@@ -73,6 +73,12 @@ function isXlsxFile(file = {}) {
   return mime.includes('spreadsheet') || mime.includes('excel') || /\.xlsx$/i.test(name);
 }
 
+function isPptxFile(file = {}) {
+  const mime = normalizeText(file.mimeType || file.type);
+  const name = normalizeText(file.originalName || file.filename || file.name);
+  return mime.includes('presentation') || mime.includes('powerpoint') || /\.pptx$/i.test(name);
+}
+
 function extensionForFile(file = {}) {
   const name = String(file.originalName || file.filename || file.name || '').toLowerCase();
   const ext = path.extname(name).replace(/^\./, '').toLowerCase();
@@ -107,11 +113,11 @@ function isTextLikeFile(file = {}) {
 }
 
 function isSupportedSourcePreservingFile(file = {}) {
-  return isDocxFile(file) || isXlsxFile(file) || isPdfFile(file) || isTextLikeFile(file);
+  return isDocxFile(file) || isXlsxFile(file) || isPptxFile(file) || isPdfFile(file) || isTextLikeFile(file);
 }
 
 function supportedSourceEditLabel() {
-  return 'DOCX, XLSX, PDF, TXT, Markdown, CSV, HTML, SVG, JSON, XML o YAML';
+  return 'DOCX, XLSX, PPTX, PDF, TXT, Markdown, CSV, HTML, SVG, JSON, XML o YAML';
 }
 
 function resolveStoredFilePath(row = {}, userId = '') {
@@ -175,8 +181,8 @@ function isPotentialEditableAttachmentRef(file) {
   const mime = normalizeText(file.mimeType || file.type || file.contentType);
   const name = normalizeText(file.name || file.originalName || file.filename || file.path || '');
   if (mime.startsWith('image/') || file.type === 'image') return false;
-  return /\.(docx?|xlsx?|pdf|csv|txt|md|markdown|html?|svg|json|xml|ya?ml)$/i.test(name)
-    || /\b(word|wordprocessingml|spreadsheet|excel|pdf|csv|plain|markdown|html|svg|json|xml|yaml)\b/.test(mime);
+  return /\.(docx?|xlsx?|pptx?|pdf|csv|txt|md|markdown|html?|svg|json|xml|ya?ml)$/i.test(name)
+    || /\b(word|wordprocessingml|spreadsheet|excel|presentation|powerpoint|pdf|csv|plain|markdown|html|svg|json|xml|yaml)\b/.test(mime);
 }
 
 async function resolveRecentEditableFileIds(prisma, { chatId, prompt } = {}) {
@@ -270,7 +276,7 @@ async function loadRecentGeneratedArtifactSourceFiles(prisma, { userId, chatId, 
       where: {
         userId,
         chatId,
-        format: { in: ['docx', 'xlsx', 'pdf', 'txt', 'md', 'csv', 'html', 'htm', 'json', 'xml', 'yaml', 'yml'] },
+        format: { in: ['docx', 'xlsx', 'pptx', 'pdf', 'txt', 'md', 'csv', 'html', 'htm', 'json', 'xml', 'yaml', 'yml'] },
       },
       select: {
         id: true,
@@ -317,6 +323,7 @@ function artifactFormatFromFilename(filename = '', mime = '') {
   const normalized = normalizeText(mime);
   if (normalized.includes('wordprocessingml')) return 'docx';
   if (normalized.includes('spreadsheet') || normalized.includes('excel')) return 'xlsx';
+  if (normalized.includes('presentation') || normalized.includes('powerpoint')) return 'pptx';
   if (normalized.includes('pdf')) return 'pdf';
   if (normalized.includes('json')) return 'json';
   if (normalized.includes('yaml')) return 'yaml';
@@ -409,7 +416,7 @@ function requestWantsReferenceIntegration(prompt = '') {
 function requestExplicitlyUsesCurrentUploadAsBase(prompt = '') {
   const text = normalizeText(prompt);
   if (requestMentionsGeneralDocument(text) || requestWantsReferenceIntegration(text)) return false;
-  return /\b(este|esta|ese|esa)\s+(documento|archivo|word|docx|pdf|excel|xlsx)\b/.test(text)
+  return /\b(este|esta|ese|esa)\s+(documento|archivo|word|docx|pdf|excel|xlsx|pptx|powerpoint|presentacion)\b/.test(text)
     || /\b(documento|archivo)\s+(adjunto|subido|cargado|que\s+adjunto|que\s+subi)\b/.test(text);
 }
 
@@ -608,6 +615,20 @@ function buildAppendixBlocks(options = {}) {
     return buildInstrumentAppendix(options);
   }
   return buildGenericAppendix(options);
+}
+
+function applyTextReplacementsToBlocks(blocks = [], operations = []) {
+  const replacements = (operations || [])
+    .filter((op) => op?.kind === 'replace_text' && op.needle)
+    .map((op) => ({ needle: op.needle, replacement: op.replacement || '' }));
+  if (!replacements.length) return blocks;
+  return blocks.map((item) => {
+    let text = item.text;
+    for (const replacement of replacements) {
+      text = replaceNeedleText(text, replacement.needle, replacement.replacement);
+    }
+    return { ...item, text };
+  });
 }
 
 const ROMAN_VALUES = {
@@ -1502,6 +1523,68 @@ function normalizedTextIncludes(haystack = '', needle = '') {
   return Boolean(normalizedNeedle && normalizeText(haystack).includes(normalizedNeedle));
 }
 
+function escapeRegExp(value = '') {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function replaceNeedleText(text = '', needle = '', replacement = '') {
+  const source = String(text || '');
+  const exact = String(needle || '').trim();
+  if (!exact) return source;
+  const exactRe = new RegExp(escapeRegExp(exact), 'gi');
+  if (exactRe.test(source)) return source.replace(exactRe, String(replacement || ''));
+  const normalizedNeedle = normalizeText(exact);
+  if (normalizedNeedle && normalizeText(source).includes(normalizedNeedle)) {
+    return String(replacement || '');
+  }
+  return source;
+}
+
+function replaceTextInDocxBuffer(buffer, needle, replacement) {
+  const normalizedNeedle = normalizeText(needle);
+  if (!normalizedNeedle || normalizedNeedle.length < 3) {
+    const err = new Error('No se especificó el texto exacto que debo reemplazar dentro del DOCX.');
+    err.code = 'REPLACE_TEXT_UNSPECIFIED';
+    throw err;
+  }
+  const zip = new PizZip(buffer);
+  const documentFile = zip.file('word/document.xml');
+  if (!documentFile) throw new Error('DOCX inválido: falta word/document.xml.');
+  let documentXml = documentFile.asText();
+  const matches = extractDocxParagraphs(documentXml)
+    .filter((paragraph) => normalizedTextIncludes(paragraph.text, normalizedNeedle))
+    .sort((a, b) => b.start - a.start);
+
+  let changedCount = 0;
+  for (const paragraph of matches) {
+    const updatedText = replaceNeedleText(paragraph.text, needle, replacement);
+    const template = buildFormattingTemplate({ bodyXml: paragraph.xml });
+    const updatedParagraph = paragraphXml({ kind: 'normal', text: updatedText }, template);
+    documentXml = `${documentXml.slice(0, paragraph.start)}${updatedParagraph}${documentXml.slice(paragraph.end)}`;
+    changedCount += 1;
+  }
+
+  if (changedCount === 0) {
+    const escapedNeedle = xmlEscape(needle);
+    if (documentXml.includes(escapedNeedle)) {
+      documentXml = documentXml.split(escapedNeedle).join(xmlEscape(replacement));
+      changedCount = 1;
+    }
+  }
+
+  if (changedCount === 0) {
+    const err = new Error(`No encontré el texto "${needle}" dentro del DOCX para reemplazarlo sin afectar otra sección.`);
+    err.code = 'REPLACE_TEXT_NOT_FOUND';
+    throw err;
+  }
+
+  zip.file('word/document.xml', documentXml);
+  return {
+    buffer: zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' }),
+    changedCount,
+  };
+}
+
 function deleteTextFromDocxBuffer(buffer, needle) {
   const normalizedNeedle = normalizeText(needle);
   if (!normalizedNeedle || normalizedNeedle.length < 3) {
@@ -1590,6 +1673,233 @@ async function appendToXlsxBuffer(buffer, blocks) {
   sheet.getRow(1).font = { bold: true };
   const out = await workbook.xlsx.writeBuffer();
   return Buffer.from(out);
+}
+
+async function replaceTextInXlsxBuffer(buffer, needle, replacement = '') {
+  const normalizedNeedle = normalizeText(needle);
+  if (!normalizedNeedle || normalizedNeedle.length < 3) {
+    const err = new Error('No se especificó el texto exacto que debo reemplazar dentro del XLSX.');
+    err.code = 'XLSX_REPLACE_TEXT_UNSPECIFIED';
+    throw err;
+  }
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  let changedCount = 0;
+  workbook.worksheets.forEach((sheet) => {
+    sheet.eachRow({ includeEmpty: false }, (row) => {
+      row.eachCell({ includeEmpty: false }, (cell) => {
+        const value = cell.value;
+        if (typeof value === 'string' && normalizedTextIncludes(value, normalizedNeedle)) {
+          cell.value = replaceNeedleText(value, needle, replacement);
+          changedCount += 1;
+        } else if (value?.richText && Array.isArray(value.richText)) {
+          const text = value.richText.map((part) => part.text || '').join('');
+          if (normalizedTextIncludes(text, normalizedNeedle)) {
+            cell.value = replaceNeedleText(text, needle, replacement);
+            changedCount += 1;
+          }
+        } else if (value?.text && normalizedTextIncludes(value.text, normalizedNeedle)) {
+          cell.value = replaceNeedleText(value.text, needle, replacement);
+          changedCount += 1;
+        }
+      });
+    });
+  });
+  if (changedCount === 0) {
+    const err = new Error(`No encontré el texto "${needle}" dentro del XLSX.`);
+    err.code = 'XLSX_REPLACE_TEXT_NOT_FOUND';
+    throw err;
+  }
+  const out = await workbook.xlsx.writeBuffer();
+  return { buffer: Buffer.from(out), changedCount };
+}
+
+async function setXlsxCellBuffer(buffer, { sheetName = '', address = '', value = '' } = {}) {
+  const cellAddress = String(address || '').trim().toUpperCase();
+  if (!/^[A-Z]{1,3}[1-9][0-9]{0,6}$/.test(cellAddress)) {
+    const err = new Error('No se especificó una celda válida para editar en el XLSX.');
+    err.code = 'XLSX_CELL_ADDRESS_INVALID';
+    throw err;
+  }
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  let sheet = null;
+  if (sheetName) {
+    const wanted = normalizeText(sheetName);
+    sheet = workbook.worksheets.find((candidate) => normalizeText(candidate.name) === wanted)
+      || workbook.getWorksheet(sheetName);
+  }
+  sheet = sheet || workbook.worksheets[0];
+  if (!sheet) {
+    const err = new Error('El XLSX no tiene hojas editables.');
+    err.code = 'XLSX_NO_SHEETS';
+    throw err;
+  }
+  sheet.getCell(cellAddress).value = String(value || '');
+  sheet.getCell(cellAddress).alignment = {
+    ...(sheet.getCell(cellAddress).alignment || {}),
+    wrapText: true,
+    vertical: 'top',
+  };
+  const out = await workbook.xlsx.writeBuffer();
+  return {
+    buffer: Buffer.from(out),
+    sheetName: sheet.name,
+    address: cellAddress,
+  };
+}
+
+function pptxSlideFileNames(zip) {
+  return Object.keys(zip.files)
+    .filter((name) => /^ppt\/slides\/slide\d+\.xml$/i.test(name))
+    .sort((a, b) => {
+      const an = Number((a.match(/slide(\d+)\.xml/i) || [])[1] || 0);
+      const bn = Number((b.match(/slide(\d+)\.xml/i) || [])[1] || 0);
+      return an - bn;
+    });
+}
+
+function extractTextFromPptxXml(xml = '') {
+  const pieces = [];
+  const re = /<a:t\b[^>]*>([\s\S]*?)<\/a:t>/g;
+  let match;
+  while ((match = re.exec(xml))) pieces.push(xmlUnescape(match[1]));
+  return pieces.join('\n');
+}
+
+function extractTextFromPptxBuffer(buffer) {
+  const zip = new PizZip(buffer);
+  return pptxSlideFileNames(zip)
+    .map((name) => extractTextFromPptxXml(zip.file(name)?.asText() || ''))
+    .filter(Boolean)
+    .join('\n');
+}
+
+function replaceTextInPptxBuffer(buffer, needle, replacement = '') {
+  const normalizedNeedle = normalizeText(needle);
+  if (!normalizedNeedle || normalizedNeedle.length < 3) {
+    const err = new Error('No se especificó el texto exacto que debo reemplazar dentro del PPTX.');
+    err.code = 'PPTX_REPLACE_TEXT_UNSPECIFIED';
+    throw err;
+  }
+  const zip = new PizZip(buffer);
+  let changedCount = 0;
+  for (const name of pptxSlideFileNames(zip)) {
+    let xml = zip.file(name)?.asText() || '';
+    const updated = xml.replace(/<a:t\b([^>]*)>([\s\S]*?)<\/a:t>/g, (full, attrs, value) => {
+      const visible = xmlUnescape(value);
+      if (!normalizedTextIncludes(visible, normalizedNeedle)) return full;
+      changedCount += 1;
+      return `<a:t${attrs}>${xmlEscape(replaceNeedleText(visible, needle, replacement))}</a:t>`;
+    });
+    if (updated !== xml) zip.file(name, updated);
+  }
+  if (changedCount === 0) {
+    const err = new Error(`No encontré el texto "${needle}" dentro del PPTX.`);
+    err.code = 'PPTX_REPLACE_TEXT_NOT_FOUND';
+    throw err;
+  }
+  return {
+    buffer: zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' }),
+    changedCount,
+  };
+}
+
+function nextPptxRelationshipId(relsXml = '') {
+  const ids = Array.from(String(relsXml || '').matchAll(/\bId="rId(\d+)"/g))
+    .map((match) => Number(match[1]))
+    .filter(Number.isFinite);
+  return `rId${Math.max(0, ...ids) + 1}`;
+}
+
+function ensurePptxContentTypeOverride(contentTypesXml = '', partName = '') {
+  if (!partName || contentTypesXml.includes(`PartName="${partName}"`)) return contentTypesXml;
+  const override = `<Override PartName="${partName}" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>`;
+  return contentTypesXml.replace(/<\/Types>\s*$/i, `${override}</Types>`);
+}
+
+function updatePptxAppSlideCount(appXml = '', slideCount = 0) {
+  if (!appXml) return appXml;
+  if (/<Slides>\d+<\/Slides>/i.test(appXml)) {
+    return appXml.replace(/<Slides>\d+<\/Slides>/i, `<Slides>${slideCount}</Slides>`);
+  }
+  return appXml.replace(/<\/Properties>\s*$/i, `<Slides>${slideCount}</Slides></Properties>`);
+}
+
+function buildPptxSlideXml(blocks = []) {
+  const content = nonPageBreakBlocks(blocks);
+  const title = content.find((item) => /heading/.test(item.kind))?.text || 'Contenido agregado';
+  const body = content
+    .filter((item) => item.text !== title)
+    .map((item) => String(item.text || '').trim())
+    .filter(Boolean)
+    .slice(0, 10);
+  const bodyParagraphs = body.length
+    ? body.map((line) => `<a:p><a:r><a:rPr lang="es-ES" sz="1800"/><a:t>${xmlEscape(line)}</a:t></a:r></a:p>`).join('')
+    : '<a:p><a:r><a:rPr lang="es-ES" sz="1800"/><a:t>Contenido agregado por SiraGPT.</a:t></a:r></a:p>';
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld>
+    <p:spTree>
+      <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
+      <p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>
+      <p:sp>
+        <p:nvSpPr><p:cNvPr id="2" name="Título SiraGPT"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/></p:nvSpPr>
+        <p:spPr><a:xfrm><a:off x="685800" y="457200"/><a:ext cx="7772400" cy="914400"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln><a:noFill/></a:ln></p:spPr>
+        <p:txBody><a:bodyPr wrap="square"/><a:lstStyle/><a:p><a:r><a:rPr lang="es-ES" sz="3000" b="1"/><a:t>${xmlEscape(title)}</a:t></a:r></a:p></p:txBody>
+      </p:sp>
+      <p:sp>
+        <p:nvSpPr><p:cNvPr id="3" name="Contenido SiraGPT"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/></p:nvSpPr>
+        <p:spPr><a:xfrm><a:off x="685800" y="1524000"/><a:ext cx="10668000" cy="4572000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln><a:noFill/></a:ln></p:spPr>
+        <p:txBody><a:bodyPr wrap="square"/><a:lstStyle/>${bodyParagraphs}</p:txBody>
+      </p:sp>
+    </p:spTree>
+  </p:cSld>
+  <p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>
+</p:sld>`;
+}
+
+function appendToPptxBuffer(buffer, blocks) {
+  const zip = new PizZip(buffer);
+  const presentationFile = zip.file('ppt/presentation.xml');
+  const relsFile = zip.file('ppt/_rels/presentation.xml.rels');
+  const contentTypesFile = zip.file('[Content_Types].xml');
+  if (!presentationFile || !relsFile || !contentTypesFile) {
+    throw new Error('PPTX inválido: faltan archivos principales de presentación.');
+  }
+  const slideFiles = pptxSlideFileNames(zip);
+  const nextSlideNumber = Math.max(0, ...slideFiles.map((name) => Number((name.match(/slide(\d+)\.xml/i) || [])[1] || 0))) + 1;
+  const newSlidePath = `ppt/slides/slide${nextSlideNumber}.xml`;
+  const newPartName = `/ppt/slides/slide${nextSlideNumber}.xml`;
+  let presentationXml = presentationFile.asText();
+  let relsXml = relsFile.asText();
+  let contentTypesXml = contentTypesFile.asText();
+  const relId = nextPptxRelationshipId(relsXml);
+  const slideIds = Array.from(presentationXml.matchAll(/<p:sldId\b[^>]*\bid="(\d+)"/g))
+    .map((match) => Number(match[1]))
+    .filter(Number.isFinite);
+  const newSlideId = Math.max(255, ...slideIds) + 1;
+  const slideRef = `<p:sldId id="${newSlideId}" r:id="${relId}"/>`;
+  if (/<p:sldIdLst\b[^>]*>[\s\S]*?<\/p:sldIdLst>/.test(presentationXml)) {
+    presentationXml = presentationXml.replace(/<\/p:sldIdLst>/, `${slideRef}</p:sldIdLst>`);
+  } else {
+    presentationXml = presentationXml.replace(/<\/p:presentation>/, `<p:sldIdLst>${slideRef}</p:sldIdLst></p:presentation>`);
+  }
+  relsXml = relsXml.replace(/<\/Relationships>\s*$/i, `<Relationship Id="${relId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide${nextSlideNumber}.xml"/></Relationships>`);
+  contentTypesXml = ensurePptxContentTypeOverride(contentTypesXml, newPartName);
+  zip.file('ppt/presentation.xml', presentationXml);
+  zip.file('ppt/_rels/presentation.xml.rels', relsXml);
+  zip.file('[Content_Types].xml', contentTypesXml);
+  zip.file(newSlidePath, buildPptxSlideXml(blocks));
+
+  const firstSlideRels = zip.file('ppt/slides/_rels/slide1.xml.rels')?.asText();
+  const rels = firstSlideRels && firstSlideRels.includes('slideLayout')
+    ? firstSlideRels
+    : '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/></Relationships>';
+  zip.file(`ppt/slides/_rels/slide${nextSlideNumber}.xml.rels`, rels);
+  const appFile = zip.file('docProps/app.xml');
+  if (appFile) zip.file('docProps/app.xml', updatePptxAppSlideCount(appFile.asText(), slideFiles.length + 1));
+  return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
 function nonPageBreakBlocks(blocks) {
@@ -1765,6 +2075,7 @@ async function extractTextFromFile(file = {}) {
     const buffer = await fs.promises.readFile(localPath);
     if (isDocxFile(file)) return extractTextFromDocxBuffer(buffer);
     if (isXlsxFile(file)) return extractTextFromXlsxBuffer(buffer);
+    if (isPptxFile(file)) return extractTextFromPptxBuffer(buffer);
     if (isTextLikeFile(file)) return buffer.toString('utf8');
   } catch {
     return '';
@@ -2248,6 +2559,92 @@ function validateDocxOperationCriteria(buffer, operations = []) {
     if (op.kind === 'delete_text') {
       const passed = !normalizedTextIncludes(text, op.needle);
       checks.push({ id: 'specific_text_deleted', label: 'Texto específico eliminado', passed, details: { needle: compact(op.needle, 120) } });
+      continue;
+    }
+    if (op.kind === 'replace_text') {
+      const passed = !normalizedTextIncludes(text, op.needle) && normalizedTextIncludes(text, op.replacement);
+      checks.push({
+        id: 'specific_text_replaced',
+        label: 'Texto específico reemplazado',
+        passed,
+        details: { needle: compact(op.needle, 120), replacement: compact(op.replacement, 120) },
+      });
+    }
+  }
+  return {
+    checks,
+    passed: checks.every((check) => check.passed !== false),
+  };
+}
+
+async function extractVisibleTextForFormat(buffer, format) {
+  try {
+    if (format === 'docx') return extractDocxTextFromBuffer(buffer);
+    if (format === 'xlsx') return extractTextFromXlsxBuffer(buffer);
+    if (format === 'pptx') return extractTextFromPptxBuffer(buffer);
+    if (TEXT_LIKE_EXTENSIONS.has(format)) return buffer.toString('utf8');
+  } catch {
+    return '';
+  }
+  return '';
+}
+
+async function readXlsxCellVisibleValue(buffer, { sheetName = '', address = '' } = {}) {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  let sheet = null;
+  if (sheetName) {
+    const wanted = normalizeText(sheetName);
+    sheet = workbook.worksheets.find((candidate) => normalizeText(candidate.name) === wanted)
+      || workbook.getWorksheet(sheetName);
+  }
+  sheet = sheet || workbook.worksheets[0];
+  if (!sheet) return '';
+  const value = sheet.getCell(String(address || '').toUpperCase()).value;
+  if (value == null) return '';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value.richText)) return value.richText.map((part) => part.text || '').join('');
+  if (value.text) return String(value.text);
+  if (value.result != null) return String(value.result);
+  return String(value);
+}
+
+async function validateOfficeOperationCriteria(buffer, format, operations = [], blocks = []) {
+  const text = await extractVisibleTextForFormat(buffer, format);
+  const checks = [];
+  for (const op of operations || []) {
+    if (op.kind === 'replace_text') {
+      checks.push({
+        id: `${format}_specific_text_replaced`,
+        label: 'Texto específico reemplazado',
+        passed: !normalizedTextIncludes(text, op.needle) && normalizedTextIncludes(text, op.replacement),
+        details: { needle: compact(op.needle, 120), replacement: compact(op.replacement, 120) },
+      });
+    } else if (op.kind === 'delete_text') {
+      checks.push({
+        id: `${format}_specific_text_deleted`,
+        label: 'Texto específico eliminado',
+        passed: !normalizedTextIncludes(text, op.needle),
+        details: { needle: compact(op.needle, 120) },
+      });
+    } else if (op.kind === 'set_cell') {
+      const cellValue = await readXlsxCellVisibleValue(buffer, op);
+      checks.push({
+        id: 'xlsx_cell_written',
+        label: 'Celda Excel actualizada',
+        passed: normalizedTextIncludes(cellValue, op.value),
+        details: { address: op.address, sheetName: op.sheetName || null, value: compact(cellValue, 120) },
+      });
+    } else if (op.kind === 'append_generic' && format === 'pptx') {
+      const hasAnyAddedText = nonPageBreakBlocks(blocks)
+        .map((item) => item.text)
+        .filter((value) => String(value || '').trim().length >= 8)
+        .some((value) => normalizedTextIncludes(text, String(value).slice(0, 120)));
+      checks.push({
+        id: 'pptx_slide_appended',
+        label: 'Diapositiva PowerPoint agregada',
+        passed: hasAnyAddedText,
+      });
     }
   }
   return {
@@ -2300,6 +2697,9 @@ async function validateEditedBuffer(buffer, format, blocks, context = {}) {
           .join('\n');
         return `${sharedStrings}\n${worksheets}`.includes(xmlEscape(appendedNeedle).slice(0, 24));
       }
+      if (format === 'pptx') {
+        return normalizedTextIncludes(extractTextFromPptxBuffer(buffer), appendedNeedle.slice(0, 120));
+      }
       if (format === 'pdf') {
         return buffer.slice(0, 5).toString('latin1') === '%PDF-';
       }
@@ -2318,7 +2718,7 @@ async function validateEditedBuffer(buffer, format, blocks, context = {}) {
   })();
   const semanticCriteria = format === 'docx'
     ? validateDocxOperationCriteria(buffer, context.operations || [])
-    : { checks: [], passed: true };
+    : await validateOfficeOperationCriteria(buffer, format, context.operations || [], blocks);
   const hasSemanticCriteria = semanticCriteria.checks.length > 0;
   const operationEffectApplied = semanticCriteria.checks.length > 0 ? semanticCriteria.passed : appendedTextPresent;
   const checks = {
@@ -2341,6 +2741,7 @@ async function validateEditedBuffer(buffer, format, blocks, context = {}) {
   } catch {
     checks.mime_type = true;
   }
+  const editMode = hasSemanticCriteria ? 'source_preserving_operation_edit' : 'source_preserving_append';
   return {
     format,
     checks,
@@ -2349,7 +2750,7 @@ async function validateEditedBuffer(buffer, format, blocks, context = {}) {
     qualityScore: 100,
     overallScore: 100,
     details: {
-      editMode: 'source_preserving_append',
+      editMode,
       appendedBlocks: blocks.filter((item) => item.kind !== 'pageBreak').length,
       sizeBytes: buffer.length,
       operationCriteria: semanticCriteria.checks,
@@ -2379,9 +2780,15 @@ function splitRequestClauses(text) {
   const normalized = normalizeText(text);
   if (!normalized) return [];
   const anchorRe = new RegExp(`\\b(?:${CLAUSE_ACTION_VERB})\\b`, 'g');
-  const anchors = [];
+  const rawAnchors = [];
   let match;
-  while ((match = anchorRe.exec(normalized))) anchors.push(match.index);
+  while ((match = anchorRe.exec(normalized))) rawAnchors.push(match.index);
+  const anchors = rawAnchors.filter((index, position) => {
+    if (position === 0) return true;
+    const before = normalized.slice(Math.max(0, index - 32), index);
+    return /(?:^|[\s,.;:])(?:y|e|tambien|ademas|luego|despues)\s*$/.test(before)
+      || /[,.;:]\s*$/.test(before);
+  });
   if (anchors.length <= 1) return [normalized];
   const clauses = [];
   for (let i = 0; i < anchors.length; i += 1) {
@@ -2427,6 +2834,51 @@ function extractDeletionNeedle(clauseNorm = '') {
   return cleaned.slice(0, 180);
 }
 
+function extractQuotedValues(text = '') {
+  const values = [];
+  const re = /["“”'‘’]([^"“”'‘’]{1,500})["“”'‘’]/g;
+  let match;
+  while ((match = re.exec(String(text || '')))) values.push(match[1].trim());
+  return values.filter(Boolean);
+}
+
+function extractReplacementPair(text = '') {
+  const raw = String(text || '');
+  const quoted = extractQuotedValues(raw);
+  if (quoted.length >= 2 && /\b(reemplaz\w*|sustitu\w*|cambi\w*|modific\w*|corrig\w*)\b/i.test(raw)) {
+    return { needle: quoted[0], replacement: quoted[1] };
+  }
+  const normalized = normalizeText(raw);
+  const match = normalized.match(/\b(?:reemplaz\w*|sustitu\w*|cambi\w*|modific\w*|corrig\w*)\s+(.{3,120}?)\s+(?:por|con|a)\s+(.{3,220})$/);
+  if (!match) return null;
+  const needle = match[1]
+    .replace(/\b(?:el|la|los|las|texto|frase|palabra|contenido|que dice|donde dice)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const replacement = match[2].replace(/[.;!?]+$/g, '').trim();
+  if (needle.length < 3 || replacement.length < 1) return null;
+  return { needle: needle.slice(0, 180), replacement: replacement.slice(0, 500) };
+}
+
+function extractXlsxCellWrite(text = '') {
+  const raw = String(text || '');
+  const cellMatch = raw.match(/\b(?:celda|cell)\s+([A-Z]{1,3}[1-9][0-9]{0,6})\b/i);
+  if (!cellMatch) return null;
+  const sheetMatch = raw.match(/\b(?:hoja|sheet)\s+["“]?([^"”',.;]{1,80})["”]?/i);
+  const afterCell = raw.slice(cellMatch.index + cellMatch[0].length);
+  let value = extractQuotedValues(afterCell)[0] || '';
+  if (!value) {
+    const valueMatch = afterCell.match(/\b(?:escrib\w*|pon\w*|coloc\w*|con|a|=|valor)\s+(.{1,500})$/i);
+    value = valueMatch ? valueMatch[1].replace(/[.;!?]+$/g, '').trim() : '';
+  }
+  if (!value) return null;
+  return {
+    address: cellMatch[1].toUpperCase(),
+    sheetName: sheetMatch ? sheetMatch[1].trim() : '',
+    value,
+  };
+}
+
 function sectionExistsInDoc(documentXml, target) {
   if (!target) return false;
   const paragraphs = extractDocxParagraphs(documentXml);
@@ -2439,6 +2891,11 @@ function buildOperationFromClause(clauseNorm, documentXml) {
   const fill = clauseIsFill(clauseNorm);
   const append = clauseIsAppend(clauseNorm);
   const remove = clauseIsDelete(clauseNorm);
+  const replacement = extractReplacementPair(clauseNorm);
+
+  if (replacement) {
+    return { kind: 'replace_text', ...replacement };
+  }
 
   if (remove) {
     const needle = extractDeletionNeedle(clauseNorm);
@@ -2463,7 +2920,7 @@ function buildOperationFromClause(clauseNorm, documentXml) {
 }
 
 function operationKey(op) {
-  return `${op.kind}:${op.target ? op.target.label : ''}:${op.wantsInstrument ? 'instr' : ''}:${op.needle || ''}`;
+  return `${op.kind}:${op.target ? op.target.label : ''}:${op.wantsInstrument ? 'instr' : ''}:${normalizeText(op.needle || '')}:${normalizeText(op.replacement || '')}:${op.address || ''}`;
 }
 
 const BULK_FILL_SCOPE_RE = /\b(tablas?|anexos?|secciones?|cuadros?|matrices?|matriz|vac[ií]as?|vac[ií]os?|faltantes?|pendientes?|todo|todos|todas|que\s+falt\w*)\b/;
@@ -2480,6 +2937,8 @@ function planSourcePreservingOperations({ requestText = '', documentXml = '', re
     ops.push(op);
   };
 
+  const rawReplacement = extractReplacementPair(requestText);
+  if (rawReplacement) add({ kind: 'replace_text', ...rawReplacement });
   for (const clause of clauses) add(buildOperationFromClause(clause, documentXml));
 
   // Broader understanding: "completa / rellena las tablas vacías / los anexos /
@@ -2815,6 +3274,22 @@ function runDeleteTextOperation({ buffer, op }) {
   };
 }
 
+function runReplaceTextOperation({ buffer, op }) {
+  const result = replaceTextInDocxBuffer(buffer, op.needle, op.replacement);
+  return {
+    buffer: result.buffer,
+    validationBlocks: [block('normal', op.replacement)],
+    step: {
+      kind: 'replace_text',
+      label: 'Texto específico',
+      mode: 'safe_replace',
+      changedCount: result.changedCount,
+      needle: op.needle,
+      replacement: op.replacement,
+    },
+  };
+}
+
 async function executeDocxOperations({ input, ops, requestText, sourceText, allSourceFiles, sourceFile, referenceFiles = [], signal }) {
   let buffer = input;
   const steps = [];
@@ -2831,6 +3306,8 @@ async function executeDocxOperations({ input, ops, requestText, sourceText, allS
       result = runFillCoverOperation({ buffer, sourceText, sourceFile });
     } else if (op.kind === 'delete_text') {
       result = runDeleteTextOperation({ buffer, op });
+    } else if (op.kind === 'replace_text') {
+      result = runReplaceTextOperation({ buffer, op });
     } else {
       result = runAppendGenericOperation({ buffer, op, requestText, sourceText, sourceFile });
     }
@@ -2839,6 +3316,104 @@ async function executeDocxOperations({ input, ops, requestText, sourceText, allS
     validationBlocks.push(...(result.validationBlocks || []));
   }
   return { buffer, steps, validationBlocks };
+}
+
+function planGenericOfficeOperations({ requestText = '', format = '' } = {}) {
+  const clauses = splitRequestClauses(requestText);
+  const ops = [];
+  const seen = new Set();
+  const add = (op) => {
+    if (!op) return;
+    const key = operationKey(op);
+    if (seen.has(key)) return;
+    seen.add(key);
+    ops.push(op);
+  };
+  const rawReplacement = extractReplacementPair(requestText);
+  if (rawReplacement) add({ kind: 'replace_text', ...rawReplacement });
+  if (format === 'xlsx') {
+    const rawCellWrite = extractXlsxCellWrite(requestText);
+    if (rawCellWrite) add({ kind: 'set_cell', ...rawCellWrite });
+  }
+  for (const clause of clauses) {
+    const replacement = extractReplacementPair(clause);
+    if (replacement) {
+      add({ kind: 'replace_text', ...replacement });
+      continue;
+    }
+    if (format === 'xlsx') {
+      const cellWrite = extractXlsxCellWrite(clause);
+      if (cellWrite) {
+        add({ kind: 'set_cell', ...cellWrite });
+        continue;
+      }
+    }
+    if (clauseIsDelete(clause)) {
+      const needle = extractDeletionNeedle(clause);
+      if (needle) {
+        add({ kind: 'delete_text', needle });
+        continue;
+      }
+    }
+    if (clauseIsAppend(clause) || clauseIsFill(clause) || clauseWantsInstrument(clause)) {
+      add({ kind: 'append_generic', wantsInstrument: clauseWantsInstrument(clause) });
+    }
+  }
+  if (ops.length === 0) ops.push({ kind: 'append_generic', wantsInstrument: clauseWantsInstrument(normalizeText(requestText)) });
+  return ops;
+}
+
+async function executeXlsxOperations({ input, ops, blocks }) {
+  let buffer = input;
+  const steps = [];
+  const validationBlocks = [];
+  const appendBlocks = applyTextReplacementsToBlocks(blocks, ops);
+  for (const op of ops) {
+    if (op.kind === 'replace_text') {
+      const result = await replaceTextInXlsxBuffer(buffer, op.needle, op.replacement);
+      buffer = result.buffer;
+      validationBlocks.push(block('normal', op.replacement));
+      steps.push({ kind: 'replace_text', mode: 'xlsx_safe_replace', changedCount: result.changedCount });
+    } else if (op.kind === 'delete_text') {
+      const result = await replaceTextInXlsxBuffer(buffer, op.needle, '');
+      buffer = result.buffer;
+      steps.push({ kind: 'delete_text', mode: 'xlsx_safe_delete', removedCount: result.changedCount });
+    } else if (op.kind === 'set_cell') {
+      const result = await setXlsxCellBuffer(buffer, op);
+      buffer = result.buffer;
+      validationBlocks.push(block('normal', op.value));
+      steps.push({ kind: 'set_cell', mode: 'xlsx_cell_write', label: `${result.sheetName}!${result.address}` });
+    } else {
+      buffer = await appendToXlsxBuffer(buffer, appendBlocks);
+      validationBlocks.push(...appendBlocks);
+      steps.push({ kind: 'append_generic', mode: 'xlsx_new_sheet' });
+    }
+  }
+  return { buffer, steps, validationBlocks: validationBlocks.length ? validationBlocks : appendBlocks };
+}
+
+function executePptxOperations({ input, ops, blocks }) {
+  let buffer = input;
+  const steps = [];
+  const validationBlocks = [];
+  const appendBlocks = applyTextReplacementsToBlocks(blocks, ops);
+  for (const op of ops) {
+    if (op.kind === 'replace_text') {
+      const result = replaceTextInPptxBuffer(buffer, op.needle, op.replacement);
+      buffer = result.buffer;
+      validationBlocks.push(block('normal', op.replacement));
+      steps.push({ kind: 'replace_text', mode: 'pptx_safe_replace', changedCount: result.changedCount });
+    } else if (op.kind === 'delete_text') {
+      const result = replaceTextInPptxBuffer(buffer, op.needle, '');
+      buffer = result.buffer;
+      steps.push({ kind: 'delete_text', mode: 'pptx_safe_delete', removedCount: result.changedCount });
+    } else {
+      buffer = appendToPptxBuffer(buffer, appendBlocks);
+      validationBlocks.push(...appendBlocks);
+      steps.push({ kind: 'append_generic', mode: 'pptx_new_slide' });
+    }
+  }
+  return { buffer, steps, validationBlocks: validationBlocks.length ? validationBlocks : appendBlocks };
 }
 
 function joinSpanishList(items) {
@@ -2858,6 +3433,10 @@ function describeStep(step) {
   if (step.kind === 'integrate_references') return `integré ${step.references || 0} documento(s) de soporte al documento principal`;
   if (step.kind === 'fill_cover') return 'completé la portada con los datos disponibles del documento';
   if (step.kind === 'delete_text') return `eliminé el texto específico solicitado (${step.removedCount || 0} coincidencia(s))`;
+  if (step.kind === 'replace_text') return `reemplacé el texto específico solicitado (${step.changedCount || 0} coincidencia(s))`;
+  if (step.kind === 'set_cell') return `actualicé la celda ${step.label || 'solicitada'}`;
+  if (step.kind === 'append_generic' && step.mode === 'xlsx_new_sheet') return 'agregué una hoja nueva con el contenido solicitado';
+  if (step.kind === 'append_generic' && step.mode === 'pptx_new_slide') return 'agregué una diapositiva nueva con el contenido solicitado';
   return 'agregué el contenido solicitado en anexos';
 }
 
@@ -2898,7 +3477,10 @@ function buildDocumentOrchestrationPlan({ requestText = '', sourceFile = {}, ref
       kind: op.kind,
       target: op.target?.label || null,
       wantsInstrument: Boolean(op.wantsInstrument),
-      needle: op.kind === 'delete_text' ? compact(op.needle, 80) : undefined,
+      needle: (op.kind === 'delete_text' || op.kind === 'replace_text') ? compact(op.needle, 80) : undefined,
+      replacement: op.kind === 'replace_text' ? compact(op.replacement, 80) : undefined,
+      address: op.kind === 'set_cell' ? op.address : undefined,
+      value: op.kind === 'set_cell' ? compact(op.value, 80) : undefined,
     })),
   };
 }
@@ -2981,8 +3563,48 @@ async function generateSourcePreservingDocumentEdit({
     validationBlocks = blocks;
     if (isXlsxFile(sourceFile)) {
       format = 'xlsx';
-      output = await appendToXlsxBuffer(input, blocks);
-      content = 'Listo. Conservé el XLSX original y agregué el contenido solicitado en una hoja nueva, sin reemplazar las hojas existentes.';
+      operations = planGenericOfficeOperations({ requestText, format });
+      const execution = await executeXlsxOperations({ input, ops: operations, blocks });
+      output = execution.buffer;
+      validationBlocks = execution.validationBlocks;
+      orchestration = buildDocumentOrchestrationPlan({
+        requestText,
+        sourceFile,
+        referenceFiles,
+        operations,
+        selectionReason,
+      });
+      const stepSummary = joinSpanishList(execution.steps.map(describeStep));
+      suffix = execution.steps.some((step) => step.kind === 'set_cell') ? 'celda_actualizada' : 'editado';
+      titleSuffix = 'editado';
+      explanation = stepSummary
+        ? `Se conservó el XLSX original; ${stepSummary}.`
+        : 'Se conservó el XLSX original y se aplicó la edición solicitada.';
+      content = stepSummary
+        ? `Listo. Conservé el XLSX original y ${stepSummary}, sin reemplazar las hojas existentes.`
+        : 'Listo. Conservé el XLSX original y apliqué la edición solicitada sin reemplazar las hojas existentes.';
+    } else if (isPptxFile(sourceFile)) {
+      format = 'pptx';
+      operations = planGenericOfficeOperations({ requestText, format });
+      const execution = executePptxOperations({ input, ops: operations, blocks });
+      output = execution.buffer;
+      validationBlocks = execution.validationBlocks;
+      orchestration = buildDocumentOrchestrationPlan({
+        requestText,
+        sourceFile,
+        referenceFiles,
+        operations,
+        selectionReason,
+      });
+      const stepSummary = joinSpanishList(execution.steps.map(describeStep));
+      suffix = 'editado';
+      titleSuffix = 'editado';
+      explanation = stepSummary
+        ? `Se conservó el PPTX original; ${stepSummary}.`
+        : 'Se conservó el PPTX original y se aplicó la edición solicitada.';
+      content = stepSummary
+        ? `Listo. Conservé el PPTX original y ${stepSummary}, sin reconstruir la presentación completa.`
+        : 'Listo. Conservé el PPTX original y apliqué la edición solicitada sin reconstruir la presentación completa.';
     } else if (isPdfFile(sourceFile)) {
       format = 'pdf';
       output = await appendToPdfBuffer(input, blocks);
@@ -3112,6 +3734,7 @@ module.exports = {
     buildSectionFormattingTemplate,
     analyzeDocumentStructure,
     analyzeTableForFill,
+    appendToPptxBuffer,
     detectCronogramaAnexo3Plan,
     loadRecentAssistantArtifactSourceFiles,
     loadRecentGeneratedArtifactSourceFiles,
@@ -3124,6 +3747,7 @@ module.exports = {
     detectSectionTablePlan,
     extractParagraphProperties,
     extractRunProperties,
+    extractTextFromPptxBuffer,
     fillCronogramaTableXml,
     fillGenericSectionTableBuffer,
     fillGenericSectionTableXml,
@@ -3133,12 +3757,17 @@ module.exports = {
     isTargetedSectionFillRequest,
     locateCronogramaTable,
     locateSectionTable,
+    planGenericOfficeOperations,
     planSourcePreservingOperations,
+    replaceTextInDocxBuffer,
+    replaceTextInPptxBuffer,
+    replaceTextInXlsxBuffer,
     requestMentionsGeneralDocument,
     requestWantsReferenceIntegration,
     resolveStoredFilePath,
     sanitizeCapturedParagraphProperties,
     selectSourcePreservingDocumentSet,
+    setXlsxCellBuffer,
     sourceDocumentParallelism,
     splitRequestClauses,
   },

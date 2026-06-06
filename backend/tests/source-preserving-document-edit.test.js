@@ -4,6 +4,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { Document, Packer, Paragraph, TextRun, AlignmentType, Table, TableRow, TableCell } = require('docx');
+const ExcelJS = require('exceljs');
+const PptxGenJS = require('pptxgenjs');
 const PizZip = require('pizzip');
 
 const {
@@ -1293,5 +1295,176 @@ describe('source-preserving document edit — document-understanding brain', () 
       if (savedKey === undefined) delete process.env.OPENAI_API_KEY;
       else process.env.OPENAI_API_KEY = savedKey;
     }
+  });
+});
+
+describe('source-preserving Office edit — generic XLSX/PPTX operations', () => {
+  const {
+    appendToPptxBuffer,
+    extractTextFromPptxBuffer,
+    planGenericOfficeOperations,
+    replaceTextInDocxBuffer,
+    replaceTextInPptxBuffer,
+    replaceTextInXlsxBuffer,
+    setXlsxCellBuffer,
+  } = sourcePreservingInternals;
+
+  async function makeXlsxBuffer() {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Datos');
+    sheet.addRow(['Estado', 'Observación']);
+    sheet.addRow(['Pendiente', 'Revisar matriz']);
+    const buffer = await workbook.xlsx.writeBuffer();
+    return Buffer.from(buffer);
+  }
+
+  async function readXlsxCell(buffer, address, sheetName = 'Datos') {
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(buffer);
+    return workbook.getWorksheet(sheetName).getCell(address).value;
+  }
+
+  async function makePptxBuffer() {
+    const pptx = new PptxGenJS();
+    pptx.layout = 'LAYOUT_WIDE';
+    const slide = pptx.addSlide();
+    slide.addText('Título viejo', { x: 0.7, y: 0.6, w: 7, h: 0.6, fontSize: 26, bold: true });
+    slide.addText('Contenido base', { x: 0.7, y: 1.5, w: 7, h: 1.2, fontSize: 18 });
+    const buffer = await pptx.write({ outputType: 'nodebuffer' });
+    return Buffer.from(buffer);
+  }
+
+  it('plans replacement and Excel cell-write operations without section-specific prompts', () => {
+    const replaceOps = planGenericOfficeOperations({
+      requestText: 'reemplaza "Pendiente" por "Completado"',
+      format: 'xlsx',
+    });
+    assert.deepEqual(replaceOps, [{ kind: 'replace_text', needle: 'Pendiente', replacement: 'Completado' }]);
+
+    const cellOps = planGenericOfficeOperations({
+      requestText: 'en la celda B2 escribe "Validado por comité"',
+      format: 'xlsx',
+    });
+    assert.equal(cellOps[0].kind, 'set_cell');
+    assert.equal(cellOps[0].address, 'B2');
+    assert.equal(cellOps[0].value, 'Validado por comité');
+  });
+
+  it('replaces text and writes a specific cell in XLSX while preserving the workbook', async () => {
+    const source = await makeXlsxBuffer();
+    const replaced = await replaceTextInXlsxBuffer(source, 'Pendiente', 'Completado');
+    assert.equal(await readXlsxCell(replaced.buffer, 'A2'), 'Completado');
+    assert.equal(await readXlsxCell(replaced.buffer, 'B2'), 'Revisar matriz');
+
+    const edited = await setXlsxCellBuffer(replaced.buffer, { address: 'B2', value: 'Validado por comité' });
+    assert.equal(await readXlsxCell(edited.buffer, 'A2'), 'Completado');
+    assert.equal(await readXlsxCell(edited.buffer, 'B2'), 'Validado por comité');
+  });
+
+  it('generates a validated XLSX artifact for a compound generic edit request', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-xlsx-generic-'));
+    const originalPath = path.join(tmp, 'matriz.xlsx');
+    fs.writeFileSync(originalPath, await makeXlsxBuffer());
+
+    const result = await generateSourcePreservingDocumentEdit({
+      sourceFile: {
+        id: 'file-xlsx',
+        path: originalPath,
+        originalName: 'matriz.xlsx',
+        filename: 'matriz.xlsx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        extractedText: 'Estado Pendiente; Observación Revisar matriz.',
+      },
+      prompt: 'reemplaza "Pendiente" por "Completado" y en la celda B2 escribe "Validado por comité"',
+      displayPrompt: 'reemplaza "Pendiente" por "Completado" y en la celda B2 escribe "Validado por comité"',
+      userId: 'user-office',
+      chatId: 'chat-office',
+    });
+
+    assert.equal(result.format, 'xlsx');
+    assert.equal(result.validation.passed, true);
+    assert.equal(result.validation.checks.operation_criteria, true);
+    assert.match(result.content, /reemplacé el texto específico/);
+    assert.match(result.content, /actualicé la celda Datos!B2/);
+    assert.equal(result.orchestration.operations.some((op) => op.kind === 'replace_text'), true);
+    assert.equal(result.orchestration.operations.some((op) => op.kind === 'set_cell' && op.address === 'B2'), true);
+
+    const edited = fs.readFileSync(result.artifact.path);
+    assert.equal(await readXlsxCell(edited, 'A2'), 'Completado');
+    assert.equal(await readXlsxCell(edited, 'B2'), 'Validado por comité');
+  });
+
+  it('replaces and deletes text in DOCX through the generic text operation', async () => {
+    const source = await makeDocxBuffer();
+    const replaced = replaceTextInDocxBuffer(source, 'Introducción original', 'Introducción mejorada');
+    const text = sourcePreservingInternals
+      .analyzeDocumentStructure(new PizZip(replaced.buffer).file('word/document.xml').asText());
+    const xml = new PizZip(replaced.buffer).file('word/document.xml').asText();
+    assert.match(xml, /Introducción mejorada/);
+    assert.ok(text);
+  });
+
+  it('appends a real PPTX slide and preserves existing slides', async () => {
+    const source = await makePptxBuffer();
+    const edited = appendToPptxBuffer(source, [
+      { kind: 'heading2', text: 'Nueva diapositiva de riesgos' },
+      { kind: 'normal', text: 'Matriz de riesgos, controles y responsables.' },
+    ]);
+    const zip = new PizZip(edited);
+    const slides = Object.keys(zip.files).filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name));
+    assert.equal(slides.length, 2);
+    const text = extractTextFromPptxBuffer(edited);
+    assert.match(text, /Título viejo/);
+    assert.match(text, /Nueva diapositiva de riesgos/);
+    assert.match(text, /Matriz de riesgos/);
+  });
+
+  it('generates a validated PPTX artifact for replace plus new-slide requests', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-pptx-generic-'));
+    const originalPath = path.join(tmp, 'riesgos.pptx');
+    fs.writeFileSync(originalPath, await makePptxBuffer());
+
+    const result = await generateSourcePreservingDocumentEdit({
+      sourceFile: {
+        id: 'file-pptx',
+        path: originalPath,
+        originalName: 'riesgos.pptx',
+        filename: 'riesgos.pptx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        extractedText: 'Título viejo. Contenido base.',
+      },
+      prompt: 'reemplaza "Título viejo" por "Título nuevo" y agrega una diapositiva sobre matriz de riesgos de IA',
+      displayPrompt: 'reemplaza "Título viejo" por "Título nuevo" y agrega una diapositiva sobre matriz de riesgos de IA',
+      userId: 'user-office',
+      chatId: 'chat-office',
+    });
+
+    assert.equal(result.format, 'pptx');
+    assert.equal(result.validation.passed, true);
+    assert.equal(result.validation.checks.operation_criteria, true);
+    assert.match(result.content, /reemplacé el texto específico/);
+    assert.match(result.content, /agregué una diapositiva nueva/);
+    assert.equal(result.orchestration.operations.some((op) => op.kind === 'replace_text'), true);
+    assert.equal(result.orchestration.operations.some((op) => op.kind === 'append_generic'), true);
+
+    const edited = fs.readFileSync(result.artifact.path);
+    const text = extractTextFromPptxBuffer(edited);
+    const slides = Object.keys(new PizZip(edited).files).filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name));
+    assert.equal(slides.length, 2);
+    assert.match(text, /Título nuevo/);
+    assert.doesNotMatch(text, /Título viejo/);
+    assert.match(text, /matriz de riesgos/i);
+  });
+
+  it('replaces and deletes PPTX slide text without rebuilding the deck', async () => {
+    const source = await makePptxBuffer();
+    const replaced = replaceTextInPptxBuffer(source, 'Título viejo', 'Título nuevo');
+    assert.match(extractTextFromPptxBuffer(replaced.buffer), /Título nuevo/);
+    assert.doesNotMatch(extractTextFromPptxBuffer(replaced.buffer), /Título viejo/);
+
+    const deleted = replaceTextInPptxBuffer(replaced.buffer, 'Contenido base', '');
+    assert.doesNotMatch(extractTextFromPptxBuffer(deleted.buffer), /Contenido base/);
+    const slides = Object.keys(new PizZip(deleted.buffer).files).filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name));
+    assert.equal(slides.length, 1);
   });
 });
