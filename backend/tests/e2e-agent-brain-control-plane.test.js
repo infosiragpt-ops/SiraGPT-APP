@@ -187,4 +187,33 @@ describe('E2E agent brain cognitive control plane', () => {
     assert.ok(meta.agenticOperatingCore.validation.deterministic_checks.includes('cognitive.e2e-user-journey-probe'));
     assert.ok(done, 'expected done SSE event');
   });
+
+  test('POST /api/agent/task exposes the universal 1000-agent fabric for broad autonomous requests', async () => {
+    const app = buildRouteTestApp('/api/agent', reloadModule('../src/routes/agent-task'));
+    const res = await request(app)
+      .post('/api/agent/task')
+      .set('Authorization', auth.authHeader)
+      .send({
+        goal: 'Ciclo agentico para todo con 1000 agentes para entender contexto, programar, validar y no terminar hasta lograrlo',
+        scopeMode: 'global',
+        maxSteps: 4,
+        maxRuntimeMs: 60000,
+      });
+
+    assert.equal(res.status, 200);
+    assert.match(res.headers['content-type'], /text\/event-stream/);
+
+    const events = parseSseEvents(res.text);
+    const meta = events.find((event) => event.type === 'meta');
+    const done = events.find((event) => event.type === 'done');
+
+    assert.ok(meta, 'expected meta SSE event');
+    assert.equal(meta.executionProfile.universalAgents.summary.totalAgentCount, 1000);
+    assert.equal(meta.executionProfile.universalAgents.summary.universalAgentRequest, true);
+    assert.equal(meta.agenticOperatingCore.universal_agents.summary.totalAgentCount, 1000);
+    assert.equal(meta.agenticOperatingCore.universal_agents.summary.allCyclePhasesCovered, true);
+    assert.equal(meta.enterpriseRuntimeProfile.agenticOperatingCore.universalAgentCatalogCount, 1000);
+    assert.ok(meta.agenticOperatingCore.validation.deterministic_checks.includes('universal_agents.catalog_1000'));
+    assert.ok(done, 'expected done SSE event');
+  });
 });

@@ -210,12 +210,6 @@ function stringifyWithinSseLimit(payload, maxLen, original = payload) {
 }
 
 function compactEventForSse(obj, maxLen) {
-  const compact = compactJsonValue(obj, {
-    maxString: Math.max(1200, Math.floor(maxLen / 4)),
-    maxArray: 24,
-  });
-  const str = JSON.stringify(compact);
-  if (str.length <= maxLen) return str;
   if (obj?.type === 'meta') {
     const cognitive = obj.agenticOperatingCore?.cognitive_improvements || null;
     const executionCognitive = obj.executionProfile?.cognitiveImprovements || null;
@@ -233,6 +227,16 @@ function compactEventForSse(obj, maxLen) {
           mode: executionCognitive.mode,
           summary: executionCognitive.summary,
           active_categories: sliceWithCount(executionCognitive.active_categories, 16),
+        } : null,
+        universalAgents: obj.executionProfile.universalAgents ? {
+          version: obj.executionProfile.universalAgents.version,
+          mode: obj.executionProfile.universalAgents.mode,
+          summary: obj.executionProfile.universalAgents.summary,
+          active_families: sliceWithCount(obj.executionProfile.universalAgents.active_families, 20),
+          active_team_ids: sliceWithCount(
+            (obj.executionProfile.universalAgents.active_team || []).map((agent) => agent.id),
+            24
+          ),
         } : null,
       } : undefined,
       enterpriseRuntimeProfile: obj.enterpriseRuntimeProfile ? {
@@ -252,12 +256,31 @@ function compactEventForSse(obj, maxLen) {
           summary: cognitive.summary,
           active_categories: sliceWithCount(cognitive.active_categories, 16),
         } : null,
+        universal_agents: obj.agenticOperatingCore.universal_agents ? {
+          version: obj.agenticOperatingCore.universal_agents.version,
+          mode: obj.agenticOperatingCore.universal_agents.mode,
+          summary: obj.agenticOperatingCore.universal_agents.summary,
+          active_families: sliceWithCount(obj.agenticOperatingCore.universal_agents.active_families, 20),
+          active_team_ids: sliceWithCount(
+            (obj.agenticOperatingCore.universal_agents.active_team || []).map((agent) => agent.id),
+            24
+          ),
+          cycle: (obj.agenticOperatingCore.universal_agents.cycle || []).map((phase) => ({
+            phase: phase.phase,
+            order: phase.order,
+            gate: phase.gate,
+            assigned_agent_ids: sliceWithCount(phase.assigned_agents, 4),
+          })),
+        } : null,
         validation: obj.agenticOperatingCore.validation ? {
           reports_required: sliceWithCount(obj.agenticOperatingCore.validation.reports_required, 24),
           deterministic_checks: sliceWithCount(obj.agenticOperatingCore.validation.deterministic_checks, 40, [
             'cognitive.e2e-user-journey-probe',
             'cognitive.stream-terminal-event-probe',
             'cognitive.api-contract-probe',
+            'universal_agents.catalog_1000',
+            'universal_agents.all_cycle_phases_covered',
+            'universal_agents.release_not_before_validation',
           ]),
           qa_board_decision: obj.agenticOperatingCore.validation.qa_board_decision,
         } : undefined,
@@ -271,6 +294,12 @@ function compactEventForSse(obj, maxLen) {
       _compaction: 'meta_control_plane_summary',
     }, maxLen, obj);
   }
+  const compact = compactJsonValue(obj, {
+    maxString: Math.max(1200, Math.floor(maxLen / 4)),
+    maxArray: 24,
+  });
+  const str = JSON.stringify(compact);
+  if (str.length <= maxLen) return str;
   return stringifyWithinSseLimit({
     type: obj && obj.type ? obj.type : 'event',
     taskId: obj && obj.taskId ? obj.taskId : undefined,
