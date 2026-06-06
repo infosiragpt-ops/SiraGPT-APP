@@ -1979,6 +1979,10 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         if (!preserved?.artifact) {
           throw new Error('No encontré un archivo editable compatible asociado a este turno.');
         }
+        if (!preserved.validation?.passed) {
+          const unresolved = preserved.validation?.details?.agenticCycle?.unresolvedChecks || [];
+          throw new Error(`La edición se generó pero no pasó la autoevaluación del DOCX${unresolved.length ? `: ${unresolved.join(', ')}` : '.'}`);
+        }
         const artifactEvent = {
           id: preserved.artifact.id,
           filename: preserved.artifact.filename,
@@ -1991,6 +1995,24 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         };
         artifacts.push(artifactEvent);
         emit({ type: 'file_artifact', artifact: artifactEvent });
+        emit({
+          type: 'checkpoint',
+          label: 'Autoevaluación del documento',
+          status: 'completed',
+          payload: preserved.validation?.details?.agenticCycle || null,
+        });
+        for (const criterion of preserved.validation?.details?.agenticCycle?.semanticCriteria || []) {
+          emit({
+            type: 'quality_gate',
+            gate: `docx_${criterion.id}`,
+            label: criterion.label || criterion.id,
+            passed: Boolean(criterion.passed),
+            summary: criterion.passed
+              ? 'Criterio verificado en el DOCX generado.'
+              : 'Criterio no cumplido en el DOCX generado.',
+            payload: criterion,
+          });
+        }
         emit({
           type: 'quality_gate',
           gate: 'source_preserving_document_edit',
@@ -2714,6 +2736,10 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             displayPrompt: displayGoal,
           });
           if (preserved?.artifact) {
+            if (!preserved.validation?.passed) {
+              const unresolved = preserved.validation?.details?.agenticCycle?.unresolvedChecks || [];
+              throw new Error(`La edición se generó pero no pasó la autoevaluación del DOCX${unresolved.length ? `: ${unresolved.join(', ')}` : '.'}`);
+            }
             const artifactEvent = {
               id: preserved.artifact.id,
               filename: preserved.artifact.filename,
@@ -2726,6 +2752,24 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             };
             artifacts.push(artifactEvent);
             emit({ type: 'file_artifact', artifact: artifactEvent });
+            emit({
+              type: 'checkpoint',
+              label: 'Autoevaluación del documento',
+              status: 'completed',
+              payload: preserved.validation?.details?.agenticCycle || null,
+            });
+            for (const criterion of preserved.validation?.details?.agenticCycle?.semanticCriteria || []) {
+              emit({
+                type: 'quality_gate',
+                gate: `docx_${criterion.id}`,
+                label: criterion.label || criterion.id,
+                passed: Boolean(criterion.passed),
+                summary: criterion.passed
+                  ? 'Criterio verificado en el DOCX generado.'
+                  : 'Criterio no cumplido en el DOCX generado.',
+                payload: criterion,
+              });
+            }
             emit({
               type: 'quality_gate',
               gate: 'source_preserving_document_edit',

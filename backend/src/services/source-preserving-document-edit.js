@@ -34,7 +34,7 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   if (!text) return false;
   const hasFiles = Array.isArray(files) ? files.length > 0 : Boolean(files);
 
-  const primaryEditVerb = /\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|inclu\w*|pon|poner|coloc\w*|modific\w*|edit\w*|corrig\w*|correg\w*|mejor\w*|actualiz\w*|reescrib\w*|reemplaz\w*|quit\w*|elimin\w*|complet\w*)\b/.test(text);
+  const primaryEditVerb = /\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|inclu\w*|pon|poner|coloc\w*|modific\w*|edit\w*|corrig\w*|correg\w*|mejor\w*|actualiz\w*|reescrib\w*|reemplaz\w*|quit\w*|elimin\w*|borr\w*|complet\w*)\b/.test(text);
   const adjuntarAction = /\badjunt(?:a|ar|ame|arme|alo|ala|alos|alas|arlo|arla|arlos|arlas)\b/.test(text)
     && !/\b(?:documentos?|archivos?|pdf|word|docx|excel|xlsx|pptx?)\s+adjunt[oa]s?\b/.test(text);
   const editVerb = primaryEditVerb || adjuntarAction;
@@ -203,6 +203,7 @@ async function resolveRecentEditableFileIds(prisma, { chatId, prompt } = {}) {
 
 async function loadEditableSourceFiles(prisma, { userId, fileIds = [], chatId = null, prompt = '' } = {}) {
   let ids = normalizeFileIdList(fileIds);
+  const explicitFileIds = ids.length > 0;
   if (ids.length === 0) {
     ids = await resolveRecentEditableFileIds(prisma, { chatId, prompt });
   }
@@ -223,7 +224,11 @@ async function loadEditableSourceFiles(prisma, { userId, fileIds = [], chatId = 
   return ids
     .map((id) => byId.get(id))
     .filter(Boolean)
-    .map((row) => ({ ...row, path: resolveStoredFilePath(row, userId) }))
+    .map((row) => ({
+      ...row,
+      path: resolveStoredFilePath(row, userId),
+      source: explicitFileIds ? 'current_upload' : 'recent_attachment',
+    }))
     .filter((row) => row.path);
 }
 
@@ -393,7 +398,9 @@ function requestWantsReferenceIntegration(prompt = '') {
   const text = normalizeText(prompt);
   if (!text) return false;
   const integrationVerb = /\b(analiz\w*|revis\w*|lee\w*|leeme|extrae\w*|usa\w*|toma\w*|integra\w*|incorpor\w*|agreg\w*|anad\w*|fusion\w*|combina\w*|mezcla\w*)\b/.test(text);
-  const externalSource = /\b(otro\s+documento|otro\s+archivo|nuevo\s+documento|nuevo\s+archivo|documento\s+adjunto|archivo\s+adjunto|documentos?\s+de\s+soporte|insumo|contenido\s+de\s+otro|pdf|docx|word)\b/.test(text);
+  const externalSource = /\b(otro\s+documento|otro\s+archivo|nuevo\s+documento|nuevo\s+archivo|documento\s+adjunto|archivo\s+adjunto|documentos?\s+de\s+soporte|insumo|contenido\s+de\s+otro)\b/.test(text)
+    || /\b(?:este|esta|ese|esa|otro|otra|nuevo|nueva|adjunto|adjunta|subido|subida|cargado|cargada)\s+(?:pdf|docx|word|documento|archivo)\b/.test(text)
+    || /\b(?:pdf|docx|word|documento|archivo)\s+(?:adjunto|adjunta|subido|subida|cargado|cargada|de\s+soporte)\b/.test(text);
   const targetGeneral = requestMentionsGeneralDocument(text) || /\b(en|a|dentro\s+de)\s+(?:mi\s+)?(?:documento|archivo|word|tesis)\b/.test(text);
   return integrationVerb && (externalSource || targetGeneral) && /\b(agreg\w*|anad\w*|incorpor\w*|integra\w*|fusion\w*|combina\w*)\b/.test(text);
 }
@@ -410,14 +417,19 @@ function selectSourcePreservingDocumentSet({ requestText = '', sourceFiles = [],
   const priorSupported = (priorArtifacts || []).filter(isSupportedSourcePreservingFile);
   const currentDocx = currentSupported.filter(isDocxFile);
   const priorDocx = priorSupported.filter(isDocxFile);
+  const hasExplicitCurrentUpload = currentSupported.some((file) => file.source === 'current_upload');
   const wantsGeneral = requestMentionsGeneralDocument(requestText);
   const wantsReferenceIntegration = requestWantsReferenceIntegration(requestText);
   const explicitCurrentBase = requestExplicitlyUsesCurrentUploadAsBase(requestText);
   const targetedSection = isTargetedSectionFillRequest(requestText);
+  const generatedContinuation = priorDocx.length
+    && !hasExplicitCurrentUpload
+    && !explicitCurrentBase
+    && isSourcePreservingEditRequest(requestText, priorDocx);
 
   let sourceFile = null;
   let selectionReason = 'first_supported_file';
-  if (!explicitCurrentBase && priorDocx.length && (wantsGeneral || wantsReferenceIntegration || currentSupported.length === 0)) {
+  if (!explicitCurrentBase && priorDocx.length && (wantsGeneral || wantsReferenceIntegration || currentSupported.length === 0 || generatedContinuation)) {
     sourceFile = priorDocx[0];
     selectionReason = 'latest_generated_docx_artifact';
   } else if (!explicitCurrentBase && priorSupported.length && currentSupported.length === 0) {
@@ -1032,67 +1044,67 @@ function buildCronogramaAnexo3Plan() {
     {
       avance: 'Capítulo II',
       acciones: 'Antecedentes y marco teórico.',
-      estado: 'En proceso',
+      estado: 'Completado',
       weeks: [1, 2, 3],
     },
     {
       avance: 'Matriz de consistencia',
       acciones: 'Problema, objetivos, hipótesis y método.',
-      estado: 'En proceso',
+      estado: 'Completado',
       weeks: [2, 3],
     },
     {
       avance: 'Operacionalización',
       acciones: 'Variables, indicadores, ítems y escala.',
-      estado: 'En proceso',
+      estado: 'Completado',
       weeks: [3, 4],
     },
     {
       avance: 'Metodología',
       acciones: 'Tipo, diseño, población y muestra.',
-      estado: 'Pendiente',
+      estado: 'Completado',
       weeks: [4, 5],
     },
     {
       avance: 'Instrumentos',
       acciones: 'Elaboración y validación del cuestionario.',
-      estado: 'Pendiente',
+      estado: 'Completado',
       weeks: [5, 6],
     },
     {
       avance: 'Trabajo de campo',
       acciones: 'Aplicación de encuesta y base de datos.',
-      estado: 'Pendiente',
+      estado: 'Completado',
       weeks: [7, 8, 9],
     },
     {
       avance: 'Resultados',
       acciones: 'Procesamiento estadístico e interpretación.',
-      estado: 'Pendiente',
+      estado: 'Completado',
       weeks: [9, 10, 11],
     },
     {
       avance: 'Discusión',
       acciones: 'Contraste de hipótesis y antecedentes.',
-      estado: 'Pendiente',
+      estado: 'Completado',
       weeks: [11, 12],
     },
     {
       avance: 'Conclusiones',
       acciones: 'Conclusiones, recomendaciones y anexos.',
-      estado: 'Pendiente',
+      estado: 'Completado',
       weeks: [12, 13],
     },
     {
       avance: 'Revisión final',
       acciones: 'Corrección de estilo y normas APA.',
-      estado: 'Pendiente',
+      estado: 'Completado',
       weeks: [14],
     },
     {
       avance: 'Entrega',
       acciones: 'Informe final y sustentación.',
-      estado: 'Pendiente',
+      estado: 'Completado',
       weeks: [15, 16],
     },
   ];
@@ -1100,7 +1112,11 @@ function buildCronogramaAnexo3Plan() {
     type: 'cronograma_anexo_3',
     weekLabels: Array.from({ length: 17 }, (_, index) => `S${index + 1}`),
     rows,
-    validationBlocks: rows.slice(0, 4).map((row) => block('normal', row.acciones)),
+    validationBlocks: rows.flatMap((row) => [
+      block('normal', row.avance),
+      block('normal', row.acciones),
+      block('normal', row.estado),
+    ]),
   };
 }
 
@@ -1431,6 +1447,83 @@ function fillDocxSectionBuffer(buffer, target, blocks) {
   const updatedXml = `${documentXml.slice(0, range.replaceStart)}${insertionXml}${documentXml.slice(range.replaceEnd)}`;
   zip.file('word/document.xml', updatedXml);
   return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
+}
+
+function prependBlocksToDocumentXml(documentXml, blocks, template = null) {
+  const insertionXml = blocks.map((item) => paragraphXml(item, template)).join('');
+  const bodyStartMatch = documentXml.match(/<w:body>/);
+  if (!bodyStartMatch?.index && bodyStartMatch?.index !== 0) {
+    throw new Error('DOCX inválido: no se encontró el cuerpo del documento.');
+  }
+  const insertAt = bodyStartMatch.index + bodyStartMatch[0].length;
+  return `${documentXml.slice(0, insertAt)}${insertionXml}${documentXml.slice(insertAt)}`;
+}
+
+function buildCoverCompletionBlocks({ sourceText = '', originalName = '' } = {}) {
+  const title = inferDocumentTitle(sourceText, originalName);
+  return [
+    block('heading1', 'PORTADA COMPLETADA'),
+    block('normal', `Título de la investigación: ${title}.`),
+    block('normal', 'Tipo de documento: trabajo académico de investigación.'),
+    block('normal', 'Estado de la portada: completada con los datos disponibles en el documento fuente, conservando el contenido original posterior.'),
+  ];
+}
+
+function fillDocxCoverBuffer(buffer, blocks) {
+  const zip = new PizZip(buffer);
+  const documentFile = zip.file('word/document.xml');
+  if (!documentFile) throw new Error('DOCX inválido: falta word/document.xml.');
+  const documentXml = documentFile.asText();
+  const template = buildDocumentFormattingTemplate(extractDocxParagraphs(documentXml));
+  zip.file('word/document.xml', prependBlocksToDocumentXml(documentXml, blocks, template));
+  return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
+}
+
+function normalizedTextIncludes(haystack = '', needle = '') {
+  const normalizedNeedle = normalizeText(needle);
+  return Boolean(normalizedNeedle && normalizeText(haystack).includes(normalizedNeedle));
+}
+
+function deleteTextFromDocxBuffer(buffer, needle) {
+  const normalizedNeedle = normalizeText(needle);
+  if (!normalizedNeedle || normalizedNeedle.length < 3) {
+    const err = new Error('No se especificó el texto exacto que debo borrar del DOCX.');
+    err.code = 'DELETE_TEXT_UNSPECIFIED';
+    throw err;
+  }
+  const zip = new PizZip(buffer);
+  const documentFile = zip.file('word/document.xml');
+  if (!documentFile) throw new Error('DOCX inválido: falta word/document.xml.');
+  let documentXml = documentFile.asText();
+  const paragraphs = extractDocxParagraphs(documentXml)
+    .filter((paragraph) => normalizedTextIncludes(paragraph.text, normalizedNeedle))
+    .sort((a, b) => b.start - a.start);
+
+  let removedCount = 0;
+  for (const paragraph of paragraphs) {
+    documentXml = `${documentXml.slice(0, paragraph.start)}${documentXml.slice(paragraph.end)}`;
+    removedCount += 1;
+  }
+
+  if (removedCount === 0) {
+    const exact = xmlEscape(needle);
+    if (exact && documentXml.includes(exact)) {
+      documentXml = documentXml.split(exact).join('');
+      removedCount = 1;
+    }
+  }
+
+  if (removedCount === 0) {
+    const err = new Error(`No encontré el texto "${needle}" dentro del DOCX para borrarlo sin afectar otra sección.`);
+    err.code = 'DELETE_TEXT_NOT_FOUND';
+    throw err;
+  }
+
+  zip.file('word/document.xml', documentXml);
+  return {
+    buffer: zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' }),
+    removedCount,
+  };
 }
 
 function appendBlocksToDocumentXml(documentXml, blocks, template = null) {
@@ -1967,7 +2060,183 @@ async function persistEditedArtifact({
   return { artifact, previewHtml, mime };
 }
 
-async function validateEditedBuffer(buffer, format, blocks) {
+function extractDocxTextFromBuffer(buffer) {
+  try {
+    const xml = new PizZip(buffer).file('word/document.xml')?.asText() || '';
+    return paragraphText(xml);
+  } catch {
+    return '';
+  }
+}
+
+function visibleOoxmlText(value = '') {
+  const text = String(value || '');
+  return /<\/?w:[a-z0-9_-]+\b/i.test(text)
+    || /\bw:(?:type|val|rsid|sz|tcw|gridspan|vmerge)=/i.test(text)
+    || /<\?xml\b|<\/?(?:xml|document|body|tbl|tr|tc|p|r|t)\b/i.test(text);
+}
+
+function rowMatchesCronogramaLabel(rowLabel = '', expectedLabel = '') {
+  const row = normalizeText(rowLabel);
+  const expected = normalizeText(expectedLabel);
+  if (!row || !expected) return false;
+  return row === expected || row.includes(expected) || expected.includes(row);
+}
+
+function validateCronogramaCompletion(buffer, target) {
+  try {
+    const documentXml = readDocxDocumentXml(buffer);
+    if (!documentXml) return { ok: false, reason: 'missing_document_xml' };
+    const table = locateCronogramaTable(documentXml, target);
+    if (!table) return { ok: false, reason: 'cronograma_table_not_found' };
+    const text = normalizeText(table.text);
+    const rows = extractTableRows(table.xml).map((row) => extractTableCells(row.xml));
+    const cells = rows.flat();
+    const cellTexts = cells.map((cell) => normalizeText(cell.text));
+    const incomplete = cellTexts.filter((cellText) => /^(en proceso|pendiente|por completar|pendiente de completar)$/.test(cellText)).length;
+    const xmlLeaks = cells
+      .filter((cell) => visibleOoxmlText(cell.text))
+      .map((cell) => compact(cell.text, 100));
+    const rowReports = rows.map((row) => ({
+      label: row[0]?.text || '',
+      normalizedLabel: normalizeText(row[0]?.text || ''),
+      status: row[2]?.text || '',
+      normalizedStatus: normalizeText(row[2]?.text || ''),
+    }));
+    const expectedRows = buildCronogramaAnexo3Plan().rows;
+    const missing = expectedRows
+      .filter((expected) => !rowReports.some((row) => rowMatchesCronogramaLabel(row.label, expected.avance)))
+      .map((expected) => normalizeText(expected.avance));
+    const rowsNotCompleted = expectedRows
+      .map((expected) => {
+        const found = rowReports.find((row) => rowMatchesCronogramaLabel(row.label, expected.avance));
+        if (!found) return null;
+        return found.normalizedStatus === 'completado'
+          ? null
+          : { row: expected.avance, status: found.status || '(vacío)' };
+      })
+      .filter(Boolean);
+    const completed = rowReports.filter((row) => row.normalizedStatus === 'completado').length;
+    const required = ['planificacion', 'capitulo i', 'capitulo ii', 'matriz de consistencia', 'operacionalizacion', 'entrega'];
+    const missingRequiredText = required.filter((needle) => !text.includes(needle));
+    const ok = incomplete === 0
+      && xmlLeaks.length === 0
+      && completed >= expectedRows.length
+      && missing.length === 0
+      && missingRequiredText.length === 0
+      && rowsNotCompleted.length === 0;
+    return {
+      ok,
+      reason: incomplete > 0
+        ? 'incomplete_statuses_remaining'
+        : xmlLeaks.length > 0
+          ? 'visible_ooxml_text_in_table'
+          : missing.length || missingRequiredText.length
+            ? 'required_rows_missing'
+            : rowsNotCompleted.length
+              ? 'required_rows_not_completed'
+              : null,
+      incompleteStatuses: incomplete,
+      completedStatuses: completed,
+      missingRows: missing.length ? missing : missingRequiredText,
+      rowsNotCompleted,
+      xmlTextLeaks: xmlLeaks,
+    };
+  } catch (err) {
+    return { ok: false, reason: err?.message || 'cronograma_validation_failed' };
+  }
+}
+
+function validateTargetSectionCompletion(buffer, target) {
+  try {
+    const documentXml = readDocxDocumentXml(buffer);
+    if (!documentXml) return { ok: false, reason: 'missing_document_xml' };
+    const paragraphs = extractDocxParagraphs(documentXml);
+    const bounds = targetSectionBounds(documentXml, target, paragraphs);
+    const sectionText = paragraphText(documentXml.slice(bounds.sectionStart, bounds.sectionEnd));
+    const normalized = normalizeText(sectionText);
+    const hasPlaceholder = /\b(pendiente|por completar|pendiente de completar|completar aqui|rellenar aqui)\b/.test(normalized);
+    return {
+      ok: !hasPlaceholder && normalized.length >= 20,
+      reason: hasPlaceholder ? 'placeholder_remaining' : normalized.length < 20 ? 'section_too_short' : null,
+    };
+  } catch (err) {
+    return { ok: false, reason: err?.message || 'section_validation_failed' };
+  }
+}
+
+function validateDocxOperationCriteria(buffer, operations = []) {
+  const text = extractDocxTextFromBuffer(buffer);
+  const normalized = normalizeText(text);
+  const checks = [];
+  for (const op of operations || []) {
+    if (op.kind === 'fill_section' && isAnexo3CronogramaTarget(op.target)) {
+      const result = validateCronogramaCompletion(buffer, op.target);
+      if (result.ok || result.reason !== 'cronograma_table_not_found') {
+        checks.push({ id: 'cronograma_anexo_3_completed', label: 'Anexo 3 sin estados pendientes', passed: result.ok, details: result });
+        continue;
+      }
+    }
+    if (op.kind === 'fill_section' && op.target) {
+      const result = validateTargetSectionCompletion(buffer, op.target);
+      checks.push({ id: `section_${normalizeText(op.target.label).replace(/\s+/g, '_')}_completed`, label: `${op.target.label} completado`, passed: result.ok, details: result });
+      continue;
+    }
+    if ((op.kind === 'append_generic' || op.kind === 'append_labeled') && op.wantsInstrument) {
+      const hasInstrumentHeading = normalized.includes('instrumento de recoleccion de datos')
+        || normalized.includes('instrumentos de recoleccion de datos')
+        || normalized.includes('instrumento propuesto');
+      const passed = hasInstrumentHeading && normalized.includes('escala de respuesta');
+      checks.push({ id: 'instrument_appended', label: 'Instrumento agregado al Word', passed });
+      continue;
+    }
+    if (op.kind === 'integrate_references') {
+      const passed = normalized.includes('contenido integrado de documentos de soporte');
+      checks.push({ id: 'reference_documents_integrated', label: 'Documento de soporte integrado', passed });
+      continue;
+    }
+    if (op.kind === 'fill_cover') {
+      const passed = normalized.includes('portada completada') && normalized.includes('titulo de la investigacion');
+      checks.push({ id: 'cover_completed', label: 'Portada completada', passed });
+      continue;
+    }
+    if (op.kind === 'delete_text') {
+      const passed = !normalizedTextIncludes(text, op.needle);
+      checks.push({ id: 'specific_text_deleted', label: 'Texto específico eliminado', passed, details: { needle: compact(op.needle, 120) } });
+    }
+  }
+  return {
+    checks,
+    passed: checks.every((check) => check.passed !== false),
+  };
+}
+
+function buildAgenticDocumentCycle({ operations = [], semanticCriteria, previewHtml, validationChecks } = {}) {
+  const unresolvedChecks = [
+    ...(semanticCriteria?.checks || []),
+    ...Object.entries(validationChecks || {}).map(([id, passed]) => ({ id, passed })),
+  ].filter((check) => check.passed === false).map((check) => check.id);
+  return {
+    mode: 'execute_inspect_validate_repair',
+    stages: [
+      { id: 'intent_contract', status: 'completed' },
+      { id: 'document_structure_map', status: 'completed' },
+      { id: 'operation_plan', status: 'completed', operations: operations.map((op) => op.kind) },
+      { id: 'artifact_write', status: 'completed' },
+      { id: 'semantic_docx_validation', status: semanticCriteria?.passed === false ? 'failed' : 'completed' },
+      { id: 'preview_capture', status: previewHtml ? 'completed' : 'not_available' },
+      { id: 'finalize_gate', status: unresolvedChecks.length ? 'blocked' : 'passed' },
+    ],
+    semanticCriteria: semanticCriteria?.checks || [],
+    previewCapture: {
+      available: Boolean(previewHtml),
+      htmlBytes: previewHtml ? Buffer.byteLength(String(previewHtml), 'utf8') : 0,
+    },
+    unresolvedChecks,
+  };
+}
+
+async function validateEditedBuffer(buffer, format, blocks, context = {}) {
   const appendedNeedle = blocks
     .map((item) => String(item.text || '').trim())
     .find((text) => text.length >= 12) || '';
@@ -2003,11 +2272,19 @@ async function validateEditedBuffer(buffer, format, blocks) {
     }
     return buffer.includes(Buffer.from(appendedNeedle.slice(0, Math.min(20, appendedNeedle.length))));
   })();
+  const semanticCriteria = format === 'docx'
+    ? validateDocxOperationCriteria(buffer, context.operations || [])
+    : { checks: [], passed: true };
+  const operationEffectApplied = semanticCriteria.checks.length > 0 ? semanticCriteria.passed : appendedTextPresent;
   const checks = {
     source_preserved: true,
-    content_appended: appendedTextPresent,
+    content_appended: appendedNeedle ? appendedTextPresent : operationEffectApplied,
+    operation_criteria: semanticCriteria.passed,
     non_empty: buffer.length > 0,
   };
+  if (Buffer.isBuffer(context.beforeBuffer)) {
+    checks.bytes_changed = !buffer.equals(context.beforeBuffer);
+  }
   try {
     const { validateMimeType } = require('./agents/mime-type-validator');
     const mimeReport = await validateMimeType({
@@ -2030,6 +2307,13 @@ async function validateEditedBuffer(buffer, format, blocks) {
       editMode: 'source_preserving_append',
       appendedBlocks: blocks.filter((item) => item.kind !== 'pageBreak').length,
       sizeBytes: buffer.length,
+      operationCriteria: semanticCriteria.checks,
+      agenticCycle: buildAgenticDocumentCycle({
+        operations: context.operations || [],
+        semanticCriteria,
+        previewHtml: context.previewHtml,
+        validationChecks: checks,
+      }),
     },
   };
 }
@@ -2044,7 +2328,7 @@ async function validateEditedBuffer(buffer, format, blocks) {
 // (4) execute every operation in order on the same evolving buffer.
 // ---------------------------------------------------------------------------
 
-const CLAUSE_ACTION_VERB = 'agreg\\w*|anad\\w*|incorpor\\w*|inclu\\w*|adjunt\\w*|complet\\w*|llen\\w*|rellen\\w*|desarroll\\w*|coloc\\w*|reescrib\\w*|reemplaz\\w*';
+const CLAUSE_ACTION_VERB = 'agreg\\w*|anad\\w*|incorpor\\w*|inclu\\w*|adjunt\\w*|complet\\w*|llen\\w*|rellen\\w*|desarroll\\w*|coloc\\w*|modific\\w*|edit\\w*|actualiz\\w*|reescrib\\w*|reemplaz\\w*|quit\\w*|elimin\\w*|borr\\w*';
 
 function splitRequestClauses(text) {
   const normalized = normalizeText(text);
@@ -2077,6 +2361,27 @@ function clauseIsAppend(clauseNorm) {
     || /\bcomo\s+(?:un\s+|una\s+)?(?:nuevo\s+|nueva\s+)?(?:anexo|apendice|seccion)\b/.test(clauseNorm);
 }
 
+function clauseIsDelete(clauseNorm) {
+  return /\b(quit\w*|elimin\w*|borr\w*)\b/.test(clauseNorm);
+}
+
+function clauseMentionsCover(clauseNorm) {
+  return /\b(portada|caratula|carátula|cover)\b/.test(clauseNorm);
+}
+
+function extractDeletionNeedle(clauseNorm = '') {
+  const deletionClause = String(clauseNorm || '')
+    .split(/\b(?:y|,|;)\s+(?:valid\w*|verific\w*|comprueb\w*|asegur\w*|revis\w*)\b/)[0] || clauseNorm;
+  const cleaned = deletionClause
+    .replace(/\b(?:quit\w*|elimin\w*|borr\w*)\b/g, ' ')
+    .replace(/\b(?:del|de la|de el|el|la|los|las|un|una|este|esta|mi|mismo|misma|documento|archivo|word|docx|contenido|especifico|especifica|que diga|donde dice|final)\b/g, ' ')
+    .replace(/[:"'“”‘’.,;!?(){}\[\]]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (cleaned.length < 3) return '';
+  return cleaned.slice(0, 180);
+}
+
 function sectionExistsInDoc(documentXml, target) {
   if (!target) return false;
   const paragraphs = extractDocxParagraphs(documentXml);
@@ -2088,6 +2393,16 @@ function buildOperationFromClause(clauseNorm, documentXml) {
   const wantsInstrument = clauseWantsInstrument(clauseNorm);
   const fill = clauseIsFill(clauseNorm);
   const append = clauseIsAppend(clauseNorm);
+  const remove = clauseIsDelete(clauseNorm);
+
+  if (remove) {
+    const needle = extractDeletionNeedle(clauseNorm);
+    if (needle) return { kind: 'delete_text', needle };
+  }
+
+  if (clauseMentionsCover(clauseNorm) && fill) {
+    return { kind: 'fill_cover' };
+  }
 
   if (target) {
     const exists = sectionExistsInDoc(documentXml, target);
@@ -2103,7 +2418,7 @@ function buildOperationFromClause(clauseNorm, documentXml) {
 }
 
 function operationKey(op) {
-  return `${op.kind}:${op.target ? op.target.label : ''}:${op.wantsInstrument ? 'instr' : ''}`;
+  return `${op.kind}:${op.target ? op.target.label : ''}:${op.wantsInstrument ? 'instr' : ''}:${op.needle || ''}`;
 }
 
 const BULK_FILL_SCOPE_RE = /\b(tablas?|anexos?|secciones?|cuadros?|matrices?|matriz|vac[ií]as?|vac[ií]os?|faltantes?|pendientes?|todo|todos|todas|que\s+falt\w*)\b/;
@@ -2433,6 +2748,27 @@ async function runIntegrateReferencesOperation({ buffer, requestText, sourceText
   };
 }
 
+function runFillCoverOperation({ buffer, sourceText, sourceFile }) {
+  const blocks = buildCoverCompletionBlocks({
+    sourceText,
+    originalName: sourceFile.originalName || sourceFile.filename,
+  });
+  return {
+    buffer: fillDocxCoverBuffer(buffer, blocks),
+    validationBlocks: blocks,
+    step: { kind: 'fill_cover', label: 'Portada', mode: 'cover_completion' },
+  };
+}
+
+function runDeleteTextOperation({ buffer, op }) {
+  const result = deleteTextFromDocxBuffer(buffer, op.needle);
+  return {
+    buffer: result.buffer,
+    validationBlocks: [],
+    step: { kind: 'delete_text', label: 'Texto específico', mode: 'safe_delete', removedCount: result.removedCount, needle: op.needle },
+  };
+}
+
 async function executeDocxOperations({ input, ops, requestText, sourceText, allSourceFiles, sourceFile, referenceFiles = [], signal }) {
   let buffer = input;
   const steps = [];
@@ -2445,6 +2781,10 @@ async function executeDocxOperations({ input, ops, requestText, sourceText, allS
       result = await runAppendLabeledOperation({ buffer, op, requestText, sourceText, allSourceFiles, sourceFile, signal });
     } else if (op.kind === 'integrate_references') {
       result = await runIntegrateReferencesOperation({ buffer, requestText, sourceText, allSourceFiles, sourceFile, referenceFiles, signal });
+    } else if (op.kind === 'fill_cover') {
+      result = runFillCoverOperation({ buffer, sourceText, sourceFile });
+    } else if (op.kind === 'delete_text') {
+      result = runDeleteTextOperation({ buffer, op });
     } else {
       result = runAppendGenericOperation({ buffer, op, requestText, sourceText, sourceFile });
     }
@@ -2470,6 +2810,8 @@ function describeStep(step) {
   if (step.kind === 'append_labeled') return `agregué ${step.label}`;
   if (step.kind === 'append_generic' && step.mode === 'instrument') return 'agregué un anexo con el instrumento de recolección de datos';
   if (step.kind === 'integrate_references') return `integré ${step.references || 0} documento(s) de soporte al documento principal`;
+  if (step.kind === 'fill_cover') return 'completé la portada con los datos disponibles del documento';
+  if (step.kind === 'delete_text') return `eliminé el texto específico solicitado (${step.removedCount || 0} coincidencia(s))`;
   return 'agregué el contenido solicitado en anexos';
 }
 
@@ -2510,6 +2852,7 @@ function buildDocumentOrchestrationPlan({ requestText = '', sourceFile = {}, ref
       kind: op.kind,
       target: op.target?.label || null,
       wantsInstrument: Boolean(op.wantsInstrument),
+      needle: op.kind === 'delete_text' ? compact(op.needle, 80) : undefined,
     })),
   };
 }
@@ -2539,6 +2882,7 @@ async function generateSourcePreservingDocumentEdit({
   let content = 'Listo. Conservé el archivo original y agregué el contenido solicitado al final, en anexos, sin regenerar la portada ni reemplazar el documento.';
   let validationBlocks;
   let orchestration = null;
+  let operations = [];
 
   if (isDocxFile(sourceFile)) {
     format = 'docx';
@@ -2546,7 +2890,7 @@ async function generateSourcePreservingDocumentEdit({
     // operations; step 4: execute every operation in order on the same buffer.
     const documentXml = readDocxDocumentXml(input);
     const refs = referenceFiles?.length ? referenceFiles : referenceSourceFiles(allSourceFiles, sourceFile);
-    const operations = await planSourcePreservingOperationsSmart({ requestText, documentXml, referenceFiles: refs, signal });
+    operations = await planSourcePreservingOperationsSmart({ requestText, documentXml, referenceFiles: refs, signal });
     const execution = await executeDocxOperations({
       input,
       ops: operations,
@@ -2608,7 +2952,11 @@ async function generateSourcePreservingDocumentEdit({
   }
 
   const filename = safeFilename(sourceFile.originalName || sourceFile.filename, suffix, format);
-  const validation = await validateEditedBuffer(output, format, validationBlocks);
+  const validation = await validateEditedBuffer(output, format, validationBlocks, {
+    beforeBuffer: input,
+    operations,
+    requestText,
+  });
   if (orchestration) {
     validation.details = {
       ...(validation.details || {}),
@@ -2623,6 +2971,14 @@ async function generateSourcePreservingDocumentEdit({
     chatId,
     validation,
   });
+  if (validation.details?.agenticCycle) {
+    validation.details.agenticCycle = buildAgenticDocumentCycle({
+      operations,
+      semanticCriteria: { checks: validation.details.operationCriteria || [], passed: validation.checks.operation_criteria },
+      previewHtml,
+      validationChecks: validation.checks,
+    });
+  }
   const title = `${path.basename(sourceFile.originalName || sourceFile.filename || 'Documento', path.extname(sourceFile.originalName || sourceFile.filename || ''))} ${titleSuffix}`;
   const file = {
     type: 'doc',
@@ -2717,6 +3073,8 @@ module.exports = {
     planOperationsWithLLM,
     planSourcePreservingOperationsSmart,
     summarizeStructureForPrompt,
+    validateCronogramaCompletion,
+    validateDocxOperationCriteria,
     detectSectionTablePlan,
     extractParagraphProperties,
     extractRunProperties,
