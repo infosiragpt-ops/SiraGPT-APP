@@ -19,6 +19,7 @@
 - [Reserved VM GCLB 30s timeout](reserved-vm-gclb-timeout.md) — GCLB hard ~30s total-response cut; heartbeats don't reset it (unlike Autoscale). For >30s work: persist-then-poll, don't keep request alive.
 - [Image gen vs edit providers](image-edit-provider-matrix.md) — editing (imagePath) only works on OpenAI/Gemini; OpenRouter is generation-only and must be rerouted, never hard-fail.
 - [Backend test CI wiring](backend-test-ci-wiring.md) — new backend tests only run in CI if added to package.json `test` string; /health routes live in injectable createHealthRoutes for supertest.
+- [Prisma renamed-migration P3009](prisma-renamed-migration-p3009.md) — renaming an applied migration re-runs its DDL → "already exists" → P3009 → backend never boots; fix with idempotent SQL + `migrate resolve --applied`, then republish.
 - [Web-search sources UX](source-presentation-chips.md) — sources are app-rendered (Fuentes chip + Actividad drawer next to action rail), NOT inline markdown; allowlist source URLs (http/https) before any href.
 - [Authoritative current datetime](authoritative-datetime.md) — inject a current-datetime block as system authority so the model stops hallucinating "today"; never answer volatile facts from memory.
 - [Intent alignment signals](intent-alignment-signals.md) — new tone/length/language/count signals must be additive + guarded against domain false-positives; always add negative tests.
