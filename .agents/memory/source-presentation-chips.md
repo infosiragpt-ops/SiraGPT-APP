@@ -1,25 +1,35 @@
 ---
-name: Source presentation as chips at message bottom
-description: How SiraGPT renders web/search sources as clean chips at the end of a message instead of inline clutter.
+name: Web-search source presentation (Fuentes chip + Actividad drawer)
+description: How SiraGPT surfaces web-search sources — app-rendered chip next to the action rail, not inline markdown.
 ---
 
-# Sources as chips at the bottom (not inline)
+# Web-search sources are app-rendered, not model-rendered
 
-The model is instructed (SOURCE INTEGRITY CONTRACT in master-prompt.js) to write
-clean prose with NO raw URLs / engine markers inline, and to list every source
-once at the END under a heading named exactly `## Fuentes` (`## Sources` in
-English) as a numbered markdown list of links (one link per line).
+Web-search results are surfaced by the application UI, NOT by the model writing a
+markdown source list. The model is instructed (SOURCE PRESENTATION directive in
+master-prompt.js) to write clean prose and NOT emit a `## Fuentes` heading or raw
+URLs for web-search results. The academic/APA bibliography exception stays: when
+the user explicitly wants citations/references, the model still writes them.
 
-The frontend (components/message-component.tsx markdown renderer) then turns any
-**link-only list item** into a ChatGPT-style chip (pill with a globe icon), and a
-list whose items are all link-only into a `flex flex-wrap` row of chips.
+The backend carries structured sources end-to-end: the web-search adapter returns
+`{ query, sources:[{title,url,snippet,domain,confidence}] }`; the chat route emits
+them over SSE as a `web_sources` event AND persists them into the assistant
+message metadata (`webSources` + `webSearchMeta`) so reloaded turns keep them.
 
-**Why scope to link-only `<li>`, not the global `<a>` renderer:** an earlier
-attempt styled every `<a>` as a chip, which forced *inline prose links* into pills
-too. Scoping the chip to list items that contain only a link keeps normal inline
-links as plain underlined links while the Fuentes section renders as chips.
+The frontend renders a single `SourcesChip` (favicon "burbujitas" + `Fuentes N`
+label) next to the message action rail for ASSISTANT, non-streaming messages that
+have sources. Clicking it opens a right-side portal "Actividad" drawer with the
+search steps, elapsed time, and the full source list. A module-scope
+`extractWebSources(message)` reads live `message.sources/searchActivity` first,
+then falls back to parsing persisted `message.metadata` JSON.
 
-**How to apply:** if you change the chip look, edit `SOURCE_CHIP_CLASS` /
-`renderSourceChip` and the `ul`/`ol`/`li` renderers — keep the plain inline `a`
-renderer untouched. The detection relies on the model emitting sources as a
-markdown list; the contract wording and the renderer must stay in sync.
+**Why:** the earlier approach turned link-only markdown `<li>`s into inline chips,
+which depended on the model emitting a `## Fuentes` list and cluttered the body.
+The app-level chip+drawer matches ChatGPT's UX and is decoupled from model output.
+
+**How to apply:**
+- Untrusted source URLs must be protocol-allowlisted (http/https only) before going
+  into an anchor `href` — `safeHref()` in SourcesChip.tsx. Never render a raw
+  source URL as an href without it (javascript:/data: XSS risk).
+- The old inline link-list-to-chip markdown transformation was removed; do not
+  reintroduce it. Sources live only in the chip/drawer.

@@ -102,7 +102,7 @@ describe("ai-service · deterministic intent routing", () => {
     )
   })
 
-  it("routes targeted edits of an uploaded Word document to the document editor", async () => {
+  it("routes targeted edits of an uploaded Word document to the agentic document editor", async () => {
     const history = [
       {
         role: "USER",
@@ -121,7 +121,7 @@ describe("ai-service · deterministic intent routing", () => {
     assert.equal(shouldAnswerFromExistingDocument(prompt, history), false)
     assert.equal(shouldEditExistingDocument(prompt, history), true)
     assert.equal(shouldUseExistingDocumentFileContext(prompt, history), true)
-    assert.equal(await aiService.classifyIntent(prompt, history), "doc")
+    assert.equal(await aiService.classifyIntent(prompt, history), "agent_task")
   })
 
   it("keeps spreadsheet data work on the agentic route when a spreadsheet is attached", () => {

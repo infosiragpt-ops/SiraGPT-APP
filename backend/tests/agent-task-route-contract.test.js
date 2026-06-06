@@ -11,6 +11,9 @@ const agentTaskRouter = require('../src/routes/agent-task');
 const { INTERNAL } = agentTaskRouter;
 const taskStore = require('../src/services/agents/task-store');
 const chatTaskScope = require('../src/services/agents/chat-task-scope');
+const {
+  buildCognitiveImprovementBundle,
+} = require('../src/services/agents/cognitive-improvements');
 
 test('agent task route: strips internal execution contracts from visible goals', () => {
   const raw = [
@@ -58,6 +61,66 @@ test('agent task route: safeJsonStringify keeps oversized SSE events parseable',
   assert.equal(parsed.type, 'framework_status');
   assert.equal(parsed.taskId, 'task-large-json');
   assert.equal(parsed.seq, 7);
+});
+
+test('agent task route: safeJsonStringify preserves cognitive meta summary under a hard SSE budget', () => {
+  const cognitive = buildCognitiveImprovementBundle({
+    goal: 'Implementa 100 mejoras en el backend y mejora el cerebro del software',
+  });
+  const serialized = INTERNAL.safeJsonStringify({
+    type: 'meta',
+    taskId: 'task-cognitive-meta',
+    goal: 'x'.repeat(80_000),
+    model: 'gpt-4o',
+    executionProfile: {
+      version: 'test-profile',
+      capabilities: { needsAgentRuntimeHardening: true },
+      requiredTools: ['run_tests', ...Array.from({ length: 120 }, (_, index) => `tool_${index}`)],
+      cognitiveImprovements: cognitive,
+    },
+    enterpriseRuntimeProfile: {
+      agenticOperatingCore: {
+        cognitiveImprovementCount: 100,
+        activeCognitiveImprovementCount: cognitive.summary.activeControlCount,
+      },
+      toolRuntime: { authorizedTools: Array.from({ length: 120 }, (_, index) => `tool_${index}`) },
+      qaPreflight: { decision: 'allow' },
+      durableExecution: { status: 'running' },
+      noisy: 'y'.repeat(120_000),
+    },
+    agenticOperatingCore: {
+      version: 'test-core',
+      core_id: 'core-cognitive-meta',
+      trace_id: 'trace-cognitive-meta',
+      summary: {
+        cognitiveImprovementCount: 100,
+        activeCognitiveImprovementCount: cognitive.summary.activeControlCount,
+        cognitiveCategoryCount: 10,
+      },
+      cognitive_improvements: cognitive,
+      validation: {
+        reports_required: Array.from({ length: 80 }, (_, index) => `report_${index}`),
+        deterministic_checks: [
+          ...cognitive.validation_checks,
+          ...Array.from({ length: 120 }, (_, index) => `extra_check_${index}`),
+        ],
+        qa_board_decision: 'allow',
+      },
+      observability: {
+        trace_id: 'trace-cognitive-meta',
+        events: [...cognitive.observability_events, ...Array.from({ length: 120 }, (_, index) => `event_${index}`)],
+        metrics: [...cognitive.metrics, ...Array.from({ length: 120 }, (_, index) => `metric_${index}`)],
+      },
+    },
+  }, 8192);
+
+  assert.ok(serialized.length <= 8192);
+  const parsed = JSON.parse(serialized);
+  assert.equal(parsed.type, 'meta');
+  assert.equal(parsed._compaction, 'meta_control_plane_summary');
+  assert.equal(parsed.agenticOperatingCore.cognitive_improvements.summary.totalControlCount, 100);
+  assert.equal(parsed.agenticOperatingCore.cognitive_improvements.summary.activeControlCount, 100);
+  assert.ok(parsed.agenticOperatingCore.validation.deterministic_checks.includes('cognitive.e2e-user-journey-probe'));
 });
 
 test('agent task route: detects weak attachment tool-unavailable final answers', () => {

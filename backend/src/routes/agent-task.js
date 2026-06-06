@@ -157,14 +157,150 @@ function compactJsonValue(value, {
   return out;
 }
 
+function sliceWithCount(value, limit = 24, preserve = []) {
+  if (!Array.isArray(value)) return value;
+  const preserveSet = new Set((preserve || []).filter((item) => value.includes(item)));
+  const preserved = Array.from(preserveSet);
+  const headLimit = Math.max(0, limit - preserved.length);
+  const out = [];
+  for (const item of value) {
+    if (preserveSet.has(item)) continue;
+    if (out.length >= headLimit) break;
+    out.push(item);
+  }
+  for (const item of preserved) {
+    if (!out.includes(item) && out.length < limit) out.push(item);
+  }
+  if (value.length > out.length) out.push(`[Truncated ${value.length - out.length} items]`);
+  return out;
+}
+
+function stringifyWithinSseLimit(payload, maxLen, original = payload) {
+  const serialized = JSON.stringify(payload);
+  if (!Number.isFinite(maxLen) || serialized.length <= maxLen) return serialized;
+
+  const compact = compactJsonValue(payload, {
+    maxString: Math.max(160, Math.floor(maxLen / 8)),
+    maxArray: 8,
+    maxDepth: 4,
+  });
+  const compactSerialized = JSON.stringify(compact);
+  if (compactSerialized.length <= maxLen) return compactSerialized;
+
+  const messageLimit = Math.max(60, Math.min(600, maxLen - 320));
+  const minimal = {
+    type: (original && original.type) || payload?.type || 'event',
+    taskId: (original && original.taskId) || payload?.taskId || undefined,
+    seq: (original && original.seq) || payload?.seq || undefined,
+    label: original?.label ? String(original.label).slice(0, 160) : undefined,
+    status: original?.status || undefined,
+    message: original?.message ? String(original.message).slice(0, messageLimit) : undefined,
+    _truncated: true,
+    _compaction: payload?._compaction || 'sse_hard_limit',
+  };
+  const minimalSerialized = JSON.stringify(minimal);
+  if (minimalSerialized.length <= maxLen) return minimalSerialized;
+
+  return JSON.stringify({
+    type: minimal.type || 'event',
+    taskId: minimal.taskId,
+    _truncated: true,
+    _compaction: 'sse_minimal',
+  });
+}
+
 function compactEventForSse(obj, maxLen) {
+  if (obj?.type === 'meta') {
+    const cognitive = obj.agenticOperatingCore?.cognitive_improvements || null;
+    const executionCognitive = obj.executionProfile?.cognitiveImprovements || null;
+    return stringifyWithinSseLimit({
+      type: 'meta',
+      taskId: obj.taskId || undefined,
+      goal: obj.goal ? String(obj.goal).slice(0, 1200) : undefined,
+      model: obj.model || undefined,
+      executionProfile: obj.executionProfile ? {
+        version: obj.executionProfile.version,
+        capabilities: obj.executionProfile.capabilities,
+        requiredTools: sliceWithCount(obj.executionProfile.requiredTools, 24),
+        cognitiveImprovements: executionCognitive ? {
+          version: executionCognitive.version,
+          mode: executionCognitive.mode,
+          summary: executionCognitive.summary,
+          active_categories: sliceWithCount(executionCognitive.active_categories, 16),
+        } : null,
+        universalAgents: obj.executionProfile.universalAgents ? {
+          version: obj.executionProfile.universalAgents.version,
+          mode: obj.executionProfile.universalAgents.mode,
+          summary: obj.executionProfile.universalAgents.summary,
+          active_families: sliceWithCount(obj.executionProfile.universalAgents.active_families, 20),
+          active_team_ids: sliceWithCount(
+            (obj.executionProfile.universalAgents.active_team || []).map((agent) => agent.id),
+            24
+          ),
+        } : null,
+      } : undefined,
+      enterpriseRuntimeProfile: obj.enterpriseRuntimeProfile ? {
+        agenticOperatingCore: obj.enterpriseRuntimeProfile.agenticOperatingCore,
+        toolRuntime: obj.enterpriseRuntimeProfile.toolRuntime,
+        qaPreflight: obj.enterpriseRuntimeProfile.qaPreflight,
+        durableExecution: obj.enterpriseRuntimeProfile.durableExecution,
+      } : undefined,
+      agenticOperatingCore: obj.agenticOperatingCore ? {
+        version: obj.agenticOperatingCore.version,
+        core_id: obj.agenticOperatingCore.core_id,
+        trace_id: obj.agenticOperatingCore.trace_id,
+        summary: obj.agenticOperatingCore.summary,
+        cognitive_improvements: cognitive ? {
+          version: cognitive.version,
+          mode: cognitive.mode,
+          summary: cognitive.summary,
+          active_categories: sliceWithCount(cognitive.active_categories, 16),
+        } : null,
+        universal_agents: obj.agenticOperatingCore.universal_agents ? {
+          version: obj.agenticOperatingCore.universal_agents.version,
+          mode: obj.agenticOperatingCore.universal_agents.mode,
+          summary: obj.agenticOperatingCore.universal_agents.summary,
+          active_families: sliceWithCount(obj.agenticOperatingCore.universal_agents.active_families, 20),
+          active_team_ids: sliceWithCount(
+            (obj.agenticOperatingCore.universal_agents.active_team || []).map((agent) => agent.id),
+            24
+          ),
+          cycle: (obj.agenticOperatingCore.universal_agents.cycle || []).map((phase) => ({
+            phase: phase.phase,
+            order: phase.order,
+            gate: phase.gate,
+            assigned_agent_ids: sliceWithCount(phase.assigned_agents, 4),
+          })),
+        } : null,
+        validation: obj.agenticOperatingCore.validation ? {
+          reports_required: sliceWithCount(obj.agenticOperatingCore.validation.reports_required, 24),
+          deterministic_checks: sliceWithCount(obj.agenticOperatingCore.validation.deterministic_checks, 40, [
+            'cognitive.e2e-user-journey-probe',
+            'cognitive.stream-terminal-event-probe',
+            'cognitive.api-contract-probe',
+            'universal_agents.catalog_1000',
+            'universal_agents.all_cycle_phases_covered',
+            'universal_agents.release_not_before_validation',
+          ]),
+          qa_board_decision: obj.agenticOperatingCore.validation.qa_board_decision,
+        } : undefined,
+        observability: obj.agenticOperatingCore.observability ? {
+          trace_id: obj.agenticOperatingCore.observability.trace_id,
+          events: sliceWithCount(obj.agenticOperatingCore.observability.events, 24),
+          metrics: sliceWithCount(obj.agenticOperatingCore.observability.metrics, 40),
+        } : undefined,
+      } : undefined,
+      _truncated: true,
+      _compaction: 'meta_control_plane_summary',
+    }, maxLen, obj);
+  }
   const compact = compactJsonValue(obj, {
     maxString: Math.max(1200, Math.floor(maxLen / 4)),
     maxArray: 24,
   });
   const str = JSON.stringify(compact);
   if (str.length <= maxLen) return str;
-  return JSON.stringify({
+  return stringifyWithinSseLimit({
     type: obj && obj.type ? obj.type : 'event',
     taskId: obj && obj.taskId ? obj.taskId : undefined,
     seq: obj && obj.seq ? obj.seq : undefined,
@@ -172,7 +308,7 @@ function compactEventForSse(obj, maxLen) {
     status: obj && obj.status ? obj.status : undefined,
     message: obj && obj.message ? String(obj.message).slice(0, 1200) : undefined,
     _truncated: true,
-  });
+  }, maxLen, obj);
 }
 
 function safeJsonStringify(obj, maxLen = 32_768) {

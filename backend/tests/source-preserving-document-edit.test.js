@@ -82,6 +82,51 @@ async function makeDocxWithAnexo3CronogramaBuffer() {
   return Buffer.from(await Packer.toBuffer(doc));
 }
 
+async function makeDocxWithAnexo3CronogramaStatusBuffer({ statusForRow = () => 'Completado', leakText = false } = {}) {
+  const plan = sourcePreservingInternals.buildCronogramaAnexo3Plan();
+  const blankCells = (count) => Array.from({ length: count }, () => new TableCell({ children: [new Paragraph('')] }));
+  const doc = new Document({
+    sections: [{
+      children: [
+        new Paragraph('Anexo 3. Cronograma del Desarrollo y Culminación de la Tesis'),
+        new Table({
+          rows: [
+            new TableRow({
+              children: [
+                new TableCell({ children: [new Paragraph('AVANCE DE LA TESIS')] }),
+                new TableCell({ children: [new Paragraph('ACCIONES')] }),
+                new TableCell({ children: [new Paragraph('ESTADO')] }),
+                new TableCell({ children: [new Paragraph('FECHAS')] }),
+              ],
+            }),
+            new TableRow({
+              children: [
+                new TableCell({ children: [new Paragraph('')] }),
+                new TableCell({ children: [new Paragraph('')] }),
+                new TableCell({ children: [new Paragraph('')] }),
+                ...plan.weekLabels.map((label) => new TableCell({ children: [new Paragraph(label)] })),
+              ],
+            }),
+            ...plan.rows.map((row, index) => new TableRow({
+              children: [
+                new TableCell({ children: [new Paragraph(row.avance)] }),
+                new TableCell({
+                  children: [new Paragraph(leakText && index === 0
+                    ? `${row.acciones} <w:tcPr><w:tcW w:type="dxa"/></w:tcPr>`
+                    : row.acciones)],
+                }),
+                new TableCell({ children: [new Paragraph(statusForRow(row, index))] }),
+                ...blankCells(plan.weekLabels.length),
+              ],
+            })),
+          ],
+        }),
+      ],
+    }],
+  });
+  return Buffer.from(await Packer.toBuffer(doc));
+}
+
 describe('source-preserving document edit', () => {
   it('detects requests to edit the uploaded document instead of creating a new file', () => {
     const prompt = 'quiero que agregues al final el intuemtno de tesis que vamos a aplicar en esta tesis';
@@ -227,6 +272,67 @@ describe('source-preserving document edit', () => {
     }
   });
 
+  it('continues follow-up edits on the latest generated DOCX instead of the older uploaded attachment', () => {
+    const selection = sourcePreservingInternals.selectSourcePreservingDocumentSet({
+      requestText: 'agrega al final un instrumento profesional de recolección de datos',
+      sourceFiles: [{
+        id: 'file-original',
+        filename: 'original.docx',
+        originalName: 'original.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        source: 'recent_attachment',
+      }],
+      priorArtifacts: [{
+        id: 'artifact-edited',
+        filename: 'original_anexo_3_completado.docx',
+        originalName: 'original_anexo_3_completado.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        source: 'generated_artifact',
+      }],
+    });
+
+    assert.equal(selection.sourceFile.id, 'artifact-edited');
+    assert.equal(selection.selectionReason, 'latest_generated_docx_artifact');
+
+    const explicitSelection = sourcePreservingInternals.selectSourcePreservingDocumentSet({
+      requestText: 'completa el anexo 3',
+      sourceFiles: [{
+        id: 'file-current',
+        filename: 'nuevo.docx',
+        originalName: 'nuevo.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        source: 'current_upload',
+      }],
+      priorArtifacts: [{
+        id: 'artifact-old',
+        filename: 'old.docx',
+        originalName: 'old.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        source: 'generated_artifact',
+      }],
+    });
+
+    assert.equal(explicitSelection.sourceFile.id, 'file-current');
+    assert.equal(explicitSelection.selectionReason, 'current_docx_target_section');
+  });
+
+  it('does not mistake an instrument request for external reference integration because it mentions Word final', () => {
+    const prompt = 'agrega al final un instrumento profesional de recolección de datos para esta investigación y valida el Word final';
+
+    assert.equal(sourcePreservingInternals.requestWantsReferenceIntegration(prompt), false);
+    assert.equal(sourcePreservingInternals.requestWantsReferenceIntegration('analiza este documento adjunto y agrégalo a mi documento general'), true);
+
+    const ops = sourcePreservingInternals.planSourcePreservingOperations({
+      requestText: prompt,
+      documentXml: '<w:document><w:body></w:body></w:document>',
+      referenceFiles: [{ id: 'ref-original' }],
+    });
+
+    assert.equal(ops.length, 1);
+    assert.equal(ops[0].kind, 'append_generic');
+    assert.equal(ops[0].wantsInstrument, true);
+  });
+
   it('recovers the previous DOCX from assistant message artifacts when generatedArtifact persistence is missing', async () => {
     const savedKey = process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_API_KEY;
@@ -362,12 +468,37 @@ describe('source-preserving document edit', () => {
     assert.match(xml, /AVANCE DE LA TESIS/);
     assert.match(xml, /Lineamientos y cronograma de tesis/);
     assert.match(xml, /Problema, objetivos, hipótesis y método/);
-    assert.match(xml, /Informe final y sustentación/);
-    assert.match(xml, /S1/);
-    assert.match(xml, /S17/);
-    assert.equal((xml.match(/<w:tbl\b/g) || []).length, 1);
+      assert.match(xml, /Informe final y sustentación/);
+      assert.doesNotMatch(xml, /En proceso/);
+      assert.doesNotMatch(xml, /Pendiente/);
+      assert.match(xml, /S1/);
+      assert.match(xml, /S17/);
+      assert.equal((xml.match(/<w:tbl\b/g) || []).length, 1);
     assert.equal((xml.match(/ANEXOS/g) || []).length, 0);
     assert.doesNotMatch(xml, /El Anexo 3 presenta un análisis detallado/i);
+  });
+
+  it('blocks Anexo 3 validation when statuses remain pending or OOXML leaks into visible text', async () => {
+    const target = parseTargetSectionRequest('completa el anexo 3');
+    const pending = await makeDocxWithAnexo3CronogramaStatusBuffer({
+      statusForRow: (_, index) => (index % 2 === 0 ? 'En proceso' : 'Pendiente'),
+    });
+    const pendingReport = sourcePreservingInternals.validateDocxOperationCriteria(pending, [{ kind: 'fill_section', target }]);
+    const pendingCheck = pendingReport.checks.find((check) => check.id === 'cronograma_anexo_3_completed');
+
+    assert.equal(pendingReport.passed, false);
+    assert.equal(pendingCheck.passed, false);
+    assert.equal(pendingCheck.details.reason, 'incomplete_statuses_remaining');
+    assert.ok(pendingCheck.details.incompleteStatuses >= 13);
+
+    const leaked = await makeDocxWithAnexo3CronogramaStatusBuffer({ leakText: true });
+    const leakReport = sourcePreservingInternals.validateDocxOperationCriteria(leaked, [{ kind: 'fill_section', target }]);
+    const leakCheck = leakReport.checks.find((check) => check.id === 'cronograma_anexo_3_completed');
+
+    assert.equal(leakReport.passed, false);
+    assert.equal(leakCheck.passed, false);
+    assert.equal(leakCheck.details.reason, 'visible_ooxml_text_in_table');
+    assert.ok(leakCheck.details.xmlTextLeaks.length > 0);
   });
 
   it('returns a downloadable edited DOCX artifact instead of failing after validation', async () => {
@@ -490,6 +621,9 @@ describe('source-preserving document edit', () => {
 
       assert.equal(result.format, 'docx');
       assert.equal(result.validation.passed, true);
+      assert.equal(result.validation.checks.operation_criteria, true);
+      assert.ok(result.validation.details.agenticCycle);
+      assert.equal(result.validation.details.agenticCycle.unresolvedChecks.length, 0);
       assert.match(result.file.filename, /anexo_3_completado\.docx$/);
 
       const edited = fs.readFileSync(result.artifact.path);
@@ -497,6 +631,8 @@ describe('source-preserving document edit', () => {
       assert.match(xml, /Anexo 3\. Cronograma del Desarrollo y Culminación de la Tesis/);
       assert.match(xml, /Lineamientos y cronograma de tesis/);
       assert.match(xml, /Informe final y sustentación/);
+      assert.doesNotMatch(xml, /En proceso/);
+      assert.doesNotMatch(xml, /Pendiente/);
       assert.equal((xml.match(/<w:tbl\b/g) || []).length, 1);
       assert.doesNotMatch(xml, /El Anexo 3 presenta un análisis detallado/i);
       assert.doesNotMatch(xml, /ANEXOS/);
@@ -533,6 +669,100 @@ describe('source-preserving document edit', () => {
     assert.equal(parsed.original, true);
     assert.match(parsed._siraGPT_appendix.content, /ANEXOS/);
     assert.match(parsed._siraGPT_appendix.content, /Instrumento de recolección de datos/);
+  });
+
+  it('supports an autonomous multi-turn DOCX cycle: complete, add instrument, delete text and complete cover', async () => {
+    const originalOpenAIKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-autonomous-cycle-'));
+      const originalPath = path.join(tmp, 'tesis-autonoma.docx');
+      const seed = new Document({
+        sections: [{
+          children: [
+            new Paragraph('Texto temporal para borrar'),
+            new Paragraph('Portada original UPN'),
+            new Paragraph('Anexo 3. Cronograma del Desarrollo y Culminación de la Tesis'),
+            new Table({
+              rows: [
+                new TableRow({
+                  children: [
+                    new TableCell({ children: [new Paragraph('AVANCE DE LA TESIS')] }),
+                    new TableCell({ children: [new Paragraph('ACCIONES')] }),
+                    new TableCell({ children: [new Paragraph('ESTADO')] }),
+                    new TableCell({ children: [new Paragraph('FECHAS')] }),
+                  ],
+                }),
+                ...Array.from({ length: 23 }, () => new TableRow({
+                  children: Array.from({ length: 20 }, () => new TableCell({ children: [new Paragraph('')] })),
+                })),
+              ],
+            }),
+          ],
+        }],
+      });
+      fs.writeFileSync(originalPath, Buffer.from(await Packer.toBuffer(seed)));
+
+      const baseFile = {
+        id: 'file-docx',
+        path: originalPath,
+        originalName: 'tesis-autonoma.docx',
+        filename: 'tesis-autonoma.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        extractedText: '“La inteligencia artificial y la experiencia del usuario en una empresa privada de tecnología en San Isidro, Lima 2025.”',
+      };
+
+      const completed = await generateSourcePreservingDocumentEdit({
+        sourceFile: baseFile,
+        prompt: 'completa el anexo 3',
+        displayPrompt: 'completa el anexo 3',
+        userId: 'user-1',
+        chatId: 'chat-1',
+      });
+      assert.equal(completed.validation.passed, true);
+
+      const instrumented = await generateSourcePreservingDocumentEdit({
+        sourceFile: { ...baseFile, path: completed.artifact.path, originalName: completed.artifact.filename, filename: completed.artifact.filename },
+        prompt: 'agrega al final un instrumento profesional',
+        displayPrompt: 'agrega al final un instrumento profesional',
+        userId: 'user-1',
+        chatId: 'chat-1',
+      });
+      assert.equal(instrumented.validation.passed, true);
+
+      const deleted = await generateSourcePreservingDocumentEdit({
+        sourceFile: { ...baseFile, path: instrumented.artifact.path, originalName: instrumented.artifact.filename, filename: instrumented.artifact.filename },
+        prompt: 'borra el texto temporal para borrar',
+        displayPrompt: 'borra el texto temporal para borrar',
+        userId: 'user-1',
+        chatId: 'chat-1',
+      });
+      assert.equal(deleted.validation.passed, true);
+
+      const covered = await generateSourcePreservingDocumentEdit({
+        sourceFile: { ...baseFile, path: deleted.artifact.path, originalName: deleted.artifact.filename, filename: deleted.artifact.filename },
+        prompt: 'completa la portada del word',
+        displayPrompt: 'completa la portada del word',
+        userId: 'user-1',
+        chatId: 'chat-1',
+      });
+      assert.equal(covered.validation.passed, true);
+
+      const xml = new PizZip(fs.readFileSync(covered.artifact.path)).file('word/document.xml').asText();
+      assert.match(xml, /PORTADA COMPLETADA/);
+      assert.match(xml, /Título de la investigación/);
+      assert.match(xml, /Instrumento de recolección de datos/);
+      assert.match(xml, /Escala de respuesta/);
+      assert.match(xml, /Anexo 3\. Cronograma/);
+      assert.match(xml, /Informe final y sustentación/);
+      assert.doesNotMatch(xml, /Texto temporal para borrar/);
+      assert.doesNotMatch(xml, /En proceso/);
+      assert.doesNotMatch(xml, /Pendiente/);
+      assert.equal(covered.validation.details.agenticCycle.unresolvedChecks.length, 0);
+    } finally {
+      if (originalOpenAIKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = originalOpenAIKey;
+    }
   });
 
   it('keeps YAML artifacts valid and passing MIME validation while appending content', async () => {
@@ -725,6 +955,17 @@ describe('source-preserving document edit — agentic multi-step planning', () =
     assert.equal(ops.length, 1);
     assert.equal(ops[0].kind, 'append_generic');
     assert.equal(ops[0].wantsInstrument, true);
+  });
+
+  it('extracts only the requested deletion target before validation instructions', () => {
+    const ops = planSourcePreservingOperations({
+      requestText: 'borra Aspectos Éticos del documento y valida el Word final',
+      documentXml: DOC_WITH_ANEXO3,
+    });
+
+    assert.equal(ops.length, 1);
+    assert.equal(ops[0].kind, 'delete_text');
+    assert.equal(ops[0].needle, 'aspectos eticos');
   });
 
   it('executes both intentions: fills the Anexo 3 cronograma table AND appends a new Anexo 4 with the instrument', async () => {

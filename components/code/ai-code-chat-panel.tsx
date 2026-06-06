@@ -422,7 +422,9 @@ export function AICodeChatPanel() {
               try {
                 const blocks = parseCodeBlocks(assistantText).filter((b) => b.path)
                 if (blocks.length > 0) {
-                  for (const b of blocks) applyBlock(b.path, b.content)
+                  for (const b of blocks) {
+                    if (b.path) applyBlock(b.path, b.content)
+                  }
                   const hasHtml = blocks.some((b) => /\.html?$/i.test(b.path || ""))
                   toast.success(
                     hasHtml

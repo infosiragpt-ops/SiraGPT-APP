@@ -6,8 +6,8 @@
 */
 
 -- AlterTable
-ALTER TABLE "ai_models" ADD COLUMN     "lastSynced" TIMESTAMP(3),
-ADD COLUMN     "syncSource" TEXT DEFAULT 'manual',
-ADD COLUMN     "contextLength" INTEGER,
-ADD COLUMN     "pricing" JSONB,
-ADD COLUMN     "tags" TEXT[];
+ALTER TABLE "ai_models" ADD COLUMN IF NOT EXISTS     "lastSynced" TIMESTAMP(3),
+ADD COLUMN IF NOT EXISTS     "syncSource" TEXT DEFAULT 'manual',
+ADD COLUMN IF NOT EXISTS     "contextLength" INTEGER,
+ADD COLUMN IF NOT EXISTS     "pricing" JSONB,
+ADD COLUMN IF NOT EXISTS     "tags" TEXT[];

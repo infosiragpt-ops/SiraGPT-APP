@@ -614,9 +614,9 @@ export function buildIntentAttributionGraph(
     confidence = words.length <= 4 ? 0.65 : 0.72
     rationale.push('Short follow-up inherits the latest concrete user goal from conversation history.')
   } else if (editsExistingDocument) {
-    inferredIntent = 'doc'
+    inferredIntent = 'agent_task'
     confidence = 0.9
-    rationale.push('Existing document attachment plus edit wording implies a source-preserving document edit.')
+    rationale.push('Existing document attachment plus edit wording requires the agentic source-preserving document editor.')
   } else if (!currentIntent && hasSpreadsheetContext && ROUTING_PATTERNS.dataWork.test(normalized)) {
     inferredIntent = 'math'
     confidence = 0.7
@@ -952,7 +952,7 @@ export class AIService {
   ): Promise<ChatIntent> {
 
     if (shouldEditExistingDocument(prompt, conversationHistory)) {
-      return 'doc';
+      return 'agent_task';
     }
 
     if (shouldAnswerFromExistingDocument(prompt, conversationHistory)) {

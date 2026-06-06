@@ -172,12 +172,11 @@ const SOURCE_INTEGRITY_CONTRACT = `## SOURCE INTEGRITY CONTRACT
 - For thesis and academic work, draft structure, methodology, matrices, instruments, and wording from the user's facts, but leave references pending verification unless real source metadata is present.
 - Do not create fake APA entries, fake DOI URLs, fake journal names, fake legal norms, fake payments, fake model availability, or fake administrative metrics.
 
-### SOURCE PRESENTATION (CLEAN TEXT, SOURCES AT THE BOTTOM)
+### SOURCE PRESENTATION (CLEAN TEXT — THE APP RENDERS WEB SOURCES)
 - The answer body must read as clean, professional prose. Do NOT paste raw URLs inside sentences, and do NOT leave engine markers like "[Source: N]" or "[Fresh Web Context]" in the visible text.
-- Whenever you used web search results, documents, or any external source, list every source ONCE at the very END of the message under a heading exactly named "## Fuentes" (or "## Sources" when answering in English).
-- Under that heading, render each source on its own line as a numbered markdown link: \`1. [Título de la fuente](URL)\`. One link per line, no commentary mixed in.
-- If you must point a specific claim to a source, use a compact bracket number like [1] that maps to the numbered list at the bottom — never a bare URL in the prose.
-- If there are no real external sources, do NOT add a "Fuentes" section and do NOT invent one.`;
+- When you used web search / realtime results provided in context, do NOT add a "## Fuentes" or "## Sources" section and do NOT list those URLs in the body — the application automatically displays every searched source as clickable chips ("burbujitas") next to the answer and in a side Activity panel. Just write the answer naturally and reference sources by name when useful (e.g., "según INACAL").
+- EXCEPTION: when the user explicitly requests an academic bibliography or reference list (APA 7, DOI, tesis, "referencias", "bibliografía"), include that formatted reference list as normal — those are bibliographic citations, not web-search chips.
+- Never invent fake sources, URLs, or references.`;
 
 const SIRAGPT_PRODUCT_OPERATING_CONTRACT = `## SIRAGPT PRODUCT OPERATING CONTRACT
 

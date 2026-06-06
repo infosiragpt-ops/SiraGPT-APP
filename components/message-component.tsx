@@ -81,6 +81,7 @@ import SpotifyConnectionCard from "./SpotifyConnectionCard"
 import SpotifyResults from "./spotify-results"
 import { ThinkingPlaceholder } from "./thinking-placeholder"
 import MessageActionRail from "./MessageActionRail"
+import SourcesChip from "./SourcesChip"
 import ComputerUseReasoning from "./ComputerUseReasoning"
 import type { DocumentPreviewTarget } from "./document-preview"
 import { appendUploadAuthToken, resolveImageAttachmentUrl } from "@/lib/attachment-url"
@@ -109,6 +110,25 @@ const truncateUrl = (url: unknown, maxLength: number = 30) => {
     const path = parts.slice(3).join('/');
     const truncatedPath = path.length > 25 ? `${path.slice(0, 25)}...` : path;
     return path ? `${domain}/${truncatedPath}` : domain;
+};
+
+// Extract web-search sources for the ChatGPT-style "Fuentes" chip. Live
+// turns attach `sources`/`searchActivity` to the message during streaming;
+// reloaded turns carry them inside the persisted `metadata` JSON
+// (webSources / webSearchMeta). This reads whichever is available.
+const extractWebSources = (message: any): { sources: any[]; activity: any } => {
+    let sources = Array.isArray(message?.sources) ? message.sources : [];
+    let activity = message?.searchActivity || null;
+    if (!sources.length || !activity) {
+        try {
+            const meta = typeof message?.metadata === 'string'
+                ? JSON.parse(message.metadata)
+                : (message?.metadata && typeof message.metadata === 'object' ? message.metadata : {});
+            if (!sources.length && Array.isArray(meta?.webSources)) sources = meta.webSources;
+            if (!activity && meta?.webSearchMeta) activity = meta.webSearchMeta;
+        } catch { /* malformed metadata — ignore */ }
+    }
+    return { sources, activity };
 };
 
 const NON_IMAGE_EXTENSIONS = new Set([
@@ -2997,23 +3017,31 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                             </div>
                         ) : null}
                         {!isVideoMessage && (
-                            <MessageActionRail
-                                messageId={message.id}
-                                chatId={message.chatId}
-                                model={(message as any).model}
-                                content={stripNonCopyableArtifactBlocks(message.content || "")}
-                                hasError={!!message.error}
-                                regenerationAttempt={regenerationAttempt}
-                                isStreaming={isStreaming}
-                                feedback={feedbackSent}
-                                isSpeaking={isSpeaking}
-                                isLoadingAudio={isLoadingAudio}
-                                onCopy={handleGlobalCopy}
-                                onSpeak={handleSpeak}
-                                onFeedback={async (kind) => { await handleFeedback(kind) }}
-                                onRegenerate={() => onRegenerate(message.id)}
-                                onShare={handleShare}
-                            />
+                            <div className="flex flex-wrap items-center gap-2">
+                                <MessageActionRail
+                                    messageId={message.id}
+                                    chatId={message.chatId}
+                                    model={(message as any).model}
+                                    content={stripNonCopyableArtifactBlocks(message.content || "")}
+                                    hasError={!!message.error}
+                                    regenerationAttempt={regenerationAttempt}
+                                    isStreaming={isStreaming}
+                                    feedback={feedbackSent}
+                                    isSpeaking={isSpeaking}
+                                    isLoadingAudio={isLoadingAudio}
+                                    onCopy={handleGlobalCopy}
+                                    onSpeak={handleSpeak}
+                                    onFeedback={async (kind) => { await handleFeedback(kind) }}
+                                    onRegenerate={() => onRegenerate(message.id)}
+                                    onShare={handleShare}
+                                />
+                                {message.role === 'ASSISTANT' && !isStreaming ? (() => {
+                                    const { sources, activity } = extractWebSources(message)
+                                    return sources.length > 0 ? (
+                                        <SourcesChip sources={sources} activity={activity} />
+                                    ) : null
+                                })() : null}
+                            </div>
                         )}
                     </div>
                 )}

@@ -230,6 +230,18 @@ interface Message {
   presentation?: string // Add this line
   error?: any
   metadata?: string
+  sources?: Array<{
+    title: string
+    url: string
+    snippet?: string
+    domain?: string
+    confidence?: string
+  }>
+  searchActivity?: {
+    provider?: string
+    query?: string
+    elapsedMs?: number
+  }
 }
 
 function parseMessageMetadata(metadata: unknown): Record<string, any> {
@@ -1441,6 +1453,27 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 // the stop button visible after the visible reply was rendered.
                 setIsLoading(false);
                 setIsStreaming(false);
+              },
+              onSources: (payload) => {
+                if (controller.signal.aborted || pendingStop) return;
+                setCurrentChat((prevChat) => {
+                  if (!prevChat || prevChat.id !== activeChat.id) return prevChat;
+                  const newMessages = prevChat.messages.map((msg) => {
+                    if (msg.id === aiMessagePlaceholder.id) {
+                      return {
+                        ...msg,
+                        sources: payload.sources,
+                        searchActivity: {
+                          provider: payload.provider,
+                          query: payload.query,
+                          elapsedMs: payload.elapsedMs,
+                        },
+                      };
+                    }
+                    return msg;
+                  });
+                  return { ...prevChat, messages: newMessages };
+                });
               },
             }
           );

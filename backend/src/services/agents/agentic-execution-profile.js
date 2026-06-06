@@ -11,6 +11,14 @@
 
 const PROFILE_VERSION = 'docsira-agentic-profile-2026-04';
 const { detectMediaIntent } = require('./media-intent');
+const {
+  buildCognitiveImprovementBundle,
+  buildCognitiveImprovementPrompt,
+} = require('./cognitive-improvements');
+const {
+  buildUniversalAgentFabric,
+  buildUniversalAgentFabricPrompt,
+} = require('./universal-agent-fabric');
 
 const PATTERNS = {
   research: /\b(investiga(?:r|cion)?|research|busca(?:r)?|recopila(?:r)?|fuentes|citas|referencias|art[ií]culos?|papers?|literatura|acad[eé]mic[oa]s?|cient[ií]fic[oa]s?|mercado|benchmark|estado del arte|revision sistem[aá]tica|metaan[aá]lisis|scielo|redalyc|dialnet|openalex|crossref|pubmed|doi|semantic scholar|doaj|scopus|web of science|wos)\b/i,
@@ -77,6 +85,8 @@ function buildExecutionProfile({ goal, fileIds = [], fileMetadata = [] } = {}) {
     attachmentKinds.total > 0 && attachmentKinds.documentCount === 0 && attachmentKinds.imageCount > 0;
   const mentionsPrivateFiles = PATTERNS.privateFiles.test(rawGoal) || PATTERNS.privateFiles.test(normalized);
   const mediaIntent = detectMediaIntent(rawGoal);
+  const cognitiveImprovements = buildCognitiveImprovementBundle({ goal: rawGoal });
+  const universalAgents = buildUniversalAgentFabric({ goal: rawGoal });
   const needsMedia = !!(mediaIntent && mediaIntent.kind && mediaIntent.tool && mediaIntent.confidence === 'high');
   const plainTranscription =
     (PATTERNS.transcription.test(rawGoal) || PATTERNS.transcription.test(normalized))
@@ -85,7 +95,10 @@ function buildExecutionProfile({ goal, fileIds = [], fileMetadata = [] } = {}) {
   const externalRepoAdaptation = PATTERNS.externalRepo.test(rawGoal) || PATTERNS.externalRepo.test(normalized);
   const autonomousSoftwareWork = PATTERNS.autonomousSoftware.test(rawGoal) || PATTERNS.autonomousSoftware.test(normalized);
   const bulkSourceFusion = PATTERNS.bulkSourceFusion.test(rawGoal) || PATTERNS.bulkSourceFusion.test(normalized);
-  const agentRuntimeHardening = PATTERNS.agentRuntime.test(rawGoal) || PATTERNS.agentRuntime.test(normalized);
+  const agentRuntimeHardening =
+    PATTERNS.agentRuntime.test(rawGoal)
+    || PATTERNS.agentRuntime.test(normalized)
+    || cognitiveImprovements.summary.backendBrainRequest;
   const explicitDeliverableRequested = PATTERNS.explicitDeliverable.test(rawGoal) || PATTERNS.explicitDeliverable.test(normalized);
   const mentionsAttachedPrivateFile = hasFiles && (
     PATTERNS.privateFiles.test(rawGoal)
@@ -108,6 +121,7 @@ function buildExecutionProfile({ goal, fileIds = [], fileMetadata = [] } = {}) {
     needsPrivateContext,
     needsCodeOrRepair: PATTERNS.code.test(rawGoal) || PATTERNS.code.test(normalized) || externalRepoAdaptation || autonomousSoftwareWork || bulkSourceFusion,
     needsAgentRuntimeHardening: agentRuntimeHardening,
+    needsUniversalAgentFabric: universalAgents.summary.universalAgentRequest || agentRuntimeHardening,
     needsExternalRepoAdaptation: externalRepoAdaptation,
     needsAutonomousSoftware: autonomousSoftwareWork,
     needsBulkSourceFusion: bulkSourceFusion,
@@ -153,6 +167,10 @@ function buildExecutionProfile({ goal, fileIds = [], fileMetadata = [] } = {}) {
   }
   if (capabilities.needsAgentRuntimeHardening) {
     qualityGates.push('Inspect agent runtime contracts, tool gates, durable state, and verification checkpoints before claiming agent improvements.');
+    qualityGates.push(`Apply the 100-control cognitive upgrade catalog (${cognitiveImprovements.summary.activeControlCount}/100 active controls) for backend brain hardening.`);
+  }
+  if (capabilities.needsUniversalAgentFabric) {
+    qualityGates.push(`Select from the universal 1000-agent fabric (${universalAgents.summary.activeAgentCount}/${universalAgents.summary.totalAgentCount} active profiles) and cover every agentic cycle phase before finalizing.`);
   }
   if (capabilities.needsExternalRepoAdaptation) {
     qualityGates.push('Audit external repository capabilities as reference-only input before integrating behavior.');
@@ -170,6 +188,8 @@ function buildExecutionProfile({ goal, fileIds = [], fileMetadata = [] } = {}) {
     requiredTools: unique(requiredTools),
     minimumToolCalls,
     qualityGates,
+    cognitiveImprovements,
+    universalAgents,
   };
 }
 
@@ -242,8 +262,12 @@ function buildExecutionProfilePrompt(profile) {
     `Deterministic execution profile: ${profile.version}`,
     `Required tools before finalize: ${tools}`,
     `Minimum tool calls: ${JSON.stringify(profile.minimumToolCalls || {})}`,
+    `Cognitive brain upgrade: ${profile.cognitiveImprovements?.summary?.activeControlCount || 0}/100 controls active across ${profile.cognitiveImprovements?.summary?.activeCategoryCount || 0} categories`,
+    `Universal agent fabric: ${profile.universalAgents?.summary?.activeAgentCount || 0}/${profile.universalAgents?.summary?.totalAgentCount || 0} active agents across ${profile.universalAgents?.summary?.activeFamilyCount || 0}/${profile.universalAgents?.summary?.familyCount || 0} families`,
     'Quality gates:',
     gates,
+    profile.cognitiveImprovements ? buildCognitiveImprovementPrompt(profile.cognitiveImprovements) : '',
+    profile.universalAgents ? buildUniversalAgentFabricPrompt(profile.universalAgents) : '',
     'If a finalize call is rejected, read the tool observation, execute the missing tools, then finalize again.',
   ].join('\n');
 }

@@ -186,8 +186,24 @@ function isExpectedAuthApiFailure(args: {
   return false
 }
 
+export type WebSource = {
+  title: string
+  url: string
+  snippet?: string
+  domain?: string
+  confidence?: string
+}
+
+export type WebSourcesPayload = {
+  provider?: string
+  query?: string
+  elapsedMs?: number
+  sources: WebSource[]
+}
+
 type AIStreamOptions = {
   onReplace?: (content: string) => void
+  onSources?: (payload: WebSourcesPayload) => void
 }
 
 export type GrokVoiceSessionSnapshot = {
@@ -1249,6 +1265,17 @@ class ApiClient {
                   jsonData.content.includes('\n');
 
                 if (shouldProcess) flushBatch();
+              } else if (jsonData.type === 'web_sources' && Array.isArray(jsonData.sources)) {
+                // ChatGPT-style searched-sources frame. Surface to the UI
+                // so it can render the "Fuentes" chip + Activity panel.
+                if (options.onSources) {
+                  options.onSources({
+                    provider: jsonData.provider,
+                    query: jsonData.query,
+                    elapsedMs: jsonData.elapsedMs,
+                    sources: jsonData.sources,
+                  });
+                }
               } else if (jsonData.error) {
                 // When the backend recovered the turn with a localized
                 // fallback message, we've already delivered a useful
