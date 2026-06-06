@@ -51,6 +51,9 @@ yarn-error.log*
 .env*.local
 .env
 
+# MCP config (contains secret tokens — keep local)
+.mcp.json
+
 # vercel
 .vercel
 

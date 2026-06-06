@@ -106,7 +106,25 @@ function saveStore(store: SessionStore) {
   try {
     s.setItem(STORAGE_KEY, JSON.stringify(store))
     if (typeof window !== "undefined") {
-      window.dispatchEvent(new CustomEvent(CODE_CHAT_SESSIONS_UPDATED_EVENT))
+      // Defer the cross-component notification so it never fires during a
+      // React render. saveStore is invoked from inside setState updaters
+      // (e.g. ensureDefaultSession / setActiveCodeChatSession passed to
+      // setChatSessionStore), which React runs in the render phase and
+      // which must stay side-effect-free. Dispatching synchronously there
+      // makes listeners (SidebarFoldersDropdown) call setState mid-render —
+      // the "Cannot update a component while rendering a different
+      // component" warning. The localStorage write above stays synchronous
+      // so any immediate readCodeChatStore() still sees fresh data; only
+      // the event is pushed past the current render/commit.
+      const fire = () => {
+        try {
+          window.dispatchEvent(new CustomEvent(CODE_CHAT_SESSIONS_UPDATED_EVENT))
+        } catch {
+          /* noop */
+        }
+      }
+      if (typeof queueMicrotask === "function") queueMicrotask(fire)
+      else setTimeout(fire, 0)
     }
   } catch {
     /* quota */

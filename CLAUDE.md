@@ -619,6 +619,86 @@ Both searches are now first-class tools the chat agent can invoke:
 `github_search` and `scientific_search` (registered in `agents/agent-tools.js`,
 wired into `agentic-chat-stream.js` `baseWebTools`).
 
+## siraGPT Builder — constructor full-stack tipo Replit (added 2026-06-05)
+
+Constructor de apps estilo Replit/Lovable/bolt dentro de SiraGPT: el usuario
+describe una idea → un agente hace **seguimiento con preguntas** hasta tener
+contexto total → genera plan + archivos → el usuario **ve el código** y una
+**vista previa**. Roadmap completo (epics E1–E6 + desktop) en Notion:
+"siraGPT Builder · Roadmap". **Excepción a la regla #1**: para esta feature el
+usuario autorizó que Claude construya también la UI.
+
+### Backend (`backend/src/services/builder/`)
+- `contracts.js` — `COVERAGE_DIMENSIONS` (purpose/platform/coreFeatures/
+  dataEntities/style/audience), `QuestionCardSchema`, `ProjectBriefSchema`.
+  **`platform` ∈ web | mobile | landing | desktop** (desktop añadido 2026-06-05).
+- `intake-engine.js` — entrevista pura/stateless: `coverage`, `nextQuestion`,
+  `buildBrief`, `normalisePlatform` (detecta desktop *antes* que mobile para que
+  "Electron app"/"escritorio" no caigan en la regla de "app").
+- `questions.js` — banco estático de QuestionCards (chip `desktop` incluido).
+- `blueprint.js` (E2) — plan determinista; `STACK_BY_PLATFORM.desktop` =
+  Electron + React / Node main / SQLite·PostgreSQL / GitHub Releases.
+- `scaffold.js` (E3) — archivos starter (preview.html, README, .env.example,
+  prisma/schema.prisma).
+- `preview.js` (semilla E5) — `buildPreviewHtml(brief)`: HTML autocontenido,
+  determinista, **escapado anti-inyección**, temado (oscuro/minimalista/
+  corporativo/colorido/moderno) y con marco por plataforma (teléfono / ventana
+  desktop / web). Seguro para `<iframe srcdoc>` sandbox (sin JS).
+- `llm.js` — adapter LLM por tiers sobre `ai/cerebras-client.js` (FlashGPT/
+  Cerebras gratis). **Fail-open a determinismo**: devuelve `null` si no hay key/
+  error/timeout/JSON inválido → el caller usa el banco estático. Inyectable
+  (`createClient`, `env`) para tests sin red. `extractJson` tolera fences/prosa.
+- `question-generator.js` — `generateNextQuestion(session, dimension)`: pide al
+  LLM una QuestionCard **contextual** (seguimiento), la valida contra el schema
+  y **fuerza la dimensión**; cualquier fallo → fallback al banco estático.
+- `codegen.js` (E3+) — **codegen real**: `codegenFromBrief(brief, blueprint?)`
+  genera un proyecto **Next.js 14 ejecutable** (App Router, TS) — no solo docs.
+  Corre con `npm install && npm run dev` **sin DB**: cada entidad obtiene una
+  API route CRUD en memoria (`lib/store.ts`) + página lista/alta. Emite
+  `package.json`/`tsconfig.json`/`next.config.mjs`/`app/layout.tsx`/
+  `app/page.tsx` (hero+features) /`components/site-nav.tsx` y, por entidad,
+  `app/api/<slug>/route.ts` + `app/<slug>/page.tsx`. Slice vertical: solo
+  plataformas Next.js (**web/landing**); mobile/desktop → `generated:false` y
+  el caller conserva los starters. Puro/determinista, **escapado anti-inyección**
+  (jsStr/jsxText) en todo texto del brief. Cableado aditivamente en
+  `scaffold.js` (sin colisión de paths).
+
+### Rutas (`backend/src/routes/builder.js`, montado `/api/builder`)
+- `GET /intake/questions` — catálogo de cards.
+- `POST /intake/step` — `{ session?, answer?, integrations?, constraints?,
+  dynamic? }` → `{ session, coverage, nextQuestion, complete, dynamic }`.
+  Con `dynamic:true` la próxima pregunta se genera con LLM (auto-fallback).
+- `POST /intake/brief` → `{ brief }` (cuando la cobertura está completa).
+- `POST /blueprint` → `{ blueprint }` (E2). `POST /scaffold` → `{ blueprint, files }` (E3).
+
+### Frontend (UI — regla #1 levantada para esta feature)
+- `lib/builder/intake-service.ts` — cliente tipado (patrón `projects-service`:
+  `localStorage "auth-token"` Bearer, `credentials:include`).
+- `lib/builder/useIntake.ts` — hook dueño del `session` (round-trip), orquesta
+  entrevista → `generate()` (brief → scaffold). `lib/builder/dimensions.ts` —
+  meta (label/ícono) por dimensión.
+- `components/builder/` — `QuestionCard` (chips/select/multiselect/text),
+  `CoverageRail` (stepper %), `ResultPanel` (tabs **Preview** [iframe] / Plan /
+  Código con visor + copiar), `BuilderIntake` (shell del chat).
+- `app/builder/page.tsx` — página "build studio" oscura, acento violeta
+  (`--accent-violet`), Geist Sans/Mono.
+
+### Tests (registrados en `backend/package.json`)
+`builder-contracts` · `builder-intake` · `builder-route` · `builder-preview` (7)
+· `builder-llm` (7) · `builder-question-generator` (8). Todos verdes; el banco
+estático mantiene el camino sin red.
+
+### Env
+- `CEREBRAS_API_KEY` — activa el intake dinámico (sin ella, todo cae al banco
+  estático). Modelo/baseURL via `FREE_IA_MODEL_ID` / `CEREBRAS_BASE_URL`.
+
+### Pendiente
+Codegen real para mobile/desktop (hoy solo web/landing) · ejecutar el proyecto
+generado en vivo / WebContainers (E5) · persistencia de builds (T2 schema + T8
+repo) · brief-synthesizer LLM (T6) · orquestación multi-agente con
+ProjectContext compartido (E6). **Hecho:** intake agéntico (LLM + dynamic) ·
+codegen real Next.js web/landing (E3+, `codegen.js`).
+
 ## Conexiones externas
 - Repo: https://github.com/SiraGPT-ORg/siraGPT
 - Remoto: `sira-org`
