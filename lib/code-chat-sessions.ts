@@ -3,6 +3,8 @@
  */
 
 import { codexIdForProject } from "./codex-projects"
+import type { AgentState } from "./code-agent/types"
+import { defaultAgentState } from "./code-agent/types"
 
 export type CodeChatTurn = {
   id: string
@@ -20,6 +22,8 @@ export type CodeChatSession = {
   updatedAt: number
   /** When true the user renamed it manually — don't re-derive the title from turns. */
   titleLocked?: boolean
+  /** FSM state of the /code agent for this session (intake → generate → debug). */
+  agent?: AgentState
 }
 
 type SessionStore = {
@@ -170,6 +174,7 @@ export function ensureDefaultSession(workspaceId: string, store = loadStore()): 
     turns: [],
     createdAt: Date.now(),
     updatedAt: Date.now(),
+    agent: defaultAgentState(),
   }
   const next: SessionStore = {
     sessions: [...store.sessions, session],
@@ -194,6 +199,7 @@ export function createCodeChatSession(
     turns: [],
     createdAt: Date.now(),
     updatedAt: Date.now(),
+    agent: defaultAgentState(),
   }
   let sessions = [...ensured.sessions, session]
   const perWs = sessions.filter((s) => s.workspaceId === key)
@@ -244,6 +250,24 @@ export function updateCodeChatSessionTurns(
       // A manually renamed session keeps its title; otherwise derive from turns.
       const title = s.titleLocked ? s.title : deriveCodeChatSessionTitle(turns)
       return { ...s, turns, title, updatedAt: Date.now() }
+    }),
+  }
+  saveStore(next)
+  return next
+}
+
+/** Patch the agent FSM state of a session (persists immediately). */
+export function updateCodeChatSessionAgent(
+  sessionId: string,
+  updater: (prev: AgentState) => AgentState,
+  store = loadStore(),
+): SessionStore {
+  const next: SessionStore = {
+    ...store,
+    sessions: store.sessions.map((s) => {
+      if (s.id !== sessionId) return s
+      const agent = updater(s.agent ?? defaultAgentState())
+      return { ...s, agent, updatedAt: Date.now() }
     }),
   }
   saveStore(next)

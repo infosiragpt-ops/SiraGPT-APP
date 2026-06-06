@@ -3867,15 +3867,23 @@ router.post(
       let orchMemoryBlock = '';
       let webSearchSources = null;
       let webSearchMeta = null;
+      // Callers that want a plain LLM stream (e.g. the /code chat, which
+      // generates code blocks) set disableAgentic:true and must NOT detour
+      // into web search — it adds latency and pollutes the code prompt. An
+      // explicit disableWebSearch:true also opts out.
+      const _webSearchAllowed =
+        req.body.disableAgentic !== true && req.body.disableWebSearch !== true;
       if (typeof prompt === 'string' && prompt.length > 0) {
         // Run web search + orchestration memory in parallel — both are
         // independent reads on the same prompt/userId.
         const _memoryAdapter = userId ? getMemoryAdapter() : null;
         const _wsStart = Date.now();
         const [_webCtx, _orchMem] = await Promise.all([
-          enrichWithWebSearch(prompt, {
-            mode: webSearchMode === 'dedicated' ? 'dedicated' : 'auto',
-          }).catch(() => null),
+          _webSearchAllowed
+            ? enrichWithWebSearch(prompt, {
+                mode: webSearchMode === 'dedicated' ? 'dedicated' : 'auto',
+              }).catch(() => null)
+            : Promise.resolve(null),
           _memoryAdapter
             ? _memoryAdapter.buildMemoryPrompt(userId, prompt).catch(() => null)
             : Promise.resolve(null),

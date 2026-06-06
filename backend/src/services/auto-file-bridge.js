@@ -91,6 +91,9 @@ async function ingestPastedContent(userId, content, opts = {}) {
         userId,
         originalName: fileName,
         filename: fileName,
+        // Virtual (pasted) document — no file on disk. The File model requires
+        // a non-null `path`; use a synthetic, namespaced one.
+        path: `auto/${fileName}`,
         mimeType: detected.mime,
         size: sizeBytes,
         extractedText: content,

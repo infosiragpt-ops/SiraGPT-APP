@@ -39,6 +39,7 @@ const intake = require('../services/builder/intake-engine');
 const { planFromBrief } = require('../services/builder/blueprint');
 const { scaffoldFromBrief } = require('../services/builder/scaffold');
 const { generateNextQuestion } = require('../services/builder/question-generator');
+const { briefFromPrompt } = require('../services/builder/brief-from-prompt');
 
 const router = express.Router();
 
@@ -199,6 +200,35 @@ router.post(
       return res.json(result);
     } catch (err) {
       return res.status(400).json({ error: 'scaffold_failed', message: err.message });
+    }
+  }
+);
+
+/**
+ * POST /api/builder/generate
+ *   body: { prompt }  — a single free-text app description
+ *   →    { brief, blueprint, files }  one-shot deterministic generation
+ *   →    400 { error, message }       when the prompt is empty/unusable
+ *
+ * This is the LLM-free "Construir app" path: it derives a ProjectBrief from the
+ * prompt heuristically and scaffolds a runnable project (incl. a live index.html)
+ * so the /code workspace can build + preview even when the chat model is down.
+ */
+router.post(
+  '/generate',
+  authenticateToken,
+  [body('prompt').isString().trim().notEmpty().withMessage('prompt is required')],
+  (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+    }
+    try {
+      const brief = briefFromPrompt(req.body.prompt);
+      const { blueprint, files } = scaffoldFromBrief(brief);
+      return res.json({ brief, blueprint, files });
+    } catch (err) {
+      return res.status(400).json({ error: 'generate_failed', message: err.message });
     }
   }
 );

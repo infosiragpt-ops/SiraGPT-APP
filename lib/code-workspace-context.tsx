@@ -58,7 +58,9 @@ import {
   readCodeChatStore,
   setActiveCodeChatSession as setActiveCodeChatSessionRecord,
   updateCodeChatSessionTurns,
+  updateCodeChatSessionAgent,
 } from "./code-chat-sessions"
+import type { AgentState } from "./code-agent/types"
 
 export const SWITCH_CODEX_WORKSPACE_EVENT = "siragpt:switch-codex-workspace"
 export const TOGGLE_CODEX_SIDEBAR_EVENT = "siragpt:toggle-codex-sidebar"
@@ -163,6 +165,8 @@ export type CodeWorkspaceContextValue = {
     sessionId: string,
     updater: (prev: CodeChatTurn[]) => CodeChatTurn[],
   ) => void
+  /** Patch the agent FSM state of a session (intake → generate → debug). */
+  patchAgentState: (sessionId: string, updater: (prev: AgentState) => AgentState) => void
   listCodeChatSessionsForWorkspace: (workspaceId: string) => CodeChatSession[]
   openWorkspaceNewCodeChat: (detail: CodeNewChatDetail) => Promise<void>
   workspaceSource: WorkspaceSource
@@ -661,6 +665,13 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
     [chatSessionStore],
   )
 
+  const patchAgentState = React.useCallback(
+    (sessionId: string, updater: (prev: AgentState) => AgentState) => {
+      setChatSessionStore(updateCodeChatSessionAgent(sessionId, updater, chatSessionStore))
+    },
+    [chatSessionStore],
+  )
+
   const openWorkspaceNewCodeChat = React.useCallback(
     async (detail: CodeNewChatDetail) => {
       await switchCodexWorkspace({
@@ -744,6 +755,7 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       createCodeChatSession,
       setActiveCodeChatSession,
       patchCodeChatSessionTurns,
+      patchAgentState,
       listCodeChatSessionsForWorkspace,
       openWorkspaceNewCodeChat,
     }),
@@ -776,6 +788,7 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       createCodeChatSession,
       setActiveCodeChatSession,
       patchCodeChatSessionTurns,
+      patchAgentState,
       listCodeChatSessionsForWorkspace,
       openWorkspaceNewCodeChat,
     ],

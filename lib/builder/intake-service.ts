@@ -82,6 +82,12 @@ export interface ScaffoldResult {
   files: ScaffoldFile[]
 }
 
+export interface GenerateResult {
+  brief: ProjectBrief
+  blueprint: Blueprint
+  files: ScaffoldFile[]
+}
+
 const baseUrl = `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}/builder`
 
 function authHeaders(): HeadersInit {
@@ -167,5 +173,21 @@ export const intakeService = {
       body: JSON.stringify({ brief }),
     })
     return handle<ScaffoldResult>(res)
+  },
+
+  /**
+   * One-shot, LLM-free generation from a single free-text description. The
+   * server derives a ProjectBrief heuristically and scaffolds runnable files
+   * (incl. a live index.html). Powers the /code "Construir app" button so the
+   * build + preview flow works even when the chat model is unavailable.
+   */
+  async generate(prompt: string): Promise<GenerateResult> {
+    const res = await fetch(`${baseUrl}/generate`, {
+      method: "POST",
+      credentials: "include",
+      headers: authHeaders(),
+      body: JSON.stringify({ prompt }),
+    })
+    return handle<GenerateResult>(res)
   },
 }
