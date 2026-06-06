@@ -840,6 +840,16 @@ function paragraphText(paragraphXmlValue = '') {
 
 function extractDocxParagraphs(documentXml = '') {
   const paragraphs = [];
+  const tableRanges = [];
+  const tableRe = /<w:tbl\b[\s\S]*?<\/w:tbl>/g;
+  let tableMatch;
+  while ((tableMatch = tableRe.exec(documentXml))) {
+    tableRanges.push({
+      start: tableMatch.index,
+      end: tableMatch.index + tableMatch[0].length,
+    });
+  }
+  const isInsideTable = (index) => tableRanges.some((range) => index >= range.start && index < range.end);
   const paragraphRe = /<w:p\b[\s\S]*?<\/w:p>/g;
   let match;
   while ((match = paragraphRe.exec(documentXml))) {
@@ -851,6 +861,7 @@ function extractDocxParagraphs(documentXml = '') {
       xml,
       text,
       normalized: normalizeText(text),
+      inTable: isInsideTable(match.index),
     });
   }
   return paragraphs;
@@ -893,9 +904,10 @@ function extractTableCells(rowXml = '') {
 }
 
 function targetHeadingPattern(target) {
+  const numericPart = `0*${target.numeric}`;
   const numberPart = target.roman
-    ? `(?:${target.numeric}|${normalizeText(target.roman)})`
-    : target.numeric;
+    ? `(?:${numericPart}|${normalizeText(target.roman)})`
+    : numericPart;
   if (target.kind === 'anexo') {
     return new RegExp(`\\b(?:anexo|anexos|apendice|apendices)\\s*(?:n(?:ro|umero)?\\.?|num\\.?|no\\.?|#)?\\s*${numberPart}\\b`);
   }
@@ -947,6 +959,7 @@ function sectionInsertionRange(documentXml, target, precomputedParagraphs = null
 
   for (let index = headingIndex + 1; index < paragraphs.length; index += 1) {
     const paragraph = paragraphs[index];
+    if (paragraph.inTable) continue;
     if (isSectionBoundary(paragraph.normalized, target)) break;
 
     if (isPlaceholderParagraph(paragraph.text)) {
@@ -980,6 +993,7 @@ function targetSectionBounds(documentXml, target, precomputedParagraphs = null) 
   let sectionEnd = bodyEnd >= 0 ? bodyEnd : documentXml.length;
   for (let index = headingIndex + 1; index < paragraphs.length; index += 1) {
     const paragraph = paragraphs[index];
+    if (paragraph.inTable) continue;
     if (isSectionBoundary(paragraph.normalized, target)) {
       sectionEnd = paragraph.start;
       break;
@@ -1186,7 +1200,10 @@ function fillCronogramaTableXml(tableXml = '', plan = buildCronogramaAnexo3Plan(
   const dateStartColumn = 3;
   const availableDateColumns = maxColumns - dateStartColumn;
   const dateLabels = plan.weekLabels.slice(0, availableDateColumns);
-  const headerRowIndex = rows.findIndex((row, index) => index > 0 && extractTableCells(row.xml).length === maxColumns);
+  const firstRowCells = extractTableCells(rows[0]?.xml || '');
+  const headerRowIndex = firstRowCells.length === maxColumns
+    ? 0
+    : rows.findIndex((row, index) => index > 0 && extractTableCells(row.xml).length === maxColumns);
   const dataStartRow = headerRowIndex >= 0 ? headerRowIndex + 1 : 1;
   const rowReplacements = new Map();
 
@@ -2161,12 +2178,32 @@ function validateTargetSectionCompletion(buffer, target) {
     if (!documentXml) return { ok: false, reason: 'missing_document_xml' };
     const paragraphs = extractDocxParagraphs(documentXml);
     const bounds = targetSectionBounds(documentXml, target, paragraphs);
-    const sectionText = paragraphText(documentXml.slice(bounds.sectionStart, bounds.sectionEnd));
+    const sectionXml = documentXml.slice(bounds.sectionStart, bounds.sectionEnd);
+    const sectionText = paragraphText(sectionXml);
     const normalized = normalizeText(sectionText);
-    const hasPlaceholder = /\b(pendiente|por completar|pendiente de completar|completar aqui|rellenar aqui)\b/.test(normalized);
+    const nonTableParagraphs = paragraphs.filter((paragraph) => (
+      !paragraph.inTable
+      && paragraph.start >= bounds.sectionStart
+      && paragraph.end <= bounds.sectionEnd
+    ));
+    const nonTableText = normalizeText(nonTableParagraphs.map((paragraph) => paragraph.text).join('\n'));
+    const hasPlaceholder = /\b(pendiente|por completar|pendiente de completar|completar aqui|rellenar aqui)\b/.test(nonTableText);
+    const sectionTables = extractDocxTables(documentXml)
+      .filter((table) => table.start >= bounds.sectionStart && table.start < bounds.sectionEnd);
+    const emptyTableRows = sectionTables
+      .map((table) => analyzeTableForFill(table.xml)?.dataRows?.length || 0)
+      .reduce((sum, count) => sum + count, 0);
+    const hasNarrativeCompletion = nonTableText.length >= 20;
     return {
-      ok: !hasPlaceholder && normalized.length >= 20,
-      reason: hasPlaceholder ? 'placeholder_remaining' : normalized.length < 20 ? 'section_too_short' : null,
+      ok: !hasPlaceholder && normalized.length >= 20 && (emptyTableRows === 0 || hasNarrativeCompletion),
+      reason: hasPlaceholder
+        ? 'placeholder_remaining'
+        : normalized.length < 20
+          ? 'section_too_short'
+          : emptyTableRows > 0 && !hasNarrativeCompletion
+            ? 'table_still_has_empty_rows'
+            : null,
+      emptyTableRows,
     };
   } catch (err) {
     return { ok: false, reason: err?.message || 'section_validation_failed' };
@@ -2252,8 +2289,7 @@ async function validateEditedBuffer(buffer, format, blocks, context = {}) {
     if (!appendedNeedle) return false;
     try {
       if (format === 'docx') {
-        const xml = new PizZip(buffer).file('word/document.xml')?.asText() || '';
-        return xml.includes(xmlEscape(appendedNeedle).slice(0, 24));
+        return normalizedTextIncludes(extractDocxTextFromBuffer(buffer), appendedNeedle.slice(0, 120));
       }
       if (format === 'xlsx') {
         const zip = new PizZip(buffer);
@@ -2283,10 +2319,11 @@ async function validateEditedBuffer(buffer, format, blocks, context = {}) {
   const semanticCriteria = format === 'docx'
     ? validateDocxOperationCriteria(buffer, context.operations || [])
     : { checks: [], passed: true };
+  const hasSemanticCriteria = semanticCriteria.checks.length > 0;
   const operationEffectApplied = semanticCriteria.checks.length > 0 ? semanticCriteria.passed : appendedTextPresent;
   const checks = {
     source_preserved: true,
-    content_appended: appendedNeedle ? appendedTextPresent : operationEffectApplied,
+    content_appended: hasSemanticCriteria ? operationEffectApplied : (appendedNeedle ? appendedTextPresent : operationEffectApplied),
     operation_criteria: semanticCriteria.passed,
     non_empty: buffer.length > 0,
   };
@@ -2506,6 +2543,7 @@ function analyzeDocumentStructure(documentXml = '') {
   const headingRe = /\b(?:anexo|anexos|apendice|apendices|capitulo|capitulos|seccion|secciones)\s*(?:n(?:ro|umero)?\.?|num\.?|no\.?|#)?\s*(?:[0-9]{1,3}|[ivxlcdm]{1,10})\b/;
   const headingIdx = [];
   paragraphs.forEach((paragraph, idx) => {
+    if (paragraph.inTable) return;
     if (headingRe.test(paragraph.normalized)) headingIdx.push(idx);
   });
   const bodyEnd = documentXml.lastIndexOf('</w:body>');
