@@ -1548,6 +1548,9 @@ router.post(
           steps,
           unavailableTools,
         }),
+        onCompact: ({ step, removedMessages, chars }) => {
+          try { console.log(`[agent-task] trace compacted at step ${step}: -${removedMessages} msgs, ${chars} chars`); } catch (_) {}
+        },
         onStepStart: (step) => {
           // react-agent gives us THE assistant turn (thought + tool
           // invocations). We turn the `thought` line into a

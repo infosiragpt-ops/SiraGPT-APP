@@ -2627,6 +2627,9 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         steps,
         unavailableTools,
       }),
+      onCompact: ({ step, removedMessages, chars }) => {
+        try { console.log(`[agent-task-runner] trace compacted at step ${step}: -${removedMessages} msgs, ${chars} chars (task ${taskId})`); } catch (_) {}
+      },
       onStepStart: (step) => {
         stepIdCounter += 1;
         currentStepId = `s${stepIdCounter}`;

@@ -144,3 +144,51 @@ test('react-agent: a healthy tool still works and finalizes normally', async () 
   assert.equal(result.finalAnswer, 'All good.');
   assert.deepEqual(result.exhaustedTools, []);
 });
+
+const okTool = {
+  name: 'web_search',
+  description: 'Returns a canned result.',
+  parameters: { type: 'object', properties: { q: { type: 'string' } }, required: ['q'], additionalProperties: false },
+  execute: async () => ({ ok: true, results: ['fact'] }),
+};
+
+test('react-agent: a model error yields a non-empty, honest degraded answer (never silent-empty)', async () => {
+  // The provider throws on every call (e.g. a 5xx that outlived SDK retries).
+  // The old behavior returned finalAnswer=null → silent empty "completed"
+  // message on the task path. Now the run hands back a real, honest message.
+  const throwingOpenAI = {
+    chat: { completions: { create: async () => { throw new Error('upstream 503'); } } },
+  };
+
+  const result = await reactAgent.run(throwingOpenAI, {
+    query: 'haz algo',
+    tools: [okTool],
+    maxSteps: 4,
+    model: 'test-model',
+  });
+
+  assert.match(String(result.stoppedReason), /model_error/);
+  assert.ok(String(result.finalAnswer || '').trim().length > 0, 'must not be empty');
+  assert.match(result.finalAnswer, /modelo/i);
+  assert.deepEqual(result.exhaustedTools, []);
+});
+
+test('react-agent: max_steps without finalize still returns a non-empty answer', async () => {
+  // The model keeps calling a healthy tool and a guard blocks every finalize
+  // (including the forced last-step one), so the run exhausts its step budget
+  // with no answer of its own. The safety net must still produce real text.
+  const script = Array.from({ length: 10 }, () => ({ tool: 'web_search', args: { q: 'x' } }));
+  const openai = makeScriptedOpenAI(script);
+
+  const result = await reactAgent.run(openai, {
+    query: 'investiga a fondo',
+    tools: [okTool],
+    maxSteps: 4,
+    model: 'test-model',
+    finalizeGuard: () => ({ ok: false, message: 'blocked', missingTools: ['nope'] }),
+  });
+
+  assert.notEqual(result.stoppedReason, 'finalized');
+  assert.ok(String(result.finalAnswer || '').trim().length > 0, 'must not be empty');
+  assert.equal(result.exhaustedTools.length, 0);
+});

@@ -40,6 +40,7 @@
   const { cloneProjectTool } = require('./agents/clone-project-tool');
   const { hostBashTool } = require('./agents/host-bash-tool');
   const { hostFileTool } = require('./agents/host-file-tool');
+  const { listDirTool, globFilesTool, codeGrepTool } = require('./agents/host-code-search-tool');
   const { checkCiStatusTool, monitorCiTool } = require('./agents/github-actions-tool');
   const openclawCapabilityKernel = require('./openclaw-capability-kernel');
   const { runToolWithRetry } = require('./agents/tool-call-retry');
@@ -485,7 +486,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       'Si el usuario dice "todavía no funciona", "sigue", "arregla", "no sirve", o similar, revisa TODO el historial del hilo para entender qué se pidió antes, qué se hizo, qué falló, y continúa desde donde se quedó. No empieces de cero.',
       'Cuando detectes que el usuario quiere hacer operaciones de repositorio (clonar, editar, commit, push, PR, deploy, CI), actúa como un coding agent completo:',
       '  1. Clona o localiza el repositorio usando `clone_project` o `host_bash` con git.',
-      '  2. Comprende la estructura del proyecto.',
+      '  2. Comprende la estructura del proyecto: usa `list_dir` para explorar el árbol, `glob_files` para localizar archivos por patrón (ej. "**/*.ts") y `code_grep` para buscar dónde se define o se usa un símbolo/cadena antes de editar.',
       '  3. Realiza los cambios necesarios editando archivos con `host_file` para cambios de texto y `host_bash` solo para comandos.',
       '  4. Ejecuta `npm test` o la suite de pruebas respectiva para verificar.',
       '  5. Si las pruebas pasan, haz `git add`, `git commit`, `git push` al repositorio.',
@@ -543,6 +544,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       finalizeGuard: executionProfile.requiredTools.length
         ? ({ steps, unavailableTools }) => validateFinalize(executionProfile, steps, { unavailableTools })
         : null,
+      onCompact: ({ step, removedMessages, chars }) => {
+        try { console.log(`[agentic-chat] trace compacted at step ${step}: -${removedMessages} msgs, ${chars} chars`); } catch (_) {}
+      },
       onStepStart: async (stepRec) => {
         stepCounter += 1;
         // Mark the previous synthetic step done.
@@ -892,7 +896,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
    *   lean. Calling with no args keeps the legacy base toolset.
    */
   function buildDefaultTools(opts = {}) {
-    const base = [...baseWebTools(), ...loadTaskTools(), cloneProjectTool, hostBashTool, hostFileTool, checkCiStatusTool, monitorCiTool];
+    const base = [...baseWebTools(), ...loadTaskTools(), cloneProjectTool, hostBashTool, hostFileTool, listDirTool, globFilesTool, codeGrepTool, checkCiStatusTool, monitorCiTool];
     const userQuery = opts && typeof opts.userQuery === 'string' ? opts.userQuery : '';
     const wantsMedia = !!userQuery && (isAgenticActionRequest(userQuery) || !!detectMediaIntent(userQuery).kind);
     const tools = wantsMedia ? [...base, ...loadMediaTools()] : base;

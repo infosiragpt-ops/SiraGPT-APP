@@ -32,6 +32,26 @@
 
 const DEFAULT_MAX_STEPS = 8;
 const DEFAULT_MAX_RUNTIME_MS = 30 * 60 * 1000;
+
+// ── Trace compaction ────────────────────────────────────────────────────
+// The running `messages` array grows by one assistant message + one tool
+// message per tool call, every step. On long autonomous runs (maxSteps
+// 30–60) this overflows the model's context window, which surfaces as a
+// hard `model_error` abort mid-task — the single most common way a
+// multi-step run dies before it can finalize. Compaction caps the trace by
+// summarizing OLDER complete rounds while preserving the head (system +
+// query) and the most recent rounds verbatim, so the assistant→tool
+// pairing the OpenAI API requires is never broken.
+const DEFAULT_COMPACT_MAX_CHARS = (() => {
+  const v = Number(process.env.SIRAGPT_REACT_COMPACT_MAX_CHARS);
+  return Number.isFinite(v) && v > 0 ? v : 60000; // ~15k tokens of trace
+})();
+const DEFAULT_COMPACT_TAIL_ROUNDS = (() => {
+  const v = Number(process.env.SIRAGPT_REACT_COMPACT_TAIL_ROUNDS);
+  return Number.isFinite(v) && v >= 1 ? Math.floor(v) : 3;
+})();
+const COMPACT_DISABLED = process.env.SIRAGPT_REACT_COMPACT_DISABLED === '1';
+
 const Ajv = require('ajv');
 const { sanitizeToolParameters } = require('./ai-product-os/tool-schema-sanitizer');
 const ajv = new Ajv({ allErrors: true, strict: false, coerceTypes: false });
@@ -163,6 +183,165 @@ async function dispatchTool(registry, name, argsRaw, ctx) {
 }
 
 /**
+ * Rough char-count of a message array. We use chars (not a tokenizer) on
+ * purpose: it's dependency-free, deterministic, and a 4:1 char:token ratio
+ * is a safe over-estimate that keeps us comfortably under context limits.
+ */
+function estimateMessagesChars(messages) {
+  if (!Array.isArray(messages)) return 0;
+  let total = 0;
+  for (const m of messages) {
+    try {
+      total += JSON.stringify(m).length;
+    } catch {
+      total += String(m && m.content ? m.content : '').length;
+    }
+  }
+  return total;
+}
+
+/**
+ * Condense a single tool observation (the JSON content of a `role:'tool'`
+ * message) into a one-line gist: keep error codes verbatim, otherwise list
+ * the top-level result keys. Never throws.
+ */
+function summarizeObservation(content) {
+  let str = content;
+  if (typeof str !== 'string') {
+    try { str = JSON.stringify(str); } catch { return 'unserializable'; }
+  }
+  let obj = null;
+  try { obj = JSON.parse(str); } catch { /* not JSON — fall through */ }
+  if (obj && typeof obj === 'object') {
+    if (obj.error) return `error=${String(obj.error).slice(0, 100)}`;
+    const keys = Object.keys(obj).slice(0, 8);
+    return keys.length ? `ok keys=[${keys.join(',')}]` : 'ok';
+  }
+  return String(str).slice(0, 120).replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Summarize one "round" — an assistant message plus the tool messages that
+ * answer its tool_calls — into a compact line: the thought (truncated) and
+ * each `toolName→gist`.
+ */
+function summarizeRound(round) {
+  const assistant = round.find((m) => m && m.role === 'assistant');
+  const thought = assistant && typeof assistant.content === 'string'
+    ? assistant.content.trim().slice(0, 140)
+    : '';
+  const calls = assistant && Array.isArray(assistant.tool_calls) ? assistant.tool_calls : [];
+  const toolMsgs = round.filter((m) => m && m.role === 'tool');
+  const parts = [];
+  for (let i = 0; i < calls.length; i += 1) {
+    const name = calls[i] && calls[i].function ? calls[i].function.name : 'tool';
+    const obs = toolMsgs[i] ? summarizeObservation(toolMsgs[i].content) : '(no observation)';
+    parts.push(`${name}→${obs}`);
+  }
+  const callSummary = parts.join('; ') || (thought ? '' : '(no tool calls)');
+  if (thought && callSummary) return `${thought} | ${callSummary}`;
+  return thought || callSummary;
+}
+
+/**
+ * Compact a ReAct message trace so it fits a char budget without breaking
+ * the OpenAI assistant→tool pairing invariant.
+ *
+ * Strategy:
+ *   - Preserve the HEAD verbatim: every leading message up to (but not
+ *     including) the first assistant turn — i.e. the system prompt and the
+ *     user query.
+ *   - Split the remainder into rounds at each assistant message. A round is
+ *     [assistant, ...its tool/user replies], which is the atomic unit the
+ *     API needs kept together.
+ *   - Keep the last `tailRounds` rounds verbatim (recent context the model
+ *     is actively reasoning over).
+ *   - Replace the older middle rounds with ONE summary `user` message that
+ *     lists what was already done, so the model keeps continuity but pays a
+ *     fraction of the tokens.
+ *
+ * Returns the original array (same reference) when no compaction is needed
+ * or when it would not actually shrink the payload — callers can cheaply
+ * detect a no-op via identity.
+ */
+function compactMessages(messages, opts = {}) {
+  if (!Array.isArray(messages) || messages.length < 4) return messages;
+  const maxChars = Number.isFinite(opts.maxChars) && opts.maxChars > 0
+    ? opts.maxChars
+    : DEFAULT_COMPACT_MAX_CHARS;
+  const tailRounds = Number.isFinite(opts.tailRounds) && opts.tailRounds >= 1
+    ? Math.floor(opts.tailRounds)
+    : DEFAULT_COMPACT_TAIL_ROUNDS;
+
+  if (estimateMessagesChars(messages) <= maxChars) return messages;
+
+  // Head: leading non-assistant messages (system + first user query).
+  let headEnd = 0;
+  while (headEnd < messages.length && messages[headEnd].role !== 'assistant') headEnd += 1;
+  if (headEnd === 0) return messages; // malformed (no head) — leave untouched
+  const head = messages.slice(0, headEnd);
+  const rest = messages.slice(headEnd);
+
+  // Split the rest into rounds at assistant boundaries.
+  const rounds = [];
+  let current = null;
+  for (const m of rest) {
+    if (m.role === 'assistant') {
+      if (current) rounds.push(current);
+      current = [m];
+    } else if (current) {
+      current.push(m);
+    } else {
+      current = [m];
+    }
+  }
+  if (current) rounds.push(current);
+
+  if (rounds.length <= tailRounds) return messages; // not enough history to fold
+  const tail = rounds.slice(rounds.length - tailRounds);
+  const middle = rounds.slice(0, rounds.length - tailRounds);
+  if (middle.length === 0) return messages;
+
+  const lines = middle.map((round, idx) => `  ${idx + 1}. ${summarizeRound(round)}`);
+  const summaryMessage = {
+    role: 'user',
+    content:
+      `[CONTEXTO COMPACTADO] Para no exceder la ventana de contexto se resumieron `
+      + `${middle.length} pasos previos (las herramientas y observaciones recientes se `
+      + `conservan completas abajo). Resumen de lo ya hecho:\n${lines.join('\n')}\n`
+      + `Continúa desde aquí sin repetir trabajo ya realizado.`,
+  };
+
+  const compacted = head.concat([summaryMessage], ...tail);
+  // Only adopt the compacted form if it genuinely shrinks the payload.
+  if (estimateMessagesChars(compacted) >= estimateMessagesChars(messages)) return messages;
+  return compacted;
+}
+
+/**
+ * Build an honest, reason-aware degraded answer for a run that stopped
+ * without finalizing and produced no answer of its own. Keeps the user from
+ * ever receiving a silent empty "completed" message.
+ */
+function buildDegradedAnswer(stoppedReason) {
+  const reason = String(stoppedReason || '');
+  if (reason.startsWith('runtime_budget')) {
+    return 'No alcancé a completar la tarea dentro del tiempo disponible. Te dejo lo procesado hasta ahora; si necesitas el resultado completo, vuelve a intentarlo o acota la solicitud.';
+  }
+  if (reason.startsWith('model_error')) {
+    return 'Hubo un problema temporal con el modelo y no pude completar la respuesta. Por favor vuelve a intentarlo; si el problema persiste, reformula la solicitud.';
+  }
+  if (reason === 'aborted') {
+    return 'La tarea se canceló antes de completarse.';
+  }
+  if (reason === 'no_message') {
+    return 'El modelo no devolvió una respuesta utilizable. Por favor vuelve a intentarlo o reformula la solicitud.';
+  }
+  // max_steps, empty reason, guard-blocked, anything else.
+  return 'No logré cerrar la tarea dentro del presupuesto de pasos disponible. Te respondo con lo que alcancé a determinar; si necesitas más profundidad, reformula la solicitud o divídela en partes más pequeñas.';
+}
+
+/**
  * Run the ReAct loop.
  *
  * @param {OpenAI} openai — an instantiated OpenAI client
@@ -191,6 +370,9 @@ async function run(openai, opts) {
     extraSystem = '',
     finalizeGuard = null,
     initialToolChoice = null,
+    compactMaxChars = DEFAULT_COMPACT_MAX_CHARS,
+    compactTailRounds = DEFAULT_COMPACT_TAIL_ROUNDS,
+    onCompact = () => {},
   } = opts;
 
   if (!query) throw new Error('react-agent: query is required');
@@ -239,6 +421,25 @@ async function run(openai, opts) {
     if (Date.now() - startedAt > maxRuntimeMs) {
       stoppedReason = 'runtime_budget_exhausted';
       break;
+    }
+
+    // Keep the trace under the context budget. At the top of an iteration
+    // the array always ends on a complete round (every assistant turn from
+    // the previous step already has its tool replies appended), so folding
+    // older rounds here can never orphan a tool message.
+    if (!COMPACT_DISABLED) {
+      const compacted = compactMessages(messages, {
+        maxChars: compactMaxChars,
+        tailRounds: compactTailRounds,
+      });
+      if (compacted !== messages && compacted.length < messages.length) {
+        const removed = messages.length - compacted.length;
+        messages.length = 0;
+        messages.push(...compacted);
+        try {
+          onCompact({ step, removedMessages: removed, chars: estimateMessagesChars(messages) });
+        } catch { /* telemetry must never break the loop */ }
+      }
     }
 
     // If we're at the last step, force a finalize by narrowing the
@@ -455,19 +656,39 @@ async function run(openai, opts) {
     if (finalized) break;
   }
 
-  // Safety net: if the loop ended without a real finalize but we had to
-  // disable one or more tools, never return an empty/null answer. Hand back a
-  // short, honest degraded answer so the caller can still surface something
-  // useful instead of the old hard "tool X failed N times" dead-end.
-  if ((finalAnswer == null || String(finalAnswer).trim() === '') && exhaustedTools.size > 0) {
-    const toolList = Array.from(exhaustedTools).join(', ');
-    finalAnswer = `No pude usar ${toolList} en esta tarea (falló de forma repetida). Te respondo con la información disponible; si necesitas más precisión, vuelve a intentarlo o reformula la solicitud.`;
-    if (!stoppedReason || stoppedReason === 'max_steps') {
-      stoppedReason = `degraded_no_finalize:${toolList}`;
+  // Safety net: NEVER return an empty/null answer. A run can stop without a
+  // real finalize for many reasons — exhausted tools, max_steps, runtime
+  // budget, a model error, a guard that kept rejecting. In every one of those
+  // cases the old code returned `finalAnswer = null`, which on the task path
+  // surfaced as a `status:'completed'` message with no body (the `if
+  // (finalMarkdown)` gate dropped it). Always hand back a short, honest
+  // degraded answer so the caller has something real to show.
+  if (finalAnswer == null || String(finalAnswer).trim() === '') {
+    if (exhaustedTools.size > 0) {
+      const toolList = Array.from(exhaustedTools).join(', ');
+      finalAnswer = `No pude usar ${toolList} en esta tarea (falló de forma repetida). Te respondo con la información disponible; si necesitas más precisión, vuelve a intentarlo o reformula la solicitud.`;
+      if (!stoppedReason || stoppedReason === 'max_steps') {
+        stoppedReason = `degraded_no_finalize:${toolList}`;
+      }
+    } else {
+      finalAnswer = buildDegradedAnswer(stoppedReason);
+      if (!stoppedReason || stoppedReason === 'max_steps') {
+        stoppedReason = stoppedReason || 'degraded_no_finalize';
+      }
     }
   }
 
   return { finalAnswer, steps, stoppedReason, exhaustedTools: Array.from(exhaustedTools) };
 }
 
-module.exports = { run, DEFAULT_MAX_STEPS, DEFAULT_MAX_RUNTIME_MS, SYSTEM_PROMPT };
+module.exports = {
+  run,
+  DEFAULT_MAX_STEPS,
+  DEFAULT_MAX_RUNTIME_MS,
+  SYSTEM_PROMPT,
+  // Exported for unit testing + reuse by other loops (agent-core, executor).
+  compactMessages,
+  estimateMessagesChars,
+  DEFAULT_COMPACT_MAX_CHARS,
+  DEFAULT_COMPACT_TAIL_ROUNDS,
+};
