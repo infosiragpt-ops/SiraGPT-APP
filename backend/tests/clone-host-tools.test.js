@@ -10,6 +10,24 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
+// The product-repo protection tests assume the running repo is INSIDE an
+// allowed workspace root (true on a dev box at ~/Desktop/siraGPT). On CI the
+// checkout lives at /home/runner/work/... which is not a default root, so we
+// add the repo root via SIRAGPT_WORKSPACE_ROOTS for the duration of the test.
+// This makes the repo "within workspace" (readable) everywhere, so the
+// read-only protection can be asserted consistently across machines.
+async function withProductRepoInWorkspace(fn) {
+  const roots = require('../src/services/agents/workspace-roots');
+  const prev = process.env.SIRAGPT_WORKSPACE_ROOTS;
+  process.env.SIRAGPT_WORKSPACE_ROOTS = roots.selfRepoRoot();
+  try {
+    return await fn(roots);
+  } finally {
+    if (prev === undefined) delete process.env.SIRAGPT_WORKSPACE_ROOTS;
+    else process.env.SIRAGPT_WORKSPACE_ROOTS = prev;
+  }
+}
+
 // ── clone-project-tool ─────────────────────────────────────────────
 
 describe('clone-project-tool', () => {
@@ -344,13 +362,14 @@ describe('host-bash-tool', () => {
   });
 
   it('hostBash refuses git push/commit inside the product repo (integration)', async () => {
-    const roots = require('../src/services/agents/workspace-roots');
-    // Non-existent protected subdir: blocked before any spawn; a regression
-    // would surface a different error and fail this test without side effects.
-    const dir = path.join(roots.selfRepoRoot(), 'no-such-subdir-protection-probe');
-    const result = await hostModule.hostBash({ command: 'git commit -m "probe"', directory: dir });
-    assert.strictEqual(result.ok, false);
-    assert.ok(/bloqueada|solo lectura|self|código fuente/i.test(result.error || ''), `unexpected error: ${result.error}`);
+    await withProductRepoInWorkspace(async (roots) => {
+      // Non-existent protected subdir: blocked before any spawn; a regression
+      // would surface a different error and fail this test without side effects.
+      const dir = path.join(roots.selfRepoRoot(), 'no-such-subdir-protection-probe');
+      const result = await hostModule.hostBash({ command: 'git commit -m "probe"', directory: dir });
+      assert.strictEqual(result.ok, false);
+      assert.ok(/bloqueada|solo lectura|self|código fuente/i.test(result.error || ''), `unexpected error: ${result.error}`);
+    });
   });
 });
 
@@ -358,11 +377,13 @@ describe('workspace-roots protection policy', () => {
   let roots;
   before(() => { roots = require('../src/services/agents/workspace-roots'); });
 
-  it('marks the product repo as protected (readable, not writable)', () => {
-    const productFile = path.join(roots.selfRepoRoot(), 'backend', 'index.js');
-    assert.strictEqual(roots.isPathProtected(productFile), true);
-    assert.strictEqual(roots.isPathWithinWorkspace(productFile), true); // still readable
-    assert.strictEqual(roots.isPathWritable(productFile), false);        // but not writable
+  it('marks the product repo as protected (readable, not writable)', async () => {
+    await withProductRepoInWorkspace((r) => {
+      const productFile = path.join(r.selfRepoRoot(), 'backend', 'index.js');
+      assert.strictEqual(r.isPathProtected(productFile), true);
+      assert.strictEqual(r.isPathWithinWorkspace(productFile), true); // still readable
+      assert.strictEqual(r.isPathWritable(productFile), false);        // but not writable
+    });
   });
 
   it('keeps sira-projects clones fully writable', () => {
@@ -378,28 +399,30 @@ describe('workspace-roots protection policy', () => {
 
 describe('host-file-tool protection', () => {
   let hostFileModule;
-  let roots;
   before(() => {
     hostFileModule = require('../src/services/agents/host-file-tool');
-    roots = require('../src/services/agents/workspace-roots');
   });
 
   it('refuses to write into the product repo source', async () => {
-    const probe = path.join(roots.selfRepoRoot(), '.protection-probe-should-not-be-created.tmp');
-    try {
-      const result = await hostFileModule.hostFile({ action: 'write', path: probe, content: 'x' });
-      assert.strictEqual(result.ok, false);
-      assert.ok(/solo lectura|read-only|self|código fuente/i.test(result.error || ''), `unexpected: ${result.error}`);
-      assert.strictEqual(fs.existsSync(probe), false, 'protected write must not touch disk');
-    } finally {
-      try { if (fs.existsSync(probe)) fs.unlinkSync(probe); } catch { /* noop */ }
-    }
+    await withProductRepoInWorkspace(async (r) => {
+      const probe = path.join(r.selfRepoRoot(), '.protection-probe-should-not-be-created.tmp');
+      try {
+        const result = await hostFileModule.hostFile({ action: 'write', path: probe, content: 'x' });
+        assert.strictEqual(result.ok, false);
+        assert.ok(/solo lectura|read-only|self|código fuente/i.test(result.error || ''), `unexpected: ${result.error}`);
+        assert.strictEqual(fs.existsSync(probe), false, 'protected write must not touch disk');
+      } finally {
+        try { if (fs.existsSync(probe)) fs.unlinkSync(probe); } catch { /* noop */ }
+      }
+    });
   });
 
   it('still allows reading the product repo source', async () => {
-    const target = path.join(roots.selfRepoRoot(), 'backend', 'package.json');
-    const result = await hostFileModule.hostFile({ action: 'read', path: target });
-    assert.strictEqual(result.ok, true, `read should succeed: ${result.error || ''}`);
-    assert.ok(result.content.includes('"name"'));
+    await withProductRepoInWorkspace(async (r) => {
+      const target = path.join(r.selfRepoRoot(), 'backend', 'package.json');
+      const result = await hostFileModule.hostFile({ action: 'read', path: target });
+      assert.strictEqual(result.ok, true, `read should succeed: ${result.error || ''}`);
+      assert.ok(result.content.includes('"name"'));
+    });
   });
 });
