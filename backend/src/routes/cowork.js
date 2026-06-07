@@ -153,6 +153,21 @@ router.delete('/memory', authenticateToken, async (req, res) => {
   }
 });
 
+// Forget a single memory by id (scoped to the owning user). Powers the
+// "Olvidar" action on each item in the MEMORIA panel.
+router.delete('/memory/:id', authenticateToken, memoryRateLimit, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const id = String(req.params.id || '');
+    if (!id) return res.status(400).json({ error: 'id required' });
+    const result = activeMemory.deleteById(userId, id);
+    if (!result.removed) return res.status(404).json({ error: 'memory not found' });
+    res.json({ ok: true, removed: result.removed, fact: result.fact });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/memory/promote/:entryId', authenticateToken, memoryRateLimit, async (req, res) => {
   try {
     const entry = activeMemory.promoteToLongTerm(req.params.entryId);

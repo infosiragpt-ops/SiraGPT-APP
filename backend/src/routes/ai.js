@@ -176,6 +176,7 @@ const postResponseBrainHook = require('../services/sira/post-response-brain-hook
 const coworkEngine = require('../services/cowork-engine');
 const activeMemory = require('../services/active-memory');
 const memoryDecision = require('../services/memory-decision');
+const memoryIntelligence = require('../services/memory-intelligence');
 const memoryDocument = require('../services/memory-document');
 const conversationUnderstanding = require('../services/conversation-understanding');
 const chatAttachmentRecovery = require('../services/chat-attachment-recovery');
@@ -3909,50 +3910,73 @@ router.post(
         }
       }
 
-      // ── Autonomous memory: the turn DECIDES on its own when to remember ──
-      // memory-decision inspects the prompt and decides (a) whether to store
-      // durable facts the user just shared, and (b) whether this turn leans on
-      // the user's personal/past context enough to RECALL stored memory. Only
-      // when recall is warranted AND something relevant exists do we inject it
-      // into the prompt (so the model USES it) + stream a `memory` frame (so
-      // the UI shows the "MEMORIA" section). Best-effort: never break the turn.
+      // ── Autonomous memory (professional): the turn DECIDES on its own ────
+      // memory-intelligence inspects the prompt and produces a structured
+      // decision: (a) durable FACTS the user shared (precise, typed, with
+      // polarity), (b) a FORGET request, and (c) a confidence-scored RECALL
+      // decision. We store facts (superseding stale single-valued ones so a
+      // new name replaces the old), honour forget requests, and — only when
+      // recall is warranted AND relevant memory clears a relevance bar — inject
+      // it into the prompt (so the model USES it) + stream a `memory` frame
+      // (so the UI shows the "MEMORIA" section). Best-effort: never break the turn.
       let activeMemoryBlock = '';
       let memoryItems = null;
       let memoryMeta = null;
       try {
         if (userId && typeof prompt === 'string' && prompt.trim()) {
-          const memDecision = memoryDecision.decide(prompt);
-          // (a) Store new durable facts so future turns can recall them.
-          if (memDecision.store && Array.isArray(memDecision.facts)) {
-            for (const f of memDecision.facts) {
+          const mem = memoryIntelligence.analyze(prompt);
+          // (a) FORGET: honour explicit "olvida eso / forget that".
+          if (mem.forget?.should && Array.isArray(mem.forget.targets)) {
+            for (const t of mem.forget.targets) {
+              try { if (t?.query) activeMemory.forget(userId, t.query); } catch { /* best effort */ }
+            }
+          }
+          // (b) STORE structured facts; supersede stale single-valued attrs.
+          if (Array.isArray(mem.store?.facts)) {
+            for (const f of mem.store.facts) {
               try {
-                activeMemory.createMemoryEntry(userId, f.fact, {
+                const entry = activeMemory.createMemoryEntry(userId, f.fact, {
                   source: 'chat',
                   category: f.category || 'general',
-                  confidence: 0.8,
+                  confidence: typeof f.confidence === 'number' ? f.confidence : 0.8,
+                  metadata: { attribute: f.attribute || null, polarity: f.polarity || 'positive' },
                 });
+                // A new name/role/company/location/project replaces the old one.
+                if (f.attribute && entry?.id) {
+                  activeMemory.supersede(userId, { category: f.category, attribute: f.attribute, exceptId: entry.id });
+                }
               } catch { /* per-fact best effort */ }
             }
           }
-          // (b) Recall only when the turn references personal/past context.
-          if (memDecision.recall) {
+          // (c) RECALL only when warranted, and only surface relevant memory.
+          const SIRA_MEM_MIN_RELEVANCE = Number(process.env.SIRAGPT_MEMORY_MIN_RELEVANCE || 0.45);
+          if (mem.recall?.should) {
             let recalled = [];
-            try { recalled = activeMemory.recall(userId, prompt, { limit: 6 }) || []; } catch { recalled = []; }
-            if (Array.isArray(recalled) && recalled.length > 0) {
-              memoryItems = recalled.map((m) => ({
+            try { recalled = activeMemory.recall(userId, prompt, { limit: 8 }) || []; } catch { recalled = []; }
+            const relevant = recalled.filter((m) => typeof m.score !== 'number' || m.score >= SIRA_MEM_MIN_RELEVANCE).slice(0, 6);
+            if (relevant.length > 0) {
+              const now = Date.now();
+              memoryItems = relevant.map((m) => ({
+                id: m.id,
                 fact: m.fact,
                 category: m.category || 'general',
                 tier: m.tier || 'short_term',
-                strength: typeof m.strength === 'number' ? m.strength : null,
-                score: typeof m.score === 'number' ? m.score : null,
+                polarity: m.metadata?.polarity || 'positive',
+                confidence: typeof m.confidence === 'number' ? Number(m.confidence.toFixed(2)) : null,
+                relevance: typeof m.score === 'number' ? Number(Math.min(1, m.score).toFixed(2)) : null,
+                ageMs: typeof m.createdAt === 'number' ? Math.max(0, now - m.createdAt) : null,
               }));
-              memoryMeta = { reason: memDecision.reason || '', recalled: memoryItems.length };
+              memoryMeta = {
+                reason: mem.recall.reason || '',
+                confidence: typeof mem.recall.confidence === 'number' ? mem.recall.confidence : null,
+                recalled: memoryItems.length,
+              };
               // Inject so the model actually uses what it remembered.
               const memLines = memoryItems.map((m) => `- ${m.fact}`).join('\n');
               activeMemoryBlock = `\n\n## Memoria del usuario (recordada para este turno)\nUsa estos datos recordados cuando sean relevantes. No los repitas literalmente si no aportan.\n${memLines}`;
               // Stream a memory frame so the UI can render the MEMORIA section.
               try {
-                res.write(`data: ${JSON.stringify({ type: 'memory', reason: memoryMeta.reason, items: memoryItems })}\n\n`);
+                res.write(`data: ${JSON.stringify({ type: 'memory', reason: memoryMeta.reason, confidence: memoryMeta.confidence, items: memoryItems })}\n\n`);
               } catch { /* socket gone */ }
             }
           }

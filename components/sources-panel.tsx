@@ -12,7 +12,22 @@
  */
 
 import * as React from "react"
-import { Brain, Check, ExternalLink, Globe, Search, X } from "lucide-react"
+import {
+  Brain,
+  Briefcase,
+  Check,
+  ExternalLink,
+  Globe,
+  Heart,
+  Lightbulb,
+  Search,
+  Sparkles,
+  ThumbsDown,
+  Trash2,
+  User,
+  X,
+} from "lucide-react"
+import { apiClient } from "@/lib/api"
 import {
   Favicon,
   domainOf,
@@ -37,6 +52,41 @@ const MEMORY_TIER_LABEL: Record<string, string> = {
   short_term: "Reciente",
 }
 
+const MEMORY_CATEGORY_LABEL: Record<string, string> = {
+  identity: "Identidad",
+  preference: "Preferencia",
+  project: "Proyecto",
+  instruction: "Instrucción",
+  general: "Dato",
+}
+
+function memoryIcon(category?: string, polarity?: string) {
+  if (polarity === "negative") return ThumbsDown
+  switch (category) {
+    case "identity":
+      return User
+    case "preference":
+      return Heart
+    case "project":
+      return Briefcase
+    case "instruction":
+      return Lightbulb
+    default:
+      return Sparkles
+  }
+}
+
+/** Compact relative-age label: "hoy", "ayer", "hace 3 d", "hace 2 sem". */
+function formatAge(ageMs?: number | null): string {
+  if (typeof ageMs !== "number" || ageMs < 0) return ""
+  const days = Math.floor(ageMs / 86_400_000)
+  if (days <= 0) return "hoy"
+  if (days === 1) return "ayer"
+  if (days < 14) return `hace ${days} d`
+  if (days < 60) return `hace ${Math.floor(days / 7)} sem`
+  return `hace ${Math.floor(days / 30)} mes`
+}
+
 export function SourcesPanel({ sources, activity, memory, memoryMeta, onClose }: SourcesPanelProps) {
   const safeSources = React.useMemo(
     () => (Array.isArray(sources) ? sources.filter(Boolean) : []),
@@ -54,9 +104,33 @@ export function SourcesPanel({ sources, activity, memory, memoryMeta, onClose }:
   const previewDomains = uniqueDomains.slice(0, 3)
   const elapsed = formatElapsed(activity?.elapsedMs)
   const query = activity?.query || ""
+  // Optimistic "forget": ids the user removed this session are hidden
+  // immediately while the DELETE round-trips.
+  const [forgotten, setForgotten] = React.useState<Set<string>>(new Set())
+  const [forgetting, setForgetting] = React.useState<Set<string>>(new Set())
+
+  const visibleMemory = React.useMemo(
+    () => safeMemory.filter((m) => !m.id || !forgotten.has(m.id)),
+    [safeMemory, forgotten],
+  )
   const hasSources = safeSources.length > 0
-  const hasMemory = safeMemory.length > 0
+  const hasMemory = visibleMemory.length > 0
   const memoryReason = memoryMeta?.reason || ""
+
+  const handleForget = React.useCallback(async (item: ChipMemoryItem) => {
+    if (!item.id) return
+    const id = item.id
+    setForgetting((prev) => new Set(prev).add(id))
+    const ok = await apiClient.forgetMemory(id)
+    setForgetting((prev) => {
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+    if (ok) {
+      setForgotten((prev) => new Set(prev).add(id))
+    }
+  }, [])
 
   // Esc closes the panel, matching the other right-pane viewers.
   React.useEffect(() => {
@@ -88,7 +162,7 @@ export function SourcesPanel({ sources, activity, memory, memoryMeta, onClose }:
       {/* MEMORIA — autonomously recalled memory the model used this turn */}
       {hasMemory ? (
         <div className="border-b border-border px-5 py-4">
-          <div className="mb-3 flex items-center gap-2">
+          <div className="mb-1 flex items-center gap-2">
             <span className="flex h-5 w-5 items-center justify-center rounded-md bg-violet-500/15 text-violet-600 dark:text-violet-400">
               <Brain className="h-3.5 w-3.5" />
             </span>
@@ -96,38 +170,77 @@ export function SourcesPanel({ sources, activity, memory, memoryMeta, onClose }:
               MEMORIA
             </h3>
             <span className="rounded-full bg-violet-500/10 px-2 py-0.5 text-xs font-medium text-violet-600 dark:text-violet-400">
-              {safeMemory.length}
+              {visibleMemory.length}
             </span>
+            {typeof memoryMeta?.confidence === "number" ? (
+              <span
+                className="ml-auto text-[11px] font-medium text-muted-foreground"
+                title="Confianza de la decisión de recordar"
+              >
+                {Math.round((memoryMeta.confidence || 0) * 100)}% confianza
+              </span>
+            ) : null}
           </div>
           {memoryReason ? (
-            <p className="mb-3 text-xs leading-5 text-muted-foreground">{memoryReason}</p>
-          ) : null}
+            <p className="mb-3 mt-1 text-xs leading-5 text-muted-foreground">{memoryReason}</p>
+          ) : (
+            <div className="mb-3" />
+          )}
           <ul className="space-y-1.5">
-            {safeMemory.map((m, i) => {
+            {visibleMemory.map((m, i) => {
               const tierLabel = m.tier ? (MEMORY_TIER_LABEL[m.tier] || m.tier) : null
+              const categoryLabel = m.category ? (MEMORY_CATEGORY_LABEL[m.category] || m.category) : null
+              const ageLabel = formatAge(m.ageMs)
+              const relevancePct = typeof m.relevance === "number" ? Math.round(Math.min(1, m.relevance) * 100) : null
+              const Icon = memoryIcon(m.category, m.polarity)
+              const isForgetting = !!m.id && forgetting.has(m.id)
               return (
                 <li
-                  key={`mem-${i}`}
-                  className="flex items-start gap-2.5 rounded-lg border border-violet-500/20 bg-violet-500/5 p-2.5"
+                  key={m.id || `mem-${i}`}
+                  className="group relative flex items-start gap-2.5 rounded-lg border border-violet-500/20 bg-violet-500/[0.06] p-2.5 transition-colors hover:border-violet-500/40"
                 >
-                  <Brain className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-violet-500/70" />
+                  <span className="mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md bg-violet-500/15 text-violet-600 dark:text-violet-400">
+                    <Icon className="h-3 w-3" />
+                  </span>
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm leading-5 text-foreground">{m.fact}</p>
-                    {(tierLabel || m.category) ? (
-                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                        {tierLabel ? (
-                          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                            {tierLabel}
-                          </span>
-                        ) : null}
-                        {m.category && m.category !== "general" ? (
-                          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                            {m.category}
-                          </span>
-                        ) : null}
-                      </div>
-                    ) : null}
+                    <p className="pr-5 text-sm leading-5 text-foreground">{m.fact}</p>
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                      {categoryLabel ? (
+                        <span className="rounded-full bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-medium text-violet-600 dark:text-violet-400">
+                          {categoryLabel}
+                        </span>
+                      ) : null}
+                      {tierLabel ? (
+                        <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                          {tierLabel}
+                        </span>
+                      ) : null}
+                      {relevancePct !== null ? (
+                        <span
+                          className="inline-flex items-center gap-1 text-[10px] text-muted-foreground"
+                          title="Relevancia para tu mensaje"
+                        >
+                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500/70" />
+                          {relevancePct}%
+                        </span>
+                      ) : null}
+                      {ageLabel ? (
+                        <span className="text-[10px] text-muted-foreground">· {ageLabel}</span>
+                      ) : null}
+                    </div>
                   </div>
+                  {m.id ? (
+                    <button
+                      type="button"
+                      onClick={() => handleForget(m)}
+                      disabled={isForgetting}
+                      title="Olvidar este dato"
+                      aria-label="Olvidar este dato"
+                      className="absolute right-1.5 top-1.5 rounded-md p-1 text-muted-foreground opacity-0 transition-all hover:bg-destructive/10 hover:text-destructive focus:opacity-100 group-hover:opacity-100 disabled:opacity-40"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  ) : null}
                 </li>
               )
             })}

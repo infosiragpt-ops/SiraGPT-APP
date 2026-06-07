@@ -202,15 +202,21 @@ export type WebSourcesPayload = {
 }
 
 export type MemoryItem = {
+  id?: string
   fact: string
   category?: string
   tier?: string
+  polarity?: string
+  confidence?: number | null
+  relevance?: number | null
+  ageMs?: number | null
   strength?: number | null
   score?: number | null
 }
 
 export type MemoryPayload = {
   reason?: string
+  confidence?: number | null
   items: MemoryItem[]
 }
 
@@ -847,6 +853,17 @@ class ApiClient {
 
   async getActiveChatRuns(): Promise<{ runs: ChatRunSummary[] }> {
     return (await this.request('/chats/active-runs')) as { runs: ChatRunSummary[] };
+  }
+
+  /** Forget a single recalled memory by id (powers the "Olvidar" action). */
+  async forgetMemory(id: string): Promise<boolean> {
+    if (!id) return false;
+    try {
+      await this.request(`/cowork/memory/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async getActiveChatRun(chatId: string): Promise<{ run: ChatRunSummary | null }> {

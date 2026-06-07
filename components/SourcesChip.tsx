@@ -20,15 +20,21 @@ export type ChipActivity = {
 } | null
 
 export type ChipMemoryItem = {
+  id?: string
   fact: string
   category?: string
   tier?: string
+  polarity?: string
+  confidence?: number | null
+  relevance?: number | null
+  ageMs?: number | null
   strength?: number | null
   score?: number | null
 }
 
 export type ChipMemoryMeta = {
   reason?: string
+  confidence?: number | null
   recalled?: number
 } | null
 

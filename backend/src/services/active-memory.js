@@ -332,6 +332,39 @@ function clearUserMemory(userId) {
   return { cleared };
 }
 
+/**
+ * Delete a single entry by id, scoped to the owning user (so one user can
+ * never delete another's memory). Returns the removed fact for confirmation.
+ */
+function deleteById(userId, id) {
+  const entry = store.get(id);
+  if (!entry || entry.userId !== userId) return { removed: 0, fact: null };
+  store.delete(id);
+  schedulePersistUserMemory(userId);
+  return { removed: 1, fact: entry.fact };
+}
+
+/**
+ * Remove prior facts describing the same single-valued attribute so an updated
+ * fact (e.g. a new name) supersedes the stale one instead of accumulating
+ * contradictions. Matches on category + metadata.attribute. `exceptId` keeps
+ * the freshly-created entry.
+ */
+function supersede(userId, { category, attribute, exceptId } = {}) {
+  if (!attribute) return { removed: 0 };
+  let removed = 0;
+  for (const [id, entry] of store) {
+    if (entry.userId !== userId) continue;
+    if (id === exceptId) continue;
+    if (entry.category === category && entry.metadata && entry.metadata.attribute === attribute) {
+      store.delete(id);
+      removed++;
+    }
+  }
+  if (removed) schedulePersistUserMemory(userId);
+  return { removed };
+}
+
 function getStats(userId) {
   const userEntries = [...store.values()].filter(e => e.userId === userId);
   return {
@@ -388,6 +421,8 @@ module.exports = {
   autoPromote,
   autoDemote,
   forget,
+  deleteById,
+  supersede,
   clearUserMemory,
   getStats,
   expireStale,
