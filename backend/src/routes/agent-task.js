@@ -95,6 +95,7 @@ const agentTaskPersistence = require('../services/agents/agent-task-persistence'
 const {
   buildUploadedFileContext,
   normalizeClientMetadata,
+  resolveChatDocumentFileIds,
   resolveTranscriptionFileIds,
   serializeMessageAttachments,
 } = require('../services/message-attachments');
@@ -977,6 +978,28 @@ router.post(
     });
     if (!scope.ok) return res.status(scope.status).json(scope.body);
     req.body.chatId = scope.chatId;
+
+    // Document-followup recovery: when a user asks about an already-uploaded
+    // document WITHOUT re-attaching it, the composer sends `files: []` and the
+    // no-file agentic path fails with a 5xx (the reported bug). Reattach the most
+    // recent readable document from this chat so the turn runs through the safe
+    // local-document runtime — the same path the first (working) turn used.
+    try {
+      const providedNow = Array.isArray(req.body.files) ? req.body.files.map(String).filter(Boolean) : [];
+      if (providedNow.length === 0 && req.body.chatId && looksLikeDocumentFollowupQuestion(req.body.goal)) {
+        const reattached = await resolveChatDocumentFileIds(prisma, {
+          userId: req.user?.id,
+          chatId: String(req.body.chatId),
+          providedFileIds: providedNow,
+        });
+        if (Array.isArray(reattached) && reattached.length > 0) {
+          req.body.files = reattached;
+          console.log(`[agent-task] reattached ${reattached.length} prior chat document(s) for follow-up question`);
+        }
+      }
+    } catch (reattachErr) {
+      console.warn('[agent-task] document reattach failed (continuing without):', reattachErr?.message || reattachErr);
+    }
 
     const requestedFileIds = Array.isArray(req.body.files)
       ? req.body.files.map(String).filter(Boolean).slice(0, MAX_SIMULTANEOUS_DOCUMENTS)
@@ -1878,13 +1901,15 @@ async function handleQueuedTaskRequest(req, res) {
     if (isRedisFailure) {
       const { markRedisFailure } = require('../services/agents/redis-resilience');
       markRedisFailure(err);
-      console.warn('[agent-task] enqueue failed, falling back to local runtime:', message);
-      return handleLocalTaskRequest(req, res, {
-        fallbackReason: 'redis_unavailable',
-        fallbackDetail: message,
-      });
     }
-    throw err;
+    // Never surface a bare 5xx for an enqueue failure: a degraded in-process
+    // local run is always better UX than "El servidor tuvo un problema". This
+    // also covers non-redis enqueue errors that previously bubbled to Express.
+    console.warn('[agent-task] enqueue failed, falling back to local runtime:', message);
+    return handleLocalTaskRequest(req, res, {
+      fallbackReason: isRedisFailure ? 'redis_unavailable' : 'enqueue_failed',
+      fallbackDetail: message,
+    });
   }
   let streamState = initialAgentState();
   const snapshot = {
@@ -2414,6 +2439,22 @@ function normalizeDisplayGoal(text) {
 function isTranscriptionRequest(text) {
   return /\b(transcrib(?:e|ir|eme|irme|iendo|irlo|irla|elo|ela)?|transcripci[oó]n|transcripcion|transcribe|transcript|transcription)\b/i
     .test(String(text || ''));
+}
+
+/**
+ * Does this goal look like a QUESTION about an already-uploaded document
+ * (a follow-up), rather than a build/research/generation task? Used to decide
+ * whether to reattach the chat's prior document when no file is sent. Broad on
+ * doc-understanding signals, conservative against creation/external commands so
+ * we never hijack a "/goal crea una app" task with an unrelated old upload.
+ */
+function looksLikeDocumentFollowupQuestion(text) {
+  const v = String(text || '').trim().toLowerCase();
+  if (!v || v.length > 400) return false;
+  if (/\b(crea|cre[aá]me|genera|gener[aá]me|construye|desarrolla|dise[ñn]a|build|create|develop|investiga en internet|busca en (la )?(web|internet)|descarga|deploy|sube a|haz una (app|web|p[aá]gina))\b/i.test(v)) {
+    return false;
+  }
+  return /\b(qu[eé]|cu[aá]l(es)?|c[oó]mo|cu[aá]ndo|d[oó]nde|qui[eé]n(es)?|cu[aá]nto?s?|por qu[eé]|what|which|who|where|when|how|why|resume|res[uú]men|res[uú]me|resumir|explica|expl[ií]came|analiza|an[aá]lisis|de qu[eé] trata|t[ií]tulo|title|autor|objetivo|conclusi[oó]n|secci[oó]n|cap[ií]tulo|p[aá]gina|menciona|dice|trata|contiene|summary|about|tell me)\b/i.test(v);
 }
 
 function looksLikeAttachmentRecoveryNeeded(text) {
@@ -3044,3 +3085,6 @@ router.INTERNAL = {
 };
 
 module.exports = router;
+// Exposed for unit tests (document-followup recovery heuristic).
+module.exports.looksLikeDocumentFollowupQuestion = looksLikeDocumentFollowupQuestion;
+module.exports.isTranscriptionRequest = isTranscriptionRequest;

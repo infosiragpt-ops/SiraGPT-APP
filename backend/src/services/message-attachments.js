@@ -628,6 +628,52 @@ async function resolveTranscriptionFileIds(prisma, {
   return [];
 }
 
+/**
+ * Resolve the most recent readable document(s) attached earlier in a chat.
+ *
+ * The frontend drops the prior attachment when a user asks a follow-up about an
+ * already-uploaded document ("cual es el titulo?"), sending `files: []`. This
+ * recovers those file ids from the chat's recent message history so the turn can
+ * still answer from the document instead of failing. Mirrors the chat-scan in
+ * `resolveTranscriptionFileIds` but without the transcription-only recent-file
+ * fallback (so it never grabs an unrelated upload from another chat).
+ */
+async function resolveChatDocumentFileIds(prisma, {
+  userId,
+  chatId = null,
+  providedFileIds = [],
+  take = 30,
+} = {}) {
+  const provided = uniqueFileIds(Array.isArray(providedFileIds) ? providedFileIds : []);
+  if (provided.length > 0 || !prisma || !userId || !chatId) return provided;
+  if (!prisma.chat?.findFirst || !prisma.message?.findMany) return [];
+
+  const chat = await prisma.chat.findFirst({
+    where: { id: String(chatId), userId },
+    select: { id: true },
+  }).catch(() => null);
+  if (!chat) return [];
+
+  const messages = await prisma.message.findMany({
+    where: { chatId: chat.id },
+    orderBy: { timestamp: 'desc' },
+    take: Math.max(1, Math.min(100, Number(take) || 30)),
+    select: { files: true },
+  }).catch(() => []);
+
+  const ids = [];
+  for (const message of messages) {
+    ids.push(...extractFileIdsFromMessageFiles(message.files));
+  }
+  const unique = uniqueFileIds(ids);
+  if (unique.length === 0) return [];
+
+  const rows = await loadFileRows(prisma, userId, unique);
+  const allowed = new Set(rows.filter(isReadableFileCandidate).map((row) => row.id));
+  // Preserve recency order (messages are newest-first, so `unique` is too).
+  return unique.filter((id) => allowed.has(id)).slice(0, MAX_SIMULTANEOUS_DOCUMENTS);
+}
+
 async function serializeMessageAttachments(prisma, { userId, fileIds = [], clientMetadata = [] } = {}) {
   const ids = uniqueFileIds(Array.isArray(fileIds) ? fileIds : []);
   if (ids.length === 0) return [];
@@ -842,6 +888,7 @@ module.exports = {
   normalizeClientMetadata,
   prepareDocumentTextForProfessionalSynthesis,
   requestedParagraphCount,
+  resolveChatDocumentFileIds,
   resolveTranscriptionFileIds,
   serializeMessageAttachments,
   wantsSingleParagraphSynthesis,
