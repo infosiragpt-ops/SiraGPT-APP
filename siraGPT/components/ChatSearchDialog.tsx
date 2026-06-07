@@ -167,53 +167,53 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[600px] max-h-[80vh] p-0">
-        <DialogHeader className="px-6 pt-6 pb-2">
+      <DialogContent className="sm:max-w-[600px] max-h-[80vh] p-0 bg-white dark:bg-[#0E131B] border-zinc-200 dark:border-zinc-800/80 shadow-[0_24px_70px_-36px_rgba(15,23,42,0.55)] dark:shadow-[0_24px_70px_-36px_rgba(0,0,0,0.8)] text-zinc-900 dark:text-zinc-100">
+        <DialogHeader className="px-6 pt-6 pb-2 border-b border-zinc-200/80 dark:border-zinc-800/80 bg-white dark:bg-[#0E131B] text-zinc-900 dark:text-zinc-100">
           <DialogTitle className="flex items-center gap-2">
-            <Search className="h-5 w-5" />
+            <Search className="h-5 w-5 text-zinc-400 dark:text-zinc-500" />
             Buscar chats
-            <span className="ml-auto inline-flex h-6 items-center rounded-md border border-border/55 bg-muted/40 px-2 font-mono text-[10.5px] font-medium tracking-wide text-muted-foreground">
+            <span className="ml-auto inline-flex h-6 items-center rounded-md border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800/40 px-2 font-mono text-[10.5px] font-medium tracking-wide text-zinc-400 dark:text-zinc-500">
               ⌘K
             </span>
           </DialogTitle>
         </DialogHeader>
 
         {/* Search Input */}
-        <div className="px-6 pb-4">
+        <div className="px-6 pb-4 pt-4 bg-white dark:bg-[#0E131B]">
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-zinc-400 dark:text-zinc-500" />
             <Input
               placeholder="Buscar en tus chats…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10"
+              className="pl-10 text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500 border-zinc-200 dark:border-zinc-800 bg-transparent"
               autoFocus
             />
             {isSearching && (
-              <Loader2 className="absolute right-3 top-1/2 transform -translate-y-1/2 h-4 w-4 animate-spin text-muted-foreground" />
+              <Loader2 className="absolute right-3 top-1/2 transform -translate-y-1/2 h-4 w-4 animate-spin text-zinc-400 dark:text-zinc-500" />
             )}
           </div>
         </div>
 
         {/* Search Results */}
         <ScrollArea
-          className="flex-1 max-h-[400px]"
+          className="flex-1 max-h-[400px] bg-white dark:bg-[#0E131B]"
           ref={scrollAreaRef}
           onScrollCapture={handleScroll}
         >
           <div className="px-6 pb-6">
             {searchResults.length === 0 && !isSearching ? (
-              <div className="text-center py-8 text-muted-foreground">
+              <div className="text-center py-8 text-zinc-500 dark:text-zinc-400">
                 {searchQuery ? (
                   <>
-                    <MessageSquare className="h-12 w-12 mx-auto mb-3 opacity-50" />
-                    <p>No hay chats que coincidan con &quot;{searchQuery}&quot;</p>
+                    <MessageSquare className="h-12 w-12 mx-auto mb-3 opacity-50 text-zinc-400 dark:text-zinc-500" />
+                    <p className="text-zinc-900 dark:text-zinc-100 font-medium">No hay chats que coincidan con &quot;{searchQuery}&quot;</p>
                     <p className="text-sm mt-1">Intenta con otras palabras clave</p>
                   </>
                 ) : (
                   <>
-                    <History className="h-12 w-12 mx-auto mb-3 opacity-50" />
-                    <p>Aún no tienes chats</p>
+                    <History className="h-12 w-12 mx-auto mb-3 opacity-50 text-zinc-400 dark:text-zinc-500" />
+                    <p className="text-zinc-900 dark:text-zinc-100 font-medium">Aún no tienes chats</p>
                     <p className="text-sm mt-1">Empieza una conversación para verla aquí</p>
                   </>
                 )}
@@ -226,18 +226,18 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
                   <Button
                     key={`${chat.id}-${index}`}
                     variant="ghost"
-                    className="w-full justify-start p-3 h-auto text-left hover:bg-accent/50"
+                    className="w-full justify-start p-3 h-auto text-left text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800/50"
                     onClick={() => handleChatSelect(chat.id)}
                   >
                     <div className="flex items-start gap-3 w-full">
                       <div className="flex-shrink-0 mt-1">
-                        <MessageCircle className="h-4 w-4 text-muted-foreground" />
+                        <MessageCircle className="h-4 w-4 text-zinc-400 dark:text-zinc-500" />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <div className="font-medium text-sm truncate">
+                        <div className="font-medium text-sm truncate text-zinc-900 dark:text-zinc-100">
                           {searchQuery ? highlightSearchTerm(chat.title, searchQuery) : chat.title}
                         </div>
-                        <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
+                        <div className="flex items-center gap-2 mt-1 text-xs text-zinc-400 dark:text-zinc-500">
                           <Clock className="h-3 w-3" />
                           {formatChatTime(chat.updatedAt)}
                         </div>
@@ -248,15 +248,15 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
 
                 {/* Loading indicator for infinite scroll */}
                 {isLoadingMore && !searchQuery && (
-                  <div className="flex items-center justify-center py-4">
+                  <div className="flex items-center justify-center py-4 text-zinc-500 dark:text-zinc-400">
                     <ThinkingIndicator size="sm" className="mr-2" />
-                    <span className="text-sm text-muted-foreground">Loading more chats...</span>
+                    <span className="text-sm">Loading more chats...</span>
                   </div>
                 )}
 
                 {/* End of results indicator */}
                 {!hasMoreChats && !searchQuery && searchResults.length > 10 && (
-                  <div className="text-center py-4 text-xs text-muted-foreground">
+                  <div className="text-center py-4 text-xs text-zinc-400 dark:text-zinc-500">
                     You've reached the end of your chats
                   </div>
                 )}
