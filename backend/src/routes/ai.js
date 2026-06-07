@@ -179,6 +179,8 @@ const memoryDecision = require('../services/memory-decision');
 const memoryIntelligence = require('../services/memory-intelligence');
 const memoryEngine = require('../services/memory-engine');
 const memoryMetrics = require('../services/memory-metrics');
+const memorySemantic = require('../services/memory-semantic');
+const memoryLlmExtract = require('../services/memory-llm-extract');
 const memoryDocument = require('../services/memory-document');
 const conversationUnderstanding = require('../services/conversation-understanding');
 const chatAttachmentRecovery = require('../services/chat-attachment-recovery');
@@ -3958,6 +3960,30 @@ router.post(
               } catch { /* per-fact best effort */ }
             }
           }
+          // (b2) LLM-assisted extraction (fire-and-forget): catches durable
+          // facts stated in ANY phrasing the regex misses. Runs after the
+          // response is on its way, so it never adds latency; the facts it finds
+          // are stored for FUTURE recall. No-op when no fast model is configured.
+          if (memoryLlmExtract.available()) {
+            const _uid = userId;
+            const _prompt = prompt;
+            setImmediate(async () => {
+              try {
+                const llmFacts = await memoryLlmExtract.extractFacts(_prompt);
+                for (const f of llmFacts) {
+                  try {
+                    activeMemory.createMemoryEntry(_uid, f.fact, {
+                      source: 'chat-llm',
+                      category: f.category || 'general',
+                      confidence: f.confidence,
+                      metadata: { attribute: null, polarity: f.polarity || 'positive', extractor: 'llm' },
+                    });
+                    memoryMetrics.record('stored');
+                  } catch { /* per-fact */ }
+                }
+              } catch { /* best effort */ }
+            });
+          }
           // (c) RECALL only when warranted, and only surface relevant memory.
           const SIRA_MEM_MIN_RELEVANCE = Number(process.env.SIRAGPT_MEMORY_MIN_RELEVANCE || 0.45);
           if (mem.recall?.should) {
@@ -3965,7 +3991,10 @@ router.post(
             memoryMetrics.recordReason(mem.recall.reason || '');
             let recalled = [];
             try { recalled = activeMemory.recall(userId, prompt, { limit: 10 }) || []; } catch { recalled = []; }
-            const relevant = recalled.filter((m) => typeof m.score !== 'number' || m.score >= SIRA_MEM_MIN_RELEVANCE);
+            let relevant = recalled.filter((m) => typeof m.score !== 'number' || m.score >= SIRA_MEM_MIN_RELEVANCE);
+            // Semantic re-rank: understands MEANING (real embeddings when a key
+            // is configured). Fail-open — keeps lexical order if unavailable.
+            try { relevant = await memorySemantic.semanticRerank(prompt, relevant, { limit: 10 }); } catch { /* keep lexical */ }
             if (relevant.length > 0) {
               const now = Date.now();
               // Explainable, blended ranking: surfaces WHY each item was recalled.
@@ -3978,6 +4007,7 @@ router.post(
                 polarity: m.metadata?.polarity || 'positive',
                 confidence: typeof m.confidence === 'number' ? Number(m.confidence.toFixed(2)) : null,
                 relevance: typeof m.blendedScore === 'number' ? m.blendedScore : (typeof m.score === 'number' ? Number(Math.min(1, m.score).toFixed(2)) : null),
+                semantic: typeof m.semantic === 'number' ? Number(Math.min(1, Math.max(0, (m.semantic + 1) / 2)).toFixed(2)) : null,
                 matchedTopics: Array.isArray(m.matchedTopics) ? m.matchedTopics.slice(0, 4) : [],
                 why: m.why || '',
                 ageMs: typeof m.createdAt === 'number' ? Math.max(0, now - m.createdAt) : null,

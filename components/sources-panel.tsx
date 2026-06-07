@@ -192,6 +192,7 @@ export function SourcesPanel({ sources, activity, memory, memoryMeta, onClose }:
               const categoryLabel = m.category ? (MEMORY_CATEGORY_LABEL[m.category] || m.category) : null
               const ageLabel = formatAge(m.ageMs)
               const relevancePct = typeof m.relevance === "number" ? Math.round(Math.min(1, m.relevance) * 100) : null
+              const semanticPct = typeof m.semantic === "number" ? Math.round(Math.min(1, Math.max(0, m.semantic)) * 100) : null
               const Icon = memoryIcon(m.category, m.polarity)
               const isForgetting = !!m.id && forgetting.has(m.id)
               return (
@@ -222,6 +223,14 @@ export function SourcesPanel({ sources, activity, memory, memoryMeta, onClose }:
                         >
                           <span className="h-1.5 w-1.5 rounded-full bg-emerald-500/70" />
                           {relevancePct}%
+                        </span>
+                      ) : null}
+                      {semanticPct !== null ? (
+                        <span
+                          className="inline-flex items-center gap-1 rounded-full bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-medium text-sky-600 dark:text-sky-400"
+                          title="Similitud semántica (por significado)"
+                        >
+                          ~{semanticPct}% similitud
                         </span>
                       ) : null}
                       {ageLabel ? (
