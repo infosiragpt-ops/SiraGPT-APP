@@ -6,10 +6,20 @@
 
 import * as React from "react"
 import { usePathname, useRouter } from "next/navigation"
-import { Cloud, FolderOpen, FolderPlus, RefreshCw, SlidersHorizontal } from "lucide-react"
+import { Cloud, FolderOpen, FolderPlus, Loader2, RefreshCw, SlidersHorizontal } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -61,6 +71,7 @@ import {
 import { canOpenLocalDirectory, importLocalFolderAsWorkspace } from "@/lib/local-folder-workspace"
 import { apiClient } from "@/lib/api"
 import { projectsService, type Project, type ProjectChatSummary } from "@/lib/projects-service"
+import { normalizeChatInput } from "@/lib/chat-input-normalize"
 import { cn } from "@/lib/utils"
 
 const STORAGE_EXPANDED = "code-workspace:expanded-workspaces"
@@ -81,6 +92,11 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
   const [codexProjects, setCodexProjects] = React.useState<CodexProjectEntry[]>([])
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
+
+  // "Proyecto en la nube" modal — replaces the native window.prompt.
+  const [cloudDialogOpen, setCloudDialogOpen] = React.useState(false)
+  const [cloudName, setCloudName] = React.useState("")
+  const [creatingCloud, setCreatingCloud] = React.useState(false)
 
   const [expandedIds, setExpandedIds] = React.useState<Set<string>>(new Set())
   const [chatsByFolder, setChatsByFolder] = React.useState<
@@ -502,11 +518,33 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
     }
   }, [handleOpenDesktopFolder, onMobileNavigate, refreshCodexProjects, router])
 
-  // Secondary entry: a cloud-only project (no local files).
-  const handleNewCloudProject = React.useCallback(async () => {
-    const name = typeof window !== "undefined" ? window.prompt("Nombre del proyecto en la nube") : null
-    const clean = name?.trim()
-    if (!clean) return
+  // Secondary entry: a cloud-only project (no local files). Opens a
+  // styled modal instead of the native window.prompt.
+  const handleNewCloudProject = React.useCallback(() => {
+    setCloudName("")
+    setCreatingCloud(false)
+    setCloudDialogOpen(true)
+  }, [])
+
+  // Empty on open; validated live. We normalise the same way the backend
+  // stores it (strips invisible chars/BOM) so the button only lights up for
+  // a name that will actually persist cleanly.
+  const cloudNameClean = normalizeChatInput(cloudName).value.trim()
+  // Soft, NON-blocking warning only: the backend (projects model has no
+  // unique constraint on name) accepts duplicates, so we surface the
+  // collision but never hard-block a valid create.
+  const cloudNameDuplicate = React.useMemo(
+    () =>
+      cloudNameClean.length > 0 &&
+      folders.some((f) => f.name.trim().toLowerCase() === cloudNameClean.toLowerCase()),
+    [cloudNameClean, folders],
+  )
+  const canSubmitCloud = cloudNameClean.length > 0 && !creatingCloud
+
+  const submitCloudProject = React.useCallback(async () => {
+    const clean = normalizeChatInput(cloudName).value.trim()
+    if (!clean || creatingCloud) return
+    setCreatingCloud(true)
     try {
       const project = await projectsService.create({ name: clean })
       await refresh()
@@ -517,10 +555,21 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
         chatListId: project.id,
       })
       toast.success(`Proyecto "${project.name}" creado`)
+      setCloudDialogOpen(false)
     } catch (err: any) {
       toast.error(err?.message || "No se pudo crear el proyecto")
+      setCreatingCloud(false)
     }
-  }, [handleOpenWorkspace, refresh])
+  }, [cloudName, creatingCloud, handleOpenWorkspace, refresh])
+
+  // House pattern (create-project-dialog): clear state whenever the dialog
+  // closes so a second open never inherits a stale name or a frozen spinner.
+  React.useEffect(() => {
+    if (!cloudDialogOpen) {
+      setCloudName("")
+      setCreatingCloud(false)
+    }
+  }, [cloudDialogOpen])
 
   const handleSetDisplay = React.useCallback(
     <K extends keyof CodexDisplayOptions>(key: K, value: CodexDisplayOptions[K]) => {
@@ -685,6 +734,96 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
           </>
         }
       />
+
+      <Dialog
+        open={cloudDialogOpen}
+        onOpenChange={(open) => {
+          if (!creatingCloud) setCloudDialogOpen(open)
+        }}
+      >
+        <DialogContent showCloseButton={!creatingCloud} className="sm:max-w-[460px]">
+          <DialogHeader>
+            <div className="mb-1 flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-sky-500/15 to-indigo-500/15 ring-1 ring-sky-500/20">
+              <Cloud className="h-5 w-5 text-sky-500" />
+            </div>
+            <DialogTitle className="text-xl tracking-tight">Nuevo proyecto en la nube</DialogTitle>
+            <DialogDescription>
+              Crea un workspace sincronizado en la nube. Podrás organizar tus chats y código dentro de él.
+            </DialogDescription>
+          </DialogHeader>
+
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              void submitCloudProject()
+            }}
+            className="space-y-4 pt-1"
+          >
+            <div className="space-y-1.5">
+              <Label htmlFor="cloud-project-name" className="text-sm">
+                Nombre del proyecto
+              </Label>
+              <Input
+                id="cloud-project-name"
+                autoFocus
+                value={cloudName}
+                onChange={(e) => setCloudName(e.target.value)}
+                placeholder="Ej. Marketing Q3, App de finanzas…"
+                maxLength={120}
+                disabled={creatingCloud}
+                aria-describedby="cloud-project-hint"
+                className={cn(
+                  "h-11",
+                  cloudNameDuplicate && "border-amber-500/60 focus-visible:ring-amber-500/40",
+                )}
+              />
+              <p
+                id="cloud-project-hint"
+                role="status"
+                aria-live="polite"
+                className={cn(
+                  "min-h-[1rem] text-xs",
+                  cloudNameDuplicate && !creatingCloud
+                    ? "text-amber-700 dark:text-amber-400"
+                    : "text-muted-foreground",
+                )}
+              >
+                {creatingCloud
+                  ? "Creando proyecto…"
+                  : cloudNameDuplicate
+                    ? "Ya tienes un proyecto con ese nombre — puedes crearlo igualmente."
+                    : canSubmitCloud
+                      ? "Pulsa ⏎ para crear · Esc para cancelar"
+                      : "Escribe un nombre · Esc para cancelar"}
+              </p>
+            </div>
+
+            <DialogFooter className="gap-2 sm:gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setCloudDialogOpen(false)}
+                disabled={creatingCloud}
+              >
+                Cancelar
+              </Button>
+              <Button type="submit" disabled={!canSubmitCloud} aria-busy={creatingCloud}>
+                {creatingCloud ? (
+                  <>
+                    <Loader2 aria-hidden="true" className="mr-2 h-4 w-4 animate-spin" />
+                    Creando…
+                  </>
+                ) : (
+                  <>
+                    <Cloud aria-hidden="true" className="mr-2 h-4 w-4" />
+                    Crear proyecto
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

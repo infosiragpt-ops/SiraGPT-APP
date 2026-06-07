@@ -91,7 +91,7 @@ import {
   SelectedTextDisplay,
   LinkContextDisplay,
 } from "@/components/chat/ComposerInlineDisplays"
-import { FileProcessingBadge } from "@/components/file-processing-badge"
+import { FileUploadProgress } from "@/components/file-upload-progress"
 import type { FileProcessingStatus } from "@/hooks/use-file-processing-status"
 import { isActiveProcessingStage, type FileProcessingStage } from "@/lib/file-processing-vocab"
 import {
@@ -1782,24 +1782,15 @@ const ActiveOptionsDisplay = ({
                         </button>
                       </div>
                     )}
-                    {!isUploading && !isFailed && file.id && !longPasteMeta && (
-                      <div className="mt-0.5">
-                        <FileProcessingBadge
+                    {!isFailed && !longPasteMeta && (isUploading || file.id) && (
+                      <div className="mt-1">
+                        <FileUploadProgress
+                          uploading={isUploading}
+                          uploadProgress={progress}
                           fileId={file.id}
                           onReady={() => toast.success(`Documento listo: ${file.name}`)}
                           onStatusChange={(status) => onFileProcessingStatusChange?.(file, status)}
                         />
-                      </div>
-                    )}
-                    {isUploading && (
-                      <div className="flex items-center gap-1 mt-1">
-                        <div className="flex-1 h-1 bg-gray-200 dark:bg-muted rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-blue-500 transition-all duration-300"
-                            style={{ width: `${progress}%` }}
-                          />
-                        </div>
-                        <span className="text-[10px] text-muted-foreground">{Math.round(progress)}%</span>
                       </div>
                     )}
                     {isFailed && (

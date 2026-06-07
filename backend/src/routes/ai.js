@@ -1186,6 +1186,46 @@ async function loadUserFile(fileRef, userId) {
   return toProcessedFile(file);
 }
 
+/**
+ * Recover the document(s) a user attached earlier in THIS chat so
+ * follow-up turns keep their context even when the client doesn't
+ * re-send the file ids (the common case: ask once about a doc, then
+ * ask again — or reload the page and ask again). We read the chat's
+ * recent USER messages straight from the DB, pull the attachment ids,
+ * load the files and drop images (only documents are useful as RAG /
+ * text context). Bounded by recency + count, and fail-open: any error
+ * just yields no recovered files so the turn proceeds normally.
+ */
+async function recoverRecentChatDocumentFiles({ chatId, userId, maxFiles = 4, lookbackMessages = 12 } = {}) {
+  if (!chatId || !userId) return [];
+
+  const recent = await prisma.message.findMany({
+    where: { chatId, role: 'USER', deletedAt: null },
+    orderBy: { timestamp: 'desc' },
+    take: lookbackMessages,
+    select: { files: true },
+  });
+  if (!recent.length) return [];
+
+  const ids = [];
+  const seen = new Set();
+  for (const message of recent) {
+    if (!message.files) continue;
+    for (const id of messageAttachments.extractFileIdsFromMessageFiles(message.files)) {
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      ids.push(id);
+      if (ids.length >= maxFiles) break;
+    }
+    if (ids.length >= maxFiles) break;
+  }
+  if (!ids.length) return [];
+
+  const loaded = await Promise.all(ids.map((id) => loadUserFile(id, userId).catch(() => null)));
+  // Only documents help as reusable thread context; skip images + misses.
+  return loaded.filter((f) => f && f.attachmentKind !== 'image');
+}
+
 const normalizeDuplicateTurnContent = (value) =>
   String(value || '').trim().replace(/\s+/g, ' ');
 
@@ -1875,6 +1915,40 @@ router.post(
           } catch (attachCtxErr) {
             console.warn('[ai] uploaded file context build failed (continuing with raw extracts):', attachCtxErr.message);
           }
+        }
+      }
+
+      // ✅ Follow-up turns in the same thread: the user asks again about a
+      // document they uploaded earlier WITHOUT re-attaching it. The client
+      // may not re-send the file ids (and can't after a page reload), so we
+      // recover the recently-attached document(s) from this chat's history.
+      // This keeps multi-turn Q&A over an uploaded file working reliably.
+      // Fail-open: any error here just means no recovered files.
+      if (
+        isAuth && userId && canPersist && chatId
+        && processedFiles.length === 0
+        && !operationalRag.isPureGreetingPrompt(prompt)
+      ) {
+        try {
+          const recovered = await recoverRecentChatDocumentFiles({ chatId, userId });
+          if (recovered.length > 0) {
+            processedFiles = recovered;
+            for (const pf of recovered) {
+              if (pf?.openaiFileId) openaiFiles.push(pf.openaiFileId);
+            }
+            try {
+              processedFiles = await chatAttachmentRecovery.refreshProcessedFileExtracts(prisma, processedFiles);
+              uploadedFileContextForTurn = await chatAttachmentRecovery.buildChatUploadedFileContext(
+                prisma,
+                { userId, processedFiles, prompt },
+              );
+            } catch (recoverCtxErr) {
+              console.warn('[ai] recovered file context build failed (continuing with raw extracts):', recoverCtxErr.message);
+            }
+            console.log(`[ai] recovered ${processedFiles.length} document(s) from chat history for follow-up turn (chat ${chatId})`);
+          }
+        } catch (recoverErr) {
+          console.warn('[ai] recent chat document recovery failed (continuing without):', recoverErr.message || recoverErr);
         }
       }
 
