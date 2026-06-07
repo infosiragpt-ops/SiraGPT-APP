@@ -99,6 +99,32 @@ async function prefetchParallelDispatch(registry, toolCalls, ctx, exhaustedTools
   return out;
 }
 
+// ── A3: one-shot tool fallback ───────────────────────────────────────────────
+// When a tool fails with a HARD error, try ONE compatible alternative (same
+// args) before counting the failure. The alternative's own arg validation
+// guards against incompatible schemas (a mismatch just returns {error} and we
+// keep the original). Mostly the search/read families, whose args line up.
+const TOOL_FALLBACK_DISABLED = ['0', 'off', 'false', 'no'].includes(
+  String(process.env.SIRAGPT_TOOL_FALLBACK || '').trim().toLowerCase()
+);
+const TOOL_FALLBACK_MAP = Object.freeze({
+  web_search: 'deep_search',
+  deep_search: 'web_search',
+  scientific_search: 'web_search',
+  github_search: 'web_search',
+  x_search: 'web_search',
+  read_url: 'web_extract',
+  web_extract: 'read_url',
+  rag_retrieve: 'search_docs',
+  search_docs: 'rag_retrieve',
+  docintel_analyze: 'deep_analyze',
+  deep_analyze: 'docintel_analyze',
+});
+
+function fallbackToolFor(name) {
+  return TOOL_FALLBACK_MAP[String(name || '')] || null;
+}
+
 const Ajv = require('ajv');
 const { sanitizeToolParameters } = require('./ai-product-os/tool-schema-sanitizer');
 const ajv = new Ajv({ allErrors: true, strict: false, coerceTypes: false });
@@ -628,9 +654,35 @@ async function run(openai, opts) {
         continue;
       }
 
-      const dispatch = prefetched.has(call.id)
+      let dispatch = prefetched.has(call.id)
         ? prefetched.get(call.id)
         : await dispatchTool(registry, toolName, call.function?.arguments, ctx);
+
+      // A3: one-shot fallback to a compatible alternative tool on a hard error
+      // (not abort/finalize). If the alternative succeeds, we use its result and
+      // the failure is never counted. Same args; the alternative's own arg
+      // validation protects against schema mismatches. SIRAGPT_TOOL_FALLBACK=0
+      // disables.
+      if (
+        dispatch.error
+        && toolName !== 'finalize'
+        && !TOOL_FALLBACK_DISABLED
+        && !/abort/i.test(String(dispatch.error))
+      ) {
+        const altName = fallbackToolFor(toolName);
+        if (altName && altName !== toolName && !exhaustedTools.has(altName) && registry.some((t) => t && t.name === altName)) {
+          try {
+            const altDispatch = await dispatchTool(registry, altName, call.function?.arguments, ctx);
+            if (altDispatch && !altDispatch.error) {
+              console.log(`[react-agent] tool fallback ${toolName} → ${altName} recovered (step ${step})`);
+              const altResult = (altDispatch.result && typeof altDispatch.result === 'object' && !Array.isArray(altDispatch.result))
+                ? { ...altDispatch.result, _recovered_from: toolName, _recovered_via: altName }
+                : altDispatch.result;
+              dispatch = { result: altResult };
+            }
+          } catch (_fallbackErr) { /* keep the original error */ }
+        }
+      }
 
       let observation = dispatch.error
         ? { error: dispatch.error }
@@ -757,4 +809,7 @@ module.exports = {
   isParallelSafeTool,
   prefetchParallelDispatch,
   TOOL_PARALLEL_MAX,
+  // A3: tool fallback (exported for tests).
+  fallbackToolFor,
+  TOOL_FALLBACK_MAP,
 };

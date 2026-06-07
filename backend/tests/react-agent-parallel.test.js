@@ -95,3 +95,61 @@ describe('prefetchParallelDispatch', () => {
     await assert.doesNotReject(reactAgent.prefetchParallelDispatch([], null, {}, new Set()));
   });
 });
+
+// ── A3: one-shot tool fallback ──────────────────────────────────────────────
+function makeScriptedOpenAI(script) {
+  let i = 0;
+  let callId = 0;
+  return {
+    chat: {
+      completions: {
+        create: async (params) => {
+          const forcedFinalize = params.tool_choice && typeof params.tool_choice === 'object'
+            && params.tool_choice.function?.name === 'finalize';
+          const entry = forcedFinalize ? { finalize: 'forced' } : (script[i] || { finalize: 'default' });
+          i += 1; callId += 1;
+          const toolCall = entry.finalize != null
+            ? { id: `call_${callId}`, type: 'function', function: { name: 'finalize', arguments: JSON.stringify({ answer: entry.finalize }) } }
+            : { id: `call_${callId}`, type: 'function', function: { name: entry.tool, arguments: JSON.stringify(entry.args || {}) } };
+          return { choices: [{ message: { role: 'assistant', content: 'thinking', tool_calls: [toolCall] } }] };
+        },
+      },
+    },
+  };
+}
+
+describe('fallbackToolFor', () => {
+  test('maps search/read families to compatible alternatives', () => {
+    assert.equal(reactAgent.fallbackToolFor('web_search'), 'deep_search');
+    assert.equal(reactAgent.fallbackToolFor('scientific_search'), 'web_search');
+    assert.equal(reactAgent.fallbackToolFor('read_url'), 'web_extract');
+    assert.equal(reactAgent.fallbackToolFor('rag_retrieve'), 'search_docs');
+    assert.equal(reactAgent.fallbackToolFor('unknown_tool'), null);
+  });
+});
+
+describe('A3 — in-loop tool fallback recovery', () => {
+  test('a failing web_search auto-recovers via deep_search and never counts the failure', async () => {
+    let deepCalled = 0;
+    const webSearch = makeTool('web_search', async () => { throw new Error('web boom'); });
+    const deepSearch = makeTool('deep_search', async () => { deepCalled += 1; return { ok: true, hits: ['x'] }; });
+    const openai = makeScriptedOpenAI([{ tool: 'web_search', args: { query: 'q' } }, { finalize: 'done' }]);
+
+    const result = await reactAgent.run(openai, { query: 'test', tools: [webSearch, deepSearch], model: 'gpt-4o', maxSteps: 4 });
+    assert.ok(deepCalled >= 1, 'fallback deep_search executed');
+    const action = result.steps.flatMap((s) => s.actions).find((a) => a.tool === 'web_search');
+    assert.ok(action, 'web_search step recorded');
+    assert.equal(action.observation._recovered_from, 'web_search');
+    assert.equal(action.observation._recovered_via, 'deep_search');
+    assert.equal(action.observation.ok, true);
+  });
+
+  test('no fallback when the alternative is absent → original error stands', async () => {
+    const webSearch = makeTool('web_search', async () => { throw new Error('web boom'); });
+    // deep_search NOT in registry → no recovery
+    const openai = makeScriptedOpenAI([{ tool: 'web_search', args: { query: 'q' } }, { finalize: 'done' }]);
+    const result = await reactAgent.run(openai, { query: 'test', tools: [webSearch], model: 'gpt-4o', maxSteps: 4 });
+    const action = result.steps.flatMap((s) => s.actions).find((a) => a.tool === 'web_search');
+    assert.ok(action.observation.error, 'original error preserved when no alternative');
+  });
+});
