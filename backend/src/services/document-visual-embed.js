@@ -480,6 +480,91 @@ function buildKpiCardsSvg({ spec, title, width, height, theme }) {
   return parts.join('');
 }
 
+function buildStackedBarChartSvg({ spec, title, width, height, theme }) {
+  const { labels, series } = normalizeSeries(spec);
+  const parts = [svgHeader(width, height, theme), svgTitle(title, width, theme)];
+  const padTop = title ? 56 : 28;
+  const padBottom = 78;
+  const padLeft = 56;
+  const padRight = 24;
+  const plotW = width - padLeft - padRight;
+  const plotH = height - padTop - padBottom;
+  const groups = Math.max(1, labels.length);
+  const totals = labels.map((_, g) => series.reduce((sum, s) => sum + toNumber(s.values[g], 0), 0));
+  const maxTotal = Math.max(1, ...totals);
+  const slot = plotW / groups;
+  const barW = Math.max(8, slot * 0.6);
+  for (let i = 0; i <= 4; i += 1) {
+    const y = padTop + (plotH * i) / 4;
+    parts.push(`<line x1="${padLeft}" y1="${y.toFixed(1)}" x2="${width - padRight}" y2="${y.toFixed(1)}" stroke="${theme.grid}" stroke-width="1"/>`);
+    parts.push(`<text x="${padLeft - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="10" fill="${theme.axis}">${((maxTotal * (4 - i)) / 4).toFixed(maxTotal >= 10 ? 0 : 1)}</text>`);
+  }
+  labels.forEach((label, g) => {
+    const x = padLeft + slot * g + (slot - barW) / 2;
+    let yCursor = padTop + plotH;
+    series.forEach((s, si) => {
+      const value = toNumber(s.values[g], 0);
+      const segH = (value / maxTotal) * plotH;
+      yCursor -= segH;
+      if (segH > 0) parts.push(`<rect x="${x.toFixed(1)}" y="${yCursor.toFixed(1)}" width="${barW.toFixed(1)}" height="${segH.toFixed(1)}" fill="${theme.palette[si % theme.palette.length]}"/>`);
+    });
+    parts.push(`<text x="${(x + barW / 2).toFixed(1)}" y="${(padTop + plotH + 16).toFixed(1)}" text-anchor="middle" font-size="10" fill="${theme.axis}">${xmlEscape(String(label).slice(0, 12))}</text>`);
+  });
+  let lx = padLeft;
+  const ly = height - 20;
+  series.forEach((s, si) => {
+    parts.push(`<rect x="${lx}" y="${ly}" width="11" height="11" rx="2" fill="${theme.palette[si % theme.palette.length]}"/>`);
+    parts.push(`<text x="${lx + 16}" y="${ly + 10}" font-size="11" fill="${theme.text}">${xmlEscape(s.name.slice(0, 18))}</text>`);
+    lx += 16 + 8 + Math.min(150, s.name.length * 7 + 16);
+  });
+  parts.push(`<line x1="${padLeft}" y1="${padTop}" x2="${padLeft}" y2="${padTop + plotH}" stroke="${theme.axis}" stroke-width="1.5"/>`);
+  parts.push(`<line x1="${padLeft}" y1="${padTop + plotH}" x2="${width - padRight}" y2="${padTop + plotH}" stroke="${theme.axis}" stroke-width="1.5"/>`);
+  parts.push('</svg>');
+  return parts.join('');
+}
+
+function buildHistogramSvg({ spec, data, title, width, height, theme }) {
+  const raw = Array.isArray(spec?.values) ? spec.values
+    : (spec?.data && Array.isArray(spec.data.values) ? spec.data.values : (Array.isArray(data) ? data : []));
+  const nums = raw.map((v) => toNumber(v, NaN)).filter(Number.isFinite);
+  const parts = [svgHeader(width, height, theme), svgTitle(title, width, theme)];
+  const padTop = title ? 56 : 28;
+  const padBottom = 56;
+  const padLeft = 56;
+  const padRight = 24;
+  const plotW = width - padLeft - padRight;
+  const plotH = height - padTop - padBottom;
+  if (!nums.length) { parts.push('</svg>'); return parts.join(''); }
+  const min = Math.min(...nums);
+  const max = Math.max(...nums);
+  const binCount = Math.max(3, Math.min(12, toNumber(spec?.bins, Math.ceil(Math.sqrt(nums.length)))));
+  const span = (max - min) || 1;
+  const binWidth = span / binCount;
+  const counts = new Array(binCount).fill(0);
+  nums.forEach((n) => { let idx = Math.floor((n - min) / binWidth); if (idx >= binCount) idx = binCount - 1; if (idx < 0) idx = 0; counts[idx] += 1; });
+  const maxCount = Math.max(1, ...counts);
+  const barW = plotW / binCount;
+  for (let i = 0; i <= 4; i += 1) {
+    const y = padTop + (plotH * i) / 4;
+    parts.push(`<line x1="${padLeft}" y1="${y.toFixed(1)}" x2="${width - padRight}" y2="${y.toFixed(1)}" stroke="${theme.grid}" stroke-width="1"/>`);
+    parts.push(`<text x="${padLeft - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="10" fill="${theme.axis}">${Math.round((maxCount * (4 - i)) / 4)}</text>`);
+  }
+  counts.forEach((c, i) => {
+    const h = (c / maxCount) * plotH;
+    const x = padLeft + barW * i;
+    const y = padTop + plotH - h;
+    parts.push(`<rect x="${(x + 0.5).toFixed(1)}" y="${y.toFixed(1)}" width="${(barW - 1).toFixed(1)}" height="${Math.max(0, h).toFixed(1)}" fill="${theme.palette[0]}"/>`);
+    if (i % Math.ceil(binCount / 6) === 0) {
+      const edge = min + binWidth * i;
+      parts.push(`<text x="${x.toFixed(1)}" y="${(padTop + plotH + 16).toFixed(1)}" text-anchor="middle" font-size="9" fill="${theme.axis}">${(Math.round(edge * 10) / 10)}</text>`);
+    }
+  });
+  parts.push(`<line x1="${padLeft}" y1="${padTop}" x2="${padLeft}" y2="${padTop + plotH}" stroke="${theme.axis}" stroke-width="1.5"/>`);
+  parts.push(`<line x1="${padLeft}" y1="${padTop + plotH}" x2="${width - padRight}" y2="${padTop + plotH}" stroke="${theme.axis}" stroke-width="1.5"/>`);
+  parts.push('</svg>');
+  return parts.join('');
+}
+
 // Public: build a chart/diagram SVG string for the given spec.
 function buildChartSvg(spec = {}) {
   const width = Math.max(200, Math.min(1200, toNumber(spec.width, 640)));
@@ -499,6 +584,8 @@ function buildChartSvg(spec = {}) {
   if (type === 'grouped' || type === 'grouped-bar' || type === 'multibar' || type === 'comparativo' || type === 'agrupado') return buildGroupedBarChartSvg({ spec, title, width, height, theme });
   if (type === 'scatter' || type === 'dispersion' || type === 'xy' || type === 'nube') return buildScatterChartSvg({ spec, title, width, height, theme });
   if (type === 'kpi' || type === 'cards' || type === 'stats' || type === 'tarjetas' || type === 'indicadores') return buildKpiCardsSvg({ spec, title, width, height, theme });
+  if (type === 'stacked' || type === 'stacked-bar' || type === 'apilada' || type === 'apiladas') return buildStackedBarChartSvg({ spec, title, width, height, theme });
+  if (type === 'histogram' || type === 'histograma') return buildHistogramSvg({ spec, data: spec.data, title, width, height, theme });
   return buildBarChartSvg(params);
 }
 
@@ -632,9 +719,11 @@ function normalizeText(value) {
   return String(value || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
 }
 
-const VISUAL_INTENT_RE = /\b(grafico\w*|grafica\w*|diagrama\w*|organigrama\w*|linea de tiempo|cronolog\w*|timeline|flujograma|diagrama de flujo|flujo|chart|pastel|dona|donut|barras?|histograma|radar|arana|spider|dispersion|scatter|correlacion|comparativ\w*|agrupad\w*|kpi\w*|tarjetas?|indicadores?)\b/;
+const VISUAL_INTENT_RE = /\b(grafico\w*|grafica\w*|diagrama\w*|organigrama\w*|linea de tiempo|cronolog\w*|timeline|flujograma|diagrama de flujo|flujo|chart|pastel|dona|donut|barras?|histograma\w*|radar|arana|spider|dispersion|scatter|correlacion|comparativ\w*|agrupad\w*|apilad\w*|kpi\w*|tarjetas?|indicadores?)\b/;
 
 function inferVisualType(norm) {
+  if (/\bhistograma\w*|distribucion de frecuencias?\b/.test(norm)) return 'histogram';
+  if (/\bapilad\w*|stacked\b/.test(norm)) return 'stacked';
   if (/\bkpi\w*|tarjetas?|indicadores?|stat cards?\b/.test(norm)) return 'kpi';
   if (/\bdispersion|scatter|correlacion|nube de puntos\b/.test(norm)) return 'scatter';
   if (/\bcomparativ\w*|agrupad\w*|multibar|por grupos?\b/.test(norm)) return 'grouped';
@@ -713,11 +802,12 @@ async function extractVisualSpecWithLLM({ requestText, sourceText, fallbackType,
     const raw = completion?.choices?.[0]?.message?.content;
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    const type = ['bar', 'pie', 'donut', 'line', 'radar', 'process', 'timeline', 'organigram', 'grouped', 'scatter'].includes(parsed.type) ? parsed.type : fallbackType;
+    const type = ['bar', 'pie', 'donut', 'line', 'radar', 'process', 'timeline', 'organigram', 'grouped', 'scatter', 'stacked', 'histogram'].includes(parsed.type) ? parsed.type : fallbackType;
     const spec = { type, title: parsed.title ? String(parsed.title) : '' };
     if (type === 'organigram' && parsed.tree) spec.tree = parsed.tree;
     else if (type === 'scatter' && Array.isArray(parsed.points)) spec.points = parsed.points;
-    else if (type === 'grouped' && Array.isArray(parsed.series)) { spec.series = parsed.series; if (Array.isArray(parsed.labels)) spec.labels = parsed.labels; }
+    else if (type === 'histogram' && Array.isArray(parsed.values)) spec.values = parsed.values;
+    else if ((type === 'grouped' || type === 'stacked') && Array.isArray(parsed.series)) { spec.series = parsed.series; if (Array.isArray(parsed.labels)) spec.labels = parsed.labels; }
     else if (type === 'process' && Array.isArray(parsed.steps)) spec.data = parsed.steps;
     else if (Array.isArray(parsed.data) && parsed.data.length) spec.data = parsed.data;
     else if (Array.isArray(parsed.steps) && parsed.steps.length) spec.data = parsed.steps;
@@ -733,6 +823,11 @@ function visualSpecHasContent(spec) {
   if (spec.type === 'scatter') {
     const pts = Array.isArray(spec.points) ? spec.points : (Array.isArray(spec.data) ? spec.data : []);
     return pts.some((p) => p && Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y)));
+  }
+  if (spec.type === 'histogram') {
+    const vals = Array.isArray(spec.values) ? spec.values
+      : (spec.data && Array.isArray(spec.data.values) ? spec.data.values : (Array.isArray(spec.data) ? spec.data : []));
+    return vals.some((v) => Number.isFinite(Number(v)));
   }
   if (Array.isArray(spec.series) && spec.series.some((s) => Array.isArray(s.values) && s.values.length)) return true;
   return Array.isArray(spec.data) && spec.data.length > 0;

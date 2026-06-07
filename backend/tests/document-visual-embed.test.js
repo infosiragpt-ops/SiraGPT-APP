@@ -121,6 +121,21 @@ describe('document-visual-embed — diagrams (process / timeline / organigram)',
     assert.equal(detectVisualRequest('agrega unas tarjetas KPI del resumen').type, 'kpi');
   });
 
+  it('builds a stacked bar chart (composition) with a legend', () => {
+    const svg = buildChartSvg({ type: 'stacked', title: 'Composición', labels: ['2023', '2024'], series: [{ name: 'A', values: [30, 40] }, { name: 'B', values: [20, 25] }] });
+    assert.match(svg, /Composición/);
+    assert.match(svg, /2023/);
+    assert.match(svg, /<rect /);
+    assert.equal(detectVisualRequest('un gráfico de barras apiladas').type, 'stacked');
+  });
+
+  it('builds a histogram (frequency distribution) from raw values', () => {
+    const svg = buildChartSvg({ type: 'histogram', title: 'Distribución de edades', values: [21, 22, 23, 23, 24, 25, 25, 26, 28, 30, 31, 33, 35] });
+    assert.match(svg, /Distribución de edades/);
+    assert.match(svg, /<rect /);
+    assert.equal(detectVisualRequest('haz un histograma de las edades').type, 'histogram');
+  });
+
   it('builds an organigram from a nested tree and connects parents to children', () => {
     const svg = buildChartSvg({
       type: 'organigram',
