@@ -48,6 +48,8 @@ const ALWAYS_KEEP = new Set([
   // Explicit user constraints (one paragraph, in English, include X…) are
   // load-bearing — never prune them.
   'constraints',
+  // Response posture (clarify / abstain / caveat) is load-bearing.
+  'response-posture',
 ]);
 
 // The "attribution theater" + heavy policy blocks: valuable on hard/ambiguous

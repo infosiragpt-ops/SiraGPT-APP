@@ -4378,7 +4378,41 @@ router.post(
 
       const reasoningEffortBlock = (req._reasoningKernelBlock || '');
       const constraintBlock = (req._constraintBlock || '');
-      const systemInstruction = { role: 'system', content: promptBundle.system + openclawRuntimeBlock + llmUnderstandingBlock + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + activeMemoryBlock + crossChatBlock + attributionBlock + circuitAttributionBlock + intentAttributionGraphBlock + saliencyBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock + reasoningEffortBlock + constraintBlock };
+
+      // Confidence calibration / abstention: decide whether to answer, answer
+      // with a caveat, ask ONE clarifying question, or refuse-to-invent when
+      // info is missing. Computed here (after web search is known) so a
+      // realtime question that WILL get web results isn't told "I lack data".
+      // On unless SIRAGPT_CONFIDENCE_CALIBRATION=0. Fail-open.
+      let postureDirectiveBlock = '';
+      try {
+        if (String(process.env.SIRAGPT_CONFIDENCE_CALIBRATION || '').trim().toLowerCase() !== '0'
+          && String(process.env.SIRAGPT_CONFIDENCE_CALIBRATION || '').trim().toLowerCase() !== 'off'
+          && req._cognitiveDecision) {
+          const confidenceCalibration = require('../services/confidence-calibration');
+          const __calib = confidenceCalibration.calibrate({
+            prompt,
+            difficulty: req._cognitiveDecision.difficulty,
+            risk: req._cognitiveDecision.risk,
+            hasGrounding: processedFiles.length > 0
+              || !!(operationalRagContext && operationalRagContext.active)
+              || (typeof evidenceBlock === 'string' && evidenceBlock.trim().length > 0),
+            hasWebSearch: typeof webSearchBlock === 'string' && webSearchBlock.trim().length > 0,
+            hasHistory: Array.isArray(__conversationHistoryForUnderstanding) && __conversationHistoryForUnderstanding.length > 0,
+            needsClarification: !!(semanticIntentAnalysis && semanticIntentAnalysis.needs_clarification),
+            triageAction: intentTriageDecision && intentTriageDecision.action,
+          });
+          if (__calib.posture !== 'answer') {
+            postureDirectiveBlock = confidenceCalibration.buildPostureDirective(__calib, {
+              language: (langResolution && langResolution.language) || 'es',
+            });
+          }
+          req._calibration = __calib;
+          console.log(confidenceCalibration.summarizeForLog(__calib));
+        }
+      } catch (_calibErr) { /* fail-open: no posture directive */ }
+
+      const systemInstruction = { role: 'system', content: promptBundle.system + openclawRuntimeBlock + llmUnderstandingBlock + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + activeMemoryBlock + crossChatBlock + attributionBlock + circuitAttributionBlock + intentAttributionGraphBlock + saliencyBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock + reasoningEffortBlock + constraintBlock + postureDirectiveBlock };
       // Structured view of the system prompt — same content as
       // `systemInstruction.content`, but split into typed blocks with a
       // `cacheable` hint. When the downstream provider is Anthropic (or
@@ -4410,6 +4444,7 @@ router.post(
         { kind: 'pr5-grounding', text: __pr5GroundingBlock, cacheable: false },
         { kind: 'reasoning-effort', text: reasoningEffortBlock, cacheable: false },
         { kind: 'constraints', text: constraintBlock, cacheable: false },
+        { kind: 'response-posture', text: postureDirectiveBlock, cacheable: false },
       ].filter((b) => typeof b.text === 'string' && b.text.trim().length > 0);
 
       // Phase 4: prompt kernel — need-based block activation. On easy, low-risk,
