@@ -90,6 +90,15 @@ test('captureValue: stops at boundary + caps length', () => {
   assert.equal(mi.captureValue('x'.repeat(120)).length <= 83, true);
 });
 
+test('isTrivialMessage: greetings/acks are trivial; real requests are not', () => {
+  for (const t of ['hola', 'Hola!', 'buenos días', 'qué tal', 'gracias', 'ok', 'sí', 'jaja', 'hi', '']) {
+    assert.equal(mi.isTrivialMessage(t), true, `"${t}" should be trivial`);
+  }
+  for (const t of ['hazme un plan de estudio', '¿cómo me llamo?', 'escribe una función', 'recuérdame comprar pan']) {
+    assert.equal(mi.isTrivialMessage(t), false, `"${t}" should NOT be trivial`);
+  }
+});
+
 test('analyze: one-call combines store + recall + forget', () => {
   const r = mi.analyze('recuerda que me llamo Ana y dime qué prefiero');
   assert.equal(typeof r.store, 'object');

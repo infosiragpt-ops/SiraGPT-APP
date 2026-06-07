@@ -181,11 +181,10 @@ export function SourcesPanel({ sources, activity, memory, memoryMeta, onClose }:
               </span>
             ) : null}
           </div>
-          {memoryReason ? (
-            <p className="mb-3 mt-1 text-xs leading-5 text-muted-foreground">{memoryReason}</p>
-          ) : (
-            <div className="mb-3" />
-          )}
+          <p className="mb-3 mt-1 text-xs leading-5 text-muted-foreground">
+            <span className="font-medium text-foreground/80">Fuente usada en esta respuesta.</span>
+            {memoryReason ? ` ${memoryReason}` : " El asistente se apoyó en lo que recuerda de ti."}
+          </p>
           <ul className="space-y-1.5">
             {visibleMemory.map((m, i) => {
               const tierLabel = m.tier ? (MEMORY_TIER_LABEL[m.tier] || m.tier) : null

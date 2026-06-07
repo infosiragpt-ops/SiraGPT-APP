@@ -57,4 +57,16 @@ test('buildBlock: renders a markdown block or empty', () => {
   assert.match(block, /Memoria del usuario/);
   assert.match(block, /- A/);
   assert.match(block, /- B/);
+  assert.match(block, /MENCI[OÓ]NALO|recuerdo/i); // instructs citing memory as a source
+});
+
+test('dedupeCandidates: merges by id (first wins, keeps score) + fact fallback', () => {
+  const a = [{ id: '1', fact: 'X', score: 0.9 }, { id: '2', fact: 'Y' }];
+  const b = [{ id: '1', fact: 'X' }, { id: '3', fact: 'Z' }];
+  const merged = engine.dedupeCandidates(a, b);
+  assert.deepEqual(merged.map((m) => m.fact), ['X', 'Y', 'Z']);
+  assert.equal(merged[0].score, 0.9); // first occurrence (with score) kept
+  // id-less items dedupe by normalized fact (case-insensitive).
+  assert.equal(engine.dedupeCandidates([{ fact: 'Hola' }], [{ fact: 'hola' }]).length, 1);
+  assert.deepEqual(engine.dedupeCandidates(null, undefined, [{ nope: 1 }]), []);
 });

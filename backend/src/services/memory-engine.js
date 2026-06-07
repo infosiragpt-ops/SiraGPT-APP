@@ -95,7 +95,34 @@ function buildBlock(items) {
   const list = Array.isArray(items) ? items.filter((m) => m && m.fact) : [];
   if (list.length === 0) return '';
   const lines = list.map((m) => `- ${m.fact}`).join('\n');
-  return `\n\n## Memoria del usuario (recordada para este turno)\nUsa estos datos recordados cuando sean relevantes. No los repitas literalmente si no aportan.\n${lines}`;
+  return [
+    '\n\n## Memoria del usuario (recordada para este turno)',
+    'Estos son datos que recuerdas del usuario de conversaciones previas. Úsalos SIEMPRE que ayuden a responder mejor y de forma personalizada.',
+    'Cuando te apoyes en uno de estos datos, MENCIÓNALO de forma natural y breve para que quede claro que proviene de tu memoria (por ejemplo: "según lo que recuerdo, prefieres …" o "como me comentaste antes, …").',
+    'No inventes datos que no estén en esta lista.',
+    lines,
+  ].join('\n');
+}
+
+/**
+ * Merge several candidate lists (e.g. lexical recall + recent listing) into one
+ * deduped list keyed by id (falling back to the normalized fact). Earlier lists
+ * win, preserving any per-item fields (like the lexical `score`) they carry.
+ */
+function dedupeCandidates(...lists) {
+  const seen = new Set();
+  const out = [];
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const item of list) {
+      if (!item || typeof item.fact !== 'string') continue;
+      const key = item.id || normalize(item.fact);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(item);
+    }
+  }
+  return out;
 }
 
 module.exports = {
@@ -103,5 +130,6 @@ module.exports = {
   topicMatches,
   rankRecall,
   buildBlock,
+  dedupeCandidates,
   STOPWORDS,
 };

@@ -162,6 +162,19 @@ function detectForget(prompt) {
   return { should: true, targets: [{ query }] };
 }
 
+// Greetings / very short acks where consulting memory adds nothing. Used to
+// skip the (semantic) recall path on trivial turns so it stays fast and quiet.
+const TRIVIAL_RE = /^(?:hola+|hey+|buenas|buen(?:os|as)\s+(?:d[ií]as|tardes|noches)|qu[eé]\s+tal|holi+|saludos|hi+|hello+|yo+|sup|gracias|ok(?:ay)?|vale|listo|perfecto|genial|adi[oó]s|chao|bye|hasta luego|s[ií]|no|jaja+|jeje+)\b[\s!.?]*$/i;
+
+/** True when the message is a greeting/ack too trivial to need memory. */
+function isTrivialMessage(prompt) {
+  const norm = normalize(prompt);
+  if (!norm) return true;
+  if (TRIVIAL_RE.test(String(prompt || '').trim()) || TRIVIAL_RE.test(norm)) return true;
+  // A single short token with no real content.
+  return norm.length <= 2 || (norm.split(' ').length === 1 && norm.length < 4);
+}
+
 function analyze(prompt) {
   const facts = extractFacts(prompt);
   return {
@@ -176,6 +189,7 @@ module.exports = {
   extractFacts,
   assessRecall,
   detectForget,
+  isTrivialMessage,
   captureValue,
   titleCase,
   // exported for tests

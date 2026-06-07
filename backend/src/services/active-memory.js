@@ -254,6 +254,22 @@ function recall(userId, query, opts = {}) {
   return results;
 }
 
+/**
+ * Read-only listing of a user's live (non-expired) memory entries, newest
+ * first. Unlike recall(), it does NOT bump accessCount/lastAccessed — so the
+ * "consider memory every turn" path can scan facts without skewing the data.
+ */
+function listEntries(userId, opts = {}) {
+  hydrateUserMemory(userId);
+  const limit = Math.min(opts.limit || 50, 500);
+  const now = Date.now();
+  return [...store.values()]
+    .filter((e) => e.userId === userId && !(e.expiresAt && e.expiresAt < now))
+    .sort((a, b) => b.lastAccessed - a.lastAccessed)
+    .slice(0, limit)
+    .map((e) => ({ ...e }));
+}
+
 function getMemoryContext(userId, opts = {}) {
   const longTermCount = [...store.values()].filter(e => e.userId === userId && e.tier === 'long_term').length;
   const shortTermCount = [...store.values()].filter(e => e.userId === userId && e.tier === 'short_term').length;
@@ -414,6 +430,7 @@ startCleanup();
 module.exports = {
   createMemoryEntry,
   recall,
+  listEntries,
   getMemoryContext,
   buildMemoryPrompt,
   promoteToLongTerm,

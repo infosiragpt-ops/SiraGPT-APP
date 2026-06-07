@@ -3984,17 +3984,32 @@ router.post(
               } catch { /* best effort */ }
             });
           }
-          // (c) RECALL only when warranted, and only surface relevant memory.
-          const SIRA_MEM_MIN_RELEVANCE = Number(process.env.SIRAGPT_MEMORY_MIN_RELEVANCE || 0.45);
-          if (mem.recall?.should) {
-            memoryMetrics.record('recall_decision');
-            memoryMetrics.recordReason(mem.recall.reason || '');
-            let recalled = [];
-            try { recalled = activeMemory.recall(userId, prompt, { limit: 10 }) || []; } catch { recalled = []; }
-            let relevant = recalled.filter((m) => typeof m.score !== 'number' || m.score >= SIRA_MEM_MIN_RELEVANCE);
-            // Semantic re-rank: understands MEANING (real embeddings when a key
-            // is configured). Fail-open — keeps lexical order if unavailable.
-            try { relevant = await memorySemantic.semanticRerank(prompt, relevant, { limit: 10 }); } catch { /* keep lexical */ }
+          // (c) RECALL — use memory WHENEVER it can help, not only on explicit
+          // cues. We consider memory on every substantive turn and let a
+          // relevance bar decide if it's actually needed; an explicit "recuerdas"
+          // lowers the bar. Trivial turns (greetings) skip it entirely.
+          const explicitCue = mem.recall?.should === true;
+          const IMPLICIT_BAR = Number(process.env.SIRAGPT_MEMORY_MIN_RELEVANCE || 0.5);
+          const EXPLICIT_BAR = Number(process.env.SIRAGPT_MEMORY_MIN_RELEVANCE_EXPLICIT || 0.35);
+          if (!memoryIntelligence.isTrivialMessage(prompt)) {
+            // Lexical hits (carry a keyword score) + a read-only recent listing
+            // so MEANING-only matches with no shared words can still surface.
+            let lexical = [];
+            let recent = [];
+            try { lexical = activeMemory.recall(userId, prompt, { limit: 8 }) || []; } catch { lexical = []; }
+            try { recent = activeMemory.listEntries(userId, { limit: 15 }) || []; } catch { recent = []; }
+            let candidates = memoryEngine.dedupeCandidates(lexical, recent);
+            if (candidates.length > 0) {
+              memoryMetrics.record('recall_decision');
+              const reason = explicitCue
+                ? (mem.recall.reason || 'El usuario hace referencia a algo dicho anteriormente.')
+                : 'Datos relevantes de tu memoria para responder mejor.';
+              memoryMetrics.recordReason(reason);
+              // Semantic re-rank: understands MEANING (real embeddings when a key
+              // is configured). Fail-open — keeps lexical order if unavailable.
+              try { candidates = await memorySemantic.semanticRerank(prompt, candidates, { limit: 12 }); } catch { /* keep lexical */ }
+              const bar = explicitCue ? EXPLICIT_BAR : IMPLICIT_BAR;
+              const relevant = candidates.filter((m) => typeof m.score !== 'number' || m.score >= bar);
             if (relevant.length > 0) {
               const now = Date.now();
               // Explainable, blended ranking: surfaces WHY each item was recalled.
@@ -4012,20 +4027,22 @@ router.post(
                 why: m.why || '',
                 ageMs: typeof m.createdAt === 'number' ? Math.max(0, now - m.createdAt) : null,
               }));
-              memoryMetrics.record('recalled', memoryItems.length);
-              memoryMeta = {
-                reason: mem.recall.reason || '',
-                confidence: typeof mem.recall.confidence === 'number' ? mem.recall.confidence : null,
-                recalled: memoryItems.length,
-              };
-              // Inject so the model actually uses what it remembered.
-              activeMemoryBlock = memoryEngine.buildBlock(memoryItems);
-              // Stream a memory frame so the UI can render the MEMORIA section.
-              try {
-                res.write(`data: ${JSON.stringify({ type: 'memory', reason: memoryMeta.reason, confidence: memoryMeta.confidence, items: memoryItems })}\n\n`);
-              } catch { /* socket gone */ }
-            } else {
-              memoryMetrics.record('recall_empty');
+               memoryMetrics.record('recalled', memoryItems.length);
+               memoryMeta = {
+                 reason,
+                 explicit: explicitCue,
+                 confidence: explicitCue && typeof mem.recall.confidence === 'number' ? mem.recall.confidence : null,
+                 recalled: memoryItems.length,
+               };
+               // Inject so the model actually USES + CITES what it remembered.
+               activeMemoryBlock = memoryEngine.buildBlock(memoryItems);
+               // Stream a memory frame so the UI can render the MEMORIA section.
+               try {
+                 res.write(`data: ${JSON.stringify({ type: 'memory', reason: memoryMeta.reason, confidence: memoryMeta.confidence, items: memoryItems })}\n\n`);
+               } catch { /* socket gone */ }
+             } else {
+               memoryMetrics.record('recall_empty');
+             }
             }
           }
         }
