@@ -52,15 +52,19 @@ function directiveBody(mode, samples, lang) {
       return es
         ? [
             'Esta consulta es compleja. Antes de responder, razona internamente paso a paso:',
-            'descompón el problema, identifica supuestos y casos límite, y verifica cada paso.',
-            'Luego entrega SOLO la respuesta final, clara y bien estructurada (no muestres el',
-            'borrador de razonamiento salvo que se pida). Si algo es incierto, dilo explícitamente.',
+            'descompón el problema, explicita supuestos y casos límite, elige el mejor enfoque y',
+            'verifica cada paso. Antes de cerrar, repasa lo fácil de equivocar (cifras, unidades,',
+            'nombres, fechas, consistencia lógica y si respondiste lo que se preguntó). Luego entrega',
+            'SOLO la respuesta final, directa y bien estructurada, con la conclusión primero; no',
+            'muestres el borrador de razonamiento salvo que se pida. Si algo es incierto, dilo.',
           ].join(' ')
         : [
             'This request is complex. Before answering, reason step by step internally:',
-            'decompose the problem, surface assumptions and edge cases, and verify each step.',
-            'Then deliver ONLY the final, well-structured answer (do not expose the scratch',
-            'reasoning unless asked). If anything is uncertain, state it explicitly.',
+            'decompose the problem, surface assumptions and edge cases, pick the best approach, and',
+            'verify each step. Before closing, re-check what is easy to get wrong (figures, units,',
+            'names, dates, logical consistency, and whether you answered the actual question). Then',
+            'deliver ONLY the final, direct, well-structured answer with the conclusion first; do not',
+            'expose the scratch reasoning unless asked. If anything is uncertain, state it explicitly.',
           ].join(' ');
     case 'self_consistency':
       return es
