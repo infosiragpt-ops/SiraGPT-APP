@@ -5,7 +5,10 @@ const assert = require('node:assert/strict');
 
 const { resolveChatDocumentFileIds } = require('../src/services/message-attachments');
 const agentTaskRoute = require('../src/routes/agent-task');
+// looksLikeDocumentFollowupQuestion now lives in message-attachments (shared by
+// the chat + agent-task routes); the route re-exports it for back-compat.
 const { looksLikeDocumentFollowupQuestion } = agentTaskRoute;
+const { shouldRunForPrompt } = require('../src/services/rag/operational-runtime');
 
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
@@ -116,5 +119,40 @@ describe('looksLikeDocumentFollowupQuestion — when to reattach', () => {
     assert.equal(looksLikeDocumentFollowupQuestion(''), false);
     assert.equal(looksLikeDocumentFollowupQuestion('   '), false);
     assert.equal(looksLikeDocumentFollowupQuestion('cuál '.repeat(120)), false); // > 400 chars
+  });
+
+  test('shared helper is also exported from message-attachments', () => {
+    const { looksLikeDocumentFollowupQuestion: shared } = require('../src/services/message-attachments');
+    assert.equal(typeof shared, 'function');
+    assert.equal(shared('cual es el titulo de la investigacion ?'), true);
+  });
+});
+
+describe('RAG gate relax — questions retrieve when a document is in scope', () => {
+  const docs = [{ chars: 500, text: 'x'.repeat(500) }]; // short doc (< long threshold)
+
+  test('no docs → never runs', () => {
+    assert.equal(shouldRunForPrompt('cual es el titulo?', []), false);
+  });
+
+  test('pure greeting → does not run even with a doc', () => {
+    assert.equal(shouldRunForPrompt('hola', docs), false);
+  });
+
+  test('THE reported follow-up (no doc keyword) now retrieves', () => {
+    assert.equal(shouldRunForPrompt('cual es el titulo de la investigacion ?', docs), true);
+  });
+
+  test('interrogatives without a trailing "?" still retrieve', () => {
+    assert.equal(shouldRunForPrompt('cuál es el objetivo del proyecto', docs), true);
+    assert.equal(shouldRunForPrompt('quién es el autor', docs), true);
+  });
+
+  test('explicit doc keyword still retrieves (unchanged)', () => {
+    assert.equal(shouldRunForPrompt('resume el documento', docs), true);
+  });
+
+  test('a non-question statement without keywords does not over-trigger', () => {
+    assert.equal(shouldRunForPrompt('gracias, perfecto', docs), false);
   });
 });

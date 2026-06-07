@@ -629,6 +629,23 @@ async function resolveTranscriptionFileIds(prisma, {
 }
 
 /**
+ * Does this text look like a QUESTION about an already-uploaded document
+ * (a follow-up), rather than a build/research/generation task? Used to decide
+ * whether to reattach a chat's prior document when no file is sent. Broad on
+ * doc-understanding signals, conservative against creation/external commands so
+ * an unrelated old upload is never hijacked by a "crea una app" task. Shared by
+ * the chat route and the agent-task route.
+ */
+function looksLikeDocumentFollowupQuestion(text) {
+  const v = String(text || '').trim().toLowerCase();
+  if (!v || v.length > 400) return false;
+  if (/\b(crea|cre[aá]me|genera|gener[aá]me|construye|desarrolla|dise[ñn]a|build|create|develop|investiga en internet|busca en (la )?(web|internet)|descarga|deploy|sube a|haz una (app|web|p[aá]gina))\b/i.test(v)) {
+    return false;
+  }
+  return /\b(qu[eé]|cu[aá]l(es)?|c[oó]mo|cu[aá]ndo|d[oó]nde|qui[eé]n(es)?|cu[aá]nto?s?|por qu[eé]|what|which|who|where|when|how|why|resume|res[uú]men|res[uú]me|resumir|explica|expl[ií]came|analiza|an[aá]lisis|de qu[eé] trata|t[ií]tulo|title|autor|objetivo|conclusi[oó]n|secci[oó]n|cap[ií]tulo|p[aá]gina|menciona|dice|trata|contiene|summary|about|tell me)\b/i.test(v);
+}
+
+/**
  * Resolve the most recent readable document(s) attached earlier in a chat.
  *
  * The frontend drops the prior attachment when a user asks a follow-up about an
@@ -887,6 +904,7 @@ module.exports = {
   mapWithLimit,
   normalizeClientMetadata,
   prepareDocumentTextForProfessionalSynthesis,
+  looksLikeDocumentFollowupQuestion,
   requestedParagraphCount,
   resolveChatDocumentFileIds,
   resolveTranscriptionFileIds,

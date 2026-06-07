@@ -343,7 +343,15 @@ function shouldRunForPrompt(prompt, docs) {
   const p = String(prompt || '').toLowerCase();
   if (isPureGreetingPrompt(p)) return false;
   if (docs.some(d => d.chars >= LONG_DOC_CHAR_THRESHOLD)) return true;
-  return /\b(documento|documentos|archivo|archivos|pdf|fuente|fuentes|seg[uú]n|adjunto|adjuntos|uploaded|file|files|source|sources|resumen|resume|analiza|analisis|analysis|extract|extrae|cita|citas)\b/i.test(p);
+  // Explicit document keywords.
+  if (/\b(documento|documentos|archivo|archivos|pdf|fuente|fuentes|seg[uú]n|adjunto|adjuntos|uploaded|file|files|source|sources|resumen|resume|analiza|analisis|analysis|extract|extrae|cita|citas)\b/i.test(p)) {
+    return true;
+  }
+  // …or ANY question while a document is in scope. A follow-up like "cuál es el
+  // título?" almost always refers to the in-scope document; we must not lose
+  // that context just because the user didn't say the word "documento".
+  if (/\?\s*$/.test(p.trim())) return true;
+  return /(^|\b)(qu[eé]|cu[aá]l(es)?|c[oó]mo|cu[aá]ndo|d[oó]nde|qui[eé]n(es)?|cu[aá]nto?s?|por qu[eé]|de qu[eé]|t[ií]tulo|autor|objetivo|conclusi[oó]n|secci[oó]n|cap[ií]tulo|menciona|trata|contiene|what|which|who|where|when|how|why|title|author)\b/i.test(p);
 }
 
 function shouldForceCustomGptKnowledge(prompt, customGptDocs) {

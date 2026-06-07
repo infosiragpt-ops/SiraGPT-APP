@@ -1890,6 +1890,28 @@ router.post(
         } catch { clearInterval(keepAlive); keepAlive = null; }
       }, 5000);
 
+      // Document-followup recovery (chat path): when a user asks about an
+      // already-uploaded document WITHOUT re-attaching it, reattach the most
+      // recent chat document so RAG + file context still ground the answer.
+      // Mirrors the agent-task fix — defense-in-depth so document analysis never
+      // silently loses context on a follow-up. Best-effort; never blocks.
+      if (isAuth && userId && canPersist && (!Array.isArray(files) || files.length === 0)
+        && messageAttachments.looksLikeDocumentFollowupQuestion(prompt)) {
+        try {
+          const __reattachedDocs = await messageAttachments.resolveChatDocumentFileIds(prisma, {
+            userId,
+            chatId,
+            providedFileIds: [],
+          });
+          if (Array.isArray(__reattachedDocs) && __reattachedDocs.length > 0) {
+            files = __reattachedDocs;
+            console.log(`[ai/generate] reattached ${__reattachedDocs.length} prior chat document(s) for follow-up question`);
+          }
+        } catch (__reattachErr) {
+          console.warn('[ai/generate] document reattach failed (continuing without):', __reattachErr?.message || __reattachErr);
+        }
+      }
+
       // ✅ Process attached files
       let processedFiles = [];
       let openaiFiles = [];
