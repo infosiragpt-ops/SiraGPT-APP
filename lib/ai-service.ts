@@ -258,8 +258,11 @@ const EXISTING_DOCUMENT_EDIT_RE =
 // operate on the entire uploaded file, so unlike EXISTING_DOCUMENT_EDIT_RE
 // they don't require a sub-region target keyword. When a document is
 // attached, these verbs should route to the source-preserving editor.
+// IMPORTANT: match VERB forms only — generic stems like `cambi\w*` / `resum\w*`
+// also capture nouns ("cambio", "resumen", "traducción") and would hijack
+// read-only prompts ("explica el cambio del documento") into a fake edit.
 const WHOLE_DOCUMENT_TRANSFORM_RE =
-  /\b(?:traduc\w*|reescrib\w*|reescrit\w*|reformul\w*|parafrase\w*|parafras\w*|sintetiz\w*|resum\w*|transcrib\w*|cambi\w*)\b/i
+  /\b(?:traduc(?:e\w*|ir\w*|iendo|id[oa])|traduzca\w*|reescrib(?:e\w*|ir\w*|iendo)|reescrit[oa]|reformul(?:e\w*|a|as|ar\w*|alo|ala|ame|ando|ad[oa])|parafrase\w*|sintetiz(?:a\w*|e\w*|ando|ad[oa])|sintetice\w*|resum(?:e|es|ir\w*|a|as|amos|elo|ela|elos|elas|eme|emelo|iendo|id[oa])|transcrib(?:e\w*|ir\w*|a\w*|iendo)|transcrit[oa]|cambi(?:a\w*|e\w*))\b/i
 
 const OUTPUT_FORMAT_REQUEST_RE =
   /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|svg)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|prepara(?:r|me)?|elabora(?:r|me)?|redacta(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|svg|documento|archivo|informe|reporte|presentaci[oó]n)\b/i

@@ -78,6 +78,16 @@ describe("ai-service · deterministic intent routing", () => {
     // request, even when a document happens to be attached.
     assert.equal(shouldEditExistingDocument("traduce esta frase al inglés", history), false)
     assert.equal(shouldEditExistingDocument("cambia de tema", history), false)
+    // Noun forms (cambio / resumen) in read-only questions must not be mistaken
+    // for transform verbs, even with a document attached.
+    assert.equal(shouldEditExistingDocument("explica el cambio del documento", history), false)
+    assert.equal(shouldEditExistingDocument("¿cuál es el resumen del documento?", history), false)
+    // reescribir parity with the backend transformVerb: needs an explicit doc
+    // noun (a bare sentence reference is not enough), and the noun "reescritura"
+    // in a read-only question must not trigger an edit.
+    assert.equal(shouldEditExistingDocument("reescribe esta frase", history), false)
+    assert.equal(shouldEditExistingDocument("reescribe este documento en un tono formal", history), true)
+    assert.equal(shouldEditExistingDocument("explica la reescritura del documento", history), false)
   })
 
   it("routes document follow-up questions like title lookup through the agent runtime", async () => {

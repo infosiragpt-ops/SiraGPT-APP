@@ -192,6 +192,16 @@ describe('source-preserving document edit', () => {
     assert.equal(isSourcePreservingEditRequest('traduce esta frase al inglés', ['file-docx']), false);
     assert.equal(isSourcePreservingEditRequest('cambia de tema', ['file-docx']), false);
     assert.equal(isSourcePreservingEditRequest('resume esta idea en una línea', ['file-docx']), false);
+    // Noun forms (cambio / resumen / traducción) in read-only questions must NOT
+    // be mistaken for transform verbs, even with a document attached.
+    assert.equal(isSourcePreservingEditRequest('explica el cambio del documento', ['file-docx']), false);
+    assert.equal(isSourcePreservingEditRequest('cuál es el resumen del documento', ['file-docx']), false);
+    assert.equal(isSourcePreservingEditRequest('qué dice la traducción del documento', ['file-docx']), false);
+    // reescribir parity with the frontend: whole-document transform, so it needs
+    // an explicit document noun and must agree with shouldEditExistingDocument.
+    assert.equal(isSourcePreservingEditRequest('reescribe esta frase', ['file-docx']), false);
+    assert.equal(isSourcePreservingEditRequest('reescribe este documento en un tono formal', ['file-docx']), true);
+    assert.equal(isSourcePreservingEditRequest('explica la reescritura del documento', ['file-docx']), false);
     assert.deepEqual(parseTargetSectionRequest('completa el anexo 3'), {
       kind: 'anexo',
       number: 3,

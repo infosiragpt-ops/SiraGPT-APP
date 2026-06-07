@@ -21,3 +21,11 @@ Whole-document transforms (traducir/cambiar/resumir/reformular/parafrasear/sinte
 **Rule:** transform verbs only count as a source-preserving edit when an explicit document NOUN is present (documento/archivo/word/docx/pdf/tesis/adjunto…), via `EXISTING_DOCUMENT_REFERENCE_RE` on the frontend and the `documentNoun` (not pronoun-only `existingDocRef`) check on the backend. Pronoun-only references are honored ONLY for the structural edit verbs (agrega/modifica/…), which is the original, tested behavior.
 
 **How to apply:** when adding new edit/transform verbs, decide if they are "structural" (region-targeted, pronoun refs OK) or "whole-document transforms" (require a document noun). Keep the backend `structuralEditVerb` vs `transformVerb` split and the frontend `EXISTING_DOCUMENT_EDIT_RE` vs `WHOLE_DOCUMENT_TRANSFORM_RE` split in sync.
+
+# Transform verbs must match VERB forms only — never generic stems
+
+Do NOT match transform verbs with broad stems like `cambi\w*` / `resum\w*` / `traduc\w*`. Those capture the corresponding NOUNS — "cambio", "resumen", "traducción", "síntesis", "paráfrasis", "transcripción", "reformulación" — so a read-only question like "explica el **cambio** del documento" or "¿cuál es el **resumen** del documento?" gets hijacked into a fake source-preserving edit.
+
+**Why:** Spanish nouns share the verb stem. `cambi\w*` matches both "cambia" (verb) and "cambio" (noun). With a document attached + a document noun present, the bad match flips the request into the in-place edit flow.
+
+**How to apply:** enumerate explicit verb endings. For verbs whose noun is `stem+vowel+suffix` (resumir→resumen, reformular→reformulación) you CANNOT use `stem+e\w*` because `\w*` swallows the noun tail — list exact endings and rely on the outer `\b` to reject the noun (after "resume" the "n" of "resumen" fails the word boundary). Formal/usted imperatives change the stem consonant (traducir→"traduzca", sintetizar→"sintetice"), so they need their own top-level alternatives (`traduzca\w*`, `sintetice\w*`) — they are unreachable from the `traduc`/`sintetiz` stems. Both files normalize with NFD + strip-accents + lowercase, so write patterns accent-free and keep frontend `WHOLE_DOCUMENT_TRANSFORM_RE` and backend `transformVerb` identical.

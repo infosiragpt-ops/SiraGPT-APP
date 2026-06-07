@@ -35,12 +35,18 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   if (!text) return false;
   const hasFiles = Array.isArray(files) ? files.length > 0 : Boolean(files);
 
-  const structuralEditVerb = /\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|inclu\w*|pon|poner|coloc\w*|modific\w*|edit\w*|corrig\w*|correg\w*|mejor\w*|actualiz\w*|reescrib\w*|reemplaz\w*|quit\w*|elimin\w*|borr\w*|complet\w*)\b/.test(text);
+  const structuralEditVerb = /\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|inclu\w*|pon|poner|coloc\w*|modific\w*|edit\w*|corrig\w*|correg\w*|mejor\w*|actualiz\w*|reemplaz\w*|quit\w*|elimin\w*|borr\w*|complet\w*)\b/.test(text);
   // Whole-document transforms (traduce / cambia / resume / reformula…) act on the
   // entire file. They are recognized as edits, but require an explicit document
   // noun (not just a demonstrative pronoun) so phrases like "traduce esta frase"
   // or "cambia de tema" stay normal chat answers even when a file is attached.
-  const transformVerb = /\b(traduc\w*|cambi\w*|resum\w*|reformul\w*|parafras\w*|sintetiz\w*|transcrib\w*)\b/.test(text);
+  // Match VERB forms only — generic stems like `cambi\w*` / `resum\w*` also match
+  // nouns ("cambio", "resumen", "traduccion") and would turn read-only prompts
+  // ("explica el cambio del documento") into a fake source-preserving edit.
+  // reescribir lives HERE (not in structuralEditVerb) so it needs an explicit
+  // document noun like the other whole-document transforms — keep this pattern
+  // byte-identical to lib/ai-service.ts WHOLE_DOCUMENT_TRANSFORM_RE.
+  const transformVerb = /\b(?:traduc(?:e\w*|ir\w*|iendo|id[oa])|traduzca\w*|reescrib(?:e\w*|ir\w*|iendo)|reescrit[oa]|cambi(?:a\w*|e\w*)|resum(?:e|es|ir\w*|a|as|amos|elo|ela|elos|elas|eme|emelo|iendo|id[oa])|reformul(?:e\w*|a|as|ar\w*|alo|ala|ame|ando|ad[oa])|parafrase\w*|sintetiz(?:a\w*|e\w*|ando|ad[oa])|sintetice\w*|transcrib(?:e\w*|ir\w*|a\w*|iendo)|transcrit[oa])\b/.test(text);
   const primaryEditVerb = structuralEditVerb || transformVerb;
   const adjuntarAction = /\badjunt(?:a|ar|ame|arme|alo|ala|alos|alas|arlo|arla|arlos|arlas)\b/.test(text)
     && !/\b(?:documentos?|archivos?|pdf|word|docx|excel|xlsx|pptx?)\s+adjunt[oa]s?\b/.test(text);
