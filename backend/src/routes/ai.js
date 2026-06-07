@@ -3763,6 +3763,66 @@ router.post(
           console.warn('[intent-triage] failed (continuing without):', triageErr && triageErr.message);
           intentTriageDecision = null;
         }
+
+        // ─── Cognitive core: reasoning orchestrator ───────────────────────
+        // One pure, deterministic decision that assesses difficulty + risk,
+        // recommends the best model for the task, and PLANS how much test-time
+        // compute + verification the turn deserves. Recommend-only by default
+        // (SIRAGPT_AUTO_ROUTING=off): it emits telemetry and stores the
+        // decision on req for later phases (verification / test-time compute)
+        // WITHOUT changing the model. Set SIRAGPT_AUTO_ROUTING=escalate|auto to
+        // let it intelligently re-route the model. Fail-open: any error leaves
+        // the turn untouched.
+        try {
+          const reasoningOrchestrator = require('../services/reasoning-orchestrator');
+          const __ctxChars = Array.isArray(__conversationHistoryForUnderstanding)
+            ? __conversationHistoryForUnderstanding.reduce((sum, t) => sum + String((t && (t.content || t.text)) || '').length, 0)
+            : 0;
+          const __hasImagesForRoute = processedFiles.some((f) => f && isImageMime(f.mimeType));
+          const __hasGrounding = processedFiles.length > 0
+            || !!(operationalRagContext && operationalRagContext.active);
+          const cognitiveDecision = reasoningOrchestrator.decide({
+            prompt,
+            userModel: actualModel,
+            userProvider: actualProvider,
+            plan: (req.user && req.user.plan) || 'FREE',
+            attachments: processedFiles,
+            contextSize: __ctxChars,
+            hasGrounding: __hasGrounding,
+            semanticIntent: semanticIntentAnalysis,
+            language: (langResolution && langResolution.language) || 'es',
+          });
+          req._cognitiveDecision = cognitiveDecision;
+          try { console.log(reasoningOrchestrator.summarizeForLog(cognitiveDecision)); } catch (_) { /* noop */ }
+
+          // Apply intelligent re-routing only when the orchestrator says so AND
+          // it's safe: no images (the vision path owns its own model choice),
+          // a real provider can be inferred, and the target is plan-eligible.
+          const __route = cognitiveDecision.routing;
+          if (
+            __route
+            && __route.shouldApply
+            && __route.selectedModel
+            && __route.selectedModel !== actualModel
+            && !__hasImagesForRoute
+          ) {
+            const __targetModel = __route.selectedModel;
+            const __targetCatalog = modelRouter.getModel(__targetModel);
+            const __planOk = !__targetCatalog
+              || modelRouter.isPlanEligible(__targetCatalog.plans, (req.user && req.user.plan) || 'FREE');
+            const __targetProvider = inferProviderFromModelId(__targetModel) || __route.selectedProvider;
+            if (__planOk && __targetProvider) {
+              console.log(`[reasoning-orchestrator] re-route ${actualProvider}:${actualModel} → ${__targetProvider}:${__targetModel} (${__route.action}/${__route.reason})`);
+              actualModel = __targetModel;
+              actualProvider = __targetProvider;
+            } else {
+              console.log(`[reasoning-orchestrator] re-route skipped for ${__targetModel} (planOk=${__planOk} provider=${__targetProvider || 'none'})`);
+            }
+          }
+        } catch (orchErr) {
+          console.warn('[reasoning-orchestrator] decision failed (continuing without):', orchErr && orchErr.message);
+        }
+
         ciraRuntimeBundle = await ciraEngine.runUserMessage({
           text: prompt,
           attachments: processedFiles.map(toCiraAttachment).filter(Boolean),
@@ -4947,6 +5007,45 @@ router.post(
           } catch (recoveryErr) {
             console.warn('[ai] attachment recovery failed:', recoveryErr.message);
           }
+        }
+
+        // ─── Cognitive core: selective faithfulness / grounding self-check ──
+        // When the reasoning orchestrator flagged this turn for verification
+        // (grounded + non-trivial, or high-stakes domain), score the final
+        // answer against the grounding context. If it makes ungrounded claims
+        // (numbers/entities/URLs not in the evidence), append a transparent
+        // "self-check" footer flagging the unverified items. Opt-in via
+        // SIRAGPT_FAITHFULNESS_CHECK; fail-open so a bad check never blocks the
+        // reply. Skipped on artifact turns (we're inside `if (!artifactHandled)`).
+        try {
+          const __faithCheckOn = ['1', 'on', 'true'].includes(
+            String(process.env.SIRAGPT_FAITHFULNESS_CHECK || '').trim().toLowerCase()
+          );
+          if (__faithCheckOn && req._cognitiveDecision && fullResponseContent) {
+            const faithGate = require('../services/chat-faithfulness-gate');
+            const __faith = faithGate.verify({
+              response: fullResponseContent,
+              decision: req._cognitiveDecision,
+              blocks: {
+                evidenceBlock,
+                uploadedFileContext: uploadedFileContextForTurn,
+                documentEnrichmentBlock,
+                memoryBlock,
+                activeMemoryBlock,
+                crossChatBlock,
+                webSearchBlock,
+              },
+            });
+            if (__faith.ran) {
+              console.log(`[faithfulness-gate] ran action=${__faith.action} grade=${__faith.grade || '-'} score=${__faith.score ?? '-'} sources=${__faith.contextSources} model=${actualModel}`);
+            }
+            if (__faith.action === 'annotate' && __faith.footer && !res.writableEnded) {
+              res.write(`data: ${JSON.stringify({ content: __faith.footer })}\n\n`);
+              fullResponseContent = `${fullResponseContent}${__faith.footer}`;
+            }
+          }
+        } catch (faithErr) {
+          console.warn('[faithfulness-gate] check failed (continuing without):', faithErr && faithErr.message);
         }
 
         if (cacheHandle) cacheHandle.complete();
