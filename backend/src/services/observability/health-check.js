@@ -56,6 +56,45 @@ async function checkDatabase(prisma) {
   }
 }
 
+async function checkMigrations(prisma) {
+  if (!prisma || typeof prisma.$queryRawUnsafe !== "function") {
+    return { name: "migrations", status: "skipped", critical: false, latency_ms: 0, details: { reason: "no_prisma_client_provided" } };
+  }
+  const start = Date.now();
+  try {
+    // A row that started but never finished and was never rolled back is a
+    // FAILED migration (P3009) — the exact condition that took the backend down
+    // in the production incident. Because `migrate deploy` runs to completion
+    // before the HTTP server starts, any such row at serving time is genuinely
+    // stuck, not an in-flight migration. Surfacing it as a critical readiness
+    // failure lets the load balancer drain a broken instance instead of routing
+    // traffic into 500s.
+    const rows = await prisma.$queryRawUnsafe(
+      'SELECT migration_name FROM "_prisma_migrations" WHERE finished_at IS NULL AND rolled_back_at IS NULL'
+    );
+    const failed = Array.isArray(rows) ? rows.map((r) => r && r.migration_name).filter(Boolean) : [];
+    if (failed.length > 0) {
+      return {
+        name: "migrations", status: "unhealthy", critical: true,
+        latency_ms: Date.now() - start,
+        details: { failed_count: failed.length, failed: failed.slice(0, 20) },
+        error: "failed migration(s) present (P3009)",
+      };
+    }
+    return { name: "migrations", status: "healthy", critical: true, latency_ms: Date.now() - start, details: { failed_count: 0 } };
+  } catch (err) {
+    // Table missing (fresh DB before first migrate), restricted permissions, or
+    // a non-Prisma datasource: never penalise readiness for an unreadable
+    // bookkeeping table — that would be a self-inflicted outage.
+    return {
+      name: "migrations", status: "skipped", critical: false,
+      latency_ms: Date.now() - start,
+      details: { reason: "migrations_table_unreadable" },
+      error: err && err.message ? String(err.message).slice(0, 200) : "unknown",
+    };
+  }
+}
+
 async function checkRedis(redis) {
   if (!redis || typeof redis.ping !== "function") {
     return { name: "redis", status: "skipped", critical: false, latency_ms: 0, details: { reason: "no_redis_client_provided" } };
@@ -461,6 +500,7 @@ function runLivenessCheck() {
 async function runReadinessCheck({ prisma, redis, queue } = {}) {
   const checks = await Promise.all([
     checkDatabase(prisma),
+    checkMigrations(prisma),
     checkRedis(redis),
     checkQueue(queue),
   ]);
@@ -471,6 +511,7 @@ async function runReadinessCheck({ prisma, redis, queue } = {}) {
 async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry, langfuse, posthog, circuitBreakers, coworkHealth, googleOAuth, startupEnv, env = process.env } = {}) {
   const checks = await Promise.all([
     checkDatabase(prisma),
+    checkMigrations(prisma),
     checkRedis(redis),
     checkQueue(queue),
   ]);
@@ -537,6 +578,7 @@ function reportToHttpStatus(report) {
 module.exports = {
   PROCESS_BOOT_AT,
   checkDatabase,
+  checkMigrations,
   checkRedis,
   checkQueue,
   checkProcess,

@@ -12,6 +12,7 @@ const assert = require("node:assert/strict");
 
 const {
   checkDatabase,
+  checkMigrations,
   checkRedis,
   checkQueue,
   checkProcess,
@@ -55,6 +56,54 @@ describe("checkDatabase", () => {
     const r = await checkDatabase(null);
     assert.equal(r.status, "skipped");
     assert.equal(r.critical, false);
+  });
+});
+
+// ── checkMigrations ────────────────────────────────────────────────
+
+describe("checkMigrations", () => {
+  test("healthy when no failed migrations", async () => {
+    const fakePrisma = { $queryRawUnsafe: async () => [] };
+    const r = await checkMigrations(fakePrisma);
+    assert.equal(r.name, "migrations");
+    assert.equal(r.status, "healthy");
+    assert.equal(r.critical, true);
+    assert.equal(r.details.failed_count, 0);
+  });
+
+  test("unhealthy + critical when a failed migration is present (P3009)", async () => {
+    const fakePrisma = {
+      $queryRawUnsafe: async () => [{ migration_name: "20250919203030_add_model_sync_fields" }],
+    };
+    const r = await checkMigrations(fakePrisma);
+    assert.equal(r.status, "unhealthy");
+    assert.equal(r.critical, true);
+    assert.equal(r.details.failed_count, 1);
+    assert.deepEqual(r.details.failed, ["20250919203030_add_model_sync_fields"]);
+  });
+
+  test("skipped (non-critical) when the migrations table is unreadable", async () => {
+    const fakePrisma = { $queryRawUnsafe: async () => { throw new Error('relation "_prisma_migrations" does not exist'); } };
+    const r = await checkMigrations(fakePrisma);
+    assert.equal(r.status, "skipped");
+    assert.equal(r.critical, false);
+    assert.equal(r.details.reason, "migrations_table_unreadable");
+  });
+
+  test("skipped when no client passed", async () => {
+    const r = await checkMigrations(null);
+    assert.equal(r.status, "skipped");
+    assert.equal(r.critical, false);
+  });
+
+  test("a failed migration drives readiness to 503-worthy unhealthy", async () => {
+    const r = await runReadinessCheck({
+      prisma: { $queryRawUnsafe: async (sql) => (/_prisma_migrations/.test(sql) ? [{ migration_name: "x" }] : 1) },
+      redis: { ping: async () => "PONG" },
+      queue: { getJobCounts: async () => ({ waiting: 0 }) },
+    });
+    assert.equal(r.status, "unhealthy");
+    assert.ok(r.checks.find((c) => c.name === "migrations" && c.status === "unhealthy"));
   });
 });
 
@@ -311,7 +360,7 @@ describe("runReadinessCheck", () => {
     });
     assert.equal(r.status, "healthy");
     const names = r.checks.map((c) => c.name).sort();
-    assert.deepEqual(names, ["database", "process", "queue", "redis"]);
+    assert.deepEqual(names, ["database", "migrations", "process", "queue", "redis"]);
   });
 
   test("503 when DB is unhealthy", async () => {

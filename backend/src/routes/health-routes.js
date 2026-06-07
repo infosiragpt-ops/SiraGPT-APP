@@ -156,12 +156,15 @@ function createHealthRoutes(deps = {}) {
    *                    load balancer / k8s readiness probe.
    */
   function register(app) {
-    app.get(['/health/live', '/api/health/live'], (_req, res) => {
+    // `/healthz` and `/livez` are the de-facto k8s/orchestrator liveness
+    // conventions; alias them to the same liveness handler so external probes
+    // work without bespoke config. `/readyz` mirrors readiness.
+    app.get(['/health/live', '/api/health/live', '/healthz', '/livez', '/api/healthz', '/api/livez'], (_req, res) => {
       const report = runLivenessCheck();
       sendHealthReport(res, report);
     });
 
-    app.get(['/health/ready', '/api/health/ready'], async (_req, res) => {
+    app.get(['/health/ready', '/api/health/ready', '/readyz', '/api/readyz'], async (_req, res) => {
       const report = await getCachedOrFresh('ready', () => runReadinessCheck({
         prisma,
         redis: getHealthRedisClient(),
