@@ -630,6 +630,25 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       || 'No pude generar una respuesta verificable. Intenta reformular la pregunta.';
     state.finalText = finalAnswer;
 
+    // Non-blocking honesty check: flag completion claims in the answer that
+    // no executed tool supports (e.g. "creé el archivo" with no document tool
+    // run, "busqué en la web" with no search). Emitted as a trace event for
+    // observability + telemetry; it never blocks or rewrites the answer.
+    try {
+      // eslint-disable-next-line global-require
+      const { verifyClaims } = require('./agents/completion-claim-verifier');
+      // eslint-disable-next-line global-require
+      const { successfulToolCalls } = require('./agents/agentic-execution-profile');
+      const counts = successfulToolCalls(Array.isArray(result?.steps) ? result.steps : state.steps);
+      const executed = counts && typeof counts.keys === 'function' ? Array.from(counts.keys()) : [];
+      const honesty = verifyClaims(finalAnswer, executed);
+      if (!honesty.ok) {
+        const kinds = honesty.unsupported.map((c) => c.kind);
+        try { onEvent({ type: 'honesty_check', severity: honesty.severity, unsupportedClaims: kinds, executedTools: executed }); } catch (_) { /* noop */ }
+        console.warn(`[agentic-chat-stream] honesty_check severity=${honesty.severity} unsupported=${kinds.join(',')} executedTools=${executed.length}`);
+      }
+    } catch (_) { /* honesty check must never break the response */ }
+
     // Emit the final sentinel + the answer body in two frames so the UI
     // shows the completed timeline AND the streamed answer below it.
     await writeSse(res, {
