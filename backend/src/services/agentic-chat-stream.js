@@ -42,6 +42,7 @@
   const { hostFileTool } = require('./agents/host-file-tool');
   const { checkCiStatusTool, monitorCiTool } = require('./agents/github-actions-tool');
   const openclawCapabilityKernel = require('./openclaw-capability-kernel');
+  const { runToolWithRetry } = require('./agents/tool-call-retry');
   const { isAgenticActionRequest } = require('./agents/agentic-trigger');
   const { detectMediaIntent, buildMediaIntentHint } = require('./agents/media-intent');
   const {
@@ -637,7 +638,16 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       name: tool.name,
       description: tool.description,
       parameters: jsonSchema,
-      execute: async (args, _ctx) => tool.handler(args, _ctx),
+      // Bounded, classifier-driven retry so a transient network blip while
+      // calling a tool does not abort an otherwise-correct multi-step run.
+      // Transparent on success; only THROWN transient errors are retried,
+      // deterministic `{error}` responses are passed straight through.
+      execute: async (args, _ctx) => runToolWithRetry(
+        (a, c) => tool.handler(a, c),
+        args,
+        _ctx,
+        { label: tool.name },
+      ),
     };
   }
 
