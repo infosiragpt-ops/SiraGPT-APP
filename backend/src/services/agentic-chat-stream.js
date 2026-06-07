@@ -220,6 +220,13 @@ function stageLabelFor(toolName, args) {
 function modelSupportsFunctionCalling(provider, model) {
   const p = String(provider || '').toLowerCase();
   const m = String(model || '').toLowerCase();
+  // OSS/efficient model families that expose OpenAI-style tool_calls on every
+  // OpenAI-compatible host we route to (Cerebras free tier, Groq, OpenRouter).
+  // Checked before the per-provider allowlist so the DEFAULT FREE model
+  // (Cerebras "FlashGPT" / llama-3.1-8b) and its cross-plan fallback actually
+  // reach the agentic loop — regardless of how the provider string is labeled.
+  // Without this, most users were silently kept on plain streaming.
+  if (/(?:^|[/_-])(?:llama-?[34]|qwen|gpt-oss|kimi-k2)/i.test(m)) return true;
   if (p === 'openai') {
     return /^(gpt-4|gpt-4o|gpt-4\.1|gpt-5|o3|o4|chatgpt|gpt-3\.5-turbo-1106|gpt-3\.5-turbo-0125)/i.test(m);
   }

@@ -110,6 +110,16 @@ test('modelSupportsFunctionCalling allowlist', () => {
   assert.equal(agenticStream.modelSupportsFunctionCalling('Gemini', 'gemini-3-pro'), true);
   assert.equal(agenticStream.modelSupportsFunctionCalling('DeepSeek', 'deepseek-v4-pro'), true);
   assert.equal(agenticStream.modelSupportsFunctionCalling('OpenRouter', 'moonshotai/kimi-k2.6'), true);
+  // Cerebras (default free model "FlashGPT" / llama-3.1-8b) is OpenAI
+  // tool-compatible — it MUST reach the agentic loop or most users get
+  // plain chat.
+  assert.equal(agenticStream.modelSupportsFunctionCalling('Cerebras', 'llama-3.1-8b'), true);
+  assert.equal(agenticStream.modelSupportsFunctionCalling('Cerebras', 'qwen-3-32b'), true);
+  // Family-based: tool-capable OSS models reach the loop even when the
+  // provider label is the generic fallback (the default-free-model case).
+  assert.equal(agenticStream.modelSupportsFunctionCalling('OpenAI', 'llama-3.1-8b'), true);
+  assert.equal(agenticStream.modelSupportsFunctionCalling('Groq', 'gpt-oss-120b'), true);
+  // ...but the family check must not over-match a non-tool OpenAI SKU.
   assert.equal(agenticStream.modelSupportsFunctionCalling('OpenAI', 'davinci-002'), false);
   assert.equal(agenticStream.modelSupportsFunctionCalling('Anthropic', 'claude-3-opus'), false);
 });
