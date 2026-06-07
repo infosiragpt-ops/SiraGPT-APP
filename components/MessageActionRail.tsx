@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import {
+  BrainCircuit,
   Check,
   Clipboard,
   GitBranch,
@@ -22,7 +23,7 @@ import { cn } from "@/lib/utils"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 type FeedbackKind = "liked" | "disliked"
-type ActionKind = "copy" | "speak" | "like" | "dislike" | "regenerate" | "share" | "branch"
+type ActionKind = "copy" | "speak" | "like" | "dislike" | "regenerate" | "share" | "branch" | "remember"
 
 export interface MessageActionRailProps {
   /** Message identity — passed straight through to telemetry. */
@@ -60,6 +61,10 @@ export interface MessageActionRailProps {
    *  but the button only renders when an `onBranch` handler is supplied —
    *  this keeps it opt-in for call sites that don't yet support forking. */
   canBranch?: boolean
+  /** Save this answer to the user's persistent agent memory. Defaults to
+   *  true, but the button only renders when an `onRemember` handler is
+   *  supplied. */
+  canRemember?: boolean
 
   /** TTS state owned by the parent (so multiple messages share one
    *  audio context). */
@@ -79,6 +84,9 @@ export interface MessageActionRailProps {
   /** Fork the conversation from this message into a new branch. When
    *  omitted the Branch button is hidden entirely. */
   onBranch?: () => Promise<void> | void
+  /** Persist this answer to the user's long-term agent memory. When
+   *  omitted the Remember button is hidden entirely. */
+  onRemember?: () => Promise<void> | void
 
   /** Telemetry hook — fires after every action with timing + outcome.
    *  Defaults to console.log so dev sees it; wire to a real
@@ -226,6 +234,8 @@ export function MessageActionRail({
   onRegenerate,
   onShare,
   onBranch,
+  onRemember,
+  canRemember = true,
   onTelemetry = DEFAULT_TELEMETRY,
 }: MessageActionRailProps) {
   // ── Local UI state ───────────────────────────────────────────────
@@ -234,6 +244,9 @@ export function MessageActionRail({
   const [isCopying, setIsCopying] = React.useState(false)
   const [isSharing, setIsSharing] = React.useState(false)
   const [isBranching, setIsBranching] = React.useState(false)
+  const [isRemembering, setIsRemembering] = React.useState(false)
+  const [rememberPulse, setRememberPulse] = React.useState<"success" | "error" | null>(null)
+  const [remembered, setRemembered] = React.useState(false)
   const [isSubmittingFeedback, setIsSubmittingFeedback] = React.useState<FeedbackKind | null>(null)
   const [localFeedback, setLocalFeedback] = React.useState<FeedbackKind | null>(feedback)
 
@@ -259,6 +272,9 @@ export function MessageActionRail({
   // Branching is opt-in: the button only appears when the parent actually
   // wired an `onBranch` handler (forking the conversation tree).
   const showBranch = canBranch && !!onBranch && hasText && !hasError && !isLive
+  // Remember (persistent agent memory) is opt-in too — only assistant answers
+  // worth keeping should expose it, so it's gated on an `onRemember` handler.
+  const showRemember = canRemember && !!onRemember && hasText && !hasError && !isLive
   const regenerationBadge = Number.isFinite(regenerationAttempt) && regenerationAttempt > 0
     ? (regenerationAttempt > 99 ? "99+" : String(Math.floor(regenerationAttempt)))
     : null
@@ -270,7 +286,7 @@ export function MessageActionRail({
 
   // Nothing to render? Don't render the container either — keeps the
   // bubble visually clean for messages that genuinely have no actions.
-  if (!showCopy && !showSpeak && !showFeedback && !showRegenerate && !showShare && !showBranch && !showModelBadge) {
+  if (!showCopy && !showSpeak && !showFeedback && !showRegenerate && !showShare && !showBranch && !showRemember && !showModelBadge) {
     return null
   }
 
@@ -371,6 +387,18 @@ export function MessageActionRail({
       await fire("branch", () => onBranch())
     } catch { /* telemetry already recorded */ }
     finally { setIsBranching(false) }
+  }
+
+  const handleRememberClick = async () => {
+    if (isRemembering || !onRemember) return
+    setIsRemembering(true)
+    try {
+      await fire("remember", () => onRemember(), setRememberPulse)
+      // Latch a persistent "saved" affordance so the user knows this answer
+      // already lives in their agent's long-term memory.
+      setRemembered(true)
+    } catch { /* pulse already handled */ }
+    finally { setIsRemembering(false) }
   }
 
   const handleSpeakClick = () => {
@@ -500,6 +528,29 @@ export function MessageActionRail({
             loading={isBranching}
             onClick={handleBranchClick}
             icon={<GitBranch className="h-4 w-4" />}
+          />
+        )}
+        {showRemember && (
+          // ── "Recordar" (memoria persistente del agente) ──────────────
+          // The most future-facing action of all: software that *remembers*.
+          // The next generation of AI tools is defined by agents with durable,
+          // cross-session memory — pin an answer and the assistant keeps it as
+          // a long-term fact about you, so future chats start already knowing
+          // it. Self-contained: the parent persists it to the user's memory
+          // document. Once saved, the icon latches to a filled/accent state.
+          <RailButton
+            label={remembered ? "Guardado en memoria" : "Recordar esto"}
+            disabled={allDisabled}
+            loading={isRemembering}
+            pressed={remembered}
+            pulse={rememberPulse}
+            glow={remembered ? "accent" : null}
+            onClick={handleRememberClick}
+            icon={
+              rememberPulse === "success" || remembered
+                ? <BrainCircuit className="h-4 w-4" strokeWidth={2.25} />
+                : <BrainCircuit className="h-4 w-4" />
+            }
           />
         )}
         {showModelBadge && (

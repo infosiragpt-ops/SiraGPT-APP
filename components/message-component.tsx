@@ -695,10 +695,13 @@ const GeneratedImageCard = ({
     );
 };
 
-const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, isStreaming, onToggleSplitView, isGeneratingImage, onDocumentPreview, onAttachmentPreview, onOpenSources, children }: {
+const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessageInChat, isStreaming, onToggleSplitView, isGeneratingImage, onDocumentPreview, onAttachmentPreview, onOpenSources, children }: {
     message: any;
     user: any;
     onRegenerate: (messageId: string) => void;
+    /** Fork the conversation from this message into a new branch. Optional —
+     *  the Branch action only renders when this is supplied. */
+    onBranch?: (messageId: string) => void | Promise<void>;
     updateMessageInChat: (messageId: string, newContent: string, files?: any[]) => void;
     isStreaming?: boolean;
     onToggleSplitView?: (content: any) => void;
@@ -980,7 +983,36 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         }
     };
 
-
+    // ── Recordar (memoria persistente del agente) ────────────────────────
+    // Pins this answer into the user's long-term memory document so future
+    // chats start already knowing it. Self-contained: hits the existing
+    // /memory endpoint via apiClient.addMemoryEntry — no parent plumbing,
+    // which also keeps it safe from the concurrent edits churning the big
+    // chat-interface file. We strip non-copyable artifact fences and cap the
+    // length so we store a clean, useful fact rather than a giant blob.
+    const handleRemember = async () => {
+        const raw = stripNonCopyableArtifactBlocks(message.content || "").trim();
+        if (!raw) {
+            toast.error("No hay contenido para recordar");
+            throw new Error("empty-remember");
+        }
+        // Memory entries are short facts; keep the most salient opening slice.
+        const MAX_MEMORY_CHARS = 1200;
+        const text = raw.length > MAX_MEMORY_CHARS ? `${raw.slice(0, MAX_MEMORY_CHARS - 1).trimEnd()}…` : raw;
+        try {
+            await apiClient.addMemoryEntry(text, "chat");
+            toast.success("Guardado en la memoria de tu agente", {
+                description: "Tus próximas conversaciones partirán recordando esto.",
+            });
+        } catch (err: any) {
+            const status = err?.status || err?.statusCode;
+            const detail = err?.errorData?.error || err?.message || "error desconocido";
+            console.error("[remember] failed:", { status, detail, messageId: message.id });
+            if (status === 401) toast.error("Tu sesión expiró. Inicia sesión de nuevo.");
+            else toast.error(`No se pudo guardar en memoria: ${detail}`);
+            throw err;
+        }
+    };
 
     const handleEditSave = async () => {
         if (editedContent.trim() === message.content || editedContent.trim() === "") {
@@ -3116,6 +3148,8 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                     onFeedback={async (kind) => { await handleFeedback(kind) }}
                                     onRegenerate={() => onRegenerate(message.id)}
                                     onShare={handleShare}
+                                    onBranch={onBranch ? () => onBranch(message.id) : undefined}
+                                    onRemember={message.role === 'ASSISTANT' ? handleRemember : undefined}
                                 />
                                 {message.role === 'ASSISTANT' && !isStreaming ? (() => {
                                     const { sources, activity } = extractWebSources(message)

@@ -4039,6 +4039,13 @@ function ChatInterfaceContent() {
   const currentChatId = currentChat?.id ?? null
   const currentChatIdRef = React.useRef<string | null>(null)
   React.useEffect(() => { currentChatIdRef.current = currentChatId }, [currentChatId])
+  // Live refs so stable (identity-fixed) callbacks like `branchMessage` can
+  // read the latest chat/model without re-creating — required because the
+  // memoized MessageComponent ignores callback prop changes.
+  const currentChatRef = React.useRef<any>(null)
+  React.useEffect(() => { currentChatRef.current = currentChat }, [currentChat])
+  const selectedModelRef = React.useRef<string | undefined>(undefined)
+  React.useEffect(() => { selectedModelRef.current = selectedModel }, [selectedModel])
   const isCurrentChatStreaming = Boolean(currentChatId && activeStreamingChatIds.includes(currentChatId))
   const isCurrentChatLoading = isCurrentChatStreaming
   // Per-chat draft persistence. The composer's text is saved (debounced)
@@ -5414,6 +5421,68 @@ But first, you need to connect your Spotify account securely using the button be
     });
     setSourcesPanelData(payload);
   }, [closeArtifactPanel, setShowAudioPanel]);
+
+  // ── Bifurcar conversación ───────────────────────────────────────────────
+  // Forks the current chat into a brand-new conversation containing a copy of
+  // every message up to AND including the one the user branched from. The
+  // original chat is left untouched, so the user can explore an alternate
+  // direction without losing context — git-style branching applied to a
+  // conversation tree. Powered by the existing createChat + addMessage
+  // endpoints; no new backend needed. Reads live state from refs so the
+  // callback stays identity-stable (the memoized MessageComponent ignores
+  // callback prop changes).
+  const branchMessage = React.useCallback(async (messageId: string) => {
+    const chat = currentChatRef.current;
+    const msgs: any[] = chat?.messages || [];
+    const idx = msgs.findIndex((m) => m?.id === messageId);
+    if (idx < 0) {
+      toast.error("No se pudo bifurcar: mensaje no encontrado");
+      return;
+    }
+    const slice = msgs.slice(0, idx + 1).filter((m) => m && (m.content || m.files));
+    if (slice.length === 0) {
+      toast.error("No hay contenido para bifurcar");
+      return;
+    }
+
+    const baseTitle = (chat?.title || "Conversación").slice(0, 40);
+    const toastId = toast.loading("Bifurcando conversación…");
+    try {
+      const created = await apiClient.createChat({
+        title: `${baseTitle} (rama)`,
+        model: chat?.model || selectedModelRef.current,
+      });
+      const newChat = created?.chat || created;
+      const newChatId = newChat?.id;
+      if (!newChatId) throw new Error("createChat no devolvió id");
+
+      for (const m of slice) {
+        let files: string[] | undefined;
+        try {
+          if (Array.isArray(m.files)) files = m.files;
+          else if (typeof m.files === "string" && m.files.trim().startsWith("[")) files = JSON.parse(m.files);
+        } catch { /* non-fatal: forks can drop unparseable file refs */ }
+        await apiClient.addMessage(newChatId, {
+          role: String(m.role || "USER").toUpperCase(),
+          content: typeof m.content === "string" ? m.content : String(m.content ?? ""),
+          files,
+          metadata: typeof m.metadata === "string" ? m.metadata : undefined,
+        });
+      }
+
+      await selectChat(newChatId);
+      toast.success("Conversación bifurcada", {
+        id: toastId,
+        description: `${slice.length} mensaje${slice.length === 1 ? "" : "s"} copiado${slice.length === 1 ? "" : "s"} a la nueva rama`,
+      });
+    } catch (err: any) {
+      console.error("[branch] failed:", err);
+      toast.error("No se pudo bifurcar la conversación", {
+        id: toastId,
+        description: err?.message || "Inténtalo de nuevo",
+      });
+    }
+  }, [selectChat]);
 
   // Complete chat share functionality
   const handleCompleteShare = async () => {
@@ -10015,6 +10084,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                       message={message}
                                       user={user}
                                       onRegenerate={regenerateMessage}
+                                      onBranch={branchMessage}
                                       updateMessageInChat={editAndRegenerate}
                                       isStreaming={false}
                                       onToggleSplitView={handleToggleSplitView}
@@ -10035,6 +10105,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                     message={message}
                                     user={user}
                                     onRegenerate={regenerateMessage}
+                                    onBranch={branchMessage}
                                     updateMessageInChat={editAndRegenerate}
                                     isStreaming={false}
                                     onToggleSplitView={handleToggleSplitView}

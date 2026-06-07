@@ -118,19 +118,20 @@ export interface ScoredVoice {
 const DEFAULT_PROSODY: SpeechProsody = {
   // Slightly under 1.0 reads as more deliberate / professional than the
   // browser default which tends to feel rushed on long technical answers.
-  rate: 0.98,
+  // 0.96 is the sweet spot most premium voices sound warmest at.
+  rate: 0.96,
   pitch: 1.0,
   volume: 1.0,
 };
 
 /** Per-language micro tweaks so the same text feels right across languages. */
 const LANG_PROSODY: Record<string, Partial<SpeechProsody>> = {
-  es: { rate: 1.0, pitch: 1.0 },
-  en: { rate: 0.98, pitch: 1.0 },
-  pt: { rate: 0.99, pitch: 1.0 },
-  fr: { rate: 0.97, pitch: 1.02 },
-  de: { rate: 0.95, pitch: 0.99 },
-  it: { rate: 1.0, pitch: 1.01 },
+  es: { rate: 0.98, pitch: 1.0 },
+  en: { rate: 0.96, pitch: 1.0 },
+  pt: { rate: 0.97, pitch: 1.0 },
+  fr: { rate: 0.96, pitch: 1.02 },
+  de: { rate: 0.94, pitch: 0.99 },
+  it: { rate: 0.98, pitch: 1.01 },
 };
 
 /** Chrome/Edge silently stop after ~15s; keep chunks well under that. */
@@ -152,22 +153,52 @@ const KEEPALIVE_INTERVAL_MS = 12000;
  * country-agnostic and just pick the best engineering available.
  */
 const PREMIUM_VOICE_MARKERS: Array<{ rx: RegExp; bonus: number; tag: string }> = [
-  { rx: /\bnatural\b/i, bonus: 60, tag: "natural" },
-  { rx: /\bneural\b/i, bonus: 58, tag: "neural" },
-  { rx: /\bpremium\b/i, bonus: 50, tag: "premium" },
-  { rx: /\benhanced\b/i, bonus: 45, tag: "enhanced" },
-  { rx: /\bonline\b/i, bonus: 30, tag: "online" },
-  { rx: /\bgoogle\b/i, bonus: 40, tag: "google" },
-  { rx: /\bmicrosoft\b/i, bonus: 22, tag: "microsoft" },
-  { rx: /\bsiri\b/i, bonus: 48, tag: "siri" },
-  { rx: /\b(multilingual|wavenet|studio|journey|polyglot)\b/i, bonus: 55, tag: "advanced" },
+  { rx: /\bnatural\b/i, bonus: 66, tag: "natural" },
+  { rx: /\bneural\b/i, bonus: 64, tag: "neural" },
+  { rx: /\bpremium\b/i, bonus: 58, tag: "premium" },
+  { rx: /\benhanced\b/i, bonus: 50, tag: "enhanced" },
+  { rx: /\bonline\b/i, bonus: 34, tag: "online" },
+  { rx: /\bgoogle\b/i, bonus: 44, tag: "google" },
+  { rx: /\bmicrosoft\b/i, bonus: 24, tag: "microsoft" },
+  { rx: /\bsiri\b/i, bonus: 56, tag: "siri" },
+  // The truly modern, expressive engines — these are the closest a browser
+  // gets to a studio voice, so they outrank everything else when present.
+  { rx: /\b(multilingual|wavenet|studio|journey|polyglot|expressive|neural2|chirp)\b/i, bonus: 62, tag: "advanced" },
 ];
 
 /** Markers of a low-quality, robotic legacy voice — penalized. */
 const LEGACY_VOICE_MARKERS: Array<{ rx: RegExp; penalty: number; tag: string }> = [
-  { rx: /\b(compact|eloquence|fred|albert|zarvox|trinoids|cellos|bahh|boing|bubbles|deranged|hysterical|pipe organ|whisper|bad news|good news|wobble)\b/i, penalty: 70, tag: "legacy/novelty" },
-  { rx: /\b(espeak|festival|pico)\b/i, penalty: 50, tag: "open-robotic" },
+  { rx: /\b(compact|eloquence|fred|albert|zarvox|trinoids|cellos|bahh|boing|bubbles|deranged|hysterical|pipe organ|whisper|bad news|good news|wobble|novelty)\b/i, penalty: 70, tag: "legacy/novelty" },
+  { rx: /\b(espeak|festival|pico|flite|mbrola)\b/i, penalty: 50, tag: "open-robotic" },
 ];
+
+/**
+ * Curated allowlist of the highest-quality stock voices shipped by Apple /
+ * Microsoft / Google, grouped by language family. These are quality markers,
+ * NOT country preferences — they're simply the best-engineered voices each
+ * platform offers, so when one is present for the target language we give it a
+ * solid bonus. The bonus is small enough that it can never override a correct
+ * language match (so e.g. "Samantha" — an English voice — never wins for
+ * Spanish text). Matching is whole-word and case-insensitive.
+ */
+const PREMIUM_VOICE_ALLOWLIST: Record<string, string[]> = {
+  es: ["mónica", "monica", "paulina", "marisol", "jimena", "ximena", "lía", "lia", "catalina", "sara", "helena", "laura", "elvira", "dalia", "sabina", "pablo", "álvaro", "alvaro", "jorge", "juan", "diego", "andrés", "andres", "tomás", "tomas", "lucia", "lucía"],
+  en: ["samantha", "alex", "ava", "allison", "susan", "tom", "nicky", "aaron", "daniel", "karen", "serena", "moira", "fiona", "zoe", "evan", "nathan", "aria", "jenny", "guy", "michelle", "ana", "libby", "ryan", "sonia", "emma", "brian", "jane", "nova", "noah", "ada"],
+  pt: ["luciana", "joana", "fernanda", "francisca", "antônio", "antonio", "brenda", "donato", "manuela", "duarte"],
+  fr: ["thomas", "amélie", "amelie", "audrey", "aurelie", "marie", "denise", "henri", "eloise", "jacqueline", "yves"],
+  de: ["anna", "petra", "markus", "yannick", "katja", "conrad", "amala", "killian", "louisa", "viktoria"],
+  it: ["alice", "federica", "luca", "elsa", "isabella", "giuseppe", "calogero", "fabiola"],
+};
+
+/** Whole-word membership test against a language's premium allowlist. */
+function isAllowlistedVoice(name: string, baseLang: string): boolean {
+  const list = PREMIUM_VOICE_ALLOWLIST[baseLang];
+  if (!list || !name) return false;
+  const tokens = name.toLowerCase().match(/[a-zà-ÿñ]+/gi) || [];
+  if (tokens.length === 0) return false;
+  const set = new Set(tokens);
+  return list.some((n) => set.has(n));
+}
 
 /**
  * Score a single voice for a target language. Higher is better. The scoring is
@@ -225,6 +256,13 @@ export function scoreVoice(
       score -= penalty;
       reasons.push(`-${tag}`);
     }
+  }
+
+  // Curated premium stock voice for this language family → quality nudge.
+  // Kept modest so it can never beat a correct language match.
+  if (isAllowlistedVoice(name, base)) {
+    score += 36;
+    reasons.push("+curated-premium");
   }
 
   return { voice, score, reasons };
@@ -613,7 +651,7 @@ export function isSpeechSupported(): boolean {
  * populated asynchronously via the `voiceschanged` event, so we wait (with a
  * timeout) the first time and cache the result thereafter.
  */
-export function loadVoices(timeoutMs = 2000): Promise<SpeechSynthesisVoice[]> {
+export function loadVoices(timeoutMs = 3000): Promise<SpeechSynthesisVoice[]> {
   const s = synth();
   if (!s) return Promise.resolve([]);
 
@@ -817,8 +855,12 @@ export class NaturalSpeechEngine {
       this.index += 1;
       this.emitter.emit("progress", this.queue.length ? this.index / this.queue.length : 1);
       if (this.index < this.queue.length && this._state !== "paused") {
-        // Small natural breath between chunks; also lets Chrome settle.
-        window.setTimeout(() => this.speakChunk(token), 60);
+        // A natural breath between sentences. Slightly longer after a chunk
+        // that ends a sentence (./!/?/…) so the cadence sounds human rather
+        // than machine-gunned; also lets Chrome settle between utterances.
+        const prev = this.queue[this.index - 1] || "";
+        const endsSentence = /[.!?…]["'”’)\]]?\s*$/.test(prev);
+        window.setTimeout(() => this.speakChunk(token), endsSentence ? 130 : 70);
       } else if (this.index >= this.queue.length) {
         this.finishNaturally();
       }
