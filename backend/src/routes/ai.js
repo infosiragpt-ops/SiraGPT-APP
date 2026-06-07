@@ -3781,8 +3781,17 @@ router.post(
           const __hasImagesForRoute = processedFiles.some((f) => f && isImageMime(f.mimeType));
           const __hasGrounding = processedFiles.length > 0
             || !!(operationalRagContext && operationalRagContext.active);
+          // Nivel 1: constrain intelligent routing to models that are actually
+          // reachable (provider key configured + not an aspirational catalog
+          // placeholder), so escalate/auto never re-routes to a dead model id.
+          let __reachableModelIds;
+          try {
+            const modelAvailability = require('../services/model-availability');
+            __reachableModelIds = modelAvailability.reachableModelIds(modelRouter.CATALOG);
+          } catch (_reachErr) { __reachableModelIds = undefined; }
           const cognitiveDecision = reasoningOrchestrator.decide({
             prompt,
+            reachableModelIds: __reachableModelIds,
             userModel: actualModel,
             userProvider: actualProvider,
             plan: (req.user && req.user.plan) || 'FREE',

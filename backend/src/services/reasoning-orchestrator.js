@@ -302,6 +302,44 @@ function fitnessFor(model, needs) {
   return den > 0 ? num / den : null;
 }
 
+function toIdSet(v) {
+  if (!v) return null;
+  if (v instanceof Set) return v;
+  if (Array.isArray(v)) return new Set(v);
+  return null;
+}
+
+/**
+ * Post-filter a routing decision against the set of currently-reachable model
+ * ids (provider configured + not aspirational). Backward-compatible: when no
+ * `reachableModelIds` is supplied the decision is returned untouched. When the
+ * chosen target isn't reachable, fall back to the first reachable alternative,
+ * else keep the user's model (never route to a dead id).
+ */
+function filterReachable(base, input) {
+  const set = toIdSet(input && input.reachableModelIds);
+  if (!set || !base.changed || !base.selectedModel) return base;
+  if (set.has(base.selectedModel)) return base; // target reachable as-is
+  const userModel = base.userModel;
+  for (const alt of Array.isArray(base.alternatives) ? base.alternatives : []) {
+    const id = typeof alt === 'string' ? alt : (alt && alt.id);
+    if (id && id !== userModel && set.has(id)) {
+      base.selectedModel = id;
+      base.selectedProvider = null; // caller re-infers provider from the id
+      base.reason = `${base.reason}:reroute_reachable`;
+      return base;
+    }
+  }
+  // No reachable target → keep the user's model rather than route to a dead id.
+  base.selectedModel = userModel;
+  base.selectedProvider = base.userProvider;
+  base.changed = false;
+  base.shouldApply = false;
+  base.action = 'keep';
+  base.reason = `${base.reason}:no_reachable_target`;
+  return base;
+}
+
 function routeModel(input = {}, deps = {}) {
   const catalog = 'catalogRouter' in deps ? deps.catalogRouter : defaultCatalogRouter;
   const userModel = String(input.userModel || '').trim();
@@ -390,7 +428,7 @@ function routeModel(input = {}, deps = {}) {
     base.action = autoRequested ? 'auto_select' : (changed ? 'auto_select' : 'keep');
     base.reason = `auto:${selection.rationale ? 'scored' : 'selected'}`;
     base.shouldApply = changed;
-    return base;
+    return filterReachable(base, input);
   }
 
   // mode === 'escalate' — only move UP for genuinely harder tasks.
@@ -427,7 +465,7 @@ function routeModel(input = {}, deps = {}) {
     base.reason = base.recommendedModel === userModel ? 'already_optimal' : 'user_model_sufficient';
     base.shouldApply = false;
   }
-  return base;
+  return filterReachable(base, input);
 }
 
 // ── 4a. Test-time compute plan ────────────────────────────────────────────────
