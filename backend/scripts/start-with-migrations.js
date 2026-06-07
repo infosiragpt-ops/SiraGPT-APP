@@ -22,6 +22,11 @@ const SAFE_AUTO_ROLLBACK_MIGRATIONS = [
     pattern: /^20260520160000_add_org_pending_transfer$/,
     reason: "idempotent org pending-transfer schema migration",
   },
+  {
+    pattern: /^20250919203030_add_model_sync_fields$/,
+    reason:
+      "idempotent additive AiModel sync columns (ADD COLUMN IF NOT EXISTS); a merge renamed this migration and re-running ADD COLUMN re-failed with 42701 -> P3009 -> boot abort. Safe to roll back and retry.",
+  },
 ];
 
 function log(msg, extra = {}) {
@@ -68,6 +73,79 @@ function isSafeAutoRollbackMigration(migrationName) {
   return SAFE_AUTO_ROLLBACK_MIGRATIONS.some(({ pattern }) => pattern.test(migrationName));
 }
 
+// Statements that are provably idempotent AND purely additive: re-running them
+// against a database that already has the object is a no-op, never destructive.
+const IDEMPOTENT_ADDITIVE_STATEMENT = [
+  /^CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\b/i,
+  /^CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\b/i,
+  /^CREATE\s+EXTENSION\s+IF\s+NOT\s+EXISTS\b/i,
+  /^CREATE\s+SCHEMA\s+IF\s+NOT\s+EXISTS\b/i,
+];
+
+// Any of these tokens makes a statement ineligible for auto-rollback because a
+// retry could lose data or fail outside a transaction (e.g. ALTER TYPE ADD
+// VALUE, CREATE INDEX CONCURRENTLY). Conservative on purpose.
+const FORBIDDEN_STATEMENT_TOKEN =
+  /\b(DROP|DELETE|TRUNCATE|UPDATE|INSERT|RENAME|ALTER\s+COLUMN|ADD\s+CONSTRAINT|ADD\s+PRIMARY|ADD\s+FOREIGN|ADD\s+UNIQUE|SET\s+NOT\s+NULL|CONCURRENTLY|ALTER\s+TYPE|CREATE\s+TYPE)\b/i;
+
+function stripSqlComments(sql) {
+  return sql.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/--[^\n]*/g, " ");
+}
+
+function splitSqlStatements(sql) {
+  return stripSqlComments(sql)
+    .split(";")
+    .map((statement) => statement.trim())
+    .filter((statement) => statement.length > 0);
+}
+
+// `ALTER TABLE … ADD COLUMN IF NOT EXISTS …[, ADD COLUMN IF NOT EXISTS …]` is the
+// most common additive migration. Treat it as safe only when EVERY `ADD COLUMN`
+// is guarded and no other (potentially destructive) operation is present.
+function isIdempotentAdditiveAlterTable(statement) {
+  if (!/^ALTER\s+TABLE\b/i.test(statement)) return false;
+  if (FORBIDDEN_STATEMENT_TOKEN.test(statement)) return false;
+  const addColumns = (statement.match(/\bADD\s+COLUMN\b/gi) || []).length;
+  if (addColumns === 0) return false;
+  const guardedAddColumns = (statement.match(/\bADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\b/gi) || []).length;
+  return addColumns === guardedAddColumns;
+}
+
+function isIdempotentAdditiveStatement(statement) {
+  if (FORBIDDEN_STATEMENT_TOKEN.test(statement)) return false;
+  if (IDEMPOTENT_ADDITIVE_STATEMENT.some((pattern) => pattern.test(statement))) return true;
+  return isIdempotentAdditiveAlterTable(statement);
+}
+
+// Static analysis of a migration's SQL. Returns true only when the file can be
+// fully parsed into statements that are ALL idempotent-additive. Dollar-quoted
+// blocks (DO $$ … $$) and any unrecognised statement make it ineligible, so the
+// explicit allowlist remains the only path for anything non-trivial.
+function migrationSqlIsIdempotentAdditive(migrationName, migrationsDir = MIGRATIONS_DIR) {
+  if (typeof migrationName !== "string" || !/^[A-Za-z0-9_]+$/.test(migrationName)) {
+    return false;
+  }
+  let sql;
+  try {
+    sql = fs.readFileSync(path.join(migrationsDir, migrationName, "migration.sql"), "utf8");
+  } catch {
+    return false;
+  }
+  if (/\$\w*\$/.test(sql)) return false; // dollar-quoted body — too complex to prove safe
+  const statements = splitSqlStatements(sql);
+  if (statements.length === 0) return false;
+  return statements.every(isIdempotentAdditiveStatement);
+}
+
+// A migration may be auto-rolled-back after a P3009 when it is either on the
+// explicit allowlist or its SQL is provably idempotent-additive.
+function isMigrationAutoRollbackSafe(migrationName, migrationsDir = MIGRATIONS_DIR) {
+  return (
+    isSafeAutoRollbackMigration(migrationName) ||
+    migrationSqlIsIdempotentAdditive(migrationName, migrationsDir)
+  );
+}
+
 function extractP3009MigrationNames(output) {
   const names = new Set();
   for (const match of output.matchAll(/The `([^`]+)` migration started at/g)) {
@@ -82,7 +160,7 @@ function extractP3009MigrationNames(output) {
 function shouldContinueAfterSafeP3009(output) {
   if (!output.includes("P3009")) return false;
   const names = extractP3009MigrationNames(output);
-  return names.length > 0 && names.every(isSafeAutoRollbackMigration);
+  return names.length > 0 && names.every((name) => isMigrationAutoRollbackSafe(name));
 }
 
 async function getActiveFailedMigrations() {
@@ -151,9 +229,9 @@ async function rollbackSafeFailedMigrations() {
     return false;
   }
 
-  const unsafe = failedMigrations.filter((name) => !isSafeAutoRollbackMigration(name));
+  const unsafe = failedMigrations.filter((name) => !isMigrationAutoRollbackSafe(name));
   if (unsafe.length > 0) {
-    log("refusing to auto-rollback unknown migration failures", { failedMigrations });
+    log("refusing to auto-rollback unknown migration failures", { failedMigrations, unsafe });
     return false;
   }
 
@@ -323,6 +401,8 @@ if (require.main === module) {
 module.exports = {
   extractP3009MigrationNames,
   isSafeAutoRollbackMigration,
+  isMigrationAutoRollbackSafe,
+  migrationSqlIsIdempotentAdditive,
   makePgClientOptions,
   resolvePrismaDatabaseUrl,
   shouldContinueAfterSafeP3009,
