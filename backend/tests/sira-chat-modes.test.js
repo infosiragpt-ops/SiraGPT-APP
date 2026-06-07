@@ -105,12 +105,16 @@ describe("isToolAllowedInMode", () => {
   });
 
   test("research blocks code execution", () => {
+    assert.equal(isToolAllowedInMode("research", "web_extract"), true);
+    assert.equal(isToolAllowedInMode("research", "session_search"), true);
     assert.equal(isToolAllowedInMode("research", "execute_sandboxed_code"), false);
   });
 
   test("code allows code generation but blocks web_search", () => {
     assert.equal(isToolAllowedInMode("code", "code_generation"), true);
     assert.equal(isToolAllowedInMode("code", "web_search"), false);
+    assert.equal(isToolAllowedInMode("code", "web_extract"), false);
+    assert.equal(isToolAllowedInMode("code", "read_url"), false);
   });
 
   test("document allows docx_generation and rag_retrieve", () => {

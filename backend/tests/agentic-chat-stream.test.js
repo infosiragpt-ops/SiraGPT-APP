@@ -160,6 +160,12 @@ test('shouldUseAgenticChat auto-routes freshness / live-data questions to web se
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿cuánto es 2+2?' }), false);
 });
 
+test('shouldUseAgenticChat routes session search and browser automation requests', () => {
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'busca en mis conversaciones pasadas lo de la tesis' }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'haz scraping de esta web y extrae precios' }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'abre el navegador, haz click y baja con scroll' }), true);
+});
+
 test('serializeSentinel produces a fenced agent-task-state block', () => {
   const { serializeSentinel, freshState } = agenticStream._internal;
   const out = serializeSentinel(freshState());
@@ -175,6 +181,12 @@ test('default toolset includes chat, document and verification tools', () => {
   const names = buildDefaultTools().map(tool => tool.name);
   assert.ok(names.includes('web_search'));
   assert.ok(names.includes('read_url'));
+  assert.ok(names.includes('web_extract'));
+  assert.ok(names.includes('session_search'));
+  assert.ok(names.includes('browser_navigate'));
+  assert.ok(names.includes('browser_click'));
+  assert.ok(names.includes('browser_type'));
+  assert.ok(names.includes('browser_scroll'));
   assert.ok(names.includes('memory_recall'));
   assert.ok(names.includes('rag_retrieve'));
   assert.ok(names.includes('python_exec'));

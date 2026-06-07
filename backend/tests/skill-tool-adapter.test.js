@@ -62,6 +62,25 @@ test('resolveToolNames maps fetch_url to web_search (alias consolidation)', () =
   assert.deepEqual(resolveToolNames(['fetch_url']), ['web_search']);
 });
 
+test('resolveToolNames maps new session, extraction and browser tools directly', () => {
+  const out = resolveToolNames([
+    'session_search',
+    'web_extract',
+    'browser_navigate',
+    'browser_click',
+    'browser_type',
+    'browser_scroll',
+  ]);
+  assert.deepEqual(out.sort(), [
+    'browser_click',
+    'browser_navigate',
+    'browser_scroll',
+    'browser_type',
+    'session_search',
+    'web_extract',
+  ].sort());
+});
+
 test('resolveToolNames maps repository delivery aliases onto executable runtime tools', () => {
   const out = resolveToolNames([
     'git_clone',

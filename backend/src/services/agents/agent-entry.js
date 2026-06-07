@@ -84,6 +84,59 @@ function buildAllTools(thinking = 'low', opts = {}) {
       required: ['url'],
       additionalProperties: false,
     }),
+    adaptAgentTool(agentTools.web_extract, {
+      type: 'object',
+      properties: {
+        url:      { type: 'string', description: 'Absolute http(s) URL to extract as readable markdown.' },
+        maxChars: { type: 'integer', minimum: 500, maximum: 50000, description: 'Markdown cap. Default 12000.' },
+      },
+      required: ['url'],
+      additionalProperties: false,
+    }),
+    adaptAgentTool(agentTools.session_search, {
+      type: 'object',
+      properties: {
+        query:           { type: 'string', description: 'Terms to search in the user’s past chat messages.' },
+        limit:           { type: 'integer', minimum: 1, maximum: 25, description: 'How many matching snippets to return. Default 8.' },
+        sessionId:       { type: 'string', description: 'Optional chat/session id to restrict the search.' },
+        includeArchived: { type: 'boolean', description: 'Include archived sessions. Default false.' },
+      },
+      required: ['query'],
+      additionalProperties: false,
+    }),
+    adaptAgentTool(agentTools.browser_navigate, {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'Absolute http(s) URL to open in the active browser session.' },
+      },
+      required: ['url'],
+      additionalProperties: false,
+    }),
+    adaptAgentTool(agentTools.browser_click, {
+      type: 'object',
+      properties: {
+        selector: { type: 'string', description: 'CSS selector to click in the active browser session.' },
+      },
+      required: ['selector'],
+      additionalProperties: false,
+    }),
+    adaptAgentTool(agentTools.browser_type, {
+      type: 'object',
+      properties: {
+        selector: { type: 'string', description: 'CSS selector for the input/textarea target.' },
+        text:     { type: 'string', description: 'Text to type into the target.' },
+      },
+      required: ['selector', 'text'],
+      additionalProperties: false,
+    }),
+    adaptAgentTool(agentTools.browser_scroll, {
+      type: 'object',
+      properties: {
+        y:        { type: 'integer', description: 'Vertical pixel delta. Default 800 when selector is omitted.' },
+        selector: { type: 'string', description: 'CSS selector to scroll into view.' },
+      },
+      additionalProperties: false,
+    }),
   );
 
   // 2. Task tools (code execution, document generation, web search, RAG)

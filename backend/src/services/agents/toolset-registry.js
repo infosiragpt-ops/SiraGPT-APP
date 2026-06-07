@@ -11,6 +11,10 @@
 const CORE_TOOLS = Object.freeze([
   'web_search',
   'fetch_url',
+  'web_extract',
+  'session_search',
+  'session_list',
+  'session_history',
   'read_file',
   'write_file',
   'bash_exec',
@@ -34,6 +38,10 @@ const RESEARCH_TOOLS = Object.freeze([
 const WEBHOOK_SAFE_TOOLS = Object.freeze([
   'web_search',
   'fetch_url',
+  'web_extract',
+  'session_search',
+  'session_list',
+  'session_history',
   'memory_recall',
   'create_chart',
   'create_mermaid_diagram',
@@ -53,6 +61,10 @@ const VISUAL_TOOLS = Object.freeze([
 
 const ENTERPRISE_TOOLS = Object.freeze([
   ...RESEARCH_TOOLS,
+  'browser_navigate',
+  'browser_click',
+  'browser_type',
+  'browser_scroll',
   'github_actions_monitor',
   'secret_scan',
   'dependency_audit',
@@ -105,6 +117,8 @@ const TOOLSETS = Object.freeze({
     tools: Object.freeze([
       'web_search',
       'fetch_url',
+      'web_extract',
+      'session_search',
       'bash_exec',
       'python_exec',
       'read_file',

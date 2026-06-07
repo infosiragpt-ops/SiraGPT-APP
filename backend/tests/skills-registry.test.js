@@ -226,6 +226,7 @@ test('bundled skills load cleanly from the real skills dir', () => {
   // Sessions-as-tools (Pattern 5):
   assert.ok(skills.has('session_list'), 'session_list should be bundled');
   assert.ok(skills.has('session_history'), 'session_history should be bundled');
+  assert.ok(skills.has('session_search'), 'session_search should be bundled');
   assert.ok(skills.has('session_spawn'), 'session_spawn should be bundled');
   assert.ok(skills.has('session_send'), 'session_send should be bundled');
   // Academic skills (Followup C):

@@ -21,6 +21,7 @@ test('agent tool policy: private document source wording disables external searc
   const forbidden = buildForbiddenToolNames(options);
   assert.equal(forbidden.has('web_search'), true);
   assert.equal(forbidden.has('read_url'), true);
+  assert.equal(forbidden.has('web_extract'), true);
   assert.equal(forbidden.has('scientific_search'), true);
   assert.equal(forbidden.has('create_document'), true);
   assert.equal(forbidden.has('verify_artifact'), true);

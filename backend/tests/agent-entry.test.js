@@ -70,6 +70,12 @@ test('buildAllTools returns a non-empty array of unique tool objects', () => {
   const toolNames = new Set(names);
   assert.ok(toolNames.has('web_search'), 'web_search tool missing');
   assert.ok(toolNames.has('read_url'), 'read_url tool missing');
+  assert.ok(toolNames.has('web_extract'), 'web_extract tool missing');
+  assert.ok(toolNames.has('session_search'), 'session_search tool missing');
+  assert.ok(toolNames.has('browser_navigate'), 'browser_navigate tool missing');
+  assert.ok(toolNames.has('browser_click'), 'browser_click tool missing');
+  assert.ok(toolNames.has('browser_type'), 'browser_type tool missing');
+  assert.ok(toolNames.has('browser_scroll'), 'browser_scroll tool missing');
   assert.ok(toolNames.has('clone_project'), 'clone_project tool missing');
   assert.ok(toolNames.has('host_bash'), 'host_bash tool missing');
   assert.ok(toolNames.has('check_ci_status'), 'check_ci_status tool missing');

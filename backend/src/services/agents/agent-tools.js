@@ -4,12 +4,13 @@
  * The survey (Liu et al., 2024) §5.1 treats Action (tools) as THE
  * component that extends an LLM's reach past its token output. Which
  * tools you expose defines what the agent can do. In a chat-app context
- * like siraGPT we deliberately avoid shell, network, and write tools:
+ * like siraGPT we deliberately avoid shell and write tools:
  *   - No `run_command` / shell: a chat app is the wrong place to
  *     execute arbitrary code with user-level privileges.
  *   - No `write_file`: agents can propose diffs; applying them is the
  *     user's decision.
- *   - No outbound HTTP: prevents SSRF and data exfiltration.
+ *   - Outbound HTTP is limited to hardened web_search/read_url/web_extract
+ *     adapters with SSRF, robots.txt, redirect and timeout controls.
  *
  * What agents CAN do through these tools:
  *   - read_file      — read a chunk already ingested into the user's
@@ -22,6 +23,10 @@
  *   - static_checks  — deterministic structural lints (complexity,
  *                      long functions, TODOs, etc.)
  *   - propose_patch  — output-only structured diff proposal
+ *   - web_search / web_extract — safe public-web research and scraping
+ *   - session_search / session_list / session_history — user-owned
+ *                      conversation continuity (search → browse → resume)
+ *   - browser_*     — browser automation only when the caller injects a driver
  *
  * Each tool declares an OpenAPI-ish `schema` field that the agent-core
  * renders into the system prompt. Tool handlers are `(args, ctx) => obs`
@@ -39,6 +44,83 @@ const webSearch = require('./web-search');
 function ensureCollection(ctx) {
   if (!ctx?.userId || !ctx?.collection) {
     throw new Error('tool requires ctx.userId and ctx.collection');
+  }
+}
+
+function safeBrowserRecord(record) {
+  if (!record || typeof record !== 'object') return record;
+  const args = record.action === 'type'
+    ? {
+        selector: record.args?.selector,
+        textLength: String(record.args?.text || '').length,
+      }
+    : record.args;
+  return { ...record, args };
+}
+
+function slimScreenshot(screenshot) {
+  if (!screenshot || typeof screenshot !== 'object') return null;
+  return {
+    id: screenshot.id || null,
+    mime: screenshot.mime || null,
+    bytes: Number.isFinite(Number(screenshot.bytes)) ? Number(screenshot.bytes) : null,
+  };
+}
+
+function resolveBrowserAgent(ctx = {}) {
+  if (ctx?.browserAgent && typeof ctx.browserAgent.run === 'function') {
+    return ctx.browserAgent;
+  }
+
+  let driver = null;
+  if (ctx?.browserDriver && typeof ctx.browserDriver.run === 'function') {
+    driver = ctx.browserDriver;
+  } else if (ctx?.browserAdapter && typeof ctx.browserAdapter.driver === 'function') {
+    driver = ctx.browserAdapter.driver();
+  } else if (ctx?.browser && typeof ctx.browser.driver === 'function') {
+    driver = ctx.browser.driver();
+  } else if (ctx?.browser && typeof ctx.browser.run === 'function') {
+    driver = ctx.browser;
+  }
+
+  if (!driver || typeof driver.run !== 'function') return null;
+
+  // eslint-disable-next-line global-require
+  const { createBrowserAgent, DEFAULT_POLICY } = require('../ai-product-os/browser-agent');
+  const agent = createBrowserAgent({
+    driver,
+    policy: ctx.browserPolicy || DEFAULT_POLICY,
+  });
+  if (ctx && typeof ctx === 'object') ctx.browserAgent = agent;
+  return agent;
+}
+
+async function runBrowserAction(action, args = {}, ctx = {}) {
+  try {
+    const browserAgent = resolveBrowserAgent(ctx);
+    if (!browserAgent) {
+      return {
+        ok: false,
+        action,
+        error: 'browser_driver_required',
+        message: 'No active browser driver/session is available for browser automation.',
+      };
+    }
+    const out = await browserAgent.run(action, args);
+    return {
+      ok: true,
+      action,
+      record: safeBrowserRecord(out?.record),
+      result: out?.result || null,
+      screenshot: slimScreenshot(out?.screenshot),
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      action,
+      error: err?.code || 'browser_action_failed',
+      message: String(err?.message || err).slice(0, 300),
+    };
   }
 }
 
@@ -1136,6 +1218,116 @@ const read_url = {
   },
 };
 
+const web_extract = {
+  name: 'web_extract',
+  description: 'Extract readable markdown from a public web page. Alias of read_url for web scraping workflows; use after web_search when snippets are insufficient. Applies the same SSRF, robots.txt, redirect, timeout and content-size protections.',
+  schema: {
+    url: 'string (required — absolute http(s) URL)',
+    maxChars: 'number (optional, default 12000, max 50000)',
+  },
+  async handler(args, ctx) {
+    return read_url.handler(args, ctx);
+  },
+};
+
+const session_search = {
+  name: 'session_search',
+  description: 'Search past chat conversations owned by the current user. Use when the user asks to find, recall, resume, or quote something from previous sessions. Returns matching message snippets with session ids and titles.',
+  schema: {
+    query: 'string (required — terms to search in past messages)',
+    limit: 'number (optional, default 8, max 25)',
+    sessionId: 'string (optional — restrict search to one chat session)',
+    includeArchived: 'boolean (optional, default false)',
+  },
+  async handler(args, ctx) {
+    // eslint-disable-next-line global-require
+    const { searchSessions } = require('../session-search');
+    return searchSessions(args || {}, ctx || {});
+  },
+};
+
+const session_list = {
+  name: 'session_list',
+  description: 'List the current user\u2019s recent chat sessions (id, title, model, message count, last-updated). Use when the user asks "what was I working on", "show my recent chats", or to find a prior thread to resume before answering.',
+  schema: {
+    limit: 'number (optional, default 10, max 50 — most-recently-updated first)',
+    includeArchived: 'boolean (optional, default false)',
+  },
+  async handler(args, ctx) {
+    // eslint-disable-next-line global-require
+    const { listSessions } = require('../session-recall');
+    return listSessions(args || {}, ctx || {});
+  },
+};
+
+const session_history = {
+  name: 'session_history',
+  description: 'Read the most recent messages from one of the user\u2019s own past chat sessions, in chronological order. Use after session_list/session_search to open a prior thread and recall exactly what was discussed before continuing the work. Only returns sessions owned by the current user.',
+  schema: {
+    sessionId: 'string (required — chat/session id, e.g. from session_list or session_search)',
+    limit: 'number (optional, default 20, max 50 — most recent messages)',
+  },
+  async handler(args, ctx) {
+    // eslint-disable-next-line global-require
+    const { fetchSessionHistory } = require('../session-recall');
+    return fetchSessionHistory(args || {}, ctx || {});
+  },
+};
+
+// ─── Browser automation (driver injected by caller) ────────────────────────
+
+const browser_navigate = {
+  name: 'browser_navigate',
+  description: 'Navigate the active browser session to an absolute http(s) URL. Requires ctx.browserAgent, ctx.browserDriver, ctx.browserAdapter, or ctx.browser to be injected by the caller.',
+  schema: {
+    url: 'string (required — absolute http(s) URL)',
+  },
+  async handler(args, ctx) {
+    return runBrowserAction('navigate', { url: args?.url }, ctx || {});
+  },
+};
+
+const browser_click = {
+  name: 'browser_click',
+  description: 'Click an element in the active browser session using a CSS selector.',
+  schema: {
+    selector: 'string (required — CSS selector to click)',
+  },
+  async handler(args, ctx) {
+    return runBrowserAction('click', { selector: args?.selector }, ctx || {});
+  },
+};
+
+const browser_type = {
+  name: 'browser_type',
+  description: 'Type text into an element in the active browser session using a CSS selector. The returned evidence redacts the typed text and reports only its length.',
+  schema: {
+    selector: 'string (required — CSS selector for the target input/textarea)',
+    text: 'string (required — text to type)',
+  },
+  async handler(args, ctx) {
+    return runBrowserAction('type', { selector: args?.selector, text: args?.text }, ctx || {});
+  },
+};
+
+const browser_scroll = {
+  name: 'browser_scroll',
+  description: 'Scroll the active browser session. Provide y for pixel delta, selector to scroll to an element, or neither to scroll down one viewport.',
+  schema: {
+    y: 'number (optional — vertical pixel delta; default 800 when selector is omitted)',
+    selector: 'string (optional — CSS selector to scroll into view)',
+  },
+  async handler(args, ctx) {
+    const payload = {};
+    const selector = typeof args?.selector === 'string' && args.selector.trim() ? args.selector.trim() : '';
+    if (selector) payload.selector = selector;
+    const y = Number(args?.y);
+    if (Number.isFinite(y)) payload.y = y;
+    if (!selector && !Number.isFinite(y)) payload.y = 800;
+    return runBrowserAction('scroll', payload, ctx || {});
+  },
+};
+
 // ─── GitHub search (repos / code / issues / users / topics) ─────────────────
 //
 // Mines open-source projects worldwide for libraries, prior art and reference
@@ -1216,7 +1408,10 @@ const scientific_search = {
 // ─── Registry ───────────────────────────────────────────────────────────────
 
 const ALL_TOOLS = [
-  read_file, list_files, search_docs, search_code, search_graph, get_symbol, static_checks, propose_patch, web_search, read_url, github_search, scientific_search,
+  read_file, list_files, search_docs, search_code, search_graph, get_symbol, static_checks, propose_patch,
+  web_search, read_url, web_extract, session_search, session_list, session_history,
+  browser_navigate, browser_click, browser_type, browser_scroll,
+  github_search, scientific_search,
 ];
 
 const TOOLS_BY_NAME = new Map(ALL_TOOLS.map(t => [t.name, t]));
@@ -1230,7 +1425,10 @@ module.exports = {
   TOOLS_BY_NAME,
   pick,
   // individual exports for tests
-  read_file, list_files, search_docs, search_code, search_graph, get_symbol, static_checks, propose_patch, web_search, read_url, github_search, scientific_search,
+  read_file, list_files, search_docs, search_code, search_graph, get_symbol, static_checks, propose_patch,
+  web_search, read_url, web_extract, session_search, session_list, session_history,
+  browser_navigate, browser_click, browser_type, browser_scroll,
+  github_search, scientific_search,
   STATIC_CHECKS,
   buildCommentCodeMask, // exported for tests
   stripStringLiterals,  // exported for tests

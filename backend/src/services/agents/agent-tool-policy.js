@@ -65,6 +65,7 @@ function buildForbiddenToolNames({
   })) {
     forbidden.add('web_search');
     forbidden.add('read_url');
+    forbidden.add('web_extract');
     forbidden.add('scientific_search');
   }
   return forbidden;

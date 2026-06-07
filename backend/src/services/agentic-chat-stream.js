@@ -65,6 +65,14 @@
   const STAGE_LABELS = {
     web_search: (args) => `Buscando "${truncate(args?.query, 60)}"`,
     read_url:   (args) => `Leyendo ${prettyDomain(args?.url) || 'fuente'}`,
+    web_extract: (args) => `Extrayendo ${prettyDomain(args?.url) || 'fuente'}`,
+    session_search: (args) => `Buscando sesiones sobre "${truncate(args?.query, 48)}"`,
+    session_list: () => 'Revisando tus sesiones recientes',
+    session_history: (args) => `Abriendo sesión ${truncate(args?.sessionId, 32)}`,
+    browser_navigate: (args) => `Navegando a ${prettyDomain(args?.url) || 'sitio'}`,
+    browser_click: (args) => `Click en ${truncate(args?.selector, 48)}`,
+    browser_type: (args) => `Escribiendo en ${truncate(args?.selector, 48)}`,
+    browser_scroll: () => 'Desplazando navegador',
     memory_recall: (args) => `Recordando contexto sobre "${truncate(args?.query, 48)}"`,
     clone_project: (args) => `Clonando ${truncate(args?.url, 60)}`,
     host_bash: (args) => `Ejecutando ${truncate(args?.command, 60)}`,
@@ -225,7 +233,7 @@ function modelSupportsFunctionCalling(provider, model) {
 }
 
 const SIMPLE_CHAT_PROMPT = /^\s*(hola|hi|hello|hey|buenas|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|gracias|thanks|ok|vale|listo|perfecto|sí|si|no|test|prueba)[.!?¡¿\s]*$/i;
-const AGENTIC_PROMPT_HINT = /\b(clon|repo|repositorio|github|git|commit|push|pr|pull ?request|deploy|despleg|codex|cursor|claude.?code|program|c[oó]digo|refactor|mejora|arregla|corrige|no.?funciona|no.?sirve|todav[ií]a|sigue|contin[uú]a|investiga|busca|fuentes?|cita|web|internet|actual|reciente|pdf|documento|archivo|excel|word|ppt|tabla|analiza|compara|genera.?archivo|descargable|aut[oó]nom|background|segundo.?plano|meses?|semanas?|\b\/goal\b|\b\/plan\b)\b/i;
+const AGENTIC_PROMPT_HINT = /\b(clon|repo|repositorio|github|git|commit|push|pr|pull ?request|deploy|despleg|codex|cursor|claude.?code|program|c[oó]digo|refactor|mejora|arregla|corrige|no.?funciona|no.?sirve|todav[ií]a|sigue|contin[uú]a|investiga|busca|fuentes?|cita|web|internet|actual|reciente|pdf|documento|archivo|excel|word|ppt|tabla|analiza|compara|genera.?archivo|descargable|aut[oó]nom|background|segundo.?plano|meses?|semanas?|historial|sesiones?|conversaci[oó]n(?:es)?|navegador|browser|naveg|scrap|rasp|extrae.?web|click|clic|scroll|desplaz|\b\/goal\b|\b\/plan\b)\b/i;
 
 /**
  * Decide whether a normal chat turn should enter the expensive agentic
@@ -301,7 +309,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
    * lib/agent-task-service.ts `initialAgentState` so the existing
    * reducers / renderers work without modification.
    */
-  function freshState(toolNames = ['web_search', 'read_url']) {
+  function freshState(toolNames = ['web_search', 'read_url', 'web_extract', 'session_search', 'session_list', 'session_history']) {
     return {
       meta: { goal: '', model: '', tools: toolNames },
       steps: [],
@@ -479,8 +487,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       '  5. Si las pruebas pasan, haz `git add`, `git commit`, `git push` al repositorio.',
       '  6. Usa `check_ci_status` o `monitor_ci` para verificar GitHub Actions hasta verde; si CI falla, informa el fallo exacto y no afirmes que quedó en verde.',
       'Usa `memory_recall` cuando el pedido dependa de preferencias o contexto persistente del usuario.',
+      'Para continuidad entre conversaciones (el usuario dice "lo que hablamos antes", "retoma", "¿en qué quedamos?", "mis chats", "la sesión de ayer"): usa `session_list` para ver sus sesiones recientes, `session_search` para encontrar un tema concreto, y `session_history` para abrir una sesión por su id y leer el hilo completo antes de continuar. Solo accedes a sesiones del propio usuario.',
       'Usa `rag_retrieve`, `self_rag_answer` o `docintel_*` cuando el usuario mencione archivos, documentos, PDFs, tablas o conocimiento privado.',
-      'Si la respuesta depende de hechos que pueden haber cambiado, datos en tiempo real, cifras, fechas, precios, noticias, o de cualquier cosa que no sepas con certeza absoluta, DEBES usar `web_search` (y luego `read_url` sobre las mejores fuentes) ANTES de responder. Nunca respondas "no tengo información", "no tengo acceso a internet" o "mis datos llegan hasta cierta fecha" sin haber ejecutado primero `web_search`. Cita las fuentes con enlaces markdown.',
+      'Si la respuesta depende de hechos que pueden haber cambiado, datos en tiempo real, cifras, fechas, precios, noticias, o de cualquier cosa que no sepas con certeza absoluta, DEBES usar `web_search` (y luego `web_extract` o `read_url` sobre las mejores fuentes) ANTES de responder. Nunca respondas "no tengo información", "no tengo acceso a internet" o "mis datos llegan hasta cierta fecha" sin haber ejecutado primero `web_search`. Cita las fuentes con enlaces markdown.',
       'Para calculos, transformaciones de datos o verificacion deterministica, usa `python_exec`. Cuando generes codigo no trivial, usa `run_tests` antes de finalizar.',
       'Cuando el usuario pida un archivo descargable, usa `create_document` y despues `verify_artifact`; no finalices si la verificacion muestra un archivo vacio o incorrecto.',
       'Cuando el usuario pida editar su Word/Excel/PPT/PDF subido, trata el archivo original como solo lectura: crea una nueva copia en el mismo formato, conserva estructura/logos/tablas/formulas/hojas/encabezados/diseño tanto como sea posible, y modifica solo lo solicitado.',
@@ -653,6 +662,76 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
           maxChars: { type: 'integer', minimum: 500, maximum: 50000, description: 'Markdown cap. Default 12000.' },
         },
         required: ['url'],
+        additionalProperties: false,
+      }),
+      adaptAgentTool(agentTools.web_extract, {
+        type: 'object',
+        properties: {
+          url:      { type: 'string', description: 'Absolute http(s) URL to extract as readable markdown.' },
+          maxChars: { type: 'integer', minimum: 500, maximum: 50000, description: 'Markdown cap. Default 12000.' },
+        },
+        required: ['url'],
+        additionalProperties: false,
+      }),
+      adaptAgentTool(agentTools.session_search, {
+        type: 'object',
+        properties: {
+          query:           { type: 'string', description: 'Terms to search in the user’s past chat messages.' },
+          limit:           { type: 'integer', minimum: 1, maximum: 25, description: 'How many matching snippets to return. Default 8.' },
+          sessionId:       { type: 'string', description: 'Optional chat/session id to restrict the search.' },
+          includeArchived: { type: 'boolean', description: 'Include archived sessions. Default false.' },
+        },
+        required: ['query'],
+        additionalProperties: false,
+      }),
+      adaptAgentTool(agentTools.session_list, {
+        type: 'object',
+        properties: {
+          limit:           { type: 'integer', minimum: 1, maximum: 50, description: 'How many recent sessions to return, newest first. Default 10.' },
+          includeArchived: { type: 'boolean', description: 'Include archived sessions. Default false.' },
+        },
+        additionalProperties: false,
+      }),
+      adaptAgentTool(agentTools.session_history, {
+        type: 'object',
+        properties: {
+          sessionId: { type: 'string', description: 'Chat/session id to open (e.g. from session_list or session_search).' },
+          limit:     { type: 'integer', minimum: 1, maximum: 50, description: 'How many recent messages to return, in chronological order. Default 20.' },
+        },
+        required: ['sessionId'],
+        additionalProperties: false,
+      }),
+      adaptAgentTool(agentTools.browser_navigate, {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'Absolute http(s) URL to open in the active browser session.' },
+        },
+        required: ['url'],
+        additionalProperties: false,
+      }),
+      adaptAgentTool(agentTools.browser_click, {
+        type: 'object',
+        properties: {
+          selector: { type: 'string', description: 'CSS selector to click in the active browser session.' },
+        },
+        required: ['selector'],
+        additionalProperties: false,
+      }),
+      adaptAgentTool(agentTools.browser_type, {
+        type: 'object',
+        properties: {
+          selector: { type: 'string', description: 'CSS selector for the input/textarea target.' },
+          text:     { type: 'string', description: 'Text to type into the target.' },
+        },
+        required: ['selector', 'text'],
+        additionalProperties: false,
+      }),
+      adaptAgentTool(agentTools.browser_scroll, {
+        type: 'object',
+        properties: {
+          y:        { type: 'integer', description: 'Vertical pixel delta. Default 800 when selector is omitted.' },
+          selector: { type: 'string', description: 'CSS selector to scroll into view.' },
+        },
         additionalProperties: false,
       }),
       // SUNAT / RENIEC Perú lookup. The logic lives in the filesystem skill
