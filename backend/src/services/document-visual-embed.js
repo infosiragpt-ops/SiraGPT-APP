@@ -740,6 +740,19 @@ function visualSpecHasContent(spec) {
 
 // Detect a visual request, build its spec (LLM or inline), and embed it.
 // Returns { added, buffer, spec, reason }. Never throws on "no visual".
+// Next APA-style number for a caption word ("Figura"/"Tabla"), based on captions
+// already present in the document (so chained edits keep incrementing).
+function nextCaptionNumber(buffer, word) {
+  try {
+    const xml = new PizZip(buffer).file('word/document.xml')?.asText() || '';
+    const text = (xml.match(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g) || []).map((t) => t.replace(/<[^>]+>/g, '')).join(' ');
+    const nums = [...text.matchAll(new RegExp(`\\b${word}\\s+(\\d+)`, 'gi'))].map((m) => Number(m[1])).filter(Number.isFinite);
+    return (nums.length ? Math.max(...nums) : 0) + 1;
+  } catch {
+    return 1;
+  }
+}
+
 async function addVisualFromRequest(buffer, { requestText = '', sourceText = '', signal, theme = 'corporate' } = {}) {
   const detection = detectVisualRequest(requestText);
   if (!detection.wantsVisual) return { added: false, buffer, reason: 'no_visual_intent' };
@@ -753,8 +766,11 @@ async function addVisualFromRequest(buffer, { requestText = '', sourceText = '',
 
   if (!isVisualAvailable()) return { added: false, buffer, reason: 'renderer_unavailable', spec };
   spec.theme = spec.theme || theme;
+  const figure = nextCaptionNumber(buffer, 'Figura');
+  const baseTitle = String(spec.title || '').trim();
+  spec.caption = baseTitle ? `Figura ${figure}. ${baseTitle}` : `Figura ${figure}`;
   const out = await addChartToDocxBuffer(buffer, spec);
-  return { added: true, buffer: out, spec };
+  return { added: true, buffer: out, spec: { ...spec, caption: spec.caption } };
 }
 
 module.exports = {

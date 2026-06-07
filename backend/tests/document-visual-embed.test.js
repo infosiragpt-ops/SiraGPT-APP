@@ -211,6 +211,23 @@ describe('document-visual-embed — request → visual intent', () => {
     }
   });
 
+  it('auto-numbers figures APA-style (Figura N. <title>)', async (t) => {
+    if (!isVisualAvailable()) { t.skip('sharp not available'); return; }
+    const savedKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      const docx = await makeDocxBuffer();
+      const res = await addVisualFromRequest(docx, { requestText: 'agrega un gráfico de barras con Lima 48, Arequipa 22' });
+      assert.match(res.spec.caption, /^Figura 1\b/);
+      assert.match(new PizZip(res.buffer).file('word/document.xml').asText(), /Figura 1\b/);
+      const res2 = await addVisualFromRequest(res.buffer, { requestText: 'agrega un gráfico de pastel con A 60, B 40' });
+      assert.match(res2.spec.caption, /^Figura 2\b/);
+    } finally {
+      if (savedKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = savedKey;
+    }
+  });
+
   it('is a no-op for non-visual requests and for visual requests without data', async () => {
     const docx = await makeDocxBuffer();
     const savedKey = process.env.OPENAI_API_KEY;

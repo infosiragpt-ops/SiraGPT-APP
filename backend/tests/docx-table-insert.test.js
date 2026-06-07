@@ -83,4 +83,21 @@ describe('docx-table-insert — native table', () => {
       else process.env.OPENAI_API_KEY = savedKey;
     }
   });
+
+  it('auto-numbers tables APA-style and increments across inserts', async () => {
+    const savedKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      const docx = await makeDocxBuffer();
+      const md = 'agrega una tabla: | A | B |\n| 1 | 2 |';
+      const first = await addTableFromRequest(docx, { requestText: md });
+      assert.match(first.spec.title, /^Tabla 1\b/);
+      assert.match(new PizZip(first.buffer).file('word/document.xml').asText(), /Tabla 1\b/);
+      const second = await addTableFromRequest(first.buffer, { requestText: md });
+      assert.match(second.spec.title, /^Tabla 2\b/);
+    } finally {
+      if (savedKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = savedKey;
+    }
+  });
 });

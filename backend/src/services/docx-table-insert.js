@@ -165,6 +165,18 @@ async function extractTableSpecWithLLM({ requestText, sourceText, signal }) {
   }
 }
 
+// Next APA-style "Tabla N" number based on captions already in the document.
+function nextTableNumber(buffer) {
+  try {
+    const xml = new PizZip(buffer).file('word/document.xml')?.asText() || '';
+    const text = (xml.match(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g) || []).map((t) => t.replace(/<[^>]+>/g, '')).join(' ');
+    const nums = [...text.matchAll(/\bTabla\s+(\d+)/gi)].map((m) => Number(m[1])).filter(Number.isFinite);
+    return (nums.length ? Math.max(...nums) : 0) + 1;
+  } catch {
+    return 1;
+  }
+}
+
 // Detect a "create a table" request, build its spec (inline parse or LLM), and
 // insert a native table. Returns { added, buffer, reason }. Never throws on "no".
 async function addTableFromRequest(buffer, { requestText = '', sourceText = '', signal } = {}) {
@@ -172,8 +184,11 @@ async function addTableFromRequest(buffer, { requestText = '', sourceText = '', 
   let spec = parseTableFromText(requestText);
   if (!tableSpecHasContent(spec)) spec = await extractTableSpecWithLLM({ requestText, sourceText, signal });
   if (!tableSpecHasContent(spec)) return { added: false, buffer, reason: 'no_data' };
-  const out = insertTableIntoDocxBuffer(buffer, { headers: spec.headers, rows: spec.rows, title: spec.title || '' });
-  return { added: true, buffer: out, spec: { headers: spec.headers, rowCount: spec.rows.length, title: spec.title || '' } };
+  const number = nextTableNumber(buffer);
+  const base = String(spec.title || '').trim();
+  const caption = base ? `Tabla ${number}. ${base}` : `Tabla ${number}`;
+  const out = insertTableIntoDocxBuffer(buffer, { headers: spec.headers, rows: spec.rows, title: caption });
+  return { added: true, buffer: out, spec: { headers: spec.headers, rowCount: spec.rows.length, title: caption } };
 }
 
 module.exports = {
