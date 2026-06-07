@@ -619,6 +619,60 @@ Both searches are now first-class tools the chat agent can invoke:
 `github_search` and `scientific_search` (registered in `agents/agent-tools.js`,
 wired into `agentic-chat-stream.js` `baseWebTools`).
 
+## Brave Search + X (Twitter) search — added 2026-06-07 (production-hardened)
+
+Two more discovery providers/tools, both key-gated and degrading gracefully
+to the existing free, key-less path when unconfigured. No new npm deps. Both
+mirror the `github-search` resilience conventions (transient-only `withRetry`).
+
+### Brave Search (web_search provider)
+- **File**: `src/services/agents/web-search/providers/brave.js` — added to the
+  `web_search` adapter chain (`web-search/index.js`) at **priority 8** (head of
+  the general-web tier, before DuckDuckGo=10). Gated on `BRAVE_SEARCH_API_KEY`
+  (alias `BRAVE_API_KEY`): the provider's `enabled` getter returns false with no
+  key, so `sortProviders` skips it and the chain falls through to the free
+  **DuckDuckGo → Wikipedia → SearXNG** providers. Header auth
+  (`X-Subscription-Token`), locale → `search_lang`/`country`, HTML-tag stripping,
+  dedupe. Returns `[]` (not a throw) on empty results.
+- **Hardening**: transient-only `withRetry` (429/5xx/network/timeout retried,
+  other 4xx never — `classifyBraveError` + `BraveHttpError`); env
+  `BRAVE_SEARCH_RETRY_DISABLED` / `_MAX_RETRIES` / `_RETRY_BASE_MS` /
+  `_TIMEOUT_MS`. `freshness` time filter (`pd|pw|pm|py` or `day|week|month|year`,
+  bilingual, or an ISO date range) **threaded end-to-end** from the `web_search`
+  tool → adapter → provider (cache bucket keeps fresh/non-fresh distinct).
+  `extra_snippets` merged into snippets; optional `news` results folded in
+  (`source:'brave-news'`, `age` field) when freshness/news requested. Internal
+  abort timeout for direct (non-adapter) callers.
+- **searchBrain**: the universal catalog's `brave-search` entry
+  (`searchBrain/universal/providers/catalog.js`) flipped from `disabled(...)` to
+  a real key-gated provider (reads `keys.brave` or env).
+- **Tests**: `tests/web-search-brave.test.js` (19), `tests/web-search-adapter.test.js`,
+  + 2 cases in `tests/searchbrain-economic-providers.test.js`.
+
+### X (Twitter) search — `x_search` tool + `/api/x-search` route
+- **File**: `src/services/x-search.js` — xAI **Live Search** wrapper. Forces
+  `search_parameters: { mode:'on', sources:[{type:'x'}], return_citations:true }`
+  on the OpenAI-compatible `/chat/completions` endpoint so Grok retrieves recent
+  X posts; parses the summary + top-level `citations[]` into `{ url, source }`
+  (host-aware `x` vs `web` tagging). Key-gated on `XAI_API_KEY` (base
+  `https://api.x.ai/v1`, model `X_SEARCH_MODEL || XAI_GROK_MODEL || grok-4.3`).
+  With no key `isConfigured()` is false and `search()` returns
+  `{ configured:false, note }` WITHOUT any network call. Injectable `fetchImpl`;
+  query-free errors.
+- **Hardening**: transient-only `withRetry` (`classifyXSearchError` +
+  `XSearchHttpError`; env `X_SEARCH_RETRY_DISABLED` / `_MAX_RETRIES` /
+  `_RETRY_BASE_MS`); optional extra `sources` (web/news) alongside X + `mode`
+  override; in-memory metrics (`x-search-metrics.js`: searches/posts/errors/
+  unconfigured + Prometheus text).
+- **Tool**: registered in `agents/agent-tools.js` (`x_search`, args
+  `query`/`maxResults`/`handles`/`fromDate`/`toDate`), wired into
+  `agentic-chat-stream.js` `baseWebTools`.
+- **Route**: `src/routes/x-search.js` mounted `/api/x-search` (parity with
+  github/scientific-search): `POST /` (auth + express-validator), `GET /health`,
+  `GET /metrics`, `GET /metrics.prom`. API key never leaked in any payload.
+- **Tests**: `tests/x-search.test.js` (25), `tests/x-search-metrics.test.js` (8),
+  `tests/x-search-route.test.js` (5) — all offline.
+
 ## siraGPT Builder — constructor full-stack tipo Replit (added 2026-06-05)
 
 Constructor de apps estilo Replit/Lovable/bolt dentro de SiraGPT: el usuario

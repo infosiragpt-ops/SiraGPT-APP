@@ -1166,18 +1166,20 @@ const propose_patch = {
 
 const web_search = {
   name: 'web_search',
-  description: 'Search the open web through free, key-less providers (DuckDuckGo → Wikipedia → SearXNG). Use only when the answer needs information past the model cutoff or specific recent facts. Returns up to maxResults normalised hits.',
+  description: 'Search the open web. Uses Brave Search when BRAVE_SEARCH_API_KEY is set (freshest, highest quality) and otherwise free, key-less providers (DuckDuckGo → Wikipedia → SearXNG). Use when the answer needs information past the model cutoff or specific recent facts. Pass freshness ("pd"=day, "pw"=week, "pm"=month, "py"=year) for recent/news queries. Returns up to maxResults normalised hits.',
   schema: {
     query: 'string (required — the search query)',
     maxResults: 'number (optional, default 5, max 15)',
     locale: 'string (optional — BCP47-ish like "es-es" or "en"; nudges provider region/language)',
+    freshness: 'string (optional — recency window: pd|pw|pm|py or day|week|month|year; honoured by Brave)',
   },
   async handler(args) {
     const query = typeof args?.query === 'string' ? args.query.trim() : '';
     if (!query) return { error: 'missing "query"' };
     const maxResults = Math.max(1, Math.min(Number(args?.maxResults) || 5, 15));
     const locale = typeof args?.locale === 'string' ? args.locale : null;
-    const { results, provider, cached, attempts } = await webSearch.search(query, { maxResults, locale });
+    const freshness = typeof args?.freshness === 'string' ? args.freshness : undefined;
+    const { results, provider, cached, attempts } = await webSearch.search(query, { maxResults, locale, freshness });
     // Return structured JSON (not a concatenated string) so the model can
     // cite individual URLs rather than treat the whole response as prose.
     return {
@@ -1454,6 +1456,45 @@ const scientific_search = {
   },
 };
 
+// ─── X (Twitter) live search via xAI Live Search ────────────────────────────
+//
+// Real-time X/Twitter retrieval. Key-gated on XAI_API_KEY: with no key the
+// tool returns `{ configured:false, note }` instead of failing, so the agent
+// can tell the user it needs configuration rather than hallucinating posts.
+
+const x_search = {
+  name: 'x_search',
+  description: 'Search X (Twitter) in real time for recent posts about a topic, person, event or $ticker. Use for breaking news, public sentiment or what people are saying right now on X. Requires XAI_API_KEY (xAI Live Search); when unconfigured it returns configured:false with a note — never invent posts. Returns a concise summary plus the source post URLs (citations).',
+  schema: {
+    query: 'string (required — what to look up on X/Twitter)',
+    maxResults: 'number (optional, default 15, max 30)',
+    handles: 'array (optional — restrict to specific X handles, without the @)',
+    fromDate: 'string (optional — ISO date YYYY-MM-DD lower bound)',
+    toDate: 'string (optional — ISO date YYYY-MM-DD upper bound)',
+  },
+  async handler(args) {
+    const query = typeof args?.query === 'string' ? args.query.trim() : '';
+    if (!query) return { error: 'missing "query"' };
+    // eslint-disable-next-line global-require
+    const xSearch = require('../x-search');
+    const out = await xSearch.search(query, {
+      maxResults: Math.max(1, Math.min(Number(args?.maxResults) || 15, 30)),
+      handles: Array.isArray(args?.handles) ? args.handles : undefined,
+      fromDate: typeof args?.fromDate === 'string' ? args.fromDate : undefined,
+      toDate: typeof args?.toDate === 'string' ? args.toDate : undefined,
+    });
+    return {
+      configured: out.configured,
+      query: out.query,
+      model: out.model,
+      summary: out.summary,
+      count: Array.isArray(out.results) ? out.results.length : 0,
+      results: out.results || [],
+      note: out.note,
+    };
+  },
+};
+
 // ─── Registry ───────────────────────────────────────────────────────────────
 
 const ALL_TOOLS = [
@@ -1461,7 +1502,7 @@ const ALL_TOOLS = [
   web_search, read_url, web_extract, session_search, session_list, session_history,
   session_send, session_spawn,
   browser_navigate, browser_click, browser_type, browser_scroll,
-  github_search, scientific_search,
+  github_search, scientific_search, x_search,
 ];
 
 const TOOLS_BY_NAME = new Map(ALL_TOOLS.map(t => [t.name, t]));
@@ -1479,7 +1520,7 @@ module.exports = {
   web_search, read_url, web_extract, session_search, session_list, session_history,
   session_send, session_spawn,
   browser_navigate, browser_click, browser_type, browser_scroll,
-  github_search, scientific_search,
+  github_search, scientific_search, x_search,
   STATIC_CHECKS,
   buildCommentCodeMask, // exported for tests
   stripStringLiterals,  // exported for tests

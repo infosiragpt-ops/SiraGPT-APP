@@ -49,6 +49,33 @@ test("guardedSearch runs the current query closure (no stale-closure caching acr
   assert.deepStrictEqual(second, [{ q: "second" }]);
 });
 
+test("brave-search provider is registered exactly once and is key-gated", () => {
+  const brave = byId("brave-search");
+  assert.strictEqual(brave.length, 1, "brave-search must be registered exactly once (no leftover disabled stub)");
+  assert.strictEqual(brave[0].category, "web");
+  assert.strictEqual(brave[0].requiresKey, true);
+  assert.strictEqual(typeof brave[0].search, "function");
+});
+
+test("brave-search returns [] gracefully when no key is configured", async () => {
+  const prevPrimary = process.env.BRAVE_SEARCH_API_KEY;
+  const prevAlias = process.env.BRAVE_API_KEY;
+  const prevBrain = process.env.SEARCH_BRAIN_BRAVE_KEY;
+  delete process.env.BRAVE_SEARCH_API_KEY;
+  delete process.env.BRAVE_API_KEY;
+  delete process.env.SEARCH_BRAIN_BRAVE_KEY;
+  try {
+    const brave = byId("brave-search")[0];
+    assert.deepStrictEqual(await brave.search("ai news", {}), []);
+    // empty/invalid query also short-circuits
+    assert.deepStrictEqual(await brave.search("", { keys: { brave: "k" } }), []);
+  } finally {
+    if (prevPrimary !== undefined) process.env.BRAVE_SEARCH_API_KEY = prevPrimary;
+    if (prevAlias !== undefined) process.env.BRAVE_API_KEY = prevAlias;
+    if (prevBrain !== undefined) process.env.SEARCH_BRAIN_BRAVE_KEY = prevBrain;
+  }
+});
+
 test("no duplicate provider ids exist in the catalog", () => {
   const ids = catalogProviders.map((p) => p.id);
   const dupes = ids.filter((id, i) => ids.indexOf(id) !== i);

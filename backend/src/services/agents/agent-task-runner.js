@@ -1418,7 +1418,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   if (!user?.id) throw new Error('agent task payload missing user.id');
   const plainTranscriptionRequest = isPlainTranscriptionRequest(goal);
   const hasAttachedFiles = Array.isArray(files) && files.length > 0;
-  const wantsSourcePreservingEdit = isSourcePreservingEditRequest(displayGoal || goal, files);
+  let wantsSourcePreservingEdit = isSourcePreservingEditRequest(displayGoal || goal, files);
   const deterministicVancouverRequest = isVancouverMatrixWordRequest(`${goal || ''} ${displayGoal || ''}`) &&
     hasAttachedFiles;
   if (!process.env.OPENAI_API_KEY && !plainTranscriptionRequest && !deterministicVancouverRequest && !hasAttachedFiles) {
@@ -1987,8 +1987,14 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           prompt: goal,
           displayPrompt: displayGoal,
         });
-        if (!preserved?.artifact) {
-          throw new Error('No encontré un archivo editable compatible asociado a este turno.');
+        if (preserved === null) {
+          // No había archivo adjunto ni artefacto previo que conservar: la
+          // petición es en realidad un documento NUEVO. Señalamos el caso con
+          // un sentinel para que el catch lo trate como "generar desde cero"
+          // (fallthrough) en vez de rechazar la creación del documento.
+          const fresh = new Error('source_preserving_no_base');
+          fresh.__fallthroughFreshDocument = true;
+          throw fresh;
         }
         if (!preserved.validation?.passed) {
           const unresolved = preserved.validation?.details?.agenticCycle?.unresolvedChecks || [];
@@ -2055,26 +2061,35 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           },
         });
       } catch (err) {
-        emit({ type: 'step_done', id: currentStepId, ok: false });
-        currentStepId = null;
-        emit({
-          type: 'quality_gate',
-          gate: 'source_preserving_document_edit',
-          label: 'Edición preservadora no disponible',
-          passed: false,
-          summary: err?.message || 'No se pudo editar el archivo original.',
-        });
-        return finishDeterministicTask({
-          finalMarkdown: `No pude editar el archivo original sin cambiarlo: ${err?.message || 'error desconocido'}. No generé un documento nuevo para evitar entregarte contenido ajeno al archivo.`,
-          stoppedReason: 'source_preserving_document_edit_failed',
-          steps: stepIdCounter,
-          artifactsList: [],
-          metadata: {
-            sourcePreservingEdit: true,
-            sourcePreservingError: err?.message || 'unknown_error',
-            sourceFileIds: files,
-          },
-        });
+        if (err && err.__fallthroughFreshDocument) {
+          // Sin archivo base que conservar: cerramos el paso de edición y
+          // dejamos que el flujo genere un documento nuevo más abajo en lugar
+          // de rechazar la creación del documento.
+          wantsSourcePreservingEdit = false;
+          emit({ type: 'step_done', id: currentStepId, ok: true });
+          currentStepId = null;
+        } else {
+          emit({ type: 'step_done', id: currentStepId, ok: false });
+          currentStepId = null;
+          emit({
+            type: 'quality_gate',
+            gate: 'source_preserving_document_edit',
+            label: 'Edición preservadora no disponible',
+            passed: false,
+            summary: err?.message || 'No se pudo editar el archivo original.',
+          });
+          return finishDeterministicTask({
+            finalMarkdown: `No pude editar el archivo original sin cambiarlo: ${err?.message || 'error desconocido'}. No generé un documento nuevo para evitar entregarte contenido ajeno al archivo.`,
+            stoppedReason: 'source_preserving_document_edit_failed',
+            steps: stepIdCounter,
+            artifactsList: [],
+            metadata: {
+              sourcePreservingEdit: true,
+              sourcePreservingError: err?.message || 'unknown_error',
+              sourceFileIds: files,
+            },
+          });
+        }
       }
     }
 
@@ -2800,7 +2815,10 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             });
             finalMarkdown = preserved.content;
           } else {
-            finalMarkdown = 'No encontré un archivo editable compatible asociado a este turno para modificarlo sin regenerarlo. No generé un documento nuevo para evitar cambiar tu archivo base.';
+            // preserved === null: no hay archivo base que conservar, así que
+            // generamos un documento NUEVO más abajo en vez de rechazar la
+            // petición.
+            wantsSourcePreservingEdit = false;
           }
         } catch (err) {
           emit({
@@ -2815,7 +2833,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       }
     }
 
-    if (documentPolicy.autoGenerate && artifacts.length === 0 && !isSourcePreservingEditRequest(displayGoal || goal, files)) {
+    if (documentPolicy.autoGenerate && artifacts.length === 0 && !wantsSourcePreservingEdit) {
       try {
         const generated = await generateAutoDocument({
           task,

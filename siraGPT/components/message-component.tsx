@@ -2702,15 +2702,19 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                     className="h-6 w-6"
                                     onClick={() => {
                                         copyMarkdownToWordClipboard(formatAgentTaskUserContent(message.content))
-                                            .then(() => toast.success("Copiado con formato para Word"))
+                                            .then(() => {
+                                                setIsCopied(true);
+                                                setTimeout(() => setIsCopied(false), 2000);
+                                                toast.success("Copiado con formato para Word");
+                                            })
                                             .catch((err) => {
                                                 console.error("[copy] failed:", err)
                                                 toast.error("No se pudo copiar")
                                             })
                                     }}
-                                    title="Copiar"
+                                    title={isCopied ? "Copiado" : "Copiar"}
                                 >
-                                    <Copy size={14} />
+                                    {isCopied ? <Check size={14} strokeWidth={2.25} className="text-emerald-400" /> : <Copy size={14} />}
                                 </Button>
                                 <Button
                                     variant="ghost"

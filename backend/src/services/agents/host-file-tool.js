@@ -17,8 +17,11 @@ const {
   defaultProjectsDir,
   describeWorkspaceRoots,
   expandHome,
+  isPathProtected,
   normalizeRoot,
 } = require('./workspace-roots');
+
+const WRITE_ACTIONS = new Set(['write', 'append', 'replace']);
 
 const DEFAULT_WORKING_DIR = defaultProjectsDir();
 const ALLOWED_DIRS = new Set(allowedWorkspaceRoots());
@@ -120,6 +123,12 @@ async function hostFile(args = {}, ctx = {}) {
   }
   if (isBlockedSecretPath(filePath)) {
     return { ok: false, error: 'Por seguridad no se leen ni editan archivos de secretos como .env o llaves privadas.' };
+  }
+  if (WRITE_ACTIONS.has(action) && isPathProtected(filePath)) {
+    return {
+      ok: false,
+      error: 'Esta ruta pertenece al código fuente del propio SiraGPT y es de solo lectura para el agente. Trabaja en ~/Desktop/sira-projects. (Para permitir auto-modificación, configura SIRAGPT_ALLOW_SELF_MODIFY=1.)',
+    };
   }
 
   ctx.onEvent?.({ type: 'tool_call', tool: 'host_file', preview: `${action || 'unknown'} ${filePath}` });

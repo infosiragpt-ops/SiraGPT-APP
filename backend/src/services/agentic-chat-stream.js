@@ -531,6 +531,15 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       } catch (_) { /* never let UI plumbing crash a tool */ }
     }
 
+    // Authorization chokepoint for the interactive chat. Without this the
+    // high-risk host tools (host_bash/host_file/clone_project) ran fail-open
+    // for any ai:generate user. Low-risk tools are allow-by-default so the
+    // ~80 web/RAG/visual tools keep working untouched.
+    const { createChatToolGate } = require('./agents/chat-tool-policy');
+    const toolGate = createChatToolGate({
+      onAudit: (info) => { try { onEvent({ type: 'tool_authorized', tool: info.tool }); } catch (_) { /* noop */ } },
+    });
+
     let stepCounter = 0;
     const result = await reactAgent.run(openai, {
       query: userQuery,
@@ -540,7 +549,16 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       maxRuntimeMs: maxRuntimeOverride,
       extraSystem,
       initialToolChoice,
-      ctx: { ...toolContext, signal, onEvent },
+      ctx: {
+        ...toolContext,
+        signal,
+        onEvent,
+        toolGate,
+        toolAuthCtx: {
+          userId: toolContext.userId || null,
+          clearance: toolContext.clearance || null,
+        },
+      },
       finalizeGuard: executionProfile.requiredTools.length
         ? ({ steps, unavailableTools }) => validateFinalize(executionProfile, steps, { unavailableTools })
         : null,
@@ -668,6 +686,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
           query:      { type: 'string', description: 'Search query, 2-12 keywords.' },
           maxResults: { type: 'integer', minimum: 1, maximum: 15, description: 'How many hits to return. Default 5.' },
           locale:     { type: 'string', description: 'BCP-47 hint, e.g. "es-es".' },
+          freshness:  { type: 'string', description: 'Recency window for fresh/news queries: pd|pw|pm|py (day/week/month/year). Honoured by Brave.' },
         },
         required: ['query'],
         additionalProperties: false,
@@ -827,6 +846,18 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
           query:     { type: 'string', description: 'Research topic or keywords.' },
           limit:     { type: 'integer', minimum: 1, maximum: 25, description: 'Per-provider cap. Default 8.' },
           providers: { type: 'array', items: { type: 'string' }, description: 'Subset like ["arxiv","pubmed"]. Default all.' },
+        },
+        required: ['query'],
+        additionalProperties: false,
+      }),
+      adaptAgentTool(agentTools.x_search, {
+        type: 'object',
+        properties: {
+          query:      { type: 'string', description: 'What to search on X (Twitter): topic, person, event or $ticker.' },
+          maxResults: { type: 'integer', minimum: 1, maximum: 30, description: 'How many X posts to retrieve. Default 15.' },
+          handles:    { type: 'array', items: { type: 'string' }, description: 'Restrict to specific X handles (without @).' },
+          fromDate:   { type: 'string', description: 'ISO date YYYY-MM-DD lower bound for posts.' },
+          toDate:     { type: 'string', description: 'ISO date YYYY-MM-DD upper bound for posts.' },
         },
         required: ['query'],
         additionalProperties: false,

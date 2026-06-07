@@ -2272,6 +2272,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
+    // Register this chat as actively streaming so the UI lights up the
+    // thinking placeholder (animated SVG) and the stop-chat button —
+    // same path the normal send flow uses via markChatStreaming.
+    markChatStreaming(currentChat.id, streamId, controller);
+
     try {
       // Update the message in the backend. This should also handle deleting subsequent messages.
       await apiClient.editUserMessage(messageId, { content: newContent });
@@ -2322,6 +2327,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           editBuffer.dispose();
           if (streamBufferRef.current === editBuffer) streamBufferRef.current = null;
           if (!controller.signal.aborted && !pendingStop) {
+            markChatIdle(currentChat.id, streamId);
             setIsLoading(false);
             setIsStreaming(false);
             setCurrentStreamId(null);
@@ -2403,6 +2409,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               });
             }
 
+            markChatIdle(currentChat.id, streamId);
             setIsLoading(false);
             setIsStreaming(false);
             setCurrentStreamId(null);
@@ -2434,6 +2441,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       console.error("Failed to edit and regenerate:", error);
       streamBufferRef.current?.dispose();
       streamBufferRef.current = null;
+      markChatIdle(currentChat.id, streamId);
       setIsLoading(false);
       setIsStreaming(false);
       setCurrentStreamId(null);
@@ -2446,7 +2454,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // latest closure is captured at call time, so listing it would
     // re-create the callback on every keystroke that flips the flag.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentChat, isLoading, selectProvider, selectedModel, selectChat, setCurrentChat, setIsLoading, setIsStreaming, setCurrentStreamId]);
+  }, [currentChat, isLoading, selectProvider, selectedModel, selectChat, setCurrentChat, setIsLoading, setIsStreaming, setCurrentStreamId, markChatStreaming, markChatIdle]);
 
   const pollVideoStatus = useCallback((operationId: string, messageId: string) => {
     devLog('🔄 Starting polling for:', operationId);

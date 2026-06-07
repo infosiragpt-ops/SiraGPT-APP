@@ -382,6 +382,80 @@ describe('source-preserving document edit', () => {
     assert.equal(explicitSelection.selectionReason, 'current_docx_target_section');
   });
 
+  it('does not crash selecting a source set when there is no editable file at all', () => {
+    // Regresión: fileStableKey(null) lanzaba "Cannot read properties of null
+    // (reading 'id')" cuando no había archivo base ni artefacto previo, lo que
+    // bloqueaba la creación del documento ("coloca esta información en un word").
+    let selection;
+    assert.doesNotThrow(() => {
+      selection = sourcePreservingInternals.selectSourcePreservingDocumentSet({
+        requestText: 'coloca esta información en un word',
+        sourceFiles: [],
+        priorArtifacts: [],
+      });
+    });
+    assert.equal(selection.sourceFile, null);
+    assert.deepEqual(selection.sourceFiles, []);
+    assert.deepEqual(selection.referenceFiles, []);
+  });
+
+  it('returns null (generate a fresh document) when "coloca esta información en un word" has no base file', async () => {
+    // Regresión del flujo del usuario: sin archivo adjunto ni artefacto previo,
+    // la petición debe tratarse como documento NUEVO (devuelve null para que el
+    // caller lo genere) en vez de crashear o rechazar con "No generé un
+    // documento nuevo para evitar entregarte contenido ajeno al archivo".
+    const prisma = {
+      file: { async findMany() { return []; } },
+      generatedArtifact: { async findMany() { return []; } },
+      message: { async findMany() { return []; } },
+    };
+    const result = await tryGenerateSourcePreservingDocumentEdit({
+      prisma,
+      userId: 'user-1',
+      chatId: 'chat-1',
+      fileIds: [],
+      prompt: 'coloca esta información en un word',
+      displayPrompt: 'coloca esta información en un word',
+    });
+    assert.equal(result, null);
+  });
+
+  it('asks for a compatible file (instead of crashing) when the only attachment is not editable', async () => {
+    // Antes del fix, un adjunto no editable (p. ej. una imagen) también
+    // disparaba fileStableKey(null) → "Cannot read properties of null". Ahora
+    // pide un formato compatible con un mensaje útil.
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-incompatible-'));
+    const imgPath = path.join(tmp, 'foto.png');
+    fs.writeFileSync(imgPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const prisma = {
+      file: {
+        async findMany() {
+          return [{
+            id: 'file-img',
+            filename: 'foto.png',
+            originalName: 'foto.png',
+            mimeType: 'image/png',
+            size: 4,
+            path: imgPath,
+          }];
+        },
+      },
+      generatedArtifact: { async findMany() { return []; } },
+      message: { async findMany() { return []; } },
+    };
+    await assert.rejects(
+      () => tryGenerateSourcePreservingDocumentEdit({
+        prisma,
+        userId: 'user-1',
+        chatId: 'chat-1',
+        fileIds: ['file-img'],
+        prompt: 'edita este documento adjunto y agrégale una sección al final',
+        displayPrompt: 'edita este documento adjunto y agrégale una sección al final',
+      }),
+      /archivo editable compatible|archivo DOCX/i,
+    );
+  });
+
   it('does not mistake an instrument request for external reference integration because it mentions Word final', () => {
     const prompt = 'agrega al final un instrumento profesional de recolección de datos para esta investigación y valida el Word final';
 

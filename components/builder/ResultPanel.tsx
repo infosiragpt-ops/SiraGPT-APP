@@ -37,7 +37,7 @@ export function ResultPanel({ result, onReset }: ResultPanelProps) {
     try {
       await navigator.clipboard.writeText(current.content)
       setCopied(true)
-      setTimeout(() => setCopied(false), 1400)
+      setTimeout(() => setCopied(false), 2000)
     } catch {
       /* clipboard blocked — no-op */
     }

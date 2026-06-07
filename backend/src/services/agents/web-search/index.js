@@ -61,10 +61,14 @@ const builtinProviders = [
   require('./providers/scielo'),
   require('./providers/openalex'),
   require('./providers/arxiv'),
-  // General-web tier (priority 10-30). The extra key-less providers
-  // (Stack Exchange Q&A + Hacker News) widen breadth for the aggregating
-  // `searchMany` path and stay cheap for `search()` since each returns []
-  // when it has no match.
+  // General-web tier (priority 8-30). Brave (priority 8) leads when its
+  // optional BRAVE_SEARCH_API_KEY is set; otherwise it reports
+  // enabled:false and the chain falls through to the free, key-less
+  // DuckDuckGo → Stack Exchange → Hacker News → Wikipedia → SearXNG
+  // providers. The extra key-less providers widen breadth for the
+  // aggregating `searchMany` path (tech Q&A + tech news) and stay cheap
+  // for `search()` since each returns [] when it has no match.
+  require('./providers/brave'),
   require('./providers/duckduckgo'),
   require('./providers/stackexchange'),
   require('./providers/hackernews'),
@@ -181,8 +185,17 @@ async function search(query, opts = {}) {
   const maxResults = Math.max(1, Math.min(Number(opts.maxResults) || 5, 15));
   const locale = typeof opts.locale === 'string' ? opts.locale : null;
   const timeoutMs = Math.max(500, Math.min(Number(opts.timeoutMs) || DEFAULT_TIMEOUT_MS, 10000));
+  // Optional time-freshness hint (e.g. "pw" / "last week"). Only some
+  // providers honour it (Brave); the rest ignore the extra opt harmlessly.
+  const freshness = typeof opts.freshness === 'string' && opts.freshness.trim() ? opts.freshness.trim() : null;
+  const includeNews = opts.includeNews === true;
+  // Fresh queries must not return a stale cache entry, so fold the
+  // freshness hint into the cache bucket WITHOUT touching the cache's
+  // (query, locale) signature or the real locale passed to providers.
+  const cacheBucket = [locale || '', freshness ? `f=${freshness}` : '', includeNews ? 'news' : '']
+    .filter(Boolean).join('|') || null;
 
-  const cached = cache.get(q, locale);
+  const cached = cache.get(q, cacheBucket);
   if (cached) {
     return {
       results: cached.results.slice(0, maxResults),
@@ -197,7 +210,7 @@ async function search(query, opts = {}) {
     const start = Date.now();
     try {
       const results = await withTimeout(
-        (signal) => p.search(q, { maxResults, locale, signal }),
+        (signal) => p.search(q, { maxResults, locale, signal, freshness, includeNews }),
         timeoutMs,
       );
       const list = Array.isArray(results) ? results : [];
@@ -212,7 +225,7 @@ async function search(query, opts = {}) {
       attempts.push({ id: p.id, ok: true, ms: Date.now() - start, count: normalised.length });
       if (normalised.length === 0) continue; // try next provider
       const value = { results: normalised, provider: p.id };
-      cache.set(q, locale, value);
+      cache.set(q, cacheBucket, value);
       // Audit WITHOUT the raw query — only its length — so secrets the
       // user might paste don't leak into the log feed.
       auditLog.audit({

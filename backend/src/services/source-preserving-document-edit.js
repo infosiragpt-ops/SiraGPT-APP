@@ -401,7 +401,12 @@ async function loadRecentAssistantArtifactSourceFiles(prisma, { chatId, limit = 
   return dedupeFiles(files);
 }
 
-function fileStableKey(file = {}) {
+function fileStableKey(file) {
+  // `file = {}` solo aplica el default cuando el argumento es `undefined`; un
+  // `null` explícito (p. ej. cuando no hay archivo fuente seleccionable) hacía
+  // `null.id` → "Cannot read properties of null (reading 'id')". Blindamos
+  // contra cualquier valor no-objeto.
+  if (!file || typeof file !== 'object') return '';
   return String(file.id || file.artifactId || file.path || file.filename || file.originalName || '');
 }
 
@@ -3825,6 +3830,16 @@ async function tryGenerateSourcePreservingDocumentEdit({
   const targetedSection = isTargetedSectionFillRequest(requestText);
   const selection = selectSourcePreservingDocumentSet({ requestText, sourceFiles, priorArtifacts });
   const supported = selection.sourceFile;
+  if (!supported && !sourceFiles.length && !priorArtifacts.length) {
+    // No hay ningún archivo adjunto ni artefacto previo que conservar. La
+    // petición ("coloca esta información en un word") es en realidad una
+    // solicitud de documento NUEVO, no una edición preservadora. Devolvemos
+    // null para que el caller genere el documento desde cero en lugar de
+    // rechazar la petición ("No generé un documento nuevo…"). Solo lanzamos el
+    // error de "necesito un archivo compatible" cuando SÍ había archivos de
+    // entrada pero ninguno era editable.
+    return null;
+  }
   if (targetedSection && supported && !isDocxFile(supported)) {
     const names = [...sourceFiles, ...priorArtifacts].map((file) => file.originalName || file.filename || file.id).join(', ');
     throw new Error(`Para conservar el documento original necesito un archivo DOCX con la sección solicitada. Archivo recibido: ${names || 'sin archivo compatible'}.`);

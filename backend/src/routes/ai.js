@@ -4822,6 +4822,7 @@ router.post(
                     userId,
                     chatId: canPersist ? chatId : null,
                     userEmail: req.user?.email || null,
+                    clearance: req.user?.clearance || null,
                     prisma,
                     openai: agenticClient,
                     collection: 'default',

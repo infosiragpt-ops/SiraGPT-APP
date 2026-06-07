@@ -2909,7 +2909,21 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                         />
                                         <div className="flex gap-2 justify-end">
                                             <Button size="sm" variant="ghost" onClick={() => setIsEditing(false)}>Cancelar</Button>
-                                            <Button size="sm" onClick={handleEditSave}>Guardar</Button>
+                                            <Button
+                                                size="sm"
+                                                onClick={handleEditSave}
+                                                className={cn(
+                                                    "relative overflow-hidden border-0 text-white",
+                                                    "bg-gradient-to-br from-indigo-500 via-violet-500 to-purple-600",
+                                                    "shadow-[0_4px_16px_-4px_rgba(124,58,237,0.55)]",
+                                                    "transition-all duration-300 ease-out",
+                                                    "hover:shadow-[0_6px_24px_-4px_rgba(124,58,237,0.7)] hover:brightness-110",
+                                                    "active:scale-[0.97]",
+                                                    "before:absolute before:inset-0 before:-translate-x-full before:bg-gradient-to-r before:from-transparent before:via-white/35 before:to-transparent before:transition-transform before:duration-700 before:ease-out hover:before:translate-x-full",
+                                                )}
+                                            >
+                                                Enviar
+                                            </Button>
                                         </div>
                                     </div>
                                 ) : (
@@ -2928,15 +2942,21 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                     className="h-6 w-6"
                                     onClick={() => {
                                         copyMarkdownToWordClipboard(formatAgentTaskUserContent(message.content))
-                                            .then(() => toast.success("Copiado con formato para Word"))
+                                            .then(() => {
+                                                setIsCopied(true);
+                                                setTimeout(() => setIsCopied(false), 2000);
+                                                toast.success("Copiado con formato para Word");
+                                            })
                                             .catch((err) => {
                                                 console.error("[copy] failed:", err)
                                                 toast.error("No se pudo copiar")
                                             })
                                     }}
-                                    title="Copiar"
+                                    title={isCopied ? "Copiado" : "Copiar"}
                                 >
-                                    <Copy size={14} />
+                                    {isCopied
+                                        ? <Check size={14} strokeWidth={2.5} className="text-emerald-500 animate-in zoom-in-50 duration-200" />
+                                        : <Copy size={14} />}
                                 </Button>
                                 <Button
                                     variant="ghost"

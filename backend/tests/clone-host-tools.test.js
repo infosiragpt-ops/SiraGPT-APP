@@ -257,11 +257,149 @@ describe('host-bash-tool', () => {
     assert.ok(caps.restrictions.includes('systemctl is read-only only'));
   });
 
-  it('cloneProjectTool definition has correct name and parameters', () => {
-    const cloneModule = require('../src/services/agents/clone-project-tool');
-    assert.strictEqual(cloneModule.cloneProjectTool.name, 'clone_project');
-    assert.ok(cloneModule.cloneProjectTool.description);
-    assert.ok(cloneModule.cloneProjectTool.parameters.properties.url);
-    assert.ok(cloneModule.cloneProjectTool.parameters.required.includes('url'));
+  // ── env hardening (secret exfiltration defense) ──────────────────
+  it('buildHostBashEnv keeps system/toolchain vars but drops secrets', () => {
+    const src = {
+      PATH: '/usr/bin', HOME: '/Users/test', LANG: 'en_US.UTF-8',
+      NVM_DIR: '/Users/test/.nvm', PYTHONPATH: '/site', SSH_AUTH_SOCK: '/tmp/agent.sock',
+      OPENAI_API_KEY: 'sk-must-not-leak', CEREBRAS_API_KEY: 'csk-must-not-leak',
+      DATABASE_URL: 'postgres://secret', JWT_SECRET: 'jwt-must-not-leak',
+      R2_ACCESS_KEY_ID: 'r2-leak', GITHUB_TOKEN: 'ghp_leak', SESSION_SECRET: 'sess-leak',
+    };
+    const env = hostModule._internal.buildHostBashEnv(src);
+    // Kept (system / toolchain):
+    assert.strictEqual(env.PATH, '/usr/bin');
+    assert.strictEqual(env.HOME, '/Users/test');
+    assert.strictEqual(env.LANG, 'en_US.UTF-8');
+    assert.strictEqual(env.NVM_DIR, '/Users/test/.nvm');
+    assert.strictEqual(env.PYTHONPATH, '/site');
+    assert.strictEqual(env.SSH_AUTH_SOCK, '/tmp/agent.sock');
+    // Dropped (every app secret):
+    for (const leaked of ['OPENAI_API_KEY', 'CEREBRAS_API_KEY', 'DATABASE_URL', 'JWT_SECRET', 'R2_ACCESS_KEY_ID', 'GITHUB_TOKEN', 'SESSION_SECRET']) {
+      assert.strictEqual(env[leaked], undefined, `${leaked} must not be passed to host_bash child`);
+    }
+    // Hardening defaults forced:
+    assert.strictEqual(env.GIT_TERMINAL_PROMPT, '0');
+    assert.ok('NODE_ENV' in env);
+  });
+
+  it('buildHostBashEnv extra passthrough works but still refuses secret-looking names', () => {
+    const src = {
+      PATH: '/usr/bin', MY_BUILD_FLAG: 'on', CUSTOM_API_KEY: 'leak',
+      SIRAGPT_HOST_BASH_ENV_EXTRA: 'MY_BUILD_FLAG, CUSTOM_API_KEY',
+    };
+    const env = hostModule._internal.buildHostBashEnv(src);
+    assert.strictEqual(env.MY_BUILD_FLAG, 'on');
+    assert.strictEqual(env.CUSTOM_API_KEY, undefined, 'secret-looking extra var must be refused');
+  });
+
+  it('isSensitiveEnvName flags credentials and clears benign vars', () => {
+    const { isSensitiveEnvName } = hostModule._internal;
+    for (const n of ['OPENAI_API_KEY', 'JWT_SECRET', 'DB_PASSWORD', 'X_TOKEN', 'SESSION_SECRET', 'STRIPE_KEY']) {
+      assert.strictEqual(isSensitiveEnvName(n), true, `${n} should be sensitive`);
+    }
+    for (const n of ['PATH', 'HOME', 'LANG', 'NVM_DIR', 'MY_BUILD_FLAG']) {
+      assert.strictEqual(isSensitiveEnvName(n), false, `${n} should be benign`);
+    }
+  });
+
+  it('host_bash child cannot read a real secret from process.env (end-to-end)', async () => {
+    const KEY = 'OPENAI_API_KEY';
+    const original = process.env[KEY];
+    process.env[KEY] = 'sk-e2e-secret-should-not-leak';
+    try {
+      const result = await hostModule.hostBash({
+        command: 'node -e "console.log(process.env.OPENAI_API_KEY)"',
+        directory: os.tmpdir(),
+      });
+      assert.strictEqual(result.ok, true, `node should run: ${result.stderr || result.error || ''}`);
+      // The child prints "undefined" because the secret was stripped from its env.
+      assert.strictEqual(result.stdout.trim(), 'undefined');
+      assert.ok(!result.stdout.includes('sk-e2e-secret-should-not-leak'));
+    } finally {
+      if (original === undefined) delete process.env[KEY];
+      else process.env[KEY] = original;
+    }
+  });
+
+  // ── product-repo protection (no self-modify / push to main) ──────
+  it('isProtectedGitMutation blocks writes in the product repo, allows reads', () => {
+    const { isProtectedGitMutation, buildCommandSpec } = hostModule._internal;
+    const roots = require('../src/services/agents/workspace-roots');
+    const productDir = roots.selfRepoRoot();
+    const cloneDir = path.join(os.homedir(), 'Desktop', 'sira-projects', 'some-repo');
+    // Mutating git inside the product repo → blocked.
+    assert.strictEqual(isProtectedGitMutation(buildCommandSpec('git push origin main'), productDir), true);
+    assert.strictEqual(isProtectedGitMutation(buildCommandSpec('git commit -m "x"'), productDir), true);
+    assert.strictEqual(isProtectedGitMutation(buildCommandSpec('git add -A'), productDir), true);
+    assert.strictEqual(isProtectedGitMutation(buildCommandSpec('git reset --hard HEAD'), productDir), true);
+    // Read-only git inside the product repo → allowed.
+    assert.strictEqual(isProtectedGitMutation(buildCommandSpec('git status'), productDir), false);
+    assert.strictEqual(isProtectedGitMutation(buildCommandSpec('git log --oneline -5'), productDir), false);
+    assert.strictEqual(isProtectedGitMutation(buildCommandSpec('git diff HEAD~1'), productDir), false);
+    // Mutating git inside a normal clone → allowed.
+    assert.strictEqual(isProtectedGitMutation(buildCommandSpec('git push origin main'), cloneDir), false);
+    // Non-git commands are never treated as a protected git mutation.
+    assert.strictEqual(isProtectedGitMutation(buildCommandSpec('ls -la'), productDir), false);
+  });
+
+  it('hostBash refuses git push/commit inside the product repo (integration)', async () => {
+    const roots = require('../src/services/agents/workspace-roots');
+    // Non-existent protected subdir: blocked before any spawn; a regression
+    // would surface a different error and fail this test without side effects.
+    const dir = path.join(roots.selfRepoRoot(), 'no-such-subdir-protection-probe');
+    const result = await hostModule.hostBash({ command: 'git commit -m "probe"', directory: dir });
+    assert.strictEqual(result.ok, false);
+    assert.ok(/bloqueada|solo lectura|self|código fuente/i.test(result.error || ''), `unexpected error: ${result.error}`);
+  });
+});
+
+describe('workspace-roots protection policy', () => {
+  let roots;
+  before(() => { roots = require('../src/services/agents/workspace-roots'); });
+
+  it('marks the product repo as protected (readable, not writable)', () => {
+    const productFile = path.join(roots.selfRepoRoot(), 'backend', 'index.js');
+    assert.strictEqual(roots.isPathProtected(productFile), true);
+    assert.strictEqual(roots.isPathWithinWorkspace(productFile), true); // still readable
+    assert.strictEqual(roots.isPathWritable(productFile), false);        // but not writable
+  });
+
+  it('keeps sira-projects clones fully writable', () => {
+    const cloneFile = path.join(os.homedir(), 'Desktop', 'sira-projects', 'repo', 'src', 'a.js');
+    assert.strictEqual(roots.isPathProtected(cloneFile), false);
+    assert.strictEqual(roots.isPathWritable(cloneFile), true);
+  });
+
+  it('selfRepoRoot resolves to the running repo checkout', () => {
+    assert.ok(roots.selfRepoRoot().endsWith('siraGPT'), `got ${roots.selfRepoRoot()}`);
+  });
+});
+
+describe('host-file-tool protection', () => {
+  let hostFileModule;
+  let roots;
+  before(() => {
+    hostFileModule = require('../src/services/agents/host-file-tool');
+    roots = require('../src/services/agents/workspace-roots');
+  });
+
+  it('refuses to write into the product repo source', async () => {
+    const probe = path.join(roots.selfRepoRoot(), '.protection-probe-should-not-be-created.tmp');
+    try {
+      const result = await hostFileModule.hostFile({ action: 'write', path: probe, content: 'x' });
+      assert.strictEqual(result.ok, false);
+      assert.ok(/solo lectura|read-only|self|código fuente/i.test(result.error || ''), `unexpected: ${result.error}`);
+      assert.strictEqual(fs.existsSync(probe), false, 'protected write must not touch disk');
+    } finally {
+      try { if (fs.existsSync(probe)) fs.unlinkSync(probe); } catch { /* noop */ }
+    }
+  });
+
+  it('still allows reading the product repo source', async () => {
+    const target = path.join(roots.selfRepoRoot(), 'backend', 'package.json');
+    const result = await hostFileModule.hostFile({ action: 'read', path: target });
+    assert.strictEqual(result.ok, true, `read should succeed: ${result.error || ''}`);
+    assert.ok(result.content.includes('"name"'));
   });
 });

@@ -15,7 +15,6 @@ const { authenticateToken } = require('../middleware/auth');
 const prisma = require('../config/database');
 const { streamAdvancedDocumentPipeline } = require('../services/document-pipeline/advanced-document-pipeline');
 const {
-  isSourcePreservingEditRequest,
   tryGenerateSourcePreservingDocumentEdit,
 } = require('../services/source-preserving-document-edit');
 const {
@@ -203,7 +202,11 @@ router.post(
         return arr.findIndex(other => (other.id || `${other.originalName}:${other.mimeType}`) === key) === index;
       }).slice(0, MAX_SIMULTANEOUS_DOCUMENTS);
 
-      const wantsSourcePreservingEdit = isSourcePreservingEditRequest(displayPrompt || prompt, req.body.files);
+      // Devuelve un edit preservador SOLO cuando hay un archivo base/artefacto
+      // compatible que conservar. Si no hay nada que preservar devuelve null y
+      // generamos un documento NUEVO desde cero (no rechazamos la petición). Si
+      // había archivos de entrada pero ninguno editable, tryGenerate lanza un
+      // error descriptivo que captura el catch externo.
       const preservedEdit = await tryGenerateSourcePreservingDocumentEdit({
         prisma,
         userId: req.user.id,
@@ -220,8 +223,6 @@ router.post(
         file = preservedEdit.file;
         format = preservedEdit.format;
         send({ type: 'stage', label: 'Documento editado sin regenerar el archivo', pct: 92 });
-      } else if (wantsSourcePreservingEdit) {
-        throw new Error('No encontré un archivo editable compatible para modificar sin regenerar el documento. Formatos soportados: DOCX, XLSX, PDF, TXT, Markdown, CSV, HTML, SVG, JSON, XML o YAML.');
       } else {
         const projectPrompt = projectContext?.promptPrefix
           ? `${projectContext.promptPrefix}\n\nUSER DOCUMENT REQUEST:\n${prompt}`

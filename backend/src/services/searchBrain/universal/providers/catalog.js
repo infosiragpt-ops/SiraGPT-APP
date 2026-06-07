@@ -307,7 +307,42 @@ const webProviders = [
   },
   noKeyJsonProvider({ id: "wikipedia-opensearch", name: "Wikipedia OpenSearch", region: "global", category: "web", license: "open", rateLimit: "Public API" }, (q, opts) => `https://${opts.language === "zh" ? "zh" : opts.language === "es" ? "es" : "en"}.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(q)}&limit=${Math.min(opts.maxResults || 10, 20)}&namespace=0&format=json`, (json) => asArray(json?.[1]).map((title, i) => ({ title, snippet: json[2]?.[i], url: json[3]?.[i] })), (it) => result(hashId("wikipedia", it.url || it.title), "web", "wikipedia-opensearch", it.title, { url: it.url, snippet: it.snippet })),
   disabled({ id: "searxng-public", name: "SearXNG JSON", region: "global", category: "web", license: "open", rateLimit: "Self-host recommended", requiresKey: false }, "Use local SearXNG for stable production; public instances vary."),
-  disabled({ id: "brave-search", name: "Brave Search", region: "global", category: "web", license: "requires-key", rateLimit: "Free registered tier", requiresKey: true }, "Requires free Brave Search API key."),
+  {
+    id: "brave-search",
+    name: "Brave Search",
+    region: "global",
+    category: "web",
+    license: "requires-key",
+    rateLimit: "Free registered tier",
+    requiresKey: true,
+    metadata: { keyName: "brave" },
+    async search(query, opts = {}) {
+      if (!query || typeof query !== "string") return [];
+      // Key gated: user-configured key (settings store under "brave") or
+      // any of the env aliases. No key → return [] just like the other
+      // optional-key providers, so the brain falls through to the
+      // key-less DuckDuckGo / Wikipedia web providers.
+      const key = opts.keys?.brave
+        || opts.keys?.["brave-search"]
+        || process.env.BRAVE_SEARCH_API_KEY
+        || process.env.BRAVE_API_KEY
+        || process.env.SEARCH_BRAIN_BRAVE_KEY;
+      if (!key) return [];
+      return guardedSearch("brave-search", async () => {
+        const json = await fetchJson(
+          `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${Math.min(opts.maxResults || 10, 20)}&result_filter=web&safesearch=moderate`,
+          { timeoutMs: opts.timeoutMs, headers: { Accept: "application/json", "X-Subscription-Token": key } },
+        );
+        return asArray(json?.web?.results).slice(0, opts.maxResults || 10).map((it) =>
+          result(hashId("brave-search", it.url || it.title), "web", "brave-search", it.title, {
+            url: it.url,
+            snippet: it.description,
+            metadata: { age: it.age, language: it.language },
+          })
+        ).filter((r) => r.title && r.url);
+      });
+    },
+  },
   disabled({ id: "mojeek", name: "Mojeek", region: "global", category: "web", license: "requires-key", rateLimit: "Free registered tier", requiresKey: true }, "Requires key."),
   disabled({ id: "marginalia", name: "Marginalia", region: "global", category: "web", license: "open", rateLimit: "Public API availability varies", requiresKey: false }, "Endpoint availability changes; keep disabled until configured."),
 ];
