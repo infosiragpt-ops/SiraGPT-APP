@@ -3,7 +3,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { buildOpenAICompatibleClient } = require('../src/services/agents/agent-task-runner');
+const {
+  buildOpenAICompatibleClient,
+  normalizeAgentRuntimeModel,
+  resolveAgentRuntimeClient,
+} = require('../src/services/agents/agent-task-runner');
 
 /**
  * The agent runtime's OpenAI-compatible client must carry a bounded
@@ -77,6 +81,85 @@ test('no API key → null (unchanged behavior)', () => {
     assert.equal(buildOpenAICompatibleClient(TARGET), null);
     assert.equal(buildOpenAICompatibleClient(null), null);
     assert.equal(buildOpenAICompatibleClient({ provider: 'x' }), null);
+  } finally {
+    restore();
+  }
+});
+
+// ── runtime client fallback: never drive a client with a foreign model id ──
+//
+// Repro for the "Kimi K2.6 → Analizando solicitud → 90s stall" report: the
+// selected model is OpenRouter-only, but OPENROUTER_API_KEY is empty (placeholder
+// "" in the deployment .env). The runtime must fall back to a CONFIGURED provider
+// AND a model that provider actually accepts — not carry "moonshotai/kimi-k2.6"
+// into an OpenAI client (which 404s every call and stalls the run silently).
+
+const RUNTIME_ENV_KEYS = [
+  'OPENROUTER_API_KEY', 'OPENAI_API_KEY', 'DEEPSEEK_API_KEY',
+  'AGENT_TASK_OPENAI_MODEL', 'AGENT_TASK_RUNTIME_MODEL',
+];
+
+test('Kimi/OpenRouter selection with empty OPENROUTER_API_KEY falls back to an OpenAI-valid model', () => {
+  const restore = rememberEnv(RUNTIME_ENV_KEYS);
+  process.env.OPENROUTER_API_KEY = '';                 // matches the prod .env placeholder ("")
+  process.env.OPENAI_API_KEY = 'sk-test-openai-key';
+  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.AGENT_TASK_OPENAI_MODEL;
+  delete process.env.AGENT_TASK_RUNTIME_MODEL;
+  try {
+    const profile = normalizeAgentRuntimeModel('moonshotai/kimi-k2.6');
+    assert.equal(profile.detected?.provider, 'OpenRouter', 'Kimi is detected as an OpenRouter model');
+    const resolution = resolveAgentRuntimeClient(profile);
+    assert.ok(resolution.client, 'a working client is resolved via the fallback list');
+    assert.equal(resolution.provider, 'OpenAI', 'falls back to OpenAI when the OpenRouter key is empty');
+    assert.notEqual(
+      resolution.model, 'moonshotai/kimi-k2.6',
+      'must NOT drive the OpenAI client with the foreign Kimi model id (the stall bug)',
+    );
+    assert.equal(resolution.model, 'gpt-4o-mini', 'uses a known OpenAI model the endpoint accepts');
+  } finally {
+    restore();
+  }
+});
+
+test('OpenAI fallback model is env-tunable via AGENT_TASK_OPENAI_MODEL', () => {
+  const restore = rememberEnv(RUNTIME_ENV_KEYS);
+  process.env.OPENROUTER_API_KEY = '';
+  process.env.OPENAI_API_KEY = 'sk-test-openai-key';
+  delete process.env.DEEPSEEK_API_KEY;
+  process.env.AGENT_TASK_OPENAI_MODEL = 'gpt-4o';
+  try {
+    const resolution = resolveAgentRuntimeClient(normalizeAgentRuntimeModel('moonshotai/kimi-k2.6'));
+    assert.equal(resolution.provider, 'OpenAI');
+    assert.equal(resolution.model, 'gpt-4o');
+  } finally {
+    restore();
+  }
+});
+
+test('a detected, configured provider is used directly (no fallback, model preserved)', () => {
+  const restore = rememberEnv(RUNTIME_ENV_KEYS);
+  process.env.OPENAI_API_KEY = 'sk-test-openai-key';
+  delete process.env.OPENROUTER_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  try {
+    const resolution = resolveAgentRuntimeClient(normalizeAgentRuntimeModel('gpt-4o'));
+    assert.equal(resolution.provider, 'OpenAI');
+    assert.equal(resolution.model, 'gpt-4o', 'a native OpenAI selection keeps its own model id');
+  } finally {
+    restore();
+  }
+});
+
+test('no provider key at all → null client (run degrades deterministically, never stalls on a foreign model)', () => {
+  const restore = rememberEnv(RUNTIME_ENV_KEYS);
+  delete process.env.OPENROUTER_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  try {
+    const resolution = resolveAgentRuntimeClient(normalizeAgentRuntimeModel('moonshotai/kimi-k2.6'));
+    assert.equal(resolution.client, null, 'no client when nothing is configured');
+    assert.equal(resolution.provider, 'unconfigured');
   } finally {
     restore();
   }

@@ -1296,8 +1296,20 @@ function resolveAgentRuntimeClient(profile) {
     return { client: primary, model: profile.runtimeModel, provider: profile.detected.provider };
   }
 
+  // The user's selected provider has no usable key. Walk a small fallback
+  // list — but each fallback MUST use a model ITS OWN provider accepts. The
+  // selected model id (e.g. an OpenRouter "moonshotai/kimi-k2.6" when
+  // OPENROUTER_API_KEY is unset/empty) would be rejected by the OpenAI or
+  // DeepSeek endpoints, which previously left the runtime driving a valid
+  // client with a FOREIGN model id → every LLM call failed and the run
+  // stalled silently at "Analizando solicitud" (0 steps / 0 tools) until the
+  // client's 90s idle watchdog fired. So the OpenAI fallback uses a known
+  // OpenAI model (env-tunable), never the originally-selected id.
+  const openAIFallbackModel = String(
+    process.env.AGENT_TASK_OPENAI_MODEL || process.env.AGENT_TASK_RUNTIME_MODEL || 'gpt-4o-mini'
+  ).trim() || 'gpt-4o-mini';
   const fallbackTargets = [
-    { provider: 'OpenAI', apiKeyEnv: 'OPENAI_API_KEY', baseURL: null, model: profile?.runtimeModel || 'gpt-4o-mini' },
+    { provider: 'OpenAI', apiKeyEnv: 'OPENAI_API_KEY', baseURL: null, model: openAIFallbackModel },
     { provider: 'DeepSeek', apiKeyEnv: 'DEEPSEEK_API_KEY', baseURL: 'https://api.deepseek.com', model: 'deepseek-v4-flash' },
     {
       provider: 'OpenRouter',
@@ -1307,7 +1319,9 @@ function resolveAgentRuntimeClient(profile) {
         'HTTP-Referer': process.env.NEXT_PUBLIC_URL || process.env.FRONTEND_URL || 'http://localhost:3000',
         'X-Title': 'SiraGPT',
       },
-      model: 'moonshotai/kimi-k2.6',
+      // Honor the selected model when it really is an OpenRouter model;
+      // otherwise drive a known OpenRouter default.
+      model: profile?.detected?.provider === 'OpenRouter' ? profile.runtimeModel : 'moonshotai/kimi-k2.6',
     },
   ];
   for (const target of fallbackTargets) {
@@ -3064,6 +3078,8 @@ module.exports = {
   buildOpenAICompatibleClient,
   classifyTaskError,
   normalizeAgentRuntimeModel,
+  resolveAgentRuntimeClient,
+  detectAgentRuntimeProvider,
   buildAttachmentGroundedFallbackAnswer,
   buildBibliographyFallbackAnswer,
   buildAttachmentUnavailableFallbackAnswer,
