@@ -95,6 +95,58 @@ describe('verify — annotate path', () => {
   });
 });
 
+describe('verify — localized footer', () => {
+  const fakeFailEs = {
+    postprocess: () => ({
+      ok: false,
+      action: 'annotate',
+      report: {
+        grade: 'D',
+        score: 0.3,
+        unsupported: [
+          { kind: 'number', text: '12345', severity: 'high' },
+          { kind: 'entity', text: 'AcmeCorp', severity: 'medium' },
+        ],
+      },
+      repair: { userFooter: '---\n> ⚠️ Auto-fidelity check: D (0.3).', flaggedCounts: { numbers: 1, entities: 1, total: 2 } },
+    }),
+  };
+
+  test('language=es renders a professional Spanish footer (no English text)', () => {
+    const r = gate.verify({ response: longResponse, decision: { verify: { faithfulness: true, threshold: 0.6 } }, language: 'es', blocks: { evidenceBlock: 'x'.repeat(50) }, deps: { postprocessor: fakeFailEs } });
+    assert.equal(r.action, 'annotate');
+    assert.match(r.footer, /Autoverificación de fidelidad/);
+    assert.match(r.footer, /no aparecen en el contexto/);
+    assert.match(r.footer, /12345/);
+    assert.match(r.footer, /AcmeCorp/);
+    assert.doesNotMatch(r.footer, /Auto-fidelity check/);
+  });
+
+  test('no language defaults to the English postprocessor footer (back-compat)', () => {
+    const r = gate.verify({ response: longResponse, decision: { verify: { faithfulness: true, threshold: 0.6 } }, blocks: { evidenceBlock: 'x'.repeat(50) }, deps: { postprocessor: fakeFailEs } });
+    assert.match(r.footer, /Auto-fidelity check/);
+  });
+});
+
+describe('buildLocalizedFooter', () => {
+  const result = {
+    report: { grade: 'D', score: 0.3, unsupported: [{ kind: 'number', text: '999' }, { kind: 'url', text: 'http://x.test' }] },
+    repair: { userFooter: '---\n> ⚠️ Auto-fidelity check: D (0.3).' },
+  };
+  test('es renders a localized footer from the report', () => {
+    const f = gate.buildLocalizedFooter(result, 'es');
+    assert.match(f, /Autoverificación de fidelidad: D \(0\.3\)/);
+    assert.match(f, /999/);
+    assert.match(f, /no verificados/);
+  });
+  test('en reuses the postprocessor footer', () => {
+    assert.match(gate.buildLocalizedFooter(result, 'en'), /Auto-fidelity check/);
+  });
+  test('defaults to English when no language is given', () => {
+    assert.match(gate.buildLocalizedFooter(result), /Auto-fidelity check/);
+  });
+});
+
 describe('verify — integration with the real postprocessor', () => {
   test('flags ungrounded numbers/entities against thin context', () => {
     const response = 'El informe confirma que MegaCorp captó 4821931 clientes en Marte y facturó 99999 USD según el contrato secreto. '.repeat(3);

@@ -131,7 +131,10 @@ describe("master-prompt · buildSystemPrompt", () => {
     assert.match(built.system, /SIRAGPT PRODUCT OPERATING CONTRACT/)
     assert.match(built.system, /durable work session/)
     assert.match(built.system, /Preserve the existing user interface/)
-    assert.match(built.system, /Gema4-31B/)
+    // Post-rebrand (Gema4 → Cerebras/FlashGPT) the operating contract names
+    // the fallback generically ("configured fallback model") instead of a
+    // hard-coded model id. Assert the current, brand-agnostic copy.
+    assert.match(built.system, /configured fallback model/)
     assert.match(built.system, /Never claim GitHub/)
   })
 

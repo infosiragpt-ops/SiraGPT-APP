@@ -3950,11 +3950,15 @@ router.post(
 
           // Phase 3: test-time compute. Turn the orchestrator's compute plan
           // into a reasoning directive injected into the system prompt (extended
-          // thinking / self-consistency / best-of-N) on hard turns only. Opt-in
-          // via SIRAGPT_TEST_TIME_COMPUTE; fail-open.
+          // thinking / self-consistency / best-of-N). ADAPTIVE: the directive is
+          // only emitted on moderate/complex turns (buildReasoningDirective
+          // returns '' for easy/direct ones), so simple turns stay fast and
+          // cheap. On by default; disable with SIRAGPT_TEST_TIME_COMPUTE=0|off.
+          // Fail-open.
           req._reasoningKernelBlock = '';
           try {
-            if (['1', 'on', 'true'].includes(String(process.env.SIRAGPT_TEST_TIME_COMPUTE || '').trim().toLowerCase())) {
+            const __ttcFlag = String(process.env.SIRAGPT_TEST_TIME_COMPUTE || '').trim().toLowerCase();
+            if (__ttcFlag !== '0' && __ttcFlag !== 'off' && __ttcFlag !== 'false') {
               const testTimeCompute = require('../services/test-time-compute');
               req._reasoningKernelBlock = testTimeCompute.buildReasoningDirective(cognitiveDecision, {
                 language: (langResolution && langResolution.language) || 'es',
@@ -4449,10 +4453,14 @@ router.post(
 
       // Phase 4: prompt kernel — need-based block activation. On easy, low-risk,
       // non-agentic turns, prune the heavy "attribution theater" + policy blocks
-      // that only dilute the answer; keep the full stack for hard/ambiguous/
-      // agentic/high-risk turns. Opt-in via SIRAGPT_PROMPT_KERNEL; fail-open.
+      // that only dilute the answer and drown the persona + reasoning directive;
+      // keep the full stack for hard/ambiguous/agentic/high-risk turns. Load-
+      // bearing blocks (persona, contract, evidence, memory, reasoning-effort,
+      // constraints, posture) are NEVER dropped. On by default; disable with
+      // SIRAGPT_PROMPT_KERNEL=0|off; fail-open.
       try {
-        if (['1', 'on', 'true'].includes(String(process.env.SIRAGPT_PROMPT_KERNEL || '').trim().toLowerCase()) && req._cognitiveDecision) {
+        const __pkFlag = String(process.env.SIRAGPT_PROMPT_KERNEL || '').trim().toLowerCase();
+        if (__pkFlag !== '0' && __pkFlag !== 'off' && __pkFlag !== 'false' && req._cognitiveDecision) {
           const promptKernel = require('../services/prompt-kernel');
           const __kernelPlan = promptKernel.planBlocks({
             intent: req._cognitiveDecision.intent,
@@ -5262,18 +5270,22 @@ router.post(
         // (grounded + non-trivial, or high-stakes domain), score the final
         // answer against the grounding context. If it makes ungrounded claims
         // (numbers/entities/URLs not in the evidence), append a transparent
-        // "self-check" footer flagging the unverified items. Opt-in via
-        // SIRAGPT_FAITHFULNESS_CHECK; fail-open so a bad check never blocks the
-        // reply. Skipped on artifact turns (we're inside `if (!artifactHandled)`).
+        // "self-check" footer flagging the unverified items (localized to the
+        // user's language). ADAPTIVE: only runs on grounded, non-trivial turns
+        // the orchestrator flagged AND only annotates when the answer scores
+        // below threshold — clean answers ship untouched. On by default;
+        // disable with SIRAGPT_FAITHFULNESS_CHECK=0|off; fail-open so a bad
+        // check never blocks the reply. Skipped on artifact turns (we're inside
+        // `if (!artifactHandled)`).
         try {
-          const __faithCheckOn = ['1', 'on', 'true'].includes(
-            String(process.env.SIRAGPT_FAITHFULNESS_CHECK || '').trim().toLowerCase()
-          );
+          const __faithFlag = String(process.env.SIRAGPT_FAITHFULNESS_CHECK || '').trim().toLowerCase();
+          const __faithCheckOn = __faithFlag !== '0' && __faithFlag !== 'off' && __faithFlag !== 'false';
           if (__faithCheckOn && req._cognitiveDecision && fullResponseContent) {
             const faithGate = require('../services/chat-faithfulness-gate');
             const __faith = faithGate.verify({
               response: fullResponseContent,
               decision: req._cognitiveDecision,
+              language: (langResolution && langResolution.language) || 'es',
               blocks: {
                 evidenceBlock,
                 uploadedFileContext: uploadedFileContextForTurn,

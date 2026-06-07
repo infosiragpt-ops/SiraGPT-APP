@@ -39,6 +39,14 @@ describe('buildReasoningDirective', () => {
     assert.match(b, /REASONING EFFORT/);
     assert.match(b, /step by step/i);
   });
+  test('extended directive includes a pre-commit self-verification step', () => {
+    const es = ttc.buildReasoningDirective(dec({ mode: 'extended', reasoningEffort: 'high' }));
+    assert.match(es, /verifica cada paso/i);
+    assert.match(es, /antes de cerrar/i);
+    const en = ttc.buildReasoningDirective(dec({ mode: 'extended', reasoningEffort: 'high' }), { language: 'en' });
+    assert.match(en, /verify each step/i);
+    assert.match(en, /re-check/i);
+  });
   test('self_consistency interpolates sample count', () => {
     const b = ttc.buildReasoningDirective(dec({ mode: 'self_consistency', samples: 5, reasoningEffort: 'high' }));
     assert.match(b, /5 enfoques/);

@@ -71,11 +71,47 @@ function buildGroundingContext(blocks = {}) {
 }
 
 /**
+ * Build the user-facing self-check footer. English (default) reuses the
+ * postprocessor's own footer so the shared module stays the single source of
+ * truth for EN. Spanish renders a localized, professional equivalent from the
+ * same report data so ES-first users never get an English warning bolted onto
+ * their answer. Any other language falls back to English.
+ */
+function buildLocalizedFooter(result, language = 'en') {
+  const repair = (result && result.repair) || {};
+  const lang = String(language || 'en').slice(0, 2).toLowerCase();
+  if (lang !== 'es') {
+    return repair.userFooter ? `\n\n${repair.userFooter}` : '';
+  }
+  const report = (result && result.report) || {};
+  const unsupported = Array.isArray(report.unsupported) ? report.unsupported : [];
+  const pick = (kind) => unsupported
+    .filter((u) => u && u.kind === kind)
+    .map((u) => String(u.text || '').trim())
+    .filter(Boolean);
+  const numbers = pick('number');
+  const urls = pick('url');
+  const entities = pick('entity');
+  const claims = pick('claim');
+  const grade = report.grade != null ? report.grade : (repair.grade != null ? repair.grade : '?');
+  const score = report.score != null ? report.score : (repair.score != null ? repair.score : '?');
+  const lines = ['---'];
+  lines.push(`> ⚠️ Autoverificación de fidelidad: ${grade} (${score}). Revisa estos elementos antes de darlos por ciertos.`);
+  if (numbers.length) lines.push(`> Cifras que no aparecen en el contexto proporcionado: ${numbers.slice(0, 6).join(', ')}.`);
+  if (urls.length) lines.push(`> URLs que no aparecen en el contexto proporcionado: ${urls.slice(0, 4).join(', ')}.`);
+  if (entities.length) lines.push(`> Entidades que no aparecen en el contexto proporcionado: ${entities.slice(0, 6).join(', ')}.`);
+  if (claims.length) lines.push(`> Afirmaciones con poca correspondencia con el contexto: ${claims.length} oración(es).`);
+  lines.push('> Trata los elementos anteriores como no verificados hasta confirmarlos con la fuente.');
+  return `\n\n${lines.join('\n')}`;
+}
+
+/**
  * Run the selective faithfulness check. Returns a VerifyResult; the caller is
  * responsible for streaming `footer` as an extra SSE frame + appending it to
- * the persisted content when `action === 'annotate'`.
+ * the persisted content when `action === 'annotate'`. `language` localizes the
+ * self-check footer (default English for back-compat).
  */
-function verify({ response = '', decision = null, blocks = {}, deps = {} } = {}) {
+function verify({ response = '', decision = null, blocks = {}, language = 'en', deps = {} } = {}) {
   const postprocessor = 'postprocessor' in deps ? deps.postprocessor : defaultPostprocessor;
   const text = String(response || '');
 
@@ -119,10 +155,8 @@ function verify({ response = '', decision = null, blocks = {}, deps = {} } = {})
   }
 
   // action === 'annotate' — the answer scored below threshold. Surface the
-  // self-check footer the postprocessor built.
-  const footer = result.repair && result.repair.userFooter
-    ? `\n\n${result.repair.userFooter}`
-    : '';
+  // self-check footer, localized to the user's language.
+  const footer = buildLocalizedFooter(result, language);
   return {
     ran: true,
     reason: 'below_threshold',
@@ -138,6 +172,7 @@ function verify({ response = '', decision = null, blocks = {}, deps = {} } = {})
 module.exports = {
   shouldVerify,
   buildGroundingContext,
+  buildLocalizedFooter,
   verify,
   MIN_RESPONSE_CHARS,
 };

@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { buildSystemPrompt } = require('../src/services/master-prompt');
+const { buildSystemPrompt, REASONING_QUALITY_CONTRACT } = require('../src/services/master-prompt');
 
 test('buildSystemPrompt returns systemBlocks array alongside flat string', () => {
   const out = buildSystemPrompt({
@@ -83,6 +83,28 @@ test('buildSystemPrompt: with project, project block is present and cacheable', 
   assert.ok(proj, 'project block missing');
   assert.strictEqual(proj.cacheable, true);
   assert.ok(proj.text.includes('MyProj'));
+});
+
+test('REASONING_QUALITY_CONTRACT is exported and covers the core cognitive standards', () => {
+  assert.strictEqual(typeof REASONING_QUALITY_CONTRACT, 'string');
+  assert.ok(REASONING_QUALITY_CONTRACT.length > 400, 'contract should be substantial');
+  // The load-bearing behaviors that make the assistant feel frontier-grade.
+  assert.match(REASONING_QUALITY_CONTRACT, /Adaptive thinking depth/i);
+  assert.match(REASONING_QUALITY_CONTRACT, /Answer first|BLUF/i);
+  assert.match(REASONING_QUALITY_CONTRACT, /honesty|calibration/i);
+  assert.match(REASONING_QUALITY_CONTRACT, /Verify before/i);
+  assert.match(REASONING_QUALITY_CONTRACT, /never fabricate/i);
+});
+
+test('buildSystemPrompt: reasoning-quality contract ships inside the cacheable rules block', () => {
+  const out = buildSystemPrompt({ language: 'es', userMessage: 'explícame la relatividad general' });
+  // Present in the flat system string…
+  assert.match(out.system, /REASONING & ANSWER-QUALITY CONTRACT/);
+  // …and carried by the (cacheable) rules block, not a per-turn block.
+  const rules = out.systemBlocks.find((b) => b.kind === 'rules');
+  assert.ok(rules, 'rules block missing');
+  assert.strictEqual(rules.cacheable, true);
+  assert.match(rules.text, /Adaptive thinking depth/i);
 });
 
 test('buildSystemPrompt: extra blocks are appended as non-cacheable', () => {
