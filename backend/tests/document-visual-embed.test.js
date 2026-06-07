@@ -93,6 +93,26 @@ describe('document-visual-embed — diagrams (process / timeline / organigram)',
     assert.equal(detectVisualRequest('haz un gráfico de radar de las dimensiones').type, 'radar');
   });
 
+  it('builds a grouped (multi-series) bar chart with a legend', () => {
+    const svg = buildChartSvg({
+      type: 'grouped',
+      title: 'Pre vs Post',
+      labels: ['Dim 1', 'Dim 2', 'Dim 3'],
+      series: [{ name: 'Pre', values: [40, 55, 30] }, { name: 'Post', values: [70, 80, 65] }],
+    });
+    assert.match(svg, /Pre/);
+    assert.match(svg, /Post/);
+    assert.match(svg, /Dim 1/);
+    assert.equal(detectVisualRequest('un gráfico comparativo por grupos').type, 'grouped');
+  });
+
+  it('builds a scatter plot from x/y points', () => {
+    const svg = buildChartSvg({ type: 'scatter', title: 'Correlación', points: [{ x: 1, y: 2 }, { x: 3, y: 5 }, { x: 6, y: 4 }] });
+    assert.match(svg, /Correlación/);
+    assert.match(svg, /<circle /);
+    assert.equal(detectVisualRequest('una gráfica de dispersión de correlación').type, 'scatter');
+  });
+
   it('builds an organigram from a nested tree and connects parents to children', () => {
     const svg = buildChartSvg({
       type: 'organigram',

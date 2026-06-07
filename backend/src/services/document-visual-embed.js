@@ -344,6 +344,100 @@ function buildRadarChartSvg({ data, title, width, height, theme }) {
   return parts.join('');
 }
 
+function normalizeSeries(spec) {
+  if (Array.isArray(spec.series) && spec.series.length) {
+    const labels = Array.isArray(spec.labels)
+      ? spec.labels.map(String)
+      : (spec.data && Array.isArray(spec.data.labels) ? spec.data.labels.map(String) : []);
+    const series = spec.series.map((entry, index) => ({
+      name: String(entry.name ?? entry.label ?? `Serie ${index + 1}`),
+      values: (Array.isArray(entry.values) ? entry.values : []).map((value) => toNumber(value, 0)),
+    }));
+    const span = labels.length || Math.max(0, ...series.map((s) => s.values.length));
+    const filledLabels = Array.from({ length: span }, (_, i) => labels[i] || `Cat ${i + 1}`);
+    return { labels: filledLabels, series };
+  }
+  const points = normalizeData(spec.data);
+  return { labels: points.map((p) => p.label), series: [{ name: spec.title || 'Serie 1', values: points.map((p) => p.value) }] };
+}
+
+function buildGroupedBarChartSvg({ spec, title, width, height, theme }) {
+  const { labels, series } = normalizeSeries(spec);
+  const parts = [svgHeader(width, height, theme), svgTitle(title, width, theme)];
+  const padTop = title ? 56 : 28;
+  const padBottom = 78;
+  const padLeft = 56;
+  const padRight = 24;
+  const plotW = width - padLeft - padRight;
+  const plotH = height - padTop - padBottom;
+  const maxValue = Math.max(1, ...series.flatMap((s) => s.values));
+  const groups = Math.max(1, labels.length);
+  const perGroup = Math.max(1, series.length);
+  const slot = plotW / groups;
+  const groupInner = slot * 0.8;
+  const barW = groupInner / perGroup;
+
+  for (let i = 0; i <= 4; i += 1) {
+    const y = padTop + (plotH * i) / 4;
+    parts.push(`<line x1="${padLeft}" y1="${y.toFixed(1)}" x2="${width - padRight}" y2="${y.toFixed(1)}" stroke="${theme.grid}" stroke-width="1"/>`);
+    parts.push(`<text x="${padLeft - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="10" fill="${theme.axis}">${((maxValue * (4 - i)) / 4).toFixed(maxValue >= 10 ? 0 : 1)}</text>`);
+  }
+  labels.forEach((label, g) => {
+    const groupX = padLeft + slot * g + (slot - groupInner) / 2;
+    series.forEach((s, si) => {
+      const value = toNumber(s.values[g], 0);
+      const barH = (value / maxValue) * plotH;
+      const x = groupX + barW * si;
+      const y = padTop + plotH - barH;
+      parts.push(`<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${(barW * 0.92).toFixed(1)}" height="${Math.max(0, barH).toFixed(1)}" rx="2" fill="${theme.palette[si % theme.palette.length]}"/>`);
+    });
+    parts.push(`<text x="${(padLeft + slot * g + slot / 2).toFixed(1)}" y="${(padTop + plotH + 16).toFixed(1)}" text-anchor="middle" font-size="10" fill="${theme.axis}">${xmlEscape(String(label).slice(0, 12))}</text>`);
+  });
+  let lx = padLeft;
+  const ly = height - 20;
+  series.forEach((s, si) => {
+    parts.push(`<rect x="${lx}" y="${ly}" width="11" height="11" rx="2" fill="${theme.palette[si % theme.palette.length]}"/>`);
+    parts.push(`<text x="${lx + 16}" y="${ly + 10}" font-size="11" fill="${theme.text}">${xmlEscape(s.name.slice(0, 18))}</text>`);
+    lx += 16 + 8 + Math.min(150, s.name.length * 7 + 16);
+  });
+  parts.push(`<line x1="${padLeft}" y1="${padTop}" x2="${padLeft}" y2="${padTop + plotH}" stroke="${theme.axis}" stroke-width="1.5"/>`);
+  parts.push(`<line x1="${padLeft}" y1="${padTop + plotH}" x2="${width - padRight}" y2="${padTop + plotH}" stroke="${theme.axis}" stroke-width="1.5"/>`);
+  parts.push('</svg>');
+  return parts.join('');
+}
+
+function buildScatterChartSvg({ spec, title, width, height, theme }) {
+  const raw = Array.isArray(spec.points) ? spec.points : (Array.isArray(spec.data) ? spec.data : []);
+  const points = raw
+    .map((p) => (p && typeof p === 'object' ? { x: toNumber(p.x, NaN), y: toNumber(p.y, NaN) } : null))
+    .filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.y));
+  const parts = [svgHeader(width, height, theme), svgTitle(title, width, theme)];
+  const padTop = title ? 56 : 28;
+  const padBottom = 48;
+  const padLeft = 56;
+  const padRight = 24;
+  const plotW = width - padLeft - padRight;
+  const plotH = height - padTop - padBottom;
+  const xMax = Math.max(1, ...points.map((p) => p.x));
+  const yMax = Math.max(1, ...points.map((p) => p.y));
+  const color = theme.palette[0];
+
+  for (let i = 0; i <= 4; i += 1) {
+    const y = padTop + (plotH * i) / 4;
+    parts.push(`<line x1="${padLeft}" y1="${y.toFixed(1)}" x2="${width - padRight}" y2="${y.toFixed(1)}" stroke="${theme.grid}" stroke-width="1"/>`);
+    parts.push(`<text x="${padLeft - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="10" fill="${theme.axis}">${((yMax * (4 - i)) / 4).toFixed(yMax >= 10 ? 0 : 1)}</text>`);
+  }
+  points.forEach((p) => {
+    const cx = padLeft + (p.x / xMax) * plotW;
+    const cy = padTop + plotH - (p.y / yMax) * plotH;
+    parts.push(`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="4" fill="${color}" fill-opacity="0.75"/>`);
+  });
+  parts.push(`<line x1="${padLeft}" y1="${padTop}" x2="${padLeft}" y2="${padTop + plotH}" stroke="${theme.axis}" stroke-width="1.5"/>`);
+  parts.push(`<line x1="${padLeft}" y1="${padTop + plotH}" x2="${width - padRight}" y2="${padTop + plotH}" stroke="${theme.axis}" stroke-width="1.5"/>`);
+  parts.push('</svg>');
+  return parts.join('');
+}
+
 // Public: build a chart/diagram SVG string for the given spec.
 function buildChartSvg(spec = {}) {
   const width = Math.max(200, Math.min(1200, toNumber(spec.width, 640)));
@@ -360,6 +454,8 @@ function buildChartSvg(spec = {}) {
   if (type === 'timeline' || type === 'linea-de-tiempo' || type === 'cronologia') return buildTimelineSvg(params);
   if (type === 'organigram' || type === 'organigrama' || type === 'orgchart' || type === 'org') return buildOrganigramSvg({ spec, title, width, height, theme });
   if (type === 'radar' || type === 'spider' || type === 'arana') return buildRadarChartSvg(params);
+  if (type === 'grouped' || type === 'grouped-bar' || type === 'multibar' || type === 'comparativo' || type === 'agrupado') return buildGroupedBarChartSvg({ spec, title, width, height, theme });
+  if (type === 'scatter' || type === 'dispersion' || type === 'xy' || type === 'nube') return buildScatterChartSvg({ spec, title, width, height, theme });
   return buildBarChartSvg(params);
 }
 
@@ -493,9 +589,11 @@ function normalizeText(value) {
   return String(value || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
 }
 
-const VISUAL_INTENT_RE = /\b(grafico\w*|grafica\w*|diagrama\w*|organigrama\w*|linea de tiempo|cronolog\w*|timeline|flujograma|diagrama de flujo|flujo|chart|pastel|dona|donut|barras?|histograma|radar|arana|spider)\b/;
+const VISUAL_INTENT_RE = /\b(grafico\w*|grafica\w*|diagrama\w*|organigrama\w*|linea de tiempo|cronolog\w*|timeline|flujograma|diagrama de flujo|flujo|chart|pastel|dona|donut|barras?|histograma|radar|arana|spider|dispersion|scatter|correlacion|comparativ\w*|agrupad\w*)\b/;
 
 function inferVisualType(norm) {
+  if (/\bdispersion|scatter|correlacion|nube de puntos\b/.test(norm)) return 'scatter';
+  if (/\bcomparativ\w*|agrupad\w*|multibar|por grupos?\b/.test(norm)) return 'grouped';
   if (/\bradar|arana|spider\b/.test(norm)) return 'radar';
   if (/\borganigrama\w*|orgchart|organization\b/.test(norm)) return 'organigram';
   if (/\btimeline|linea de tiempo|cronolog\w*\b/.test(norm)) return 'timeline';
@@ -560,8 +658,8 @@ async function extractVisualSpecWithLLM({ requestText, sourceText, fallbackType,
             String(sourceText || '').slice(0, 6000),
             '',
             'Responde SOLO JSON:',
-            '{"type":"bar|pie|donut|line|process|timeline|organigram","title":"...","data":[{"label":"...","value":0}],"steps":["..."],"tree":{"label":"...","children":[]}}',
-            'Usa "data" para bar/pie/donut/line; "steps" para process; "data" con {label,date} para timeline; "tree" para organigram. Incluye solo el campo que corresponda al type.',
+            '{"type":"bar|pie|donut|line|radar|process|timeline|organigram|grouped|scatter","title":"...","data":[{"label":"...","value":0}],"steps":["..."],"tree":{"label":"...","children":[]},"labels":["..."],"series":[{"name":"...","values":[0]}],"points":[{"x":0,"y":0}]}',
+            'Usa "data" para bar/pie/donut/line/radar; "steps" para process; "data" con {label,date} para timeline; "tree" para organigram; "labels"+"series" para grouped (comparativo); "points" {x,y} para scatter. Incluye solo los campos del type.',
           ].join('\n'),
         },
       ],
@@ -571,9 +669,11 @@ async function extractVisualSpecWithLLM({ requestText, sourceText, fallbackType,
     const raw = completion?.choices?.[0]?.message?.content;
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    const type = ['bar', 'pie', 'donut', 'line', 'process', 'timeline', 'organigram'].includes(parsed.type) ? parsed.type : fallbackType;
+    const type = ['bar', 'pie', 'donut', 'line', 'radar', 'process', 'timeline', 'organigram', 'grouped', 'scatter'].includes(parsed.type) ? parsed.type : fallbackType;
     const spec = { type, title: parsed.title ? String(parsed.title) : '' };
     if (type === 'organigram' && parsed.tree) spec.tree = parsed.tree;
+    else if (type === 'scatter' && Array.isArray(parsed.points)) spec.points = parsed.points;
+    else if (type === 'grouped' && Array.isArray(parsed.series)) { spec.series = parsed.series; if (Array.isArray(parsed.labels)) spec.labels = parsed.labels; }
     else if (type === 'process' && Array.isArray(parsed.steps)) spec.data = parsed.steps;
     else if (Array.isArray(parsed.data) && parsed.data.length) spec.data = parsed.data;
     else if (Array.isArray(parsed.steps) && parsed.steps.length) spec.data = parsed.steps;
@@ -586,6 +686,11 @@ async function extractVisualSpecWithLLM({ requestText, sourceText, fallbackType,
 function visualSpecHasContent(spec) {
   if (!spec) return false;
   if (spec.type === 'organigram') return Boolean(spec.tree && (spec.tree.label || (Array.isArray(spec.tree.children) && spec.tree.children.length)));
+  if (spec.type === 'scatter') {
+    const pts = Array.isArray(spec.points) ? spec.points : (Array.isArray(spec.data) ? spec.data : []);
+    return pts.some((p) => p && Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y)));
+  }
+  if (Array.isArray(spec.series) && spec.series.some((s) => Array.isArray(s.values) && s.values.length)) return true;
   return Array.isArray(spec.data) && spec.data.length > 0;
 }
 
