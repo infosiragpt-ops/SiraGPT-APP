@@ -32,6 +32,8 @@ router.get('/providers', responseCache({ ttlMs: 5 * 60_000, namespace: 'sci-prov
       core: !!process.env.CORE_API_KEY,
       ncbi: !!process.env.NCBI_API_KEY,
       semanticscholar: !!process.env.SEMANTIC_SCHOLAR_API_KEY,
+      scopus: !!process.env.SCOPUS_API_KEY,
+      wos: !!(process.env.WOS_API_KEY || process.env.CLARIVATE_API_KEY),
       mailto: !!process.env.SIRAGPT_RESEARCH_EMAIL,
     },
   });

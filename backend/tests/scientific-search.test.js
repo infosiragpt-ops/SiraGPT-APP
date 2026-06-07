@@ -424,8 +424,207 @@ test('searchDataCite: maps attributes to canonical shape', async () => {
   assert.equal(out[0].authors[1].name, 'Joe Smith', 'given+family joined');
 });
 
+// ── SciELO (via Crossref member 530) ───────────────────────────────────
+
+test('searchSciELO: queries Crossref member 530 and maps to canonical shape', async () => {
+  let calledUrl = '';
+  setFetchHandler((url) => {
+    calledUrl = url;
+    assert.ok(url.includes('api.crossref.org'), 'hits Crossref');
+    assert.ok(url.includes('member%3A530'), 'filters to SciELO member 530');
+    return Promise.resolve(jsonResponse({
+      message: {
+        items: [{
+          DOI: '10.1590/s0102-67202013000200003',
+          title: ['Cirugía bariátrica'],
+          author: [{ given: 'Ana', family: 'Souza' }],
+          issued: { 'date-parts': [[2013]] },
+          'container-title': ['ABCD Arq Bras Cir Dig'],
+          'is-referenced-by-count': 7,
+          URL: 'https://doi.org/10.1590/s0102-67202013000200003',
+        }],
+      },
+    }));
+  });
+  const out = await ss.searchSciELO('cirugia bariatrica');
+  assert.equal(out.length, 1);
+  assert.equal(out[0].source, 'scielo');
+  assert.equal(out[0].openAccess, true, 'SciELO is OA by definition');
+  assert.equal(out[0].doi, '10.1590/s0102-67202013000200003');
+  assert.equal(out[0].title, 'Cirugía bariátrica');
+  assert.equal(out[0].venue, 'ABCD Arq Bras Cir Dig');
+  assert.equal(out[0].citations, 7);
+  assert.equal(out[0].authors[0].name, 'Ana Souza');
+  assert.ok(calledUrl, 'fetch was called');
+});
+
+// ── Redalyc (via OpenAlex source pin) ──────────────────────────────────
+
+test('searchRedalyc: pins OpenAlex to the Redalyc source and links to redalyc.org', async () => {
+  setFetchHandler((url) => {
+    assert.ok(url.includes('api.openalex.org'), 'hits OpenAlex');
+    assert.ok(url.includes('S4377196100'), 'pins to the Redalyc primary source id');
+    return Promise.resolve(jsonResponse({
+      results: [{
+        id: 'https://openalex.org/W123',
+        title: 'Educación inclusiva',
+        abstract_inverted_index: { Hola: [0], mundo: [1] },
+        authorships: [{ author: { display_name: 'A. Pérez' }, institutions: [{ display_name: 'UAEMex' }] }],
+        publication_year: 2011,
+        cited_by_count: 12,
+        doi: null,
+        open_access: { is_oa: false, oa_url: null },
+        primary_location: {
+          source: { id: 'https://openalex.org/S4377196100', display_name: 'Redalyc (UAEMex)' },
+          landing_page_url: 'https://www.redalyc.org/articulo.oa?id=20804208',
+          pdf_url: null,
+        },
+      }],
+    }));
+  });
+  const out = await ss.searchRedalyc('educacion inclusiva');
+  assert.equal(out.length, 1);
+  assert.equal(out[0].source, 'redalyc');
+  assert.equal(out[0].venue, 'Redalyc', 'venue label hard-coded');
+  assert.ok(out[0].htmlUrl.startsWith('https://www.redalyc.org/articulo.oa'), 'links to the real redalyc.org page');
+  assert.equal(out[0].abstract, 'Hola mundo', 'inverted index reconstructed');
+  assert.equal(out[0].openAccess, false, 'do not force OA true');
+  assert.equal(out[0].doi, null);
+});
+
+// ── Scopus (key-gated) ──────────────────────────────────────────────────
+
+test('searchScopus: returns [] without SCOPUS_API_KEY (no network call)', async () => {
+  const orig = process.env.SCOPUS_API_KEY;
+  delete process.env.SCOPUS_API_KEY;
+  try {
+    setFetchHandler(() => { throw new Error('should not be called'); });
+    const out = await ss.searchScopus('anything');
+    assert.deepEqual(out, []);
+  } finally {
+    if (orig !== undefined) process.env.SCOPUS_API_KEY = orig;
+  }
+});
+
+test('searchScopus: maps STANDARD-view entries when SCOPUS_API_KEY is set', async () => {
+  const orig = process.env.SCOPUS_API_KEY;
+  process.env.SCOPUS_API_KEY = 'test-key';
+  try {
+    setFetchHandler((url, opts) => {
+      assert.ok(url.includes('api.elsevier.com/content/search/scopus'));
+      assert.equal(opts.headers['X-ELS-APIKey'], 'test-key', 'key sent in header, not URL');
+      assert.ok(!url.includes('test-key'), 'key never in the URL');
+      return Promise.resolve(jsonResponse({
+        'search-results': {
+          entry: [{
+            'dc:identifier': 'SCOPUS_ID:85012345678',
+            'dc:title': 'Deep learning for X',
+            'dc:creator': 'Doe J.',
+            'prism:coverDate': '2020-05-01',
+            'prism:publicationName': 'Journal of X',
+            'prism:doi': '10.1/x',
+            'citedby-count': '42',
+            openaccess: '1',
+            link: [{ '@ref': 'scopus', '@href': 'https://www.scopus.com/record/85012345678' }],
+          }],
+        },
+      }));
+    });
+    const out = await ss.searchScopus('deep learning');
+    assert.equal(out.length, 1);
+    assert.equal(out[0].source, 'scopus');
+    assert.equal(out[0].id, 'scopus:85012345678');
+    assert.equal(out[0].doi, '10.1/x');
+    assert.equal(out[0].year, 2020);
+    assert.equal(out[0].venue, 'Journal of X');
+    assert.equal(out[0].citations, 42);
+    assert.equal(out[0].openAccess, true);
+    assert.equal(out[0].abstract, null, 'no abstract in STANDARD view');
+    assert.equal(out[0].authors[0].name, 'Doe J.');
+    assert.equal(out[0].htmlUrl, 'https://www.scopus.com/record/85012345678');
+  } finally {
+    if (orig === undefined) delete process.env.SCOPUS_API_KEY;
+    else process.env.SCOPUS_API_KEY = orig;
+  }
+});
+
+test('searchScopus: filters the synthetic empty-result entry', async () => {
+  const orig = process.env.SCOPUS_API_KEY;
+  process.env.SCOPUS_API_KEY = 'test-key';
+  try {
+    setFetchHandler(() => Promise.resolve(jsonResponse({
+      'search-results': { entry: [{ error: 'Result set was empty' }] },
+    })));
+    const out = await ss.searchScopus('zzzzz');
+    assert.deepEqual(out, []);
+  } finally {
+    if (orig === undefined) delete process.env.SCOPUS_API_KEY;
+    else process.env.SCOPUS_API_KEY = orig;
+  }
+});
+
+// ── Web of Science (key-gated) ──────────────────────────────────────────
+
+test('searchWebOfScience: returns [] without a key (no network call)', async () => {
+  const origW = process.env.WOS_API_KEY;
+  const origC = process.env.CLARIVATE_API_KEY;
+  delete process.env.WOS_API_KEY;
+  delete process.env.CLARIVATE_API_KEY;
+  try {
+    setFetchHandler(() => { throw new Error('should not be called'); });
+    const out = await ss.searchWebOfScience('anything');
+    assert.deepEqual(out, []);
+  } finally {
+    if (origW !== undefined) process.env.WOS_API_KEY = origW;
+    if (origC !== undefined) process.env.CLARIVATE_API_KEY = origC;
+  }
+});
+
+test('searchWebOfScience: maps Starter API hits when WOS_API_KEY is set', async () => {
+  const origW = process.env.WOS_API_KEY;
+  const origC = process.env.CLARIVATE_API_KEY;
+  process.env.WOS_API_KEY = 'wos-test-key';
+  delete process.env.CLARIVATE_API_KEY;
+  try {
+    setFetchHandler((url, opts) => {
+      assert.ok(url.includes('api.clarivate.com/apis/wos-starter'));
+      assert.equal(opts.headers['X-ApiKey'], 'wos-test-key', 'X-ApiKey header, no Bearer');
+      assert.ok(url.includes('TS%3D'), 'wraps the query in the TS topic field tag');
+      return Promise.resolve(jsonResponse({
+        metadata: { total: 1, page: 1, limit: 10 },
+        hits: [{
+          uid: 'WOS:000123456700001',
+          title: 'A WoS paper',
+          source: { sourceTitle: 'Nature', publishYear: 2020 },
+          names: { authors: [{ displayName: 'Doe, J' }] },
+          identifiers: { doi: '10.1/x' },
+          citations: [{ db: 'WOS', count: 42 }],
+          links: { record: 'https://www.webofscience.com/wos/woscc/full-record/WOS:000123456700001' },
+          keywords: { authorKeywords: ['ml', 'ai'] },
+        }],
+      }));
+    });
+    const out = await ss.searchWebOfScience('machine learning');
+    assert.equal(out.length, 1);
+    assert.equal(out[0].source, 'wos');
+    assert.equal(out[0].id, 'WOS:000123456700001');
+    assert.equal(out[0].doi, '10.1/x');
+    assert.equal(out[0].citations, 42);
+    assert.equal(out[0].venue, 'Nature');
+    assert.equal(out[0].year, 2020);
+    assert.equal(out[0].htmlUrl, 'https://www.webofscience.com/wos/woscc/full-record/WOS:000123456700001');
+    assert.equal(out[0].abstract, 'ml, ai', 'authorKeywords surfaced as a snippet');
+    assert.equal(out[0].openAccess, null, 'OA not exposed by Starter API');
+    assert.equal(out[0].pdfUrl, null);
+    assert.equal(out[0].authors[0].name, 'Doe, J');
+  } finally {
+    if (origW === undefined) delete process.env.WOS_API_KEY; else process.env.WOS_API_KEY = origW;
+    if (origC !== undefined) process.env.CLARIVATE_API_KEY = origC;
+  }
+});
+
 test('PROVIDERS includes the worldwide sources', () => {
-  for (const p of ['doaj', 'dblp', 'datacite']) {
+  for (const p of ['doaj', 'dblp', 'datacite', 'scielo', 'redalyc', 'scopus', 'wos']) {
     assert.ok(ss.PROVIDERS.includes(p), `${p} listed in PROVIDERS`);
   }
 });

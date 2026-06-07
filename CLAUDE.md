@@ -616,8 +616,44 @@ DataCite (worldwide datasets/software/theses). All key-less + query-based.
 
 ### Agentic chat tools
 Both searches are now first-class tools the chat agent can invoke:
-`github_search` and `scientific_search` (registered in `agents/agent-tools.js`,
-wired into `agentic-chat-stream.js` `baseWebTools`).
+`github_search` and `scientific_search` (registered in `agents/agent-tools.js`
+`ALL_TOOLS`; `scientific_search` powered by `scientific-search.js`).
+
+## Academic providers — SciELO / Redalyc / Scopus / Web of Science — added 2026-06-07
+
+`scientific-search.js` extended from 10 → **14 providers** so the chat agent's
+`scientific_search` tool reaches Latin-American/Iberian + commercial indices.
+No new npm deps (stdlib `fetch` + existing `safeJson`/`clampLimit` helpers).
+Two shared mappers were factored to avoid duplication: `mapCrossrefWork`
+(CrossRef + SciELO) and `mapOpenAlexWork` (OpenAlex + Redalyc) — both preserve
+the exact prior CrossRef/OpenAlex output (existing tests unchanged & green).
+
+- **SciELO** (`searchSciELO`, key-free) — queried via **Crossref member 530**
+  (FapUNIFESP, the SciELO DOI agency), NOT `search.scielo.org` whose JSON
+  endpoint is now behind a Bunny-Shield JS proof-of-work anti-bot gate (403s
+  server-side `fetch`). `openAccess:true` by definition.
+- **Redalyc** (`searchRedalyc`, key-free) — via **OpenAlex pinned to the Redalyc
+  source** `primary_location.source.id:S4377196100` (works whose *primary* host
+  is Redalyc; the looser `locations.source.id` over-matches co-hosted works).
+  `htmlUrl` points at the real `redalyc.org/articulo.oa` page; `venue:'Redalyc'`.
+  Redalyc-native records often lack DOIs and OpenAlex reports `is_oa:false`.
+- **Scopus** (`searchScopus`, key-gated) — Elsevier Scopus Search API
+  (`X-ELS-APIKey` header, optional `X-ELS-Insttoken`). `SCOPUS_API_KEY` /
+  `SCOPUS_INSTTOKEN`. STANDARD view → no abstract/PDF, first author only,
+  `count≤25`. Returns `[]` (no network call) when the key is absent.
+- **Web of Science** (`searchWebOfScience`, key-gated) — Clarivate **Starter
+  API** (`X-ApiKey` header, `q=TS=(…)` topic search, `db=WOS`, `limit≤50`).
+  `WOS_API_KEY` / `CLARIVATE_API_KEY`. Metadata only: no abstract (surfaces
+  `authorKeywords` as a snippet), no PDF, no OA flag. Returns `[]` without a key.
+
+DuckDuckGo, Brave (cached, key-gated) and Browser Automation
+(`browser_navigate`/`click`/`type`/`scroll`) were already wired (see the
+`web_search` adapter and `agent-tools.js` browser tools) — this change only
+filled the academic-DB gap requested.
+- **Route**: `GET /api/scientific-search/providers` now reports `scopus`/`wos`
+  in `keysConfigured`. `scientific_search` tool description lists the new sources.
+- **Tests**: `tests/scientific-search.test.js` — +7 (SciELO, Redalyc, Scopus
+  no-key/with-key/empty-entry, WoS no-key/with-key); 64 total, all offline.
 
 ## Brave Search + X (Twitter) search — added 2026-06-07 (production-hardened)
 

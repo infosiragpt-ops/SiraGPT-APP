@@ -1424,11 +1424,11 @@ const github_search = {
 
 const scientific_search = {
   name: 'scientific_search',
-  description: 'Search peer-reviewed scientific papers across open APIs worldwide (arXiv, OpenAlex, CrossRef, PubMed, Europe PMC, Semantic Scholar, CORE, DOAJ, DBLP, DataCite). Use when the user needs academic sources, citations, DOIs or a literature review. Returns ranked papers with title, authors, year, venue, citations, abstract and PDF/HTML links.',
+  description: 'Search peer-reviewed scientific papers across APIs worldwide (arXiv, OpenAlex, CrossRef, PubMed, Europe PMC, Semantic Scholar, CORE, DOAJ, DBLP, DataCite, SciELO + Redalyc for Latin-American/Iberian sources, plus Scopus and Web of Science when their API keys are configured). Use when the user needs academic sources, citations, DOIs or a literature review. Returns ranked papers with title, authors, year, venue, citations, abstract and PDF/HTML links.',
   schema: {
     query: 'string (required — research topic or keywords)',
     limit: 'number (optional per-provider cap, default 8, max 25)',
-    providers: 'array (optional subset, e.g. ["arxiv","pubmed"]; default all)',
+    providers: 'array (optional subset, e.g. ["scielo","redalyc","scopus","wos"]; default all)',
   },
   async handler(args) {
     const query = typeof args?.query === 'string' ? args.query.trim() : '';

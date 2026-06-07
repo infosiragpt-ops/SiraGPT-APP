@@ -3,18 +3,22 @@
 /**
  * scientific-search.js
  * ─────────────────────────────────────────────────────────────────────────────
- * Unified search over the major OPEN scientific-paper APIs, spanning multiple
+ * Unified search over the major scientific-paper APIs, spanning multiple
  * regions of the world. Most sources work with NO API key (arXiv, Semantic
  * Scholar, OpenAlex, CrossRef, PubMed E-utilities, Europe PMC, DOAJ, DBLP,
- * DataCite); CORE optionally takes a free key for higher rate limits. DOAJ adds
- * worldwide open-access journal coverage (~130 countries), DBLP the global
- * computer-science bibliography, and DataCite global datasets/software/theses.
+ * DataCite, SciELO, Redalyc); CORE optionally takes a free key for higher rate
+ * limits. DOAJ adds worldwide open-access journal coverage (~130 countries),
+ * DBLP the global computer-science bibliography, DataCite global
+ * datasets/software/theses, and SciELO + Redalyc strong Latin-American /
+ * Iberian open-access reach. Two commercial indices are key-gated and degrade
+ * to [] when unconfigured: Scopus (SCOPUS_API_KEY, Elsevier) and Web of Science
+ * (WOS_API_KEY / CLARIVATE_API_KEY, Clarivate Starter API).
  *
  * Each provider exposes a `search(query, opts)` function that returns an
  * array of canonical Paper objects:
  *
  *   {
- *     source: 'arxiv' | 'openalex' | 'semanticscholar' | 'crossref' | 'pubmed' | 'europepmc' | 'core' | 'doaj' | 'dblp' | 'datacite',
+ *     source: 'arxiv' | 'openalex' | 'semanticscholar' | 'crossref' | 'pubmed' | 'europepmc' | 'core' | 'doaj' | 'dblp' | 'datacite' | 'scielo' | 'scopus' | 'wos' | 'redalyc',
  *     id: <provider-native id>,
  *     doi: '10.x/...' | null,
  *     title: 'string',
@@ -43,6 +47,10 @@
  *   searchPubMed(query, opts)
  *   searchEuropePMC(query, opts)
  *   searchCore(query, opts)
+ *   searchSciELO(query, opts)        — key-free (via Crossref member 530)
+ *   searchRedalyc(query, opts)       — key-free (via OpenAlex source pin)
+ *   searchScopus(query, opts)        — requires SCOPUS_API_KEY
+ *   searchWebOfScience(query, opts)  — requires WOS_API_KEY / CLARIVATE_API_KEY
  *   _internal: { dedupeByDoi, normaliseTitle, parseAtomFeed }
  *
  * Design constraints:
@@ -75,7 +83,7 @@ const DEFAULT_TOTAL_TIMEOUT_MS = (() => {
   return Number.isFinite(n) && n > 0 ? n : 20000;
 })();
 
-const PROVIDERS = ['arxiv', 'openalex', 'semanticscholar', 'crossref', 'pubmed', 'europepmc', 'core', 'doaj', 'dblp', 'datacite'];
+const PROVIDERS = ['arxiv', 'openalex', 'semanticscholar', 'crossref', 'pubmed', 'europepmc', 'core', 'doaj', 'dblp', 'datacite', 'scielo', 'scopus', 'wos', 'redalyc'];
 
 function userAgent() {
   const email = process.env.SIRAGPT_RESEARCH_EMAIL || '';
@@ -400,6 +408,34 @@ async function searchSemanticScholar(query, opts = {}) {
 
 // ── OpenAlex ───────────────────────────────────────────────────────────
 // https://api.openalex.org — no key required; `mailto` is polite.
+// Shared mapper so Redalyc (queried via an OpenAlex source filter) reuses
+// the exact same canonical projection. `venueLabel` overrides the venue
+// name; `preferLandingPage` makes htmlUrl point at the publisher's landing
+// page (the real redalyc.org article) instead of the openalex.org URL.
+function mapOpenAlexWork(w, source, { venueLabel, preferLandingPage } = {}) {
+  const doi = w.doi?.replace(/^https?:\/\/doi\.org\//, '') || null;
+  const landing = w.primary_location?.landing_page_url || null;
+  return {
+    source,
+    id: w.id?.replace(/^https?:\/\/openalex\.org\//, '') || null,
+    doi,
+    title: w.title || w.display_name || '',
+    abstract: w.abstract_inverted_index ? invertedIndexToText(w.abstract_inverted_index) : null,
+    authors: (w.authorships || []).map((a) => ({
+      name: a.author?.display_name || null,
+      affiliation: a.institutions?.[0]?.display_name || null,
+    })).filter((a) => a.name),
+    year: w.publication_year || null,
+    venue: venueLabel || w.host_venue?.display_name || w.primary_location?.source?.display_name || null,
+    citations: typeof w.cited_by_count === 'number' ? w.cited_by_count : null,
+    openAccess: !!w.open_access?.is_oa,
+    pdfUrl: w.open_access?.oa_url || w.primary_location?.pdf_url || null,
+    htmlUrl: preferLandingPage
+      ? (landing || w.id || (doi ? `https://doi.org/${doi}` : null))
+      : (w.id || (doi ? `https://doi.org/${doi}` : null)),
+  };
+}
+
 async function searchOpenAlex(query, opts = {}) {
   const limit = clampLimit(opts.limit);
   const params = new URLSearchParams({
@@ -410,23 +446,30 @@ async function searchOpenAlex(query, opts = {}) {
   const url = `https://api.openalex.org/works?${params.toString()}`;
   const json = await safeJson(url, { timeoutMs: opts.timeoutMs, signal: opts.signal, label: 'openalex' });
   const items = Array.isArray(json.results) ? json.results : [];
-  return items.map((w) => ({
-    source: 'openalex',
-    id: w.id?.replace(/^https?:\/\/openalex\.org\//, '') || null,
-    doi: w.doi?.replace(/^https?:\/\/doi\.org\//, '') || null,
-    title: w.title || w.display_name || '',
-    abstract: w.abstract_inverted_index ? invertedIndexToText(w.abstract_inverted_index) : null,
-    authors: (w.authorships || []).map((a) => ({
-      name: a.author?.display_name || null,
-      affiliation: a.institutions?.[0]?.display_name || null,
-    })).filter((a) => a.name),
-    year: w.publication_year || null,
-    venue: w.host_venue?.display_name || w.primary_location?.source?.display_name || null,
-    citations: typeof w.cited_by_count === 'number' ? w.cited_by_count : null,
-    openAccess: !!w.open_access?.is_oa,
-    pdfUrl: w.open_access?.oa_url || w.primary_location?.pdf_url || null,
-    htmlUrl: w.id || (w.doi ? `https://doi.org/${w.doi.replace(/^https?:\/\/doi\.org\//, '')}` : null),
-  }));
+  return items.map((w) => mapOpenAlexWork(w, 'openalex'));
+}
+
+// ── Redalyc — Latin-American open-access (UAEMex) ───────────────────────
+// Redalyc exposes no documented key-free keyword-search JSON API, so we
+// query OpenAlex pinned to Redalyc's canonical source id — the works whose
+// PRIMARY host is the Redalyc platform (primary_location.source.id, not the
+// looser locations.source.id which also matches merely co-hosted works).
+// Key-free and honest: every hit is a redalyc.org article, and htmlUrl
+// points at the real redalyc.org landing page. Note: Redalyc-native records
+// frequently lack DOIs and OpenAlex often reports is_oa:false for them.
+const REDALYC_OPENALEX_SOURCE = 'S4377196100';
+async function searchRedalyc(query, opts = {}) {
+  const limit = clampLimit(opts.limit);
+  const params = new URLSearchParams({
+    search: query,
+    per_page: String(limit),
+    filter: `primary_location.source.id:${REDALYC_OPENALEX_SOURCE}`,
+  });
+  if (process.env.SIRAGPT_RESEARCH_EMAIL) params.set('mailto', process.env.SIRAGPT_RESEARCH_EMAIL);
+  const url = `https://api.openalex.org/works?${params.toString()}`;
+  const json = await safeJson(url, { timeoutMs: opts.timeoutMs, signal: opts.signal, label: 'redalyc' });
+  const items = Array.isArray(json.results) ? json.results : [];
+  return items.map((w) => mapOpenAlexWork(w, 'redalyc', { venueLabel: 'Redalyc', preferLandingPage: true }));
 }
 
 function invertedIndexToText(idx) {
@@ -451,15 +494,11 @@ function invertedIndexToText(idx) {
 
 // ── CrossRef ────────────────────────────────────────────────────────────
 // https://api.crossref.org/works — no key required, `mailto` polite.
-async function searchCrossRef(query, opts = {}) {
-  const limit = clampLimit(opts.limit);
-  const params = new URLSearchParams({ query, rows: String(limit) });
-  if (process.env.SIRAGPT_RESEARCH_EMAIL) params.set('mailto', process.env.SIRAGPT_RESEARCH_EMAIL);
-  const url = `https://api.crossref.org/works?${params.toString()}`;
-  const json = await safeJson(url, { timeoutMs: opts.timeoutMs, signal: opts.signal, label: 'crossref' });
-  const items = Array.isArray(json.message?.items) ? json.message.items : [];
-  return items.map((w) => ({
-    source: 'crossref',
+// Shared mapper so SciELO (which is queried via a Crossref member filter)
+// produces byte-for-byte the same canonical shape as plain Crossref.
+function mapCrossrefWork(w, source, openAccess) {
+  return {
+    source,
     id: w.DOI || null,
     doi: w.DOI || null,
     title: Array.isArray(w.title) ? w.title[0] : (w.title || ''),
@@ -471,10 +510,37 @@ async function searchCrossRef(query, opts = {}) {
     year: w.issued?.['date-parts']?.[0]?.[0] || null,
     venue: Array.isArray(w['container-title']) ? w['container-title'][0] : null,
     citations: typeof w['is-referenced-by-count'] === 'number' ? w['is-referenced-by-count'] : null,
-    openAccess: null, // CrossRef doesn't reliably know
+    openAccess,
     pdfUrl: null,
     htmlUrl: w.URL || (w.DOI ? `https://doi.org/${w.DOI}` : null),
-  }));
+  };
+}
+
+async function searchCrossRef(query, opts = {}) {
+  const limit = clampLimit(opts.limit);
+  const params = new URLSearchParams({ query, rows: String(limit) });
+  if (process.env.SIRAGPT_RESEARCH_EMAIL) params.set('mailto', process.env.SIRAGPT_RESEARCH_EMAIL);
+  const url = `https://api.crossref.org/works?${params.toString()}`;
+  const json = await safeJson(url, { timeoutMs: opts.timeoutMs, signal: opts.signal, label: 'crossref' });
+  const items = Array.isArray(json.message?.items) ? json.message.items : [];
+  return items.map((w) => mapCrossrefWork(w, 'crossref', null)); // CrossRef doesn't reliably know OA
+}
+
+// ── SciELO — Latin-American / Iberian open-access network ───────────────
+// SciELO articles register their DOIs through Crossref member 530
+// (FapUNIFESP — the SciELO DOI agency), so we query Crossref filtered to
+// that member rather than search.scielo.org, whose JSON endpoint is now
+// behind a JavaScript proof-of-work anti-bot challenge (403s server-side
+// fetch). This Crossref polite-pool path is key-free and robust, and every
+// hit is a genuine open-access SciELO article.
+async function searchSciELO(query, opts = {}) {
+  const limit = clampLimit(opts.limit);
+  const params = new URLSearchParams({ query, rows: String(limit), filter: 'member:530' });
+  if (process.env.SIRAGPT_RESEARCH_EMAIL) params.set('mailto', process.env.SIRAGPT_RESEARCH_EMAIL);
+  const url = `https://api.crossref.org/works?${params.toString()}`;
+  const json = await safeJson(url, { timeoutMs: opts.timeoutMs, signal: opts.signal, label: 'scielo' });
+  const items = Array.isArray(json.message?.items) ? json.message.items : [];
+  return items.map((w) => mapCrossrefWork(w, 'scielo', true)); // SciELO is open access by definition
 }
 
 // ── PubMed E-utilities ─────────────────────────────────────────────────
@@ -669,6 +735,99 @@ async function searchDataCite(query, opts = {}) {
   });
 }
 
+// ── Scopus (Elsevier) — requires a key ──────────────────────────────────
+// https://api.elsevier.com/content/search/scopus — key-gated on
+// SCOPUS_API_KEY (+ optional SCOPUS_INSTTOKEN for institutional customers).
+// STANDARD view returns title / first-author / venue / year / doi /
+// citations only — no abstract, no PDF. Returns [] when no key is set, so
+// the unified search degrades cleanly to the open providers.
+async function searchScopus(query, opts = {}) {
+  const apiKey = process.env.SCOPUS_API_KEY;
+  if (!apiKey) return []; // key-gated soft-skip (no network call)
+  const count = Math.min(25, clampLimit(opts.limit)); // conservative cap (STANDARD view permits up to 200, COMPLETE only 25)
+  const params = new URLSearchParams({ query, count: String(count), view: 'STANDARD', sort: 'relevancy' });
+  const url = `https://api.elsevier.com/content/search/scopus?${params.toString()}`;
+  const headers = { 'X-ELS-APIKey': apiKey };
+  if (process.env.SCOPUS_INSTTOKEN) headers['X-ELS-Insttoken'] = process.env.SCOPUS_INSTTOKEN;
+  const json = await safeJson(url, { headers, timeoutMs: opts.timeoutMs, signal: opts.signal, label: 'scopus' });
+  const entries = json?.['search-results']?.entry;
+  if (!Array.isArray(entries)) return [];
+  return entries
+    .filter((e) => e && !e.error) // Scopus returns a synthetic { error } entry on zero hits
+    .map((e) => {
+      const doi = e['prism:doi'] || null;
+      const coverDate = typeof e['prism:coverDate'] === 'string' ? e['prism:coverDate'] : '';
+      const year = /^\d{4}/.test(coverDate) ? (parseInt(coverDate.slice(0, 4), 10) || null) : null;
+      const citesRaw = Number(e['citedby-count']);
+      const oa = e.openaccess;
+      const idRaw = e['dc:identifier'];
+      const scopusId = String((Array.isArray(idRaw) ? idRaw[0] : idRaw) || '').replace(/^SCOPUS_ID:/, '');
+      const landing = Array.isArray(e.link) ? (e.link.find((l) => l && l['@ref'] === 'scopus')?.['@href'] || null) : null;
+      return {
+        source: 'scopus',
+        id: scopusId ? `scopus:${scopusId}` : (doi ? `scopus:${doi}` : (e.eid || null)),
+        doi,
+        title: e['dc:title'] || '',
+        abstract: null, // not available in STANDARD view
+        authors: e['dc:creator'] ? [{ name: e['dc:creator'] }] : [], // STANDARD view = first author only
+        year,
+        venue: e['prism:publicationName'] || null,
+        citations: Number.isFinite(citesRaw) ? citesRaw : null,
+        openAccess: (oa === '1' || oa === 1 || oa === true)
+          ? true
+          : (oa === '0' || oa === 0 || oa === false) ? false : null,
+        pdfUrl: null,
+        // prefer the user-facing Scopus record link, then the DOI resolver;
+        // never the prism:url API self-link (api.elsevier.com — not openable).
+        htmlUrl: landing || (doi ? `https://doi.org/${doi}` : null),
+      };
+    });
+}
+
+// ── Web of Science (Clarivate) — Starter API, requires a key ────────────
+// https://api.clarivate.com/apis/wos-starter/v1/documents — key-gated on
+// WOS_API_KEY (or CLARIVATE_API_KEY), passed as the X-ApiKey header (no
+// "Bearer" prefix). Bibliographic metadata only: no abstract text, no PDF,
+// no open-access flag — we surface authorKeywords as a weak snippet.
+// Returns [] when no key is configured.
+async function searchWebOfScience(query, opts = {}) {
+  const apiKey = process.env.WOS_API_KEY || process.env.CLARIVATE_API_KEY;
+  if (!apiKey) return []; // key-gated soft-skip (no network call)
+  const limit = Math.min(50, clampLimit(opts.limit)); // Starter API caps limit at 50
+  // Strip characters that would break the WoS advanced-query parser, then
+  // wrap in the TS (Topic) field tag for a free-text title/abstract/keyword search.
+  const safeQuery = String(query).replace(/[()"]/g, ' ').replace(/\s+/g, ' ').trim();
+  const params = new URLSearchParams({ q: `TS=(${safeQuery})`, db: 'WOS', limit: String(limit), page: '1' });
+  const url = `https://api.clarivate.com/apis/wos-starter/v1/documents?${params.toString()}`;
+  const json = await safeJson(url, {
+    headers: { 'X-ApiKey': apiKey },
+    timeoutMs: opts.timeoutMs, signal: opts.signal, label: 'wos',
+  });
+  const items = Array.isArray(json?.hits) ? json.hits : [];
+  return items.map((rec) => {
+    const doi = rec.identifiers?.doi || null;
+    const wosCite = Array.isArray(rec.citations)
+      ? (rec.citations.find((c) => c && c.db === 'WOS') || rec.citations[0])
+      : null;
+    const authorKeywords = rec.keywords?.authorKeywords;
+    const py = rec.source?.publishYear;
+    return {
+      source: 'wos',
+      id: rec.uid || null, // e.g. "WOS:000123456700001"
+      doi,
+      title: rec.title || '',
+      abstract: Array.isArray(authorKeywords) && authorKeywords.length ? authorKeywords.join(', ') : null,
+      authors: (rec.names?.authors || []).map((a) => ({ name: a.displayName || a.wosStandard })).filter((a) => a.name),
+      year: Number.isFinite(py) ? py : (py ? (parseInt(py, 10) || null) : null),
+      venue: rec.source?.sourceTitle || null,
+      citations: typeof wosCite?.count === 'number' ? wosCite.count : null,
+      openAccess: null, // not exposed by the Starter API
+      pdfUrl: null, // not exposed by the Starter API
+      htmlUrl: rec.links?.record || (doi ? `https://doi.org/${doi}` : null),
+    };
+  });
+}
+
 const PROVIDER_FUNCS = {
   arxiv: searchArxiv,
   semanticscholar: searchSemanticScholar,
@@ -680,6 +839,10 @@ const PROVIDER_FUNCS = {
   doaj: searchDOAJ,
   dblp: searchDBLP,
   datacite: searchDataCite,
+  scielo: searchSciELO,
+  scopus: searchScopus,
+  wos: searchWebOfScience,
+  redalyc: searchRedalyc,
 };
 
 /**
@@ -779,6 +942,10 @@ module.exports = {
   searchDOAJ,
   searchDBLP,
   searchDataCite,
+  searchSciELO,
+  searchScopus,
+  searchWebOfScience,
+  searchRedalyc,
   PROVIDERS,
   _internal: {
     dedupeByDoi, normaliseTitle, normaliseDoi, parseAtomFeed, invertedIndexToText,
