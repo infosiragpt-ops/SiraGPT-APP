@@ -222,10 +222,10 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="flex max-h-[78vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[620px]"
+        className="top-[5vh] flex max-h-[90vh] translate-y-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-[620px]"
         showCloseButton={false}
       >
-        <DialogHeader className="shrink-0 space-y-0 border-b border-border/60 px-4 py-3">
+        <DialogHeader className="sticky top-0 z-10 shrink-0 space-y-0 border-b border-border/60 bg-background px-4 py-3">
           <DialogTitle className="sr-only">Buscar chats</DialogTitle>
           <div className="flex items-center gap-3">
             <Search className="h-[18px] w-[18px] shrink-0 text-muted-foreground" />
