@@ -21,6 +21,7 @@
  */
 
 const { classifySource } = require('../../search/source-confidence');
+const qi = require('./query-intelligence');
 
 // Words that carry no discriminating signal: removing them prevents a single
 // common word from "matching" an unrelated document. Spanish + English.
@@ -108,14 +109,37 @@ function contentTokens(text) {
   return out;
 }
 
+/** Forms of a token used for matching: the token itself + its light stem. */
+function tokenForms(tok) {
+  const s = qi.stem(tok);
+  return s === tok ? [tok] : [tok, s];
+}
+
+/** Build a Set of {token, stem} forms for a list of raw tokens. */
+function formSet(tokens) {
+  const out = new Set();
+  for (const t of tokens) for (const f of tokenForms(t)) out.add(f);
+  return out;
+}
+
+/** Does a query token's expansion group intersect a doc form set? */
+function groupHits(group, forms) {
+  for (const g of group) if (forms.has(g)) return true;
+  return false;
+}
+
 /**
  * Bounded relevance score in [0,1] — the FILTER signal. 0 means "no
  * discriminating overlap" (drop it).
  *
+ * v3: matching is stem- and synonym-aware (via query-intelligence) so a result
+ * titled "inteligencia artificial" matches the query "IA", and
+ * "investigaciones" matches "investigación" — without embeddings.
+ *
  * Weighting:
- *   - coverage   : fraction of distinct query tokens present anywhere in the
+ *   - coverage   : fraction of distinct query terms present anywhere in the
  *                  result (title + snippet + domain).             (0.60)
- *   - titleHit   : fraction of query tokens present in the TITLE — a much
+ *   - titleHit   : fraction of query terms present in the TITLE — a much
  *                  stronger signal than the snippet.              (0.40)
  *   - phraseBonus: additive bonus when the query's content words appear as a
  *                  contiguous phrase in the title/snippet.        (+0.15)
@@ -130,8 +154,9 @@ function scoreResult(queryTokensArg, result) {
   const snippet = String(result?.snippet || result?.content || '');
   const domain = String(result?.domain || result?.url || '');
 
-  const titleSet = new Set(rawTokens(title));
-  const bodySet = new Set([
+  const groups = qi.matchGroups(queryTokens);
+  const titleForms = formSet(rawTokens(title));
+  const bodyForms = formSet([
     ...rawTokens(title),
     ...rawTokens(snippet),
     ...rawTokens(domain),
@@ -139,9 +164,9 @@ function scoreResult(queryTokensArg, result) {
 
   let anyHits = 0;
   let titleHits = 0;
-  for (const qt of queryTokens) {
-    if (bodySet.has(qt)) anyHits += 1;
-    if (titleSet.has(qt)) titleHits += 1;
+  for (const group of groups) {
+    if (groupHits(group, bodyForms)) anyHits += 1;
+    if (groupHits(group, titleForms)) titleHits += 1;
   }
   if (anyHits === 0) return 0;
 
@@ -194,17 +219,21 @@ function registrableDomain(url) {
   }
 }
 
-/** BM25-lite term-frequency map for a doc, with the title field up-weighted. */
-function buildDocStats(result) {
+/**
+ * Per-doc weighted token forms for BM25. Each doc token contributes its
+ * {token, stem} forms with a field weight (title up-weighted). Stored as a
+ * flat list so the ranker can match each doc token against the expanded query
+ * groups (stem/synonym-aware) when computing term frequencies.
+ */
+function buildDocForms(result) {
   const titleToks = rawTokens(result?.title);
   const bodyToks = rawTokens(`${result?.snippet || result?.content || ''} ${result?.domain || ''}`);
-  const tf = new Map();
-  for (const t of titleToks) tf.set(t, (tf.get(t) || 0) + TITLE_FIELD_BOOST);
-  for (const t of bodyToks) tf.set(t, (tf.get(t) || 0) + 1);
-  // Effective length uses the boosted counts so long titles don't game it.
+  const weighted = [];
+  for (const t of titleToks) weighted.push({ forms: new Set(tokenForms(t)), w: TITLE_FIELD_BOOST });
+  for (const t of bodyToks) weighted.push({ forms: new Set(tokenForms(t)), w: 1 });
   let len = 0;
-  for (const v of tf.values()) len += v;
-  return { tf, len: len || 1 };
+  for (const x of weighted) len += x.w;
+  return { weighted, len: len || 1 };
 }
 
 function freshnessBoost(result) {
@@ -267,30 +296,40 @@ function rankAndFilter(query, results, opts = {}) {
   if (survivors.length === 0) return [];
 
   // ── Stage 2: corpus stats for IDF, then BM25-lite rank score ──
+  // Term frequencies are computed against the EXPANDED query groups so a stem
+  // or synonym occurrence in the doc counts toward the matching query term.
   const N = survivors.length;
-  const stats = survivors.map(buildDocStats);
+  const groups = qi.matchGroups(queryTokens);
+  const stats = survivors.map(buildDocForms);
   const avgdl = stats.reduce((s, d) => s + d.len, 0) / N || 1;
-  const df = new Map();
-  for (const qt of queryTokens) {
-    let c = 0;
-    for (const d of stats) if (d.tf.has(qt)) c += 1;
-    df.set(qt, c);
-  }
-  const idf = new Map();
-  for (const qt of queryTokens) {
-    const dfi = df.get(qt) || 0;
-    // BM25 idf with +1 floor so a term present in every doc still counts a bit.
-    idf.set(qt, Math.log(1 + (N - dfi + 0.5) / (dfi + 0.5)) + 0.05);
-  }
+
+  // tfPerDoc[i][g] = weighted count of doc tokens matching query group g.
+  const tfPerDoc = stats.map((d) => {
+    const tf = new Array(groups.length).fill(0);
+    for (const wt of d.weighted) {
+      for (let g = 0; g < groups.length; g++) {
+        if (groupHits(groups[g], wt.forms)) tf[g] += wt.w;
+      }
+    }
+    return tf;
+  });
+
+  const idf = groups.map((_, g) => {
+    let dfi = 0;
+    for (const tf of tfPerDoc) if (tf[g] > 0) dfi += 1;
+    // BM25 idf with a small floor so a term present in every doc still counts.
+    return Math.log(1 + (N - dfi + 0.5) / (dfi + 0.5)) + 0.05;
+  });
 
   for (let i = 0; i < survivors.length; i++) {
     const d = stats[i];
+    const tf = tfPerDoc[i];
     let bm25 = 0;
-    for (const qt of queryTokens) {
-      const f = d.tf.get(qt) || 0;
+    for (let g = 0; g < groups.length; g++) {
+      const f = tf[g];
       if (f === 0) continue;
       const denom = f + BM25_K1 * (1 - BM25_B + BM25_B * (d.len / avgdl));
-      bm25 += (idf.get(qt) || 0) * (f * (BM25_K1 + 1)) / denom;
+      bm25 += idf[g] * (f * (BM25_K1 + 1)) / denom;
     }
     let rank = bm25;
     if (useAuthority) {

@@ -26,6 +26,12 @@
 
 const auditLog = require('../audit-log');
 const relevance = require('./relevance');
+const queryIntelligence = require('./query-intelligence');
+
+// Detected query language → a locale providers understand (Wikipedia language,
+// DuckDuckGo `kl` region). Used only when the caller didn't pass an explicit
+// locale, so the chat path automatically searches the right-language sources.
+const LANG_LOCALE = { es: 'es-es', en: 'en-us' };
 
 const DEFAULT_TIMEOUT_MS = 3000;
 // The aggregating `searchMany` path fans out to many providers in parallel and
@@ -41,7 +47,7 @@ const DEFAULT_CACHE_MAX = 200;
 // a query like "¿qué día es hoy?" gets answered with random DOIs. `searchMany`
 // only includes this tier when the query looks scientific.
 const SCIENTIFIC_PROVIDER_IDS = new Set([
-  'crossref', 'pubmed', 'scielo', 'openalex', 'arxiv',
+  'crossref', 'pubmed', 'scielo', 'openalex', 'arxiv', 'europepmc',
 ]);
 
 // Lightweight heuristic: does the prompt look like an academic/research ask?
@@ -61,6 +67,7 @@ const builtinProviders = [
   require('./providers/scielo'),
   require('./providers/openalex'),
   require('./providers/arxiv'),
+  require('./providers/europepmc'),
   // General-web tier (priority 8-30). Brave (priority 8) leads when its
   // optional BRAVE_SEARCH_API_KEY is set; otherwise it reports
   // enabled:false and the chain falls through to the free, key-less
@@ -72,6 +79,7 @@ const builtinProviders = [
   require('./providers/duckduckgo'),
   require('./providers/stackexchange'),
   require('./providers/hackernews'),
+  require('./providers/github'),
   require('./providers/wikipedia'),
   require('./providers/searxng'),
 ];
@@ -284,11 +292,21 @@ async function searchMany(query, opts = {}) {
   }
 
   const maxResults = Math.max(1, Math.min(Number(opts.maxResults) || 30, 1000));
-  const locale = typeof opts.locale === 'string' ? opts.locale : null;
+  // Locale: caller's explicit value wins; otherwise detect the query language
+  // and search the matching-language sources automatically.
+  const explicitLocale = typeof opts.locale === 'string' ? opts.locale : null;
+  const locale = explicitLocale || LANG_LOCALE[queryIntelligence.detectLanguage(q)] || null;
   const timeoutMs = Math.max(500, Math.min(Number(opts.timeoutMs) || DEFAULT_MANY_TIMEOUT_MS, 10000));
   const minScore = Number.isFinite(opts.minScore) ? opts.minScore : 0.3;
   const includeScientific = opts.includeScientific === true
     || (opts.includeScientific !== false && isScientificQuery(q));
+  // Optional multi-query fan-out: run synonym-expanded query variants for more
+  // recall. Default 1 (no extra network) so the latency-sensitive chat path is
+  // unchanged; callers opt in with `fanout:true` or `variants:N`.
+  const variantCount = Math.max(1, Math.min(Number(opts.variants) || (opts.fanout ? 3 : 1), 4));
+  const searchQueries = variantCount > 1
+    ? queryIntelligence.queryVariants(q, { max: variantCount })
+    : [q];
 
   // A query with no discriminating content tokens (e.g. "¿qué día es hoy?")
   // can't be matched against any source — skip the network entirely.
@@ -329,13 +347,18 @@ async function searchMany(query, opts = {}) {
   // aggregate reaches hundreds of candidates for broad/scientific queries.
   const perProvider = Math.max(5, Math.min(maxResults, 50));
 
+  // Fan out across (provider × query-variant) in parallel.
+  const tasks = [];
+  for (const p of selected) {
+    for (const sq of searchQueries) tasks.push({ p, sq });
+  }
   const attempts = [];
   const settled = await Promise.allSettled(
-    selected.map(async (p) => {
+    tasks.map(async ({ p, sq }) => {
       const start = Date.now();
       try {
         const results = await withTimeout(
-          (signal) => p.search(q, { maxResults: perProvider, locale, signal }),
+          (signal) => p.search(sq, { maxResults: perProvider, locale, signal }),
           timeoutMs,
         );
         const list = Array.isArray(results) ? results : [];
@@ -347,10 +370,10 @@ async function searchMany(query, opts = {}) {
             snippet: String(r.snippet || '').slice(0, 600),
             source: r.source || p.id,
           }));
-        attempts.push({ id: p.id, ok: true, ms: Date.now() - start, count: normalised.length });
+        attempts.push({ id: p.id, ok: true, ms: Date.now() - start, count: normalised.length, variant: sq !== q || undefined });
         return normalised;
       } catch (err) {
-        attempts.push({ id: p.id, ok: false, ms: Date.now() - start, error: classifyError(err) });
+        attempts.push({ id: p.id, ok: false, ms: Date.now() - start, error: classifyError(err), variant: sq !== q || undefined });
         return [];
       }
     }),

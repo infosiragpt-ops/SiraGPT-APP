@@ -20,6 +20,8 @@ require.cache[fetchPath] = {
 
 const stackexchange = require('../src/services/agents/web-search/providers/stackexchange');
 const hackernews = require('../src/services/agents/web-search/providers/hackernews');
+const europepmc = require('../src/services/agents/web-search/providers/europepmc');
+const github = require('../src/services/agents/web-search/providers/github');
 
 function json(body, { status = 200 } = {}) {
   return { ok: status >= 200 && status < 300, status, text: async () => JSON.stringify(body), json: async () => body };
@@ -93,6 +95,68 @@ test('extra providers carry the expected general-web priority + enabled metadata
   assert.equal(stackexchange.priority, 12);
   assert.equal(hackernews.priority, 14);
   for (const p of [stackexchange, hackernews]) {
+    assert.equal(p.enabled, true);
+    assert.equal(typeof p.search, 'function');
+  }
+});
+
+// ─── europepmc (scientific tier) ─────────────────────────────────────
+
+test('europepmc: parses results, prefers DOI link, builds meta snippet', async () => {
+  let capturedUrl = '';
+  fetchImpl = async (url) => {
+    capturedUrl = String(url);
+    return json({ resultList: { result: [
+      { id: '123', source: 'MED', doi: '10.1/abc', title: 'A vaccine study', authorString: 'Smith J', journalTitle: 'Nature', pubYear: '2024', abstractText: '<p>Results show...</p>' },
+      { id: '456', source: 'PMC', title: 'No-DOI paper' },
+    ] } });
+  };
+  const out = await europepmc.search('vaccine', { maxResults: 5 });
+  assert.match(capturedUrl, /europepmc/);
+  assert.equal(out.length, 2);
+  assert.equal(out[0].source, 'europepmc');
+  assert.equal(out[0].url, 'https://doi.org/10.1/abc');
+  assert.match(out[0].snippet, /Nature/);
+  assert.match(out[0].snippet, /2024/);
+  assert.equal(/<p>/.test(out[0].snippet), false);
+  // no DOI → europepmc abstract URL
+  assert.equal(out[1].url, 'https://europepmc.org/abstract/PMC/456');
+});
+
+test('europepmc: throws on non-2xx', async () => {
+  fetchImpl = async () => json({}, { status: 503 });
+  await assert.rejects(() => europepmc.search('q'), /europepmc http 503/);
+});
+
+// ─── github (general tier) ───────────────────────────────────────────
+
+test('github: parses repositories with stars/language meta', async () => {
+  let capturedUrl = '';
+  fetchImpl = async (url) => {
+    capturedUrl = String(url);
+    return json({ items: [
+      { full_name: 'org/repo', html_url: 'https://github.com/org/repo', description: 'A cool tool', stargazers_count: 4200, language: 'TypeScript' },
+      { description: 'no name/url' },
+    ] });
+  };
+  const out = await github.search('cool tool', { maxResults: 5, env: {} });
+  assert.match(capturedUrl, /api\.github\.com\/search\/repositories/);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].source, 'github');
+  assert.equal(out[0].url, 'https://github.com/org/repo');
+  assert.match(out[0].snippet, /★ 4200/);
+  assert.match(out[0].snippet, /TypeScript/);
+});
+
+test('github: throws on non-2xx (e.g. rate limit)', async () => {
+  fetchImpl = async () => json({}, { status: 403 });
+  await assert.rejects(() => github.search('q', { env: {} }), /github http 403/);
+});
+
+test('discovery providers carry expected tier metadata', () => {
+  assert.equal(europepmc.priority, 8);
+  assert.equal(github.priority, 16);
+  for (const p of [europepmc, github]) {
     assert.equal(p.enabled, true);
     assert.equal(typeof p.search, 'function');
   }
