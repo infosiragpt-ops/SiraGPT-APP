@@ -52,6 +52,53 @@ const DEFAULT_COMPACT_TAIL_ROUNDS = (() => {
 })();
 const COMPACT_DISABLED = process.env.SIRAGPT_REACT_COMPACT_DISABLED === '1';
 
+// ── A2: parallel tool execution ──────────────────────────────────────────────
+// Independent READ-ONLY / idempotent tool calls in a single step are dispatched
+// concurrently (bounded) instead of strictly one-by-one. Mutating/stateful
+// tools (bash, file writes, patches, browser actions, sub-agent spawns, the
+// `finalize` sentinel) always run sequentially to avoid races. Observations are
+// still processed in the model's original order, so tool_call_id pairing,
+// error budgets and the finalize guard are unchanged.
+const TOOL_PARALLEL_DISABLED = ['0', 'off', 'false', 'no'].includes(
+  String(process.env.SIRAGPT_TOOL_PARALLEL || '').trim().toLowerCase()
+);
+const TOOL_PARALLEL_MAX = Math.max(2, Number(process.env.SIRAGPT_TOOL_PARALLEL_MAX) || 4);
+const PARALLEL_SAFE_RX = /^(web_search|read_url|web_extract|deep_search|github_search|scientific_search|x_search|rag_retrieve|search_docs|search_code|get_symbol|list_files|read_file|list_dir|glob_files|code_grep|docintel|deep_analyze|memory_recall|session_search|session_list|session_history|sunat_)/i;
+
+function isParallelSafeTool(name) {
+  const n = String(name || '');
+  return n !== 'finalize' && PARALLEL_SAFE_RX.test(n);
+}
+
+/**
+ * Concurrently dispatch the read-only/idempotent tool calls of one step,
+ * returning a Map<call.id, dispatchResult>. Mutating calls are skipped here
+ * (they run inline, sequentially, in the main loop). Bounded by TOOL_PARALLEL_MAX.
+ */
+async function prefetchParallelDispatch(registry, toolCalls, ctx, exhaustedTools) {
+  const out = new Map();
+  if (TOOL_PARALLEL_DISABLED || !Array.isArray(toolCalls)) return out;
+  const safe = toolCalls.filter((c) => {
+    const n = c && c.function && c.function.name;
+    return isParallelSafeTool(n) && !(exhaustedTools && exhaustedTools.has(n)) && c.id != null;
+  });
+  if (safe.length < 2) return out; // nothing to gain from parallelism
+  for (let i = 0; i < safe.length; i += TOOL_PARALLEL_MAX) {
+    const chunk = safe.slice(i, i + TOOL_PARALLEL_MAX);
+    // eslint-disable-next-line no-await-in-loop
+    const results = await Promise.all(chunk.map(async (call) => {
+      try {
+        const d = await dispatchTool(registry, call.function?.name, call.function?.arguments, ctx);
+        return { id: call.id, d };
+      } catch (e) {
+        return { id: call.id, d: { error: `tool_execution_failed: ${e && e.message ? e.message : String(e)}` } };
+      }
+    }));
+    for (const r of results) if (r && r.id != null) out.set(r.id, r.d);
+  }
+  return out;
+}
+
 const Ajv = require('ajv');
 const { sanitizeToolParameters } = require('./ai-product-os/tool-schema-sanitizer');
 const ajv = new Ajv({ allErrors: true, strict: false, coerceTypes: false });
@@ -535,6 +582,19 @@ async function run(openai, opts) {
     });
     let finalized = false;
 
+    // A2: pre-dispatch the independent read-only tool calls of this step
+    // concurrently. Their results are consumed in original order below, so
+    // nothing about ordering, budgets, or the finalize guard changes.
+    let prefetched = new Map();
+    if (!ctx?.signal?.aborted) {
+      try {
+        prefetched = await prefetchParallelDispatch(registry, toolCalls, ctx, exhaustedTools);
+        if (prefetched.size > 1) {
+          console.log(`[react-agent] parallel-dispatched ${prefetched.size} read-only tools (step ${step})`);
+        }
+      } catch (_prefetchErr) { prefetched = new Map(); }
+    }
+
     for (const call of toolCalls) {
       if (ctx?.signal?.aborted) {
         stoppedReason = 'aborted';
@@ -568,7 +628,9 @@ async function run(openai, opts) {
         continue;
       }
 
-      const dispatch = await dispatchTool(registry, toolName, call.function?.arguments, ctx);
+      const dispatch = prefetched.has(call.id)
+        ? prefetched.get(call.id)
+        : await dispatchTool(registry, toolName, call.function?.arguments, ctx);
 
       let observation = dispatch.error
         ? { error: dispatch.error }
@@ -691,4 +753,8 @@ module.exports = {
   estimateMessagesChars,
   DEFAULT_COMPACT_MAX_CHARS,
   DEFAULT_COMPACT_TAIL_ROUNDS,
+  // A2: parallel tool execution (exported for tests).
+  isParallelSafeTool,
+  prefetchParallelDispatch,
+  TOOL_PARALLEL_MAX,
 };
