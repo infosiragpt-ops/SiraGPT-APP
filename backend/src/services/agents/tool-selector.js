@@ -33,8 +33,9 @@ try { defaultSkillAdapter = require('../skill-tool-adapter'); } catch (_) { defa
 const DEFAULT_MAX_TOOLS = Number(process.env.SIRAGPT_TOOL_SELECTION_MAX) || 16;
 const MIN_KEPT = Number(process.env.SIRAGPT_TOOL_SELECTION_MIN) || 8;
 
-// General-purpose tools kept on (almost) every agentic turn.
-const CORE_TOOLS = Object.freeze(['web_search', 'read_url', 'read_file', 'search_docs']);
+// General-purpose tools kept on (almost) every agentic turn. `run_skill` gives
+// access to all policy-allowed specialized skills, so it stays available.
+const CORE_TOOLS = Object.freeze(['web_search', 'read_url', 'read_file', 'search_docs', 'run_skill']);
 
 // Tool-name → capability category (a tool can match several).
 const CATEGORY_PATTERNS = Object.freeze({

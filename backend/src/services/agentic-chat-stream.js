@@ -390,7 +390,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
     if (!userQuery) throw new Error('runAgenticChat: userQuery is required');
     if (!res) throw new Error('runAgenticChat: res is required');
 
-    const tools = toolsOverride || buildDefaultTools({ userQuery, selection });
+    const tools = toolsOverride || buildDefaultTools({ userQuery, selection, clearance: toolContext && toolContext.clearance });
     const availableToolNames = new Set(tools.map((tool) => tool && tool.name).filter(Boolean));
     // Bilingual media-intent detection: when the user asks to create an
     // image / video / audio / music in the chat bar, this pre-extracts the
@@ -972,6 +972,19 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
   function buildDefaultTools(opts = {}) {
     const base = [...baseWebTools(), ...loadTaskTools(), cloneProjectTool, hostBashTool, hostFileTool, listDirTool, globFilesTool, codeGrepTool, checkCiStatusTool, monitorCiTool];
     const userQuery = opts && typeof opts.userQuery === 'string' ? opts.userQuery : '';
+
+    // Phase C: expose the real, policy-gated filesystem skills (openalex,
+    // crossref, apa7, sessions, scheduling…) via ONE `run_skill` tool, so the
+    // chat agent can actually execute them. Policy is enforced per-call by the
+    // user's clearance. Skipped when SIRAGPT_SKILLS_IN_CHAT=0 or unavailable.
+    try {
+      const skillRunner = require('./agents/skill-runner');
+      const runSkillTool = skillRunner.buildRunSkillTool({ ctx: { clearance: (opts && opts.clearance) || null } });
+      if (runSkillTool) base.push(runSkillTool);
+    } catch (skillToolErr) {
+      console.warn('[skills-in-chat] run_skill tool unavailable:', skillToolErr && skillToolErr.message);
+    }
+
     const wantsMedia = !!userQuery && (isAgenticActionRequest(userQuery) || !!detectMediaIntent(userQuery).kind);
     const tools = wantsMedia ? [...base, ...loadMediaTools()] : base;
     const seen = new Set();
