@@ -40,7 +40,7 @@ function rebuildAbstract(inverted, maxWords = 80) {
 async function search(query, { maxResults = 5, signal } = {}) {
   const params = new URLSearchParams({
     search: query,
-    per_page: String(Math.max(1, Math.min(maxResults, 25))),
+    per_page: String(Math.max(1, Math.min(maxResults, 60))),
     mailto: POLITE_MAILTO,
   });
   const res = await fetch(`${ENDPOINT}?${params.toString()}`, {

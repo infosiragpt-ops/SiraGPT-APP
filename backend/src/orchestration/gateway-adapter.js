@@ -60,28 +60,64 @@ function getSSEBuffer(opts = {}) {
   return _sseBufferSingleton;
 }
 
+function clampInt(value, fallback, min, max) {
+  const n = Number.parseInt(value, 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(n, max));
+}
+
 async function enrichWithWebSearch(prompt, opts = {}) {
+  const env = opts.env || process.env;
   const mode = String(opts.mode || 'auto').toLowerCase();
   const dedicated = mode === 'dedicated';
   if (!dedicated && !needsFreshWebContext(prompt)) return null;
 
+  // How many sources to surface in the UI "Fuentes" panel (env-tunable).
+  // Aggregated across many providers and relevance-ranked + de-duplicated
+  // upstream, so a larger cap means more GOOD sources, not more noise. Broad
+  // and scientific queries can genuinely fill these; narrow ones return fewer.
+  const sliceCount = dedicated
+    ? clampInt(env.SIRAGPT_WEBSEARCH_MAX_SOURCES_DEDICATED, 100, 1, 500)
+    : clampInt(env.SIRAGPT_WEBSEARCH_MAX_SOURCES, 40, 1, 500);
+  // How many of those sources get injected into the LLM context. Kept small
+  // and separate from the UI count so showing many sources never bloats the
+  // prompt (which would slow the response and dilute quality).
+  const promptCap = clampInt(env.SIRAGPT_WEBSEARCH_PROMPT_SOURCES, dedicated ? 12 : 8, 1, sliceCount);
+
   try {
     const results = await searchFreshContext(prompt, {
-      env: opts.env || process.env,
+      env,
       fetchImpl: opts.fetchImpl || globalThis.fetch,
-      limit: dedicated ? 12 : 5,
+      limit: sliceCount,
       freeSearch: opts.freeSearch,
       disableFreeTier: opts.disableFreeTier,
+      includeScientific: opts.includeScientific,
     });
 
     if (!results?.results?.length) return null;
 
-    const sliceCount = dedicated ? 10 : 5;
     const sliced = results.results.slice(0, sliceCount);
     const tally = { verified: 0, unverified: 0, inferred: 0 };
-    const snippets = sliced.map((r) => {
+
+    // Build the UI source list first so the confidence tally reflects every
+    // source we actually surface (not just the few injected into the prompt).
+    const sources = sliced.map((r) => {
       const cls = classifySource({ url: r.url });
       tally[cls.confidence] = (tally[cls.confidence] || 0) + 1;
+      let domain = '';
+      try { domain = new URL(r.url || '').hostname.replace(/^www\./, ''); } catch { domain = ''; }
+      return {
+        title: r.title || 'Source',
+        url: r.url || '',
+        snippet: (r.content || r.snippet || '').slice(0, 280),
+        domain,
+        confidence: cls.confidence,
+      };
+    });
+
+    // Only the top `promptCap` sources go into the model context.
+    const snippets = sliced.slice(0, promptCap).map((r) => {
+      const cls = classifySource({ url: r.url });
       const label = confidenceLabel(cls.confidence);
       const title = r.title || 'Source';
       const url = r.url || '#';
@@ -96,19 +132,6 @@ async function enrichWithWebSearch(prompt, opts = {}) {
     const tallyLine =
       `Resumen de fuentes — verificadas: ${tally.verified || 0}, sin verificar: ${tally.unverified || 0}, ` +
       `inferidas: ${tally.inferred || 0}.`;
-
-    const sources = sliced.map((r) => {
-      const cls = classifySource({ url: r.url });
-      let domain = '';
-      try { domain = new URL(r.url || '').hostname.replace(/^www\./, ''); } catch { domain = ''; }
-      return {
-        title: r.title || 'Source',
-        url: r.url || '',
-        snippet: (r.content || r.snippet || '').slice(0, 280),
-        domain,
-        confidence: cls.confidence,
-      };
-    });
 
     return {
       source: results.provider,

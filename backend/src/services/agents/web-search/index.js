@@ -25,10 +25,32 @@
  */
 
 const auditLog = require('../audit-log');
+const relevance = require('./relevance');
 
 const DEFAULT_TIMEOUT_MS = 3000;
+// The aggregating `searchMany` path fans out to many providers in parallel and
+// waits for all of them (bounded by this per-provider deadline), so it uses a
+// tighter default than single-provider `search()` to keep the chat snappy —
+// one slow public instance can't drag the whole turn past ~2.5s. Env-tunable.
+const DEFAULT_MANY_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_WEBSEARCH_MANY_TIMEOUT_MS || '', 10) || 2500;
 const DEFAULT_CACHE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_CACHE_MAX = 200;
+
+// Providers that query academic/paper databases. They are authoritative for
+// research questions but must NOT be consulted for casual prompts — otherwise
+// a query like "¿qué día es hoy?" gets answered with random DOIs. `searchMany`
+// only includes this tier when the query looks scientific.
+const SCIENTIFIC_PROVIDER_IDS = new Set([
+  'crossref', 'pubmed', 'scielo', 'openalex', 'arxiv',
+]);
+
+// Lightweight heuristic: does the prompt look like an academic/research ask?
+// Unicode-aware boundaries so accented Spanish keywords match (needs `u`).
+const SCIENTIFIC_QUERY_RE = /(?<![\p{L}])(?:estudios?|investigaci[oó]n(?:es)?|paper|papers|journal|revista[s]?\s+cient[ií]fica[s]?|cient[ií]fic[ao]s?|cl[ií]nic[ao]s?|clinical|trial|ensayo[s]?\s+cl[ií]nico[s]?|evidencia\s+cient[ií]fica|hip[oó]tesis|hypothesis|meta[\s-]?an[aá]lisis|meta[\s-]?analysis|systematic\s+review|revisi[oó]n\s+sistem[aá]tica|doi|pubmed|arxiv|scielo|crossref|openalex|teorema|experiment(?:o|os|al)?|dataset|biomarcador(?:es)?|peer[\s-]?review)(?![\p{L}])/iu;
+
+function isScientificQuery(query) {
+  return SCIENTIFIC_QUERY_RE.test(String(query || ''));
+}
 
 const builtinProviders = [
   // Scientific tier (priority 3-7) — try the most authoritative sources
@@ -39,8 +61,13 @@ const builtinProviders = [
   require('./providers/scielo'),
   require('./providers/openalex'),
   require('./providers/arxiv'),
-  // General-web tier (priority 10-30).
+  // General-web tier (priority 10-30). The extra key-less providers
+  // (Stack Exchange Q&A + Hacker News) widen breadth for the aggregating
+  // `searchMany` path and stay cheap for `search()` since each returns []
+  // when it has no match.
   require('./providers/duckduckgo'),
+  require('./providers/stackexchange'),
+  require('./providers/hackernews'),
   require('./providers/wikipedia'),
   require('./providers/searxng'),
 ];
@@ -114,6 +141,15 @@ class LruTtlCache {
 }
 
 const cache = new LruTtlCache();
+// Separate cache for the aggregating `searchMany` path so its merged,
+// relevance-ranked payloads never collide with single-provider `search()`.
+// Longer TTL + larger capacity because it backs a stale-while-revalidate
+// strategy: a cached turn is served in microseconds and refreshed in the
+// background once it ages past SWR_FRESH_MS.
+const SWR_TTL_MS = Number.parseInt(process.env.SIRAGPT_WEBSEARCH_CACHE_TTL_MS || '', 10) || 30 * 60 * 1000;
+const SWR_FRESH_MS = Number.parseInt(process.env.SIRAGPT_WEBSEARCH_CACHE_FRESH_MS || '', 10) || 3 * 60 * 1000;
+const SWR_CACHE_MAX = Number.parseInt(process.env.SIRAGPT_WEBSEARCH_CACHE_MAX || '', 10) || 400;
+const manyCache = new LruTtlCache({ max: SWR_CACHE_MAX, ttlMs: SWR_TTL_MS });
 
 // ── timeout wrapper ──────────────────────────────────────────────────
 function withTimeout(promiseFactory, ms) {
@@ -219,6 +255,133 @@ async function search(query, opts = {}) {
   return { results: [], provider: null, cached: false, attempts };
 }
 
+// ── aggregating entry point ──────────────────────────────────────────
+// Unlike `search()` (first non-empty provider wins), `searchMany()` fans out
+// to ALL relevant providers IN PARALLEL, merges + de-duplicates their results
+// and ranks them by relevance to the query, dropping anything irrelevant.
+//
+// This is what powers the chat "Fuentes" panel: more sources (aggregated
+// across providers), faster (parallel ≈ slowest provider, not the sum), and
+// higher quality (irrelevant academic papers are filtered out instead of
+// hijacking casual prompts).
+async function searchMany(query, opts = {}) {
+  const q = typeof query === 'string' ? query.trim() : '';
+  if (!q) {
+    return { results: [], provider: null, providers: [], cached: false, attempts: [] };
+  }
+
+  const maxResults = Math.max(1, Math.min(Number(opts.maxResults) || 30, 1000));
+  const locale = typeof opts.locale === 'string' ? opts.locale : null;
+  const timeoutMs = Math.max(500, Math.min(Number(opts.timeoutMs) || DEFAULT_MANY_TIMEOUT_MS, 10000));
+  const minScore = Number.isFinite(opts.minScore) ? opts.minScore : 0.3;
+  const includeScientific = opts.includeScientific === true
+    || (opts.includeScientific !== false && isScientificQuery(q));
+
+  // A query with no discriminating content tokens (e.g. "¿qué día es hoy?")
+  // can't be matched against any source — skip the network entirely.
+  if (relevance.contentTokens(q).length === 0) {
+    return { results: [], provider: null, providers: [], cached: false, attempts: [] };
+  }
+
+  const cacheKey = `${includeScientific ? 'sci' : 'gen'}:${maxResults}:${q}`;
+
+  // Stale-while-revalidate: serve a cached payload instantly; if it has aged
+  // past the freshness window, kick off a non-blocking background refresh so
+  // the NEXT turn is current — the user never waits on the network.
+  if (opts._force !== true) {
+    const cachedHit = manyCache.get(cacheKey, locale);
+    if (cachedHit) {
+      const age = Date.now() - (cachedHit.at || 0);
+      if (age > SWR_FRESH_MS && opts._background !== true) {
+        Promise.resolve()
+          .then(() => searchMany(query, { ...opts, _force: true, _background: true }))
+          .catch(() => { /* best-effort refresh */ });
+      }
+      return {
+        results: cachedHit.results.slice(0, maxResults),
+        provider: cachedHit.provider,
+        providers: cachedHit.providers,
+        cached: true,
+        attempts: [],
+      };
+    }
+  }
+
+  // General tier always runs; scientific tier only for research-y queries.
+  const selected = providers.filter(
+    (p) => includeScientific || !SCIENTIFIC_PROVIDER_IDS.has(p.id),
+  );
+  // Ask each provider for a generous page; they self-clamp to their own max
+  // (DDG ~15, Wikipedia ~10, OpenAlex/Crossref up to 50-60), which is how the
+  // aggregate reaches hundreds of candidates for broad/scientific queries.
+  const perProvider = Math.max(5, Math.min(maxResults, 50));
+
+  const attempts = [];
+  const settled = await Promise.allSettled(
+    selected.map(async (p) => {
+      const start = Date.now();
+      try {
+        const results = await withTimeout(
+          (signal) => p.search(q, { maxResults: perProvider, locale, signal }),
+          timeoutMs,
+        );
+        const list = Array.isArray(results) ? results : [];
+        const normalised = list
+          .filter((r) => r && typeof r.url === 'string' && typeof r.title === 'string')
+          .map((r) => ({
+            title: String(r.title).slice(0, 240),
+            url: String(r.url),
+            snippet: String(r.snippet || '').slice(0, 600),
+            source: r.source || p.id,
+          }));
+        attempts.push({ id: p.id, ok: true, ms: Date.now() - start, count: normalised.length });
+        return normalised;
+      } catch (err) {
+        attempts.push({ id: p.id, ok: false, ms: Date.now() - start, error: classifyError(err) });
+        return [];
+      }
+    }),
+  );
+
+  const merged = [];
+  for (const s of settled) {
+    if (s.status === 'fulfilled' && Array.isArray(s.value)) merged.push(...s.value);
+  }
+
+  // Diversity: cap results per domain for general-web queries so one site
+  // can't dominate; scientific queries skip the cap (each doi.org/arxiv path
+  // is a distinct paper). Aggregator hosts are exempt inside rankAndFilter.
+  const perDomain = includeScientific
+    ? undefined
+    : (Number.parseInt(process.env.SIRAGPT_WEBSEARCH_PER_DOMAIN || '', 10) || 6);
+
+  const ranked = relevance
+    .rankAndFilter(q, merged, { minScore, limit: maxResults, perDomain })
+    // eslint-disable-next-line no-unused-vars
+    .map(({ _score, _rank, ...rest }) => rest);
+
+  const providersUsed = Array.from(new Set(ranked.map((r) => r.source))).slice(0, 12);
+  const provider = providersUsed.length ? `aggregate:${providersUsed.length}` : null;
+
+  if (ranked.length > 0) {
+    manyCache.set(cacheKey, locale, { results: ranked, provider, providers: providersUsed, at: Date.now() });
+  }
+
+  // Audit WITHOUT the raw query (only its length) — same rule as search().
+  auditLog.audit({
+    event: 'web_search_many',
+    provider,
+    hits: ranked.length,
+    queryLen: q.length,
+    locale: locale || null,
+    scientific: includeScientific,
+    attempts: attempts.map(({ id, ok, ms, count, error }) => ({ id, ok, ms, count, error })),
+    cached: false,
+  });
+
+  return { results: ranked, provider, providers: providersUsed, cached: false, attempts };
+}
+
 // ── test / extension hooks ───────────────────────────────────────────
 function setProviders(list) {
   providers = sortProviders(list);
@@ -232,16 +395,20 @@ function resetProviders() {
   providers = sortProviders(builtinProviders);
 }
 
-function clearCache() { cache.clear(); }
+function clearCache() { cache.clear(); manyCache.clear(); }
 
 module.exports = {
   search,
+  searchMany,
+  isScientificQuery,
   setProviders,
   getProviders,
   resetProviders,
   clearCache,
+  SCIENTIFIC_PROVIDER_IDS,
   // exported for tests
   _cache: cache,
+  _manyCache: manyCache,
   _LruTtlCache: LruTtlCache,
   _withTimeout: withTimeout,
   _classifyError: classifyError,

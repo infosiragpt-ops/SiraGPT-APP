@@ -89,13 +89,20 @@ async function searxngSearch(query, { env = process.env, fetchImpl = globalThis.
 // keys would silently never inject web results and the model would answer
 // time-sensitive questions ("¿qué día es hoy?", "precio actual…") from stale
 // training data.
-async function freeTierSearch(query, { maxResults = 5, locale, freeSearch } = {}) {
+async function freeTierSearch(query, { maxResults = 30, locale, freeSearch, includeScientific } = {}) {
   // `freeSearch` is injectable so unit tests stay hermetic (no real network);
   // production lazy-requires the agent web-search adapter so this module stays
   // loadable in contexts where that adapter isn't present.
   // eslint-disable-next-line global-require
   const freeAdapter = freeSearch || require('../services/agents/web-search');
-  const out = await freeAdapter.search(query, { maxResults, locale });
+  // Prefer the aggregating, relevance-ranked path (`searchMany`): it fans out
+  // to every relevant provider in parallel, merges + de-duplicates, and drops
+  // irrelevant hits — so the chat "Fuentes" panel gets many GOOD sources
+  // instead of the first provider's possibly-irrelevant list. Injected test
+  // stubs that only implement `.search` transparently fall back to it.
+  const out = typeof freeAdapter.searchMany === 'function'
+    ? await freeAdapter.searchMany(query, { maxResults, locale, includeScientific })
+    : await freeAdapter.search(query, { maxResults, locale });
   const results = (out?.results || []).map((r) => ({
     title: r.title || '',
     url: r.url || '',
@@ -133,9 +140,10 @@ async function searchFreshContext(query, opts = {}) {
   if (opts.disableFreeTier !== true) {
     try {
       const free = await freeTierSearch(query, {
-        maxResults: opts.limit || 5,
+        maxResults: opts.limit || 24,
         locale: opts.locale,
         freeSearch: opts.freeSearch,
+        includeScientific: opts.includeScientific,
       });
       if (free.results?.length) return { ...free, errors };
     } catch (err) { errors.push({ provider: 'free', message: err.message }); }

@@ -55,7 +55,7 @@ async function searchSolr(query, { maxResults, signal, locale }) {
     q: query,
     output: 'site',
     format: 'json',
-    count: String(Math.max(1, Math.min(maxResults, 20))),
+    count: String(Math.max(1, Math.min(maxResults, 40))),
   });
   const lang = langFromLocale(locale);
   if (lang) params.set('lang', lang);

@@ -47,7 +47,7 @@ function pickAuthors(item) {
 async function search(query, { maxResults = 5, signal } = {}) {
   const params = new URLSearchParams({
     query,
-    rows: String(Math.max(1, Math.min(maxResults, 20))),
+    rows: String(Math.max(1, Math.min(maxResults, 60))),
     mailto: POLITE_MAILTO,
     // Crossref scores results better when we ask for relevance order.
     sort: 'relevance',
