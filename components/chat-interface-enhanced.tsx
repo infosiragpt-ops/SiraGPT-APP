@@ -5023,7 +5023,7 @@ But first, you need to connect your Spotify account securely using the button be
   const isFreePlan = isFreePlanName(currentPlan);
   const [splitViewContent, setSplitViewContent] = React.useState<any>(null)
   const [documentPreviewUrl, setDocumentPreviewUrl] = React.useState<DocumentPreviewTarget | null>(null);
-  const [sourcesPanelData, setSourcesPanelData] = React.useState<{ sources: any[]; activity: any; messageId?: string } | null>(null);
+  const [sourcesPanelData, setSourcesPanelData] = React.useState<{ sources: any[]; activity: any; memory?: any[]; memoryMeta?: any; messageId?: string } | null>(null);
   const [composerPreviewIndex, setComposerPreviewIndex] = React.useState<number | null>(null);
   const [sidePreviewAttachment, setSidePreviewAttachment] = React.useState<AttachmentLike | null>(null);
   const [sidePreviewSiblings, setSidePreviewSiblings] = React.useState<AttachmentLike[]>([]);
@@ -5393,8 +5393,10 @@ But first, you need to connect your Spotify account securely using the button be
   // isn't suppressed by a stale viewer), rebalances the split, and stores the
   // message's sources. The reverse direction (closing Fuentes when another
   // pane opens) is enforced by the mutual-exclusion effect below.
-  const handleOpenSources = React.useCallback((payload: { sources: any[]; activity: any; messageId?: string }) => {
-    if (!payload || !Array.isArray(payload.sources) || payload.sources.length === 0) return;
+  const handleOpenSources = React.useCallback((payload: { sources: any[]; activity: any; memory?: any[]; memoryMeta?: any; messageId?: string }) => {
+    const hasSources = Array.isArray(payload?.sources) && payload.sources.length > 0;
+    const hasMemory = Array.isArray(payload?.memory) && payload.memory.length > 0;
+    if (!payload || (!hasSources && !hasMemory)) return;
     setSplitViewContent(null);
     setDocumentPreviewUrl(null);
     setComposerPreviewIndex(null);
@@ -10579,6 +10581,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 <SourcesPanel
                   sources={sourcesPanelData.sources}
                   activity={sourcesPanelData.activity}
+                  memory={sourcesPanelData.memory}
+                  memoryMeta={sourcesPanelData.memoryMeta}
                   onClose={() => setSourcesPanelData(null)}
                 />
               )}

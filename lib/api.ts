@@ -201,9 +201,23 @@ export type WebSourcesPayload = {
   sources: WebSource[]
 }
 
+export type MemoryItem = {
+  fact: string
+  category?: string
+  tier?: string
+  strength?: number | null
+  score?: number | null
+}
+
+export type MemoryPayload = {
+  reason?: string
+  items: MemoryItem[]
+}
+
 type AIStreamOptions = {
   onReplace?: (content: string) => void
   onSources?: (payload: WebSourcesPayload) => void
+  onMemory?: (payload: MemoryPayload) => void
 }
 
 export type GrokVoiceSessionSnapshot = {
@@ -1274,6 +1288,15 @@ class ApiClient {
                     query: jsonData.query,
                     elapsedMs: jsonData.elapsedMs,
                     sources: jsonData.sources,
+                  });
+                }
+              } else if (jsonData.type === 'memory' && Array.isArray(jsonData.items)) {
+                // Autonomous-memory frame: the turn decided to recall stored
+                // facts. Surface them so the UI shows the "MEMORIA" section.
+                if (options.onMemory) {
+                  options.onMemory({
+                    reason: jsonData.reason,
+                    items: jsonData.items,
                   });
                 }
               } else if (jsonData.error) {

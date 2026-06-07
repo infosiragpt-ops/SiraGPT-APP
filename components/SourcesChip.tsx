@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { createPortal } from "react-dom"
-import { Globe, X, Search, Check, ExternalLink } from "lucide-react"
+import { Globe, X, Search, Check, ExternalLink, Brain } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 export type ChipSource = {
@@ -19,16 +19,32 @@ export type ChipActivity = {
   elapsedMs?: number
 } | null
 
+export type ChipMemoryItem = {
+  fact: string
+  category?: string
+  tier?: string
+  strength?: number | null
+  score?: number | null
+}
+
+export type ChipMemoryMeta = {
+  reason?: string
+  recalled?: number
+} | null
+
 interface SourcesChipProps {
   sources: ChipSource[]
   activity?: ChipActivity
+  /** Autonomously-recalled memory items surfaced for this turn (optional). */
+  memory?: ChipMemoryItem[]
+  memoryMeta?: ChipMemoryMeta
   /**
    * When provided, clicking the chip opens the integrated right-side panel
    * (the chat's resizable pane) instead of the self-contained portal drawer.
    * The drawer stays as a fallback for read-only contexts (e.g. share pages)
    * where no panel host is mounted.
    */
-  onOpenSources?: (payload: { sources: ChipSource[]; activity: ChipActivity }) => void
+  onOpenSources?: (payload: { sources: ChipSource[]; activity: ChipActivity; memory?: ChipMemoryItem[]; memoryMeta?: ChipMemoryMeta }) => void
 }
 
 export function domainOf(s: ChipSource): string {
@@ -94,7 +110,7 @@ export function Favicon({ domain, size = 16 }: { domain: string; size?: number }
   )
 }
 
-export function SourcesChip({ sources, activity, onOpenSources }: SourcesChipProps) {
+export function SourcesChip({ sources, activity, memory, memoryMeta, onOpenSources }: SourcesChipProps) {
   const [open, setOpen] = React.useState(false)
   const [mounted, setMounted] = React.useState(false)
 
@@ -112,13 +128,18 @@ export function SourcesChip({ sources, activity, onOpenSources }: SourcesChipPro
     return () => window.removeEventListener("keydown", onKey)
   }, [open])
 
-  if (!Array.isArray(sources) || sources.length === 0) return null
+  const safeSources = Array.isArray(sources) ? sources : []
+  const safeMemory = Array.isArray(memory) ? memory : []
+  // Show the chip when the turn produced web sources OR recalled memory.
+  if (safeSources.length === 0 && safeMemory.length === 0) return null
 
-  const domains = sources.map(domainOf)
+  const domains = safeSources.map(domainOf)
   const uniqueDomains = Array.from(new Set(domains.filter(Boolean)))
   const previewDomains = uniqueDomains.slice(0, 3)
   const elapsed = formatElapsed(activity?.elapsedMs)
   const query = activity?.query || ""
+  const hasSources = safeSources.length > 0
+  const hasMemory = safeMemory.length > 0
 
   const drawer =
     mounted && open
@@ -264,28 +285,43 @@ export function SourcesChip({ sources, activity, onOpenSources }: SourcesChipPro
       <button
         type="button"
         onClick={() => {
-          if (onOpenSources) onOpenSources({ sources, activity: activity ?? null })
+          if (onOpenSources) onOpenSources({ sources: safeSources, activity: activity ?? null, memory: safeMemory, memoryMeta: memoryMeta ?? null })
           else setOpen(true)
         }}
-        title={`Ver ${sources.length} fuentes`}
-        aria-label={`Ver ${sources.length} fuentes`}
+        title={hasSources ? `Ver ${safeSources.length} fuentes${hasMemory ? ` y ${safeMemory.length} de memoria` : ""}` : `Ver ${safeMemory.length} de memoria`}
+        aria-label={hasSources ? `Ver ${safeSources.length} fuentes${hasMemory ? ` y ${safeMemory.length} memorias` : ""}` : `Ver ${safeMemory.length} memorias`}
         className={cn(
           "inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-2 py-1 text-xs font-medium text-muted-foreground transition-colors",
           "hover:bg-muted hover:text-foreground",
         )}
       >
-        <span className="flex items-center">
-          {previewDomains.map((d, i) => (
-            <span
-              key={d}
-              className="rounded-full ring-2 ring-background"
-              style={{ marginLeft: i === 0 ? 0 : -6, zIndex: previewDomains.length - i }}
-            >
-              <Favicon domain={d} size={16} />
+        {hasSources ? (
+          <>
+            <span className="flex items-center">
+              {previewDomains.map((d, i) => (
+                <span
+                  key={d}
+                  className="rounded-full ring-2 ring-background"
+                  style={{ marginLeft: i === 0 ? 0 : -6, zIndex: previewDomains.length - i }}
+                >
+                  <Favicon domain={d} size={16} />
+                </span>
+              ))}
             </span>
-          ))}
-        </span>
-        <span>Fuentes {sources.length}</span>
+            <span>Fuentes {safeSources.length}</span>
+            {hasMemory ? (
+              <span className="ml-0.5 inline-flex items-center gap-1 border-l border-border pl-1.5 text-violet-600 dark:text-violet-400">
+                <Brain className="h-3.5 w-3.5" />
+                {safeMemory.length}
+              </span>
+            ) : null}
+          </>
+        ) : (
+          <span className="inline-flex items-center gap-1 text-violet-600 dark:text-violet-400">
+            <Brain className="h-3.5 w-3.5" />
+            Memoria {safeMemory.length}
+          </span>
+        )}
       </button>
       {drawer}
     </>

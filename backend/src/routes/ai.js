@@ -175,6 +175,7 @@ const {
 const postResponseBrainHook = require('../services/sira/post-response-brain-hook');
 const coworkEngine = require('../services/cowork-engine');
 const activeMemory = require('../services/active-memory');
+const memoryDecision = require('../services/memory-decision');
 const memoryDocument = require('../services/memory-document');
 const conversationUnderstanding = require('../services/conversation-understanding');
 const chatAttachmentRecovery = require('../services/chat-attachment-recovery');
@@ -3908,6 +3909,56 @@ router.post(
         }
       }
 
+      // ── Autonomous memory: the turn DECIDES on its own when to remember ──
+      // memory-decision inspects the prompt and decides (a) whether to store
+      // durable facts the user just shared, and (b) whether this turn leans on
+      // the user's personal/past context enough to RECALL stored memory. Only
+      // when recall is warranted AND something relevant exists do we inject it
+      // into the prompt (so the model USES it) + stream a `memory` frame (so
+      // the UI shows the "MEMORIA" section). Best-effort: never break the turn.
+      let activeMemoryBlock = '';
+      let memoryItems = null;
+      let memoryMeta = null;
+      try {
+        if (userId && typeof prompt === 'string' && prompt.trim()) {
+          const memDecision = memoryDecision.decide(prompt);
+          // (a) Store new durable facts so future turns can recall them.
+          if (memDecision.store && Array.isArray(memDecision.facts)) {
+            for (const f of memDecision.facts) {
+              try {
+                activeMemory.createMemoryEntry(userId, f.fact, {
+                  source: 'chat',
+                  category: f.category || 'general',
+                  confidence: 0.8,
+                });
+              } catch { /* per-fact best effort */ }
+            }
+          }
+          // (b) Recall only when the turn references personal/past context.
+          if (memDecision.recall) {
+            let recalled = [];
+            try { recalled = activeMemory.recall(userId, prompt, { limit: 6 }) || []; } catch { recalled = []; }
+            if (Array.isArray(recalled) && recalled.length > 0) {
+              memoryItems = recalled.map((m) => ({
+                fact: m.fact,
+                category: m.category || 'general',
+                tier: m.tier || 'short_term',
+                strength: typeof m.strength === 'number' ? m.strength : null,
+                score: typeof m.score === 'number' ? m.score : null,
+              }));
+              memoryMeta = { reason: memDecision.reason || '', recalled: memoryItems.length };
+              // Inject so the model actually uses what it remembered.
+              const memLines = memoryItems.map((m) => `- ${m.fact}`).join('\n');
+              activeMemoryBlock = `\n\n## Memoria del usuario (recordada para este turno)\nUsa estos datos recordados cuando sean relevantes. No los repitas literalmente si no aportan.\n${memLines}`;
+              // Stream a memory frame so the UI can render the MEMORIA section.
+              try {
+                res.write(`data: ${JSON.stringify({ type: 'memory', reason: memoryMeta.reason, items: memoryItems })}\n\n`);
+              } catch { /* socket gone */ }
+            }
+          }
+        }
+      } catch (_memErr) { /* memory is best-effort, never break generation */ }
+
       // PR-5: Grounding preface para tareas de alto coste. Detecta si
       // el contrato es de alto coste (presentations, video, deep
       // research, web app build) y, si lo es, añade una instrucción al
@@ -4006,7 +4057,7 @@ router.post(
         console.warn('[ai] llm understanding packet unavailable (continuing without):', llmUnderstandingErr && llmUnderstandingErr.message);
       }
 
-      const systemInstruction = { role: 'system', content: promptBundle.system + openclawRuntimeBlock + llmUnderstandingBlock + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + crossChatBlock + attributionBlock + circuitAttributionBlock + intentAttributionGraphBlock + saliencyBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock };
+      const systemInstruction = { role: 'system', content: promptBundle.system + openclawRuntimeBlock + llmUnderstandingBlock + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + activeMemoryBlock + crossChatBlock + attributionBlock + circuitAttributionBlock + intentAttributionGraphBlock + saliencyBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock };
       // Structured view of the system prompt — same content as
       // `systemInstruction.content`, but split into typed blocks with a
       // `cacheable` hint. When the downstream provider is Anthropic (or
@@ -5177,6 +5228,7 @@ router.post(
           ...(codexMeta || {}),
           ...(normalizedRegenerationAttempt ? { regeneration: { attempt: normalizedRegenerationAttempt } } : {}),
           ...(webSearchSources ? { webSources: webSearchSources, webSearchMeta } : {}),
+          ...(memoryItems ? { memory: memoryItems, memoryMeta } : {}),
         };
         const savedChat = await saveChatAndTrackUsage(
           userId,

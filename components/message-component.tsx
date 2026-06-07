@@ -131,6 +131,24 @@ const extractWebSources = (message: any): { sources: any[]; activity: any } => {
     return { sources, activity };
 };
 
+// Mirror of extractWebSources for autonomously-recalled memory: live turns
+// attach `message.memory`; reloaded turns carry it inside the persisted
+// metadata JSON as `memory` (+ `memoryMeta`).
+const extractMemory = (message: any): { memory: any[]; memoryMeta: any } => {
+    let memory = Array.isArray(message?.memory) ? message.memory : [];
+    let memoryMeta = message?.memoryMeta || null;
+    if (!memory.length || !memoryMeta) {
+        try {
+            const meta = typeof message?.metadata === 'string'
+                ? JSON.parse(message.metadata)
+                : (message?.metadata && typeof message.metadata === 'object' ? message.metadata : {});
+            if (!memory.length && Array.isArray(meta?.memory)) memory = meta.memory;
+            if (!memoryMeta && meta?.memoryMeta) memoryMeta = meta.memoryMeta;
+        } catch { /* malformed metadata — ignore */ }
+    }
+    return { memory, memoryMeta };
+};
+
 const NON_IMAGE_EXTENSIONS = new Set([
     'doc', 'docx', 'pdf', 'xls', 'xlsx', 'csv', 'ppt', 'pptx', 'txt', 'md', 'rtf',
 ]);
@@ -686,7 +704,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     isGeneratingImage?: boolean;
     onDocumentPreview?: (target: DocumentPreviewTarget) => void;
     onAttachmentPreview?: (attachment: AttachmentLike, siblings: AttachmentLike[], index: number) => void;
-    onOpenSources?: (payload: { sources: any[]; activity: any; messageId?: string }) => void;
+    onOpenSources?: (payload: { sources: any[]; activity: any; memory?: any[]; memoryMeta?: any; messageId?: string }) => void;
     children?: React.ReactNode;
 }) => {
     // Performance monitoring disabled to prevent overhead
@@ -3038,12 +3056,15 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 />
                                 {message.role === 'ASSISTANT' && !isStreaming ? (() => {
                                     const { sources, activity } = extractWebSources(message)
-                                    return sources.length > 0 ? (
+                                    const { memory, memoryMeta } = extractMemory(message)
+                                    return (sources.length > 0 || memory.length > 0) ? (
                                         <SourcesChip
                                             sources={sources}
                                             activity={activity}
+                                            memory={memory}
+                                            memoryMeta={memoryMeta}
                                             onOpenSources={onOpenSources
-                                                ? (payload) => onOpenSources({ ...payload, messageId: message.id })
+                                                ? (payload) => onOpenSources({ ...payload, memory, memoryMeta, messageId: message.id })
                                                 : undefined}
                                         />
                                     ) : null

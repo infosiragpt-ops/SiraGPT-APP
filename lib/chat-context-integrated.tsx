@@ -242,6 +242,17 @@ interface Message {
     query?: string
     elapsedMs?: number
   }
+  memory?: Array<{
+    fact: string
+    category?: string
+    tier?: string
+    strength?: number | null
+    score?: number | null
+  }>
+  memoryMeta?: {
+    reason?: string
+    recalled?: number
+  }
 }
 
 function parseMessageMetadata(metadata: unknown): Record<string, any> {
@@ -1468,6 +1479,23 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                           query: payload.query,
                           elapsedMs: payload.elapsedMs,
                         },
+                      };
+                    }
+                    return msg;
+                  });
+                  return { ...prevChat, messages: newMessages };
+                });
+              },
+              onMemory: (payload) => {
+                if (controller.signal.aborted || pendingStop) return;
+                setCurrentChat((prevChat) => {
+                  if (!prevChat || prevChat.id !== activeChat.id) return prevChat;
+                  const newMessages = prevChat.messages.map((msg) => {
+                    if (msg.id === aiMessagePlaceholder.id) {
+                      return {
+                        ...msg,
+                        memory: payload.items,
+                        memoryMeta: { reason: payload.reason, recalled: payload.items?.length },
                       };
                     }
                     return msg;
