@@ -1241,6 +1241,17 @@ function buildOpenAICompatibleClient(target) {
   const opts = { apiKey };
   if (target.baseURL) opts.baseURL = target.baseURL;
   if (target.defaultHeaders) opts.defaultHeaders = target.defaultHeaders;
+  // Bound every model call. The OpenAI SDK defaults to a 600s (10 min)
+  // per-request timeout — a hung or degraded provider would otherwise freeze
+  // the planning phase ("Analizando solicitud", 0 steps / 0 tools) for
+  // minutes while the client's 90s idle watchdog aborts the run. A tight
+  // timeout makes a stalled call reject fast so react-agent breaks with a
+  // clean `model_error` (and the contract resolver falls back to its
+  // heuristic) instead of stalling silently. Both knobs are env-tunable.
+  const timeoutMs = Number.parseInt(process.env.AGENT_TASK_LLM_TIMEOUT_MS || '', 10);
+  opts.timeout = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60_000;
+  const maxRetries = Number.parseInt(process.env.AGENT_TASK_LLM_MAX_RETRIES || '', 10);
+  opts.maxRetries = Number.isFinite(maxRetries) && maxRetries >= 0 ? maxRetries : 2;
   return new OpenAI(opts);
 }
 
@@ -3029,6 +3040,7 @@ const { classifyTaskError } = require('../../utils/task-error-classifier');
 module.exports = {
   runAgentTaskJob,
   buildFinalizeProfile,
+  buildOpenAICompatibleClient,
   classifyTaskError,
   normalizeAgentRuntimeModel,
   buildAttachmentGroundedFallbackAnswer,

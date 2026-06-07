@@ -170,6 +170,38 @@ function safeParseJson(text) {
   try { return JSON.parse(t); } catch { return null; }
 }
 
+// The contract resolver runs BEFORE the agent emits its first step event, so
+// a slow/hung provider here is invisible to the user ("Analizando solicitud"
+// with 0 steps) until the client's 90s idle watchdog aborts. We cap the LLM
+// call so a stall drops us into the deterministic heuristic fallback fast
+// instead of freezing the whole run. The underlying request is also bounded
+// by the client's own timeout (agent-task-runner buildOpenAICompatibleClient);
+// this race is a second, tighter ceiling specific to the planning phase.
+const DEFAULT_RESOLVER_TIMEOUT_MS = 30_000;
+
+function resolverTimeoutMs(explicit) {
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  const env = Number.parseInt(process.env.AGENT_TASK_CONTRACT_TIMEOUT_MS || "", 10);
+  return Number.isFinite(env) && env > 0 ? env : DEFAULT_RESOLVER_TIMEOUT_MS;
+}
+
+/**
+ * Resolve `promise`, but reject with a timeout error if it does not settle
+ * within `ms`. A non-positive / non-finite `ms` disables the cap. The timer
+ * is unref'd so it never keeps the process alive, and always cleared.
+ */
+function raceWithTimeout(promise, ms) {
+  if (!Number.isFinite(ms) || ms <= 0) return promise;
+  let timer = null;
+  const timeout = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`task-contract-resolver timed out after ${ms}ms`)), ms);
+    if (timer && typeof timer.unref === "function") timer.unref();
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 /**
  * Resolve a TaskContract for a raw user message.
  *
@@ -187,8 +219,9 @@ function safeParseJson(text) {
  *   durationMs: number,
  * }>}
  */
-async function resolveTaskContract({ goal, openai, model = "gpt-4o-mini", fileIds, fallback }) {
+async function resolveTaskContract({ goal, openai, model = "gpt-4o-mini", fileIds, fallback, timeoutMs }) {
   const t0 = Date.now();
+  const effTimeoutMs = resolverTimeoutMs(timeoutMs);
   const hint = Array.isArray(fileIds) && fileIds.length > 0
     ? `\n\n(The user has ${fileIds.length} uploaded file${fileIds.length === 1 ? "" : "s"} attached to this conversation.)`
     : "";
@@ -238,7 +271,7 @@ async function resolveTaskContract({ goal, openai, model = "gpt-4o-mini", fileId
   // Try LLM with Structured Outputs first.
   if (effectiveOpenai && typeof effectiveOpenai.chat?.completions?.create === "function" && typeof goal === "string" && goal.trim().length > 0) {
     try {
-      const resp = await effectiveOpenai.chat.completions.create({
+      const resp = await raceWithTimeout(effectiveOpenai.chat.completions.create({
         model: effectiveModel,
         temperature: 0,
         max_tokens: 1400,
@@ -259,7 +292,7 @@ async function resolveTaskContract({ goal, openai, model = "gpt-4o-mini", fileId
             schema: toStrictOpenAISchema(taskContractSchema),
           },
         },
-      });
+      }), effTimeoutMs);
       const raw = resp?.choices?.[0]?.message?.content;
       const parsed = safeParseJson(raw);
       if (parsed) {

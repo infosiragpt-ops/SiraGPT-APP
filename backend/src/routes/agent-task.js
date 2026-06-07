@@ -1262,11 +1262,20 @@ router.post(
       if (!chatId) controller.abort();
     });
 
-    // Heartbeat keeps proxies (nginx, Cloudflare) from closing the stream
+    // Heartbeat keeps proxies (nginx, Cloudflare, GCLB) from closing the
+    // stream AND keeps the client's 90s idle watchdog reset during a long
+    // planning / first-LLM-call phase. A bare `: keep-alive` comment is not
+    // enough — edge proxies buffer/drop SSE comments — so we also send a real
+    // `data:` heartbeat frame (mirrors routes/ai.js). The client reducer
+    // treats unknown `heartbeat` events as a no-op.
+    const inlineHeartbeatMs = Math.max(2_000, Number.parseInt(process.env.AGENT_TASK_SSE_HEARTBEAT_MS || '15000', 10) || 15000);
     heartbeatTimer = setInterval(() => {
       if (!clientConnected || res.writableEnded) { clearTimers(); return; }
-      try { res.write(': keep-alive\n\n'); } catch { safeCloseConnection(); }
-    }, 25000);
+      try {
+        res.write(': keep-alive\n\n');
+        res.write(`data: ${safeJsonStringify({ type: 'heartbeat', at: Date.now() })}\n\n`);
+      } catch { safeCloseConnection(); }
+    }, inlineHeartbeatMs);
     if (typeof heartbeatTimer.unref === 'function') heartbeatTimer.unref();
 
     // Response timeout ensures we never leave a socket hanging
@@ -2270,10 +2279,25 @@ function streamTaskEvents(req, res, taskId, userId) {
   };
 
   pollTimer = setInterval(flush, 450);
-  heartbeatTimer = setInterval(() => {
+  // Heartbeat keeps the client's idle watchdog (90s, see
+  // lib/agent-task-service.ts) from firing while the worker sits in a long
+  // planning / first-LLM-call phase that hasn't produced a step event yet
+  // (the "Analizando solicitud · 0 pasos" stall). We emit BOTH a comment
+  // frame (warms raw sockets) AND a real `data:` heartbeat frame — only the
+  // latter reliably survives edge proxies (GCLB / nginx / Cloudflare) that
+  // buffer or drop bare SSE comments, which is exactly why the chat stream
+  // (routes/ai.js) already sends a `data:` heartbeat. The client reducer
+  // ignores unknown `heartbeat` events (no-op) and resets its idle timer on
+  // every received chunk. Interval well under the 90s watchdog, env-tunable.
+  const heartbeatMs = Math.max(2_000, Number.parseInt(process.env.AGENT_TASK_SSE_HEARTBEAT_MS || '15000', 10) || 15000);
+  const writeHeartbeat = () => {
     if (!clientConnected || res.writableEnded || res.destroyed) return;
-    try { res.write(': keep-alive\n\n'); } catch { safeCloseQueuedConnection(); }
-  }, 25000);
+    try {
+      res.write(': keep-alive\n\n');
+      res.write(`data: ${safeJsonStringify({ type: 'heartbeat', at: Date.now() })}\n\n`);
+    } catch { safeCloseQueuedConnection(); }
+  };
+  heartbeatTimer = setInterval(writeHeartbeat, heartbeatMs);
 
   // Don't keep the process alive just for SSE polling
   if (typeof pollTimer.unref === 'function') pollTimer.unref();
