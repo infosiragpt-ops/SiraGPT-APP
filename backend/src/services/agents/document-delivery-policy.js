@@ -131,7 +131,11 @@ function classifyMode(requestText, estimatedWords, format, files = [], options =
   if (Array.isArray(files) && files.length > 0 && SOURCE_MAP_CHAT_RE.test(requestText) && !explicitFileFormat) {
     return 'chat_only';
   }
-  if (isSourcePreservingEdit(requestText, files)) return 'doc_required';
+  // A source-preserving edit needs an actual source file to preserve. Without
+  // an attachment, transform phrasings like "resume el word" are read/answer
+  // intent, not an edit, and must fall through to the inquiry short-circuit
+  // below (otherwise they wrongly auto-generate a brand-new document).
+  if (Array.isArray(files) && files.length > 0 && isSourcePreservingEdit(requestText, files)) return 'doc_required';
   // Read/inquiry intent about a doc the user already shared in a
   // prior turn must short-circuit BEFORE the WORDISH/SHEET/DECK/PDF
   // check below — otherwise "cuál es el título del word?" matches
