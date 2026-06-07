@@ -157,6 +157,18 @@ async function upsertAgentTask(task = {}) {
         return null;
       }
     }
+    // P2003 = foreign key constraint failed. The task references a userId
+    // (agent_tasks_userId_fkey) that no longer exists in the User table —
+    // e.g. a deleted account or a session minted against a different DB.
+    // Persistence is impossible by definition, so there is nothing to
+    // retry. Collapse the noisy multi-line Prisma dump into one concise,
+    // intelligible line instead of falling through to the generic warn.
+    if (err?.code === 'P2003') {
+      if (process.env.NODE_ENV !== 'test') {
+        console.warn(`[agent-task-persistence] task ${data.id} not persisted: userId ${data.userId} has no matching User row (orphaned task)`);
+      }
+      return null;
+    }
     if (process.env.NODE_ENV !== 'test') {
       console.warn('[agent-task-persistence] upsert skipped:', err?.message || err);
     }
