@@ -157,6 +157,7 @@ import {
 import { useTranslations } from "next-intl"
 import { useArtifactPanel } from "@/lib/artifact-panel-context"
 import { ArtifactPanel } from "@/components/chat/ArtifactPanel"
+import { SourcesPanel } from "@/components/sources-panel"
 import { ChatEmptyStateHero } from "@/components/chat/ChatEmptyStateHero"
 import { GrokVoicePanel } from "@/components/chat/grok-voice-panel"
 import { DocumentPreview, type DocumentPreviewTarget } from "./document-preview"
@@ -4006,7 +4007,7 @@ export default function ChatInterface() {
 
 function ChatInterfaceContent() {
   const tComposer = useTranslations("composer")
-  const { active: activeArtifact } = useArtifactPanel()
+  const { active: activeArtifact, close: closeArtifactPanel } = useArtifactPanel()
   const { user } = useAuth()
 
   const {
@@ -4607,6 +4608,7 @@ function ChatInterfaceContent() {
     // Reset other UI states
     setShowAudioPanel(false);
     setDocumentPreviewUrl(null);
+    setSourcesPanelData(null);
     setActiveSearchActivityId(null);
     setSplitViewContent(null);
     setComposerPreviewIndex(null);
@@ -5021,6 +5023,7 @@ But first, you need to connect your Spotify account securely using the button be
   const isFreePlan = isFreePlanName(currentPlan);
   const [splitViewContent, setSplitViewContent] = React.useState<any>(null)
   const [documentPreviewUrl, setDocumentPreviewUrl] = React.useState<DocumentPreviewTarget | null>(null);
+  const [sourcesPanelData, setSourcesPanelData] = React.useState<{ sources: any[]; activity: any; messageId?: string } | null>(null);
   const [composerPreviewIndex, setComposerPreviewIndex] = React.useState<number | null>(null);
   const [sidePreviewAttachment, setSidePreviewAttachment] = React.useState<AttachmentLike | null>(null);
   const [sidePreviewSiblings, setSidePreviewSiblings] = React.useState<AttachmentLike[]>([]);
@@ -5357,6 +5360,7 @@ But first, you need to connect your Spotify account securely using the button be
 
   const handleDocumentPreview = (url: DocumentPreviewTarget) => {
     setSplitViewContent(null)
+    setSourcesPanelData(null)
     setComposerPreviewIndex(null)
     setSidePreviewAttachment(null)
     setSidePreviewSiblings([])
@@ -5371,6 +5375,7 @@ But first, you need to connect your Spotify account securely using the button be
   const handleAttachmentPreview = React.useCallback((attachment: AttachmentLike, siblings: AttachmentLike[] = [], index = 0) => {
     setSplitViewContent(null);
     setDocumentPreviewUrl(null);
+    setSourcesPanelData(null);
     setComposerPreviewIndex(null);
     setActiveSearchActivityId(null);
     setSplitRatio((current) => {
@@ -5382,6 +5387,31 @@ But first, you need to connect your Spotify account securely using the button be
     setSidePreviewSiblings(normalizedSiblings);
     setSidePreviewAttachment(normalizedSiblings[index] || attachment);
   }, []);
+
+  // Open the integrated "Fuentes" pane for a message. Mirrors
+  // handleDocumentPreview: clears the other right-pane tenants (so the pane
+  // isn't suppressed by a stale viewer), rebalances the split, and stores the
+  // message's sources. The reverse direction (closing Fuentes when another
+  // pane opens) is enforced by the mutual-exclusion effect below.
+  const handleOpenSources = React.useCallback((payload: { sources: any[]; activity: any; messageId?: string }) => {
+    if (!payload || !Array.isArray(payload.sources) || payload.sources.length === 0) return;
+    setSplitViewContent(null);
+    setDocumentPreviewUrl(null);
+    setComposerPreviewIndex(null);
+    setSidePreviewAttachment(null);
+    setSidePreviewSiblings([]);
+    setActiveSearchActivityId(null);
+    setIsWordConnectorActive(false);
+    setIsExcelConnectorActive(false);
+    try { closeArtifactPanel(); } catch { /* ignore */ }
+    setShowAudioPanel(false);
+    setSplitRatio((current) => {
+      const balanced = current < 40 || current > 62 ? 48 : current;
+      try { localStorage.setItem(SPLIT_STORAGE_KEY, String(balanced)); } catch { /* ignore */ }
+      return balanced;
+    });
+    setSourcesPanelData(payload);
+  }, [closeArtifactPanel, setShowAudioPanel]);
 
   // Complete chat share functionality
   const handleCompleteShare = async () => {
@@ -8655,12 +8685,43 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     showAudioPanel ||
     searchActivityPanelOpen ||
     documentPreviewUrl ||
+    sourcesPanelData ||
     composerPreviewAttachment ||
     sidePreviewAttachment ||
     isWordConnectorActive ||
     isExcelConnectorActive ||
     activeArtifact
   );
+
+  // Mutual exclusion: the Fuentes pane is the lowest-priority right-pane
+  // tenant, so if any other viewer becomes active while it's open, close it.
+  // handleOpenSources clears the others when opening, so this only fires when
+  // a different pane opens afterwards (e.g. a streamed search, a doc preview).
+  React.useEffect(() => {
+    if (!sourcesPanelData) return;
+    if (
+      showAudioPanel ||
+      searchActivityPanelOpen ||
+      documentPreviewUrl ||
+      composerPreviewAttachment ||
+      sidePreviewAttachment ||
+      isWordConnectorActive ||
+      isExcelConnectorActive ||
+      activeArtifact
+    ) {
+      setSourcesPanelData(null);
+    }
+  }, [
+    sourcesPanelData,
+    showAudioPanel,
+    searchActivityPanelOpen,
+    documentPreviewUrl,
+    composerPreviewAttachment,
+    sidePreviewAttachment,
+    isWordConnectorActive,
+    isExcelConnectorActive,
+    activeArtifact,
+  ]);
 
   const mainPaneAudioPanelEnabled = false;
 
@@ -9957,6 +10018,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                       onToggleSplitView={handleToggleSplitView}
                                       onDocumentPreview={handleDocumentPreview}
                                       onAttachmentPreview={handleAttachmentPreview}
+                                      onOpenSources={handleOpenSources}
                                     />
                                   </ErrorBoundary>
                                 )}
@@ -9976,6 +10038,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                     onToggleSplitView={handleToggleSplitView}
                                     onDocumentPreview={handleDocumentPreview}
                                     onAttachmentPreview={handleAttachmentPreview}
+                                    onOpenSources={handleOpenSources}
                                   />
                                 </ErrorBoundary>
                               ))
@@ -10511,6 +10574,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
               )}
               {!showAudioPanel && !activeSearchActivity && activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && !composerPreviewAttachment && !sidePreviewAttachment && (
                 <ArtifactPanel />
+              )}
+              {!showAudioPanel && !activeSearchActivity && !activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && !composerPreviewAttachment && !sidePreviewAttachment && sourcesPanelData && (
+                <SourcesPanel
+                  sources={sourcesPanelData.sources}
+                  activity={sourcesPanelData.activity}
+                  onClose={() => setSourcesPanelData(null)}
+                />
               )}
             </div>
           </>

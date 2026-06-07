@@ -22,9 +22,16 @@ export type ChipActivity = {
 interface SourcesChipProps {
   sources: ChipSource[]
   activity?: ChipActivity
+  /**
+   * When provided, clicking the chip opens the integrated right-side panel
+   * (the chat's resizable pane) instead of the self-contained portal drawer.
+   * The drawer stays as a fallback for read-only contexts (e.g. share pages)
+   * where no panel host is mounted.
+   */
+  onOpenSources?: (payload: { sources: ChipSource[]; activity: ChipActivity }) => void
 }
 
-function domainOf(s: ChipSource): string {
+export function domainOf(s: ChipSource): string {
   if (s.domain) return s.domain
   try {
     return new URL(s.url).hostname.replace(/^www\./, "")
@@ -43,7 +50,7 @@ function faviconUrl(domain: string): string {
  * malicious result can't smuggle a `javascript:`/`data:` scheme into an anchor
  * href and run script on click. Returns null for anything unsafe/unparseable.
  */
-function safeHref(url: unknown): string | null {
+export function safeHref(url: unknown): string | null {
   if (typeof url !== "string" || url.length === 0) return null
   try {
     const parsed = new URL(url)
@@ -53,14 +60,14 @@ function safeHref(url: unknown): string | null {
   }
 }
 
-function formatElapsed(ms?: number): string {
+export function formatElapsed(ms?: number): string {
   if (!ms || ms < 0) return ""
   const secs = Math.max(1, Math.round(ms / 1000))
   return `${secs}s`
 }
 
 /** Small favicon with a graceful fallback to a globe glyph. */
-function Favicon({ domain, size = 16 }: { domain: string; size?: number }) {
+export function Favicon({ domain, size = 16 }: { domain: string; size?: number }) {
   const [failed, setFailed] = React.useState(false)
   const src = faviconUrl(domain)
   if (failed || !src) {
@@ -87,7 +94,7 @@ function Favicon({ domain, size = 16 }: { domain: string; size?: number }) {
   )
 }
 
-export function SourcesChip({ sources, activity }: SourcesChipProps) {
+export function SourcesChip({ sources, activity, onOpenSources }: SourcesChipProps) {
   const [open, setOpen] = React.useState(false)
   const [mounted, setMounted] = React.useState(false)
 
@@ -256,7 +263,10 @@ export function SourcesChip({ sources, activity }: SourcesChipProps) {
     <>
       <button
         type="button"
-        onClick={() => setOpen(true)}
+        onClick={() => {
+          if (onOpenSources) onOpenSources({ sources, activity: activity ?? null })
+          else setOpen(true)
+        }}
         title={`Ver ${sources.length} fuentes`}
         aria-label={`Ver ${sources.length} fuentes`}
         className={cn(

@@ -676,7 +676,7 @@ const GeneratedImageCard = ({
     );
 };
 
-const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, isStreaming, onToggleSplitView, isGeneratingImage, onDocumentPreview, onAttachmentPreview, children }: {
+const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, isStreaming, onToggleSplitView, isGeneratingImage, onDocumentPreview, onAttachmentPreview, onOpenSources, children }: {
     message: any;
     user: any;
     onRegenerate: (messageId: string) => void;
@@ -686,6 +686,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     isGeneratingImage?: boolean;
     onDocumentPreview?: (target: DocumentPreviewTarget) => void;
     onAttachmentPreview?: (attachment: AttachmentLike, siblings: AttachmentLike[], index: number) => void;
+    onOpenSources?: (payload: { sources: any[]; activity: any; messageId?: string }) => void;
     children?: React.ReactNode;
 }) => {
     // Performance monitoring disabled to prevent overhead
@@ -3038,7 +3039,13 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 {message.role === 'ASSISTANT' && !isStreaming ? (() => {
                                     const { sources, activity } = extractWebSources(message)
                                     return sources.length > 0 ? (
-                                        <SourcesChip sources={sources} activity={activity} />
+                                        <SourcesChip
+                                            sources={sources}
+                                            activity={activity}
+                                            onOpenSources={onOpenSources
+                                                ? (payload) => onOpenSources({ ...payload, messageId: message.id })
+                                                : undefined}
+                                        />
                                     ) : null
                                 })() : null}
                             </div>
