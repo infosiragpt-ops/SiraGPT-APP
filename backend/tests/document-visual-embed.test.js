@@ -113,6 +113,14 @@ describe('document-visual-embed — diagrams (process / timeline / organigram)',
     assert.equal(detectVisualRequest('una gráfica de dispersión de correlación').type, 'scatter');
   });
 
+  it('builds KPI/stat cards with big values and labels', () => {
+    const svg = buildChartSvg({ type: 'kpi', title: 'Resumen', data: [{ label: 'Ingresos', value: 'S/ 1.2M', sub: '+12%' }, { label: 'Clientes', value: '340' }, { label: 'NPS', value: '72' }] });
+    assert.match(svg, /S\/ 1\.2M/);
+    assert.match(svg, /Ingresos/);
+    assert.match(svg, /\+12%/);
+    assert.equal(detectVisualRequest('agrega unas tarjetas KPI del resumen').type, 'kpi');
+  });
+
   it('builds an organigram from a nested tree and connects parents to children', () => {
     const svg = buildChartSvg({
       type: 'organigram',

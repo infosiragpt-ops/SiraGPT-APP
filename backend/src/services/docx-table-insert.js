@@ -91,7 +91,12 @@ function insertTableIntoDocxBuffer(buffer, { headers = [], rows = [], title = ''
 function parseTableFromText(text) {
   const lines = String(text || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const pipeLines = lines.filter((l) => l.includes('|') && !/^\s*\|?\s*:?-{2,}/.test(l));
-  const split = (l) => l.replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+  // Slice from the first pipe so prose preceding the table (e.g. "agrega una
+  // tabla con | A | B |") doesn't pollute the first cell.
+  const split = (l) => {
+    const fromPipe = l.indexOf('|') >= 0 ? l.slice(l.indexOf('|')) : l;
+    return fromPipe.replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+  };
   if (pipeLines.length >= 2) {
     const headers = split(pipeLines[0]);
     const rows = pipeLines.slice(1).map(split).filter((r) => r.some(Boolean));

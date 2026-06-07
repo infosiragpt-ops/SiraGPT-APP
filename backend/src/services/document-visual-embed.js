@@ -438,6 +438,48 @@ function buildScatterChartSvg({ spec, title, width, height, theme }) {
   return parts.join('');
 }
 
+function normalizeKpiData(data) {
+  if (Array.isArray(data)) {
+    return data.map((item, index) => {
+      if (item && typeof item === 'object') {
+        return { label: String(item.label ?? item.name ?? `KPI ${index + 1}`), value: String(item.value ?? item.y ?? item.count ?? ''), sub: item.sub ? String(item.sub) : '' };
+      }
+      return { label: '', value: String(item), sub: '' };
+    });
+  }
+  if (data && typeof data === 'object' && Array.isArray(data.labels)) {
+    return data.labels.map((label, i) => ({ label: String(label), value: String((data.values || [])[i] ?? ''), sub: '' }));
+  }
+  return [];
+}
+
+// Executive "stat cards": big numbers with labels — common in report summaries.
+function buildKpiCardsSvg({ spec, title, width, height, theme }) {
+  const cards = normalizeKpiData(spec.data).slice(0, 8);
+  const parts = [svgHeader(width, height, theme), svgTitle(title, width, theme)];
+  const top = title ? 64 : 28;
+  const margin = 24;
+  const gap = 16;
+  const perRow = Math.min(Math.max(1, cards.length), 4);
+  const rows = Math.max(1, Math.ceil(cards.length / perRow));
+  const cardW = (width - margin * 2 - gap * (perRow - 1)) / perRow;
+  const cardH = Math.min(130, Math.max(70, (height - top - margin - gap * (rows - 1)) / rows));
+  cards.forEach((card, i) => {
+    const r = Math.floor(i / perRow);
+    const col = i % perRow;
+    const x = margin + col * (cardW + gap);
+    const y = top + r * (cardH + gap);
+    const color = theme.palette[i % theme.palette.length];
+    parts.push(`<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${cardW.toFixed(1)}" height="${cardH.toFixed(1)}" rx="10" fill="#f8fafc" stroke="${theme.grid}" stroke-width="1"/>`);
+    parts.push(`<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${cardW.toFixed(1)}" height="6" rx="3" fill="${color}"/>`);
+    parts.push(`<text x="${(x + cardW / 2).toFixed(1)}" y="${(y + cardH * 0.5).toFixed(1)}" text-anchor="middle" font-size="28" font-weight="800" fill="${color}">${xmlEscape(card.value.slice(0, 14))}</text>`);
+    parts.push(`<text x="${(x + cardW / 2).toFixed(1)}" y="${(y + cardH * 0.74).toFixed(1)}" text-anchor="middle" font-size="12" fill="${theme.text}">${xmlEscape(card.label.slice(0, 22))}</text>`);
+    if (card.sub) parts.push(`<text x="${(x + cardW / 2).toFixed(1)}" y="${(y + cardH * 0.9).toFixed(1)}" text-anchor="middle" font-size="10" fill="${theme.axis}">${xmlEscape(card.sub.slice(0, 26))}</text>`);
+  });
+  parts.push('</svg>');
+  return parts.join('');
+}
+
 // Public: build a chart/diagram SVG string for the given spec.
 function buildChartSvg(spec = {}) {
   const width = Math.max(200, Math.min(1200, toNumber(spec.width, 640)));
@@ -456,6 +498,7 @@ function buildChartSvg(spec = {}) {
   if (type === 'radar' || type === 'spider' || type === 'arana') return buildRadarChartSvg(params);
   if (type === 'grouped' || type === 'grouped-bar' || type === 'multibar' || type === 'comparativo' || type === 'agrupado') return buildGroupedBarChartSvg({ spec, title, width, height, theme });
   if (type === 'scatter' || type === 'dispersion' || type === 'xy' || type === 'nube') return buildScatterChartSvg({ spec, title, width, height, theme });
+  if (type === 'kpi' || type === 'cards' || type === 'stats' || type === 'tarjetas' || type === 'indicadores') return buildKpiCardsSvg({ spec, title, width, height, theme });
   return buildBarChartSvg(params);
 }
 
@@ -589,9 +632,10 @@ function normalizeText(value) {
   return String(value || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
 }
 
-const VISUAL_INTENT_RE = /\b(grafico\w*|grafica\w*|diagrama\w*|organigrama\w*|linea de tiempo|cronolog\w*|timeline|flujograma|diagrama de flujo|flujo|chart|pastel|dona|donut|barras?|histograma|radar|arana|spider|dispersion|scatter|correlacion|comparativ\w*|agrupad\w*)\b/;
+const VISUAL_INTENT_RE = /\b(grafico\w*|grafica\w*|diagrama\w*|organigrama\w*|linea de tiempo|cronolog\w*|timeline|flujograma|diagrama de flujo|flujo|chart|pastel|dona|donut|barras?|histograma|radar|arana|spider|dispersion|scatter|correlacion|comparativ\w*|agrupad\w*|kpi\w*|tarjetas?|indicadores?)\b/;
 
 function inferVisualType(norm) {
+  if (/\bkpi\w*|tarjetas?|indicadores?|stat cards?\b/.test(norm)) return 'kpi';
   if (/\bdispersion|scatter|correlacion|nube de puntos\b/.test(norm)) return 'scatter';
   if (/\bcomparativ\w*|agrupad\w*|multibar|por grupos?\b/.test(norm)) return 'grouped';
   if (/\bradar|arana|spider\b/.test(norm)) return 'radar';

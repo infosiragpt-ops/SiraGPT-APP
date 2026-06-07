@@ -51,6 +51,12 @@ describe('docx-table-insert — native table', () => {
     assert.deepEqual(spec.rows[0], ['Materiales', '1200']);
   });
 
+  it('ignores prose before the first pipe so a prefixed header is clean', () => {
+    const spec = parseTableFromText('agrega una tabla con | Concepto | Monto |\n| Materiales | 1200 |\n| Servicios | 800 |');
+    assert.deepEqual(spec.headers, ['Concepto', 'Monto']);
+    assert.equal(spec.rows.length, 2);
+  });
+
   it('detects create-table intent but not fill-table intent', () => {
     assert.equal(detectTableRequest('agrega una tabla de presupuesto').wantsTable, true);
     assert.equal(detectTableRequest('inserta un cuadro comparativo').wantsTable, true);
