@@ -1274,6 +1274,55 @@ const session_history = {
   },
 };
 
+// ─── Sub-agents (OpenClaw sessions_send / spawn — cost-guarded) ─────────────
+
+const session_send = {
+  name: 'session_send',
+  description: 'Append a message to one of the user\u2019s own existing chat sessions. By default leaves an assistant NOTE (cheap, no agent run) — use this to record a result/follow-up in another session. Set runAgent:true to run a sub-agent on the message (sandboxed, depth- and budget-limited; may cost credits).',
+  schema: {
+    sessionId: 'string (required — target chat id, must belong to the user)',
+    message: 'string (required — content to append)',
+    runAgent: 'boolean (optional, default false — if true, run a sandboxed sub-agent on the message)',
+    thinking: 'string (optional — low|medium|high, only when runAgent:true)',
+  },
+  async handler(args, ctx) {
+    const context = ctx || {};
+    if (args && args.runAgent) {
+      // eslint-disable-next-line global-require
+      const { reserveSpawn } = require('./subagent-guard');
+      const verdict = reserveSpawn(context);
+      if (!verdict.allowed) {
+        return { appended: false, ran: false, reason: verdict.reason };
+      }
+    }
+    // eslint-disable-next-line global-require
+    const { execute } = require('../../skills/session_send/handler');
+    return execute(args || {}, context);
+  },
+};
+
+const session_spawn = {
+  name: 'session_spawn',
+  description: 'Launch a sandboxed sub-agent in a NEW chat session with a focused, self-contained prompt. Use to parallelise a side-task ("research this in the background") without losing the main thread. Runs at depth+1 in sandbox mode, capped by a per-turn budget; returns the new session id and the sub-agent\u2019s answer. May cost credits.',
+  schema: {
+    prompt: 'string (required — self-contained task for the sub-agent; it does NOT see this chat\u2019s history)',
+    title: 'string (optional — short title for the new session, <= 80 chars)',
+    thinking: 'string (optional — low|medium|high, default low)',
+  },
+  async handler(args, ctx) {
+    const context = ctx || {};
+    // eslint-disable-next-line global-require
+    const { reserveSpawn } = require('./subagent-guard');
+    const verdict = reserveSpawn(context);
+    if (!verdict.allowed) {
+      return { spawned: false, reason: verdict.reason };
+    }
+    // eslint-disable-next-line global-require
+    const { execute } = require('../../skills/session_spawn/handler');
+    return execute(args || {}, context);
+  },
+};
+
 // ─── Browser automation (driver injected by caller) ────────────────────────
 
 const browser_navigate = {
@@ -1410,6 +1459,7 @@ const scientific_search = {
 const ALL_TOOLS = [
   read_file, list_files, search_docs, search_code, search_graph, get_symbol, static_checks, propose_patch,
   web_search, read_url, web_extract, session_search, session_list, session_history,
+  session_send, session_spawn,
   browser_navigate, browser_click, browser_type, browser_scroll,
   github_search, scientific_search,
 ];
@@ -1427,6 +1477,7 @@ module.exports = {
   // individual exports for tests
   read_file, list_files, search_docs, search_code, search_graph, get_symbol, static_checks, propose_patch,
   web_search, read_url, web_extract, session_search, session_list, session_history,
+  session_send, session_spawn,
   browser_navigate, browser_click, browser_type, browser_scroll,
   github_search, scientific_search,
   STATIC_CHECKS,

@@ -43,6 +43,7 @@
   const { checkCiStatusTool, monitorCiTool } = require('./agents/github-actions-tool');
   const openclawCapabilityKernel = require('./openclaw-capability-kernel');
   const { runToolWithRetry } = require('./agents/tool-call-retry');
+  const { liveSubagentsEnabled } = require('./agents/subagent-guard');
   const { isAgenticActionRequest } = require('./agents/agentic-trigger');
   const { detectMediaIntent, buildMediaIntentHint } = require('./agents/media-intent');
   const {
@@ -70,6 +71,8 @@
     session_search: (args) => `Buscando sesiones sobre "${truncate(args?.query, 48)}"`,
     session_list: () => 'Revisando tus sesiones recientes',
     session_history: (args) => `Abriendo sesión ${truncate(args?.sessionId, 32)}`,
+    session_send: (args) => `Enviando a sesión ${truncate(args?.sessionId, 24)}`,
+    session_spawn: (args) => `Lanzando sub-agente: ${truncate(args?.title || args?.prompt, 40)}`,
     browser_navigate: (args) => `Navegando a ${prettyDomain(args?.url) || 'sitio'}`,
     browser_click: (args) => `Click en ${truncate(args?.selector, 48)}`,
     browser_type: (args) => `Escribiendo en ${truncate(args?.selector, 48)}`,
@@ -711,6 +714,31 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
         required: ['sessionId'],
         additionalProperties: false,
       }),
+      // Sub-agent tools are cost-bearing (they run a full sandboxed agent)
+      // so they are opt-in via SIRAGPT_LIVE_SUBAGENTS and depth/budget-guarded.
+      ...(liveSubagentsEnabled() ? [
+        adaptAgentTool(agentTools.session_send, {
+          type: 'object',
+          properties: {
+            sessionId: { type: 'string', description: 'Target chat/session id (must belong to the user).' },
+            message:   { type: 'string', description: 'Content to append to that session.' },
+            runAgent:  { type: 'boolean', description: 'If true, run a sandboxed sub-agent on the message. Default false (just leaves a note).' },
+            thinking:  { type: 'string', enum: ['low', 'medium', 'high'], description: 'Thinking level when runAgent is true.' },
+          },
+          required: ['sessionId', 'message'],
+          additionalProperties: false,
+        }),
+        adaptAgentTool(agentTools.session_spawn, {
+          type: 'object',
+          properties: {
+            prompt:   { type: 'string', description: 'Self-contained task for the sub-agent (it does not see this chat\u2019s history).' },
+            title:    { type: 'string', description: 'Short title for the new session (<= 80 chars).' },
+            thinking: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Thinking level for the sub-run. Default low.' },
+          },
+          required: ['prompt'],
+          additionalProperties: false,
+        }),
+      ] : []),
       adaptAgentTool(agentTools.browser_navigate, {
         type: 'object',
         properties: {

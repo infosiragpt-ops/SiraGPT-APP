@@ -9,6 +9,8 @@ test('agent tool registry exposes session, extraction and browser automation too
     'session_search',
     'session_list',
     'session_history',
+    'session_send',
+    'session_spawn',
     'web_search',
     'web_extract',
     'browser_navigate',
@@ -36,6 +38,23 @@ test('session_list / session_history delegate to the session-recall service', as
 
   const missing = await agentTools.session_history.handler({}, { userId: 'u1' });
   assert.equal(missing.error, 'missing sessionId');
+});
+
+test('session_spawn / session_send are cost-guarded: blocked at max depth, no sub-agent run', async () => {
+  const { maxSpawnDepth } = require('../src/services/agents/subagent-guard');
+  const deep = { userId: 'u1', depth: maxSpawnDepth() };
+
+  // At/over max depth the guard returns a structured refusal WITHOUT
+  // invoking the skill handler (so no prisma write / no runAgent).
+  const spawn = await agentTools.session_spawn.handler({ prompt: 'do x' }, deep);
+  assert.equal(spawn.spawned, false);
+  assert.match(spawn.reason, /depth/i);
+
+  const send = await agentTools.session_send.handler(
+    { sessionId: 's1', message: 'm', runAgent: true }, deep,
+  );
+  assert.equal(send.appended, false);
+  assert.match(send.reason, /depth/i);
 });
 
 test('browser automation wrappers run against an injected browser adapter', async () => {
