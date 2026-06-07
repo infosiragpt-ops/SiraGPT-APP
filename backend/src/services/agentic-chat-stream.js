@@ -382,6 +382,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       skipDoneSentinel = true,
       toolsOverride = null,
       toolContext = {},
+      selection = null,
     } = opts || {};
 
     if (!openai) throw new Error('runAgenticChat: openai client is required');
@@ -389,7 +390,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
     if (!userQuery) throw new Error('runAgenticChat: userQuery is required');
     if (!res) throw new Error('runAgenticChat: res is required');
 
-    const tools = toolsOverride || buildDefaultTools({ userQuery });
+    const tools = toolsOverride || buildDefaultTools({ userQuery, selection });
     const availableToolNames = new Set(tools.map((tool) => tool && tool.name).filter(Boolean));
     // Bilingual media-intent detection: when the user asks to create an
     // image / video / audio / music in the chat bar, this pre-extracts the
@@ -973,11 +974,39 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
     const wantsMedia = !!userQuery && (isAgenticActionRequest(userQuery) || !!detectMediaIntent(userQuery).kind);
     const tools = wantsMedia ? [...base, ...loadMediaTools()] : base;
     const seen = new Set();
-    return tools.filter((tool) => {
+    const deduped = tools.filter((tool) => {
       if (!tool || !tool.name || seen.has(tool.name)) return false;
       seen.add(tool.name);
       return true;
     });
+
+    // A1: per-turn tool selection. Hand the model a small, relevant subset
+    // instead of all ~37-73 tools (which degrades tool-choice accuracy, esp. on
+    // the free model). Conservative: keeps a core + intent-relevant tools, and
+    // falls back to the FULL set on broad/unknown intent. On unless
+    // SIRAGPT_TOOL_SELECTION=0. Fail-open → full set on any error.
+    const sel = opts && opts.selection;
+    if (sel && String(process.env.SIRAGPT_TOOL_SELECTION || '').trim().toLowerCase() !== '0'
+      && String(process.env.SIRAGPT_TOOL_SELECTION || '').trim().toLowerCase() !== 'off') {
+      try {
+        const toolSelector = require('./agents/tool-selector');
+        const picked = toolSelector.selectTools({
+          tools: deduped,
+          userQuery,
+          decision: sel.decision || null,
+          intent: sel.intent || (sel.decision && sel.decision.intent) || null,
+          signals: sel.signals || {},
+          maxTools: sel.maxTools,
+        });
+        if (picked && picked.applied && Array.isArray(picked.tools) && picked.tools.length >= 4) {
+          console.log(`[tool-selector] ${picked.reason}: ${picked.keptCount}/${deduped.length} tools (dropped ${picked.droppedCount})`);
+          return picked.tools;
+        }
+      } catch (selErr) {
+        console.warn('[tool-selector] selection failed (using full set):', selErr && selErr.message);
+      }
+    }
+    return deduped;
   }
 
   /**

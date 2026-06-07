@@ -5163,6 +5163,16 @@ router.post(
                   history: priorHistory,
                   res,
                   signal,
+                  // A1: per-turn tool selection context — the cognitive decision
+                  // (intent/difficulty) lets the agentic loop hand the model a
+                  // small, relevant tool subset instead of all ~37-73 tools.
+                  selection: {
+                    decision: req._cognitiveDecision || null,
+                    signals: {
+                      hasFiles: Array.isArray(agenticFileIds) && agenticFileIds.length > 0,
+                      hasCode: !!(req._cognitiveDecision && req._cognitiveDecision.difficulty && req._cognitiveDecision.difficulty.hasCode),
+                    },
+                  },
                   toolContext: {
                     userId,
                     chatId: canPersist ? chatId : null,
