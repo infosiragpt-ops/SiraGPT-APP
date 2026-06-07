@@ -656,12 +656,27 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       }
     } catch (_) { /* honesty check must never break the response */ }
 
-    // Emit the final sentinel + the answer body in two frames so the UI
-    // shows the completed timeline AND the streamed answer below it.
-    await writeSse(res, {
-      replace: true,
-      content: serializeSentinel(state) + '\n\n' + finalAnswer,
-    });
+    // Emit the final sentinel + the answer body. Phase 5: when
+    // SIRAGPT_AGENTIC_STREAM_FINAL is enabled, token-stream the answer
+    // progressively (the agentic path otherwise dumps the whole answer in one
+    // frame). Default off → original single-frame behavior. Hard fallback so
+    // streaming can never break the response.
+    try {
+      // eslint-disable-next-line global-require
+      const finalStreamer = require('./agentic-final-streamer');
+      await finalStreamer.streamFinalAnswer({
+        res,
+        writeSse,
+        prefix: serializeSentinel(state),
+        finalAnswer,
+        signal,
+      });
+    } catch (_finalStreamErr) {
+      await writeSse(res, {
+        replace: true,
+        content: serializeSentinel(state) + '\n\n' + finalAnswer,
+      });
+    }
 
     if (!skipDoneSentinel) {
       if (!res.writableEnded) {

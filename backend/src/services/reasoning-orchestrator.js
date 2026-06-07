@@ -89,7 +89,10 @@ const RISK_DOMAINS = Object.freeze({
   },
   scientific: {
     level: 'medium',
-    rx: /\b(scientific|experiment|empirical|dataset|statistic|hypothes|doi|arxiv|cient[íi]fic|experiment|emp[íi]ric|estad[íi]stic|conjunto de datos)\b/i,
+    // Spanish stems carry inflections (empíric-o, estadístic-as, científic-o),
+    // so we allow a trailing o/a/s rather than a hard word boundary that would
+    // miss the inflected forms.
+    rx: /\b(scientific|experiment(o|os|al)?|empirical|datasets?|statistics?|hypothes(is|es)|doi|arxiv|cient[íi]fic[oa]s?|emp[íi]ric[oa]s?|estad[íi]stic[oa]s?|conjuntos? de datos)\b/i,
   },
 });
 
@@ -146,6 +149,15 @@ const HEAVY_DELIVERABLE_RX = /\b(thesis|dissertation|monograph|whitepaper|busine
 // "build an app", "desarrolla un dashboard" even without a semantic-intent hint.
 const CREATE_DELIVERABLE_RX = /\b(crea|cre[áa]me|haz|hazme|desarrolla|monta|constru[yi]e?|dise[ñn]a|genera|build|create|develop|make|design)\s+(una?\s+|an?\s+|el\s+|the\s+|mi\s+|my\s+)?(web|app|aplicaci[óo]n|sitio|p[áa]gina|landing|dashboard|plataforma|platform|sistema|system|api|backend|frontend)\b/i;
 
+// Task-verb floors (bilingual): a request's VERB implies a minimum complexity
+// even without a semantic-intent hint and even when phrased tersely. Ordered
+// high→low; the highest matching floor wins (combined via maxBucket).
+const TASK_VERB_FLOORS = Object.freeze([
+  { floor: 'complex', rx: /\b(investiga(r|ci[óo]n)?|research|estado del arte|state of the art|systematic review|revisi[óo]n sistem[áa]tica)\b/i },
+  { floor: 'moderate', rx: /\b(resume|res[úu]men|resumir|sumariza(r)?|summari[sz]e|summary|analiza(r)?|an[áa]lisis|analy[sz]e|analysis|compara(r)?|comparativa|comparison|eval[úu]a(r)?|evaluate)\b/i },
+  { floor: 'simple', rx: /\b(traduce|traducir|traducci[óo]n|translate|translation)\b/i },
+]);
+
 function maxBucket(a, b) {
   const oa = BUCKET_ORDER[a] ?? 1;
   const ob = BUCKET_ORDER[b] ?? 1;
@@ -166,6 +178,9 @@ function semanticFloor({ prompt = '', intent = null, semanticIntent = null, risk
   if (HEAVY_DELIVERABLE_RX.test(text)) floor = maxBucket(floor, 'complex');
   if (CREATE_DELIVERABLE_RX.test(text)) floor = maxBucket(floor, 'complex');
   if (MATH_LOGIC_RX.test(text)) floor = maxBucket(floor, 'moderate');
+  for (const { floor: f, rx } of TASK_VERB_FLOORS) {
+    if (rx.test(text)) { floor = maxBucket(floor, f); break; }
+  }
   // High-stakes domains (legal/medical/financial) deserve a capable model and
   // verification even when phrased tersely.
   if (riskLevel === 'high') floor = maxBucket(floor, 'moderate');

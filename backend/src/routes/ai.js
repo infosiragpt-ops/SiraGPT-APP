@@ -3795,6 +3795,32 @@ router.post(
           req._cognitiveDecision = cognitiveDecision;
           try { console.log(reasoningOrchestrator.summarizeForLog(cognitiveDecision)); } catch (_) { /* noop */ }
 
+          // Phase 6: record cognitive-core decisions for observability
+          // (router action/difficulty/risk + compute mode). Invisible counters,
+          // no behavior change. Exposed at /metrics.
+          try {
+            const cognitiveMetrics = require('../services/cognitive-metrics');
+            cognitiveMetrics.recordRoutingDecision(cognitiveDecision);
+            cognitiveMetrics.recordCompute({ mode: cognitiveDecision.compute && cognitiveDecision.compute.mode });
+          } catch (_) { /* metrics must never break the turn */ }
+
+          // Phase 3: test-time compute. Turn the orchestrator's compute plan
+          // into a reasoning directive injected into the system prompt (extended
+          // thinking / self-consistency / best-of-N) on hard turns only. Opt-in
+          // via SIRAGPT_TEST_TIME_COMPUTE; fail-open.
+          req._reasoningKernelBlock = '';
+          try {
+            if (['1', 'on', 'true'].includes(String(process.env.SIRAGPT_TEST_TIME_COMPUTE || '').trim().toLowerCase())) {
+              const testTimeCompute = require('../services/test-time-compute');
+              req._reasoningKernelBlock = testTimeCompute.buildReasoningDirective(cognitiveDecision, {
+                language: (langResolution && langResolution.language) || 'es',
+              });
+              if (req._reasoningKernelBlock) {
+                console.log(`[test-time-compute] mode=${cognitiveDecision.compute.mode} effort=${cognitiveDecision.compute.reasoningEffort} injected=${req._reasoningKernelBlock.length}c`);
+              }
+            }
+          } catch (_ttcErr) { /* fail-open: no directive */ }
+
           // Apply intelligent re-routing only when the orchestrator says so AND
           // it's safe: no images (the vision path owns its own model choice),
           // a real provider can be inferred, and the target is plan-eligible.
@@ -4206,7 +4232,8 @@ router.post(
         console.warn('[ai] llm understanding packet unavailable (continuing without):', llmUnderstandingErr && llmUnderstandingErr.message);
       }
 
-      const systemInstruction = { role: 'system', content: promptBundle.system + openclawRuntimeBlock + llmUnderstandingBlock + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + activeMemoryBlock + crossChatBlock + attributionBlock + circuitAttributionBlock + intentAttributionGraphBlock + saliencyBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock };
+      const reasoningEffortBlock = (req._reasoningKernelBlock || '');
+      const systemInstruction = { role: 'system', content: promptBundle.system + openclawRuntimeBlock + llmUnderstandingBlock + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + activeMemoryBlock + crossChatBlock + attributionBlock + circuitAttributionBlock + intentAttributionGraphBlock + saliencyBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock + reasoningEffortBlock };
       // Structured view of the system prompt — same content as
       // `systemInstruction.content`, but split into typed blocks with a
       // `cacheable` hint. When the downstream provider is Anthropic (or
@@ -4236,7 +4263,37 @@ router.post(
         { kind: 'cowork', text: coworkBlock, cacheable: false },
         { kind: 'web-search', text: webSearchBlock, cacheable: false },
         { kind: 'pr5-grounding', text: __pr5GroundingBlock, cacheable: false },
+        { kind: 'reasoning-effort', text: reasoningEffortBlock, cacheable: false },
       ].filter((b) => typeof b.text === 'string' && b.text.trim().length > 0);
+
+      // Phase 4: prompt kernel — need-based block activation. On easy, low-risk,
+      // non-agentic turns, prune the heavy "attribution theater" + policy blocks
+      // that only dilute the answer; keep the full stack for hard/ambiguous/
+      // agentic/high-risk turns. Opt-in via SIRAGPT_PROMPT_KERNEL; fail-open.
+      try {
+        if (['1', 'on', 'true'].includes(String(process.env.SIRAGPT_PROMPT_KERNEL || '').trim().toLowerCase()) && req._cognitiveDecision) {
+          const promptKernel = require('../services/prompt-kernel');
+          const __kernelPlan = promptKernel.planBlocks({
+            intent: req._cognitiveDecision.intent,
+            difficulty: req._cognitiveDecision.difficulty,
+            risk: req._cognitiveDecision.risk,
+            signals: {
+              ambiguous: !!(semanticIntentAnalysis && semanticIntentAnalysis.needs_clarification),
+              agentic: !!(intentTriageDecision && intentTriageDecision.action === 'agentic'),
+            },
+            presentKinds: systemBlocks.map((b) => b.kind),
+          });
+          if (__kernelPlan.drop.length > 0) {
+            const __pruned = promptKernel.applyPlan(systemBlocks, __kernelPlan);
+            systemBlocks.length = 0;
+            for (const b of __pruned) systemBlocks.push(b);
+            systemInstruction.content = systemBlocks.map((b) => b.text || '').join('');
+            try { console.log(promptKernel.summarizeForLog(__kernelPlan)); } catch (_) { /* noop */ }
+          }
+        }
+      } catch (__kernelErr) {
+        console.warn('[prompt-kernel] pruning failed (continuing without):', __kernelErr && __kernelErr.message);
+      }
 
       // Prompt-budget allocator — trims overflowing systemBlocks so the
       // stacking attribution / circuit / saliency / RAG / cowork surfaces
@@ -5038,6 +5095,8 @@ router.post(
             });
             if (__faith.ran) {
               console.log(`[faithfulness-gate] ran action=${__faith.action} grade=${__faith.grade || '-'} score=${__faith.score ?? '-'} sources=${__faith.contextSources} model=${actualModel}`);
+              // Phase 6: faithfulness grade per model (observability).
+              try { require('../services/cognitive-metrics').recordFaithfulness({ grade: __faith.grade, action: __faith.action, model: actualModel }); } catch (_) { /* noop */ }
             }
             if (__faith.action === 'annotate' && __faith.footer && !res.writableEnded) {
               res.write(`data: ${JSON.stringify({ content: __faith.footer })}\n\n`);
