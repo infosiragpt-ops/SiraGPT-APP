@@ -37,6 +37,7 @@ const MAX_SIGNATURES = Number(process.env.SIRAGPT_ROUTING_FEEDBACK_MAX_SIGNATURE
 const OUTCOME_WEIGHTS = Object.freeze({
   regenerated: { neg: 1, pos: 0 },
   low_faithfulness: { neg: 1, pos: 0 },
+  constraint_violation: { neg: 1, pos: 0 },
   honesty_flag: { neg: 0.5, pos: 0 },
   high_faithfulness: { neg: 0, pos: 1 },
   success: { neg: 0, pos: 1 },

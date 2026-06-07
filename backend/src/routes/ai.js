@@ -3906,6 +3906,26 @@ router.post(
           req._cognitiveDecision = cognitiveDecision;
           try { console.log(reasoningOrchestrator.summarizeForLog(cognitiveDecision)); } catch (_) { /* noop */ }
 
+          // Instruction-following: extract the user's EXPLICIT constraints
+          // (one paragraph, in English, include X, without Y, max N words) and
+          // inject them as a hard MUST-satisfy checklist so the model honors
+          // them — the #1 perceived-quality lever. Stored on req for the
+          // post-generation adherence check. On unless SIRAGPT_CONSTRAINT_ADHERENCE=0.
+          req._constraints = [];
+          req._constraintBlock = '';
+          try {
+            if (String(process.env.SIRAGPT_CONSTRAINT_ADHERENCE || '').trim().toLowerCase() !== '0'
+              && String(process.env.SIRAGPT_CONSTRAINT_ADHERENCE || '').trim().toLowerCase() !== 'off') {
+              const constraintAdherence = require('../services/constraint-adherence');
+              const __constraints = constraintAdherence.extractConstraints(prompt);
+              if (Array.isArray(__constraints) && __constraints.length > 0) {
+                req._constraints = __constraints;
+                req._constraintBlock = constraintAdherence.buildConstraintPromptBlock(__constraints);
+                console.log(`[constraint-adherence] extracted ${__constraints.length}: ${__constraints.map((c) => c.kind).join(',')}`);
+              }
+            }
+          } catch (_caErr) { /* fail-open: no constraint block */ }
+
           // A regenerate request is a negative signal: the prior answer for this
           // signature was unsatisfactory. Feed it into the learning loop.
           try {
@@ -4357,7 +4377,8 @@ router.post(
       }
 
       const reasoningEffortBlock = (req._reasoningKernelBlock || '');
-      const systemInstruction = { role: 'system', content: promptBundle.system + openclawRuntimeBlock + llmUnderstandingBlock + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + activeMemoryBlock + crossChatBlock + attributionBlock + circuitAttributionBlock + intentAttributionGraphBlock + saliencyBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock + reasoningEffortBlock };
+      const constraintBlock = (req._constraintBlock || '');
+      const systemInstruction = { role: 'system', content: promptBundle.system + openclawRuntimeBlock + llmUnderstandingBlock + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + activeMemoryBlock + crossChatBlock + attributionBlock + circuitAttributionBlock + intentAttributionGraphBlock + saliencyBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock + reasoningEffortBlock + constraintBlock };
       // Structured view of the system prompt — same content as
       // `systemInstruction.content`, but split into typed blocks with a
       // `cacheable` hint. When the downstream provider is Anthropic (or
@@ -4388,6 +4409,7 @@ router.post(
         { kind: 'web-search', text: webSearchBlock, cacheable: false },
         { kind: 'pr5-grounding', text: __pr5GroundingBlock, cacheable: false },
         { kind: 'reasoning-effort', text: reasoningEffortBlock, cacheable: false },
+        { kind: 'constraints', text: constraintBlock, cacheable: false },
       ].filter((b) => typeof b.text === 'string' && b.text.trim().length > 0);
 
       // Phase 4: prompt kernel — need-based block activation. On easy, low-risk,
@@ -5240,6 +5262,32 @@ router.post(
           }
         } catch (faithErr) {
           console.warn('[faithfulness-gate] check failed (continuing without):', faithErr && faithErr.message);
+        }
+
+        // Instruction-following audit: verify the final answer against the
+        // user's explicit constraints (one paragraph, language, include/exclude,
+        // word count). Observability only here — the pre-generation checklist is
+        // the prevention; this surfaces any miss for telemetry + the learning
+        // loop. Fail-open; never blocks the reply.
+        try {
+          if (Array.isArray(req._constraints) && req._constraints.length > 0 && fullResponseContent) {
+            const constraintAdherence = require('../services/constraint-adherence');
+            const __adh = constraintAdherence.verifyAdherence(fullResponseContent, req._constraints);
+            console.log(constraintAdherence.summarizeForLog(__adh));
+            if (!__adh.satisfied) {
+              // A constraint miss is a negative quality signal for the router.
+              try {
+                require('../services/routing-feedback').recordOutcome({
+                  intent: req._cognitiveDecision && req._cognitiveDecision.intent,
+                  difficulty: req._cognitiveDecision && req._cognitiveDecision.difficulty,
+                  model: actualModel,
+                  outcome: 'constraint_violation',
+                });
+              } catch (_) { /* noop */ }
+            }
+          }
+        } catch (caVerifyErr) {
+          console.warn('[constraint-adherence] verify failed (continuing without):', caVerifyErr && caVerifyErr.message);
         }
 
         if (cacheHandle) cacheHandle.complete();

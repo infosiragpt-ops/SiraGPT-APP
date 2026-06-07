@@ -45,6 +45,9 @@ const ALWAYS_KEEP = new Set([
   'pr5-grounding',
   // Phase 3 reasoning directive (if present) is load-bearing for hard turns.
   'reasoning-effort',
+  // Explicit user constraints (one paragraph, in English, include X…) are
+  // load-bearing — never prune them.
+  'constraints',
 ]);
 
 // The "attribution theater" + heavy policy blocks: valuable on hard/ambiguous
