@@ -33,6 +33,22 @@ function log(msg, extra = {}) {
   process.stdout.write(JSON.stringify({ ts: new Date().toISOString(), scope: "boot", msg, ...extra }) + "\n");
 }
 
+// Wall-clock anchor so every structured phase event carries an elapsed_ms since
+// the wrapper started — turns a wall of free-text logs into a queryable boot
+// timeline (env-load -> db-preflight -> migrate-lock -> migrate -> backend-start).
+const BOOT_STARTED_AT = Date.now();
+
+function phase(name, extra = {}) {
+  process.stdout.write(JSON.stringify({
+    ts: new Date().toISOString(),
+    scope: "boot",
+    event: "boot_phase",
+    phase: name,
+    elapsed_ms: Date.now() - BOOT_STARTED_AT,
+    ...extra,
+  }) + "\n");
+}
+
 function pipeResult(result) {
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
@@ -67,6 +83,19 @@ function makePgClientOptions(url) {
     connectionString: url,
     ssl: needsSsl ? { rejectUnauthorized: false } : undefined,
   };
+}
+
+// Only a direct postgres URL can be dialed by `pg` (and by `migrate deploy`).
+// A Prisma Accelerate / Data Proxy `prisma://` URL cannot, so preflight and the
+// advisory lock must skip — fast — rather than retry a connection that can
+// never succeed.
+function isDirectPostgresUrl(url) {
+  return typeof url === "string" && /^postgres(?:ql)?:\/\//i.test(url.trim());
+}
+
+function createPgClient(url = resolvePrismaDatabaseUrl()) {
+  const { Client } = require("pg");
+  return new Client(makePgClientOptions(url));
 }
 
 function isSafeAutoRollbackMigration(migrationName) {
@@ -288,6 +317,134 @@ function isTransientMigrationError(result) {
 const MIGRATION_TRANSIENT_RETRIES = Number(process.env.MIGRATION_TRANSIENT_RETRIES ?? 6);
 const MIGRATION_RETRY_DELAY_MS = Number(process.env.MIGRATION_RETRY_DELAY_MS ?? 8000);
 
+// ── Boot v2: DB preflight + cross-instance migration advisory lock ──────────
+// All of this is best-effort and fail-safe: any error degrades to the prior
+// behaviour (proceed straight to `migrate deploy`). Nothing here can block boot
+// indefinitely or turn a healthy boot into a failed one.
+const MIGRATION_LOCK_NAME = "siragpt:prisma-migrate-deploy";
+const MIGRATION_PREFLIGHT_ATTEMPTS = Number(process.env.MIGRATION_PREFLIGHT_ATTEMPTS ?? 10);
+const MIGRATION_PREFLIGHT_DELAY_MS = Number(process.env.MIGRATION_PREFLIGHT_DELAY_MS ?? 3000);
+const MIGRATION_LOCK_TIMEOUT_MS = Number(process.env.MIGRATION_LOCK_TIMEOUT_MS ?? 120000);
+const MIGRATION_LOCK_POLL_MS = Number(process.env.MIGRATION_LOCK_POLL_MS ?? 1500);
+
+// Deterministic [int4, int4] key pair for pg_advisory_lock(int4, int4) derived
+// from a stable name via two differently-seeded FNV-1a passes. Same name ->
+// same pair on every instance, so all replicas contend for the same lock.
+function computeAdvisoryLockKeys(name) {
+  const str = String(name);
+  const fnv = (seed, reverse) => {
+    let h = seed >>> 0;
+    for (let i = 0; i < str.length; i++) {
+      const idx = reverse ? str.length - 1 - i : i;
+      h ^= str.charCodeAt(idx);
+      h = Math.imul(h, 0x01000193);
+    }
+    return h | 0; // signed 32-bit, valid Postgres int4
+  };
+  return [fnv(0x811c9dc5, false), fnv(0x811c9dc5 ^ 0x5a5a5a5a, true)];
+}
+
+// Wait (with retries) until the database accepts connections, so `migrate
+// deploy` doesn't fail immediately against a database that is still starting up
+// in an orchestrated deploy. Connection logic is injectable for tests.
+async function preflightDatabase(opts = {}) {
+  const {
+    attempts = MIGRATION_PREFLIGHT_ATTEMPTS,
+    delayMs = MIGRATION_PREFLIGHT_DELAY_MS,
+    connect = defaultPreflightConnect,
+    sleepFn = sleep,
+    logFn = phase,
+  } = opts;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      await connect();
+      logFn("db_preflight_ok", { attempt });
+      return true;
+    } catch (err) {
+      logFn("db_preflight_retry", { attempt, maxAttempts: attempts, error: err?.message });
+      if (attempt < attempts) await sleepFn(delayMs);
+    }
+  }
+  logFn("db_preflight_exhausted", { attempts });
+  return false;
+}
+
+async function defaultPreflightConnect() {
+  const url = resolvePrismaDatabaseUrl();
+  if (!url) throw new Error("no database url configured");
+  const client = createPgClient(url);
+  await client.connect();
+  try {
+    await client.query("SELECT 1");
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+// Acquire a Postgres session advisory lock so only one booting instance runs
+// `migrate deploy` at a time — two replicas applying the same migration
+// concurrently is a classic source of failed/half-applied migrations (P3009).
+// Returns an async release() function. Best-effort: on any failure it returns a
+// no-op release and lets boot proceed (an un-serialised migrate is still better
+// than a hung boot).
+async function acquireMigrationLock(opts = {}) {
+  const {
+    keys = computeAdvisoryLockKeys(MIGRATION_LOCK_NAME),
+    timeoutMs = MIGRATION_LOCK_TIMEOUT_MS,
+    pollMs = MIGRATION_LOCK_POLL_MS,
+    clientFactory = () => createPgClient(),
+    sleepFn = sleep,
+    logFn = phase,
+    now = Date.now,
+  } = opts;
+
+  const noop = async () => {};
+  let client;
+  try {
+    client = clientFactory();
+    await client.connect();
+  } catch (err) {
+    logFn("migration_lock_skipped", { reason: "connect_failed", error: err?.message });
+    if (client && client.end) await client.end().catch(() => {});
+    return noop;
+  }
+
+  const deadline = now() + timeoutMs;
+  let acquired = false;
+  while (now() < deadline) {
+    let res;
+    try {
+      res = await client.query("SELECT pg_try_advisory_lock($1::int4, $2::int4) AS locked", keys);
+    } catch (err) {
+      logFn("migration_lock_skipped", { reason: "query_failed", error: err?.message });
+      await client.end().catch(() => {});
+      return noop;
+    }
+    const locked = res && res.rows && (res.rows[0]?.locked === true || res.rows[0]?.locked === "t");
+    if (locked) { acquired = true; break; }
+    logFn("migration_lock_waiting", { pollMs });
+    await sleepFn(pollMs);
+  }
+
+  if (!acquired) {
+    logFn("migration_lock_timeout", { timeoutMs });
+    await client.end().catch(() => {});
+    return noop;
+  }
+
+  logFn("migration_lock_acquired", {});
+  return async () => {
+    try {
+      await client.query("SELECT pg_advisory_unlock($1::int4, $2::int4)", keys);
+      logFn("migration_lock_released", {});
+    } catch (err) {
+      logFn("migration_lock_release_failed", { error: err?.message });
+    } finally {
+      await client.end().catch(() => {});
+    }
+  };
+}
+
 async function runMigrations() {
   loadDotenv();
   if (process.env.SKIP_MIGRATIONS === "1") {
@@ -372,8 +529,52 @@ function startBackend() {
   });
 }
 
+// Run DB preflight + acquire the migration advisory lock when applicable.
+// Returns an async release() (a no-op when nothing was locked). Every branch is
+// gated by env and fail-safe: a bug here can never block boot or fail it.
+async function maybePreflightAndLock() {
+  const noop = async () => {};
+  if (process.env.SKIP_MIGRATIONS === "1") return noop;
+
+  loadDotenv();
+  const url = resolvePrismaDatabaseUrl();
+  if (!isDirectPostgresUrl(url)) {
+    // Accelerate/Data Proxy (prisma://) or no URL: pg can't dial it, so skip
+    // fast instead of burning preflight retries that can never succeed.
+    phase("migration_preflight_skipped", { reason: url ? "non_direct_postgres_url" : "no_database_url" });
+    return noop;
+  }
+
+  if (process.env.MIGRATION_PREFLIGHT_DISABLED !== "1") {
+    phase("db_preflight_start", { attempts: MIGRATION_PREFLIGHT_ATTEMPTS });
+    const ok = await preflightDatabase().catch((err) => {
+      phase("db_preflight_error", { error: err?.message });
+      return true; // never block boot on a preflight bug
+    });
+    if (!ok) phase("db_preflight_giving_up", { note: "continuing to migrate anyway" });
+  }
+
+  if (process.env.MIGRATION_ADVISORY_LOCK_DISABLED === "1") return noop;
+  phase("migration_lock_start", {});
+  return acquireMigrationLock().catch((err) => {
+    phase("migration_lock_error", { error: err?.message });
+    return noop;
+  });
+}
+
 async function main() {
-  const migrationStatus = await runMigrations();
+  phase("boot_start", { skipMigrations: process.env.SKIP_MIGRATIONS === "1" });
+  const release = await maybePreflightAndLock();
+
+  let migrationStatus;
+  try {
+    phase("migrate_start", {});
+    migrationStatus = await runMigrations();
+    phase("migrate_done", { status: migrationStatus });
+  } finally {
+    await release().catch(() => {});
+  }
+
   if (migrationStatus !== 0) {
     // Opt-in safety valve (default OFF — byte-identical to before when unset):
     // when MIGRATION_NONFATAL=1, boot the backend anyway so it can still bind
@@ -382,12 +583,15 @@ async function main() {
     // The operator must still fix the underlying DB/migration condition.
     if (process.env.MIGRATION_NONFATAL === "1") {
       log("migrations failed but MIGRATION_NONFATAL=1 — booting anyway (degraded)", { status: migrationStatus });
+      phase("backend_start", { degraded: true });
       startBackend();
       return;
     }
     log("migrations failed — aborting boot", { status: migrationStatus });
+    phase("boot_aborted", { status: migrationStatus });
     process.exit(migrationStatus);
   }
+  phase("backend_start", { degraded: false });
   startBackend();
 }
 
@@ -406,4 +610,8 @@ module.exports = {
   makePgClientOptions,
   resolvePrismaDatabaseUrl,
   shouldContinueAfterSafeP3009,
+  isDirectPostgresUrl,
+  computeAdvisoryLockKeys,
+  preflightDatabase,
+  acquireMigrationLock,
 };
