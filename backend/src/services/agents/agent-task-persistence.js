@@ -130,7 +130,7 @@ async function upsertAgentTask(task = {}) {
         skipDuplicates: true,
       });
       if (created?.count > 0) {
-        return prisma.agentTask.findFirst({ where: { id: data.id } });
+        return await prisma.agentTask.findFirst({ where: { id: data.id } });
       }
     }
 

@@ -1361,11 +1361,11 @@ async function persistAssistantMessage({
       },
     };
     if (assistantMessageId) {
-      return prisma.message.update({ where: { id: assistantMessageId }, data });
+      return await prisma.message.update({ where: { id: assistantMessageId }, data });
     }
     const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
     if (!chat) return null;
-    return prisma.message.create({
+    return await prisma.message.create({
       data: { chatId, role: 'ASSISTANT', timestamp: new Date(), ...data },
     });
   } catch {
