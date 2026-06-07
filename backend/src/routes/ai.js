@@ -177,6 +177,8 @@ const coworkEngine = require('../services/cowork-engine');
 const activeMemory = require('../services/active-memory');
 const memoryDecision = require('../services/memory-decision');
 const memoryIntelligence = require('../services/memory-intelligence');
+const memoryEngine = require('../services/memory-engine');
+const memoryMetrics = require('../services/memory-metrics');
 const memoryDocument = require('../services/memory-document');
 const conversationUnderstanding = require('../services/conversation-understanding');
 const chatAttachmentRecovery = require('../services/chat-attachment-recovery');
@@ -3924,11 +3926,17 @@ router.post(
       let memoryMeta = null;
       try {
         if (userId && typeof prompt === 'string' && prompt.trim()) {
+          memoryMetrics.record('turn');
           const mem = memoryIntelligence.analyze(prompt);
           // (a) FORGET: honour explicit "olvida eso / forget that".
           if (mem.forget?.should && Array.isArray(mem.forget.targets)) {
             for (const t of mem.forget.targets) {
-              try { if (t?.query) activeMemory.forget(userId, t.query); } catch { /* best effort */ }
+              try {
+                if (t?.query) {
+                  const r = activeMemory.forget(userId, t.query);
+                  if (r?.removed) memoryMetrics.record('forgotten', r.removed);
+                }
+              } catch { /* best effort */ }
             }
           }
           // (b) STORE structured facts; supersede stale single-valued attrs.
@@ -3941,9 +3949,11 @@ router.post(
                   confidence: typeof f.confidence === 'number' ? f.confidence : 0.8,
                   metadata: { attribute: f.attribute || null, polarity: f.polarity || 'positive' },
                 });
+                memoryMetrics.record('stored');
                 // A new name/role/company/location/project replaces the old one.
                 if (f.attribute && entry?.id) {
-                  activeMemory.supersede(userId, { category: f.category, attribute: f.attribute, exceptId: entry.id });
+                  const s = activeMemory.supersede(userId, { category: f.category, attribute: f.attribute, exceptId: entry.id });
+                  if (s?.removed) memoryMetrics.record('superseded', s.removed);
                 }
               } catch { /* per-fact best effort */ }
             }
@@ -3951,33 +3961,41 @@ router.post(
           // (c) RECALL only when warranted, and only surface relevant memory.
           const SIRA_MEM_MIN_RELEVANCE = Number(process.env.SIRAGPT_MEMORY_MIN_RELEVANCE || 0.45);
           if (mem.recall?.should) {
+            memoryMetrics.record('recall_decision');
+            memoryMetrics.recordReason(mem.recall.reason || '');
             let recalled = [];
-            try { recalled = activeMemory.recall(userId, prompt, { limit: 8 }) || []; } catch { recalled = []; }
-            const relevant = recalled.filter((m) => typeof m.score !== 'number' || m.score >= SIRA_MEM_MIN_RELEVANCE).slice(0, 6);
+            try { recalled = activeMemory.recall(userId, prompt, { limit: 10 }) || []; } catch { recalled = []; }
+            const relevant = recalled.filter((m) => typeof m.score !== 'number' || m.score >= SIRA_MEM_MIN_RELEVANCE);
             if (relevant.length > 0) {
               const now = Date.now();
-              memoryItems = relevant.map((m) => ({
+              // Explainable, blended ranking: surfaces WHY each item was recalled.
+              const ranked = memoryEngine.rankRecall(prompt, relevant, { topics: mem.recall.topics, limit: 6 });
+              memoryItems = ranked.map((m) => ({
                 id: m.id,
                 fact: m.fact,
                 category: m.category || 'general',
                 tier: m.tier || 'short_term',
                 polarity: m.metadata?.polarity || 'positive',
                 confidence: typeof m.confidence === 'number' ? Number(m.confidence.toFixed(2)) : null,
-                relevance: typeof m.score === 'number' ? Number(Math.min(1, m.score).toFixed(2)) : null,
+                relevance: typeof m.blendedScore === 'number' ? m.blendedScore : (typeof m.score === 'number' ? Number(Math.min(1, m.score).toFixed(2)) : null),
+                matchedTopics: Array.isArray(m.matchedTopics) ? m.matchedTopics.slice(0, 4) : [],
+                why: m.why || '',
                 ageMs: typeof m.createdAt === 'number' ? Math.max(0, now - m.createdAt) : null,
               }));
+              memoryMetrics.record('recalled', memoryItems.length);
               memoryMeta = {
                 reason: mem.recall.reason || '',
                 confidence: typeof mem.recall.confidence === 'number' ? mem.recall.confidence : null,
                 recalled: memoryItems.length,
               };
               // Inject so the model actually uses what it remembered.
-              const memLines = memoryItems.map((m) => `- ${m.fact}`).join('\n');
-              activeMemoryBlock = `\n\n## Memoria del usuario (recordada para este turno)\nUsa estos datos recordados cuando sean relevantes. No los repitas literalmente si no aportan.\n${memLines}`;
+              activeMemoryBlock = memoryEngine.buildBlock(memoryItems);
               // Stream a memory frame so the UI can render the MEMORIA section.
               try {
                 res.write(`data: ${JSON.stringify({ type: 'memory', reason: memoryMeta.reason, confidence: memoryMeta.confidence, items: memoryItems })}\n\n`);
               } catch { /* socket gone */ }
+            } else {
+              memoryMetrics.record('recall_empty');
             }
           }
         }

@@ -27,6 +27,8 @@ export type ChipMemoryItem = {
   polarity?: string
   confidence?: number | null
   relevance?: number | null
+  matchedTopics?: string[]
+  why?: string
   ageMs?: number | null
   strength?: number | null
   score?: number | null

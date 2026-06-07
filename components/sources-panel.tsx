@@ -228,6 +228,19 @@ export function SourcesPanel({ sources, activity, memory, memoryMeta, onClose }:
                         <span className="text-[10px] text-muted-foreground">· {ageLabel}</span>
                       ) : null}
                     </div>
+                    {Array.isArray(m.matchedTopics) && m.matchedTopics.length > 0 ? (
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                        <span className="text-[10px] text-muted-foreground">recordado por</span>
+                        {m.matchedTopics.slice(0, 4).map((t) => (
+                          <span
+                            key={t}
+                            className="rounded bg-emerald-500/10 px-1 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-400"
+                          >
+                            {t}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                   {m.id ? (
                     <button

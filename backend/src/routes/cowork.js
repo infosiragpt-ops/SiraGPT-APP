@@ -6,6 +6,7 @@ const { optionalAuth } = require('../middleware/optionalAuth');
 const autoFileBridge = require('../services/auto-file-bridge');
 const deepDocumentAnalyzer = require('../services/deep-document-analyzer');
 const activeMemory = require('../services/active-memory');
+const memoryMetrics = require('../services/memory-metrics');
 const sessionManager = require('../services/session-manager');
 const skillsRegistry = require('../services/skills-registry');
 const coworkEngine = require('../services/cowork-engine');
@@ -132,6 +133,39 @@ router.get('/memory', authenticateToken, async (req, res) => {
     const context = activeMemory.getMemoryContext(userId, { limit: 50 });
     const stats = activeMemory.getStats(userId);
     res.json({ context, stats });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Full structured list of everything the system remembers about the user —
+// powers a "ver toda mi memoria" management view (transparency + control).
+router.get('/memory/all', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const limit = Math.min(Number(req.query.limit) || 200, 500);
+    const entries = activeMemory.recall(userId, null, { limit });
+    const items = (Array.isArray(entries) ? entries : []).map((m) => ({
+      id: m.id,
+      fact: m.fact,
+      category: m.category || 'general',
+      tier: m.tier || 'short_term',
+      polarity: m.metadata?.polarity || 'positive',
+      confidence: typeof m.confidence === 'number' ? Number(m.confidence.toFixed(2)) : null,
+      accessCount: m.accessCount || 0,
+      createdAt: m.createdAt || null,
+      lastAccessed: m.lastAccessed || null,
+    }));
+    res.json({ items, stats: activeMemory.getStats(userId) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Memory-system observability snapshot (counts + recall hit-rate).
+router.get('/memory/metrics', authenticateToken, async (req, res) => {
+  try {
+    res.json(memoryMetrics.snapshot());
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
