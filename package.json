@@ -24,6 +24,8 @@
     "eval:mythos:json": "node scripts/run-mythos-preview-evals.js --json",
     "eval:understanding": "node backend/scripts/run-understanding-eval.js",
     "eval:understanding:json": "node backend/scripts/run-understanding-eval.js --json",
+    "eval:intelligence": "node ./node_modules/typescript/bin/tsc -p tests/tsconfig.json && node .test-dist/server/intelligence/eval/run.js",
+    "eval:intelligence:json": "node ./node_modules/typescript/bin/tsc -p tests/tsconfig.json && node .test-dist/server/intelligence/eval/run.js --json",
     "prepare": "husky",
     "mobile:sync": "cap sync",
     "mobile:open:android": "cap open android",
