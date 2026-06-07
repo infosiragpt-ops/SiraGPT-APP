@@ -86,6 +86,13 @@ describe('document-visual-embed — diagrams (process / timeline / organigram)',
     assert.match(svg, /<circle /);
   });
 
+  it('builds a radar chart with axes, rings and a data polygon', () => {
+    const svg = buildChartSvg({ type: 'radar', title: 'Perfil por dimensión', data: { labels: ['Eficacia', 'Eficiencia', 'Calidad', 'Innovación', 'Costo'], values: [80, 65, 90, 50, 70] } });
+    assert.match(svg, /Eficacia/);
+    assert.match(svg, /<polygon /); // rings + data polygon
+    assert.equal(detectVisualRequest('haz un gráfico de radar de las dimensiones').type, 'radar');
+  });
+
   it('builds an organigram from a nested tree and connects parents to children', () => {
     const svg = buildChartSvg({
       type: 'organigram',

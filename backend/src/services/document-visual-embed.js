@@ -309,6 +309,41 @@ function buildOrganigramSvg({ spec, title, width, height, theme }) {
   return parts.join('');
 }
 
+function buildRadarChartSvg({ data, title, width, height, theme }) {
+  const points = normalizeData(data);
+  const parts = [svgHeader(width, height, theme), svgTitle(title, width, theme)];
+  const top = title ? 60 : 28;
+  const cx = width / 2;
+  const cy = top + (height - top - 24) / 2;
+  const radius = Math.max(40, Math.min(cx - 90, (height - top - 48) / 2));
+  const n = Math.max(3, points.length);
+  const maxValue = Math.max(1, ...points.map((p) => p.value));
+  const angleAt = (i) => -Math.PI / 2 + (i * 2 * Math.PI) / n;
+  const pointAt = (i, r) => ({ x: cx + r * Math.cos(angleAt(i)), y: cy + r * Math.sin(angleAt(i)) });
+
+  // concentric grid rings
+  for (let ring = 1; ring <= 4; ring += 1) {
+    const r = (radius * ring) / 4;
+    const poly = points.map((_, i) => { const p = pointAt(i, r); return `${p.x.toFixed(1)},${p.y.toFixed(1)}`; }).join(' ');
+    parts.push(`<polygon points="${poly}" fill="none" stroke="${theme.grid}" stroke-width="1"/>`);
+  }
+  // axes + labels
+  points.forEach((point, i) => {
+    const edge = pointAt(i, radius);
+    parts.push(`<line x1="${cx.toFixed(1)}" y1="${cy.toFixed(1)}" x2="${edge.x.toFixed(1)}" y2="${edge.y.toFixed(1)}" stroke="${theme.grid}" stroke-width="1"/>`);
+    const lbl = pointAt(i, radius + 16);
+    const anchor = Math.abs(lbl.x - cx) < 6 ? 'middle' : (lbl.x > cx ? 'start' : 'end');
+    parts.push(`<text x="${lbl.x.toFixed(1)}" y="${(lbl.y + 4).toFixed(1)}" text-anchor="${anchor}" font-size="11" fill="${theme.text}">${xmlEscape(point.label.slice(0, 16))}</text>`);
+  });
+  // data polygon
+  const color = theme.palette[0];
+  const dataPoly = points.map((point, i) => { const p = pointAt(i, (point.value / maxValue) * radius); return `${p.x.toFixed(1)},${p.y.toFixed(1)}`; }).join(' ');
+  parts.push(`<polygon points="${dataPoly}" fill="${color}" fill-opacity="0.25" stroke="${color}" stroke-width="2.5"/>`);
+  points.forEach((point, i) => { const p = pointAt(i, (point.value / maxValue) * radius); parts.push(`<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3.5" fill="${color}"/>`); });
+  parts.push('</svg>');
+  return parts.join('');
+}
+
 // Public: build a chart/diagram SVG string for the given spec.
 function buildChartSvg(spec = {}) {
   const width = Math.max(200, Math.min(1200, toNumber(spec.width, 640)));
@@ -324,6 +359,7 @@ function buildChartSvg(spec = {}) {
   if (type === 'process' || type === 'flow' || type === 'flujo') return buildProcessFlowSvg(params);
   if (type === 'timeline' || type === 'linea-de-tiempo' || type === 'cronologia') return buildTimelineSvg(params);
   if (type === 'organigram' || type === 'organigrama' || type === 'orgchart' || type === 'org') return buildOrganigramSvg({ spec, title, width, height, theme });
+  if (type === 'radar' || type === 'spider' || type === 'arana') return buildRadarChartSvg(params);
   return buildBarChartSvg(params);
 }
 
@@ -457,9 +493,10 @@ function normalizeText(value) {
   return String(value || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
 }
 
-const VISUAL_INTENT_RE = /\b(grafico\w*|grafica\w*|diagrama\w*|organigrama\w*|linea de tiempo|cronolog\w*|timeline|flujograma|diagrama de flujo|flujo|chart|pastel|dona|donut|barras?|histograma)\b/;
+const VISUAL_INTENT_RE = /\b(grafico\w*|grafica\w*|diagrama\w*|organigrama\w*|linea de tiempo|cronolog\w*|timeline|flujograma|diagrama de flujo|flujo|chart|pastel|dona|donut|barras?|histograma|radar|arana|spider)\b/;
 
 function inferVisualType(norm) {
+  if (/\bradar|arana|spider\b/.test(norm)) return 'radar';
   if (/\borganigrama\w*|orgchart|organization\b/.test(norm)) return 'organigram';
   if (/\btimeline|linea de tiempo|cronolog\w*\b/.test(norm)) return 'timeline';
   if (/\bflujograma|diagrama de flujo|\bflujo\b|proceso\b/.test(norm)) return 'process';
