@@ -43,3 +43,4 @@
 - [Deploy promote frontend gating](deploy-promote-frontend-gating.md) — Reserved VM promote health-checks frontend port 3000, not backend; backend-only deltas can't fail promote → a "waiting for ready" fail is transient, just republish.
 - [Curated IMAGE activation](curated-image-activation.md) — ensureStaticCatalogModels is hot-path; gate any "reactivate curated rows" write behind a per-instance once-per-process flag, never unconditional.
 - [Filter config override](filter-config-override.md) — FILTERS_CONFIG.enabled overrides each filter module's own enabled flag; change both or they silently disagree.
+- [Post-deploy warmup window](post-deploy-warmup-window.md) — frontend live ~90s before backend; /api/* gives raw 500; gate auth actions on HEAD /api/health/ready (204/503) via useBackendReady.

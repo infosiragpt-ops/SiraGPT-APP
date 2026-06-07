@@ -226,6 +226,8 @@
     "forgotPassword": "Forgot password?",
     "orContinueWith": "Or continue with",
     "continueWithGoogle": "Continue with Google",
+    "serverWarming": "The server is starting up. Retrying automatically…",
+    "serverWarmingButton": "Starting server…",
     "noAccount": "Don't have an account?",
     "haveAccount": "Already have an account?",
     "tagline": "Sign in to your Sira Gpt account",

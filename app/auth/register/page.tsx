@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import { useAuth } from "@/lib/auth-context-integrated"
+import { useBackendReady } from "@/lib/use-backend-ready"
 import { toast } from "sonner"
 import { useTranslations } from "next-intl"
 
@@ -31,6 +32,13 @@ export default function RegisterPage() {
   const { register, user } = useAuth()
   const router = useRouter()
 
+  // Right after a publish the backend is still booting (~90s) while the
+  // frontend is already live, so the registration request would hit a 500 and
+  // show a misleading "could not create account" error. Track backend
+  // readiness and queue the submit until the backend answers.
+  const backendState = useBackendReady()
+  const [pendingRegister, setPendingRegister] = React.useState(false)
+
   // Redirect if already logged in
   React.useEffect(() => {
     if (user) {
@@ -38,19 +46,7 @@ export default function RegisterPage() {
     }
   }, [user, router])
 
-  const handleRegister = async (e: React.FormEvent) => {
-    e.preventDefault()
-
-    if (formData.password !== formData.confirmPassword) {
-      toast.error("Las contraseñas no coinciden")
-      return
-    }
-
-    if (formData.password.length < 6) {
-      toast.error("La contraseña debe tener al menos 6 caracteres")
-      return
-    }
-
+  const runRegister = React.useCallback(async () => {
     setIsLoading(true)
 
     try {
@@ -66,7 +62,38 @@ export default function RegisterPage() {
     } finally {
       setIsLoading(false)
     }
+  }, [formData.name, formData.email, formData.password, register, router])
+
+  const handleRegister = (e: React.FormEvent) => {
+    e.preventDefault()
+
+    if (formData.password !== formData.confirmPassword) {
+      toast.error("Las contraseñas no coinciden")
+      return
+    }
+
+    if (formData.password.length < 6) {
+      toast.error("La contraseña debe tener al menos 6 caracteres")
+      return
+    }
+
+    // Backend still warming up after a publish: queue and run once ready.
+    if (backendState !== "ready") {
+      setPendingRegister(true)
+      return
+    }
+
+    void runRegister()
   }
+
+  // Flush the queued registration once the backend reports ready.
+  React.useEffect(() => {
+    if (backendState !== "ready" || !pendingRegister) return
+    setPendingRegister(false)
+    void runRegister()
+  }, [backendState, pendingRegister, runRegister])
+
+  const isWarming = backendState === "warming" || (backendState !== "ready" && pendingRegister)
 
   const handleInputChange = (field: string, value: string | boolean) => {
     setFormData((prev) => ({ ...prev, [field]: value }))
@@ -97,6 +124,17 @@ export default function RegisterPage() {
         </CardHeader>
 
         <CardContent>
+          {isWarming && (
+            <div
+              role="status"
+              aria-live="polite"
+              data-testid="register-server-warming"
+              className="mb-4 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300"
+            >
+              <ThinkingIndicator size="sm" />
+              <span>{t("serverWarming")}</span>
+            </div>
+          )}
           <form onSubmit={handleRegister} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="name" className="text-neutral-900 dark:text-zinc-100">

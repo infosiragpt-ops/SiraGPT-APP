@@ -12,6 +12,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Separator } from "@/components/ui/separator"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { getNormalizedApiBaseUrl } from "@/lib/api"
+import { useBackendReady } from "@/lib/use-backend-ready"
 import { toast } from "sonner"
 import { useTranslations } from "next-intl"
 
@@ -25,6 +26,18 @@ export default function LoginPage() {
 
   const { login, user } = useAuth()
   const router = useRouter()
+
+  // Right after a publish the backend is still booting (~90s) while the
+  // frontend is already live, so any /api/* call (including the Google OAuth
+  // redirect) returns a raw "Internal Server Error". Track backend readiness
+  // and, if the user acts during that window, queue the action and run it
+  // automatically once the backend answers instead of failing.
+  const backendState = useBackendReady()
+  const [pendingAction, setPendingAction] = React.useState<null | "google" | "email">(null)
+
+  const goToGoogle = React.useCallback(() => {
+    window.location.href = `${getNormalizedApiBaseUrl()}/auth/google`
+  }, [])
 
   // Surface the `?error=…` query the auth/callback page may pass on
   // a failed OAuth round-trip ("La sesión es inválida o expiró",
@@ -69,8 +82,7 @@ export default function LoginPage() {
     }
   }, [user, router])
 
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault()
+  const runLogin = React.useCallback(async () => {
     setIsLoading(true)
 
     try {
@@ -92,7 +104,43 @@ export default function LoginPage() {
     } finally {
       setIsLoading(false)
     }
+  }, [email, password, login, router, t])
+
+  const handleLogin = (e: React.FormEvent) => {
+    e.preventDefault()
+    // If the backend is still warming up after a publish, queue the login and
+    // let the effect below fire it once the backend is ready, rather than
+    // showing a misleading "invalid credentials" error from a 500.
+    if (backendState !== "ready") {
+      setPendingAction("email")
+      return
+    }
+    void runLogin()
   }
+
+  const handleGoogle = () => {
+    if (backendState === "ready") {
+      goToGoogle()
+      return
+    }
+    // Warming up: queue the redirect; the effect runs it once ready.
+    setPendingAction("google")
+  }
+
+  // Once the backend reports ready, flush any action the user queued while it
+  // was still booting.
+  React.useEffect(() => {
+    if (backendState !== "ready" || !pendingAction) return
+    const action = pendingAction
+    setPendingAction(null)
+    if (action === "google") {
+      goToGoogle()
+    } else if (action === "email") {
+      void runLogin()
+    }
+  }, [backendState, pendingAction, goToGoogle, runLogin])
+
+  const isWarming = backendState === "warming" || (backendState !== "ready" && pendingAction !== null)
 
   const fieldClassName =
     "border-neutral-300 bg-white text-neutral-900 placeholder:text-neutral-500 focus-visible:border-neutral-900 focus-visible:ring-neutral-900/15"
@@ -137,6 +185,17 @@ export default function LoginPage() {
         </CardHeader>
 
         <CardContent>
+          {isWarming && (
+            <div
+              role="status"
+              aria-live="polite"
+              data-testid="login-server-warming"
+              className="mb-4 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800"
+            >
+              <ThinkingIndicator size="sm" />
+              <span>{t("serverWarming")}</span>
+            </div>
+          )}
           <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="email" className="text-neutral-900">
@@ -224,8 +283,9 @@ export default function LoginPage() {
             <div className="mt-6 grid grid-cols-1 gap-3">
               <Button
                 variant="outline"
+                type="button"
                 disabled={isLoading}
-                onClick={() => (window.location.href = `${getNormalizedApiBaseUrl()}/auth/google`)}
+                onClick={handleGoogle}
                 className="w-full border-neutral-300 bg-white font-medium text-neutral-900 hover:bg-neutral-100"
               >
 
@@ -247,7 +307,7 @@ export default function LoginPage() {
                     fill="#EA4335"
                   />
                 </svg>
-                {t("continueWithGoogle")}
+                {pendingAction === "google" ? t("serverWarmingButton") : t("continueWithGoogle")}
               </Button>
 
             </div>
