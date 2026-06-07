@@ -118,7 +118,9 @@ const TABLE_FILL_VERB_RE = /\b(complet\w*|llen\w*|rellen\w*)\b/;
 
 function detectTableRequest(text) {
   const norm = normalizeText(text);
-  const wantsTable = TABLE_INTENT_RE.test(norm) && TABLE_CREATE_VERB_RE.test(norm) && !TABLE_FILL_VERB_RE.test(norm);
+  // "índice/lista de tablas" is an index request, not a create-table request.
+  const wantsTable = TABLE_INTENT_RE.test(norm) && TABLE_CREATE_VERB_RE.test(norm)
+    && !TABLE_FILL_VERB_RE.test(norm) && !INDEX_REQUEST_RE.test(norm);
   return { wantsTable };
 }
 
@@ -191,11 +193,80 @@ async function addTableFromRequest(buffer, { requestText = '', sourceText = '', 
   return { added: true, buffer: out, spec: { headers: spec.headers, rowCount: spec.rows.length, title: caption } };
 }
 
+// ---------------------------------------------------------------------------
+// Índice de figuras / tablas — list the "Figura N." / "Tabla N." captions the
+// document already has (a thesis/APA requirement once figures & tables exist).
+// ---------------------------------------------------------------------------
+
+function headingParagraphXml(text) {
+  return `<w:p><w:pPr><w:spacing w:before="240" w:after="120"/><w:outlineLvl w:val="0"/></w:pPr>`
+    + `<w:r><w:rPr><w:b/><w:sz w:val="28"/></w:rPr><w:t xml:space="preserve">${xmlEscape(text)}</w:t></w:r></w:p>`;
+}
+
+function entryParagraphXml(text) {
+  return `<w:p><w:pPr><w:spacing w:after="40"/></w:pPr>`
+    + `<w:r><w:rPr><w:sz w:val="22"/></w:rPr><w:t xml:space="preserve">${xmlEscape(text)}</w:t></w:r></w:p>`;
+}
+
+function buildCaptionIndex(documentXml) {
+  const paragraphs = (String(documentXml || '').match(/<w:p\b[\s\S]*?<\/w:p>/g) || [])
+    .map((p) => (p.match(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g) || []).map((t) => t.replace(/<[^>]+>/g, '')).join('').trim());
+  const figures = [];
+  const tables = [];
+  for (const text of paragraphs) {
+    let m;
+    if ((m = text.match(/^Figura\s+(\d+)\.?\s*(.*)$/i))) figures.push({ num: Number(m[1]), title: m[2].trim() });
+    else if ((m = text.match(/^Tabla\s+(\d+)\.?\s*(.*)$/i))) tables.push({ num: Number(m[1]), title: m[2].trim() });
+  }
+  return { figures, tables };
+}
+
+function insertCaptionIndexIntoDocxBuffer(buffer, { scope = 'both' } = {}) {
+  const zip = new PizZip(buffer);
+  const documentFile = zip.file('word/document.xml');
+  if (!documentFile) throw new Error('DOCX inválido: falta word/document.xml.');
+  const documentXml = documentFile.asText();
+  const { figures, tables } = buildCaptionIndex(documentXml);
+  const wantFigures = (scope === 'both' || scope === 'figures') && figures.length;
+  const wantTables = (scope === 'both' || scope === 'tables') && tables.length;
+  if (!wantFigures && !wantTables) return { inserted: false, buffer, figures: figures.length, tables: tables.length };
+
+  const entry = (kind, item) => entryParagraphXml(`${kind} ${item.num}${item.title ? `. ${item.title}` : ''}`);
+  let fragment = '';
+  if (wantFigures) fragment += headingParagraphXml('Índice de figuras') + figures.map((f) => entry('Figura', f)).join('');
+  if (wantTables) fragment += headingParagraphXml('Índice de tablas') + tables.map((tb) => entry('Tabla', tb)).join('');
+  zip.file('word/document.xml', insertBeforeBodyEnd(documentXml, fragment));
+  return { inserted: true, buffer: zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' }), figures: figures.length, tables: tables.length };
+}
+
+const INDEX_REQUEST_RE = /\b(indice|lista|tabla)\s+(?:de\s+)?(figuras?|tablas?|graficos?|cuadros?|ilustraciones?)\b/;
+
+function detectIndexRequest(text) {
+  const norm = normalizeText(text);
+  if (!INDEX_REQUEST_RE.test(norm)) return { wantsIndex: false, scope: 'both' };
+  const hasFig = /\b(figuras?|graficos?|ilustraciones?)\b/.test(norm);
+  const hasTab = /\b(tablas?|cuadros?)\b/.test(norm);
+  const scope = hasFig && !hasTab ? 'figures' : (hasTab && !hasFig ? 'tables' : 'both');
+  return { wantsIndex: true, scope };
+}
+
+async function addIndexFromRequest(buffer, { requestText = '' } = {}) {
+  const det = detectIndexRequest(requestText);
+  if (!det.wantsIndex) return { added: false, buffer, reason: 'no_index_intent' };
+  const result = insertCaptionIndexIntoDocxBuffer(buffer, { scope: det.scope });
+  if (!result.inserted) return { added: false, buffer, reason: 'no_captions' };
+  return { added: true, buffer: result.buffer, spec: { scope: det.scope, figures: result.figures, tables: result.tables } };
+}
+
 module.exports = {
   buildTableXml,
   insertTableIntoDocxBuffer,
   parseTableFromText,
   detectTableRequest,
   addTableFromRequest,
+  buildCaptionIndex,
+  insertCaptionIndexIntoDocxBuffer,
+  detectIndexRequest,
+  addIndexFromRequest,
   INTERNAL: { tableSpecHasContent, captionParagraphXml, insertBeforeBodyEnd, normalizeText },
 };

@@ -2916,6 +2916,11 @@ function clauseWantsTable(clauseNorm) {
   return Boolean(mod && mod.detectTableRequest(clauseNorm).wantsTable);
 }
 
+function clauseWantsIndex(clauseNorm) {
+  const mod = docxTableInsertModule();
+  return Boolean(mod && mod.detectIndexRequest && mod.detectIndexRequest(clauseNorm).wantsIndex);
+}
+
 function clauseWantsVisual(clauseNorm) {
   const mod = documentVisualEmbedModule();
   return Boolean(mod && mod.detectVisualRequest(clauseNorm).wantsVisual);
@@ -2952,6 +2957,7 @@ function buildOperationFromClause(clauseNorm, documentXml) {
   }
   // A chart/diagram request (no explicit section) → embed a visual instead of a
   // generic text appendix.
+  if (clauseWantsIndex(clauseNorm)) return { kind: 'insert_index' };
   if (clauseWantsTable(clauseNorm)) return { kind: 'insert_table' };
   if (clauseWantsVisual(clauseNorm)) return { kind: 'insert_visual' };
   if (append || wantsInstrument) return { kind: 'append_generic', wantsInstrument };
@@ -3372,6 +3378,22 @@ async function runInsertTableOperation({ buffer, requestText, sourceText, signal
   }
 }
 
+// Design layer: build an "Índice de figuras / tablas" from the captions already
+// in the document. A failure must never break the document edit.
+async function runInsertIndexOperation({ buffer, requestText }) {
+  const mod = docxTableInsertModule();
+  if (!mod || !mod.addIndexFromRequest) return { buffer, validationBlocks: [], step: { kind: 'insert_index', label: 'índice', mode: 'unavailable' } };
+  try {
+    const result = await mod.addIndexFromRequest(buffer, { requestText });
+    if (result.added) {
+      return { buffer: result.buffer, validationBlocks: [], step: { kind: 'insert_index', label: `índice (${result.spec?.figures || 0} fig / ${result.spec?.tables || 0} tab)` } };
+    }
+    return { buffer, validationBlocks: [], step: { kind: 'insert_index', label: 'índice', mode: result.reason || 'skipped' } };
+  } catch {
+    return { buffer, validationBlocks: [], step: { kind: 'insert_index', label: 'índice', mode: 'error' } };
+  }
+}
+
 async function executeDocxOperations({ input, ops, requestText, sourceText, allSourceFiles, sourceFile, referenceFiles = [], signal }) {
   let buffer = input;
   const steps = [];
@@ -3386,6 +3408,8 @@ async function executeDocxOperations({ input, ops, requestText, sourceText, allS
       result = await runInsertVisualOperation({ buffer, requestText, sourceText, signal });
     } else if (op.kind === 'insert_table') {
       result = await runInsertTableOperation({ buffer, requestText, sourceText, signal });
+    } else if (op.kind === 'insert_index') {
+      result = await runInsertIndexOperation({ buffer, requestText });
     } else if (op.kind === 'integrate_references') {
       result = await runIntegrateReferencesOperation({ buffer, requestText, sourceText, allSourceFiles, sourceFile, referenceFiles, signal });
     } else if (op.kind === 'fill_cover') {
@@ -3519,6 +3543,8 @@ function describeStep(step) {
   if (step.kind === 'integrate_references') return `integré ${step.references || 0} documento(s) de soporte al documento principal`;
   if (step.kind === 'insert_visual' && !step.mode) return `inserté un ${step.label || 'gráfico'} en el documento`;
   if (step.kind === 'insert_visual') return 'intenté insertar un gráfico, pero no había datos suficientes';
+  if (step.kind === 'insert_index' && !step.mode) return `generé el ${step.label || 'índice'} de figuras/tablas`;
+  if (step.kind === 'insert_index') return 'intenté generar el índice, pero aún no hay figuras/tablas numeradas';
   if (step.kind === 'insert_table' && !step.mode) return `inserté una ${step.label || 'tabla'} en el documento`;
   if (step.kind === 'insert_table') return 'intenté insertar una tabla, pero no había datos suficientes';
   if (step.kind === 'fill_cover') return 'completé la portada con los datos disponibles del documento';

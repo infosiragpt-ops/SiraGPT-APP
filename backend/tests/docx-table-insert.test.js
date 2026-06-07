@@ -11,6 +11,9 @@ const {
   parseTableFromText,
   detectTableRequest,
   addTableFromRequest,
+  buildCaptionIndex,
+  detectIndexRequest,
+  addIndexFromRequest,
 } = require('../src/services/docx-table-insert');
 
 async function makeDocxBuffer() {
@@ -99,5 +102,47 @@ describe('docx-table-insert — native table', () => {
       if (savedKey === undefined) delete process.env.OPENAI_API_KEY;
       else process.env.OPENAI_API_KEY = savedKey;
     }
+  });
+});
+
+describe('docx-table-insert — índice de figuras/tablas', () => {
+  async function docWithCaptions() {
+    const doc = new Document({ sections: [{ children: [
+      new Paragraph('Figura 1. Resultados por dimensión'),
+      new Paragraph('Tabla 1. Presupuesto del proyecto'),
+      new Paragraph('Figura 2. Distribución de la muestra'),
+    ] }] });
+    return Buffer.from(await Packer.toBuffer(doc));
+  }
+
+  it('detects index intent and scope, and not a create-table request', () => {
+    assert.deepEqual(detectIndexRequest('genera el índice de figuras'), { wantsIndex: true, scope: 'figures' });
+    assert.deepEqual(detectIndexRequest('agrega la lista de tablas'), { wantsIndex: true, scope: 'tables' });
+    assert.equal(detectIndexRequest('crea el índice de figuras y tablas').scope, 'both');
+    assert.equal(detectTableRequest('genera el índice de tablas').wantsTable, false);
+  });
+
+  it('builds the caption index from the document', async () => {
+    const xml = new PizZip(await docWithCaptions()).file('word/document.xml').asText();
+    const idx = buildCaptionIndex(xml);
+    assert.equal(idx.figures.length, 2);
+    assert.equal(idx.tables.length, 1);
+    assert.equal(idx.figures[0].title, 'Resultados por dimensión');
+  });
+
+  it('inserts an índice de figuras/tablas listing existing captions', async () => {
+    const res = await addIndexFromRequest(await docWithCaptions(), { requestText: 'genera el índice de figuras y tablas' });
+    assert.equal(res.added, true);
+    const xml = new PizZip(res.buffer).file('word/document.xml').asText();
+    assert.match(xml, /Índice de figuras/);
+    assert.match(xml, /Índice de tablas/);
+    assert.match(xml, /Figura 2\. Distribución de la muestra/);
+  });
+
+  it('is a no-op when there are no captions to index', async () => {
+    const doc = new Document({ sections: [{ children: [new Paragraph('Sin figuras ni tablas aún.')] }] });
+    const res = await addIndexFromRequest(Buffer.from(await Packer.toBuffer(doc)), { requestText: 'genera el índice de figuras' });
+    assert.equal(res.added, false);
+    assert.equal(res.reason, 'no_captions');
   });
 });
