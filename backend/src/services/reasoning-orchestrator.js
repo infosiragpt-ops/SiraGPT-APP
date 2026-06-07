@@ -340,6 +340,73 @@ function filterReachable(base, input) {
   return base;
 }
 
+const PENALTY_THRESHOLD = Number(process.env.SIRAGPT_ROUTING_PENALTY_THRESHOLD) || 0.4;
+const PENALTY_MARGIN = Number(process.env.SIRAGPT_ROUTING_PENALTY_MARGIN) || 0.1;
+
+/** Resolve a {modelId: penalty} map from a precomputed object or a provider fn. */
+function resolveModelPenalties(input) {
+  if (input && input.modelPenalties && typeof input.modelPenalties === 'object') return input.modelPenalties;
+  if (input && typeof input.penaltyProvider === 'function') {
+    try {
+      const p = input.penaltyProvider({
+        intent: input.intent,
+        difficulty: input.difficulty && input.difficulty.bucket ? input.difficulty.bucket : input.difficulty,
+      });
+      return p && typeof p === 'object' ? p : null;
+    } catch (_) { return null; }
+  }
+  return null;
+}
+
+/**
+ * Outcome-based learning: if the chosen target has a poor track record
+ * (penalty ≥ threshold) for this signature, switch to a meaningfully
+ * lower-penalty candidate (recommended or alternative), reachable if a reachable
+ * set is supplied. If the best candidate is the user's own model, this keeps it.
+ * Backward-compatible: no penalties → unchanged.
+ */
+function applyPenalties(base, input) {
+  const penalties = resolveModelPenalties(input);
+  if (!penalties || !base.changed || !base.selectedModel) return base;
+  const selPenalty = Number(penalties[base.selectedModel]) || 0;
+  if (selPenalty < PENALTY_THRESHOLD) return base;
+  const reachable = toIdSet(input && input.reachableModelIds);
+  const userModel = base.userModel;
+  // Look for a better CAPABLE candidate (recommended + alternatives) — never the
+  // user's own model here, so an untested model with no penalty data can't beat
+  // a capable model on a "0 vs 0.05" tie. The user model is only a last resort.
+  const candidates = [];
+  if (base.recommendedModel) candidates.push(base.recommendedModel);
+  for (const a of Array.isArray(base.alternatives) ? base.alternatives : []) {
+    candidates.push(typeof a === 'string' ? a : (a && a.id));
+  }
+  let best = null;
+  let bestP = selPenalty - PENALTY_MARGIN;
+  for (const id of candidates) {
+    if (!id || id === base.selectedModel || id === userModel) continue;
+    if (reachable && !reachable.has(id)) continue;
+    const p = Number(penalties[id]) || 0;
+    if (p < bestP) { bestP = p; best = id; }
+  }
+  if (best) {
+    base.selectedModel = best;
+    base.selectedProvider = null; // caller re-infers provider from the id
+    base.changed = best !== userModel;
+    base.shouldApply = base.changed;
+    base.reason = `${base.reason}:deprioritized(${selPenalty}->${Math.round(bestP * 1000) / 1000})`;
+  } else {
+    // No acceptable capable alternative → don't escalate to a known-bad model;
+    // fall back to the user's chosen model.
+    base.selectedModel = userModel;
+    base.selectedProvider = base.userProvider;
+    base.changed = false;
+    base.shouldApply = false;
+    base.action = 'keep';
+    base.reason = `${base.reason}:penalty_no_alt`;
+  }
+  return base;
+}
+
 function routeModel(input = {}, deps = {}) {
   const catalog = 'catalogRouter' in deps ? deps.catalogRouter : defaultCatalogRouter;
   const userModel = String(input.userModel || '').trim();
@@ -428,7 +495,7 @@ function routeModel(input = {}, deps = {}) {
     base.action = autoRequested ? 'auto_select' : (changed ? 'auto_select' : 'keep');
     base.reason = `auto:${selection.rationale ? 'scored' : 'selected'}`;
     base.shouldApply = changed;
-    return filterReachable(base, input);
+    return applyPenalties(filterReachable(base, input), input);
   }
 
   // mode === 'escalate' — only move UP for genuinely harder tasks.
@@ -465,7 +532,7 @@ function routeModel(input = {}, deps = {}) {
     base.reason = base.recommendedModel === userModel ? 'already_optimal' : 'user_model_sufficient';
     base.shouldApply = false;
   }
-  return filterReachable(base, input);
+  return applyPenalties(filterReachable(base, input), input);
 }
 
 // ── 4a. Test-time compute plan ────────────────────────────────────────────────

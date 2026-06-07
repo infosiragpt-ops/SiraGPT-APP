@@ -3789,9 +3789,15 @@ router.post(
             const modelAvailability = require('../services/model-availability');
             __reachableModelIds = modelAvailability.reachableModelIds(modelRouter.CATALOG);
           } catch (_reachErr) { __reachableModelIds = undefined; }
+          // Outcome-based learning: bias routing away from models with a poor
+          // track record for this (intent, difficulty). Penalties only bite when
+          // intelligent routing is enabled; recording is always safe.
+          let __routingFeedback = null;
+          try { __routingFeedback = require('../services/routing-feedback'); } catch (_) { __routingFeedback = null; }
           const cognitiveDecision = reasoningOrchestrator.decide({
             prompt,
             reachableModelIds: __reachableModelIds,
+            penaltyProvider: __routingFeedback ? (sig) => __routingFeedback.getModelPenalties(sig) : undefined,
             userModel: actualModel,
             userProvider: actualProvider,
             plan: (req.user && req.user.plan) || 'FREE',
@@ -3803,6 +3809,19 @@ router.post(
           });
           req._cognitiveDecision = cognitiveDecision;
           try { console.log(reasoningOrchestrator.summarizeForLog(cognitiveDecision)); } catch (_) { /* noop */ }
+
+          // A regenerate request is a negative signal: the prior answer for this
+          // signature was unsatisfactory. Feed it into the learning loop.
+          try {
+            if (regenerate && __routingFeedback) {
+              __routingFeedback.recordOutcome({
+                intent: cognitiveDecision.intent,
+                difficulty: cognitiveDecision.difficulty,
+                model: actualModel,
+                outcome: 'regenerated',
+              });
+            }
+          } catch (_) { /* learning must never break the turn */ }
 
           // Phase 6: record cognitive-core decisions for observability
           // (router action/difficulty/risk + compute mode). Invisible counters,
@@ -5106,6 +5125,17 @@ router.post(
               console.log(`[faithfulness-gate] ran action=${__faith.action} grade=${__faith.grade || '-'} score=${__faith.score ?? '-'} sources=${__faith.contextSources} model=${actualModel}`);
               // Phase 6: faithfulness grade per model (observability).
               try { require('../services/cognitive-metrics').recordFaithfulness({ grade: __faith.grade, action: __faith.action, model: actualModel }); } catch (_) { /* noop */ }
+              // Outcome learning: feed the faithfulness grade back into routing
+              // so chronically-ungrounded models get deprioritized for this signature.
+              try {
+                const __rf = require('../services/routing-feedback');
+                const __g = String(__faith.grade || '');
+                const __outcome = (__g === 'D' || __g === 'F') ? 'low_faithfulness'
+                  : (__g === 'A' || __g === 'B') ? 'high_faithfulness' : null;
+                if (__outcome && req._cognitiveDecision) {
+                  __rf.recordOutcome({ intent: req._cognitiveDecision.intent, difficulty: req._cognitiveDecision.difficulty, model: actualModel, outcome: __outcome });
+                }
+              } catch (_) { /* noop */ }
             }
             if (__faith.action === 'annotate' && __faith.footer && !res.writableEnded) {
               res.write(`data: ${JSON.stringify({ content: __faith.footer })}\n\n`);
