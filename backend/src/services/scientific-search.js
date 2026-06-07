@@ -61,6 +61,20 @@ const DEFAULT_PER_PROVIDER_LIMIT = 10;
 const MAX_PER_PROVIDER_LIMIT = 50;
 const USER_AGENT_PREFIX = 'SiraGPT-Research/1.0';
 
+// Retry transient per-provider failures (timeout / 429 / 5xx / network) once
+// by default — a single flaky API shouldn't silently drop a whole source from
+// the results. Env-tunable; 0 disables retries.
+const DEFAULT_RETRIES = (() => {
+  const n = parseInt(process.env.SCIENTIFIC_SEARCH_RETRIES || '', 10);
+  return Number.isFinite(n) && n >= 0 ? n : 1;
+})();
+// Wall-clock ceiling for the whole fan-out. Guarantees `search()` returns
+// partial results instead of blocking on the slowest provider.
+const DEFAULT_TOTAL_TIMEOUT_MS = (() => {
+  const n = parseInt(process.env.SCIENTIFIC_SEARCH_TOTAL_TIMEOUT_MS || '', 10);
+  return Number.isFinite(n) && n > 0 ? n : 20000;
+})();
+
 const PROVIDERS = ['arxiv', 'openalex', 'semanticscholar', 'crossref', 'pubmed', 'europepmc', 'core', 'doaj', 'dblp', 'datacite'];
 
 function userAgent() {
@@ -69,27 +83,50 @@ function userAgent() {
   return USER_AGENT_PREFIX;
 }
 
-function withTimeout(promise, ms, label) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error(`${label || 'request'} timed out after ${ms}ms`));
+// fetch with REAL cancellation. The old `withTimeout` only rejected the wrapper
+// promise on a deadline — the underlying TCP socket + file descriptor lived on
+// until the OS gave up, leaking connections under 10-provider fan-out load. We
+// now drive an AbortController: the deadline (opts.timeoutMs, default
+// DEFAULT_TIMEOUT_MS) aborts the socket AND a race rejects the promise so a peer
+// that ignores the abort can never wedge a provider. An external opts.signal is
+// chained in for cooperative cancellation from the caller.
+async function fetchWithAbort(url, opts = {}) {
+  const ms = Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0 ? opts.timeoutMs : DEFAULT_TIMEOUT_MS;
+  const label = opts.label || 'request';
+  const ac = new AbortController();
+  const onExternalAbort = () => { try { ac.abort(); } catch { /* noop */ } };
+  if (opts.signal) {
+    if (opts.signal.aborted) onExternalAbort();
+    else opts.signal.addEventListener('abort', onExternalAbort, { once: true });
+  }
+  let timer = null;
+  const timeout = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => {
+      try { ac.abort(); } catch { /* noop */ }
+      reject(new Error(`${label} timed out after ${ms}ms`));
     }, ms);
     timer.unref?.();
-    promise.then(
-      (v) => { clearTimeout(timer); resolve(v); },
-      (e) => { clearTimeout(timer); reject(e); }
-    );
   });
+  try {
+    return await Promise.race([
+      fetch(url, {
+        signal: ac.signal,
+        headers: { 'User-Agent': userAgent(), ...(opts.headers || {}) },
+      }),
+      timeout,
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (opts.signal) {
+      try { opts.signal.removeEventListener('abort', onExternalAbort); } catch { /* noop */ }
+    }
+  }
 }
 
 async function safeJson(url, opts = {}) {
-  const res = await fetch(url, {
+  const res = await fetchWithAbort(url, {
     ...opts,
-    headers: {
-      'User-Agent': userAgent(),
-      Accept: 'application/json',
-      ...(opts.headers || {}),
-    },
+    headers: { Accept: 'application/json', ...(opts.headers || {}) },
   });
   if (!res.ok) {
     throw new Error(`HTTP ${res.status} ${res.statusText} — ${url}`);
@@ -98,13 +135,7 @@ async function safeJson(url, opts = {}) {
 }
 
 async function safeText(url, opts = {}) {
-  const res = await fetch(url, {
-    ...opts,
-    headers: {
-      'User-Agent': userAgent(),
-      ...(opts.headers || {}),
-    },
-  });
+  const res = await fetchWithAbort(url, opts);
   if (!res.ok) {
     throw new Error(`HTTP ${res.status} ${res.statusText} — ${url}`);
   }
@@ -131,40 +162,137 @@ function normaliseDoi(d) {
   return String(d).toLowerCase().replace(/^https?:\/\/(dx\.)?doi\.org\//, '').trim() || null;
 }
 
+const _metaScore = (x) =>
+  (x.abstract ? 2 : 0) +
+  (x.openAccess ? 2 : 0) +
+  (x.citations != null ? 1 : 0) +
+  (x.pdfUrl ? 1 : 0);
+
+// Fuse two records for the same paper found via different providers into one
+// richer record: fill missing scalars, keep the longest author list, take the
+// max citation count, let a definite openAccess=true win, and record every
+// contributing source for provenance. The old dedup just kept whichever record
+// had more metadata and DISCARDED the other's unique fields (e.g. an arXiv hit
+// with a PDF url would be dropped in favour of a Crossref hit with the DOI +
+// citation count, losing the PDF). Merging keeps the best of both.
+function mergePaper(base, extra) {
+  const out = { ...base };
+  out.doi = base.doi || extra.doi || null;
+  out.abstract = base.abstract || extra.abstract || null;
+  out.pdfUrl = base.pdfUrl || extra.pdfUrl || null;
+  out.htmlUrl = base.htmlUrl || extra.htmlUrl || null;
+  out.venue = base.venue || extra.venue || null;
+  out.year = base.year || extra.year || null;
+  const cb = typeof base.citations === 'number' ? base.citations : null;
+  const ce = typeof extra.citations === 'number' ? extra.citations : null;
+  out.citations = cb != null && ce != null ? Math.max(cb, ce) : (cb != null ? cb : ce);
+  out.openAccess = (base.openAccess === true || extra.openAccess === true)
+    ? true
+    : (base.openAccess === false || extra.openAccess === false)
+      ? false
+      : (base.openAccess != null ? base.openAccess : (extra.openAccess != null ? extra.openAccess : null));
+  if ((extra.authors?.length || 0) > (base.authors?.length || 0)) out.authors = extra.authors;
+  const srcs = []
+    .concat(base.sources || (base.source ? [base.source] : []))
+    .concat(extra.sources || (extra.source ? [extra.source] : []));
+  out.sources = Array.from(new Set(srcs.filter(Boolean)));
+  return out;
+}
+
 function dedupeByDoi(papers) {
   const seen = new Map();
+  const order = [];
   for (const p of papers) {
     const doi = normaliseDoi(p.doi);
     const key = doi || `t:${normaliseTitle(p.title)}`;
     const prev = seen.get(key);
     if (!prev) {
       seen.set(key, p);
+      order.push(key);
       continue;
     }
-    // Merge: prefer the entry with more metadata
-    const score = (x) =>
-      (x.abstract ? 2 : 0) +
-      (x.openAccess ? 2 : 0) +
-      (x.citations != null ? 1 : 0) +
-      (x.pdfUrl ? 1 : 0);
-    if (score(p) > score(prev)) seen.set(key, p);
+    // The richer record is the base; fuse the other's unique fields into it.
+    const base = _metaScore(p) > _metaScore(prev) ? p : prev;
+    const other = base === p ? prev : p;
+    seen.set(key, mergePaper(base, other));
   }
-  return Array.from(seen.values());
+  return order.map((k) => seen.get(k));
 }
 
-function rankPapers(papers) {
-  return papers.slice().sort((a, b) => {
-    if ((b.openAccess ? 1 : 0) !== (a.openAccess ? 1 : 0)) {
-      return (b.openAccess ? 1 : 0) - (a.openAccess ? 1 : 0);
-    }
-    const ca = a.citations || 0;
-    const cb = b.citations || 0;
-    if (ca !== cb) return cb - ca;
-    const ya = a.year || 0;
-    const yb = b.year || 0;
-    if (ya !== yb) return yb - ya;
-    return (a.title || '').length - (b.title || '').length;
-  });
+// ── Relevance scoring ──────────────────────────────────────────────────
+// The old ranking sorted purely by open-access → citations → year → title
+// length. It NEVER looked at whether a paper actually matched the query, so a
+// heavily-cited classic on an unrelated topic could outrank the precise paper
+// the user asked for. We now score query-term coverage (title weighted far
+// above abstract/venue) as the PRIMARY signal, then use the old metadata
+// signals as tiebreakers. Bilingual EN/ES stopwords keep scores meaningful.
+const STOPWORDS = new Set((
+  'the a an of and or in on for to with from by at as is are be this that these those ' +
+  'una un el la los las de del y o en con por para a al se su sus es son lo le les'
+).split(' '));
+
+function queryTerms(query) {
+  return normaliseTitle(query)
+    .split(' ')
+    .filter((w) => w && w.length > 1 && !STOPWORDS.has(w));
+}
+
+function relevanceScore(paper, terms) {
+  if (!terms || !terms.length) return 0;
+  const title = normaliseTitle(paper.title);
+  const abs = normaliseTitle(paper.abstract || '');
+  const venue = normaliseTitle(paper.venue || '');
+  let titleHits = 0;
+  let softHits = 0;
+  for (const t of terms) {
+    if (title.includes(t)) titleHits += 1;
+    else if (abs.includes(t)) softHits += 1;
+    else if (venue.includes(t)) softHits += 0.5;
+  }
+  const coverage = (titleHits + softHits) / terms.length;   // breadth of match
+  const titleWeight = titleHits / terms.length;             // precision of match
+  const phrase = title.includes(terms.join(' ')) ? 0.5 : 0; // exact phrase bonus
+  return coverage + titleWeight * 1.5 + phrase;
+}
+
+// `query` is optional: when omitted the ranking is byte-for-byte the legacy
+// open-access → citations → year → title-length order (preserves callers/tests
+// that rank a raw list). When provided, relevance dominates.
+function rankPapers(papers, query) {
+  const terms = query ? queryTerms(query) : null;
+  return papers
+    .map((p) => ({ p, rel: terms ? relevanceScore(p, terms) : 0 }))
+    .sort((a, b) => {
+      if (terms) {
+        // Round to damp floating-point jitter so tiebreakers still apply
+        // between papers of essentially-equal relevance.
+        const ra = Math.round(a.rel * 1000);
+        const rb = Math.round(b.rel * 1000);
+        if (rb !== ra) return rb - ra;
+      }
+      const A = a.p;
+      const B = b.p;
+      if ((B.openAccess ? 1 : 0) !== (A.openAccess ? 1 : 0)) {
+        return (B.openAccess ? 1 : 0) - (A.openAccess ? 1 : 0);
+      }
+      const ca = A.citations || 0;
+      const cb = B.citations || 0;
+      if (ca !== cb) return cb - ca;
+      const ya = A.year || 0;
+      const yb = B.year || 0;
+      if (ya !== yb) return yb - ya;
+      return (A.title || '').length - (B.title || '').length;
+    })
+    .map((x) => x.p);
+}
+
+// Normalise a free-text query: collapse whitespace and strip wrapping quotes
+// so cache keys are stable and providers get a clean term string.
+function normaliseQuery(q) {
+  return String(q || '')
+    .replace(/\s+/g, ' ')
+    .replace(/^["'\s]+|["'\s]+$/g, '')
+    .trim();
 }
 
 // ── arXiv ──────────────────────────────────────────────────────────────
@@ -231,7 +359,7 @@ async function searchArxiv(query, opts = {}) {
     sortOrder: 'descending',
   });
   const url = `http://export.arxiv.org/api/query?${params.toString()}`;
-  const xml = await withTimeout(safeText(url), opts.timeoutMs || DEFAULT_TIMEOUT_MS, 'arxiv');
+  const xml = await safeText(url, { timeoutMs: opts.timeoutMs, signal: opts.signal, label: 'arxiv' });
   return parseAtomFeed(xml);
 }
 
@@ -249,7 +377,7 @@ async function searchSemanticScholar(query, opts = {}) {
   if (process.env.SEMANTIC_SCHOLAR_API_KEY) {
     headers['x-api-key'] = process.env.SEMANTIC_SCHOLAR_API_KEY;
   }
-  const json = await withTimeout(safeJson(url, { headers }), opts.timeoutMs || DEFAULT_TIMEOUT_MS, 'semanticscholar');
+  const json = await safeJson(url, { headers, timeoutMs: opts.timeoutMs, signal: opts.signal, label: 'semanticscholar' });
   const items = Array.isArray(json.data) ? json.data : [];
   return items.map((p) => ({
     source: 'semanticscholar',
@@ -280,7 +408,7 @@ async function searchOpenAlex(query, opts = {}) {
   });
   if (process.env.SIRAGPT_RESEARCH_EMAIL) params.set('mailto', process.env.SIRAGPT_RESEARCH_EMAIL);
   const url = `https://api.openalex.org/works?${params.toString()}`;
-  const json = await withTimeout(safeJson(url), opts.timeoutMs || DEFAULT_TIMEOUT_MS, 'openalex');
+  const json = await safeJson(url, { timeoutMs: opts.timeoutMs, signal: opts.signal, label: 'openalex' });
   const items = Array.isArray(json.results) ? json.results : [];
   return items.map((w) => ({
     source: 'openalex',
@@ -328,7 +456,7 @@ async function searchCrossRef(query, opts = {}) {
   const params = new URLSearchParams({ query, rows: String(limit) });
   if (process.env.SIRAGPT_RESEARCH_EMAIL) params.set('mailto', process.env.SIRAGPT_RESEARCH_EMAIL);
   const url = `https://api.crossref.org/works?${params.toString()}`;
-  const json = await withTimeout(safeJson(url), opts.timeoutMs || DEFAULT_TIMEOUT_MS, 'crossref');
+  const json = await safeJson(url, { timeoutMs: opts.timeoutMs, signal: opts.signal, label: 'crossref' });
   const items = Array.isArray(json.message?.items) ? json.message.items : [];
   return items.map((w) => ({
     source: 'crossref',
@@ -360,7 +488,7 @@ async function searchPubMed(query, opts = {}) {
   });
   if (process.env.NCBI_API_KEY) searchParams.set('api_key', process.env.NCBI_API_KEY);
   const searchUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?${searchParams.toString()}`;
-  const searchJson = await withTimeout(safeJson(searchUrl), opts.timeoutMs || DEFAULT_TIMEOUT_MS, 'pubmed:esearch');
+  const searchJson = await safeJson(searchUrl, { timeoutMs: opts.timeoutMs, signal: opts.signal, label: 'pubmed:esearch' });
   const ids = searchJson?.esearchresult?.idlist || [];
   if (ids.length === 0) return [];
   // Step 2: esummary → metadata for those IDs
@@ -369,7 +497,7 @@ async function searchPubMed(query, opts = {}) {
   });
   if (process.env.NCBI_API_KEY) sumParams.set('api_key', process.env.NCBI_API_KEY);
   const sumUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?${sumParams.toString()}`;
-  const sumJson = await withTimeout(safeJson(sumUrl), opts.timeoutMs || DEFAULT_TIMEOUT_MS, 'pubmed:esummary');
+  const sumJson = await safeJson(sumUrl, { timeoutMs: opts.timeoutMs, signal: opts.signal, label: 'pubmed:esummary' });
   const result = sumJson?.result || {};
   return ids
     .map((id) => result[id])
@@ -398,7 +526,7 @@ async function searchEuropePMC(query, opts = {}) {
     query, format: 'json', pageSize: String(limit), resultType: 'core',
   });
   const url = `https://www.ebi.ac.uk/europepmc/webservices/rest/search?${params.toString()}`;
-  const json = await withTimeout(safeJson(url), opts.timeoutMs || DEFAULT_TIMEOUT_MS, 'europepmc');
+  const json = await safeJson(url, { timeoutMs: opts.timeoutMs, signal: opts.signal, label: 'europepmc' });
   const items = json?.resultList?.result || [];
   return items.map((r) => ({
     source: 'europepmc',
@@ -427,9 +555,10 @@ async function searchCore(query, opts = {}) {
   if (!process.env.CORE_API_KEY) return [];
   const params = new URLSearchParams({ q: query, limit: String(limit) });
   const url = `https://api.core.ac.uk/v3/search/works?${params.toString()}`;
-  const json = await withTimeout(safeJson(url, {
+  const json = await safeJson(url, {
     headers: { Authorization: `Bearer ${process.env.CORE_API_KEY}` },
-  }), opts.timeoutMs || DEFAULT_TIMEOUT_MS, 'core');
+    timeoutMs: opts.timeoutMs, signal: opts.signal, label: 'core',
+  });
   const items = Array.isArray(json?.results) ? json.results : [];
   return items.map((p) => ({
     source: 'core',
@@ -454,7 +583,7 @@ async function searchCore(query, opts = {}) {
 async function searchDOAJ(query, opts = {}) {
   const limit = clampLimit(opts.limit);
   const url = `https://doaj.org/api/v2/search/articles/${encodeURIComponent(query)}?pageSize=${limit}`;
-  const json = await withTimeout(safeJson(url), opts.timeoutMs || DEFAULT_TIMEOUT_MS, 'doaj');
+  const json = await safeJson(url, { timeoutMs: opts.timeoutMs, signal: opts.signal, label: 'doaj' });
   const items = Array.isArray(json?.results) ? json.results : [];
   return items.map((it) => {
     const b = it.bibjson || {};
@@ -484,7 +613,7 @@ async function searchDBLP(query, opts = {}) {
   const limit = clampLimit(opts.limit);
   const params = new URLSearchParams({ q: query, format: 'json', h: String(limit) });
   const url = `https://dblp.org/search/publ/api?${params.toString()}`;
-  const json = await withTimeout(safeJson(url), opts.timeoutMs || DEFAULT_TIMEOUT_MS, 'dblp');
+  const json = await safeJson(url, { timeoutMs: opts.timeoutMs, signal: opts.signal, label: 'dblp' });
   const hits = json?.result?.hits?.hit;
   const items = Array.isArray(hits) ? hits : (hits ? [hits] : []);
   return items.map((h) => {
@@ -516,7 +645,7 @@ async function searchDataCite(query, opts = {}) {
   const limit = clampLimit(opts.limit);
   const params = new URLSearchParams({ query, 'page[size]': String(limit) });
   const url = `https://api.datacite.org/dois?${params.toString()}`;
-  const json = await withTimeout(safeJson(url), opts.timeoutMs || DEFAULT_TIMEOUT_MS, 'datacite');
+  const json = await safeJson(url, { timeoutMs: opts.timeoutMs, signal: opts.signal, label: 'datacite' });
   const items = Array.isArray(json?.data) ? json.data : [];
   return items.map((d) => {
     const a = d.attributes || {};
@@ -565,33 +694,76 @@ const PROVIDER_FUNCS = {
  */
 const searchCache = require('./scientific-search-cache');
 
+// A transient failure is worth retrying; a 4xx (bad query, auth, not-found) is
+// not. Keep this conservative so we never hammer an API over a permanent error.
+function isTransientError(err) {
+  const m = String(err?.message || err || '').toLowerCase();
+  if (/\b4\d\d\b/.test(m) && !/\b429\b/.test(m)) return false; // 4xx except 429
+  return /timed out|timeout|429|too many|\b5\d\d\b|econnreset|enotfound|eai_again|network|fetch failed|socket|abort/.test(m);
+}
+
+async function callProviderWithRetry(fn, query, opts, retries) {
+  let lastErr;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      return await fn(query, opts);
+    } catch (err) {
+      lastErr = err;
+      if (attempt >= retries || !isTransientError(err)) break;
+      const delay = 150 * (attempt + 1) + Math.floor(Math.random() * 100); // backoff + jitter
+      await new Promise((resolve) => { const t = setTimeout(resolve, delay); t.unref?.(); });
+    }
+  }
+  throw lastErr;
+}
+
 async function search(query, opts = {}) {
-  if (typeof query !== 'string' || !query.trim()) {
+  const cleanQuery = normaliseQuery(query);
+  if (!cleanQuery) {
     return { papers: [], errors: [{ provider: 'input', message: 'query is empty' }], providers: [] };
   }
-  const cached = searchCache.get(query, opts);
+  const cached = searchCache.get(cleanQuery, opts);
   if (cached) return cached;
 
   const chosen = (Array.isArray(opts.providers) && opts.providers.length)
     ? opts.providers.filter((p) => PROVIDER_FUNCS[p])
     : PROVIDERS.slice();
-  const results = await Promise.allSettled(
-    chosen.map((p) => PROVIDER_FUNCS[p](query, opts))
-  );
+
+  const retries = Number.isFinite(opts.retries) && opts.retries >= 0 ? opts.retries : DEFAULT_RETRIES;
+  const totalTimeoutMs = Number.isFinite(opts.totalTimeoutMs) && opts.totalTimeoutMs > 0
+    ? opts.totalTimeoutMs
+    : DEFAULT_TOTAL_TIMEOUT_MS;
+
   const errors = [];
   const papers = [];
-  results.forEach((r, idx) => {
-    const provider = chosen[idx];
-    if (r.status === 'fulfilled') {
-      for (const p of r.value || []) papers.push(p);
+  // Each provider settles independently and collects its results the moment it
+  // resolves. A global wall-clock deadline then guarantees the unified search
+  // returns whatever has arrived rather than blocking on the slowest provider
+  // (or one whose per-provider timeout was overridden upward). Late arrivals are
+  // harmless — their sockets were started with AbortControllers and get cleaned
+  // up — they simply don't make it into this turn's ranked list.
+  const collect = (entry) => {
+    if ('reason' in entry) {
+      errors.push({ provider: entry.p, message: entry.reason?.message || String(entry.reason) });
     } else {
-      errors.push({ provider, message: r.reason?.message || String(r.reason) });
+      for (const paper of entry.value || []) papers.push(paper);
     }
-  });
+  };
+  const perProvider = chosen.map((p) =>
+    callProviderWithRetry(PROVIDER_FUNCS[p], cleanQuery, opts, retries)
+      .then((value) => collect({ p, value }))
+      .catch((reason) => collect({ p, reason }))
+  );
+
+  await Promise.race([
+    Promise.allSettled(perProvider),
+    new Promise((resolve) => { const t = setTimeout(resolve, totalTimeoutMs); t.unref?.(); }),
+  ]);
+
   const deduped = dedupeByDoi(papers);
-  const ranked = rankPapers(deduped);
+  const ranked = rankPapers(deduped, cleanQuery);
   const result = { papers: ranked, errors, providers: chosen };
-  searchCache.set(query, opts, result);
+  searchCache.set(cleanQuery, opts, result);
   return result;
 }
 
@@ -608,5 +780,9 @@ module.exports = {
   searchDBLP,
   searchDataCite,
   PROVIDERS,
-  _internal: { dedupeByDoi, normaliseTitle, normaliseDoi, parseAtomFeed, invertedIndexToText, rankPapers, userAgent },
+  _internal: {
+    dedupeByDoi, normaliseTitle, normaliseDoi, parseAtomFeed, invertedIndexToText,
+    rankPapers, userAgent, normaliseQuery, queryTerms, relevanceScore, mergePaper,
+    isTransientError,
+  },
 };
