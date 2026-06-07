@@ -715,19 +715,38 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
                   <FolderPlus className="h-3.5 w-3.5" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-60">
-                <DropdownMenuItem onClick={handleOpenLocalProject}>
-                  <FolderOpen className="mr-2 h-4 w-4" />
-                  Nuevo proyecto (carpeta local)
+              <DropdownMenuContent align="end" className="liquid-menu-surface w-64">
+                <DropdownMenuItem
+                  onClick={handleOpenLocalProject}
+                  className="group liquid-menu-item gap-2.5 focus:bg-transparent data-[highlighted]:bg-transparent"
+                >
+                  <div className="liquid-icon flex h-7 w-7 items-center justify-center rounded-lg bg-zinc-500/10 dark:bg-white/[0.06]">
+                    <FolderOpen className="h-3.5 w-3.5 text-zinc-600 dark:text-zinc-300" />
+                  </div>
+                  <span className="liquid-label text-sm">Nuevo proyecto (carpeta local)</span>
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={handleNewCloudProject}>
-                  <Cloud className="mr-2 h-4 w-4" />
-                  Proyecto en la nube
+                <DropdownMenuItem
+                  onClick={handleNewCloudProject}
+                  data-accent="cloud"
+                  className="group liquid-menu-item gap-2.5 focus:bg-transparent data-[highlighted]:bg-transparent"
+                >
+                  <div className="liquid-icon flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-violet-400/25 via-indigo-400/15 to-cyan-300/25 dark:from-violet-500/20 dark:via-indigo-500/15 dark:to-cyan-400/20">
+                    <Cloud className="h-3.5 w-3.5 text-violet-700 dark:text-violet-200" />
+                  </div>
+                  <span className="liquid-label text-sm font-medium text-violet-900/90 dark:text-violet-100/90">
+                    Proyecto en la nube
+                  </span>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => refresh()} disabled={loading}>
-                  <RefreshCw className="mr-2 h-4 w-4" />
-                  Actualizar
+                <DropdownMenuItem
+                  onClick={() => refresh()}
+                  disabled={loading}
+                  className="group liquid-menu-item gap-2.5 focus:bg-transparent data-[highlighted]:bg-transparent"
+                >
+                  <div className="liquid-icon flex h-7 w-7 items-center justify-center rounded-lg bg-zinc-500/10 dark:bg-white/[0.06]">
+                    <RefreshCw className={`h-3.5 w-3.5 text-zinc-600 dark:text-zinc-300 ${loading ? "animate-spin" : ""}`} />
+                  </div>
+                  <span className="liquid-label text-sm">Actualizar</span>
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
