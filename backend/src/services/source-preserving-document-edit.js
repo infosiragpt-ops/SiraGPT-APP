@@ -2898,6 +2898,24 @@ function documentVisualEmbedModule() {
   return _documentVisualEmbedModule;
 }
 
+let _docxTableInsertModule;
+function docxTableInsertModule() {
+  if (_docxTableInsertModule === undefined) {
+    try {
+      // eslint-disable-next-line global-require
+      _docxTableInsertModule = require('./docx-table-insert');
+    } catch {
+      _docxTableInsertModule = null;
+    }
+  }
+  return _docxTableInsertModule;
+}
+
+function clauseWantsTable(clauseNorm) {
+  const mod = docxTableInsertModule();
+  return Boolean(mod && mod.detectTableRequest(clauseNorm).wantsTable);
+}
+
 function clauseWantsVisual(clauseNorm) {
   const mod = documentVisualEmbedModule();
   return Boolean(mod && mod.detectVisualRequest(clauseNorm).wantsVisual);
@@ -2934,6 +2952,7 @@ function buildOperationFromClause(clauseNorm, documentXml) {
   }
   // A chart/diagram request (no explicit section) → embed a visual instead of a
   // generic text appendix.
+  if (clauseWantsTable(clauseNorm)) return { kind: 'insert_table' };
   if (clauseWantsVisual(clauseNorm)) return { kind: 'insert_visual' };
   if (append || wantsInstrument) return { kind: 'append_generic', wantsInstrument };
   if (fill) return null;
@@ -3332,6 +3351,27 @@ async function runInsertVisualOperation({ buffer, requestText, sourceText, signa
   }
 }
 
+// Design layer: insert a native, editable Word table from the request data.
+// A table failure must never break the document edit.
+async function runInsertTableOperation({ buffer, requestText, sourceText, signal }) {
+  const mod = docxTableInsertModule();
+  if (!mod) return { buffer, validationBlocks: [], step: { kind: 'insert_table', label: 'tabla', mode: 'unavailable' } };
+  try {
+    const result = await mod.addTableFromRequest(buffer, { requestText, sourceText, signal });
+    if (result.added) {
+      const caption = String(result.spec?.title || '').trim();
+      return {
+        buffer: result.buffer,
+        validationBlocks: caption ? [block('normal', caption)] : [],
+        step: { kind: 'insert_table', label: `tabla (${result.spec?.rowCount || 0} filas)` },
+      };
+    }
+    return { buffer, validationBlocks: [], step: { kind: 'insert_table', label: 'tabla', mode: result.reason || 'skipped' } };
+  } catch {
+    return { buffer, validationBlocks: [], step: { kind: 'insert_table', label: 'tabla', mode: 'error' } };
+  }
+}
+
 async function executeDocxOperations({ input, ops, requestText, sourceText, allSourceFiles, sourceFile, referenceFiles = [], signal }) {
   let buffer = input;
   const steps = [];
@@ -3344,6 +3384,8 @@ async function executeDocxOperations({ input, ops, requestText, sourceText, allS
       result = await runAppendLabeledOperation({ buffer, op, requestText, sourceText, allSourceFiles, sourceFile, signal });
     } else if (op.kind === 'insert_visual') {
       result = await runInsertVisualOperation({ buffer, requestText, sourceText, signal });
+    } else if (op.kind === 'insert_table') {
+      result = await runInsertTableOperation({ buffer, requestText, sourceText, signal });
     } else if (op.kind === 'integrate_references') {
       result = await runIntegrateReferencesOperation({ buffer, requestText, sourceText, allSourceFiles, sourceFile, referenceFiles, signal });
     } else if (op.kind === 'fill_cover') {
@@ -3477,6 +3519,8 @@ function describeStep(step) {
   if (step.kind === 'integrate_references') return `integré ${step.references || 0} documento(s) de soporte al documento principal`;
   if (step.kind === 'insert_visual' && !step.mode) return `inserté un ${step.label || 'gráfico'} en el documento`;
   if (step.kind === 'insert_visual') return 'intenté insertar un gráfico, pero no había datos suficientes';
+  if (step.kind === 'insert_table' && !step.mode) return `inserté una ${step.label || 'tabla'} en el documento`;
+  if (step.kind === 'insert_table') return 'intenté insertar una tabla, pero no había datos suficientes';
   if (step.kind === 'fill_cover') return 'completé la portada con los datos disponibles del documento';
   if (step.kind === 'delete_text') return `eliminé el texto específico solicitado (${step.removedCount || 0} coincidencia(s))`;
   if (step.kind === 'replace_text') return `reemplacé el texto específico solicitado (${step.changedCount || 0} coincidencia(s))`;
