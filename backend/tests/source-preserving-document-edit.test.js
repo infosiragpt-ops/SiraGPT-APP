@@ -177,6 +177,21 @@ describe('source-preserving document edit', () => {
     assert.equal(isSourcePreservingEditRequest('completa el anexo 3', ['file-docx']), true);
     assert.equal(isSourcePreservingEditRequest('modifica mi documento general con este nuevo contenido', []), true);
     assert.equal(isSourcePreservingEditRequest('analiza este documento adjunto y agrégalo a mi documento general', ['file-ref']), true);
+    // Whole-document transforms over the uploaded file must preserve the source.
+    assert.equal(isSourcePreservingEditRequest('traduce este documento al inglés', ['file-docx']), true);
+    assert.equal(isSourcePreservingEditRequest('resume este documento', ['file-docx']), true);
+    assert.equal(isSourcePreservingEditRequest('reescribe el documento adjunto en un tono más formal', ['file-docx']), true);
+    assert.equal(isSourcePreservingEditRequest('reformula mi documento word', []), true);
+    assert.equal(isSourcePreservingEditRequest('cambia el título de la portada del documento', ['file-docx']), true);
+    // No document reference → still a normal chat answer, not a preserving edit.
+    assert.equal(isSourcePreservingEditRequest('traduce esta frase al inglés', []), false);
+    assert.equal(isSourcePreservingEditRequest('resume la reunión de ayer', []), false);
+    assert.equal(isSourcePreservingEditRequest('cambia de tema', []), false);
+    // Transform verb + attached file but only a pronoun reference (no document
+    // noun) must NOT hijack the request into a source-preserving edit.
+    assert.equal(isSourcePreservingEditRequest('traduce esta frase al inglés', ['file-docx']), false);
+    assert.equal(isSourcePreservingEditRequest('cambia de tema', ['file-docx']), false);
+    assert.equal(isSourcePreservingEditRequest('resume esta idea en una línea', ['file-docx']), false);
     assert.deepEqual(parseTargetSectionRequest('completa el anexo 3'), {
       kind: 'anexo',
       number: 3,

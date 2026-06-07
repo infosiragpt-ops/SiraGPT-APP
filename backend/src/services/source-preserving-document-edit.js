@@ -35,11 +35,18 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   if (!text) return false;
   const hasFiles = Array.isArray(files) ? files.length > 0 : Boolean(files);
 
-  const primaryEditVerb = /\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|inclu\w*|pon|poner|coloc\w*|modific\w*|edit\w*|corrig\w*|correg\w*|mejor\w*|actualiz\w*|reescrib\w*|reemplaz\w*|quit\w*|elimin\w*|borr\w*|complet\w*)\b/.test(text);
+  const structuralEditVerb = /\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|inclu\w*|pon|poner|coloc\w*|modific\w*|edit\w*|corrig\w*|correg\w*|mejor\w*|actualiz\w*|reescrib\w*|reemplaz\w*|quit\w*|elimin\w*|borr\w*|complet\w*)\b/.test(text);
+  // Whole-document transforms (traduce / cambia / resume / reformula…) act on the
+  // entire file. They are recognized as edits, but require an explicit document
+  // noun (not just a demonstrative pronoun) so phrases like "traduce esta frase"
+  // or "cambia de tema" stay normal chat answers even when a file is attached.
+  const transformVerb = /\b(traduc\w*|cambi\w*|resum\w*|reformul\w*|parafras\w*|sintetiz\w*|transcrib\w*)\b/.test(text);
+  const primaryEditVerb = structuralEditVerb || transformVerb;
   const adjuntarAction = /\badjunt(?:a|ar|ame|arme|alo|ala|alos|alas|arlo|arla|arlos|arlas)\b/.test(text)
     && !/\b(?:documentos?|archivos?|pdf|word|docx|excel|xlsx|pptx?)\s+adjunt[oa]s?\b/.test(text);
   const editVerb = primaryEditVerb || adjuntarAction;
   const existingDocRef = /\b(mi|mismo|misma|este|esta|ese|esa|documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx|powerpoint|pdf|tesis)\b/.test(text);
+  const documentNoun = /\b(documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx|powerpoint|pdf|tesis)\b/.test(text);
   const appendLocation = /\b(al final|final|anexo|anexos|apendice|ultima pagina|ultima hoja|nueva hoja|nueva pagina|nueva diapositiva)\b/.test(text);
   const preservation = /\b(sin cambiar|no cambies|no modificar lo demas|mismo word|mismo documento|conservar|preservar|mantener)\b/.test(text);
   const explicitFreshDeliverable = /\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|dame|prepara(?:r|me)?|redacta(?:r|me)?|elabora(?:r|me)?|devu[eé]lv(?:e|eme|elo)|entr[eé]ga(?:r|me)?)\b[^.?!]{0,160}\b(?:un\s+|una\s+|el\s+|la\s+)?(?:word|docx|documento|informe|reporte|tesis|monografia|ensayo)\b/.test(text)
@@ -54,7 +61,14 @@ function isSourcePreservingEditRequest(prompt, files = []) {
 
   if (!editVerb) return false;
   if (explicitFreshDeliverable && !preservation) return false;
-  if (hasFiles) return existingDocRef || appendLocation || preservation || instrument || documentRegion;
+  if (hasFiles) {
+    if (appendLocation || preservation || instrument || documentRegion) return true;
+    if (documentNoun) return true;
+    // Pronoun-only references (este/esta/mi…) are honored for structural edits,
+    // but transform verbs require an explicit document noun (handled above) so
+    // "traduce esta frase" / "cambia de tema" stay normal chat answers.
+    return structuralEditVerb && existingDocRef;
+  }
   return preservation
     || followUpDocumentEdit
     || (existingDocRef && (appendLocation || instrument || documentRegion))

@@ -254,6 +254,13 @@ const DOCUMENT_UNDERSTANDING_RE =
 const EXISTING_DOCUMENT_EDIT_RE =
   /\b(?:agrega(?:r|me|s)?|a[ñn]ad(?:e|ir|eme|as)?|inserta(?:r|me|s)?|incorpora(?:r|me|s)?|inclu(?:ye|ir|yeme|yas)?|completa(?:r|me|s)?|llen(?:a|ar|ame|as)?|rellena(?:r|me|s)?|desarrolla(?:r|me|s)?|modifica(?:r|me|s)?|edita(?:r|me|s)?|corrige(?:r|me|s)?|actualiza(?:r|me|s)?|reemplaza(?:r|me|s)?|cambia(?:r|me|s)?|pon(?:er|me)?|coloca(?:r|me|s)?)\b[^.?!]{0,180}\b(?:al\s+final|anexos?|ap[eé]ndice|secci[oó]n|apartado|cap[ií]tulo|portada|car[aá]tula|t[ií]tulo|encabezado|pie\s+de\s+p[aá]gina|tabla|hoja|celda|fila|columna|diapositiva|instrumento|cuestionario|encuesta|escala|tesis|mismo\s+word|mismo\s+documento|sin\s+cambiar|conserva(?:r)?|preserva(?:r)?)\b/i
 
+// Whole-document transforms (translate / rewrite / summarize / rephrase)
+// operate on the entire uploaded file, so unlike EXISTING_DOCUMENT_EDIT_RE
+// they don't require a sub-region target keyword. When a document is
+// attached, these verbs should route to the source-preserving editor.
+const WHOLE_DOCUMENT_TRANSFORM_RE =
+  /\b(?:traduc\w*|reescrib\w*|reescrit\w*|reformul\w*|parafrase\w*|parafras\w*|sintetiz\w*|resum\w*|transcrib\w*|cambi\w*)\b/i
+
 const OUTPUT_FORMAT_REQUEST_RE =
   /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|svg)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|prepara(?:r|me)?|elabora(?:r|me)?|redacta(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|svg|documento|archivo|informe|reporte|presentaci[oó]n)\b/i
 
@@ -342,8 +349,21 @@ export function shouldEditExistingDocument(
 ): boolean {
   const normalized = normalizePrompt(prompt)
   if (!normalized) return false
-  if (!EXISTING_DOCUMENT_EDIT_RE.test(normalized)) return false
-  return EXISTING_DOCUMENT_REFERENCE_RE.test(normalized) || hasDocumentAttachmentContext(conversationHistory)
+  const referencesExistingDocument =
+    EXISTING_DOCUMENT_REFERENCE_RE.test(normalized) || hasDocumentAttachmentContext(conversationHistory)
+  if (EXISTING_DOCUMENT_EDIT_RE.test(normalized)) return referencesExistingDocument
+  // Whole-document transforms (traduce / resume / reescribe / reformula) count
+  // as edits only when the prompt explicitly references a document AND a file is
+  // attached — so "traduce esta frase" / "cambia de tema" stay normal chat
+  // answers, and pure format conversions ("pásalo a PDF") go to doc generation.
+  if (
+    WHOLE_DOCUMENT_TRANSFORM_RE.test(normalized)
+    && EXISTING_DOCUMENT_REFERENCE_RE.test(normalized)
+    && !OUTPUT_FORMAT_REQUEST_RE.test(normalized)
+  ) {
+    return hasDocumentAttachmentContext(conversationHistory)
+  }
+  return false
 }
 
 export function shouldAnswerFromExistingDocument(
@@ -533,8 +553,11 @@ export function buildIntentAttributionGraph(
   const hasDocumentContext = allFiles.some(isDocumentLikeAttachment)
   const hasSpreadsheetContext = allFiles.some(isSpreadsheetLikeAttachment)
   const editsExistingDocument = hasDocumentContext
-    && EXISTING_DOCUMENT_EDIT_RE.test(normalized)
     && !OUTPUT_FORMAT_REQUEST_RE.test(normalized)
+    && (
+      EXISTING_DOCUMENT_EDIT_RE.test(normalized)
+      || (WHOLE_DOCUMENT_TRANSFORM_RE.test(normalized) && EXISTING_DOCUMENT_REFERENCE_RE.test(normalized))
+    )
   const isShortContextualFragment =
     words.length <= 6
     && !!historyIntent

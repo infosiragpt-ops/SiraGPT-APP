@@ -57,6 +57,29 @@ describe("ai-service · deterministic intent routing", () => {
     assert.equal(shouldRouteTextPromptThroughAgenticRuntime(prompt, history[0].files), true)
   })
 
+  it("routes whole-document transforms (translate/summarize/rewrite) over an attachment to the source-preserving agent", async () => {
+    const docFile = {
+      id: "file-docx-transform",
+      name: "tesis.docx",
+      mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }
+    const history = [{ role: "USER", content: "tesis.docx", files: [docFile] }]
+    for (const prompt of [
+      "traduce este documento al inglés",
+      "resume este documento",
+      "reescribe el documento adjunto en un tono más formal",
+    ]) {
+      assert.equal(shouldEditExistingDocument(prompt, history), true)
+      assert.equal(await aiService.classifyIntent(prompt, history), "agent_task")
+    }
+    // A pure format conversion still goes to document generation, not preserve-edit.
+    assert.equal(shouldEditExistingDocument("pásalo a PDF", history), false)
+    // Transform verb without an explicit document reference must not hijack the
+    // request, even when a document happens to be attached.
+    assert.equal(shouldEditExistingDocument("traduce esta frase al inglés", history), false)
+    assert.equal(shouldEditExistingDocument("cambia de tema", history), false)
+  })
+
   it("routes document follow-up questions like title lookup through the agent runtime", async () => {
     const history = [
       {
