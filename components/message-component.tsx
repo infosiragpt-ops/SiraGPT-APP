@@ -49,6 +49,7 @@ import {
 import { toast } from "sonner"
 import { apiClient } from "@/lib/api"
 import { useVoiceControls } from './voice-controls';
+import { getNaturalSpeechEngine, isSpeechSupported } from '@/lib/speech/natural-speech-engine';
 import ReactMarkdown from 'react-markdown'
 import { PerformanceOptimizer } from "@/lib/performance-optimizer"
 import { markdownRehypePlugins, markdownRemarkPlugins } from '@/lib/markdown-sanitize'
@@ -835,6 +836,11 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             if (typeof window !== "undefined" && window.speechSynthesis) {
                 try { window.speechSynthesis.cancel() } catch { /* ignore */ }
             }
+            // Also reset the NaturalSpeechEngine so its internal queue/state
+            // doesn't leak across route changes.
+            if (isSpeechSupported()) {
+                try { getNaturalSpeechEngine().cancel() } catch { /* ignore */ }
+            }
         };
     }, [currentAudio]);
 
@@ -1058,15 +1064,26 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             return;
         }
 
-        // Toggle path 2 — browser-TTS fallback was speaking. The
-        // SpeechSynthesisUtterance API has no per-handle stop; we
-        // cancel the entire queue and reset state. Without this,
-        // every click that lands here while the browser is talking
-        // would queue another utterance on top of the current one.
-        if (isSpeaking && typeof window !== "undefined" && window.speechSynthesis) {
-            try { window.speechSynthesis.cancel() } catch { /* ignore */ }
-            setIsSpeaking(false);
-            return;
+        // Toggle path 2 — the NaturalSpeechEngine fallback is active.
+        // The engine owns play/pause/resume across sentence chunks, so a
+        // click while it's talking pauses, and a click while paused
+        // resumes — no re-fetch, no utterances stacking on top of each
+        // other (the old naive SpeechSynthesisUtterance path did both).
+        if (isSpeechSupported()) {
+            const engine = getNaturalSpeechEngine();
+            if (engine.isActive) {
+                if (engine.state === "speaking") {
+                    engine.pause();
+                    setIsSpeaking(false);
+                } else if (engine.state === "paused") {
+                    engine.resume();
+                    setIsSpeaking(true);
+                } else {
+                    engine.cancel();
+                    setIsSpeaking(false);
+                }
+                return;
+            }
         }
 
         const textToSpeak = message.content
@@ -1118,29 +1135,57 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                 };
             }
         } catch (error) {
-            // Fallback to browser TTS
-            // ElevenLabs TTS failed → fall back to browser TTS (caught above)
+            // ElevenLabs TTS unavailable → fall back to the on-device
+            // NaturalSpeechEngine. Unlike the old naive
+            // `new SpeechSynthesisUtterance(text)` call, this engine
+            // auto-detects the language, scores + picks the highest-quality
+            // voice the platform exposes (neural/natural/premium), tunes
+            // prosody, and streams the answer sentence-by-sentence with a
+            // watchdog + keep-alive so long replies don't get cut off after
+            // ~15s on Chrome. Pure client-side voice engineering — no API
+            // key, no country-locked cloud provider.
             void error;
             setIsLoadingAudio(false);
             setShowAudioPlayer(false);
-            // Cancel any utterance still queued from a previous
-            // failure path so we don't talk over ourselves.
-            try { window.speechSynthesis?.cancel() } catch { /* ignore */ }
-            const utterance = new SpeechSynthesisUtterance(textToSpeak);
-            utterance.onstart = () => setIsSpeaking(true);
-            utterance.onend = () => {
+
+            if (!isSpeechSupported()) {
+                setIsSpeaking(false);
+                toast.error("Tu navegador no soporta lectura en voz alta");
+                return;
+            }
+
+            const engine = getNaturalSpeechEngine();
+            // Subscribe once per run; listeners are replaced (not stacked)
+            // because speak() bumps an internal run token that invalidates
+            // stale callbacks, and we unsubscribe on terminal states below.
+            const offState = engine.on("state", (next) => {
+                if (next === "speaking") setIsSpeaking(true);
+                else if (next === "paused" || next === "stopped" || next === "idle") setIsSpeaking(false);
+            });
+            const cleanup = () => {
+                offState();
+                offEnd();
+                offError();
+            };
+            const offEnd = engine.on("end", () => {
                 setIsSpeaking(false);
                 setCurrentAudio(null);
-            };
-            utterance.onerror = () => {
+                cleanup();
+            });
+            const offError = engine.on("error", () => {
                 setIsSpeaking(false);
                 setCurrentAudio(null);
-            };
-            window.speechSynthesis.speak(utterance);
-            // Optimistically flip the visual state — onstart can
-            // be slow on Safari and the user expects immediate
-            // feedback when they pressed the button.
+                cleanup();
+                toast.error("Falló la lectura en voz alta");
+            });
+
+            // Optimistically flip the visual state — onstart can be slow on
+            // Safari and the user expects immediate feedback on click.
             setIsSpeaking(true);
+            engine.speak(textToSpeak).catch(() => {
+                setIsSpeaking(false);
+                cleanup();
+            });
         }
     };
 
@@ -1158,6 +1203,11 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         if (currentAudio) {
             currentAudio.pause();
             currentAudio.currentTime = 0;
+        }
+        // Stop the on-device speech engine too, in case the browser-TTS
+        // fallback is what's currently reading.
+        if (isSpeechSupported()) {
+            try { getNaturalSpeechEngine().cancel() } catch { /* ignore */ }
         }
         setIsSpeaking(false);
         setAudioProgress(0);
@@ -2912,16 +2962,9 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                             <Button
                                                 size="sm"
                                                 onClick={handleEditSave}
-                                                className={cn(
-                                                    "relative overflow-hidden border-0 text-white",
-                                                    "bg-gradient-to-br from-indigo-500 via-violet-500 to-purple-600",
-                                                    "shadow-[0_4px_16px_-4px_rgba(124,58,237,0.55)]",
-                                                    "transition-all duration-300 ease-out",
-                                                    "hover:shadow-[0_6px_24px_-4px_rgba(124,58,237,0.7)] hover:brightness-110",
-                                                    "active:scale-[0.97]",
-                                                    "before:absolute before:inset-0 before:-translate-x-full before:bg-gradient-to-r before:from-transparent before:via-white/35 before:to-transparent before:transition-transform before:duration-700 before:ease-out hover:before:translate-x-full",
-                                                )}
+                                                className="liquid-send-btn"
                                             >
+                                                <Sparkles size={13} strokeWidth={2} className="opacity-90" />
                                                 Enviar
                                             </Button>
                                         </div>

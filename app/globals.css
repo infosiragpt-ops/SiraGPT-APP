@@ -1208,6 +1208,32 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   background-color: hsl(150 70% 34%) !important;
 }
 
+/* MessageActionRail — "now reading" equalizer + active-state halo.
+   Both are transform/opacity-only so they stay on the compositor, and they
+   are only attached via `motion-safe:` so reduced-motion users see a static
+   button. */
+@keyframes rail-eq {
+  0%,
+  100% {
+    transform: scaleY(0.45);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes rail-halo {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1.04);
+  }
+}
+
 @keyframes video-liquid-sweep {
   0% {
     transform: translateX(-120%) skewX(-12deg);
@@ -5593,4 +5619,133 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
   .fal-launcher { transition: none; }
   .fal-liquid-card:hover { transform: none; }
   .fal-launcher:hover { transform: none; }
+}
+
+/* ───────────────────────────────────────────────────────────────
+ * Premium liquid "Enviar" button — flowing gradient, breathing
+ * glow, glossy top highlight, a continuous light sheen sweep, a
+ * hover lift and a spring press. Built on the --accent-violet token
+ * so it stays on-brand in light & dark. Honors reduced-motion.
+ * ─────────────────────────────────────────────────────────────── */
+@keyframes liquid-send-flow {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+@keyframes liquid-send-sheen {
+  0%   { transform: translateX(-130%) skewX(-18deg); opacity: 0; }
+  12%  { opacity: 0.85; }
+  55%  { opacity: 0; }
+  100% { transform: translateX(260%) skewX(-18deg); opacity: 0; }
+}
+@keyframes liquid-send-glow {
+  0%, 100% {
+    box-shadow:
+      0 6px 20px -10px hsl(var(--accent-violet) / 0.6),
+      0 0 0 0 hsl(var(--accent-violet) / 0),
+      inset 0 1px 0 hsl(0 0% 100% / 0.38),
+      inset 0 -8px 16px -10px hsl(266 90% 40% / 0.5);
+  }
+  50% {
+    box-shadow:
+      0 12px 30px -10px hsl(var(--accent-violet) / 0.78),
+      0 0 24px -2px hsl(var(--accent-violet) / 0.4),
+      inset 0 1px 0 hsl(0 0% 100% / 0.5),
+      inset 0 -8px 16px -10px hsl(266 90% 40% / 0.55);
+  }
+}
+
+.liquid-send-btn {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border: 0 !important;
+  color: #fff !important;
+  font-weight: 600;
+  letter-spacing: 0.005em;
+  border-radius: 0.7rem;
+  background-image: linear-gradient(
+    110deg,
+    hsl(248 92% 63%) 0%,
+    hsl(264 90% 61%) 22%,
+    hsl(286 86% 62%) 44%,
+    hsl(300 82% 64%) 56%,
+    hsl(264 90% 61%) 78%,
+    hsl(248 92% 63%) 100%
+  );
+  background-size: 240% 100%;
+  animation:
+    liquid-send-flow 6s ease-in-out infinite,
+    liquid-send-glow 3.4s ease-in-out infinite;
+  transition:
+    transform 240ms var(--ease-out-soft, cubic-bezier(0.16, 1, 0.3, 1)),
+    filter 240ms var(--ease-out-soft, cubic-bezier(0.16, 1, 0.3, 1));
+  will-change: transform, background-position;
+}
+
+/* Glossy curved highlight across the top third. */
+.liquid-send-btn::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(
+    180deg,
+    hsl(0 0% 100% / 0.32) 0%,
+    hsl(0 0% 100% / 0.08) 36%,
+    transparent 58%
+  );
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Continuous light sheen sweeping left → right. */
+.liquid-send-btn::after {
+  content: "";
+  position: absolute;
+  top: -10%;
+  left: 0;
+  width: 42%;
+  height: 120%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    hsl(0 0% 100% / 0.6),
+    transparent
+  );
+  transform: translateX(-130%) skewX(-18deg);
+  pointer-events: none;
+  z-index: 2;
+  animation: liquid-send-sheen 3.8s var(--ease-out-soft, cubic-bezier(0.16, 1, 0.3, 1)) infinite;
+}
+
+.liquid-send-btn > * {
+  position: relative;
+  z-index: 3;
+}
+
+.liquid-send-btn:hover {
+  transform: translateY(-1.5px) scale(1.03);
+  filter: brightness(1.09) saturate(1.1);
+}
+
+.liquid-send-btn:active {
+  transform: translateY(0) scale(0.965);
+  filter: brightness(0.98);
+  transition-duration: 90ms;
+}
+
+.liquid-send-btn:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 3px hsl(var(--accent-violet) / 0.38),
+    0 12px 30px -10px hsl(var(--accent-violet) / 0.78);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .liquid-send-btn,
+  .liquid-send-btn::after {
+    animation: none;
+  }
+  .liquid-send-btn:hover { transform: none; }
 }
