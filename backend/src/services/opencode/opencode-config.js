@@ -53,6 +53,19 @@ function isOpencodeConfigured({ env = process.env } = {}) {
   return getOpencodeConfig({ env }).enabled;
 }
 
+/**
+ * The model the engine should use. OpenCode defaults to anthropic/claude-*,
+ * which fails when that account has no credit; we steer it to a funded provider
+ * the container already has keys for. Override via OPENCODE_MODEL_PROVIDER /
+ * OPENCODE_MODEL_ID. Returns null to let the engine pick its own default.
+ */
+function getOpencodeModel({ env = process.env } = {}) {
+  const providerID = cleanString(env.OPENCODE_MODEL_PROVIDER) || 'openai';
+  const modelID = cleanString(env.OPENCODE_MODEL_ID) || 'gpt-4o-mini';
+  if (!providerID || !modelID) return null;
+  return { providerID, modelID };
+}
+
 /** Build the Authorization header value, or null when no password is set. */
 function basicAuthHeader(config) {
   if (!config || !config.password) return null;
@@ -60,4 +73,4 @@ function basicAuthHeader(config) {
   return `Basic ${token}`;
 }
 
-module.exports = { getOpencodeConfig, isOpencodeConfigured, basicAuthHeader, DEFAULT_USERNAME };
+module.exports = { getOpencodeConfig, isOpencodeConfigured, getOpencodeModel, basicAuthHeader, DEFAULT_USERNAME };

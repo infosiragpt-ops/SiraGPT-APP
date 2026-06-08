@@ -22,6 +22,7 @@ const ENDPOINTS = {
   session: (id) => `/session/${encodeURIComponent(id)}`, // GET/DELETE/PATCH
   message: (id) => `/session/${encodeURIComponent(id)}/message`, // GET/POST
   file: () => '/file', // GET (file content at /file/content)
+  fileContent: () => '/file/content', // GET ?path= → { type, content } (verified)
   find: () => '/find/symbol', // GET symbol search
   event: () => '/api/event', // GET — SSE stream (verified text/event-stream)
 };
@@ -89,14 +90,22 @@ function createOpencodeClient({ env = process.env, fetchImpl } = {}) {
     ping(opts) { return request('GET', ENDPOINTS.openapi(), opts); },
     listSessions(opts) { return request('GET', ENDPOINTS.sessions(), opts); },
     createSession(body = {}, opts) { return request('POST', ENDPOINTS.sessions(), { ...opts, body }); },
-    /** Send a text prompt to a session (OpenCode message-parts shape). */
-    prompt(sessionId, text, opts) {
-      return request('POST', ENDPOINTS.message(sessionId), {
-        ...opts,
-        body: { parts: [{ type: 'text', text: String(text) }] },
-      });
+    /**
+     * Send a text prompt to a session (OpenCode message-parts shape). When a
+     * `model` ({ providerID, modelID }) is supplied it steers the engine to a
+     * funded provider (its default anthropic model 400s with no credit).
+     */
+    prompt(sessionId, text, opts = {}) {
+      const { model, ...rest } = opts;
+      const body = { parts: [{ type: 'text', text: String(text) }] };
+      if (model && model.providerID && model.modelID) body.model = model;
+      return request('POST', ENDPOINTS.message(sessionId), { ...rest, body });
     },
     readFile(path, opts) { return request('GET', ENDPOINTS.file(), { ...opts, query: { path } }); },
+    /** Read a workspace file's content → { type, content }. */
+    readFileContent(path, opts) {
+      return request('GET', ENDPOINTS.fileContent(), { ...opts, query: { path } });
+    },
     findText(pattern, opts) { return request('GET', ENDPOINTS.find(), { ...opts, query: { pattern } }); },
     /** Absolute URL of the SSE event stream (for a backend→frontend proxy). */
     eventStreamUrl() { return buildUrl(config.baseUrl, ENDPOINTS.event()); },

@@ -19,6 +19,7 @@ const { authenticateToken } = require('../middleware/auth');
 const {
   isOpencodeConfigured,
   getOpencodeConfig,
+  getOpencodeModel,
   basicAuthHeader,
 } = require('../services/opencode/opencode-config');
 const { createOpencodeClient } = require('../services/opencode/opencode-client');
@@ -64,13 +65,29 @@ router.post(
       return res.status(400).json({ error: 'validation_failed', details: errors.array() });
     }
     try {
-      const result = await createOpencodeClient().prompt(req.params.id, req.body.text);
+      const result = await createOpencodeClient().prompt(req.params.id, req.body.text, {
+        model: getOpencodeModel(),
+      });
       return res.json({ result });
     } catch (err) {
       return res.status(502).json({ error: 'opencode_upstream', message: err.message });
     }
   },
 );
+
+// Read a file the agent wrote in the engine's workspace → { path, content }.
+// Used by the /code UI to surface engine edits in the editor/preview.
+router.get('/file', authenticateToken, requireConfigured, async (req, res) => {
+  const path = typeof req.query.path === 'string' ? req.query.path : '';
+  if (!path) return res.status(400).json({ error: 'validation_failed', message: 'path is required' });
+  try {
+    const out = await createOpencodeClient().readFileContent(path);
+    const content = out && typeof out.content === 'string' ? out.content : '';
+    return res.json({ path, content });
+  } catch (err) {
+    return res.status(502).json({ error: 'opencode_upstream', message: err.message });
+  }
+});
 
 // Proxy the engine's SSE event stream to the browser.
 router.get('/events', authenticateToken, requireConfigured, async (req, res) => {

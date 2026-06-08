@@ -81,6 +81,17 @@ export const opencodeService = {
     return json.result
   },
 
+  /** Read a file the agent wrote in the engine's workspace. "" if absent. */
+  async readFile(path: string): Promise<string> {
+    const res = await fetch(`${baseUrl}/file?path=${encodeURIComponent(path)}`, {
+      credentials: "include",
+      headers: authHeaders(),
+    })
+    if (!res.ok) return ""
+    const json = (await res.json().catch(() => ({}))) as { content?: string }
+    return typeof json.content === "string" ? json.content : ""
+  },
+
   /**
    * Stream the engine's SSE events. Calls `onEvent` per frame; resolves when the
    * stream ends. Pass an AbortSignal to stop. Uses fetch (not EventSource) so the

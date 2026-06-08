@@ -692,7 +692,7 @@ export function AICodeChatPanel() {
         }
 
         const sendText = ctx
-          ? `${landingSystemPrompt(ctx)}\n\nIMPORTANTE: NO uses herramientas de edición de archivos ni el filesystem. DEVUELVE el index.html COMPLETO dentro de UN bloque que empiece EXACTAMENTE con \`\`\`html index.html en tu mensaje.`
+          ? `${landingSystemPrompt(ctx)}\n\nIMPORTANTE: ESCRIBE los archivos en el workspace usando tus herramientas (write/edit). El archivo de ENTRADA DEBE llamarse exactamente "index.html" y ser autocontenido (HTML + Tailwind por CDN). Puedes añadir styles.css y/o app.js si lo necesitas.`
           : text
 
         // OpenCode is event-driven: the POST /message returns an empty shell and
@@ -737,22 +737,51 @@ export function AICodeChatPanel() {
         const reply = assistantText()
         const blocks = parseCodeBlocks(reply).filter((b) => b.path)
 
+        if (ctx) {
+          // BUILD: read the files the agent wrote to its /workspace (the agent
+          // edits files via tools, it doesn't return code in text). We read a few
+          // known entry/companion paths and apply the non-empty ones, plus any
+          // code blocks it happened to include in the reply.
+          const candidates = ["index.html", "styles.css", "style.css", "app.js", "script.js", "main.js"]
+          const engineFiles: Array<{ path: string; content: string }> = []
+          for (const p of candidates) {
+            try {
+              const c = await opencodeService.readFile(p)
+              if (c && c.trim()) engineFiles.push({ path: p, content: c })
+            } catch {
+              /* missing file → skip */
+            }
+          }
+          const seen = new Set<string>()
+          const merged: Array<{ path: string; content: string }> = []
+          for (const f of [...engineFiles, ...blocks.map((b) => ({ path: b.path as string, content: b.content }))]) {
+            if (!seen.has(f.path)) {
+              seen.add(f.path)
+              merged.push(f)
+            }
+          }
+          if (merged.some((f) => /(^|\/)index\.html?$/i.test(f.path))) {
+            applyFilesToWorkspace(merged)
+            finish(reply ? `${reply}\n\n_(Motor OpenCode: ${merged.length} archivo(s) →)_` : `✅ Motor OpenCode — ${merged.length} archivo(s) →`)
+            toast.success(`Motor OpenCode — ${merged.length} archivo(s) →`)
+            return
+          }
+          // Engine produced nothing usable → reliable deterministic fallback.
+          const n = await runDeterministicInto(ctx)
+          finish(
+            reply
+              ? `${reply}\n\n_(El motor no dejó archivos; usé el builder determinista: ${n} archivos.)_`
+              : `✅ App generada (builder determinista, ${n} archivos).`,
+          )
+          toast.success("App generada (builder determinista) →")
+          return
+        }
+
+        // Non-build chat: render the assistant reply + apply any code blocks.
         if (blocks.length > 0) {
           applyFilesToWorkspace(blocks.map((b) => ({ path: b.path as string, content: b.content })))
           finish(reply || `✅ Motor OpenCode — ${blocks.length} archivo(s) aplicados →`)
           toast.success(`Motor OpenCode — ${blocks.length} archivo(s) →`)
-          return
-        }
-
-        if (ctx) {
-          // Engine produced no applicable code → reliable deterministic fallback.
-          const n = await runDeterministicInto(ctx)
-          finish(
-            reply
-              ? `${reply}\n\n_(Apliqué el builder determinista: ${n} archivos.)_`
-              : `✅ App generada (builder determinista, ${n} archivos).`,
-          )
-          toast.success("App generada (builder determinista) →")
           return
         }
 
@@ -823,16 +852,19 @@ export function AICodeChatPanel() {
         }
         case "generate": {
           patchAgentState(sid, (s) => ({ ...s, phase: "generating", context: action.context }))
-          // Reliable build: the deterministic builder (/api/builder/generate) is a
-          // short, non-streaming request that always produces a runnable app in
-          // the preview. The OpenCode engine is an agent that edits files in its
-          // OWN /workspace via tools (it doesn't return code in text), so surfacing
-          // its output here would need a workspace file read-back — until then the
-          // deterministic builder is the dependable path. Fed with intake context.
-          const ctxPrompt = promptFromContext(action.context)
-          const genPrompt = action.context.productType || action.context.brand ? ctxPrompt : text
-          await buildApp(genPrompt)
-          patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "deterministic" }))
+          if (!opts?.forceDeterministic && engineAvailable) {
+            // Prefer the OpenCode agent: it writes the landing files into its
+            // /workspace (via a funded model), and runEngine reads them back into
+            // the editor/preview — falling back to the deterministic builder if
+            // the agent leaves no index.html. Rich AND reliable in Docker.
+            await runEngine(text, sid, { buildContext: action.context })
+            patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "llm" }))
+          } else {
+            const ctxPrompt = promptFromContext(action.context)
+            const genPrompt = action.context.productType || action.context.brand ? ctxPrompt : text
+            await buildApp(genPrompt)
+            patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "deterministic" }))
+          }
           return
         }
         case "patch": {
