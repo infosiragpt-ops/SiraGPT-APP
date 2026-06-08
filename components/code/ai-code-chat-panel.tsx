@@ -61,7 +61,7 @@ import { useCodeWorkspace } from "@/lib/code-workspace-context"
 import { intakeService } from "@/lib/builder/intake-service"
 import type { CodeChatTurn } from "@/lib/code-chat-sessions"
 import { computeLineDiff, parseCodeBlocks, type CodeBlock } from "@/lib/code-workspace-utils"
-import { defaultAgentState } from "@/lib/code-agent/types"
+import { defaultAgentState, type AgentBuildContext } from "@/lib/code-agent/types"
 import {
   classifyBuildError,
   mergeOverridesIntoPackageJson,
@@ -69,10 +69,10 @@ import {
   promptFromContext,
   renderFiveSections,
 } from "@/lib/code-agent/orchestrator"
-import { sreSystemPrompt } from "@/lib/code-agent/prompts"
+import { landingSystemPrompt, sreSystemPrompt } from "@/lib/code-agent/prompts"
 import { isSlowModel, recommendFastModel } from "@/lib/code-agent/model-policy"
 import { opencodeService } from "@/lib/opencode/opencode-service"
-import { useOpencodeEngine, extractEngineText } from "@/lib/opencode/use-opencode-engine"
+import { useOpencodeEngine } from "@/lib/opencode/use-opencode-engine"
 
 import { DiffView } from "./diff-view"
 import { AgentSwarm } from "./agent-swarm"
@@ -625,37 +625,62 @@ export function AICodeChatPanel() {
     [applyBlock, files, patchAgentState, setTurns],
   )
 
-  // Agent FSM entry point: the pure orchestrator decides the next action
-  // (ask → generate → patch → debug → passthrough) and we execute it, reusing
-  // the LLM executor (sendPrompt) and the deterministic generator (buildApp).
-  // OpenCode engine path (opt-in). Creates/reuses an engine session, streams
-  // live events for progress, sends the prompt, renders the reply, and applies
-  // any code blocks it returns to the workspace. Degrades with a clear error
-  // when the engine is configured but unreachable (e.g. host-dev without Docker).
+  // Apply a set of {path,content} files to the workspace (index.html last so the
+  // live preview lands on the runnable app) and open the preview.
+  const applyFilesToWorkspace = React.useCallback(
+    (files: Array<{ path: string; content: string }>) => {
+      const ordered = [...files].sort(
+        (a, b) =>
+          (/(^|\/)index\.html?$/i.test(a.path) ? 1 : 0) - (/(^|\/)index\.html?$/i.test(b.path) ? 1 : 0),
+      )
+      for (const f of ordered) applyBlock(f.path, f.content)
+      if (files.length > 0 && typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("siragpt:code-open-preview"))
+      }
+    },
+    [applyBlock],
+  )
+
+  // Run the deterministic builder for a context and apply its files. Returns the
+  // file count. Used as the reliable fallback when the engine yields no code.
+  const runDeterministicInto = React.useCallback(
+    async (ctx: AgentBuildContext): Promise<number> => {
+      const result = await intakeService.generate(promptFromContext(ctx))
+      const files = result.files || []
+      applyFilesToWorkspace(files)
+      return files.length
+    },
+    [applyFilesToWorkspace],
+  )
+
+  // OpenCode engine path. For a normal chat turn it sends the text; for a BUILD
+  // (opts.buildContext) it sends the agency-grade landing instruction and forces
+  // the engine to RETURN the code in the reply (no file tools), then applies it.
+  // If the engine yields no usable code (or errors), it falls back to the
+  // deterministic builder in the SAME turn — so a build always produces a result.
   const runEngine = React.useCallback(
-    async (text: string, sid: string) => {
+    async (text: string, sid: string, opts?: { buildContext?: AgentBuildContext }) => {
+      const ctx = opts?.buildContext
+      const isBuild = !!ctx
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
       const assistantId = `${id}-a`
       setTurns((prev) => [
         ...prev,
         { id, role: "user", content: text },
-        { id: `${assistantId}`, role: "assistant", content: "⚙️ Motor OpenCode trabajando…", streaming: true },
+        {
+          id: assistantId,
+          role: "assistant",
+          content: isBuild ? "⚙️ Motor OpenCode construyendo…" : "⚙️ Motor OpenCode trabajando…",
+          streaming: true,
+        },
       ])
       setInput("")
       setBusy(true)
       const controller = new AbortController()
       abortRef.current = controller
 
-      // Best-effort live stream: surface any readable progress text.
-      const streamP = opencodeService
-        .streamEvents((ev) => {
-          const d = ev?.data as any
-          const note = typeof d === "string" ? d : d?.text || d?.message || d?.part?.text
-          if (note && typeof note === "string") {
-            setTurns((prev) => prev.map((t) => (t.id === assistantId ? { ...t, content: note.slice(0, 6000) } : t)))
-          }
-        }, controller.signal)
-        .catch(() => {})
+      const finish = (content: string) =>
+        setTurns((prev) => prev.map((t) => (t.id === assistantId ? { ...t, content, streaming: false } : t)))
 
       try {
         let esid = engineSessionRef.current[sid]
@@ -665,35 +690,98 @@ export function AICodeChatPanel() {
           if (!esid) throw new Error("El motor no devolvió un id de sesión.")
           engineSessionRef.current[sid] = esid
         }
-        const result = await opencodeService.prompt(esid, text)
-        const reply = extractEngineText(result) || "_(el motor no devolvió texto)_"
-        setTurns((prev) => prev.map((t) => (t.id === assistantId ? { ...t, content: reply, streaming: false } : t)))
 
-        // Apply any code blocks the engine returned to the workspace + preview.
-        try {
-          const blocks = parseCodeBlocks(reply).filter((b) => b.path)
-          for (const b of blocks) if (b.path) applyBlock(b.path, b.content)
-          if (blocks.length > 0 && typeof window !== "undefined") {
-            window.dispatchEvent(new CustomEvent("siragpt:code-open-preview"))
-            toast.success(`Motor OpenCode — ${blocks.length} archivo(s) aplicados →`)
-          }
-        } catch {
-          /* parse/apply best-effort */
-        }
-      } catch (err: any) {
-        const msg = err?.message || "El motor OpenCode no respondió"
-        setTurns((prev) =>
-          prev.map((t) => (t.id === assistantId ? { ...t, content: `_${msg}_`, streaming: false } : t)),
-        )
-        toast.error(msg)
-      } finally {
+        const sendText = ctx
+          ? `${landingSystemPrompt(ctx)}\n\nIMPORTANTE: NO uses herramientas de edición de archivos ni el filesystem. DEVUELVE el index.html COMPLETO dentro de UN bloque que empiece EXACTAMENTE con \`\`\`html index.html en tu mensaje.`
+          : text
+
+        // OpenCode is event-driven: the POST /message returns an empty shell and
+        // the assistant reply arrives over the SSE event stream. We accumulate
+        // text parts (by part.id, dropping the echoed user prompt) and resolve
+        // when the session goes idle.
+        const byId = new Map<string, string>()
+        const order: string[] = []
+        let resolveIdle: () => void = () => {}
+        const idle = new Promise<void>((r) => {
+          resolveIdle = r
+        })
+        const assistantText = () =>
+          order
+            .map((pid) => byId.get(pid) || "")
+            .filter((txt) => txt && txt !== sendText)
+            .join("\n")
+            .trim()
+
+        const streamP = opencodeService
+          .streamEvents((ev) => {
+            const d = ev?.data as any
+            if (!d || d.sessionID !== esid) return
+            if (ev.type === "message.part.updated" && d.part?.type === "text" && typeof d.part.text === "string") {
+              if (!byId.has(d.part.id)) order.push(d.part.id)
+              byId.set(d.part.id, d.part.text)
+              const live = assistantText()
+              if (live) setTurns((prev) => prev.map((t) => (t.id === assistantId ? { ...t, content: live.slice(0, 12000) } : t)))
+            } else if (ev.type === "session.idle" || ev.type === "session.error") {
+              resolveIdle()
+            }
+          }, controller.signal)
+          .catch(() => {})
+
+        // Kick off the turn (fire-and-forget; content comes via events) and wait
+        // for idle, with a safety timeout so we never hang the UI.
+        opencodeService.prompt(esid, sendText).catch(() => {})
+        await Promise.race([idle, new Promise<void>((r) => setTimeout(r, 120_000))])
         controller.abort() // close the events stream
+        await streamP.catch(() => {})
+
+        const reply = assistantText()
+        const blocks = parseCodeBlocks(reply).filter((b) => b.path)
+
+        if (blocks.length > 0) {
+          applyFilesToWorkspace(blocks.map((b) => ({ path: b.path as string, content: b.content })))
+          finish(reply || `✅ Motor OpenCode — ${blocks.length} archivo(s) aplicados →`)
+          toast.success(`Motor OpenCode — ${blocks.length} archivo(s) →`)
+          return
+        }
+
+        if (ctx) {
+          // Engine produced no applicable code → reliable deterministic fallback.
+          const n = await runDeterministicInto(ctx)
+          finish(
+            reply
+              ? `${reply}\n\n_(Apliqué el builder determinista: ${n} archivos.)_`
+              : `✅ App generada (builder determinista, ${n} archivos).`,
+          )
+          toast.success("App generada (builder determinista) →")
+          return
+        }
+
+        finish(reply || "_(el motor no devolvió texto)_")
+      } catch (err: any) {
+        if (ctx) {
+          // Engine unreachable/error during a build → still deliver via the builder.
+          try {
+            const n = await runDeterministicInto(ctx)
+            finish(`✅ App generada (builder determinista, ${n} archivos). El motor no respondió.`)
+            toast.success("App generada (builder determinista) →")
+            return
+          } catch {
+            /* fall through to error */
+          }
+        }
+        finish(`_${err?.message || "El motor OpenCode no respondió"}_`)
+        toast.error(err?.message || "El motor OpenCode no respondió")
+      } finally {
+        try {
+          controller.abort()
+        } catch {
+          /* already closed */
+        }
         abortRef.current = null
         setBusy(false)
-        await streamP.catch(() => {})
       }
     },
-    [applyBlock, setTurns],
+    [applyFilesToWorkspace, runDeterministicInto, setTurns],
   )
 
   const dispatch = React.useCallback(
@@ -709,14 +797,6 @@ export function AICodeChatPanel() {
         return
       }
       const sid = sessionId
-
-      // Opt-in OpenCode engine: route the prompt through the real agent engine
-      // (⚡ Construir still uses the deterministic builder, even with the engine on).
-      if (engineMode && engineAvailable && !opts?.forceDeterministic) {
-        await runEngine(text, sid)
-        return
-      }
-
       const agent = activeCodeChatSession?.agent ?? defaultAgentState()
       const action = nextAgentAction(agent, text, {
         mode: composerMode,
@@ -744,10 +824,11 @@ export function AICodeChatPanel() {
         case "generate": {
           patchAgentState(sid, (s) => ({ ...s, phase: "generating", context: action.context }))
           // Reliable build: the deterministic builder (/api/builder/generate) is a
-          // short, non-streaming request that always works — including behind
-          // Docker Desktop's port proxy, where the LLM SSE stream can drop
-          // mid-flight ("Failed to fetch"). Feed it the intake context so brand/
-          // product/style flow through.
+          // short, non-streaming request that always produces a runnable app in
+          // the preview. The OpenCode engine is an agent that edits files in its
+          // OWN /workspace via tools (it doesn't return code in text), so surfacing
+          // its output here would need a workspace file read-back — until then the
+          // deterministic builder is the dependable path. Fed with intake context.
           const ctxPrompt = promptFromContext(action.context)
           const genPrompt = action.context.productType || action.context.brand ? ctxPrompt : text
           await buildApp(genPrompt)
@@ -755,7 +836,11 @@ export function AICodeChatPanel() {
           return
         }
         case "patch": {
-          await sendPrompt(action.instruction, { autoApply: true })
+          if (engineMode && engineAvailable) {
+            await runEngine(action.instruction, sid)
+          } else {
+            await sendPrompt(action.instruction, { autoApply: true })
+          }
           return
         }
         case "debug": {
@@ -771,7 +856,11 @@ export function AICodeChatPanel() {
           return
         }
         default:
-          await sendPrompt(text, { autoApply: composerMode === "app" })
+          if (engineMode && engineAvailable) {
+            await runEngine(text, sid)
+          } else {
+            await sendPrompt(text, { autoApply: composerMode === "app" })
+          }
       }
     },
     [
