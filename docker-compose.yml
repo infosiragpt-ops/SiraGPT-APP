@@ -102,6 +102,10 @@ services:
       SMTP_PASS: "${SMTP_PASS:-}"
       MAX_FILE_SIZE: "${MAX_FILE_SIZE:-50}"
       UPLOAD_DIR: "/app/uploads"
+      # OpenCode engine (sidecar) — empty by default; set to http://opencode:4096
+      # and run `docker compose --profile opencode up` to enable.
+      OPENCODE_SERVER_URL: "${OPENCODE_SERVER_URL:-}"
+      OPENCODE_SERVER_PASSWORD: "${OPENCODE_SERVER_PASSWORD:-}"
     volumes:
       - uploads_data:/app/uploads
     depends_on:
@@ -153,6 +157,35 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # ── OpenCode engine (Bun sidecar) — opt-in via profile ─────
+  # Runs the vendored agent (vendor/opencode) as an HTTP server. Enable with:
+  #   docker compose --profile opencode up
+  # and set OPENCODE_SERVER_URL=http://opencode:4096 in your .env so the
+  # backend connects to it.
+  opencode:
+    image: oven/bun:1
+    profiles: ["opencode"]
+    restart: unless-stopped
+    working_dir: /engine
+    command: sh -c "bun install && bun run ./src/index.ts serve --hostname 0.0.0.0 --port 4096"
+    environment:
+      OPENCODE_SERVER_PASSWORD: "${OPENCODE_SERVER_PASSWORD:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+    volumes:
+      - ./vendor/opencode:/engine
+      - opencode_modules:/engine/node_modules
+    expose:
+      - "4096"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   pgdata:
   uploads_data:
+  opencode_modules:

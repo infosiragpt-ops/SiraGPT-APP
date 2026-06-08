@@ -46,6 +46,19 @@ bun run ./src/index.ts serve --port 4096 --hostname 127.0.0.1
 # optional auth: OPENCODE_SERVER_PASSWORD=... bun run ./src/index.ts serve ...
 ```
 
+### Or as a Docker sidecar (recommended for the stack)
+
+`docker-compose.yml` ships an opt-in `opencode` service (Bun image) behind a
+profile:
+
+```bash
+# in .env:  OPENCODE_SERVER_URL=http://opencode:4096
+docker compose --profile opencode up
+```
+
+The siraGPT backend then reaches it at `http://opencode:4096` via
+`OPENCODE_SERVER_URL` (already wired in the backend service env).
+
 `test/` (heavy image fixtures) was excluded when vendoring; restore from
 upstream if you need to run OpenCode's own test suite.
 
