@@ -42,6 +42,16 @@ const nextConfig = {
   // Enable React strict mode in development to catch double-render bugs
   reactStrictMode: true,
 
+  // Cap webpack's peak memory during `next build`. The deploy builder is an
+  // 8 GiB e2-standard-2, and this app's compile + static-generation phase can
+  // push RSS past 8 GiB and get OOM-killed — surfacing as intermittent publish
+  // failures with no error in the build log (the build just dies right as
+  // `next build` starts). This trades a little build speed for a much lower
+  // memory ceiling. Paired with a lower --max-old-space-size in the build script.
+  experimental: {
+    webpackMemoryOptimizations: true,
+  },
+
   // Prevent Next.js from issuing a 308 redirect when the URL has a trailing
   // slash. Without this, /sira-promo/ → 308 → /sira-promo happens BEFORE
   // beforeFiles rewrites run, which causes the Replit cloud proxy to 502.

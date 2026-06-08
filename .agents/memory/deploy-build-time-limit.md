@@ -1,32 +1,53 @@
 ---
-name: Deploy build phase ~15 min time limit
-description: gce deploy build step is killed at ~15 min; keep installs fast so next build fits
+name: Deploy build failure modes (OOM + install timeout)
+description: gce deploy build can fail two ways — intermittent next-build OOM (primary) and install-phase timeout; how to tell them apart and the levers for each
 ---
 
-The Reserved VM (`gce`, e2-standard-2: 2 vCPU / 8 GiB) deploy **build phase** has a
-hard time limit around ~15 minutes. It is measured from the "Starting Build" log
-line, AFTER the separate security-scan and packages phases.
+The Reserved VM (`gce`, e2-standard-2: 2 vCPU / 8 GiB) deploy **build phase** has
+two distinct failure modes. Both show `status: failed`, `suspendedReason`
+undefined, and NO error keyword / firewall 403 in the log. Tell them apart by
+WHERE the log ends.
 
-**Symptom of hitting it:** build status `failed`, `suspendedReason` undefined, no
-error keyword and no firewall 403 in the logs — the build log just ENDS cleanly
-mid-step (e.g. right after the last `npm ci` "found 0 vulnerabilities") and
-`next build` never prints a line. Compare durations via `listDeploymentBuilds`:
-a failed run noticeably longer than recent successful runs (~12–14 min) = timeout.
+## Mode 1 — intermittent OOM during `next build` (PRIMARY / confirmed)
 
-**Why it bit us:** two cold `npm ci` installs (root ~8 min + backend ~7 min) ran
-SEQUENTIALLY and consumed the whole build budget before `next build` could start.
-Install speed varies with npm-registry/network on the builder, so it's right at the
-margin — a slow-install day tips it over.
+**Signature:** log dies right as `next build` STARTS — install finished cleanly,
+then `next build` never prints "Creating an optimized production build" or any
+"Compiled" line. Same code succeeds then fails with NO commits in between
+(environmental variance), and timings do NOT match any fixed limit.
 
-**Fix / how to apply:** keep the build phase well under ~15 min.
-- Run independent installs in PARALLEL (see `scripts/replit-deploy-install.cjs`,
-  wired into `.replit` `[deployment].build`). Parallel `npm ci` into different dirs
-  is safe (cacache is concurrency-safe); install is I/O/network-bound so it overlaps
-  well even on 2 vCPU.
-- Pass `--no-audit --no-fund --prefer-offline` to trim install time.
-- Keep the `rm -rf node_modules backend/node_modules .next` clean (needed for the
-  stale `@next/swc` ENOTEMPTY rename bug) and the `replit-npm-ci.cjs` retry wrapper.
+**Why:** an 8 GiB builder with the V8 heap cap set too high (was 6144 MB) leaves
+too little non-heap headroom for SWC/webpack native allocs + static-generation
+worker processes + OS, so peak RSS intermittently crosses 8 GiB → kernel SIGKILL
+with no Node error output. Measured: this app's build footprint peaks ~4.2 GiB
+during compile+static-gen, so 4096 is comfortably enough and leaves ~4 GiB
+headroom.
 
-**Editing `.replit`:** direct writes (even creating a `.replit.edit` sibling) are
-blocked. Use the `verifyAndReplaceDotReplit({ tempFilePath })` sandbox callback with
-a temp file whose name does NOT start with `.replit` (e.g. `.local/dotreplit-edit.toml`).
+**Fix / how to apply:**
+- Keep `--max-old-space-size=4096` (NOT 6144) in the package.json `build` script.
+- Keep `experimental.webpackMemoryOptimizations: true` in `next.config.mjs`.
+- PIN `NODE_OPTIONS=--max-old-space-size=4096` explicitly in `.replit`
+  `[deployment].build` right before `npm run build`, so an externally-set
+  `NODE_OPTIONS` can't bypass the package.json default (`${NODE_OPTIONS:-...}`).
+- If it ever recurs after this: add a static-generation worker concurrency cap as
+  a tertiary lever (not needed as of this writing).
+
+## Mode 2 — install-phase timeout (~15 min, secondary)
+
+**Signature:** log ends mid-INSTALL (e.g. right after an `npm ci` "found 0
+vulnerabilities"); `next build` line never appears AND total duration is
+noticeably longer than recent successes (~12–14 min). Two cold sequential
+`npm ci` (root ~8 min + backend ~7 min) used to consume the whole budget.
+
+**Fix / how to apply:** run the two installs in PARALLEL via
+`scripts/replit-deploy-install.cjs` (wired into `.replit` `[deployment].build`).
+Parallel `npm ci` into different dirs is safe (cacache is concurrency-safe);
+install is I/O/network-bound so it overlaps well even on 2 vCPU. Keep
+`--no-audit --no-fund`, the `rm -rf node_modules backend/node_modules .next`
+clean (for the stale `@next/swc` ENOTEMPTY rename bug), and the
+`replit-npm-ci.cjs` retry wrapper.
+
+## Editing `.replit`
+
+Direct writes (even a `.replit.edit` sibling) are policy-blocked; use the
+`verifyAndReplaceDotReplit({ tempFilePath })` callback with a temp file whose
+name does NOT start with `.replit` (e.g. `.local/dotreplit-edit.toml`).
