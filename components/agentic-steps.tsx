@@ -105,10 +105,13 @@ function projectTimelineSteps(steps: AgentTaskState["steps"]): TimelineStepProje
   for (const step of source) {
     const tools = Array.from(new Set((step.toolCalls || []).map((call) => toolToProfessionalLabel(call.tool)))).slice(0, 2)
     const label = professionalStepLabel(step)
+    // Prefer the model's own reasoning narration (Claude-style transparency)
+    // as the secondary line; fall back to the tool names when absent.
+    const reasoning = typeof step.reasoning === "string" ? step.reasoning.trim() : ""
     const item: TimelineStepProjection = {
       id: step.id,
       label,
-      detail: tools.length ? tools.join(" · ") : undefined,
+      detail: reasoning || (tools.length ? tools.join(" · ") : undefined),
       status: step.status === "running" ? "running" : step.status === "error" ? "error" : "done",
       phase: phaseFromStep(step, label),
       count: 1,
@@ -465,35 +468,71 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview }: Pr
   }
 
   if (isLiveActivity) {
-    // Live state — simplified per design directive: render ONLY the
-    // 3-bar pensando SVG inline with the rest of the chat. No status
-    // pill, no stage label, no step counters, no inline progress bar.
-    // Past steps and intermediate stage labels are intentionally
-    // suppressed (user wanted the chat surface to stay clean —
-    // identical visual language to a regular streaming text answer).
-    // The Stop affordance at the composer dock is the canonical way
-    // to cancel; we keep a tiny secondary "Cancelar" button only when
-    // the task carries a `taskId` (server-side cancel path).
+    // Live state — stream the model's reasoning as it happens (Claude-style
+    // transparency). We render the trail of reasoning steps that already
+    // carry a narration, then the 3-bar "pensando" indicator for the step in
+    // flight. Steps without any reasoning text fall back to the minimal
+    // placeholder so simple/plain turns still read like a clean streaming
+    // answer. The Stop affordance at the composer dock is the canonical
+    // cancel; the tiny secondary button only shows for server-side tasks.
+    const liveReasoning = timelineSteps.filter((s) => s.detail && s.detail.trim()).slice(-5)
+    if (liveReasoning.length === 0) {
+      return (
+        <div
+          role="status"
+          aria-live="polite"
+          aria-label="Generando respuesta"
+          className={cn("my-1 flex items-center gap-2", className)}
+        >
+          <ThinkingPlaceholder compact />
+          {canCancel && (
+            <button
+              type="button"
+              onClick={cancelTask}
+              disabled={cancelling}
+              className="ml-1 inline-flex h-6 shrink-0 items-center gap-1 rounded-full border border-border/55 px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground disabled:opacity-60"
+              aria-label="Cancelar tarea"
+            >
+              {cancelling ? <ThinkingIndicator size="xs" /> : <Ban className="h-3 w-3" />}
+              Cancelar
+            </button>
+          )}
+        </div>
+      )
+    }
     return (
       <div
         role="status"
         aria-live="polite"
-        aria-label="Generando respuesta"
-        className={cn("my-1 flex items-center gap-2", className)}
+        aria-label="Razonando"
+        className={cn("my-2 w-full max-w-2xl", className)}
       >
-        <ThinkingPlaceholder compact />
-        {canCancel && (
-          <button
-            type="button"
-            onClick={cancelTask}
-            disabled={cancelling}
-            className="ml-1 inline-flex h-6 shrink-0 items-center gap-1 rounded-full border border-border/55 px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground disabled:opacity-60"
-            aria-label="Cancelar tarea"
-          >
-            {cancelling ? <ThinkingIndicator size="xs" /> : <Ban className="h-3 w-3" />}
-            Cancelar
-          </button>
-        )}
+        <div className="border-l border-border/60 pl-3">
+          {liveReasoning.map((step) => (
+            <TimelineRow
+              key={step.id}
+              icon={<AgentStatusIcon kind={step.status === "running" ? step.phase : "done"} className="h-4 w-4" />}
+              label={step.label}
+              detail={step.detail}
+              status={step.status}
+            />
+          ))}
+          <div className="mt-1 flex items-center gap-2">
+            <ThinkingPlaceholder compact />
+            {canCancel && (
+              <button
+                type="button"
+                onClick={cancelTask}
+                disabled={cancelling}
+                className="ml-1 inline-flex h-6 shrink-0 items-center gap-1 rounded-full border border-border/55 px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground disabled:opacity-60"
+                aria-label="Cancelar tarea"
+              >
+                {cancelling ? <ThinkingIndicator size="xs" /> : <Ban className="h-3 w-3" />}
+                Cancelar
+              </button>
+            )}
+          </div>
+        </div>
       </div>
     )
   }

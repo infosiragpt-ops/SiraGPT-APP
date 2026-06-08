@@ -1587,7 +1587,11 @@ router.post(
           const firstAction = step.actions?.[0];
           const label = thought || firstAction?.tool || 'Pensando…';
           const icon = inferIconFor(firstAction?.tool);
-          emit({ type: 'step_start', id: currentStepId, label: shortLabel(label), icon });
+          // Surface the FULL reasoning narration (not just the truncated
+          // label) so the chat shows its thinking like Claude. The frontend
+          // renders it as the step's detail line; `label` stays a short header.
+          const reasoning = thought ? thought.replace(/\s+/g, ' ').trim().slice(0, 280) : undefined;
+          emit({ type: 'step_start', id: currentStepId, label: shortLabel(label), icon, ...(reasoning ? { reasoning } : {}) });
         },
         onStepDone: (step) => {
           const firstAction = step.actions?.[0];
@@ -2931,6 +2935,7 @@ function reduceAgentState(state, evt) {
           id: evt.id,
           label: evt.label,
           icon: evt.icon,
+          ...(evt.reasoning ? { reasoning: evt.reasoning } : {}),
           status: 'running',
           toolCalls: [],
         }],
@@ -3018,6 +3023,7 @@ function toSerializableAgentState(state = {}) {
       id: step.id,
       label: step.label,
       icon: step.icon,
+      ...(step.reasoning ? { reasoning: step.reasoning } : {}),
       status: step.status,
       toolCalls: (step.toolCalls || []).map((call) => ({
         tool: call.tool,

@@ -131,6 +131,25 @@ function safeArgs(raw) {
   catch { return {}; }
 }
 
+// Turn the model's per-step "thought" into a clean, user-facing reasoning
+// line for the chat timeline (Claude-style transparency). Strips code fences,
+// tool-state/JSON blobs and tool-call syntax, collapses whitespace, and caps
+// the length so the narration stays a tidy 1-2 sentences.
+const REASONING_MAX_CHARS = Number(process.env.AGENTIC_REASONING_MAX_CHARS) || 280;
+function sanitizeReasoning(raw) {
+  let s = String(raw == null ? '' : raw);
+  if (!s.trim()) return '';
+  s = s.replace(/```[\s\S]*?```/g, ' ');           // drop fenced blocks
+  s = s.replace(/\{[\s\S]*\}/g, ' ');               // drop JSON-ish blobs
+  s = s.replace(/<\/?[^>]+>/g, ' ');                // drop stray tags
+  s = s.replace(/\s+/g, ' ').trim();
+  if (!s) return '';
+  // Skip lines that are still just an identifier / tool name.
+  if (/^[a-z][a-z0-9]*(?:[_-][a-z0-9]+)+$/i.test(s)) return '';
+  if (s.length > REASONING_MAX_CHARS) s = `${s.slice(0, REASONING_MAX_CHARS - 1).trim()}…`;
+  return s;
+}
+
 function textFromMessageContent(content) {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
@@ -580,14 +599,21 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
         const last = state.steps[state.steps.length - 1];
         if (last && last.status === 'running') last.status = 'done';
 
+        // The model's natural-language reasoning for this step. Surfacing it
+        // (instead of only a terse "Pensando" / tool label) is what makes the
+        // chat show its thinking like Claude. Sanitised + capped so JSON /
+        // tool-state never leaks into the visible narration.
+        const reasoning = sanitizeReasoning(stepRec?.thought);
+
         // Project each tool call as its own visible step so the timeline
         // reads "buscando X → leyendo fuente N → componiendo respuesta".
         const actions = Array.isArray(stepRec?.actions) ? stepRec.actions : [];
         if (actions.length === 0) {
           state.steps.push({
             id: `step-${stepCounter}-think`,
-            label: 'Pensando',
+            label: 'Razonando',
             icon: 'thought',
+            ...(reasoning ? { reasoning } : {}),
             status: 'running',
             toolCalls: [],
           });
@@ -599,11 +625,14 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
               id: `step-${stepCounter}-${idx}`,
               label,
               icon: 'thought',
+              // Attach the reasoning to the first projected step of this turn
+              // so the "why" sits next to the "what".
+              ...(idx === 0 && reasoning ? { reasoning } : {}),
               status: 'running',
               toolCalls: [{ tool: a?.tool || 'unknown' }],
             });
             // Lightweight stage event for any consumer that listens.
-            writeSse(res, { type: 'stage', label, tool: a?.tool || 'unknown' });
+            writeSse(res, { type: 'stage', label, tool: a?.tool || 'unknown', ...(idx === 0 && reasoning ? { reasoning } : {}) });
           });
         }
         await writeSse(res, { replace: true, content: serializeSentinel(state) });
