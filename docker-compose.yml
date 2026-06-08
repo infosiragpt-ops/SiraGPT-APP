@@ -166,8 +166,11 @@ services:
     image: oven/bun:1
     profiles: ["opencode"]
     restart: unless-stopped
-    working_dir: /engine
-    command: sh -c "bun install && bun run ./src/index.ts serve --hostname 0.0.0.0 --port 4096"
+    working_dir: /workspace
+    # Run the published, self-contained CLI (the vendored source in
+    # vendor/opencode is kept for reference/modification, but its Bun
+    # workspace+catalog deps don't `bun install` standalone).
+    command: sh -c "bunx opencode-ai@latest serve --hostname 0.0.0.0 --port 4096 --print-logs"
     environment:
       OPENCODE_SERVER_PASSWORD: "${OPENCODE_SERVER_PASSWORD:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
@@ -175,8 +178,7 @@ services:
       OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
       GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
     volumes:
-      - ./vendor/opencode:/engine
-      - opencode_modules:/engine/node_modules
+      - opencode_workspace:/workspace
     expose:
       - "4096"
     logging:
@@ -188,4 +190,4 @@ services:
 volumes:
   pgdata:
   uploads_data:
-  opencode_modules:
+  opencode_workspace:
