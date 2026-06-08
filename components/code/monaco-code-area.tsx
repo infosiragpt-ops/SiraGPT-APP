@@ -21,7 +21,6 @@
 
 import * as React from "react"
 import Editor, { type OnChange, type OnMount } from "@monaco-editor/react"
-import { FileCode2 } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
@@ -126,11 +125,6 @@ export default function MonacoCodeArea({ value, language, onChange, path }: Prop
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-7 shrink-0 items-center gap-2 border-b border-border/40 bg-muted/20 px-3 text-[11px] uppercase tracking-wide text-muted-foreground">
-        <FileCode2 className="h-3 w-3" />
-        <span className="truncate">{path}</span>
-        <span className="ml-auto opacity-70">{language}</span>
-      </div>
       <div className={cn("min-h-0 flex-1")}>
         <Editor
           height="100%"
@@ -149,9 +143,12 @@ export default function MonacoCodeArea({ value, language, onChange, path }: Prop
               "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
             renderLineHighlight: "line",
             smoothScrolling: true,
-            // Trim the gutter so the editor visually fits the chat
-            // surface; Monaco's defaults are sized for a full IDE.
-            lineNumbersMinChars: 3,
+            // Minimalist surface: no line-number gutter, no folding column.
+            lineNumbers: "off",
+            glyphMargin: false,
+            folding: false,
+            lineDecorationsWidth: 8,
+            lineNumbersMinChars: 0,
             scrollbar: {
               vertical: "auto",
               horizontal: "auto",

@@ -1287,6 +1287,16 @@ model Project {
   description  String? @db.Text
   instructions String? @db.Text // Optional custom instructions; may be edited any time.
 
+  // Project kind — chosen at creation. "general" is the default
+  // task workspace; "webapp" projects also surface in the Library →
+  // "Apps web" gallery so the user can find their web apps there.
+  type String @default("general")
+
+  // Where the project's code is hosted. "sira-cloud" is the built-in
+  // SiraGPT cloud workspace; "github" is reserved for the upcoming
+  // GitHub-backed flow (OAuth + repo push) — not yet wired.
+  hostingProvider String @default("sira-cloud")
+
   // Optional star / favourite — powers the "starred first" sort the
   // UI offers alongside recent activity.
   isStarred Boolean @default(false)

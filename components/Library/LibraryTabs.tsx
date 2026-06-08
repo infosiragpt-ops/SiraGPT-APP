@@ -15,6 +15,7 @@ import {
     Sparkles,
 } from 'lucide-react';
 import { SidebarTrigger } from '@/components/ui/sidebar';
+import { projectsService, type Project } from '@/lib/projects-service';
 
 type MediaType = 'image' | 'video' | 'audio' | 'music' | 'webapp' | 'mobileapp';
 
@@ -84,6 +85,9 @@ const MediaLibrary: React.FC = () => {
     const [artifactUrl, setArtifactUrl] = useState<string | null>(null);
     const [artifactLoading, setArtifactLoading] = useState(false);
     const [artifactError, setArtifactError] = useState<string | null>(null);
+    // Web-app projects (created via "Proyecto en la nube" → tipo "App web").
+    // Surfaced alongside chat-generated artifacts in the "Apps web" tab.
+    const [webappProjects, setWebappProjects] = useState<Project[]>([]);
     const router = useRouter();
 
     const fetchMediaItems = async (page: number, typeFilter: FilterType) => {
@@ -108,6 +112,37 @@ const MediaLibrary: React.FC = () => {
     useEffect(() => {
         fetchMediaItems(currentPage, filterType);
     }, [currentPage, filterType]);
+
+    // Pull the user's "App web" projects for the webapp/all tabs. Failures
+    // are non-fatal — the artifact grid still renders without them.
+    useEffect(() => {
+        if (filterType !== 'webapp' && filterType !== 'all') {
+            setWebappProjects([]);
+            return;
+        }
+        let cancelled = false;
+        projectsService
+            .list({ type: 'webapp', sort: 'activity' })
+            .then((projects) => {
+                if (!cancelled) setWebappProjects(projects);
+            })
+            .catch(() => {
+                if (!cancelled) setWebappProjects([]);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [filterType]);
+
+    // Apply the same client-side search to project cards.
+    const visibleProjects = useMemo(() => {
+        if (currentPage > 1) return [] as Project[]; // projects only on page 1
+        const q = searchQuery.trim().toLowerCase();
+        if (!q) return webappProjects;
+        return webappProjects.filter((p) =>
+            (p.name + ' ' + (p.description || '')).toLowerCase().includes(q)
+        );
+    }, [webappProjects, searchQuery, currentPage]);
 
     // Load the selected artifact's bytes (with auth) into an object URL so the
     // modal can play/preview it. Revokes the URL on close/change to avoid leaks.
@@ -265,6 +300,22 @@ const MediaLibrary: React.FC = () => {
             {error && <p className="text-red-500 text-center py-10">Error: {error}</p>}
 
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+                {visibleProjects.map((project) => (
+                    <div
+                        key={`project-${project.id}`}
+                        className="library-card group cursor-pointer aspect-square"
+                        onClick={() => router.push(`/projects/${project.id}`)}
+                        title={`Abrir proyecto: ${project.name}`}
+                    >
+                        <div className="flex flex-col items-center justify-center w-full h-full p-4 text-center gap-3">
+                            <div className="library-card-badge"><Globe className="w-10 h-10" /></div>
+                            <p className="text-sm font-semibold text-[hsl(var(--foreground))] truncate w-full" title={project.name}>
+                                {project.name}
+                            </p>
+                            <span className="text-xs text-[hsl(var(--muted-foreground))]">Proyecto · App web</span>
+                        </div>
+                    </div>
+                ))}
                 {visibleItems.length > 0 ? (
                     visibleItems.map((item) => (
                         <div
@@ -327,7 +378,7 @@ const MediaLibrary: React.FC = () => {
                         </div>
                     ))
                 ) : (
-                    !loading && (
+                    visibleProjects.length === 0 && !loading && (
                         <div className="col-span-full library-empty py-12 px-6 flex flex-col items-center gap-4 text-center">
                             <div className="library-empty-badge">
                                 <Sparkles className="w-7 h-7" />

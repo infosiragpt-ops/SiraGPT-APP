@@ -92,12 +92,14 @@ router.get(
   [
     query('search').optional().isString(),
     query('sort').optional().isIn(['activity', 'edited', 'created']),
+    query('type').optional().isIn(['general', 'webapp']),
   ],
   async (req, res) => {
     try {
       if (validationFail(req, res)) return;
       const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
       const sort = req.query.sort || 'activity';
+      const type = typeof req.query.type === 'string' ? req.query.type : '';
 
       const orderBy =
         sort === 'created' ? { createdAt: 'desc' } :
@@ -105,6 +107,7 @@ router.get(
                              { updatedAt: 'desc' }; // 'activity' — most-recently-touched
 
       const where = { userId: req.user.id };
+      if (type) where.type = type;
       if (search) {
         where.OR = [
           { name: { contains: search, mode: 'insensitive' } },
@@ -117,6 +120,7 @@ router.get(
         orderBy,
         select: {
           id: true, name: true, description: true, instructions: true,
+          type: true, hostingProvider: true,
           isStarred: true, shareId: true, createdAt: true, updatedAt: true,
           _count: { select: { files: true, chats: true } },
         },
@@ -145,11 +149,23 @@ router.post(
     body('name').trim().isLength({ min: 1, max: 120 }),
     body('description').optional().isString().isLength({ max: 4000 }),
     body('instructions').optional().isString().isLength({ max: 16000 }),
+    body('type').optional().isIn(['general', 'webapp']),
+    body('hostingProvider').optional().isIn(['sira-cloud', 'github']),
   ],
   async (req, res) => {
     try {
       if (validationFail(req, res)) return;
-      const { name, description, instructions } = req.body;
+      const { name, description, instructions, type, hostingProvider } = req.body;
+
+      // GitHub-backed hosting isn't wired yet (no OAuth / repo push). Reject
+      // it explicitly so the client can't create an orphaned "github" project
+      // that has nowhere to live.
+      if (hostingProvider === 'github') {
+        return res.status(400).json({
+          error: 'GitHub hosting is not available yet. Connect a GitHub account once the integration ships.',
+          code: 'GITHUB_NOT_CONFIGURED',
+        });
+      }
 
       const project = await prisma.project.create({
         data: {
@@ -157,6 +173,8 @@ router.post(
           name: name.trim(),
           description: description?.trim() || null,
           instructions: instructions?.trim() || null,
+          type: type === 'webapp' ? 'webapp' : 'general',
+          hostingProvider: 'sira-cloud',
         },
       });
       res.status(201).json({ project });

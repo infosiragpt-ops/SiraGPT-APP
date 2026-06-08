@@ -220,12 +220,12 @@ function buildInitialStateFor(folderId: string | null): PersistedState {
   const persisted = readPersisted(folderId)
   if (persisted && Object.keys(persisted.files).length > 0) return persisted
 
-  const starter = defaultStarterFiles()
-  const files: CodeFiles = {}
-  for (const f of starter) files[f.path] = f
-  const openTabs = starter.slice(0, 2).map((f) => f.path)
-  const activePath = openTabs[0] ?? null
-  return { files, openTabs, activePath }
+  // A brand-new workspace opens CLEAN — no example code, no sample
+  // folders. "Proyecto nuevo desde cero" should mean a blank canvas you
+  // start working in, not a demo app you have to delete first. The
+  // sample project is still one click away via "Restaurar ejemplo"
+  // (resetWorkspace) for anyone who wants a reference.
+  return { files: {}, openTabs: [], activePath: null }
 }
 
 function readStoredActiveFolder(): ActiveFolder | null {

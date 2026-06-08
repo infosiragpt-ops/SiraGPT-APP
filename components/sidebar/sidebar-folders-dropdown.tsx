@@ -6,7 +6,7 @@
 
 import * as React from "react"
 import { usePathname, useRouter } from "next/navigation"
-import { Cloud, FolderOpen, FolderPlus, Loader2, RefreshCw, SlidersHorizontal } from "lucide-react"
+import { Cloud, FolderOpen, FolderPlus, Github, Globe, Loader2, RefreshCw, SlidersHorizontal } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -70,7 +70,13 @@ import {
 } from "@/lib/codex-conversation-prefs"
 import { canOpenLocalDirectory, importLocalFolderAsWorkspace } from "@/lib/local-folder-workspace"
 import { apiClient } from "@/lib/api"
-import { projectsService, type Project, type ProjectChatSummary } from "@/lib/projects-service"
+import {
+  projectsService,
+  type Project,
+  type ProjectChatSummary,
+  type ProjectHostingProvider,
+  type ProjectType,
+} from "@/lib/projects-service"
 import { normalizeChatInput } from "@/lib/chat-input-normalize"
 import { cn } from "@/lib/utils"
 
@@ -97,6 +103,10 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
   const [cloudDialogOpen, setCloudDialogOpen] = React.useState(false)
   const [cloudName, setCloudName] = React.useState("")
   const [creatingCloud, setCreatingCloud] = React.useState(false)
+  // New-project choices: kind (general vs web app) + where it's hosted.
+  // GitHub hosting is a placeholder until the OAuth/push flow ships.
+  const [cloudType, setCloudType] = React.useState<ProjectType>("general")
+  const [cloudHosting, setCloudHosting] = React.useState<ProjectHostingProvider>("sira-cloud")
 
   const [expandedIds, setExpandedIds] = React.useState<Set<string>>(new Set())
   const [chatsByFolder, setChatsByFolder] = React.useState<
@@ -523,6 +533,8 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
   const handleNewCloudProject = React.useCallback(() => {
     setCloudName("")
     setCreatingCloud(false)
+    setCloudType("general")
+    setCloudHosting("sira-cloud")
     setCloudDialogOpen(true)
   }, [])
 
@@ -539,14 +551,21 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
       folders.some((f) => f.name.trim().toLowerCase() === cloudNameClean.toLowerCase()),
     [cloudNameClean, folders],
   )
-  const canSubmitCloud = cloudNameClean.length > 0 && !creatingCloud
+  // GitHub hosting isn't available yet — selecting it disables submit and
+  // shows a "coming soon" note instead of creating an orphaned project.
+  const githubSelected = cloudHosting === "github"
+  const canSubmitCloud = cloudNameClean.length > 0 && !creatingCloud && !githubSelected
 
   const submitCloudProject = React.useCallback(async () => {
     const clean = normalizeChatInput(cloudName).value.trim()
-    if (!clean || creatingCloud) return
+    if (!clean || creatingCloud || cloudHosting === "github") return
     setCreatingCloud(true)
     try {
-      const project = await projectsService.create({ name: clean })
+      const project = await projectsService.create({
+        name: clean,
+        type: cloudType,
+        hostingProvider: "sira-cloud",
+      })
       await refresh()
       handleOpenWorkspace({
         id: codexIdForProject(project.id),
@@ -554,13 +573,17 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
         kind: "project",
         chatListId: project.id,
       })
-      toast.success(`Proyecto "${project.name}" creado`)
+      toast.success(
+        cloudType === "webapp"
+          ? `App web "${project.name}" creada · disponible en Biblioteca → Apps web`
+          : `Proyecto "${project.name}" creado`,
+      )
       setCloudDialogOpen(false)
     } catch (err: any) {
       toast.error(err?.message || "No se pudo crear el proyecto")
       setCreatingCloud(false)
     }
-  }, [cloudName, creatingCloud, handleOpenWorkspace, refresh])
+  }, [cloudName, cloudType, cloudHosting, creatingCloud, handleOpenWorkspace, refresh])
 
   // House pattern (create-project-dialog): clear state whenever the dialog
   // closes so a second open never inherits a stale name or a frozen spinner.
@@ -568,6 +591,8 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
     if (!cloudDialogOpen) {
       setCloudName("")
       setCreatingCloud(false)
+      setCloudType("general")
+      setCloudHosting("sira-cloud")
     }
   }, [cloudDialogOpen])
 
@@ -815,6 +840,89 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
                       ? "Pulsa ⏎ para crear · Esc para cancelar"
                       : "Escribe un nombre · Esc para cancelar"}
               </p>
+            </div>
+
+            {/* Project kind — "App web" projects also surface in Library → Apps web. */}
+            <div className="space-y-1.5">
+              <Label className="text-sm">Tipo de proyecto</Label>
+              <div className="grid grid-cols-2 gap-2">
+                {(
+                  [
+                    { value: "general" as const, label: "Proyecto general", Icon: FolderOpen },
+                    { value: "webapp" as const, label: "App web", Icon: Globe },
+                  ]
+                ).map(({ value, label, Icon }) => {
+                  const active = cloudType === value
+                  return (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setCloudType(value)}
+                      disabled={creatingCloud}
+                      aria-pressed={active}
+                      className={cn(
+                        "flex items-center gap-2.5 rounded-lg border px-3 py-2.5 text-left text-sm transition-colors disabled:opacity-60",
+                        active
+                          ? "border-sky-500/60 bg-sky-500/10 text-foreground ring-1 ring-sky-500/30"
+                          : "border-border/60 hover:bg-muted/50",
+                      )}
+                    >
+                      <Icon className={cn("h-4 w-4 shrink-0", active ? "text-sky-500" : "text-muted-foreground")} />
+                      <span className="min-w-0 truncate">{label}</span>
+                    </button>
+                  )
+                })}
+              </div>
+              {cloudType === "webapp" ? (
+                <p className="text-xs text-muted-foreground">
+                  Aparecerá en <span className="font-medium">Biblioteca → Apps web</span>.
+                </p>
+              ) : null}
+            </div>
+
+            {/* Hosting destination — GitHub is reserved for the upcoming flow. */}
+            <div className="space-y-1.5">
+              <Label className="text-sm">Alojamiento</Label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCloudHosting("sira-cloud")}
+                  disabled={creatingCloud}
+                  aria-pressed={cloudHosting === "sira-cloud"}
+                  className={cn(
+                    "flex items-center gap-2.5 rounded-lg border px-3 py-2.5 text-left text-sm transition-colors disabled:opacity-60",
+                    cloudHosting === "sira-cloud"
+                      ? "border-sky-500/60 bg-sky-500/10 text-foreground ring-1 ring-sky-500/30"
+                      : "border-border/60 hover:bg-muted/50",
+                  )}
+                >
+                  <Cloud className={cn("h-4 w-4 shrink-0", cloudHosting === "sira-cloud" ? "text-sky-500" : "text-muted-foreground")} />
+                  <span className="min-w-0 truncate">Nube de SiraGPT</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCloudHosting("github")}
+                  disabled={creatingCloud}
+                  aria-pressed={cloudHosting === "github"}
+                  className={cn(
+                    "flex items-center gap-2.5 rounded-lg border px-3 py-2.5 text-left text-sm transition-colors disabled:opacity-60",
+                    cloudHosting === "github"
+                      ? "border-amber-500/60 bg-amber-500/10 text-foreground ring-1 ring-amber-500/30"
+                      : "border-border/60 hover:bg-muted/50",
+                  )}
+                >
+                  <Github className={cn("h-4 w-4 shrink-0", cloudHosting === "github" ? "text-amber-500" : "text-muted-foreground")} />
+                  <span className="min-w-0 flex-1 truncate">GitHub</span>
+                  <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                    Próximamente
+                  </span>
+                </button>
+              </div>
+              {githubSelected ? (
+                <p className="text-xs text-amber-700 dark:text-amber-400">
+                  La conexión con GitHub aún no está disponible. Usa la nube de SiraGPT por ahora.
+                </p>
+              ) : null}
             </div>
 
             <DialogFooter className="gap-2 sm:gap-2">

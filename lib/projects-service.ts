@@ -11,11 +11,16 @@
  * predictable.
  */
 
+export type ProjectType = "general" | "webapp"
+export type ProjectHostingProvider = "sira-cloud" | "github"
+
 export interface Project {
   id: string
   name: string
   description: string | null
   instructions: string | null
+  type?: ProjectType
+  hostingProvider?: ProjectHostingProvider
   isStarred: boolean
   shareId: string | null
   createdAt: string
@@ -99,6 +104,8 @@ export interface CreateProjectInput {
   name: string
   description?: string
   instructions?: string
+  type?: ProjectType
+  hostingProvider?: ProjectHostingProvider
 }
 
 export interface UpdateProjectInput {
@@ -113,6 +120,7 @@ export type ProjectSort = "activity" | "edited" | "created"
 export interface ProjectFilters {
   search?: string
   sort?: ProjectSort
+  type?: ProjectType
 }
 
 const baseUrl = `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}/projects`
@@ -144,6 +152,7 @@ export const projectsService = {
     const params = new URLSearchParams()
     if (filters.search) params.set("search", filters.search)
     if (filters.sort) params.set("sort", filters.sort)
+    if (filters.type) params.set("type", filters.type)
     const qs = params.toString()
     const res = await fetch(`${baseUrl}${qs ? `?${qs}` : ""}`, {
       credentials: "include",

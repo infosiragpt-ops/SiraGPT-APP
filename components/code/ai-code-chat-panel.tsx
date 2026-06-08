@@ -72,6 +72,7 @@ import { landingSystemPrompt, sreSystemPrompt } from "@/lib/code-agent/prompts"
 import { isSlowModel, recommendFastModel } from "@/lib/code-agent/model-policy"
 
 import { DiffView } from "./diff-view"
+import { AgentSwarm } from "./agent-swarm"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 
@@ -766,6 +767,7 @@ export function AICodeChatPanel() {
       </div>
 
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto p-3">
+        <AgentSwarm active={busy || buildingApp} />
         {turns.length === 0 ? (
           <EmptyChat />
         ) : (
@@ -819,19 +821,6 @@ export function AICodeChatPanel() {
               fast={modelIsFast}
               onSelect={(m) => chooseCodeModel({ name: m.name, provider: m.provider })}
             />
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="h-7 shrink-0 gap-1 rounded-md px-2 text-[11px] font-medium text-violet-600 hover:bg-violet-500/10 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300"
-              onClick={() => dispatch(input, { forceDeterministic: true })}
-              disabled={!input.trim() || busy || buildingApp}
-              aria-label="Construir app (determinista, sin LLM)"
-              title="Construir app al instante — sin LLM ni API keys"
-            >
-              <Rocket className="h-3.5 w-3.5" />
-              <span>{buildingApp ? "Construyendo…" : "Construir"}</span>
-            </Button>
             <span className="min-w-0 flex-1" />
             {busy ? (
               <Button
@@ -869,11 +858,24 @@ export function AICodeChatPanel() {
 
 function EmptyChat() {
   return (
-    <div className="flex h-full items-center justify-center text-center">
-      <div className="max-w-xs space-y-3">
-        <Sparkles className="mx-auto h-6 w-6 text-sky-500/80" />
-        <p className="text-sm text-muted-foreground">
-          Pide un cambio sobre el archivo activo, genera un nuevo archivo o pega un error y pídeme una corrección.
+    <div className="flex h-full items-center justify-center px-2 text-center">
+      <div className="max-w-[17rem] space-y-3">
+        <div className="relative mx-auto flex h-12 w-12 items-center justify-center">
+          <div
+            aria-hidden
+            className="absolute inset-0 rounded-2xl bg-[radial-gradient(circle,hsl(var(--accent-violet)/0.28),transparent_70%)] blur-md"
+          />
+          <div className="relative flex h-12 w-12 items-center justify-center rounded-2xl border border-[hsl(var(--accent-violet)/0.35)] bg-[hsl(var(--accent-violet)/0.10)] text-[hsl(var(--accent-violet))]">
+            <Sparkles className="h-6 w-6" />
+          </div>
+        </div>
+        <p className="text-sm font-semibold tracking-tight text-foreground">
+          Describe tu idea y se pone a trabajar un enjambre de agentes
+        </p>
+        <p className="text-[12.5px] leading-relaxed text-muted-foreground">
+          Más de 1000 agentes en paralelo buscan información, generan imágenes y
+          código, refactorizan, revisan y te entregan el resultado en el preview
+          en vivo.
         </p>
       </div>
     </div>

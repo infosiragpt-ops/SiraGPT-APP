@@ -9,7 +9,7 @@
  */
 
 import * as React from "react"
-import { FileCode2, FilePlus2, RotateCcw, X } from "lucide-react"
+import { FileCode2, FilePlus2, Sparkles } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -18,22 +18,14 @@ import { useCodeWorkspace } from "@/lib/code-workspace-context"
 export function EditorPanel() {
   const {
     files,
-    openTabs,
     activePath,
-    setActiveTab,
-    closeTab,
     updateFile,
     focusChat,
     createFile,
-    resetWorkspace,
     saveFileToWorkspace,
   } = useCodeWorkspace()
 
   const activeFile = activePath ? files[activePath] : null
-  const tabPaths = React.useMemo(
-    () => openTabs.filter((path) => Boolean(files[path])),
-    [files, openTabs],
-  )
 
   const handleChange = React.useCallback(
     (value: string) => {
@@ -57,12 +49,6 @@ export function EditorPanel() {
     createFile(path, "")
   }, [createFile])
 
-  const handleResetWorkspace = React.useCallback(() => {
-    if (typeof window === "undefined") return
-    if (!window.confirm("Esto restaurará los archivos de ejemplo y descartará el workspace actual.")) return
-    resetWorkspace()
-  }, [resetWorkspace])
-
   React.useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const isMod = e.metaKey || e.ctrlKey
@@ -82,49 +68,14 @@ export function EditorPanel() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      <div className="flex h-8 shrink-0 items-center gap-1 border-b border-border/50 px-1.5">
-        <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
-          {tabPaths.length === 0 ? (
-            <span className="px-2 text-[11px] text-muted-foreground">Sin archivos abiertos</span>
-          ) : (
-            tabPaths.map((path) => (
-              <FileTabButton
-                key={path}
-                path={path}
-                active={path === activePath}
-                onSelect={() => setActiveTab(path)}
-                onClose={() => closeTab(path)}
-              />
-            ))
-          )}
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 text-muted-foreground hover:text-foreground"
-            onClick={handleCreateFile}
-            title="Nuevo archivo"
-            aria-label="Nuevo archivo"
-          >
-            <FilePlus2 className="h-3.5 w-3.5" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 text-muted-foreground hover:text-foreground"
-            onClick={handleResetWorkspace}
-            title="Restaurar ejemplo"
-            aria-label="Restaurar ejemplo"
-          >
-            <RotateCcw className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-      </div>
       <div className="flex min-h-0 flex-1">
         <div className="min-w-0 flex-1">
           {!activeFile ? (
-            <EmptyState />
+            <EmptyState
+              hasFiles={Object.keys(files).length > 0}
+              onCreateFile={handleCreateFile}
+              onFocusChat={focusChat}
+            />
           ) : (
             <CodeArea
               value={activeFile.content}
@@ -135,46 +86,6 @@ export function EditorPanel() {
           )}
         </div>
       </div>
-    </div>
-  )
-}
-
-function FileTabButton({
-  path,
-  active,
-  onSelect,
-  onClose,
-}: {
-  path: string
-  active: boolean
-  onSelect: () => void
-  onClose: () => void
-}) {
-  const label = path.includes("/") ? path.slice(path.lastIndexOf("/") + 1) : path
-  return (
-    <div
-      className={cn(
-        "group flex h-7 max-w-[200px] shrink-0 items-center gap-0.5 rounded-md border border-transparent px-1.5 text-[11px] transition-colors",
-        active
-          ? "border-border/60 bg-background text-foreground shadow-sm"
-          : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-      )}
-    >
-      <button type="button" onClick={onSelect} className="flex min-w-0 items-center gap-1 truncate" title={path}>
-        <FileCode2 className="h-3 w-3 shrink-0 opacity-60" />
-        <span className="truncate">{label}</span>
-      </button>
-      <button
-        type="button"
-        className="rounded p-0.5 opacity-0 transition-opacity hover:bg-muted group-hover:opacity-100"
-        aria-label={`Cerrar ${label}`}
-        onClick={(e) => {
-          e.stopPropagation()
-          onClose()
-        }}
-      >
-        <X className="h-3 w-3" />
-      </button>
     </div>
   )
 }
@@ -190,14 +101,9 @@ type CodeAreaProps = {
 // Monaco bundle fails to load (offline build, slow network, library
 // regression). Keeps the page interactive without shipping the ~2 MB
 // Monaco chunk on the critical path.
-function TextareaCodeArea({ value, language, onChange, path }: CodeAreaProps) {
+function TextareaCodeArea({ value, onChange }: CodeAreaProps) {
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-7 shrink-0 items-center gap-2 border-b border-border/40 bg-muted/20 px-3 text-[11px] uppercase tracking-wide text-muted-foreground">
-        <FileCode2 className="h-3 w-3" />
-        <span className="truncate">{path}</span>
-        <span className="ml-auto opacity-70">{language}</span>
-      </div>
       <textarea
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -251,12 +157,50 @@ function CodeArea(props: CodeAreaProps) {
   return <TextareaCodeArea {...props} />
 }
 
-function EmptyState() {
+function EmptyState({
+  hasFiles,
+  onCreateFile,
+  onFocusChat,
+}: {
+  hasFiles: boolean
+  onCreateFile: () => void
+  onFocusChat: () => void
+}) {
+  // Files exist but none is open — gentle nudge to pick a tab.
+  if (hasFiles) {
+    return (
+      <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
+        <div>
+          <FileCode2 className="mx-auto mb-3 h-6 w-6 opacity-60" />
+          <p>Selecciona un archivo en la barra superior para empezar a editar.</p>
+        </div>
+      </div>
+    )
+  }
+
+  // Blank project — the clean canvas a new workspace opens in. Invite
+  // the user to start from zero: create a file, or let the AI chat build
+  // it. No example code or sample folders to delete first.
   return (
-    <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
-      <div>
-        <FileCode2 className="mx-auto mb-3 h-6 w-6 opacity-60" />
-        <p>Selecciona un archivo en la barra superior para empezar a editar.</p>
+    <div className="flex h-full items-center justify-center p-6 text-center">
+      <div className="max-w-sm">
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-muted/60">
+          <Sparkles className="h-6 w-6 text-muted-foreground" />
+        </div>
+        <h2 className="mb-1.5 text-base font-semibold text-foreground">Proyecto en blanco</h2>
+        <p className="mb-5 text-sm text-muted-foreground">
+          Empieza desde cero: crea tu primer archivo o pídele al chat de IA que construya la app por ti.
+        </p>
+        <div className="flex items-center justify-center gap-2">
+          <Button type="button" size="sm" onClick={onCreateFile}>
+            <FilePlus2 className="mr-1.5 h-3.5 w-3.5" />
+            Nuevo archivo
+          </Button>
+          <Button type="button" size="sm" variant="outline" onClick={onFocusChat}>
+            <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+            Pedir a la IA
+          </Button>
+        </div>
       </div>
     </div>
   )

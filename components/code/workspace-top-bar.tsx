@@ -3,8 +3,9 @@
 import * as React from "react"
 import {
   CheckCircle2,
+  FolderGit2,
   GitBranch,
-  Globe,
+  LayoutGrid,
   Monitor,
   Plus,
   Search,
@@ -14,6 +15,7 @@ import {
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { ProjectChip } from "./project-chip"
 
 export type WorkspacePanelId = "preview" | "terminal" | "git" | "validation"
 
@@ -37,6 +39,10 @@ export type WorkspaceTopBarProps = {
   onClosePanel: (id: WorkspacePanelId) => void
   onOpenPalette: (query?: string) => void
   onOpenSearch: () => void
+  onOpenLauncher: () => void
+  launcherOpen?: boolean
+  onOpenCode: () => void
+  codeOpen?: boolean
   toolsMenu?: React.ReactNode
 }
 
@@ -47,13 +53,22 @@ export function WorkspaceTopBar({
   onClosePanel,
   onOpenPalette,
   onOpenSearch,
+  onOpenLauncher,
+  launcherOpen,
+  onOpenCode,
+  codeOpen,
   toolsMenu,
 }: WorkspaceTopBarProps) {
   const visible = PANELS.filter((p) => openPanels.has(p.id))
 
   return (
     <header className="flex h-8 shrink-0 items-center gap-1 border-b border-border/40 bg-background/55 px-1.5 backdrop-blur-xl supports-[backdrop-filter]:bg-background/40">
-      <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
+      {/* Left — editable project identity (sits above the chat column). */}
+      <ProjectChip onOpenCode={onOpenCode} />
+      <span className="h-4 w-px shrink-0 bg-border/50" />
+
+      {/* Center — panel tabs + tools + search (sits above the preview). */}
+      <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto px-0.5">
         {visible.map((panel) => {
           const Icon = panel.icon
           const active = activePanel === panel.id
@@ -116,13 +131,35 @@ export function WorkspaceTopBar({
           type="button"
           variant="ghost"
           size="sm"
-          className="h-7 rounded-md px-2 text-[11px] font-normal text-muted-foreground hover:text-foreground"
-          onClick={() => {
-            if (typeof window !== "undefined") window.open("/", "_blank", "noopener,noreferrer")
-          }}
+          aria-label="Herramientas del workspace"
+          aria-pressed={launcherOpen}
+          onClick={onOpenLauncher}
+          className={cn(
+            "h-7 rounded-md px-2 text-[11px] font-normal transition-colors",
+            launcherOpen
+              ? "bg-[hsl(var(--accent-violet)/0.16)] text-[hsl(var(--accent-violet))] shadow-[inset_0_0_0_1px_hsl(var(--accent-violet)/0.35)]"
+              : "text-muted-foreground hover:text-foreground",
+          )}
         >
-          <Globe className="mr-1 h-3 w-3" />
-          App
+          <LayoutGrid className="mr-1 h-3 w-3" />
+          Herramientas
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          aria-label="Código del proyecto"
+          aria-pressed={codeOpen}
+          onClick={onOpenCode}
+          className={cn(
+            "h-7 rounded-md px-2 text-[11px] font-normal transition-colors",
+            codeOpen
+              ? "bg-[hsl(var(--accent-violet)/0.16)] text-[hsl(var(--accent-violet))] shadow-[inset_0_0_0_1px_hsl(var(--accent-violet)/0.35)]"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          <FolderGit2 className="mr-1 h-3 w-3" />
+          Código
         </Button>
       </div>
     </header>

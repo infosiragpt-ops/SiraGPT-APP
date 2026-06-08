@@ -29,7 +29,6 @@ import {
   EyeOff,
   CalendarDays,
   FolderKanban,
-  Palette,
   Loader2,
   PenSquare,
   Shield,
@@ -370,7 +369,7 @@ export function AppSidebar() {
   // ────────────────────────────────────────────────────────────
   const SIDEBAR_ROUTES = React.useMemo(
     () => [
-      '/chat', '/gpts', '/parafraseo', '/projects', '/design', '/code', '/library',
+      '/chat', '/gpts', '/parafraseo', '/projects', '/code', '/library',
       '/billing', '/settings', '/profile',
     ],
     [],
@@ -1040,7 +1039,6 @@ export function AppSidebar() {
   const isOnGPTsPage = activePathname.startsWith('/gpts')
   const isOnParaphrasePage = activePathname.startsWith('/parafraseo')
   const isOnProjectsPage = activePathname.startsWith('/projects')
-  const isOnDesignPage = activePathname.startsWith('/design')
 
   return (
     <Sidebar className="w-[--sidebar-width] border-r border-border/40 bg-sidebar" collapsible="icon">
@@ -1242,25 +1240,6 @@ export function AppSidebar() {
             icon={FolderKanban}
             active={isOnProjectsPage}
             pending={isPendingRoute("/projects")}
-            sidebarState={state}
-            markNavigationIntent={markNavigationIntent}
-            prefetchOnHover={prefetchOnHover}
-            navigate={navigate}
-            onNavigate={closeMobileSidebar}
-          />
-
-          {/* Design — siraGPT's Claude-Design-style canvas, placed
-              right under Projects since both are workspace-shaped
-              artifacts (design extends the workflow with a visual
-              output surface). Palette icon keeps it distinct from
-              FolderKanban without clashing visually. */}
-          <SidebarNavItem
-            href="/design"
-            label={t("design")}
-            tooltip={t("design")}
-            icon={Palette}
-            active={isOnDesignPage}
-            pending={isPendingRoute("/design")}
             sidebarState={state}
             markNavigationIntent={markNavigationIntent}
             prefetchOnHover={prefetchOnHover}
