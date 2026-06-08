@@ -15,6 +15,7 @@ import apiClient from '@/lib/api'
 import { useAuth } from '@/lib/auth-context-integrated'
 import VoiceSelector from './voice-selector'
 import { devLog } from '@/lib/dev-log'
+import { writeText as copyTextSafe } from '@/lib/native/clipboard'
 import {
   Mic,
   Play,
@@ -703,10 +704,19 @@ const { voices, loading: voicesLoading } = useVoices()
                         variant="outline"
                         size="sm"
                         onClick={() => {
-                          navigator.clipboard.writeText(transcribedText)
-                          toast({
-                            title: "Copied",
-                            description: "Text copied to clipboard",
+                          void copyTextSafe(transcribedText).then((r) => {
+                            if (r.ok) {
+                              toast({
+                                title: "Copied",
+                                description: "Text copied to clipboard",
+                              })
+                            } else {
+                              toast({
+                                title: "No se pudo copiar",
+                                description: "No se pudo copiar el texto al portapapeles",
+                                variant: "destructive",
+                              })
+                            }
                           })
                         }}
                       >

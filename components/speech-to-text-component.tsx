@@ -12,6 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Progress } from '@/components/ui/progress'
 import { useToast } from '@/hooks/use-toast'
 import apiClient from '@/lib/api'
+import { writeText as copyTextSafe } from '@/lib/native/clipboard'
 import { useAuth } from '@/lib/auth-context-integrated'
 import VoiceSelector from './voice-selector'
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
@@ -426,10 +427,19 @@ export default function SpeechToTextComponent() {
                                                 variant="outline"
                                                 size="sm"
                                                 onClick={() => {
-                                                    navigator.clipboard.writeText(transcribedText)
-                                                    toast({
-                                                        title: "Copied",
-                                                        description: "Text copied to clipboard",
+                                                    void copyTextSafe(transcribedText).then((r) => {
+                                                        if (r.ok) {
+                                                            toast({
+                                                                title: "Copied",
+                                                                description: "Text copied to clipboard",
+                                                            })
+                                                        } else {
+                                                            toast({
+                                                                title: "No se pudo copiar",
+                                                                description: "No se pudo copiar el texto al portapapeles",
+                                                                variant: "destructive",
+                                                            })
+                                                        }
                                                     })
                                                 }}
                                             >

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Check, Clipboard } from "lucide-react";
+import { writeText as copyTextSafe } from "@/lib/native/clipboard";
 
 /**
  * DiffBlock — Cursor/Codex-style unified-diff renderer for chat code
@@ -53,9 +54,11 @@ export function DiffBlock({ diff }: { diff: string }) {
   }, [diff]);
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(diff).then(() => {
-      setIsCopied(true);
-      setTimeout(() => setIsCopied(false), 2000);
+    void copyTextSafe(diff).then((r) => {
+      if (r.ok) {
+        setIsCopied(true);
+        setTimeout(() => setIsCopied(false), 2000);
+      }
     });
   };
 

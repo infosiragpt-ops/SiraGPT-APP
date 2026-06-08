@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Check, Copy, ExternalLink, ListOrdered } from "lucide-react";
 import { useShikiHighlight } from "@/lib/use-shiki-highlight";
 import { DiffBlock } from "@/components/chat/diff-block";
+import { writeText as copyTextSafe } from "@/lib/native/clipboard";
 import { cn } from "@/lib/utils";
 
 // Lote E · #36 + #40 — line-numbers preference is global and
@@ -67,9 +68,11 @@ export const CustomCodeBlock = ({ className, children, canPreview, onPreview }: 
     }
 
     const handleCopy = () => {
-        navigator.clipboard.writeText(codeString).then(() => {
-            setIsCopied(true);
-            setTimeout(() => setIsCopied(false), 2000);
+        void copyTextSafe(codeString).then((r) => {
+            if (r.ok) {
+                setIsCopied(true);
+                setTimeout(() => setIsCopied(false), 2000);
+            }
         });
     };
 

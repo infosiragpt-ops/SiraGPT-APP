@@ -1,5 +1,6 @@
 import { type ClassValue, clsx } from "clsx"
 import { twMerge } from "tailwind-merge"
+import { writeText as copyTextSafe } from "@/lib/native/clipboard"
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
@@ -81,8 +82,8 @@ export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-export function copyToClipboard(text: string): Promise<void> {
-  return navigator.clipboard.writeText(text)
+export function copyToClipboard(text: string): Promise<boolean> {
+  return copyTextSafe(text).then((r) => r.ok)
 }
 
 export function downloadBlob(blob: Blob, filename: string): void {

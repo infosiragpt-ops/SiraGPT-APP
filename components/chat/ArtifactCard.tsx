@@ -25,6 +25,7 @@ import {
   Check, Clipboard,
 } from "lucide-react"
 import { useArtifactPanel } from "@/lib/artifact-panel-context"
+import { writeText as copyTextSafe } from "@/lib/native/clipboard"
 import dynamic from "next/dynamic"
 const ShikiCodeView = dynamic(
   () => import("@/components/ui/shiki-code-view").then(m => ({ default: m.ShikiCodeView })),
@@ -320,9 +321,11 @@ function IconButton({ label, active, onClick, children }: { label: string; activ
 function InlineSource({ code, language }: { code: string; language: string }) {
   const [copied, setCopied] = useState(false)
   const copy = () => {
-    navigator.clipboard.writeText(code).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1600)
+    void copyTextSafe(code).then((r) => {
+      if (r.ok) {
+        setCopied(true)
+        setTimeout(() => setCopied(false), 1600)
+      }
     })
   }
   return (
