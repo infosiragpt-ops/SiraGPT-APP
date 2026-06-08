@@ -66,9 +66,10 @@ import {
   classifyBuildError,
   mergeOverridesIntoPackageJson,
   nextAgentAction,
+  promptFromContext,
   renderFiveSections,
 } from "@/lib/code-agent/orchestrator"
-import { landingSystemPrompt, sreSystemPrompt } from "@/lib/code-agent/prompts"
+import { sreSystemPrompt } from "@/lib/code-agent/prompts"
 import { isSlowModel, recommendFastModel } from "@/lib/code-agent/model-policy"
 import { opencodeService } from "@/lib/opencode/opencode-service"
 import { useOpencodeEngine, extractEngineText } from "@/lib/opencode/use-opencode-engine"
@@ -742,14 +743,15 @@ export function AICodeChatPanel() {
         }
         case "generate": {
           patchAgentState(sid, (s) => ({ ...s, phase: "generating", context: action.context }))
-          if (action.tier === "llm" && activeModelName) {
-            const sys = `${includeContext ? `${buildSystemContext(files, activePath, activeFolder)}\n\n` : ""}${landingSystemPrompt(action.context)}`
-            await sendPrompt(text, { systemPrompt: sys, autoApply: true })
-            patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "llm" }))
-          } else {
-            await buildApp(text)
-            patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "deterministic" }))
-          }
+          // Reliable build: the deterministic builder (/api/builder/generate) is a
+          // short, non-streaming request that always works — including behind
+          // Docker Desktop's port proxy, where the LLM SSE stream can drop
+          // mid-flight ("Failed to fetch"). Feed it the intake context so brand/
+          // product/style flow through.
+          const ctxPrompt = promptFromContext(action.context)
+          const genPrompt = action.context.productType || action.context.brand ? ctxPrompt : text
+          await buildApp(genPrompt)
+          patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "deterministic" }))
           return
         }
         case "patch": {
