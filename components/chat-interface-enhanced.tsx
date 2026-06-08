@@ -104,7 +104,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { apiClient } from "@/lib/api"
 import { track } from "@/lib/analytics"
-import { aiService, buildProfessionalCapabilityPrompt, extractRequestedVideoDurationSeconds, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldAutoActivateVideoGeneration, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, type ChatIntent } from "@/lib/ai-service"
+import { aiService, buildProfessionalCapabilityPrompt, classifyIntentFastPath, extractRequestedVideoDurationSeconds, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldAutoActivateVideoGeneration, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, type ChatIntent } from "@/lib/ai-service"
 import { toast } from "sonner"
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
@@ -4948,7 +4948,7 @@ But first, you need to connect your Spotify account securely using the button be
 
         // Show upgrade modal for API limit errors
         setSubscribeOpen(true);
-        toast.error('Monthly API limit exceeded. Please upgrade to continue.');
+        toast.error('Tu plan necesita una mejora para continuar.');
 
         const updateChatWithLimitError = (prevChat: any) => {
           if (!prevChat) return prevChat;
@@ -4957,7 +4957,7 @@ But first, you need to connect your Spotify account securely using the button be
             if (msg.content === '[PROCESSING_SPOTIFY]') {
               return {
                 ...msg,
-                content: "Monthly API limit exceeded. Please upgrade your plan to continue using Spotify features.",
+                content: "Tu plan necesita una mejora para continuar usando Spotify.",
                 error: "Monthly API limit exceeded"
               };
             }
@@ -5331,7 +5331,7 @@ But first, you need to connect your Spotify account securely using the button be
       const errorMessage = customEvent.detail?.message || customEvent.detail?.error || '';
       if (isMonthlyLimitError(errorMessage)) {
         setSubscribeOpen(true);
-        toast.error('Monthly API limit exceeded. Please upgrade to continue.');
+        toast.error('Tu plan necesita una mejora para continuar.');
       }
     }
 
@@ -6640,6 +6640,18 @@ But first, you need to connect your Spotify account securely using the button be
   const pendingMsgQueueRef = React.useRef<Array<{ chatId: string | null; msg: string; files: any[] }>>([]);
   const queueBurstTimestampsRef = React.useRef<number[]>([]);
   const handleSendRef = React.useRef<() => void>(() => {});
+  // Reactive mirror of the per-chat queued-message count so the composer can
+  // SHOW the user that their extra tasks (sent while the agent is thinking)
+  // are queued and will run in order. The ref above is the source of truth;
+  // this state just drives the visible "N en cola" chip.
+  const [queuedCount, setQueuedCount] = React.useState(0);
+  const syncQueuedCount = React.useCallback((chatId?: string | null) => {
+    const cid = chatId ?? currentChatIdRef.current ?? null;
+    setQueuedCount(pendingMsgQueueRef.current.filter((q) => q.chatId === cid).length);
+  }, []);
+  React.useEffect(() => {
+    syncQueuedCount(currentChat?.id ?? null);
+  }, [currentChat?.id, syncQueuedCount]);
 
   // ────────────────────────────────────────────────────────────
   // Sidebar auto-collapse — when the user turns on any composer tool
@@ -7092,6 +7104,7 @@ But first, you need to connect your Spotify account securely using the button be
       // Park the message — we'll drain the queue once the busy flags
       // flip back to idle (see the useEffect watching busy state).
       pendingMsgQueueRef.current.push({ chatId: currentChat?.id ?? null, msg, files: composerFiles });
+      syncQueuedCount(currentChat?.id ?? null);
       setInput("");
       uploadedFilesRef.current = [];
       setUploadedFiles([]);
@@ -7443,6 +7456,19 @@ REWRITTEN TEXT:`;
       }
     }
 
+    const deterministicAgenticIntent = classifyIntentFastPath(msg);
+    const shouldStartAgenticLoopImmediately = deterministicAgenticIntent
+      && ['web_search', 'agent_task', 'math', 'viz', 'chart', 'ppt'].includes(deterministicAgenticIntent);
+
+    if (shouldStartAgenticLoopImmediately) {
+      try {
+        await handleAgentTask(msg, filesToSend, { userMessageAlreadyAdded: false });
+      } finally {
+        inFlightSendKeysRef.current.delete(sendKey);
+      }
+      return;
+    }
+
     if (sendInFlightRef.current) return;
     sendInFlightRef.current = true;
 
@@ -7663,6 +7689,11 @@ REWRITTEN TEXT:`;
         }
       };
 
+      const runClassifiedAgentTask = () => handleAgentTask(msg, filesToSend, {
+        userMessageAlreadyAdded: !isNewChat,
+        assistantMessageId: !isNewChat ? assistantPlaceholder.id : undefined,
+      });
+
       switch (intent) {
         case 'image':
           await handleImageGeneration(buildImageEditPrompt(msg), collectUploadFileIds(filesToSend));
@@ -7671,7 +7702,7 @@ REWRITTEN TEXT:`;
           await handleVideoGeneration(msg, collectUploadFileIds(filesToSend));
           break;
         case 'ppt':
-          await handleAgentTask(msg, filesToSend);
+          await runClassifiedAgentTask();
           break;
         case 'webdev':
           await handleWebDevGeneration(msg);
@@ -7687,14 +7718,14 @@ REWRITTEN TEXT:`;
         case 'viz':
         case 'web_search':
         case 'agent_task':
-          await handleAgentTask(msg, filesToSend);
+          await runClassifiedAgentTask();
           break;
         case 'doc':
           await runContextPipeline(intent);
           break;
         case 'text':
           if (shouldRouteTextPromptThroughAgenticRuntime(msg, filesToSend)) {
-            await handleAgentTask(msg, filesToSend);
+            await runClassifiedAgentTask();
           } else {
             await runContextPipeline(intent);
           }
@@ -7705,7 +7736,7 @@ REWRITTEN TEXT:`;
           break;
         default:
           if (shouldRouteThroughAgenticRuntime(intent)) {
-            await handleAgentTask(msg, filesToSend);
+            await runClassifiedAgentTask();
           } else {
             await runContextPipeline(intent);
           }
@@ -7749,11 +7780,10 @@ REWRITTEN TEXT:`;
         // Show upgrade modal for API limit errors
         setSubscribeOpen(true);
 
-        // Extract usage information if available
+        // Extract a neutral usage signal if available without exposing internal quotas
         let usageInfo = '';
         if (errorData && errorData.usage) {
-          const { current, limit } = errorData.usage;
-          usageInfo = ` You've used ${current?.toLocaleString()} out of ${limit?.toLocaleString()} tokens this month.`;
+          usageInfo = ' Tu actividad del mes ya alcanzó el máximo disponible para tu plan.';
         }
 
         // Show proper error message in UI
@@ -7761,9 +7791,9 @@ REWRITTEN TEXT:`;
           id: `msg-error-${Date.now()}`,
           chatId: chatToUpdate?.id || 'unknown',
           role: 'ASSISTANT' as const,
-          content: `Monthly API limit exceeded.${usageInfo} Please upgrade your plan to continue using the service.`,
+          content: `Tu plan necesita una mejora para continuar.${usageInfo} Elige Pro, Pro Extendido o comunícate por WhatsApp para Enterprise.`,
           timestamp: new Date().toISOString(),
-          error: 'Monthly API limit exceeded',
+          error: 'Plan upgrade required',
         };
 
         setCurrentChat(prevChat => {
@@ -7772,7 +7802,7 @@ REWRITTEN TEXT:`;
           return { ...prevChat, messages: updatedMessages };
         });
 
-        toast.error(`Monthly API limit exceeded.${usageInfo ? ' ' + usageInfo : ''} Please upgrade to continue.`);
+        toast.error(`Tu plan necesita una mejora para continuar.${usageInfo ? ' ' + usageInfo : ''}`);
         return;
       }
 
@@ -7893,7 +7923,7 @@ But first, you need to connect your Gmail account securely using the button belo
 
         // Show upgrade modal for API limit errors
         setSubscribeOpen(true);
-        toast.error('Monthly API limit exceeded. Please upgrade to continue.');
+        toast.error('Tu plan necesita una mejora para continuar.');
 
         // Update placeholder with limit error
         const updateChatWithLimitError = (prevChat: any) => {
@@ -7903,7 +7933,7 @@ But first, you need to connect your Gmail account securely using the button belo
             if (msg.content === '[PROCESSING_GMAIL]') {
               return {
                 ...msg,
-                content: "Monthly API limit exceeded. Please upgrade your plan to continue using Gmail features.",
+                content: "Tu plan necesita una mejora para continuar usando Gmail.",
                 error: "Monthly API limit exceeded"
               };
             }
@@ -8009,7 +8039,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
         // Show upgrade modal for API limit errors
         setSubscribeOpen(true);
-        toast.error('Monthly API limit exceeded. Please upgrade to continue.');
+        toast.error('Tu plan necesita una mejora para continuar.');
 
         const updateChatWithLimitError = (prevChat: any) => {
           if (!prevChat) return prevChat;
@@ -8018,7 +8048,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             if (msg.content === '[PROCESSING_CALENDAR_ACTION]' || msg.content === '[PROCESSING_DRIVE_ACTION]') {
               return {
                 ...msg,
-                content: "Monthly API limit exceeded. Please upgrade your plan to continue using Google Services.",
+                content: "Tu plan necesita una mejora para continuar usando Google Services.",
                 error: "Monthly API limit exceeded"
               };
             }
@@ -8245,7 +8275,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
         // Show upgrade modal for API limit errors
         setSubscribeOpen(true);
-        toast.error('Monthly API limit exceeded. Please upgrade to continue.');
+        toast.error('Tu plan necesita una mejora para continuar.');
 
         const updateChatWithLimitError = (prevChat: any) => {
           if (!prevChat) return prevChat;
@@ -8253,7 +8283,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             if (msg.content === '[GENERATING_IMAGE]') {
               return {
                 ...msg,
-                content: 'Monthly API limit exceeded. Please upgrade your plan to continue using image generation.',
+                content: 'Tu plan necesita una mejora para continuar generando imágenes.',
                 error: 'Monthly API limit exceeded'
               };
             }
@@ -8340,7 +8370,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
         // Show upgrade modal for API limit errors
         setSubscribeOpen(true);
-        toast.error('Monthly API limit exceeded. Please upgrade to continue.');
+        toast.error('Tu plan necesita una mejora para continuar.');
         return;
       }
 
@@ -8608,6 +8638,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     const nextIndex = pendingMsgQueueRef.current.findIndex((item) => item.chatId === queueChatId);
     if (nextIndex < 0) return;
     const [next] = pendingMsgQueueRef.current.splice(nextIndex, 1);
+    syncQueuedCount(queueChatId);
     if (!next) return;
     setInput(next.msg);
     uploadedFilesRef.current = next.files || [];
@@ -9218,8 +9249,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             const errorMessage = error.message || 'Agentic search failed';
             if (isMonthlyLimitError(errorMessage)) {
               setSubscribeOpen(true);
-              toast.error('Monthly API limit exceeded. Please upgrade to continue.');
-              updateBubble('Monthly API limit exceeded. Please upgrade your plan to continue using web search.');
+              toast.error('Tu plan necesita una mejora para continuar.');
+              updateBubble('Tu plan necesita una mejora para continuar usando búsqueda web.');
               markLocalJobIdle(activeChat.id, controller);
               setIsWebSearching(false);
               searchAbortControllerRef.current = null;
@@ -9249,11 +9280,16 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   // This way step cards live INSIDE the regular message bubble — no
   // parallel surface to maintain — and the persisted message survives
   // a chat reload (the JSON is the source of truth for replay).
-  const handleAgentTask = async (goalText: string, filesToSend: any[] = []) => {
+  const handleAgentTask = async (
+    goalText: string,
+    filesToSend: any[] = [],
+    options: { userMessageAlreadyAdded?: boolean; assistantMessageId?: string } = {},
+  ) => {
     if (!goalText) {
       toast.error('Please enter a task');
       return;
     }
+    const { userMessageAlreadyAdded = false, assistantMessageId } = options;
     const systemContract = PROFESSIONAL_CAPABILITY_CONTRACTS.agent_task || '';
     let activeChat = currentChat;
     const isNewChat = !activeChat;
@@ -9280,7 +9316,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     markLocalJobBusy(activeChat.id);
 
     try {
-      if (isNewChat) {
+      if (!userMessageAlreadyAdded) {
         const userMessage = {
           id: `msg-user-${Date.now()}`,
           chatId: activeChat.id,
@@ -9290,21 +9326,58 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           files: filesToSend,
         };
         setCurrentChat(prev => {
-          if (!prev || prev.id !== activeChat.id) return prev;
+          if (!prev) return { ...activeChat, messages: [userMessage] } as any;
+          if (prev.id !== activeChat.id) return prev;
           return { ...prev, messages: [...(prev.messages || []), userMessage] };
         });
       }
 
+      const clientBootstrapStepId = 'client-agent-bootstrap';
+      const makeInitialTaskState = (): AgentTaskState => ({
+        ...initialAgentState,
+        steps: [{
+          id: clientBootstrapStepId,
+          label: 'Analizando solicitud',
+          icon: 'thought',
+          reasoning: 'Preparando el plan, las fuentes y las herramientas antes de ejecutar la tarea.',
+          status: 'running',
+          toolCalls: [],
+        }],
+        artifacts: [],
+        approvals: [],
+        checkpoints: [],
+        qualityGates: [],
+        repairs: [],
+      });
+      const settleClientBootstrapStep = (current: AgentTaskState): AgentTaskState => {
+        if (!current.steps.some(step => step.id === clientBootstrapStepId && step.status === 'running')) return current;
+        return {
+          ...current,
+          steps: current.steps.map(step =>
+            step.id === clientBootstrapStepId ? { ...step, status: 'done' as const } : step
+          ),
+        };
+      };
+
+      const initialTaskState = makeInitialTaskState();
       const aiMessage = {
-        id: `msg-ai-${Date.now() + 1}`,
+        id: assistantMessageId || `msg-ai-${Date.now() + 1}`,
         chatId: activeChat.id,
         role: 'ASSISTANT' as const,
-        content: '```agent-task-state\n' + JSON.stringify({ ...initialAgentState, steps: [], artifacts: [], approvals: [], checkpoints: [], qualityGates: [], repairs: [] }) + '\n```',
+        content: '```agent-task-state\n' + JSON.stringify(initialTaskState) + '\n```',
         timestamp: new Date().toISOString(),
       };
       setCurrentChat(prev => {
-        if (!prev || prev.id !== activeChat.id) return prev;
-        return { ...prev, messages: [...(prev.messages || []), aiMessage] };
+        if (!prev) return { ...activeChat, messages: [aiMessage] } as any;
+        if (prev.id !== activeChat.id) return prev;
+        const messages = prev.messages || [];
+        const replaced = messages.some(m => m.id === aiMessage.id);
+        return {
+          ...prev,
+          messages: replaced
+            ? messages.map(m => m.id === aiMessage.id ? { ...m, ...aiMessage, error: undefined, progressStage: undefined, progressPct: undefined } : m)
+            : [...messages, aiMessage],
+        };
       });
 
       const updateBubble = (state: AgentTaskState) => {
@@ -9324,7 +9397,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       markLocalJobBusy(activeChat.id, controller);
       currentAgentTaskIdRef.current = null;
 
-      let state: AgentTaskState = { ...initialAgentState, steps: [], artifacts: [], approvals: [], checkpoints: [], qualityGates: [], repairs: [] };
+      let state: AgentTaskState = makeInitialTaskState();
       let taskWasAborted = false;
       try {
         const fileIds = collectUploadFileIds(filesToSend);
@@ -9345,6 +9418,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           if (taskIdFromEvent) {
             currentAgentTaskIdRef.current = taskIdFromEvent;
             agentTaskIdsByChatRef.current.set(activeChat.id, taskIdFromEvent);
+          }
+          const eventType = (evt as any).type;
+          if (eventType === 'step_start' || eventType === 'final_text' || eventType === 'done' || eventType === 'error') {
+            state = settleClientBootstrapStep(state);
           }
           state = reduceEvent(state, evt);
           updateBubble(state);
@@ -10149,6 +10226,21 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
                   <div ref={chatComposerDockRef} className="chat-composer-dock sticky bottom-0 left-0 right-0 z-10">
                     <div className="relative max-w-3xl mx-auto space-y-2 bg-background">
+                      {/* Queued-tasks chip — while the agent is thinking the
+                          user can keep sending; messages park in a queue and
+                          run in order. This makes that visible (the queue is
+                          otherwise a silent ref). */}
+                      {queuedCount > 0 && (
+                        <div className="flex items-center justify-center" aria-live="polite">
+                          <span className="inline-flex items-center gap-1.5 rounded-full border border-border/55 bg-muted/50 px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
+                            <span className="relative flex h-1.5 w-1.5">
+                              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[hsl(var(--accent-violet))] opacity-75" />
+                              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-[hsl(var(--accent-violet))]" />
+                            </span>
+                            {queuedCount} {queuedCount === 1 ? "tarea en cola" : "tareas en cola"} · se procesarán en orden
+                          </span>
+                        </div>
+                      )}
                       {/* Scroll-to-bottom pill — only shown when the
                           user has scrolled up. Floats just above the
                           composer surface so the click target sits in
@@ -10397,7 +10489,34 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 )
                               })()}
 
-                              {isStopButtonVisible && (
+                              {/* While the agent is thinking, a non-empty
+                                  composer SENDS the new task to the queue
+                                  (runs in order after the current one). This
+                                  is what makes "send more while it thinks"
+                                  work on mobile, where Enter isn't available.
+                                  Empty composer → STOP button. */}
+                              {isStopButtonVisible && input.trim().length > 0 && (
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button
+                                      onClick={handleSend}
+                                      size="icon"
+                                      aria-label="Enviar a la cola"
+                                      title="Enviar a la cola · se procesa en orden"
+                                      className={cn(
+                                        "h-9 w-9 rounded-full p-0 transition-all duration-200",
+                                        "bg-[hsl(var(--accent-violet))] text-white",
+                                        "shadow-[0_1px_2px_rgba(0,0,0,0.10),0_4px_10px_-3px_rgba(0,0,0,0.22)]",
+                                        "hover:opacity-90 active:scale-[0.96]",
+                                      )}
+                                    >
+                                      <ArrowUp className="h-[16px] w-[16px]" strokeWidth={2.25} />
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent side="top"><p>Enviar a la cola · se procesa en orden</p></TooltipContent>
+                                </Tooltip>
+                              )}
+                              {isStopButtonVisible && input.trim().length === 0 && (
                                 <Button
                                   onClick={stopActiveGeneration}
                                   size="icon"
