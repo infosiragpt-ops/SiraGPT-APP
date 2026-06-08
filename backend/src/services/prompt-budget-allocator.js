@@ -40,8 +40,12 @@ const TIER_BY_KIND = Object.freeze({
   'master-prompt': 0,
   'conversation-understanding': 0,
   'universal-contract': 0,
-  'enterprise-execution': 0,
-  'pr5-grounding': 0,
+
+  // Demoted from tier-0 → tier-1 so the allocator actually has a lever when the
+  // protected blocks alone blow the budget (was producing ~40k-token prompts
+  // → ~74s turns). These tolerate 60% retention; the base identity stays tier-0.
+  'enterprise-execution': 1,
+  'pr5-grounding': 1,
 
   'attribution': 1,
   'circuit-attribution': 1,

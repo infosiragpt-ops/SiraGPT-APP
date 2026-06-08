@@ -1737,7 +1737,11 @@ router.post(
               role: (m.role || '').toLowerCase(),
               content: m.content || '',
             }));
-          } catch (_) { /* fail-open: empty history */ }
+          } catch (e) {
+            // Was silently swallowed — that made thread context loss invisible.
+            // Log so we can tell a real DB failure from a genuinely empty chat.
+            console.warn('[ai/generate] early history load failed', { chatId, err: e?.message });
+          }
         }
         req._filterCtx = {
           scope: 'ai.generate',
@@ -2101,7 +2105,18 @@ router.post(
         if (userId && canPersist && chatId) {
           // Reuse the 80-message snapshot loaded earlier (filter block) to
           // avoid a second identical prisma.message.findMany round-trip.
-          const __historyMsgs = req._earlyHistory80 || [];
+          let __historyMsgs = req._earlyHistory80 || [];
+          // Fallback: if the earlier snapshot is missing (its query threw, or
+          // ran before this turn's rows existed), re-query directly so an
+          // in-thread turn still gets its history instead of threadTurns=0.
+          if (__historyMsgs.length === 0) {
+            __historyMsgs = await prisma.message.findMany({
+              where: { chatId },
+              orderBy: { timestamp: 'desc' },
+              take: 40,
+              select: { role: true, content: true },
+            });
+          }
           // Map oldest → newest, normalized shape for the resolver.
           __conversationHistoryForUnderstanding = __historyMsgs.slice().reverse().map((m) => ({
             role: m.role === 'ASSISTANT' ? 'assistant' : 'user',

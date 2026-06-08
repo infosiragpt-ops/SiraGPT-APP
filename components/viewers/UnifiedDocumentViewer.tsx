@@ -116,11 +116,12 @@ import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import "react-pdf/dist/Page/TextLayer.css"
 import "react-pdf/dist/Page/AnnotationLayer.css"
 
-// pdfjs worker — bundled with the app from the exact pdfjs-dist version
-// installed alongside react-pdf. Keeping the worker local avoids CDN/CSP/
-// offline failures that otherwise leave previews stuck on a blank PDF panel.
+// pdfjs worker — use the CDN fallback that matches the installed version
+// to avoid Webpack `new URL(..., import.meta.url)` ESM-worker breakage
+// (https://github.com/wojtekmaj/react-pdf/issues/1832).
 if (typeof window !== "undefined") {
-  pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString()
+  const version = pdfjs.version
+  pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${version}/build/pdf.worker.min.mjs`
 }
 
 // ─── Format detection ────────────────────────────────────────────────

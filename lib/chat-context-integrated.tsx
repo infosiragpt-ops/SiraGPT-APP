@@ -1969,7 +1969,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   )
 
 
-  const regenerateMessage = async (messageId?: string) => {
+  const regenerateMessageImpl = async (messageId?: string) => {
     if (!currentChat || isLoading) return;
 
     let targetAiMessageIndex = -1;
@@ -2233,8 +2233,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // Backward compatibility wrapper
-  const regenerateLastMessage = () => regenerateMessage();
+  // Stable identities via a latest-ref. Previously these two were plain
+  // closures recreated every render, which forced the `currentChatValue`
+  // useMemo to recompute on every render → a render storm during streaming
+  // that crashed the chat page ("Algo salió mal"). The ref keeps the impl
+  // fresh while the exported callbacks stay referentially stable.
+  const regenerateMessageRef = useRef(regenerateMessageImpl)
+  regenerateMessageRef.current = regenerateMessageImpl
+  const regenerateMessage = useCallback((messageId?: string) => regenerateMessageRef.current(messageId), [])
+  const regenerateLastMessage = useCallback(() => regenerateMessageRef.current(), [])
 
   const editAndRegenerate = useCallback(async (messageId: string, newContent: string, files?: any[]) => {
     if (!currentChat || isLoading) return;
