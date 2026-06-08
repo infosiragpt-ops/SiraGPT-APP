@@ -14,7 +14,13 @@ deploymentTarget = "gce"
 # make npm fail before build with ENOTEMPTY while renaming the platform SWC
 # binary. Always start from a clean workspace and use npm ci so installs match
 # package-lock.json exactly.
-build = "rm -rf node_modules backend/node_modules .next && NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=http://localhost:5050 REPLIT_BACKEND_MODE=sidecar BACKEND_PORT=5050 FRONTEND_PORT=3000 HUSKY=0 node scripts/replit-npm-ci.cjs ci && NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=http://localhost:5050 REPLIT_BACKEND_MODE=sidecar BACKEND_PORT=5050 FRONTEND_PORT=3000 HUSKY=0 node scripts/replit-npm-ci.cjs --prefix backend ci && NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=http://localhost:5050 REPLIT_BACKEND_MODE=sidecar BACKEND_PORT=5050 FRONTEND_PORT=3000 REPLIT_DEPLOYMENT=1 npm run build"
+#
+# The build phase has a hard ~15 min time limit on the e2-standard-2 builder.
+# Running the root and backend installs sequentially (~8 min + ~7 min) consumed
+# the entire budget and `next build` never started. replit-deploy-install.cjs
+# runs both `npm ci` steps in parallel (each still via the retry wrapper) so the
+# install phase collapses to ~max(root, backend) and leaves room for next build.
+build = "rm -rf node_modules backend/node_modules .next && NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=http://localhost:5050 REPLIT_BACKEND_MODE=sidecar BACKEND_PORT=5050 FRONTEND_PORT=3000 HUSKY=0 node scripts/replit-deploy-install.cjs && NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=http://localhost:5050 REPLIT_BACKEND_MODE=sidecar BACKEND_PORT=5050 FRONTEND_PORT=3000 REPLIT_DEPLOYMENT=1 npm run build"
 run = "NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=http://localhost:5050 REPLIT_BACKEND_MODE=sidecar BACKEND_PORT=5050 FRONTEND_PORT=3000 REPLIT_DEPLOYMENT=1 npm start"
 
 [packager.features]
