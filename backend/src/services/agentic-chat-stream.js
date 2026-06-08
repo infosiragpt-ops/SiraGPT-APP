@@ -245,6 +245,10 @@ function modelSupportsFunctionCalling(provider, model) {
   // (Cerebras "FlashGPT" / llama-3.1-8b) and its cross-plan fallback actually
   // reach the agentic loop — regardless of how the provider string is labeled.
   // Without this, most users were silently kept on plain streaming.
+  // kimi-k2 included: Moonshot Kimi K2.6 (via OpenRouter) emits tool calls in
+  // its native `<|tool_call_begin|>functions.x` token format rather than OpenAI
+  // `tool_calls`. react-agent now PARSES that native format (parseNativeToolCalls)
+  // so the agentic loop drives Kimi correctly instead of leaking raw markup.
   if (/(?:^|[/_-])(?:llama-?[34]|qwen|gpt-oss|kimi-k2)/i.test(m)) return true;
   if (p === 'openai') {
     return /^(gpt-4|gpt-4o|gpt-4\.1|gpt-5|o3|o4|chatgpt|gpt-3\.5-turbo-1106|gpt-3\.5-turbo-0125)/i.test(m);
@@ -258,7 +262,10 @@ function modelSupportsFunctionCalling(provider, model) {
   if (p === 'openrouter') {
     // OpenRouter normalises tools across providers; the safe bets are
     // the same families as above when surfaced through OpenRouter.
-    return /(openai\/(gpt-4|gpt-4o|gpt-4\.1|gpt-5|o3|o4)|google\/gemini-(1\.5|2|2\.5|3)|deepseek\/|moonshotai\/kimi-k2\.6)/i.test(m);
+    // moonshotai/kimi-k2.6 included — its native tool-token format is parsed by
+    // react-agent (parseNativeToolCalls). anthropic/claude + x-ai/grok support
+    // OpenAI-normalised tool_calls via OpenRouter, so they reach the loop too.
+    return /(openai\/(gpt-4|gpt-4o|gpt-4\.1|gpt-5|o3|o4)|google\/gemini-(1\.5|2|2\.5|3)|deepseek\/|moonshotai\/kimi-k2\.6|anthropic\/claude|x-ai\/grok)/i.test(m);
   }
   return false;
 }

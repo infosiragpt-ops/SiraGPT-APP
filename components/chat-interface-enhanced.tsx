@@ -10027,8 +10027,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 </div>
               ) : (
                 <>
-                  {/* Messages */}
-                  <ScrollArea className="chat-message-scroll flex-1 w-full" ref={scrollAreaRef} onClickCapture={handleMessageAreaClick}>
+                  {/* Messages — `min-h-0` is REQUIRED so this flex-1 scroll
+                      area can shrink below its content size. Without it the
+                      flex item's implicit `min-height:auto` lets it grow with
+                      the message list and push the composer dock off a short
+                      (mobile) viewport — the "la barra de chat desaparece"
+                      bug after the 2nd message. */}
+                  <ScrollArea className="chat-message-scroll flex-1 min-h-0 w-full" ref={scrollAreaRef} onClickCapture={handleMessageAreaClick}>
                     <div className="chat-message-scroll-content space-y-2 max-w-3xl mx-auto w-full">
                       {(() => {
                         // dedupeMessages is the render-layer safety net against

@@ -109,7 +109,12 @@ test('modelSupportsFunctionCalling allowlist', () => {
   assert.equal(agenticStream.modelSupportsFunctionCalling('Gemini', 'gemini-2.5-pro'), true);
   assert.equal(agenticStream.modelSupportsFunctionCalling('Gemini', 'gemini-3-pro'), true);
   assert.equal(agenticStream.modelSupportsFunctionCalling('DeepSeek', 'deepseek-v4-pro'), true);
+  // Kimi K2.6 (via OpenRouter) emits its native tool-call token format; the
+  // react-agent parser (parseNativeToolCalls) normalises it, so it reaches the
+  // agentic loop. Claude + Grok via OpenRouter expose OpenAI-normalised tools.
   assert.equal(agenticStream.modelSupportsFunctionCalling('OpenRouter', 'moonshotai/kimi-k2.6'), true);
+  assert.equal(agenticStream.modelSupportsFunctionCalling('OpenRouter', 'anthropic/claude-opus-4.7'), true);
+  assert.equal(agenticStream.modelSupportsFunctionCalling('OpenRouter', 'x-ai/grok-4.20'), true);
   // Cerebras (default free model "FlashGPT" / llama-3.1-8b) is OpenAI
   // tool-compatible — it MUST reach the agentic loop or most users get
   // plain chat.

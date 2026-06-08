@@ -740,21 +740,16 @@ export function shouldRouteTextPromptThroughAgenticRuntime(prompt: string, files
   }
   if (isLightweightConversationalPrompt(normalized)) return false
 
-  const words = normalized.split(/\s+/).filter(Boolean)
-  if (words.length >= 80) return true
-
-  return [
-    ROUTING_PATTERNS.urlReference,
-    ROUTING_PATTERNS.externalResearch,
-    ROUTING_PATTERNS.deliverableFile,
-    ROUTING_PATTERNS.dataWork,
-    ROUTING_PATTERNS.codeWork,
-    ROUTING_PATTERNS.implementationWork,
-    ROUTING_PATTERNS.repoOperation,
-    ROUTING_PATTERNS.longRunningAgent,
-    ROUTING_PATTERNS.musicGeneration,
-    ROUTING_PATTERNS.voiceGeneration,
-  ].some((pattern) => pattern.test(normalized))
+  // No-file interactive prompts (research, deliverables, code, data work,
+  // long questions, etc.) run through the RELIABLE inline /generate agentic
+  // loop — which already owns web_search/read_url + artifact tools, a
+  // per-step timeout and a plain-stream fallback, and streams its reasoning
+  // live. The durable QUEUED agent-task path is reserved for /goal (handled
+  // at the top) and uploaded-document tasks (the files branch above): for
+  // plain text prompts it could leave the chat stuck on
+  // "stream_closed_without_done / 0 pasos" when the worker doesn't relay
+  // events. Routing them inline is what makes the chat respond reliably.
+  return false
 }
 
 export function shouldUseFastTextRoute(prompt: string): boolean {

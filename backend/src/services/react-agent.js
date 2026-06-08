@@ -415,6 +415,62 @@ function compactMessages(messages, opts = {}) {
  * without finalizing and produced no answer of its own. Keeps the user from
  * ever receiving a silent empty "completed" message.
  */
+// ── Native tool-call parsing ────────────────────────────────────────────────
+// Some models surface tool calls in their NATIVE token format inside
+// `message.content` instead of OpenAI `tool_calls` — notably Moonshot Kimi K2.6
+// via OpenRouter: `<|tool_call_begin|>functions.NAME:IDX<|tool_call_argument_begin|>{…}<|tool_call_end|>`.
+// Others use Hermes/Qwen-style `<tool_call>{"name":…,"arguments":…}</tool_call>`.
+// Parsing these lets ANY such model drive the agentic loop instead of leaking
+// raw markup as the "answer" (and looping until the time budget). Exported for
+// unit testing.
+const KIMI_TOOLCALL_RE = /<\|tool_call_begin\|>\s*(?:functions\.)?([\w.-]+)\s*:\s*(\d+)\s*<\|tool_call_argument_begin\|>([\s\S]*?)<\|tool_call_end\|>/g;
+const XML_TOOLCALL_RE = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g;
+
+function hasNativeToolCalls(content) {
+  return typeof content === 'string'
+    && (content.includes('<|tool_call_begin|>') || /<tool_call>/.test(content));
+}
+
+function stripNativeToolCallMarkup(content) {
+  return String(content == null ? '' : content)
+    .replace(/<\|tool_calls_section_begin\|>[\s\S]*?<\|tool_calls_section_end\|>/g, ' ')
+    .replace(KIMI_TOOLCALL_RE, ' ')
+    .replace(XML_TOOLCALL_RE, ' ')
+    .replace(/<\|tool_call[^|]*\|>/g, ' ')
+    .replace(/<\|tool_calls_section_(?:begin|end)\|>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function parseNativeToolCalls(content) {
+  const text = String(content == null ? '' : content);
+  const toolCalls = [];
+  let m;
+  KIMI_TOOLCALL_RE.lastIndex = 0;
+  while ((m = KIMI_TOOLCALL_RE.exec(text)) !== null) {
+    const name = m[1];
+    const idx = m[2];
+    let args = (m[3] || '').trim();
+    try { JSON.parse(args); } catch { if (!args) args = '{}'; }
+    toolCalls.push({ id: `call_native_${idx}_${name}`.slice(0, 60), type: 'function', function: { name, arguments: args } });
+  }
+  if (toolCalls.length === 0) {
+    XML_TOOLCALL_RE.lastIndex = 0;
+    let i = 0;
+    while ((m = XML_TOOLCALL_RE.exec(text)) !== null) {
+      try {
+        const obj = JSON.parse(m[1]);
+        const name = obj.name || obj.tool || obj.function;
+        if (!name) continue;
+        const rawArgs = obj.arguments != null ? obj.arguments : (obj.parameters != null ? obj.parameters : {});
+        const args = typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs);
+        toolCalls.push({ id: `call_native_${i++}_${name}`.slice(0, 60), type: 'function', function: { name, arguments: args } });
+      } catch { /* skip malformed */ }
+    }
+  }
+  return { toolCalls, cleanedContent: stripNativeToolCallMarkup(text) };
+}
+
 function buildDegradedAnswer(stoppedReason) {
   const reason = String(stoppedReason || '');
   if (reason.startsWith('runtime_budget')) {
@@ -589,6 +645,20 @@ async function run(openai, opts) {
     const choice = resp.choices?.[0];
     const msg = choice?.message;
     if (!msg) { stoppedReason = 'no_message'; break; }
+
+    // Normalise NATIVE tool-call formats → OpenAI `tool_calls`. Models like
+    // Moonshot Kimi K2.6 (via OpenRouter) emit tool calls as tokens inside
+    // `content` rather than structured `tool_calls`; without this they leak
+    // raw markup as the answer and loop until the time budget. We also strip
+    // the markup from `content` so the visible thought/answer stays clean.
+    if ((!msg.tool_calls || msg.tool_calls.length === 0) && hasNativeToolCalls(msg.content)) {
+      const parsed = parseNativeToolCalls(msg.content);
+      msg.content = parsed.cleanedContent;
+      if (parsed.toolCalls.length > 0) {
+        msg.tool_calls = parsed.toolCalls;
+        try { console.log(`[react-agent] parsed ${parsed.toolCalls.length} native tool call(s) from content (model=${model})`); } catch (_) { /* noop */ }
+      }
+    }
 
     // Persist the thought + any tool_calls so the NEXT turn has full
     // context — this is how the model "sees" its own trace.
@@ -873,6 +943,10 @@ module.exports = {
   DEFAULT_MAX_STEPS,
   DEFAULT_MAX_RUNTIME_MS,
   SYSTEM_PROMPT,
+  // Native tool-call parsing (Kimi/Hermes formats) — exported for unit tests.
+  parseNativeToolCalls,
+  hasNativeToolCalls,
+  stripNativeToolCallMarkup,
   // Exported for unit testing + reuse by other loops (agent-core, executor).
   compactMessages,
   estimateMessagesChars,
