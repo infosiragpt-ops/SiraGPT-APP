@@ -136,9 +136,18 @@ test("debug mode and pasted logs route to the SRE agent", () => {
 
 test("isBuildRequest / isBuildLog heuristics", () => {
   assert.equal(isBuildRequest("hazme una app"), true)
+  // "realiza/realizar/desarrolla" must count as build verbs (was missing → no intake)
+  assert.equal(isBuildRequest("realiza un landing"), true)
+  assert.equal(isBuildRequest("realízame una web"), true)
+  assert.equal(isBuildRequest("desarrolla una tienda"), true)
   assert.equal(isBuildRequest("hola"), false)
   assert.equal(isBuildLog("npm ERR! code ERESOLVE"), true)
   assert.equal(isBuildLog("buenas tardes"), false)
+})
+
+test('"realiza un landing" starts the intake (not a passthrough to the LLM)', () => {
+  const a = nextAgentAction(state(), "realiza un landing", { mode: "app", hasModel: true })
+  assert.equal(a.type, "ask")
 })
 
 test("promptFromContext builds a landing prompt", () => {
