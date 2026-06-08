@@ -62,6 +62,10 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    # Apply pending Prisma migrations on boot, then start the server. Without
+    # this the DB drifts behind the image's schema (e.g. a missing projects.type
+    # column → 500s). Set SKIP_MIGRATIONS=1 to bypass during local iteration.
+    command: ["node", "scripts/start-with-migrations.js"]
     ports:
       - "${BACKEND_PORT_EXTERNAL:-5000}:5000"
     environment:
