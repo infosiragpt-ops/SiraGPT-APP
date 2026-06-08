@@ -137,7 +137,7 @@ function enrichPlanWithPricing(plan) {
 const PLAN_BUDGETS = Object.freeze({
   FREE: 0,           // FREE has no premium budget
   PRO: 100_000,
-  PRO_MAX: 300_000,
+  PRO_MAX: 200_000,
   ENTERPRISE: null,  // unlimited
 });
 
@@ -148,8 +148,8 @@ const PLAN_BUDGETS = Object.freeze({
  *   usage      → cheapest plan covering totalMonthly credits
  *   0 calls    → FREE (no premium needed)
  *   ≤ 100k     → PRO
- *   ≤ 300k     → PRO_MAX
- *   > 300k     → ENTERPRISE (unlimited)
+ *   ≤ 200k     → PRO_MAX
+ *   > 200k     → ENTERPRISE (custom)
  */
 /**
  * Plan tier USD prices per the product brief.

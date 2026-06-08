@@ -165,7 +165,7 @@ test('getRecommendedPlan: small usage → PRO', () => {
 });
 
 test('getRecommendedPlan: medium usage → PRO_MAX', () => {
-  // 50_000 calls × 3 = 150_000 credits → exceeds PRO (100k), fits PRO_MAX (300k)
+  // 50_000 calls × 3 = 150_000 credits → exceeds PRO (100k), fits PRO_MAX (200k)
   const r = getRecommendedPlan({
     paraphrase: { calls: 50000, avgTextLength: 2000 },
   });
@@ -173,7 +173,7 @@ test('getRecommendedPlan: medium usage → PRO_MAX', () => {
 });
 
 test('getRecommendedPlan: huge usage → ENTERPRISE', () => {
-  // 100_000 calls × 11 = 1_100_000 credits → exceeds PRO_MAX (300k)
+  // 100_000 calls × 11 = 1_100_000 credits → exceeds PRO_MAX (200k)
   const r = getRecommendedPlan({
     paraphrase: { calls: 100000, avgTextLength: 10000 },
   });
@@ -321,8 +321,8 @@ test('PLAN_BUDGETS: matches the values plan-credits-catalog grants', () => {
   assert.equal(PLAN_BUDGETS.FREE, 0);
   // PRO grants 100k premium tokens per the spec
   assert.equal(PLAN_BUDGETS.PRO, 100_000);
-  // PRO_MAX grants 300k
-  assert.equal(PLAN_BUDGETS.PRO_MAX, 300_000);
+  // PRO_MAX grants 200k
+  assert.equal(PLAN_BUDGETS.PRO_MAX, 200_000);
   // ENTERPRISE is unlimited (null)
   assert.equal(PLAN_BUDGETS.ENTERPRISE, null);
 });
@@ -506,7 +506,7 @@ test('comparePlans: PRO_MAX → PRO is a downgrade with negative deltas', () => 
   const cmp = comparePlans('PRO_MAX', 'PRO');
   assert.equal(cmp.direction, 'downgrade');
   assert.equal(cmp.priceDeltaUsd, -5);
-  assert.equal(cmp.budgetDeltaCredits, -200_000);
+  assert.equal(cmp.budgetDeltaCredits, -100_000);
 });
 
 test('comparePlans: same plan is direction "same" with zero deltas', () => {
@@ -615,7 +615,7 @@ test('findCheapestPlanForBudget: $5 → ENTERPRISE (unlimited beats PRO 100k)', 
   assert.equal(findCheapestPlanForBudget(5).plan, 'ENTERPRISE');
 });
 
-test('findCheapestPlanForBudget: $10 → ENTERPRISE (still unlimited beats PRO_MAX 300k)', () => {
+test('findCheapestPlanForBudget: $10 → ENTERPRISE (still unlimited beats PRO_MAX 200k)', () => {
   const { findCheapestPlanForBudget } = require('../src/services/feature-cost-estimator');
   assert.equal(findCheapestPlanForBudget(10).plan, 'ENTERPRISE');
 });
@@ -813,7 +813,7 @@ test('pricingFAQEntries: prices match canonical PLAN_PRICES_USD', () => {
   assert.ok(proAnswer.includes('100,000'));
   const proMaxAnswer = faq.find((e) => e.q.includes('PRO_MAX')).a;
   assert.ok(proMaxAnswer.includes('$10'));
-  assert.ok(proMaxAnswer.includes('300,000'));
+  assert.ok(proMaxAnswer.includes('200,000'));
 });
 
 test('pricingFAQEntries: describes premium credit exhaustion without FlashGPT fallback', () => {

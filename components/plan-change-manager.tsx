@@ -41,6 +41,16 @@ interface ProrationPreview {
   currentPeriodEnd: string
 }
 
+interface PlanInfo {
+  name: string
+  price: number
+  priceLabel: string
+  billingLabel: string
+  limit: string
+  features: string[]
+  contactOnly?: boolean
+}
+
 export default function PlanChangeManager({ currentPlan, onPlanChanged }: PlanChangeModalProps) {
   const { user, refreshUser } = useAuth()
   const [selectedPlan, setSelectedPlan] = useState<string>('')
@@ -49,24 +59,31 @@ export default function PlanChangeManager({ currentPlan, onPlanChanged }: PlanCh
   const [executing, setExecuting] = useState(false)
   const [immediate, setImmediate] = useState(true)
 
-  const planInfo = {
+  const planInfo: Record<'PRO' | 'PRO_MAX' | 'ENTERPRISE', PlanInfo> = {
     PRO: {
       name: 'Pro',
       price: 5,
-      limit: '500.000 tokens/mes',
-      features: ['Todos los modelos de IA', 'Soporte prioritario', 'Funciones avanzadas']
+      priceLabel: '$5',
+      billingLabel: 'Facturación mensual',
+      limit: 'Acceso completo a SiraGPT',
+      features: ['Todos los modelos líderes', 'Documentos, imágenes, código y agentes', 'Soporte prioritario']
     },
     PRO_MAX: {
-      name: 'Pro Max',
-      price: 20,
-      limit: '1.000.000 tokens/mes',
-      features: ['Todo lo de Pro', 'Mayor límite de tokens', 'Límites de uso ampliados', 'Modelos avanzados']
+      name: 'Pro Extendido',
+      price: 10,
+      priceLabel: '$10',
+      billingLabel: 'Facturación mensual',
+      limit: 'Todo Pro con experiencia ampliada',
+      features: ['Todo lo de Pro', 'Más capacidad para trabajo frecuente', 'Prioridad superior']
     },
     ENTERPRISE: {
       name: 'Enterprise',
-      price: 200,
-      limit: '10.000.000 tokens/mes',
-      features: ['Todo lo de Pro Max', 'Límites masivos de tokens', 'Soporte dedicado', 'Integración a medida']
+      price: Number.POSITIVE_INFINITY,
+      priceLabel: 'Enterprise',
+      billingLabel: 'Por WhatsApp',
+      limit: 'Solución personalizada para equipos',
+      features: ['Acceso completo para equipos', 'Integraciones y seguridad', 'Acompañamiento directo'],
+      contactOnly: true
     }
   }
 
@@ -127,6 +144,14 @@ export default function PlanChangeManager({ currentPlan, onPlanChanged }: PlanCh
   }
 
   const handlePlanSelect = (plan: string) => {
+    const info = planInfo[plan as keyof typeof planInfo]
+    if (info?.contactOnly) {
+      const whatsappNumber = process.env.NEXT_PUBLIC_WHATSAPP_NUMBER || ''
+      const message = encodeURIComponent('Hola 👋, me interesa el plan Enterprise de SiraGPT. ¿Podrían ayudarme?')
+      window.open(`https://wa.me/${whatsappNumber}?text=${message}`, '_blank', 'noopener,noreferrer')
+      return
+    }
+
     setSelectedPlan(plan)
     previewPlanChange(plan)
   }
@@ -145,7 +170,7 @@ export default function PlanChangeManager({ currentPlan, onPlanChanged }: PlanCh
         <div className="text-center mb-8">
           <h3 className="text-2xl font-bold mb-2">Elige tu nuevo plan</h3>
           <p className="text-muted-foreground">
-            Select a plan below to see instant proration calculations
+            Selecciona Pro o Pro Extendido para revisar el cambio. Enterprise se coordina por WhatsApp.
           </p>
         </div>
         
@@ -181,7 +206,7 @@ export default function PlanChangeManager({ currentPlan, onPlanChanged }: PlanCh
                       : 'bg-orange-500 hover:bg-orange-600'
                     } text-white font-medium px-3 py-1`}
                   >
-                    {isUpgrade ? '⬆ Upgrade' : '⬇ Downgrade'}
+                    {info.contactOnly ? 'Contactar' : isUpgrade ? '⬆ Upgrade' : '⬇ Downgrade'}
                   </Badge>
                 </div>
 
@@ -192,9 +217,9 @@ export default function PlanChangeManager({ currentPlan, onPlanChanged }: PlanCh
                 <div className="mb-4">
                   <div className="flex items-baseline">
                     <span className="text-3xl font-bold">
-                      {formatCurrency(info.price)}
+                      {info.priceLabel}
                     </span>
-                    <span className="text-sm text-muted-foreground ml-1">/month</span>
+                    <span className="text-sm text-muted-foreground ml-1">{info.billingLabel}</span>
                   </div>
                   <p className="text-sm text-muted-foreground mt-1">{info.limit}</p>
                 </div>

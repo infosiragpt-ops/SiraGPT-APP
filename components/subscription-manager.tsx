@@ -45,40 +45,50 @@ export default function SubscriptionManager() {
   const [showPlanChange, setShowPlanChange] = useState(false)
   const [activeTab, setActiveTab] = useState('overview')
 
-  const planInfo: Record<string, { 
-    color: string, 
-    icon: any, 
-    limit: string, 
+  const planInfo: Record<string, {
+    color: string,
+    icon: any,
+    limit: string,
     price: number,
-    features: string[] 
+    priceLabel: string,
+    billingLabel: string,
+    features: string[]
   }> = {
     FREE: {
       color: 'from-gray-500 to-gray-600',
       icon: Users,
-      limit: '3 llamadas/mes',
+      limit: 'Acceso inicial',
       price: 0,
+      priceLabel: 'Gratis',
+      billingLabel: '',
       features: ['Chat IA básico', 'Soporte de la comunidad']
     },
     PRO: {
       color: 'from-blue-500 to-cyan-500',
       icon: Crown,
-      limit: '500.000 tokens/mes',
+      limit: 'Acceso completo a SiraGPT',
       price: 5,
-      features: ['Todos los modelos de IA', 'Soporte prioritario', 'Funciones avanzadas', 'Límites de uso ampliados']
+      priceLabel: '$5',
+      billingLabel: '/mes',
+      features: ['Todos los modelos líderes', 'Documentos, imágenes, código y agentes', 'Soporte prioritario']
     },
     PRO_MAX: {
       color: 'from-purple-500 to-pink-500',
       icon: Sparkles,
-      limit: '1.000.000 tokens/mes',
-      price: 20,
-      features: ['Todo lo de Pro', 'Mayor límite de tokens', 'Soporte prioritario', 'Modelos avanzados', 'Límites de uso ampliados']
+      limit: 'Todo Pro con experiencia ampliada',
+      price: 10,
+      priceLabel: '$10',
+      billingLabel: '/mes',
+      features: ['Todo lo de Pro', 'Más capacidad para trabajo frecuente', 'Prioridad superior']
     },
     ENTERPRISE: {
       color: 'from-amber-500 to-orange-500',
       icon: Zap,
-      limit: '10.000.000 tokens/mes',
-      price: 200,
-      features: ['Todo lo de Pro Max', 'Límites masivos de tokens', 'Soporte dedicado', 'Integración a medida', 'SLA garantizado']
+      limit: 'Solución personalizada para equipos',
+      price: Number.POSITIVE_INFINITY,
+      priceLabel: 'Enterprise',
+      billingLabel: 'WhatsApp',
+      features: ['Acceso completo para equipos', 'Integraciones y seguridad', 'Acompañamiento directo']
     }
   }
 
@@ -174,7 +184,7 @@ export default function SubscriptionManager() {
     usedAmount = totalLimit - remainingAmount
     usagePercentage = totalLimit > 0 ? (usedAmount / totalLimit) * 100 : 0
   } else {
-    // For paid users: apiUsage is tokens used, monthlyLimit is total tokens allowed
+    // For paid users: apiUsage tracks internal monthly activity units.
     totalLimit = user.monthlyLimit || 0
     usedAmount = user.apiUsage || 0
     remainingAmount = Math.max(0, totalLimit - usedAmount)
@@ -240,7 +250,7 @@ export default function SubscriptionManager() {
               </Badge>
               {currentPlan !== 'FREE' && (
                 <p className="text-sm text-muted-foreground mt-1">
-                  ${currentPlanInfo?.price}/month
+                  {currentPlanInfo?.priceLabel}{currentPlanInfo?.billingLabel ? currentPlanInfo.billingLabel : ''}
                 </p>
               )}
             </div>
@@ -250,14 +260,16 @@ export default function SubscriptionManager() {
           {/* Usage Progress */}
           <div>
             <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-medium">{currentPlan === 'FREE' ? 'Llamadas API este mes' : 'Uso de tokens este mes'}</span>
+              <span className="text-sm font-medium">{currentPlan === 'FREE' ? 'Actividad gratuita este mes' : 'Actividad del mes'}</span>
               <span className="text-sm text-muted-foreground">
-                {usedAmount.toLocaleString()}/{totalLimit.toLocaleString()}
+                {currentPlan === 'FREE' ? `${usedAmount.toLocaleString()}/${totalLimit.toLocaleString()}` : `${Math.round(usagePercentage)}%`}
               </span>
             </div>
             <Progress value={usagePercentage} className="h-2" />
             <p className="text-xs text-muted-foreground mt-1">
-              Quedan {remainingAmount.toLocaleString()} {currentPlan === 'FREE' ? 'llamadas' : 'tokens'}
+              {currentPlan === 'FREE'
+                ? `Quedan ${remainingAmount.toLocaleString()} accesos gratuitos`
+                : 'Tu plan sigue activo para continuar trabajando'}
             </p>
           </div>
 
@@ -405,10 +417,10 @@ export default function SubscriptionManager() {
           <CardHeader>
             <CardTitle className="flex items-center">
               <TrendingUp className="h-5 w-5 mr-2" />
-              Upgrade Your Plan
+              Mejora tu plan
             </CardTitle>
             <CardDescription>
-              Get more API calls and unlock advanced features
+              Accede a todo SiraGPT con una experiencia profesional y simple
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -419,10 +431,10 @@ export default function SubscriptionManager() {
                     <info.icon className="h-5 w-5" />
                     <span className="font-semibold">{plan}</span>
                   </div>
-                  <p className="text-2xl font-bold mb-1">${info.price}<span className="text-sm font-normal">/mo</span></p>
+                  <p className="text-2xl font-bold mb-1">{info.priceLabel}<span className="text-sm font-normal">{info.billingLabel ? ` ${info.billingLabel}` : ''}</span></p>
                   <p className="text-sm text-muted-foreground mb-4">{info.limit}</p>
                   <Button size="sm" className="w-full">
-                    Upgrade to {plan}
+                    {plan === 'ENTERPRISE' ? 'Comunícate al WhatsApp' : `Elegir ${info.priceLabel}`}
                   </Button>
                 </div>
               ))}
@@ -442,12 +454,12 @@ export default function SubscriptionManager() {
         <CardContent>
           <div className="grid gap-4 md:grid-cols-3">
             <div className="text-center p-4 bg-muted/50 rounded-lg">
-              <p className="text-2xl font-bold">{usedAmount.toLocaleString()}</p>
-              <p className="text-sm text-muted-foreground">{currentPlan === 'FREE' ? 'Llamadas' : 'Tokens'} usadas este mes</p>
+              <p className="text-2xl font-bold">{currentPlan === 'FREE' ? usedAmount.toLocaleString() : `${Math.round(usagePercentage)}%`}</p>
+              <p className="text-sm text-muted-foreground">Actividad este mes</p>
             </div>
             <div className="text-center p-4 bg-muted/50 rounded-lg">
-              <p className="text-2xl font-bold">{remainingAmount.toLocaleString()}</p>
-              <p className="text-sm text-muted-foreground">{currentPlan === 'FREE' ? 'Llamadas' : 'Tokens'} restantes</p>
+              <p className="text-2xl font-bold">{currentPlan === 'FREE' ? remainingAmount.toLocaleString() : 'Activo'}</p>
+              <p className="text-sm text-muted-foreground">Disponibilidad del plan</p>
             </div>
             <div className="text-center p-4 bg-muted/50 rounded-lg">
               <p className="text-2xl font-bold">{Math.round(usagePercentage)}%</p>

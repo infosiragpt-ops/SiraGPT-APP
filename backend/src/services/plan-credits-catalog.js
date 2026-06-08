@@ -16,14 +16,14 @@ const PLANS = Object.freeze({
   PRO: {
     plan: 'PRO',
     premiumTokens: 100_000,
-    gemaTokenLimit: 500_000,
+    gemaTokenLimit: 1_000_000,
     gemaUnlimited: false,
     dailyCalls: null,
     priceUsd: 5,
   },
   PRO_MAX: {
     plan: 'PRO_MAX',
-    premiumTokens: 300_000,
+    premiumTokens: 200_000,
     gemaTokenLimit: 1_000_000,
     gemaUnlimited: false,
     dailyCalls: null,

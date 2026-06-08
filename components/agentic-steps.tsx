@@ -13,7 +13,8 @@ import {
   FileCheck2,
   FileText,
   RefreshCcw,
-  ShieldCheck} from "lucide-react"
+  ShieldCheck,
+} from "lucide-react"
 import { cn } from "@/lib/utils"
 import { AgentStatusIcon, type AgentStatusIconKind } from "@/components/icons/agent-status-icons"
 import { agentTaskService, type AgentArtifact, type AgentTaskState } from "@/lib/agent-task-service"
@@ -28,7 +29,6 @@ import {
 import type { DocumentPreviewTarget } from "@/components/document-preview"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
-import { ThinkingPlaceholder } from "@/components/thinking-placeholder"
 interface Props {
   state: AgentTaskState
   className?: string
@@ -45,14 +45,14 @@ interface TimelineStepProjection {
 }
 
 const STATUS_STYLES: Record<AgentActivityStatus, string> = {
-  queued: "border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-800 dark:bg-slate-950/30 dark:text-slate-200",
-  running: "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900/70 dark:bg-blue-950/30 dark:text-blue-200",
-  verifying: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/70 dark:bg-emerald-950/30 dark:text-emerald-200",
-  repairing: "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/70 dark:bg-amber-950/30 dark:text-amber-200",
-  completed: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/70 dark:bg-emerald-950/30 dark:text-emerald-200",
-  cancelled: "border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-800 dark:bg-slate-950/30 dark:text-slate-200",
-  error: "border-red-200 bg-red-50 text-red-700 dark:border-red-900/70 dark:bg-red-950/30 dark:text-red-200",
-  idle: "border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-800 dark:bg-slate-950/30 dark:text-slate-200",
+  queued: "border-border/60 bg-background/70 text-muted-foreground",
+  running: "border-sky-500/20 bg-sky-500/[0.055] text-sky-700 dark:text-sky-300",
+  verifying: "border-emerald-500/20 bg-emerald-500/[0.055] text-emerald-700 dark:text-emerald-300",
+  repairing: "border-amber-500/20 bg-amber-500/[0.055] text-amber-800 dark:text-amber-300",
+  completed: "border-emerald-500/20 bg-emerald-500/[0.055] text-emerald-700 dark:text-emerald-300",
+  cancelled: "border-border/60 bg-background/70 text-muted-foreground",
+  error: "border-red-500/20 bg-red-500/[0.055] text-red-700 dark:text-red-300",
+  idle: "border-border/60 bg-background/70 text-muted-foreground",
 }
 
 function plural(value: number, singular: string, pluralLabel: string) {
@@ -99,7 +99,13 @@ function phaseFromStatus(status: AgentActivityStatus): AgentStatusIconKind {
 }
 
 function projectTimelineSteps(steps: AgentTaskState["steps"]): TimelineStepProjection[] {
-  const source = steps?.length ? steps : [{ id: "initial", label: "Analizando solicitud", status: "running" as const, toolCalls: [] }]
+  const source = steps?.length ? steps : [{
+    id: "initial",
+    label: "Analizando solicitud",
+    reasoning: "Preparando el plan, las fuentes y las herramientas antes de ejecutar la tarea.",
+    status: "running" as const,
+    toolCalls: [],
+  }]
   const projected: TimelineStepProjection[] = []
 
   for (const step of source) {
@@ -307,29 +313,62 @@ function TimelineRow({
   badges?: string[]
 }) {
   return (
-    <div className="relative flex gap-3">
-      <div className="flex w-6 shrink-0 justify-center text-muted-foreground">
+    <div className="relative flex gap-2.5">
+      <div className="flex w-5 shrink-0 justify-center text-muted-foreground">
         <div className={cn(
-          "mt-0.5 flex h-6 w-6 items-center justify-center bg-background",
+          "mt-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-background/80 ring-1 ring-border/50",
           status === "done" && "text-emerald-600",
-          status === "running" && "text-blue-600",
+          status === "running" && "text-sky-600 shadow-[0_0_0_3px_rgba(14,165,233,0.08)]",
           status === "error" && "text-red-600",
           (!status || status === "muted") && "text-muted-foreground",
         )}>
           {icon}
         </div>
       </div>
-      <div className="min-w-0 flex-1 pb-3">
+      <div className="min-w-0 flex-1 pb-2.5">
         <div className="flex flex-wrap items-center gap-2">
-          <div className="text-sm font-medium text-foreground">{label}</div>
+          <div className="text-[13px] font-medium leading-5 text-foreground">{label}</div>
           {badges.map((badge) => (
-            <span key={badge} className="rounded-md bg-muted/40 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+            <span key={badge} className="rounded-full bg-muted/50 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
               {badge}
             </span>
           ))}
         </div>
-        {detail && <div className="mt-0.5 text-xs leading-5 text-muted-foreground">{detail}</div>}
+        {detail && <div className="mt-0.5 max-w-[52rem] text-[12px] leading-5 text-muted-foreground">{detail}</div>}
       </div>
+    </div>
+  )
+}
+
+function AgentActionButton({
+  children,
+  onClick,
+  disabled,
+  "aria-label": ariaLabel,
+}: {
+  children: React.ReactNode
+  onClick: () => void
+  disabled?: boolean
+  "aria-label"?: string
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={ariaLabel}
+      className="inline-flex h-7 items-center gap-1.5 rounded-full border border-border/60 bg-background/70 px-2.5 text-[11px] font-medium text-muted-foreground shadow-sm transition-colors hover:border-border hover:bg-muted/40 hover:text-foreground disabled:opacity-60"
+    >
+      {children}
+    </button>
+  )
+}
+
+function AgentProgressBeam() {
+  return (
+    <div className="h-px w-full overflow-hidden rounded-full bg-border/60" aria-hidden="true">
+      <div className="h-full w-1/3 animate-[agent-beam_1.35s_ease-in-out_infinite] rounded-full bg-gradient-to-r from-transparent via-foreground/45 to-transparent" />
+      <style jsx>{`@keyframes agent-beam { 0% { transform: translateX(-120%); } 100% { transform: translateX(320%); } }`}</style>
     </div>
   )
 }
@@ -448,9 +487,9 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview }: Pr
     // animated placeholder is a lie. Surface a minimal, recoverable
     // state instead so the user can retry or move on.
     return (
-      <div className={cn("my-2 flex flex-wrap items-center gap-2 text-[12.5px] text-muted-foreground", className)}>
+      <div className={cn("my-2 flex flex-wrap items-center gap-2 rounded-full border border-amber-500/20 bg-amber-500/[0.06] px-3 py-2 text-[12.5px] text-muted-foreground", className)}>
         <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
-        <span>El asistente dejó de responder. Intenta reformular o reintentar.</span>
+        <span>Sin actualizaciones recientes. Puedes cancelar y volver a intentar.</span>
         {canCancel && (
           <button
             type="button"
@@ -468,70 +507,55 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview }: Pr
   }
 
   if (isLiveActivity) {
-    // Live state — stream the model's reasoning as it happens (Claude-style
-    // transparency). We render the trail of reasoning steps that already
-    // carry a narration, then the 3-bar "pensando" indicator for the step in
-    // flight. Steps without any reasoning text fall back to the minimal
-    // placeholder so simple/plain turns still read like a clean streaming
-    // answer. The Stop affordance at the composer dock is the canonical
-    // cancel; the tiny secondary button only shows for server-side tasks.
-    const liveReasoning = timelineSteps.filter((s) => s.detail && s.detail.trim()).slice(-5)
-    if (liveReasoning.length === 0) {
-      return (
-        <div
-          role="status"
-          aria-live="polite"
-          aria-label="Generando respuesta"
-          className={cn("my-1 flex items-center gap-2", className)}
-        >
-          <ThinkingPlaceholder compact />
-          {canCancel && (
-            <button
-              type="button"
-              onClick={cancelTask}
-              disabled={cancelling}
-              className="ml-1 inline-flex h-6 shrink-0 items-center gap-1 rounded-full border border-border/55 px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground disabled:opacity-60"
-              aria-label="Cancelar tarea"
-            >
-              {cancelling ? <ThinkingIndicator size="xs" /> : <Ban className="h-3 w-3" />}
-              Cancelar
-            </button>
-          )}
-        </div>
-      )
-    }
+    // Minimal live activity: one calm card, one pulse line, clear status.
+    // It reads like a professional execution trace instead of a generic spinner.
+    const visibleSteps = timelineSteps
+      .filter((s) => s.detail && s.detail.trim())
+      .slice(-4)
+    const stepsToRender = visibleSteps.length ? visibleSteps : timelineSteps.slice(-3)
     return (
       <div
         role="status"
         aria-live="polite"
-        aria-label="Razonando"
-        className={cn("my-2 w-full max-w-2xl", className)}
+        aria-label="Agente trabajando"
+        className={cn("my-3 w-full max-w-2xl rounded-2xl border border-border/55 bg-background/85 p-3.5 shadow-sm backdrop-blur-xl", className)}
       >
-        <div className="border-l border-border/60 pl-3">
-          {liveReasoning.map((step) => (
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <span className="relative flex h-2.5 w-2.5 shrink-0">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-foreground/30 opacity-45" />
+              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-foreground" />
+            </span>
+            <div className="min-w-0">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">Trabajando</div>
+              <div className="mt-0.5 truncate text-sm font-medium text-foreground">{runningTimelineStep?.label || summary.label}</div>
+            </div>
+          </div>
+          {canCancel && (
+            <AgentActionButton onClick={cancelTask} disabled={cancelling} aria-label="Cancelar tarea">
+              {cancelling ? <ThinkingIndicator size="xs" /> : <Ban className="h-3 w-3" />}
+              Cancelar
+            </AgentActionButton>
+          )}
+        </div>
+        <AgentProgressBeam />
+        <div className="mt-3 border-l border-border/50 pl-3">
+          {stepsToRender.map((step) => (
             <TimelineRow
               key={step.id}
-              icon={<AgentStatusIcon kind={step.status === "running" ? step.phase : "done"} className="h-4 w-4" />}
+              icon={<AgentStatusIcon kind={step.status === "running" ? step.phase : "done"} className="h-3.5 w-3.5" />}
               label={step.label}
-              detail={step.detail}
+              detail={step.detail || "Procesando la siguiente acción…"}
               status={step.status}
+              badges={step.count > 1 ? [`${step.count} pasos`] : []}
             />
           ))}
-          <div className="mt-1 flex items-center gap-2">
-            <ThinkingPlaceholder compact />
-            {canCancel && (
-              <button
-                type="button"
-                onClick={cancelTask}
-                disabled={cancelling}
-                className="ml-1 inline-flex h-6 shrink-0 items-center gap-1 rounded-full border border-border/55 px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground disabled:opacity-60"
-                aria-label="Cancelar tarea"
-              >
-                {cancelling ? <ThinkingIndicator size="xs" /> : <Ban className="h-3 w-3" />}
-                Cancelar
-              </button>
-            )}
-          </div>
+        </div>
+        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
+          <span>{plural(Math.max(summary.stepCount, stepsToRender.length), "paso", "pasos")}</span>
+          <span className="text-border">/</span>
+          <span>{plural(summary.toolCount, "herramienta", "herramientas")}</span>
+          {state.queue?.status && <><span className="text-border">/</span><span>{sanitizeAgentText(state.queue.status, "en ejecución")}</span></>}
         </div>
       </div>
     )

@@ -11,12 +11,20 @@ const {
   resolveModelForUser,
 } = require('../src/services/model-quota-router');
 
-test('plan catalog PRO grants 100k premium and 500k gema', () => {
+test('plan catalog PRO grants 100k premium and 1M gema', () => {
   const catalog = getPlanCatalog('PRO');
   assert.equal(catalog.premiumTokens, 100_000);
-  assert.equal(catalog.gemaTokenLimit, 500_000);
+  assert.equal(catalog.gemaTokenLimit, 1_000_000);
   assert.equal(String(premiumTokenGrant('PRO')), '100000');
-  assert.equal(String(gemaTokenGrant('PRO')), '500000');
+  assert.equal(String(gemaTokenGrant('PRO')), '1000000');
+});
+
+test('plan catalog PRO_MAX grants 200k premium and 1M gema', () => {
+  const catalog = getPlanCatalog('PRO_MAX');
+  assert.equal(catalog.premiumTokens, 200_000);
+  assert.equal(catalog.gemaTokenLimit, 1_000_000);
+  assert.equal(String(premiumTokenGrant('PRO_MAX')), '200000');
+  assert.equal(String(gemaTokenGrant('PRO_MAX')), '1000000');
 });
 
 test('model router falls back to default Gema4 model when premium exhausted', () => {
@@ -25,7 +33,7 @@ test('model router falls back to default Gema4 model when premium exhausted', ()
     apiUsage: 200_000n,
     monthlyLimit: 100_000n,
     gemaTokenUsage: 0n,
-    gemaTokenLimit: 500_000n,
+    gemaTokenLimit: 1_000_000n,
   }, 'gpt-4o');
   assert.equal(typeof routed.model, 'string');
   assert.equal(typeof routed.provider, 'string');
@@ -59,7 +67,7 @@ test('model quota policy reports exhausted premium fallback separately from Gema
     apiUsage: 100_000n,
     monthlyLimit: 100_000n,
     gemaTokenUsage: 10_000n,
-    gemaTokenLimit: 500_000n,
+    gemaTokenLimit: 1_000_000n,
   });
 
   assert.equal(policy.currentPlan, 'PRO');
@@ -67,7 +75,7 @@ test('model quota policy reports exhausted premium fallback separately from Gema
   assert.equal(policy.premiumTokens.exhausted, true);
   assert.equal(policy.premiumTokens.remaining, '0');
   assert.equal(policy.gemaTokens.exhausted, false);
-  assert.equal(policy.gemaTokens.remaining, '490000');
+  assert.equal(policy.gemaTokens.remaining, '990000');
   assert.equal(policy.notices.some((n) => n.code === 'premium_pool_exhausted_fallback_available'), true);
 });
 
@@ -121,7 +129,7 @@ test('userQuotaDigest: PRO user with 70% premium usage reports pctUsed=70', () =
     apiUsage: 70_000n,
     monthlyLimit: 100_000n,
     gemaTokenUsage: 0n,
-    gemaTokenLimit: 500_000n,
+    gemaTokenLimit: 1_000_000n,
   });
   assert.equal(digest.plan, 'PRO');
   assert.equal(digest.premium.unlimited, false);
@@ -136,7 +144,7 @@ test('userQuotaDigest.flashGptStatus: inlined per-day quota check', () => {
     apiUsage: 0n,
     monthlyLimit: 100_000n,
     gemaTokenUsage: 0n,
-    gemaTokenLimit: 500_000n,
+    gemaTokenLimit: 1_000_000n,
   });
   assert.ok(digest.flashGptStatus, 'flashGptStatus should be inlined on the digest');
   assert.equal(typeof digest.flashGptStatus.ok, 'boolean');
@@ -163,7 +171,7 @@ test('userQuotaDigest.upgradeHint: PRO under 80% — no hint inlined', () => {
     apiUsage: 50_000n,
     monthlyLimit: 100_000n,
     gemaTokenUsage: 0n,
-    gemaTokenLimit: 500_000n,
+    gemaTokenLimit: 1_000_000n,
   });
   assert.equal(digest.upgradeHint, null);
 });

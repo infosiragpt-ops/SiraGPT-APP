@@ -1,23 +1,35 @@
 "use client"
 
 import * as React from "react"
-import { useState, useEffect } from "react"
-import { MessageSquare, Globe, ImageIcon, Mic, Video, Crown } from "lucide-react"
+import { Building2, Check, Crown, FileText, Globe, ImageIcon, MessageCircle, Rocket, ShieldCheck, Sparkles } from "lucide-react"
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
 import { toast } from "sonner"
-import { cn } from "@/lib/utils"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { apiClient } from "@/lib/api"
 
 type Plan = "FREE" | "PRO" | "PRO_MAX" | "ENTERPRISE"
+
+type UpgradePlan = {
+  id: Exclude<Plan, "FREE">
+  name: string
+  eyebrow: string
+  price: string
+  subtitle: string
+  icon: typeof Crown
+  featured?: boolean
+  cta: string
+  features: Array<{
+    icon: typeof Crown
+    title: string
+    desc: string
+  }>
+}
 
 interface UpgradeModalProps {
   open: boolean
@@ -33,16 +45,64 @@ interface UpgradeModalProps {
   isSubscribing?: boolean
 }
 
-/** Local FeatureRow used inside modal */
-function FeatureRow({ icon, title, desc, included = true }: { icon: React.ReactNode; title: string; desc: string; included?: boolean }) {
+const upgradePlans: UpgradePlan[] = [
+  {
+    id: "PRO",
+    name: "Pro",
+    eyebrow: "Acceso completo",
+    price: "$5",
+    subtitle: "Todo SiraGPT para empezar fuerte.",
+    icon: Crown,
+    featured: true,
+    cta: "Elegir Pro",
+    features: [
+      { icon: Sparkles, title: "Modelos líderes", desc: "GPT, Claude, Gemini, Grok y más" },
+      { icon: FileText, title: "Trabajo completo", desc: "Chat, documentos, código e imágenes" },
+      { icon: Rocket, title: "Agentes y proyectos", desc: "Flujos inteligentes en una sola cuenta" },
+      { icon: ShieldCheck, title: "Soporte prioritario", desc: "Acompañamiento para avanzar mejor" },
+    ],
+  },
+  {
+    id: "PRO_MAX",
+    name: "Pro Extendido",
+    eyebrow: "Más capacidad",
+    price: "$10",
+    subtitle: "La misma experiencia completa, ampliada para uso diario.",
+    icon: Rocket,
+    cta: "Elegir Pro Extendido",
+    features: [
+      { icon: Crown, title: "Todo Pro", desc: "Todas las funciones incluidas" },
+      { icon: Globe, title: "Más ritmo de trabajo", desc: "Ideal para proyectos frecuentes" },
+      { icon: ImageIcon, title: "Creatividad avanzada", desc: "Imagen, voz, video y análisis" },
+      { icon: ShieldCheck, title: "Prioridad superior", desc: "Soporte y continuidad reforzados" },
+    ],
+  },
+  {
+    id: "ENTERPRISE",
+    name: "Enterprise",
+    eyebrow: "A medida",
+    price: "Enterprise",
+    subtitle: "Para equipos, empresas y requerimientos especiales.",
+    icon: Building2,
+    cta: "Comunícate al WhatsApp",
+    features: [
+      { icon: Building2, title: "Equipos", desc: "Configuración para operación interna" },
+      { icon: ShieldCheck, title: "Seguridad", desc: "Revisión de necesidades por caso" },
+      { icon: Globe, title: "Integraciones", desc: "Flujos y herramientas conectadas" },
+      { icon: MessageCircle, title: "Atención directa", desc: "Acompañamiento por WhatsApp" },
+    ],
+  },
+]
+
+function FeatureRow({ icon: Icon, title, desc }: { icon: typeof Crown; title: string; desc: string }) {
   return (
-    <div className={`flex items-start gap-3 ${included ? '' : 'opacity-60'}`}>
-      <div className="w-8 h-8 rounded-md bg-muted/20 flex items-center justify-center text-muted-foreground">
-        {icon}
+    <div className="flex gap-3 py-2.5">
+      <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border/60 bg-background text-muted-foreground">
+        <Icon className="h-3.5 w-3.5" />
       </div>
-      <div>
-        <div className="font-medium text-sm">{title}</div>
-        <div className="text-xs text-muted-foreground">{desc}</div>
+      <div className="min-w-0">
+        <div className="text-sm font-medium leading-5 text-foreground">{title}</div>
+        <div className="text-xs leading-5 text-muted-foreground">{desc}</div>
       </div>
     </div>
   )
@@ -50,25 +110,27 @@ function FeatureRow({ icon, title, desc, included = true }: { icon: React.ReactN
 
 export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, isSubscribing }: UpgradeModalProps) {
   const [loadingPlan, setLoadingPlan] = React.useState<Plan | null>(null)
-
-  // Use auth context directly for the most up-to-date user data
   const { user: authUser } = useAuth()
-
-  // Use auth context user if available, fallback to prop user
   const currentUser = authUser || user
-  const currentPlan = currentUser?.plan || "FREE"
+  const currentPlan = (currentUser?.plan || "FREE") as Plan
   const apiUsage = currentUser?.apiUsage ?? 0
   const monthlyLimit = currentUser?.monthlyLimit ?? 0
-  const monthlyCallLimit = currentUser?.monthlyCallLimit ?? 0
-  const remainingCalls = monthlyLimit - monthlyCallLimit
+  const usageRatio = monthlyLimit > 0 ? apiUsage / monthlyLimit : 0
 
-  const planMeta: Record<Exclude<Plan, "FREE">, { price: number; creditsLabel: string; monthlyLimit: number }> = {
-    PRO: { price: 5, creditsLabel: "500.000 tokens / mes", monthlyLimit: 500000 },
-    PRO_MAX: { price: 20, creditsLabel: "1.000.000 tokens / mes", monthlyLimit: 1000000 },
-    ENTERPRISE: { price: 200, creditsLabel: "10.000.000 tokens / mes", monthlyLimit: 10000000 },
+  const openEnterpriseWhatsapp = () => {
+    const whatsappNumber = process.env.NEXT_PUBLIC_WHATSAPP_NUMBER || ""
+    const message = encodeURIComponent(
+      "Hola 👋, me interesa el plan Enterprise de SiraGPT. ¿Podrían ayudarme?",
+    )
+    window.open(`https://wa.me/${whatsappNumber}?text=${message}`, "_blank", "noopener,noreferrer")
   }
 
   const subscribe = async (plan: Exclude<Plan, "FREE">) => {
+    if (plan === "ENTERPRISE") {
+      openEnterpriseWhatsapp()
+      return
+    }
+
     try {
       setLoadingPlan(plan)
 
@@ -96,9 +158,8 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
 
       if (status === 503 || /not configured/i.test(err?.message || "")) {
         toast.error(
-          data?.message ||
-            "El procesamiento de pagos aún no está configurado. Contacta a soporte.",
-          { duration: 6000 }
+          data?.message || "El procesamiento de pagos aún no está configurado. Contacta a soporte.",
+          { duration: 6000 },
         )
       } else if (status === 401) {
         toast.error("Tu sesión expiró — inicia sesión de nuevo.")
@@ -112,246 +173,115 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-7xl w-[98%] md:w-11/12 lg:w-4/5 p-6 max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="text-2xl">Planes</DialogTitle>
-        </DialogHeader>
+      <DialogContent className="max-h-[92vh] w-[96vw] max-w-5xl overflow-y-auto border-border/70 bg-background p-0 shadow-2xl">
+        <div className="border-b border-border/60 px-6 py-6 sm:px-8">
+          <DialogHeader>
+            <div className="mb-3 inline-flex w-fit items-center gap-2 rounded-full border border-border/70 bg-muted/30 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+              <Sparkles className="h-3.5 w-3.5 text-violet-500" />
+              SiraGPT Pro
+            </div>
+            <DialogTitle className="max-w-2xl text-balance text-2xl font-semibold tracking-[-0.035em] sm:text-3xl">
+              Planes simples, potentes y listos para trabajar.
+            </DialogTitle>
+          </DialogHeader>
 
-        <div className="mt-6 flex flex-col gap-6">
-          {/* Top summary row */}
-          <div className="flex items-center justify-between gap-4">
-            <div className="flex items-center gap-4">
-              {currentUser ? (
-                <div className="text-sm">
-                  <div className="font-medium">{currentUser?.name || "Usuario"}</div>
-                  <div className="text-xs text-muted-foreground">{currentUser?.email || ""}</div>
-                </div>
-              ) : (
-                <div className="text-sm text-muted-foreground">
-                  <div className="flex items-center gap-2">
-                    <div>No has iniciado sesión</div>
-                    <Button size="sm" variant="ghost" onClick={() => (window.location.href = "/auth/login")}>Iniciar sesión</Button>
+          <div className="mt-4 flex flex-col gap-3 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+            <p className="max-w-2xl">
+              Todo SiraGPT desde Pro. Más capacidad cuando tu ritmo crece. Atención directa cuando tu equipo necesita una solución a medida.
+            </p>
+            <div className="rounded-full border border-border/70 px-3 py-1 text-xs">
+              Plan actual: <span className="font-medium text-foreground">{currentPlan}</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="px-6 py-6 sm:px-8">
+          {usageRatio >= 0.7 ? (
+            <div className="mb-5 rounded-2xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-900 dark:text-amber-200">
+              <div className="font-medium">Tu actividad del mes está alta.</div>
+              <p className="mt-1 text-amber-800/80 dark:text-amber-200/80">
+                Mejora tu plan para mantener continuidad y trabajar sin interrupciones.
+              </p>
+            </div>
+          ) : null}
+
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+            {upgradePlans.map((plan) => {
+              const Icon = plan.icon
+              const isCurrent = currentPlan === plan.id
+              const isLoading = loadingPlan === plan.id || isSubscribing
+              const isEnterprise = plan.id === "ENTERPRISE"
+
+              return (
+                <article
+                  key={plan.id}
+                  className={`relative flex min-h-[470px] flex-col rounded-[26px] border p-5 transition-all duration-200 ${
+                    plan.featured
+                      ? "border-foreground/15 bg-card shadow-xl shadow-foreground/5 ring-1 ring-foreground/10"
+                      : "border-border/70 bg-card/45 hover:border-foreground/20 hover:bg-card/70"
+                  }`}
+                >
+                  {plan.featured ? (
+                    <div className="absolute right-5 top-5 rounded-full border border-border/60 bg-background px-2.5 py-1 text-[11px] font-medium text-muted-foreground shadow-sm">
+                      Recomendado
+                    </div>
+                  ) : null}
+
+                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-current/10 bg-current/[0.04]">
+                    <Icon className="h-5 w-5" />
                   </div>
-                </div>
-              )}
-            </div>
 
-            <div className="text-sm text-muted-foreground">
-              <div>Plan: <strong>{currentPlan}</strong></div>
-              <div className="text-xs">Uso de tokens: {apiUsage}</div>
-            </div>
-          </div>
-          
-         {/* Usage warning message */}
-{monthlyLimit > 0 && (
-  <>
-    {/* Limit exceeded */}
-    {apiUsage >= monthlyLimit ? (
-      <div className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-        <div className="flex items-center gap-2">
-          <div className="w-2 h-2 bg-red-500 rounded-full"></div>
-          <div className="text-sm font-medium text-red-700 dark:text-red-400">
-            Límite mensual alcanzado
-          </div>
-        </div>
-        <p className="text-sm text-red-600 dark:text-red-300 mt-1">
-          Has consumido todo tu límite mensual de la API.
-          Mejora tu plan para seguir usando todas las funciones.
-        </p>
-      </div>
+                  <div className="mt-6">
+                    <div className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                      {plan.eyebrow}
+                    </div>
+                    <h3 className="mt-3 text-2xl font-semibold tracking-[-0.03em]">{plan.name}</h3>
+                    <p className="mt-3 min-h-[44px] text-sm leading-6 text-muted-foreground">
+                      {plan.subtitle}
+                    </p>
+                  </div>
 
-    ) : (apiUsage / monthlyLimit) >= 0.9 ? (
-      /* 90% Warning */
-      <div className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-        <div className="flex items-center gap-2">
-          <div className="w-2 h-2 bg-red-500 rounded-full"></div>
-          <div className="text-sm font-medium text-red-700 dark:text-red-400">
-            Casi al límite
-          </div>
-        </div>
-        <p className="text-sm text-red-600 dark:text-red-300 mt-1">
-          Has usado {Math.round((apiUsage / monthlyLimit) * 100)}% de tu límite mensual de API.
-          Mejora tu plan para seguir usando todas las funciones.
-        </p>
-      </div>
+                  <div className="mt-6 border-t border-current/10 pt-6">
+                    <div className="text-4xl font-semibold tracking-[-0.05em]">{plan.price}</div>
+                    {plan.id !== "ENTERPRISE" ? (
+                      <div className="mt-1 text-xs text-muted-foreground">Facturación mensual</div>
+                    ) : (
+                      <div className="mt-1 text-xs text-muted-foreground">Comunicación directa por WhatsApp</div>
+                    )}
+                  </div>
 
-    ) : (apiUsage / monthlyLimit) >= 0.7 ? (
-      /* 70% Warning */
-      <div className="p-4 bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-lg">
-        <div className="flex items-center gap-2">
-          <div className="w-2 h-2 bg-orange-500 rounded-full"></div>
-          <div className="text-sm font-medium text-orange-700 dark:text-orange-400">
-            Acercándote al límite
-          </div>
-        </div>
-        <p className="text-sm text-orange-600 dark:text-orange-300 mt-1">
-          Has usado {Math.round((apiUsage / monthlyLimit) * 100)}% de tu límite mensual de API.
-          Considera mejorar tu plan para evitar interrupciones.
-        </p>
-      </div>
+                  <div className="mt-5 flex-1 divide-y divide-border/50">
+                    {plan.features.map((feature) => (
+                      <FeatureRow key={feature.title} {...feature} />
+                    ))}
+                  </div>
 
-    ) : null}
-  </>
-)}
-
-
-          {/* Grid of plan cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            {/* FREE */}
-            <div className="rounded-2xl p-8 bg-gradient-to-b from-background/80 to-background/60 backdrop-blur-md border border-border/30 shadow-md min-h-[420px] flex flex-col transition hover:shadow-xl hover:scale-[1.02] duration-200">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-lg font-semibold">FREE</h3>
-                  <div className="text-xs text-muted-foreground mt-1">Acceso básico</div>
-                </div>
-                <div className="text-right">
-                  <div className="text-xl font-bold">Gratis</div>
-                  <div className="text-xs text-muted-foreground">3 llamadas / mes</div>
-                </div>
-              </div>
-
-              <div className="mt-6 space-y-3 text-sm flex-1">
-                <FeatureRow icon={<MessageSquare className="h-5 w-5" />} title="Chat (GPT)" desc="Asistente conversacional" included />
-                <FeatureRow icon={<Globe className="h-5 w-5" />} title="Búsqueda web" desc="Búsqueda web básica" included />
-                <FeatureRow icon={<ImageIcon className="h-5 w-5" />} title="Generación de imágenes" desc="No incluido" included={false} />
-                <FeatureRow icon={<Mic className="h-5 w-5" />} title="Audio (ElevenLabs)" desc="No incluido" included={false} />
-                <FeatureRow icon={<Video className="h-5 w-5" />} title="Generación de video" desc="No incluido" included={false} />
-              </div>
-
-              <div className="mt-8 border-t border-border/30 pt-6 flex flex-col items-center gap-3">
-                {currentPlan === "FREE" ? (
-                  <Button size="sm" variant="outline" disabled className="w-full">Plan actual</Button>
-                ) : (
-                  // Free plan is not a "subscribe" option. Show informative disabled button.
-                  <Button size="sm" variant="ghost" disabled className="w-full text-muted-foreground">
-                    Gratis (por defecto)
-                  </Button>
-                )}
-                <div className="text-xs text-muted-foreground text-center">
-                  El plan gratuito es el predeterminado para nuevos usuarios — no es una suscripción de pago.
-                </div>
-              </div>
-            </div>
-
-            {/* PRO */}
-            <div className="rounded-2xl p-8 bg-gradient-to-b from-white/10 to-white/5 border border-border/30 shadow-lg min-h-[400px] flex flex-col transition hover:shadow-xl hover:scale-[1.02] duration-200">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-lg font-semibold">PRO</h3>
-                  <div className="text-xs text-muted-foreground mt-1">Todos los modelos, soporte prioritario</div>
-                </div>
-                <div className="text-right">
-                  <div className="text-xl font-bold">$5</div>
-                  <div className="text-xs text-muted-foreground">500.000 tokens / mes</div>
-                </div>
-              </div>
-
-              <div className="mt-6 space-y-3 text-sm">
-                <FeatureRow icon={<MessageSquare className="h-5 w-5" />} title="Todos los modelos" desc="GPT, Claude, Gemini, etc." included />
-                <FeatureRow icon={<Globe className="h-5 w-5" />} title="Búsqueda web" desc="Resultados web integrados" included />
-                <FeatureRow icon={<ImageIcon className="h-5 w-5" />} title="Generación de imágenes" desc="Incluido" included />
-                <FeatureRow icon={<Mic className="h-5 w-5" />} title="Audio (ElevenLabs)" desc="No incluido" included={false} />
-                <FeatureRow icon={<Video className="h-5 w-5" />} title="Generación de video" desc="No incluido" included={false} />
-              </div>
-
-              <div className="mt-8 border-t border-border/30 pt-6 flex flex-col items-center gap-3">
-                {currentPlan === "PRO" ? (
-                  <Button size="sm" variant="outline" disabled className="w-full">Plan actual</Button>
-                ) : (
-                  <Button size="sm" onClick={() => subscribe("PRO")} disabled={isSubscribing || !!loadingPlan} className="w-full">
-                    Suscribirse
-                  </Button>
-                )}
-              </div>
-            </div>
-
-            {/* PRO_MAX */}
-            <div className="rounded-2xl p-8 bg-gradient-to-b from-primary/10 to-primary/5 border border-border/30 shadow-lg min-h-[400px] flex flex-col transition hover:shadow-xl hover:scale-[1.02] duration-200">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-lg font-semibold">PRO MAX</h3>
-                  <div className="text-xs text-muted-foreground mt-1 h-4">Todo PRO + límites ampliados</div>
-                </div>
-                <div className="text-right">
-                  <div className="text-xl font-bold">$20</div>
-                  <div className="text-xs text-muted-foreground h-4">1.000.000 tokens / mes</div>
-                </div>
-              </div>
-
-              <div className="mt-6 space-y-3 text-sm">
-                <FeatureRow icon={<MessageSquare className="h-5 w-5" />} title="Todo lo de PRO" desc="Todas las funciones PRO" included />
-                <FeatureRow icon={<Globe className="h-5 w-5" />} title="Búsqueda web" desc="Incluido" included />
-                <FeatureRow icon={<ImageIcon className="h-5 w-5" />} title="Generación de imágenes" desc="Incluido" included />
-                <FeatureRow icon={<Mic className="h-5 w-5" />} title="Audio (ElevenLabs)" desc="Incluido" included />
-                <FeatureRow icon={<Video className="h-5 w-5" />} title="10 videos generados" desc="Incluido" included />
-              </div>
-
-              <div className="mt-8 border-t border-border/30 pt-6 flex flex-col items-center gap-3">
-                {currentPlan === "PRO_MAX" ? (
-                  <Button size="sm" variant="outline" disabled className="w-full">Plan actual</Button>
-                ) : (
-                  <Button size="sm" onClick={() => subscribe("PRO_MAX")} disabled={isSubscribing || !!loadingPlan} className="w-full">
-                    Suscribirse
-                  </Button>
-                )}
-              </div>
-            </div>
-
-            {/* ENTERPRISE */}
-            <div className="rounded-2xl p-8 bg-gradient-to-b from-amber-900/10 to-amber-900/5 border border-border/30 shadow-lg min-h-[400px] flex flex-col transition hover:shadow-xl hover:scale-[1.02] duration-200">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-lg font-semibold">ENTERPRISE</h3>
-                  <div className="text-xs text-muted-foreground mt-1 h-4">Todas las funciones, prioridad y SLAs</div>
-                </div>
-                <div className="text-right">
-                  <div className="text-xl font-bold">$200</div>
-                  <div className="text-xs text-muted-foreground h-4">10.000.000 tokens / mes</div>
-                </div>
-              </div>
-
-              <div className="mt-6 space-y-3 text-sm">
-                <FeatureRow icon={<MessageSquare className="h-5 w-5" />} title="Chat (GPT)" desc="Incluido" included />
-                <FeatureRow icon={<Video className="h-5 w-5" />} title="Generación de video" desc="Incluido" included />
-                <FeatureRow icon={<Mic className="h-5 w-5" />} title="Audio y música avanzados" desc="Incluido" included />
-                <FeatureRow icon={<Globe className="h-5 w-5" />} title="Prioridad y SLAs" desc="Incluido" included />
-                <FeatureRow icon={<Crown className="h-5 w-5" />} title="Llamadas ilimitadas" desc="Incluido" included />
-              </div>
-
-              <div className="mt-8 border-t border-border/30 pt-6 flex flex-col items-center gap-3">
-                {currentPlan === "ENTERPRISE" ? (
-                  <Button size="sm" variant="outline" disabled className="w-full">Plan actual</Button>
-                ) : (
                   <Button
                     size="sm"
-                    onClick={() => {
-                      const whatsappNumber = process.env.NEXT_PUBLIC_WHATSAPP_NUMBER;
-                      const isMobile = /Mobi|Android/i.test(navigator.userAgent);
-                      const whatsappUrl =
-                        // isMobile
-                        //   ?
-                        `https://wa.me/${whatsappNumber}`
-                      // : `https://web.whatsapp.com/send?phone=${whatsappNumber}`;
-                      window.open(whatsappUrl, "_blank", "noopener,noreferrer");
-                    }}
-                    disabled={isSubscribing || !!loadingPlan}
-                    className="w-full flex items-center gap-2"
+                    variant="outline"
+                    disabled={isCurrent || !!isLoading}
+                    onClick={() => subscribe(plan.id)}
+                    className={`mt-6 h-11 w-full rounded-full ${plan.featured ? "border-foreground bg-foreground text-background hover:bg-foreground/90 hover:text-background" : ""}`}
                   >
-                    {/* <img src="/icons/whatsapp-logo.png" alt="WhatsApp" className="h-5 w-5" /> */}
-                    <img src="/icons/whatsapp.png" alt="WhatsApp" className="w-6 h-6 invert dark:invert-0" />
-
-                    Suscribirse
+                    {isCurrent ? (
+                      <>
+                        <Check className="mr-2 h-4 w-4" />
+                        Plan actual
+                      </>
+                    ) : isEnterprise ? (
+                      <>
+                        <MessageCircle className="mr-2 h-4 w-4" />
+                        {plan.cta}
+                      </>
+                    ) : (
+                      plan.cta
+                    )}
                   </Button>
-                )}
-              </div>
-            </div>
+                </article>
+              )
+            })}
           </div>
         </div>
-
-        <DialogFooter className="mt-6">
-          <div className="w-full text-xs text-muted-foreground">
-          </div>
-        </DialogFooter>
       </DialogContent>
     </Dialog>
   )
