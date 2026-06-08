@@ -60,7 +60,7 @@
   // - Repository clone + edit + test + commit + push can take 10+ steps
   // - Research + web_search + read_url + verify can take 8+ steps
   // - /goal tasks run until the agent decides they are done.
-  const DEFAULT_MAX_STEPS = 24;
+  const DEFAULT_MAX_STEPS = Number(process.env.AGENTIC_MAX_STEPS) || 24;
   // Per-turn wall clock. Extended for multi-file edits, npm install, and
   // git operations that may include slow CI checks.
   const DEFAULT_MAX_RUNTIME_MS = 5 * 60 * 1000;

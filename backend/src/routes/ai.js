@@ -5147,6 +5147,10 @@ router.post(
             planTier: __spanPlanTier,
           },
           async (span) => {
+            // Set true once the agentic loop has streamed a sentinel to the
+            // client; if we then fall back to the plain stream we must wipe
+            // that sentinel first (aiService.generateStream only appends).
+            let __agenticDidStream = false;
             // ─── Agentic chat path (feature-flagged) ─────────────────
             // When AGENTIC_TOOLS_IN_CHAT=1 AND the selected model can
             // do OpenAI-style tool calls AND there are no images
@@ -5179,6 +5183,7 @@ router.post(
                   .map((file) => file && (file.id || file.fileId || file.uploadId || file.databaseId))
                   .filter(Boolean)
                   .map(String);
+                __agenticDidStream = true;
                 const agenticResult = await agenticStream.runAgenticChat({
                   openai: agenticClient,
                   model: actualModel,
@@ -5207,13 +5212,45 @@ router.post(
                     fileIds: agenticFileIds,
                   },
                 });
-                return agenticResult.finalAnswer || '';
+                // The agentic loop reports success via stoppedReason:
+                // 'finalized' (model called the finalize tool) or
+                // 'plain_text_finalize' (model answered directly). ANY other
+                // reason (max_steps / model_error / no_message / aborted /
+                // runtime_budget_exhausted / degraded_no_finalize / tool_*) is
+                // a degraded run whose finalAnswer is empty OR a generic
+                // apology ("No logré cerrar la tarea…"). Returning either of
+                // those is what surfaced "El asistente dejó de responder" /
+                // the apology on perfectly simple prompts.
+                const __agenticAnswer = (agenticResult && typeof agenticResult.finalAnswer === 'string')
+                  ? agenticResult.finalAnswer.trim()
+                  : '';
+                const __SUCCESS_REASONS = new Set(['finalized', 'plain_text_finalize']);
+                const __agenticOk =
+                  agenticResult
+                  && __SUCCESS_REASONS.has(agenticResult.stoppedReason)
+                  && __agenticAnswer.length > 0
+                  && __agenticAnswer !== '(agent returned empty message)';
+                if (__agenticOk) {
+                  return agenticResult.finalAnswer;
+                }
+                // Degraded/empty → do NOT return it. Fall through to the
+                // reliable plain stream below; aiService.generateStream emits a
+                // `replace` frame that overwrites any agent-task-state sentinel
+                // already streamed, so the user always gets a real answer.
+                console.warn('[agentic-chat] degraded result (stoppedReason=' + (agenticResult && agenticResult.stoppedReason) + ', len=' + __agenticAnswer.length + ') — falling back to plain stream');
               }
             } catch (agenticErr) {
               console.warn('[agentic-chat] loop failed, falling back to plain stream:', agenticErr && agenticErr.message);
-              // Fall through to aiService.generateStream below. The
-              // sentinel block we may have already written is harmless:
-              // the next replace frame from aiService overwrites it.
+              // Fall through to aiService.generateStream below.
+            }
+
+            // If the agentic path streamed a sentinel (success-but-degraded or
+            // a throw mid-loop) we must CLEAR the client buffer before the
+            // plain stream: aiService.generateStream APPENDS content frames and
+            // does NOT emit a leading replace, so without this the plain answer
+            // would render glued onto the discarded agent-task-state sentinel.
+            if (__agenticDidStream && !res.writableEnded) {
+              try { res.write(`data: ${JSON.stringify({ replace: true, content: '' })}\n\n`); } catch (_) { /* socket gone */ }
             }
 
             const out = await aiService.generateStream({

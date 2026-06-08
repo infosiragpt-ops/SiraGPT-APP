@@ -32,15 +32,23 @@ const ACTION_VERBS = new RegExp(
   '\\b(' +
     [
       // Spanish (stems catch conjugations: crea/crear/creando/creación …)
+      // NOTE: pure text-composition verbs (redact/escrib/resum/traduc and the
+      // English writ/draft/compose/summari[sz]e/translat) are deliberately NOT
+      // listed. They produce plain text, not a tool-backed artifact, and routing
+      // "redacta esto en 9 líneas" / "resume este párrafo" / "traduce esta frase"
+      // through the agentic loop was slow and could intermittently return an
+      // empty answer ("El asistente dejó de responder"). When such a request
+      // genuinely targets a deliverable ("redacta un documento Word", "resume
+      // esto a un PDF") the ARTIFACT_NOUNS branch below still catches it.
       'cr[eé]a', 'gener', 'dise[ñn]', 'construy', 'hazme', 'haz', 'h[aá]game',
-      'elabor', 'prepar', 'redact', 'escrib', 'dibuj', 'grafic', 'export',
-      'convier', 'convert', 'transform', 'analiz', 'investig', 'resum', 'traduc',
+      'elabor', 'prepar', 'dibuj', 'grafic', 'export',
+      'convier', 'convert', 'transform', 'analiz', 'investig',
       'program', 'codific', 'desarroll', 'implement', 'calcul', 'busca', 'buscar',
       'plote', 'maqueta', 'esquematiza', 'visualiza', 'compila', 'rellena',
       // English
       'creat', 'generat', 'build', 'mak(e|ing)', 'design', 'draw', 'plot', 'render',
-      'writ', 'draft', 'compose', 'analy[sz]e', 'research', 'summari[sz]e',
-      'translat', 'develop', 'visuali[sz]e', 'compile', 'diagram',
+      'analy[sz]e', 'research',
+      'develop', 'visuali[sz]e', 'compile', 'diagram',
     ].join('|') +
     ')',
   'i',

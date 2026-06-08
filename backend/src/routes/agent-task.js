@@ -1795,6 +1795,30 @@ function shouldRunAttachmentTaskLocally({ fileIds = [], goal = '', env = process
   return (Array.isArray(fileIds) && fileIds.length > 0) || isTranscriptionRequest(goal);
 }
 
+// Resolve the step/runtime budget for an agent task. Explicit caller values
+// always win. Otherwise the default is gated on intent: a heavy document the
+// user actually asked us to auto-generate (or a caller that explicitly asked
+// for a large step count) legitimately needs a long, multi-step run; a plain
+// interactive chat answer does NOT. The chat client surfaces a "dejó de
+// responder" stall after ~90s and abandons the stream, so the old blanket
+// 60-step / 2-hour ceiling just let a misrouted/runaway loop burn ~50 min of
+// LLM calls on a result nobody would ever see. Bound the interactive case
+// tightly so a stuck task fails fast and cheap instead of grinding to the cap.
+function resolveAgentTaskBudget({ maxStepsRaw, maxRuntimeMsRaw, documentPolicy = null } = {}) {
+  const parsedSteps = Number.parseInt(maxStepsRaw, 10);
+  const parsedRuntime = Number.parseInt(maxRuntimeMsRaw, 10);
+  const hasSteps = Number.isFinite(parsedSteps);
+  const hasRuntime = Number.isFinite(parsedRuntime);
+  const heavy = Boolean(documentPolicy && documentPolicy.autoGenerate)
+    || (hasSteps && parsedSteps > 40);
+  const defaultSteps = heavy ? 60 : 28;
+  const defaultRuntimeMs = heavy ? 2 * 60 * 60 * 1000 : 8 * 60 * 1000;
+  return {
+    maxSteps: hasSteps ? parsedSteps : defaultSteps,
+    maxRuntimeMs: hasRuntime ? parsedRuntime : defaultRuntimeMs,
+  };
+}
+
 async function handleQueuedTaskRequest(req, res) {
   const rawGoal = String(req.body.goal || '');
   try {
@@ -1849,14 +1873,15 @@ async function handleQueuedTaskRequest(req, res) {
   const traceId = crypto.randomUUID();
   const chatId = typeof req.body.chatId === 'string' ? req.body.chatId : null;
   const model = typeof req.body.model === 'string' && req.body.model.length > 0 ? req.body.model : 'gpt-4o';
-  const parsedMaxSteps = Number.parseInt(req.body.maxSteps, 10);
-  const parsedMaxRuntimeMs = Number.parseInt(req.body.maxRuntimeMs, 10);
-  const maxSteps = Number.isFinite(parsedMaxSteps) ? parsedMaxSteps : 60;
-  const maxRuntimeMs = Number.isFinite(parsedMaxRuntimeMs) ? parsedMaxRuntimeMs : 2 * 60 * 60 * 1000;
   const documentPolicy = buildDocumentDeliveryPolicy({
     goal: agentGoal,
     displayGoal,
     files: fileIds,
+  });
+  const { maxSteps, maxRuntimeMs } = resolveAgentTaskBudget({
+    maxStepsRaw: req.body.maxSteps,
+    maxRuntimeMsRaw: req.body.maxRuntimeMs,
+    documentPolicy,
   });
   const openclawRuntimeProfile = buildOpenClawRuntimeProfile({
     goal: agentGoal,
@@ -2060,14 +2085,15 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
   const traceId = crypto.randomUUID();
   const chatId = typeof req.body.chatId === 'string' ? req.body.chatId : null;
   const model = typeof req.body.model === 'string' && req.body.model.length > 0 ? req.body.model : 'gpt-4o';
-  const parsedMaxSteps = Number.parseInt(req.body.maxSteps, 10);
-  const parsedMaxRuntimeMs = Number.parseInt(req.body.maxRuntimeMs, 10);
-  const maxSteps = Number.isFinite(parsedMaxSteps) ? parsedMaxSteps : 60;
-  const maxRuntimeMs = Number.isFinite(parsedMaxRuntimeMs) ? parsedMaxRuntimeMs : 2 * 60 * 60 * 1000;
   const documentPolicy = buildDocumentDeliveryPolicy({
     goal: agentGoal,
     displayGoal,
     files: fileIds,
+  });
+  const { maxSteps, maxRuntimeMs } = resolveAgentTaskBudget({
+    maxStepsRaw: req.body.maxSteps,
+    maxRuntimeMsRaw: req.body.maxRuntimeMs,
+    documentPolicy,
   });
   const openclawRuntimeProfile = buildOpenClawRuntimeProfile({
     goal: agentGoal,
@@ -3073,3 +3099,5 @@ module.exports = router;
 // Exposed for unit tests (document-followup recovery heuristic).
 module.exports.looksLikeDocumentFollowupQuestion = looksLikeDocumentFollowupQuestion;
 module.exports.isTranscriptionRequest = isTranscriptionRequest;
+// Exposed for unit tests (interactive vs heavy-document budget gating).
+module.exports.resolveAgentTaskBudget = resolveAgentTaskBudget;

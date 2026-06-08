@@ -52,6 +52,25 @@ const DEFAULT_COMPACT_TAIL_ROUNDS = (() => {
 })();
 const COMPACT_DISABLED = process.env.SIRAGPT_REACT_COMPACT_DISABLED === '1';
 
+// ── Finalize-guard circuit breaker ───────────────────────────────────────
+// When the model calls `finalize`, the finalize guard can reject it and feed
+// back repair instructions, then the loop continues. There was NO limit on
+// how many times the guard could reject finalize, so an unsatisfiable guard
+// (e.g. a simple chat request misrouted into the heavy document pipeline with
+// a weak model that can never produce the evidence the guard demands) spins
+// for the entire step/runtime budget — burning ~50 min of LLM calls on a
+// runaway loop while the client already gave up at ~90s ("dejó de responder").
+// These caps force a degraded-but-real finalize once the guard has clearly
+// become unsatisfiable, instead of grinding to max_steps.
+const MAX_FINALIZE_REJECTIONS = (() => {
+  const v = Number(process.env.SIRAGPT_REACT_MAX_FINALIZE_REJECTIONS);
+  return Number.isFinite(v) && v >= 1 ? Math.floor(v) : 8; // absolute cap across the run
+})();
+const MAX_CONSEC_FINALIZE_REJECTIONS = (() => {
+  const v = Number(process.env.SIRAGPT_REACT_MAX_CONSEC_FINALIZE_REJECTIONS);
+  return Number.isFinite(v) && v >= 1 ? Math.floor(v) : 3; // cap with no intervening tool progress
+})();
+
 // ── A2: parallel tool execution ──────────────────────────────────────────────
 // Independent READ-ONLY / idempotent tool calls in a single step are dispatched
 // concurrently (bounded) instead of strictly one-by-one. Mutating/stateful
@@ -485,6 +504,9 @@ async function run(openai, opts) {
   // termination forever. This keeps a single chat thread usable when one tool
   // (e.g. docintel_retrieve on an image or a text-less document) keeps failing.
   const exhaustedTools = new Set();
+  // Finalize-guard rejection tracking (see MAX_FINALIZE_REJECTIONS above).
+  let finalizeRejectionsTotal = 0;
+  let finalizeRejectionsConsecutive = 0;
 
   for (let step = 0; step < maxSteps; step++) {
     if (ctx?.signal?.aborted) {
@@ -527,6 +549,22 @@ async function run(openai, opts) {
       : (shouldForceInitialTool ? { type: 'function', function: { name: initialToolChoice } } : 'auto');
 
     let resp;
+    // Per-step wall-clock timeout. A single hung/slow provider completion
+    // must NOT exceed the chat UI's 90s "stale" threshold (agentic-steps.tsx)
+    // — otherwise the user sees "El asistente dejó de responder" while the
+    // loop is still blocked on one call. On timeout we abort the call, mark
+    // model_error, and break → the caller streams a degraded answer / the
+    // route falls back to a plain completion. Env: REACT_STEP_TIMEOUT_MS.
+    const stepTimeoutMs = Number(process.env.REACT_STEP_TIMEOUT_MS) || 60000;
+    const stepCtl = new AbortController();
+    const stepTimer = setTimeout(() => {
+      try { stepCtl.abort(new Error('step_timeout')); } catch { /* noop */ }
+    }, stepTimeoutMs);
+    const onParentAbort = () => { try { stepCtl.abort(); } catch { /* noop */ } };
+    if (ctx?.signal) {
+      if (ctx.signal.aborted) onParentAbort();
+      else ctx.signal.addEventListener('abort', onParentAbort, { once: true });
+    }
     try {
       resp = await openai.chat.completions.create({
         model,
@@ -534,10 +572,18 @@ async function run(openai, opts) {
         tools: toolsSchema,
         tool_choice: toolChoice,
         temperature: 0.3,
-      }, ctx?.signal ? { signal: ctx.signal } : undefined);
+      }, { signal: stepCtl.signal });
     } catch (err) {
-      stoppedReason = `model_error: ${err.message}`;
+      const timedOut = stepCtl.signal.aborted && !(ctx?.signal && ctx.signal.aborted);
+      stoppedReason = timedOut
+        ? `model_error: step_timeout_${stepTimeoutMs}ms`
+        : `model_error: ${err.message}`;
       break;
+    } finally {
+      clearTimeout(stepTimer);
+      if (ctx?.signal) {
+        try { ctx.signal.removeEventListener('abort', onParentAbort); } catch { /* noop */ }
+      }
     }
 
     const choice = resp.choices?.[0];
@@ -709,6 +755,10 @@ async function run(openai, opts) {
         }
       } else {
         toolErrorBudget.delete(toolName);
+        // A successful non-finalize tool call is genuine progress: reset the
+        // consecutive finalize-rejection counter so a run that keeps moving
+        // forward is only ever stopped by the absolute cap, never the soft one.
+        if (toolName !== 'finalize') finalizeRejectionsConsecutive = 0;
       }
 
       if (toolName === 'finalize' && !dispatch.error && typeof finalizeGuard === 'function') {
@@ -728,13 +778,36 @@ async function run(openai, opts) {
           guard = { ok: false, message: `finalize guard failed: ${err.message || err}` };
         }
         if (!guard?.ok) {
-          observation = {
-            error: 'finalize_guard_failed',
-            message: guard?.message || 'Finalization blocked by execution policy.',
-            missingTools: guard?.missingTools || [],
-            requiredTools: guard?.requiredTools || [],
-            repairInstructions: guard?.repairInstructions || 'Run the missing tool calls, then call finalize again.',
-          };
+          finalizeRejectionsTotal += 1;
+          finalizeRejectionsConsecutive += 1;
+          if (
+            finalizeRejectionsConsecutive >= MAX_CONSEC_FINALIZE_REJECTIONS ||
+            finalizeRejectionsTotal >= MAX_FINALIZE_REJECTIONS
+          ) {
+            // Circuit breaker: the finalize guard has rejected this answer too
+            // many times. Treating it as unsatisfiable, we accept the model's
+            // current answer (degraded) rather than spin to the step/runtime
+            // budget. Leave `observation` as the finalize result (no error) so
+            // the terminator below fires and the user gets a real answer.
+            stoppedReason = `finalized_guard_breaker:${finalizeRejectionsConsecutive}/${finalizeRejectionsTotal}`;
+            try {
+              console.warn(
+                `[react-agent] finalize guard rejected ${finalizeRejectionsConsecutive} times in a row `
+                + `(${finalizeRejectionsTotal} total) — tripping breaker and accepting degraded answer: `
+                + `${guard?.message || 'blocked by execution policy'}`
+              );
+            } catch { /* logging must never crash the run */ }
+          } else {
+            observation = {
+              error: 'finalize_guard_failed',
+              message: guard?.message || 'Finalization blocked by execution policy.',
+              missingTools: guard?.missingTools || [],
+              requiredTools: guard?.requiredTools || [],
+              repairInstructions: guard?.repairInstructions || 'Run the missing tool calls, then call finalize again.',
+            };
+          }
+        } else {
+          finalizeRejectionsConsecutive = 0;
         }
       }
 

@@ -2,5 +2,8 @@
 node_modules
 .env
 uploads/
-# Capability eval run artifact (generated)
+# Eval run artifacts (generated) — corpus + harness scripts stay tracked
 evals/last-report.json
+evals/live-chat-e2e-report.json
+evals/judge-items.json
+evals/judge-verdicts.json

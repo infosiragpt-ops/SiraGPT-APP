@@ -29,7 +29,7 @@ test('triggers on Spanish create / transform requests', () => {
     'arma una línea de tiempo del proyecto',
     'genera un mapa mental sobre el tema',
     'construye una tabla comparativa en una hoja de cálculo',
-    'traduce y resume este contrato',
+    'traduce y resume este contrato en un documento Word',
   ];
   for (const m of yes) {
     assert.equal(isAgenticActionRequest(m), true, `should trigger: ${m}`);
@@ -61,6 +61,25 @@ test('does NOT trigger on plain conversational messages', () => {
     'me gusta el café por la mañana',
     '¿cuál es la capital de Francia?',
     'buenos días',
+  ];
+  for (const m of no) {
+    assert.equal(isAgenticActionRequest(m), false, `should NOT trigger: ${m}`);
+  }
+});
+
+test('does NOT trigger on pure text-composition (no artifact, no tool) — these go to fast plain chat', () => {
+  // Regression: "redacta en 9 líneas" was wrongly routed into the agentic
+  // loop, which intermittently returned an empty answer ("El asistente dejó
+  // de responder"). Pure redact/resume/translate/compose tasks with no
+  // deliverable noun must be handled by a normal chat completion.
+  const no = [
+    'redacta en 9 líneas este texto sobre construcción sostenible',
+    'resume esto en un párrafo',
+    'tradúceme esta frase al inglés',
+    'escribe un correo de agradecimiento',
+    'redacta un resumen breve de lo anterior',
+    'translate this sentence to Spanish',
+    'summarize the following text in three lines',
   ];
   for (const m of no) {
     assert.equal(isAgenticActionRequest(m), false, `should NOT trigger: ${m}`);
