@@ -1,0 +1,23 @@
+{
+  "_note": "REPRESENTATIVE capability evals — NOT the official benchmarks (SWE-bench/GPQA/MMMLU/etc. are gated + need their own harnesses/sandboxes and measure the underlying model). These are deterministic-grading smoke checks run through the real AI pipeline to give an objective, repeatable pass-rate signal per category.",
+  "ai": [
+    { "category": "reasoning", "id": "r1", "q": "Un tren recorre 90 km en 1.5 horas a velocidad constante. ¿Cuál es su velocidad media en km/h? Responde SOLO con el número.", "expectAny": ["60"] },
+    { "category": "reasoning", "id": "r2", "q": "¿Cuánto es 2 elevado a la 10? Responde SOLO con el número.", "expectAny": ["1024"] },
+    { "category": "reasoning", "id": "r3", "q": "Si todos los A son B, y algunos B son C, ¿se sigue necesariamente que algunos A son C? Responde SOLO 'sí' o 'no'.", "expectAny": ["no"] },
+    { "category": "reasoning", "id": "r4", "q": "Una camisa cuesta $40 tras un 20% de descuento. ¿Cuál era el precio original? Responde SOLO con el número.", "expectAny": ["50"] },
+    { "category": "reasoning", "id": "r5", "q": "¿Cuál es el siguiente número en la serie 2, 6, 12, 20, 30, ...? Responde SOLO con el número.", "expectAny": ["42"] },
+    { "category": "reasoning", "id": "r6", "q": "Tengo 3 manzanas y compro 2 cajas con 6 manzanas cada una. ¿Cuántas manzanas tengo en total? Responde SOLO con el número.", "expectAny": ["15"] },
+    { "category": "multilingual", "id": "m1", "q": "Translate 'good morning' into French. Reply with ONLY the translation.", "expectAny": ["bonjour"] },
+    { "category": "multilingual", "id": "m2", "q": "日本の首都はどこですか？英語で一語で答えてください。 (Reply with ONE English word.)", "expectAny": ["tokyo", "tokio"] },
+    { "category": "multilingual", "id": "m3", "q": "¿Cuál es la capital de Alemania? Responde SOLO con una palabra.", "expectAny": ["berlin", "berlín"] },
+    { "category": "multilingual", "id": "m4", "q": "Come si dice 'grazie' in spagnolo? Rispondi con UNA sola parola.", "expectAny": ["gracias"] },
+    { "category": "multilingual", "id": "m5", "q": "What language is the sentence 'Wie geht es dir?' written in? Reply with ONLY the language name in English.", "expectAny": ["german", "alemán", "aleman"] },
+    { "category": "multilingual", "id": "m6", "q": "Traduce al inglés: 'el gato negro'. Responde SOLO con la traducción.", "expectAny": ["black cat", "the black cat"] },
+    { "category": "coding", "id": "c1", "q": "In Python, what does len('hello') return? Reply with ONLY the number.", "expectAny": ["5"] },
+    { "category": "coding", "id": "c2", "q": "In JavaScript, what is the value of [10,2,1].sort()[0]? Reply with ONLY the value.", "expectAny": ["1"] },
+    { "category": "coding", "id": "c3", "q": "What is the time complexity of binary search on a sorted array of n elements? Reply with ONLY the big-O notation.", "expectAny": ["o(log n)", "o(logn)", "log n", "logarith"] },
+    { "category": "coding", "id": "c4", "q": "In Python, what is 7 // 2 ? Reply with ONLY the number.", "expectAny": ["3"] },
+    { "category": "coding", "id": "c5", "q": "In SQL, which keyword removes duplicate rows from a SELECT result? Reply with ONLY the keyword.", "expectAny": ["distinct"] },
+    { "category": "coding", "id": "c6", "q": "What does JSON.stringify({a:1}) return in JavaScript? Reply with ONLY the exact string.", "expectAny": ["{\"a\":1}"] }
+  ]
+}
