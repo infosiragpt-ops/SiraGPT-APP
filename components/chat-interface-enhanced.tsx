@@ -205,6 +205,11 @@ import { usePasteCapture } from "@/components/paste-preview-overlay"
 import { analyzePastedContent, type PasteCaptureResult, type PasteCaptureAction } from "@/lib/paste-capture"
 import { useChatDraft } from "@/hooks/use-chat-draft"
 import { useVisualViewportCssVars } from "@/hooks/use-visual-viewport-css-vars"
+// Never-throwing clipboard (Capacitor → navigator.clipboard → execCommand fallback).
+// Direct navigator.clipboard.writeText() throws NotAllowedError in restrictive
+// contexts (preview iframes, denied permission, insecure origin) and, when not
+// awaited/caught, surfaces as an unhandled rejection in the dev overlay.
+import { writeText as copyTextSafe } from "@/lib/native/clipboard"
 
 type ComputerUseAppMode = "browser" | "chrome" | "computer"
 
@@ -3176,12 +3181,9 @@ const NavbarModelSelector = ({
     const href = gpt?.shareId
       ? `${window.location.origin}/gpts/share/${gpt.shareId}`
       : `${window.location.origin}/chat?id=${currentChat?.id || ""}`;
-    try {
-      await navigator.clipboard.writeText(href);
-      toast.success("Enlace copiado");
-    } catch {
-      toast.error("No se pudo copiar el enlace. Cópialo manualmente.");
-    }
+    const r = await copyTextSafe(href);
+    if (r.ok) toast.success("Enlace copiado");
+    else toast.error("No se pudo copiar el enlace. Cópialo manualmente.");
   }, [currentChat?.customGpt, currentChat?.id]);
 
   const selectedGptModel = React.useMemo(() => {
@@ -3359,12 +3361,9 @@ const NavbarModelSelector = ({
   const copyProjectLink = React.useCallback(async () => {
     const projectId = currentChat?.project?.id || currentChat?.projectId;
     if (!projectId) return;
-    try {
-      await navigator.clipboard.writeText(`${window.location.origin}/projects/${projectId}`);
-      toast.success("Enlace del proyecto copiado");
-    } catch {
-      toast.error("No se pudo copiar el enlace del proyecto. Cópialo manualmente.");
-    }
+    const r = await copyTextSafe(`${window.location.origin}/projects/${projectId}`);
+    if (r.ok) toast.success("Enlace del proyecto copiado");
+    else toast.error("No se pudo copiar el enlace del proyecto. Cópialo manualmente.");
   }, [currentChat?.project?.id, currentChat?.projectId]);
 
   const ModelLogo = ({ model, compact = false }: { model: any; compact?: boolean }) => (
@@ -5486,12 +5485,10 @@ But first, you need to connect your Spotify account securely using the button be
       const response = await apiClient.handleShare(currentChat.id);
       const baseUrl = process.env.NEXT_PUBLIC_URL || `http://localhost:${process.env.PORT || 3000}`;
       const url = `${baseUrl}/share/${response.shareableLink}`;
-      try {
-        await navigator.clipboard.writeText(url);
-        toast.success("Enlace para compartir copiado");
-      } catch {
-        toast.success("Enlace para compartir creado (no se pudo copiar automáticamente)");
-      }
+      const r = await copyTextSafe(url);
+      toast.success(r.ok
+        ? "Enlace para compartir copiado"
+        : "Enlace para compartir creado (no se pudo copiar automáticamente)");
       setShareUrl(url);
       setShareModalOpen(true);
     } catch (error) {
@@ -6938,9 +6935,7 @@ But first, you need to connect your Spotify account securely using the button be
               duration: 8000,
               description: "Reporte copiado al portapapeles — pégalo en el chat para discutirlo.",
             });
-            try {
-              await navigator.clipboard.writeText(lastReport.report);
-            } catch { /* clipboard denied */ }
+            await copyTextSafe(lastReport.report);
           } else {
             toast.error(`⚠️ Goal terminado sin reporte`, { id: toastId });
           }
@@ -8645,7 +8640,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     setUploadedFiles(next.files || []);
     const t = setTimeout(() => { handleSendRef.current(); }, 0);
     return () => clearTimeout(t);
-  }, [currentChat?.id, isCurrentChatStreaming, isCurrentChatLocalJobBusy, isUploading, setUploadedFiles]);
+  }, [currentChat?.id, isCurrentChatStreaming, isCurrentChatLocalJobBusy, isUploading, setUploadedFiles, syncQueuedCount]);
 
   // Prevent Enter key from adding new line when not holding Shift
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -9675,8 +9670,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           size="sm"
                           onClick={() => {
                             if (!shareUrl) return;
-                            navigator.clipboard.writeText(shareUrl);
-                            toast.success('Enlace copiado al portapapeles');
+                            void copyTextSafe(shareUrl).then((r) => {
+                              toast[r.ok ? 'success' : 'error'](
+                                r.ok
+                                  ? 'Enlace copiado al portapapeles'
+                                  : 'No se pudo copiar. Selecciónalo y cópialo manualmente.',
+                              );
+                            });
                           }}
                         >
                           Copiar enlace
