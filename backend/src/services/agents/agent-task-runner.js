@@ -1207,20 +1207,38 @@ function buildAttachmentUnavailableFallbackAnswer({ goal = '', uploadedFileConte
 function detectAgentRuntimeProvider(modelId) {
   const id = String(modelId || '').trim();
   if (!id) return null;
-  if (/^(gpt-|o\d|chatgpt-|ft:gpt-|ft:o)/i.test(id)) {
+  // Bare OpenAI-native ids (NO aggregator slug): gpt-4o, o1, chatgpt-*, fine-tunes.
+  // A slug form like `openai/gpt-5.5` is NOT native OpenAI — it routes through
+  // OpenRouter (see the slug branch below), which is how the main chat flow
+  // resolves it (provider-inference.js). Guarding on the absence of a `/`
+  // is what stops openai/gpt-5.5 from silently falling through to the
+  // gpt-4o-mini fallback.
+  if (!id.includes('/') && /^(gpt-|o\d|chatgpt-|ft:gpt-|ft:o)/i.test(id)) {
     return { provider: 'OpenAI', apiKeyEnv: 'OPENAI_API_KEY', baseURL: null };
   }
-  if (/^deepseek(-|\/|$)/i.test(id)) {
+  // Direct DeepSeek API only for bare `deepseek-v*/chat/reasoner` ids. The
+  // slug form `deepseek/...` is an OpenRouter aggregator id and is handled
+  // by the slug branch below (matches isDirectDeepSeekModel in
+  // provider-inference.js).
+  if (/^deepseek-(v\d|chat|reasoner)/i.test(id)) {
     return { provider: 'DeepSeek', apiKeyEnv: 'DEEPSEEK_API_KEY', baseURL: 'https://api.deepseek.com' };
   }
-  if (/^gemini-/i.test(id) || /^imagen-/i.test(id)) {
+  // Google Gemini family (bare gemini-*/imagen-* ids, no slug).
+  if (!id.includes('/') && (/^gemini-/i.test(id) || /^imagen-/i.test(id))) {
     return {
       provider: 'Gemini',
       apiKeyEnv: 'GEMINI_API_KEY',
       baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
     };
   }
-  if (/^(anthropic|meta-llama|moonshotai|x-ai|openrouter)\//i.test(id)) {
+  // Any aggregator slug ("provider/model") routes through OpenRouter — this is
+  // exactly how the main chat flow (provider-inference.js) maps openai/*,
+  // google/*, anthropic/*, x-ai/*, qwen/*, mistralai/*, moonshotai/*, etc.
+  // Previously only a short allowlist (anthropic|meta-llama|moonshotai|x-ai|
+  // openrouter) matched, so openai/gpt-5.5 returned null and got force-remapped
+  // to gpt-4o-mini (modelRemapped:true). Catching every slug keeps the agent
+  // runtime in lockstep with the user's selected model.
+  if (id.includes('/')) {
     return {
       provider: 'OpenRouter',
       apiKeyEnv: 'OPENROUTER_API_KEY',

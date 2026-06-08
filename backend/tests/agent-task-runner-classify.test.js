@@ -207,6 +207,44 @@ test('normalizeAgentRuntimeModel: OpenRouter slugs (anthropic, kimi, etc.) keep 
   assert.equal(kimi.remapped, false);
 });
 
+test('normalizeAgentRuntimeModel: openai/* and google/* slugs route via OpenRouter (NOT force-remapped to gpt-4o-mini)', () => {
+  // Regression: `openai/gpt-5.5` is an OpenRouter aggregator slug, not a native
+  // OpenAI id. Previously it fell through to null → gpt-4o-mini (remapped:true),
+  // silently downgrading the user's selected model.
+  const gpt55 = normalizeAgentRuntimeModel('openai/gpt-5.5');
+  assert.equal(gpt55.runtimeProvider, 'selected-openrouter');
+  assert.equal(gpt55.runtimeModel, 'openai/gpt-5.5');
+  assert.equal(gpt55.remapped, false);
+
+  const gemini = normalizeAgentRuntimeModel('google/gemini-3.5-pro');
+  assert.equal(gemini.runtimeProvider, 'selected-openrouter');
+  assert.equal(gemini.runtimeModel, 'google/gemini-3.5-pro');
+  assert.equal(gemini.remapped, false);
+});
+
+test('normalizeAgentRuntimeModel: bare gpt-* stays native OpenAI; deepseek/* slug goes OpenRouter', () => {
+  const nativeOpenAI = normalizeAgentRuntimeModel('gpt-4o');
+  assert.equal(nativeOpenAI.runtimeProvider, 'selected-openai');
+  assert.equal(nativeOpenAI.remapped, false);
+
+  // Slug form is an aggregator id, not the direct DeepSeek API.
+  const dsSlug = normalizeAgentRuntimeModel('deepseek/deepseek-chat');
+  assert.equal(dsSlug.runtimeProvider, 'selected-openrouter');
+  assert.equal(dsSlug.remapped, false);
+
+  // Bare deepseek id still uses the direct DeepSeek API.
+  const dsDirect = normalizeAgentRuntimeModel('deepseek-v4-flash');
+  assert.equal(dsDirect.runtimeProvider, 'selected-deepseek');
+  assert.equal(dsDirect.remapped, false);
+});
+
+test('normalizeAgentRuntimeModel: any unknown slash slug routes via OpenRouter (contract lock)', () => {
+  const result = normalizeAgentRuntimeModel('foo/bar-model');
+  assert.equal(result.runtimeProvider, 'selected-openrouter');
+  assert.equal(result.runtimeModel, 'foo/bar-model');
+  assert.equal(result.remapped, false);
+});
+
 test('normalizeAgentRuntimeModel: Gemini models keep their provider', () => {
   const result = normalizeAgentRuntimeModel('gemini-2.5-pro');
   assert.equal(result.runtimeProvider, 'selected-gemini');

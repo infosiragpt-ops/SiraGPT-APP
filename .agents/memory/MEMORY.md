@@ -44,4 +44,5 @@
 - [Curated IMAGE activation](curated-image-activation.md) — ensureStaticCatalogModels is hot-path; gate any "reactivate curated rows" write behind a per-instance once-per-process flag, never unconditional.
 - [Filter config override](filter-config-override.md) — FILTERS_CONFIG.enabled overrides each filter module's own enabled flag; change both or they silently disagree.
 - [Post-deploy warmup window](post-deploy-warmup-window.md) — frontend live ~90s before backend; /api/* gives raw 500; gate auth actions on HEAD /api/health/ready (204/503) via useBackendReady.
+- [Agent runtime model slugs](agent-runtime-model-slugs.md) — any `provider/model` slug must route to OpenRouter in agent-task-runner (like chat's inferProviderFromModelId), else openai/gpt-5.5 force-remaps to gpt-4o-mini.
 - [OCR image variant early-exit](ocr-variant-early-exit.md) — local image OCR must lazily generate sharp variants + break on first accepted result, or 5 variants × Tesseract blows past the 20s extraction timeout (screenshots silently lose text).
