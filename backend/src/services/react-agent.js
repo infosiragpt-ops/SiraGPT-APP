@@ -527,6 +527,22 @@ async function run(openai, opts) {
       : (shouldForceInitialTool ? { type: 'function', function: { name: initialToolChoice } } : 'auto');
 
     let resp;
+    // Per-step wall-clock timeout. A single hung/slow provider completion
+    // must NOT exceed the chat UI's 90s "stale" threshold (agentic-steps.tsx)
+    // — otherwise the user sees "El asistente dejó de responder" while the
+    // loop is still blocked on one call. On timeout we abort the call, mark
+    // model_error, and break → the caller streams a degraded answer / the
+    // route falls back to a plain completion. Env: REACT_STEP_TIMEOUT_MS.
+    const stepTimeoutMs = Number(process.env.REACT_STEP_TIMEOUT_MS) || 60000;
+    const stepCtl = new AbortController();
+    const stepTimer = setTimeout(() => {
+      try { stepCtl.abort(new Error('step_timeout')); } catch { /* noop */ }
+    }, stepTimeoutMs);
+    const onParentAbort = () => { try { stepCtl.abort(); } catch { /* noop */ } };
+    if (ctx?.signal) {
+      if (ctx.signal.aborted) onParentAbort();
+      else ctx.signal.addEventListener('abort', onParentAbort, { once: true });
+    }
     try {
       resp = await openai.chat.completions.create({
         model,
@@ -534,10 +550,18 @@ async function run(openai, opts) {
         tools: toolsSchema,
         tool_choice: toolChoice,
         temperature: 0.3,
-      }, ctx?.signal ? { signal: ctx.signal } : undefined);
+      }, { signal: stepCtl.signal });
     } catch (err) {
-      stoppedReason = `model_error: ${err.message}`;
+      const timedOut = stepCtl.signal.aborted && !(ctx?.signal && ctx.signal.aborted);
+      stoppedReason = timedOut
+        ? `model_error: step_timeout_${stepTimeoutMs}ms`
+        : `model_error: ${err.message}`;
       break;
+    } finally {
+      clearTimeout(stepTimer);
+      if (ctx?.signal) {
+        try { ctx.signal.removeEventListener('abort', onParentAbort); } catch { /* noop */ }
+      }
     }
 
     const choice = resp.choices?.[0];
