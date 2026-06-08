@@ -70,6 +70,8 @@ import {
 } from "@/lib/code-agent/orchestrator"
 import { landingSystemPrompt, sreSystemPrompt } from "@/lib/code-agent/prompts"
 import { isSlowModel, recommendFastModel } from "@/lib/code-agent/model-policy"
+import { opencodeService } from "@/lib/opencode/opencode-service"
+import { useOpencodeEngine, extractEngineText } from "@/lib/opencode/use-opencode-engine"
 
 import { DiffView } from "./diff-view"
 import { AgentSwarm } from "./agent-swarm"
@@ -276,6 +278,13 @@ export function AICodeChatPanel() {
   const activeProvider = codeModel?.provider || autoFastModel?.provider || selectProvider
   // Fast = streaming-friendly (good for the live preview); slow = reasoning/heavy.
   const modelIsFast = !!activeModelName && !isSlowModel(activeModelName)
+
+  // OpenCode engine (opt-in): when configured/reachable, the chat can route
+  // prompts through the real agent engine instead of the LLM/builder path.
+  const { available: engineAvailable } = useOpencodeEngine()
+  const [engineMode, setEngineMode] = React.useState(false)
+  // Map<chatSessionId, engineSessionId> so each code chat reuses one engine session.
+  const engineSessionRef = React.useRef<Record<string, string>>({})
 
   const abortRef = React.useRef<AbortController | null>(null)
   const inputRef = React.useRef<HTMLTextAreaElement | null>(null)
@@ -618,6 +627,74 @@ export function AICodeChatPanel() {
   // Agent FSM entry point: the pure orchestrator decides the next action
   // (ask → generate → patch → debug → passthrough) and we execute it, reusing
   // the LLM executor (sendPrompt) and the deterministic generator (buildApp).
+  // OpenCode engine path (opt-in). Creates/reuses an engine session, streams
+  // live events for progress, sends the prompt, renders the reply, and applies
+  // any code blocks it returns to the workspace. Degrades with a clear error
+  // when the engine is configured but unreachable (e.g. host-dev without Docker).
+  const runEngine = React.useCallback(
+    async (text: string, sid: string) => {
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const assistantId = `${id}-a`
+      setTurns((prev) => [
+        ...prev,
+        { id, role: "user", content: text },
+        { id: `${assistantId}`, role: "assistant", content: "⚙️ Motor OpenCode trabajando…", streaming: true },
+      ])
+      setInput("")
+      setBusy(true)
+      const controller = new AbortController()
+      abortRef.current = controller
+
+      // Best-effort live stream: surface any readable progress text.
+      const streamP = opencodeService
+        .streamEvents((ev) => {
+          const d = ev?.data as any
+          const note = typeof d === "string" ? d : d?.text || d?.message || d?.part?.text
+          if (note && typeof note === "string") {
+            setTurns((prev) => prev.map((t) => (t.id === assistantId ? { ...t, content: note.slice(0, 6000) } : t)))
+          }
+        }, controller.signal)
+        .catch(() => {})
+
+      try {
+        let esid = engineSessionRef.current[sid]
+        if (!esid) {
+          const s = await opencodeService.createSession({})
+          esid = String((s && (s.id as string)) || "")
+          if (!esid) throw new Error("El motor no devolvió un id de sesión.")
+          engineSessionRef.current[sid] = esid
+        }
+        const result = await opencodeService.prompt(esid, text)
+        const reply = extractEngineText(result) || "_(el motor no devolvió texto)_"
+        setTurns((prev) => prev.map((t) => (t.id === assistantId ? { ...t, content: reply, streaming: false } : t)))
+
+        // Apply any code blocks the engine returned to the workspace + preview.
+        try {
+          const blocks = parseCodeBlocks(reply).filter((b) => b.path)
+          for (const b of blocks) if (b.path) applyBlock(b.path, b.content)
+          if (blocks.length > 0 && typeof window !== "undefined") {
+            window.dispatchEvent(new CustomEvent("siragpt:code-open-preview"))
+            toast.success(`Motor OpenCode — ${blocks.length} archivo(s) aplicados →`)
+          }
+        } catch {
+          /* parse/apply best-effort */
+        }
+      } catch (err: any) {
+        const msg = err?.message || "El motor OpenCode no respondió"
+        setTurns((prev) =>
+          prev.map((t) => (t.id === assistantId ? { ...t, content: `_${msg}_`, streaming: false } : t)),
+        )
+        toast.error(msg)
+      } finally {
+        controller.abort() // close the events stream
+        abortRef.current = null
+        setBusy(false)
+        await streamP.catch(() => {})
+      }
+    },
+    [applyBlock, setTurns],
+  )
+
   const dispatch = React.useCallback(
     async (rawInput: string, opts?: { forceDeterministic?: boolean }) => {
       const text = rawInput.trim()
@@ -631,6 +708,14 @@ export function AICodeChatPanel() {
         return
       }
       const sid = sessionId
+
+      // Opt-in OpenCode engine: route the prompt through the real agent engine
+      // (⚡ Construir still uses the deterministic builder, even with the engine on).
+      if (engineMode && engineAvailable && !opts?.forceDeterministic) {
+        await runEngine(text, sid)
+        return
+      }
+
       const agent = activeCodeChatSession?.agent ?? defaultAgentState()
       const action = nextAgentAction(agent, text, {
         mode: composerMode,
@@ -696,10 +781,13 @@ export function AICodeChatPanel() {
       busy,
       buildingApp,
       composerMode,
+      engineAvailable,
+      engineMode,
       files,
       includeContext,
       patchAgentState,
       runDeterministicSRE,
+      runEngine,
       sendPrompt,
       sessionId,
       setTurns,
@@ -821,6 +909,30 @@ export function AICodeChatPanel() {
               fast={modelIsFast}
               onSelect={(m) => chooseCodeModel({ name: m.name, provider: m.provider })}
             />
+            {engineAvailable ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className={cn(
+                  "h-7 shrink-0 gap-1 rounded-md px-2 text-[11px] font-medium",
+                  engineMode
+                    ? "bg-[hsl(var(--accent-violet)/0.16)] text-[hsl(var(--accent-violet))] hover:bg-[hsl(var(--accent-violet)/0.24)]"
+                    : "text-muted-foreground hover:bg-muted/80 hover:text-foreground",
+                )}
+                onClick={() => setEngineMode((v) => !v)}
+                aria-pressed={engineMode}
+                aria-label="Usar el motor OpenCode"
+                title={
+                  engineMode
+                    ? "Motor OpenCode activo — el chat usa el agente real"
+                    : "Activar el motor OpenCode (agente real) para este chat"
+                }
+              >
+                <Server className="h-3.5 w-3.5" />
+                <span>Motor{engineMode ? " ✓" : ""}</span>
+              </Button>
+            ) : null}
             <span className="min-w-0 flex-1" />
             {busy ? (
               <Button
