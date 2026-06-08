@@ -5,7 +5,23 @@ This directory is the **OpenCode coding-agent engine**, vendored from
 **License: MIT** (see `LICENSE`). Keep the upstream copyright notice.
 
 We bring the *engine implementation* here (not the TUI/desktop/web/docs/infra
-packages). The real agent lives under `src/`:
+packages). The main agent package is vendored at the root of this directory;
+its sibling engine packages are under `packages/`:
+
+| Path | Upstream package | Purpose |
+|------|------------------|---------|
+| `./src` | `packages/opencode` | main agent: loop, tools, server, providers |
+| `packages/core` | `@opencode/core` | shared core runtime |
+| `packages/server` | `@opencode/server` | server layer |
+| `packages/llm` | `@opencode/llm` | LLM/provider layer |
+| `packages/sdk` | `@opencode/sdk` | TS SDK (HTTP client, OpenAPI-generated) |
+| `packages/plugin` | `@opencode/plugin` | plugin API |
+| `packages/identity` | `@opencode/identity` | identity helpers |
+| `packages/function` | `@opencode/function` | function utilities |
+| `packages/effect-drizzle-sqlite`, `packages/effect-sqlite-node` | Effect + SQLite bindings |
+
+`test/` fixtures and `node_modules` were excluded from every package when
+vendoring. The main agent lives under `src/`:
 
 - `src/agent`, `src/tool`, `src/skill` — the agent loop, tools, skills
 - `src/session`, `src/message` — conversations / message parts
