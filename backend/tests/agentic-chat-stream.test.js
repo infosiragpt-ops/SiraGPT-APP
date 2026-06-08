@@ -144,10 +144,21 @@ test('shouldUseAgenticChat keeps tool-heavy and follow-up repair turns agentic',
     prompt: 'sigue con eso',
     history: [{ role: 'user', content: 'Arregla el deploy del repositorio en GitHub' }],
   }), true);
+  // Attachment turn that asks for a tool-backed DELIVERABLE → still agentic.
   assert.equal(agenticStream.shouldUseAgenticChat({
-    prompt: 'resume este archivo',
+    prompt: 'genera una tabla en Excel con los datos de este archivo',
     files: [{ id: 'file_1' }],
   }), true);
+});
+
+test('shouldUseAgenticChat keeps simple doc Q&A / summaries on the reliable plain stream', () => {
+  // A doc is attached (its text is injected into the prompt). Plain Q&A and
+  // summaries must NOT enter the react-agent loop — that stalled on weak
+  // tool-callers ("Analizando solicitud" → 90s timeout → user hits Regenerate).
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'dame un resumen en 200 palabras', files: [{ id: 'f1' }] }), false);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'cual es el titulo de la investigacion?', files: [{ id: 'f1' }] }), false);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'resume este archivo', files: [{ id: 'f1' }] }), false);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'que dice el documento sobre el presupuesto?', files: [{ id: 'f1' }] }), false);
 });
 
 test('shouldUseAgenticChat routes visual + document create requests through the agent', () => {

@@ -45,7 +45,7 @@
   const openclawCapabilityKernel = require('./openclaw-capability-kernel');
   const { runToolWithRetry } = require('./agents/tool-call-retry');
   const { liveSubagentsEnabled } = require('./agents/subagent-guard');
-  const { isAgenticActionRequest } = require('./agents/agentic-trigger');
+  const { isAgenticActionRequest, isArtifactDeliverableRequest } = require('./agents/agentic-trigger');
   const { detectMediaIntent, buildMediaIntentHint } = require('./agents/media-intent');
   const {
     buildExecutionProfile,
@@ -285,9 +285,25 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
   const text = String(prompt || '').trim();
   if (!text) return false;
   if (SIMPLE_CHAT_PROMPT.test(text)) return false;
-  if (Array.isArray(files) && files.length > 0) return true;
   if (/^\s*\/(goal|plan)\b/i.test(text)) return true;
   if (isCognitionUpgradeRequest(text)) return true;
+  // ── Attachment turns ──────────────────────────────────────────────────
+  // A doc is attached: its text is ALREADY injected into the prompt
+  // (`Attached files:` / RAG evidence), so the answer comes FROM the doc.
+  // Only escalate to the agentic loop when the user wants a tool-backed
+  // DELIVERABLE built from it (Word/PDF/Excel/table/chart/diagram/slides…).
+  // Plain Q&A and summaries answer DIRECTLY via the reliable plain stream —
+  // fast, no "Analizando solicitud" stall (the old `files.length>0 → true`
+  // sent every doc turn through the react-agent loop, which on weak
+  // tool-callers like Kimi stalls until the 90s timeout and forced the user
+  // to hit Regenerate). The gate requires a creation verb AND an artifact noun
+  // ("genera una tabla en Excel", "conviértelo a PDF"); a bare reference word
+  // ("qué dice el documento", "el presupuesto") or a doc-SUBJECT word
+  // ("investigación", "análisis") stays on the plain stream — so a simple
+  // "cuál es el título de la investigación?" answers directly, fast.
+  if (Array.isArray(files) && files.length > 0) {
+    return isArtifactDeliverableRequest(text);
+  }
   if (AGENTIC_PROMPT_HINT.test(text)) return true;
   // Auto web-search routing: send freshness / live-data / factual-lookup
   // questions into the agentic loop (which owns web_search) even when the

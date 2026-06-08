@@ -71,6 +71,27 @@ const ARTIFACT_NOUNS = new RegExp(
   'i',
 );
 
+// Verbs that mean "produce / transform into" an artifact — the creation/
+// transformation subset of ACTION_VERBS, excluding the analysis/search/
+// research stems (analiz / investig / busca). Those last three describe
+// reading-about an input, not building a new deliverable, so on an
+// attachment turn "analiza este documento" stays on the plain stream.
+const CREATION_VERBS = new RegExp(
+  '\\b(' +
+    [
+      // Spanish
+      'cr[eé]a', 'gener', 'dise[ñn]', 'construy', 'hazme', 'haz', 'h[aá]game',
+      'elabor', 'prepar', 'dibuj', 'grafic', 'export', 'convi[eé]rt', 'convert',
+      'transform', 'program', 'codific', 'desarroll', 'implement', 'plote',
+      'maqueta', 'esquematiza', 'visualiza', 'compila', 'rellena',
+      // English
+      'creat', 'generat', 'build', 'mak(e|ing)', 'design', 'draw', 'plot',
+      'render', 'develop', 'visuali[sz]e', 'compile', 'diagram', 'turn into',
+    ].join('|') +
+    ')',
+  'i',
+);
+
 /**
  * @param {string} text user message (any case)
  * @returns {boolean} true when the message should enter the agentic runtime
@@ -83,4 +104,27 @@ function isAgenticActionRequest(text) {
   return false;
 }
 
-module.exports = { isAgenticActionRequest, ACTION_VERBS, ARTIFACT_NOUNS };
+/**
+ * Attachment-turn gate: true only when the message asks to BUILD a tool-backed
+ * deliverable FROM the attached doc (a creation/transformation verb applied to
+ * an artifact noun — "genera una tabla en Excel", "conviértelo a PDF"), vs.
+ * merely asking ABOUT it ("qué dice el documento", "resume esto"). Requiring
+ * BOTH a verb and a noun stops ambiguous reference words ("el documento", "el
+ * presupuesto") from mis-routing plain Q&A into the slow react-agent loop.
+ *
+ * @param {string} text user message (any case)
+ * @returns {boolean}
+ */
+function isArtifactDeliverableRequest(text) {
+  const t = String(text == null ? '' : text);
+  if (!t.trim()) return false;
+  return CREATION_VERBS.test(t) && ARTIFACT_NOUNS.test(t);
+}
+
+module.exports = {
+  isAgenticActionRequest,
+  isArtifactDeliverableRequest,
+  ACTION_VERBS,
+  CREATION_VERBS,
+  ARTIFACT_NOUNS,
+};

@@ -3,7 +3,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { isAgenticActionRequest } = require('../src/services/agents/agentic-trigger');
+const {
+  isAgenticActionRequest,
+  isArtifactDeliverableRequest,
+} = require('../src/services/agents/agentic-trigger');
 
 test('triggers on the five explicit create categories (documents/images/videos/charts/organigrams)', () => {
   const yes = [
@@ -91,4 +94,36 @@ test('handles empty / nullish input safely', () => {
   assert.equal(isAgenticActionRequest('   '), false);
   assert.equal(isAgenticActionRequest(null), false);
   assert.equal(isAgenticActionRequest(undefined), false);
+});
+
+test('isArtifactDeliverableRequest gates attachment turns on verb + noun', () => {
+  // BUILD-a-deliverable: creation verb applied to an artifact noun → true.
+  const yes = [
+    'genera una tabla en Excel con los datos de este archivo',
+    'conviértelo a PDF',
+    'créame un PowerPoint con el resumen',
+    'haz un gráfico con estos números',
+    'export this to a spreadsheet',
+    'build a dashboard from the attached data',
+  ];
+  for (const m of yes) {
+    assert.equal(isArtifactDeliverableRequest(m), true, `should be a deliverable: ${m}`);
+  }
+
+  // Ask-ABOUT the doc (no creation verb, or a bare reference noun) → false.
+  // These must stay on the fast plain stream — the doc text is already injected.
+  const no = [
+    'dame un resumen en 200 palabras',
+    'cuál es el título de la investigación?',
+    'resume este archivo',
+    'qué dice el documento sobre el presupuesto?',
+    'analiza este documento',
+    'de qué trata el pdf?',
+    '',
+    null,
+    undefined,
+  ];
+  for (const m of no) {
+    assert.equal(isArtifactDeliverableRequest(m), false, `should NOT be a deliverable: ${m}`);
+  }
 });
