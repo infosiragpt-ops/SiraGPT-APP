@@ -79,7 +79,7 @@ export type AgentTaskEvent =
   | { type: "cycle_init"; taskId?: string; stages?: Array<{ id: string; label: string }>; documentType?: string | null; field?: string | null; citationStyle?: string | null; code?: string | null; ts?: string; seq?: number }
   | { type: "cycle_stage"; taskId?: string; stage: string; status: "start" | "done" | string; label?: string; note?: string; ts?: string; seq?: number }
   | { type: "meta"; taskId?: string; goal: string; model: string; runtimeModel?: string; runtimeProvider?: string; tools: string[]; executionProfile?: Record<string, unknown>; intentAlignmentProfile?: Record<string, unknown>; taskPlan?: Record<string, unknown>; frameworks?: AgentFrameworkStatus }
-  | { type: "step_start"; id: string; label: string; icon?: AgenticIcon }
+  | { type: "step_start"; id: string; label: string; icon?: AgenticIcon; reasoning?: string }
   | { type: "tool_call"; stepId: string; tool: string; preview?: string; language?: string; codePreview?: string }
   | { type: "tool_output"; stepId: string; tool: string; ok: boolean; preview?: string; partial?: boolean }
   | { type: "step_done"; id: string; ok: boolean; summary?: string }
@@ -399,6 +399,9 @@ export interface AgentTaskState {
     id: string
     label: string
     icon?: AgenticIcon
+    // The model's natural-language reasoning for this step (1-2 sentences),
+    // surfaced in the timeline so the chat shows its thinking like Claude.
+    reasoning?: string
     status: "running" | "done" | "error"
     toolCalls: Array<{
       tool: string
@@ -543,6 +546,7 @@ export function reduceEvent(state: AgentTaskState, evt: AgentTaskEvent): AgentTa
           id: evt.id,
           label: evt.label,
           icon: evt.icon,
+          ...(evt.reasoning ? { reasoning: evt.reasoning } : {}),
           status: "running",
           toolCalls: [],
         }],
