@@ -13,16 +13,17 @@
 
 const { getOpencodeConfig, basicAuthHeader } = require('./opencode-config');
 
-// Endpoint shapes per opencode.ai/docs (server mode). Reconcile against /doc
-// on a live server before depending on the exact request/response bodies.
+// Endpoint shapes — VERIFIED against a live `opencode serve` v1.16.2 /doc
+// (2026-06-08). The server exposes a raw surface (/session, /file, …) plus an
+// /api/* surface; the SSE event stream lives at /api/event.
 const ENDPOINTS = {
   openapi: () => '/doc',
-  sessions: () => '/session',
-  session: (id) => `/session/${encodeURIComponent(id)}`,
-  message: (id) => `/session/${encodeURIComponent(id)}/message`,
-  file: () => '/file',
-  find: () => '/find',
-  event: () => '/event',
+  sessions: () => '/session', // GET list · POST create  (verified 200)
+  session: (id) => `/session/${encodeURIComponent(id)}`, // GET/DELETE/PATCH
+  message: (id) => `/session/${encodeURIComponent(id)}/message`, // GET/POST
+  file: () => '/file', // GET (file content at /file/content)
+  find: () => '/find/symbol', // GET symbol search
+  event: () => '/api/event', // GET — SSE stream (verified text/event-stream)
 };
 
 class OpencodeHttpError extends Error {

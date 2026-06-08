@@ -88,7 +88,7 @@ test('a non-ok response throws OpencodeHttpError carrying the status', async () 
   });
 });
 
-test('eventStreamUrl points at the SSE endpoint', () => {
+test('eventStreamUrl points at the SSE endpoint (/api/event, verified live)', () => {
   const client = createOpencodeClient({ env: { OPENCODE_SERVER_URL: 'http://127.0.0.1:4096' }, fetchImpl: fakeFetch() });
-  assert.equal(client.eventStreamUrl(), 'http://127.0.0.1:4096/event');
+  assert.equal(client.eventStreamUrl(), 'http://127.0.0.1:4096/api/event');
 });
