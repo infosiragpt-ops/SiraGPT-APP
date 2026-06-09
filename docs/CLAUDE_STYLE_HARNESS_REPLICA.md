@@ -129,15 +129,24 @@ esta tabla es el mapa de mantenimiento):
 7. **Observabilidad** — spans por turno (tokens, duración, modelo real),
    y ahora `reasoningDurationMs` por mensaje.
 
-## 3. Hoja de ruta restante (prioridad por impacto medido)
+## 3. Hoja de ruta (prioridad por impacto medido)
 
-1. **`plan_task` + todo list visible** en el timeline (plan-then-execute
-   completo; las notas estructuradas mantienen coherencia en tareas largas).
-2. **Verificación evaluator-optimizer en el finalize guard** (hoy valida
-   política, no calidad; un pase de juez con rúbrica es la pieza que falta
-   del loop gather→act→**verify**).
-3. **Tool search / deferred loading** para las ~50 tools (las definiciones
-   consumen contexto; cargar esquemas bajo demanda = −85% tokens medido).
+1. ✅ **`update_plan` + todo list visible** (plan-then-execute): tool en
+   `agents/agent-plan-verify.js`, plan fijado como step del timeline que se
+   actualiza en vivo (✓ / ▸ / ·); el system prompt exige plan primero en
+   tareas multi-paso.
+2. ✅ **Verificación evaluator-optimizer en el finalize guard**
+   (`createAnswerVerifier`): un pase de juez por run rechaza borradores que
+   no responden / inventan / sub-entregan, con instrucciones de reparación;
+   acotado (1 rechazo máx), fail-open, gate `SIRAGPT_AGENT_VERIFY=0`. Se
+   encadena tras el gate determinista de requiredTools
+   (`composeFinalizeGuards`: reglas primero, juez después).
+3. ✅ **Tool search / deferred loading** (`react-agent` `deferredTools` +
+   meta-tool `search_tools`): el schema arranca con el core
+   (`CORE_AGENT_TOOL_NAMES` + requiredTools + media intent) y el resto se
+   activa por búsqueda de capacidad; el schema (y el bloque prompted) se
+   refresca al paso siguiente. Rollout con `SIRAGPT_TOOL_DEFER=1`
+   (default off hasta validar en prod).
 4. **Compaction estilo Claude Code**: al 80% de la ventana, resumir
    preservando decisiones arquitectónicas + bugs abiertos + últimos 5 tool
    results, y reiniciar el trace.

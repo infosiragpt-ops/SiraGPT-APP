@@ -732,6 +732,7 @@ async function run(openai, opts) {
     compactMaxChars = DEFAULT_COMPACT_MAX_CHARS,
     compactTailRounds = DEFAULT_COMPACT_TAIL_ROUNDS,
     onCompact = () => {},
+    deferredTools = [],
   } = opts;
 
   if (!query) throw new Error('react-agent: query is required');
@@ -747,7 +748,71 @@ async function run(openai, opts) {
     execute: async (args) => args, // pass-through; the loop reads this and terminates
   }]);
 
-  const toolsSchema = registry.map(toOpenAITool);
+  // ── Deferred tool loading (tool-search pattern) ─────────────────────────
+  // With a large toolset the JSON-schema definitions alone can dominate the
+  // context window. Callers can pass most tools as `deferredTools`: they are
+  // EXCLUDED from the schema until the model activates them through the
+  // `search_tools` meta-tool (match by capability keywords → top hits join
+  // the live registry; the schema — and the prompted-tools block — refresh on
+  // the next step). Measured upstream at ~85% schema-token savings.
+  const deferredPool = (Array.isArray(deferredTools) ? deferredTools : [])
+    .filter((t) => t && t.name && typeof t.execute === 'function');
+  let toolsSchemaDirty = false;
+  if (deferredPool.length > 0) {
+    registry.push({
+      name: 'search_tools',
+      description:
+        `Discover and activate additional tools. Beyond the tools listed, ${deferredPool.length} more exist `
+        + '(media/image/chart generation, documents, repository/code editing, browser, sessions, …). '
+        + 'Call with a short capability query (e.g. "generate image", "edit repo file", "create excel"); '
+        + 'matching tools become callable immediately after.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Capability you need, a few keywords.' },
+        },
+        required: ['query'],
+        additionalProperties: false,
+      },
+      execute: async ({ query }) => {
+        const words = String(query || '').toLowerCase().split(/[^a-z0-9_áéíóúñ]+/).filter((w) => w.length > 2);
+        if (words.length === 0) return { found: 0, note: 'Provide capability keywords.' };
+        const activeNames = new Set(registry.map((t) => t.name));
+        const scored = deferredPool
+          .filter((t) => !activeNames.has(t.name))
+          .map((t) => {
+            const name = String(t.name).toLowerCase();
+            const hay = `${name} ${String(t.description || '').toLowerCase()}`;
+            let score = 0;
+            for (const w of words) {
+              if (name.includes(w)) score += 3;
+              else if (hay.includes(w)) score += 1;
+            }
+            return { t, score };
+          })
+          .filter((x) => x.score > 0)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 8);
+        if (scored.length === 0) {
+          return { found: 0, note: 'No tools matched. Try different capability keywords (e.g. "image", "document", "repository", "browser").' };
+        }
+        for (const { t } of scored) {
+          registry.push(t);
+          registryNames.add(t.name);
+        }
+        toolsSchemaDirty = true;
+        return {
+          activated: scored.map(({ t }) => ({
+            name: t.name,
+            description: String(t.description || '').slice(0, 180),
+          })),
+          note: 'These tools are callable from your next message onward.',
+        };
+      },
+    });
+  }
+
+  let toolsSchema = registry.map(toOpenAITool);
 
   // Prompted tool-calling (fallback ladder rung 2): the registry is described
   // in the system prompt and calls are parsed from fenced JSON blocks. The
@@ -757,7 +822,7 @@ async function run(openai, opts) {
   const prompted = toolCallMode === 'prompted';
   const promptedTC = prompted ? require('./agents/prompted-tool-calling') : null;
   const registryNames = new Set(registry.map((t) => t.name));
-  const promptedBlock = prompted ? promptedTC.buildPromptedToolsBlock(registry) : '';
+  let promptedBlock = prompted ? promptedTC.buildPromptedToolsBlock(registry) : '';
 
   const messages = [
     {
@@ -823,6 +888,23 @@ async function run(openai, opts) {
     // cache below restores any elided result the model genuinely re-needs.
     if (!OBS_ELIDE_DISABLED) {
       try { elideStaleObservations(messages); } catch { /* aging must never break the loop */ }
+    }
+
+    // Deferred tools activated on the previous step → refresh the schema
+    // (and, in prompted mode, the tools block inside the system message)
+    // before this completion call.
+    if (toolsSchemaDirty) {
+      toolsSchema = registry.map(toOpenAITool);
+      if (prompted) {
+        promptedBlock = promptedTC.buildPromptedToolsBlock(registry);
+        messages[0] = {
+          role: 'system',
+          content: SYSTEM_PROMPT
+            + (extraSystem ? `\n\n${extraSystem}` : '')
+            + (promptedBlock ? `\n\n${promptedBlock}` : ''),
+        };
+      }
+      toolsSchemaDirty = false;
     }
 
     // Keep the trace under the context budget. At the top of an iteration

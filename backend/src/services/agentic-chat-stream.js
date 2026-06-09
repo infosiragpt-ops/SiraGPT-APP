@@ -65,7 +65,22 @@
   // git operations that may include slow CI checks.
   const DEFAULT_MAX_RUNTIME_MS = 5 * 60 * 1000;
 
+  // Tools that always stay in the model-visible schema when deferred tool
+  // loading is ON (SIRAGPT_TOOL_DEFER=1). Everything else is discoverable
+  // through `search_tools`. Required tools from the execution profile and a
+  // media-intent initialToolChoice are force-included at run time.
+  const CORE_AGENT_TOOL_NAMES = [
+    'update_plan',
+    'web_search', 'read_url', 'web_extract', 'deep_search',
+    'memory_recall', 'rag_retrieve', 'self_rag_answer',
+    'python_exec', 'run_tests',
+    'create_document', 'verify_artifact',
+    'session_search', 'session_list', 'session_history',
+  ];
+
   const STAGE_LABELS = {
+    update_plan: () => 'Actualizando el plan',
+    search_tools: (args) => `Buscando herramientas: "${truncate(args?.query, 50)}"`,
     web_search: (args) => `Buscando "${truncate(args?.query, 60)}"`,
     read_url:   (args) => `Leyendo ${prettyDomain(args?.url) || 'fuente'}`,
     web_extract: (args) => `Extrayendo ${prettyDomain(args?.url) || 'fuente'}`,
@@ -636,6 +651,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
 
     const extraSystem = [
       'Responde SIEMPRE en español, con tono profesional y cercano. No uses emojis.',
+      'En tareas con 2 o más pasos llama `update_plan` PRIMERO con el plan completo (3-7 pasos cortos) y vuelve a llamarlo al completar cada paso o si el plan cambia — el usuario lo ve actualizarse en vivo. Para tareas de una sola acción no hace falta plan.',
       initialToolChoice ? buildMediaIntentHint(mediaIntent) : '',
       openclawRuntimeBlock,
       buildExecutionProfilePrompt(executionProfile),
@@ -699,10 +715,45 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       onAudit: (info) => { try { onEvent({ type: 'tool_authorized', tool: info.tool }); } catch (_) { /* noop */ } },
     });
 
+    // ── Claude-Code harness: plan + verify + deferred tools ────────────────
+    // 1. `update_plan`: visible, updatable todo list pinned in the timeline
+    //    (plan-then-execute; zero frontend changes — it rides the sentinel).
+    // 2. Evaluator-optimizer finalize guard: one cheap judge pass per run
+    //    rejects a draft that doesn't answer / fabricates / under-delivers,
+    //    with concrete repair instructions (gather → act → VERIFY).
+    // 3. Deferred tool loading (SIRAGPT_TOOL_DEFER=1): lean core schema,
+    //    everything else activates on demand via `search_tools`.
+    const planVerify = require('./agents/agent-plan-verify');
+    tools = tools.concat([planVerify.createPlanTool({
+      getState: () => state,
+      emit: async () => { await writeSse(res, { replace: true, content: serializeSentinel(state) }); },
+    })]);
+
+    let coreTools = tools;
+    let deferredAgentTools = [];
+    if (String(process.env.SIRAGPT_TOOL_DEFER || '') === '1') {
+      const mustKeep = new Set([
+        ...CORE_AGENT_TOOL_NAMES,
+        ...(executionProfile.requiredTools || []),
+        ...(initialToolChoice ? [initialToolChoice] : []),
+      ]);
+      coreTools = tools.filter((t) => t && mustKeep.has(t.name));
+      deferredAgentTools = tools.filter((t) => t && !mustKeep.has(t.name));
+      try { console.log(`[agentic-chat] tool-defer ON: ${coreTools.length} core, ${deferredAgentTools.length} deferred`); } catch (_) { /* noop */ }
+    }
+
+    const composedFinalizeGuard = planVerify.composeFinalizeGuards([
+      executionProfile.requiredTools.length
+        ? ({ steps, unavailableTools }) => validateFinalize(executionProfile, steps, { unavailableTools })
+        : null,
+      planVerify.createAnswerVerifier({ openai, model, userQuery }),
+    ]);
+
     let stepCounter = 0;
     const result = await reactAgent.run(openai, {
       query: userQuery,
-      tools,
+      tools: coreTools,
+      deferredTools: deferredAgentTools,
       model,
       maxSteps: maxStepsOverride,
       maxRuntimeMs: maxRuntimeOverride,
@@ -719,9 +770,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
           clearance: toolContext.clearance || null,
         },
       },
-      finalizeGuard: executionProfile.requiredTools.length
-        ? ({ steps, unavailableTools }) => validateFinalize(executionProfile, steps, { unavailableTools })
-        : null,
+      finalizeGuard: composedFinalizeGuard,
       onCompact: ({ step, removedMessages, chars }) => {
         try { console.log(`[agentic-chat] trace compacted at step ${step}: -${removedMessages} msgs, ${chars} chars`); } catch (_) {}
       },
