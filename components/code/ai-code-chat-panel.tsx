@@ -816,13 +816,17 @@ export function AICodeChatPanel() {
   const dispatch = React.useCallback(
     async (rawInput: string, opts?: { forceDeterministic?: boolean }) => {
       const text = rawInput.trim()
-      if (!text || busy || buildingApp) return
+      if (!text) return
+      if (busy || buildingApp) {
+        toast("Espera — sigo procesando el mensaje anterior…")
+        return
+      }
       if (!user || !token) {
         toast.error("Inicia sesión para usar el chat de código.")
         return
       }
       if (!sessionId) {
-        toast.error("Selecciona o crea un agente de código.")
+        toast.error("Abre o crea un chat de código (la carpeta/agente no está activo). Recarga si abriste una carpeta local que no montó.")
         return
       }
       const sid = sessionId
