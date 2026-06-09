@@ -299,7 +299,7 @@
     "feedbackBad": "Unhelpful response"
   },
   "composer": {
-    "placeholderDefault": "Type a message",
+    "placeholderDefault": "Write, paste a link or drop files…",
     "placeholderImage": "Describe the image you want to create",
     "placeholderVideo": "Describe the video you want to create",
     "placeholderWebSearch": "Search the web",
