@@ -10,6 +10,7 @@ import {
   ChevronDown,
   ChevronRight,
   Download,
+  Globe,
   Eye,
   FileCheck2,
   RefreshCcw,
@@ -43,6 +44,12 @@ interface Props {
   hideSteps?: boolean
 }
 
+interface ProjectedSearchCall {
+  query?: string
+  count?: number
+  sources?: Array<{ title?: string; url?: string }>
+}
+
 interface TimelineStepProjection {
   id: string
   label: string
@@ -50,6 +57,21 @@ interface TimelineStepProjection {
   status: "running" | "done" | "error"
   phase: AgentStatusIconKind
   count: number
+  /** Claude-style web research trace: queries + their result lists. */
+  searchCalls: ProjectedSearchCall[]
+  /** Domains the agent is fetching ("Obteniendo datos de …"). */
+  fetchTargets: string[]
+}
+
+const SEARCH_TOOL_RE = /search/i
+const FETCH_TOOL_RE = /(browse|navigate|read_url|url_read|fetch|scrape|open_page|visit)/i
+
+function domainOf(url?: string): string {
+  try {
+    return new URL(String(url)).hostname.replace(/^www\./, "")
+  } catch {
+    return ""
+  }
 }
 
 function etaLabel(ms?: number | null) {
@@ -107,6 +129,22 @@ function projectTimelineSteps(steps: AgentTaskState["steps"]): TimelineStepProje
     // Prefer the model's own reasoning narration (Claude-style transparency)
     // as the secondary line; fall back to the tool names when absent.
     const reasoning = typeof step.reasoning === "string" ? step.reasoning.trim() : ""
+    // Claude-style research trace: surface searches (query + results) and
+    // page fetches as first-class rows under the step.
+    const searchCalls: ProjectedSearchCall[] = []
+    const fetchTargets: string[] = []
+    for (const call of step.toolCalls || []) {
+      if (SEARCH_TOOL_RE.test(call.tool)) {
+        searchCalls.push({
+          query: call.preview,
+          count: call.output?.resultCount ?? call.output?.sources?.length,
+          sources: call.output?.sources,
+        })
+      } else if (FETCH_TOOL_RE.test(call.tool) && call.preview) {
+        const target = domainOf(call.preview) || String(call.preview).slice(0, 60)
+        if (target && !fetchTargets.includes(target)) fetchTargets.push(target)
+      }
+    }
     const item: TimelineStepProjection = {
       id: step.id,
       label,
@@ -114,11 +152,15 @@ function projectTimelineSteps(steps: AgentTaskState["steps"]): TimelineStepProje
       status: step.status === "running" ? "running" : step.status === "error" ? "error" : "done",
       phase: phaseFromStep(step, label),
       count: 1,
+      searchCalls,
+      fetchTargets,
     }
     const previous = projected[projected.length - 1]
     if (previous && previous.label === item.label && previous.detail === item.detail && previous.status === item.status) {
       previous.count += 1
       previous.id = item.id
+      previous.searchCalls.push(...item.searchCalls)
+      previous.fetchTargets.push(...item.fetchTargets.filter((t) => !previous.fetchTargets.includes(t)))
     } else {
       projected.push(item)
     }
@@ -131,6 +173,76 @@ function authHeaders(): Record<string, string> {
   if (typeof window === "undefined") return {}
   const token = window.localStorage.getItem("auth-token")
   return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+/**
+ * Claude-style research trace under a step: each search shows the query
+ * line ("query…  ·  N resultados") followed by a quiet result list
+ * (favicon + title + domain), and page fetches read as
+ * "Obteniendo datos de dominio.com".
+ */
+function StepResearchTrace({ searchCalls, fetchTargets }: { searchCalls: ProjectedSearchCall[]; fetchTargets: string[] }) {
+  if (!searchCalls.length && !fetchTargets.length) return null
+  return (
+    <div className="mt-1 space-y-1.5">
+      {searchCalls.map((call, index) => (
+        <div key={`s-${index}`}>
+          <div className="flex items-center gap-2 text-[12.5px] text-muted-foreground/85">
+            <Globe className="h-3.5 w-3.5 shrink-0 text-muted-foreground/55" />
+            <span className="min-w-0 flex-1 truncate">
+              {call.query ? `“${call.query}”` : "Buscando…"}
+            </span>
+            {typeof call.count === "number" && (
+              <span className="shrink-0 text-[11.5px] tabular-nums text-muted-foreground/55">
+                {call.count} resultado{call.count === 1 ? "" : "s"}
+              </span>
+            )}
+          </div>
+          {(call.sources?.length ?? 0) > 0 && (
+            <div className="ml-5 mt-1 max-h-44 overflow-y-auto rounded-xl border border-border/50 bg-background/60">
+              {call.sources!.map((sourceItem, sourceIndex) => {
+                const sourceDomain = domainOf(sourceItem.url)
+                return (
+                  <a
+                    key={`src-${sourceIndex}`}
+                    href={sourceItem.url || "#"}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2.5 px-3 py-1.5 transition-colors hover:bg-muted/40"
+                  >
+                    {sourceDomain ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={`https://www.google.com/s2/favicons?sz=64&domain=${sourceDomain}`}
+                        alt=""
+                        className="h-4 w-4 shrink-0 rounded-sm"
+                        referrerPolicy="no-referrer"
+                        loading="lazy"
+                      />
+                    ) : (
+                      <Globe className="h-4 w-4 shrink-0 text-muted-foreground/40" />
+                    )}
+                    <span className="min-w-0 flex-1 truncate text-[12.5px] text-foreground/85">
+                      {sourceItem.title || sourceItem.url}
+                    </span>
+                    {sourceDomain && (
+                      <span className="shrink-0 text-[11.5px] text-muted-foreground/55">{sourceDomain}</span>
+                    )}
+                  </a>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      ))}
+      {fetchTargets.slice(-3).map((target, index) => (
+        <div key={`f-${index}`} className="flex items-center gap-2 text-[12.5px] text-muted-foreground/75">
+          <Globe className="h-3.5 w-3.5 shrink-0 text-muted-foreground/45" />
+          <span className="min-w-0 truncate">Obteniendo datos de {target}</span>
+        </div>
+      ))}
+    </div>
+  )
 }
 
 
@@ -554,6 +666,7 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
                 {step.detail && (
                   <div className="mt-0.5 max-w-[48rem] text-[12px] leading-5 text-muted-foreground/65">{step.detail}</div>
                 )}
+                <StepResearchTrace searchCalls={step.searchCalls} fetchTargets={step.fetchTargets} />
               </div>
             ))}
           </div>
@@ -622,14 +735,16 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
           )}
 
           {timelineSteps.map((step) => (
-            <TimelineRow
-              key={step.id}
-              icon={<AgentStatusIcon kind={step.status === "error" ? "error" : step.status === "done" ? "done" : step.phase} className="h-4 w-4" />}
-              label={step.label}
-              detail={step.detail}
-              status={step.status}
-              badges={step.count > 1 ? [`${step.count} pasos`] : []}
-            />
+            <React.Fragment key={step.id}>
+              <TimelineRow
+                icon={<AgentStatusIcon kind={step.status === "error" ? "error" : step.status === "done" ? "done" : step.phase} className="h-4 w-4" />}
+                label={step.label}
+                detail={step.detail}
+                status={step.status}
+                badges={step.count > 1 ? [`${step.count} pasos`] : []}
+              />
+              <StepResearchTrace searchCalls={step.searchCalls} fetchTargets={step.fetchTargets} />
+            </React.Fragment>
           ))}
 
           {state.repairs?.slice(-3).map((repair) => (

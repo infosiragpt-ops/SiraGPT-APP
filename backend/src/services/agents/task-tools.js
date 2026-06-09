@@ -575,6 +575,10 @@ const webSearch = {
       tool: 'web_search',
       ok: true,
       preview: `${payload.sources.length} fuentes top (${stats?.dedupedCount || 0} recopiladas)`,
+      // Claude-style search trace: the UI renders the top sources as a
+      // result list (favicon + title + domain) under the query line.
+      resultCount: payload.sources.length,
+      sources: payload.sources.slice(0, 8).map(s => ({ title: s.title, url: s.url })),
     });
     return payload;
   },

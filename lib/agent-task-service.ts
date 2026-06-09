@@ -408,7 +408,13 @@ export interface AgentTaskState {
       preview?: string
       language?: string
       codePreview?: string
-      output?: { ok: boolean; preview?: string }
+      output?: {
+        ok: boolean
+        preview?: string
+        /** Claude-style search trace payload (web_search & friends). */
+        resultCount?: number
+        sources?: Array<{ title?: string; url?: string }>
+      }
     }>
   }>
   artifacts: AgentArtifact[]
@@ -576,7 +582,9 @@ export function reduceEvent(prevState: AgentTaskState, evt: AgentTaskEvent): Age
         ...state,
         steps: callSteps.map(s =>
           s.id === callStepId
-            ? { ...s, toolCalls: [...s.toolCalls, { tool: evt.tool }] }
+            // Keep the preview (e.g. the search query) — the Claude-style
+            // trace renders it as the visible line for the tool call.
+            ? { ...s, toolCalls: [...s.toolCalls, { tool: evt.tool, preview: evt.preview }] }
             : s
         ),
       }
@@ -592,6 +600,15 @@ export function reduceEvent(prevState: AgentTaskState, evt: AgentTaskEvent): Age
           status: "running" as const,
           toolCalls: [{ tool: evt.tool }],
         }]
+      // Partial provider progress events would overwrite the final
+      // output otherwise; only the non-partial event closes the call.
+      const isPartial = Boolean((evt as { partial?: boolean }).partial)
+      const output = {
+        ok: evt.ok,
+        preview: (evt as { preview?: string }).preview,
+        resultCount: (evt as { resultCount?: number }).resultCount,
+        sources: (evt as { sources?: Array<{ title?: string; url?: string }> }).sources,
+      }
       return {
         ...state,
         steps: outputSteps.map(s => {
@@ -600,13 +617,13 @@ export function reduceEvent(prevState: AgentTaskState, evt: AgentTaskEvent): Age
           // Attach the output to the most recent unattached call for this tool.
           let attached = false
           for (let i = calls.length - 1; i >= 0; i--) {
-            if (calls[i].tool === evt.tool && !calls[i].output) {
-              calls[i] = { ...calls[i], output: { ok: evt.ok } }
+            if (calls[i].tool === evt.tool && (!calls[i].output || isPartial)) {
+              if (!isPartial) calls[i] = { ...calls[i], output }
               attached = true
               break
             }
           }
-          if (!attached) calls.push({ tool: evt.tool, output: { ok: evt.ok } })
+          if (!attached && !isPartial) calls.push({ tool: evt.tool, output })
           return { ...s, toolCalls: calls }
         }),
       }
