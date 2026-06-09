@@ -81,6 +81,7 @@ import ProcessingGoogleServicesCard from "./ProcessingGoogleServicesCard"
 import SpotifyConnectionCard from "./SpotifyConnectionCard"
 import SpotifyResults from "./spotify-results"
 import { ThinkingPlaceholder } from "./thinking-placeholder"
+import ThinkingTrace from "./thinking-trace"
 import MessageActionRail from "./MessageActionRail"
 import SourcesChip from "./SourcesChip"
 import ComputerUseReasoning from "./ComputerUseReasoning"
@@ -130,6 +131,35 @@ const extractWebSources = (message: any): { sources: any[]; activity: any } => {
         } catch { /* malformed metadata — ignore */ }
     }
     return { sources, activity };
+};
+
+// Claude-style extended thinking. Live turns accumulate `message.reasoning`
+// (+ `reasoningStreaming` / `reasoningToolCalls`) from the typed SSE frames;
+// reloaded turns carry `reasoning` as a first-class column on the Message row
+// and the thinking duration inside the persisted metadata JSON
+// (`reasoningDurationMs`).
+const extractReasoning = (message: any): {
+    reasoning: string;
+    reasoningStreaming: boolean;
+    reasoningDurationMs: number | null;
+    reasoningToolCalls: any[];
+} => {
+    const reasoning = typeof message?.reasoning === 'string' ? message.reasoning : '';
+    let reasoningDurationMs = typeof message?.reasoningDurationMs === 'number' ? message.reasoningDurationMs : null;
+    if (reasoningDurationMs == null) {
+        try {
+            const meta = typeof message?.metadata === 'string'
+                ? JSON.parse(message.metadata)
+                : (message?.metadata && typeof message.metadata === 'object' ? message.metadata : {});
+            if (typeof meta?.reasoningDurationMs === 'number') reasoningDurationMs = meta.reasoningDurationMs;
+        } catch { /* malformed metadata — ignore */ }
+    }
+    return {
+        reasoning,
+        reasoningStreaming: !!message?.reasoningStreaming,
+        reasoningDurationMs,
+        reasoningToolCalls: Array.isArray(message?.reasoningToolCalls) ? message.reasoningToolCalls : [],
+    };
 };
 
 // Mirror of extractWebSources for autonomously-recalled memory: live turns
@@ -962,7 +992,12 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     // metadata (progressStage / progressPct set by the plan / math /
     // viz dispatchers) as "thinking" so the unified placeholder with
     // the animated SVG bars stays visible for the whole activity.
-    const isThinking = isAssistant && !message.error && (
+    // Claude-style thinking trace: live reasoning replaces the generic
+    // placeholder — the trace itself carries the "Pensando…" header, so
+    // showing both would duplicate the affordance.
+    const reasoningView = extractReasoning(message);
+    const hasLiveReasoning = isAssistant && (reasoningView.reasoningStreaming || (isStreaming && !!reasoningView.reasoning));
+    const isThinking = isAssistant && !message.error && !hasLiveReasoning && (
       (isStreaming && !message.content) || !!(message as any).progressStage
     );
     // const isThinking = isAssistant && message.content === null;
@@ -3066,6 +3101,14 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
 
                 {message.role === 'ASSISTANT' && (
                     <div className="chat-assistant-message w-full max-w-full md:max-w-3xl">
+                        {!message.error && (reasoningView.reasoning || reasoningView.reasoningStreaming) && (
+                            <ThinkingTrace
+                                reasoning={reasoningView.reasoning}
+                                streaming={reasoningView.reasoningStreaming}
+                                durationMs={reasoningView.reasoningDurationMs}
+                                toolCalls={reasoningView.reasoningToolCalls}
+                            />
+                        )}
                         {message.error ? (
                             <ErrorMessage onRegenerate={onRegenerate} />
                         ) : isThinking ? (

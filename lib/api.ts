@@ -227,6 +227,15 @@ type AIStreamOptions = {
   onReplace?: (content: string) => void
   onSources?: (payload: WebSourcesPayload) => void
   onMemory?: (payload: MemoryPayload) => void
+  // Claude-style extended thinking. `onReasoning` receives each
+  // chain-of-thought delta while the model is in its thinking phase;
+  // `onReasoningDone` fires once with the total thinking duration when the
+  // first visible token arrives (or the stream ends thought-only).
+  onReasoning?: (delta: string) => void
+  onReasoningDone?: (durationMs: number) => void
+  // Tool-call deltas surfaced by reasoning models mid-stream: `name` arrives
+  // on the first frame for an index, `argsDelta` carries argument fragments.
+  onToolCall?: (payload: { index: number; name?: string; argsDelta?: string }) => void
 }
 
 export type GrokVoiceSessionSnapshot = {
@@ -1299,6 +1308,23 @@ class ApiClient {
                   jsonData.content.includes('\n');
 
                 if (shouldProcess) flushBatch();
+              } else if (jsonData.type === 'reasoning_delta' && typeof jsonData.reasoning === 'string') {
+                // Chain-of-thought delta (ThinkingTrace). Deliberately keyed
+                // `reasoning` (not `content`) so legacy parsers ignore it.
+                if (options.onReasoning) options.onReasoning(jsonData.reasoning);
+                lastProcessTime = Date.now();
+              } else if (jsonData.type === 'reasoning_done') {
+                if (options.onReasoningDone) {
+                  options.onReasoningDone(typeof jsonData.durationMs === 'number' ? jsonData.durationMs : 0);
+                }
+              } else if (jsonData.type === 'tool_call_delta') {
+                if (options.onToolCall) {
+                  options.onToolCall({
+                    index: typeof jsonData.index === 'number' ? jsonData.index : 0,
+                    ...(jsonData.name ? { name: jsonData.name } : {}),
+                    ...(jsonData.argsDelta ? { argsDelta: jsonData.argsDelta } : {}),
+                  });
+                }
               } else if (jsonData.type === 'web_sources' && Array.isArray(jsonData.sources)) {
                 // ChatGPT-style searched-sources frame. Surface to the UI
                 // so it can render the "Fuentes" chip + Activity panel.

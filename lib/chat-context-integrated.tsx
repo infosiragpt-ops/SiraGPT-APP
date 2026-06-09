@@ -253,6 +253,15 @@ interface Message {
     reason?: string
     recalled?: number
   }
+  // Claude-style extended thinking (ThinkingTrace). Live streams accumulate
+  // `reasoning` from `reasoning_delta` frames with `reasoningStreaming: true`
+  // until `reasoning_done` arrives with the duration; historical messages get
+  // `reasoning` straight from the persisted column and the duration from
+  // metadata.reasoningDurationMs.
+  reasoning?: string
+  reasoningStreaming?: boolean
+  reasoningDurationMs?: number | null
+  reasoningToolCalls?: Array<{ index: number; name?: string; args?: string }>
 }
 
 function parseMessageMetadata(metadata: unknown): Record<string, any> {
@@ -264,6 +273,65 @@ function parseMessageMetadata(metadata: unknown): Record<string, any> {
     return parsed && typeof parsed === 'object' ? parsed : {}
   } catch {
     return {}
+  }
+}
+
+/**
+ * Per-stream reasoning handlers for the typed SSE frames (reasoning_delta /
+ * reasoning_done / tool_call_delta). All chat-state writes go through
+ * functional `setChat` updates keyed by the placeholder message id, so
+ * interleaved text/reasoning/tool deltas can never clobber each other; the
+ * delta accumulator itself is closure-local to ONE stream. Reasoning deltas
+ * are flushed on a short timer (~80ms) instead of per-token to keep the
+ * markdown re-render cost bounded.
+ */
+function createReasoningHandlers(opts: {
+  setChat: (updater: (prev: any) => any) => void
+  messageId: string
+  isCancelled: () => boolean
+}) {
+  const { setChat, messageId, isCancelled } = opts
+  let reasoningAcc = ''
+  let flushTimer: ReturnType<typeof setTimeout> | null = null
+  const toolCalls = new Map<number, { index: number; name?: string; args: string }>()
+
+  const patchMessage = (patch: Record<string, any>) => {
+    setChat((prevChat: any) => {
+      if (!prevChat) return prevChat
+      const newMessages = prevChat.messages.map((msg: any) =>
+        msg.id === messageId ? { ...msg, ...patch } : msg
+      )
+      return { ...prevChat, messages: newMessages }
+    })
+  }
+
+  const flush = (streaming: boolean, durationMs?: number) => {
+    if (flushTimer) { clearTimeout(flushTimer); flushTimer = null }
+    patchMessage({
+      reasoning: reasoningAcc,
+      reasoningStreaming: streaming,
+      ...(durationMs !== undefined ? { reasoningDurationMs: durationMs } : {}),
+    })
+  }
+
+  return {
+    onReasoning: (delta: string) => {
+      if (isCancelled()) return
+      reasoningAcc += delta
+      if (!flushTimer) flushTimer = setTimeout(() => { flushTimer = null; flush(true) }, 80)
+    },
+    onReasoningDone: (durationMs: number) => {
+      if (isCancelled()) return
+      flush(false, durationMs)
+    },
+    onToolCall: (payload: { index: number; name?: string; argsDelta?: string }) => {
+      if (isCancelled()) return
+      const existing = toolCalls.get(payload.index) || { index: payload.index, args: '' }
+      if (payload.name) existing.name = payload.name
+      if (payload.argsDelta) existing.args += payload.argsDelta
+      toolCalls.set(payload.index, existing)
+      patchMessage({ reasoningToolCalls: Array.from(toolCalls.values()) })
+    },
   }
 }
 
@@ -1440,6 +1508,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             },
             controller.signal, // Pass the abort signal
             {
+              ...createReasoningHandlers({
+                setChat: setCurrentChat,
+                messageId: aiMessagePlaceholder.id,
+                isCancelled: () => controller.signal.aborted || pendingStop,
+              }),
               onReplace: (replacement) => {
                 if (controller.signal.aborted || pendingStop) {
                   return;
@@ -2203,6 +2276,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         },
         controller.signal, // Pass the abort signal
         {
+          ...createReasoningHandlers({
+            setChat: setCurrentChat,
+            messageId: aiMessagePlaceholder.id,
+            isCancelled: () => controller.signal.aborted || pendingStop,
+          }),
           onReplace: (replacement) => {
             if (controller.signal.aborted || pendingStop) {
               return;
@@ -2428,6 +2506,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         },
         controller.signal, // Pass the abort signal
         {
+          ...createReasoningHandlers({
+            setChat: setCurrentChat,
+            messageId: aiMessagePlaceholder.id,
+            isCancelled: () => controller.signal.aborted || pendingStop,
+          }),
           onReplace: (replacement) => {
             if (controller.signal.aborted || pendingStop) {
               return;

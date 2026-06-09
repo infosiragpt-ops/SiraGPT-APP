@@ -1393,7 +1393,7 @@ async function persistUserMessageOnce(chatId, content, filesJson = null, windowM
   });
 }
 
-async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false, extraMetadata = null, userPlan = null) {
+async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false, extraMetadata = null, userPlan = null, reasoningPayload = null) {
   let assistantMessage = null;
   const normalizedResponseContent = typeof fullResponseContent === 'string'
     ? fullResponseContent
@@ -1470,6 +1470,15 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
           tokens,
           files: assistantFiles.length > 0 ? JSON.stringify(assistantFiles) : null,
           metadata: metadataPayload,
+          // Claude-style extended thinking: chain-of-thought text + the raw
+          // OpenRouter reasoning_details array (replayed verbatim on later
+          // Anthropic tool-call turns). Both null when the model didn't think.
+          reasoning: (reasoningPayload && typeof reasoningPayload.text === 'string' && reasoningPayload.text.trim())
+            ? reasoningPayload.text
+            : null,
+          reasoningDetails: (reasoningPayload && reasoningPayload.details != null)
+            ? reasoningPayload.details
+            : undefined,
         }
       });
 
@@ -4535,9 +4544,18 @@ router.post(
         historyMessages = await prisma.message.findMany({
           where: { chatId },
           orderBy: { timestamp: 'asc' },
-          select: { role: true, content: true, files: true }
+          // reasoningDetails: raw OpenRouter thinking blocks (incl. signed
+          // Anthropic thinking) replayed verbatim on later turns — see the
+          // history-mapping loop below.
+          select: { role: true, content: true, files: true, reasoningDetails: true }
         });
       }
+      // Anthropic models via OpenRouter require the raw `reasoning_details`
+      // of prior assistant turns replayed INTACT when the conversation
+      // continues (the thinking chain is signed; dropping it breaks
+      // tool-call turns). Other providers never see the field — the gateway
+      // sanitizer strips it for every non-OpenRouter runtime.
+      const __replayReasoningDetails = actualProvider === 'OpenRouter' && /anthropic\//i.test(String(actualModel || ''));
 
       const currentTurnHasNonImageFiles = processedFiles.some(f => !isImageMime(f.mimeType));
       // Decide once whether this turn's image(s) should be handed to a
@@ -4663,7 +4681,13 @@ router.post(
 
             messages.push({
               role: messageRole,
-              content: messageContent
+              content: messageContent,
+              // Replay the signed thinking chain verbatim for Anthropic-via-
+              // OpenRouter turns. The gateway strips this field for every
+              // other runtime, so adding it here is provider-safe.
+              ...(__replayReasoningDetails && messageRole === 'assistant' && m.reasoningDetails
+                ? { reasoning_details: m.reasoningDetails }
+                : {}),
             });
           }
         }
@@ -5113,6 +5137,11 @@ router.post(
           console.warn('[artifact] branch errored, falling through:', artifactErr.message);
         }
       }
+      // Collector filled by aiService.generateStream when the model streams
+      // chain-of-thought: { text, details, durationMs }. Declared at handler
+      // scope (NOT inside the !artifactHandled block) because the persistence
+      // path below reads it for every branch.
+      const __reasoningSink = {};
       try {
         if (!artifactHandled) {
         // Keep images in the payload whenever this turn can reach a vision
@@ -5273,6 +5302,7 @@ router.post(
               userPrompt: prompt,
               qualityGuard: true,
               skipDoneSentinel: true,
+              reasoningSink: __reasoningSink,
             });
             // Annotate the span with tokensIn / tokensOut now that we
             // have a final completion. Best-effort: failures don't
@@ -5775,6 +5805,11 @@ router.post(
           ...(normalizedRegenerationAttempt ? { regeneration: { attempt: normalizedRegenerationAttempt } } : {}),
           ...(webSearchSources ? { webSources: webSearchSources, webSearchMeta } : {}),
           ...(memoryItems ? { memory: memoryItems, memoryMeta } : {}),
+          // Thinking duration for the collapsed trace header ("Pensó durante
+          // 12 s") on historically loaded messages.
+          ...(__reasoningSink && __reasoningSink.durationMs
+            ? { reasoningDurationMs: __reasoningSink.durationMs }
+            : {}),
         };
         const savedChat = await saveChatAndTrackUsage(
           userId,
@@ -5788,6 +5823,7 @@ router.post(
           regenerate,
           Object.keys(assistantMeta).length > 0 ? assistantMeta : null,
           req.user?.plan || null,
+          __reasoningSink,
         );
         if (req._activeGenerateTurn && !req._activeGenerateTurn.settled) {
           req._activeGenerateTurn.resolve(savedChat);

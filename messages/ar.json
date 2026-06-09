@@ -1,9 +1,18 @@
 {
-  "_meta": { "dir": "rtl" },
+  "_meta": {
+    "dir": "rtl"
+  },
   "sidebar": {
-    "newChat": "محادثة جديدة", "searchChats": "بحث في المحادثات", "library": "المكتبة", "gpts": "GPTs",
-    "recentChats": "المحادثات الأخيرة", "noChats": "لا توجد محادثات بعد. ابدأ محادثة!",
-    "settings": "الإعدادات", "profile": "الملف الشخصي", "billing": "الفوترة", "logout": "تسجيل الخروج",
+    "newChat": "محادثة جديدة",
+    "searchChats": "بحث في المحادثات",
+    "library": "المكتبة",
+    "gpts": "GPTs",
+    "recentChats": "المحادثات الأخيرة",
+    "noChats": "لا توجد محادثات بعد. ابدأ محادثة!",
+    "settings": "الإعدادات",
+    "profile": "الملف الشخصي",
+    "billing": "الفوترة",
+    "logout": "تسجيل الخروج",
     "today": "اليوم",
     "last7Days": "آخر 7 أيام",
     "older": "أقدم",
@@ -100,15 +109,10 @@
     "cancel": "Cancel",
     "pipeline": "Pipeline",
     "phase": {
-
       "search": "Search academic sources",
-
       "validate": "Validate DOIs",
-
       "synthesize": "Write cited markdown",
-
       "format": "Build reference list"
-
     },
     "searchRunning": "Querying OpenAlex…",
     "validateRunning": "Checking CrossRef…",
@@ -132,67 +136,221 @@
     "backToProject": "← {name}"
   },
   "chat": {
-    "placeholder": "اكتب رسالة", "send": "إرسال", "stop": "إيقاف", "regenerate": "إعادة إنشاء",
-    "copy": "نسخ", "delete": "حذف", "edit": "تعديل", "share": "مشاركة", "thinking": "جارٍ التفكير…",
-    "attachFile": "إرفاق ملف", "voiceInput": "إدخال صوتي", "webSearch": "بحث في الويب",
-    "imageGeneration": "إنشاء صورة", "videoGeneration": "إنشاء فيديو",
-    "connectorActive": "الموصل نشط", "showSidebar": "إظهار الشريط الجانبي"
+    "placeholder": "اكتب رسالة",
+    "send": "إرسال",
+    "stop": "إيقاف",
+    "regenerate": "إعادة إنشاء",
+    "copy": "نسخ",
+    "delete": "حذف",
+    "edit": "تعديل",
+    "share": "مشاركة",
+    "thinking": "جارٍ التفكير…",
+    "attachFile": "إرفاق ملف",
+    "voiceInput": "إدخال صوتي",
+    "webSearch": "بحث في الويب",
+    "imageGeneration": "إنشاء صورة",
+    "videoGeneration": "إنشاء فيديو",
+    "connectorActive": "الموصل نشط",
+    "showSidebar": "إظهار الشريط الجانبي"
   },
   "settings": {
-    "title": "الإعدادات", "subtitle": "خصّص siraGPT ليعمل بأسلوبك.",
-    "searchPlaceholder": "ابحث عن إعداد…", "noResults": "لا توجد نتائج", "backToChat": "العودة إلى المحادثة",
-    "autoSync": "مزامنة تلقائية", "saving": "جارٍ الحفظ…", "saved": "تم الحفظ", "offline": "غير متصل — تغييرات محلية",
+    "title": "الإعدادات",
+    "subtitle": "خصّص siraGPT ليعمل بأسلوبك.",
+    "searchPlaceholder": "ابحث عن إعداد…",
+    "noResults": "لا توجد نتائج",
+    "backToChat": "العودة إلى المحادثة",
+    "autoSync": "مزامنة تلقائية",
+    "saving": "جارٍ الحفظ…",
+    "saved": "تم الحفظ",
+    "offline": "غير متصل — تغييرات محلية",
     "sections": {
-      "general":         { "label": "عام",           "desc": "المظهر واللغة وإمكانية الوصول" },
-      "models":          { "label": "نماذج الذكاء",   "desc": "النماذج المتاحة والمفضلة" },
-      "notifications":   { "label": "الإشعارات",     "desc": "القنوات والتنبيهات" },
-      "personalization": { "label": "التخصيص",      "desc": "الأسلوب والنبرة والقدرات" },
-      "apps":            { "label": "التطبيقات",    "desc": "الاتصالات والموصّلات" },
-      "schedules":       { "label": "الجدولة",      "desc": "عمليات التشغيل المجدولة" },
-      "data":            { "label": "ضوابط البيانات","desc": "الخصوصية والسجل والبيانات" },
-      "security":        { "label": "الأمان",        "desc": "المصادقة متعددة العوامل والجلسات" },
-      "account":         { "label": "الحساب",        "desc": "ملف المُنشئ" }
+      "general": {
+        "label": "عام",
+        "desc": "المظهر واللغة وإمكانية الوصول"
+      },
+      "models": {
+        "label": "نماذج الذكاء",
+        "desc": "النماذج المتاحة والمفضلة"
+      },
+      "notifications": {
+        "label": "الإشعارات",
+        "desc": "القنوات والتنبيهات"
+      },
+      "personalization": {
+        "label": "التخصيص",
+        "desc": "الأسلوب والنبرة والقدرات"
+      },
+      "apps": {
+        "label": "التطبيقات",
+        "desc": "الاتصالات والموصّلات"
+      },
+      "schedules": {
+        "label": "الجدولة",
+        "desc": "عمليات التشغيل المجدولة"
+      },
+      "data": {
+        "label": "ضوابط البيانات",
+        "desc": "الخصوصية والسجل والبيانات"
+      },
+      "security": {
+        "label": "الأمان",
+        "desc": "المصادقة متعددة العوامل والجلسات"
+      },
+      "account": {
+        "label": "الحساب",
+        "desc": "ملف المُنشئ"
+      }
     },
     "general": {
-      "display": { "title": "العرض", "desc": "المظهر المرئي للتطبيق" },
-      "theme": { "label": "المظهر", "desc": "فاتح أو داكن أو حسب النظام", "light": "فاتح", "dark": "داكن", "system": "النظام" },
-      "accent": { "label": "لون التمييز", "desc": "اللون الأساسي للأزرار" },
-      "fontSize": { "label": "حجم الخط", "desc": "الحجم الأساسي", "small": "صغير", "medium": "متوسط", "large": "كبير" },
-      "density": { "label": "الكثافة", "desc": "المسافات العمودية", "compact": "متراص", "comfortable": "مريح", "spacious": "واسع" },
-      "region": { "title": "اللغة والمنطقة", "desc": "التاريخ والمنطقة الزمنية واللغة" },
+      "display": {
+        "title": "العرض",
+        "desc": "المظهر المرئي للتطبيق"
+      },
+      "theme": {
+        "label": "المظهر",
+        "desc": "فاتح أو داكن أو حسب النظام",
+        "light": "فاتح",
+        "dark": "داكن",
+        "system": "النظام"
+      },
+      "accent": {
+        "label": "لون التمييز",
+        "desc": "اللون الأساسي للأزرار"
+      },
+      "fontSize": {
+        "label": "حجم الخط",
+        "desc": "الحجم الأساسي",
+        "small": "صغير",
+        "medium": "متوسط",
+        "large": "كبير"
+      },
+      "density": {
+        "label": "الكثافة",
+        "desc": "المسافات العمودية",
+        "compact": "متراص",
+        "comfortable": "مريح",
+        "spacious": "واسع"
+      },
+      "region": {
+        "title": "اللغة والمنطقة",
+        "desc": "التاريخ والمنطقة الزمنية واللغة"
+      },
       "interfaceLanguage": "لغة الواجهة",
-      "spokenLanguage": { "label": "لغة النطق", "desc": "للتعرف على الصوت", "automatic": "تلقائي" },
+      "spokenLanguage": {
+        "label": "لغة النطق",
+        "desc": "للتعرف على الصوت",
+        "automatic": "تلقائي"
+      },
       "dateFormat": "تنسيق التاريخ",
-      "timeZone": { "label": "المنطقة الزمنية", "desc": "يتم الكشف عنها تلقائياً" },
-      "timeFormat": { "label": "تنسيق الوقت", "h12": "12 ساعة", "h24": "24 ساعة" },
-      "voice": { "title": "الصوت", "assistantVoice": "صوت المساعد", "autoPlay": "تشغيل الردود تلقائياً", "autoPlayDesc": "قراءة الردود بصوت عالٍ", "standalone": "وضع الصوت المستقل", "standaloneDesc": "ملء الشاشة دون عناصر مرئية" },
-      "aiModels": { "title": "نماذج الذكاء الاصطناعي", "showExtras": "إظهار نماذج إضافية", "showExtrasDesc": "عرض جميع النماذج المتاحة", "stream": "بث الردود", "streamDesc": "رؤية الردود أثناء توليدها" },
-      "accessibility": { "title": "إمكانية الوصول", "shortcuts": "اختصارات لوحة المفاتيح", "shortcutsDesc": "تفعيل التنقل بلوحة المفاتيح", "reduceMotion": "تقليل الحركة", "reduceMotionDesc": "تقليل الرسوم المتحركة", "highContrast": "تباين عالٍ", "highContrastDesc": "تحسين وضوح العناصر" }
+      "timeZone": {
+        "label": "المنطقة الزمنية",
+        "desc": "يتم الكشف عنها تلقائياً"
+      },
+      "timeFormat": {
+        "label": "تنسيق الوقت",
+        "h12": "12 ساعة",
+        "h24": "24 ساعة"
+      },
+      "voice": {
+        "title": "الصوت",
+        "assistantVoice": "صوت المساعد",
+        "autoPlay": "تشغيل الردود تلقائياً",
+        "autoPlayDesc": "قراءة الردود بصوت عالٍ",
+        "standalone": "وضع الصوت المستقل",
+        "standaloneDesc": "ملء الشاشة دون عناصر مرئية"
+      },
+      "aiModels": {
+        "title": "نماذج الذكاء الاصطناعي",
+        "showExtras": "إظهار نماذج إضافية",
+        "showExtrasDesc": "عرض جميع النماذج المتاحة",
+        "stream": "بث الردود",
+        "streamDesc": "رؤية الردود أثناء توليدها"
+      },
+      "accessibility": {
+        "title": "إمكانية الوصول",
+        "shortcuts": "اختصارات لوحة المفاتيح",
+        "shortcutsDesc": "تفعيل التنقل بلوحة المفاتيح",
+        "reduceMotion": "تقليل الحركة",
+        "reduceMotionDesc": "تقليل الرسوم المتحركة",
+        "highContrast": "تباين عالٍ",
+        "highContrastDesc": "تحسين وضوح العناصر"
+      }
     }
   },
   "auth": {
-    "welcomeBack": "مرحباً بعودتك", "login": "تسجيل الدخول", "signIn": "تسجيل الدخول", "register": "إنشاء حساب",
-    "signUp": "إنشاء حساب", "logout": "تسجيل الخروج", "email": "البريد الإلكتروني", "emailPlaceholder": "أدخل بريدك الإلكتروني",
-    "password": "كلمة المرور", "passwordPlaceholder": "أدخل كلمة المرور", "forgotPassword": "هل نسيت كلمة المرور؟",
-    "orContinueWith": "أو تابع باستخدام", "continueWithGoogle": "المتابعة باستخدام Google",
-    "noAccount": "ليس لديك حساب؟", "haveAccount": "هل لديك حساب بالفعل؟", "tagline": "سجّل الدخول إلى حسابك في Sira Gpt"
+    "welcomeBack": "مرحباً بعودتك",
+    "login": "تسجيل الدخول",
+    "signIn": "تسجيل الدخول",
+    "register": "إنشاء حساب",
+    "signUp": "إنشاء حساب",
+    "logout": "تسجيل الخروج",
+    "email": "البريد الإلكتروني",
+    "emailPlaceholder": "أدخل بريدك الإلكتروني",
+    "password": "كلمة المرور",
+    "passwordPlaceholder": "أدخل كلمة المرور",
+    "forgotPassword": "هل نسيت كلمة المرور؟",
+    "orContinueWith": "أو تابع باستخدام",
+    "continueWithGoogle": "المتابعة باستخدام Google",
+    "noAccount": "ليس لديك حساب؟",
+    "haveAccount": "هل لديك حساب بالفعل؟",
+    "tagline": "سجّل الدخول إلى حسابك في Sira Gpt"
   },
   "documents": {
-    "download": "تنزيل", "close": "إغلاق", "wordDocument": "مستند Word", "excelFile": "ملف Excel",
-    "presentation": "عرض تقديمي", "pdfFile": "ملف PDF", "downloadAsWord": "تنزيل كملف Word (.docx)",
-    "downloadAsPdf": "تنزيل كملف PDF", "generating": "جارٍ الإنشاء…"
+    "download": "تنزيل",
+    "close": "إغلاق",
+    "wordDocument": "مستند Word",
+    "excelFile": "ملف Excel",
+    "presentation": "عرض تقديمي",
+    "pdfFile": "ملف PDF",
+    "downloadAsWord": "تنزيل كملف Word (.docx)",
+    "downloadAsPdf": "تنزيل كملف PDF",
+    "generating": "جارٍ الإنشاء…"
   },
   "errors": {
     "serverError": "حدثت مشكلة أثناء معالجة طلبك. يرجى المحاولة مرة أخرى.",
     "networkError": "خطأ في الاتصال. تحقق من الإنترنت.",
-    "unauthorized": "انتهت الجلسة. يرجى تسجيل الدخول مرة أخرى.", "notFound": "المورد غير موجود."
+    "unauthorized": "انتهت الجلسة. يرجى تسجيل الدخول مرة أخرى.",
+    "notFound": "المورد غير موجود."
   },
   "common": {
-    "loading": "جارٍ التحميل…", "noResults": "لا توجد نتائج", "confirm": "تأكيد", "cancel": "إلغاء",
-    "delete": "حذف", "edit": "تعديل", "save": "حفظ", "close": "إغلاق", "open": "فتح",
-    "back": "رجوع", "next": "التالي", "previous": "السابق", "search": "بحث", "filter": "تصفية",
-    "export": "تصدير", "import": "استيراد", "create": "إنشاء", "update": "تحديث", "yes": "نعم",
-    "no": "لا", "all": "الكل", "none": "لا شيء", "select": "اختيار", "upload": "رفع",
-    "dragDrop": "أسقط الملفات هنا", "or": "أو", "processing": "جارٍ معالجة رسائلك…", "tryAgain": "حاول مرة أخرى"
+    "loading": "جارٍ التحميل…",
+    "noResults": "لا توجد نتائج",
+    "confirm": "تأكيد",
+    "cancel": "إلغاء",
+    "delete": "حذف",
+    "edit": "تعديل",
+    "save": "حفظ",
+    "close": "إغلاق",
+    "open": "فتح",
+    "back": "رجوع",
+    "next": "التالي",
+    "previous": "السابق",
+    "search": "بحث",
+    "filter": "تصفية",
+    "export": "تصدير",
+    "import": "استيراد",
+    "create": "إنشاء",
+    "update": "تحديث",
+    "yes": "نعم",
+    "no": "لا",
+    "all": "الكل",
+    "none": "لا شيء",
+    "select": "اختيار",
+    "upload": "رفع",
+    "dragDrop": "أسقط الملفات هنا",
+    "or": "أو",
+    "processing": "جارٍ معالجة رسائلك…",
+    "tryAgain": "حاول مرة أخرى"
+  },
+  "thinking": {
+    "thinking": "يفكّر…",
+    "thought": "عملية التفكير",
+    "thoughtFor": "فكّر لمدة {duration}",
+    "reasoningAria": "استدلال النموذج",
+    "arguments": "الوسائط",
+    "toolSearching": "يبحث عن معلومات",
+    "toolReading": "يقرأ مصدرًا",
+    "toolRunning": "يشغّل الكود",
+    "toolUsing": "يستخدم {name}"
   }
 }

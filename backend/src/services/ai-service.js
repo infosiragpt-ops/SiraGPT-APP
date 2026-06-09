@@ -221,6 +221,14 @@ function currentThinkingLevel() {
     return process.env.SIRA_THINKING_LEVEL || process.env.DEEPSEEK_V4_THINKING || 'high';
 }
 
+// Claude-style reasoning streaming master switch. ON by default; set
+// SIRAGPT_REASONING_STREAM=0|off|false to restore the legacy behaviour
+// (chain-of-thought discarded, gpt-oss excluded for first-byte latency).
+function reasoningStreamEnabled() {
+    const v = String(process.env.SIRAGPT_REASONING_STREAM || '').trim().toLowerCase();
+    return v !== '0' && v !== 'off' && v !== 'false';
+}
+
 function normalizeTemperature(value, fallback = 0.55) {
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) return fallback;
@@ -460,7 +468,7 @@ class AIService {
         }
     }
 
-    async generateStream({ provider, model, messages, systemBlocks, chatId, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false }) {
+    async generateStream({ provider, model, messages, systemBlocks, chatId, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false, reasoningSink = null }) {
         // ── Siragpt 1.0 — modelo combinado ──
         // Si el caller pidió siragpt-1.0 y hay imágenes adjuntas, las
         // describimos primero con Gemini 2.5 Flash Lite, inyectamos la
@@ -651,14 +659,16 @@ class AIService {
                 const currentModel = modelChain[m];
                 const currentProvider = m === 0 ? provider : providerForModel(currentModel);
                 const currentRuntimeModel = normalizeModelForProvider(currentProvider, currentModel);
-                // OpenRouter reasoning models (gpt-oss family) stream their
-                // chain-of-thought in `delta.reasoning` and leave `delta.content`
-                // empty until the very end. Asking OpenRouter to exclude the
-                // reasoning makes the model still think internally but only
-                // stream the final answer, so the user sees tokens immediately
-                // instead of hitting the 30s first-byte timeout.
+                // Claude-style extended thinking. When reasoning streaming is
+                // ON (default) the chain-of-thought a reasoning model emits in
+                // `delta.reasoning` / `delta.reasoning_content` is forwarded to
+                // the client as typed SSE frames instead of being discarded —
+                // the gateway's applyThinkingControls adds the OpenRouter
+                // `reasoning: { effort }` param for supported models. When OFF
+                // we restore the old behaviour for gpt-oss (exclude, so the
+                // user isn't staring at silence until the final answer).
                 const extraPayload = { temperature: normalizedTemperature };
-                if (currentProvider === 'OpenRouter' && /gpt-oss/i.test(currentRuntimeModel)) {
+                if (!reasoningStreamEnabled() && currentProvider === 'OpenRouter' && /gpt-oss/i.test(currentRuntimeModel)) {
                     extraPayload.reasoning = { exclude: true };
                 }
                 const providerPayload = buildProviderChatPayload({
@@ -705,6 +715,26 @@ class AIService {
                             client.chat.completions.create(payload, { signal: attemptCtrl.signal })
                         );
 
+                        // Per-attempt reasoning state. A retry/fallback restarts
+                        // the trace, so the accumulators reset with each attempt
+                        // and only the attempt that returns commits to the sink.
+                        const reasoningOn = reasoningStreamEnabled();
+                        let reasoningText = '';
+                        let reasoningDetails = [];
+                        let reasoningStartedAt = 0;
+                        let reasoningDoneSent = false;
+                        const emitReasoningDone = async () => {
+                            if (!reasoningStartedAt || reasoningDoneSent) return;
+                            reasoningDoneSent = true;
+                            const durationMs = Date.now() - reasoningStartedAt;
+                            if (reasoningSink && typeof reasoningSink === 'object') {
+                                reasoningSink.text = reasoningText;
+                                reasoningSink.details = reasoningDetails.length ? reasoningDetails : null;
+                                reasoningSink.durationMs = durationMs;
+                            }
+                            await writeWithBackpressure(res, `data: ${JSON.stringify({ type: 'reasoning_done', durationMs })}\n\n`);
+                        };
+
                         for await (const chunk of stream) {
                             const delta = chunk.choices[0]?.delta || {};
                             // DeepSeek emits `reasoning_content`; OpenRouter emits `reasoning`.
@@ -716,13 +746,51 @@ class AIService {
                                 firstByteSeen = true;
                                 clearTimeout(firstByteTimer);
                             }
+                            // Claude-style thinking trace: forward the reasoning
+                            // delta as a typed frame. The payload key is
+                            // `reasoning` (NOT `content`) on purpose — a stale
+                            // client that only reads `content` keeps ignoring
+                            // these frames instead of gluing the chain-of-thought
+                            // onto the visible answer.
+                            if (reasoningOn && reasoningChunk && typeof reasoningChunk === 'string') {
+                                if (!reasoningStartedAt) reasoningStartedAt = Date.now();
+                                reasoningText += reasoningChunk;
+                                await writeWithBackpressure(res, `data: ${JSON.stringify({ type: 'reasoning_delta', reasoning: reasoningChunk })}\n\n`);
+                            }
+                            // Raw OpenRouter reasoning_details blocks (signed
+                            // Anthropic thinking, encrypted traces…) — persisted
+                            // verbatim, never streamed to the client.
+                            if (reasoningOn && Array.isArray(delta.reasoning_details) && delta.reasoning_details.length) {
+                                reasoningDetails = reasoningDetails.concat(delta.reasoning_details);
+                            }
+                            // Tool-call deltas (name arrives on the first frame,
+                            // argument fragments after). The plain chat path
+                            // sends no tools today, but reasoning models routed
+                            // here must not have their tool intent silently
+                            // swallowed.
+                            if (Array.isArray(delta.tool_calls) && delta.tool_calls.length) {
+                                for (const tc of delta.tool_calls) {
+                                    await writeWithBackpressure(res, `data: ${JSON.stringify({
+                                        type: 'tool_call_delta',
+                                        index: tc.index ?? 0,
+                                        ...(tc.function?.name ? { name: tc.function.name } : {}),
+                                        ...(tc.function?.arguments ? { argsDelta: tc.function.arguments } : {}),
+                                    })}\n\n`);
+                                }
+                            }
                             if (contentChunk) {
                                 if (!firstByteSeen) { firstByteSeen = true; clearTimeout(firstByteTimer); }
+                                // First visible token closes the thinking phase.
+                                await emitReasoningDone();
                                 fullResponseContent += contentChunk;
                                 hasStreamedAnyContent = true;
-                                await writeWithBackpressure(res, `data: ${JSON.stringify({ content: contentChunk })}\n\n`);
+                                await writeWithBackpressure(res, `data: ${JSON.stringify({ type: 'text_delta', content: contentChunk })}\n\n`);
                             }
                         }
+                        // Model thought but never produced content (tool-call-only
+                        // or empty completion): still close the trace so the UI
+                        // collapses instead of shimmering forever.
+                        await emitReasoningDone();
 
                         if (!hasStreamedAnyContent) {
                             throw Object.assign(new Error('Empty completion — model returned no content'), { code: 'EMPTY_COMPLETION' });
