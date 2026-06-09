@@ -3524,6 +3524,7 @@ const NavbarModelSelector = ({
                             <div className="space-y-0.5">
                               {models.map((model: any) => {
                                 const isActive = model.name === activeProjectModelName;
+                                const isComingSoon = Boolean(model.comingSoon);
                                 const label = getModelDisplayLabel(model);
                                 const attribution = resolveModelAttributionName(model);
                                 return (
@@ -3531,14 +3532,20 @@ const NavbarModelSelector = ({
                                     key={model.name}
                                     onSelect={(event) => {
                                       event.preventDefault();
-                                      applyProjectModel(model);
+                                      if (!isComingSoon) applyProjectModel(model);
                                     }}
+                                    disabled={isComingSoon}
                                     data-selected={isActive ? "true" : undefined}
-                                    className="model-picker-row min-h-12 rounded-xl px-2.5 py-2"
+                                    className={cn("model-picker-row min-h-12 rounded-xl px-2.5 py-2", isComingSoon && "cursor-default opacity-55")}
                                   >
                                     <ModelLogo model={model} />
                                     <div className="min-w-0 flex-1">
-                                      <div className="liquid-label truncate text-[13.5px] font-semibold leading-5">{label}</div>
+                                      <div className="flex items-center gap-1.5">
+                                        <div className="liquid-label truncate text-[13.5px] font-semibold leading-5">{label}</div>
+                                        {isComingSoon && (
+                                          <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Pronto</span>
+                                        )}
+                                      </div>
                                       <div className="truncate text-[12px] font-medium leading-4 text-muted-foreground/82">{attribution}</div>
                                     </div>
                                     {isActive && <Check className="ml-2 h-4 w-4 shrink-0" />}
@@ -3704,6 +3711,7 @@ const NavbarModelSelector = ({
                             <div className="space-y-0.5">
                               {models.map((model: any) => {
                                 const isActive = model.name === activeModelName;
+                                const isComingSoon = Boolean(model.comingSoon);
                                 const label = getModelDisplayLabel(model);
                                 const attribution = resolveModelAttributionName(model);
                                 return (
@@ -3711,14 +3719,20 @@ const NavbarModelSelector = ({
                                     key={model.name}
                                     onSelect={(event) => {
                                       event.preventDefault();
-                                      applyGptModel(model);
+                                      if (!isComingSoon) applyGptModel(model);
                                     }}
+                                    disabled={isComingSoon}
                                     data-selected={isActive ? "true" : undefined}
-                                    className="model-picker-row min-h-12 rounded-xl px-2.5 py-2"
+                                    className={cn("model-picker-row min-h-12 rounded-xl px-2.5 py-2", isComingSoon && "cursor-default opacity-55")}
                                   >
                                     <ModelLogo model={model} />
                                     <div className="min-w-0 flex-1">
-                                      <div className="liquid-label truncate text-[13.5px] font-semibold leading-5">{label}</div>
+                                      <div className="flex items-center gap-1.5">
+                                        <div className="liquid-label truncate text-[13.5px] font-semibold leading-5">{label}</div>
+                                        {isComingSoon && (
+                                          <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Pronto</span>
+                                        )}
+                                      </div>
                                       <div className="truncate text-[12px] font-medium leading-4 text-muted-foreground/82">{attribution}</div>
                                     </div>
                                     {isActive && <Check className="ml-2 h-4 w-4 shrink-0" />}
@@ -3907,21 +3921,31 @@ const NavbarModelSelector = ({
   // the right; rows stay one-line and restrained for fast scanning.
   const ModelRow = ({ model }: { model: any }) => {
     const isSelected = model.name === selectedModel;
+    const isComingSoon = Boolean(model.comingSoon);
     const label = getModelDisplayLabel(model);
     const attribution = resolveModelAttributionName(model);
     return (
       <DropdownMenuItem
-        onSelect={() => onPick(model)}
+        onSelect={isComingSoon ? (e) => e.preventDefault() : () => onPick(model)}
         data-selected={isSelected ? "true" : undefined}
+        disabled={isComingSoon}
         className={cn(
           "model-picker-row group/row flex min-h-[62px] cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5",
           "text-foreground/90 focus:bg-transparent data-[highlighted]:bg-transparent",
+          isComingSoon && "cursor-default opacity-55",
         )}
       >
         <ModelLogo model={model} />
         <span className="min-w-0 flex-1">
-          <span className="liquid-label block truncate text-[15px] font-semibold leading-5">
-            {label}
+          <span className="flex items-center gap-1.5">
+            <span className="liquid-label block truncate text-[15px] font-semibold leading-5">
+              {label}
+            </span>
+            {isComingSoon && (
+              <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Pronto
+              </span>
+            )}
           </span>
           <span className="block truncate text-[12.5px] font-medium leading-4 text-muted-foreground/82">
             {attribution}

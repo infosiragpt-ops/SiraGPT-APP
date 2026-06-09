@@ -2,6 +2,11 @@ const prisma = (() => {
   try { return require('../../config/database'); } catch { return null; }
 })();
 
+// Process-level dedup: suppress repeated "orphaned task" warnings for the
+// same taskId — concurrent persistence calls for a single task can produce
+// dozens of identical log lines in a short window. Log once, then stay quiet.
+const _orphanedTaskIds = new Set();
+
 function hasModel(name) {
   return Boolean(prisma && prisma[name]);
 }
@@ -164,7 +169,8 @@ async function upsertAgentTask(task = {}) {
     // retry. Collapse the noisy multi-line Prisma dump into one concise,
     // intelligible line instead of falling through to the generic warn.
     if (err?.code === 'P2003') {
-      if (process.env.NODE_ENV !== 'test') {
+      if (process.env.NODE_ENV !== 'test' && !_orphanedTaskIds.has(data.id)) {
+        _orphanedTaskIds.add(data.id);
         console.warn(`[agent-task-persistence] task ${data.id} not persisted: userId ${data.userId} has no matching User row (orphaned task)`);
       }
       return null;

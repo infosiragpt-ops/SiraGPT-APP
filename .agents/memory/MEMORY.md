@@ -1,3 +1,5 @@
+- [spawn EIO in production](spawn-eio-production.md) — spawn() can throw synchronously (EIO) in prod Nix env; always wrap Promise executor with try-catch in commandExists-style helpers.
+- [Orphaned task log dedup](orphaned-task-dedup.md) — P2003 (foreign-key userId missing) fires per concurrent upsert call; use process-level Set to log once per taskId lifetime.
 - [Duplicate message dedup](duplicate-message-dedup.md) — role comparisons must be case-insensitive; run dedupeMessages on filtered list too.
 - [iOS keyboard sticky fix](ios-keyboard-fix.md) — position:fixed on composer when keyboard open; sticky breaks inside overflow:hidden on iOS.
 - [SiraGPT deployment architecture](siragpt-deployment.md) — executeSql hits local DB not backend DB; use node -e with backend Prisma client for real data

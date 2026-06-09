@@ -143,9 +143,13 @@ async function convertViaGotenberg(srcPath, originalName) {
 
 async function commandExists(bin) {
   return new Promise((resolve) => {
-    const child = spawn(bin, ['--version'], { stdio: 'ignore' });
-    child.on('error', () => resolve(false));
-    child.on('exit', (code) => resolve(code === 0));
+    try {
+      const child = spawn(bin, ['--version'], { stdio: 'ignore' });
+      child.on('error', () => resolve(false));
+      child.on('exit', (code) => resolve(code === 0));
+    } catch {
+      resolve(false);
+    }
   });
 }
 

@@ -29,6 +29,7 @@ const VISIBLE_TEXT_MODEL_DEFINITIONS = Object.freeze([
     icon: 'GeminiLogo',
     description: 'Gemini 3.5 via OpenRouter para contexto largo, vision y analisis multimodal.',
     aliases: ['gemini-3.5', 'gemini-3.5-pro', 'google/gemini-3.5-pro', 'google/gemini-3.5-flash'],
+    comingSoon: true,
   },
   {
     name: 'x-ai/grok-4.20',
