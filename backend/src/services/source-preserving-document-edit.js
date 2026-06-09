@@ -1700,6 +1700,81 @@ async function appendToXlsxBuffer(buffer, blocks) {
   return Buffer.from(out);
 }
 
+/**
+ * Append data rows to an EXISTING sheet, preserving everything else in the
+ * workbook (exceljs round-trips styles, widths, formulas, other sheets).
+ * sheetName falls back to the first worksheet when missing/unknown.
+ */
+async function appendRowsToXlsxBuffer(buffer, { sheetName = '', rows = [] } = {}) {
+  const cleanRows = (Array.isArray(rows) ? rows : [])
+    .slice(0, 200)
+    .map((r) => (Array.isArray(r) ? r.slice(0, 30).map((c) => (c == null ? '' : c)) : [String(r ?? '')]));
+  if (!cleanRows.length) {
+    const err = new Error('No se especificaron filas para agregar al XLSX.');
+    err.code = 'XLSX_APPEND_ROWS_EMPTY';
+    throw err;
+  }
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  const wanted = normalizeText(sheetName);
+  const sheet = (wanted && workbook.worksheets.find((s) => normalizeText(s.name) === wanted))
+    || workbook.worksheets[0];
+  if (!sheet) {
+    const err = new Error('El XLSX no tiene hojas editables.');
+    err.code = 'XLSX_NO_SHEETS';
+    throw err;
+  }
+  for (const r of cleanRows) {
+    const row = sheet.addRow(r);
+    row.alignment = { vertical: 'top', wrapText: true };
+  }
+  const out = await workbook.xlsx.writeBuffer();
+  return { buffer: Buffer.from(out), sheetName: sheet.name, added: cleanRows.length };
+}
+
+/** Add a NEW sheet with tabular data; first row styled as header. */
+async function addSheetToXlsxBuffer(buffer, { name = 'Datos', rows = [] } = {}) {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  const existing = new Set(workbook.worksheets.map((s) => s.name));
+  let sheetName = String(name || 'Datos').slice(0, 28).replace(/[\\/?*[\]:]/g, ' ').trim() || 'Datos';
+  let counter = 1;
+  while (existing.has(sheetName)) { counter += 1; sheetName = `${String(name || 'Datos').slice(0, 24)} ${counter}`; }
+  const sheet = workbook.addWorksheet(sheetName);
+  const cleanRows = (Array.isArray(rows) ? rows : [])
+    .slice(0, 200)
+    .map((r) => (Array.isArray(r) ? r.slice(0, 30).map((c) => (c == null ? '' : c)) : [String(r ?? '')]));
+  for (const r of cleanRows) sheet.addRow(r);
+  if (cleanRows.length) sheet.getRow(1).font = { bold: true };
+  const widest = Math.max(1, ...cleanRows.map((r) => r.length));
+  for (let c = 1; c <= widest; c += 1) sheet.getColumn(c).width = 24;
+  const out = await workbook.xlsx.writeBuffer();
+  return { buffer: Buffer.from(out), sheetName, added: cleanRows.length };
+}
+
+/** Compact workbook summary the LLM planner can reason about. */
+async function buildXlsxSummaryForPrompt(buffer, { maxSheets = 6, maxRows = 12, maxCols = 8 } = {}) {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  const lines = [];
+  for (const sheet of workbook.worksheets.slice(0, maxSheets)) {
+    lines.push(`Hoja "${sheet.name}" (${sheet.actualRowCount || sheet.rowCount} filas x ${sheet.actualColumnCount || sheet.columnCount} columnas):`);
+    let printed = 0;
+    sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+      if (printed >= maxRows) return;
+      printed += 1;
+      const cells = [];
+      for (let c = 1; c <= Math.min(maxCols, row.cellCount || maxCols); c += 1) {
+        const v = row.getCell(c).value;
+        const text = v == null ? '' : (typeof v === 'object' ? (v.text || v.result || v.richText?.map((p) => p.text).join('') || '') : String(v));
+        cells.push(String(text).slice(0, 30));
+      }
+      lines.push(`  fila ${rowNumber}: ${cells.join(' | ')}`);
+    });
+  }
+  return lines.join('\n').slice(0, 4000);
+}
+
 async function replaceTextInXlsxBuffer(buffer, needle, replacement = '') {
   const normalizedNeedle = normalizeText(needle);
   if (!normalizedNeedle || normalizedNeedle.length < 3) {
@@ -3453,6 +3528,111 @@ async function executeDocxOperations({ input, ops, requestText, sourceText, allS
   return { buffer, steps, validationBlocks };
 }
 
+// ── Smart office planner (XLSX/PPTX parity with the DOCX LLM planner) ──────
+// The heuristic planner below only understands regex-shaped requests
+// ("reemplaza X por Y", "celda B2 = 5"). Anything richer ("agrega las ventas
+// de marzo como filas", "añade una diapositiva con los 3 riesgos") used to
+// degrade to a generic appendix sheet/slide. This planner shows the LLM a
+// compact summary of the real workbook/presentation and asks for a bounded
+// JSON plan over the SAME executor operations, so Excel/PowerPoint edits
+// behave like the Word ones. Fail-open: any error → null → heuristic plan.
+function officeSmartPlanEnabled() {
+  const v = String(process.env.SIRAGPT_OFFICE_SMART_PLAN || '').trim().toLowerCase();
+  return v !== '0' && v !== 'off' && v !== 'false';
+}
+
+function sanitizeOfficeOperations(rawOps, format) {
+  if (!Array.isArray(rawOps)) return null;
+  const ops = [];
+  const str = (v, max = 400) => String(v ?? '').slice(0, max).trim();
+  const grid = (rows) => (Array.isArray(rows) ? rows : [])
+    .slice(0, 120)
+    .map((r) => (Array.isArray(r) ? r.slice(0, 30).map((c) => str(c, 200)) : [str(r, 200)]))
+    .filter((r) => r.some((c) => c !== ''));
+  for (const raw of rawOps.slice(0, 15)) {
+    const kind = str(raw?.kind || raw?.op, 40);
+    if (kind === 'replace_text' && str(raw.needle).length >= 3) {
+      ops.push({ kind: 'replace_text', needle: str(raw.needle), replacement: str(raw.replacement) });
+    } else if (kind === 'delete_text' && str(raw.needle).length >= 3) {
+      ops.push({ kind: 'delete_text', needle: str(raw.needle) });
+    } else if (format === 'xlsx' && kind === 'set_cell' && /^[A-Z]{1,3}[1-9][0-9]{0,6}$/i.test(str(raw.address, 12))) {
+      ops.push({ kind: 'set_cell', sheetName: str(raw.sheetName, 40), address: str(raw.address, 12).toUpperCase(), value: str(raw.value, 500) });
+    } else if (format === 'xlsx' && kind === 'append_rows') {
+      const rows = grid(raw.rows);
+      if (rows.length) ops.push({ kind: 'append_rows', sheetName: str(raw.sheetName, 40), rows });
+    } else if (format === 'xlsx' && kind === 'add_sheet') {
+      const rows = grid(raw.rows);
+      if (rows.length) ops.push({ kind: 'add_sheet', name: str(raw.name, 30) || 'Datos', rows });
+    } else if (format === 'pptx' && kind === 'add_slide') {
+      const title = str(raw.title, 120);
+      const bullets = (Array.isArray(raw.bullets) ? raw.bullets : []).slice(0, 12).map((b) => str(b, 220)).filter(Boolean);
+      if (title || bullets.length) ops.push({ kind: 'add_slide', title: title || 'Nueva diapositiva', bullets });
+    }
+  }
+  return ops.length ? ops : null;
+}
+
+async function planOfficeOperationsSmart({ requestText = '', format = '', input, signal } = {}) {
+  if (!officeSmartPlanEnabled() || !process.env.OPENAI_API_KEY) return null;
+  try {
+    let summary = '';
+    if (format === 'xlsx') summary = await buildXlsxSummaryForPrompt(input);
+    else if (format === 'pptx') summary = String(extractTextFromPptxBuffer(input) || '').slice(0, 3500);
+    const opsCatalog = format === 'xlsx'
+      ? [
+        '{"kind":"replace_text","needle":"texto exacto","replacement":"texto nuevo"}',
+        '{"kind":"delete_text","needle":"texto exacto"}',
+        '{"kind":"set_cell","sheetName":"Hoja1","address":"B2","value":"5000"}',
+        '{"kind":"append_rows","sheetName":"Hoja1","rows":[["Marzo",5000,"pagado"]]}  // filas NUEVAS al final de una hoja existente',
+        '{"kind":"add_sheet","name":"Resumen","rows":[["Mes","Total"],["Enero",1200]]}  // hoja NUEVA',
+      ]
+      : [
+        '{"kind":"replace_text","needle":"texto exacto","replacement":"texto nuevo"}',
+        '{"kind":"delete_text","needle":"texto exacto"}',
+        '{"kind":"add_slide","title":"Riesgos del proyecto","bullets":["Riesgo 1...","Riesgo 2..."]}  // diapositiva NUEVA al final',
+      ];
+    const client = createContentClient('OpenAI');
+    const completion = await client.chat.completions.create({
+      model: DEFAULT_MODEL,
+      response_format: { type: 'json_object' },
+      messages: [
+        {
+          role: 'system',
+          content: [
+            `Eres el cerebro de un editor de archivos ${format === 'xlsx' ? 'Excel' : 'PowerPoint'} que PRESERVA el archivo original.`,
+            'Convierte la petición del usuario en un plan de operaciones concretas sobre el archivo; cuando la petición requiera CONTENIDO (filas, viñetas, valores), redáctalo tú con datos fieles a la petición y al archivo.',
+            'Usa needles EXACTOS copiados del contenido actual. No inventes hojas/celdas que no existan salvo en add_sheet/add_slide/append_rows.',
+          ].join(' '),
+        },
+        {
+          role: 'user',
+          content: [
+            `Petición del usuario: ${String(requestText).slice(0, 1500)}`,
+            '',
+            'Contenido actual del archivo:',
+            summary || '(sin resumen disponible)',
+            '',
+            'Operaciones válidas (elige las necesarias, máximo 15):',
+            ...opsCatalog,
+            '',
+            'Responde SOLO JSON: {"operations":[ ... ]}',
+          ].join('\n'),
+        },
+      ],
+    }, signal ? { signal } : undefined);
+    const content = completion?.choices?.[0]?.message?.content || '';
+    const parsed = JSON.parse(content);
+    const ops = sanitizeOfficeOperations(parsed?.operations, format);
+    if (ops) {
+      try { console.log(`[source-preserving-edit] smart ${format} plan: ${ops.map((o) => o.kind).join(', ')}`); } catch (_) { /* noop */ }
+    }
+    return ops;
+  } catch (err) {
+    try { console.warn(`[source-preserving-edit] smart ${format} plan failed (fallback to heuristic): ${err?.message}`); } catch (_) { /* noop */ }
+    return null;
+  }
+}
+
 function planGenericOfficeOperations({ requestText = '', format = '' } = {}) {
   const clauses = splitRequestClauses(requestText);
   const ops = [];
@@ -3518,6 +3698,16 @@ async function executeXlsxOperations({ input, ops, blocks }) {
       buffer = result.buffer;
       validationBlocks.push(block('normal', op.value));
       steps.push({ kind: 'set_cell', mode: 'xlsx_cell_write', label: `${result.sheetName}!${result.address}` });
+    } else if (op.kind === 'append_rows') {
+      const result = await appendRowsToXlsxBuffer(buffer, op);
+      buffer = result.buffer;
+      for (const r of op.rows.slice(0, 5)) validationBlocks.push(block('normal', r.join(' ')));
+      steps.push({ kind: 'append_rows', mode: 'xlsx_append_rows', label: result.sheetName, count: result.added });
+    } else if (op.kind === 'add_sheet') {
+      const result = await addSheetToXlsxBuffer(buffer, op);
+      buffer = result.buffer;
+      for (const r of op.rows.slice(0, 5)) validationBlocks.push(block('normal', r.join(' ')));
+      steps.push({ kind: 'add_sheet', mode: 'xlsx_new_sheet', label: result.sheetName, count: result.added });
     } else {
       buffer = await appendToXlsxBuffer(buffer, appendBlocks);
       validationBlocks.push(...appendBlocks);
@@ -3542,6 +3732,14 @@ function executePptxOperations({ input, ops, blocks }) {
       const result = replaceTextInPptxBuffer(buffer, op.needle, '');
       buffer = result.buffer;
       steps.push({ kind: 'delete_text', mode: 'pptx_safe_delete', removedCount: result.changedCount });
+    } else if (op.kind === 'add_slide') {
+      const slideBlocks = [
+        block('heading1', op.title),
+        ...(op.bullets || []).map((b) => block('normal', `• ${b}`)),
+      ];
+      buffer = appendToPptxBuffer(buffer, slideBlocks);
+      validationBlocks.push(...slideBlocks);
+      steps.push({ kind: 'add_slide', mode: 'pptx_new_slide', label: op.title });
     } else {
       buffer = appendToPptxBuffer(buffer, appendBlocks);
       validationBlocks.push(...appendBlocks);
@@ -3559,6 +3757,9 @@ function joinSpanishList(items) {
 }
 
 function describeStep(step) {
+  if (step.kind === 'append_rows') return `agregué ${step.count || ''} fila(s) a la hoja "${step.label}"`.replace('  ', ' ');
+  if (step.kind === 'add_sheet') return `agregué la hoja "${step.label}" con ${step.count || 0} fila(s)`;
+  if (step.kind === 'add_slide') return `agregué la diapositiva "${step.label}"`;
   if (step.kind === 'fill_section' && step.mode === 'cronograma_table') return `completé la tabla del cronograma de ${step.label}`;
   if (step.kind === 'fill_section') return `completé ${step.label} respetando su formato`;
   if (step.kind === 'append_labeled' && step.mode === 'instrument') return `agregué ${step.label} con los instrumentos profesionales`;
@@ -3705,6 +3906,14 @@ async function generateSourcePreservingDocumentEdit({
     if (isXlsxFile(sourceFile)) {
       format = 'xlsx';
       operations = planGenericOfficeOperations({ requestText, format });
+      // When the regexes only produced the generic-appendix fallback, let the
+      // LLM planner read the real workbook and build a concrete plan
+      // (set_cell / append_rows / add_sheet / replace_text). Heuristic hits
+      // stay authoritative — they are exact by construction.
+      if (operations.every((op) => op.kind === 'append_generic')) {
+        const smart = await planOfficeOperationsSmart({ requestText, format, input, signal });
+        if (smart) operations = smart;
+      }
       const execution = await executeXlsxOperations({ input, ops: operations, blocks });
       output = execution.buffer;
       validationBlocks = execution.validationBlocks;
@@ -3727,6 +3936,10 @@ async function generateSourcePreservingDocumentEdit({
     } else if (isPptxFile(sourceFile)) {
       format = 'pptx';
       operations = planGenericOfficeOperations({ requestText, format });
+      if (operations.every((op) => op.kind === 'append_generic')) {
+        const smart = await planOfficeOperationsSmart({ requestText, format, input, signal });
+        if (smart) operations = smart;
+      }
       const execution = executePptxOperations({ input, ops: operations, blocks });
       output = execution.buffer;
       validationBlocks = execution.validationBlocks;
@@ -3875,6 +4088,13 @@ module.exports = {
   parseTargetSectionRequest,
   tryGenerateSourcePreservingDocumentEdit,
   INTERNAL: {
+    addSheetToXlsxBuffer,
+    appendRowsToXlsxBuffer,
+    buildXlsxSummaryForPrompt,
+    executePptxOperations,
+    executeXlsxOperations,
+    planOfficeOperationsSmart,
+    sanitizeOfficeOperations,
     buildCombinedSourceText,
     buildCronogramaAnexo3Plan,
     buildDocumentFormattingTemplate,
