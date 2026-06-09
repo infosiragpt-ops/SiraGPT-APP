@@ -52,6 +52,11 @@ services:
       - ./components.json:/app/components.json
     environment:
       NODE_ENV: development
+      # Windows/Docker bind-mounts don't propagate inotify events, so Next.js'
+      # webpack watcher never sees host edits → no HMR. Polling fixes it: host
+      # edits to lib/ components/ app/ now hot-reload instantly (no restart).
+      WATCHPACK_POLLING: "true"
+      CHOKIDAR_USEPOLLING: "true"
     ports:
       - "3000:3000"
     command: ["npm", "run", "dev"]
