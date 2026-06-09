@@ -48,7 +48,9 @@ const { buildIntegrationRuntimeProfile } = require('../ai-product-os/integration
 const {
   buildTranscriptionTextFromFiles,
   buildUploadedFileContext,
+  isImageFile,
   isPlainTranscriptionRequest,
+  resolveStoredFilePath,
   resolveTranscriptionFileIds,
   serializeMessageAttachments,
 } = require('../message-attachments');
@@ -56,6 +58,7 @@ const {
   assessAttachmentContext,
   countUsefulWords,
   stripScaffolding,
+  DEFAULT_THIN_THRESHOLD,
 } = require('./attachment-context-guard');
 const apa7 = require('../marco-teorico/apa7');
 
@@ -963,6 +966,60 @@ function resolveAttachmentFallbackMarkdown({ goal, uploadedFileContext, reason =
   );
 }
 
+function pickAttachmentRecoveryRuntime(env = process.env) {
+  const flag = String(env.AGENT_TASK_LLM_RECOVERY || '').trim();
+  if (flag === '0') return null;
+  // Determinismo en tests: sin opt-in explícito no se hace ninguna llamada
+  // de red (los shards de CI exportan keys dummy que aquí harían requests).
+  if (String(env.NODE_ENV) === 'test' && flag !== '1') return null;
+  if (env.OPENAI_API_KEY) return { provider: 'OpenAI', model: env.AGENT_TASK_RECOVERY_MODEL || 'gpt-4o-mini' };
+  if (env.GEMINI_API_KEY) return { provider: 'Gemini', model: env.GEMINI_VISION_MODEL || 'gemini-2.5-flash' };
+  if (env.OPENROUTER_API_KEY) return { provider: 'OpenRouter', model: 'openai/gpt-4o-mini' };
+  return null;
+}
+
+/**
+ * Última línea de defensa con LLM: cuando el agente termina con una
+ * respuesta vacía o débil sobre un adjunto, intenta una respuesta directa
+ * de un solo turno (sin loop agéntico) con el primer proveedor configurado
+ * antes de degradar al volcado mecánico de fragmentos — que responde con
+ * estadísticas sueltas e ignora la pregunta concreta del usuario.
+ * Devuelve markdown o null (sin proveedor, error o respuesta vacía).
+ */
+async function buildLlmAttachmentRecoveryAnswer({ goal, uploadedFileContext, env = process.env, clientFactory = null }) {
+  const question = String(goal || '').trim();
+  const material = stripScaffolding(uploadedFileContext);
+  if (!question || !material || countUsefulWords(uploadedFileContext) < 8) return null;
+  const runtime = pickAttachmentRecoveryRuntime(env);
+  if (!runtime) return null;
+  try {
+    const aiService = require('../ai-service');
+    const client = clientFactory ? clientFactory(runtime.provider) : aiService.getClient(runtime.provider);
+    const completion = await client.chat.completions.create({
+      model: runtime.model,
+      stream: false,
+      temperature: 0.3,
+      messages: [
+        {
+          role: 'system',
+          content: 'Responde en español la pregunta concreta del usuario usando exclusivamente el material adjunto. '
+            + 'Si la respuesta no aparece en el material, dilo explícitamente en una frase y resume en otra qué contiene el material. '
+            + 'No inventes datos que no estén en el material.',
+        },
+        {
+          role: 'user',
+          content: `Pregunta del usuario: ${question.slice(0, 1000)}\n\nMaterial adjunto:\n${material.slice(0, 48000)}`,
+        },
+      ],
+    });
+    const text = completion?.choices?.[0]?.message?.content;
+    return typeof text === 'string' && text.trim().length >= 20 ? text.trim() : null;
+  } catch (err) {
+    console.warn('[agent-task] LLM attachment recovery falló:', err?.message || err);
+    return null;
+  }
+}
+
 function buildToolObservationFallbackContext(steps = []) {
   if (!Array.isArray(steps) || steps.length === 0) return '';
   const snippets = [];
@@ -1800,7 +1857,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   });
 
   let assistantMessageId = existing?.assistantMessageId || null;
-  const uploadedFileContext = wantsSourcePreservingEdit
+  let uploadedFileContext = wantsSourcePreservingEdit
     ? ''
     : await buildUploadedFileContext(prisma, {
       userId: user.id,
@@ -1808,6 +1865,51 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       query: deterministicAttachmentAnswer ? '' : displayGoal || goal,
       maxChars: deterministicAttachmentAnswer ? 120000 : 36000,
     });
+
+  // ── Vision grounding para imágenes adjuntas ────────────────────────
+  // Cuando la extracción de texto deja casi nada (logos, fotos, diagramas,
+  // capturas sin OCR útil), el guard de adjunto-insuficiente rechazaría el
+  // turno aunque un modelo de visión pueda leer la imagen directamente.
+  // Describimos las imágenes con el runtime de visión configurado y
+  // anexamos la descripción al contexto: el guard deja de dispararse y el
+  // agente responde con contexto visual real.
+  if (!wantsSourcePreservingEdit && prisma && Array.isArray(files) && files.length > 0
+    && countUsefulWords(uploadedFileContext) < DEFAULT_THIN_THRESHOLD) {
+    try {
+      const fileRows = await prisma.file.findMany({
+        where: { id: { in: files }, userId: user.id },
+        select: { id: true, filename: true, originalName: true, mimeType: true, path: true },
+      });
+      const imageFiles = fileRows
+        .filter((row) => isImageFile(row))
+        .map((row) => {
+          const resolvedPath = resolveStoredFilePath(row, user.id);
+          return resolvedPath
+            ? { path: resolvedPath, mimeType: row.mimeType || 'image/png' }
+            : null;
+        })
+        .filter(Boolean);
+      if (imageFiles.length > 0) {
+        const aiService = require('../ai-service');
+        const visualDescription = await aiService.describeAttachedImages(
+          imageFiles,
+          displayGoal || goal,
+        );
+        if (visualDescription) {
+          uploadedFileContext = [
+            uploadedFileContext,
+            `Análisis visual de ${imageFiles.length} imagen(es) adjunta(s) realizado por un modelo de visión:`,
+            visualDescription,
+          ].filter(Boolean).join('\n\n');
+          console.log(`[agent-task] vision grounding aplicado: ${imageFiles.length} imagen(es), ${visualDescription.length} chars (task ${taskId})`);
+        } else {
+          console.warn(`[agent-task] vision grounding sin descripción (¿proveedor de visión no configurado?) (task ${taskId})`);
+        }
+      }
+    } catch (visionErr) {
+      console.warn('[agent-task] vision grounding falló (se continúa con el texto extraído):', visionErr?.message || visionErr);
+    }
+  }
   if (chatId && prisma) {
     try {
       const chat = await prisma.chat.findFirst({ where: { id: chatId, userId: user.id } });
@@ -2710,7 +2812,11 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       looksLikeMissingAttachmentAnswer(finalMarkdown)
     );
     if (attachmentFinalNeedsRecovery) {
-      const recoveredMarkdown = buildBibliographyFallbackAnswer({
+      const llmRecoveredMarkdown = await buildLlmAttachmentRecoveryAnswer({
+        goal: displayGoal || goal,
+        uploadedFileContext: recoveryUploadedFileContext,
+      });
+      const recoveredMarkdown = llmRecoveredMarkdown || buildBibliographyFallbackAnswer({
         goal: displayGoal || goal,
         uploadedFileContext: recoveryUploadedFileContext,
       }) || buildAttachmentGroundedFallbackAnswer({
@@ -3101,6 +3207,8 @@ module.exports = {
   buildAttachmentGroundedFallbackAnswer,
   buildBibliographyFallbackAnswer,
   buildAttachmentUnavailableFallbackAnswer,
+  buildLlmAttachmentRecoveryAnswer,
+  pickAttachmentRecoveryRuntime,
   parseSpreadsheetCitationRows,
   parseCitationAuthors,
   resolveAttachmentFallbackMarkdown,

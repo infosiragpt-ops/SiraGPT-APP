@@ -192,3 +192,88 @@ test('react-agent: max_steps without finalize still returns a non-empty answer',
   assert.ok(String(result.finalAnswer || '').trim().length > 0, 'must not be empty');
   assert.equal(result.exhaustedTools.length, 0);
 });
+
+test('react-agent: repeated re-polling of an exhausted tool trips the escape and forces finalize', async () => {
+  // 5 failures exhaust the tool; the model then stubbornly re-calls it. After
+  // EXHAUSTED_REPOLL_LIMIT consecutive re-polls the loop must narrow the tool
+  // choice to finalize instead of looping to the step budget.
+  const script = Array.from({ length: 20 }, () => ({ tool: 'docintel_retrieve', args: { query: 'x' } }));
+  const openai = makeScriptedOpenAI(script);
+
+  const result = await reactAgent.run(openai, {
+    query: 'resolver',
+    tools: [alwaysFailingTool],
+    maxSteps: 20,
+    model: 'test-model',
+  });
+
+  assert.equal(result.stoppedReason, 'finalized');
+  assert.equal(result.finalAnswer, 'Forced final answer.');
+  // 5 failing steps + EXHAUSTED_REPOLL_LIMIT re-polls + 1 forced finalize.
+  const expectedMax = 5 + reactAgent.EXHAUSTED_REPOLL_LIMIT + 1;
+  assert.ok(
+    result.steps.length <= expectedMax,
+    `escape must fire well before the step budget (${result.steps.length} > ${expectedMax})`
+  );
+});
+
+test('react-agent: invalid tool args do NOT consume the per-tool call budget', async () => {
+  // First call: missing required `query` → rejected by schema validation
+  // BEFORE the budget is touched. Second call: valid args → budget consumed.
+  const script = [
+    { tool: 'docintel_retrieve', args: {} },
+    { tool: 'docintel_retrieve', args: { query: 'x' } },
+    { finalize: 'done' },
+  ];
+  const openai = makeScriptedOpenAI(script);
+  const budgetChecks = [];
+  const ctx = {
+    toolUsageMap: {},
+    checkToolBudget: (name, usage) => { budgetChecks.push({ name, count: usage[name] || 0 }); return { ok: true }; },
+  };
+
+  const result = await reactAgent.run(openai, {
+    query: 'resolver',
+    tools: [alwaysFailingTool],
+    maxSteps: 6,
+    model: 'test-model',
+    ctx,
+  });
+
+  assert.equal(result.stoppedReason, 'finalized');
+  const invalidAction = result.steps.flatMap((s) => s.actions).find((a) => String(a.observation?.error || '').includes('invalid_tool_args'));
+  assert.ok(invalidAction, 'schema rejection surfaced to the model');
+  // Budget consulted exactly once (the valid call), and usage counted once.
+  assert.equal(budgetChecks.length, 1);
+  assert.equal(ctx.toolUsageMap.docintel_retrieve, 1);
+});
+
+test('react-agent: slow provider trend forces finalize before the runtime budget blows mid-step', async () => {
+  // Each completion takes ~30ms against a 1.5s budget with a 2s headroom
+  // buffer — after the first measured step the loop must conclude there is no
+  // room for another exploration step and force finalize.
+  const script = Array.from({ length: 10 }, () => ({ tool: 'docintel_retrieve', args: { query: 'x' } }));
+  const scripted = makeScriptedOpenAI(script);
+  const openai = {
+    chat: {
+      completions: {
+        create: async (...args) => {
+          await new Promise((r) => setTimeout(r, 30));
+          return scripted.chat.completions.create(...args);
+        },
+      },
+    },
+  };
+
+  const result = await reactAgent.run(openai, {
+    query: 'investiga',
+    tools: [alwaysFailingTool],
+    maxSteps: 10,
+    maxRuntimeMs: 1500,
+    model: 'test-model',
+  });
+
+  assert.equal(result.stoppedReason, 'finalized');
+  assert.equal(result.finalAnswer, 'Forced final answer.');
+  assert.equal(result.steps.length, 2, 'one measured step, then a forced finalize');
+});

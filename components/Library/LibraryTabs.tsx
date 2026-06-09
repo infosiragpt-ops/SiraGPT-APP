@@ -11,10 +11,10 @@ import {
     Smartphone,
     Play,
     ExternalLink,
-    Loader2,
     Sparkles,
 } from 'lucide-react';
 import { SidebarTrigger } from '@/components/ui/sidebar';
+import { ThinkingIndicator } from '@/components/ui/thinking-indicator';
 import { projectsService, type Project } from '@/lib/projects-service';
 
 type MediaType = 'image' | 'video' | 'audio' | 'music' | 'webapp' | 'mobileapp';
@@ -459,7 +459,7 @@ const MediaLibrary: React.FC = () => {
                                 <div className="min-h-[8rem]">
                                     {artifactLoading && (
                                         <div className="flex items-center justify-center gap-2 py-12 text-gray-300">
-                                            <Loader2 className="w-5 h-5 animate-spin" />
+                                            <ThinkingIndicator size="md" />
                                             Cargando…
                                         </div>
                                     )}

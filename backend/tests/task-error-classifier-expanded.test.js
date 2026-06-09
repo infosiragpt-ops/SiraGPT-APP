@@ -51,6 +51,12 @@ const CASES = [
   ['bad gateway from model provider', true, 'server-error'],
   ['upstream 503 overloaded', true, 'server-error'],
   ['502 bad gateway', true, 'server-error'],
+  // provider capacity pressure (e.g. Anthropic HTTP 529) — was previously
+  // mis-classified as non-retryable 'unknown'.
+  ['Overloaded', true, 'server-error'],
+  ['overloaded_error', true, 'server-error'],
+  ['the server is overloaded, please try again later', true, 'server-error'],
+  [{ message: 'overloaded_error', statusCode: 529 }, true, 'server-error'],
   [{ message: 'provider exploded', statusCode: 500 }, true, 'server-error'],
   [{ message: 'maintenance', statusCode: 503 }, true, 'server-error'],
 

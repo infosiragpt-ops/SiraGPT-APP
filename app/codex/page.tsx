@@ -14,7 +14,6 @@ import {
   GitBranch,
   Github,
   Globe,
-  Loader2,
   Monitor,
   RefreshCw,
   Search,
@@ -27,6 +26,7 @@ import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { cn } from "@/lib/utils"
 import { normalizeChatInput } from "@/lib/chat-input-normalize"
 import {
@@ -345,11 +345,11 @@ export default function CodexPage() {
 
             <div className="grid grid-cols-2 gap-2">
               <Button type="button" onClick={() => inspect("actions")} disabled={busy} className="h-9 rounded-md">
-                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                {busy ? <ThinkingIndicator size="sm" /> : <RefreshCw className="h-4 w-4" />}
                 Revisar CI
               </Button>
               <Button type="button" variant="outline" onClick={() => analyzeRun(latestRun)} disabled={!latestRun || Boolean(analyzingRunId)} className="h-9 rounded-md">
-                {analyzingRunId ? <Loader2 className="h-4 w-4 animate-spin" /> : <Terminal className="h-4 w-4" />}
+                {analyzingRunId ? <ThinkingIndicator size="sm" /> : <Terminal className="h-4 w-4" />}
                 Analizar fallo
               </Button>
             </div>
@@ -401,7 +401,7 @@ export default function CodexPage() {
               className="h-10 rounded-md"
             />
             <Button type="button" size="icon" onClick={searchRepository} disabled={ragSearching} className="h-10 w-10 shrink-0 rounded-md" aria-label="Buscar en RAG">
-              {ragSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+              {ragSearching ? <ThinkingIndicator size="sm" /> : <Search className="h-4 w-4" />}
             </Button>
           </div>
         </div>
@@ -555,7 +555,7 @@ function ActionsPane({
           <div className="flex items-center gap-2 border-b border-border/60 p-4">
             <Activity className="h-4 w-4 text-emerald-600" />
             <h2 className="text-sm font-semibold">GitHub Actions</h2>
-            {loading ? <Loader2 className="ml-auto h-4 w-4 animate-spin text-muted-foreground" /> : null}
+            {loading ? <ThinkingIndicator size="sm" className="ml-auto text-muted-foreground" /> : null}
           </div>
           <div className="divide-y divide-border/60">
             {actions?.runs.length ? actions.runs.map((run) => (
@@ -577,7 +577,7 @@ function ActionsPane({
                 </div>
                 <div className="flex items-center gap-2">
                   <Button variant="outline" size="sm" onClick={() => onAnalyze(run)} disabled={analyzingRunId === run.id} className="h-8 rounded-md">
-                    {analyzingRunId === run.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Terminal className="h-3.5 w-3.5" />}
+                    {analyzingRunId === run.id ? <ThinkingIndicator size="xs" /> : <Terminal className="h-3.5 w-3.5" />}
                     Analizar
                   </Button>
                   <Button variant="ghost" size="sm" asChild className="h-8 rounded-md px-2">
@@ -670,7 +670,7 @@ function ActionsPane({
 
 function RepositoryPane({ context, loading }: { context: GitHubCodexContext | null; loading: boolean }) {
   if (loading) {
-    return <CenteredState icon={Loader2} label="Leyendo repositorio" spin />
+    return <CenteredState label="Leyendo repositorio" spin />
   }
   if (!context) {
     return <CenteredState icon={Github} label="Ejecuta Revisar CI para cargar el repositorio" />
@@ -764,11 +764,11 @@ function RagPane({
             </div>
             <div className="flex flex-wrap gap-2">
               <Button type="button" variant="outline" onClick={onIndex} disabled={indexing} className="h-9 rounded-md">
-                {indexing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />}
+                {indexing ? <ThinkingIndicator size="sm" /> : <Database className="h-4 w-4" />}
                 Indexar
               </Button>
               <Button type="button" onClick={onSearch} disabled={searching} className="h-9 rounded-md">
-                {searching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                {searching ? <ThinkingIndicator size="sm" /> : <Search className="h-4 w-4" />}
                 Buscar
               </Button>
             </div>
@@ -806,12 +806,16 @@ function RagPane({
   )
 }
 
-function CenteredState({ icon: Icon, label, spin = false }: { icon: React.ElementType; label: string; spin?: boolean }) {
+function CenteredState({ icon: Icon, label, spin = false }: { icon?: React.ElementType; label: string; spin?: boolean }) {
   return (
     <div className="grid h-full place-items-center p-6 text-center">
       <div className="space-y-3">
         <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-md border border-border bg-card">
-          <Icon className={cn("h-5 w-5 text-muted-foreground", spin && "animate-spin")} />
+          {spin || !Icon ? (
+            <ThinkingIndicator size="md" className="text-muted-foreground" label={label} />
+          ) : (
+            <Icon className="h-5 w-5 text-muted-foreground" />
+          )}
         </div>
         <div className="text-sm text-muted-foreground">{label}</div>
       </div>

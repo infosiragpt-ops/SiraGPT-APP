@@ -1179,11 +1179,15 @@ const web_search = {
     const maxResults = Math.max(1, Math.min(Number(args?.maxResults) || 5, 15));
     const locale = typeof args?.locale === 'string' ? args.locale : null;
     const freshness = typeof args?.freshness === 'string' ? args.freshness : undefined;
-    const { results, provider, cached, attempts } = await webSearch.search(query, { maxResults, locale, freshness });
+    // Use the aggregating/relevance-ranked path for chat. The legacy
+    // first-non-empty search() path can be fooled by a broad academic provider
+    // returning unrelated papers before the general-web providers answer.
+    const { results, provider, providers, cached, attempts } = await webSearch.searchMany(query, { maxResults, locale, freshness });
     // Return structured JSON (not a concatenated string) so the model can
     // cite individual URLs rather than treat the whole response as prose.
     return {
       provider,
+      providers,
       cached,
       count: results.length,
       results,

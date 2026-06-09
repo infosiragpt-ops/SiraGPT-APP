@@ -588,7 +588,7 @@ export default function CreateGPTPage() {
             >
               {isSaving ? (
                 <span className="flex items-center gap-2">
-                  <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                  <ThinkingIndicator size="xs" />
                   Guardando...
                 </span>
               ) : isEditMode ? (
@@ -994,7 +994,7 @@ export default function CreateGPTPage() {
             >
               {isSaving ? (
                 <span className="flex items-center gap-2">
-                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                  <ThinkingIndicator size="sm" />
                   Guardando...
                 </span>
               ) : isEditMode ? (

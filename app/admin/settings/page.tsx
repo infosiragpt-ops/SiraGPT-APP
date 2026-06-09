@@ -11,6 +11,7 @@ import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { SidebarTrigger } from "@/components/ui/sidebar"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState({
@@ -58,7 +59,7 @@ export default function SettingsPage() {
           </div>
         </div>
         <Button onClick={handleSave} disabled={isSaving} size="sm" className="flex-shrink-0 text-sm">
-          {isSaving ? <RefreshCw className="mr-2 h-3 w-3 sm:h-4 sm:w-4 animate-spin" /> : <Save className="mr-2 h-3 w-3 sm:h-4 sm:w-4" />}
+          {isSaving ? <ThinkingIndicator size="sm" className="mr-2" /> : <Save className="mr-2 h-3 w-3 sm:h-4 sm:w-4" />}
           <span className="hidden sm:inline">{isSaving ? "Saving..." : "Save Changes"}</span>
           <span className="sm:hidden">Save</span>
         </Button>

@@ -14,7 +14,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
-import { Loader2, CheckCircle2, Circle, CircleDot } from "lucide-react"
+import { CheckCircle2, Circle, CircleDot } from "lucide-react"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 
 type Option = { id: string; label: string }
 type Stage = { id: string; label: string }
@@ -245,11 +246,11 @@ export default function DocumentCyclePage() {
 
         <div className="flex flex-wrap gap-3">
           <Button variant="outline" onClick={handleClassify} disabled={classifying || running}>
-            {classifying && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            {classifying && <ThinkingIndicator size="sm" className="mr-2" />}
             Vista previa de clasificación
           </Button>
           <Button onClick={handleStart} disabled={running}>
-            {running && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            {running && <ThinkingIndicator size="sm" className="mr-2" />}
             Iniciar ciclo
           </Button>
           {running && (

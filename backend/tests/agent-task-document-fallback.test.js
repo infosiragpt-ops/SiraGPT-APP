@@ -370,13 +370,81 @@ test('buildAttachmentGroundedFallbackAnswer respects one-paragraph XLSX summarie
   assert.doesNotMatch(answer, /Incorrect API key|401/);
 });
 
+test('buildLlmAttachmentRecoveryAnswer answers the concrete question via an injected client', async () => {
+  clearAgentModules();
+  const { buildLlmAttachmentRecoveryAnswer } = require('../src/services/agents/agent-task-runner');
+  const calls = [];
+  const fakeClient = {
+    chat: {
+      completions: {
+        create: async (payload) => {
+          calls.push(payload);
+          return { choices: [{ message: { content: 'El título de la investigación es "Redes sociales y voto joven".' } }] };
+        },
+      },
+    },
+  };
+  const ctx = [
+    '### Archivo adjunto 1: metodo.docx',
+    'Redes sociales y voto joven: estudio cuantitativo sobre TikTok como fuente de noticias.',
+    'La muestra incluyó 582 estudiantes universitarios de Colombia durante 2026.',
+    'Los resultados evidenciaron que las hipótesis planteadas fueron significativas.',
+  ].join('\n');
+
+  const answer = await buildLlmAttachmentRecoveryAnswer({
+    goal: 'cual es el titulo de la investigacion?',
+    uploadedFileContext: ctx,
+    env: { OPENAI_API_KEY: 'test-key' },
+    clientFactory: () => fakeClient,
+  });
+
+  assert.match(answer, /Redes sociales y voto joven/);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].model, 'gpt-4o-mini');
+  assert.match(calls[0].messages[1].content, /cual es el titulo de la investigacion/);
+  assert.match(calls[0].messages[1].content, /582 estudiantes/);
+});
+
+test('buildLlmAttachmentRecoveryAnswer returns null without provider keys or on empty output', async () => {
+  clearAgentModules();
+  const { buildLlmAttachmentRecoveryAnswer, pickAttachmentRecoveryRuntime } = require('../src/services/agents/agent-task-runner');
+
+  // Sin keys configuradas → null sin llamada.
+  const noKeys = await buildLlmAttachmentRecoveryAnswer({
+    goal: 'cual es el titulo?',
+    uploadedFileContext: 'Texto largo del documento con suficientes palabras para superar el umbral del guard.',
+    env: {},
+    clientFactory: () => { throw new Error('no debe llamarse'); },
+  });
+  assert.equal(noKeys, null);
+
+  // Respuesta vacía del proveedor → null (cae al fallback determinista).
+  const emptyClient = { chat: { completions: { create: async () => ({ choices: [{ message: { content: '   ' } }] }) } } };
+  const emptyAnswer = await buildLlmAttachmentRecoveryAnswer({
+    goal: 'cual es el titulo?',
+    uploadedFileContext: 'Texto largo del documento con suficientes palabras para superar el umbral del guard.',
+    env: { OPENAI_API_KEY: 'test-key' },
+    clientFactory: () => emptyClient,
+  });
+  assert.equal(emptyAnswer, null);
+
+  // Flag de apagado y modo test sin opt-in → runtime null.
+  assert.equal(pickAttachmentRecoveryRuntime({ OPENAI_API_KEY: 'k', AGENT_TASK_LLM_RECOVERY: '0' }), null);
+  assert.equal(pickAttachmentRecoveryRuntime({ OPENAI_API_KEY: 'k', NODE_ENV: 'test' }), null);
+  assert.deepEqual(
+    pickAttachmentRecoveryRuntime({ OPENAI_API_KEY: 'k', NODE_ENV: 'test', AGENT_TASK_LLM_RECOVERY: '1' }),
+    { provider: 'OpenAI', model: 'gpt-4o-mini' },
+  );
+});
+
 test('runAgentTaskJob: recovers weak tool-unavailable attachment final answer', async () => {
-  const restoreEnv = rememberEnv(['OPENAI_API_KEY', 'AGENT_TASK_STORE_DIR', 'NODE_ENV', 'AGENT_TASK_ATTACHMENT_FASTPATH']);
+  const restoreEnv = rememberEnv(['OPENAI_API_KEY', 'AGENT_TASK_STORE_DIR', 'NODE_ENV', 'AGENT_TASK_ATTACHMENT_FASTPATH', 'AGENT_TASK_LLM_RECOVERY']);
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'siragpt-doc-tool-unavailable-'));
   process.env.OPENAI_API_KEY = 'test-openai-key';
   process.env.AGENT_TASK_STORE_DIR = storeDir;
   process.env.NODE_ENV = 'test';
   process.env.AGENT_TASK_ATTACHMENT_FASTPATH = '0';
+  process.env.AGENT_TASK_LLM_RECOVERY = '0';
   clearAgentModules();
 
   const prisma = require('../src/config/database');
@@ -926,12 +994,13 @@ test('runAgentTaskJob: uploaded document recovers when model runtime throws quot
 });
 
 test('runAgentTaskJob: uploaded document recovers when model runtime completes with empty final text', async () => {
-  const restoreEnv = rememberEnv(['OPENAI_API_KEY', 'AGENT_TASK_STORE_DIR', 'NODE_ENV', 'AGENT_TASK_ATTACHMENT_FASTPATH']);
+  const restoreEnv = rememberEnv(['OPENAI_API_KEY', 'AGENT_TASK_STORE_DIR', 'NODE_ENV', 'AGENT_TASK_ATTACHMENT_FASTPATH', 'AGENT_TASK_LLM_RECOVERY']);
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'siragpt-doc-empty-final-'));
   process.env.OPENAI_API_KEY = 'test-openai-key';
   process.env.AGENT_TASK_STORE_DIR = storeDir;
   process.env.NODE_ENV = 'test';
   process.env.AGENT_TASK_ATTACHMENT_FASTPATH = '0';
+  process.env.AGENT_TASK_LLM_RECOVERY = '0';
   clearAgentModules();
 
   const prisma = require('../src/config/database');

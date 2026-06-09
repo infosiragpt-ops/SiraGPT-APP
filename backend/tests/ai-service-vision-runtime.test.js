@@ -133,4 +133,75 @@ describe('ai-service vision routing', () => {
       assert.equal(service.__test.shouldAttachVisionContent('DeepSeek', 'deepseek-chat', rt), false);
     });
   });
+
+  describe('describeAttachedImages', () => {
+    const fs = require('node:fs');
+    const os = require('node:os');
+    const path = require('node:path');
+    // PNG 1x1 transparente (válido) para que prepareImageForVision lo lea.
+    const PNG_1PX = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+      'base64',
+    );
+
+    test('returns null when no vision provider key is configured', async () => {
+      const out = await service.describeAttachedImages(
+        [{ path: '/tmp/nope.png', mimeType: 'image/png' }],
+        'que es esto?',
+      );
+      assert.equal(out, null);
+    });
+
+    test('describes images through the selected vision runtime client', async () => {
+      process.env.OPENAI_API_KEY = 'sk-test';
+      const tmpImage = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sira-vision-')), 'logo.png');
+      fs.writeFileSync(tmpImage, PNG_1PX);
+      const calls = [];
+      const originalGetClient = service.getClient;
+      service.getClient = () => ({
+        chat: {
+          completions: {
+            create: async (payload) => {
+              calls.push(payload);
+              return { choices: [{ message: { content: 'Un logotipo de estrella de cuatro puntas con degradado azul y violeta.' } }] };
+            },
+          },
+        },
+      });
+      try {
+        const out = await service.describeAttachedImages(
+          [{ path: tmpImage, mimeType: 'image/png' }],
+          'que es esto?',
+        );
+        assert.match(out, /estrella de cuatro puntas/);
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].model, 'gpt-4o-mini');
+        const parts = calls[0].messages[0].content;
+        assert.equal(parts[0].type, 'text');
+        assert.match(parts[0].text, /que es esto\?/);
+        assert.equal(parts[1].type, 'image_url');
+        assert.match(parts[1].image_url.url, /^data:image\/png;base64,/);
+      } finally {
+        service.getClient = originalGetClient;
+        fs.rmSync(path.dirname(tmpImage), { recursive: true, force: true });
+      }
+    });
+
+    test('returns null when no image can be read from disk (no network call)', async () => {
+      process.env.OPENAI_API_KEY = 'sk-test';
+      const originalGetClient = service.getClient;
+      service.getClient = () => ({
+        chat: { completions: { create: async () => { throw new Error('no debe llamarse'); } } },
+      });
+      try {
+        const out = await service.describeAttachedImages(
+          [{ path: '/tmp/definitivamente-no-existe-9f3.png', mimeType: 'image/png' }],
+          'que es esto?',
+        );
+        assert.equal(out, null);
+      } finally {
+        service.getClient = originalGetClient;
+      }
+    });
+  });
 });

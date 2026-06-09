@@ -180,15 +180,31 @@ function getChat(store, userId, chatId) {
 
 // ── 8. ETag (matches chats.js fingerprint) ─────────────────────────
 
+function stableStringify(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
+}
+
 function chatEtag(store, chatId) {
   const chat = store.chats.find((c) => c.id === chatId);
   if (!chat) return null;
   const msgs = store.messages.filter((m) => m.chatId === chatId && !m.deletedAt);
   const count = msgs.length;
-  const latest = msgs.length
-    ? Math.max(...msgs.map((m) => m.timestamp.getTime()))
+  const latestMessage = msgs
+    .slice()
+    .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())[0] || null;
+  const latest = latestMessage
+    ? latestMessage.timestamp.getTime()
     : chat.updatedAt.getTime();
-  return `W/"chat-${chat.id}-${count}-${latest}"`;
+  const latestContent = typeof latestMessage?.content === 'string' ? latestMessage.content : '';
+  const latestMetadata = latestMessage?.metadata ? stableStringify(latestMessage.metadata) : '';
+  const latestDigest = crypto
+    .createHash('sha1')
+    .update(`${latestMessage?.id || ''}:${latestContent}:${latestMetadata}`)
+    .digest('hex')
+    .slice(0, 16);
+  return `W/"chat-${chat.id}-${count}-${latest}-${latestDigest}"`;
 }
 
 // ── 9. Markdown export ─────────────────────────────────────────────
@@ -343,6 +359,16 @@ describe('user journey · full happy path', () => {
     const ifNoneMatch = etag;
     const expected = chatEtag(store, chatId);
     assert.equal(ifNoneMatch === expected, true, '304 short-circuit');
+  });
+
+  it('8a. ETag changes when the latest message content changes in place', () => {
+    const before = chatEtag(store, chatId);
+    const latest = store.messages
+      .filter((m) => m.chatId === chatId && !m.deletedAt)
+      .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())[0];
+    latest.content = `${latest.content}\n\nfinal text persisted`;
+    const after = chatEtag(store, chatId);
+    assert.notEqual(before, after);
   });
 
   it('8b. ETag changes after a new message', async () => {

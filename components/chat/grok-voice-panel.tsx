@@ -1,12 +1,13 @@
 "use client"
 
 import * as React from "react"
-import { AudioLines, Loader2, Mic, Square, Volume2, VolumeX, X } from "lucide-react"
+import { AudioLines, Mic, Square, Volume2, VolumeX, X } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { cn } from "@/lib/utils"
 import { apiClient, type GrokVoiceAssistantReply, type GrokVoiceSessionSnapshot } from "@/lib/api"
 
@@ -423,7 +424,7 @@ export function GrokVoicePanel({
           onClick={isListening ? stopListening : startListening}
         >
           {isBusy ? (
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            <ThinkingIndicator size="sm" className="mr-2" />
           ) : isListening ? (
             <Square className="mr-2 h-4 w-4 fill-current" />
           ) : canStart ? (
