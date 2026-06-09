@@ -341,3 +341,54 @@ test('attachHarness: merges harness tools, wraps existing ones, kill switch resp
   t.after(() => { delete process.env.SIRAGPT_AGENT_HARNESS; });
   assert.equal(await attachHarness({ tools: [baseTool], write: async () => {} }), null);
 });
+
+// ── cost estimate + parallel_tool_calls (Phase 1b) ──────────────────────────
+
+test('cost estimate: provider list prices blended 75/25, null when unpriced', () => {
+  const { estimateCostUsd } = require('../src/services/agent-harness/event-stream');
+  // openai manifest: { input: 2.5, output: 10 } → 2.5*0.75 + 10*0.25 = 4.375/M
+  assert.equal(estimateCostUsd('OpenAI', 1_000_000), 4.375);
+  assert.ok(estimateCostUsd('deepseek', 500_000) > 0);
+  assert.equal(estimateCostUsd('Cerebras', 1_000_000), null); // no published rate
+  assert.equal(estimateCostUsd('OpenAI', 0), null);
+  assert.equal(estimateCostUsd(null, 1000), null);
+});
+
+test('agent_done: carries the USD estimate when the provider is priced', () => {
+  const registry = sampleRegistry();
+  const frames = [];
+  const events = createAgentEventStream({ write: async (f) => frames.push(f), registry, provider: 'OpenAI' });
+  events.onStepStart({ thought: 'x'.repeat(4000), actions: [] });
+  const run = events.finish({ stoppedReason: 'finalized', finalAnswer: 'y'.repeat(4000) });
+  const done = frames.find((f) => f.type === 'agent_done');
+  assert.ok(run.costUsdEstimate > 0, 'estimate must be computed');
+  assert.equal(done.costUsdEstimate, run.costUsdEstimate);
+});
+
+test('react-agent: parallel_tool_calls sent only when capability-enabled', async () => {
+  const reactAgent = require('../src/services/react-agent');
+  const payloads = [];
+  const fakeOpenAI = {
+    chat: {
+      completions: {
+        create: async (payload) => {
+          payloads.push(payload);
+          return {
+            choices: [{
+              message: {
+                content: '',
+                tool_calls: [{ id: 'c1', type: 'function', function: { name: 'finalize', arguments: JSON.stringify({ answer: 'ok' }) } }],
+              },
+            }],
+          };
+        },
+      },
+    },
+  };
+  await reactAgent.run(fakeOpenAI, { query: 'q', tools: [], maxSteps: 2, parallelToolCalls: true });
+  assert.equal(payloads[0].parallel_tool_calls, true);
+
+  payloads.length = 0;
+  await reactAgent.run(fakeOpenAI, { query: 'q', tools: [], maxSteps: 2 });
+  assert.equal('parallel_tool_calls' in payloads[0], false, 'param must be OMITTED (not false) by default');
+});

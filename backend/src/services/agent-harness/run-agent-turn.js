@@ -77,6 +77,7 @@ async function attachHarness(opts = {}) {
     signal = null,
     describeTool = null,
     mcpEnabled = true,
+    provider = null,
   } = opts;
 
   const registry = createToolRegistry();
@@ -120,6 +121,7 @@ async function attachHarness(opts = {}) {
     registry,
     permission: permissionManager,
     ctxInfo: { chatId, userId },
+    provider,
     signal,
   });
 

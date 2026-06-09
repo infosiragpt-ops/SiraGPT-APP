@@ -30,6 +30,7 @@ import { LOCALES } from "@/lib/i18n/locales"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { MemorySettingsCard } from "@/components/settings/MemorySettingsCard"
+import { McpServersCard } from "@/components/settings/McpServersCard"
 // ────────────────────────────────────────────────────────────
 // Section registry
 // ────────────────────────────────────────────────────────────
@@ -944,6 +945,7 @@ function AppsSection() {
   return (
     <>
       <div className="text-sm text-muted-foreground">Conecta y administra las aplicaciones que siraGPT puede usar.</div>
+      <McpServersCard />
       {cats.map((cat) => (
         <SectionCard key={cat} title={cat}>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-5">

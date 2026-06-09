@@ -296,6 +296,18 @@ export type AgentStreamEvent =
   | AgentPermissionResolvedEvent
   | AgentDoneEvent
 
+/** Registered external MCP server (headers never leave the backend). */
+export type McpServerInfo = {
+  id: string
+  name: string
+  url: string
+  transport: 'streamable-http' | 'sse'
+  enabled: boolean
+  hasHeaders: boolean
+  createdAt?: string
+  updatedAt?: string
+}
+
 const AGENT_STREAM_EVENT_TYPES = new Set([
   'tool_call_start',
   'tool_executing',
@@ -1201,6 +1213,47 @@ class ApiClient {
     return this.request('/agent/permission', {
       method: 'POST',
       body: JSON.stringify({ permissionId, decision }),
+    });
+  }
+
+  // ── External MCP servers (agent harness) ─────────────────────────────────
+  // Registered servers join every agent turn as mcp__<server>__<tool> with
+  // the 'confirm' permission tier. Auth headers are encrypted server-side
+  // and NEVER returned by the API (the list only carries `hasHeaders`).
+
+  async listMcpServers(): Promise<{ servers: McpServerInfo[] }> {
+    return this.request('/agent/mcp-servers', { method: 'GET' });
+  }
+
+  async createMcpServer(data: {
+    name: string
+    url: string
+    transport?: 'streamable-http' | 'sse'
+    headers?: Record<string, string>
+    enabled?: boolean
+  }): Promise<{ server: McpServerInfo }> {
+    return this.request('/agent/mcp-servers', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateMcpServer(id: string, data: {
+    name?: string
+    url?: string
+    transport?: 'streamable-http' | 'sse'
+    headers?: Record<string, string>
+    enabled?: boolean
+  }): Promise<{ server: McpServerInfo }> {
+    return this.request(`/agent/mcp-servers/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteMcpServer(id: string): Promise<{ ok: boolean }> {
+    return this.request(`/agent/mcp-servers/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
     });
   }
 

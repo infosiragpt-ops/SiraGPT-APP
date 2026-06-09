@@ -910,6 +910,26 @@ redirects, sandbox límites/aislamiento, create_artifact e2e) ·
 - E2E local: JWT debe tener fila en `sessions`; backend de pruebas:
   `PORT=5151 node index.js` con la BD localhost.
 
+### Fase 1b (added 2026-06-09, mismo día)
+- **UI de ajustes para MCP**: `components/settings/McpServersCard.tsx`
+  (patrón MemorySettingsCard, montada al inicio de la sección Apps de
+  `app/settings/page.tsx`): lista con toggle enabled + borrar, alta con
+  nombre/URL/transporte/headers key-value (se cifran y NUNCA se vuelven a
+  mostrar — la lista solo trae `hasHeaders`). Métodos en `lib/api.ts`:
+  `listMcpServers/createMcpServer/updateMcpServer/deleteMcpServer` + tipo
+  `McpServerInfo`.
+- **`parallel_tool_calls` por capacidad**: `react-agent.run` acepta
+  `parallelToolCalls` y lo incluye en el payload nativo SOLO cuando es true
+  (omitido en negativo — la o-series y varios hosts OSS rechazan el
+  parámetro); `runAgenticChat` lo resuelve del capability registry y la ruta
+  pasa `provider: actualProvider`.
+- **`costUsdEstimate` real** en `agent_done`/`agent_metadata`:
+  `estimateCostUsd(provider, tokens)` en event-stream.js con los precios del
+  litellm-gateway (blend 75/25 input-heavy); null si el proveedor no tiene
+  tarifa (Cerebras). Fix de higiene: los separadores de `plannedKey` en event-stream.js
+  llevaban bytes NUL literales (grep trataba el archivo como binario);
+  reemplazados por la secuencia escapada backslash-u0000 en el fuente.
+
 ## Conexiones externas
 - Repo: https://github.com/SiraGPT-ORg/siraGPT
 - Remoto: `sira-org`

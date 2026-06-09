@@ -5233,6 +5233,7 @@ router.post(
                 const agenticResult = await agenticStream.runAgenticChat({
                   openai: agenticClient,
                   model: actualModel,
+                  provider: actualProvider,
                   userQuery: prompt,
                   history: priorHistory,
                   res,

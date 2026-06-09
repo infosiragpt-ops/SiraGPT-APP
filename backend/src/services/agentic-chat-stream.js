@@ -490,6 +490,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       toolContext = {},
       selection = null,
       toolCallMode = 'native',
+      provider = null,
     } = opts || {};
 
     if (!openai) throw new Error('runAgenticChat: openai client is required');
@@ -525,6 +526,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
           prisma: toolContext.prisma || null,
           signal,
           describeTool: stageLabelFor,
+          provider,
           // Weak prompted models already struggle with the core toolset —
           // don't hand them third-party MCP tools on top.
           mcpEnabled: toolCallMode === 'native',
@@ -749,6 +751,16 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       planVerify.createAnswerVerifier({ openai, model, userQuery }),
     ]);
 
+    // parallel_tool_calls per the capability registry: sent ONLY when the
+    // model family is known to honor it (o-series and several OSS hosts
+    // reject the parameter outright, so absence — not `false` — is the safe
+    // negative).
+    let __parallelToolCalls = false;
+    try {
+      const { resolveModelCapabilities } = require('./agent-harness/model-capabilities');
+      __parallelToolCalls = resolveModelCapabilities(model, { provider }).supportsParallelToolCalls === true;
+    } catch (_) { /* capability registry unavailable → omit the param */ }
+
     let stepCounter = 0;
     const result = await reactAgent.run(openai, {
       query: userQuery,
@@ -760,6 +772,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       extraSystem,
       initialToolChoice,
       toolCallMode,
+      parallelToolCalls: __parallelToolCalls,
       ctx: {
         ...toolContext,
         signal,

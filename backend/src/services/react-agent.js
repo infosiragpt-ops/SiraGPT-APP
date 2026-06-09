@@ -729,6 +729,10 @@ async function run(openai, opts) {
     finalizeGuard = null,
     initialToolChoice = null,
     toolCallMode = 'native',
+    // Capability-gated: when true the native payload carries
+    // parallel_tool_calls so multi-call steps are explicit. Omitted (never
+    // `false`) otherwise — several providers 4xx on the unknown parameter.
+    parallelToolCalls = false,
     compactMaxChars = DEFAULT_COMPACT_MAX_CHARS,
     compactTailRounds = DEFAULT_COMPACT_TAIL_ROUNDS,
     onCompact = () => {},
@@ -1000,6 +1004,7 @@ async function run(openai, opts) {
           messages,
           tools: toolsSchema,
           tool_choice: toolChoice,
+          ...(parallelToolCalls === true ? { parallel_tool_calls: true } : {}),
           temperature: 0.3,
         }, { signal: stepCtl.signal });
       }
