@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1497**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1504**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -451,7 +451,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yargs-parser` | 21.1.1 | ISC | [link](https://github.com/yargs/yargs-parser) |
 | `zod-to-json-schema` | 3.25.2 | ISC | [link](https://github.com/StefanTerdell/zod-to-json-schema) |
 
-## MIT (1102)
+## MIT (1109)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -498,6 +498,11 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@iconify/utils` | 3.1.1 | MIT | [link](https://github.com/iconify/iconify) |
 | `@img/colour` | 1.0.0, 1.1.0 | MIT | [link](https://github.com/lovell/colour) |
 | `@ioredis/commands` | 1.5.1 | MIT | [link](https://github.com/ioredis/commands) |
+| `@jitl/quickjs-ffi-types` | 0.32.0 | MIT | [link](https://github.com/justjake/quickjs-emscripten) |
+| `@jitl/quickjs-wasmfile-debug-asyncify` | 0.32.0 | MIT | [link](https://github.com/justjake/quickjs-emscripten) |
+| `@jitl/quickjs-wasmfile-debug-sync` | 0.32.0 | MIT | [link](https://github.com/justjake/quickjs-emscripten) |
+| `@jitl/quickjs-wasmfile-release-asyncify` | 0.32.0 | MIT | [link](https://github.com/justjake/quickjs-emscripten) |
+| `@jitl/quickjs-wasmfile-release-sync` | 0.32.0 | MIT | [link](https://github.com/justjake/quickjs-emscripten) |
 | `@jridgewell/gen-mapping` | 0.3.13 | MIT | [link](https://github.com/jridgewell/sourcemaps) |
 | `@jridgewell/resolve-uri` | 3.1.2 | MIT | [link](https://github.com/jridgewell/resolve-uri) |
 | `@jridgewell/sourcemap-codec` | 1.5.5 | MIT | [link](https://github.com/jridgewell/sourcemaps) |
@@ -1345,6 +1350,8 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `queue-microtask` | 1.2.3 | MIT | [link](https://github.com/feross/queue-microtask) |
 | `quick-format-unescaped` | 4.0.4 | MIT | [link](https://github.com/davidmarkclements/quick-format) |
 | `quick-lru` | 7.3.0 | MIT | [link](https://github.com/sindresorhus/quick-lru) |
+| `quickjs-emscripten` | 0.32.0 | MIT | [link](https://github.com/justjake/quickjs-emscripten) |
+| `quickjs-emscripten-core` | 0.32.0 | MIT | [link](https://github.com/justjake/quickjs-emscripten) |
 | `random-bytes` | 1.0.0 | MIT | [link](https://github.com/crypto-utils/random-bytes) |
 | `range-parser` | 1.2.1 | MIT | [link](https://github.com/jshttp/range-parser) |
 | `rate-limit-redis` | 4.3.1 | MIT | [link](https://github.com/express-rate-limit/rate-limit-redis) |
