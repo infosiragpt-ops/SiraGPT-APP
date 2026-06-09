@@ -730,7 +730,13 @@ export function AICodeChatPanel() {
         // Kick off the turn (fire-and-forget; content comes via events) and wait
         // for idle, with a safety timeout so we never hang the UI.
         opencodeService.prompt(esid, sendText).catch(() => {})
-        await Promise.race([idle, new Promise<void>((r) => setTimeout(r, 120_000))])
+        // Safety net only: the engine resolves `idle` as soon as it finishes, so
+        // simple builds return in seconds and we never wait the full window.
+        // This cap only fires if the engine *hangs*. Keep it generous so the
+        // agent can build real, larger systems (full web app / ecommerce), then
+        // fall back to the deterministic builder so a result is always produced.
+        const engineTimeoutMs = isBuild ? 150_000 : 60_000
+        await Promise.race([idle, new Promise<void>((r) => setTimeout(r, engineTimeoutMs))])
         controller.abort() // close the events stream
         await streamP.catch(() => {})
 

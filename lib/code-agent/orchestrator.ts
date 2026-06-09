@@ -56,18 +56,25 @@ function clean(text: string): string {
   return String(text == null ? "" : text).replace(/\s+/g, " ").trim()
 }
 
-/** A "build something from scratch" request (noun + verb). */
+const BUILD_NOUN =
+  /\b(landing|app|aplicaci[oó]n|web|p[aá]gina|pagina|sitio|website|portfolio|portafolio|tienda|ecommerce|e-commerce|dashboard|panel|blog|crud|sistema|plataforma)\b/
+const BUILD_VERB =
+  /\b(cre[ae]|cr[eé]a|cr[eé]ame|crear|crearme|cr[eé]ar|h[aá]z|hazme|haceme|hac[ée]me|construye|constr[uú]ye?me|construir|genera|gen[eé]rame|generar|real[ií]z(?:a|ar|[aá]me)|desarroll(?:a|ar|e)|desarr[oó]llame|programa|programar|impl[ée]menta|implementar|monta|m[oó]ntame|prepara|prepar[aá]me|prep[aá]rame|levanta|dame|ponme|quiero|necesito|dise[ñn]a|dise[ñn]ar|armar?|arma|build|make|create)\b/
+
+/** A "build something from scratch" request (recognised noun + verb). Strict. */
 export function isBuildRequest(text: string): boolean {
   const t = text.toLowerCase()
-  const noun =
-    /\b(landing|app|aplicaci[oó]n|web|p[aá]gina|pagina|sitio|portfolio|portafolio|tienda|ecommerce|e-commerce|dashboard|blog)\b/.test(
-      t,
-    )
-  const verb =
-    /\b(cre[ae]|cr[eé]a|cr[eé]ame|crear|crearme|cr[eé]ar|h[aá]z|hazme|haceme|hac[ée]me|construye|constr[uú]ye?me|construir|genera|gen[eé]rame|generar|real[ií]z(?:a|ar|[aá]me)|desarroll(?:a|ar|e)|desarr[oó]llame|programa|programar|impl[ée]menta|implementar|monta|m[oó]ntame|prepara|prepar[aá]me|prep[aá]rame|levanta|dame|ponme|quiero|necesito|dise[ñn]a|dise[ñn]ar|armar?|arma|build|make|create)\b/.test(
-      t,
-    )
-  return noun && verb
+  return BUILD_NOUN.test(t) && BUILD_VERB.test(t)
+}
+
+/**
+ * Looser build-intent check: a build VERB alone ("créame…", "quiero…",
+ * "hazme…"). In App mode the user is always trying to build, so a typo'd or
+ * noun-less phrase ("crea un alding panaderia") should still open the intake
+ * rather than fall through to a bare chat turn that produces nothing.
+ */
+export function hasBuildVerb(text: string): boolean {
+  return BUILD_VERB.test(text.toLowerCase())
 }
 
 /** Heuristic: the text looks like a build/install/deploy error log. */
@@ -125,7 +132,10 @@ export function nextAgentAction(state: AgentState, input: string, signal: AgentS
   }
 
   const inIntake = state.phase === "intake"
-  const isStart = (signal.mode === "app" || signal.mode === "build") && isBuildRequest(text)
+  // In App/Build mode the user is always trying to build something, so a build
+  // VERB alone is enough to open the intake — typos or a missing noun
+  // ("crea un alding panaderia") must NOT fall through to a bare chat turn.
+  const isStart = (signal.mode === "app" || signal.mode === "build") && (isBuildRequest(text) || hasBuildVerb(text))
 
   // 5) Intake gate (app/build).
   if (isStart || inIntake) {
