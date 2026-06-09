@@ -34,7 +34,7 @@
  */
 
 const DEFAULT_BASE_URL = 'https://api.cerebras.ai/v1';
-const DEFAULT_MODEL = 'llama-3.1-8b';
+const DEFAULT_MODEL = 'gpt-oss-120b'; // llama-3.1-8b was retired from Cerebras (404); gpt-oss-120b is current
 const DEFAULT_DISPLAY_NAME = 'Free IA';
 const PROVIDER_NAME = 'Cerebras';
 

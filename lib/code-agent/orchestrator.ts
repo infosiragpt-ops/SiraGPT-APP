@@ -149,6 +149,7 @@ export function nextAgentAction(state: AgentState, input: string, signal: AgentS
       return {
         type: "ask",
         question: list[state.intakeStep].q,
+        slot: list[state.intakeStep].slot,
         nextStep: state.intakeStep + 1,
         context: ctx,
       }
@@ -159,7 +160,8 @@ export function nextAgentAction(state: AgentState, input: string, signal: AgentS
       return { type: "generate", context: seedGoal(state.context, text), tier }
     }
     const seeded = seedGoal(state.context, text)
-    return { type: "ask", question: questionsFor(seeded.goal)[0].q, nextStep: 1, context: seeded }
+    const first = questionsFor(seeded.goal)[0]
+    return { type: "ask", question: first.q, slot: first.slot, nextStep: 1, context: seeded }
   }
 
   // 6) Default (e.g. app-mode follow-up that is not a build request).

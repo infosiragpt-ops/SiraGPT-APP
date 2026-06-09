@@ -71,6 +71,7 @@ import {
 } from "@/lib/code-agent/orchestrator"
 import { landingSystemPrompt, sreSystemPrompt } from "@/lib/code-agent/prompts"
 import { isSlowModel, recommendFastModel } from "@/lib/code-agent/model-policy"
+import { fetchCodeIntakeQuestion } from "@/lib/code/intake-question"
 import { opencodeService } from "@/lib/opencode/opencode-service"
 import { useOpencodeEngine } from "@/lib/opencode/use-opencode-engine"
 
@@ -846,10 +847,12 @@ export function AICodeChatPanel() {
       switch (action.type) {
         case "ask": {
           const qid = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+          const assistantId = `${qid}-a`
+          const staticQuestion = action.question
           setTurns((prev) => [
             ...prev,
             { id: qid, role: "user", content: text },
-            { id: `${qid}-a`, role: "assistant", content: action.question },
+            { id: assistantId, role: "assistant", content: staticQuestion, streaming: true },
           ])
           setInput("")
           patchAgentState(sid, (s) => ({
@@ -858,6 +861,15 @@ export function AICodeChatPanel() {
             intakeStep: action.nextStep,
             context: action.context,
           }))
+          // Upgrade the hardcoded question to a context-aware, LLM-phrased one
+          // (adapts to what the user already said). Static stays as the fallback.
+          const convo = [...turns, { role: "user", content: text }]
+          const dynamicQuestion = await fetchCodeIntakeQuestion(action.slot, convo, staticQuestion)
+          setTurns((prev) =>
+            prev.map((t) =>
+              t.id === assistantId ? { ...t, content: dynamicQuestion, streaming: false } : t,
+            ),
+          )
           return
         }
         case "generate": {

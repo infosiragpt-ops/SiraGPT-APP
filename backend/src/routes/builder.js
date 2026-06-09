@@ -40,6 +40,7 @@ const { planFromBrief } = require('../services/builder/blueprint');
 const { scaffoldFromBrief } = require('../services/builder/scaffold');
 const { generateNextQuestion } = require('../services/builder/question-generator');
 const { briefFromPrompt } = require('../services/builder/brief-from-prompt');
+const { generateCodeIntakeQuestion } = require('../services/code-intake-question');
 
 const router = express.Router();
 
@@ -86,6 +87,24 @@ router.get('/intake/questions', authenticateToken, (req, res) => {
     dimensions: COVERAGE_DIMENSIONS,
     questions: COVERAGE_DIMENSIONS.map((d) => questionForDimension(d)),
   });
+});
+
+// Context-aware intake question for the /code agent. Given the slot being asked
+// and the conversation so far, the LLM phrases a personalised question; falls
+// back to the caller's static question on any failure (key/LLM/output).
+router.post('/code-question', authenticateToken, async (req, res) => {
+  const { slot, history, fallback } = req.body || {};
+  try {
+    const question = await generateCodeIntakeQuestion({
+      slot: typeof slot === 'string' ? slot : '',
+      history: Array.isArray(history) ? history : [],
+      fallback: typeof fallback === 'string' ? fallback : '',
+      env: process.env,
+    });
+    res.json({ question });
+  } catch {
+    res.json({ question: typeof fallback === 'string' ? fallback : '' });
+  }
 });
 
 router.post(

@@ -56,7 +56,7 @@ export interface AgentSignal {
 }
 
 export type AgentAction =
-  | { type: "ask"; question: string; nextStep: number; context: AgentBuildContext }
+  | { type: "ask"; question: string; slot: string; nextStep: number; context: AgentBuildContext }
   | { type: "generate"; context: AgentBuildContext; tier: "llm" | "deterministic" }
   | { type: "patch"; instruction: string }
   | { type: "debug"; log: string }
