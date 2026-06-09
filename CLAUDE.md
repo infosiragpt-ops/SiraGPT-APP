@@ -789,6 +789,51 @@ repo) · brief-synthesizer LLM (T6) · orquestación multi-agente con
 ProjectContext compartido (E6). **Hecho:** intake agéntico (LLM + dynamic) ·
 codegen real Next.js web/landing (E3+, `codegen.js`).
 
+## Agent-first chat + prompted tool-calling — added 2026-06-09
+
+Todo chat nuevo ES un agente (SWE-agent ACI, arXiv:2405.15793 + harness
+engineering 2025-26: fallback ladder de tool-calling, budgets en código,
+capability gating). Tres cambios:
+
+### 1. Agent-first routing (`agentic-chat-stream.js shouldUseAgenticChat`)
+Default invertido: TODA conversación entra al loop agéntico (web_search,
+artefactos, documentos, media) excepto smalltalk trivial (`SIMPLE_CHAT_PROMPT`)
+y Q&A simple sobre documento adjunto (texto ya inyectado; stream plano es
+mejor). La ruta sigue cayendo al stream plano en cualquier run degradado, así
+que agent-first nunca cuesta una respuesta. `SIRAGPT_AGENT_FIRST=0` restaura
+el routing heurístico legacy.
+
+### 2. Prompted tool-calling (`agents/prompted-tool-calling.js`)
+Escalera de fallback para que CUALQUIER modelo maneje el loop:
+- `resolveToolCallMode(provider, model)` → `native` (allowlist OpenAI-style) |
+  `prompted` (el resto) | `none` (solo si `SIRAGPT_PROMPTED_TOOLS=0`).
+- En modo prompted, react-agent (`toolCallMode: 'prompted'`): describe el
+  registry en el system prompt (protocolo de bloque ```tool_call JSON +
+  worked example), convierte la traza canónica a transcript provider-safe
+  (sin `tools`/`tool_choice`/`role:"tool"` — observaciones como mensajes user
+  `[TOOL_RESULT <tool>]`), parsea los bloques fenced (o JSON bare con clave
+  `tool`, validado contra el registry) de vuelta a `tool_calls`. tool_choice
+  forzado (finalize/initial) se emula con instrucción explícita.
+- Budgets en código para modelos débiles: cap de herramientas ordenado
+  (`capToolsForPrompted`, `SIRAGPT_PROMPTED_MAX_TOOLS` default 10, pinnea
+  intent media + RAG) y `SIRAGPT_PROMPTED_MAX_STEPS` (default 10).
+- El gate duro `modelSupportsFunctionCalling` en `ai.js` fue reemplazado por
+  `resolveToolCallMode`; el modo viaja a `runAgenticChat` y queda en
+  `state.meta.runtime.toolCallMode`.
+
+### 3. Creation tools siempre disponibles (`buildDefaultTools`)
+Las herramientas de creación (generate_image/video/speech/music + las 30+
+diagram/chart tools) se cargan en CADA turno agéntico (un "ahora hazme un
+diagrama de eso" a mitad de conversación funciona sin intent inicial). El
+tool-selector per-turn mantiene el set efectivo pequeño.
+`SIRAGPT_MEDIA_TOOLS_ALWAYS=0` restaura la carga intent-gated.
+
+### Tests
+`tests/prompted-tool-calling.test.js` (13) · `tests/react-agent-prompted.test.js`
+(5, e2e con cliente fake que verifica payload provider-safe) ·
+`tests/agentic-chat-stream.test.js` actualizado (agent-first default + env-off
+legacy + resolveToolCallMode + media-always). Registrados en `backend/package.json`.
+
 ## Conexiones externas
 - Repo: https://github.com/SiraGPT-ORg/siraGPT
 - Remoto: `sira-org`

@@ -5168,6 +5168,11 @@ router.post(
                 history: priorHistory,
                 files: filesForVision || [],
               });
+              // Tool-calling fallback ladder: 'native' (OpenAI-style
+              // tool_calls), 'prompted' (tools described in the system prompt,
+              // fenced-JSON calls parsed back — lets ANY model drive the
+              // loop), or 'none' (prompted disabled via env → legacy gate).
+              const __toolCallMode = agenticStream.resolveToolCallMode(actualProvider, actualModel);
               if (
                 agenticStream.isEnabled()
                 && shouldRunAgentic
@@ -5175,7 +5180,7 @@ router.post(
                 // which generates code blocks and must never detour into the
                 // web_search/artifact agentic loop) set disableAgentic:true.
                 && req.body.disableAgentic !== true
-                && agenticStream.modelSupportsFunctionCalling(actualProvider, actualModel)
+                && __toolCallMode !== 'none'
                 && !hasImages
               ) {
                 const agenticClient = createProviderClient(actualProvider);
@@ -5191,6 +5196,7 @@ router.post(
                   history: priorHistory,
                   res,
                   signal,
+                  toolCallMode: __toolCallMode,
                   // A1: per-turn tool selection context — the cognitive decision
                   // (intent/difficulty) lets the agentic loop hand the model a
                   // small, relevant tool subset instead of all ~37-73 tools.

@@ -129,10 +129,35 @@ test('modelSupportsFunctionCalling allowlist', () => {
   assert.equal(agenticStream.modelSupportsFunctionCalling('Anthropic', 'claude-3-opus'), false);
 });
 
-test('shouldUseAgenticChat skips greetings and simple chat', () => {
+test('shouldUseAgenticChat skips greetings and trivial smalltalk', () => {
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'hola' }), false);
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'gracias!' }), false);
-  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿Puedes explicarme qué es una API?' }), false);
+  // Agent-first default: a real question IS an agent turn (the route still
+  // falls back to the plain stream on any degraded loop run).
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿Puedes explicarme qué es una API?' }), true);
+});
+
+test('shouldUseAgenticChat agent-first default routes plain chat turns through the agent', () => {
+  assert.equal(agenticStream.agentFirstEnabled(), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿cuál es la capital de Francia?' }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'escríbeme un poema sobre el mar' }), true);
+});
+
+test('shouldUseAgenticChat SIRAGPT_AGENT_FIRST=0 restores the legacy heuristic routing', () => {
+  const prev = process.env.SIRAGPT_AGENT_FIRST;
+  process.env.SIRAGPT_AGENT_FIRST = '0';
+  try {
+    assert.equal(agenticStream.agentFirstEnabled(), false);
+    assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿Puedes explicarme qué es una API?' }), false);
+    assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿cuál es la capital de Francia?' }), false);
+    assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'escríbeme un poema sobre el mar' }), false);
+    assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿cuánto es 2+2?' }), false);
+    // Tool-heavy turns still enter the loop with agent-first off.
+    assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'investiga esto y cita fuentes recientes' }), true);
+  } finally {
+    if (prev === undefined) delete process.env.SIRAGPT_AGENT_FIRST;
+    else process.env.SIRAGPT_AGENT_FIRST = prev;
+  }
 });
 
 test('shouldUseAgenticChat keeps tool-heavy and follow-up repair turns agentic', () => {
@@ -170,8 +195,6 @@ test('shouldUseAgenticChat routes visual + document create requests through the 
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'create a bar chart of revenue' }), true);
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'diseña una presentación en powerpoint' }), true);
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'haz un video corto del producto' }), true);
-  // Casual factual chat still skips the agentic loop.
-  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿cuál es la capital de Francia?' }), false);
 });
 
 test('shouldUseAgenticChat auto-routes freshness / live-data questions to web search', () => {
@@ -181,9 +204,6 @@ test('shouldUseAgenticChat auto-routes freshness / live-data questions to web se
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿Cuál es el precio actual del bitcoin?' }), true);
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'dame el clima de hoy en Lima' }), true);
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿Qué pasó con OpenAI esta semana?' }), true);
-  // Creative writing and pure math must stay on the cheaper plain path.
-  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'escríbeme un poema sobre el mar' }), false);
-  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿cuánto es 2+2?' }), false);
 });
 
 test('shouldUseAgenticChat routes session search and browser automation requests', () => {
@@ -224,12 +244,50 @@ test('default toolset includes chat, document and verification tools', () => {
   assert.ok(names.includes('monitor_ci'));
 });
 
-test('default toolset stays lean (no media tools) when the turn is not a create request', () => {
+test('default toolset now ships creation tools on every turn (media-always default)', () => {
+  // Mid-conversation "ahora hazme un diagrama de eso" must work even when the
+  // opening turn had no media intent — creation tools are always available.
   const { buildDefaultTools } = agenticStream._internal;
   const names = buildDefaultTools({ userQuery: '¿cuál es la capital de Francia?' }).map(tool => tool.name);
   assert.ok(names.includes('web_search'));
-  assert.ok(!names.includes('generate_image'));
-  assert.ok(!names.includes('generate_music'));
+  assert.ok(names.includes('generate_image'));
+  assert.ok(names.includes('generate_music'));
+  assert.ok(names.includes('create_mermaid_diagram'));
+});
+
+test('SIRAGPT_MEDIA_TOOLS_ALWAYS=0 restores the legacy intent-gated media loading', () => {
+  const prev = process.env.SIRAGPT_MEDIA_TOOLS_ALWAYS;
+  process.env.SIRAGPT_MEDIA_TOOLS_ALWAYS = '0';
+  try {
+    const { buildDefaultTools } = agenticStream._internal;
+    const names = buildDefaultTools({ userQuery: '¿cuál es la capital de Francia?' }).map(tool => tool.name);
+    assert.ok(names.includes('web_search'));
+    assert.ok(!names.includes('generate_image'));
+    assert.ok(!names.includes('generate_music'));
+  } finally {
+    if (prev === undefined) delete process.env.SIRAGPT_MEDIA_TOOLS_ALWAYS;
+    else process.env.SIRAGPT_MEDIA_TOOLS_ALWAYS = prev;
+  }
+});
+
+test('resolveToolCallMode: native for allowlisted models, prompted for the rest', () => {
+  assert.equal(agenticStream.resolveToolCallMode('OpenAI', 'gpt-4o-mini'), 'native');
+  assert.equal(agenticStream.resolveToolCallMode('Cerebras', 'llama-3.1-8b'), 'native');
+  // Models WITHOUT native function calling now reach the loop via prompted
+  // tool-calling (tools described in the system prompt, fenced-JSON calls).
+  assert.equal(agenticStream.resolveToolCallMode('Anthropic', 'claude-3-opus'), 'prompted');
+  assert.equal(agenticStream.resolveToolCallMode('Mistral', 'mistral-large-2'), 'prompted');
+  assert.equal(agenticStream.resolveToolCallMode('OpenAI', 'davinci-002'), 'prompted');
+  // Env kill-switch restores the legacy hard gate.
+  const prev = process.env.SIRAGPT_PROMPTED_TOOLS;
+  process.env.SIRAGPT_PROMPTED_TOOLS = '0';
+  try {
+    assert.equal(agenticStream.resolveToolCallMode('Anthropic', 'claude-3-opus'), 'none');
+    assert.equal(agenticStream.resolveToolCallMode('OpenAI', 'gpt-4o-mini'), 'native');
+  } finally {
+    if (prev === undefined) delete process.env.SIRAGPT_PROMPTED_TOOLS;
+    else process.env.SIRAGPT_PROMPTED_TOOLS = prev;
+  }
 });
 
 test('default toolset adds image/video/audio/music tools for a create request', () => {

@@ -270,16 +270,50 @@ function modelSupportsFunctionCalling(provider, model) {
   return false;
 }
 
+function envFlagEnabled(raw, defaultOn = true) {
+  if (raw == null || String(raw).trim() === '') return defaultOn;
+  const v = String(raw).trim().toLowerCase();
+  return !(v === '0' || v === 'false' || v === 'off' || v === 'no');
+}
+
+/** Prompted tool-calling (models without native function calling) — default ON. */
+function promptedToolsEnabled() {
+  return envFlagEnabled(process.env.SIRAGPT_PROMPTED_TOOLS, true);
+}
+
+/** Agent-first chat (every non-trivial turn enters the agentic loop) — default ON. */
+function agentFirstEnabled() {
+  return envFlagEnabled(process.env.SIRAGPT_AGENT_FIRST, true);
+}
+
+/**
+ * Tool-calling fallback ladder: how should THIS provider+model drive the
+ * agentic loop?
+ *   'native'   — OpenAI-style tool_calls (allowlisted families).
+ *   'prompted' — tools described in the system prompt, fenced-JSON calls
+ *                parsed back (any other chat-completions model).
+ *   'none'     — prompted mode disabled by env → keep the legacy hard gate.
+ */
+function resolveToolCallMode(provider, model) {
+  if (modelSupportsFunctionCalling(provider, model)) return 'native';
+  return promptedToolsEnabled() ? 'prompted' : 'none';
+}
+
 const SIMPLE_CHAT_PROMPT = /^\s*(hola|hi|hello|hey|buenas|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|gracias|thanks|ok|vale|listo|perfecto|sí|si|no|test|prueba)[.!?¡¿\s]*$/i;
 const AGENTIC_PROMPT_HINT = /\b(clon|repo|repositorio|github|git|commit|push|pr|pull ?request|deploy|despleg|codex|cursor|claude.?code|program|c[oó]digo|refactor|mejora|arregla|corrige|no.?funciona|no.?sirve|todav[ií]a|sigue|contin[uú]a|investiga|busca|fuentes?|cita|web|internet|actual|reciente|pdf|documento|archivo|excel|word|ppt|tabla|analiza|compara|genera.?archivo|descargable|aut[oó]nom|background|segundo.?plano|meses?|semanas?|historial|sesiones?|conversaci[oó]n(?:es)?|navegador|browser|naveg|scrap|rasp|extrae.?web|click|clic|scroll|desplaz|\b\/goal\b|\b\/plan\b)\b/i;
 
 /**
- * Decide whether a normal chat turn should enter the expensive agentic
- * loop. The loop is useful for repo work, current research, documents
- * and autonomous follow-ups; it is the wrong path for greetings and
- * simple Q&A because some providers can finish without a `finalize`
- * tool call, which previously surfaced the generic "no verificable"
- * fallback instead of a normal answer.
+ * Decide whether a normal chat turn should enter the agentic loop.
+ *
+ * AGENT-FIRST (default since 2026-06): every chat turn IS an agent turn —
+ * search, write, summarize, create images/video/diagrams/documents — except
+ * the cases where the plain stream is strictly better:
+ *   - greetings / trivial smalltalk (SIMPLE_CHAT_PROMPT),
+ *   - plain Q&A over an attached document (its text is already injected
+ *     into the prompt; the loop adds latency without adding capability).
+ * The route still falls back to the plain stream on ANY degraded loop run,
+ * so being agent-first never costs the user a real answer. Operators can
+ * restore the legacy heuristic routing with SIRAGPT_AGENT_FIRST=0.
  */
 function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
   const text = String(prompt || '').trim();
@@ -326,11 +360,16 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
   const recent = Array.isArray(history)
     ? history.slice(-8).map((m) => textFromMessageContent(m && m.content)).join('\n')
     : '';
-  if (recent && /\b(repo|github|commit|deploy|despleg|archivo|documento|pdf|excel|word|investiga|fuentes?|no.?funciona|todav[ií]a)\b/i.test(recent)) {
-    return /\b(sigue|contin[uú]a|hazlo|dale|arregla|corrige|eso|todav[ií]a|no.?funciona|no.?sirve)\b/i.test(text);
+  if (recent
+      && /\b(repo|github|commit|deploy|despleg|archivo|documento|pdf|excel|word|investiga|fuentes?|no.?funciona|todav[ií]a)\b/i.test(recent)
+      && /\b(sigue|contin[uú]a|hazlo|dale|arregla|corrige|eso|todav[ií]a|no.?funciona|no.?sirve)\b/i.test(text)) {
+    return true;
   }
 
-  return false;
+  // Agent-first default: anything that reached this point is a normal chat
+  // turn with no special signals — it still gets the full agent (tools,
+  // web search, artifact creation) unless the operator opted out.
+  return agentFirstEnabled();
 }
 
   function buildChatFinalizeProfile({ userQuery, fileIds = [], availableToolNames = new Set() } = {}) {
@@ -425,6 +464,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       toolsOverride = null,
       toolContext = {},
       selection = null,
+      toolCallMode = 'native',
     } = opts || {};
 
     if (!openai) throw new Error('runAgenticChat: openai client is required');
@@ -432,13 +472,31 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
     if (!userQuery) throw new Error('runAgenticChat: userQuery is required');
     if (!res) throw new Error('runAgenticChat: res is required');
 
-    const tools = toolsOverride || buildDefaultTools({ userQuery, selection, clearance: toolContext && toolContext.clearance });
-    const availableToolNames = new Set(tools.map((tool) => tool && tool.name).filter(Boolean));
+    let tools = toolsOverride || buildDefaultTools({ userQuery, selection, clearance: toolContext && toolContext.clearance });
     // Bilingual media-intent detection: when the user asks to create an
     // image / video / audio / music in the chat bar, this pre-extracts the
     // specs (duration, aspect ratio, count, style/genre) and lets us inject a
     // directive so the agent reliably calls the matching tool with them.
     const mediaIntent = detectMediaIntent(userQuery);
+    // Prompted mode (model without native function calling): hand the model a
+    // SMALL, ordered toolset — weak models depend on harness quality far more
+    // than flagships, and a ~70-tool catalog rendered as prose overwhelms
+    // them. Intent tools (media, file/RAG) are pinned so they survive the cap.
+    if (toolCallMode === 'prompted' && !toolsOverride) {
+      try {
+        const { capToolsForPrompted } = require('./agents/prompted-tool-calling');
+        const pinned = [
+          mediaIntent && mediaIntent.tool,
+          ...(Array.isArray(toolContext.fileIds) && toolContext.fileIds.length
+            ? ['rag_retrieve', 'docintel_analyze', 'search_docs']
+            : []),
+        ].filter(Boolean);
+        tools = capToolsForPrompted(tools, { pinned });
+      } catch (capErr) {
+        console.warn('[agentic-chat] prompted tool cap failed (using full set):', capErr && capErr.message);
+      }
+    }
+    const availableToolNames = new Set(tools.map((tool) => tool && tool.name).filter(Boolean));
     let initialToolChoice = mediaIntent?.tool && mediaIntent.confidence === 'high' && availableToolNames.has(mediaIntent.tool)
       ? mediaIntent.tool
       : null;
@@ -487,6 +545,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       version: openclawProfile.version,
       reason: openclawProfile.routing.reason,
       capabilities: openclawProfile.capabilities,
+      toolCallMode,
     };
     state.meta.executionProfile = {
       version: executionProfile.version,
@@ -523,8 +582,15 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
     const isRepoTask = /\b(clon|repo|github|git|commit|push|pr|pull ?request|deploy|despleg|codex|cursor|claude.?code|program|c[oó]digo|refactor|mejora|arregla|corrige)\b/i.test(userQuery);
     const isAutonomous = isGoalCommand || isRepoTask || /\b(meses?|semanas?|sin.?detene|no.?pare?s|background|segundo.?plano|auto.?ejecut|contin[uú]a.?trabajando|trabaja.?por.?meses|no.?funciona.?a[uú]n|todav[ií]a.?no.?funciona)\b/i.test(userQuery);
 
-    const maxStepsOverride = isAutonomous ? Math.max(maxSteps, isGoalCommand ? 60 : 30) : maxSteps;
+    let maxStepsOverride = isAutonomous ? Math.max(maxSteps, isGoalCommand ? 60 : 30) : maxSteps;
     const maxRuntimeOverride = isAutonomous ? Math.max(maxRuntimeMs, 15 * 60 * 1000) : maxRuntimeMs;
+    // Prompted mode: budgets enforced in code, not prompts. Weak models drift
+    // on long horizons; a tighter step budget converges to finalize sooner
+    // (the loop already force-narrows to finalize on the last step).
+    if (toolCallMode === 'prompted') {
+      const promptedCap = Number(process.env.SIRAGPT_PROMPTED_MAX_STEPS) || 10;
+      maxStepsOverride = Math.min(maxStepsOverride, Math.max(3, promptedCap));
+    }
 
     const extraSystem = [
       'Responde SIEMPRE en español, con tono profesional y cercano. No uses emojis.',
@@ -600,6 +666,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       maxRuntimeMs: maxRuntimeOverride,
       extraSystem,
       initialToolChoice,
+      toolCallMode,
       ctx: {
         ...toolContext,
         signal,
@@ -1037,7 +1104,14 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       console.warn('[skills-in-chat] run_skill tool unavailable:', skillToolErr && skillToolErr.message);
     }
 
-    const wantsMedia = !!userQuery && (isAgenticActionRequest(userQuery) || !!detectMediaIntent(userQuery).kind);
+    // Creation tools (image/video/audio/music + the 30+ diagram/chart tools)
+    // ship on EVERY agentic turn by default — a mid-conversation "ahora hazme
+    // un diagrama de eso" must work even when the opening turn had no media
+    // intent. The per-turn tool selector below keeps the effective set small.
+    // SIRAGPT_MEDIA_TOOLS_ALWAYS=0 restores the legacy intent-gated loading.
+    const mediaAlways = envFlagEnabled(process.env.SIRAGPT_MEDIA_TOOLS_ALWAYS, true);
+    const wantsMedia = mediaAlways
+      || (!!userQuery && (isAgenticActionRequest(userQuery) || !!detectMediaIntent(userQuery).kind));
     const tools = wantsMedia ? [...base, ...loadMediaTools()] : base;
     const seen = new Set();
     const deduped = tools.filter((tool) => {
@@ -1095,6 +1169,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
     isEnabled,
     shouldUseAgenticChat,
     modelSupportsFunctionCalling,
+    resolveToolCallMode,
+    promptedToolsEnabled,
+    agentFirstEnabled,
     // Exposed for tests:
     _internal: {
       freshState,

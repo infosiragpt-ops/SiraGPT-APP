@@ -708,6 +708,11 @@ function buildDegradedAnswer(stoppedReason) {
  * @param {string}   [opts.extraSystem]   appended to the system prompt (query-specific guidance)
  * @param {function} [opts.finalizeGuard] validates finalize calls before allowing termination
  * @param {string}   [opts.initialToolChoice] optional tool name to force on the first model step
+ * @param {'native'|'prompted'} [opts.toolCallMode='native'] — 'prompted' drives
+ *   models WITHOUT native function calling: tools are described in the system
+ *   prompt, the trace is converted to a provider-safe transcript (no `tools`,
+ *   no `tool_choice`, no role:'tool'), and fenced ```tool_call JSON blocks are
+ *   parsed back into OpenAI-shaped tool_calls. See agents/prompted-tool-calling.
  */
 async function run(openai, opts) {
   const {
@@ -723,6 +728,7 @@ async function run(openai, opts) {
     extraSystem = '',
     finalizeGuard = null,
     initialToolChoice = null,
+    toolCallMode = 'native',
     compactMaxChars = DEFAULT_COMPACT_MAX_CHARS,
     compactTailRounds = DEFAULT_COMPACT_TAIL_ROUNDS,
     onCompact = () => {},
@@ -743,8 +749,23 @@ async function run(openai, opts) {
 
   const toolsSchema = registry.map(toOpenAITool);
 
+  // Prompted tool-calling (fallback ladder rung 2): the registry is described
+  // in the system prompt and calls are parsed from fenced JSON blocks. The
+  // internal `messages` trace stays CANONICAL (assistant.tool_calls +
+  // role:'tool') so compaction, observation aging and the duplicate cache work
+  // unchanged — only the per-request payload is converted.
+  const prompted = toolCallMode === 'prompted';
+  const promptedTC = prompted ? require('./agents/prompted-tool-calling') : null;
+  const registryNames = new Set(registry.map((t) => t.name));
+  const promptedBlock = prompted ? promptedTC.buildPromptedToolsBlock(registry) : '';
+
   const messages = [
-    { role: 'system', content: SYSTEM_PROMPT + (extraSystem ? `\n\n${extraSystem}` : '') },
+    {
+      role: 'system',
+      content: SYSTEM_PROMPT
+        + (extraSystem ? `\n\n${extraSystem}` : '')
+        + (promptedBlock ? `\n\n${promptedBlock}` : ''),
+    },
     { role: 'user',   content: query },
   ];
 
@@ -879,13 +900,27 @@ async function run(openai, opts) {
       else ctx.signal.addEventListener('abort', onParentAbort, { once: true });
     }
     try {
-      resp = await openai.chat.completions.create({
-        model,
-        messages,
-        tools: toolsSchema,
-        tool_choice: toolChoice,
-        temperature: 0.3,
-      }, { signal: stepCtl.signal });
+      if (prompted) {
+        // Provider-safe payload: no tools/tool_choice params, no role:'tool'
+        // messages. Forced narrowing (finalize / initial tool) is emulated
+        // with an explicit instruction appended to the transcript.
+        const forceToolName = (toolChoice && typeof toolChoice === 'object' && toolChoice.function)
+          ? toolChoice.function.name
+          : null;
+        resp = await openai.chat.completions.create({
+          model,
+          messages: promptedTC.toPromptedTranscript(messages, { forceToolName }),
+          temperature: 0.3,
+        }, { signal: stepCtl.signal });
+      } else {
+        resp = await openai.chat.completions.create({
+          model,
+          messages,
+          tools: toolsSchema,
+          tool_choice: toolChoice,
+          temperature: 0.3,
+        }, { signal: stepCtl.signal });
+      }
     } catch (err) {
       const timedOut = stepCtl.signal.aborted && !(ctx?.signal && ctx.signal.aborted);
       stoppedReason = timedOut
@@ -914,6 +949,23 @@ async function run(openai, opts) {
       if (parsed.toolCalls.length > 0) {
         msg.tool_calls = parsed.toolCalls;
         try { console.log(`[react-agent] parsed ${parsed.toolCalls.length} native tool call(s) from content (model=${model})`); } catch (_) { /* noop */ }
+      }
+    }
+
+    // Prompted mode: parse fenced ```tool_call JSON blocks (or bare JSON
+    // objects carrying a "tool" key) into OpenAI-shaped tool_calls. Names are
+    // validated against the registry so quoted JSON in prose is never
+    // mistaken for a call. Unique ids per step keep tool_call_id pairing sane.
+    if (prompted && (!msg.tool_calls || msg.tool_calls.length === 0)
+        && promptedTC.hasPromptedToolCalls(msg.content)) {
+      const parsed = promptedTC.parsePromptedToolCalls(msg.content, registryNames);
+      if (parsed.toolCalls.length > 0) {
+        msg.content = parsed.cleanedContent;
+        msg.tool_calls = parsed.toolCalls.map((c, i) => ({
+          ...c,
+          id: `call_p${step}_${i}_${c.function.name}`.slice(0, 60),
+        }));
+        try { console.log(`[react-agent] parsed ${msg.tool_calls.length} prompted tool call(s) from content (model=${model})`); } catch (_) { /* noop */ }
       }
     }
 
