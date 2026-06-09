@@ -360,6 +360,7 @@ const ragRoutes = require('./src/routes/rag');
 const agentRoutes = require('./src/routes/agent');
 const agentTaskRoutes = require('./src/routes/agent-task');
 const agentBatchRoutes = require('./src/routes/agent-batch');
+const agentHarnessRoutes = require('./src/routes/agent-harness');
 const seAgentsRoutes = require('./src/routes/se-agents');
 const searchBrainRoutes = require('./src/routes/search-brain');
 const searchBrainUniversalRoutes = require('./src/routes/search-brain-universal');
@@ -1012,6 +1013,9 @@ app.use('/api/agent', idempotency);
 app.use('/api/agent', agentTaskRoutes);
 app.use('/api/agent', agentBatchRoutes);
 app.use('/api/agent', agentRoutes);
+// Agent harness (Phase 1): interactive tool-permission decisions + external
+// MCP server registration for the chat agent.
+app.use('/api/agent', agentHarnessRoutes);
 app.use('/api/se-agents', seAgentsRoutes);
 app.use('/api/artifacts', artifactsRoutes);
 app.use('/api/document-ai', documentGenerateAiRoutes);

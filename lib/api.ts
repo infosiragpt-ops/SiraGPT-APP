@@ -223,6 +223,88 @@ export type MemoryPayload = {
   items: MemoryItem[]
 }
 
+// ── Agent harness (Phase 1) typed SSE events ───────────────────────────────
+// Every frame carries a globally monotonic `seq` plus a `blockIndex` (one
+// block per tool call), so the store renders deterministically regardless of
+// frame interleaving or stream reconnects.
+export type AgentToolCallStartEvent = {
+  type: 'tool_call_start'
+  seq: number
+  blockIndex: number
+  id: string
+  name: string
+  humanDescription?: string
+  args?: string
+  permissionTier?: 'auto' | 'confirm'
+}
+export type AgentToolExecutingEvent = {
+  type: 'tool_executing'
+  seq: number
+  blockIndex: number
+  id: string
+  name?: string
+}
+export type AgentToolResultEvent = {
+  type: 'tool_result'
+  seq: number
+  blockIndex: number
+  id: string
+  name?: string
+  preview?: string
+  isError?: boolean
+  durationMs?: number
+  status?: string
+}
+export type AgentPermissionRequestEvent = {
+  type: 'permission_request'
+  seq: number
+  blockIndex: number
+  id: string
+  permissionId: string
+  name: string
+  humanDescription?: string
+  args?: string
+  expiresInMs?: number
+}
+export type AgentPermissionResolvedEvent = {
+  type: 'permission_resolved'
+  seq: number
+  blockIndex: number
+  id: string
+  decision?: string
+  scope?: string
+  cached?: boolean
+}
+export type AgentDoneEvent = {
+  type: 'agent_done'
+  seq: number
+  blockIndex?: number
+  steps?: number
+  toolCalls?: number
+  errors?: number
+  durationMs?: number
+  tokensEstimate?: number
+  costUsdEstimate?: number | null
+  stoppedReason?: string | null
+  interrupted?: boolean
+}
+export type AgentStreamEvent =
+  | AgentToolCallStartEvent
+  | AgentToolExecutingEvent
+  | AgentToolResultEvent
+  | AgentPermissionRequestEvent
+  | AgentPermissionResolvedEvent
+  | AgentDoneEvent
+
+const AGENT_STREAM_EVENT_TYPES = new Set([
+  'tool_call_start',
+  'tool_executing',
+  'tool_result',
+  'permission_request',
+  'permission_resolved',
+  'agent_done',
+])
+
 type AIStreamOptions = {
   onReplace?: (content: string) => void
   onSources?: (payload: WebSourcesPayload) => void
@@ -236,6 +318,8 @@ type AIStreamOptions = {
   // Tool-call deltas surfaced by reasoning models mid-stream: `name` arrives
   // on the first frame for an index, `argsDelta` carries argument fragments.
   onToolCall?: (payload: { index: number; name?: string; argsDelta?: string }) => void
+  // Agent harness: typed tool-call / permission / done frames (AgentTrace).
+  onAgentEvent?: (event: AgentStreamEvent) => void
 }
 
 export type GrokVoiceSessionSnapshot = {
@@ -1107,6 +1191,19 @@ class ApiClient {
     });
   }
 
+  /**
+   * Answer a pending agent tool-permission request (permission_request SSE
+   * frame). `allow` resumes the paused tool call, `always_allow_in_chat`
+   * additionally whitelists the tool for the rest of the chat, `deny` feeds
+   * a permission-denied tool result back to the model.
+   */
+  async resolveAgentPermission(permissionId: string, decision: 'allow' | 'always_allow_in_chat' | 'deny') {
+    return this.request('/agent/permission', {
+      method: 'POST',
+      body: JSON.stringify({ permissionId, decision }),
+    });
+  }
+
 
   // Stream chat completions from /ai/generate. Resilient by design:
   // automatically reconnects at the transport layer BEFORE the user sees
@@ -1324,6 +1421,13 @@ class ApiClient {
                     ...(jsonData.name ? { name: jsonData.name } : {}),
                     ...(jsonData.argsDelta ? { argsDelta: jsonData.argsDelta } : {}),
                   });
+                }
+              } else if (typeof jsonData.type === 'string' && AGENT_STREAM_EVENT_TYPES.has(jsonData.type)) {
+                // Agent harness typed frames (tool_call_start / tool_executing /
+                // tool_result / permission_request / permission_resolved /
+                // agent_done) — ordered by seq/blockIndex in the store.
+                if (options.onAgentEvent) {
+                  options.onAgentEvent(jsonData as AgentStreamEvent);
                 }
               } else if (jsonData.type === 'web_sources' && Array.isArray(jsonData.sources)) {
                 // ChatGPT-style searched-sources frame. Surface to the UI

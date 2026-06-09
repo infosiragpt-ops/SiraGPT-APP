@@ -82,6 +82,7 @@ import SpotifyConnectionCard from "./SpotifyConnectionCard"
 import SpotifyResults from "./spotify-results"
 import { ThinkingPlaceholder } from "./thinking-placeholder"
 import ThinkingTrace from "./thinking-trace"
+import AgentTrace from "./agent-trace"
 import MessageActionRail from "./MessageActionRail"
 import SourcesChip from "./SourcesChip"
 import ComputerUseReasoning from "./ComputerUseReasoning"
@@ -138,6 +139,59 @@ const extractWebSources = (message: any): { sources: any[]; activity: any } => {
 // reloaded turns carry `reasoning` as a first-class column on the Message row
 // and the thinking duration inside the persisted metadata JSON
 // (`reasoningDurationMs`).
+// Agent harness (AgentTrace): live turns carry `agentSteps`/`agentRun`
+// straight on the message (typed SSE frames); historically loaded messages
+// hydrate from the persisted `agentMetadata` column (compact projection
+// written by the backend next to the agent_steps rows).
+const extractAgentTrace = (message: any): {
+    steps: any[];
+    run: any | null;
+    permission: any | null;
+} => {
+    if (Array.isArray(message?.agentSteps) && message.agentSteps.length > 0) {
+        return {
+            steps: message.agentSteps,
+            run: message?.agentRun || null,
+            permission: message?.agentPermission || null,
+        };
+    }
+    const meta = message?.agentMetadata;
+    const parsed = meta && typeof meta === 'string'
+        ? (() => { try { return JSON.parse(meta); } catch { return null; } })()
+        : (meta && typeof meta === 'object' ? meta : null);
+    if (parsed && Array.isArray(parsed.steps)) {
+        const steps = parsed.steps
+            .filter((s: any) => s && s.type === 'tool_call')
+            .map((s: any, i: number) => ({
+                id: `hist_${s.stepIndex ?? i}`,
+                blockIndex: s.stepIndex ?? i,
+                seq: i,
+                type: 'tool_call',
+                name: s.toolName || 'tool',
+                humanDescription: s.humanDescription,
+                args: s.argsPreview,
+                preview: s.resultPreview,
+                status: s.status === 'running' ? 'interrupted' : (s.status || 'completed'),
+                isError: Boolean(s.isError),
+                durationMs: s.durationMs,
+            }));
+        return {
+            steps,
+            run: {
+                status: parsed.status === 'interrupted' ? 'interrupted' : 'completed',
+                toolCalls: parsed.toolCalls,
+                errors: parsed.errors,
+                durationMs: parsed.durationMs,
+                tokensEstimate: parsed.tokensEstimate,
+                costUsdEstimate: parsed.costUsdEstimate ?? null,
+                stoppedReason: parsed.stoppedReason ?? null,
+            },
+            permission: null,
+        };
+    }
+    return { steps: [], run: null, permission: null };
+};
+
 const extractReasoning = (message: any): {
     reasoning: string;
     reasoningStreaming: boolean;
@@ -996,6 +1050,8 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     // placeholder — the trace itself carries the "Pensando…" header, so
     // showing both would duplicate the affordance.
     const reasoningView = extractReasoning(message);
+    const agentTraceView = extractAgentTrace(message);
+    const hasAgentTrace = isAssistant && agentTraceView.steps.length > 0;
     const hasLiveReasoning = isAssistant && (reasoningView.reasoningStreaming || (isStreaming && !!reasoningView.reasoning));
     const isThinking = isAssistant && !message.error && !hasLiveReasoning && (
       (isStreaming && !message.content) || !!(message as any).progressStage
@@ -1343,7 +1399,10 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
             if (language === 'agent-task-state') {
                 try {
                     const state = JSON.parse(codeString);
-                    return <AgenticStepsRenderer state={state} onDocumentPreview={onDocumentPreview} />;
+                    // When the typed AgentTrace timeline is active for this
+                    // message, the sentinel contributes only its artifacts —
+                    // one timeline, not two.
+                    return <AgenticStepsRenderer state={state} hideSteps={hasAgentTrace} onDocumentPreview={onDocumentPreview} />;
                 } catch {
                     return null;
                 }
@@ -1476,7 +1535,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                     if (lang === 'agent-task-state') {
                         try {
                             const state = JSON.parse(codeString);
-                            return <AgenticStepsRenderer state={state} onDocumentPreview={onDocumentPreview} />;
+                            return <AgenticStepsRenderer state={state} hideSteps={hasAgentTrace} onDocumentPreview={onDocumentPreview} />;
                         } catch {
                             return null;
                         }
@@ -1514,9 +1573,11 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                 );
             },
         // onDocumentPreview is typically stable (callback from parent);
-        // baseComponents is stable. Deps stay narrow on purpose.
+        // baseComponents is stable. hasAgentTrace flips once when the first
+        // typed tool frame lands — the map must recompute then so the live
+        // sentinel hands the timeline over to AgentTrace.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-        }), [baseComponents, onDocumentPreview]);
+        }), [baseComponents, onDocumentPreview, hasAgentTrace]);
 
         // Final (post-streaming) map: enriches the table with controls
         // tied to the now-stable message.content. Recomputed only when
@@ -3101,14 +3162,26 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
 
                 {message.role === 'ASSISTANT' && (
                     <div className="chat-assistant-message w-full max-w-full md:max-w-3xl">
-                        {!message.error && (reasoningView.reasoning || reasoningView.reasoningStreaming) && (
+                        {!message.error && hasAgentTrace ? (
+                            // AgentTrace = ThinkingTrace evolved: same shimmer
+                            // header + reasoning markdown, plus the typed
+                            // tool-call timeline and inline permission card.
+                            <AgentTrace
+                                reasoning={reasoningView.reasoning}
+                                reasoningStreaming={reasoningView.reasoningStreaming}
+                                reasoningDurationMs={reasoningView.reasoningDurationMs}
+                                steps={agentTraceView.steps}
+                                run={agentTraceView.run}
+                                permission={agentTraceView.permission}
+                            />
+                        ) : !message.error && (reasoningView.reasoning || reasoningView.reasoningStreaming) ? (
                             <ThinkingTrace
                                 reasoning={reasoningView.reasoning}
                                 streaming={reasoningView.reasoningStreaming}
                                 durationMs={reasoningView.reasoningDurationMs}
                                 toolCalls={reasoningView.reasoningToolCalls}
                             />
-                        )}
+                        ) : null}
                         {message.error ? (
                             <ErrorMessage onRegenerate={onRegenerate} />
                         ) : isThinking ? (

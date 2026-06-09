@@ -166,6 +166,9 @@ model User {
   // User memory relations (orchestration)
   memories UserMemory[]
 
+  // Agent harness — external MCP servers registered by this user.
+  mcpServers McpServer[]
+
   // F1 — declarative RBAC. `userRoles` joins to `user_roles` and
   // ultimately to `roles` + `permissions`. The legacy `isSuperAdmin`
   // flag stays as a shadow until F5 sunset.
@@ -389,6 +392,12 @@ model Message {
   reasoning        String? @db.Text
   reasoningDetails Json?   @map("reasoning_details")
 
+  // Agent harness (Phase 1): compact projection of the agent run that
+  // produced this assistant message — status, totals and per-step previews
+  // so chat history re-renders the collapsed AgentTrace without joining
+  // agent_steps. The full-fidelity trace lives in the AgentStep relation.
+  agentMetadata Json? @map("agent_metadata")
+
   // Soft-delete tombstone — mirrors Chat.deletedAt so GDPR delete can
   // cascade without losing chat shape (foreign-key cascade still works
   // on hard purge from the cron).
@@ -412,11 +421,61 @@ model Message {
   generatedArtifacts GeneratedArtifact[]
   bookmarks          Bookmark[]
   run                ChatRun?            @relation("RunMessage", fields: [runId], references: [id], onDelete: SetNull)
+  agentSteps         AgentStep[]
 
   @@index([chatId, timestamp])
   @@index([chatId, deletedAt])
   @@index([runId])
   @@map("messages")
+}
+
+// ────────────────────────────────────────────────────────────
+// AgentStep — full-fidelity trace of one agent-harness step (a reasoning
+// burst or a tool call) for the assistant message it produced. Streamed
+// live over SSE during the turn; persisted here after the message row
+// exists so history re-renders complete AgentTrace timelines. Results are
+// capped at 30k chars (explicit truncation marker) by the event stream.
+model AgentStep {
+  id         String   @id @default(cuid())
+  messageId  String   @map("message_id")
+  stepIndex  Int      @map("step_index")
+  type       String // 'tool_call' | 'reasoning'
+  toolName   String?  @map("tool_name")
+  args       Json?
+  result     Json?
+  status     String   @default("completed") // completed | error | denied | interrupted | running
+  durationMs Int?     @map("duration_ms")
+  isError    Boolean  @default(false) @map("is_error")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId, stepIndex])
+  @@map("agent_steps")
+}
+
+// ────────────────────────────────────────────────────────────
+// McpServer — a user-registered EXTERNAL MCP server (Model Context
+// Protocol) whose tools are discovered at the start of an agent turn and
+// merged into the chat toolset as mcp__<server>__<tool> with permission
+// tier 'confirm'. `headersEncrypted` holds the AES-256-CBC encrypted JSON
+// of auth headers (utils/encryption) — never returned by the API.
+model McpServer {
+  id               String   @id @default(cuid())
+  userId           String   @map("user_id")
+  name             String
+  url              String
+  transport        String   @default("streamable-http") // streamable-http | sse
+  headersEncrypted String?  @map("headers_encrypted") @db.Text
+  enabled          Boolean  @default(true)
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, name])
+  @@index([userId, enabled])
+  @@map("mcp_servers")
 }
 
 // ────────────────────────────────────────────────────────────

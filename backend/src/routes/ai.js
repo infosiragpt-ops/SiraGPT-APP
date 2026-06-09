@@ -1393,7 +1393,7 @@ async function persistUserMessageOnce(chatId, content, filesJson = null, windowM
   });
 }
 
-async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false, extraMetadata = null, userPlan = null, reasoningPayload = null) {
+async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false, extraMetadata = null, userPlan = null, reasoningPayload = null, agentRun = null) {
   let assistantMessage = null;
   const normalizedResponseContent = typeof fullResponseContent === 'string'
     ? fullResponseContent
@@ -1491,6 +1491,18 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
             : chat.title
         }
       });
+
+      // Agent harness: persist the run trace now that the assistant row
+      // exists — agent_steps rows (full fidelity) + messages.agent_metadata
+      // (compact projection for history hydration). Best-effort by design.
+      if (agentRun && assistantMessage?.id) {
+        try {
+          const { persistAgentRun } = require('../services/agent-harness/agent-steps-store');
+          await persistAgentRun({ prisma, messageId: assistantMessage.id, run: agentRun, model });
+        } catch (agentPersistErr) {
+          console.warn('[ai/generate] agent run persist failed:', agentPersistErr && agentPersistErr.message);
+        }
+      }
     }
 
     // ✅ Track usage
@@ -5266,7 +5278,15 @@ router.post(
                   && __agenticAnswer.length > 0
                   && __agenticAnswer !== '(agent returned empty message)';
                 if (__agenticOk) {
+                  // Carry the harness trace to the persistence layer so the
+                  // assistant message gets agent_steps + agent_metadata.
+                  req._agentRun = agenticResult.agentRun || null;
                   return agenticResult.finalAnswer;
+                }
+                // Stop button / client abort: keep the partial trace and mark
+                // the run interrupted — what WAS generated stays visible.
+                if (agenticResult && agenticResult.stoppedReason === 'aborted' && agenticResult.agentRun) {
+                  req._agentRun = agenticResult.agentRun;
                 }
                 // Degraded/empty → do NOT return it. Fall through to the
                 // reliable plain stream below; aiService.generateStream emits a
@@ -5824,6 +5844,7 @@ router.post(
           Object.keys(assistantMeta).length > 0 ? assistantMeta : null,
           req.user?.plan || null,
           __reasoningSink,
+          req._agentRun || null,
         );
         if (req._activeGenerateTurn && !req._activeGenerateTurn.settled) {
           req._activeGenerateTurn.resolve(savedChat);

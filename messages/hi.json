@@ -349,5 +349,24 @@
     "toolReading": "स्रोत पढ़ रहा है",
     "toolRunning": "कोड चला रहा है",
     "toolUsing": "{name} का उपयोग कर रहा है"
+  },
+  "agent": {
+    "working": "काम चल रहा है…",
+    "summary": "{duration} सोचा · {count} टूल इस्तेमाल किए",
+    "summaryOne": "{duration} सोचा · 1 टूल इस्तेमाल किया",
+    "summaryNoTools": "{duration} सोचा",
+    "interrupted": "उपयोगकर्ता ने रोक दिया",
+    "details": "विवरण",
+    "arguments": "आर्गुमेंट",
+    "result": "परिणाम",
+    "error": "त्रुटि",
+    "usingTool": "{name} का उपयोग हो रहा है",
+    "permissionTitle": "एजेंट {name} का उपयोग करना चाहता है",
+    "allow": "अनुमति दें",
+    "allowAlways": "इस चैट में हमेशा अनुमति दें",
+    "deny": "अस्वीकार करें",
+    "permissionDeniedChip": "अस्वीकृत",
+    "permissionError": "आपका उत्तर नहीं भेजा जा सका। फिर से प्रयास करें।",
+    "traceAria": "एजेंट गतिविधि"
   }
 }

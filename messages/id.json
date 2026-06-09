@@ -349,5 +349,24 @@
     "toolReading": "Membaca sumber",
     "toolRunning": "Menjalankan kode",
     "toolUsing": "Menggunakan {name}"
+  },
+  "agent": {
+    "working": "Sedang bekerja…",
+    "summary": "Berpikir {duration} · memakai {count} alat",
+    "summaryOne": "Berpikir {duration} · memakai 1 alat",
+    "summaryNoTools": "Berpikir {duration}",
+    "interrupted": "Dihentikan oleh pengguna",
+    "details": "Detail",
+    "arguments": "Argumen",
+    "result": "Hasil",
+    "error": "Kesalahan",
+    "usingTool": "Menggunakan {name}",
+    "permissionTitle": "Agen ingin menggunakan {name}",
+    "allow": "Izinkan",
+    "allowAlways": "Selalu izinkan di chat ini",
+    "deny": "Tolak",
+    "permissionDeniedChip": "Ditolak",
+    "permissionError": "Jawaban tidak dapat dikirim. Coba lagi.",
+    "traceAria": "Aktivitas agen"
   }
 }

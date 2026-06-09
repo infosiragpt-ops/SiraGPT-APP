@@ -349,5 +349,24 @@
     "toolReading": "Čítanie zdroja",
     "toolRunning": "Spúšťanie kódu",
     "toolUsing": "Používa {name}"
+  },
+  "agent": {
+    "working": "Working…",
+    "summary": "Thought for {duration} · used {count} tools",
+    "summaryOne": "Thought for {duration} · used 1 tool",
+    "summaryNoTools": "Thought for {duration}",
+    "interrupted": "Stopped by user",
+    "details": "Details",
+    "arguments": "Arguments",
+    "result": "Result",
+    "error": "Error",
+    "usingTool": "Using {name}",
+    "permissionTitle": "The agent wants to use {name}",
+    "allow": "Allow",
+    "allowAlways": "Always allow in this chat",
+    "deny": "Deny",
+    "permissionDeniedChip": "Denied",
+    "permissionError": "Could not send your answer. Please try again.",
+    "traceAria": "Agent activity"
   }
 }

@@ -426,9 +426,19 @@ export interface AgentTaskState {
   done: boolean
   stoppedReason?: string
   error?: string
+  /** ISO timestamp of the last SSE event seen (heartbeats included). */
+  lastEventAt?: string
 }
 
-export function reduceEvent(state: AgentTaskState, evt: AgentTaskEvent): AgentTaskState {
+export function reduceEvent(prevState: AgentTaskState, evt: AgentTaskEvent): AgentTaskState {
+  // Liveness stamp — EVERY event (heartbeats included, which otherwise
+  // fall through to `default` untouched) refreshes lastEventAt so the
+  // UI's stale-stream guard can tell "model thinking quietly" apart
+  // from "stream actually dead".
+  const state: AgentTaskState = {
+    ...prevState,
+    lastEventAt: (evt as { ts?: string }).ts || new Date().toISOString(),
+  }
   switch (evt.type) {
     case "queue_status":
       return {

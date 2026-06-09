@@ -349,5 +349,24 @@
     "toolReading": "출처 읽는 중",
     "toolRunning": "코드 실행 중",
     "toolUsing": "{name} 사용 중"
+  },
+  "agent": {
+    "working": "작업 중…",
+    "summary": "{duration} 동안 생각 · 도구 {count}개 사용",
+    "summaryOne": "{duration} 동안 생각 · 도구 1개 사용",
+    "summaryNoTools": "{duration} 동안 생각",
+    "interrupted": "사용자가 중지함",
+    "details": "세부정보",
+    "arguments": "인수",
+    "result": "결과",
+    "error": "오류",
+    "usingTool": "{name} 사용 중",
+    "permissionTitle": "에이전트가 {name}을(를) 사용하려고 합니다",
+    "allow": "허용",
+    "allowAlways": "이 채팅에서 항상 허용",
+    "deny": "거부",
+    "permissionDeniedChip": "거부됨",
+    "permissionError": "응답을 보낼 수 없습니다. 다시 시도해 주세요.",
+    "traceAria": "에이전트 활동"
   }
 }

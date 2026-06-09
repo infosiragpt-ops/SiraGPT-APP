@@ -349,5 +349,24 @@
     "toolReading": "Bron lezen",
     "toolRunning": "Code uitvoeren",
     "toolUsing": "{name} gebruiken"
+  },
+  "agent": {
+    "working": "Bezig…",
+    "summary": "Dacht {duration} na · {count} tools gebruikt",
+    "summaryOne": "Dacht {duration} na · 1 tool gebruikt",
+    "summaryNoTools": "Dacht {duration} na",
+    "interrupted": "Gestopt door gebruiker",
+    "details": "Details",
+    "arguments": "Argumenten",
+    "result": "Resultaat",
+    "error": "Fout",
+    "usingTool": "{name} wordt gebruikt",
+    "permissionTitle": "De agent wil {name} gebruiken",
+    "allow": "Toestaan",
+    "allowAlways": "Altijd toestaan in deze chat",
+    "deny": "Weigeren",
+    "permissionDeniedChip": "Geweigerd",
+    "permissionError": "Je antwoord kon niet worden verzonden. Probeer opnieuw.",
+    "traceAria": "Agentactiviteit"
   }
 }

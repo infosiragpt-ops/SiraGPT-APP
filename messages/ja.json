@@ -419,5 +419,24 @@
     "toolReading": "ソースを読み取り中",
     "toolRunning": "コードを実行中",
     "toolUsing": "{name}を使用中"
+  },
+  "agent": {
+    "working": "作業中…",
+    "summary": "{duration}思考 · ツールを{count}回使用",
+    "summaryOne": "{duration}思考 · ツールを1回使用",
+    "summaryNoTools": "{duration}思考",
+    "interrupted": "ユーザーにより停止",
+    "details": "詳細",
+    "arguments": "引数",
+    "result": "結果",
+    "error": "エラー",
+    "usingTool": "{name}を使用中",
+    "permissionTitle": "エージェントが{name}を使おうとしています",
+    "allow": "許可",
+    "allowAlways": "このチャットで常に許可",
+    "deny": "拒否",
+    "permissionDeniedChip": "拒否済み",
+    "permissionError": "回答を送信できませんでした。もう一度お試しください。",
+    "traceAria": "エージェントの活動"
   }
 }

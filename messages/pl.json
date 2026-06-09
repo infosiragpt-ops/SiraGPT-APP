@@ -349,5 +349,24 @@
     "toolReading": "Czytanie źródła",
     "toolRunning": "Uruchamianie kodu",
     "toolUsing": "Używa {name}"
+  },
+  "agent": {
+    "working": "Pracuje…",
+    "summary": "Myślał {duration} · użyto narzędzi: {count}",
+    "summaryOne": "Myślał {duration} · użyto 1 narzędzia",
+    "summaryNoTools": "Myślał {duration}",
+    "interrupted": "Zatrzymane przez użytkownika",
+    "details": "Szczegóły",
+    "arguments": "Argumenty",
+    "result": "Wynik",
+    "error": "Błąd",
+    "usingTool": "Używanie {name}",
+    "permissionTitle": "Agent chce użyć {name}",
+    "allow": "Zezwól",
+    "allowAlways": "Zawsze zezwalaj w tym czacie",
+    "deny": "Odmów",
+    "permissionDeniedChip": "Odmówiono",
+    "permissionError": "Nie udało się wysłać odpowiedzi. Spróbuj ponownie.",
+    "traceAria": "Aktywność agenta"
   }
 }
