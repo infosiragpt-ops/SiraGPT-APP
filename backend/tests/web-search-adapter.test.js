@@ -80,6 +80,49 @@ test('skips a provider that returns an empty list and falls through', async () =
   assert.equal(out.attempts[0].count, 0);
 });
 
+test('search excludes scientific providers for casual/general-web prompts', async () => {
+  let scientificHit = false;
+  webSearch.setProviders([
+    {
+      id: 'openalex',
+      name: 'openalex',
+      priority: 3,
+      enabled: true,
+      async search() {
+        scientificHit = true;
+        return [{ title: 'Unrelated academic paper', url: 'https://doi.org/nope', snippet: 'paper', source: 'openalex' }];
+      },
+    },
+    makeProvider({ id: 'duckduckgo', priority: 10, results: [{ title: 'AI news today', url: 'https://news.test/ai', snippet: 'latest ai news' }] }),
+  ]);
+
+  const out = await webSearch.search('últimas noticias inteligencia artificial', { maxResults: 5 });
+  assert.equal(scientificHit, false, 'OpenAlex/Crossref tier must not run for casual news prompts');
+  assert.equal(out.provider, 'duckduckgo');
+  assert.equal(out.results[0].url, 'https://news.test/ai');
+});
+
+test('search includes scientific providers for explicit research prompts', async () => {
+  let scientificHit = false;
+  webSearch.setProviders([
+    {
+      id: 'openalex',
+      name: 'openalex',
+      priority: 3,
+      enabled: true,
+      async search() {
+        scientificHit = true;
+        return [{ title: 'Cancer study', url: 'https://doi.org/study', snippet: 'study', source: 'openalex' }];
+      },
+    },
+    makeProvider({ id: 'duckduckgo', priority: 10, results: [{ title: 'Cancer overview', url: 'https://web.test/cancer', snippet: 'overview' }] }),
+  ]);
+
+  const out = await webSearch.search('estudios sobre cáncer', { maxResults: 5 });
+  assert.equal(scientificHit, true, 'scientific tier should run for research prompts');
+  assert.equal(out.provider, 'openalex');
+});
+
 test('falls through when a provider throws', async () => {
   webSearch.setProviders([
     makeProvider({ id: 'broken', priority: 10, throws: 'http 500 from upstream' }),
@@ -229,8 +272,9 @@ test('web_search tool returns structured JSON with normalised shape', async () =
   webSearch.setProviders([
     makeProvider({ id: 't', priority: 10, results: [{ title: 'Tool', url: 'https://t.test', snippet: 'tool' }] }),
   ]);
-  const obs = await agentTools.web_search.handler({ query: 'hi', maxResults: 3 });
-  assert.equal(obs.provider, 't');
+  const obs = await agentTools.web_search.handler({ query: 'tool news', maxResults: 3 });
+  assert.equal(obs.provider, 'aggregate:1');
+  assert.deepEqual(obs.providers, ['t']);
   assert.equal(obs.count, 1);
   assert.equal(obs.results[0].url, 'https://t.test');
   assert.equal(Array.isArray(obs.attempts), true);

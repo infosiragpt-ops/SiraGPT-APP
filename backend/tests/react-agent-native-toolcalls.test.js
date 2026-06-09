@@ -7,7 +7,38 @@ const {
   parseNativeToolCalls,
   hasNativeToolCalls,
   stripNativeToolCallMarkup,
+  classifyToolError,
 } = require('../src/services/react-agent');
+
+test('classifyToolError tags upstream blips transient and deterministic failures terminal', () => {
+  // Transient (flaky upstream → should NOT retire a tool fast).
+  for (const e of [
+    'Request timed out after 60000ms',
+    'fetch failed: ECONNRESET',
+    { status: 429, message: 'Too Many Requests' },
+    { status: 503, error: 'Service Unavailable' },
+    new Error('upstream provider overloaded, try again'),
+    { status: 529, error: 'overloaded_error' },
+    { code: 'ETIMEDOUT' },
+    'rate limit exceeded',
+  ]) {
+    assert.equal(classifyToolError(e), 'transient', `should be transient: ${JSON.stringify(e)}`);
+  }
+  // Terminal (deterministic → die fast). Aborts are user cancellation, not a
+  // retryable blip. Default for unknown shapes.
+  for (const e of [
+    new Error('boom'),
+    'AbortError: The operation was aborted',
+    'invalid arguments: missing required field "query"',
+    { status: 400, message: 'Bad Request' },
+    'schema validation failed',
+    null,
+    undefined,
+    42,
+  ]) {
+    assert.equal(classifyToolError(e), 'terminal', `should be terminal: ${JSON.stringify(e)}`);
+  }
+});
 
 test('parses Moonshot/Kimi native tool-call tokens into OpenAI tool_calls', () => {
   const content = 'Voy a buscar fuentes verificadas.<|tool_calls_section_begin|><|tool_call_begin|>functions.web_search:0<|tool_call_argument_begin|>{"query":"poliestireno reciclado construccion"}<|tool_call_end|><|tool_calls_section_end|>';

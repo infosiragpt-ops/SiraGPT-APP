@@ -19,6 +19,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { writeText as copyTextSafe } from "@/lib/native/clipboard"
 import { cn } from "@/lib/utils"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
@@ -338,7 +339,8 @@ export function MessageActionRail({
         if (onCopy) {
           await onCopy()
         } else {
-          await navigator.clipboard.writeText(trimmed)
+          const result = await copyTextSafe(trimmed)
+          if (!result.ok) throw new Error(result.error || "clipboard_unavailable")
         }
       }, setCopyPulse)
     } catch { /* pulse already handled */ }

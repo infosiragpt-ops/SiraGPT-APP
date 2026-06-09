@@ -11,7 +11,7 @@ import { useAuth } from "./auth-context-integrated"
 import { apiClient } from "./api"
 import { aiService, buildProfessionalCapabilityPrompt, shouldUseExistingDocumentFileContext, type ChatIntent } from "./ai-service"
 import { buildDocumentChatRequest } from "./document-chat-request"
-import { mergeChatPreservingUserMessages } from "./message-preservation"
+import { hasCompletedAgentTaskAssistantContent, mergeChatPreservingUserMessages } from "./message-preservation"
 import { toast } from "sonner"
 import { useBackgroundStreams } from "./background-streams-context"
 import {
@@ -1883,7 +1883,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             .filter((m: any) => m?.role?.toUpperCase() !== 'USER' && m?.content)
             .reduce((sum: number, m: any) => sum + (typeof m.content === 'string' ? m.content.length : 0), 0) || 0
 
-          if (prevAssistantContent > serverAssistantContent) {
+          if (
+            prevAssistantContent > serverAssistantContent &&
+            !hasCompletedAgentTaskAssistantContent(chat.messages || [])
+          ) {
             return prev
           }
 

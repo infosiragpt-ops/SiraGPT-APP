@@ -148,6 +148,48 @@ const Ajv = require('ajv');
 const { sanitizeToolParameters } = require('./ai-product-os/tool-schema-sanitizer');
 const ajv = new Ajv({ allErrors: true, strict: false, coerceTypes: false });
 const schemaValidatorCache = new Map();
+
+// ── Tool-error classification for the per-run error budget ─────────────────
+// A flaky upstream blip (timeout, 429, 5xx, provider overload) is NOT the same
+// as a deterministically broken tool (bad args, validation, 4xx, not found).
+// Counting both equally retired a tool after 5 transient blips, dead-ending
+// doc-QA turns when a provider was briefly slow (seen in the live E2E).
+// Terminal errors hit the budget at full weight; transient ones at a fraction,
+// so a tool survives several blips but a truly-broken one still dies fast.
+// Detection delegates to the canonical single-source-of-truth classifier
+// (task-error-classifier) so the agent loop, retries, and circuit breaker all
+// agree on what "transient" means. Unknown shapes → 'terminal'.
+const { classifyTaskError } = require('../utils/task-error-classifier');
+const TRANSIENT_TOOL_ERROR_WEIGHT = (() => {
+  const w = Number(process.env.SIRAGPT_TRANSIENT_TOOL_ERROR_WEIGHT);
+  return Number.isFinite(w) && w > 0 && w <= 1 ? w : 0.34;
+})();
+
+/**
+ * Classify a tool error as 'transient' (retryable upstream blip) or 'terminal'
+ * (deterministic). Accepts string | Error | `{error|message|code|status}`.
+ * @param {*} err
+ * @returns {'transient'|'terminal'}
+ */
+function classifyToolError(err) {
+  if (err == null) return 'terminal';
+  // Normalise the various tool-error shapes into what classifyTaskError reads
+  // (.message / .code / .statusCode / .name) — dispatch errors can be a string
+  // or an object using `.error`/`.status`.
+  let probe;
+  if (typeof err === 'string') probe = { message: err };
+  else if (err instanceof Error) probe = err;
+  else if (typeof err === 'object') {
+    probe = {
+      message: err.error || err.message || err.reason || '',
+      code: err.code,
+      statusCode: err.status ?? err.statusCode,
+      name: err.name,
+    };
+  } else probe = { message: String(err) };
+  return classifyTaskError(probe).retryable ? 'transient' : 'terminal';
+}
+
 const FINALIZE_TOOL_PARAMETERS = {
   type: 'object',
   properties: {
@@ -805,8 +847,11 @@ async function run(openai, opts) {
         : dispatch.result;
 
       // Track consecutive tool errors per tool to prevent infinite loops.
+      // Transient blips weigh a fraction so a flaky upstream isn't retired as
+      // fast as a deterministically broken tool (see classifyToolError).
       if (dispatch.error) {
-        const errCount = (toolErrorBudget.get(toolName) || 0) + 1;
+        const errWeight = classifyToolError(dispatch.error) === 'transient' ? TRANSIENT_TOOL_ERROR_WEIGHT : 1;
+        const errCount = (toolErrorBudget.get(toolName) || 0) + errWeight;
         toolErrorBudget.set(toolName, errCount);
         if (errCount >= MAX_TOOL_ERRORS && toolName !== 'finalize') {
           // Degrade gracefully instead of dead-ending the task: declare the
@@ -815,12 +860,13 @@ async function run(openai, opts) {
           // required-but-broken tool no longer blocks termination.
           exhaustedTools.add(toolName);
           stoppedReason = `tool_unavailable:${toolName}`;
+          const failures = Math.round(errCount);
           observation = {
             error: 'tool_unavailable',
             tool: toolName,
-            failures: errCount,
+            failures,
             lastError: dispatch.error,
-            message: `The tool "${toolName}" failed ${errCount} times in a row and is now unavailable. Stop calling it. Provide the best possible answer to the user directly (use other tools or your own reasoning), then call finalize.`,
+            message: `The tool "${toolName}" failed ${failures} times in a row and is now unavailable. Stop calling it. Provide the best possible answer to the user directly (use other tools or your own reasoning), then call finalize.`,
           };
         }
       } else {
@@ -947,6 +993,8 @@ module.exports = {
   parseNativeToolCalls,
   hasNativeToolCalls,
   stripNativeToolCallMarkup,
+  // Tool-error classification for the weighted per-run error budget.
+  classifyToolError,
   // Exported for unit testing + reuse by other loops (agent-core, executor).
   compactMessages,
   estimateMessagesChars,

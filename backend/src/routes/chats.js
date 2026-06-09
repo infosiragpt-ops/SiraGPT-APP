@@ -457,16 +457,27 @@ router.get('/:id', authenticateToken, async (req, res) => {
           messages: {
             orderBy: { timestamp: 'desc' },
             take: 1,
-            select: { timestamp: true },
+            select: { id: true, timestamp: true, content: true, metadata: true },
           },
         },
       });
       if (fingerprintRow) {
-        const latestTs = fingerprintRow.messages[0]?.timestamp
-          ? new Date(fingerprintRow.messages[0].timestamp).getTime()
+        const latestMessage = fingerprintRow.messages[0] || null;
+        const latestTs = latestMessage?.timestamp
+          ? new Date(latestMessage.timestamp).getTime()
           : new Date(fingerprintRow.updatedAt || 0).getTime();
         const count = fingerprintRow._count?.messages || 0;
-        const etag = `W/"chat-${fingerprintRow.id}-${count}-${latestTs}"`;
+        const latestContent = typeof latestMessage?.content === 'string' ? latestMessage.content : '';
+        const latestMetadata = latestMessage?.metadata ? stableStringify(latestMessage.metadata) : '';
+        const latestDigest = crypto
+          .createHash('sha1')
+          .update(`${latestMessage?.id || ''}:${latestContent}:${latestMetadata}`)
+          .digest('hex')
+          .slice(0, 16);
+        // Agent-task updates often replace the content of the same assistant
+        // row without changing message count or timestamp. Include a digest
+        // so browser HTTP cache cannot keep showing the stale placeholder.
+        const etag = `W/"chat-${fingerprintRow.id}-${count}-${latestTs}-${latestDigest}"`;
         res.setHeader('ETag', etag);
         const ifNoneMatch = req.headers['if-none-match'];
         if (ifNoneMatch && ifNoneMatch === etag) {

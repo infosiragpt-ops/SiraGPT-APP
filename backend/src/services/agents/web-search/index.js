@@ -197,6 +197,8 @@ async function search(query, opts = {}) {
   // providers honour it (Brave); the rest ignore the extra opt harmlessly.
   const freshness = typeof opts.freshness === 'string' && opts.freshness.trim() ? opts.freshness.trim() : null;
   const includeNews = opts.includeNews === true;
+  const includeScientific = opts.includeScientific === true
+    || (opts.includeScientific !== false && isScientificQuery(q));
   // Fresh queries must not return a stale cache entry, so fold the
   // freshness hint into the cache bucket WITHOUT touching the cache's
   // (query, locale) signature or the real locale passed to providers.
@@ -214,7 +216,13 @@ async function search(query, opts = {}) {
   }
 
   const attempts = [];
-  for (const p of providers) {
+  // General prompts must not be hijacked by academic APIs (OpenAlex/Crossref
+  // can return loosely-related papers for almost any phrase). Keep the
+  // scientific tier for explicit research asks only, mirroring searchMany().
+  const selected = providers.filter(
+    (p) => includeScientific || !SCIENTIFIC_PROVIDER_IDS.has(p.id),
+  );
+  for (const p of selected) {
     const start = Date.now();
     try {
       const results = await withTimeout(

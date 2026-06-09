@@ -199,6 +199,25 @@ const formatAgentTaskUserContent = (content: string) => {
     return String(content || "").replace(/^🤖\s*Tarea:\s*/i, "").trim();
 };
 
+const extractRenderableAgentTaskContent = (content: string) => {
+    const raw = String(content || "");
+    const match = raw.match(/^```agent-task-state\s*\n([\s\S]*?)\n```\s*/);
+    if (!match) return raw;
+
+    const trailing = raw.slice(match[0].length).trim();
+    if (trailing) return trailing;
+
+    try {
+        const state = JSON.parse(match[1]);
+        const finalText = typeof state?.finalText === "string" ? state.finalText.trim() : "";
+        if (state?.done && !state?.error && finalText) return finalText;
+    } catch {
+        // Keep the original markdown so the normal renderer can handle it.
+    }
+
+    return raw;
+};
+
 const getDocumentChipIcon = (name: string) => {
     const extension = name.split('.').pop()?.toLowerCase();
     if (extension === 'doc' || extension === 'docx') {
@@ -991,7 +1010,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     // chat-interface file. We strip non-copyable artifact fences and cap the
     // length so we store a clean, useful fact rather than a giant blob.
     const handleRemember = async () => {
-        const raw = stripNonCopyableArtifactBlocks(message.content || "").trim();
+        const raw = stripNonCopyableArtifactBlocks(extractRenderableAgentTaskContent(message.content || "")).trim();
         if (!raw) {
             toast.error("No hay contenido para recordar");
             throw new Error("empty-remember");
@@ -1035,7 +1054,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     // source, so pasting into Word keeps headings, lists, tables and
     // emphasis without carrying chat UI borders or buttons.
     const handleGlobalCopy = async () => {
-        const source = stripNonCopyableArtifactBlocks(String(message.content || ""));
+        const source = stripNonCopyableArtifactBlocks(extractRenderableAgentTaskContent(String(message.content || "")));
         if (!source) {
             toast.error("Nada que copiar.");
             throw new Error("empty_content");
@@ -1046,7 +1065,6 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
             setTimeout(() => setIsCopied(false), 2000);
             toast.success("Copiado con formato profesional para Word");
         } catch (err: any) {
-            console.error("[copy] failed:", err);
             toast.error(`No se pudo copiar: ${err?.message || "error desconocido"}`);
             throw err;
         }
@@ -1672,7 +1690,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     const isPPTMessage = !!pptEntry
 
     const displayedContent = useMemo(() => {
-        let content = message.content;
+        let content = extractRenderableAgentTaskContent(message.content);
 
         // Check if there's a figma file (diagram)
         const hasFigmaFile = Array.isArray(parsedFiles) && parsedFiles.some((f: any) => f.type === 'figma');
@@ -3023,8 +3041,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                                 toast.success("Copiado con formato para Word");
                                             })
                                             .catch((err) => {
-                                                console.error("[copy] failed:", err)
-                                                toast.error("No se pudo copiar")
+                                                toast.error(`No se pudo copiar: ${err?.message || "error desconocido"}`)
                                             })
                                     }}
                                     title={isCopied ? "Copiado" : "Copiar"}
@@ -3136,7 +3153,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                     messageId={message.id}
                                     chatId={message.chatId}
                                     model={(message as any).model}
-                                    content={stripNonCopyableArtifactBlocks(message.content || "")}
+                                    content={stripNonCopyableArtifactBlocks(extractRenderableAgentTaskContent(message.content || ""))}
                                     hasError={!!message.error}
                                     regenerationAttempt={regenerationAttempt}
                                     isStreaming={isStreaming}

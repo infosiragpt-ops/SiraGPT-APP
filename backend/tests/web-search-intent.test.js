@@ -27,6 +27,20 @@ test('flags temporal "today" in Spanish', () => {
   assert.ok(r.signals.some((s) => s.startsWith('live_event:news')));
 });
 
+test('flags accented Spanish recency question "qué pasó hoy"', () => {
+  const r = detectWebSearchIntent('¿Qué pasó hoy con OpenAI?');
+  assert.equal(r.needsWebSearch, true);
+  assert.ok(r.signals.some((s) => s.startsWith('temporal:today')));
+  assert.ok(r.signals.some((s) => s.startsWith('live_event:news')));
+});
+
+test('flags Spanish sports result phrasing with ganó + hoy', () => {
+  const r = detectWebSearchIntent('¿Quién ganó el partido hoy?');
+  assert.equal(r.needsWebSearch, true);
+  assert.ok(r.signals.some((s) => s.startsWith('temporal:today')));
+  assert.ok(r.signals.some((s) => s.startsWith('live_event:sports_score')));
+});
+
 test('flags temporal "today" in English', () => {
   const r = detectWebSearchIntent('What is happening today in tech?');
   assert.equal(r.needsWebSearch, true);

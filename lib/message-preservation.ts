@@ -20,6 +20,104 @@ const asText = (value: unknown) =>
 
 const hasText = (value: unknown) => asText(value).trim().length > 0;
 
+const AGENT_TASK_STATE_RE = /^```agent-task-state\s*\n([\s\S]*?)\n```\s*/;
+
+type AgentTaskContentInfo = {
+  hasEnvelope: boolean;
+  done: boolean;
+  error: boolean;
+  taskId?: string;
+  finalTextLength: number;
+  trailingTextLength: number;
+  visibleTextLength: number;
+};
+
+const parseAgentTaskContent = (value: unknown): AgentTaskContentInfo => {
+  const raw = asText(value);
+  const match = raw.match(AGENT_TASK_STATE_RE);
+  if (!match) {
+    return {
+      hasEnvelope: false,
+      done: false,
+      error: false,
+      finalTextLength: 0,
+      trailingTextLength: 0,
+      visibleTextLength: raw.trim().length,
+    };
+  }
+
+  let state: Record<string, unknown> | null = null;
+  try {
+    const parsed = JSON.parse(match[1]);
+    if (parsed && typeof parsed === 'object') {
+      state = parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Keep the envelope classification; malformed state should not crash merges.
+  }
+
+  const trailingText = raw.slice(match[0].length).trim();
+  const finalText = typeof state?.finalText === 'string' ? state.finalText.trim() : '';
+  const status = typeof state?.status === 'string' ? state.status.toLowerCase() : '';
+  const done = state?.done === true || status === 'completed';
+  const error = Boolean(state?.error) || status === 'failed' || status === 'error';
+  const taskId = typeof state?.taskId === 'string' ? state.taskId : undefined;
+  const visibleText = trailingText || (done && !error ? finalText : '');
+
+  return {
+    hasEnvelope: true,
+    done,
+    error,
+    taskId,
+    finalTextLength: finalText.length,
+    trailingTextLength: trailingText.length,
+    visibleTextLength: visibleText.length,
+  };
+};
+
+const isCompletedAgentTaskContentInfo = (info: AgentTaskContentInfo) =>
+  info.hasEnvelope && info.done && !info.error && info.visibleTextLength > 0;
+
+export const hasCompletedAgentTaskContent = (value: unknown) =>
+  isCompletedAgentTaskContentInfo(parseAgentTaskContent(value));
+
+export const hasCompletedAgentTaskAssistantContent = (messages: ChatMessageLike[] = []) =>
+  messages.some((message) =>
+    message?.role &&
+    !isUserMessage(message) &&
+    hasCompletedAgentTaskContent(message.content)
+  );
+
+const shouldPreserveLocalAssistantContent = (incomingContent: unknown, localContent: unknown) => {
+  const incomingText = asText(incomingContent);
+  const localText = asText(localContent);
+  if (!hasText(localText)) return false;
+
+  const incomingTask = parseAgentTaskContent(incomingText);
+  const localTask = parseAgentTaskContent(localText);
+  const incomingCompleted = isCompletedAgentTaskContentInfo(incomingTask);
+  const localCompleted = isCompletedAgentTaskContentInfo(localTask);
+
+  if (incomingCompleted && !localCompleted) return false;
+  if (incomingCompleted && localCompleted) {
+    return localTask.visibleTextLength > incomingTask.visibleTextLength + 20;
+  }
+
+  if (!incomingTask.hasEnvelope && hasText(incomingText) && localTask.hasEnvelope && !localCompleted) {
+    return false;
+  }
+
+  if (incomingTask.hasEnvelope || localTask.hasEnvelope) {
+    const incomingVisible = incomingTask.hasEnvelope ? incomingTask.visibleTextLength : incomingText.trim().length;
+    const localVisible = localTask.hasEnvelope ? localTask.visibleTextLength : localText.trim().length;
+    if (incomingVisible > 0 || localVisible > 0) {
+      return localVisible > incomingVisible + 20;
+    }
+  }
+
+  return !hasText(incomingText) || localText.length > incomingText.length;
+};
+
 const hasFiles = (value: unknown) => {
   if (Array.isArray(value)) return value.length > 0;
   if (typeof value !== 'string') return false;
@@ -170,7 +268,7 @@ export function mergeMessagesPreservingUserContent<TMessage extends ChatMessageL
       const next: TMessage = { ...incoming };
       const incomingText = asText(next.content);
       const localText = asText(localMatch.content);
-      if (hasText(localText) && (!hasText(incomingText) || localText.length > incomingText.length)) {
+      if (shouldPreserveLocalAssistantContent(incomingText, localText)) {
         next.content = localText as TMessage['content'];
       }
       if (shouldPreserveLocalFiles(next.files, localMatch.files)) {
@@ -511,7 +609,7 @@ export function preserveOrphanAssistantMessages<TMessage extends ChatMessageLike
       const incomingText = asText(m.content);
       const localText = asText(localVersion.content);
       // If the local version has substantially more content, use it.
-      if (hasText(localText) && (!hasText(incomingText) || localText.length > incomingText.length + 20)) {
+      if (shouldPreserveLocalAssistantContent(incomingText, localText)) {
         patched = true;
         return { ...m, content: localText as TMessage['content'] };
       }

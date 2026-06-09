@@ -76,6 +76,40 @@ test('merges chat refresh without altering unrelated assistant messages', () => 
   assert.equal(merged.messages[1].content, 'LAS NORMAS A USAR SON VANCOUVER');
 });
 
+test('prefers completed agent task server content over longer pending local state', () => {
+  const finalText = 'RESUMEN La gestion administrativa mejora la estructura organizacional.';
+  const incomingContent = '```agent-task-state\n' + JSON.stringify({
+    taskId: 'task-1',
+    done: true,
+    error: null,
+    finalText,
+  }) + '\n```\n\n' + finalText;
+  const localContent = '```agent-task-state\n' + JSON.stringify({
+    taskId: 'task-1',
+    done: false,
+    status: 'running',
+    steps: Array.from({ length: 30 }, (_, index) => ({
+      title: `Paso ${index + 1}`,
+      detail: 'esperando actualizacion '.repeat(12),
+    })),
+  }) + '\n```';
+
+  assert.ok(localContent.length > incomingContent.length);
+
+  const merged = mergeMessagesPreservingUserContent(
+    [
+      { id: 'user-1', role: 'USER', content: 'resume el pdf' },
+      { id: 'assistant-1', role: 'ASSISTANT', content: incomingContent },
+    ],
+    [
+      { id: 'user-1', role: 'USER', content: 'resume el pdf' },
+      { id: 'assistant-1', role: 'ASSISTANT', content: localContent },
+    ],
+  );
+
+  assert.equal(merged[1].content, incomingContent);
+});
+
 test('re-inserts a visible user message if the backend refresh drops the turn', () => {
   const local = [
     { id: 'old-user', role: 'USER', content: 'hola' },
