@@ -11,7 +11,8 @@
  */
 
 import * as React from "react"
-import { Download, FolderGit2, Github, Loader2, X } from "lucide-react"
+import { Download, FolderGit2, Github, X } from "lucide-react"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -117,7 +118,7 @@ export function CodeHub({ open, onClose }: Props) {
             aria-label="Exportar proyecto como ZIP"
           >
             {exporting ? (
-              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              <ThinkingIndicator size="xs" className="mr-1.5" />
             ) : (
               <Download className="mr-1.5 h-3.5 w-3.5" />
             )}

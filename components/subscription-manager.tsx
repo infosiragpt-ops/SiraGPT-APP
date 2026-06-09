@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect } from 'react'
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -351,7 +352,7 @@ export default function SubscriptionManager() {
                     onClick={handleReactivateSubscription}
                     disabled={actionLoading === 'reactivate'}
                   >
-                    {actionLoading === 'reactivate' && <RefreshCw className="h-3 w-3 mr-2 animate-spin" />}
+                    {actionLoading === 'reactivate' && <ThinkingIndicator size="xs" className="mr-2" />}
                     Reactivar suscripción
                   </Button>
                 </div>
@@ -370,7 +371,7 @@ export default function SubscriptionManager() {
                   onClick={handleCancelSubscription}
                   disabled={actionLoading === 'cancel'}
                 >
-                  {actionLoading === 'cancel' && <RefreshCw className="h-3 w-3 mr-2 animate-spin" />}
+                  {actionLoading === 'cancel' && <ThinkingIndicator size="xs" className="mr-2" />}
                   Cancelar
                 </Button>
               </div>

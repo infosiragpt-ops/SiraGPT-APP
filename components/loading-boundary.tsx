@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { cn } from "@/lib/utils"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 
 interface LoadingBoundaryProps {
   children: React.ReactNode
@@ -61,24 +62,6 @@ export function LoadingBoundary({
  * LoadingSpinner — a minimal spinner for inline usage.
  */
 export function LoadingSpinner({ size = "md", className }: { size?: "sm" | "md" | "lg"; className?: string }) {
-  const sizeClasses = {
-    sm: "h-4 w-4 border-2",
-    md: "h-6 w-6 border-[2.5px]",
-    lg: "h-10 w-10 border-[3px]",
-  }
-
-  return (
-    <div
-      className={cn(
-        "inline-block animate-spin rounded-full border-solid border-current border-r-transparent align-[-0.125em] motion-reduce:animate-[spin_1.5s_linear_infinite]",
-        sizeClasses[size],
-        className
-      )}
-      role="status"
-    >
-      <span className="!absolute !-m-px !h-px !w-px !overflow-hidden !whitespace-nowrap !border-0 !p-0 ![clip:rect(0,0,0,0)]">
-        Loading...
-      </span>
-    </div>
-  )
+  const sizeMap = { sm: "xs", md: "sm", lg: "md" } as const
+  return <ThinkingIndicator size={sizeMap[size]} className={cn("inline-flex", className)} />
 }

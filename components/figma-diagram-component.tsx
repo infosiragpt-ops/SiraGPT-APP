@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { ExternalLink, Edit, Copy, Check, ZoomIn, Download } from "lucide-react"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { toast } from "sonner"
@@ -204,8 +205,8 @@ export function FigmaDiagramComponent({
                 <div className="relative w-full flex justify-center items-center min-h-[200px] bg-white dark:bg-gray-800/50 p-4">
                     {isLoading ? (
                         <div className="flex flex-col items-center gap-2 text-gray-500 dark:text-gray-400 min-h-[400px]">
-                            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 dark:border-gray-100"></div>
-                            <span>Rendering diagram...</span>
+                            <ThinkingIndicator size="lg" label="Renderizando diagrama…" />
+                            <span>Renderizando diagrama…</span>
                         </div>
                     ) : displayMode === 'image' && imageUrl ? (
                         <>

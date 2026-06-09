@@ -6,7 +6,8 @@
 
 import * as React from "react"
 import { usePathname, useRouter } from "next/navigation"
-import { Cloud, FolderOpen, FolderPlus, Github, Globe, Loader2, RefreshCw, SlidersHorizontal } from "lucide-react"
+import { Cloud, FolderOpen, FolderPlus, Github, Globe, RefreshCw, SlidersHorizontal } from "lucide-react"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -937,7 +938,7 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
               <Button type="submit" disabled={!canSubmitCloud} aria-busy={creatingCloud}>
                 {creatingCloud ? (
                   <>
-                    <Loader2 aria-hidden="true" className="mr-2 h-4 w-4 animate-spin" />
+                    <ThinkingIndicator size="sm" className="mr-2" />
                     Creando…
                   </>
                 ) : (

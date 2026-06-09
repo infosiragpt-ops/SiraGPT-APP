@@ -6,7 +6,6 @@ import {
   History,
   Clock,
   MessageSquare,
-  Loader2,
   MessageCircle,
   CornerDownLeft,
   ArrowUp,
@@ -240,7 +239,7 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
               autoFocus
             />
             {isSearching ? (
-              <Loader2 className="h-4 w-4 shrink-0 animate-spin text-zinc-400 dark:text-zinc-500" />
+              <ThinkingIndicator size="sm" className="text-zinc-400 dark:text-zinc-500" />
             ) : searchQuery ? (
               <button
                 type="button"

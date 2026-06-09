@@ -1,6 +1,8 @@
 "use client"
 
-import { Check, Loader2, Sparkles, TriangleAlert, Wand2 } from "lucide-react"
+import { Check, Sparkles, TriangleAlert, Wand2 } from "lucide-react"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import { DotmCircular15 } from "@/components/ui/dotm-circular-15"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -71,13 +73,13 @@ export function BuilderIntake() {
 
         {phase === "loading" && (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" /> Preparando la entrevista…
+            <ThinkingIndicator size="sm" /> Preparando la entrevista…
           </div>
         )}
 
         {phase === "generating" && (
           <div className="rounded-xl border border-border bg-card p-8 text-center">
-            <Loader2 className="mx-auto mb-3 h-6 w-6 animate-spin" style={{ color: accent }} />
+            <DotmCircular15 size={24} dotSize={3} color={accent} className="mx-auto mb-3" />
             <p className="text-sm font-medium text-foreground">Generando tu proyecto…</p>
             <p className="mt-1 text-xs text-muted-foreground">Brief → blueprint → archivos starter</p>
           </div>

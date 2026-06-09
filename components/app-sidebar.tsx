@@ -29,7 +29,6 @@ import {
   EyeOff,
   CalendarDays,
   FolderKanban,
-  Loader2,
   PenSquare,
   Shield,
 
@@ -1316,9 +1315,10 @@ export function AppSidebar() {
               />
               <span className="truncate">{t("recentChats")}</span>
               {isLoadingChats || isLoadingMore ? (
-                <Loader2
-                  className="ml-auto h-3 w-3 animate-spin text-muted-foreground/70"
-                  aria-label="Cargando historial de chats"
+                <ThinkingIndicator
+                  size="xs"
+                  label="Cargando historial de chats"
+                  className="ml-auto text-muted-foreground/70"
                 />
               ) : (
                 <span
@@ -1348,7 +1348,7 @@ export function AppSidebar() {
                             no desplace el contenido. */}
                         <span className="flex h-5 w-5 shrink-0 items-center justify-center">
                           {i === 0 ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground/70" />
+                            <ThinkingIndicator size="xs" className="text-muted-foreground/70" />
                           ) : (
                             <Skeleton className="h-4 w-4 rounded-full" />
                           )}
@@ -1491,10 +1491,10 @@ export function AppSidebar() {
                                               }
                                             >
                                               {isStreaming ? (
-                                                <Loader2
-                                                  aria-label="Chat en progreso"
-                                                  className="h-3.5 w-3.5 animate-spin text-muted-foreground/80"
-                                                  strokeWidth={2.25}
+                                                <ThinkingIndicator
+                                                  size="xs"
+                                                  label="Chat en progreso"
+                                                  className="text-muted-foreground/80"
                                                 />
                                               ) : (
                                                 <>
@@ -1956,7 +1956,7 @@ export function AppSidebar() {
             >
               {deletingChatId ? (
                 <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <ThinkingIndicator size="sm" className="mr-2" />
                   Eliminando
                 </>
               ) : (

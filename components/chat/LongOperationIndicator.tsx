@@ -1,7 +1,9 @@
 "use client"
 
 import * as React from "react"
-import { Loader2, X } from "lucide-react"
+import { X } from "lucide-react"
+
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 
 export interface LongOperationIndicatorProps {
   active: boolean
@@ -42,7 +44,7 @@ export function LongOperationIndicator({
       aria-live="polite"
       className="fixed bottom-24 right-4 z-50 flex max-w-[90vw] items-center gap-3 rounded-lg border border-border bg-background/95 px-3 py-2 text-xs shadow-lg backdrop-blur sm:bottom-6 sm:max-w-sm"
     >
-      <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" />
+      <ThinkingIndicator size="sm" className="text-primary" />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="truncate font-medium text-foreground">{label}</span>
         <span className={slow ? "text-amber-600" : "text-muted-foreground"}>
