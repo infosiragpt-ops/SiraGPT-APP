@@ -61,16 +61,42 @@ test("intake advances through brand then style, filling slots", () => {
   }
 })
 
-test("after 3 questions the agent generates (LLM tier when model present)", () => {
-  const a = nextAgentAction(
+test("landing intake: step 3 asks sections (after style), last step generates", () => {
+  // step 3 — fills styleAudience, asks for sections (landing-specific)
+  const a3 = nextAgentAction(
     state({ phase: "intake", intakeStep: 3, context: { goal: "landing", productType: "ropa", brand: "Farceque" } }),
     "streetwear minimalista oscuro",
     { mode: "app", hasModel: true },
   )
-  assert.equal(a.type, "generate")
-  if (a.type === "generate") {
-    assert.equal(a.tier, "llm")
-    assert.equal(a.context.styleAudience, "streetwear minimalista oscuro")
+  assert.equal(a3.type, "ask")
+  if (a3.type === "ask") {
+    assert.match(a3.question, /secciones/i)
+    assert.equal(a3.context.styleAudience, "streetwear minimalista oscuro")
+    assert.equal(a3.nextStep, 4)
+  }
+  // last step (5 of 5) — fills the colour slot, then generates (LLM tier)
+  const a5 = nextAgentAction(
+    state({ phase: "intake", intakeStep: 5, context: { goal: "landing", productType: "ropa" } }),
+    "tonos tierra y negro",
+    { mode: "app", hasModel: true },
+  )
+  assert.equal(a5.type, "generate")
+  if (a5.type === "generate") {
+    assert.equal(a5.tier, "llm")
+    assert.equal(a5.context.colorRef, "tonos tierra y negro")
+  }
+})
+
+test("app intake adapts: step 3 asks for key features (not sections)", () => {
+  const a = nextAgentAction(
+    state({ phase: "intake", intakeStep: 3, context: { goal: "app", productType: "gestión", brand: "Acme" } }),
+    "panel corporativo",
+    { mode: "app", hasModel: true },
+  )
+  assert.equal(a.type, "ask")
+  if (a.type === "ask") {
+    assert.match(a.question, /funcionalidades/i)
+    assert.equal(a.nextStep, 4)
   }
 })
 
@@ -106,7 +132,8 @@ test("forceDeterministic generates immediately in the deterministic tier", () =>
 })
 
 test("no model → generation falls back to the deterministic tier", () => {
-  const a = nextAgentAction(state({ phase: "intake", intakeStep: 3 }), "moderno", { mode: "app", hasModel: false })
+  // intakeStep 5 of 5 (landing) → past the last question → generate
+  const a = nextAgentAction(state({ phase: "intake", intakeStep: 5 }), "moderno", { mode: "app", hasModel: false })
   assert.equal(a.type, "generate")
   if (a.type === "generate") assert.equal(a.tier, "deterministic")
 })

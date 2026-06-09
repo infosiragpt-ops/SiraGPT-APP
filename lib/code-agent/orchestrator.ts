@@ -15,6 +15,7 @@
 import type {
   AgentAction,
   AgentBuildContext,
+  AgentGoal,
   AgentSignal,
   AgentState,
   BuildErrorVerdict,
@@ -22,16 +23,34 @@ import type {
 
 // ---- intake ----------------------------------------------------------------
 
-const INTAKE_QUESTIONS = [
+// The intake is a short product-planning interview. The first three questions
+// are shared; the last two adapt to the goal (a landing asks about sections +
+// colour refs, an app asks about features + data). Kept tiny + goal-driven so
+// it stays a fast "seguimiento" without turning into a form.
+type IntakeQuestion = { slot: keyof AgentBuildContext; q: string }
+
+const COMMON_QUESTIONS: readonly IntakeQuestion[] = [
   { slot: "productType", q: "¿Qué **producto o servicio** vas a ofrecer?" },
   { slot: "brand", q: "¿**Nombre** de la marca o negocio? (o escribe «propón uno»)" },
-  {
-    slot: "styleAudience",
-    q: "¿Qué **estilo visual y público**? (ej. streetwear minimalista, premium oscuro, corporativo…)",
-  },
-] as const
+  { slot: "styleAudience", q: "¿Qué **estilo visual y público**? (ej. streetwear minimalista, premium oscuro, corporativo…)" },
+]
 
-type IntakeSlot = (typeof INTAKE_QUESTIONS)[number]["slot"]
+const LANDING_QUESTIONS: readonly IntakeQuestion[] = [
+  ...COMMON_QUESTIONS,
+  { slot: "sections", q: "¿Qué **secciones** quieres? (hero, productos/colecciones, sobre nosotros, testimonios, contacto…)" },
+  { slot: "colorRef", q: "¿Algún **color, paleta o referencia** (una web/marca que te guste)? (o «sorpréndeme»)" },
+]
+
+const APP_QUESTIONS: readonly IntakeQuestion[] = [
+  ...COMMON_QUESTIONS,
+  { slot: "features", q: "¿Qué **funcionalidades clave** no pueden faltar? (auth, pagos, panel, búsqueda, chat…)" },
+  { slot: "dataEntities", q: "¿Qué **datos** manejará? Nombra las entidades (ej. Usuario, Pedido, Producto)." },
+]
+
+/** The intake question list for a goal (landing vs app). */
+function questionsFor(goal: AgentGoal): readonly IntakeQuestion[] {
+  return goal === "app" ? APP_QUESTIONS : LANDING_QUESTIONS
+}
 
 function clean(text: string): string {
   return String(text == null ? "" : text).replace(/\s+/g, " ").trim()
@@ -68,11 +87,12 @@ function seedGoal(ctx: AgentBuildContext, text: string): AgentBuildContext {
   return { ...ctx, goal }
 }
 
-/** Fill the slot the agent just asked about. "propón uno"/"-"/"no" → leave empty. */
+/** Fill the slot the agent just asked about. "propón uno"/"sorpréndeme"/"-" → leave empty. */
 function fillSlot(ctx: AgentBuildContext, index: number, raw: string): AgentBuildContext {
-  const slot = INTAKE_QUESTIONS[Math.max(0, Math.min(index, 2))].slot as IntakeSlot
+  const list = questionsFor(ctx.goal)
+  const slot = list[Math.max(0, Math.min(index, list.length - 1))].slot
   const value = clean(raw)
-  if (!value || /^(prop[oó]n( uno)?|sin preferencia|no s[eé]|cualquiera|-|n\/a)$/i.test(value)) {
+  if (!value || /^(prop[oó]n( uno)?|sin preferencia|no s[eé]|cualquiera|sorpr[eé]ndeme|lo que sea|-|n\/a)$/i.test(value)) {
     return ctx // keep empty → applyDefaults / prompt handles it
   }
   return { ...ctx, [slot]: value }
@@ -110,14 +130,15 @@ export function nextAgentAction(state: AgentState, input: string, signal: AgentS
   // 5) Intake gate (app/build).
   if (isStart || inIntake) {
     if (inIntake) {
+      const list = questionsFor(state.context.goal)
       const idx = Math.max(0, state.intakeStep - 1) // the slot we just asked about
       const ctx = fillSlot(state.context, idx, text)
-      if (state.intakeStep >= INTAKE_QUESTIONS.length || wantsImmediate(text)) {
+      if (state.intakeStep >= list.length || wantsImmediate(text)) {
         return { type: "generate", context: ctx, tier }
       }
       return {
         type: "ask",
-        question: INTAKE_QUESTIONS[state.intakeStep].q,
+        question: list[state.intakeStep].q,
         nextStep: state.intakeStep + 1,
         context: ctx,
       }
@@ -127,7 +148,8 @@ export function nextAgentAction(state: AgentState, input: string, signal: AgentS
     if (wantsImmediate(text) || text.length > 160) {
       return { type: "generate", context: seedGoal(state.context, text), tier }
     }
-    return { type: "ask", question: INTAKE_QUESTIONS[0].q, nextStep: 1, context: seedGoal(state.context, text) }
+    const seeded = seedGoal(state.context, text)
+    return { type: "ask", question: questionsFor(seeded.goal)[0].q, nextStep: 1, context: seeded }
   }
 
   // 6) Default (e.g. app-mode follow-up that is not a build request).
@@ -141,6 +163,10 @@ export function promptFromContext(ctx: AgentBuildContext): string {
   if (ctx.brand) parts.push(`de ${ctx.brand}`)
   if (ctx.productType) parts.push(`para ${ctx.productType}`)
   if (ctx.styleAudience) parts.push(`estilo ${ctx.styleAudience}`)
+  if (ctx.sections) parts.push(`con secciones ${ctx.sections}`)
+  if (ctx.features) parts.push(`con funcionalidades ${ctx.features}`)
+  if (ctx.dataEntities) parts.push(`que maneja ${ctx.dataEntities}`)
+  if (ctx.colorRef) parts.push(`con paleta/referencias ${ctx.colorRef}`)
   return parts.join(" ")
 }
 

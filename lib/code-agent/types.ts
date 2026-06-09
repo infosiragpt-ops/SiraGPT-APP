@@ -12,12 +12,20 @@ export type AgentPhase = "idle" | "intake" | "generating" | "preview" | "debuggi
 
 export type AgentGoal = "landing" | "app"
 
-/** Context accumulated during the intake gate (slot-filling, máx. 3 slots). */
+/** Context accumulated during the intake gate (slot-filling, goal-adaptive). */
 export interface AgentBuildContext {
   goal: AgentGoal
   productType?: string
   brand?: string
   styleAudience?: string
+  /** Landing path: which sections the page should have. */
+  sections?: string
+  /** Landing path: colours / palette / visual references. */
+  colorRef?: string
+  /** App path: the key features that can't be missing. */
+  features?: string
+  /** App path: the main data entities the app manages. */
+  dataEntities?: string
 }
 
 /** Per-chat-session agent state, persisted with the session. */
