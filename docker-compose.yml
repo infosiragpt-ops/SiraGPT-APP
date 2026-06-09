@@ -110,6 +110,10 @@ services:
       # and run `docker compose --profile opencode up` to enable.
       OPENCODE_SERVER_URL: "${OPENCODE_SERVER_URL:-}"
       OPENCODE_SERVER_PASSWORD: "${OPENCODE_SERVER_PASSWORD:-}"
+      # Steer the engine to a funded provider/model (its anthropic default has no
+      # credit). Defaults to OpenRouter gpt-4o-mini (verified to write files).
+      OPENCODE_MODEL_PROVIDER: "${OPENCODE_MODEL_PROVIDER:-openrouter}"
+      OPENCODE_MODEL_ID: "${OPENCODE_MODEL_ID:-openai/gpt-4o-mini}"
     volumes:
       - uploads_data:/app/uploads
     depends_on:
