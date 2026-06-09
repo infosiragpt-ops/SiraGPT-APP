@@ -416,6 +416,50 @@ class AIService {
         }
     }
 
+    /**
+     * Describe imágenes adjuntas con el runtime de visión que esté
+     * configurado (OpenAI → Gemini → OpenRouter, según selectVisionRuntime).
+     * A diferencia de describeImagesWithGemini, no depende de una key
+     * concreta. Devuelve la descripción en texto o null si no hay proveedor
+     * de visión disponible o la llamada falla; el caller decide cómo degradar.
+     * @param {Array<{path: string, mimeType: string}>} imageFiles
+     * @param {string} userText - pregunta original del usuario (contexto)
+     */
+    async describeAttachedImages(imageFiles, userText) {
+        const runtime = selectVisionRuntime('', '');
+        if (!runtime.switched) {
+            console.warn('[vision-describe] sin proveedor de visión configurado — no se pueden describir imágenes');
+            return null;
+        }
+        try {
+            const client = this.getClient(runtime.provider);
+            const contentArray = [{
+                type: 'text',
+                text: `Describe en español, con detalle y precisión, lo que aparece en la(s) imagen(es) adjunta(s). ` +
+                    `Si contienen texto, transcríbelo literalmente preservando saltos de línea. ` +
+                    `Si contienen ecuaciones, formúlalas en LaTeX. ` +
+                    `Si es un diagrama, logotipo o ilustración, describe su estructura, formas y colores. ` +
+                    `Pregunta original del usuario para contexto: "${(userText || '').slice(0, 500)}"`,
+            }];
+            for (const f of imageFiles) {
+                const img = await this.prepareImageForVision(f.path, f.mimeType);
+                if (img) contentArray.push(img);
+            }
+            if (contentArray.length === 1) return null;
+            const completion = await client.chat.completions.create({
+                model: runtime.model,
+                messages: [{ role: 'user', content: contentArray }],
+                stream: false,
+                temperature: 0.2,
+            });
+            const text = completion?.choices?.[0]?.message?.content || '';
+            return typeof text === 'string' && text.trim() ? text.trim() : null;
+        } catch (err) {
+            console.error('[vision-describe] fallo describiendo imágenes:', err?.message || err);
+            return null;
+        }
+    }
+
     async generateStream({ provider, model, messages, systemBlocks, chatId, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false }) {
         // ── Siragpt 1.0 — modelo combinado ──
         // Si el caller pidió siragpt-1.0 y hay imágenes adjuntas, las

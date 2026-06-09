@@ -29,6 +29,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { toast } from "sonner"
 import { IconProvider } from "@/components/icon-provider"
 import { getNormalizedApiBaseUrl } from "@/lib/api-base-url"
@@ -495,7 +496,7 @@ export default function ModelsPage() {
     return (
       <div className="mx-auto w-full max-w-7xl space-y-6 px-4 py-4 pb-24 sm:px-6 lg:px-8">
         <div className="flex items-center space-x-2">
-          <RefreshCw className="h-4 w-4 animate-spin" />
+          <ThinkingIndicator size="sm" />
           <span>Loading models...</span>
         </div>
       </div>
@@ -537,7 +538,7 @@ export default function ModelsPage() {
             size="sm"
           >
             {isSyncing ? (
-              <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+              <ThinkingIndicator size="sm" className="mr-2" />
             ) : (
               <Upload className="mr-2 h-4 w-4" />
             )}
@@ -702,7 +703,7 @@ export default function ModelsPage() {
                   disabled={isSyncing}
                 >
                   {isSyncing ? (
-                    <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                    <ThinkingIndicator size="sm" className="mr-2" />
                   ) : (
                     <Zap className="mr-2 h-4 w-4" />
                   )}

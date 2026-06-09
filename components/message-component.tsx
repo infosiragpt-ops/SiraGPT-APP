@@ -2823,7 +2823,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                     <div key={index} className="relative inline-block group">
                                         {imageLoading[`file-${index}`] && (
                                             <div className="absolute inset-0 flex items-center justify-center bg-gray-100 dark:bg-gray-800 rounded-lg">
-                                                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+                                                <ThinkingIndicator size="lg" className="text-primary" />
                                             </div>
                                         )}
                                         {imageError[`file-${index}`] ? (
@@ -2874,7 +2874,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                     <div className="relative inline-block group">
                                         {imageLoading['content-image'] && (
                                             <div className="absolute inset-0 flex items-center justify-center bg-gray-100 dark:bg-gray-800 rounded-lg">
-                                                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+                                                <ThinkingIndicator size="lg" className="text-primary" />
                                             </div>
                                         )}
                                         {imageError['content-image'] ? (

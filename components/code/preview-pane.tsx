@@ -14,7 +14,6 @@ import {
   Circle,
   Eraser,
   ExternalLink,
-  Loader2,
   Monitor,
   RefreshCw,
   Smartphone,
@@ -25,6 +24,7 @@ import {
 } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { useCodeWorkspace } from "@/lib/code-workspace-context"
 import { buildPreviewDocument, type PreviewKind } from "@/lib/code-preview-build"
 import { CODE_TEMPLATES } from "@/lib/code-templates"
@@ -130,7 +130,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
           aria-label="Recargar preview"
           title="Recargar"
         >
-          {building ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+          {building ? <ThinkingIndicator size="xs" /> : <RefreshCw className="h-3.5 w-3.5" />}
         </button>
 
         <div className="flex min-w-0 flex-1 items-center gap-2 rounded-full border border-border/40 bg-muted/30 px-3 py-1 text-[11px] text-muted-foreground shadow-inner backdrop-blur">

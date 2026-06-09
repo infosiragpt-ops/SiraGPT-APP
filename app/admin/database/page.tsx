@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 
 const databaseStats = [
   { name: "Users", count: 1247, size: "2.4 MB", growth: "+12%" },
@@ -45,7 +46,7 @@ export default function DatabasePage() {
             Refresh
           </Button>
           <Button onClick={handleBackup} disabled={isBackingUp}>
-            {isBackingUp ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+            {isBackingUp ? <ThinkingIndicator size="sm" className="mr-2" /> : <Download className="mr-2 h-4 w-4" />}
             {isBackingUp ? "Backing up..." : "Backup"}
           </Button>
         </div>
