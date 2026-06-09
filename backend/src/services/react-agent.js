@@ -244,8 +244,11 @@ const FINALIZE_TOOL_PARAMETERS = {
 const SYSTEM_PROMPT = `You are a rigorous research agent. Solve the user's request by deciding which tool to call next, observing the result, then deciding again. Keep going until you can give a confident, well-grounded answer.
 
 Rules:
+- For multi-part tasks, start your FIRST thought with a one-line plan (e.g. "Plan: search → read top source → compare → finalize") and update it briefly when your approach changes.
 - Prefer gathering 2–3 pieces of evidence before finalizing, unless the query is trivial.
 - Do NOT fabricate tool calls — only call tools that appear in the tools list.
+- Do NOT repeat a tool call with identical arguments — vary the arguments or switch tools instead.
+- If a tool result says it was truncated, refine the request (narrower query, fewer results, pagination) rather than re-requesting the same output.
 - When you have enough evidence, call the \`finalize\` tool with a well-structured final answer (markdown). Do NOT write the final answer as plain text in the assistant message — only via \`finalize\`.
 - Every tool call must be justified by a short natural-language thought in the assistant message preceding the call.
 - Keep thoughts concise (1–2 sentences). Save the depth for the final answer.`;
@@ -397,6 +400,121 @@ function summarizeObservation(content) {
     return keys.length ? `ok keys=[${keys.join(',')}]` : 'ok';
   }
   return String(str).slice(0, 120).replace(/\s+/g, ' ').trim();
+}
+
+// ── ACI observation formatting (SWE-agent, arXiv:2405.15793) ───────────────
+// Three measured findings from the Agent-Computer Interface work, applied to
+// how tool observations are fed back to the model:
+//   1. Silent truncation misleads — a JSON cut mid-string reads as complete
+//      data. Over the cap we return an EXPLICIT envelope (total size, shown
+//      head/tail, and an instruction to refine) so the model redirects
+//      instead of trusting a mangled prefix.
+//   2. Empty output is ambiguous (success? failure?) — replace it with an
+//      explicit "ran successfully, no output" note.
+//   3. Stale observations are worse than useless (old state actively
+//      misleads, and distractor context degrades the model) — collapse every
+//      tool observation older than the last OBS_KEEP_ROUNDS rounds to a
+//      one-line gist, keeping thoughts/actions (the plan) intact. This is
+//      ALWAYS-ON aging, independent of the char-budget compaction below,
+//      which only fires on overflow.
+const DEFAULT_OBS_MAX_CHARS = (() => {
+  const v = Number(process.env.SIRAGPT_REACT_OBS_MAX_CHARS);
+  return Number.isFinite(v) && v >= 1000 ? Math.floor(v) : 8000;
+})();
+const OBS_KEEP_ROUNDS = (() => {
+  const v = Number(process.env.SIRAGPT_REACT_OBS_KEEP_ROUNDS);
+  return Number.isFinite(v) && v >= 1 ? Math.floor(v) : 5;
+})();
+const OBS_ELIDE_DISABLED = process.env.SIRAGPT_REACT_OBS_ELIDE_DISABLED === '1';
+const ELIDED_OBS_PREFIX = '[stale observation elided]';
+// Below this size an old observation is kept verbatim — eliding it would not
+// meaningfully shrink the trace and could drop still-useful detail.
+const OBS_ELIDE_MIN_CHARS = 200;
+
+/**
+ * Serialize a tool observation for the model. Never silently truncates:
+ * over-cap output becomes an explicit envelope with orientation metadata
+ * (total size, shown head/tail) and a refine instruction; empty output
+ * becomes an explicit success note. Always returns a string ≤ ~maxChars.
+ */
+function formatObservation(observation, maxChars = DEFAULT_OBS_MAX_CHARS) {
+  let obsStr;
+  try {
+    obsStr = JSON.stringify(observation);
+  } catch {
+    obsStr = JSON.stringify({ error: 'non_serializable_tool_output', type: typeof observation });
+  }
+  if (
+    obsStr === undefined || obsStr === 'null' || obsStr === '{}'
+    || obsStr === '""' || obsStr === '[]' || obsStr === '{"result":null}'
+    || obsStr === '{"result":""}' || obsStr === '{"result":{}}' || obsStr === '{"result":[]}'
+  ) {
+    return JSON.stringify({ ok: true, note: 'Tool ran successfully and produced no output.' });
+  }
+  if (obsStr.length <= maxChars) return obsStr;
+  // Reserve room for the envelope itself; split the budget ~80/20 head/tail
+  // so the model sees how the output starts AND how it ends.
+  const budget = Math.max(500, maxChars - 400);
+  const headLen = Math.floor(budget * 0.8);
+  const tailLen = budget - headLen;
+  return JSON.stringify({
+    truncated: true,
+    total_chars: obsStr.length,
+    shown_chars: budget,
+    note: `Tool output was too large (${obsStr.length} chars) and was truncated. Do NOT re-request the same output — refine the call instead (narrower query, fewer results, a specific range or page).`,
+    head: obsStr.slice(0, headLen),
+    tail: obsStr.slice(-tailLen),
+  });
+}
+
+/**
+ * Collapse tool observations older than the last `keepRounds` assistant
+ * rounds to a one-line gist (in place). Thoughts and tool_calls are never
+ * touched — the plan/action history survives, only obsolete state goes.
+ * Idempotent (already-elided messages are skipped) and pairing-safe (the
+ * message keeps its role/tool_call_id, only `content` shrinks).
+ * Returns the number of observations elided.
+ */
+function elideStaleObservations(messages, keepRounds = OBS_KEEP_ROUNDS) {
+  if (!Array.isArray(messages) || messages.length === 0) return 0;
+  const assistantIdx = [];
+  for (let i = 0; i < messages.length; i += 1) {
+    if (messages[i] && messages[i].role === 'assistant') assistantIdx.push(i);
+  }
+  if (assistantIdx.length <= keepRounds) return 0;
+  // Tool messages BEFORE the first of the last `keepRounds` rounds are stale.
+  const cutoff = assistantIdx[assistantIdx.length - keepRounds];
+  let elided = 0;
+  for (let i = 0; i < cutoff; i += 1) {
+    const m = messages[i];
+    if (!m || m.role !== 'tool' || typeof m.content !== 'string') continue;
+    if (m.content.length <= OBS_ELIDE_MIN_CHARS) continue;
+    if (m.content.startsWith(ELIDED_OBS_PREFIX)) continue;
+    m.content = `${ELIDED_OBS_PREFIX} ${summarizeObservation(m.content)}`;
+    elided += 1;
+  }
+  return elided;
+}
+
+// ── Duplicate-call cache / loop breaker ─────────────────────────────────────
+// Recovery probability collapses after the model starts repeating itself
+// (90.5% → 57.2% after a single failure in the SWE-agent measurements), and a
+// model re-issuing the SAME read-only call burns steps, latency and credits
+// for an identical result. Successful read-only calls are cached per run by
+// (tool, args) signature; an identical repeat short-circuits to the cached
+// result wrapped in an explicit do-not-repeat warning. Mutating tools are
+// exempt — re-running `run_tests` or `host_bash` with the same args is
+// legitimate. The cache also makes observation aging safe: if the model
+// re-requests data whose observation was elided, it gets the full result
+// back instantly instead of being blocked.
+const DUP_CALL_CACHE_MAX = 50;
+
+function toolCallSignature(name, argsRaw) {
+  let args = argsRaw;
+  if (typeof args === 'string') {
+    try { args = JSON.parse(args || '{}'); } catch { return `${name}::${argsRaw}`; }
+  }
+  return `${name}::${stableSchemaKey(args || {})}`;
 }
 
 /**
@@ -656,6 +774,13 @@ async function run(openai, opts) {
   // tool_choice=finalize instead of burning the remaining steps.
   let exhaustedRepolls = 0;
   let forceFinalize = false;
+  // Duplicate-call cache: signature → already-formatted observation string of
+  // a SUCCESSFUL read-only call. Identical repeats short-circuit to the cache
+  // with a do-not-repeat warning; ≥EXHAUSTED_REPOLL_LIMIT consecutive repeats
+  // mean the model is looping and we force finalize (same escape hatch as
+  // exhausted-tool re-polling).
+  const dupCallCache = new Map();
+  let duplicateRepolls = 0;
   // Recent provider latencies (ms) — used to stop exploring when the trend
   // says there is no runtime left for another full step (see toolChoice).
   const stepDurations = [];
@@ -669,6 +794,14 @@ async function run(openai, opts) {
     if (Date.now() - startedAt > maxRuntimeMs) {
       stoppedReason = 'runtime_budget_exhausted';
       break;
+    }
+
+    // ACI observation aging: collapse tool outputs older than the last
+    // OBS_KEEP_ROUNDS rounds to one-line gists, every step, regardless of
+    // total size — old state misleads more than it helps, and the duplicate
+    // cache below restores any elided result the model genuinely re-needs.
+    if (!OBS_ELIDE_DISABLED) {
+      try { elideStaleObservations(messages); } catch { /* aging must never break the loop */ }
     }
 
     // Keep the trace under the context budget. At the top of an iteration
@@ -898,12 +1031,42 @@ async function run(openai, opts) {
         messages.push({
           role: 'tool',
           tool_call_id: call.id,
-          content: JSON.stringify(observation).slice(0, 8000),
+          content: formatObservation(observation),
         });
         continue;
       }
       // Any call that is NOT an exhausted re-poll means the model pivoted.
       exhaustedRepolls = 0;
+
+      // Duplicate read-only call with identical args: short-circuit to the
+      // cached result instead of re-executing. The model gets the data it
+      // asked for (so re-reading after observation aging still works) plus an
+      // explicit do-not-repeat warning; persistent repeats trip the same
+      // forced-finalize escape as exhausted-tool re-polling.
+      if (toolName !== 'finalize' && isParallelSafeTool(toolName)) {
+        const sig = toolCallSignature(toolName, call.function?.arguments);
+        const cached = dupCallCache.get(sig);
+        if (cached) {
+          duplicateRepolls += 1;
+          if (duplicateRepolls >= EXHAUSTED_REPOLL_LIMIT && !forceFinalize) {
+            forceFinalize = true;
+            try { console.warn(`[react-agent] ${duplicateRepolls} consecutive duplicate tool calls — forcing finalize next step`); } catch { /* noop */ }
+          }
+          const observation = {
+            warning: 'duplicate_tool_call',
+            message: `You already called "${toolName}" with these exact arguments in step ${cached.step}. The cached result is returned below. Do NOT repeat identical calls — change the arguments or use a different tool.`,
+            cached_result: cached.content,
+          };
+          stepRecord.actions.push({ tool: toolName, args: call.function?.arguments || '', observation });
+          messages.push({
+            role: 'tool',
+            tool_call_id: call.id,
+            content: formatObservation(observation),
+          });
+          continue;
+        }
+      }
+      duplicateRepolls = 0;
 
       let dispatch = prefetched.has(call.id)
         ? prefetched.get(call.id)
@@ -1027,18 +1190,25 @@ async function run(openai, opts) {
 
       // Feed the observation back as a tool message so the next model
       // call sees what happened. OpenAI requires tool messages to
-      // reference the originating tool_call_id.
-      let obsStr;
-      try {
-        obsStr = JSON.stringify(observation);
-      } catch {
-        obsStr = JSON.stringify({ error: 'non_serializable_tool_output', type: typeof observation });
-      }
+      // reference the originating tool_call_id. formatObservation never
+      // truncates silently: over-cap output becomes an explicit envelope
+      // with a refine instruction, empty output an explicit success note.
+      const obsContent = formatObservation(observation);
       messages.push({
         role: 'tool',
         tool_call_id: call.id,
-        content: obsStr.slice(0, 8000), // cap to avoid blowing context
+        content: obsContent,
       });
+
+      // Remember successful read-only results so an identical repeat can be
+      // served from cache (see the duplicate short-circuit above).
+      if (!dispatch.error && toolName !== 'finalize' && isParallelSafeTool(toolName)
+          && !(observation && typeof observation === 'object' && observation.error)) {
+        if (dupCallCache.size >= DUP_CALL_CACHE_MAX) {
+          dupCallCache.delete(dupCallCache.keys().next().value);
+        }
+        dupCallCache.set(toolCallSignature(toolName, call.function?.arguments), { step, content: obsContent });
+      }
 
       if (toolName === 'finalize' && !dispatch.error && !observation.error) {
         finalAnswer = dispatch.result?.answer || '';
@@ -1092,6 +1262,13 @@ module.exports = {
   stripNativeToolCallMarkup,
   // Tool-error classification for the weighted per-run error budget.
   classifyToolError,
+  // ACI observation formatting (SWE-agent) — exported for tests.
+  formatObservation,
+  elideStaleObservations,
+  toolCallSignature,
+  DEFAULT_OBS_MAX_CHARS,
+  OBS_KEEP_ROUNDS,
+  ELIDED_OBS_PREFIX,
   // Exported for unit testing + reuse by other loops (agent-core, executor).
   compactMessages,
   estimateMessagesChars,
