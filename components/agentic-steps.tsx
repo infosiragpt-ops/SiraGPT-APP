@@ -8,6 +8,8 @@ import {
   Ban,
   Braces,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Download,
   Eye,
   FileCheck2,
@@ -29,6 +31,7 @@ import {
 import type { DocumentPreviewTarget } from "@/components/document-preview"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import { DotmCircular15 } from "@/components/ui/dotm-circular-15"
 interface Props {
   state: AgentTaskState
   className?: string
@@ -340,38 +343,7 @@ function TimelineRow({
   )
 }
 
-function AgentActionButton({
-  children,
-  onClick,
-  disabled,
-  "aria-label": ariaLabel,
-}: {
-  children: React.ReactNode
-  onClick: () => void
-  disabled?: boolean
-  "aria-label"?: string
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      aria-label={ariaLabel}
-      className="inline-flex h-7 items-center gap-1.5 rounded-full border border-border/60 bg-background/70 px-2.5 text-[11px] font-medium text-muted-foreground shadow-sm transition-colors hover:border-border hover:bg-muted/40 hover:text-foreground disabled:opacity-60"
-    >
-      {children}
-    </button>
-  )
-}
 
-function AgentProgressBeam() {
-  return (
-    <div className="h-px w-full overflow-hidden rounded-full bg-border/60" aria-hidden="true">
-      <div className="h-full w-1/3 animate-[agent-beam_1.35s_ease-in-out_infinite] rounded-full bg-gradient-to-r from-transparent via-foreground/45 to-transparent" />
-      <style jsx>{`@keyframes agent-beam { 0% { transform: translateX(-120%); } 100% { transform: translateX(320%); } }`}</style>
-    </div>
-  )
-}
 
 function ValidationSummary({ state }: { state: AgentTaskState }) {
   if (!state.qualityGates?.length) return null
@@ -401,6 +373,9 @@ function ValidationSummary({ state }: { state: AgentTaskState }) {
 export function AgenticStepsRenderer({ state, className, onDocumentPreview }: Props) {
   const [retrying, setRetrying] = React.useState(false)
   const [cancelling, setCancelling] = React.useState(false)
+  // Claude-style live trace: expanded by default while the agent runs;
+  // the user's toggle wins for the rest of the run.
+  const [liveExpanded, setLiveExpanded] = React.useState(true)
   const summary = React.useMemo(() => summarizeAgentActivity(state), [state])
   const timelineSteps = React.useMemo(() => projectTimelineSteps(state.steps), [state.steps])
   const runningTimelineStep = React.useMemo(
@@ -507,56 +482,72 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview }: Pr
   }
 
   if (isLiveActivity) {
-    // Minimal live activity: one calm card, one pulse line, clear status.
-    // It reads like a professional execution trace instead of a generic spinner.
-    const visibleSteps = timelineSteps
-      .filter((s) => s.detail && s.detail.trim())
-      .slice(-4)
-    const stepsToRender = visibleSteps.length ? visibleSteps : timelineSteps.slice(-3)
+    // Claude-style live activity (mirrors ThinkingTrace): a single
+    // shimmering line with the current step + chevron, and a dimmed
+    // step trace behind a left rail. No box, no headers, no counters —
+    // the line IS the status.
+    const visibleSteps = timelineSteps.slice(-5)
+    const headerLabel = runningTimelineStep?.label || summary.label
     return (
       <div
         role="status"
         aria-live="polite"
         aria-label="Agente trabajando"
-        className={cn("my-3 w-full max-w-2xl rounded-2xl border border-border/55 bg-background/85 p-3.5 shadow-sm backdrop-blur-xl", className)}
+        className={cn("my-2.5 w-full max-w-2xl", className)}
       >
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-2.5">
-            <span className="relative flex h-2.5 w-2.5 shrink-0">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-foreground/30 opacity-45" />
-              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-foreground" />
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setLiveExpanded((v) => !v)}
+            aria-expanded={liveExpanded}
+            aria-label="Ver actividad del agente"
+            className="group flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-0.5 text-left"
+          >
+            <DotmCircular15 size={18} className="shrink-0" ariaLabel="Trabajando" />
+            <span className="thinking-shimmer-text min-w-0 truncate text-[13px] font-medium tracking-tight">
+              {headerLabel}
             </span>
-            <div className="min-w-0">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">Trabajando</div>
-              <div className="mt-0.5 truncate text-sm font-medium text-foreground">{runningTimelineStep?.label || summary.label}</div>
-            </div>
-          </div>
+            {liveExpanded ? (
+              <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+            )}
+          </button>
           {canCancel && (
-            <AgentActionButton onClick={cancelTask} disabled={cancelling} aria-label="Cancelar tarea">
-              {cancelling ? <ThinkingIndicator size="xs" /> : <Ban className="h-3 w-3" />}
-              Cancelar
-            </AgentActionButton>
+            <button
+              type="button"
+              onClick={cancelTask}
+              disabled={cancelling}
+              title="Cancelar tarea"
+              aria-label="Cancelar tarea"
+              className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-muted-foreground/60 transition-colors hover:bg-muted/50 hover:text-foreground disabled:opacity-60"
+            >
+              {cancelling ? <ThinkingIndicator size="xs" /> : <Ban className="h-3.5 w-3.5" />}
+            </button>
           )}
         </div>
-        <AgentProgressBeam />
-        <div className="mt-3 border-l border-border/50 pl-3">
-          {stepsToRender.map((step) => (
-            <TimelineRow
-              key={step.id}
-              icon={<AgentStatusIcon kind={step.status === "running" ? step.phase : "done"} className="h-3.5 w-3.5" />}
-              label={step.label}
-              detail={step.detail || "Procesando la siguiente acción…"}
-              status={step.status}
-              badges={step.count > 1 ? [`${step.count} pasos`] : []}
-            />
-          ))}
-        </div>
-        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
-          <span>{plural(Math.max(summary.stepCount, stepsToRender.length), "paso", "pasos")}</span>
-          <span className="text-border">/</span>
-          <span>{plural(summary.toolCount, "herramienta", "herramientas")}</span>
-          {state.queue?.status && <><span className="text-border">/</span><span>{sanitizeAgentText(state.queue.status, "en ejecución")}</span></>}
-        </div>
+
+        {liveExpanded && (
+          <div className="mt-1 border-l border-border/50 pl-3">
+            {visibleSteps.map((step) => (
+              <div key={step.id} className="py-1">
+                <div
+                  className={cn(
+                    "text-[12.5px] leading-5",
+                    step.status === "running" ? "font-medium text-foreground/75" : "text-muted-foreground/80",
+                    step.status === "error" && "text-red-600 dark:text-red-400",
+                  )}
+                >
+                  {step.label}
+                  {step.count > 1 && <span className="ml-1.5 text-[10.5px] text-muted-foreground/60">×{step.count}</span>}
+                </div>
+                {step.detail && (
+                  <div className="mt-0.5 max-w-[48rem] text-[12px] leading-5 text-muted-foreground/65">{step.detail}</div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     )
   }
