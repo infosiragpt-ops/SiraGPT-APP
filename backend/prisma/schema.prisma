@@ -380,6 +380,15 @@ model Message {
   metadata  Json? // Store message metadata (like Gmail connection requirements)
   feedback  String?
 
+  // Claude-style extended thinking. `reasoning` is the human-readable
+  // chain-of-thought streamed by reasoning models (OpenRouter `reasoning`,
+  // DeepSeek `reasoning_content`); `reasoningDetails` is the RAW OpenRouter
+  // `reasoning_details` array, persisted verbatim because Anthropic models
+  // require it replayed intact on later tool-call turns (signed thinking
+  // chain). Assistant rows only; null elsewhere.
+  reasoning        String? @db.Text
+  reasoningDetails Json?   @map("reasoning_details")
+
   // Soft-delete tombstone — mirrors Chat.deletedAt so GDPR delete can
   // cascade without losing chat shape (foreign-key cascade still works
   // on hard purge from the cron).

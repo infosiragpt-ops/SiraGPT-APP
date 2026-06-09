@@ -207,6 +207,29 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
     --sidebar-border: 215 21% 11%;     /* #161B22 */
     --sidebar-ring: 253 100% 68%;
   }
+
+  /*
+   * Medianoche — OLED flavor of the dark theme. Activated by adding
+   * `midnight` NEXT TO the `dark` class (the boot script in
+   * app/layout.tsx + the theme toggle manage the flag), so it inherits
+   * every dark style and only re-tints the canvas/surfaces to true
+   * black. Scoped to `.dark.midnight`: the class is inert in light mode.
+   */
+  .dark.midnight {
+    --background: 0 0% 0%;             /* #000000 — true black canvas */
+    --card: 220 14% 4%;                /* #090A0C — surface/primary */
+    --popover: 220 14% 6%;             /* #0D0F12 — surface/elevated */
+    --secondary: 220 14% 6%;
+    --muted: 220 14% 5%;
+    --accent: 220 14% 7%;
+    --border: 217 12% 12%;             /* slightly stronger edge on pure black */
+    --input: 217 12% 12%;
+    --surface-elevated: 220 14% 6%;
+    --composer-bg: 220 14% 3%;         /* #060708 */
+    --composer-border: 217 14% 13%;
+    --sidebar-background: 220 16% 2%;  /* #040506 */
+    --sidebar-border: 217 14% 9%;
+  }
 }
 
 @layer base {
@@ -466,6 +489,30 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 
 .chat-tools-menu .flex-1 {
   min-width: 0;
+}
+
+/* Soft inset hairline between the attach/tools group and the
+   AI-generation group — reads as etched glass, not a hard rule. */
+.liquid-menu-separator {
+  height: 1px;
+  margin: 0.3rem 0.55rem;
+  border: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    hsl(var(--foreground) / 0.12) 18%,
+    hsl(var(--foreground) / 0.12) 82%,
+    transparent
+  );
+}
+.dark .liquid-menu-separator {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    hsl(0 0% 100% / 0.1) 18%,
+    hsl(0 0% 100% / 0.1) 82%,
+    transparent
+  );
 }
 
 .chat-tools-menu .text-xs {
@@ -1673,7 +1720,7 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   .chat-tools-menu .liquid-icon {
     width: 1.65rem !important;
     height: 1.65rem !important;
-    border-radius: 0.58rem !important;
+    border-radius: 999px !important;
   }
 
   .chat-tools-menu .text-xs {
@@ -4664,23 +4711,27 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
   animation: liquid-shimmer 420ms cubic-bezier(0.25, 0.1, 0.25, 1) forwards;
 }
 
+/* Uniform row height — every entry (with or without subtitle, active
+   dot or Pro badge) reads as the same visual unit. */
 .chat-tools-menu .liquid-menu-item {
-  min-height: 2.2rem;
+  min-height: 2.6rem;
 }
 
 .chat-tools-menu .liquid-menu-item > div {
   gap: 0.55rem !important;
 }
 
+/* Icon chips: perfect circles, one size for every row — the menu reads
+   as a single rhythm instead of mixed squares/circles/emoji. */
 .chat-tools-menu .liquid-icon {
-  width: 1.65rem !important;
-  height: 1.65rem !important;
-  border-radius: 0.58rem !important;
+  width: 1.75rem !important;
+  height: 1.75rem !important;
+  border-radius: 999px !important;
 }
 
 .chat-tools-menu .liquid-icon :is(svg, img) {
-  width: 0.82rem !important;
-  height: 0.82rem !important;
+  width: 0.85rem !important;
+  height: 0.85rem !important;
 }
 
 .chat-tools-menu .liquid-label {
@@ -5786,4 +5837,30 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
 .liquid-menu-item[data-accent="cloud"]:focus-visible::after {
   opacity: 1;
   border-radius: 17px;
+}
+
+/*
+ * Thinking-trace text shimmer — same sweep as .premium-shimmer but clipped
+ * to the glyphs, for the "Pensando…" header of the extended-thinking panel.
+ */
+.thinking-shimmer-text {
+  background-image: linear-gradient(
+    100deg,
+    hsl(var(--muted-foreground)) 35%,
+    hsl(var(--foreground)) 50%,
+    hsl(var(--muted-foreground)) 65%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: premium-shimmer 1.8s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thinking-shimmer-text {
+    animation: none;
+    background-image: none;
+    color: hsl(var(--muted-foreground));
+  }
 }

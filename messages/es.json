@@ -123,15 +123,10 @@
     "cancel": "Cancelar",
     "pipeline": "Flujo",
     "phase": {
-
       "search": "Buscar fuentes académicas",
-
       "validate": "Validar DOIs",
-
       "synthesize": "Redactar con citas",
-
       "format": "Construir referencias"
-
     },
     "searchRunning": "Consultando OpenAlex…",
     "validateRunning": "Verificando en CrossRef…",
@@ -182,34 +177,118 @@
     "saving": "Guardando…",
     "saved": "Guardado",
     "offline": "Sin conexión — cambios locales",
-
     "sections": {
-      "general":         { "label": "General",         "desc": "Apariencia, idioma y accesibilidad" },
-      "models":          { "label": "Modelos AI",      "desc": "Modelos disponibles y favoritos" },
-      "notifications":   { "label": "Notificaciones",  "desc": "Canales y alertas" },
-      "personalization": { "label": "Personalización", "desc": "Estilo, tono y capacidades" },
-      "apps":            { "label": "Aplicaciones",    "desc": "Conexiones y conectores" },
-      "schedules":       { "label": "Programaciones",  "desc": "Ejecuciones programadas" },
-      "data":            { "label": "Control de datos","desc": "Privacidad, historial y datos" },
-      "security":        { "label": "Seguridad",       "desc": "MFA y sesiones" },
-      "account":         { "label": "Cuenta",          "desc": "Perfil de constructor" }
+      "general": {
+        "label": "General",
+        "desc": "Apariencia, idioma y accesibilidad"
+      },
+      "models": {
+        "label": "Modelos AI",
+        "desc": "Modelos disponibles y favoritos"
+      },
+      "notifications": {
+        "label": "Notificaciones",
+        "desc": "Canales y alertas"
+      },
+      "personalization": {
+        "label": "Personalización",
+        "desc": "Estilo, tono y capacidades"
+      },
+      "apps": {
+        "label": "Aplicaciones",
+        "desc": "Conexiones y conectores"
+      },
+      "schedules": {
+        "label": "Programaciones",
+        "desc": "Ejecuciones programadas"
+      },
+      "data": {
+        "label": "Control de datos",
+        "desc": "Privacidad, historial y datos"
+      },
+      "security": {
+        "label": "Seguridad",
+        "desc": "MFA y sesiones"
+      },
+      "account": {
+        "label": "Cuenta",
+        "desc": "Perfil de constructor"
+      }
     },
-
     "general": {
-      "display": { "title": "Apariencia", "desc": "Apariencia visual de la aplicación" },
-      "theme": { "label": "Tema", "desc": "Tema claro, oscuro o el del sistema", "light": "Claro", "dark": "Oscuro", "system": "Sistema" },
-      "accent": { "label": "Color de acento", "desc": "Color primario usado en botones y acentos" },
-      "fontSize": { "label": "Tamaño de fuente", "desc": "Tamaño base de la tipografía", "small": "Pequeño", "medium": "Mediano", "large": "Grande" },
-      "density": { "label": "Densidad", "desc": "Espaciado vertical de la UI", "compact": "Compacto", "comfortable": "Cómodo", "spacious": "Espacioso" },
-      "region": { "title": "Idioma y región", "desc": "Formato de fecha, zona horaria e idioma" },
+      "display": {
+        "title": "Apariencia",
+        "desc": "Apariencia visual de la aplicación"
+      },
+      "theme": {
+        "label": "Tema",
+        "desc": "Tema claro, oscuro o el del sistema",
+        "light": "Claro",
+        "dark": "Oscuro",
+        "system": "Sistema"
+      },
+      "accent": {
+        "label": "Color de acento",
+        "desc": "Color primario usado en botones y acentos"
+      },
+      "fontSize": {
+        "label": "Tamaño de fuente",
+        "desc": "Tamaño base de la tipografía",
+        "small": "Pequeño",
+        "medium": "Mediano",
+        "large": "Grande"
+      },
+      "density": {
+        "label": "Densidad",
+        "desc": "Espaciado vertical de la UI",
+        "compact": "Compacto",
+        "comfortable": "Cómodo",
+        "spacious": "Espacioso"
+      },
+      "region": {
+        "title": "Idioma y región",
+        "desc": "Formato de fecha, zona horaria e idioma"
+      },
       "interfaceLanguage": "Idioma de la interfaz",
-      "spokenLanguage": { "label": "Idioma hablado", "desc": "Para reconocimiento de voz", "automatic": "Automático" },
+      "spokenLanguage": {
+        "label": "Idioma hablado",
+        "desc": "Para reconocimiento de voz",
+        "automatic": "Automático"
+      },
       "dateFormat": "Formato de fecha",
-      "timeZone": { "label": "Zona horaria", "desc": "Detectada automáticamente" },
-      "timeFormat": { "label": "Formato de hora", "h12": "12 horas", "h24": "24 horas" },
-      "voice": { "title": "Voz y audio", "assistantVoice": "Voz del asistente", "autoPlay": "Reproducir respuestas automáticamente", "autoPlayDesc": "Lee las respuestas en voz alta", "standalone": "Modo de voz independiente", "standaloneDesc": "Pantalla completa sin elementos visuales" },
-      "aiModels": { "title": "Modelos de IA", "showExtras": "Mostrar modelos adicionales", "showExtrasDesc": "Ver todos los modelos disponibles", "stream": "Transmitir respuestas", "streamDesc": "Ver las respuestas mientras se generan" },
-      "accessibility": { "title": "Accesibilidad", "shortcuts": "Atajos de teclado", "shortcutsDesc": "Habilitar navegación con teclado", "reduceMotion": "Reducir movimiento", "reduceMotionDesc": "Minimizar animaciones en toda la app", "highContrast": "Alto contraste", "highContrastDesc": "Mejorar visibilidad de elementos" }
+      "timeZone": {
+        "label": "Zona horaria",
+        "desc": "Detectada automáticamente"
+      },
+      "timeFormat": {
+        "label": "Formato de hora",
+        "h12": "12 horas",
+        "h24": "24 horas"
+      },
+      "voice": {
+        "title": "Voz y audio",
+        "assistantVoice": "Voz del asistente",
+        "autoPlay": "Reproducir respuestas automáticamente",
+        "autoPlayDesc": "Lee las respuestas en voz alta",
+        "standalone": "Modo de voz independiente",
+        "standaloneDesc": "Pantalla completa sin elementos visuales"
+      },
+      "aiModels": {
+        "title": "Modelos de IA",
+        "showExtras": "Mostrar modelos adicionales",
+        "showExtrasDesc": "Ver todos los modelos disponibles",
+        "stream": "Transmitir respuestas",
+        "streamDesc": "Ver las respuestas mientras se generan"
+      },
+      "accessibility": {
+        "title": "Accesibilidad",
+        "shortcuts": "Atajos de teclado",
+        "shortcutsDesc": "Habilitar navegación con teclado",
+        "reduceMotion": "Reducir movimiento",
+        "reduceMotionDesc": "Minimizar animaciones en toda la app",
+        "highContrast": "Alto contraste",
+        "highContrastDesc": "Mejorar visibilidad de elementos"
+      }
     }
   },
   "auth": {
@@ -263,29 +342,45 @@
     "subtitle": "Gestiona los ajustes y preferencias de tu cuenta.",
     "synced": "Sincronizado",
     "admin": "Administrador",
-    "personalInfo": { "title": "Información personal", "desc": "Tus datos de perfil en siraGPT" },
+    "personalInfo": {
+      "title": "Información personal",
+      "desc": "Tus datos de perfil en siraGPT"
+    },
     "fullName": "Nombre completo",
     "fullNamePlaceholder": "Tu nombre",
     "emailImmutable": "El email no se puede modificar por seguridad.",
     "discard": "Descartar",
     "save": "Guardar cambios",
     "saving": "Guardando…",
-    "security": { "title": "Seguridad", "desc": "Actualiza tu contraseña periódicamente" },
+    "security": {
+      "title": "Seguridad",
+      "desc": "Actualiza tu contraseña periódicamente"
+    },
     "currentPassword": "Contraseña actual",
     "newPassword": "Nueva contraseña",
     "confirmPassword": "Confirmar contraseña",
     "minChars": "Mínimo 8 caracteres",
     "updatePassword": "Actualizar contraseña",
     "updatingPassword": "Actualizando…",
-    "subscription": { "title": "Suscripción", "desc": "Plan y facturación" },
+    "subscription": {
+      "title": "Suscripción",
+      "desc": "Plan y facturación"
+    },
     "nextBilling": "Próxima facturación",
     "manageSubscription": "Gestionar suscripción",
-    "usage": { "title": "Uso mensual", "subtitleCalls": "Llamadas consumidas", "subtitleTokens": "Tokens consumidos" },
+    "usage": {
+      "title": "Uso mensual",
+      "subtitleCalls": "Llamadas consumidas",
+      "subtitleTokens": "Tokens consumidos"
+    },
     "used": "usado",
     "remaining": "restantes",
     "usageWarning": "Ya superaste el 70% de tu cupo mensual.",
     "usageDanger": "Te queda muy poco cupo este mes. Considera actualizar tu plan para no interrumpir tu flujo.",
-    "adminAccess": { "title": "Acceso de administrador", "desc": "Privilegios activos" },
+    "adminAccess": {
+      "title": "Acceso de administrador",
+      "desc": "Privilegios activos"
+    },
     "openAdmin": "Abrir panel de admin"
   },
   "messageActions": {
@@ -299,7 +394,7 @@
     "feedbackBad": "Respuesta poco útil"
   },
   "composer": {
-    "placeholderDefault": "Escribe un mensaje",
+    "placeholderDefault": "Escribe, pega un enlace o arrastra archivos…",
     "placeholderImage": "Describe la imagen que quieres crear",
     "placeholderVideo": "Describe el video que quieres crear",
     "placeholderWebSearch": "Busca en la web",
@@ -341,5 +436,16 @@
     "or": "o",
     "processing": "Procesando tus mensajes…",
     "tryAgain": "Intentar de nuevo"
+  },
+  "thinking": {
+    "thinking": "Pensando…",
+    "thought": "Pensamiento",
+    "thoughtFor": "Pensó durante {duration}",
+    "reasoningAria": "Razonamiento del modelo",
+    "arguments": "Argumentos",
+    "toolSearching": "Buscando información",
+    "toolReading": "Leyendo una fuente",
+    "toolRunning": "Ejecutando código",
+    "toolUsing": "Usando {name}"
   }
 }

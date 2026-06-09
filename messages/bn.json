@@ -106,15 +106,10 @@
     "cancel": "Cancel",
     "pipeline": "Pipeline",
     "phase": {
-
       "search": "Search academic sources",
-
       "validate": "Validate DOIs",
-
       "synthesize": "Write cited markdown",
-
       "format": "Build reference list"
-
     },
     "searchRunning": "Querying OpenAlex…",
     "validateRunning": "Checking CrossRef…",
@@ -165,34 +160,118 @@
     "saving": "Saving…",
     "saved": "Saved",
     "offline": "Offline — local changes",
-
     "sections": {
-      "general":         { "label": "General",         "desc": "Appearance, language and accessibility" },
-      "models":          { "label": "AI Models",       "desc": "Available models and favorites" },
-      "notifications":   { "label": "Notifications",   "desc": "Channels and alerts" },
-      "personalization": { "label": "Personalization", "desc": "Style, tone and capabilities" },
-      "apps":            { "label": "Apps",            "desc": "Connections and connectors" },
-      "schedules":       { "label": "Schedules",       "desc": "Scheduled runs" },
-      "data":            { "label": "Data controls",   "desc": "Privacy, history and data" },
-      "security":        { "label": "Security",        "desc": "MFA and sessions" },
-      "account":         { "label": "Account",         "desc": "Builder profile" }
+      "general": {
+        "label": "General",
+        "desc": "Appearance, language and accessibility"
+      },
+      "models": {
+        "label": "AI Models",
+        "desc": "Available models and favorites"
+      },
+      "notifications": {
+        "label": "Notifications",
+        "desc": "Channels and alerts"
+      },
+      "personalization": {
+        "label": "Personalization",
+        "desc": "Style, tone and capabilities"
+      },
+      "apps": {
+        "label": "Apps",
+        "desc": "Connections and connectors"
+      },
+      "schedules": {
+        "label": "Schedules",
+        "desc": "Scheduled runs"
+      },
+      "data": {
+        "label": "Data controls",
+        "desc": "Privacy, history and data"
+      },
+      "security": {
+        "label": "Security",
+        "desc": "MFA and sessions"
+      },
+      "account": {
+        "label": "Account",
+        "desc": "Builder profile"
+      }
     },
-
     "general": {
-      "display": { "title": "Display", "desc": "Visual appearance of the application" },
-      "theme": { "label": "Theme", "desc": "Light, dark or system theme", "light": "Light", "dark": "Dark", "system": "System" },
-      "accent": { "label": "Accent color", "desc": "Primary color used for buttons and accents" },
-      "fontSize": { "label": "Font size", "desc": "Base typography size", "small": "Small", "medium": "Medium", "large": "Large" },
-      "density": { "label": "Density", "desc": "Vertical spacing of the UI", "compact": "Compact", "comfortable": "Comfortable", "spacious": "Spacious" },
-      "region": { "title": "Language & region", "desc": "Date, time zone and language formatting" },
+      "display": {
+        "title": "Display",
+        "desc": "Visual appearance of the application"
+      },
+      "theme": {
+        "label": "Theme",
+        "desc": "Light, dark or system theme",
+        "light": "Light",
+        "dark": "Dark",
+        "system": "System"
+      },
+      "accent": {
+        "label": "Accent color",
+        "desc": "Primary color used for buttons and accents"
+      },
+      "fontSize": {
+        "label": "Font size",
+        "desc": "Base typography size",
+        "small": "Small",
+        "medium": "Medium",
+        "large": "Large"
+      },
+      "density": {
+        "label": "Density",
+        "desc": "Vertical spacing of the UI",
+        "compact": "Compact",
+        "comfortable": "Comfortable",
+        "spacious": "Spacious"
+      },
+      "region": {
+        "title": "Language & region",
+        "desc": "Date, time zone and language formatting"
+      },
       "interfaceLanguage": "Interface language",
-      "spokenLanguage": { "label": "Spoken language", "desc": "For voice recognition", "automatic": "Automatic" },
+      "spokenLanguage": {
+        "label": "Spoken language",
+        "desc": "For voice recognition",
+        "automatic": "Automatic"
+      },
       "dateFormat": "Date format",
-      "timeZone": { "label": "Time zone", "desc": "Detected automatically" },
-      "timeFormat": { "label": "Time format", "h12": "12-hour", "h24": "24-hour" },
-      "voice": { "title": "Voice & audio", "assistantVoice": "Assistant voice", "autoPlay": "Auto-play replies", "autoPlayDesc": "Read responses aloud", "standalone": "Standalone voice mode", "standaloneDesc": "Full screen with no visual elements" },
-      "aiModels": { "title": "AI Models", "showExtras": "Show additional models", "showExtrasDesc": "See every available model", "stream": "Stream responses", "streamDesc": "See responses as they're generated" },
-      "accessibility": { "title": "Accessibility", "shortcuts": "Keyboard shortcuts", "shortcutsDesc": "Enable keyboard navigation", "reduceMotion": "Reduce motion", "reduceMotionDesc": "Minimize animations across the app", "highContrast": "High contrast", "highContrastDesc": "Improve element visibility" }
+      "timeZone": {
+        "label": "Time zone",
+        "desc": "Detected automatically"
+      },
+      "timeFormat": {
+        "label": "Time format",
+        "h12": "12-hour",
+        "h24": "24-hour"
+      },
+      "voice": {
+        "title": "Voice & audio",
+        "assistantVoice": "Assistant voice",
+        "autoPlay": "Auto-play replies",
+        "autoPlayDesc": "Read responses aloud",
+        "standalone": "Standalone voice mode",
+        "standaloneDesc": "Full screen with no visual elements"
+      },
+      "aiModels": {
+        "title": "AI Models",
+        "showExtras": "Show additional models",
+        "showExtrasDesc": "See every available model",
+        "stream": "Stream responses",
+        "streamDesc": "See responses as they're generated"
+      },
+      "accessibility": {
+        "title": "Accessibility",
+        "shortcuts": "Keyboard shortcuts",
+        "shortcutsDesc": "Enable keyboard navigation",
+        "reduceMotion": "Reduce motion",
+        "reduceMotionDesc": "Minimize animations across the app",
+        "highContrast": "High contrast",
+        "highContrastDesc": "Improve element visibility"
+      }
     }
   },
   "auth": {
@@ -259,5 +338,16 @@
     "or": "or",
     "processing": "Processing your messages…",
     "tryAgain": "Try again"
+  },
+  "thinking": {
+    "thinking": "ভাবছে…",
+    "thought": "চিন্তার প্রক্রিয়া",
+    "thoughtFor": "{duration} ধরে ভেবেছে",
+    "reasoningAria": "মডেলের যুক্তি",
+    "arguments": "আর্গুমেন্ট",
+    "toolSearching": "তথ্য খুঁজছে",
+    "toolReading": "উৎস পড়ছে",
+    "toolRunning": "কোড চালাচ্ছে",
+    "toolUsing": "{name} ব্যবহার করছে"
   }
 }

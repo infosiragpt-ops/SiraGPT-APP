@@ -1,8 +1,15 @@
 {
   "sidebar": {
-    "newChat": "नई चैट", "searchChats": "चैट खोजें", "library": "लाइब्रेरी", "gpts": "GPTs",
-    "recentChats": "हाल की चैट", "noChats": "अभी कोई चैट नहीं है। बातचीत शुरू करें!",
-    "settings": "सेटिंग्स", "profile": "प्रोफ़ाइल", "billing": "बिलिंग", "logout": "लॉग आउट",
+    "newChat": "नई चैट",
+    "searchChats": "चैट खोजें",
+    "library": "लाइब्रेरी",
+    "gpts": "GPTs",
+    "recentChats": "हाल की चैट",
+    "noChats": "अभी कोई चैट नहीं है। बातचीत शुरू करें!",
+    "settings": "सेटिंग्स",
+    "profile": "प्रोफ़ाइल",
+    "billing": "बिलिंग",
+    "logout": "लॉग आउट",
     "today": "आज",
     "last7Days": "पिछले 7 दिन",
     "older": "पुराने",
@@ -99,15 +106,10 @@
     "cancel": "Cancel",
     "pipeline": "Pipeline",
     "phase": {
-
       "search": "Search academic sources",
-
       "validate": "Validate DOIs",
-
       "synthesize": "Write cited markdown",
-
       "format": "Build reference list"
-
     },
     "searchRunning": "Querying OpenAlex…",
     "validateRunning": "Checking CrossRef…",
@@ -131,67 +133,221 @@
     "backToProject": "← {name}"
   },
   "chat": {
-    "placeholder": "संदेश लिखें", "send": "भेजें", "stop": "रोकें", "regenerate": "पुनः तैयार करें",
-    "copy": "कॉपी", "delete": "हटाएँ", "edit": "संपादित करें", "share": "साझा करें", "thinking": "सोच रहा है…",
-    "attachFile": "फ़ाइल संलग्न करें", "voiceInput": "ध्वनि इनपुट", "webSearch": "वेब खोज",
-    "imageGeneration": "छवि बनाएँ", "videoGeneration": "वीडियो बनाएँ",
-    "connectorActive": "कनेक्टर सक्रिय", "showSidebar": "साइडबार दिखाएँ"
+    "placeholder": "संदेश लिखें",
+    "send": "भेजें",
+    "stop": "रोकें",
+    "regenerate": "पुनः तैयार करें",
+    "copy": "कॉपी",
+    "delete": "हटाएँ",
+    "edit": "संपादित करें",
+    "share": "साझा करें",
+    "thinking": "सोच रहा है…",
+    "attachFile": "फ़ाइल संलग्न करें",
+    "voiceInput": "ध्वनि इनपुट",
+    "webSearch": "वेब खोज",
+    "imageGeneration": "छवि बनाएँ",
+    "videoGeneration": "वीडियो बनाएँ",
+    "connectorActive": "कनेक्टर सक्रिय",
+    "showSidebar": "साइडबार दिखाएँ"
   },
   "settings": {
-    "title": "सेटिंग्स", "subtitle": "siraGPT को अपनी शैली के अनुसार कस्टमाइज़ करें।",
-    "searchPlaceholder": "सेटिंग खोजें…", "noResults": "कोई परिणाम नहीं", "backToChat": "चैट पर वापस",
-    "autoSync": "स्वतः सिंक", "saving": "सहेजा जा रहा है…", "saved": "सहेजा गया", "offline": "ऑफ़लाइन — स्थानीय बदलाव",
+    "title": "सेटिंग्स",
+    "subtitle": "siraGPT को अपनी शैली के अनुसार कस्टमाइज़ करें।",
+    "searchPlaceholder": "सेटिंग खोजें…",
+    "noResults": "कोई परिणाम नहीं",
+    "backToChat": "चैट पर वापस",
+    "autoSync": "स्वतः सिंक",
+    "saving": "सहेजा जा रहा है…",
+    "saved": "सहेजा गया",
+    "offline": "ऑफ़लाइन — स्थानीय बदलाव",
     "sections": {
-      "general":         { "label": "सामान्य",        "desc": "रूप, भाषा और अभिगम्यता" },
-      "models":          { "label": "AI मॉडल",        "desc": "उपलब्ध मॉडल और पसंदीदा" },
-      "notifications":   { "label": "सूचनाएँ",        "desc": "चैनल और अलर्ट" },
-      "personalization": { "label": "वैयक्तिकरण",     "desc": "शैली, स्वर और क्षमताएँ" },
-      "apps":            { "label": "ऐप्स",           "desc": "कनेक्शन और कनेक्टर" },
-      "schedules":       { "label": "शेड्यूल",        "desc": "निर्धारित रन" },
-      "data":            { "label": "डेटा नियंत्रण",  "desc": "गोपनीयता, इतिहास और डेटा" },
-      "security":        { "label": "सुरक्षा",        "desc": "MFA और सत्र" },
-      "account":         { "label": "खाता",           "desc": "बिल्डर प्रोफ़ाइल" }
+      "general": {
+        "label": "सामान्य",
+        "desc": "रूप, भाषा और अभिगम्यता"
+      },
+      "models": {
+        "label": "AI मॉडल",
+        "desc": "उपलब्ध मॉडल और पसंदीदा"
+      },
+      "notifications": {
+        "label": "सूचनाएँ",
+        "desc": "चैनल और अलर्ट"
+      },
+      "personalization": {
+        "label": "वैयक्तिकरण",
+        "desc": "शैली, स्वर और क्षमताएँ"
+      },
+      "apps": {
+        "label": "ऐप्स",
+        "desc": "कनेक्शन और कनेक्टर"
+      },
+      "schedules": {
+        "label": "शेड्यूल",
+        "desc": "निर्धारित रन"
+      },
+      "data": {
+        "label": "डेटा नियंत्रण",
+        "desc": "गोपनीयता, इतिहास और डेटा"
+      },
+      "security": {
+        "label": "सुरक्षा",
+        "desc": "MFA और सत्र"
+      },
+      "account": {
+        "label": "खाता",
+        "desc": "बिल्डर प्रोफ़ाइल"
+      }
     },
     "general": {
-      "display": { "title": "डिस्प्ले", "desc": "ऐप की दृश्य उपस्थिति" },
-      "theme": { "label": "थीम", "desc": "हल्की, गहरी या सिस्टम", "light": "हल्की", "dark": "गहरी", "system": "सिस्टम" },
-      "accent": { "label": "एक्सेंट रंग", "desc": "बटनों का प्रमुख रंग" },
-      "fontSize": { "label": "फ़ॉन्ट आकार", "desc": "आधार आकार", "small": "छोटा", "medium": "मध्यम", "large": "बड़ा" },
-      "density": { "label": "घनत्व", "desc": "ऊर्ध्वाधर अंतराल", "compact": "सघन", "comfortable": "आरामदायक", "spacious": "विस्तृत" },
-      "region": { "title": "भाषा और क्षेत्र", "desc": "दिनांक, समय क्षेत्र और भाषा" },
+      "display": {
+        "title": "डिस्प्ले",
+        "desc": "ऐप की दृश्य उपस्थिति"
+      },
+      "theme": {
+        "label": "थीम",
+        "desc": "हल्की, गहरी या सिस्टम",
+        "light": "हल्की",
+        "dark": "गहरी",
+        "system": "सिस्टम"
+      },
+      "accent": {
+        "label": "एक्सेंट रंग",
+        "desc": "बटनों का प्रमुख रंग"
+      },
+      "fontSize": {
+        "label": "फ़ॉन्ट आकार",
+        "desc": "आधार आकार",
+        "small": "छोटा",
+        "medium": "मध्यम",
+        "large": "बड़ा"
+      },
+      "density": {
+        "label": "घनत्व",
+        "desc": "ऊर्ध्वाधर अंतराल",
+        "compact": "सघन",
+        "comfortable": "आरामदायक",
+        "spacious": "विस्तृत"
+      },
+      "region": {
+        "title": "भाषा और क्षेत्र",
+        "desc": "दिनांक, समय क्षेत्र और भाषा"
+      },
       "interfaceLanguage": "इंटरफ़ेस भाषा",
-      "spokenLanguage": { "label": "बोली जाने वाली भाषा", "desc": "वाक् पहचान के लिए", "automatic": "स्वचालित" },
+      "spokenLanguage": {
+        "label": "बोली जाने वाली भाषा",
+        "desc": "वाक् पहचान के लिए",
+        "automatic": "स्वचालित"
+      },
       "dateFormat": "दिनांक प्रारूप",
-      "timeZone": { "label": "समय क्षेत्र", "desc": "स्वतः पहचाना गया" },
-      "timeFormat": { "label": "समय प्रारूप", "h12": "12-घंटे", "h24": "24-घंटे" },
-      "voice": { "title": "आवाज़ और ऑडियो", "assistantVoice": "सहायक की आवाज़", "autoPlay": "उत्तर स्वतः चलाएँ", "autoPlayDesc": "उत्तर ज़ोर से पढ़ें", "standalone": "स्टैंडअलोन आवाज़ मोड", "standaloneDesc": "बिना दृश्य तत्वों के पूर्ण स्क्रीन" },
-      "aiModels": { "title": "AI मॉडल", "showExtras": "अतिरिक्त मॉडल दिखाएँ", "showExtrasDesc": "सभी उपलब्ध मॉडल देखें", "stream": "उत्तर स्ट्रीम करें", "streamDesc": "उत्पन्न होते समय उत्तर देखें" },
-      "accessibility": { "title": "अभिगम्यता", "shortcuts": "कीबोर्ड शॉर्टकट", "shortcutsDesc": "कीबोर्ड नेविगेशन सक्षम करें", "reduceMotion": "गति कम करें", "reduceMotionDesc": "एनिमेशन कम से कम करें", "highContrast": "उच्च कंट्रास्ट", "highContrastDesc": "तत्वों की दृश्यता बेहतर करें" }
+      "timeZone": {
+        "label": "समय क्षेत्र",
+        "desc": "स्वतः पहचाना गया"
+      },
+      "timeFormat": {
+        "label": "समय प्रारूप",
+        "h12": "12-घंटे",
+        "h24": "24-घंटे"
+      },
+      "voice": {
+        "title": "आवाज़ और ऑडियो",
+        "assistantVoice": "सहायक की आवाज़",
+        "autoPlay": "उत्तर स्वतः चलाएँ",
+        "autoPlayDesc": "उत्तर ज़ोर से पढ़ें",
+        "standalone": "स्टैंडअलोन आवाज़ मोड",
+        "standaloneDesc": "बिना दृश्य तत्वों के पूर्ण स्क्रीन"
+      },
+      "aiModels": {
+        "title": "AI मॉडल",
+        "showExtras": "अतिरिक्त मॉडल दिखाएँ",
+        "showExtrasDesc": "सभी उपलब्ध मॉडल देखें",
+        "stream": "उत्तर स्ट्रीम करें",
+        "streamDesc": "उत्पन्न होते समय उत्तर देखें"
+      },
+      "accessibility": {
+        "title": "अभिगम्यता",
+        "shortcuts": "कीबोर्ड शॉर्टकट",
+        "shortcutsDesc": "कीबोर्ड नेविगेशन सक्षम करें",
+        "reduceMotion": "गति कम करें",
+        "reduceMotionDesc": "एनिमेशन कम से कम करें",
+        "highContrast": "उच्च कंट्रास्ट",
+        "highContrastDesc": "तत्वों की दृश्यता बेहतर करें"
+      }
     }
   },
   "auth": {
-    "welcomeBack": "वापस स्वागत है", "login": "साइन इन", "signIn": "साइन इन", "register": "साइन अप",
-    "signUp": "खाता बनाएँ", "logout": "साइन आउट", "email": "ईमेल", "emailPlaceholder": "अपना ईमेल दर्ज करें",
-    "password": "पासवर्ड", "passwordPlaceholder": "अपना पासवर्ड दर्ज करें", "forgotPassword": "पासवर्ड भूल गए?",
-    "orContinueWith": "या इसके साथ जारी रखें", "continueWithGoogle": "Google के साथ जारी रखें",
-    "noAccount": "खाता नहीं है?", "haveAccount": "पहले से खाता है?", "tagline": "अपने Sira Gpt खाते में साइन इन करें"
+    "welcomeBack": "वापस स्वागत है",
+    "login": "साइन इन",
+    "signIn": "साइन इन",
+    "register": "साइन अप",
+    "signUp": "खाता बनाएँ",
+    "logout": "साइन आउट",
+    "email": "ईमेल",
+    "emailPlaceholder": "अपना ईमेल दर्ज करें",
+    "password": "पासवर्ड",
+    "passwordPlaceholder": "अपना पासवर्ड दर्ज करें",
+    "forgotPassword": "पासवर्ड भूल गए?",
+    "orContinueWith": "या इसके साथ जारी रखें",
+    "continueWithGoogle": "Google के साथ जारी रखें",
+    "noAccount": "खाता नहीं है?",
+    "haveAccount": "पहले से खाता है?",
+    "tagline": "अपने Sira Gpt खाते में साइन इन करें"
   },
   "documents": {
-    "download": "डाउनलोड", "close": "बंद करें", "wordDocument": "Word दस्तावेज़", "excelFile": "Excel फ़ाइल",
-    "presentation": "प्रस्तुति", "pdfFile": "PDF फ़ाइल", "downloadAsWord": "Word (.docx) के रूप में डाउनलोड",
-    "downloadAsPdf": "PDF के रूप में डाउनलोड", "generating": "जनरेट किया जा रहा है…"
+    "download": "डाउनलोड",
+    "close": "बंद करें",
+    "wordDocument": "Word दस्तावेज़",
+    "excelFile": "Excel फ़ाइल",
+    "presentation": "प्रस्तुति",
+    "pdfFile": "PDF फ़ाइल",
+    "downloadAsWord": "Word (.docx) के रूप में डाउनलोड",
+    "downloadAsPdf": "PDF के रूप में डाउनलोड",
+    "generating": "जनरेट किया जा रहा है…"
   },
   "errors": {
     "serverError": "आपका अनुरोध संसाधित करने में समस्या हुई। कृपया पुनः प्रयास करें।",
     "networkError": "कनेक्शन त्रुटि। अपना इंटरनेट जाँचें।",
-    "unauthorized": "सत्र समाप्त हो गया। कृपया फिर से साइन इन करें।", "notFound": "संसाधन नहीं मिला।"
+    "unauthorized": "सत्र समाप्त हो गया। कृपया फिर से साइन इन करें।",
+    "notFound": "संसाधन नहीं मिला।"
   },
   "common": {
-    "loading": "लोड हो रहा है…", "noResults": "कोई परिणाम नहीं", "confirm": "पुष्टि करें", "cancel": "रद्द करें",
-    "delete": "हटाएँ", "edit": "संपादित करें", "save": "सहेजें", "close": "बंद करें", "open": "खोलें",
-    "back": "पीछे", "next": "अगला", "previous": "पिछला", "search": "खोजें", "filter": "फ़िल्टर",
-    "export": "निर्यात", "import": "आयात", "create": "बनाएँ", "update": "अपडेट करें", "yes": "हाँ",
-    "no": "नहीं", "all": "सभी", "none": "कोई नहीं", "select": "चुनें", "upload": "अपलोड",
-    "dragDrop": "फ़ाइलें यहाँ छोड़ें", "or": "या", "processing": "आपके संदेश संसाधित हो रहे हैं…", "tryAgain": "पुनः प्रयास"
+    "loading": "लोड हो रहा है…",
+    "noResults": "कोई परिणाम नहीं",
+    "confirm": "पुष्टि करें",
+    "cancel": "रद्द करें",
+    "delete": "हटाएँ",
+    "edit": "संपादित करें",
+    "save": "सहेजें",
+    "close": "बंद करें",
+    "open": "खोलें",
+    "back": "पीछे",
+    "next": "अगला",
+    "previous": "पिछला",
+    "search": "खोजें",
+    "filter": "फ़िल्टर",
+    "export": "निर्यात",
+    "import": "आयात",
+    "create": "बनाएँ",
+    "update": "अपडेट करें",
+    "yes": "हाँ",
+    "no": "नहीं",
+    "all": "सभी",
+    "none": "कोई नहीं",
+    "select": "चुनें",
+    "upload": "अपलोड",
+    "dragDrop": "फ़ाइलें यहाँ छोड़ें",
+    "or": "या",
+    "processing": "आपके संदेश संसाधित हो रहे हैं…",
+    "tryAgain": "पुनः प्रयास"
+  },
+  "thinking": {
+    "thinking": "सोच रहा है…",
+    "thought": "विचार प्रक्रिया",
+    "thoughtFor": "{duration} तक सोचा",
+    "reasoningAria": "मॉडल का तर्क",
+    "arguments": "आर्ग्युमेंट्स",
+    "toolSearching": "जानकारी खोज रहा है",
+    "toolReading": "स्रोत पढ़ रहा है",
+    "toolRunning": "कोड चला रहा है",
+    "toolUsing": "{name} का उपयोग कर रहा है"
   }
 }

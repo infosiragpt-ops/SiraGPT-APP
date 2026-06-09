@@ -43,6 +43,7 @@ import {
   Flag,
   Settings,
   PenSquare,
+  GraduationCap,
   MessageSquare} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -1266,12 +1267,12 @@ const ActionsDropdown = ({
             disabled={isUploading || isGeneratingImage}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-900/20 flex items-center justify-center">
+              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-blue-100 dark:bg-blue-900/20 flex items-center justify-center">
                 <Paperclip className="h-4 w-4 text-blue-600 dark:text-blue-400" />
               </div>
-              <div className="flex-1">
+              <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">Subir archivos</div>
-                <div className="text-xs text-muted-foreground">
+                <div className="truncate text-xs text-muted-foreground">
                   {isUploading ? 'Subiendo…' : 'Imágenes, PDFs, documentos'}
                 </div>
               </div>
@@ -1292,22 +1293,19 @@ const ActionsDropdown = ({
             disabled={isWebSearching || isGeneratingImage}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isWebSearchActive
-                ? 'bg-green-100 dark:bg-green-900/20'
-                : 'bg-emerald-100 dark:bg-emerald-900/20'
-                }`}>
-                <Globe className={`h-4 w-4 ${isWebSearchActive
-                  ? 'text-green-600 dark:text-green-400'
-                  : 'text-emerald-600 dark:text-emerald-400'
-                  }`} />
+              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-emerald-100 dark:bg-emerald-900/20 flex items-center justify-center">
+                <Globe className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
               </div>
-              <div className="flex-1">
+              <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">
-                  {isWebSearchActive ? 'Web Search Active' : 'Web Search'}
+                  {isWebSearchActive ? 'Web Search activo' : 'Web Search'}
+                </div>
+                <div className="truncate text-xs text-muted-foreground">
+                  Busca en internet en tiempo real
                 </div>
               </div>
               {isWebSearchActive && (
-                <div className="w-2 h-2 bg-green-500 rounded-full" />
+                <div className="w-2 h-2 shrink-0 bg-emerald-500 rounded-full" />
               )}
             </div>
           </DropdownMenuItem>
@@ -1319,11 +1317,11 @@ const ActionsDropdown = ({
             }}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon w-8 h-8 rounded-lg bg-gray-100 dark:bg-gray-900/20 flex items-center justify-center">
-                <Network width="13" height="13" />
+              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-gray-100 dark:bg-gray-900/20 flex items-center justify-center">
+                <Network className="h-4 w-4 text-gray-600 dark:text-gray-300" />
               </div>
               <div className="min-w-0 flex-1">
-                <div className="liquid-label font-semibold text-sm">APPs</div>
+                <div className="liquid-label font-medium text-sm">APPs</div>
                 <div className="truncate text-xs text-muted-foreground">
                   {activeAppsCount > 0 ? `${activeAppsCount} activa${activeAppsCount > 1 ? "s" : ""}` : "Gmail, Drive, Navegador, Chrome"}
                 </div>
@@ -1347,12 +1345,13 @@ const ActionsDropdown = ({
               }}
             >
               <div className="flex items-center gap-3 w-full">
-                <div className="liquid-icon w-8 h-8 rounded-lg bg-gray-100 dark:bg-gray-900/20 flex items-center justify-center">
-                  <Network width="13" height="13" />
+                <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-gray-100 dark:bg-gray-900/20 flex items-center justify-center">
+                  <Network className="h-4 w-4 text-gray-600 dark:text-gray-300" />
                 </div>
-                <div className="flex-1">
-                  <div className="liquid-label font-medium text-sm flex items-center">
-                    APPs
+                <div className="min-w-0 flex-1">
+                  <div className="liquid-label font-medium text-sm">APPs</div>
+                  <div className="truncate text-xs text-muted-foreground">
+                    {activeAppsCount > 0 ? `${activeAppsCount} activa${activeAppsCount > 1 ? "s" : ""}` : "Gmail, Drive, Navegador, Chrome"}
                   </div>
                 </div>
               </div>
@@ -1369,7 +1368,10 @@ const ActionsDropdown = ({
             </DropdownMenuPortal>
           </DropdownMenuSub>
 
-          <DropdownMenuSeparator />
+          <DropdownMenuSeparator className="liquid-menu-separator" />
+          <div className="px-2.5 pb-0.5 pt-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/80">
+            Generar con IA
+          </div>
 
           {/* Image Generation */}
           <DropdownMenuItem
@@ -1378,25 +1380,19 @@ const ActionsDropdown = ({
             disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isImageGenerationActive
-                ? 'bg-pink-100 dark:bg-pink-900/20'
-                : 'bg-pink-100 dark:bg-pink-900/20'
-                }`}>
-                <Palette className={`h-4 w-4 ${isImageGenerationActive
-                  ? 'text-pink-600 dark:text-pink-400'
-                  : 'text-pink-600 dark:text-pink-400'
-                  }`} />
+              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-pink-100 dark:bg-pink-900/20 flex items-center justify-center">
+                <Palette className="h-4 w-4 text-pink-600 dark:text-pink-400" />
               </div>
-              <div className="flex-1">
+              <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">
                   {isImageGenerationActive ? 'Imágenes activas' : 'Imágenes'}
                 </div>
-                <div className="text-xs text-muted-foreground">
+                <div className="truncate text-xs text-muted-foreground">
                   {isFreePlan ? 'Vista previa de generación con IA' : isGeneratingImage ? 'Generando ahora' : 'Genera imágenes con IA'}
                 </div>
               </div>
               {(isImageGenerationActive || isGeneratingImage) && (
-                <div className={cn("w-2 h-2 bg-pink-500 rounded-full", isGeneratingImage && "animate-pulse")} />
+                <div className={cn("w-2 h-2 shrink-0 bg-pink-500 rounded-full", isGeneratingImage && "animate-pulse")} />
               )}
               {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
@@ -1411,17 +1407,17 @@ const ActionsDropdown = ({
             disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon w-8 h-8 rounded-lg bg-cyan-100 dark:bg-cyan-900/20 flex items-center justify-center">
+              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-cyan-100 dark:bg-cyan-900/20 flex items-center justify-center">
                 <AudioLines className="h-4 w-4 text-cyan-600 dark:text-cyan-400" />
               </div>
-              <div className="flex-1">
+              <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">Voz</div>
-                <div className="text-xs text-muted-foreground">
+                <div className="truncate text-xs text-muted-foreground">
                   {isFreePlan ? 'Vista previa ElevenLabs / Mimo HD' : 'ElevenLabs / Mimo HD · TTS'}
                 </div>
               </div>
               {isVoiceGenerationActive && (
-                <div className="w-2 h-2 bg-cyan-500 rounded-full" />
+                <div className="w-2 h-2 shrink-0 bg-cyan-500 rounded-full" />
               )}
               {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
@@ -1436,25 +1432,19 @@ const ActionsDropdown = ({
             disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isVideoGenerationActive
-                ? 'bg-emerald-100 dark:bg-emerald-900/24'
-                : 'bg-emerald-100 dark:bg-emerald-900/20'
-                }`}>
-                <Video className={`h-4 w-4 ${isVideoGenerationActive
-                  ? 'text-emerald-700 dark:text-emerald-300'
-                  : 'text-emerald-700 dark:text-emerald-300'
-                  }`} />
+              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-emerald-100 dark:bg-emerald-900/20 flex items-center justify-center">
+                <Video className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
               </div>
-              <div className="flex-1">
+              <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">
-                  {isVideoGenerationActive ? 'Video Generation Active' : 'Video Generation'}
+                  {isVideoGenerationActive ? 'Video activo' : 'Video'}
                 </div>
-                <div className="text-xs text-muted-foreground">
+                <div className="truncate text-xs text-muted-foreground">
                   {isFreePlan ? 'Vista previa de video con IA' : 'Crea videos con fal.ai'}
                 </div>
               </div>
               {isVideoGenerationActive && (
-                <div className="w-2 h-2 bg-emerald-500 rounded-full" />
+                <div className="w-2 h-2 shrink-0 bg-emerald-500 rounded-full" />
               )}
               {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
@@ -1469,19 +1459,19 @@ const ActionsDropdown = ({
             disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon w-8 h-8 rounded-lg bg-rose-100 dark:bg-rose-900/20 flex items-center justify-center">
+              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-rose-100 dark:bg-rose-900/20 flex items-center justify-center">
                 <Music className="h-4 w-4 text-rose-600 dark:text-rose-400" />
               </div>
-              <div className="flex-1">
+              <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">
                   {isMusicGenerationActive ? 'Música activa' : 'Música'}
                 </div>
-                <div className="text-xs text-muted-foreground">
+                <div className="truncate text-xs text-muted-foreground">
                   {isFreePlan ? 'Vista previa de música con IA' : 'Lyria 3 Pro · genera canciones con IA'}
                 </div>
               </div>
               {isMusicGenerationActive && (
-                <div className="w-2 h-2 bg-rose-500 rounded-full" />
+                <div className="w-2 h-2 shrink-0 bg-rose-500 rounded-full" />
               )}
               {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
@@ -1499,22 +1489,19 @@ const ActionsDropdown = ({
             disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${chatType === 'thesis'
-                ? 'bg-purple-100 dark:bg-purple-900/20'
-                : 'bg-purple-100 dark:bg-purple-900/20'
-                }`}>
-                <span className="text-base leading-none" aria-hidden="true">🎓</span>
+              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-purple-100 dark:bg-purple-900/20 flex items-center justify-center">
+                <GraduationCap className="h-4 w-4 text-purple-600 dark:text-purple-400" />
               </div>
-              <div className="flex-1">
+              <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">
                   {chatType === 'thesis' ? 'Generador de tesis activo' : 'Generador de tesis'}
                 </div>
-                <div className="text-xs text-muted-foreground">
+                <div className="truncate text-xs text-muted-foreground">
                   {isFreePlan ? 'Vista previa de tesis académica' : 'Genera tesis académicas completas'}
                 </div>
               </div>
               {chatType === 'thesis' && (
-                <div className="w-2 h-2 bg-purple-500 rounded-full" />
+                <div className="w-2 h-2 shrink-0 bg-purple-500 rounded-full" />
               )}
               {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>

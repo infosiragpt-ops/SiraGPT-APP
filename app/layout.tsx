@@ -178,6 +178,20 @@ export default async function RootLayout({
     >
       <head suppressHydrationWarning>
         {/*
+          Medianoche (OLED) theme boot — runs before first paint so a
+          midnight user never sees the regular dark canvas flash. The
+          flag lives outside next-themes ("midnight" is a flavor of the
+          dark theme, not a separate theme), and the CSS is scoped to
+          `.dark.midnight`, so the class is inert while in light mode.
+        */}
+        <script
+          suppressHydrationWarning
+          dangerouslySetInnerHTML={{
+            __html:
+              "try{if(localStorage.getItem('sira-theme-midnight')==='1'){document.documentElement.classList.add('midnight')}}catch(e){}",
+          }}
+        />
+        {/*
           KaTeX CSS is already bundled via `import 'katex/dist/katex.min.css'`
           at the top of this file, which Next.js inlines/serves from
           `_next/static`. We previously also referenced a CDN copy here,

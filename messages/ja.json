@@ -1,8 +1,15 @@
 {
   "sidebar": {
-    "newChat": "新しいチャット", "searchChats": "チャットを検索", "library": "ライブラリ", "gpts": "GPTs",
-    "recentChats": "最近のチャット", "noChats": "まだチャットがありません。会話を始めましょう！",
-    "settings": "設定", "profile": "プロフィール", "billing": "請求", "logout": "ログアウト",
+    "newChat": "新しいチャット",
+    "searchChats": "チャットを検索",
+    "library": "ライブラリ",
+    "gpts": "GPTs",
+    "recentChats": "最近のチャット",
+    "noChats": "まだチャットがありません。会話を始めましょう！",
+    "settings": "設定",
+    "profile": "プロフィール",
+    "billing": "請求",
+    "logout": "ログアウト",
     "today": "今日",
     "last7Days": "過去 7 日間",
     "older": "以前",
@@ -99,15 +106,10 @@
     "cancel": "Cancel",
     "pipeline": "Pipeline",
     "phase": {
-
       "search": "Search academic sources",
-
       "validate": "Validate DOIs",
-
       "synthesize": "Write cited markdown",
-
       "format": "Build reference list"
-
     },
     "searchRunning": "Querying OpenAlex…",
     "validateRunning": "Checking CrossRef…",
@@ -131,99 +133,291 @@
     "backToProject": "← {name}"
   },
   "chat": {
-    "placeholder": "メッセージを入力", "send": "送信", "stop": "停止", "regenerate": "再生成",
-    "copy": "コピー", "delete": "削除", "edit": "編集", "share": "共有", "thinking": "考え中…",
-    "attachFile": "ファイルを添付", "voiceInput": "音声入力", "webSearch": "ウェブ検索",
-    "imageGeneration": "画像を生成", "videoGeneration": "動画を生成",
-    "connectorActive": "コネクタ有効", "showSidebar": "サイドバーを表示"
+    "placeholder": "メッセージを入力",
+    "send": "送信",
+    "stop": "停止",
+    "regenerate": "再生成",
+    "copy": "コピー",
+    "delete": "削除",
+    "edit": "編集",
+    "share": "共有",
+    "thinking": "考え中…",
+    "attachFile": "ファイルを添付",
+    "voiceInput": "音声入力",
+    "webSearch": "ウェブ検索",
+    "imageGeneration": "画像を生成",
+    "videoGeneration": "動画を生成",
+    "connectorActive": "コネクタ有効",
+    "showSidebar": "サイドバーを表示"
   },
   "settings": {
-    "title": "設定", "subtitle": "あなたのやり方に合わせて siraGPT をカスタマイズ。",
-    "searchPlaceholder": "設定を検索…", "noResults": "結果なし", "backToChat": "チャットに戻る",
-    "autoSync": "自動同期", "saving": "保存中…", "saved": "保存しました", "offline": "オフライン — ローカルの変更",
+    "title": "設定",
+    "subtitle": "あなたのやり方に合わせて siraGPT をカスタマイズ。",
+    "searchPlaceholder": "設定を検索…",
+    "noResults": "結果なし",
+    "backToChat": "チャットに戻る",
+    "autoSync": "自動同期",
+    "saving": "保存中…",
+    "saved": "保存しました",
+    "offline": "オフライン — ローカルの変更",
     "sections": {
-      "general":         { "label": "一般",             "desc": "外観、言語、アクセシビリティ" },
-      "models":          { "label": "AI モデル",        "desc": "利用可能なモデルとお気に入り" },
-      "notifications":   { "label": "通知",             "desc": "チャンネルとアラート" },
-      "personalization": { "label": "パーソナライズ",   "desc": "スタイル、トーン、機能" },
-      "apps":            { "label": "アプリ",           "desc": "接続とコネクタ" },
-      "schedules":       { "label": "スケジュール",     "desc": "予約実行" },
-      "data":            { "label": "データ管理",       "desc": "プライバシー、履歴、データ" },
-      "security":        { "label": "セキュリティ",     "desc": "MFA とセッション" },
-      "account":         { "label": "アカウント",       "desc": "ビルダープロフィール" }
+      "general": {
+        "label": "一般",
+        "desc": "外観、言語、アクセシビリティ"
+      },
+      "models": {
+        "label": "AI モデル",
+        "desc": "利用可能なモデルとお気に入り"
+      },
+      "notifications": {
+        "label": "通知",
+        "desc": "チャンネルとアラート"
+      },
+      "personalization": {
+        "label": "パーソナライズ",
+        "desc": "スタイル、トーン、機能"
+      },
+      "apps": {
+        "label": "アプリ",
+        "desc": "接続とコネクタ"
+      },
+      "schedules": {
+        "label": "スケジュール",
+        "desc": "予約実行"
+      },
+      "data": {
+        "label": "データ管理",
+        "desc": "プライバシー、履歴、データ"
+      },
+      "security": {
+        "label": "セキュリティ",
+        "desc": "MFA とセッション"
+      },
+      "account": {
+        "label": "アカウント",
+        "desc": "ビルダープロフィール"
+      }
     },
     "general": {
-      "display": { "title": "表示", "desc": "アプリの外観" },
-      "theme": { "label": "テーマ", "desc": "ライト、ダーク、システム", "light": "ライト", "dark": "ダーク", "system": "システム" },
-      "accent": { "label": "アクセントカラー", "desc": "ボタンのメインカラー" },
-      "fontSize": { "label": "フォントサイズ", "desc": "基本サイズ", "small": "小", "medium": "中", "large": "大" },
-      "density": { "label": "密度", "desc": "縦方向の間隔", "compact": "コンパクト", "comfortable": "標準", "spacious": "広め" },
-      "region": { "title": "言語と地域", "desc": "日付、タイムゾーン、言語" },
+      "display": {
+        "title": "表示",
+        "desc": "アプリの外観"
+      },
+      "theme": {
+        "label": "テーマ",
+        "desc": "ライト、ダーク、システム",
+        "light": "ライト",
+        "dark": "ダーク",
+        "system": "システム"
+      },
+      "accent": {
+        "label": "アクセントカラー",
+        "desc": "ボタンのメインカラー"
+      },
+      "fontSize": {
+        "label": "フォントサイズ",
+        "desc": "基本サイズ",
+        "small": "小",
+        "medium": "中",
+        "large": "大"
+      },
+      "density": {
+        "label": "密度",
+        "desc": "縦方向の間隔",
+        "compact": "コンパクト",
+        "comfortable": "標準",
+        "spacious": "広め"
+      },
+      "region": {
+        "title": "言語と地域",
+        "desc": "日付、タイムゾーン、言語"
+      },
       "interfaceLanguage": "インターフェース言語",
-      "spokenLanguage": { "label": "話し言葉", "desc": "音声認識用", "automatic": "自動" },
+      "spokenLanguage": {
+        "label": "話し言葉",
+        "desc": "音声認識用",
+        "automatic": "自動"
+      },
       "dateFormat": "日付形式",
-      "timeZone": { "label": "タイムゾーン", "desc": "自動検出" },
-      "timeFormat": { "label": "時刻形式", "h12": "12時間", "h24": "24時間" },
-      "voice": { "title": "音声とオーディオ", "assistantVoice": "アシスタントの声", "autoPlay": "返信を自動再生", "autoPlayDesc": "返信を読み上げる", "standalone": "スタンドアロン音声モード", "standaloneDesc": "視覚要素のないフルスクリーン" },
-      "aiModels": { "title": "AI モデル", "showExtras": "追加モデルを表示", "showExtrasDesc": "利用可能なすべてのモデルを表示", "stream": "応答をストリーム", "streamDesc": "生成中に応答を表示" },
-      "accessibility": { "title": "アクセシビリティ", "shortcuts": "キーボードショートカット", "shortcutsDesc": "キーボード操作を有効化", "reduceMotion": "モーションを減らす", "reduceMotionDesc": "アニメーションを最小化", "highContrast": "ハイコントラスト", "highContrastDesc": "視認性を向上" }
+      "timeZone": {
+        "label": "タイムゾーン",
+        "desc": "自動検出"
+      },
+      "timeFormat": {
+        "label": "時刻形式",
+        "h12": "12時間",
+        "h24": "24時間"
+      },
+      "voice": {
+        "title": "音声とオーディオ",
+        "assistantVoice": "アシスタントの声",
+        "autoPlay": "返信を自動再生",
+        "autoPlayDesc": "返信を読み上げる",
+        "standalone": "スタンドアロン音声モード",
+        "standaloneDesc": "視覚要素のないフルスクリーン"
+      },
+      "aiModels": {
+        "title": "AI モデル",
+        "showExtras": "追加モデルを表示",
+        "showExtrasDesc": "利用可能なすべてのモデルを表示",
+        "stream": "応答をストリーム",
+        "streamDesc": "生成中に応答を表示"
+      },
+      "accessibility": {
+        "title": "アクセシビリティ",
+        "shortcuts": "キーボードショートカット",
+        "shortcutsDesc": "キーボード操作を有効化",
+        "reduceMotion": "モーションを減らす",
+        "reduceMotionDesc": "アニメーションを最小化",
+        "highContrast": "ハイコントラスト",
+        "highContrastDesc": "視認性を向上"
+      }
     }
   },
   "auth": {
-    "welcomeBack": "おかえりなさい", "login": "ログイン", "signIn": "ログイン", "register": "登録",
-    "signUp": "アカウント作成", "logout": "ログアウト", "email": "メール", "emailPlaceholder": "メールアドレスを入力",
-    "password": "パスワード", "passwordPlaceholder": "パスワードを入力", "forgotPassword": "パスワードをお忘れですか？",
-    "orContinueWith": "または", "continueWithGoogle": "Google で続ける",
-    "noAccount": "アカウントをお持ちでない？", "haveAccount": "すでにアカウントをお持ちですか？",
+    "welcomeBack": "おかえりなさい",
+    "login": "ログイン",
+    "signIn": "ログイン",
+    "register": "登録",
+    "signUp": "アカウント作成",
+    "logout": "ログアウト",
+    "email": "メール",
+    "emailPlaceholder": "メールアドレスを入力",
+    "password": "パスワード",
+    "passwordPlaceholder": "パスワードを入力",
+    "forgotPassword": "パスワードをお忘れですか？",
+    "orContinueWith": "または",
+    "continueWithGoogle": "Google で続ける",
+    "noAccount": "アカウントをお持ちでない？",
+    "haveAccount": "すでにアカウントをお持ちですか？",
     "tagline": "Sira Gpt アカウントにサインイン"
   },
   "documents": {
-    "download": "ダウンロード", "close": "閉じる", "wordDocument": "Word ドキュメント", "excelFile": "Excel ファイル",
-    "presentation": "プレゼンテーション", "pdfFile": "PDF ファイル", "downloadAsWord": "Word (.docx) でダウンロード",
-    "downloadAsPdf": "PDF でダウンロード", "generating": "生成中…"
+    "download": "ダウンロード",
+    "close": "閉じる",
+    "wordDocument": "Word ドキュメント",
+    "excelFile": "Excel ファイル",
+    "presentation": "プレゼンテーション",
+    "pdfFile": "PDF ファイル",
+    "downloadAsWord": "Word (.docx) でダウンロード",
+    "downloadAsPdf": "PDF でダウンロード",
+    "generating": "生成中…"
   },
   "errors": {
     "serverError": "リクエストの処理中に問題が発生しました。もう一度お試しください。",
     "networkError": "接続エラー。インターネットを確認してください。",
-    "unauthorized": "セッションが期限切れです。再度ログインしてください。", "notFound": "リソースが見つかりません。"
+    "unauthorized": "セッションが期限切れです。再度ログインしてください。",
+    "notFound": "リソースが見つかりません。"
   },
   "profile": {
-    "title": "プロフィール設定", "subtitle": "アカウントの設定と環境設定を管理します。",
-    "synced": "同期済み", "admin": "管理者",
-    "personalInfo": { "title": "個人情報", "desc": "siraGPT 内のプロフィール情報" },
-    "fullName": "氏名", "fullNamePlaceholder": "あなたの名前",
+    "title": "プロフィール設定",
+    "subtitle": "アカウントの設定と環境設定を管理します。",
+    "synced": "同期済み",
+    "admin": "管理者",
+    "personalInfo": {
+      "title": "個人情報",
+      "desc": "siraGPT 内のプロフィール情報"
+    },
+    "fullName": "氏名",
+    "fullNamePlaceholder": "あなたの名前",
     "emailImmutable": "セキュリティ上の理由でメールは変更できません。",
-    "discard": "破棄", "save": "変更を保存", "saving": "保存中…",
-    "security": { "title": "セキュリティ", "desc": "パスワードを定期的に更新してください" },
-    "currentPassword": "現在のパスワード", "newPassword": "新しいパスワード", "confirmPassword": "パスワードの確認",
-    "minChars": "8文字以上", "updatePassword": "パスワードを更新", "updatingPassword": "更新中…",
-    "subscription": { "title": "サブスクリプション", "desc": "プランと請求" },
-    "nextBilling": "次回請求", "manageSubscription": "サブスクリプションを管理",
-    "usage": { "title": "月間利用状況", "subtitleCalls": "消費した呼び出し", "subtitleTokens": "消費したトークン" },
-    "used": "使用済み", "remaining": "残り",
+    "discard": "破棄",
+    "save": "変更を保存",
+    "saving": "保存中…",
+    "security": {
+      "title": "セキュリティ",
+      "desc": "パスワードを定期的に更新してください"
+    },
+    "currentPassword": "現在のパスワード",
+    "newPassword": "新しいパスワード",
+    "confirmPassword": "パスワードの確認",
+    "minChars": "8文字以上",
+    "updatePassword": "パスワードを更新",
+    "updatingPassword": "更新中…",
+    "subscription": {
+      "title": "サブスクリプション",
+      "desc": "プランと請求"
+    },
+    "nextBilling": "次回請求",
+    "manageSubscription": "サブスクリプションを管理",
+    "usage": {
+      "title": "月間利用状況",
+      "subtitleCalls": "消費した呼び出し",
+      "subtitleTokens": "消費したトークン"
+    },
+    "used": "使用済み",
+    "remaining": "残り",
     "usageWarning": "月間クォータの70%を超えました。",
     "usageDanger": "今月の残量が非常に少ないです。プランのアップグレードをご検討ください。",
-    "adminAccess": { "title": "管理者アクセス", "desc": "権限が有効" },
+    "adminAccess": {
+      "title": "管理者アクセス",
+      "desc": "権限が有効"
+    },
     "openAdmin": "管理パネルを開く"
   },
   "messageActions": {
-    "copy": "コピー", "copied": "コピーしました", "speak": "読み上げる", "stopSpeak": "読み上げを停止",
-    "regenerate": "再生成", "share": "共有", "feedbackGood": "役に立った", "feedbackBad": "役に立たなかった"
+    "copy": "コピー",
+    "copied": "コピーしました",
+    "speak": "読み上げる",
+    "stopSpeak": "読み上げを停止",
+    "regenerate": "再生成",
+    "share": "共有",
+    "feedbackGood": "役に立った",
+    "feedbackBad": "役に立たなかった"
   },
   "composer": {
-    "placeholderDefault": "メッセージを入力", "placeholderImage": "生成したい画像を記述",
-    "placeholderVideo": "生成したい動画を記述", "placeholderWebSearch": "ウェブを検索",
-    "placeholderGmail": "Gmail コマンド", "placeholderGoogle": "Google コマンド", "placeholderSpotify": "Spotify コマンド",
-    "placeholderWord": "作成したい文書を記述", "placeholderComputer": "操作したい内容を入力", "sendHint": "送信", "stopHint": "停止",
+    "placeholderDefault": "メッセージを入力",
+    "placeholderImage": "生成したい画像を記述",
+    "placeholderVideo": "生成したい動画を記述",
+    "placeholderWebSearch": "ウェブを検索",
+    "placeholderGmail": "Gmail コマンド",
+    "placeholderGoogle": "Google コマンド",
+    "placeholderSpotify": "Spotify コマンド",
+    "placeholderWord": "作成したい文書を記述",
+    "placeholderComputer": "操作したい内容を入力",
+    "sendHint": "送信",
+    "stopHint": "停止",
     "dropFiles": "ファイルをここにドロップ"
   },
   "common": {
-    "loading": "読み込み中…", "noResults": "結果なし", "confirm": "確認", "cancel": "キャンセル",
-    "delete": "削除", "edit": "編集", "save": "保存", "close": "閉じる", "open": "開く",
-    "back": "戻る", "next": "次へ", "previous": "前へ", "search": "検索", "filter": "フィルター",
-    "export": "エクスポート", "import": "インポート", "create": "作成", "update": "更新", "yes": "はい",
-    "no": "いいえ", "all": "すべて", "none": "なし", "select": "選択", "upload": "アップロード",
-    "dragDrop": "ここにファイルをドロップ", "or": "または", "processing": "メッセージを処理中…",
+    "loading": "読み込み中…",
+    "noResults": "結果なし",
+    "confirm": "確認",
+    "cancel": "キャンセル",
+    "delete": "削除",
+    "edit": "編集",
+    "save": "保存",
+    "close": "閉じる",
+    "open": "開く",
+    "back": "戻る",
+    "next": "次へ",
+    "previous": "前へ",
+    "search": "検索",
+    "filter": "フィルター",
+    "export": "エクスポート",
+    "import": "インポート",
+    "create": "作成",
+    "update": "更新",
+    "yes": "はい",
+    "no": "いいえ",
+    "all": "すべて",
+    "none": "なし",
+    "select": "選択",
+    "upload": "アップロード",
+    "dragDrop": "ここにファイルをドロップ",
+    "or": "または",
+    "processing": "メッセージを処理中…",
     "tryAgain": "もう一度試す"
+  },
+  "thinking": {
+    "thinking": "考え中…",
+    "thought": "思考プロセス",
+    "thoughtFor": "{duration}考えました",
+    "reasoningAria": "モデルの推論",
+    "arguments": "引数",
+    "toolSearching": "情報を検索中",
+    "toolReading": "ソースを読み取り中",
+    "toolRunning": "コードを実行中",
+    "toolUsing": "{name}を使用中"
   }
 }

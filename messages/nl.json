@@ -1,8 +1,15 @@
 {
   "sidebar": {
-    "newChat": "Nieuwe chat", "searchChats": "Chats zoeken", "library": "Bibliotheek", "gpts": "GPTs",
-    "recentChats": "Recente chats", "noChats": "Nog geen chats. Start een gesprek!",
-    "settings": "Instellingen", "profile": "Profiel", "billing": "Facturatie", "logout": "Uitloggen",
+    "newChat": "Nieuwe chat",
+    "searchChats": "Chats zoeken",
+    "library": "Bibliotheek",
+    "gpts": "GPTs",
+    "recentChats": "Recente chats",
+    "noChats": "Nog geen chats. Start een gesprek!",
+    "settings": "Instellingen",
+    "profile": "Profiel",
+    "billing": "Facturatie",
+    "logout": "Uitloggen",
     "today": "Vandaag",
     "last7Days": "Laatste 7 dagen",
     "older": "Ouder",
@@ -99,15 +106,10 @@
     "cancel": "Cancel",
     "pipeline": "Pipeline",
     "phase": {
-
       "search": "Search academic sources",
-
       "validate": "Validate DOIs",
-
       "synthesize": "Write cited markdown",
-
       "format": "Build reference list"
-
     },
     "searchRunning": "Querying OpenAlex…",
     "validateRunning": "Checking CrossRef…",
@@ -131,67 +133,221 @@
     "backToProject": "← {name}"
   },
   "chat": {
-    "placeholder": "Typ een bericht", "send": "Versturen", "stop": "Stoppen", "regenerate": "Opnieuw genereren",
-    "copy": "Kopiëren", "delete": "Verwijderen", "edit": "Bewerken", "share": "Delen", "thinking": "Denken…",
-    "attachFile": "Bestand toevoegen", "voiceInput": "Spraakinvoer", "webSearch": "Zoeken op het web",
-    "imageGeneration": "Afbeelding genereren", "videoGeneration": "Video genereren",
-    "connectorActive": "Connector actief", "showSidebar": "Zijbalk tonen"
+    "placeholder": "Typ een bericht",
+    "send": "Versturen",
+    "stop": "Stoppen",
+    "regenerate": "Opnieuw genereren",
+    "copy": "Kopiëren",
+    "delete": "Verwijderen",
+    "edit": "Bewerken",
+    "share": "Delen",
+    "thinking": "Denken…",
+    "attachFile": "Bestand toevoegen",
+    "voiceInput": "Spraakinvoer",
+    "webSearch": "Zoeken op het web",
+    "imageGeneration": "Afbeelding genereren",
+    "videoGeneration": "Video genereren",
+    "connectorActive": "Connector actief",
+    "showSidebar": "Zijbalk tonen"
   },
   "settings": {
-    "title": "Instellingen", "subtitle": "Pas siraGPT aan op jouw werkwijze.",
-    "searchPlaceholder": "Instelling zoeken…", "noResults": "Geen resultaten", "backToChat": "Terug naar chat",
-    "autoSync": "Automatisch gesynchroniseerd", "saving": "Opslaan…", "saved": "Opgeslagen", "offline": "Offline — lokale wijzigingen",
+    "title": "Instellingen",
+    "subtitle": "Pas siraGPT aan op jouw werkwijze.",
+    "searchPlaceholder": "Instelling zoeken…",
+    "noResults": "Geen resultaten",
+    "backToChat": "Terug naar chat",
+    "autoSync": "Automatisch gesynchroniseerd",
+    "saving": "Opslaan…",
+    "saved": "Opgeslagen",
+    "offline": "Offline — lokale wijzigingen",
     "sections": {
-      "general":         { "label": "Algemeen",         "desc": "Uiterlijk, taal en toegankelijkheid" },
-      "models":          { "label": "AI-modellen",      "desc": "Beschikbare modellen en favorieten" },
-      "notifications":   { "label": "Meldingen",        "desc": "Kanalen en waarschuwingen" },
-      "personalization": { "label": "Personalisatie",   "desc": "Stijl, toon en mogelijkheden" },
-      "apps":            { "label": "Apps",             "desc": "Verbindingen en connectors" },
-      "schedules":       { "label": "Planningen",       "desc": "Geplande taken" },
-      "data":            { "label": "Gegevensbeheer",   "desc": "Privacy, geschiedenis en gegevens" },
-      "security":        { "label": "Beveiliging",      "desc": "MFA en sessies" },
-      "account":         { "label": "Account",          "desc": "Bouwersprofiel" }
+      "general": {
+        "label": "Algemeen",
+        "desc": "Uiterlijk, taal en toegankelijkheid"
+      },
+      "models": {
+        "label": "AI-modellen",
+        "desc": "Beschikbare modellen en favorieten"
+      },
+      "notifications": {
+        "label": "Meldingen",
+        "desc": "Kanalen en waarschuwingen"
+      },
+      "personalization": {
+        "label": "Personalisatie",
+        "desc": "Stijl, toon en mogelijkheden"
+      },
+      "apps": {
+        "label": "Apps",
+        "desc": "Verbindingen en connectors"
+      },
+      "schedules": {
+        "label": "Planningen",
+        "desc": "Geplande taken"
+      },
+      "data": {
+        "label": "Gegevensbeheer",
+        "desc": "Privacy, geschiedenis en gegevens"
+      },
+      "security": {
+        "label": "Beveiliging",
+        "desc": "MFA en sessies"
+      },
+      "account": {
+        "label": "Account",
+        "desc": "Bouwersprofiel"
+      }
     },
     "general": {
-      "display": { "title": "Weergave", "desc": "Visuele verschijning van de app" },
-      "theme": { "label": "Thema", "desc": "Licht, donker of systeem", "light": "Licht", "dark": "Donker", "system": "Systeem" },
-      "accent": { "label": "Accentkleur", "desc": "Primaire kleur van knoppen" },
-      "fontSize": { "label": "Lettergrootte", "desc": "Basisgrootte", "small": "Klein", "medium": "Middel", "large": "Groot" },
-      "density": { "label": "Dichtheid", "desc": "Verticale witruimte", "compact": "Compact", "comfortable": "Comfortabel", "spacious": "Ruim" },
-      "region": { "title": "Taal en regio", "desc": "Datum, tijdzone en taal" },
+      "display": {
+        "title": "Weergave",
+        "desc": "Visuele verschijning van de app"
+      },
+      "theme": {
+        "label": "Thema",
+        "desc": "Licht, donker of systeem",
+        "light": "Licht",
+        "dark": "Donker",
+        "system": "Systeem"
+      },
+      "accent": {
+        "label": "Accentkleur",
+        "desc": "Primaire kleur van knoppen"
+      },
+      "fontSize": {
+        "label": "Lettergrootte",
+        "desc": "Basisgrootte",
+        "small": "Klein",
+        "medium": "Middel",
+        "large": "Groot"
+      },
+      "density": {
+        "label": "Dichtheid",
+        "desc": "Verticale witruimte",
+        "compact": "Compact",
+        "comfortable": "Comfortabel",
+        "spacious": "Ruim"
+      },
+      "region": {
+        "title": "Taal en regio",
+        "desc": "Datum, tijdzone en taal"
+      },
       "interfaceLanguage": "Taal van interface",
-      "spokenLanguage": { "label": "Gesproken taal", "desc": "Voor spraakherkenning", "automatic": "Automatisch" },
+      "spokenLanguage": {
+        "label": "Gesproken taal",
+        "desc": "Voor spraakherkenning",
+        "automatic": "Automatisch"
+      },
       "dateFormat": "Datumnotatie",
-      "timeZone": { "label": "Tijdzone", "desc": "Automatisch gedetecteerd" },
-      "timeFormat": { "label": "Tijdnotatie", "h12": "12-uurs", "h24": "24-uurs" },
-      "voice": { "title": "Stem en audio", "assistantVoice": "Stem van assistent", "autoPlay": "Antwoorden automatisch afspelen", "autoPlayDesc": "Antwoorden hardop voorlezen", "standalone": "Standalone spraakmodus", "standaloneDesc": "Volledig scherm zonder visuele elementen" },
-      "aiModels": { "title": "AI-modellen", "showExtras": "Extra modellen tonen", "showExtrasDesc": "Alle beschikbare modellen zien", "stream": "Antwoorden streamen", "streamDesc": "Antwoorden zien tijdens het genereren" },
-      "accessibility": { "title": "Toegankelijkheid", "shortcuts": "Sneltoetsen", "shortcutsDesc": "Toetsenbordnavigatie inschakelen", "reduceMotion": "Beweging verminderen", "reduceMotionDesc": "Animaties minimaliseren", "highContrast": "Hoog contrast", "highContrastDesc": "Zichtbaarheid verbeteren" }
+      "timeZone": {
+        "label": "Tijdzone",
+        "desc": "Automatisch gedetecteerd"
+      },
+      "timeFormat": {
+        "label": "Tijdnotatie",
+        "h12": "12-uurs",
+        "h24": "24-uurs"
+      },
+      "voice": {
+        "title": "Stem en audio",
+        "assistantVoice": "Stem van assistent",
+        "autoPlay": "Antwoorden automatisch afspelen",
+        "autoPlayDesc": "Antwoorden hardop voorlezen",
+        "standalone": "Standalone spraakmodus",
+        "standaloneDesc": "Volledig scherm zonder visuele elementen"
+      },
+      "aiModels": {
+        "title": "AI-modellen",
+        "showExtras": "Extra modellen tonen",
+        "showExtrasDesc": "Alle beschikbare modellen zien",
+        "stream": "Antwoorden streamen",
+        "streamDesc": "Antwoorden zien tijdens het genereren"
+      },
+      "accessibility": {
+        "title": "Toegankelijkheid",
+        "shortcuts": "Sneltoetsen",
+        "shortcutsDesc": "Toetsenbordnavigatie inschakelen",
+        "reduceMotion": "Beweging verminderen",
+        "reduceMotionDesc": "Animaties minimaliseren",
+        "highContrast": "Hoog contrast",
+        "highContrastDesc": "Zichtbaarheid verbeteren"
+      }
     }
   },
   "auth": {
-    "welcomeBack": "Welkom terug", "login": "Inloggen", "signIn": "Inloggen", "register": "Registreren",
-    "signUp": "Account aanmaken", "logout": "Uitloggen", "email": "E-mail", "emailPlaceholder": "Voer je e-mail in",
-    "password": "Wachtwoord", "passwordPlaceholder": "Voer je wachtwoord in", "forgotPassword": "Wachtwoord vergeten?",
-    "orContinueWith": "Of ga door met", "continueWithGoogle": "Doorgaan met Google",
-    "noAccount": "Nog geen account?", "haveAccount": "Heb je al een account?", "tagline": "Log in op je Sira Gpt-account"
+    "welcomeBack": "Welkom terug",
+    "login": "Inloggen",
+    "signIn": "Inloggen",
+    "register": "Registreren",
+    "signUp": "Account aanmaken",
+    "logout": "Uitloggen",
+    "email": "E-mail",
+    "emailPlaceholder": "Voer je e-mail in",
+    "password": "Wachtwoord",
+    "passwordPlaceholder": "Voer je wachtwoord in",
+    "forgotPassword": "Wachtwoord vergeten?",
+    "orContinueWith": "Of ga door met",
+    "continueWithGoogle": "Doorgaan met Google",
+    "noAccount": "Nog geen account?",
+    "haveAccount": "Heb je al een account?",
+    "tagline": "Log in op je Sira Gpt-account"
   },
   "documents": {
-    "download": "Downloaden", "close": "Sluiten", "wordDocument": "Word-document", "excelFile": "Excel-bestand",
-    "presentation": "Presentatie", "pdfFile": "PDF-bestand", "downloadAsWord": "Downloaden als Word (.docx)",
-    "downloadAsPdf": "Downloaden als PDF", "generating": "Genereren…"
+    "download": "Downloaden",
+    "close": "Sluiten",
+    "wordDocument": "Word-document",
+    "excelFile": "Excel-bestand",
+    "presentation": "Presentatie",
+    "pdfFile": "PDF-bestand",
+    "downloadAsWord": "Downloaden als Word (.docx)",
+    "downloadAsPdf": "Downloaden als PDF",
+    "generating": "Genereren…"
   },
   "errors": {
     "serverError": "Er is een probleem opgetreden bij het verwerken van je verzoek. Probeer het opnieuw.",
     "networkError": "Verbindingsfout. Controleer je internet.",
-    "unauthorized": "Sessie verlopen. Log opnieuw in.", "notFound": "Bron niet gevonden."
+    "unauthorized": "Sessie verlopen. Log opnieuw in.",
+    "notFound": "Bron niet gevonden."
   },
   "common": {
-    "loading": "Laden…", "noResults": "Geen resultaten", "confirm": "Bevestigen", "cancel": "Annuleren",
-    "delete": "Verwijderen", "edit": "Bewerken", "save": "Opslaan", "close": "Sluiten", "open": "Openen",
-    "back": "Terug", "next": "Volgende", "previous": "Vorige", "search": "Zoeken", "filter": "Filter",
-    "export": "Exporteren", "import": "Importeren", "create": "Aanmaken", "update": "Bijwerken", "yes": "Ja",
-    "no": "Nee", "all": "Alles", "none": "Geen", "select": "Selecteren", "upload": "Uploaden",
-    "dragDrop": "Sleep bestanden hierheen", "or": "of", "processing": "Je berichten verwerken…", "tryAgain": "Opnieuw proberen"
+    "loading": "Laden…",
+    "noResults": "Geen resultaten",
+    "confirm": "Bevestigen",
+    "cancel": "Annuleren",
+    "delete": "Verwijderen",
+    "edit": "Bewerken",
+    "save": "Opslaan",
+    "close": "Sluiten",
+    "open": "Openen",
+    "back": "Terug",
+    "next": "Volgende",
+    "previous": "Vorige",
+    "search": "Zoeken",
+    "filter": "Filter",
+    "export": "Exporteren",
+    "import": "Importeren",
+    "create": "Aanmaken",
+    "update": "Bijwerken",
+    "yes": "Ja",
+    "no": "Nee",
+    "all": "Alles",
+    "none": "Geen",
+    "select": "Selecteren",
+    "upload": "Uploaden",
+    "dragDrop": "Sleep bestanden hierheen",
+    "or": "of",
+    "processing": "Je berichten verwerken…",
+    "tryAgain": "Opnieuw proberen"
+  },
+  "thinking": {
+    "thinking": "Aan het denken…",
+    "thought": "Denkproces",
+    "thoughtFor": "Dacht {duration} na",
+    "reasoningAria": "Redenering van het model",
+    "arguments": "Argumenten",
+    "toolSearching": "Informatie zoeken",
+    "toolReading": "Bron lezen",
+    "toolRunning": "Code uitvoeren",
+    "toolUsing": "{name} gebruiken"
   }
 }
