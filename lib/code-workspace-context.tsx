@@ -652,24 +652,27 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
 
   const setActiveCodeChatSession = React.useCallback(
     (sessionId: string) => {
-      setChatSessionStore(setActiveCodeChatSessionRecord(workspaceSessionKey, sessionId, chatSessionStore))
+      // Functional updater: never read the store from the closure — back-to-back
+      // store mutations in one tick must each see the previous result, or they
+      // clobber each other (e.g. setTurns + patchAgentState in the same dispatch).
+      setChatSessionStore((prev) => setActiveCodeChatSessionRecord(workspaceSessionKey, sessionId, prev))
       focusChat()
     },
-    [chatSessionStore, focusChat, workspaceSessionKey],
+    [focusChat, workspaceSessionKey],
   )
 
   const patchCodeChatSessionTurns = React.useCallback(
     (sessionId: string, updater: (prev: CodeChatTurn[]) => CodeChatTurn[]) => {
-      setChatSessionStore(updateCodeChatSessionTurns(sessionId, updater, chatSessionStore))
+      setChatSessionStore((prev) => updateCodeChatSessionTurns(sessionId, updater, prev))
     },
-    [chatSessionStore],
+    [],
   )
 
   const patchAgentState = React.useCallback(
     (sessionId: string, updater: (prev: AgentState) => AgentState) => {
-      setChatSessionStore(updateCodeChatSessionAgent(sessionId, updater, chatSessionStore))
+      setChatSessionStore((prev) => updateCodeChatSessionAgent(sessionId, updater, prev))
     },
-    [chatSessionStore],
+    [],
   )
 
   const openWorkspaceNewCodeChat = React.useCallback(
