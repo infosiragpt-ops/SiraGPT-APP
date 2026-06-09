@@ -153,3 +153,42 @@ describe('A3 — in-loop tool fallback recovery', () => {
     assert.ok(action.observation.error, 'original error preserved when no alternative');
   });
 });
+
+describe('prefetch straggler cap (partial batch results)', () => {
+  test('a hung read-only tool no longer stalls the batch; it is handed back pending', async () => {
+    const prev = process.env.SIRAGPT_TOOL_PREFETCH_TIMEOUT_MS;
+    process.env.SIRAGPT_TOOL_PREFETCH_TIMEOUT_MS = '50';
+    try {
+      let release;
+      const gate = new Promise((r) => { release = r; });
+      const registry = [
+        makeTool('web_search', async () => { await gate; return { ok: true, slow: true }; }),
+        makeTool('rag_retrieve', async () => ({ ok: true, fast: true })),
+      ];
+      const calls = [call('1', 'web_search'), call('2', 'rag_retrieve')];
+      const t0 = Date.now();
+      const map = await reactAgent.prefetchParallelDispatch(registry, calls, {}, new Set());
+      assert.ok(Date.now() - t0 < 2000, 'batch returns at the cap, not when the straggler finishes');
+      assert.deepEqual(map.get('2').result, { ok: true, fast: true }, 'fast peer resolved normally');
+      const slowEntry = map.get('1');
+      assert.ok(slowEntry.__pending, 'straggler handed back as {__pending: Promise} — no re-dispatch');
+      release();
+      const resolved = await slowEntry.__pending;
+      assert.deepEqual(resolved.result, { ok: true, slow: true }, 'pending promise resolves to the real result');
+    } finally {
+      if (prev === undefined) delete process.env.SIRAGPT_TOOL_PREFETCH_TIMEOUT_MS;
+      else process.env.SIRAGPT_TOOL_PREFETCH_TIMEOUT_MS = prev;
+    }
+  });
+
+  test('fast tools are returned directly (no pending wrapper) under the default cap', async () => {
+    const registry = [
+      makeTool('web_search', async () => ({ ok: 1 })),
+      makeTool('rag_retrieve', async () => ({ ok: 2 })),
+    ];
+    const map = await reactAgent.prefetchParallelDispatch(registry, [call('1', 'web_search'), call('2', 'rag_retrieve')], {}, new Set());
+    assert.equal(map.get('1').__pending, undefined);
+    assert.deepEqual(map.get('1').result, { ok: 1 });
+    assert.deepEqual(map.get('2').result, { ok: 2 });
+  });
+});

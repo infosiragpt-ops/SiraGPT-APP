@@ -89,10 +89,27 @@ function isParallelSafeTool(name) {
   return n !== 'finalize' && PARALLEL_SAFE_RX.test(n);
 }
 
+// Per-call cap on how long the prefetch BATCH waits for any single tool. A
+// hung read-only tool used to stall the whole Promise.all until the step
+// budget burned; past the cap the batch returns and hands back the still-
+// pending promise (`{__pending}`) so the main loop awaits it only when that
+// call's result is actually consumed — no re-dispatch, no double budget.
+// Known trade-off: if the run ends before consuming a straggler (finalize,
+// abort, runtime budget), the dispatch keeps running in the background until
+// it settles on its own; acceptable because only read-only/idempotent tools
+// are prefetched and the inner catch guarantees no unhandled rejection.
+function prefetchCallTimeoutMs() {
+  const v = Number(process.env.SIRAGPT_TOOL_PREFETCH_TIMEOUT_MS);
+  return Number.isFinite(v) && v > 0 ? v : 8000;
+}
+const PREFETCH_PENDING = Symbol('prefetch_pending');
+
 /**
  * Concurrently dispatch the read-only/idempotent tool calls of one step,
- * returning a Map<call.id, dispatchResult>. Mutating calls are skipped here
- * (they run inline, sequentially, in the main loop). Bounded by TOOL_PARALLEL_MAX.
+ * returning a Map<call.id, dispatchResult | {__pending: Promise}>. Mutating
+ * calls are skipped here (they run inline, sequentially, in the main loop).
+ * Bounded by TOOL_PARALLEL_MAX; each batch waits at most
+ * PREFETCH_CALL_TIMEOUT_MS for stragglers (partial results, never a stall).
  */
 async function prefetchParallelDispatch(registry, toolCalls, ctx, exhaustedTools) {
   const out = new Map();
@@ -105,13 +122,24 @@ async function prefetchParallelDispatch(registry, toolCalls, ctx, exhaustedTools
   for (let i = 0; i < safe.length; i += TOOL_PARALLEL_MAX) {
     const chunk = safe.slice(i, i + TOOL_PARALLEL_MAX);
     // eslint-disable-next-line no-await-in-loop
-    const results = await Promise.all(chunk.map(async (call) => {
-      try {
-        const d = await dispatchTool(registry, call.function?.name, call.function?.arguments, ctx);
-        return { id: call.id, d };
-      } catch (e) {
-        return { id: call.id, d: { error: `tool_execution_failed: ${e && e.message ? e.message : String(e)}` } };
-      }
+    const results = await Promise.all(chunk.map((call) => {
+      const dispatched = (async () => {
+        try {
+          return await dispatchTool(registry, call.function?.name, call.function?.arguments, ctx);
+        } catch (e) {
+          return { error: `tool_execution_failed: ${e && e.message ? e.message : String(e)}` };
+        }
+      })();
+      let capTimer;
+      const cap = new Promise((resolve) => {
+        capTimer = setTimeout(() => resolve(PREFETCH_PENDING), prefetchCallTimeoutMs());
+      });
+      return Promise.race([dispatched, cap]).then((d) => {
+        clearTimeout(capTimer);
+        return d === PREFETCH_PENDING
+          ? { id: call.id, d: { __pending: dispatched } }
+          : { id: call.id, d };
+      });
     }));
     for (const r of results) if (r && r.id != null) out.set(r.id, r.d);
   }
@@ -189,6 +217,20 @@ function classifyToolError(err) {
   } else probe = { message: String(err) };
   return classifyTaskError(probe).retryable ? 'transient' : 'terminal';
 }
+
+// ── Run-loop pacing constants ───────────────────────────────────────────────
+// Consecutive calls to already-exhausted tools tolerated before the loop
+// narrows tool_choice to finalize (env: SIRAGPT_EXHAUSTED_REPOLL_LIMIT).
+const EXHAUSTED_REPOLL_LIMIT = (() => {
+  const v = Number(process.env.SIRAGPT_EXHAUSTED_REPOLL_LIMIT);
+  return Number.isFinite(v) && v >= 1 ? Math.floor(v) : 3;
+})();
+// Floor for the adaptive per-step timeout: even with almost no runtime left,
+// give the (forced-finalize) completion a real chance to land.
+const MIN_STEP_TIMEOUT_MS = 5000;
+// Wall-clock headroom reserved when clamping a step to the remaining runtime,
+// covering tool dispatch + bookkeeping after the completion returns.
+const STEP_RUNTIME_BUFFER_MS = 2000;
 
 const FINALIZE_TOOL_PARAMETERS = {
   type: 'object',
@@ -285,15 +327,6 @@ async function dispatchTool(registry, name, argsRaw, ctx) {
       return { error: auth?.reason || 'tool_denied' };
     }
   }
-  if (ctx?.checkToolBudget && name !== 'finalize') {
-    const usage = ctx.toolUsageMap || {};
-    const budget = ctx.checkToolBudget(name, usage);
-    if (budget && budget.ok === false) {
-      return { error: budget.reason || 'tool_budget_exceeded' };
-    }
-    usage[name] = (Number(usage[name]) || 0) + 1;
-    ctx.toolUsageMap = usage;
-  }
   const tool = registry.find(t => t.name === name);
   if (!tool) {
     return { error: `unknown_tool: ${name}` };
@@ -307,6 +340,18 @@ async function dispatchTool(registry, name, argsRaw, ctx) {
   const validation = validateToolArgs(tool, args);
   if (!validation.ok) {
     return { error: validation.error };
+  }
+  // Budget is consumed only AFTER lookup + arg validation: a malformed or
+  // unknown call must not burn a tool-call slot the model could still use
+  // with corrected arguments on the next turn.
+  if (ctx?.checkToolBudget && name !== 'finalize') {
+    const usage = ctx.toolUsageMap || {};
+    const budget = ctx.checkToolBudget(name, usage);
+    if (budget && budget.ok === false) {
+      return { error: budget.reason || 'tool_budget_exceeded' };
+    }
+    usage[name] = (Number(usage[name]) || 0) + 1;
+    ctx.toolUsageMap = usage;
   }
   try {
     const result = await tool.execute(args, ctx);
@@ -605,8 +650,18 @@ async function run(openai, opts) {
   // Finalize-guard rejection tracking (see MAX_FINALIZE_REJECTIONS above).
   let finalizeRejectionsTotal = 0;
   let finalizeRejectionsConsecutive = 0;
+  // Escape hatch for exhausted-tool re-polling: some models keep calling a
+  // tool we already declared unavailable, re-reading the same observation
+  // forever. After EXHAUSTED_REPOLL_LIMIT consecutive such calls we force
+  // tool_choice=finalize instead of burning the remaining steps.
+  let exhaustedRepolls = 0;
+  let forceFinalize = false;
+  // Recent provider latencies (ms) — used to stop exploring when the trend
+  // says there is no runtime left for another full step (see toolChoice).
+  const stepDurations = [];
 
   for (let step = 0; step < maxSteps; step++) {
+    const stepStartedAt = Date.now();
     if (ctx?.signal?.aborted) {
       stoppedReason = 'aborted';
       break;
@@ -636,13 +691,30 @@ async function run(openai, opts) {
     }
 
     // If we're at the last step, force a finalize by narrowing the
-    // tool choice — the model can't keep exploring past the budget.
+    // tool choice — the model can't keep exploring past the budget. The same
+    // narrowing fires when the exhausted-repoll escape tripped, or when the
+    // recent provider latency trend says another exploration step would blow
+    // the runtime budget mid-flight ("dejó de responder").
     const isLast = step === maxSteps - 1;
+    const remainingMs = maxRuntimeMs - (Date.now() - startedAt);
+    const recentDurations = stepDurations.slice(-3);
+    const avgStepMs = recentDurations.length
+      ? recentDurations.reduce((a, b) => a + b, 0) / recentDurations.length
+      : 0;
+    const outOfRuntimeForAnotherStep =
+      avgStepMs > 0 && (remainingMs - STEP_RUNTIME_BUFFER_MS) < avgStepMs * 1.5;
+    if (outOfRuntimeForAnotherStep && !isLast && !forceFinalize) {
+      try { console.log(`[react-agent] forcing finalize: ~${Math.round(avgStepMs)}ms/step trend vs ${remainingMs}ms left (step ${step})`); } catch { /* noop */ }
+    }
+    // Latch: once the trend says there is no room for another step, stay in
+    // finalize mode — a fast guard-rejected finalize would otherwise lower the
+    // average and let the loop resume exploring with no runtime left.
+    if (outOfRuntimeForAnotherStep) forceFinalize = true;
     const shouldForceInitialTool =
       step === 0
       && initialToolChoice
       && registry.some((tool) => tool && tool.name === initialToolChoice);
-    const toolChoice = isLast
+    const toolChoice = (isLast || forceFinalize || outOfRuntimeForAnotherStep)
       ? { type: 'function', function: { name: 'finalize' } }
       : (shouldForceInitialTool ? { type: 'function', function: { name: initialToolChoice } } : 'auto');
 
@@ -653,7 +725,17 @@ async function run(openai, opts) {
     // loop is still blocked on one call. On timeout we abort the call, mark
     // model_error, and break → the caller streams a degraded answer / the
     // route falls back to a plain completion. Env: REACT_STEP_TIMEOUT_MS.
-    const stepTimeoutMs = Number(process.env.REACT_STEP_TIMEOUT_MS) || 60000;
+    // The per-step cap is additionally clamped to the REMAINING run budget
+    // (minus a buffer) so a slow final step can't blow the wall clock: better
+    // to time out one step and degrade than to overshoot maxRuntimeMs.
+    const envStepTimeoutMs = Number(process.env.REACT_STEP_TIMEOUT_MS) || 60000;
+    // The floor applies only to the remaining-runtime clamp (a forced-finalize
+    // completion still gets a real chance to land) — an explicit env value
+    // below the floor is honored as configured.
+    const stepTimeoutMs = Math.min(
+      envStepTimeoutMs,
+      Math.max(MIN_STEP_TIMEOUT_MS, remainingMs - STEP_RUNTIME_BUFFER_MS)
+    );
     const stepCtl = new AbortController();
     const stepTimer = setTimeout(() => {
       try { stepCtl.abort(new Error('step_timeout')); } catch { /* noop */ }
@@ -798,6 +880,15 @@ async function run(openai, opts) {
       // Feed back a clear instruction so the model pivots to another tool or
       // finalizes with what it has.
       if (toolName !== 'finalize' && exhaustedTools.has(toolName)) {
+        exhaustedRepolls += 1;
+        if (exhaustedRepolls >= EXHAUSTED_REPOLL_LIMIT && !forceFinalize) {
+          // The model is stuck re-polling unavailable tools. Stop feeding it
+          // the same observation: next turn the tool choice is narrowed to
+          // finalize (see toolChoice above) so the run terminates with a real
+          // answer instead of looping to the step budget.
+          forceFinalize = true;
+          try { console.warn(`[react-agent] ${exhaustedRepolls} consecutive exhausted-tool calls — forcing finalize next step`); } catch { /* noop */ }
+        }
         const observation = {
           error: 'tool_unavailable',
           tool: toolName,
@@ -811,10 +902,15 @@ async function run(openai, opts) {
         });
         continue;
       }
+      // Any call that is NOT an exhausted re-poll means the model pivoted.
+      exhaustedRepolls = 0;
 
       let dispatch = prefetched.has(call.id)
         ? prefetched.get(call.id)
         : await dispatchTool(registry, toolName, call.function?.arguments, ctx);
+      // A prefetched call that outlived the batch cap hands back its pending
+      // promise — await it here, where the result is actually needed.
+      if (dispatch && dispatch.__pending) dispatch = await dispatch.__pending;
 
       // A3: one-shot fallback to a compatible alternative tool on a hard error
       // (not abort/finalize). If the alternative succeeds, we use its result and
@@ -956,6 +1052,7 @@ async function run(openai, opts) {
     onStep(stepRecord);
     onStepDone(stepRecord);
 
+    stepDurations.push(Date.now() - stepStartedAt);
     if (finalized) break;
   }
 
@@ -1004,6 +1101,11 @@ module.exports = {
   isParallelSafeTool,
   prefetchParallelDispatch,
   TOOL_PARALLEL_MAX,
+  prefetchCallTimeoutMs,
+  // Run-loop pacing (exported for tests).
+  EXHAUSTED_REPOLL_LIMIT,
+  MIN_STEP_TIMEOUT_MS,
+  STEP_RUNTIME_BUFFER_MS,
   // A3: tool fallback (exported for tests).
   fallbackToolFor,
   TOOL_FALLBACK_MAP,
