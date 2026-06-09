@@ -405,9 +405,12 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview }: Pr
   React.useEffect(() => {
     setStale(false)
     if (state.done || state.error) return
+    // Re-armed by lastEventAt: SSE heartbeats arrive every ~15 s, so a
+    // long quiet model call no longer trips the banner — only a stream
+    // that is truly dead for 90 s does.
     const id = window.setTimeout(() => setStale(true), 90_000)
     return () => window.clearTimeout(id)
-  }, [state.done, state.error, state.steps.length])
+  }, [state.done, state.error, state.steps.length, state.lastEventAt])
 
   const isLiveActivity = Boolean(!state.done && !state.error && !stale)
   const isCompletedActivity = Boolean(state.done && !state.error)
