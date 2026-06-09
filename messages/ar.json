@@ -352,5 +352,24 @@
     "toolReading": "يقرأ مصدرًا",
     "toolRunning": "يشغّل الكود",
     "toolUsing": "يستخدم {name}"
+  },
+  "agent": {
+    "working": "جارٍ العمل…",
+    "summary": "فكّر لمدة {duration} · استخدم {count} أدوات",
+    "summaryOne": "فكّر لمدة {duration} · استخدم أداة واحدة",
+    "summaryNoTools": "فكّر لمدة {duration}",
+    "interrupted": "أوقفه المستخدم",
+    "details": "التفاصيل",
+    "arguments": "المعاملات",
+    "result": "النتيجة",
+    "error": "خطأ",
+    "usingTool": "استخدام {name}",
+    "permissionTitle": "يريد الوكيل استخدام {name}",
+    "allow": "السماح",
+    "allowAlways": "السماح دائمًا في هذه المحادثة",
+    "deny": "رفض",
+    "permissionDeniedChip": "مرفوض",
+    "permissionError": "تعذّر إرسال إجابتك. حاول مرة أخرى.",
+    "traceAria": "نشاط الوكيل"
   }
 }

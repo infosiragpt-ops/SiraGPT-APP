@@ -834,6 +834,82 @@ tool-selector per-turn mantiene el set efectivo pequeño.
 `tests/agentic-chat-stream.test.js` actualizado (agent-first default + env-off
 legacy + resolveToolCallMode + media-always). Registrados en `backend/package.json`.
 
+## Agent harness multi-modelo — Fase 1 (added 2026-06-09)
+
+Convierte cada turno agéntico del chat en un agente estilo Claude con eventos
+tipados, gate de permisos y MCP externo, sobre el loop existente
+(react-agent + agentic-chat-stream) y el protocolo SSE de razonamiento.
+
+### Backend (`backend/src/services/agent-harness/`)
+- `model-capabilities.js` — registry de capacidades por modelo (familias
+  OpenRouter: Claude/GPT/Gemini/DeepSeek/Llama/Qwen/Mistral/Kimi/Grok/gpt-oss):
+  supportsNativeTools/ParallelToolCalls/Reasoning(+estilo)/contextWindow/
+  maxOutputTokens/supportsImages/supportsPromptCaching; defaults conservadores;
+  overrides por env `SIRAGPT_MODEL_CAPS_OVERRIDES` (JSON) o settings, AUTORITATIVOS
+  en ambos sentidos. `supportsNativeToolTransport` distingue capacidad del modelo
+  vs transporte del provider (Anthropic/Mistral directos → prompted).
+  `resolveToolCallMode` delega aquí (legacy allowlist solo como fallback de carga).
+- `tool-registry.js` — tools declarativas {name, description con cuándo-usar/
+  cuándo-no, inputSchema Zod, permissionTier auto|confirm, humanDescription(args),
+  execute}; proyección a formato OpenAI (zod-to-json-schema) y a react-agent;
+  overlay de metadata (tier/labels) para las ~80 tools existentes y MCP.
+- `tools/` — `web_fetch` (open-world con denylist: IP privadas/loopback/metadata
+  bloqueadas en URL+DNS anti-rebinding, redirects manuales re-validados ≤5,
+  Readability→Turndown→cheerio, cap 50k con marcador), `run_javascript`
+  (quickjs-emscripten WASM: 5s interrupt, 64MB, sin require/fs/net/timers,
+  console capturada, promesas pump-eadas), `create_artifact` (integra
+  task-tools saveArtifact + evento file_artifact existente), `web_search`
+  (solo si el toolset no trae uno; delega en agents/web-search).
+- `event-stream.js` — eventos SSE tipados con blockIndex+seq monotónicos:
+  tool_call_start/tool_executing/tool_result/permission_request/
+  permission_resolved/agent_done(steps,toolCalls,durationMs,tokensEstimate);
+  graba steps para persistencia (result cap 30k con marcador); wrapTools()
+  envuelve cada execute (errores → is_error sin abortar loop).
+- `permission-manager.js` — tier 'confirm' pausa el loop (promesa pendiente,
+  TTL 2min → deny); POST `/api/agent/permission` {permissionId, decision:
+  allow|always_allow_in_chat|deny} (mismo usuario); always_allow cachea por chat.
+- `mcp-client.js` — servidores MCP EXTERNOS por usuario (tabla `mcp_servers`,
+  headers AES-256 via utils/encryption): discovery por turno (timeout 8s),
+  namespacing `mcp__<srv>__<tool>`, tier confirm, llamadas con timeout 30s,
+  caché de conexión con TTL, fallos por servidor NUNCA tumban el chat;
+  transportes Streamable HTTP → SSE fallback. CRUD `/api/agent/mcp-servers`.
+- `run-agent-turn.js` — `attachHarness` (merge + wrap + events) llamado por
+  `runAgenticChat` (exportado también como `runAgentTurn`); kill switch
+  `SIRAGPT_AGENT_HARNESS=0`; en prompted no se cargan MCP y aplica el cap.
+- `agent-steps-store.js` + migración `20260609190000`: tabla `agent_steps`
+  (FK message_id CASCADE, full fidelity) + `messages.agent_metadata` JSONB
+  (proyección compacta para hidratar historia sin join).
+
+### Frontend
+- `components/agent-trace.tsx` — AgentTrace: evolución de ThinkingTrace (mismo
+  shimmer/markdown) + timeline de tools (rail conector, iconos por familia,
+  spinner dotm-circular-15 en ejecución, check/error, chip args/result con
+  CustomCodeBlock y tinte rojo en error), tarjeta de permiso inline (Permitir /
+  Permitir siempre en este chat / Denegar), colapso automático en agent_done a
+  "Pensó Xs · usó N herramientas". Mensajes históricos hidratan desde
+  `agentMetadata` (extractAgentTrace en message-component).
+- `lib/api.ts` — tipos AgentStreamEvent + dispatch onAgentEvent +
+  `apiClient.resolveAgentPermission`. `lib/chat-context-integrated.tsx` —
+  createAgentTraceHandlers (orden blockIndex/seq, dedupe por seq ante
+  reconexión). `agentic-steps.tsx` acepta `hideSteps` (cuando AgentTrace está
+  activo el sentinel solo aporta artifacts — una sola timeline).
+- i18n: namespace `agent` en los 59 locales (16 traducciones a mano + EN
+  fallback) vía `scripts/add-agent-locale-keys.js`.
+
+### Tests
+`tests/agent-harness-core.test.js` (capacidades+paridad legacy, registry,
+eventos, permisos) · `tests/agent-harness-tools.test.js` (SSRF matrix,
+redirects, sandbox límites/aislamiento, create_artifact e2e) ·
+`tests/agent-harness-mcp.test.js`. Registrados en `backend/package.json`.
+
+### Gotchas
+- El cliente directo Anthropic/Mistral NO habla tool_calls OpenAI → prompted
+  (los slugs `anthropic/...`/`mistralai/...` vía OpenRouter sí son native).
+- `OPENROUTER_API_KEY` está VACÍA en el .env local — los modelos OpenRouter
+  caen al failover local; probar OpenRouter real solo en prod.
+- E2E local: JWT debe tener fila en `sessions`; backend de pruebas:
+  `PORT=5151 node index.js` con la BD localhost.
+
 ## Conexiones externas
 - Repo: https://github.com/SiraGPT-ORg/siraGPT
 - Remoto: `sira-org`

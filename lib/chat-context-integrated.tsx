@@ -262,6 +262,47 @@ interface Message {
   reasoningStreaming?: boolean
   reasoningDurationMs?: number | null
   reasoningToolCalls?: Array<{ index: number; name?: string; args?: string }>
+  // Agent harness (AgentTrace). Live streams accumulate `agentSteps` from the
+  // typed tool_call_start / tool_executing / tool_result frames (ordered by
+  // blockIndex+seq) until `agent_done` closes `agentRun`; historical messages
+  // hydrate both from the persisted `agentMetadata` column (see
+  // extractAgentTrace in message-component).
+  agentSteps?: AgentStepClient[]
+  agentRun?: AgentRunClient | null
+  agentPermission?: AgentPermissionClient | null
+  agentMetadata?: any
+}
+
+export interface AgentStepClient {
+  id: string
+  blockIndex: number
+  seq: number
+  type: 'tool_call'
+  name: string
+  humanDescription?: string
+  args?: string
+  preview?: string
+  status: 'planned' | 'executing' | 'completed' | 'error' | 'denied' | 'interrupted'
+  isError?: boolean
+  durationMs?: number
+}
+
+export interface AgentRunClient {
+  status: 'running' | 'completed' | 'interrupted'
+  toolCalls?: number
+  errors?: number
+  durationMs?: number
+  tokensEstimate?: number
+  costUsdEstimate?: number | null
+  stoppedReason?: string | null
+}
+
+export interface AgentPermissionClient {
+  permissionId: string
+  id: string
+  name: string
+  humanDescription?: string
+  args?: string
 }
 
 function parseMessageMetadata(metadata: unknown): Record<string, any> {
@@ -331,6 +372,119 @@ function createReasoningHandlers(opts: {
       if (payload.argsDelta) existing.args += payload.argsDelta
       toolCalls.set(payload.index, existing)
       patchMessage({ reasoningToolCalls: Array.from(toolCalls.values()) })
+    },
+  }
+}
+
+/**
+ * Per-stream handlers for the agent-harness typed SSE frames
+ * (tool_call_start / tool_executing / tool_result / permission_request /
+ * permission_resolved / agent_done). Steps are keyed by call id and ordered
+ * by (blockIndex, seq); a stale frame (seq ≤ the one already applied to that
+ * step) is dropped, which makes the reducer safe under reconnects and
+ * out-of-order delivery. Same functional-setChat discipline as
+ * createReasoningHandlers so agent frames never clobber text/reasoning state.
+ */
+function createAgentTraceHandlers(opts: {
+  setChat: (updater: (prev: any) => any) => void
+  messageId: string
+  isCancelled: () => boolean
+}) {
+  const { setChat, messageId, isCancelled } = opts
+  const steps = new Map<string, AgentStepClient>()
+  let lastSeqByStep = new Map<string, number>()
+
+  const patchMessage = (patch: Record<string, any>) => {
+    setChat((prevChat: any) => {
+      if (!prevChat) return prevChat
+      const newMessages = prevChat.messages.map((msg: any) =>
+        msg.id === messageId ? { ...msg, ...patch } : msg
+      )
+      return { ...prevChat, messages: newMessages }
+    })
+  }
+
+  const orderedSteps = () =>
+    Array.from(steps.values()).sort((a, b) => (a.blockIndex - b.blockIndex) || (a.seq - b.seq))
+
+  return {
+    onAgentEvent: (event: import('./api').AgentStreamEvent) => {
+      if (isCancelled() && event.type !== 'agent_done') return
+      switch (event.type) {
+        case 'tool_call_start': {
+          const prevSeq = lastSeqByStep.get(event.id) || 0
+          if (event.seq <= prevSeq) return
+          lastSeqByStep.set(event.id, event.seq)
+          steps.set(event.id, {
+            id: event.id,
+            blockIndex: event.blockIndex,
+            seq: event.seq,
+            type: 'tool_call',
+            name: event.name,
+            humanDescription: event.humanDescription,
+            args: event.args,
+            status: 'planned',
+          })
+          patchMessage({ agentSteps: orderedSteps(), agentRun: { status: 'running' } })
+          break
+        }
+        case 'tool_executing': {
+          const step = steps.get(event.id)
+          if (!step || event.seq <= (lastSeqByStep.get(event.id) || 0)) return
+          lastSeqByStep.set(event.id, event.seq)
+          steps.set(event.id, { ...step, status: 'executing' })
+          patchMessage({ agentSteps: orderedSteps() })
+          break
+        }
+        case 'tool_result': {
+          const step = steps.get(event.id)
+          if (!step || event.seq <= (lastSeqByStep.get(event.id) || 0)) return
+          lastSeqByStep.set(event.id, event.seq)
+          steps.set(event.id, {
+            ...step,
+            status: event.status === 'denied' ? 'denied'
+              : event.status === 'interrupted' ? 'interrupted'
+                : event.isError ? 'error' : 'completed',
+            isError: Boolean(event.isError),
+            preview: event.preview,
+            durationMs: event.durationMs,
+          })
+          patchMessage({ agentSteps: orderedSteps() })
+          break
+        }
+        case 'permission_request': {
+          patchMessage({
+            agentPermission: {
+              permissionId: event.permissionId,
+              id: event.id,
+              name: event.name,
+              humanDescription: event.humanDescription,
+              args: event.args,
+            },
+          })
+          break
+        }
+        case 'permission_resolved': {
+          patchMessage({ agentPermission: null })
+          break
+        }
+        case 'agent_done': {
+          patchMessage({
+            agentPermission: null,
+            agentSteps: orderedSteps(),
+            agentRun: {
+              status: event.interrupted ? 'interrupted' : 'completed',
+              toolCalls: event.toolCalls,
+              errors: event.errors,
+              durationMs: event.durationMs,
+              tokensEstimate: event.tokensEstimate,
+              costUsdEstimate: event.costUsdEstimate ?? null,
+              stoppedReason: event.stoppedReason ?? null,
+            },
+          })
+          break
+        }
+      }
     },
   }
 }
@@ -1513,6 +1667,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 messageId: aiMessagePlaceholder.id,
                 isCancelled: () => controller.signal.aborted || pendingStop,
               }),
+              ...createAgentTraceHandlers({
+                setChat: setCurrentChat,
+                messageId: aiMessagePlaceholder.id,
+                isCancelled: () => controller.signal.aborted || pendingStop,
+              }),
               onReplace: (replacement) => {
                 if (controller.signal.aborted || pendingStop) {
                   return;
@@ -2281,6 +2440,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             messageId: aiMessagePlaceholder.id,
             isCancelled: () => controller.signal.aborted || pendingStop,
           }),
+          ...createAgentTraceHandlers({
+            setChat: setCurrentChat,
+            messageId: aiMessagePlaceholder.id,
+            isCancelled: () => controller.signal.aborted || pendingStop,
+          }),
           onReplace: (replacement) => {
             if (controller.signal.aborted || pendingStop) {
               return;
@@ -2507,6 +2671,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         controller.signal, // Pass the abort signal
         {
           ...createReasoningHandlers({
+            setChat: setCurrentChat,
+            messageId: aiMessagePlaceholder.id,
+            isCancelled: () => controller.signal.aborted || pendingStop,
+          }),
+          ...createAgentTraceHandlers({
             setChat: setCurrentChat,
             messageId: aiMessagePlaceholder.id,
             isCancelled: () => controller.signal.aborted || pendingStop,

@@ -295,7 +295,17 @@ function agentFirstEnabled() {
  *   'none'     — prompted mode disabled by env → keep the legacy hard gate.
  */
 function resolveToolCallMode(provider, model) {
-  if (modelSupportsFunctionCalling(provider, model)) return 'native';
+  // The harness capability registry (per-family table seeded as a superset
+  // of the legacy allowlist + SIRAGPT_MODEL_CAPS_OVERRIDES / settings
+  // overrides) is the AUTHORITATIVE verdict — overrides can force a model
+  // onto the prompted ladder both ways. The legacy regex allowlist only
+  // backs it up if the registry itself fails to load.
+  try {
+    const caps = require('./agent-harness/model-capabilities');
+    if (caps.supportsNativeToolTransport(provider, model)) return 'native';
+  } catch (_) {
+    if (modelSupportsFunctionCalling(provider, model)) return 'native';
+  }
   return promptedToolsEnabled() ? 'prompted' : 'none';
 }
 
@@ -478,6 +488,38 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
     // specs (duration, aspect ratio, count, style/genre) and lets us inject a
     // directive so the agent reliably calls the matching tool with them.
     const mediaIntent = detectMediaIntent(userQuery);
+
+    // ─── Agent harness (Phase 1) ──────────────────────────────────────────
+    // Merge the harness-native tools (web_fetch / run_javascript /
+    // create_artifact) plus the user's external MCP tools into the turn, and
+    // wrap EVERY tool with the typed SSE event stream (tool_call_start /
+    // tool_executing / tool_result, blockIndex+seq) and the interactive
+    // permission gate ('confirm' tier pauses on permission_request until
+    // POST /api/agent/permission answers). Fail-open: any harness error
+    // leaves the original toolset untouched. Skipped for toolsOverride
+    // callers (tests pin the legacy frame contract). Env: SIRAGPT_AGENT_HARNESS=0.
+    let __harness = null;
+    if (!toolsOverride) {
+      try {
+        const { attachHarness } = require('./agent-harness/run-agent-turn');
+        __harness = await attachHarness({
+          tools,
+          write: (payload) => writeSse(res, payload),
+          chatId: toolContext.chatId || null,
+          userId: toolContext.userId || null,
+          prisma: toolContext.prisma || null,
+          signal,
+          describeTool: stageLabelFor,
+          // Weak prompted models already struggle with the core toolset —
+          // don't hand them third-party MCP tools on top.
+          mcpEnabled: toolCallMode === 'native',
+        });
+        if (__harness) tools = __harness.tools;
+      } catch (harnessErr) {
+        console.warn('[agent-harness] attach failed — continuing without harness:', harnessErr && harnessErr.message);
+      }
+    }
+
     // Prompted mode (model without native function calling): hand the model a
     // SMALL, ordered toolset — weak models depend on harness quality far more
     // than flagships, and a ~70-tool catalog rendered as prose overwhelms
@@ -684,6 +726,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
         try { console.log(`[agentic-chat] trace compacted at step ${step}: -${removedMessages} msgs, ${chars} chars`); } catch (_) {}
       },
       onStepStart: async (stepRec) => {
+        // Harness first (synchronous prefix): registers the step's planned
+        // tool calls and emits typed tool_call_start frames BEFORE the
+        // sentinel replace below, so the AgentTrace timeline leads the UI.
+        if (__harness) __harness.onStepStart(stepRec);
         stepCounter += 1;
         // Mark the previous synthetic step done.
         const last = state.steps[state.steps.length - 1];
@@ -728,6 +774,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
         await writeSse(res, { replace: true, content: serializeSentinel(state) });
       },
       onStepDone: async (stepRec) => {
+        // Harness first: settle tool calls that never reached execute()
+        // (duplicate-cache hits, exhausted tools, invalid args) from their
+        // observations so every tool_call_start gets its tool_result.
+        if (__harness) __harness.onStepDone(stepRec);
         // Walk the actions in reverse and attach status to the most-recent
         // matching running step so an output lines up with its start.
         const actions = Array.isArray(stepRec?.actions) ? stepRec.actions : [];
@@ -799,6 +849,23 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       });
     }
 
+    // Close the harness run: settles dangling calls, emits agent_done
+    // (steps, duration, token/cost estimate, interrupted flag) AFTER the
+    // final answer streamed — the UI collapses the trace on this frame —
+    // and returns the persistence-ready record for agent_steps.
+    let agentRun = null;
+    if (__harness) {
+      try {
+        agentRun = __harness.finish({
+          stoppedReason: result?.stoppedReason || 'finalized',
+          interrupted: Boolean(signal && signal.aborted),
+          finalAnswer,
+        });
+      } catch (finishErr) {
+        console.warn('[agent-harness] finish failed:', finishErr && finishErr.message);
+      }
+    }
+
     if (!skipDoneSentinel) {
       if (!res.writableEnded) {
         try { res.write('data: [DONE]\n\n'); } catch { /* socket gone */ }
@@ -809,6 +876,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       finalAnswer,
       stoppedReason: result?.stoppedReason || 'finalized',
       steps: result?.steps || [],
+      agentRun,
     };
   }
 
@@ -1166,6 +1234,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
 
   module.exports = {
     runAgenticChat,
+    // Phase-1 spec name for the harness-enriched agent turn: runAgenticChat
+    // IS the runAgentTurn implementation (capability-gated tool-call mode,
+    // typed SSE events, permission gate, agent_steps persistence record).
+    runAgentTurn: runAgenticChat,
     isEnabled,
     shouldUseAgenticChat,
     modelSupportsFunctionCalling,

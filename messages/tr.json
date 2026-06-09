@@ -349,5 +349,24 @@
     "toolReading": "Kaynak okunuyor",
     "toolRunning": "Kod çalıştırılıyor",
     "toolUsing": "{name} kullanılıyor"
+  },
+  "agent": {
+    "working": "Çalışıyor…",
+    "summary": "{duration} düşündü · {count} araç kullandı",
+    "summaryOne": "{duration} düşündü · 1 araç kullandı",
+    "summaryNoTools": "{duration} düşündü",
+    "interrupted": "Kullanıcı tarafından durduruldu",
+    "details": "Ayrıntılar",
+    "arguments": "Argümanlar",
+    "result": "Sonuç",
+    "error": "Hata",
+    "usingTool": "{name} kullanılıyor",
+    "permissionTitle": "Ajan {name} kullanmak istiyor",
+    "allow": "İzin ver",
+    "allowAlways": "Bu sohbette her zaman izin ver",
+    "deny": "Reddet",
+    "permissionDeniedChip": "Reddedildi",
+    "permissionError": "Yanıtınız gönderilemedi. Tekrar deneyin.",
+    "traceAria": "Ajan etkinliği"
   }
 }

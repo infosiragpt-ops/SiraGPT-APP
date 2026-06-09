@@ -419,5 +419,24 @@
     "toolReading": "正在阅读来源",
     "toolRunning": "正在运行代码",
     "toolUsing": "正在使用 {name}"
+  },
+  "agent": {
+    "working": "处理中…",
+    "summary": "思考了 {duration} · 使用了 {count} 个工具",
+    "summaryOne": "思考了 {duration} · 使用了 1 个工具",
+    "summaryNoTools": "思考了 {duration}",
+    "interrupted": "已被用户停止",
+    "details": "详情",
+    "arguments": "参数",
+    "result": "结果",
+    "error": "错误",
+    "usingTool": "正在使用 {name}",
+    "permissionTitle": "代理想要使用 {name}",
+    "allow": "允许",
+    "allowAlways": "在此对话中始终允许",
+    "deny": "拒绝",
+    "permissionDeniedChip": "已拒绝",
+    "permissionError": "无法发送你的回答，请重试。",
+    "traceAria": "代理活动"
   }
 }

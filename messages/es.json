@@ -447,5 +447,24 @@
     "toolReading": "Leyendo una fuente",
     "toolRunning": "Ejecutando código",
     "toolUsing": "Usando {name}"
+  },
+  "agent": {
+    "working": "Trabajando…",
+    "summary": "Pensó {duration} · usó {count} herramientas",
+    "summaryOne": "Pensó {duration} · usó 1 herramienta",
+    "summaryNoTools": "Pensó {duration}",
+    "interrupted": "Detenido por el usuario",
+    "details": "Detalles",
+    "arguments": "Argumentos",
+    "result": "Resultado",
+    "error": "Error",
+    "usingTool": "Usando {name}",
+    "permissionTitle": "El agente quiere usar {name}",
+    "allow": "Permitir",
+    "allowAlways": "Permitir siempre en este chat",
+    "deny": "Denegar",
+    "permissionDeniedChip": "Denegado",
+    "permissionError": "No se pudo enviar tu respuesta. Inténtalo de nuevo.",
+    "traceAria": "Actividad del agente"
   }
 }

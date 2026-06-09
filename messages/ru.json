@@ -419,5 +419,24 @@
     "toolReading": "Чтение источника",
     "toolRunning": "Выполнение кода",
     "toolUsing": "Использует {name}"
+  },
+  "agent": {
+    "working": "Работает…",
+    "summary": "Думал {duration} · использовано инструментов: {count}",
+    "summaryOne": "Думал {duration} · использован 1 инструмент",
+    "summaryNoTools": "Думал {duration}",
+    "interrupted": "Остановлено пользователем",
+    "details": "Подробности",
+    "arguments": "Аргументы",
+    "result": "Результат",
+    "error": "Ошибка",
+    "usingTool": "Используется {name}",
+    "permissionTitle": "Агент хочет использовать {name}",
+    "allow": "Разрешить",
+    "allowAlways": "Всегда разрешать в этом чате",
+    "deny": "Отклонить",
+    "permissionDeniedChip": "Отклонено",
+    "permissionError": "Не удалось отправить ответ. Попробуйте ещё раз.",
+    "traceAria": "Активность агента"
   }
 }

@@ -349,5 +349,24 @@
     "toolReading": "Đang đọc nguồn",
     "toolRunning": "Đang chạy mã",
     "toolUsing": "Đang dùng {name}"
+  },
+  "agent": {
+    "working": "Đang xử lý…",
+    "summary": "Suy nghĩ {duration} · đã dùng {count} công cụ",
+    "summaryOne": "Suy nghĩ {duration} · đã dùng 1 công cụ",
+    "summaryNoTools": "Suy nghĩ {duration}",
+    "interrupted": "Người dùng đã dừng",
+    "details": "Chi tiết",
+    "arguments": "Tham số",
+    "result": "Kết quả",
+    "error": "Lỗi",
+    "usingTool": "Đang dùng {name}",
+    "permissionTitle": "Tác tử muốn dùng {name}",
+    "allow": "Cho phép",
+    "allowAlways": "Luôn cho phép trong cuộc trò chuyện này",
+    "deny": "Từ chối",
+    "permissionDeniedChip": "Đã từ chối",
+    "permissionError": "Không thể gửi câu trả lời của bạn. Hãy thử lại.",
+    "traceAria": "Hoạt động của tác tử"
   }
 }

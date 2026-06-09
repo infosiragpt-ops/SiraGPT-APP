@@ -34,6 +34,13 @@ interface Props {
   state: AgentTaskState
   className?: string
   onDocumentPreview?: (target: DocumentPreviewTarget) => void
+  /**
+   * Agent harness: when the typed AgentTrace timeline is rendering this
+   * message's steps, the sentinel contributes only its artifacts (same
+   * clean surface the completed state already uses) so the user never
+   * sees two timelines for one turn.
+   */
+  hideSteps?: boolean
 }
 
 interface TimelineStepProjection {
@@ -345,7 +352,7 @@ function ValidationSummary({ state }: { state: AgentTaskState }) {
   )
 }
 
-export function AgenticStepsRenderer({ state, className, onDocumentPreview }: Props) {
+export function AgenticStepsRenderer({ state, className, onDocumentPreview, hideSteps = false }: Props) {
   const [retrying, setRetrying] = React.useState(false)
   const [cancelling, setCancelling] = React.useState(false)
   // Claude-style live trace: expanded by default while the agent runs;
@@ -438,13 +445,14 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview }: Pr
     }
   }, [retrying, taskId])
 
-  if (isCompletedActivity) {
+  if (isCompletedActivity || hideSteps) {
     // Once the task is finished we want a clean answer surface — no
     // "Completado · N pasos · M herramientas" header and no "Ver
     // actividad" disclosure. The agent's deliverables still render
     // when present so the user can keep the file/preview, but if the
     // run produced no artifacts we render nothing here and let the
-    // message body speak for itself.
+    // message body speak for itself. `hideSteps` reuses the same
+    // artifacts-only surface while AgentTrace owns the live timeline.
     if (!hasDeliverable) return null
     return (
       <div className={cn("my-2 max-w-2xl space-y-1", className)}>
