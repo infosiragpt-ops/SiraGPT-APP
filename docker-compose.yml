@@ -181,10 +181,17 @@ services:
     command: sh -c "bunx opencode-ai@latest serve --hostname 0.0.0.0 --port 4096 --print-logs"
     environment:
       OPENCODE_SERVER_PASSWORD: "${OPENCODE_SERVER_PASSWORD:-}"
+      # Provider keys — pass everything in .env so the engine can use any model.
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
       GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+      GOOGLE_GENERATIVE_AI_API_KEY: "${GOOGLE_GENERATIVE_AI_API_KEY:-}"
+      GROQ_API_KEY: "${GROQ_API_KEY:-}"
+      MISTRAL_API_KEY: "${MISTRAL_API_KEY:-}"
+      DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"
+      XAI_API_KEY: "${XAI_API_KEY:-}"
+      CEREBRAS_API_KEY: "${CEREBRAS_API_KEY:-}"
     volumes:
       - opencode_workspace:/workspace
     expose:
