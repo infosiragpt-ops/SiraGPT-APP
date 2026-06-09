@@ -8,42 +8,67 @@
 
 import type { AgentBuildContext } from "./types"
 
-/** Generator role: agency-grade landing as a single runnable index.html. */
+/** Generator role: agency-grade site/app as a single runnable index.html. */
 export function landingSystemPrompt(ctx: AgentBuildContext): string {
   const product = ctx.productType || "(no especificado — asume un negocio genérico)"
   const brand = ctx.brand || "(sin nombre — PROPÓN uno corto y memorable)"
   const style = ctx.styleAudience || "moderno y minimalista"
+  const isApp = ctx.goal === "app"
+  const sections = ctx.sections ? `- Secciones/funciones pedidas: ${ctx.sections}` : null
+  const features = ctx.features ? `- Funcionalidades clave: ${ctx.features}` : null
+  const colorRef = ctx.colorRef ? `- Color/paleta/referencias: ${ctx.colorRef}` : null
+  const data = ctx.dataEntities ? `- Entidades de datos: ${ctx.dataEntities}` : null
+
   return [
-    "[ROL: ARQUITECTO DE LANDING — nivel agencia]",
-    "Construye UNA landing profesional como UN SOLO `index.html` autocontenido",
-    "(HTML + Tailwind por CDN + JS vanilla; sin React salvo que se pida).",
+    `[ROL: DIRECTOR DE DISEÑO + INGENIERO FRONTEND SENIOR — nivel estudio premium]`,
+    isApp
+      ? "Construye UNA app web real y pulida como UN SOLO `index.html` autocontenido (React 18 + Tailwind por CDN, estado con hooks, datos demo en memoria/localStorage)."
+      : "Construye UN sitio profesional como UN SOLO `index.html` autocontenido (HTML + Tailwind por CDN + JS vanilla).",
+    "Tu trabajo debe parecer hecho por un estudio de diseño top — NO una plantilla, NO 'AI slop'.",
     "",
     "CONTEXTO CONSOLIDADO (no vuelvas a preguntar):",
     `- Producto/servicio: ${product}`,
     `- Marca: ${brand}`,
     `- Estilo y público: ${style}`,
+    sections,
+    features,
+    colorRef,
+    data,
     "",
-    "ARQUITECTURA LIMPIA Y EXIGENCIAS (prohibido entregar algo tipo plantilla):",
-    "1. Tipografía: una DISPLAY de impacto para titulares (Anton/Syne/Archivo Black según el estilo)",
-    "   + una sans limpia para texto. Jerarquía clara, titulares GRANDES.",
-    "2. Paleta cohesiva derivada del estilo:",
-    "   - premium/streetwear → negros/grises + 1 acento, layouts asimétricos, secciones editoriales de colección.",
-    "   - corporativo → azules/neutros, grid regular, social proof.",
-    "   - colorido → acentos vivos, gradientes suaves.",
-    "3. Secciones: nav sticky translúcido (logo de la marca + enlaces), hero a pantalla completa con imagen",
-    "   (https://images.unsplash.com/... o https://picsum.photos/seed/PALABRA/1920/1080 como respaldo) + overlay/gradiente,",
-    "   colecciones/productos en grid, bloque editorial/about, testimonios/features, CTA final, footer con redes.",
-    "   Copy REAL de la marca (NADA de lorem ipsum).",
-    "4. Responsive (móvil + desktop), accesible (alt/aria/contraste), micro-animaciones de aparición al hacer",
-    "   scroll (IntersectionObserver), menú hamburguesa en móvil.",
+    "PROHIBIDO (estética genérica de IA) — evita a toda costa:",
+    "• Fuentes genéricas (Inter, Roboto, Arial, system-ui) como display. • Gradientes morado-sobre-blanco.",
+    "• Layouts cookie-cutter centrados y predecibles. • Tarjetas planas idénticas en fila sin jerarquía.",
+    "• Lorem ipsum o copy de relleno. • Emojis como iconos en producto serio.",
+    "",
+    "CRAFT EXIGIDO (lo que separa profesional de amateur):",
+    "1. TIPOGRAFÍA con personalidad: una display de carácter (p.ej. Fraunces, Syne, Clash Display, Archivo Black,",
+    "   Playfair, Bricolage Grotesque — elige según el estilo) vía Google Fonts + una sans limpia para texto.",
+    "   Escala tipográfica amplia (clamp), titulares MUY grandes, tracking/leading cuidados.",
+    "2. PALETA cohesiva y con criterio (3–5 colores + neutros), derivada del estilo/marca y del color pedido si lo hay.",
+    "   Usa color con intención (no decorativo). Modo claro u oscuro según encaje con la marca.",
+    "3. PROFUNDIDAD y composición: espacios en blanco generosos, layouts asimétricos/editoriales, grid intencional,",
+    "   capas (sombras suaves, blur, bordes sutiles), detalles (badges, líneas, números de sección, hairlines).",
+    "4. IMÁGENES reales: https://images.unsplash.com/... (busca términos del rubro) o https://picsum.photos/seed/PALABRA/1600/1000.",
+    "   Trátalas con overlays/duotono/máscaras para que se integren al theme (no pegadas en crudo).",
+    "5. MICRO-INTERACCIONES y movimiento: hover states ricos, transiciones suaves, animaciones de entrada al hacer",
+    "   scroll (IntersectionObserver), parallax sutil, nav sticky translúcido con blur. Nada exagerado.",
+    isApp
+      ? "6. APP REAL: layout de aplicación (sidebar/topbar), vistas con datos demo realistas, estados (vacío/cargando),"
+      : "6. SECCIONES con narrativa: hero a pantalla completa con jerarquía fuerte, prueba social, bloque editorial/about,",
+    isApp
+      ? "   interacciones que funcionan (añadir/editar/filtrar/marcar), responsive. Copy real del dominio."
+      : "   features/colecciones con jerarquía, testimonios creíbles, CTA final potente, footer completo con redes. Copy REAL.",
+    "7. Responsive impecable (móvil primero), accesible (alt/aria/contraste/foco), menú hamburguesa en móvil.",
     "",
     "FORMATO DE SALIDA (ESTRICTO — respétalo al 100%):",
     "• El PRIMER carácter de tu respuesta DEBE ser un backtick: empieza EXACTAMENTE con la línea ```html index.html",
-    "• PROHIBIDO escribir CUALQUIER cosa antes del bloque: ni saludos, ni «Aquí tienes…», ni explicaciones, ni texto introductorio.",
+    "• PROHIBIDO escribir CUALQUIER cosa antes del bloque: ni saludos, ni «Aquí tienes…», ni explicaciones.",
     "• La PRIMERA línea DENTRO del bloque es `// path: index.html`, seguida del documento HTML completo (`<!doctype html>` …).",
-    "• Cierra el bloque con ``` . Después del bloque, como MÁXIMO una sola línea con 1–3 siguientes pasos (opcional). Nada más.",
-    "• NO incluyas otros bloques de código ni varios archivos: solo ese único `index.html`.",
-  ].join("\n")
+    "• Cierra el bloque con ``` . Después, como MÁXIMO una sola línea con 1–3 siguientes pasos (opcional). Nada más.",
+    "• Un único `index.html`. Hazlo largo y detallado — la calidad y el detalle importan más que la brevedad.",
+  ]
+    .filter((line): line is string => line !== null)
+    .join("\n")
 }
 
 /** SRE role: diagnose a build log, output the strict 5-section format. */
