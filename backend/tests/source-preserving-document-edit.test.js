@@ -1567,3 +1567,64 @@ describe('source-preserving Office edit — generic XLSX/PPTX operations', () =>
     assert.equal(slides.length, 1);
   });
 });
+
+describe('append_references — referencias bibliográficas reales', () => {
+  it('planea append_references con conteo para "agrega dos referencias en bibliografía al pie"', () => {
+    const ops = sourcePreservingInternals.planSourcePreservingOperations({
+      requestText: 'agrega dos referencias a este documento en bibliografia al pie',
+      documentXml: '<w:document><w:body></w:body></w:document>',
+    });
+    assert.equal(ops.length, 1);
+    assert.equal(ops[0].kind, 'append_references');
+    assert.equal(ops[0].count, 2);
+  });
+
+  it('tolera el typo "bliografia" y números arábigos', () => {
+    assert.equal(sourcePreservingInternals.clauseWantsBibliography('agrega 5 citas en la bliografia'), true);
+    assert.equal(sourcePreservingInternals.extractReferenceCount('agrega 5 citas en la bliografia'), 5);
+    assert.equal(sourcePreservingInternals.extractReferenceCount('agrega referencias'), 2);
+  });
+
+  it('formatea una referencia estilo APA con DOI', () => {
+    const apa = sourcePreservingInternals.formatReferenceApa({
+      title: 'Gestión administrativa moderna',
+      authors: ['Pérez, J.', 'García, M.'],
+      year: 2024,
+      journal: 'Revista de Administración',
+      doi: '10.1234/abc',
+    });
+    assert.match(apa, /Pérez, J.; García, M\./);
+    assert.match(apa, /\(2024\)\./);
+    assert.match(apa, /https:\/\/doi\.org\/10\.1234\/abc/);
+  });
+
+  it('sin red (NODE_ENV=test) degrada honestamente sin fabricar citas', async () => {
+    const prevEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'test';
+    try {
+      const input = await makeDocxBuffer();
+      const result = await sourcePreservingInternals.runAppendReferencesOperation({
+        buffer: input,
+        op: { kind: 'append_references', count: 2 },
+        sourceText: 'gestión administrativa en instituciones educativas',
+        sourceFile: { originalName: 'matriz.docx' },
+      });
+      assert.equal(result.step.mode, 'unavailable');
+      assert.equal(result.step.count, 0);
+      assert.equal(result.buffer, input);
+      assert.match(
+        sourcePreservingInternals.describeStep(result.step),
+        /no pude obtener referencias verificadas/,
+      );
+    } finally {
+      process.env.NODE_ENV = prevEnv;
+    }
+  });
+
+  it('describeStep reporta referencias verificadas agregadas', () => {
+    assert.match(
+      sourcePreservingInternals.describeStep({ kind: 'append_references', mode: 'scientific_search', count: 3 }),
+      /agregué 3 referencia\(s\) bibliográfica\(s\) verificadas/,
+    );
+  });
+});

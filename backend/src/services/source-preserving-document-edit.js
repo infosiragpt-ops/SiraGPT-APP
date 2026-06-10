@@ -2913,6 +2913,24 @@ function clauseIsAppend(clauseNorm) {
     || /\bcomo\s+(?:un\s+|una\s+)?(?:nuevo\s+|nueva\s+)?(?:anexo|apendice|seccion)\b/.test(clauseNorm);
 }
 
+// "agrega dos referencias…", "añade citas a la bibliografía", "pon fuentes
+// bibliográficas al pie". clauseNorm llega sin acentos (normalizeText), y se
+// tolera el typo común "bliografia".
+const BIBLIOGRAPHY_RE = /\b(referencias?(\s+bibliografic\w*)?|b(?:ib)?liografia|citas?\s+bibliografic\w*|fuentes?\s+bibliografic\w*)\b/;
+
+function clauseWantsBibliography(clauseNorm) {
+  return BIBLIOGRAPHY_RE.test(clauseNorm);
+}
+
+const SPANISH_SMALL_COUNTS = { un: 1, una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7, ocho: 8, nueve: 9, diez: 10 };
+
+function extractReferenceCount(clauseNorm) {
+  const m = clauseNorm.match(/\b(\d{1,2}|un|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\s+(?:referencias?|citas?|fuentes?)\b/);
+  if (!m) return 2;
+  const n = Number(m[1]) || SPANISH_SMALL_COUNTS[m[1]] || 2;
+  return Math.max(1, Math.min(10, n));
+}
+
 function clauseIsDelete(clauseNorm) {
   return /\b(quit\w*|elimin\w*|borr\w*)\b/.test(clauseNorm);
 }
@@ -3045,6 +3063,12 @@ function buildOperationFromClause(clauseNorm, documentXml) {
 
   if (clauseMentionsCover(clauseNorm) && fill) {
     return { kind: 'fill_cover' };
+  }
+
+  // "agrega N referencias / citas a la bibliografía" — referencias REALES
+  // (búsqueda científica) en una sección de Referencias, no un anexo genérico.
+  if (clauseWantsBibliography(clauseNorm) && (append || fill)) {
+    return { kind: 'append_references', count: extractReferenceCount(clauseNorm) };
   }
 
   if (target) {
@@ -3384,6 +3408,66 @@ function runAppendGenericOperation({ buffer, op, requestText, sourceText, source
   };
 }
 
+/**
+ * Referencias REALES para "agrega N referencias a la bibliografía": consulta
+ * la búsqueda científica multi-proveedor (key-free: OpenAlex/Crossref/SciELO/
+ * DOAJ/PubMed…) con el tema del documento y devuelve hasta `count` papers.
+ * En tests (NODE_ENV=test) no toca la red salvo opt-in explícito. Nunca
+ * inventa citas: sin resultados → [] y el paso lo reporta honestamente.
+ */
+async function fetchVerifiedReferences({ topic, count, signal }) {
+  if (String(process.env.NODE_ENV) === 'test' && process.env.SIRAGPT_REFERENCES_NETWORK !== '1') return [];
+  try {
+    const scientific = require('./scientific-search');
+    const result = await scientific.search(topic, { limit: Math.max(count * 4, 12), signal });
+    const papers = Array.isArray(result?.papers) ? result.papers : (Array.isArray(result) ? result : []);
+    return papers.filter((p) => p && p.title).slice(0, count);
+  } catch {
+    return [];
+  }
+}
+
+function formatReferenceApa(paper) {
+  const authors = (Array.isArray(paper.authors) ? paper.authors : [])
+    .slice(0, 6)
+    .map((a) => (typeof a === 'string' ? a : a?.name))
+    .filter(Boolean);
+  const authorPart = authors.length ? `${authors.join('; ')}.` : '';
+  const year = paper.year ? `(${paper.year}).` : '(s.f.).';
+  const venue = paper.journal || paper.venue || '';
+  const doi = paper.doi ? `https://doi.org/${String(paper.doi).replace(/^https?:\/\/(dx\.)?doi\.org\//i, '')}` : '';
+  const link = doi || paper.url || paper.htmlUrl || '';
+  return [authorPart, year, `${String(paper.title).trim()}.`, venue ? `${venue}.` : '', link]
+    .filter(Boolean)
+    .join(' ');
+}
+
+async function runAppendReferencesOperation({ buffer, op, sourceText, sourceFile, signal }) {
+  const originalName = sourceFile.originalName || sourceFile.filename || '';
+  const topic = compact(String(originalName).replace(/\.[a-z0-9]+$/i, '').replace(/[_-]+/g, ' '), 140)
+    || compact(String(sourceText || ''), 140);
+  const count = Math.max(1, Math.min(10, Number(op.count) || 2));
+  const papers = await fetchVerifiedReferences({ topic, count, signal });
+  if (!papers.length) {
+    // Sin fuentes verificables no se fabrica nada — el resumen del paso le
+    // dice al usuario que reintente, en vez de inventar citas académicas.
+    return {
+      buffer,
+      validationBlocks: [],
+      step: { kind: 'append_references', mode: 'unavailable', count: 0 },
+    };
+  }
+  const blocks = [
+    block('heading2', 'Referencias bibliográficas'),
+    ...papers.map((p) => block('normal', formatReferenceApa(p))),
+  ];
+  return {
+    buffer: appendToDocxBuffer(buffer, blocks),
+    validationBlocks: blocks,
+    step: { kind: 'append_references', mode: 'scientific_search', count: papers.length },
+  };
+}
+
 async function runIntegrateReferencesOperation({ buffer, requestText, sourceText, allSourceFiles, sourceFile, referenceFiles, signal }) {
   const refs = referenceFiles?.length ? referenceFiles : referenceSourceFiles(allSourceFiles, sourceFile);
   const blocks = await generateReferenceIntegrationBlocks({
@@ -3512,6 +3596,8 @@ async function executeDocxOperations({ input, ops, requestText, sourceText, allS
       result = await runInsertIndexOperation({ buffer, requestText });
     } else if (op.kind === 'integrate_references') {
       result = await runIntegrateReferencesOperation({ buffer, requestText, sourceText, allSourceFiles, sourceFile, referenceFiles, signal });
+    } else if (op.kind === 'append_references') {
+      result = await runAppendReferencesOperation({ buffer, op, sourceText, sourceFile, signal });
     } else if (op.kind === 'fill_cover') {
       result = runFillCoverOperation({ buffer, sourceText, sourceFile });
     } else if (op.kind === 'delete_text') {
@@ -3767,6 +3853,8 @@ function describeStep(step) {
   if (step.kind === 'append_labeled') return `agregué ${step.label}`;
   if (step.kind === 'append_generic' && step.mode === 'instrument') return 'agregué un anexo con el instrumento de recolección de datos';
   if (step.kind === 'integrate_references') return `integré ${step.references || 0} documento(s) de soporte al documento principal`;
+  if (step.kind === 'append_references' && step.mode === 'unavailable') return 'no pude obtener referencias verificadas en línea en este intento (vuelve a pedirlo en unos minutos)';
+  if (step.kind === 'append_references') return `agregué ${step.count} referencia(s) bibliográfica(s) verificadas en la sección "Referencias bibliográficas"`;
   if (step.kind === 'insert_visual' && !step.mode) return `inserté un ${step.label || 'gráfico'} en el documento`;
   if (step.kind === 'insert_visual') return 'intenté insertar un gráfico, pero no había datos suficientes';
   if (step.kind === 'insert_index' && !step.mode) return `generé el ${step.label || 'índice'} de figuras/tablas`;
@@ -4130,6 +4218,11 @@ module.exports = {
     locateSectionTable,
     planGenericOfficeOperations,
     planSourcePreservingOperations,
+    clauseWantsBibliography,
+    extractReferenceCount,
+    formatReferenceApa,
+    runAppendReferencesOperation,
+    describeStep,
     replaceTextInDocxBuffer,
     replaceTextInPptxBuffer,
     replaceTextInXlsxBuffer,
