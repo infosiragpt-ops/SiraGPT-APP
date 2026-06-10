@@ -274,13 +274,18 @@ async function createDockerSandbox() {
 /* ── factory ─────────────────────────────────────────────────────────────── */
 
 /**
- * @param {{ driver?: 'auto'|'local'|'docker' }} [opts]
+ * @param {{ driver?: 'auto'|'local'|'docker'|'remote' }} [opts]
  */
 async function createSandbox(opts = {}) {
   const requested = String(opts.driver || process.env.SIRAGPT_DOC_SANDBOX_DRIVER || 'auto').toLowerCase();
+  const hasRemote = Boolean(process.env.SANDBOX_SERVICE_URL && process.env.SANDBOX_API_KEY);
+  if (requested === 'remote') return require('./remote-sandbox').createRemoteSandbox();
   if (requested === 'local') return createLocalSandbox();
   if (requested === 'docker') return createDockerSandbox();
-  // auto: prefer the real container when a Docker daemon is reachable.
+  // auto: the remote sandbox microservice wins when configured (this is how a
+  // Docker-less host like Replit gets real container isolation); then a local
+  // Docker daemon; then the in-process local workspace fallback.
+  if (hasRemote) return require('./remote-sandbox').createRemoteSandbox();
   if (await dockerAvailable()) {
     try { return await createDockerSandbox(); } catch (_) { /* image missing etc. → local */ }
   }
