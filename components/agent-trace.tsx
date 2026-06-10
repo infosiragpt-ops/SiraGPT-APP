@@ -45,7 +45,6 @@ import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { markdownRehypePlugins, markdownRemarkPlugins } from "@/lib/markdown-sanitize"
 import { DotmCircular15 } from "@/components/ui/dotm-circular-15"
-import { ThinkingPulse } from "@/components/ui/thinking-pulse"
 import { CustomCodeBlock } from "@/components/ui/custom-code-block"
 import { apiClient } from "@/lib/api"
 import { formatThinkingDuration } from "@/components/thinking-trace"
@@ -111,7 +110,7 @@ function StepRow({ step, isLast }: { step: AgentStepClient; isLast: boolean }) {
             {step.humanDescription || t("usingTool", { name: step.name })}
           </span>
           {running ? (
-            <ThinkingPulse size={13} className="shrink-0 text-muted-foreground" ariaLabel={t("working")} />
+            <DotmCircular15 size={13} className="shrink-0" ariaLabel={t("working")} />
           ) : failed ? (
             <X className="h-3.5 w-3.5 shrink-0 text-red-500" aria-label={t("error")} />
           ) : (
@@ -290,7 +289,7 @@ export default function AgentTrace({
         className="group flex w-full items-center gap-2 rounded-lg px-1 py-0.5 text-left"
       >
         {active ? (
-          <ThinkingPulse size={16} className="shrink-0 text-muted-foreground" ariaLabel={t("working")} />
+          <DotmCircular15 size={18} className="shrink-0" ariaLabel={t("working")} />
         ) : (
           <Bot className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         )}

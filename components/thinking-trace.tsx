@@ -31,7 +31,7 @@ import { ChevronDown, ChevronRight, Brain, Globe, FileText, Terminal, Wrench, Im
 import ReactMarkdown from "react-markdown"
 import { useTranslations } from "next-intl"
 import { markdownRehypePlugins, markdownRemarkPlugins } from "@/lib/markdown-sanitize"
-import { ThinkingPulse } from "@/components/ui/thinking-pulse"
+import { DotmCircular15 } from "@/components/ui/dotm-circular-15"
 import { CustomCodeBlock } from "@/components/ui/custom-code-block"
 
 export type ThinkingToolCall = {
@@ -173,7 +173,7 @@ export default function ThinkingTrace({ reasoning, streaming, durationMs, toolCa
         className="group flex w-full items-center gap-2 rounded-lg px-1 py-0.5 text-left"
       >
         {streaming ? (
-          <ThinkingPulse size={16} className="shrink-0 text-muted-foreground" ariaLabel={t("thinking")} />
+          <DotmCircular15 size={18} className="shrink-0" ariaLabel={t("thinking")} />
         ) : (
           <Brain className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         )}
