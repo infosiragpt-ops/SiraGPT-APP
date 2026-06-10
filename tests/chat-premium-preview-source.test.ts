@@ -28,9 +28,12 @@ describe("premium tool preview source contract", () => {
     for (const label of ["Imágenes", "Voz", "Video Generation", "Música", "Generador de tesis"]) {
       assert.match(premiumMenu, new RegExp(label), `missing premium menu label ${label}`)
     }
+    // The graduation-cap logo shipped as an emoji span and was later
+    // restyled to the lucide <GraduationCap /> icon in the liquid menu —
+    // either rendering satisfies the visual contract.
     assert.match(
       premiumMenu,
-      /aria-hidden="true">🎓<\/span>/,
+      /aria-hidden="true">🎓<\/span>|<GraduationCap\b/,
       "thesis generator premium menu item should show the graduation cap logo"
     )
 

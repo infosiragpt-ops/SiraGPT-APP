@@ -85,11 +85,16 @@ describe("chat agentic loop routing source contract", () => {
       "  return (",
       agenticStepsSource,
     )
-    assert.match(liveBlock, /Minimal live activity/)
+    // The live-activity header comment evolved ("Minimal live activity" →
+    // "Claude-style live activity"); anchor on the stable phrase.
+    assert.match(liveBlock, /live activity/)
     assert.match(agenticStepsSource, /aria-label="Agente trabajando"/)
     assert.match(agenticStepsSource, /Trabajando/)
-    assert.match(agenticStepsSource, /AgentProgressBeam/)
-    assert.match(agenticStepsSource, /rounded-2xl border border-border\/55 bg-background\/85/)
+    // The AgentProgressBeam bar was replaced by the Claude-style shimmer
+    // line + circular spinner (feat: minimal thinking-stream indicator).
+    assert.match(agenticStepsSource, /DotmCircular15|AgentProgressBeam/)
+    assert.match(agenticStepsSource, /thinking-shimmer-text/)
+    assert.match(agenticStepsSource, /rounded-2xl border border-border\//)
   })
 
   it("keeps reloaded empty agent states visible instead of collapsing to a plain spinner", () => {
