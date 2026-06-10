@@ -823,12 +823,16 @@ export function shouldRouteTextPromptThroughAgenticRuntime(prompt: string, files
     // document_edit tool and, when the worker can't relay events, leaves the
     // chat stuck on "Sin actualizaciones recientes" — exactly the doc-edit
     // failure users hit. Strong mutation verb alone, or an edit verb + region.
+    // A STRONG mutation verb (borra/elimina/agrega/edita/reemplaza…) is an edit
+    // of the attached file REGARDLESS of any format mention — "borra el jurado
+    // evaluador y dámelo en word" is still an edit, not a fresh generation.
+    // Only the weaker edit/transform verbs stay gated by OUTPUT_FORMAT (where
+    // "en un word" may mean "create a new word from scratch").
     if (
-      !OUTPUT_FORMAT_REQUEST_RE.test(normalized)
-      && (
-        DOCUMENT_MUTATION_STRONG_RE.test(normalized)
-        || EXISTING_DOCUMENT_EDIT_RE.test(normalized)
-        || WHOLE_DOCUMENT_TRANSFORM_RE.test(normalized)
+      DOCUMENT_MUTATION_STRONG_RE.test(normalized)
+      || (
+        !OUTPUT_FORMAT_REQUEST_RE.test(normalized)
+        && (EXISTING_DOCUMENT_EDIT_RE.test(normalized) || WHOLE_DOCUMENT_TRANSFORM_RE.test(normalized))
       )
     ) {
       return false

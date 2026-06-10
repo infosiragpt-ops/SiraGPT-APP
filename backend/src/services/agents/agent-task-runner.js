@@ -2234,6 +2234,21 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           },
         });
       } catch (err) {
+        // "Target-not-located" failures (the literal editor couldn't find the
+        // exact string/section to delete/replace) are NOT terminal: the request
+        // is well-formed, the deterministic literal matcher just can't resolve
+        // natural language ("borra el jurado evaluador"). Fall through to the
+        // generative path (grounded in the file's text) instead of dead-ending
+        // with "No pude editar…". The semantic document_edit tool on the inline
+        // /api/ai/generate path is the primary handler; this keeps the queued
+        // surface from giving the user an error on a perfectly valid edit.
+        const TARGET_NOT_LOCATED = new Set([
+          'DELETE_TEXT_NOT_FOUND', 'DELETE_TEXT_UNSPECIFIED',
+          'REPLACE_TEXT_NOT_FOUND', 'REPLACE_TEXT_UNSPECIFIED',
+          'SECTION_TABLE_NOT_FOUND', 'CRONOGRAMA_TABLE_NOT_FOUND',
+          'XLSX_REPLACE_TEXT_NOT_FOUND', 'XLSX_REPLACE_TEXT_UNSPECIFIED',
+          'PPTX_REPLACE_TEXT_NOT_FOUND', 'PPTX_REPLACE_TEXT_UNSPECIFIED',
+        ]);
         if (err && err.__fallthroughFreshDocument) {
           // Sin archivo base que conservar: cerramos el paso de edición y
           // dejamos que el flujo genere un documento nuevo más abajo en lugar
@@ -2241,6 +2256,17 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           wantsSourcePreservingEdit = false;
           emit({ type: 'step_done', id: currentStepId, ok: true });
           currentStepId = null;
+        } else if (err && TARGET_NOT_LOCATED.has(err.code)) {
+          wantsSourcePreservingEdit = false;
+          emit({ type: 'step_done', id: currentStepId, ok: true });
+          currentStepId = null;
+          emit({
+            type: 'quality_gate',
+            gate: 'source_preserving_document_edit',
+            label: 'Reintentando la edición de forma semántica',
+            passed: true,
+            summary: 'El editor literal no ubicó el fragmento exacto; el agente reintenta la edición sobre el documento.',
+          });
         } else {
           emit({ type: 'step_done', id: currentStepId, ok: false });
           currentStepId = null;
@@ -3024,14 +3050,35 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             wantsSourcePreservingEdit = false;
           }
         } catch (err) {
-          emit({
-            type: 'quality_gate',
-            gate: 'source_preserving_document_edit',
-            label: 'Edición preservadora no disponible',
-            passed: false,
-            summary: err?.message || 'No se pudo editar el archivo original.',
-          });
-          finalMarkdown = `No pude editar el archivo original sin cambiarlo: ${err?.message || 'error desconocido'}. No generé un documento nuevo para evitar entregarte contenido ajeno al archivo.`;
+          // A "target-not-located" literal failure is not terminal — fall
+          // through to the generative path (grounded in the file's text)
+          // instead of returning an apology, mirroring the BEFORE-loop catch.
+          const TARGET_NOT_LOCATED_POST = new Set([
+            'DELETE_TEXT_NOT_FOUND', 'DELETE_TEXT_UNSPECIFIED',
+            'REPLACE_TEXT_NOT_FOUND', 'REPLACE_TEXT_UNSPECIFIED',
+            'SECTION_TABLE_NOT_FOUND', 'CRONOGRAMA_TABLE_NOT_FOUND',
+            'XLSX_REPLACE_TEXT_NOT_FOUND', 'XLSX_REPLACE_TEXT_UNSPECIFIED',
+            'PPTX_REPLACE_TEXT_NOT_FOUND', 'PPTX_REPLACE_TEXT_UNSPECIFIED',
+          ]);
+          if (err && TARGET_NOT_LOCATED_POST.has(err.code)) {
+            emit({
+              type: 'quality_gate',
+              gate: 'source_preserving_document_edit',
+              label: 'Reintentando la edición de forma semántica',
+              passed: true,
+              summary: 'El editor literal no ubicó el fragmento exacto; se genera el documento editado sobre el contenido del archivo.',
+            });
+            wantsSourcePreservingEdit = false;
+          } else {
+            emit({
+              type: 'quality_gate',
+              gate: 'source_preserving_document_edit',
+              label: 'Edición preservadora no disponible',
+              passed: false,
+              summary: err?.message || 'No se pudo editar el archivo original.',
+            });
+            finalMarkdown = `No pude editar el archivo original sin cambiarlo: ${err?.message || 'error desconocido'}. No generé un documento nuevo para evitar entregarte contenido ajeno al archivo.`;
+          }
         }
       }
     }
