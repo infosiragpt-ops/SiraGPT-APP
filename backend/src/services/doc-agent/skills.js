@@ -24,7 +24,12 @@ HARD RULES
    and the format is still valid). If a step fails, read the error and fix it.
 5. Name outputs descriptively, keeping the original extension
    (e.g. "informe-editado.docx").
-6. When done, reply with a SHORT summary of what you changed and the output
+6. COMPLETION CHECKLIST (mandatory before your final reply): re-read the
+   user's request, list EACH requested change, and confirm each one is
+   actually present in the output file by inspecting it. If ANY requested
+   change is missing (a rename, a sort, an added row/column/slide…), apply it
+   before finishing — a partially-done task is a failed task.
+7. When done, reply with a SHORT summary of what you changed and the output
    filename(s). Do not dump file contents into the reply.`;
 
 const SKILLS = {
@@ -65,19 +70,26 @@ Never edit the binary .docx directly with str_replace — always one of the two
 workflows above. Mind that a sentence may be split across multiple <w:t> runs.`,
 
   xlsx: `XLSX SKILL
-Use openpyxl and PRESERVE FORMULAS (openpyxl keeps them as strings starting
-with "="; do not overwrite formula cells with computed values unless asked):
+An .xlsx is a BINARY ZIP — NEVER edit it with str_replace or hand-written XML
+(that is the #1 cause of a corrupt workbook). Use openpyxl END TO END, and
+PRESERVE FORMULAS (openpyxl keeps them as strings starting with "="; do not
+overwrite formula cells with computed values unless asked):
   python3 - <<'PY'
   import openpyxl
   wb = openpyxl.load_workbook('/workspace/uploads/FILE.xlsx')
   ws = wb['Sheet1']  # or wb.active; keep sheet names intact
-  # edit cells: ws['B2'] = 'nuevo valor'
+  # edit cells: ws['B2'] = 'nuevo valor'; add rows with ws.append([...])
   wb.save('/workspace/outputs/FILE-editado.xlsx')
   PY
+✅ THEN VERIFY before finishing (mandatory):
+  python3 -c "import openpyxl; openpyxl.load_workbook('/workspace/outputs/FILE-editado.xlsx'); print('valid xlsx')"
+If that errors, regenerate the file with openpyxl — do NOT try to patch the
+ZIP/XML by hand.
 For CSV use python3 csv module with the original delimiter/encoding.`,
 
   pptx: `PPTX SKILL
-Use python-pptx; preserve layouts, masters and images:
+A .pptx is a BINARY ZIP — NEVER edit it with str_replace or hand-written XML.
+Use python-pptx END TO END; preserve layouts, masters and images:
   python3 - <<'PY'
   from pptx import Presentation
   prs = Presentation('/workspace/uploads/FILE.pptx')
@@ -85,7 +97,9 @@ Use python-pptx; preserve layouts, masters and images:
       for shape in slide.shapes:
           if shape.has_text_frame: pass  # edit shape.text_frame paragraphs/runs
   prs.save('/workspace/outputs/FILE-editado.pptx')
-  PY`,
+  PY
+✅ THEN VERIFY before finishing (mandatory):
+  python3 -c "from pptx import Presentation; Presentation('/workspace/outputs/FILE-editado.pptx'); print('valid pptx')"`,
 
   pdf: `PDF SKILL
 Use pypdf for page-level operations (merge/split/rotate/extract/metadata):
@@ -100,7 +114,27 @@ PDFs are not reliably text-editable in place. For content rewrites: extract the
 text, rebuild via a docx (python-docx) and convert:
   libreoffice --headless --convert-to pdf --outdir /workspace/outputs file.docx`,
 
-  txt: `TEXT/CSV/MD SKILL
+  csv: `CSV SKILL
+For ANY computational transform — adding a computed column, sorting,
+filtering, aggregating, deduping — you MUST run python3. NEVER compute averages,
+sums or a new row order in your head and write them with write_file: hand
+arithmetic and hand sorting WILL be wrong. Run the code and let it produce the
+file. Use pandas when a calculation/sort is involved so the math and ordering
+are exact:
+  python3 - <<'PY'
+  import pandas as pd
+  df = pd.read_csv('/workspace/uploads/FILE.csv')   # keep the original delimiter/encoding
+  # e.g. compute a column and SORT as the user asked:
+  # df['Promedio'] = df[['Nota1','Nota2','Nota3']].mean(axis=1).round(2)
+  # df = df.sort_values('Promedio', ascending=False)
+  df.to_csv('/workspace/outputs/FILE-editado.csv', index=False)
+  PY
+Apply EVERY part of the request (a computed column AND a sort are two separate
+steps — do both). Re-read the output to confirm the order/values are right.
+For tiny surgical text fixes only (no math, no reorder) read_file + str_replace
+is fine. Write the result to /workspace/outputs.`,
+
+  txt: `TEXT/MD SKILL
 Plain-text formats: use read_file + str_replace for surgical edits (old_str
 must be unique) or write_file for full rewrites. Keep the original encoding
 and line endings; write the result to /workspace/outputs.`,
@@ -108,7 +142,7 @@ and line endings; write the result to /workspace/outputs.`,
 
 const EXT_TO_SKILL = {
   docx: 'docx', doc: 'docx',
-  xlsx: 'xlsx', xls: 'xlsx', csv: 'txt',
+  xlsx: 'xlsx', xls: 'xlsx', csv: 'csv',
   pptx: 'pptx', ppt: 'pptx',
   pdf: 'pdf',
   txt: 'txt', md: 'txt', text: 'txt',

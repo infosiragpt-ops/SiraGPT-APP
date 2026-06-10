@@ -38,7 +38,12 @@ const MIME_BY_EXT = {
 };
 
 router.get('/health', async (_req, res) => {
-  res.json({ ok: true, defaultModel: DEFAULT_MODEL, drivers: ['docker', 'local'] });
+  const remoteConfigured = Boolean(process.env.SANDBOX_SERVICE_URL && process.env.SANDBOX_API_KEY);
+  res.json({
+    ok: true,
+    defaultModel: DEFAULT_MODEL,
+    drivers: [...(remoteConfigured ? ['remote'] : []), 'docker', 'local'],
+  });
 });
 
 router.post(
@@ -96,6 +101,9 @@ router.post(
       await fs.mkdir(uploadsRoot, { recursive: true });
       const artifacts = [];
       for (const out of result.outputs) {
+        // Never deliver an empty file as a download card — it is always junk
+        // (e.g. a failed repack); the invalid-output event already reported it.
+        if (!out.buffer || out.buffer.length === 0) continue;
         const ext = String(out.name).split('.').pop().toLowerCase();
         const filename = `docagent-${Date.now()}-${out.name}`.replace(/[^\w.\-() À-ɏ]/g, '_');
         const abs = path.join(uploadsRoot, filename);

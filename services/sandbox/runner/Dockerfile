@@ -26,13 +26,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Document-manipulation libraries the skills prompt teaches the model to use.
+# pandas + numpy power the CSV/spreadsheet computational transforms (computed
+# columns, sorting, aggregation) the CSV skill relies on.
 RUN pip3 install --no-cache-dir \
       python-docx \
       openpyxl \
       python-pptx \
       pypdf \
       mammoth \
-      lxml
+      lxml \
+      pandas \
+      numpy \
+      tabulate
 
 # Non-root user; workspace owned by it. The runner exec's as this user.
 RUN useradd -m -u 10001 -d /workspace sandbox \

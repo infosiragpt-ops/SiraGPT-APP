@@ -78,13 +78,20 @@ async function collectValidOutputs(sandbox, onEvent = () => {}) {
   const outputs = await sandbox.collectOutputs();
   for (const out of outputs) {
     const ext = String(out.name).split('.').pop().toLowerCase();
-    if (['docx', 'xlsx', 'pptx'].includes(ext)) {
+    if (!out.buffer || out.buffer.length === 0) {
+      // An empty deliverable is never useful, whatever the format.
+      out.valid = false;
+      onEvent({ type: 'output_invalid', name: out.name, reason: 'empty_file' });
+    } else if (['docx', 'xlsx', 'pptx'].includes(ext)) {
       out.valid = isValidOoxml(out.buffer);
       if (!out.valid) onEvent({ type: 'output_invalid', name: out.name, reason: 'ooxml_structure' });
     } else {
       out.valid = true;
     }
   }
+  // Valid deliverables first so naive consumers (first-artifact UIs) get the
+  // good file even when a scratch/corrupt sibling also landed in outputs/.
+  outputs.sort((a, b) => Number(b.valid !== false) - Number(a.valid !== false));
   return outputs;
 }
 
@@ -153,9 +160,10 @@ async function runDocumentAgent({
       messages.push({
         role: 'user',
         content:
-          'You have not yet produced a valid deliverable in /workspace/outputs. Remember: a .docx/.xlsx/.pptx is a binary ZIP — ' +
-          'do NOT str_replace it directly. Unpack it (unzip) into a scratch dir, edit the extracted XML (or use python3 / python-docx), ' +
-          'then write the final file to /workspace/outputs and verify it opens. Do this now and finish.',
+          'You have not yet produced a valid, non-empty deliverable in /workspace/outputs. Remember: a .docx/.xlsx/.pptx is a binary ZIP — ' +
+          'NEVER edit it with str_replace or hand-written XML. Use the python3 libraries end to end: python-docx for .docx, openpyxl for .xlsx, ' +
+          'python-pptx for .pptx (load the uploaded file, apply the changes, save to /workspace/outputs/). Then VERIFY it opens by loading it ' +
+          'again with the same library and printing a confirmation. Do this now and finish.',
       });
       result = await runDocAgentLoop({
         client: llm, model, messages, tools: TOOL_DEFINITIONS, executors,
