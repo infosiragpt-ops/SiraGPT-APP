@@ -93,6 +93,62 @@ test('inferProviderFromModelId: unknown ids fall back to OpenAI (safe)', () => {
   assert.equal(inferProviderFromModelId('something-totally-new'), 'OpenAI');
 });
 
+test('inferProviderFromModelId: hostile non-string inputs never throw → OpenAI default', () => {
+  // Null-prototype object — String() throws "Cannot convert object to primitive value".
+  assert.equal(inferProviderFromModelId(Object.create(null)), 'OpenAI');
+  // toString that throws.
+  assert.equal(
+    inferProviderFromModelId({ toString() { throw new Error('boom'); } }),
+    'OpenAI'
+  );
+  // Plain non-strings coerce safely to the fallback.
+  assert.equal(inferProviderFromModelId(123), 'OpenAI');
+  assert.equal(inferProviderFromModelId(true), 'OpenAI');
+  assert.equal(inferProviderFromModelId({}), 'OpenAI');
+});
+
+test('isDirectDeepSeekModel: hostile non-string inputs never throw', () => {
+  assert.equal(isDirectDeepSeekModel(Object.create(null)), false);
+  assert.equal(isDirectDeepSeekModel({ toString() { throw new Error('boom'); } }), false);
+  assert.equal(isDirectDeepSeekModel(42), false);
+});
+
+test('inferProviderFromModelId: surrounding whitespace infers same as clean form', () => {
+  assert.equal(inferProviderFromModelId('  claude-opus-4-7  '), 'Anthropic');
+  assert.equal(inferProviderFromModelId('\tmistral-large-latest\n'), 'Mistral');
+  assert.equal(inferProviderFromModelId(' codestral-latest'), 'Mistral');
+  assert.equal(inferProviderFromModelId('llama-3.3-70b-versatile  '), 'Groq');
+  assert.equal(inferProviderFromModelId('  deepseek-chat '), 'DeepSeek');
+  assert.equal(inferProviderFromModelId('  gemini-2.5-pro '), 'Gemini');
+  assert.equal(inferProviderFromModelId(' anthropic/claude-opus-4.7 '), 'OpenRouter');
+});
+
+test('inferProviderFromModelId: leading/trailing slashes infer same as clean form', () => {
+  assert.equal(inferProviderFromModelId('/claude-sonnet-4-6'), 'Anthropic');
+  assert.equal(inferProviderFromModelId('/mistral-large-latest'), 'Mistral');
+  assert.equal(inferProviderFromModelId('/deepseek-reasoner'), 'DeepSeek');
+  assert.equal(inferProviderFromModelId('llama-3.1-70b-versatile/'), 'Groq');
+  assert.equal(inferProviderFromModelId('claude-haiku-4-5/'), 'Anthropic');
+  // A stray leading slash must NOT trip the "/gpt-oss" OpenRouter slug rule:
+  // the clean form "gpt-oss-120b" is OpenAI-shaped.
+  assert.equal(inferProviderFromModelId('/gpt-oss-120b'), 'OpenAI');
+  // Internal slashes (real OpenRouter slugs) are preserved:
+  assert.equal(inferProviderFromModelId('anthropic/claude-opus-4.7/'), 'OpenRouter');
+  assert.equal(inferProviderFromModelId('/openai/gpt-oss-120b'), 'OpenRouter');
+});
+
+test('inferProviderFromModelId: mixed case + decoration combine correctly', () => {
+  assert.equal(inferProviderFromModelId('  CLAUDE-OPUS-4-7 '), 'Anthropic');
+  assert.equal(inferProviderFromModelId(' /MISTRAL-LARGE-LATEST'), 'Mistral');
+  assert.equal(inferProviderFromModelId('DeepSeek-Chat  '), 'DeepSeek');
+});
+
+test('inferProviderFromModelId: whitespace-only / slash-only ids → OpenAI default', () => {
+  assert.equal(inferProviderFromModelId('   '), 'OpenAI');
+  assert.equal(inferProviderFromModelId('///'), 'OpenAI');
+  assert.equal(inferProviderFromModelId(' / '), 'OpenAI');
+});
+
 test('listKnownProviders / KNOWN_PROVIDERS: stable canonical set', () => {
   const list = listKnownProviders();
   assert.ok(list.includes('Gemini'));

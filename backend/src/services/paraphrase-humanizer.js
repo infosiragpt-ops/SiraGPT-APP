@@ -112,9 +112,93 @@ function matchCase(source, replacement) {
   return replacement;
 }
 
-function replaceAITells(text, { excludeTells = [] } = {}) {
+// ── Pathological-input guards ─────────────────────────────────────────
+
+/**
+ * Coerce arbitrary input to a string without ever throwing. Mirrors the
+ * legacy `String(value || '')` semantics exactly for every input that
+ * used to work (falsy → '', truthy → String(value)) and additionally
+ * survives values whose string conversion throws (e.g.
+ * Object.create(null), revoked Proxies).
+ */
+function toSafeString(value) {
+  if (typeof value === 'string') return value;
+  if (!value) return '';
+  try {
+    return String(value);
+  } catch {
+    return '';
+  }
+}
+
+function isSentenceTerminator(ch) {
+  return ch === '.' || ch === '!' || ch === '?';
+}
+
+/**
+ * Linear-time equivalent of `str.match(/[^.!?]+[.!?]+/g) || []`.
+ *
+ * The two character classes are disjoint, so the greedy runs are fully
+ * deterministic and backtracking can never change the result — but the
+ * regex engine still pays O(n²) backtracking on a long terminator-free
+ * tail (a 200k-char single token took ~20s). This manual scan produces
+ * byte-identical matches in O(n).
+ */
+function splitSentenceRuns(str) {
+  const out = [];
+  const len = str.length;
+  let i = 0;
+  while (i < len) {
+    if (isSentenceTerminator(str[i])) {
+      i += 1;
+      continue;
+    }
+    const start = i;
+    while (i < len && !isSentenceTerminator(str[i])) i += 1;
+    if (i >= len) break; // terminator-free tail → the regex finds no match here
+    while (i < len && isSentenceTerminator(str[i])) i += 1;
+    out.push(str.slice(start, i));
+  }
+  return out;
+}
+
+/**
+ * Linear-time equivalent of `str.match(/[^.!?]+[.!?]+(\s|$)/g)` — same
+ * runs as splitSentenceRuns, but the trailing `(\s|$)` group means a
+ * run only matches when followed by a whitespace char (consumed into
+ * the match) or end-of-string. Returns null when nothing matches,
+ * exactly like String.prototype.match.
+ */
+function splitSentencesWithTrail(str) {
+  const out = [];
+  const len = str.length;
+  let i = 0;
+  while (i < len) {
+    if (isSentenceTerminator(str[i])) {
+      i += 1;
+      continue;
+    }
+    const start = i;
+    while (i < len && !isSentenceTerminator(str[i])) i += 1;
+    if (i >= len) break;
+    while (i < len && isSentenceTerminator(str[i])) i += 1;
+    if (i >= len) {
+      out.push(str.slice(start));
+    } else if (/\s/.test(str[i])) {
+      out.push(str.slice(start, i + 1));
+      i += 1;
+    }
+    // else: terminator run followed by a non-space char — the regex
+    // fails at every position of this run and resumes scanning at the
+    // next run, which is exactly where `i` already points.
+  }
+  return out.length > 0 ? out : null;
+}
+
+function replaceAITells(text, opts = {}) {
+  const { excludeTells = [] } = opts || {};
   const applied = [];
-  let result = String(text || '');
+  let result = toSafeString(text);
   const excluded = new Set(
     Array.isArray(excludeTells)
       ? excludeTells.map((t) => String(t || '').toLowerCase())
@@ -138,7 +222,7 @@ function replaceAITells(text, { excludeTells = [] } = {}) {
 function cleanEmDashOveruse(text) {
   const applied = [];
   // Long em-dash flanked by spaces → comma when fragment is < 60 chars.
-  const result = String(text || '').replace(/ — ([^—]{1,60}) — /g, (match, mid) => {
+  const result = toSafeString(text).replace(/ — ([^—]{1,60}) — /g, (match, mid) => {
     applied.push({ from: '— ... —', to: ', ... ,', kind: 'em_dash' });
     return `, ${mid}, `;
   });
@@ -151,7 +235,9 @@ function cleanEmDashOveruse(text) {
 // direction.
 function boostBurstiness(text) {
   const applied = [];
-  const sentences = String(text || '').match(/[^.!?]+[.!?]+(\s|$)/g);
+  // Linear-scan equivalent of String(text||'').match(/[^.!?]+[.!?]+(\s|$)/g)
+  // — see splitSentencesWithTrail for why the regex was a hang risk.
+  const sentences = splitSentencesWithTrail(toSafeString(text));
   // Even a single very long sentence is splittable — only bail when the
   // input has no terminating punctuation at all.
   if (!sentences || sentences.length === 0) return { text, applied };
@@ -179,7 +265,13 @@ function boostBurstiness(text) {
     if (commas >= 3 && words.length >= 25) {
       // Split on the LAST comma into a separate short sentence.
       const lastCommaIdx = sent.lastIndexOf(',');
-      const head = sent.slice(0, lastCommaIdx).trim().replace(/[,]+$/, '');
+      // Manual trailing-comma strip (was .replace(/[,]+$/, '')): the
+      // anchored regex backtracks O(k²) on a k-long comma run that sits
+      // mid-string, which a pure-punctuation paste can trigger.
+      let head = sent.slice(0, lastCommaIdx).trim();
+      let headEnd = head.length;
+      while (headEnd > 0 && head[headEnd - 1] === ',') headEnd -= 1;
+      head = head.slice(0, headEnd);
       const tail = sent.slice(lastCommaIdx + 1).trim();
       if (head && tail) {
         const tailFirst = tail[0] ? tail[0].toUpperCase() + tail.slice(1) : tail;
@@ -220,7 +312,7 @@ function estimateAIScore(text) {
  * to score meaningfully (mirrors estimateAIScore's 0-return guards).
  */
 function estimateAIScoreDetailed(text) {
-  const t = String(text || '');
+  const t = toSafeString(text);
   if (t.length < 20) return { score: 0, components: null };
   const words = t.toLowerCase().split(/\s+/).filter(Boolean);
   if (words.length < 10) return { score: 0, components: null };
@@ -232,7 +324,10 @@ function estimateAIScoreDetailed(text) {
   }
   const tellDensity = Math.min(1, tellHits / (words.length / 80));
 
-  const sentences = t.match(/[^.!?]+[.!?]+/g) || [];
+  // Linear-scan equivalent of t.match(/[^.!?]+[.!?]+/g) || [] — the
+  // regex backtracks O(n²) on long terminator-free text (e.g. 200k
+  // chars of words with no periods), see splitSentenceRuns.
+  const sentences = splitSentenceRuns(t);
   let burstinessScore = 0;
   if (sentences.length >= 3) {
     const lens = sentences.map((s) => s.trim().split(/\s+/).filter(Boolean).length);
@@ -322,9 +417,10 @@ function countAITellPatternsByLanguage() {
  * @param {object} [opts]
  * @param {number} [opts.limit] — top-N (default 5)
  */
-function topAITellsByLanguage(text, language, { limit = 5 } = {}) {
-  const t = String(text || '');
-  const wanted = String(language || '').toLowerCase();
+function topAITellsByLanguage(text, language, opts = {}) {
+  const { limit = 5 } = opts || {};
+  const t = toSafeString(text);
+  const wanted = toSafeString(language).toLowerCase();
   if (!t.trim() || (wanted !== 'english' && wanted !== 'spanish')) return [];
   const spanishMarker = /[áéíóúñü¿¡]|^en |^cabe |^sin /;
   const counts = [];
@@ -341,8 +437,9 @@ function topAITellsByLanguage(text, language, { limit = 5 } = {}) {
     .slice(0, Math.max(0, limit));
 }
 
-function topAITellsFound(text, { limit = 5 } = {}) {
-  const t = String(text || '');
+function topAITellsFound(text, opts = {}) {
+  const { limit = 5 } = opts || {};
+  const t = toSafeString(text);
   if (!t.trim()) return [];
   const counts = [];
   for (const { key, regex } of AI_TELL_PATTERNS) {
@@ -367,8 +464,11 @@ function topAITellsFound(text, { limit = 5 } = {}) {
  * @param {'low'|'medium'|'high'} [opts.intensity] — controls pass count
  * @returns {{ text:string, applied:Array, aiScoreBefore:number, aiScoreAfter:number, deltaScore:number, intensity:string, language:string }}
  */
-function humanizeText({ text, language = 'es', intensity = 'medium', excludeTells = [] } = {}) {
-  const input = String(text || '');
+function humanizeText(opts = {}) {
+  // `opts || {}` (not just the param default) so an explicit `null`
+  // argument cannot crash the destructuring.
+  const { text, language = 'es', intensity = 'medium', excludeTells = [] } = opts || {};
+  const input = toSafeString(text);
   const aiScoreBefore = estimateAIScore(input);
 
   if (!input.trim()) {
@@ -429,8 +529,9 @@ function clampScore(value) {
  *
  * Returns the same shape as humanizeText, with aggregated scores.
  */
-function humanizeChunked({ text, language = 'es', intensity = 'medium', excludeTells = [], maxChunkChars = 8000 } = {}) {
-  const input = String(text || '');
+function humanizeChunked(opts = {}) {
+  const { text, language = 'es', intensity = 'medium', excludeTells = [], maxChunkChars = 8000 } = opts || {};
+  const input = toSafeString(text);
   if (input.length <= maxChunkChars) {
     return humanizeText({ text: input, language, intensity, excludeTells });
   }
@@ -482,4 +583,7 @@ module.exports = {
   cleanEmDashOveruse,
   boostBurstiness,
   matchCase,
+  toSafeString,
+  splitSentenceRuns,
+  splitSentencesWithTrail,
 };

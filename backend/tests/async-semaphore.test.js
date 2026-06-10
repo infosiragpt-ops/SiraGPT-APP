@@ -119,3 +119,153 @@ test('createLimiter caps concurrency across a Promise.all fan-out', async () => 
     assert.ok(peak <= 3, `peak ${peak} <= 3`);
     assert.equal(limit.active, 0);
 });
+
+// --- hardening: invalid capacity edge values -------------------------------
+
+test('constructor / createLimiter reject NaN, Infinity and non-number max', () => {
+    assert.throws(() => new Semaphore(NaN), /positive integer/);
+    assert.throws(() => new Semaphore(Infinity), /positive integer/);
+    assert.throws(() => new Semaphore(-Infinity), /positive integer/);
+    assert.throws(() => new Semaphore('4'), /positive integer/);
+    assert.throws(() => new Semaphore(undefined), /positive integer/);
+    assert.throws(() => createLimiter(NaN), /positive integer/);
+    assert.throws(() => createLimiter(Infinity), /positive integer/);
+});
+
+// --- hardening: synchronous throw still releases the permit ----------------
+
+test('run releases the permit when the task throws synchronously', async () => {
+    const sem = new Semaphore(1);
+    await assert.rejects(sem.run(() => { throw new Error('sync-boom'); }), /sync-boom/);
+    assert.equal(sem.active, 0, 'permit returned after a sync throw');
+    assert.equal(sem.available, 1);
+    // semaphore still usable afterwards
+    assert.equal(await sem.run(() => 'still-alive'), 'still-alive');
+});
+
+// --- hardening: AbortSignal cancellation while queued -----------------------
+
+test('acquire rejects immediately on an already-aborted signal — no permit consumed', async () => {
+    const sem = new Semaphore(1);
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(sem.acquire({ signal: controller.signal }), { name: 'AbortError' });
+    assert.equal(sem.active, 0, 'no permit consumed');
+    assert.equal(sem.pending, 0, 'nothing queued');
+    // semaphore untouched and usable
+    const release = await sem.acquire();
+    assert.equal(sem.active, 1);
+    release();
+});
+
+test('aborting a queued acquire dequeues the waiter and leaks no permit', async () => {
+    const sem = new Semaphore(1);
+    const r1 = await sem.acquire();
+    const controller = new AbortController();
+    const p2 = sem.acquire({ signal: controller.signal });
+    p2.catch(() => {}); // observe early — rejection lands on abort below
+    await tick();
+    assert.equal(sem.pending, 1, 'waiter queued');
+
+    controller.abort();
+    await assert.rejects(p2, { name: 'AbortError' });
+    assert.equal(sem.pending, 0, 'aborted waiter removed from the queue');
+    assert.equal(sem.active, 1, 'holder unaffected');
+
+    r1();
+    assert.equal(sem.active, 0, 'no leaked permit after release');
+    assert.equal(sem.available, 1, 'full capacity restored');
+});
+
+test('FIFO preserved across an aborted waiter — next waiter still gets the permit', async () => {
+    const sem = new Semaphore(1);
+    const r1 = await sem.acquire();
+    const controller = new AbortController();
+    const pAborted = sem.acquire({ signal: controller.signal });
+    pAborted.catch(() => {});
+    let granted = false;
+    const pNext = sem.acquire().then((rel) => { granted = true; return rel; });
+    await tick();
+    assert.equal(sem.pending, 2);
+
+    controller.abort();
+    await assert.rejects(pAborted, { name: 'AbortError' });
+    assert.equal(sem.pending, 1, 'only the aborted waiter was removed');
+    assert.equal(granted, false, 'survivor still blocked while permit held');
+
+    r1();
+    const r2 = await pNext;
+    assert.equal(granted, true, 'survivor granted after release, not starved');
+    assert.equal(sem.active, 1);
+    r2();
+    assert.equal(sem.active, 0);
+});
+
+test('abort after the grant is a no-op — caller keeps the permit and can release', async () => {
+    const sem = new Semaphore(1);
+    const controller = new AbortController();
+    const release = await sem.acquire({ signal: controller.signal });
+    controller.abort();
+    await tick();
+    assert.equal(sem.active, 1, 'permit still held despite post-grant abort');
+    release();
+    assert.equal(sem.active, 0);
+    assert.equal(sem.available, 1);
+});
+
+test('run(fn, { signal }) never invokes fn when aborted while queued', async () => {
+    const sem = new Semaphore(1);
+    const gate = defer();
+    const holder = sem.run(() => gate.promise);
+    await tick();
+
+    const controller = new AbortController();
+    let invoked = false;
+    const p = sem.run(() => { invoked = true; return 'should-not-happen'; },
+        { signal: controller.signal });
+    p.catch(() => {});
+    await tick();
+    assert.equal(sem.pending, 1);
+
+    controller.abort(new Error('caller-timeout'));
+    await assert.rejects(p, /caller-timeout/); // signal.reason is propagated
+    gate.resolve();
+    await holder;
+    await tick();
+    assert.equal(invoked, false, 'fn must never run after a queued abort');
+    assert.equal(sem.active, 0);
+    assert.equal(sem.available, 1, 'no permit leaked');
+    // still fully usable
+    assert.equal(await sem.run(() => 'ok'), 'ok');
+});
+
+test('limiter forwards the signal — queued task cancellable, capacity intact', async () => {
+    const limit = createLimiter(1);
+    const gate = defer();
+    const holder = limit(() => gate.promise);
+    await tick();
+
+    const controller = new AbortController();
+    let invoked = false;
+    const p = limit(() => { invoked = true; }, { signal: controller.signal });
+    p.catch(() => {});
+    await tick();
+    assert.equal(limit.pending, 1);
+
+    controller.abort();
+    await assert.rejects(p, { name: 'AbortError' });
+    assert.equal(limit.pending, 0);
+
+    gate.resolve();
+    await holder;
+    assert.equal(invoked, false);
+    assert.equal(limit.active, 0);
+    assert.equal(limit.available, 1, 'limiter capacity fully restored');
+});
+
+test('acquire rejects a malformed options.signal with a TypeError', () => {
+    const sem = new Semaphore(1);
+    assert.throws(() => sem.acquire({ signal: 'not-a-signal' }), TypeError);
+    assert.throws(() => sem.acquire({ signal: {} }), TypeError);
+    assert.equal(sem.active, 0, 'no permit consumed by the failed call');
+});

@@ -28,11 +28,43 @@ const fsp = require('fs').promises;
 const path = require('path');
 const crypto = require('crypto');
 
+/**
+ * Structured error for non-serializable input (circular refs, BigInt,
+ * undefined/function/symbol roots). Extends TypeError so callers that
+ * `catch (e) { if (e instanceof TypeError) ... }` keep working; adds a
+ * stable `code` for programmatic handling and `cause` with the original.
+ */
+class JsonSerializeError extends TypeError {
+    constructor(message, cause) {
+        super(message);
+        this.name = 'JsonSerializeError';
+        this.code = 'ERR_JSON_SERIALIZE';
+        if (cause !== undefined) this.cause = cause;
+    }
+}
+
 function serialize(data, opts = {}) {
     const space = opts.pretty === true ? 2 : (Number.isInteger(opts.pretty) ? opts.pretty : 0);
-    // JSON.stringify throws on circular refs / BigInt — caller's bug; let it
-    // propagate BEFORE we create any temp file so the target is untouched.
-    return JSON.stringify(data, null, space);
+    // Serialization failures (circular refs, BigInt) are surfaced as a
+    // structured JsonSerializeError BEFORE any temp file is created, so the
+    // target is never touched. The original message is preserved inside ours.
+    let json;
+    try {
+        json = JSON.stringify(data, null, space);
+    } catch (err) {
+        const detail = err && err.message ? err.message : String(err);
+        throw new JsonSerializeError(`Data is not JSON-serializable: ${detail}`, err);
+    }
+    // JSON.stringify returns undefined (no throw!) for undefined, functions
+    // and symbols — writing that would previously die later inside
+    // Buffer.from() with an opaque ERR_INVALID_ARG_TYPE. Fail cleanly here.
+    if (typeof json !== 'string') {
+        throw new JsonSerializeError(
+            'Data is not JSON-serializable: JSON.stringify returned undefined '
+            + '(root value is undefined, a function, or a symbol)'
+        );
+    }
+    return json;
 }
 
 function _tmpPath(filePath) {
@@ -83,7 +115,22 @@ function writeJsonAtomicSync(filePath, data, opts = {}) {
     let fd;
     try {
         fd = fs.openSync(tmp, 'w');
-        fs.writeSync(fd, buf, 0, buf.length, 0);
+        // write(2) may write fewer bytes than requested (signals, quotas,
+        // some filesystems). A single un-checked writeSync could fsync+rename
+        // a TRUNCATED temp file over the target — loop until every byte is
+        // on disk, and bail out (cleanup below) on zero progress.
+        let written = 0;
+        while (written < buf.length) {
+            const n = fs.writeSync(fd, buf, written, buf.length - written, written);
+            if (!Number.isInteger(n) || n <= 0) {
+                const err = new Error(
+                    `Short write to temp file "${tmp}": wrote ${written}/${buf.length} bytes`
+                );
+                err.code = 'ERR_JSON_SHORT_WRITE';
+                throw err;
+            }
+            written += n;
+        }
         fs.fsyncSync(fd);
         fs.closeSync(fd);
         fd = undefined;
@@ -153,5 +200,6 @@ module.exports = {
     writeJsonAtomicSync,
     writeJsonAtomic,
     readJsonSafe,
+    JsonSerializeError,
     _tmpPath,
 };

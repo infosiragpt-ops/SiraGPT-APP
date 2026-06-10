@@ -65,6 +65,85 @@ test('parseZip threads the char counter through nested directories', async () =>
   }
 });
 
+test('parseZip rejects corrupted and truncated archives with a clean structured error', async () => {
+  const junkPath = path.join(os.tmpdir(), `siragpt-ziptest-junk-${crypto.randomUUID()}.zip`);
+  fs.writeFileSync(junkPath, Buffer.from('this is definitely not a zip archive, just junk bytes'));
+
+  // Truncated: take a valid archive and chop off its central directory.
+  const validPath = writeZip({ 'a.txt': 'X'.repeat(400), 'b.txt': 'Y'.repeat(400) });
+  const truncPath = path.join(os.tmpdir(), `siragpt-ziptest-trunc-${crypto.randomUUID()}.zip`);
+  const validBuf = fs.readFileSync(validPath);
+  fs.writeFileSync(truncPath, validBuf.subarray(0, Math.floor(validBuf.length / 3)));
+
+  try {
+    for (const badPath of [junkPath, truncPath]) {
+      let thrown;
+      try {
+        await parseZip(badPath);
+      } catch (err) {
+        thrown = err;
+      }
+      assert.ok(thrown instanceof Error, 'parseZip must reject malformed archives');
+      assert.match(thrown.message, /invalid or corrupted ZIP/i);
+      // The old wrapper blamed a missing unzip binary even when unzip ran
+      // fine and the archive was simply broken — that lie must be gone.
+      assert.doesNotMatch(thrown.message, /Ensure 'unzip' is installed/);
+    }
+  } finally {
+    for (const p of [junkPath, validPath, truncPath]) fs.rmSync(p, { force: true });
+  }
+});
+
+test('parseZip skips hostile ../ and absolute-path entries without losing safe siblings', async () => {
+  const marker = crypto.randomUUID();
+  // extractDir lives directly inside os.tmpdir(), so a honoured "../" entry
+  // would land at os.tmpdir()/<name>; the unique marker makes that provable.
+  const escapeName = `siragpt-zip-escape-${marker}.txt`;
+  const zipPath = writeZip({
+    'good.txt': 'SAFE-GOOD-CONTENT',
+    [`../${escapeName}`]: 'HOSTILE-PAYLOAD',
+    [`/siragpt-zip-abs-${marker}.txt`]: 'HOSTILE-PAYLOAD',
+  });
+  const escapeTarget = path.join(os.tmpdir(), escapeName);
+  try {
+    // Before the fix this threw outright: unzip exits 1 (warning) when it
+    // sanitizes hostile names, and any non-zero exit aborted the parse.
+    const out = await parseZip(zipPath);
+    assert.match(out, /SAFE-GOOD-CONTENT/, 'safe sibling must still be extracted');
+    assert.doesNotMatch(out, /HOSTILE-PAYLOAD/, 'hostile entry content must not be extracted');
+    assert.match(out, /Skipped \d+ entr(y|ies) with unsafe path/, 'skips must be reported');
+    assert.ok(!fs.existsSync(escapeTarget), 'no file may be written outside the extraction dir');
+  } finally {
+    fs.rmSync(zipPath, { force: true });
+    fs.rmSync(escapeTarget, { force: true });
+  }
+});
+
+test('parseZip rejects archives whose declared uncompressed size exceeds the cap (zip-bomb guard)', async () => {
+  const resolved = require.resolve('../src/services/zip-parser');
+  const saved = process.env.ZIP_MAX_TOTAL_UNCOMPRESSED_BYTES;
+  process.env.ZIP_MAX_TOTAL_UNCOMPRESSED_BYTES = '100';
+  delete require.cache[resolved];
+  const fresh = require('../src/services/zip-parser');
+  const zipPath = writeZip({ 'big.txt': 'Z'.repeat(5000) });
+  try {
+    let thrown;
+    try {
+      await fresh.parseZip(zipPath);
+    } catch (err) {
+      thrown = err;
+    }
+    assert.ok(thrown instanceof Error, 'oversized archive must be rejected before extraction');
+    assert.match(thrown.message, /zip bomb|exceeds/i);
+  } finally {
+    fs.rmSync(zipPath, { force: true });
+    if (saved === undefined) delete process.env.ZIP_MAX_TOTAL_UNCOMPRESSED_BYTES;
+    else process.env.ZIP_MAX_TOTAL_UNCOMPRESSED_BYTES = saved;
+    delete require.cache[resolved];
+    require('../src/services/zip-parser'); // re-prime with default env
+  }
+});
+
 test('parseZip caps extracted text at the char limit and accumulates across files', async () => {
   // Force a tiny cap via env and re-require a fresh module instance so the
   // module-level constant picks it up regardless of prior cache state.
