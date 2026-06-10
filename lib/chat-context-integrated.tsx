@@ -2537,6 +2537,92 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         ? JSON.parse(updatedUserMessage.files)
         : updatedUserMessage.files;
 
+      // Documento adjunto + verbo de edición → mismo camino del editor de
+      // documentos que el envío normal. El stream genérico respondería con
+      // el gate de aclaración ("¿qué formato quieres?") y la instrucción de
+      // edición se perdería — exactamente el bug de "reenviar" reportado.
+      const editFilesArr: any[] = Array.isArray(parsedFiles) ? parsedFiles : [];
+      const editFileIds = editFilesArr.map((f: any) => String(f?.id || f?.fileId || '')).filter(Boolean);
+      const editHasDocAttachment = editFilesArr.some((f: any) => {
+        const name = String(f?.name || f?.originalName || f?.filename || '');
+        const mime = String(f?.mimeType || f?.type || '');
+        return /\.(docx?|xlsx?|pptx?|pdf|txt|md|csv)$/i.test(name)
+          || /(wordprocessingml|spreadsheetml|presentationml|msword|ms-excel|ms-powerpoint|pdf|text\/)/i.test(mime);
+      });
+      const editLooksLikeDocEdit = /\b(agrega\w*|a[ñn]ad\w*|borr\w*|elimin\w*|quit\w*|reemplaz\w*|complet\w*|rellen\w*|llen\w*|edit\w*|modific\w*|corrig\w*|insert\w*|cambi\w*|actualiz\w*)\b/i.test(newContent);
+      if (editHasDocAttachment && editLooksLikeDocEdit && editFileIds.length) {
+        let docFinalMsg: any = null;
+        let docStage = 'Editando documento';
+        let docPct = 0;
+        const renderDocProgress = () => {
+          setCurrentChat((prev) => {
+            if (!prev) return prev;
+            const msgs = prev.messages.map((m: any) =>
+              m.id === aiMessagePlaceholder.id
+                ? { ...m, content: '', progressStage: docStage, progressPct: docPct }
+                : m
+            );
+            return { ...prev, messages: msgs };
+          });
+        };
+        renderDocProgress();
+        try {
+          await apiClient.generateDocStream(
+            { prompt: newContent, chatId: currentChat.id, files: editFileIds },
+            (ev: any) => {
+              if (controller.signal.aborted) return;
+              if (ev.type === 'stage') {
+                docStage = ev.label || docStage;
+                docPct = typeof ev.pct === 'number' ? ev.pct : docPct;
+                renderDocProgress();
+              } else if (ev.type === 'final') {
+                docFinalMsg = ev.assistantMessage || {
+                  id: aiMessagePlaceholder.id,
+                  role: 'ASSISTANT',
+                  content: ev.content || 'Listo.',
+                  files: ev.file ? [ev.file] : [],
+                };
+                if (docFinalMsg?.files?.[0] && ev.file?.dataUrl) {
+                  docFinalMsg.files[0] = { ...docFinalMsg.files[0], dataUrl: ev.file.dataUrl };
+                }
+              } else if (ev.type === 'error') {
+                docFinalMsg = ev.assistantMessage || {
+                  id: aiMessagePlaceholder.id,
+                  role: 'ASSISTANT',
+                  content: `No pude editar el documento: ${ev.error || 'error desconocido'}.`,
+                  files: [],
+                };
+              }
+            },
+            { signal: controller.signal },
+          );
+        } catch (err: any) {
+          if (err?.name !== 'AbortError') {
+            docFinalMsg = docFinalMsg || {
+              id: aiMessagePlaceholder.id,
+              role: 'ASSISTANT',
+              content: `No pude editar el documento: ${err?.message || 'error de red'}.`,
+              files: [],
+            };
+          }
+        }
+        if (docFinalMsg) {
+          setCurrentChat((prev) => {
+            if (!prev) return prev;
+            const msgs = prev.messages.map((m: any) =>
+              m.id === aiMessagePlaceholder.id ? { ...docFinalMsg, id: docFinalMsg.id || aiMessagePlaceholder.id } : m
+            );
+            return { ...prev, messages: msgs };
+          });
+        }
+        markChatIdle(currentChat.id, streamId);
+        setIsLoading(false);
+        setIsStreaming(false);
+        setCurrentStreamId(null);
+        abortControllerRef.current = null;
+        return;
+      }
+
       // Per-frame buffer (edit-and-regenerate path).
       streamBufferRef.current?.dispose();
       const editBuffer = createStreamBuffer({
