@@ -4619,9 +4619,10 @@ router.post(
             let textContent = m.content;
 
             if (m.role === 'USER' && imageFiles.length > 0) {
-              textContent += '\n\nIMPORTANT: If the uploaded image(s) contain mathematical equations, formulas, or expressions, ' +
-                'please transcribe and format them using proper LaTeX syntax. Use single dollar signs ($...$) for inline math ' +
-                'and double dollar signs ($$...$$) for display math.';
+              // Task-first: the user's text is the task, the image is its
+              // content. The old "please transcribe" wording hijacked terse
+              // instructions into bare transcriptions.
+              textContent += '\n\n[Image attached: execute the instruction above on its content; format any math you write in LaTeX ($...$ inline, $$...$$ display). Do not merely transcribe unless asked.]';
             }
 
             const contentArray = [
@@ -4772,18 +4773,18 @@ router.post(
         // ✅ Add LaTeX instruction for images
         let mathInstructions = '';
         if (hasImageFiles) {
-          mathInstructions = '\n\nIMPORTANT: If any uploaded image contains mathematical equations, formulas, or expressions, ' +
-            'please transcribe and format them using proper LaTeX syntax. Use single dollar signs ($...$) for inline math ' +
-            'and double dollar signs ($$...$$) for display math. For example: ' +
-            'Inline: $E = mc^2$ or Display: $$\\int_{-\\infty}^{\\infty} e^{-x^2} dx = \\sqrt{\\pi}$$' +
-            '\n\nExamples of proper LaTeX formatting:' +
-            '\n- Fractions: $\\frac{a}{b}$' +
-            '\n- Square roots: $\\sqrt{x}$ or $\\sqrt[n]{x}$' +
-            '\n- Integrals: $\\int f(x) dx$ or $\\int_{a}^{b} f(x) dx$' +
-            '\n- Summations: $\\sum_{i=1}^{n} x_i$' +
-            '\n- Greek letters: $\\alpha, \\beta, \\gamma, \\pi, \\theta$' +
-            '\n- Subscripts/Superscripts: $x_1, y^2, a_i^j$' +
-            '\n- Matrix: $\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}$';
+          // Task-first protocol. The previous wording ("please transcribe and
+          // format them using proper LaTeX") OVERRODE terse user instructions:
+          // an attached exercise + "resolver" came back as a bare LaTeX
+          // transcription instead of the solved exercise (reported live). The
+          // user's text is the TASK; the image is the content it applies to.
+          mathInstructions = '\n\nIMAGE TASK PROTOCOL:' +
+            '\n- The user\'s instruction is the TASK; the attached image is the CONTENT it applies to.' +
+            '\n- A brief instruction ("resolver", "deriva", "calcula", "simplifica", "solve", "derive", "evaluate") means: perform that operation COMPLETELY, step by step, on the exercise shown in the image — e.g. for a derivative, apply the quotient/chain/product rules and simplify to the final result.' +
+            '\n- NEVER answer with only a transcription or description of the image unless the user explicitly asks for a transcription.' +
+            '\n- Format every mathematical expression in LaTeX: inline $...$, display $$...$$. ' +
+            'Fractions $\\frac{a}{b}$, roots $\\sqrt{x}$, integrals $\\int_{a}^{b} f(x) dx$, sums $\\sum_{i=1}^{n} x_i$, ' +
+            'Greek $\\alpha, \\beta, \\pi$, sub/superscripts $x_1, y^2$, matrices $\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}$.';
         }
 
         const documentTurnGuard = currentTurnHasNonImageFiles
