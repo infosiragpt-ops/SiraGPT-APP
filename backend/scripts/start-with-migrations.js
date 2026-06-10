@@ -580,8 +580,21 @@ function ensureSandboxPythonDeps() {
   } catch { /* non-critical */ }
 }
 
+/**
+ * Kill any stale process holding BACKEND_PORT (default 5050) so a workflow
+ * restart triggered by adding secrets never hits EADDRINUSE.
+ * Uses `fuser -k` which is always available on Linux/Nix. Non-fatal.
+ */
+function clearStalePortProcess() {
+  const port = process.env.BACKEND_PORT || process.env.PORT || '5050';
+  try {
+    spawnSync('fuser', ['-k', `${port}/tcp`], { stdio: 'ignore' });
+  } catch { /* non-critical — fuser may not exist on every OS */ }
+}
+
 async function main() {
   phase("boot_start", { skipMigrations: process.env.SKIP_MIGRATIONS === "1" });
+  clearStalePortProcess();
   ensureSandboxPythonDeps();
   const release = await maybePreflightAndLock();
 
