@@ -637,8 +637,9 @@ async function resolveTranscriptionFileIds(prisma, {
  * the chat route and the agent-task route.
  */
 function looksLikeDocumentFollowupQuestion(text) {
-  const v = String(text || '').trim().toLowerCase();
-  if (!v || v.length > 400) return false;
+  const raw = String(text || '').trim().toLowerCase();
+  if (!raw || raw.length > 400) return false;
+  const v = `${raw} ${raw.replace(/([a-z])\1+/g, '$1')}`;
   if (/\b(crea|cre[aá]me|genera|gener[aá]me|construye|desarrolla|dise[ñn]a|build|create|develop|investiga en internet|busca en (la )?(web|internet)|descarga|deploy|sube a|haz una (app|web|p[aá]gina))\b/i.test(v)) {
     return false;
   }

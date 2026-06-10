@@ -177,6 +177,38 @@ async function enqueueAgentTask(payload, opts = {}) {
   return withEnqueueTimeout(addPromise, readPositiveInt(opts.timeoutMs, getQueueEnqueueTimeoutMs()), payload.taskId);
 }
 
+/**
+ * Liveness del productor: tras crear (lazy) la cola, espera a que la
+ * conexión ioredis esté 'ready'. Hoy se observaron procesos con la
+ * conexión zombi (status nunca ready, sin errores logueados): add()
+ * aparenta éxito pero el job jamás llega a Redis y la tarea queda
+ * "queued" para siempre. Con esto el caller decide caer al runtime
+ * local en vez de varar al usuario.
+ */
+async function waitForQueueReady(timeoutMs = 1500) {
+  getAgentTaskQueue();
+  const conn = queueConnection;
+  if (!conn) return false;
+  if (conn.status === 'ready') return true;
+  if (conn.status === 'end') return false;
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (ok) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      conn.removeListener('ready', onReady);
+      conn.removeListener('end', onEnd);
+      resolve(ok);
+    };
+    const onReady = () => finish(true);
+    const onEnd = () => finish(false);
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    conn.once('ready', onReady);
+    conn.once('end', onEnd);
+  });
+}
+
 async function cancelQueuedTask(taskId) {
   if (!taskId) return { cancelled: false };
   const q = getAgentTaskQueue();
@@ -226,6 +258,7 @@ async function closeAgentTaskQueue({ force = false } = {}) {
 
 module.exports = {
   cancelQueuedTask,
+  waitForQueueReady,
   closeAgentTaskQueue,
   createRedisConnection,
   enqueueAgentTask,

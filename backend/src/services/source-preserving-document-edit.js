@@ -30,12 +30,25 @@ function normalizeText(value) {
     .trim();
 }
 
+// Typos de tecleo rapido duplican letras ("coompleta", "agreega"). Para el
+// MATCH DE VERBOS probamos tambien la version con letras repetidas colapsadas
+// (solo agrega coincidencias; el texto original sigue presente en el haystack).
+function withCollapsedRepeats(textNorm) {
+  return `${textNorm} ${String(textNorm).replace(/([a-z])\1+/g, '$1')}`;
+}
+
 function isSourcePreservingEditRequest(prompt, files = []) {
   const text = normalizeText(prompt);
   if (!text) return false;
+  const verbHay = withCollapsedRepeats(text);
   const hasFiles = Array.isArray(files) ? files.length > 0 : Boolean(files);
 
-  const structuralEditVerb = /\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|inclu\w*|pon|poner|coloc\w*|modific\w*|edit\w*|corrig\w*|correg\w*|mejor\w*|actualiz\w*|reemplaz\w*|quit\w*|elimin\w*|borr\w*|complet\w*)\b/.test(text);
+  const structuralEditVerb = /\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|inclu\w*|pon|poner|coloc\w*|modific\w*|edit\w*|corrig\w*|correg\w*|mejor\w*|actualiz\w*|reemplaz\w*|quit\w*|elimin\w*|borr\w*|complet\w*)\b/.test(verbHay);
+  // STRONG mutation verbs (delete / remove / insert / add / replace): on an
+  // attachment turn these unambiguously target the attached file even with no
+  // document/region noun ("borra el jurado evaluador", "elimina los anexos",
+  // "agrega una conclusión") — the only plausible target is the uploaded doc.
+  const strongStructuralVerb = /\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|quit\w*|elimin\w*|borr\w*|suprim\w*|remov\w*|reemplaz\w*|sustitu\w*|tach\w*)\b/.test(verbHay);
   // Whole-document transforms (traduce / cambia / resume / reformula…) act on the
   // entire file. They are recognized as edits, but require an explicit document
   // noun (not just a demonstrative pronoun) so phrases like "traduce esta frase"
@@ -66,12 +79,23 @@ function isSourcePreservingEditRequest(prompt, files = []) {
     && /\b(documento|archivo|word|docx|tesis|general|principal|contenido)\b/.test(text);
 
   if (!editVerb) return false;
-  if (explicitFreshDeliverable && !preservation) return false;
+  // "completa el anexo 3 … y dame un nuevo word" = edita el adjunto y
+  // entregame el archivo actualizado, NO un documento desde cero. El veto de
+  // entregable nuevo solo aplica cuando no hay un objetivo concreto dentro
+  // del documento adjunto.
+  // Solo una SECCIÓN NOMBRADA del documento adjunto ("el anexo 3", "capítulo
+  // 2") levanta el veto — palabras sueltas como "tabla/índice" en una
+  // enumeración de creación ("genera un word: incluye tabla, índice…") no.
+  const concreteEditTarget = hasFiles && Boolean(parseTargetSectionRequest(text));
+  if (explicitFreshDeliverable && !preservation && !concreteEditTarget) return false;
   if (hasFiles) {
     if (appendLocation || preservation || instrument || documentRegion) return true;
     if (documentNoun) return true;
-    // Pronoun-only references (este/esta/mi…) are honored for structural edits,
-    // but transform verbs require an explicit document noun (handled above) so
+    // A STRONG mutation verb alone is enough on an attachment turn — the
+    // uploaded file is the only plausible target ("borra el jurado evaluador").
+    if (strongStructuralVerb) return true;
+    // Weaker edit verbs (pon/mejora/modifica/edita…) still need an explicit
+    // reference, and transform verbs require a document noun (handled above) so
     // "traduce esta frase" / "cambia de tema" stay normal chat answers.
     return structuralEditVerb && existingDocRef;
   }
@@ -2925,10 +2949,12 @@ function clauseWantsInstrument(clauseNorm) {
 }
 
 function clauseIsFill(clauseNorm) {
+  clauseNorm = withCollapsedRepeats(clauseNorm);
   return /\b(complet\w*|llen\w*|rellen\w*|desarroll\w*|termin\w*|reescrib\w*|reemplaz\w*)\b/.test(clauseNorm);
 }
 
 function clauseIsAppend(clauseNorm) {
+  clauseNorm = withCollapsedRepeats(clauseNorm);
   return /\b(agreg\w*|anad\w*|incorpor\w*|inclu\w*|adjunt\w*|coloc\w*)\b/.test(clauseNorm)
     || /\bcomo\s+(?:un\s+|una\s+)?(?:nuevo\s+|nueva\s+)?(?:anexo|apendice|seccion)\b/.test(clauseNorm);
 }
@@ -2969,9 +2995,12 @@ function extractDeletionNeedle(clauseNorm = '') {
     .split(/\b(?:y|,|;)\s+(?:valid\w*|verific\w*|comprueb\w*|asegur\w*|revis\w*)\b/)[0] || clauseNorm;
   const cleaned = deletionClause
     .replace(/\b(?:la\s+)?parte\s+(?:de|del|donde|que\s+dice)\b/g, ' ')
-    .replace(/\b(?:quit\w*|elimin\w*|borr\w*)\b/g, ' ')
+    .replace(/\b(?:quit\w*|elimin\w*|borr\w*|suprim\w*|remov\w*)\b/g, ' ')
     .replace(/\b(?:del|de la|de el|el|la|los|las|un|una|este|esta|mi|mismo|misma|documento|archivo|word|docx|contenido|especifico|especifica|que diga|donde dice|dice|diga|final)\b/g, ' ')
     .replace(/[:"'“”‘’.,;!?(){}\[\]]+/g, ' ')
+    // Drop dangling conjunctions left when a multi-clause prompt was split mid
+    // sentence ("borra el jurado evaluador y edita…" → needle would keep "y").
+    .replace(/(^|\s)(?:y|e|o|u|and|or)(\s|$)/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   if (cleaned.length < 3) return '';

@@ -1851,6 +1851,20 @@ async function handleQueuedTaskRequest(req, res) {
     });
   }
 
+  // Liveness del productor: una conexión de cola no-ready significa que el
+  // add() escribiría al vacío (jobs "queued" varados para siempre, visto en
+  // producción local). Mejor un run local degradado que un chat colgado.
+  {
+    const { waitForQueueReady } = require('../services/agents/agent-task-queue');
+    const queueReady = await waitForQueueReady(1500).catch(() => false);
+    if (!queueReady) {
+      return handleLocalTaskRequest(req, res, {
+        fallbackReason: 'redis_unready',
+        fallbackDetail: 'queue connection not ready (producer liveness check)',
+      });
+    }
+  }
+
   const displayGoal = normalizeDisplayGoal(req.body.displayGoal || rawGoal);
   const agentGoal = normalizeDisplayGoal(rawGoal);
   const systemContract = normalizeSystemContract(

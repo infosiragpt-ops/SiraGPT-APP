@@ -7464,16 +7464,6 @@ REWRITTEN TEXT:`;
     }
 
     const deterministicAgenticIntent = classifyIntentFastPath(msg);
-    // Document edits must NEVER fall into the ambiguity/clarify path: an
-    // attached document + an edit verb ("borra…", "agrega…", "reemplaza…")
-    // is a fully-specified instruction for the source-preserving editor.
-    const hasDocumentAttachment = (filesToSend || []).some((f: any) => {
-      const name = String(f?.name || f?.originalName || f?.filename || '');
-      const mime = String(f?.mimeType || f?.type || '');
-      return /\.(docx?|xlsx?|pptx?|pdf|txt|md|csv)$/i.test(name)
-        || /(wordprocessingml|spreadsheetml|presentationml|msword|ms-excel|ms-powerpoint|pdf|text\/)/i.test(mime);
-    });
-    const looksLikeDocumentEditInstruction = /\b(agrega\w*|a[ñn]ad\w*|borr\w*|elimin\w*|quit\w*|reemplaz\w*|complet\w*|rellen\w*|llen\w*|edit\w*|modific\w*|corrig\w*|insert\w*|cambi\w*|actualiz\w*)\b/i.test(msg);
     // Image-only turns ("resolver", "resuelve esta derivada", "¿qué dice esta
     // imagen?") need VISION, which lives only in the plain /api/ai/generate
     // path. The queued agent loop has no vision and stalls blind on the image.
@@ -7481,10 +7471,17 @@ REWRITTEN TEXT:`;
     // "derivada" → math, "imagen" → image), keep image-only turns out of the
     // agent loop entirely — the vision path reads the image and responds.
     const imageOnlyTurn = isImageOnlyAttachmentTurn(filesToSend);
-    const shouldStartAgenticLoopImmediately = (deterministicAgenticIntent
+    // NOTE: document-EDIT turns (attachment + "borra/elimina/agrega/edita…")
+    // are deliberately NOT forced into the queued agent-task path here. The
+    // queued runner (agent-task-runner) has NO document_edit tool and stalls
+    // ("Sin actualizaciones recientes"). Document edits must run on the INLINE
+    // /api/ai/generate path, which carries the document_edit (Cowork sandbox)
+    // tool plus a reliable plain-stream fallback. The intent switch +
+    // shouldRouteTextPromptThroughAgenticRuntime (which returns false → inline
+    // for edit intents) route them there.
+    const shouldStartAgenticLoopImmediately = deterministicAgenticIntent
       && ['web_search', 'agent_task', 'math', 'viz', 'chart', 'ppt'].includes(deterministicAgenticIntent)
-      && !imageOnlyTurn)
-      || (hasDocumentAttachment && looksLikeDocumentEditInstruction);
+      && !imageOnlyTurn;
 
     if (shouldStartAgenticLoopImmediately) {
       try {
