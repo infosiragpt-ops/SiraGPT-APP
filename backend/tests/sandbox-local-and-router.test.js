@@ -235,5 +235,5 @@ test('router: invalid SANDBOX_PREFERENCE values are dropped, defaults restored',
     SANDBOX_PREFERENCE: 'nonsense, alsonope',
   });
   // Both invalid → fall back to default order.
-  assert.deepEqual(summary.preference, ['e2b', 'local']);
+  assert.deepEqual(summary.preference, ['remote', 'e2b', 'local']);
 });

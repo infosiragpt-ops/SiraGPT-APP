@@ -34,7 +34,11 @@ function createRemoteSandbox({ baseUrl, apiKey, fetchImpl } = {}) {
     const text = await res.text();
     let json;
     try { json = text ? JSON.parse(text) : {}; } catch { json = { error: 'bad_json', raw: text.slice(0, 300) }; }
-    if (!res.ok) throw new Error(`sandbox service ${res.status}: ${json.error || text.slice(0, 200)}`);
+    if (!res.ok) {
+      const err = new Error(`sandbox service ${res.status}: ${json.error || text.slice(0, 200)}`);
+      err.status = res.status; // lets callers classify auth vs server vs transport failures
+      throw err;
+    }
     return json;
   }
 

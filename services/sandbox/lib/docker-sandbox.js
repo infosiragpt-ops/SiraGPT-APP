@@ -91,6 +91,14 @@ async function createDockerSession() {
   let destroyed = false;
   const dexec = (args, opts) => runProcess('docker', args, opts);
 
+  // `docker cp` preserves the HOST file's uid/gid, so copied-in files are NOT
+  // writable by the container's non-root user — in-place edits would fail with
+  // EACCES. Record the container user's ids once so putFile can chown each
+  // copied file back to it (the chown runs as root via `exec -u root`, which
+  // the daemon permits regardless of no-new-privileges).
+  const idProbe = await dexec(['exec', name, 'sh', '-c', 'echo "$(id -u):$(id -g)"'], { timeoutMs: 10_000 });
+  const containerIds = /^\d+:\d+$/.test(idProbe.stdout.trim()) ? idProbe.stdout.trim() : '10001:10001';
+
   return {
     name,
     createdAt: Date.now(),
@@ -107,6 +115,8 @@ async function createDockerSession() {
       const cp = await dexec(['cp', local, `${name}:${path.posix.join('/workspace', rel)}`], { timeoutMs: 60_000 });
       await fs.rm(local, { force: true });
       if (cp.exitCode !== 0) throw new Error(`docker cp in failed: ${cp.stderr}`);
+      // Give the file back to the container user so in-place edits work.
+      await dexec(['exec', '-u', 'root', name, 'chown', containerIds, path.posix.join('/workspace', rel)], { timeoutMs: 10_000 });
       return path.posix.join('/workspace', rel);
     },
     async readFile(relPath) {

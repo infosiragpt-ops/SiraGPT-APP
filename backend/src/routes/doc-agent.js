@@ -111,7 +111,12 @@ router.post(
             processingStage: 'ready',
           },
         });
-        const artifact = { id: rec.id, name: out.name, size: out.buffer.length, url: `/uploads/${userId}/${filename}` };
+        const artifact = {
+          id: rec.id, name: out.name, size: out.buffer.length,
+          url: `/uploads/${userId}/${filename}`,
+          valid: out.valid !== false,
+          ...(out.valid === false ? { warning: 'El archivo generado puede estar dañado (estructura OOXML inválida).' } : {}),
+        };
         artifacts.push(artifact);
         send({ type: 'artifact', ...artifact });
       }

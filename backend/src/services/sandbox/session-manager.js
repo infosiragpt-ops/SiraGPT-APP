@@ -28,7 +28,11 @@ const os   = require('os');
 const crypto = require('crypto');
 const { pipeline } = require('stream/promises');
 
-const SESSION_TTL_MS   = parseInt(process.env.SANDBOX_SESSION_TTL_MS  || String(30 * 60_000), 10);
+// Local-workspace TTL. Prefer SANDBOX_LOCAL_SESSION_TTL_MS: the bare
+// SANDBOX_SESSION_TTL_MS name is ALSO read by the remote sandbox
+// microservice (services/sandbox/server.js, container TTL, default 10min) —
+// in a single shared env (Replit) tuning one would silently retune the other.
+const SESSION_TTL_MS   = parseInt(process.env.SANDBOX_LOCAL_SESSION_TTL_MS || process.env.SANDBOX_SESSION_TTL_MS  || String(30 * 60_000), 10);
 const GC_INTERVAL_MS   = parseInt(process.env.SANDBOX_GC_INTERVAL_MS  || String(5  * 60_000), 10);
 const MAX_FILE_BYTES   = parseInt(process.env.SANDBOX_MAX_FILE_BYTES   || String(50 * 1024 * 1024), 10); // 50 MB
 const MAX_SESSIONS     = parseInt(process.env.SANDBOX_MAX_SESSIONS     || '200', 10);

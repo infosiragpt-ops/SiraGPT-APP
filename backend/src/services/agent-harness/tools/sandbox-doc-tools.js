@@ -73,16 +73,17 @@ function buildSandboxDocTools(sessionId) {
       execute: async ({ language, code, timeoutMs }) => {
         sandbox.touchSession(sessionId);
 
-        const preamble = language === 'python'
-          ? `import os\nos.chdir(${JSON.stringify(workdir)})\n`
-          : `cd ${JSON.stringify(workdir)}\n`;
-
+        // No chdir preamble: the local backend already runs with cwd=workdir,
+        // and the remote backend syncs workdir files into the container's
+        // /workspace (an absolute local path would not exist there anyway).
+        // e2b is excluded for THIS call path: it has no file sync, so doc
+        // commands would run against an empty VM and "succeed" misleadingly.
         const result = await executeCode({
           language: language === 'python' ? 'python' : 'bash',
-          code: preamble + code,
+          code,
           timeoutMs: timeoutMs || EXEC_TIMEOUT_MS,
           workdir,
-        });
+        }, { ...process.env, SANDBOX_PREFERENCE: process.env.SANDBOX_DOC_TOOLS_PREFERENCE || 'remote,local' });
 
         sandbox.touchSession(sessionId);
 
