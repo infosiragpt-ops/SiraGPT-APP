@@ -48,6 +48,13 @@ function httpPost(url, body, { apiKey, timeoutMs, signal } = {}) {
     const lib = isHttps ? https : http;
     const payload = JSON.stringify(body);
 
+    // Auth header format: prefer X-Api-Key (what the siragpt-sandbox service
+    // uses); can be overridden to Bearer via SANDBOX_AUTH_SCHEME=bearer.
+    const scheme = String(process.env.SANDBOX_AUTH_SCHEME || 'x-api-key').toLowerCase();
+    const authHeaders = scheme === 'bearer'
+      ? { 'Authorization': `Bearer ${apiKey}` }
+      : { 'X-Api-Key': apiKey };
+
     const req = lib.request({
       hostname: parsed.hostname,
       port: parsed.port || (isHttps ? 443 : 80),
@@ -56,7 +63,7 @@ function httpPost(url, body, { apiKey, timeoutMs, signal } = {}) {
       headers: {
         'Content-Type':   'application/json',
         'Content-Length': Buffer.byteLength(payload),
-        'Authorization':  `Bearer ${apiKey}`,
+        ...authHeaders,
       },
       timeout: timeoutMs,
     }, (res) => {
