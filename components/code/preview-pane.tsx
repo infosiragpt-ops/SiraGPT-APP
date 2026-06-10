@@ -15,8 +15,10 @@ import {
   Eraser,
   ExternalLink,
   Monitor,
+  Play,
   RefreshCw,
   Smartphone,
+  Square,
   TerminalSquare,
   X,
   Zap,
@@ -28,6 +30,9 @@ import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { useCodeWorkspace } from "@/lib/code-workspace-context"
 import { buildPreviewDocument, type PreviewKind } from "@/lib/code-preview-build"
 import { CODE_TEMPLATES } from "@/lib/code-templates"
+import { opencodeService } from "@/lib/opencode/opencode-service"
+
+type LiveRun = { phase: "idle" | "starting" | "ready" | "error"; devUrl: string; note: string }
 
 type LogEntry = { level: string; text: string; id: number }
 type Device = "responsive" | "phone"
@@ -62,6 +67,62 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
   const [consoleOpen, setConsoleOpen] = React.useState(false)
   const [logs, setLogs] = React.useState<LogEntry[]>([])
   const logSeq = React.useRef(0)
+
+  // Phase B — run a real Node/Vite/Next app in the cloud runner and iframe it.
+  const [liveRun, setLiveRun] = React.useState<LiveRun>({ phase: "idle", devUrl: "", note: "" })
+  const pollRef = React.useRef<number | null>(null)
+
+  const hasNodeProject = React.useMemo(
+    () => Object.keys(files || {}).some((p) => /(^|\/)package\.json$/.test(p)),
+    [files],
+  )
+
+  const stopApp = React.useCallback(() => {
+    if (pollRef.current) {
+      window.clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+    setLiveRun({ phase: "idle", devUrl: "", note: "" })
+    void opencodeService.stopRun()
+  }, [])
+
+  const runApp = React.useCallback(async () => {
+    setLiveRun({ phase: "starting", devUrl: "", note: "Instalando dependencias y arrancando el dev server…" })
+    const res = await opencodeService.runProject()
+    if (res.error) {
+      setLiveRun({ phase: "error", devUrl: "", note: res.error })
+      return
+    }
+    const fallbackUrl = res.devUrl || "http://localhost:5173"
+    if (pollRef.current) window.clearInterval(pollRef.current)
+    let tries = 0
+    pollRef.current = window.setInterval(async () => {
+      tries += 1
+      const st = await opencodeService.runStatus()
+      if (st.ready) {
+        if (pollRef.current) {
+          window.clearInterval(pollRef.current)
+          pollRef.current = null
+        }
+        setLiveRun({ phase: "ready", devUrl: st.devUrl || fallbackUrl, note: st.framework || "app" })
+      } else if (st.error || tries > 45) {
+        if (pollRef.current) {
+          window.clearInterval(pollRef.current)
+          pollRef.current = null
+        }
+        setLiveRun({ phase: "error", devUrl: "", note: st.error || "El dev server no arrancó a tiempo." })
+      } else {
+        setLiveRun((p) => ({ ...p, note: (st.tail && st.tail[st.tail.length - 1]) || p.note }))
+      }
+    }, 2500)
+  }, [])
+
+  React.useEffect(
+    () => () => {
+      if (pollRef.current) window.clearInterval(pollRef.current)
+    },
+    [],
+  )
 
   // Debounce rebuilds so typing stays smooth; manual refresh bypasses it.
   const [snapshot, setSnapshot] = React.useState({ files, activePath })
@@ -153,6 +214,34 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
             <Smartphone className="h-3.5 w-3.5" />
           </GlassToggle>
 
+          {/* Phase B — run a real Node/Vite/Next app (npm install + dev server). */}
+          {hasNodeProject ? (
+            <>
+              <span className="mx-0.5 h-4 w-px bg-border/50" />
+              {liveRun.phase === "ready" || liveRun.phase === "starting" ? (
+                <button
+                  type="button"
+                  onClick={stopApp}
+                  title="Detener el dev server"
+                  className="flex h-6 items-center gap-1 rounded-md bg-rose-500/15 px-2 text-[11px] font-medium text-rose-500 transition-colors hover:bg-rose-500/25"
+                >
+                  {liveRun.phase === "starting" ? <ThinkingIndicator size="xs" /> : <Square className="h-3 w-3" />}
+                  <span>{liveRun.phase === "starting" ? "Arrancando…" : "Detener"}</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={runApp}
+                  title="Instalar dependencias y correr el app (npm)"
+                  className="flex h-6 items-center gap-1 rounded-md bg-[hsl(var(--accent-violet)/0.16)] px-2 text-[11px] font-medium text-[hsl(var(--accent-violet))] transition-colors hover:bg-[hsl(var(--accent-violet)/0.28)]"
+                >
+                  <Play className="h-3 w-3" />
+                  <span>Ejecutar</span>
+                </button>
+              )}
+            </>
+          ) : null}
+
           <span className="mx-0.5 h-4 w-px bg-border/50" />
 
           <GlassToggle
@@ -201,7 +290,41 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
 
       {/* Viewport */}
       <div className="min-h-0 flex-1 overflow-auto bg-zinc-100/60 p-0 dark:bg-zinc-900/40">
-        {result.kind === "empty" || result.kind === "unsupported" ? (
+        {liveRun.phase === "ready" ? (
+          // Real running app from the cloud runner (npm dev server).
+          <div
+            className={cn(
+              "mx-auto h-full bg-white transition-all dark:bg-zinc-900",
+              device === "phone" && "my-3 h-[calc(100%-1.5rem)] max-w-[390px] overflow-hidden rounded-[28px] border-[6px] border-zinc-800 shadow-2xl",
+            )}
+          >
+            <iframe
+              src={liveRun.devUrl}
+              title="App en vivo (dev server)"
+              className="h-full w-full border-0 bg-white dark:bg-zinc-900"
+            />
+          </div>
+        ) : liveRun.phase === "starting" ? (
+          <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
+            <ThinkingIndicator size="sm" />
+            <div>
+              <p className="text-sm font-medium text-foreground">Compilando tu app…</p>
+              <p className="mx-auto mt-1 max-w-md font-mono text-[11px] leading-relaxed text-muted-foreground">{liveRun.note}</p>
+            </div>
+          </div>
+        ) : liveRun.phase === "error" ? (
+          <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
+            <p className="text-sm font-medium text-rose-500">No se pudo correr el app</p>
+            <p className="mx-auto max-w-md font-mono text-[11px] leading-relaxed text-muted-foreground">{liveRun.note}</p>
+            <button
+              type="button"
+              onClick={runApp}
+              className="rounded-md bg-[hsl(var(--accent-violet)/0.16)] px-3 py-1.5 text-[12px] font-medium text-[hsl(var(--accent-violet))] hover:bg-[hsl(var(--accent-violet)/0.28)]"
+            >
+              Reintentar
+            </button>
+          </div>
+        ) : result.kind === "empty" || result.kind === "unsupported" ? (
           <PreviewLaunchpad kind={result.kind} note={result.note} />
         ) : (
           <div

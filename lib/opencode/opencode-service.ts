@@ -100,6 +100,43 @@ export const opencodeService = {
     }
   },
 
+  /** Phase B — install deps + start the project's dev server. → { ok, port, devUrl }. */
+  async runProject(): Promise<{ ok?: boolean; port?: number; devUrl?: string; error?: string }> {
+    try {
+      const res = await fetch(`${baseUrl}/run`, { method: "POST", credentials: "include", headers: authHeaders() })
+      return (await res.json().catch(() => ({}))) as { ok?: boolean; port?: number; devUrl?: string; error?: string }
+    } catch (e) {
+      return { error: e instanceof Error ? e.message : "runner unreachable" }
+    }
+  },
+
+  /** Phase B — dev-server status: { running, ready, framework, error, tail, devUrl }. */
+  async runStatus(): Promise<{
+    running?: boolean
+    ready?: boolean
+    framework?: string | null
+    error?: string | null
+    tail?: string[]
+    devUrl?: string
+  }> {
+    try {
+      const res = await fetch(`${baseUrl}/run/status`, { credentials: "include", headers: authHeaders() })
+      if (!res.ok) return { error: `HTTP ${res.status}` }
+      return (await res.json().catch(() => ({}))) as Awaited<ReturnType<typeof opencodeService.runStatus>>
+    } catch (e) {
+      return { error: e instanceof Error ? e.message : "runner unreachable" }
+    }
+  },
+
+  /** Phase B — stop the running dev server. */
+  async stopRun(): Promise<void> {
+    try {
+      await fetch(`${baseUrl}/run/stop`, { method: "POST", credentials: "include", headers: authHeaders() })
+    } catch {
+      /* ignore */
+    }
+  },
+
   /** Read a file the agent wrote in the engine's workspace. "" if absent. */
   async readFile(path: string): Promise<string> {
     const res = await fetch(`${baseUrl}/file?path=${encodeURIComponent(path)}`, {
