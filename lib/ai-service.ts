@@ -254,6 +254,17 @@ const DOCUMENT_UNDERSTANDING_RE =
 const EXISTING_DOCUMENT_EDIT_RE =
   /\b(?:agrega(?:r|me|s)?|a[ñn]ad(?:e|ir|eme|as)?|inserta(?:r|me|s)?|incorpora(?:r|me|s)?|inclu(?:ye|ir|yeme|yas)?|completa(?:r|me|s)?|llen(?:a|ar|ame|as)?|rellena(?:r|me|s)?|desarrolla(?:r|me|s)?|modifica(?:r|me|s)?|edita(?:r|me|s)?|corrige(?:r|me|s)?|actualiza(?:r|me|s)?|reemplaza(?:r|me|s)?|cambia(?:r|me|s)?|pon(?:er|me)?|coloca(?:r|me|s)?)\b[^.?!]{0,180}\b(?:al\s+final|anexos?|ap[eé]ndice|secci[oó]n|apartado|cap[ií]tulo|portada|car[aá]tula|t[ií]tulo|encabezado|pie\s+de\s+p[aá]gina|tabla|hoja|celda|fila|columna|diapositiva|instrumento|cuestionario|encuesta|escala|tesis|mismo\s+word|mismo\s+documento|sin\s+cambiar|conserva(?:r)?|preserva(?:r)?)\b/i
 
+// STRONG document-mutation verbs: an imperative command to change the file's
+// content (delete / remove / insert / add / edit / replace / restructure). On
+// an attachment turn these unambiguously mean "edit the attached document" even
+// with NO structure keyword ("borra el jurado evaluador", "elimina los anexos",
+// "agrega una conclusión") — so unlike EXISTING_DOCUMENT_EDIT_RE they need no
+// target noun. They never appear in plain read-only Q&A ("¿qué dice?",
+// "resume", "explica"). Used to route document EDITS to the INLINE
+// /api/ai/generate path, where the document_edit (Cowork sandbox) tool lives.
+const DOCUMENT_MUTATION_STRONG_RE =
+  /\b(?:borra\w*|borre\w*|elimin\w*|quita\w*|quite\w*|suprim\w*|remov\w*|remueve\w*|tach(?:a|e|ar)\w*|descart\w*|s[aá]ca\w*|agrega\w*|agr[eé]ga\w*|a[ñn]ad\w*|inserta\w*|insert\w*|incorpora\w*|edita\w*|edit[aá]\w*|modific\w*|corrig\w*|correg\w*|reemplaz\w*|sustitu\w*|renombr\w*|reescrib\w*|reorganiz\w*|reordena\w*|reformate\w*|reenumera\w*|delete\w*|remove\w*|erase\w*|append\w*|modify\w*|replace\w*|rewrite\w*|rename\w*)\b/i
+
 // Whole-document transforms (translate / rewrite / summarize / rephrase)
 // operate on the entire uploaded file, so unlike EXISTING_DOCUMENT_EDIT_RE
 // they don't require a sub-region target keyword. When a document is
@@ -804,6 +815,24 @@ export function shouldRouteTextPromptThroughAgenticRuntime(prompt: string, files
     // transcribe, solve, or describe-to-create from it.
     const everyFileIsImage = fileList.length > 0 && fileList.every(isImageLikeAttachment)
     if (everyFileIsImage) return false
+    // Document EDIT requests ("borra el jurado evaluador", "elimina los anexos",
+    // "agrega una conclusión", "cambia el título del informe") must run on the
+    // INLINE /api/ai/generate path: that is where the document_edit (Cowork
+    // sandbox-editing) tool lives, and it is the RELIABLE path (per-step
+    // timeout + plain-stream fallback). The queued agent-task path has no
+    // document_edit tool and, when the worker can't relay events, leaves the
+    // chat stuck on "Sin actualizaciones recientes" — exactly the doc-edit
+    // failure users hit. Strong mutation verb alone, or an edit verb + region.
+    if (
+      !OUTPUT_FORMAT_REQUEST_RE.test(normalized)
+      && (
+        DOCUMENT_MUTATION_STRONG_RE.test(normalized)
+        || EXISTING_DOCUMENT_EDIT_RE.test(normalized)
+        || WHOLE_DOCUMENT_TRANSFORM_RE.test(normalized)
+      )
+    ) {
+      return false
+    }
     const hasDocumentForSynthesis = fileList.some((file) =>
       isDocumentLikeAttachment(file) && !isSpreadsheetLikeAttachment(file)
     )

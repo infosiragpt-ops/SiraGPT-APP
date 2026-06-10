@@ -200,7 +200,13 @@ test('registration gating: document_edit appears ONLY when the turn has attachme
 
 test('routing gate: edit requests with attachments enter the agentic loop; doc-QA does not', () => {
   const { isDocumentEditRequest } = require('../src/services/agents/agentic-trigger');
-  // positives
+  // positives — incl. DELETION/insertion verbs with NO document noun (the exact
+  // prod failure: "borra el jurado evaluador" stalled because it routed nowhere)
+  assert.equal(isDocumentEditRequest('borra el jurado evaluador'), true);
+  assert.equal(isDocumentEditRequest('elimina la sección de anexos'), true);
+  assert.equal(isDocumentEditRequest('quita la tabla de matrices'), true);
+  assert.equal(isDocumentEditRequest('agrega una conclusión al final'), true);
+  assert.equal(isDocumentEditRequest('suprime el párrafo 3'), true);
   assert.equal(isDocumentEditRequest('edita mi documento y corrige la tabla'), true);
   assert.equal(isDocumentEditRequest('modifica el excel adjunto'), true);
   assert.equal(isDocumentEditRequest('actualiza el informe con los datos nuevos'), true);
@@ -209,6 +215,16 @@ test('routing gate: edit requests with attachments enter the agentic loop; doc-Q
   assert.equal(isDocumentEditRequest('resume este documento'), false);
   assert.equal(isDocumentEditRequest('¿qué dice el documento?'), false);
   assert.equal(isDocumentEditRequest('explícame el informe'), false);
+  assert.equal(isDocumentEditRequest('de qué trata'), false);
+
+  // The queued-path deterministic gate must ALSO fire on strong mutation verbs
+  // with an attachment (belt-and-suspenders if a turn still routes there).
+  const { isSourcePreservingEditRequest } = require('../src/services/source-preserving-document-edit');
+  const docx = [{ name: 'x.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }];
+  assert.equal(isSourcePreservingEditRequest('borra el jurado evaluador', docx), true);
+  assert.equal(isSourcePreservingEditRequest('agrega una conclusión', docx), true);
+  assert.equal(isSourcePreservingEditRequest('¿qué dice el documento?', docx), false);
+  assert.equal(isSourcePreservingEditRequest('resume esto', docx), false);
 
   const { shouldUseAgenticChat } = require('../src/services/agentic-chat-stream');
   assert.equal(shouldUseAgenticChat({ prompt: 'edita mi documento: cambia el título', files: [{ id: 'f1' }] }), true);

@@ -36,6 +36,11 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   const hasFiles = Array.isArray(files) ? files.length > 0 : Boolean(files);
 
   const structuralEditVerb = /\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|inclu\w*|pon|poner|coloc\w*|modific\w*|edit\w*|corrig\w*|correg\w*|mejor\w*|actualiz\w*|reemplaz\w*|quit\w*|elimin\w*|borr\w*|complet\w*)\b/.test(text);
+  // STRONG mutation verbs (delete / remove / insert / add / replace): on an
+  // attachment turn these unambiguously target the attached file even with no
+  // document/region noun ("borra el jurado evaluador", "elimina los anexos",
+  // "agrega una conclusión") — the only plausible target is the uploaded doc.
+  const strongStructuralVerb = /\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|quit\w*|elimin\w*|borr\w*|suprim\w*|remov\w*|reemplaz\w*|sustitu\w*|tach\w*)\b/.test(text);
   // Whole-document transforms (traduce / cambia / resume / reformula…) act on the
   // entire file. They are recognized as edits, but require an explicit document
   // noun (not just a demonstrative pronoun) so phrases like "traduce esta frase"
@@ -70,8 +75,11 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   if (hasFiles) {
     if (appendLocation || preservation || instrument || documentRegion) return true;
     if (documentNoun) return true;
-    // Pronoun-only references (este/esta/mi…) are honored for structural edits,
-    // but transform verbs require an explicit document noun (handled above) so
+    // A STRONG mutation verb alone is enough on an attachment turn — the
+    // uploaded file is the only plausible target ("borra el jurado evaluador").
+    if (strongStructuralVerb) return true;
+    // Weaker edit verbs (pon/mejora/modifica/edita…) still need an explicit
+    // reference, and transform verbs require a document noun (handled above) so
     // "traduce esta frase" / "cambia de tema" stay normal chat answers.
     return structuralEditVerb && existingDocRef;
   }

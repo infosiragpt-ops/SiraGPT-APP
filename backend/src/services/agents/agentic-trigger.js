@@ -121,34 +121,55 @@ function isArtifactDeliverableRequest(text) {
   return CREATION_VERBS.test(t) && ARTIFACT_NOUNS.test(t);
 }
 
-// Verbs that mean "change the EXISTING document" — deliberately conservative
-// (no bare "cambia"/"arregla", which appear constantly in plain Q&A follow-ups)
-// so doc-Q&A turns keep their fast plain-stream path.
-const EDIT_VERBS = new RegExp(
+// STRONG mutation verbs: an imperative command to change the document's
+// CONTENT. On an attachment turn these are unmistakable edits even with no
+// document noun ("borra el jurado evaluador", "agrega una conclusión",
+// "elimina los anexos") — the only plausible target is the attached file.
+// They do NOT appear in plain doc-Q&A ("¿qué dice?", "resume", "explica").
+const STRONG_EDIT_VERBS = new RegExp(
   '\\b(' +
     [
-      // Spanish
-      'edit', 'modific', 'corrig', 'correg', 'actualiz', 'reemplaz',
-      'renombr', 'reescrib', 'reorganiz', 'reformate',
+      // Spanish — delete / remove
+      'borra', 'borre', 'borrar', 'elimin', 'quita', 'quite', 'quitar',
+      'suprim', 'remov', 'remueve', 'tacha', 'descarta', 's[aá]cale', 's[aá]calo',
+      // Spanish — insert / add
+      'agrega', 'agr[eé]ga', 'a[ñn]ad', 'inserta', 'incorpora', 'incluye',
+      // Spanish — edit / replace / restructure
+      'edita', 'edit[aá]', 'modific', 'corrig', 'correg', 'reemplaz', 'sustitu',
+      'renombr', 'reescrib', 'reorganiz', 'reformate', 'reordena', 'reenumera',
       // English
-      'modify', 'fix the', 'update', 'replac', 'rewrit', 'reformat', 'rename',
+      'delete', 'remove', 'erase', 'strip out', 'strike',
+      'add ', 'insert', 'append',
+      'edit', 'modify', 'replac', 'rewrite', 'reformat', 'rename', 'reorder',
     ].join('|') +
     ')',
   'i',
 );
 
+// WEAK edit verbs: also used in chit-chat / Q&A follow-ups ("cambia de tema",
+// "actualízame", "arréglate"), so they only count as a document edit when a
+// document/file noun is also present.
+const WEAK_EDIT_VERBS = /\b(cambia\w*|c[aá]mbia\w*|c[aá]mbi[aá]le|actualiz\w*|arregl\w*|p[oó]nle|ponle|mejora\w*|ajusta\w*|update\w*|change\w*|fix the|improve\w*|adjust\w*)\b/i;
+
 // Nouns that, on an ATTACHMENT turn, unambiguously refer to the attached file
 // itself or a concrete document instance (complementing ARTIFACT_NOUNS, which
-// targets deliverable formats). Only consulted together with an EDIT verb, so
-// "qué dice el informe" (no edit verb) still stays on the plain stream.
-const ATTACHED_FILE_NOUNS = /\b(archivo|adjunto|attached file|attachment|file|informe|reporte|report|contrato|contract|ensayo|tesis|curr[ií]culum|\bcv\b|carta|acta|memorando|propuesta|proposal)\b/i;
+// targets deliverable formats). Used to disambiguate WEAK edit verbs; STRONG
+// verbs need no noun.
+const ATTACHED_FILE_NOUNS = /\b(archivo|adjunto|attached file|attachment|file|documento|doc|informe|reporte|report|contrato|contract|ensayo|tesis|curr[ií]culum|\bcv\b|carta|acta|memorando|propuesta|proposal|secci[oó]n|p[aá]rrafo|t[ií]tulo|tabla|p[aá]gina|encabezado|pie de p[aá]gina|columna|fila)\b/i;
+
+// Back-compat export: the combined verb regex (strong ∪ weak).
+const EDIT_VERBS = new RegExp(`${STRONG_EDIT_VERBS.source}|${WEAK_EDIT_VERBS.source}`, 'i');
 
 /**
- * Attachment-turn gate for EDIT requests: "edita mi documento", "corrige el
- * excel adjunto", "actualiza el informe". These need the agentic loop — that
- * is where the `document_edit` (Cowork-style sandbox editing) tool lives.
- * Requires an edit verb AND a document/file noun, mirroring the
- * verb+noun design of isArtifactDeliverableRequest.
+ * Attachment-turn gate for EDIT requests. Called ONLY when a file is attached
+ * (shouldUseAgenticChat already requires files.length > 0), so an imperative
+ * mutation verb alone is enough — the attached file is the only plausible
+ * target. WEAK verbs additionally need a document/file noun. This is where the
+ * `document_edit` (Cowork-style sandbox editing) tool lives.
+ *
+ * Examples that MUST route: "borra el jurado evaluador", "elimina los anexos",
+ * "agrega una conclusión", "edita mi documento", "cambia el título del informe".
+ * Examples that MUST NOT: "¿qué dice?", "resume esto", "explica el documento".
  *
  * @param {string} text user message (any case)
  * @returns {boolean}
@@ -156,7 +177,8 @@ const ATTACHED_FILE_NOUNS = /\b(archivo|adjunto|attached file|attachment|file|in
 function isDocumentEditRequest(text) {
   const t = String(text == null ? '' : text);
   if (!t.trim()) return false;
-  return EDIT_VERBS.test(t) && (ARTIFACT_NOUNS.test(t) || ATTACHED_FILE_NOUNS.test(t));
+  if (STRONG_EDIT_VERBS.test(t)) return true;
+  return WEAK_EDIT_VERBS.test(t) && (ARTIFACT_NOUNS.test(t) || ATTACHED_FILE_NOUNS.test(t));
 }
 
 module.exports = {
