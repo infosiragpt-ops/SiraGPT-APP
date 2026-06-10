@@ -562,8 +562,27 @@ async function maybePreflightAndLock() {
   });
 }
 
+/**
+ * Ensure Python document sandbox libraries are installed.
+ * Runs pip install --user silently in background — never blocks boot.
+ * Idempotent: pip skips packages already installed.
+ */
+function ensureSandboxPythonDeps() {
+  const PACKAGES = ['python-docx', 'openpyxl', 'pypdf', 'reportlab', 'pandas'];
+  const python = process.env.PYTHON_BIN || 'python3';
+  try {
+    const child = spawn(
+      python,
+      ['-m', 'pip', 'install', '--user', '--quiet', '--exists-action=i', ...PACKAGES],
+      { stdio: 'ignore', detached: false }
+    );
+    child.on('error', () => { /* non-critical */ });
+  } catch { /* non-critical */ }
+}
+
 async function main() {
   phase("boot_start", { skipMigrations: process.env.SKIP_MIGRATIONS === "1" });
+  ensureSandboxPythonDeps();
   const release = await maybePreflightAndLock();
 
   let migrationStatus;

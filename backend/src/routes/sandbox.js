@@ -27,7 +27,8 @@ const router = express.Router();
 // the module doesn't export the expected shape (tests / standalone).
 let requireAuth;
 try {
-  requireAuth = require('../middleware/auth').requireAuth;
+  const auth = require('../middleware/auth');
+  requireAuth = auth.requireAuth || auth.authenticateToken || ((_req, _res, next) => next());
 } catch (_) {
   requireAuth = (_req, _res, next) => next();
 }
