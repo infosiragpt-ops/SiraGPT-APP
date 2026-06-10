@@ -695,7 +695,11 @@ export function AICodeChatPanel() {
         }
 
         const sendText = ctx
-          ? `${landingSystemPrompt(ctx)}\n\nIMPORTANTE: ESCRIBE los archivos en el workspace con tus herramientas (write/edit). Crea un PROYECTO con archivos INDEPENDIENTES y bien organizados (p.ej. index.html, styles.css, app.js, y un archivo por sección/componente cuando aporte claridad). El archivo de ENTRADA debe llamarse exactamente "index.html", enlazar a los demás (./styles.css, ./app.js) y quedar EJECUTABLE con Tailwind por CDN.`
+          ? `${landingSystemPrompt(ctx)}\n\n${
+              ctx.goal === "app"
+                ? 'IMPORTANTE: Crea un PROYECTO Vite + React REAL con tus herramientas (write/edit), con archivos INDEPENDIENTES — NO un solo archivo:\n- package.json (con "vite" y "react"+"react-dom" en dependencias, y script "dev": "vite")\n- index.html en la raíz que cargue <script type="module" src="/src/main.jsx">\n- src/main.jsx (monta <App/>), src/App.jsx, y componentes en src/components/*.jsx\n- src/index.css con Tailwind por CDN en el index.html o estilos propios.\nOrganiza por componentes/secciones. El usuario lo correrá con npm/bun (dev server).'
+                : 'IMPORTANTE: ESCRIBE los archivos con tus herramientas (write/edit). Crea un PROYECTO con archivos INDEPENDIENTES (p.ej. index.html, styles.css, app.js, y un archivo por sección cuando aporte claridad). El archivo de ENTRADA debe llamarse exactamente "index.html", enlazar a los demás (./styles.css, ./app.js) y quedar EJECUTABLE con Tailwind por CDN (sin build).'
+            }`
           : iterate
             ? `MODIFICA los archivos que YA existen en tu workspace para lograr: ${text}.\n\nPrimero LEE el código actual con tus herramientas, haz cambios DIRIGIDOS solo donde corresponde y CONSERVA el resto intacto. NO regeneres todo desde cero — edita los archivos existentes (write/edit).`
             : text
