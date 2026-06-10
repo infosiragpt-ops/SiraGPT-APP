@@ -288,15 +288,24 @@ const extractRenderableAgentTaskContent = (content: string) => {
     const match = raw.match(/^```agent-task-state\s*\n([\s\S]*?)\n```\s*/);
     if (!match) return raw;
 
-    const trailing = raw.slice(match[0].length).trim();
-    if (trailing) return trailing;
-
+    // A completed run with deliverables must KEEP the state block: it is
+    // what mounts AgenticStepsRenderer -> the artifact cards (Word/PDF
+    // download). Collapsing to plain text alone made every finished
+    // document edit lose its file card.
+    let state: { done?: boolean; error?: unknown; finalText?: string; artifacts?: unknown[] } | null = null;
     try {
-        const state = JSON.parse(match[1]);
-        const finalText = typeof state?.finalText === "string" ? state.finalText.trim() : "";
-        if (state?.done && !state?.error && finalText) return finalText;
+        state = JSON.parse(match[1]);
     } catch {
-        // Keep the original markdown so the normal renderer can handle it.
+        state = null;
+    }
+    const hasArtifacts = Array.isArray(state?.artifacts) && state.artifacts.length > 0;
+
+    const trailing = raw.slice(match[0].length).trim();
+    if (trailing) return hasArtifacts ? `${trailing}\n\n${match[0].trim()}` : trailing;
+
+    const finalText = typeof state?.finalText === "string" ? state.finalText.trim() : "";
+    if (state?.done && !state?.error && finalText) {
+        return hasArtifacts ? `${finalText}\n\n${match[0].trim()}` : finalText;
     }
 
     return raw;
