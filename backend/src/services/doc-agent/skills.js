@@ -28,8 +28,10 @@ HARD RULES
    filename(s). Do not dump file contents into the reply.`;
 
 const SKILLS = {
-  docx: `DOCX SKILL (OOXML)
-A .docx is a ZIP of XML. Two reliable workflows — pick per task:
+  docx: `DOCX SKILL (OOXML) — FOLLOW THIS PROCEDURE
+A .docx is a BINARY ZIP of XML. You CANNOT edit it with str_replace directly;
+str_replace/read_file on the .docx will return a binary error. ALWAYS unpack
+first. Use ONE of two workflows:
 (a) python-docx (preferred for structural edits — adding/removing paragraphs,
     tables, headings):
       python3 - <<'PY'
@@ -43,9 +45,22 @@ A .docx is a ZIP of XML. Two reliable workflows — pick per task:
       mkdir -p /workspace/tmp/x && cd /workspace/tmp/x
       unzip -o /workspace/uploads/FILE.docx
       # edit word/document.xml with str_replace (keep namespaces + <w:r> runs intact;
-      # text lives in <w:t> elements — replace the TEXT inside, never the tags)
-      # validate: python3 -c "import lxml.etree as ET; ET.parse('word/document.xml')"
-      cd /workspace/tmp/x && zip -q -r /workspace/outputs/FILE-editado.docx .
+      # text lives in <w:t> elements — replace the TEXT inside, never the tags;
+      # for inserted text use <w:t xml:space="preserve">…</w:t>)
+      # validate the XML: python3 -c "import lxml.etree as ET; ET.parse('word/document.xml')"
+
+    ⚠️ REPACK CORRECTLY — this is the #1 cause of a corrupt .docx:
+      You MUST cd INTO the unpacked dir and zip the CURRENT directory ".", so
+      [Content_Types].xml and word/ land at the ARCHIVE ROOT:
+          cd /workspace/tmp/x && zip -q -r /workspace/outputs/FILE-editado.docx .
+      NEVER do "zip -r out.docx /workspace/tmp/x/*" or zip a parent/absolute
+      path — that nests every entry under a subfolder and Word/readers reject
+      the file. The entries' paths inside the zip must be exactly
+      "[Content_Types].xml", "word/document.xml", … (no leading folder).
+
+    ✅ THEN VERIFY before finishing (mandatory):
+          python3 -c "from docx import Document; Document('/workspace/outputs/FILE-editado.docx'); print('valid docx')"
+      If that errors, your packing is wrong — re-pack with the cd+"." form.
 Never edit the binary .docx directly with str_replace — always one of the two
 workflows above. Mind that a sentence may be split across multiple <w:t> runs.`,
 

@@ -25,7 +25,7 @@ const { createSandbox, resolveInWorkspace } = require('../src/services/doc-agent
 const { TOOL_DEFINITIONS, makeToolExecutors } = require('../src/services/doc-agent/tools');
 const { buildDocAgentSystemPrompt } = require('../src/services/doc-agent/skills');
 const { runDocAgentLoop } = require('../src/services/doc-agent/loop');
-const { runDocumentAgent } = require('../src/services/doc-agent');
+const { runDocumentAgent, isValidOoxml } = require('../src/services/doc-agent');
 const { parseZip } = require('../src/services/zip-parser');
 
 /** OpenAI-compatible fake: returns the scripted responses in order. */
@@ -202,6 +202,28 @@ test('loop: stops at the iteration cap and never throws on unknown tools', async
   } finally {
     await sandbox.destroy();
   }
+});
+
+test('isValidOoxml: accepts a real docx, rejects a mis-packed (nested) archive', async () => {
+  const good = await makeSampleDocx();
+  assert.equal(isValidOoxml(good), true);
+
+  // Repack the docx so every entry is nested under "nested/" → corrupt OOXML
+  // (the exact failure a model causes with `zip -r out.docx /abs/path/*`).
+  const sandbox = await createSandbox({ driver: 'local' });
+  try {
+    await sandbox.putFile('uploads/g.docx', good);
+    await sandbox.exec('mkdir -p /workspace/tmp/u && cd /workspace/tmp/u && python3 -c "import zipfile; zipfile.ZipFile(\'/workspace/uploads/g.docx\').extractall(\'.\')"');
+    // zip from the PARENT so paths become "u/[Content_Types].xml", etc.
+    await sandbox.exec('cd /workspace/tmp && zip -q -r /workspace/outputs/bad.docx u');
+    const bad = await sandbox.readFile('outputs/bad.docx');
+    assert.equal(isValidOoxml(bad), false);
+  } finally {
+    await sandbox.destroy();
+  }
+
+  assert.equal(isValidOoxml(Buffer.from('not a zip')), false);
+  assert.equal(isValidOoxml(null), false);
 });
 
 test('skills: prompt includes only the relevant format blocks + hard rules', () => {

@@ -165,6 +165,11 @@ function makeToolExecutors(sandbox) {
         if (!oldStr) return 'ERROR: old_str must not be empty';
         const buf = await sandbox.readFile(p);
         const text = buf.toString('utf8');
+        if (text.includes('\u0000')) {
+          return `ERROR: ${p} is a BINARY file (a .docx/.xlsx/.pptx is a ZIP archive — you cannot text-edit it directly). ` +
+            `First unpack it (e.g. "mkdir -p /workspace/tmp/x && cd /workspace/tmp/x && unzip -o /workspace/uploads/${p.split('/').pop()}"), ` +
+            `then str_replace inside the extracted word/document.xml, then repack with "cd /workspace/tmp/x && zip -q -r /workspace/outputs/NAME.docx ." — or use python3 (python-docx).`;
+        }
         const first = text.indexOf(oldStr);
         if (first === -1) return `ERROR: old_str not found in ${p}. Read the file and copy the exact text (including whitespace).`;
         const second = text.indexOf(oldStr, first + oldStr.length);
