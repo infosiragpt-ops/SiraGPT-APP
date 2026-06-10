@@ -5864,3 +5864,26 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
     color: hsl(var(--muted-foreground));
   }
 }
+
+/* Minimal "thinking" pulse — a quiet breathing dot with a soft expanding
+   halo. Pairs with .thinking-shimmer-text for a Claude-style streaming
+   affordance (see components/ui/thinking-pulse.tsx). */
+@keyframes thinking-pulse-core {
+  0%, 100% { opacity: 0.55; transform: scale(0.92); }
+  50% { opacity: 1; transform: scale(1); }
+}
+@keyframes thinking-pulse-halo {
+  0% { transform: scale(1); opacity: 0.22; }
+  70%, 100% { transform: scale(2.5); opacity: 0; }
+}
+/* minimal thinking pulse */
+.thinking-pulse-core {
+  animation: thinking-pulse-core 1.5s ease-in-out infinite;
+}
+.thinking-pulse-halo {
+  animation: thinking-pulse-halo 1.7s ease-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .thinking-pulse-core { animation: none; opacity: 0.7; transform: none; }
+  .thinking-pulse-halo { display: none; }
+}
