@@ -74,7 +74,13 @@ function loadDotenv() {
 }
 
 function resolvePrismaDatabaseUrl(env = process.env) {
-  return env.PRISMA_DATABASE_URL || env.DATABASE_URL || "";
+  // Prefer DATABASE_URL (direct PostgreSQL) over PRISMA_DATABASE_URL.
+  // PRISMA_DATABASE_URL used to point at Prisma Accelerate; the schema now
+  // uses DATABASE_URL directly, so always favour the direct connection here
+  // so the advisory-lock preflight and pg.Client work correctly.
+  const direct = env.DATABASE_URL || env.PRISMA_DATABASE_URL || "";
+  if (direct) return direct;
+  return env.PRISMA_DATABASE_URL || "";
 }
 
 function makePgClientOptions(url) {
