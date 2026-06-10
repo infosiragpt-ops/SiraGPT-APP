@@ -81,6 +81,25 @@ export const opencodeService = {
     return json.result
   },
 
+  /**
+   * List + read EVERY file the agent wrote in its workspace (recursive), so the
+   * UI can show a real multi-file project. Returns [] on any failure.
+   */
+  async listProjectFiles(): Promise<Array<{ path: string; content: string }>> {
+    try {
+      const res = await fetch(`${baseUrl}/files`, { credentials: "include", headers: authHeaders() })
+      if (!res.ok) return []
+      const json = (await res.json().catch(() => ({}))) as {
+        files?: Array<{ path: string; content: string }>
+      }
+      return Array.isArray(json.files)
+        ? json.files.filter((f) => f && typeof f.path === "string" && typeof f.content === "string")
+        : []
+    } catch {
+      return []
+    }
+  },
+
   /** Read a file the agent wrote in the engine's workspace. "" if absent. */
   async readFile(path: string): Promise<string> {
     const res = await fetch(`${baseUrl}/file?path=${encodeURIComponent(path)}`, {

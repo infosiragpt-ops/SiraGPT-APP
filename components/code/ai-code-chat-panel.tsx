@@ -661,9 +661,10 @@ export function AICodeChatPanel() {
   // If the engine yields no usable code (or errors), it falls back to the
   // deterministic builder in the SAME turn — so a build always produces a result.
   const runEngine = React.useCallback(
-    async (text: string, sid: string, opts?: { buildContext?: AgentBuildContext }) => {
+    async (text: string, sid: string, opts?: { buildContext?: AgentBuildContext; iterate?: boolean }) => {
       const ctx = opts?.buildContext
       const isBuild = !!ctx
+      const iterate = !!opts?.iterate
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
       const assistantId = `${id}-a`
       setTurns((prev) => [
@@ -694,8 +695,10 @@ export function AICodeChatPanel() {
         }
 
         const sendText = ctx
-          ? `${landingSystemPrompt(ctx)}\n\nIMPORTANTE: ESCRIBE los archivos en el workspace usando tus herramientas (write/edit). El archivo de ENTRADA DEBE llamarse exactamente "index.html" y ser autocontenido (HTML + Tailwind por CDN). Puedes añadir styles.css y/o app.js si lo necesitas.`
-          : text
+          ? `${landingSystemPrompt(ctx)}\n\nIMPORTANTE: ESCRIBE los archivos en el workspace con tus herramientas (write/edit). Crea un PROYECTO con archivos INDEPENDIENTES y bien organizados (p.ej. index.html, styles.css, app.js, y un archivo por sección/componente cuando aporte claridad). El archivo de ENTRADA debe llamarse exactamente "index.html", enlazar a los demás (./styles.css, ./app.js) y quedar EJECUTABLE con Tailwind por CDN.`
+          : iterate
+            ? `MODIFICA los archivos que YA existen en tu workspace para lograr: ${text}.\n\nPrimero LEE el código actual con tus herramientas, haz cambios DIRIGIDOS solo donde corresponde y CONSERVA el resto intacto. NO regeneres todo desde cero — edita los archivos existentes (write/edit).`
+            : text
 
         // OpenCode is event-driven: the POST /message returns an empty shell and
         // the assistant reply arrives over the SSE event stream. We accumulate
@@ -746,29 +749,33 @@ export function AICodeChatPanel() {
         const blocks = parseCodeBlocks(reply).filter((b) => b.path)
 
         if (ctx) {
-          // BUILD: read the files the agent wrote to its /workspace (the agent
-          // edits files via tools, it doesn't return code in text). We read a few
-          // known entry/companion paths and apply the non-empty ones, plus any
-          // code blocks it happened to include in the reply.
-          const candidates = ["index.html", "styles.css", "style.css", "app.js", "script.js", "main.js"]
-          const engineFiles: Array<{ path: string; content: string }> = []
-          for (const p of candidates) {
-            try {
-              const c = await opencodeService.readFile(p)
-              if (c && c.trim()) engineFiles.push({ path: p, content: c })
-            } catch {
-              /* missing file → skip */
+          // BUILD: read back the ENTIRE project the agent wrote to its /workspace
+          // — a real multi-file tree (index.html, styles, scripts, components,
+          // config…), not just one file. Falls back to known entry paths + reply
+          // code blocks if the listing is empty.
+          let engineFiles = await opencodeService.listProjectFiles()
+          if (engineFiles.length === 0) {
+            const candidates = ["index.html", "styles.css", "style.css", "app.js", "script.js", "main.js"]
+            for (const p of candidates) {
+              try {
+                const c = await opencodeService.readFile(p)
+                if (c && c.trim()) engineFiles.push({ path: p, content: c })
+              } catch {
+                /* missing file → skip */
+              }
             }
           }
           const seen = new Set<string>()
           const merged: Array<{ path: string; content: string }> = []
           for (const f of [...engineFiles, ...blocks.map((b) => ({ path: b.path as string, content: b.content }))]) {
-            if (!seen.has(f.path)) {
+            if (f.path && !seen.has(f.path)) {
               seen.add(f.path)
               merged.push(f)
             }
           }
-          if (merged.some((f) => /(^|\/)index\.html?$/i.test(f.path))) {
+          // Accept a real project: a runnable/known entry, or simply ≥2 files.
+          const hasEntry = merged.some((f) => /(^|\/)(index\.html?|package\.json)$/i.test(f.path))
+          if (merged.length > 0 && (hasEntry || merged.length >= 2)) {
             applyFilesToWorkspace(merged)
             finish(reply ? `${reply}\n\n_(Motor OpenCode: ${merged.length} archivo(s) →)_` : `✅ Motor OpenCode — ${merged.length} archivo(s) →`)
             toast.success(`Motor OpenCode — ${merged.length} archivo(s) →`)
@@ -785,7 +792,28 @@ export function AICodeChatPanel() {
           return
         }
 
-        // Non-build chat: render the assistant reply + apply any code blocks.
+        // Iterate: the agent edited files in its workspace ("change the header").
+        // Read the whole project back and sync it so edits land in the tree +
+        // preview — this is the Replit-style "modify what's not well done" loop.
+        if (iterate) {
+          const projectFiles = await opencodeService.listProjectFiles()
+          const seen = new Set<string>()
+          const synced: Array<{ path: string; content: string }> = []
+          for (const f of [...projectFiles, ...blocks.map((b) => ({ path: b.path as string, content: b.content }))]) {
+            if (f.path && !seen.has(f.path)) {
+              seen.add(f.path)
+              synced.push(f)
+            }
+          }
+          if (synced.length > 0) {
+            applyFilesToWorkspace(synced)
+            finish(reply ? `${reply}\n\n_(Motor OpenCode: ${synced.length} archivo(s) →)_` : `✅ Cambios aplicados — ${synced.length} archivo(s) →`)
+            toast.success(`Cambios aplicados — ${synced.length} archivo(s) →`)
+            return
+          }
+        }
+
+        // Plain engine chat: render the reply + apply any code blocks it returned.
         if (blocks.length > 0) {
           applyFilesToWorkspace(blocks.map((b) => ({ path: b.path as string, content: b.content })))
           finish(reply || `✅ Motor OpenCode — ${blocks.length} archivo(s) aplicados →`)
@@ -892,7 +920,7 @@ export function AICodeChatPanel() {
         }
         case "patch": {
           if (engineMode && engineAvailable) {
-            await runEngine(action.instruction, sid)
+            await runEngine(action.instruction, sid, { iterate: true })
           } else {
             await sendPrompt(action.instruction, { autoApply: true })
           }

@@ -89,6 +89,43 @@ router.get('/file', authenticateToken, requireConfigured, async (req, res) => {
   }
 });
 
+// List + read EVERY file the agent wrote in its workspace (recursive), so the
+// /code UI can surface a real multi-file project in the file tree — not just a
+// single index.html. Caps depth/count/size and skips dependency/build dirs.
+const PROJECT_SKIP_DIRS = new Set(['node_modules', '.git', '.next', 'dist', 'build', '.cache', '.opencode', 'coverage', '.turbo']);
+const PROJECT_MAX_FILES = 80;
+router.get('/files', authenticateToken, requireConfigured, async (req, res) => {
+  const client = createOpencodeClient();
+  const files = [];
+  async function walk(dir, depth) {
+    if (depth > 6 || files.length >= PROJECT_MAX_FILES) return;
+    let listing;
+    try { listing = await client.listFiles(dir); } catch { return; }
+    const entries = listing && Array.isArray(listing.data) ? listing.data : [];
+    for (const e of entries) {
+      if (files.length >= PROJECT_MAX_FILES) break;
+      const name = String(e.path || '').split('/').pop();
+      if (!name || name.startsWith('.')) continue;
+      const full = dir === '.' ? name : `${dir}/${name}`;
+      if (e.type === 'directory') {
+        if (!PROJECT_SKIP_DIRS.has(name)) await walk(full, depth + 1);
+      } else if (e.type === 'file') {
+        try {
+          const out = await client.readFileContent(full);
+          const content = out && typeof out.content === 'string' ? out.content : '';
+          if (content) files.push({ path: full, content: content.slice(0, 200_000) });
+        } catch { /* unreadable/binary → skip */ }
+      }
+    }
+  }
+  try {
+    await walk('.', 0);
+    return res.json({ files });
+  } catch (err) {
+    return res.status(502).json({ error: 'opencode_upstream', message: err.message });
+  }
+});
+
 // Proxy the engine's SSE event stream to the browser.
 router.get('/events', authenticateToken, requireConfigured, async (req, res) => {
   const client = createOpencodeClient();

@@ -24,6 +24,7 @@ const ENDPOINTS = {
   file: () => '/file', // GET (file content at /file/content)
   fileContent: () => '/file/content', // GET ?path= → { type, content } (verified)
   find: () => '/find/symbol', // GET symbol search
+  fsList: () => '/api/fs/list', // GET ?path= → { data: [{ path, type, mime }] } (verified)
   event: () => '/api/event', // GET — SSE stream (verified text/event-stream)
 };
 
@@ -102,6 +103,8 @@ function createOpencodeClient({ env = process.env, fetchImpl } = {}) {
       return request('POST', ENDPOINTS.message(sessionId), { ...rest, body });
     },
     readFile(path, opts) { return request('GET', ENDPOINTS.file(), { ...opts, query: { path } }); },
+    /** List entries under a workspace dir → { data: [{ path, type, mime }] }. */
+    listFiles(path = '.', opts) { return request('GET', ENDPOINTS.fsList(), { ...opts, query: { path } }); },
     /** Read a workspace file's content → { type, content }. */
     readFileContent(path, opts) {
       return request('GET', ENDPOINTS.fileContent(), { ...opts, query: { path } });
