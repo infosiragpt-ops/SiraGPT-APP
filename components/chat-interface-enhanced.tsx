@@ -105,7 +105,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { apiClient } from "@/lib/api"
 import { track } from "@/lib/analytics"
-import { aiService, buildProfessionalCapabilityPrompt, classifyIntentFastPath, extractRequestedVideoDurationSeconds, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldAutoActivateVideoGeneration, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, type ChatIntent } from "@/lib/ai-service"
+import { aiService, buildProfessionalCapabilityPrompt, classifyIntentFastPath, extractRequestedVideoDurationSeconds, isImageOnlyAttachmentTurn, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldAutoActivateVideoGeneration, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, type ChatIntent } from "@/lib/ai-service"
 import { toast } from "sonner"
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
@@ -200,7 +200,6 @@ import {
   buildFileOnlyPrompt,
   createLongPasteDocumentFile,
   getLongPasteMetadata,
-  shouldCompilePastedTextAsDocument,
 } from "@/lib/long-paste"
 import { usePasteCapture } from "@/components/paste-preview-overlay"
 import { analyzePastedContent, type PasteCaptureResult, type PasteCaptureAction } from "@/lib/paste-capture"
@@ -231,6 +230,11 @@ const previewAttachmentKey = (attachment: AttachmentLike | null | undefined): st
 
 const isComposerFileUploadPending = (file: any): boolean =>
   Boolean(file && file.status === "uploading" && !resolveUploadFileId(file))
+
+// ChatGPT-style paste threshold: pasted text below this stays inline in the
+// composer (which grows with an internal scrollbar); at/above it the paste is
+// attached as a document chip to keep the controlled textarea responsive.
+const INLINE_PASTE_MAX_CHARS = 50_000
 
 const PROCESSING_CONTEXT_EXT_RE = /\.(?:pdf|docx?|xlsx?|csv|pptx?|txt|md|markdown|rtf|odt|ods|odp)$/i
 const PROCESSING_CONTEXT_MIME_RE =
@@ -4283,7 +4287,6 @@ function ChatInterfaceContent() {
   )
 
   const pasteCapture = usePasteCapture(handlePasteCaptureAction);
-  const capturePastedText = pasteCapture.capture;
   const pasteCapturePendingRef = React.useRef<PasteCaptureResult | null>(null);
   React.useEffect(() => {
     pasteCapturePendingRef.current = pasteCapture.captureResult;
@@ -5208,7 +5211,11 @@ But first, you need to connect your Spotify account securely using the button be
     if (typeof window === "undefined") return 200;
     const viewportHeight = window.visualViewport?.height || window.innerHeight || 720;
     const isMobileViewport = window.matchMedia("(max-width: 767px)").matches;
-    if (!isMobileViewport) return 200;
+    if (!isMobileViewport) {
+      // ChatGPT-style composer: grows up to ~45% of the viewport so a long
+      // paste reads inline; beyond that the textarea scrolls internally.
+      return Math.max(200, Math.min(560, Math.floor(viewportHeight * 0.45)));
+    }
     return Math.max(96, Math.min(180, Math.floor(viewportHeight * 0.28)));
   }, []);
 
@@ -6545,19 +6552,13 @@ But first, you need to connect your Spotify account securely using the button be
         htmlFallbackText = (tmp.textContent || tmp.innerText || '').trim();
       }
       const pastedText = (text && text.trim()) ? text : htmlFallbackText;
-      if (pastedText && shouldCompilePastedTextAsDocument(pastedText)) {
+      // ChatGPT-style paste: the text stays inline in the composer, which
+      // grows tall with its own scrollbar (getComposerTextareaMaxHeight).
+      // Only a truly massive paste becomes a document chip — a controlled
+      // textarea holding hundreds of KB makes every keystroke re-render lag.
+      if (pastedText && pastedText.length >= INLINE_PASTE_MAX_CHARS) {
         e.preventDefault();
-        // NO chooser popup. Direct paste, always:
-        //   · Clearly large content (≥1200 chars, ≥200 words, ≥20 lines)
-        //     → attach as document chip next to the input.
-        //   · Anything smaller → insert as plain text in the input bar.
-        const analyzed = analyzePastedContent(pastedText);
-        const isClearlyLarge =
-          analyzed.charCount >= 1200 ||
-          analyzed.wordCount >= 200 ||
-          analyzed.lineCount >= 20;
-        const action: PasteCaptureAction = isClearlyLarge ? "attach_document" : "insert_text";
-        handlePasteCaptureActionRef.current(action, analyzed);
+        handlePasteCaptureActionRef.current("attach_document", analyzePastedContent(pastedText));
         return;
       }
       // HTML-only paste (rare — usually browsers attach text/plain too).
@@ -6604,7 +6605,7 @@ But first, you need to connect your Spotify account securely using the button be
       if (text) setInput(prev => prev + text);
       handleAndUploadFiles(filesToFileList(accepted), channel);
     }
-  }, [capturePastedText, handleAndUploadFiles]);
+  }, [handleAndUploadFiles]);
 
   const handleTextareaPaste = React.useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     handleClipboardPaste(e);
@@ -7473,8 +7474,16 @@ REWRITTEN TEXT:`;
         || /(wordprocessingml|spreadsheetml|presentationml|msword|ms-excel|ms-powerpoint|pdf|text\/)/i.test(mime);
     });
     const looksLikeDocumentEditInstruction = /\b(agrega\w*|a[ñn]ad\w*|borr\w*|elimin\w*|quit\w*|reemplaz\w*|complet\w*|rellen\w*|llen\w*|edit\w*|modific\w*|corrig\w*|insert\w*|cambi\w*|actualiz\w*)\b/i.test(msg);
+    // Image-only turns ("resolver", "resuelve esta derivada", "¿qué dice esta
+    // imagen?") need VISION, which lives only in the plain /api/ai/generate
+    // path. The queued agent loop has no vision and stalls blind on the image.
+    // So even when the TEXT alone classifies as an agentic intent (e.g.
+    // "derivada" → math, "imagen" → image), keep image-only turns out of the
+    // agent loop entirely — the vision path reads the image and responds.
+    const imageOnlyTurn = isImageOnlyAttachmentTurn(filesToSend);
     const shouldStartAgenticLoopImmediately = (deterministicAgenticIntent
-      && ['web_search', 'agent_task', 'math', 'viz', 'chart', 'ppt'].includes(deterministicAgenticIntent))
+      && ['web_search', 'agent_task', 'math', 'viz', 'chart', 'ppt'].includes(deterministicAgenticIntent)
+      && !imageOnlyTurn)
       || (hasDocumentAttachment && looksLikeDocumentEditInstruction);
 
     if (shouldStartAgenticLoopImmediately) {
@@ -9867,7 +9876,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           isProcessingGmail={isCurrentChatLocalJobBusy && isProcessingGmail}
                         />
 
-                        {/* CENTER — single-line textarea, expands vertically up to 200px */}
+                        {/* CENTER — single-line textarea, expands vertically up to ~45% viewport (ChatGPT-style) */}
                         <Textarea
                           ref={textareaRef}
                           value={input}

@@ -340,6 +340,25 @@ const isSpreadsheetLikeAttachment = (file: any) => {
   return SPREADSHEET_FILE_EXT_RE.test(name) || SPREADSHEET_MIME_RE.test(mimeType)
 }
 
+const IMAGE_FILE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|svg|heic|heif|avif|tiff?)$/i
+const isImageLikeAttachment = (file: any) => {
+  if (!file) return false
+  if (typeof file === 'string') return IMAGE_FILE_EXT_RE.test(file)
+  const name = String(file.name || file.originalName || file.filename || file.path || '')
+  const mimeType = String(file.mimeType || file.type || file.contentType || '')
+  return mimeType.toLowerCase().startsWith('image/') || file.type === 'image' || IMAGE_FILE_EXT_RE.test(name)
+}
+
+/**
+ * True when EVERY attachment is an image (and there is at least one). Such
+ * turns need VISION, which lives only in the plain /api/ai/generate path — the
+ * queued agent-task / react-agent loop has no vision and stalls on the image.
+ */
+export function isImageOnlyAttachmentTurn(files: any[] = []): boolean {
+  const list = Array.isArray(files) ? files : []
+  return list.length > 0 && list.every(isImageLikeAttachment)
+}
+
 export function hasDocumentAttachmentContext(conversationHistory: any[] = []): boolean {
   return (Array.isArray(conversationHistory) ? conversationHistory : []).some((message) =>
     parseFilesFromMessage(message).some(isDocumentLikeAttachment)
@@ -722,6 +741,23 @@ export function shouldRouteTextPromptThroughAgenticRuntime(prompt: string, files
   if (GOAL_COMMAND_RE.test(prompt)) return true
   if (files.length > 0) {
     const fileList = Array.isArray(files) ? files : []
+    // Image-only analysis turns ("resolver", "¿qué dice?", "transcribe",
+    // "resuelve esta derivada") need VISION, which lives ONLY in the plain
+    // /api/ai/generate path (base64 image → vision model, with auto-routing to
+    // a vision-capable model when the selected one is text-only). The queued
+    // agent-task / react-agent loop has no vision: it never receives the image,
+    // so the model spins blind until the 90s stale guard fires ("Sin
+    // actualizaciones recientes"). Route pure image-analysis turns to the
+    // vision path; keep the agentic loop only when the user explicitly asks to
+    // CREATE a deliverable (image/video/diagram/doc/code) from the image.
+    // An image-only turn can NEVER be served by the queued agent / react-agent
+    // loop — that loop has no vision, so it receives no image and stalls blind
+    // until the 90s stale guard. ALWAYS send image-only turns to the plain
+    // /api/ai/generate vision path, which reads the image (auto-routing to a
+    // vision-capable model when the selected one is text-only) and can analyse,
+    // transcribe, solve, or describe-to-create from it.
+    const everyFileIsImage = fileList.length > 0 && fileList.every(isImageLikeAttachment)
+    if (everyFileIsImage) return false
     const hasDocumentForSynthesis = fileList.some((file) =>
       isDocumentLikeAttachment(file) && !isSpreadsheetLikeAttachment(file)
     )

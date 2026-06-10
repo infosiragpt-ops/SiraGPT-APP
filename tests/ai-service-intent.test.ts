@@ -10,6 +10,7 @@ import {
   shouldAutoActivateVideoGeneration,
   shouldRouteThroughAgenticRuntime,
   shouldRouteTextPromptThroughAgenticRuntime,
+  isImageOnlyAttachmentTurn,
   shouldUseFastTextRoute,
   shouldAnswerFromExistingDocument,
   shouldEditExistingDocument,
@@ -168,6 +169,24 @@ describe("ai-service · deterministic intent routing", () => {
       ]),
       true,
     )
+  })
+
+  it("routes image-only analysis turns to the vision path (plain /generate), NOT the queued agent loop", () => {
+    // Regression: an image + "resolver" was sent to the queued agent-task /
+    // react-agent loop, which has no vision — the model never saw the image
+    // and the run stalled until the 90s stale guard. Image analysis must reach
+    // the plain /api/ai/generate vision path instead.
+    const img = { id: "f-img", name: "captura.png", mimeType: "image/png" }
+    assert.equal(isImageOnlyAttachmentTurn([img]), true)
+    // Every image-only turn goes to the vision path — even ones whose text
+    // mentions "imagen" or classifies as math; the vision-less agent loop can
+    // never handle an image, so it must never receive one.
+    for (const prompt of ["resolver", "resuelve esta derivada", "¿qué dice esta imagen?", "transcribe la fórmula", "describe la foto", "genera un diagrama a partir de esta imagen"]) {
+      assert.equal(shouldRouteTextPromptThroughAgenticRuntime(prompt, [img]), false, `image turn must go to vision: ${prompt}`)
+    }
+    // A document attachment is unaffected (still agentic).
+    assert.equal(isImageOnlyAttachmentTurn([{ id: "f-doc", name: "x.pdf", mimeType: "application/pdf" }]), false)
+    assert.equal(shouldRouteTextPromptThroughAgenticRuntime("resume este documento", [{ id: "f-doc", name: "x.pdf", mimeType: "application/pdf" }]), true)
   })
 
   it("still creates a Word file when Word is requested as the output format", async () => {
