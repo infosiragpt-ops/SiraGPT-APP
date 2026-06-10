@@ -28,7 +28,7 @@ import {
   Archive,
   EyeOff,
   CalendarDays,
-  FolderKanban,
+  FolderKanban, FileText,
   PenSquare,
   Shield,
 
@@ -755,6 +755,11 @@ export function AppSidebar() {
   }, [])
 
   const handleNewChat = () => {
+    // Guest preview (public home): starting a chat requires a session.
+    if (!user) {
+      router.push("/auth/login")
+      return
+    }
     markNewChatIntent()
     setCurrentChat(null);
     localStorage.removeItem('currentChatId');
@@ -1038,6 +1043,7 @@ export function AppSidebar() {
   const isOnGPTsPage = activePathname.startsWith('/gpts')
   const isOnParaphrasePage = activePathname.startsWith('/parafraseo')
   const isOnProjectsPage = activePathname.startsWith('/projects')
+  const isOnDocumentsPage = activePathname.startsWith('/documents')
 
   return (
     <Sidebar className="w-[--sidebar-width] border-r border-border/40 bg-sidebar" collapsible="icon">
@@ -1239,6 +1245,22 @@ export function AppSidebar() {
             icon={FolderKanban}
             active={isOnProjectsPage}
             pending={isPendingRoute("/projects")}
+            sidebarState={state}
+            markNavigationIntent={markNavigationIntent}
+            prefetchOnHover={prefetchOnHover}
+            navigate={navigate}
+            onNavigate={closeMobileSidebar}
+          />
+
+          {/* Documentos — galería de archivos generados/editados por la IA
+              (Word/Excel/PPT/PDF). Misma gramática visual que el resto. */}
+          <SidebarNavItem
+            href="/documents"
+            label="Documentos"
+            tooltip="Documentos"
+            icon={FileText}
+            active={isOnDocumentsPage}
+            pending={isPendingRoute("/documents")}
             sidebarState={state}
             markNavigationIntent={markNavigationIntent}
             prefetchOnHover={prefetchOnHover}
@@ -1751,6 +1773,30 @@ export function AppSidebar() {
       </SidebarContent>
 
       <SidebarFooter className="border-t border-border/40 p-2">
+        {/* Guest preview (public home): the user menu makes no sense
+            without a session — offer the way in instead. */}
+        {!user ? (
+          <div className={cn("flex flex-col gap-1.5 p-1", state === "closed" && "items-center")}>
+            <Button
+              size="sm"
+              onClick={() => router.push("/auth/login")}
+              className={cn("w-full rounded-xl text-[13px] font-semibold", state === "closed" && "h-8 w-8 p-0")}
+              title="Iniciar sesión"
+            >
+              {state === "closed" ? <User className="h-4 w-4" /> : "Iniciar sesión"}
+            </Button>
+            {state === "open" && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => router.push("/auth/register")}
+                className="w-full rounded-xl text-[13px] font-semibold"
+              >
+                Registrarse gratis
+              </Button>
+            )}
+          </div>
+        ) : (
         <SidebarMenu>
           <SidebarMenuItem>
             <div className="flex items-center w-full">
@@ -1909,6 +1955,7 @@ export function AppSidebar() {
             </div>
           </SidebarMenuItem>
         </SidebarMenu>
+        )}
       </SidebarFooter>
 
       {/* Shared Upgrade modal */}

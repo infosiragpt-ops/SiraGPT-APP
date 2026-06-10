@@ -415,6 +415,49 @@ Rules:
 - When ready, call the \`finalize\` tool with markdown that summarises what you delivered (numbers verified, file location, key findings). Do NOT write the final answer as free text — only via finalize.
 - Respond in the same language as the user. Keep thoughts short (1-2 sentences); save the depth for the finalize markdown. Each thought line should describe what you're about to do in concrete terms ("Construyendo el Excel con 30 filas en hoja 'Fuentes'", not just "Working on Excel").`;
 
+// ─── GET /api/agent/artifacts — galería "Mis documentos" ────────────────
+// Lista los documentos generados del usuario (DOCX/XLSX/PPTX/PDF…), más
+// recientes primero. Alimenta la página /documents (estilo Cowork): ver,
+// descargar y volver al chat de origen.
+router.get('/artifacts', authenticateToken, async (req, res) => {
+  try {
+    if (!prisma?.generatedArtifact?.findMany) {
+      return res.json({ ok: true, artifacts: [], total: 0 });
+    }
+    const limit = Math.max(1, Math.min(100, Number.parseInt(String(req.query.limit || '60'), 10) || 60));
+    const offset = Math.max(0, Number.parseInt(String(req.query.offset || '0'), 10) || 0);
+    const where = { userId: req.user.id };
+    const [rows, total] = await Promise.all([
+      prisma.generatedArtifact.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: offset,
+        take: limit,
+        select: {
+          id: true,
+          filename: true,
+          format: true,
+          mime: true,
+          sizeBytes: true,
+          createdAt: true,
+          chatId: true,
+        },
+      }),
+      prisma.generatedArtifact.count({ where }),
+    ]);
+    res.json({
+      ok: true,
+      total,
+      artifacts: rows.map((row) => ({
+        ...row,
+        downloadUrl: `/api/agent/artifact/${row.id}?name=${encodeURIComponent(row.filename || 'documento')}`,
+      })),
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'artifact list failed' });
+  }
+});
+
 // ─── GET /api/agent/artifact/:id ────────────────────────────────────────
 
 router.get('/artifact/:id', authenticateToken, async (req, res) => {
