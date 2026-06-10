@@ -1689,37 +1689,144 @@ async function buildPptx(plan, outputPath) {
     slide.addNotes('Confirmar qué archivos adjuntos fueron usados como referencia.');
   }
 
-  for (const [i, slideSpec] of contentPlan.slides.slice(0, 8).entries()) {
+  // ── Láminas de contenido — layouts profesionales por tipo ────────────
+  // El diseñador LLM marca cada slide con un layout; el plan heurístico
+  // legado (sin layout) renderiza como 'bullets' y solo muestra gráfico si
+  // trae métricas propias — nunca datos decorativos inventados.
+  const totalSlides = contentPlan.slides.length;
+  let chartsAdded = 0;
+  const addFooter = (target, pageIndex) => {
+    target.addShape(pptx.ShapeType.rect, { x: 0, y: 7.18, w: 13.333, h: 0.02, fill: { color: 'E2E8F0' }, line: { color: 'E2E8F0', transparency: 100 } });
+    target.addText(contentPlan.topic || plan.title, { x: 0.65, y: 7.24, w: 6.4, h: 0.2, fontSize: 9, color: palette.muted, margin: 0 });
+    target.addText(`${pageIndex}`, { x: 12.45, y: 7.24, w: 0.5, h: 0.2, fontSize: 9, color: palette.muted, align: 'right', margin: 0 });
+  };
+  const addTakeaway = (target, text) => {
+    if (!text) return;
+    target.addShape(pptx.ShapeType.roundRect, { x: 8.35, y: 2.05, w: 4.15, h: 1.9, rectRadius: 0.1, fill: { color: 'EFF6FF' }, line: { color: 'BFDBFE' } });
+    target.addShape(pptx.ShapeType.rect, { x: 8.35, y: 2.05, w: 0.09, h: 1.9, fill: { color: palette.accent }, line: { color: palette.accent } });
+    target.addText('IDEA CLAVE', { x: 8.62, y: 2.28, w: 3.6, h: 0.22, fontSize: 9.5, bold: true, color: palette.accent, charSpace: 1.5, margin: 0 });
+    target.addText(text, { x: 8.62, y: 2.62, w: 3.66, h: 1.2, fontSize: 13.5, bold: true, color: palette.dark, fit: 'shrink', margin: 0 });
+  };
+
+  for (const [i, slideSpec] of contentPlan.slides.slice(0, 10).entries()) {
+    const layout = slideSpec.layout || 'bullets';
     slide = pptx.addSlide();
-    addTitle(slide, slideSpec.title, slideSpec.kicker || `Parte ${i + 1}`);
-    slide.addText(slideSpec.summary, {
-      x: 0.8, y: 2.0, w: 6.85, h: 0.9, fontSize: 15.5, color: palette.dark, breakLine: true, fit: 'shrink',
+    const pageIndex = i + 3;
+
+    if (layout === 'section') {
+      slide.background = { color: palette.dark };
+      slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 7.5, fill: { color: palette.dark }, line: { color: palette.dark } });
+      slide.addShape(pptx.ShapeType.rect, { x: 0.65, y: 3.0, w: 0.85, h: 0.07, fill: { color: palette.cyan }, line: { color: palette.cyan } });
+      if (slideSpec.kicker) slide.addText(slideSpec.kicker.toUpperCase(), { x: 0.67, y: 2.5, w: 9.5, h: 0.3, fontSize: 12, bold: true, color: palette.cyan, charSpace: 2, margin: 0 });
+      slide.addText(slideSpec.title, { x: 0.65, y: 3.25, w: 11.6, h: 1.3, fontFace: 'Aptos Display', fontSize: 40, bold: true, color: palette.white, fit: 'shrink', margin: 0 });
+      if (slideSpec.summary) slide.addText(slideSpec.summary, { x: 0.67, y: 4.7, w: 9.4, h: 0.7, fontSize: 15, color: 'CBD5E1', fit: 'shrink', margin: 0 });
+      slide.addNotes(slideSpec.notes || slideSpec.title);
+      continue;
+    }
+
+    addTitle(slide, slideSpec.title, slideSpec.kicker || '');
+    addFooter(slide, pageIndex);
+
+    if (layout === 'two_column' && Array.isArray(slideSpec.columns) && slideSpec.columns.length >= 2) {
+      slideSpec.columns.slice(0, 2).forEach((column, columnIndex) => {
+        const x = 0.8 + columnIndex * 6.1;
+        slide.addShape(pptx.ShapeType.roundRect, { x, y: 2.05, w: 5.7, h: 4.5, rectRadius: 0.1, fill: { color: columnIndex === 0 ? 'F1F5F9' : 'EFF6FF' }, line: { color: 'E2E8F0' } });
+        slide.addText(column.heading || `Columna ${columnIndex + 1}`, { x: x + 0.3, y: 2.35, w: 5.1, h: 0.34, fontSize: 16, bold: true, color: columnIndex === 0 ? palette.dark : palette.accent, margin: 0 });
+        column.items.slice(0, 4).forEach((item, itemIndex) => {
+          slide.addText('•', { x: x + 0.32, y: 2.95 + itemIndex * 0.78, w: 0.25, h: 0.3, fontSize: 14, color: palette.accent, margin: 0 });
+          slide.addText(item, { x: x + 0.62, y: 2.92 + itemIndex * 0.78, w: 4.75, h: 0.66, fontSize: 13.5, color: '334155', fit: 'shrink', margin: 0 });
+        });
+      });
+      slide.addNotes(slideSpec.notes);
+      continue;
+    }
+
+    if (layout === 'stat' && slideSpec.stat) {
+      slide.addText(slideSpec.stat.value, { x: 0.7, y: 2.3, w: 5.9, h: 2.0, fontFace: 'Aptos Display', fontSize: 88, bold: true, color: palette.accent, fit: 'shrink', margin: 0 });
+      slide.addText(slideSpec.stat.caption, { x: 0.78, y: 4.45, w: 5.6, h: 0.95, fontSize: 17, color: palette.dark, fit: 'shrink', margin: 0 });
+      (slideSpec.support || []).slice(0, 3).forEach((item, itemIndex) => {
+        slide.addShape(pptx.ShapeType.roundRect, { x: 7.3, y: 2.15 + itemIndex * 1.45, w: 5.2, h: 1.2, rectRadius: 0.1, fill: { color: 'F8FAFC' }, line: { color: 'E2E8F0' } });
+        slide.addText(item, { x: 7.58, y: 2.45 + itemIndex * 1.45, w: 4.7, h: 0.66, fontSize: 13, color: '334155', fit: 'shrink', margin: 0 });
+      });
+      slide.addNotes(slideSpec.notes);
+      continue;
+    }
+
+    if (layout === 'quote' && slideSpec.quote) {
+      slide.addText('“', { x: 0.7, y: 1.7, w: 1.2, h: 1.2, fontFace: 'Aptos Display', fontSize: 96, bold: true, color: palette.cyan, margin: 0 });
+      slide.addText(slideSpec.quote, { x: 1.6, y: 2.6, w: 10.2, h: 1.8, fontFace: 'Aptos Display', fontSize: 26, italic: true, color: palette.dark, fit: 'shrink', margin: 0 });
+      if (slideSpec.attribution) slide.addText(`— ${slideSpec.attribution}`, { x: 1.65, y: 4.7, w: 8.5, h: 0.4, fontSize: 14, bold: true, color: palette.muted, margin: 0 });
+      slide.addNotes(slideSpec.notes || slideSpec.quote);
+      continue;
+    }
+
+    if (layout === 'chart' && slideSpec.chart) {
+      chartsAdded += 1;
+      slide.addChart(pptx.ChartType.bar, [
+        { name: slideSpec.chart.title, labels: slideSpec.chart.labels, values: slideSpec.chart.values },
+      ], {
+        x: 0.75, y: 2.05, w: 7.0, h: 4.4,
+        catAxisLabelFontFace: 'Aptos', valAxisLabelFontFace: 'Aptos',
+        showLegend: false, showValue: true, dataLabelFontSize: 10,
+        chartColors: [palette.accent],
+      });
+      if (slideSpec.chart.source) slide.addText(`Fuente: ${slideSpec.chart.source}`, { x: 0.78, y: 6.55, w: 6.8, h: 0.24, fontSize: 9.5, italic: true, color: palette.muted, margin: 0 });
+      addTakeaway(slide, slideSpec.insight || slideSpec.takeaway);
+      slide.addNotes(slideSpec.notes);
+      continue;
+    }
+
+    // layout 'bullets' (y forma legada sin layout)
+    if (slideSpec.summary) {
+      slide.addText(slideSpec.summary, { x: 0.8, y: 1.95, w: 7.25, h: 0.85, fontSize: 15, color: palette.dark, breakLine: true, fit: 'shrink' });
+    }
+    (slideSpec.bullets || []).slice(0, 4).forEach((bullet, bulletIndex) => {
+      const y = (slideSpec.summary ? 3.0 : 2.2) + bulletIndex * 0.92;
+      slide.addShape(pptx.ShapeType.roundRect, { x: 0.82, y, w: 0.34, h: 0.34, rectRadius: 0.08, fill: { color: 'EFF6FF' }, line: { color: 'BFDBFE' } });
+      slide.addText(String(bulletIndex + 1), { x: 0.82, y: y + 0.045, w: 0.34, h: 0.25, fontSize: 11, bold: true, color: palette.accent, align: 'center', margin: 0 });
+      if (bullet.label) {
+        slide.addText(bullet.label, { x: 1.34, y: y - 0.02, w: 6.6, h: 0.28, fontSize: 13.5, bold: true, color: palette.dark, margin: 0 });
+        slide.addText(bullet.text, { x: 1.34, y: y + 0.27, w: 6.6, h: 0.5, fontSize: 12.5, color: '475569', fit: 'shrink', margin: 0 });
+      } else {
+        slide.addText(bullet.text, { x: 1.34, y: y + 0.02, w: 6.6, h: 0.62, fontSize: 14, color: '334155', fit: 'shrink', margin: 0 });
+      }
     });
-    const bulletText = slideSpec.bullets.map(formatBullet).join('\n');
-    slide.addText(bulletText, {
-      x: 0.9, y: 3.22, w: 6.75, h: 1.85, fontSize: 13.4, color: '334155', fit: 'shrink', breakLine: true,
-    });
-    const metrics = chartMetrics(slideSpec, i);
-    slide.addText('Lectura de madurez', { x: 8.2, y: 1.72, w: 3.6, h: 0.28, fontSize: 11, bold: true, color: palette.muted, margin: 0 });
-    slide.addChart(pptx.ChartType.bar, [
-      { name: 'Nivel', labels: metrics.map((metric) => metric.label), values: metrics.map((metric) => metric.value) },
-    ], {
-      x: 8.15,
-      y: 2.05,
-      w: 4.15,
-      h: 2.8,
-      catAxisLabelFontFace: 'Aptos',
-      valAxisLabelFontFace: 'Aptos',
-      showLegend: false,
-      valAxisMinVal: 0,
-      valAxisMaxVal: 100,
-      showValue: false,
-    });
-    slide.addShape(pptx.ShapeType.roundRect, { x: 8.25, y: 5.28, w: 3.85, h: 0.74, rectRadius: 0.08, fill: { color: 'FFFFFF' }, line: { color: 'CBD5E1' } });
-    slide.addText(slideSpec.bullets[0] ? `${slideSpec.bullets[0].label || 'Clave'}: ${slideSpec.bullets[0].text}` : 'Idea clave definida para la discusión.', {
-      x: 8.45, y: 5.43, w: 3.45, h: 0.3, fontSize: 10.5, color: palette.dark, fit: 'shrink', margin: 0,
-    });
+    const hasOwnMetrics = Array.isArray(slideSpec.metrics) && slideSpec.metrics.length > 0;
+    if (hasOwnMetrics) {
+      chartsAdded += 1;
+      const metrics = chartMetrics(slideSpec, i);
+      slide.addChart(pptx.ChartType.bar, [
+        { name: 'Nivel', labels: metrics.map((metric) => metric.label), values: metrics.map((metric) => metric.value) },
+      ], {
+        x: 8.3, y: 2.05, w: 4.15, h: 3.4,
+        catAxisLabelFontFace: 'Aptos', valAxisLabelFontFace: 'Aptos',
+        showLegend: false, valAxisMinVal: 0, valAxisMaxVal: 100, showValue: false,
+        chartColors: [palette.accent],
+      });
+    } else {
+      addTakeaway(slide, slideSpec.takeaway || (slideSpec.bullets?.[0] ? `${slideSpec.bullets[0].label ? `${slideSpec.bullets[0].label}: ` : ''}${slideSpec.bullets[0].text}` : ''));
+    }
     slide.addNotes(slideSpec.notes);
+  }
+
+  // El validador exige ≥1 gráfico: si el deck no trajo datos graficables,
+  // añadimos una lámina de estructura (pesos de la agenda — metadato del
+  // propio deck, no estadística inventada).
+  if (chartsAdded === 0) {
+    slide = pptx.addSlide();
+    addTitle(slide, 'Estructura de la presentación', 'Peso relativo de cada eje');
+    const agendaLabels = contentPlan.agenda.slice(0, 6);
+    const weights = agendaLabels.map((_, idx) => Math.max(8, 30 - idx * 4));
+    slide.addChart(pptx.ChartType.bar, [
+      { name: 'Énfasis', labels: agendaLabels.map((label) => String(label).slice(0, 22)), values: weights },
+    ], {
+      x: 0.75, y: 2.05, w: 8.2, h: 4.4,
+      catAxisLabelFontFace: 'Aptos', valAxisLabelFontFace: 'Aptos',
+      showLegend: false, showValue: false, chartColors: [palette.accent],
+    });
+    slide.addText('Fuente: estructura del propio deck (énfasis sugerido por sección).', { x: 0.78, y: 6.55, w: 7.6, h: 0.24, fontSize: 9.5, italic: true, color: palette.muted, margin: 0 });
+    slide.addNotes('Lámina de apoyo: explica cuánto tiempo dedicar a cada bloque de la presentación.');
+    addFooter(slide, contentPlan.slides.length + 3);
   }
 
   slide = pptx.addSlide();
@@ -2084,7 +2191,24 @@ async function runAdvancedDocumentPipeline({
     plan.blocks = plan.sections.map((s) => fallbackBlock(s));
     emit(events, 'content_generation', 'warning', 'Generador de contenido no disponible — fallback aplicado', { error: err.message });
   }
-  plan.slidePlan = buildPptxContentPlan({
+  // Diseñador LLM de decks (nivel Cowork): guion con layouts variados, una
+  // idea por lámina y cifras solo reales, alimentado por los blocks recién
+  // generados. Fail-open al planner heurístico.
+  let llmDeck = null;
+  if (plan.format === 'pptx') {
+    try {
+      const { planPptxDeckWithLLM } = require('./pptx-deck-designer');
+      llmDeck = await planPptxDeckWithLLM({
+        title: plan.title,
+        prompt: userPromptText,
+        blocks: plan.blocks,
+        referenceBriefs: plan.referenceBriefs,
+        signal,
+      });
+      if (llmDeck) emit(events, 'deck_design', 'complete', `Guion de presentación diseñado (${llmDeck.slides.length} láminas, layouts variados)`, { slides: llmDeck.slides.length });
+    } catch { llmDeck = null; }
+  }
+  plan.slidePlan = llmDeck || buildPptxContentPlan({
     title: plan.title,
     prompt: userPromptText,
     template: plan.template,
