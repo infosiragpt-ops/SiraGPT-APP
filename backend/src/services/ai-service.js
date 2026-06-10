@@ -10,7 +10,7 @@ const axios = require('axios');
 const FormData = require('form-data');
 const PptxGenJS = require('pptxgenjs');
 const vectorPPTService = require('./vector-ppt-service');
-const { fitMessagesToContext } = require('./context-window');
+const { fitMessagesToContext, getCompletionLimit } = require('./context-window');
 const { evaluateResponse, buildCorrectivePrompt } = require('./quality-guard');
 const { getBreaker, CircuitBreakerError } = require('./circuit-breaker');
 const {
@@ -678,6 +678,7 @@ class AIService {
                     stream: true,
                     thinkingLevel: currentThinkingLevel(),
                     extra: extraPayload,
+                    maxOutputTokens: Math.min(getCompletionLimit(currentRuntimeModel), 16384),
                 });
                 const payload = providerPayload.payload;
 
@@ -961,6 +962,7 @@ class AIService {
                 stream: false,
                 thinkingLevel: currentThinkingLevel(),
                 extra: { temperature: normalizeTemperature(temperature) },
+                maxOutputTokens: Math.min(getCompletionLimit(model), 16384),
             });
             const resp = await client.chat.completions.create(
                 providerPayload.payload,

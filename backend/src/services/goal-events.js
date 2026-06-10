@@ -70,18 +70,31 @@ async function appendEvent({ goalRunId, type, payload } = {}) {
   if (!goalRunId || !type) return { ok: false, reason: 'invalid_input' };
 
   const safePayload = safeJson(payload, { type });
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+
+  // Retry loop: P2002 = unique seq conflict (concurrent append), P2034 =
+  // serialization failure (concurrent serializable tx). Both are transient —
+  // the next attempt will see the correct max seq and succeed.
+  for (let attempt = 0; attempt < 8; attempt += 1) {
     try {
-      const existing = await prisma.goalRunEvent.count({ where: { goalRunId: String(goalRunId) } });
-      const seq = existing + 1;
-      const created = await prisma.goalRunEvent.create({
-        data: {
-          goalRunId: String(goalRunId),
-          seq,
-          type: String(type),
-          payload: safePayload,
-        },
-      });
+      // Serializable transaction: the findFirst+create pair is atomic at
+      // the DB level, so two concurrent appends can never pick the same seq.
+      // Replaces the old count()-then-create pattern which had a TOCTOU race.
+      const created = await prisma.$transaction(async (tx) => {
+        const latest = await tx.goalRunEvent.findFirst({
+          where: { goalRunId: String(goalRunId) },
+          orderBy: { seq: 'desc' },
+          select: { seq: true },
+        });
+        const seq = (latest?.seq ?? 0) + 1;
+        return tx.goalRunEvent.create({
+          data: {
+            goalRunId: String(goalRunId),
+            seq,
+            type: String(type),
+            payload: safePayload,
+          },
+        });
+      }, { isolationLevel: 'Serializable' });
 
       // Roll up counters + phase + updatedAt on the parent row. Use
       // updateMany (no throw on missing) so a deleted row doesn't
@@ -98,11 +111,13 @@ async function appendEvent({ goalRunId, type, payload } = {}) {
         data: updateData,
       });
 
-      return { ok: true, seq, eventId: created.id };
+      return { ok: true, seq: created.seq, eventId: created.id };
     } catch (err) {
-      if (err?.code === 'P2002' && attempt < 2) {
-        // Concurrent append picked the same seq — retry with the next
-        // count() snapshot.
+      const isRetryable =
+        err?.code === 'P2002' || // unique seq conflict
+        err?.code === 'P2034' || // serialization failure
+        String(err?.message || '').includes('serializ'); // fallback for raw PG 40001
+      if (isRetryable && attempt < 7) {
         continue;
       }
       if (process.env.NODE_ENV !== 'test') {
@@ -124,7 +139,7 @@ async function listEventsSince({ goalRunId, lastSeq = -1, limit = 1000 } = {}) {
   }
   if (!goalRunId) return { ok: false, events: [], run: null, reason: 'invalid_input' };
 
-  const safeLimit = Math.max(1, Math.min(Number(limit) || 1000, 5000));
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 200, 200));
   const safeLastSeq = Number.isFinite(Number(lastSeq)) ? Number(lastSeq) : -1;
   try {
     const [events, run] = await Promise.all([
@@ -132,6 +147,7 @@ async function listEventsSince({ goalRunId, lastSeq = -1, limit = 1000 } = {}) {
         where: { goalRunId: String(goalRunId), seq: { gt: safeLastSeq } },
         orderBy: { seq: 'asc' },
         take: safeLimit,
+        select: { id: true, seq: true, type: true, payload: true, createdAt: true },
       }),
       prisma.goalRun.findUnique({ where: { id: String(goalRunId) } }),
     ]);
