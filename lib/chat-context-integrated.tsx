@@ -2549,7 +2549,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         return /\.(docx?|xlsx?|pptx?|pdf|txt|md|csv)$/i.test(name)
           || /(wordprocessingml|spreadsheetml|presentationml|msword|ms-excel|ms-powerpoint|pdf|text\/)/i.test(mime);
       });
-      const editLooksLikeDocEdit = /\b(agrega\w*|a[ñn]ad\w*|borr\w*|elimin\w*|quit\w*|reemplaz\w*|complet\w*|rellen\w*|llen\w*|edit\w*|modific\w*|corrig\w*|insert\w*|cambi\w*|actualiz\w*)\b/i.test(newContent);
+      const editVerbHay = `${newContent} ${newContent.replace(/([a-zA-Z])\1+/g, '$1')}`;
+      const editLooksLikeDocEdit = /\b(agrega\w*|a[ñn]ad\w*|borr\w*|elimin\w*|quit\w*|reemplaz\w*|complet\w*|rellen\w*|llen\w*|edit\w*|modific\w*|corrig\w*|insert\w*|cambi\w*|actualiz\w*)\b/i.test(editVerbHay);
       if (editHasDocAttachment && editLooksLikeDocEdit && editFileIds.length) {
         let docFinalMsg: any = null;
         let docStage = 'Editando documento';
