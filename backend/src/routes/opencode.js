@@ -126,6 +126,41 @@ router.get('/files', authenticateToken, requireConfigured, async (req, res) => {
   }
 });
 
+// Phase B — drive the code-runner sidecar that installs deps + starts the
+// project's dev server, so the preview can iframe a REAL running Node/Vite/Next
+// app. `devUrl` is where the browser reaches the dev server (published port).
+const RUNNER_CTRL = process.env.CODE_RUNNER_URL || 'http://runner:4097';
+const RUNNER_DEV_URL = process.env.CODE_RUNNER_DEV_URL || 'http://localhost:5173';
+
+router.post('/run', authenticateToken, requireConfigured, async (req, res) => {
+  try {
+    const r = await fetch(`${RUNNER_CTRL}/run`, { method: 'POST' });
+    const j = await r.json().catch(() => ({}));
+    return res.json({ ...j, devUrl: RUNNER_DEV_URL });
+  } catch (err) {
+    return res.status(502).json({ error: 'runner_unreachable', message: err.message });
+  }
+});
+
+router.get('/run/status', authenticateToken, requireConfigured, async (req, res) => {
+  try {
+    const r = await fetch(`${RUNNER_CTRL}/status`);
+    const j = await r.json().catch(() => ({}));
+    return res.json({ ...j, devUrl: RUNNER_DEV_URL });
+  } catch (err) {
+    return res.status(502).json({ error: 'runner_unreachable', message: err.message });
+  }
+});
+
+router.post('/run/stop', authenticateToken, requireConfigured, async (req, res) => {
+  try {
+    await fetch(`${RUNNER_CTRL}/stop`, { method: 'POST' }).catch(() => {});
+    return res.json({ ok: true });
+  } catch (err) {
+    return res.status(502).json({ error: 'runner_unreachable', message: err.message });
+  }
+});
+
 // Proxy the engine's SSE event stream to the browser.
 router.get('/events', authenticateToken, requireConfigured, async (req, res) => {
   const client = createOpencodeClient();

@@ -202,6 +202,33 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # ── Code runner (Phase B) — runs the agent's project (bun install + dev) ────
+  # Shares the OpenCode workspace volume so it sees the multi-file project the
+  # agent wrote, then serves its dev server on 5173 (published) for the preview.
+  # Same `opencode` profile: docker compose --profile opencode up.
+  runner:
+    image: oven/bun:1
+    profiles: ["opencode"]
+    restart: unless-stopped
+    working_dir: /workspace
+    command: ["bun", "/code-runner.js"]
+    environment:
+      DEV_PORT: "5173"
+      CTRL_PORT: "4097"
+      RUNNER_WORKDIR: "/workspace"
+    volumes:
+      - opencode_workspace:/workspace
+      - ./scripts/code-runner.js:/code-runner.js:ro
+    ports:
+      - "5173:5173"   # dev server → preview iframe
+    expose:
+      - "4097"        # control API (backend → runner)
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   pgdata:
   uploads_data:
