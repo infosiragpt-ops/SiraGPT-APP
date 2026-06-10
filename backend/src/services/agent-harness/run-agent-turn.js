@@ -35,7 +35,7 @@ function harnessEnabled(env = process.env) {
   return !['0', 'false', 'off', 'no'].includes(String(raw).trim().toLowerCase());
 }
 
-function buildHarnessTools(existingNames) {
+function buildHarnessTools(existingNames, opts = {}) {
   const defs = [];
   const { buildWebFetchTool } = require('./tools/web-fetch-tool');
   const { buildRunJavascriptTool } = require('./tools/run-javascript-tool');
@@ -49,6 +49,20 @@ function buildHarnessTools(existingNames) {
       try { console.warn('[agent-harness] tool registration failed:', err && err.message); } catch (_) { /* noop */ }
     }
   }
+
+  // Sandbox document-editing tools — only when a session is active.
+  if (opts.sandboxSessionId) {
+    try {
+      const { buildSandboxDocTools } = require('./tools/sandbox-doc-tools');
+      const sandboxDefs = buildSandboxDocTools(opts.sandboxSessionId);
+      for (const def of sandboxDefs) {
+        if (!existingNames.has(def.name)) defs.push(def);
+      }
+    } catch (err) {
+      try { console.warn('[agent-harness] sandbox tools registration failed:', err && err.message); } catch (_) { /* noop */ }
+    }
+  }
+
   return defs;
 }
 
@@ -78,6 +92,7 @@ async function attachHarness(opts = {}) {
     describeTool = null,
     mcpEnabled = true,
     provider = null,
+    sandboxSessionId = null,
   } = opts;
 
   const registry = createToolRegistry();
@@ -95,7 +110,8 @@ async function attachHarness(opts = {}) {
   }
 
   // Harness-native tools (registry-defined: Zod validation + tiers).
-  const harnessDefs = buildHarnessTools(existingNames);
+  // When sandboxSessionId is present the 4 sandbox_* document tools are added.
+  const harnessDefs = buildHarnessTools(existingNames, { sandboxSessionId });
   for (const def of harnessDefs) registry.register(def);
   const harnessTools = harnessDefs.map((def) => registry.toAgentTool(def.name));
 

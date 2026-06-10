@@ -1,5 +1,6 @@
 - [spawn EIO in production](spawn-eio-production.md) — spawn() can throw synchronously (EIO) in prod Nix env; always wrap Promise executor with try-catch in commandExists-style helpers.
 - [Orphaned task log dedup](orphaned-task-dedup.md) — P2003 (foreign-key userId missing) fires per concurrent upsert call; use process-level Set to log once per taskId lifetime.
+- [Document sandbox architecture](doc-sandbox-architecture.md) — session-manager + remote-driver + 4 sandbox_* tools; activated by sandboxSessionId in attachHarness(); Lenovo remote via SANDBOX_SERVICE_URL+SANDBOX_API_KEY.
 - [goalRunEvent seq race](goal-run-event-seq-race.md) — count()→create TOCTOU; use $transaction Serializable + findFirst(max seq) + catch P2002/P2034; cap listEventsSince at 200 + select.
 - [OpenRouter default max_tokens](openrouter-default-max-tokens.md) — if max_tokens absent, OpenRouter uses model max (65536); always pass maxOutputTokens capped at 16384 to buildProviderChatPayload.
 - [Duplicate message dedup](duplicate-message-dedup.md) — role comparisons must be case-insensitive; run dedupeMessages on filtered list too.

@@ -22,23 +22,28 @@
  *   air-gapped install.
  */
 
-const e2b = require('./e2b-sandbox');
-const local = require('./local-sandbox');
+const e2b    = require('./e2b-sandbox');
+const local  = require('./local-sandbox');
+const remote = require('./remote-driver');
 
-const DEFAULT_PREFERENCE = ['e2b', 'local'];
+// Priority: remote (Docker/Lenovo) > e2b > local
+const DEFAULT_PREFERENCE = ['remote', 'e2b', 'local'];
 
 function readPreference(env = process.env) {
   const raw = String(env.SANDBOX_PREFERENCE || '').trim().toLowerCase();
   if (!raw) return [...DEFAULT_PREFERENCE];
-  const parts = raw.split(/[,\s]+/).filter(Boolean).filter((p) => p === 'e2b' || p === 'local');
+  const valid = new Set(['remote', 'e2b', 'local']);
+  const parts = raw.split(/[,\s]+/).filter(Boolean).filter((p) => valid.has(p));
   return parts.length > 0 ? parts : [...DEFAULT_PREFERENCE];
 }
 
 function describeBackends(env = process.env) {
-  const e2bCfg = e2b.resolveE2BConfig(env);
+  const e2bCfg    = e2b.resolveE2BConfig(env);
+  const remoteCfg = remote.resolveRemoteConfig(env);
   return {
-    e2b: { available: e2bCfg.enabled, configured: e2bCfg.configured },
-    local: { available: local.resolveLocalConfig(env).enabled },
+    remote: { available: remoteCfg.enabled, url: remoteCfg.url || null },
+    e2b:    { available: e2bCfg.enabled, configured: e2bCfg.configured },
+    local:  { available: local.resolveLocalConfig(env).enabled },
     preference: readPreference(env),
   };
 }
@@ -48,11 +53,24 @@ function describeBackends(env = process.env) {
  * Returns the backend's native result object plus a `backend` field
  * tagging which one served the request. When no backend is enabled,
  * returns `{ ok: false, code: 'sandbox_no_backend', backend: 'none' }`.
+ *
+ * Backend priority (highest isolation first):
+ *   remote — Lenovo Docker sandbox via HTTPS (SANDBOX_SERVICE_URL + SANDBOX_API_KEY)
+ *   e2b    — Firecracker cloud sandbox (E2B_API_KEY)
+ *   local  — child_process with timeout/output cap (always available)
  */
 async function executeCode(args = {}, env = process.env, opts = {}) {
   const preference = readPreference(env);
 
   for (const backend of preference) {
+    if (backend === 'remote') {
+      const cfg = remote.resolveRemoteConfig(env);
+      if (!cfg.enabled) continue;
+      const out = await remote.executeRemote(args, env, opts);
+      // If remote is unreachable and not set to remote-only, fall through.
+      if (out.code === 'remote_unreachable' && !cfg.remoteOnly) continue;
+      return out;
+    }
     if (backend === 'e2b') {
       const cfg = e2b.resolveE2BConfig(env);
       if (!cfg.enabled) continue;
@@ -62,11 +80,6 @@ async function executeCode(args = {}, env = process.env, opts = {}) {
     if (backend === 'local') {
       const cfg = local.resolveLocalConfig(env);
       if (!cfg.enabled) continue;
-      // The local backend supports python / node / bash; e2b also
-      // supports javascript / typescript / r. If the caller requested
-      // a language only e2b serves and e2b is disabled, the local
-      // backend will reply `sandbox_language_not_allowed` — surface
-      // the error verbatim so the caller can degrade gracefully.
       const out = await local.executeLocal(args, env, opts);
       return { ...out, backend: 'local' };
     }
@@ -75,7 +88,7 @@ async function executeCode(args = {}, env = process.env, opts = {}) {
   return {
     ok: false,
     code: 'sandbox_no_backend',
-    message: 'no sandbox backend is enabled (set E2B_API_KEY or LOCAL_SANDBOX_ENABLED=1)',
+    message: 'no sandbox backend enabled (set SANDBOX_SERVICE_URL+SANDBOX_API_KEY, E2B_API_KEY, or LOCAL_SANDBOX_ENABLED=1)',
     backend: 'none',
   };
 }
