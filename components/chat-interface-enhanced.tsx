@@ -7463,8 +7463,19 @@ REWRITTEN TEXT:`;
     }
 
     const deterministicAgenticIntent = classifyIntentFastPath(msg);
-    const shouldStartAgenticLoopImmediately = deterministicAgenticIntent
-      && ['web_search', 'agent_task', 'math', 'viz', 'chart', 'ppt'].includes(deterministicAgenticIntent);
+    // Document edits must NEVER fall into the ambiguity/clarify path: an
+    // attached document + an edit verb ("borra…", "agrega…", "reemplaza…")
+    // is a fully-specified instruction for the source-preserving editor.
+    const hasDocumentAttachment = (filesToSend || []).some((f: any) => {
+      const name = String(f?.name || f?.originalName || f?.filename || '');
+      const mime = String(f?.mimeType || f?.type || '');
+      return /\.(docx?|xlsx?|pptx?|pdf|txt|md|csv)$/i.test(name)
+        || /(wordprocessingml|spreadsheetml|presentationml|msword|ms-excel|ms-powerpoint|pdf|text\/)/i.test(mime);
+    });
+    const looksLikeDocumentEditInstruction = /\b(agrega\w*|a[ñn]ad\w*|borr\w*|elimin\w*|quit\w*|reemplaz\w*|complet\w*|rellen\w*|llen\w*|edit\w*|modific\w*|corrig\w*|insert\w*|cambi\w*|actualiz\w*)\b/i.test(msg);
+    const shouldStartAgenticLoopImmediately = (deterministicAgenticIntent
+      && ['web_search', 'agent_task', 'math', 'viz', 'chart', 'ppt'].includes(deterministicAgenticIntent))
+      || (hasDocumentAttachment && looksLikeDocumentEditInstruction);
 
     if (shouldStartAgenticLoopImmediately) {
       try {

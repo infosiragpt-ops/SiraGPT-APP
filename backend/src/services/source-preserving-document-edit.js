@@ -460,11 +460,31 @@ function selectSourcePreservingDocumentSet({ requestText = '', sourceFiles = [],
     && !explicitCurrentBase
     && isSourcePreservingEditRequest(requestText, priorDocx);
 
+  // Needle continuity: "borra/reemplaza X" donde X NO existe en el archivo
+  // re-adjuntado pero el hilo tiene un artifact editado más reciente (el
+  // usuario itera sobre "el documento" tras una edición previa, p.ej. borrar
+  // parte de una referencia que agregamos nosotros). Editar el original
+  // fallaría con "No encontré el texto…"; re-basamos sobre el artifact.
+  const continuityNeedle = (() => {
+    const norm = normalizeText(requestText);
+    const pair = extractReplacementPair(norm);
+    if (pair?.needle) return pair.needle;
+    if (clauseIsDelete(norm)) return extractDeletionNeedle(norm);
+    return '';
+  })();
+  const needleMissingInCurrentUpload = Boolean(
+    continuityNeedle
+    && currentDocx.length
+    && priorDocx.length
+    && !explicitCurrentBase
+    && !normalizeText(String(currentDocx[0].extractedText || '')).includes(normalizeText(continuityNeedle))
+  );
+
   let sourceFile = null;
   let selectionReason = 'first_supported_file';
-  if (!explicitCurrentBase && priorDocx.length && (wantsGeneral || wantsReferenceIntegration || currentSupported.length === 0 || generatedContinuation)) {
+  if (!explicitCurrentBase && priorDocx.length && (wantsGeneral || wantsReferenceIntegration || currentSupported.length === 0 || generatedContinuation || needleMissingInCurrentUpload)) {
     sourceFile = priorDocx[0];
-    selectionReason = 'latest_generated_docx_artifact';
+    selectionReason = needleMissingInCurrentUpload ? 'artifact_continuity_needle' : 'latest_generated_docx_artifact';
   } else if (!explicitCurrentBase && priorSupported.length && currentSupported.length === 0) {
     sourceFile = priorSupported[0];
     selectionReason = 'latest_generated_artifact';
@@ -2940,11 +2960,17 @@ function clauseMentionsCover(clauseNorm) {
 }
 
 function extractDeletionNeedle(clauseNorm = '') {
+  // Texto entrecomillado = needle literal del usuario ("borra la parte de
+  // \"15144\""). Antes se diluía con las palabras de relleno de la frase y
+  // el borrado fallaba por needle inexistente.
+  const quoted = extractQuotedValues(clauseNorm);
+  if (quoted.length && quoted[0].length >= 2) return quoted[0].slice(0, 180);
   const deletionClause = String(clauseNorm || '')
     .split(/\b(?:y|,|;)\s+(?:valid\w*|verific\w*|comprueb\w*|asegur\w*|revis\w*)\b/)[0] || clauseNorm;
   const cleaned = deletionClause
+    .replace(/\b(?:la\s+)?parte\s+(?:de|del|donde|que\s+dice)\b/g, ' ')
     .replace(/\b(?:quit\w*|elimin\w*|borr\w*)\b/g, ' ')
-    .replace(/\b(?:del|de la|de el|el|la|los|las|un|una|este|esta|mi|mismo|misma|documento|archivo|word|docx|contenido|especifico|especifica|que diga|donde dice|final)\b/g, ' ')
+    .replace(/\b(?:del|de la|de el|el|la|los|las|un|una|este|esta|mi|mismo|misma|documento|archivo|word|docx|contenido|especifico|especifica|que diga|donde dice|dice|diga|final)\b/g, ' ')
     .replace(/[:"'“”‘’.,;!?(){}\[\]]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
