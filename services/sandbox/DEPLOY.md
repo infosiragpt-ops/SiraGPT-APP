@@ -32,30 +32,28 @@ a dedicated server is "the muscle of the sandbox".
 - `.env.example` — config template (the real `.env` lives only on the host).
 
 ## Server deploy (run on the Lenovo as `lenovo`)
+One script does it all (idempotent, no secrets inside):
 ```bash
-# 1. code
-mkdir -p /home/lenovo/siragpt-sandbox && cd /home/lenovo/siragpt-sandbox
-#   (rsync just services/sandbox/* here — see scripts/server-setup.sh)
-
-# 2. runner image
-docker build -t siragpt-doc-sandbox:latest runner
-
-# 3. config: strong key (ALSO saved to ~/secrets/lenovo-server.txt)
-KEY=$(openssl rand -hex 32)
-cp .env.example .env && sed -i "s/^SANDBOX_API_KEY=.*/SANDBOX_API_KEY=$KEY/" .env
-
-# 4. service
-sudo cp siragpt-sandbox.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now siragpt-sandbox
-curl -s http://127.0.0.1:4000/health    # → {"ok":true,"docker":true,...}
-
-# 5. tunnel ingress (add to the EXISTING cloudflared config; do NOT touch the
-#    SSH ingress). In ~/.cloudflared/config.yml under `ingress:`:
-#      - hostname: sandbox.chatagic.com
-#        service: http://localhost:4000
-#    then: cloudflared tunnel route dns <TUNNEL> sandbox.chatagic.com
-#    sudo systemctl restart cloudflared
+# transfer just this directory, then:
+cd /home/lenovo/siragpt-sandbox
+bash scripts/server-setup.sh            # add --harden-ssh to also lock down SSH
 ```
+What it does (and what was done in production):
+1. **Runner image** — `docker build -t siragpt-doc-sandbox:latest runner`.
+2. **Config** — generates a strong `SANDBOX_API_KEY` into `.env` (chmod 600) and
+   `~/secrets/lenovo-server.txt`.
+3. **Service** — installs `siragpt-sandbox.service`, binds **127.0.0.1:4000**,
+   `curl http://127.0.0.1:4000/health` → `{"ok":true,"docker":true,...}`.
+4. **Dedicated tunnel** — creates a **separate named** cloudflared tunnel
+   (`siragpt-sandbox`) with its OWN config (`~/.cloudflared/sandbox-config.yml`)
+   and its OWN systemd unit (`cloudflared-sandbox.service`), routes
+   `sandbox.chatagic.com` to it by explicit tunnel UUID, and runs it. The
+   host's existing cloudflared config (SSH ingress + other sites) is **never
+   touched** — a mistake here cannot break SSH access or the other tunnels.
+
+> Why a separate tunnel and not an extra ingress in the shared config? The only
+> way into this host is the Cloudflare SSH tunnel; corrupting the shared config
+> would mean a permanent lockout. An isolated tunnel removes that risk entirely.
 
 ## Validate from anywhere
 ```bash
