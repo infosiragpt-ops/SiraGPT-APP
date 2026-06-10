@@ -1309,9 +1309,9 @@ function detectAgentRuntimeProvider(modelId) {
   return null;
 }
 
-function buildOpenAICompatibleClient(target) {
+function buildOpenAICompatibleClient(target, env = process.env) {
   if (!target || !target.apiKeyEnv) return null;
-  const apiKey = process.env[target.apiKeyEnv];
+  const apiKey = env[target.apiKeyEnv];
   if (!apiKey) return null;
   const opts = { apiKey };
   if (target.baseURL) opts.baseURL = target.baseURL;
@@ -1350,6 +1350,45 @@ function normalizeAgentRuntimeModel(selectedModel) {
     detected,
     remapped: !detected,
   };
+}
+
+function agentModelFailoverEnabled(env = process.env) {
+  const flag = String(env.AGENT_TASK_MODEL_FAILOVER || '').trim();
+  if (flag === '0') return false;
+  // Determinismo en tests: los shards de CI exportan keys dummy que aquí
+  // dispararían llamadas de red reales en el reintento.
+  if (String(env.NODE_ENV) === 'test' && flag !== '1') return false;
+  return true;
+}
+
+/**
+ * Runtime de respaldo cross-provider para cuando el modelo seleccionado
+ * falla EN EJECUCIÓN (402 sin créditos, 401, caída del proveedor) aunque
+ * su key exista. Elige el primer proveedor DISTINTO al que acaba de
+ * fallar que tenga key configurada. Devuelve null si no hay alternativa.
+ */
+function resolveAgentModelFailoverRuntime(profile, env = process.env) {
+  const failedProvider = String(profile?.detected?.provider || 'OpenAI');
+  const fallbackModel = String(
+    env.AGENT_TASK_OPENAI_MODEL || env.AGENT_TASK_RUNTIME_MODEL || 'gpt-4o-mini'
+  ).trim() || 'gpt-4o-mini';
+  const candidates = [
+    { provider: 'OpenAI', apiKeyEnv: 'OPENAI_API_KEY', baseURL: null, model: fallbackModel },
+    {
+      provider: 'Gemini',
+      apiKeyEnv: 'GEMINI_API_KEY',
+      baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+      model: env.GEMINI_VISION_MODEL || 'gemini-2.5-flash',
+    },
+    { provider: 'DeepSeek', apiKeyEnv: 'DEEPSEEK_API_KEY', baseURL: 'https://api.deepseek.com', model: 'deepseek-v4-flash' },
+  ];
+  for (const target of candidates) {
+    if (target.provider === failedProvider) continue;
+    if (!env[target.apiKeyEnv]) continue;
+    const client = buildOpenAICompatibleClient(target, env);
+    if (client) return { client, model: target.model, provider: target.provider };
+  }
+  return null;
 }
 
 // Resolve the OpenAI-compatible client the agent runtime should drive.
@@ -2746,7 +2785,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       });
     }
 
-    const result = await reactAgent.run(openai, {
+    const reactRunArgs = {
       query: goal,
       tools,
       maxSteps: effectiveMaxSteps,
@@ -2799,7 +2838,33 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         });
         currentStepId = null;
       },
-    });
+    };
+
+    let result = await reactAgent.run(openai, reactRunArgs);
+
+    // ── Cross-provider model failover (OpenClaw-style) ─────────────────
+    // The tool stack (búsquedas científicas key-free, documentos, etc.) es
+    // agnóstico del modelo: si el modelo seleccionado muere (402 sin
+    // créditos, 401 key inválida, caída del proveedor), la tarea NO debe
+    // morir con él. Reintentamos UNA vez con el primer runtime sano de
+    // otro proveedor antes de degradar la respuesta.
+    const modelFailed = String(result.stoppedReason || '').startsWith('model_error');
+    if (modelFailed && agentModelFailoverEnabled()) {
+      const failoverRuntime = resolveAgentModelFailoverRuntime(runtimeModelProfile);
+      if (failoverRuntime?.client) {
+        console.warn(`[agent-task] model failover: ${runtimeModelProfile.runtimeModel} → ${failoverRuntime.provider}:${failoverRuntime.model} (task ${taskId})`);
+        emit({
+          type: 'checkpoint',
+          label: `Modelo de respaldo activado: ${failoverRuntime.model}`,
+          status: 'warning',
+          payload: { from: runtimeModelProfile.runtimeModel, to: failoverRuntime.model, reason: result.stoppedReason },
+        });
+        result = await reactAgent.run(failoverRuntime.client, {
+          ...reactRunArgs,
+          model: failoverRuntime.model,
+        });
+      }
+    }
 
     let finalMarkdown = result.finalAnswer || '';
     let stoppedReason = result.stoppedReason;
@@ -3209,6 +3274,8 @@ module.exports = {
   buildAttachmentUnavailableFallbackAnswer,
   buildLlmAttachmentRecoveryAnswer,
   pickAttachmentRecoveryRuntime,
+  agentModelFailoverEnabled,
+  resolveAgentModelFailoverRuntime,
   parseSpreadsheetCitationRows,
   parseCitationAuthors,
   resolveAttachmentFallbackMarkdown,

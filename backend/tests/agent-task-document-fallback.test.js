@@ -437,6 +437,33 @@ test('buildLlmAttachmentRecoveryAnswer returns null without provider keys or on 
   );
 });
 
+test('agentModelFailoverEnabled + resolveAgentModelFailoverRuntime gate and pick cross-provider', () => {
+  clearAgentModules();
+  const { agentModelFailoverEnabled, resolveAgentModelFailoverRuntime } = require('../src/services/agents/agent-task-runner');
+
+  assert.equal(agentModelFailoverEnabled({}), true);
+  assert.equal(agentModelFailoverEnabled({ AGENT_TASK_MODEL_FAILOVER: '0' }), false);
+  assert.equal(agentModelFailoverEnabled({ NODE_ENV: 'test' }), false);
+  assert.equal(agentModelFailoverEnabled({ NODE_ENV: 'test', AGENT_TASK_MODEL_FAILOVER: '1' }), true);
+
+  // OpenRouter (kimi) falló → debe elegir OpenAI con el modelo de runtime.
+  const profile = { detected: { provider: 'OpenRouter' }, runtimeModel: 'moonshotai/kimi-k2.6' };
+  const picked = resolveAgentModelFailoverRuntime(profile, { OPENAI_API_KEY: 'k' });
+  assert.equal(picked.provider, 'OpenAI');
+  assert.equal(picked.model, 'gpt-4o-mini');
+  assert.ok(picked.client);
+
+  // El proveedor que falló se excluye aunque tenga key.
+  const openaiFailed = resolveAgentModelFailoverRuntime(
+    { detected: { provider: 'OpenAI' }, runtimeModel: 'gpt-4o' },
+    { OPENAI_API_KEY: 'k', GEMINI_API_KEY: 'g' },
+  );
+  assert.equal(openaiFailed.provider, 'Gemini');
+
+  // Sin keys alternativas → null.
+  assert.equal(resolveAgentModelFailoverRuntime(profile, {}), null);
+});
+
 test('runAgentTaskJob: recovers weak tool-unavailable attachment final answer', async () => {
   const restoreEnv = rememberEnv(['OPENAI_API_KEY', 'AGENT_TASK_STORE_DIR', 'NODE_ENV', 'AGENT_TASK_ATTACHMENT_FASTPATH', 'AGENT_TASK_LLM_RECOVERY']);
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'siragpt-doc-tool-unavailable-'));
