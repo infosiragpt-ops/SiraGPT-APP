@@ -262,3 +262,84 @@ test('a successful search records searches + posts; unconfigured records its own
   assert.equal(snap.unconfigured, 1);
   assert.equal(snap.successRate, 1);
 });
+
+// ── malformed-payload hardening ───────────────────────────────────────
+
+test('isUsablePayload accepts payloads with choices and/or citations, rejects the rest', () => {
+  const u = xSearch.isUsablePayload;
+  assert.equal(u({ choices: [] }), true);
+  assert.equal(u({ citations: [] }), true);
+  assert.equal(u({ choices: [{ message: { citations: [] } }] }), true);
+  // missing both
+  assert.equal(u({ model: 'grok-4.3', usage: { total_tokens: 5 } }), false);
+  // non-object / wrong shapes
+  assert.equal(u(null), false);
+  assert.equal(u(undefined), false);
+  assert.equal(u(42), false);
+  assert.equal(u('not json'), false);
+  assert.equal(u([{ choices: [] }]), false); // arrays are not usable objects
+  // wrong field types (must be arrays)
+  assert.equal(u({ choices: 'x', citations: 'y' }), false);
+});
+
+test('search returns an empty-but-valid result (no throw) on a payload missing choices/citations', async () => {
+  // 2xx body that parses fine but carries neither choices nor citations.
+  const fetchImpl = async () => jsonRes({ model: 'grok-4.3', usage: { total_tokens: 7 } });
+  const out = await xSearch.search('breaking topic', { env: { XAI_API_KEY: 'k' }, fetchImpl });
+  assert.equal(out.configured, true);
+  assert.equal(out.summary, '');
+  assert.deepEqual(out.results, []);
+  assert.deepEqual(out.citations, []);
+  assert.match(out.note, /malformed/i);
+  // The raw query never leaks into the note.
+  assert.equal(out.note.includes('breaking topic'), false);
+  const snap = xMetrics.snapshot();
+  assert.equal(snap.searches, 0); // NOT counted as a success
+  assert.equal(snap.errors, 1);
+  assert.equal(snap.topErrorCodes[0].code, 'malformed_payload');
+});
+
+test('search does NOT throw when the 2xx body fails to parse as JSON', async () => {
+  // res.ok is true but res.json() rejects (truncated / non-JSON body).
+  const fetchImpl = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => { throw new SyntaxError('Unexpected end of JSON input'); },
+  });
+  const out = await xSearch.search('q', { env: { XAI_API_KEY: 'k' }, fetchImpl });
+  assert.equal(out.configured, true);
+  assert.deepEqual(out.results, []);
+  assert.match(out.note, /malformed/i);
+  const snap = xMetrics.snapshot();
+  assert.equal(snap.searches, 0);
+  assert.equal(snap.errors, 1);
+  assert.equal(snap.topErrorCodes[0].code, 'malformed_payload');
+});
+
+test('a malformed-payload JSON-parse failure is NOT retried (non-transient)', async () => {
+  delete process.env.X_SEARCH_RETRY_DISABLED;
+  process.env.X_SEARCH_MAX_RETRIES = '3';
+  process.env.X_SEARCH_RETRY_BASE_MS = '1';
+  let n = 0;
+  const fetchImpl = async () => {
+    n += 1;
+    return { ok: true, status: 200, json: async () => { throw new Error('bad json'); } };
+  };
+  const out = await xSearch.search('q', { env: { XAI_API_KEY: 'k' }, fetchImpl });
+  assert.equal(n, 1); // parse failure must not trigger a retry loop
+  assert.deepEqual(out.results, []);
+  assert.match(out.note, /malformed/i);
+});
+
+test('a citations-only payload (no choices) still succeeds with an empty summary', async () => {
+  // Regression guard: the malformed gate must not swallow a valid, common shape.
+  const fetchImpl = async () => jsonRes({ citations: ['https://x.com/a/1'] });
+  const out = await xSearch.search('q', { env: { XAI_API_KEY: 'k' }, fetchImpl });
+  assert.equal(out.configured, true);
+  assert.equal(out.summary, '');
+  assert.equal(out.results.length, 1);
+  assert.equal(out.note, undefined); // happy path: no malformed note
+  const snap = xMetrics.snapshot();
+  assert.equal(snap.searches, 1);
+  assert.equal(snap.errors, 0);
+});

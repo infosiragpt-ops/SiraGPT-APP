@@ -336,3 +336,93 @@ test('searchAll skips code search when unauthenticated', async () => {
   assert.equal(out.authenticated, false);
   assert.ok(!seen.some((u) => u.includes('/search/code')), 'code search not attempted without token');
 });
+
+// ── Resilience: malformed payloads never reject / drop the whole batch ──
+
+test('rankRepos is stable on a non-array input', () => {
+  const { rankRepos } = gh._internal;
+  // Must not throw on .slice/.sort of a non-array.
+  assert.deepEqual(rankRepos(undefined), []);
+  assert.deepEqual(rankRepos(null), []);
+  assert.deepEqual(rankRepos({ not: 'an array' }), []);
+});
+
+test('rankRepos skips null/primitive entries instead of throwing', () => {
+  const { rankRepos } = gh._internal;
+  const out = rankRepos([
+    { fullName: 'a/b', stars: 5, pushedAt: '2020-01-01' },
+    null,
+    undefined,
+    'garbage',
+    42,
+    { fullName: 'c/d', stars: 100, pushedAt: '2024-01-01' },
+  ]);
+  // Only the two well-formed entries survive, ranked by stars desc.
+  assert.equal(out.length, 2);
+  assert.equal(out[0].fullName, 'c/d');
+  assert.equal(out[1].fullName, 'a/b');
+});
+
+test('searchRepositories drops malformed items but keeps valid ones', async () => {
+  clearToken();
+  setFetchHandler(() => jsonResponse({
+    items: [
+      null,
+      { id: 1, full_name: 'valid/repo', stargazers_count: 7, html_url: 'u' },
+      'not-an-object',
+      undefined,
+    ],
+  }));
+  const out = await gh.search('mixed', { type: 'repositories' });
+  assert.equal(out.errors.length, 0, 'no error — malformed entries are skipped, not fatal');
+  assert.equal(out.count, 1);
+  assert.equal(out.items[0].fullName, 'valid/repo');
+});
+
+test('searchRepositories tolerates a payload with no items array', async () => {
+  clearToken();
+  setFetchHandler(() => jsonResponse({ message: 'unexpected shape' }));
+  const out = await gh.search('weird', { type: 'repositories' });
+  assert.equal(out.count, 0);
+  assert.equal(out.errors.length, 0);
+  assert.deepEqual(out.items, []);
+});
+
+test('searchAll: one corpus with malformed entries does not reject the fan-out', async () => {
+  clearToken();
+  setFetchHandler((url) => {
+    if (url.includes('/search/repositories')) {
+      // malformed: a null entry sits next to a valid repo
+      return jsonResponse({
+        items: [null, { id: 1, full_name: 'good/repo', stargazers_count: 9, html_url: 'u' }],
+      });
+    }
+    if (url.includes('/search/issues')) {
+      return jsonResponse({ items: [{ number: 3, title: 'ok', state: 'open', html_url: 'h', repository_url: 'https://api.github.com/repos/o/r' }] });
+    }
+    if (url.includes('/search/users')) return jsonResponse({ items: [] });
+    throw new Error(`unexpected url ${url}`);
+  });
+  // Must resolve (not reject) and surface the valid results from every corpus.
+  const out = await gh.searchAll('topic', {});
+  assert.equal(out.repositories.length, 1, 'valid repo survives the malformed sibling entry');
+  assert.equal(out.repositories[0].fullName, 'good/repo');
+  assert.equal(out.issues.length, 1, 'issues corpus unaffected');
+  assert.equal(out.errors.length, 0, 'malformed entry is skipped, not reported as a corpus failure');
+});
+
+test('searchAll: a thrown corpus is captured while siblings still return', async () => {
+  clearToken();
+  setFetchHandler((url) => {
+    if (url.includes('/search/repositories')) {
+      return jsonResponse({ items: [{ id: 1, full_name: 'a/b', stargazers_count: 3, html_url: 'u' }] });
+    }
+    if (url.includes('/search/issues')) return errorResponse(500);
+    if (url.includes('/search/users')) return jsonResponse({ items: [] });
+    throw new Error(`unexpected url ${url}`);
+  });
+  process.env.GITHUB_SEARCH_RETRY_DISABLED = '1'; // make the 500 terminal/fast
+  const out = await gh.searchAll('topic', {});
+  assert.equal(out.repositories.length, 1, 'repositories still returned');
+  assert.ok(out.errors.some((e) => e.source === 'github:issues' && e.status === 500), 'failing corpus captured per-provider');
+});

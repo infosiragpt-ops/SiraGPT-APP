@@ -211,6 +211,9 @@ function dedupeByDoi(papers) {
   const seen = new Map();
   const order = [];
   for (const p of papers) {
+    // Defensive: a malformed (non-object/null) entry must not abort the whole
+    // dedupe pass and drop every other paper that came with it.
+    if (!p || typeof p !== 'object') continue;
     const doi = normaliseDoi(p.doi);
     const key = doi || `t:${normaliseTitle(p.title)}`;
     const prev = seen.get(key);
@@ -908,8 +911,23 @@ async function search(query, opts = {}) {
   const collect = (entry) => {
     if ('reason' in entry) {
       errors.push({ provider: entry.p, message: entry.reason?.message || String(entry.reason) });
-    } else {
-      for (const paper of entry.value || []) papers.push(paper);
+      return;
+    }
+    // A provider must resolve to an array of canonical Paper objects. If a
+    // malformed/HTML/non-JSON body slips past a mapper's guards and the
+    // provider resolves to a non-array (string, object, null, …), DON'T let
+    // `for…of` throw here — that throw would be re-routed into `.catch(collect)`
+    // and silently swallowed, making the provider vanish from BOTH `papers` and
+    // `errors`. Treat it as a captured per-provider error so the other
+    // providers still aggregate + dedupe and the caller can see what failed.
+    if (!Array.isArray(entry.value)) {
+      errors.push({ provider: entry.p, message: `provider returned a non-array result (${entry.value === null ? 'null' : typeof entry.value})` });
+      return;
+    }
+    for (const paper of entry.value) {
+      // Skip non-object entries defensively so one malformed item never breaks
+      // the loop (and thus the whole provider's contribution).
+      if (paper && typeof paper === 'object') papers.push(paper);
     }
   };
   const perProvider = chosen.map((p) =>

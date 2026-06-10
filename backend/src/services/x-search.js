@@ -130,6 +130,25 @@ function normaliseCitations(data) {
   return out;
 }
 
+// A 2xx response whose body is missing / non-JSON / not a usable object is a
+// "malformed payload": we never invented the posts, so there is nothing to
+// summarise. Rather than throw (which would surface as a tool failure and,
+// worse, retry a non-transient condition), we treat it as a recorded soft
+// error and hand back an empty-but-valid result. The happy path — a plain
+// object carrying `choices` and/or `citations` — is unaffected.
+function isUsablePayload(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+  const hasChoices = Array.isArray(data.choices);
+  const hasCitations = Array.isArray(data.citations)
+    || Array.isArray(data?.choices?.[0]?.message?.citations);
+  return hasChoices || hasCitations;
+}
+
+// Sentinel handed back by postOnce when a 2xx body cannot be parsed as JSON.
+// Carried through withRetry untouched (it is not an error → not retried) and
+// recognised by isUsablePayload as malformed.
+const MALFORMED_PAYLOAD = Object.freeze({ __xSearchMalformed: true });
+
 // Transient-only retry classifier (mirror of the github/brave policy).
 function classifyXSearchError(err) {
   const status = err && Number(err.status);
@@ -205,7 +224,14 @@ async function search(query, opts = {}) {
       // Query-free error so the raw user query never lands in logs/retries.
       throw new XSearchHttpError(res ? res.status : 0, `x-search http ${res ? res.status : 'no_response'}`);
     }
-    return res.json();
+    // A 2xx with an unparseable / non-JSON body is NOT a transient failure, so
+    // we must not let it bubble (it would re-throw, and withRetry would treat a
+    // parse reject as retryable). Map it to the malformed sentinel instead.
+    try {
+      return await res.json();
+    } catch (_) {
+      return MALFORMED_PAYLOAD;
+    }
   };
 
   const cfg = retryConfig();
@@ -220,6 +246,22 @@ async function search(query, opts = {}) {
         ...(typeof opts.sleep === 'function' ? { sleep: opts.sleep } : {}),
       })
       : await postOnce();
+
+    if (!isUsablePayload(data)) {
+      // Malformed provider response (no choices/citations, non-JSON, etc.).
+      // Record a soft error and return an empty-but-valid result — never throw.
+      metrics.recordError({ code: 'malformed_payload' });
+      return {
+        configured: true,
+        query: q,
+        model: provider.model,
+        summary: '',
+        results: [],
+        citations: [],
+        usage: null,
+        note: 'x-search received a malformed provider response',
+      };
+    }
 
     const summary = String(data?.choices?.[0]?.message?.content || '').trim();
     const citations = normaliseCitations(data);
@@ -245,6 +287,7 @@ module.exports = {
   resolveXaiProvider,
   buildSearchParameters,
   normaliseCitations,
+  isUsablePayload,
   classifyXSearchError,
   retryConfig,
   XSearchHttpError,

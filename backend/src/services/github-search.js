@@ -257,8 +257,11 @@ async function searchRepositories(query, opts = {}) {
     opts.timeoutMs || DEFAULT_TIMEOUT_MS,
     'github:repositories',
   );
-  const items = Array.isArray(json.items) ? json.items : [];
-  return items.map(normaliseRepo);
+  const items = Array.isArray(json?.items) ? json.items : [];
+  // Skip malformed entries (null / primitive) instead of letting normaliseRepo
+  // throw on the whole batch — one bad item must not nuke an otherwise-valid
+  // result set.
+  return items.filter((r) => r && typeof r === 'object').map(normaliseRepo);
 }
 
 // ── Code ────────────────────────────────────────────────────────────────
@@ -281,8 +284,8 @@ async function searchCode(query, opts = {}) {
     opts.timeoutMs || DEFAULT_TIMEOUT_MS,
     'github:code',
   );
-  const items = Array.isArray(json.items) ? json.items : [];
-  return items.map((c) => ({
+  const items = Array.isArray(json?.items) ? json.items : [];
+  return items.filter((c) => c && typeof c === 'object').map((c) => ({
     type: 'code',
     name: c.name || null,
     path: c.path || null,
@@ -314,8 +317,8 @@ async function searchIssues(query, opts = {}) {
     opts.timeoutMs || DEFAULT_TIMEOUT_MS,
     'github:issues',
   );
-  const items = Array.isArray(json.items) ? json.items : [];
-  return items.map((i) => ({
+  const items = Array.isArray(json?.items) ? json.items : [];
+  return items.filter((i) => i && typeof i === 'object').map((i) => ({
     type: i.pull_request ? 'pull_request' : 'issue',
     number: i.number,
     title: i.title || '',
@@ -353,8 +356,8 @@ async function searchUsers(query, opts = {}) {
     opts.timeoutMs || DEFAULT_TIMEOUT_MS,
     'github:users',
   );
-  const items = Array.isArray(json.items) ? json.items : [];
-  return items.map((u) => ({
+  const items = Array.isArray(json?.items) ? json.items : [];
+  return items.filter((u) => u && typeof u === 'object').map((u) => ({
     type: u.type === 'Organization' ? 'organization' : 'user',
     login: u.login || null,
     id: u.id,
@@ -377,8 +380,8 @@ async function searchTopics(query, opts = {}) {
     opts.timeoutMs || DEFAULT_TIMEOUT_MS,
     'github:topics',
   );
-  const items = Array.isArray(json.items) ? json.items : [];
-  return items.map((t) => ({
+  const items = Array.isArray(json?.items) ? json.items : [];
+  return items.filter((t) => t && typeof t === 'object').map((t) => ({
     type: 'topic',
     name: t.name || null,
     displayName: t.display_name || t.name || null,
@@ -444,9 +447,18 @@ async function rateLimit(opts = {}) {
 // (GitHub already best-match orders, but when the caller pins sort=stars we
 //  re-rank for determinism; for mixed result sets stars is the stable key.)
 function rankRepos(repos) {
-  return repos.slice().sort((a, b) => {
-    const sa = a.stars || 0;
-    const sb = b.stars || 0;
+  // Resilience: a malformed upstream payload (or a buggy mapper) can hand us a
+  // non-array, or an array with null/primitive entries. Ranking runs OUTSIDE
+  // the per-corpus try/catch in searchAll(), so a throw here would reject the
+  // whole fan-out and lose every other category's results. Coerce to an array
+  // of plain objects first, and read fields defensively so .sort() can never
+  // dereference a null/undefined entry.
+  const safe = (Array.isArray(repos) ? repos : []).filter(
+    (r) => r && typeof r === 'object',
+  );
+  return safe.sort((a, b) => {
+    const sa = typeof a.stars === 'number' ? a.stars : 0;
+    const sb = typeof b.stars === 'number' ? b.stars : 0;
     if (sa !== sb) return sb - sa;
     const pa = a.pushedAt ? Date.parse(a.pushedAt) || 0 : 0;
     const pb = b.pushedAt ? Date.parse(b.pushedAt) || 0 : 0;
@@ -507,7 +519,11 @@ async function searchAll(query, opts = {}) {
   settled.forEach((r, idx) => {
     const t = corpora[idx];
     if (r.status === 'fulfilled') {
-      out[t] = t === 'repositories' ? rankRepos(r.value || []) : (r.value || []);
+      // r.value should be an array of normalised entries, but guard against a
+      // malformed mapper returning a non-array. rankRepos already coerces; for
+      // the other corpora coerce here so the payload shape stays consistent.
+      const value = Array.isArray(r.value) ? r.value : [];
+      out[t] = t === 'repositories' ? rankRepos(value) : value;
     } else {
       out.errors.push({ source: `github:${t}`, message: r.reason?.message || String(r.reason), status: r.reason?.status || null });
     }

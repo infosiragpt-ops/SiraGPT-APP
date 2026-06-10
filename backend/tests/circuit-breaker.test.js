@@ -462,6 +462,107 @@ describe('CircuitBreaker', () => {
     });
   });
 
+  // ── Invalid-config clamping ───────────────────────────────────────────
+  describe('invalid config clamping', () => {
+    it('clamps a NaN threshold to the default so the breaker still opens', async () => {
+      // Before clamping: `count >= NaN` is always false → breaker NEVER opens.
+      const cb = new CircuitBreaker({ threshold: NaN, cooldownMs: 1000 });
+      assert.equal(cb.threshold, 5, 'NaN threshold should fall back to default 5');
+      for (let i = 0; i < 5; i++) {
+        await assert.rejects(() => cb.call(async () => { throw new Error(`e${i}`); }));
+      }
+      assert.equal(cb.state, STATE.OPEN);
+    });
+
+    it('clamps a zero / negative threshold to a minimum of 1', async () => {
+      const cbZero = new CircuitBreaker({ threshold: 0 });
+      assert.equal(cbZero.threshold, 1);
+      const cbNeg = new CircuitBreaker({ threshold: -5 });
+      assert.equal(cbNeg.threshold, 1);
+
+      // With threshold 1, a single SUCCESS must NOT open the circuit.
+      await cbNeg.call(async () => 'ok');
+      assert.equal(cbNeg.state, STATE.CLOSED);
+      // ...but a single failure should.
+      await assert.rejects(() => cbNeg.call(async () => { throw new Error('boom'); }));
+      assert.equal(cbNeg.state, STATE.OPEN);
+    });
+
+    it('clamps a NaN cooldownMs to the default (no NaN in nextAttempt / snapshot)', async () => {
+      // Before clamping: nextAttempt = now + NaN → OPEN→HALF_OPEN never fires
+      // and toJSON().cooldownRemainingMs leaked NaN.
+      const cb = new CircuitBreaker({ threshold: 1, cooldownMs: NaN });
+      assert.equal(cb.cooldownMs, 30_000);
+      await assert.rejects(() => cb.call(async () => { throw new Error('boom'); }));
+      assert.equal(cb.state, STATE.OPEN);
+      const json = cb.toJSON();
+      assert.equal(Number.isFinite(json.cooldownRemainingMs), true);
+      assert.equal(Number.isNaN(json.cooldownRemainingMs), false);
+      assert.ok(json.cooldownRemainingMs > 0 && json.cooldownRemainingMs <= 30_000);
+    });
+
+    it('clamps a NaN / zero probeCount to 1 so HALF_OPEN can recover to CLOSED', async () => {
+      // Before clamping: `successCount >= NaN` is always false → stuck HALF_OPEN.
+      const cb = new CircuitBreaker({ threshold: 1, cooldownMs: 30, probeCount: NaN });
+      assert.equal(cb.probeCount, 1);
+      await assert.rejects(() => cb.call(async () => { throw new Error('boom'); }));
+      assert.equal(cb.state, STATE.OPEN);
+      await delay(40);
+      assert.equal(cb.state, STATE.HALF_OPEN);
+      await cb.call(async () => 'probe-ok');
+      assert.equal(cb.state, STATE.CLOSED);
+    });
+
+    it('clamps NaN / negative timeoutMs and windowMs to 0', () => {
+      const cb = new CircuitBreaker({ timeoutMs: NaN, windowMs: -100 });
+      assert.equal(cb.timeoutMs, 0);
+      assert.equal(cb.windowMs, 0);
+    });
+
+    it('clamps Infinity knobs back to their finite defaults', () => {
+      const cb = new CircuitBreaker({
+        threshold: Infinity,
+        cooldownMs: Infinity,
+        probeCount: Infinity,
+        windowMs: Infinity,
+        timeoutMs: Infinity,
+      });
+      assert.equal(cb.threshold, 5);
+      assert.equal(cb.cooldownMs, 30_000);
+      assert.equal(cb.probeCount, 1);
+      assert.equal(cb.windowMs, 60_000);
+      assert.equal(cb.timeoutMs, 0);
+    });
+
+    it('truncates fractional numeric knobs to integers', () => {
+      const cb = new CircuitBreaker({ threshold: 3.9, probeCount: 2.7, cooldownMs: 100.6 });
+      assert.equal(cb.threshold, 3);
+      assert.equal(cb.probeCount, 2);
+      assert.equal(cb.cooldownMs, 100);
+    });
+
+    it('falls back to a default name when name is empty or nullish', () => {
+      assert.equal(new CircuitBreaker({ name: '' }).name, 'default');
+      assert.equal(new CircuitBreaker({ name: null }).name, 'default');
+      assert.equal(new CircuitBreaker({ name: undefined }).name, 'default');
+      // A real name is preserved and coerced to string.
+      assert.equal(new CircuitBreaker({ name: 'svc-1' }).name, 'svc-1');
+      assert.equal(new CircuitBreaker({ name: 42 }).name, '42');
+    });
+
+    it('toJSON() never throws and never leaks non-finite values, even when forced OPEN', () => {
+      const cb = new CircuitBreaker({ threshold: NaN, cooldownMs: NaN, timeoutMs: NaN });
+      cb.forceState(STATE.OPEN);
+      let json;
+      assert.doesNotThrow(() => { json = cb.toJSON(); });
+      for (const key of ['threshold', 'cooldownMs', 'probeCount', 'windowMs', 'timeoutMs', 'cooldownRemainingMs']) {
+        assert.equal(Number.isFinite(json[key]), true, `${key} should be finite, got ${json[key]}`);
+      }
+      // Round-trips through JSON.stringify without producing the literal "null".
+      assert.doesNotThrow(() => JSON.stringify(cb));
+    });
+  });
+
   // ── external signal listener cleanup ──────────────────────────────────
   describe('external signal listener cleanup', () => {
     it('detaches the abort listener after a successful call (no leak on reused signal)', async () => {

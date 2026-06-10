@@ -49,6 +49,19 @@ function readPositiveNumber(raw, fallback) {
 }
 
 /**
+ * Coerce any input to a finite, non-negative number. Non-finite
+ * (NaN, ±Infinity), negative, or non-numeric values collapse to
+ * `fallback` (default 0). This is the single boundary guard that keeps
+ * every credit/USD computation from ever emitting NaN, Infinity, or a
+ * negative figure when fed garbage (e.g. textLength:Infinity,
+ * calls:NaN, credits:-1). Valid inputs pass through unchanged.
+ */
+function toFiniteNonNegative(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+/**
  * Estimate credit cost for a feature given a payload size hint.
  * Always returns at least `minCost`. Returns null when the feature
  * is unknown (caller should treat as a free no-op or an error).
@@ -61,9 +74,9 @@ function estimateCost(feature, { textLength = 0, env = process.env } = {}) {
   if (feature === 'paraphrase') {
     perK = readPositiveNumber(env.CREDITS_PARAPHRASE_PER_1K_CHARS, spec.perKChars);
   }
-  const len = Math.max(0, Number(textLength) || 0);
-  const lengthCost = Math.ceil(len / 1000) * perK;
-  const total = Math.max(spec.minCost, spec.base + lengthCost);
+  const len = toFiniteNonNegative(textLength);
+  const lengthCost = toFiniteNonNegative(Math.ceil(len / 1000) * perK);
+  const total = toFiniteNonNegative(Math.max(spec.minCost, spec.base + lengthCost), spec.minCost);
   return {
     credits: total,
     breakdown: {
@@ -241,7 +254,7 @@ function monthlyBreakdownAsMarkdown(projection) {
 }
 
 function creditsToUsdCents(credits) {
-  const n = Number(credits) || 0;
+  const n = toFiniteNonNegative(credits);
   if (n <= 0) return 0;
   return Math.round(n * USD_PER_CREDIT * 100);
 }
@@ -257,13 +270,13 @@ function creditsToUsdCents(credits) {
  *   creditsForUsd(0)    → 0
  */
 function creditsForUsd(usd) {
-  const n = Number(usd) || 0;
+  const n = toFiniteNonNegative(usd);
   if (n <= 0) return 0;
   return Math.floor(n / USD_PER_CREDIT);
 }
 
 function formatCreditsAsUsd(credits) {
-  const n = Number(credits) || 0;
+  const n = toFiniteNonNegative(credits);
   if (n <= 0) return '';
   const usd = n * USD_PER_CREDIT;
   if (usd < 0.01) return '≈ <$0.01';
@@ -391,12 +404,12 @@ function estimateMonthlyCost(usage, { env = process.env } = {}) {
   const perFeature = {};
   for (const [feature, profile] of Object.entries(usage)) {
     if (!profile || typeof profile !== 'object') continue;
-    const calls = Math.max(0, Number(profile.calls) || 0);
-    const avgLen = Math.max(0, Number(profile.avgTextLength) || 0);
+    const calls = toFiniteNonNegative(profile.calls);
+    const avgLen = toFiniteNonNegative(profile.avgTextLength);
     if (calls === 0) continue;
     const est = estimateCost(feature, { textLength: avgLen, env });
     if (!est) continue;
-    const monthly = est.credits * calls;
+    const monthly = toFiniteNonNegative(est.credits * calls);
     perFeature[feature] = {
       calls,
       perCallCredits: est.credits,
@@ -488,7 +501,7 @@ function affordsFeature(currentPlan, feature, { calls = 0, avgTextLength = 0, en
   if (!planEnriched) return null;
   const est = estimateCost(feature, { textLength: avgTextLength, env });
   if (!est) return { affords: false, reason: 'unknown_feature' };
-  const projectedCredits = est.credits * Math.max(0, Number(calls) || 0);
+  const projectedCredits = toFiniteNonNegative(est.credits * toFiniteNonNegative(calls));
   if (planEnriched.unlimited) {
     return {
       affords: true,
