@@ -150,6 +150,22 @@ async function runDocumentAgent({
     });
     let outputs = await collectValidOutputs(sandbox, onEvent);
 
+    // An output byte-identical to an input is a copy, not an edit — a flaky
+    // model sometimes repacks the file without applying any change. Treat
+    // those as non-deliverables so the corrective retry fires.
+    const crypto = require('crypto');
+    const sha1 = (buf) => crypto.createHash('sha1').update(buf).digest('hex');
+    const inputHashes = new Set(files.map((f) => f && Buffer.isBuffer(f.buffer) ? sha1(f.buffer) : null).filter(Boolean));
+    const markUneditedCopies = (outs) => {
+      for (const out of outs) {
+        if (out.valid !== false && out.buffer.length > 0 && inputHashes.has(sha1(out.buffer))) {
+          out.valid = false;
+          onEvent({ type: 'output_invalid', name: out.name, reason: 'identical_to_input' });
+        }
+      }
+    };
+    markUneditedCopies(outputs);
+
     // One corrective retry when the run produced no usable deliverable (a flaky
     // model can burn its iterations on a wrong strategy — e.g. str_replace on
     // the binary .docx). We nudge it with the failure and let it finish the job
@@ -160,16 +176,18 @@ async function runDocumentAgent({
       messages.push({
         role: 'user',
         content:
-          'You have not yet produced a valid, non-empty deliverable in /workspace/outputs. Remember: a .docx/.xlsx/.pptx is a binary ZIP — ' +
-          'NEVER edit it with str_replace or hand-written XML. Use the python3 libraries end to end: python-docx for .docx, openpyxl for .xlsx, ' +
-          'python-pptx for .pptx (load the uploaded file, apply the changes, save to /workspace/outputs/). Then VERIFY it opens by loading it ' +
-          'again with the same library and printing a confirmation. Do this now and finish.',
+          'You have NOT yet produced a valid, EDITED deliverable in /workspace/outputs (it is missing, corrupt, or byte-identical to the ' +
+          'uploaded file — copying the file without applying the requested changes does not count). Remember: a .docx/.xlsx/.pptx is a binary ' +
+          'ZIP — NEVER edit it with str_replace or hand-written XML. Use the python3 libraries end to end: python-docx for .docx, openpyxl for ' +
+          '.xlsx, python-pptx for .pptx (load the uploaded file, APPLY every requested change, save to /workspace/outputs/). Then VERIFY by ' +
+          'loading the saved file again and printing the changed content. Do this now and finish.',
       });
       result = await runDocAgentLoop({
         client: llm, model, messages, tools: TOOL_DEFINITIONS, executors,
         maxIterations: Math.min(maxIterations, 12), onEvent, signal,
       });
       outputs = await collectValidOutputs(sandbox, onEvent);
+      markUneditedCopies(outputs);
     }
 
     onEvent({ type: 'outputs', count: outputs.length, names: outputs.map((o) => o.name) });

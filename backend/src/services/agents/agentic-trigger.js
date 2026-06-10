@@ -121,10 +121,50 @@ function isArtifactDeliverableRequest(text) {
   return CREATION_VERBS.test(t) && ARTIFACT_NOUNS.test(t);
 }
 
+// Verbs that mean "change the EXISTING document" — deliberately conservative
+// (no bare "cambia"/"arregla", which appear constantly in plain Q&A follow-ups)
+// so doc-Q&A turns keep their fast plain-stream path.
+const EDIT_VERBS = new RegExp(
+  '\\b(' +
+    [
+      // Spanish
+      'edit', 'modific', 'corrig', 'correg', 'actualiz', 'reemplaz',
+      'renombr', 'reescrib', 'reorganiz', 'reformate',
+      // English
+      'modify', 'fix the', 'update', 'replac', 'rewrit', 'reformat', 'rename',
+    ].join('|') +
+    ')',
+  'i',
+);
+
+// Nouns that, on an ATTACHMENT turn, unambiguously refer to the attached file
+// itself or a concrete document instance (complementing ARTIFACT_NOUNS, which
+// targets deliverable formats). Only consulted together with an EDIT verb, so
+// "qué dice el informe" (no edit verb) still stays on the plain stream.
+const ATTACHED_FILE_NOUNS = /\b(archivo|adjunto|attached file|attachment|file|informe|reporte|report|contrato|contract|ensayo|tesis|curr[ií]culum|\bcv\b|carta|acta|memorando|propuesta|proposal)\b/i;
+
+/**
+ * Attachment-turn gate for EDIT requests: "edita mi documento", "corrige el
+ * excel adjunto", "actualiza el informe". These need the agentic loop — that
+ * is where the `document_edit` (Cowork-style sandbox editing) tool lives.
+ * Requires an edit verb AND a document/file noun, mirroring the
+ * verb+noun design of isArtifactDeliverableRequest.
+ *
+ * @param {string} text user message (any case)
+ * @returns {boolean}
+ */
+function isDocumentEditRequest(text) {
+  const t = String(text == null ? '' : text);
+  if (!t.trim()) return false;
+  return EDIT_VERBS.test(t) && (ARTIFACT_NOUNS.test(t) || ATTACHED_FILE_NOUNS.test(t));
+}
+
 module.exports = {
   isAgenticActionRequest,
   isArtifactDeliverableRequest,
+  isDocumentEditRequest,
   ACTION_VERBS,
   CREATION_VERBS,
   ARTIFACT_NOUNS,
+  EDIT_VERBS,
 };

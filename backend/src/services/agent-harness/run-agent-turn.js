@@ -63,6 +63,18 @@ function buildHarnessTools(existingNames, opts = {}) {
     }
   }
 
+  // Cowork-style document editing — only when the turn has attached files.
+  // The tool itself re-verifies ownership and confines edits to ctx.fileIds.
+  if (opts.hasAttachments) {
+    try {
+      const { buildDocumentEditTool } = require('./tools/document-edit-tool');
+      const def = buildDocumentEditTool();
+      if (!existingNames.has(def.name)) defs.push(def);
+    } catch (err) {
+      try { console.warn('[agent-harness] document_edit registration failed:', err && err.message); } catch (_) { /* noop */ }
+    }
+  }
+
   return defs;
 }
 
@@ -93,6 +105,7 @@ async function attachHarness(opts = {}) {
     mcpEnabled = true,
     provider = null,
     sandboxSessionId = null,
+    fileIds = [],
   } = opts;
 
   const registry = createToolRegistry();
@@ -110,8 +123,12 @@ async function attachHarness(opts = {}) {
   }
 
   // Harness-native tools (registry-defined: Zod validation + tiers).
-  // When sandboxSessionId is present the 4 sandbox_* document tools are added.
-  const harnessDefs = buildHarnessTools(existingNames, { sandboxSessionId });
+  // When sandboxSessionId is present the 4 sandbox_* document tools are added;
+  // when the turn carries attachments, document_edit (Cowork editing) is too.
+  const harnessDefs = buildHarnessTools(existingNames, {
+    sandboxSessionId,
+    hasAttachments: Array.isArray(fileIds) && fileIds.filter(Boolean).length > 0,
+  });
   for (const def of harnessDefs) registry.register(def);
   const harnessTools = harnessDefs.map((def) => registry.toAgentTool(def.name));
 
@@ -164,4 +181,5 @@ async function attachHarness(opts = {}) {
 module.exports = {
   attachHarness,
   harnessEnabled,
+  buildHarnessTools,
 };

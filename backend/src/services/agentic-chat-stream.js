@@ -45,7 +45,7 @@
   const openclawCapabilityKernel = require('./openclaw-capability-kernel');
   const { runToolWithRetry } = require('./agents/tool-call-retry');
   const { liveSubagentsEnabled } = require('./agents/subagent-guard');
-  const { isAgenticActionRequest, isArtifactDeliverableRequest } = require('./agents/agentic-trigger');
+  const { isAgenticActionRequest, isArtifactDeliverableRequest, isDocumentEditRequest } = require('./agents/agentic-trigger');
   const { detectMediaIntent, buildMediaIntentHint } = require('./agents/media-intent');
   const {
     buildExecutionProfile,
@@ -74,7 +74,7 @@
     'web_search', 'read_url', 'web_extract', 'deep_search',
     'memory_recall', 'rag_retrieve', 'self_rag_answer',
     'python_exec', 'run_tests',
-    'create_document', 'verify_artifact',
+    'create_document', 'verify_artifact', 'document_edit',
     'session_search', 'session_list', 'session_history',
   ];
 
@@ -361,7 +361,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
   // ("investigación", "análisis") stays on the plain stream — so a simple
   // "cuál es el título de la investigación?" answers directly, fast.
   if (Array.isArray(files) && files.length > 0) {
-    return isArtifactDeliverableRequest(text);
+    // Edit requests ("edita mi documento", "corrige el excel") also need the
+    // loop: that's where document_edit (Cowork editing) lives.
+    return isArtifactDeliverableRequest(text) || isDocumentEditRequest(text);
   }
   if (AGENTIC_PROMPT_HINT.test(text)) return true;
   // Auto web-search routing: send freshness / live-data / factual-lookup
@@ -530,6 +532,8 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
           // Weak prompted models already struggle with the core toolset —
           // don't hand them third-party MCP tools on top.
           mcpEnabled: toolCallMode === 'native',
+          // Attachment IDs (ownership-verified upstream) — gates document_edit.
+          fileIds: Array.isArray(toolContext.fileIds) ? toolContext.fileIds.filter(Boolean) : [],
         });
         if (__harness) tools = __harness.tools;
       } catch (harnessErr) {
@@ -547,7 +551,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
         const pinned = [
           mediaIntent && mediaIntent.tool,
           ...(Array.isArray(toolContext.fileIds) && toolContext.fileIds.length
-            ? ['rag_retrieve', 'docintel_analyze', 'search_docs']
+            ? ['rag_retrieve', 'docintel_analyze', 'search_docs', 'document_edit']
             : []),
         ].filter(Boolean);
         tools = capToolsForPrompted(tools, { pinned });

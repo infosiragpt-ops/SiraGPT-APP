@@ -971,13 +971,18 @@ function buildExecutionPlan({ pipeline, primaryIntent, requiredTools, validation
   return plan;
 }
 
-function inferAmbiguityScore({ raw, requiredExtension, pipeline, sourceRequirements, requestTokenAnalysis = null }) {
+function inferAmbiguityScore({ raw, requiredExtension, pipeline, sourceRequirements, requestTokenAnalysis = null, hasFiles = false }) {
   const n = normalize(raw);
   if (!n) return 1;
   if (hasTextOnlyDirective(raw) || requestTokenAnalysis?.context?.has_text_only_directive) return 0.12;
   if (requestTokenAnalysis?.context?.has_contextual_followup) return 0.15;
   if (isPlainTranscriptionRequest(raw, requiredExtension)) return 0.15;
-  if (/\b(archivo|documento|haz algo|lo que sea|cualquier cosa)\b/.test(n) && !requiredExtension) return 0.85;
+  // "documento/archivo" with NO attachment and no target format is vague
+  // ("haz algo con un documento") — but when a file IS attached the word is a
+  // concrete REFERENCE to it ("edita mi documento: …"), not ambiguity; that
+  // turn must execute, not stall on a clarifying question.
+  const attached = hasFiles || Boolean(requestTokenAnalysis?.context?.has_files);
+  if (/\b(archivo|documento|haz algo|lo que sea|cualquier cosa)\b/.test(n) && !requiredExtension && !attached) return 0.85;
   if (sourceRequirements.required && /\b(articulos|fuentes|papers)\b/.test(n) && !/\b(\d{1,5}|varios|algunos|lista)\b/.test(n)) return 0.45;
   if (pipeline === 'DirectAnswerPipeline') return 0.15;
   return requiredExtension || sourceRequirements.required ? 0.12 : 0.3;
@@ -1088,6 +1093,7 @@ function buildUniversalTaskContract({ rawUserRequest, fileIds = [], now = new Da
     pipeline: primaryPipeline,
     sourceRequirements,
     requestTokenAnalysis,
+    hasFiles,
   });
   const riskLevel = inferRiskLevel({
     sourceRequirements,
