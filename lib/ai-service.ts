@@ -454,6 +454,49 @@ export function shouldAutoActivateVideoGeneration(prompt: string): boolean {
   return !!normalized && ROUTING_PATTERNS.video.test(normalized)
 }
 
+// Analysis/understanding questions ABOUT an image ("describe esta imagen",
+// "¿qué ves?", "transcribe la foto", "what does it say"). These mention image
+// words, so the bare `image` routing pattern misreads them as image
+// GENERATION — which hijacked "describir que ves en esta imagen" + an attached
+// photo into the image generator instead of the vision chat path. Inputs are
+// matched after normalizePrompt (lowercase, accents stripped).
+const IMAGE_ANALYSIS_PROMPT_RE = new RegExp(
+  '(' + [
+    // Spanish analysis verbs / question shapes
+    '\\bdescrib',                                  // describe / describir / descríbeme
+    '\\btranscrib',                                // transcribe / transcribir / transcríbela
+    '\\bque\\s+(se\\s+)?ves?\\b',                  // qué ves / que se ve
+    '\\bque\\s+dice\\b',
+    '\\bque\\s+hay\\b',
+    '\\bque\\s+observas\\b',
+    '\\bocr\\b',
+    '\\bextrae\\w*\\s+(el\\s+)?texto',
+    '\\blee\\w*\\s+(la|el|esta|este)\\b',
+    '\\b(analiza\\w*|explica\\w*|interpreta\\w*|identifica\\w*|reconoce\\w*|traduce\\w*|resume\\w*)\\s+(la\\s+|el\\s+|esta\\s+|este\\s+)?(imagen|foto|captura|screenshot|pantallazo)',
+    '\\bdescripcion\\s+de\\s+(la|esta)\\s+(imagen|foto|captura)',
+    // English
+    '\\btranscribe\\b', '\\bcaption\\b',
+    '\\bwhat\\s+do\\s+you\\s+see\\b',
+    '\\bwhat\\s+does\\s+(it|this|the)\\s+\\w*\\s*say\\b',
+    '\\bwhat.?s\\s+in\\s+(the|this)\\b',
+    '\\bread\\s+(the|this)\\b',
+    '\\bextract\\s+(the\\s+)?text',
+    '\\b(analyze|explain|identify|translate|summarize)\\s+(the\\s+|this\\s+)?(image|photo|picture|screenshot)',
+  ].join('|') + ')',
+  'i',
+)
+
+/**
+ * True when the prompt asks to ANALYSE / read / describe an image rather than
+ * generate one. Used to keep "describe esta imagen" turns on the vision chat
+ * path — the image generator must never hijack an understanding question.
+ */
+export function isImageAnalysisPrompt(prompt: string): boolean {
+  const normalized = normalizePrompt(prompt)
+  if (!normalized) return false
+  return IMAGE_ANALYSIS_PROMPT_RE.test(normalized)
+}
+
 const CONTEXT_FOLLOWUP_RE =
   /\b(?:eso|esto|aquello|lo anterior|anterior|mismo|misma|tambien|también|ahora|despues|después|luego|ademas|además|hazlo|hacelo|con eso|usa eso|usalo|úsalo|en base a eso|basado en eso|convierte(?:lo)?|pasalo|pásalo|exportalo|expórtalo)\b/i
 
@@ -520,7 +563,10 @@ const signalIntentFromText = (text: string): ChatIntent | null => {
   if (ROUTING_PATTERNS.viz.test(normalized)) return 'viz'
   if (ROUTING_PATTERNS.video.test(normalized)) return 'video'
   if (ROUTING_PATTERNS.musicGeneration.test(normalized) || ROUTING_PATTERNS.voiceGeneration.test(normalized)) return 'agent_task'
-  if (ROUTING_PATTERNS.image.test(normalized)) return 'image'
+  // "describe esta imagen / ¿qué ves? / transcribe la foto" is image
+  // ANALYSIS (vision chat), not generation — don't let the bare image-word
+  // pattern hijack it into the image generator.
+  if (ROUTING_PATTERNS.image.test(normalized) && !IMAGE_ANALYSIS_PROMPT_RE.test(normalized)) return 'image'
   if (ROUTING_PATTERNS.figma.test(normalized)) return 'figma'
   if (ROUTING_PATTERNS.webdev.test(normalized) && ROUTING_PATTERNS.webdevBuildAction.test(normalized)) return 'webdev'
   return null
@@ -933,7 +979,9 @@ export function classifyIntentFastPath(prompt: string): ChatIntent | null {
   if (ROUTING_PATTERNS.viz.test(lc)) return 'viz'
   if (ROUTING_PATTERNS.video.test(lc)) return 'video'
   if (ROUTING_PATTERNS.musicGeneration.test(lc) || ROUTING_PATTERNS.voiceGeneration.test(lc)) return 'agent_task'
-  if (ROUTING_PATTERNS.image.test(lc)) return 'image'
+  // Image ANALYSIS questions ("describe esta imagen") are vision chat, not
+  // generation — same gate as signalIntentFromText.
+  if (ROUTING_PATTERNS.image.test(lc) && !IMAGE_ANALYSIS_PROMPT_RE.test(lc)) return 'image'
   if (ROUTING_PATTERNS.figma.test(lc)) return 'figma'
   if (ROUTING_PATTERNS.webdev.test(lc) && ROUTING_PATTERNS.webdevBuildAction.test(lc)) return 'webdev'
 
@@ -1054,7 +1102,7 @@ export class AIService {
   * "what's the latest news on OpenAI?" / "últimas noticias de la NASA"
   * "investiga sobre X" / "investigate X" / "research X"
   * Any question where the user wants citations, a literature scan, or an answer grounded in real web/scholarly sources. If in doubt AND the request asks for information the LLM cannot safely answer from memory, prefer 'web_search' over 'text'.
-- 'image': Generating images. Examples: "create an image of a sunset", "genera una imagen de un gato".
+- 'image': GENERATING a new image. Examples: "create an image of a sunset", "genera una imagen de un gato". NOT for questions ABOUT an attached or previous image — "describe esta imagen", "¿qué ves en la foto?", "transcribe la captura", "what does this image say" are 'text' (vision analysis), never 'image'.
 - 'video': Generating videos. Examples: "make a video of a beach", "crea un video de la ciudad".
 - 'ppt': Creating PowerPoint presentations. Examples in multiple languages:
 * English: "create a presentation about AI", "make a PPT on climate change", "generate slides about marketing"

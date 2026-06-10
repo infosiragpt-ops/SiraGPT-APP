@@ -10,6 +10,7 @@ import {
   shouldAutoActivateVideoGeneration,
   shouldRouteThroughAgenticRuntime,
   shouldRouteTextPromptThroughAgenticRuntime,
+  isImageAnalysisPrompt,
   isImageOnlyAttachmentTurn,
   shouldUseFastTextRoute,
   shouldAnswerFromExistingDocument,
@@ -187,6 +188,33 @@ describe("ai-service · deterministic intent routing", () => {
     // A document attachment is unaffected (still agentic).
     assert.equal(isImageOnlyAttachmentTurn([{ id: "f-doc", name: "x.pdf", mimeType: "application/pdf" }]), false)
     assert.equal(shouldRouteTextPromptThroughAgenticRuntime("resume este documento", [{ id: "f-doc", name: "x.pdf", mimeType: "application/pdf" }]), true)
+  })
+
+  it("image ANALYSIS questions never classify as image GENERATION", () => {
+    // Regression: "describir que ves en esta imagen" + an attached photo
+    // started the image GENERATOR (GPT Image 2) instead of describing the
+    // image — the bare image-word pattern hijacked an understanding question.
+    const analysis = [
+      "describir que ves en esta imagen",
+      "describe esta imagen",
+      "transcribe la foto",
+      "¿qué ves en la imagen?",
+      "que dice la imagen",
+      "extrae el texto de la captura",
+      "analiza esta imagen",
+      "explica la imagen",
+      "what do you see in this picture",
+      "transcribe this image",
+    ]
+    for (const prompt of analysis) {
+      assert.equal(isImageAnalysisPrompt(prompt), true, `analysis: ${prompt}`)
+      assert.notEqual(classifyIntentFastPath(prompt), "image", `must NOT be generation: ${prompt}`)
+    }
+    // Real generation prompts still classify as 'image'.
+    for (const prompt of ["genera una imagen de un gato", "crea una imagen de un atardecer", "create an image of a sunset"]) {
+      assert.equal(isImageAnalysisPrompt(prompt), false, `generation: ${prompt}`)
+      assert.equal(classifyIntentFastPath(prompt), "image", `must stay generation: ${prompt}`)
+    }
   })
 
   it("still creates a Word file when Word is requested as the output format", async () => {

@@ -105,7 +105,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { apiClient } from "@/lib/api"
 import { track } from "@/lib/analytics"
-import { aiService, buildProfessionalCapabilityPrompt, classifyIntentFastPath, extractRequestedVideoDurationSeconds, isImageOnlyAttachmentTurn, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldAutoActivateVideoGeneration, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, type ChatIntent } from "@/lib/ai-service"
+import { aiService, buildProfessionalCapabilityPrompt, classifyIntentFastPath, extractRequestedVideoDurationSeconds, isImageAnalysisPrompt, isImageOnlyAttachmentTurn, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldAutoActivateVideoGeneration, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, type ChatIntent } from "@/lib/ai-service"
 import { toast } from "sonner"
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
@@ -7556,8 +7556,14 @@ REWRITTEN TEXT:`;
         return;
       }
       if (isImageGenerationActive || chatType === 'image') {
-        await handleImageGeneration(buildImageEditPrompt(msg), collectUploadFileIds(filesToSend), imageModelForSendOverride);
-        return;
+        // Even with the "Imágenes" composer mode on (it can be left sticky by
+        // a previous generation), an ANALYSIS question about an image
+        // ("describe esta imagen", "¿qué ves?") must go to the vision chat
+        // path, not the generator — fall through to normal routing.
+        if (!isImageAnalysisPrompt(msg)) {
+          await handleImageGeneration(buildImageEditPrompt(msg), collectUploadFileIds(filesToSend), imageModelForSendOverride);
+          return;
+        }
       }
       if (isVideoGenerationActive || chatType === 'video') {
         await handleVideoGeneration(msg, collectUploadFileIds(filesToSend));
@@ -7722,6 +7728,16 @@ REWRITTEN TEXT:`;
 
       switch (intent) {
         case 'image':
+          // "describe esta imagen / ¿qué ves? / transcribe" is image ANALYSIS:
+          // run the vision chat path (the plain stream reads attached and
+          // historical images). The async classifier can return 'image' for
+          // these because the text mentions "imagen" — generating a new image
+          // here was a real reported bug ("describir que ves en esta imagen"
+          // + attached photo started the image generator).
+          if (isImageAnalysisPrompt(msg)) {
+            await runContextPipeline('text');
+            break;
+          }
           await handleImageGeneration(buildImageEditPrompt(msg), collectUploadFileIds(filesToSend));
           break;
         case 'video':
