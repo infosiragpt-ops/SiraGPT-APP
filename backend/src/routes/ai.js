@@ -6915,7 +6915,15 @@ router.post(
 
       let imageBase64s;
       const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Image generation timeout')), 200000);
+        setTimeout(() => {
+          // Deadline reached: the response below becomes an error either
+          // way, so cancel the in-flight provider call too — otherwise the
+          // SDK keeps generating (default timeout up to 600s) burning paid
+          // quota for a result nobody will consume. Clients wait 210s
+          // (> this 200s) so this verdict always reaches them in-band.
+          requestAbortController.abort();
+          reject(new Error('Image generation timeout'));
+        }, 200000);
       });
 
       const generateSingleImage = async () => {

@@ -491,9 +491,14 @@ class ApiClient {
    *     RETRY_AFTER_MAX_MS so a misbehaving server with a 1-hour
    *     Retry-After can't pin the UI for an hour.
    */
-  private async request(endpoint: string, options: RequestInit & { timeoutMs?: number } = {}) {
+  private async request(endpoint: string, options: RequestInit & { timeoutMs?: number; maxRetries?: number } = {}) {
     const url = `${this.baseURL}${endpoint}`;
     const timeoutMs = options.timeoutMs ?? this.DEFAULT_TIMEOUT_MS;
+    // Per-request retry override. Expensive, non-idempotent generations
+    // (image/video) pass 0: an automatic retry of a timed-out generation
+    // triples the provider spend and multiplies the user's wait — the
+    // caller recovers via chat polling instead.
+    const maxRetries = options.maxRetries ?? this.MAX_RETRIES;
 
     // Build headers once (they don't change between retries — and
     // Idempotency-Key MUST stay stable across retries for the
@@ -537,7 +542,7 @@ class ApiClient {
     // Track last error for re-throw on final failure
     let lastError: Error & { status?: number; statusCode?: number; errorData?: any } | null = null;
 
-    for (let attempt = 0; attempt <= this.MAX_RETRIES; attempt++) {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
       // AbortController for timeout
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -569,7 +574,7 @@ class ApiClient {
         // because 429 IS retryable (unlike 400, 403, 404, 409).
         if (response.status === 429 || response.status === 503) {
           clearTimeout(timeoutId);
-          if (attempt < this.MAX_RETRIES) {
+          if (attempt < maxRetries) {
             const retryAfterMs = this._parseRetryAfter(getResponseHeader(response, 'retry-after'));
             const waitMs = retryAfterMs !== null
               ? Math.min(retryAfterMs, this.RETRY_AFTER_MAX_MS)
@@ -663,7 +668,7 @@ class ApiClient {
         (lastError as any).statusCode = response.status;
 
         // If it's the last attempt, try to parse the body for better error
-        if (attempt === this.MAX_RETRIES) {
+        if (attempt === maxRetries) {
           const errorData = await response.json().catch(() => ({ error: 'Server error' }));
           lastError!.message = errorData.error || lastError!.message;
           (lastError as any).errorData = errorData;
@@ -685,7 +690,7 @@ class ApiClient {
           (lastError as any).status = 0;
           (lastError as any).statusCode = 0;
           // Not the last attempt — retry
-          if (attempt < this.MAX_RETRIES) {
+          if (attempt < maxRetries) {
             const delay = this.BASE_RETRY_DELAY_MS * Math.pow(2, attempt);
             await new Promise(r => setTimeout(r, delay));
             continue;
@@ -697,7 +702,7 @@ class ApiClient {
       }
 
       // Exponential backoff before retry
-      if (attempt < this.MAX_RETRIES) {
+      if (attempt < maxRetries) {
         const delay = this.BASE_RETRY_DELAY_MS * Math.pow(2, attempt);
         await new Promise(r => setTimeout(r, delay));
       }
@@ -705,7 +710,7 @@ class ApiClient {
 
     // All retries exhausted
     const finalError = lastError || new Error('Request failed after retries');
-    console.error(`[ApiClient] Request failed after ${this.MAX_RETRIES + 1} attempts:`, endpoint, finalError.message);
+    console.error(`[ApiClient] Request failed after ${maxRetries + 1} attempts:`, endpoint, finalError.message);
     this._reportApiFailure({
       endpoint,
       method,
@@ -1573,10 +1578,16 @@ class ApiClient {
       body: JSON.stringify(data),
       signal: options.signal,
       // Image generation routinely takes 60-180s (gpt-image-2, Seedream,
-      // Imagen). The default 30s client timeout aborted the request while
-      // the backend was still working, surfacing "Request timed out after
-      // 30000ms" even though the image generated fine server-side.
-      timeoutMs: 180000,
+      // Imagen). The backend enforces its own 200s deadline and answers
+      // with a real result or error by then — waiting 210s (> 200s)
+      // guarantees that verdict arrives within a single attempt instead
+      // of the client aborting at 180s while the server is still working.
+      timeoutMs: 210000,
+      // Never auto-retry: a retried generation is a NEW paid generation
+      // (3x provider spend) and 3x the wait. On timeout the caller falls
+      // back to waitForGeneratedImage(), which picks up the image the
+      // backend persists to the chat.
+      maxRetries: 0,
     });
     // El backend ahora envía cabeceras 200 al inicio (para no morir
     // en el proxy de 30 s) y, si la generación falla después, devuelve
@@ -1593,7 +1604,8 @@ class ApiClient {
     const response = await this.request('/ai/generate-image', {
       method: 'POST',
       body: JSON.stringify(data),
-      timeoutMs: 180000, // image edit takes 60-180s; see generateImage
+      timeoutMs: 210000, // > backend 200s deadline; see generateImage
+      maxRetries: 0,     // non-idempotent paid generation — never auto-retry
     })
     if (response && typeof response === 'object' && (response as any).error) {
       const err: any = new Error((response as any).error);
