@@ -208,6 +208,54 @@ test('edit_image requires an instruction', async () => {
   assert.equal(r.ok, false);
 });
 
+// ── edit_image security hardening ─────────────────────────────────────────
+
+test('edit_image blocks path traversal through /uploads URLs', async () => {
+  const prisma = {
+    file: { findMany: async () => [], findFirst: async () => null },
+    message: { findMany: async () => [] },
+  };
+  const r = await tool('edit_image').execute(
+    { instruction: 'x', imageUrl: '/uploads/../../../../etc/passwd' },
+    fakeCtx({ prisma })
+  );
+  assert.equal(r.ok, false);
+  assert.equal(engineCalls.edit.length, 0, 'no edit call should happen for an escaped path');
+});
+
+test('edit_image blocks SSRF to private / metadata addresses', async () => {
+  const prisma = {
+    file: { findMany: async () => [], findFirst: async () => null },
+    message: { findMany: async () => [] },
+  };
+  for (const target of ['http://169.254.169.254/latest/meta-data/', 'http://127.0.0.1:5000/admin', 'http://localhost/x.png']) {
+    const r = await tool('edit_image').execute({ instruction: 'x', imageUrl: target }, fakeCtx({ prisma }));
+    assert.equal(r.ok, false, `should not fetch ${target}`);
+  }
+  assert.equal(engineCalls.edit.length, 0);
+});
+
+test('edit_image last-chat-image lookup filters by owner (no IDOR)', async () => {
+  const seenWheres = [];
+  const prisma = {
+    file: {
+      findMany: async () => [],
+      findFirst: async ({ where }) => { seenWheres.push(where); return null; },
+    },
+    message: {
+      findMany: async () => [
+        { files: JSON.stringify([{ type: 'image', fileId: 'someone-elses-file' }]) },
+      ],
+    },
+  };
+  const r = await tool('edit_image').execute({ instruction: 'x' }, fakeCtx({ prisma }));
+  assert.equal(r.ok, false);
+  assert.ok(seenWheres.length > 0, 'should query the file record');
+  for (const where of seenWheres) {
+    assert.equal(where.userId, 'user-1', 'every file lookup must be owner-scoped');
+  }
+});
+
 // ── generate_video model resolution ──────────────────────────────────────
 
 test('generate_video resolves a cataloged fal model and builds its payload', async () => {

@@ -310,19 +310,31 @@ async function resolveEditSourceImage({ imageUrl, fileId }, ctx = {}) {
     }
     if (/^https?:\/\//i.test(url)) {
       try {
-        const resp = await fetch(url, ctx.signal ? { signal: ctx.signal } : undefined);
+        // SSRF guard: the URL is an LLM-produced tool argument — block
+        // private / loopback / cloud-metadata targets with the same vetting
+        // the harness web_fetch tool uses, and refuse redirects (an
+        // approved host could otherwise bounce us to an internal one).
+        // eslint-disable-next-line global-require
+        const { assertSafeUrl } = require('../agent-harness/tools/web-fetch-tool');
+        assertSafeUrl(url);
+        const resp = await fetch(url, { redirect: 'error', ...(ctx.signal ? { signal: ctx.signal } : {}) });
         if (resp && resp.ok) {
           const buf = Buffer.from(await resp.arrayBuffer());
           if (buf.length) {
             return { buffer: buf, mimeType: resp.headers?.get?.('content-type') || 'image/png', source: url };
           }
         }
-      } catch { /* fall through to other sources */ }
+      } catch { /* unsafe or unreachable URL → fall through to other sources */ }
     }
     const uploadsMatch = url.match(/\/uploads\/(.+)$/);
     if (uploadsMatch) {
       try {
-        const local = path.join(__dirname, '../../../uploads', uploadsMatch[1]);
+        // Containment check: the captured segment is attacker-influenced —
+        // resolve it and require it to stay inside the uploads root so
+        // "/uploads/../../etc/passwd" cannot escape.
+        const uploadsRoot = path.resolve(__dirname, '../../../uploads');
+        const local = path.resolve(uploadsRoot, uploadsMatch[1]);
+        if (local === uploadsRoot || !local.startsWith(uploadsRoot + path.sep)) return null;
         const buf = await fs.promises.readFile(local);
         if (buf.length) return { buffer: buf, mimeType: 'image/png', source: url };
       } catch { /* fall through */ }
@@ -351,8 +363,11 @@ async function resolveEditSourceImage({ imageUrl, fileId }, ctx = {}) {
   }
 
   // 4. Most recent image in the chat (uploaded or generated via the
-  //    dedicated image route, which persists files on the message).
-  if (prisma && ctx.chatId) {
+  //    dedicated image route, which persists files on the message). The
+  //    fileId embedded in message.files is NOT trusted: the file record
+  //    must belong to the requesting user (same ownership filter as the
+  //    fileId branches above).
+  if (prisma && ctx.chatId && ctx.userId) {
     try {
       const messages = await prisma.message.findMany({
         where: { chatId: ctx.chatId, files: { not: null } },
@@ -367,7 +382,9 @@ async function resolveEditSourceImage({ imageUrl, fileId }, ctx = {}) {
         if (!Array.isArray(files)) continue;
         const image = files.find((f) => f && (f.type === 'image' || String(f.type || '').startsWith('image/')) && (f.fileId || f.id));
         if (!image) continue;
-        const record = await prisma.file.findFirst({ where: { id: String(image.fileId || image.id) } });
+        const record = await prisma.file.findFirst({
+          where: { id: String(image.fileId || image.id), userId: ctx.userId },
+        });
         const resolved = await bufferFromFileRecord(record);
         if (resolved) return resolved;
       }
