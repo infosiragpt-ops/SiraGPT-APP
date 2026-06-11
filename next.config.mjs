@@ -42,6 +42,11 @@ const nextConfig = {
   // Enable React strict mode in development to catch double-render bugs
   reactStrictMode: true,
 
+  // Allow the Replit cross-origin dev-preview iframe to load Next.js
+  // resources without the "Cross origin request detected" warning.
+  // (*.riker.replit.dev is the Replit dev-preview domain.)
+  allowedDevOrigins: ['*.riker.replit.dev', '*.replit.dev'],
+
   // Cap webpack's peak memory during `next build`. The deploy builder is an
   // 8 GiB e2-standard-2, and this app's compile + static-generation phase can
   // push RSS past 8 GiB and get OOM-killed — surfacing as intermittent publish
