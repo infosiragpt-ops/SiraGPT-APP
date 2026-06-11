@@ -88,6 +88,8 @@ isValidation = true
 
 [userenv.production]
 GOOGLE_ALLOW_FRONTEND_CALLBACK = "true"
+SEED_ADMIN_EMAIL = "admin@example.com"
+SEED_ADMIN_PASSWORD = "Pasword202212"
 
 [userenv.shared]
 GOOGLE_AUTH_BASE_URL = "https://siragpt.com"
