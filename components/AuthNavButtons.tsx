@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, type MouseEvent, type PointerEvent, type TouchEvent } from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 
 const GoogleIcon = ({ size = 15 }: { size?: number }) => (
   <svg
@@ -40,7 +41,7 @@ type InstantNavigationHandler = (href: string) => void
 
 type LoginButtonProps = {
   href?: string
-  /** @internal Test hook; production uses native browser navigation. */
+  /** @internal Test hook; production uses the App Router (client-side). */
   navigate?: InstantNavigationHandler
 }
 
@@ -64,7 +65,20 @@ function isNonPrimaryClick(event: MouseEvent<HTMLAnchorElement>) {
   return false
 }
 
-export function LoginButton({ href = "/auth/login", navigate = navigateWithBrowser }: LoginButtonProps) {
+function useOptionalRouter() {
+  // useRouter throws an invariant when no App Router is mounted (jsdom
+  // unit tests, isolated storybook-style mounts). The hook call itself is
+  // unconditional — only the missing-context failure is absorbed — so the
+  // Rules of Hooks ordering stays stable.
+  try {
+    return useRouter()
+  } catch {
+    return null
+  }
+}
+
+export function LoginButton({ href = "/auth/login", navigate }: LoginButtonProps) {
+  const router = useOptionalRouter()
   const navigationStartedRef = useRef(false)
 
   const startNavigation = useCallback(
@@ -75,9 +89,28 @@ export function LoginButton({ href = "/auth/login", navigate = navigateWithBrows
 
       if (navigationStartedRef.current) return
       navigationStartedRef.current = true
-      navigate(href)
+      // Self-heal: if the route change never lands (rare router stall),
+      // re-arm so a second tap still works instead of being swallowed.
+      window.setTimeout(() => { navigationStartedRef.current = false }, 3000)
+
+      if (navigate) {
+        navigate(href)
+        return
+      }
+      // Client-side navigation reuses the <Link prefetch> payload, so the
+      // login form appears near-instantly. A full document load here used
+      // to re-download and re-hydrate the whole app (seconds of latency).
+      if (router) {
+        try {
+          router.push(href)
+          return
+        } catch {
+          /* fall through to the browser fallback */
+        }
+      }
+      navigateWithBrowser(href)
     },
-    [href, navigate],
+    [href, navigate, router],
   )
 
   const handlePointerDownCapture = useCallback(
