@@ -46,7 +46,7 @@
   const { runToolWithRetry } = require('./agents/tool-call-retry');
   const { liveSubagentsEnabled } = require('./agents/subagent-guard');
   const { isAgenticActionRequest, isArtifactDeliverableRequest, isDocumentEditRequest } = require('./agents/agentic-trigger');
-  const { detectMediaIntent, buildMediaIntentHint } = require('./agents/media-intent');
+  const { detectMediaIntent, detectMediaIntents, buildMediaIntentsHint } = require('./agents/media-intent');
   const {
     buildExecutionProfile,
     buildExecutionProfilePrompt,
@@ -505,7 +505,13 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
     // image / video / audio / music in the chat bar, this pre-extracts the
     // specs (duration, aspect ratio, count, style/genre) and lets us inject a
     // directive so the agent reliably calls the matching tool with them.
-    const mediaIntent = detectMediaIntent(userQuery);
+    // Multi-intent: "crea un video y una foto" yields BOTH intents — the
+    // primary (intents[0]) drives the forced first tool call, and the hint
+    // instructs the model to call every requested tool before finalizing.
+    const mediaIntents = detectMediaIntents(userQuery, {
+      hasImageAttachment: Boolean(toolContext && toolContext.hasImageAttachment),
+    });
+    const mediaIntent = mediaIntents[0] || null;
 
     // ─── Agent harness (Phase 1) ──────────────────────────────────────────
     // Merge the harness-native tools (web_fetch / run_javascript /
@@ -549,7 +555,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       try {
         const { capToolsForPrompted } = require('./agents/prompted-tool-calling');
         const pinned = [
-          mediaIntent && mediaIntent.tool,
+          ...mediaIntents.map((intent) => intent && intent.tool),
           ...(Array.isArray(toolContext.fileIds) && toolContext.fileIds.length
             ? ['rag_retrieve', 'docintel_analyze', 'search_docs', 'document_edit']
             : []),
@@ -658,7 +664,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
     const extraSystem = [
       'Responde SIEMPRE en español, con tono profesional y cercano. No uses emojis.',
       'En tareas con 2 o más pasos llama `update_plan` PRIMERO con el plan completo (3-7 pasos cortos) y vuelve a llamarlo al completar cada paso o si el plan cambia — el usuario lo ve actualizarse en vivo. Para tareas de una sola acción no hace falta plan.',
-      initialToolChoice ? buildMediaIntentHint(mediaIntent) : '',
+      initialToolChoice ? buildMediaIntentsHint(mediaIntents) : '',
       openclawRuntimeBlock,
       buildExecutionProfilePrompt(executionProfile),
       buildThreadWorkContext(history, userQuery),

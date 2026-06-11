@@ -32,6 +32,27 @@ require.cache[require.resolve(path.join(SERVICE_DIR, 'ai-service'))] = {
   },
 };
 
+// Stub the multi-provider image engine (generate_image / edit_image route
+// through it now) so tests never hit a real provider.
+require.cache[require.resolve(path.join(SERVICE_DIR, 'media/image-engine'))] = {
+  exports: {
+    generateImage: async () => ({
+      ok: true,
+      images: [{ b64: Buffer.from('fake-image-bytes').toString('base64'), mime: 'image/png' }],
+      provider: 'openai',
+      model: 'gpt-image-2',
+      attempts: [{ provider: 'openai', model: 'gpt-image-2', ok: true }],
+    }),
+    editImage: async () => ({
+      ok: true,
+      images: [{ b64: Buffer.from('fake-edited-bytes').toString('base64'), mime: 'image/png' }],
+      provider: 'gemini',
+      model: 'gemini-2.5-flash-image',
+      attempts: [{ provider: 'gemini', model: 'gemini-2.5-flash-image', ok: true }],
+    }),
+  },
+};
+
 // Stub viz-generator
 require.cache[require.resolve(path.join(SERVICE_DIR, 'viz-generator'))] = {
   exports: {},
@@ -653,8 +674,8 @@ test('create_dashboard_html: no charts', async () => {
 
 // ── Tool metadata ────────────────────────────────────────────────
 
-test('all 34 tools have valid metadata', () => {
-  assert.equal(VISUAL_MEDIA_TOOLS.length, 34);
+test('all 35 tools have valid metadata', () => {
+  assert.equal(VISUAL_MEDIA_TOOLS.length, 35);
   for (const t of VISUAL_MEDIA_TOOLS) {
     assert.ok(t.name);
     assert.ok(t.description);

@@ -274,10 +274,13 @@ function createProviderClient(provider) {
   }
 
   if (provider === "OpenRouter") {
-    return new OpenAI({
+    // afford-guard: low-credit 402s retry once with a clamped max_tokens
+    // instead of dead-ending the turn. See services/ai/openrouter-afford-guard.
+    const { wrapOpenRouterClient } = require('../services/ai/openrouter-afford-guard');
+    return wrapOpenRouterClient(new OpenAI({
       apiKey: process.env.OPENROUTER_API_KEY,
       baseURL: "https://openrouter.ai/api/v1",
-    });
+    }));
   }
 
   if (provider === "DeepSeek") {
@@ -5259,6 +5262,11 @@ router.post(
                     openai: agenticClient,
                     collection: 'default',
                     fileIds: agenticFileIds,
+                    // Lets media-intent treat edit phrasings ("mejora la
+                    // calidad", "recorta la imagen") as img2img edits.
+                    hasImageAttachment: (processedFiles || []).some(
+                      (file) => file && isImageMime(file.mimeType || file.type)
+                    ),
                   },
                 });
                 // The agentic loop reports success via stoppedReason:

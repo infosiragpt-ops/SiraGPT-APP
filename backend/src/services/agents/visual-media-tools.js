@@ -42,6 +42,12 @@ function getVizGenerator() {
   return vizGeneratorMod;
 }
 
+let imageEngineMod;
+function getImageEngine() {
+  if (!imageEngineMod) imageEngineMod = require('../media/image-engine');
+  return imageEngineMod;
+}
+
 // ── Shared helpers ──────────────────────────────────────────────────────
 
 function ensureDir(p) {
@@ -185,28 +191,23 @@ function generateScenesFromPrompt(prompt, totalDuration) {
 
 const generateImage = {
   name: 'generate_image',
-  description: 'Generate an image from a text description using an AI image model (DALL-E, Stable Diffusion, or the user\'s configured provider). The resulting image is saved as a downloadable artifact. Use for photos, illustrations, diagrams, concept art, product mockups, or any visual content.',
+  description: 'Generate an image from a text description using ANY configured AI image model — OpenAI (gpt-image), Google (Imagen/Gemini), fal.ai (FLUX, etc.), OpenRouter or xAI. The model is routed to its provider automatically and, if that provider fails or has no API key, the engine fails over to the next configured one. The resulting image is saved as a downloadable artifact. Use for photos, illustrations, concept art, product mockups, or any visual content.',
   parameters: {
     type: 'object',
     properties: {
       prompt: { type: 'string', description: 'Detailed description of the image to generate. More detail = better results.' },
       style: { type: 'string', description: 'Optional style hint: "realistic", "vivid", "natural", "photographic", "digital-art", "anime", "oil-painting", "line-art". Default: "vivid".' },
-      aspectRatio: { type: 'string', enum: ['square', 'wide', 'portrait'], description: 'Aspect ratio hint. Default: "square" (1024×1024). wide → 1792×1024, portrait → 1024×1792.' },
+      aspectRatio: { type: 'string', enum: ['square', 'wide', 'portrait'], description: 'Aspect ratio hint. Default: "square". wide → landscape, portrait → vertical.' },
       quality: { type: 'string', enum: ['standard', 'hd'], description: 'Quality level. Default: "standard".' },
+      model: { type: 'string', description: 'Optional image model id, e.g. "gpt-image-2", "imagen-4.0-generate-001", "fal-ai/flux/schnell", "black-forest-labs/flux-1.1-pro", "grok-2-image". Only pass it when the user asked for a specific model; omit to use the best configured provider.' },
     },
     required: ['prompt'],
     additionalProperties: false,
   },
-  async execute({ prompt, style = 'vivid', aspectRatio = 'square', quality = 'standard' }, ctx = {}) {
+  async execute({ prompt, style = 'vivid', aspectRatio = 'square', quality = 'standard', model }, ctx = {}) {
     emitEvent(ctx, 'tool_call', { tool: 'generate_image', preview: prompt });
 
     try {
-      const ai = getAiService();
-
-      // Map aspect ratio to size
-      const sizeMap = { square: '1024x1024', wide: '1792x1024', portrait: '1024x1792' };
-      const size = sizeMap[aspectRatio] || '1024x1024';
-
       // Enhance prompt with style hint
       const styleHints = {
         realistic: 'Photorealistic, highly detailed.',
@@ -223,15 +224,23 @@ const generateImage = {
 
       emitEvent(ctx, 'tool_output', { tool: 'generate_image', preview: 'Generando imagen…', partial: true });
 
-      // dall-e-3 was removed from this account (400 model does not exist);
-      // use gpt-image-2 to match ai-service.generateImage's new default.
-      const imageB64 = await ai.generateImage(enhancedPrompt, 'OpenAI', 'gpt-image-2');
-      if (!imageB64) {
-        emitEvent(ctx, 'tool_output', { tool: 'generate_image', ok: false, preview: 'El servicio de imágenes no devolvió resultado. Reintenta con un prompt más simple.' });
-        return { ok: false, error: 'image generation returned empty result' };
+      const engine = getImageEngine();
+      const result = await engine.generateImage({
+        prompt: enhancedPrompt,
+        model: model || ctx.imageModel || undefined,
+        aspectRatio,
+        quality,
+        n: 1,
+        signal: ctx.signal,
+      });
+
+      if (!result.ok || !result.images?.length) {
+        const msg = result.error || 'El servicio de imágenes no devolvió resultado. Reintenta con un prompt más simple.';
+        emitEvent(ctx, 'tool_output', { tool: 'generate_image', ok: false, preview: msg });
+        return { ok: false, error: msg, attempts: result.attempts };
       }
 
-      const buffer = Buffer.from(imageB64, 'base64');
+      const buffer = Buffer.from(result.images[0].b64, 'base64');
       const filename = `image_${crypto.randomBytes(4).toString('hex')}.png`;
 
       const artifact = finalizeArtifact({ filename, buffer, mime: 'image/png', ctx });
@@ -250,7 +259,7 @@ const generateImage = {
       emitEvent(ctx, 'tool_output', {
         tool: 'generate_image',
         ok: true,
-        preview: `Imagen lista: ${artifact.filename} (${Math.round(artifact.sizeBytes / 1024)} KB)`,
+        preview: `Imagen lista: ${artifact.filename} (${Math.round(artifact.sizeBytes / 1024)} KB, ${result.model} vía ${result.provider})`,
       });
 
       return {
@@ -261,10 +270,194 @@ const generateImage = {
         downloadUrl: artifact.downloadUrl,
         mime: 'image/png',
         prompt: enhancedPrompt,
+        provider: result.provider,
+        model: result.model,
       };
     } catch (err) {
       const msg = err?.message || String(err);
       emitEvent(ctx, 'tool_output', { tool: 'generate_image', ok: false, preview: `Error: ${msg}` });
+      return { ok: false, error: msg };
+    }
+  },
+};
+
+// ─────────────────────────────────────────────────────────────────────────
+// Tool 1b: edit_image (img2img — transform an existing image)
+// ─────────────────────────────────────────────────────────────────────────
+
+/** Resolve the source image for edit_image into a Buffer. */
+async function resolveEditSourceImage({ imageUrl, fileId }, ctx = {}) {
+  const prisma = ctx.prisma || (() => { try { return require('../../config/database'); } catch { return null; } })();
+
+  async function bufferFromFileRecord(record) {
+    if (!record || !record.path) return null;
+    try {
+      const buf = await fs.promises.readFile(record.path);
+      return buf && buf.length
+        ? { buffer: buf, mimeType: record.mimeType || 'image/png', source: record.originalName || record.filename }
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // 1. Explicit URL (http(s), data: or a local /uploads path).
+  const url = String(imageUrl || '').trim();
+  if (url) {
+    const dataMatch = url.match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i);
+    if (dataMatch) {
+      return { buffer: Buffer.from(dataMatch[2], 'base64'), mimeType: dataMatch[1], source: 'data-url' };
+    }
+    if (/^https?:\/\//i.test(url)) {
+      try {
+        const resp = await fetch(url, ctx.signal ? { signal: ctx.signal } : undefined);
+        if (resp && resp.ok) {
+          const buf = Buffer.from(await resp.arrayBuffer());
+          if (buf.length) {
+            return { buffer: buf, mimeType: resp.headers?.get?.('content-type') || 'image/png', source: url };
+          }
+        }
+      } catch { /* fall through to other sources */ }
+    }
+    const uploadsMatch = url.match(/\/uploads\/(.+)$/);
+    if (uploadsMatch) {
+      try {
+        const local = path.join(__dirname, '../../../uploads', uploadsMatch[1]);
+        const buf = await fs.promises.readFile(local);
+        if (buf.length) return { buffer: buf, mimeType: 'image/png', source: url };
+      } catch { /* fall through */ }
+    }
+  }
+
+  // 2. Explicit fileId (ownership-checked).
+  if (fileId && prisma && ctx.userId) {
+    try {
+      const record = await prisma.file.findFirst({ where: { id: String(fileId), userId: ctx.userId } });
+      const resolved = await bufferFromFileRecord(record);
+      if (resolved) return resolved;
+    } catch { /* fall through */ }
+  }
+
+  // 3. Image attached to THIS message (toolContext.fileIds).
+  if (prisma && ctx.userId && Array.isArray(ctx.fileIds) && ctx.fileIds.length) {
+    try {
+      const records = await prisma.file.findMany({
+        where: { id: { in: ctx.fileIds.map(String) }, userId: ctx.userId },
+      });
+      const image = records.find((r) => String(r.mimeType || '').startsWith('image/'));
+      const resolved = await bufferFromFileRecord(image);
+      if (resolved) return resolved;
+    } catch { /* fall through */ }
+  }
+
+  // 4. Most recent image in the chat (uploaded or generated via the
+  //    dedicated image route, which persists files on the message).
+  if (prisma && ctx.chatId) {
+    try {
+      const messages = await prisma.message.findMany({
+        where: { chatId: ctx.chatId, files: { not: null } },
+        orderBy: { timestamp: 'desc' },
+        take: 10,
+      });
+      for (const message of messages) {
+        let files;
+        try {
+          files = typeof message.files === 'string' ? JSON.parse(message.files) : message.files;
+        } catch { continue; }
+        if (!Array.isArray(files)) continue;
+        const image = files.find((f) => f && (f.type === 'image' || String(f.type || '').startsWith('image/')) && (f.fileId || f.id));
+        if (!image) continue;
+        const record = await prisma.file.findFirst({ where: { id: String(image.fileId || image.id) } });
+        const resolved = await bufferFromFileRecord(record);
+        if (resolved) return resolved;
+      }
+    } catch { /* fall through */ }
+  }
+
+  return null;
+}
+
+const editImage = {
+  name: 'edit_image',
+  description: 'Edit / transform an EXISTING image with a natural-language instruction (img2img): remove or change the background, add/remove objects, change colors or style, retouch, restore, etc. The source image is resolved automatically from the file the user attached, an explicit imageUrl/fileId, or the most recent image in this chat. Use when the user says "edita/modifica/retoca esta foto", "quítale el fondo", "cámbiale el color", "remove the background". Do NOT use to create brand-new images — that is generate_image.',
+  parameters: {
+    type: 'object',
+    properties: {
+      instruction: { type: 'string', description: 'The transformation to apply, in natural language (e.g. "quita el fondo y déjalo transparente", "make the sky sunset orange").' },
+      imageUrl: { type: 'string', description: 'Optional URL of the source image (http(s), data: or an /uploads path from this chat).' },
+      fileId: { type: 'string', description: 'Optional id of an uploaded file to edit. Defaults to the image attached to the message or the last image in the chat.' },
+      model: { type: 'string', description: 'Optional edit model override (e.g. "gemini-2.5-flash-image", "gpt-image-1"). Omit to use the best configured provider.' },
+    },
+    required: ['instruction'],
+    additionalProperties: false,
+  },
+  async execute({ instruction, imageUrl, fileId, model } = {}, ctx = {}) {
+    emitEvent(ctx, 'tool_call', { tool: 'edit_image', preview: instruction });
+
+    try {
+      const cleanInstruction = String(instruction || '').trim();
+      if (!cleanInstruction) return { ok: false, error: 'La instrucción de edición está vacía.' };
+
+      emitEvent(ctx, 'tool_output', { tool: 'edit_image', preview: 'Buscando la imagen a editar…', partial: true });
+      const source = await resolveEditSourceImage({ imageUrl, fileId }, ctx);
+      if (!source) {
+        const msg = 'No encontré ninguna imagen para editar. Pide al usuario que adjunte la imagen o genera una primero con generate_image.';
+        emitEvent(ctx, 'tool_output', { tool: 'edit_image', ok: false, preview: msg });
+        return { ok: false, error: msg };
+      }
+
+      emitEvent(ctx, 'tool_output', { tool: 'edit_image', preview: 'Aplicando la edición a la imagen…', partial: true });
+      const engine = getImageEngine();
+      const result = await engine.editImage({
+        prompt: cleanInstruction,
+        imageBuffer: source.buffer,
+        mimeType: source.mimeType,
+        model,
+        signal: ctx.signal,
+      });
+
+      if (!result.ok || !result.images?.length) {
+        const msg = result.error || 'El servicio de edición de imágenes no devolvió resultado.';
+        emitEvent(ctx, 'tool_output', { tool: 'edit_image', ok: false, preview: msg });
+        return { ok: false, error: msg, attempts: result.attempts };
+      }
+
+      const buffer = Buffer.from(result.images[0].b64, 'base64');
+      const filename = `imagen_editada_${crypto.randomBytes(4).toString('hex')}.png`;
+      const artifact = finalizeArtifact({ filename, buffer, mime: 'image/png', ctx });
+
+      emitEvent(ctx, 'file_artifact', {
+        artifact: {
+          id: artifact.id,
+          filename: artifact.filename,
+          format: 'png',
+          mime: 'image/png',
+          sizeBytes: artifact.sizeBytes,
+          downloadUrl: artifact.downloadUrl,
+        },
+      });
+
+      emitEvent(ctx, 'tool_output', {
+        tool: 'edit_image',
+        ok: true,
+        preview: `Imagen editada: ${artifact.filename} (${Math.round(artifact.sizeBytes / 1024)} KB, ${result.model} vía ${result.provider})`,
+      });
+
+      return {
+        ok: true,
+        id: artifact.id,
+        filename: artifact.filename,
+        sizeBytes: artifact.sizeBytes,
+        downloadUrl: artifact.downloadUrl,
+        mime: 'image/png',
+        instruction: cleanInstruction,
+        sourceImage: source.source,
+        provider: result.provider,
+        model: result.model,
+      };
+    } catch (err) {
+      const msg = err?.message || String(err);
+      emitEvent(ctx, 'tool_output', { tool: 'edit_image', ok: false, preview: `Error: ${msg}` });
       return { ok: false, error: msg };
     }
   },
@@ -1749,11 +1942,13 @@ const generateVideo = {
       duration: { type: 'integer', minimum: 3, maximum: 30, description: 'Target duration in seconds. Default 8.' },
       aspectRatio: { type: 'string', enum: ['16:9', '9:16', '1:1', '4:3'], description: 'Aspect ratio. Default "16:9".' },
       style: { type: 'string', description: 'Style hint: "cinematic", "realistic", "animated", "claymation", "retro", "3d-render".' },
+      model: { type: 'string', description: 'Optional fal.ai video model (e.g. "fal-ai/veo3/fast", "fal-ai/kling-video/v2.5-turbo/pro/text-to-video", "fal-ai/sora-2/text-to-video"). Only pass it when the user asked for a specific model; omit for the default (Veo 3 fast).' },
+      imageUrl: { type: 'string', description: 'Optional source image URL to animate (image-to-video). Use the URL of an image the user attached or one generated earlier in this chat.' },
     },
     required: ['prompt'],
     additionalProperties: false,
   },
-  async execute({ prompt, title, duration = 8, aspectRatio = '16:9', style }, ctx = {}) {
+  async execute({ prompt, title, duration = 8, aspectRatio = '16:9', style, model, imageUrl }, ctx = {}) {
     emitEvent(ctx, 'tool_call', { tool: 'generate_video', preview: prompt });
 
     try {
@@ -1898,20 +2093,44 @@ const generateVideo = {
           const { fal } = require('@fal-ai/client');
           fal.config({ credentials: falKey });
           const secs = Math.min(Math.max(Number(duration) || 8, 4), 15);
-          // Veo 3 fast supports 16:9 / 9:16 — map anything else to 16:9.
+          const sourceImageUrl = String(imageUrl || '').trim() || null;
+
+          // Resolve the requested model against the fal video catalog (any
+          // cataloged model works; an attached image flips the endpoint to
+          // the model's image-to-video variant). Unknown / incompatible
+          // requests fall back to Veo 3 fast instead of failing the turn.
+          const DEFAULT_FAL_VIDEO_ENDPOINT = 'fal-ai/veo3/fast';
+          let endpoint = DEFAULT_FAL_VIDEO_ENDPOINT;
+          const requestedVideoModel = String(model || '').trim();
+          // eslint-disable-next-line global-require
+          const falVideoCatalog = require('../fal-video-model-catalog');
+          const resolution = falVideoCatalog.resolveFalVideoModelRequest(
+            requestedVideoModel && !/^veo[-_]?fast$/i.test(requestedVideoModel)
+              ? requestedVideoModel
+              : DEFAULT_FAL_VIDEO_ENDPOINT,
+            { hasImage: Boolean(sourceImageUrl), imageCount: sourceImageUrl ? 1 : 0 }
+          );
+          if (resolution && resolution.ok && resolution.endpoint) {
+            endpoint = resolution.endpoint;
+          } else if (resolution && resolution.ok === false && requestedVideoModel) {
+            emitEvent(ctx, 'tool_output', { tool: 'generate_video', preview: `${resolution.message || 'Modelo de video no disponible'}; usando Veo 3 fast…`, partial: true });
+          }
+
+          // Veo supports 16:9 / 9:16 — map anything else to 16:9.
           const falAspect = (aspectRatio === '16:9' || aspectRatio === '9:16') ? aspectRatio : '16:9';
-          emitEvent(ctx, 'tool_output', { tool: 'generate_video', preview: `Generando video real con Veo (${secs}s)…`, partial: true });
-          const falResult = await fal.subscribe('fal-ai/veo3/fast', {
-            input: {
-              prompt: enhancedPrompt,
-              duration: `${secs}s`,
-              aspect_ratio: falAspect,
-              generate_audio: true,
-              resolution: '720p',
-            },
-            logs: false,
+          const falInput = falVideoCatalog.buildFalVideoInputPayload({
+            endpoint,
+            prompt: enhancedPrompt,
+            aspectRatio: falAspect,
+            duration: secs,
+            imageUrl: sourceImageUrl,
+            resolution: '720p',
+            audio: true,
           });
-          const veoUrl = falResult && falResult.data && falResult.data.video && falResult.data.video.url;
+          emitEvent(ctx, 'tool_output', { tool: 'generate_video', preview: `Generando video real con ${endpoint} (${secs}s)…`, partial: true });
+          const falResult = await fal.subscribe(endpoint, { input: falInput, logs: false });
+          const veoUrl = falVideoCatalog.extractFalVideoUrl(falResult)
+            || (falResult && falResult.data && falResult.data.video && falResult.data.video.url);
           if (veoUrl) {
             const dl = await fetch(veoUrl, { signal: ctx.signal });
             if (dl && dl.ok) {
@@ -1940,7 +2159,9 @@ const generateVideo = {
                 sizeBytes: artifact.sizeBytes,
                 downloadUrl: artifact.downloadUrl,
                 mime: 'video/mp4',
-                provider: 'fal/veo3-fast',
+                provider: `fal/${endpoint.replace(/^fal-ai\//, '')}`,
+                model: endpoint,
+                generationType: sourceImageUrl ? 'image-to-video' : 'text-to-video',
                 prompt: enhancedPrompt,
                 duration: secs,
                 aspectRatio: falAspect,
@@ -8206,6 +8427,7 @@ const createSwimlaneDiagram = {
 
 const VISUAL_MEDIA_TOOLS = [
   generateImage,
+  editImage,
   createChart,
   createOrganigram,
   createMermaidDiagram,
