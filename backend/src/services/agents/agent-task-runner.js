@@ -2811,6 +2811,8 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       });
     }
 
+    let preLoopStepId = null;
+
     const reactRunArgs = {
       query: goal,
       tools,
@@ -2845,6 +2847,10 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         try { console.log(`[agent-task-runner] trace compacted at step ${step}: -${removedMessages} msgs, ${chars} chars (task ${taskId})`); } catch (_) {}
       },
       onStepStart: (step) => {
+        if (preLoopStepId && currentStepId === preLoopStepId) {
+          emit({ type: 'step_done', id: preLoopStepId, ok: true });
+          preLoopStepId = null;
+        }
         stepIdCounter += 1;
         currentStepId = `s${stepIdCounter}`;
         const thought = (step.thought || '').trim();
@@ -2866,7 +2872,30 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       },
     };
 
+    // Emit an immediate "thinking" step before the first LLM round-trip so
+    // the frontend stale-detection timer (90 s of no step events) does NOT
+    // fire during a slow model response. Without this, a DeepSeek / OpenRouter
+    // call that takes >90 s produces "Sin actualizaciones recientes" even
+    // though the task is actively running.
+    stepIdCounter += 1;
+    currentStepId = `s${stepIdCounter}`;
+    preLoopStepId = currentStepId;
+    const preLoopLabel = (() => {
+      const g = (goal || '').toLowerCase();
+      if (/busca|artículo|investiga|paper|paper|científico|científica|search|find/.test(g)) return 'Buscando información...';
+      if (/analiz|resume|resumir|resum|analys/.test(g)) return 'Analizando solicitud...';
+      if (/escribe|redacta|crea|genera|write|draft/.test(g)) return 'Redactando respuesta...';
+      return 'Procesando solicitud...';
+    })();
+    emit({ type: 'step_start', id: preLoopStepId, label: preLoopLabel, icon: 'brain' });
+
     let result = await reactAgent.run(openai, reactRunArgs);
+
+    if (preLoopStepId && currentStepId === preLoopStepId) {
+      emit({ type: 'step_done', id: preLoopStepId, ok: true });
+      preLoopStepId = null;
+      currentStepId = null;
+    }
 
     // ── Cross-provider model failover (OpenClaw-style) ─────────────────
     // The tool stack (búsquedas científicas key-free, documentos, etc.) es
