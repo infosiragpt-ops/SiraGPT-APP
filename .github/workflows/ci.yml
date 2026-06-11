@@ -467,6 +467,7 @@ jobs:
             e2e/auth-forms.spec.ts
             e2e/admin-smoke.spec.ts
             e2e/chat-upload.spec.ts
+            e2e/chat-paste-ingest.spec.ts
           )
           timeout --kill-after=30s 8m npm run test:e2e -- --reporter=list "${E2E_SMOKE_SPECS[@]}"
           smoke_status=$?

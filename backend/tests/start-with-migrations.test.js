@@ -60,10 +60,17 @@ test("static analysis rejects path traversal / unknown migration names", () => {
   assert.equal(migrationSqlIsIdempotentAdditive("", MIGRATIONS_DIR), false);
 });
 
-test("prisma database url takes precedence over generic database url", () => {
+test("direct DATABASE_URL takes precedence over PRISMA_DATABASE_URL", () => {
+  // Since "Improve database connection logic for migration checks": the
+  // schema uses DATABASE_URL directly, so the migration preflight favours
+  // the direct PostgreSQL connection; PRISMA_DATABASE_URL (formerly Prisma
+  // Accelerate) is only a fallback.
   assert.equal(resolvePrismaDatabaseUrl({
     PRISMA_DATABASE_URL: "postgres://prisma.example/db",
     DATABASE_URL: "postgres://generic.example/db",
+  }), "postgres://generic.example/db");
+  assert.equal(resolvePrismaDatabaseUrl({
+    PRISMA_DATABASE_URL: "postgres://prisma.example/db",
   }), "postgres://prisma.example/db");
 });
 
