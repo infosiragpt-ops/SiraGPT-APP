@@ -16,6 +16,7 @@ import {
   CODEX_UPDATED_EVENT,
   codexIdForProject,
   listCodexProjects,
+  removeCodexProject,
   type CodexProjectEntry,
   upsertCodexProject,
 } from "@/lib/codex-projects"
@@ -38,6 +39,7 @@ export function CodexFoldersSidebar({ onClose, variant = "rail" }: Props) {
     activeFolder,
     openLocalFolderWorkspace,
     resetWorkspace,
+    forgetWorkspace,
     activeCodeChatSessionId,
     setActiveCodeChatSession,
     listCodeChatSessionsForWorkspace,
@@ -184,6 +186,34 @@ export function CodexFoldersSidebar({ onClose, variant = "rail" }: Props) {
     [localEntries, projects, switchTo],
   )
 
+  const handleDeleteWorkspace = React.useCallback(
+    async (node: WorkspaceTreeNode) => {
+      const isCloud = node.kind === "project"
+      const message = isCloud
+        ? `¿Eliminar el proyecto "${node.name}"? Se borrarán también sus chats. Esta acción no se puede deshacer.`
+        : `¿Quitar la carpeta "${node.name}" de tus proyectos? No se borra ningún archivo de tu disco.`
+      if (typeof window !== "undefined" && !window.confirm(message)) return
+      try {
+        if (isCloud) {
+          await projectsService.remove(node.chatListId)
+        }
+        removeCodexProject(node.id)
+        forgetWorkspace(node.id)
+        setChatsByFolder((prev) => {
+          if (!(node.chatListId in prev)) return prev
+          const next = { ...prev }
+          delete next[node.chatListId]
+          return next
+        })
+        await refresh()
+        toast.success(isCloud ? `Proyecto "${node.name}" eliminado.` : `Carpeta "${node.name}" quitada.`)
+      } catch (err: any) {
+        toast.error(err?.message || "No se pudo eliminar el proyecto")
+      }
+    },
+    [forgetWorkspace, refresh],
+  )
+
   const handleOpenChat = React.useCallback((chatId: string) => {
     if (typeof window === "undefined") return
     window.open(`/chat?id=${encodeURIComponent(chatId)}`, "_blank", "noopener,noreferrer")
@@ -281,6 +311,7 @@ export function CodexFoldersSidebar({ onClose, variant = "rail" }: Props) {
           loading={loading}
           onToggleExpand={toggleExpanded}
           onOpenWorkspace={handleOpenWorkspace}
+          onDeleteWorkspace={handleDeleteWorkspace}
           onOpenChat={handleOpenChat}
           onNewCodeChat={handleNewCodeChat}
           onSelectCodeSession={handleSelectCodeSession}

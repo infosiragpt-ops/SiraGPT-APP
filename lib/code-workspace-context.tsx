@@ -63,6 +63,9 @@ import {
 import type { AgentState } from "./code-agent/types"
 
 export const SWITCH_CODEX_WORKSPACE_EVENT = "siragpt:switch-codex-workspace"
+/** Fired (with detail {id}) when a workspace is deleted elsewhere (e.g. the app
+ *  sidebar) so the open /code workspace drops it from state and resets if active. */
+export const FORGET_CODEX_WORKSPACE_EVENT = "siragpt:forget-codex-workspace"
 export const TOGGLE_CODEX_SIDEBAR_EVENT = "siragpt:toggle-codex-sidebar"
 export const CODE_ACTIVITY_EVENT = "siragpt:code-activity"
 export const CODE_NEW_CODE_CHAT_EVENT = "siragpt:code-new-code-chat"
@@ -125,6 +128,11 @@ export type CodeWorkspaceContextValue = {
 
   /** Reset the workspace to the starter project. */
   resetWorkspace: () => void
+
+  /** Delete a workspace folder's local state (persisted files/tabs). If it is
+   *  the one currently open, fall back to the starter project. Does NOT touch
+   *  the codex registry, the backend project, or the user's disk. */
+  forgetWorkspace: (id: string) => void
 
   /** Open a Desktop/local folder through the browser File System Access
    *  picker and replace the in-memory workspace with compatible files. */
@@ -435,6 +443,26 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
     setWorkspaceSource({ kind: "starter", name: "Ejemplo local", linked: false })
   }, [])
 
+  const forgetWorkspace = React.useCallback(
+    (id: string) => {
+      if (!id) return
+      if (typeof window !== "undefined") {
+        try {
+          window.localStorage.removeItem(storageKeyFor(id))
+        } catch {
+          /* fail soft */
+        }
+      }
+      // If the deleted workspace is the one currently open, drop back to the
+      // starter project so the editor never points at a folder that's gone.
+      if (activeFolder?.id === id) {
+        setActiveFolder(null)
+        resetWorkspace()
+      }
+    },
+    [activeFolder?.id, setActiveFolder, resetWorkspace],
+  )
+
   const openLocalFolderWorkspace = React.useCallback(async () => {
     try {
       const imported = await openLocalDirectoryWorkspace()
@@ -466,6 +494,9 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
         window.dispatchEvent(new CustomEvent(CODEX_UPDATED_EVENT))
       }
       toast.success(`Carpeta "${imported.rootName}" abierta como workspace.`)
+      if (imported.fileCount === 0) {
+        toast.info("La carpeta está vacía — crea archivos o pídeselos al agente para empezar.")
+      }
       if (imported.skippedCount > 0) {
         toast.info(`${imported.skippedCount} archivo(s) se omitieron por tamaño, formato o carpeta ignorada.`)
       }
@@ -542,13 +573,20 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       if (!detail?.id) return
       void switchCodexWorkspace(detail)
     }
+    const forget = (event: Event) => {
+      const detail = (event as CustomEvent<{ id?: string }>).detail
+      if (!detail?.id) return
+      forgetWorkspace(detail.id)
+    }
     window.addEventListener("siragpt:open-local-folder", openFolder)
     window.addEventListener(SWITCH_CODEX_WORKSPACE_EVENT, switchWorkspace)
+    window.addEventListener(FORGET_CODEX_WORKSPACE_EVENT, forget)
     return () => {
       window.removeEventListener("siragpt:open-local-folder", openFolder)
       window.removeEventListener(SWITCH_CODEX_WORKSPACE_EVENT, switchWorkspace)
+      window.removeEventListener(FORGET_CODEX_WORKSPACE_EVENT, forget)
     }
-  }, [openLocalFolderWorkspace, switchCodexWorkspace])
+  }, [openLocalFolderWorkspace, switchCodexWorkspace, forgetWorkspace])
 
   const saveFileToWorkspace = React.useCallback(async (path?: string) => {
     const targetPath = path || state.activePath
@@ -741,6 +779,7 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       renameFile,
       deleteFile,
       resetWorkspace,
+      forgetWorkspace,
       openLocalFolderWorkspace,
       saveFileToWorkspace,
       applyBlock,
@@ -774,6 +813,7 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       renameFile,
       deleteFile,
       resetWorkspace,
+      forgetWorkspace,
       openLocalFolderWorkspace,
       saveFileToWorkspace,
       applyBlock,

@@ -45,6 +45,7 @@ import {
 import {
   CODE_NEW_CODE_CHAT_EVENT,
   CODE_SELECT_CHAT_SESSION_EVENT,
+  FORGET_CODEX_WORKSPACE_EVENT,
   type CodeNewChatDetail,
 } from "@/lib/code-workspace-context"
 import { useChat } from "@/lib/chat-context-integrated"
@@ -52,6 +53,7 @@ import {
   CODEX_UPDATED_EVENT,
   codexIdForProject,
   listCodexProjects,
+  removeCodexProject,
   type CodexProjectEntry,
   upsertCodexProject,
 } from "@/lib/codex-projects"
@@ -83,6 +85,9 @@ import { cn } from "@/lib/utils"
 
 const STORAGE_EXPANDED = "code-workspace:expanded-workspaces"
 const STORAGE_ACTIVE_FOLDER = "code-workspace:active-folder"
+// Prefix of the per-workspace files/tabs bucket the /code provider persists
+// (storageKeyFor → `code-workspace:v1:<id>`). Cleared when a workspace is deleted.
+const WORKSPACE_STATE_PREFIX = "code-workspace:v1"
 
 type Props = {
   collapsed: boolean
@@ -360,6 +365,49 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
       handleOpenInCode({ localId: node.id })
     },
     [handleOpenInCode, refreshCodexProjects],
+  )
+
+  const handleDeleteWorkspace = React.useCallback(
+    async (node: WorkspaceTreeNode) => {
+      const isCloud = node.kind === "project"
+      const message = isCloud
+        ? `¿Eliminar el proyecto "${node.name}"? Se borrarán también sus archivos y chats. Esta acción no se puede deshacer.`
+        : `¿Quitar la carpeta "${node.name}" de tus proyectos? Se elimina del panel y se borra su contenido en el navegador (no se toca ningún archivo de tu disco).`
+      if (typeof window !== "undefined" && !window.confirm(message)) return
+      try {
+        if (isCloud) {
+          await projectsService.remove(node.chatListId)
+        }
+        // Drop the registry entry + the persisted files/folders bucket, and tell
+        // an open /code workspace to forget it (resetting the editor if active).
+        removeCodexProject(node.id)
+        if (typeof window !== "undefined") {
+          try {
+            window.localStorage.removeItem(`${WORKSPACE_STATE_PREFIX}:${node.id}`)
+          } catch {
+            /* fail soft */
+          }
+          window.dispatchEvent(
+            new CustomEvent(FORGET_CODEX_WORKSPACE_EVENT, { detail: { id: node.id } }),
+          )
+        }
+        setChatsByFolder((prev) => {
+          if (!(node.chatListId in prev)) return prev
+          const next = { ...prev }
+          delete next[node.chatListId]
+          return next
+        })
+        refreshCodexProjects()
+        if (isCloud) await refresh()
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent(CODEX_UPDATED_EVENT))
+        }
+        toast.success(isCloud ? `Proyecto "${node.name}" eliminado.` : `Carpeta "${node.name}" quitada.`)
+      } catch (err: any) {
+        toast.error(err?.message || "No se pudo eliminar el proyecto")
+      }
+    },
+    [refresh, refreshCodexProjects],
   )
 
   const handleOpenChat = React.useCallback(
@@ -671,6 +719,7 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
         readRows={readRows}
         onToggleExpand={toggleExpanded}
         onOpenWorkspace={handleOpenWorkspace}
+        onDeleteWorkspace={handleDeleteWorkspace}
         onOpenChat={handleOpenChat}
         onNewCodeChat={handleNewCodeChat}
         onSelectCodeSession={handleSelectCodeSession}
