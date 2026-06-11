@@ -2156,6 +2156,7 @@ model UserMemory {
   content         String   @db.Text
   category        String?
   importanceScore Float    @default(0) @map("importance_score")
+  confidence      Float    @default(0.8) @map("confidence")
   lastAccessedAt  DateTime @default(now()) @map("last_accessed_at")
   accessCount     Int      @default(0) @map("access_count")
   createdAt       DateTime @default(now()) @map("created_at")

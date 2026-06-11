@@ -27,6 +27,10 @@ const SAFE_AUTO_ROLLBACK_MIGRATIONS = [
     reason:
       "idempotent additive AiModel sync columns (ADD COLUMN IF NOT EXISTS); a merge renamed this migration and re-running ADD COLUMN re-failed with 42701 -> P3009 -> boot abort. Safe to roll back and retry.",
   },
+  {
+    pattern: /^20260611120000_add_user_memory_confidence$/,
+    reason: "idempotent ADD COLUMN IF NOT EXISTS confidence to user_memories; safe to re-run.",
+  },
 ];
 
 function log(msg, extra = {}) {
