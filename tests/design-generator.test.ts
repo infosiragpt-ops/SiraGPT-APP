@@ -1,8 +1,11 @@
 import assert from "node:assert/strict"
 import { createRequire } from "node:module"
+import * as path from "node:path"
 import { describe, it } from "node:test"
 
-const cjsRequire = createRequire(__filename)
+// Anchor CJS resolution at the repo root (the runner always runs from the
+// repo root) so backend requires work no matter where test-dist lives.
+const cjsRequire = createRequire(path.join(process.cwd(), "package.json"))
 
 type QualityReport = {
   passed: boolean
@@ -18,7 +21,7 @@ type DesignGenerator = {
   shouldRepairDesign: (report: QualityReport, effort?: string) => boolean
 }
 
-const generator = cjsRequire("../../backend/src/services/design-generator") as DesignGenerator
+const generator = cjsRequire("./backend/src/services/design-generator") as DesignGenerator
 
 describe("design-generator · html extraction", () => {
   it("strips markdown/prose and keeps one complete HTML document", () => {

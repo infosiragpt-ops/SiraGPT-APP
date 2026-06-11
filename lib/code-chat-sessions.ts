@@ -36,8 +36,11 @@ const MAX_SESSIONS_PER_WORKSPACE = 12
 
 export const CODE_CHAT_SESSIONS_UPDATED_EVENT = "siragpt:code-chat-sessions-updated"
 
+// Version/variant-agnostic on purpose: legacy stores may hold ids whose
+// version nibble isn't 1-5 (e.g. UUIDv7) — any 8-4-4-4-12 hex shape is a
+// bare project id that must migrate to the canonical `project:` key.
 const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /** Canonical workspace id for agent sessions (matches Codex tree node ids). */
 export function codexWorkspaceSessionKey(folderId: string | null | undefined): string {

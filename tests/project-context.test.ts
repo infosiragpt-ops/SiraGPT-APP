@@ -1,8 +1,11 @@
 import assert from "node:assert/strict"
 import { createRequire } from "node:module"
+import * as path from "node:path"
 import { describe, it } from "node:test"
 
-const cjsRequire = createRequire(__filename)
+// Anchor CJS resolution at the repo root (the runner always runs from the
+// repo root) so backend requires work no matter where test-dist lives.
+const cjsRequire = createRequire(path.join(process.cwd(), "package.json"))
 
 type ProjectContext = {
   buildProjectContextManifest: (project: any) => any
@@ -13,8 +16,8 @@ type ChatScope = {
   buildChatListWhere: (opts: { userId: string; projectId?: string | null; includeProjects?: boolean; search?: string }) => any
 }
 
-const projectContext = cjsRequire("../../backend/src/services/project-context") as ProjectContext
-const chatScope = cjsRequire("../../backend/src/services/chat-scope") as ChatScope
+const projectContext = cjsRequire("./backend/src/services/project-context") as ProjectContext
+const chatScope = cjsRequire("./backend/src/services/chat-scope") as ChatScope
 
 describe("project context manifest", () => {
   it("summarizes files, chats, documents, memory and extraction coverage", () => {

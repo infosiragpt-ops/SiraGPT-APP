@@ -1,8 +1,11 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { createRequire } from "node:module"
+import * as path from "node:path"
 
-const cjsRequire = createRequire(__filename)
+// Anchor CJS resolution at the repo root (the runner always runs from the
+// repo root) so backend requires work no matter where test-dist lives.
+const cjsRequire = createRequire(path.join(process.cwd(), "package.json"))
 
 type AgenticBatchEvent = {
   type: string
@@ -11,12 +14,12 @@ type AgenticBatchEvent = {
   totalCollected?: number
 }
 
-const { runAgenticBatch, buildSummaryMarkdown } = cjsRequire("../../backend/src/services/searchBrain/agenticBatch") as {
+const { runAgenticBatch, buildSummaryMarkdown } = cjsRequire("./backend/src/services/searchBrain/agenticBatch") as {
   runAgenticBatch: (opts: any) => AsyncGenerator<AgenticBatchEvent>
   buildSummaryMarkdown: (args: any) => string
 }
 
-const providers = cjsRequire("../../backend/src/services/searchBrain/providers") as {
+const providers = cjsRequire("./backend/src/services/searchBrain/providers") as {
   searchOpenAlex: (query: string, opts?: any) => Promise<any[]>
   searchSemanticScholar: (query: string, opts?: any) => Promise<any[]>
   searchCrossRef: (query: string, opts?: any) => Promise<any[]>

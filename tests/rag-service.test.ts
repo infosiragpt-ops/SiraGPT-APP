@@ -1,8 +1,11 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { createRequire } from "node:module"
+import * as path from "node:path"
 
-const cjsRequire = createRequire(__filename)
+// Anchor CJS resolution at the repo root (the runner always runs from the
+// repo root) so backend requires work no matter where test-dist lives.
+const cjsRequire = createRequire(path.join(process.cwd(), "package.json"))
 
 type Rag = {
   chunk: (text: string, opts?: { size?: number; overlap?: number }) => string[]
@@ -30,8 +33,8 @@ type StreamCache = {
   _size: () => Promise<number>
 }
 
-const rag = cjsRequire("../../backend/src/services/rag-service") as Rag
-const streamCache = cjsRequire("../../backend/src/services/stream-cache") as StreamCache
+const rag = cjsRequire("./backend/src/services/rag-service") as Rag
+const streamCache = cjsRequire("./backend/src/services/stream-cache") as StreamCache
 
 describe("rag-service · chunk", () => {
   it("returns an empty array for empty / non-string input", () => {
@@ -204,17 +207,17 @@ describe("stream-cache · lifecycle", () => {
 
 describe("route modules load clean", () => {
   it("rag route module loads without error", () => {
-    const mod = cjsRequire("../../backend/src/routes/rag")
+    const mod = cjsRequire("./backend/src/routes/rag")
     assert.ok(mod, "rag route should export an Express router")
   })
 
   it("chats route module still loads after adding pending-stream endpoint", () => {
-    const mod = cjsRequire("../../backend/src/routes/chats")
+    const mod = cjsRequire("./backend/src/routes/chats")
     assert.ok(mod)
   })
 
   it("research route module still loads after adding the critic pass", () => {
-    const mod = cjsRequire("../../backend/src/routes/research")
+    const mod = cjsRequire("./backend/src/routes/research")
     assert.ok(mod)
   })
 })

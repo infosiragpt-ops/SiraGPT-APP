@@ -39,8 +39,12 @@ describe("agent-task-service · reducer", () => {
     assert.deepEqual(state.meta?.tools, ["web_search"])
     assert.equal(state.steps.length, 1)
     assert.equal(state.steps[0].toolCalls.length, 1)
+    // Claude-style research trace (commit afaf6fc06): the call keeps its
+    // preview (the search query) as the visible line for the tool call,
+    // and the output carries its own preview text.
+    assert.equal(state.steps[0].toolCalls[0].preview, "diabetes prevention papers")
     assert.equal(state.steps[0].toolCalls[0].output?.ok, true)
-    assert.equal("preview" in state.steps[0].toolCalls[0], false)
+    assert.equal(state.steps[0].toolCalls[0].output?.preview, "25 fuentes")
   })
 
   it("preserves taskId from early queue_status events before meta arrives", () => {
