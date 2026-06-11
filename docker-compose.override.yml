@@ -23,6 +23,11 @@ services:
       - uploads_data:/app/uploads
     environment:
       NODE_ENV: development
+      # schema.prisma migrated its datasource to env("DATABASE_URL") (commit
+      # "Fix Google login: bypass Prisma Accelerate") but the base compose only
+      # provides PRISMA_DATABASE_URL. Mirror the same direct postgres URL here so
+      # `prisma migrate deploy` + the runtime client resolve in dev.
+      DATABASE_URL: "postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-siragpt}"
     ports:
       - "9229:9229"   # Node.js inspector (debugger)
     # Apply pending Prisma migrations on boot (so the DB never drifts behind the
