@@ -231,10 +231,11 @@ const previewAttachmentKey = (attachment: AttachmentLike | null | undefined): st
 const isComposerFileUploadPending = (file: any): boolean =>
   Boolean(file && file.status === "uploading" && !resolveUploadFileId(file))
 
-// ChatGPT-style paste threshold: pasted text below this stays inline in the
-// composer (which grows with an internal scrollbar); at/above it the paste is
-// attached as a document chip to keep the controlled textarea responsive.
-const INLINE_PASTE_MAX_CHARS = 50_000
+// ChatGPT-style paste: pasted text stays inline in the composer (which grows
+// with an internal scrollbar) — no document chip. The cap is a freeze-guard
+// only: a controlled textarea holding half a megabyte re-renders the whole
+// chat shell on every keystroke, so beyond it the paste attaches as a chip.
+const INLINE_PASTE_MAX_CHARS = 500_000
 
 const PROCESSING_CONTEXT_EXT_RE = /\.(?:pdf|docx?|xlsx?|csv|pptx?|txt|md|markdown|rtf|odt|ods|odp)$/i
 const PROCESSING_CONTEXT_MIME_RE =
@@ -4513,7 +4514,7 @@ function ChatInterfaceContent() {
   const [showAudioPanel, setShowAudioPanel] = React.useState(false);
   const [audioTab, setAudioTab] = React.useState<'tts' | 'stt' | 'music' | 'video'>("tts");
 
-  // Speech-to-Text states 
+  // Speech-to-Text states
   const [isSpeechSupported, setIsSpeechSupported] = React.useState(false);
   const recognitionRef = React.useRef<SpeechRecognition | null>(null);
 
@@ -7138,7 +7139,7 @@ But first, you need to connect your Spotify account securely using the button be
 
       // Construct prompt with full context but focus on selected text
       const rewritePrompt = `You are editing a specific part of a document.
-      
+
 CONTEXT:
 The user has selected the following text to edit:
 "${selectedWordText}"
@@ -7925,7 +7926,7 @@ REWRITTEN TEXT:`;
 
 I can help you with Gmail tasks like:
 - Reading your emails
-- Sending emails  
+- Sending emails
 - Searching for specific emails
 - Managing your inbox
 
