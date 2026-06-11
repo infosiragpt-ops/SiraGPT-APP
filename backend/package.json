@@ -18,7 +18,7 @@
     "db:setup": "node scripts/setup-db.js",
     "db:superadmin": "node scripts/create-superadmin.js",
     "db:migrate": "prisma migrate dev",
-    "db:reset": "prisma migrate reset",
+    "db:reset": "node -e \"if(process.env.NODE_ENV==='production'||process.env.DATABASE_URL?.includes('neon.tech'))throw new Error('BLOCKED: db:reset is forbidden in production. Use prisma migrate deploy instead.');\" && prisma migrate reset",
     "seed": "js-node --compiler-options {\"module\":\"CommonJS\"} prisma/seed.js",
     "generate:openapi": "node scripts/generate-openapi.js",
     "generate:openapi:check": "node scripts/generate-openapi.js --check",

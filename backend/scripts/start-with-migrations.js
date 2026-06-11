@@ -653,10 +653,59 @@ async function seedAdminIfNeeded() {
   }
 }
 
+/**
+ * Log a fingerprint of the database URL (host + db name only, never credentials)
+ * and count existing users so we can detect if production points to a wrong or
+ * empty database. Logged BEFORE migrations so mismatches are visible in boot logs.
+ */
+async function logDbSnapshot(label) {
+  const url = resolvePrismaDatabaseUrl();
+  let dbFingerprint = "(unknown)";
+  if (isDirectPostgresUrl(url)) {
+    try {
+      const parsed = new URL(url);
+      // Only log host + pathname (db name), never user/password.
+      dbFingerprint = `${parsed.hostname}${parsed.pathname}`;
+    } catch { /* ignore parse errors */ }
+  }
+
+  let userCount = null;
+  let chatCount = null;
+  try {
+    const { Client } = require("pg");
+    const client = new Client(makePgClientOptions(url));
+    await client.connect();
+    try {
+      const r = await client.query('SELECT COUNT(*) FROM "users"');
+      userCount = parseInt(r.rows[0].count, 10);
+      const r2 = await client.query('SELECT COUNT(*) FROM "chats"');
+      chatCount = parseInt(r2.rows[0].count, 10);
+    } catch { /* table may not exist yet on first boot */ }
+    await client.end().catch(() => {});
+  } catch { /* pg unavailable */ }
+
+  phase("db_snapshot", { label, db: dbFingerprint, users: userCount, chats: chatCount });
+
+  // Safety: if we already have users and this is a re-deploy, emit a prominent
+  // WARNING so data-loss incidents are immediately visible in logs.
+  if (label === "pre_migrate" && userCount !== null && userCount === 0) {
+    phase("db_snapshot_warn", {
+      label,
+      warning: "ZERO users found before migrations — database may be empty or wrong DATABASE_URL in production",
+      db: dbFingerprint,
+    });
+  }
+  return { userCount, chatCount, dbFingerprint };
+}
+
 async function main() {
   phase("boot_start", { skipMigrations: process.env.SKIP_MIGRATIONS === "1" });
   clearStalePortProcess();
   ensureSandboxPythonDeps();
+
+  // Log DB fingerprint + user count BEFORE migrations to detect wrong-DB issues.
+  const pre = await logDbSnapshot("pre_migrate");
+
   const release = await maybePreflightAndLock();
 
   let migrationStatus;
@@ -683,6 +732,18 @@ async function main() {
     log("migrations failed — aborting boot", { status: migrationStatus });
     phase("boot_aborted", { status: migrationStatus });
     process.exit(migrationStatus);
+  }
+
+  // Log user count AFTER migrations — a drop vs pre-count means data was lost.
+  const post = await logDbSnapshot("post_migrate");
+  if (pre.userCount !== null && post.userCount !== null && post.userCount < pre.userCount) {
+    phase("db_snapshot_data_loss", {
+      warning: "USER COUNT DROPPED after migrations!",
+      before: pre.userCount,
+      after: post.userCount,
+      lost: pre.userCount - post.userCount,
+      db: post.dbFingerprint,
+    });
   }
 
   // Seed the admin user into the production DB if env vars are configured.
