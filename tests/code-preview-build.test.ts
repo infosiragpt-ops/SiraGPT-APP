@@ -109,4 +109,34 @@ describe("buildPreviewDocument", () => {
     assert.equal(r.kind, "html")
     assert.equal(r.entry, "page.html")
   })
+
+  it("a Vite project routes to ▶ Ejecutar instead of a blank srcdoc render", () => {
+    const vite = files({
+      "package.json": '{"devDependencies":{"vite":"^7.1.0"}}',
+      "index.html": '<html><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>',
+      "src/main.tsx": "import App from './App'",
+      "src/App.tsx": "export default function App(){ return <div>landing</div> }",
+    })
+    const r = buildPreviewDocument(vite, "index.html")
+    assert.equal(r.kind, "unsupported")
+    assert.match(r.html, /Ejecutar/)
+  })
+
+  it("markdown/svg files still preview inside a Vite project", () => {
+    const vite = files({
+      "package.json": '{"devDependencies":{"vite":"^7.1.0"}}',
+      "README.md": "# Hola",
+    })
+    const r = buildPreviewDocument(vite, "README.md")
+    assert.equal(r.kind, "markdown")
+  })
+
+  it("a package.json without a bundler keeps the static preview path", () => {
+    const plain = files({
+      "package.json": '{"dependencies":{"lodash":"^4.0.0"}}',
+      "index.html": "<html><body>hola</body></html>",
+    })
+    const r = buildPreviewDocument(plain, null)
+    assert.equal(r.kind, "html")
+  })
 })

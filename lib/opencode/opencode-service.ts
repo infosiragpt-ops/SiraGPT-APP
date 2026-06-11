@@ -104,7 +104,23 @@ export const opencodeService = {
   async runProject(): Promise<{ ok?: boolean; port?: number; devUrl?: string; error?: string }> {
     try {
       const res = await fetch(`${baseUrl}/run`, { method: "POST", credentials: "include", headers: authHeaders() })
-      return (await res.json().catch(() => ({}))) as { ok?: boolean; port?: number; devUrl?: string; error?: string }
+      const body = (await res.json().catch(() => ({}))) as {
+        ok?: boolean
+        port?: number
+        devUrl?: string
+        error?: string
+        message?: string
+      }
+      if (!res.ok) {
+        // Surface a friendly message instead of a raw error code (503 = feature
+        // not configured; 502 = runner sidecar unreachable).
+        const friendly =
+          body.error === "opencode_not_configured"
+            ? "El motor de código no está configurado (OPENCODE_SERVER_URL). Levanta el stack con `docker compose --profile opencode up` para usar ▶ Ejecutar."
+            : body.message || body.error || `HTTP ${res.status}`
+        return { error: friendly }
+      }
+      return body
     } catch (e) {
       return { error: e instanceof Error ? e.message : "runner unreachable" }
     }

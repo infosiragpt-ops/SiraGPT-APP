@@ -255,7 +255,7 @@ export function classifyBuildError(log: string): BuildErrorVerdict {
     }
   }
 
-  // Module not found in the preview/build (no bundler).
+  // Module not found in the dev server / preview build.
   if (/Module not found|Cannot find module/i.test(text)) {
     return {
       matched: true,
@@ -265,10 +265,10 @@ export function classifyBuildError(log: string): BuildErrorVerdict {
         ? `Se importó \`${name}\` pero no está disponible en el entorno.`
         : "Hay un import a un paquete que no existe en el workspace.",
       causaRaiz:
-        "El preview no tiene bundler ni npm: los paquetes deben venir por CDN, no por `import` de npm.",
+        "Si el workspace tiene `package.json` (proyecto Vite/Node), la dependencia falta en `dependencies` o no se instaló. Si es un preview estático sin build, los paquetes deben venir por CDN, no por `import` de npm.",
       arreglo:
-        "Quita el `import` del paquete y cárgalo por CDN (`<script src=…>`), o usa una alternativa ya disponible (React/Tailwind están globales).",
-      siguientePaso: "Aplica el cambio y revisa el **preview en vivo**.",
+        "Proyecto Vite/Node: añade el paquete a `dependencies` en `package.json` y pulsa **▶ Ejecutar** para reinstalar. Preview estático: quita el `import` y cárgalo por CDN (`<script src=…>`), o usa una alternativa ya disponible (React/Tailwind están globales).",
+      siguientePaso: "Aplica el cambio y pulsa **▶ Ejecutar** (proyecto Node) o revisa el **preview en vivo** (estático).",
     }
   }
 

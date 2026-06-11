@@ -130,8 +130,9 @@ async function startDev() {
   pipe(devProc.stdout, "[dev]");
   pipe(devProc.stderr, "[dev]");
 
-  // Poll readiness for up to ~60s.
-  for (let i = 0; i < 40; i++) {
+  // Poll readiness for up to ~90s (cold-cache installs of vite + tailwind v4
+  // native binaries can be slow; the frontend polls with its own ~3min budget).
+  for (let i = 0; i < 60; i++) {
     await Bun.sleep(1500);
     if (await probeReady()) {
       state.ready = true;
@@ -144,7 +145,15 @@ async function startDev() {
       return;
     }
   }
-  state.error = "dev server didn't become ready in 60s";
+  // Kill the stalled process so a late-ready zombie can't confuse the next /status.
+  try {
+    devProc.kill();
+  } catch {
+    /* already gone */
+  }
+  devProc = null;
+  state.running = false;
+  state.error = "dev server didn't become ready in 90s";
 }
 
 Bun.serve({

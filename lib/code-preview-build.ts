@@ -282,12 +282,39 @@ function placeholder(note: string): string {
 <body><div class="box"><div style="font-size:13px">${escapeHtml(note)}</div></div></body></html>`
 }
 
+/** True when the workspace is a real Node bundler project (Vite/Next): its
+ * index.html loads /src/main.tsx through the dev server, so the sandboxed
+ * iframe can't render it — the user must press ▶ Ejecutar. */
+function isNodeBundlerProject(files: CodeFiles): boolean {
+  const pkgPath = Object.keys(files).find((p) => /(^|\/)package\.json$/.test(p))
+  if (!pkgPath) return false
+  try {
+    const pkg = JSON.parse(files[pkgPath]?.content ?? "")
+    const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) }
+    return Boolean(deps.vite || deps.next)
+  } catch {
+    return false
+  }
+}
+
 /** Pick the best entry + kind given the active file and the whole project. */
 export function buildPreviewDocument(files: CodeFiles, activePath: string | null): PreviewResult {
   const paths = Object.keys(files)
   if (paths.length === 0) return { html: placeholder("Aún no hay archivos. Empieza a programar y el preview aparecerá aquí."), kind: "empty", entry: null }
 
   const activeExt = activePath ? ext(activePath) : ""
+
+  // 0) Real Vite/Next projects need the dev server — a srcdoc render would be a
+  //    misleading blank page. Markdown/SVG files still preview individually.
+  if (isNodeBundlerProject(files) && !(activePath && ["md", "mdx", "svg"].includes(activeExt))) {
+    return {
+      html: placeholder(
+        "Este proyecto usa Vite con dependencias npm. Pulsa ▶ Ejecutar para instalar las dependencias y verlo en vivo en el dev server.",
+      ),
+      kind: "unsupported",
+      entry: activePath,
+    }
+  }
 
   // 1) Follow the active file when it is directly previewable.
   if (activePath) {

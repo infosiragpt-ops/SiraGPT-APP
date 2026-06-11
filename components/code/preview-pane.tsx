@@ -105,7 +105,9 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
           pollRef.current = null
         }
         setLiveRun({ phase: "ready", devUrl: st.devUrl || fallbackUrl, note: st.framework || "app" })
-      } else if (st.error || tries > 45) {
+      } else if (st.error || tries > 72) {
+        // ~3 min budget: a cold-cache `bun install` of vite + tailwind v4 +
+        // framer-motion + lucide can exceed the old ~112s window.
         if (pollRef.current) {
           window.clearInterval(pollRef.current)
           pollRef.current = null
@@ -301,6 +303,10 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
             <iframe
               src={liveRun.devUrl}
               title="App en vivo (dev server)"
+              // El dev server corre en otro puerto (cross-origin): sin este
+              // permiso, navigator.clipboard.writeText falla dentro del iframe
+              // (p.ej. el botón Copiar del componente «Invitar al proyecto»).
+              allow="clipboard-write"
               className="h-full w-full border-0 bg-white dark:bg-zinc-900"
             />
           </div>

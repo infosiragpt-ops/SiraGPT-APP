@@ -69,7 +69,13 @@ import {
   promptFromContext,
   renderFiveSections,
 } from "@/lib/code-agent/orchestrator"
-import { landingSystemPrompt, sreSystemPrompt } from "@/lib/code-agent/prompts"
+import {
+  engineTransportInstructions,
+  landingSystemPrompt,
+  sreSystemPrompt,
+  streamOutputFormat,
+} from "@/lib/code-agent/prompts"
+import { buildViteLandingFiles } from "@/lib/code-agent/vite-scaffold"
 import { isSlowModel, recommendFastModel } from "@/lib/code-agent/model-policy"
 import { fetchCodeIntakeQuestion } from "@/lib/code/intake-question"
 import { opencodeService } from "@/lib/opencode/opencode-service"
@@ -102,16 +108,15 @@ const COMPOSER_PLACEHOLDER: Record<ComposerMode, string> = {
 
 const COMPOSER_MODE_INSTRUCTION: Record<ComposerMode, string> = {
   app:
-    "Modo App (construir desde cero, estilo Replit/Lovable): tu meta es entregar una landing/app COMPLETA y VISTOSA que corra en el PREVIEW EN VIVO al instante.\n" +
+    "Modo App (construir desde cero, estilo Replit/Lovable): tu meta es entregar una landing/app COMPLETA y VISTOSA como un proyecto Vite + React + TypeScript real que el usuario ejecuta con ▶ Ejecutar (dev server).\n" +
     "1) INTAKE OBLIGATORIO (como un product manager) — Si el usuario pide construir algo desde cero (p.ej. 'créame un landing', 'hazme una app', 'crea una web') y NO incluyó ya todos los detalles, tu PRIMERA respuesta DEBE ser ÚNICAMENTE preguntas para entender el contexto. NUNCA generes código en esa primera respuesta. Haz una tanda breve (3-5 preguntas, con opciones cuando ayude), por ejemplo: '¿Qué tipo de producto o servicio vas a ofrecer?', '¿Tienes nombre de marca/negocio o quieres que proponga uno?', '¿Qué estilo visual prefieres (minimalista, oscuro, streetwear, corporativo, colorido…)?', '¿Qué secciones quieres (hero, colecciones/productos, sobre nosotros, testimonios, contacto…)?', '¿Algún color o referencia que te guste?'. Termina pidiendo las respuestas y espera.\n" +
     "   REGLA DE GENERACIÓN: SOLO cuando el usuario ya respondió ese contexto (su segunda respuesta en adelante) o dice explícitamente 'genera'/'hazlo'/'dale', construye el proyecto COMPLETO, asumiendo defaults sensatos para lo que falte. A partir de ahí NUNCA vuelvas a quedarte solo en preguntas: tu salida pasa a ser CÓDIGO.\n" +
-    "2) GENERAR — entrega una LANDING PROFESIONAL NIVEL AGENCIA como UN SOLO archivo `index.html` autocontenido (HTML + Tailwind por CDN + JS vanilla). El preview lo renderiza al instante y de forma fiable. El bloque DEBE empezar con la ruta: usa el formato ```html index.html y como PRIMERA línea del contenido `// path: index.html`. Exigencias de calidad (queda PROHIBIDO entregar algo básico o tipo plantilla):\n" +
-    "   • Carga Tailwind (https://cdn.tailwindcss.com) y Google Fonts: una tipografía DISPLAY de impacto para titulares (p.ej. Anton, Syne, Archivo Black o similar según el estilo) + una sans limpia para texto. Títulos GRANDES con jerarquía clara.\n" +
-    "   • COHERENCIA DE NICHO [CRÍTICO]: analiza el rubro (ropa, restaurante, gym, software…) y alinea TODO a él. Las imágenes DEBEN ilustrar ese negocio (ropa→prendas/moda, restaurante→platos, gym→entrenamiento). PROHIBIDO usar fotos genéricas o aleatorias (paisajes, arquitectura, oficinas stock) sin relación con el rubro.\n" +
-    "   • HERO a pantalla completa con imagen de alta calidad de fondo y overlay/gradiente para legibilidad. Para imágenes reales usa `https://images.unsplash.com/...` con términos del nicho (p.ej. `?food,restaurant,dish`), o `https://picsum.photos/seed/PALABRA-DEL-RUBRO/1920/1080` como respaldo fiable; añade siempre un gradiente de marca por si la imagen no carga, y `alt` descriptivo.\n" +
-    "   • Copy REAL, persuasivo y específico de la marca y su sector (NADA de lorem ipsum): títulos, descripciones de producto y CTAs propios del negocio. Secciones completas y bien diferenciadas: nav sticky translúcido con logo+enlaces, hero con titular potente + CTA, sección de colecciones/productos (grid con imágenes), bloque editorial/about, testimonios o features, CTA final y footer con redes.\n" +
-    "   • Paleta cohesiva según el estilo (ej. oscuro editorial = negros/grises + 1 acento). Mucho espacio en blanco, alineación impecable, hover/transiciones suaves y micro-animaciones de aparición al hacer scroll (IntersectionObserver agregando clases). Menú responsive (hamburguesa en móvil).\n" +
-    "   • Responsive MÓVIL-PRIMERO (móvil + desktop) y accesible WCAG AA (alt, aria, foco visible, contraste ≥ 4.5:1). Código moderno y limpio: HTML5 semántico (header/nav/main/section/footer), maquetación con Grid/Flexbox (nunca floats ni tablas), sin estilos en línea innecesarios. TODO en ese único `index.html`. No uses React ni librerías de gráficos (no hacen falta y restan fiabilidad).\n" +
+    "2) GENERAR — entrega un PROYECTO Vite 7 + React 18 + TypeScript COMPLETO (package.json, vite.config.ts, tsconfig.json, index.html, src/main.tsx, src/index.css, src/App.tsx) con Tailwind v4 vía @tailwindcss/vite (SIN tailwind.config.js ni postcss.config.js — `@import \"tailwindcss\"` en src/index.css y la paleta como CSS custom properties en :root), animaciones de entrada por scroll con Framer Motion (`useInView`/`whileInView` + `viewport={{ once: true }}`), iconos lucide-react y fuentes Syne + Space Grotesk (Google Fonts → --font-display/--font-body). Exigencias (PROHIBIDO entregar algo básico o tipo plantilla):\n" +
+    "   • COHERENCIA DE NICHO [CRÍTICO]: analiza el rubro (ropa, restaurante, gym, software…) y alinea TODO a él — copy REAL del negocio (NADA de lorem ipsum) e imágenes que ilustren ese rubro (ilustraciones SVG integradas o `https://images.unsplash.com/...` con términos del nicho); PROHIBIDAS fotos genéricas sin relación.\n" +
+    "   • Hero potente con titular Syne MUY grande (clamp), nav sticky translúcido, secciones diferenciadas (productos/features, about, testimonios, CTA final, footer completo), paleta cohesiva con 1 acento, hover/transiciones suaves, responsive MÓVIL-PRIMERO y accesible WCAG AA (alt/aria, foco visible, contraste ≥ 4.5:1).\n" +
+    "   • Componente OBLIGATORIO «Invitar al proyecto»: botón «Invitar» (Lucide UserPlus) + panel/modal animado (AnimatePresence) con «Enlace privado para unirse» (input readOnly), subtexto EXACTO «Cualquier persona con el enlace tendrá acceso de edición», botón Copiar (navigator.clipboard.writeText + «¡Copiado!») e input de email con botón «Invitar por correo electrónico» (validación simple, sin llamada real).\n" +
+    streamOutputFormat({ strictStart: false }) +
+    "\n" +
     "3) Cierra con 1-3 siguientes pasos sugeridos para iterar (ej. 'añade sección de precios', 'conecta un formulario', 'modo claro/oscuro').",
   build:
     "Modo Build: implementa cambios de código concretos. Si creas o modificas archivos, entrega bloques aplicables con ruta.",
@@ -135,6 +140,8 @@ function collectConfigFiles(
     "package-lock.json",
     "next.config.mjs",
     "next.config.js",
+    "vite.config.ts",
+    "vite.config.js",
     "tsconfig.json",
     ".npmrc",
   ])
@@ -148,6 +155,7 @@ function buildSystemContext(
   files: Record<string, { path: string; language: string; content: string }>,
   activePath: string | null,
   folder: { name: string; description?: string | null; instructions?: string | null } | null,
+  mode?: ComposerMode,
 ) {
   const fileList = Object.values(files)
     .map((f) => `- ${f.path} (${f.language})`)
@@ -166,27 +174,47 @@ function buildSystemContext(
         .filter(Boolean)
         .join("\n")
     : ""
+  const hasNodeProject = Object.keys(files).some((p) => /(^|\/)package\.json$/.test(p))
+  // App mode builds the Vite contract even on an empty workspace — emitting the
+  // static-preview rules there would contradict COMPOSER_MODE_INSTRUCTION.app.
+  const expectViteProject = hasNodeProject || mode === "app"
+  const previewBlock = expectViteProject
+    ? [
+        hasNodeProject
+          ? "El workspace contiene un PROYECTO Node REAL (hay package.json) — típicamente"
+          : "El workspace alojará un PROYECTO Node REAL (modo App) — típicamente",
+        "Vite 7 + React 18 + TypeScript. Usa imports npm normales y extensiones",
+        ".tsx/.ts; el usuario lo ejecuta con ▶ Ejecutar (dev server). RESPETA el",
+        "contrato del proyecto: Tailwind v4 vía @tailwindcss/vite (PROHIBIDO crear",
+        "tailwind.config.js/postcss.config.js o usar directivas v3 `@tailwind`),",
+        'src/index.css empieza con `@import "tailwindcss";` + paleta como CSS custom',
+        "properties en :root, animaciones con Framer Motion e iconos lucide-react.",
+      ].join("\n")
+    : [
+        "El workspace tiene un PREVIEW EN VIVO (navegador embebido) que se",
+        "actualiza solo. Escribe SIEMPRE código que se pueda previsualizar sin",
+        "build ni npm:",
+        "- Web estática: un único index.html autocontenido (puedes usar el CDN de",
+        "  Tailwind y enlazar styles.css / app.js locales).",
+        "- React/JSX: define un componente App exportado por defecto (export default",
+        "  function App()). React 18 y los globales Recharts, d3, lucide, motion y",
+        "  AnimatePresence, además de Tailwind, ya están disponibles — NO uses",
+        "  imports de paquetes npm (no hay bundler). Importar archivos locales",
+        "  .css/.json sí funciona.",
+        "- Mantén cada entrega autocontenida y lista para renderizar.",
+      ].join("\n")
   return [
     "Eres un asistente de programación que trabaja en un workspace en memoria del navegador.",
     "Cuando devuelvas código pensado para un archivo, usa SIEMPRE este formato para que la app pueda aplicarlo:",
     "",
     "\u0060\u0060\u0060<lenguaje> <ruta>",
-    "// path: <ruta>",
-    "<contenido del archivo>",
+    "<contenido COMPLETO del archivo>",
     "\u0060\u0060\u0060",
+    "(la ruta va SOLO en el encabezado del bloque — NO añadas líneas `// path:` dentro del contenido;",
+    "en package.json un comentario rompe el JSON)",
     folderBlock,
     "",
-    "El workspace tiene un PREVIEW EN VIVO (navegador embebido) que se",
-    "actualiza solo. Escribe SIEMPRE código que se pueda previsualizar sin",
-    "build ni npm:",
-    "- Web estática: un único index.html autocontenido (puedes usar el CDN de",
-    "  Tailwind y enlazar styles.css / app.js locales).",
-    "- React/JSX: define un componente App exportado por defecto (export default",
-    "  function App()). React 18 y los globales Recharts, d3, lucide, motion y",
-    "  AnimatePresence, además de Tailwind, ya están disponibles — NO uses",
-    "  imports de paquetes npm (no hay bundler). Importar archivos locales",
-    "  .css/.json sí funciona.",
-    "- Mantén cada entrega autocontenida y lista para renderizar.",
+    previewBlock,
     "",
     "Archivos disponibles:",
     fileList || "(workspace vacío)",
@@ -418,7 +446,7 @@ export function AICodeChatPanel() {
       const finalPrompt = override?.systemPrompt
         ? `${override.systemPrompt}\n\n${convoBlock}Usuario: ${text}`
         : includeContext
-          ? `${buildSystemContext(files, activePath, activeFolder)}\n\n${modeInstruction}\n\n${convoBlock}Usuario: ${text}`
+          ? `${buildSystemContext(files, activePath, activeFolder, composerMode)}\n\n${modeInstruction}\n\n${convoBlock}Usuario: ${text}`
           : `${modeInstruction}\n\n${convoBlock}Usuario: ${text}`
 
       // Accumulate the streamed answer locally so onDone can auto-apply the
@@ -466,11 +494,14 @@ export function AICodeChatPanel() {
                   for (const b of blocks) {
                     if (b.path) applyBlock(b.path, b.content)
                   }
+                  const hasPkg = blocks.some((b) => /(^|\/)package\.json$/i.test(b.path || ""))
                   const hasHtml = blocks.some((b) => /\.html?$/i.test(b.path || ""))
                   toast.success(
-                    hasHtml
-                      ? "App generada — revisa el preview en vivo →"
-                      : `Generados ${blocks.length} archivo(s) — abriendo preview`,
+                    hasPkg
+                      ? "Proyecto generado — pulsa ▶ Ejecutar para levantar el dev server"
+                      : hasHtml
+                        ? "App generada — revisa el preview en vivo →"
+                        : `Generados ${blocks.length} archivo(s) — abriendo preview`,
                   )
                   // applyBlock already emits "siragpt:code-open-preview"; make
                   // sure the preview pane is shown even if it was collapsed.
@@ -525,13 +556,14 @@ export function AICodeChatPanel() {
     ],
   )
 
-  // Deterministic "Construir app" path: bypasses the LLM entirely. Sends the
-  // current prompt to /api/builder/generate (pure heuristics → runnable files),
-  // writes those files into the workspace, and opens the live preview. This is
-  // the reliable build flow that works even when the chat model / API keys are
-  // down — same engine the /builder studio uses.
+  // Deterministic "Construir app" path: bypasses the LLM entirely. For a
+  // LANDING goal it builds the Vite 7 + React 18 + TS project locally
+  // (lib/code-agent/vite-scaffold — zero network); for APP goals it sends the
+  // prompt to /api/builder/generate (pure heuristics → runnable Next.js CRUD).
+  // This is the reliable build flow that works even when the chat model / API
+  // keys are down.
   const buildApp = React.useCallback(
-    async (prompt: string) => {
+    async (prompt: string, ctx?: AgentBuildContext) => {
       const text = prompt.trim()
       if (!text || busy || buildingApp) return
       if (!user || !token) {
@@ -553,14 +585,42 @@ export function AICodeChatPanel() {
       setBuildingApp(true)
 
       try {
-        const result = await intakeService.generate(text)
-        const files = result.files || []
-        if (files.length === 0) {
-          throw new Error("La generación no devolvió archivos.")
+        let appliedFiles: Array<{ path: string; content: string }>
+        let summary: string
+        let toastMsg: string
+        if (ctx && ctx.goal === "landing") {
+          // Landing → local Vite scaffold (no network, full landing + Invitar).
+          appliedFiles = buildViteLandingFiles(ctx)
+          summary = [
+            `✅ Landing generada (determinista) — ${appliedFiles.length} archivo(s).`,
+            ``,
+            `- **Stack:** Vite 7 + React 18 + TypeScript + Tailwind v4`,
+            `- **Incluye:** animaciones de scroll (Framer Motion) y el componente «Invitar al proyecto»`,
+            ``,
+            `Pulsa **▶ Ejecutar** para instalar dependencias y ver la landing en vivo. Itera pidiéndome cambios en el chat.`,
+          ].join("\n")
+          toastMsg = "Landing generada — pulsa ▶ Ejecutar →"
+        } else {
+          const result = await intakeService.generate(text)
+          appliedFiles = result.files || []
+          if (appliedFiles.length === 0) {
+            throw new Error("La generación no devolvió archivos.")
+          }
+          const entities = result.brief.dataEntities.map((e) => e.name).join(", ") || "—"
+          summary = [
+            `✅ App generada (determinista) — ${appliedFiles.length} archivo(s).`,
+            ``,
+            `- **Plataforma:** ${result.brief.platform}`,
+            `- **Entidades:** ${entities}`,
+            `- **Stack:** ${result.blueprint.stack.frontend}`,
+            ``,
+            `Revisa el **preview en vivo** → y el código en el árbol de archivos. Itera pidiéndome cambios en el chat.`,
+          ].join("\n")
+          toastMsg = "App generada — revisa el preview en vivo →"
         }
         // Apply index.html LAST so it stays the active tab and the live preview
         // lands on the runnable app rather than a doc file.
-        const ordered = [...files].sort((a, b) =>
+        const ordered = [...appliedFiles].sort((a, b) =>
           (/(^|\/)index\.html?$/i.test(a.path) ? 1 : 0) - (/(^|\/)index\.html?$/i.test(b.path) ? 1 : 0),
         )
         for (const file of ordered) {
@@ -569,21 +629,10 @@ export function AICodeChatPanel() {
         if (typeof window !== "undefined") {
           window.dispatchEvent(new CustomEvent("siragpt:code-open-preview"))
         }
-
-        const entities = result.brief.dataEntities.map((e) => e.name).join(", ") || "—"
-        const summary = [
-          `✅ App generada (determinista) — ${files.length} archivo(s).`,
-          ``,
-          `- **Plataforma:** ${result.brief.platform}`,
-          `- **Entidades:** ${entities}`,
-          `- **Stack:** ${result.blueprint.stack.frontend}`,
-          ``,
-          `Revisa el **preview en vivo** → y el código en el árbol de archivos. Itera pidiéndome cambios en el chat.`,
-        ].join("\n")
         setTurns((prev) =>
           prev.map((t) => (t.id === `${id}-a` ? { ...t, content: summary, streaming: false } : t)),
         )
-        toast.success("App generada — revisa el preview en vivo →")
+        toast.success(toastMsg)
       } catch (err: any) {
         const msg = err?.message || "No se pudo generar la app"
         setTurns((prev) =>
@@ -645,21 +694,38 @@ export function AICodeChatPanel() {
 
   // Run the deterministic builder for a context and apply its files. Returns the
   // file count. Used as the reliable fallback when the engine yields no code.
+  // Landings build locally (vite-scaffold, zero network); app goals use the
+  // backend builder and degrade to a local landing shell if it's unreachable.
   const runDeterministicInto = React.useCallback(
     async (ctx: AgentBuildContext): Promise<number> => {
-      const result = await intakeService.generate(promptFromContext(ctx))
-      const files = result.files || []
-      applyFilesToWorkspace(files)
-      return files.length
+      if (ctx.goal === "landing") {
+        const scaffold = buildViteLandingFiles(ctx)
+        applyFilesToWorkspace(scaffold)
+        return scaffold.length
+      }
+      try {
+        const result = await intakeService.generate(promptFromContext(ctx))
+        const files = result.files || []
+        if (files.length > 0) {
+          applyFilesToWorkspace(files)
+          return files.length
+        }
+      } catch {
+        /* backend unreachable → offline landing shell below */
+      }
+      const fallback = buildViteLandingFiles({ ...ctx, goal: "landing" })
+      applyFilesToWorkspace(fallback)
+      return fallback.length
     },
     [applyFilesToWorkspace],
   )
 
   // OpenCode engine path. For a normal chat turn it sends the text; for a BUILD
-  // (opts.buildContext) it sends the agency-grade landing instruction and forces
-  // the engine to RETURN the code in the reply (no file tools), then applies it.
-  // If the engine yields no usable code (or errors), it falls back to the
-  // deterministic builder in the SAME turn — so a build always produces a result.
+  // (opts.buildContext) it sends the Vite 7 + React 18 + TS contract prompt and
+  // the engine writes the project files into its /workspace (write/edit tools);
+  // runEngine then reads the whole tree back into the editor. If the engine
+  // yields no usable code (or errors), it falls back to the deterministic
+  // builder in the SAME turn — so a build always produces a result.
   const runEngine = React.useCallback(
     async (text: string, sid: string, opts?: { buildContext?: AgentBuildContext; iterate?: boolean }) => {
       const ctx = opts?.buildContext
@@ -695,13 +761,9 @@ export function AICodeChatPanel() {
         }
 
         const sendText = ctx
-          ? `${landingSystemPrompt(ctx)}\n\n${
-              ctx.goal === "app"
-                ? 'IMPORTANTE: Crea un PROYECTO Vite + React REAL con tus herramientas (write/edit), con archivos INDEPENDIENTES — NO un solo archivo:\n- package.json (con "vite" y "react"+"react-dom" en dependencias, y script "dev": "vite")\n- index.html en la raíz que cargue <script type="module" src="/src/main.jsx">\n- src/main.jsx (monta <App/>), src/App.jsx, y componentes en src/components/*.jsx\n- src/index.css con Tailwind por CDN en el index.html o estilos propios.\nOrganiza por componentes/secciones. El usuario lo correrá con npm/bun (dev server).'
-                : 'IMPORTANTE: ESCRIBE los archivos con tus herramientas (write/edit). Crea un PROYECTO con archivos INDEPENDIENTES (p.ej. index.html, styles.css, app.js, y un archivo por sección cuando aporte claridad). El archivo de ENTRADA debe llamarse exactamente "index.html", enlazar a los demás (./styles.css, ./app.js) y quedar EJECUTABLE con Tailwind por CDN (sin build).'
-            }`
+          ? `${landingSystemPrompt(ctx)}\n\n${engineTransportInstructions()}`
           : iterate
-            ? `MODIFICA los archivos que YA existen en tu workspace para lograr: ${text}.\n\nPrimero LEE el código actual con tus herramientas, haz cambios DIRIGIDOS solo donde corresponde y CONSERVA el resto intacto. NO regeneres todo desde cero — edita los archivos existentes (write/edit).`
+            ? `MODIFICA los archivos que YA existen en tu workspace para lograr: ${text}.\n\nPrimero LEE el código actual con tus herramientas, haz cambios DIRIGIDOS solo donde corresponde y CONSERVA el resto intacto. NO regeneres todo desde cero — edita los archivos existentes (write/edit). Si el proyecto es Vite + React + TypeScript, RESPETA su contrato: extensiones .tsx/.ts y Tailwind v4 vía @tailwindcss/vite (PROHIBIDO crear tailwind.config.js/postcss.config.js o usar directivas v3 \`@tailwind\`).`
             : text
 
         // OpenCode is event-driven: the POST /message returns an empty shell and
@@ -759,7 +821,21 @@ export function AICodeChatPanel() {
           // code blocks if the listing is empty.
           let engineFiles = await opencodeService.listProjectFiles()
           if (engineFiles.length === 0) {
-            const candidates = ["index.html", "styles.css", "style.css", "app.js", "script.js", "main.js"]
+            const candidates = [
+              "package.json",
+              "vite.config.ts",
+              "tsconfig.json",
+              "index.html",
+              "src/main.tsx",
+              "src/index.css",
+              "src/App.tsx",
+              // Legacy single-html era entries (old engine sessions).
+              "styles.css",
+              "style.css",
+              "app.js",
+              "script.js",
+              "main.js",
+            ]
             for (const p of candidates) {
               try {
                 const c = await opencodeService.readFile(p)
@@ -907,17 +983,29 @@ export function AICodeChatPanel() {
         }
         case "generate": {
           patchAgentState(sid, (s) => ({ ...s, phase: "generating", context: action.context }))
+          const hasIntake = !!(action.context.productType || action.context.brand)
+          const genPrompt = hasIntake ? promptFromContext(action.context) : text
           if (!opts?.forceDeterministic && engineAvailable) {
-            // Prefer the OpenCode agent: it writes the landing files into its
-            // /workspace (via a funded model), and runEngine reads them back into
-            // the editor/preview — falling back to the deterministic builder if
-            // the agent leaves no index.html. Rich AND reliable in Docker.
+            // Prefer the OpenCode agent: it writes the Vite project files into
+            // its /workspace (via a funded model), and runEngine reads them back
+            // into the editor — falling back to the deterministic builder if the
+            // agent leaves no usable project. Rich AND reliable in Docker.
             await runEngine(text, sid, { buildContext: action.context })
             patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "llm" }))
+          } else if (!opts?.forceDeterministic && activeModelName) {
+            // No engine but a chat model is available → stream the Vite project
+            // as fenced blocks (the contract format parseCodeBlocks understands)
+            // and auto-apply them into the workspace.
+            await sendPrompt(genPrompt, {
+              systemPrompt: `${landingSystemPrompt(action.context)}\n\n${streamOutputFormat()}`,
+              autoApply: true,
+            })
+            patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "llm" }))
           } else {
-            const ctxPrompt = promptFromContext(action.context)
-            const genPrompt = action.context.productType || action.context.brand ? ctxPrompt : text
-            await buildApp(genPrompt)
+            // Deterministic tier: enrich a bare context with the raw prompt so
+            // the local scaffold still produces niche-coherent copy.
+            const buildCtx = hasIntake ? action.context : { ...action.context, productType: text }
+            await buildApp(genPrompt, buildCtx)
             patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "deterministic" }))
           }
           return

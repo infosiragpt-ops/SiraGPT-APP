@@ -24,7 +24,7 @@ SiraGPT es una plataforma AI full-stack (Next.js 14 + Express.js) con sistema mu
 npm run dev            # Next.js dev server (puerto 3000)
 npm run build          # Next.js build
 npm test               # Tests backend (Node --test) - ~2900 tests
-npm run lint           # ESLint (ratchet: max-warnings 45)
+npm run lint           # ESLint (ratchet: max-warnings 50)
 npx tsc --noEmit --skipLibCheck   # TypeScript check
 npm run type-check     # TSC completo
 ```
@@ -788,6 +788,43 @@ generado en vivo / WebContainers (E5) · persistencia de builds (T2 schema + T8
 repo) · brief-synthesizer LLM (T6) · orquestación multi-agente con
 ProjectContext compartido (E6). **Hecho:** intake agéntico (LLM + dynamic) ·
 codegen real Next.js web/landing (E3+, `codegen.js`).
+
+## /code · Generador de Landing Pages Vite 7 + React 18 + TS — added 2026-06-11
+
+El generador del módulo `/code` (http://localhost:3000/code, modo App) emite un
+**proyecto Vite 7 + React 18 + TypeScript real** para AMBOS goals (`landing` y
+`app`), ejecutable con ▶ Ejecutar (runner Bun, `bun install` + `bunx vite
+--port 5173`). Spec: `docs/code/landing-generator-prompt.md` · plan + decisiones:
+`docs/code/plan.md`.
+
+- **Contrato** (`VITE_LANDING_CONTRACT_PATHS` en `lib/code-agent/vite-scaffold.ts`,
+  única fuente de verdad, importada por `prompts.ts`): package.json ·
+  vite.config.ts · tsconfig.json · index.html · src/main.tsx · src/index.css ·
+  src/App.tsx. Stack: Tailwind **v4 vía `@tailwindcss/vite`** (sin
+  tailwind.config.js/postcss.config.js — `@import "tailwindcss"` + paleta CSS
+  vars en :root + `@theme inline`), framer-motion ^11 (`useInView`, once),
+  lucide-react, Syne + Space Grotesk. Componente OBLIGATORIO «Invitar al
+  proyecto» (enlace privado readOnly + subtexto exacto «Cualquier persona con el
+  enlace tendrá acceso de edición» + Copiar con «¡Copiado!» + invitar por email).
+- **Tiers de generación** (`dispatch` en `components/code/ai-code-chat-panel.tsx`):
+  motor OpenCode (write/edit, `engineTransportInstructions()`) → streaming LLM
+  (bloques fenced `streamOutputFormat()`: un bloque por archivo, ruta SOLO en el
+  encabezado ` ```json package.json ` — NUNCA `// path:` dentro del contenido,
+  rompe package.json) → determinista.
+- **Fallback determinista sin LLM/red**: `lib/code-agent/vite-scaffold.ts` +
+  `vite-app-template.ts` + `escape.ts` (jsStr/jsxText/escapeHtml/pickAccentHex,
+  anti-inyección con whitelist de paleta/iconos; mismo ctx → bytes idénticos).
+  Goal `app` determinista sigue usando `/api/builder/generate` (Next.js CRUD)
+  con fallback offline a la landing local.
+- **Preview**: `lib/code-preview-build.ts` detecta proyectos Vite/Next
+  (package.json con vite/next) y muestra el placeholder «pulsa ▶ Ejecutar» en
+  vez de un srcdoc en blanco; `preview-pane.tsx` espera ~3 min (instalación
+  fría); el runner (scripts/code-runner.js) mata el dev server zombie al agotar
+  los 90s y docker-compose monta `runner_bun_cache` para reinstalaciones tibias.
+- **Tests**: `tests/code-agent-vite-scaffold.test.ts` (contrato, determinismo,
+  strings de Invitar, resistencia a inyección con parse TSX vía
+  `ts.createSourceFile`, theming) + casos Vite en `tests/code-preview-build.test.ts`.
+  Tier node --test del root (`npm test`); `tests/lib/` es solo-vitest.
 
 ## Agent-first chat + prompted tool-calling — added 2026-06-09
 

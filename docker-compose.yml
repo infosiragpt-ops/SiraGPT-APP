@@ -219,6 +219,7 @@ services:
     volumes:
       - opencode_workspace:/workspace
       - ./scripts/code-runner.js:/code-runner.js:ro
+      - runner_bun_cache:/root/.bun/install/cache   # warm re-installs (vite/tailwind/framer-motion)
     ports:
       - "5173:5173"   # dev server → preview iframe
     expose:
@@ -233,3 +234,4 @@ volumes:
   pgdata:
   uploads_data:
   opencode_workspace:
+  runner_bun_cache:

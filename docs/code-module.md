@@ -216,16 +216,21 @@ a determinista** (funciona aunque el LLM/keys fallen).
 | Estado | Qué hace |
 |---|---|
 | `intake` | Pregunta **máx. 3** cosas (producto · marca · estilo/audiencia), consolida en `context`. Determinista, sin LLM |
-| `generating` | Genera la app. **Tier LLM** (`landingSystemPrompt`) ▸ **fallback determinista** `/api/builder/generate` |
+| `generating` | Genera la app. **Tier LLM** (`landingSystemPrompt`, contrato Vite 7 + React 18 + TS) ▸ **fallback determinista** (landing: `vite-scaffold.ts` local · app: `/api/builder/generate`) |
 | `preview` | App corriendo; un mensaje no-build itera (`patch`) |
 | `debugging` | Diagnostica un log de build en **formato estricto de 5 secciones** + auto-parche de `package.json` |
 
 **Roles:**
 1. **Intake** — `nextAgentAction` detecta "construir desde cero" y hace el slot-filling. Un
    prompt vago dispara las preguntas; uno detallado (>160 chars) o `"genera ya"` salta directo a generar.
-2. **Generador (tiered)** — con modelo: `landingSystemPrompt` (tipografía/paleta por estilo,
-   **salida que empieza EXACTAMENTE con el bloque ```html index.html, sin texto previo**); sin
-   modelo o ante fallo: `/api/builder/generate` determinista.
+2. **Generador (tiered)** — con motor/modelo: `landingSystemPrompt` emite el **contrato Vite 7 +
+   React 18 + TypeScript** (package.json · vite.config.ts · tsconfig.json · index.html ·
+   src/main.tsx · src/index.css · src/App.tsx, Tailwind v4 vía `@tailwindcss/vite`, Framer Motion
+   `useInView`, lucide-react, Syne + Space Grotesk, componente «Invitar al proyecto»). Transporte:
+   motor OpenCode (write/edit, `engineTransportInstructions`) o streaming por bloques fenced
+   (`streamOutputFormat`, **un bloque por archivo, ruta SOLO en el encabezado, empezando por
+   ```json package.json**). Sin modelo o ante fallo: landing → `vite-scaffold.ts` local
+   (determinista, sin red); app → `/api/builder/generate`.
 3. **SRE / Debug** — `classifyBuildError(log)` reconoce 404-tarball / ERESOLVE / EINTEGRITY /
    module-not-found y responde **Diagnóstico · Qué pasaba · Causa raíz · Arreglo · Siguiente paso**,
    aplicando `overrides` a `package.json` cuando el arreglo es determinista. Con modelo usa `sreSystemPrompt`.
@@ -246,7 +251,7 @@ usuario escribe idea → FSM
    ├─ vago  → intake (3 preguntas, determinista) → generate
    ├─ rico  → generate directo
    └─ ⚡    → generate determinista (sin LLM)
-generate → LLM (modelo rápido) bloque ```html index.html``` → applyBlock → preview en vivo
+generate → motor/LLM → proyecto Vite (bloques por archivo o write/edit) → applyBlock → ▶ Ejecutar (dev server)
 ```
 
 ---
@@ -435,7 +440,7 @@ npm test   # incluye tests/code-agent-orchestrator.test.ts y tests/code-agent-mo
 |---|---|---|
 | **"Failed to fetch"** en el chat | Backend caído **o** modelo lento (gpt-5*, reasoning) que buffer ~45 s | Verifica `:5000/health`; el `/code` ya auto-elige modelo rápido (chip ⚡). Si pusiste uno lento a mano, cámbialo |
 | El chat **no pregunta el contexto** | El prompt era detallado (>160 chars) o `"genera ya"` → la FSM salta el intake (por diseño) | Usa un prompt corto/vago para que pregunte, o responde lo que pida |
-| Nada se crea pese a responder | El modelo respondió prosa sin bloque, o se usó passthrough | El generador (`landingSystemPrompt`) fuerza el bloque; usa modo **App** o **⚡ Construir** |
+| Nada se crea pese a responder | El modelo respondió prosa sin bloques, o se usó passthrough | El generador (`landingSystemPrompt` + `streamOutputFormat`) fuerza los bloques; usa modo **App** o **⚡ Construir** |
 | Botón Construir da "Inicia sesión…" | No hay JWT | Inicia sesión; el token vive en `localStorage "auth-token"` |
 | "Selecciona o crea un agente de código" | No hay `codeChatSession` activa | Crea un chat con el botón **+** del panel |
 | `/generate` → 401 | Falta Bearer token | El cliente lo adjunta solo si hay sesión; reloguea |
