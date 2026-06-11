@@ -9837,7 +9837,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         TooltipProvider) so the top surface is dedicated
                         to drag-and-drop of files / audio / images. */}
                     <TooltipProvider>
-                      <div className="flex items-center gap-2 pl-2 pr-2 py-1.5">
+                      <div className="flex items-end gap-2 pl-2 pr-2 py-1.5">
                         {/* LEFT — Plus / attach + tool selector */}
                         <ActionsDropdown
                           chatType={chatType}
@@ -10375,7 +10375,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             the matching block after the TooltipProvider
                             closes. Top surface is reserved for drop-zone. */}
                         <TooltipProvider>
-                          <div className="flex items-center gap-2 pl-2 pr-2 py-1.5">
+                          <div className="flex items-end gap-2 pl-2 pr-2 py-1.5">
                             <ActionsDropdown
                               chatType={chatType}
                               setChatType={setChatType}
