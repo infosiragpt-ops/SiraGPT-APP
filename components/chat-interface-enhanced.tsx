@@ -8041,7 +8041,20 @@ REWRITTEN TEXT:`;
         case 'viz':
         case 'web_search':
         case 'agent_task':
-          await runClassifiedAgentTask();
+          // Same gate as 'text': no-file analytical turns ("ejecuta la
+          // fórmula", "haz un gráfico de esto", quick web lookups) run on
+          // the RELIABLE inline /generate agentic loop — it owns web_search,
+          // chart/visual tools and math, streams live, and has per-step
+          // timeouts + a plain-stream fallback. The durable QUEUED agent
+          // path is for /goal and uploaded-document work; sending a pasted
+          // formula there used to trigger the doc-required pipeline (forced
+          // XLSX!), a 30+-step runaway on the failover model and a frozen
+          // "Analizando solicitud" card when the SSE relay dropped.
+          if (shouldRouteTextPromptThroughAgenticRuntime(msg, filesToSend)) {
+            await runClassifiedAgentTask();
+          } else {
+            await runContextPipeline(intent);
+          }
           break;
         case 'doc':
           await runContextPipeline(intent);
