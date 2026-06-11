@@ -6,10 +6,144 @@ exports[`LongOperationIndicator (snapshot) > renders at ~5s elapsed (not slow) 1
   class="fixed bottom-24 right-4 z-50 flex max-w-[90vw] items-center gap-3 rounded-lg border border-border bg-background/95 px-3 py-2 text-xs shadow-lg backdrop-blur sm:bottom-6 sm:max-w-sm"
   role="status"
 >
-  <svg
-    class="h-4 w-4 shrink-0 animate-spin text-primary"
-    data-testid="loader"
-  />
+  <div
+    aria-label="Procesando"
+    aria-live="polite"
+    class="dmx-root dmx-dot-shape-circle inline-flex shrink-0 align-middle text-primary"
+    role="status"
+    style="width: 16px; height: 16px; --dmx-speed: 0.6060606060606061; --dmx-dot-size: 2px; --dmx-halo-level: 0; --dmx-dot-fill: currentColor; color: currentcolor;"
+  >
+    <div
+      class="dmx-grid"
+      style="gap: 1px;"
+    >
+      <span
+        aria-hidden="true"
+        class="dmx-dot dmx-inactive"
+        style="width: 2px; height: 2px; --dmx-distance: 2.8284271247461903; --dmx-row: 0; --dmx-col: 0; --dmx-x: -6px; --dmx-y: -6px; --dmx-angle: -2.356194490192345; --dmx-radius: 1; --dmx-manhattan: 4;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 0; --dmx-col: 1; --dmx-x: -3px; --dmx-y: -6px; --dmx-angle: -2.0344439357957027; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 2; --dmx-row: 0; --dmx-col: 2; --dmx-x: 0px; --dmx-y: -6px; --dmx-angle: -1.5707963267948966; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 2; opacity: 0.07; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 0; --dmx-col: 3; --dmx-x: 3px; --dmx-y: -6px; --dmx-angle: -1.1071487177940904; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot dmx-inactive"
+        style="width: 2px; height: 2px; --dmx-distance: 2.8284271247461903; --dmx-row: 0; --dmx-col: 4; --dmx-x: 6px; --dmx-y: -6px; --dmx-angle: -0.7853981633974483; --dmx-radius: 1; --dmx-manhattan: 4;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 1; --dmx-col: 0; --dmx-x: -6px; --dmx-y: -3px; --dmx-angle: -2.677945044588987; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 1.4142135623730951; --dmx-row: 1; --dmx-col: 1; --dmx-x: -3px; --dmx-y: -3px; --dmx-angle: -2.356194490192345; --dmx-radius: 0.5; --dmx-manhattan: 2; opacity: 0.95; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 1; --dmx-row: 1; --dmx-col: 2; --dmx-x: 0px; --dmx-y: -3px; --dmx-angle: -1.5707963267948966; --dmx-radius: 0.35355339059327373; --dmx-manhattan: 1; opacity: 0.34; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 1.4142135623730951; --dmx-row: 1; --dmx-col: 3; --dmx-x: 3px; --dmx-y: -3px; --dmx-angle: -0.7853981633974483; --dmx-radius: 0.5; --dmx-manhattan: 2; opacity: 0.07; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 1; --dmx-col: 4; --dmx-x: 6px; --dmx-y: -3px; --dmx-angle: -0.4636476090008061; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 2; --dmx-row: 2; --dmx-col: 0; --dmx-x: -6px; --dmx-y: 0px; --dmx-angle: 3.141592653589793; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 2; opacity: 0.07; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 1; --dmx-row: 2; --dmx-col: 1; --dmx-x: -3px; --dmx-y: 0px; --dmx-angle: 3.141592653589793; --dmx-radius: 0.35355339059327373; --dmx-manhattan: 1; opacity: 0.95; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 0; --dmx-row: 2; --dmx-col: 2; --dmx-x: 0px; --dmx-y: 0px; --dmx-angle: 0; --dmx-radius: 0; --dmx-manhattan: 0; opacity: 0.95; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 1; --dmx-row: 2; --dmx-col: 3; --dmx-x: 3px; --dmx-y: 0px; --dmx-angle: 0; --dmx-radius: 0.35355339059327373; --dmx-manhattan: 1; opacity: 0.95; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 2; --dmx-row: 2; --dmx-col: 4; --dmx-x: 6px; --dmx-y: 0px; --dmx-angle: 0; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 2; opacity: 0.07; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 3; --dmx-col: 0; --dmx-x: -6px; --dmx-y: 3px; --dmx-angle: 2.677945044588987; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 1.4142135623730951; --dmx-row: 3; --dmx-col: 1; --dmx-x: -3px; --dmx-y: 3px; --dmx-angle: 2.356194490192345; --dmx-radius: 0.5; --dmx-manhattan: 2; opacity: 0.07; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 1; --dmx-row: 3; --dmx-col: 2; --dmx-x: 0px; --dmx-y: 3px; --dmx-angle: 1.5707963267948966; --dmx-radius: 0.35355339059327373; --dmx-manhattan: 1; opacity: 0.34; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 1.4142135623730951; --dmx-row: 3; --dmx-col: 3; --dmx-x: 3px; --dmx-y: 3px; --dmx-angle: 0.7853981633974483; --dmx-radius: 0.5; --dmx-manhattan: 2; opacity: 0.95; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 3; --dmx-col: 4; --dmx-x: 6px; --dmx-y: 3px; --dmx-angle: 0.4636476090008061; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot dmx-inactive"
+        style="width: 2px; height: 2px; --dmx-distance: 2.8284271247461903; --dmx-row: 4; --dmx-col: 0; --dmx-x: -6px; --dmx-y: 6px; --dmx-angle: 2.356194490192345; --dmx-radius: 1; --dmx-manhattan: 4;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 4; --dmx-col: 1; --dmx-x: -3px; --dmx-y: 6px; --dmx-angle: 2.0344439357957027; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 2; --dmx-row: 4; --dmx-col: 2; --dmx-x: 0px; --dmx-y: 6px; --dmx-angle: 1.5707963267948966; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 2; opacity: 0.07; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 4; --dmx-col: 3; --dmx-x: 3px; --dmx-y: 6px; --dmx-angle: 1.1071487177940904; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot dmx-inactive"
+        style="width: 2px; height: 2px; --dmx-distance: 2.8284271247461903; --dmx-row: 4; --dmx-col: 4; --dmx-x: 6px; --dmx-y: 6px; --dmx-angle: 0.7853981633974483; --dmx-radius: 1; --dmx-manhattan: 4;"
+      />
+    </div>
+  </div>
   <div
     class="flex min-w-0 flex-1 flex-col gap-0.5"
   >
@@ -34,10 +168,144 @@ exports[`LongOperationIndicator (snapshot) > renders at ~35s elapsed (slow state
   class="fixed bottom-24 right-4 z-50 flex max-w-[90vw] items-center gap-3 rounded-lg border border-border bg-background/95 px-3 py-2 text-xs shadow-lg backdrop-blur sm:bottom-6 sm:max-w-sm"
   role="status"
 >
-  <svg
-    class="h-4 w-4 shrink-0 animate-spin text-primary"
-    data-testid="loader"
-  />
+  <div
+    aria-label="Procesando"
+    aria-live="polite"
+    class="dmx-root dmx-dot-shape-circle inline-flex shrink-0 align-middle text-primary"
+    role="status"
+    style="width: 16px; height: 16px; --dmx-speed: 0.6060606060606061; --dmx-dot-size: 2px; --dmx-halo-level: 0; --dmx-dot-fill: currentColor; color: currentcolor;"
+  >
+    <div
+      class="dmx-grid"
+      style="gap: 1px;"
+    >
+      <span
+        aria-hidden="true"
+        class="dmx-dot dmx-inactive"
+        style="width: 2px; height: 2px; --dmx-distance: 2.8284271247461903; --dmx-row: 0; --dmx-col: 0; --dmx-x: -6px; --dmx-y: -6px; --dmx-angle: -2.356194490192345; --dmx-radius: 1; --dmx-manhattan: 4;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 0; --dmx-col: 1; --dmx-x: -3px; --dmx-y: -6px; --dmx-angle: -2.0344439357957027; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 2; --dmx-row: 0; --dmx-col: 2; --dmx-x: 0px; --dmx-y: -6px; --dmx-angle: -1.5707963267948966; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 2; opacity: 0.07; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 0; --dmx-col: 3; --dmx-x: 3px; --dmx-y: -6px; --dmx-angle: -1.1071487177940904; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot dmx-inactive"
+        style="width: 2px; height: 2px; --dmx-distance: 2.8284271247461903; --dmx-row: 0; --dmx-col: 4; --dmx-x: 6px; --dmx-y: -6px; --dmx-angle: -0.7853981633974483; --dmx-radius: 1; --dmx-manhattan: 4;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 1; --dmx-col: 0; --dmx-x: -6px; --dmx-y: -3px; --dmx-angle: -2.677945044588987; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 1.4142135623730951; --dmx-row: 1; --dmx-col: 1; --dmx-x: -3px; --dmx-y: -3px; --dmx-angle: -2.356194490192345; --dmx-radius: 0.5; --dmx-manhattan: 2; opacity: 0.95; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 1; --dmx-row: 1; --dmx-col: 2; --dmx-x: 0px; --dmx-y: -3px; --dmx-angle: -1.5707963267948966; --dmx-radius: 0.35355339059327373; --dmx-manhattan: 1; opacity: 0.95; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 1.4142135623730951; --dmx-row: 1; --dmx-col: 3; --dmx-x: 3px; --dmx-y: -3px; --dmx-angle: -0.7853981633974483; --dmx-radius: 0.5; --dmx-manhattan: 2; opacity: 0.95; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 1; --dmx-col: 4; --dmx-x: 6px; --dmx-y: -3px; --dmx-angle: -0.4636476090008061; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 2; --dmx-row: 2; --dmx-col: 0; --dmx-x: -6px; --dmx-y: 0px; --dmx-angle: 3.141592653589793; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 2; opacity: 0.07; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 1; --dmx-row: 2; --dmx-col: 1; --dmx-x: -3px; --dmx-y: 0px; --dmx-angle: 3.141592653589793; --dmx-radius: 0.35355339059327373; --dmx-manhattan: 1; opacity: 0.95; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 0; --dmx-row: 2; --dmx-col: 2; --dmx-x: 0px; --dmx-y: 0px; --dmx-angle: 0; --dmx-radius: 0; --dmx-manhattan: 0; opacity: 0.34; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 1; --dmx-row: 2; --dmx-col: 3; --dmx-x: 3px; --dmx-y: 0px; --dmx-angle: 0; --dmx-radius: 0.35355339059327373; --dmx-manhattan: 1; opacity: 0.95; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 2; --dmx-row: 2; --dmx-col: 4; --dmx-x: 6px; --dmx-y: 0px; --dmx-angle: 0; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 2; opacity: 0.07; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 3; --dmx-col: 0; --dmx-x: -6px; --dmx-y: 3px; --dmx-angle: 2.677945044588987; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 1.4142135623730951; --dmx-row: 3; --dmx-col: 1; --dmx-x: -3px; --dmx-y: 3px; --dmx-angle: 2.356194490192345; --dmx-radius: 0.5; --dmx-manhattan: 2; opacity: 0.95; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 1; --dmx-row: 3; --dmx-col: 2; --dmx-x: 0px; --dmx-y: 3px; --dmx-angle: 1.5707963267948966; --dmx-radius: 0.35355339059327373; --dmx-manhattan: 1; opacity: 0.95; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 1.4142135623730951; --dmx-row: 3; --dmx-col: 3; --dmx-x: 3px; --dmx-y: 3px; --dmx-angle: 0.7853981633974483; --dmx-radius: 0.5; --dmx-manhattan: 2; opacity: 0.95; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 3; --dmx-col: 4; --dmx-x: 6px; --dmx-y: 3px; --dmx-angle: 0.4636476090008061; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot dmx-inactive"
+        style="width: 2px; height: 2px; --dmx-distance: 2.8284271247461903; --dmx-row: 4; --dmx-col: 0; --dmx-x: -6px; --dmx-y: 6px; --dmx-angle: 2.356194490192345; --dmx-radius: 1; --dmx-manhattan: 4;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 4; --dmx-col: 1; --dmx-x: -3px; --dmx-y: 6px; --dmx-angle: 2.0344439357957027; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 2; --dmx-row: 4; --dmx-col: 2; --dmx-x: 0px; --dmx-y: 6px; --dmx-angle: 1.5707963267948966; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 2; opacity: 0.07; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot"
+        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 4; --dmx-col: 3; --dmx-x: 3px; --dmx-y: 6px; --dmx-angle: 1.1071487177940904; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
+      />
+      <span
+        aria-hidden="true"
+        class="dmx-dot dmx-inactive"
+        style="width: 2px; height: 2px; --dmx-distance: 2.8284271247461903; --dmx-row: 4; --dmx-col: 4; --dmx-x: 6px; --dmx-y: 6px; --dmx-angle: 0.7853981633974483; --dmx-radius: 1; --dmx-manhattan: 4;"
+      />
+    </div>
+  </div>
   <div
     class="flex min-w-0 flex-1 flex-col gap-0.5"
   >

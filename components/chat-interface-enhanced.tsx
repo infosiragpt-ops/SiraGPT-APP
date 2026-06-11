@@ -48,6 +48,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
+import { motion, AnimatePresence } from "framer-motion"
 import { dedupeMessages } from "@/lib/message-preservation"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { CredentialWarning } from "@/components/credential-warning"
@@ -203,6 +204,13 @@ import {
 } from "@/lib/long-paste"
 import { usePasteCapture } from "@/components/paste-preview-overlay"
 import { analyzePastedContent, type PasteCaptureResult, type PasteCaptureAction } from "@/lib/paste-capture"
+// Universal ingest modules — typed registry + pure paste routing + helpers.
+import { routePaste } from "@/lib/attachments/paste-router"
+import { htmlToMarkdown } from "@/lib/attachments/html-to-markdown"
+import { dedupeFiles } from "@/lib/attachments/file-hash"
+import { extractAudioMeta, extractVideoMeta } from "@/lib/attachments/media-meta"
+import { fetchLinkPreview, faviconFallbackUrl, type LinkPreview } from "@/lib/attachments/link-preview"
+import { defaultAttachmentRegistry } from "@/lib/attachments/registry"
 import { useChatDraft } from "@/hooks/use-chat-draft"
 import { useVisualViewportCssVars } from "@/hooks/use-visual-viewport-css-vars"
 // Never-throwing clipboard (Capacitor → navigator.clipboard → execCommand fallback).
@@ -231,11 +239,14 @@ const previewAttachmentKey = (attachment: AttachmentLike | null | undefined): st
 const isComposerFileUploadPending = (file: any): boolean =>
   Boolean(file && file.status === "uploading" && !resolveUploadFileId(file))
 
-// ChatGPT-style paste: pasted text stays inline in the composer (which grows
-// with an internal scrollbar) — no document chip. The cap is a freeze-guard
-// only: a controlled textarea holding half a megabyte re-renders the whole
-// chat shell on every keystroke, so beyond it the paste attaches as a chip.
-const INLINE_PASTE_MAX_CHARS = 500_000
+// Universal ingest: pasted plain text longer than this becomes a "PEGADO"
+// (.txt) chip next to the input — expandable/removable — so the bar stays
+// clean. Shorter pastes insert inline at the caret. Configurable per
+// deployment via NEXT_PUBLIC_COMPOSER_PASTE_CHIP_THRESHOLD.
+const LONG_PASTE_CHIP_THRESHOLD = (() => {
+  const n = Number(process.env.NEXT_PUBLIC_COMPOSER_PASTE_CHIP_THRESHOLD)
+  return Number.isFinite(n) && n > 0 ? n : 1500
+})()
 
 const PROCESSING_CONTEXT_EXT_RE = /\.(?:pdf|docx?|xlsx?|csv|pptx?|txt|md|markdown|rtf|odt|ods|odp)$/i
 const PROCESSING_CONTEXT_MIME_RE =
@@ -1573,6 +1584,42 @@ const getFileIcon = (file: any) => {
       return wrapIconInSmallSquare(<FileIcon className="h-5 w-5 text-white" />, "#9ca3af"); // gray
   }
 };
+// Human-readable byte size for attachment chips ("1,5 MB").
+const formatChipBytes = (bytes: number | null | undefined): string => {
+  if (!Number.isFinite(bytes as number) || (bytes as number) <= 0) return "";
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes as number;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit++; }
+  const rounded = value >= 100 || unit === 0 ? Math.round(value).toString() : value.toFixed(1).replace(".", ",");
+  return `${rounded} ${units[unit]}`;
+};
+
+// "m:ss" / "h:mm:ss" duration label for audio/video chips.
+const formatChipDuration = (seconds: number | null | undefined): string => {
+  if (!Number.isFinite(seconds as number) || (seconds as number) <= 0) return "";
+  const total = Math.round(seconds as number);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return h > 0
+    ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+    : `${m}:${String(s).padStart(2, "0")}`;
+};
+
+// Mini-waveform for audio chips — normalized peaks (0..1) to bars.
+const ChipWaveform = ({ peaks }: { peaks: number[] }) => (
+  <span aria-hidden className="flex h-[16px] items-end gap-[1.5px]">
+    {peaks.slice(0, 36).map((p, i) => (
+      <span
+        key={i}
+        className="w-[2px] rounded-full bg-pink-500/70 dark:bg-pink-400/70"
+        style={{ height: `${Math.max(2, Math.round(p * 16))}px` }}
+      />
+    ))}
+  </span>
+);
+
 // Active Options Display Component - Renders above the textarea
 const ActiveOptionsDisplay = ({
   uploadedFiles,
@@ -1582,6 +1629,7 @@ const ActiveOptionsDisplay = ({
   restoreLongPasteToInput,
   onPreviewAttachment,
   onFileProcessingStatusChange,
+  moveFile,
 }: {
   uploadedFiles: any[];
   removeFile: (index: number) => void;
@@ -1590,7 +1638,12 @@ const ActiveOptionsDisplay = ({
   restoreLongPasteToInput?: (file: any, index: number) => void;
   onPreviewAttachment?: (attachment: AttachmentLike, siblings: AttachmentLike[], index: number) => void;
   onFileProcessingStatusChange?: (file: any, status: FileProcessingStatus) => void;
+  moveFile?: (index: number, delta: -1 | 1) => void;
 }) => {
+  // Screen-reader announcement for keyboard reordering (aria-live).
+  const [reorderAnnouncement, setReorderAnnouncement] = React.useState("");
+  // Inline expanded preview for "PEGADO" text-snippet chips.
+  const [expandedSnippetId, setExpandedSnippetId] = React.useState<string | null>(null);
   // Viewer state — same reusable viewer used by sent-message chips, so
   // the user gets identical high-fidelity preview in both contexts.
   const [viewingIndex, setViewingIndex] = React.useState<number | null>(null);
@@ -1635,7 +1688,14 @@ const ActiveOptionsDisplay = ({
 
   return (
     <div className="p-3  bg-background">
-      <div className="flex flex-wrap items-center gap-2 max-h-40 overflow-y-auto">
+      {/* aria-live announcer so keyboard reordering is narrated. */}
+      <span aria-live="polite" className="sr-only">{reorderAnnouncement}</span>
+      <div
+        role="list"
+        aria-label="Archivos adjuntos"
+        className="flex flex-wrap items-center gap-2 max-h-40 overflow-y-auto"
+      >
+        <AnimatePresence initial={false}>
         {uploadedFiles.map((file, index) => {
           const isImage = file.type?.startsWith('image/');
           const fileId = file.id || file.tempId;
@@ -1658,9 +1718,26 @@ const ActiveOptionsDisplay = ({
             }
           };
 
+          const chipKey = String(file.tempId || file.id || `${file.name}-${index}`);
+          const isAudio = (file.type || '').startsWith('audio/');
+          const isVideo = (file.type || '').startsWith('video/');
+          const chipLabel = `${longPasteMeta?.title || file.name}, adjunto ${index + 1} de ${uploadedFiles.length}`;
+          const handleReorder = (delta: -1 | 1) => {
+            if (!moveFile) return;
+            const target = index + delta;
+            if (target < 0 || target >= uploadedFiles.length) return;
+            moveFile(index, delta);
+            setReorderAnnouncement(`${file.name} movido a la posición ${target + 1} de ${uploadedFiles.length}`);
+          };
+
           return (
-            <div
-              key={index}
+            <motion.div
+              key={chipKey}
+              layout
+              initial={{ opacity: 0, scale: 0.85, y: 8 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.85, y: 8 }}
+              transition={{ type: 'spring', stiffness: 420, damping: 30, mass: 0.7 }}
               className={cn(
                 "relative text-sm rounded-xl",
                 "border",
@@ -1668,12 +1745,22 @@ const ActiveOptionsDisplay = ({
                 isImage ? `${imageSizeClass} p-0` : "flex items-center gap-2 px-2 py-1",
                 // Clickable chip — opens the unified high-fidelity viewer.
                 canPreview && "cursor-pointer hover:border-foreground/40 hover:shadow-sm transition-all",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
               )}
               title={isFailed ? `Subida fallida: ${file.uploadError || 'error'}` : canPreview ? 'Ver documento' : 'Preparando documento'}
               onClick={openPreview}
-              role={canPreview ? 'button' : undefined}
-              tabIndex={canPreview ? 0 : undefined}
-              onKeyDown={(e) => {
+              role="listitem"
+              aria-label={chipLabel}
+              tabIndex={0}
+              onKeyDown={(e: React.KeyboardEvent) => {
+                if (e.key === 'Delete' || e.key === 'Backspace') {
+                  e.preventDefault();
+                  removeFile(index);
+                  setReorderAnnouncement(`${file.name} eliminado`);
+                  return;
+                }
+                if (e.altKey && e.key === 'ArrowLeft') { e.preventDefault(); handleReorder(-1); return; }
+                if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); handleReorder(1); return; }
                 if (!canPreview) return;
                 if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPreview(); }
               }}
@@ -1720,26 +1807,54 @@ const ActiveOptionsDisplay = ({
                     )}
                   </div>
 
-                  {!isUploading && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="absolute top-1 right-1 h-6 w-6 p-0 bg-white dark:bg-background rounded-full shadow-md flex items-center justify-center hover:bg-gray-100"
-                      onClick={(e) => { e.stopPropagation(); removeFile(index); }}
-                      title="Quitar"
-                      aria-label="Quitar archivo"
-                    >
-                      <X className="h-4 w-4 text-gray-600 dark:text-foreground" />
-                    </Button>
-                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="absolute top-1 right-1 h-6 w-6 p-0 bg-white dark:bg-background rounded-full shadow-md flex items-center justify-center hover:bg-gray-100"
+                    onClick={(e) => { e.stopPropagation(); removeFile(index); }}
+                    title={isUploading ? "Cancelar subida" : "Quitar"}
+                    aria-label={isUploading ? "Cancelar subida" : "Quitar archivo"}
+                  >
+                    <X className="h-4 w-4 text-gray-600 dark:text-foreground" />
+                  </Button>
                 </>
               ) : (
                 <>
-                  {getFileIcon(file)}
+                  {isVideo && file.mediaMeta?.thumbnailDataUrl ? (
+                    <span className="relative h-9 w-12 shrink-0 overflow-hidden rounded-md bg-black/80">
+                      <img src={file.mediaMeta.thumbnailDataUrl} alt="" className="h-full w-full object-cover" />
+                      {formatChipDuration(file.mediaMeta?.durationSeconds) && (
+                        <span className="absolute bottom-0.5 right-0.5 rounded bg-black/75 px-1 text-[9px] font-medium leading-tight text-white tabular-nums">
+                          {formatChipDuration(file.mediaMeta?.durationSeconds)}
+                        </span>
+                      )}
+                    </span>
+                  ) : (
+                    getFileIcon(file)
+                  )}
                   <div className="flex flex-col flex-1 min-w-0">
                     <span className={`truncate font-medium text-[13px] ${isFailed ? 'text-red-600 dark:text-red-400' : ''}`}>
+                      {longPasteMeta && (
+                        <span className="mr-1.5 inline-flex items-center rounded bg-muted px-1 py-px align-middle text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">
+                          Pegado
+                        </span>
+                      )}
                       {longPasteMeta?.title || file.name}
                     </span>
+                    {/* Secondary metadata line — readable size + media details. */}
+                    {!longPasteMeta && !isFailed && (
+                      <span className="mt-0.5 flex items-center gap-1.5 text-[10.5px] leading-tight text-muted-foreground">
+                        {isAudio && Array.isArray(file.mediaMeta?.peaks) && file.mediaMeta.peaks.length > 0 && (
+                          <ChipWaveform peaks={file.mediaMeta.peaks} />
+                        )}
+                        {isAudio && formatChipDuration(file.mediaMeta?.durationSeconds) && (
+                          <span className="tabular-nums">{formatChipDuration(file.mediaMeta?.durationSeconds)}</span>
+                        )}
+                        {formatChipBytes(file.size) && (
+                          <span className="tabular-nums">{formatChipBytes(file.size)}</span>
+                        )}
+                      </span>
+                    )}
                     {longPasteMeta && !isUploading && !isFailed && (
                       <div className="mt-0.5 flex items-center gap-2 text-[11px] leading-tight text-muted-foreground">
                         {/* Solid stats so the user can verify the
@@ -1767,7 +1882,20 @@ const ActiveOptionsDisplay = ({
                         )}
                         <button
                           type="button"
-                          className="ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 underline-offset-2 hover:bg-muted/60 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                          className="ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setExpandedSnippetId((cur) => (cur === chipKey ? null : chipKey));
+                          }}
+                          aria-expanded={expandedSnippetId === chipKey}
+                          aria-label={expandedSnippetId === chipKey ? "Contraer vista previa del texto pegado" : "Expandir vista previa del texto pegado"}
+                          title={expandedSnippetId === chipKey ? "Contraer" : "Expandir"}
+                        >
+                          {expandedSnippetId === chipKey ? "Contraer ▴" : "Expandir ▾"}
+                        </button>
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 underline-offset-2 hover:bg-muted/60 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
                           onClick={(e) => {
                             e.stopPropagation();
                             restoreLongPasteToInput?.(file, index);
@@ -1778,6 +1906,14 @@ const ActiveOptionsDisplay = ({
                           Restaurar ↩
                         </button>
                       </div>
+                    )}
+                    {longPasteMeta && expandedSnippetId === chipKey && (
+                      <pre className="mt-1.5 max-h-36 max-w-[340px] overflow-y-auto whitespace-pre-wrap break-words rounded-md border border-border/50 bg-muted/30 px-2 py-1.5 font-sans text-[11.5px] leading-snug text-foreground/85">
+                        {longPasteMeta.preview || longPasteMeta.text?.slice(0, 700)}
+                        {(longPasteMeta.originalCharCount || 0) > 700 && (
+                          <span className="text-muted-foreground">{"\n"}… ({Intl.NumberFormat('es').format(longPasteMeta.originalCharCount)} caracteres en total)</span>
+                        )}
+                      </pre>
                     )}
                     {!isFailed && !longPasteMeta && (isUploading || file.id) && (
                       <div className="mt-1">
@@ -1796,37 +1932,36 @@ const ActiveOptionsDisplay = ({
                       </span>
                     )}
                   </div>
-                  {!isUploading && (
-                    <div className="flex items-center gap-0.5 ml-1">
-                      {isFailed && retryUpload && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-5 w-5 p-0 hover:bg-red-500/10 rounded-full text-red-600 dark:text-red-400"
-                          onClick={(e) => { e.stopPropagation(); retryUpload(file); }}
-                          title="Reintentar subida"
-                          aria-label="Reintentar subida"
-                        >
-                          <RefreshCw className="h-3.5 w-3.5" />
-                        </Button>
-                      )}
+                  <div className="flex items-center gap-0.5 ml-1">
+                    {isFailed && retryUpload && (
                       <Button
                         variant="ghost"
                         size="sm"
-                        className="h-5 w-5 p-0 hover:bg-gray-200 dark:hover:bg-muted rounded-full"
-                        onClick={(e) => { e.stopPropagation(); removeFile(index); }}
-                        title="Quitar"
-                        aria-label="Quitar archivo"
+                        className="h-5 w-5 p-0 hover:bg-red-500/10 rounded-full text-red-600 dark:text-red-400"
+                        onClick={(e) => { e.stopPropagation(); retryUpload(file); }}
+                        title="Reintentar subida"
+                        aria-label="Reintentar subida"
                       >
-                        <X className="h-4 w-4" />
+                        <RefreshCw className="h-3.5 w-3.5" />
                       </Button>
-                    </div>
-                  )}
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-5 w-5 p-0 hover:bg-gray-200 dark:hover:bg-muted rounded-full"
+                      onClick={(e) => { e.stopPropagation(); removeFile(index); }}
+                      title={isUploading ? "Cancelar subida" : "Quitar"}
+                      aria-label={isUploading ? "Cancelar subida" : "Quitar archivo"}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </>
               )}
-            </div>
+            </motion.div>
           );
         })}
+        </AnimatePresence>
       </div>
       <UnifiedDocumentViewer
         open={viewingIndex !== null}
@@ -4209,6 +4344,14 @@ function ChatInterfaceContent() {
   const uploadedFilesRef = React.useRef<any[]>([]);
   React.useEffect(() => { uploadedFilesRef.current = uploadedFiles; }, [uploadedFiles]);
   const inFlightSendKeysRef = React.useRef<Map<string, number>>(new Map());
+  // Universal-ingest bookkeeping: chips cancelled mid-upload (their XHR
+  // result must not resurrect them) + content-hash dedup of attachments.
+  const cancelledTempIdsRef = React.useRef<Set<string>>(new Set());
+  const attachmentHashesRef = React.useRef<Set<string>>(new Set());
+  const attachmentHashByIdRef = React.useRef<Map<string, string>>(new Map());
+  // OG metadata cache for detected link chips (url → preview | null).
+  const linkPreviewCacheRef = React.useRef<Map<string, LinkPreview | null>>(new Map());
+  const [linkPreviews, setLinkPreviews] = React.useState<Record<string, LinkPreview | null>>({});
 
   const updateUploadedFileById = React.useCallback((
     fileId: string,
@@ -5197,6 +5340,39 @@ But first, you need to connect your Spotify account securely using the button be
 
   const detectedLinks = React.useMemo(() => extractDetectedLinks(input), [input]);
 
+  // Background OG-metadata enrichment for detected link chips (title +
+  // favicon + thumbnail) with a silent fallback: on any failure the chip
+  // simply keeps showing the host. Debounced so typing doesn't spam the
+  // endpoint; cached per URL for the session.
+  React.useEffect(() => {
+    if (detectedLinks.length === 0) return;
+    const timer = window.setTimeout(() => {
+      detectedLinks.slice(0, 5).forEach((link) => {
+        if (linkPreviewCacheRef.current.has(link.url)) {
+          const cached = linkPreviewCacheRef.current.get(link.url);
+          if (cached) setLinkPreviews(prev => (prev[link.url] ? prev : { ...prev, [link.url]: cached }));
+          return;
+        }
+        linkPreviewCacheRef.current.set(link.url, null); // in-flight marker
+        void fetchLinkPreview(link.url)
+          .then((preview) => {
+            const enriched = preview
+              ? { ...preview, faviconUrl: preview.faviconUrl || faviconFallbackUrl(link.url) }
+              : null;
+            linkPreviewCacheRef.current.set(link.url, enriched);
+            if (enriched) setLinkPreviews(prev => ({ ...prev, [link.url]: enriched }));
+          })
+          .catch(() => { /* silent fallback — chip keeps the bare host */ });
+      });
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [detectedLinks]);
+
+  const enrichedDetectedLinks = React.useMemo(
+    () => detectedLinks.map((link) => ({ ...link, og: linkPreviews[link.url] || null })),
+    [detectedLinks, linkPreviews],
+  );
+
   const removeDetectedLink = React.useCallback((link: DetectedLink) => {
     setInput((prev) => {
       const escapedRaw = link.raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
@@ -5271,6 +5447,31 @@ But first, you need to connect your Spotify account securely using the button be
     // Use requestAnimationFrame to ensure DOM is updated before scrolling
     requestAnimationFrame(resizeComposerTextarea);
   };
+
+  // Insert text at the textarea caret (replacing any selection), keeping
+  // the draft, the auto-grow height and the caret position consistent.
+  // Used by the universal paste router for orchestrated (non-native)
+  // insertions: markdown from rich HTML, link URLs, multi-item pastes.
+  const insertTextAtCaret = React.useCallback((snippet: string) => {
+    if (!snippet) return;
+    const ta = textareaRef.current;
+    if (!ta) {
+      setInput(prev => (prev ? `${prev}\n\n${snippet}` : snippet));
+      return;
+    }
+    const prevValue = ta.value;
+    const start = ta.selectionStart ?? prevValue.length;
+    const end = ta.selectionEnd ?? start;
+    const next = prevValue.slice(0, start) + snippet + prevValue.slice(end);
+    setInput(next);
+    chatDraft.save(next);
+    window.requestAnimationFrame(() => {
+      resizeComposerTextarea();
+      const caret = start + snippet.length;
+      try { ta.setSelectionRange(caret, caret); } catch { /* old Safari */ }
+      ta.focus();
+    });
+  }, [chatDraft, resizeComposerTextarea]);
 
   const handleTextareaFocus = React.useCallback(() => {
     resizeComposerTextarea();
@@ -6122,6 +6323,22 @@ But first, you need to connect your Spotify account securely using the button be
     if (accepted.length === 0) return;
     filesToUpload = accepted;
 
+    // Content-hash dedup — the same bytes can't be attached twice in a
+    // conversation. Hashing must never block an upload, so any failure
+    // falls through to "no dedup" silently.
+    let batchHashes: Map<File, string> | null = null;
+    try {
+      const { unique, duplicates, hashes } = await dedupeFiles(filesToUpload, attachmentHashesRef.current);
+      if (duplicates.length > 0) {
+        toast.info(duplicates.length === 1
+          ? `"${duplicates[0].name}" ya está adjunto — duplicado omitido.`
+          : `${duplicates.length} archivos duplicados omitidos.`);
+      }
+      if (unique.length === 0) return;
+      filesToUpload = unique;
+      batchHashes = hashes;
+    } catch { /* hash dedup is best-effort */ }
+
     // Idempotency key — backend dedupes retries of the SAME batch attempt.
     const idempotencyKey = `upload-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
@@ -6130,6 +6347,11 @@ But first, you need to connect your Spotify account securely using the button be
       const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
       const preview = file.type.startsWith('image/') ? URL.createObjectURL(file) : null;
       const longPasteMeta = getLongPasteMetadata(file);
+      const contentHash = batchHashes?.get(file) || null;
+      if (contentHash) {
+        attachmentHashesRef.current.add(contentHash);
+        attachmentHashByIdRef.current.set(tempId, contentHash);
+      }
       return {
         tempId,
         name: file.name,
@@ -6140,6 +6362,7 @@ But first, you need to connect your Spotify account securely using the button be
         sourceChannel,
         longPasteMeta,
         isLongPasteDocument: Boolean(longPasteMeta),
+        mediaMeta: null as null | { durationSeconds?: number; peaks?: number[]; thumbnailDataUrl?: string | null },
         status: 'uploading' as 'uploading' | 'ready' | 'failed',
       };
     });
@@ -6148,6 +6371,27 @@ But first, you need to connect your Spotify account securely using the button be
       const next = [...cur, ...tempFiles];
       uploadedFilesRef.current = next;
       return next;
+    });
+
+    // Best-effort media metadata: mini-waveform + duration for audio,
+    // thumbnail + duration badge for video. Fire-and-forget; the chip
+    // upgrades in place when (and if) extraction succeeds.
+    tempFiles.forEach((tf) => {
+      const mime = tf.type || '';
+      const applyMediaMeta = (meta: { durationSeconds?: number; peaks?: number[]; thumbnailDataUrl?: string | null } | null) => {
+        if (!meta) return;
+        tf.mediaMeta = { ...(tf.mediaMeta || {}), ...meta };
+        setUploadedFiles((cur: any[]) => {
+          const next = cur.map(f => (f.tempId === tf.tempId ? { ...f, mediaMeta: tf.mediaMeta } : f));
+          uploadedFilesRef.current = next;
+          return next;
+        });
+      };
+      if (mime.startsWith('audio/')) {
+        void extractAudioMeta(tf.file).then(applyMediaMeta).catch(() => {});
+      } else if (mime.startsWith('video/')) {
+        void extractVideoMeta(tf.file).then(applyMediaMeta).catch(() => {});
+      }
     });
 
     // Initialize per-temp progress at 0.
@@ -6225,11 +6469,15 @@ But first, you need to connect your Spotify account securely using the button be
           const processingStage = f?.processingStage || f?.stage || null;
           return {
             ...f,
+            // Keep the tempId so chip identity (animations, hash bookkeeping,
+            // cancel tracking) survives the temp → server swap.
+            tempId: tempFiles[idx]?.tempId ?? f.tempId,
             file: tempFiles[idx]?.file ?? f.file,
             preview: tempFiles[idx]?.preview ?? f.preview,
             sourceChannel,
             longPasteMeta: tempFiles[idx]?.longPasteMeta ?? f.longPasteMeta,
             isLongPasteDocument: tempFiles[idx]?.isLongPasteDocument || Boolean(f.isLongPasteDocument),
+            mediaMeta: tempFiles[idx]?.mediaMeta ?? f.mediaMeta ?? null,
             processingStage,
             status: failed
               ? ('failed' as const)
@@ -6238,7 +6486,9 @@ But first, you need to connect your Spotify account securely using the button be
                 : ('ready' as const),
             uploadError: failed ? (f?.error || 'No se pudo procesar el archivo.') : f?.uploadError,
           };
-        });
+        // A chip removed while its upload was in flight acts as CANCEL —
+        // do not resurrect it when the XHR completes.
+        }).filter((m: any, idx: number) => !cancelledTempIdsRef.current.has(tempFiles[idx]?.tempId));
         const tempIds = new Set(tempFiles.map(tf => tf.tempId));
         setUploadedFiles((cur: any[]) => {
           const next = [
@@ -6532,43 +6782,76 @@ But first, you need to connect your Spotify account securely using the button be
 
     const { files, text, html } = extractFromClipboardEvent(native, { includeHtml: true });
 
-    // ─── No files ───────────────────────────────────────────────────
+    // ─── No files — route by content through the universal router ────
     if (files.length === 0) {
-      // text/uri-list — user copied a link from the address bar or a
-      // browser tab tab strip. Insert the URL(s) as plain text instead
-      // of letting Chrome paste the HTML <a> wrapper.
-      const uriList = cd.getData('text/uri-list');
-      if (uriList && !text) {
-        const urls = uriList.split('\n').map(s => s.trim()).filter(Boolean).filter(u => !u.startsWith('#'));
-        if (urls.length > 0) {
-          e.preventDefault();
-          setInput(prev => prev + (prev ? ' ' : '') + urls.join(' '));
-          return;
-        }
-      }
+      // HTML-only flavors (rare) still need a plain-text mirror so the
+      // router can apply the long-paste threshold and URL detection.
       let htmlFallbackText: string | null = null;
       if (!text && html) {
         const tmp = document.createElement('div');
         tmp.innerHTML = html;
         htmlFallbackText = (tmp.textContent || tmp.innerText || '').trim();
       }
-      const pastedText = (text && text.trim()) ? text : htmlFallbackText;
-      // ChatGPT-style paste: the text stays inline in the composer, which
-      // grows tall with its own scrollbar (getComposerTextareaMaxHeight).
-      // Only a truly massive paste becomes a document chip — a controlled
-      // textarea holding hundreds of KB makes every keystroke re-render lag.
-      if (pastedText && pastedText.length >= INLINE_PASTE_MAX_CHARS) {
-        e.preventDefault();
-        handlePasteCaptureActionRef.current("attach_document", analyzePastedContent(pastedText));
+      const effectiveText = (text && text.trim()) ? text : htmlFallbackText;
+      const uriList = cd.getData('text/uri-list') || null;
+
+      let actions: ReturnType<typeof routePaste> = [];
+      try {
+        actions = routePaste(
+          { text: effectiveText, html, uriList },
+          {
+            longTextThreshold: LONG_PASTE_CHIP_THRESHOLD,
+            resolveKind: (mime, name) => defaultAttachmentRegistry.resolve(mime, name).kind,
+          },
+        );
+      } catch {
+        // Router failure must never eat a paste — native fallback.
         return;
       }
-      // HTML-only paste (rare — usually browsers attach text/plain too).
-      // Strip to text via DOM parsing so we don't lose the content.
-      if (!text && htmlFallbackText) {
-        e.preventDefault();
-        setInput(prev => prev + htmlFallbackText);
+      if (actions.length === 0) return;
+
+      // A single plain-text insert keeps the NATIVE paste (caret-aware,
+      // selection-replacing, undo-friendly). Everything else — snippet
+      // chips, Word/Docs Markdown, link chips, multi-action pastes — is
+      // orchestrated by us.
+      if (actions.length === 1 && actions[0].type === 'insert-text') return;
+
+      e.preventDefault();
+      for (const action of actions) {
+        switch (action.type) {
+          case 'insert-text':
+            insertTextAtCaret(action.text);
+            break;
+          case 'link-chip':
+            // Link chips ride on the detected-links pipeline: the URL goes
+            // into the input and LinkContextDisplay renders the chip, which
+            // the OG-metadata effect enriches in background.
+            insertTextAtCaret(`${action.url} `);
+            break;
+          case 'text-snippet-chip':
+            // "PEGADO" chip — long pasted text becomes an expandable,
+            // removable .txt attachment to keep the bar clean.
+            handlePasteCaptureActionRef.current('attach_document', analyzePastedContent(action.text));
+            break;
+          case 'rich-html': {
+            // Word / Google Docs rich paste → sanitized Markdown that
+            // preserves bold, lists and tables. Falls back to plain text.
+            let content = '';
+            try { content = htmlToMarkdown(action.html); } catch { content = ''; }
+            if (!content.trim()) content = action.plainText || '';
+            content = content.trim();
+            if (!content) break;
+            if (content.length > LONG_PASTE_CHIP_THRESHOLD) {
+              handlePasteCaptureActionRef.current('attach_document', analyzePastedContent(content));
+            } else {
+              insertTextAtCaret(content);
+            }
+            break;
+          }
+          default:
+            break;
+        }
       }
-      // Otherwise let the browser do its native plain-text paste.
       return;
     }
 
@@ -6603,10 +6886,10 @@ But first, you need to connect your Spotify account securely using the button be
       // Prevent default so the OS file path string doesn't get pasted
       // as text next to the file. Then handle text ourselves if present.
       if ('preventDefault' in e) e.preventDefault();
-      if (text) setInput(prev => prev + text);
+      if (text) insertTextAtCaret(text);
       handleAndUploadFiles(filesToFileList(accepted), channel);
     }
-  }, [handleAndUploadFiles]);
+  }, [handleAndUploadFiles, insertTextAtCaret]);
 
   const handleTextareaPaste = React.useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     handleClipboardPaste(e);
@@ -8714,6 +8997,16 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
   const removeFile = (index: number) => {
     setUploadedFiles((cur: any[]) => {
+      const removed = cur[index];
+      // Removing a chip mid-upload acts as CANCEL: remember the tempId so
+      // the XHR completion merge doesn't resurrect the chip, and free its
+      // dedup hash so the user can re-attach the same file later.
+      if (removed?.tempId) cancelledTempIdsRef.current.add(removed.tempId);
+      const removedHash = removed ? attachmentHashByIdRef.current.get(removed.tempId || removed.id) : null;
+      if (removedHash) {
+        attachmentHashesRef.current.delete(removedHash);
+        attachmentHashByIdRef.current.delete(removed.tempId || removed.id);
+      }
       const next = cur.filter((_, i) => i !== index);
       uploadedFilesRef.current = next;
       return next;
@@ -8724,6 +9017,26 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       return index < current ? current - 1 : current;
     });
   }
+
+  // Keyboard reordering of attachment chips (Alt+←/→ on a focused chip).
+  // Preserves every other invariant: send order == visual order.
+  const moveFile = React.useCallback((index: number, delta: -1 | 1) => {
+    setUploadedFiles((cur: any[]) => {
+      const target = index + delta;
+      if (index < 0 || index >= cur.length || target < 0 || target >= cur.length) return cur;
+      const next = [...cur];
+      const [moved] = next.splice(index, 1);
+      next.splice(target, 0, moved);
+      uploadedFilesRef.current = next;
+      return next;
+    });
+    setComposerPreviewIndex((current) => {
+      if (current === null) return null;
+      if (current === index) return index + delta;
+      if (current === index + delta) return current - delta;
+      return current;
+    });
+  }, [setUploadedFiles]);
 
   const restoreLongPasteToInput = React.useCallback((file: any, index: number) => {
     const metadata = getLongPasteMetadata(file);
@@ -9539,14 +9852,15 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       onDrop={handleDrop}
     >
       {isDragging && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/80 p-6 backdrop-blur-sm">
+          <div className="composer-drop-ants pointer-events-none absolute inset-4 rounded-3xl" aria-hidden />
           <div className="flex max-w-sm flex-col items-center gap-3 rounded-3xl border-2 border-dashed border-primary/70 bg-background/95 p-10 text-center shadow-2xl">
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary">
               <Upload className="h-7 w-7" />
             </div>
-            <p className="text-base font-semibold">Soltar para adjuntar</p>
+            <p className="text-base font-semibold">Suelta tus archivos aquí</p>
             <p className="text-xs leading-5 text-muted-foreground">
-              PDF, Word, Excel, PowerPoint, imágenes y datos — sin límite de tamaño.
+              PDF, Office, imágenes, audio, video y datos — hasta 20 archivos, 100 MB c/u. Se conserva el orden en que los sueltes.
             </p>
           </div>
         </div>
@@ -9802,7 +10116,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     <CredentialWarning text={input} />
                     <div
                       className={cn(
-                        "composer-surface composer-liquid-surface group/composer relative rounded-3xl",
+                        "composer-surface composer-liquid-surface composer-focus-glow group/composer relative rounded-3xl",
                         pasteCapture.overlayVisible ? "overflow-visible" : "overflow-hidden",
                         "bg-background",
                         "ring-1 ring-black/[0.08] dark:ring-1 dark:ring-white/[0.06]",
@@ -9822,12 +10136,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       uploadProgress={uploadProgress}
                       retryUpload={retryUpload}
                       restoreLongPasteToInput={restoreLongPasteToInput}
+                      moveFile={moveFile}
                       onPreviewAttachment={(_attachment, _siblings, index) => openComposerDocumentPreview(index)}
                       onFileProcessingStatusChange={handleFileProcessingStatusChange}
                     />
                     <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
                     <LinkContextDisplay
-                      links={detectedLinks}
+                      links={enrichedDetectedLinks}
                       removeLink={removeDetectedLink}
                       isWebSearchActive={isWebSearchActive}
                       setIsWebSearchActive={setIsWebSearchActive}
@@ -10345,7 +10660,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         {pasteCapture.Overlay}
                         <div
                           className={cn(
-                            "composer-surface composer-liquid-surface group/composer relative rounded-3xl",
+                            "composer-surface composer-liquid-surface composer-focus-glow group/composer relative rounded-3xl",
                             pasteCapture.overlayVisible ? "overflow-visible" : "overflow-hidden",
                             "bg-background",
                             "ring-1 ring-black/[0.08] dark:ring-1 dark:ring-white/[0.06]",
@@ -10361,12 +10676,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           uploadProgress={uploadProgress}
                           retryUpload={retryUpload}
                           restoreLongPasteToInput={restoreLongPasteToInput}
+                          moveFile={moveFile}
                           onPreviewAttachment={(_attachment, _siblings, index) => openComposerDocumentPreview(index)}
                           onFileProcessingStatusChange={handleFileProcessingStatusChange}
                         />
                         <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
                         <LinkContextDisplay
-                          links={detectedLinks}
+                          links={enrichedDetectedLinks}
                           removeLink={removeDetectedLink}
                           isWebSearchActive={isWebSearchActive}
                           setIsWebSearchActive={setIsWebSearchActive}

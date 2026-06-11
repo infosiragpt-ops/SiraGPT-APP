@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { describeGeoHintStatus } from '@/app/settings/appshots/page'
+import { describeGeoHintStatus } from '@/lib/appshots-geo-hint'
 
 // Task 29 — covers the discreet sub-text the Appshots settings page
 // renders when the backend reports `geoHintStatus !== 'ok'`. We test

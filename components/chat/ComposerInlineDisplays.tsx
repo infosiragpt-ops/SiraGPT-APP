@@ -29,6 +29,12 @@ export type ImageAspectRatio = "1:1" | "2:3" | "3:2" | "3:4" | "9:16" | "4:3" | 
 export type DetectedLink = {
   url: string
   host: string
+  /** Optional OG metadata fetched in background (silent fallback). */
+  og?: {
+    title?: string | null
+    faviconUrl?: string | null
+    imageUrl?: string | null
+  } | null
 }
 
 export function ImageAspectRatioMark({
@@ -97,11 +103,30 @@ export function LinkContextDisplay<L extends DetectedLink>({
         {links.map((link) => (
           <div
             key={link.url}
-            className="group/link-chip flex min-w-0 max-w-[220px] items-center gap-1.5 rounded-full border border-sky-200 bg-background/90 px-2 py-1 text-xs text-sky-800 shadow-sm dark:border-sky-500/25 dark:bg-background/70 dark:text-sky-200"
-            title={link.url}
+            className="group/link-chip flex min-w-0 max-w-[260px] items-center gap-1.5 rounded-full border border-sky-200 bg-background/90 px-2 py-1 text-xs text-sky-800 shadow-sm dark:border-sky-500/25 dark:bg-background/70 dark:text-sky-200"
+            title={link.og?.title ? `${link.og.title} — ${link.url}` : link.url}
           >
-            <Link2 className="h-3.5 w-3.5 shrink-0" />
-            <span className="min-w-0 truncate font-medium">{link.host}</span>
+            {link.og?.faviconUrl ? (
+              <img
+                src={link.og.faviconUrl}
+                alt=""
+                aria-hidden
+                className="h-3.5 w-3.5 shrink-0 rounded-sm"
+                onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none" }}
+              />
+            ) : (
+              <Link2 className="h-3.5 w-3.5 shrink-0" />
+            )}
+            <span className="flex min-w-0 flex-col leading-tight">
+              {link.og?.title ? (
+                <>
+                  <span className="min-w-0 truncate font-medium">{link.og.title}</span>
+                  <span className="min-w-0 truncate text-[10px] text-sky-700/70 dark:text-sky-300/60">{link.host}</span>
+                </>
+              ) : (
+                <span className="min-w-0 truncate font-medium">{link.host}</span>
+              )}
+            </span>
             <Button
               variant="ghost"
               size="sm"

@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { describeGeoHintStatus } from '@/lib/appshots-geo-hint';
 
 /**
  * Página de vinculación de la extensión Sira Appshots.
@@ -473,24 +474,9 @@ export default function AppshotsSettingsPage() {
   );
 }
 
-// Not exported on purpose: Next.js App Router page files only allow a
-// fixed allowlist of named exports (metadata, default, generateStaticParams,
-// dynamic, revalidate, ...). Any extra `export` here breaks the production
-// build with a TS2344 on the auto-generated `.next/types/.../page.ts`.
-function describeGeoHintStatus(status: 'ok' | 'private' | 'unresolved'): string | null {
-  // Task 29 — copy intentionally short and neutral. Anything longer
-  // would push the device card onto a third visual line and start
-  // competing for attention with the "Último uso" timestamp.
-  switch (status) {
-    case 'private':
-      return 'Ubicación no disponible (red privada)';
-    case 'unresolved':
-      return 'Ubicación no disponible';
-    case 'ok':
-    default:
-      return null;
-  }
-}
+// Extracted to lib/appshots-geo-hint.ts: Next.js App Router page files
+// only allow a fixed allowlist of named exports (any extra `export` here
+// breaks the production build), and the unit test needs to import it.
 
 function describeRevocationReason(code: string): string {
   // Stable codes come from the backend (backend/src/routes/appshots.js

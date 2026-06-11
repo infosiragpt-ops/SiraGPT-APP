@@ -29,6 +29,80 @@ exports[`KeyboardShortcutsModal (snapshot) > renders the shortcut list when open
         <span
           class="text-foreground"
         >
+          Enviar mensaje
+        </span>
+        <span
+          class="flex items-center gap-1"
+        >
+          <kbd
+            class="rounded-md border border-border/60 bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground shadow-sm"
+          >
+            Enter
+          </kbd>
+        </span>
+      </li>
+      <li
+        class="flex items-center justify-between gap-4 py-2 text-sm"
+      >
+        <span
+          class="text-foreground"
+        >
+          Enviar mensaje (alternativo)
+        </span>
+        <span
+          class="flex items-center gap-1"
+        >
+          <kbd
+            class="rounded-md border border-border/60 bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground shadow-sm"
+          >
+            ⌘/Ctrl
+          </kbd>
+          <span
+            class="text-xs text-muted-foreground"
+          >
+            +
+          </span>
+          <kbd
+            class="rounded-md border border-border/60 bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground shadow-sm"
+          >
+            Enter
+          </kbd>
+        </span>
+      </li>
+      <li
+        class="flex items-center justify-between gap-4 py-2 text-sm"
+      >
+        <span
+          class="text-foreground"
+        >
+          Nueva línea en el mensaje
+        </span>
+        <span
+          class="flex items-center gap-1"
+        >
+          <kbd
+            class="rounded-md border border-border/60 bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground shadow-sm"
+          >
+            Shift
+          </kbd>
+          <span
+            class="text-xs text-muted-foreground"
+          >
+            +
+          </span>
+          <kbd
+            class="rounded-md border border-border/60 bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground shadow-sm"
+          >
+            Enter
+          </kbd>
+        </span>
+      </li>
+      <li
+        class="flex items-center justify-between gap-4 py-2 text-sm"
+      >
+        <span
+          class="text-foreground"
+        >
           Enfocar búsqueda
         </span>
         <span
@@ -57,7 +131,7 @@ exports[`KeyboardShortcutsModal (snapshot) > renders the shortcut list when open
         <span
           class="text-foreground"
         >
-          Enviar mensaje
+          Abrir menú de comandos
         </span>
         <span
           class="flex items-center gap-1"
@@ -65,35 +139,7 @@ exports[`KeyboardShortcutsModal (snapshot) > renders the shortcut list when open
           <kbd
             class="rounded-md border border-border/60 bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground shadow-sm"
           >
-            ⌘/Ctrl
-          </kbd>
-          <span
-            class="text-xs text-muted-foreground"
-          >
-            +
-          </span>
-          <kbd
-            class="rounded-md border border-border/60 bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground shadow-sm"
-          >
-            Enter
-          </kbd>
-        </span>
-      </li>
-      <li
-        class="flex items-center justify-between gap-4 py-2 text-sm"
-      >
-        <span
-          class="text-foreground"
-        >
-          Cerrar modal / cancelar
-        </span>
-        <span
-          class="flex items-center gap-1"
-        >
-          <kbd
-            class="rounded-md border border-border/60 bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground shadow-sm"
-          >
-            Esc
+            /
           </kbd>
         </span>
       </li>
@@ -112,6 +158,24 @@ exports[`KeyboardShortcutsModal (snapshot) > renders the shortcut list when open
             class="rounded-md border border-border/60 bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground shadow-sm"
           >
             ↑
+          </kbd>
+        </span>
+      </li>
+      <li
+        class="flex items-center justify-between gap-4 py-2 text-sm"
+      >
+        <span
+          class="text-foreground"
+        >
+          Cerrar herramientas / cancelar / desenfocar
+        </span>
+        <span
+          class="flex items-center gap-1"
+        >
+          <kbd
+            class="rounded-md border border-border/60 bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground shadow-sm"
+          >
+            Esc
           </kbd>
         </span>
       </li>
@@ -140,6 +204,24 @@ exports[`KeyboardShortcutsModal (snapshot) > renders the shortcut list when open
             class="rounded-md border border-border/60 bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground shadow-sm"
           >
             /
+          </kbd>
+        </span>
+      </li>
+      <li
+        class="flex items-center justify-between gap-4 py-2 text-sm"
+      >
+        <span
+          class="text-foreground"
+        >
+          Mostrar esta ayuda (alternativo)
+        </span>
+        <span
+          class="flex items-center gap-1"
+        >
+          <kbd
+            class="rounded-md border border-border/60 bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground shadow-sm"
+          >
+            ?
           </kbd>
         </span>
       </li>

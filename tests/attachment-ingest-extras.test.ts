@@ -168,12 +168,20 @@ describe("validateBatch · count cap", () => {
   })
 
   it("caps the accepted list at the default maxCount and routes the rest to rejected", () => {
-    // Default cap is 10 (matches backend `files: 10`).
-    const files = Array.from({ length: 13 }, (_, i) => ok(`f${i}.png`))
+    // Default cap is 20 (universal ingest spec; backend accepts up to 50).
+    const files = Array.from({ length: 23 }, (_, i) => ok(`f${i}.png`))
     const result = validateBatch(files)
-    assert.equal(result.accepted.length, 10)
+    assert.equal(result.accepted.length, 20)
     assert.equal(result.rejected.length, 3)
     assert.equal(result.rejected[0].code, "count_exceeded")
+  })
+
+  it("rejects a file above the default 100 MB cap", () => {
+    const big = ok("pesado.png")
+    Object.defineProperty(big, "size", { value: 101 * 1024 * 1024 })
+    const result = validateBatch([big])
+    assert.equal(result.accepted.length, 0)
+    assert.equal(result.rejected[0].code, "size_exceeded")
   })
 })
 

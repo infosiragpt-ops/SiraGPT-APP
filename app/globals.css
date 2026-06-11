@@ -5864,3 +5864,78 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
     color: hsl(var(--muted-foreground));
   }
 }
+
+/* ── Universal ingest · composer visuals ──────────────────────────────
+   1. .composer-drop-ants — animated "marching ants" dashed border for
+      the full-window drag&drop overlay.
+   2. .composer-focus-glow — subtle animated gradient ring shown while
+      the composer has focus, coherent with the liquid/glass language.
+   Both honor prefers-reduced-motion. */
+
+.composer-drop-ants {
+  background-image:
+    linear-gradient(90deg, hsl(var(--primary) / 0.75) 55%, transparent 45%),
+    linear-gradient(90deg, hsl(var(--primary) / 0.75) 55%, transparent 45%),
+    linear-gradient(0deg, hsl(var(--primary) / 0.75) 55%, transparent 45%),
+    linear-gradient(0deg, hsl(var(--primary) / 0.75) 55%, transparent 45%);
+  background-repeat: repeat-x, repeat-x, repeat-y, repeat-y;
+  background-size: 18px 2px, 18px 2px, 2px 18px, 2px 18px;
+  background-position: 0 0, 0 100%, 0 0, 100% 0;
+  animation: sira-ants-march 0.9s linear infinite;
+}
+@keyframes sira-ants-march {
+  to {
+    background-position: 18px 0, -18px 100%, 0 -18px, 100% 18px;
+  }
+}
+
+@property --sira-glow-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+.composer-focus-glow {
+  position: relative;
+}
+.composer-focus-glow::before {
+  content: "";
+  position: absolute;
+  inset: 0; /* the pill clips overflow, so the ring hugs the inner edge */
+  border-radius: inherit;
+  padding: 1.5px;
+  background: conic-gradient(
+    from var(--sira-glow-angle, 0deg),
+    transparent 0%,
+    hsl(var(--primary) / 0.45) 18%,
+    rgba(139, 92, 246, 0.5) 38%,
+    hsl(var(--primary) / 0.3) 58%,
+    transparent 78%
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 0.35s ease;
+  pointer-events: none;
+  z-index: 0;
+}
+.composer-focus-glow:focus-within::before {
+  opacity: 1;
+  animation: sira-glow-spin 7s linear infinite;
+}
+@keyframes sira-glow-spin {
+  to {
+    --sira-glow-angle: 360deg;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-drop-ants {
+    animation: none;
+  }
+  .composer-focus-glow:focus-within::before {
+    animation: none;
+    opacity: 0.55;
+  }
+}
