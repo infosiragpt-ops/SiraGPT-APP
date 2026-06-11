@@ -1610,6 +1610,28 @@ with open(OUT_PATH, "rb") as f:
   return buffer;
 }
 
+let _coverAccentPng = null;
+async function buildCoverAccentPng() {
+  if (_coverAccentPng) return _coverAccentPng;
+  try {
+    const sharp = require('sharp');
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="480">
+      <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#2563EB"/><stop offset="1" stop-color="#06B6D4"/>
+      </linearGradient></defs>
+      <circle cx="240" cy="240" r="200" fill="url(#g)" opacity="0.92"/>
+      <circle cx="240" cy="240" r="200" fill="none" stroke="#0F172A" stroke-opacity="0.08" stroke-width="2"/>
+      <g fill="#FFFFFF" opacity="0.85">
+        ${Array.from({ length: 5 }, (_, r) => Array.from({ length: 5 }, (_, c) => `<circle cx="${168 + c * 36}" cy="${168 + r * 36}" r="4"/>`).join('')).join('')}
+      </g>
+    </svg>`;
+    _coverAccentPng = await sharp(Buffer.from(svg)).png().toBuffer();
+  } catch {
+    _coverAccentPng = TINY_PNG;
+  }
+  return _coverAccentPng;
+}
+
 async function buildPptx(plan, outputPath) {
   const contentPlan = (plan.slidePlan && Array.isArray(plan.slidePlan.slides) && plan.slidePlan.slides.length > 0)
     ? plan.slidePlan
@@ -1667,7 +1689,8 @@ async function buildPptx(plan, outputPath) {
   slide.addShape(pptx.ShapeType.roundRect, { x: 0.82, y: 4.2, w: 3.1, h: 0.48, rectRadius: 0.09, fill: { color: palette.white }, line: { color: 'CBD5E1' } });
   slide.addText('Enfoque ejecutivo y editable', { x: 1.05, y: 4.33, w: 2.7, h: 0.18, fontSize: 10.5, bold: true, color: palette.dark, margin: 0 });
   slide.addShape(pptx.ShapeType.arc, { x: 9.2, y: 0.85, w: 3.1, h: 3.1, line: { color: palette.cyan, transparency: 25 }, fill: { color: 'DBEAFE', transparency: 8 } });
-  slide.addImage({ data: `data:image/png;base64,${TINY_PNG.toString('base64')}`, x: 10.22, y: 4.7, w: 1.08, h: 1.08 });
+  const coverAccent = await buildCoverAccentPng();
+  slide.addImage({ data: `data:image/png;base64,${coverAccent.toString('base64')}`, x: 10.35, y: 4.45, w: 1.7, h: 1.7 });
   slide.addNotes(`Portada. Presentar el propósito central: ${contentPlan.thesis}`);
 
   slide = pptx.addSlide();
@@ -1856,36 +1879,159 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
       blocks: plan.blocks,
       referenceBriefs: plan.referenceBriefs,
     });
-  const checks = Object.entries(validation.checks || {})
-    .slice(0, 8)
-    .map(([key, value]) => `<li><strong>${xmlEscape(key.replace(/_/g, ' '))}</strong><span>${value === true ? 'OK' : 'Revisar'}</span></li>`)
-    .join('');
-  const cards = contentPlan.slides.slice(0, 10).map((slideSpec, index) => {
-    const bullets = slideSpec.bullets
-      .map((bullet) => {
-        const label = bullet.label ? `<strong>${xmlEscape(bullet.label)}:</strong> ` : '';
-        return `<li>${label}${xmlEscape(bullet.text)}</li>`;
-      })
-      .join('');
-    return `
-    <article class="slide">
-      <div class="num">${index + 1}</div>
-      <h2>${xmlEscape(slideSpec.title)}</h2>
-      <p>${xmlEscape(slideSpec.summary)}</p>
-      <ul>${bullets}</ul>
-    </article>`;
-  }).join('');
-  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${xmlEscape(plan.title)}</title><style>
-  :root{--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;--accent:#ea580c;--bg:#fff7ed;--card:#fff}
-  *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 8% 0,#ffedd5,transparent 34%),linear-gradient(135deg,#fff,#f8fafc);font-family:Aptos,Inter,system-ui,sans-serif;color:var(--ink)}
-  .wrap{max-width:1180px;margin:0 auto;padding:34px}.hero{display:grid;grid-template-columns:1.2fr .8fr;gap:18px;align-items:end;margin-bottom:22px}
-  .eyebrow{font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);font-weight:900}h1{font-size:clamp(32px,5vw,58px);line-height:.94;margin:8px 0 12px}
-  .lead{color:#475569;font-size:16px;line-height:1.6;max-width:720px}.panel,.slide{background:rgba(255,255,255,.92);border:1px solid var(--line);border-radius:26px;box-shadow:0 24px 70px rgba(15,23,42,.1)}
-  .panel{padding:22px}.checks{list-style:none;margin:14px 0 0;padding:0;display:grid;gap:9px}.checks li{display:flex;justify-content:space-between;gap:16px;border-bottom:1px solid var(--line);padding-bottom:8px;color:#475569}.checks span{font-weight:800;color:#16a34a}
-  .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.slide{position:relative;padding:26px 26px 24px 76px;min-height:245px}.num{position:absolute;left:22px;top:24px;width:36px;height:36px;border-radius:999px;background:var(--accent);color:white;display:grid;place-items:center;font-weight:900}
-  h2{margin:0 0 12px;font-size:24px}.slide p{color:#475569;line-height:1.55}.slide ul{margin:12px 0 0;padding-left:18px;color:#334155;display:grid;gap:7px}.badge{display:inline-flex;border:1px solid var(--line);border-radius:999px;padding:9px 12px;background:white;color:#334155;font-weight:800}
-  @media(max-width:860px){.hero,.grid{grid-template-columns:1fr}.wrap{padding:22px}.slide{padding-left:64px}}
-  </style></head><body><main class="wrap"><header class="hero"><div><span class="eyebrow">siraGPT Rendering Agent</span><h1>${xmlEscape(plan.title)}</h1><p class="lead">${xmlEscape(contentPlan.thesis)} La vista previa usa el mismo guion que construye el archivo PowerPoint nativo.</p><span class="badge">${xmlEscape(filename)}</span></div><aside class="panel"><strong>Validaciones técnicas</strong><ul class="checks">${checks || '<li><strong>integrity</strong><span>OK</span></li>'}</ul></aside></header><section class="grid">${cards}</section></main></body></html>`;
+
+  // El visor del chat SANITIZA el HTML (elimina <style>), así que toda la
+  // estética va en estilos inline: cada lámina se dibuja como tarjeta 16:9
+  // con el mismo sistema visual del PPTX (portada, divisores oscuros, stat
+  // hero, dos columnas, cita, bullets numerados + IDEA CLAVE).
+  const INK = '#0f172a';
+  const MUTED = '#64748b';
+  const ACCENT = '#2563EB';
+  const LINE = '#e2e8f0';
+  const deckTitle = xmlEscape(contentPlan.topic || plan.title);
+  const slideShell = (inner, { dark = false } = {}) => `
+    <div style="position:relative;width:100%;max-width:860px;margin:0 auto 26px;aspect-ratio:16/9;border-radius:14px;border:1px solid ${dark ? '#1e293b' : LINE};background:${dark ? INK : '#ffffff'};box-shadow:0 18px 44px -22px rgba(15,23,42,.28);overflow:hidden;font-family:Inter,system-ui,sans-serif;">
+      ${inner}
+    </div>`;
+  const footer = (n) => `
+    <div style="position:absolute;left:0;right:0;bottom:0;display:flex;justify-content:space-between;padding:8px 22px;border-top:1px solid ${LINE};font-size:10px;color:${MUTED};background:rgba(255,255,255,.7);">
+      <span>${deckTitle}</span><span>${n}</span>
+    </div>`;
+  const kickerHtml = (kicker) => kicker ? `<div style="font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:${ACCENT};margin-bottom:6px;">${xmlEscape(kicker)}</div>` : '';
+  const titleHtml = (title) => `<div style="font-size:26px;font-weight:800;color:${INK};line-height:1.12;">${xmlEscape(title)}</div>`;
+
+  const renderSlide = (spec, pageNum) => {
+    const layout = spec.layout || 'bullets';
+    if (layout === 'section') {
+      return slideShell(`
+        <div style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;padding:0 56px;">
+          <div style="width:54px;height:4px;background:#06B6D4;border-radius:2px;margin-bottom:16px;"></div>
+          ${spec.kicker ? `<div style="font-size:11px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:#67e8f9;margin-bottom:8px;">${xmlEscape(spec.kicker)}</div>` : ''}
+          <div style="font-size:34px;font-weight:800;color:#ffffff;line-height:1.1;">${xmlEscape(spec.title)}</div>
+          ${spec.summary ? `<div style="margin-top:12px;font-size:14px;color:#cbd5e1;max-width:620px;">${xmlEscape(spec.summary)}</div>` : ''}
+        </div>`, { dark: true });
+    }
+    if (layout === 'stat' && spec.stat) {
+      return slideShell(`
+        <div style="padding:30px 40px 0;">${kickerHtml(spec.kicker)}${titleHtml(spec.title)}</div>
+        <div style="display:flex;gap:30px;padding:10px 40px 0;align-items:flex-start;">
+          <div style="flex:1;">
+            <div style="font-size:88px;font-weight:900;color:${ACCENT};line-height:1;">${xmlEscape(spec.stat.value)}</div>
+            <div style="margin-top:10px;font-size:15px;color:${INK};max-width:340px;">${xmlEscape(spec.stat.caption)}</div>
+          </div>
+          <div style="flex:1;display:flex;flex-direction:column;gap:10px;padding-top:8px;">
+            ${(spec.support || []).slice(0, 3).map((item) => `<div style="border:1px solid ${LINE};background:#f8fafc;border-radius:10px;padding:12px 14px;font-size:12.5px;color:#334155;">${xmlEscape(item)}</div>`).join('')}
+          </div>
+        </div>
+        ${footer(pageNum)}`);
+    }
+    if (layout === 'two_column' && Array.isArray(spec.columns) && spec.columns.length >= 2) {
+      return slideShell(`
+        <div style="padding:30px 40px 0;">${kickerHtml(spec.kicker)}${titleHtml(spec.title)}</div>
+        <div style="display:flex;gap:18px;padding:18px 40px 0;">
+          ${spec.columns.slice(0, 2).map((column, i) => `
+            <div style="flex:1;border-radius:12px;padding:16px 18px;border:1px solid ${LINE};background:${i === 0 ? '#f1f5f9' : '#eff6ff'};">
+              <div style="font-size:15px;font-weight:800;color:${i === 0 ? INK : ACCENT};margin-bottom:10px;">${xmlEscape(column.heading || '')}</div>
+              ${(column.items || []).slice(0, 4).map((item) => `<div style="display:flex;gap:8px;margin-bottom:8px;font-size:12.5px;color:#334155;"><span style="color:${ACCENT};font-weight:800;">•</span><span>${xmlEscape(item)}</span></div>`).join('')}
+            </div>`).join('')}
+        </div>
+        ${footer(pageNum)}`);
+    }
+    if (layout === 'quote' && spec.quote) {
+      return slideShell(`
+        <div style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;padding:0 64px;">
+          <div style="font-size:64px;font-weight:900;color:#06B6D4;line-height:.6;">“</div>
+          <div style="font-size:22px;font-style:italic;font-weight:600;color:${INK};line-height:1.4;max-width:640px;">${xmlEscape(spec.quote)}</div>
+          ${spec.attribution ? `<div style="margin-top:14px;font-size:13px;font-weight:700;color:${MUTED};">— ${xmlEscape(spec.attribution)}</div>` : ''}
+        </div>
+        ${footer(pageNum)}`);
+    }
+    if (layout === 'chart' && spec.chart) {
+      const max = Math.max(...spec.chart.values, 1);
+      return slideShell(`
+        <div style="padding:30px 40px 0;">${kickerHtml(spec.kicker)}${titleHtml(spec.title)}</div>
+        <div style="display:flex;gap:26px;padding:16px 40px 0;">
+          <div style="flex:1.4;display:flex;flex-direction:column;gap:9px;">
+            ${spec.chart.labels.map((label, i) => `
+              <div style="display:flex;align-items:center;gap:10px;">
+                <span style="width:110px;font-size:11.5px;color:#334155;text-align:right;">${xmlEscape(label)}</span>
+                <div style="flex:1;background:#f1f5f9;border-radius:6px;height:18px;overflow:hidden;"><div style="width:${Math.round((spec.chart.values[i] / max) * 100)}%;height:100%;background:${ACCENT};border-radius:6px;"></div></div>
+                <span style="width:40px;font-size:11px;color:${MUTED};">${xmlEscape(String(spec.chart.values[i]))}${xmlEscape(spec.chart.unit || '')}</span>
+              </div>`).join('')}
+            ${spec.chart.source ? `<div style="margin-top:6px;font-size:10px;font-style:italic;color:${MUTED};">Fuente: ${xmlEscape(spec.chart.source)}</div>` : ''}
+          </div>
+          ${spec.insight ? `
+          <div style="flex:1;border-left:3px solid ${ACCENT};background:#eff6ff;border-radius:10px;padding:14px 16px;align-self:flex-start;">
+            <div style="font-size:10px;font-weight:800;letter-spacing:.12em;color:${ACCENT};margin-bottom:6px;">IDEA CLAVE</div>
+            <div style="font-size:14px;font-weight:700;color:${INK};">${xmlEscape(spec.insight)}</div>
+          </div>` : ''}
+        </div>
+        ${footer(pageNum)}`);
+    }
+    // bullets / forma legada
+    const bullets = (spec.bullets || []).slice(0, 4);
+    const takeaway = spec.takeaway || (bullets[0] ? `${bullets[0].label ? `${bullets[0].label}: ` : ''}${bullets[0].text}` : '');
+    return slideShell(`
+      <div style="padding:30px 40px 0;">${kickerHtml(spec.kicker)}${titleHtml(spec.title)}</div>
+      <div style="display:flex;gap:26px;padding:14px 40px 0;">
+        <div style="flex:1.5;">
+          ${spec.summary ? `<div style="font-size:13px;color:#475569;margin-bottom:14px;max-width:480px;">${xmlEscape(spec.summary)}</div>` : ''}
+          ${bullets.map((bullet, i) => `
+            <div style="display:flex;gap:12px;margin-bottom:12px;align-items:flex-start;">
+              <span style="flex:none;width:24px;height:24px;border-radius:7px;background:#eff6ff;border:1px solid #bfdbfe;color:${ACCENT};font-size:12px;font-weight:800;display:flex;align-items:center;justify-content:center;">${i + 1}</span>
+              <span style="font-size:13.5px;color:#334155;line-height:1.45;">${bullet.label ? `<strong style="color:${INK};">${xmlEscape(bullet.label)}.</strong> ` : ''}${xmlEscape(bullet.text)}</span>
+            </div>`).join('')}
+        </div>
+        ${takeaway ? `
+        <div style="flex:1;border-left:3px solid ${ACCENT};background:#eff6ff;border-radius:10px;padding:14px 16px;align-self:flex-start;">
+          <div style="font-size:10px;font-weight:800;letter-spacing:.12em;color:${ACCENT};margin-bottom:6px;">IDEA CLAVE</div>
+          <div style="font-size:14px;font-weight:700;color:${INK};">${xmlEscape(takeaway)}</div>
+        </div>` : ''}
+      </div>
+      ${footer(pageNum)}`);
+  };
+
+  const cover = slideShell(`
+    <div style="position:absolute;left:0;top:0;bottom:0;width:7px;background:${ACCENT};"></div>
+    <div style="position:absolute;right:-60px;top:-60px;width:220px;height:220px;border-radius:999px;background:radial-gradient(circle at 35% 35%, #60a5fa, #06B6D4);opacity:.25;"></div>
+    <div style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;padding:0 56px;">
+      <div style="font-size:11px;font-weight:800;letter-spacing:.2em;color:${ACCENT};margin-bottom:12px;">PRESENTACIÓN PROFESIONAL</div>
+      <div style="font-size:38px;font-weight:900;color:${INK};line-height:1.06;max-width:640px;">${xmlEscape(plan.title)}</div>
+      <div style="margin-top:14px;font-size:15px;color:#475569;max-width:560px;">${xmlEscape(contentPlan.thesis)}</div>
+    </div>`);
+
+  const agenda = slideShell(`
+    <div style="padding:30px 40px 0;">${titleHtml('Agenda')}<div style="font-size:12px;color:${MUTED};margin-top:4px;">Ruta de la presentación</div></div>
+    <div style="padding:16px 40px 0;display:flex;flex-direction:column;gap:8px;">
+      ${contentPlan.agenda.slice(0, 7).map((item, i) => `
+        <div style="display:flex;gap:14px;align-items:center;border-bottom:1px solid ${LINE};padding-bottom:8px;">
+          <span style="font-size:12px;font-weight:800;color:${ACCENT};">${String(i + 1).padStart(2, '0')}</span>
+          <span style="font-size:15px;color:${INK};${i === 0 ? 'font-weight:700;' : ''}">${xmlEscape(item)}</span>
+        </div>`).join('')}
+    </div>
+    ${footer(2)}`);
+
+  const passed = validation?.passed === true || validation?.checks
+    ? Object.values(validation.checks || {}).every((value) => value === true)
+    : true;
+  const slidesHtml = contentPlan.slides.slice(0, 10).map((spec, i) => renderSlide(spec, i + 3)).join('');
+
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${xmlEscape(plan.title)}</title></head>
+<body style="margin:0;background:#eef2f7;padding:26px 18px;font-family:Inter,system-ui,sans-serif;">
+  <div style="max-width:860px;margin:0 auto 18px;display:flex;justify-content:space-between;align-items:center;gap:12px;">
+    <div>
+      <div style="font-size:11px;font-weight:800;letter-spacing:.16em;color:${ACCENT};">VISTA PREVIA · ${contentPlan.slides.length + 2} LÁMINAS</div>
+      <div style="font-size:18px;font-weight:800;color:${INK};">${xmlEscape(filename)}</div>
+    </div>
+    <div style="border:1px solid ${passed ? '#bbf7d0' : '#fde68a'};background:${passed ? '#f0fdf4' : '#fffbeb'};color:${passed ? '#15803d' : '#92400e'};border-radius:999px;padding:7px 14px;font-size:12px;font-weight:800;">
+      ${passed ? '✓ Validación técnica completa' : 'Validación con observaciones'}
+    </div>
+  </div>
+  ${cover}
+  ${agenda}
+  ${slidesHtml}
+  <div style="max-width:860px;margin:0 auto;text-align:center;color:${MUTED};font-size:11px;">La vista previa replica el guion del archivo PowerPoint nativo. Descarga el .pptx para presentar.</div>
+</body></html>`;
 }
 
 async function buildPdf(plan, outputPath) {
@@ -2516,6 +2662,7 @@ async function* streamAdvancedDocumentPipeline(opts = {}) {
 }
 
 module.exports = {
+  buildPptxHtmlPreview,
   ROLES,
   PIPELINE_VERSION,
   MIN_TECHNICAL_SCORE,
