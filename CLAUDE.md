@@ -969,6 +969,6 @@ redirects, sandbox límites/aislamiento, create_artifact e2e) ·
 
 ## Conexiones externas
 - Repo: https://github.com/SiraGPT-ORg/siraGPT
-- Remoto: `sira-org`
+- Remoto: `origin`
 - Branch: main (push directo)
 - CI: GitHub Actions (automatic cancel on newer commit)
