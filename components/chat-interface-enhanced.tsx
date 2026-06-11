@@ -7765,7 +7765,14 @@ REWRITTEN TEXT:`;
     // for edit intents) route them there.
     const shouldStartAgenticLoopImmediately = deterministicAgenticIntent
       && ['web_search', 'agent_task', 'math', 'viz', 'chart', 'ppt'].includes(deterministicAgenticIntent)
-      && !imageOnlyTurn;
+      && !imageOnlyTurn
+      // Same gate as the semantic switch below: no-file analytical turns
+      // (web lookups, formulas, charts) belong on the RELIABLE inline
+      // /generate agentic loop, not the durable queued path. Without this,
+      // the deterministic fast-path queued "busca en la web…" style prompts
+      // straight into the agent-task pipeline and the chat froze on
+      // "Analizando solicitud" whenever the worker/relay hiccupped.
+      && shouldRouteTextPromptThroughAgenticRuntime(msg, filesToSend);
 
     if (shouldStartAgenticLoopImmediately) {
       try {
