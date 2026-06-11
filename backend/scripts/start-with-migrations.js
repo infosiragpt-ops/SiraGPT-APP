@@ -598,6 +598,57 @@ function clearStalePortProcess() {
   } catch { /* non-critical — fuser may not exist on every OS */ }
 }
 
+/**
+ * Seed an admin user if SEED_ADMIN_EMAIL + SEED_ADMIN_PASSWORD are set.
+ * Runs after migrations, before the backend boots. Never throws — a seed
+ * failure is logged but never blocks boot.
+ */
+async function seedAdminIfNeeded() {
+  const email = process.env.SEED_ADMIN_EMAIL;
+  const rawPassword = process.env.SEED_ADMIN_PASSWORD;
+  if (!email || !rawPassword) return;
+
+  phase("seed_admin_check", { email });
+  try {
+    const { PrismaClient } = require("../node_modules/@prisma/client");
+    const bcrypt = require("../node_modules/bcryptjs");
+    const prisma = new PrismaClient();
+    try {
+      const existing = await prisma.user.findUnique({ where: { email } });
+      if (existing) {
+        // Update password so the seed password stays in sync on every deploy.
+        const hash = await bcrypt.hash(rawPassword, 12);
+        await prisma.user.update({
+          where: { email },
+          data: {
+            password: hash,
+            isAdmin: true,
+            isSuperAdmin: true,
+          },
+        });
+        phase("seed_admin_updated", { email });
+      } else {
+        const hash = await bcrypt.hash(rawPassword, 12);
+        await prisma.user.create({
+          data: {
+            email,
+            name: "Admin",
+            password: hash,
+            isAdmin: true,
+            isSuperAdmin: true,
+          },
+        });
+        phase("seed_admin_created", { email });
+      }
+    } finally {
+      await prisma.$disconnect().catch(() => {});
+    }
+  } catch (err) {
+    // Never block boot on seed failure.
+    phase("seed_admin_error", { email, error: err?.message });
+  }
+}
+
 async function main() {
   phase("boot_start", { skipMigrations: process.env.SKIP_MIGRATIONS === "1" });
   clearStalePortProcess();
@@ -629,6 +680,10 @@ async function main() {
     phase("boot_aborted", { status: migrationStatus });
     process.exit(migrationStatus);
   }
+
+  // Seed the admin user into the production DB if env vars are configured.
+  await seedAdminIfNeeded();
+
   phase("backend_start", { degraded: false });
   startBackend();
 }
