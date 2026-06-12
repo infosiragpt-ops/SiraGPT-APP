@@ -136,6 +136,8 @@ model User {
   subscriptionEvents      SubscriptionEvent[]
   agentTasks              AgentTask[]
   goalRuns                GoalRun[]
+  codexProjects           CodexProject[]
+  codexRuns               CodexRun[]
   generatedArtifacts      GeneratedArtifact[]
   documentAnalyses        DocumentAnalysis[]
   pushSubscriptions       PushSubscription[]
@@ -172,7 +174,7 @@ model User {
   // F1 — declarative RBAC. `userRoles` joins to `user_roles` and
   // ultimately to `roles` + `permissions`. The legacy `isSuperAdmin`
   // flag stays as a shadow until F5 sunset.
-  userRoles UserRole[] @relation("UserRoleAssignedTo")
+  userRoles     UserRole[] @relation("UserRoleAssignedTo")
   assignedRoles UserRole[] @relation("UserRoleAssignedBy")
 
   @@index([deletedAt])
@@ -693,27 +695,27 @@ model AgentTaskEvent {
 // forward-looking discriminator (research today; code / image / video /
 // song planned) so the same queue can drive multiple slash commands.
 model GoalRun {
-  id              String    @id @default(cuid())
-  userId          String
-  chatId          String?
-  jobId           String?   @unique
-  status          String    @default("queued")
-  prompt          String    @db.Text
-  depth           String    @default("standard")
-  agentKind       String    @default("research")
-  papersCount     Int       @default(0)
-  findingsCount   Int       @default(0)
-  pagesCount      Int       @default(0)
-  phase           String?
-  finalReport     String?   @db.Text
-  error           String?   @db.Text
-  cancelReason    String?
-  createdAt       DateTime  @default(now())
-  startedAt       DateTime?
-  updatedAt       DateTime  @updatedAt
-  completedAt     DateTime?
-  cancelledAt     DateTime?
-  failedAt        DateTime?
+  id            String    @id @default(cuid())
+  userId        String
+  chatId        String?
+  jobId         String?   @unique
+  status        String    @default("queued")
+  prompt        String    @db.Text
+  depth         String    @default("standard")
+  agentKind     String    @default("research")
+  papersCount   Int       @default(0)
+  findingsCount Int       @default(0)
+  pagesCount    Int       @default(0)
+  phase         String?
+  finalReport   String?   @db.Text
+  error         String?   @db.Text
+  cancelReason  String?
+  createdAt     DateTime  @default(now())
+  startedAt     DateTime?
+  updatedAt     DateTime  @updatedAt
+  completedAt   DateTime?
+  cancelledAt   DateTime?
+  failedAt      DateTime?
 
   user   User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   chat   Chat?          @relation(fields: [chatId], references: [id], onDelete: SetNull)
@@ -1105,13 +1107,13 @@ model PlanCatalog {
 // to an organization). The legacy `OrgRole` enum is kept for back-compat
 // on `OrgMembership.role`; PR4 backfills `user_roles` from it.
 model Role {
-  id          String           @id @default(cuid())
-  code        String           @unique
+  id          String   @id @default(cuid())
+  code        String   @unique
   name        String
   description String?
-  isSystem    Boolean          @default(false)
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @default(now()) @updatedAt
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now()) @updatedAt
 
   permissions RolePermission[]
   userRoles   UserRole[]
@@ -1120,11 +1122,11 @@ model Role {
 }
 
 model Permission {
-  id          String           @id @default(cuid())
-  code        String           @unique
+  id          String   @id @default(cuid())
+  code        String   @unique
   description String?
-  isSystem    Boolean          @default(false)
-  createdAt   DateTime         @default(now())
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
 
   roles RolePermission[]
 
@@ -1159,8 +1161,8 @@ model UserRole {
   assignedBy String?
   assignedAt DateTime  @default(now())
 
-  user     User @relation("UserRoleAssignedTo", fields: [userId], references: [id], onDelete: Cascade)
-  role     Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  user     User  @relation("UserRoleAssignedTo", fields: [userId], references: [id], onDelete: Cascade)
+  role     Role  @relation(fields: [roleId], references: [id], onDelete: Cascade)
   assigner User? @relation("UserRoleAssignedBy", fields: [assignedBy], references: [id], onDelete: SetNull)
 
   @@index([userId, scope])
@@ -1901,6 +1903,128 @@ model OrgInvitation {
   @@index([orgId, email])
   @@index([email])
   @@map("org_invitations")
+}
+
+// ── Codex Agent V2 (flag CODEX_AGENT_V2) — spec docs/codex-agent-ux.md §4 ──
+// Proyectos con workspace git en el runner + corridas server-driven con
+// timeline append-only (codex_events) reproducible tras recarga.
+
+model CodexProject {
+  id            String   @id @default(cuid())
+  userId        String
+  name          String
+  status        String   @default("provisioning") // provisioning | ready | error
+  workspacePath String? // relativo al volumen del runner: projects/<id>
+  previewUrl    String?
+  brief         Json?
+  error         String?  @db.Text
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  runs        CodexRun[]
+  checkpoints CodexCheckpoint[]
+
+  @@index([userId, updatedAt])
+  @@map("codex_projects")
+}
+
+model CodexRun {
+  id         String    @id @default(cuid())
+  projectId  String
+  userId     String
+  mode       String // plan | build
+  status     String    @default("queued") // queued | running | waiting_approval | done | error | cancelled
+  jobId      String?   @unique
+  model      String?
+  tier       String?
+  planRunId  String?
+  error      String?   @db.Text
+  createdAt  DateTime  @default(now())
+  startedAt  DateTime?
+  finishedAt DateTime?
+  updatedAt  DateTime  @updatedAt
+
+  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project     CodexProject      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  events      CodexEvent[]
+  actions     CodexAction[]
+  checkpoints CodexCheckpoint[]
+  metric      CodexRunMetric?
+
+  @@index([projectId, createdAt])
+  @@index([userId, status, updatedAt])
+  @@map("codex_runs")
+}
+
+model CodexEvent {
+  id        String   @id @default(cuid())
+  runId     String
+  seq       Int
+  type      String
+  payload   Json
+  createdAt DateTime @default(now())
+
+  run CodexRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, seq])
+  @@index([runId, createdAt])
+  @@map("codex_events")
+}
+
+model CodexAction {
+  id            String   @id @default(cuid())
+  runId         String
+  kind          String // terminal | file_read | file_write | reasoning | web
+  command       String?  @db.Text
+  path          String?
+  outputSummary String?  @db.Text
+  status        String   @default("running") // running | done | error
+  durationMs    Int?
+  linesRead     Int?
+  groupId       String?
+  createdAt     DateTime @default(now())
+
+  run CodexRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, createdAt])
+  @@map("codex_actions")
+}
+
+model CodexCheckpoint {
+  id        String   @id @default(cuid())
+  runId     String
+  projectId String
+  commitSha String
+  title     String
+  createdAt DateTime @default(now())
+
+  run     CodexRun     @relation(fields: [runId], references: [id], onDelete: Cascade)
+  project CodexProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, createdAt])
+  @@map("codex_checkpoints")
+}
+
+model CodexRunMetric {
+  id              String   @id @default(cuid())
+  runId           String   @unique
+  timeWorkedMs    Int      @default(0)
+  actionsCount    Int      @default(0)
+  itemsReadLines  Int      @default(0)
+  additions       Int      @default(0)
+  deletions       Int      @default(0)
+  tokensIn        Int      @default(0)
+  tokensOut       Int      @default(0)
+  costUsd         Float    @default(0)
+  costSource      String   @default("estimated") // provider_exact | openrouter_generation | estimated
+  costOriginalUsd Float    @default(0)
+  costAppliedUsd  Float    @default(0)
+  createdAt       DateTime @default(now())
+
+  run CodexRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@map("codex_run_metrics")
 }
 
 // Ratchet 44 — pending ownership transfer (cycle 76).
