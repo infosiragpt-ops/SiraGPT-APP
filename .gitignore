@@ -77,8 +77,10 @@ next-env.d.ts
 # OS
 Thumbs.db
 
-# Logs
-logs
+# Logs (runtime log directories only — the bare "logs" pattern used to
+# also swallow source dirs like app/admin/logs/)
+/logs
+backend/logs
 *.log
 
 # Runtime data
