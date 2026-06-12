@@ -1,174 +1,279 @@
 "use client"
 
-import { useState } from "react"
-import { RefreshCw, Download } from "lucide-react"
+/**
+ * Admin · Base de datos — estado real de la base y su almacenamiento.
+ *
+ * This page used to render 100% invented data (hardcoded table counts,
+ * fake health metrics, a setTimeout "backup" button and a fictional
+ * backups list). It now consumes the real admin endpoints:
+ *   - GET /api/admin/stats            → real prisma counts + storage
+ *   - GET /api/admin/health/services  → live postgres/redis/queue probes
+ *   - GET /api/admin/backups          → nightly pg_dump status (honest
+ *     empty state when the script has never run)
+ * The fake "Backup" button was removed on purpose: backups are produced
+ * by scripts/backup-db.sh (cron), and there is no on-demand endpoint.
+ */
+
+import { useCallback, useEffect, useState } from "react"
+import { RefreshCw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
-import { Progress } from "@/components/ui/progress"
-import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import { apiClient } from "@/lib/api"
 
-const databaseStats = [
-  { name: "Users", count: 1247, size: "2.4 MB", growth: "+12%" },
-  { name: "Chats", count: 8934, size: "45.2 MB", growth: "+28%" },
-  { name: "Messages", count: 156789, size: "234.1 MB", growth: "+35%" },
-  { name: "Payments", count: 892, size: "1.8 MB", growth: "+15%" },
-  { name: "API Usage", count: 45623, size: "12.3 MB", growth: "+42%" },
+type ServiceProbe = {
+  status?: string
+  latency_ms?: number
+  detail?: string
+}
+
+type AdminStats = {
+  database?: Record<string, number>
+  storage?: { totalFiles?: number; totalSize?: number }
+}
+
+type BackupInfo = {
+  ok?: boolean
+  lastBackupAt?: string | null
+  sizeMB?: number | null
+  retained?: number | null
+  retentionDays?: number | null
+}
+
+const TABLE_LABELS: Array<{ key: string; label: string }> = [
+  { key: "users", label: "Usuarios" },
+  { key: "chats", label: "Chats" },
+  { key: "messages", label: "Mensajes" },
+  { key: "files", label: "Archivos" },
+  { key: "payments", label: "Pagos" },
+  { key: "apiUsage", label: "Uso de API" },
+  { key: "sessions", label: "Sesiones" },
+  { key: "auditLogs", label: "Logs de auditoría" },
 ]
 
-const connectionStats = [
-  { metric: "Active Connections", value: "23", status: "healthy" },
-  { metric: "Query Response Time", value: "12ms", status: "healthy" },
-  { metric: "CPU Usage", value: "34%", status: "healthy" },
-  { metric: "Memory Usage", value: "67%", status: "warning" },
-  { metric: "Disk Usage", value: "45%", status: "healthy" },
-]
+function formatBytes(bytes: number | undefined | null): string {
+  if (!Number.isFinite(bytes as number) || (bytes as number) <= 0) return "0 B"
+  const units = ["B", "KB", "MB", "GB", "TB"]
+  let value = bytes as number
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit++ }
+  return `${value >= 100 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`
+}
+
+function probeBadge(probe?: ServiceProbe) {
+  const status = (probe?.status || "").toLowerCase()
+  if (status === "up" || status === "ok" || status === "healthy") {
+    return <Badge className="bg-emerald-600 hover:bg-emerald-600">activo</Badge>
+  }
+  if (!status) return <Badge variant="outline">sin datos</Badge>
+  return <Badge variant="destructive">{status}</Badge>
+}
 
 export default function DatabasePage() {
-  const [isBackingUp, setIsBackingUp] = useState(false)
+  const [stats, setStats] = useState<AdminStats | null>(null)
+  const [services, setServices] = useState<Record<string, ServiceProbe>>({})
+  const [overall, setOverall] = useState<string>("")
+  const [backups, setBackups] = useState<BackupInfo | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  const handleBackup = () => {
-    setIsBackingUp(true)
-    setTimeout(() => setIsBackingUp(false), 3000)
-  }
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const [statsRes, healthRes, backupsRes] = await Promise.allSettled([
+        apiClient.getSystemStats(),
+        fetchJson("/api/admin/health/services"),
+        fetchJson("/api/admin/backups"),
+      ])
+      if (statsRes.status === "fulfilled") setStats(statsRes.value as AdminStats)
+      if (healthRes.status === "fulfilled") {
+        const payload = healthRes.value as { overall?: string; services?: Record<string, ServiceProbe> }
+        setOverall(payload?.overall || "")
+        setServices(payload?.services || {})
+      }
+      if (backupsRes.status === "fulfilled") setBackups(backupsRes.value as BackupInfo)
+      if (statsRes.status === "rejected" && healthRes.status === "rejected") {
+        setError("No se pudieron cargar los datos de la base")
+      }
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { void load() }, [load])
+
+  const db = stats?.database || {}
+  const dbProbe = services.postgres
+  const redisProbe = services.redis
+  const queueProbe = services.bullmq
 
   return (
     <div className="flex-1 space-y-6 p-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Database Management</h1>
-          <p className="text-muted-foreground">Monitor and manage database operations</p>
+          <h1 className="text-3xl font-bold">Base de datos</h1>
+          <p className="text-muted-foreground">Estado real de la base, almacenamiento y backups</p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline">
-            <RefreshCw className="mr-2 h-4 w-4" />
-            Refresh
-          </Button>
-          <Button onClick={handleBackup} disabled={isBackingUp}>
-            {isBackingUp ? <ThinkingIndicator size="sm" className="mr-2" /> : <Download className="mr-2 h-4 w-4" />}
-            {isBackingUp ? "Backing up..." : "Backup"}
-          </Button>
-        </div>
+        <Button variant="outline" onClick={() => void load()} disabled={loading}>
+          <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+          Refrescar
+        </Button>
       </div>
 
-      {/* Database Health */}
-      <div className="grid gap-4 md:grid-cols-5">
-        {connectionStats.map((stat) => (
-          <Card key={stat.metric}>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">{stat.metric}</CardTitle>
-              <Badge variant={stat.status === "healthy" ? "default" : "destructive"}>{stat.status}</Badge>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{stat.value}</div>
-            </CardContent>
-          </Card>
-        ))}
+      {error && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+          {error}
+        </div>
+      )}
+
+      {/* Salud en vivo — sondas reales del backend */}
+      <div className="grid gap-4 md:grid-cols-4">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">PostgreSQL</CardTitle>
+            {probeBadge(dbProbe)}
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold tabular-nums">
+              {Number.isFinite(dbProbe?.latency_ms) ? `${dbProbe?.latency_ms} ms` : "—"}
+            </div>
+            <p className="text-xs text-muted-foreground">latencia de sonda</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Redis</CardTitle>
+            {probeBadge(redisProbe)}
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold tabular-nums">
+              {Number.isFinite(redisProbe?.latency_ms) ? `${redisProbe?.latency_ms} ms` : "—"}
+            </div>
+            <p className="text-xs text-muted-foreground">latencia de sonda</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Cola (BullMQ)</CardTitle>
+            {probeBadge(queueProbe)}
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold tabular-nums">
+              {Number.isFinite(queueProbe?.latency_ms) ? `${queueProbe?.latency_ms} ms` : "—"}
+            </div>
+            <p className="text-xs text-muted-foreground">workers de tareas</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Estado general</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold capitalize">{overall || "—"}</div>
+            <p className="text-xs text-muted-foreground">todas las sondas</p>
+          </CardContent>
+        </Card>
       </div>
 
-      {/* Database Tables */}
+      {/* Tablas — conteos reales de Prisma */}
       <Card>
         <CardHeader>
-          <CardTitle>Database Tables</CardTitle>
-          <CardDescription>Overview of all database tables and their statistics</CardDescription>
+          <CardTitle>Tablas</CardTitle>
+          <CardDescription>Registros reales por tabla principal</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="overflow-x-auto">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Table Name</TableHead>
-                <TableHead>Records</TableHead>
-                <TableHead>Size</TableHead>
-                <TableHead>Growth</TableHead>
-                <TableHead>Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {databaseStats.map((table) => (
-                <TableRow key={table.name}>
-                  <TableCell className="font-medium">{table.name}</TableCell>
-                  <TableCell>{table.count.toLocaleString()}</TableCell>
-                  <TableCell>{table.size}</TableCell>
-                  <TableCell>
-                    <Badge variant="outline">{table.growth}</Badge>
-                  </TableCell>
-                  <TableCell>
-                    <Button variant="ghost" size="sm">
-                      View
-                    </Button>
-                  </TableCell>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Tabla</TableHead>
+                  <TableHead className="text-right">Registros</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {TABLE_LABELS.map(({ key, label }) => (
+                  <TableRow key={key}>
+                    <TableCell className="font-medium">{label}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {Number.isFinite(db[key]) ? db[key].toLocaleString("es") : "—"}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           </div>
         </CardContent>
       </Card>
 
-      {/* Storage Usage */}
       <div className="grid gap-6 md:grid-cols-2">
+        {/* Almacenamiento real (archivos subidos) */}
         <Card>
           <CardHeader>
-            <CardTitle>Storage Usage</CardTitle>
+            <CardTitle>Almacenamiento</CardTitle>
+            <CardDescription>Archivos subidos por los usuarios</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
-              <div className="flex justify-between text-sm mb-2">
-                <span>Database Size</span>
-                <span>295.8 MB / 1 GB</span>
-              </div>
-              <Progress value={29.6} />
+          <CardContent className="space-y-3">
+            <div className="flex items-center justify-between text-sm">
+              <span>Archivos totales</span>
+              <span className="font-medium tabular-nums">{(stats?.storage?.totalFiles ?? 0).toLocaleString("es")}</span>
             </div>
-            <div>
-              <div className="flex justify-between text-sm mb-2">
-                <span>Backup Storage</span>
-                <span>1.2 GB / 5 GB</span>
-              </div>
-              <Progress value={24} />
-            </div>
-            <div>
-              <div className="flex justify-between text-sm mb-2">
-                <span>Log Files</span>
-                <span>45.3 MB / 500 MB</span>
-              </div>
-              <Progress value={9.1} />
+            <div className="flex items-center justify-between text-sm">
+              <span>Tamaño total</span>
+              <span className="font-medium tabular-nums">{formatBytes(stats?.storage?.totalSize)}</span>
             </div>
           </CardContent>
         </Card>
 
+        {/* Backups — estado del pg_dump nocturno */}
         <Card>
           <CardHeader>
-            <CardTitle>Recent Backups</CardTitle>
+            <CardTitle>Backups</CardTitle>
+            <CardDescription>pg_dump nocturno (scripts/backup-db.sh)</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="space-y-3">
-              <div className="flex justify-between items-center">
-                <div>
-                  <p className="text-sm font-medium">Full Backup</p>
-                  <p className="text-xs text-muted-foreground">2024-01-15 02:00 AM</p>
+            {backups?.lastBackupAt ? (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between text-sm">
+                  <span>Último backup</span>
+                  <span className="font-medium">{new Date(backups.lastBackupAt).toLocaleString("es")}</span>
                 </div>
-                <Badge variant="default">Success</Badge>
+                {Number.isFinite(backups.sizeMB as number) && (
+                  <div className="flex items-center justify-between text-sm">
+                    <span>Tamaño</span>
+                    <span className="font-medium tabular-nums">{backups.sizeMB} MB</span>
+                  </div>
+                )}
+                {Number.isFinite(backups.retained as number) && (
+                  <div className="flex items-center justify-between text-sm">
+                    <span>Copias retenidas</span>
+                    <span className="font-medium tabular-nums">
+                      {backups.retained}{backups.retentionDays ? ` (${backups.retentionDays} días)` : ""}
+                    </span>
+                  </div>
+                )}
               </div>
-              <div className="flex justify-between items-center">
-                <div>
-                  <p className="text-sm font-medium">Incremental Backup</p>
-                  <p className="text-xs text-muted-foreground">2024-01-14 02:00 AM</p>
-                </div>
-                <Badge variant="default">Success</Badge>
-              </div>
-              <div className="flex justify-between items-center">
-                <div>
-                  <p className="text-sm font-medium">Full Backup</p>
-                  <p className="text-xs text-muted-foreground">2024-01-13 02:00 AM</p>
-                </div>
-                <Badge variant="default">Success</Badge>
-              </div>
-            </div>
+            ) : (
+              <p className="py-4 text-center text-sm text-muted-foreground">
+                Sin backups registrados todavía. El script nocturno escribe aquí su último estado al ejecutarse.
+              </p>
+            )}
           </CardContent>
         </Card>
       </div>
     </div>
   )
+}
+
+// Minimal authenticated JSON fetch against the same-origin API proxy.
+// (apiClient.request is private; these admin GETs are simple enough.)
+async function fetchJson(path: string): Promise<unknown> {
+  const token = typeof window !== "undefined" ? window.localStorage.getItem("auth-token") : null
+  const res = await fetch(path, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    credentials: "include",
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
 }
