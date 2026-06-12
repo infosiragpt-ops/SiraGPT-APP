@@ -136,6 +136,13 @@ const nextConfig = {
           source: '/uploads/:path*',
           destination: `${backendBase}/uploads/:path*`,
         },
+        // Express exposes latency/route metrics at /metrics; the admin
+        // Estado page's "Latencias" card fetches it same-origin. Without
+        // this rewrite it received Next's 404 HTML and rendered nothing.
+        {
+          source: '/metrics',
+          destination: `${backendBase}/metrics`,
+        },
       ],
       fallback: [],
     }
