@@ -4795,6 +4795,7 @@ router.post(
             'CURRENT TURN DOCUMENT LOCK:',
             '- The attached document/spreadsheet/PDF files below are the active source for this user request.',
             '- If the user asks for a summary, resumen, analysis, extraction, or explanation, answer from these current files first.',
+            '- META-DOCUMENT TASKS: requests that apply TO the document itself are valid even when the answer is not literally written inside it. In particular, "cita en Vancouver/APA/MLA/Harvard/IEEE/ISO 690", "referencia bibliográfica", "cítame este documento/artículo" mean: BUILD the bibliographic reference of the attached document in that citation style, using its own bibliographic data (title, authors, year, journal/institution, volume/pages, DOI/URL) as found in the text; clearly mark any field the document does not reveal as [no disponible]. With an academic document attached, "cita" means citation/reference — never a calendar appointment. NEVER reply that the material lacks information for these meta-tasks.',
             '- For professional analysis, synthesize the argument and implications; do not reproduce the table of contents, index links, cover metadata, advisor names, or internal extraction labels.',
             '- Never start the final answer with "Indice de contenidos", "Índice de contenidos", raw markdown links, or filename metadata.',
             ...messageAttachments.buildFormatDirectiveLines(prompt, { lang: 'en' }),

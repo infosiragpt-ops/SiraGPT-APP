@@ -1003,7 +1003,13 @@ async function buildLlmAttachmentRecoveryAnswer({ goal, uploadedFileContext, env
         {
           role: 'system',
           content: 'Responde en español la pregunta concreta del usuario usando exclusivamente el material adjunto. '
-            + 'Si la respuesta no aparece en el material, dilo explícitamente en una frase y resume en otra qué contiene el material. '
+            + 'TAREAS META sobre el documento: si el usuario pide la cita o referencia bibliográfica del documento '
+            + '(en Vancouver, APA, MLA, Harvard, IEEE, ISO 690…), CONSTRUYE esa referencia con los datos bibliográficos '
+            + 'del propio material (título, autores, año, revista/institución, volumen/páginas, DOI/URL) y marca como '
+            + '[no disponible] cualquier campo que el material no revele; con un documento académico adjunto, "cita" '
+            + 'significa SIEMPRE referencia bibliográfica, nunca una cita de calendario. '
+            + 'Solo para preguntas de contenido cuya respuesta no aparece en el material: dilo explícitamente en una '
+            + 'frase y resume en otra qué contiene el material. '
             + 'No inventes datos que no estén en el material.',
         },
         {
