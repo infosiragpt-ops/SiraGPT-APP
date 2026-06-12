@@ -645,6 +645,17 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [activeStreamingChatIds, setActiveStreamingChatIds] = useState<string[]>([]);
   const [currentStreamId, setCurrentStreamId] = useState<string | null>(null);
   const [pendingStop, setPendingStop] = useState(false);
+  // Synchronous mirror for the stream-chunk guards. addMessage omits
+  // pendingStop from its deps on purpose, so the callback closes over a
+  // STALE value: after a stop, the next send captured pendingStop=true
+  // forever and silently dropped every chunk of the new stream (the
+  // backend answered; the UI never rendered it). Guards must read this
+  // ref, never the state value.
+  const pendingStopRef = useRef(false);
+  const setPendingStopSynced = useCallback((value: boolean) => {
+    pendingStopRef.current = value;
+    setPendingStop(value);
+  }, []);
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const streamControllersRef = useRef<Map<string, { streamId: string; controller: AbortController }>>(new Map());
@@ -720,7 +731,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       if (isCurrentChat) {
         currentStreamIdRef.current = null
         setCurrentStreamId(null)
-        setPendingStop(false)
+        setPendingStopSynced(false)
         streamBufferRef.current?.dispose()
         streamBufferRef.current = null
       }
@@ -908,7 +919,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     devLog("Stop Streaming triggered", { currentStreamId: streamIdToStop, targetChatId, isStreaming, isLoading });
 
     // IMMEDIATE UI State Reset - no waiting for API
-    setPendingStop(true);
+    setPendingStopSynced(true);
     if (targetChatId) {
       markChatIdle(targetChatId, streamIdToStop || undefined);
     } else {
@@ -970,11 +981,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         })
         .finally(() => {
           setCurrentStreamId(null);
-          setPendingStop(false);
+          setPendingStopSynced(false);
         });
     } else {
       setCurrentStreamId(null);
-      setPendingStop(false);
+      setPendingStopSynced(false);
     }
   }, [currentStreamId, isStreaming, isLoading, markChatIdle]);
   const addMessage = useCallback(
@@ -1038,7 +1049,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       const streamId = safeUUID();
       markChatStreaming(activeChat.id, streamId);
       // Reset pending stop state
-      setPendingStop(false);
+      setPendingStopSynced(false);
       try {
         const intent = intentOverride || await aiService.classifyIntent(content, conversationForRouting);
         const professionalPrompt = buildProfessionalCapabilityPrompt(intent, content);
@@ -1542,7 +1553,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
               // Check if we should stop processing chunks for the
               // foreground chat view.
-              if (controller.signal.aborted || pendingStop) {
+              if (controller.signal.aborted || pendingStopRef.current) {
                 return;
               }
 
@@ -1556,7 +1567,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               if (streamBufferRef.current === fgBuffer) streamBufferRef.current = null;
               clearPending(activeChat.id);
               bg.complete(activeChat.id);
-              if (!controller.signal.aborted && !pendingStop) {
+              if (!controller.signal.aborted && !pendingStopRef.current) {
                 setIsLoading(false);
                 setIsStreaming(false);
                 setCurrentStreamId(null);
@@ -1610,7 +1621,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 triggerUpgradeModal(errorMessage, errorData);
 
                 // Update message with monthly limit error
-                if (!controller.signal.aborted && !pendingStop && error.name !== 'AbortError') {
+                if (!controller.signal.aborted && !pendingStopRef.current && error.name !== 'AbortError') {
                   setCurrentChat((prevChat) => {
                     if (!prevChat) return prevChat;
                     const newMessages = prevChat.messages.map((msg) => {
@@ -1640,7 +1651,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               }
 
               // Only update UI if not manually stopped
-              if (!controller.signal.aborted && !pendingStop) {
+              if (!controller.signal.aborted && !pendingStopRef.current) {
                 setIsLoading(false);
                 setIsStreaming(false);
                 setCurrentStreamId(null);
@@ -1665,15 +1676,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               ...createReasoningHandlers({
                 setChat: setCurrentChat,
                 messageId: aiMessagePlaceholder.id,
-                isCancelled: () => controller.signal.aborted || pendingStop,
+                isCancelled: () => controller.signal.aborted || pendingStopRef.current,
               }),
               ...createAgentTraceHandlers({
                 setChat: setCurrentChat,
                 messageId: aiMessagePlaceholder.id,
-                isCancelled: () => controller.signal.aborted || pendingStop,
+                isCancelled: () => controller.signal.aborted || pendingStopRef.current,
               }),
               onReplace: (replacement) => {
-                if (controller.signal.aborted || pendingStop) {
+                if (controller.signal.aborted || pendingStopRef.current) {
                   return;
                 }
                 // Drop any queued tokens — the replacement is authoritative.
@@ -1698,7 +1709,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 setIsStreaming(false);
               },
               onSources: (payload) => {
-                if (controller.signal.aborted || pendingStop) return;
+                if (controller.signal.aborted || pendingStopRef.current) return;
                 setCurrentChat((prevChat) => {
                   if (!prevChat || prevChat.id !== activeChat.id) return prevChat;
                   const newMessages = prevChat.messages.map((msg) => {
@@ -1719,7 +1730,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 });
               },
               onMemory: (payload) => {
-                if (controller.signal.aborted || pendingStop) return;
+                if (controller.signal.aborted || pendingStopRef.current) return;
                 setCurrentChat((prevChat) => {
                   if (!prevChat || prevChat.id !== activeChat.id) return prevChat;
                   const newMessages = prevChat.messages.map((msg) => {
@@ -2292,7 +2303,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     const streamId = safeUUID();
     setCurrentStreamId(streamId);
     setIsStreaming(true);
-    setPendingStop(false);
+    setPendingStopSynced(false);
 
     // Create new AbortController for regeneration
     const controller = new AbortController();
@@ -2331,7 +2342,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         },
         (chunk) => {
           // Check if we should stop processing chunks
-          if (controller.signal.aborted || pendingStop) {
+          if (controller.signal.aborted || pendingStopRef.current) {
             return;
           }
           regenBuffer.append(chunk);
@@ -2341,7 +2352,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           regenBuffer.flush();
           regenBuffer.dispose();
           if (streamBufferRef.current === regenBuffer) streamBufferRef.current = null;
-          if (!controller.signal.aborted && !pendingStop) {
+          if (!controller.signal.aborted && !pendingStopRef.current) {
             devLog('Regeneration completed successfully');
             setIsLoading(false);
             setIsStreaming(false);
@@ -2380,7 +2391,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           regenBuffer.flush();
           regenBuffer.dispose();
           if (streamBufferRef.current === regenBuffer) streamBufferRef.current = null;
-          if (!controller.signal.aborted && !pendingStop) {
+          if (!controller.signal.aborted && !pendingStopRef.current) {
             console.error("Streaming failed during regeneration:", error);
 
             // Check for monthly API limit errors
@@ -2438,15 +2449,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           ...createReasoningHandlers({
             setChat: setCurrentChat,
             messageId: aiMessagePlaceholder.id,
-            isCancelled: () => controller.signal.aborted || pendingStop,
+            isCancelled: () => controller.signal.aborted || pendingStopRef.current,
           }),
           ...createAgentTraceHandlers({
             setChat: setCurrentChat,
             messageId: aiMessagePlaceholder.id,
-            isCancelled: () => controller.signal.aborted || pendingStop,
+            isCancelled: () => controller.signal.aborted || pendingStopRef.current,
           }),
           onReplace: (replacement) => {
-            if (controller.signal.aborted || pendingStop) {
+            if (controller.signal.aborted || pendingStopRef.current) {
               return;
             }
             regenBuffer.dispose();
@@ -2516,7 +2527,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     setCurrentChat(prev => prev ? { ...prev, messages: [...messagesUpToEdit, updatedUserMessage, aiMessagePlaceholder] } : null);
     setIsLoading(true);
     setIsStreaming(true);
-    setPendingStop(false);
+    setPendingStopSynced(false);
     const streamId = safeUUID();
     setCurrentStreamId(streamId);
 
@@ -2655,7 +2666,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         },
         (chunk) => {
           // Check if we should stop processing chunks
-          if (controller.signal.aborted || pendingStop) {
+          if (controller.signal.aborted || pendingStopRef.current) {
             return;
           }
           editBuffer.append(chunk);
@@ -2665,7 +2676,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           editBuffer.flush();
           editBuffer.dispose();
           if (streamBufferRef.current === editBuffer) streamBufferRef.current = null;
-          if (!controller.signal.aborted && !pendingStop) {
+          if (!controller.signal.aborted && !pendingStopRef.current) {
             markChatIdle(currentChat.id, streamId);
             setIsLoading(false);
             setIsStreaming(false);
@@ -2701,7 +2712,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           editBuffer.flush();
           editBuffer.dispose();
           if (streamBufferRef.current === editBuffer) streamBufferRef.current = null;
-          if (!controller.signal.aborted && !pendingStop) {
+          if (!controller.signal.aborted && !pendingStopRef.current) {
             console.error("Streaming failed during regeneration:", error);
 
             // Check for monthly API limit errors
@@ -2760,15 +2771,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           ...createReasoningHandlers({
             setChat: setCurrentChat,
             messageId: aiMessagePlaceholder.id,
-            isCancelled: () => controller.signal.aborted || pendingStop,
+            isCancelled: () => controller.signal.aborted || pendingStopRef.current,
           }),
           ...createAgentTraceHandlers({
             setChat: setCurrentChat,
             messageId: aiMessagePlaceholder.id,
-            isCancelled: () => controller.signal.aborted || pendingStop,
+            isCancelled: () => controller.signal.aborted || pendingStopRef.current,
           }),
           onReplace: (replacement) => {
-            if (controller.signal.aborted || pendingStop) {
+            if (controller.signal.aborted || pendingStopRef.current) {
               return;
             }
             editBuffer.dispose();
