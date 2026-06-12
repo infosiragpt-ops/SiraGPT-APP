@@ -139,7 +139,7 @@ Sobre común: `{ runId, seq, ts, type, data }`.
 
 ## 6. Workspace y git
 
-- Provisioning: directorio por proyecto en el volumen del runner → scaffold inicial (reutiliza `vite-scaffold`/codegen del Builder) → `git init` + commit inicial → `bun install` → dev server → `previewUrl`.
+- Provisioning (síncrono, rápido): directorio por proyecto en el volumen del runner → scaffold inicial determinista → `git init` + commit inicial → `previewUrl` asignada. El `bun install` + dev server arrancan **on-demand** (`POST /api/codex/projects/:id/preview/start`, mismo patrón de polling que el ▶ Ejecutar actual): el runner es single-tenant en el puerto dev, así que solo hay un dev server activo a la vez y "View preview" apunta siempre al proyecto activo.
 - **Checkpoint** = commit git real con título descriptivo generado por el agente al cierre de cada build.
 - **Rollback** = `git reset --hard <sha>` con confirmación explícita del usuario; si el lockfile cambió, reinstalación de dependencias y restart del dev server.
 - **Changes** = `git diff` entre el checkpoint y su padre, renderizado con `diff-view.tsx`.
@@ -203,6 +203,7 @@ Registro declarativo de patrones sobre logs y salidas de acciones:
 | Modelos sin tool-calling nativo | Escalera `prompted-tool-calling` existente (probada en chat) |
 | Costo OpenRouter no disponible en local (key vacía) | `costSource` explícito + fallback estimado; tests con fetch mockeado |
 | Rollback con dev server corriendo | Stop → reset → reinstall condicional → restart, como transacción secuencial |
+| Runner single-tenant (un dev server, puerto 5173) | Workspaces multi-proyecto en subdirectorios, pero un solo preview activo por despliegue; multi-tenant de previews queda fuera del MVP |
 | Crecimiento de `codex_events` | Índice `(runId, seq)`; retención/poda fuera de alcance del MVP (anotado) |
 
 ## 14. Fuera de alcance (MVP)
