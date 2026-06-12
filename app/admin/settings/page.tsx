@@ -1,6 +1,10 @@
 "use client"
 
-import { useState } from "react"
+// Persisted via GET/PUT /api/admin/settings (system_settings blob).
+// The old Save button was setTimeout + alert() — nothing ever persisted.
+// Maintenance mode keeps its dedicated super-admin endpoint by design.
+
+import { useCallback, useEffect, useState } from "react"
 import { Save, RefreshCw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -12,34 +16,150 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import { toast } from "sonner"
+
+type PageSettings = {
+  siteName: string
+  siteDescription: string
+  adminEmail: string
+  supportEmail: string
+  maxUsersPerPlan: { free: number; pro: number; enterprise: number }
+  enableRegistration: boolean
+  enableEmailVerification: boolean
+  enableMaintenanceMode: boolean
+  defaultUserPlan: string
+  sessionTimeout: number
+  maxFileSize: number
+}
+
+const EMPTY_SETTINGS: PageSettings = {
+  siteName: "",
+  siteDescription: "",
+  adminEmail: "",
+  supportEmail: "",
+  maxUsersPerPlan: { free: 0, pro: 0, enterprise: 0 },
+  enableRegistration: true,
+  enableEmailVerification: true,
+  enableMaintenanceMode: false,
+  defaultUserPlan: "free",
+  sessionTimeout: 30,
+  maxFileSize: 100,
+}
+
+async function adminFetch(path: string, init?: RequestInit): Promise<any> {
+  const token = typeof window !== "undefined" ? window.localStorage.getItem("auth-token") : null
+  const res = await fetch(path, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(init?.headers || {}),
+    },
+    credentials: "include",
+  })
+  if (!res.ok) {
+    const err: any = new Error(`HTTP ${res.status}`)
+    err.status = res.status
+    throw err
+  }
+  return res.json()
+}
+
+// Server blob (FREE/PRO/… + *Minutes/*Mb) ↔ page shape (lowercase keys).
+function serverToPage(server: any, maintenanceEnabled: boolean): PageSettings {
+  const s = server || {}
+  const caps = s.maxUsersPerPlan || {}
+  return {
+    siteName: s.siteName ?? "",
+    siteDescription: s.siteDescription ?? "",
+    adminEmail: s.adminEmail ?? "",
+    supportEmail: s.supportEmail ?? "",
+    maxUsersPerPlan: {
+      free: caps.FREE ?? 0,
+      pro: caps.PRO ?? 0,
+      enterprise: caps.ENTERPRISE ?? 0,
+    },
+    enableRegistration: Boolean(s.enableRegistration),
+    enableEmailVerification: Boolean(s.enableEmailVerification),
+    enableMaintenanceMode: maintenanceEnabled,
+    defaultUserPlan: String(s.defaultUserPlan || "FREE").toLowerCase(),
+    sessionTimeout: s.sessionTimeoutMinutes ?? 30,
+    maxFileSize: s.maxFileSizeMb ?? 100,
+  }
+}
+
+function pageToServer(page: PageSettings) {
+  return {
+    siteName: page.siteName,
+    siteDescription: page.siteDescription,
+    adminEmail: page.adminEmail,
+    supportEmail: page.supportEmail,
+    enableRegistration: page.enableRegistration,
+    enableEmailVerification: page.enableEmailVerification,
+    defaultUserPlan: page.defaultUserPlan.toUpperCase(),
+    sessionTimeoutMinutes: page.sessionTimeout,
+    maxFileSizeMb: page.maxFileSize,
+    maxUsersPerPlan: {
+      FREE: page.maxUsersPerPlan.free,
+      PRO: page.maxUsersPerPlan.pro,
+      ENTERPRISE: page.maxUsersPerPlan.enterprise,
+    },
+  }
+}
 
 export default function SettingsPage() {
-  const [settings, setSettings] = useState({
-    siteName: "Sira Gpt Platform",
-    siteDescription: "Multi-LLM AI Platform with Text, Image, Audio & Video Generation",
-    adminEmail: "admin@openwebui.com",
-    supportEmail: "support@openwebui.com",
-    maxUsersPerPlan: {
-      free: 10000,
-      pro: 50000,
-      enterprise: 100000,
-    },
-    enableRegistration: true,
-    enableEmailVerification: true,
-    enableMaintenanceMode: false,
-    defaultUserPlan: "free",
-    sessionTimeout: 30,
-    maxFileSize: 10,
-  })
-
+  const [settings, setSettings] = useState<PageSettings>(EMPTY_SETTINGS)
+  const [loadedMaintenance, setLoadedMaintenance] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
 
-  const handleSave = () => {
+  const load = useCallback(async () => {
+    setIsLoading(true)
+    try {
+      const data = await adminFetch("/api/admin/settings")
+      const maintenanceEnabled = Boolean(data?.maintenance?.enabled)
+      setSettings(serverToPage(data?.settings, maintenanceEnabled))
+      setLoadedMaintenance(maintenanceEnabled)
+    } catch {
+      toast.error("No se pudieron cargar los ajustes")
+    } finally {
+      setIsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { void load() }, [load])
+
+  const handleSave = async () => {
     setIsSaving(true)
-    setTimeout(() => {
+    try {
+      const data = await adminFetch("/api/admin/settings", {
+        method: "PUT",
+        body: JSON.stringify({ settings: pageToServer(settings) }),
+      })
+      // Maintenance mode lives behind its dedicated super-admin endpoint.
+      if (settings.enableMaintenanceMode !== loadedMaintenance) {
+        try {
+          await adminFetch("/api/admin/maintenance/mode", {
+            method: "POST",
+            body: JSON.stringify({ enabled: settings.enableMaintenanceMode }),
+          })
+          setLoadedMaintenance(settings.enableMaintenanceMode)
+        } catch (err: any) {
+          if (err?.status === 403) {
+            toast.error("El modo mantenimiento requiere super-admin")
+          } else {
+            toast.error("No se pudo cambiar el modo mantenimiento")
+          }
+          setSettings((prev) => ({ ...prev, enableMaintenanceMode: loadedMaintenance }))
+        }
+      }
+      setSettings((prev) => ({ ...serverToPage(data?.settings, prev.enableMaintenanceMode) }))
+      toast.success("Ajustes guardados")
+    } catch {
+      toast.error("No se pudieron guardar los ajustes")
+    } finally {
       setIsSaving(false)
-      alert("Settings saved successfully!")
-    }, 2000)
+    }
   }
 
   const updateSetting = (key: string, value: any) => {
@@ -58,7 +178,7 @@ export default function SettingsPage() {
             </div>
           </div>
         </div>
-        <Button onClick={handleSave} disabled={isSaving} size="sm" className="flex-shrink-0 text-sm">
+        <Button onClick={handleSave} disabled={isSaving || isLoading} size="sm" className="flex-shrink-0 text-sm">
           {isSaving ? <ThinkingIndicator size="sm" className="mr-2" /> : <Save className="mr-2 h-3 w-3 sm:h-4 sm:w-4" />}
           <span className="hidden sm:inline">{isSaving ? "Saving..." : "Save Changes"}</span>
           <span className="sm:hidden">Save</span>
