@@ -8,21 +8,47 @@
  * not just CDN HTML. One project at a time (the workspace is single-tenant).
  *
  * Control API (CTRL_PORT, internal):
- *   POST /run     → (re)install + start the dev server. → { ok, port }
- *   GET  /status  → { running, ready, framework, port, error, tail }
+ *   POST /run     → (re)install + start the dev server. Body { project? } to
+ *                   run a per-project workspace (projects/<id>); without body
+ *                   it keeps running the workspace root (legacy /code flow).
+ *   GET  /status  → { running, ready, framework, project, port, error, tail }
  *   POST /stop    → kill the dev server.
+ *
+ * Workspace API (Codex Agent V2, flag-gated at the backend):
+ *   POST /workspace/init  { project }          → mkdir + git init -b main
+ *   POST /workspace/write { project, files[] } → write files (paths sanitized)
+ *   GET  /workspace/file?project&path          → read a file (cap 200k)
+ *   POST /workspace/exec  { project, cmd[], timeoutMs } → allowlisted exec
  * The dev server itself is reachable on DEV_PORT (published in compose).
  */
+
+const { mkdirSync, writeFileSync, readFileSync, existsSync } = require("node:fs");
+const { dirname } = require("node:path");
+const { sanitizeProjectId, resolveProjectRelPath, isAllowedCommand } = require("./code-runner-utils.js");
 
 const WORKDIR = process.env.RUNNER_WORKDIR || "/workspace";
 const DEV_PORT = Number(process.env.DEV_PORT || 5173);
 const CTRL_PORT = Number(process.env.CTRL_PORT || 4097);
+const PROJECTS_DIR = `${WORKDIR}/projects`;
+
+function projectDirOf(id) {
+  return `${PROJECTS_DIR}/${id}`;
+}
+
+// Git refuses repos owned by another uid ("dubious ownership") — the volume
+// is shared across containers, so trust it wholesale inside the sandbox.
+try {
+  Bun.spawnSync(["git", "config", "--global", "--add", "safe.directory", "*"]);
+} catch {
+  /* git missing — surfaced by /workspace/init instead */
+}
 
 let devProc = null;
 const state = {
   running: false,
   ready: false,
   framework: null,
+  project: null,
   port: DEV_PORT,
   error: null,
   log: [],
@@ -75,7 +101,7 @@ function pipe(stream, prefix) {
   })();
 }
 
-async function startDev() {
+async function startDev(projectId = null) {
   if (devProc) {
     try { devProc.kill(); } catch { /* already gone */ }
     devProc = null;
@@ -85,7 +111,10 @@ async function startDev() {
   state.error = null;
   state.log = [];
 
-  const pkg = await readJson(`${WORKDIR}/package.json`);
+  const cwd = projectId ? projectDirOf(projectId) : WORKDIR;
+  state.project = projectId;
+
+  const pkg = await readJson(`${cwd}/package.json`);
   if (!pkg) {
     state.running = false;
     state.error = "No package.json — this project doesn't need a build (use the static preview).";
@@ -99,7 +128,7 @@ async function startDev() {
   state.framework = isNext ? "next" : deps.vite ? "vite" : hasDevScript ? "custom" : "vite";
 
   pushLog("$ bun install");
-  const install = Bun.spawn(["bun", "install"], { cwd: WORKDIR, stdout: "pipe", stderr: "pipe" });
+  const install = Bun.spawn(["bun", "install"], { cwd, stdout: "pipe", stderr: "pipe" });
   pipe(install.stdout, "[install]");
   pipe(install.stderr, "[install]");
   const code = await install.exited;
@@ -122,7 +151,7 @@ async function startDev() {
   }
   pushLog(`$ ${cmd.join(" ")}`);
   devProc = Bun.spawn(cmd, {
-    cwd: WORKDIR,
+    cwd,
     stdout: "pipe",
     stderr: "pipe",
     env: { ...process.env, PORT: String(DEV_PORT), HOST: "0.0.0.0", BROWSER: "none" },
@@ -161,16 +190,85 @@ Bun.serve({
   hostname: "0.0.0.0",
   async fetch(req) {
     const url = new URL(req.url);
+
+    if (url.pathname === "/workspace/init" && req.method === "POST") {
+      const body = await req.json().catch(() => ({}));
+      const id = sanitizeProjectId(body.project);
+      if (!id) return Response.json({ ok: false, error: "invalid_project" }, { status: 400 });
+      const dir = projectDirOf(id);
+      mkdirSync(dir, { recursive: true });
+      const init = Bun.spawnSync(["git", "init", "-b", "main"], { cwd: dir });
+      if (init.exitCode !== 0) {
+        const detail = init.stderr ? init.stderr.toString().slice(0, 500) : "git unavailable";
+        return Response.json({ ok: false, error: "git_init_failed", detail }, { status: 500 });
+      }
+      return Response.json({ ok: true, dir: `projects/${id}` });
+    }
+
+    if (url.pathname === "/workspace/write" && req.method === "POST") {
+      const body = await req.json().catch(() => ({}));
+      const id = sanitizeProjectId(body.project);
+      const files = Array.isArray(body.files) ? body.files : [];
+      if (!id || !files.length) return Response.json({ ok: false, error: "invalid_request" }, { status: 400 });
+      const dir = projectDirOf(id);
+      if (!existsSync(dir)) return Response.json({ ok: false, error: "project_not_found" }, { status: 404 });
+      let written = 0;
+      for (const f of files.slice(0, 200)) {
+        const rel = resolveProjectRelPath(f && f.path);
+        if (!rel || typeof f.content !== "string" || f.content.length > 2_000_000) continue;
+        const abs = `${dir}/${rel}`;
+        mkdirSync(dirname(abs), { recursive: true });
+        writeFileSync(abs, f.content);
+        written++;
+      }
+      return Response.json({ ok: true, written });
+    }
+
+    if (url.pathname === "/workspace/file" && req.method === "GET") {
+      const id = sanitizeProjectId(url.searchParams.get("project"));
+      const rel = resolveProjectRelPath(url.searchParams.get("path"));
+      if (!id || !rel) return Response.json({ ok: false, error: "invalid_request" }, { status: 400 });
+      const abs = `${projectDirOf(id)}/${rel}`;
+      if (!existsSync(abs)) return Response.json({ ok: false, error: "file_not_found" }, { status: 404 });
+      const content = readFileSync(abs, "utf8").slice(0, 200_000);
+      return Response.json({ ok: true, path: rel, content });
+    }
+
+    if (url.pathname === "/workspace/exec" && req.method === "POST") {
+      const body = await req.json().catch(() => ({}));
+      const id = sanitizeProjectId(body.project);
+      const cmd = body.cmd;
+      if (!id || !isAllowedCommand(cmd)) {
+        return Response.json({ ok: false, error: "invalid_command" }, { status: 400 });
+      }
+      const dir = projectDirOf(id);
+      if (!existsSync(dir)) return Response.json({ ok: false, error: "project_not_found" }, { status: 404 });
+      const timeoutMs = Math.min(Math.max(Number(body.timeoutMs) || 30_000, 1_000), 120_000);
+      const started = Date.now();
+      const proc = Bun.spawn(cmd, { cwd: dir, stdout: "pipe", stderr: "pipe" });
+      const timer = setTimeout(() => { try { proc.kill(); } catch { /* gone */ } }, timeoutMs);
+      const exitCode = await proc.exited;
+      clearTimeout(timer);
+      const stdout = (await new Response(proc.stdout).text()).slice(0, 30_000);
+      const stderr = (await new Response(proc.stderr).text()).slice(0, 30_000);
+      return Response.json({ ok: exitCode === 0, exitCode, stdout, stderr, durationMs: Date.now() - started });
+    }
+
     if (url.pathname === "/status") {
       const ready = state.running ? await probeReady() : false;
       return Response.json({ ...state, ready, tail: state.log.slice(-12) });
     }
     if (url.pathname === "/run" && req.method === "POST") {
-      startDev().catch((e) => {
+      const body = await req.json().catch(() => ({}));
+      const id = body && body.project ? sanitizeProjectId(body.project) : null;
+      if (body && body.project && !id) {
+        return Response.json({ ok: false, error: "invalid_project" }, { status: 400 });
+      }
+      startDev(id).catch((e) => {
         state.error = String(e && e.message ? e.message : e);
         state.running = false;
       });
-      return Response.json({ ok: true, port: DEV_PORT });
+      return Response.json({ ok: true, port: DEV_PORT, project: id });
     }
     if (url.pathname === "/stop" && req.method === "POST") {
       if (devProc) { try { devProc.kill(); } catch { /* gone */ } devProc = null; }

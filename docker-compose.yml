@@ -207,18 +207,21 @@ services:
   # agent wrote, then serves its dev server on 5173 (published) for the preview.
   # Same `opencode` profile: docker compose --profile opencode up.
   runner:
-    image: oven/bun:1
+    build:
+      context: ./scripts
+      dockerfile: runner.Dockerfile
     profiles: ["opencode"]
     restart: unless-stopped
     working_dir: /workspace
-    command: ["bun", "/code-runner.js"]
+    command: ["bun", "/scripts/code-runner.js"]
     environment:
       DEV_PORT: "5173"
       CTRL_PORT: "4097"
       RUNNER_WORKDIR: "/workspace"
     volumes:
       - opencode_workspace:/workspace
-      - ./scripts/code-runner.js:/code-runner.js:ro
+      - ./scripts/code-runner.js:/scripts/code-runner.js:ro
+      - ./scripts/code-runner-utils.js:/scripts/code-runner-utils.js:ro
       - runner_bun_cache:/root/.bun/install/cache   # warm re-installs (vite/tailwind/framer-motion)
     ports:
       - "5173:5173"   # dev server → preview iframe
