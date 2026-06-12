@@ -202,7 +202,10 @@ export default function ModelsPage() {
 
       if (response.ok) {
         const data = await response.json()
-        setSyncStatus(data)
+        // The API wraps the payload: { status: { isScheduled, nextRun, … } }.
+        // Reading the top level left isScheduled always undefined, which
+        // made the scheduler toggle always send action:'start'.
+        setSyncStatus(data?.status ?? data)
       }
     } catch (error) {
       console.error('Failed to load sync status:', error)
@@ -306,29 +309,6 @@ export default function ModelsPage() {
       toast.error('Failed to run sync')
     } finally {
       setIsSyncing(false)
-    }
-  }
-
-  const bulkUpdateModels = async (action: 'enable' | 'disable', provider?: string) => {
-    try {
-      const token = localStorage.getItem('auth-token')
-      const response = await fetch(`${API_ROOT}/admin/models/bulk`, {
-        method: 'PUT',
-        headers: adminAuthHeaders(token, true),
-        body: JSON.stringify({ action, provider })
-      })
-
-      const data = await response.json()
-      
-      if (data.success) {
-        toast.success(data.message)
-        await Promise.all([loadModels(), loadStats()])
-      } else {
-        toast.error(data.error)
-      }
-    } catch (error) {
-      console.error('Failed to bulk update models:', error)
-      toast.error('Failed to update models')
     }
   }
 
@@ -516,11 +496,13 @@ export default function ModelsPage() {
         </div>
         
         <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center">
-          {/* Fetch Models - Commented out, auto-sync handles this
-          <Button 
-            variant="outline" 
-            onClick={fetchModelsFromProviders} 
+          {/* Vista previa de modelos disponibles en los proveedores (GET
+              /admin/models/fetch — verificado en vivo: 574 modelos). */}
+          <Button
+            variant="outline"
+            onClick={fetchModelsFromProviders}
             disabled={isFetching}
+            size="sm"
           >
             {isFetching ? (
               <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
@@ -529,7 +511,6 @@ export default function ModelsPage() {
             )}
             Fetch Models
           </Button>
-          */}
           
           <Button 
             variant="outline" 
@@ -586,9 +567,9 @@ export default function ModelsPage() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="OpenAI">OpenAI</SelectItem>
-                      <SelectItem value="Gemini">Gemini</SelectItem>
-                      <SelectItem value="OpenRouter">OpenRouter</SelectItem>
+                      {(providers.length ? providers : ['OpenAI', 'Gemini', 'OpenRouter']).map((p) => (
+                        <SelectItem key={p} value={p}>{p}</SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
@@ -670,7 +651,9 @@ export default function ModelsPage() {
         </div>
       )}
 
-      {/* Auto-Sync Status - Commented out for now, will auto-sync on deployment
+      {/* Auto-Sync Status — restored: GET /models/sync/status and the
+          scheduler/run endpoints work (verified live); the card was hidden
+          while the status shape bug made isScheduled read undefined. */}
       {syncStatus && (
         <Card>
           <CardHeader>
@@ -758,7 +741,6 @@ export default function ModelsPage() {
           </CardContent>
         </Card>
       )}
-      */}
 
       {/* Filters and Search */}
       <Card>
@@ -945,7 +927,6 @@ export default function ModelsPage() {
                         >
                           {model.isActive ? "Deactivate" : "Activate"}
                         </DropdownMenuItem>
-                        <DropdownMenuItem>View Details</DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </TableCell>
@@ -1058,9 +1039,9 @@ export default function ModelsPage() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="OpenAI">OpenAI</SelectItem>
-                    <SelectItem value="Gemini">Gemini</SelectItem>
-                    <SelectItem value="OpenRouter">OpenRouter</SelectItem>
+                    {(providers.length ? providers : ['OpenAI', 'Gemini', 'OpenRouter']).map((p) => (
+                      <SelectItem key={p} value={p}>{p}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
