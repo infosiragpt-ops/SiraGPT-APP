@@ -212,6 +212,22 @@ class StripeService {
     this.isConfigured = false;
     this.configurationState = 'invalid';
     this.configurationIssue = 'STRIPE_SECRET_KEY was rejected by Stripe';
+    // The latch used to be PERMANENT: one auth failure disabled Stripe
+    // until a full backend restart, so a key rotation never recovered.
+    // Re-arm after a cooldown so the next call re-probes the key.
+    const REPROBE_COOLDOWN_MS = 5 * 60 * 1000;
+    if (this._reprobeTimer) clearTimeout(this._reprobeTimer);
+    this._reprobeTimer = setTimeout(() => {
+      this._reprobeTimer = null;
+      if (this.configurationState !== 'invalid') return;
+      const secretKey = process.env.STRIPE_SECRET_KEY;
+      if (hasUsableStripeSecret(secretKey)) {
+        this.isConfigured = true;
+        this.configurationState = 'reprobing';
+        this.configurationIssue = null;
+      }
+    }, REPROBE_COOLDOWN_MS);
+    if (typeof this._reprobeTimer?.unref === 'function') this._reprobeTimer.unref();
   }
 
   shouldLogAuthFailure() {
