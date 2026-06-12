@@ -634,14 +634,27 @@ function recoverStaleRunningTasks({
   markAs = 'error',
   reason = 'recovered_after_restart',
   skipJobBacked = false,
+  // Hard ceiling for job-backed tasks: with Redis configured, rows that
+  // carry a jobId are normally left to the BullMQ worker — but a job that
+  // has been "running" for this long is a zombie (no legitimate job lives
+  // for a day; queue timeouts are minutes). Without a ceiling those rows
+  // were skipped FOREVER: rescanned and logged on every boot while their
+  // chats showed an eternal in-progress state.
+  jobBackedStaleAfterMs = 24 * 60 * 60 * 1000,
 } = {}) {
   const stale = findStaleRunningTasks({ staleAfterMs });
   const recovered = [];
   const skipped = [];
+  const jobCutoff = Date.now() - Math.max(staleAfterMs, jobBackedStaleAfterMs);
   for (const row of stale) {
     if (skipJobBacked && row.jobId) {
-      skipped.push({ taskId: row.taskId, userId: row.userId, reason: 'job_backed' });
-      continue;
+      const rowUpdatedAt = Date.parse(row.updatedAt || 0);
+      const withinJobGrace = Number.isFinite(rowUpdatedAt) && rowUpdatedAt >= jobCutoff;
+      if (withinJobGrace) {
+        skipped.push({ taskId: row.taskId, userId: row.userId, reason: 'job_backed' });
+        continue;
+      }
+      // Beyond the hard ceiling: zombie job-backed task → recover below.
     }
     const snapshot = readTaskSnapshot(row.taskId);
     if (!snapshot) continue;
