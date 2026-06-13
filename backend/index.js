@@ -409,6 +409,10 @@ const { startGoalWorker, closeGoalWorker } = require('./src/services/goal-worker
 const { closeGoalQueue } = require('./src/services/goal-queue');
 const { recoverGoalRunsAfterBoot, stopGoalRecovery } = require('./src/services/goal-boot-recovery');
 const { startGoalCleanup, stopGoalCleanup } = require('./src/services/goal-cleanup');
+// Codex Agent V2 run engine (feature 05). startCodexWorker self-gates on the
+// CODEX_AGENT_V2 flag (no-op when off), so it's always safe to call.
+const { startCodexWorker, closeCodexWorker, closeCodexQueue } = require('./src/services/codex/run-queue');
+const { recoverCodexRunsAfterBoot } = require('./src/services/codex/boot-recovery');
 const alerting = require('./src/services/alerting');
 const sloTracker = require('./src/services/slo-tracker');
 const shutdownRegistry = require('./src/utils/shutdown');
@@ -1239,6 +1243,10 @@ async function startServer() {
     startGoalCleanup({ logger });
     startAgentTaskWorker();
     startGoalWorker();
+    // Codex V2: recover interrupted runs then start the worker (both no-op when
+    // the flag is off). Fire-and-forget recovery never throws.
+    recoverCodexRunsAfterBoot().catch((err) => logger.warn({ err: err.message }, 'codex_boot_recovery_failed'));
+    startCodexWorker();
 
     // Apply any admin-curated provider keys (panel /admin/connections)
     // by overriding the corresponding process.env vars in this worker.
@@ -1354,6 +1362,8 @@ async function startServer() {
             closeAgentTaskQueue(),
             closeGoalWorker(),
             closeGoalQueue(),
+            closeCodexWorker(),
+            closeCodexQueue(),
         ]);
     }, 5000);
 

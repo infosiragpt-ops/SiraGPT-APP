@@ -1936,6 +1936,7 @@ model CodexRun {
   mode       String // plan | build
   status     String    @default("queued") // queued | running | waiting_approval | done | error | cancelled
   jobId      String?   @unique
+  prompt     String?   @db.Text // user's context/instructions for this run
   model      String?
   tier       String?
   planRunId  String?

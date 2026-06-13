@@ -27,6 +27,7 @@ const { createRunnerClient, runnerDevUrl } = require('../services/codex/runner-c
 const eventStore = require('../services/codex/event-store');
 const runAccess = require('../services/codex/run-access');
 const pubsub = require('../services/codex/redis-pubsub');
+const runService = require('../services/codex/run-service');
 
 const router = express.Router();
 
@@ -131,6 +132,76 @@ router.post('/projects/:id/preview/stop', authenticateToken, async (req, res) =>
   }
 });
 
+// ── Runs (feature 05) ───────────────────────────────────────────────────────
+// Create/list/detail are scoped under the project (POST/GET /projects/:id/runs)
+// so they never shadow the legacy codex-runs router, which is mounted first and
+// owns POST /runs + GET /runs/:id. Cancel + stream live at /runs/:id/* (paths
+// the legacy router does not define), so they fall through to here.
+function mapRunError(err, res) {
+  if (err instanceof runService.RunServiceError) {
+    return res.status(err.status).json({ error: err.code, message: err.message });
+  }
+  return res.status(500).json({ error: 'codex_run_failed', message: err.message });
+}
+
+router.post(
+  '/projects/:projectId/runs',
+  authenticateToken,
+  [
+    body('mode').isString().bail().isIn(['plan', 'build']).withMessage('mode must be plan or build'),
+    body('prompt').optional({ nullable: true }).isString().isLength({ max: 20000 }),
+    body('model').optional({ nullable: true }).isString().isLength({ max: 200 }),
+    body('tier').optional({ nullable: true }).isString().isLength({ max: 40 }),
+    body('planRunId').optional({ nullable: true }).isString().isLength({ max: 64 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+    try {
+      const run = await runService.createRun({
+        userId: req.user.id,
+        projectId: req.params.projectId,
+        mode: req.body.mode,
+        prompt: req.body.prompt ?? null,
+        model: req.body.model ?? null,
+        tier: req.body.tier ?? null,
+        planRunId: req.body.planRunId ?? null,
+      });
+      return res.status(201).json({ run });
+    } catch (err) {
+      return mapRunError(err, res);
+    }
+  },
+);
+
+router.get('/projects/:projectId/runs', authenticateToken, async (req, res) => {
+  try {
+    const runs = await runService.listRuns({ userId: req.user.id, projectId: req.params.projectId });
+    return res.json({ runs });
+  } catch (err) {
+    return mapRunError(err, res);
+  }
+});
+
+router.get('/projects/:projectId/runs/:runId', authenticateToken, async (req, res) => {
+  try {
+    const run = await runService.getRun({ userId: req.user.id, runId: req.params.runId });
+    if (!run || run.projectId !== req.params.projectId) return res.status(404).json({ error: 'run_not_found' });
+    return res.json({ run });
+  } catch (err) {
+    return mapRunError(err, res);
+  }
+});
+
+router.post('/runs/:id/cancel', authenticateToken, async (req, res) => {
+  try {
+    const run = await runService.cancelRun({ userId: req.user.id, runId: req.params.id });
+    return res.json({ run });
+  } catch (err) {
+    return mapRunError(err, res);
+  }
+});
+
 // ── GET /api/codex/runs/:id/stream — SSE replay + live (feature 04) ─────────
 // Replays codex_events with seq > afterSeq from the DB (the durable source of
 // truth) and then attaches the live Redis channel. Subscribe-before-replay +
@@ -225,9 +296,12 @@ router.get('/runs/:id/stream', bearerFromQueryFallback, authenticateToken, async
     if (closed) break;
   }
 
-  // Already-terminal run with no live subscriber pending: replay was the whole
-  // story, so close the stream now instead of holding it open.
-  if (!closed && runAccess.isTerminalStatus(run.status) && !subscriber) {
+  // Already-terminal run: the worker has finished and will publish nothing more,
+  // so replay (+ any buffered live tail) was the whole story. Close the stream
+  // now instead of holding it open — even with a live subscriber attached, since
+  // no further events will ever arrive (e.g. a client reconnecting with an
+  // afterSeq past the terminal run_status would otherwise hang forever).
+  if (!closed && runAccess.isTerminalStatus(run.status)) {
     cleanup();
     if (!res.writableEnded) res.end();
     return undefined;

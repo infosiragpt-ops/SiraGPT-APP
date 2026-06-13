@@ -29,10 +29,14 @@ const restoreAccess = mockResolvedModule(require.resolve('../src/services/codex/
   isTerminalStatus: (s) => ['done', 'error', 'cancelled'].includes(String(s || '')),
 });
 
-const restorePubsub = mockResolvedModule(require.resolve('../src/services/codex/redis-pubsub'), {
-  createRunSubscriber: async () => null, // Redis off ⇒ replay-only path
+// Swappable so individual tests can simulate Redis being up (a real subscriber)
+// vs down (null). The route reads pubsub.createRunSubscriber at call time.
+let subscriberFactory = async () => null; // default: Redis off ⇒ replay-only path
+const pubsubMock = {
+  createRunSubscriber: (...args) => subscriberFactory(...args),
   publishEvent: async () => false,
-});
+};
+const restorePubsub = mockResolvedModule(require.resolve('../src/services/codex/redis-pubsub'), pubsubMock);
 
 // project-service + runner-client are imported by the route too; stub them out.
 const restoreService = mockResolvedModule(require.resolve('../src/services/codex/project-service'), {
@@ -48,7 +52,7 @@ after(() => {
   restoreAuth(); restoreStore(); restoreAccess(); restorePubsub(); restoreService(); restoreRunner();
   delete process.env.CODEX_AGENT_V2;
 });
-beforeEach(() => { process.env.CODEX_AGENT_V2 = '1'; ownedRun = null; scriptedEvents = []; });
+beforeEach(() => { process.env.CODEX_AGENT_V2 = '1'; ownedRun = null; scriptedEvents = []; subscriberFactory = async () => null; });
 
 function app() {
   const a = express();
@@ -92,4 +96,23 @@ test('stream replays only events after afterSeq', async () => {
   assert.doesNotMatch(res.text, /"text":"a"/); // seq 1 skipped
   assert.match(res.text, /"text":"b"/);
   assert.match(res.text, /"status":"done"/);
+});
+
+test('terminal run with a live subscriber and afterSeq past the end still closes (no hang)', async () => {
+  // Redis is UP (a real subscriber is attached) and the client reconnects with
+  // afterSeq past the terminal run_status, so replay yields nothing. The stream
+  // must still close — a terminal run will never publish more events. Before the
+  // fix this hung forever (request() would time out) because the auto-close was
+  // gated on `!subscriber`.
+  ownedRun = { id: 'run-1', userId: 'u-1', status: 'done' };
+  scriptedEvents = [
+    { runId: 'run-1', seq: 1, ts: 't', type: 'narrative_delta', data: { text: 'a' } },
+    { runId: 'run-1', seq: 2, ts: 't', type: 'run_status', data: { status: 'done' } },
+  ];
+  let closed = false;
+  subscriberFactory = async () => ({ close: async () => { closed = true; } });
+  const res = await request(app()).get('/api/codex/runs/run-1/stream?afterSeq=2');
+  assert.equal(res.status, 200);
+  assert.doesNotMatch(res.text, /"status":"done"/); // seq 2 already seen by client
+  assert.equal(closed, true); // subscriber was torn down on close (no leak)
 });
