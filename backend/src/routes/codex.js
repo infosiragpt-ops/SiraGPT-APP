@@ -24,8 +24,23 @@ const { authenticateToken } = require('../middleware/auth');
 const { isCodexV2Enabled } = require('../services/codex/flags');
 const projectService = require('../services/codex/project-service');
 const { createRunnerClient, runnerDevUrl } = require('../services/codex/runner-client');
+const eventStore = require('../services/codex/event-store');
+const runAccess = require('../services/codex/run-access');
+const pubsub = require('../services/codex/redis-pubsub');
 
 const router = express.Router();
+
+// EventSource can't set headers, so allow a ?token= fallback for the SSE route
+// (header still wins). Same shape as the goals SSE route.
+function bearerFromQueryFallback(req, _res, next) {
+  if (!req.headers.authorization && req.query && req.query.token) {
+    const token = String(req.query.token);
+    if (token.length > 0 && token.length < 8192) {
+      req.headers.authorization = `Bearer ${token}`;
+    }
+  }
+  next();
+}
 
 // Público y SIEMPRE 200: el frontend decide si renderiza la UI V2 con esto.
 router.get('/health', (_req, res) => res.json({ ok: true, enabled: isCodexV2Enabled() }));
@@ -114,6 +129,117 @@ router.post('/projects/:id/preview/stop', authenticateToken, async (req, res) =>
   } catch (err) {
     return res.status(502).json({ error: 'runner_unreachable', message: err.message });
   }
+});
+
+// ── GET /api/codex/runs/:id/stream — SSE replay + live (feature 04) ─────────
+// Replays codex_events with seq > afterSeq from the DB (the durable source of
+// truth) and then attaches the live Redis channel. Subscribe-before-replay +
+// a per-stream seq gate guarantee no loss and no duplicates across reconnects.
+router.get('/runs/:id/stream', bearerFromQueryFallback, authenticateToken, async (req, res) => {
+  const runId = String(req.params.id);
+  const userId = String(req.user?.id || '');
+  if (!userId) return res.status(401).json({ error: 'unauthenticated' });
+
+  let run;
+  try {
+    run = await runAccess.findOwnedRun({ runId, userId });
+  } catch (err) {
+    return res.status(503).json({ error: 'persistence_unavailable', message: err.message });
+  }
+  if (!run) return res.status(404).json({ error: 'run_not_found' });
+
+  const afterSeq = Number.parseInt(req.query.afterSeq, 10);
+  const startSeq = Number.isFinite(afterSeq) ? afterSeq : 0;
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  if (typeof res.flushHeaders === 'function') res.flushHeaders();
+
+  const gate = eventStore.createSeqGate();
+  let closed = false;
+  let subscriber = null;
+  let heartbeat = null;
+
+  function cleanup() {
+    if (closed) return;
+    closed = true;
+    if (heartbeat) clearInterval(heartbeat);
+    if (subscriber) Promise.resolve(subscriber.close()).catch(() => {});
+  }
+  req.on('close', cleanup);
+  res.on('close', cleanup);
+
+  function write(envelope) {
+    if (closed || res.writableEnded) return false;
+    try {
+      res.write(`data: ${JSON.stringify(envelope)}\n\n`);
+      return true;
+    } catch {
+      cleanup();
+      return false;
+    }
+  }
+
+  // Emit through the gate; close the stream once a terminal run_status passes.
+  function emit(envelope) {
+    if (closed) return;
+    if (!gate.shouldEmit(envelope.seq)) return;
+    write(envelope);
+    if (envelope.type === 'run_status' && runAccess.isTerminalStatus(envelope.data?.status)) {
+      cleanup();
+      if (!res.writableEnded) res.end();
+    }
+  }
+
+  // Buffer live events that arrive while we replay, then flush them (the gate
+  // dedups against the replay) and continue streaming live.
+  const liveBuffer = [];
+  let replaying = true;
+  try {
+    subscriber = await pubsub.createRunSubscriber(runId, (envelope) => {
+      if (replaying) liveBuffer.push(envelope);
+      else emit(envelope);
+    });
+  } catch {
+    subscriber = null; // Redis down → replay-only; client reconnects for more.
+  }
+
+  try {
+    const history = await eventStore.listEvents(runId, { afterSeq: startSeq });
+    for (const ev of history) {
+      emit(ev);
+      if (closed) break;
+    }
+  } catch (err) {
+    write({ type: 'error', message: err.message || 'replay_failed' });
+    cleanup();
+    if (!res.writableEnded) res.end();
+    return undefined;
+  }
+
+  replaying = false;
+  for (const ev of liveBuffer.splice(0)) {
+    emit(ev);
+    if (closed) break;
+  }
+
+  // Already-terminal run with no live subscriber pending: replay was the whole
+  // story, so close the stream now instead of holding it open.
+  if (!closed && runAccess.isTerminalStatus(run.status) && !subscriber) {
+    cleanup();
+    if (!res.writableEnded) res.end();
+    return undefined;
+  }
+
+  if (!closed) {
+    heartbeat = setInterval(() => {
+      write({ type: 'heartbeat', ts: new Date().toISOString() });
+    }, 25_000);
+    if (typeof heartbeat.unref === 'function') heartbeat.unref();
+  }
+  return undefined;
 });
 
 module.exports = router;
