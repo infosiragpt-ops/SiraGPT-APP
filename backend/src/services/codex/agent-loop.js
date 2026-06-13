@@ -21,6 +21,7 @@ const planMode = require('./plan-mode');
 const buildTools = require('./build-tools');
 const actionStoreDefault = require('./action-store');
 const checkpointService = require('./checkpoint-service');
+const runMetrics = require('./run-metrics');
 
 const DEFAULT_MAX_STEPS = 24;
 const DEFAULT_MAX_TOOLS_PER_TURN = 4;
@@ -82,7 +83,10 @@ async function loadApprovedPlan({ run, eventStore, prisma }) {
 }
 
 async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
-  const { eventStore, prisma, env = process.env, clock = () => new Date(), metrics } = deps;
+  const { eventStore, prisma, env = process.env, clock = () => new Date() } = deps;
+  // The metrics accumulator (feature 08) is fed during the loop and finalized at
+  // close. Created here when the caller didn't inject one.
+  const metrics = deps.metrics || runMetrics.createAccumulator({ run, clock });
   const llmTurn = deps.llmTurn || ((a) => require('./llm-turn').defaultLlmTurn(a));
   const runner = deps.runner || require('./runner-client').createRunnerClient();
   const actionStore = deps.actionStore || actionStoreDefault;
@@ -199,9 +203,35 @@ async function closeBuild({ run, project, runner, eventStore, prisma, llmTurn, c
   } catch (err) {
     if (env?.NODE_ENV !== 'test') console.warn('[codex agent-loop] checkpoint failed:', err?.message || err);
   }
-  // Feature 08 will finalize CodexRunMetric + emit run_summary here, using the
-  // checkpoint's diffstat for Code changed. `metrics` is the accumulator.
+
+  // Metrics + run_summary (feature 08). Order: checkpoint → diffstat → metric →
+  // run_summary, then the processor emits the terminal run_status. Best-effort —
+  // a metrics failure must not turn a successful build into an error.
+  if (metrics && typeof metrics.finalize === 'function') {
+    try {
+      let diffstat = { additions: 0, deletions: 0 };
+      if (checkpoint) {
+        const d = await checkpointService.getCheckpointDiff({ checkpointId: checkpoint.id, userId: run.userId, deps: { runner, prisma } });
+        if (d && !d.error) diffstat = { additions: d.additions, deletions: d.deletions };
+      }
+      const userPlan = await resolveUserPlan(run.userId, prisma);
+      await metrics.finalize({ diffstat, userPlan, prisma, eventStore, env, clock });
+    } catch (err) {
+      if (env?.NODE_ENV !== 'test') console.warn('[codex agent-loop] metrics finalize failed:', err?.message || err);
+    }
+  }
   return { checkpoint };
+}
+
+/** Best-effort lookup of the user's plan for pricing (defaults to FREE). */
+async function resolveUserPlan(userId, prisma) {
+  if (!userId || !prisma || !prisma.user) return 'FREE';
+  try {
+    const u = await prisma.user.findUnique({ where: { id: userId }, select: { plan: true } });
+    return u?.plan || 'FREE';
+  } catch {
+    return 'FREE';
+  }
 }
 
 async function runAgentLoop({ run, project, signal, isCancelled, deps = {} } = {}) {
