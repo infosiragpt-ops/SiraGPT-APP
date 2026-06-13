@@ -12,6 +12,11 @@ import { Loader2, Plus, Send } from "lucide-react"
 import { codexApi, type CodexProject, type CodexRun } from "@/lib/codex/codex-api"
 import { useCodexRun } from "@/lib/codex/use-codex-run"
 import { CodexRunTimeline } from "./run-timeline"
+import { PlanCard } from "./plan-card"
+import { CheckpointCard } from "./checkpoint-card"
+import { RunSummaryCard } from "./run-summary-card"
+import { ActionRequiredCard } from "./action-required-card"
+import type { TimelineItem } from "@/lib/codex/timeline-reducer"
 
 export function CodexAgentPanel() {
   const [projects, setProjects] = useState<CodexProject[] | null>(null)
@@ -20,7 +25,55 @@ export function CodexAgentPanel() {
   const [prompt, setPrompt] = useState("")
   const [busy, setBusy] = useState(false)
 
-  const { state, status, active } = useCodexRun(activeRunId)
+  const { state, status, active, markApproved } = useCodexRun(activeRunId)
+
+  // Approve the plan → create the build run and switch the timeline to it.
+  async function approvePlan() {
+    if (!project || !activeRunId) return
+    markApproved()
+    try {
+      const build = await codexApi.approvePlan(project.id, activeRunId)
+      setActiveRunId(build.id)
+    } catch (e: any) {
+      toast.error(e?.message || "No se pudo aprobar el plan")
+    }
+  }
+
+  // Map plan/checkpoint/summary/action_required items to their rich cards.
+  function renderCard(item: TimelineItem): React.ReactNode | null {
+    switch (item.kind) {
+      case "plan":
+        return (
+          <PlanCard
+            architecture={item.architecture}
+            pages={item.pages}
+            components={item.components}
+            tasks={item.tasks}
+            approved={item.approved}
+            waiting={status === "waiting_approval"}
+            onApprove={approvePlan}
+            onAdjust={() => document.querySelector<HTMLTextAreaElement>("[data-codex-composer]")?.focus()}
+          />
+        )
+      case "checkpoint":
+        return (
+          <CheckpointCard
+            checkpointId={item.checkpointId}
+            commitSha={item.commitSha}
+            title={item.title}
+            createdAt={item.createdAt}
+            projectId={project?.id}
+            previewUrl={project?.previewUrl}
+          />
+        )
+      case "summary":
+        return <RunSummaryCard metrics={item.metrics} />
+      case "action_required":
+        return <ActionRequiredCard title={item.title} rawError={item.rawError} blockedCapabilities={item.blockedCapabilities} remediationUrl={item.remediationUrl} />
+      default:
+        return null
+    }
+  }
 
   useEffect(() => {
     codexApi.listProjects().then(setProjects).catch(() => setProjects([]))
@@ -85,7 +138,7 @@ export function CodexAgentPanel() {
 
       <div className="flex min-h-0 flex-1 flex-col">
         {activeRunId ? (
-          <CodexRunTimeline state={state} />
+          <CodexRunTimeline state={state} cardRenderer={renderCard} />
         ) : (
           <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-zinc-500">
             {project ? "Describe qué quieres construir para proponer un plan." : "Crea o selecciona un proyecto para empezar."}
@@ -96,6 +149,7 @@ export function CodexAgentPanel() {
       <footer className="shrink-0 border-t border-white/10 p-3">
         <div className="flex items-end gap-2 rounded-xl border border-white/10 bg-white/5 p-2">
           <textarea
+            data-codex-composer
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send() } }}
