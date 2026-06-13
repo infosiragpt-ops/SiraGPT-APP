@@ -989,3 +989,114 @@ test('search diversifies sources by default and opts out with diversify:false', 
   const raw = await ss.search('diversity probe', { providers: ['arxiv', 'openalex'], diversify: false });
   assert.equal(raw.papers.length, 5, 'opt-out keeps every paper');
 });
+
+// ── Unpaywall OA enrichment ────────────────────────────────────────────────
+const { enrichWithUnpaywall } = ss;
+
+test('enrichWithUnpaywall backfills pdfUrl for DOI-bearing papers lacking a PDF', async () => {
+  const orig = process.env.SIRAGPT_RESEARCH_EMAIL;
+  process.env.SIRAGPT_RESEARCH_EMAIL = 'tester@example.com';
+  try {
+    setFetchHandler((url) => {
+      assert.ok(url.includes('api.unpaywall.org/v2/'), 'hits Unpaywall');
+      assert.ok(url.includes('email='), 'sends the mandatory contact email');
+      return Promise.resolve(jsonResponse({
+        is_oa: true,
+        best_oa_location: { url_for_pdf: 'https://oa.example.org/paper.pdf', url: 'https://oa.example.org/paper' },
+      }));
+    });
+    const papers = [{ source: 'scopus', doi: '10.1000/closed', title: 'Closed-index hit', pdfUrl: null, openAccess: null }];
+    const out = await enrichWithUnpaywall(papers, { maxEnrich: 5 });
+    assert.equal(out[0].pdfUrl, 'https://oa.example.org/paper.pdf', 'pdf backfilled');
+    assert.equal(out[0].openAccess, true, 'openAccess flipped true when is_oa');
+  } finally {
+    if (orig === undefined) delete process.env.SIRAGPT_RESEARCH_EMAIL;
+    else process.env.SIRAGPT_RESEARCH_EMAIL = orig;
+  }
+});
+
+test('enrichWithUnpaywall is a no-op without SIRAGPT_RESEARCH_EMAIL (no network call)', async () => {
+  const orig = process.env.SIRAGPT_RESEARCH_EMAIL;
+  delete process.env.SIRAGPT_RESEARCH_EMAIL;
+  try {
+    setFetchHandler(() => { throw new Error('should not be called'); });
+    const papers = [{ source: 'crossref', doi: '10.1/x', pdfUrl: null }];
+    const out = await enrichWithUnpaywall(papers, { maxEnrich: 5 });
+    assert.equal(out[0].pdfUrl, null, 'left untouched without an email');
+  } finally {
+    if (orig !== undefined) process.env.SIRAGPT_RESEARCH_EMAIL = orig;
+  }
+});
+
+test('enrichWithUnpaywall skips papers that already have a PDF or no DOI, and never throws on lookup failure', async () => {
+  const orig = process.env.SIRAGPT_RESEARCH_EMAIL;
+  process.env.SIRAGPT_RESEARCH_EMAIL = 'tester@example.com';
+  let calls = 0;
+  try {
+    setFetchHandler((url) => {
+      calls += 1;
+      assert.ok(url.includes('10.1000/needs-pdf'), 'only the candidate without a PDF is looked up');
+      return Promise.resolve(errorResponse(404)); // Unpaywall miss → safeJson throws → swallowed
+    });
+    const papers = [
+      { source: 'arxiv', doi: '10.1000/has-pdf', pdfUrl: 'https://arxiv.org/pdf/x', openAccess: true },
+      { source: 'dblp', doi: null, pdfUrl: null },          // no DOI → skipped
+      { source: 'wos', doi: '10.1000/needs-pdf', pdfUrl: null, openAccess: null }, // looked up, 404
+    ];
+    const out = await enrichWithUnpaywall(papers, { maxEnrich: 5 });
+    assert.equal(calls, 1, 'exactly one outbound lookup (the only eligible candidate)');
+    assert.equal(out[2].pdfUrl, null, 'failed lookup leaves the paper unchanged');
+    assert.equal(out[0].pdfUrl, 'https://arxiv.org/pdf/x', 'paper with a PDF untouched');
+  } finally {
+    if (orig === undefined) delete process.env.SIRAGPT_RESEARCH_EMAIL;
+    else process.env.SIRAGPT_RESEARCH_EMAIL = orig;
+  }
+});
+
+test('enrichWithUnpaywall caps outbound lookups at maxEnrich', async () => {
+  const orig = process.env.SIRAGPT_RESEARCH_EMAIL;
+  process.env.SIRAGPT_RESEARCH_EMAIL = 'tester@example.com';
+  let calls = 0;
+  try {
+    setFetchHandler(() => { calls += 1; return Promise.resolve(jsonResponse({ is_oa: false })); });
+    const papers = Array.from({ length: 10 }, (_, i) => ({ source: 'crossref', doi: `10.1/${i}`, pdfUrl: null }));
+    await enrichWithUnpaywall(papers, { maxEnrich: 3 });
+    assert.equal(calls, 3, 'no more than maxEnrich lookups');
+  } finally {
+    if (orig === undefined) delete process.env.SIRAGPT_RESEARCH_EMAIL;
+    else process.env.SIRAGPT_RESEARCH_EMAIL = orig;
+  }
+});
+
+test('search runs Unpaywall enrichment only when opts.unpaywall is set', async () => {
+  const orig = process.env.SIRAGPT_RESEARCH_EMAIL;
+  process.env.SIRAGPT_RESEARCH_EMAIL = 'tester@example.com';
+  try {
+    searchCache.clear();
+    let unpaywallCalls = 0;
+    setFetchHandler((url) => {
+      if (url.includes('api.unpaywall.org')) {
+        unpaywallCalls += 1;
+        return Promise.resolve(jsonResponse({ is_oa: true, best_oa_location: { url_for_pdf: 'https://oa/x.pdf' } }));
+      }
+      if (url.includes('crossref.org')) {
+        return Promise.resolve(jsonResponse({ message: { items: [
+          { DOI: '10.5/closed', title: ['Closed paper'], type: 'journal-article' },
+        ] } }));
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+    const off = await ss.search('enrich probe', { providers: ['crossref'] });
+    assert.equal(unpaywallCalls, 0, 'default search does not call Unpaywall');
+    assert.ok(off.papers.length >= 1);
+
+    searchCache.clear();
+    const on = await ss.search('enrich probe', { providers: ['crossref'], unpaywall: true });
+    assert.ok(unpaywallCalls >= 1, 'opt-in search calls Unpaywall');
+    const enriched = on.papers.find((p) => p.doi === '10.5/closed');
+    assert.ok(enriched && enriched.pdfUrl === 'https://oa/x.pdf', 'pdf backfilled in opt-in search');
+  } finally {
+    if (orig === undefined) delete process.env.SIRAGPT_RESEARCH_EMAIL;
+    else process.env.SIRAGPT_RESEARCH_EMAIL = orig;
+  }
+});

@@ -5,7 +5,7 @@
  * OpenAlex / CrossRef / PubMed / Europe PMC / CORE.
  *
  *   POST /api/scientific-search
- *     body: { query, providers?, limit?, timeoutMs?, diversify? }
+ *     body: { query, providers?, limit?, timeoutMs?, diversify?, unpaywall? }
  *     →    { papers, errors, providers, count }
  *
  *   GET  /api/scientific-search/providers
@@ -51,15 +51,17 @@ router.post(
     body('timeoutMs').optional().isInt({ min: 500, max: 30_000 }),
     body('diversify').optional().isBoolean()
       .withMessage('diversify must be a boolean'),
+    body('unpaywall').optional().isBoolean()
+      .withMessage('unpaywall must be a boolean'),
   ],
   async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({ error: 'validation_failed', details: errors.array() });
     }
-    const { query, providers, limit, timeoutMs, diversify } = req.body;
+    const { query, providers, limit, timeoutMs, diversify, unpaywall } = req.body;
     try {
-      const result = await scientificSearch.search(query, { providers, limit, timeoutMs, diversify });
+      const result = await scientificSearch.search(query, { providers, limit, timeoutMs, diversify, unpaywall });
       return res.json({
         ...result,
         count: result.papers.length,

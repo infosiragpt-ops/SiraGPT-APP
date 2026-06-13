@@ -1433,6 +1433,7 @@ const scientific_search = {
     query: 'string (required — research topic or keywords)',
     limit: 'number (optional per-provider cap, default 8, max 25)',
     providers: 'array (optional subset, e.g. ["biorxiv","medrxiv","scielo","redalyc","scopus","wos"]; default all)',
+    unpaywall: 'boolean (optional — backfill open-access PDF links for DOI hits that lack one, e.g. Scopus/WoS/CrossRef; slightly slower)',
   },
   async handler(args) {
     const query = typeof args?.query === 'string' ? args.query.trim() : '';
@@ -1441,7 +1442,8 @@ const scientific_search = {
     const scientificSearch = require('../scientific-search');
     const limit = Math.max(1, Math.min(Number(args?.limit) || 8, 25));
     const providers = Array.isArray(args?.providers) ? args.providers : undefined;
-    const { papers, errors, providers: used } = await scientificSearch.search(query, { limit, providers });
+    const unpaywall = args?.unpaywall === true || args?.unpaywall === 'true';
+    const { papers, errors, providers: used } = await scientificSearch.search(query, { limit, providers, unpaywall });
     // Slim the payload: the model rarely needs every field and abstracts are long.
     const slim = (papers || []).slice(0, limit).map((p) => ({
       source: p.source,

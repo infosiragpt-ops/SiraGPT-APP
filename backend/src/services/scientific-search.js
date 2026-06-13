@@ -962,6 +962,53 @@ async function callProviderWithRetry(fn, query, opts, retries) {
   throw lastErr;
 }
 
+// ── Unpaywall OA enrichment ──────────────────────────────────────────────
+// Closed-index hits (Scopus, Web of Science, CrossRef, PubMed, DBLP) often
+// carry a DOI but no open-access PDF. Unpaywall (key-free, but it REQUIRES a
+// contact email) maps a DOI → the best legal OA copy. We backfill pdfUrl (and
+// openAccess) for the top-ranked papers that have a DOI but no pdfUrl yet.
+// Bounded + best-effort: skipped entirely without SIRAGPT_RESEARCH_EMAIL,
+// capped at `maxEnrich` lookups, run in parallel with a tight timeout, and a
+// failed/timed-out lookup simply leaves the paper untouched (never throws).
+// Opt-in (opts.unpaywall) so the default search keeps its current latency.
+const UNPAYWALL_BASE = 'https://api.unpaywall.org/v2';
+
+async function enrichWithUnpaywall(papers, opts = {}) {
+  if (!Array.isArray(papers) || !papers.length) return papers;
+  const email = process.env.SIRAGPT_RESEARCH_EMAIL;
+  if (!email) return papers; // Unpaywall mandates a contact email
+  const maxEnrich = Number.isFinite(opts.maxEnrich) && opts.maxEnrich >= 0 ? Math.floor(opts.maxEnrich) : 8;
+  if (maxEnrich === 0) return papers;
+  // Pick top-ranked papers that have a DOI but no usable PDF yet. Preserve the
+  // incoming ranked order and cap the number of outbound lookups.
+  const candidates = [];
+  for (const p of papers) {
+    if (candidates.length >= maxEnrich) break;
+    if (p && typeof p === 'object' && p.doi && !p.pdfUrl) candidates.push(p);
+  }
+  if (!candidates.length) return papers;
+  await Promise.all(candidates.map(async (p) => {
+    try {
+      const url = `${UNPAYWALL_BASE}/${encodeURIComponent(p.doi)}?email=${encodeURIComponent(email)}`;
+      const json = await safeJson(url, {
+        timeoutMs: Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : 5000,
+        signal: opts.signal,
+        label: 'unpaywall',
+      });
+      const loc = json && (json.best_oa_location
+        || (Array.isArray(json.oa_locations) ? json.oa_locations[0] : null));
+      const pdf = loc && (loc.url_for_pdf || loc.url);
+      if (pdf) {
+        p.pdfUrl = pdf;
+        if (json.is_oa) p.openAccess = true;
+      } else if (json && typeof json.is_oa === 'boolean' && p.openAccess == null) {
+        p.openAccess = json.is_oa;
+      }
+    } catch { /* best-effort: leave the paper unchanged */ }
+  }));
+  return papers;
+}
+
 async function search(query, opts = {}) {
   const cleanQuery = normaliseQuery(query);
   if (!cleanQuery) {
@@ -1028,6 +1075,15 @@ async function search(query, opts = {}) {
   const papersOut = opts.diversify === false
     ? ranked
     : diversifyBySource(ranked, { maxRun: opts.maxRun });
+  // Opt-in OA PDF backfill for DOI-bearing hits that lack a PDF (e.g. Scopus,
+  // Web of Science, CrossRef). Off by default to preserve search latency.
+  if (opts.unpaywall) {
+    await enrichWithUnpaywall(papersOut, {
+      maxEnrich: opts.maxEnrichUnpaywall,
+      timeoutMs: opts.timeoutMs,
+      signal: opts.signal,
+    });
+  }
   const result = { papers: papersOut, errors, providers: chosen };
   searchCache.set(cleanQuery, opts, result);
   return result;
@@ -1052,10 +1108,11 @@ module.exports = {
   searchBioRxiv,
   searchMedRxiv,
   diversifyBySource,
+  enrichWithUnpaywall,
   PROVIDERS,
   _internal: {
     dedupeByDoi, normaliseTitle, normaliseDoi, parseAtomFeed, invertedIndexToText,
     rankPapers, userAgent, normaliseQuery, queryTerms, relevanceScore, mergePaper,
-    isTransientError, diversifyBySource,
+    isTransientError, diversifyBySource, enrichWithUnpaywall,
   },
 };
