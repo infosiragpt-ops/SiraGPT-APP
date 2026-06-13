@@ -492,6 +492,70 @@ test('searchRedalyc: pins OpenAlex to the Redalyc source and links to redalyc.or
   assert.equal(out[0].doi, null);
 });
 
+// ── bioRxiv & medRxiv (via OpenAlex source pin) ────────────────────────
+
+test('searchBioRxiv: pins OpenAlex to the bioRxiv source, tags source=biorxiv, links to landing page', async () => {
+  setFetchHandler((url) => {
+    assert.ok(url.includes('api.openalex.org'), 'hits OpenAlex');
+    assert.ok(url.includes('S4306402567'), 'pins to the bioRxiv primary source id');
+    return Promise.resolve(jsonResponse({
+      results: [{
+        id: 'https://openalex.org/W777',
+        title: 'CRISPR base editing in vivo',
+        abstract_inverted_index: { Gene: [0], editing: [1] },
+        authorships: [{ author: { display_name: 'J. Doe' }, institutions: [{ display_name: 'MIT' }] }],
+        publication_year: 2023,
+        cited_by_count: 8,
+        doi: 'https://doi.org/10.1101/2023.01.01.000001',
+        open_access: { is_oa: true, oa_url: 'https://www.biorxiv.org/content/10.1101/2023.01.01.000001v1.full.pdf' },
+        primary_location: {
+          source: { id: 'https://openalex.org/S4306402567', display_name: 'bioRxiv' },
+          landing_page_url: 'https://www.biorxiv.org/content/10.1101/2023.01.01.000001v1',
+          pdf_url: null,
+        },
+      }],
+    }));
+  });
+  const out = await ss.searchBioRxiv('crispr base editing');
+  assert.equal(out.length, 1);
+  assert.equal(out[0].source, 'biorxiv');
+  assert.equal(out[0].venue, 'bioRxiv', 'venue label hard-coded');
+  assert.ok(out[0].htmlUrl.startsWith('https://www.biorxiv.org/content/'), 'links to the bioRxiv landing page');
+  assert.equal(out[0].abstract, 'Gene editing', 'inverted index reconstructed');
+  assert.equal(out[0].openAccess, true);
+  assert.equal(out[0].doi, '10.1101/2023.01.01.000001', 'doi prefix stripped');
+});
+
+test('searchMedRxiv: pins OpenAlex to the canonical medRxiv source (S3005729997), tags source=medrxiv', async () => {
+  setFetchHandler((url) => {
+    assert.ok(url.includes('S3005729997'), 'pins to the canonical medRxiv source id (not the empty S4306400573)');
+    return Promise.resolve(jsonResponse({
+      results: [{
+        id: 'https://openalex.org/W888',
+        title: 'COVID-19 vaccine efficacy',
+        authorships: [{ author: { display_name: 'A. Smith' } }],
+        publication_year: 2021,
+        open_access: { is_oa: true, oa_url: null },
+        primary_location: {
+          source: { id: 'https://openalex.org/S3005729997', display_name: 'medRxiv' },
+          landing_page_url: 'https://www.medrxiv.org/content/10.1101/2021.02.02.000002v1',
+          pdf_url: null,
+        },
+      }],
+    }));
+  });
+  const out = await ss.searchMedRxiv('covid vaccine efficacy');
+  assert.equal(out.length, 1);
+  assert.equal(out[0].source, 'medrxiv');
+  assert.equal(out[0].venue, 'medRxiv');
+  assert.ok(out[0].htmlUrl.startsWith('https://www.medrxiv.org/content/'));
+});
+
+test('PROVIDERS includes biorxiv and medrxiv', () => {
+  assert.ok(ss.PROVIDERS.includes('biorxiv'));
+  assert.ok(ss.PROVIDERS.includes('medrxiv'));
+});
+
 // ── Scopus (key-gated) ──────────────────────────────────────────────────
 
 test('searchScopus: returns [] without SCOPUS_API_KEY (no network call)', async () => {

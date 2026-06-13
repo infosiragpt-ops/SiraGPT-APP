@@ -83,7 +83,7 @@ const DEFAULT_TOTAL_TIMEOUT_MS = (() => {
   return Number.isFinite(n) && n > 0 ? n : 20000;
 })();
 
-const PROVIDERS = ['arxiv', 'openalex', 'semanticscholar', 'crossref', 'pubmed', 'europepmc', 'core', 'doaj', 'dblp', 'datacite', 'scielo', 'scopus', 'wos', 'redalyc'];
+const PROVIDERS = ['arxiv', 'openalex', 'semanticscholar', 'crossref', 'pubmed', 'europepmc', 'core', 'doaj', 'dblp', 'datacite', 'scielo', 'scopus', 'wos', 'redalyc', 'biorxiv', 'medrxiv'];
 
 function userAgent() {
   const email = process.env.SIRAGPT_RESEARCH_EMAIL || '';
@@ -513,6 +513,45 @@ async function searchRedalyc(query, opts = {}) {
   return items.map((w) => mapOpenAlexWork(w, 'redalyc', { venueLabel: 'Redalyc', preferLandingPage: true }));
 }
 
+// ── bioRxiv & medRxiv — Cold Spring Harbor preprint servers ─────────────
+// The official bioRxiv/medRxiv API is date-range based, not keyword-search,
+// so — exactly as Redalyc does — we query OpenAlex pinned to each server's
+// canonical source id (primary_location.source.id, so a hit's PRIMARY host is
+// the preprint server, not merely a work that was later co-hosted there).
+// Key-free, abstracts included (OpenAlex inverted index), htmlUrl points at the
+// preprint's landing page. These surface as distinct sources ('biorxiv' /
+// 'medrxiv') so the diversification pass treats them as the separate sources
+// they are. NB: the canonical medRxiv source is S3005729997 — the alternate
+// S4306400573 ("medRxiv (Cold Spring Harbor Laboratory)") holds 0 works.
+const BIORXIV_OPENALEX_SOURCE = 'S4306402567';
+const MEDRXIV_OPENALEX_SOURCE = 'S3005729997';
+
+async function searchPinnedOpenAlexSource(query, opts, { sourceId, source, venueLabel, label }) {
+  const limit = clampLimit(opts.limit);
+  const params = new URLSearchParams({
+    search: query,
+    per_page: String(limit),
+    filter: `primary_location.source.id:${sourceId}`,
+  });
+  if (process.env.SIRAGPT_RESEARCH_EMAIL) params.set('mailto', process.env.SIRAGPT_RESEARCH_EMAIL);
+  const url = `https://api.openalex.org/works?${params.toString()}`;
+  const json = await safeJson(url, { timeoutMs: opts.timeoutMs, signal: opts.signal, label });
+  const items = Array.isArray(json.results) ? json.results : [];
+  return items.map((w) => mapOpenAlexWork(w, source, { venueLabel, preferLandingPage: true }));
+}
+
+async function searchBioRxiv(query, opts = {}) {
+  return searchPinnedOpenAlexSource(query, opts, {
+    sourceId: BIORXIV_OPENALEX_SOURCE, source: 'biorxiv', venueLabel: 'bioRxiv', label: 'biorxiv',
+  });
+}
+
+async function searchMedRxiv(query, opts = {}) {
+  return searchPinnedOpenAlexSource(query, opts, {
+    sourceId: MEDRXIV_OPENALEX_SOURCE, source: 'medrxiv', venueLabel: 'medRxiv', label: 'medrxiv',
+  });
+}
+
 function invertedIndexToText(idx) {
   // OpenAlex stores abstracts as inverted indices. Reconstruct the sentence
   // by sorting positions, then mapping each position back to its word.
@@ -884,6 +923,8 @@ const PROVIDER_FUNCS = {
   scopus: searchScopus,
   wos: searchWebOfScience,
   redalyc: searchRedalyc,
+  biorxiv: searchBioRxiv,
+  medrxiv: searchMedRxiv,
 };
 
 /**
@@ -1008,6 +1049,8 @@ module.exports = {
   searchScopus,
   searchWebOfScience,
   searchRedalyc,
+  searchBioRxiv,
+  searchMedRxiv,
   diversifyBySource,
   PROVIDERS,
   _internal: {
