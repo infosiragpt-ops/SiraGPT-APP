@@ -967,6 +967,63 @@ redirects, sandbox límites/aislamiento, create_artifact e2e) ·
   llevaban bytes NUL literales (grep trataba el archivo como binario);
   reemplazados por la secuencia escapada backslash-u0000 en el fuente.
 
+## Codex Agent V2 — experiencia agéntica tipo Replit en `/code` (added 2026-06-13)
+
+Subsistema server-driven detrás del flag `CODEX_AGENT_V2` (off ⇒ `/api/codex/*`
+→ 404 salvo `/health`; worker no registrado; `/code` idéntico a hoy). Spec:
+`docs/codex-agent-ux.md`. Features trazables: `plans/codex-agent-v2/`.
+
+### Backend (`backend/src/services/codex/`)
+- `flags.js` — `isCodexV2Enabled(env)` (1/true/on).
+- Modelos Prisma `codex_*` (schema.prisma): CodexProject/Run/Event/Action/Checkpoint/RunMetric
+  + `CodexRun.prompt`. Migraciones `20260612120000_add_codex_tables`, `20260613100000_add_codex_run_prompt`.
+- `runner-client.js` — cliente HTTP del runner (init/write/read/exec/dev); `starter-files.js`
+  starter Vite determinista; `workspace.js` provisioning + `gitCommitAll`.
+- `project-service.js` — CRUD de proyectos scoped por userId; enriquece el error de provisioning con remediación.
+- `event-types.js` — catálogo SSE §5 + `isValidEvent`; `event-store.js` — append-only seq monotónico
+  (serializado por run + retry de colisión) + `listEvents` + `createSeqGate`; `redis-pubsub.js` pub/sub
+  `codex:run:<id>` best-effort; `run-access.js` ownership.
+- `run-queue.js` — cola `codex-runs` + worker flag-gated; `run-processor.js` lifecycle del job
+  (run_status, hard timeout, cancel cooperativo, transición terminal status-guarded); `run-service.js`
+  createRun/cancelRun/get/list (gates mode/ownership/planRunId/single-active-409); `boot-recovery.js`.
+- `agent-loop.js` — loop LLM↔herramientas (narrative/reasoning/action_* por groupId, budgets, cancelación,
+  closeBuild = checkpoint→diffstat→métrica→run_summary); `plan-mode.js`; `build-tools.js` (5 tools);
+  `llm-turn.js` (Cerebras + prompted-tool-calling); `action-store.js`.
+- `checkpoint-service.js` — commit/rollback/diff git real; `run-metrics.js` + `cost-resolver.js`
+  (provider_exact/openrouter_generation/estimated) + `pricing-policy.js` (multiplicador por plan);
+  `error-patterns.js` clasificador (bloqueante→action_required, benigno→anotación); `config-validator.js`.
+
+### Rutas (`backend/src/routes/codex.js`, montado `/api/codex` tras codex-runs legacy)
+`GET /health` (público) · `POST/GET /projects` · `GET /projects/:id` · `*/preview/{start,status,stop}` ·
+`POST/GET /projects/:id/runs` · `GET /projects/:id/runs/:runId` · `POST /runs/:id/cancel` ·
+`GET /runs/:id/stream` (SSE replay+live) · `POST /checkpoints/:id/rollback` · `GET /checkpoints/:id/diff` ·
+`GET /projects/:id/checkpoints`. Creación/lectura de runs scoped por proyecto para no sombrear el codex-runs legacy.
+
+### Frontend (`lib/codex/`, `components/codex/`)
+- `timeline-reducer.ts` (puro, dedup por seq, IDs idempotentes) · `run-stream.ts` (SSE fetch, reconexión
+  con backoff, corta en 4xx) · `use-codex-run.ts` · `use-stick-to-bottom.ts` · `codex-api.ts` ·
+  `use-codex-health.ts` · `model-tiers.ts` · `format.ts` · `workspace-tabs.ts`.
+- `run-timeline.tsx` + action-chips-row/reasoning-block · cards plan/checkpoint/run-summary/action-required ·
+  `composer.tsx` (+ plan-toggle/power-selector/dictation-button) · bottom-tab-bar/web-tab/checklist-tab ·
+  `codex-agent-panel.tsx`. Montado en `app/code/page.tsx` solo si `health.enabled`.
+
+### Tests
+~30 archivos `backend/tests/codex-*.test.js` (node --test) + `tests/lib/codex/*` y
+`tests/components/codex-*` (vitest, **`--pool=threads`** — el pool forks cuelga en esta máquina).
+E2E con git real en tmpdir: `codex-e2e-flow.test.js`. Golden replay: `tests/lib/codex/golden-replay.test.ts`.
+
+### Envs
+`CODEX_AGENT_V2` · `CODE_RUNNER_URL`/`CODE_RUNNER_DEV_URL` · `REDIS_URL` (cola+pubsub) ·
+`CODEX_WORKER_CONCURRENCY` (2) · `CODEX_RUN_TIMEOUT_MS` (15min) · `CODEX_MAX_STEPS` (24) ·
+`CODEX_MAX_TOOLS_PER_TURN` (4) · `CODEX_COST_PROMO_MULTIPLIER` · `CEREBRAS_API_KEY` (LLM).
+`logCodexConfig()` valida coherencia al boot.
+
+### Gotchas
+- vitest forks pool cuelga aquí → usar `--pool=threads`.
+- Tests e2e/integración deben `delete process.env.REDIS_URL` o el publish abre una conexión ioredis
+  que mantiene vivo el proceso (cuelga node --test).
+- git-real tests: `git config core.autocrlf false` en el repo temporal (Windows CRLF rompe la comparación byte-a-byte).
+
 ## Conexiones externas
 - Repo: https://github.com/SiraGPT-ORg/siraGPT
 - Remoto: `origin`

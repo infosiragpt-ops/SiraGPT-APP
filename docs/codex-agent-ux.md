@@ -212,3 +212,17 @@ Registro declarativo de patrones sobre logs y salidas de acciones:
 - Retención/archivado de eventos antiguos.
 - Colaboración multiusuario sobre el mismo workspace.
 - Ejecución del proyecto generado fuera del runner actual (WebContainers, etc.).
+
+## 14. Smoke de release (validación local con Docker)
+
+Guion para validar la experiencia V2 end-to-end con un modelo real barato (FlashGPT/Cerebras):
+
+1. **Levantar el runner**: `docker compose --profile opencode up -d runner` (volumen `opencode_workspace`, control API interna 4097, dev 5173).
+2. **Config**: en `.env.local` → `CODEX_AGENT_V2=1`, `REDIS_URL=...`, `CEREBRAS_API_KEY=...`, `CODE_RUNNER_URL=http://runner:4097`. Arrancar backend (`logCodexConfig` debe loguear "config OK") y frontend.
+3. **Crear proyecto**: en `/code` (con el flag on aparece el panel V2 ⚡ Codex) → "Nuevo". Verifica `status: ready`, `previewUrl` asignada y el commit inicial en el workspace.
+4. **Plan**: escribe "haz una landing de zapatos" → corrida `plan` → tarjeta de plan en `waiting_approval`.
+5. **Build**: "Aprobar y construir" → el timeline narra en 1ª persona (español), chips de acciones agrupadas, bloque de razonamiento con duración; al cierre tarjeta **Checkpoint made X ago** + **Worked for N minutes** con métricas reales.
+6. **Checkpoint**: *Changes* abre el diff; *View preview* abre la URL viva; *Rollback here* (con confirmación) restaura el workspace.
+7. **Recarga**: refresca la página a mitad de build → el timeline se reconstruye idéntico (replay desde `seq 0`) y sigue en vivo.
+8. **Errores accionables**: con créditos OpenRouter agotados (o key inválida) la corrida termina con la tarjeta **Acción requerida de su parte 🔴** (error crudo copiable + remediación).
+9. **Flag off**: `CODEX_AGENT_V2=0` → `/code` idéntico a hoy, `/api/codex/*` → 404 (salvo `/health`), worker no registrado.

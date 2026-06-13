@@ -413,6 +413,7 @@ const { startGoalCleanup, stopGoalCleanup } = require('./src/services/goal-clean
 // CODEX_AGENT_V2 flag (no-op when off), so it's always safe to call.
 const { startCodexWorker, closeCodexWorker, closeCodexQueue } = require('./src/services/codex/run-queue');
 const { recoverCodexRunsAfterBoot } = require('./src/services/codex/boot-recovery');
+const { logCodexConfig } = require('./src/services/codex/config-validator');
 const alerting = require('./src/services/alerting');
 const sloTracker = require('./src/services/slo-tracker');
 const shutdownRegistry = require('./src/utils/shutdown');
@@ -1243,8 +1244,9 @@ async function startServer() {
     startGoalCleanup({ logger });
     startAgentTaskWorker();
     startGoalWorker();
-    // Codex V2: recover interrupted runs then start the worker (both no-op when
-    // the flag is off). Fire-and-forget recovery never throws.
+    // Codex V2: validate config, recover interrupted runs, then start the worker
+    // (all no-op when the flag is off). Fire-and-forget recovery never throws.
+    try { logCodexConfig(process.env, logger); } catch { /* never blocks boot */ }
     recoverCodexRunsAfterBoot().catch((err) => logger.warn({ err: err.message }, 'codex_boot_recovery_failed'));
     startCodexWorker();
 
