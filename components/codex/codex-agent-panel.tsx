@@ -8,31 +8,35 @@
 
 import React, { useEffect, useState } from "react"
 import { toast } from "sonner"
-import { Loader2, Plus, Send } from "lucide-react"
-import { codexApi, type CodexProject, type CodexRun } from "@/lib/codex/codex-api"
+import { Loader2, Plus } from "lucide-react"
+import { codexApi, type CodexProject } from "@/lib/codex/codex-api"
 import { useCodexRun } from "@/lib/codex/use-codex-run"
 import { CodexRunTimeline } from "./run-timeline"
 import { PlanCard } from "./plan-card"
 import { CheckpointCard } from "./checkpoint-card"
 import { RunSummaryCard } from "./run-summary-card"
 import { ActionRequiredCard } from "./action-required-card"
+import { Composer, type ComposerSendPayload } from "./composer"
 import type { TimelineItem } from "@/lib/codex/timeline-reducer"
 
 export function CodexAgentPanel() {
   const [projects, setProjects] = useState<CodexProject[] | null>(null)
   const [project, setProject] = useState<CodexProject | null>(null)
   const [activeRunId, setActiveRunId] = useState<string | null>(null)
-  const [prompt, setPrompt] = useState("")
   const [busy, setBusy] = useState(false)
 
   const { state, status, active, markApproved } = useCodexRun(activeRunId)
 
   // Approve the plan → create the build run and switch the timeline to it.
+  // The plan card is only marked approved AFTER the build run is created, so a
+  // failed request never leaves the card collapsed-approved with no build run
+  // (req 5: no inconsistent UI state on error). The PlanCard's own busy spinner
+  // covers the in-flight state while we await.
   async function approvePlan() {
     if (!project || !activeRunId) return
-    markApproved()
     try {
       const build = await codexApi.approvePlan(project.id, activeRunId)
+      markApproved()
       setActiveRunId(build.id)
     } catch (e: any) {
       toast.error(e?.message || "No se pudo aprobar el plan")
@@ -100,18 +104,28 @@ export function CodexAgentPanel() {
     }
   }
 
-  async function send() {
-    if (!project || !prompt.trim()) return
+  // A composer send always starts a PLAN run (plan-first); the build run is
+  // created later by the plan card's approval. Attachments are inlined into the
+  // run prompt (feature 12 minimal scope). The chosen tier travels to the run.
+  async function send(payload: ComposerSendPayload) {
+    if (!project) return
+    const attachText = payload.attachments.map((a) => `--- ${a.name} ---\n${a.content}`).join("\n\n")
+    const fullPrompt = [attachText, payload.prompt].filter(Boolean).join("\n\n").trim()
+    if (!fullPrompt) return
     setBusy(true)
     try {
-      const run: CodexRun = await codexApi.createRun(project.id, { mode: "plan", prompt: prompt.trim() })
+      const run = await codexApi.createRun(project.id, { mode: "plan", prompt: fullPrompt, tier: payload.tier })
       setActiveRunId(run.id)
-      setPrompt("")
     } catch (e: any) {
       toast.error(e?.message || "No se pudo iniciar la corrida")
     } finally {
       setBusy(false)
     }
+  }
+
+  async function stop() {
+    if (!activeRunId || !active) return
+    try { await codexApi.cancelRun(activeRunId) } catch (e: any) { toast.error(e?.message || "No se pudo detener la corrida") }
   }
 
   if (projects === null) {
@@ -146,24 +160,7 @@ export function CodexAgentPanel() {
         )}
       </div>
 
-      <footer className="shrink-0 border-t border-white/10 p-3">
-        <div className="flex items-end gap-2 rounded-xl border border-white/10 bg-white/5 p-2">
-          <textarea
-            data-codex-composer
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send() } }}
-            placeholder="Make, test, iterate..."
-            rows={1}
-            disabled={!project || busy || active}
-            className="max-h-32 flex-1 resize-none bg-transparent text-sm outline-none placeholder:text-zinc-600"
-            style={{ fontSize: 16 }}
-          />
-          <button type="button" onClick={send} disabled={!project || busy || active || !prompt.trim()} className="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-600 text-white disabled:opacity-40 hover:bg-violet-500">
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-          </button>
-        </div>
-      </footer>
+      <Composer disabled={!project} busy={busy} active={active} onSend={send} onStop={stop} />
     </div>
   )
 }

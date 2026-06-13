@@ -124,6 +124,13 @@ function Action({ onClick, icon: Icon, label, spin }: { onClick: () => void; ico
 }
 
 function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
+  // Close on Escape (parity with backdrop click), matching the repo's dialog UX.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose() }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [onClose])
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
       <div className="w-full max-w-2xl rounded-xl border border-white/10 bg-zinc-900 p-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
