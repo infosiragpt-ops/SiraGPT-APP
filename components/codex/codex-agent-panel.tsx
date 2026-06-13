@@ -1,0 +1,115 @@
+"use client"
+
+// codex/codex-agent-panel — the Codex Agent V2 experience shell (feature 10),
+// mounted in /code behind the health flag. Owns project selection + the active
+// run, and renders the live timeline. Feature 11 adds the plan/checkpoint/
+// summary/action-required cards, feature 12 the replica composer, feature 13
+// the mobile tab bar. Minimal here so the timeline is exercisable end-to-end.
+
+import React, { useEffect, useState } from "react"
+import { toast } from "sonner"
+import { Loader2, Plus, Send } from "lucide-react"
+import { codexApi, type CodexProject, type CodexRun } from "@/lib/codex/codex-api"
+import { useCodexRun } from "@/lib/codex/use-codex-run"
+import { CodexRunTimeline } from "./run-timeline"
+
+export function CodexAgentPanel() {
+  const [projects, setProjects] = useState<CodexProject[] | null>(null)
+  const [project, setProject] = useState<CodexProject | null>(null)
+  const [activeRunId, setActiveRunId] = useState<string | null>(null)
+  const [prompt, setPrompt] = useState("")
+  const [busy, setBusy] = useState(false)
+
+  const { state, status, active } = useCodexRun(activeRunId)
+
+  useEffect(() => {
+    codexApi.listProjects().then(setProjects).catch(() => setProjects([]))
+  }, [])
+
+  // Pick the most recent active/last run for the selected project.
+  useEffect(() => {
+    if (!project) return
+    codexApi.listRuns(project.id).then((runs) => {
+      if (runs.length) setActiveRunId(runs[0].id)
+    }).catch(() => {})
+  }, [project])
+
+  async function createProject() {
+    setBusy(true)
+    try {
+      const p = await codexApi.createProject(`Proyecto ${(projects?.length || 0) + 1}`)
+      setProjects((cur) => [p, ...(cur || [])])
+      setProject(p)
+    } catch (e: any) {
+      toast.error(e?.message || "No se pudo crear el proyecto")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function send() {
+    if (!project || !prompt.trim()) return
+    setBusy(true)
+    try {
+      const run: CodexRun = await codexApi.createRun(project.id, { mode: "plan", prompt: prompt.trim() })
+      setActiveRunId(run.id)
+      setPrompt("")
+    } catch (e: any) {
+      toast.error(e?.message || "No se pudo iniciar la corrida")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (projects === null) {
+    return <div className="flex h-full items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Cargando…</div>
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-zinc-950 text-zinc-100">
+      <header className="flex h-11 shrink-0 items-center gap-2 border-b border-white/10 px-3">
+        <span className="text-sm font-semibold">⚡ Codex</span>
+        <select
+          className="ml-2 rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs"
+          value={project?.id || ""}
+          onChange={(e) => setProject(projects.find((p) => p.id === e.target.value) || null)}
+        >
+          <option value="">Selecciona un proyecto…</option>
+          {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+        <button type="button" onClick={createProject} disabled={busy} className="ml-auto flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs hover:bg-white/10">
+          <Plus className="h-3.5 w-3.5" /> Nuevo
+        </button>
+        {status && <span className="rounded-full bg-white/5 px-2 py-0.5 text-[10px] uppercase tracking-wide text-zinc-400">{status}</span>}
+      </header>
+
+      <div className="flex min-h-0 flex-1 flex-col">
+        {activeRunId ? (
+          <CodexRunTimeline state={state} />
+        ) : (
+          <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-zinc-500">
+            {project ? "Describe qué quieres construir para proponer un plan." : "Crea o selecciona un proyecto para empezar."}
+          </div>
+        )}
+      </div>
+
+      <footer className="shrink-0 border-t border-white/10 p-3">
+        <div className="flex items-end gap-2 rounded-xl border border-white/10 bg-white/5 p-2">
+          <textarea
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send() } }}
+            placeholder="Make, test, iterate..."
+            rows={1}
+            disabled={!project || busy || active}
+            className="max-h-32 flex-1 resize-none bg-transparent text-sm outline-none placeholder:text-zinc-600"
+            style={{ fontSize: 16 }}
+          />
+          <button type="button" onClick={send} disabled={!project || busy || active || !prompt.trim()} className="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-600 text-white disabled:opacity-40 hover:bg-violet-500">
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+          </button>
+        </div>
+      </footer>
+    </div>
+  )
+}

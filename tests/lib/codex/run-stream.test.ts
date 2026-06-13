@@ -1,0 +1,75 @@
+import { describe, it, expect } from 'vitest'
+import { createSSEParser, openRunStream } from '@/lib/codex/run-stream'
+
+describe('createSSEParser', () => {
+  it('parses complete data frames', () => {
+    const p = createSSEParser()
+    const out = p.push('data: {"seq":1,"type":"run_status","data":{"status":"running"}}\n\n')
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatchObject({ seq: 1, type: 'run_status' })
+  })
+
+  it('buffers partial frames across chunks', () => {
+    const p = createSSEParser()
+    expect(p.push('data: {"seq":1,')).toHaveLength(0) // incomplete
+    const out = p.push('"type":"narrative_delta","data":{"text":"hi"}}\n\n')
+    expect(out).toHaveLength(1)
+    expect(out[0].type).toBe('narrative_delta')
+  })
+
+  it('parses multiple frames in one chunk and skips malformed JSON', () => {
+    const p = createSSEParser()
+    const out = p.push('data: {"seq":1,"type":"a"}\n\ndata: not-json\n\ndata: {"seq":2,"type":"b"}\n\n')
+    expect(out.map((e) => e.type)).toEqual(['a', 'b'])
+  })
+
+  it('tolerates CRLF line endings', () => {
+    const p = createSSEParser()
+    const out = p.push('data: {"seq":1,"type":"x"}\r\n\r\n')
+    expect(out).toHaveLength(1)
+  })
+})
+
+function streamResponse(frames: string[]) {
+  const enc = new TextEncoder()
+  const body = new ReadableStream<Uint8Array>({
+    start(ctrl) {
+      for (const f of frames) ctrl.enqueue(enc.encode(f))
+      ctrl.close()
+    },
+  })
+  return { ok: true, status: 200, body } as unknown as Response
+}
+
+describe('openRunStream', () => {
+  it('emits events, tracks status, and ends on a terminal run_status', async () => {
+    const events: string[] = []
+    let finalStatus = ''
+    const fetchImpl = (async () => streamResponse([
+      'data: {"seq":1,"type":"run_status","data":{"status":"running"}}\n\n',
+      'data: {"seq":2,"type":"narrative_delta","data":{"text":"hola"}}\n\n',
+      'data: {"seq":3,"type":"run_status","data":{"status":"done"}}\n\n',
+    ])) as unknown as typeof fetch
+
+    const handle = openRunStream({
+      runId: 'run-1',
+      onEvent: (e) => events.push(e.type),
+      onStatus: (s) => { finalStatus = s },
+      fetchImpl,
+      token: 't',
+    })
+    await handle.done
+    expect(events).toContain('narrative_delta')
+    expect(finalStatus).toBe('done')
+  })
+
+  it('passes afterSeq and the token in the request URL', async () => {
+    let calledUrl = ''
+    const fetchImpl = (async (url: string) => { calledUrl = url; return streamResponse(['data: {"seq":6,"type":"run_status","data":{"status":"done"}}\n\n']) }) as unknown as typeof fetch
+    const handle = openRunStream({ runId: 'run-1', afterSeq: 5, onEvent: () => {}, fetchImpl, token: 'tok' })
+    await handle.done
+    expect(calledUrl).toContain('afterSeq=5')
+    expect(calledUrl).toContain('token=tok')
+    expect(calledUrl).toContain('/codex/runs/run-1/stream')
+  })
+})
