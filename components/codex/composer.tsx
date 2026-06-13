@@ -95,9 +95,9 @@ export function Composer({ disabled, busy, active, locale, onSend, onStop }: Com
           style={{ fontSize: 16 }}
         />
 
-        <div className="mt-1 flex items-center gap-2">
+        <div className="mt-1 flex flex-wrap items-center gap-2">
           <input ref={fileRef} type="file" accept=".txt,.md,.json,.csv,.js,.ts,.tsx,.py,.html,.css" multiple className="hidden" onChange={onFiles} />
-          <button type="button" onClick={() => fileRef.current?.click()} aria-label="Adjuntar archivo" className="flex h-9 w-9 items-center justify-center rounded-lg text-zinc-400 hover:bg-white/5">
+          <button type="button" onClick={() => fileRef.current?.click()} aria-label="Adjuntar archivo" className="flex h-9 min-h-[44px] w-9 min-w-[44px] items-center justify-center rounded-lg text-zinc-400 hover:bg-white/5 sm:min-h-0 sm:min-w-0">
             <Plus className="h-5 w-5" />
           </button>
           <PlanToggle active={planOnly} onToggle={setPlanOnly} />

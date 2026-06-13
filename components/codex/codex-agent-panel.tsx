@@ -24,6 +24,10 @@ export function CodexAgentPanel() {
   const [project, setProject] = useState<CodexProject | null>(null)
   const [activeRunId, setActiveRunId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // Latest composer Plan-toggle choice. When on, the run is planning-only: the
+  // plan card hides "Aprobar y construir" and approvePlan is a guarded no-op, so
+  // no build run can ever be created from a planning-only send (feature 12 acc.).
+  const [planOnly, setPlanOnly] = useState(false)
 
   const { state, status, active, markApproved } = useCodexRun(activeRunId)
 
@@ -34,6 +38,8 @@ export function CodexAgentPanel() {
   // covers the in-flight state while we await.
   async function approvePlan() {
     if (!project || !activeRunId) return
+    // Plan toggle on → planning-only: refuse to create the build run.
+    if (planOnly) return
     try {
       const build = await codexApi.approvePlan(project.id, activeRunId)
       markApproved()
@@ -55,6 +61,7 @@ export function CodexAgentPanel() {
             tasks={item.tasks}
             approved={item.approved}
             waiting={status === "waiting_approval"}
+            planOnly={planOnly}
             onApprove={approvePlan}
             onAdjust={() => document.querySelector<HTMLTextAreaElement>("[data-codex-composer]")?.focus()}
           />
@@ -112,6 +119,9 @@ export function CodexAgentPanel() {
     const attachText = payload.attachments.map((a) => `--- ${a.name} ---\n${a.content}`).join("\n\n")
     const fullPrompt = [attachText, payload.prompt].filter(Boolean).join("\n\n").trim()
     if (!fullPrompt) return
+    // Remember the Plan-toggle choice so the resulting plan card can suppress
+    // the build path while the toggle is active (req 2: forces planning-only).
+    setPlanOnly(payload.planOnly)
     setBusy(true)
     try {
       const run = await codexApi.createRun(project.id, { mode: "plan", prompt: fullPrompt, tier: payload.tier })

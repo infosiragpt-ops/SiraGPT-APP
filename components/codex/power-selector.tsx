@@ -18,7 +18,7 @@ export function PowerSelector({ value, onChange }: { value: CodexTier; onChange:
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-xs text-zinc-300 hover:bg-white/5"
+        className="flex min-h-[44px] items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-xs text-zinc-300 hover:bg-white/5 sm:min-h-0"
       >
         <Zap className="h-3.5 w-3.5 text-violet-400" />
         <span>{current.label}</span>

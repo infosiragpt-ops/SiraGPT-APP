@@ -16,6 +16,8 @@ export interface PlanCardProps {
   tasks: any[]
   approved: boolean
   waiting?: boolean
+  /** Plan toggle is on → the run is planning-only; do not offer "Aprobar y construir". */
+  planOnly?: boolean
   onApprove?: () => Promise<void> | void
   onAdjust?: () => void
 }
@@ -25,7 +27,7 @@ function label(x: any): string {
   return x?.title || x?.name || x?.label || JSON.stringify(x)
 }
 
-export function PlanCard({ architecture, pages, components, tasks, approved, waiting, onApprove, onAdjust }: PlanCardProps) {
+export function PlanCard({ architecture, pages, components, tasks, approved, waiting, planOnly, onApprove, onAdjust }: PlanCardProps) {
   const [open, setOpen] = useState(!approved)
   const [busy, setBusy] = useState(false)
 
@@ -59,13 +61,17 @@ export function PlanCard({ architecture, pages, components, tasks, approved, wai
           )}
 
           {!approved && (
-            <div className="mt-3 flex gap-2">
-              <button type="button" onClick={approve} disabled={busy} className="flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-500 disabled:opacity-50">
-                {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Hammer className="h-3.5 w-3.5" />} Aprobar y construir
-              </button>
+            <div className="mt-3 flex items-center gap-2">
+              {/* Plan toggle on → planning-only run: never offer the build path. */}
+              {!planOnly && (
+                <button type="button" onClick={approve} disabled={busy} className="flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-500 disabled:opacity-50">
+                  {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Hammer className="h-3.5 w-3.5" />} Aprobar y construir
+                </button>
+              )}
               <button type="button" onClick={onAdjust} className="flex items-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-xs text-zinc-300 hover:bg-white/5">
                 <Pencil className="h-3.5 w-3.5" /> Ajustar
               </button>
+              {planOnly && <span className="text-[10px] text-zinc-500">Solo planificación (Plan activo)</span>}
             </div>
           )}
         </div>

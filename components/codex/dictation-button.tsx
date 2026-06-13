@@ -61,7 +61,7 @@ export function DictationButton({ onTranscript, locale = "es-ES", recognitionCto
       onClick={toggle}
       aria-pressed={recording}
       aria-label={recording ? "Detener dictado" : "Dictar"}
-      className={`flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 transition-colors ${recording ? "bg-red-500/20 text-red-300" : "text-zinc-400 hover:bg-white/5"}`}
+      className={`flex h-8 min-h-[44px] w-8 min-w-[44px] items-center justify-center rounded-lg border border-white/10 transition-colors sm:min-h-0 sm:min-w-0 ${recording ? "bg-red-500/20 text-red-300" : "text-zinc-400 hover:bg-white/5"}`}
     >
       {recording ? <MicOff className="h-4 w-4 animate-pulse" /> : <Mic className="h-4 w-4" />}
     </button>
