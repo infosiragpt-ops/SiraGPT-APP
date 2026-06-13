@@ -26,7 +26,7 @@ import { Badge } from "@/components/ui/badge"
 import { DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import {
   ArrowLeft, Sliders, Brain, Bell, Sparkles, Plug, Clock, Database,
-  ShieldCheck, UserCircle2, Star, Check, Monitor, Moon, Sun,
+  ShieldCheck, UserCircle2, Star, Check, Monitor, Moon, MoonStar, Sun,
   LogOut, Download, Trash2, Github, Globe, Linkedin, Mail,
   ExternalLink, Search as SearchIcon, Camera, Plus,
   AlertTriangle, Laptop} from "lucide-react"
@@ -34,6 +34,7 @@ import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { apiClient } from "@/lib/api"
 import { useTranslations } from "next-intl"
+import { useTheme } from "next-themes"
 import { useRouter as useNextRouter } from "next/navigation"
 import { LOCALES } from "@/lib/i18n/locales"
 
@@ -384,9 +385,10 @@ function SelectRow({ title, desc, value, onChange, options, width = "w-[200px]" 
 // ────────────────────────────────────────────────────────────
 
 const THEME_PREVIEWS = [
-  { value: 'light',  label: 'Light',  icon: Sun,     bg: 'bg-white',               ring: 'ring-zinc-300',  dot: 'bg-zinc-900' },
-  { value: 'dark',   label: 'Dark',   icon: Moon,    bg: 'bg-zinc-900',            ring: 'ring-zinc-600',  dot: 'bg-white' },
-  { value: 'system', label: 'System', icon: Monitor, bg: 'bg-gradient-to-br from-white to-zinc-900', ring: 'ring-zinc-400', dot: 'bg-zinc-500' },
+  { value: 'light',    label: 'Light',     icon: Sun,      bg: 'bg-white',               ring: 'ring-zinc-300',  dot: 'bg-zinc-900' },
+  { value: 'dark',     label: 'Dark',      icon: Moon,     bg: 'bg-zinc-900',            ring: 'ring-zinc-600',  dot: 'bg-white' },
+  { value: 'midnight', label: 'Midnight',  icon: MoonStar, bg: 'bg-black',               ring: 'ring-zinc-800',  dot: 'bg-zinc-200' },
+  { value: 'system',   label: 'System',    icon: Monitor,  bg: 'bg-gradient-to-br from-white to-zinc-900', ring: 'ring-zinc-400', dot: 'bg-zinc-500' },
 ] as const
 
 const ACCENT_SWATCHES = [
@@ -410,8 +412,59 @@ const DENSITY_PREVIEWS = [
   { value: 'spacious',    label: 'Spacious',    gap: 'gap-[10px]',rowH: 'h-2' },
 ] as const
 
+// Shared with the header ThemeToggle: "Midnight" is an OLED dark flavour
+// tracked by this localStorage flag + the `.midnight` class (CSS scoped to
+// `.dark.midnight`); the boot script in app/layout.tsx applies it before
+// first paint. Keeping the same mechanism here keeps the settings picker and
+// the header toggle perfectly in sync.
+const MIDNIGHT_KEY = "sira-theme-midnight"
+const MIDNIGHT_EVENT = "sira:midnight"
+
+function readMidnightFlag(): boolean {
+  try { return localStorage.getItem(MIDNIGHT_KEY) === "1" } catch { return false }
+}
+
 function GeneralSection() {
   const { settings, update } = useSettings()
+  const { theme: ntTheme, setTheme } = useTheme()
+  const [mounted, setMounted] = React.useState(false)
+  const [isMidnight, setIsMidnight] = React.useState(false)
+  React.useEffect(() => {
+    setMounted(true)
+    setIsMidnight(readMidnightFlag())
+    // Stay in sync when midnight is toggled from the header ThemeToggle or
+    // another tab.
+    const sync = () => setIsMidnight(readMidnightFlag())
+    const onStorage = (e: StorageEvent) => { if (e.key === MIDNIGHT_KEY) sync() }
+    window.addEventListener(MIDNIGHT_EVENT, sync)
+    window.addEventListener("storage", onStorage)
+    return () => {
+      window.removeEventListener(MIDNIGHT_EVENT, sync)
+      window.removeEventListener("storage", onStorage)
+    }
+  }, [])
+
+  // The active card reflects the *live* applied theme (next-themes + the
+  // midnight flag), so it updates even when the theme is changed from the
+  // header toggle. Falls back to the persisted setting before mount (SSR-safe).
+  const activeTheme = !mounted
+    ? settings.theme
+    : isMidnight ? "midnight" : (ntTheme || settings.theme)
+
+  const pickTheme = (value: string) => {
+    const midnight = value === "midnight"
+    try {
+      if (midnight) localStorage.setItem(MIDNIGHT_KEY, "1")
+      else localStorage.removeItem(MIDNIGHT_KEY)
+    } catch { /* storage off — class still applies for the session */ }
+    document.documentElement.classList.toggle("midnight", midnight)
+    try { window.dispatchEvent(new Event(MIDNIGHT_EVENT)) } catch { /* noop */ }
+    setIsMidnight(midnight)
+    // Midnight is dark + the flag; everything else maps straight through.
+    setTheme(midnight ? "dark" : value)
+    update({ theme: (midnight ? "dark" : value) as any })
+  }
+
   return (
     <>
       {/* Minimalist top group — mirrors Claude's "General": language, style
@@ -450,15 +503,15 @@ function GeneralSection() {
         <div className="p-5">
           <div className="mb-3">
             <div className="text-sm font-medium">Theme</div>
-            <div className="text-xs text-muted-foreground">Tema claro, oscuro o el del sistema</div>
+            <div className="text-xs text-muted-foreground">Claro, oscuro, medianoche o el del sistema</div>
           </div>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {THEME_PREVIEWS.map(({ value, label, icon: Icon, bg, ring, dot }) => {
-              const active = settings.theme === value
+              const active = activeTheme === value
               return (
                 <button
                   key={value}
-                  onClick={() => update({ theme: value as any })}
+                  onClick={() => pickTheme(value)}
                   className={cn(
                     "relative rounded-xl border-2 overflow-hidden transition-all",
                     active ? "border-primary ring-2 ring-primary/20" : "border-border hover:border-border/80",

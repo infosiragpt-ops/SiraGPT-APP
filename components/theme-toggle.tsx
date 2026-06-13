@@ -26,12 +26,17 @@ function readMidnightFlag(): boolean {
   }
 }
 
+// Broadcast so the settings Theme picker (and any other tab) re-reads the
+// midnight flag live — keeps the toggle and Configuración perfectly in sync.
+const MIDNIGHT_EVENT = "sira:midnight"
+
 function applyMidnight(on: boolean) {
   try {
     if (on) localStorage.setItem(MIDNIGHT_KEY, "1")
     else localStorage.removeItem(MIDNIGHT_KEY)
   } catch { /* storage unavailable — class still applies for the session */ }
   document.documentElement.classList.toggle("midnight", on)
+  try { window.dispatchEvent(new Event(MIDNIGHT_EVENT)) } catch { /* noop */ }
 }
 
 const OPTIONS = [
@@ -53,6 +58,16 @@ export function ThemeToggle({ className }: ThemeToggleProps) {
   React.useEffect(() => {
     setMounted(true)
     setIsMidnight(readMidnightFlag())
+    // Stay in sync when midnight is toggled elsewhere (settings picker) or
+    // in another tab.
+    const sync = () => setIsMidnight(readMidnightFlag())
+    const onStorage = (e: StorageEvent) => { if (e.key === MIDNIGHT_KEY) sync() }
+    window.addEventListener(MIDNIGHT_EVENT, sync)
+    window.addEventListener("storage", onStorage)
+    return () => {
+      window.removeEventListener(MIDNIGHT_EVENT, sync)
+      window.removeEventListener("storage", onStorage)
+    }
   }, [])
 
   const selected: ThemeKey | null = !mounted
