@@ -6,9 +6,9 @@
 // summary/action-required cards, feature 12 the replica composer, feature 13
 // the mobile tab bar. Minimal here so the timeline is exercisable end-to-end.
 
-import React, { useEffect, useState } from "react"
+import React, { useEffect, useReducer, useState } from "react"
 import { toast } from "sonner"
-import { Loader2, Plus } from "lucide-react"
+import { Loader2, Plus, Folder } from "lucide-react"
 import { codexApi, type CodexProject } from "@/lib/codex/codex-api"
 import { useCodexRun } from "@/lib/codex/use-codex-run"
 import { CodexRunTimeline } from "./run-timeline"
@@ -17,7 +17,25 @@ import { CheckpointCard } from "./checkpoint-card"
 import { RunSummaryCard } from "./run-summary-card"
 import { ActionRequiredCard } from "./action-required-card"
 import { Composer, type ComposerSendPayload } from "./composer"
+import { BottomTabBar } from "./bottom-tab-bar"
+import { WebTab } from "./web-tab"
+import { ChecklistTab } from "./checklist-tab"
+import { McpServersCard } from "@/components/settings/McpServersCard"
+import { tabsReducer, initialTabsState, type CodexTabId } from "@/lib/codex/workspace-tabs"
 import type { TimelineItem } from "@/lib/codex/timeline-reducer"
+
+/** Tracks the md breakpoint so the tab bar only exists on mobile. */
+function useIsMobile(): boolean {
+  const [mobile, setMobile] = useState(false)
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 767px)")
+    const update = () => setMobile(mq.matches)
+    update()
+    mq.addEventListener("change", update)
+    return () => mq.removeEventListener("change", update)
+  }, [])
+  return mobile
+}
 
 export function CodexAgentPanel() {
   const [projects, setProjects] = useState<CodexProject[] | null>(null)
@@ -30,6 +48,14 @@ export function CodexAgentPanel() {
   const [planOnly, setPlanOnly] = useState(false)
 
   const { state, status, active, markApproved } = useCodexRun(activeRunId)
+
+  const isMobile = useIsMobile()
+  const [tabs, dispatchTabs] = useReducer(tabsReducer, undefined, () => initialTabsState())
+  // Accrue the Agent-tab badge when timeline events arrive while elsewhere.
+  useEffect(() => { if (state.lastSeq >= 0) dispatchTabs({ type: "agent_event" }) }, [state.lastSeq])
+  const selectTab = (tab: CodexTabId) => dispatchTabs({ type: "select", tab })
+  // On desktop the layout is the Agent view; the tab bar is mobile-only.
+  const activeTab: CodexTabId = isMobile ? tabs.active : "agent"
 
   // Approve the plan → create the build run and switch the timeline to it.
   // The plan card is only marked approved AFTER the build run is created, so a
@@ -161,16 +187,33 @@ export function CodexAgentPanel() {
       </header>
 
       <div className="flex min-h-0 flex-1 flex-col">
-        {activeRunId ? (
-          <CodexRunTimeline state={state} cardRenderer={renderCard} />
-        ) : (
-          <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-zinc-500">
-            {project ? "Describe qué quieres construir para proponer un plan." : "Crea o selecciona un proyecto para empezar."}
+        {activeTab === "agent" && (
+          <>
+            <div className="flex min-h-0 flex-1 flex-col">
+              {activeRunId ? (
+                <CodexRunTimeline state={state} cardRenderer={renderCard} />
+              ) : (
+                <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-zinc-500">
+                  {project ? "Describe qué quieres construir para proponer un plan." : "Crea o selecciona un proyecto para empezar."}
+                </div>
+              )}
+            </div>
+            <Composer disabled={!project} busy={busy} active={active} onSend={send} onStop={stop} />
+          </>
+        )}
+
+        {activeTab === "preview" && <WebTab url={project?.previewUrl ?? null} />}
+        {activeTab === "web" && <WebTab url={project?.previewUrl ?? null} />}
+        {activeTab === "connections" && <div className="overflow-y-auto p-3"><McpServersCard /></div>}
+        {activeTab === "checklist" && <ChecklistTab state={state} runStatus={status} />}
+        {activeTab === "files" && (
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 text-sm text-zinc-500">
+            <Folder className="h-6 w-6 opacity-50" /> El árbol de archivos del workspace se abre desde el editor de /code.
           </div>
         )}
       </div>
 
-      <Composer disabled={!project} busy={busy} active={active} onSend={send} onStop={stop} />
+      <BottomTabBar state={tabs} onSelect={selectTab} />
     </div>
   )
 }
