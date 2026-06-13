@@ -297,6 +297,44 @@ function rankPapers(papers, query) {
     .map((x) => x.p);
 }
 
+// Source diversification — the product premise is "search across diverse
+// sources", but a single provider with very precise title matches (e.g.
+// Semantic Scholar) can otherwise monopolise the entire top of the ranked
+// list. This is a SOFT, relevance-preserving interleave applied AFTER ranking:
+// it keeps the strongest paper(s) of each source up front but breaks long runs
+// from one provider so the first screenful actually reflects multiple sources.
+//
+// Algorithm: greedy stable pass over the already-ranked list. We always take
+// the best-ranked remaining paper, except once a source has appeared `maxRun`
+// times in a row we defer it and pull the next best-ranked paper from a
+// DIFFERENT source. If only the over-used source remains, we fall through and
+// take it anyway (no starvation, no dropped papers). With maxRun=2 the top-2
+// most-relevant papers always survive untouched; interleaving only kicks in at
+// the 3rd consecutive same-source paper. O(n²) worst case, but n is small
+// (a deduped page of results), so this is negligible.
+function diversifyBySource(papers, opts = {}) {
+  if (!Array.isArray(papers)) return [];
+  const maxRun = Number.isFinite(opts.maxRun) && opts.maxRun >= 1 ? Math.floor(opts.maxRun) : 2;
+  if (papers.length <= maxRun) return papers.slice();
+  const remaining = papers.slice();        // preserves the incoming relevance order
+  const out = [];
+  let lastSource = null;
+  let run = 0;
+  while (remaining.length) {
+    let idx = 0;                            // default: best-ranked remaining paper
+    if (run >= maxRun) {
+      const alt = remaining.findIndex((p) => (p && p.source) !== lastSource);
+      if (alt !== -1) idx = alt;            // else only same-source left → take it anyway
+    }
+    const [pick] = remaining.splice(idx, 1);
+    const src = pick && pick.source;
+    if (src === lastSource) run += 1;
+    else { lastSource = src; run = 1; }
+    out.push(pick);
+  }
+  return out;
+}
+
 // Normalise a free-text query: collapse whitespace and strip wrapping quotes
 // so cache keys are stable and providers get a clean term string.
 function normaliseQuery(q) {
@@ -943,7 +981,13 @@ async function search(query, opts = {}) {
 
   const deduped = dedupeByDoi(papers);
   const ranked = rankPapers(deduped, cleanQuery);
-  const result = { papers: ranked, errors, providers: chosen };
+  // Interleave sources so the top of the list reflects "diverse sources" rather
+  // than whichever provider returned the most precise title matches. Opt out
+  // with `diversify: false` to get the pure relevance order.
+  const papersOut = opts.diversify === false
+    ? ranked
+    : diversifyBySource(ranked, { maxRun: opts.maxRun });
+  const result = { papers: papersOut, errors, providers: chosen };
   searchCache.set(cleanQuery, opts, result);
   return result;
 }
@@ -964,10 +1008,11 @@ module.exports = {
   searchScopus,
   searchWebOfScience,
   searchRedalyc,
+  diversifyBySource,
   PROVIDERS,
   _internal: {
     dedupeByDoi, normaliseTitle, normaliseDoi, parseAtomFeed, invertedIndexToText,
     rankPapers, userAgent, normaliseQuery, queryTerms, relevanceScore, mergePaper,
-    isTransientError,
+    isTransientError, diversifyBySource,
   },
 };

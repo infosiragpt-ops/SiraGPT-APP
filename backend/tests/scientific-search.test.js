@@ -838,3 +838,90 @@ test('collect guard: non-array provider value surfaces as a per-provider error (
   assert.ok(errors.some((e) => e.provider === 'bad'), 'non-array object → error');
   assert.ok(errors.some((e) => e.provider === 'nul'), 'null value → error');
 });
+
+// ── Source diversification ────────────────────────────────────────────────
+const { diversifyBySource } = ss;
+
+test('diversifyBySource breaks a long single-source run while preserving relevance order at the top', () => {
+  // Incoming list is already ranked: 5 semanticscholar, then arxiv, then openalex.
+  const ranked = [
+    { source: 'semanticscholar', title: 's1' },
+    { source: 'semanticscholar', title: 's2' },
+    { source: 'semanticscholar', title: 's3' },
+    { source: 'semanticscholar', title: 's4' },
+    { source: 'semanticscholar', title: 's5' },
+    { source: 'arxiv', title: 'a1' },
+    { source: 'openalex', title: 'o1' },
+  ];
+  const out = diversifyBySource(ranked, { maxRun: 2 });
+  // No paper is dropped or duplicated.
+  assert.equal(out.length, ranked.length);
+  assert.deepEqual(
+    [...out].map((p) => p.title).sort(),
+    [...ranked].map((p) => p.title).sort(),
+  );
+  // The two most-relevant papers survive untouched at the top.
+  assert.equal(out[0].title, 's1');
+  assert.equal(out[1].title, 's2');
+  // No run of more than 2 consecutive identical sources anywhere.
+  let run = 1;
+  for (let i = 1; i < out.length; i += 1) {
+    run = out[i].source === out[i - 1].source ? run + 1 : 1;
+    assert.ok(run <= 2, `run of ${run} same-source at index ${i}`);
+  }
+  // The first 3 picks now span >1 source (diversity reached the first screenful).
+  assert.ok(new Set(out.slice(0, 3).map((p) => p.source)).size >= 2);
+});
+
+test('diversifyBySource does not starve when only one source remains', () => {
+  const ranked = [
+    { source: 'arxiv', title: 'a1' },
+    { source: 'semanticscholar', title: 's1' },
+    { source: 'semanticscholar', title: 's2' },
+    { source: 'semanticscholar', title: 's3' },
+  ];
+  const out = diversifyBySource(ranked, { maxRun: 2 });
+  assert.equal(out.length, 4, 'every paper is retained even with a same-source tail');
+  assert.deepEqual([...out].map((p) => p.title).sort(), ['a1', 's1', 's2', 's3']);
+});
+
+test('diversifyBySource is a no-op for lists at or below maxRun', () => {
+  const tiny = [{ source: 'arxiv', title: 'a' }, { source: 'arxiv', title: 'b' }];
+  assert.deepEqual(diversifyBySource(tiny, { maxRun: 2 }), tiny);
+  assert.deepEqual(diversifyBySource([], { maxRun: 2 }), []);
+  assert.deepEqual(diversifyBySource(null), []);
+});
+
+test('search diversifies sources by default and opts out with diversify:false', async () => {
+  searchCache.clear();
+  // arxiv + openalex each contribute multiple papers; without diversification
+  // the relevance/citation tiebreakers would cluster a source at the top.
+  setFetchHandler((url) => {
+    if (url.includes('arxiv.org')) {
+      return Promise.resolve(textResponse(`<feed>
+        <entry><id>http://arxiv.org/abs/A1</id><title>diversity probe alpha</title><published>2024-01-01</published></entry>
+        <entry><id>http://arxiv.org/abs/A2</id><title>diversity probe beta</title><published>2024-01-01</published></entry>
+        <entry><id>http://arxiv.org/abs/A3</id><title>diversity probe gamma</title><published>2024-01-01</published></entry>
+      </feed>`));
+    }
+    if (url.includes('openalex.org')) {
+      return Promise.resolve(jsonResponse({ results: [
+        { id: 'W1', title: 'diversity probe delta', publication_year: 2024 },
+        { id: 'W2', title: 'diversity probe epsilon', publication_year: 2024 },
+      ] }));
+    }
+    return Promise.resolve(jsonResponse({}));
+  });
+  const out = await ss.search('diversity probe', { providers: ['arxiv', 'openalex'] });
+  assert.equal(out.papers.length, 5);
+  // Default-on: no run of 3+ identical sources.
+  let run = 1;
+  for (let i = 1; i < out.papers.length; i += 1) {
+    run = out.papers[i].source === out.papers[i - 1].source ? run + 1 : 1;
+    assert.ok(run <= 2, 'default search interleaves sources');
+  }
+
+  searchCache.clear();
+  const raw = await ss.search('diversity probe', { providers: ['arxiv', 'openalex'], diversify: false });
+  assert.equal(raw.papers.length, 5, 'opt-out keeps every paper');
+});
