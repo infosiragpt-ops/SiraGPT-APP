@@ -46,6 +46,9 @@ export type SettingsShape = {
   defaultModel: string | null
   showAdditionalModels: boolean
   streamResponses: boolean
+  // GENERAL — response speed/depth preference (persisted; mirrors Claude's
+  // "Velocidad"). thorough = más reflexiva · normal · fast = más directa.
+  responseSpeed: "thorough" | "normal" | "fast"
 
   // GENERAL — accessibility
   keyboardShortcuts: boolean
@@ -120,6 +123,7 @@ export const DEFAULT_SETTINGS: SettingsShape = {
   defaultModel: null,
   showAdditionalModels: true,
   streamResponses: true,
+  responseSpeed: "normal",
   keyboardShortcuts: true,
   reducedMotion: false,
   highContrast: false,

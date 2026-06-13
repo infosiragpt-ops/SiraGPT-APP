@@ -414,6 +414,37 @@ function GeneralSection() {
   const { settings, update } = useSettings()
   return (
     <>
+      {/* Minimalist top group — mirrors Claude's "General": language, style
+          and response speed as three clean rows. All wired to real,
+          auto-saved settings. */}
+      <SectionCard title="General">
+        <InterfaceLanguageRow />
+        <SelectRow
+          title="Estilo"
+          desc="Cómo se comunica siraGPT contigo"
+          value={settings.baseStyle}
+          onChange={(v) => update({ baseStyle: v as any, preferredTone: v === "default" ? null : v })}
+          options={[
+            { value: "default", label: "Predeterminado" },
+            { value: "formal", label: "Formal" },
+            { value: "casual", label: "Casual" },
+            { value: "technical", label: "Técnico" },
+            { value: "academic", label: "Académico" },
+          ]}
+        />
+        <SelectRow
+          title="Velocidad"
+          desc="Equilibrio entre rapidez y profundidad de las respuestas"
+          value={settings.responseSpeed}
+          onChange={(v) => update({ responseSpeed: v as any })}
+          options={[
+            { value: "fast", label: "Rápida" },
+            { value: "normal", label: "Normal" },
+            { value: "thorough", label: "Reflexiva" },
+          ]}
+        />
+      </SectionCard>
+
       <SectionCard title="Display" desc="Apariencia visual de la aplicación">
         {/* Theme — 3 visual cards */}
         <div className="p-5">
@@ -544,7 +575,6 @@ function GeneralSection() {
       </SectionCard>
 
       <SectionCard title="Language & region" desc="Formato de fecha, zona horaria e idioma">
-        <InterfaceLanguageRow />
         <SelectRow
           title="Spoken language"
           desc="Para reconocimiento de voz"
@@ -880,20 +910,7 @@ function PersonalizationSection() {
 
   return (
     <>
-      <div className="text-sm text-muted-foreground">Configura el estilo y el tono que siraGPT utiliza al responder.</div>
-
-      <SectionCard title="Estilo de respuesta">
-        <SelectRow
-          title="Estilo base" desc="Cómo se comunicará siraGPT contigo"
-          value={settings.baseStyle}
-          onChange={(v) => update({ baseStyle: v as any, preferredTone: v === "default" ? null : v })}
-          options={[
-            { value: "default", label: "Default" }, { value: "formal", label: "Formal" },
-            { value: "casual", label: "Casual" }, { value: "technical", label: "Técnico" },
-            { value: "academic", label: "Académico" },
-          ]}
-        />
-      </SectionCard>
+      <div className="text-sm text-muted-foreground">Configura el estilo y el tono que siraGPT utiliza al responder. El <strong>estilo</strong> base ahora vive en <em>General</em>.</div>
 
       <SectionCard title="Instrucciones personalizadas" desc="Se inyectan en cada conversación">
         <div className="p-5 space-y-4">
