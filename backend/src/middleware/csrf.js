@@ -41,6 +41,9 @@ const TOKEN_COOKIE = 'csrf_token';
 const SECRET_COOKIE = '_csrf_secret';
 const HEADER_NAME = 'x-csrf-token';
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+// How long a stateless self-signed token stays valid. Bounds the replay
+// window for the cookieless fallback path (see makeStatelessToken).
+const STATELESS_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 function getPepper() {
   return (
@@ -59,6 +62,64 @@ function hashToken(token, pepper = getPepper()) {
 
 function generateToken() {
   return crypto.randomBytes(TOKEN_BYTES).toString('hex');
+}
+
+/**
+ * Mint a self-signed CSRF token: `<nonce>.<ts>.<sig>` where
+ * `sig = HMAC(nonce.ts, pepper)`. Unlike a bare random token this can be
+ * validated WITHOUT the httpOnly secret cookie — the server just recomputes
+ * the HMAC. That makes it work in cross-site iframe contexts (Replit canvas
+ * preview) and browsers that block third-party cookies (Safari ITP), where
+ * the `_csrf_secret` cookie never reaches the backend.
+ *
+ * NOTE: the token is GLOBAL — the signature proves it was minted by this
+ * server but does NOT bind it to a session/user. On its own that is not enough
+ * for CSRF defense (an attacker can mint one too). It is only safe because
+ * requireCsrf honors the stateless path EXCLUSIVELY from the X-CSRF-Token
+ * header, which a cross-site attacker cannot set without a CORS preflight the
+ * server rejects for unknown origins. A 24h embedded timestamp bounds replay.
+ */
+function makeStatelessToken() {
+  const nonce = crypto.randomBytes(TOKEN_BYTES).toString('hex');
+  const ts = Date.now().toString(36);
+  const payload = `${nonce}.${ts}`;
+  const sig = hashToken(payload);
+  return `${payload}.${sig}`;
+}
+
+// Tolerance for clock drift between the issuing and verifying clocks. Bounds
+// how far in the "future" an embedded timestamp may be before we reject it as
+// malformed/forged (a legitimate token can never be issued in the future).
+const STATELESS_CLOCK_SKEW_MS = 5 * 60 * 1000;
+
+/**
+ * Verify a self-signed token minted by makeStatelessToken. Returns true only
+ * when the HMAC signature matches AND the embedded timestamp is within the
+ * `[now - maxAgeMs, now + skew]` window. Old-format bare-hex tokens (no dots)
+ * return false.
+ *
+ * SECURITY: a valid signature only proves the token was minted by THIS server
+ * — it is NOT bound to any session/user. Callers MUST therefore only honor a
+ * stateless token submitted via a custom request header (X-CSRF-Token), never
+ * from a body/form field. A custom header cannot be set on a cross-site
+ * request without a CORS preflight (which the server rejects for unknown
+ * origins), so the header requirement is what preserves CSRF protection. See
+ * requireCsrf for the enforcement.
+ */
+function verifyStatelessToken(token, maxAgeMs = STATELESS_MAX_AGE_MS) {
+  if (typeof token !== 'string') return false;
+  const parts = token.split('.');
+  if (parts.length !== 3) return false;
+  const [nonce, ts, sig] = parts;
+  if (!nonce || !ts || !sig) return false;
+  const expectedSig = hashToken(`${nonce}.${ts}`);
+  if (!timingSafeEqual(expectedSig, sig)) return false;
+  const issuedAt = parseInt(ts, 36);
+  if (!Number.isFinite(issuedAt)) return false;
+  const age = Date.now() - issuedAt;
+  if (age > maxAgeMs) return false; // expired
+  if (age < -STATELESS_CLOCK_SKEW_MS) return false; // issued in the future → forged/malformed
+  return true;
 }
 
 function timingSafeEqual(a, b) {
@@ -123,7 +184,7 @@ function hasBearerAuth(req) {
  *     this helper generates a brand-new random value.
  */
 function issueCsrfToken(res) {
-  const token = generateToken();
+  const token = makeStatelessToken();
   const secret = hashToken(token);
   // In the Replit dev environment the app is previewed inside a cross-site
   // iframe (top-level origin: replit.com, iframe origin: *.riker.replit.dev).
@@ -164,9 +225,19 @@ function csrfTokenRoute(req, res) {
  * state-mutating methods. Safe methods (GET/HEAD/OPTIONS) and
  * bearer-authenticated requests are passed through.
  *
- * Token lookup order:
- *   1. `X-CSRF-Token` header (preferred — easier for SPA clients)
- *   2. `_csrf` body field (for traditional form posts)
+ * Two validation paths:
+ *   1. Double-submit cookie (PRIMARY) — accepts the token from EITHER the
+ *      `X-CSRF-Token` header OR the `_csrf`/`csrfToken` body field, because
+ *      security comes from the un-readable httpOnly `_csrf_secret` cookie that
+ *      must round-trip. Used whenever the browser stores cookies (direct
+ *      top-level access, e.g. production siragpt.com).
+ *   2. Stateless self-signed token (FALLBACK) — used when the secret cookie
+ *      never arrives (cross-site iframe previews, Safari ITP). Only honored
+ *      from the `X-CSRF-Token` HEADER, never from the body/form field: a
+ *      stateless token is global (not session-bound), so accepting it from a
+ *      body field would let an attacker mint a valid token and replay it via a
+ *      plain cross-site <form> POST. A custom header requires a CORS preflight
+ *      the server rejects for unknown origins, which is what keeps this safe.
  *
  * On failure the request is rejected with 403 and a stable
  * `error: 'csrf_invalid'` code so the frontend can refresh its token.
@@ -187,16 +258,39 @@ function requireCsrf(req, res, next) {
 
   const secret = req.cookies && req.cookies[SECRET_COOKIE];
 
-  if (!submitted || !secret) {
+  if (!submitted) {
     return rejectCsrf(req, res, 'missing_token');
   }
 
-  const expected = hashToken(submitted);
-  if (!timingSafeEqual(expected, secret)) {
-    return rejectCsrf(req, res, 'mismatch');
+  // Primary path — double-submit cookie. Strongest defense: requires the
+  // httpOnly _csrf_secret cookie to round-trip, which it does whenever the
+  // browser stores cookies (direct top-level access, e.g. production
+  // siragpt.com).
+  if (secret) {
+    const expected = hashToken(submitted);
+    if (timingSafeEqual(expected, secret)) {
+      return next();
+    }
+    // Secret present but mismatched — fall through to the stateless check
+    // below before rejecting, so a freshly-issued self-signed token still
+    // validates even if the browser kept a stale secret cookie.
   }
 
-  return next();
+  // Fallback path — stateless self-signed token. Required when the
+  // _csrf_secret cookie never arrives: cross-site iframe previews (Replit
+  // canvas) and browsers that block third-party cookies (Safari ITP).
+  //
+  // CRITICAL: only the HEADER token is eligible here, never the body/form
+  // field. A stateless token is global (not session-bound), so an attacker can
+  // mint a valid one for themselves; if it were accepted from a body field they
+  // could replay it via a plain cross-site <form> POST and bypass CSRF. A
+  // custom header cannot be set cross-site without a CORS preflight (rejected
+  // for unknown origins), which is what keeps this path safe.
+  if (headerToken && verifyStatelessToken(headerToken)) {
+    return next();
+  }
+
+  return rejectCsrf(req, res, secret ? 'mismatch' : 'missing_token');
 }
 
 module.exports = {
@@ -205,6 +299,8 @@ module.exports = {
   requireCsrf,
   hashToken,
   generateToken,
+  makeStatelessToken,
+  verifyStatelessToken,
   hasBearerAuth,
   readHeader,
   rejectCsrf,

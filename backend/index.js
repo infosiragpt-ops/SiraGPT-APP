@@ -1217,6 +1217,16 @@ async function startServer() {
                 'cors_allowlist_empty_in_production',
             );
         }
+        // SECURITY: the CSRF stateless-header fallback (csrf.js) is only safe
+        // while CORS rejects unknown origins — a wildcard origin with
+        // credentials would let any site send X-CSRF-Token cross-site and
+        // bypass CSRF. Loudly flag this dangerous combo in production.
+        if (process.env.NODE_ENV === 'production' && ALLOWED_ORIGINS.includes('*')) {
+            logger.warn(
+                { hint: 'replace CORS_ORIGINS=* with an explicit allowlist; wildcard + credentials defeats CSRF protection' },
+                'cors_wildcard_origin_in_production_csrf_risk',
+            );
+        }
     });
 
     recoverAgentTasksAfterBoot({ logger });
