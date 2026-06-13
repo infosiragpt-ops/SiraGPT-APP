@@ -41,7 +41,15 @@ const PATTERNS = [
   {
     id: 'missing_api_key',
     severity: 'blocking',
-    match: (t) => /(api key|unauthorized|invalid api key|missing api key)/i.test(t) || /\b401\b/.test(t),
+    // Auth phrases (space/underscore/dash tolerant) match outright; a bare 401
+    // ONLY counts when it carries an HTTP/auth/status context word. This avoids
+    // an expensive false positive (spec req. 5): a stray "401" in unrelated tool
+    // output — an asset path (img-401.png), an audit count ("401 packages") —
+    // must NOT raise a blocking "missing API key" card that kills the run.
+    match: (t) =>
+      /(api[ _-]?key|unauthorized|invalid[ _-]?api[ _-]?key|missing[ _-]?api[ _-]?key|invalid[ _-]?api|invalid[ _-]?key)/i.test(t) ||
+      (/(?:^|[^.\d])401(?=\D|$)/.test(t) &&
+        /(http|status|code|c[oó]digo|unauthor|error|auth|response|respuesta|token|key|clave|credential|credencial|forbidden)/i.test(t)),
     title: 'Falta o es inválida una API key del proveedor',
     blockedCapabilities: ['Generación con el proveedor afectado'],
     remediationUrl: '/settings',

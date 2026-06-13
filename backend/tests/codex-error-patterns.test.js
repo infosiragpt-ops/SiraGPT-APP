@@ -50,14 +50,37 @@ test('quota_exhausted matches the internal credit 402 (not OpenRouter)', () => {
   assert.equal(c.pattern.remediationUrl, '/api/free-ia/plans');
 });
 
+test('quota_exhausted does NOT match a 402 that names OpenRouter, nor a plan mention without 402', () => {
+  // A 402 that names OpenRouter must NOT be routed to the internal quota pattern.
+  assert.notEqual(classifyText('OpenRouter 402: plan limit')?.pattern.id, 'quota_exhausted');
+  // A "plan" mention with no 402 status is not a quota error at all.
+  assert.equal(classifyText('switching to the PRO plan now'), null);
+});
+
 test('missing_api_key matches 401/unauthorized/api key errors', () => {
   assert.equal(classifyText('401 Unauthorized: invalid api key').pattern.id, 'missing_api_key');
   assert.equal(classifyText('Error: missing API key for provider').pattern.id, 'missing_api_key');
+  assert.equal(classifyText('HTTP 401: invalid_api_key').pattern.id, 'missing_api_key');
+});
+
+test('missing_api_key does NOT fire on a bare 401 without auth context (no expensive false positive)', () => {
+  // A stray "401" in unrelated tool output must NOT raise a blocking card.
+  assert.equal(classifyText('GET /assets/img-401.png 200 OK'), null);
+  assert.equal(classifyText('audited 401 packages, 0 vulnerabilities'), null);
+  assert.equal(classifyText('discussing 401k retirement content'), null);
+  assert.equal(classifyText('wrote 401 bytes to disk'), null);
 });
 
 test('provision_failed matches runner-unreachable signals', () => {
   assert.equal(classifyText('RunnerError: runner unreachable: fetch failed').pattern.id, 'provision_failed');
   assert.equal(classifyText('connect ECONNREFUSED 127.0.0.1:4097').pattern.id, 'provision_failed');
+});
+
+test('provision_failed does NOT match an ECONNREFUSED on a non-runner port', () => {
+  // The runner port 4097 is what signals "sandbox down"; an ECONNREFUSED to some
+  // other host/port is not auto-classified as a runner provisioning failure.
+  assert.notEqual(classifyText('connect ECONNREFUSED 127.0.0.1:9999')?.pattern?.id, 'provision_failed');
+  assert.equal(classifyText('connect ECONNREFUSED 127.0.0.1:9999'), null);
 });
 
 test('econnrefused_boot is benign ONLY inside the boot window', () => {
@@ -75,6 +98,13 @@ test('econnrefused_boot is benign ONLY inside the boot window', () => {
 test('peer_deps_warn and vite_port_retry are benign', () => {
   assert.equal(classifyText('npm WARN deprecated foo@1.0.0').pattern.id, 'peer_deps_warn');
   assert.equal(classifyText('Port 5173 is in use, trying another one instead').pattern.id, 'vite_port_retry');
+});
+
+test('peer_deps_warn and vite_port_retry do NOT match near-miss clean output', () => {
+  // A plain "npm install" line with no WARN/deprecation is not a diagnostic.
+  assert.equal(classifyText('npm install completed in 4.2s'), null);
+  // A successful "Local: http://localhost:5173/" line is not a port-retry.
+  assert.equal(classifyText('Local:   http://localhost:5173/'), null);
 });
 
 test('a blocking pattern wins over a benign one when both match', () => {
