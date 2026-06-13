@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { renderWithIntl as render, screen, fireEvent } from '../lib/codex/intl-test-utils'
 import { BottomTabBar } from '@/components/codex/bottom-tab-bar'
 import { ChecklistTab } from '@/components/codex/checklist-tab'
 import { WebTab } from '@/components/codex/web-tab'

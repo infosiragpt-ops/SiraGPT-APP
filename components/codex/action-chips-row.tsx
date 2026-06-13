@@ -7,6 +7,7 @@
 
 import React, { useState } from "react"
 import clsx from "clsx"
+import { useTranslations } from "next-intl"
 import { ChevronDown, ChevronRight, Terminal, FileText, FilePen, Globe, Sparkles, Check, X } from "lucide-react"
 import { DotmCircular15 } from "@/components/ui/dotm-circular-15"
 import { CustomCodeBlock } from "@/components/ui/custom-code-block"
@@ -30,6 +31,7 @@ function StatusGlyph({ status }: { status: ActionItem["status"] }) {
 }
 
 export function ActionChipsRow({ actions }: { actions: ActionItem[] }) {
+  const t = useTranslations("codex")
   const [expanded, setExpanded] = useState(false)
   const running = actions.some((a) => a.status === "running")
   const errored = actions.some((a) => a.status === "error")
@@ -53,7 +55,7 @@ export function ActionChipsRow({ actions }: { actions: ActionItem[] }) {
             return <Icon key={i} className="h-3.5 w-3.5" />
           })}
         </span>
-        <span className="tabular-nums">{n} {n === 1 ? "acción" : "acciones"}</span>
+        <span className="tabular-nums">{t("timeline.actions", { count: n })}</span>
         {running && <DotmCircular15 className="h-3 w-3 text-violet-400" />}
       </button>
 

@@ -7,6 +7,7 @@
 
 import React, { useEffect, useState } from "react"
 import { toast } from "sonner"
+import { useTranslations } from "next-intl"
 import { GitCommitHorizontal, History, FileDiff, Eye, Loader2, X } from "lucide-react"
 import { codexApi, type CodexCheckpointDiff } from "@/lib/codex/codex-api"
 import { relativeTime } from "@/lib/codex/format"
@@ -22,6 +23,7 @@ export interface CheckpointCardProps {
 }
 
 export function CheckpointCard({ checkpointId, commitSha, title, createdAt, projectId, previewUrl, onRolledBack }: CheckpointCardProps) {
+  const t = useTranslations("codex")
   const [, setTick] = useState(0)
   const [confirming, setConfirming] = useState(false)
   const [rolling, setRolling] = useState(false)
@@ -38,12 +40,12 @@ export function CheckpointCard({ checkpointId, commitSha, title, createdAt, proj
   async function doRollback() {
     setRolling(true)
     try {
-      const r = await codexApi.rollbackCheckpoint(checkpointId)
-      toast.success(`Rollback al checkpoint ${commitSha.slice(0, 7)}${r.restarted ? " (dev reiniciado)" : ""}`)
+      await codexApi.rollbackCheckpoint(checkpointId)
+      toast.success(t("checkpoint.rolledBack", { sha: commitSha.slice(0, 7) }))
       setConfirming(false)
       onRolledBack?.()
     } catch (e: any) {
-      toast.error(e?.message || "El rollback falló")
+      toast.error(e?.message || t("checkpoint.rollbackFailed"))
     } finally {
       setRolling(false)
     }
@@ -54,7 +56,7 @@ export function CheckpointCard({ checkpointId, commitSha, title, createdAt, proj
     try {
       setDiff(await codexApi.getCheckpointDiff(checkpointId))
     } catch (e: any) {
-      toast.error(e?.message || "No se pudo cargar el diff")
+      toast.error(e?.message || t("errors.loadDiff"))
     } finally {
       setLoadingDiff(false)
     }
@@ -68,7 +70,7 @@ export function CheckpointCard({ checkpointId, commitSha, title, createdAt, proj
       const r = await codexApi.startPreview(projectId)
       if (r.devUrl) window.open(r.devUrl, "_blank", "noopener")
     } catch (e: any) {
-      toast.error(e?.message || "No se pudo abrir el preview")
+      toast.error(e?.message || t("errors.openPreview"))
     } finally {
       setOpening(false)
     }
@@ -84,31 +86,31 @@ export function CheckpointCard({ checkpointId, commitSha, title, createdAt, proj
       </div>
 
       <div className="mt-2 flex flex-wrap gap-2">
-        <Action onClick={() => setConfirming(true)} icon={History} label="Rollback here" />
-        <Action onClick={showDiff} icon={loadingDiff ? Loader2 : FileDiff} label="Changes" spin={loadingDiff} />
-        <Action onClick={viewPreview} icon={opening ? Loader2 : Eye} label="View preview" spin={opening} />
+        <Action onClick={() => setConfirming(true)} icon={History} label={t("checkpoint.rollback")} />
+        <Action onClick={showDiff} icon={loadingDiff ? Loader2 : FileDiff} label={t("checkpoint.changes")} spin={loadingDiff} />
+        <Action onClick={viewPreview} icon={opening ? Loader2 : Eye} label={t("checkpoint.viewPreview")} spin={opening} />
       </div>
 
       {confirming && (
-        <Modal onClose={() => setConfirming(false)} title="¿Hacer rollback a este checkpoint?">
-          <p className="text-sm text-zinc-300">Se descartarán <strong>todos los cambios posteriores</strong> a este commit en el workspace. Esta acción no se puede deshacer.</p>
+        <Modal onClose={() => setConfirming(false)} title={t("checkpoint.confirmTitle")}>
+          <p className="text-sm text-zinc-300">{t("checkpoint.confirmBody")}</p>
           <div className="mt-4 flex justify-end gap-2">
-            <button onClick={() => setConfirming(false)} className="rounded-lg border border-white/10 px-3 py-1.5 text-sm text-zinc-300 hover:bg-white/5">Cancelar</button>
+            <button onClick={() => setConfirming(false)} className="rounded-lg border border-white/10 px-3 py-1.5 text-sm text-zinc-300 hover:bg-white/5">{t("checkpoint.cancel")}</button>
             <button onClick={doRollback} disabled={rolling} className="flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-50">
-              {rolling && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Hacer rollback
+              {rolling && <Loader2 className="h-3.5 w-3.5 animate-spin" />} {t("checkpoint.confirm")}
             </button>
           </div>
         </Modal>
       )}
 
       {diff && (
-        <Modal onClose={() => setDiff(null)} title={`Cambios · +${diff.additions} −${diff.deletions} · ${diff.filesChanged} archivos`}>
+        <Modal onClose={() => setDiff(null)} title={t("checkpoint.diffTitle", { additions: diff.additions, deletions: diff.deletions, files: diff.filesChanged })}>
           <pre className="max-h-[60vh] overflow-auto rounded-lg bg-black/40 p-3 text-[11px] leading-relaxed">
             {diff.diff.split("\n").map((line, i) => (
               <div key={i} className={line.startsWith("+") && !line.startsWith("+++") ? "text-emerald-400" : line.startsWith("-") && !line.startsWith("---") ? "text-red-400" : line.startsWith("@@") ? "text-cyan-400" : "text-zinc-400"}>{line || " "}</div>
             ))}
           </pre>
-          {diff.truncated && <p className="mt-1 text-xs text-amber-400">Diff truncado (muy largo).</p>}
+          {diff.truncated && <p className="mt-1 text-xs text-amber-400">{t("checkpoint.truncated")}</p>}
         </Modal>
       )}
     </div>

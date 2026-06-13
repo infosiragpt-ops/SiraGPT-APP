@@ -7,22 +7,24 @@
 
 import React from "react"
 import clsx from "clsx"
+import { useTranslations } from "next-intl"
 import { Eye, Bot, Globe, Plug, ListChecks, Folder } from "lucide-react"
 import type { CodexTabId, TabsState } from "@/lib/codex/workspace-tabs"
 
-const TABS: { id: CodexTabId; label: string; icon: any }[] = [
-  { id: "preview", label: "Preview", icon: Eye },
-  { id: "agent", label: "Agent", icon: Bot },
-  { id: "web", label: "Web", icon: Globe },
-  { id: "connections", label: "Conexiones", icon: Plug },
-  { id: "checklist", label: "Checklist", icon: ListChecks },
-  { id: "files", label: "Archivos", icon: Folder },
+const TABS: { id: CodexTabId; labelKey: string; icon: any }[] = [
+  { id: "preview", labelKey: "tabs.preview", icon: Eye },
+  { id: "agent", labelKey: "tabs.agent", icon: Bot },
+  { id: "web", labelKey: "tabs.web", icon: Globe },
+  { id: "connections", labelKey: "tabs.connections", icon: Plug },
+  { id: "checklist", labelKey: "tabs.checklist", icon: ListChecks },
+  { id: "files", labelKey: "tabs.files", icon: Folder },
 ]
 
 export function BottomTabBar({ state, onSelect }: { state: TabsState; onSelect: (tab: CodexTabId) => void }) {
+  const t = useTranslations("codex")
   return (
     <nav className="grid grid-cols-6 border-t border-white/10 bg-zinc-950 pb-[env(safe-area-inset-bottom)] md:hidden">
-      {TABS.map(({ id, label, icon: Icon }) => {
+      {TABS.map(({ id, labelKey, icon: Icon }) => {
         const activeTab = state.active === id
         return (
           <button
@@ -39,7 +41,7 @@ export function BottomTabBar({ state, onSelect }: { state: TabsState; onSelect: 
               )}
               {id === "preview" && state.previewError && <span className="absolute -right-1 -top-0.5 h-2 w-2 rounded-full bg-red-500" />}
             </span>
-            <span>{label}</span>
+            <span>{t(labelKey)}</span>
           </button>
         )
       })}

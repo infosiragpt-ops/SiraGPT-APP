@@ -8,6 +8,7 @@
 
 import React, { useEffect, useReducer, useState } from "react"
 import { toast } from "sonner"
+import { useTranslations } from "next-intl"
 import { Loader2, Plus, Folder } from "lucide-react"
 import { codexApi, type CodexProject } from "@/lib/codex/codex-api"
 import { useCodexRun } from "@/lib/codex/use-codex-run"
@@ -38,6 +39,7 @@ function useIsMobile(): boolean {
 }
 
 export function CodexAgentPanel() {
+  const t = useTranslations("codex")
   const [projects, setProjects] = useState<CodexProject[] | null>(null)
   const [project, setProject] = useState<CodexProject | null>(null)
   const [activeRunId, setActiveRunId] = useState<string | null>(null)
@@ -53,6 +55,10 @@ export function CodexAgentPanel() {
   const [tabs, dispatchTabs] = useReducer(tabsReducer, undefined, () => initialTabsState())
   // Accrue the Agent-tab badge when timeline events arrive while elsewhere.
   useEffect(() => { if (state.lastSeq >= 0) dispatchTabs({ type: "agent_event" }) }, [state.lastSeq])
+  // Surface a run/build failure as the Preview-tab error dot (req 5): the
+  // dev-server-failed signal here is the run ending in error. Cleared on any
+  // non-error status so a fresh run drops the stale dot.
+  useEffect(() => { dispatchTabs({ type: "preview_error", value: status === "error" }) }, [status])
   const selectTab = (tab: CodexTabId) => dispatchTabs({ type: "select", tab })
   // On desktop the layout is the Agent view; the tab bar is mobile-only.
   const activeTab: CodexTabId = isMobile ? tabs.active : "agent"
@@ -71,7 +77,7 @@ export function CodexAgentPanel() {
       markApproved()
       setActiveRunId(build.id)
     } catch (e: any) {
-      toast.error(e?.message || "No se pudo aprobar el plan")
+      toast.error(e?.message || t("errors.approvePlan"))
     }
   }
 
@@ -127,11 +133,11 @@ export function CodexAgentPanel() {
   async function createProject() {
     setBusy(true)
     try {
-      const p = await codexApi.createProject(`Proyecto ${(projects?.length || 0) + 1}`)
+      const p = await codexApi.createProject(t("panel.defaultProjectName", { n: (projects?.length || 0) + 1 }))
       setProjects((cur) => [p, ...(cur || [])])
       setProject(p)
     } catch (e: any) {
-      toast.error(e?.message || "No se pudo crear el proyecto")
+      toast.error(e?.message || t("errors.createProject"))
     } finally {
       setBusy(false)
     }
@@ -153,7 +159,7 @@ export function CodexAgentPanel() {
       const run = await codexApi.createRun(project.id, { mode: "plan", prompt: fullPrompt, tier: payload.tier })
       setActiveRunId(run.id)
     } catch (e: any) {
-      toast.error(e?.message || "No se pudo iniciar la corrida")
+      toast.error(e?.message || t("errors.startRun"))
     } finally {
       setBusy(false)
     }
@@ -161,11 +167,11 @@ export function CodexAgentPanel() {
 
   async function stop() {
     if (!activeRunId || !active) return
-    try { await codexApi.cancelRun(activeRunId) } catch (e: any) { toast.error(e?.message || "No se pudo detener la corrida") }
+    try { await codexApi.cancelRun(activeRunId) } catch (e: any) { toast.error(e?.message || t("errors.stopRun")) }
   }
 
   if (projects === null) {
-    return <div className="flex h-full items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Cargando…</div>
+    return <div className="flex h-full items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" /> {t("panel.loading")}</div>
   }
 
   return (
@@ -177,11 +183,11 @@ export function CodexAgentPanel() {
           value={project?.id || ""}
           onChange={(e) => setProject(projects.find((p) => p.id === e.target.value) || null)}
         >
-          <option value="">Selecciona un proyecto…</option>
+          <option value="">{t("panel.selectProject")}</option>
           {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
         <button type="button" onClick={createProject} disabled={busy} className="ml-auto flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs hover:bg-white/10">
-          <Plus className="h-3.5 w-3.5" /> Nuevo
+          <Plus className="h-3.5 w-3.5" /> {t("panel.newProject")}
         </button>
         {status && <span className="rounded-full bg-white/5 px-2 py-0.5 text-[10px] uppercase tracking-wide text-zinc-400">{status}</span>}
       </header>
@@ -194,7 +200,7 @@ export function CodexAgentPanel() {
                 <CodexRunTimeline state={state} cardRenderer={renderCard} />
               ) : (
                 <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-zinc-500">
-                  {project ? "Describe qué quieres construir para proponer un plan." : "Crea o selecciona un proyecto para empezar."}
+                  {project ? t("panel.emptyDescribe") : t("panel.emptySelect")}
                 </div>
               )}
             </div>
@@ -208,7 +214,7 @@ export function CodexAgentPanel() {
         {activeTab === "checklist" && <ChecklistTab state={state} runStatus={status} />}
         {activeTab === "files" && (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 text-sm text-zinc-500">
-            <Folder className="h-6 w-6 opacity-50" /> El árbol de archivos del workspace se abre desde el editor de /code.
+            <Folder className="h-6 w-6 opacity-50" /> {t("panel.filesHint")}
           </div>
         )}
       </div>

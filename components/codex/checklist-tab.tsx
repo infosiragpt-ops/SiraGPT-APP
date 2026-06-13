@@ -6,23 +6,25 @@
 
 import React from "react"
 import clsx from "clsx"
+import { useTranslations } from "next-intl"
 import { Circle, CircleDot, CheckCircle2, ListChecks } from "lucide-react"
 import type { TimelineState, TimelineItem } from "@/lib/codex/timeline-reducer"
 
 type TaskStatus = "pending" | "in_progress" | "done"
 
-function taskLabel(t: any): string {
-  if (typeof t === "string") return t
-  return t?.title || t?.name || String(t)
+function taskLabel(task: any): string {
+  if (typeof task === "string") return task
+  return task?.title || task?.name || String(task)
 }
 
 export function ChecklistTab({ state, runStatus }: { state: TimelineState; runStatus: string | null }) {
+  const t = useTranslations("codex")
   const plan = state.items.find((i): i is Extract<TimelineItem, { kind: "plan" }> => i.kind === "plan")
   if (!plan || plan.tasks.length === 0) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-zinc-500">
         <ListChecks className="h-6 w-6 opacity-50" />
-        Aún no hay un plan aprobado con tareas.
+        {t("panel.checklistEmpty")}
       </div>
     )
   }

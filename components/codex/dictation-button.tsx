@@ -6,6 +6,7 @@
 // detector is injectable so the render logic is testable.
 
 import React, { useEffect, useRef, useState } from "react"
+import { useTranslations } from "next-intl"
 import { Mic, MicOff } from "lucide-react"
 
 type SpeechRecognitionCtor = new () => any
@@ -23,6 +24,7 @@ export interface DictationButtonProps {
 }
 
 export function DictationButton({ onTranscript, locale = "es-ES", recognitionCtor }: DictationButtonProps) {
+  const t = useTranslations("codex")
   const Ctor = recognitionCtor !== undefined ? recognitionCtor : getSpeechRecognition()
   const [recording, setRecording] = useState(false)
   const recRef = useRef<any>(null)
@@ -60,7 +62,7 @@ export function DictationButton({ onTranscript, locale = "es-ES", recognitionCto
       type="button"
       onClick={toggle}
       aria-pressed={recording}
-      aria-label={recording ? "Detener dictado" : "Dictar"}
+      aria-label={recording ? t("composer.stopDictation") : t("composer.dictate")}
       className={`flex h-8 min-h-[44px] w-8 min-w-[44px] items-center justify-center rounded-lg border border-white/10 transition-colors sm:min-h-0 sm:min-w-0 ${recording ? "bg-red-500/20 text-red-300" : "text-zinc-400 hover:bg-white/5"}`}
     >
       {recording ? <MicOff className="h-4 w-4 animate-pulse" /> : <Mic className="h-4 w-4" />}

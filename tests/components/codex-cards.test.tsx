@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { renderWithIntl as render, screen, fireEvent } from '../lib/codex/intl-test-utils'
 import { PlanCard } from '@/components/codex/plan-card'
 import { RunSummaryCard } from '@/components/codex/run-summary-card'
 import { ActionRequiredCard } from '@/components/codex/action-required-card'

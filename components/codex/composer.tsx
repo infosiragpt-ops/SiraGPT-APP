@@ -9,6 +9,7 @@
 import React, { useRef, useState } from "react"
 import clsx from "clsx"
 import { toast } from "sonner"
+import { useTranslations } from "next-intl"
 import { Plus, Send, Square, Loader2, Paperclip, X } from "lucide-react"
 import { PlanToggle } from "./plan-toggle"
 import { PowerSelector } from "./power-selector"
@@ -31,6 +32,7 @@ export interface ComposerProps {
 const MAX_ATTACH_CHARS = 20_000
 
 export function Composer({ disabled, busy, active, locale, onSend, onStop }: ComposerProps) {
+  const t = useTranslations("codex")
   const [prompt, setPrompt] = useState("")
   const [planOnly, setPlanOnly] = useState(false)
   const [tier, setTier] = useState<CodexTier>(DEFAULT_TIER)
@@ -52,7 +54,7 @@ export function Composer({ disabled, busy, active, locale, onSend, onStop }: Com
         const text = (await f.text()).slice(0, MAX_ATTACH_CHARS)
         setAttachments((cur) => [...cur, { name: f.name, content: text }])
       } catch {
-        toast.error(`No se pudo leer ${f.name}`)
+        toast.error(t("errors.readFile", { name: f.name }))
       }
     }
     if (fileRef.current) fileRef.current.value = ""
@@ -88,7 +90,7 @@ export function Composer({ disabled, busy, active, locale, onSend, onStop }: Com
           value={prompt}
           onChange={(e) => { setPrompt(e.target.value); autoResize() }}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit() } }}
-          placeholder="Make, test, iterate..."
+          placeholder={t("composer.placeholder")}
           rows={1}
           disabled={disabled}
           className="max-h-40 w-full resize-none bg-transparent px-1 text-zinc-100 outline-none placeholder:text-zinc-600"
@@ -97,7 +99,7 @@ export function Composer({ disabled, busy, active, locale, onSend, onStop }: Com
 
         <div className="mt-1 flex flex-wrap items-center gap-2">
           <input ref={fileRef} type="file" accept=".txt,.md,.json,.csv,.js,.ts,.tsx,.py,.html,.css" multiple className="hidden" onChange={onFiles} />
-          <button type="button" onClick={() => fileRef.current?.click()} aria-label="Adjuntar archivo" className="flex h-9 min-h-[44px] w-9 min-w-[44px] items-center justify-center rounded-lg text-zinc-400 hover:bg-white/5 sm:min-h-0 sm:min-w-0">
+          <button type="button" onClick={() => fileRef.current?.click()} aria-label={t("composer.attach")} className="flex h-9 min-h-[44px] w-9 min-w-[44px] items-center justify-center rounded-lg text-zinc-400 hover:bg-white/5 sm:min-h-0 sm:min-w-0">
             <Plus className="h-5 w-5" />
           </button>
           <PlanToggle active={planOnly} onToggle={setPlanOnly} />
@@ -108,7 +110,7 @@ export function Composer({ disabled, busy, active, locale, onSend, onStop }: Com
               type="button"
               onClick={submit}
               disabled={!active && (disabled || busy || (!prompt.trim() && attachments.length === 0))}
-              aria-label={active ? "Detener" : "Enviar"}
+              aria-label={active ? t("composer.stop") : t("composer.send")}
               className={clsx("flex h-9 min-h-[44px] w-11 items-center justify-center rounded-xl text-white disabled:opacity-40 sm:min-h-0", active ? "bg-red-600 hover:bg-red-500" : "bg-violet-600 hover:bg-violet-500")}
             >
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : active ? <Square className="h-4 w-4" /> : <Send className="h-4 w-4" />}
