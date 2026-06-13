@@ -172,19 +172,94 @@ export function SettingsPanel({
   if (variant === "modal") {
     return (
       <div className="flex h-full min-h-0 flex-col">
+        {/*
+          Responsive layout is driven by a scoped <style> with real media
+          queries rather than Tailwind md:/lg: utilities. This project ships a
+          CURATED (non-JIT) Tailwind build, so freshly-added responsive
+          utilities like `md:w-52` / `md:flex-col` aren't guaranteed to exist
+          in the compiled CSS (same reason home-page.tsx / settings-dialog.tsx
+          inline their dimensions). Raw CSS keeps the breakpoints deterministic.
+
+          On phones the panel is ~360px wide, so the old fixed 208px side rail
+          crushed content into a ~150px column. We STACK on mobile — search +
+          a horizontally-scrolling strip of section chips on top, content below
+          — and switch to the two-pane left-rail layout only at ≥768px.
+        */}
+        <style
+          dangerouslySetInnerHTML={{
+            __html: [
+              ".set-modal-body{display:flex;flex:1 1 0%;min-height:0;flex-direction:column}",
+              ".set-modal-aside{flex-shrink:0;padding:0.75rem;border-bottom:1px solid hsl(var(--border)/0.6)}",
+              ".set-modal-nav{display:flex;gap:0.25rem;overflow-x:auto;padding-bottom:0.25rem;-webkit-overflow-scrolling:touch}",
+              ".set-nav-item{flex-shrink:0}",
+              ".set-nav-textwrap{min-width:0}",
+              ".set-nav-label{white-space:nowrap}",
+              ".set-nav-desc{display:none}",
+              ".set-modal-content{flex:1 1 0%;min-width:0;overflow-y:auto}",
+              "@media(min-width:768px){",
+              ".set-modal-body{flex-direction:row}",
+              ".set-modal-aside{width:13rem;border-bottom:none;border-right:1px solid hsl(var(--border)/0.6);overflow-y:auto}",
+              ".set-modal-nav{flex-direction:column;overflow-x:visible;padding-bottom:0}",
+              ".set-nav-item{flex-shrink:1}",
+              ".set-nav-textwrap{flex:1 1 0%}",
+              ".set-nav-label{white-space:normal}",
+              ".set-nav-desc{display:block}",
+              "}",
+              "@media(min-width:1024px){.set-modal-aside{width:15rem}}",
+            ].join(""),
+          }}
+        />
         {/* Header — title + live save status (X close is provided by DialogContent) */}
-        <div className="flex items-start justify-between gap-3 px-6 py-4 border-b border-border/60 pr-14">
+        <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-border/60 pr-14">
           <div className="min-w-0">
             <DialogTitle className="text-lg font-semibold tracking-tight">{t("title")}</DialogTitle>
             <DialogDescription className="text-sm text-muted-foreground mt-0.5">{t("subtitle")}</DialogDescription>
           </div>
           <div className="pt-1 shrink-0"><SaveIndicator /></div>
         </div>
-        <div className="flex flex-1 min-h-0">
-          <aside className="w-52 sm:w-60 shrink-0 border-r border-border/60 overflow-y-auto p-3">
-            {nav}
+        <div className="set-modal-body">
+          <aside className="set-modal-aside">
+            <div className="relative mb-3">
+              <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={t("searchPlaceholder")}
+                className="pl-9 h-9"
+              />
+            </div>
+            <nav className="set-modal-nav">
+              {filteredSections.map((s) => {
+                const Icon = s.icon
+                const active = s.key === section
+                return (
+                  <button
+                    key={s.key}
+                    onClick={() => changeSection(s.key)}
+                    className={cn(
+                      "set-nav-item group flex items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors",
+                      active ? "bg-primary/10 text-primary" : "hover:bg-muted/40",
+                    )}
+                  >
+                    <span className={cn(
+                      "h-8 w-8 rounded-md grid place-items-center transition-colors shrink-0",
+                      active ? "bg-primary text-primary-foreground" : "bg-muted text-foreground/70",
+                    )}>
+                      <Icon className="h-4 w-4" />
+                    </span>
+                    <div className="set-nav-textwrap">
+                      <div className={cn("set-nav-label text-sm font-medium truncate", active ? "text-primary" : "text-foreground")}>{s.label}</div>
+                      <div className="set-nav-desc text-xs text-muted-foreground truncate">{s.desc}</div>
+                    </div>
+                  </button>
+                )
+              })}
+              {filteredSections.length === 0 && (
+                <div className="text-xs text-muted-foreground px-3 py-4">{t("noResults")} · "{query}"</div>
+              )}
+            </nav>
           </aside>
-          <section className="flex-1 min-w-0 overflow-y-auto p-5 sm:p-6 space-y-6">
+          <section className="set-modal-content p-5 space-y-6">
             {content}
           </section>
         </div>
