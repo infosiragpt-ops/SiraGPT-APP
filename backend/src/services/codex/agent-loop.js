@@ -22,6 +22,7 @@ const buildTools = require('./build-tools');
 const actionStoreDefault = require('./action-store');
 const checkpointService = require('./checkpoint-service');
 const runMetrics = require('./run-metrics');
+const { classifyText, toActionRequired, benignAnnotation } = require('./error-patterns');
 
 const DEFAULT_MAX_STEPS = 24;
 const DEFAULT_MAX_TOOLS_PER_TURN = 4;
@@ -116,8 +117,14 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
     try {
       turn = await llmTurn({ messages, tools: registry, signal, env });
     } catch (err) {
-      // Transport error → run error (feature 09 classifies the message).
-      return { status: 'error', error: String(err?.message || err) };
+      // Transport error → run error. Feature 09: a blocking pattern (402, missing
+      // key, quota) surfaces an action_required card before the run ends.
+      const msg = String(err?.message || err);
+      const cls = classifyText(msg);
+      if (cls && cls.severity === 'blocking') {
+        await eventStore.appendEvent(run.id, 'action_required', toActionRequired(cls.pattern, msg), { prisma }).catch(() => {});
+      }
+      return { status: 'error', error: msg };
     }
     if (turn?.usage && metrics?.recordLlmUsage) metrics.recordLlmUsage(turn.usage);
 
@@ -150,6 +157,10 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
       if (!tool) {
         await eventStore.appendEvent(run.id, 'action_start', { actionId, kind: 'terminal', command: String(call.name), groupId }, { prisma });
         await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'error', outputSummary: `herramienta desconocida: ${call.name}`, durationMs: 0 }, { prisma });
+        // Honest counting (feature 08, spec req. 4): actionsCount = actions with
+        // an action_end of ANY status. This unknown-tool path emits an action_end,
+        // so it must be counted too — otherwise the "Work done" number undercounts.
+        if (metrics?.recordAction) metrics.recordAction('terminal', 0);
         messages.push({ role: 'user', content: `[TOOL_RESULT ${call.name}] Error: herramienta desconocida.` });
         continue;
       }
@@ -163,18 +174,38 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
       const durationMs = Math.max(0, clock().getTime() - t0);
       const status = result.isError ? 'error' : 'done';
 
-      const endData = { actionId, status, outputSummary: result.summary || '', durationMs };
+      // Feature 09: classify a failed action. A benign diagnostic (peer-deps
+      // warning, vite port retry…) is annotated on the outputSummary and the
+      // loop continues; a blocking pattern (402, missing key, runner down) emits
+      // an action_required card and ends the run.
+      let outputSummary = result.summary || '';
+      let blockingPattern = null;
+      if (result.isError) {
+        const cls = classifyText(result.observation || outputSummary);
+        if (cls && cls.severity === 'benign') {
+          outputSummary = `${outputSummary}\n${benignAnnotation(cls.pattern)}`.trim();
+        } else if (cls && cls.severity === 'blocking') {
+          blockingPattern = cls.pattern;
+        }
+      }
+
+      const endData = { actionId, status, outputSummary, durationMs };
       if (Number.isFinite(result.linesRead)) endData.linesRead = result.linesRead;
       await eventStore.appendEvent(run.id, 'action_end', endData, { prisma });
 
       try {
-        await actionStore.recordAction({ runId: run.id, kind: tool.kind, command, path, status, outputSummary: result.summary, durationMs, linesRead: result.linesRead, groupId, prisma });
+        await actionStore.recordAction({ runId: run.id, kind: tool.kind, command, path, status, outputSummary, durationMs, linesRead: result.linesRead, groupId, prisma });
       } catch { /* persistence best-effort; the event timeline is the source of truth */ }
 
       if (metrics?.recordAction) metrics.recordAction(tool.kind, durationMs);
       if (Number.isFinite(result.linesRead) && metrics?.recordLinesRead) metrics.recordLinesRead(result.linesRead);
 
-      messages.push({ role: 'user', content: `[TOOL_RESULT ${call.name}] ${result.observation || result.summary || ''}` });
+      messages.push({ role: 'user', content: `[TOOL_RESULT ${call.name}] ${result.observation || outputSummary || ''}` });
+
+      if (blockingPattern) {
+        await eventStore.appendEvent(run.id, 'action_required', toActionRequired(blockingPattern, result.observation || outputSummary), { prisma }).catch(() => {});
+        return { status: 'error', error: blockingPattern.title };
+      }
     }
   }
 

@@ -11,6 +11,18 @@ const defaultPrisma = (() => {
 })();
 const { createRunnerClient, runnerDevUrl } = require('./runner-client');
 const { provisionWorkspace } = require('./workspace');
+const { classifyText } = require('./error-patterns');
+
+/** Enrich a provisioning failure message with a remediation hint when the
+ *  error matches a known blocking pattern (e.g. runner unreachable). */
+function describeProvisionError(raw) {
+  const cls = classifyText(raw);
+  if (cls && cls.severity === 'blocking') {
+    const rem = cls.pattern.remediationUrl ? ` (${cls.pattern.remediationUrl})` : '';
+    return `${raw}\n[${cls.pattern.title}] ${cls.pattern.explanation}${rem}`.slice(0, 2000);
+  }
+  return String(raw).slice(0, 2000);
+}
 
 function publicProject(row) {
   return {
@@ -46,7 +58,7 @@ async function createProject({ userId, name, brief = null, runner, db = defaultP
   } catch (err) {
     const failed = await prisma.codexProject.update({
       where: { id: row.id },
-      data: { status: 'error', error: String((err && err.message) || err).slice(0, 2000) },
+      data: { status: 'error', error: describeProvisionError((err && err.message) || err) },
     });
     return publicProject(failed);
   }

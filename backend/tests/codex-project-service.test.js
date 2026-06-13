@@ -58,6 +58,15 @@ test('provisioning failure persists status=error without throwing', async () => 
   assert.equal(db.rows.get(project.id).status, 'error');
 });
 
+test('a blocking provisioning failure is enriched with a remediation hint (feature 09)', async () => {
+  const db = fakeDb();
+  const badRunner = { initWorkspace: async () => { throw new Error('RunnerError: runner unreachable: fetch failed'); } };
+  const project = await createProject({ userId: 'u1', name: 'X', runner: badRunner, db, env: {} });
+  assert.equal(project.status, 'error');
+  assert.match(project.error, /runner unreachable/); // raw error preserved
+  assert.match(project.error, /perfil "opencode"/); // provision_failed remediation appended
+});
+
 test('getProject is scoped by userId; listProjects returns only own projects', async () => {
   const db = fakeDb();
   const mine = await createProject({ userId: 'u1', name: 'A', runner: okRunner(), db, env: {} });

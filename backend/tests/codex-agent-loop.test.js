@@ -109,6 +109,55 @@ test('LLM transport error in build → run error', async () => {
   assert.match(res.error, /402/);
 });
 
+test('a blocking LLM error (402) emits action_required before the run errors', async () => {
+  const f = fakeDeps({ llmTurn: async () => { throw new Error('OpenRouter 402 Insufficient credits'); } });
+  const res = await runAgentLoop({ run: { id: 'r1', mode: 'build' }, project: { id: 'p1' }, deps: f.deps });
+  assert.equal(res.status, 'error');
+  const ar = f.events.find((e) => e.type === 'action_required');
+  assert.ok(ar);
+  assert.equal(ar.data.patternId, 'openrouter_402');
+  assert.equal(ar.data.remediationUrl, 'https://openrouter.ai/credits');
+});
+
+test('a blocking tool error (runner down) ends the run with action_required', async () => {
+  const f = fakeDeps({
+    runner: {
+      exec: async (_p, cmd) => {
+        if (cmd[0] === 'git' && cmd[1] === 'status') return { exitCode: 0, stdout: '', stderr: '' };
+        throw new Error('runner unreachable: ECONNREFUSED 127.0.0.1:4097');
+      },
+      readFile: async () => ({ content: '' }),
+      writeFiles: async () => ({}),
+    },
+    llmTurn: scriptedLlm([{ text: 'Compilo.', toolCalls: [{ name: 'run_command', args: { cmd: ['bun', 'run', 'build'] } }] }]),
+  });
+  const res = await runAgentLoop({ run: { id: 'r1', mode: 'build' }, project: { id: 'p1' }, deps: f.deps });
+  assert.equal(res.status, 'error');
+  assert.equal(f.events.find((e) => e.type === 'action_required').data.patternId, 'provision_failed');
+});
+
+test('a benign tool error is annotated as a diagnostic and the loop continues', async () => {
+  const f = fakeDeps({
+    runner: {
+      exec: async (_p, cmd) => {
+        if (cmd[0] === 'git' && cmd[1] === 'status') return { exitCode: 0, stdout: '', stderr: '' };
+        return { exitCode: 1, stdout: 'npm WARN deprecated foo@1.0.0: upgrade', stderr: '' };
+      },
+      readFile: async () => ({ content: '' }),
+      writeFiles: async () => ({}),
+    },
+    llmTurn: scriptedLlm([
+      { text: 'Instalo.', toolCalls: [{ name: 'run_command', args: { cmd: ['bun', 'install'] } }] },
+      { text: 'Listo.', toolCalls: [] },
+    ]),
+  });
+  const res = await runAgentLoop({ run: { id: 'r1', mode: 'build' }, project: { id: 'p1' }, deps: f.deps });
+  assert.equal(res.status, 'done'); // benign → loop continued
+  assert.equal(f.events.some((e) => e.type === 'action_required'), false);
+  const end = f.events.find((e) => e.type === 'action_end' && e.data.status === 'error');
+  assert.match(end.data.outputSummary, /\[diagnóstico\]/);
+});
+
 test('build close creates a checkpoint when the workspace has changes', async () => {
   const checkpoints = [];
   const f = fakeDeps({
@@ -150,4 +199,22 @@ test('metrics hooks receive usage, actions and lines read', async () => {
   assert.equal(rec.usage.length, 1);
   assert.deepEqual(rec.actions, ['file_read']);
   assert.equal(rec.lines, 3);
+});
+
+test('an unknown tool call still emits action_end AND counts toward actionsCount (honest counting)', async () => {
+  const rec = { actions: [] };
+  const metrics = { recordAction: (k) => rec.actions.push(k) };
+  const f = fakeDeps({
+    metrics,
+    llmTurn: scriptedLlm([
+      { text: 'pruebo', toolCalls: [{ name: 'no_such_tool', args: {} }] },
+      { text: 'fin', toolCalls: [] },
+    ]),
+  });
+  await runAgentLoop({ run: { id: 'r1', mode: 'build' }, project: { id: 'p1' }, deps: f.deps });
+  const ends = f.events.filter((e) => e.type === 'action_end');
+  assert.equal(ends.length, 1);
+  assert.equal(ends[0].data.status, 'error');
+  // The action_end means the action counts (spec req. 4: any status).
+  assert.deepEqual(rec.actions, ['terminal']);
 });
