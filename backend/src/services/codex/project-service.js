@@ -1,0 +1,71 @@
+'use strict';
+
+/**
+ * codex/project-service — CodexProject CRUD + provisioning. The DB client and
+ * runner are injectable (defaults: shared Prisma + real runner client) so the
+ * route stays thin and the tests stay offline.
+ */
+
+const defaultPrisma = (() => {
+  try { return require('../../config/database'); } catch { return null; }
+})();
+const { createRunnerClient, runnerDevUrl } = require('./runner-client');
+const { provisionWorkspace } = require('./workspace');
+
+function publicProject(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    status: row.status,
+    workspacePath: row.workspacePath,
+    previewUrl: row.previewUrl,
+    error: row.error,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function requireDb(db) {
+  if (!db || !db.codexProject) throw new Error('database unavailable');
+  return db;
+}
+
+async function createProject({ userId, name, brief = null, runner, db = defaultPrisma, env = process.env }) {
+  const prisma = requireDb(db);
+  const runnerClient = runner || createRunnerClient();
+  const row = await prisma.codexProject.create({
+    data: { userId, name, brief, status: 'provisioning' },
+  });
+  try {
+    const { workspacePath } = await provisionWorkspace({ project: row.id, projectName: name, runner: runnerClient });
+    const ready = await prisma.codexProject.update({
+      where: { id: row.id },
+      data: { status: 'ready', workspacePath, previewUrl: runnerDevUrl(env) },
+    });
+    return publicProject(ready);
+  } catch (err) {
+    const failed = await prisma.codexProject.update({
+      where: { id: row.id },
+      data: { status: 'error', error: String((err && err.message) || err).slice(0, 2000) },
+    });
+    return publicProject(failed);
+  }
+}
+
+async function listProjects({ userId, db = defaultPrisma }) {
+  const prisma = requireDb(db);
+  const rows = await prisma.codexProject.findMany({
+    where: { userId },
+    orderBy: { updatedAt: 'desc' },
+    take: 50,
+  });
+  return rows.map(publicProject);
+}
+
+async function getProject({ userId, id, db = defaultPrisma }) {
+  const prisma = requireDb(db);
+  const row = await prisma.codexProject.findFirst({ where: { id, userId } });
+  return row ? publicProject(row) : null;
+}
+
+module.exports = { createProject, listProjects, getProject, publicProject };
