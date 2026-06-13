@@ -108,14 +108,23 @@ async function processCodexRunJob({
     : 'done';
   const errorMsg = status === 'error' ? String(outcome?.error || 'run failed').slice(0, 2000) : null;
 
-  await prisma.codexRun.update({
-    where: { id: runId },
+  // Guard the terminal transition against a concurrent cancelRun / boot-recovery
+  // that flipped the row to a terminal state in the window after our isCancelled()
+  // check above. Only transition a row still `running`; if nothing was updated
+  // someone else already finalized it, so we MUST NOT emit a second run_status
+  // (which would duplicate the terminal event and could revert `cancelled`).
+  const flip = await prisma.codexRun.updateMany({
+    where: { id: runId, status: 'running' },
     data: {
       status,
       error: errorMsg,
       finishedAt: status === 'waiting_approval' ? null : new Date(nowIso(clock)),
     },
   });
+  if (!flip || flip.count === 0) {
+    const fresh = await prisma.codexRun.findUnique({ where: { id: runId } }).catch(() => null);
+    return { status: fresh?.status || status, raced: true };
+  }
   await eventStore.appendEvent(runId, 'run_status', { status }, { prisma });
 
   return { status, error: errorMsg };

@@ -14,6 +14,13 @@ function makeDeps({ run, project } = {}) {
     codexRun: {
       async findUnique({ where }) { return where.id === runRow.id ? { ...runRow } : null; },
       async update({ where, data }) { if (where.id === runRow.id) Object.assign(runRow, data); return { ...runRow }; },
+      // Status-guarded terminal transition: only flips when the WHERE matches.
+      async updateMany({ where, data }) {
+        const match = where.id === runRow.id && (where.status === undefined || runRow.status === where.status);
+        if (!match) return { count: 0 };
+        Object.assign(runRow, data);
+        return { count: 1 };
+      },
     },
     codexProject: {
       async findUnique({ where }) { return where.id === projRow.id ? { ...projRow } : null; },
@@ -66,6 +73,49 @@ test('out-of-band cancellation finalizes cancelled WITHOUT a duplicate run_statu
   assert.equal(res.status, 'cancelled');
   // Only the 'running' run_status is emitted here; cancelRun owns 'cancelled'.
   const statuses = d.events.filter((e) => e.type === 'run_status').map((e) => e.data.status);
+  assert.deepEqual(statuses, ['running']);
+});
+
+test('cancel landing after the isCancelled() check is not clobbered and emits no terminal run_status', async () => {
+  // Simulate cancelRun flipping the row to `cancelled` in the narrow window
+  // AFTER the processor's post-loop isCancelled() check but BEFORE its guarded
+  // terminal write. The guarded updateMany (where status:'running') must no-op,
+  // so the row stays `cancelled` and no duplicate run_status is emitted.
+  const runRow = { id: 'run-1', projectId: 'p1', userId: 'u1', mode: 'build', status: 'queued' };
+  const events = [];
+  let cancelFlips = 0;
+  const prisma = {
+    codexRun: {
+      async findUnique({ where }) {
+        if (where.id !== runRow.id) return null;
+        // Snapshot BEFORE mutating so the post-loop isCancelled() observes the
+        // pre-cancel `running` value (returns false), then cancelRun lands: the
+        // row is `cancelled` by the time the guarded terminal write runs.
+        const snapshot = { ...runRow };
+        if (runRow.status === 'running') {
+          cancelFlips += 1;
+          runRow.status = 'cancelled'; // flips just AFTER this read returns `running`
+        }
+        return snapshot;
+      },
+      async update({ where, data }) { if (where.id === runRow.id) Object.assign(runRow, data); return { ...runRow }; },
+      async updateMany({ where, data }) {
+        const match = where.id === runRow.id && (where.status === undefined || runRow.status === where.status);
+        if (!match) return { count: 0 };
+        Object.assign(runRow, data);
+        return { count: 1 };
+      },
+    },
+    codexProject: { async findUnique() { return { id: 'p1', name: 'Demo' }; } },
+  };
+  const eventStore = { async appendEvent(runId, type, data) { events.push({ runId, type, data }); } };
+  const loop = async () => ({ status: 'done' });
+  const res = await processCodexRunJob({ runId: 'run-1', prisma, eventStore, runAgentLoop: loop, clock: () => new Date('2026-06-13T12:00:00Z') });
+  // The row was cancelled out-of-band; the guarded write must not revert it to done.
+  assert.equal(runRow.status, 'cancelled');
+  assert.equal(res.raced, true);
+  // Only `running` was emitted by the processor; no terminal done/error event.
+  const statuses = events.filter((e) => e.type === 'run_status').map((e) => e.data.status);
   assert.deepEqual(statuses, ['running']);
 });
 
