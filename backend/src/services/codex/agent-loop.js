@@ -20,6 +20,7 @@
 const planMode = require('./plan-mode');
 const buildTools = require('./build-tools');
 const actionStoreDefault = require('./action-store');
+const checkpointService = require('./checkpoint-service');
 
 const DEFAULT_MAX_STEPS = 24;
 const DEFAULT_MAX_TOOLS_PER_TURN = 4;
@@ -134,6 +135,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
     const calls = Array.isArray(turn?.toolCalls) ? turn.toolCalls.slice(0, maxToolsPerTurn) : [];
     if (calls.length === 0) {
       // Model produced no tool call → it's done.
+      await closeBuild({ run, project, runner, eventStore, prisma, llmTurn, clock, env, metrics });
       return { status: 'done' };
     }
 
@@ -180,7 +182,26 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
     { text: aborted ? 'Me detuve por el límite de tiempo de la corrida.' : 'Alcancé el límite de pasos de esta corrida; cierro con lo construido hasta aquí.' },
     { prisma },
   ).catch(() => {});
+  await closeBuild({ run, project, runner, eventStore, prisma, llmTurn, clock, env, metrics });
   return { status: 'done' };
+}
+
+/**
+ * Build close (feature 07 + 08): create the git checkpoint for the changes this
+ * run produced (no checkpoint when the tree is clean), then finalize metrics +
+ * run_summary (feature 08 extends this). Best-effort — a checkpoint/metrics
+ * failure must not turn a successful build into an error.
+ */
+async function closeBuild({ run, project, runner, eventStore, prisma, llmTurn, clock, env, metrics }) {
+  let checkpoint = null;
+  try {
+    checkpoint = await checkpointService.createCheckpoint({ run, project, deps: { runner, eventStore, prisma, llmTurn, clock, env } });
+  } catch (err) {
+    if (env?.NODE_ENV !== 'test') console.warn('[codex agent-loop] checkpoint failed:', err?.message || err);
+  }
+  // Feature 08 will finalize CodexRunMetric + emit run_summary here, using the
+  // checkpoint's diffstat for Code changed. `metrics` is the accumulator.
+  return { checkpoint };
 }
 
 async function runAgentLoop({ run, project, signal, isCancelled, deps = {} } = {}) {

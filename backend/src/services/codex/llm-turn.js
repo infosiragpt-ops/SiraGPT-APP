@@ -16,6 +16,18 @@
 const { getCerebrasConfig, createCerebrasClient } = require('../ai/cerebras-client');
 const { buildPromptedToolsBlock, parsePromptedToolCalls } = require('../agents/prompted-tool-calling');
 
+// Protocol scaffolding the prompted block tells the model to emit (e.g. a
+// `finalize` block — codex has no such tool, so parsePromptedToolCalls rejects
+// it and leaves the fence in cleanedContent). Strip any residual tool_call/json
+// fence so raw protocol JSON never leaks into the user-facing narrative.
+const RESIDUAL_FENCE_RE = /```(?:tool_call|json)\s*[\s\S]*?```/gi;
+
+function stripResidualFences(text) {
+  const s = String(text == null ? '' : text);
+  if (!s.includes('```')) return s;
+  return s.replace(RESIDUAL_FENCE_RE, ' ').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 function appendToolsToSystem(messages, tools) {
   if (!tools || tools.length === 0) return messages.slice();
   const block = buildPromptedToolsBlock(tools);
@@ -65,7 +77,7 @@ async function defaultLlmTurn({ messages, tools = [], signal, env = process.env,
   let text = content;
   if (tools.length) {
     const parsed = parsePromptedToolCalls(content, names);
-    text = parsed.cleanedContent;
+    text = stripResidualFences(parsed.cleanedContent);
     toolCalls = (parsed.toolCalls || []).map((tc) => {
       let args = {};
       try { args = JSON.parse(tc.function.arguments || '{}'); } catch { args = {}; }
@@ -81,4 +93,4 @@ async function defaultLlmTurn({ messages, tools = [], signal, env = process.env,
   };
 }
 
-module.exports = { defaultLlmTurn, appendToolsToSystem, extractUsage };
+module.exports = { defaultLlmTurn, appendToolsToSystem, extractUsage, stripResidualFences };

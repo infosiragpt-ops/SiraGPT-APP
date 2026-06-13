@@ -16,7 +16,12 @@ function fakeDeps(overrides = {}) {
   const actions = [];
   const writes = [];
   const runner = {
-    exec: async (_p, cmd) => ({ exitCode: 0, stdout: `ran ${cmd.join(' ')}`, stderr: '' }),
+    exec: async (_p, cmd) => {
+      // Default: a CLEAN tree for `git status --porcelain` so the build close
+      // creates no checkpoint (keeps these tests focused on the loop itself).
+      if (cmd[0] === 'git' && cmd[1] === 'status') return { exitCode: 0, stdout: '', stderr: '' };
+      return { exitCode: 0, stdout: `ran ${cmd.join(' ')}`, stderr: '' };
+    },
     readFile: async () => ({ content: 'a\nb\nc' }),
     writeFiles: async (_p, files) => { writes.push(...files); return { ok: true }; },
   };
@@ -102,6 +107,29 @@ test('LLM transport error in build → run error', async () => {
   const res = await runAgentLoop({ run: { id: 'r1', mode: 'build' }, project: { id: 'p1' }, deps: f.deps });
   assert.equal(res.status, 'error');
   assert.match(res.error, /402/);
+});
+
+test('build close creates a checkpoint when the workspace has changes', async () => {
+  const checkpoints = [];
+  const f = fakeDeps({
+    // git status reports a change → checkpoint is committed at close.
+    runner: {
+      exec: async (_p, cmd) => {
+        if (cmd[0] === 'git' && cmd[1] === 'status') return { exitCode: 0, stdout: ' M index.html', stderr: '' };
+        if (cmd[0] === 'git' && cmd[1] === 'rev-parse') return { exitCode: 0, stdout: 'abc1234\n', stderr: '' };
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+      readFile: async () => ({ content: '' }),
+      writeFiles: async () => ({}),
+    },
+    prisma: { codexCheckpoint: { create: async ({ data }) => { const r = { id: 'cp-1', createdAt: new Date(), ...data }; checkpoints.push(r); return r; } } },
+    llmTurn: scriptedLlm([{ text: 'Construido.', toolCalls: [] }]),
+  });
+  const res = await runAgentLoop({ run: { id: 'run-1', mode: 'build' }, project: { id: 'p1', name: 'X' }, deps: f.deps });
+  assert.equal(res.status, 'done');
+  assert.equal(checkpoints.length, 1);
+  assert.equal(checkpoints[0].commitSha, 'abc1234');
+  assert.ok(f.events.some((e) => e.type === 'checkpoint_created'));
 });
 
 test('metrics hooks receive usage, actions and lines read', async () => {

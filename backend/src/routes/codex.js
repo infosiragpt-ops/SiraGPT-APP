@@ -28,6 +28,7 @@ const eventStore = require('../services/codex/event-store');
 const runAccess = require('../services/codex/run-access');
 const pubsub = require('../services/codex/redis-pubsub');
 const runService = require('../services/codex/run-service');
+const checkpointService = require('../services/codex/checkpoint-service');
 
 const router = express.Router();
 
@@ -199,6 +200,48 @@ router.post('/runs/:id/cancel', authenticateToken, async (req, res) => {
     return res.json({ run });
   } catch (err) {
     return mapRunError(err, res);
+  }
+});
+
+// ── Checkpoints (feature 07) ────────────────────────────────────────────────
+// /checkpoints/* and /projects/:id/checkpoints do not collide with the legacy
+// codex-runs router. Ownership is enforced inside checkpoint-service via the
+// project relation; the service returns { error, status } which we map here.
+router.post('/checkpoints/:id/rollback', authenticateToken, async (req, res) => {
+  try {
+    const out = await checkpointService.rollbackCheckpoint({
+      checkpointId: req.params.id,
+      userId: req.user.id,
+      deps: { runner: createRunnerClient() },
+    });
+    if (out.error) return res.status(out.status || 400).json({ error: out.error, detail: out.detail });
+    return res.json(out);
+  } catch (err) {
+    return res.status(502).json({ error: 'runner_unreachable', message: err.message });
+  }
+});
+
+router.get('/checkpoints/:id/diff', authenticateToken, async (req, res) => {
+  try {
+    const out = await checkpointService.getCheckpointDiff({
+      checkpointId: req.params.id,
+      userId: req.user.id,
+      deps: { runner: createRunnerClient() },
+    });
+    if (out.error) return res.status(out.status || 400).json({ error: out.error });
+    return res.json(out);
+  } catch (err) {
+    return res.status(502).json({ error: 'runner_unreachable', message: err.message });
+  }
+});
+
+router.get('/projects/:projectId/checkpoints', authenticateToken, async (req, res) => {
+  try {
+    const checkpoints = await checkpointService.listCheckpoints({ userId: req.user.id, projectId: req.params.projectId });
+    if (checkpoints === null) return res.status(404).json({ error: 'project_not_found' });
+    return res.json({ checkpoints });
+  } catch (err) {
+    return res.status(500).json({ error: 'codex_checkpoints_failed', message: err.message });
   }
 });
 
