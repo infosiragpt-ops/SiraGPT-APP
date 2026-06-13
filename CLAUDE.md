@@ -655,6 +655,37 @@ filled the academic-DB gap requested.
 - **Tests**: `tests/scientific-search.test.js` — +7 (SciELO, Redalyc, Scopus
   no-key/with-key/empty-entry, WoS no-key/with-key); 64 total, all offline.
 
+## Scientific-search — diversity + preprints + OA backfill — added 2026-06-13
+
+Three upgrades to `scientific-search.js` so results actually reflect the
+"diverse sources" promise and surface free PDFs. All offline-tested, lint-clean.
+
+- **Source diversification** (`diversifyBySource`, default-on): a soft,
+  relevance-preserving post-rank interleave so the top of the list isn't
+  monopolised by one provider (Semantic Scholar's precise title matches used to
+  fill the whole first screenful). `maxRun=2` keeps the top-2 most-relevant
+  hits, then breaks runs of 3+ from one source. Opt out with `diversify:false`
+  (also on `POST /api/scientific-search`). No paper dropped/duplicated; no
+  starvation when only one source remains. Verified live: top-10 went 1→3 sources.
+- **bioRxiv + medRxiv** (14 → **16 providers**): Cold Spring Harbor preprint
+  servers as distinct sources (`source: biorxiv`/`medrxiv`), queried like
+  SciELO/Redalyc via OpenAlex pinned to each server's canonical
+  `primary_location.source.id` (bioRxiv `S4306402567`, medRxiv `S3005729997` —
+  the alternate medRxiv `S4306400573` holds 0 works). Key-free, abstracts via
+  the OpenAlex inverted index, htmlUrl → the preprint landing page. Shared
+  `searchPinnedOpenAlexSource` helper. They feed the diversification pass too.
+- **Unpaywall OA PDF backfill** (`enrichWithUnpaywall`, opt-in via
+  `opts.unpaywall`): closed-index hits (Scopus/WoS/CrossRef/PubMed/DBLP) often
+  carry a DOI but no PDF; Unpaywall (key-free, REQUIRES a contact email) maps
+  DOI → best legal OA copy. Bounded + best-effort: skipped without
+  `SIRAGPT_RESEARCH_EMAIL`, capped at `maxEnrich` (default 8) parallel lookups
+  with a tight timeout, never throws. Opt-in so default search latency is
+  unchanged. Exposed on the route + the `scientific_search` agent tool.
+- **Wiring**: `research-agent.js` inherits all three automatically (it calls
+  `scientificSearch.search`). `scientific_search` tool description + provider
+  hints updated. `tests/scientific-search.test.js` — 53 total (+12: diversify,
+  biorxiv/medrxiv, unpaywall), all offline.
+
 ## Brave Search + X (Twitter) search — added 2026-06-07 (production-hardened)
 
 Two more discovery providers/tools, both key-gated and degrading gracefully
