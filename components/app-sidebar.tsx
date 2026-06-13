@@ -97,6 +97,7 @@ import { cn, downloadBlob } from "@/lib/utils"
 import Link from "next/link"
 import UpgradeModal from "./UpgradeModal"
 import { ChatSearchDialog } from "./ChatSearchDialog"
+import { SettingsDialog } from "@/components/settings/settings-dialog"
 import { SidebarFoldersDropdown } from "./sidebar/sidebar-folders-dropdown"
 import {
   normalizeNavigationHref,
@@ -442,6 +443,9 @@ export function AppSidebar() {
   }, [markSharedNavigationIntent, t])
   const [upgradeOpen, setUpgradeOpen] = React.useState(false)
   const [searchOpen, setSearchOpen] = React.useState(false)
+  // Settings now open as a floating Claude-style modal (the /settings
+  // route still exists for deep-links / command palette).
+  const [settingsOpen, setSettingsOpen] = React.useState(false)
 
   // ── Global keyboard shortcut: ⌘K / Ctrl+K opens chat search ──────
   // Mirrors the affordance every Claude / Linear / Notion user
@@ -1862,8 +1866,14 @@ export function AppSidebar() {
                     {t("billing")}
                   </DropdownMenuItem>
                   <DropdownMenuItem
-                    onClick={() => navigate("/settings")}
-                    onMouseEnter={() => prefetchOnHover("/settings")}
+                    onSelect={(e) => {
+                      // Open the floating settings modal instead of navigating.
+                      // Defer so the dropdown finishes closing before the dialog
+                      // grabs focus (avoids a Radix focus-trap race).
+                      e.preventDefault()
+                      if (isMobile) setOpenMobile(false)
+                      setTimeout(() => setSettingsOpen(true), 0)
+                    }}
                     className={LG_ITEM}
                   >
                     <Settings className="mr-2 h-4 w-4" />
@@ -1973,6 +1983,9 @@ export function AppSidebar() {
           if (!open && isMobile) setOpenMobile(false)
         }}
       />
+
+      {/* Floating settings modal (Claude-style) — opened from the user menu */}
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
 
       {/* #44 — Confirmación accesible de borrado de chat. Sustituye al
           window.confirm() nativo: foco teclado correcto, ESC y click
