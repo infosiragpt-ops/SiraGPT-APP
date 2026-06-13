@@ -46,10 +46,16 @@ export function initialTimelineState(): TimelineState {
   return { items: [], status: null, lastSeq: -1, seen: new Set() }
 }
 
+// Synthetic item IDs are derived from the event's seq so a replay of the same
+// event stream reconstructs byte-identical item IDs (idempotent reload). seq is
+// unique per run, so `${prefix}_${seq}` is stable and collision-free. The
+// counter fallback only fires for seq-less events (never on the real wire
+// protocol, where every envelope carries a seq) and stays unique within a run.
 let synthCounter = 0
-function synthId(prefix: string): string {
+function synthId(prefix: string, seq?: number): string {
+  if (seq !== undefined) return `${prefix}_${seq}`
   synthCounter += 1
-  return `${prefix}_${synthCounter}`
+  return `${prefix}_x${synthCounter}`
 }
 
 function replaceItem(items: TimelineItem[], idx: number, next: TimelineItem): TimelineItem[] {
@@ -80,13 +86,13 @@ export function timelineReducer(state: TimelineState, event: CodexEventEnvelope)
       if (last && last.kind === 'narrative') {
         items = replaceItem(items, items.length - 1, { ...last, text: last.text + (data.text || '') })
       } else {
-        items = [...items, { kind: 'narrative', id: synthId('narr'), text: data.text || '' }]
+        items = [...items, { kind: 'narrative', id: synthId('narr', seq), text: data.text || '' }]
       }
       break
     }
 
     case 'reasoning_start': {
-      const id = data.blockId || synthId('reason')
+      const id = data.blockId || synthId('reason', seq)
       if (!items.some((it) => it.kind === 'reasoning' && it.id === id)) {
         items = [...items, { kind: 'reasoning', id, label: data.label || '', text: '', durationMs: undefined, done: false }]
       }
@@ -110,7 +116,7 @@ export function timelineReducer(state: TimelineState, event: CodexEventEnvelope)
     }
 
     case 'action_start': {
-      const groupId = data.groupId || synthId('grp')
+      const groupId = data.groupId || synthId('grp', seq)
       const action: ActionItem = {
         actionId: data.actionId,
         kind: data.kind,
@@ -148,19 +154,19 @@ export function timelineReducer(state: TimelineState, event: CodexEventEnvelope)
     }
 
     case 'plan_proposed':
-      items = [...items, { kind: 'plan', id: synthId('plan'), architecture: data.architecture, pages: data.pages || [], components: data.components || [], tasks: data.tasks || [], approved: false }]
+      items = [...items, { kind: 'plan', id: synthId('plan', seq), architecture: data.architecture, pages: data.pages || [], components: data.components || [], tasks: data.tasks || [], approved: false }]
       break
 
     case 'checkpoint_created':
-      items = [...items, { kind: 'checkpoint', id: data.checkpointId || synthId('cp'), checkpointId: data.checkpointId, commitSha: data.commitSha, title: data.title, createdAt: data.createdAt }]
+      items = [...items, { kind: 'checkpoint', id: data.checkpointId || synthId('cp', seq), checkpointId: data.checkpointId, commitSha: data.commitSha, title: data.title, createdAt: data.createdAt }]
       break
 
     case 'run_summary':
-      items = [...items, { kind: 'summary', id: synthId('sum'), metrics: data.metrics || {} }]
+      items = [...items, { kind: 'summary', id: synthId('sum', seq), metrics: data.metrics || {} }]
       break
 
     case 'action_required':
-      items = [...items, { kind: 'action_required', id: synthId('ar'), patternId: data.patternId, title: data.title, rawError: data.rawError, blockedCapabilities: data.blockedCapabilities || [], remediationUrl: data.remediationUrl }]
+      items = [...items, { kind: 'action_required', id: synthId('ar', seq), patternId: data.patternId, title: data.title, rawError: data.rawError, blockedCapabilities: data.blockedCapabilities || [], remediationUrl: data.remediationUrl }]
       break
 
     default:

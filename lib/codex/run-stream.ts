@@ -8,6 +8,16 @@ import type { CodexEventEnvelope } from './timeline-reducer'
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api').replace(/\/+$/, '')
 const TERMINAL = new Set(['done', 'error', 'cancelled'])
 
+/**
+ * Is an HTTP status worth reconnecting for? Transient (network/5xx/429/503) →
+ * yes, retry with backoff. Permanent client errors (404 run-not-found, 401/403
+ * auth) → no: reconnecting forever would hammer the server. Mirrors the repo
+ * convention in lib/api.ts (4xx hard-fail except 429/503).
+ */
+function isRetryableStatus(status: number): boolean {
+  return status === 429 || status >= 500
+}
+
 /** Stateful SSE frame parser: feed raw chunks, get parsed envelopes. */
 export function createSSEParser() {
   let buffer = ''
@@ -78,6 +88,7 @@ export function openRunStream(opts: RunStreamOptions): RunStreamHandle {
     if (!fetchImpl) { onError?.(new Error('fetch unavailable')); return }
     while (!closed) {
       controller = new AbortController()
+      let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
       try {
         const qs = new URLSearchParams({ afterSeq: String(lastSeq) })
         if (token) qs.set('token', token)
@@ -85,9 +96,17 @@ export function openRunStream(opts: RunStreamOptions): RunStreamHandle {
           signal: controller.signal,
           headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         })
-        if (!res.ok || !res.body) throw new Error(`stream http ${res.status}`)
+        if (!res.ok || !res.body) {
+          // Permanent client error (404 not-found, 401/403 auth) — surface once
+          // and stop, instead of an unbounded reconnect storm against a dead URL.
+          if (!isRetryableStatus(res.status)) {
+            if (!closed) onError?.(new Error(`stream http ${res.status}`))
+            return
+          }
+          throw new Error(`stream http ${res.status}`)
+        }
         attempt = 0
-        const reader = (res.body as ReadableStream<Uint8Array>).getReader()
+        reader = (res.body as ReadableStream<Uint8Array>).getReader()
         const decoder = new TextDecoder()
         const parser = createSSEParser()
         let terminal = false
@@ -106,6 +125,9 @@ export function openRunStream(opts: RunStreamOptions): RunStreamHandle {
       } catch (err) {
         if (closed) return
         onError?.(err)
+      } finally {
+        // Release the lock so a reconnect can re-read; abort cancels the body.
+        try { reader?.releaseLock() } catch { /* already released */ }
       }
       // Backoff before reconnecting.
       attempt += 1

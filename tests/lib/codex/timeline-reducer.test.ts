@@ -113,6 +113,19 @@ describe('timelineReducer', () => {
     expect((s.items[0] as any).approved).toBe(true)
   })
 
+  it('replaying the same event stream reconstructs byte-identical items (idempotent reload)', () => {
+    const events: CodexEventEnvelope[] = [
+      { seq: 0, type: 'narrative_delta', data: { text: 'a' } },
+      { seq: 1, type: 'plan_proposed', data: { architecture: 'x', pages: [], components: [], tasks: [] } },
+      { seq: 2, type: 'run_summary', data: { metrics: {} } },
+      { seq: 3, type: 'action_required', data: { patternId: 'p', title: 't', rawError: 'e', blockedCapabilities: [] } },
+    ]
+    const a = reduceEvents(events)
+    const b = reduceEvents(events) // a fresh reload of the same DB replay
+    expect(a.items.map((i) => i.id)).toEqual(b.items.map((i) => i.id))
+    expect(JSON.stringify(a.items)).toEqual(JSON.stringify(b.items))
+  })
+
   it('reduceEvents replays a full list to the same state regardless of duplicates', () => {
     const events = [
       { seq: 0, type: 'run_status', data: { status: 'running' } },

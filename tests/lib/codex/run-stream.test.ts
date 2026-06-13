@@ -63,6 +63,30 @@ describe('openRunStream', () => {
     expect(finalStatus).toBe('done')
   })
 
+  it('stops (no reconnect storm) on a permanent client error like 404', async () => {
+    let calls = 0
+    let errored: unknown = null
+    const fetchImpl = (async () => { calls += 1; return { ok: false, status: 404, body: null } as unknown as Response }) as unknown as typeof fetch
+    const handle = openRunStream({ runId: 'gone', onEvent: () => {}, onError: (e) => { errored = e }, fetchImpl, token: 't' })
+    await handle.done
+    expect(calls).toBe(1) // did not reconnect against a dead URL
+    expect(errored).toBeInstanceOf(Error)
+  })
+
+  it('reconnects on a transient error (503) then succeeds', async () => {
+    let calls = 0
+    const fetchImpl = (async () => {
+      calls += 1
+      if (calls === 1) return { ok: false, status: 503, body: null } as unknown as Response
+      return streamResponse(['data: {"seq":1,"type":"run_status","data":{"status":"done"}}\n\n'])
+    }) as unknown as typeof fetch
+    const events: string[] = []
+    const handle = openRunStream({ runId: 'r', onEvent: (e) => events.push(e.type), fetchImpl, token: 't', maxBackoffMs: 1 })
+    await handle.done
+    expect(calls).toBe(2) // retried the transient failure
+    expect(events).toContain('run_status')
+  })
+
   it('passes afterSeq and the token in the request URL', async () => {
     let calledUrl = ''
     const fetchImpl = (async (url: string) => { calledUrl = url; return streamResponse(['data: {"seq":6,"type":"run_status","data":{"status":"done"}}\n\n']) }) as unknown as typeof fetch
