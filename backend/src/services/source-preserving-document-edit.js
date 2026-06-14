@@ -2171,6 +2171,55 @@ function appendToTextLikeBuffer(buffer, blocks, format = 'txt') {
   return appendToPlainTextBuffer(buffer, blocks);
 }
 
+// Count how many times `needle` appears in `text` (case-insensitive exact, with
+// the same normalized fallback replaceNeedleText uses) so in-place text edits
+// can report a real changedCount and detect a no-op match.
+function countNeedleMatches(text, needle) {
+  const exact = String(needle || '').trim();
+  if (!exact) return 0;
+  const re = new RegExp(escapeRegExp(exact), 'gi');
+  const matches = String(text || '').match(re);
+  if (matches) return matches.length;
+  const norm = normalizeText(exact);
+  return norm && normalizeText(String(text || '')).includes(norm) ? 1 : 0;
+}
+
+// In-place edit for plain-text-like files (txt/md/csv/html/json/xml/yaml/svg).
+// Applies replace_text / delete_text operations to the decoded text first, then
+// appends generic blocks only when the request actually asked to ADD content.
+// Mirrors executeXlsxOperations so "reemplaza X por Y en el markdown" edits in
+// place instead of always appending an annex at the end. Pure & deterministic.
+function executeTextLikeOperations({ input, requestText = '', format = 'txt', blocks = [] }) {
+  const ops = planGenericOfficeOperations({ requestText, format });
+  let text = Buffer.isBuffer(input) ? input.toString('utf8') : String(input || '');
+  const steps = [];
+  const validationBlocks = [];
+  const appendBlocks = applyTextReplacementsToBlocks(blocks, ops);
+  let needsAppend = false;
+  for (const op of ops) {
+    if (op.kind === 'replace_text' && op.needle) {
+      const count = countNeedleMatches(text, op.needle);
+      if (count > 0) text = replaceNeedleText(text, op.needle, op.replacement || '');
+      validationBlocks.push(block('normal', op.replacement || ''));
+      steps.push({ kind: 'replace_text', mode: 'text_safe_replace', changedCount: count });
+    } else if (op.kind === 'delete_text' && op.needle) {
+      const count = countNeedleMatches(text, op.needle);
+      if (count > 0) text = replaceNeedleText(text, op.needle, '');
+      steps.push({ kind: 'delete_text', mode: 'text_safe_delete', removedCount: count });
+    } else {
+      // append_generic (or any other) → fall back to appending the blocks once.
+      needsAppend = true;
+    }
+  }
+  let buffer = Buffer.from(text, 'utf8');
+  if (needsAppend) {
+    buffer = appendToTextLikeBuffer(buffer, appendBlocks, format);
+    validationBlocks.push(...appendBlocks);
+    steps.push({ kind: 'append_generic', mode: 'text_append' });
+  }
+  return { buffer, steps, validationBlocks, ops };
+}
+
 function extractTextFromDocxBuffer(buffer) {
   const zip = new PizZip(buffer);
   const xml = zip.file('word/document.xml')?.asText() || '';
@@ -4108,8 +4157,27 @@ async function generateSourcePreservingDocumentEdit({
       content = 'Listo. Conservé el PDF original y agregué el contenido solicitado al final, sin reemplazar las páginas existentes.';
     } else if (isTextLikeFile(sourceFile)) {
       format = textLikeFormatForFile(sourceFile) || 'txt';
-      output = appendToTextLikeBuffer(input, blocks, format);
-      content = `Listo. Conservé el ${format.toUpperCase()} original y agregué el contenido solicitado sin reemplazar el archivo base.`;
+      const execution = executeTextLikeOperations({ input, requestText, format, blocks });
+      output = execution.buffer;
+      validationBlocks = execution.validationBlocks;
+      operations = execution.ops;
+      orchestration = buildDocumentOrchestrationPlan({
+        requestText,
+        sourceFile,
+        referenceFiles,
+        operations,
+        selectionReason,
+      });
+      const stepSummary = joinSpanishList(execution.steps.map(describeStep));
+      const onlyAppend = execution.steps.every((step) => step.kind === 'append_generic');
+      suffix = onlyAppend ? 'con_anexos' : 'editado';
+      titleSuffix = onlyAppend ? 'con anexos' : 'editado';
+      explanation = stepSummary
+        ? `Se conservó el ${format.toUpperCase()} original; ${stepSummary}.`
+        : `Se conservó el ${format.toUpperCase()} original y se aplicó la edición solicitada.`;
+      content = stepSummary
+        ? `Listo. Conservé el ${format.toUpperCase()} original y ${stepSummary}, sin reemplazar el archivo base.`
+        : `Listo. Conservé el ${format.toUpperCase()} original y apliqué la edición solicitada sin reemplazar el archivo base.`;
     } else {
       const ext = path.extname(sourceFile.originalName || sourceFile.filename || '').replace(/^\./, '').toLowerCase();
       throw new Error(`La edición preservadora todavía no soporta archivos .${ext || 'desconocidos'}. Formatos soportados: ${supportedSourceEditLabel()}.`);
@@ -4234,7 +4302,9 @@ module.exports = {
     addSheetToXlsxBuffer,
     appendRowsToXlsxBuffer,
     buildXlsxSummaryForPrompt,
+    countNeedleMatches,
     executePptxOperations,
+    executeTextLikeOperations,
     executeXlsxOperations,
     planOfficeOperationsSmart,
     sanitizeOfficeOperations,

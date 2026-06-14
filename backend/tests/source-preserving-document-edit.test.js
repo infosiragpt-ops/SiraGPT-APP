@@ -1628,3 +1628,47 @@ describe('append_references — referencias bibliográficas reales', () => {
     );
   });
 });
+
+describe('executeTextLikeOperations — in-place edits for plain-text files', () => {
+  const { executeTextLikeOperations, countNeedleMatches } = sourcePreservingInternals;
+
+  it('replaces text IN PLACE instead of only appending (markdown)', () => {
+    const input = Buffer.from('# Informe\n\nHola MUNDO, adios MUNDO.\n');
+    const out = executeTextLikeOperations({ input, requestText: 'reemplaza MUNDO por TIERRA', format: 'md', blocks: [] });
+    const text = out.buffer.toString('utf8');
+    assert.match(text, /tierra/i, 'replacement text must be present');
+    assert.equal(/mundo/i.test(text), false, 'the original needle must be gone (replaced, not appended)');
+    const replaceStep = out.steps.find((s) => s.kind === 'replace_text');
+    assert.ok(replaceStep && replaceStep.changedCount === 2, 'reports both occurrences replaced');
+    assert.equal(out.steps.some((s) => s.kind === 'append_generic'), false, 'a pure replace must NOT append an annex');
+  });
+
+  it('deletes specific text in place', () => {
+    const input = Buffer.from('texto CONFIDENCIAL aqui');
+    const out = executeTextLikeOperations({ input, requestText: 'borra CONFIDENCIAL', format: 'txt', blocks: [] });
+    assert.equal(/confidencial/i.test(out.buffer.toString('utf8')), false);
+    assert.ok(out.steps.some((s) => s.kind === 'delete_text' && s.removedCount === 1));
+  });
+
+  it('still APPENDS when the request asks to add content (back-compat)', () => {
+    const input = Buffer.from('línea original\n');
+    const blocks = [{ kind: 'normal', text: 'Contenido nuevo agregado' }];
+    const out = executeTextLikeOperations({ input, requestText: 'agrega una sección de conclusiones', format: 'txt', blocks });
+    const text = out.buffer.toString('utf8');
+    assert.match(text, /línea original/, 'original content preserved');
+    assert.match(text, /Contenido nuevo agregado/, 'new content appended');
+    assert.ok(out.steps.some((s) => s.kind === 'append_generic'));
+  });
+
+  it('a replace whose needle is absent is a reported no-op (changedCount 0), buffer unchanged', () => {
+    const input = Buffer.from('contenido sin coincidencias');
+    const out = executeTextLikeOperations({ input, requestText: 'reemplaza FOO por BAR', format: 'txt', blocks: [] });
+    assert.equal(out.buffer.toString('utf8'), 'contenido sin coincidencias');
+    assert.ok(out.steps.some((s) => s.kind === 'replace_text' && s.changedCount === 0));
+  });
+
+  it('countNeedleMatches counts case-insensitively', () => {
+    assert.equal(countNeedleMatches('aA aa Aa', 'aa'), 3);
+    assert.equal(countNeedleMatches('nada', 'xyz'), 0);
+  });
+});

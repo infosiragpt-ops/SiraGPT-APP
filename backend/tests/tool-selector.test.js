@@ -110,3 +110,27 @@ describe('scoreTool / categoriesFor', () => {
     assert.ok(sel.categoriesFor('create_chart').includes('media'));
   });
 });
+
+describe('selectTools — document_edit survives on attachment turns', () => {
+  const withEdit = [...BASE, { name: 'document_edit', schema: {}, handler: () => {} }];
+
+  test('keeps document_edit whenever a file is attached, even on a non-edit intent', () => {
+    // document_edit has no CATEGORY_PATTERNS entry → score 0 → would be dropped
+    // by the narrowing pass. The hasFiles core-keep guarantees the in-process
+    // "edit my document" path is reachable on every attachment turn.
+    const r = sel.selectTools(
+      { tools: withEdit, userQuery: 'resume y mejora este informe adjunto', intent: 'summarization', signals: { hasFiles: true } },
+      deps,
+    );
+    assert.equal(r.applied, true);
+    assert.ok(names(r).includes('document_edit'), 'document_edit MUST be kept when signals.hasFiles');
+  });
+
+  test('without an attached file, document_edit is not special-cased (free to drop)', () => {
+    const r = sel.selectTools(
+      { tools: withEdit, userQuery: 'busca papers de IA', intent: 'research_question', signals: { needsResearch: true } },
+      deps,
+    );
+    assert.equal(names(r).includes('document_edit'), false);
+  });
+});

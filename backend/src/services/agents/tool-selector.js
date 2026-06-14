@@ -167,7 +167,11 @@ function selectTools(rawInput, deps = {}) {
   for (const t of tools) {
     const n = toName(t).toLowerCase();
     if (CORE_TOOLS.includes(n)) coreSet.add(toName(t));
-    if (signals.hasFiles && /(rag_retrieve|docintel|deep_analyze)/.test(n)) coreSet.add(toName(t));
+    // When files are attached, never strand the document tools: document_edit
+    // is the in-process "edit specific parts of my doc" path and has no
+    // CATEGORY_PATTERNS entry (score 0), so without this it can be dropped on a
+    // specific-intent turn even though the user attached a file to edit it.
+    if (signals.hasFiles && /(rag_retrieve|docintel|deep_analyze|document_edit)/.test(n)) coreSet.add(toName(t));
     if ((signals.hasMedia || /media|image|chart/.test(it)) && /(create_document|generate_image|create_chart)/.test(n)) coreSet.add(toName(t));
   }
 
