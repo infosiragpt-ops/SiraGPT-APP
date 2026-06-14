@@ -41,6 +41,7 @@ function statusLabel(s: CheckStatus) {
     case "degraded": return "Degradado"
     case "unhealthy": return "Caído"
     case "skipped": return "Omitido"
+    default: return String(s || "Desconocido")
   }
 }
 
@@ -194,7 +195,7 @@ export default function HealthDashboard() {
           {/* Check cards */}
           <div className="grid gap-4">
             {health.checks.map((check) => {
-              const cfg = statusConfig[check.status]
+              const cfg = statusConfig[check.status] ?? statusConfig.skipped
               const Icon = cfg.Icon
               const CheckIcon = iconForCheck(check.name)
               const hasDetails = check.details && Object.keys(check.details).length > 0
