@@ -493,6 +493,11 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       selection = null,
       toolCallMode = 'native',
       provider = null,
+      // Extracted text of the user's attached documents (already budget-capped
+      // by the caller). Injected directly into the system prompt so the agentic
+      // loop ALWAYS sees the content — rag_retrieve becomes a fallback for deep
+      // search, not the only path. Empty string when there are no attachments.
+      attachedDocuments = '',
     } = opts || {};
 
     if (!openai) throw new Error('runAgenticChat: openai client is required');
@@ -686,6 +691,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       'Cuando el usuario pida un archivo descargable, usa `create_document` y despues `verify_artifact`; no finalices si la verificacion muestra un archivo vacio o incorrecto.',
       'Cuando el usuario pida editar su Word/Excel/PPT/PDF subido, trata el archivo original como solo lectura: crea una nueva copia en el mismo formato, conserva estructura/logos/tablas/formulas/hojas/encabezados/diseño tanto como sea posible, y modifica solo lo solicitado.',
       'No afirmes que modificaste repositorios, GitHub o el filesystem local si ninguna herramienta disponible lo hizo realmente.',
+      attachedDocuments
+        ? `\n=== DOCUMENTOS ADJUNTOS POR EL USUARIO (texto ya extraído) ===\nAnaliza este contenido DIRECTAMENTE para responder. NUNCA digas que no tienes acceso al documento ni que el usuario debe reenviarlo: el texto está aquí. Si necesitas más detalle del que aparece (el contenido puede venir recortado), usa \`rag_retrieve\` o \`docintel_*\` sobre estos mismos archivos.\n${attachedDocuments}\n=== FIN DOCUMENTOS ADJUNTOS ===`
+        : '',
       historyForPrompt ? `\nConversación previa (recortada):\n${historyForPrompt}` : '',
     ].filter(Boolean).join('\n');
 

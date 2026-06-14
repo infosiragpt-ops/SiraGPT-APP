@@ -5234,11 +5234,38 @@ router.post(
                   .map((file) => file && (file.id || file.fileId || file.uploadId || file.databaseId))
                   .filter(Boolean)
                   .map(String);
+                // Inject the attached documents' extracted text directly into the
+                // agentic loop so it ALWAYS sees the content (the loop used to get
+                // only fileIds + a "call rag_retrieve" hint, so weak tool-callers
+                // or a RAG miss made it answer "no tengo acceso al documento").
+                // Per-file budget keeps multi-file turns ("compara estos 2") fair;
+                // rag_retrieve/docintel remain the fallback for the overflow.
+                let agenticAttachedDocuments = '';
+                try {
+                  const agenticDocs = (processedFiles || [])
+                    .filter((file) => file && !isImageMime(file.mimeType || file.type));
+                  const AGENTIC_DOC_INJECT_CHARS = Number(process.env.SIRAGPT_AGENTIC_DOC_INJECT_CHARS) || 120000;
+                  const perFileCap = agenticDocs.length
+                    ? Math.max(8000, Math.floor(AGENTIC_DOC_INJECT_CHARS / agenticDocs.length))
+                    : AGENTIC_DOC_INJECT_CHARS;
+                  agenticAttachedDocuments = agenticDocs.map((file) => {
+                    const name = file.originalName || file.name || file.filename || 'documento';
+                    const raw = typeof file.extractedText === 'string' ? file.extractedText.trim() : '';
+                    let body = raw
+                      ? messageAttachments.prepareDocumentTextForProfessionalSynthesis(raw)
+                      : messageAttachments.describeUnextractedAttachment(file);
+                    if (body && body.length > perFileCap) {
+                      body = body.slice(0, perFileCap) + '\n... [contenido recortado por límite; usa rag_retrieve para el resto] ...';
+                    }
+                    return body ? `--- ${name} ---\n${body}` : null;
+                  }).filter(Boolean).join('\n\n');
+                } catch (_) { agenticAttachedDocuments = ''; }
                 __agenticDidStream = true;
                 const agenticResult = await agenticStream.runAgenticChat({
                   openai: agenticClient,
                   model: actualModel,
                   provider: actualProvider,
+                  attachedDocuments: agenticAttachedDocuments,
                   userQuery: prompt,
                   history: priorHistory,
                   res,

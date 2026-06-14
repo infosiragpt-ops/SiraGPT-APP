@@ -556,6 +556,44 @@ test('runAgenticChat sends expanded thread context to the model', async () => {
   assert.match(system, /cada hilo recuerde la meta completa/);
 });
 
+test('runAgenticChat injects attached-document text directly into the system prompt', async () => {
+  let firstCreateArgs = null;
+  const openai = {
+    chat: {
+      completions: {
+        create: async (args) => { firstCreateArgs = args; return finalizeMessage('Listo.'); },
+      },
+    },
+  };
+  const { res } = makeFakeRes();
+
+  await agenticStream.runAgenticChat({
+    openai,
+    model: 'gpt-4o-mini',
+    userQuery: 'analiza este documento',
+    history: [],
+    res,
+    attachedDocuments: '--- informe.pdf ---\nEl ingreso neto del Q3 fue 4.2 millones de dólares.',
+  });
+
+  const system = firstCreateArgs.messages.find(m => m.role === 'system')?.content || '';
+  // The actual document content must reach the model so it never claims "no access".
+  assert.match(system, /DOCUMENTOS ADJUNTOS POR EL USUARIO/);
+  assert.match(system, /El ingreso neto del Q3 fue 4\.2 millones/);
+  assert.match(system, /NUNCA digas que no tienes acceso/);
+});
+
+test('runAgenticChat omits the attached-documents block when there are none', async () => {
+  let firstCreateArgs = null;
+  const openai = {
+    chat: { completions: { create: async (args) => { firstCreateArgs = args; return finalizeMessage('Listo.'); } } },
+  };
+  const { res } = makeFakeRes();
+  await agenticStream.runAgenticChat({ openai, model: 'gpt-4o-mini', userQuery: 'hola', history: [], res });
+  const system = firstCreateArgs.messages.find(m => m.role === 'system')?.content || '';
+  assert.equal(/DOCUMENTOS ADJUNTOS POR EL USUARIO/.test(system), false);
+});
+
 test('runAgenticChat emits sentinel + final answer with a stub tool', async () => {
   const openai = makeFakeOpenAI([
     toolCallMessage('echo', { text: 'hola' }),

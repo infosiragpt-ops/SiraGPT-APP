@@ -351,7 +351,12 @@ class FileProcessor {
       return {
         success: false,
         error: error.message,
-        extractedText: `Error processing file: ${error.message}`,
+        // Keep extractedText EMPTY on failure — the human-readable reason lives
+        // in `error` (surfaced downstream as extractionWarning). Putting the
+        // error string here pollutes the chat (the model would "analyze" the
+        // error text) and the RAG index. Empty → describeUnextractedAttachment
+        // gives the model a sensible "couldn't extract text" note instead.
+        extractedText: '',
         ocr: {
           status: 'failed',
           confidence: 0,
@@ -395,23 +400,32 @@ class FileProcessor {
           }
           const fullText = parts.join('');
 
-          const header = `PDF document — ${streamingResult.totalPages} page(s) extracted, ` +
-            `${streamingResult.totalChars} characters` +
-            (streamingResult.partial ? ' (partial — RSS cap reached)' : '') +
-            `\n---\n`;
+          // Scanned / image-only PDF: streaming saw pages but extracted NO text
+          // layer. Returning here would hand back a header-only "0 characters"
+          // result and the user's scan would never be analyzed. Instead, fall
+          // through to the pdf-parse + hybrid-OCR path below, which detects the
+          // missing text layer and runs OCR. Only return early when we actually
+          // captured text.
+          if (fullText.trim().length > 0) {
+            const header = `PDF document — ${streamingResult.totalPages} page(s) extracted, ` +
+              `${streamingResult.totalChars} characters` +
+              (streamingResult.partial ? ' (partial — RSS cap reached)' : '') +
+              `\n---\n`;
 
-          const extractedText = header + fullText;
-          const ocr = {
-            status: 'skipped',
-            confidence: null,
-            provider: 'pdf_text_layer',
-            reason: 'embedded_text_layer',
-            pages: streamingResult.totalPages,
-            streaming: true,
-            pageCount: streamingResult.pageCount,
-            partial: streamingResult.partial,
-          };
-          return options.detailed ? { extractedText, ocr } : extractedText;
+            const extractedText = header + fullText;
+            const ocr = {
+              status: 'skipped',
+              confidence: null,
+              provider: 'pdf_text_layer',
+              reason: 'embedded_text_layer',
+              pages: streamingResult.totalPages,
+              streaming: true,
+              pageCount: streamingResult.pageCount,
+              partial: streamingResult.partial,
+            };
+            return options.detailed ? { extractedText, ocr } : extractedText;
+          }
+          console.log(`[fileProcessor] streaming PDF found ${streamingResult.pageCount} page(s) but no text layer — falling through to OCR`);
         }
       } catch (streamingErr) {
         console.warn(`[fileProcessor] streaming PDF failed, falling back to pdf-parse: ${streamingErr.message}`);
