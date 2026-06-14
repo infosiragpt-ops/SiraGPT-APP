@@ -22,12 +22,14 @@
 
 import * as React from "react"
 import {
+  AlertTriangle,
   ArrowUp,
   BookOpen,
   Bug,
   Check,
   ChevronDown,
   CircleHelp,
+  ExternalLink,
   Image as ImageIcon,
   ListChecks,
   Plus,
@@ -61,6 +63,16 @@ import { useCodeWorkspace } from "@/lib/code-workspace-context"
 import { intakeService } from "@/lib/builder/intake-service"
 import type { CodeChatTurn } from "@/lib/code-chat-sessions"
 import { computeLineDiff, parseCodeBlocks, type CodeBlock } from "@/lib/code-workspace-utils"
+import { detectBlocker } from "@/lib/code-chat-blocker"
+import { extractPlanLabel } from "@/lib/code-chat-plan-label"
+import {
+  buildWriteMetrics,
+  formatUsd,
+  formatWorked,
+  glyphForAction,
+  type CodeChatAction,
+  type CodeChatMetrics,
+} from "@/lib/code-chat-metrics"
 import { defaultAgentState, type AgentBuildContext } from "@/lib/code-agent/types"
 import {
   classifyBuildError,
@@ -151,6 +163,22 @@ function collectConfigFiles(
     .join("\n\n")
 }
 
+// Agent-style narration block (docs/code/code-chat-agent-style-prompt.md): makes
+// every assistant reply read like the live-dashboard agent — first-person,
+// technical, step-by-step, validating env constraints by name. The badges /
+// action-glyph rows / Worked Summary are added by the UI from REAL data; the
+// model must NOT fabricate them.
+const AGENT_STYLE_BLOCK = [
+  "ESTILO DE RESPUESTA (obligatorio):",
+  "- Eres un Agente de Ingeniería de Software Senior: planificas, ejecutas y reportas como un dashboard de desarrollo en vivo.",
+  "- Escribe en PRIMERA PERSONA y en PRESENTE, con tono técnico, objetivo y proactivo: \"Analizo todos los errores en paralelo\", \"Veo los problemas claramente\", \"Tengo el panorama completo\", \"Los ordeno por prioridad\". Frases cortas (1-2 líneas), sin relleno.",
+  "- Abre SIEMPRE con una línea de planificación que empiece con un GERUNDIO y nombre la operación (\"Planificando la verificación de la migración…\", \"Revisando el código de memoria…\", \"Buscando las queries SQL…\"). Ponla como primera línea, sola, seguida del resto en líneas aparte.",
+  "- Narra PASO A PASO: una frase breve anuncia la acción → realizas la acción (generas el archivo / usas la herramienta) → describes lo que observas → siguiente acción. No vuelques un bloque de código gigante sin narrar.",
+  "- Antes de cambiar o ejecutar código, VALIDA los supuestos del entorno y NÓMBRALOS: columnas/tablas que quizá no existan (p. ej. column \"embedding\" does not exist), dependencias, variables. No asumas que algo existe sin verificarlo.",
+  "- Cierra con una síntesis del panorama (\"Tengo el panorama completo: identifico N problemas distintos. Los ordeno por prioridad:\").",
+  "- NO inventes resultados ni métricas (tiempo, acciones, líneas, tokens y costo se miden y se muestran solos). Si algo falla por falta de créditos/cuota/clave (402), detente, no reintentes en bucle, y explica qué quedó bloqueado.",
+].join("\n")
+
 function buildSystemContext(
   files: Record<string, { path: string; language: string; content: string }>,
   activePath: string | null,
@@ -215,6 +243,8 @@ function buildSystemContext(
     folderBlock,
     "",
     previewBlock,
+    "",
+    AGENT_STYLE_BLOCK,
     "",
     "Archivos disponibles:",
     fileList || "(workspace vacío)",
@@ -444,7 +474,7 @@ export function AICodeChatPanel() {
         .join("\n\n")
       const convoBlock = transcript ? `Conversación hasta ahora:\n${transcript}\n\n---\n\n` : ""
       const finalPrompt = override?.systemPrompt
-        ? `${override.systemPrompt}\n\n${convoBlock}Usuario: ${text}`
+        ? `${AGENT_STYLE_BLOCK}\n\n${override.systemPrompt}\n\n${convoBlock}Usuario: ${text}`
         : includeContext
           ? `${buildSystemContext(files, activePath, activeFolder, composerMode)}\n\n${modeInstruction}\n\n${convoBlock}Usuario: ${text}`
           : `${modeInstruction}\n\n${convoBlock}Usuario: ${text}`
@@ -453,6 +483,10 @@ export function AICodeChatPanel() {
       // generated files without reading it back out of a setState updater
       // (updaters must stay pure — applyBlock is a side effect).
       let assistantText = ""
+      const startedAt = Date.now()
+      // Real token usage (+ optional USD cost) from the stream's `usage` frame,
+      // delivered just before onClose so it's available when we build metrics.
+      let usage: { tokensIn: number; tokensOut: number; costOriginalUsd?: number; costAppliedUsd?: number } | null = null
 
       try {
         await apiClient.generateAIStream(
@@ -470,23 +504,26 @@ export function AICodeChatPanel() {
           (chunk) => {
             assistantText += chunk
             setTurns((prev) =>
-              prev.map((t) =>
-                t.id === assistantId ? { ...t, content: t.content + chunk } : t,
-              ),
+              prev.map((t) => {
+                if (t.id !== assistantId) return t
+                const nextContent = t.content + chunk
+                // The first completed line = the planning line is done → stamp the
+                // REAL planning duration once (turn start → first line emitted).
+                const planPatch =
+                  t.planMs == null && nextContent.includes("\n")
+                    ? { planMs: Date.now() - startedAt }
+                    : {}
+                return { ...t, content: nextContent, ...planPatch }
+              }),
             )
           },
           () => {
-            setTurns((prev) =>
-              prev.map((t) =>
-                t.id === assistantId ? { ...t, streaming: false } : t,
-              ),
-            )
-            setBusy(false)
-            abortRef.current = null
             // App mode (or an explicit override) = Replit-style "presented
             // output": auto-apply the generated files and open the live preview
             // so the user sees the result immediately. Other modes keep the
-            // manual "Aplicar" button (review-before-write).
+            // manual "Aplicar" button (review-before-write). `applied` is fed to
+            // the Worked-Summary/action-log metrics on the turn (real numbers).
+            let applied: Array<{ path: string; content: string }> = []
             if (override?.autoApply ?? composerMode === "app") {
               try {
                 const blocks = parseCodeBlocks(assistantText).filter((b) => b.path)
@@ -494,6 +531,7 @@ export function AICodeChatPanel() {
                   for (const b of blocks) {
                     if (b.path) applyBlock(b.path, b.content)
                   }
+                  applied = blocks.map((b) => ({ path: b.path as string, content: b.content }))
                   const hasPkg = blocks.some((b) => /(^|\/)package\.json$/i.test(b.path || ""))
                   const hasHtml = blocks.some((b) => /\.html?$/i.test(b.path || ""))
                   toast.success(
@@ -513,6 +551,42 @@ export function AICodeChatPanel() {
                 /* parsing/apply failure → user can still apply manually */
               }
             }
+            setTurns((prev) =>
+              prev.map((t) => {
+                if (t.id !== assistantId) return t
+                const base = { ...t, streaming: false }
+                // Attach the Worked Summary when the turn did file work OR the
+                // stream reported real token usage (the Agent Usage figure).
+                if (applied.length > 0 || usage) {
+                  const { actions, metrics } = buildWriteMetrics(applied, {
+                    startedAt,
+                    now: Date.now(),
+                    getPrevContent: (p) => files[p]?.content ?? "",
+                  })
+                  // Even a no-file text answer shows an action row (the model
+                  // reasoned + produced the reply).
+                  const effectiveActions =
+                    actions.length > 0 ? actions : [{ kind: "reasoning" as const, label: "Genero la respuesta" }]
+                  const withUsage = usage
+                    ? {
+                        ...metrics,
+                        tokensIn: usage.tokensIn,
+                        tokensOut: usage.tokensOut,
+                        ...(usage.costOriginalUsd != null ? { costOriginalUsd: usage.costOriginalUsd } : {}),
+                        ...(usage.costAppliedUsd != null ? { costAppliedUsd: usage.costAppliedUsd } : {}),
+                      }
+                    : metrics
+                  return {
+                    ...base,
+                    actions: effectiveActions,
+                    metrics: withUsage,
+                  }
+                }
+                return base
+              }),
+            )
+            setBusy(false)
+            abortRef.current = null
           },
           (err) => {
             const msg = err?.message || "Error en el chat de código"
@@ -531,6 +605,7 @@ export function AICodeChatPanel() {
             abortRef.current = null
           },
           controller.signal,
+          { onUsage: (u) => { usage = u } },
         )
       } catch (err: any) {
         toast.error(err?.message || "Error en el chat de código")
@@ -748,8 +823,27 @@ export function AICodeChatPanel() {
       const controller = new AbortController()
       abortRef.current = controller
 
-      const finish = (content: string) =>
-        setTurns((prev) => prev.map((t) => (t.id === assistantId ? { ...t, content, streaming: false } : t)))
+      const startedAt = Date.now()
+      const finish = (
+        content: string,
+        meta?: { written?: Array<{ path: string; content: string }>; read?: Array<{ path: string; content: string }> },
+      ) =>
+        setTurns((prev) =>
+          prev.map((t) => {
+            if (t.id !== assistantId) return t
+            const base = { ...t, content, streaming: false }
+            if (meta?.written && meta.written.length > 0) {
+              const { actions, metrics } = buildWriteMetrics(meta.written, {
+                startedAt,
+                now: Date.now(),
+                getPrevContent: (p) => files[p]?.content ?? "",
+                read: meta.read,
+              })
+              return { ...base, actions, metrics }
+            }
+            return base
+          }),
+        )
 
       try {
         let esid = engineSessionRef.current[sid]
@@ -857,7 +951,10 @@ export function AICodeChatPanel() {
           const hasEntry = merged.some((f) => /(^|\/)(index\.html?|package\.json)$/i.test(f.path))
           if (merged.length > 0 && (hasEntry || merged.length >= 2)) {
             applyFilesToWorkspace(merged)
-            finish(reply ? `${reply}\n\n_(Motor OpenCode: ${merged.length} archivo(s) →)_` : `✅ Motor OpenCode — ${merged.length} archivo(s) →`)
+            finish(
+              reply ? `${reply}\n\n_(Motor OpenCode: ${merged.length} archivo(s) →)_` : `✅ Motor OpenCode — ${merged.length} archivo(s) →`,
+              { written: merged, read: engineFiles },
+            )
             toast.success(`Motor OpenCode — ${merged.length} archivo(s) →`)
             return
           }
@@ -887,7 +984,10 @@ export function AICodeChatPanel() {
           }
           if (synced.length > 0) {
             applyFilesToWorkspace(synced)
-            finish(reply ? `${reply}\n\n_(Motor OpenCode: ${synced.length} archivo(s) →)_` : `✅ Cambios aplicados — ${synced.length} archivo(s) →`)
+            finish(
+              reply ? `${reply}\n\n_(Motor OpenCode: ${synced.length} archivo(s) →)_` : `✅ Cambios aplicados — ${synced.length} archivo(s) →`,
+              { written: synced },
+            )
             toast.success(`Cambios aplicados — ${synced.length} archivo(s) →`)
             return
           }
@@ -896,7 +996,9 @@ export function AICodeChatPanel() {
         // Plain engine chat: render the reply + apply any code blocks it returned.
         if (blocks.length > 0) {
           applyFilesToWorkspace(blocks.map((b) => ({ path: b.path as string, content: b.content })))
-          finish(reply || `✅ Motor OpenCode — ${blocks.length} archivo(s) aplicados →`)
+          finish(reply || `✅ Motor OpenCode — ${blocks.length} archivo(s) aplicados →`, {
+            written: blocks.map((b) => ({ path: b.path as string, content: b.content })),
+          })
           toast.success(`Motor OpenCode — ${blocks.length} archivo(s) →`)
           return
         }
@@ -926,7 +1028,7 @@ export function AICodeChatPanel() {
         setBusy(false)
       }
     },
-    [applyFilesToWorkspace, runDeterministicInto, setTurns],
+    [applyFilesToWorkspace, files, runDeterministicInto, setTurns],
   )
 
   const dispatch = React.useCallback(
@@ -974,9 +1076,17 @@ export function AICodeChatPanel() {
           // (adapts to what the user already said). Static stays as the fallback.
           const convo = [...turns, { role: "user", content: text }]
           const dynamicQuestion = await fetchCodeIntakeQuestion(action.slot, convo, staticQuestion)
+          // Real steps this turn took, so even an intake question shows an action
+          // row (the agent reviewed the conversation + formulated the question).
+          const askActions: CodeChatAction[] = [
+            { kind: "file_read", label: "Reviso el contexto de la conversación" },
+            { kind: "reasoning", label: "Formulo la siguiente pregunta" },
+          ]
           setTurns((prev) =>
             prev.map((t) =>
-              t.id === assistantId ? { ...t, content: dynamicQuestion, streaming: false } : t,
+              t.id === assistantId
+                ? { ...t, content: dynamicQuestion, streaming: false, actions: askActions }
+                : t,
             ),
           )
           return
@@ -1275,23 +1385,51 @@ function ChatBubble({
     [turn.content, turn.role],
   )
 
+  // USER messages: right-aligned dark-blue bubble with light text (the spec's
+  // user style). No code-block parsing — the user types prompts, not code cards.
+  if (isUser) {
+    return (
+      <div className="flex justify-end">
+        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl bg-blue-900 px-3.5 py-2 text-sm leading-relaxed text-zinc-50 shadow-sm">
+          {turn.content}
+        </div>
+      </div>
+    )
+  }
+
+  // ASSISTANT messages: left-aligned, plain background, clean typography (no
+  // colored bubble) — direct text on the interface, with the code-block cards.
+  const blocker = detectBlocker(turn.content)
+  // Pull the model's gerund-led planning line into the "🧠 …" badge (like the
+  // agent dashboard) and narrate the rest. Falls back to a generic badge while
+  // streaming before the planning line lands.
+  const { label: planLabel, body } = extractPlanLabel(turn.content)
   return (
-    <div
-      className={cn(
-        "rounded-lg border border-border/60 p-3 text-sm",
-        isUser ? "bg-muted/30" : "bg-background",
+    <div className="text-sm">
+      <div className="mb-1 flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-wide text-muted-foreground">
+        Asistente
+        {planLabel || turn.streaming ? (
+          <span className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-violet-500/10 px-2 py-0.5 normal-case tracking-normal text-violet-300">
+            <span aria-hidden="true">🧠</span>
+            <span className="truncate font-medium">{planLabel || "Pensando"}</span>
+            {!turn.streaming && typeof turn.planMs === "number" ? (
+              <span className="opacity-60">({formatWorked(turn.planMs)})</span>
+            ) : null}
+            {turn.streaming ? <ThinkingIndicator size="xs" className="inline" /> : null}
+          </span>
+        ) : null}
+      </div>
+      {/* An out-of-credits / quota error surfaces as a high-visibility panel
+          instead of plain prose; otherwise render the assistant text normally. */}
+      {blocker ? (
+        <ChatBlockerPanel title={blocker.title} rawError={turn.content} url={blocker.url} />
+      ) : (
+        <div className="whitespace-pre-wrap text-sm leading-relaxed">
+          {/* `body` already drops the planning line (now in the badge); strip
+              fenced blocks too so prose isn't shown twice (here + block cards). */}
+          {blocks.length > 0 ? stripFences(body) : body}
+        </div>
       )}
-    >
-      <div className="mb-1 text-[11px] uppercase tracking-wide text-muted-foreground">
-        {isUser ? "Tú" : "Asistente"}
-        {turn.streaming ? <ThinkingIndicator size="xs" className="ml-2 inline" /> : null}
-      </div>
-      <div className="whitespace-pre-wrap text-sm leading-relaxed">
-        {/* Strip fenced blocks from the prose so the user does not see
-            the raw markdown twice — once here and once inside each
-            block card below. */}
-        {blocks.length > 0 ? stripFences(turn.content) : turn.content}
-      </div>
       {(() => {
         const applicable = blocks.filter((b) => b.path)
         return applicable.length >= 2 ? (
@@ -1317,12 +1455,118 @@ function ChatBubble({
           existingContent={block.path ? lookupContent(block.path) : ""}
         />
       ))}
+      {/* Real action log + mandatory Worked Summary — only when the turn did
+          measurable file work (build/app/engine paths populate these). */}
+      {turn.actions && turn.actions.length > 0 ? <ChatActionLog actions={turn.actions} /> : null}
+      {turn.metrics ? <ChatWorkedSummary metrics={turn.metrics} /> : null}
     </div>
   )
 }
 
 function stripFences(text: string): string {
   return text.replace(/```[^\n`]*\n[\s\S]*?```/g, "").trim()
+}
+
+// Compact action log: the FULL ordered glyph sequence (">_ 📖 ✎ …") + an
+// expandable list of the real file paths the agent wrote/read this turn.
+function ChatActionLog({ actions }: { actions: CodeChatAction[] }) {
+  const [open, setOpen] = React.useState(false)
+  if (!actions.length) return null
+  return (
+    <div className="mt-2">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex max-w-full flex-wrap items-center gap-1.5 rounded-full border border-border/60 bg-muted/30 px-2.5 py-1 text-xs text-muted-foreground hover:bg-muted/50"
+        aria-expanded={open}
+      >
+        <span className="flex flex-wrap items-center gap-x-1 font-mono leading-none" aria-hidden="true">
+          {actions.map((a, i) => (
+            <span key={i}>{glyphForAction(a.kind)}</span>
+          ))}
+        </span>
+        <span className="tabular-nums">
+          {actions.length} {actions.length === 1 ? "acción" : "acciones"}
+        </span>
+      </button>
+      {open && (
+        <ul className="mt-1.5 space-y-1 border-l border-border/60 pl-3 text-xs">
+          {actions.map((a, i) => (
+            <li key={i} className="flex items-center gap-1.5 text-muted-foreground">
+              <span className="font-mono" aria-hidden="true">{glyphForAction(a.kind)}</span>
+              <code className="truncate">{a.label}</code>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+// "Trabajó N s" — the mandatory Worked Summary, from REAL measured numbers.
+// File/line groups show only when there was file work; tokens/cost show only
+// when the stream reported real usage (cost omitted when the price is unknown).
+function ChatWorkedSummary({ metrics }: { metrics: CodeChatMetrics }) {
+  const hasFiles = metrics.filesChanged > 0
+  const hasTokens = typeof metrics.tokensIn === "number" || typeof metrics.tokensOut === "number"
+  const orig = metrics.costOriginalUsd
+  const applied = typeof metrics.costAppliedUsd === "number" ? metrics.costAppliedUsd : orig
+  const hasCost = typeof orig === "number" || typeof applied === "number"
+  const showStrike = typeof orig === "number" && typeof applied === "number" && applied < orig
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-border/60 bg-muted/20 px-2.5 py-1.5 text-[11px] text-muted-foreground">
+      <span className="font-medium text-foreground">⏱️ Trabajó {formatWorked(metrics.timeWorkedMs)}</span>
+      {hasFiles ? (
+        <>
+          <span>· {metrics.actionsCount} {metrics.actionsCount === 1 ? "acción" : "acciones"}</span>
+          <span>· {metrics.filesChanged} archivo(s)</span>
+          <span className="tabular-nums">· +{metrics.linesAdded} −{metrics.linesRemoved}</span>
+        </>
+      ) : null}
+      {metrics.itemsReadLines > 0 ? (
+        <span className="tabular-nums">· {metrics.itemsReadLines} líneas leídas</span>
+      ) : null}
+      {hasTokens ? (
+        <span className="tabular-nums">
+          · {(metrics.tokensIn ?? 0) + (metrics.tokensOut ?? 0)} tokens
+        </span>
+      ) : null}
+      {hasCost ? (
+        <span className="tabular-nums">
+          ·{" "}
+          {showStrike ? (
+            <span className="mr-1 text-muted-foreground/60 line-through">{formatUsd(orig as number)}</span>
+          ) : null}
+          {formatUsd((applied ?? orig) as number)}
+        </span>
+      ) : null}
+    </div>
+  )
+}
+
+function ChatBlockerPanel({ title, rawError, url }: { title: string; rawError: string; url?: string }) {
+  const isInternal = url?.startsWith("/")
+  return (
+    <div className="my-1 rounded-xl border border-red-500/30 bg-red-500/10 p-3">
+      <div className="flex items-center gap-1.5 text-sm font-semibold text-red-300">
+        <AlertTriangle className="h-4 w-4" /> Acción requerida de su parte
+      </div>
+      <div className="mt-1 text-sm text-foreground">{title}</div>
+      <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-black/40 p-2.5 text-[11px] leading-relaxed text-zinc-300">
+        {rawError.trim()}
+      </pre>
+      {url && (
+        <a
+          href={url}
+          target={isInternal ? undefined : "_blank"}
+          rel={isInternal ? undefined : "noopener noreferrer"}
+          className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-500"
+        >
+          Añadir créditos <ExternalLink className="h-3.5 w-3.5" />
+        </a>
+      )}
+    </div>
+  )
 }
 
 function ComposerPlusMenu({
