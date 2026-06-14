@@ -110,6 +110,64 @@ function buildDocumentEditTool(deps = {}) {
         files.push({ name: row.originalName || row.filename, buffer });
       }
 
+      // FAST PATH — in-process source-preserving editor (no sandbox, pure Node:
+      // PizZip / ExcelJS / pdf-lib). Handles the common "edit these specific
+      // parts" request on docx/xlsx/pptx/txt/md/html/csv in-process and
+      // self-persists the edited artifact, so editing works even when no Linux
+      // sandbox is installed. It returns null when it can't handle the request
+      // (e.g. needs a different source format) — in that case we fall straight
+      // through to the sandbox doc-agent below, so nothing is ever lost.
+      try {
+        const sp = deps.sourcePreservingEdit || require('../../source-preserving-document-edit');
+        const inproc = await sp.tryGenerateSourcePreservingDocumentEdit({
+          prisma,
+          userId: ctx.userId || null,
+          chatId: ctx.chatId || null,
+          fileIds: ids,
+          prompt: args.instruction,
+          displayPrompt: args.instruction,
+          signal: ctx.signal,
+        });
+        if (inproc && inproc.artifact && inproc.artifact.id) {
+          if (ctx && typeof ctx.onEvent === 'function') {
+            try {
+              ctx.onEvent({
+                type: 'file_artifact',
+                artifact: {
+                  id: inproc.artifact.id,
+                  filename: inproc.artifact.filename,
+                  mime: inproc.artifact.mime,
+                  format: inproc.artifact.format,
+                  sizeBytes: inproc.artifact.sizeBytes,
+                  downloadUrl: inproc.artifact.downloadUrl,
+                  previewHtml: inproc.previewHtml || null,
+                  validation: inproc.validation || null,
+                },
+              });
+            } catch (_) { /* UI plumbing must never fail the tool */ }
+          }
+          return {
+            ok: true,
+            engine: 'in-process',
+            edited: [{
+              filename: inproc.artifact.filename,
+              sizeBytes: inproc.artifact.sizeBytes,
+              downloadUrl: inproc.artifact.downloadUrl,
+              valid: !(inproc.validation && inproc.validation.ok === false),
+            }],
+            format: inproc.format,
+            summary: String(inproc.content || '').slice(0, 1200),
+            note: 'El archivo editado (preservando el original) ya aparece como tarjeta de descarga en el chat. Menciónalo brevemente; NO pegues su contenido.',
+          };
+        }
+        // inproc === null → not a source-preserving edit / unsupported source.
+        // Fall through to the sandbox doc-agent below.
+      } catch (_) {
+        // The in-process editor throws when it needs a different/compatible
+        // source (e.g. a section edit on a non-DOCX). The sandbox doc-agent is
+        // more capable for those cases — fall through to it rather than failing.
+      }
+
       // Run the verified pipeline (remote sandbox in prod, auto-fallback).
       let result;
       try {

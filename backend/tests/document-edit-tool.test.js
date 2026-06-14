@@ -23,6 +23,13 @@ process.env.AGENT_ARTIFACT_DIR = ARTIFACT_DIR;
 const { buildDocumentEditTool, MAX_CALLS_PER_TURN } = require('../src/services/agent-harness/tools/document-edit-tool');
 const { buildHarnessTools } = require('../src/services/agent-harness/run-agent-turn');
 
+// The tool now tries the in-process source-preserving editor BEFORE the
+// sandbox doc-agent. These sandbox-path tests stub it to "not applicable"
+// (returns null → fall through) so they stay hermetic and keep asserting the
+// sandbox behaviour. The two dedicated tests at the bottom exercise the
+// in-process fast path directly.
+const SP_NULL = { tryGenerateSourcePreservingDocumentEdit: async () => null };
+
 function tmpFileWith(content) {
   const p = path.join(os.tmpdir(), `doc-edit-in-${Date.now()}-${Math.random().toString(36).slice(2)}.docx`);
   fs.writeFileSync(p, content);
@@ -59,6 +66,7 @@ test('happy path: ownership-scoped lookup, agent gets bytes, artifact card emitt
   let agentArgs = null;
 
   const tool = buildDocumentEditTool({
+    sourcePreservingEdit: SP_NULL,
     prisma: fakePrisma([{ id: 'f1', userId: 'u1', path: inputPath, originalName: 'informe.docx', filename: 'x.docx' }], capture),
     runDocumentAgent: async (opts) => {
       agentArgs = opts;
@@ -105,6 +113,7 @@ test('model-named IDs outside the turn fall back to the REAL attachments (never 
   const capture = {};
   let agentFiles = null;
   const tool = buildDocumentEditTool({
+    sourcePreservingEdit: SP_NULL,
     prisma: fakePrisma([
       { id: 'f1', userId: 'u1', path: real, originalName: 'real.docx', filename: 'real.docx' },
       { id: 'foreign', userId: 'u1', path: '/nope', originalName: 'x.docx', filename: 'x' },
@@ -133,6 +142,7 @@ test('model-named IDs outside the turn fall back to the REAL attachments (never 
 test('error paths return ok:false without throwing', async () => {
   // file_blob_missing
   const t1 = buildDocumentEditTool({
+    sourcePreservingEdit: SP_NULL,
     prisma: fakePrisma([{ id: 'f1', userId: 'u1', path: '/does/not/exist', originalName: 'a.docx', filename: 'a' }]),
     runDocumentAgent: async () => ({ outputs: [] }),
   });
@@ -141,6 +151,7 @@ test('error paths return ok:false without throwing', async () => {
 
   // file_not_found (row owned by another user)
   const t2 = buildDocumentEditTool({
+    sourcePreservingEdit: SP_NULL,
     prisma: fakePrisma([{ id: 'f1', userId: 'OTHER', path: '/x', originalName: 'a.docx', filename: 'a' }]),
     runDocumentAgent: async () => ({ outputs: [] }),
   });
@@ -150,6 +161,7 @@ test('error paths return ok:false without throwing', async () => {
   // doc_agent_failed (e.g. OPENROUTER_API_KEY missing in dev)
   const p3 = tmpFileWith('x');
   const t3 = buildDocumentEditTool({
+    sourcePreservingEdit: SP_NULL,
     prisma: fakePrisma([{ id: 'f1', userId: 'u1', path: p3, originalName: 'a.docx', filename: 'a' }]),
     runDocumentAgent: async () => { throw new Error('OPENROUTER_API_KEY is not configured'); },
   });
@@ -162,6 +174,7 @@ test('error paths return ok:false without throwing', async () => {
 test('empty outputs are skipped; all-empty → no_output', async () => {
   const p = tmpFileWith('x');
   const tool = buildDocumentEditTool({
+    sourcePreservingEdit: SP_NULL,
     prisma: fakePrisma([{ id: 'f1', userId: 'u1', path: p, originalName: 'a.docx', filename: 'a' }]),
     runDocumentAgent: async () => ({ outputs: [{ name: 'broken.docx', buffer: Buffer.alloc(0), valid: false }], finalText: 'meh' }),
   });
@@ -173,6 +186,7 @@ test('empty outputs are skipped; all-empty → no_output', async () => {
 test('per-turn call budget: the 4th call on the SAME ctx is refused', async () => {
   const p = tmpFileWith('x');
   const tool = buildDocumentEditTool({
+    sourcePreservingEdit: SP_NULL,
     prisma: fakePrisma([{ id: 'f1', userId: 'u1', path: p, originalName: 'a.docx', filename: 'a' }]),
     runDocumentAgent: async () => ({ outputs: [{ name: 'e.docx', buffer: Buffer.from('y'), valid: true }], iterations: 1, driver: 'local', finalText: 'ok' }),
   });
@@ -241,4 +255,88 @@ test('intent triage: a specific edit request WITH attachment must not stall on c
   // The vague-request guard must survive: no attachment + no format = ask.
   const noFile = buildSemanticIntentAnalysis({ rawUserRequest: 'haz algo con un documento', files: [] });
   assert.equal(noFile.needs_clarification, true);
+});
+
+test('in-process fast path: source-preserving edit returns the card WITHOUT touching the sandbox', async () => {
+  const inputPath = tmpFileWith('original-bytes');
+  const events = [];
+  let sandboxCalled = false;
+  let spArgs = null;
+
+  const tool = buildDocumentEditTool({
+    prisma: fakePrisma([{ id: 'f1', userId: 'u1', path: inputPath, originalName: 'informe.docx', filename: 'x.docx' }]),
+    // The in-process editor self-persists and returns its artifact descriptor.
+    sourcePreservingEdit: {
+      tryGenerateSourcePreservingDocumentEdit: async (a) => {
+        spArgs = a;
+        return {
+          content: 'Reemplacé la sección "Conclusiones".',
+          format: 'docx',
+          previewHtml: '<p>preview</p>',
+          validation: { ok: true },
+          artifact: {
+            id: 'art-inproc-1',
+            filename: 'informe-editado.docx',
+            mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            format: 'docx',
+            sizeBytes: 4096,
+            downloadUrl: '/api/agent/artifact/art-inproc-1',
+          },
+        };
+      },
+    },
+    // If the fast path works, the sandbox must NEVER run.
+    runDocumentAgent: async () => { sandboxCalled = true; return { outputs: [] }; },
+    saveArtifact: () => { throw new Error('saveArtifact must NOT run — in-process editor self-persists'); },
+  });
+
+  const out = await tool.execute(
+    { instruction: 'cambia la sección Conclusiones' },
+    baseCtx({ onEvent: (e) => events.push(e) }),
+  );
+
+  assert.equal(out.ok, true);
+  assert.equal(out.engine, 'in-process');
+  assert.equal(sandboxCalled, false, 'sandbox doc-agent must be skipped when the in-process editor handles it');
+  assert.equal(spArgs.fileIds[0], 'f1', 'in-process editor receives the confined file ids');
+  assert.equal(spArgs.prompt, 'cambia la sección Conclusiones');
+  assert.equal(out.edited.length, 1);
+  assert.equal(out.edited[0].downloadUrl, '/api/agent/artifact/art-inproc-1');
+
+  const fa = events.find((e) => e.type === 'file_artifact');
+  assert.ok(fa, 'file_artifact event must be emitted for the chat card');
+  assert.equal(fa.artifact.id, 'art-inproc-1');
+  assert.equal(fa.artifact.filename, 'informe-editado.docx');
+  assert.equal(fa.artifact.previewHtml, '<p>preview</p>');
+  fs.rmSync(inputPath, { force: true });
+});
+
+test('in-process fast path falls through to the sandbox when the editor returns null or throws', async () => {
+  const inputPath = tmpFileWith('original-bytes');
+
+  // null → not a source-preserving edit → sandbox runs.
+  let sandboxCalls = 0;
+  const toolNull = buildDocumentEditTool({
+    prisma: fakePrisma([{ id: 'f1', userId: 'u1', path: inputPath, originalName: 'x.docx', filename: 'x.docx' }]),
+    sourcePreservingEdit: { tryGenerateSourcePreservingDocumentEdit: async () => null },
+    runDocumentAgent: async () => {
+      sandboxCalls += 1;
+      return { outputs: [{ name: 'e.docx', buffer: Buffer.from('y'), valid: true }], iterations: 1, driver: 'local', finalText: 'ok' };
+    },
+  });
+  const outNull = await toolNull.execute({ instruction: 'edita algo' }, baseCtx());
+  assert.equal(outNull.ok, true);
+  assert.equal(outNull.driver, 'local', 'null result must fall through to the sandbox doc-agent');
+  assert.equal(sandboxCalls, 1);
+
+  // throw → editor can't handle this source → sandbox still runs (no capability loss).
+  const toolThrow = buildDocumentEditTool({
+    prisma: fakePrisma([{ id: 'f1', userId: 'u1', path: inputPath, originalName: 'x.docx', filename: 'x.docx' }]),
+    sourcePreservingEdit: { tryGenerateSourcePreservingDocumentEdit: async () => { throw new Error('necesito un archivo DOCX con la sección solicitada'); } },
+    runDocumentAgent: async () => ({ outputs: [{ name: 'e.docx', buffer: Buffer.from('y'), valid: true }], iterations: 1, driver: 'local', finalText: 'ok' }),
+  });
+  const outThrow = await toolThrow.execute({ instruction: 'edita algo' }, baseCtx());
+  assert.equal(outThrow.ok, true, 'a throw from the in-process editor must not fail the tool — sandbox takes over');
+  assert.equal(outThrow.driver, 'local');
+  fs.rmSync(inputPath, { force: true });
 });
