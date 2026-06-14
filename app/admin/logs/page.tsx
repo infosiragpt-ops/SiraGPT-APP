@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { apiClient } from "@/lib/api"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
@@ -115,6 +116,7 @@ export default function AdminLogsPage() {
   const [live, setLive] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [lastUpdated, setLastUpdated] = useState<string | null>(null)
+  const [detailRow, setDetailRow] = useState<AuditLogRow | null>(null)
 
   const load = useCallback(async (
     targetPage: number,
@@ -225,6 +227,33 @@ export default function AdminLogsPage() {
     try {
       await navigator.clipboard.writeText(text)
       toast.success(`${source.length} ${source.length === 1 ? "evento copiado" : "eventos copiados"} al portapapeles`)
+    } catch {
+      toast.error("No se pudo copiar al portapapeles")
+    }
+  }
+
+  // Pretty, paste-ready JSON for a single event — the full record including
+  // untruncated metadata, so an operator can see exactly why something failed.
+  const eventToJson = (row: AuditLogRow): string => {
+    const payload = {
+      id: row.id,
+      createdAt: row.createdAt,
+      action: row.action,
+      actor: { type: row.actorType ?? null, id: row.actorId ?? null, name: row.actorName ?? null },
+      resource: { type: row.resourceType ?? null, id: row.resourceId ?? null },
+      metadata: row.metadata ?? null,
+    }
+    try {
+      return JSON.stringify(payload, null, 2)
+    } catch {
+      return String(payload)
+    }
+  }
+
+  const copyDetail = async (row: AuditLogRow) => {
+    try {
+      await navigator.clipboard.writeText(eventToJson(row))
+      toast.success("Evento copiado (JSON) al portapapeles")
     } catch {
       toast.error("No se pudo copiar al portapapeles")
     }
@@ -406,9 +435,11 @@ export default function AdminLogsPage() {
                     <TableRow
                       key={row.id}
                       data-state={isChecked ? "selected" : undefined}
-                      className={cn(isErr && "bg-destructive/5")}
+                      className={cn("cursor-pointer", isErr && "bg-destructive/5")}
+                      onClick={() => setDetailRow(row)}
+                      title="Ver detalle del evento"
                     >
-                      <TableCell className="align-middle">
+                      <TableCell className="align-middle" onClick={(e) => e.stopPropagation()}>
                         <Checkbox
                           checked={isChecked}
                           onCheckedChange={() => toggleRow(row.id)}
@@ -453,6 +484,54 @@ export default function AdminLogsPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Event detail — full record with untruncated metadata for debugging. */}
+      <Dialog open={!!detailRow} onOpenChange={(o) => { if (!o) setDetailRow(null) }}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <span>Detalle del evento</span>
+              {detailRow && (
+                <Badge variant={actionBadgeVariant(detailRow.action)} className="font-mono text-[11px]">
+                  {detailRow.action}
+                </Badge>
+              )}
+            </DialogTitle>
+            <DialogDescription>
+              {detailRow ? formatTimestamp(detailRow.createdAt) : ""}
+            </DialogDescription>
+          </DialogHeader>
+          {detailRow && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
+                <div className="min-w-0">
+                  <div className="text-xs font-medium text-muted-foreground">Actor</div>
+                  <div className="break-all">{detailRow.actorName || detailRow.actorId || detailRow.actorType || "—"}</div>
+                  {detailRow.actorId && detailRow.actorName && (
+                    <div className="break-all text-xs text-muted-foreground">{detailRow.actorId}</div>
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <div className="text-xs font-medium text-muted-foreground">Recurso</div>
+                  <div className="break-all">{[detailRow.resourceType, detailRow.resourceId].filter(Boolean).join(" · ") || "—"}</div>
+                </div>
+              </div>
+              <div className="min-w-0">
+                <div className="mb-1 text-xs font-medium text-muted-foreground">Metadata</div>
+                <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/60 bg-muted/40 p-3 text-xs leading-relaxed">
+                  {detailRow.metadata ? JSON.stringify(detailRow.metadata, null, 2) : "—"}
+                </pre>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" size="sm" onClick={() => void copyDetail(detailRow)}>
+                  <Copy className="mr-1.5 h-3.5 w-3.5" />
+                  Copiar JSON
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
