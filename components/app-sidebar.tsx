@@ -1045,7 +1045,6 @@ export function AppSidebar() {
   const isOnChatPage = activePathname.startsWith('/chat')
   const isOnLibraryPage = activePathname.startsWith('/library')
   const isOnGPTsPage = activePathname.startsWith('/gpts')
-  const isOnParaphrasePage = activePathname.startsWith('/parafraseo')
   const isOnProjectsPage = activePathname.startsWith('/projects')
   const isOnDocumentsPage = activePathname.startsWith('/documents')
 
@@ -1223,19 +1222,6 @@ export function AppSidebar() {
             onNavigate={closeMobileSidebar}
           />
 
-          <SidebarNavItem
-            href="/parafraseo"
-            label="Parafraseo"
-            tooltip="Parafraseo"
-            icon={Sparkles}
-            active={isOnParaphrasePage}
-            pending={isPendingRoute("/parafraseo")}
-            sidebarState={state}
-            markNavigationIntent={markNavigationIntent}
-            prefetchOnHover={prefetchOnHover}
-            navigate={navigate}
-            onNavigate={closeMobileSidebar}
-          />
 
           {/* Projects — file-bucket workspaces. Placed right after GPTs
               because both are "context-rich chat entry points": GPTs
