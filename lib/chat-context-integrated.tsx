@@ -2184,6 +2184,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setUploadedFiles([])
       } catch (error) {
         console.error("Failed to load chat:", error)
+        // Stale/deleted chat id (e.g. restored from localStorage) → clear the
+        // dead pointer so it isn't re-requested (and re-logged) on every load.
+        if ((error as any)?.status === 404 || (error as any)?.statusCode === 404) {
+          try { if (localStorage.getItem('currentChatId') === chatId) localStorage.removeItem('currentChatId') } catch { /* private mode */ }
+          setCurrentChat((prev: any) => (prev?.id === chatId ? null : prev))
+          setChats((prev: any[]) => prev.filter((c) => c && c.id !== chatId))
+        }
       }
     },
     [],

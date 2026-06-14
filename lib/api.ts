@@ -186,6 +186,20 @@ function isExpectedAuthApiFailure(args: {
   return false
 }
 
+// A benign 404 on GET /chats/<id> (chat deleted, or a stale id restored from
+// localStorage) is expected — don't report it as an api error. Kept narrow:
+// GET only, 404 only, EXACT /chats/<id> (never nested routes like
+// /chats/:id/messages), so genuine failures still surface.
+function isExpectedMissingChat(args: {
+  endpoint: string
+  method: string
+  status?: number | null
+}): boolean {
+  if (Number(args.status) !== 404) return false
+  if (String(args.method || "GET").toUpperCase() !== "GET") return false
+  return /^\/chats\/[^/]+$/.test(normalizedEndpointPath(args.endpoint))
+}
+
 export type WebSource = {
   title: string
   url: string
@@ -442,6 +456,7 @@ class ApiClient {
   // JS-readable) and an httpOnly `_csrf_secret` cookie. Mutating requests
   // must echo the public token in the `X-CSRF-Token` header.
   private _csrfTokenInFlight: Promise<string | null> | null = null;
+  private _csrfToken: string | null = null; // cached stateless token (Safari ITP path)
 
   constructor(baseURL: string) {
     this.baseURL = baseURL;
@@ -462,6 +477,13 @@ class ApiClient {
   }): void {
     if (args.endpoint.startsWith("/telemetry")) return
     if (isExpectedAuthApiFailure(args)) return
+    if (isExpectedMissingChat(args)) return
+    // A stable "not configured" 503 (e.g. Stripe billing off) is an expected
+    // config state, not a server outage — don't report it as a server-error.
+    if (
+      Number(args.status) === 503 &&
+      /not[ _]?configured/i.test(`${args.message || ""} ${JSON.stringify(args.extra || {})}`)
+    ) return
     reportClientLog({
       source: "api",
       severity: args.status && args.status >= 500 ? "error" : "warn",
@@ -636,8 +658,7 @@ class ApiClient {
               // by re-fetching) and retry once. We cap at one CSRF retry by
               // tagging the headers so we don't loop indefinitely.
               if (!headers.has('X-CSRF-Retry')) {
-                this._csrfTokenInFlight = null;
-                const fresh = await this._ensureCsrfToken();
+                const fresh = await this._ensureCsrfToken(true);
                 if (fresh) {
                   headers.set('X-CSRF-Token', fresh);
                   headers.set('X-CSRF-Retry', '1');
@@ -778,10 +799,17 @@ class ApiClient {
    * GET /api/csrf-token once (deduped via _csrfTokenInFlight) to have the
    * backend mint a fresh pair and surface the public token in the body.
    */
-  private async _ensureCsrfToken(): Promise<string | null> {
+  private async _ensureCsrfToken(forceRefresh = false): Promise<string | null> {
     if (typeof window === 'undefined') return null;
-    const existing = this._readCsrfCookie();
-    if (existing) return existing;
+    if (forceRefresh) { this._csrfToken = null; this._csrfTokenInFlight = null; }
+    // Reuse the last good stateless token first. On Safari ITP the public
+    // csrf_token cookie is dropped/partitioned (split-host) and goes stale,
+    // so the cached stateless token is the only value that keeps validating.
+    if (this._csrfToken) return this._csrfToken;
+    if (!forceRefresh) {
+      const existing = this._readCsrfCookie();
+      if (existing) return existing; // double-submit path (non-Safari / same-origin)
+    }
     if (this._csrfTokenInFlight) return this._csrfTokenInFlight;
     this._csrfTokenInFlight = (async () => {
       try {
@@ -791,7 +819,9 @@ class ApiClient {
         });
         if (!res.ok) return null;
         const data = await res.json().catch(() => null) as { csrfToken?: string } | null;
-        return (data && data.csrfToken) || this._readCsrfCookie();
+        const token = (data && data.csrfToken) || this._readCsrfCookie();
+        if (token) this._csrfToken = token; // cache the freshly minted stateless token
+        return token;
       } catch {
         return null;
       } finally {
