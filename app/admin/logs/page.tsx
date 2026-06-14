@@ -1,21 +1,30 @@
 "use client"
 
 /**
- * Admin · Logs — auditoría operativa del sistema.
+ * Admin · Logs — auditoría operativa del sistema, en vivo.
  *
- * The sidebar has linked /admin/logs since the panel shipped, but the page
- * never existed (the entry dead-ended on the Next 404). The backend
- * (/api/admin/audit-logs[.csv|/search]) and the apiClient methods were
- * already implemented and consumer-less — this page is the missing consumer.
+ * The backend (/api/admin/audit-logs[.csv|/search]) exposes the audit feed
+ * over REST; this page is the operator console on top of it.
  *
- * Operator affordances for tracking software errors (e.g. a failed image
- * generation): per-row selection checkboxes + one-click "copy selected",
- * a date-range filter, an "errors only" quick filter, and a live mode that
- * polls the feed in real time so new events appear at the top automatically.
+ * Built for tracking software errors (a failed image generation, a session
+ * mismatch, a denied admin op) and resolving them fast:
+ *   - ALWAYS LIVE: an adaptive poller (self-rescheduling, backoff, tab-hidden
+ *     pause) keeps page 1 streaming with a connection indicator — no toggle.
+ *   - NEW-ERROR ALERTS: new error events fire a toast, an optional beep, a
+ *     "nuevos errores" counter and a brief row highlight (watermark-seeded so
+ *     the initial backlog never alerts).
+ *   - SELECT + COPY: per-row checkboxes + one-click copy (TSV, paste-ready).
+ *   - DATE RANGE + ERRORS-ONLY filters.
+ *   - DETAIL + AI DIAGNOSE: click a row for the full untruncated metadata and
+ *     a one-click AI root-cause + fix suggestion (FlashGPT, no chat persisted).
+ *
+ * Realtime is POLLING through apiClient (Bearer header) — deliberately not
+ * SSE/EventSource: the app has no token cookie and a JWT must never travel in
+ * a URL, so polling is the security-respecting, no-backend-change path.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { Copy, Download, RefreshCw, Search } from "lucide-react"
+import { Copy, Download, RefreshCw, Search, Sparkles, Volume2, VolumeX } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -51,6 +60,11 @@ type AuditLogRow = {
 
 const PAGE_SIZE = 25
 const LIVE_INTERVAL_MS = 5000
+const MAX_LIVE_BACKOFF_MS = 30000
+const HIGHLIGHT_MS = 6000
+const MAX_LIVE_ROWS = 200
+
+type ConnState = "live" | "reconnecting" | "paused"
 
 function isErrorAction(action: string): boolean {
   return /fail|error|denied|revoked|deleted|mismatch|expired|blocked|rejected|invalid/i.test(action)
@@ -82,7 +96,6 @@ function metadataSummary(metadata: Record<string, unknown> | null | undefined): 
   return parts.join(" · ").slice(0, 90)
 }
 
-// Full, paste-ready detail for the clipboard export (no 90-char clamp).
 function metadataFull(metadata: Record<string, unknown> | null | undefined): string {
   if (!metadata || typeof metadata !== "object") return ""
   try {
@@ -100,6 +113,11 @@ function dayBoundIso(date: string, end: boolean): string | undefined {
   return Number.isFinite(d.getTime()) ? d.toISOString() : undefined
 }
 
+const rowTime = (r: AuditLogRow): number => {
+  const t = Date.parse(r.createdAt)
+  return Number.isFinite(t) ? t : 0
+}
+
 export default function AdminLogsPage() {
   const [rows, setRows] = useState<AuditLogRow[]>([])
   const [loading, setLoading] = useState(false)
@@ -113,69 +131,209 @@ export default function AdminLogsPage() {
   const [fromDate, setFromDate] = useState("")
   const [toDate, setToDate] = useState("")
   const [errorsOnly, setErrorsOnly] = useState(false)
-  const [live, setLive] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [lastUpdated, setLastUpdated] = useState<string | null>(null)
   const [detailRow, setDetailRow] = useState<AuditLogRow | null>(null)
 
-  const load = useCallback(async (
-    targetPage: number,
-    search: string,
-    action: string,
-    from: string,
-    to: string,
-    opts?: { silent?: boolean },
-  ) => {
-    if (!opts?.silent) setLoading(true)
-    setError(null)
+  // Live engine
+  const [connState, setConnState] = useState<ConnState>("live")
+  const [newErrorCount, setNewErrorCount] = useState(0)
+  const [soundOn, setSoundOn] = useState(false)
+  const [recentlyNew, setRecentlyNew] = useState<Set<string>>(new Set())
+
+  // AI diagnosis
+  const [diagnosis, setDiagnosis] = useState("")
+  const [diagnosing, setDiagnosing] = useState(false)
+
+  // Refs (avoid stale closures in the poller / no re-render churn)
+  const filtersRef = useRef({ searchTerm, actionFilter, fromDate, toDate, errorsOnly, page })
+  filtersRef.current = { searchTerm, actionFilter, fromDate, toDate, errorsOnly, page }
+  const watermark = useRef(0)
+  const seededRef = useRef(false)
+  const inFlight = useRef(false)
+  const failuresRef = useRef(0)
+  const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const audioCtxRef = useRef<any>(null)
+  const soundOnRef = useRef(soundOn)
+  soundOnRef.current = soundOn
+  const diagAbort = useRef<AbortController | null>(null)
+
+  const beep = useCallback(() => {
+    if (!soundOnRef.current) return
     try {
-      const fromIso = dayBoundIso(from, false)
-      const toIso = dayBoundIso(to, true)
-      const common: Record<string, string | number> = { page: targetPage, limit: PAGE_SIZE, order: "desc" }
-      if (fromIso) common.from = fromIso
-      if (toIso) common.to = toIso
-      const params: Record<string, string | number> = { ...common }
-      if (action && action !== "all") params.action = action
-      const response: any = search.trim()
-        ? await apiClient.searchAdminAuditLogs({ q: search.trim(), ...common } as any)
-        : await apiClient.getAdminAuditLogs(params as any)
-      const items: AuditLogRow[] = response?.items || response?.logs || []
-      setRows(items)
-      setHasMore(items.length >= PAGE_SIZE)
-      setLastUpdated(new Date().toLocaleTimeString("es", { timeStyle: "medium" }))
-      setKnownActions((prev) => {
-        const next = new Set(prev)
-        items.forEach((row) => row.action && next.add(row.action))
-        return Array.from(next).sort()
-      })
-    } catch (err: any) {
-      setError(err?.message || "No se pudieron cargar los logs")
-    } finally {
-      if (!opts?.silent) setLoading(false)
+      const Ctor = (window as any).AudioContext || (window as any).webkitAudioContext
+      if (!Ctor) return
+      if (!audioCtxRef.current) audioCtxRef.current = new Ctor()
+      const ctx = audioCtxRef.current
+      if (ctx.state === "suspended") ctx.resume().catch(() => {})
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = "sine"
+      osc.frequency.value = 880
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime)
+      gain.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + 0.01)
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.18)
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.start()
+      osc.stop(ctx.currentTime + 0.2)
+    } catch {
+      /* SSR / autoplay-policy safe */
     }
   }, [])
 
+  const flashRows = useCallback((ids: string[]) => {
+    if (ids.length === 0) return
+    setRecentlyNew((prev) => {
+      const next = new Set(prev)
+      ids.forEach((id) => next.add(id))
+      return next
+    })
+    window.setTimeout(() => {
+      setRecentlyNew((prev) => {
+        const next = new Set(prev)
+        ids.forEach((id) => next.delete(id))
+        return next
+      })
+    }, HIGHLIGHT_MS)
+  }, [])
+
+  // Fetch one page from the audit feed with the active filters.
+  const fetchPage = useCallback(async (targetPage: number): Promise<AuditLogRow[]> => {
+    const f = filtersRef.current
+    const fromIso = dayBoundIso(f.fromDate, false)
+    const toIso = dayBoundIso(f.toDate, true)
+    const common: Record<string, string | number> = { page: targetPage, limit: PAGE_SIZE, order: "desc" }
+    if (fromIso) common.from = fromIso
+    if (toIso) common.to = toIso
+    const params: Record<string, string | number> = { ...common }
+    if (f.actionFilter && f.actionFilter !== "all") params.action = f.actionFilter
+    const response: any = f.searchTerm.trim()
+      ? await apiClient.searchAdminAuditLogs({ q: f.searchTerm.trim(), ...common } as any)
+      : await apiClient.getAdminAuditLogs(params as any)
+    return response?.items || response?.logs || []
+  }, [])
+
+  const ingest = useCallback((items: AuditLogRow[]) => {
+    setKnownActions((prev) => {
+      const next = new Set(prev)
+      items.forEach((row) => row.action && next.add(row.action))
+      return Array.from(next).sort()
+    })
+    setLastUpdated(new Date().toLocaleTimeString("es", { timeStyle: "medium" }))
+  }, [])
+
+  // Manual / initial / pagination load (shows the spinner).
+  const load = useCallback(async (targetPage: number) => {
+    setLoading(true)
+    setError(null)
+    try {
+      const items = await fetchPage(targetPage)
+      setRows(items)
+      setHasMore(items.length >= PAGE_SIZE)
+      ingest(items)
+      // Seed the live watermark from the freshest row WITHOUT alerting.
+      const maxTs = items.reduce((m, r) => Math.max(m, rowTime(r)), 0)
+      if (maxTs > watermark.current) watermark.current = maxTs
+      seededRef.current = true
+    } catch (err: any) {
+      setError(err?.message || "No se pudieron cargar los logs")
+    } finally {
+      setLoading(false)
+    }
+  }, [fetchPage, ingest])
+
+  // Silent live tick: detect + alert new errors, merge into page 1.
+  const pollOnce = useCallback(async () => {
+    if (inFlight.current) return
+    if (typeof document !== "undefined" && document.hidden) { setConnState("paused"); return }
+    inFlight.current = true
+    try {
+      const items = await fetchPage(1)
+      failuresRef.current = 0
+      setConnState("live")
+      ingest(items)
+
+      const wm = watermark.current
+      const fresh = items.filter((r) => rowTime(r) > wm)
+      const maxTs = items.reduce((m, r) => Math.max(m, rowTime(r)), wm)
+      watermark.current = maxTs
+
+      if (seededRef.current && fresh.length > 0) {
+        const freshErrors = fresh.filter((r) => isErrorAction(r.action))
+        if (freshErrors.length > 0) {
+          const n = freshErrors.length
+          toast.error(`${n} nuevo${n > 1 ? "s" : ""} error${n > 1 ? "es" : ""} · ${freshErrors[0].action}`, { duration: 6000 })
+          beep()
+          setNewErrorCount((c) => c + n)
+        }
+        flashRows(fresh.map((r) => r.id))
+      }
+      seededRef.current = true
+
+      // Only repaint the table when viewing the live (first) page.
+      if (filtersRef.current.page === 1) {
+        setRows((prev) => {
+          if (fresh.length === 0) return items
+          const map = new Map<string, AuditLogRow>()
+          ;[...items, ...prev].forEach((r) => { if (!map.has(r.id)) map.set(r.id, r) })
+          return Array.from(map.values()).sort((a, b) => rowTime(b) - rowTime(a)).slice(0, MAX_LIVE_ROWS)
+        })
+      }
+    } catch {
+      failuresRef.current += 1
+      setConnState("reconnecting")
+    } finally {
+      inFlight.current = false
+    }
+  }, [fetchPage, ingest, beep, flashRows])
+
+  // Always-on adaptive poller (self-rescheduling setTimeout → supports backoff,
+  // never overlaps). Runs for the life of the page.
   useEffect(() => {
-    void load(page, searchTerm, actionFilter, fromDate, toDate)
+    let cancelled = false
+    const schedule = (delay: number) => {
+      if (cancelled) return
+      pollTimer.current = setTimeout(tick, delay)
+    }
+    const tick = async () => {
+      await pollOnce()
+      if (cancelled) return
+      const failures = failuresRef.current
+      const delay = failures > 0
+        ? Math.min(LIVE_INTERVAL_MS * 2 ** failures, MAX_LIVE_BACKOFF_MS) + Math.random() * 500
+        : LIVE_INTERVAL_MS
+      schedule(delay)
+    }
+    schedule(LIVE_INTERVAL_MS)
+
+    const onVisibility = () => {
+      if (typeof document === "undefined") return
+      if (document.hidden) {
+        setConnState("paused")
+      } else {
+        setConnState("live")
+        if (pollTimer.current) clearTimeout(pollTimer.current)
+        void tick()
+      }
+    }
+    document.addEventListener("visibilitychange", onVisibility)
+    return () => {
+      cancelled = true
+      if (pollTimer.current) clearTimeout(pollTimer.current)
+      document.removeEventListener("visibilitychange", onVisibility)
+    }
+  }, [pollOnce])
+
+  // Initial load + reload on filter/page changes. Reset the live watermark so
+  // a filter switch re-seeds silently against the new result set.
+  useEffect(() => {
+    seededRef.current = false
+    watermark.current = 0
+    void load(page)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, actionFilter, fromDate, toDate])
 
-  // Live mode — poll the most-recent page on an interval so new events stream
-  // in without a manual refresh. Only polls page 1 (the newest slice) and
-  // pauses while paginating back through history.
-  const liveRef = useRef({ searchTerm, actionFilter, fromDate, toDate })
-  liveRef.current = { searchTerm, actionFilter, fromDate, toDate }
-  useEffect(() => {
-    if (!live || page !== 1) return
-    const id = setInterval(() => {
-      const s = liveRef.current
-      void load(1, s.searchTerm, s.actionFilter, s.fromDate, s.toDate, { silent: true })
-    }, LIVE_INTERVAL_MS)
-    return () => clearInterval(id)
-  }, [live, page, load])
-
-  // Rows actually shown (errors-only is a client-side view filter on top of
-  // whatever the server returned for the current page).
   const visibleRows = useMemo(
     () => (errorsOnly ? rows.filter((r) => isErrorAction(r.action)) : rows),
     [rows, errorsOnly],
@@ -204,11 +362,11 @@ export default function AdminLogsPage() {
 
   const handleSearch = () => {
     setPage(1)
-    void load(1, searchTerm, actionFilter, fromDate, toDate)
+    seededRef.current = false
+    watermark.current = 0
+    void load(1)
   }
 
-  // Copy the selected rows (or every visible row when nothing is checked) as a
-  // tab-separated block with a header — paste-ready for a ticket or spreadsheet.
   const handleCopy = async () => {
     const source = someSelected ? visibleRows.filter((r) => selected.has(r.id)) : visibleRows
     if (source.length === 0) {
@@ -232,8 +390,6 @@ export default function AdminLogsPage() {
     }
   }
 
-  // Pretty, paste-ready JSON for a single event — the full record including
-  // untruncated metadata, so an operator can see exactly why something failed.
   const eventToJson = (row: AuditLogRow): string => {
     const payload = {
       id: row.id,
@@ -258,6 +414,53 @@ export default function AdminLogsPage() {
       toast.error("No se pudo copiar al portapapeles")
     }
   }
+
+  // AI root-cause + fix suggestion for an event. Streams from the free FlashGPT
+  // path; never persisted to any chat (no chatId).
+  const diagnose = useCallback((row: AuditLogRow) => {
+    diagAbort.current?.abort()
+    const ctrl = new AbortController()
+    diagAbort.current = ctrl
+    setDiagnosing(true)
+    setDiagnosis("")
+    const prompt =
+`Eres un ingeniero SRE senior de SiraGPT. Diagnostica este evento de auditoría y responde SOLO en español, en markdown conciso.
+
+Acción: ${row.action}
+Recurso: ${[row.resourceType, row.resourceId].filter(Boolean).join(":") || "—"}
+Actor: ${row.actorName || row.actorId || row.actorType || "—"}
+Metadata (JSON):
+${JSON.stringify(row.metadata ?? {}, null, 2)}
+
+Devuelve:
+1. Causa raíz más probable (1-2 frases).
+2. Pasos concretos para solucionarlo (lista numerada y accionable).
+3. Cómo prevenir que vuelva a ocurrir.`
+    const run = (provider: string, model: string) => apiClient.generateAIStream(
+      { provider, model, prompt, streamId: crypto.randomUUID(), disableAgentic: true },
+      (chunk) => setDiagnosis((t) => t + chunk),
+      () => setDiagnosing(false),
+      (err) => {
+        // One fallback to a cheap paid model if the free path is unconfigured.
+        if (provider === "Cerebras") {
+          setDiagnosis("")
+          void run("OpenAI", "gpt-4o-mini")
+          return
+        }
+        setDiagnosis(`Error: ${err.message}`)
+        setDiagnosing(false)
+      },
+      ctrl.signal,
+    )
+    void run("Cerebras", "gpt-oss-120b")
+  }, [])
+
+  // Reset the diagnosis panel when switching events.
+  useEffect(() => {
+    diagAbort.current?.abort()
+    setDiagnosis("")
+    setDiagnosing(false)
+  }, [detailRow])
 
   const handleExport = async () => {
     setExporting(true)
@@ -284,6 +487,13 @@ export default function AdminLogsPage() {
     }
   }
 
+  const connDot = connState === "live" ? "#22c55e" : connState === "reconnecting" ? "#f59e0b" : "#9ca3af"
+  const connLabel = connState === "live"
+    ? `En vivo${lastUpdated ? ` · ${lastUpdated}` : ""}`
+    : connState === "reconnecting"
+      ? "Reconectando…"
+      : "En pausa (pestaña oculta)"
+
   return (
     <div className="flex flex-col gap-4 p-4 md:p-6">
       <div className="flex items-center gap-2">
@@ -291,7 +501,7 @@ export default function AdminLogsPage() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Logs</h1>
           <p className="text-sm text-muted-foreground">
-            Auditoría del sistema: sesiones, cambios de roles, acciones administrativas.
+            Auditoría del sistema en vivo: sesiones, cambios de roles, acciones administrativas y errores.
           </p>
         </div>
       </div>
@@ -299,12 +509,22 @@ export default function AdminLogsPage() {
       <Card>
         <CardHeader className="pb-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <CardTitle className="text-base">Registro de auditoría</CardTitle>
-              <CardDescription>
-                Eventos más recientes primero
-                {lastUpdated ? ` · actualizado ${lastUpdated}` : ""}
-              </CardDescription>
+            <div className="flex items-center gap-3">
+              <div>
+                <CardTitle className="text-base">Registro de auditoría</CardTitle>
+                <CardDescription>Eventos más recientes primero</CardDescription>
+              </div>
+              {newErrorCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setNewErrorCount(0)}
+                  title="Marcar como visto"
+                  className="inline-flex items-center gap-1.5 rounded-full bg-destructive/10 px-2.5 py-1 text-xs font-semibold text-destructive"
+                >
+                  <span className="inline-block h-2 w-2 animate-pulse rounded-full" style={{ backgroundColor: "#ef4444" }} aria-hidden />
+                  {newErrorCount} nuevo{newErrorCount > 1 ? "s" : ""} error{newErrorCount > 1 ? "es" : ""} · marcar visto
+                </button>
+              )}
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <div className="relative">
@@ -328,7 +548,7 @@ export default function AdminLogsPage() {
                   ))}
                 </SelectContent>
               </Select>
-              <Button variant="outline" size="sm" onClick={() => void load(page, searchTerm, actionFilter, fromDate, toDate)} disabled={loading}>
+              <Button variant="outline" size="sm" onClick={() => void load(page)} disabled={loading}>
                 <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
                 Actualizar
               </Button>
@@ -339,8 +559,17 @@ export default function AdminLogsPage() {
             </div>
           </div>
 
-          {/* Secondary toolbar — date range, errors-only, live, copy selected */}
+          {/* Secondary toolbar — live status, date range, errors-only, sound, copy */}
           <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-border/60 pt-3">
+            <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground" title="Conexión en tiempo real">
+              <span
+                className={cn("inline-block h-2 w-2 rounded-full", connState === "live" && "animate-pulse")}
+                style={{ backgroundColor: connDot }}
+                aria-hidden
+              />
+              {connLabel}
+            </span>
+
             <div className="flex items-center gap-2">
               <span className="text-xs font-medium text-muted-foreground">Desde</span>
               <Input
@@ -375,18 +604,10 @@ export default function AdminLogsPage() {
               Solo errores
             </label>
 
-            <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-muted-foreground">
-              <Switch checked={live} onCheckedChange={(v) => setLive(!!v)} />
-              <span className="flex items-center gap-1.5">
-                {live && (
-                  <span
-                    className="inline-block h-2 w-2 animate-pulse rounded-full"
-                    style={{ backgroundColor: "#22c55e" }}
-                    aria-hidden
-                  />
-                )}
-                En vivo
-              </span>
+            <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-muted-foreground" title="Sonar al detectar un error nuevo">
+              <Switch checked={soundOn} onCheckedChange={(v) => { setSoundOn(!!v); if (v) beep() }} />
+              {soundOn ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5" />}
+              Sonido
             </label>
 
             <div className="ml-auto flex items-center gap-2">
@@ -431,11 +652,13 @@ export default function AdminLogsPage() {
                 {visibleRows.map((row) => {
                   const isErr = isErrorAction(row.action)
                   const isChecked = selected.has(row.id)
+                  const isNew = recentlyNew.has(row.id)
                   return (
                     <TableRow
                       key={row.id}
                       data-state={isChecked ? "selected" : undefined}
                       className={cn("cursor-pointer", isErr && "bg-destructive/5")}
+                      style={isNew ? { boxShadow: "inset 3px 0 0 #f59e0b", backgroundColor: "rgba(245,158,11,0.08)" } : undefined}
                       onClick={() => setDetailRow(row)}
                       title="Ver detalle del evento"
                     >
@@ -471,7 +694,7 @@ export default function AdminLogsPage() {
           )}
           <div className="mt-4 flex items-center justify-between">
             <span className="text-xs text-muted-foreground">
-              Página {page}{live && page === 1 ? " · en vivo" : ""}
+              Página {page}{page === 1 ? " · en vivo" : ""}
             </span>
             <div className="flex gap-2">
               <Button variant="outline" size="sm" disabled={page <= 1 || loading} onClick={() => setPage((p) => Math.max(1, p - 1))}>
@@ -485,7 +708,7 @@ export default function AdminLogsPage() {
         </CardContent>
       </Card>
 
-      {/* Event detail — full record with untruncated metadata for debugging. */}
+      {/* Event detail — full record + AI diagnosis. */}
       <Dialog open={!!detailRow} onOpenChange={(o) => { if (!o) setDetailRow(null) }}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
@@ -518,11 +741,44 @@ export default function AdminLogsPage() {
               </div>
               <div className="min-w-0">
                 <div className="mb-1 text-xs font-medium text-muted-foreground">Metadata</div>
-                <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/60 bg-muted/40 p-3 text-xs leading-relaxed">
+                <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/60 bg-muted/40 p-3 text-xs leading-relaxed">
                   {detailRow.metadata ? JSON.stringify(detailRow.metadata, null, 2) : "—"}
                 </pre>
               </div>
-              <div className="flex justify-end gap-2">
+
+              {(diagnosis || diagnosing) && (
+                <div className="min-w-0">
+                  <div className="mb-1 flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                    <Sparkles className="h-3.5 w-3.5" />
+                    Diagnóstico IA {diagnosing && <span className="text-muted-foreground/70">· generando…</span>}
+                  </div>
+                  <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/60 bg-muted/30 p-3 text-xs leading-relaxed">
+                    {diagnosis || "…"}
+                  </pre>
+                </div>
+              )}
+
+              <div className="flex flex-wrap justify-end gap-2">
+                {diagnosing ? (
+                  <Button variant="outline" size="sm" onClick={() => { diagAbort.current?.abort(); setDiagnosing(false) }}>
+                    Detener
+                  </Button>
+                ) : (
+                  <Button variant="outline" size="sm" onClick={() => diagnose(detailRow)}>
+                    <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+                    {diagnosis ? "Re-diagnosticar" : "Diagnosticar con IA"}
+                  </Button>
+                )}
+                {diagnosis && !diagnosing && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => { void navigator.clipboard.writeText(diagnosis).then(() => toast.success("Diagnóstico copiado")) }}
+                  >
+                    <Copy className="mr-1.5 h-3.5 w-3.5" />
+                    Copiar diagnóstico
+                  </Button>
+                )}
                 <Button variant="outline" size="sm" onClick={() => void copyDetail(detailRow)}>
                   <Copy className="mr-1.5 h-3.5 w-3.5" />
                   Copiar JSON
