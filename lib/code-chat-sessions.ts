@@ -11,6 +11,12 @@ export type CodeChatTurn = {
   role: "user" | "assistant"
   content: string
   streaming?: boolean
+  /** Real action log + Worked-Summary metrics for a turn that did file work. */
+  actions?: import("./code-chat-metrics").CodeChatAction[]
+  metrics?: import("./code-chat-metrics").CodeChatMetrics
+  /** Real time (ms) from turn start to the first narrated line — the planning
+   *  duration shown on the "🧠 …" badge. Measured, never fabricated. */
+  planMs?: number
 }
 
 export type CodeChatSession = {

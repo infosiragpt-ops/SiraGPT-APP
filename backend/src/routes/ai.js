@@ -5349,6 +5349,39 @@ router.post(
                 });
               }
             } catch (_e) { /* swallow */ }
+            // Emit a REAL token-usage frame so the /code chat (and any consumer)
+            // can show an honest "Agent Usage" in its Worked Summary. Cost comes
+            // from model-pricing-service, raced against an 800ms cap so a cold
+            // price fetch never stalls the stream close. Guarded + best-effort:
+            // a failure here must never break the stream. Unknown to other
+            // consumers (they ignore frames with an unrecognised `type`).
+            try {
+              if (!res.writableEnded) {
+                const usageTokensIn = usageService.calculateTextTokens(prompt || '', actualModel);
+                const usageTokensOut = usageService.calculateTextTokens(out || '', actualModel);
+                let usageCostOriginalUsd = null;
+                let usageCostAppliedUsd = null;
+                try {
+                  const modelPricing = require('../services/model-pricing-service');
+                  const pricing = await Promise.race([
+                    modelPricing.resolvePricing(actualModel).catch(() => null),
+                    new Promise((r) => { const tm = setTimeout(() => r(null), 800); if (tm.unref) tm.unref(); }),
+                  ]);
+                  if (pricing && (pricing.input != null || pricing.output != null)) {
+                    // List price from the provider's per-token rates (Agent Usage original).
+                    usageCostOriginalUsd = (usageTokensIn / 1e6) * (pricing.input || 0) + (usageTokensOut / 1e6) * (pricing.output || 0);
+                    // Applied price via the app's real plan-pricing policy (the
+                    // struck-through → optimized figure). Unknown plan → no discount.
+                    try {
+                      const { applyPlanPricing } = require('../services/codex/pricing-policy');
+                      const userPlan = (req.user && req.user.plan) ? req.user.plan : 'PRO';
+                      usageCostAppliedUsd = applyPlanPricing(userPlan, usageCostOriginalUsd).costAppliedUsd;
+                    } catch { usageCostAppliedUsd = usageCostOriginalUsd; }
+                  }
+                } catch { /* pricing unavailable → emit tokens only */ }
+                res.write(`data: ${JSON.stringify({ type: 'usage', tokensIn: usageTokensIn, tokensOut: usageTokensOut, model: actualModel, ...(usageCostOriginalUsd != null ? { costOriginalUsd: usageCostOriginalUsd, costAppliedUsd: usageCostAppliedUsd != null ? usageCostAppliedUsd : usageCostOriginalUsd } : {}) })}\n\n`);
+              }
+            } catch (_e) { /* usage frame is best-effort */ }
             return out;
           },
         );

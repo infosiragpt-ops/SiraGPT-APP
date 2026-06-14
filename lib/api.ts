@@ -332,6 +332,11 @@ type AIStreamOptions = {
   onToolCall?: (payload: { index: number; name?: string; argsDelta?: string }) => void
   // Agent harness: typed tool-call / permission / done frames (AgentTrace).
   onAgentEvent?: (event: AgentStreamEvent) => void
+  // Real token usage (+ optional USD cost) emitted once at stream end, so a
+  // caller can show an honest "Agent Usage" figure. costOriginalUsd is the
+  // provider list price; costAppliedUsd is after the plan policy (struck-through
+  // original → applied when they differ).
+  onUsage?: (payload: { tokensIn: number; tokensOut: number; model?: string; costOriginalUsd?: number; costAppliedUsd?: number }) => void
 }
 
 export type GrokVoiceSessionSnapshot = {
@@ -1486,6 +1491,17 @@ class ApiClient {
                 // agent_done) — ordered by seq/blockIndex in the store.
                 if (options.onAgentEvent) {
                   options.onAgentEvent(jsonData as AgentStreamEvent);
+                }
+              } else if (jsonData.type === 'usage' && typeof jsonData.tokensIn === 'number') {
+                // Real token usage (+ optional USD cost) for the Worked Summary.
+                if (options.onUsage) {
+                  options.onUsage({
+                    tokensIn: jsonData.tokensIn,
+                    tokensOut: typeof jsonData.tokensOut === 'number' ? jsonData.tokensOut : 0,
+                    ...(typeof jsonData.model === 'string' ? { model: jsonData.model } : {}),
+                    ...(typeof jsonData.costOriginalUsd === 'number' ? { costOriginalUsd: jsonData.costOriginalUsd } : {}),
+                    ...(typeof jsonData.costAppliedUsd === 'number' ? { costAppliedUsd: jsonData.costAppliedUsd } : {}),
+                  })
                 }
               } else if (jsonData.type === 'web_sources' && Array.isArray(jsonData.sources)) {
                 // ChatGPT-style searched-sources frame. Surface to the UI
