@@ -3077,7 +3077,21 @@ function extractReplacementPair(text = '') {
     .replace(/\b(?:el|la|los|las|texto|frase|palabra|contenido|que dice|donde dice)\b/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  const replacement = match[2].replace(/[.;!?]+$/g, '').trim();
+  let replacement = match[2].replace(/[.;!?]+$/g, '').trim();
+  // Preserve the user's original casing/accents for the REPLACEMENT. The match
+  // above runs on normalizeText() output (lowercased, accents stripped), which
+  // would emit "introduccion" instead of "Introducción". Re-run the same
+  // pattern on the raw text and trust the raw capture only when it normalizes
+  // to the same span (guards against the raw regex matching a different range).
+  // The needle stays normalized — downstream replaceNeedleText matches it
+  // case-insensitively, so only the replacement's casing reaches the output.
+  const rawMatch = raw.match(/\b(?:reemplaz\w*|sustitu\w*|cambi\w*|modific\w*|corrig\w*)\s+(.{3,120}?)\s+(?:por|con|a)\s+(.{3,220})$/iu);
+  if (rawMatch && rawMatch[2]) {
+    const rawReplacement = rawMatch[2].replace(/[.;!?]+$/g, '').trim();
+    if (rawReplacement && normalizeText(rawReplacement) === normalizeText(replacement)) {
+      replacement = rawReplacement;
+    }
+  }
   if (needle.length < 3 || replacement.length < 1) return null;
   return { needle: needle.slice(0, 180), replacement: replacement.slice(0, 500) };
 }

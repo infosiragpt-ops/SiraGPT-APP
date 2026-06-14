@@ -1632,15 +1632,21 @@ describe('append_references — referencias bibliográficas reales', () => {
 describe('executeTextLikeOperations — in-place edits for plain-text files', () => {
   const { executeTextLikeOperations, countNeedleMatches } = sourcePreservingInternals;
 
-  it('replaces text IN PLACE instead of only appending (markdown)', () => {
+  it('replaces text IN PLACE instead of only appending, preserving replacement casing (markdown)', () => {
     const input = Buffer.from('# Informe\n\nHola MUNDO, adios MUNDO.\n');
     const out = executeTextLikeOperations({ input, requestText: 'reemplaza MUNDO por TIERRA', format: 'md', blocks: [] });
     const text = out.buffer.toString('utf8');
-    assert.match(text, /tierra/i, 'replacement text must be present');
+    assert.match(text, /TIERRA/, 'replacement must keep the user-supplied casing (not lowercased)');
     assert.equal(/mundo/i.test(text), false, 'the original needle must be gone (replaced, not appended)');
     const replaceStep = out.steps.find((s) => s.kind === 'replace_text');
     assert.ok(replaceStep && replaceStep.changedCount === 2, 'reports both occurrences replaced');
     assert.equal(out.steps.some((s) => s.kind === 'append_generic'), false, 'a pure replace must NOT append an annex');
+  });
+
+  it('preserves accents/casing of an unquoted replacement', () => {
+    const input = Buffer.from('Capítulo 1 — borrador');
+    const out = executeTextLikeOperations({ input, requestText: 'reemplaza Capítulo 1 por Introducción', format: 'txt', blocks: [] });
+    assert.match(out.buffer.toString('utf8'), /Introducción/, 'accents + casing must survive (not "introduccion")');
   });
 
   it('deletes specific text in place', () => {
