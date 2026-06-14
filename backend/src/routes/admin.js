@@ -217,6 +217,12 @@ router.get('/models/fetch', async (req, res) => {
         gemini: models.filter(m => m.provider === 'Gemini').length,
         openrouter: models.filter(m => m.provider === 'OpenRouter').length,
         deepseek: models.filter(m => m.provider === 'DeepSeek').length,
+        anthropic: models.filter(m => m.provider === 'Anthropic').length,
+        groq: models.filter(m => m.provider === 'Groq').length,
+        mistral: models.filter(m => m.provider === 'Mistral').length,
+        xai: models.filter(m => m.provider === 'xAI').length,
+        together: models.filter(m => m.provider === 'Together').length,
+        fireworks: models.filter(m => m.provider === 'Fireworks').length,
         video: models.filter(m => m.type === 'VIDEO').length
       }
     });

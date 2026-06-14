@@ -430,13 +430,14 @@ class ModelSyncService {
   async fetchAllModels() {
     console.log('🚀 Starting to fetch models from all providers...');
 
-    const [openaiModels, geminiModels, openrouterModels, deepseekModels, imageModels, videoModels] = await Promise.allSettled([
+    const [openaiModels, geminiModels, openrouterModels, deepseekModels, imageModels, videoModels, genericModels] = await Promise.allSettled([
       this.fetchOpenAIModels(),
       this.fetchGeminiModels(),
       this.fetchOpenRouterModels(),
       this.fetchDeepSeekModels(),
       Promise.resolve(this.getStaticImageModels()),
-      this.fetchFalVideoModels()
+      this.fetchFalVideoModels(),
+      this._fetchGenericEnvProviderModels()
     ]);
 
     const allModels = [];
@@ -465,6 +466,10 @@ class ModelSyncService {
       allModels.push(...videoModels.value);
     }
 
+    if (genericModels.status === 'fulfilled') {
+      allModels.push(...genericModels.value);
+    }
+
     const deduped = [];
     const seen = new Set();
     for (const model of allModels) {
@@ -490,56 +495,67 @@ class ModelSyncService {
         return { updated: 0, created: 0, errors: 0 };
       }
 
-      let created = 0;
-      let updated = 0;
-      let errors = 0;
-
-      for (const model of fetchedModels) {
-        try {
-          const existingModel = await prisma.aiModel.findUnique({
-            where: { name: model.name }
-          });
-
-          if (existingModel) {
-            // Update metadata only. Admin availability must survive refreshes
-            // so an activated model immediately remains visible to users.
-            await prisma.aiModel.update({
-              where: { name: model.name },
-              data: this.buildModelSyncUpdateData(model)
-            });
-            updated++;
-          } else {
-            // Create new model
-            await prisma.aiModel.create({
-              data: {
-                name: model.name,
-                displayName: model.displayName,
-                description: model.description,
-                provider: model.provider,
-                type: model.type,
-                isActive: model.isActive === true,
-                icon: this.getModelIcon(model),
-                lastSynced: new Date(),
-                syncSource: model.syncSource || 'api',
-                contextLength: model.contextLength,
-                pricing: model.pricing,
-                tags: model.tags && model.tags.length ? model.tags : this.generateTags(model)
-              }
-            });
-            created++;
-          }
-        } catch (modelError) {
-          console.error(`❌ Error syncing model ${model.name}:`, modelError.message);
-          errors++;
-        }
-      }
-
-      console.log(`✅ Model sync complete: ${created} created, ${updated} updated, ${errors} errors`);
-      return { created, updated, errors };
+      const result = await this.persistModels(fetchedModels);
+      console.log(`✅ Model sync complete: ${result.created} created, ${result.updated} updated, ${result.errors} errors`);
+      return result;
     } catch (error) {
       console.error('❌ Error during model sync:', error);
       throw error;
     }
+  }
+
+  /**
+   * Upsert a list of normalised models into the AiModel catalog.
+   *
+   * New rows are created with the model's own `isActive` flag (generic
+   * discovery always passes `false` so admins curate visibility). Existing
+   * rows only get metadata refreshed via buildModelSyncUpdateData, which
+   * deliberately omits `isActive` so a manual admin activation survives.
+   */
+  async persistModels(models = []) {
+    let created = 0;
+    let updated = 0;
+    let errors = 0;
+
+    for (const model of models) {
+      if (!model || !model.name) continue;
+      try {
+        const existingModel = await this.prisma.aiModel.findUnique({
+          where: { name: model.name }
+        });
+
+        if (existingModel) {
+          await this.prisma.aiModel.update({
+            where: { name: model.name },
+            data: this.buildModelSyncUpdateData(model)
+          });
+          updated++;
+        } else {
+          await this.prisma.aiModel.create({
+            data: {
+              name: model.name,
+              displayName: model.displayName,
+              description: model.description,
+              provider: model.provider,
+              type: model.type,
+              isActive: model.isActive === true,
+              icon: this.getModelIcon(model),
+              lastSynced: new Date(),
+              syncSource: model.syncSource || 'api',
+              contextLength: model.contextLength,
+              pricing: model.pricing,
+              tags: model.tags && model.tags.length ? model.tags : this.generateTags(model)
+            }
+          });
+          created++;
+        }
+      } catch (modelError) {
+        console.error(`❌ Error syncing model ${model.name}:`, modelError.message);
+        errors++;
+      }
+    }
+
+    return { created, updated, errors };
   }
 
   buildModelSyncUpdateData(model) {
@@ -557,6 +573,186 @@ class ModelSyncService {
       updatedAt: new Date()
     };
     return data;
+  }
+
+  /**
+   * Normalise a raw provider /models payload into catalog model shapes.
+   * Handles the OpenAI `{ id }`, Anthropic `{ id, display_name }`, and bare
+   * `{ name }` row variants. Discovered models are always inactive — admins
+   * decide visibility from Admin → Modelos.
+   */
+  _normalizeRawModelList(rawList, providerLabel, sourceTag = 'connection') {
+    if (!Array.isArray(rawList)) return [];
+    const out = [];
+    for (const raw of rawList) {
+      if (!raw) continue;
+      const rawId = raw.id || raw.name || raw.model || raw.slug || '';
+      const name = String(rawId).replace(/^models\//, '').trim();
+      if (!name) continue;
+      out.push({
+        id: name,
+        name,
+        displayName: raw.display_name || raw.displayName || this.formatModelName(name),
+        provider: providerLabel,
+        type: this.inferModelType(name, raw),
+        description: raw.description || this.generateModelDescription(name, providerLabel),
+        contextLength: raw.context_length || raw.contextLength || raw.inputTokenLimit || raw.max_context_length || undefined,
+        pricing: raw.pricing || undefined,
+        isActive: false,
+        syncSource: sourceTag,
+        apiData: raw,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Fetch + normalise the model list from any OpenAI-compatible (or
+   * Anthropic) `/models` endpoint. Provider-agnostic: the caller supplies
+   * the URL, key and auth style. Never throws — returns a structured
+   * `{ ok, status, error, models }` so callers can branch without a
+   * try/catch. `providerKey === 'anthropic'` switches to `x-api-key` +
+   * `anthropic-version` auth automatically.
+   */
+  async fetchModelsFromEndpoint(options = {}) {
+    const {
+      url,
+      apiKey = null,
+      authType = 'Bearer',
+      headers = null,
+      providerLabel,
+      providerKey = '',
+      modelIdsFilter = null,
+      sourceTag = 'connection',
+      timeoutMs = 15000,
+      fetchImpl = (typeof fetch === 'function' ? fetch : null),
+    } = options;
+
+    if (!url) return { ok: false, status: 0, error: 'missing_url', models: [] };
+    if (typeof fetchImpl !== 'function') return { ok: false, status: 0, error: 'fetch_unavailable', models: [] };
+
+    const reqHeaders = { Accept: 'application/json' };
+    const pk = String(providerKey || '').toLowerCase();
+    if (pk === 'anthropic') {
+      if (apiKey) reqHeaders['x-api-key'] = apiKey;
+      reqHeaders['anthropic-version'] = '2023-06-01';
+    } else if (authType !== 'None' && apiKey) {
+      reqHeaders['Authorization'] = `Bearer ${apiKey}`;
+    }
+    if (headers && typeof headers === 'object') Object.assign(reqHeaders, headers);
+
+    let response;
+    try {
+      response = await fetchImpl(url, { method: 'GET', headers: reqHeaders, signal: AbortSignal.timeout(timeoutMs) });
+    } catch (err) {
+      return { ok: false, status: 0, error: err.message, models: [] };
+    }
+    if (!response.ok) {
+      let txt = '';
+      try { txt = await response.text(); } catch (_) { /* noop */ }
+      return { ok: false, status: response.status, error: `HTTP ${response.status} ${String(txt).slice(0, 160)}`.trim(), models: [] };
+    }
+    let body;
+    try { body = await response.json(); } catch (err) {
+      return { ok: false, status: response.status, error: `bad_json: ${err.message}`, models: [] };
+    }
+
+    const rawList = Array.isArray(body?.data) ? body.data
+      : Array.isArray(body?.models) ? body.models
+      : Array.isArray(body) ? body
+      : [];
+    let normalized = this._normalizeRawModelList(rawList, providerLabel || pk || 'Custom', sourceTag);
+
+    if (Array.isArray(modelIdsFilter) && modelIdsFilter.length) {
+      const allow = new Set(modelIdsFilter.map((x) => String(x).toLowerCase()));
+      normalized = normalized.filter((m) => allow.has(m.name.toLowerCase()));
+    }
+
+    // Best-effort manifest merge + pricing enrichment; degrade to the plain
+    // list on any failure (unknown providers have no manifest entries, which
+    // mergeProviderModels tolerates by passing the live row through).
+    let enriched = normalized;
+    try {
+      enriched = await modelPricingService.enrichModels(
+        mergeProviderModels(normalized, providerLabel, { includeManifestOnly: false })
+      );
+      enriched = enriched.map((m) => ({ ...m, isActive: false, syncSource: m.syncSource || sourceTag }));
+    } catch (_) {
+      enriched = normalized;
+    }
+
+    return { ok: true, status: response.status, error: null, models: enriched };
+  }
+
+  /**
+   * Discover + persist models for a single admin connection. `conn.apiKey`
+   * must be the decrypted plaintext key (the route decrypts before calling).
+   * Returns the fetch verdict merged with persist counts.
+   */
+  async syncConnectionModels(conn = {}) {
+    let catalogMap = {};
+    try { catalogMap = require('./admin-connections-bridge').PROVIDER_CATALOG_MAP || {}; } catch (_) { /* noop */ }
+    const providerLabel = conn.providerLabel
+      || catalogMap[String(conn.providerKey || '').toLowerCase()]
+      || conn.providerKey
+      || 'Custom';
+
+    const base = String(conn.url || '').replace(/\/+$/, '');
+    if (!base) return { ok: false, error: 'missing_url', created: 0, updated: 0, errors: 0, count: 0, models: [] };
+    const url = /\/models$/.test(base) ? base : `${base}/models`;
+
+    const res = await this.fetchModelsFromEndpoint({
+      url,
+      apiKey: conn.apiKey || null,
+      authType: conn.authType || 'Bearer',
+      headers: conn.headers || null,
+      providerLabel,
+      providerKey: conn.providerKey,
+      modelIdsFilter: Array.isArray(conn.modelIds) && conn.modelIds.length ? conn.modelIds : null,
+      sourceTag: 'connection',
+      fetchImpl: conn.fetchImpl,
+    });
+
+    if (!res.ok) return { ...res, created: 0, updated: 0, errors: 0, count: 0 };
+    if (!res.models.length) return { ok: true, error: null, created: 0, updated: 0, errors: 0, count: 0, models: [] };
+
+    const persisted = await this.persistModels(res.models);
+    return { ok: true, error: null, ...persisted, count: res.models.length, models: res.models };
+  }
+
+  /**
+   * Discover models from providers whose API key lives only in the
+   * environment (no hardcoded fetch* method) — Anthropic, Groq, Mistral,
+   * xAI, Together, Fireworks. Lets "Sync Models" + the scheduler cover every
+   * configured provider, not just OpenAI/Gemini/DeepSeek/OpenRouter.
+   */
+  async _fetchGenericEnvProviderModels(fetchImpl) {
+    const providers = [
+      { providerLabel: 'Anthropic', providerKey: 'anthropic', envVar: 'ANTHROPIC_API_KEY', url: 'https://api.anthropic.com/v1/models' },
+      { providerLabel: 'Groq', providerKey: 'groq', envVar: 'GROQ_API_KEY', url: 'https://api.groq.com/openai/v1/models' },
+      { providerLabel: 'Mistral', providerKey: 'mistral', envVar: 'MISTRAL_API_KEY', url: 'https://api.mistral.ai/v1/models' },
+      { providerLabel: 'xAI', providerKey: 'xai', envVar: 'XAI_API_KEY', url: 'https://api.x.ai/v1/models' },
+      { providerLabel: 'Together', providerKey: 'together', envVar: 'TOGETHER_API_KEY', url: 'https://api.together.xyz/v1/models' },
+      { providerLabel: 'Fireworks', providerKey: 'fireworks', envVar: 'FIREWORKS_API_KEY', url: 'https://api.fireworks.ai/inference/v1/models' },
+    ];
+    const out = [];
+    await Promise.all(providers.map(async (p) => {
+      const apiKey = process.env[p.envVar];
+      if (!apiKey) return;
+      const res = await this.fetchModelsFromEndpoint({
+        url: p.url,
+        apiKey,
+        providerKey: p.providerKey,
+        providerLabel: p.providerLabel,
+        sourceTag: 'api',
+        ...(fetchImpl ? { fetchImpl } : {}),
+      });
+      if (res.ok && res.models.length) {
+        console.log(`✅ Discovered ${res.models.length} ${p.providerLabel} models from env key`);
+        out.push(...res.models);
+      }
+    }));
+    return out;
   }
 
   /**
