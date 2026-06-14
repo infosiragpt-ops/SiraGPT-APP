@@ -752,15 +752,15 @@ export default function ModelsPage() {
                 Showing {startIndex + 1}-{Math.min(endIndex, totalFilteredModels)} of {totalFilteredModels} models
               </CardDescription>
             </div>
-            <div className="flex items-center space-x-2">
+            <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:gap-2">
               <Input
                 placeholder="Search models..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-48"
+                className="w-full sm:w-48"
               />
               <Select value={selectedProvider} onValueChange={setSelectedProvider}>
-                <SelectTrigger className="w-40">
+                <SelectTrigger className="w-full sm:w-40">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -773,7 +773,7 @@ export default function ModelsPage() {
                 </SelectContent>
               </Select>
               <Select value={selectedType} onValueChange={setSelectedType}>
-                <SelectTrigger className="w-32">
+                <SelectTrigger className="w-full sm:w-32">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -789,8 +789,8 @@ export default function ModelsPage() {
           </div>
         </CardHeader>
         <CardContent>
-          {/* Models Table */}
-          <div className="overflow-x-auto">
+          {/* Models Table — desktop/tablet only; phones get the card list below */}
+          <div className="hidden overflow-x-auto md:block">
           <Table>
             <TableHeader>
               <TableRow>
@@ -934,6 +934,66 @@ export default function ModelsPage() {
               ))}
             </TableBody>
           </Table>
+          </div>
+
+          {/* Mobile card list — phones get a stacked, tappable layout instead
+              of a side-scrolling 8-column table. Reuses the same handlers. */}
+          <div className="space-y-2 md:hidden">
+            {paginatedModels.map((model) => {
+              const cost = formatModelCost(model.pricing)
+              const typeLabel = model.type === 'TEXT' ? 'Texto'
+                : model.type === 'IMAGE' ? 'Imagen'
+                : model.type === 'VIDEO' ? 'Video'
+                : model.type === 'AUDIO' ? 'Audio'
+                : model.type === 'MUSIC' ? 'Música'
+                : model.type
+              return (
+                <div key={model.id} className="rounded-lg border bg-card p-3">
+                  <div className="flex items-start gap-2">
+                    <IconProvider name={resolveModelIconName(model)} className="h-6 w-6 shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate font-medium">{model.displayName}</div>
+                      <div className="truncate text-xs text-muted-foreground">{model.name}</div>
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                        <Badge variant="secondary" className="text-[11px]">{typeLabel}</Badge>
+                        <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                          <IconProvider name={getProviderIcon(model.provider)} className="h-3.5 w-3.5" />
+                          {model.provider}
+                        </span>
+                      </div>
+                    </div>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="ghost" className="h-8 w-8 shrink-0 p-0">
+                          <MoreHorizontal className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => handleEditModel(model)}>
+                          <Settings className="mr-2 h-4 w-4" />
+                          Edit Model
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => toggleModelStatus(model.id, model.isActive)}>
+                          {model.isActive ? "Deactivate" : "Activate"}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between border-t border-border/60 pt-2">
+                    <div className="flex items-center gap-2">
+                      <Switch
+                        checked={model.isActive}
+                        onCheckedChange={() => toggleModelStatus(model.id, model.isActive)}
+                      />
+                      <Badge variant={model.isActive ? "default" : "secondary"}>
+                        {model.isActive ? "Active" : "Inactive"}
+                      </Badge>
+                    </div>
+                    <span className="whitespace-nowrap text-xs text-muted-foreground">{cost.main}</span>
+                  </div>
+                </div>
+              )
+            })}
           </div>
 
           {paginatedModels.length === 0 && (
