@@ -598,6 +598,7 @@ interface ChatContextType {
   setSelectedProivder: (model: string) => void
   isLoading: boolean
   availableModels: any[]
+  refreshModels: () => void | Promise<void>
   chatType: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis'
   uploadedFiles: any[]
   setChatType: React.Dispatch<React.SetStateAction<'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis'>>
@@ -832,6 +833,37 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
     loadModelsForType();
   }, [chatType, hasInitialized]);
+
+  // Re-fetch the available models on demand (used when the picker opens and
+  // when the tab regains focus) so a model an admin just activated shows up
+  // WITHOUT a full page reload. Updates the list only — never disturbs the
+  // user's current selection. getAIModels sends Cache-Control: no-cache, so
+  // this reads the live DB, not the 5-min server cache.
+  const refreshModels = useCallback(async () => {
+    if (!hasInitialized) return;
+    try {
+      const r = await apiClient.getAIModels(
+        chatType.toString().toUpperCase() as 'TEXT' | 'IMAGE' | 'VIDEO'
+      );
+      if (Array.isArray(r?.models)) setAvailableModels(r.models);
+    } catch {
+      /* best-effort: keep the existing list on a transient failure */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatType, hasInitialized]);
+
+  // Pick up admin model changes when the user tabs back to the app.
+  useEffect(() => {
+    if (!hasInitialized) return;
+    const onFocus = () => { void refreshModels(); };
+    const onVisible = () => { if (document.visibilityState === 'visible') void refreshModels(); };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [refreshModels, hasInitialized]);
 
   // const loadUserChats = async () => {
   //   try {
@@ -3449,11 +3481,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     selectProvider,
     setSelectedProivder,
     availableModels,
+    refreshModels,
     uploadedFiles,
     setUploadedFiles,
   }), [
     selectedModel, setSelectedModel, selectProvider, setSelectedProivder,
-    availableModels, uploadedFiles, setUploadedFiles,
+    availableModels, refreshModels, uploadedFiles, setUploadedFiles,
   ])
 
   return (
@@ -3524,6 +3557,7 @@ interface ModelsFilesContextType {
   selectProvider: string
   setSelectedProivder: (model: string) => void
   availableModels: any[]
+  refreshModels: () => void | Promise<void>
   uploadedFiles: any[]
   setUploadedFiles: React.Dispatch<React.SetStateAction<any[]>>
 }
@@ -3589,6 +3623,7 @@ export function useChat(): ChatContextType {
     setSelectedProivder: mf.setSelectedProivder,
     isLoading: streaming.isLoading,
     availableModels: mf.availableModels,
+    refreshModels: mf.refreshModels,
     chatType: current.chatType,
     setChatType: current.setChatType,
     uploadedFiles: mf.uploadedFiles,

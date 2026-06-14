@@ -1849,7 +1849,10 @@ class ApiClient {
   // }
   async getAIModels(type?: 'TEXT' | 'IMAGE' | 'VIDEO') { // type ko optional parameter banayein
     const endpoint = type ? `/ai/models?type=${type}` : '/ai/models';
-    return this.request(endpoint);
+    // Always read the live list: the picker must reflect an admin model
+    // activation immediately, so bypass the 5-min server response-cache
+    // (response-cache honours Cache-Control: no-cache → forced MISS).
+    return this.request(endpoint, { headers: { 'Cache-Control': 'no-cache' } });
   }
 
   // Admin connections — CRUD + test

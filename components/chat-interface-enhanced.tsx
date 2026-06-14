@@ -3231,6 +3231,9 @@ const NavbarModelSelector = ({
 }: any) => {
   const selectedModelData = availableModels.find((m: any) => m.name === selectedModel);
   const [searchQuery, setSearchQuery] = React.useState("");
+  // Re-fetch the model list when the picker opens so a model an admin just
+  // activated shows up without a page reload (live admin → frontend sync).
+  const { refreshModels } = useChat();
 
   // Keep the call sites intact for model changes, but the picker no
   // longer surfaces a separate "recent models" section.
@@ -4057,7 +4060,7 @@ const NavbarModelSelector = ({
         data-selected={isSelected ? "true" : undefined}
         disabled={isComingSoon}
         className={cn(
-          "model-picker-row group/row flex min-h-[62px] cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5",
+          "model-picker-row group/row flex min-h-[52px] cursor-pointer items-center gap-3 rounded-xl px-3 py-2 sm:min-h-[62px] sm:py-2.5",
           "text-foreground/90 focus:bg-transparent data-[highlighted]:bg-transparent",
           isComingSoon && "cursor-default opacity-55",
         )}
@@ -4065,7 +4068,7 @@ const NavbarModelSelector = ({
         <ModelLogo model={model} />
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-1.5">
-            <span className="liquid-label block truncate text-[15px] font-semibold leading-5">
+            <span className="liquid-label block truncate text-sm font-semibold leading-5 sm:text-[15px]">
               {label}
             </span>
             {isComingSoon && (
@@ -4074,7 +4077,7 @@ const NavbarModelSelector = ({
               </span>
             )}
           </span>
-          <span className="block truncate text-[12.5px] font-medium leading-4 text-muted-foreground/82">
+          <span className="hidden truncate text-[12.5px] font-medium leading-4 text-muted-foreground/82 sm:block">
             {attribution}
           </span>
         </span>
@@ -4085,7 +4088,8 @@ const NavbarModelSelector = ({
   // Default model selector for regular chats
   return (
     <DropdownMenu onOpenChange={(open) => {
-      if (!open) setSearchQuery("");
+      if (open) { void refreshModels?.(); }
+      else setSearchQuery("");
     }}>
       {/* Model selector trigger — h-10, medium weight, subtle surface.
           The always-on red dot was removed: it was a dead indicator
@@ -4124,7 +4128,7 @@ const NavbarModelSelector = ({
           </div>
         </div>
 
-        <ScrollArea className="chat-model-menu-scroll h-[min(70dvh,456px)]">
+        <ScrollArea className="chat-model-menu-scroll h-[min(60dvh,420px)] sm:h-[min(70dvh,456px)]">
           {filteredModels.length > 0 ? (
             <div className="model-picker-list flex flex-col gap-1 px-2 pb-2 pt-2">
               {filteredModels.map((model: any) => (

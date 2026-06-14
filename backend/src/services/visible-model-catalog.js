@@ -313,12 +313,20 @@ function curateVisibleTextModels(models = [], env = process.env) {
     byName.set(name.toLowerCase(), model);
   }
 
-  return listVisibleTextModelDefinitions(env).flatMap((definition) => {
+  // Curated entries: the static catalog definitions that have a matching
+  // active DB row, merged with their rich display metadata. Track which DB
+  // names these consume so the admin-authoritative pass-through below doesn't
+  // duplicate them.
+  const consumed = new Set();
+  const curated = listVisibleTextModelDefinitions(env).flatMap((definition) => {
     const candidates = [definition.name, ...(definition.aliases || [])]
       .filter(Boolean)
       .map((name) => String(name).trim().toLowerCase());
     const existing = candidates.map((name) => byName.get(name)).find(Boolean) || null;
     if (!existing) return [];
+    candidates.forEach((c) => consumed.add(c));
+    const existingName = String(existing?.name || '').trim().toLowerCase();
+    if (existingName) consumed.add(existingName);
     const { aliases, ...publicDefinition } = definition;
 
     return [{
@@ -327,6 +335,27 @@ function curateVisibleTextModels(models = [], env = process.env) {
       ...publicDefinition,
     }];
   });
+
+  // Admin-authoritative pass-through: any TEXT model the admin explicitly
+  // activated (isActive=true) that isn't already surfaced by a curated
+  // definition still appears in the picker — "activar = visible". This keeps
+  // curated models' rich metadata while letting operators expose new models
+  // by toggling them on, with no code edit to the static catalog. Still honors
+  // the deploy-scoped VISIBLE_MODELS_ALLOWLIST when that env is set.
+  const allow = parseVisibleModelsAllowlist(env);
+  const passthrough = [];
+  for (const [lowerName, model] of byName) {
+    if (consumed.has(lowerName)) continue;
+    const t = normalizeModelType(model?.type);
+    if (t && t !== 'TEXT') continue; // only surface TEXT here
+    if (allow && !allow.has(lowerName)) continue;
+    passthrough.push({
+      ...model,
+      displayName: model?.displayName || model?.name,
+    });
+  }
+
+  return [...curated, ...passthrough];
 }
 
 function normalizeModelType(type) {
