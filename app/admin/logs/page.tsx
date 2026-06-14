@@ -631,6 +631,9 @@ Devuelve:
               {errorsOnly ? "Sin errores para este filtro." : "Sin eventos para este filtro."}
             </div>
           ) : (
+            <>
+            {/* Desktop/tablet table; phones get the card list below. */}
+            <div className="hidden md:block">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -691,6 +694,57 @@ Devuelve:
                 })}
               </TableBody>
             </Table>
+            </div>
+
+            {/* Mobile card list — phones get tappable cards instead of a
+                side-scrolling table. Same selection + tap-to-detail behavior. */}
+            <div className="space-y-2 md:hidden">
+              {visibleRows.map((row) => {
+                const isErr = isErrorAction(row.action)
+                const isChecked = selected.has(row.id)
+                const isNew = recentlyNew.has(row.id)
+                return (
+                  <div
+                    key={row.id}
+                    onClick={() => setDetailRow(row)}
+                    className={cn("cursor-pointer rounded-lg border bg-card p-3", isErr && "bg-destructive/5")}
+                    style={isNew ? { boxShadow: "inset 3px 0 0 #f59e0b", backgroundColor: "rgba(245,158,11,0.08)" } : undefined}
+                  >
+                    <div className="flex items-start gap-2">
+                      <span className="pt-0.5" onClick={(e) => e.stopPropagation()}>
+                        <Checkbox
+                          checked={isChecked}
+                          onCheckedChange={() => toggleRow(row.id)}
+                          aria-label="Seleccionar evento"
+                        />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <Badge variant={actionBadgeVariant(row.action)} className="font-mono text-[11px]">
+                            {row.action}
+                          </Badge>
+                          <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+                            {formatTimestamp(row.createdAt)}
+                          </span>
+                        </div>
+                        <div className="mt-1 truncate text-xs">
+                          {row.actorName || row.actorId || row.actorType || "—"}
+                        </div>
+                        <div className="truncate text-xs text-muted-foreground">
+                          {[row.resourceType, row.resourceId].filter(Boolean).join(" · ") || "—"}
+                        </div>
+                        {metadataSummary(row.metadata) && (
+                          <div className="mt-0.5 truncate text-xs text-muted-foreground">
+                            {metadataSummary(row.metadata)}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+            </>
           )}
           <div className="mt-4 flex items-center justify-between">
             <span className="text-xs text-muted-foreground">
