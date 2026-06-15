@@ -15,6 +15,7 @@ const periods = require('../services/accounting/periods');
 const exchangeRate = require('../services/accounting/exchange-rate');
 const catalog = require('../services/accounting/catalog');
 const invoicing = require('../services/accounting/invoicing');
+const autoJournal = require('../services/accounting/auto-journal');
 const { seedPcge } = require('../services/accounting/pcge');
 
 const router = express.Router();
@@ -177,6 +178,12 @@ router.get('/invoices/:id', authenticateToken, async (req, res) => {
 });
 router.post('/invoices/:id/issue', authenticateToken, async (req, res) => {
   try { res.json({ invoice: await invoicing.issueInvoice({ prisma, id: req.params.id }) }); } catch (err) { sendDomainError(res, err); }
+});
+router.post('/invoices/:id/payment', authenticateToken, express.json({ limit: '8kb' }), async (req, res) => {
+  try {
+    const entry = await autoJournal.registerPayment({ prisma, invoiceId: req.params.id, account: req.body && req.body.account, amount: req.body && req.body.amount, date: req.body && req.body.date });
+    res.status(201).json({ entry });
+  } catch (err) { sendDomainError(res, err); }
 });
 
 // ── Tipo de cambio (multimoneda) ─────────────────────────────────────────────

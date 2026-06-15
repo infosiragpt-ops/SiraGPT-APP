@@ -106,8 +106,16 @@ test('pcge: catalog has the 9 elements + 2-digit accounts, all consistent', () =
     assert.equal(r.element, de.accountElement(r.code));
     assert.equal(r.level, de.accountLevel(r.code));
     assert.ok(['DEUDORA', 'ACREEDORA'].includes(r.nature), `naturaleza inválida en ${r.code}`);
-    if (r.level === 2) assert.ok(codes.has(r.parentCode), `falta el padre de ${r.code}`);
-    assert.equal(r.postable, false);
+    if (r.level >= 2) assert.ok(codes.has(r.parentCode), `falta el padre de ${r.code}`);
+    // Sólo las cuentas de detalle (hoja) pueden ser postable; elementos y
+    // cuentas de 2 dígitos nunca aceptan asientos.
+    if (r.level <= 2) assert.equal(r.postable, false, `${r.code} no debe ser postable`);
+  }
+  // Tras añadir cuentas de detalle, debe haber cuentas postable (1011, 1212, 40111, 7011…).
+  assert.ok(rows.some((r) => r.postable === true), 'debe existir al menos una cuenta postable');
+  for (const code of ['1011', '1212', '40111', '7011']) {
+    const acc = rows.find((r) => r.code === code);
+    assert.ok(acc && acc.postable === true, `la cuenta de detalle ${code} debe ser postable`);
   }
 });
 

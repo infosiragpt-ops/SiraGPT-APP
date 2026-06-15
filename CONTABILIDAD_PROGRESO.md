@@ -95,8 +95,15 @@ archivo.
       (CDR simulado) + envs (OSE_PROVIDER/RUC/USER/TOKEN/BASE_URL) + punto de
       extensión NubeFact documentado. Rutas `/api/accounting/invoices[/:id/issue]`.
       Tests `accounting-invoicing.test.js` (10).
-- [ ] **8. Asiento automático por venta/cobro** — al emitir/cobrar genera el
-      asiento contable; servicio + tests.
+- [x] **8. Asiento automático por venta/cobro** ✅ — `auto-journal.js`:
+      `invoiceToJournalLines` (cargo 1212 CxC=total, abono 7011 Ventas=base,
+      abono 40111 IGV; Σdebe=Σhaber), `postInvoiceSale` (asiento SALE + enlaza
+      journalEntryId, idempotente), `registerPayment` (cobro: cargo 1011/1041
+      Efectivo, abono 1212; source PAYMENT). Integrado en `issueInvoice`
+      (contabiliza tras emitir, tolerante). Cuentas de detalle PCGE añadidas al
+      seed (1011/1041/1212/40111/4212/6011/7011/7041, postable). Ruta
+      `/api/accounting/invoices/:id/payment`. Tests `accounting-auto-journal`
+      (5). Suite contable completa: 61/61.
 - [ ] **9. Libros electrónicos PLE** (ventas/compras) formato SUNAT; generadores
       + tests.
 - [ ] **10. Reportes financieros** — estado de resultados, balance general, flujo

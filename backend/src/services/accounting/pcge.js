@@ -115,7 +115,26 @@ const TWO_DIGIT = [
   ['97', 'Gastos financieros'],
 ];
 
-/** Devuelve el catálogo completo (elementos + cuentas de 2 dígitos) como filas. */
+// Cuentas de detalle (3–5 dígitos) usadas por los asientos automáticos.
+// [code, name, postable]. La cuenta hoja (postable:true) acepta asientos.
+const DETAIL = [
+  // Caja y bancos
+  ['101', 'Caja', false], ['1011', 'Caja', true],
+  ['104', 'Cuentas corrientes en instituciones financieras', false], ['1041', 'Cuentas corrientes operativas', true],
+  // Cuentas por cobrar comerciales
+  ['121', 'Facturas, boletas y otros comprobantes por cobrar', false], ['1212', 'Emitidas en cartera', true],
+  // Tributos por pagar (IGV)
+  ['401', 'Gobierno central', false], ['4011', 'Impuesto general a las ventas', false], ['40111', 'IGV - Cuenta propia', true],
+  // Cuentas por pagar comerciales (compras)
+  ['421', 'Facturas, boletas y otros comprobantes por pagar', false], ['4212', 'Emitidas', true],
+  // Compras
+  ['601', 'Mercaderías', false], ['6011', 'Mercaderías - Terceros', true],
+  // Ventas
+  ['701', 'Mercaderías', false], ['7011', 'Mercaderías - Terceros', true],
+  ['704', 'Prestación de servicios', false], ['7041', 'Terceros', true],
+];
+
+/** Devuelve el catálogo completo (elementos + cuentas de 2 dígitos + detalle) como filas. */
 function pcgeAccounts() {
   const rows = [];
   // Nivel 1 — elementos.
@@ -144,7 +163,22 @@ function pcgeAccounts() {
       parentCode: parentCode(code),
       nature: (override && override.nature) || meta.nature,
       type: (override && override.type) || meta.type,
-      postable: false, // las cuentas de detalle (4+ dígitos) se marcan postable en ítems posteriores
+      postable: false,
+    });
+  }
+  // Nivel 3–5 — cuentas de detalle (las hojas son postable).
+  for (const [code, name, postable] of DETAIL) {
+    const el = accountElement(code);
+    const meta = ELEMENTS[el] || {};
+    rows.push({
+      code,
+      name,
+      element: el,
+      level: accountLevel(code),
+      parentCode: parentCode(code),
+      nature: meta.nature,
+      type: meta.type,
+      postable: Boolean(postable),
     });
   }
   return rows;

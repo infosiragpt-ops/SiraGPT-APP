@@ -112,7 +112,7 @@ async function issueInvoice({ prisma, id, adapter } = {}) {
   const ose = adapter || getOseAdapter();
   const result = await ose.emit(invoice);
 
-  return prisma.accountingInvoice.update({
+  const updated = await prisma.accountingInvoice.update({
     where: { id },
     data: {
       status: 'ISSUED',
@@ -123,6 +123,17 @@ async function issueInvoice({ prisma, id, adapter } = {}) {
     },
     include: { lines: true },
   });
+
+  // Contabilización automática de la venta (tolerante: nunca rompe la emisión).
+  try {
+    const autoJournal = require('./auto-journal');
+    const posted = await autoJournal.postInvoiceSale({ prisma, invoiceId: id });
+    if (posted && posted.journalEntryId) updated.journalEntryId = posted.journalEntryId;
+  } catch (postErr) {
+    console.warn('[invoicing] no se pudo contabilizar la venta automáticamente:', postErr && postErr.message);
+  }
+
+  return updated;
 }
 
 async function listInvoices({ prisma, docType, status, customerId, skip = 0, take = 50 } = {}) {
