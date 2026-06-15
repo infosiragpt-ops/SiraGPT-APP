@@ -17,6 +17,7 @@ const catalog = require('../services/accounting/catalog');
 const invoicing = require('../services/accounting/invoicing');
 const autoJournal = require('../services/accounting/auto-journal');
 const ple = require('../services/accounting/ple');
+const reports = require('../services/accounting/reports');
 const { seedPcge } = require('../services/accounting/pcge');
 
 const router = express.Router();
@@ -205,6 +206,17 @@ router.get('/exchange-rates/lookup', authenticateToken, async (req, res) => {
     const rate = await exchangeRate.getRate({ prisma, currency: req.query.currency, date: req.query.date, rateType: req.query.rateType });
     res.json({ currency: String(req.query.currency || '').toUpperCase(), rate });
   } catch (err) { sendDomainError(res, err); }
+});
+
+// ── Reportes financieros ─────────────────────────────────────────────────────
+router.get('/reports/income-statement', authenticateToken, async (req, res) => {
+  try { res.json(await reports.computeIncomeStatement({ prisma, from: req.query.from, to: req.query.to })); } catch (err) { sendDomainError(res, err); }
+});
+router.get('/reports/balance-sheet', authenticateToken, async (req, res) => {
+  try { res.json(await reports.computeBalanceSheet({ prisma, asOf: req.query.asOf })); } catch (err) { sendDomainError(res, err); }
+});
+router.get('/reports/cash-flow', authenticateToken, async (req, res) => {
+  try { res.json(await reports.computeCashFlow({ prisma, from: req.query.from, to: req.query.to })); } catch (err) { sendDomainError(res, err); }
 });
 
 // ── Libros electrónicos PLE (SUNAT) ──────────────────────────────────────────

@@ -113,8 +113,14 @@ archivo.
       (módulo de compras = extensión futura, documentado). Rutas
       `/api/accounting/ple/ventas` y `/ple/compras` (param periodo). Tests
       `accounting-ple.test.js` (9).
-- [ ] **10. Reportes financieros** — estado de resultados, balance general, flujo
-      de caja; reconcilian con el mayor; servicios + tests.
+- [x] **10. Reportes financieros** ✅ — `reports.js` (puras + wrappers prisma
+      sobre `ledger`): `incomeStatement` (ingresos elem.7 neto de 74 − gastos
+      elem.6 → utilidad), `balanceSheet` (activo 1/2/3 vs pasivo 4 + patrimonio 5
+      + resultado, con reconciliación `activo = pasivo+patrimonio+resultado`),
+      `cashFlow` (movimientos de efectivo clase 10). Rutas
+      `/api/accounting/reports/{income-statement,balance-sheet,cash-flow}`.
+      Tests `accounting-reports.test.js` (6) — reconciliación verificada. Suite
+      contable: **76/76**.
 - [ ] **11. UI Next.js** — dashboard contable, tablas de asientos/comprobantes,
       export Excel/PDF.
 - [ ] **12. Cierre** — push rama, PR, CI verde, merge a main.
