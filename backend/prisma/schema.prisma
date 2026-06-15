@@ -2451,3 +2451,61 @@ model AccountingProduct {
   @@index([isSubscription])
   @@map("accounting_products")
 }
+
+/// Comprobante electrónico peruano (boleta/factura) con cálculo de IGV.
+model AccountingInvoice {
+  id           String   @id @default(cuid())
+  docType      String // BOLETA | FACTURA
+  series       String // p.ej. F001, B001
+  number       Int // correlativo por serie
+  issueDate    DateTime
+  customerId   String?
+  customerDoc  String?
+  customerName String
+  currency     String   @default("PEN") // PEN | USD
+  exchangeRate Decimal? @db.Decimal(18, 6)
+  gravado      Decimal  @default(0) @db.Decimal(18, 2)
+  exonerado    Decimal  @default(0) @db.Decimal(18, 2)
+  inafecto     Decimal  @default(0) @db.Decimal(18, 2)
+  igv          Decimal  @default(0) @db.Decimal(18, 2)
+  total        Decimal  @default(0) @db.Decimal(18, 2)
+  status       String   @default("DRAFT") // DRAFT | ISSUED | VOID
+  sunatStatus  String? // PENDING | ACCEPTED | REJECTED
+  sunatTicket  String?
+  cdrHash      String?
+  oseProvider  String?
+  journalEntryId String?
+  userId       String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  lines AccountingInvoiceLine[]
+
+  @@unique([series, number])
+  @@index([docType])
+  @@index([customerId])
+  @@index([status])
+  @@index([issueDate])
+  @@map("accounting_invoices")
+}
+
+/// Línea de un comprobante.
+model AccountingInvoiceLine {
+  id          String  @id @default(cuid())
+  invoiceId   String
+  productId   String?
+  code        String?
+  description String
+  quantity    Decimal @default(1) @db.Decimal(18, 4)
+  unitPrice   Decimal @default(0) @db.Decimal(18, 4)
+  unit        String  @default("NIU")
+  taxType     String  @default("GRAVADO") // GRAVADO | EXONERADO | INAFECTO
+  base        Decimal @default(0) @db.Decimal(18, 2)
+  igv         Decimal @default(0) @db.Decimal(18, 2)
+  total       Decimal @default(0) @db.Decimal(18, 2)
+
+  invoice AccountingInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("accounting_invoice_lines")
+}

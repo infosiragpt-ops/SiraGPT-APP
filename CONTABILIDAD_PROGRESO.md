@@ -85,9 +85,16 @@ archivo.
       offline. `catalog.js`: validación de documento peruano (RUC 11 díg/DNI 8),
       CRUD con zod. Rutas `/api/accounting/customers` y `/products`
       (GET/POST/GET:id/PATCH). Tests `accounting-catalog.test.js` (8).
-- [ ] **7. Facturación + comprobantes electrónicos** (boleta/factura) + IGV 18%
-      exacto + adaptador OSE/PSE (interfaz + stub funcional + envs + puntos de
-      extensión para NubeFact); modelos + cálculo IGV + tests.
+- [x] **7. Facturación + comprobantes electrónicos** ✅ — `igv.js` (IGV 18%
+      exacto por línea con money.js; GRAVADO/EXONERADO/INAFECTO; totales por
+      afectación). Modelos Prisma `AccountingInvoice` (BOLETA/FACTURA, serie,
+      correlativo, totales, status DRAFT/ISSUED/VOID, sunatStatus/ticket/CDR) +
+      `AccountingInvoiceLine` + migración offline. `invoicing.js`: createInvoice
+      (zod + IGV + numeración por serie + FACTURA exige RUC), issueInvoice
+      (emite vía OSE), list/get. `ose-adapter.js`: interfaz + **stub funcional**
+      (CDR simulado) + envs (OSE_PROVIDER/RUC/USER/TOKEN/BASE_URL) + punto de
+      extensión NubeFact documentado. Rutas `/api/accounting/invoices[/:id/issue]`.
+      Tests `accounting-invoicing.test.js` (10).
 - [ ] **8. Asiento automático por venta/cobro** — al emitir/cobrar genera el
       asiento contable; servicio + tests.
 - [ ] **9. Libros electrónicos PLE** (ventas/compras) formato SUNAT; generadores

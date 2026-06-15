@@ -14,6 +14,7 @@ const ledger = require('../services/accounting/ledger');
 const periods = require('../services/accounting/periods');
 const exchangeRate = require('../services/accounting/exchange-rate');
 const catalog = require('../services/accounting/catalog');
+const invoicing = require('../services/accounting/invoicing');
 const { seedPcge } = require('../services/accounting/pcge');
 
 const router = express.Router();
@@ -34,6 +35,12 @@ function sendDomainError(res, err) {
   }
   if (err && (err.code === 'RATE_NOT_FOUND' || err.code === 'INVALID_RATE')) {
     return res.status(422).json({ error: err.code.toLowerCase(), message: err.message });
+  }
+  if (err && err.code === 'NOT_FOUND') {
+    return res.status(404).json({ error: 'not_found', message: err.message });
+  }
+  if (err && (err.code === 'INVALID_STATE' || err.code === 'OSE_NOT_CONFIGURED')) {
+    return res.status(422).json({ error: err.code.toLowerCase(), message: err.message, hints: err.hints });
   }
   console.error('[accounting] error:', err && err.message);
   return res.status(500).json({ error: 'internal_error', message: 'Error interno del módulo contable' });
@@ -150,6 +157,26 @@ router.get('/products/:id', authenticateToken, async (req, res) => {
 });
 router.patch('/products/:id', authenticateToken, express.json({ limit: '16kb' }), async (req, res) => {
   try { res.json({ product: await catalog.updateProduct({ prisma, id: req.params.id, input: req.body }) }); } catch (err) { sendDomainError(res, err); }
+});
+
+// ── Comprobantes electrónicos (boleta/factura) ───────────────────────────────
+router.get('/invoices', authenticateToken, async (req, res) => {
+  try {
+    res.json(await invoicing.listInvoices({ prisma, docType: req.query.docType, status: req.query.status, customerId: req.query.customerId, skip: Math.max(0, Number(req.query.skip) || 0), take: Math.min(200, Math.max(1, Number(req.query.take) || 50)) }));
+  } catch (err) { sendDomainError(res, err); }
+});
+router.post('/invoices', authenticateToken, express.json({ limit: '256kb' }), async (req, res) => {
+  try { res.status(201).json({ invoice: await invoicing.createInvoice({ prisma, input: req.body, userId: req.user && req.user.id }) }); } catch (err) { sendDomainError(res, err); }
+});
+router.get('/invoices/:id', authenticateToken, async (req, res) => {
+  try {
+    const invoice = await invoicing.getInvoice({ prisma, id: req.params.id });
+    if (!invoice) return res.status(404).json({ error: 'not_found', message: 'Comprobante no encontrado' });
+    res.json({ invoice });
+  } catch (err) { sendDomainError(res, err); }
+});
+router.post('/invoices/:id/issue', authenticateToken, async (req, res) => {
+  try { res.json({ invoice: await invoicing.issueInvoice({ prisma, id: req.params.id }) }); } catch (err) { sendDomainError(res, err); }
 });
 
 // ── Tipo de cambio (multimoneda) ─────────────────────────────────────────────
