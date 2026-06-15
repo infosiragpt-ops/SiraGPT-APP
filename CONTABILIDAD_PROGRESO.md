@@ -71,8 +71,13 @@ archivo.
       asientos en periodo cerrado + setea periodId del periodo abierto). Rutas
       `/api/accounting/periods[/open|/close]`. Tests `accounting-periods.test.js`
       (7) + regresión del diario verde.
-- [ ] **5. Multimoneda PEN/USD** — registro de tipo de cambio, conversión; modelo
-      + servicio + tests.
+- [x] **5. Multimoneda PEN/USD** ✅ — modelo Prisma `AccountingExchangeRate`
+      (date/currency/rateType únicos, COMPRA/VENTA, source SUNAT/SBS/MANUAL) +
+      migración offline. `exchange-rate.js`: `recordRate` (zod+upsert),
+      `getRate` (match exacto o más reciente ≤ fecha), `convertWithRate`/
+      `convertAmount` (PEN↔extranjera exacto). Rutas
+      `/api/accounting/exchange-rates[/lookup]`. Tests
+      `accounting-exchange-rate.test.js` (6). (El diario ya acepta currency+TC).
 - [ ] **6. Clientes + catálogo de productos/servicios** (incl. suscripciones del
       SaaS); modelos + CRUD + tests.
 - [ ] **7. Facturación + comprobantes electrónicos** (boleta/factura) + IGV 18%

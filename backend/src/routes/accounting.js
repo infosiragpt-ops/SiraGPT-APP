@@ -12,6 +12,7 @@ const prisma = require('../config/database');
 const journal = require('../services/accounting/journal');
 const ledger = require('../services/accounting/ledger');
 const periods = require('../services/accounting/periods');
+const exchangeRate = require('../services/accounting/exchange-rate');
 const { seedPcge } = require('../services/accounting/pcge');
 
 const router = express.Router();
@@ -29,6 +30,9 @@ function sendDomainError(res, err) {
   }
   if (err && err.code === 'PERIOD_CLOSED') {
     return res.status(422).json({ error: 'period_closed', message: err.message, period: err.period });
+  }
+  if (err && (err.code === 'RATE_NOT_FOUND' || err.code === 'INVALID_RATE')) {
+    return res.status(422).json({ error: err.code.toLowerCase(), message: err.message });
   }
   console.error('[accounting] error:', err && err.message);
   return res.status(500).json({ error: 'internal_error', message: 'Error interno del módulo contable' });
@@ -103,6 +107,26 @@ router.post('/periods/open', authenticateToken, express.json({ limit: '8kb' }), 
 router.post('/periods/close', authenticateToken, express.json({ limit: '8kb' }), async (req, res) => {
   try {
     res.json({ period: await periods.closePeriod({ prisma, input: req.body, closedBy: req.user && req.user.id }) });
+  } catch (err) { sendDomainError(res, err); }
+});
+
+// ── Tipo de cambio (multimoneda) ─────────────────────────────────────────────
+router.get('/exchange-rates', authenticateToken, async (req, res) => {
+  try {
+    res.json({ rates: await exchangeRate.listRates({ prisma, currency: req.query.currency }) });
+  } catch (err) { sendDomainError(res, err); }
+});
+
+router.post('/exchange-rates', authenticateToken, express.json({ limit: '8kb' }), async (req, res) => {
+  try {
+    res.status(201).json({ rate: await exchangeRate.recordRate({ prisma, input: req.body }) });
+  } catch (err) { sendDomainError(res, err); }
+});
+
+router.get('/exchange-rates/lookup', authenticateToken, async (req, res) => {
+  try {
+    const rate = await exchangeRate.getRate({ prisma, currency: req.query.currency, date: req.query.date, rateType: req.query.rateType });
+    res.json({ currency: String(req.query.currency || '').toUpperCase(), rate });
   } catch (err) { sendDomainError(res, err); }
 });
 

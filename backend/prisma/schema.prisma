@@ -2397,3 +2397,19 @@ model AccountingPeriod {
   @@index([status])
   @@map("accounting_periods")
 }
+
+/// Tipo de cambio por fecha y moneda (rate = soles PEN por 1 unidad de la
+/// moneda extranjera). SUNAT publica compra/venta; se guarda por rateType.
+model AccountingExchangeRate {
+  id        String   @id @default(cuid())
+  date      DateTime
+  currency  String // moneda extranjera, p.ej. "USD"
+  rate      Decimal  @db.Decimal(18, 6)
+  rateType  String   @default("VENTA") // COMPRA | VENTA
+  source    String   @default("MANUAL") // MANUAL | SUNAT | SBS
+  createdAt DateTime @default(now())
+
+  @@unique([date, currency, rateType])
+  @@index([currency, date])
+  @@map("accounting_exchange_rates")
+}
