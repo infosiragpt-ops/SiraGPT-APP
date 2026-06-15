@@ -2306,3 +2306,75 @@ model UserMemoryEmbedding {
   @@index([memoryId])
   @@map("user_memory_embeddings")
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// Contabilidad (PCGE peruano · partida doble) — feat/contabilidad
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Plan de cuentas jerárquico basado en el PCGE peruano.
+model AccountingAccount {
+  id         String   @id @default(cuid())
+  code       String   @unique // código PCGE, p.ej. "10", "1011", "70"
+  name       String
+  element    Int // 1–9 (elemento/clase PCGE)
+  level      Int // profundidad (1=elemento, 2=2 dígitos, …)
+  parentCode String? // código PCGE del padre
+  nature     String // DEUDORA | ACREEDORA (saldo normal)
+  type       String // ACTIVO | PASIVO | PATRIMONIO | INGRESO | GASTO | COSTO | ORDEN
+  postable   Boolean  @default(false) // sólo las cuentas de detalle (hoja) aceptan asientos
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  lines AccountingJournalLine[]
+
+  @@index([element])
+  @@index([parentCode])
+  @@index([postable])
+  @@map("accounting_accounts")
+}
+
+/// Asiento del libro diario (partida doble: Σ debe = Σ haber).
+model AccountingJournalEntry {
+  id           String   @id @default(cuid())
+  number       Int      @unique // correlativo del diario
+  date         DateTime
+  glosa        String // descripción / glosa del asiento
+  currency     String   @default("PEN") // PEN | USD
+  exchangeRate Decimal? @db.Decimal(18, 6) // tipo de cambio cuando currency != PEN
+  status       String   @default("POSTED") // DRAFT | POSTED | VOID
+  source       String   @default("MANUAL") // MANUAL | SALE | PAYMENT | OPENING | CLOSING
+  sourceId     String? // id del comprobante/cobro que originó el asiento
+  periodId     String?
+  userId       String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  lines AccountingJournalLine[]
+
+  @@index([date])
+  @@index([status])
+  @@index([source, sourceId])
+  @@index([periodId])
+  @@map("accounting_journal_entries")
+}
+
+/// Línea de un asiento (un cargo o abono sobre una cuenta).
+model AccountingJournalLine {
+  id          String   @id @default(cuid())
+  entryId     String
+  accountId   String
+  accountCode String // desnormalizado para reportes rápidos
+  debit       Decimal  @default(0) @db.Decimal(18, 2)
+  credit      Decimal  @default(0) @db.Decimal(18, 2)
+  description String?
+  createdAt   DateTime @default(now())
+
+  entry   AccountingJournalEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  account AccountingAccount      @relation(fields: [accountId], references: [id])
+
+  @@index([entryId])
+  @@index([accountId])
+  @@index([accountCode])
+  @@map("accounting_journal_lines")
+}
