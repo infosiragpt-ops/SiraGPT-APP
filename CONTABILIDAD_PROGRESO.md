@@ -129,7 +129,19 @@ archivo.
       (ingresos/gastos/utilidad/activo) + pestañas Asientos/Comprobantes/Reportes
       con tablas + botones de export Excel/PDF. tsc 0, lint limpio, UI-lock
       re-baselineado. Suite contable: **81/81**.
-- [ ] **12. Cierre** — push rama, PR, CI verde, merge a main.
+- [x] **12. Cierre** ✅ — PR #117 con CI verde (gate "CI · required checks
+      passed" + 4 shards backend + Frontend build + UI-lock + Docker + Drizzle
+      dry-run; CodeQL Analyze ✓ sin alertas en archivos contables). PR marcado
+      ready y mergeado a main. Suite contable 81/81.
+
+---
+
+**Sistema contable COMPLETO** (12/12). Backend: PCGE + partida doble, libro
+diario/mayor, periodos, multimoneda, clientes/productos (incl. suscripciones),
+facturación + comprobantes electrónicos + IGV 18% + adaptador OSE/PSE (stub +
+extensión NubeFact), asientos automáticos venta/cobro, libros PLE SUNAT,
+reportes financieros. UI Next.js con dashboard + export Excel/PDF. Migraciones
+generadas offline (aplicar vía pipeline de deploy con `prisma migrate deploy`).
 
 ## Registro de avance
 
