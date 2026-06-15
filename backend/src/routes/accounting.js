@@ -10,6 +10,7 @@ const { authenticateToken } = require('../middleware/auth');
 const prisma = require('../config/database');
 
 const journal = require('../services/accounting/journal');
+const ledger = require('../services/accounting/ledger');
 const { seedPcge } = require('../services/accounting/pcge');
 
 const router = express.Router();
@@ -79,6 +80,28 @@ router.get('/journal-entries/:id', authenticateToken, async (req, res) => {
     const entry = await journal.getJournalEntry({ prisma, id: req.params.id });
     if (!entry) return res.status(404).json({ error: 'not_found', message: 'Asiento no encontrado' });
     res.json({ entry });
+  } catch (err) { sendDomainError(res, err); }
+});
+
+// ── Libro Mayor / Balance de comprobación ────────────────────────────────────
+router.get('/ledger', authenticateToken, async (req, res) => {
+  try {
+    const accounts = await ledger.computeLedger({ prisma, from: req.query.from, to: req.query.to });
+    res.json({ accounts });
+  } catch (err) { sendDomainError(res, err); }
+});
+
+router.get('/ledger/:accountCode', authenticateToken, async (req, res) => {
+  try {
+    const account = await ledger.computeLedger({ prisma, accountCode: req.params.accountCode, from: req.query.from, to: req.query.to });
+    res.json({ account });
+  } catch (err) { sendDomainError(res, err); }
+});
+
+router.get('/trial-balance', authenticateToken, async (req, res) => {
+  try {
+    const result = await ledger.computeTrialBalance({ prisma, from: req.query.from, to: req.query.to });
+    res.json(result);
   } catch (err) { sendDomainError(res, err); }
 });
 

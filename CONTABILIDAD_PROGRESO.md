@@ -58,8 +58,12 @@ archivo.
       (`/api/accounting/journal-entries` POST/GET/:id, `/accounts`,
       `/accounts/seed`) montada en index.js, auth + mapeo de errores
       (400/422/404). Tests `accounting-journal.test.js` (7, node --test).
-- [ ] **3. Libro Mayor** — saldos por cuenta derivados del diario; servicio +
-      ruta + tests de reconciliación con el diario.
+- [x] **3. Libro Mayor** ✅ — `ledger.js`: `buildLedger` (agregación pura por
+      cuenta, saldo firmado por naturaleza DEUDORA/ACREEDORA), `buildTrialBalance`
+      (balance de comprobación con reconciliación Σdebe=Σhaber),
+      `computeLedger`/`computeTrialBalance` (prisma, sólo asientos POSTED).
+      Rutas `/api/accounting/ledger[/:code]` + `/trial-balance`. Tests
+      `accounting-ledger.test.js` (6, node --test).
 - [ ] **4. Periodos contables** — apertura/cierre; bloquear asientos en periodos
       cerrados; modelo + servicio + tests.
 - [ ] **5. Multimoneda PEN/USD** — registro de tipo de cambio, conversión; modelo
