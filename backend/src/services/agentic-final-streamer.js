@@ -28,7 +28,12 @@ const DEFAULT_DELAY_MS = Number(process.env.SIRAGPT_AGENTIC_STREAM_DELAY_MS) || 
 const MIN_STREAM_CHARS = Number(process.env.SIRAGPT_AGENTIC_STREAM_MIN_CHARS) || 160;
 
 function isEnabled() {
-  const raw = String(process.env.SIRAGPT_AGENTIC_STREAM_FINAL || '').trim().toLowerCase();
+  // Default ON: token-stream the final answer progressively so it reveals like
+  // ChatGPT (text arrives and fills in) instead of the whole answer popping in
+  // one frame after the thinking timeline — which read as a ~1s "dead" gap.
+  // Set SIRAGPT_AGENTIC_STREAM_FINAL=0 (or off/false) to restore single-frame.
+  const raw = String(process.env.SIRAGPT_AGENTIC_STREAM_FINAL ?? '').trim().toLowerCase();
+  if (raw === '') return true;
   return raw === '1' || raw === 'on' || raw === 'true';
 }
 

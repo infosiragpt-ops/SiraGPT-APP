@@ -5,6 +5,32 @@ const assert = require('node:assert/strict');
 
 const streamer = require('../src/services/agentic-final-streamer');
 
+describe('isEnabled — progressive final-answer streaming defaults ON', () => {
+  test('enabled when the env var is unset (default ON)', () => {
+    const prev = process.env.SIRAGPT_AGENTIC_STREAM_FINAL;
+    delete process.env.SIRAGPT_AGENTIC_STREAM_FINAL;
+    try { assert.equal(streamer.isEnabled(), true); }
+    finally { if (prev !== undefined) process.env.SIRAGPT_AGENTIC_STREAM_FINAL = prev; }
+  });
+
+  test('disabled only when explicitly set to 0/off/false', () => {
+    const prev = process.env.SIRAGPT_AGENTIC_STREAM_FINAL;
+    try {
+      for (const off of ['0', 'off', 'false']) {
+        process.env.SIRAGPT_AGENTIC_STREAM_FINAL = off;
+        assert.equal(streamer.isEnabled(), false, `"${off}" must disable`);
+      }
+      for (const on of ['1', 'on', 'true']) {
+        process.env.SIRAGPT_AGENTIC_STREAM_FINAL = on;
+        assert.equal(streamer.isEnabled(), true, `"${on}" must enable`);
+      }
+    } finally {
+      if (prev === undefined) delete process.env.SIRAGPT_AGENTIC_STREAM_FINAL;
+      else process.env.SIRAGPT_AGENTIC_STREAM_FINAL = prev;
+    }
+  });
+});
+
 describe('chunkForStreaming', () => {
   test('empty → []', () => {
     assert.deepEqual(streamer.chunkForStreaming(''), []);
