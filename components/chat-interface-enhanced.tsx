@@ -12,6 +12,7 @@ import {
   Globe,
   Bot,
   ChevronDown,
+  ChevronRight,
   X,
   Upload,
   Palette,
@@ -6019,8 +6020,13 @@ But first, you need to connect your Spotify account securely using the button be
   ]
   const renderComposerModelControls = () => {
     if (isMediaToolActive) return null
+    // One control: the model selector, with a SUBTLE ">" at its edge that
+    // expands the reasoning-effort menu (Bajo/Medio/Extra/Max). Keeping the
+    // effort behind the chevron — instead of a second always-on pill — keeps
+    // the composer uncluttered. The chevron is faint by default (visible on
+    // mobile) and brightens on hover / when its menu is open.
     return (
-      <>
+      <div className="group inline-flex shrink-0 items-center">
         <NavbarModelSelector
           selectedModel={selectedModel}
           setSelectedModel={setSelectedModel}
@@ -6037,17 +6043,16 @@ But first, you need to connect your Spotify account securely using the button be
                 <button
                   type="button"
                   aria-label={`Esfuerzo de razonamiento: ${selectedEffort}`}
-                  className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full border border-border/55 bg-muted/40 px-2.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                  className="-ml-1 inline-flex h-8 w-5 shrink-0 items-center justify-center rounded-full text-muted-foreground/70 opacity-70 transition-opacity hover:text-foreground hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 group-hover:opacity-100 data-[state=open]:text-foreground data-[state=open]:opacity-100"
                 >
-                  <span>{selectedEffort}</span>
-                  <ChevronDown className="h-3 w-3 opacity-55" />
+                  <ChevronRight className="h-3.5 w-3.5" />
                 </button>
               </DropdownMenuTrigger>
             </TooltipTrigger>
-            <TooltipContent side="top">Esfuerzo de razonamiento</TooltipContent>
+            <TooltipContent side="top">Esfuerzo: {selectedEffort}</TooltipContent>
           </Tooltip>
-          <DropdownMenuContent align="end" sideOffset={8} className="w-48 rounded-2xl p-1">
-            <div className="px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/70">Esfuerzo</div>
+          <DropdownMenuContent align="end" sideOffset={8} className="w-52 rounded-2xl p-1">
+            <div className="px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/70">Esfuerzo de razonamiento</div>
             {COMPOSER_EFFORT_LEVELS.map((lvl) => (
               <DropdownMenuItem
                 key={lvl.value}
@@ -6063,7 +6068,7 @@ But first, you need to connect your Spotify account securely using the button be
             ))}
           </DropdownMenuContent>
         </DropdownMenu>
-      </>
+      </div>
     )
   }
 
