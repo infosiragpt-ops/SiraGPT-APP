@@ -4165,6 +4165,8 @@ function ChatInterfaceContent() {
     selectedModel,
     createNewChat,
     setSelectedModel,
+    selectedEffort,
+    setSelectedEffort,
     setSelectedProivder,
     selectProvider,
     uploadedFiles,
@@ -6005,6 +6007,65 @@ But first, you need to connect your Spotify account securely using the button be
       void startRecorderDictation();
     }
   };
+
+  // Composer model + reasoning-effort controls (Claude-style), rendered next to
+  // the mic. The model selector was moved here from the top-left navbar; the
+  // effort pill (Bajo/Medio/Extra/Max) maps to the backend `reasoningEffort`.
+  const COMPOSER_EFFORT_LEVELS: { value: string; hint: string }[] = [
+    { value: "Bajo", hint: "Respuestas rápidas" },
+    { value: "Medio", hint: "Equilibrado" },
+    { value: "Extra", hint: "Razona más a fondo" },
+    { value: "Max", hint: "Máximo razonamiento" },
+  ]
+  const renderComposerModelControls = () => {
+    if (isMediaToolActive) return null
+    return (
+      <>
+        <NavbarModelSelector
+          selectedModel={selectedModel}
+          setSelectedModel={setSelectedModel}
+          availableModels={availableModels}
+          setSelectedProvider={setSelectedProivder}
+          chatTypes={chatType}
+          currentChat={currentChat}
+          setCurrentChat={setCurrentChat}
+        />
+        <DropdownMenu>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  aria-label={`Esfuerzo de razonamiento: ${selectedEffort}`}
+                  className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full border border-border/55 bg-muted/40 px-2.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                >
+                  <span>{selectedEffort}</span>
+                  <ChevronDown className="h-3 w-3 opacity-55" />
+                </button>
+              </DropdownMenuTrigger>
+            </TooltipTrigger>
+            <TooltipContent side="top">Esfuerzo de razonamiento</TooltipContent>
+          </Tooltip>
+          <DropdownMenuContent align="end" sideOffset={8} className="w-48 rounded-2xl p-1">
+            <div className="px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/70">Esfuerzo</div>
+            {COMPOSER_EFFORT_LEVELS.map((lvl) => (
+              <DropdownMenuItem
+                key={lvl.value}
+                onSelect={(e) => { e.preventDefault(); setSelectedEffort(lvl.value) }}
+                className="flex items-center justify-between gap-2 rounded-xl px-2.5 py-2 text-[13px]"
+              >
+                <span className="flex flex-col">
+                  <span className="font-medium leading-4">{lvl.value}</span>
+                  <span className="text-[11px] leading-4 text-muted-foreground/70">{lvl.hint}</span>
+                </span>
+                {selectedEffort === lvl.value && <Check className="h-4 w-4 shrink-0" />}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </>
+    )
+  }
 
   const renderDictationButton = () => (
     <Tooltip>
@@ -9936,17 +9997,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     <SidebarOvalIcon className="h-5 w-5" />
                   </SidebarTrigger>
                 </div>
-                {!isMediaToolActive && (
-                  <NavbarModelSelector
-                    selectedModel={selectedModel}
-                    setSelectedModel={setSelectedModel}
-                    availableModels={availableModels}
-                    setSelectedProvider={setSelectedProivder}
-                    chatTypes={chatType}
-                    currentChat={currentChat}
-                    setCurrentChat={setCurrentChat}
-                  />
-                )}
+                {/* Model selector moved to the composer (next to the mic),
+                    Claude-style. See renderComposerModelControls(). */}
               </div>
               <div className="chat-header-actions flex shrink-0 items-center gap-0.5">
                 {/* Complete Chat Share Button - only show if there's a chat with messages.
@@ -10292,6 +10344,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           {/* Pulido · contador suave de caracteres. Aparece
                               sólo cuando ya escribiste bastante. */}
                           <ComposerCharCounter input={input} />
+                          {renderComposerModelControls()}
                           {!isStopButtonVisible && (
                             renderDictationButton()
                           )}
@@ -10823,6 +10876,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             <div className="flex shrink-0 items-center gap-1.5">
                               {/* Pulido · contador suave de caracteres. */}
                               <ComposerCharCounter input={input} />
+                              {renderComposerModelControls()}
                               {!isStopButtonVisible && (
                                 renderDictationButton()
                               )}

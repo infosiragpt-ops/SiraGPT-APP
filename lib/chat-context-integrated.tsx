@@ -594,6 +594,8 @@ interface ChatContextType {
   deleteChat: (chatId: string) => Promise<boolean> | boolean
   selectedModel: string
   setSelectedModel: (model: string) => void
+  selectedEffort: string
+  setSelectedEffort: (effort: string) => void
   selectProvider: string
   setSelectedProivder: (model: string) => void
   isLoading: boolean
@@ -632,6 +634,20 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [chats, setChats] = useState<Chat[]>([])
   const [currentChat, setCurrentChat] = useState<Chat | null>(null)
   const [selectedModel, setSelectedModel] = useState("")
+  // Composer reasoning-effort picker (Bajo/Medio/Extra/Max), Claude-style.
+  // Persisted so the user's choice survives reloads; sent to the backend as
+  // `reasoningEffort` and mapped to the compute plan there.
+  const [selectedEffort, setSelectedEffortState] = useState<string>("Medio")
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem("sira:composer:effort")
+      if (saved) setSelectedEffortState(saved)
+    } catch { /* ignore */ }
+  }, [])
+  const setSelectedEffort = useCallback((effort: string) => {
+    setSelectedEffortState(effort)
+    try { window.localStorage.setItem("sira:composer:effort", effort) } catch { /* ignore */ }
+  }, [])
   const [selectProvider, setSelectedProivder] = useState("")
   const [availableModels, setAvailableModels] = useState<any[]>([])
   const [isLoading, setIsLoading] = useState(false)
@@ -1573,6 +1589,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             {
               provider: selectProvider,
               model: selectedModel,
+              reasoningEffort: selectedEffort,
               prompt: content,
               chatId: activeChat.id,
               files: requestFileIds,
@@ -2372,6 +2389,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         {
           provider: selectProvider,
           model: selectedModel,
+          reasoningEffort: selectedEffort,
           prompt: originalUserMessage.content,
           chatId: currentChat.id,
           files: (originalUserMessage.files?.map((f: any) => f.id) as string[]) || [],
@@ -2697,6 +2715,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         {
           provider: selectProvider,
           model: selectedModel,
+          reasoningEffort: selectedEffort,
           prompt: newContent,
           chatId: currentChat.id,
           files: Array.isArray(parsedFiles) ? parsedFiles : [], // Pass file IDs
@@ -3485,6 +3504,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const modelsFilesValue = useMemo<ModelsFilesContextType>(() => ({
     selectedModel,
     setSelectedModel,
+    selectedEffort,
+    setSelectedEffort,
     selectProvider,
     setSelectedProivder,
     availableModels,
@@ -3492,7 +3513,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     uploadedFiles,
     setUploadedFiles,
   }), [
-    selectedModel, setSelectedModel, selectProvider, setSelectedProivder,
+    selectedModel, setSelectedModel, selectedEffort, setSelectedEffort, selectProvider, setSelectedProivder,
     availableModels, refreshModels, uploadedFiles, setUploadedFiles,
   ])
 
@@ -3561,6 +3582,8 @@ interface StreamingContextType {
 interface ModelsFilesContextType {
   selectedModel: string
   setSelectedModel: (model: string) => void
+  selectedEffort: string
+  setSelectedEffort: (effort: string) => void
   selectProvider: string
   setSelectedProivder: (model: string) => void
   availableModels: any[]
@@ -3626,6 +3649,8 @@ export function useChat(): ChatContextType {
     deleteChat: list.deleteChat,
     selectedModel: mf.selectedModel,
     setSelectedModel: mf.setSelectedModel,
+    selectedEffort: mf.selectedEffort,
+    setSelectedEffort: mf.setSelectedEffort,
     selectProvider: mf.selectProvider,
     setSelectedProivder: mf.setSelectedProivder,
     isLoading: streaming.isLoading,
