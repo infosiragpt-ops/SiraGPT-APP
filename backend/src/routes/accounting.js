@@ -16,6 +16,7 @@ const exchangeRate = require('../services/accounting/exchange-rate');
 const catalog = require('../services/accounting/catalog');
 const invoicing = require('../services/accounting/invoicing');
 const autoJournal = require('../services/accounting/auto-journal');
+const ple = require('../services/accounting/ple');
 const { seedPcge } = require('../services/accounting/pcge');
 
 const router = express.Router();
@@ -203,6 +204,22 @@ router.get('/exchange-rates/lookup', authenticateToken, async (req, res) => {
   try {
     const rate = await exchangeRate.getRate({ prisma, currency: req.query.currency, date: req.query.date, rateType: req.query.rateType });
     res.json({ currency: String(req.query.currency || '').toUpperCase(), rate });
+  } catch (err) { sendDomainError(res, err); }
+});
+
+// ── Libros electrónicos PLE (SUNAT) ──────────────────────────────────────────
+router.get('/ple/ventas', authenticateToken, async (req, res) => {
+  try {
+    const text = await ple.generateVentasPle({ prisma, periodo: req.query.periodo });
+    res.type('text/plain').send(text);
+  } catch (err) { sendDomainError(res, err); }
+});
+
+router.get('/ple/compras', authenticateToken, async (req, res) => {
+  try {
+    // Las compras se proveen como registros capturados (módulo de compras = extensión futura).
+    const text = await ple.generateComprasPle({ purchases: [], periodo: req.query.periodo });
+    res.type('text/plain').send(text);
   } catch (err) { sendDomainError(res, err); }
 });
 

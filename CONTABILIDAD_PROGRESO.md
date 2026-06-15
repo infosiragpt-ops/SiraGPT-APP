@@ -104,8 +104,15 @@ archivo.
       seed (1011/1041/1212/40111/4212/6011/7011/7041, postable). Ruta
       `/api/accounting/invoices/:id/payment`. Tests `accounting-auto-journal`
       (5). Suite contable completa: 61/61.
-- [ ] **9. Libros electrónicos PLE** (ventas/compras) formato SUNAT; generadores
-      + tests.
+- [x] **9. Libros electrónicos PLE** ✅ — `ple.js`: generadores pipe-delimited
+      formato SUNAT — `buildVentasPle` (Registro de Ventas e Ingresos) +
+      `buildComprasPle` (Registro de Compras) con codificación de tipo de
+      comprobante (01/03/07/08) y de documento (Tabla 2: RUC=6/DNI=1/CE=4),
+      fechas dd/mm/aaaa, montos a 2 dec, periodo AAAAMM00. `generateVentasPle`
+      arma desde comprobantes ISSUED del periodo; compras acepta registros
+      (módulo de compras = extensión futura, documentado). Rutas
+      `/api/accounting/ple/ventas` y `/ple/compras` (param periodo). Tests
+      `accounting-ple.test.js` (9).
 - [ ] **10. Reportes financieros** — estado de resultados, balance general, flujo
       de caja; reconcilian con el mayor; servicios + tests.
 - [ ] **11. UI Next.js** — dashboard contable, tablas de asientos/comprobantes,
