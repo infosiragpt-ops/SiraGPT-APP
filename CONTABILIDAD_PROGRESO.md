@@ -78,8 +78,13 @@ archivo.
       `convertAmount` (PEN↔extranjera exacto). Rutas
       `/api/accounting/exchange-rates[/lookup]`. Tests
       `accounting-exchange-rate.test.js` (6). (El diario ya acepta currency+TC).
-- [ ] **6. Clientes + catálogo de productos/servicios** (incl. suscripciones del
-      SaaS); modelos + CRUD + tests.
+- [x] **6. Clientes + catálogo de productos/servicios** ✅ — modelos Prisma
+      `AccountingCustomer` (docType RUC/DNI/CE/PASAPORTE/SIN_DOC únicos) y
+      `AccountingProduct` (kind, unitPrice, currency, unit SUNAT, igvAffected,
+      `isSubscription` para suscripciones del SaaS, incomeAccount) + migración
+      offline. `catalog.js`: validación de documento peruano (RUC 11 díg/DNI 8),
+      CRUD con zod. Rutas `/api/accounting/customers` y `/products`
+      (GET/POST/GET:id/PATCH). Tests `accounting-catalog.test.js` (8).
 - [ ] **7. Facturación + comprobantes electrónicos** (boleta/factura) + IGV 18%
       exacto + adaptador OSE/PSE (interfaz + stub funcional + envs + puntos de
       extensión para NubeFact); modelos + cálculo IGV + tests.

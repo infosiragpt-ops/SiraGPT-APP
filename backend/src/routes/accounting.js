@@ -13,6 +13,7 @@ const journal = require('../services/accounting/journal');
 const ledger = require('../services/accounting/ledger');
 const periods = require('../services/accounting/periods');
 const exchangeRate = require('../services/accounting/exchange-rate');
+const catalog = require('../services/accounting/catalog');
 const { seedPcge } = require('../services/accounting/pcge');
 
 const router = express.Router();
@@ -108,6 +109,47 @@ router.post('/periods/close', authenticateToken, express.json({ limit: '8kb' }),
   try {
     res.json({ period: await periods.closePeriod({ prisma, input: req.body, closedBy: req.user && req.user.id }) });
   } catch (err) { sendDomainError(res, err); }
+});
+
+// ── Clientes ─────────────────────────────────────────────────────────────────
+router.get('/customers', authenticateToken, async (req, res) => {
+  try {
+    res.json(await catalog.listCustomers({ prisma, q: req.query.q, skip: Math.max(0, Number(req.query.skip) || 0), take: Math.min(200, Math.max(1, Number(req.query.take) || 50)) }));
+  } catch (err) { sendDomainError(res, err); }
+});
+router.post('/customers', authenticateToken, express.json({ limit: '16kb' }), async (req, res) => {
+  try { res.status(201).json({ customer: await catalog.createCustomer({ prisma, input: req.body }) }); } catch (err) { sendDomainError(res, err); }
+});
+router.get('/customers/:id', authenticateToken, async (req, res) => {
+  try {
+    const customer = await catalog.getCustomer({ prisma, id: req.params.id });
+    if (!customer) return res.status(404).json({ error: 'not_found', message: 'Cliente no encontrado' });
+    res.json({ customer });
+  } catch (err) { sendDomainError(res, err); }
+});
+router.patch('/customers/:id', authenticateToken, express.json({ limit: '16kb' }), async (req, res) => {
+  try { res.json({ customer: await catalog.updateCustomer({ prisma, id: req.params.id, input: req.body }) }); } catch (err) { sendDomainError(res, err); }
+});
+
+// ── Productos / servicios ────────────────────────────────────────────────────
+router.get('/products', authenticateToken, async (req, res) => {
+  try {
+    const isSubscription = req.query.isSubscription == null ? undefined : req.query.isSubscription === 'true';
+    res.json(await catalog.listProducts({ prisma, kind: req.query.kind, isSubscription, skip: Math.max(0, Number(req.query.skip) || 0), take: Math.min(300, Math.max(1, Number(req.query.take) || 100)) }));
+  } catch (err) { sendDomainError(res, err); }
+});
+router.post('/products', authenticateToken, express.json({ limit: '16kb' }), async (req, res) => {
+  try { res.status(201).json({ product: await catalog.createProduct({ prisma, input: req.body }) }); } catch (err) { sendDomainError(res, err); }
+});
+router.get('/products/:id', authenticateToken, async (req, res) => {
+  try {
+    const product = await catalog.getProduct({ prisma, id: req.params.id });
+    if (!product) return res.status(404).json({ error: 'not_found', message: 'Producto no encontrado' });
+    res.json({ product });
+  } catch (err) { sendDomainError(res, err); }
+});
+router.patch('/products/:id', authenticateToken, express.json({ limit: '16kb' }), async (req, res) => {
+  try { res.json({ product: await catalog.updateProduct({ prisma, id: req.params.id, input: req.body }) }); } catch (err) { sendDomainError(res, err); }
 });
 
 // ── Tipo de cambio (multimoneda) ─────────────────────────────────────────────

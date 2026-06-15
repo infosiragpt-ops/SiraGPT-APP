@@ -2413,3 +2413,41 @@ model AccountingExchangeRate {
   @@index([currency, date])
   @@map("accounting_exchange_rates")
 }
+
+/// Cliente del módulo contable (para facturación/comprobantes).
+model AccountingCustomer {
+  id        String   @id @default(cuid())
+  docType   String // RUC | DNI | CE | PASAPORTE | SIN_DOC
+  docNumber String
+  name      String
+  email     String?
+  address   String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([docType, docNumber])
+  @@index([name])
+  @@map("accounting_customers")
+}
+
+/// Catálogo de productos/servicios facturables, incluidas las suscripciones del SaaS.
+model AccountingProduct {
+  id             String   @id @default(cuid())
+  code           String   @unique
+  name           String
+  kind           String   @default("SERVICE") // SERVICE | GOOD
+  unitPrice      Decimal  @default(0) @db.Decimal(18, 2)
+  currency       String   @default("PEN") // PEN | USD
+  unit           String   @default("NIU") // unidad de medida SUNAT
+  igvAffected    Boolean  @default(true) // afecto a IGV (18%)
+  isSubscription Boolean  @default(false) // suscripción del propio SaaS
+  incomeAccount  String? // cuenta PCGE de ingreso (p.ej. 7011)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([kind])
+  @@index([isSubscription])
+  @@map("accounting_products")
+}
