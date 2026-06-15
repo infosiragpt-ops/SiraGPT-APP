@@ -8,17 +8,25 @@
 import { useEffect, useState } from "react"
 import { codexApi } from "./codex-api"
 
-let cached: boolean | null = null
+// Only a definitive `enabled:true` is cached (sticky). A `false` or a failed
+// probe is NOT cached, so a transient blip or a flag turned on after the first
+// probe re-resolves on the next mount/navigation instead of stranding the user
+// on the old /code flow forever.
+let cached: true | null = null
 
 export function useCodexHealth() {
   const [enabled, setEnabled] = useState<boolean | null>(cached)
 
   useEffect(() => {
-    if (cached !== null) { setEnabled(cached); return }
+    if (cached === true) { setEnabled(true); return }
     let cancelled = false
     codexApi.health()
-      .then((h) => { cached = Boolean(h.enabled); if (!cancelled) setEnabled(cached) })
-      .catch(() => { cached = false; if (!cancelled) setEnabled(false) })
+      .then((h) => {
+        const on = Boolean(h.enabled)
+        if (on) cached = true
+        if (!cancelled) setEnabled(on)
+      })
+      .catch(() => { if (!cancelled) setEnabled(false) })
     return () => { cancelled = true }
   }, [])
 

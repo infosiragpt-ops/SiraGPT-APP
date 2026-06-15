@@ -24,7 +24,9 @@ export interface CodexRunMetric { timeWorkedMs: number; actionsCount: number; it
 export interface CodexCheckpointDiff { ok: boolean; commitSha: string; diff: string; truncated: boolean; additions: number; deletions: number; filesChanged: number }
 
 export const codexApi = {
-  health: () => req<CodexHealth>("/health"),
+  // no-store: the flag can change; a cached 304 (enabled:false) would strand
+  // the UI on the old /code flow even after the flag is turned on.
+  health: () => req<CodexHealth>("/health", { cache: "no-store" }),
 
   listProjects: () => req<{ projects: CodexProject[] }>("/projects").then((r) => r.projects),
   createProject: (name: string, brief?: unknown) => req<{ project: CodexProject }>("/projects", { method: "POST", body: JSON.stringify({ name, brief }) }).then((r) => r.project),

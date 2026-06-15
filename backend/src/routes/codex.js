@@ -46,7 +46,14 @@ function bearerFromQueryFallback(req, _res, next) {
 }
 
 // Público y SIEMPRE 200: el frontend decide si renderiza la UI V2 con esto.
-router.get('/health', (_req, res) => res.json({ ok: true, enabled: isCodexV2Enabled() }));
+// NUNCA cachear: el flag puede cambiar y un 304 con cuerpo viejo (enabled:false)
+// dejaría la UI clavada en el flujo antiguo aunque el flag ya esté on. Sin ETag
+// + no-store ⇒ el navegador siempre recibe el valor fresco.
+router.get('/health', (req, res) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.removeHeader('ETag');
+  res.json({ ok: true, enabled: isCodexV2Enabled() });
+});
 
 router.use((req, res, next) => {
   if (!isCodexV2Enabled()) return res.status(404).json({ error: 'not_found' });
