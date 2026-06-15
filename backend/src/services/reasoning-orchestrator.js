@@ -573,6 +573,43 @@ function planCompute({ difficulty, risk, intent = null, prompt = '' } = {}) {
   return { mode, samples, reasoningEffort, reflection };
 }
 
+// User-controlled effort override. The composer exposes a Bajo/Medio/Extra/Max
+// effort picker (Claude-style); when the user picks one, it FORCES the compute
+// plan instead of letting planCompute auto-decide from difficulty/risk. Returns
+// null for unknown levels so the caller keeps the auto plan. Drives the
+// test-time-compute reasoning directive (works across every model/provider).
+const EFFORT_ALIASES = Object.freeze({
+  bajo: 'low', low: 'low', minimo: 'low', 'mínimo': 'low', fast: 'low', rapido: 'low', 'rápido': 'low',
+  medio: 'medium', medium: 'medium', normal: 'medium', balanced: 'medium',
+  extra: 'high', alto: 'high', high: 'high', deep: 'high',
+  max: 'max', maximo: 'max', 'máximo': 'max', maximum: 'max', ultra: 'max',
+});
+
+function normalizeEffortLevel(level) {
+  const key = String(level || '').trim().toLowerCase();
+  return EFFORT_ALIASES[key] || null;
+}
+
+function computeForEffort(level) {
+  const norm = normalizeEffortLevel(level);
+  if (!norm) return null;
+  switch (norm) {
+    case 'low':
+      // Fast path: a single direct pass, no extended reasoning directive.
+      return { mode: 'direct', samples: 1, reasoningEffort: 'low', reflection: false };
+    case 'medium':
+      return { mode: 'extended', samples: 1, reasoningEffort: 'medium', reflection: true };
+    case 'high':
+      return { mode: 'extended', samples: 1, reasoningEffort: 'high', reflection: true };
+    case 'max':
+      // Strongest streaming-safe directive: ask for multiple internal approaches
+      // and reconcile (self-consistency) at high effort.
+      return { mode: 'self_consistency', samples: 3, reasoningEffort: 'high', reflection: true };
+    default:
+      return null;
+  }
+}
+
 // ── 4b. Verification plan ─────────────────────────────────────────────────────
 
 function planVerification({ difficulty, risk, hasGrounding = false } = {}) {
@@ -691,6 +728,8 @@ module.exports = {
   assessRisk,
   routeModel,
   planCompute,
+  computeForEffort,
+  normalizeEffortLevel,
   planVerification,
   summarizeForLog,
   buildNeeds,

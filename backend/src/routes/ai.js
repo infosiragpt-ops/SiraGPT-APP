@@ -1551,6 +1551,9 @@ router.post(
 
     body('chatId').optional().isString(),
     body('files').optional().isArray(),
+    // Composer effort picker (Bajo/Medio/Extra/Max → low/medium/high/max).
+    // Optional; when present it overrides the auto-decided reasoning depth.
+    body('reasoningEffort').optional().isString().isLength({ max: 16 }),
   ],
   authenticateToken,
   requireScope('ai:generate'),
@@ -3943,6 +3946,16 @@ router.post(
             language: (langResolution && langResolution.language) || 'es',
           });
           req._cognitiveDecision = cognitiveDecision;
+          // User-controlled reasoning effort (composer Bajo/Medio/Extra/Max).
+          // When the user picks an effort, FORCE the compute plan so the
+          // reasoning directive matches their choice instead of the auto plan.
+          try {
+            const __effortOverride = reasoningOrchestrator.computeForEffort(req.body && req.body.reasoningEffort);
+            if (__effortOverride && cognitiveDecision) {
+              cognitiveDecision.compute = __effortOverride;
+              console.log(`[reasoning-effort] user override "${req.body.reasoningEffort}" → mode=${__effortOverride.mode} effort=${__effortOverride.reasoningEffort}`);
+            }
+          } catch (_) { /* effort override must never break the turn */ }
           try { console.log(reasoningOrchestrator.summarizeForLog(cognitiveDecision)); } catch (_) { /* noop */ }
 
           // Instruction-following: extract the user's EXPLICIT constraints

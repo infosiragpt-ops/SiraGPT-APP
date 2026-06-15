@@ -302,3 +302,34 @@ describe('decide — orchestration', () => {
     }
   });
 });
+
+describe('computeForEffort — user-controlled reasoning effort override', () => {
+  test('maps the composer levels (Bajo/Medio/Extra/Max) to compute plans', () => {
+    assert.deepEqual(orch.computeForEffort('Bajo'), { mode: 'direct', samples: 1, reasoningEffort: 'low', reflection: false });
+    assert.deepEqual(orch.computeForEffort('Medio'), { mode: 'extended', samples: 1, reasoningEffort: 'medium', reflection: true });
+    assert.deepEqual(orch.computeForEffort('Extra'), { mode: 'extended', samples: 1, reasoningEffort: 'high', reflection: true });
+    assert.deepEqual(orch.computeForEffort('Max'), { mode: 'self_consistency', samples: 3, reasoningEffort: 'high', reflection: true });
+  });
+
+  test('accepts english/alias levels and is case-insensitive', () => {
+    assert.equal(orch.computeForEffort('low').reasoningEffort, 'low');
+    assert.equal(orch.computeForEffort('HIGH').reasoningEffort, 'high');
+    assert.equal(orch.computeForEffort('máximo').mode, 'self_consistency');
+    assert.equal(orch.normalizeEffortLevel('rápido'), 'low');
+  });
+
+  test('returns null for unknown/empty levels so the caller keeps the auto plan', () => {
+    assert.equal(orch.computeForEffort('basura'), null);
+    assert.equal(orch.computeForEffort(''), null);
+    assert.equal(orch.computeForEffort(null), null);
+    assert.equal(orch.computeForEffort(undefined), null);
+  });
+
+  test('a forced "low" plan produces no reasoning directive (fast path)', () => {
+    const ttc = require('../src/services/test-time-compute');
+    // direct + low → shouldApply false → empty directive
+    assert.equal(ttc.buildReasoningDirective({ compute: orch.computeForEffort('Bajo') }), '');
+    // extended + high → a real directive
+    assert.ok(ttc.buildReasoningDirective({ compute: orch.computeForEffort('Extra') }).length > 0);
+  });
+});
