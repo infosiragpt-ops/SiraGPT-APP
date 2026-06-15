@@ -6026,7 +6026,8 @@ But first, you need to connect your Spotify account securely using the button be
     // the composer uncluttered. The chevron is faint by default (visible on
     // mobile) and brightens on hover / when its menu is open.
     return (
-      <div className="group inline-flex shrink-0 items-center">
+      <div className="flex w-full min-w-0 items-center px-1 pb-0.5 pt-0.5 sm:px-1.5">
+        <div className="group inline-flex min-w-0 max-w-full items-center">
         <NavbarModelSelector
           selectedModel={selectedModel}
           setSelectedModel={setSelectedModel}
@@ -6068,6 +6069,7 @@ But first, you need to connect your Spotify account securely using the button be
             ))}
           </DropdownMenuContent>
         </DropdownMenu>
+        </div>
       </div>
     )
   }
@@ -10349,7 +10351,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           {/* Pulido · contador suave de caracteres. Aparece
                               sólo cuando ya escribiste bastante. */}
                           <ComposerCharCounter input={input} />
-                          {renderComposerModelControls()}
                           {!isStopButtonVisible && (
                             renderDictationButton()
                           )}
@@ -10429,6 +10430,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           )}
                         </div>
                       </div>
+                      {/* Bottom row — model + reasoning-effort selector, kept off
+                          the textarea row so typing has full width on mobile. */}
+                      {renderComposerModelControls()}
                     </TooltipProvider>
 
                     {/* Secondary row — active tool / connector pills.
@@ -10881,7 +10885,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             <div className="flex shrink-0 items-center gap-1.5">
                               {/* Pulido · contador suave de caracteres. */}
                               <ComposerCharCounter input={input} />
-                              {renderComposerModelControls()}
                               {!isStopButtonVisible && (
                                 renderDictationButton()
                               )}
@@ -10984,6 +10987,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               )}
                             </div>
                           </div>
+                          {/* Bottom row — model + reasoning-effort selector, kept
+                              off the textarea row so typing has full width on mobile. */}
+                          {renderComposerModelControls()}
                         </TooltipProvider>
 
                         {/* Secondary row — active tool / connector pills.
