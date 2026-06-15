@@ -30,7 +30,7 @@ import {
 import type { DocumentPreviewTarget } from "@/components/document-preview"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
-import { DotmCircular15 } from "@/components/ui/dotm-circular-15"
+import { DotmCircular15, THINKING_GLYPH_COLOR } from "@/components/ui/dotm-circular-15"
 interface Props {
   state: AgentTaskState
   className?: string
@@ -622,7 +622,7 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
             aria-label="Ver actividad del agente"
             className="group flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-0.5 text-left"
           >
-            <DotmCircular15 size={18} className="shrink-0" ariaLabel="Trabajando" />
+            <DotmCircular15 size={18} color={THINKING_GLYPH_COLOR} className="shrink-0" ariaLabel="Trabajando" />
             <span className="thinking-shimmer-text min-w-0 truncate text-[13px] font-medium tracking-tight">
               {headerLabel}
             </span>

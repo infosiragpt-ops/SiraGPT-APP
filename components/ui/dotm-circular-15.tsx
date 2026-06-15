@@ -11,6 +11,13 @@ import type { DotAnimationResolver, DotMatrixCommonProps } from "@/lib/dotmatrix
 
 export type DotmCircular15Props = DotMatrixCommonProps;
 
+// Canonical "thinking" glyph color — a fuchsia/purple used by every chat
+// thinking surface (placeholder, reasoning trace, agent timeline, agentic
+// steps) so the act of thinking reads consistently across the product.
+// Passed as the DotMatrix `color` so the dots render fuchsia instead of
+// inheriting the surrounding text color.
+export const THINKING_GLYPH_COLOR = "#c026d3";
+
 const STEP_COUNT = 24;
 const BASE_OPACITY = 0.07;
 const MID_OPACITY = 0.34;

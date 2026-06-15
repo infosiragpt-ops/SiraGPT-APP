@@ -23,7 +23,7 @@
 
 import { useEffect, useRef, useState } from "react"
 import clsx from "clsx"
-import { DotmCircular15 } from "@/components/ui/dotm-circular-15"
+import { DotmCircular15, THINKING_GLYPH_COLOR } from "@/components/ui/dotm-circular-15"
 
 const ROTATING_MESSAGES = [
   "Pensando…",
@@ -157,6 +157,7 @@ export const ThinkingPlaceholder = ({ stage, pct, compact = false, className }: 
         <DotmCircular15
           size={glyphSize}
           dotSize={glyphDot}
+          color={THINKING_GLYPH_COLOR}
           ariaLabel={activeLabel ?? "Generando respuesta"}
           className="shrink-0"
         />
