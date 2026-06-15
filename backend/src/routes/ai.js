@@ -5260,12 +5260,21 @@ router.post(
                     return body ? `--- ${name} ---\n${body}` : null;
                   }).filter(Boolean).join('\n\n');
                 } catch (_) { agenticAttachedDocuments = ''; }
+                // Inject the custom GPT persona into the agentic loop so a
+                // selected GPT actually follows its own instructions. The agentic
+                // path previously dropped it entirely (only the plain stream got
+                // it via masterPrompt.buildSystemPrompt) — reuse the SAME builder.
+                let agenticCustomGptPersona = '';
+                try {
+                  agenticCustomGptPersona = customGpt ? (masterPrompt.buildCustomGptPromptBlock(customGpt) || '') : '';
+                } catch (_) { agenticCustomGptPersona = ''; }
                 __agenticDidStream = true;
                 const agenticResult = await agenticStream.runAgenticChat({
                   openai: agenticClient,
                   model: actualModel,
                   provider: actualProvider,
                   attachedDocuments: agenticAttachedDocuments,
+                  customGptPersona: agenticCustomGptPersona,
                   userQuery: prompt,
                   history: priorHistory,
                   res,

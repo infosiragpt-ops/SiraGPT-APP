@@ -498,6 +498,11 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       // loop ALWAYS sees the content — rag_retrieve becomes a fallback for deep
       // search, not the only path. Empty string when there are no attachments.
       attachedDocuments = '',
+      // Custom-GPT persona block (the "CUSTOM GPT EXECUTION CONTRACT" already
+      // built by the caller via masterPrompt.buildCustomGptPromptBlock). The
+      // agentic loop used to drop it entirely, so a selected GPT didn't follow
+      // its own instructions. Injected at the TOP of extraSystem for primacy.
+      customGptPersona = '',
     } = opts || {};
 
     if (!openai) throw new Error('runAgenticChat: openai client is required');
@@ -667,6 +672,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
     }
 
     const extraSystem = [
+      // Custom-GPT persona FIRST (primacy) so a selected GPT actually follows
+      // its configured instructions/format/tone, then the generic agent rules.
+      customGptPersona || '',
       'Responde SIEMPRE en español, con tono profesional y cercano. No uses emojis.',
       'En tareas con 2 o más pasos llama `update_plan` PRIMERO con el plan completo (3-7 pasos cortos) y vuelve a llamarlo al completar cada paso o si el plan cambia — el usuario lo ve actualizarse en vivo. Para tareas de una sola acción no hace falta plan.',
       initialToolChoice ? buildMediaIntentsHint(mediaIntents) : '',

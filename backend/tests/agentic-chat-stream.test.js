@@ -583,6 +583,39 @@ test('runAgenticChat injects attached-document text directly into the system pro
   assert.match(system, /NUNCA digas que no tienes acceso/);
 });
 
+test('runAgenticChat injects the custom GPT persona into the system prompt (so it follows its instructions)', async () => {
+  let firstCreateArgs = null;
+  const openai = {
+    chat: { completions: { create: async (args) => { firstCreateArgs = args; return finalizeMessage('Hecho.'); } } },
+  };
+  const { res } = makeFakeRes();
+
+  await agenticStream.runAgenticChat({
+    openai,
+    model: 'gpt-4o-mini',
+    userQuery: 'cual es la hipotesis 4?',
+    history: [],
+    res,
+    customGptPersona: '## CUSTOM GPT EXECUTION CONTRACT: "Antecedentes de tesis"\nResponde SIEMPRE en un solo párrafo académico con citas numeradas.',
+  });
+
+  const system = firstCreateArgs.messages.find(m => m.role === 'system')?.content || '';
+  assert.match(system, /CUSTOM GPT EXECUTION CONTRACT/);
+  assert.match(system, /Antecedentes de tesis/);
+  assert.match(system, /un solo párrafo académico/);
+});
+
+test('runAgenticChat omits the custom GPT persona when none is supplied', async () => {
+  let firstCreateArgs = null;
+  const openai = {
+    chat: { completions: { create: async (args) => { firstCreateArgs = args; return finalizeMessage('Ok.'); } } },
+  };
+  const { res } = makeFakeRes();
+  await agenticStream.runAgenticChat({ openai, model: 'gpt-4o-mini', userQuery: 'hola', history: [], res });
+  const system = firstCreateArgs.messages.find(m => m.role === 'system')?.content || '';
+  assert.equal(/CUSTOM GPT EXECUTION CONTRACT/.test(system), false);
+});
+
 test('runAgenticChat omits the attached-documents block when there are none', async () => {
   let firstCreateArgs = null;
   const openai = {
