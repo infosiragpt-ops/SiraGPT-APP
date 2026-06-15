@@ -2,6 +2,7 @@
 
 const { z } = require('zod');
 const { assertBalanced } = require('./double-entry');
+const { assertDateOpen } = require('./periods');
 const { round2 } = require('./money');
 
 /** Zod schema para una línea de asiento. */
@@ -82,6 +83,9 @@ async function createJournalEntry({ prisma, input, userId = null } = {}) {
   // Invariante contable: el total del debe debe ser igual al del haber.
   assertBalanced(data.lines);
 
+  // No se permiten asientos en un periodo contable cerrado.
+  const period = await assertDateOpen({ prisma, date: data.date });
+
   const byCode = await resolveAccounts(prisma, data.lines.map((l) => l.accountCode));
   const number = await nextEntryNumber(prisma);
 
@@ -103,7 +107,7 @@ async function createJournalEntry({ prisma, input, userId = null } = {}) {
       status: 'POSTED',
       source: data.source,
       sourceId: data.sourceId || null,
-      periodId: data.periodId || null,
+      periodId: data.periodId || (period ? period.id : null),
       userId,
       lines: { create: lines },
     },

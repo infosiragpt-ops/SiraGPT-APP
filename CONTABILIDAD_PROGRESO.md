@@ -64,8 +64,13 @@ archivo.
       `computeLedger`/`computeTrialBalance` (prisma, sólo asientos POSTED).
       Rutas `/api/accounting/ledger[/:code]` + `/trial-balance`. Tests
       `accounting-ledger.test.js` (6, node --test).
-- [ ] **4. Periodos contables** — apertura/cierre; bloquear asientos en periodos
-      cerrados; modelo + servicio + tests.
+- [x] **4. Periodos contables** ✅ — modelo Prisma `AccountingPeriod`
+      (year/month únicos, OPEN/CLOSED) + migración offline. `periods.js`:
+      openPeriod/closePeriod (idempotentes), findPeriodForDate, `assertDateOpen`
+      (lanza PERIOD_CLOSED). Integrado en `journal.createJournalEntry` (bloquea
+      asientos en periodo cerrado + setea periodId del periodo abierto). Rutas
+      `/api/accounting/periods[/open|/close]`. Tests `accounting-periods.test.js`
+      (7) + regresión del diario verde.
 - [ ] **5. Multimoneda PEN/USD** — registro de tipo de cambio, conversión; modelo
       + servicio + tests.
 - [ ] **6. Clientes + catálogo de productos/servicios** (incl. suscripciones del

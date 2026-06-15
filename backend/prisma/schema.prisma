@@ -2378,3 +2378,22 @@ model AccountingJournalLine {
   @@index([accountCode])
   @@map("accounting_journal_lines")
 }
+
+/// Periodo contable mensual con apertura/cierre. Un periodo CERRADO bloquea
+/// el alta de asientos cuya fecha caiga dentro de él.
+model AccountingPeriod {
+  id        String    @id @default(cuid())
+  year      Int
+  month     Int // 1–12
+  startDate DateTime
+  endDate   DateTime
+  status    String    @default("OPEN") // OPEN | CLOSED
+  closedAt  DateTime?
+  closedBy  String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@unique([year, month])
+  @@index([status])
+  @@map("accounting_periods")
+}

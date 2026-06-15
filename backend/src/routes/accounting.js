@@ -11,6 +11,7 @@ const prisma = require('../config/database');
 
 const journal = require('../services/accounting/journal');
 const ledger = require('../services/accounting/ledger');
+const periods = require('../services/accounting/periods');
 const { seedPcge } = require('../services/accounting/pcge');
 
 const router = express.Router();
@@ -25,6 +26,9 @@ function sendDomainError(res, err) {
   }
   if (err && err.code === 'ACCOUNT_NOT_FOUND') {
     return res.status(422).json({ error: 'account_not_found', message: err.message, missing: err.missing });
+  }
+  if (err && err.code === 'PERIOD_CLOSED') {
+    return res.status(422).json({ error: 'period_closed', message: err.message, period: err.period });
   }
   console.error('[accounting] error:', err && err.message);
   return res.status(500).json({ error: 'internal_error', message: 'Error interno del módulo contable' });
@@ -80,6 +84,25 @@ router.get('/journal-entries/:id', authenticateToken, async (req, res) => {
     const entry = await journal.getJournalEntry({ prisma, id: req.params.id });
     if (!entry) return res.status(404).json({ error: 'not_found', message: 'Asiento no encontrado' });
     res.json({ entry });
+  } catch (err) { sendDomainError(res, err); }
+});
+
+// ── Periodos contables ───────────────────────────────────────────────────────
+router.get('/periods', authenticateToken, async (req, res) => {
+  try {
+    res.json({ periods: await periods.listPeriods({ prisma }) });
+  } catch (err) { sendDomainError(res, err); }
+});
+
+router.post('/periods/open', authenticateToken, express.json({ limit: '8kb' }), async (req, res) => {
+  try {
+    res.json({ period: await periods.openPeriod({ prisma, input: req.body }) });
+  } catch (err) { sendDomainError(res, err); }
+});
+
+router.post('/periods/close', authenticateToken, express.json({ limit: '8kb' }), async (req, res) => {
+  try {
+    res.json({ period: await periods.closePeriod({ prisma, input: req.body, closedBy: req.user && req.user.id }) });
   } catch (err) { sendDomainError(res, err); }
 });
 
