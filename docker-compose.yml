@@ -132,7 +132,10 @@ services:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/health/live"]
       interval: 15s
       timeout: 5s
-      start_period: 20s
+      # Backend cold boot (Prisma migrate deploy + provider/plugin init) takes
+      # ~40s; a 20s grace period marked it unhealthy and blocked the frontend
+      # from starting. 75s leaves headroom on slower machines.
+      start_period: 75s
       retries: 3
     logging:
       driver: "json-file"
