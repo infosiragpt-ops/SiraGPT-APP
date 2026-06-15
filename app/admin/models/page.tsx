@@ -864,14 +864,15 @@ export default function ModelsPage() {
                   </TableCell>
                   
                   <TableCell>
-                    <div className="flex items-center space-x-2">
+                    <div className="flex items-center gap-2">
                       <Switch
                         checked={model.isActive}
                         onCheckedChange={() => toggleModelStatus(model.id, model.isActive)}
+                        aria-label={model.isActive ? "Desactivar modelo" : "Activar modelo"}
                       />
-                      <Badge variant={model.isActive ? "default" : "secondary"}>
-                        {model.isActive ? "Active" : "Inactive"}
-                      </Badge>
+                      <span className={model.isActive ? "text-xs font-medium text-green-600 dark:text-green-500" : "text-xs font-medium text-muted-foreground"}>
+                        {model.isActive ? "Activo" : "Inactivo"}
+                      </span>
                     </div>
                   </TableCell>
                   
@@ -922,11 +923,6 @@ export default function ModelsPage() {
                           <Settings className="mr-2 h-4 w-4" />
                           Edit Model
                         </DropdownMenuItem>
-                        <DropdownMenuItem 
-                          onClick={() => toggleModelStatus(model.id, model.isActive)}
-                        >
-                          {model.isActive ? "Deactivate" : "Activate"}
-                        </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </TableCell>
@@ -973,9 +969,6 @@ export default function ModelsPage() {
                           <Settings className="mr-2 h-4 w-4" />
                           Edit Model
                         </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => toggleModelStatus(model.id, model.isActive)}>
-                          {model.isActive ? "Deactivate" : "Activate"}
-                        </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
@@ -984,10 +977,11 @@ export default function ModelsPage() {
                       <Switch
                         checked={model.isActive}
                         onCheckedChange={() => toggleModelStatus(model.id, model.isActive)}
+                        aria-label={model.isActive ? "Desactivar modelo" : "Activar modelo"}
                       />
-                      <Badge variant={model.isActive ? "default" : "secondary"}>
-                        {model.isActive ? "Active" : "Inactive"}
-                      </Badge>
+                      <span className={model.isActive ? "text-xs font-medium text-green-600 dark:text-green-500" : "text-xs font-medium text-muted-foreground"}>
+                        {model.isActive ? "Activo" : "Inactivo"}
+                      </span>
                     </div>
                     <span className="whitespace-nowrap text-xs text-muted-foreground">{cost.main}</span>
                   </div>
