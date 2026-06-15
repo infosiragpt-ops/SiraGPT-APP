@@ -114,6 +114,13 @@ services:
       # credit). Defaults to OpenRouter gpt-4o-mini (verified to write files).
       OPENCODE_MODEL_PROVIDER: "${OPENCODE_MODEL_PROVIDER:-openrouter}"
       OPENCODE_MODEL_ID: "${OPENCODE_MODEL_ID:-openai/gpt-4o-mini}"
+      # Codex Agent V2 — flag + runner endpoint. Flag off (default) keeps /code
+      # identical to today; the runner (perfil opencode) provisiona el workspace.
+      CODEX_AGENT_V2: "${CODEX_AGENT_V2:-}"
+      CODE_RUNNER_URL: "${CODE_RUNNER_URL:-http://runner:4097}"
+      # Host-visible base dir the runner's /export bind-mount maps to (display
+      # only; shown to the user so they can find the mirrored project on disk).
+      CODEX_EXPORT_HOST_DIR: "${CODEX_EXPORT_HOST_DIR:-.codex-workspaces}"
     volumes:
       - uploads_data:/app/uploads
     depends_on:
@@ -218,11 +225,15 @@ services:
       DEV_PORT: "5173"
       CTRL_PORT: "4097"
       RUNNER_WORKDIR: "/workspace"
+      EXPORT_DIR: "/export"
     volumes:
       - opencode_workspace:/workspace
       - ./scripts/code-runner.js:/scripts/code-runner.js:ro
       - ./scripts/code-runner-utils.js:/scripts/code-runner-utils.js:ro
       - runner_bun_cache:/root/.bun/install/cache   # warm re-installs (vite/tailwind/framer-motion)
+      # Hybrid "export to disk": Codex V2 mirrors each project's source here so
+      # it lands in a real folder on the host (D:\…\.codex-workspaces\<id>).
+      - ./.codex-workspaces:/export
     ports:
       - "5173:5173"   # dev server → preview iframe
     expose:

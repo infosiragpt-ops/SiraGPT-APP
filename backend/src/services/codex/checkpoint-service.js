@@ -101,6 +101,13 @@ async function createCheckpoint({ run, project, deps = {} }) {
   if (eventStore?.appendEvent) {
     await eventStore.appendEvent(run.id, 'checkpoint_created', { checkpointId: checkpoint.id, commitSha, title, createdAt }, { prisma: db }).catch(() => {});
   }
+
+  // Hybrid "export to disk": mirror the just-committed source to the host
+  // folder. Best-effort and non-blocking — a runner without export support
+  // (older sidecar / test mocks) or an export failure must never fail the run.
+  if (typeof runner.exportWorkspace === 'function') {
+    Promise.resolve(runner.exportWorkspace(projectId)).catch(() => {});
+  }
   return checkpoint;
 }
 

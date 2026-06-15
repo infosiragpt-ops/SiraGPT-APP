@@ -6,6 +6,7 @@ const {
   sanitizeProjectId,
   resolveProjectRelPath,
   isAllowedCommand,
+  shouldIgnoreExportPath,
 } = require('../../scripts/code-runner-utils');
 
 test('sanitizeProjectId accepts cuid-like ids and rejects everything else', () => {
@@ -37,4 +38,22 @@ test('isAllowedCommand allows git/bun/bunx/node and blocks the rest', () => {
   assert.equal(isAllowedCommand([]), false);
   assert.equal(isAllowedCommand('git init'), false);
   assert.equal(isAllowedCommand(['git', 42]), false);
+});
+
+test('shouldIgnoreExportPath keeps source but skips generated/heavy dirs', () => {
+  // Source files the user wants on disk → copied.
+  assert.equal(shouldIgnoreExportPath('package.json'), false);
+  assert.equal(shouldIgnoreExportPath('src/main.tsx'), false);
+  assert.equal(shouldIgnoreExportPath('public/logo.svg'), false);
+  assert.equal(shouldIgnoreExportPath('a/b/c.ts'), false);
+  // Generated/heavy trees → never mirrored, at any depth, backslashes too.
+  assert.equal(shouldIgnoreExportPath('node_modules/react/index.js'), true);
+  assert.equal(shouldIgnoreExportPath('.git/HEAD'), true);
+  assert.equal(shouldIgnoreExportPath('dist/bundle.js'), true);
+  assert.equal(shouldIgnoreExportPath('.next/cache/x'), true);
+  assert.equal(shouldIgnoreExportPath('src/node_modules/dep/x.js'), true);
+  assert.equal(shouldIgnoreExportPath('build\\out.js'), true);
+  // Empty/blank → ignored (nothing to copy).
+  assert.equal(shouldIgnoreExportPath(''), true);
+  assert.equal(shouldIgnoreExportPath(null), true);
 });

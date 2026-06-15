@@ -31,6 +31,7 @@ export const codexApi = {
   getProject: (id: string) => req<{ project: CodexProject }>(`/projects/${id}`).then((r) => r.project),
   startPreview: (id: string) => req<{ devUrl: string }>(`/projects/${id}/preview/start`, { method: "POST" }),
   previewStatus: (id: string) => req<any>(`/projects/${id}/preview/status`),
+  exportProject: (id: string) => req<{ ok: boolean; project: string; files: number; hostPath: string }>(`/projects/${id}/export`, { method: "POST" }),
 
   createRun: (projectId: string, body: { mode: "plan" | "build"; prompt?: string; model?: string; tier?: string; planRunId?: string }) =>
     req<{ run: CodexRun }>(`/projects/${projectId}/runs`, { method: "POST", body: JSON.stringify(body) }).then((r) => r.run),

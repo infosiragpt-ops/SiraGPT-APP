@@ -17,6 +17,8 @@
 /uploads/
 /tmp-smoke/
 /tmp-smoke-tel/
+# Codex Agent V2 hybrid "export to disk" mirror (runner bind-mount target)
+/.codex-workspaces/
 /.next.broken*/
 /.next.stale*/
 backend/prisma/dev.db

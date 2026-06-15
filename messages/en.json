@@ -499,7 +499,11 @@
       "diffTitle": "Changes · +{additions} −{deletions} · {files} files",
       "truncated": "Diff truncated (too long).",
       "rolledBack": "Rolled back to checkpoint {sha}",
-      "rollbackFailed": "Rollback failed"
+      "rollbackFailed": "Rollback failed",
+      "export": "Copy to my disk",
+      "exported": "{count} files copied to {path}",
+      "exportedHint": "On your disk:",
+      "exportFailed": "Could not copy to disk"
     },
     "summary": {
       "workedFor": "Worked for {duration}",

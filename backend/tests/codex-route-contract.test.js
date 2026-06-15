@@ -41,8 +41,10 @@ const restoreRunner = mockResolvedModule(runnerPath, {
     startDev: async (project) => { runnerCalls.push(['startDev', project]); return { ok: true, port: 5173, project }; },
     devStatus: async () => ({ running: true, ready: true, project: 'p1' }),
     stopDev: async () => ({ ok: true }),
+    exportWorkspace: async (project) => { runnerCalls.push(['exportWorkspace', project]); return { ok: true, project, files: 5 }; },
   }),
   runnerDevUrl: () => 'http://localhost:5173',
+  codexExportHostPath: (id) => `.codex-workspaces/${id}`,
   RunnerError: class RunnerError extends Error {},
 });
 
@@ -106,5 +108,18 @@ test('POST /projects/:id/preview/start proxies the runner and adds devUrl', asyn
 
 test('preview routes 404 on foreign project ids (ownership gate)', async () => {
   const res = await request(buildApp()).post('/api/codex/projects/nope/preview/start');
+  assert.equal(res.status, 404);
+});
+
+test('POST /projects/:id/export mirrors via the runner and returns hostPath', async () => {
+  const res = await request(buildApp()).post('/api/codex/projects/p1/export');
+  assert.equal(res.status, 200);
+  assert.equal(res.body.files, 5);
+  assert.equal(res.body.hostPath, '.codex-workspaces/p1');
+  assert.deepEqual(runnerCalls.at(-1), ['exportWorkspace', 'p1']);
+});
+
+test('export route 404s on foreign project ids (ownership gate)', async () => {
+  const res = await request(buildApp()).post('/api/codex/projects/nope/export');
   assert.equal(res.status, 404);
 });

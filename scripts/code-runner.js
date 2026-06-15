@@ -19,20 +19,54 @@
  *   POST /workspace/write { project, files[] } → write files (paths sanitized)
  *   GET  /workspace/file?project&path          → read a file (cap 200k)
  *   POST /workspace/exec  { project, cmd[], timeoutMs } → allowlisted exec
+ *   POST /workspace/export { project }                  → mirror source to
+ *                   EXPORT_DIR/<project> (host bind-mount) — hybrid "to disk".
  * The dev server itself is reachable on DEV_PORT (published in compose).
  */
 
-const { mkdirSync, writeFileSync, readFileSync, existsSync } = require("node:fs");
+const { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, statSync, copyFileSync, rmSync } = require("node:fs");
 const { dirname } = require("node:path");
-const { sanitizeProjectId, resolveProjectRelPath, isAllowedCommand } = require("./code-runner-utils.js");
+const { sanitizeProjectId, resolveProjectRelPath, isAllowedCommand, shouldIgnoreExportPath } = require("./code-runner-utils.js");
 
 const WORKDIR = process.env.RUNNER_WORKDIR || "/workspace";
 const DEV_PORT = Number(process.env.DEV_PORT || 5173);
 const CTRL_PORT = Number(process.env.CTRL_PORT || 4097);
 const PROJECTS_DIR = `${WORKDIR}/projects`;
+// Host-bind-mounted mirror target (Codex Agent V2 "export to disk", hybrid mode).
+const EXPORT_DIR = process.env.EXPORT_DIR || "/export";
 
 function projectDirOf(id) {
   return `${PROJECTS_DIR}/${id}`;
+}
+
+/**
+ * Mirror a project's SOURCE (ignoring node_modules/.git/build dirs) to
+ * destDir. Replaces destDir wholesale so the mirror always matches HEAD.
+ * Returns the number of files copied.
+ */
+function exportProjectSource(srcDir, destDir) {
+  rmSync(destDir, { recursive: true, force: true });
+  let files = 0;
+  const walk = (relBase) => {
+    const absDir = relBase ? `${srcDir}/${relBase}` : srcDir;
+    for (const name of readdirSync(absDir)) {
+      const rel = relBase ? `${relBase}/${name}` : name;
+      if (shouldIgnoreExportPath(rel)) continue;
+      const absChild = `${srcDir}/${rel}`;
+      let st;
+      try { st = statSync(absChild); } catch { continue; }
+      if (st.isDirectory()) {
+        walk(rel);
+      } else if (st.isFile()) {
+        const dest = `${destDir}/${rel}`;
+        mkdirSync(dirname(dest), { recursive: true });
+        copyFileSync(absChild, dest);
+        files++;
+      }
+    }
+  };
+  walk("");
+  return files;
 }
 
 // Git refuses repos owned by another uid ("dubious ownership") — the volume
@@ -252,6 +286,21 @@ Bun.serve({
       const stdout = (await new Response(proc.stdout).text()).slice(0, 30_000);
       const stderr = (await new Response(proc.stderr).text()).slice(0, 30_000);
       return Response.json({ ok: exitCode === 0, exitCode, stdout, stderr, durationMs: Date.now() - started });
+    }
+
+    if (url.pathname === "/workspace/export" && req.method === "POST") {
+      const body = await req.json().catch(() => ({}));
+      const id = sanitizeProjectId(body.project);
+      if (!id) return Response.json({ ok: false, error: "invalid_project" }, { status: 400 });
+      const src = projectDirOf(id);
+      if (!existsSync(src)) return Response.json({ ok: false, error: "project_not_found" }, { status: 404 });
+      try {
+        const files = exportProjectSource(src, `${EXPORT_DIR}/${id}`);
+        return Response.json({ ok: true, project: id, files });
+      } catch (e) {
+        const detail = String(e && e.message ? e.message : e).slice(0, 400);
+        return Response.json({ ok: false, error: "export_failed", detail }, { status: 500 });
+      }
     }
 
     if (url.pathname === "/status") {

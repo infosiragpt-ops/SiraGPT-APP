@@ -37,4 +37,30 @@ function isAllowedCommand(cmd) {
   );
 }
 
-module.exports = { sanitizeProjectId, resolveProjectRelPath, isAllowedCommand, ALLOWED_BINS };
+// Dirs never mirrored to the user's disk on export: generated/heavy trees the
+// user re-creates locally with `npm install`/`npm run build`. Keeping them out
+// makes the export a clean, small source copy and dodges the slow/fragile
+// node_modules-over-a-Windows-bind-mount path entirely.
+const IGNORED_EXPORT_DIRS = new Set([
+  'node_modules', '.git', 'dist', 'build', '.next', '.cache', '.turbo',
+  'coverage', '.vite', '.output', '.parcel-cache', '.svelte-kit',
+]);
+
+/** True when a project-relative path lives under an ignored dir (any segment). */
+function shouldIgnoreExportPath(relPath) {
+  const p = String(relPath || '').replaceAll('\\', '/').trim();
+  if (!p) return true;
+  for (const seg of p.split('/')) {
+    if (seg && IGNORED_EXPORT_DIRS.has(seg)) return true;
+  }
+  return false;
+}
+
+module.exports = {
+  sanitizeProjectId,
+  resolveProjectRelPath,
+  isAllowedCommand,
+  ALLOWED_BINS,
+  IGNORED_EXPORT_DIRS,
+  shouldIgnoreExportPath,
+};

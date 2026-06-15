@@ -10,6 +10,7 @@
  *   GET  /api/codex/projects/:id                 → detalle            (auth)
  *   POST /api/codex/projects/:id/preview/start   → dev server on      (auth)
  *   GET  /api/codex/projects/:id/preview/status  → estado del runner  (auth)
+ *   POST /api/codex/projects/:id/export          → mirror src a disco  (auth)
  *   POST /api/codex/projects/:id/preview/stop    → dev server off     (auth)
  *
  * Montaje: en backend/index.js DESPUÉS del router legacy codex-runs (que ya
@@ -23,7 +24,7 @@ const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const { isCodexV2Enabled } = require('../services/codex/flags');
 const projectService = require('../services/codex/project-service');
-const { createRunnerClient, runnerDevUrl } = require('../services/codex/runner-client');
+const { createRunnerClient, runnerDevUrl, codexExportHostPath } = require('../services/codex/runner-client');
 const eventStore = require('../services/codex/event-store');
 const runAccess = require('../services/codex/run-access');
 const pubsub = require('../services/codex/redis-pubsub');
@@ -128,6 +129,21 @@ router.post('/projects/:id/preview/stop', authenticateToken, async (req, res) =>
     if (!project) return undefined;
     await createRunnerClient().stopDev();
     return res.json({ ok: true });
+  } catch (err) {
+    return res.status(502).json({ error: 'runner_unreachable', message: err.message });
+  }
+});
+
+// Hybrid "export to disk": mirror the project's source to the runner's
+// host-bind-mounted EXPORT_DIR so it shows up in a real folder on the user's
+// machine. Also fired best-effort after each checkpoint; this route lets the
+// user force a fresh mirror and learn the host path.
+router.post('/projects/:id/export', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProject(req, res);
+    if (!project) return undefined;
+    const out = await createRunnerClient().exportWorkspace(project.id);
+    return res.json({ ...out, hostPath: codexExportHostPath(project.id) });
   } catch (err) {
     return res.status(502).json({ error: 'runner_unreachable', message: err.message });
   }

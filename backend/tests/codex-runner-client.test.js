@@ -2,7 +2,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { createRunnerClient, RunnerError, runnerDevUrl } = require('../src/services/codex/runner-client');
+const { createRunnerClient, RunnerError, runnerDevUrl, codexExportHostDir, codexExportHostPath } = require('../src/services/codex/runner-client');
 
 function fakeFetch(handler) {
   const calls = [];
@@ -73,4 +73,23 @@ test('startDev posts { project } to /run; runnerDevUrl honours env override', as
   assert.deepEqual(calls[0].body, { project: 'p1' });
   assert.equal(runnerDevUrl({ CODE_RUNNER_DEV_URL: 'https://preview.example' }), 'https://preview.example');
   assert.equal(runnerDevUrl({}), 'http://localhost:5173');
+});
+
+test('exportWorkspace POSTs { project } to /workspace/export', async () => {
+  const { impl, calls } = fakeFetch(() => jsonResponse({ ok: true, project: 'p1', files: 7 }));
+  const client = createRunnerClient({ fetchImpl: impl, baseUrl: 'http://runner:4097' });
+  const out = await client.exportWorkspace('p1');
+  assert.equal(out.files, 7);
+  assert.equal(calls[0].url, 'http://runner:4097/workspace/export');
+  assert.equal(calls[0].method, 'POST');
+  assert.deepEqual(calls[0].body, { project: 'p1' });
+});
+
+test('codexExportHostDir/Path default and honour env, picking the right separator', () => {
+  assert.equal(codexExportHostDir({}), '.codex-workspaces');
+  assert.equal(codexExportHostPath('p1', {}), '.codex-workspaces/p1');
+  // POSIX override (trailing slash trimmed).
+  assert.equal(codexExportHostPath('p1', { CODEX_EXPORT_HOST_DIR: '/srv/codex/' }), '/srv/codex/p1');
+  // Windows override → backslash separator.
+  assert.equal(codexExportHostPath('p1', { CODEX_EXPORT_HOST_DIR: 'D:\\git\\siraGPT\\.codex-workspaces' }), 'D:\\git\\siraGPT\\.codex-workspaces\\p1');
 });

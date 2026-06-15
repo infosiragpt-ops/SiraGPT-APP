@@ -24,6 +24,19 @@ function runnerDevUrl(env = process.env) {
   return env.CODE_RUNNER_DEV_URL || 'http://localhost:5173';
 }
 
+// Host-visible base dir the runner's /export bind-mount maps to (display only —
+// the backend never touches it; the runner writes there). Default matches the
+// compose bind mount `./.codex-workspaces`.
+function codexExportHostDir(env = process.env) {
+  return String(env.CODEX_EXPORT_HOST_DIR || '.codex-workspaces').replace(/[/\\]+$/, '');
+}
+
+/** Human-facing path of an exported project, e.g. `.codex-workspaces/<id>`. */
+function codexExportHostPath(projectId, env = process.env) {
+  const sep = /\\/.test(codexExportHostDir(env)) ? '\\' : '/';
+  return `${codexExportHostDir(env)}${sep}${projectId}`;
+}
+
 function createRunnerClient({ fetchImpl = fetch, baseUrl = runnerBaseUrl(), timeoutMs = 30_000 } = {}) {
   async function call(method, path, body) {
     const ctrl = new AbortController();
@@ -57,7 +70,8 @@ function createRunnerClient({ fetchImpl = fetch, baseUrl = runnerBaseUrl(), time
     startDev: (project) => call('POST', '/run', { project }),
     devStatus: () => call('GET', '/status'),
     stopDev: () => call('POST', '/stop'),
+    exportWorkspace: (project) => call('POST', '/workspace/export', { project }),
   };
 }
 
-module.exports = { createRunnerClient, RunnerError, runnerBaseUrl, runnerDevUrl };
+module.exports = { createRunnerClient, RunnerError, runnerBaseUrl, runnerDevUrl, codexExportHostDir, codexExportHostPath };

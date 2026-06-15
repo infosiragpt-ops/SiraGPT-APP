@@ -670,7 +670,10 @@ router.get('/fal-models', optionalAuth, responseCache({ ttlMs: 10 * 60_000, name
 
 // ✅ Get available AI models
 router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace: 'ai-models' }), async (req, res) => {
+  const __dbgT0 = Date.now();
+  const __dbg = (m) => { try { console.error(`[models-dbg] +${Date.now() - __dbgT0}ms ${m}`); } catch (_) {} };
   try {
+    __dbg('handler-enter');
     const rawType = Array.isArray(req.query.type) ? req.query.type[0] : req.query.type;
     const type = String(rawType || '').trim().toUpperCase();
     const userPlan = req.user?.plan || 'FREE';
@@ -678,6 +681,7 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
       ? await countDailyApiCalls(req.user.id)
       : null;
     const modelPolicy = buildModelQuotaPolicy(req.user, process.env, { freeDailyCallsUsed });
+    __dbg(`after-quota-policy type=${type}`);
     const wantText = !type || type === 'TEXT';
     const wantImage = !type || type === 'IMAGE';
     const wantVideo = !type || type === 'VIDEO';
@@ -704,6 +708,7 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
     }
 
 
+    __dbg('before-main-findMany');
     let models = await prisma.aiModel.findMany({
       where: whereClause,
       select: {
@@ -718,6 +723,7 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
       },
       orderBy: { createdAt: 'asc' }
     });
+    __dbg(`after-main-findMany count=${models.length}`);
 
     // If OpenRouter is configured but Kimi was never seeded (or DB is empty),
     // expose Kimi K2.6 anyway so the picker always shows it. Skip when a DB row
@@ -739,6 +745,7 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
       }
     }
 
+    __dbg('after-deepseek-block');
     if (wantText && hasEnv('OPENROUTER_API_KEY')) {
       const alreadyListed = models.some((m) => m.name === KIMI_K26_OPENROUTER.name);
       if (!alreadyListed) {
@@ -839,6 +846,7 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
       }
     }
 
+    __dbg('after-openrouter-block');
     if (wantText) {
       const fallbackModel = buildGema4VirtualModel();
       const alreadyListed = models.some((m) => m.name === fallbackModel.name);
@@ -855,9 +863,11 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
       }
     }
 
+    __dbg('after-fallback-block');
     if (wantText) {
       models = curateVisibleTextModels(models);
     }
+    __dbg('after-curate');
 
     // Plan gating — drop catalogued models the user's plan can't use, but
     // leave models not in the catalog untouched (DB-only / virtual entries
@@ -889,7 +899,9 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
     // their upstream 503 only when actually invoked, instead of being
     // hidden from the picker.
 
+    __dbg(`before-res-json count=${models.length}`);
     res.json({ models, policy: modelPolicy });
+    __dbg('after-res-json');
   } catch (error) {
     console.error('Get AI models error:', error);
     res.status(500).json({ error: 'Failed to fetch AI models' });

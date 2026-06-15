@@ -499,7 +499,11 @@
       "diffTitle": "Cambios · +{additions} −{deletions} · {files} archivos",
       "truncated": "Diff truncado (muy largo).",
       "rolledBack": "Rollback al checkpoint {sha}",
-      "rollbackFailed": "El rollback falló"
+      "rollbackFailed": "El rollback falló",
+      "export": "Copiar a mi disco",
+      "exported": "{count} archivos copiados a {path}",
+      "exportedHint": "En tu disco:",
+      "exportFailed": "No se pudo copiar a disco"
     },
     "summary": {
       "workedFor": "Trabajó {duration}",

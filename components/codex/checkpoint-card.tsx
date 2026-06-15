@@ -8,7 +8,7 @@
 import React, { useEffect, useState } from "react"
 import { toast } from "sonner"
 import { useTranslations } from "next-intl"
-import { GitCommitHorizontal, History, FileDiff, Eye, Loader2, X } from "lucide-react"
+import { GitCommitHorizontal, History, FileDiff, Eye, Loader2, X, HardDriveDownload } from "lucide-react"
 import { codexApi, type CodexCheckpointDiff } from "@/lib/codex/codex-api"
 import { relativeTime } from "@/lib/codex/format"
 
@@ -30,6 +30,8 @@ export function CheckpointCard({ checkpointId, commitSha, title, createdAt, proj
   const [diff, setDiff] = useState<CodexCheckpointDiff | null>(null)
   const [loadingDiff, setLoadingDiff] = useState(false)
   const [opening, setOpening] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [exportedPath, setExportedPath] = useState<string | null>(null)
 
   // Live "made X ago".
   useEffect(() => {
@@ -62,6 +64,20 @@ export function CheckpointCard({ checkpointId, commitSha, title, createdAt, proj
     }
   }
 
+  async function exportToDisk() {
+    if (!projectId) return
+    setExporting(true)
+    try {
+      const r = await codexApi.exportProject(projectId)
+      setExportedPath(r.hostPath)
+      toast.success(t("checkpoint.exported", { count: r.files, path: r.hostPath }))
+    } catch (e: any) {
+      toast.error(e?.message || t("checkpoint.exportFailed"))
+    } finally {
+      setExporting(false)
+    }
+  }
+
   async function viewPreview() {
     if (previewUrl) { window.open(previewUrl, "_blank", "noopener"); return }
     if (!projectId) return
@@ -89,7 +105,16 @@ export function CheckpointCard({ checkpointId, commitSha, title, createdAt, proj
         <Action onClick={() => setConfirming(true)} icon={History} label={t("checkpoint.rollback")} />
         <Action onClick={showDiff} icon={loadingDiff ? Loader2 : FileDiff} label={t("checkpoint.changes")} spin={loadingDiff} />
         <Action onClick={viewPreview} icon={opening ? Loader2 : Eye} label={t("checkpoint.viewPreview")} spin={opening} />
+        {projectId && (
+          <Action onClick={exportToDisk} icon={exporting ? Loader2 : HardDriveDownload} label={t("checkpoint.export")} spin={exporting} />
+        )}
       </div>
+
+      {exportedPath && (
+        <p className="mt-2 text-[11px] text-zinc-500">
+          {t("checkpoint.exportedHint")} <code className="rounded bg-white/5 px-1 py-0.5 text-zinc-400">{exportedPath}</code>
+        </p>
+      )}
 
       {confirming && (
         <Modal onClose={() => setConfirming(false)} title={t("checkpoint.confirmTitle")}>
