@@ -247,6 +247,13 @@ async function ingest(userId, collection, docs, opts = {}) {
   if (allChunks.length === 0) return { chunksAdded: 0, totalChunks: 0 };
 
   const vectors = await embed(allChunks.map(c => c.text));
+  // Guard: embed() must return exactly one vector per chunk. A partial response
+  // would leave later chunks with `embedding: undefined`, which corrupts every
+  // future retrieval (cosine over undefined). Fail loudly so the caller marks
+  // indexing as failed / retries instead of silently storing broken chunks.
+  if (!Array.isArray(vectors) || vectors.length !== allChunks.length) {
+    throw new Error(`rag embed returned ${Array.isArray(vectors) ? vectors.length : 'a non-array'} vectors for ${allChunks.length} chunk(s)`);
+  }
   const key = storeKey(userId, collection);
 
   return runWithLock(`rag:${key}`, async () => {
@@ -979,6 +986,13 @@ async function ingestCode(userId, collection, files, opts = {}) {
   if (allChunks.length === 0) return { chunksAdded: 0, totalChunks: 0 };
 
   const vectors = await embed(allChunks.map(c => c.text));
+  // Guard: embed() must return exactly one vector per chunk. A partial response
+  // would leave later chunks with `embedding: undefined`, which corrupts every
+  // future retrieval (cosine over undefined). Fail loudly so the caller marks
+  // indexing as failed / retries instead of silently storing broken chunks.
+  if (!Array.isArray(vectors) || vectors.length !== allChunks.length) {
+    throw new Error(`rag embed returned ${Array.isArray(vectors) ? vectors.length : 'a non-array'} vectors for ${allChunks.length} chunk(s)`);
+  }
   const key = storeKey(userId, collection);
 
   return runWithLock(`rag:${key}`, async () => {
