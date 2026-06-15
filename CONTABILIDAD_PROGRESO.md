@@ -51,8 +51,13 @@ archivo.
       helpers element/level/parent), `pcge.js` (catálogo PCGE: 9 elementos + 65
       cuentas de 2 dígitos, overrides de naturaleza para contra-cuentas, +
       `seedPcge`). Tests `accounting-core.test.js` (12, node --test, verde).
-- [ ] **2. Libro Diario** — alta de asientos con validación estricta debe=haber,
-      numeración correlativa, glosa, estado; servicio + ruta + tests.
+- [x] **2. Libro Diario** ✅ — `journal.js`: `createJournalEntry` (zod +
+      `assertBalanced` Σdebe=Σhaber + resolución de cuentas por código +
+      numeración correlativa global + persistencia atómica entry+lines),
+      `listJournalEntries`, `getJournalEntry`. Ruta `accounting.js`
+      (`/api/accounting/journal-entries` POST/GET/:id, `/accounts`,
+      `/accounts/seed`) montada en index.js, auth + mapeo de errores
+      (400/422/404). Tests `accounting-journal.test.js` (7, node --test).
 - [ ] **3. Libro Mayor** — saldos por cuenta derivados del diario; servicio +
       ruta + tests de reconciliación con el diario.
 - [ ] **4. Periodos contables** — apertura/cierre; bloquear asientos en periodos
