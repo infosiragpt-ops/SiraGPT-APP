@@ -3113,6 +3113,48 @@ class ApiClient {
     window.URL.revokeObjectURL(downloadUrl);
     document.body.removeChild(a);
   }
+
+  // ── Contabilidad (módulo contable PCGE) ────────────────────────────────────
+  async getAccountingTrialBalance(params: { from?: string; to?: string } = {}) {
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v)).toString();
+    return this.request(`/accounting/trial-balance${qs ? `?${qs}` : ''}`);
+  }
+  async listAccountingJournalEntries(params: { from?: string; to?: string; take?: number } = {}) {
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)])).toString();
+    return this.request(`/accounting/journal-entries${qs ? `?${qs}` : ''}`);
+  }
+  async listAccountingInvoices(params: { docType?: string; status?: string; take?: number } = {}) {
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)])).toString();
+    return this.request(`/accounting/invoices${qs ? `?${qs}` : ''}`);
+  }
+  async getAccountingIncomeStatement(params: { from?: string; to?: string } = {}) {
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v)).toString();
+    return this.request(`/accounting/reports/income-statement${qs ? `?${qs}` : ''}`);
+  }
+  async getAccountingBalanceSheet(params: { asOf?: string } = {}) {
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v)).toString();
+    return this.request(`/accounting/reports/balance-sheet${qs ? `?${qs}` : ''}`);
+  }
+  async getAccountingCashFlow(params: { from?: string; to?: string } = {}) {
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v)).toString();
+    return this.request(`/accounting/reports/cash-flow${qs ? `?${qs}` : ''}`);
+  }
+  /** Download an accounting export (xlsx/pdf) with auth, triggering a browser save. */
+  async downloadAccountingExport(path: string, filename: string) {
+    const headers = new Headers();
+    if (this.token) headers.set('Authorization', `Bearer ${this.token}`);
+    const response = await fetch(`${this.baseURL}/accounting/export/${path}`, { method: 'GET', headers, credentials: 'include' });
+    if (!response.ok) throw new Error('No se pudo generar la exportación');
+    const blob = await response.blob();
+    const downloadUrl = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = downloadUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(downloadUrl);
+    document.body.removeChild(a);
+  }
 }
 
 export const apiClient = new ApiClient(API_BASE_URL);

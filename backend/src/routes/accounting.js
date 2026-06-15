@@ -18,7 +18,15 @@ const invoicing = require('../services/accounting/invoicing');
 const autoJournal = require('../services/accounting/auto-journal');
 const ple = require('../services/accounting/ple');
 const reports = require('../services/accounting/reports');
+const exporters = require('../services/accounting/exporters');
 const { seedPcge } = require('../services/accounting/pcge');
+
+function sendFile(res, buffer, mime, filename) {
+  res.setHeader('Content-Type', mime);
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(buffer);
+}
+const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 const router = express.Router();
 
@@ -205,6 +213,38 @@ router.get('/exchange-rates/lookup', authenticateToken, async (req, res) => {
   try {
     const rate = await exchangeRate.getRate({ prisma, currency: req.query.currency, date: req.query.date, rateType: req.query.rateType });
     res.json({ currency: String(req.query.currency || '').toUpperCase(), rate });
+  } catch (err) { sendDomainError(res, err); }
+});
+
+// ── Exportación Excel / PDF ───────────────────────────────────────────────────
+router.get('/export/journal.xlsx', authenticateToken, async (req, res) => {
+  try {
+    const { items } = await journal.listJournalEntries({ prisma, from: req.query.from, to: req.query.to, take: 5000 });
+    sendFile(res, await exporters.journalWorkbookBuffer(items), XLSX_MIME, 'libro-diario.xlsx');
+  } catch (err) { sendDomainError(res, err); }
+});
+router.get('/export/trial-balance.xlsx', authenticateToken, async (req, res) => {
+  try {
+    const tb = await ledger.computeTrialBalance({ prisma, from: req.query.from, to: req.query.to });
+    sendFile(res, await exporters.trialBalanceWorkbookBuffer(tb), XLSX_MIME, 'balance-comprobacion.xlsx');
+  } catch (err) { sendDomainError(res, err); }
+});
+router.get('/export/invoices.xlsx', authenticateToken, async (req, res) => {
+  try {
+    const { items } = await invoicing.listInvoices({ prisma, take: 5000 });
+    sendFile(res, await exporters.invoicesWorkbookBuffer(items), XLSX_MIME, 'comprobantes.xlsx');
+  } catch (err) { sendDomainError(res, err); }
+});
+router.get('/export/income-statement.pdf', authenticateToken, async (req, res) => {
+  try {
+    const data = await reports.computeIncomeStatement({ prisma, from: req.query.from, to: req.query.to });
+    sendFile(res, await exporters.incomeStatementPdfBuffer(data), 'application/pdf', 'estado-resultados.pdf');
+  } catch (err) { sendDomainError(res, err); }
+});
+router.get('/export/balance-sheet.pdf', authenticateToken, async (req, res) => {
+  try {
+    const data = await reports.computeBalanceSheet({ prisma, asOf: req.query.asOf });
+    sendFile(res, await exporters.balanceSheetPdfBuffer(data), 'application/pdf', 'balance-general.pdf');
   } catch (err) { sendDomainError(res, err); }
 });
 

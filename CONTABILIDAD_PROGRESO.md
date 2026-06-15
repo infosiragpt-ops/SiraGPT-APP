@@ -121,8 +121,14 @@ archivo.
       `/api/accounting/reports/{income-statement,balance-sheet,cash-flow}`.
       Tests `accounting-reports.test.js` (6) — reconciliación verificada. Suite
       contable: **76/76**.
-- [ ] **11. UI Next.js** — dashboard contable, tablas de asientos/comprobantes,
-      export Excel/PDF.
+- [x] **11. UI Next.js + exportación** ✅ — backend `exporters.js` (Excel via
+      exceljs: diario/balance de comprobación/comprobantes; PDF via pdfkit:
+      estado de resultados/balance general) + rutas `/api/accounting/export/*`
+      + tests (5). `lib/api.ts` métodos contables + `downloadAccountingExport`.
+      UI `app/contabilidad/page.tsx` (design system existente): KPIs
+      (ingresos/gastos/utilidad/activo) + pestañas Asientos/Comprobantes/Reportes
+      con tablas + botones de export Excel/PDF. tsc 0, lint limpio, UI-lock
+      re-baselineado. Suite contable: **81/81**.
 - [ ] **12. Cierre** — push rama, PR, CI verde, merge a main.
 
 ## Registro de avance
