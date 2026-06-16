@@ -362,18 +362,17 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
      the right edge (the app failed to fill the window in Chrome). Height +
      offset below intentionally keep using the visual viewport so the mobile
      on-screen-keyboard avoidance still works — keyboards change height, not
-     width. */
+     width. Keep offsetting with margins instead of transform: a transformed
+     shell becomes the containing block for fixed descendants, which can pin
+     the mobile composer behind the iOS keyboard. */
   width: 100vw;
   width: var(--app-layout-viewport-width, 100vw);
   height: 100vh;
   height: var(--app-viewport-height, 100dvh);
   min-height: 0;
   overflow: hidden;
-  transform: translate3d(
-    var(--app-viewport-offset-left, 0px),
-    var(--app-viewport-offset-top, 0px),
-    0
-  );
+  margin-left: var(--app-viewport-offset-left, 0px);
+  margin-top: var(--app-viewport-offset-top, 0px);
 }
 
 .chat-viewport {
@@ -1760,10 +1759,12 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
      * anchor and the composer bar flies to the top of the visible area.
      *
      * Fix: Flip the composer to `position:fixed` the moment the keyboard
-     * opens.  On iOS Safari, fixed elements are always positioned relative
-     * to the *visual* viewport (the area above the keyboard), so
-     * `bottom:0` keeps the bar pinned right above the keyboard regardless
-     * of any document-level scroll.  The existing `padding-bottom` on
+     * opens, or as soon as the textarea receives focus while Safari is still
+     * catching up with visualViewport updates. On iOS Safari, fixed elements
+     * are positioned relative to the visual viewport as long as no transformed
+     * ancestor captures them, so `bottom:0` keeps the bar pinned right above
+     * the keyboard regardless of any document-level scroll. The existing
+     * `padding-bottom` on
      * `.chat-message-scroll-content` already reserves the right amount of
      * space so messages never slide under the bar.
      *
@@ -1771,7 +1772,8 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
      * only fires on iOS/iPadOS Safari; Android Chrome and desktop are
      * unaffected and keep using the normal sticky layout.
      */
-    .chat-viewport[data-chat-keyboard="open"] .chat-composer-dock {
+    .chat-viewport[data-chat-keyboard="open"] .chat-composer-dock,
+    .chat-viewport[data-chat-input-focused="true"] .chat-composer-dock {
       position: fixed;
       bottom: 0;
       left: 0;

@@ -178,6 +178,27 @@ test('generateImage sends response_format for dall-e models', async () => {
   }
 });
 
+test('generateImage falls back to the configured image model for chat model ids', async () => {
+  setEnv({ OPENAI_API_KEY: 'sk-x' });
+  const calls = [];
+  _internal.setOpenAIFactory(fakeOpenAIFactory({
+    onGenerate: async (payload) => {
+      calls.push(payload);
+      return { data: [{ b64_json: 'IMG_FROM_DEFAULT_IMAGE_MODEL' }] };
+    },
+  }));
+  try {
+    const result = await engine.generateImage({ prompt: 'a product photo', model: 'gpt-4o' });
+    assert.equal(result.ok, true);
+    assert.equal(result.provider, 'openai');
+    assert.equal(result.model, 'gpt-image-2');
+    assert.equal(calls[0].model, 'gpt-image-2');
+    assert.equal(result.images[0].b64, 'IMG_FROM_DEFAULT_IMAGE_MODEL');
+  } finally {
+    restoreEnv();
+  }
+});
+
 test('generateImage fails over to the next configured provider', async () => {
   setEnv({ OPENAI_API_KEY: 'sk-x', GEMINI_API_KEY: 'g-x' });
   let geminiCalled = false;

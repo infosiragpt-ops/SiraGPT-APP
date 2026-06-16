@@ -5418,6 +5418,12 @@ But first, you need to connect your Spotify account securely using the button be
     setPx("--chat-textarea-max-height", getComposerTextareaMaxHeight());
   }, [getComposerTextareaMaxHeight]);
 
+  const setComposerInputFocused = React.useCallback((focused: boolean) => {
+    const root = chatViewportRef.current;
+    if (!root) return;
+    root.dataset.chatInputFocused = focused ? "true" : "false";
+  }, []);
+
   const resizeComposerTextarea = React.useCallback(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
@@ -5483,12 +5489,25 @@ But first, you need to connect your Spotify account securely using the button be
   }, [chatDraft, resizeComposerTextarea]);
 
   const handleTextareaFocus = React.useCallback(() => {
+    setComposerInputFocused(true);
     resizeComposerTextarea();
     window.requestAnimationFrame(() => {
       syncChatLayoutVars();
       scrollToBottom();
     });
-  }, [resizeComposerTextarea, scrollToBottom, syncChatLayoutVars]);
+    window.setTimeout(() => {
+      syncChatLayoutVars();
+      scrollToBottom();
+    }, 120);
+  }, [resizeComposerTextarea, scrollToBottom, setComposerInputFocused, syncChatLayoutVars]);
+
+  const handleTextareaBlur = React.useCallback(() => {
+    window.setTimeout(() => {
+      if (document.activeElement === textareaRef.current) return;
+      setComposerInputFocused(false);
+      syncChatLayoutVars();
+    }, 120);
+  }, [setComposerInputFocused, syncChatLayoutVars]);
 
   React.useEffect(() => {
     resizeComposerTextarea();
@@ -8560,13 +8579,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       } catch (genError: any) {
         const status = genError?.status ?? genError?.statusCode;
         const userAborted = controller.signal.aborted || genError?.name === 'AbortError';
-        const elapsed = Date.now() - imageRequestStartedAt;
-        // El edge proxy de la Reserved VM corta la conexión a los ~30s
-        // (status 0 / sin status) mientras el backend sigue generando y
-        // persiste la imagen en el chat. Solo en ese caso hacemos polling;
-        // los errores HTTP reales (4xx/5xx) y la cancelación del usuario se
-        // delegan al catch externo.
-        const connectionCut = !status && !userAborted && !genError?.code && elapsed >= 25000;
+        // Mobile Safari and edge proxies can drop a long image request without
+        // an HTTP status while the backend keeps generating and persists the
+        // result into the chat. Treat any status-less, non-user abort as a
+        // recoverable connection cut and poll the conversation for the final
+        // image/error message. Real HTTP errors and explicit user cancellation
+        // still go through the outer catch.
+        const connectionCut = !status && !userAborted && !genError?.code;
         if (!connectionCut) {
           throw genError;
         }
@@ -10248,6 +10267,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             onChange={handleTextareaChange}
                             onKeyDown={handleKeyDown}
                             onFocus={handleTextareaFocus}
+                            onBlur={handleTextareaBlur}
                             onPaste={handleTextareaPaste}
                             onScroll={handleComposerTextareaScroll}
                             onCompositionStart={() => { isComposingRef.current = true }}
@@ -10795,6 +10815,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 onChange={handleTextareaChange}
                                 onKeyDown={handleKeyDown}
                                 onFocus={handleTextareaFocus}
+                                onBlur={handleTextareaBlur}
                                 onPaste={handleTextareaPaste}
                                 onScroll={handleComposerTextareaScroll}
                                 onCompositionStart={() => { isComposingRef.current = true }}

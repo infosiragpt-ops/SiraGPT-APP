@@ -6918,7 +6918,6 @@ router.post(
   authenticateToken,
   requirePaidPlan({ feature: 'image_generation' }),
   async (req, res) => {
-    const requestStartedAt = Date.now();
     const requestAbortController = new AbortController();
     let clientDisconnected = false;
     // Declarado FUERA del try para que el bloque catch pueda invocarlo
@@ -6938,14 +6937,13 @@ router.post(
     res.on('close', () => {
       if (!res.writableEnded) {
         clientDisconnected = true;
-        // Una desconexión ANTES del corte del proxy (~30s) es una cancelación
-        // real del usuario → abortamos al proveedor para no malgastar la cuota
-        // ni persistir una imagen que el usuario ya no quiere. Una caída a los
-        // ~30s con un chat válido es el corte del Load Balancer → dejamos que
-        // la generación termine y persista (detachOnDisconnect).
-        const elapsed = Date.now() - requestStartedAt;
-        const proxyCutWindow = detachOnDisconnect && elapsed >= 28000;
-        if (!proxyCutWindow) {
+        // In mobile Safari and behind edge/load-balancer proxies, the request
+        // socket can close while the user still expects the result. Once we
+        // have a valid chat target, keep the provider call alive and persist
+        // the image into the conversation; the client recovers it by polling.
+        // Before chat validation, abort normally because there is nowhere safe
+        // to store the result.
+        if (!detachOnDisconnect) {
           requestAbortController.abort();
         }
       }
@@ -7214,7 +7212,7 @@ router.post(
       // Si el usuario canceló de verdad (abort explícito) no persistimos.
       // Pero un simple cierre de conexión con chat válido (detachOnDisconnect)
       // NO debe descartar la imagen: seguimos para guardarla en el chat.
-      if (requestAbortController.signal.aborted) {
+      if (requestAbortController.signal.aborted && !clientDisconnected) {
         console.log('Image generation cancelled by client before persistence.');
         return;
       }
@@ -7304,7 +7302,10 @@ router.post(
     } catch (error) {
       stopKeepAlive();
       // Cancelación REAL del usuario (abort explícito): no persistimos nada.
-      const wasRealAbort = requestAbortController.signal.aborted || error?.name === 'AbortError';
+      const wasRealAbort =
+        !clientDisconnected &&
+        requestAbortController.signal.aborted &&
+        error?.name === 'AbortError';
       if (wasRealAbort) {
         console.log('Image generation request aborted by client.');
         if (!res.writableEnded) res.end();

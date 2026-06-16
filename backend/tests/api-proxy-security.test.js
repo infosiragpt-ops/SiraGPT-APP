@@ -5,12 +5,14 @@ const request = require('supertest');
 const {
   buildRouteTestApp,
   installAuthSessionMock,
+  mockResolvedModule,
   reloadModule,
 } = require('./http-test-utils');
 
 describe('api proxy route security', () => {
   let auth;
   let previousOpenAiKey;
+  let restoreImageEngineMock;
 
   beforeEach(() => {
     auth = installAuthSessionMock();
@@ -21,6 +23,8 @@ describe('api proxy route security', () => {
 
   afterEach(() => {
     auth.restore();
+    restoreImageEngineMock?.();
+    restoreImageEngineMock = undefined;
     if (previousOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = previousOpenAiKey;
     delete require.cache[require.resolve('../src/routes/api')];
@@ -68,5 +72,40 @@ describe('api proxy route security', () => {
 
     assert.equal(res.status, 400);
     assert.ok(Array.isArray(res.body.errors));
+  });
+
+  test('legacy image generations use provider failover engine and keep OpenAI-compatible response', async () => {
+    let capturedSpec = null;
+    restoreImageEngineMock = mockResolvedModule(
+      require.resolve('../src/services/media/image-engine'),
+      {
+        generateImage: async (spec) => {
+          capturedSpec = spec;
+          return {
+            ok: true,
+            provider: 'openai',
+            model: 'gpt-image-2',
+            images: [{ b64: 'IMAGE_B64' }],
+          };
+        },
+      },
+    );
+
+    const res = await request(buildApp())
+      .post('/api/proxy/images/generations')
+      .set('Authorization', auth.authHeader)
+      .send({
+        model: 'gpt-4o',
+        prompt: 'chart',
+        n: 1,
+        size: '1792x1024',
+      });
+
+    assert.equal(res.status, 200);
+    assert.equal(capturedSpec.model, 'gpt-4o');
+    assert.equal(capturedSpec.aspectRatio, '16:9');
+    assert.equal(capturedSpec.failover, true);
+    assert.deepEqual(res.body.data, [{ b64_json: 'IMAGE_B64' }]);
+    assert.equal(res.body.model, 'gpt-image-2');
   });
 });
