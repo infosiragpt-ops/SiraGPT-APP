@@ -28,7 +28,7 @@ import {
   Archive,
   EyeOff,
   CalendarDays,
-  FolderKanban, FileText,
+  FolderKanban,
   PenSquare,
   Shield,
 
@@ -1046,8 +1046,6 @@ export function AppSidebar() {
   const isOnLibraryPage = activePathname.startsWith('/library')
   const isOnGPTsPage = activePathname.startsWith('/gpts')
   const isOnProjectsPage = activePathname.startsWith('/projects')
-  const isOnDocumentsPage = activePathname.startsWith('/documents')
-
   return (
     <Sidebar className="w-[--sidebar-width] border-r border-border/40 bg-sidebar" collapsible="icon">
       <SidebarHeader
@@ -1235,22 +1233,6 @@ export function AppSidebar() {
             icon={FolderKanban}
             active={isOnProjectsPage}
             pending={isPendingRoute("/projects")}
-            sidebarState={state}
-            markNavigationIntent={markNavigationIntent}
-            prefetchOnHover={prefetchOnHover}
-            navigate={navigate}
-            onNavigate={closeMobileSidebar}
-          />
-
-          {/* Documentos — galería de archivos generados/editados por la IA
-              (Word/Excel/PPT/PDF). Misma gramática visual que el resto. */}
-          <SidebarNavItem
-            href="/documents"
-            label="Documentos"
-            tooltip="Documentos"
-            icon={FileText}
-            active={isOnDocumentsPage}
-            pending={isPendingRoute("/documents")}
             sidebarState={state}
             markNavigationIntent={markNavigationIntent}
             prefetchOnHover={prefetchOnHover}
