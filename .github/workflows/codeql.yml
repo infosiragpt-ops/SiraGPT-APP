@@ -40,21 +40,44 @@ jobs:
           languages: ${{ matrix.language }}
           queries: security-extended
           config: |
+            paths:
+              - "app/**"
+              - "components/**"
+              - "hooks/**"
+              - "lib/**"
+              - "server/**"
+              - "backend/**"
+              - "scripts/**"
+              - "middleware.ts"
+              - "instrumentation.ts"
+              - "next.config.mjs"
+              - "tailwind.config.js"
+              - "postcss.config.mjs"
+              - "drizzle.config.ts"
             paths-ignore:
+              - ".agents/**"
               - "apps/upstream/**"
               - "changelog/upstream/**"
               - "config/upstream/**"
               - "extensions/upstream/**"
               - "packages/upstream/**"
               - "src/upstream/**"
+              - "siraGPT/**"
+              - "skills/**"
+              - "test/**"
+              - "ui/**"
+              - "vendor/**"
               - "ui/upstream/**"
               - "attached_assets/**"
+              - "uploads/**"
               - ".test-dist/**"
               - "backend/tests/**"
               - "e2e/**"
               - "tests/**"
               - "test-results/**"
               - ".next/**"
+              - ".next.broken-*/**"
+              - ".root-backup-before-siragpt-publish-*/**"
 
       # JavaScript/TypeScript CodeQL extracts directly from source. Skipping
       # autobuild avoids spending minutes on vendored/upstream trees before the
