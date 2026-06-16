@@ -2017,10 +2017,13 @@ model CodexRunMetric {
   deletions       Int      @default(0)
   tokensIn        Int      @default(0)
   tokensOut       Int      @default(0)
+  model           String?  // model id behind the run (for the Agent Usage detail)
   costUsd         Float    @default(0)
   costSource      String   @default("estimated") // provider_exact | openrouter_generation | estimated
   costOriginalUsd Float    @default(0)
   costAppliedUsd  Float    @default(0)
+  costInputUsd    Float    @default(0) // applied cost attributed to input tokens
+  costOutputUsd   Float    @default(0) // applied cost attributed to output tokens
   createdAt       DateTime @default(now())
 
   run CodexRun @relation(fields: [runId], references: [id], onDelete: Cascade)

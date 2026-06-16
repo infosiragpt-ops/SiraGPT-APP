@@ -6,17 +6,17 @@
 // summary/action-required cards, feature 12 the replica composer, feature 13
 // the mobile tab bar. Minimal here so the timeline is exercisable end-to-end.
 
-import React, { useEffect, useReducer, useState } from "react"
+import React, { useEffect, useMemo, useReducer, useState } from "react"
 import clsx from "clsx"
 import { toast } from "sonner"
 import { useTranslations } from "next-intl"
 import { Loader2, Plus, Eye, FileCode2, ListChecks, Plug, Play } from "lucide-react"
-import { codexApi, type CodexProject } from "@/lib/codex/codex-api"
+import { codexApi, type CodexProject, type CodexRunMetric } from "@/lib/codex/codex-api"
 import { useCodexRun } from "@/lib/codex/use-codex-run"
 import { CodexRunTimeline } from "./run-timeline"
 import { PlanCard } from "./plan-card"
 import { CheckpointCard } from "./checkpoint-card"
-import { RunSummaryCard } from "./run-summary-card"
+import { RunSummaryCard, type RunSessionUsage } from "./run-summary-card"
 import { ActionRequiredCard } from "./action-required-card"
 import { Composer, type ComposerSendPayload } from "./composer"
 import { BottomTabBar } from "./bottom-tab-bar"
@@ -61,6 +61,36 @@ export function CodexAgentPanel() {
   const [planOnly, setPlanOnly] = useState(false)
 
   const { state, status, active, markApproved } = useCodexRun(activeRunId)
+
+  // Session usage accumulator (feature 08, req 9): each run's timeline resets in
+  // useCodexRun, so we fold every run's final `run_summary` metric into a
+  // panel-level map keyed by runId (idempotent — replays of the same metric are
+  // ignored). The session total is the sum of applied costs across all runs.
+  const [usageByRun, setUsageByRun] = useState<Record<string, CodexRunMetric>>({})
+  useEffect(() => {
+    if (!activeRunId) return
+    const summary = state.items.find((it) => it.kind === "summary") as Extract<TimelineItem, { kind: "summary" }> | undefined
+    const metrics = summary?.metrics as CodexRunMetric | undefined
+    if (!metrics) return
+    setUsageByRun((cur) => {
+      const prev = cur[activeRunId]
+      if (prev && prev.costAppliedUsd === metrics.costAppliedUsd && prev.tokensIn === metrics.tokensIn && prev.tokensOut === metrics.tokensOut) return cur
+      return { ...cur, [activeRunId]: metrics }
+    })
+  }, [state.items, activeRunId])
+
+  const sessionUsage = useMemo<RunSessionUsage>(() => (
+    Object.values(usageByRun).reduce(
+      (acc, m) => ({
+        costAppliedUsd: acc.costAppliedUsd + (m.costAppliedUsd || 0),
+        costOriginalUsd: acc.costOriginalUsd + (m.costOriginalUsd || 0),
+        tokensIn: acc.tokensIn + (m.tokensIn || 0),
+        tokensOut: acc.tokensOut + (m.tokensOut || 0),
+        runs: acc.runs + 1,
+      }),
+      { costAppliedUsd: 0, costOriginalUsd: 0, tokensIn: 0, tokensOut: 0, runs: 0 },
+    )
+  ), [usageByRun])
 
   const isMobile = useIsMobile()
   const [tabs, dispatchTabs] = useReducer(tabsReducer, undefined, () => initialTabsState())
@@ -140,7 +170,7 @@ export function CodexAgentPanel() {
           />
         )
       case "summary":
-        return <RunSummaryCard metrics={item.metrics} />
+        return <RunSummaryCard metrics={item.metrics} session={sessionUsage} />
       case "action_required":
         return <ActionRequiredCard title={item.title} rawError={item.rawError} blockedCapabilities={item.blockedCapabilities} remediationUrl={item.remediationUrl} />
       default:

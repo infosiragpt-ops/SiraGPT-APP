@@ -5,16 +5,29 @@ const assert = require('node:assert/strict');
 
 const { resolveCost, aggregateSource } = require('../src/services/codex/cost-resolver');
 
-test('a direct costUsd on the response is provider_exact', async () => {
+test('a direct costUsd on the response is provider_exact, split by token ratio', async () => {
   const r = await resolveCost({ provider: 'openai', tokensIn: 10, tokensOut: 5, costUsd: 0.01 });
-  assert.deepEqual(r, { costUsd: 0.01, costSource: 'provider_exact' });
+  assert.equal(r.costUsd, 0.01);
+  assert.equal(r.costSource, 'provider_exact');
+  // 10:5 token ratio → 2/3 input, 1/3 output; parts sum back to the total.
+  assert.ok(Math.abs(r.costInputUsd - 0.01 * (10 / 15)) < 1e-9);
+  assert.ok(Math.abs(r.costOutputUsd - 0.01 * (5 / 15)) < 1e-9);
+  assert.ok(Math.abs(r.costInputUsd + r.costOutputUsd - r.costUsd) < 1e-9);
 });
 
-test('Cerebras / FlashGPT is exactly $0 (provider_exact)', async () => {
+test('explicit per-direction cost on the response wins over the token split', async () => {
+  const r = await resolveCost({ provider: 'openai', tokensIn: 10, tokensOut: 5, costUsd: 0.01, costInputUsd: 0.008, costOutputUsd: 0.002 });
+  assert.equal(r.costInputUsd, 0.008);
+  assert.equal(r.costOutputUsd, 0.002);
+});
+
+test('Cerebras / FlashGPT is exactly $0 (provider_exact), zero split', async () => {
   const a = await resolveCost({ provider: 'Cerebras', tokensIn: 1000, tokensOut: 2000 });
-  assert.deepEqual(a, { costUsd: 0, costSource: 'provider_exact' });
+  assert.deepEqual(a, { costUsd: 0, costInputUsd: 0, costOutputUsd: 0, costSource: 'provider_exact' });
   const b = await resolveCost({ provider: 'FlashGPT', tokensIn: 1, tokensOut: 1 });
   assert.equal(b.costUsd, 0);
+  assert.equal(b.costInputUsd, 0);
+  assert.equal(b.costOutputUsd, 0);
   assert.equal(b.costSource, 'provider_exact');
 });
 

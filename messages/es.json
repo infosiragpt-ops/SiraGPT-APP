@@ -514,7 +514,17 @@
       "agentUsage": "Uso del agente",
       "estimated": "estimado",
       "actions": "{count, plural, one {# acción} other {# acciones}}",
-      "lines": "{count, plural, one {# línea} other {# líneas}}"
+      "lines": "{count, plural, one {# línea} other {# líneas}}",
+      "usageDetail": "Detalle de uso",
+      "model": "Modelo",
+      "inputTokens": "Tokens de entrada",
+      "outputTokens": "Tokens de salida",
+      "inputCost": "Costo de entrada",
+      "outputCost": "Costo de salida",
+      "totalCost": "Costo total",
+      "thisRun": "Esta ejecución",
+      "sessionUsage": "Sesión",
+      "sessionRuns": "{count, plural, one {# ejecución} other {# ejecuciones}}"
     },
     "actionRequired": {
       "title": "Acción requerida de su parte",

@@ -404,7 +404,11 @@
       "diffTitle": "Changes · +{additions} −{deletions} · {files} files",
       "truncated": "Diff truncated (too long).",
       "rolledBack": "Rolled back to checkpoint {sha}",
-      "rollbackFailed": "Rollback failed"
+      "rollbackFailed": "Rollback failed",
+      "export": "Copy to my disk",
+      "exported": "{count} files copied to {path}",
+      "exportedHint": "On your disk:",
+      "exportFailed": "Could not copy to disk"
     },
     "summary": {
       "workedFor": "Worked for {duration}",
@@ -415,7 +419,17 @@
       "agentUsage": "Agent Usage",
       "estimated": "estimated",
       "actions": "{count, plural, one {# action} other {# actions}}",
-      "lines": "{count, plural, one {# line} other {# lines}}"
+      "lines": "{count, plural, one {# line} other {# lines}}",
+      "usageDetail": "Usage detail",
+      "model": "Model",
+      "inputTokens": "Input tokens",
+      "outputTokens": "Output tokens",
+      "inputCost": "Input cost",
+      "outputCost": "Output cost",
+      "totalCost": "Total cost",
+      "thisRun": "This run",
+      "sessionUsage": "Session",
+      "sessionRuns": "{count, plural, one {# run} other {# runs}}"
     },
     "actionRequired": {
       "title": "Action required from you",
@@ -448,6 +462,17 @@
       "connections": "Connections",
       "checklist": "Checklist",
       "files": "Files"
+    },
+    "preview": {
+      "start": "▶ Start / Reload",
+      "hint": "Boots this project's dev server and loads the preview."
+    },
+    "files": {
+      "title": "Code",
+      "refresh": "Refresh",
+      "loading": "Loading…",
+      "empty": "No files in the workspace yet.",
+      "none": "Select a file to view its content."
     },
     "errors": {
       "createProject": "Could not create the project",

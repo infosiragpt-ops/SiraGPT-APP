@@ -72,6 +72,34 @@ test('finalize resolves cost via an injected resolver and applies the plan multi
   assert.ok(metric.costOriginalUsd >= metric.costAppliedUsd);
 });
 
+test('finalize accumulates per-direction cost, records the model, applies the plan multiplier', async () => {
+  const run = { id: 'r1', startedAt: new Date(0) };
+  const acc = createAccumulator({ run, clock: () => new Date(0) });
+  acc.recordLlmUsage({ tokensIn: 1000, tokensOut: 500, provider: 'OpenRouter', generationId: 'g1', model: 'anthropic/claude-opus' });
+
+  // $0.06 input + $0.04 output = $0.10 list; PRO_MAX → ×0.9.
+  const costResolver = async () => ({ costUsd: 0.1, costInputUsd: 0.06, costOutputUsd: 0.04, costSource: 'openrouter_generation' });
+  const metric = await acc.finalize({ diffstat: { additions: 0, deletions: 0 }, userPlan: 'PRO_MAX', costResolver, clock: () => new Date(1000) });
+
+  assert.equal(metric.model, 'anthropic/claude-opus');
+  assert.equal(metric.costOriginalUsd, 0.1);
+  assert.equal(metric.costAppliedUsd, 0.09);
+  assert.equal(metric.costInputUsd, 0.054); // 0.06 × 0.9
+  assert.equal(metric.costOutputUsd, 0.036); // 0.04 × 0.9
+  // The applied parts sum back to the applied total.
+  assert.ok(Math.abs(metric.costInputUsd + metric.costOutputUsd - metric.costAppliedUsd) < 1e-9);
+});
+
+test('finalize defaults model to null and input/output cost to 0 when the resolver omits them', async () => {
+  const acc = createAccumulator({ run: { id: 'r1' }, clock: () => new Date(0) });
+  acc.recordLlmUsage({ tokensIn: 10, tokensOut: 5 });
+  const costResolver = async () => ({ costUsd: 0, costSource: 'estimated' });
+  const metric = await acc.finalize({ diffstat: null, userPlan: 'FREE', costResolver, clock: () => new Date(0) });
+  assert.equal(metric.model, null);
+  assert.equal(metric.costInputUsd, 0);
+  assert.equal(metric.costOutputUsd, 0);
+});
+
 test('finalize without a real prisma skips persistence but still emits the summary', async () => {
   const acc = createAccumulator({ run: { id: 'r1' }, clock: () => new Date(0) });
   const events = [];

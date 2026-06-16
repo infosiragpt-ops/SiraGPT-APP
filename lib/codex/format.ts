@@ -39,3 +39,9 @@ export function formatUsd(usd: number): string {
 export function shouldStrikethrough(original: number, applied: number): boolean {
   return Number.isFinite(original) && Number.isFinite(applied) && original > applied + 1e-9
 }
+
+/** "12,480" style grouped integer — for token counts. Non-finite → "0". */
+export function formatInt(n: number): string {
+  if (!Number.isFinite(n)) return "0"
+  return Math.round(n).toLocaleString("en-US")
+}

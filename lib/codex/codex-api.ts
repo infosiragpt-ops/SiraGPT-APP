@@ -20,7 +20,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 export interface CodexHealth { ok: boolean; enabled: boolean }
 export interface CodexProject { id: string; name: string; status: string; workspacePath: string | null; previewUrl: string | null; error: string | null }
 export interface CodexRun { id: string; projectId: string; mode: string; status: string; tier: string | null; model: string | null; planRunId: string | null; prompt: string | null; error: string | null; metric?: CodexRunMetric }
-export interface CodexRunMetric { timeWorkedMs: number; actionsCount: number; itemsReadLines: number; additions: number; deletions: number; tokensIn: number; tokensOut: number; costUsd: number; costSource: string; costOriginalUsd: number; costAppliedUsd: number }
+export interface CodexRunMetric { timeWorkedMs: number; actionsCount: number; itemsReadLines: number; additions: number; deletions: number; tokensIn: number; tokensOut: number; model: string | null; costUsd: number; costSource: string; costOriginalUsd: number; costAppliedUsd: number; costInputUsd: number; costOutputUsd: number }
 export interface CodexCheckpointDiff { ok: boolean; commitSha: string; diff: string; truncated: boolean; additions: number; deletions: number; filesChanged: number }
 
 export const codexApi = {

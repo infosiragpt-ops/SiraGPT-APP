@@ -24,6 +24,7 @@ function createAccumulator({ run, clock = () => new Date() } = {}) {
   let itemsReadLines = 0;
   let tokensIn = 0;
   let tokensOut = 0;
+  let model = null;
   const usageRecords = [];
 
   return {
@@ -34,6 +35,9 @@ function createAccumulator({ run, clock = () => new Date() } = {}) {
       usageRecords.push(u);
       tokensIn += Number(u.tokensIn) || 0;
       tokensOut += Number(u.tokensOut) || 0;
+      // Keep the model name for the expandable "Agent Usage" detail. A run uses a
+      // single model in practice; the last non-empty value wins.
+      if (u.model) model = String(u.model);
     },
     snapshot() { return { actionsCount, itemsReadLines, tokensIn, tokensOut }; },
 
@@ -48,16 +52,26 @@ function createAccumulator({ run, clock = () => new Date() } = {}) {
       const deletions = Number(diffstat?.deletions) || 0;
 
       let costOriginalUsd = 0;
+      let costInputOriginalUsd = 0;
+      let costOutputOriginalUsd = 0;
       const sources = [];
       const resolver = costResolver || resolveCost;
       for (const u of usageRecords) {
         // eslint-disable-next-line no-await-in-loop
-        const { costUsd, costSource } = await resolver(u, { env, fetchImpl });
+        const { costUsd, costInputUsd, costOutputUsd, costSource } = await resolver(u, { env, fetchImpl });
         costOriginalUsd += Number(costUsd) || 0;
+        costInputOriginalUsd += Number(costInputUsd) || 0;
+        costOutputOriginalUsd += Number(costOutputUsd) || 0;
         sources.push(costSource);
       }
       const costSource = aggregateSource(sources);
       const priced = applyPlanPricing(userPlan, costOriginalUsd, { env });
+      // The plan multiplier applies uniformly, so the per-direction applied costs
+      // sum back to costAppliedUsd. round6 mirrors pricing-policy's rounding.
+      const round6 = (n) => Number((Math.round(n * 1e6) / 1e6).toFixed(6));
+      const mult = priced.multiplier;
+      const costInputUsd = round6(Math.min(costInputOriginalUsd, costInputOriginalUsd * mult));
+      const costOutputUsd = round6(Math.min(costOutputOriginalUsd, costOutputOriginalUsd * mult));
 
       const metric = {
         timeWorkedMs,
@@ -67,10 +81,13 @@ function createAccumulator({ run, clock = () => new Date() } = {}) {
         deletions,
         tokensIn,
         tokensOut,
+        model: model || null,
         costUsd: priced.costAppliedUsd,
         costSource,
         costOriginalUsd: priced.costOriginalUsd,
         costAppliedUsd: priced.costAppliedUsd,
+        costInputUsd,
+        costOutputUsd,
       };
 
       if (prisma && prisma.codexRunMetric && run && run.id) {

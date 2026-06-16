@@ -37,6 +37,33 @@ describe('RunSummaryCard', () => {
     render(<RunSummaryCard metrics={{ timeWorkedMs: 1000, costOriginalUsd: 0, costAppliedUsd: 0, costSource: 'estimated' }} />)
     expect(screen.getByText(/estimado/)).toBeTruthy()
   })
+
+  it('expands the usage detail with model, tokens and per-direction cost', () => {
+    render(<RunSummaryCard metrics={{ timeWorkedMs: 1000, tokensIn: 12480, tokensOut: 3120, model: 'anthropic/claude-opus', costOriginalUsd: 0.12, costAppliedUsd: 0.12, costInputUsd: 0.09, costOutputUsd: 0.03, costSource: 'provider_exact' }} />)
+    // Detail is collapsed by default.
+    expect(screen.queryByText('Modelo')).toBeNull()
+    fireEvent.click(screen.getByTitle('Detalle de uso'))
+    expect(screen.getByText('Modelo')).toBeTruthy()
+    expect(screen.getByText('anthropic/claude-opus')).toBeTruthy()
+    expect(screen.getByText('12,480')).toBeTruthy() // input tokens, grouped
+    expect(screen.getByText('3,120')).toBeTruthy() // output tokens
+    expect(screen.getByText('$0.090')).toBeTruthy() // input cost
+    expect(screen.getByText('$0.030')).toBeTruthy() // output cost
+    expect(screen.getByText('Costo total')).toBeTruthy()
+  })
+
+  it('shows a session total when a session accumulator is provided', () => {
+    render(
+      <RunSummaryCard
+        metrics={{ timeWorkedMs: 1000, costAppliedUsd: 0.5, costSource: 'openrouter_generation' }}
+        session={{ costAppliedUsd: 1.25, costOriginalUsd: 1.4, tokensIn: 100, tokensOut: 50, runs: 3 }}
+      />,
+    )
+    expect(screen.getByText(/Esta ejecución/)).toBeTruthy()
+    expect(screen.getByText(/Sesión/)).toBeTruthy()
+    expect(screen.getByText('$1.25')).toBeTruthy() // session applied total
+    expect(screen.getByText(/3 ejecuciones/)).toBeTruthy()
+  })
 })
 
 describe('ActionRequiredCard', () => {

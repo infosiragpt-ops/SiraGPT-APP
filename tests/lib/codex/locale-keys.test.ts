@@ -17,8 +17,8 @@ describe('codex i18n namespace', () => {
     expect(deepKeys(ES).sort()).toEqual(deepKeys(EN).sort())
   })
 
-  it('the nine groups are present', () => {
-    expect(Object.keys(ES).sort()).toEqual(['actionRequired', 'checkpoint', 'composer', 'errors', 'panel', 'plan', 'summary', 'tabs', 'timeline'])
+  it('all eleven groups are present', () => {
+    expect(Object.keys(ES).sort()).toEqual(['actionRequired', 'checkpoint', 'composer', 'errors', 'files', 'panel', 'plan', 'preview', 'summary', 'tabs', 'timeline'])
   })
 
   it('every locale file carries the codex namespace with full key parity vs en', () => {
