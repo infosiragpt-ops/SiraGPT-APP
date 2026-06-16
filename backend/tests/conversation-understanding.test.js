@@ -96,6 +96,7 @@ test('thread-aware prompt expands follow-up routing context without changing sta
   ];
 
   assert.equal(promptDependsOnThread('Aun no funciona como quiero'), true);
+  assert.equal(promptDependsOnThread('¿Y cuál fue su total exacto? Solo el número.'), true);
   assert.equal(promptDependsOnThread('Explica qué es React'), false);
 
   const aware = buildThreadAwarePrompt({

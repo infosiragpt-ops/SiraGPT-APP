@@ -122,6 +122,8 @@ const operationalRag = require('../services/rag/operational-runtime');
 const documentProfessionalAnalyzer = require('../services/document-professional-analyzer');
 const documentResponseFidelity = require('../services/document-response-fidelity');
 const documentBlockBudget = require('../services/document-block-budget');
+const documentAnalysisQuality = require('../services/document-analysis-quality');
+const directAnswerNormalizer = require('../services/direct-answer-normalizer');
 const feedbackLedger = require('../services/agents/feedback-ledger');
 const modelRouter = require('../services/ai-product-os/model-router');
 const modelSyncService = require('../services/model-sync-service');
@@ -2586,7 +2588,14 @@ router.post(
       // <20 ms to the chat path on a warm DB. Never throws.
       let documentEnrichment = null;
       let documentEnrichmentBlock = '';
+      let documentAnalysisQualityBlock = '';
       if (processedFiles.length > 0) {
+        documentAnalysisQualityBlock = documentAnalysisQuality.buildPromptBlock({
+          prompt,
+          files: processedFiles,
+          language: (langResolution && langResolution.language) || 'es',
+          source: 'ai.generate',
+        });
         try {
           documentEnrichment = await documentProfessionalAnalyzer.buildEnrichedFileContext({
             prisma,
@@ -3969,6 +3978,16 @@ router.post(
               console.log(`[reasoning-effort] user override "${req.body.reasoningEffort}" → mode=${__effortOverride.mode} effort=${__effortOverride.reasoningEffort}`);
             }
           } catch (_) { /* effort override must never break the turn */ }
+          try {
+            const __documentCompute = documentAnalysisQuality.upgradeComputeForDocumentAnalysis(
+              cognitiveDecision && cognitiveDecision.compute,
+              { prompt, files: processedFiles },
+            );
+            if (__documentCompute.upgraded && cognitiveDecision) {
+              cognitiveDecision.compute = __documentCompute.compute;
+              console.log(`[document-analysis-quality] upgraded compute: mode=${__documentCompute.compute.mode} effort=${__documentCompute.compute.reasoningEffort} reason=${__documentCompute.reason}`);
+            }
+          } catch (_) { /* document-analysis guard must never break the turn */ }
           try { console.log(reasoningOrchestrator.summarizeForLog(cognitiveDecision)); } catch (_) { /* noop */ }
 
           // Instruction-following: extract the user's EXPLICIT constraints
@@ -4481,7 +4500,7 @@ router.post(
         }
       } catch (_calibErr) { /* fail-open: no posture directive */ }
 
-      const systemInstruction = { role: 'system', content: promptBundle.system + openclawRuntimeBlock + llmUnderstandingBlock + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + activeMemoryBlock + crossChatBlock + attributionBlock + circuitAttributionBlock + intentAttributionGraphBlock + saliencyBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock + reasoningEffortBlock + constraintBlock + postureDirectiveBlock };
+      const systemInstruction = { role: 'system', content: promptBundle.system + openclawRuntimeBlock + llmUnderstandingBlock + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + activeMemoryBlock + crossChatBlock + attributionBlock + circuitAttributionBlock + intentAttributionGraphBlock + saliencyBlock + feedbackBlock + evidenceBlock + documentAnalysisQualityBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock + reasoningEffortBlock + constraintBlock + postureDirectiveBlock };
       // Structured view of the system prompt — same content as
       // `systemInstruction.content`, but split into typed blocks with a
       // `cacheable` hint. When the downstream provider is Anthropic (or
@@ -4507,6 +4526,7 @@ router.post(
         { kind: 'intent-attribution-graph', text: intentAttributionGraphBlock, cacheable: false },
         { kind: 'feedback', text: feedbackBlock, cacheable: false },
         { kind: 'evidence', text: evidenceBlock, cacheable: false },
+        { kind: 'document-analysis-quality', text: documentAnalysisQualityBlock, cacheable: false },
         { kind: 'document-enrichment', text: documentEnrichmentBlock, cacheable: false },
         { kind: 'cowork', text: coworkBlock, cacheable: false },
         { kind: 'web-search', text: webSearchBlock, cacheable: false },
@@ -4754,13 +4774,19 @@ router.post(
         const visionImageFiles = keepImagesForVision
           ? processedFiles.filter(f => isImageMime(f.mimeType))
           : [];
+        const rawFileContext = processedFiles.map(describeFileForText).join('\n\n');
         let fileContext;
         if (visionImageFiles.length > 0) {
-          const textContextFiles = processedFiles.filter(f => !isImageMime(f.mimeType));
+          const textContextFiles = processedFiles.filter((f) => {
+            if (!isImageMime(f.mimeType)) return true;
+            return typeof f.extractedText === 'string' && f.extractedText.trim().length >= 8;
+          });
           fileContext = textContextFiles.map(describeFileForText).join('\n\n');
+        } else if (processedFiles.length > 1) {
+          fileContext = rawFileContext;
         } else {
           fileContext = uploadedFileContextForTurn
-            || processedFiles.map(describeFileForText).join('\n\n');
+            || rawFileContext;
         }
 
         // ✅ Check if there are any image files that might contain math
@@ -4824,6 +4850,7 @@ router.post(
             '- META-DOCUMENT TASKS: requests that apply TO the document itself are valid even when the answer is not literally written inside it. In particular, "cita en Vancouver/APA/MLA/Harvard/IEEE/ISO 690", "referencia bibliográfica", "cítame este documento/artículo" mean: BUILD the bibliographic reference of the attached document in that citation style, using its own bibliographic data (title, authors, year, journal/institution, volume/pages, DOI/URL) as found in the text; clearly mark any field the document does not reveal as [no disponible]. With an academic document attached, "cita" means citation/reference — never a calendar appointment. NEVER reply that the material lacks information for these meta-tasks.',
             '- For professional analysis, synthesize the argument and implications; do not reproduce the table of contents, index links, cover metadata, advisor names, or internal extraction labels.',
             '- Never start the final answer with "Indice de contenidos", "Índice de contenidos", raw markdown links, or filename metadata.',
+            ...documentAnalysisQuality.buildGuardLines(prompt, { files: processedFiles, language: 'en' }),
             ...messageAttachments.buildFormatDirectiveLines(prompt, { lang: 'en' }),
             '- Do not answer from prior images, weather cards, generated visuals, or unrelated chat history unless the user explicitly asks for that older context.',
             '- Preserve file identity: refer to each attachment by filename and never reinterpret a document as an image.'
@@ -5448,6 +5475,29 @@ router.post(
           },
         );
 
+        if (processedFiles.length > 0) {
+          try {
+            const directContext = uploadedFileContextForTurn
+              || chatAttachmentRecovery.buildProcessedFilesContext(processedFiles, prompt);
+            const directAnswer = chatAttachmentRecovery.buildDirectExtractedFieldAnswer(prompt, directContext);
+            const directShortRequest = /\b(?:solo\s+(?:el\s+)?n[uú]mero|solo\s+una\s+palabra|una\s+sola\s+palabra|one\s+word|only\s+the\s+(?:number|word))\b/i.test(prompt);
+            const allowDirectFieldRecovery = processedFiles.length === 1 || directShortRequest;
+            if (allowDirectFieldRecovery && chatAttachmentRecovery.shouldUseDirectExtractedFieldAnswer({
+              prompt,
+              response: fullResponseContent,
+              directAnswer,
+            })) {
+              if (!res.writableEnded) {
+                res.write(`data: ${JSON.stringify({ replace: true, content: directAnswer })}\n\n`);
+              }
+              fullResponseContent = directAnswer;
+              console.log(`[ai] direct extracted-field recovery applied (${directAnswer.length} chars)`);
+            }
+          } catch (directRecoveryErr) {
+            console.warn('[ai] direct extracted-field recovery failed:', directRecoveryErr.message);
+          }
+        }
+
         if (
           processedFiles.length > 0
           && userId
@@ -5467,7 +5517,9 @@ router.post(
               reason: 'chat_attachment_recovery',
             });
             const cleanRecovered = (recovered || '').trim();
-            if (cleanRecovered && cleanRecovered.length >= 40) {
+            const acceptShortRecovered = /\b(?:solo\s+(?:el\s+)?n[uú]mero|solo\s+una\s+palabra|una\s+sola\s+palabra|one\s+word|only\s+the\s+(?:number|word))\b/i.test(prompt)
+              && cleanRecovered.length >= 1;
+            if (cleanRecovered && (cleanRecovered.length >= 40 || acceptShortRecovered)) {
               if (!res.writableEnded) {
                 res.write(`data: ${JSON.stringify({ replace: true, content: cleanRecovered })}\n\n`);
               }
@@ -5476,6 +5528,60 @@ router.post(
             }
           } catch (recoveryErr) {
             console.warn('[ai] attachment recovery failed:', recoveryErr.message);
+          }
+        }
+
+        if (processedFiles.length > 0 && fullResponseContent) {
+          try {
+            const spreadsheetDirectShortRequest = /\b(?:solo\s+(?:el\s+)?n[uú]mero|solo\s+una\s+palabra|una\s+sola\s+palabra|one\s+word|only\s+the\s+(?:number|word))\b/i.test(prompt);
+            const allowSpreadsheetDirectRecovery = processedFiles.length === 1 || spreadsheetDirectShortRequest;
+            const spreadsheetDirect = allowSpreadsheetDirectRecovery
+              ? documentAnalysisQuality.buildSpreadsheetDirectAnswer({
+                prompt,
+                response: fullResponseContent,
+                files: processedFiles,
+              })
+              : null;
+            if (spreadsheetDirect?.answer) {
+              if (!res.writableEnded) {
+                res.write(`data: ${JSON.stringify({ replace: true, content: spreadsheetDirect.answer })}\n\n`);
+              }
+              fullResponseContent = spreadsheetDirect.answer;
+              console.log(`[ai] spreadsheet direct recovery applied op=${spreadsheetDirect.operation} rows=${(spreadsheetDirect.rows || []).join(',')} column=${spreadsheetDirect.column || '-'} source=${spreadsheetDirect.source || '-'}`);
+            }
+            const spreadsheetFollowUp = documentAnalysisQuality.buildSpreadsheetFollowUpAnswer({
+              prompt,
+              response: fullResponseContent,
+              files: processedFiles,
+              history: historyMessages,
+            });
+            if (spreadsheetFollowUp?.answer) {
+              if (!res.writableEnded) {
+                res.write(`data: ${JSON.stringify({ replace: true, content: spreadsheetFollowUp.answer })}\n\n`);
+              }
+              fullResponseContent = spreadsheetFollowUp.answer;
+              console.log(`[ai] spreadsheet follow-up recovery applied row=${spreadsheetFollowUp.rowLabel} column=${spreadsheetFollowUp.column || '-'} source=${spreadsheetFollowUp.source || '-'}`);
+            }
+          } catch (spreadsheetRecoveryErr) {
+            console.warn('[ai] spreadsheet follow-up recovery failed:', spreadsheetRecoveryErr.message);
+          }
+        }
+
+        if (fullResponseContent) {
+          try {
+            const normalizedDirectAnswer = directAnswerNormalizer.normalizeDirectAnswer({
+              prompt,
+              response: fullResponseContent,
+            });
+            if (normalizedDirectAnswer) {
+              if (!res.writableEnded) {
+                res.write(`data: ${JSON.stringify({ replace: true, content: normalizedDirectAnswer })}\n\n`);
+              }
+              fullResponseContent = normalizedDirectAnswer;
+              console.log(`[ai] direct answer normalization applied (${normalizedDirectAnswer.length} chars)`);
+            }
+          } catch (normalizationErr) {
+            console.warn('[ai] direct answer normalization failed:', normalizationErr.message);
           }
         }
 
@@ -5717,7 +5823,9 @@ router.post(
               reason: apiError?.message || 'stream_failed',
             });
             const cleanRecovered = (recovered || '').trim();
-            if (cleanRecovered.length >= 40) {
+            const acceptShortRecovered = /\b(?:solo\s+(?:el\s+)?n[uú]mero|solo\s+una\s+palabra|una\s+sola\s+palabra|one\s+word|only\s+the\s+(?:number|word))\b/i.test(prompt)
+              && cleanRecovered.length >= 1;
+            if (cleanRecovered.length >= 40 || acceptShortRecovered) {
               fullResponseContent = cleanRecovered;
               if (!res.writableEnded) {
                 res.write(`data: ${JSON.stringify({ replace: true, content: cleanRecovered })}\n\n`);

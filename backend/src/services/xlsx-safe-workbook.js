@@ -57,9 +57,12 @@ function rowToValues(row, maxColumns = DEFAULT_MAX_COLUMNS, options = {}) {
 function worksheetRows(worksheet, { maxRows = DEFAULT_MAX_ROWS, maxColumns = DEFAULT_MAX_COLUMNS, defangFormulas } = {}) {
   const rows = [];
   const cellOptions = defangFormulas === undefined ? {} : { enabled: Boolean(defangFormulas) };
+  // ExcelJS `actualRowCount` is a count of non-empty rows, not the highest row
+  // index. Workbooks with intentional blank separator rows can otherwise drop
+  // later key-value rows such as "Marcador / XLSMARK-5521".
   const rowLimit = Math.min(
-    Number.isFinite(Number(worksheet?.actualRowCount || worksheet?.rowCount))
-      ? Number(worksheet.actualRowCount || worksheet.rowCount)
+    Number.isFinite(Number(worksheet?.rowCount || worksheet?.actualRowCount))
+      ? Number(worksheet.rowCount || worksheet.actualRowCount)
       : maxRows,
     maxRows,
   );

@@ -449,6 +449,30 @@ test('agent task route: system prompt keeps hidden contract separate from user g
   assert.doesNotMatch(INTERNAL.normalizeDisplayGoal('Haz un resumen'), /execution contract/i);
 });
 
+test('agent task route: system prompt includes deep document analysis contract for document summaries', () => {
+  const prompt = INTERNAL.buildAgentSystemPrompt(
+    '',
+    ['TESIS 2 - JESSICA PATINO - 15JUN2026.docx'],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    '',
+    null,
+    'dame un resumen en un solo parrafo',
+  );
+
+  assert.match(prompt, /CONTRATO DE ANALISIS DOCUMENTAL PROFUNDO/);
+  assert.match(prompt, /cubra el documento completo/);
+  assert.match(prompt, /resultados, conclusiones/);
+});
+
 test('agent task route: attached document/image tasks bypass queued runtime by default', () => {
   assert.equal(
     INTERNAL.shouldRunAttachmentTaskLocally({

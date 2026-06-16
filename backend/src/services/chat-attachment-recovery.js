@@ -16,6 +16,7 @@ const OPERATIONAL_DISCLOSURE_RE = /nota operativa|runtime principal|respuesta se
 const GENERIC_STREAM_FAILURE_RE = /hubo un problema procesando tu solicitud|there was a problem processing your request/i;
 const RAW_TOC_RESPONSE_RE = /\b(?:[ií]ndice\s+de\s+contenidos|tabla\s+de\s+contenido|table\s+of\s+contents|declaratoria\s+de\s+autenticidad|_Toc\d+)\b/i;
 const RAW_MARKDOWN_LINK_RE = /\[[^\]\n]{2,160}\]\((?:#_?Toc|#[^)]+)\)/i;
+const DIRECT_SHORT_ANSWER_RE = /\b(?:solo\s+(?:el\s+)?n[uú]mero|solo\s+una\s+palabra|una\s+sola\s+palabra|one\s+word|only\s+the\s+(?:number|word))\b/i;
 
 function wantsBibliographyAnswer(request) {
   const value = String(request || '').toLowerCase().normalize('NFD').replace(/\p{M}/gu, '');
@@ -25,6 +26,116 @@ function wantsBibliographyAnswer(request) {
 function looksLikeUnsupportedExtractionPlaceholder(value) {
   const text = String(value || '').trim();
   return /^File\s+"[^"]+"\s+uploaded successfully\.\s+Content type:\s+application\/(?:octet-stream|zip|x-zip|x-zip-compressed)\.?$/i.test(text);
+}
+
+function normalizeKey(value) {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function pickMatch(text, patterns = []) {
+  for (const pattern of patterns) {
+    const match = String(text || '').match(pattern);
+    if (match?.[1]) return String(match[1]).trim();
+  }
+  return '';
+}
+
+function comparableDirectValue(answer = '') {
+  const text = String(answer || '').trim();
+  const bold = text.match(/\*\*([^*]+)\*\*/);
+  if (bold?.[1]) return bold[1].trim();
+  const requested = text.match(/^El dato solicitado es\s+(.+?)\.?$/i);
+  if (requested?.[1]) return requested[1].replace(/\*/g, '').trim();
+  return text;
+}
+
+function splitSummarySentences(text = '') {
+  return String(text || '')
+    .replace(/\r/g, '\n')
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((sentence) => sentence.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+}
+
+function buildDirectExtractedSummaryAnswer(prompt = '', rawText = '') {
+  const request = normalizeKey(prompt);
+  if (!/\b(?:resumen|resume|sintesis|summary|de que trata|que dice)\b/.test(request)) return '';
+  const sentences = splitSummarySentences(rawText)
+    .filter((sentence) => sentence.length >= 24)
+    .filter((sentence) => !/^[A-ZÁÉÍÓÚÑ0-9\s\-–—:]{8,}$/.test(sentence));
+  if (!sentences.length) return '';
+  const requestTerms = request
+    .split(/\W+/)
+    .filter((term) => term.length >= 5 && !['resumen', 'resume', 'documento', 'archivo', 'informe'].includes(term));
+  const scored = sentences.map((sentence, index) => {
+    const key = normalizeKey(sentence);
+    let score = 0;
+    for (const term of requestTerms) if (key.includes(term)) score += 2;
+    if (/\d/.test(sentence)) score += 2;
+    if (/\b(?:uptime|vulnerab|seguridad|recomendaci|credencial|cifrar|factor)\b/i.test(sentence)) score += 2;
+    return { sentence, index, score };
+  });
+  const selectedIndexes = scored
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .slice(0, 3)
+    .sort((a, b) => a.index - b.index);
+  const selected = selectedIndexes.length ? selectedIndexes : scored.slice(0, 2);
+  return selected.map((item) => item.sentence).join(' ').replace(/\s+/g, ' ').trim();
+}
+
+function buildDirectExtractedFieldAnswer(prompt = '', uploadedFileContext = '') {
+  const request = normalizeKey(prompt);
+  const context = String(uploadedFileContext || '');
+  if (!request || !context.trim()) return '';
+
+  let value = '';
+  const asksInvoiceNumber = /\b(?:numero|nro|num|number)\s+(?:de\s+)?factura\b|\bfactura\s+(?:numero|nro|num|number)\b|\binvoice\s+number\b/.test(request);
+  const asksInvoiceTotal = /\btotal\b.*\bfactura\b|\bfactura\b.*\btotal\b/.test(request);
+  const asksInvoiceCurrency = /\b(?:moneda|currency|divisa)\b/.test(request) && (/\bfactura\b/.test(request) || /\btotal\b/.test(request));
+  const asksMultipleInvoiceFields = !DIRECT_SHORT_ANSWER_RE.test(prompt) && asksInvoiceNumber && asksInvoiceTotal;
+  if (asksMultipleInvoiceFields) return '';
+  if (asksInvoiceCurrency) {
+    value = pickMatch(context, [/\bTOTAL\s*[:\-]\s*[0-9][0-9.,]*\s*([A-Z]{2,4}|euros?)\b/i]);
+    value = value.toUpperCase();
+  } else if (asksInvoiceTotal) {
+    value = pickMatch(context, [/\bTOTAL\s*[:\-]\s*([0-9][0-9.,]*)(?:\s*[A-Z]{2,4})?\b/i]);
+  } else if (asksInvoiceNumber) {
+    value = pickMatch(context, [
+      /\bFACTURA\s*(?:N|N[°º.]?|NO\.?|NUM(?:ERO)?\.?|#)?\s*[:\-]?\s*([A-Z0-9-]*\d[A-Z0-9-]*)\b/i,
+      /\b(?:n[uú]mero|numero|nro|no\.?|#)\s*(?:de\s+)?factura\s*[:\-]?\s*([A-Z0-9-]*\d[A-Z0-9-]*)\b/i,
+    ]);
+  } else if (/\bcliente\b/.test(request)) {
+    value = pickMatch(context, [/\bCliente\s*[:\-]\s*([^\n\r]*?)(?=\s+(?:Fecha|Concepto|TOTAL|Factura)\s*[:\-]|\s*$)/i]);
+  } else if (/\bfecha\b/.test(request)) {
+    value = pickMatch(context, [/\bFecha\s*[:\-]\s*([0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})\b/i]);
+  } else if (/\bconcepto\b/.test(request)) {
+    value = pickMatch(context, [/\bConcepto\s*[:\-]\s*([^\n\r]*?)(?=\s+(?:TOTAL|Cliente|Fecha|Factura)\s*[:\-]|\s*$)/i]);
+  } else if (/\bmarcador\b/.test(request)) {
+    value = pickMatch(context, [/\b(?:Marcador|Marker)\s*[:\t\-]\s*([A-Z0-9-]{4,})\b/i]);
+  }
+
+  if (!value) return '';
+  value = value.replace(/[.。,:;]+$/g, '').trim();
+  if (DIRECT_SHORT_ANSWER_RE.test(prompt)) return value;
+  return `El dato solicitado es **${value}**.`;
+}
+
+function shouldUseDirectExtractedFieldAnswer({ prompt = '', response = '', directAnswer = '' } = {}) {
+  const answer = String(directAnswer || '').trim();
+  if (!answer) return false;
+  const current = String(response || '').trim();
+  if (!current) return true;
+  const normalizedCurrent = normalizeKey(current).replace(/[.。,:;]+$/g, '');
+  const normalizedAnswer = normalizeKey(comparableDirectValue(answer)).replace(/[.。,:;]+$/g, '');
+  if (DIRECT_SHORT_ANSWER_RE.test(prompt)) {
+    return normalizedCurrent !== normalizedAnswer;
+  }
+  return !normalizedCurrent.includes(normalizedAnswer);
 }
 
 function shouldRecoverAttachmentResponse({ prompt, response, processedFiles = [] }) {
@@ -136,17 +247,42 @@ async function recoverChatAttachmentResponse({
   const context = uploadedFileContext
     || await buildChatUploadedFileContext(prisma, { userId, processedFiles, prompt })
     || buildProcessedFilesContext(processedFiles, prompt);
+  const directAnswer = buildDirectExtractedFieldAnswer(prompt, context);
+  if (directAnswer) return directAnswer;
   let answer = resolveAttachmentFallbackMarkdown({
     goal: prompt,
     uploadedFileContext: context,
     reason,
   });
 
+  const rawExtract = (processedFiles || [])
+    .map((file) => String(file?.extractedText || '').trim())
+    .filter((text) => text.length > 40)
+    .join('\n\n');
+
+  if (rawExtract && (!answer?.trim() || FILE_READ_FAILURE_RE.test(answer) || /no\s+encontr[eé]\s+texto\s+suficiente/i.test(answer))) {
+    const fromRaw = resolveAttachmentFallbackMarkdown({
+      goal: prompt,
+      uploadedFileContext: rawExtract,
+      reason,
+    });
+    if (fromRaw?.trim()) answer = fromRaw;
+  }
+
+  const directSummary = rawExtract ? buildDirectExtractedSummaryAnswer(prompt, rawExtract) : '';
+  if (
+    directSummary
+    && (
+      !answer?.trim()
+      || FILE_READ_FAILURE_RE.test(answer)
+      || /no\s+encontr[eé]\s+texto\s+suficiente/i.test(answer)
+      || String(answer).trim().length < 140
+    )
+  ) {
+    answer = directSummary;
+  }
+
   if (wantsBibliographyAnswer(prompt) && parseSpreadsheetCitationRows(context).length === 0) {
-    const rawExtract = (processedFiles || [])
-      .map((file) => String(file?.extractedText || '').trim())
-      .filter((text) => text.length > 40)
-      .join('\n\n');
     if (rawExtract) {
       const fromRaw = resolveAttachmentFallbackMarkdown({
         goal: prompt,
@@ -163,8 +299,16 @@ async function recoverChatAttachmentResponse({
 module.exports = {
   wantsBibliographyAnswer,
   shouldRecoverAttachmentResponse,
+  shouldUseDirectExtractedFieldAnswer,
+  buildDirectExtractedFieldAnswer,
   buildProcessedFilesContext,
   refreshProcessedFileExtracts,
   buildChatUploadedFileContext,
   recoverChatAttachmentResponse,
+  _internal: {
+    buildDirectExtractedFieldAnswer,
+    buildDirectExtractedSummaryAnswer,
+    shouldUseDirectExtractedFieldAnswer,
+    normalizeKey,
+  },
 };

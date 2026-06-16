@@ -42,6 +42,7 @@ function tryBuildOptions(analysis, prompt, recentTurns) {
 }
 
 const SPANGLISH_RE = /[_]|input_under_specified|needs_clarification/i;
+const CJK_TEXT_RE = /[\u3040-\u30ff\u3400-\u9fff]/;
 
 function normalizeQuestion(raw, fallback) {
   let q = String(raw || "").trim();
@@ -166,6 +167,13 @@ async function triageIntent({ analysis, prompt, recentTurns = [], judge, options
       source: "heuristic_override",
       score,
     };
+  }
+
+  // Concrete CJK questions can look "short" or under-specified to Spanish/
+  // English heuristics. Do not ask a clarification just because the tokenizer
+  // cannot segment Japanese/Chinese/Korean text.
+  if (CJK_TEXT_RE.test(promptText) && /[？?]/.test(promptText)) {
+    return { action: "execute", reason: "cjk_question", source: "heuristic_override", score };
   }
 
   // High-confidence ambiguity → ask immediately with heuristic question.
