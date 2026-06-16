@@ -30,13 +30,14 @@ export const revalidate = false
 // Errors that mean "this tab is running JS from a previous deployment".
 // The only safe recovery is a hard reload to fetch the new bundle —
 // `reset()` re-renders with the same stale chunks and loops forever.
-function isStaleDeploymentError(err: Error & { digest?: string }): boolean {
+function isRecoverableClientBundleError(err: Error & { digest?: string }): boolean {
   const msg = (err.message || "") + " " + (err.digest || "")
   return (
     /Failed to find Server Action/i.test(msg) ||
     /ChunkLoadError/i.test(err.name || "") ||
     /Loading chunk \d+ failed/i.test(msg) ||
-    /Loading CSS chunk/i.test(msg)
+    /Loading CSS chunk/i.test(msg) ||
+    (/ReferenceError/i.test(err.name || "") && /\bis not defined\b/i.test(msg))
   )
 }
 
@@ -61,12 +62,15 @@ export default function Error({
   //    one fresh auto-reload chance again instead of being stuck on
   //    the error screen for the rest of the tab's lifetime.
   useEffect(() => {
-    if (!isStaleDeploymentError(error)) return
+    if (!isRecoverableClientBundleError(error)) return
     if (typeof window === "undefined") return
     try {
       const buildId = (window as unknown as { __NEXT_DATA__?: { buildId?: string } })
         .__NEXT_DATA__?.buildId || "unknown"
-      const KEY = `__siragpt_stale_reload__:${buildId}`
+      const signature = `${error.name || "Error"}:${error.message || error.digest || "unknown"}`
+        .slice(0, 160)
+        .replace(/[^a-zA-Z0-9_.:-]+/g, "_")
+      const KEY = `__siragpt_stale_reload__:${buildId}:${signature}`
       if (!sessionStorage.getItem(KEY)) {
         sessionStorage.setItem(KEY, String(Date.now()))
         window.location.reload()

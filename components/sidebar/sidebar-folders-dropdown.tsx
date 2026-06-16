@@ -6,7 +6,15 @@
 
 import * as React from "react"
 import { usePathname, useRouter } from "next/navigation"
-import { Cloud, FolderOpen, FolderPlus, Github, Globe, RefreshCw, SlidersHorizontal } from "lucide-react"
+import {
+  Cloud,
+  FolderOpen,
+  FolderPlus,
+  Github,
+  Globe,
+  RefreshCw,
+  SlidersHorizontal,
+} from "lucide-react"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { toast } from "sonner"
 
@@ -337,7 +345,15 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
       if (opts.folderId) params.set("folder", opts.folderId)
       if (opts.localId) params.set("local", opts.localId)
       const query = params.toString()
-      router.push(query ? `/code?${query}` : "/code")
+      const target = query ? `/code?${query}` : "/code"
+      router.push(target)
+      if (typeof window !== "undefined") {
+        window.setTimeout(() => {
+          if (!window.location.pathname.startsWith("/code")) {
+            window.location.assign(target)
+          }
+        }, 450)
+      }
       onMobileNavigate?.()
     },
     [folders, localProjects, onMobileNavigate, router],
@@ -699,7 +715,7 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
   }
 
   return (
-    <div className="flex max-h-[min(420px,50vh)] min-h-[120px] flex-col px-1 pt-3">
+    <div className="flex max-h-[min(560px,62vh)] min-h-[180px] flex-col px-1 pt-3">
       {error ? (
         <div className="mx-2 mb-2 rounded-md border border-rose-300/40 bg-rose-500/5 px-3 py-2 text-xs text-rose-700 dark:text-rose-300">
           {error}

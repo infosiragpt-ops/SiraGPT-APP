@@ -70,12 +70,14 @@ export const TOGGLE_CODEX_SIDEBAR_EVENT = "siragpt:toggle-codex-sidebar"
 export const CODE_ACTIVITY_EVENT = "siragpt:code-activity"
 export const CODE_NEW_CODE_CHAT_EVENT = "siragpt:code-new-code-chat"
 export const CODE_SELECT_CHAT_SESSION_EVENT = "siragpt:code-select-chat-session"
+export const CODE_OPEN_TOOL_EVENT = "siragpt:code-open-tool"
 
 export type CodeNewChatDetail = {
   workspaceId: string
   name: string
   kind: "local-folder" | "project"
   projectId?: string
+  title?: string
 }
 
 const STORAGE_KEY = "code-workspace:v1"
@@ -722,8 +724,19 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
         projectId: detail.projectId,
       })
       const key = codexWorkspaceSessionKey(detail.workspaceId)
-      const { store } = createCodeChatSessionRecord(key, undefined, chatSessionStore)
-      setChatSessionStore(store)
+      const existing = detail.title
+        ? listSessionsForWorkspace(key, chatSessionStore).find((session) => session.title === detail.title)
+        : null
+      if (existing) {
+        setChatSessionStore(setActiveCodeChatSessionRecord(key, existing.id, chatSessionStore))
+      } else {
+        const { store } = createCodeChatSessionRecord(
+          key,
+          detail.title ? { title: detail.title } : undefined,
+          chatSessionStore,
+        )
+        setChatSessionStore(store)
+      }
       focusChat()
     },
     [chatSessionStore, focusChat, switchCodexWorkspace],

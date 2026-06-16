@@ -133,8 +133,8 @@ export const IconProvider = ({ name, size = 24, className, style, ...props }: Ic
                     width={size}
                     height={size}
                     style={{
-                        width: "100%",
-                        height: "100%",
+                        width: size,
+                        height: size,
                         objectFit: "contain",
                         filter,
                     }}

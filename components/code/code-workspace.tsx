@@ -26,7 +26,10 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable"
-import { useCodeWorkspace } from "@/lib/code-workspace-context"
+import {
+  CODE_OPEN_TOOL_EVENT,
+  useCodeWorkspace,
+} from "@/lib/code-workspace-context"
 import { CODE_TEMPLATES } from "@/lib/code-templates"
 
 import { AICodeChatPanel } from "./ai-code-chat-panel"
@@ -42,6 +45,7 @@ const CHAT_DEFAULT_SIZE = 30
 const CHAT_MIN_SIZE = 22
 const TERMINAL_DEFAULT_SIZE = 32
 const TERMINAL_MIN_SIZE = 14
+const PENDING_CODE_TOOL_KEY = "code-workspace:pending-tool"
 
 type PaletteCommand = {
   id: string
@@ -133,8 +137,8 @@ export function CodeWorkspace() {
         return
       }
       if (id === "git" || id === "validation") {
-        setPaletteQuery("")
-        setPaletteOpen(true)
+        setCodeHubOpen(false)
+        setActiveTool(id)
       }
     },
     [],
@@ -162,11 +166,12 @@ export function CodeWorkspace() {
 
   // Which tools count as "open tabs" in the launcher's dynamic section.
   const openToolIds = React.useMemo<WorkspaceToolId[]>(() => {
-    const ids: WorkspaceToolId[] = []
-    if (previewOpen) ids.push("preview")
-    if (terminalOpen) ids.push("shell")
-    return ids
-  }, [previewOpen, terminalOpen])
+    const ids = new Set<WorkspaceToolId>()
+    if (previewOpen) ids.add("preview")
+    if (terminalOpen) ids.add("shell")
+    if (activeTool) ids.add(activeTool)
+    return Array.from(ids)
+  }, [activeTool, previewOpen, terminalOpen])
 
   // Pick a tool from the launcher: inline actions run immediately; everything
   // else opens the single active tool screen ("una pantalla a la vez").
@@ -176,6 +181,10 @@ export function CodeWorkspace() {
       const tool = WORKSPACE_TOOLS[id]
       if (!tool) return
       if (tool.behavior === "action") {
+        if (id === "agent") {
+          openComposer()
+          return
+        }
         if (id === "new-file") {
           if (typeof window === "undefined") return
           const path = window.prompt("Nombre del archivo (incluye ruta)")
@@ -192,8 +201,31 @@ export function CodeWorkspace() {
       setCodeHubOpen(false)
       setActiveTool(id)
     },
-    [createFile],
+    [createFile, openComposer],
   )
+
+  React.useEffect(() => {
+    const openTool = (id: unknown) => {
+      if (typeof id !== "string" || !(id in WORKSPACE_TOOLS)) return
+      handleSelectTool(id as WorkspaceToolId)
+    }
+
+    try {
+      const pending = window.localStorage.getItem(PENDING_CODE_TOOL_KEY)
+      if (pending) {
+        window.localStorage.removeItem(PENDING_CODE_TOOL_KEY)
+        window.setTimeout(() => openTool(pending), 0)
+      }
+    } catch {
+      /* fail soft */
+    }
+
+    const onOpenTool = (event: Event) => {
+      openTool((event as CustomEvent<{ toolId?: string }>).detail?.toolId)
+    }
+    window.addEventListener(CODE_OPEN_TOOL_EVENT, onOpenTool)
+    return () => window.removeEventListener(CODE_OPEN_TOOL_EVENT, onOpenTool)
+  }, [handleSelectTool])
 
   const loadTemplate = React.useCallback(
     (templateId: string) => {
@@ -548,4 +580,3 @@ export function CodeWorkspace() {
     </div>
   )
 }
-

@@ -4,7 +4,7 @@
  * metadata; the launcher renders sections from here and the tool screen
  * renders one tool at a time.
  *
- * status:   "ready" → wired to real behavior · "soon" → polished placeholder
+ * status:   "ready" → wired to real behavior
  * behavior: "screen" → opens the single active tool screen ·
  *           "action" → runs an inline action and closes the launcher
  */
@@ -36,10 +36,11 @@ import {
   type LucideIcon,
 } from "lucide-react"
 
-export type ToolStatus = "ready" | "soon"
+export type ToolStatus = "ready"
 export type ToolBehavior = "screen" | "action"
 
 export type WorkspaceToolId =
+  | "agent"
   | "preview"
   | "shell"
   | "console"
@@ -74,6 +75,14 @@ export type WorkspaceTool = {
 }
 
 export const WORKSPACE_TOOLS: Record<WorkspaceToolId, WorkspaceTool> = {
+  agent: {
+    id: "agent",
+    label: "Agent",
+    description: "Chat de construccion y edicion del workspace",
+    icon: Bot,
+    status: "ready",
+    behavior: "action",
+  },
   preview: {
     id: "preview",
     label: "Preview",
@@ -127,7 +136,7 @@ export const WORKSPACE_TOOLS: Record<WorkspaceToolId, WorkspaceTool> = {
     label: "Publishing",
     description: "Publica una versión compartible de la app",
     icon: Rocket,
-    status: "soon",
+    status: "ready",
     behavior: "screen",
   },
   integrations: {
@@ -135,7 +144,7 @@ export const WORKSPACE_TOOLS: Record<WorkspaceToolId, WorkspaceTool> = {
     label: "Integraciones",
     description: "Conecta servicios nativos y APIs externas",
     icon: Cable,
-    status: "soon",
+    status: "ready",
     behavior: "screen",
   },
   database: {
@@ -143,7 +152,7 @@ export const WORKSPACE_TOOLS: Record<WorkspaceToolId, WorkspaceTool> = {
     label: "Database",
     description: "Datos estructurados: perfiles, métricas, catálogos",
     icon: Database,
-    status: "soon",
+    status: "ready",
     behavior: "screen",
   },
   storage: {
@@ -151,7 +160,7 @@ export const WORKSPACE_TOOLS: Record<WorkspaceToolId, WorkspaceTool> = {
     label: "App Storage",
     description: "Sube y guarda imágenes, vídeos y documentos",
     icon: HardDrive,
-    status: "soon",
+    status: "ready",
     behavior: "screen",
   },
   auth: {
@@ -159,7 +168,7 @@ export const WORKSPACE_TOOLS: Record<WorkspaceToolId, WorkspaceTool> = {
     label: "Auth",
     description: "Inicio de sesión con página de login preconstruida",
     icon: ShieldCheck,
-    status: "soon",
+    status: "ready",
     behavior: "screen",
   },
   security: {
@@ -167,7 +176,7 @@ export const WORKSPACE_TOOLS: Record<WorkspaceToolId, WorkspaceTool> = {
     label: "Security Center",
     description: "Vulnerabilidades, privacidad y cumplimiento",
     icon: ShieldAlert,
-    status: "soon",
+    status: "ready",
     behavior: "screen",
   },
   secrets: {
@@ -175,7 +184,7 @@ export const WORKSPACE_TOOLS: Record<WorkspaceToolId, WorkspaceTool> = {
     label: "Secrets",
     description: "API keys y credenciales de forma segura",
     icon: KeyRound,
-    status: "soon",
+    status: "ready",
     behavior: "screen",
   },
   skills: {
@@ -183,7 +192,7 @@ export const WORKSPACE_TOOLS: Record<WorkspaceToolId, WorkspaceTool> = {
     label: "Agent Skills",
     description: "Habilidades que amplían las capacidades del agente",
     icon: Sparkles,
-    status: "soon",
+    status: "ready",
     behavior: "screen",
   },
   analytics: {
@@ -191,7 +200,7 @@ export const WORKSPACE_TOOLS: Record<WorkspaceToolId, WorkspaceTool> = {
     label: "Analytics",
     description: "Tráfico, métricas y uso de la app desplegada",
     icon: BarChart3,
-    status: "soon",
+    status: "ready",
     behavior: "screen",
   },
   automations: {
@@ -199,7 +208,7 @@ export const WORKSPACE_TOOLS: Record<WorkspaceToolId, WorkspaceTool> = {
     label: "Automations",
     description: "Agentes y automatizaciones de larga duración",
     icon: Bot,
-    status: "soon",
+    status: "ready",
     behavior: "screen",
   },
   canvas: {
@@ -207,7 +216,7 @@ export const WORKSPACE_TOOLS: Record<WorkspaceToolId, WorkspaceTool> = {
     label: "Canvas",
     description: "Lienzo controlado por agente para mockups",
     icon: PenTool,
-    status: "soon",
+    status: "ready",
     behavior: "screen",
   },
   settings: {
@@ -215,7 +224,7 @@ export const WORKSPACE_TOOLS: Record<WorkspaceToolId, WorkspaceTool> = {
     label: "User Settings",
     description: "Preferencias del editor y del workspace",
     icon: Settings,
-    status: "soon",
+    status: "ready",
     behavior: "screen",
   },
   validation: {
@@ -223,7 +232,7 @@ export const WORKSPACE_TOOLS: Record<WorkspaceToolId, WorkspaceTool> = {
     label: "Validation",
     description: "Comandos de prueba y resultados de CI",
     icon: CheckCircle2,
-    status: "soon",
+    status: "ready",
     behavior: "screen",
   },
   developer: {
@@ -231,7 +240,7 @@ export const WORKSPACE_TOOLS: Record<WorkspaceToolId, WorkspaceTool> = {
     label: "Developer",
     description: "Herramientas internas, telemetría y diagnósticos",
     icon: Wrench,
-    status: "soon",
+    status: "ready",
     behavior: "screen",
   },
   git: {
@@ -239,7 +248,7 @@ export const WORKSPACE_TOOLS: Record<WorkspaceToolId, WorkspaceTool> = {
     label: "Git",
     description: "Control de versiones del proyecto",
     icon: GitBranch,
-    status: "soon",
+    status: "ready",
     behavior: "screen",
   },
   vnc: {
@@ -247,15 +256,15 @@ export const WORKSPACE_TOOLS: Record<WorkspaceToolId, WorkspaceTool> = {
     label: "VNC",
     description: "Pantalla de escritorio remota de la app",
     icon: MonitorSmartphone,
-    status: "soon",
+    status: "ready",
     behavior: "screen",
   },
   workflows: {
     id: "workflows",
     label: "Workflows",
-    description: "Orquestación encadenada con agente interno (10–20 h)",
+    description: "Comandos reutilizables y boton Run del workspace",
     icon: Workflow,
-    status: "soon",
+    status: "ready",
     behavior: "screen",
   },
 }
@@ -275,15 +284,20 @@ export const TOOL_SECTIONS: ToolSection[] = [
     id: "suggested",
     label: "Sugerido",
     toolIds: [
+      "agent",
+      "preview",
+      "shell",
+      "console",
       "publishing",
-      "integrations",
       "database",
+      "secrets",
+      "workflows",
+      "integrations",
       "storage",
       "auth",
       "security",
-      "secrets",
-      "skills",
       "analytics",
+      "skills",
       "automations",
       "canvas",
       "settings",
@@ -295,14 +309,10 @@ export const TOOL_SECTIONS: ToolSection[] = [
     toolIds: [
       "settings",
       "validation",
-      "preview",
-      "shell",
       "code-search",
-      "console",
       "developer",
       "git",
       "vnc",
-      "workflows",
     ],
   },
   {

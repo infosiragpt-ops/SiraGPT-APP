@@ -57,7 +57,6 @@ import { ComposerCharCounter } from "@/components/composer-char-counter"
 import { Input } from "@/components/ui/input"
 import { useChat } from "@/lib/chat-context-integrated"
 import { useAuth } from "@/lib/auth-context-integrated"
-import { ThemeToggle } from "@/components/theme-toggle"
 import WhatsAppButton from "@/components/WhatsAppButton"
 import { PremiumCardIcon } from "@/components/icons/premium-card-icon"
 import { SidebarOvalIcon } from "@/components/icons/sidebar-oval-icon"
@@ -92,7 +91,6 @@ import { SlashCommandMenu, detectSlashFilter, parseSlashPrefix } from "@/compone
 import {
   ImageAspectRatioMark,
   SelectedTextDisplay,
-  LinkContextDisplay,
 } from "@/components/chat/ComposerInlineDisplays"
 import { FileUploadProgress } from "@/components/file-upload-progress"
 import type { FileProcessingStatus } from "@/hooks/use-file-processing-status"
@@ -210,7 +208,6 @@ import { routePaste } from "@/lib/attachments/paste-router"
 import { htmlToMarkdown } from "@/lib/attachments/html-to-markdown"
 import { dedupeFiles } from "@/lib/attachments/file-hash"
 import { extractAudioMeta, extractVideoMeta } from "@/lib/attachments/media-meta"
-import { fetchLinkPreview, faviconFallbackUrl, type LinkPreview } from "@/lib/attachments/link-preview"
 import { defaultAttachmentRegistry } from "@/lib/attachments/registry"
 import { useChatDraft } from "@/hooks/use-chat-draft"
 import { useVisualViewportCssVars } from "@/hooks/use-visual-viewport-css-vars"
@@ -587,6 +584,44 @@ function extractDetectedLinks(value: string): DetectedLink[] {
   return links.slice(0, 8)
 }
 
+function ComposerInlineLinkHighlights({ value }: { value: string }) {
+  if (!value) return null
+
+  const nodes: React.ReactNode[] = []
+  let cursor = 0
+  let key = 0
+
+  for (const match of value.matchAll(URL_TOKEN_RE)) {
+    const token = match[0] || ""
+    const start = match.index ?? 0
+    const clean = cleanUrlToken(token)
+    if (!clean) continue
+
+    if (start > cursor) {
+      nodes.push(value.slice(cursor, start))
+    }
+
+    nodes.push(
+      <span key={`url-${key++}`} className="composer-inline-link-highlight">
+        {clean}
+      </span>,
+    )
+
+    const cleanEnd = start + clean.length
+    const tokenEnd = start + token.length
+    if (tokenEnd > cleanEnd) {
+      nodes.push(value.slice(cleanEnd, tokenEnd))
+    }
+    cursor = tokenEnd
+  }
+
+  if (cursor < value.length) {
+    nodes.push(value.slice(cursor))
+  }
+
+  return <>{nodes}</>
+}
+
 function appendTextToken(current: string, token: string) {
   const trimmedToken = token.trim()
   if (!trimmedToken) return current
@@ -863,9 +898,8 @@ function SearchActivityPanel({ activity, onClose }: { activity: SearchActivitySt
 }
 
 // Selected Text Display Component
-// `SelectedTextDisplay` and `LinkContextDisplay` were extracted to
-// `components/chat/ComposerInlineDisplays.tsx`. They are imported at
-// the top of this file and used below with the exact same prop shape.
+// `SelectedTextDisplay` was extracted to
+// `components/chat/ComposerInlineDisplays.tsx` and is imported above.
 
 
 // Enhanced Actions Dropdown Component
@@ -3502,7 +3536,7 @@ const NavbarModelSelector = ({
       className={cn("model-logo-chip chat-model-icon", compact && "model-logo-chip--sm")}
       data-model-brand={getModelBrandKey(model)}
     >
-      <IconProvider name={resolveModelIconName(model)} size={compact ? 15 : 20} />
+      <IconProvider name={resolveModelIconName(model)} size={compact ? 14 : 20} />
     </span>
   );
 
@@ -4057,19 +4091,21 @@ const NavbarModelSelector = ({
     const attribution = resolveModelAttributionName(model);
     return (
       <DropdownMenuItem
+        aria-label={`${label}${attribution ? `, ${attribution}` : ""}`}
+        title={attribution ? `${label} - ${attribution}` : label}
         onSelect={isComingSoon ? (e) => e.preventDefault() : () => onPick(model)}
         data-selected={isSelected ? "true" : undefined}
         disabled={isComingSoon}
         className={cn(
-          "model-picker-row group/row flex min-h-[52px] cursor-pointer items-center gap-3 rounded-xl px-3 py-2 sm:min-h-[62px] sm:py-2.5",
+          "model-picker-row group/row flex min-h-9 cursor-pointer items-center gap-2 rounded-md px-2 py-1",
           "text-foreground/90 focus:bg-transparent data-[highlighted]:bg-transparent",
           isComingSoon && "cursor-default opacity-55",
         )}
       >
-        <ModelLogo model={model} />
+        <ModelLogo model={model} compact />
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-1.5">
-            <span className="liquid-label block truncate text-sm font-semibold leading-5 sm:text-[15px]">
+            <span className="liquid-label block truncate text-[12.5px] font-medium leading-4">
               {label}
             </span>
             {isComingSoon && (
@@ -4077,9 +4113,6 @@ const NavbarModelSelector = ({
                 Pronto
               </span>
             )}
-          </span>
-          <span className="hidden truncate text-[12.5px] font-medium leading-4 text-muted-foreground/82 sm:block">
-            {attribution}
           </span>
         </span>
       </DropdownMenuItem>
@@ -4114,24 +4147,24 @@ const NavbarModelSelector = ({
         <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-55 transition-transform duration-200 group-data-[state=open]/model:rotate-180" strokeWidth={2} />
       </DropdownMenuTrigger>
 
-      <DropdownMenuContent align="start" sideOffset={8} collisionPadding={12} className="model-picker-content w-[calc(100vw-1.5rem)] p-0 overflow-hidden sm:w-[392px]">
+      <DropdownMenuContent align="end" sideOffset={6} collisionPadding={12} className="model-picker-content w-[min(calc(100vw-1.5rem),16.25rem)] overflow-hidden p-0">
         <div className="model-picker-search-shell hidden sm:block">
           <div className="relative">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/60" />
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground/55" />
             <Input
               placeholder="Buscar modelos"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="model-picker-search-input h-9 rounded-xl border-0 bg-transparent pl-9 pr-3 text-base shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 sm:text-[13px]"
+              className="model-picker-search-input h-7 rounded-md border-0 bg-transparent pl-7 pr-2 text-base shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 sm:text-[12px]"
               onClick={(e) => e.stopPropagation()}
               onKeyDown={(e) => e.stopPropagation()}
             />
           </div>
         </div>
 
-        <ScrollArea className="chat-model-menu-scroll h-[min(60dvh,420px)] sm:h-[min(70dvh,456px)]">
+        <ScrollArea className="chat-model-menu-scroll h-[min(52dvh,300px)]">
           {filteredModels.length > 0 ? (
-            <div className="model-picker-list flex flex-col gap-1 px-2 pb-2 pt-2">
+            <div className="model-picker-list flex flex-col gap-px px-1.5 pb-1.5 pt-1">
               {filteredModels.map((model: any) => (
                 <ModelRow key={model.name} model={model} />
               ))}
@@ -4345,6 +4378,7 @@ function ChatInterfaceContent() {
   const scrollAreaRef = React.useRef<HTMLDivElement>(null)
   const chatCreationInitiated = React.useRef(false);
   const prevChatIdRef = React.useRef<string | undefined>();
+  const composerHighlightOverlayRef = React.useRef<HTMLDivElement>(null);
   // Mirror of `uploadedFiles` for use inside async/event handlers that
   // outlive the render closure (paste listener, drop handler, etc.) —
   // reading from state directly would capture stale values.
@@ -4356,10 +4390,6 @@ function ChatInterfaceContent() {
   const cancelledTempIdsRef = React.useRef<Set<string>>(new Set());
   const attachmentHashesRef = React.useRef<Set<string>>(new Set());
   const attachmentHashByIdRef = React.useRef<Map<string, string>>(new Map());
-  // OG metadata cache for detected link chips (url → preview | null).
-  const linkPreviewCacheRef = React.useRef<Map<string, LinkPreview | null>>(new Map());
-  const [linkPreviews, setLinkPreviews] = React.useState<Record<string, LinkPreview | null>>({});
-
   const updateUploadedFileById = React.useCallback((
     fileId: string,
     updater: (file: any) => any,
@@ -5346,50 +5376,22 @@ But first, you need to connect your Spotify account securely using the button be
   }, [input]);
 
   const detectedLinks = React.useMemo(() => extractDetectedLinks(input), [input]);
+  const hasDetectedLinks = detectedLinks.length > 0;
 
-  // Background OG-metadata enrichment for detected link chips (title +
-  // favicon + thumbnail) with a silent fallback: on any failure the chip
-  // simply keeps showing the host. Debounced so typing doesn't spam the
-  // endpoint; cached per URL for the session.
-  React.useEffect(() => {
-    if (detectedLinks.length === 0) return;
-    const timer = window.setTimeout(() => {
-      detectedLinks.slice(0, 5).forEach((link) => {
-        if (linkPreviewCacheRef.current.has(link.url)) {
-          const cached = linkPreviewCacheRef.current.get(link.url);
-          if (cached) setLinkPreviews(prev => (prev[link.url] ? prev : { ...prev, [link.url]: cached }));
-          return;
-        }
-        linkPreviewCacheRef.current.set(link.url, null); // in-flight marker
-        void fetchLinkPreview(link.url)
-          .then((preview) => {
-            const enriched = preview
-              ? { ...preview, faviconUrl: preview.faviconUrl || faviconFallbackUrl(link.url) }
-              : null;
-            linkPreviewCacheRef.current.set(link.url, enriched);
-            if (enriched) setLinkPreviews(prev => ({ ...prev, [link.url]: enriched }));
-          })
-          .catch(() => { /* silent fallback — chip keeps the bare host */ });
-      });
-    }, 350);
-    return () => window.clearTimeout(timer);
-  }, [detectedLinks]);
-
-  const enrichedDetectedLinks = React.useMemo(
-    () => detectedLinks.map((link) => ({ ...link, og: linkPreviews[link.url] || null })),
-    [detectedLinks, linkPreviews],
-  );
-
-  const removeDetectedLink = React.useCallback((link: DetectedLink) => {
-    setInput((prev) => {
-      const escapedRaw = link.raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-      const escapedUrl = link.url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-      const withoutRaw = prev.replace(new RegExp(`\\s*${escapedRaw}`, "g"), " ")
-      const withoutUrl = withoutRaw.replace(new RegExp(`\\s*${escapedUrl}`, "g"), " ")
-      return withoutUrl.replace(/[ \t]{2,}/g, " ").replace(/\n{3,}/g, "\n\n").trimStart()
-    });
-    window.setTimeout(() => textareaRef.current?.focus(), 0);
+  const syncComposerHighlightScroll = React.useCallback((textarea: HTMLTextAreaElement | null = textareaRef.current) => {
+    const overlay = composerHighlightOverlayRef.current;
+    if (!overlay || !textarea) return;
+    overlay.scrollTop = textarea.scrollTop;
+    overlay.scrollLeft = textarea.scrollLeft;
   }, []);
+
+  const handleComposerTextareaScroll = React.useCallback((event: React.UIEvent<HTMLTextAreaElement>) => {
+    syncComposerHighlightScroll(event.currentTarget);
+  }, [syncComposerHighlightScroll]);
+
+  React.useEffect(() => {
+    syncComposerHighlightScroll();
+  }, [input, hasDetectedLinks, syncComposerHighlightScroll]);
 
   const getComposerTextareaMaxHeight = React.useCallback(() => {
     if (typeof window === "undefined") return 200;
@@ -6009,25 +6011,12 @@ But first, you need to connect your Spotify account securely using the button be
     }
   };
 
-  // Composer model + reasoning-effort controls (Claude-style), rendered next to
-  // the mic. The model selector was moved here from the top-left navbar; the
-  // effort pill (Bajo/Medio/Extra/Max) maps to the backend `reasoningEffort`.
-  const COMPOSER_EFFORT_LEVELS: { value: string; hint: string }[] = [
-    { value: "Bajo", hint: "Respuestas rápidas" },
-    { value: "Medio", hint: "Equilibrado" },
-    { value: "Extra", hint: "Razona más a fondo" },
-    { value: "Max", hint: "Máximo razonamiento" },
-  ]
+  // Composer model selector (Claude-style), rendered inline in the right action
+  // cluster next to the mic.
   const renderComposerModelControls = () => {
     if (isMediaToolActive) return null
-    // One control: the model selector, with a SUBTLE ">" at its edge that
-    // expands the reasoning-effort menu (Bajo/Medio/Extra/Max). Keeping the
-    // effort behind the chevron — instead of a second always-on pill — keeps
-    // the composer uncluttered. The chevron is faint by default (visible on
-    // mobile) and brightens on hover / when its menu is open.
     return (
-      <div className="flex w-full min-w-0 items-center px-1 pb-0.5 pt-0.5 sm:px-1.5">
-        <div className="group inline-flex min-w-0 max-w-full items-center">
+      <div className="composer-model-inline flex min-w-0 max-w-[min(42vw,13rem)] shrink items-center justify-end">
         <NavbarModelSelector
           selectedModel={selectedModel}
           setSelectedModel={setSelectedModel}
@@ -6037,39 +6026,6 @@ But first, you need to connect your Spotify account securely using the button be
           currentChat={currentChat}
           setCurrentChat={setCurrentChat}
         />
-        <DropdownMenu>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  aria-label={`Esfuerzo de razonamiento: ${selectedEffort}`}
-                  className="-ml-1 inline-flex h-8 w-5 shrink-0 items-center justify-center rounded-full text-muted-foreground/70 opacity-70 transition-opacity hover:text-foreground hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 group-hover:opacity-100 data-[state=open]:text-foreground data-[state=open]:opacity-100"
-                >
-                  <ChevronRight className="h-3.5 w-3.5" />
-                </button>
-              </DropdownMenuTrigger>
-            </TooltipTrigger>
-            <TooltipContent side="top">Esfuerzo: {selectedEffort}</TooltipContent>
-          </Tooltip>
-          <DropdownMenuContent align="end" sideOffset={8} className="w-52 rounded-2xl p-1">
-            <div className="px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/70">Esfuerzo de razonamiento</div>
-            {COMPOSER_EFFORT_LEVELS.map((lvl) => (
-              <DropdownMenuItem
-                key={lvl.value}
-                onSelect={(e) => { e.preventDefault(); setSelectedEffort(lvl.value) }}
-                className="flex items-center justify-between gap-2 rounded-xl px-2.5 py-2 text-[13px]"
-              >
-                <span className="flex flex-col">
-                  <span className="font-medium leading-4">{lvl.value}</span>
-                  <span className="text-[11px] leading-4 text-muted-foreground/70">{lvl.hint}</span>
-                </span>
-                {selectedEffort === lvl.value && <Check className="h-4 w-4 shrink-0" />}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-        </div>
       </div>
     )
   }
@@ -6884,7 +6840,7 @@ But first, you need to connect your Spotify account securely using the button be
 
       // A single plain-text insert keeps the NATIVE paste (caret-aware,
       // selection-replacing, undo-friendly). Everything else — snippet
-      // chips, Word/Docs Markdown, link chips, multi-action pastes — is
+      // chips, Word/Docs Markdown, link inserts, multi-action pastes — is
       // orchestrated by us.
       if (actions.length === 1 && actions[0].type === 'insert-text') return;
 
@@ -6895,9 +6851,9 @@ But first, you need to connect your Spotify account securely using the button be
             insertTextAtCaret(action.text);
             break;
           case 'link-chip':
-            // Link chips ride on the detected-links pipeline: the URL goes
-            // into the input and LinkContextDisplay renders the chip, which
-            // the OG-metadata effect enriches in background.
+            // URLs stay in the editable text. The composer paints detected
+            // URLs inline with a subtle link color instead of creating a
+            // separate preview row above the conversation.
             insertTextAtCaret(`${action.url} `);
             break;
           case 'text-snippet-chip':
@@ -9168,6 +9124,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     chatType === 'video';
   const isSendingForCurrentChat = isSending && sendingChatId === currentChatId;
   const isStopButtonVisible = isCurrentChatLoading || isCurrentChatStreaming || (pendingStop && isCurrentChatStreaming) || isSendingForCurrentChat || isCurrentChatLocalJobBusy || isGeneratingImage || isGeneratingVideo || isGeneratingPPT;
+  const composerHasInlineContext = uploadedFiles.length > 0 || Boolean(selectedWordText) || hasDetectedLinks;
+  const composerIsExpanded =
+    composerHasInlineContext ||
+    input.length > 120 ||
+    input.includes("\n");
 
   // Shared props bundle for <ActiveToolsDisplay /> — the component is
   // now rendered in a different spot (below the input instead of above)
@@ -10031,39 +9992,24 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     message="Hola 👋, me interesa SiraGPT. ¿Podrían contarme más sobre sus funciones y precios?"
                   />
                 )}
-                <ThemeToggle className="chat-header-icon-btn" />
-                {/* Plan / Upgrade button — unified icon-system:
-                    Free plan → text CTA "Subir de plan"
-                    Paid + near-quota → text CTA "Upgrade Now" + warning border
-                    Paid + healthy → compact icon button with Sparkles glyph
-                    The 💰 emoji was replaced with Lucide Sparkles (same stroke
-                    family as the rest of the header icons). */}
+                {/* Upgrade CTA: keep the header clean for paid users.
+                    Paid customers manage billing from the account/settings area. */}
                 {(() => {
-                  const usageRatio =
-                    currentUserInfo?.apiUsage && currentUserInfo?.monthlyLimit
-                      ? currentUserInfo.apiUsage / currentUserInfo.monthlyLimit
-                      : 0
-                  const isFree = currentPlan === 'FREE'
-                  // Collapse the text CTA to icon-only when a right-side
-                  // panel is active — the left pane is ~half width then,
-                  // and the "Subir de plan" pill was wrapping into the
-                  // message area.
+                  const isFree = isFreePlanName(currentPlan)
+                  if (!isFree) return null
+
                   const isSplitActive = rightPanelActive
-                  const showTextCta = !isSplitActive && (isFree || usageRatio >= 0.7)
-                  const warn = !isFree && usageRatio >= 0.9
-                  const caution = !isFree && usageRatio >= 0.7 && usageRatio < 0.9
+                  const showTextCta = !isSplitActive
                   return (
                     <Button
                       variant={showTextCta ? 'outline' : 'ghost'}
                       size={showTextCta ? 'sm' : 'icon'}
                       onClick={() => setSubscribeOpen(true)}
-                      aria-label={isFree ? 'Subir de plan' : 'Gestionar plan'}
-                      title={isFree ? 'Subir de plan' : 'Gestionar plan'}
+                      aria-label="Subir de plan"
+                      title="Subir de plan"
                       className={cn(
                         !showTextCta && 'h-11 w-11 rounded-full text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground active:scale-[0.96]',
                         showTextCta && 'h-11 gap-1.5 rounded-full px-3 text-[13px] font-semibold',
-                        warn && 'border-red-500/70 text-red-600 hover:bg-red-500/10 hover:text-red-600',
-                        caution && 'border-amber-500/70 text-amber-600 hover:bg-amber-500/10 hover:text-amber-600',
                         'chat-header-icon-btn',
                         'chat-plan-action',
                         'transition-all duration-200',
@@ -10072,7 +10018,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       {showTextCta ? (
                         <>
                           <PremiumCardIcon className="h-[18px] w-[24px] shrink-0 drop-shadow-[0_1px_1px_rgba(0,0,0,0.15)]" />
-                          <span>{isFree ? 'Subir de plan' : 'Mejorar plan'}</span>
+                          <span>Subir de plan</span>
                         </>
                       ) : (
                         <PremiumCardIcon className="h-[18px] w-[24px] drop-shadow-[0_1px_1px_rgba(0,0,0,0.15)]" />
@@ -10224,18 +10170,15 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       onFileProcessingStatusChange={handleFileProcessingStatusChange}
                     />
                     <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
-                    <LinkContextDisplay
-                      links={enrichedDetectedLinks}
-                      removeLink={removeDetectedLink}
-                      isWebSearchActive={isWebSearchActive}
-                      setIsWebSearchActive={setIsWebSearchActive}
-                    />
                     {/* Tool pills used to live ABOVE the input; moved to
                         a secondary row BELOW the input (see after the
                         TooltipProvider) so the top surface is dedicated
                         to drag-and-drop of files / audio / images. */}
                     <TooltipProvider>
-                      <div className="flex items-end gap-2 pl-2 pr-2 py-1.5">
+                      <div
+                        className="composer-input-row flex items-end gap-2 pl-2 pr-2 py-1.5"
+                        data-expanded={composerIsExpanded ? "true" : undefined}
+                      >
                         {/* LEFT — Plus / attach + tool selector */}
                         <ActionsDropdown
                           chatType={chatType}
@@ -10289,68 +10232,82 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         />
 
                         {/* CENTER — single-line textarea, expands vertically up to ~45% viewport (ChatGPT-style) */}
-                        <Textarea
-                          ref={textareaRef}
-                          value={input}
-                          onChange={handleTextareaChange}
-                          onKeyDown={handleKeyDown}
-                          onFocus={handleTextareaFocus}
-                          onPaste={handleTextareaPaste}
-                          onCompositionStart={() => { isComposingRef.current = true }}
-                          onCompositionEnd={() => { isComposingRef.current = false }}
-                          placeholder={
-                            isImageGenerationActive
-                              ? tComposer("placeholderImage")
-                              : isVideoGenerationActive
-                                ? tComposer("placeholderVideo")
-                                : isVoiceGenerationActive
-                                  ? "Describe la voz que quieres crear"
-                                  : isMusicGenerationActive
-                                    ? "Describe la música que quieres crear"
-                                      : isWebSearchActive
-                                        ? tComposer("placeholderWebSearch")
-                                        : isComputerUseActive
-                                          ? tComposer("placeholderComputer")
-                                        : isGmailActive
-                                          ? tComposer("placeholderGmail")
-                                        : (isGoogleCalendarActive || isGoogleDriveActive)
-                                          ? tComposer("placeholderGoogle")
-                                          : isSpotifyActive
-                                            ? tComposer("placeholderSpotify")
-                                            : isWordConnectorActive
-                                              ? tComposer("placeholderWord")
-                                              : tComposer("placeholderDefault")
-                          }
-                          className={cn(
-                            "textarea-scrollbar min-h-[24px] min-w-0 flex-1 resize-none border-none bg-transparent",
-                            "py-1.5 px-1",
-                            "text-[15px] leading-[1.45] tracking-[-0.01em] text-foreground",
-                            "placeholder:text-muted-foreground/65 placeholder:font-normal",
-                            "dark:placeholder:text-[hsl(var(--text-tertiary))]",
-                            "outline-none ring-0 focus:outline-none focus:ring-0",
-                            "rounded-none transition-colors duration-200",
-                          )}
-                          style={{
-                            minHeight: "24px",
-                            maxHeight: "var(--chat-textarea-max-height, 200px)",
-                            overflowY: "auto",
-                            overflowX: "hidden",
-                            wordWrap: "break-word",
-                            border: "none",
-                            outline: "none",
-                            boxShadow: "none",
-                          }}
-                          rows={1}
-                          disabled={isCurrentChatLoading || isCurrentChatLocalJobBusy}
-                        />
+                        <div className="composer-textarea-shell min-w-0 flex-1">
+                          {hasDetectedLinks && input ? (
+                            <div
+                              ref={composerHighlightOverlayRef}
+                              className="composer-textarea-highlights textarea-scrollbar"
+                              aria-hidden="true"
+                            >
+                              <ComposerInlineLinkHighlights value={input} />
+                            </div>
+                          ) : null}
+                          <Textarea
+                            ref={textareaRef}
+                            value={input}
+                            onChange={handleTextareaChange}
+                            onKeyDown={handleKeyDown}
+                            onFocus={handleTextareaFocus}
+                            onPaste={handleTextareaPaste}
+                            onScroll={handleComposerTextareaScroll}
+                            onCompositionStart={() => { isComposingRef.current = true }}
+                            onCompositionEnd={() => { isComposingRef.current = false }}
+                            data-link-highlights={hasDetectedLinks ? "true" : undefined}
+                            placeholder={
+                              isImageGenerationActive
+                                ? tComposer("placeholderImage")
+                                : isVideoGenerationActive
+                                  ? tComposer("placeholderVideo")
+                                  : isVoiceGenerationActive
+                                    ? "Describe la voz que quieres crear"
+                                    : isMusicGenerationActive
+                                      ? "Describe la música que quieres crear"
+                                        : isWebSearchActive
+                                          ? tComposer("placeholderWebSearch")
+                                          : isComputerUseActive
+                                            ? tComposer("placeholderComputer")
+                                          : isGmailActive
+                                            ? tComposer("placeholderGmail")
+                                          : (isGoogleCalendarActive || isGoogleDriveActive)
+                                            ? tComposer("placeholderGoogle")
+                                            : isSpotifyActive
+                                              ? tComposer("placeholderSpotify")
+                                              : isWordConnectorActive
+                                                ? tComposer("placeholderWord")
+                                                : tComposer("placeholderDefault")
+                            }
+                            className={cn(
+                              "composer-textarea textarea-scrollbar min-h-[24px] min-w-0 w-full resize-none border-none bg-transparent",
+                              "py-1.5 px-1",
+                              "text-[15px] leading-[1.45] tracking-normal text-foreground",
+                              "placeholder:text-muted-foreground/65 placeholder:font-normal",
+                              "dark:placeholder:text-[hsl(var(--text-tertiary))]",
+                              "outline-none ring-0 focus:outline-none focus:ring-0",
+                              "rounded-none transition-colors duration-200",
+                            )}
+                            style={{
+                              minHeight: "24px",
+                              maxHeight: "var(--chat-textarea-max-height, 200px)",
+                              overflowY: "auto",
+                              overflowX: "hidden",
+                              wordWrap: "break-word",
+                              border: "none",
+                              outline: "none",
+                              boxShadow: "none",
+                            }}
+                            rows={1}
+                            disabled={isCurrentChatLoading || isCurrentChatLocalJobBusy}
+                          />
+                        </div>
 
                         {/* RIGHT — VoiceControls (mic, ghost) + primary action.
                             Primary swaps glyph based on state — never a
                             decorative button. */}
-                        <div className="flex shrink-0 items-center gap-1.5">
+                        <div className="composer-toolbar-actions flex shrink-0 items-center gap-1.5">
                           {/* Pulido · contador suave de caracteres. Aparece
                               sólo cuando ya escribiste bastante. */}
                           <ComposerCharCounter input={input} />
+                          {renderComposerModelControls()}
                           {!isStopButtonVisible && (
                             renderDictationButton()
                           )}
@@ -10430,9 +10387,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           )}
                         </div>
                       </div>
-                      {/* Bottom row — model + reasoning-effort selector, kept off
-                          the textarea row so typing has full width on mobile. */}
-                      {renderComposerModelControls()}
                     </TooltipProvider>
 
                     {/* Secondary row — active tool / connector pills.
@@ -10767,17 +10721,14 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           onFileProcessingStatusChange={handleFileProcessingStatusChange}
                         />
                         <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
-                        <LinkContextDisplay
-                          links={enrichedDetectedLinks}
-                          removeLink={removeDetectedLink}
-                          isWebSearchActive={isWebSearchActive}
-                          setIsWebSearchActive={setIsWebSearchActive}
-                        />
                         {/* Tool pills relocated below the input — see
                             the matching block after the TooltipProvider
                             closes. Top surface is reserved for drop-zone. */}
                         <TooltipProvider>
-                          <div className="flex items-end gap-2 pl-2 pr-2 py-1.5">
+                          <div
+                            className="composer-input-row flex items-end gap-2 pl-2 pr-2 py-1.5"
+                            data-expanded={composerIsExpanded ? "true" : undefined}
+                          >
                             <ActionsDropdown
                               chatType={chatType}
                               setChatType={setChatType}
@@ -10828,63 +10779,77 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               isGeneratingPPT={isGeneratingPPT}
                               isProcessingGmail={isCurrentChatLocalJobBusy && isProcessingGmail}
                             />
-                            <Textarea
-                              ref={textareaRef}
-                              value={input}
-                              onChange={handleTextareaChange}
-                              onKeyDown={handleKeyDown}
-                              onFocus={handleTextareaFocus}
-                              onPaste={handleTextareaPaste}
-                              onCompositionStart={() => { isComposingRef.current = true }}
-                              onCompositionEnd={() => { isComposingRef.current = false }}
-                              placeholder={
-                                isImageGenerationActive
-                                  ? tComposer("placeholderImage")
-                                  : isVideoGenerationActive
-                                    ? tComposer("placeholderVideo")
-                                    : isVoiceGenerationActive
-                                      ? "Describe la voz que quieres crear"
-                                      : isMusicGenerationActive
-                                        ? "Describe la música que quieres crear"
-                                          : isWebSearchActive
-                                            ? tComposer("placeholderWebSearch")
-                                            : isComputerUseActive
-                                              ? tComposer("placeholderComputer")
-                                          : isGmailActive
-                                            ? tComposer("placeholderGmail")
-                                            : (isGoogleCalendarActive || isGoogleDriveActive)
-                                              ? tComposer("placeholderGoogle")
-                                              : isSpotifyActive
-                                                ? tComposer("placeholderSpotify")
-                                                : isWordConnectorActive
-                                                  ? tComposer("placeholderWord")
-                                                  : tComposer("placeholderDefault")
-                              }
-                              className={cn(
-                                "textarea-scrollbar min-h-[24px] min-w-0 flex-1 resize-none border-none bg-transparent",
-                                "py-1.5 px-1",
-                                "text-[15px] leading-[1.45] tracking-[-0.01em] text-foreground",
-                                "placeholder:text-muted-foreground/65 placeholder:font-normal",
-                                "dark:placeholder:text-[hsl(var(--text-tertiary))]",
-                                "outline-none ring-0 focus:outline-none focus:ring-0",
-                                "rounded-none transition-colors duration-200",
-                              )}
-                              style={{
-                                minHeight: "24px",
-                                maxHeight: "var(--chat-textarea-max-height, 200px)",
-                                overflowY: "auto",
-                                overflowX: "hidden",
-                                wordWrap: "break-word",
-                                border: "none",
-                                outline: "none",
-                                boxShadow: "none",
-                              }}
-                              rows={1}
-                              disabled={isCurrentChatLoading || isCurrentChatLocalJobBusy}
-                            />
-                            <div className="flex shrink-0 items-center gap-1.5">
+                            <div className="composer-textarea-shell min-w-0 flex-1">
+                              {hasDetectedLinks && input ? (
+                                <div
+                                  ref={composerHighlightOverlayRef}
+                                  className="composer-textarea-highlights textarea-scrollbar"
+                                  aria-hidden="true"
+                                >
+                                  <ComposerInlineLinkHighlights value={input} />
+                                </div>
+                              ) : null}
+                              <Textarea
+                                ref={textareaRef}
+                                value={input}
+                                onChange={handleTextareaChange}
+                                onKeyDown={handleKeyDown}
+                                onFocus={handleTextareaFocus}
+                                onPaste={handleTextareaPaste}
+                                onScroll={handleComposerTextareaScroll}
+                                onCompositionStart={() => { isComposingRef.current = true }}
+                                onCompositionEnd={() => { isComposingRef.current = false }}
+                                data-link-highlights={hasDetectedLinks ? "true" : undefined}
+                                placeholder={
+                                  isImageGenerationActive
+                                    ? tComposer("placeholderImage")
+                                    : isVideoGenerationActive
+                                      ? tComposer("placeholderVideo")
+                                      : isVoiceGenerationActive
+                                        ? "Describe la voz que quieres crear"
+                                        : isMusicGenerationActive
+                                          ? "Describe la música que quieres crear"
+                                            : isWebSearchActive
+                                              ? tComposer("placeholderWebSearch")
+                                              : isComputerUseActive
+                                                ? tComposer("placeholderComputer")
+                                            : isGmailActive
+                                              ? tComposer("placeholderGmail")
+                                              : (isGoogleCalendarActive || isGoogleDriveActive)
+                                                ? tComposer("placeholderGoogle")
+                                                : isSpotifyActive
+                                                  ? tComposer("placeholderSpotify")
+                                                  : isWordConnectorActive
+                                                    ? tComposer("placeholderWord")
+                                                    : tComposer("placeholderDefault")
+                                }
+                                className={cn(
+                                  "composer-textarea textarea-scrollbar min-h-[24px] min-w-0 w-full resize-none border-none bg-transparent",
+                                  "py-1.5 px-1",
+                                  "text-[15px] leading-[1.45] tracking-normal text-foreground",
+                                  "placeholder:text-muted-foreground/65 placeholder:font-normal",
+                                  "dark:placeholder:text-[hsl(var(--text-tertiary))]",
+                                  "outline-none ring-0 focus:outline-none focus:ring-0",
+                                  "rounded-none transition-colors duration-200",
+                                )}
+                                style={{
+                                  minHeight: "24px",
+                                  maxHeight: "var(--chat-textarea-max-height, 200px)",
+                                  overflowY: "auto",
+                                  overflowX: "hidden",
+                                  wordWrap: "break-word",
+                                  border: "none",
+                                  outline: "none",
+                                  boxShadow: "none",
+                                }}
+                                rows={1}
+                                disabled={isCurrentChatLoading || isCurrentChatLocalJobBusy}
+                              />
+                            </div>
+                            <div className="composer-toolbar-actions flex shrink-0 items-center gap-1.5">
                               {/* Pulido · contador suave de caracteres. */}
                               <ComposerCharCounter input={input} />
+                              {renderComposerModelControls()}
                               {!isStopButtonVisible && (
                                 renderDictationButton()
                               )}
@@ -10987,9 +10952,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               )}
                             </div>
                           </div>
-                          {/* Bottom row — model + reasoning-effort selector, kept
-                              off the textarea row so typing has full width on mobile. */}
-                          {renderComposerModelControls()}
                         </TooltipProvider>
 
                         {/* Secondary row — active tool / connector pills.

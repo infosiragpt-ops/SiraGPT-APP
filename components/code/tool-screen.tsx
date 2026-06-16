@@ -3,20 +3,19 @@
 /**
  * ToolScreen — the single active workspace tool surface ("una pantalla a la
  * vez"). Overlays the editor/preview region; shows exactly one tool chosen
- * from the ToolLauncher. Ready tools render their real component; not-yet-
- * built tools render a polished "Próximamente" placeholder.
+ * from the ToolLauncher. Ready tools render their real component and actions.
  */
 
 import * as React from "react"
 import { ArrowLeft, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import { cn } from "@/lib/utils"
 import { WORKSPACE_TOOLS, type WorkspaceToolId } from "@/lib/code-workspace-tools"
 
 import { FileTreePanel } from "./file-tree-panel"
 import { PreviewPane } from "./preview-pane"
 import { TerminalPanel } from "./terminal-panel"
+import { WorkspaceToolPanel } from "./workspace-tool-panels"
 
 type Props = {
   toolId: WorkspaceToolId | null
@@ -104,44 +103,10 @@ function ToolBody({
     case "preview":
       return <PreviewPane onClose={onClose} />
     case "shell":
-    case "console":
       return <TerminalPanel open onClose={onClose} />
     case "files":
       return <FileTreePanel />
     default:
-      return <ComingSoon toolId={toolId} />
+      return <WorkspaceToolPanel toolId={toolId} />
   }
-}
-
-function ComingSoon({ toolId }: { toolId: WorkspaceToolId }) {
-  const tool = WORKSPACE_TOOLS[toolId]
-  const Icon = tool.icon
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-5 px-6 text-center">
-      <div className="relative">
-        <div
-          aria-hidden
-          className="absolute -inset-6 rounded-full bg-[radial-gradient(circle,hsl(var(--accent-violet)/0.22),transparent_70%)] blur-xl"
-        />
-        <div className="relative flex h-16 w-16 items-center justify-center rounded-2xl border border-[hsl(var(--accent-violet)/0.35)] bg-[hsl(var(--accent-violet)/0.10)] text-[hsl(var(--accent-violet))] shadow-[inset_0_1px_0_rgba(255,255,255,0.18)]">
-          <Icon className="h-7 w-7" />
-        </div>
-      </div>
-      <div className="space-y-1.5">
-        <div className="flex items-center justify-center gap-2">
-          <h2 className="text-lg font-semibold tracking-tight text-foreground">{tool.label}</h2>
-          <span className="rounded-full border border-[hsl(var(--accent-violet)/0.35)] bg-[hsl(var(--accent-violet)/0.10)] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[hsl(var(--accent-violet))]">
-            Próximamente
-          </span>
-        </div>
-        <p className="mx-auto max-w-sm text-[13px] leading-relaxed text-muted-foreground">
-          {tool.description}.
-        </p>
-        <p className="mx-auto max-w-sm text-[12px] leading-relaxed text-muted-foreground/70">
-          Esta herramienta está en construcción — la iremos afinando. Mientras
-          tanto puedes seguir usando el resto del workspace.
-        </p>
-      </div>
-    </div>
-  )
 }

@@ -3,7 +3,7 @@ import * as React from "react"
 /**
  * Premium credit-card glyph — inspired by the Visa Infinite metal card
  * (deep navy surface, gold chip, contactless waves). Used as the
- * "Gestionar plan" / upgrade CTA icon in the header.
+ * free-plan upgrade CTA icon in the header.
  *
  * Filled SVG with brand-like colors rather than stroke-only — this ONE
  * icon is the paid-product signifier, so it intentionally carries more

@@ -1290,7 +1290,7 @@ export function AppSidebar() {
                   )}
                   aria-hidden="true"
                 />
-                <span>Codex</span>
+                <span>Apps</span>
               </button>
             )}
             <div
