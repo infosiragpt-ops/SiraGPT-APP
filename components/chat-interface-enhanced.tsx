@@ -1655,17 +1655,7 @@ const ChipWaveform = ({ peaks }: { peaks: number[] }) => (
   </span>
 );
 
-// Active Options Display Component - Renders above the textarea
-const ActiveOptionsDisplay = ({
-  uploadedFiles,
-  removeFile,
-  uploadProgress,
-  retryUpload,
-  restoreLongPasteToInput,
-  onPreviewAttachment,
-  onFileProcessingStatusChange,
-  moveFile,
-}: {
+type ActiveOptionsDisplayProps = {
   uploadedFiles: any[];
   removeFile: (index: number) => void;
   uploadProgress: { [key: string]: number };
@@ -1674,7 +1664,35 @@ const ActiveOptionsDisplay = ({
   onPreviewAttachment?: (attachment: AttachmentLike, siblings: AttachmentLike[], index: number) => void;
   onFileProcessingStatusChange?: (file: any, status: FileProcessingStatus) => void;
   moveFile?: (index: number, delta: -1 | 1) => void;
-}) => {
+}
+
+function areActiveOptionsDisplayPropsEqual(
+  prev: ActiveOptionsDisplayProps,
+  next: ActiveOptionsDisplayProps,
+) {
+  return (
+    prev.uploadedFiles === next.uploadedFiles &&
+    prev.uploadProgress === next.uploadProgress &&
+    prev.removeFile === next.removeFile &&
+    prev.retryUpload === next.retryUpload &&
+    prev.restoreLongPasteToInput === next.restoreLongPasteToInput &&
+    prev.onPreviewAttachment === next.onPreviewAttachment &&
+    prev.onFileProcessingStatusChange === next.onFileProcessingStatusChange &&
+    prev.moveFile === next.moveFile
+  )
+}
+
+// Active Options Display Component - Renders above the textarea
+const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
+  uploadedFiles,
+  removeFile,
+  uploadProgress,
+  retryUpload,
+  restoreLongPasteToInput,
+  onPreviewAttachment,
+  onFileProcessingStatusChange,
+  moveFile,
+}: ActiveOptionsDisplayProps) {
   // Screen-reader announcement for keyboard reordering (aria-live).
   const [reorderAnnouncement, setReorderAnnouncement] = React.useState("");
   // Inline expanded preview for "PEGADO" text-snippet chips.
@@ -2010,7 +2028,7 @@ const ActiveOptionsDisplay = ({
       />
     </div>
   );
-};
+}, areActiveOptionsDisplayPropsEqual);
 // Active Tools Display Component - Shows INSIDE the textarea at the bottom
 const ActiveToolsDisplay = ({
   isWebSearchActive,
@@ -3255,7 +3273,38 @@ const getModelDisplayLabel = (model: any) => {
     .trim() || label
 }
 
-const NavbarModelSelector = ({
+const getNavbarModelSelectorChatSignature = (chat: any) => [
+  chat?.id,
+  chat?.model,
+  chat?.title,
+  chat?.customGptId,
+  chat?.customGpt?.id,
+  chat?.customGpt?.name,
+  chat?.customGpt?.iconUrl,
+  chat?.customGpt?.modelName,
+  chat?.customGpt?.shareId,
+  chat?.projectId,
+  chat?.project?.id,
+  chat?.project?.name,
+  chat?.project?._count?.files,
+  chat?.project?._count?.chats,
+  chat?.project?._count?.memories,
+  chat?.project?._count?.documents,
+].map((part) => String(part ?? "")).join("\u0001")
+
+function areNavbarModelSelectorPropsEqual(prev: any, next: any) {
+  return (
+    prev.selectedModel === next.selectedModel &&
+    prev.availableModels === next.availableModels &&
+    prev.chatTypes === next.chatTypes &&
+    prev.setSelectedModel === next.setSelectedModel &&
+    prev.setSelectedProvider === next.setSelectedProvider &&
+    prev.setCurrentChat === next.setCurrentChat &&
+    getNavbarModelSelectorChatSignature(prev.currentChat) === getNavbarModelSelectorChatSignature(next.currentChat)
+  )
+}
+
+const NavbarModelSelector = React.memo(function NavbarModelSelector({
   selectedModel,
   setSelectedModel,
   availableModels,
@@ -3263,7 +3312,7 @@ const NavbarModelSelector = ({
   chatTypes,
   currentChat,
   setCurrentChat,
-}: any) => {
+}: any) {
   const selectedModelData = availableModels.find((m: any) => m.name === selectedModel);
   const [searchQuery, setSearchQuery] = React.useState("");
   // Re-fetch the model list when the picker opens so a model an admin just
@@ -4178,7 +4227,7 @@ const NavbarModelSelector = ({
       </DropdownMenuContent>
     </DropdownMenu>
   );
-};
+}, areNavbarModelSelectorPropsEqual);
 
 export default function ChatInterface() {
   return <ChatInterfaceContent />
@@ -5349,6 +5398,9 @@ But first, you need to connect your Spotify account securely using the button be
   const chatHeaderRef = React.useRef<HTMLDivElement>(null);
   const chatComposerDockRef = React.useRef<HTMLDivElement>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+  const chatLayoutVarsRef = React.useRef<Record<string, number>>({});
+  const composerResizeFrameRef = React.useRef<number | null>(null);
+  const textareaLayoutRef = React.useRef<{ height: number; overflowY: string }>({ height: 0, overflowY: "" });
 
   // Slash-command menu state. Tracks whether the menu is open and what filter
   // string the user has typed after the leading "/". The menu auto-opens
@@ -5410,7 +5462,10 @@ But first, you need to connect your Spotify account securely using the button be
     if (!root) return;
 
     const setPx = (name: string, value: number) => {
-      root.style.setProperty(name, `${Math.max(0, Math.ceil(value))}px`);
+      const roundedValue = Math.max(0, Math.ceil(value));
+      if (chatLayoutVarsRef.current[name] === roundedValue) return;
+      chatLayoutVarsRef.current[name] = roundedValue;
+      root.style.setProperty(name, `${roundedValue}px`);
     };
 
     setPx("--chat-header-height", chatHeaderRef.current?.getBoundingClientRect().height || 64);
@@ -5431,26 +5486,44 @@ But first, you need to connect your Spotify account securely using the button be
     const maxHeight = getComposerTextareaMaxHeight();
     textarea.style.height = "auto";
     const scrollHeight = textarea.scrollHeight;
+    const nextHeight = Math.min(scrollHeight, maxHeight);
+    const nextOverflowY = scrollHeight > maxHeight ? "auto" : "hidden";
+    const previousLayout = textareaLayoutRef.current;
+    const heightChanged = previousLayout.height !== nextHeight;
+    const overflowChanged = previousLayout.overflowY !== nextOverflowY;
 
-    if (scrollHeight > maxHeight) {
-      textarea.style.height = `${maxHeight}px`;
-      textarea.style.overflowY = "auto";
-      window.setTimeout(() => {
-        textarea.scrollTop = textarea.scrollHeight;
-      }, 0);
-    } else {
-      textarea.style.height = `${scrollHeight}px`;
-      textarea.style.overflowY = "hidden";
+    textarea.style.height = `${nextHeight}px`;
+    if (overflowChanged) {
+      textarea.style.overflowY = nextOverflowY;
+    }
+    if (heightChanged || overflowChanged) {
+      textareaLayoutRef.current = { height: nextHeight, overflowY: nextOverflowY };
+    }
+    if (nextOverflowY === "auto" && document.activeElement === textarea) {
+      textarea.scrollTop = textarea.scrollHeight;
     }
 
     syncChatLayoutVars();
-    window.requestAnimationFrame(() => {
+    if (composerResizeFrameRef.current !== null) {
+      window.cancelAnimationFrame(composerResizeFrameRef.current);
+    }
+    composerResizeFrameRef.current = window.requestAnimationFrame(() => {
+      composerResizeFrameRef.current = null;
       syncChatLayoutVars();
-      if (document.activeElement === textarea) {
+      if (heightChanged && document.activeElement === textarea) {
         scrollToBottom();
       }
     });
   }, [getComposerTextareaMaxHeight, scrollToBottom, syncChatLayoutVars]);
+
+  React.useEffect(() => {
+    return () => {
+      if (composerResizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(composerResizeFrameRef.current);
+        composerResizeFrameRef.current = null;
+      }
+    };
+  }, []);
 
   // Handle textarea input change with smooth scrolling
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -5458,9 +5531,6 @@ But first, you need to connect your Spotify account securely using the button be
     setInput(value);
     // Persist the in-progress draft per chat (debounced inside the hook).
     chatDraft.save(value);
-
-    // Use requestAnimationFrame to ensure DOM is updated before scrolling
-    requestAnimationFrame(resizeComposerTextarea);
   };
 
   // Insert text at the textarea caret (replacing any selection), keeping
@@ -7137,6 +7207,13 @@ But first, you need to connect your Spotify account securely using the button be
     });
     setComposerPreviewIndex(index);
   }, [uploadedFiles]);
+  const handleComposerAttachmentPreview = React.useCallback((
+    _attachment: AttachmentLike,
+    _siblings: AttachmentLike[],
+    index: number,
+  ) => {
+    openComposerDocumentPreview(index);
+  }, [openComposerDocumentPreview]);
 
   React.useEffect(() => {
     if (composerPreviewIndex === null) return;
@@ -9062,7 +9139,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }
   }
 
-  const removeFile = (index: number) => {
+  const removeFile = React.useCallback((index: number) => {
     setUploadedFiles((cur: any[]) => {
       const removed = cur[index];
       // Removing a chip mid-upload acts as CANCEL: remember the tempId so
@@ -9083,7 +9160,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       if (current === index) return null;
       return index < current ? current - 1 : current;
     });
-  }
+  }, [setUploadedFiles])
 
   // Keyboard reordering of attachment chips (Alt+←/→ on a focused chip).
   // Preserves every other invariant: send order == visual order.
@@ -10185,7 +10262,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       retryUpload={retryUpload}
                       restoreLongPasteToInput={restoreLongPasteToInput}
                       moveFile={moveFile}
-                      onPreviewAttachment={(_attachment, _siblings, index) => openComposerDocumentPreview(index)}
+                      onPreviewAttachment={handleComposerAttachmentPreview}
                       onFileProcessingStatusChange={handleFileProcessingStatusChange}
                     />
                     <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
@@ -10737,7 +10814,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           retryUpload={retryUpload}
                           restoreLongPasteToInput={restoreLongPasteToInput}
                           moveFile={moveFile}
-                          onPreviewAttachment={(_attachment, _siblings, index) => openComposerDocumentPreview(index)}
+                          onPreviewAttachment={handleComposerAttachmentPreview}
                           onFileProcessingStatusChange={handleFileProcessingStatusChange}
                         />
                         <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />

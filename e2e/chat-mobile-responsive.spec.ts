@@ -286,6 +286,9 @@ test("390px mobile model and tools menus stay inside the viewport", async ({ pag
   await page.getByRole("button", { name: /Adjuntar archivos y herramientas|attach files & tools/i }).click()
   const toolsMenu = page.locator('[role="menu"]').filter({ hasText: /Subir archivos|Upload Files/ }).first()
   await expect(toolsMenu).toBeVisible()
+  const appsMenuItem = toolsMenu.getByRole("menuitem", { name: /APPs/i })
+  await expect(appsMenuItem).toBeVisible()
+  await appsMenuItem.click()
   await expect(toolsMenu.getByText("Gmail", { exact: true })).toBeVisible()
   await expect(toolsMenu.getByText("Google Drive", { exact: true })).toBeVisible()
   const toolsBox = await toolsMenu.boundingBox()
@@ -322,4 +325,70 @@ test("390px mobile chat stays pinned when visualViewport is reduced by a simulat
   expect(metrics.composerSurfaceBottomGap).toBeLessThanOrEqual(30)
   expect(metrics.scrollPaddingBottom).toBeGreaterThanOrEqual(metrics.composerHeight - 1)
   expect(metrics.htmlScrollWidth).toBeLessThanOrEqual(metrics.htmlClientWidth + 1)
+})
+
+test("mobile composer typing does not remount controls or repaint layout vars per key", async ({ page }) => {
+  await page.addInitScript(() => {
+    const originalSetProperty = CSSStyleDeclaration.prototype.setProperty
+    Object.defineProperty(window, "__siraChatVarWrites", {
+      configurable: true,
+      writable: true,
+      value: 0,
+    })
+    CSSStyleDeclaration.prototype.setProperty = function(name: string, value?: string | null, priority?: string) {
+      if (typeof name === "string" && name.startsWith("--chat-")) {
+        ;(window as any).__siraChatVarWrites += 1
+      }
+      return originalSetProperty.call(this, name, value ?? "", priority ?? "")
+    }
+  })
+
+  await openMobileChat(page, 390, 844)
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent("sira:reuse-attachment", {
+      detail: {
+        id: "file-mobile-long-paste",
+        name: "CAPITULO I INTRODUCCION.txt",
+        mimeType: "text/plain",
+        size: 61319,
+        url: "/api/files/file-mobile-long-paste",
+        longPasteMeta: {
+          title: "CAPITULO I: INTRODUCCION",
+          originalCharCount: 61319,
+          originalWordCount: 8033,
+          contentKind: "markdown",
+          preview: "CAPITULO I: INTRODUCCION",
+        },
+      },
+    }))
+  })
+
+  const textarea = page.locator(".chat-composer-dock textarea")
+  await textarea.focus()
+  await page.waitForTimeout(100)
+
+  await page.evaluate(() => {
+    ;(window as any).__siraModelTrigger = document.querySelector(".chat-composer-dock .chat-model-trigger")
+    ;(window as any).__siraAttachButton = document.querySelector(".chat-composer-dock [aria-label*='Adjuntar'], .chat-composer-dock [aria-label*='Attach']")
+    ;(window as any).__siraSendButton = document.querySelector(".chat-composer-dock button[aria-label^='Enviar'], .chat-composer-dock button[aria-label^='Modo de voz']")
+    ;(window as any).__siraChatVarWrites = 0
+  })
+
+  await textarea.type("dfffffff", { delay: 12 })
+  await page.waitForTimeout(150)
+
+  const stability = await page.evaluate(() => ({
+    modelSame: (window as any).__siraModelTrigger === document.querySelector(".chat-composer-dock .chat-model-trigger"),
+    attachSame: (window as any).__siraAttachButton === document.querySelector(".chat-composer-dock [aria-label*='Adjuntar'], .chat-composer-dock [aria-label*='Attach']"),
+    sendSame: (window as any).__siraSendButton === document.querySelector(".chat-composer-dock button[aria-label^='Enviar'], .chat-composer-dock button[aria-label^='Modo de voz']"),
+    chatVarWrites: (window as any).__siraChatVarWrites,
+    value: (document.querySelector(".chat-composer-dock textarea") as HTMLTextAreaElement | null)?.value || "",
+  }))
+
+  expect(stability.value).toBe("dfffffff")
+  expect(stability.modelSame).toBe(true)
+  expect(stability.attachSame).toBe(true)
+  expect(stability.sendSame).toBe(true)
+  expect(stability.chatVarWrites).toBeLessThanOrEqual(4)
 })
