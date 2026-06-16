@@ -77,13 +77,13 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@grpc/proto-loader` | 0.8.1 | Apache-2.0 | [link](https://github.com/grpc/grpc-node) |
 | `@mozilla/readability` | 0.6.0 | Apache-2.0 | [link](https://github.com/mozilla/readability) |
 | `@opentelemetry/api` | 1.9.0, 1.9.1 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
-| `@opentelemetry/api-logs` | 0.207.0, 0.208.0, 0.212.0, 0.214.0, 0.218.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
+| `@opentelemetry/api-logs` | 0.207.0, 0.212.0, 0.214.0, 0.218.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/auto-instrumentations-node` | 0.76.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js-contrib) |
 | `@opentelemetry/configuration` | 0.218.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/context-async-hooks` | 2.7.1 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
-| `@opentelemetry/core` | 2.2.0, 2.6.1, 2.7.1 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
+| `@opentelemetry/core` | 2.6.1, 2.7.1 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/exporter-logs-otlp-grpc` | 0.218.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
-| `@opentelemetry/exporter-logs-otlp-http` | 0.208.0, 0.218.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
+| `@opentelemetry/exporter-logs-otlp-http` | 0.218.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/exporter-logs-otlp-proto` | 0.218.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/exporter-metrics-otlp-grpc` | 0.218.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/exporter-metrics-otlp-http` | 0.218.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
@@ -134,9 +134,9 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@opentelemetry/instrumentation-tedious` | 0.33.0, 0.37.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js-contrib) |
 | `@opentelemetry/instrumentation-undici` | 0.28.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js-contrib) |
 | `@opentelemetry/instrumentation-winston` | 0.62.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js-contrib) |
-| `@opentelemetry/otlp-exporter-base` | 0.208.0, 0.218.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
+| `@opentelemetry/otlp-exporter-base` | 0.218.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/otlp-grpc-exporter-base` | 0.218.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
-| `@opentelemetry/otlp-transformer` | 0.208.0, 0.218.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
+| `@opentelemetry/otlp-transformer` | 0.218.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/propagator-b3` | 2.7.1 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/propagator-jaeger` | 2.7.1 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/redis-common` | 0.38.3 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js-contrib) |
@@ -145,11 +145,11 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@opentelemetry/resource-detector-azure` | 0.26.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js-contrib) |
 | `@opentelemetry/resource-detector-container` | 0.8.9 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js-contrib) |
 | `@opentelemetry/resource-detector-gcp` | 0.53.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js-contrib) |
-| `@opentelemetry/resources` | 2.2.0, 2.7.1 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
-| `@opentelemetry/sdk-logs` | 0.208.0, 0.218.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
-| `@opentelemetry/sdk-metrics` | 2.2.0, 2.7.1 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
+| `@opentelemetry/resources` | 2.7.1 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
+| `@opentelemetry/sdk-logs` | 0.218.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
+| `@opentelemetry/sdk-metrics` | 2.7.1 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/sdk-node` | 0.218.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
-| `@opentelemetry/sdk-trace-base` | 2.2.0, 2.7.1 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
+| `@opentelemetry/sdk-trace-base` | 2.7.1 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/sdk-trace-node` | 2.7.1 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/semantic-conventions` | 1.40.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/sql-common` | 0.41.2 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js-contrib) |
@@ -244,7 +244,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@protobufjs/aspromise` | 1.1.2 | BSD-3-Clause | [link](https://github.com/dcodeIO/protobuf.js) |
 | `@protobufjs/base64` | 1.1.2 | BSD-3-Clause | [link](https://github.com/dcodeIO/protobuf.js) |
 | `@protobufjs/codegen` | 2.0.5 | BSD-3-Clause | [link](https://github.com/dcodeIO/protobuf.js) |
-| `@protobufjs/eventemitter` | 1.1.0, 1.1.1 | BSD-3-Clause | [link](https://github.com/dcodeIO/protobuf.js) |
+| `@protobufjs/eventemitter` | 1.1.1 | BSD-3-Clause | [link](https://github.com/dcodeIO/protobuf.js) |
 | `@protobufjs/fetch` | 1.1.1 | BSD-3-Clause | [link](https://github.com/dcodeIO/protobuf.js) |
 | `@protobufjs/float` | 1.0.2 | BSD-3-Clause | [link](https://github.com/dcodeIO/protobuf.js) |
 | `@protobufjs/inquire` | 1.1.2 | BSD-3-Clause | [link](https://github.com/dcodeIO/protobuf.js) |
@@ -289,7 +289,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `normalize-package-data` | 5.0.0 | BSD-2-Clause | [link](https://github.com/npm/normalize-package-data) |
 | `nth-check` | 2.1.1 | BSD-2-Clause | [link](https://github.com/fb55/nth-check) |
 | `option` | 0.2.4 | BSD-2-Clause | [link](https://github.com/mwilliamson/node-options) |
-| `protobufjs` | 7.6.0, 7.6.1 | BSD-3-Clause | [link](https://github.com/protobufjs/protobuf.js) |
+| `protobufjs` | 7.6.1 | BSD-3-Clause | [link](https://github.com/protobufjs/protobuf.js) |
 | `qs` | 6.15.2 | BSD-3-Clause | [link](https://github.com/ljharb/qs) |
 | `robot3` | 0.4.1 | BSD-2-Clause | [link](https://github.com/matthewp/robot) |
 | `rw` | 1.3.3 | BSD-3-Clause | [link](https://github.com/mbostock/rw) |
@@ -328,7 +328,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
-| `posthog-js` | 1.372.6 | Custom: LICENSE | [link](https://github.com/PostHog/posthog-js) |
+| `posthog-js` | 1.386.8 | Custom: LICENSE | [link](https://github.com/PostHog/posthog-js) |
 
 ## Custom: license (23)
 
@@ -574,8 +574,8 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@peculiar/utils` | 2.0.3 | MIT | [link](https://github.com/PeculiarVentures/pvtsutils) |
 | `@pinojs/redact` | 0.4.0 | MIT | [link](https://github.com/pinojs/redact) |
 | `@pkgjs/parseargs` | 0.11.0 | MIT | [link](https://github.com/pkgjs/parseargs) |
-| `@posthog/core` | 1.28.0 | MIT | [link](https://github.com/PostHog/posthog-js) |
-| `@posthog/types` | 1.372.6 | MIT | [link](https://github.com/PostHog/posthog-js) |
+| `@posthog/core` | 1.32.5 | MIT | [link](https://github.com/PostHog/posthog-js) |
+| `@posthog/types` | 1.386.4 | MIT | [link](https://github.com/PostHog/posthog-js) |
 | `@radix-ui/number` | 1.1.0, 1.1.1 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/primitive` | 1.1.1, 1.1.3 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/react-accordion` | 1.2.2 | MIT | [link](https://github.com/radix-ui/primitives) |
@@ -798,7 +798,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `asynckit` | 0.4.0 | MIT | [link](https://github.com/alexindigo/asynckit) |
 | `atomic-sleep` | 1.0.0 | MIT | [link](https://github.com/davidmarkclements/atomic-sleep) |
 | `autoprefixer` | 10.5.0 | MIT | [link](https://github.com/postcss/autoprefixer) |
-| `axios` | 1.16.1 | MIT | [link](https://github.com/axios/axios) |
+| `axios` | 1.16.1, 1.18.0 | MIT | [link](https://github.com/axios/axios) |
 | `bail` | 2.0.2 | MIT | [link](https://github.com/wooorm/bail) |
 | `balanced-match` | 1.0.2, 4.0.4 | MIT | [link](https://github.com/juliangruber/balanced-match) |
 | `base64-js` | 0.0.8, 1.5.1 | MIT | [link](https://github.com/beatgammit/base64-js) |
@@ -976,7 +976,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `finalhandler` | 1.3.1, 2.1.1 | MIT | [link](https://github.com/pillarjs/finalhandler) |
 | `follow-redirects` | 1.16.0 | MIT | [link](https://github.com/follow-redirects/follow-redirects) |
 | `fontkit` | 2.0.4 | MIT | [link](https://github.com/foliojs/fontkit) |
-| `form-data` | 3.0.4, 4.0.5 | MIT | [link](https://github.com/form-data/form-data) |
+| `form-data` | 3.0.4, 4.0.6 | MIT | [link](https://github.com/form-data/form-data) |
 | `format` | 0.2.2 | MIT | [link](https://github.com/samsonjs/format) |
 | `formdata-polyfill` | 4.0.10 | MIT | [link](git+https://jimmywarting@github.com/jimmywarting/FormData) |
 | `formidable` | 1.2.6, 3.5.4 | MIT | [link](https://github.com/node-formidable/formidable) |
@@ -1003,7 +1003,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `has-symbols` | 1.1.0 | MIT | [link](https://github.com/inspect-js/has-symbols) |
 | `has-tostringtag` | 1.0.2 | MIT | [link](https://github.com/inspect-js/has-tostringtag) |
 | `hash.js` | 1.1.7 | MIT | [link](https://github.com/indutny/hash.js) |
-| `hasown` | 2.0.2, 2.0.3 | MIT | [link](https://github.com/inspect-js/hasOwn) |
+| `hasown` | 2.0.2, 2.0.4 | MIT | [link](https://github.com/inspect-js/hasOwn) |
 | `hast-util-from-html` | 2.0.3 | MIT | [link](https://github.com/syntax-tree/hast-util-from-html) |
 | `hast-util-from-html-isomorphic` | 2.0.0 | MIT | [link](https://github.com/syntax-tree/hast-util-from-html-isomorphic) |
 | `hast-util-from-parse5` | 8.0.3 | MIT | [link](https://github.com/syntax-tree/hast-util-from-parse5) |
@@ -1485,7 +1485,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `tinyglobby` | 0.2.16 | MIT | [link](https://github.com/SuperchupuDev/tinyglobby) |
 | `tldts` | 6.1.86 | MIT | [link](https://github.com/remusao/tldts) |
 | `tldts-core` | 6.1.86 | MIT | [link](https://github.com/remusao/tldts) |
-| `tmp` | 0.2.6 | MIT | [link](https://github.com/raszi/node-tmp) |
+| `tmp` | 0.2.6, 0.2.7 | MIT | [link](https://github.com/raszi/node-tmp) |
 | `to-regex-range` | 5.0.1 | MIT | [link](https://github.com/micromatch/to-regex-range) |
 | `toad-cache` | 3.7.0 | MIT | [link](https://github.com/kibertoad/toad-cache) |
 | `toidentifier` | 1.0.1 | MIT | [link](https://github.com/component/toidentifier) |
@@ -1549,7 +1549,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `whatwg-mimetype` | 4.0.0 | MIT | [link](https://github.com/jsdom/whatwg-mimetype) |
 | `whatwg-url` | 14.2.0, 5.0.0 | MIT | [link](https://github.com/jsdom/whatwg-url) |
 | `wrap-ansi` | 7.0.0, 8.1.0 | MIT | [link](https://github.com/chalk/wrap-ansi) |
-| `ws` | 8.20.1 | MIT | [link](https://github.com/websockets/ws) |
+| `ws` | 8.21.0 | MIT | [link](https://github.com/websockets/ws) |
 | `xml` | 1.0.1 | MIT | [link](https://github.com/dylang/node-xml) |
 | `xml-js` | 1.6.11 | MIT | [link](https://github.com/nashwaan/xml-js) |
 | `xml-naming` | 0.1.0 | MIT | [link](https://github.com/NaturalIntelligence/xml-naming) |
