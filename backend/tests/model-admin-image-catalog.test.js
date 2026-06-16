@@ -13,6 +13,7 @@ const EXPECTED_IMAGE_MODELS = [
   'openai/gpt-5.4-image-2',
   'google/gemini-3.1-flash-image-preview',
   'google/gemini-3-pro-image-preview',
+  'google/gemini-2.5-flash-image',
   'bytedance-seed/seedream-4.5',
   'recraftai/recraft-v3',
   'ideogram/ideogram-v2',

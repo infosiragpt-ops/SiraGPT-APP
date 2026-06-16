@@ -64,6 +64,7 @@ function enforceOrgBudgetSafe(req, res, next) {
 const prisma = require('../config/database');
 const { tryConsumePlanQuota, checkPaidTokenCap, recordApiUsage } = require('../services/plan-quota');
 const aiService = require('../services/ai-service');
+const imageEngine = require('../services/media/image-engine');
 const { classifyImageGenError } = require('../services/image-error-classifier');
 const agentFilters = require('../services/agents/filters');
 const OpenAI = require('openai');
@@ -6475,6 +6476,34 @@ function openRouterImageSizeFor(quality) {
   return quality === '2K' || quality === '4K' ? '2K' : '1K';
 }
 
+const ENGINE_PROVIDER_TO_ROUTE_PROVIDER = {
+  openai: 'OpenAI',
+  gemini: 'Gemini',
+  openrouter: 'OpenRouter',
+  fal: 'Fal',
+  xai: 'xAI',
+};
+
+function toImageEngineProvider(provider) {
+  const normalized = String(provider || '').trim().toLowerCase();
+  if (normalized === 'openrouter') return 'openrouter';
+  if (normalized === 'openai') return 'openai';
+  if (normalized === 'gemini') return 'gemini';
+  if (normalized === 'fal' || normalized === 'fal.ai') return 'fal';
+  if (normalized === 'xai' || normalized === 'x-ai') return 'xai';
+  return undefined;
+}
+
+function fromImageEngineProvider(provider, fallback) {
+  return ENGINE_PROVIDER_TO_ROUTE_PROVIDER[String(provider || '').trim().toLowerCase()] || fallback;
+}
+
+function imageProviderAttemptTimeoutMs() {
+  const raw = Number(process.env.CHAT_IMAGE_PROVIDER_TIMEOUT_MS || process.env.IMAGE_GEN_PROVIDER_TIMEOUT_MS || 45000);
+  if (!Number.isFinite(raw)) return 45000;
+  return Math.min(180000, Math.max(5000, raw));
+}
+
 // gpt-image-2 only accepts a fixed set of sizes (1024x1024 | 1536x1024 |
 // 1024x1536 | auto) and REJECTS the old DALL-E sizes (1792x1024 / 1024x1792
 // → 400 invalid size). Map the app's aspect ratio to the nearest valid
@@ -6577,10 +6606,10 @@ function createOpenRouterClient() {
   });
 }
 
-// Reliable OpenRouter image fallback — FLUX 1.1 Pro has broad endpoint
-// availability and does not require special output-modality negotiation.
-// Replaces gpt-5.4-image-2 which was returning ECONNRESET on OpenRouter.
-const BEST_OPENROUTER_IMAGE_MODEL = 'black-forest-labs/flux-1.1-pro';
+// Reliable OpenRouter image fallback. Keep this aligned with the current
+// OpenRouter model catalog: the route uses it when a requested image model has
+// no usable image output endpoint.
+const BEST_OPENROUTER_IMAGE_MODEL = 'google/gemini-2.5-flash-image';
 
 async function generateOpenRouterImage(openrouter, { model, prompt, aspectRatio, quality, signal }) {
   if (!process.env.OPENROUTER_API_KEY) {
@@ -6836,12 +6865,6 @@ router.post(
       const userId = req.user.id;
       console.log('userId', userId);
 
-      const openai = provider === "OpenRouter"
-        ? createOpenRouterClient()
-        : provider === "Fal"
-          ? null // fal.ai uses its own SDK (see generateFalImage); no OpenAI-style client
-          : createProviderClient(provider);
-
       // ✅ Paid-plan token cap (single source of truth: plan-quota.js)
       const quotaCap = checkPaidTokenCap(req.user);
       if (!quotaCap.ok) return res.status(quotaCap.status).json(quotaCap.body);
@@ -7008,7 +7031,7 @@ router.post(
         }
       };
 
-      let imageBase64s;
+      let imageResults;
       const timeoutPromise = new Promise((_, reject) => {
         setTimeout(() => {
           // Deadline reached: the response below becomes an error either
@@ -7042,72 +7065,41 @@ router.post(
           }
           return aiService.generateImageFromImage(imagePath, imagePrompt, editProvider);
         }
-
-        if (provider === "OpenRouter") {
-          return generateOpenRouterImage(openai, {
-            model,
-            prompt: imagePrompt,
-            aspectRatio,
-            quality,
-            signal: requestAbortController.signal,
-          });
+        const result = await imageEngine.generateImage({
+          prompt: imagePrompt,
+          model,
+          provider: toImageEngineProvider(provider),
+          aspectRatio,
+          quality,
+          n: imageCount,
+          signal: requestAbortController.signal,
+          timeoutMs: imageProviderAttemptTimeoutMs(),
+          failover: true,
+        });
+        if (!result.ok || !result.images?.length) {
+          const err = new Error(result.error || 'Image provider did not return any image data.');
+          err.code = result.code || 'image_generation_failed';
+          err.attempts = result.attempts || [];
+          throw err;
         }
-
-        if (provider === "Fal") {
-          return generateFalImage({
-            model,
-            prompt: imagePrompt,
-            aspectRatio,
-            signal: requestAbortController.signal,
-          });
-        }
-
-        if (provider === "Gemini") {
-          const geminiImageModel = String(model || '').trim() || 'imagen-4.0-generate-001';
-          // Google's OpenAI-compatible image endpoint returns b64_json by
-          // default and REJECTS `response_format` with
-          // "400 Unknown parameter: 'response_format'". Do not send it.
-          const response = await openai.images.generate({
-            model: geminiImageModel,
-            prompt: imagePrompt,
-            n: 1,
-            size: requestedImageSize
-          }, { signal: requestAbortController.signal });
-          return response.data?.[0]?.b64_json;
-        }
-
-        const openAiImageModel = String(model || '').trim() || 'gpt-image-2';
-        const openAiImagePayload = isOpenAiResponsesImageModel(openAiImageModel)
-          ? {
-              model: openAiImageModel,
-              prompt: imagePrompt,
-              n: 1,
-              size: gptImageSizeFor(aspectRatio),
-              quality: gptImageQualityFor(quality),
-            }
-          : {
-              model: openAiImageModel,
-              prompt: imagePrompt,
-              response_format: 'b64_json',
-              n: 1,
-              size: requestedImageSize,
-              quality: openAiImageQualityFor(quality),
-            };
-
-        const response = await openai.images.generate(openAiImagePayload, { signal: requestAbortController.signal });
-        const { b64_json, ...rest } = response.data[0];
-
-        console.log("📦 Remaining fields in imageData (excluding b64_json):", rest);
-        return b64_json;
+        const actualProvider = fromImageEngineProvider(result.provider, provider);
+        return result.images.map((img) => ({
+          b64: img.b64,
+          provider: actualProvider,
+          model: result.model || model,
+          attempts: result.attempts || [],
+        }));
       };
 
-      imageBase64s = await Promise.race([
-        Promise.all(Array.from({ length: imageCount }, () => generateSingleImage())),
+      imageResults = await Promise.race([
+        imagePath
+          ? Promise.all(Array.from({ length: imageCount }, () => generateSingleImage()))
+          : generateSingleImage(),
         timeoutPromise,
       ]);
-      imageBase64s = imageBase64s.filter(Boolean);
+      imageResults = imageResults.flat().filter((item) => item && (item.b64 || typeof item === 'string'));
 
-      if (!imageBase64s.length) {
+      if (!imageResults.length) {
         throw new Error('Image provider did not return any image data.');
       }
 
@@ -7124,8 +7116,11 @@ router.post(
       }
 
       const generatedFiles = [];
-      for (let index = 0; index < imageBase64s.length; index += 1) {
-        const { imageUrl, fileId: newFileId } = await saveBase64Image(imageBase64s[index], userId, prompt, aspectRatio);
+      for (let index = 0; index < imageResults.length; index += 1) {
+        const imageResult = typeof imageResults[index] === 'string'
+          ? { b64: imageResults[index], provider, model }
+          : imageResults[index];
+        const { imageUrl, fileId: newFileId } = await saveBase64Image(imageResult.b64, userId, prompt, aspectRatio);
         generatedFiles.push({
           type: 'image',
           url: imageUrl,
@@ -7133,9 +7128,9 @@ router.post(
           fileId: newFileId,
           aspectRatio,
           index: index + 1,
-          count: imageBase64s.length,
-          model,
-          provider,
+          count: imageResults.length,
+          model: imageResult.model || model,
+          provider: imageResult.provider || provider,
           quality,
         });
       }
@@ -7175,7 +7170,8 @@ router.post(
       }
 
       // ✅ Track usage (single source of truth: plan-quota.js)
-      const updatedUser = await recordApiUsage({ prisma, userId, model, tokens: 1000 * generatedFiles.length });
+      const usageModel = generatedFiles[0]?.model || model;
+      const updatedUser = await recordApiUsage({ prisma, userId, model: usageModel, tokens: 1000 * generatedFiles.length });
 
       // Headers ya enviados arriba para sobrevivir al proxy; cerramos
       // con el payload JSON real (los espacios de heartbeat al inicio

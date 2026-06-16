@@ -40,13 +40,13 @@ const DEFAULT_MODEL_BY_PROVIDER = {
   openai: process.env.SIRAGPT_IMAGE_MODEL_OPENAI || 'gpt-image-2',
   gemini: process.env.SIRAGPT_IMAGE_MODEL_GEMINI || 'imagen-4.0-generate-001',
   fal: process.env.SIRAGPT_IMAGE_MODEL_FAL || 'fal-ai/flux/schnell',
-  openrouter: process.env.SIRAGPT_IMAGE_MODEL_OPENROUTER || 'black-forest-labs/flux-1.1-pro',
+  openrouter: process.env.SIRAGPT_IMAGE_MODEL_OPENROUTER || 'google/gemini-2.5-flash-image',
   xai: process.env.SIRAGPT_IMAGE_MODEL_XAI || 'grok-2-image',
 };
 
 // Broadly-available OpenRouter image model used as the in-provider retry
 // when the requested model has no endpoint for image output modalities.
-const OPENROUTER_FALLBACK_MODEL = 'black-forest-labs/flux-1.1-pro';
+const OPENROUTER_FALLBACK_MODEL = 'google/gemini-2.5-flash-image';
 
 const EDIT_MODEL_BY_PROVIDER = {
   gemini: process.env.SIRAGPT_IMAGE_EDIT_MODEL_GEMINI || 'gemini-2.5-flash-image',
@@ -232,6 +232,37 @@ function withTimeout(promise, ms, label) {
     if (timer.unref) timer.unref();
   });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+function createAttemptSignal(parentSignal, timeoutMs, label) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    if (!controller.signal.aborted) {
+      controller.abort(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }
+  }, timeoutMs);
+  if (timeout.unref) timeout.unref();
+
+  const forwardAbort = () => {
+    if (!controller.signal.aborted) {
+      controller.abort(parentSignal?.reason || new Error('aborted'));
+    }
+  };
+
+  if (parentSignal) {
+    if (parentSignal.aborted) forwardAbort();
+    else parentSignal.addEventListener('abort', forwardAbort, { once: true });
+  }
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timeout);
+      if (parentSignal && typeof parentSignal.removeEventListener === 'function') {
+        parentSignal.removeEventListener('abort', forwardAbort);
+      }
+    },
+  };
 }
 
 // ── Generation adapters (one per provider) ────────────────────────────────
@@ -440,10 +471,11 @@ async function generateImage(spec = {}) {
       continue;
     }
     const model = step.model || DEFAULT_MODEL_BY_PROVIDER[step.provider];
+    const attemptSignal = createAttemptSignal(spec.signal, timeoutMs, `${step.provider}:${model}`);
     try {
       const b64s = await GENERATORS[step.provider]({
         model, prompt, ratio, quality, n,
-        signal: spec.signal, timeoutMs,
+        signal: attemptSignal.signal, timeoutMs,
       });
       if (!b64s || !b64s.length) throw new Error('provider returned no image data');
       attempts.push({ provider: step.provider, model, ok: true });
@@ -460,6 +492,8 @@ async function generateImage(spec = {}) {
         return { ok: false, code: 'ABORTED', error: 'generation aborted', attempts };
       }
       attempts.push({ provider: step.provider, model, ok: false, error: (err && err.message) || String(err) });
+    } finally {
+      attemptSignal.cleanup();
     }
   }
 
@@ -612,6 +646,7 @@ module.exports = {
     stripImageDataUrl,
     extractOpenRouterImageBase64s,
     withTimeout,
+    createAttemptSignal,
     setOpenAIFactory: (fn) => { _openAIFactory = fn; },
     setGoogleGenAIFactory: (fn) => { _googleGenAIFactory = fn; },
     setFalFactory: (fn) => { _falFactory = fn; },

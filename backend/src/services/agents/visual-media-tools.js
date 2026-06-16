@@ -199,7 +199,7 @@ const generateImage = {
       style: { type: 'string', description: 'Optional style hint: "realistic", "vivid", "natural", "photographic", "digital-art", "anime", "oil-painting", "line-art". Default: "vivid".' },
       aspectRatio: { type: 'string', enum: ['square', 'wide', 'portrait'], description: 'Aspect ratio hint. Default: "square". wide → landscape, portrait → vertical.' },
       quality: { type: 'string', enum: ['standard', 'hd'], description: 'Quality level. Default: "standard".' },
-      model: { type: 'string', description: 'Optional image model id, e.g. "gpt-image-2", "imagen-4.0-generate-001", "fal-ai/flux/schnell", "black-forest-labs/flux-1.1-pro", "grok-2-image". Only pass it when the user asked for a specific model; omit to use the best configured provider.' },
+      model: { type: 'string', description: 'Optional image model id, e.g. "gpt-image-2", "imagen-4.0-generate-001", "fal-ai/flux/schnell", "google/gemini-2.5-flash-image", "grok-2-image". Only pass it when the user asked for a specific model; omit to use the best configured provider.' },
     },
     required: ['prompt'],
     additionalProperties: false,

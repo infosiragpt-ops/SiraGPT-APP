@@ -68,7 +68,7 @@ test('resolveImageModelRoute maps model ids to providers', () => {
   assert.deepEqual(engine.resolveImageModelRoute('imagen-4.0-generate-001'), { provider: 'gemini', model: 'imagen-4.0-generate-001' });
   assert.deepEqual(engine.resolveImageModelRoute('gemini-2.5-flash-image'), { provider: 'gemini', model: 'gemini-2.5-flash-image' });
   assert.deepEqual(engine.resolveImageModelRoute('fal-ai/flux/schnell'), { provider: 'fal', model: 'fal-ai/flux/schnell' });
-  assert.deepEqual(engine.resolveImageModelRoute('black-forest-labs/flux-1.1-pro'), { provider: 'openrouter', model: 'black-forest-labs/flux-1.1-pro' });
+  assert.deepEqual(engine.resolveImageModelRoute('google/gemini-2.5-flash-image'), { provider: 'openrouter', model: 'google/gemini-2.5-flash-image' });
   assert.deepEqual(engine.resolveImageModelRoute('grok-2-image'), { provider: 'xai', model: 'grok-2-image' });
   assert.equal(engine.resolveImageModelRoute('mystery-model'), null);
   assert.equal(engine.resolveImageModelRoute(''), null);
@@ -206,6 +206,46 @@ test('generateImage fails over to the next configured provider', async () => {
   }
 });
 
+test('generateImage aborts a hung provider attempt and fails over', async () => {
+  setEnv({ OPENAI_API_KEY: 'sk-x', GEMINI_API_KEY: 'g-x' });
+  let openAiAborted = false;
+  _internal.setOpenAIFactory((config) => ({
+    images: {
+      generate: async (payload, opts = {}) => {
+        if (config.baseURL && config.baseURL.includes('generativelanguage')) {
+          return { data: [{ b64_json: 'FROM_GEMINI_AFTER_TIMEOUT' }] };
+        }
+        return new Promise((_, reject) => {
+          if (opts.signal?.aborted) {
+            openAiAborted = true;
+            reject(new Error('already aborted'));
+            return;
+          }
+          opts.signal?.addEventListener('abort', () => {
+            openAiAborted = true;
+            reject(new Error(opts.signal.reason?.message || 'aborted'));
+          }, { once: true });
+        });
+      },
+    },
+  }));
+  try {
+    const result = await engine.generateImage({
+      prompt: 'a slow provider should not block fallback',
+      model: 'gpt-image-2',
+      timeoutMs: 20,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.provider, 'gemini');
+    assert.equal(result.images[0].b64, 'FROM_GEMINI_AFTER_TIMEOUT');
+    assert.equal(openAiAborted, true);
+    assert.equal(result.attempts.length, 2);
+    assert.match(result.attempts[0].error, /timed out|aborted/);
+  } finally {
+    restoreEnv();
+  }
+});
+
 test('generateImage with failover disabled stops after the requested provider', async () => {
   setEnv({ OPENAI_API_KEY: 'sk-x', GEMINI_API_KEY: 'g-x' });
   _internal.setOpenAIFactory(fakeOpenAIFactory({
@@ -259,7 +299,7 @@ test('generateImage via OpenRouter extracts images from chat completions', async
     },
   }));
   try {
-    const result = await engine.generateImage({ prompt: 'x', model: 'black-forest-labs/flux-1.1-pro', aspectRatio: '16:9', quality: '2K' });
+    const result = await engine.generateImage({ prompt: 'x', model: 'google/gemini-2.5-flash-image', aspectRatio: '16:9', quality: '2K' });
     assert.equal(result.ok, true);
     assert.equal(result.provider, 'openrouter');
     assert.equal(result.images[0].b64, 'ORDATA');
