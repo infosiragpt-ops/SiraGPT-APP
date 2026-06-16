@@ -4155,7 +4155,7 @@ const NavbarModelSelector = ({
               placeholder="Buscar modelos"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="model-picker-search-input h-7 rounded-md border-0 bg-transparent pl-7 pr-2 text-base shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 sm:text-[12px]"
+              className="model-picker-search-input h-7 rounded-md border-0 bg-transparent pl-7 pr-2 text-base shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 sm:text-[13px]"
               onClick={(e) => e.stopPropagation()}
               onKeyDown={(e) => e.stopPropagation()}
             />
