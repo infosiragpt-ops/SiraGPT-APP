@@ -2,7 +2,7 @@ name: CodeQL
 
 # F5 PR20 — SAST scanning for JS/TS via GitHub's CodeQL. Runs on every
 # push to `main`, every pull-request into `main`, and weekly so the
-# advisories database stays fresh against committed code.
+# advisories database stays fresh against committed production code.
 
 on:
   push:
@@ -38,7 +38,7 @@ jobs:
         uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
-          queries: security-and-quality
+          queries: security-extended
           config: |
             paths-ignore:
               - "apps/upstream/**"
@@ -49,6 +49,10 @@ jobs:
               - "src/upstream/**"
               - "ui/upstream/**"
               - "attached_assets/**"
+              - ".test-dist/**"
+              - "backend/tests/**"
+              - "e2e/**"
+              - "tests/**"
               - "test-results/**"
               - ".next/**"
 
