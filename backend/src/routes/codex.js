@@ -12,6 +12,8 @@
  *   GET  /api/codex/projects/:id/preview/status  → estado del runner  (auth)
  *   POST /api/codex/projects/:id/export          → mirror src a disco  (auth)
  *   POST /api/codex/projects/:id/preview/stop    → dev server off     (auth)
+ *   GET  /api/codex/projects/:id/files           → lista de archivos  (auth)
+ *   GET  /api/codex/projects/:id/file?path=      → contenido archivo  (auth)
  *
  * Montaje: en backend/index.js DESPUÉS del router legacy codex-runs (que ya
  * ocupa POST /api/codex/runs y GET /api/codex/runs/:id). Para no sombrear ese
@@ -49,10 +51,16 @@ function bearerFromQueryFallback(req, _res, next) {
 // NUNCA cachear: el flag puede cambiar y un 304 con cuerpo viejo (enabled:false)
 // dejaría la UI clavada en el flujo antiguo aunque el flag ya esté on. Sin ETag
 // + no-store ⇒ el navegador siempre recibe el valor fresco.
-router.get('/health', (req, res) => {
-  res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
-  res.removeHeader('ETag');
-  res.json({ ok: true, enabled: isCodexV2Enabled() });
+router.get('/health', (_req, res) => {
+  // res.end (not res.json) so Express never attaches an ETag → a conditional
+  // request can't get a 304 with a stale body. Paired with no-store this makes
+  // the flag value impossible to cache.
+  const body = JSON.stringify({ ok: true, enabled: isCodexV2Enabled() });
+  res.writeHead(200, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store, no-cache, must-revalidate',
+  });
+  res.end(body);
 });
 
 router.use((req, res, next) => {
@@ -151,6 +159,39 @@ router.post('/projects/:id/export', authenticateToken, async (req, res) => {
     if (!project) return undefined;
     const out = await createRunnerClient().exportWorkspace(project.id);
     return res.json({ ...out, hostPath: codexExportHostPath(project.id) });
+  } catch (err) {
+    return res.status(502).json({ error: 'runner_unreachable', message: err.message });
+  }
+});
+
+// ── Workspace files (desktop "Código" pane) ─────────────────────────────────
+// List the project's source files (tracked + untracked, excluding gitignored —
+// so node_modules never shows up) and read one file's content, both via the
+// runner (the only process with filesystem access). Read-only.
+router.get('/projects/:id/files', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProject(req, res);
+    if (!project) return undefined;
+    const out = await createRunnerClient().exec(project.id, ['git', 'ls-files', '-co', '--exclude-standard']);
+    const files = String(out?.stdout || '')
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .sort();
+    return res.json({ files });
+  } catch (err) {
+    return res.status(502).json({ error: 'runner_unreachable', message: err.message });
+  }
+});
+
+router.get('/projects/:id/file', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProject(req, res);
+    if (!project) return undefined;
+    const path = String(req.query.path || '').trim();
+    if (!path) return res.status(400).json({ error: 'path_required' });
+    const out = await createRunnerClient().readFile(project.id, path);
+    return res.json(out);
   } catch (err) {
     return res.status(502).json({ error: 'runner_unreachable', message: err.message });
   }

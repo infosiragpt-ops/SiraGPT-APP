@@ -42,6 +42,8 @@ const restoreRunner = mockResolvedModule(runnerPath, {
     devStatus: async () => ({ running: true, ready: true, project: 'p1' }),
     stopDev: async () => ({ ok: true }),
     exportWorkspace: async (project) => { runnerCalls.push(['exportWorkspace', project]); return { ok: true, project, files: 5 }; },
+    exec: async (project, cmd) => { runnerCalls.push(['exec', project, cmd]); return { ok: true, exitCode: 0, stdout: 'src/main.tsx\nindex.html\npackage.json\n', stderr: '' }; },
+    readFile: async (project, path) => { runnerCalls.push(['readFile', project, path]); return { ok: true, path, content: '<html></html>' }; },
   }),
   runnerDevUrl: () => 'http://localhost:5173',
   codexExportHostPath: (id) => `.codex-workspaces/${id}`,
@@ -122,4 +124,27 @@ test('POST /projects/:id/export mirrors via the runner and returns hostPath', as
 test('export route 404s on foreign project ids (ownership gate)', async () => {
   const res = await request(buildApp()).post('/api/codex/projects/nope/export');
   assert.equal(res.status, 404);
+});
+
+test('GET /projects/:id/files lists source files (sorted) via the runner', async () => {
+  const res = await request(buildApp()).get('/api/codex/projects/p1/files');
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.files, ['index.html', 'package.json', 'src/main.tsx']);
+  assert.deepEqual(runnerCalls.at(-1), ['exec', 'p1', ['git', 'ls-files', '-co', '--exclude-standard']]);
+});
+
+test('GET /projects/:id/file reads a file via the runner; requires ?path', async () => {
+  const missing = await request(buildApp()).get('/api/codex/projects/p1/file');
+  assert.equal(missing.status, 400);
+  assert.equal(missing.body.error, 'path_required');
+
+  const res = await request(buildApp()).get('/api/codex/projects/p1/file?path=index.html');
+  assert.equal(res.status, 200);
+  assert.equal(res.body.content, '<html></html>');
+  assert.deepEqual(runnerCalls.at(-1), ['readFile', 'p1', 'index.html']);
+});
+
+test('files/file routes 404 on foreign project ids (ownership gate)', async () => {
+  assert.equal((await request(buildApp()).get('/api/codex/projects/nope/files')).status, 404);
+  assert.equal((await request(buildApp()).get('/api/codex/projects/nope/file?path=x')).status, 404);
 });

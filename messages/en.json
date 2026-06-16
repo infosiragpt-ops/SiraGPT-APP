@@ -548,6 +548,17 @@
       "checklist": "Checklist",
       "files": "Files"
     },
+    "preview": {
+      "start": "▶ Start / Reload",
+      "hint": "Boots this project's dev server and loads the preview."
+    },
+    "files": {
+      "title": "Code",
+      "refresh": "Refresh",
+      "loading": "Loading…",
+      "empty": "No files in the workspace yet.",
+      "none": "Select a file to view its content."
+    },
     "errors": {
       "createProject": "Could not create the project",
       "startRun": "Could not start the run",

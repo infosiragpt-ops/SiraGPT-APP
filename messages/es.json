@@ -548,6 +548,17 @@
       "checklist": "Checklist",
       "files": "Archivos"
     },
+    "preview": {
+      "start": "▶ Iniciar / Recargar",
+      "hint": "Levanta el dev server de este proyecto y carga la vista previa."
+    },
+    "files": {
+      "title": "Código",
+      "refresh": "Actualizar",
+      "loading": "Cargando…",
+      "empty": "Aún no hay archivos en el workspace.",
+      "none": "Selecciona un archivo para ver su contenido."
+    },
     "errors": {
       "createProject": "No se pudo crear el proyecto",
       "startRun": "No se pudo iniciar la corrida",

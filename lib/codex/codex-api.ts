@@ -34,6 +34,8 @@ export const codexApi = {
   startPreview: (id: string) => req<{ devUrl: string }>(`/projects/${id}/preview/start`, { method: "POST" }),
   previewStatus: (id: string) => req<any>(`/projects/${id}/preview/status`),
   exportProject: (id: string) => req<{ ok: boolean; project: string; files: number; hostPath: string }>(`/projects/${id}/export`, { method: "POST" }),
+  listFiles: (id: string) => req<{ files: string[] }>(`/projects/${id}/files`).then((r) => r.files),
+  readFileContent: (id: string, path: string) => req<{ ok: boolean; path: string; content: string }>(`/projects/${id}/file?path=${encodeURIComponent(path)}`),
 
   createRun: (projectId: string, body: { mode: "plan" | "build"; prompt?: string; model?: string; tier?: string; planRunId?: string }) =>
     req<{ run: CodexRun }>(`/projects/${projectId}/runs`, { method: "POST", body: JSON.stringify(body) }).then((r) => r.run),
