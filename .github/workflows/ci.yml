@@ -157,6 +157,7 @@ jobs:
       # failures from every shard in a single run instead of cancelling on
       # the first red shard.
       fail-fast: false
+      max-parallel: 2
       matrix:
         shard: [1, 2, 3, 4]
         total: [4]
