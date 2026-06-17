@@ -616,10 +616,7 @@ const DEFAULT_ACTIVE_IMAGE_MODEL_NAMES = new Set([
   'gpt-image-1.5',
   'gpt-image-1-mini',
   'gpt-image-2-2026-04-21',
-  'black-forest-labs/flux-1.1-pro',
   'google/gemini-3.1-flash-image-preview',
-  'google/gemini-3-pro-image-preview',
-  'google/gemini-2.5-flash-image',
 ]);
 
 module.exports = {
