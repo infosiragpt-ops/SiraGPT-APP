@@ -104,6 +104,7 @@ import {
 } from "@/lib/attachment-ingest"
 import { Badge } from "@/components/ui/badge"
 import { apiClient } from "@/lib/api"
+import { shouldRecoverImageGenerationViaPolling } from "@/lib/image-generation-recovery"
 import { track } from "@/lib/analytics"
 import { aiService, buildProfessionalCapabilityPrompt, classifyIntentFastPath, extractRequestedVideoDurationSeconds, isImageAnalysisPrompt, isImageOnlyAttachmentTurn, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldAutoActivateVideoGeneration, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, type ChatIntent } from "@/lib/ai-service"
 import { toast } from "sonner"
@@ -8654,15 +8655,15 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       try {
         await apiClient.generateImage(payload, { signal: controller.signal });
       } catch (genError: any) {
-        const status = genError?.status ?? genError?.statusCode;
         const userAborted = controller.signal.aborted || genError?.name === 'AbortError';
         // Mobile Safari and edge proxies can drop a long image request without
-        // an HTTP status while the backend keeps generating and persists the
-        // result into the chat. Treat any status-less, non-user abort as a
-        // recoverable connection cut and poll the conversation for the final
-        // image/error message. Real HTTP errors and explicit user cancellation
-        // still go through the outer catch.
-        const connectionCut = !status && !userAborted && !genError?.code;
+        // a usable response while the backend keeps generating and persists
+        // the result into the chat. Poll the conversation for the final
+        // image/error message on recoverable transport cuts. Functional HTTP
+        // errors and explicit user cancellation still go through the outer catch.
+        const connectionCut = shouldRecoverImageGenerationViaPolling(genError, imageRequestStartedAt, {
+          userAborted,
+        });
         if (!connectionCut) {
           throw genError;
         }

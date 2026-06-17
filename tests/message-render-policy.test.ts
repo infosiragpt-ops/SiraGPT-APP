@@ -22,3 +22,17 @@ test("assistant generated image URL still suppresses markdown rendering", () => 
 
   assert.equal(isImageOnlyMessageForRender(message, []), true)
 })
+
+test("assistant generated upload path suppresses duplicate markdown when image file is rendered", () => {
+  const message = { role: "ASSISTANT", content: "/uploads/images/generated-123.png" }
+  const files = [{ type: "image", url: "/uploads/images/generated-123.png" }]
+
+  assert.equal(isImageOnlyMessageForRender(message, files), true)
+})
+
+test("assistant text plus image file still renders markdown text", () => {
+  const message = { role: "ASSISTANT", content: "Aqui tienes la imagen final." }
+  const files = [{ type: "image", url: "/uploads/images/generated-123.png" }]
+
+  assert.equal(isImageOnlyMessageForRender(message, files), false)
+})

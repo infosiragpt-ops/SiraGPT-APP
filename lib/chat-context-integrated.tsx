@@ -9,6 +9,7 @@ import React from "react"
 import { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef } from "react"
 import { useAuth } from "./auth-context-integrated"
 import { apiClient } from "./api"
+import { shouldRecoverImageGenerationViaPolling } from "./image-generation-recovery"
 import { aiService, buildProfessionalCapabilityPrompt, shouldUseExistingDocumentFileContext, type ChatIntent } from "./ai-service"
 import { buildDocumentChatRequest } from "./document-chat-request"
 import { hasCompletedAgentTaskAssistantContent, mergeChatPreservingUserMessages } from "./message-preservation"
@@ -2026,13 +2027,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 try {
                   await apiClient.generateImage(imageGenerationPayload);
                 } catch (genError: any) {
-                  const status = genError?.status ?? genError?.statusCode;
                   const elapsed = Date.now() - imageRequestStartedAt;
                   // El edge proxy de la Reserved VM corta la conexión a los
                   // ~30s mientras el backend sigue generando y persiste la
                   // imagen en el chat; en ese caso sondeamos hasta que aparezca
                   // y recargamos el chat. Cualquier otro error se propaga.
-                  const connectionCut = !status && !genError?.code && elapsed >= 25000;
+                  const connectionCut = shouldRecoverImageGenerationViaPolling(genError, imageRequestStartedAt, {
+                    nowMs: imageRequestStartedAt + elapsed,
+                  });
                   if (!connectionCut) {
                     throw genError;
                   }

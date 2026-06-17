@@ -6826,6 +6826,18 @@ function promptWithImageAspectRatio(prompt, aspectRatio, quality = '2K') {
   return `${prompt}\n\nImage framing requirement: ${descriptor}. Quality target: ${quality}, crisp professional detail. Keep the main subject safely inside the frame.`;
 }
 
+function publicUploadUrl(pathname) {
+  const relative = String(pathname || '').startsWith('/')
+    ? String(pathname || '')
+    : `/${String(pathname || '')}`;
+  const publicBase = String(
+    process.env.PUBLIC_MEDIA_BASE_URL ||
+    process.env.NEXT_PUBLIC_IMAGE_URL ||
+    '',
+  ).trim().replace(/\/+$/, '');
+  return publicBase ? `${publicBase}${relative}` : relative;
+}
+
 async function cropImageToAspectRatio(imageBuffer, aspectRatio) {
   const ratioConfig = IMAGE_ASPECT_RATIOS[normalizeImageAspectRatio(aspectRatio)];
   const metadata = await sharp(imageBuffer).metadata();
@@ -6885,8 +6897,7 @@ async function saveBase64Image(base64Data, userId, prompt, aspectRatio = '1:1') 
   await fs.writeFile(filepath, imageBuffer);
 
 
-  const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
-  const imageUrl = `${baseUrl}/uploads/images/${filename}`;
+  const imageUrl = publicUploadUrl(`/uploads/images/${filename}`);
   // Create a file record in the database
   const newFile = await prisma.file.create({
     data: {
@@ -7023,8 +7034,7 @@ router.post(
             imagePath = inputFileRecord.path; // Use for editing but don't attach to user message
           } else {
             // ✅ Construct URL from available data for real user uploads
-            const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
-            const fileUrl = `${baseUrl}/uploads/${userId}/${inputFileRecord.filename}`;
+            const fileUrl = publicUploadUrl(`/uploads/${userId}/${inputFileRecord.filename}`);
 
             userMessageFiles = JSON.stringify([{
               id: inputFileRecord.id,
