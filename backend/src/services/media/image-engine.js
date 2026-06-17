@@ -198,6 +198,35 @@ function stripImageDataUrl(value) {
   return match ? match[1] : trimmed;
 }
 
+function isHttpUrl(value) {
+  return /^https?:\/\//i.test(String(value || '').trim());
+}
+
+async function imageResponseDataToBase64s(data, signal) {
+  const out = [];
+  const doFetch = getFetch();
+  for (const item of data || []) {
+    if (item?.b64_json) {
+      out.push(item.b64_json);
+      continue;
+    }
+    const url = item?.url;
+    if (!url) continue;
+    if (!isHttpUrl(url)) {
+      const b64 = stripImageDataUrl(url);
+      if (b64) out.push(b64);
+      continue;
+    }
+    if (!doFetch) throw new Error('fetch is not available in this runtime.');
+    const resp = await doFetch(url, signal ? { signal } : undefined);
+    if (!resp || !resp.ok) {
+      throw new Error(`OpenAI: no se pudo descargar la imagen generada (HTTP ${resp ? resp.status : 'sin respuesta'}).`);
+    }
+    out.push(Buffer.from(await resp.arrayBuffer()).toString('base64'));
+  }
+  return out.filter(Boolean);
+}
+
 // ── Client factories (lazy + injectable) ──────────────────────────────────
 
 function createOpenAIClient({ apiKey, baseURL, defaultHeaders }) {
@@ -275,12 +304,24 @@ async function generateWithOpenAI({ model, prompt, ratio, quality, n, signal, ti
   const payload = isGptImage
     ? { model: useModel, prompt, n, size: gptImageSizeFor(ratio), quality: gptImageQualityFor(quality) }
     : { model: useModel, prompt, n, size: dallESizeFor(ratio), quality: dallEQualityFor(quality), response_format: 'b64_json' };
-  const response = await withTimeout(
-    client.images.generate(payload, { signal, timeout: timeoutMs }),
+  const call = (body, label = `openai:${useModel}`) => withTimeout(
+    client.images.generate(body, { signal, timeout: timeoutMs }),
     timeoutMs,
-    `openai:${useModel}`
+    label
   );
-  return (response?.data || []).map((d) => d.b64_json || stripImageDataUrl(d.url)).filter(Boolean);
+  let response;
+  try {
+    response = await call(payload);
+  } catch (err) {
+    const message = String((err && err.message) || '');
+    if (isGptImage || !/unknown parameter:?\s*['"]?response_format/i.test(message)) {
+      throw err;
+    }
+    const retryPayload = { ...payload };
+    delete retryPayload.response_format;
+    response = await call(retryPayload, `openai:${useModel}:url`);
+  }
+  return imageResponseDataToBase64s(response?.data || [], signal);
 }
 
 async function generateWithGemini({ model, prompt, n, signal, timeoutMs }) {
