@@ -6607,8 +6607,8 @@ function fromImageEngineProvider(provider, fallback) {
 }
 
 function imageProviderAttemptTimeoutMs() {
-  const raw = Number(process.env.CHAT_IMAGE_PROVIDER_TIMEOUT_MS || process.env.IMAGE_GEN_PROVIDER_TIMEOUT_MS || 45000);
-  if (!Number.isFinite(raw)) return 45000;
+  const raw = Number(process.env.CHAT_IMAGE_PROVIDER_TIMEOUT_MS || process.env.IMAGE_GEN_PROVIDER_TIMEOUT_MS || 120000);
+  if (!Number.isFinite(raw)) return 120000;
   return Math.min(180000, Math.max(5000, raw));
 }
 

@@ -19,6 +19,8 @@ const EXPECTED_IMAGE_MODELS = [
   'ideogram/ideogram-v2',
   'black-forest-labs/flux-1.1-pro',
   'black-forest-labs/flux-1.1-ultra',
+  'gpt-image-2',
+  'gpt-image-1',
   'dall-e-3',
   'dall-e-2',
   'imagen-4.0-generate-001',
