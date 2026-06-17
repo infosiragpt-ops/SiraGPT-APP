@@ -40,13 +40,13 @@ const DEFAULT_MODEL_BY_PROVIDER = {
   openai: process.env.SIRAGPT_IMAGE_MODEL_OPENAI || 'gpt-image-2',
   gemini: process.env.SIRAGPT_IMAGE_MODEL_GEMINI || 'imagen-4.0-generate-001',
   fal: process.env.SIRAGPT_IMAGE_MODEL_FAL || 'fal-ai/flux/schnell',
-  openrouter: process.env.SIRAGPT_IMAGE_MODEL_OPENROUTER || 'google/gemini-2.5-flash-image',
+  openrouter: process.env.SIRAGPT_IMAGE_MODEL_OPENROUTER || 'google/gemini-3.1-flash-image-preview',
   xai: process.env.SIRAGPT_IMAGE_MODEL_XAI || 'grok-2-image',
 };
 
-// Broadly-available OpenRouter image model used as the in-provider retry
+// Production-validated OpenRouter image model used as the in-provider retry
 // when the requested model has no endpoint for image output modalities.
-const OPENROUTER_FALLBACK_MODEL = 'google/gemini-2.5-flash-image';
+const OPENROUTER_FALLBACK_MODEL = 'google/gemini-3.1-flash-image-preview';
 
 const EDIT_MODEL_BY_PROVIDER = {
   gemini: process.env.SIRAGPT_IMAGE_EDIT_MODEL_GEMINI || 'gemini-2.5-flash-image',
