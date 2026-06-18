@@ -49,7 +49,7 @@ function fileError(status, code, message) {
 function isUnsafeRel(rel) {
   const v = String(rel == null ? '' : rel);
   if (v.includes('\0')) return true;
-  if (path.isAbsolute(v)) return true;
+  if (path.isAbsolute(v) || path.win32.isAbsolute(v)) return true;
   // any segment that is ".." or starts with "-"
   return v
     .split(/[\\/]+/)
@@ -62,7 +62,11 @@ function isUnsafeRel(rel) {
  */
 function resolveInside(root, rel) {
   const normalizedRoot = path.resolve(root);
-  const cleaned = String(rel == null ? '' : rel).replace(/^[\\/]+/, '');
+  const raw = String(rel == null ? '' : rel);
+  if (isUnsafeRel(raw)) {
+    throw fileError(400, 'invalid_path', `Invalid path: ${raw}`);
+  }
+  const cleaned = raw.replace(/^[\\/]+/, '');
   if (isUnsafeRel(cleaned)) {
     throw fileError(400, 'invalid_path', `Invalid path: ${cleaned}`);
   }

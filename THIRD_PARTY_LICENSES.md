@@ -1482,7 +1482,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `tiny-inflate` | 1.0.3 | MIT | [link](https://github.com/devongovett/tiny-inflate) |
 | `tiny-invariant` | 1.3.3 | MIT | [link](https://github.com/alexreardon/tiny-invariant) |
 | `tinyexec` | 1.1.1, 1.1.2 | MIT | [link](https://github.com/tinylibs/tinyexec) |
-| `tinyglobby` | 0.2.16 | MIT | [link](https://github.com/SuperchupuDev/tinyglobby) |
+| `tinyglobby` | 0.2.17 | MIT | [link](https://github.com/SuperchupuDev/tinyglobby) |
 | `tldts` | 6.1.86 | MIT | [link](https://github.com/remusao/tldts) |
 | `tldts-core` | 6.1.86 | MIT | [link](https://github.com/remusao/tldts) |
 | `tmp` | 0.2.6, 0.2.7 | MIT | [link](https://github.com/raszi/node-tmp) |
@@ -1509,7 +1509,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `uid2` | 0.0.4 | MIT | [link](https://github.com/coreh/uid2) |
 | `uint8array-extras` | 1.5.0 | MIT | [link](https://github.com/sindresorhus/uint8array-extras) |
 | `underscore` | 1.13.8 | MIT | [link](https://github.com/jashkenas/underscore) |
-| `undici` | 7.25.0 | MIT | [link](https://github.com/nodejs/undici) |
+| `undici` | 7.25.0, 7.28.0 | MIT | [link](https://github.com/nodejs/undici) |
 | `undici-types` | 6.21.0, 7.16.0 | MIT | [link](https://github.com/nodejs/undici) |
 | `unicode-properties` | 1.4.1 | MIT | [link](https://github.com/devongovett/unicode-properties) |
 | `unicode-trie` | 2.0.0 | MIT | [link](https://github.com/devongovett/unicode-trie) |
