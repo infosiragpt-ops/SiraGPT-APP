@@ -192,76 +192,81 @@ export function RealGitPanel({ projectId }: { projectId: string | null; projectN
 
   const ready = bound.workspace?.status === "ready"
 
+  // Action bar (Descargar / Cargar del repo / Subir al repo / Abrir editor /
+  // Cambiar) hidden for a clean Replit-style pane. Kept in code — set to `true`
+  // to bring it back. Typed as boolean so the JSX stays type-checked.
+  const SHOW_ACTION_BAR: boolean = false
+
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-card/40 px-3 py-2">
-        <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
-          <FolderGit2 className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="truncate">{bound.fullName}</span>
-          {bound.private && <Lock className="h-3 w-3 shrink-0 text-muted-foreground" />}
-          {bound.htmlUrl && (
-            <a href={bound.htmlUrl} target="_blank" rel="noreferrer" className="text-muted-foreground">
-              <ExternalLink className="h-3 w-3" />
-            </a>
-          )}
-        </div>
-        <div className="flex items-center gap-1.5">
-          <Button
-            size="sm"
-            variant="outline"
-            title="Descargar todo el código (.zip)"
-            onClick={() => {
-              toast.info("Preparando descarga…")
-              githubService
-                .downloadZip(bound.id, `${bound.name}.zip`)
-                .catch((e) => toast.error((e as Error).message || "Descarga fallida"))
-            }}
-          >
-            <Download className="mr-1 h-3.5 w-3.5" />
-            Descargar
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={loadingRepo}
-            title="Cargar los archivos del repo en el editor de /code (repo → editor)"
-            onClick={loadRepoIntoEditor}
-          >
-            {loadingRepo ? (
-              <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <FolderInput className="mr-1 h-3.5 w-3.5" />
+      {SHOW_ACTION_BAR && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-card/40 px-3 py-2">
+          <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
+            <FolderGit2 className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <span className="truncate">{bound.fullName}</span>
+            {bound.private && <Lock className="h-3 w-3 shrink-0 text-muted-foreground" />}
+            {bound.htmlUrl && (
+              <a href={bound.htmlUrl} target="_blank" rel="noreferrer" className="text-muted-foreground">
+                <ExternalLink className="h-3 w-3" />
+              </a>
             )}
-            Cargar del repo
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={pushingFiles}
-            title="Subir los archivos actuales del editor al repo (editor → repo)"
-            onClick={uploadWorkspaceToRepo}
-          >
-            {pushingFiles ? (
-              <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <UploadCloud className="mr-1 h-3.5 w-3.5" />
-            )}
-            Subir al repo
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => router.push(`/workspace/${bound.id}`)}>
-            Abrir editor completo
-          </Button>
-          <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={unbind} title="Cambiar repositorio">
-            <Unlink className="mr-1 h-3.5 w-3.5" />
-            Cambiar
-          </Button>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <Button
+              size="sm"
+              variant="outline"
+              title="Descargar todo el código (.zip)"
+              onClick={() => {
+                toast.info("Preparando descarga…")
+                githubService
+                  .downloadZip(bound.id, `${bound.name}.zip`)
+                  .catch((e) => toast.error((e as Error).message || "Descarga fallida"))
+              }}
+            >
+              <Download className="mr-1 h-3.5 w-3.5" />
+              Descargar
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={loadingRepo}
+              title="Cargar los archivos del repo en el editor de /code (repo → editor)"
+              onClick={loadRepoIntoEditor}
+            >
+              {loadingRepo ? (
+                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <FolderInput className="mr-1 h-3.5 w-3.5" />
+              )}
+              Cargar del repo
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={pushingFiles}
+              title="Subir los archivos actuales del editor al repo (editor → repo)"
+              onClick={uploadWorkspaceToRepo}
+            >
+              {pushingFiles ? (
+                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <UploadCloud className="mr-1 h-3.5 w-3.5" />
+              )}
+              Subir al repo
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => router.push(`/workspace/${bound.id}`)}>
+              Abrir editor completo
+            </Button>
+            <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={unbind} title="Cambiar repositorio">
+              <Unlink className="mr-1 h-3.5 w-3.5" />
+              Cambiar
+            </Button>
+          </div>
         </div>
-      </div>
+      )}
 
       {ready ? (
-        <div className="h-[60vh] overflow-hidden rounded-lg border border-border">
-          <GitPane id={bound.id} repoFullName={bound.fullName} repoUrl={bound.htmlUrl} />
-        </div>
+        <GitPane id={bound.id} repoFullName={bound.fullName} repoUrl={bound.htmlUrl} fitContent />
       ) : (
         <CloneGate connection={bound} onCloned={hydrateBound} />
       )}

@@ -45,6 +45,9 @@ interface Props {
   repoFullName?: string
   repoUrl?: string | null
   onAfterCommit?: () => void
+  /** When true, the pane grows to its content height (the outer page scrolls)
+   *  instead of filling a fixed-height container with an inner scrollbar. */
+  fitContent?: boolean
 }
 
 function statusBadge(index: string, workingDir: string): { letter: string; cls: string } {
@@ -79,7 +82,7 @@ function relTime(iso: string | null | undefined): string {
   return `hace ${d} día${d > 1 ? "s" : ""}`
 }
 
-export function GitPane({ id, repoFullName, repoUrl, onAfterCommit }: Props) {
+export function GitPane({ id, repoFullName, repoUrl, onAfterCommit, fitContent }: Props) {
   const [status, setStatus] = React.useState<GitStatus | null>(null)
   const [branches, setBranches] = React.useState<GitBranches | null>(null)
   const [commits, setCommits] = React.useState<GitCommit[]>([])
@@ -203,7 +206,7 @@ export function GitPane({ id, repoFullName, repoUrl, onAfterCommit }: Props) {
   const syncCount = behind || ahead
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background text-sm">
+    <div className={cn("flex flex-col bg-background text-sm", !fitContent && "h-full min-h-0")}>
       {/* Branch bar */}
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
         <GitBranch className="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -253,7 +256,7 @@ export function GitPane({ id, repoFullName, repoUrl, onAfterCommit }: Props) {
         </button>
       </div>
 
-      <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-4 py-4">
+      <div className={cn("space-y-6 px-4 py-4", !fitContent && "min-h-0 flex-1 overflow-y-auto")}>
         {/* ── Remote Updates ───────────────────────────── */}
         <section>
           <div className="mb-2 flex items-center justify-between">
@@ -296,9 +299,14 @@ export function GitPane({ id, repoFullName, repoUrl, onAfterCommit }: Props) {
               </div>
             )}
 
-            <div className="flex items-stretch border-t border-border">
+            <div className="flex items-stretch border-t border-border/70">
               <button
-                className="flex flex-1 items-center justify-center gap-2 bg-foreground py-2.5 text-sm font-medium text-background transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                className={cn(
+                  "flex flex-1 items-center justify-center gap-2 py-2.5 text-sm font-medium transition disabled:cursor-not-allowed",
+                  syncCount > 0
+                    ? "bg-foreground text-background hover:opacity-90"
+                    : "bg-muted/60 text-muted-foreground",
+                )}
                 disabled={busy === "sync" || (ahead === 0 && behind === 0)}
                 onClick={sync}
               >
@@ -336,6 +344,10 @@ export function GitPane({ id, repoFullName, repoUrl, onAfterCommit }: Props) {
         {/* ── Commit ───────────────────────────────────── */}
         <section>
           <h3 className="mb-2 text-[15px] font-semibold">Commit</h3>
+          {!dirty ? (
+            <p className="text-sm text-muted-foreground">No hay cambios para confirmar.</p>
+          ) : (
+          <>
           <div className="mb-1.5 flex items-center gap-2 text-xs text-muted-foreground">
             Message
             <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px]">Ctrl ⏎</kbd>
@@ -461,6 +473,8 @@ export function GitPane({ id, repoFullName, repoUrl, onAfterCommit }: Props) {
             {busy === "commit" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
             Stage and commit all changes
           </button>
+          </>
+          )}
         </section>
 
         {/* ── History ──────────────────────────────────── */}
