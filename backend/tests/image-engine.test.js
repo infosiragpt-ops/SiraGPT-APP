@@ -178,6 +178,53 @@ test('generateImage sends response_format for dall-e models', async () => {
   }
 });
 
+test('generateImage retries dall-e without response_format when OpenAI rejects it', async () => {
+  setEnv({ OPENAI_API_KEY: 'sk-x' });
+  const calls = [];
+  _internal.setOpenAIFactory(fakeOpenAIFactory({
+    onGenerate: async (payload) => {
+      calls.push(payload);
+      if (payload.response_format) throw new Error("400 Unknown parameter: 'response_format'.");
+      return { data: [{ url: 'https://openai.example/generated.png' }] };
+    },
+  }));
+  _internal.setFetchImpl(async () => ({
+    ok: true,
+    arrayBuffer: async () => Buffer.from('openai-url-bytes'),
+  }));
+  try {
+    const result = await engine.generateImage({ prompt: 'a cat', model: 'dall-e-3', aspectRatio: 'portrait', failover: false });
+    assert.equal(result.ok, true);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].response_format, 'b64_json');
+    assert.equal(calls[1].response_format, undefined);
+    assert.equal(Buffer.from(result.images[0].b64, 'base64').toString(), 'openai-url-bytes');
+  } finally {
+    restoreEnv();
+  }
+});
+
+test('generateImage falls back to the configured image model for chat model ids', async () => {
+  setEnv({ OPENAI_API_KEY: 'sk-x' });
+  const calls = [];
+  _internal.setOpenAIFactory(fakeOpenAIFactory({
+    onGenerate: async (payload) => {
+      calls.push(payload);
+      return { data: [{ b64_json: 'IMG_FROM_DEFAULT_IMAGE_MODEL' }] };
+    },
+  }));
+  try {
+    const result = await engine.generateImage({ prompt: 'a product photo', model: 'gpt-4o' });
+    assert.equal(result.ok, true);
+    assert.equal(result.provider, 'openai');
+    assert.equal(result.model, 'gpt-image-2');
+    assert.equal(calls[0].model, 'gpt-image-2');
+    assert.equal(result.images[0].b64, 'IMG_FROM_DEFAULT_IMAGE_MODEL');
+  } finally {
+    restoreEnv();
+  }
+});
+
 test('generateImage fails over to the next configured provider', async () => {
   setEnv({ OPENAI_API_KEY: 'sk-x', GEMINI_API_KEY: 'g-x' });
   let geminiCalled = false;

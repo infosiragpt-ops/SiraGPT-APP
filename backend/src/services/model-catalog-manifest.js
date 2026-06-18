@@ -257,6 +257,51 @@ const STATIC_MODEL_MANIFEST = Object.freeze([
     tags: ['openrouter', 'flux', 'image', 'photorealistic', 'ultra'],
   },
   {
+    id: 'gpt-image-2',
+    name: 'gpt-image-2',
+    displayName: 'GPT Image 2',
+    provider: 'OpenAI',
+    type: 'IMAGE',
+    description: 'OpenAI GPT Image 2: high quality image generation through the direct OpenAI Images API.',
+    tags: ['openai', 'gpt', 'image', 'professional'],
+  },
+  {
+    id: 'gpt-image-1',
+    name: 'gpt-image-1',
+    displayName: 'GPT Image 1',
+    provider: 'OpenAI',
+    type: 'IMAGE',
+    description: 'OpenAI GPT Image 1: reliable image generation through the direct OpenAI Images API.',
+    tags: ['openai', 'gpt', 'image', 'reliable'],
+  },
+  {
+    id: 'gpt-image-1.5',
+    name: 'gpt-image-1.5',
+    displayName: 'GPT Image 1.5',
+    provider: 'OpenAI',
+    type: 'IMAGE',
+    description: 'OpenAI GPT Image 1.5: reliable image generation through the direct OpenAI Images API.',
+    tags: ['openai', 'gpt', 'image', 'reliable'],
+  },
+  {
+    id: 'gpt-image-1-mini',
+    name: 'gpt-image-1-mini',
+    displayName: 'GPT Image 1 Mini',
+    provider: 'OpenAI',
+    type: 'IMAGE',
+    description: 'OpenAI GPT Image 1 Mini: compact image generation through the direct OpenAI Images API.',
+    tags: ['openai', 'gpt', 'image', 'fast'],
+  },
+  {
+    id: 'gpt-image-2-2026-04-21',
+    name: 'gpt-image-2-2026-04-21',
+    displayName: 'GPT Image 2 (2026-04-21)',
+    provider: 'OpenAI',
+    type: 'IMAGE',
+    description: 'Pinned OpenAI GPT Image 2 release for high quality image generation.',
+    tags: ['openai', 'gpt', 'image', 'professional'],
+  },
+  {
     id: 'dall-e-3',
     name: 'dall-e-3',
     displayName: 'DALL-E 3',
@@ -561,21 +606,17 @@ function getProviderCatalogDiagnostics({ includeModels = false } = {}) {
 }
 
 // Curated set of IMAGE models that should be ACTIVE and selectable out of the
-// box (across every working provider: OpenAI, Gemini, OpenRouter, fal.ai). This
-// is the single source of truth for both the seeding layer
-// (model-sync-service: which rows to create/flip active) and the generation
-// route (ai.js: VERIFIED_CHAT_IMAGE_MODEL_NAMES allow-list). Keep them in lock
-// step so a model that is active is also accepted by /generate-image.
+// box. Keep this to models verified against the production credentials; models
+// that require different billing or provider keys remain in the catalog but
+// inactive until an admin validates them. This set is shared with the seeding
+// layer and /generate-image allow-list, so active defaults are accepted by chat.
 const DEFAULT_ACTIVE_IMAGE_MODEL_NAMES = new Set([
   'gpt-image-2',
-  'openai/gpt-5.4-image-2',
-  'dall-e-3',
-  'imagen-4.0-generate-001',
-  'google/gemini-3-pro-image-preview',
-  'google/gemini-2.5-flash-image',
-  'fal-ai/flux/schnell',
-  'fal-ai/flux/dev',
-  'fal-ai/flux-pro/v1.1',
+  'gpt-image-1',
+  'gpt-image-1.5',
+  'gpt-image-1-mini',
+  'gpt-image-2-2026-04-21',
+  'google/gemini-3.1-flash-image-preview',
 ]);
 
 module.exports = {

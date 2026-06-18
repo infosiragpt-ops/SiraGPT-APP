@@ -38,6 +38,7 @@ const ALWAYS_KEEP = new Set([
   'memory',
   'orchestration-memory',
   'cross-chat',
+  'document-analysis-quality',
   'document-enrichment',
   'web-search',
   'cowork',

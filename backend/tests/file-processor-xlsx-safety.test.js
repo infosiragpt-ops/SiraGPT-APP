@@ -65,6 +65,29 @@ test('processExcel honors formula defang env switch end-to-end', async () => {
   }
 });
 
+test('processExcel preserves key-value rows after blank separator rows', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'siragpt-xlsx-marker-'));
+  const filePath = path.join(dir, 'ventas_2025.xlsx');
+  try {
+    const workbook = createWorkbook();
+    const worksheet = workbook.addWorksheet('Ventas2025');
+    worksheet.addRow(['Region', 'Q1', 'Q2', 'Q3', 'Q4', 'Total']);
+    worksheet.addRow(['Norte', 120, 150, 130, 200, 600]);
+    worksheet.addRow(['Sur', 90, 80, 110, 95, 375]);
+    worksheet.addRow(['TOTAL', 210, 230, 240, 295, 975]);
+    worksheet.addRow([]);
+    worksheet.addRow(['Marcador', 'XLSMARK-5521']);
+    await fs.writeFile(filePath, await writeWorkbookBuffer(workbook));
+
+    const extracted = await fileProcessor.processExcel(filePath);
+
+    assert.match(extracted, /Marcador\tXLSMARK-5521/);
+    assert.match(extracted, /XLSMARK-5521/);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('processExcel handles empty workbooks without a truncation marker', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'siragpt-xlsx-empty-'));
   const filePath = path.join(dir, 'empty.xlsx');

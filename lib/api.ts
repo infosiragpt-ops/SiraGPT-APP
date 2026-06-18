@@ -518,7 +518,7 @@ class ApiClient {
    *     RETRY_AFTER_MAX_MS so a misbehaving server with a 1-hour
    *     Retry-After can't pin the UI for an hour.
    */
-  private async request(endpoint: string, options: RequestInit & { timeoutMs?: number; maxRetries?: number } = {}) {
+  private async request(endpoint: string, options: RequestInit & { timeoutMs?: number; maxRetries?: number; suppressFailureLog?: boolean } = {}) {
     const url = `${this.baseURL}${endpoint}`;
     const timeoutMs = options.timeoutMs ?? this.DEFAULT_TIMEOUT_MS;
     // Per-request retry override. Expensive, non-idempotent generations
@@ -736,14 +736,16 @@ class ApiClient {
 
     // All retries exhausted
     const finalError = lastError || new Error('Request failed after retries');
-    console.error(`[ApiClient] Request failed after ${maxRetries + 1} attempts:`, endpoint, finalError.message);
-    this._reportApiFailure({
-      endpoint,
-      method,
-      status: (finalError as any).status ?? null,
-      requestId: (finalError as any).errorData?.requestId || null,
-      message: finalError.message,
-    })
+    if (!options.suppressFailureLog) {
+      console.error(`[ApiClient] Request failed after ${maxRetries + 1} attempts:`, endpoint, finalError.message);
+      this._reportApiFailure({
+        endpoint,
+        method,
+        status: (finalError as any).status ?? null,
+        requestId: (finalError as any).errorData?.requestId || null,
+        message: finalError.message,
+      })
+    }
     throw finalError;
   }
 
@@ -1619,7 +1621,9 @@ class ApiClient {
     data: { prompt: string; chatId?: string; provider: string; model: string; fileId?: string; aspectRatio?: string; quality?: string; imageCount?: number },
     options: { signal?: AbortSignal } = {},
   ) {
-    const response = await this.request('/ai/generate-image', {
+    const timeoutMs = 210000;
+    const imageRequestStartedAt = Date.now();
+    const requestPromise = this.request('/ai/generate-image', {
       method: 'POST',
       body: JSON.stringify(data),
       signal: options.signal,
@@ -1634,6 +1638,13 @@ class ApiClient {
       // back to waitForGeneratedImage(), which picks up the image the
       // backend persists to the chat.
       maxRetries: 0,
+      suppressFailureLog: true,
+    });
+    const response = await this.resolveImageRequestWithChatRecovery(requestPromise, {
+      chatId: data.chatId,
+      sinceMs: imageRequestStartedAt,
+      signal: options.signal,
+      timeoutMs,
     });
     // El backend ahora envía cabeceras 200 al inicio (para no morir
     // en el proxy de 30 s) y, si la generación falla después, devuelve
@@ -1647,18 +1658,91 @@ class ApiClient {
     return response;
   }
   async generateImageByImage(data: { fileId: string, prompt: string; chatId?: string, provider: string; model: string; }) {
-    const response = await this.request('/ai/generate-image', {
+    const timeoutMs = 210000;
+    const imageRequestStartedAt = Date.now();
+    const requestPromise = this.request('/ai/generate-image', {
       method: 'POST',
       body: JSON.stringify(data),
-      timeoutMs: 210000, // > backend 200s deadline; see generateImage
+      timeoutMs, // > backend 200s deadline; see generateImage
       maxRetries: 0,     // non-idempotent paid generation — never auto-retry
+      suppressFailureLog: true,
     })
+    const response = await this.resolveImageRequestWithChatRecovery(requestPromise, {
+      chatId: data.chatId,
+      sinceMs: imageRequestStartedAt,
+      timeoutMs,
+    });
     if (response && typeof response === 'object' && (response as any).error) {
       const err: any = new Error((response as any).error);
       err.code = (response as any).code;
       throw err;
     }
     return response
+  }
+
+  private async resolveImageRequestWithChatRecovery(
+    requestPromise: Promise<any>,
+    options: { chatId?: string; sinceMs: number; signal?: AbortSignal; timeoutMs: number },
+  ): Promise<any> {
+    const chatId = String(options.chatId || '').trim();
+    if (!chatId) return requestPromise;
+
+    let requestSettled = false;
+    const trackedRequest = requestPromise.finally(() => {
+      requestSettled = true;
+    });
+
+    const edgeRecoveryDelayMs = Math.min(31_000, Math.max(0, options.timeoutMs - 1_000));
+    const recoveryPromise = (async () => {
+      await new Promise((resolve) => setTimeout(resolve, edgeRecoveryDelayMs));
+      if (requestSettled || options.signal?.aborted) return null;
+
+      const outcome = await this.waitForGeneratedImage(chatId, options.sinceMs, {
+        signal: options.signal,
+        timeoutMs: Math.max(1_000, options.timeoutMs - edgeRecoveryDelayMs),
+        intervalMs: 2000,
+      });
+
+      if (outcome === 'image') return { recoveredFromChat: true as const };
+      if (outcome === 'error') {
+        return {
+          error: 'No se pudo generar la imagen. Inténtalo de nuevo.',
+          code: 'image_generation_failed',
+        };
+      }
+      return null;
+    })();
+
+    try {
+      return await Promise.race([
+        trackedRequest,
+        recoveryPromise.then((recovered) => recovered ?? trackedRequest),
+      ]);
+    } catch (error: any) {
+      const status = Number(error?.status ?? error?.statusCode);
+      const message = String(error?.message || '');
+      const isTimeout = status === 408 || /timed out|timeout/i.test(message);
+      if (!isTimeout) throw error;
+
+      const finalOutcome = await this.waitForGeneratedImage(chatId, options.sinceMs, {
+        signal: options.signal,
+        timeoutMs: 15_000,
+        intervalMs: 2_000,
+      });
+      if (finalOutcome === 'image') return { recoveredFromChat: true as const };
+      if (finalOutcome === 'error') {
+        return {
+          error: 'No se pudo generar la imagen. Inténtalo de nuevo.',
+          code: 'image_generation_failed',
+        };
+      }
+
+      const friendly: any = new Error('La generación de imagen tardó demasiado. Inténtalo de nuevo o baja la calidad/cantidad.');
+      friendly.status = 408;
+      friendly.statusCode = 408;
+      friendly.code = 'image_generation_timeout';
+      throw friendly;
+    }
   }
 
   // El Load Balancer de la Reserved VM corta la petición a los ~30s, pero el

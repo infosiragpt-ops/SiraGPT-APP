@@ -62,7 +62,10 @@ const REQ_TIMEOUT_MS = Number(process.env.E2E_REQ_TIMEOUT_MS) || 120000;
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 const stripAccents = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '');
-const norm = (s) => stripAccents(String(s || '').toLowerCase()).replace(/\s+/g, ' ').trim();
+const norm = (s) => stripAccents(String(s || '').toLowerCase())
+  .replace(/(?<=\d)[.,](?=\d{3}\b)/g, '')
+  .replace(/\s+/g, ' ')
+  .trim();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Global dispatch gate: /api/ai/generate is capped at 60 req / 60s, so we

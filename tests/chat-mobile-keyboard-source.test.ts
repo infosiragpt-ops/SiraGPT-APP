@@ -25,7 +25,33 @@ function cssBlockAt(source: string, start: number): string {
   assert.fail("unbalanced braces while extracting CSS block")
 }
 
+function withoutCssComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "")
+}
+
 describe("mobile keyboard composer source contract", () => {
+  it("does not make the app shell a transformed containing block", () => {
+    const shellIndex = globals.indexOf(".app-shell-viewport")
+    assert.notEqual(shellIndex, -1, "missing app-shell viewport block")
+    const shellBlock = cssBlockAt(globals, shellIndex)
+
+    assert.doesNotMatch(
+      withoutCssComments(shellBlock),
+      /\btransform\s*:/,
+      "app shell must not use transform because it captures fixed-position composer descendants on iOS"
+    )
+    assert.match(
+      shellBlock,
+      /margin-left:\s*var\(--app-viewport-offset-left,\s*0px\)/,
+      "app shell should still apply visualViewport horizontal offset without transform"
+    )
+    assert.match(
+      shellBlock,
+      /margin-top:\s*var\(--app-viewport-offset-top,\s*0px\)/,
+      "app shell should still apply visualViewport vertical offset without transform"
+    )
+  })
+
   it("marks the visual viewport target when the keyboard is open", () => {
     assert.match(
       viewportHook,
@@ -80,10 +106,13 @@ describe("mobile keyboard composer source contract", () => {
     // Keyboard open on iOS: the composer dock flips to position:fixed so it
     // pins to the visual viewport instead of flying to the top (Safari's
     // sticky-inside-overflow:hidden bug — a8cd955b1).
+    const composerDockFixed =
+      /\.chat-viewport\[data-chat-keyboard="open"\]\s+\.chat-composer-dock,\s*\.chat-viewport\[data-chat-input-focused="true"\]\s+\.chat-composer-dock\s*\{[^}]*position:\s*fixed[^}]*bottom:\s*0/
+
     assert.match(
       iosBlock,
-      /\.chat-viewport\[data-chat-keyboard="open"\]\s+\.chat-composer-dock\s*\{[^}]*position:\s*fixed[^}]*bottom:\s*0/,
-      "keyboard-open composer dock must pin to the visual viewport bottom (position: fixed)"
+      composerDockFixed,
+      "keyboard-open or focused composer dock must pin to the visual viewport bottom (position: fixed)"
     )
 
     const clearanceOverride =

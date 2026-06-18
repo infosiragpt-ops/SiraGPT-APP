@@ -80,6 +80,7 @@ const {
 const { buildForbiddenToolNames } = require('../services/agents/agent-tool-policy');
 const durableExecutionStore = require('../services/agents/durable-execution-store');
 const { buildDocumentDeliveryPolicy } = require('../services/agents/document-delivery-policy');
+const documentAnalysisQuality = require('../services/document-analysis-quality');
 const { buildLangGraphLayer } = require('../services/agents/agentic-langgraph');
 const { buildAgenticFrameworkStatus } = require('../services/agents/agentic-frameworks');
 const { buildIntegrationRuntimeProfile } = require('../services/ai-product-os/integration-runtime-profile');
@@ -1606,7 +1607,8 @@ router.post(
           enterpriseQaBoardReview,
           agenticOperatingCore,
           uploadedFileContext,
-          openclawRuntimeProfile
+          openclawRuntimeProfile,
+          agentGoal
         ),
         ctx: toolCtx,
         finalizeGuard: ({ steps, unavailableTools }) => validateAgentTaskFinalize({
@@ -2601,7 +2603,8 @@ function buildAgentSystemPrompt(
   enterpriseQaBoardReview = null,
   agenticOperatingCore = null,
   uploadedFileContext = '',
-  openclawRuntimeProfile = null
+  openclawRuntimeProfile = null,
+  agentGoal = ''
 ) {
   const parts = [TASK_SYSTEM_PROMPT];
   if (universalTaskContract) {
@@ -2668,6 +2671,15 @@ function buildAgentSystemPrompt(
   }
   if (fileIds.length) {
     parts.push(`Uploaded/reference file ids available to tools: ${fileIds.join(', ')}. If the user asks about their content, call rag_retrieve before answering. If the user asks to transcribe, produce the exact readable text from the uploaded/pasted content; do not create a document unless the prompt explicitly requests Word/PDF/PPT/Excel.`);
+  }
+  const documentAnalysisQualityBlock = documentAnalysisQuality.buildPromptBlock({
+    prompt: agentGoal,
+    files: fileIds,
+    language: 'es',
+    source: 'agent.task',
+  });
+  if (documentAnalysisQualityBlock) {
+    parts.push(documentAnalysisQualityBlock);
   }
   if (uploadedFileContext) {
     parts.push(uploadedFileContext);

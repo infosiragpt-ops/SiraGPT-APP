@@ -79,6 +79,30 @@ describe("lib/native/clipboard", () => {
     assert.equal(copied, "hi")
   })
 
+  it("falls back without console noise when clipboard permission is denied", async () => {
+    const g = globalThis as Globals
+    g.navigator = {
+      clipboard: {
+        writeText: async () => {
+          const err = new Error("Failed to execute 'writeText' on 'Clipboard': Write permission denied.")
+          err.name = "NotAllowedError"
+          throw err
+        },
+      },
+    }
+    const originalWarn = console.warn
+    const warnings: unknown[] = []
+    console.warn = (...args: unknown[]) => { warnings.push(args) }
+    try {
+      const r = await writeText("hi")
+      assert.equal(r.ok, false)
+      assert.equal(r.via, "noop")
+      assert.equal(warnings.length, 0)
+    } finally {
+      console.warn = originalWarn
+    }
+  })
+
   it("reads via navigator.clipboard when available", async () => {
     const g = globalThis as Globals
     g.navigator = { clipboard: { readText: async () => "stored" } }

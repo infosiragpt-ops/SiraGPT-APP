@@ -197,7 +197,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `detect-libc` | 2.1.2 | Apache-2.0 | [link](https://github.com/lovell/detect-libc) |
 | `didyoumean` | 1.2.2 | Apache-2.0 | [link](https://github.com/dcporter/didyoumean.js) |
 | `docx-preview` | 0.3.7 | Apache-2.0 | [link](https://github.com/VolodymyrBaydalka/docxjs) |
-| `dompurify` | 3.4.1 | MPL-2.0 OR Apache-2.0 | [link](https://github.com/cure53/DOMPurify) |
+| `dompurify` | 3.4.11 | MPL-2.0 OR Apache-2.0 | [link](https://github.com/cure53/DOMPurify) |
 | `drizzle-orm` | 0.45.2 | Apache-2.0 | [link](https://github.com/drizzle-team/drizzle-orm) |
 | `ecdsa-sig-formatter` | 1.0.11 | Apache-2.0 | [link](https://github.com/Brightspace/node-ecdsa-sig-formatter) |
 | `ejs` | 3.1.10 | Apache-2.0 | [link](https://github.com/mde/ejs) |
@@ -1195,7 +1195,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `ms` | 2.0.0, 2.1.3 | MIT | [link](https://github.com/vercel/ms) |
 | `msgpackr` | 2.0.1 | MIT | [link](https://github.com/kriszyp/msgpackr) |
 | `msgpackr-extract` | 3.0.3 | MIT | [link](https://github.com/kriszyp/msgpackr-extract) |
-| `multer` | 2.1.1 | MIT | [link](https://github.com/expressjs/multer) |
+| `multer` | 2.1.1, 2.2.0 | MIT | [link](https://github.com/expressjs/multer) |
 | `mustache` | 4.2.0 | MIT | [link](https://github.com/janl/mustache.js) |
 | `mz` | 2.7.0 | MIT | [link](https://github.com/normalize/mz) |
 | `n-gram` | 2.0.2 | MIT | [link](https://github.com/words/n-gram) |
@@ -1219,7 +1219,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `node-pandoc` | 0.3.0 | MIT | [link](https://github.com/eshinn/node-pandoc) |
 | `node-readable-to-web-readable-stream` | 0.4.2 | MIT | [link](https://github.com/Borewit/node-readable-to-web-readable-stream) |
 | `node-releases` | 2.0.38 | MIT | [link](https://github.com/chicoxyzzy/node-releases) |
-| `nodemailer` | 8.0.7 | MIT-0 | [link](https://github.com/nodemailer/nodemailer) |
+| `nodemailer` | 9.0.1 | MIT-0 | [link](https://github.com/nodemailer/nodemailer) |
 | `nopt` | 1.0.10, 7.2.1 | MIT | [link](https://github.com/isaacs/nopt) |
 | `normalize-path` | 3.0.0 | MIT | [link](https://github.com/jonschlinkert/normalize-path) |
 | `nwsapi` | 2.2.23 | MIT | [link](https://github.com/dperini/nwsapi) |

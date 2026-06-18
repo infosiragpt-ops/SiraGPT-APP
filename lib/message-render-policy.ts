@@ -19,6 +19,16 @@ const isAssistantImageUrl = (message: RenderPolicyMessage) => {
     )
 }
 
+const normalizeImageUrlPath = (value: unknown) => {
+  const text = asText(value).trim()
+  if (!text || /^data:/i.test(text)) return ""
+  try {
+    return new URL(text, "http://siragpt.local").pathname
+  } catch {
+    return text.replace(/^https?:\/\/[^/]+/i, "").split(/[?#]/)[0]
+  }
+}
+
 const isImageAttachment = (file: unknown) => {
   const f = (file ?? {}) as Record<string, unknown>
   const mimeType = String(f.mimeType || f.contentType || "").toLowerCase()
@@ -29,11 +39,31 @@ const isImageAttachment = (file: unknown) => {
     || ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "avif", "heic", "heif"].includes(extension)
 }
 
+const isAssistantImageAttachmentUrl = (
+  message: RenderPolicyMessage,
+  parsedFiles: unknown[],
+) => {
+  if (String(message.role || "").toUpperCase() !== "ASSISTANT") return false
+  if (!Array.isArray(parsedFiles) || !parsedFiles.some(isImageAttachment)) return false
+
+  const contentPath = normalizeImageUrlPath(message.content)
+  if (!contentPath) return false
+
+  return parsedFiles.some((file) => {
+    if (!isImageAttachment(file)) return false
+    const f = (file ?? {}) as Record<string, unknown>
+    return [f.url, f.imageUrl, f.path]
+      .map(normalizeImageUrlPath)
+      .some((candidate) => candidate === contentPath)
+  })
+}
+
 export function isImageOnlyMessageForRender(
   message: RenderPolicyMessage,
   parsedFiles: unknown[] = [],
 ) {
   if (isAssistantImageUrl(message)) return true
+  if (isAssistantImageAttachmentUrl(message, parsedFiles)) return true
   if (!Array.isArray(parsedFiles) || !parsedFiles.some(isImageAttachment)) return false
 
   // Critical UI contract: a user turn with an image AND text is not image-only.
