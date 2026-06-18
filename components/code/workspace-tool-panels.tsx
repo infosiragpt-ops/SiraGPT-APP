@@ -55,6 +55,7 @@ import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import { useCodeWorkspace } from "@/lib/code-workspace-context"
 import type { WorkspaceToolId } from "@/lib/code-workspace-tools"
+import { RealGitPanel } from "@/components/code/git-tool-real"
 
 type Deployment = {
   id: string
@@ -1435,106 +1436,14 @@ function DeveloperTool() {
 }
 
 function GitTool() {
-  const { files } = useCodeWorkspace()
-  const filePaths = React.useMemo(() => Object.keys(files).sort(), [files])
-  const [commits, setCommits] = useWorkspacePersistedState<{ id: string; message: string; createdAt: number; fileCount: number; branch: string }[]>("git", [])
-  const [branches, setBranches] = useWorkspacePersistedState<string[]>("git-branches", ["main"])
-  const [branch, setBranch] = useWorkspacePersistedState("git-current-branch", "main")
-  const [remote, setRemote] = useWorkspacePersistedState("git-remote", "origin")
-  const [staged, setStaged] = useWorkspacePersistedState<string[]>("git-staged", [])
-  const [message, setMessage] = React.useState("Checkpoint del agente")
-  const [newBranch, setNewBranch] = React.useState("")
-
-  const create = () => {
-    const stagedCount = staged.filter((path) => filePaths.includes(path)).length
-    setCommits((prev) => [{ id: makeId("commit"), message: message.trim() || "Checkpoint", createdAt: Date.now(), fileCount: stagedCount || filePaths.length, branch }, ...prev])
-    setMessage("Checkpoint del agente")
-    setStaged([])
-    toast.success("Commit local registrado")
-  }
-
-  const createBranch = () => {
-    const clean = newBranch.trim()
-    if (!clean || branches.includes(clean)) return
-    setBranches((prev) => [...prev, clean])
-    setBranch(clean)
-    setNewBranch("")
-  }
-
+  const { activeFolder } = useCodeWorkspace()
   return (
-    <ToolShell eyebrow="Version control" title="Git" detail="Interfaz visual para cambios, stage, commits, branches y sincronizacion remota." action={<Button size="sm" className="h-8 gap-1.5" onClick={create} disabled={!message.trim()}><GitCommit className="h-3.5 w-3.5" />Commit</Button>}>
-      <PanelGrid>
-        <PanelCard title="Review changes" detail={`${filePaths.length} archivos en el workspace`} icon={<GitCommit className="h-4 w-4" />}>
-          <div className="mb-3 flex flex-wrap gap-2">
-            <Button size="sm" variant="outline" className="h-8" onClick={() => setStaged(filePaths)}>Stage all</Button>
-            <Button size="sm" variant="outline" className="h-8" onClick={() => setStaged([])}>Unstage all</Button>
-          </div>
-          <div className="max-h-64 overflow-auto rounded-md border border-border/60">
-            {filePaths.length === 0 ? (
-              <p className="px-3 py-6 text-center text-[12px] text-muted-foreground">Sin archivos para versionar.</p>
-            ) : filePaths.map((path) => {
-              const checked = staged.includes(path)
-              return (
-                <label key={path} className="flex cursor-pointer items-center gap-2 border-b border-border/40 px-3 py-2 text-[12px] last:border-b-0 hover:bg-muted/35">
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => setStaged((prev) => checked ? prev.filter((row) => row !== path) : [...prev, path])}
-                    className="h-3.5 w-3.5"
-                  />
-                  <span className="min-w-0 flex-1 truncate font-mono">{path}</span>
-                  <span className="text-[11px] text-emerald-600">modified</span>
-                </label>
-              )
-            })}
-          </div>
-        </PanelCard>
-        <PanelCard title="Commit" detail={`${staged.length} staged · branch ${branch}`} icon={<GitBranch className="h-4 w-4" />}>
-          <div className="space-y-3">
-            <Input value={message} onChange={(e) => setMessage(e.target.value)} className="h-8 text-[12px]" />
-            <div className="grid gap-2 sm:grid-cols-2">
-              <label className="text-[12px] font-medium">
-                Branch
-                <select value={branch} onChange={(event) => setBranch(event.target.value)} className="mt-1 h-8 w-full rounded-md border border-input bg-background px-2 text-[12px]">
-                  {branches.map((row) => <option key={row} value={row}>{row}</option>)}
-                </select>
-              </label>
-              <label className="text-[12px] font-medium">
-                Remote
-                <Input value={remote} onChange={(event) => setRemote(event.target.value)} className="mt-1 h-8 text-[12px]" />
-              </label>
-            </div>
-            <div className="flex gap-2">
-              <Input value={newBranch} onChange={(event) => setNewBranch(event.target.value)} placeholder="feature/workspace-tools" className="h-8 text-[12px]" />
-              <Button size="sm" variant="outline" className="h-8 shrink-0" onClick={createBranch}>New branch</Button>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Button size="sm" className="h-8 gap-1.5" onClick={create} disabled={!message.trim()}>
-                <GitCommit className="h-3.5 w-3.5" />
-                Commit
-              </Button>
-              <Button size="sm" variant="outline" className="h-8 gap-1.5" onClick={() => toast.success(`Push simulado a ${remote}/${branch}`)}>
-                <UploadCloud className="h-3.5 w-3.5" />
-                Push
-              </Button>
-              <Button size="sm" variant="outline" className="h-8 gap-1.5" onClick={() => toast.success(`Pull simulado desde ${remote}/${branch}`)}>
-                <Download className="h-3.5 w-3.5" />
-                Pull
-              </Button>
-            </div>
-          </div>
-        </PanelCard>
-        <PanelCard title="Historial" detail={`${commits.length} commits locales`} icon={<History className="h-4 w-4" />} className="lg:col-span-2">
-          <div className="space-y-2">
-            {commits.length === 0 ? <p className="rounded-md bg-muted/35 px-3 py-3 text-[12px] text-muted-foreground">Sin checkpoints.</p> : commits.map((row) => (
-              <div key={row.id} className="rounded-md border border-border/60 px-3 py-2">
-                <p className="text-[12px] font-medium">{row.message}</p>
-                <p className="text-[11px] text-muted-foreground">{formatDateTime(row.createdAt)} · {row.fileCount} archivos · {row.branch}</p>
-              </div>
-            ))}
-          </div>
-        </PanelCard>
-      </PanelGrid>
+    <ToolShell
+      eyebrow="Version control"
+      title="Git"
+      detail="Conecta GitHub y controla versiones reales: commit, push, pull, ramas e historial."
+    >
+      <RealGitPanel projectId={activeFolder?.id || null} projectName={activeFolder?.name} />
     </ToolShell>
   )
 }

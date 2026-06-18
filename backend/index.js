@@ -208,8 +208,8 @@ startLangfuse();
 // manual_edit) appears as a "score" on its associated trace. Best-effort:
 // the sink swallows all errors and noops when Langfuse is disabled.
 try {
-  const __misSignals = require('./src/services/agents/misunderstanding-signals');
-  __misSignals.setLangfuseSink({ scoreTrace: langfuseScoreTrace });
+    const __misSignals = require('./src/services/agents/misunderstanding-signals');
+    __misSignals.setLangfuseSink({ scoreTrace: langfuseScoreTrace });
 } catch (_misWireErr) { /* noop — telemetry must never block boot */ }
 const {
     getPostHogStatus,
@@ -347,6 +347,7 @@ const scientificSearchRoutes = require('./src/routes/scientific-search');
 const answerRoutes = require('./src/routes/answer');
 const builderRoutes = require('./src/routes/builder');
 const githubSearchRoutes = require('./src/routes/github-search');
+const githubRoutes = require('./src/routes/github');
 const xSearchRoutes = require('./src/routes/x-search');
 const accountingRoutes = require('./src/routes/accounting');
 const linkPreviewRoutes = require('./src/routes/link-preview');
@@ -1010,6 +1011,7 @@ app.use('/api/scientific-search', scientificSearchRoutes);
 app.use('/api/answer', answerRoutes);
 app.use('/api/builder', builderRoutes);
 app.use('/api/github-search', githubSearchRoutes);
+app.use('/api/github', githubRoutes);
 app.use('/api/x-search', xSearchRoutes);
 app.use('/api/accounting', accountingRoutes);
 app.use('/api/link-preview', linkPreviewRoutes);
@@ -1065,16 +1067,16 @@ app.use('/api/codex', codexV2Routes);
 // secret-token header) and fully inert unless TELEGRAM_BOT_TOKEN is set.
 app.use('/api/telegram', telegramRoutes);
 try {
-  const tgControl = require('./src/services/telegram/telegram-control');
-  const tgCfg = tgControl.getTelegramConfig();
-  if (tgCfg.enabled && tgCfg.webhookUrl) {
-    tgControl
-      .setTelegramWebhook(tgCfg)
-      .then((r) => console.log(r.ok ? '[telegram] webhook registered' : '[telegram] setWebhook failed'))
-      .catch(() => {});
-  }
+    const tgControl = require('./src/services/telegram/telegram-control');
+    const tgCfg = tgControl.getTelegramConfig();
+    if (tgCfg.enabled && tgCfg.webhookUrl) {
+        tgControl
+            .setTelegramWebhook(tgCfg)
+            .then((r) => console.log(r.ok ? '[telegram] webhook registered' : '[telegram] setWebhook failed'))
+            .catch(() => { });
+    }
 } catch {
-  /* telegram is optional */
+    /* telegram is optional */
 }
 app.use('/api/push', pushRoutes);
 app.use('/api/cowork', coworkRoutes);
@@ -1187,8 +1189,8 @@ async function startServer() {
         //     (image generation has its own 200 s ceiling, file uploads,
         //     model warm-ups) don't get cut off mid-flight.
         server.keepAliveTimeout = 120_000;
-        server.headersTimeout   = 125_000;
-        server.requestTimeout   = 300_000;
+        server.headersTimeout = 125_000;
+        server.requestTimeout = 300_000;
         const startInfo = {
             port: PORT,
             env: process.env.NODE_ENV || 'development',
@@ -1284,9 +1286,9 @@ async function startServer() {
     // Lives on a separate path (`/ws/realtime`) so it can't collide with
     // the computer-use socket above.
     try {
-      initRealtimeServer(server, { logger });
+        initRealtimeServer(server, { logger });
     } catch (err) {
-      logger.warn({ err: err.message }, 'realtime_socket_init_failed');
+        logger.warn({ err: err.message }, 'realtime_socket_init_failed');
     }
 
     // Wire scheduler → agent: register the invoker so cron/webhook jobs
@@ -1301,11 +1303,11 @@ async function startServer() {
     scheduler.start();
 
     try {
-      const { bootHermesRuntime } = require('./src/services/agents/hermes-runtime');
-      bootHermesRuntime();
-      logger.info('hermes_runtime_booted');
+        const { bootHermesRuntime } = require('./src/services/agents/hermes-runtime');
+        bootHermesRuntime();
+        logger.info('hermes_runtime_booted');
     } catch (err) {
-      logger.warn({ err: err && err.message }, 'hermes_runtime_boot_failed');
+        logger.warn({ err: err && err.message }, 'hermes_runtime_boot_failed');
     }
 
     // System cron — daily GDPR housekeeping (scrub @ 02:30 UTC,
@@ -1315,7 +1317,7 @@ async function startServer() {
         const systemCron = require('./src/jobs/system-cron');
         systemCron.start({ logger });
         shutdownRegistry.register('system_cron_stop', () => {
-            try { systemCron.stop(); } catch {}
+            try { systemCron.stop(); } catch { }
         }, 5000);
     } catch (err) {
         logger.warn({ err: err && err.message }, 'system_cron_init_failed');
@@ -1354,13 +1356,13 @@ async function startServer() {
 
     // 4. Close realtime WS server (cycle 24).
     shutdownRegistry.register('realtime_ws_close', () => {
-        try { closeRealtimeServer(); } catch {}
+        try { closeRealtimeServer(); } catch { }
     }, 5000);
 
     // 3. Close BullMQ workers + queue.
     shutdownRegistry.register('bullmq_workers_close', async () => {
-        try { stopGoalRecovery(); } catch {}
-        try { stopGoalCleanup(); } catch {}
+        try { stopGoalRecovery(); } catch { }
+        try { stopGoalCleanup(); } catch { }
         await Promise.allSettled([
             closeAgentTaskWorker(),
             closeAgentTaskQueue(),
@@ -1373,14 +1375,14 @@ async function startServer() {
 
     // 2. Disconnect Prisma.
     shutdownRegistry.register('prisma_disconnect', async () => {
-        try { if (typeof prisma.$disconnect === 'function') await prisma.$disconnect(); } catch {}
+        try { if (typeof prisma.$disconnect === 'function') await prisma.$disconnect(); } catch { }
     }, 5000);
 
     // 1. Disconnect Redis (lazy health client + any others we own).
     shutdownRegistry.register('redis_disconnect', async () => {
         const c = (typeof healthRoutes.getHealthRedisClient === 'function') ? healthRoutes.getHealthRedisClient() : null;
         if (c && typeof c.quit === 'function') {
-            try { await c.quit(); } catch {}
+            try { await c.quit(); } catch { }
         }
     }, 5000);
 
@@ -1402,11 +1404,11 @@ async function startServer() {
     // Scheduler stop — registered last (first to run) so cron jobs
     // can't enqueue new work during shutdown.
     shutdownRegistry.register('scheduler_stop', () => {
-        try { scheduler.stop?.(); } catch {}
+        try { scheduler.stop?.(); } catch { }
         try {
             const { shutdownHermesRuntime } = require('./src/services/agents/hermes-runtime');
             shutdownHermesRuntime();
-        } catch {}
+        } catch { }
     }, 5000);
 
     async function shutdown(signal) {
@@ -1449,7 +1451,7 @@ async function startServer() {
                     heapLimitMb: Math.round(heapLimit / 1024 / 1024),
                     heapTotalMb: Math.round(m.heapTotal / 1024 / 1024),
                     rssMb: Math.round(m.rss / 1024 / 1024),
-                })).catch(() => {});
+                })).catch(() => { });
             }
         } catch { /* never throw from monitor */ }
     }, 30_000);
@@ -1482,7 +1484,7 @@ async function startServer() {
                 Promise.resolve().then(() => alerting.notifyHigh5xxRate(ratePct, {
                     windowSize: total,
                     errors: errs,
-                })).catch(() => {});
+                })).catch(() => { });
             }
         } catch { /* never throw */ }
     }, 60_000);

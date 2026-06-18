@@ -177,6 +177,12 @@ model User {
   userRoles     UserRole[] @relation("UserRoleAssignedTo")
   assignedRoles UserRole[] @relation("UserRoleAssignedBy")
 
+  // GitHub integration (Replit-style git). One GitHub identity per user,
+  // many connected repos, each repo with at most one host workspace checkout.
+  githubAccount         GithubAccount?
+  connectedRepositories ConnectedRepository[]
+  workspaces            Workspace[]
+
   @@index([deletedAt])
   @@map("users")
 }
@@ -196,6 +202,81 @@ model PushSubscription {
 
   @@index([userId])
   @@map("push_subscriptions")
+}
+
+// ──────────────────────────────────────────────────────────────
+// GitHub integration — OAuth account, connected repos, workspaces.
+// Tokens are AES-256 sealed (see services/TokenVault.js) before they
+// ever reach `encryptedTokens`; the column never holds plaintext.
+// ──────────────────────────────────────────────────────────────
+
+model GithubAccount {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  githubUserId    String  @unique // numeric GitHub user id, stored as string
+  login           String // GitHub username (handle)
+  name            String?
+  avatarUrl       String?
+  scope           String? // granted scopes, space/comma separated
+  tokenType       String  @default("bearer")
+  encryptedTokens String // sealed JSON: { accessToken, refreshToken?, scope, expiresAt }
+
+  connectedAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  repositories ConnectedRepository[]
+
+  @@index([userId])
+  @@map("github_accounts")
+}
+
+model ConnectedRepository {
+  id              String        @id @default(cuid())
+  userId          String
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  githubAccountId String
+  githubAccount   GithubAccount @relation(fields: [githubAccountId], references: [id], onDelete: Cascade)
+
+  repoId        String // GitHub repo numeric id, stored as string
+  fullName      String // "owner/repo"
+  owner         String
+  name          String
+  private       Boolean @default(false)
+  defaultBranch String  @default("main")
+  cloneUrl      String // https clone url
+  htmlUrl       String?
+
+  connectedAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace?
+
+  @@unique([userId, repoId])
+  @@index([userId])
+  @@index([githubAccountId])
+  @@map("connected_repositories")
+}
+
+model Workspace {
+  id           String              @id @default(cuid())
+  userId       String
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  repositoryId String              @unique
+  repository   ConnectedRepository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  localPath     String // absolute path of the host checkout
+  currentBranch String?
+  status        String  @default("pending") // pending | cloning | ready | error
+  lastError     String?
+
+  lastSyncAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("workspaces")
 }
 
 model AiModel {
@@ -2017,7 +2098,7 @@ model CodexRunMetric {
   deletions       Int      @default(0)
   tokensIn        Int      @default(0)
   tokensOut       Int      @default(0)
-  model           String?  // model id behind the run (for the Agent Usage detail)
+  model           String? // model id behind the run (for the Agent Usage detail)
   costUsd         Float    @default(0)
   costSource      String   @default("estimated") // provider_exact | openrouter_generation | estimated
   costOriginalUsd Float    @default(0)
@@ -2457,30 +2538,30 @@ model AccountingProduct {
 
 /// Comprobante electrónico peruano (boleta/factura) con cálculo de IGV.
 model AccountingInvoice {
-  id           String   @id @default(cuid())
-  docType      String // BOLETA | FACTURA
-  series       String // p.ej. F001, B001
-  number       Int // correlativo por serie
-  issueDate    DateTime
-  customerId   String?
-  customerDoc  String?
-  customerName String
-  currency     String   @default("PEN") // PEN | USD
-  exchangeRate Decimal? @db.Decimal(18, 6)
-  gravado      Decimal  @default(0) @db.Decimal(18, 2)
-  exonerado    Decimal  @default(0) @db.Decimal(18, 2)
-  inafecto     Decimal  @default(0) @db.Decimal(18, 2)
-  igv          Decimal  @default(0) @db.Decimal(18, 2)
-  total        Decimal  @default(0) @db.Decimal(18, 2)
-  status       String   @default("DRAFT") // DRAFT | ISSUED | VOID
-  sunatStatus  String? // PENDING | ACCEPTED | REJECTED
-  sunatTicket  String?
-  cdrHash      String?
-  oseProvider  String?
+  id             String   @id @default(cuid())
+  docType        String // BOLETA | FACTURA
+  series         String // p.ej. F001, B001
+  number         Int // correlativo por serie
+  issueDate      DateTime
+  customerId     String?
+  customerDoc    String?
+  customerName   String
+  currency       String   @default("PEN") // PEN | USD
+  exchangeRate   Decimal? @db.Decimal(18, 6)
+  gravado        Decimal  @default(0) @db.Decimal(18, 2)
+  exonerado      Decimal  @default(0) @db.Decimal(18, 2)
+  inafecto       Decimal  @default(0) @db.Decimal(18, 2)
+  igv            Decimal  @default(0) @db.Decimal(18, 2)
+  total          Decimal  @default(0) @db.Decimal(18, 2)
+  status         String   @default("DRAFT") // DRAFT | ISSUED | VOID
+  sunatStatus    String? // PENDING | ACCEPTED | REJECTED
+  sunatTicket    String?
+  cdrHash        String?
+  oseProvider    String?
   journalEntryId String?
-  userId       String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  userId         String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   lines AccountingInvoiceLine[]
 

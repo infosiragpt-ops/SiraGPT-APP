@@ -20,7 +20,7 @@
 import * as React from "react"
 import { useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
-import { Plus, Search, ChevronDown, Check, FolderKanban, MoreHorizontal, Pencil, Star, Trash2 } from "lucide-react"
+import { Plus, Search, ChevronDown, Check, FolderKanban, MoreHorizontal, Pencil, Star, Trash2, Github } from "lucide-react"
 import { toast } from "sonner"
 import { formatDistanceToNow } from "date-fns"
 import { es as dfEs, enUS as dfEn } from "date-fns/locale"
@@ -167,10 +167,16 @@ export default function ProjectsPage() {
       <div className="mx-auto max-w-5xl px-4 sm:px-6 md:px-8 py-8 md:py-12">
         <header className="flex items-center justify-between mb-6">
           <h1 className="text-3xl font-serif tracking-tight" data-testid="projects-page-title">{t("title")}</h1>
-          <Button onClick={openCreate} className="gap-1.5">
-            <Plus className="h-4 w-4" />
-            {t("newProject")}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => router.push("/workspace")} className="gap-1.5">
+              <Github className="h-4 w-4" />
+              Import code
+            </Button>
+            <Button onClick={openCreate} className="gap-1.5">
+              <Plus className="h-4 w-4" />
+              {t("newProject")}
+            </Button>
+          </div>
         </header>
 
         <div className="mb-4">

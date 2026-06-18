@@ -1113,6 +1113,7 @@ const APPS: { id: string; name: string; desc: string; cat: AppCat }[] = [
 function AppsSection() {
   const { settings, update } = useSettings()
   const { user } = useAuth()
+  const router = useNextRouter()
 
   const isConnected = (id: string) => {
     if (id === "gmail" && (user as any)?.gmailTokens) return true
@@ -1120,6 +1121,12 @@ function AppsSection() {
   }
 
   const connect = (id: string) => {
+    // GitHub is fully wired: take the user to the Replit-style workspace hub
+    // where they can sign in, import repos and use version control.
+    if (id === "github") {
+      router.push("/workspace")
+      return
+    }
     const name = APPS.find((a) => a.id === id)?.name || id
     toast("Próximamente", { description: `La integración con ${name} estará disponible en breve.` })
     update({ apps: { ...settings.apps, [id]: { connected: false } } })

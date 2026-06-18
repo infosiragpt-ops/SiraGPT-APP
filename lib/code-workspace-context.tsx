@@ -39,6 +39,7 @@ import {
   upsertCodexProject,
 } from "./codex-projects"
 import { projectsService } from "./projects-service"
+import { mirrorWrite, mirrorDelete, mirrorRename, setMirrorSuppressed } from "./code-git-mirror"
 import {
   getLinkedLocalFolderName,
   hasLinkedLocalFolder,
@@ -149,6 +150,10 @@ export type CodeWorkspaceContextValue = {
    *  the resolved path so the caller can open the editor on it. */
   applyBlock: (path: string, content: string) => string
 
+  /** Bulk-replace the workspace files (used to load a bound GitHub repo's
+   *  files into the editor). Does NOT mirror back to the clone. */
+  hydrateFiles: (files: { path: string; content: string }[]) => void
+
   /** Imperative bus shared with the chat / command palette. The chat
    *  panel registers a focus handler so ⌘L can move focus into the
    *  composer without prop-drilling refs through three levels. */
@@ -258,6 +263,12 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
   // visible swap to the persisted ones.
   const initialFolder = React.useMemo(readStoredActiveFolder, [])
   const [activeFolder, setActiveFolderState] = React.useState<ActiveFolder | null>(initialFolder)
+  // Latest active project id, readable from stable callbacks without
+  // re-creating them on every folder switch (used by the git mirror).
+  const activeFolderIdRef = React.useRef<string | null>(initialFolder?.id ?? null)
+  React.useEffect(() => {
+    activeFolderIdRef.current = activeFolder?.id ?? null
+  }, [activeFolder?.id])
   const [state, setState] = React.useState<PersistedState>(() =>
     buildInitialStateFor(initialFolder?.id ?? null),
   )
@@ -369,18 +380,22 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
   }, [])
 
   const updateFile = React.useCallback((path: string, content: string) => {
+    let changed = false
     setState((prev) => {
       const existing = prev.files[path]
       if (!existing) return prev
       if (existing.content === content) return prev
+      changed = true
       const files = { ...prev.files, [path]: { ...existing, content, updatedAt: Date.now() } }
       return { ...prev, files }
     })
+    if (changed) mirrorWrite(activeFolderIdRef.current, path, content)
   }, [])
 
   const createFile = React.useCallback((path: string, content = "") => {
     const cleaned = normalizePath(path)
     if (!cleaned) return
+    let isNew = false
     setState((prev) => {
       if (prev.files[cleaned]) {
         // Treat as "open the existing file" rather than overwriting.
@@ -396,21 +411,25 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
         content,
         updatedAt: Date.now(),
       }
+      isNew = true
       return {
         files: { ...prev.files, [cleaned]: file },
         openTabs: [...prev.openTabs, cleaned],
         activePath: cleaned,
       }
     })
+    if (isNew) mirrorWrite(activeFolderIdRef.current, cleaned, content)
   }, [])
 
   const renameFile = React.useCallback((oldPath: string, newPath: string) => {
     const cleanedNew = normalizePath(newPath)
     if (!cleanedNew || cleanedNew === oldPath) return
+    let didRename = false
     setState((prev) => {
       const file = prev.files[oldPath]
       if (!file) return prev
       if (prev.files[cleanedNew]) return prev // refuse to clobber
+      didRename = true
       const renamed: CodeFile = {
         ...file,
         path: cleanedNew,
@@ -423,11 +442,14 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       const activePath = prev.activePath === oldPath ? cleanedNew : prev.activePath
       return { files, openTabs, activePath }
     })
+    if (didRename) mirrorRename(activeFolderIdRef.current, oldPath, cleanedNew)
   }, [])
 
   const deleteFile = React.useCallback((path: string) => {
+    let didDelete = false
     setState((prev) => {
       if (!prev.files[path]) return prev
+      didDelete = true
       const files = { ...prev.files }
       delete files[path]
       const openTabs = prev.openTabs.filter((p) => p !== path)
@@ -435,6 +457,7 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
         prev.activePath === path ? openTabs[openTabs.length - 1] ?? null : prev.activePath
       return { files, openTabs, activePath }
     })
+    if (didDelete) mirrorDelete(activeFolderIdRef.current, path)
   }, [])
 
   const resetWorkspace = React.useCallback(() => {
@@ -629,12 +652,45 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       const openTabs = prev.openTabs.includes(cleaned) ? prev.openTabs : [...prev.openTabs, cleaned]
       return { files, openTabs, activePath: cleaned }
     })
+    // Mirror the agent's write to the bound GitHub clone (if any) so its
+    // edits land in the real, committable/pushable/downloadable repo.
+    mirrorWrite(activeFolderIdRef.current, cleaned, content)
     // Surface the live preview as soon as the agent writes code, so the
     // "instruct → build → see it" loop closes without a manual toggle.
     if (typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent("siragpt:code-open-preview"))
     }
     return cleaned
+  }, [])
+
+  // Bulk-load files into the workspace (e.g. from a bound GitHub repo) WITHOUT
+  // mirroring back to the clone — the clone is the source here.
+  const hydrateFiles = React.useCallback((incoming: { path: string; content: string }[]) => {
+    const folderId = activeFolderIdRef.current
+    setMirrorSuppressed(folderId, true)
+    setState((prev) => {
+      const files: CodeFiles = {}
+      for (const f of incoming) {
+        const cleaned = normalizePath(f.path)
+        if (!cleaned) continue
+        files[cleaned] = {
+          path: cleaned,
+          language: languageForPath(cleaned),
+          content: f.content,
+          updatedAt: Date.now(),
+        }
+      }
+      const firstPath = Object.keys(files)[0] ?? null
+      const keepActive = prev.activePath && files[prev.activePath] ? prev.activePath : firstPath
+      const openTabs = prev.openTabs.filter((p) => files[p])
+      return { files, openTabs: keepActive && !openTabs.includes(keepActive) ? [...openTabs, keepActive] : openTabs, activePath: keepActive }
+    })
+    // Let the suppression cover this render's persistence cycle, then re-enable.
+    if (typeof window !== "undefined") {
+      window.setTimeout(() => setMirrorSuppressed(folderId, false), 0)
+    } else {
+      setMirrorSuppressed(folderId, false)
+    }
   }, [])
 
   const registerChatFocusHandler = React.useCallback((handler: ChatFocusListener) => {
@@ -796,6 +852,7 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       openLocalFolderWorkspace,
       saveFileToWorkspace,
       applyBlock,
+      hydrateFiles,
       registerChatFocusHandler,
       focusChat,
       registerCommandPaletteHandler,
@@ -830,6 +887,7 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       openLocalFolderWorkspace,
       saveFileToWorkspace,
       applyBlock,
+      hydrateFiles,
       registerChatFocusHandler,
       focusChat,
       registerCommandPaletteHandler,
