@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1504**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1509**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -451,7 +451,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yargs-parser` | 21.1.1 | ISC | [link](https://github.com/yargs/yargs-parser) |
 | `zod-to-json-schema` | 3.25.2 | ISC | [link](https://github.com/StefanTerdell/zod-to-json-schema) |
 
-## MIT (1109)
+## MIT (1114)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -509,6 +509,8 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@jridgewell/trace-mapping` | 0.3.31 | MIT | [link](https://github.com/jridgewell/sourcemaps) |
 | `@js-sdsl/ordered-map` | 4.4.2 | MIT | [link](https://github.com/js-sdsl/js-sdsl) |
 | `@kurkle/color` | 0.3.4 | MIT | [link](https://github.com/kurkle/color) |
+| `@kwsites/file-exists` | 1.1.1 | MIT | [link](https://github.com/kwsites/file-exists) |
+| `@kwsites/promise-deferred` | 1.1.1 | MIT | [link](https://github.com/kwsites/promise-deferred) |
 | `@langchain/core` | 1.1.41, 1.1.47 | MIT | [link](https://github.com/langchain-ai/langchainjs) |
 | `@langchain/langgraph` | 1.2.9 | MIT | [link](https://github.com/langchain-ai/langgraphjs) |
 | `@langchain/langgraph-checkpoint` | 1.0.1 | MIT | [link](https://github.com/langchain-ai/langgraphjs) |
@@ -651,6 +653,8 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@shikijs/themes` | 1.29.2 | MIT | [link](https://github.com/shikijs/shiki) |
 | `@shikijs/types` | 1.29.2 | MIT | [link](https://github.com/shikijs/shiki) |
 | `@shikijs/vscode-textmate` | 10.0.2 | MIT | [link](https://github.com/shikijs/vscode-textmate) |
+| `@simple-git/args-pathspec` | 1.0.3 | MIT | [link](https://github.com/steveukx/git-js) |
+| `@simple-git/argv-parser` | 1.1.1 | MIT | [link](https://github.com/steveukx/git-js) |
 | `@simplewebauthn/server` | 11.0.0 | MIT | [link](https://github.com/MasterKale/SimpleWebAuthn) |
 | `@simplewebauthn/types` | 11.0.0 | MIT | [link](https://github.com/MasterKale/SimpleWebAuthn) |
 | `@standard-schema/spec` | 1.1.0 | MIT | [link](https://github.com/standard-schema/standard-schema) |
@@ -1430,6 +1434,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `side-channel-weakmap` | 1.0.2 | MIT | [link](https://github.com/ljharb/side-channel-weakmap) |
 | `simple-concat` | 1.0.1 | MIT | [link](https://github.com/feross/simple-concat) |
 | `simple-get` | 4.0.1 | MIT | [link](https://github.com/feross/simple-get) |
+| `simple-git` | 3.36.0 | MIT | [link](https://github.com/steveukx/git-js) |
 | `smart-buffer` | 4.2.0 | MIT | [link](https://github.com/JoshGlazebrook/smart-buffer) |
 | `socks` | 2.8.7 | MIT | [link](https://github.com/JoshGlazebrook/socks) |
 | `socks-proxy-agent` | 8.0.5 | MIT | [link](https://github.com/TooTallNate/proxy-agents) |
