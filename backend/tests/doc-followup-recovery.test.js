@@ -2,6 +2,10 @@
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const PizZip = require('pizzip');
 
 const { resolveChatDocumentFileIds } = require('../src/services/message-attachments');
 const agentTaskRoute = require('../src/routes/agent-task');
@@ -9,6 +13,16 @@ const agentTaskRoute = require('../src/routes/agent-task');
 // the chat + agent-task routes); the route re-exports it for back-compat.
 const { looksLikeDocumentFollowupQuestion } = agentTaskRoute;
 const { shouldRunForPrompt } = require('../src/services/rag/operational-runtime');
+const {
+  buildPreviousContentDocumentPrompt,
+  findPreviousAssistantContent,
+  isPreviousContentExportRequest,
+} = require('../src/services/document-followup-context');
+const {
+  buildPlan,
+  validateDocument,
+  INTERNAL: documentPipelineInternals,
+} = require('../src/services/document-pipeline/advanced-document-pipeline');
 
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
@@ -154,5 +168,60 @@ describe('RAG gate relax — questions retrieve when a document is in scope', ()
 
   test('a non-question statement without keywords does not over-trigger', () => {
     assert.equal(shouldRunForPrompt('gracias, perfecto', docs), false);
+  });
+});
+
+describe('document export follow-up — previous assistant content becomes the source', () => {
+  test('detects short "put it in Word" follow-ups without hijacking new documents', () => {
+    assert.equal(isPreviousContentExportRequest('colocado en un word para poder descargarlo'), true);
+    assert.equal(isPreviousContentExportRequest('pásalo a Word descargable'), true);
+    assert.equal(isPreviousContentExportRequest('pon el resultado anterior en un docx'), true);
+    assert.equal(isPreviousContentExportRequest('crea un word sobre marketing digital'), false);
+  });
+
+  test('selects the last substantive assistant answer and skips generic document cards', () => {
+    const messages = [
+      {
+        role: 'ASSISTANT',
+        content: '**Colocado para poder descargarlo**\n\nDocumento generado por la pipeline multiagente de siraGPT.\n\nVerificaciones técnicas: 15/15 ✓',
+        files: JSON.stringify([{ id: 'doc1', filename: 'x.docx' }]),
+      },
+      {
+        role: 'ASSISTANT',
+        content: '## 4. Resultado Final\n\nEl tamaño de la muestra requerido, redondeado al entero más cercano, es: n ≈ 97',
+      },
+    ];
+
+    const source = findPreviousAssistantContent(messages);
+    assert.match(source, /n ≈ 97/);
+    assert.doesNotMatch(source, /pipeline multiagente/);
+  });
+
+  test('renders the recovered source content inside the generated DOCX', async () => {
+    const source = '## 4. Resultado Final\n\nEl tamaño de la muestra requerido, redondeado al entero más cercano, es: n ≈ 97';
+    const prompt = buildPreviousContentDocumentPrompt({
+      prompt: 'colocado en un word para poder descargarlo',
+      sourceContent: source,
+      format: 'docx',
+    });
+    const plan = buildPlan({
+      prompt,
+      format: 'docx',
+      template: 'premium',
+      complexity: 'standard',
+      referenceFiles: [],
+    });
+    assert.equal(plan.title, 'Resultado Final');
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'siragpt-doc-followup-'));
+    const artifact = await documentPipelineInternals.buildDocumentFile({ plan, outputDir: outDir });
+    const expected = documentPipelineInternals.expectedFor(plan.format, plan.template, plan.complexity, plan);
+    const validation = validateDocument({ format: 'docx', buffer: artifact.buffer, expected });
+    const documentXml = new PizZip(artifact.buffer).file('word/document.xml').asText();
+    const text = documentXml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+
+    assert.equal(validation.passed, true);
+    assert.match(text, /Resultado Final/);
+    assert.match(text, /n ≈ 97/);
+    assert.doesNotMatch(text, /Contenido específico pendiente de regeneración/);
   });
 });
