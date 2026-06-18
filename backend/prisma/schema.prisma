@@ -138,6 +138,7 @@ model User {
   goalRuns                GoalRun[]
   codexProjects           CodexProject[]
   codexRuns               CodexRun[]
+  deployments             Deployment[]
   generatedArtifacts      GeneratedArtifact[]
   documentAnalyses        DocumentAnalysis[]
   pushSubscriptions       PushSubscription[]
@@ -2110,6 +2111,98 @@ model CodexRunMetric {
   run CodexRun @relation(fields: [runId], references: [id], onDelete: Cascade)
 
   @@map("codex_run_metrics")
+}
+
+// Deployments / Publishing (flag DEPLOYMENTS_V2). A faithful management clone
+// of Replit's Deployments tab: status lifecycle, version history (immutable
+// snapshots with a short hash), custom domains and a synthetic security scan.
+// Management-only — it tracks/records deployments, it does NOT provision real
+// VMs. Optionally linked to a Project ("webapp") via projectId.
+model Deployment {
+  id        String  @id @default(cuid())
+  userId    String
+  projectId String? // optional link to a Project (webapp)
+  name      String
+
+  // autoscale | reserved_vm | static | scheduled
+  deploymentType  String  @default("autoscale")
+  // building | running | failed | paused | suspended | shut_down
+  status          String  @default("building")
+  // payment_failure | budget_limit | manual | null
+  suspendedReason String?
+
+  // public | workspace | private | password
+  visibility  String @default("public")
+  // na | eu | sa | asia | au  — fixed after first publish (Replit parity)
+  geography   String @default("na")
+  // reserved_vm: 0.5vcpu_2gb | 1vcpu_4gb | 2vcpu_8gb | 4vcpu_16gb ; else label
+  machineTier String @default("autoscale")
+  cpu         Float?
+  memoryMb    Int?
+
+  subdomain    String? @unique // <subdomain>.sira.app default domain
+  buildCommand String?
+  runCommand   String?
+  publicDir    String?
+  externalPort Int?    @default(80)
+
+  databaseConnected Boolean @default(false)
+  databaseProvider  String?
+
+  // id of the DeploymentVersion currently serving (isLive). Plain scalar
+  // (no relation) to avoid a circular required FK with the version table.
+  currentVersionId String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  user     User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  versions DeploymentVersion[]
+  domains  DeploymentDomain[]
+
+  @@index([userId, updatedAt])
+  @@index([userId, deletedAt])
+  @@map("deployments")
+}
+
+model DeploymentVersion {
+  id               String   @id @default(cuid())
+  deploymentId     String
+  shortHash        String // 8-char build identifier shown in the timeline
+  // provisioning | security_scan | building | bundling | promoted | failed | rolled_back
+  status           String   @default("promoting")
+  isLive           Boolean  @default(false)
+  isRollback       Boolean  @default(false)
+  rolledBackFromId String?
+  publishedById    String?
+  buildLog         String?  @db.Text
+  securityScan     Json?
+  createdAt        DateTime @default(now())
+
+  deployment Deployment @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
+
+  @@index([deploymentId, createdAt])
+  @@map("deployment_versions")
+}
+
+model DeploymentDomain {
+  id                 String   @id @default(cuid())
+  deploymentId       String
+  hostname           String
+  kind               String   @default("custom") // default | custom | purchased
+  isPrimary          Boolean  @default(false)
+  // pending | verified | failed
+  verificationStatus String   @default("pending")
+  // provisioning | active
+  tlsStatus          String   @default("provisioning")
+  dnsRecords         Json?
+  createdAt          DateTime @default(now())
+
+  deployment Deployment @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
+
+  @@index([deploymentId])
+  @@map("deployment_domains")
 }
 
 // Ratchet 44 — pending ownership transfer (cycle 76).

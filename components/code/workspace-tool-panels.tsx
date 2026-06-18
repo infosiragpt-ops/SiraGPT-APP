@@ -56,6 +56,7 @@ import { cn } from "@/lib/utils"
 import { useCodeWorkspace } from "@/lib/code-workspace-context"
 import type { WorkspaceToolId } from "@/lib/code-workspace-tools"
 import { RealGitPanel } from "@/components/code/git-tool-real"
+import { WorkspaceDeploymentsTool } from "@/components/deployments/workspace-deployments-tool"
 
 type Deployment = {
   id: string
@@ -214,7 +215,9 @@ export function WorkspaceToolPanel({ toolId }: { toolId: WorkspaceToolId }) {
     case "console":
       return <ConsoleTool />
     case "publishing":
-      return <PublishingTool />
+      // DEPLOYMENTS_V2 on ⇒ the real project-scoped Deployments module; off ⇒
+      // the legacy mock (keeps prod unchanged until the flag is enabled).
+      return <WorkspaceDeploymentsTool fallback={<PublishingTool />} />
     case "secrets":
       return <SecretsTool />
     case "database":

@@ -1055,6 +1055,59 @@ E2E con git real en tmpdir: `codex-e2e-flow.test.js`. Golden replay: `tests/lib/
   que mantiene vivo el proceso (cuelga node --test).
 - git-real tests: `git config core.autocrlf false` en el repo temporal (Windows CRLF rompe la comparación byte-a-byte).
 
+## Deployments / Publishing — clon del tab de Replit (flag DEPLOYMENTS_V2, added 2026-06-18)
+
+Clon **de gestión** (no provisiona VMs reales) del tab "Deployments/Publishing" de
+Replit: lifecycle de estados, historial de versiones inmutables con hash corto,
+dominios propios (registros A+TXT) y un security scan sintético. Patrón
+server-driven calcado de Codex V2. Flag off ⇒ `/api/deployments/*` responde 404
+salvo `/health`; el módulo `/deployments` muestra empty-state. Opcionalmente
+ligado a un `Project` (`webapp`) vía `projectId`.
+
+### Backend (`backend/src/services/deployments/` + `routes/deployments.js`)
+- `flags.js` — `isDeploymentsEnabled(env)` (`DEPLOYMENTS_V2` = 1/true/on).
+- `pipeline.js` — PURO/determinista (sin reloj ni random): pipeline de 5 fases
+  (provision→security_scan→build→bundle→promote), `generateShortHash` (FNV-1a,
+  8 hex), `slugifySubdomain`, `machineSpec` (tiers Reserved VM 0.5/2GB…4/16GB con
+  USD/mes), `dnsRecordsFor` (A + TXT `sira-verify=`), `securityScanReport`.
+- `deployment-service.js` — Prisma **inyectable** (default: cliente compartido),
+  todo scoped por `userId`: create/list/get(+versions+domains)/update(geography
+  inmutable)/publish (versión inmutable + demote de la previa live)/rollback
+  (re-promociona una versión previa como build `isRollback`)/pause·resume·shutdown
+  (soft-delete)/securityScan/addDomain·removeDomain/getLogs. `DeploymentError{status,code}`.
+- `routes/deployments.js` — montado `/api/deployments` en `index.js` (sin CSRF,
+  Bearer como codex). `GET /health` público SIEMPRE 200; resto flag-gated 404.
+  CRUD + `/publish` + `/rollback` + `/pause|resume|shutdown` + `/security-scan` +
+  `/domains` + `GET /:id/logs` + `GET /:id/logs/stream` (SSE replay + heartbeat,
+  `?token=` fallback).
+- Prisma: modelos `Deployment` / `DeploymentVersion` / `DeploymentDomain`
+  (`@@map deployments|deployment_versions|deployment_domains`) + relación en
+  `User`. Migración `20260618200000_add_deployment_tables` (aditiva).
+
+### Frontend (`app/deployments/page.tsx` + `components/deployments/*`)
+- `lib/deployments/deployments-api.ts` — cliente tipado (clon de codex-api):
+  Bearer `localStorage("auth-token")` + `credentials:include`; el contrato.
+- `page.tsx` — auth-gated, `health()` → empty-state si `enabled:false`, si no
+  lazy-load `DeploymentsModule` (`ssr:false`).
+- `components/deployments/`: `deployments-module` (selector + detalle),
+  `deployment-detail` (banner suspended + Reanudar/Ajustar/Escaneo + tabs
+  Overview/Logs/Dominios/Gestionar), `overview-tab` (card Production estilo
+  Replit + Publicar + timeline), `publish-pipeline` (5 pasos animados),
+  `version-timeline`, `logs-tab` (EventSource sobre `logsStreamUrl`),
+  `domains-tab` (A+TXT + verificación/TLS), `manage-tab` (settings + Apagar),
+  `create-deployment-dialog`, `shared.tsx` (helpers visuales + `timeAgo`).
+
+### Tests
+`backend/tests/deployment-pipeline.test.js` (8) + `deployment-service.test.js`
+(10, Prisma falso en memoria) — registrados en `backend/package.json`. Verificado
+e2e real (servicio+BD y HTTP+auth) + UI en navegador (create→publish→running).
+
+### Gotchas
+- El backend ignora `backend/.env PORT=5050` y liga a **5000** (gana `PORT=5000`
+  del `.env.local` raíz); el proxy de Next apunta ahí, así que coinciden.
+- Un seeder de arranque reescribe la password de `admin@example.com` a `password`
+  en cada reinicio del backend (credencial local estable: `admin@example.com` / `password`).
+
 ## Conexiones externas
 - Repo: https://github.com/SiraGPT-ORg/siraGPT
 - Remoto: `origin`

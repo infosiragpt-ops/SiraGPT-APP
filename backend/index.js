@@ -392,6 +392,7 @@ const socialPostsRoutes = require('./src/routes/social-posts');
 const githubCodexRoutes = require('./src/routes/github-codex');
 const codexRunsRoutes = require('./src/routes/codex-runs');
 const codexV2Routes = require('./src/routes/codex');
+const deploymentsRoutes = require('./src/routes/deployments');
 const telegramRoutes = require('./src/routes/telegram');
 const pushRoutes = require('./src/routes/push');
 const coworkRoutes = require('./src/routes/cowork');
@@ -1063,6 +1064,9 @@ app.use('/api/codex', codexRunsRoutes);
 // /runs flow keeps priority; V2 lives under /health + /projects/* (and F2 run
 // routes scoped per project). Flag off ⇒ every V2 route except /health is 404.
 app.use('/api/codex', codexV2Routes);
+// Deployments / Publishing (flag DEPLOYMENTS_V2). Bearer-auth, CSRF-exempt like
+// codex; flag off ⇒ every route except /health is 404.
+app.use('/api/deployments', deploymentsRoutes);
 // Telegram remote control for dev agents. CSRF-exempt (external POST gated by a
 // secret-token header) and fully inert unless TELEGRAM_BOT_TOKEN is set.
 app.use('/api/telegram', telegramRoutes);
