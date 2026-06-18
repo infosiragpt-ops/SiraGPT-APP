@@ -469,6 +469,37 @@ test('editImage falls back to OpenAI when Gemini fails', async () => {
   }
 });
 
+test('editImage with an OpenRouter image model falls back to OpenAI when Gemini is quota-limited', async () => {
+  setEnv({ GEMINI_API_KEY: 'g-x', OPENAI_API_KEY: 'sk-x' });
+  _internal.setGoogleGenAIFactory(() => ({
+    models: { generateContent: async () => { throw new Error('RESOURCE_EXHAUSTED quota exceeded'); } },
+  }));
+  const edits = [];
+  _internal.setOpenAIFactory(fakeOpenAIFactory({
+    onEdit: async (payload) => {
+      edits.push(payload);
+      return { data: [{ b64_json: 'OPENAI_EDIT_AFTER_OPENROUTER_SELECTION' }] };
+    },
+  }));
+  try {
+    const result = await engine.editImage({
+      prompt: 'change the selected area to pink',
+      imageBuffer: Buffer.from('img'),
+      model: 'google/gemini-3.1-flash-image-preview',
+      provider: 'openrouter',
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.provider, 'openai');
+    assert.equal(result.model, 'gpt-image-1');
+    assert.equal(result.images[0].b64, 'OPENAI_EDIT_AFTER_OPENROUTER_SELECTION');
+    assert.equal(result.attempts[0].provider, 'gemini');
+    assert.match(result.attempts[0].error, /quota/i);
+    assert.equal(edits[0].model, 'gpt-image-1');
+  } finally {
+    restoreEnv();
+  }
+});
+
 test('editImage returns NO_PROVIDER without Gemini/OpenAI keys', async () => {
   setEnv({ FAL_KEY: 'fal-x' });
   try {

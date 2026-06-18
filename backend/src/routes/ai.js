@@ -6987,6 +6987,7 @@ router.post(
       if (!quotaCap.ok) return res.status(quotaCap.status).json(quotaCap.body);
 
       let imagePath;
+      let imageMimeType = 'image/png';
       // If fileId is not provided, check the last message in the chat for an image
       if (!fileId && chatId) {
         const lastMessage = await prisma.message.findFirst({
@@ -7019,6 +7020,7 @@ router.post(
           where: { id: fileId, userId: userId }
         });
         if (inputFileRecord) {
+          imageMimeType = inputFileRecord.mimeType || imageMimeType;
           // ✅ Check if this is a generated image - more precise detection to avoid false positives
           const isGeneratedImage = (
             // Check if filename starts with 'generated-' (our specific pattern)
@@ -7162,24 +7164,29 @@ router.post(
 
       const generateSingleImage = async () => {
         if (imagePath) {
-          // La edición imagen-a-imagen solo la soportan OpenAI y Gemini.
-          // OpenRouter no edita: en vez de fallar, redirigimos automáticamente
-          // al proveedor de edición que tenga clave configurada (Gemini
-          // preferido por velocidad/coste, OpenAI como alternativa). Así una
-          // edición seleccionada con un modelo OpenRouter "simplemente
-          // funciona" en lugar de devolver un error.
-          let editProvider = provider;
-          if (provider === "OpenRouter" || provider === "Fal") {
-            if (process.env.GEMINI_API_KEY) {
-              editProvider = "Gemini";
-            } else if (process.env.OPENAI_API_KEY) {
-              editProvider = "OpenAI";
-            } else {
-              throw new Error('La edición de imágenes requiere OpenAI o Gemini, pero ninguno está configurado. Configura OPENAI_API_KEY o GEMINI_API_KEY, o genera una imagen nueva sin partir de otra.');
-            }
-            console.log(`[generate-image] ${provider} no soporta edición imagen-a-imagen; redirigiendo edición a ${editProvider}.`);
+          const sourceImageBuffer = await fs.readFile(imagePath);
+          const result = await imageEngine.editImage({
+            prompt: imagePrompt,
+            imageBuffer: sourceImageBuffer,
+            mimeType: imageMimeType,
+            model,
+            provider: toImageEngineProvider(provider),
+            signal: requestAbortController.signal,
+            timeoutMs: imageProviderAttemptTimeoutMs(),
+          });
+          if (!result.ok || !result.images?.length) {
+            const err = new Error(result.error || 'Image provider did not return any edited image data.');
+            err.code = result.code || 'image_edit_failed';
+            err.attempts = result.attempts || [];
+            throw err;
           }
-          return aiService.generateImageFromImage(imagePath, imagePrompt, editProvider);
+          const actualProvider = fromImageEngineProvider(result.provider, provider);
+          return result.images.map((img) => ({
+            b64: img.b64,
+            provider: actualProvider,
+            model: result.model || model,
+            attempts: result.attempts || [],
+          }));
         }
         const result = await imageEngine.generateImage({
           prompt: imagePrompt,
