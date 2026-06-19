@@ -45,7 +45,7 @@ import {
   Settings,
   PenSquare,
   GraduationCap,
-  MessageSquare} from "lucide-react"
+  MessageSquare, Menu as MenuIcon} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
@@ -10152,7 +10152,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     aria-label="Abrir el menú lateral"
                     title="Abrir el menú lateral"
                   >
-                    <SidebarOvalIcon className="h-5 w-5" />
+                    <MenuIcon className="h-5 w-5" />
                   </SidebarTrigger>
                 </div>
                 {/* Model selector moved to the composer (next to the mic),
