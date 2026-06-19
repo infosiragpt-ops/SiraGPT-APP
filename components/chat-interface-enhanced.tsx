@@ -1117,12 +1117,12 @@ const ActionsDropdown = ({
   };
 
 
-  const isMenuDisabled = isLoading || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices;
+  const isMenuDisabled = isLoading || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices;
   const isToolSwitchDisabled = isMenuDisabled || isGeneratingImage;
   // Premium tools are also marketing/configuration previews for FREE users.
   // Keep them selectable while a normal chat response is loading so users can
   // open the tool chip and inspect model/settings options without generating.
-  const isPremiumPreviewSwitchDisabled = isGeneratingImage || isGeneratingVideo || isUploading;
+  const isPremiumPreviewSwitchDisabled = isGeneratingImage || isUploading;
 
   const handleDropdownOpenChange = (open: boolean) => {
     setIsOpen(open);
@@ -4408,6 +4408,7 @@ function ChatInterfaceContent() {
   // Dedicated cancel handle for video generation, mirroring the image path so
   // every composer-driven media kind cancels through the same mechanism.
   const videoAbortControllerRef = React.useRef<AbortController | null>(null)
+  const currentVideoOperationIdRef = React.useRef<string | null>(null)
   const isGeneratingImageRef = React.useRef(false)
   const [isGeneratingVideo, setIsGeneratingVideo] = React.useState(false)
   const [isGeneratingPPT, setIsGeneratingPPT] = React.useState(false)
@@ -4983,6 +4984,13 @@ function ChatInterfaceContent() {
       videoAbortControllerRef.current.abort();
       videoAbortControllerRef.current = null;
     }
+    const videoOperationId = currentVideoOperationIdRef.current;
+    if (videoOperationId) {
+      currentVideoOperationIdRef.current = null;
+      void apiClient.cancelVideoGeneration(videoOperationId).catch((err) => {
+        console.warn('Failed to cancel video generation:', err);
+      });
+    }
     setIsGeneratingVideo(false);
     setIsGeneratingPPT(false);
     if (targetChatId) {
@@ -5351,12 +5359,15 @@ But first, you need to connect your Spotify account securely using the button be
     }
 
     if (!wantsVideo && autoVideoActivationRef.current) {
-      if (isVideoGenerationActive && chatType === 'video') {
+      const hasReplacementPrompt = input.trim().length > 0;
+      if (hasReplacementPrompt && isVideoGenerationActive && chatType === 'video' && !isGeneratingVideo) {
         setIsVideoGenerationActive(false);
         setChatType('text');
       }
-      setSelectedVideoDuration(DEFAULT_VIDEO_DURATION);
-      autoVideoActivationRef.current = false;
+      if (hasReplacementPrompt) {
+        setSelectedVideoDuration(DEFAULT_VIDEO_DURATION);
+        autoVideoActivationRef.current = false;
+      }
     }
   }, [
     chatType,
@@ -5368,6 +5379,7 @@ But first, you need to connect your Spotify account securely using the button be
     isGoogleCalendarActive,
     isGoogleDriveActive,
     isImageGenerationActive,
+    isGeneratingVideo,
     isMusicGenerationActive,
     isSpotifyActive,
     isVideoGenerationActive,
@@ -8845,12 +8857,34 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }
 
     let activeChatId = currentChat?.id || null;
-    setIsGeneratingVideo(true)
     // Dedicated abort handle (same mechanism as image) so stopActiveGeneration
     // can cancel the kickoff request and return the composer to idle.
     const videoController = new AbortController();
+    let pollingStarted = false;
+    let operationIdForThisRun: string | null = null;
+    let localStateSettled = false;
+    const settleLocalVideoState = () => {
+      if (localStateSettled) return;
+      localStateSettled = true;
+      const stillCurrentController = videoAbortControllerRef.current === videoController;
+      const stillCurrentOperation = Boolean(operationIdForThisRun && currentVideoOperationIdRef.current === operationIdForThisRun);
+      const noNewVideoRun = !videoAbortControllerRef.current && !currentVideoOperationIdRef.current;
+      const shouldClearVisibleState = stillCurrentController || stillCurrentOperation || noNewVideoRun;
+      if (stillCurrentController) {
+        videoAbortControllerRef.current = null;
+      }
+      if (!operationIdForThisRun || stillCurrentOperation) {
+        currentVideoOperationIdRef.current = null;
+      }
+      markLocalJobIdle(activeChatId, videoController);
+      if (shouldClearVisibleState) {
+        setIsGeneratingVideo(false);
+      }
+    };
+
+    setIsGeneratingVideo(true)
     videoAbortControllerRef.current = videoController;
-    if (activeChatId) markLocalJobBusy(activeChatId);
+    if (activeChatId) markLocalJobBusy(activeChatId, videoController);
     const promptAspectRatio = extractRequestedVideoAspectRatio(prompt);
     const sourceImageUrls = (!files?.length && shouldUseLatestImageForVideo(prompt))
       ? collectLatestGeneratedImageUrls(currentChat?.messages || [])
@@ -8863,6 +8897,15 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       model: activeVideoModel,
       signal: videoController.signal,
       sourceImageUrls,
+      onOperationStarted: (operationId: string) => {
+        pollingStarted = true;
+        operationIdForThisRun = operationId;
+        currentVideoOperationIdRef.current = operationId;
+        if (activeChatId) markLocalJobBusy(activeChatId, videoController);
+      },
+      onGenerationSettled: () => {
+        settleLocalVideoState();
+      },
     };
     try {
       if (!currentChat) {
@@ -8871,7 +8914,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           model: activeVideoModel || selectedModel,
         } as any)
         activeChatId = newChat?.id || activeChatId;
-        if (activeChatId) markLocalJobBusy(activeChatId);
+        if (activeChatId) markLocalJobBusy(activeChatId, videoController);
         await addVideoMessage(prompt, files, newChat, videoOptions as any)
       } else {
         await addVideoMessage(prompt, files, undefined, videoOptions as any)
@@ -8896,10 +8939,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
       toast.error(errorMessage)
     } finally {
-      markLocalJobIdle(activeChatId);
-      setIsGeneratingVideo(false)
-      if (videoAbortControllerRef.current === videoController) {
-        videoAbortControllerRef.current = null;
+      if (!pollingStarted) {
+        settleLocalVideoState();
       }
       // Don't auto-reset - user must manually remove
     }

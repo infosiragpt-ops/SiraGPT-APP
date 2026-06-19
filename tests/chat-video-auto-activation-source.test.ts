@@ -71,6 +71,19 @@ describe("chat video auto-activation source contract", () => {
     )
   })
 
+  it("does not deactivate auto-enabled video just because the prompt was sent and cleared", () => {
+    assert.match(
+      source,
+      /const hasReplacementPrompt = input\.trim\(\)\.length > 0;/,
+      "video auto-activation cleanup must distinguish an empty sent composer from a replacement text prompt"
+    )
+    assert.match(
+      source,
+      /hasReplacementPrompt && isVideoGenerationActive && chatType === 'video' && !isGeneratingVideo/,
+      "video mode should only auto-deactivate for a replacement non-video prompt while no video is generating"
+    )
+  })
+
   it("does not turn the primary action into Voice Studio while Video mode is waiting for a prompt", () => {
     assert.match(
       source,

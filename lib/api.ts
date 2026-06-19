@@ -521,6 +521,14 @@ class ApiClient {
   private async request(endpoint: string, options: RequestInit & { timeoutMs?: number; maxRetries?: number; suppressFailureLog?: boolean } = {}) {
     const url = `${this.baseURL}${endpoint}`;
     const timeoutMs = options.timeoutMs ?? this.DEFAULT_TIMEOUT_MS;
+    const callerSignal = options.signal as AbortSignal | undefined;
+    const makeAbortError = () => {
+      const error = typeof DOMException !== 'undefined'
+        ? new DOMException('Request aborted', 'AbortError')
+        : new Error('Request aborted');
+      (error as any).name = 'AbortError';
+      return error;
+    };
     // Per-request retry override. Expensive, non-idempotent generations
     // (image/video) pass 0: an automatic retry of a timed-out generation
     // triples the provider spend and multiplies the user's wait — the
@@ -570,9 +578,17 @@ class ApiClient {
     let lastError: Error & { status?: number; statusCode?: number; errorData?: any } | null = null;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      if (callerSignal?.aborted) {
+        throw makeAbortError();
+      }
+
       // AbortController for timeout
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      const abortFromCaller = () => controller.abort();
+      if (callerSignal) {
+        callerSignal.addEventListener('abort', abortFromCaller, { once: true });
+      }
 
       try {
         const config: RequestInit = {
@@ -704,6 +720,9 @@ class ApiClient {
 
         // AbortError (timeout) — retry
         if (error.name === 'AbortError') {
+          if (callerSignal?.aborted) {
+            throw makeAbortError();
+          }
           lastError = new Error(`Request timed out after ${timeoutMs}ms`);
           (lastError as any).status = 408;
           (lastError as any).statusCode = 408;
@@ -725,6 +744,11 @@ class ApiClient {
 
         // For errors thrown inside our block (4xx, already handled), re-throw
         throw error;
+      } finally {
+        clearTimeout(timeoutId);
+        if (callerSignal) {
+          callerSignal.removeEventListener('abort', abortFromCaller);
+        }
       }
 
       // Exponential backoff before retry
@@ -2717,6 +2741,15 @@ class ApiClient {
   async getVideoStatus(operationId: string) {
     // Was: return this.request(`/video/status/${operationId}`);
     return this.request(`/ai/video-status/${operationId}`);
+  }
+  async cancelVideoGeneration(operationId: string) {
+    return this.request(`/ai/video-cancel/${encodeURIComponent(operationId)}`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+      timeoutMs: 15000,
+      maxRetries: 0,
+      suppressFailureLog: true,
+    });
   }
   async getVideoHistory(params?: {
     page?: number;

@@ -497,6 +497,8 @@ function getRegenerationAttempt(message?: Message | null): number {
   return Number.isFinite(value) && value > 0 ? Math.min(999, Math.floor(value)) : 0
 }
 
+type VideoGenerationTerminalStatus = 'completed' | 'failed' | 'cancelled' | 'timeout' | 'error'
+
 type VideoGenerationOptions = {
   resolution?: '480p' | '720p'
   aspectRatio?: 'auto' | '16:9' | '9:16' | '1:1' | '4:3' | '3:4' | '21:9'
@@ -507,6 +509,8 @@ type VideoGenerationOptions = {
   // Optional cancel signal so the composer can abort the kickoff request,
   // mirroring the dedicated AbortController image generation already uses.
   signal?: AbortSignal
+  onOperationStarted?: (operationId: string) => void
+  onGenerationSettled?: (status: VideoGenerationTerminalStatus, payload?: any) => void
 }
 
 // Update the Chat interface around line 24
@@ -2877,64 +2881,149 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentChat, isLoading, selectProvider, selectedModel, selectChat, setCurrentChat, setIsLoading, setIsStreaming, setCurrentStreamId, markChatStreaming, markChatIdle]);
 
-  const pollVideoStatus = useCallback((operationId: string, messageId: string) => {
+  const pollVideoStatus = useCallback((
+    operationId: string,
+    messageId: string,
+    chatId?: string,
+    options?: {
+      signal?: AbortSignal
+      onSettled?: (status: VideoGenerationTerminalStatus, payload?: any) => void
+    }
+  ) => {
     devLog('🔄 Starting polling for:', operationId);
 
-    const interval = setInterval(async () => {
+    const targetChatId = chatId || currentChat?.id;
+    const startedAt = Date.now();
+    const pollTimeoutMs = 8 * 60 * 1000;
+    let consecutivePollErrors = 0;
+    let settled = false;
+    let interval: NodeJS.Timeout | null = null;
+    let onAbort = () => {};
+
+    const updateVideoMessageStatus = (status: 'failed' | 'cancelled', payload: any = {}) => {
+      setCurrentChat(prev => {
+        if (!prev || (targetChatId && prev.id !== targetChatId)) return prev;
+        let changed = false;
+        const messages = prev.messages.map((message: any) => {
+          let parsedFiles: any[] | null = null;
+          try {
+            parsedFiles = typeof message.files === 'string' ? JSON.parse(message.files) : message.files;
+          } catch {
+            parsedFiles = null;
+          }
+          if (!Array.isArray(parsedFiles)) return message;
+          const hasOperation = parsedFiles.some((file: any) => file?.type === 'video' && file?.operationId === operationId);
+          if (message.id !== messageId && !hasOperation) return message;
+
+          changed = true;
+          const nextFiles = parsedFiles.map((file: any) => {
+            if (file?.type !== 'video' || file?.operationId !== operationId) return file;
+            return {
+              ...file,
+              status,
+              error: payload?.error || payload?.message || file.error,
+              errorDetails: payload?.errorDetails || payload?.details || file.errorDetails,
+              cancelledAt: status === 'cancelled' ? new Date().toISOString() : file.cancelledAt,
+              failedAt: status === 'failed' ? new Date().toISOString() : file.failedAt,
+            };
+          });
+
+          return {
+            ...message,
+            content: status === 'cancelled'
+              ? 'Generación de video detenida por el usuario.'
+              : 'No se pudo crear el video.',
+            files: typeof message.files === 'string' ? JSON.stringify(nextFiles) : nextFiles,
+          };
+        });
+        return changed ? { ...prev, messages } : prev;
+      });
+    };
+
+    const settle = (status: VideoGenerationTerminalStatus, payload?: any) => {
+      if (settled) return;
+      settled = true;
+      if (interval) clearInterval(interval);
+      options?.signal?.removeEventListener('abort', onAbort);
+      setPollingIntervals(prev => {
+        const next = new Map(prev);
+        next.delete(operationId);
+        return next;
+      });
+      setIsLoading(false);
+      options?.onSettled?.(status, payload);
+    };
+
+    onAbort = () => {
+      updateVideoMessageStatus('cancelled', { error: 'Generación de video detenida por el usuario.' });
+      settle('cancelled');
+    };
+
+    if (options?.signal?.aborted) {
+      onAbort();
+      return;
+    }
+    options?.signal?.addEventListener('abort', onAbort, { once: true });
+
+    interval = setInterval(async () => {
+      if (settled) return;
+      if (options?.signal?.aborted) {
+        onAbort();
+        return;
+      }
+
+      if (Date.now() - startedAt > pollTimeoutMs) {
+        const timeoutPayload = {
+          error: 'El video tardó demasiado en responder. Intenta de nuevo o cambia de modelo.',
+        };
+        updateVideoMessageStatus('failed', timeoutPayload);
+        void apiClient.cancelVideoGeneration(operationId).catch(() => null);
+        settle('timeout', timeoutPayload);
+        return;
+      }
+
       try {
         const statusResponse = await apiClient.getVideoStatus(operationId);
         devLog('📊 Video status response:', statusResponse);
+        consecutivePollErrors = 0;
 
-        // Normalize status casing
-        const status = (statusResponse.status || '').toLowerCase();
-
-        if (status === 'completed' || status === 'failed') {
+        const status = String(statusResponse.status || '').toLowerCase();
+        if (status === 'completed' || status === 'failed' || status === 'cancelled') {
           devLog(' Video processing finished:', status);
-          clearInterval(interval);
-          setPollingIntervals(prev => {
-            const n = new Map(prev);
-            n.delete(operationId);
-            return n;
-          });
-
-          //  Force refresh chat from DB to get updated message with video file
-          if (currentChat?.id) {
-            devLog('🔄 Refreshing chat to show completed video');
-            await selectChat(currentChat.id);
+          if (targetChatId) {
+            devLog('🔄 Refreshing chat to show final video state');
+            await selectChat(targetChatId);
           }
-
-          //  Also ensure loading state is turned off
-          setIsLoading(false);
-
-        } else {
-          devLog(' Video still processing:', status);
-          // Optional: show "processing" in UI by updating that one message
-          setCurrentChat(prev => {
-            if (!prev) return prev;
-            const updated = prev.messages.map(m => {
-              if (m.id !== messageId) return m;
-              // Mark as processing if needed
-              return m;
-            });
-            return { ...prev, messages: updated };
-          });
+          if (status === 'failed' || status === 'cancelled') {
+            updateVideoMessageStatus(status, statusResponse);
+          }
+          settle(status as VideoGenerationTerminalStatus, statusResponse);
+          return;
         }
-      } catch (error) {
+
+        devLog(' Video still processing:', status);
+      } catch (error: any) {
+        if (options?.signal?.aborted || error?.name === 'AbortError') {
+          onAbort();
+          return;
+        }
+
+        consecutivePollErrors += 1;
         console.error(' Error polling video status:', error);
-        clearInterval(interval);
-        setPollingIntervals(prev => {
-          const n = new Map(prev);
-          n.delete(operationId);
-          return n;
-        });
-        setIsLoading(false);
+        if (consecutivePollErrors < 3) return;
+
+        const failurePayload = {
+          error: error?.message || 'No se pudo consultar el estado del video.',
+        };
+        updateVideoMessageStatus('failed', failurePayload);
+        settle('error', failurePayload);
       }
-    }, 5000); // Reduced polling interval to 5 seconds for faster updates
+    }, 5000);
 
     setPollingIntervals(prev => {
-      const n = new Map(prev);
-      n.set(operationId, interval);
-      return n;
+      const next = new Map(prev);
+      if (interval) next.set(operationId, interval);
+      return next;
     });
   }, [currentChat?.id, selectChat, setCurrentChat]);
 
@@ -3056,7 +3145,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
       const messageId = targetMessage?.id || videoResponse.operationId;
       devLog('🎯 Starting polling for operation:', videoResponse.operationId, 'message:', messageId);
-      pollVideoStatus(videoResponse.operationId, messageId);
+      options?.onOperationStarted?.(videoResponse.operationId);
+      pollVideoStatus(videoResponse.operationId, messageId, activeChat.id, {
+        signal: options?.signal,
+        onSettled: options?.onGenerationSettled,
+      });
 
     } catch (error) {
       console.error("❌ Failed to generate video:", error);

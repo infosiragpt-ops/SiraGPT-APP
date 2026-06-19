@@ -7718,6 +7718,12 @@ router.post(
           return res.status(400).json({
             error: videoServiceError.response.data.error || 'Invalid video generation parameters'
           });
+        } else if ([401, 403, 422].includes(videoServiceError.response?.status)) {
+          return res.status(videoServiceError.response.status).json({
+            error: videoServiceError.response.data.message || videoServiceError.response.data.error || 'Video provider rejected the request',
+            code: videoServiceError.response.data.code || videoServiceError.response.data.error || 'video_provider_error',
+            details: videoServiceError.response.data.details || videoServiceError.response.data.body || null,
+          });
         } else if (videoServiceError.response?.status === 429) {
           return res.status(429).json({
             error: videoServiceError.response.data.error || 'Video generation rate limit exceeded'
@@ -7735,6 +7741,83 @@ router.post(
     }
   }
 );
+
+router.post('/video-cancel/:operationId', authenticateToken, async (req, res) => {
+  try {
+    const { operationId } = req.params;
+    const axios = require('axios');
+    const internalBase = `http://127.0.0.1:${process.env.PORT || 5000}`;
+    const url = `${internalBase}/api/video/cancel/${operationId}`;
+
+    const cancelResponse = await axios.post(url, {}, {
+      headers: {
+        'Authorization': req.headers.authorization,
+        'User-Agent': req.headers['user-agent'] || 'siragpt-internal',
+        'X-Forwarded-For': req.ip,
+      },
+      timeout: 10000,
+    });
+
+    const candidates = await prisma.message.findMany({
+      where: {
+        role: 'ASSISTANT',
+        chat: { userId: req.user.id },
+      },
+      orderBy: { timestamp: 'desc' },
+      take: 200,
+      select: { id: true, files: true },
+    });
+
+    const target = candidates.find((message) => {
+      try {
+        const files = typeof message.files === 'string' ? JSON.parse(message.files) : message.files;
+        return Array.isArray(files) && files.some((file) => file && file.operationId === operationId);
+      } catch {
+        return false;
+      }
+    });
+
+    if (target) {
+      let files = [];
+      try {
+        files = typeof target.files === 'string' ? JSON.parse(target.files) : target.files;
+      } catch {
+        files = [];
+      }
+
+      const updatedFiles = Array.isArray(files)
+        ? files.map((file) => file && file.operationId === operationId
+          ? {
+            ...file,
+            status: 'cancelled',
+            error: 'Generación de video detenida por el usuario.',
+            cancelledAt: new Date().toISOString(),
+          }
+          : file)
+        : files;
+
+      await prisma.message.update({
+        where: { id: target.id },
+        data: {
+          content: 'Generación de video detenida por el usuario.',
+          files: JSON.stringify(updatedFiles),
+        },
+      });
+    }
+
+    res.json({ success: true, ...cancelResponse.data });
+  } catch (error) {
+    console.error('🚨 Video cancel error:', error.response?.data || error.message);
+    if (error.response?.status === 404) {
+      return res.status(404).json({ error: 'Video operation not found' });
+    }
+    if (error.response?.status === 403) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    res.status(500).json({ error: error.message || 'Failed to cancel video generation' });
+  }
+});
+
 // ✅ Check video generation status (Fixed)
 router.get('/video-status/:operationId', authenticateToken, async (req, res) => {
   try {
@@ -7900,6 +7983,72 @@ router.get('/video-status/:operationId', authenticateToken, async (req, res) => 
           }
         } catch (dbError) {
           console.error('❌ Database update error:', dbError);
+        }
+      }
+
+      if (['failed', 'cancelled'].includes(String(statusResponse.data.status || '').toLowerCase())) {
+        try {
+          const { operationId } = req.params;
+          const finalStatus = String(statusResponse.data.status || '').toLowerCase();
+
+          const candidates = await prisma.message.findMany({
+            where: {
+              role: 'ASSISTANT',
+              chat: { userId: req.user.id }
+            },
+            orderBy: { timestamp: 'desc' },
+            take: 200,
+            select: { id: true, files: true }
+          });
+
+          const target = candidates.find(m => {
+            try {
+              const files = typeof m.files === 'string' ? JSON.parse(m.files) : m.files;
+              return Array.isArray(files) && files.some(f => f && f.operationId === operationId);
+            } catch {
+              return false;
+            }
+          });
+
+          if (target) {
+            let files = [];
+            try {
+              files = typeof target.files === 'string' ? JSON.parse(target.files) : target.files;
+            } catch {
+              files = [];
+            }
+
+            const messageError = finalStatus === 'cancelled'
+              ? 'Generación de video detenida por el usuario.'
+              : (statusResponse.data.error || statusResponse.data.message || 'No se pudo crear el video.');
+            const updatedFiles = Array.isArray(files)
+              ? files.map(f =>
+                f && f.operationId === operationId
+                  ? {
+                    ...f,
+                    status: finalStatus,
+                    error: messageError,
+                    errorDetails: statusResponse.data.errorDetails || statusResponse.data.details || f.errorDetails,
+                    cancelledAt: finalStatus === 'cancelled' ? (statusResponse.data.cancelledAt || new Date().toISOString()) : f.cancelledAt,
+                    failedAt: finalStatus === 'failed' ? (statusResponse.data.updatedAt || new Date().toISOString()) : f.failedAt,
+                  }
+                  : f
+              )
+              : files;
+
+            await prisma.message.update({
+              where: { id: target.id },
+              data: {
+                content: finalStatus === 'cancelled'
+                  ? 'Generación de video detenida por el usuario.'
+                  : `No se pudo crear el video: "${statusResponse.data.prompt || 'Video content'}"`,
+                files: JSON.stringify(updatedFiles)
+              }
+            });
+            console.log(`💾 Message updated with ${finalStatus} video state`);
+          }
+        } catch (dbError) {
+          console.error('❌ Database terminal-state update error:', dbError);
         }
       }
 

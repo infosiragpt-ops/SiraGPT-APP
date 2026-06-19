@@ -10,13 +10,13 @@ describe("premium tool preview source contract", () => {
   it("lets free users open premium preview/configuration tools while normal chat is loading", () => {
     assert.match(
       source,
-      /const isMenuDisabled = isLoading \|\| isGeneratingVideo \|\| isUploading \|\| isWebSearching \|\| isProcessingGmail \|\| isProcessingGoogleServices;/,
-      "baseline should keep regular menu disable logic visible"
+      /const isMenuDisabled = isLoading \|\| isUploading \|\| isWebSearching \|\| isProcessingGmail \|\| isProcessingGoogleServices;/,
+      "baseline should keep regular menu disable logic visible without disabling tools for a running video render"
     )
     assert.match(
       source,
-      /const isPremiumPreviewSwitchDisabled = isGeneratingImage \|\| isGeneratingVideo \|\| isUploading;/,
-      "premium preview tools must use a narrow disabled guard so config remains selectable during assistant loading"
+      /const isPremiumPreviewSwitchDisabled = isGeneratingImage \|\| isUploading;/,
+      "premium preview tools must use a narrow disabled guard so video config remains selectable during assistant loading and video rendering"
     )
 
     const premiumMenuStart = source.indexOf("{/* Image Generation */}")

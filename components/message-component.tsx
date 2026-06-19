@@ -2223,6 +2223,12 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
         ].filter(Boolean).join(' / ')
         const modelLabel = videoEntry.modelDisplayName || videoEntry.model || 'SiraGPT Video'
         const isProcessing = status === 'processing' || status === 'in_progress' || status === 'queued'
+        const isCancelled = status === 'cancelled'
+        const terminalError = typeof videoEntry.error === 'string' && videoEntry.error.trim()
+            ? videoEntry.error.trim()
+            : isCancelled
+                ? 'Generación de video detenida por el usuario.'
+                : 'No se pudo crear el video. Prueba con un prompt más corto o cambia de modelo.'
 
         return (
             <div className="video-liquid-card mt-3" data-status={status || 'processing'}>
@@ -2233,7 +2239,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                         </span>
                         <div className="min-w-0">
                             <div className="truncate text-[13px] font-semibold text-emerald-950 dark:text-emerald-50">
-                                {isProcessing ? 'Creando video' : status === 'completed' ? 'Video listo' : 'Video'}
+                                {isProcessing ? 'Creando video' : status === 'completed' ? 'Video listo' : isCancelled ? 'Video detenido' : 'Video'}
                             </div>
                             <div className="truncate text-[11px] font-medium text-emerald-800/70 dark:text-emerald-100/62">
                                 {modelLabel}
@@ -2291,9 +2297,9 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                     </div>
                 ) : null}
 
-                {status === 'failed' ? (
+                {status === 'failed' || isCancelled ? (
                     <div className="mt-3 rounded-md border border-red-300/45 bg-red-500/8 px-3 py-2 text-[12px] font-medium text-red-600 dark:border-red-400/25 dark:text-red-200">
-                        No se pudo crear el video. Prueba con un prompt más corto o cambia de modelo.
+                        {terminalError}
                     </div>
                 ) : null}
 

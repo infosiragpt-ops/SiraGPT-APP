@@ -841,7 +841,17 @@ router.post('/generate', [
       activeOperations.set(operationId, operationData);
 
       // Start video generation with Fal.ai (async)
-      generateVideoAsync(operationId, prompt, aspect_ratio, duration, negative_prompt, filename, req.user.id, inputImageUrls, resolvedModel, resolution, audio);
+      generateVideoAsync(operationId, prompt, aspect_ratio, duration, negative_prompt, filename, req.user.id, inputImageUrls, resolvedModel, resolution, audio)
+        .catch((error) => {
+          console.error(`❌ Unhandled video generation failure for ${operationId}:`, error);
+          const failedData = activeOperations.get(operationId) || operationData;
+          if (failedData.status !== 'cancelled') {
+            failedData.status = 'failed';
+            failedData.error = error?.message || 'Video generation failed';
+            failedData.updatedAt = new Date().toISOString();
+            activeOperations.set(operationId, failedData);
+          }
+        });
 
       // Track initial usage
       await prisma.apiUsage.create({
@@ -959,11 +969,19 @@ async function generateVideoAsync(operationId, prompt, aspectRatio, duration, ne
   while (retryCount < maxRetries) {
     let activeEndpoint = null;
     try {
+      if (activeOperations.get(operationId)?.status === 'cancelled') {
+        console.log(`🛑 Video generation already cancelled before provider call: ${operationId}`);
+        return;
+      }
       console.log(`🎬 Starting video generation attempt ${retryCount + 1}/${maxRetries} for operation: ${operationId}`);
       console.log(`🖼️ Generation Mode: ${sourceImageUrls.length > 1 ? 'Reference-to-Video' : (sourceImageUrls.length === 1 ? 'Image-to-Video' : 'Text-to-Video')}`);
 
       // Update status
       let operationData = activeOperations.get(operationId) || {};
+      if (operationData.status === 'cancelled') {
+        console.log(`🛑 Video generation cancelled before status update: ${operationId}`);
+        return;
+      }
       operationData.status = 'processing';
       operationData.updatedAt = new Date().toISOString();
       activeOperations.set(operationId, operationData);
@@ -1022,6 +1040,7 @@ async function generateVideoAsync(operationId, prompt, aspectRatio, duration, ne
         logs: true,
         onQueueUpdate: (update) => {
           let updateData = activeOperations.get(operationId) || {};
+          if (updateData.status === 'cancelled') return;
           updateData.queuePosition = update.queue_position;
           updateData.status = update.status === "IN_PROGRESS" ? 'processing' : updateData.status;
           updateData.updatedAt = new Date().toISOString();
@@ -1037,6 +1056,10 @@ async function generateVideoAsync(operationId, prompt, aspectRatio, duration, ne
       });
 
       console.log(`✅ Fal.ai API response for ${operationId}:`, JSON.stringify(result, null, 2));
+      if (activeOperations.get(operationId)?.status === 'cancelled') {
+        console.log(`🛑 Video generation result ignored because operation was cancelled: ${operationId}`);
+        return;
+      }
 
       const videoUrl = extractFalVideoUrl(result);
       if (!videoUrl) {
@@ -1102,6 +1125,10 @@ async function generateVideoAsync(operationId, prompt, aspectRatio, duration, ne
 
     } catch (error) {
       console.error(`❌ Video generation failed for ${operationId} (attempt ${retryCount + 1}/${maxRetries}):`, error);
+      if (activeOperations.get(operationId)?.status === 'cancelled') {
+        console.log(`🛑 Video generation retry stopped because operation was cancelled: ${operationId}`);
+        return;
+      }
 
       //  Enhanced error logging
       if (error.status === 422) {
@@ -1155,6 +1182,46 @@ function getImageMimeType(filename) {
       return 'image/jpeg'; // Default fallback
   }
 }
+
+router.post('/cancel/:operationId', authenticateToken, async (req, res) => {
+  try {
+    const { operationId } = req.params;
+    const operationData = activeOperations.get(operationId);
+
+    if (!operationData) {
+      return res.status(404).json({
+        error: 'Operation not found',
+        message: 'The video generation operation was not found or has expired.',
+      });
+    }
+
+    if (operationData.userId !== req.user.id) {
+      return res.status(403).json({
+        error: 'Access denied',
+        message: 'You do not have permission to cancel this operation.',
+      });
+    }
+
+    if (operationData.status === 'completed' || operationData.status === 'failed') {
+      return res.json(operationData);
+    }
+
+    const cancelledData = {
+      ...operationData,
+      status: 'cancelled',
+      error: 'Video generation cancelled by user',
+      cancelledAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    activeOperations.set(operationId, cancelledData);
+    console.log(`🛑 Video generation cancelled by user: ${operationId}`);
+    res.json(cancelledData);
+  } catch (error) {
+    console.error('❌ Error cancelling video operation:', error);
+    res.status(500).json({ error: error.message || 'Failed to cancel video operation' });
+  }
+});
+
 // Check video generation status - THIS WAS MISSING!
 router.get('/status/:operationId', authenticateToken, async (req, res) => {
   try {
