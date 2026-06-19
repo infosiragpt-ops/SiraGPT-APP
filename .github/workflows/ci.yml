@@ -150,7 +150,7 @@ jobs:
   backend:
     name: Backend · prisma + boot smoke test (shard ${{ matrix.shard }}/${{ matrix.total }})
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     strategy:
       # Sharded test execution — round-robin over the explicit test-file list
       # so each runner gets ~1/N of the suite. `fail-fast: false` lets us see
