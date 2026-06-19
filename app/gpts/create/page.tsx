@@ -17,7 +17,11 @@ import {
   Plus,
   Mic,
   ArrowUp,
-  Star} from "lucide-react"
+  Star,
+  Lock,
+  Link2,
+  LayoutGrid,
+  Check} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -81,6 +85,7 @@ export default function CreateGPTPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [uploadedImage, setUploadedImage] = useState<string | null>(null)
   const [isEditMode, setIsEditMode] = useState(false)
+  const [isShareOpen, setIsShareOpen] = useState(false)
 
   const [formData, setFormData] = useState<GPTFormData>({
     name: "",
@@ -558,7 +563,7 @@ export default function CreateGPTPage() {
               <span className="hidden sm:inline">Vista previa</span>
             </Button>
             <Button
-              onClick={handleSave}
+              onClick={() => setIsShareOpen(true)}
               disabled={isSaving || !formData.name}
               size="sm"
               className="h-9 rounded-full bg-zinc-950 px-4 font-medium text-white hover:bg-zinc-800 dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200"
@@ -1001,6 +1006,71 @@ export default function CreateGPTPage() {
                 </div>
               </div>
             )} */}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Compartir GPT — visibility chooser shown on Crear/Actualizar (ChatGPT-style) */}
+      <Dialog open={isShareOpen} onOpenChange={setIsShareOpen}>
+        <DialogContent className="sm:max-w-[460px]">
+          <DialogHeader>
+            <DialogTitle>Compartir GPT</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-0.5">
+            {([
+              { v: "PRIVATE", icon: Lock, label: "Solo yo" },
+              { v: "UNLISTED", icon: Link2, label: "Cualquiera que tenga el enlace" },
+              { v: "PUBLIC", icon: LayoutGrid, label: "GPT Store" },
+            ] as const).map((opt) => {
+              const Icon = opt.icon
+              const selected = formData.visibility === opt.v
+              return (
+                <button
+                  key={opt.v}
+                  type="button"
+                  onClick={() => handleInputChange("visibility", opt.v)}
+                  className="flex w-full items-center gap-3 rounded-lg px-2 py-3 text-left transition-colors hover:bg-muted/50"
+                >
+                  <Icon className="h-5 w-5 shrink-0 text-muted-foreground" />
+                  <span className="flex-1 text-sm font-medium">{opt.label}</span>
+                  {selected && (
+                    <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-foreground text-background">
+                      <Check className="h-3 w-3" />
+                    </span>
+                  )}
+                </button>
+              )
+            })}
+          </div>
+          <div className="mt-1 flex items-center gap-3 rounded-xl border border-border/60 bg-muted/30 px-3 py-2.5">
+            <div className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-full border border-border/60 bg-background text-sm font-semibold">
+              {uploadedImage ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={uploadedImage} alt="" className="h-full w-full object-cover" />
+              ) : (
+                <span>{getNameInitial()}</span>
+              )}
+            </div>
+            <div className="min-w-0">
+              <div className="truncate text-sm font-medium">{formData.name || "Nuevo GPT"}</div>
+              <div className="truncate text-xs text-muted-foreground">Por {user?.name || "ti"}</div>
+            </div>
+          </div>
+          <div className="flex justify-end pt-1">
+            <Button
+              onClick={handleSave}
+              disabled={isSaving || !formData.name}
+              className="h-9 rounded-full bg-zinc-950 px-5 font-medium text-white hover:bg-zinc-800 dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200"
+            >
+              {isSaving ? (
+                <span className="flex items-center gap-2">
+                  <ThinkingIndicator size="xs" />
+                  Guardando...
+                </span>
+              ) : (
+                "Guardar"
+              )}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
