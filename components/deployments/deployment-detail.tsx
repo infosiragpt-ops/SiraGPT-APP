@@ -79,8 +79,8 @@ export function DeploymentDetail({
 
   return (
     <Tabs value={tab} onValueChange={(v) => setTab(v as DetailTab)}>
-      <div className="flex h-full min-h-0 flex-col bg-background">
-        <div className="shrink-0 border-b border-border/70">
+      <div className="flex h-full min-h-0 flex-col bg-background text-foreground">
+        <div className="shrink-0 border-b border-border bg-background">
           <TabsList className="h-10 justify-start rounded-none bg-transparent p-0 px-3 text-foreground">
             <DeploymentTab value="overview" active={tab === "overview"} icon={<Globe2 className="h-3.5 w-3.5" />}>
               Overview
@@ -98,40 +98,44 @@ export function DeploymentDetail({
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto w-full max-w-[980px] px-6 py-3">
-            {isSuspended ? <WarningBanner className="mb-3">{PENDING_PAYMENT_BANNER}</WarningBanner> : null}
+          <div className="w-full px-7 py-3">
+            {tab === "overview" ? (
+              <>
+                {isSuspended ? <WarningBanner className="mb-3">{PENDING_PAYMENT_BANNER}</WarningBanner> : null}
 
-            <div className="mb-4 flex flex-wrap items-center gap-2">
-              <Button
-                size="sm"
-                className="h-8 gap-1.5"
-                onClick={() => void resume()}
-                disabled={!isPausedOrSuspended || resuming}
-              >
-                {resuming ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
-                Resume
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-8 gap-1.5 text-muted-foreground"
-                onClick={() => setTab("manage")}
-              >
-                <SlidersHorizontal className="h-3.5 w-3.5" />
-                Adjust settings
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-8 gap-1.5"
-                onClick={() => void runSecurityScan()}
-                disabled={scanning}
-              >
-                {scanning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
-                Run security scan
-                <ExternalLink className="h-3 w-3 opacity-70" />
-              </Button>
-            </div>
+                <div className="mb-4 flex flex-wrap items-center gap-2">
+                  <Button
+                    size="sm"
+                    className="h-8 gap-1.5 bg-[#6aa7ff] text-white hover:bg-[#5f9bf0] disabled:bg-[#d9d4c8] disabled:text-[#8d867b]"
+                    onClick={() => void resume()}
+                    disabled={!isPausedOrSuspended || resuming}
+                  >
+                    {resuming ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+                    Resume
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 gap-1.5 border-transparent bg-muted text-muted-foreground hover:bg-[#e1ddd2] hover:text-foreground"
+                    onClick={() => setTab("manage")}
+                  >
+                    <SlidersHorizontal className="h-3.5 w-3.5" />
+                    Adjust settings
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 gap-1.5 border-transparent bg-muted text-foreground hover:bg-[#e1ddd2]"
+                    onClick={() => void runSecurityScan()}
+                    disabled={scanning}
+                  >
+                    {scanning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
+                    Run security scan
+                    <ExternalLink className="h-3 w-3 opacity-70" />
+                  </Button>
+                </div>
+              </>
+            ) : null}
 
             <TabsContent value="overview" className="mt-0">
               <OverviewTab

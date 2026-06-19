@@ -187,7 +187,7 @@ export function ManageTab({
   const isShutDown = deployment.status === "shut_down"
 
   return (
-    <div className="space-y-4">
+    <div className="mx-auto w-full space-y-4 pt-4" style={{ maxWidth: 600 }}>
       <h3 className="text-[15px] font-semibold text-foreground">Manage published app</h3>
 
       {isSuspended ? <InfoBanner>{SUSPENDED_INFO}</InfoBanner> : null}

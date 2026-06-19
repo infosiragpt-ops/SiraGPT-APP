@@ -1,7 +1,7 @@
 "use client"
 
 /**
- * ToolLauncher — futuristic, Replit-style tool dock for /code.
+ * ToolLauncher — minimal Replit-style tool dock for /code.
  *
  * A glass right-drawer catalog of workspace tools grouped into sections
  * (Pestañas abiertas · Sugerido · Avanzado · Archivos). Picking a tool
@@ -13,6 +13,7 @@ import * as React from "react"
 import { ArrowUpRight, LayoutGrid, Search, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { useCodeWorkspace } from "@/lib/code-workspace-context"
 import { cn } from "@/lib/utils"
 import {
   TOOL_SECTIONS,
@@ -29,7 +30,21 @@ type Props = {
   openToolIds: WorkspaceToolId[]
 }
 
+type ToolLauncherItem =
+  | { kind: "tool"; tool: WorkspaceTool }
+  | { kind: "file"; path: string }
+  | { kind: "new-file"; label: string; description: string }
+
+type ToolLauncherSection = {
+  id: string
+  label: string
+  items: ToolLauncherItem[]
+}
+
+const QUICK_TOOL_IDS: WorkspaceToolId[] = ["agent", "preview", "shell", "publishing"]
+
 export function ToolLauncher({ open, onClose, onSelect, openToolIds }: Props) {
+  const { files, openFile, createFile } = useCodeWorkspace()
   const [query, setQuery] = React.useState("")
 
   React.useEffect(() => {
@@ -50,30 +65,72 @@ export function ToolLauncher({ open, onClose, onSelect, openToolIds }: Props) {
 
   // Build the rendered sections: a dynamic open-tabs section first, then the
   // static catalog. Search collapses everything into a single flat result list.
-  const sections = React.useMemo(() => {
+  const sections = React.useMemo<ToolLauncherSection[]>(() => {
     if (q) {
-      const matches = Object.values(WORKSPACE_TOOLS).filter(
-        (t) =>
-          t.label.toLowerCase().includes(q) || t.description.toLowerCase().includes(q),
+      const toolMatches = Object.values(WORKSPACE_TOOLS).filter((tool) =>
+        `${tool.label} ${tool.description} ${tool.keywords}`.toLowerCase().includes(q),
       )
-      return [{ id: "results", label: "Resultados", tools: matches }]
+      const fileMatches = Object.keys(files)
+        .filter((path) => path.toLowerCase().includes(q))
+        .sort((a, b) => a.localeCompare(b))
+        .slice(0, 24)
+      const wantsNewFile =
+        ["new", "new file", "nuevo", "nuevo archivo", "crear", "create"].some((term) =>
+          term.startsWith(q) || q.startsWith(term),
+        )
+
+      return [
+        {
+          id: "tool-results",
+          label: "Herramientas",
+          items: toolMatches.map((tool) => ({ kind: "tool" as const, tool })),
+        },
+        {
+          id: "file-results",
+          label: "Archivos",
+          items: [
+            ...(wantsNewFile
+              ? [{ kind: "new-file" as const, label: "New file", description: "Crear un archivo nuevo" }]
+              : []),
+            ...fileMatches.map((path) => ({ kind: "file" as const, path })),
+          ],
+        },
+      ]
     }
-    const open: WorkspaceTool[] = Array.from(new Set(openToolIds))
+    const openTools = Array.from(new Set(openToolIds))
       .map((id) => WORKSPACE_TOOLS[id])
       .filter(Boolean)
-    const dynamic = open.length
-      ? [{ id: "open", label: "Pestañas abiertas", tools: open }]
+    const dynamic: ToolLauncherSection[] = openTools.length
+      ? [{
+          id: "open",
+          label: "Pestañas abiertas",
+          items: openTools.map((tool) => ({ kind: "tool" as const, tool })),
+        }]
       : []
     const stat = TOOL_SECTIONS.map((s) => ({
       id: s.id,
       label: s.label,
-      tools: s.toolIds.map((id) => WORKSPACE_TOOLS[id]).filter(Boolean),
+      items: s.toolIds
+        .map((id) => WORKSPACE_TOOLS[id])
+        .filter(Boolean)
+        .map((tool) => ({ kind: "tool" as const, tool })),
     }))
     return [...dynamic, ...stat]
-  }, [q, openToolIds])
+  }, [files, q, openToolIds])
 
-  const handlePick = (id: WorkspaceToolId) => {
-    onSelect(id)
+  const handlePick = (item: ToolLauncherItem) => {
+    if (item.kind === "tool") {
+      onSelect(item.tool.id)
+      return
+    }
+    if (item.kind === "file") {
+      openFile(item.path)
+      onClose()
+      return
+    }
+    const path = window.prompt("Nombre del archivo (incluye ruta)")
+    if (path) createFile(path, "")
+    onClose()
   }
 
   // Render nothing when closed — an off-screen (translate-x-full) drawer would
@@ -129,14 +186,14 @@ export function ToolLauncher({ open, onClose, onSelect, openToolIds }: Props) {
 
         {!q ? (
           <div className="grid shrink-0 grid-cols-4 gap-1.5 border-b border-border/45 px-3 pb-2">
-            {(["agent", "preview", "shell", "publishing"] as WorkspaceToolId[]).map((id) => {
+            {QUICK_TOOL_IDS.map((id) => {
               const tool = WORKSPACE_TOOLS[id]
               const Icon = tool.icon
               return (
                 <button
                   key={`quick:${id}`}
                   type="button"
-                  onClick={() => handlePick(id)}
+                  onClick={() => handlePick({ kind: "tool", tool })}
                   className="flex h-16 flex-col items-center justify-center gap-1 rounded-lg border border-border/50 bg-background/70 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                 >
                   <Icon className="h-4 w-4" />
@@ -148,25 +205,38 @@ export function ToolLauncher({ open, onClose, onSelect, openToolIds }: Props) {
         ) : null}
 
         <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-          {sections.every((s) => s.tools.length === 0) ? (
+          {sections.every((s) => s.items.length === 0) ? (
             <p className="px-3 py-8 text-center text-[12px] text-muted-foreground">
-              Sin herramientas que coincidan.
+              Sin resultados.
             </p>
           ) : (
             sections.map((section) =>
-              section.tools.length === 0 ? null : (
+              section.items.length === 0 ? null : (
                 <section key={section.id} className="mb-3">
                   <p className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/75">
                     {section.label}
                   </p>
                   <ul className="space-y-0.5">
-                    {section.tools.map((tool) => {
-                      const Icon = tool.icon
+                    {section.items.map((item) => {
+                      const isTool = item.kind === "tool"
+                      const isFile = item.kind === "file"
+                      const key = isTool
+                        ? item.tool.id
+                        : isFile
+                          ? `file:${item.path}`
+                          : "new-file-action"
+                      const label = isTool ? item.tool.label : isFile ? item.path : item.label
+                      const description = isTool
+                        ? item.tool.description
+                        : isFile
+                          ? "Abrir archivo del workspace"
+                          : item.description
+                      const Icon = isTool ? item.tool.icon : WORKSPACE_TOOLS[isFile ? "files" : "new-file"].icon
                       return (
-                        <li key={`${section.id}:${tool.id}`}>
+                        <li key={`${section.id}:${key}`}>
                           <button
                             type="button"
-                            onClick={() => handlePick(tool.id)}
+                            onClick={() => handlePick(item)}
                             className={cn(
                               "group flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors",
                               "hover:bg-muted/70 focus-visible:bg-muted/70 focus-visible:outline-none",
@@ -184,11 +254,11 @@ export function ToolLauncher({ open, onClose, onSelect, openToolIds }: Props) {
                             <span className="min-w-0 flex-1">
                               <span className="flex items-center gap-1.5">
                                 <span className="truncate text-[12.5px] font-medium text-foreground">
-                                  {tool.label}
+                                  {label}
                                 </span>
                               </span>
                               <span className="block truncate text-[11px] text-muted-foreground">
-                                {tool.description}
+                                {description}
                               </span>
                             </span>
                             <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/0 transition-colors group-hover:text-muted-foreground" />

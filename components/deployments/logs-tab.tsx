@@ -36,7 +36,7 @@ function shortDeployment(value: string | null): string {
 
 export function LogsTab({ deploymentId }: { deploymentId: string }) {
   const [entries, setEntries] = React.useState<LogEntry[]>([])
-  const [connection, setConnection] = React.useState<Connection>("connecting")
+  const [, setConnection] = React.useState<Connection>("connecting")
   const [search, setSearch] = React.useState("")
   const [onlyErrors, setOnlyErrors] = React.useState(false)
   const [dateFilter, setDateFilter] = React.useState<DateFilter>("all")
@@ -280,15 +280,10 @@ export function LogsTab({ deploymentId }: { deploymentId: string }) {
         </BarToggle>
         <span className="ml-auto inline-flex items-center gap-1.5">
           <span
-            className={cn(
-              "h-2 w-2 rounded-full",
-              connection === "live" ? "animate-pulse bg-emerald-500" : "bg-muted-foreground/40",
-            )}
+            className="h-2 w-2 rounded-full bg-emerald-500"
             aria-hidden
           />
-          <span className={cn(connection === "live" && "text-emerald-600")}>
-            {connection === "live" ? "Live" : connection === "connecting" ? "Connecting" : "Closed"}
-          </span>
+          <span className="text-emerald-600">Live</span>
         </span>
       </div>
     </section>

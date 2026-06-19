@@ -14,6 +14,21 @@ import { AlertTriangle, Info } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { DeploymentStatus } from "@/lib/deployments/deployments-api"
 
+export const REPLIT_DEPLOYMENTS_STYLE = {
+  "--background": "45 31% 95%",
+  "--foreground": "40 8% 16%",
+  "--card": "44 28% 92%",
+  "--card-foreground": "40 8% 16%",
+  "--border": "40 21% 81%",
+  "--input": "40 21% 81%",
+  "--muted": "43 26% 89%",
+  "--muted-foreground": "34 7% 38%",
+  "--primary": "40 8% 8%",
+  "--primary-foreground": "0 0% 100%",
+  "--popover": "45 31% 95%",
+  "--popover-foreground": "40 8% 16%",
+} as React.CSSProperties
+
 export function ToolShell({
   eyebrow,
   title,
@@ -64,7 +79,7 @@ export function PanelCard({
   className?: string
 }) {
   return (
-    <section className={cn("rounded-lg border border-border/60 bg-card/80 p-4 shadow-sm", className)}>
+    <section className={cn("rounded-md border border-border bg-card p-4", className)}>
       <div className="flex items-start gap-3">
         {icon ? (
           <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border/60 bg-muted/40 text-muted-foreground">
@@ -92,7 +107,7 @@ export function ActivityRow({
   children?: React.ReactNode
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 rounded-md bg-muted/35 px-3 py-2 text-[12px]">
+    <div className="flex items-center justify-between gap-3 rounded-md bg-muted px-3 py-2 text-[12px]">
       <span className="text-muted-foreground">{label}</span>
       <span className="flex min-w-0 items-center justify-end gap-1.5 truncate text-right font-medium">
         {children ?? value}
@@ -149,12 +164,12 @@ export function WarningBanner({ children, className }: { children: React.ReactNo
   return (
     <div
       className={cn(
-        "flex items-start gap-2.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3",
+        "flex items-start gap-2.5 rounded-md border border-[#d8c47a] bg-[#f5edca] px-4 py-2",
         className,
       )}
     >
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-      <p className="min-w-0 flex-1 text-[12px] leading-5 text-amber-700/90">{children}</p>
+      <p className="min-w-0 flex-1 text-[12px] leading-5 text-[#5d4b12]">{children}</p>
     </div>
   )
 }
@@ -164,7 +179,7 @@ export function InfoBanner({ children, className }: { children: React.ReactNode;
   return (
     <div
       className={cn(
-        "flex items-start gap-2.5 rounded-lg border border-border/60 bg-muted/40 px-4 py-3",
+        "flex items-start gap-2.5 rounded-md border border-border bg-background px-4 py-3",
         className,
       )}
     >

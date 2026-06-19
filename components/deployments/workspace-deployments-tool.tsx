@@ -23,7 +23,7 @@ import {
   type DeploymentDetail as DeploymentDetailData,
 } from "@/lib/deployments/deployments-api"
 
-import { statusPill, StatusPill } from "./shared"
+import { REPLIT_DEPLOYMENTS_STYLE, statusPill, StatusPill } from "./shared"
 import { DeploymentDetail } from "./deployment-detail"
 import { CreateDeploymentDialog } from "./create-deployment-dialog"
 
@@ -104,8 +104,11 @@ export function WorkspaceDeploymentsTool({ fallback }: { fallback?: React.ReactN
   if (!enabled) return <>{fallback ?? <DisabledState />}</>
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/50 px-4 py-2.5">
+    <div
+      className="flex h-full min-h-0 flex-col bg-background text-foreground"
+      style={REPLIT_DEPLOYMENTS_STYLE}
+    >
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-background px-4 py-2.5">
         <div className="flex min-w-0 items-center gap-2">
           <Rocket className="h-4 w-4 text-muted-foreground" />
           <span className="truncate text-[13px] font-semibold text-foreground">
@@ -119,7 +122,7 @@ export function WorkspaceDeploymentsTool({ fallback }: { fallback?: React.ReactN
       </div>
 
       {deployments.length > 1 ? (
-        <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-border/40 px-3 py-1.5">
+        <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-border px-3 py-1.5">
           {deployments.map((d) => {
             const pill = statusPill(d.status)
             return (

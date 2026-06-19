@@ -167,11 +167,12 @@ export function CodeWorkspace() {
   // Which tools count as "open tabs" in the launcher's dynamic section.
   const openToolIds = React.useMemo<WorkspaceToolId[]>(() => {
     const ids = new Set<WorkspaceToolId>()
-    if (previewOpen) ids.add("preview")
-    if (terminalOpen) ids.add("shell")
+    if (chatOpen) ids.add("agent")
+    if (previewOpen || openPanels.has("preview")) ids.add("preview")
+    if (terminalOpen || openPanels.has("terminal")) ids.add("shell")
     if (activeTool) ids.add(activeTool)
     return Array.from(ids)
-  }, [activeTool, previewOpen, terminalOpen])
+  }, [activeTool, chatOpen, openPanels, previewOpen, terminalOpen])
 
   // Pick a tool from the launcher: inline actions run immediately; everything
   // else opens the single active tool screen ("una pantalla a la vez").

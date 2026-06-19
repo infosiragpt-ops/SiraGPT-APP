@@ -35,10 +35,13 @@ function DeploymentsGate({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth()
   const router = useRouter()
 
+  React.useEffect(() => {
+    if (!isLoading && !user) router.replace("/auth/login?next=/deployments")
+  }, [isLoading, router, user])
+
   if (isLoading) return <ModuleSkeleton />
 
   if (!user) {
-    if (typeof window !== "undefined") router.replace("/auth/login?next=/deployments")
     return <ModuleSkeleton />
   }
 
@@ -101,19 +104,8 @@ function DisabledState({ isError }: { isError: boolean }) {
 
 function ModuleSkeleton() {
   return (
-    <div className="grid h-screen grid-cols-[300px_1fr] overflow-hidden bg-background text-foreground">
-      <div className="space-y-3 border-r border-border/60 p-3">
-        <div className="flex items-center justify-between">
-          <div className="h-5 w-28 animate-pulse rounded bg-muted/40" />
-          <div className="h-7 w-16 animate-pulse rounded-md bg-muted/40" />
-        </div>
-        {Array.from({ length: 5 }).map((_, i) => (
-          <div key={i} className="h-14 animate-pulse rounded-lg bg-muted/30" />
-        ))}
-      </div>
-      <div className="flex items-center justify-center text-muted-foreground">
+    <div className="flex h-screen items-center justify-center overflow-hidden bg-background text-muted-foreground">
         <Loader2 className="h-5 w-5 animate-spin" />
-      </div>
     </div>
   )
 }

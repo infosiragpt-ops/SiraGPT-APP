@@ -25,6 +25,7 @@ import {
 } from "lucide-react"
 
 import type { WorkspacePanelId } from "@/components/code/workspace-top-bar"
+import type { WorkspaceToolId } from "@/lib/code-workspace-tools"
 
 export type WorkspaceToolSectionId =
   | "jump"
@@ -34,6 +35,7 @@ export type WorkspaceToolSectionId =
 
 export type WorkspaceToolAction =
   | { type: "panel"; panel: WorkspacePanelId }
+  | { type: "code-tool"; toolId: WorkspaceToolId }
   | { type: "palette"; query?: string }
   | { type: "new-file" }
   | { type: "open-app" }
@@ -63,6 +65,15 @@ export const WORKSPACE_TOOL_SECTION_LABELS: Record<WorkspaceToolSectionId, strin
 
 export const WORKSPACE_TOOLS: WorkspaceToolDef[] = [
   {
+    id: "jump-agent",
+    section: "jump",
+    title: "Agent",
+    description: "Chat de construccion y edicion del workspace",
+    icon: Sparkles,
+    keywords: "agent chat builder assistant",
+    action: { type: "focus-chat" },
+  },
+  {
     id: "jump-preview",
     section: "jump",
     title: "Preview",
@@ -81,13 +92,58 @@ export const WORKSPACE_TOOLS: WorkspaceToolDef[] = [
     action: { type: "panel", panel: "terminal" },
   },
   {
+    id: "jump-publishing",
+    section: "jump",
+    title: "Publishing",
+    description: "Publica una version compartible de la app",
+    icon: Globe,
+    keywords: "publishing deploy deployments publish",
+    action: { type: "code-tool", toolId: "publishing" },
+  },
+  {
+    id: "suggested-agent",
+    section: "suggested",
+    title: "Agent",
+    description: "Chat de construccion y edicion del workspace",
+    icon: Sparkles,
+    keywords: "agent chat builder assistant",
+    action: { type: "focus-chat" },
+  },
+  {
+    id: "suggested-preview",
+    section: "suggested",
+    title: "Preview",
+    description: "Vista previa de la app en el navegador",
+    icon: Monitor,
+    keywords: "preview browser app",
+    action: { type: "panel", panel: "preview" },
+  },
+  {
+    id: "suggested-shell",
+    section: "suggested",
+    title: "Shell",
+    description: "Terminal integrada (CLI del workspace)",
+    icon: Terminal,
+    keywords: "shell terminal cli bash",
+    action: { type: "panel", panel: "terminal" },
+  },
+  {
+    id: "suggested-console",
+    section: "suggested",
+    title: "Console",
+    description: "Salida de terminal tras ejecutar codigo",
+    icon: Code2,
+    keywords: "console output logs terminal",
+    action: { type: "code-tool", toolId: "console" },
+  },
+  {
     id: "suggested-publish",
     section: "suggested",
     title: "Publishing",
     description: "Publica una versión compartible de la app",
     icon: Globe,
     keywords: "publish deploy share",
-    action: { type: "open-app" },
+    action: { type: "code-tool", toolId: "publishing" },
   },
   {
     id: "suggested-integrations",
@@ -96,7 +152,7 @@ export const WORKSPACE_TOOLS: WorkspaceToolDef[] = [
     description: "Conecta servicios nativos y APIs externas",
     icon: Blocks,
     keywords: "integrations mcp connectors",
-    action: { type: "navigate", href: "/settings" },
+    action: { type: "code-tool", toolId: "integrations" },
   },
   {
     id: "suggested-database",
@@ -105,7 +161,7 @@ export const WORKSPACE_TOOLS: WorkspaceToolDef[] = [
     description: "Datos estructurados: perfiles, métricas, catálogos",
     icon: Database,
     keywords: "database sql prisma",
-    action: { type: "noop", message: "Base de datos: conecta tu backend en Ajustes del proyecto." },
+    action: { type: "code-tool", toolId: "database" },
   },
   {
     id: "suggested-storage",
@@ -114,7 +170,7 @@ export const WORKSPACE_TOOLS: WorkspaceToolDef[] = [
     description: "Sube y guarda imágenes, vídeos y documentos",
     icon: FolderOpen,
     keywords: "storage upload files",
-    action: { type: "navigate", href: "/library" },
+    action: { type: "code-tool", toolId: "storage" },
   },
   {
     id: "suggested-auth",
@@ -123,7 +179,7 @@ export const WORKSPACE_TOOLS: WorkspaceToolDef[] = [
     description: "Inicio de sesión con página de login preconstruida",
     icon: UserCheck,
     keywords: "auth login oauth",
-    action: { type: "navigate", href: "/settings" },
+    action: { type: "code-tool", toolId: "auth" },
   },
   {
     id: "suggested-security",
@@ -132,7 +188,7 @@ export const WORKSPACE_TOOLS: WorkspaceToolDef[] = [
     description: "Vulnerabilidades, privacidad y cumplimiento",
     icon: Shield,
     keywords: "security audit compliance",
-    action: { type: "noop", message: "Centro de seguridad: escaneo DevSecOps en el pipeline CI." },
+    action: { type: "code-tool", toolId: "security" },
   },
   {
     id: "suggested-secrets",
@@ -141,7 +197,7 @@ export const WORKSPACE_TOOLS: WorkspaceToolDef[] = [
     description: "API keys y credenciales de forma segura",
     icon: Lock,
     keywords: "secrets env api key",
-    action: { type: "navigate", href: "/settings" },
+    action: { type: "code-tool", toolId: "secrets" },
   },
   {
     id: "suggested-agent-skills",
@@ -150,7 +206,7 @@ export const WORKSPACE_TOOLS: WorkspaceToolDef[] = [
     description: "Habilidades que amplían las capacidades del agente",
     icon: Sparkles,
     keywords: "agent skills tools gpts",
-    action: { type: "navigate", href: "/gpts" },
+    action: { type: "code-tool", toolId: "skills" },
   },
   {
     id: "suggested-analytics",
@@ -159,7 +215,7 @@ export const WORKSPACE_TOOLS: WorkspaceToolDef[] = [
     description: "Tráfico, métricas y uso de la app desplegada",
     icon: BarChart3,
     keywords: "analytics metrics traffic",
-    action: { type: "noop", message: "Analytics disponible tras desplegar la app." },
+    action: { type: "code-tool", toolId: "analytics" },
   },
   {
     id: "suggested-automations",
@@ -168,7 +224,7 @@ export const WORKSPACE_TOOLS: WorkspaceToolDef[] = [
     description: "Agentes y automatizaciones de larga duración",
     icon: PlaySquare,
     keywords: "automations agents cron",
-    action: { type: "workflow-dialog" },
+    action: { type: "code-tool", toolId: "automations" },
   },
   {
     id: "suggested-canvas",
@@ -177,7 +233,7 @@ export const WORKSPACE_TOOLS: WorkspaceToolDef[] = [
     description: "Lienzo controlado por agente para mockups",
     icon: Palette,
     keywords: "canvas design wireframe",
-    action: { type: "navigate", href: "/design" },
+    action: { type: "code-tool", toolId: "canvas" },
   },
   {
     id: "suggested-settings",
@@ -186,7 +242,7 @@ export const WORKSPACE_TOOLS: WorkspaceToolDef[] = [
     description: "Preferencias del editor y del workspace",
     icon: Settings,
     keywords: "settings preferences",
-    action: { type: "navigate", href: "/settings" },
+    action: { type: "code-tool", toolId: "settings" },
   },
   {
     id: "adv-settings",
@@ -195,7 +251,7 @@ export const WORKSPACE_TOOLS: WorkspaceToolDef[] = [
     description: "Preferencias personales del editor",
     icon: Settings,
     keywords: "settings",
-    action: { type: "navigate", href: "/settings" },
+    action: { type: "code-tool", toolId: "settings" },
   },
   {
     id: "adv-validation",
@@ -240,7 +296,7 @@ export const WORKSPACE_TOOLS: WorkspaceToolDef[] = [
     description: "Salida de terminal tras ejecutar código",
     icon: Code2,
     keywords: "console output log terminal",
-    action: { type: "panel", panel: "terminal" },
+    action: { type: "code-tool", toolId: "console" },
   },
   {
     id: "adv-developer",
@@ -249,7 +305,7 @@ export const WORKSPACE_TOOLS: WorkspaceToolDef[] = [
     description: "Herramientas internas, telemetría y diagnósticos",
     icon: LayoutGrid,
     keywords: "developer debug telemetry",
-    action: { type: "palette", query: "" },
+    action: { type: "code-tool", toolId: "developer" },
   },
   {
     id: "adv-git",
@@ -267,7 +323,7 @@ export const WORKSPACE_TOOLS: WorkspaceToolDef[] = [
     description: "Pantalla de escritorio remota de la app",
     icon: Monitor,
     keywords: "vnc desktop screen",
-    action: { type: "noop", message: "VNC no está habilitado en este entorno." },
+    action: { type: "code-tool", toolId: "vnc" },
   },
   {
     id: "adv-workflows",
@@ -276,7 +332,7 @@ export const WORKSPACE_TOOLS: WorkspaceToolDef[] = [
     description: "Orquestación encadenada con agente interno (10–20 h)",
     icon: Workflow,
     keywords: "workflow agent chain durable opus",
-    action: { type: "workflow-dialog" },
+    action: { type: "code-tool", toolId: "workflows" },
   },
   {
     id: "files-find",
@@ -285,7 +341,7 @@ export const WORKSPACE_TOOLS: WorkspaceToolDef[] = [
     description: "Buscar un archivo",
     icon: FileSearch,
     keywords: "files find open",
-    action: { type: "palette", query: "open " },
+    action: { type: "code-tool", toolId: "files" },
     showChevron: true,
   },
   {
