@@ -45,7 +45,7 @@ import {
   Settings,
   PenSquare,
   GraduationCap,
-  MessageSquare, Menu as MenuIcon} from "lucide-react"
+  MessageSquare, Menu as MenuIcon, Zap} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
@@ -4231,8 +4231,8 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
           "data-[state=open]:bg-muted/55 data-[state=open]:border-border/50",
         )}
       >
-        {selectedModelData && <ModelLogo model={selectedModelData} compact />}
-        <span className="chat-model-label max-w-[180px] truncate font-medium">{selectedModelData ? getModelDisplayLabel(selectedModelData) : selectedModel}</span>
+        <Zap className="h-3.5 w-3.5 shrink-0 text-violet-500 dark:text-violet-400" strokeWidth={2.25} />
+        <span className="chat-model-label min-w-0 max-w-[180px] truncate font-medium">{selectedModelData ? getModelDisplayLabel(selectedModelData) : selectedModel}</span>
         <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-55 transition-transform duration-200 group-data-[state=open]/model:rotate-180" strokeWidth={2} />
       </DropdownMenuTrigger>
 
@@ -6162,7 +6162,7 @@ But first, you need to connect your Spotify account securely using the button be
   const renderComposerModelControls = () => {
     if (isMediaToolActive) return null
     return (
-      <div className="composer-model-inline flex min-w-0 max-w-[min(42vw,13rem)] shrink items-center justify-end">
+      <div className="composer-model-inline flex min-w-0 max-w-[min(52vw,15rem)] shrink items-center justify-end">
         <NavbarModelSelector
           selectedModel={selectedModel}
           setSelectedModel={setSelectedModel}
