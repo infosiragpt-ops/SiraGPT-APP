@@ -618,16 +618,14 @@ const {
   extractFalVideoUrl,
   resolveFalVideoModelRequest,
 } = require('../services/fal-video-model-catalog');
+const { getFalApiKey, getFalApiKeySource } = require('../services/fal/fal-auth');
+const { classifyFalVideoError } = require('../services/fal/fal-video-errors');
 const objectStorage = require('../services/object-storage');
 const router = express.Router();
 const prisma = new PrismaClient();
 
-function getFalApiKey() {
-  return process.env.FAL_KEY || process.env.FAL_API_KEY || process.env.TAL_AI_API_KEY || '';
-}
-
-// Configure Fal.ai client. FAL_API_KEY is the key name present in the
-// local SiraGPT env; keep FAL_KEY and TAL_AI_API_KEY as aliases.
+// Configure Fal.ai client from server-only env. The SDK sends it as
+// `Authorization: Key <credentials>`; keep aliases for existing deployments.
 fal.config({
   credentials: getFalApiKey(),
 });
@@ -788,6 +786,7 @@ router.post('/generate', [
       requestedModel: model,
       resolvedModel,
       usingPairedEndpoint: modelRouting.usingPairedEndpoint,
+      falKeySource: getFalApiKeySource() || 'none',
     });
 
     // Check user's monthly limit
@@ -1129,31 +1128,35 @@ async function generateVideoAsync(operationId, prompt, aspectRatio, duration, ne
         console.log(`🛑 Video generation retry stopped because operation was cancelled: ${operationId}`);
         return;
       }
+      const classified = classifyFalVideoError(error, { endpoint: activeEndpoint || model });
 
       //  Enhanced error logging
-      if (error.status === 422) {
-        console.error('📋 Validation Error Details:', error.body);
+      if (classified.statusCode === 422 || classified.statusCode === 400) {
+        console.error('📋 Validation Error Details:', classified.body);
       }
 
       retryCount++;
-      if (retryCount >= maxRetries) {
+      if (!classified.retryable || retryCount >= maxRetries) {
         let failedData = activeOperations.get(operationId) || {};
         failedData.status = 'failed';
-        failedData.error = error?.message || 'Video generation failed after maximum retries';
+        failedData.error = classified.message;
         failedData.errorDetails = {
           totalAttempts: retryCount,
           timestamp: new Date().toISOString(),
-          error_type: error.constructor.name,
-          original_error: error.message,
-          status_code: error.status,
-          response_body: error.body,
+          error_type: error?.constructor?.name || 'Error',
+          code: classified.code,
+          retryable: classified.retryable,
+          provider_message: classified.providerMessage,
+          original_error: error?.message,
+          status_code: classified.statusCode,
+          response_body: classified.body,
           generationType: sourceImageUrls.length > 1 ? 'reference-to-video' : (sourceImageUrls.length === 1 ? 'image-to-video' : 'text-to-video'),
           endpoint: activeEndpoint || model
         };
         failedData.updatedAt = new Date().toISOString();
         activeOperations.set(operationId, failedData);
 
-        console.error(` Final failure for ${operationId} after ${retryCount} attempts`);
+        console.error(` Final failure for ${operationId} after ${retryCount} attempts: ${classified.code}`);
         break;
       }
 

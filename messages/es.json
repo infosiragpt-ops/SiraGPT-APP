@@ -394,7 +394,7 @@
     "feedbackBad": "Respuesta poco útil"
   },
   "composer": {
-    "placeholderDefault": "Escribe, pega un enlace o arrastra archivos…",
+    "placeholderDefault": "Pregúntale a Sira GPT",
     "placeholderImage": "Describe la imagen que quieres crear",
     "placeholderVideo": "Describe el video que quieres crear",
     "placeholderWebSearch": "Busca en la web",

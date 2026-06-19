@@ -1004,6 +1004,7 @@ const ActionsDropdown = ({
   const [isOpen, setIsOpen] = React.useState(false);
   const [appsOpen, setAppsOpen] = React.useState(false);
   const [mobileAppsOpen, setMobileAppsOpen] = React.useState(false);
+  const [tooltipOpen, setTooltipOpen] = React.useState(false);
   const [justClosed, setJustClosed] = React.useState(false);
   const closeTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
   const isFreePlan = isFreePlanName(currentPlan);
@@ -1126,6 +1127,7 @@ const ActionsDropdown = ({
 
   const handleDropdownOpenChange = (open: boolean) => {
     setIsOpen(open);
+    setTooltipOpen(false);
     if (!open) {
       setAppsOpen(false);
       setMobileAppsOpen(false);
@@ -1144,6 +1146,14 @@ const ActionsDropdown = ({
       }
     }
   };
+
+  const handleTooltipOpenChange = React.useCallback((open: boolean) => {
+    if (open && (isOpen || justClosed || isMenuDisabled)) {
+      setTooltipOpen(false);
+      return;
+    }
+    setTooltipOpen(open);
+  }, [isMenuDisabled, isOpen, justClosed]);
 
   React.useEffect(() => {
     return () => {
@@ -1328,17 +1338,17 @@ const ActionsDropdown = ({
   return (
     <TooltipProvider>
       <DropdownMenu dir="ltr" open={isOpen} onOpenChange={handleDropdownOpenChange}>
-        <Tooltip open={!isOpen && !justClosed ? undefined : false} delayDuration={300}>
+        <Tooltip open={tooltipOpen} onOpenChange={handleTooltipOpenChange} delayDuration={300}>
           <TooltipTrigger asChild>
             <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
                 size="sm"
                 aria-label="Adjuntar archivos y herramientas"
-                className="h-9 w-9 p-0 hover:bg-muted/50 rounded-full flex items-center justify-center"
+                className="composer-plus-liquid-button flex h-10 w-10 items-center justify-center rounded-full p-0"
                 disabled={isMenuDisabled}
               >
-                <Plus className="h-5 w-5" />
+                <Plus className="relative z-10 h-5 w-5" strokeWidth={2.2} />
               </Button>
             </DropdownMenuTrigger>
           </TooltipTrigger>
@@ -2150,6 +2160,7 @@ const ActiveToolsDisplay = ({
   setSelectedProvider,
   chatType,
   setChatType,
+  onVideoGenerationClose,
 
   handleComputerUseToggle,
   handleGmailToggle,
@@ -2235,6 +2246,7 @@ const ActiveToolsDisplay = ({
   setSelectedProvider: (provider: string) => void;
   chatType: string;
   setChatType: (type: any) => void;
+  onVideoGenerationClose?: () => void;
 
   handleComputerUseToggle: () => void;
   handleGmailToggle: () => void;
@@ -2348,6 +2360,7 @@ const ActiveToolsDisplay = ({
   };
 
   const handleVideoGenerationClose = () => {
+    onVideoGenerationClose?.();
     setIsVideoGenerationActive(false);
     setChatType('text');
   };
@@ -5374,15 +5387,10 @@ But first, you need to connect your Spotify account securely using the button be
     }
 
     if (!wantsVideo && autoVideoActivationRef.current) {
-      const hasReplacementPrompt = input.trim().length > 0;
-      if (hasReplacementPrompt && isVideoGenerationActive && chatType === 'video' && !isGeneratingVideo) {
-        setIsVideoGenerationActive(false);
-        setChatType('text');
-      }
-      if (hasReplacementPrompt) {
-        setSelectedVideoDuration(DEFAULT_VIDEO_DURATION);
-        autoVideoActivationRef.current = false;
-      }
+      // Auto-detection should only turn video mode on. Keeping it sticky
+      // prevents the tool from disappearing after submit, polling, or retry UI
+      // updates; the user can close the chip explicitly.
+      return;
     }
   }, [
     chatType,
@@ -5394,15 +5402,14 @@ But first, you need to connect your Spotify account securely using the button be
     isGoogleCalendarActive,
     isGoogleDriveActive,
     isImageGenerationActive,
-    isGeneratingVideo,
     isMusicGenerationActive,
     isSpotifyActive,
     isVideoGenerationActive,
     isVoiceGenerationActive,
     isWebSearchActive,
     isWordConnectorActive,
-    selectedVideoDuration,
     selectedVideoAspectRatio,
+    selectedVideoDuration,
     setChatType,
   ]);
 
@@ -9380,6 +9387,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     availableModels: composerAvailableModels,
     setSelectedProvider: setSelectedProivder,
     chatType, setChatType,
+    onVideoGenerationClose: () => { autoVideoActivationRef.current = false; },
     handleComputerUseToggle, handleGmailToggle, handleGoogleCalendarToggle,
     handleGoogleDriveToggle, handleSpotifyToggle, handleWordConnectorToggle,
     handleExcelConnectorToggle,

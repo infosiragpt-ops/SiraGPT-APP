@@ -177,6 +177,22 @@ test('fal.ai video payload preserves selected model and user settings', () => {
   });
 });
 
+test('fal.ai video payload preserves automatic aspect ratio for Seedance', () => {
+  const payload = buildFalVideoInputPayload({
+    endpoint: 'bytedance/seedance-2.0/text-to-video',
+    prompt: 'Video corto de un perro corriendo en un parque',
+    aspectRatio: 'auto',
+    duration: 8,
+    resolution: '720p',
+    audio: true,
+  });
+
+  assert.strictEqual(payload.aspect_ratio, 'auto');
+  assert.strictEqual(payload.duration, '8');
+  assert.strictEqual(payload.resolution, '720p');
+  assert.strictEqual(payload.generate_audio, true);
+});
+
 test('fal.ai video routing uses reference-to-video with multiple Seedance images', () => {
   const routing = resolveFalVideoModelRequest('bytedance/seedance-2.0/text-to-video', {
     hasImage: true,

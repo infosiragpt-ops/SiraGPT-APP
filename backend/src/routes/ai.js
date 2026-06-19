@@ -8022,6 +8022,9 @@ router.get('/video-status/:operationId', authenticateToken, async (req, res) => 
             const messageError = finalStatus === 'cancelled'
               ? 'Generación de video detenida por el usuario.'
               : (statusResponse.data.error || statusResponse.data.message || 'No se pudo crear el video.');
+            const assistantContent = finalStatus === 'cancelled'
+              ? 'Generación de video detenida por el usuario.'
+              : `No se pudo crear el video. ${messageError}`;
             const updatedFiles = Array.isArray(files)
               ? files.map(f =>
                 f && f.operationId === operationId
@@ -8040,9 +8043,7 @@ router.get('/video-status/:operationId', authenticateToken, async (req, res) => 
             await prisma.message.update({
               where: { id: target.id },
               data: {
-                content: finalStatus === 'cancelled'
-                  ? 'Generación de video detenida por el usuario.'
-                  : `No se pudo crear el video: "${statusResponse.data.prompt || 'Video content'}"`,
+                content: assistantContent,
                 files: JSON.stringify(updatedFiles)
               }
             });

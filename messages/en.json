@@ -394,7 +394,7 @@
     "feedbackBad": "Unhelpful response"
   },
   "composer": {
-    "placeholderDefault": "Write, paste a link or drop files…",
+    "placeholderDefault": "Ask Sira GPT",
     "placeholderImage": "Describe the image you want to create",
     "placeholderVideo": "Describe the video you want to create",
     "placeholderWebSearch": "Search the web",

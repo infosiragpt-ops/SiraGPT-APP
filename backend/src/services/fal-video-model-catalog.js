@@ -976,7 +976,7 @@ function buildFalVideoInputPayload({
   const id = String(endpoint || '').toLowerCase();
   const payload = { prompt };
 
-  const normalizedAspectRatio = aspectRatio === 'auto' ? '16:9' : aspectRatio;
+  const normalizedAspectRatio = normalizeFalAspectRatio(aspectRatio);
   if (!/hailuo/.test(id)) payload.aspect_ratio = normalizedAspectRatio;
 
   if (!/hailuo|cosmos/.test(id)) {
@@ -1025,6 +1025,11 @@ function normalizeFalDuration(duration, endpoint = '') {
   const id = String(endpoint || '').toLowerCase();
   if (/kling|hailuo|wan|seedance|bytedance/.test(id)) return String(numeric);
   return `${numeric}s`;
+}
+
+function normalizeFalAspectRatio(aspectRatio) {
+  const raw = String(aspectRatio || '16:9').trim();
+  return ['auto', '21:9', '16:9', '4:3', '1:1', '3:4', '9:16'].includes(raw) ? raw : '16:9';
 }
 
 function normalizeFalResolution(resolution, endpoint = '') {
@@ -1089,6 +1094,7 @@ module.exports = {
   inferFalVideoMode,
   isFalVideoModelId,
   listFalVideoModels,
+  normalizeFalAspectRatio,
   normalizeFalExploreModel,
   normalizeFalVideoId,
   resolveFalVideoModelRequest,
