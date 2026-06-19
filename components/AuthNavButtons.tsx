@@ -120,7 +120,7 @@ export function LoginButton({ href = "/auth/login", navigate }: LoginButtonProps
         prefetch={true}
         onClick={handleClick}
         data-instant-nav="login"
-        className="group relative inline-flex min-h-12 min-w-[7.25rem] touch-manipulation select-none items-center justify-center overflow-hidden rounded-full p-[1px] transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] sm:min-h-11 sm:min-w-[6.75rem]"
+        className="group relative z-30 inline-flex h-[48px] min-w-[120px] touch-manipulation select-none items-center justify-center overflow-hidden rounded-full p-[1px] transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] sm:h-11 sm:min-w-[108px]"
       >
         {/* Refined rotating border beam — tri-tone indigo → violet → rose, slow */}
         <span
