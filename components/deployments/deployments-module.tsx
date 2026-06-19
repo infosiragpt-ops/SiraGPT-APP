@@ -3,16 +3,14 @@
 /**
  * DeploymentsModule — top-level surface for the Deployments / Publishing module.
  *
- * Left: a slim selectable list of the user's deployments + "New deployment".
- * Right: the selected deployment's detail panel (Replit Overview clone).
- * Owns the selected-id state and refetches after mutations.
+ * Single Replit-like Publishing surface. Shows the selected deployment detail,
+ * or the empty tabbed Overview/Logs/Domains/Manage state before first publish.
  */
 
 import * as React from "react"
-import { Loader2, Plus, Rocket } from "lucide-react"
+import { Loader2 } from "lucide-react"
 import { toast } from "sonner"
 
-import { Button } from "@/components/ui/button"
 import {
   deploymentsApi,
   type Deployment,
@@ -21,6 +19,7 @@ import {
 
 import { REPLIT_DEPLOYMENTS_STYLE } from "./shared"
 import { DeploymentDetail } from "./deployment-detail"
+import { EmptyDeploymentDetail } from "./empty-deployment-detail"
 import { CreateDeploymentDialog } from "./create-deployment-dialog"
 
 export function DeploymentsModule() {
@@ -93,7 +92,7 @@ export function DeploymentsModule() {
         ) : detail ? (
           <DeploymentDetail detail={detail} onRefetch={refetchSelected} />
         ) : (
-          <EmptyDetail
+          <EmptyDeploymentDetail
             onCreate={() => setCreateOpen(true)}
             hasDeployments={deployments.length > 0}
             loading={listLoading}
@@ -102,42 +101,6 @@ export function DeploymentsModule() {
       </section>
 
       <CreateDeploymentDialog open={createOpen} onOpenChange={setCreateOpen} onCreated={onCreated} />
-    </div>
-  )
-}
-
-function EmptyDetail({
-  onCreate,
-  hasDeployments,
-  loading,
-}: {
-  onCreate: () => void
-  hasDeployments: boolean
-  loading: boolean
-}) {
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-      <span className="flex h-12 w-12 items-center justify-center rounded-xl border border-border/60 bg-muted/40 text-muted-foreground">
-        {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Rocket className="h-5 w-5" />}
-      </span>
-      <div>
-        <p className="text-[14px] font-semibold text-foreground">
-          {loading ? "Loading deployments" : hasDeployments ? "Select a deployment" : "Publish this project"}
-        </p>
-        <p className="mt-1 max-w-sm text-[12px] text-muted-foreground">
-          {loading
-            ? "Checking the publishing service."
-            : hasDeployments
-            ? "Choose one from the list to view its status, logs, and domains."
-            : "Publish a shareable version of your project to get started."}
-        </p>
-      </div>
-      {!loading && !hasDeployments ? (
-        <Button size="sm" className="h-9 gap-1.5" onClick={onCreate}>
-          <Plus className="h-3.5 w-3.5" />
-          New deployment
-        </Button>
-      ) : null}
     </div>
   )
 }

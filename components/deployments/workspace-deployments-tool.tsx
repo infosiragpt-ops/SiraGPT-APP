@@ -25,6 +25,7 @@ import {
 
 import { REPLIT_DEPLOYMENTS_STYLE, statusPill, StatusPill } from "./shared"
 import { DeploymentDetail } from "./deployment-detail"
+import { EmptyDeploymentDetail } from "./empty-deployment-detail"
 import { CreateDeploymentDialog } from "./create-deployment-dialog"
 
 export function WorkspaceDeploymentsTool({ fallback }: { fallback?: React.ReactNode }) {
@@ -151,7 +152,7 @@ export function WorkspaceDeploymentsTool({ fallback }: { fallback?: React.ReactN
         ) : detail ? (
           <DeploymentDetail detail={detail} onRefetch={refetch} />
         ) : (
-          <EmptyState projectName={projectName} onCreate={() => setCreateOpen(true)} />
+          <EmptyDeploymentDetail projectName={projectName} onCreate={() => setCreateOpen(true)} />
         )}
       </div>
 
@@ -162,27 +163,6 @@ export function WorkspaceDeploymentsTool({ fallback }: { fallback?: React.ReactN
         defaultName={projectName}
         onCreated={(d) => void loadList(d.id)}
       />
-    </div>
-  )
-}
-
-function EmptyState({ projectName, onCreate }: { projectName: string; onCreate: () => void }) {
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-      <span className="flex h-12 w-12 items-center justify-center rounded-xl border border-border/60 bg-muted/40 text-muted-foreground">
-        <Rocket className="h-5 w-5" />
-      </span>
-      <div>
-        <p className="text-[14px] font-semibold text-foreground">Publish this project</p>
-        <p className="mt-1 max-w-sm text-[12px] text-muted-foreground">
-          Create a deployment for {projectName ? `"${projectName}"` : "this project"} and get status, domains, logs,
-          and version history.
-        </p>
-      </div>
-      <Button size="sm" className="h-9 gap-1.5" onClick={onCreate}>
-        <Plus className="h-3.5 w-3.5" />
-        New deployment
-      </Button>
     </div>
   )
 }

@@ -45,7 +45,7 @@ const nextConfig = {
   // Allow the Replit cross-origin dev-preview iframe to load Next.js
   // resources without the "Cross origin request detected" warning.
   // (*.riker.replit.dev is the Replit dev-preview domain.)
-  allowedDevOrigins: ['*.riker.replit.dev', '*.replit.dev'],
+  allowedDevOrigins: ['127.0.0.1', '127.0.0.1:3000', 'localhost:3000', '*.riker.replit.dev', '*.replit.dev'],
 
   // Cap webpack's peak memory during `next build`. The deploy builder is an
   // 8 GiB e2-standard-2, and this app's compile + static-generation phase can
