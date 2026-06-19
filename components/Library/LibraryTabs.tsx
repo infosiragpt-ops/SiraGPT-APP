@@ -5,6 +5,7 @@ import apiClient from '@/lib/api';
 import {
     Download,
     Search,
+    X,
     Music2,
     Mic,
     Globe,
@@ -65,10 +66,10 @@ function isArtifactType(type: MediaType): boolean {
 const TYPE_ICON: Record<MediaType, React.ReactNode> = {
     image: null,
     video: null,
-    music: <Music2 className="w-10 h-10" />,
-    audio: <Mic className="w-10 h-10" />,
-    webapp: <Globe className="w-10 h-10" />,
-    mobileapp: <Smartphone className="w-10 h-10" />,
+    music: <Music2 className="w-7 h-7" />,
+    audio: <Mic className="w-7 h-7" />,
+    webapp: <Globe className="w-7 h-7" />,
+    mobileapp: <Smartphone className="w-7 h-7" />,
 };
 
 const MediaLibrary: React.FC = () => {
@@ -244,9 +245,9 @@ const MediaLibrary: React.FC = () => {
     }, [filterType, searchQuery]);
 
     const renderArtifactCardBody = (item: MediaItem) => (
-        <div className="flex flex-col items-center justify-center w-full h-full p-4 text-center gap-3">
+        <div className="flex flex-col items-center justify-center w-full h-full p-3 text-center gap-2">
             <div className="library-card-badge">{TYPE_ICON[item.type]}</div>
-            <p className="text-sm font-semibold text-[hsl(var(--foreground))] truncate w-full" title={item.filename || item.prompt}>
+            <p className="library-card-title" title={item.filename || item.prompt}>
                 {item.filename || item.prompt}
             </p>
             <span className="text-xs text-[hsl(var(--muted-foreground))]">{TAB_LABELS[item.type]}</span>
@@ -254,16 +255,18 @@ const MediaLibrary: React.FC = () => {
     );
 
     return (
-        <div className="library-page container mx-auto p-4 sm:p-6">
+        <div className="library-page mx-auto w-full max-w-7xl px-4 pb-[calc(7rem+env(safe-area-inset-bottom))] pt-[calc(1.25rem+env(safe-area-inset-top))] sm:px-6 sm:pb-8 sm:pt-7 lg:px-8">
             <Head>
                 <title>Biblioteca de archivos</title>
             </Head>
-            <div className="flex items-center gap-3 mb-6">
-                <SidebarTrigger className="md:hidden" />
-                <h1 className="library-title text-3xl">Tu biblioteca de archivos</h1>
+            <div className="library-header mb-5 flex items-start gap-3 sm:mb-6">
+                <SidebarTrigger className="mt-1 md:hidden" />
+                <div className="min-w-0">
+                    <h1 className="library-title text-[1.85rem] leading-[1.04] sm:text-4xl">Tu biblioteca de archivos</h1>
+                </div>
             </div>
 
-            <div className="flex flex-col gap-4 mb-8 lg:flex-row lg:items-center lg:justify-between">
+            <div className="library-toolbar mb-5 sm:mb-7">
                 <div className="library-tabs" role="tablist" aria-label="Filtrar biblioteca">
                     {TAB_ORDER.map((type) => {
                         const active = filterType === type;
@@ -275,7 +278,7 @@ const MediaLibrary: React.FC = () => {
                                 aria-selected={active}
                                 data-active={active}
                                 onClick={() => handleTabChange(type)}
-                                className="library-tab focus:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--accent-violet))]"
+                                className="library-tab focus:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]"
                             >
                                 {TAB_LABELS[type]}
                             </button>
@@ -283,23 +286,36 @@ const MediaLibrary: React.FC = () => {
                     })}
                 </div>
 
-                <label className="library-search w-full lg:w-72">
+                <div className="library-search" role="search">
                     <Search className="w-4 h-4 shrink-0 text-[hsl(var(--muted-foreground))] pointer-events-none" />
+                    <label htmlFor="library-search-input" className="sr-only">
+                        Buscar por prompt
+                    </label>
                     <input
+                        id="library-search-input"
                         type="search"
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder="Buscar por prompt…"
-                        className="w-full text-sm text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))]"
+                        placeholder="Buscar por prompt"
                         aria-label="Buscar elementos por prompt"
                     />
-                </label>
+                    {searchQuery && (
+                        <button
+                            type="button"
+                            onClick={() => setSearchQuery('')}
+                            className="library-search-clear focus:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]"
+                            aria-label="Limpiar búsqueda"
+                        >
+                            <X className="h-4 w-4" />
+                        </button>
+                    )}
+                </div>
             </div>
 
             {loading && <p className="text-gray-600 text-center py-10">Cargando archivos…</p>}
             {error && <p className="text-red-500 text-center py-10">Error: {error}</p>}
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+            <div className="library-grid grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-4 xl:grid-cols-5">
                 {visibleProjects.map((project) => (
                     <div
                         key={`project-${project.id}`}
@@ -307,9 +323,9 @@ const MediaLibrary: React.FC = () => {
                         onClick={() => router.push(`/projects/${project.id}`)}
                         title={`Abrir proyecto: ${project.name}`}
                     >
-                        <div className="flex flex-col items-center justify-center w-full h-full p-4 text-center gap-3">
-                            <div className="library-card-badge"><Globe className="w-10 h-10" /></div>
-                            <p className="text-sm font-semibold text-[hsl(var(--foreground))] truncate w-full" title={project.name}>
+                        <div className="flex flex-col items-center justify-center w-full h-full p-3 text-center gap-2">
+                            <div className="library-card-badge"><Globe className="w-7 h-7" /></div>
+                            <p className="library-card-title" title={project.name}>
                                 {project.name}
                             </p>
                             <span className="text-xs text-[hsl(var(--muted-foreground))]">Proyecto · App web</span>
@@ -332,7 +348,7 @@ const MediaLibrary: React.FC = () => {
                                     onError={(e) => {
                                         (e.currentTarget as HTMLImageElement).src = '/placeholder.svg';
                                     }}
-                                    className="object-cover w-full h-full transition-transform duration-300 group-hover:scale-105"
+                                    className="object-cover w-full h-full transition-transform duration-200 group-hover:scale-[1.02]"
                                 />
                             )}
 
@@ -340,7 +356,7 @@ const MediaLibrary: React.FC = () => {
                                 <div className="relative w-full h-full">
                                     <video
                                         src={`${process.env.NEXT_PUBLIC_API_URL}${item.video_url}`}
-                                        className="object-cover w-full h-full transition-transform duration-300 group-hover:scale-105 bg-black"
+                                        className="object-cover w-full h-full transition-transform duration-200 group-hover:scale-[1.02] bg-black"
                                         muted
                                         playsInline
                                     />
@@ -372,7 +388,7 @@ const MediaLibrary: React.FC = () => {
 
                             {(item.type === 'audio' || item.type === 'music') && (
                                 <div className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none">
-                                    <Play className="w-10 h-10 text-blue-600/80 opacity-0 group-hover:opacity-100 transition-opacity" />
+                                    <Play className="w-8 h-8 text-[hsl(var(--foreground))]/80 opacity-0 group-hover:opacity-100 transition-opacity" />
                                 </div>
                             )}
                         </div>
