@@ -7,11 +7,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# Cancel outdated runs on the same branch — saves minutes and gives
-# PR authors faster feedback from the most recent commit only.
+# Keep runs on the same branch from cancelling each other. Main deploy
+# watches need a completed CI result for the exact pushed SHA.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   NODE_VERSION: '24'
