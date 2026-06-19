@@ -2263,14 +2263,14 @@ const ActiveToolsDisplay = ({
     </span>
   );
   const activeConnectors = [
-    isGmailActive && { id: 'gmail', icon: <img src="/icons/google.png" alt="Gmail" className="h-4 w-4" /> },
-    isGoogleCalendarActive && { id: 'calendar', icon: <img src="/icons/google-calendar.png" alt="Google Calendar" className="h-4 w-4" /> },
-    isGoogleDriveActive && { id: 'drive', icon: <img src="/icons/google-drive.png" alt="Google Drive" className="h-4 w-4" /> },
-    isSpotifyActive && { id: 'spotify', icon: <img src="/icons/spotify.png" alt="Spotify" className="h-4 w-4" /> },
-    isWordConnectorActive && { id: 'word', icon: <img src="/icons/Word.png" alt="Word" className="h-4 w-4" /> },
-    isExcelConnectorActive && { id: 'excel', icon: <img src="/icons/Excel.png" alt="Excel" className="h-4 w-4" /> },
-    isComputerUseActive && { id: `computer-use-${activeComputerUseMode}`, icon: activeComputerUseIcon },
-  ].filter(Boolean) as { id: string; icon: JSX.Element }[];
+    isGmailActive && { id: 'gmail', label: 'Gmail', icon: <img src="/icons/google.png" alt="Gmail" className="h-4 w-4" /> },
+    isGoogleCalendarActive && { id: 'calendar', label: 'Calendar', icon: <img src="/icons/google-calendar.png" alt="Google Calendar" className="h-4 w-4" /> },
+    isGoogleDriveActive && { id: 'drive', label: 'Drive', icon: <img src="/icons/google-drive.png" alt="Google Drive" className="h-4 w-4" /> },
+    isSpotifyActive && { id: 'spotify', label: 'Spotify', icon: <img src="/icons/spotify.png" alt="Spotify" className="h-4 w-4" /> },
+    isWordConnectorActive && { id: 'word', label: 'Word', icon: <img src="/icons/Word.png" alt="Word" className="h-4 w-4" /> },
+    isExcelConnectorActive && { id: 'excel', label: 'Excel', icon: <img src="/icons/Excel.png" alt="Excel" className="h-4 w-4" /> },
+    isComputerUseActive && { id: `computer-use-${activeComputerUseMode}`, label: computerUseAppMeta[activeComputerUseMode].label, icon: activeComputerUseIcon },
+  ].filter(Boolean) as { id: string; label: string; icon: JSX.Element }[];
 
   const hasConnectors = activeConnectors.length > 0;
   const hasOtherTools = isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive || isWebSearchActive;
@@ -2286,6 +2286,18 @@ const ActiveToolsDisplay = ({
     setIsComputerUseActive(false);
     setComputerUseAppMode(null);
     setChatType('text');
+  };
+
+  // Remove a single connector chip (mirrors the direct-setter approach of
+  // handleCloseAllConnectors so it never triggers a disconnect side-effect).
+  const removeConnector = (id: string) => {
+    if (id === 'gmail') setIsGmailActive(false);
+    else if (id === 'calendar') setIsGoogleCalendarActive(false);
+    else if (id === 'drive') setIsGoogleDriveActive(false);
+    else if (id === 'spotify') setIsSpotifyActive(false);
+    else if (id === 'word') setIsWordConnectorActive(false);
+    else if (id === 'excel') setIsExcelConnectorActive(false);
+    else if (id.startsWith('computer-use')) { setIsComputerUseActive(false); setComputerUseAppMode(null); }
   };
 
   const activateComputerUseMode = (mode: ComputerUseAppMode) => {
@@ -2586,39 +2598,24 @@ const ActiveToolsDisplay = ({
 
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1.5 sm:gap-2">
-      {hasConnectors && (
-        <div className="chat-active-apps-chip flex max-w-full items-center overflow-hidden rounded-full border border-blue-200 bg-blue-50 text-blue-700 shadow-sm dark:border-blue-800/70 dark:bg-blue-950/30 dark:text-blue-200">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                className="flex h-8 min-w-0 items-center gap-1.5 px-2.5 text-xs font-semibold"
-                aria-label="Abrir APPs activas"
-              >
-                <Network width="13" height="13" className="shrink-0" />
-                <span>APPs</span>
-                <div className="ml-0.5 flex min-w-0 items-center gap-0.5">
-                  {activeConnectors.map(c => <React.Fragment key={c.id}>{c.icon}</React.Fragment>)}
-                </div>
-                <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-70" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" side="top" sideOffset={8} collisionPadding={12} className="chat-active-apps-menu liquid-menu-surface w-[min(calc(100vw-1.25rem),18rem)] p-1.5">
-              {renderAppSwitchItems()}
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="mr-1 h-6 w-6 shrink-0 rounded-full p-0 hover:bg-blue-100 dark:hover:bg-blue-900/30"
-            onClick={handleCloseAllConnectors}
-            aria-label="Cerrar APPs"
-            title="Cerrar APPs"
+      {activeConnectors.map((c) => (
+        <span
+          key={c.id}
+          className="chat-active-apps-chip inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-border/60 bg-background/80 py-0 pl-2.5 pr-1.5 text-xs font-medium text-foreground shadow-sm"
+        >
+          <span className="grid h-4 w-4 shrink-0 place-items-center">{c.icon}</span>
+          <span className="max-w-[100px] truncate">{c.label}</span>
+          <button
+            type="button"
+            onClick={() => removeConnector(c.id)}
+            aria-label={`Quitar ${c.label}`}
+            title={`Quitar ${c.label}`}
+            className="ml-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
-            <X className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-      )}
+            <X className="h-3 w-3" />
+          </button>
+        </span>
+      ))}
       {isWebSearchActive && (
         <div
           className="group/web-search-tool flex h-7 w-7 items-center justify-center overflow-hidden rounded-full border border-green-200 bg-green-100 px-0 text-xs text-green-700 transition-[width,padding,box-shadow] duration-300 ease-out hover:w-[120px] hover:justify-start hover:px-2 hover:shadow-sm focus-within:w-[120px] focus-within:justify-start focus-within:px-2 focus-within:shadow-sm dark:border-green-800 dark:bg-green-900/20 dark:text-green-300"
