@@ -55,6 +55,7 @@ jobs:
               - "postcss.config.mjs"
               - "drizzle.config.ts"
             paths-ignore:
+              - "**/node_modules/**"
               - ".agents/**"
               - "apps/upstream/**"
               - "changelog/upstream/**"
@@ -64,6 +65,7 @@ jobs:
               - "src/upstream/**"
               - "siraGPT/**"
               - "skills/**"
+              - "scripts/upstream/**"
               - "test/**"
               - "ui/**"
               - "vendor/**"
