@@ -5386,10 +5386,13 @@ But first, you need to connect your Spotify account securely using the button be
       return;
     }
 
+    const hasReplacementPrompt = input.trim().length > 0;
     if (!wantsVideo && autoVideoActivationRef.current) {
-      // Auto-detection should only turn video mode on. Keeping it sticky
-      // prevents the tool from disappearing after submit, polling, or retry UI
-      // updates; the user can close the chip explicitly.
+      if (hasReplacementPrompt && isVideoGenerationActive && chatType === 'video' && !isGeneratingVideo) {
+        setIsVideoGenerationActive(false);
+        setChatType('text');
+        autoVideoActivationRef.current = false;
+      }
       return;
     }
   }, [
@@ -5401,6 +5404,7 @@ But first, you need to connect your Spotify account securely using the button be
     isGmailActive,
     isGoogleCalendarActive,
     isGoogleDriveActive,
+    isGeneratingVideo,
     isImageGenerationActive,
     isMusicGenerationActive,
     isSpotifyActive,
