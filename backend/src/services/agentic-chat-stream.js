@@ -503,6 +503,8 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       // agentic loop used to drop it entirely, so a selected GPT didn't follow
       // its own instructions. Injected at the TOP of extraSystem for primacy.
       customGptPersona = '',
+      // Per-GPT tool capability toggles (null = legacy GPT → no gating).
+      customGptCapabilities = null,
     } = opts || {};
 
     if (!openai) throw new Error('runAgenticChat: openai client is required');
@@ -510,7 +512,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
     if (!userQuery) throw new Error('runAgenticChat: userQuery is required');
     if (!res) throw new Error('runAgenticChat: res is required');
 
-    let tools = toolsOverride || buildDefaultTools({ userQuery, selection, clearance: toolContext && toolContext.clearance });
+    let tools = toolsOverride || buildDefaultTools({ userQuery, selection, clearance: toolContext && toolContext.clearance, capabilities: customGptCapabilities });
     // Bilingual media-intent detection: when the user asks to create an
     // image / video / audio / music in the chat bar, this pre-extracts the
     // specs (duration, aspect ratio, count, style/genre) and lets us inject a
@@ -1276,6 +1278,31 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       return true;
     });
 
+    // Per-GPT capability gating. A custom GPT can disable tools per capability.
+    // SAFE DEFAULT: capabilities == null (legacy GPTs / normal non-GPT chats) →
+    // no gating. A tool is dropped only when its capability is EXPLICITLY false;
+    // missing keys stay ON so partial objects never silently disable tools.
+    // Kill switch: SIRAGPT_GPT_CAPABILITIES_GATING=0.
+    let gated = deduped;
+    const caps = opts && opts.capabilities;
+    const capGate = String(process.env.SIRAGPT_GPT_CAPABILITIES_GATING || '').trim().toLowerCase();
+    if (caps && typeof caps === 'object' && capGate !== '0' && capGate !== 'off') {
+      const blocked = new Set();
+      if (caps.webBrowsing === false) ['web_search', 'web_fetch'].forEach((n) => blocked.add(n));
+      if (caps.imageGeneration === false) ['generate_image', 'generate_video', 'generate_speech', 'generate_music'].forEach((n) => blocked.add(n));
+      if (caps.codeInterpreter === false) ['run_javascript', 'run_code', 'code_sandbox'].forEach((n) => blocked.add(n));
+      const blockVisuals = caps.dataAnalysis === false;
+      gated = deduped.filter((tool) => {
+        const name = tool && typeof tool.name === 'string' ? tool.name : '';
+        if (blocked.has(name)) return false;
+        if (blockVisuals && name.startsWith('create_')) return false;
+        return true;
+      });
+      if (gated.length !== deduped.length) {
+        console.log(`[gpt-capabilities] gated ${deduped.length - gated.length} tools (web=${caps.webBrowsing !== false} img=${caps.imageGeneration !== false} canvas=${caps.dataAnalysis !== false} code=${caps.codeInterpreter !== false})`);
+      }
+    }
+
     // A1: per-turn tool selection. Hand the model a small, relevant subset
     // instead of all ~37-73 tools (which degrades tool-choice accuracy, esp. on
     // the free model). Conservative: keeps a core + intent-relevant tools, and
@@ -1287,7 +1314,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       try {
         const toolSelector = require('./agents/tool-selector');
         const picked = toolSelector.selectTools({
-          tools: deduped,
+          tools: gated,
           userQuery,
           decision: sel.decision || null,
           intent: sel.intent || (sel.decision && sel.decision.intent) || null,
@@ -1295,14 +1322,14 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
           maxTools: sel.maxTools,
         });
         if (picked && picked.applied && Array.isArray(picked.tools) && picked.tools.length >= 4) {
-          console.log(`[tool-selector] ${picked.reason}: ${picked.keptCount}/${deduped.length} tools (dropped ${picked.droppedCount})`);
+          console.log(`[tool-selector] ${picked.reason}: ${picked.keptCount}/${gated.length} tools (dropped ${picked.droppedCount})`);
           return picked.tools;
         }
       } catch (selErr) {
         console.warn('[tool-selector] selection failed (using full set):', selErr && selErr.message);
       }
     }
-    return deduped;
+    return gated;
   }
 
   /**

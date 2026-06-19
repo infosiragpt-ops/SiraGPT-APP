@@ -244,7 +244,7 @@ router.post('/', authenticateToken, upload.single('icon'), async (req, res) => {
         visibility: visibility || 'PRIVATE',
         category,
         actions: actions || [],
-        // Store capabilities in a custom field if needed
+        capabilities: capabilities ?? null,
       },
       include: {
         creator: {
@@ -281,7 +281,8 @@ router.put('/:id', authenticateToken, upload.single('icon'), async (req, res) =>
       conversationStarters,
       visibility,
       category,
-      actions
+      actions,
+      capabilities
     } = gptData;
 
     let iconUrl = gptData.iconUrl;
@@ -326,6 +327,7 @@ router.put('/:id', authenticateToken, upload.single('icon'), async (req, res) =>
         ...(visibility !== undefined && { visibility }),
         ...(category !== undefined && { category }),
         ...(actions !== undefined && { actions }),
+        ...(capabilities !== undefined && { capabilities }),
       },
       include: {
         creator: {

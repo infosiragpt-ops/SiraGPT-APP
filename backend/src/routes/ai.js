@@ -5328,6 +5328,7 @@ router.post(
                   provider: actualProvider,
                   attachedDocuments: agenticAttachedDocuments,
                   customGptPersona: agenticCustomGptPersona,
+                  customGptCapabilities: customGpt ? (customGpt.capabilities || null) : null,
                   userQuery: prompt,
                   history: priorHistory,
                   res,

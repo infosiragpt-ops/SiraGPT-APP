@@ -29,6 +29,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -121,9 +122,9 @@ export default function CreateGPTPage() {
     category: "",
     actions: [],
     capabilities: {
-      webBrowsing: false,
-      dataAnalysis: false,
-      imageGeneration: false,
+      webBrowsing: true,
+      dataAnalysis: true,
+      imageGeneration: true,
       codeInterpreter: false,
     }
   })
@@ -178,10 +179,10 @@ export default function CreateGPTPage() {
         category: gpt.category || "",
         actions: gpt.actions || [],
         capabilities: {
-          webBrowsing: false,
-          dataAnalysis: false,
-          imageGeneration: false,
-          codeInterpreter: false,
+          webBrowsing: gpt.capabilities?.webBrowsing ?? false,
+          dataAnalysis: gpt.capabilities?.dataAnalysis ?? false,
+          imageGeneration: gpt.capabilities?.imageGeneration ?? false,
+          codeInterpreter: gpt.capabilities?.codeInterpreter ?? false,
         }
       })
 
@@ -911,6 +912,28 @@ export default function CreateGPTPage() {
                 {availableModels.length === 0 && (
                   <p className="text-xs text-muted-foreground">Cargando modelos disponibles...</p>
                 )}
+              </div>
+
+              {/* Funcionalidades — per-GPT tool capabilities (ChatGPT-style) */}
+              <div className="space-y-2">
+                <Label className="text-sm sm:text-base">Funcionalidades</Label>
+                <div className="space-y-3 pt-1">
+                  {([
+                    { key: "webBrowsing", label: "Búsqueda en la web" },
+                    { key: "dataAnalysis", label: "Lienzo" },
+                    { key: "imageGeneration", label: "Generación de imagen" },
+                    { key: "codeInterpreter", label: "Intérprete de código y análisis de datos" },
+                  ] as { key: keyof GPTFormData["capabilities"]; label: string }[]).map((cap) => (
+                    <label key={cap.key} htmlFor={`cap-${cap.key}`} className="flex items-center gap-2.5 cursor-pointer select-none">
+                      <Checkbox
+                        id={`cap-${cap.key}`}
+                        checked={formData.capabilities[cap.key]}
+                        onCheckedChange={(checked) => handleCapabilityChange(cap.key, checked === true)}
+                      />
+                      <span className="text-sm sm:text-base">{cap.label}</span>
+                    </label>
+                  ))}
+                </div>
               </div>
 
               {/* Temperature - Commented out for now */}

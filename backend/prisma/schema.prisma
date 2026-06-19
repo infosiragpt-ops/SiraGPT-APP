@@ -1400,6 +1400,10 @@ model CustomGpt {
   actions              Json?
   conversationStarters Json?
 
+  // Per-GPT tool capability toggles: { webBrowsing, dataAnalysis,
+  // imageGeneration, codeInterpreter }. null = legacy GPT (no gating).
+  capabilities         Json?
+
   // Publishing
   visibility GptVisibility @default(PRIVATE)
   shareId    String        @unique @default(cuid())

@@ -14,6 +14,12 @@ export interface CustomGPT {
   maxTokens?: number
   actions?: any[]
   conversationStarters?: string[]
+  capabilities?: {
+    webBrowsing?: boolean
+    dataAnalysis?: boolean
+    imageGeneration?: boolean
+    codeInterpreter?: boolean
+  }
   visibility: 'PRIVATE' | 'UNLISTED' | 'PUBLIC'
   shareId: string
   category?: string
