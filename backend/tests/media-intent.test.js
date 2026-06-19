@@ -14,6 +14,7 @@ const {
   detectImageEditIntent,
   buildMediaIntentHint,
   buildMediaIntentsHint,
+  resolveVideoAspectRatio,
   _internal,
 } = require('../src/services/agents/media-intent');
 
@@ -135,6 +136,14 @@ test('detectOrientation maps ES/EN orientation words', () => {
   assert.equal(o('horizontal para youtube'), 'horizontal');
   assert.equal(o('formato cuadrado'), 'square');
   assert.equal(o('una imagen normal'), null);
+});
+
+test('resolveVideoAspectRatio maps natural language video shapes', () => {
+  assert.equal(resolveVideoAspectRatio('genera un video cuadrado'), '1:1');
+  assert.equal(resolveVideoAspectRatio('genera un video rectangular para youtube'), '16:9');
+  assert.equal(resolveVideoAspectRatio('genera un video vertical para reels'), '9:16');
+  assert.equal(resolveVideoAspectRatio('genera un video 21x9 cinematografico'), '21:9');
+  assert.equal(resolveVideoAspectRatio('genera un video normal'), null);
 });
 
 test('buildMediaIntentHint produces a directive naming the tool + specs', () => {

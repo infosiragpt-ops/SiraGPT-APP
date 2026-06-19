@@ -7398,6 +7398,11 @@ router.post(
       const { prompt, chatId, aspect_ratio = '16:9', resolution = '720p', duration = 8, audio = true, negative_prompt, files, image_url, image_urls, model
       } = req.body;
       const userId = req.user.id;
+      let effectiveAspectRatio = aspect_ratio;
+      try {
+        const promptAspectRatio = require('../services/agents/media-intent').resolveVideoAspectRatio(prompt);
+        if (promptAspectRatio) effectiveAspectRatio = promptAspectRatio;
+      } catch (_) { /* best-effort: keep the selected video aspect ratio */ }
       const requestedVideoModel = String(model || '').trim();
       if (!requestedVideoModel) {
         return res.status(400).json({
@@ -7429,7 +7434,8 @@ router.post(
 
       console.log('🎬 Video generation request:', {
         prompt,
-        aspect_ratio,
+        aspect_ratio: effectiveAspectRatio,
+        selectedAspectRatio: aspect_ratio,
         userId,
         chatId,
         hasFiles: !!files?.length,
@@ -7496,7 +7502,7 @@ router.post(
 
         const videoPayload = {
           prompt,
-          aspect_ratio,
+          aspect_ratio: effectiveAspectRatio,
           resolution,
           duration: effectiveDuration,
           audio,
@@ -7639,7 +7645,7 @@ router.post(
                 status: 'processing',
                 filename: videoResponse.data.filename,
                 prompt: prompt,
-                aspect_ratio: aspect_ratio,
+                aspect_ratio: effectiveAspectRatio,
                 resolution,
                 duration: effectiveDuration,
                 requestedDuration: duration,
@@ -7683,7 +7689,7 @@ router.post(
           message: processedImageUrl ? 'Image-to-video generation started successfully' : 'Video generation started successfully',
           tokens,
           usage: usagePayloadFor(updatedUser),
-          aspect_ratio,
+          aspect_ratio: effectiveAspectRatio,
           resolution,
           duration: effectiveDuration,
           requestedDuration: duration,

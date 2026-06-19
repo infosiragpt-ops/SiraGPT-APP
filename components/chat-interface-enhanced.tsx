@@ -106,7 +106,8 @@ import { Badge } from "@/components/ui/badge"
 import { apiClient } from "@/lib/api"
 import { shouldRecoverImageGenerationViaPolling } from "@/lib/image-generation-recovery"
 import { track } from "@/lib/analytics"
-import { aiService, buildProfessionalCapabilityPrompt, classifyIntentFastPath, extractRequestedVideoDurationSeconds, isImageAnalysisPrompt, isImageOnlyAttachmentTurn, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldAutoActivateVideoGeneration, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, type ChatIntent } from "@/lib/ai-service"
+import { aiService, buildProfessionalCapabilityPrompt, classifyIntentFastPath, extractRequestedVideoAspectRatio, extractRequestedVideoDurationSeconds, isImageAnalysisPrompt, isImageOnlyAttachmentTurn, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldAutoActivateVideoGeneration, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, type ChatIntent } from "@/lib/ai-service"
+import { resolveImageAttachmentUrl } from "@/lib/attachment-url"
 import { toast } from "sonner"
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
@@ -333,6 +334,47 @@ const parseMessageFilesForRender = (files: any): any[] => {
   } catch {
     return []
   }
+}
+
+const VIDEO_SOURCE_IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|bmp|svg|heic|heif|avif|tiff?)$/i
+const IMAGE_TO_VIDEO_REFERENCE_RE =
+  /\b(?:image[- ]?to[- ]?video|imagen(?:es)?\s+a\s+video|foto(?:s)?\s+a\s+video)\b|\b(?:pasa(?:r|la|lo|las|los)?|pasar(?:la|lo|las|los)?|convierte(?:la|lo|las|los)?|convertir(?:la|lo|las|los)?|transforma(?:la|lo|las|los)?|transformar(?:la|lo|las|los)?|vuelve(?:la|lo|las|los)?)\b.{0,64}\bvideo\b|\b(?:anima(?:r|la|lo|las|los)?|animala|animalo|dale movimiento|darle movimiento|que se mueva)\b/
+
+const normalizeMediaPromptText = (value: string) =>
+  String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+
+const shouldUseLatestImageForVideo = (prompt: string) =>
+  IMAGE_TO_VIDEO_REFERENCE_RE.test(normalizeMediaPromptText(prompt))
+
+const isVideoSourceImageAttachment = (file: any) => {
+  if (!file) return false
+  const mimeType = String(file?.mimeType || file?.type || file?.contentType || "").toLowerCase()
+  const name = String(file?.originalName || file?.name || file?.filename || file?.url || file?.imageUrl || "").toLowerCase()
+  if (mimeType.startsWith("image/") || file?.type === "image") return true
+  return VIDEO_SOURCE_IMAGE_EXT_RE.test(name)
+}
+
+const collectLatestGeneratedImageUrls = (messages: any[] = [], maxImages = 4) => {
+  for (const message of [...(Array.isArray(messages) ? messages : [])].reverse()) {
+    if (String(message?.role || "").toUpperCase() !== "ASSISTANT") continue
+    const files = parseMessageFilesForRender(message?.files).filter(isVideoSourceImageAttachment)
+    const urls = files
+      .map((file: any) => resolveImageAttachmentUrl(file, process.env.NEXT_PUBLIC_IMAGE_URL))
+      .map((url: string) => String(url || "").trim())
+      .filter(Boolean)
+    if (urls.length > 0) return urls.slice(0, maxImages)
+
+    const content = String(message?.content || "").trim()
+    if (/^https?:\/\//i.test(content) && /\.(?:png|jpe?g|webp|gif|avif)(?:\?|#|$)/i.test(content)) {
+      return [content]
+    }
+  }
+  return []
 }
 
 const hasMessageTextForRender = (content: any): boolean => {
@@ -5301,6 +5343,10 @@ But first, you need to connect your Spotify account securely using the button be
       if (requestedDuration && selectedVideoDuration !== requestedDuration) {
         setSelectedVideoDuration(requestedDuration as VideoDuration);
       }
+      const requestedAspectRatio = extractRequestedVideoAspectRatio(input);
+      if (requestedAspectRatio && selectedVideoAspectRatio !== requestedAspectRatio) {
+        setSelectedVideoAspectRatio(requestedAspectRatio as VideoAspectRatio);
+      }
       return;
     }
 
@@ -5329,6 +5375,7 @@ But first, you need to connect your Spotify account securely using the button be
     isWebSearchActive,
     isWordConnectorActive,
     selectedVideoDuration,
+    selectedVideoAspectRatio,
     setChatType,
   ]);
 
@@ -8804,13 +8851,18 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     const videoController = new AbortController();
     videoAbortControllerRef.current = videoController;
     if (activeChatId) markLocalJobBusy(activeChatId);
+    const promptAspectRatio = extractRequestedVideoAspectRatio(prompt);
+    const sourceImageUrls = (!files?.length && shouldUseLatestImageForVideo(prompt))
+      ? collectLatestGeneratedImageUrls(currentChat?.messages || [])
+      : [];
     const videoOptions = {
       resolution: selectedVideoResolution,
-      aspectRatio: selectedVideoAspectRatio,
+      aspectRatio: promptAspectRatio || selectedVideoAspectRatio,
       duration: selectedVideoDuration,
       audio: selectedVideoAudio,
       model: activeVideoModel,
       signal: videoController.signal,
+      sourceImageUrls,
     };
     try {
       if (!currentChat) {

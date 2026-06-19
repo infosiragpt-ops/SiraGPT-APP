@@ -308,6 +308,11 @@ const DEFAULT_VIDEO_DURATION_SECONDS = Object.freeze([4, 5, 6, 7, 8, 9, 10, 11, 
 const VIDEO_DURATION_SECONDS_RE =
   /\b(1[0-5]|[4-9])\s*(?:s|seg(?:undo)?s?|sec(?:ond)?s?)\b/i
 
+export type RequestedVideoAspectRatio = '16:9' | '9:16' | '1:1' | '4:3' | '3:4' | '21:9'
+
+const VIDEO_RATIO_TOKEN_RE =
+  /\b(16:9|9:16|1:1|4:3|3:4|21:9|16x9|9x16|1x1|4x3|3x4|21x9)\b/i
+
 export function extractRequestedVideoDurationSeconds(
   prompt: string,
   allowedDurations: readonly number[] = DEFAULT_VIDEO_DURATION_SECONDS,
@@ -317,6 +322,21 @@ export function extractRequestedVideoDurationSeconds(
   if (!match) return null
   const duration = Number(match[1])
   return allowedDurations.includes(duration) ? duration : null
+}
+
+export function extractRequestedVideoAspectRatio(prompt: string): RequestedVideoAspectRatio | null {
+  const normalized = normalizePrompt(prompt)
+  if (!normalized) return null
+
+  const ratio = normalized.match(VIDEO_RATIO_TOKEN_RE)
+  if (ratio) return ratio[1].replace('x', ':') as RequestedVideoAspectRatio
+
+  if (/\b(?:cuadrad[oa]s?|square|post de instagram|feed de instagram)\b/.test(normalized)) return '1:1'
+  if (/\b(?:vertical(?:es)?|retrato|portrait|tiktok|reels?|historias?|story|stories|shorts?|para movil|formato movil|mas alto que ancho)\b/.test(normalized)) return '9:16'
+  if (/\b(?:rectangular(?:es)?|horizontal(?:es)?|apaisad[oa]s?|panoramic[oa]s?|landscape|widescreen|youtube|miniatura|thumbnail|banner|portada|cover|cabecera|mas ancho que alto)\b/.test(normalized)) return '16:9'
+  if (/\b(?:cinema|cinematico|cinematografico|ultrawide|panavision)\b/.test(normalized)) return '21:9'
+
+  return null
 }
 
 const parseFilesFromMessage = (message: any): any[] => {

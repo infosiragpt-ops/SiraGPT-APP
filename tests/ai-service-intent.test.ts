@@ -7,6 +7,7 @@ import {
   buildProfessionalCapabilityPrompt,
   classifyIntentFastPath,
   extractRequestedVideoDurationSeconds,
+  extractRequestedVideoAspectRatio,
   shouldAutoActivateVideoGeneration,
   shouldRouteThroughAgenticRuntime,
   shouldRouteTextPromptThroughAgenticRuntime,
@@ -433,6 +434,10 @@ describe("ai-service · deterministic intent routing", () => {
     const normalChatVideoPrompt = "que un perro este volando crea un video de 10 segundos"
     assert.equal(shouldAutoActivateVideoGeneration(normalChatVideoPrompt), true)
     assert.equal(extractRequestedVideoDurationSeconds(normalChatVideoPrompt), 10)
+    assert.equal(extractRequestedVideoAspectRatio("genera un video cuadrado de un perro"), "1:1")
+    assert.equal(extractRequestedVideoAspectRatio("genera un video rectangular para youtube"), "16:9")
+    assert.equal(extractRequestedVideoAspectRatio("crea un video vertical para reels"), "9:16")
+    assert.equal(extractRequestedVideoAspectRatio("crea un video 21x9 cinematográfico"), "21:9")
     assert.equal(classifyIntentFastPath("qué video me recomiendas para aprender React?"), null)
     assert.equal(await aiService.classifyIntent("qué video me recomiendas para aprender React?"), "text")
 

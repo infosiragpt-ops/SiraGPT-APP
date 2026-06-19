@@ -23,6 +23,16 @@ describe("chat video auto-activation source contract", () => {
       /extractRequestedVideoDurationSeconds\(input\)/,
       "auto-activation should read explicit durations like '10 segundos' into video settings"
     )
+    assert.match(
+      source,
+      /extractRequestedVideoAspectRatio\(input\)/,
+      "auto-activation should read explicit shapes like 'cuadrado' or 'vertical' into video settings"
+    )
+    assert.match(
+      source,
+      /setSelectedVideoAspectRatio\(requestedAspectRatio as VideoAspectRatio\)/,
+      "prompt-stated video aspect ratios must update the visible marker"
+    )
   })
 
   it("keeps image attachment ids when a normal chat prompt routes to video", () => {
@@ -30,6 +40,16 @@ describe("chat video auto-activation source contract", () => {
       source,
       /case 'video':[\s\S]{0,180}handleVideoGeneration\(msg, collectUploadFileIds\(filesToSend\)\)/,
       "intent-routed video generation must preserve attached image file ids for image-to-video"
+    )
+    assert.match(
+      source,
+      /shouldUseLatestImageForVideo\(prompt\)[\s\S]{0,180}collectLatestGeneratedImageUrls\(currentChat\?\.messages \|\| \[\]\)/,
+      "image-to-video follow-ups must reuse the latest generated image when no new image is attached"
+    )
+    assert.match(
+      source,
+      /sourceImageUrls,/,
+      "resolved image-to-video source URLs must be passed into the video request options"
     )
   })
 

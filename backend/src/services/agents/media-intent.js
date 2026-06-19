@@ -172,6 +172,23 @@ function resolveImageAspectRatio(text) {
   return null;
 }
 
+function resolveVideoAspectRatio(text) {
+  const norm = normalize(text);
+  if (!norm) return null;
+
+  const colon = norm.match(/\b(1:1|9:16|16:9|4:3|3:4|21:9)\b/);
+  if (colon) return colon[1];
+  const cross = norm.match(/\b(1x1|9x16|16x9|4x3|3x4|21x9)\b/);
+  if (cross) return cross[1].replace('x', ':');
+
+  if (/\b(cuadrad[oa]s?|square|post de instagram|feed de instagram)\b/.test(norm)) return '1:1';
+  if (/\b(vertical(?:es)?|retrato|portrait|tiktok|reels?|histori(?:a|as)|story|stories|shorts?|para movil|formato movil|mas alto que ancho)\b/.test(norm)) return '9:16';
+  if (/\b(rectangular(?:es)?|horizontal(?:es)?|apaisad[oa]s?|panoramic[oa]s?|landscape|widescreen|youtube|miniatura|thumbnail|banner|portada|cover|cabecera|mas ancho que alto)\b/.test(norm)) return '16:9';
+  if (/\b(cinema|cinematico|cinematografico|ultrawide|panavision)\b/.test(norm)) return '21:9';
+
+  return null;
+}
+
 const ORIENTATION_TO_IMAGE = { vertical: 'portrait', horizontal: 'wide', square: 'square', standard: 'square' };
 const ORIENTATION_TO_VIDEO = { vertical: '9:16', horizontal: '16:9', square: '1:1', standard: '4:3' };
 const DEFAULT_VIDEO_DURATION_SECONDS = 8;
@@ -500,6 +517,7 @@ module.exports = {
   buildMediaIntentHint,
   buildMediaIntentsHint,
   resolveImageAspectRatio,
+  resolveVideoAspectRatio,
   // Exposed for unit testing:
   _internal: {
     normalize,
@@ -512,6 +530,7 @@ module.exports = {
     DEFAULT_VIDEO_ASPECT_RATIO,
     DEFAULT_VIDEO_MODEL,
     resolveImageAspectRatio,
+    resolveVideoAspectRatio,
     KIND_TO_TOOL,
     buildSpecsForKind,
     detectImageEditIntent,

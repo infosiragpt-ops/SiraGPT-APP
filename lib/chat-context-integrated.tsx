@@ -503,6 +503,7 @@ type VideoGenerationOptions = {
   duration?: 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15
   audio?: boolean
   model?: string
+  sourceImageUrls?: string[]
   // Optional cancel signal so the composer can abort the kickoff request,
   // mirroring the dedicated AbortController image generation already uses.
   signal?: AbortSignal
@@ -2957,6 +2958,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         const url = raw.startsWith('http') ? raw : `${backendBaseUrl}${raw.startsWith('/') ? '' : '/'}${raw}`;
         if (!imageUrls.includes(url)) imageUrls.push(url);
       };
+
+      (options?.sourceImageUrls || []).forEach(addImageUrl);
 
       // First try to get image URL from uploadedFiles context
       if (uploadedFiles && uploadedFiles.length > 0) {
