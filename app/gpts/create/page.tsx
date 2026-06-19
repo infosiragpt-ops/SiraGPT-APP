@@ -917,22 +917,36 @@ export default function CreateGPTPage() {
               {/* Funcionalidades — per-GPT tool capabilities (ChatGPT-style) */}
               <div className="space-y-2">
                 <Label className="text-sm sm:text-base">Funcionalidades</Label>
-                <div className="space-y-3 pt-1">
+                <p className="text-xs text-muted-foreground">Elige qué herramientas puede usar este GPT.</p>
+                <div className="mt-1 overflow-hidden rounded-lg border border-border/60 bg-background/40">
                   {([
-                    { key: "webBrowsing", label: "Búsqueda en la web" },
-                    { key: "dataAnalysis", label: "Lienzo" },
-                    { key: "imageGeneration", label: "Generación de imagen" },
-                    { key: "codeInterpreter", label: "Intérprete de código y análisis de datos" },
-                  ] as { key: keyof GPTFormData["capabilities"]; label: string }[]).map((cap) => (
-                    <label key={cap.key} htmlFor={`cap-${cap.key}`} className="flex items-center gap-2.5 cursor-pointer select-none">
-                      <Checkbox
-                        id={`cap-${cap.key}`}
-                        checked={formData.capabilities[cap.key]}
-                        onCheckedChange={(checked) => handleCapabilityChange(cap.key, checked === true)}
-                      />
-                      <span className="text-sm sm:text-base">{cap.label}</span>
-                    </label>
-                  ))}
+                    { key: "webBrowsing", icon: Globe, label: "Búsqueda en la web", desc: "Consulta información actualizada en internet." },
+                    { key: "dataAnalysis", icon: Palette, label: "Lienzo", desc: "Crea y edita documentos y diagramas." },
+                    { key: "imageGeneration", icon: ImageIcon, label: "Generación de imagen", desc: "Genera imágenes a partir de texto." },
+                    { key: "codeInterpreter", icon: Code, label: "Intérprete de código y análisis de datos", desc: "Ejecuta código y analiza archivos." },
+                  ] as { key: keyof GPTFormData["capabilities"]; icon: any; label: string; desc: string }[]).map((cap) => {
+                    const Icon = cap.icon
+                    return (
+                      <label
+                        key={cap.key}
+                        htmlFor={`cap-${cap.key}`}
+                        className="flex cursor-pointer select-none items-center gap-3 border-t border-border/50 px-3 py-3 transition-colors first:border-t-0 hover:bg-muted/40"
+                      >
+                        <Checkbox
+                          id={`cap-${cap.key}`}
+                          checked={formData.capabilities[cap.key]}
+                          onCheckedChange={(checked) => handleCapabilityChange(cap.key, checked === true)}
+                        />
+                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted/60 text-muted-foreground">
+                          <Icon className="h-4 w-4" />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-sm font-medium leading-tight text-foreground">{cap.label}</span>
+                          <span className="mt-0.5 block text-xs leading-tight text-muted-foreground">{cap.desc}</span>
+                        </span>
+                      </label>
+                    )
+                  })}
                 </div>
               </div>
 
