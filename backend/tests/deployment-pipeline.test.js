@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const p = require('../src/services/deployments/pipeline');
+const connectors = require('../src/services/deployments/provider-connectors');
 
 test('generateShortHash is deterministic, 8 chars, seq-sensitive', () => {
   assert.equal(p.generateShortHash('depl_1', 0), p.generateShortHash('depl_1', 0));
@@ -26,6 +27,8 @@ test('machineSpec maps reserved VM tiers to label + resources', () => {
   assert.equal(s.monthlyUsd, 80);
   assert.equal(p.machineSpec('static').label, 'Static (CDN)');
   assert.equal(p.machineSpec('autoscale').label, 'Autoscale');
+  assert.equal(p.machineSpec('hostinger_vps').label, 'Hostinger VPS');
+  assert.equal(p.machineSpec('aws').label, 'AWS target');
 });
 
 test('defaultDomain mirrors the published Replit subdomain shape', () => {
@@ -74,4 +77,97 @@ test('securityScanReport is deterministic and passes without critical findings',
   assert.deepEqual(a, p.securityScanReport('seed-1'));
   assert.ok(['passed', 'failed'].includes(a.status));
   assert.ok(Array.isArray(a.findings));
+});
+
+test('providerReadiness reports missing env without exposing values', () => {
+  const ready = connectors.providerReadiness('hostinger_vps', {
+    HOSTINGER_VPS_HOST: '62.72.11.231',
+  });
+  assert.equal(ready.configured, false);
+  assert.deepEqual(ready.missingRequired, ['HOSTINGER_VPS_USER', 'HOSTINGER_VPS_SSH_PRIVATE_KEY']);
+  assert.equal(ready.requiredEnv.find((row) => row.key === 'HOSTINGER_VPS_HOST').configured, true);
+  assert.equal(JSON.stringify(ready).includes('62.72.11.231'), false);
+});
+
+test('AWS readiness accepts standard AWS environment variables', () => {
+  const ready = connectors.providerReadiness('aws', {
+    AWS_ACCESS_KEY_ID: 'AKIA_TEST',
+    AWS_SECRET_ACCESS_KEY: 'secret',
+    AWS_REGION: 'us-east-1',
+  });
+  assert.equal(ready.configured, true);
+  assert.deepEqual(ready.missingRequired, []);
+});
+
+test('splitGoDaddyHostname derives root domain and record name', () => {
+  assert.deepEqual(connectors.splitGoDaddyHostname('app.example.com'), {
+    hostname: 'app.example.com',
+    rootDomain: 'example.com',
+    recordName: 'app',
+  });
+  assert.deepEqual(connectors.splitGoDaddyHostname('sira.com.pe'), {
+    hostname: 'sira.com.pe',
+    rootDomain: 'sira.com.pe',
+    recordName: '@',
+  });
+});
+
+test('buildConnectionPlan returns safe Hostinger SSH target metadata', () => {
+  const plan = connectors.buildConnectionPlan({
+    providerId: 'hostinger_vps',
+    deployment: { id: 'depl_1', subdomain: 'siragpt', externalPort: 5050 },
+    env: {
+      HOSTINGER_VPS_HOST: '62.72.11.231',
+      HOSTINGER_VPS_USER: 'root',
+      HOSTINGER_VPS_SSH_PRIVATE_KEY: 'VERY_SECRET_BODY',
+      HOSTINGER_VPS_APP_PATH: '/opt/siragpt',
+    },
+  });
+  assert.equal(plan.ready, true);
+  assert.equal(plan.target.host, '62.72.11.231');
+  assert.equal(plan.target.appPort, 5050);
+  assert.equal(JSON.stringify(plan).includes('VERY_SECRET_BODY'), false);
+});
+
+test('applyGoDaddyDnsRecords no-ops when credentials are missing', async () => {
+  let called = false;
+  const result = await connectors.applyGoDaddyDnsRecords({
+    hostname: 'app.example.com',
+    records: [{ type: 'A', name: 'app.example.com', value: '1.2.3.4', ttl: 600 }],
+    env: {},
+    fetchImpl: async () => {
+      called = true;
+      return { ok: true };
+    },
+  });
+  assert.equal(called, false);
+  assert.equal(result.applied, false);
+  assert.equal(result.reason, 'missing_env');
+  assert.deepEqual(result.missingRequired, ['GODADDY_API_KEY', 'GODADDY_API_SECRET']);
+});
+
+test('applyGoDaddyDnsRecords calls GoDaddy Domains API with sso-key auth', async () => {
+  const calls = [];
+  const result = await connectors.applyGoDaddyDnsRecords({
+    hostname: 'app.example.com',
+    records: [
+      { type: 'A', name: 'app.example.com', value: '1.2.3.4', ttl: 600 },
+      { type: 'TXT', name: 'app.example.com', value: 'replit-verify=abcd', ttl: 600 },
+    ],
+    env: {
+      GODADDY_API_KEY: 'key',
+      GODADDY_API_SECRET: 'secret',
+      GODADDY_API_BASE_URL: 'https://api.ote-godaddy.com',
+    },
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      return { ok: true, status: 200 };
+    },
+  });
+  assert.equal(result.applied, true);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, 'https://api.ote-godaddy.com/v1/domains/example.com/records/A/app');
+  assert.equal(calls[0].init.method, 'PUT');
+  assert.equal(calls[0].init.headers.Authorization, 'sso-key key:secret');
+  assert.deepEqual(JSON.parse(calls[0].init.body), [{ data: '1.2.3.4', ttl: 600 }]);
 });

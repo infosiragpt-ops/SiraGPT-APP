@@ -187,6 +187,35 @@ test('updateDeployment normalizes reserved VM machine tier when changing type', 
   assert.equal(up.machineLabel, 'Reserved VM (Dedicated 1 vCPU / 4 GiB RAM)');
 });
 
+test('connectProvider rejects missing provider configuration', async () => {
+  const db = makeFakeDb();
+  const d = await service.createDeployment({ userId: USER, name: 'App', db });
+  await assert.rejects(
+    () => service.connectProvider({ userId: USER, id: d.id, providerId: 'hostinger_vps', db, env: {} }),
+    (e) => e.code === 'provider_not_configured' && e.message.includes('HOSTINGER_VPS_HOST'),
+  );
+});
+
+test('connectProvider switches a deployment to Hostinger VPS when configured', async () => {
+  const db = makeFakeDb();
+  const d = await service.createDeployment({ userId: USER, name: 'App', db });
+  const result = await service.connectProvider({
+    userId: USER,
+    id: d.id,
+    providerId: 'hostinger_vps',
+    db,
+    env: {
+      HOSTINGER_VPS_HOST: '62.72.11.231',
+      HOSTINGER_VPS_USER: 'root',
+      HOSTINGER_VPS_SSH_PRIVATE_KEY: 'PRIVATE_KEY',
+    },
+  });
+  assert.equal(result.deployment.deploymentType, 'hostinger_vps');
+  assert.equal(result.deployment.machineLabel, 'Hostinger VPS');
+  assert.equal(result.deployment.externalPort, 3000);
+  assert.equal(result.plan.ready, true);
+});
+
 test('getLogs returns the live version log lines', async () => {
   const db = makeFakeDb();
   const d = await service.createDeployment({ userId: USER, name: 'App', db });

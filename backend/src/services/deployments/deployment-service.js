@@ -9,6 +9,7 @@
  */
 
 const pipeline = require('./pipeline');
+const providers = require('./provider-connectors');
 
 const defaultPrisma = (() => {
   try { return require('../../config/database'); } catch { return null; }
@@ -102,12 +103,17 @@ async function loadOwned(prisma, userId, id) {
   return row;
 }
 
+function normalizedTierFor(deploymentType, machineTier) {
+  if (deploymentType === 'reserved_vm') return machineTier && pipeline.RESERVED_TIERS[machineTier] ? machineTier : '1vcpu_4gb';
+  return deploymentType;
+}
+
 async function createDeployment({ userId, name, projectId = null, deploymentType = 'autoscale', visibility = 'public', geography = 'na', machineTier, db = defaultPrisma }) {
   const prisma = requireDb(db);
   if (!pipeline.DEPLOYMENT_TYPES.includes(deploymentType)) throw new DeploymentError(400, 'invalid_type', 'invalid deployment type');
   if (!pipeline.VISIBILITIES.includes(visibility)) throw new DeploymentError(400, 'invalid_visibility', 'invalid visibility');
   if (!pipeline.GEOGRAPHIES.includes(geography)) throw new DeploymentError(400, 'invalid_geography', 'invalid geography');
-  const tier = deploymentType === 'reserved_vm' ? (machineTier && pipeline.RESERVED_TIERS[machineTier] ? machineTier : '1vcpu_4gb') : deploymentType;
+  const tier = normalizedTierFor(deploymentType, machineTier);
   const spec = pipeline.machineSpec(deploymentType, tier);
 
   const row = await prisma.deployment.create({
@@ -258,9 +264,7 @@ async function updateDeployment({ userId, id, patch = {}, db = defaultPrisma }) 
   if (data.deploymentType || data.machineTier) {
     const cur = await prisma.deployment.findUnique({ where: { id } });
     const nextType = data.deploymentType || cur.deploymentType;
-    let nextTier = data.machineTier || cur.machineTier;
-    if (nextType === 'reserved_vm' && !pipeline.RESERVED_TIERS[nextTier]) nextTier = '1vcpu_4gb';
-    if (nextType !== 'reserved_vm') nextTier = nextType;
+    const nextTier = normalizedTierFor(nextType, data.machineTier || cur.machineTier);
     data.machineTier = nextTier;
     const spec = pipeline.machineSpec(nextType, nextTier);
     data.cpu = spec.cpu;
@@ -292,11 +296,53 @@ async function runSecurityScan({ userId, id, db = defaultPrisma }) {
   return scan;
 }
 
-async function addDomain({ userId, id, hostname, db = defaultPrisma }) {
+function listProviders({ env = process.env } = {}) {
+  return providers.listProviders(env);
+}
+
+async function connectProvider({ userId, id, providerId, db = defaultPrisma, env = process.env }) {
+  const prisma = requireDb(db);
+  const row = await loadOwned(prisma, userId, id);
+  if (!['hostinger_vps', 'aws'].includes(providerId)) {
+    throw new DeploymentError(400, 'unsupported_provider', 'unsupported deployment provider');
+  }
+  const plan = providers.buildConnectionPlan({ providerId, deployment: publicDeployment(row), env });
+  if (!plan.ready) {
+    throw new DeploymentError(409, 'provider_not_configured', `missing provider env: ${plan.provider.missingRequired.join(', ')}`);
+  }
+  const tier = normalizedTierFor(providerId, providerId);
+  const spec = pipeline.machineSpec(providerId, tier);
+  const updated = await prisma.deployment.update({
+    where: { id },
+    data: {
+      deploymentType: providerId,
+      machineTier: tier,
+      cpu: spec.cpu,
+      memoryMb: spec.memoryMb,
+      buildCommand: row.buildCommand || 'npm run build',
+      runCommand: row.runCommand || 'npm run start',
+      externalPort: row.externalPort || 3000,
+    },
+  });
+  return {
+    deployment: publicDeployment(updated),
+    provider: plan.provider,
+    plan: providers.buildConnectionPlan({ providerId, deployment: publicDeployment(updated), env }),
+  };
+}
+
+async function addDomain({ userId, id, hostname, providerId = null, db = defaultPrisma, env = process.env }) {
   const prisma = requireDb(db);
   await loadOwned(prisma, userId, id);
   const clean = String(hostname || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
   if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(clean)) throw new DeploymentError(400, 'invalid_hostname', 'invalid hostname');
+  const dnsRecords = pipeline.dnsRecordsFor(clean, id);
+  let providerResult = null;
+  if (providerId === 'godaddy_dns') {
+    providerResult = await providers.applyGoDaddyDnsRecords({ hostname: clean, records: dnsRecords, env });
+  } else if (providerId != null) {
+    throw new DeploymentError(400, 'unsupported_provider', 'unsupported domain provider');
+  }
   const domain = await prisma.deploymentDomain.create({
     data: {
       deploymentId: id,
@@ -304,10 +350,10 @@ async function addDomain({ userId, id, hostname, db = defaultPrisma }) {
       kind: 'custom',
       verificationStatus: 'pending',
       tlsStatus: 'provisioning',
-      dnsRecords: pipeline.dnsRecordsFor(clean, id),
+      dnsRecords,
     },
   });
-  return publicDomain(domain);
+  return providerId === 'godaddy_dns' ? { domain: publicDomain(domain), providerResult } : publicDomain(domain);
 }
 
 async function removeDomain({ userId, id, domainId, db = defaultPrisma }) {
@@ -341,9 +387,11 @@ module.exports = {
   publicDeployment,
   publicVersion,
   publicDomain,
+  listProviders,
   createDeployment,
   listDeployments,
   getDeployment,
+  connectProvider,
   publishDeployment,
   rollbackDeployment,
   updateDeployment,

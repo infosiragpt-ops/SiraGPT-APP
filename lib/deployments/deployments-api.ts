@@ -12,11 +12,11 @@ function authHeaders(): Record<string, string> {
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { credentials: "include", headers: authHeaders(), ...init })
   const body = await res.json().catch(() => ({}))
-  if (!res.ok) throw Object.assign(new Error((body as any)?.error || `deployments http ${res.status}`), { status: res.status, body })
+  if (!res.ok) throw Object.assign(new Error((body as any)?.message || (body as any)?.error || `deployments http ${res.status}`), { status: res.status, body })
   return body as T
 }
 
-export type DeploymentType = "autoscale" | "reserved_vm" | "static" | "scheduled"
+export type DeploymentType = "autoscale" | "reserved_vm" | "static" | "scheduled" | "hostinger_vps" | "aws"
 export type DeploymentStatus = "building" | "running" | "failed" | "paused" | "suspended" | "shut_down"
 export type DeploymentVisibility = "public" | "workspace" | "private" | "password"
 export type DeploymentGeography = "na" | "eu" | "sa" | "asia" | "au"
@@ -85,6 +85,53 @@ export interface PublishPhase { name: string; status: "done" | "failed"; logs: s
 export interface DeploymentDetail { deployment: Deployment; versions: DeploymentVersion[]; domains: DeploymentDomain[] }
 export interface DeploymentsHealth { ok: boolean; enabled: boolean }
 
+export type DeploymentProviderId = "hostinger_vps" | "aws" | "godaddy_dns"
+
+export interface DeploymentProviderEnvRow {
+  key: string
+  configured: boolean
+}
+
+export interface DeploymentProvider {
+  id: DeploymentProviderId
+  label: string
+  category: "compute" | "domain"
+  mode: string
+  description: string
+  configured: boolean
+  missingRequired: string[]
+  requiredEnv: DeploymentProviderEnvRow[]
+  optionalEnv: DeploymentProviderEnvRow[]
+  capabilities: string[]
+  docsUrl: string
+}
+
+export interface DeploymentProviderPlan {
+  provider: DeploymentProvider
+  ready: boolean
+  target: Record<string, unknown> | null
+  steps: string[]
+  dnsRecords?: DnsRecord[]
+}
+
+export interface ProviderConnectResult {
+  deployment: Deployment
+  provider: DeploymentProvider
+  plan: DeploymentProviderPlan
+}
+
+export interface DomainProviderResult {
+  applied: boolean
+  providerId: DeploymentProviderId
+  reason: string | null
+  missingRequired?: string[]
+  rootDomain?: string
+  recordName?: string
+  attemptedRecords?: Array<Record<string, unknown>>
+  status?: number
+  message?: string
+}
+
 export interface CreateDeploymentInput {
   name: string
   deploymentType?: DeploymentType
@@ -101,6 +148,7 @@ export const deploymentsApi = {
   health: () => req<DeploymentsHealth>("/health", { cache: "no-store" }),
 
   list: () => req<{ deployments: Deployment[] }>("/").then((r) => r.deployments),
+  providers: () => req<{ providers: DeploymentProvider[] }>("/providers", { cache: "no-store" }).then((r) => r.providers),
   create: (input: CreateDeploymentInput) => req<{ deployment: Deployment }>("/", { method: "POST", body: JSON.stringify(input) }).then((r) => r.deployment),
   get: (id: string) => req<DeploymentDetail>(`/${id}`),
   update: (id: string, patch: DeploymentPatch) => req<{ deployment: Deployment }>(`/${id}`, { method: "PATCH", body: JSON.stringify(patch) }).then((r) => r.deployment),
@@ -114,7 +162,12 @@ export const deploymentsApi = {
 
   securityScan: (id: string) => req<{ scan: SecurityScan }>(`/${id}/security-scan`, { method: "POST" }).then((r) => r.scan),
 
+  connectProvider: (id: string, provider: Extract<DeploymentProviderId, "hostinger_vps" | "aws">) =>
+    req<ProviderConnectResult>(`/${id}/providers/connect`, { method: "POST", body: JSON.stringify({ provider }) }),
+
   addDomain: (id: string, hostname: string) => req<{ domain: DeploymentDomain }>(`/${id}/domains`, { method: "POST", body: JSON.stringify({ hostname }) }).then((r) => r.domain),
+  addGoDaddyDomain: (id: string, hostname: string) =>
+    req<{ domain: DeploymentDomain; providerResult: DomainProviderResult }>(`/${id}/domains/godaddy`, { method: "POST", body: JSON.stringify({ hostname }) }),
   removeDomain: (id: string, domainId: string) => req<{ ok: boolean }>(`/${id}/domains/${domainId}`, { method: "DELETE" }),
 
   logs: (id: string) => req<{ lines: string[]; entries: LogEntry[]; versionHash: string | null }>(`/${id}/logs`),

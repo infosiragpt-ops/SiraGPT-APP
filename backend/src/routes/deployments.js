@@ -9,9 +9,11 @@
  *   GET    /api/deployments/health                  → { ok, enabled }   (público, SIEMPRE 200)
  *   — resto: flag off ⇒ 404 not_found —
  *   GET    /api/deployments                          → lista del usuario
+ *   GET    /api/deployments/providers                → estado Hostinger/AWS/GoDaddy
  *   POST   /api/deployments                          → crea
  *   GET    /api/deployments/:id                      → { deployment, versions, domains }
  *   PATCH  /api/deployments/:id                      → ajustes (commands/visibility/type/tier)
+ *   POST   /api/deployments/:id/providers/connect    → conecta Hostinger VPS/AWS
  *   POST   /api/deployments/:id/publish              → publica versión (pipeline 5 fases)
  *   POST   /api/deployments/:id/rollback             → re-promociona una versión previa
  *   POST   /api/deployments/:id/pause|resume|shutdown
@@ -67,6 +69,12 @@ router.get('/', authenticateToken, async (req, res) => {
   } catch (err) { return sendError(res, err); }
 });
 
+router.get('/providers', authenticateToken, async (_req, res) => {
+  try {
+    return res.json({ providers: service.listProviders() });
+  } catch (err) { return sendError(res, err); }
+});
+
 router.post(
   '/',
   authenticateToken,
@@ -111,6 +119,24 @@ router.patch('/:id', authenticateToken, async (req, res) => {
   } catch (err) { return sendError(res, err); }
 });
 
+router.post(
+  '/:id/providers/connect',
+  authenticateToken,
+  [body('provider').isString().bail().trim().notEmpty()],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+    try {
+      const result = await service.connectProvider({
+        userId: req.user.id,
+        id: req.params.id,
+        providerId: req.body.provider,
+      });
+      return res.json(result);
+    } catch (err) { return sendError(res, err); }
+  },
+);
+
 router.post('/:id/publish', authenticateToken, async (req, res) => {
   try {
     const result = await service.publishDeployment({ userId: req.user.id, id: req.params.id, hasFiles: req.body?.hasFiles !== false });
@@ -146,7 +172,22 @@ router.post('/:id/domains', authenticateToken, [body('hostname').isString().bail
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
   try {
-    return res.status(201).json({ domain: await service.addDomain({ userId: req.user.id, id: req.params.id, hostname: req.body.hostname }) });
+    const domain = await service.addDomain({ userId: req.user.id, id: req.params.id, hostname: req.body.hostname });
+    return res.status(201).json({ domain });
+  } catch (err) { return sendError(res, err); }
+});
+
+router.post('/:id/domains/godaddy', authenticateToken, [body('hostname').isString().bail().trim().notEmpty()], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+  try {
+    const result = await service.addDomain({
+      userId: req.user.id,
+      id: req.params.id,
+      hostname: req.body.hostname,
+      providerId: 'godaddy_dns',
+    });
+    return res.status(201).json(result);
   } catch (err) { return sendError(res, err); }
 });
 

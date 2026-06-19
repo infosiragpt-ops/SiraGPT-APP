@@ -29,6 +29,8 @@ const TYPE_OPTIONS: { value: DeploymentType; label: string }[] = [
   { value: "reserved_vm", label: "Reserved VM" },
   { value: "static", label: "Static" },
   { value: "scheduled", label: "Scheduled" },
+  { value: "hostinger_vps", label: "Hostinger VPS" },
+  { value: "aws", label: "AWS" },
 ]
 
 const VISIBILITY_OPTIONS: { value: DeploymentVisibility; label: string }[] = [

@@ -6,6 +6,7 @@ import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 import {
   deploymentsApi,
@@ -39,6 +40,7 @@ export function DomainsTab({
   onRefetch: () => void
 }) {
   const [hostname, setHostname] = React.useState("")
+  const [domainProvider, setDomainProvider] = React.useState<"Manual DNS" | "GoDaddy">("Manual DNS")
   const [adding, setAdding] = React.useState(false)
   const [showConnect, setShowConnect] = React.useState(false)
   const [removingId, setRemovingId] = React.useState<string | null>(null)
@@ -56,10 +58,25 @@ export function DomainsTab({
     }
     setAdding(true)
     try {
-      const domain = await deploymentsApi.addDomain(deploymentId, trimmed)
-      toast.success("Domain added. Configure the DNS records.")
+      const result =
+        domainProvider === "GoDaddy"
+          ? await deploymentsApi.addGoDaddyDomain(deploymentId, trimmed)
+          : { domain: await deploymentsApi.addDomain(deploymentId, trimmed), providerResult: null }
+      const domain = result.domain
+      if (domainProvider === "GoDaddy") {
+        if (result.providerResult?.applied) {
+          toast.success("Domain added and GoDaddy DNS records were applied.")
+        } else if (result.providerResult?.reason === "missing_env") {
+          toast.warning(`Domain added. Missing GoDaddy env: ${result.providerResult.missingRequired?.join(", ")}`)
+        } else {
+          toast.warning("Domain added. GoDaddy DNS was not applied; configure the records shown below.")
+        }
+      } else {
+        toast.success("Domain added. Configure the DNS records.")
+      }
       setHostname("")
       setShowConnect(false)
+      setDomainProvider("Manual DNS")
       setExpandedId(domain.id)
       onRefetch()
     } catch (error) {
@@ -108,7 +125,7 @@ export function DomainsTab({
       ) : null}
 
       {showConnect ? (
-        <div className="flex gap-2 rounded-lg border border-border/60 bg-card/80 p-3">
+        <div className="grid gap-2 rounded-lg border border-border/60 bg-card/80 p-3 sm:grid-cols-[1fr_150px_auto]">
           <Input
             value={hostname}
             onChange={(e) => setHostname(e.target.value)}
@@ -119,6 +136,19 @@ export function DomainsTab({
             className="h-9 text-[12px]"
             autoFocus
           />
+          <Select value={domainProvider} onValueChange={(value) => setDomainProvider(value as "Manual DNS" | "GoDaddy")}>
+            <SelectTrigger className="h-9 text-[12px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="Manual DNS" className="text-[12px]">
+                Manual DNS
+              </SelectItem>
+              <SelectItem value="GoDaddy" className="text-[12px]">
+                GoDaddy
+              </SelectItem>
+            </SelectContent>
+          </Select>
           <Button size="sm" className="h-9 shrink-0 gap-1.5" onClick={() => void addDomain()} disabled={adding}>
             {adding ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
             Add

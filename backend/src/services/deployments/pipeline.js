@@ -10,11 +10,11 @@
  *
  * Mirrors Replit's Deployments UX (see docs research): 5-phase publish
  * pipeline, immutable versions identified by a short hash, custom-domain
- * A+TXT records, machine tiers. It is a management clone — it records
- * deployments, it does not provision real machines.
+ * A+TXT records, machine tiers. Provider connectors live beside this module
+ * so the UI can target real infrastructure without putting secrets in code.
  */
 
-const DEPLOYMENT_TYPES = ['autoscale', 'reserved_vm', 'static', 'scheduled'];
+const DEPLOYMENT_TYPES = ['autoscale', 'reserved_vm', 'static', 'scheduled', 'hostinger_vps', 'aws'];
 const VISIBILITIES = ['public', 'workspace', 'private', 'password'];
 const GEOGRAPHIES = ['na', 'eu', 'sa', 'asia', 'au'];
 const STATUSES = ['building', 'running', 'failed', 'paused', 'suspended', 'shut_down'];
@@ -24,6 +24,8 @@ const DEPLOYMENT_TYPE_LABELS = {
   reserved_vm: 'Reserved VM',
   static: 'Static',
   scheduled: 'Scheduled',
+  hostinger_vps: 'Hostinger VPS',
+  aws: 'AWS',
 };
 
 const GEOGRAPHY_LABELS = {
@@ -100,6 +102,12 @@ function machineSpec(deploymentType, machineTier) {
   }
   if (deploymentType === 'scheduled') {
     return { label: 'Scheduled job', cpu: 1, memoryMb: 1024, monthlyUsd: null };
+  }
+  if (deploymentType === 'hostinger_vps') {
+    return { label: 'Hostinger VPS', cpu: null, memoryMb: null, monthlyUsd: null };
+  }
+  if (deploymentType === 'aws') {
+    return { label: 'AWS target', cpu: null, memoryMb: null, monthlyUsd: null };
   }
   return { label: 'Autoscale', cpu: 1, memoryMb: 2048, monthlyUsd: null };
 }

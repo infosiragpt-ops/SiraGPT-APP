@@ -1,7 +1,22 @@
 "use client"
 
 import * as React from "react"
-import { Loader2, Pause, Play, Power, RefreshCw, Save, Settings2, Smartphone } from "lucide-react"
+import {
+  AlertCircle,
+  CheckCircle2,
+  Cloud,
+  ExternalLink,
+  Globe2,
+  Loader2,
+  Pause,
+  Play,
+  Power,
+  RefreshCw,
+  Save,
+  Server,
+  Settings2,
+  Smartphone,
+} from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -20,17 +35,20 @@ import {
   deploymentsApi,
   type Deployment,
   type DeploymentPatch,
+  type DeploymentProvider,
   type DeploymentType,
   type DeploymentVisibility,
 } from "@/lib/deployments/deployments-api"
 
-import { InfoBanner, PanelCard } from "./shared"
+import { InfoBanner, PanelCard, StatusPill } from "./shared"
 
 const TYPE_OPTIONS: { value: DeploymentType; label: string }[] = [
   { value: "autoscale", label: "Autoscale" },
   { value: "reserved_vm", label: "Reserved VM" },
   { value: "static", label: "Static" },
   { value: "scheduled", label: "Scheduled" },
+  { value: "hostinger_vps", label: "Hostinger VPS" },
+  { value: "aws", label: "AWS" },
 ]
 
 const VISIBILITY_OPTIONS: { value: DeploymentVisibility; label: string }[] = [
@@ -79,6 +97,9 @@ export function ManageTab({
   const [resuming, setResuming] = React.useState(false)
   const [confirmShutdown, setConfirmShutdown] = React.useState(false)
   const [shuttingDown, setShuttingDown] = React.useState(false)
+  const [providers, setProviders] = React.useState<DeploymentProvider[]>([])
+  const [providersLoading, setProvidersLoading] = React.useState(false)
+  const [connectingProvider, setConnectingProvider] = React.useState<string | null>(null)
 
   // Re-sync the form when the selected deployment changes.
   React.useEffect(() => {
@@ -90,6 +111,25 @@ export function ManageTab({
     setDeploymentType(deployment.deploymentType)
     setMachineTier(deployment.machineTier)
   }, [deployment])
+
+  React.useEffect(() => {
+    let alive = true
+    setProvidersLoading(true)
+    deploymentsApi
+      .providers()
+      .then((rows) => {
+        if (alive) setProviders(rows)
+      })
+      .catch(() => {
+        if (alive) setProviders([])
+      })
+      .finally(() => {
+        if (alive) setProvidersLoading(false)
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
 
   const save = async () => {
     setSaving(true)
@@ -139,6 +179,21 @@ export function ManageTab({
     setDeploymentType(value)
     if (value === "reserved_vm" && !RESERVED_MACHINE_TIERS.has(machineTier)) {
       setMachineTier("1vcpu_4gb")
+    }
+  }
+
+  const connectProvider = async (provider: DeploymentProvider) => {
+    if (provider.id !== "hostinger_vps" && provider.id !== "aws") return
+    setConnectingProvider(provider.id)
+    try {
+      await deploymentsApi.connectProvider(deployment.id, provider.id)
+      toast.success(`${provider.label} connected.`)
+      onRefetch()
+      setProviders(await deploymentsApi.providers())
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not connect provider.")
+    } finally {
+      setConnectingProvider(null)
     }
   }
 
@@ -260,6 +315,30 @@ export function ManageTab({
         ) : null}
       </div>
 
+      <PanelCard
+        title="Provider connections"
+        detail="Connect this deployment to real infrastructure and domain providers."
+      >
+        {providersLoading ? (
+          <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Loading providers
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {providers.map((provider) => (
+              <ProviderRow
+                key={provider.id}
+                provider={provider}
+                active={deployment.deploymentType === provider.id}
+                busy={connectingProvider === provider.id}
+                onConnect={() => void connectProvider(provider)}
+              />
+            ))}
+          </div>
+        )}
+      </PanelCard>
+
       {/* Publish on the fly */}
       <div className="space-y-2 pt-1">
         <h3 className="text-[15px] font-semibold text-foreground">Publish on the go</h3>
@@ -333,6 +412,72 @@ export function ManageTab({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  )
+}
+
+function ProviderRow({
+  provider,
+  active,
+  busy,
+  onConnect,
+}: {
+  provider: DeploymentProvider
+  active: boolean
+  busy: boolean
+  onConnect: () => void
+}) {
+  const isCompute = provider.category === "compute"
+  const configured = provider.configured
+  const missing = provider.missingRequired.join(", ")
+  return (
+    <div className="rounded-md border border-border/60 bg-background/40 p-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex flex-1 items-start gap-2.5">
+          <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border/60 bg-muted/40 text-muted-foreground">
+            {provider.id === "hostinger_vps" ? (
+              <Server className="h-4 w-4" />
+            ) : provider.id === "aws" ? (
+              <Cloud className="h-4 w-4" />
+            ) : (
+              <Globe2 className="h-4 w-4" />
+            )}
+          </span>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-[12px] font-semibold text-foreground">{provider.label}</p>
+              {active ? <StatusPill tone="success" label="Active" /> : null}
+              <StatusPill tone={configured ? "success" : "warn"} label={configured ? "Configured" : "Setup required"} />
+            </div>
+            <p className="mt-1 text-[11px] leading-4 text-muted-foreground">{provider.description}</p>
+            {!configured ? (
+              <p className="mt-1 flex items-start gap-1.5 text-[11px] leading-4 text-amber-700">
+                <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                Missing: <span className="font-mono">{missing}</span>
+              </p>
+            ) : (
+              <p className="mt-1 flex items-center gap-1.5 text-[11px] leading-4 text-emerald-700">
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                Required variables are present.
+              </p>
+            )}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button size="sm" variant="outline" className="h-8 gap-1.5" asChild>
+            <a href={provider.docsUrl} target="_blank" rel="noreferrer">
+              <ExternalLink className="h-3.5 w-3.5" />
+              Docs
+            </a>
+          </Button>
+          {isCompute ? (
+            <Button size="sm" className="h-8 gap-1.5" onClick={onConnect} disabled={!configured || busy}>
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+              Connect
+            </Button>
+          ) : null}
+        </div>
+      </div>
     </div>
   )
 }
