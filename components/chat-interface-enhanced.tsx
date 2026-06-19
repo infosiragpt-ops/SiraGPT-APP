@@ -2456,14 +2456,14 @@ const ActiveToolsDisplay = ({
           <Button
             variant="ghost"
             size="sm"
-            className="media-model-trigger group/media-model relative isolate h-7 sm:h-8 max-w-[180px] sm:max-w-[212px] shrink-0 gap-1 sm:gap-1.5 overflow-hidden rounded-full px-2 sm:px-2.5 py-0"
+            className="media-model-trigger group/media-model relative isolate h-7 sm:h-8 max-w-[180px] sm:max-w-[212px] shrink-0 gap-1 sm:gap-1.5 overflow-hidden rounded-full px-2 sm:px-3 py-0 text-[12px] sm:text-[14px] font-semibold"
             aria-label={`Seleccionar modelo de ${tool}`}
             title={`Modelo: ${label}`}
             disabled={disabled}
             data-media-tool={tool}
           >
             <span className="pointer-events-none absolute inset-y-[-55%] left-[-65%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-0 blur-sm transition-all duration-700 group-hover/media-model:left-[92%] group-hover/media-model:opacity-100 dark:via-white/20" />
-            <span className="flex h-[16px] sm:h-[18px] w-[16px] sm:w-[18px] shrink-0 items-center justify-center">
+            <span className="flex h-4 w-4 shrink-0 items-center justify-center">
               <IconProvider name={selected?.iconName || "Bot"} size={16} />
             </span>
             <span className="min-w-0 truncate max-w-[60px] sm:max-w-none">{label}</span>
@@ -2644,7 +2644,7 @@ const ActiveToolsDisplay = ({
             <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/image-liquid:translate-x-[155%] dark:via-white/25" />
             <span className="pointer-events-none absolute left-7 top-1 h-1.5 w-1.5 rounded-full bg-pink-400/75 shadow-[0_0_12px_rgba(236,72,153,0.75)] motion-safe:animate-pulse" />
             <span className="pointer-events-none absolute bottom-1 right-9 h-1 w-1 rounded-full bg-white/90 shadow-[0_0_10px_rgba(255,255,255,0.9)] motion-safe:animate-bounce" />
-            <Palette className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 drop-shadow-[0_0_8px_rgba(219,39,119,0.35)]" />
+            <Palette className="relative z-10 h-4 w-4 drop-shadow-[0_0_8px_rgba(219,39,119,0.35)]" />
             <span className="relative z-10 text-[12px] sm:text-[14px]">Imágenes</span>
             {isGeneratingImage && <span className="relative z-10 h-1.5 w-1.5 rounded-full bg-pink-500 animate-pulse" />}
             <Button
@@ -2674,12 +2674,12 @@ const ActiveToolsDisplay = ({
               <Button
                 variant="ghost"
                 size="sm"
-                className="group/ratio-trigger relative isolate h-7 sm:h-8 shrink-0 gap-1 sm:gap-2 overflow-hidden rounded-full border border-zinc-200/78 bg-white/84 px-2 sm:px-3 py-0 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
+                className="group/ratio-trigger relative isolate h-7 sm:h-8 shrink-0 gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-zinc-200/78 bg-white/84 px-2 sm:px-3 py-0 text-[12px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
                 title={`Imagen: ${selectedImageAspectRatio}, ${selectedImageQuality}, ${selectedImageCount}`}
                 aria-label={`Configurar imagen. Actual ${selectedImageAspectRatio}, ${selectedImageQuality}, ${selectedImageCount}`}
               >
                 <span className="pointer-events-none absolute inset-y-[-55%] left-[-65%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-0 blur-sm transition-all duration-700 group-hover/ratio-trigger:left-[92%] group-hover/ratio-trigger:opacity-100 dark:via-white/20" />
-                <ImageAspectRatioMark ratio={selectedImageAspectRatio} selected className="h-4 sm:h-5 w-4 sm:w-5 text-zinc-700 dark:text-white/88" />
+                <ImageAspectRatioMark ratio={selectedImageAspectRatio} selected className="h-4 w-4 text-zinc-700 dark:text-white/88" />
                 <span className="hidden sm:inline">{selectedImageAspectRatio}</span>
                 <span className="sm:hidden">{selectedImageAspectRatio.replace(':','×')}</span>
                 <span className="hidden sm:inline">{selectedImageQuality}</span>
