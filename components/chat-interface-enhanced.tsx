@@ -45,7 +45,7 @@ import {
   Settings,
   PenSquare,
   GraduationCap,
-  MessageSquare, Menu as MenuIcon, Zap} from "lucide-react"
+  MessageSquare, Menu as MenuIcon} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
@@ -3353,7 +3353,25 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
   currentChat,
   setCurrentChat,
 }: any) {
-  const selectedModelData = availableModels.find((m: any) => m.name === selectedModel);
+  const liveSelectedModelData = availableModels.find((m: any) => m.name === selectedModel);
+  // Anti-flicker: hold the last model that actually matched `selectedModel`.
+  // refreshModels (dropdown-open / window-focus / tab-visibility) replaces the
+  // list with a new array; if it transiently omits the selected model, find()
+  // returns undefined for one render and the brand logo would flash to the
+  // generic Bot fallback. Holding the last-known-good entry keeps the chip
+  // stable until a real match (or an explicit selection change) replaces it.
+  const lastGoodSelectedModelRef = React.useRef<any>(liveSelectedModelData);
+  if (liveSelectedModelData) {
+    lastGoodSelectedModelRef.current = liveSelectedModelData;
+  } else if (
+    lastGoodSelectedModelRef.current &&
+    lastGoodSelectedModelRef.current.name !== selectedModel
+  ) {
+    // User picked a genuinely different model not yet in the list: drop the
+    // stale entry so we never show a logo for the wrong model.
+    lastGoodSelectedModelRef.current = undefined;
+  }
+  const selectedModelData = liveSelectedModelData || lastGoodSelectedModelRef.current;
   const [searchQuery, setSearchQuery] = React.useState("");
   // Re-fetch the model list when the picker opens so a model an admin just
   // activated shows up without a page reload (live admin → frontend sync).
@@ -4231,7 +4249,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
           "data-[state=open]:bg-muted/55 data-[state=open]:border-border/50",
         )}
       >
-        <Zap className="h-3.5 w-3.5 shrink-0 text-violet-500 dark:text-violet-400" strokeWidth={2.25} />
+        {selectedModelData && <ModelLogo model={selectedModelData} compact />}
         <span className="chat-model-label min-w-0 max-w-[180px] truncate font-medium">{selectedModelData ? getModelDisplayLabel(selectedModelData) : selectedModel}</span>
         <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-55 transition-transform duration-200 group-data-[state=open]/model:rotate-180" strokeWidth={2} />
       </DropdownMenuTrigger>
