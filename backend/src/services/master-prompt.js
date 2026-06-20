@@ -451,6 +451,16 @@ function cleanPromptText(value, maxChars = 12000) {
     : text;
 }
 
+function sanitiseKnowledgeExcerpt(value) {
+  return String(value || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\u0000/g, '')
+    .replace(/ignore\s+all\s+(previous|prior)\s+instructions/gi, '[redacted embedded instruction]')
+    .replace(/disregard\s+(all\s+)?(previous|prior)\s+instructions/gi, '[redacted embedded instruction]')
+    .replace(/reveal\s+(the\s+)?(system|developer)\s+prompt/gi, '[redacted embedded instruction]')
+    .trim();
+}
+
 // Per-file and total caps for the inline knowledge excerpts. Kept small so
 // the knowledge content reaches the model without blowing the prompt budget:
 // even 4 maxed-out files (4 × 1500) stay under the 6000-char total ceiling.
@@ -490,10 +500,7 @@ ${lines.join('\n')}`;
     if (totalUsed >= KNOWLEDGE_EXCERPT_TOTAL_MAX) break;
     const file = cleanFiles[index];
     const raw = typeof file.extractedText === 'string' ? file.extractedText : '';
-    const text = raw
-      .replace(/\r\n/g, '\n')
-      .replace(/\u0000/g, '')
-      .trim();
+    const text = sanitiseKnowledgeExcerpt(raw);
     if (!text) continue; // skip files with no extracted text
 
     const remainingTotal = KNOWLEDGE_EXCERPT_TOTAL_MAX - totalUsed;

@@ -618,7 +618,7 @@ const {
   extractFalVideoUrl,
   resolveFalVideoModelRequest,
 } = require('../services/fal-video-model-catalog');
-const { resolveFalApiKey } = require('../services/fal/fal-auth');
+const { getFalApiKey, resolveFalApiKey } = require('../services/fal/fal-auth');
 const { classifyFalVideoError } = require('../services/fal/fal-video-errors');
 const objectStorage = require('../services/object-storage');
 const router = express.Router();
