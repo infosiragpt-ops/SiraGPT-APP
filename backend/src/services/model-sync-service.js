@@ -11,6 +11,7 @@ const {
   normalizeFalExploreModel,
   sortFalVideoModels,
 } = require('./fal-video-model-catalog');
+const { cleanEnvValue, getFalApiKey } = require('./fal/fal-auth');
 const modelPricingService = require('./model-pricing-service');
 
 class ModelSyncService {
@@ -40,19 +41,21 @@ class ModelSyncService {
   }
 
   getFalApiKey() {
-    return process.env.FAL_KEY || process.env.FAL_API_KEY || process.env.TAL_AI_API_KEY || '';
+    return getFalApiKey(process.env);
   }
 
-  getFalAuthorizationHeader() {
-    const key = this.getFalApiKey();
+  getFalAuthorizationHeader(apiKey = null) {
+    const key = cleanEnvValue(apiKey || this.getFalApiKey());
     if (!key) return null;
     return /^key\s+/i.test(key) ? key : `Key ${key}`;
   }
 
-  async fetchFalVideoModels() {
+  async fetchFalVideoModels(options = {}) {
+    const apiKey = cleanEnvValue(options.apiKey || '');
+    const useCache = !apiKey && !options.forceRefresh;
     const now = Date.now();
     const cache = this.cache.falVideo;
-    if (cache.data && (now - cache.lastFetch) < cache.ttl) {
+    if (useCache && cache.data && (now - cache.lastFetch) < cache.ttl) {
       console.log('📦 Using cached fal.ai video models');
       return cache.data;
     }
@@ -65,7 +68,7 @@ class ModelSyncService {
       for (const category of categories) {
         let cursor = null;
         let page = 0;
-        const authorization = this.getFalAuthorizationHeader();
+        const authorization = this.getFalAuthorizationHeader(apiKey);
         do {
           const response = await axios.get('https://api.fal.ai/v1/models', {
             params: {
@@ -133,8 +136,10 @@ class ModelSyncService {
     for (const model of liveModels) byName.set(model.name, { ...byName.get(model.name), ...model, isActive: true });
     const merged = sortFalVideoModels([...byName.values()]);
 
-    cache.data = merged;
-    cache.lastFetch = now;
+    if (useCache) {
+      cache.data = merged;
+      cache.lastFetch = now;
+    }
     console.log(`✅ fal.ai video catalog ready: ${merged.length} models (${liveModels.length} live discoveries)`);
     return merged;
   }
@@ -636,6 +641,8 @@ class ModelSyncService {
     if (pk === 'anthropic') {
       if (apiKey) reqHeaders['x-api-key'] = apiKey;
       reqHeaders['anthropic-version'] = '2023-06-01';
+    } else if (authType === 'Key' && apiKey) {
+      reqHeaders['Authorization'] = this.getFalAuthorizationHeader(apiKey);
     } else if (authType !== 'None' && apiKey) {
       reqHeaders['Authorization'] = `Bearer ${apiKey}`;
     }
@@ -696,6 +703,43 @@ class ModelSyncService {
       || catalogMap[String(conn.providerKey || '').toLowerCase()]
       || conn.providerKey
       || 'Custom';
+    const providerKey = String(conn.providerKey || '').toLowerCase();
+
+    if (providerKey === 'fal') {
+      const apiKey = cleanEnvValue(conn.apiKey || '');
+      if (!apiKey) return { ok: false, status: 0, error: 'missing_api_key', created: 0, updated: 0, errors: 0, count: 0, models: [] };
+
+      const fetchImpl = conn.fetchImpl || (typeof fetch === 'function' ? fetch : null);
+      if (typeof fetchImpl !== 'function') return { ok: false, status: 0, error: 'fetch_unavailable', created: 0, updated: 0, errors: 0, count: 0, models: [] };
+
+      const validation = await fetchImpl('https://api.fal.ai/v1/models?limit=1', {
+        method: 'GET',
+        headers: { Accept: 'application/json', Authorization: this.getFalAuthorizationHeader(apiKey) },
+        signal: AbortSignal.timeout(10000),
+      }).catch((error) => ({ ok: false, status: 0, text: async () => error.message }));
+
+      if (!validation.ok) {
+        let detail = '';
+        try { detail = await validation.text(); } catch (_) { /* noop */ }
+        return {
+          ok: false,
+          status: validation.status || 0,
+          error: `fal.ai API key rejected${validation.status ? ` (HTTP ${validation.status})` : ''}: ${String(detail).slice(0, 180)}`.trim(),
+          created: 0,
+          updated: 0,
+          errors: 0,
+          count: 0,
+          models: [],
+        };
+      }
+
+      const models = await this.fetchFalVideoModels({ apiKey, forceRefresh: true });
+      const filteredModels = Array.isArray(conn.modelIds) && conn.modelIds.length
+        ? models.filter((model) => conn.modelIds.some((id) => String(id).toLowerCase() === String(model.name).toLowerCase()))
+        : models;
+      const persisted = filteredModels.length ? await this.persistModels(filteredModels) : { created: 0, updated: 0, errors: 0 };
+      return { ok: true, error: null, ...persisted, count: filteredModels.length, models: filteredModels };
+    }
 
     const base = String(conn.url || '').replace(/\/+$/, '');
     if (!base) return { ok: false, error: 'missing_url', created: 0, updated: 0, errors: 0, count: 0, models: [] };

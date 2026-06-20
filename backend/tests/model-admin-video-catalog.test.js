@@ -193,6 +193,62 @@ test('fal.ai video payload preserves automatic aspect ratio for Seedance', () =>
   assert.strictEqual(payload.generate_audio, true);
 });
 
+test('admin fal.ai connection sync validates the key and imports video models', async () => {
+  const operations = [];
+  const service = new ModelSyncService({
+    prismaClient: {
+      aiModel: {
+        async findUnique() {
+          return null;
+        },
+        async create(args) {
+          operations.push(args);
+          return args;
+        },
+      },
+    },
+  });
+  service.fetchFalVideoModels = async (options = {}) => {
+    assert.strictEqual(options.apiKey, 'fal-valid-key');
+    assert.strictEqual(options.forceRefresh, true);
+    return [
+      {
+        name: 'bytedance/seedance-2.0/text-to-video',
+        displayName: 'Seedance 2.0 Text to Video',
+        provider: 'fal.ai',
+        type: 'VIDEO',
+        description: 'Video model',
+        icon: 'ByteDanceLogo',
+        tags: ['fal.ai', 'video'],
+        pricing: { provider: 'fal.ai' },
+        isActive: true,
+        syncSource: 'fal_ai_catalog',
+      },
+    ];
+  };
+
+  const fetchCalls = [];
+  const result = await service.syncConnectionModels({
+    providerKey: 'fal',
+    providerLabel: 'fal.ai',
+    apiKey: 'fal-valid-key',
+    fetchImpl: async (url, options = {}) => {
+      fetchCalls.push({ url, authorization: options.headers?.Authorization });
+      return { ok: true, status: 200 };
+    },
+  });
+
+  assert.strictEqual(result.ok, true);
+  assert.strictEqual(result.count, 1);
+  assert.deepStrictEqual(fetchCalls, [
+    { url: 'https://api.fal.ai/v1/models?limit=1', authorization: 'Key fal-valid-key' },
+  ]);
+  assert.strictEqual(operations.length, 1);
+  assert.strictEqual(operations[0].data.provider, 'fal.ai');
+  assert.strictEqual(operations[0].data.type, 'VIDEO');
+  assert.strictEqual(operations[0].data.isActive, true);
+});
+
 test('fal.ai video routing uses reference-to-video with multiple Seedance images', () => {
   const routing = resolveFalVideoModelRequest('bytedance/seedance-2.0/text-to-video', {
     hasImage: true,

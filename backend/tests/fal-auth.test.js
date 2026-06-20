@@ -5,8 +5,10 @@ const assert = require('node:assert/strict');
 
 const {
   cleanEnvValue,
+  decryptAdminConnectionKey,
   getFalApiKey,
   getFalApiKeySource,
+  resolveFalApiKey,
 } = require('../src/services/fal/fal-auth');
 
 test('cleanEnvValue strips accidental auth scheme prefixes', () => {
@@ -35,4 +37,51 @@ test('getFalApiKey accepts deployed alias names without exposing values', () => 
 test('getFalApiKey returns empty string when no usable env is present', () => {
   assert.equal(getFalApiKey({ FAL_KEY: '   ', FAL_KEY_ID: 'id-only' }), '');
   assert.equal(getFalApiKeySource({}), null);
+});
+
+test('decryptAdminConnectionKey accepts encrypted admin connection values', () => {
+  const decryptFn = (value) => {
+    assert.equal(value, 'ciphertext');
+    return ' Key fal-admin-key ';
+  };
+
+  assert.equal(decryptAdminConnectionKey('enc:v1:ciphertext', decryptFn), 'fal-admin-key');
+});
+
+test('resolveFalApiKey prefers the enabled admin fal.ai connection over env aliases', async () => {
+  const prisma = {
+    adminConnection: {
+      async findFirst(args) {
+        assert.deepEqual(args.where, {
+          providerKey: 'fal',
+          enabled: true,
+          apiKey: { not: null },
+        });
+        return { apiKey: 'enc:v1:stored' };
+      },
+    },
+  };
+  const resolved = await resolveFalApiKey({
+    env: { FAL_KEY: 'env-key' },
+    prisma,
+    decryptFn: () => 'admin-key',
+  });
+
+  assert.deepEqual(resolved, { apiKey: 'admin-key', source: 'admin_connections:fal' });
+});
+
+test('resolveFalApiKey falls back to env when no admin fal.ai connection exists', async () => {
+  const prisma = {
+    adminConnection: {
+      async findFirst() {
+        return null;
+      },
+    },
+  };
+  const resolved = await resolveFalApiKey({
+    env: { FAL_API_KEY: 'env-key' },
+    prisma,
+  });
+
+  assert.deepEqual(resolved, { apiKey: 'env-key', source: 'FAL_API_KEY' });
 });

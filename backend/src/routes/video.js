@@ -618,7 +618,7 @@ const {
   extractFalVideoUrl,
   resolveFalVideoModelRequest,
 } = require('../services/fal-video-model-catalog');
-const { getFalApiKey, getFalApiKeySource } = require('../services/fal/fal-auth');
+const { resolveFalApiKey } = require('../services/fal/fal-auth');
 const { classifyFalVideoError } = require('../services/fal/fal-video-errors');
 const objectStorage = require('../services/object-storage');
 const router = express.Router();
@@ -731,7 +731,7 @@ router.post('/generate', [
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const falApiKey = getFalApiKey();
+    const { apiKey: falApiKey, source: falKeySource } = await resolveFalApiKey({ prisma });
     if (!falApiKey) {
       return res.status(400).json({ error: 'Fal.ai API key not configured' });
     }
@@ -786,7 +786,7 @@ router.post('/generate', [
       requestedModel: model,
       resolvedModel,
       usingPairedEndpoint: modelRouting.usingPairedEndpoint,
-      falKeySource: getFalApiKeySource() || 'none',
+      falKeySource: falKeySource || 'none',
     });
 
     // Check user's monthly limit

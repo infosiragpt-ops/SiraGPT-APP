@@ -9,11 +9,8 @@
  * apply automatically. We re-apply it here at the router level so
  * the route file stays self-contained.
  *
- * The chat path (backend/src/routes/ai.js) still reads provider
- * credentials from env vars today. This module records the admin's
- * preferred upstream config but does not yet redirect provider
- * traffic to the DB-stored connection. That swap is a follow-up:
- * the connection row is the contract the swap will read from.
+ * The bridge applies enabled provider credentials into process.env so
+ * runtime paths can pick up admin-managed keys without a server restart.
  */
 
 const express = require('express');
@@ -122,6 +119,7 @@ const KNOWN_PROVIDERS = new Set([
   'fireworks',
   'deepseek',
   'xai',
+  'fal',
   'custom',
 ]);
 
@@ -136,6 +134,7 @@ const DEFAULT_PROVIDER_LABELS = {
   fireworks: 'Fireworks AI API',
   deepseek: 'DeepSeek API',
   xai: 'xAI API',
+  fal: 'fal.ai Video API',
   custom: 'Custom API',
 };
 
@@ -202,8 +201,8 @@ router.post(
     body('url').isURL({ require_tld: false, require_protocol: true }).withMessage('URL must be a full URL with protocol'),
     body('providerKey').isString().isLength({ min: 2, max: 40 }),
     body('apiKey').optional({ nullable: true }).isString().isLength({ min: 0, max: 400 }),
-    body('authType').optional().isIn(['Bearer', 'None', 'Custom']),
-    body('apiType').optional().isIn(['chat_completions', 'responses', 'embeddings']),
+    body('authType').optional().isIn(['Bearer', 'Key', 'None', 'Custom']),
+    body('apiType').optional().isIn(['chat_completions', 'responses', 'embeddings', 'video']),
     body('headers').optional({ nullable: true }),
     body('prefixId').optional({ nullable: true }).isString().isLength({ max: 80 }),
     body('modelIds').optional().isArray(),
@@ -223,8 +222,8 @@ router.post(
           providerKey: safeProvider,
           providerLabel: req.body.providerLabel || DEFAULT_PROVIDER_LABELS[safeProvider] || null,
           apiKey: encryptKey(req.body.apiKey || null),
-          authType: req.body.authType || 'Bearer',
-          apiType: req.body.apiType || 'chat_completions',
+          authType: req.body.authType || (safeProvider === 'fal' ? 'Key' : 'Bearer'),
+          apiType: req.body.apiType || (safeProvider === 'fal' ? 'video' : 'chat_completions'),
           headers: req.body.headers || null,
           prefixId: req.body.prefixId || null,
           modelIds: Array.isArray(req.body.modelIds) ? req.body.modelIds : [],
