@@ -268,7 +268,11 @@ async function fetchUserPlanQuota(userId, prisma) {
  */
 function checkPaidTokenCap(user, { message = 'Monthly API limit exceeded' } = {}) {
   if (!user) return { ok: true };
-  if (user.apiUsage >= user.monthlyLimit) {
+  // monthlyLimit === 0 means "no enforcement" (legacy / staff / unlimited
+  // accounts), matching getPlanQuotaSnapshot's `limit > 0 && …` posture. Without
+  // this guard, apiUsage >= 0 is always true and those accounts get bricked with
+  // a 429 on every paid route (paraphrase / image / video).
+  if (user.monthlyLimit > 0 && user.apiUsage >= user.monthlyLimit) {
     return {
       ok: false,
       status: 429,

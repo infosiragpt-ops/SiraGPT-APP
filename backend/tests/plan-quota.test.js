@@ -237,6 +237,14 @@ describe("checkPaidTokenCap — paid token cap gate", () => {
     assert.deepEqual(res.body.usage, { current: 750, limit: 500 });
   });
 
+  test("monthlyLimit=0 → ok:true (unlimited/legacy, NOT bricked)", () => {
+    // Matches getPlanQuotaSnapshot's `limit > 0 && …` posture: 0 means "no
+    // enforcement", so a high-usage unlimited account must NOT be 429'd.
+    assert.deepEqual(checkPaidTokenCap({ apiUsage: 9_999_999, monthlyLimit: 0 }), { ok: true });
+    // A missing/undefined limit is also treated as no-enforcement, not a 0-cap.
+    assert.deepEqual(checkPaidTokenCap({ apiUsage: 5, monthlyLimit: undefined }), { ok: true });
+  });
+
   test("message override is honored (video route keeps its own string)", () => {
     const res = checkPaidTokenCap(
       { apiUsage: 500, monthlyLimit: 500 },
