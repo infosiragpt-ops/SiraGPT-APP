@@ -45,6 +45,48 @@ export default function SubscriptionManager() {
   const [actionLoading, setActionLoading] = useState<string | null>(null)
   const [showPlanChange, setShowPlanChange] = useState(false)
   const [activeTab, setActiveTab] = useState('overview')
+  const [upgradeLoading, setUpgradeLoading] = useState<string | null>(null)
+
+  // Start a real Stripe checkout for FREE users picking a paid plan. Mirrors
+  // the proven flow in components/UpgradeModal.tsx (createStripePayment →
+  // redirect to session.url; ENTERPRISE → WhatsApp). The "Mejora tu plan"
+  // buttons used to be inert (no onClick), which is why paying was impossible
+  // from the billing page even though the Stripe backend is live.
+  const handleUpgrade = async (plan: string) => {
+    if (plan === 'ENTERPRISE') {
+      const whatsappNumber = process.env.NEXT_PUBLIC_WHATSAPP_NUMBER || ''
+      const message = encodeURIComponent(
+        'Hola 👋, me interesa el plan Enterprise de SiraGPT. ¿Podrían ayudarme?',
+      )
+      window.open(`https://wa.me/${whatsappNumber}?text=${message}`, '_blank', 'noopener,noreferrer')
+      return
+    }
+
+    try {
+      setUpgradeLoading(plan)
+      const response = await apiClient.createStripePayment({ plan })
+      if (!response?.url) {
+        throw new Error('No checkout URL received')
+      }
+      // Hand off to Stripe Checkout.
+      window.location.href = response.url
+    } catch (err: any) {
+      const status = err?.status ?? err?.statusCode
+      const data = err?.errorData
+      if (status === 503 || /not configured/i.test(err?.message || '')) {
+        toast.error(
+          data?.message || 'El procesamiento de pagos aún no está disponible. Contacta a soporte.',
+          { duration: 6000 },
+        )
+      } else if (status === 401) {
+        toast.error('Tu sesión expiró — inicia sesión de nuevo.')
+      } else {
+        toast.error(err?.message || 'No pudimos iniciar el pago. Inténtalo de nuevo.')
+      }
+    } finally {
+      setUpgradeLoading(null)
+    }
+  }
 
   const planInfo: Record<string, {
     color: string,
@@ -434,8 +476,22 @@ export default function SubscriptionManager() {
                   </div>
                   <p className="text-2xl font-bold mb-1">{info.priceLabel}<span className="text-sm font-normal">{info.billingLabel ? ` ${info.billingLabel}` : ''}</span></p>
                   <p className="text-sm text-muted-foreground mb-4">{info.limit}</p>
-                  <Button size="sm" className="w-full">
-                    {plan === 'ENTERPRISE' ? 'Comunícate al WhatsApp' : `Elegir ${info.priceLabel}`}
+                  <Button
+                    size="sm"
+                    className="w-full"
+                    disabled={upgradeLoading !== null}
+                    onClick={() => handleUpgrade(plan)}
+                  >
+                    {upgradeLoading === plan ? (
+                      <>
+                        <ThinkingIndicator size="sm" className="mr-2" />
+                        Redirigiendo…
+                      </>
+                    ) : plan === 'ENTERPRISE' ? (
+                      'Comunícate al WhatsApp'
+                    ) : (
+                      `Elegir ${info.priceLabel}`
+                    )}
                   </Button>
                 </div>
               ))}

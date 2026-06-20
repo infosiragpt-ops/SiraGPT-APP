@@ -4,7 +4,7 @@ import * as React from "react"
 import Image from "next/image"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { ArrowLeft, Eye, EyeOff} from "lucide-react"
+import { ArrowLeft, Check, Eye, EyeOff} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -23,9 +23,19 @@ export default function LoginPage() {
   const [email, setEmail] = React.useState("")
   const [password, setPassword] = React.useState("")
   const [isLoading, setIsLoading] = React.useState(false)
+  const [emailError, setEmailError] = React.useState<string | null>(null)
+  const [passwordError, setPasswordError] = React.useState<string | null>(null)
+  const [googleLoading, setGoogleLoading] = React.useState(false)
 
   const { login, user } = useAuth()
   const router = useRouter()
+
+  // Prefetch the post-login destination so the jump to /chat after a
+  // successful sign-in is instant instead of waiting on the (large) chat
+  // bundle to download at navigation time.
+  React.useEffect(() => {
+    try { router.prefetch("/chat") } catch { /* prefetch is best-effort */ }
+  }, [router])
 
   // Right after a publish the backend is still booting (~90s) while the
   // frontend is already live, so any /api/* call (including the Google OAuth
@@ -106,8 +116,31 @@ export default function LoginPage() {
     }
   }, [email, password, login, router, t])
 
+  // Lightweight client-side validation so users get immediate, field-level
+  // feedback instead of a round-trip that returns a generic "invalid
+  // credentials" toast. Keeps the same lenient contract as the backend
+  // (any non-empty password is allowed — legacy accounts may have weak ones).
+  const validateForm = React.useCallback(() => {
+    let ok = true
+    const trimmedEmail = email.trim()
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      setEmailError(t("emailInvalid"))
+      ok = false
+    } else {
+      setEmailError(null)
+    }
+    if (!password) {
+      setPasswordError(t("passwordRequired"))
+      ok = false
+    } else {
+      setPasswordError(null)
+    }
+    return ok
+  }, [email, password, t])
+
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault()
+    if (!validateForm()) return
     // If the backend is still warming up after a publish, queue the login and
     // let the effect below fire it once the backend is ready, rather than
     // showing a misleading "invalid credentials" error from a 500.
@@ -119,6 +152,7 @@ export default function LoginPage() {
   }
 
   const handleGoogle = () => {
+    setGoogleLoading(true)
     if (backendState === "ready") {
       goToGoogle()
       return
@@ -146,7 +180,49 @@ export default function LoginPage() {
     "border-neutral-300 bg-white text-neutral-900 placeholder:text-neutral-500 focus-visible:border-neutral-900 focus-visible:ring-neutral-900/15"
 
   return (
-    <div className="flex min-h-[100svh] items-center justify-center overflow-y-auto bg-neutral-50 px-4 py-6 text-neutral-950 sm:min-h-screen sm:py-10" style={{ colorScheme: "light" }}>
+    <div className="flex min-h-[100svh] bg-neutral-50 text-neutral-950 sm:min-h-screen" style={{ colorScheme: "light" }}>
+      {/* Brand panel — premium marketing rail (desktop only) */}
+      <aside
+        className="relative hidden w-[45%] flex-col justify-between overflow-hidden p-12 text-white lg:flex xl:p-14"
+        style={{ backgroundColor: "#0a0a0a", colorScheme: "dark" }}
+      >
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0"
+          style={{
+            background:
+              "radial-gradient(55% 45% at 12% 12%, rgba(124,58,237,0.28), transparent 70%), radial-gradient(50% 45% at 100% 100%, rgba(79,70,229,0.20), transparent 70%)",
+          }}
+        />
+
+        <div className="relative flex items-center gap-3">
+          <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/10 ring-1 ring-white/15 backdrop-blur">
+            <Image src="/sira-gpt.png" alt="" width={28} height={28} className="rounded-md object-contain" />
+          </div>
+          <span className="text-lg font-semibold tracking-tight">SiraGPT</span>
+        </div>
+
+        <div className="relative space-y-8">
+          <h2 className="max-w-md text-4xl font-semibold leading-[1.15] tracking-tight">
+            {t("brandTagline")}
+          </h2>
+          <ul className="space-y-4">
+            {[t("brandFeature1"), t("brandFeature2"), t("brandFeature3")].map((feature) => (
+              <li key={feature} className="flex items-start gap-3 text-white/80">
+                <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/10 ring-1 ring-white/15">
+                  <Check className="h-3.5 w-3.5 text-white" />
+                </span>
+                <span className="text-[15px] leading-6">{feature}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <div className="relative text-sm text-white/50">{t("brandFooter")}</div>
+      </aside>
+
+      {/* Form panel */}
+      <main className="flex w-full flex-col items-center justify-center overflow-y-auto px-4 py-6 sm:py-10 lg:w-[55%]">
       <Card
         data-testid="login-card"
         className="w-full max-w-md border-neutral-200 bg-white text-neutral-950 shadow-[0_24px_64px_-16px_rgba(0,0,0,0.18)]"
@@ -196,7 +272,7 @@ export default function LoginPage() {
               <span>{t("serverWarming")}</span>
             </div>
           )}
-          <form onSubmit={handleLogin} className="space-y-4">
+          <form onSubmit={handleLogin} noValidate className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="email" className="text-neutral-900">
                 {t("email")}
@@ -211,11 +287,18 @@ export default function LoginPage() {
                 spellCheck={false}
                 placeholder={t("emailPlaceholder")}
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                onChange={(e) => { setEmail(e.target.value); if (emailError) setEmailError(null) }}
                 required
                 disabled={isLoading}
-                className={fieldClassName}
+                aria-invalid={emailError ? true : undefined}
+                aria-describedby={emailError ? "email-error" : undefined}
+                className={`${fieldClassName}${emailError ? " border-red-400" : ""}`}
               />
+              {emailError && (
+                <p id="email-error" role="alert" className="text-sm text-red-600">
+                  {emailError}
+                </p>
+              )}
             </div>
 
             <div className="space-y-2">
@@ -232,10 +315,12 @@ export default function LoginPage() {
                   spellCheck={false}
                   placeholder={t("passwordPlaceholder")}
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  onChange={(e) => { setPassword(e.target.value); if (passwordError) setPasswordError(null) }}
                   required
                   disabled={isLoading}
-                  className={`${fieldClassName} pr-11`}
+                  aria-invalid={passwordError ? true : undefined}
+                  aria-describedby={passwordError ? "password-error" : undefined}
+                  className={`${fieldClassName} pr-11${passwordError ? " border-red-400" : ""}`}
                 />
                 <Button
                   type="button"
@@ -248,6 +333,11 @@ export default function LoginPage() {
                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </Button>
               </div>
+              {passwordError && (
+                <p id="password-error" role="alert" className="text-sm text-red-600">
+                  {passwordError}
+                </p>
+              )}
             </div>
 
             <div className="flex items-center justify-between">
@@ -291,29 +381,32 @@ export default function LoginPage() {
               <Button
                 variant="outline"
                 type="button"
-                disabled={isLoading}
+                disabled={isLoading || googleLoading}
                 onClick={handleGoogle}
                 className="w-full border-neutral-300 bg-white font-medium text-neutral-900 hover:bg-neutral-100"
               >
-
-                <svg className="mr-2 h-4 w-4" viewBox="0 0 24 24">
-                  <path
-                    d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                    fill="#4285F4"
-                  />
-                  <path
-                    d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                    fill="#34A853"
-                  />
-                  <path
-                    d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
-                    fill="#FBBC05"
-                  />
-                  <path
-                    d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
-                    fill="#EA4335"
-                  />
-                </svg>
+                {(googleLoading || pendingAction === "google") ? (
+                  <ThinkingIndicator size="sm" className="mr-2" />
+                ) : (
+                  <svg className="mr-2 h-4 w-4" viewBox="0 0 24 24">
+                    <path
+                      d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                      fill="#4285F4"
+                    />
+                    <path
+                      d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                      fill="#34A853"
+                    />
+                    <path
+                      d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
+                      fill="#FBBC05"
+                    />
+                    <path
+                      d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+                      fill="#EA4335"
+                    />
+                  </svg>
+                )}
                 {pendingAction === "google" ? t("serverWarmingButton") : t("continueWithGoogle")}
               </Button>
 
@@ -333,6 +426,7 @@ export default function LoginPage() {
           </p>
         </CardFooter>
       </Card>
+      </main>
     </div>
   )
 }

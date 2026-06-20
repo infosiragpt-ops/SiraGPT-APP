@@ -318,7 +318,14 @@
     "namePlaceholder": "Tu nombre completo",
     "confirmPassword": "Confirmar contraseña",
     "passwordMinHint": "Mínimo 8 caracteres",
-    "agreeTerms": "Acepto los términos y la política de privacidad"
+    "agreeTerms": "Acepto los términos y la política de privacidad",
+    "emailInvalid": "Introduce un correo electrónico válido",
+    "passwordRequired": "Introduce tu contraseña",
+    "brandTagline": "Toda la potencia de la IA, en un solo lugar",
+    "brandFeature1": "Los mejores modelos: GPT, Claude, Gemini, Grok y más",
+    "brandFeature2": "Imágenes, documentos, código y diagramas al instante",
+    "brandFeature3": "Investiga y automatiza con agentes especializados",
+    "brandFooter": "© SiraGPT — Plataforma de IA multimodal"
   },
   "documents": {
     "download": "Descargar",
