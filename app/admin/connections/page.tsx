@@ -182,6 +182,14 @@ export default function AdminConnectionsPage() {
     [groups]
   )
 
+  // Providers the admin can connect but hasn't yet — surfaced as one-click
+  // "add key" cards so every provider is visible on the page (not only the
+  // ones already configured). Driven by the QUICK_PICK catalogue.
+  const availableToAdd = useMemo(() => {
+    const connected = new Set(renderedGroups.map((g) => g.providerKey))
+    return QUICK_PICK.filter((p) => !connected.has(p.key))
+  }, [renderedGroups])
+
   const openAdd = (providerKey: string) => {
     setEditing(null)
     setPresetProvider(providerKey)
@@ -384,6 +392,25 @@ export default function AdminConnectionsPage() {
               </CardContent>
             </Card>
           ))}
+        </div>
+      )}
+
+      {!loading && availableToAdd.length > 0 && (
+        <div className="space-y-2 mt-6">
+          <p className="text-xs font-medium text-muted-foreground">Proveedores disponibles</p>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+            {availableToAdd.map((p) => (
+              <button
+                key={p.key}
+                type="button"
+                onClick={() => openAdd(p.key)}
+                className="flex items-center justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent"
+              >
+                <span className="truncate">{p.label}</span>
+                <Plus className="h-4 w-4 shrink-0 text-muted-foreground" />
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
