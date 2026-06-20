@@ -154,8 +154,25 @@ test('persistModels creates new rows and only refreshes metadata on existing row
   const existingNames = new Set(['zzz-existing']);
   const mockPrisma = {
     aiModel: {
-      findUnique: async ({ where }) => (existingNames.has(where.name) ? { name: where.name, isActive: true } : null),
-      create: async ({ data }) => { created.push(data); return data; },
+      findMany: async ({ where }) => {
+        return (where?.name?.in || [])
+          .filter((name) => existingNames.has(name))
+          .map((name) => ({
+            name,
+            displayName: 'Old existing',
+            description: null,
+            provider: 'OpenAI',
+            type: 'TEXT',
+            contextLength: null,
+            pricing: null,
+            tags: [],
+            icon: null,
+          }));
+      },
+      createMany: async ({ data }) => {
+        created.push(...data);
+        return { count: data.length };
+      },
       update: async ({ where, data }) => { updated.push({ where, data }); return data; },
     },
   };
@@ -167,7 +184,7 @@ test('persistModels creates new rows and only refreshes metadata on existing row
     { name: '' }, // skipped
   ]);
 
-  assert.deepEqual(result, { created: 1, updated: 1, errors: 0 });
+  assert.deepEqual(result, { created: 1, updated: 1, skipped: 0, errors: 0 });
   assert.equal(created.length, 1);
   assert.equal(created[0].name, 'zzz-new');
   assert.equal(created[0].isActive, false);
@@ -179,8 +196,11 @@ test('syncConnectionModels builds <base>/models, discovers and persists (inactiv
   const created = [];
   const mockPrisma = {
     aiModel: {
-      findUnique: async () => null,
-      create: async ({ data }) => { created.push(data); return data; },
+      findMany: async () => [],
+      createMany: async ({ data }) => {
+        created.push(...data);
+        return { count: data.length };
+      },
       update: async ({ data }) => data,
     },
   };
