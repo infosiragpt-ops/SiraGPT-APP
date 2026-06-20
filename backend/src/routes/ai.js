@@ -1656,6 +1656,32 @@ router.post(
       const isAuth = !!req.user;
       const userId = isAuth ? req.user.id : null;
       const canPersist = isAuth && !!chatId;
+
+      // 🔒 IDOR guard (read side): a supplied chatId must reference a chat THIS
+      // user owns — or one that doesn't exist yet (brand-new chat). The
+      // downstream context prefetch + history reads in this handler key on
+      // chatId alone, so without this gate a foreign chatId would inject
+      // another user's conversation history, project documents and custom-GPT
+      // knowledge files into this generation. The WRITE side is already
+      // owner-scoped (saveChatAndTrackUsage uses { id, userId }); this closes
+      // the read side. Single PK lookup, so every later chatId read is safe by
+      // transitivity. Fail-open on a transient DB error (matches the other
+      // reads in this handler) rather than turning a DB blip into a broken chat.
+      if (canPersist && chatId) {
+        try {
+          const __chatOwner = await prisma.chat.findUnique({
+            where: { id: chatId },
+            select: { userId: true },
+          });
+          if (__chatOwner && __chatOwner.userId !== userId) {
+            controller.abort();
+            return res.status(404).json({ error: 'Chat not found' });
+          }
+        } catch (ownerErr) {
+          console.warn('[ai/generate] chat ownership pre-check failed (continuing):', ownerErr?.message || ownerErr);
+        }
+      }
+
       const regenerationAttemptNumber = Math.floor(Number(regenerationAttempt));
       const normalizedRegenerationAttempt = regenerate
         ? Math.max(1, Math.min(999, Number.isFinite(regenerationAttemptNumber) ? regenerationAttemptNumber : 1))
