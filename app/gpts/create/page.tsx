@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { useSearchParams } from "next/navigation"
 import {
@@ -36,7 +36,7 @@ import { useAuth } from "@/lib/auth-context-integrated"
 import { useChat } from "@/lib/chat-context-integrated"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
-import { gptsService, type CustomGPT } from "@/lib/gpts-service"
+import { gptsService, type CustomGPT, type GPTKnowledgeFile } from "@/lib/gpts-service"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
@@ -86,6 +86,13 @@ export default function CreateGPTPage() {
   const [uploadedImage, setUploadedImage] = useState<string | null>(null)
   const [isEditMode, setIsEditMode] = useState(false)
   const [isShareOpen, setIsShareOpen] = useState(false)
+
+  // Conocimientos (knowledge files) — only meaningful in edit mode, since a
+  // GPT id is required to link uploaded files. In create mode the user is
+  // prompted to save first.
+  const [knowledgeFiles, setKnowledgeFiles] = useState<GPTKnowledgeFile[]>([])
+  const [isUploadingKnowledge, setIsUploadingKnowledge] = useState(false)
+  const knowledgeInputRef = useRef<HTMLInputElement | null>(null)
 
   const [formData, setFormData] = useState<GPTFormData>({
     name: "",
@@ -170,11 +177,69 @@ export default function CreateGPTPage() {
       if (gpt.iconUrl && (gpt.iconUrl.startsWith('http') || gpt.iconUrl.startsWith('https') || gpt.iconUrl.startsWith('data:'))) {
         setUploadedImage(gpt.iconUrl)
       }
+
+      // Load existing knowledge files (best-effort — a failure here must not
+      // block editing the rest of the GPT).
+      try {
+        const files = await gptsService.getGptKnowledge(gptId)
+        setKnowledgeFiles(files)
+      } catch (knowledgeError) {
+        console.warn('Failed to load GPT knowledge files:', knowledgeError)
+      }
     } catch (error: any) {
       toast.error(error.message || 'Failed to load GPT')
       router.push('/gpts')
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  // Format a byte count as a compact human-readable size for the file list.
+  const formatKnowledgeSize = (bytes: number): string => {
+    if (!Number.isFinite(bytes) || bytes <= 0) return "0 B"
+    const units = ["B", "KB", "MB", "GB"]
+    const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
+    return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`
+  }
+
+  const handleKnowledgeUploadClick = () => {
+    // In create mode there is no GPT id to attach files to yet.
+    if (!isEditMode || !editId) {
+      toast.info("Guarda el GPT primero para añadir conocimientos.")
+      return
+    }
+    knowledgeInputRef.current?.click()
+  }
+
+  const handleKnowledgeFilesSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || [])
+    // Reset the input so selecting the same file again re-triggers onChange.
+    event.target.value = ""
+    if (files.length === 0) return
+    if (!isEditMode || !editId) {
+      toast.info("Guarda el GPT primero para añadir conocimientos.")
+      return
+    }
+
+    setIsUploadingKnowledge(true)
+    try {
+      const updated = await gptsService.uploadGptKnowledge(editId, files)
+      setKnowledgeFiles(updated)
+      toast.success(files.length === 1 ? "Archivo añadido" : `${files.length} archivos añadidos`)
+    } catch (error: any) {
+      toast.error(error.message || "No se pudieron subir los archivos")
+    } finally {
+      setIsUploadingKnowledge(false)
+    }
+  }
+
+  const handleRemoveKnowledgeFile = async (fileId: string) => {
+    if (!isEditMode || !editId) return
+    try {
+      await gptsService.deleteGptKnowledge(editId, fileId)
+      setKnowledgeFiles(prev => prev.filter(f => f.id !== fileId))
+    } catch (error: any) {
+      toast.error(error.message || "No se pudo eliminar el archivo")
     }
   }
 
@@ -769,17 +834,55 @@ export default function CreateGPTPage() {
                   Si subes archivos en Conocimientos, las conversaciones con tu GPT pueden potencialmente revelar todos los archivos o parte de su contenido. Las funciones que requieran intérprete de código permiten la descarga de los archivos.
                 </p>
                 <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    ref={knowledgeInputRef}
+                    type="file"
+                    multiple
+                    className="hidden"
+                    onChange={handleKnowledgeFilesSelected}
+                  />
                   <Button
                     variant="outline"
                     size="sm"
                     type="button"
                     className={liquidGhost}
-                    onClick={() => toast.info("Subida de archivos de conocimiento — próximamente")}
+                    disabled={isUploadingKnowledge}
+                    onClick={handleKnowledgeUploadClick}
                   >
                     <Upload className="mr-2 h-4 w-4" />
-                    Cargar archivos
+                    {isUploadingKnowledge ? "Subiendo..." : "Cargar archivos"}
                   </Button>
                 </div>
+                {!isEditMode && (
+                  <p className="text-xs text-muted-foreground">
+                    Guarda el GPT primero para añadir conocimientos.
+                  </p>
+                )}
+                {knowledgeFiles.length > 0 && (
+                  <ul className="mt-1 space-y-1">
+                    {knowledgeFiles.map((file) => (
+                      <li
+                        key={file.id}
+                        className="flex items-center justify-between gap-2 rounded-md border border-border/60 bg-background/40 px-3 py-2 text-sm"
+                      >
+                        <span className="min-w-0 flex-1 truncate" title={file.originalName}>
+                          {file.originalName}
+                        </span>
+                        <span className="shrink-0 text-xs text-muted-foreground">
+                          {formatKnowledgeSize(file.size)}
+                        </span>
+                        <button
+                          type="button"
+                          aria-label={`Eliminar ${file.originalName}`}
+                          className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
+                          onClick={() => handleRemoveKnowledgeFile(file.id)}
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
 
               {/* Modelo recomendado */}

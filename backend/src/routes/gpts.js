@@ -1,10 +1,65 @@
 const express = require('express');
+const fs = require('fs').promises;
 const { PrismaClient } = require('@prisma/client');
 const { authenticateToken } = require('../middleware/auth');
 const upload = require('../middleware/upload');
+const fileProcessor = require('../services/fileProcessor');
+const { validateUploadPolicy } = require('../services/upload-security-policy');
 
 const router = express.Router();
 const prisma = new PrismaClient();
+
+// ─── Knowledge-file helpers ────────────────────────────────────────────────
+// Mirror the minimal, self-contained shape of routes/files.js. We deliberately
+// do NOT import its non-exported processFilesInParallel; we replicate just the
+// pieces needed to link an uploaded file to a custom GPT (DB record + best-effort
+// text extraction). Heavy extras (OpenAI Files, thumbnails, R2 offload, RAG
+// scheduling) are intentionally omitted — the inline knowledge-manifest excerpt
+// in master-prompt.js makes extractedText sufficient on its own.
+
+// Max knowledge files accepted per upload request.
+const KNOWLEDGE_UPLOAD_MAX_FILES = 10;
+
+// Bound the extraction step so a pathological document can never consume the
+// whole HTTP response budget (~30s proxy cut). On timeout the file still links
+// with extractedText: null. Same intent as files.js withTimeout.
+const KNOWLEDGE_EXTRACT_TIMEOUT_MS = Number.parseInt(
+  process.env.SIRAGPT_EXTRACT_TIMEOUT_MS || '20000',
+  10,
+);
+
+function withTimeout(promise, ms, label) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const err = new Error(`${label || 'operation'} timed out after ${ms}ms`);
+      err.code = 'step_timeout';
+      reject(err);
+    }, ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+async function unlinkQuiet(p) {
+  try { await fs.unlink(p); } catch (_) { /* already gone */ }
+}
+
+// Shape a File row for the API response — only safe, public-facing fields.
+// Never leaks path, userId, or openaiFileId.
+function knowledgeFileView(file) {
+  const extractedChars = typeof file.extractedText === 'string'
+    ? file.extractedText.length
+    : 0;
+  return {
+    id: file.id,
+    originalName: file.originalName,
+    size: file.size,
+    mimeType: file.mimeType,
+    extractedChars,
+  };
+}
 
 // GET /api/gpts - Get all public GPTs + user's private GPTs
 router.get('/', authenticateToken, async (req, res) => {
@@ -520,6 +575,168 @@ router.get('/chat/:chatId', authenticateToken, async (req, res) => {
   }
 });
 
-// ...existing code...
-// ...existing code...
+// ─── Knowledge files (Conocimientos v1) ────────────────────────────────────
+
+// GET /api/gpts/:id/knowledge - List a GPT's knowledge files (owner only)
+router.get('/:id/knowledge', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const gpt = await prisma.customGpt.findFirst({
+      where: { id: req.params.id, creatorId: userId },
+      include: { knowledgeFiles: true },
+    });
+
+    if (!gpt) {
+      return res.status(404).json({ error: 'GPT not found' });
+    }
+
+    res.json({ files: (gpt.knowledgeFiles || []).map(knowledgeFileView) });
+  } catch (error) {
+    console.error('Error listing GPT knowledge files:', error);
+    res.status(500).json({ error: 'Failed to list knowledge files' });
+  }
+});
+
+// POST /api/gpts/:id/knowledge - Upload knowledge files for a GPT (owner only)
+router.post(
+  '/:id/knowledge',
+  authenticateToken,
+  upload.array('files', KNOWLEDGE_UPLOAD_MAX_FILES),
+  async (req, res) => {
+    const userId = req.user.id;
+
+    // Ownership check FIRST, before touching any uploaded bytes.
+    const gpt = await prisma.customGpt.findFirst({
+      where: { id: req.params.id, creatorId: userId },
+    });
+
+    if (!gpt) {
+      // Clean up any multer-saved temp files so we don't leak disk on a
+      // rejected (non-owned / non-existent) GPT.
+      for (const f of req.files || []) await unlinkQuiet(f.path);
+      return res.status(404).json({ error: 'GPT not found' });
+    }
+
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ error: 'No files uploaded' });
+    }
+
+    try {
+      // Process files sequentially — knowledge uploads are small (≤10 files)
+      // and this keeps the handler simple and the DB pool calm.
+      for (const file of req.files) {
+        // Validate the declared vs detected mime against the upload policy.
+        // multer already gate-checked the declared mime; this is defence in
+        // depth using the same policy files.js enforces.
+        const policy = validateUploadPolicy({
+          originalName: file.originalname,
+          declaredMime: file.mimetype,
+          detectedMime: file.mimetype,
+          detectionSource: 'fallback',
+          size: file.size,
+        });
+        if (!policy.ok) {
+          await unlinkQuiet(file.path);
+          continue; // skip disallowed file; do not fail the whole upload
+        }
+        if (policy.mimeType && policy.mimeType !== file.mimetype) {
+          file.mimetype = policy.mimeType;
+        }
+
+        // Create the File row linked to this GPT (same fields as files.js
+        // processFilesInParallel, plus customGptId).
+        let fileRecord;
+        try {
+          fileRecord = await prisma.file.create({
+            data: {
+              userId,
+              filename: file.filename,
+              originalName: file.originalname,
+              mimeType: file.mimetype,
+              size: file.size,
+              path: file.path,
+              extractedText: null,
+              openaiFileId: null,
+              customGptId: gpt.id,
+              processingStage: 'uploaded',
+              processingStageAt: new Date(),
+            },
+          });
+        } catch (createError) {
+          console.error('[gpts] could not create knowledge File row:', createError.message || createError);
+          await unlinkQuiet(file.path);
+          continue;
+        }
+
+        // Best-effort text extraction. A parser failure must NEVER fail the
+        // whole upload — the file links with extractedText: null.
+        let extractedText = null;
+        try {
+          const result = await withTimeout(
+            fileProcessor.processFile(file),
+            KNOWLEDGE_EXTRACT_TIMEOUT_MS,
+            `knowledge extraction (${file.originalname})`,
+          );
+          extractedText = result && typeof result.extractedText === 'string'
+            ? result.extractedText
+            : null;
+        } catch (extractErr) {
+          console.warn(`[gpts] knowledge extraction failed for ${file.originalname} — file still linked:`, extractErr?.message || extractErr);
+        }
+
+        try {
+          await prisma.file.update({
+            where: { id: fileRecord.id },
+            data: { extractedText, mimeType: file.mimetype, processingStage: 'ready', processingStageAt: new Date() },
+          });
+        } catch (updateErr) {
+          console.warn('[gpts] knowledge File update failed:', updateErr?.message || updateErr);
+        }
+      }
+
+      // Return the GPT's full, current knowledge file list.
+      const files = await prisma.file.findMany({
+        where: { customGptId: gpt.id, userId },
+        orderBy: { createdAt: 'asc' },
+      });
+      res.json({ files: files.map(knowledgeFileView) });
+    } catch (error) {
+      console.error('Error uploading GPT knowledge files:', error);
+      res.status(500).json({ error: 'Failed to upload knowledge files' });
+    }
+  },
+);
+
+// DELETE /api/gpts/:id/knowledge/:fileId - Remove a knowledge file (owner only)
+router.delete('/:id/knowledge/:fileId', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // Ownership check on the GPT.
+    const gpt = await prisma.customGpt.findFirst({
+      where: { id: req.params.id, creatorId: userId },
+    });
+    if (!gpt) {
+      return res.status(404).json({ error: 'GPT not found' });
+    }
+
+    // Only delete a File that belongs to THIS GPT AND THIS user. Triple-scoped
+    // so a forged fileId from another GPT/user cannot be deleted.
+    const file = await prisma.file.findFirst({
+      where: { id: req.params.fileId, customGptId: gpt.id, userId },
+    });
+    if (!file) {
+      return res.status(404).json({ error: 'Knowledge file not found' });
+    }
+
+    await prisma.file.delete({ where: { id: file.id } });
+    await unlinkQuiet(file.path);
+
+    res.json({ message: 'Knowledge file removed', fileId: file.id });
+  } catch (error) {
+    console.error('Error deleting GPT knowledge file:', error);
+    res.status(500).json({ error: 'Failed to delete knowledge file' });
+  }
+});
+
 module.exports = router;

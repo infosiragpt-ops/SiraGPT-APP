@@ -68,6 +68,14 @@ export interface GPTFilters {
   visibility?: 'all' | 'mine' | 'public'
 }
 
+export interface GPTKnowledgeFile {
+  id: string
+  originalName: string
+  size: number
+  mimeType: string
+  extractedChars: number
+}
+
 class GPTsService {
   private baseUrl = `${getNormalizedApiBaseUrl()}/gpts`
 
@@ -269,6 +277,72 @@ class GPTsService {
       return data.chat
     } catch (error) {
       console.error('Error starting chat with GPT:', error)
+      throw error
+    }
+  }
+
+  // ── Knowledge files (Conocimientos) ──
+  async getGptKnowledge(id: string): Promise<GPTKnowledgeFile[]> {
+    try {
+      const response = await fetch(`${this.baseUrl}/${id}/knowledge`, {
+        credentials: 'include',
+        headers: this.authHeaders(),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || `Failed to fetch knowledge files: ${response.statusText}`)
+      }
+
+      const data = await response.json()
+      return data.files || []
+    } catch (error) {
+      console.error('Error fetching GPT knowledge files:', error)
+      throw error
+    }
+  }
+
+  async uploadGptKnowledge(id: string, files: File[]): Promise<GPTKnowledgeFile[]> {
+    try {
+      const formData = new FormData()
+      for (const file of files) {
+        formData.append('files', file)
+      }
+
+      const response = await fetch(`${this.baseUrl}/${id}/knowledge`, {
+        method: 'POST',
+        headers: this.authHeaders(false),
+        credentials: 'include',
+        body: formData,
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || `Failed to upload knowledge files: ${response.statusText}`)
+      }
+
+      const data = await response.json()
+      return data.files || []
+    } catch (error) {
+      console.error('Error uploading GPT knowledge files:', error)
+      throw error
+    }
+  }
+
+  async deleteGptKnowledge(id: string, fileId: string): Promise<void> {
+    try {
+      const response = await fetch(`${this.baseUrl}/${id}/knowledge/${fileId}`, {
+        method: 'DELETE',
+        credentials: 'include',
+        headers: this.authHeaders(),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || `Failed to delete knowledge file: ${response.statusText}`)
+      }
+    } catch (error) {
+      console.error('Error deleting GPT knowledge file:', error)
       throw error
     }
   }
