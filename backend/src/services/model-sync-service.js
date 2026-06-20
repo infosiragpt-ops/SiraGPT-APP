@@ -25,6 +25,17 @@ function stableStringify(value) {
   return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(',')}}`;
 }
 
+// Stable fingerprint of a model's pricing object that ignores the volatile
+// `updatedAt` stamp (re-written on every fetch). Without this, every priced
+// model looks "changed" on each sync and gets a needless UPDATE.
+function pricingFingerprint(pricing) {
+  if (!pricing || typeof pricing !== 'object' || Array.isArray(pricing)) {
+    return stableStringify(pricing);
+  }
+  const { updatedAt, ...rest } = pricing; // eslint-disable-line no-unused-vars
+  return stableStringify(rest);
+}
+
 class ModelSyncService {
   constructor(options = {}) {
     this.prisma = options.prismaClient || prisma;
@@ -640,7 +651,7 @@ class ModelSyncService {
       norm(existing.type) !== norm(model.type) ||
       norm(existing.contextLength) !== norm(model.contextLength) ||
       norm(existing.icon) !== norm(icon) ||
-      stableStringify(norm(existing.pricing)) !== stableStringify(norm(model.pricing)) ||
+      pricingFingerprint(norm(existing.pricing)) !== pricingFingerprint(norm(model.pricing)) ||
       tagKey(existing.tags) !== tagKey(tags)
     );
   }

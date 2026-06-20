@@ -134,14 +134,16 @@ test('persistModels skips unchanged rows — no UPDATE when nothing changed', as
 
   const model = {
     name: 'glm-4.6', displayName: 'GLM 4.6', description: 'd', provider: 'Z.ai',
-    type: 'TEXT', contextLength: 128000, pricing: { in: 1, out: 2 }, tags: ['chat'],
+    type: 'TEXT', contextLength: 128000,
+    pricing: { in: 1, out: 2, updatedAt: '2026-06-20T10:00:00.000Z' }, tags: ['chat'],
   };
-  // Build the stored row from the service's OWN derived values so the only
-  // difference is pricing key order (which stableStringify must treat as equal).
+  // Build the stored row from the service's OWN derived values. The only
+  // differences are pricing key order AND the volatile `updatedAt` stamp —
+  // both of which must be treated as "unchanged".
   storedRows = [{
     name: model.name, displayName: model.displayName, description: model.description,
     provider: model.provider, type: model.type, contextLength: model.contextLength,
-    pricing: { out: 2, in: 1 },
+    pricing: { out: 2, in: 1, updatedAt: '2026-06-20T09:00:00.000Z' },
     tags: model.tags && model.tags.length ? model.tags : service.generateTags(model),
     icon: service.getModelIcon(model),
   }];
