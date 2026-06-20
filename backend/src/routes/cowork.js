@@ -282,7 +282,7 @@ router.get('/sessions/:sessionId/history', authenticateToken, async (req, res) =
     }
     const history = sessionManager.getHistory(req.params.sessionId, {
       after: req.query.after,
-      limit: req.query.limit ? Number(req.query.limit) : undefined,
+      limit: req.query.limit ? Math.min(Math.max(1, Number(req.query.limit) || 1), 500) : undefined,
       role: req.query.role,
     });
     res.json({ messages: history });

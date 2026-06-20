@@ -945,8 +945,8 @@ router.post('/intent/semantic', optionalAuth, async (req, res) => {
 
     const analysis = buildSemanticIntentAnalysis({
       rawUserRequest,
-      conversationHistory: Array.isArray(req.body?.conversationHistory) ? req.body.conversationHistory : [],
-      files: Array.isArray(req.body?.files) ? req.body.files : [],
+      conversationHistory: Array.isArray(req.body?.conversationHistory) ? req.body.conversationHistory.slice(0, 100) : [],
+      files: Array.isArray(req.body?.files) ? req.body.files.slice(0, 50) : [],
       userId: req.user?.id || null,
       chatId: typeof req.body?.chatId === 'string' ? req.body.chatId : null,
     });

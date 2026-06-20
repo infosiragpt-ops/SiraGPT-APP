@@ -299,6 +299,9 @@ router.delete('/:id', async (req, res) => {
     await prisma.adminConnection.delete({ where: { id: req.params.id } });
     res.json({ deleted: true });
     refreshBridge();
+    // Deleting a provider's connection can change which models are available,
+    // so drop the cached ai-models response (mirrors create/patch/sync paths).
+    invalidateResponseCache({ namespace: 'ai-models' });
   } catch (err) {
     if (err.code === 'P2025') return res.status(404).json({ error: 'Connection not found' });
     console.error('[admin-connections] delete failed:', err);

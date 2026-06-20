@@ -274,7 +274,7 @@ router.get('/entities', optionalAuth, async (req, res) => {
   try {
     const userId = req.user?.id || req.query?.userId || 'anon';
     const chatId = req.query?.chatId || 'default';
-    const limit = Number.isFinite(Number(req.query?.limit)) ? Number(req.query.limit) : 25;
+    const limit = Number.isFinite(Number(req.query?.limit)) ? Math.min(Math.max(1, Number(req.query.limit)), 200) : 25;
     return res.json({ ok: true, entities: entityTracker.listEntities({ userId, chatId, limit }) });
   } catch (err) {
     console.error('[circuit-attribution/entities] failed:', err?.message || err);
@@ -605,7 +605,7 @@ router.get('/admin/traces', optionalAuth, async (req, res) => {
   try {
     const chatId = req.query?.chatId ? String(req.query.chatId).slice(0, 96) : null;
     const userId = req.query?.userId ? String(req.query.userId).slice(0, 64) : null;
-    const limit = Number.isFinite(Number(req.query?.limit)) ? Number(req.query.limit) : 50;
+    const limit = Number.isFinite(Number(req.query?.limit)) ? Math.min(Math.max(1, Number(req.query.limit)), 200) : 50;
     return res.json({
       ok: true,
       traces: traceRecorder.list({ chatId, userId, limit }),
@@ -696,7 +696,7 @@ router.post('/replay/:traceId', optionalAuth, async (req, res) => {
 router.get('/admin/replay-all', optionalAuth, async (req, res) => {
   try {
     const driftBudget = Number.isFinite(Number(req.query?.driftBudget)) ? Number(req.query.driftBudget) : undefined;
-    const limit = Number.isFinite(Number(req.query?.limit)) ? Number(req.query.limit) : 20;
+    const limit = Number.isFinite(Number(req.query?.limit)) ? Math.min(Math.max(1, Number(req.query.limit)), 200) : 20;
     return res.json({ ok: true, ...replayRunner.replayAll({ driftBudget, limit }) });
   } catch (err) {
     console.error('[circuit-attribution/admin/replay-all] failed:', err?.message || err);
