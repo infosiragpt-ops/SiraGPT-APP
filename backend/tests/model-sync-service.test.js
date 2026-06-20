@@ -118,3 +118,45 @@ test('persistModels batches DB work: one findMany, createMany for new, parallel 
   // One update for the single existing row.
   assert.equal(calls.filter(([n]) => n === 'update').length, 1);
 });
+
+test('persistModels skips unchanged rows — no UPDATE when nothing changed', async () => {
+  const calls = [];
+  let storedRows = [];
+  const service = new ModelSyncService({
+    prismaClient: {
+      aiModel: {
+        findMany: async () => { calls.push(['findMany']); return storedRows; },
+        createMany: async () => { calls.push(['createMany']); return { count: 0 }; },
+        update: async (p) => { calls.push(['update', p]); return {}; },
+      },
+    },
+  });
+
+  const model = {
+    name: 'glm-4.6', displayName: 'GLM 4.6', description: 'd', provider: 'Z.ai',
+    type: 'TEXT', contextLength: 128000, pricing: { in: 1, out: 2 }, tags: ['chat'],
+  };
+  // Build the stored row from the service's OWN derived values so the only
+  // difference is pricing key order (which stableStringify must treat as equal).
+  storedRows = [{
+    name: model.name, displayName: model.displayName, description: model.description,
+    provider: model.provider, type: model.type, contextLength: model.contextLength,
+    pricing: { out: 2, in: 1 },
+    tags: model.tags && model.tags.length ? model.tags : service.generateTags(model),
+    icon: service.getModelIcon(model),
+  }];
+
+  const result = await service.persistModels([model]);
+  assert.equal(result.updated, 0, 'unchanged model must not be updated');
+  assert.equal(result.skipped, 1);
+  assert.equal(calls.filter(([n]) => n === 'update').length, 0);
+  assert.equal(calls.filter(([n]) => n === 'createMany').length, 0);
+
+  // Now change a field → it must update.
+  calls.length = 0;
+  const changed = { ...model, displayName: 'GLM 4.6 Turbo' };
+  const r2 = await service.persistModels([changed]);
+  assert.equal(r2.updated, 1);
+  assert.equal(r2.skipped, 0);
+  assert.equal(calls.filter(([n]) => n === 'update').length, 1);
+});

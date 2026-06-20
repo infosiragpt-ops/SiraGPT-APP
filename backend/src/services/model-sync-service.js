@@ -14,6 +14,17 @@ const {
 const { cleanEnvValue, getFalApiKey } = require('./fal/fal-auth');
 const modelPricingService = require('./model-pricing-service');
 
+// Deterministic JSON stringify (keys sorted at every level) so two objects
+// with the same content but different key order compare equal — needed because
+// Postgres JSONB does not preserve insertion order when it round-trips.
+function stableStringify(value) {
+  if (value === null || value === undefined) return 'null';
+  if (typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  const keys = Object.keys(value).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(',')}}`;
+}
+
 class ModelSyncService {
   constructor(options = {}) {
     this.prisma = options.prismaClient || prisma;
@@ -537,20 +548,30 @@ class ModelSyncService {
     const list = [...byName.values()];
     if (list.length === 0) return { created, updated, errors };
 
-    // 1) Which names already exist — a single query.
-    let existing = new Set();
+    // 1) Pull the existing rows (with the fields we compare) in ONE query so
+    //    we can skip rows that haven't changed. On a repeat "Sync Now" almost
+    //    nothing changed → almost zero writes → the persist phase is near-free
+    //    (single-row UPDATEs cost ~130ms each on this VPS due to per-commit
+    //    fsync, so NOT writing is the real win).
+    const existingByName = new Map();
     try {
       const rows = await this.prisma.aiModel.findMany({
         where: { name: { in: list.map((m) => m.name) } },
-        select: { name: true },
+        select: {
+          name: true, displayName: true, description: true, provider: true,
+          type: true, contextLength: true, pricing: true, tags: true, icon: true,
+        },
       });
-      existing = new Set(rows.map((r) => r.name));
+      for (const r of rows) existingByName.set(r.name, r);
     } catch (lookupErr) {
       console.error('❌ persistModels: existing-name lookup failed:', lookupErr.message);
     }
 
-    const toCreate = list.filter((m) => !existing.has(m.name));
-    const toUpdate = list.filter((m) => existing.has(m.name));
+    const toCreate = list.filter((m) => !existingByName.has(m.name));
+    const toUpdate = list.filter(
+      (m) => existingByName.has(m.name) && this._modelNeedsUpdate(existingByName.get(m.name), m),
+    );
+    const skipped = list.length - toCreate.length - toUpdate.length;
 
     // 2) Bulk-insert new models in one statement.
     if (toCreate.length) {
@@ -600,7 +621,28 @@ class ModelSyncService {
       }
     }
 
-    return { created, updated, errors };
+    if (skipped > 0) console.log(`⏭️  persistModels: skipped ${skipped} unchanged model(s)`);
+    return { created, updated, skipped, errors };
+  }
+
+  // True when a fetched model differs from the stored row in any field we
+  // persist. Used to skip no-op UPDATEs. `pricing` is compared with a stable
+  // (key-sorted) stringify because Postgres JSONB does not preserve key order.
+  _modelNeedsUpdate(existing, model) {
+    const norm = (v) => (v === undefined || v === '' ? null : v);
+    const icon = this.getModelIcon(model);
+    const tags = model.tags && model.tags.length ? model.tags : this.generateTags(model);
+    const tagKey = (t) => (Array.isArray(t) ? [...t].sort().join('') : '');
+    return (
+      norm(existing.displayName) !== norm(model.displayName) ||
+      norm(existing.description) !== norm(model.description) ||
+      norm(existing.provider) !== norm(model.provider) ||
+      norm(existing.type) !== norm(model.type) ||
+      norm(existing.contextLength) !== norm(model.contextLength) ||
+      norm(existing.icon) !== norm(icon) ||
+      stableStringify(norm(existing.pricing)) !== stableStringify(norm(model.pricing)) ||
+      tagKey(existing.tags) !== tagKey(tags)
+    );
   }
 
   buildModelSyncUpdateData(model) {
