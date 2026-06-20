@@ -5329,6 +5329,15 @@ router.post(
                   attachedDocuments: agenticAttachedDocuments,
                   customGptPersona: agenticCustomGptPersona,
                   customGptCapabilities: customGpt ? (customGpt.capabilities || null) : null,
+                  // Actions execute with the CREATOR's encrypted auth secret, so
+                  // only inject them when the current user IS the creator. This
+                  // prevents a non-owner (incl. anyone using a PUBLIC GPT, or a
+                  // foreign chatId) from making external calls authenticated with
+                  // someone else's stored credentials.
+                  customGptActions:
+                    customGpt && userId && customGpt.creatorId === userId
+                      ? (customGpt.actions || null)
+                      : null,
                   userQuery: prompt,
                   history: priorHistory,
                   res,

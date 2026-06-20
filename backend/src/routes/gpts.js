@@ -9,9 +9,17 @@ const {
   createCerebrasClient,
   getCerebrasConfig,
 } = require('../services/ai/cerebras-client');
+const gptActions = require('../services/gpts/gpt-actions');
 
 const router = express.Router();
 const prisma = new PrismaClient();
+
+// Return a GPT object safe to send to the client: its Actions never expose the
+// encrypted auth secret (redactActionsForClient → auth.hasSecret boolean only).
+function withRedactedActions(gpt) {
+  if (!gpt || typeof gpt !== 'object' || gpt.actions == null) return gpt;
+  return { ...gpt, actions: gptActions.redactActionsForClient(gpt.actions) };
+}
 
 // ─── Live draft preview ────────────────────────────────────────────────────
 // Bounds for POST /preview-chat: a persona-faithful "try before you save"
@@ -150,7 +158,7 @@ router.get('/', authenticateToken, async (req, res) => {
 
     // Transform the data to match frontend expectations
     const transformedGpts = gpts.map(gpt => ({
-      ...gpt,
+      ...withRedactedActions(gpt),
       _count: {
         conversations: gpt._count.chats,
         files: gpt._count.knowledgeFiles
@@ -222,7 +230,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    res.json({ gpt });
+    res.json({ gpt: withRedactedActions(gpt) });
   } catch (error) {
     console.error('Error fetching GPT:', error);
     res.status(500).json({ error: 'Failed to fetch GPT' });
@@ -257,7 +265,7 @@ router.get('/share/:shareId', async (req, res) => {
       return res.status(403).json({ error: 'This GPT is private' });
     }
 
-    res.json({ gpt });
+    res.json({ gpt: withRedactedActions(gpt) });
   } catch (error) {
     console.error('Error fetching shared GPT:', error);
     res.status(500).json({ error: 'Failed to fetch shared GPT' });
@@ -316,7 +324,7 @@ router.post('/', authenticateToken, upload.single('icon'), async (req, res) => {
         conversationStarters: conversationStarters || [],
         visibility: visibility || 'PRIVATE',
         category,
-        actions: actions || [],
+        actions: gptActions.normalizeActionsForStore(actions, []),
         capabilities: capabilities ?? null,
       },
       include: {
@@ -330,7 +338,7 @@ router.post('/', authenticateToken, upload.single('icon'), async (req, res) => {
       }
     });
 
-    res.status(201).json({ gpt });
+    res.status(201).json({ gpt: withRedactedActions(gpt) });
   } catch (error) {
     console.error('Error creating GPT:', error);
     res.status(500).json({ error: 'Failed to create GPT' });
@@ -399,7 +407,9 @@ router.put('/:id', authenticateToken, upload.single('icon'), async (req, res) =>
         ...(conversationStarters !== undefined && { conversationStarters }),
         ...(visibility !== undefined && { visibility }),
         ...(category !== undefined && { category }),
-        ...(actions !== undefined && { actions }),
+        ...(actions !== undefined && {
+          actions: gptActions.normalizeActionsForStore(actions, existingGpt.actions || []),
+        }),
         ...(capabilities !== undefined && { capabilities }),
       },
       include: {
@@ -413,7 +423,7 @@ router.put('/:id', authenticateToken, upload.single('icon'), async (req, res) =>
       }
     });
 
-    res.json({ gpt: updatedGpt });
+    res.json({ gpt: withRedactedActions(updatedGpt) });
   } catch (error) {
     console.error('Error updating GPT:', error);
     res.status(500).json({ error: 'Failed to update GPT' });
@@ -803,9 +813,44 @@ function sanitizePreviewMessages(raw) {
   return out;
 }
 
+// Resolve an OpenAI-compatible client for the preview. Prefers the free
+// FlashGPT/Cerebras model; falls back to a configured provider (OpenAI →
+// OpenRouter) so the preview always works even where Cerebras isn't wired into
+// the backend env (prod resolves the free model through a different path).
+// Override the fallback model with SIRAGPT_GPT_PREVIEW_FALLBACK_MODEL.
+function resolvePreviewClient() {
+  const cerebras = createCerebrasClient();
+  if (cerebras) {
+    const cfg = getCerebrasConfig();
+    return { client: cerebras, model: cfg.model, displayName: cfg.displayName };
+  }
+  let OpenAI;
+  try {
+    OpenAI = require('openai');
+  } catch (_) {
+    return null;
+  }
+  const fallbackModel = process.env.SIRAGPT_GPT_PREVIEW_FALLBACK_MODEL;
+  if (process.env.OPENAI_API_KEY) {
+    return {
+      client: new OpenAI({ apiKey: process.env.OPENAI_API_KEY }),
+      model: fallbackModel || 'gpt-4o-mini',
+      displayName: 'Vista previa',
+    };
+  }
+  if (process.env.OPENROUTER_API_KEY) {
+    return {
+      client: new OpenAI({ apiKey: process.env.OPENROUTER_API_KEY, baseURL: 'https://openrouter.ai/api/v1' }),
+      model: fallbackModel || 'openai/gpt-4o-mini',
+      displayName: 'Vista previa',
+    };
+  }
+  return null;
+}
+
 // POST /api/gpts/preview-chat — chat with the DRAFT GPT before it is saved.
-// Stateless: nothing is persisted. Runs on the free FlashGPT/Cerebras model
-// (no credits, no tools, no knowledge) so it's a fast, faithful persona "try".
+// Stateless: nothing is persisted. Prefers the free FlashGPT model; falls back
+// to a configured provider (no tools, no knowledge) — a fast persona "try".
 router.post('/preview-chat', authenticateToken, async (req, res) => {
   try {
     const body = req.body || {};
@@ -817,14 +862,14 @@ router.post('/preview-chat', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'The last message must be from the user' });
     }
 
-    const client = createCerebrasClient();
-    if (!client) {
+    const picked = resolvePreviewClient();
+    if (!picked) {
       return res.status(503).json({
         error: 'preview_unavailable',
         message: 'La vista previa no está disponible en este momento.',
       });
     }
-    const cfg = getCerebrasConfig();
+    const { client, model: previewModel, displayName: previewDisplayName } = picked;
 
     const systemPrompt = buildPreviewSystemPrompt({
       name: body.name,
@@ -836,7 +881,7 @@ router.post('/preview-chat', authenticateToken, async (req, res) => {
 
     const completion = await withTimeout(
       client.chat.completions.create({
-        model: cfg.model,
+        model: previewModel,
         messages: [{ role: 'system', content: systemPrompt }, ...messages],
         temperature,
         max_tokens: 1024,
@@ -855,8 +900,8 @@ router.post('/preview-chat', authenticateToken, async (req, res) => {
 
     return res.json({
       reply: String(reply).trim(),
-      model: cfg.model,
-      displayName: cfg.displayName,
+      model: previewModel,
+      displayName: previewDisplayName,
     });
   } catch (error) {
     if (error && error.code === 'step_timeout') {

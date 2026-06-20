@@ -505,6 +505,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       customGptPersona = '',
       // Per-GPT tool capability toggles (null = legacy GPT → no gating).
       customGptCapabilities = null,
+      // Creator-defined external API Actions (CustomGpt.actions, stored shape
+      // WITH the encrypted auth secret). Built into agent tools below.
+      customGptActions = null,
     } = opts || {};
 
     if (!openai) throw new Error('runAgenticChat: openai client is required');
@@ -513,6 +516,30 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
     if (!res) throw new Error('runAgenticChat: res is required');
 
     let tools = toolsOverride || buildDefaultTools({ userQuery, selection, clearance: toolContext && toolContext.clearance, capabilities: customGptCapabilities });
+
+    // Inject this custom GPT's creator-defined Actions as agent tools. Appended
+    // AFTER buildDefaultTools (so the per-turn selector cannot drop them) and
+    // BEFORE the harness wrap (so each action call emits typed SSE events).
+    // Only when the GPT defines actions; kill switch SIRAGPT_GPT_ACTIONS_ENABLED=0.
+    // Fail-open: a builder error never breaks the turn.
+    if (!toolsOverride && Array.isArray(customGptActions) && customGptActions.length) {
+      const actionsGate = String(process.env.SIRAGPT_GPT_ACTIONS_ENABLED || '').trim().toLowerCase();
+      if (actionsGate !== '0' && actionsGate !== 'off') {
+        try {
+          const { buildActionTools } = require('./gpts/gpt-actions');
+          const actionTools = buildActionTools(customGptActions);
+          if (actionTools.length) {
+            const names = new Set(tools.map((t) => t && t.name));
+            for (const at of actionTools) {
+              if (at && at.name && !names.has(at.name)) { tools.push(at); names.add(at.name); }
+            }
+            console.log(`[gpt-actions] injected ${actionTools.length} action tool(s) for the custom GPT`);
+          }
+        } catch (actionErr) {
+          console.warn('[gpt-actions] tool injection failed (skipping):', actionErr && actionErr.message);
+        }
+      }
+    }
     // Bilingual media-intent detection: when the user asks to create an
     // image / video / audio / music in the chat bar, this pre-extracts the
     // specs (duration, aspect ratio, count, style/genre) and lets us inject a

@@ -40,6 +40,7 @@ import { gptsService, type CustomGPT, type GPTKnowledgeFile } from "@/lib/gpts-s
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import { GptActionsEditor, type GptAction } from "@/components/gpts/gpt-actions-editor"
 
 const liquidPanel =
   "relative overflow-hidden rounded-[24px] border border-white/60 bg-white/75 shadow-[0_18px_50px_-28px_rgba(15,23,42,0.35),inset_0_1px_0_rgba(255,255,255,0.78)] backdrop-blur-2xl dark:border-white/10 dark:bg-zinc-950/55 dark:shadow-[0_18px_60px_-30px_rgba(0,0,0,0.85),inset_0_1px_0_rgba(255,255,255,0.08)]"
@@ -990,18 +991,10 @@ export default function CreateGPTPage() {
               </div>
 
               {/* Acciones */}
-              <div className="space-y-2">
-                <Label className="text-sm font-medium">Acciones</Label>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className={cn("w-full justify-center", liquidGhost)}
-                  type="button"
-                >
-                  <Plus className="mr-2 h-4 w-4" />
-                  Crear nueva acción
-                </Button>
-              </div>
+              <GptActionsEditor
+                actions={formData.actions as GptAction[]}
+                onChange={(next) => handleInputChange("actions", next)}
+              />
 
             </div>
           </div>

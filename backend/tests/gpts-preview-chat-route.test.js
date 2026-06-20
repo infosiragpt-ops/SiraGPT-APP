@@ -170,15 +170,26 @@ test('POST /preview-chat sanitises bad roles and empty content', async () => {
   assert.equal(forwarded[1].content, 'pregunta real');
 });
 
-test('POST /preview-chat returns 503 when FlashGPT is not configured', async () => {
+test('POST /preview-chat returns 503 when no provider is configured', async () => {
   reset();
   cerebrasBehavior = 'null';
-  const app = buildApp();
-  const res = await request(app)
-    .post('/api/gpts/preview-chat')
-    .send({ instructions: 'x', messages: [{ role: 'user', content: 'hola' }] });
-  assert.equal(res.status, 503);
-  assert.equal(res.body.error, 'preview_unavailable');
+  // With Cerebras unconfigured the handler falls back to OpenAI/OpenRouter;
+  // unset those so the resolver returns null and we exercise the 503 branch.
+  const savedOpenAi = process.env.OPENAI_API_KEY;
+  const savedOpenRouter = process.env.OPENROUTER_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  delete process.env.OPENROUTER_API_KEY;
+  try {
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/gpts/preview-chat')
+      .send({ instructions: 'x', messages: [{ role: 'user', content: 'hola' }] });
+    assert.equal(res.status, 503);
+    assert.equal(res.body.error, 'preview_unavailable');
+  } finally {
+    if (savedOpenAi !== undefined) process.env.OPENAI_API_KEY = savedOpenAi;
+    if (savedOpenRouter !== undefined) process.env.OPENROUTER_API_KEY = savedOpenRouter;
+  }
 });
 
 test('POST /preview-chat falls back to an empty reply without crashing', async () => {
