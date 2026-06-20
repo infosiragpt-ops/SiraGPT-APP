@@ -309,9 +309,13 @@ const VIDEO_DURATION_SECONDS_RE =
   /\b(1[0-5]|[4-9])\s*(?:s|seg(?:undo)?s?|sec(?:ond)?s?)\b/i
 
 export type RequestedVideoAspectRatio = '16:9' | '9:16' | '1:1' | '4:3' | '3:4' | '21:9'
+export type RequestedVideoResolution = '480p' | '720p'
 
 const VIDEO_RATIO_TOKEN_RE =
   /\b(16:9|9:16|1:1|4:3|3:4|21:9|16x9|9x16|1x1|4x3|3x4|21x9)\b/i
+
+const VIDEO_RESOLUTION_TOKEN_RE =
+  /\b(480|720)\s*p\b/i
 
 export function extractRequestedVideoDurationSeconds(
   prompt: string,
@@ -335,6 +339,30 @@ export function extractRequestedVideoAspectRatio(prompt: string): RequestedVideo
   if (/\b(?:vertical(?:es)?|retrato|portrait|tiktok|reels?|historias?|story|stories|shorts?|para movil|formato movil|mas alto que ancho)\b/.test(normalized)) return '9:16'
   if (/\b(?:rectangular(?:es)?|horizontal(?:es)?|apaisad[oa]s?|panoramic[oa]s?|landscape|widescreen|youtube|miniatura|thumbnail|banner|portada|cover|cabecera|mas ancho que alto)\b/.test(normalized)) return '16:9'
   if (/\b(?:cinema|cinematico|cinematografico|ultrawide|panavision)\b/.test(normalized)) return '21:9'
+
+  return null
+}
+
+export function extractRequestedVideoResolution(prompt: string): RequestedVideoResolution | null {
+  const normalized = normalizePrompt(prompt)
+  if (!normalized) return null
+
+  const match = normalized.match(VIDEO_RESOLUTION_TOKEN_RE)
+  if (match?.[1] === '480') return '480p'
+  if (match?.[1] === '720') return '720p'
+
+  if (/\b(?:sd|baja resolucion|resolucion baja|ligero|liviano)\b/.test(normalized)) return '480p'
+  if (/\b(?:hd|alta resolucion|resolucion alta|calidad alta)\b/.test(normalized)) return '720p'
+
+  return null
+}
+
+export function extractRequestedVideoAudio(prompt: string): boolean | null {
+  const normalized = normalizePrompt(prompt)
+  if (!normalized) return null
+
+  if (/\b(?:sin audio|sin sonido|sin musica|sin voz|mudo|silencioso|audio off|mute|muted|no audio|no sound)\b/.test(normalized)) return false
+  if (/\b(?:con audio|con sonido|con musica|con voz|audio on|sonido activado|audio activado)\b/.test(normalized)) return true
 
   return null
 }

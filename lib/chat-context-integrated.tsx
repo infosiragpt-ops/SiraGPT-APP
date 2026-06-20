@@ -506,6 +506,7 @@ type VideoGenerationOptions = {
   audio?: boolean
   model?: string
   sourceImageUrls?: string[]
+  sourceImageFiles?: any[]
   // Optional cancel signal so the composer can abort the kickoff request,
   // mirroring the dedicated AbortController image generation already uses.
   signal?: AbortSignal
@@ -3104,19 +3105,25 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
       (options?.sourceImageUrls || []).forEach(addImageUrl);
 
-      // First try to get image URL from uploadedFiles context
-      if (uploadedFiles && uploadedFiles.length > 0) {
-        uploadedFiles
-          .filter(f => f.type?.startsWith('image/') || f.mimeType?.startsWith('image/'))
-          .forEach((imageFile) => addImageUrl(imageFile.url));
-      }
+      const sourceFiles = [
+        ...(Array.isArray(options?.sourceImageFiles) ? options.sourceImageFiles : []),
+        ...(Array.isArray(uploadedFiles) ? uploadedFiles : []),
+      ];
+      sourceFiles
+        .filter(f => f?.type?.startsWith('image/') || f?.mimeType?.startsWith('image/'))
+        .forEach((imageFile) => {
+          addImageUrl(imageFile.url || imageFile.thumbnailUrl);
+          if (!imageFile.url && imageFile.filename && imageFile.userId) {
+            addImageUrl(`/uploads/${imageFile.userId}/${imageFile.filename}`);
+          }
+        });
 
       // Fallback/enrichment from the API so every selected image id is included.
       if (fileIds && fileIds.length > 0) {
         try {
           for (const fileId of fileIds) {
             const fileResponse = await apiClient.getFile(fileId);
-            const file = fileResponse.file;
+            const file = (fileResponse as any)?.file || fileResponse;
 
             if (file && file.mimeType?.startsWith('image/')) {
               if (file.url) {

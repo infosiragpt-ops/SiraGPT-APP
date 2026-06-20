@@ -74,4 +74,27 @@ describe("chat video generation lifecycle source contract", () => {
       "polling must time out and cancel instead of rendering forever"
     )
   })
+
+  it("passes uploaded image files and direct /api/files/:id results into video generation", () => {
+    assert.match(
+      chatContext,
+      /sourceImageFiles\?: any\[\]/,
+      "video options should accept original uploaded image objects before the composer clears them"
+    )
+    assert.match(
+      chatContext,
+      /\.\.\.\(Array\.isArray\(options\?\.sourceImageFiles\) \? options\.sourceImageFiles : \[\]\)/,
+      "addVideoMessage should read image URLs from the captured source files"
+    )
+    assert.match(
+      chatContext,
+      /const file = \(fileResponse as any\)\?\.file \|\| fileResponse/,
+      "addVideoMessage should support apiClient.getFile returning the file directly"
+    )
+    assert.match(
+      chatContext,
+      /image_urls: imageUrls/,
+      "all resolved image references should be submitted to fal.ai for reference-to-video"
+    )
+  })
 })

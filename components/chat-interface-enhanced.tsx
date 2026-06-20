@@ -106,7 +106,7 @@ import { Badge } from "@/components/ui/badge"
 import { apiClient } from "@/lib/api"
 import { shouldRecoverImageGenerationViaPolling } from "@/lib/image-generation-recovery"
 import { track } from "@/lib/analytics"
-import { aiService, buildProfessionalCapabilityPrompt, classifyIntentFastPath, extractRequestedVideoAspectRatio, extractRequestedVideoDurationSeconds, isImageAnalysisPrompt, isImageOnlyAttachmentTurn, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldAutoActivateVideoGeneration, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, type ChatIntent } from "@/lib/ai-service"
+import { aiService, buildProfessionalCapabilityPrompt, classifyIntentFastPath, extractRequestedVideoAspectRatio, extractRequestedVideoAudio, extractRequestedVideoDurationSeconds, extractRequestedVideoResolution, isImageAnalysisPrompt, isImageOnlyAttachmentTurn, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldAutoActivateVideoGeneration, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, type ChatIntent } from "@/lib/ai-service"
 import { resolveImageAttachmentUrl } from "@/lib/attachment-url"
 import { toast } from "sonner"
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -5383,15 +5383,13 @@ But first, you need to connect your Spotify account securely using the button be
       if (requestedAspectRatio && selectedVideoAspectRatio !== requestedAspectRatio) {
         setSelectedVideoAspectRatio(requestedAspectRatio as VideoAspectRatio);
       }
-      return;
-    }
-
-    const hasReplacementPrompt = input.trim().length > 0;
-    if (!wantsVideo && autoVideoActivationRef.current) {
-      if (hasReplacementPrompt && isVideoGenerationActive && chatType === 'video' && !isGeneratingVideo) {
-        setIsVideoGenerationActive(false);
-        setChatType('text');
-        autoVideoActivationRef.current = false;
+      const requestedResolution = extractRequestedVideoResolution(input);
+      if (requestedResolution && selectedVideoResolution !== requestedResolution) {
+        setSelectedVideoResolution(requestedResolution as VideoResolution);
+      }
+      const requestedAudio = extractRequestedVideoAudio(input);
+      if (requestedAudio !== null && selectedVideoAudio !== requestedAudio) {
+        setSelectedVideoAudio(requestedAudio);
       }
       return;
     }
@@ -5404,7 +5402,6 @@ But first, you need to connect your Spotify account securely using the button be
     isGmailActive,
     isGoogleCalendarActive,
     isGoogleDriveActive,
-    isGeneratingVideo,
     isImageGenerationActive,
     isMusicGenerationActive,
     isSpotifyActive,
@@ -5413,7 +5410,9 @@ But first, you need to connect your Spotify account securely using the button be
     isWebSearchActive,
     isWordConnectorActive,
     selectedVideoAspectRatio,
+    selectedVideoAudio,
     selectedVideoDuration,
+    selectedVideoResolution,
     setChatType,
   ]);
 
@@ -6373,6 +6372,7 @@ But first, you need to connect your Spotify account securely using the button be
   React.useEffect(() => {
     const handleResetChatState = () => {
       devLog('🔄 Resetting all chat states (New Chat clicked)');
+      autoVideoActivationRef.current = false;
       resetAllToolsAndConnectors();
       setComputerUseStatus('idle');
       setComputerUseScreenshot(null);
@@ -8064,7 +8064,7 @@ REWRITTEN TEXT:`;
         }
       }
       if (isVideoGenerationActive || chatType === 'video') {
-        await handleVideoGeneration(msg, collectUploadFileIds(filesToSend));
+        await handleVideoGeneration(msg, collectUploadFileIds(filesToSend), filesToSend);
         return;
       }
       if (chatType === 'thesis' && !isNewChat) {
@@ -8239,7 +8239,7 @@ REWRITTEN TEXT:`;
           await handleImageGeneration(buildImageEditPrompt(msg), collectUploadFileIds(filesToSend));
           break;
         case 'video':
-          await handleVideoGeneration(msg, collectUploadFileIds(filesToSend));
+          await handleVideoGeneration(msg, collectUploadFileIds(filesToSend), filesToSend);
           break;
         case 'ppt':
           await runClassifiedAgentTask();
@@ -8875,7 +8875,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }
   }
 
-  const handleVideoGeneration = async (prompt: string, files?: string[]) => {
+  const handleVideoGeneration = async (prompt: string, files?: string[], sourceFiles: any[] = []) => {
     const activeVideoModel = selectedVideoModel.trim() || videoModelsForComposer[0]?.name || "";
     if (!activeVideoModel) {
       toast.error('Activa un modelo VIDEO en Admin > AI Models antes de generar video.');
@@ -8912,17 +8912,20 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     videoAbortControllerRef.current = videoController;
     if (activeChatId) markLocalJobBusy(activeChatId, videoController);
     const promptAspectRatio = extractRequestedVideoAspectRatio(prompt);
+    const promptResolution = extractRequestedVideoResolution(prompt);
+    const promptAudio = extractRequestedVideoAudio(prompt);
     const sourceImageUrls = (!files?.length && shouldUseLatestImageForVideo(prompt))
       ? collectLatestGeneratedImageUrls(currentChat?.messages || [])
       : [];
     const videoOptions = {
-      resolution: selectedVideoResolution,
+      resolution: promptResolution || selectedVideoResolution,
       aspectRatio: promptAspectRatio || selectedVideoAspectRatio,
       duration: selectedVideoDuration,
-      audio: selectedVideoAudio,
+      audio: promptAudio ?? selectedVideoAudio,
       model: activeVideoModel,
       signal: videoController.signal,
       sourceImageUrls,
+      sourceImageFiles: sourceFiles,
       onOperationStarted: (operationId: string) => {
         pollingStarted = true;
         operationIdForThisRun = operationId;
@@ -9331,6 +9334,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     || isSpotifyActive || isWordConnectorActive || isExcelConnectorActive
     || chatType === 'thesis'
   );
+  const shouldInlineActiveTools = isVideoGenerationActive;
   const isMediaToolActive = isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive;
   const requiresPromptBeforePrimarySend =
     isImageGenerationActive ||
@@ -10448,6 +10452,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           isProcessingGmail={isCurrentChatLocalJobBusy && isProcessingGmail}
                         />
 
+                        {shouldInlineActiveTools && (
+                          <div className="composer-inline-active-tools">
+                            <ActiveToolsDisplay {...activeToolsProps} />
+                          </div>
+                        )}
+
                         {/* CENTER — single-line textarea, expands vertically up to ~45% viewport (ChatGPT-style) */}
                         <div className="composer-textarea-shell min-w-0 flex-1">
                           {hasDetectedLinks && input ? (
@@ -10610,7 +10620,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     {/* Secondary row — active tool / connector pills.
                         Only rendered when something is active, so the
                         composer stays a clean pill in the idle state. */}
-                    {hasActiveTools && (
+                    {hasActiveTools && !shouldInlineActiveTools && (
                       <div className="composer-media-controls-row mx-1 sm:mx-2 mb-2 flex flex-wrap items-center gap-1 sm:gap-2 overflow-visible px-0.5 py-1">
                         <ActiveToolsDisplay {...activeToolsProps} />
                       </div>
@@ -10997,6 +11007,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               isGeneratingPPT={isGeneratingPPT}
                               isProcessingGmail={isCurrentChatLocalJobBusy && isProcessingGmail}
                             />
+                            {shouldInlineActiveTools && (
+                              <div className="composer-inline-active-tools">
+                                <ActiveToolsDisplay {...activeToolsProps} />
+                              </div>
+                            )}
                             <div className="composer-textarea-shell min-w-0 flex-1">
                               {hasDetectedLinks && input ? (
                                 <div
@@ -11176,7 +11191,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         {/* Secondary row — active tool / connector pills.
                             Mirrors the in-chat composer above so both
                             states feel identical to the user. */}
-                        {hasActiveTools && (
+                        {hasActiveTools && !shouldInlineActiveTools && (
                           <div className="composer-media-controls-row mx-1 sm:mx-2 mb-2 flex flex-wrap items-center gap-1 sm:gap-2 overflow-visible px-0.5 py-1">
                             <ActiveToolsDisplay {...activeToolsProps} />
                           </div>

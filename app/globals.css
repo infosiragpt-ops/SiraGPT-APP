@@ -4371,11 +4371,35 @@ footer {
 }
 
 .composer-input-row .composer-toolbar-actions {
-  grid-column: 2 / -1;
+  grid-column: 3;
   grid-row: 2;
   justify-self: end;
   align-self: center;
   max-width: 100%;
+}
+
+.composer-inline-active-tools {
+  grid-column: 2;
+  grid-row: 2;
+  align-self: center;
+  justify-self: start;
+  min-width: 0;
+  max-width: min(56vw, 39rem);
+  overflow: visible;
+}
+
+.composer-inline-active-tools > div {
+  max-width: 100%;
+  flex-wrap: nowrap !important;
+  overflow-x: auto;
+  overflow-y: visible;
+  padding: 0.125rem;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.composer-inline-active-tools > div::-webkit-scrollbar {
+  display: none;
 }
 
 .composer-plus-liquid-button {
@@ -4593,6 +4617,15 @@ footer {
   flex: 0 0 auto;
 }
 @media (max-width: 640px) {
+  .composer-inline-active-tools {
+    max-width: calc(100vw - 8.75rem);
+  }
+  .composer-inline-active-tools .media-model-trigger[data-media-tool="video"] {
+    max-width: 9.25rem;
+  }
+  .composer-inline-active-tools .video-settings-trigger {
+    max-width: 7.25rem;
+  }
   .composer-media-controls-row {
     margin-left: 0.625rem;
     margin-right: 0.625rem;

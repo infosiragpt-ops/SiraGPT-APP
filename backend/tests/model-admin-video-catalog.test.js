@@ -198,10 +198,16 @@ test('admin fal.ai connection sync validates the key and imports video models', 
   const service = new ModelSyncService({
     prismaClient: {
       aiModel: {
-        async findUnique() {
-          return null;
+        async findMany() {
+          return [];
         },
-        async create(args) {
+        async createMany(args) {
+          for (const data of args.data || []) {
+            operations.push({ data });
+          }
+          return { count: args.data?.length || 0 };
+        },
+        async update(args) {
           operations.push(args);
           return args;
         },

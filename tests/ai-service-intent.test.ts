@@ -6,8 +6,10 @@ import {
   buildIntentAttributionGraph,
   buildProfessionalCapabilityPrompt,
   classifyIntentFastPath,
-  extractRequestedVideoDurationSeconds,
   extractRequestedVideoAspectRatio,
+  extractRequestedVideoAudio,
+  extractRequestedVideoDurationSeconds,
+  extractRequestedVideoResolution,
   shouldAutoActivateVideoGeneration,
   shouldRouteThroughAgenticRuntime,
   shouldRouteTextPromptThroughAgenticRuntime,
@@ -438,6 +440,10 @@ describe("ai-service · deterministic intent routing", () => {
     assert.equal(extractRequestedVideoAspectRatio("genera un video rectangular para youtube"), "16:9")
     assert.equal(extractRequestedVideoAspectRatio("crea un video vertical para reels"), "9:16")
     assert.equal(extractRequestedVideoAspectRatio("crea un video 21x9 cinematográfico"), "21:9")
+    assert.equal(extractRequestedVideoResolution("crea un video 480p sin audio"), "480p")
+    assert.equal(extractRequestedVideoResolution("crea un video en 720p con audio"), "720p")
+    assert.equal(extractRequestedVideoAudio("crea un video 480p sin audio"), false)
+    assert.equal(extractRequestedVideoAudio("crea un video en 720p con audio"), true)
     assert.equal(classifyIntentFastPath("qué video me recomiendas para aprender React?"), null)
     assert.equal(await aiService.classifyIntent("qué video me recomiendas para aprender React?"), "text")
 
