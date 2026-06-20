@@ -162,4 +162,18 @@ describe("production Compose topology", () => {
     assert.match(yaml, /COMPOSE_PROFILES=docker-backend docker compose -f docker-compose\.prod\.yml up -d backend/);
     assert.doesNotMatch(frontend, /backend:/);
   });
+
+  test("Docker backend receives Stripe checkout configuration from production env", () => {
+    const yaml = readProductionCompose();
+    const backend = extractServiceBlock(yaml, "backend");
+
+    assert.match(backend, /FRONTEND_URL:\s+\$\{FRONTEND_URL:-https:\/\/siragpt\.com\}/);
+    assert.match(backend, /STRIPE_SECRET_KEY:\s+\$\{STRIPE_SECRET_KEY:-\}/);
+    assert.match(backend, /STRIPE_PUBLISHABLE_KEY:\s+\$\{STRIPE_PUBLISHABLE_KEY:-\}/);
+    assert.match(backend, /NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY:\s+\$\{NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY:-\}/);
+    assert.match(backend, /STRIPE_WEBHOOK_SECRET:\s+\$\{STRIPE_WEBHOOK_SECRET:-\}/);
+    assert.match(backend, /STRIPE_PRICE_PRO:\s+\$\{STRIPE_PRICE_PRO:-\}/);
+    assert.match(backend, /STRIPE_PRICE_PRO_MAX:\s+\$\{STRIPE_PRICE_PRO_MAX:-\}/);
+    assert.match(backend, /STRIPE_PRICE_ENTERPRISE:\s+\$\{STRIPE_PRICE_ENTERPRISE:-\}/);
+  });
 });
