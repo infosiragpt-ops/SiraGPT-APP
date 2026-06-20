@@ -495,9 +495,14 @@ class FileProcessor {
         if (totalChars + p.charCount > maxChars) {
           const remaining = Math.max(0, maxChars - totalChars);
           if (remaining > 100) {
-            parts.push(`\n[page ${p.page}]\n` + String(p.text || '').slice(0, remaining));
+            // Count the chars we ACTUALLY appended, not `remaining`: the page
+            // text may be shorter than `remaining` (when its real length differs
+            // from p.charCount), and when remaining <= 100 nothing is appended at
+            // all — so `totalChars += remaining` over-reported the size.
+            const appended = String(p.text || '').slice(0, remaining);
+            parts.push(`\n[page ${p.page}]\n` + appended);
+            totalChars += appended.length;
           }
-          totalChars += remaining;
           truncated = true;
           return;
         }
