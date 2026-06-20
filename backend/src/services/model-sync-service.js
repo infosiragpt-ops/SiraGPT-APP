@@ -30,10 +30,23 @@ function stableStringify(value) {
 // model looks "changed" on each sync and gets a needless UPDATE.
 function pricingFingerprint(pricing) {
   if (!pricing || typeof pricing !== 'object' || Array.isArray(pricing)) {
-    return stableStringify(pricing);
+    return stableStringify(roundFloats(pricing));
   }
   const { updatedAt, ...rest } = pricing; // eslint-disable-line no-unused-vars
-  return stableStringify(rest);
+  return stableStringify(roundFloats(rest));
+}
+
+// Round numeric leaves so floating-point noise (0.4 vs 0.39999999999999997,
+// produced by the pricing math) doesn't read as a real change.
+function roundFloats(value) {
+  if (typeof value === 'number') return Number.isFinite(value) ? Number(value.toFixed(8)) : value;
+  if (Array.isArray(value)) return value.map(roundFloats);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const k of Object.keys(value)) out[k] = roundFloats(value[k]);
+    return out;
+  }
+  return value;
 }
 
 class ModelSyncService {
