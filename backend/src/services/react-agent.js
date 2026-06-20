@@ -176,6 +176,15 @@ const Ajv = require('ajv');
 const { sanitizeToolParameters } = require('./ai-product-os/tool-schema-sanitizer');
 const ajv = new Ajv({ allErrors: true, strict: false, coerceTypes: false });
 const schemaValidatorCache = new Map();
+// Bound the compiled-validator cache so dynamic / per-GPT tool schemas (custom
+// GPT Actions each carry a unique parameters schema) can't grow it without
+// limit across turns. LRU: a cache hit refreshes recency; on overflow the
+// least-recently-used schema is evicted. Generous default keeps every stable
+// built-in tool resident. Override with SIRAGPT_SCHEMA_VALIDATOR_CACHE_MAX.
+const SCHEMA_VALIDATOR_CACHE_MAX = Math.max(
+  64,
+  Number(process.env.SIRAGPT_SCHEMA_VALIDATOR_CACHE_MAX) || 512,
+);
 
 // ── Tool-error classification for the per-run error budget ─────────────────
 // A flaky upstream blip (timeout, 429, 5xx, provider overload) is NOT the same
@@ -284,8 +293,19 @@ function validatorForTool(tool) {
   const schema = tool?.parameters;
   if (!schema || typeof schema !== 'object') return null;
   const cacheKey = stableSchemaKey(schema);
-  if (schemaValidatorCache.has(cacheKey)) return schemaValidatorCache.get(cacheKey);
+  const cached = schemaValidatorCache.get(cacheKey);
+  if (cached) {
+    // Refresh recency (Map keeps insertion order) so hot schemas survive eviction.
+    schemaValidatorCache.delete(cacheKey);
+    schemaValidatorCache.set(cacheKey, cached);
+    return cached;
+  }
   const validator = ajv.compile(schema);
+  // Evict the least-recently-used entry once the cache is full.
+  if (schemaValidatorCache.size >= SCHEMA_VALIDATOR_CACHE_MAX) {
+    const oldest = schemaValidatorCache.keys().next().value;
+    if (oldest !== undefined) schemaValidatorCache.delete(oldest);
+  }
   schemaValidatorCache.set(cacheKey, validator);
   return validator;
 }
@@ -1395,6 +1415,10 @@ module.exports = {
   DEFAULT_MAX_STEPS,
   DEFAULT_MAX_RUNTIME_MS,
   SYSTEM_PROMPT,
+  // Compiled-schema validator cache (bounded LRU) — exported for unit tests.
+  validatorForTool,
+  SCHEMA_VALIDATOR_CACHE_MAX,
+  _schemaValidatorCacheSize: () => schemaValidatorCache.size,
   // Native tool-call parsing (Kimi/Hermes formats) — exported for unit tests.
   parseNativeToolCalls,
   hasNativeToolCalls,
