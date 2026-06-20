@@ -37,6 +37,9 @@ const KNOWN_URLS = [
   "https://api.mistral.ai/v1",
   "https://api.groq.com/openai/v1",
   "https://openrouter.ai/api/v1",
+  "https://api.cerebras.ai/v1",
+  "https://api.z.ai/api/paas/v4",
+  "https://api.moonshot.ai/v1",
   "https://api.together.xyz/v1",
   "https://api.fireworks.ai/inference/v1",
   "https://api.deepseek.com/v1",
@@ -54,6 +57,9 @@ const PROVIDER_DEFAULTS: Record<string, { url: string; authType: AuthType; apiTy
   mistral: { url: "https://api.mistral.ai/v1", authType: "Bearer", apiType: "chat_completions" },
   groq: { url: "https://api.groq.com/openai/v1", authType: "Bearer", apiType: "chat_completions" },
   openrouter: { url: "https://openrouter.ai/api/v1", authType: "Bearer", apiType: "chat_completions" },
+  cerebras: { url: "https://api.cerebras.ai/v1", authType: "Bearer", apiType: "chat_completions" },
+  zai: { url: "https://api.z.ai/api/paas/v4", authType: "Bearer", apiType: "chat_completions" },
+  kimi: { url: "https://api.moonshot.ai/v1", authType: "Bearer", apiType: "chat_completions" },
   together: { url: "https://api.together.xyz/v1", authType: "Bearer", apiType: "chat_completions" },
   fireworks: { url: "https://api.fireworks.ai/inference/v1", authType: "Bearer", apiType: "chat_completions" },
   deepseek: { url: "https://api.deepseek.com/v1", authType: "Bearer", apiType: "chat_completions" },
@@ -68,11 +74,30 @@ const PROVIDERS: Array<{ key: string; label: string }> = [
   { key: "mistral", label: "Mistral API" },
   { key: "groq", label: "Groq API" },
   { key: "openrouter", label: "OpenRouter API" },
+  { key: "cerebras", label: "Cerebras API" },
+  { key: "zai", label: "Z.ai (GLM) API" },
+  { key: "kimi", label: "Kimi (Moonshot) API" },
   { key: "together", label: "Together AI API" },
   { key: "fireworks", label: "Fireworks AI API" },
   { key: "deepseek", label: "DeepSeek API" },
   { key: "xai", label: "xAI API" },
   { key: "custom", label: "Custom API" },
+]
+
+// Minimalist provider quick-pick shown at the top of the Add Connection
+// dialog. Click a provider → URL + auth + API type auto-fill, then just paste
+// the API key. Friendly names map to provider keys (Claude→anthropic, Grok→xai).
+const QUICK_PICK: Array<{ key: string; label: string }> = [
+  { key: "openai", label: "OpenAI" },
+  { key: "anthropic", label: "Claude" },
+  { key: "gemini", label: "Gemini" },
+  { key: "xai", label: "Grok" },
+  { key: "openrouter", label: "OpenRouter" },
+  { key: "cerebras", label: "Cerebras" },
+  { key: "zai", label: "Z.ai" },
+  { key: "kimi", label: "Kimi" },
+  { key: "fal", label: "fal.ai" },
+  { key: "mistral", label: "Mistral" },
 ]
 
 type Connection = {
@@ -110,6 +135,9 @@ function inferProviderFromUrl(u: string): string {
   if (lower.includes("mistral.ai")) return "mistral"
   if (lower.includes("groq.com")) return "groq"
   if (lower.includes("openrouter.ai")) return "openrouter"
+  if (lower.includes("cerebras.ai")) return "cerebras"
+  if (lower.includes("z.ai") || lower.includes("bigmodel.cn")) return "zai"
+  if (lower.includes("moonshot.ai") || lower.includes("moonshot.cn") || lower.includes("kimi.com")) return "kimi"
   if (lower.includes("together.xyz") || lower.includes("together.ai")) return "together"
   if (lower.includes("fireworks.ai")) return "fireworks"
   if (lower.includes("deepseek.com")) return "deepseek"
@@ -505,6 +533,31 @@ function ConnectionDialog({
             <span className="text-muted-foreground">Connection Type</span>
             <span>External</span>
           </div>
+
+          {!isEdit && (
+            <div className="space-y-1.5">
+              <Label>Proveedor</Label>
+              <div className="flex flex-wrap gap-1.5">
+                {QUICK_PICK.map((p) => (
+                  <button
+                    key={p.key}
+                    type="button"
+                    onClick={() => applyProviderDefaults(p.key)}
+                    className={`rounded-full border px-3 py-1 text-xs transition-colors ${
+                      providerKey === p.key
+                        ? "border-foreground bg-foreground text-background"
+                        : "border-border text-muted-foreground hover:bg-accent"
+                    }`}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Elige un proveedor y pega tu API key — el resto se completa solo.
+              </p>
+            </div>
+          )}
 
           <div className="space-y-1.5 relative">
             <Label>URL</Label>

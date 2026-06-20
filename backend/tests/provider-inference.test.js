@@ -149,6 +149,17 @@ test('inferProviderFromModelId: whitespace-only / slash-only ids → OpenAI defa
   assert.equal(inferProviderFromModelId(' / '), 'OpenAI');
 });
 
+test('inferProviderFromModelId: Z.ai (GLM) and Kimi (Moonshot) direct ids', () => {
+  // Bare ids route to the direct provider…
+  assert.equal(inferProviderFromModelId('glm-4.6'), 'Z.ai');
+  assert.equal(inferProviderFromModelId('glm-4-air'), 'Z.ai');
+  assert.equal(inferProviderFromModelId('kimi-k2'), 'Kimi');
+  assert.equal(inferProviderFromModelId('moonshot-v1-128k'), 'Kimi');
+  // …while aggregator slugs still go through OpenRouter.
+  assert.equal(inferProviderFromModelId('z-ai/glm-4.6'), 'OpenRouter');
+  assert.equal(inferProviderFromModelId('moonshotai/kimi-k2'), 'OpenRouter');
+});
+
 test('listKnownProviders / KNOWN_PROVIDERS: stable canonical set', () => {
   const list = listKnownProviders();
   assert.ok(list.includes('Gemini'));

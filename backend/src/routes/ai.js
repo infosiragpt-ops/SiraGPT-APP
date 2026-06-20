@@ -293,6 +293,31 @@ function createProviderClient(provider) {
     });
   }
 
+  // Providers wired via Admin → Connections (the bridge injects the key into
+  // env when the admin saves the connection). Each branch only activates when
+  // its key is present, so an unconfigured provider falls through to the OpenAI
+  // default exactly as before — no behaviour change for existing routing.
+  if (provider === "Cerebras" && process.env.CEREBRAS_API_KEY) {
+    return new OpenAI({
+      apiKey: process.env.CEREBRAS_API_KEY,
+      baseURL: process.env.CEREBRAS_BASE_URL || "https://api.cerebras.ai/v1",
+    });
+  }
+
+  if ((provider === "Z.ai" || provider === "ZAI") && process.env.ZAI_API_KEY) {
+    return new OpenAI({
+      apiKey: process.env.ZAI_API_KEY,
+      baseURL: process.env.ZAI_BASE_URL || "https://api.z.ai/api/paas/v4",
+    });
+  }
+
+  if ((provider === "Kimi" || provider === "Moonshot") && (process.env.MOONSHOT_API_KEY || process.env.KIMI_API_KEY)) {
+    return new OpenAI({
+      apiKey: process.env.MOONSHOT_API_KEY || process.env.KIMI_API_KEY,
+      baseURL: process.env.MOONSHOT_BASE_URL || process.env.KIMI_BASE_URL || "https://api.moonshot.ai/v1",
+    });
+  }
+
   return new OpenAI({
     apiKey: process.env.OPENAI_API_KEY
   });

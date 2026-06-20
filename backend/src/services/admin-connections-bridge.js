@@ -35,6 +35,9 @@ const PROVIDER_ENV_MAP = Object.freeze({
   mistral: 'MISTRAL_API_KEY',
   groq: 'GROQ_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
+  cerebras: 'CEREBRAS_API_KEY',
+  zai: 'ZAI_API_KEY',
+  kimi: 'MOONSHOT_API_KEY',
   deepseek: 'DEEPSEEK_API_KEY',
   xai: 'XAI_API_KEY',
   together: 'TOGETHER_API_KEY',
@@ -44,6 +47,8 @@ const PROVIDER_ENV_MAP = Object.freeze({
 
 const PROVIDER_ENV_ALIASES = Object.freeze({
   fal: ['FAL_API_KEY'],
+  cerebras: ['GEMA4_API_KEY'],
+  kimi: ['KIMI_API_KEY'],
 });
 
 // providerKey (lowercase, panel form) → provider value in AiModel.provider column
@@ -54,6 +59,9 @@ const PROVIDER_CATALOG_MAP = Object.freeze({
   mistral: 'Mistral',
   groq: 'Groq',
   openrouter: 'OpenRouter',
+  cerebras: 'Cerebras',
+  zai: 'Z.ai',
+  kimi: 'Kimi',
   deepseek: 'DeepSeek',
   xai: 'xAI',
   together: 'Together',
@@ -69,6 +77,9 @@ const PROVIDER_PROBE = Object.freeze({
   mistral:    { url: 'https://api.mistral.ai/v1/models',                            auth: (k) => ({ Authorization: `Bearer ${k}` }) },
   groq:       { url: 'https://api.groq.com/openai/v1/models',                       auth: (k) => ({ Authorization: `Bearer ${k}` }) },
   openrouter: { url: 'https://openrouter.ai/api/v1/auth/key',                       auth: (k) => ({ Authorization: `Bearer ${k}` }) }, // /auth/key requires valid user
+  cerebras:   { url: 'https://api.cerebras.ai/v1/models',                           auth: (k) => ({ Authorization: `Bearer ${k}` }) },
+  zai:        { url: 'https://api.z.ai/api/paas/v4/models',                          auth: (k) => ({ Authorization: `Bearer ${k}` }) },
+  kimi:       { url: 'https://api.moonshot.ai/v1/models',                            auth: (k) => ({ Authorization: `Bearer ${k}` }) },
   deepseek:   { url: 'https://api.deepseek.com/v1/models',                          auth: (k) => ({ Authorization: `Bearer ${k}` }) },
   xai:        { url: 'https://api.x.ai/v1/models',                                  auth: (k) => ({ Authorization: `Bearer ${k}` }) },
   together:   { url: 'https://api.together.xyz/v1/models',                          auth: (k) => ({ Authorization: `Bearer ${k}` }) },

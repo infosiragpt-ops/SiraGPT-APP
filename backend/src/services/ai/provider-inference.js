@@ -26,6 +26,8 @@ const KNOWN_PROVIDERS = Object.freeze([
   'Anthropic',
   'Groq',
   'Mistral',
+  'Z.ai',
+  'Kimi',
   'OpenAI',
 ]);
 
@@ -87,6 +89,12 @@ function inferProviderFromModelId(modelId) {
 
   // 6) Mistral direct — bare `mistral-*` or `codestral-*` ids.
   if (m.startsWith('mistral-') || m.startsWith('codestral-')) return 'Mistral';
+
+  // 7) Z.ai GLM family — bare `glm-*` ids (slug `z-ai/...` already → OpenRouter).
+  if (m.startsWith('glm-') || m.startsWith('glm4') || m.startsWith('glm_')) return 'Z.ai';
+
+  // 8) Kimi / Moonshot direct — bare ids (slug `moonshotai/...` already → OpenRouter).
+  if (m.startsWith('kimi-') || m.startsWith('kimi.') || m.startsWith('moonshot-') || m.startsWith('moonshotai-')) return 'Kimi';
 
   return 'OpenAI';
 }
