@@ -34,7 +34,7 @@ test('static manifest includes the flagship fal.ai video catalog ordered by qual
   assert.ok(videoModels.every(model => model.pricing?.provider === 'fal.ai'));
 });
 
-test('fal.ai API video sync normalizes all paginated text/image video endpoints as active rows', async () => {
+test('fal.ai API video sync normalizes paginated text/image video endpoints as inactive rows', async () => {
   const calls = [];
   const originalGet = axios.get;
   axios.get = async (_url, options = {}) => {
@@ -111,14 +111,14 @@ test('fal.ai API video sync normalizes all paginated text/image video endpoints 
     assert.ok(names.includes('fal-ai/kling-video/v3/pro/image-to-video'));
     assert.ok(models.every(model => model.type === 'VIDEO'));
     assert.ok(models.every(model => model.provider === 'fal.ai'));
-    assert.ok(models.every(model => model.isActive === true));
+    assert.ok(models.every(model => model.isActive === false));
     assert.ok(models.every(model => model.tags.includes('fal.ai')));
   } finally {
     axios.get = originalGet;
   }
 });
 
-test('static fal.ai video catalog creates and updates video rows as active', async () => {
+test('static fal.ai video catalog creates inactive video rows and preserves existing activation', async () => {
   const operations = [];
   const service = new ModelSyncService({
     prismaClient: {
@@ -128,22 +128,22 @@ test('static fal.ai video catalog creates and updates video rows as active', asy
         },
         async update(args) {
           operations.push({ op: 'update', args });
-          assert.strictEqual(args.data.isActive, true);
+          assert.strictEqual(Object.prototype.hasOwnProperty.call(args.data, 'isActive'), false);
           return args;
         },
         async create(args) {
           operations.push({ op: 'create', args });
           assert.strictEqual(args.data.type, 'VIDEO');
           assert.strictEqual(args.data.provider, 'fal.ai');
-          assert.strictEqual(args.data.isActive, true);
+          assert.strictEqual(args.data.isActive, false);
           return args;
         },
       },
     },
   });
   service.fetchFalVideoModels = async () => [
-    { name: 'fal-ai/veo3.1', displayName: 'Veo 3.1', provider: 'fal.ai', type: 'VIDEO', description: 'Existing row', icon: 'GeminiLogo', tags: ['fal.ai', 'video'], pricing: { provider: 'fal.ai' }, isActive: true, syncSource: 'fal_ai_catalog' },
-    { name: 'fal-ai/sora-2/text-to-video/pro', displayName: 'Sora 2 Pro', provider: 'fal.ai', type: 'VIDEO', description: 'New row', icon: 'SoraLogo', tags: ['fal.ai', 'video'], pricing: { provider: 'fal.ai' }, isActive: true, syncSource: 'fal_ai_catalog' },
+    { name: 'fal-ai/veo3.1', displayName: 'Veo 3.1', provider: 'fal.ai', type: 'VIDEO', description: 'Existing row', icon: 'GeminiLogo', tags: ['fal.ai', 'video'], pricing: { provider: 'fal.ai' }, isActive: false, syncSource: 'fal_ai_catalog' },
+    { name: 'fal-ai/sora-2/text-to-video/pro', displayName: 'Sora 2 Pro', provider: 'fal.ai', type: 'VIDEO', description: 'New row', icon: 'SoraLogo', tags: ['fal.ai', 'video'], pricing: { provider: 'fal.ai' }, isActive: false, syncSource: 'fal_ai_catalog' },
   ];
 
   const result = await service.ensureStaticCatalogModels({ types: ['VIDEO'] });
@@ -221,7 +221,7 @@ test('admin fal.ai connection sync validates the key and imports video models', 
         icon: 'ByteDanceLogo',
         tags: ['fal.ai', 'video'],
         pricing: { provider: 'fal.ai' },
-        isActive: true,
+        isActive: false,
         syncSource: 'fal_ai_catalog',
       },
     ];
@@ -246,7 +246,7 @@ test('admin fal.ai connection sync validates the key and imports video models', 
   assert.strictEqual(operations.length, 1);
   assert.strictEqual(operations[0].data.provider, 'fal.ai');
   assert.strictEqual(operations[0].data.type, 'VIDEO');
-  assert.strictEqual(operations[0].data.isActive, true);
+  assert.strictEqual(operations[0].data.isActive, false);
 });
 
 test('fal.ai video routing uses reference-to-video with multiple Seedance images', () => {

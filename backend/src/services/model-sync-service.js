@@ -35,7 +35,7 @@ class ModelSyncService {
   getStaticVideoModels() {
     return listFalVideoModels().map(model => ({
       ...model,
-      isActive: true,
+      isActive: false,
       syncSource: model.syncSource || 'static_manifest',
     }));
   }
@@ -133,7 +133,7 @@ class ModelSyncService {
 
     const byName = new Map();
     for (const model of staticModels) byName.set(model.name, model);
-    for (const model of liveModels) byName.set(model.name, { ...byName.get(model.name), ...model, isActive: true });
+    for (const model of liveModels) byName.set(model.name, { ...byName.get(model.name), ...model, isActive: false });
     const merged = sortFalVideoModels([...byName.values()]);
 
     if (useCache) {
@@ -899,9 +899,6 @@ class ModelSyncService {
         lastSynced: new Date(),
       };
       const modelType = String(model.type || '').toUpperCase();
-      if (modelType === 'VIDEO' && model.isActive === true) {
-        data.isActive = true;
-      }
 
       if (existingNames.has(model.name)) {
         await this.prisma.aiModel.update({
@@ -918,11 +915,12 @@ class ModelSyncService {
             name: model.name,
             ...data,
             // Curated IMAGE models seed ACTIVE; other IMAGE models stay inactive
-            // until an admin enables them. VIDEO manifest rows can still request
-            // active seeding because the video picker must work immediately.
+            // until an admin enables them. VIDEO/AUDIO/MUSIC rows also stay
+            // inactive on import; activating an AI Models row is the explicit
+            // user-visible publish action.
             isActive: modelType === 'IMAGE'
               ? DEFAULT_ACTIVE_IMAGE_MODEL_NAMES.has(model.name)
-              : model.isActive === true,
+              : false,
           },
         });
       } catch (err) {

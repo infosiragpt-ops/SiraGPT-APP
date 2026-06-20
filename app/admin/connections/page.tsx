@@ -10,9 +10,9 @@
  *   - test a connection (calls the upstream /models endpoint)
  *   - edit/delete
  *
- * The chat path doesn't read from this table yet — adding a row stages
- * the config so the swap-from-env follow-up has a real contract. The
- * page itself is auth-gated by the admin layout above (requireAdmin).
+ * Enabled keys are applied to the backend provider bridge. Saving/testing a
+ * connection also imports provider models into Admin → AI Models, where they
+ * remain inactive until the admin explicitly publishes them.
  */
 
 import { useState, useEffect, useCallback, useMemo } from "react"
@@ -242,7 +242,7 @@ export default function AdminConnectionsPage() {
             <Plug className="h-6 w-6" /> Conexiones
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            API keys de proveedores. Lo que actives aquí aparece en Modelos IA.
+            API keys de proveedores. Las conexiones activas sincronizan modelos en AI Models como inactivos; publícalos desde AI Models.
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -462,15 +462,30 @@ function ConnectionDialog({
         tags,
       }
       if (apiKey) payload.apiKey = apiKey
+      let savedConnection: Connection
       if (isEdit) {
-        await apiClient.updateAdminConnection(connection!.id, payload)
-        toast.success("Conexión actualizada")
+        savedConnection = await apiClient.updateAdminConnection(connection!.id, payload) as Connection
       } else {
         payload.enabled = true
-        await apiClient.createAdminConnection(payload)
-        toast.success("Conexión creada")
+        savedConnection = await apiClient.createAdminConnection(payload) as Connection
       }
-      onSaved()
+
+      const canSyncModels = savedConnection.enabled && (authType === "None" || savedConnection.apiKeySet)
+      if (canSyncModels) {
+        const t = toast.loading("Sincronizando modelos en AI Models…")
+        try {
+          const syncResult: any = await apiClient.testAdminConnection(savedConnection.id)
+          toast.dismiss(t)
+          toast.success(`Conexión guardada. ${syncResult?.imported ?? syncResult?.count ?? 0} modelo(s) sincronizado(s) como inactivos.`)
+        } catch (syncError: any) {
+          toast.dismiss(t)
+          toast.warning(`Conexión guardada, pero no se pudieron sincronizar modelos: ${syncError?.message || syncError}`)
+        }
+      } else {
+        toast.success(isEdit ? "Conexión actualizada" : "Conexión creada")
+      }
+
+      await Promise.resolve(onSaved())
       onOpenChange(false)
     } catch (e: any) {
       toast.error(`Error: ${e?.message || e}`)
@@ -617,7 +632,7 @@ function ConnectionDialog({
             <Label>Model IDs</Label>
             <div className="text-xs text-muted-foreground">
               {providerKey === "fal"
-                ? "Opcional. Déjalo vacío para habilitar el catálogo de video de fal.ai."
+                ? "Opcional. Déjalo vacío para sincronizar el catálogo de video de fal.ai."
                 : 'Leave empty to include all models from "/models" endpoint'}
             </div>
             <div className="flex items-center gap-2">

@@ -18,4 +18,10 @@ describe("admin connections fal.ai source contract", () => {
     assert.match(source, /onClick=\{\(\) => openAdd\("fal"\)\}/)
     assert.match(source, /Agregar fal\.ai/)
   })
+
+  it("syncs saved provider models into AI Models as inactive rows", () => {
+    assert.match(source, /sincronizan modelos en AI Models como inactivos/)
+    assert.match(source, /apiClient\.testAdminConnection\(savedConnection\.id\)/)
+    assert.match(source, /modelo\(s\) sincronizado\(s\) como inactivos/)
+  })
 })
