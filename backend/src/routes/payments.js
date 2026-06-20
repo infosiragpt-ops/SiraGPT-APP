@@ -675,7 +675,7 @@ router.get('/stripe/invoice/:invoiceId', authenticateToken, async (req, res) => 
 
     // Prefer direct invoice PDF if available
     if (invoice.invoice_pdf) {
-      const response = await axios.get(invoice.invoice_pdf, { responseType: 'stream' });
+      const response = await axios.get(invoice.invoice_pdf, { responseType: 'stream', timeout: 15000 });
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', contentDispositionHeader('attachment', invoicePdfFilename(invoice)));
       return response.data.pipe(res);
@@ -743,7 +743,7 @@ router.get('/invoice/:paymentId', authenticateToken, async (req, res) => {
 
     // Stream PDF if available, else redirect to hosted URL
     if (invoice.invoice_pdf) {
-      const response = await axios.get(invoice.invoice_pdf, { responseType: 'stream' });
+      const response = await axios.get(invoice.invoice_pdf, { responseType: 'stream', timeout: 15000 });
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', contentDispositionHeader('attachment', invoicePdfFilename(invoice)));
       return response.data.pipe(res);

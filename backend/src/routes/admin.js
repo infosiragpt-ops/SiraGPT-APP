@@ -2873,7 +2873,7 @@ router.get('/stripe/invoice/:invoiceId', async (req, res) => {
 
     // Stream PDF if available
     if (invoice.invoice_pdf) {
-      const response = await axios.get(invoice.invoice_pdf, { responseType: 'stream' });
+      const response = await axios.get(invoice.invoice_pdf, { responseType: 'stream', timeout: 15000 });
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', contentDispositionHeader('attachment', invoicePdfFilename(invoice)));
       return response.data.pipe(res);
