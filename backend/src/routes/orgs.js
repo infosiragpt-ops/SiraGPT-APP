@@ -2754,19 +2754,28 @@ router.post('/:id/api-keys/bulk-revoke', authenticateToken, async (req, res) => 
       if (!ok) return undefined;
     }
 
-    const revoked = [];
-    const notFound = [];
-    for (const keyId of uniqueIds) {
-      // eslint-disable-next-line no-await-in-loop
-      const tombstoned = await prisma.apiKey.updateMany({
-        where: { id: keyId, organizationId: orgId, deletedAt: null },
+    // Determine which ids are actually revocable (exist, in this org, not
+    // already tombstoned) in ONE query, then soft-delete them in ONE
+    // updateMany — instead of an N+1 loop of single-row updateManys. On the
+    // prod VPS each write costs ~130ms (per-commit fsync), so revoking 50 keys
+    // went from ~6.5s to two round-trips. Same revoked/notFound split and
+    // one-audit-per-key behaviour.
+    const revocable = await prisma.apiKey.findMany({
+      where: { id: { in: uniqueIds }, organizationId: orgId, deletedAt: null },
+      select: { id: true },
+    });
+    const revocableSet = new Set(revocable.map((k) => k.id));
+    const revoked = uniqueIds.filter((id) => revocableSet.has(id));
+    const notFound = uniqueIds.filter((id) => !revocableSet.has(id));
+
+    if (revoked.length > 0) {
+      await prisma.apiKey.updateMany({
+        where: { id: { in: revoked }, organizationId: orgId, deletedAt: null },
         data: { deletedAt: new Date() },
       });
-      if (tombstoned.count === 0) {
-        notFound.push(keyId);
-        continue;
-      }
-      revoked.push(keyId);
+    }
+
+    for (const keyId of revoked) {
       void writeAuditLog(prisma, {
         action: 'org_api_key_delete',
         userId,
