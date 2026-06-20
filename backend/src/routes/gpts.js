@@ -5,9 +5,27 @@ const { authenticateToken } = require('../middleware/auth');
 const upload = require('../middleware/upload');
 const fileProcessor = require('../services/fileProcessor');
 const { validateUploadPolicy } = require('../services/upload-security-policy');
+const {
+  createCerebrasClient,
+  getCerebrasConfig,
+} = require('../services/ai/cerebras-client');
 
 const router = express.Router();
 const prisma = new PrismaClient();
+
+// ─── Live draft preview ────────────────────────────────────────────────────
+// Bounds for POST /preview-chat: a persona-faithful "try before you save"
+// completion against the DRAFT config (never persisted, no knowledge/tools,
+// no credits — runs on the free FlashGPT/Cerebras model). Kept deliberately
+// small so a preview turn can never balloon the prompt or the latency budget.
+const PREVIEW_INSTRUCTIONS_MAX = 50000;
+const PREVIEW_NAME_MAX = 100;
+const PREVIEW_MAX_MESSAGES = 24;
+const PREVIEW_MSG_MAX_CHARS = 8000;
+const PREVIEW_LLM_TIMEOUT_MS = Number.parseInt(
+  process.env.SIRAGPT_GPT_PREVIEW_TIMEOUT_MS || '30000',
+  10,
+);
 
 // ─── Knowledge-file helpers ────────────────────────────────────────────────
 // Mirror the minimal, self-contained shape of routes/files.js. We deliberately
@@ -736,6 +754,118 @@ router.delete('/:id/knowledge/:fileId', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Error deleting GPT knowledge file:', error);
     res.status(500).json({ error: 'Failed to delete knowledge file' });
+  }
+});
+
+// ─── Helpers: live draft preview ───────────────────────────────────────────
+// Build a persona-faithful system prompt from the unsaved draft. NUL-stripped
+// and length-capped so a malicious/huge draft can never blow the prompt.
+function buildPreviewSystemPrompt({ name, instructions } = {}) {
+  const cleanName = String(name || '')
+    .replace(/\u0000/g, '')
+    .trim()
+    .slice(0, PREVIEW_NAME_MAX);
+  const cleanInstructions = String(instructions || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\u0000/g, '')
+    .trim()
+    .slice(0, PREVIEW_INSTRUCTIONS_MAX);
+  const header = cleanName
+    ? `Eres "${cleanName}", un GPT personalizado creado en SiraGPT.`
+    : 'Eres un GPT personalizado creado en SiraGPT.';
+  return [
+    header,
+    '',
+    'Sigue estas instrucciones del creador al pie de la letra:',
+    cleanInstructions ||
+      '(El creador aún no escribió instrucciones; compórtate como un asistente útil y conciso.)',
+    '',
+    'Esto es una VISTA PREVIA del borrador. Responde en el idioma del usuario, de forma natural y directa, como lo haría el GPT ya publicado.',
+  ].join('\n');
+}
+
+// Sanitise the incoming conversation: cap count, validate roles, cap length,
+// drop empties. Returns a clean [{role:'user'|'assistant', content}] array.
+function sanitizePreviewMessages(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const m of raw.slice(-PREVIEW_MAX_MESSAGES)) {
+    if (!m || typeof m !== 'object') continue;
+    const role = m.role === 'assistant' ? 'assistant' : m.role === 'user' ? 'user' : null;
+    if (!role) continue;
+    const content = String(m.content == null ? '' : m.content)
+      .replace(/\u0000/g, '')
+      .slice(0, PREVIEW_MSG_MAX_CHARS)
+      .trim();
+    if (!content) continue;
+    out.push({ role, content });
+  }
+  return out;
+}
+
+// POST /api/gpts/preview-chat — chat with the DRAFT GPT before it is saved.
+// Stateless: nothing is persisted. Runs on the free FlashGPT/Cerebras model
+// (no credits, no tools, no knowledge) so it's a fast, faithful persona "try".
+router.post('/preview-chat', authenticateToken, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const messages = sanitizePreviewMessages(body.messages);
+    if (messages.length === 0) {
+      return res.status(400).json({ error: 'At least one user message is required' });
+    }
+    if (messages[messages.length - 1].role !== 'user') {
+      return res.status(400).json({ error: 'The last message must be from the user' });
+    }
+
+    const client = createCerebrasClient();
+    if (!client) {
+      return res.status(503).json({
+        error: 'preview_unavailable',
+        message: 'La vista previa no está disponible en este momento.',
+      });
+    }
+    const cfg = getCerebrasConfig();
+
+    const systemPrompt = buildPreviewSystemPrompt({
+      name: body.name,
+      instructions: body.instructions,
+    });
+    const temperature = Number.isFinite(Number(body.temperature))
+      ? Math.min(1, Math.max(0, Number(body.temperature)))
+      : 0.7;
+
+    const completion = await withTimeout(
+      client.chat.completions.create({
+        model: cfg.model,
+        messages: [{ role: 'system', content: systemPrompt }, ...messages],
+        temperature,
+        max_tokens: 1024,
+      }),
+      PREVIEW_LLM_TIMEOUT_MS,
+      'preview_chat',
+    );
+
+    const reply =
+      (completion &&
+        completion.choices &&
+        completion.choices[0] &&
+        completion.choices[0].message &&
+        completion.choices[0].message.content) ||
+      '';
+
+    return res.json({
+      reply: String(reply).trim(),
+      model: cfg.model,
+      displayName: cfg.displayName,
+    });
+  } catch (error) {
+    if (error && error.code === 'step_timeout') {
+      return res
+        .status(504)
+        .json({ error: 'preview_timeout', message: 'La vista previa tardó demasiado. Inténtalo de nuevo.' });
+    }
+    console.error('Error in GPT preview chat:', error && error.message ? error.message : error);
+    return res.status(500).json({ error: 'Failed to generate preview response' });
   }
 });
 

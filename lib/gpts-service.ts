@@ -76,6 +76,17 @@ export interface GPTKnowledgeFile {
   extractedChars: number
 }
 
+export interface GPTPreviewMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export interface GPTPreviewResponse {
+  reply: string
+  model: string
+  displayName: string
+}
+
 class GPTsService {
   private baseUrl = `${getNormalizedApiBaseUrl()}/gpts`
 
@@ -345,6 +356,35 @@ class GPTsService {
       console.error('Error deleting GPT knowledge file:', error)
       throw error
     }
+  }
+
+  // Chat with the DRAFT GPT before it is saved. Stateless on the backend
+  // (nothing is persisted) and runs on the free FlashGPT model, so it is a
+  // fast, faithful persona preview that costs no credits.
+  async previewChat(input: {
+    instructions: string
+    name?: string
+    messages: GPTPreviewMessage[]
+  }): Promise<GPTPreviewResponse> {
+    const response = await fetch(`${this.baseUrl}/preview-chat`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: this.authHeaders(),
+      body: JSON.stringify({
+        instructions: input.instructions,
+        name: input.name,
+        messages: input.messages,
+      }),
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      throw new Error(
+        errorData.message || errorData.error || `Preview failed: ${response.statusText}`,
+      )
+    }
+
+    return response.json()
   }
 
   // Utility methods

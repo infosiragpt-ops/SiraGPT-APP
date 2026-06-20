@@ -94,6 +94,13 @@ export default function CreateGPTPage() {
   const [isUploadingKnowledge, setIsUploadingKnowledge] = useState(false)
   const knowledgeInputRef = useRef<HTMLInputElement | null>(null)
 
+  // Live draft preview chat — talks to POST /gpts/preview-chat (stateless,
+  // free FlashGPT model). Lets the creator try the persona before saving.
+  const [previewMessages, setPreviewMessages] = useState<{ role: "user" | "assistant"; content: string }[]>([])
+  const [previewInput, setPreviewInput] = useState("")
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const previewScrollRef = useRef<HTMLDivElement | null>(null)
+
   const [formData, setFormData] = useState<GPTFormData>({
     name: "",
     description: "",
@@ -287,6 +294,42 @@ export default function CreateGPTPage() {
       }
     }))
   }
+
+  // Send a message to the live draft preview (POST /gpts/preview-chat).
+  const sendPreviewMessage = async (text: string) => {
+    const content = text.trim()
+    if (!content || previewLoading) return
+    if (!formData.instructions.trim()) {
+      toast.info("Escribe las instrucciones del GPT para probar la vista previa.")
+      return
+    }
+    const nextMessages = [...previewMessages, { role: "user" as const, content }]
+    setPreviewMessages(nextMessages)
+    setPreviewInput("")
+    setPreviewLoading(true)
+    try {
+      const res = await gptsService.previewChat({
+        instructions: formData.instructions,
+        name: formData.name,
+        messages: nextMessages,
+      })
+      setPreviewMessages(prev => [...prev, { role: "assistant" as const, content: res.reply || "…" }])
+    } catch (err) {
+      console.error("Preview chat error:", err)
+      setPreviewMessages(prev => [
+        ...prev,
+        { role: "assistant" as const, content: "No pude generar la respuesta de vista previa. Inténtalo de nuevo." },
+      ])
+    } finally {
+      setPreviewLoading(false)
+    }
+  }
+
+  // Keep the preview conversation pinned to the latest message.
+  useEffect(() => {
+    const el = previewScrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [previewMessages, previewLoading])
 
   const validateForm = () => {
     if (!formData.name.trim()) {
@@ -965,51 +1008,99 @@ export default function CreateGPTPage() {
 
           {/* RIGHT — Vista previa (live, desktop only) */}
           <div className="hidden bg-[#fafafa] dark:bg-zinc-900/40 lg:flex lg:min-h-[calc(100vh-7rem)] lg:flex-col">
-            <div className="flex flex-1 flex-col px-6 py-8">
+            <div className="flex min-h-0 flex-1 flex-col px-6 py-8">
               <p className="mb-6 text-center text-sm font-medium text-zinc-500 dark:text-zinc-400">Vista previa</p>
 
-              <div className="flex flex-1 flex-col items-center justify-center text-center">
-                <div className="grid h-20 w-20 place-items-center overflow-hidden rounded-full border border-black/[0.06] bg-zinc-950 text-3xl font-semibold text-white dark:border-white/10 dark:bg-white dark:text-zinc-950">
-                  {uploadedImage ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={uploadedImage} alt="Avatar" className="h-full w-full object-cover" />
-                  ) : formData.iconUrl ? (
-                    <span>{formData.iconUrl}</span>
-                  ) : (
-                    <span>{getNameInitial()}</span>
+              {previewMessages.length === 0 ? (
+                <div className="flex flex-1 flex-col items-center justify-center text-center">
+                  <div className="grid h-20 w-20 place-items-center overflow-hidden rounded-full border border-black/[0.06] bg-zinc-950 text-3xl font-semibold text-white dark:border-white/10 dark:bg-white dark:text-zinc-950">
+                    {uploadedImage ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={uploadedImage} alt="Avatar" className="h-full w-full object-cover" />
+                    ) : formData.iconUrl ? (
+                      <span>{formData.iconUrl}</span>
+                    ) : (
+                      <span>{getNameInitial()}</span>
+                    )}
+                  </div>
+                  <h2 className="mt-4 text-xl font-semibold text-zinc-950 dark:text-zinc-50">
+                    {formData.name || "Nuevo GPT"}
+                  </h2>
+                  <p className="mt-1.5 max-w-sm text-sm text-zinc-500 dark:text-zinc-400">
+                    {formData.description || "Añade una descripción breve sobre lo que hace este GPT"}
+                  </p>
+
+                  {formData.greetingMessage.trim() && (
+                    <div className="mt-5 max-w-sm rounded-2xl border border-black/[0.06] bg-white px-4 py-2.5 text-left text-sm text-zinc-700 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-300">
+                      {formData.greetingMessage}
+                    </div>
+                  )}
+
+                  {formData.conversationStarters.filter((s) => s.trim()).length > 0 && (
+                    <div className="mt-6 grid w-full max-w-md grid-cols-1 gap-2 sm:grid-cols-2">
+                      {formData.conversationStarters.filter((s) => s.trim()).map((starter, index) => (
+                        <button
+                          key={index}
+                          type="button"
+                          onClick={() => sendPreviewMessage(starter)}
+                          className="rounded-xl border border-black/[0.06] bg-white px-3 py-2.5 text-left text-sm text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                        >
+                          {starter}
+                        </button>
+                      ))}
+                    </div>
                   )}
                 </div>
-                <h2 className="mt-4 text-xl font-semibold text-zinc-950 dark:text-zinc-50">
-                  {formData.name || "Nuevo GPT"}
-                </h2>
-                <p className="mt-1.5 max-w-sm text-sm text-zinc-500 dark:text-zinc-400">
-                  {formData.description || "Añade una descripción breve sobre lo que hace este GPT"}
-                </p>
+              ) : (
+                <div ref={previewScrollRef} className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
+                  {previewMessages.map((msg, index) => (
+                    <div
+                      key={index}
+                      className={cn(
+                        "max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm",
+                        msg.role === "user"
+                          ? "self-end bg-zinc-950 text-white dark:bg-white dark:text-zinc-950"
+                          : "self-start border border-black/[0.06] bg-white text-zinc-800 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-100",
+                      )}
+                    >
+                      <p className="whitespace-pre-wrap break-words">{msg.content}</p>
+                    </div>
+                  ))}
+                  {previewLoading && (
+                    <div className="self-start rounded-2xl border border-black/[0.06] bg-white px-3.5 py-2.5 dark:border-white/10 dark:bg-zinc-900">
+                      <ThinkingIndicator />
+                    </div>
+                  )}
+                </div>
+              )}
 
-                {formData.conversationStarters.filter((s) => s.trim()).length > 0 && (
-                  <div className="mt-6 grid w-full max-w-md grid-cols-1 gap-2 sm:grid-cols-2">
-                    {formData.conversationStarters.filter((s) => s.trim()).map((starter, index) => (
-                      <div
-                        key={index}
-                        className="rounded-xl border border-black/[0.06] bg-white px-3 py-2.5 text-left text-sm text-zinc-700 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-300"
-                      >
-                        {starter}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Composer-style placeholder (decorative) */}
+              {/* Live preview composer — talks to the draft via FlashGPT */}
               <div className="mx-auto mt-6 w-full max-w-md">
                 <div className="flex items-center gap-2 rounded-full border border-black/[0.08] bg-white px-3 py-2 dark:border-white/10 dark:bg-zinc-900">
                   <Plus className="h-5 w-5 flex-shrink-0 text-zinc-400" />
-                  <span className="min-w-0 flex-1 truncate text-sm text-zinc-400">Empieza por definir tu GPT.</span>
-                  <Mic className="h-5 w-5 flex-shrink-0 text-zinc-400" />
-                  <span className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-full bg-zinc-950 text-white dark:bg-white dark:text-zinc-950">
+                  <Input
+                    value={previewInput}
+                    onChange={(e) => setPreviewInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault()
+                        sendPreviewMessage(previewInput)
+                      }
+                    }}
+                    disabled={previewLoading}
+                    placeholder={formData.instructions.trim() ? "Prueba tu GPT…" : "Escribe instrucciones para probarlo"}
+                    className="min-w-0 flex-1 border-0 bg-transparent px-1 text-sm shadow-none focus-visible:ring-0"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => sendPreviewMessage(previewInput)}
+                    disabled={previewLoading || !previewInput.trim()}
+                    className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-full bg-zinc-950 text-white transition-opacity disabled:opacity-40 dark:bg-white dark:text-zinc-950"
+                  >
                     <ArrowUp className="h-4 w-4" />
-                  </span>
+                  </button>
                 </div>
+                <p className="mt-2 text-center text-[11px] text-zinc-400">Vista previa con FlashGPT · no se guarda</p>
               </div>
             </div>
           </div>
