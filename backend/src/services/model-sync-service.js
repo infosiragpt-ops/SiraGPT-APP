@@ -517,46 +517,86 @@ class ModelSyncService {
    * rows only get metadata refreshed via buildModelSyncUpdateData, which
    * deliberately omits `isActive` so a manual admin activation survives.
    */
+  // Persist discovered models. Batched for speed: the previous implementation
+  // ran TWO sequential DB round-trips per model (findUnique + create/update),
+  // so a few hundred models (OpenRouter alone is 300+) meant 600+ serial
+  // queries and a multi-second "Sync Now". Now we: (1) look up all existing
+  // names in ONE query, (2) bulk-insert the new ones with createMany, and
+  // (3) run the per-row updates in bounded-concurrency batches. Same
+  // {created, updated, errors} contract; discovered rows still default inactive.
   async persistModels(models = []) {
     let created = 0;
     let updated = 0;
     let errors = 0;
 
-    for (const model of models) {
-      if (!model || !model.name) continue;
-      try {
-        const existingModel = await this.prisma.aiModel.findUnique({
-          where: { name: model.name }
-        });
+    // Dedup by name (last wins) so one batch never fights itself.
+    const byName = new Map();
+    for (const model of Array.isArray(models) ? models : []) {
+      if (model && model.name) byName.set(model.name, model);
+    }
+    const list = [...byName.values()];
+    if (list.length === 0) return { created, updated, errors };
 
-        if (existingModel) {
-          await this.prisma.aiModel.update({
+    // 1) Which names already exist — a single query.
+    let existing = new Set();
+    try {
+      const rows = await this.prisma.aiModel.findMany({
+        where: { name: { in: list.map((m) => m.name) } },
+        select: { name: true },
+      });
+      existing = new Set(rows.map((r) => r.name));
+    } catch (lookupErr) {
+      console.error('❌ persistModels: existing-name lookup failed:', lookupErr.message);
+    }
+
+    const toCreate = list.filter((m) => !existing.has(m.name));
+    const toUpdate = list.filter((m) => existing.has(m.name));
+
+    // 2) Bulk-insert new models in one statement.
+    if (toCreate.length) {
+      try {
+        const data = toCreate.map((model) => ({
+          name: model.name,
+          displayName: model.displayName,
+          description: model.description,
+          provider: model.provider,
+          type: model.type,
+          isActive: model.isActive === true,
+          icon: this.getModelIcon(model),
+          lastSynced: new Date(),
+          syncSource: model.syncSource || 'api',
+          contextLength: model.contextLength,
+          pricing: model.pricing,
+          tags: model.tags && model.tags.length ? model.tags : this.generateTags(model),
+        }));
+        const res = await this.prisma.aiModel.createMany({ data, skipDuplicates: true });
+        created += typeof res?.count === 'number' ? res.count : toCreate.length;
+      } catch (createErr) {
+        console.error('❌ persistModels: createMany failed:', createErr.message);
+        errors += toCreate.length;
+      }
+    }
+
+    // 3) Per-row updates (Prisma can't bulk-set differing values) run in
+    //    bounded-concurrency batches instead of strictly serially.
+    const CONCURRENCY = Number.parseInt(process.env.MODEL_SYNC_DB_CONCURRENCY, 10) || 16;
+    for (let i = 0; i < toUpdate.length; i += CONCURRENCY) {
+      const chunk = toUpdate.slice(i, i + CONCURRENCY);
+      const results = await Promise.allSettled(
+        chunk.map((model) =>
+          this.prisma.aiModel.update({
             where: { name: model.name },
-            data: this.buildModelSyncUpdateData(model)
-          });
+            data: this.buildModelSyncUpdateData(model),
+          }),
+        ),
+      );
+      for (let j = 0; j < results.length; j++) {
+        if (results[j].status === 'fulfilled') {
           updated++;
         } else {
-          await this.prisma.aiModel.create({
-            data: {
-              name: model.name,
-              displayName: model.displayName,
-              description: model.description,
-              provider: model.provider,
-              type: model.type,
-              isActive: model.isActive === true,
-              icon: this.getModelIcon(model),
-              lastSynced: new Date(),
-              syncSource: model.syncSource || 'api',
-              contextLength: model.contextLength,
-              pricing: model.pricing,
-              tags: model.tags && model.tags.length ? model.tags : this.generateTags(model)
-            }
-          });
-          created++;
+          errors++;
+          console.error(`❌ persistModels: update failed for ${chunk[j].name}:`, results[j].reason?.message);
         }
-      } catch (modelError) {
-        console.error(`❌ Error syncing model ${model.name}:`, modelError.message);
-        errors++;
       }
     }
 
@@ -629,7 +669,7 @@ class ModelSyncService {
       providerKey = '',
       modelIdsFilter = null,
       sourceTag = 'connection',
-      timeoutMs = 15000,
+      timeoutMs = Number.parseInt(process.env.MODEL_SYNC_PROBE_TIMEOUT_MS, 10) || 7000,
       fetchImpl = (typeof fetch === 'function' ? fetch : null),
     } = options;
 
