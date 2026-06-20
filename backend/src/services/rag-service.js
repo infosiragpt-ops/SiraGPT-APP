@@ -1028,12 +1028,32 @@ async function ingestTriples(userId, collection, { openai = null, sources = null
   const filter = Array.isArray(sources) && sources.length > 0 ? new Set(sources) : null;
   const targets = filter ? entries.filter(e => filter.has(e.source)) : entries;
 
+  // Phase 1 — extract triples for every chunk in parallel (bounded). Each
+  // extraction is an independent, read-only LLM call and is the dominant cost
+  // (~1-2s/chunk), so fanning them out turns a serial 50×1.5s ≈ 75s ingest into
+  // ~ceil(50/5)×1.5s ≈ 15s. Order is preserved and stopOnError matches the old
+  // loop (one failure aborts the whole ingest). The heuristic path is sync, so
+  // the cap is harmless there.
+  const { pMap } = require('../utils/p-map');
+  const EXTRACT_CONCURRENCY = Math.max(
+    1,
+    Number(process.env.SIRAGPT_TRIPLE_EXTRACT_CONCURRENCY) || 5,
+  );
+  const extracted = await pMap(
+    targets,
+    async (entry) => ({
+      triples: openai
+        ? await tripleExtractor.extractTriples(openai, entry.text, { source: entry.source, model })
+        : tripleExtractor.extractTriplesHeuristic(entry.text, { source: entry.source }),
+    }),
+    { concurrency: EXTRACT_CONCURRENCY },
+  );
+
+  // Phase 2 — write to the shared graph SEQUENTIALLY, preserving chunk order
+  // and avoiding concurrent-mutation races on the in-memory graph.
   let triplesAdded = 0;
-  for (const entry of targets) {
-    const triples = openai
-      ? await tripleExtractor.extractTriples(openai, entry.text, { source: entry.source, model })
-      : tripleExtractor.extractTriplesHeuristic(entry.text, { source: entry.source });
-    if (triples.length === 0) continue;
+  for (const { triples } of extracted) {
+    if (!triples || triples.length === 0) continue;
     const result = await tripleGraph.addTriples(userId, collection, triples, {
       embedder: openai ? null : async () => [], // skip embeddings in heuristic/no-key mode
     });
