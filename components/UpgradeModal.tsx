@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { motion } from "framer-motion"
 import { Building2, Check, Crown, FileText, Globe, ImageIcon, MessageCircle, Rocket, ShieldCheck, Sparkles } from "lucide-react"
 import {
   Dialog,
@@ -51,15 +52,15 @@ const upgradePlans: UpgradePlan[] = [
     name: "Pro",
     eyebrow: "Acceso completo",
     price: "$5",
-    subtitle: "Todo SiraGPT para empezar fuerte.",
+    subtitle: "Toda la IA de SiraGPT en una sola cuenta. El plan con el que la mayoría empieza.",
     icon: Crown,
     featured: true,
-    cta: "Elegir Pro",
+    cta: "Empezar con Pro",
     features: [
-      { icon: Sparkles, title: "Modelos líderes", desc: "GPT, Claude, Gemini, Grok y más" },
-      { icon: FileText, title: "Trabajo completo", desc: "Chat, documentos, código e imágenes" },
-      { icon: Rocket, title: "Agentes y proyectos", desc: "Flujos inteligentes en una sola cuenta" },
-      { icon: ShieldCheck, title: "Soporte prioritario", desc: "Acompañamiento para avanzar mejor" },
+      { icon: Sparkles, title: "Todos los modelos líderes", desc: "GPT, Claude, Gemini, Grok y más, sin cambiar de app" },
+      { icon: FileText, title: "Chat, documentos y código", desc: "Crea, analiza y edita en un mismo lugar" },
+      { icon: ImageIcon, title: "Imagen, voz, video y música", desc: "Generación creativa con IA, integrada" },
+      { icon: Rocket, title: "Agentes y proyectos", desc: "Investigación y tareas que se ejecutan solas" },
     ],
   },
   {
@@ -67,13 +68,13 @@ const upgradePlans: UpgradePlan[] = [
     name: "Pro Extendido",
     eyebrow: "Más capacidad",
     price: "$10",
-    subtitle: "La misma experiencia completa, ampliada para uso diario.",
+    subtitle: "La experiencia completa de Pro con mucho más volumen para trabajar a diario.",
     icon: Rocket,
     cta: "Elegir Pro Extendido",
     features: [
-      { icon: Crown, title: "Todo Pro", desc: "Todas las funciones incluidas" },
-      { icon: Globe, title: "Más ritmo de trabajo", desc: "Ideal para proyectos frecuentes" },
-      { icon: ImageIcon, title: "Creatividad avanzada", desc: "Imagen, voz, video y análisis" },
+      { icon: Crown, title: "Todo lo de Pro incluido", desc: "Acceso completo a cada función" },
+      { icon: Globe, title: "Mucho más volumen de uso", desc: "Para producir sin frenar cada día" },
+      { icon: Rocket, title: "Ideal para uso intensivo", desc: "Proyectos frecuentes y equipos pequeños" },
       { icon: ShieldCheck, title: "Prioridad superior", desc: "Soporte y continuidad reforzados" },
     ],
   },
@@ -174,23 +175,26 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[92vh] w-[96vw] max-w-5xl overflow-y-auto border-border/70 bg-background p-0 shadow-2xl">
-        <div className="border-b border-border/60 px-6 py-6 sm:px-8">
-          <DialogHeader>
-            <div className="mb-3 inline-flex w-fit items-center gap-2 rounded-full border border-border/70 bg-muted/30 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
-              <Sparkles className="h-3.5 w-3.5 text-violet-500" />
-              SiraGPT Pro
-            </div>
-            <DialogTitle className="max-w-2xl text-balance text-2xl font-semibold tracking-[-0.035em] sm:text-3xl">
-              Planes simples, potentes y listos para trabajar.
-            </DialogTitle>
-          </DialogHeader>
+        <div className="relative overflow-hidden border-b border-border/60 px-6 py-6 sm:px-8">
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_-40%,rgba(124,58,237,0.14),transparent_55%)]" />
+          <div className="relative">
+            <DialogHeader>
+              <div className="mb-3 inline-flex w-fit items-center gap-2 rounded-full border border-violet-500/30 bg-violet-500/10 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.18em] text-violet-600 dark:text-violet-300">
+                <Sparkles className="h-3.5 w-3.5" />
+                SiraGPT Pro
+              </div>
+              <DialogTitle className="max-w-2xl text-balance text-2xl font-semibold tracking-[-0.035em] sm:text-3xl">
+                Una sola suscripción. Toda la IA.
+              </DialogTitle>
+            </DialogHeader>
 
-          <div className="mt-4 flex flex-col gap-3 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
-            <p className="max-w-2xl">
-              Todo SiraGPT desde Pro. Más capacidad cuando tu ritmo crece. Atención directa cuando tu equipo necesita una solución a medida.
-            </p>
-            <div className="rounded-full border border-border/70 px-3 py-1 text-xs">
-              Plan actual: <span className="font-medium text-foreground">{currentPlan}</span>
+            <div className="mt-4 flex flex-col gap-3 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+              <p className="max-w-2xl">
+                Los mejores modelos, generación de imagen, voz y video, agentes y documentos — todo integrado y listo para producir desde el primer día.
+              </p>
+              <div className="shrink-0 rounded-full border border-border/70 px-3 py-1 text-xs">
+                Plan actual: <span className="font-medium text-foreground">{currentPlan}</span>
+              </div>
             </div>
           </div>
         </div>
@@ -206,23 +210,26 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
           ) : null}
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-            {upgradePlans.map((plan) => {
+            {upgradePlans.map((plan, index) => {
               const Icon = plan.icon
               const isCurrent = currentPlan === plan.id
               const isLoading = loadingPlan === plan.id || isSubscribing
               const isEnterprise = plan.id === "ENTERPRISE"
 
               return (
-                <article
+                <motion.article
                   key={plan.id}
+                  initial={{ opacity: 0, y: 14 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.4, ease: "easeOut", delay: index * 0.07 }}
                   className={`relative flex min-h-[470px] flex-col rounded-[26px] border p-5 transition-all duration-200 ${
                     plan.featured
-                      ? "border-foreground/15 bg-card shadow-xl shadow-foreground/5 ring-1 ring-foreground/10"
+                      ? "border-violet-500/25 bg-card shadow-xl shadow-violet-500/10 ring-1 ring-violet-500/20"
                       : "border-border/70 bg-card/45 hover:border-foreground/20 hover:bg-card/70"
                   }`}
                 >
                   {plan.featured ? (
-                    <div className="absolute right-5 top-5 rounded-full border border-border/60 bg-background px-2.5 py-1 text-[11px] font-medium text-muted-foreground shadow-sm">
+                    <div className="absolute right-5 top-5 rounded-full border border-violet-500/30 bg-violet-500/10 px-2.5 py-1 text-[11px] font-medium text-violet-600 shadow-sm dark:text-violet-300">
                       Recomendado
                     </div>
                   ) : null}
@@ -277,9 +284,17 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
                       plan.cta
                     )}
                   </Button>
-                </article>
+                </motion.article>
               )
             })}
+          </div>
+
+          <div className="mt-6 flex flex-col items-center justify-center gap-1 text-center text-[11px] text-muted-foreground">
+            <div className="inline-flex items-center gap-2">
+              <ShieldCheck className="h-3.5 w-3.5" />
+              Pago seguro con Stripe · Cancela cuando quieras · Sin permanencia
+            </div>
+            <div>Precios en USD — se cobra en tu moneda local al tipo de cambio del día.</div>
           </div>
         </div>
       </DialogContent>

@@ -336,7 +336,7 @@ router.post('/stripe', paymentLimiter, [
       user.id,
       plan,
       `${frontendUrl}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
-      `${frontendUrl}/payment/cancel`
+      `${frontendUrl}/payment/cancel?plan=${encodeURIComponent(plan)}`
     );
 
     // Update payment record with session ID
