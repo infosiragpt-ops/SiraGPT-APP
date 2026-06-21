@@ -325,7 +325,13 @@
     "brandFeature1": "Los mejores modelos: GPT, Claude, Gemini, Grok y más",
     "brandFeature2": "Imágenes, documentos, código y diagramas al instante",
     "brandFeature3": "Investiga y automatiza con agentes especializados",
-    "brandFooter": "© SiraGPT — Plataforma de IA multimodal"
+    "brandFooter": "© SiraGPT — Plataforma de IA multimodal",
+    "orWithEmail": "o con tu correo electrónico",
+    "signUpWithGoogle": "Registrarse con Google",
+    "nameRequired": "Introduce tu nombre",
+    "passwordTooShort": "La contraseña debe tener al menos 6 caracteres",
+    "passwordsNoMatch": "Las contraseñas no coinciden",
+    "agreeTermsRequired": "Debes aceptar los términos para continuar"
   },
   "documents": {
     "download": "Descargar",
