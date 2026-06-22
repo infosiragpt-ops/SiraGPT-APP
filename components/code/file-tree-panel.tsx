@@ -1,11 +1,113 @@
 "use client"
 
 import * as React from "react"
-import { ChevronRight, FileCode2, Folder, FolderOpen, Search, Trash2, X } from "lucide-react"
+import {
+  Braces,
+  ChevronRight,
+  File,
+  FileCode2,
+  FileCog,
+  FileImage,
+  FileText,
+  Folder,
+  FolderOpen,
+  type LucideIcon,
+  ScrollText,
+  Search,
+  SquareTerminal,
+  Trash2,
+  X,
+} from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { useCodeWorkspace } from "@/lib/code-workspace-context"
+
+// Cursor / VS-Code-style file-type icons + accent colors. Keeps the tree
+// scannable: JSON in amber braces, shell in green, code in blue/yellow,
+// logs dimmed, config/metadata as a gear, images in purple.
+//
+// NOTE: colors are applied INLINE (lucide icons stroke `currentColor`), not
+// via Tailwind `text-amber-400` etc. — those saturated palette shades are not
+// part of this project's compiled/curated Tailwind CSS, so they'd silently
+// fall back to the inherited muted foreground. Inline hex is never purged.
+type FileGlyph = { Icon: LucideIcon; color: string; dim?: boolean }
+
+const MUTED = "hsl(var(--muted-foreground))"
+
+function getFileGlyph(name: string): FileGlyph {
+  const lower = name.toLowerCase()
+  const ext = lower.includes(".") ? lower.slice(lower.lastIndexOf(".") + 1) : ""
+  switch (ext) {
+    case "json":
+    case "jsonl":
+    case "json5":
+      return { Icon: Braces, color: "#e3b341" }
+    case "ts":
+    case "tsx":
+      return { Icon: FileCode2, color: "#4ab8e8" }
+    case "js":
+    case "jsx":
+    case "mjs":
+    case "cjs":
+      return { Icon: FileCode2, color: "#e8d44d" }
+    case "py":
+    case "rb":
+    case "go":
+    case "rs":
+    case "java":
+    case "kt":
+    case "php":
+    case "c":
+    case "cpp":
+    case "cs":
+    case "swift":
+      return { Icon: FileCode2, color: "#6cb6e8" }
+    case "sh":
+    case "bash":
+    case "zsh":
+      return { Icon: SquareTerminal, color: "#6cc24a" }
+    case "css":
+    case "scss":
+    case "sass":
+    case "less":
+      return { Icon: FileCode2, color: "#e06c9f" }
+    case "html":
+    case "htm":
+    case "xml":
+    case "svg":
+      return { Icon: FileCode2, color: "#e0915c" }
+    case "md":
+    case "mdx":
+    case "markdown":
+      return { Icon: FileText, color: "#7aa7c7" }
+    case "txt":
+    case "text":
+      return { Icon: FileText, color: `${MUTED.slice(0, -1)} / 0.6)` }
+    case "log":
+      return { Icon: ScrollText, color: `${MUTED.slice(0, -1)} / 0.45)`, dim: true }
+    case "yml":
+    case "yaml":
+    case "toml":
+    case "ini":
+    case "env":
+    case "conf":
+    case "lock":
+      return { Icon: FileCog, color: `${MUTED.slice(0, -1)} / 0.72)` }
+    case "png":
+    case "jpg":
+    case "jpeg":
+    case "gif":
+    case "webp":
+    case "ico":
+      return { Icon: FileImage, color: "#b48ade" }
+    default:
+      if (lower.includes("metadata") || lower.includes(".config") || lower === "dockerfile") {
+        return { Icon: FileCog, color: `${MUTED.slice(0, -1)} / 0.66)` }
+      }
+      return { Icon: File, color: `${MUTED.slice(0, -1)} / 0.55)` }
+  }
+}
 
 // ── Tree model ──────────────────────────────────────────────────────────
 export type TreeNode = {
@@ -98,9 +200,9 @@ export function FileTree({ nodes, depth, activePath, collapsed, onToggle, onOpen
                   className={cn("h-3 w-3 shrink-0 opacity-70 transition-transform", isOpen && "rotate-90")}
                 />
                 {isOpen ? (
-                  <FolderOpen className="h-3.5 w-3.5 shrink-0 text-[hsl(var(--accent-violet))] opacity-90" />
+                  <FolderOpen className="h-3.5 w-3.5 shrink-0" style={{ color: "#6c9bd6" }} />
                 ) : (
-                  <Folder className="h-3.5 w-3.5 shrink-0 text-[hsl(var(--accent-violet))] opacity-80" />
+                  <Folder className="h-3.5 w-3.5 shrink-0" style={{ color: "#5f7da8" }} />
                 )}
                 <span className="truncate font-medium">{node.name}</span>
               </button>
@@ -119,6 +221,7 @@ export function FileTree({ nodes, depth, activePath, collapsed, onToggle, onOpen
           )
         }
         const active = node.path === activePath
+        const { Icon: FileIcon, color: iconColor, dim } = getFileGlyph(node.name)
         return (
           <li key={`f:${node.path}`} className="group flex items-center gap-0.5">
             <button
@@ -127,11 +230,13 @@ export function FileTree({ nodes, depth, activePath, collapsed, onToggle, onOpen
               style={{ paddingLeft: pad + 16 }}
               className={cn(
                 "flex min-w-0 flex-1 items-center gap-1.5 rounded py-1 pr-2 text-left text-[12.5px]",
-                active ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                active
+                  ? "bg-muted text-foreground"
+                  : cn("hover:bg-muted/60 hover:text-foreground", dim ? "text-muted-foreground/55" : "text-muted-foreground"),
               )}
               title={node.path}
             >
-              <FileCode2 className="h-3.5 w-3.5 shrink-0 opacity-60" />
+              <FileIcon className="h-3.5 w-3.5 shrink-0" style={{ color: iconColor }} />
               <span className="truncate">{node.name}</span>
             </button>
             <Button
@@ -245,6 +350,7 @@ export function FileTreePanel() {
               {matches.map((path) => {
                 const active = path === activePath
                 const dir = dirname(path)
+                const { Icon: FileIcon, color: iconColor } = getFileGlyph(basename(path))
                 return (
                   <li key={path} className="group flex items-center gap-0.5">
                     <button
@@ -256,7 +362,7 @@ export function FileTreePanel() {
                       )}
                       title={path}
                     >
-                      <FileCode2 className="h-3.5 w-3.5 shrink-0 opacity-60" />
+                      <FileIcon className="h-3.5 w-3.5 shrink-0" style={{ color: iconColor }} />
                       <span className="truncate">{basename(path)}</span>
                       {dir && <span className="truncate text-[11px] text-muted-foreground/45">{dir}</span>}
                     </button>
