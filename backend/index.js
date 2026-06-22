@@ -417,6 +417,7 @@ const { startGoalCleanup, stopGoalCleanup } = require('./src/services/goal-clean
 const { startCodexWorker, closeCodexWorker, closeCodexQueue } = require('./src/services/codex/run-queue');
 const { recoverCodexRunsAfterBoot } = require('./src/services/codex/boot-recovery');
 const { logCodexConfig } = require('./src/services/codex/config-validator');
+const { validate: validateAttributionConfig } = require('./src/services/attribution-config-validator');
 const alerting = require('./src/services/alerting');
 const sloTracker = require('./src/services/slo-tracker');
 const shutdownRegistry = require('./src/utils/shutdown');
@@ -1255,6 +1256,14 @@ async function startServer() {
     // Codex V2: validate config, recover interrupted runs, then start the worker
     // (all no-op when the flag is off). Fire-and-forget recovery never throws.
     try { logCodexConfig(process.env, logger); } catch { /* never blocks boot */ }
+    // Attribution stack config coherence check (CLAUDE.md mandates running it on
+    // boot). Warnings only — never blocks boot.
+    try {
+      const attrReport = validateAttributionConfig(process.env);
+      if (!attrReport.ok || attrReport.warnings.length) {
+        logger.warn({ failures: attrReport.failures, warnings: attrReport.warnings, checked: attrReport.checked }, 'attribution_config_validation');
+      }
+    } catch { /* never blocks boot */ }
     recoverCodexRunsAfterBoot().catch((err) => logger.warn({ err: err.message }, 'codex_boot_recovery_failed'));
     startCodexWorker();
 

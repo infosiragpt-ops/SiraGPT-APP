@@ -105,8 +105,8 @@ class BulkheadPool extends EventEmitter {
     // Higher priority numbers execute first. Default priority = 0.
     this._queue = [];
 
-    // Track active operation IDs for cancellation
-    this._activeOps = new Map();
+    // Monotonic operation-id counter — opId is surfaced in acquired/released
+    // events and threaded into each release closure.
     this._opCounter = 0;
 
     if (this.maxConcurrent < 1) {
@@ -141,7 +141,6 @@ class BulkheadPool extends EventEmitter {
       if (this._active < this.maxConcurrent) {
         this._active++;
         const opId = ++this._opCounter;
-        this._activeOps.set(opId, true);
         this.emit('acquired', { name: this.name, active: this._active, opId });
 
         resolve(this._createRelease(opId));
@@ -230,7 +229,6 @@ class BulkheadPool extends EventEmitter {
     return () => {
       if (released) return;
       released = true;
-      this._activeOps.delete(opId);
       this._active--;
       this.emit('released', { name: this.name, active: this._active, opId });
 
@@ -258,7 +256,6 @@ class BulkheadPool extends EventEmitter {
       this._detachAbort(entry);
       this._active++;
       const opId = ++this._opCounter;
-      this._activeOps.set(opId, true);
       this.emit('acquired', { name: this.name, active: this._active, opId, fromQueue: true });
       entry.resolve(this._createRelease(opId));
     }
