@@ -1,5 +1,6 @@
 const express = require('express');
 const { authenticateToken, requireAdmin, requireSuperAdmin } = require('../middleware/auth');
+const { parsePositiveInt } = require('../services/chat-scope');
 const prisma = require('../config/database');
 const { body, validationResult } = require('express-validator');
 const { ProviderType, ModelType } = require('@prisma/client'); // Enums ko import karein
@@ -439,7 +440,9 @@ router.post('/models/sync/run', async (req, res) => {
 // Get all users
 router.get('/users', async (req, res) => {
   try {
-    const { page = 1, limit = 20, search = '', plan = '' } = req.query;
+    const page = parsePositiveInt(req.query.page, 1, { min: 1, max: 100000 });
+    const limit = parsePositiveInt(req.query.limit, 20, { min: 1, max: 100 });
+    const { search = '', plan = '' } = req.query;
     const skip = (page - 1) * limit;
 
     const where = {
@@ -473,8 +476,8 @@ router.get('/users', async (req, res) => {
           createdAt: true,
           updatedAt: true
         },
-        skip: parseInt(skip),
-        take: parseInt(limit),
+        skip,
+        take: limit,
         orderBy: { createdAt: 'desc' }
       }),
       prisma.user.count({ where })
@@ -593,7 +596,9 @@ router.get('/analytics', async (req, res) => {
 // Get all payments
 router.get('/payments', async (req, res) => {
   try {
-    const { page = 1, limit = 20, status = '' } = req.query;
+    const page = parsePositiveInt(req.query.page, 1, { min: 1, max: 100000 });
+    const limit = parsePositiveInt(req.query.limit, 20, { min: 1, max: 100 });
+    const { status = '' } = req.query;
     const skip = (page - 1) * limit;
 
     // Validate against the enum instead of passing raw input to Prisma —
@@ -615,8 +620,8 @@ router.get('/payments', async (req, res) => {
             }
           }
         },
-        skip: parseInt(skip),
-        take: parseInt(limit),
+        skip,
+        take: limit,
         orderBy: { createdAt: 'desc' }
       }),
       prisma.payment.count({ where })

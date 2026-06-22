@@ -73,7 +73,14 @@ router.post(
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders();
-    const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+    // Guard res.write: after a client disconnect the next write throws, which
+    // would otherwise land in the catch below and emit a misleading
+    // {type:'error'} for a benign disconnect.
+    const send = (obj) => { try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { /* client gone */ } };
+
+    // Heartbeat keeps buffering proxies/load balancers from idle-timing-out a
+    // slow stream (a multi-provider review can stall >30s between events).
+    const heartbeat = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* client gone */ } }, 15_000);
 
     // Propagate a client disconnect to the orchestrator's AbortSignal
     // so we stop any in-flight CrossRef / LLM calls instead of
@@ -102,6 +109,7 @@ router.post(
       console.error('[marco-teorico] orchestrator error:', err);
       send({ type: 'error', message: err.message || 'pipeline error' });
     } finally {
+      clearInterval(heartbeat);
       try { res.end(); } catch { /* already closed */ }
     }
   }

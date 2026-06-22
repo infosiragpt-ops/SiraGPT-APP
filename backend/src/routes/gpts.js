@@ -276,7 +276,17 @@ router.get('/share/:shareId', async (req, res) => {
 router.post('/', authenticateToken, upload.single('icon'), async (req, res) => {
   try {
     const userId = req.user.id;
-    const gptData = JSON.parse(req.body.gpts);
+    // Malformed/missing `gpts` is a client error (400), not a 500 — the bare
+    // JSON.parse(undefined)/invalid-JSON throw used to land in the outer catch.
+    if (typeof req.body.gpts !== 'string') {
+      return res.status(400).json({ error: 'gpts field is required (JSON string)' });
+    }
+    let gptData;
+    try {
+      gptData = JSON.parse(req.body.gpts);
+    } catch {
+      return res.status(400).json({ error: 'gpts must be valid JSON' });
+    }
     const {
       name,
       description,
@@ -350,7 +360,17 @@ router.put('/:id', authenticateToken, upload.single('icon'), async (req, res) =>
   try {
     const { id } = req.params;
     const userId = req.user.id;
-    const gptData = JSON.parse(req.body.gpts);
+    // Malformed/missing `gpts` is a client error (400), not a 500 — the bare
+    // JSON.parse(undefined)/invalid-JSON throw used to land in the outer catch.
+    if (typeof req.body.gpts !== 'string') {
+      return res.status(400).json({ error: 'gpts field is required (JSON string)' });
+    }
+    let gptData;
+    try {
+      gptData = JSON.parse(req.body.gpts);
+    } catch {
+      return res.status(400).json({ error: 'gpts must be valid JSON' });
+    }
     const {
       name,
       description,

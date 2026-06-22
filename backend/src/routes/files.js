@@ -1,6 +1,7 @@
 const express = require('express');
 const fsSync = require('fs');
 const { authenticateToken } = require('../middleware/auth');
+const { parsePositiveInt } = require('../services/chat-scope');
 const { requireScope } = require('../middleware/require-scope');
 const upload = require('../middleware/upload');
 const fileProcessingStatus = require('../services/file-processing-status');
@@ -858,7 +859,12 @@ router.get('/progress-stream', authenticateToken, async (req, res) => {
 // Get user files
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    const { page = 1, limit = 20, type } = req.query;
+    // Clamp pagination: bare parseInt(NaN)/negatives would crash Prisma's
+    // take/skip (500 on 400-class input) and an unbounded limit could pull the
+    // whole table.
+    const page = parsePositiveInt(req.query.page, 1, { min: 1, max: 100000 });
+    const limit = parsePositiveInt(req.query.limit, 20, { min: 1, max: 100 });
+    const { type } = req.query;
     const skip = (page - 1) * limit;
 
     const where = {
@@ -877,8 +883,8 @@ router.get('/', authenticateToken, async (req, res) => {
           size: true,
           createdAt: true
         },
-        skip: parseInt(skip),
-        take: parseInt(limit),
+        skip,
+        take: limit,
         orderBy: { createdAt: 'desc' }
       }),
       prisma.file.count({ where })

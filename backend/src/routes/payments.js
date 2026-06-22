@@ -2,6 +2,7 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
+const { parsePositiveInt } = require('../services/chat-scope');
 const prisma = require('../config/database');
 const stripeService = require('../services/stripe');
 const { logger } = require('../middleware/logger');
@@ -587,14 +588,15 @@ router.get('/verify-session', authenticateToken, async (req, res) => {
 // Get user payments
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    const { page = 1, limit = 10 } = req.query;
+    const page = parsePositiveInt(req.query.page, 1, { min: 1, max: 100000 });
+    const limit = parsePositiveInt(req.query.limit, 10, { min: 1, max: 100 });
     const skip = (page - 1) * limit;
 
     const [payments, total] = await Promise.all([
       prisma.payment.findMany({
         where: { userId: req.user.id },
-        skip: parseInt(skip),
-        take: parseInt(limit),
+        skip,
+        take: limit,
         orderBy: { createdAt: 'desc' }
       }),
       prisma.payment.count({
