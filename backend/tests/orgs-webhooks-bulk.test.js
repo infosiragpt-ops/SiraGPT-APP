@@ -82,9 +82,14 @@ const prismaMock = {
       return { count };
     },
     deleteMany: async ({ where }) => {
+      // Support both a scalar `id` and the `{ id: { in: [...] } }` operator
+      // (bulk-delete now batches into a single deleteMany).
+      const ids = where.id && typeof where.id === 'object' && Array.isArray(where.id.in)
+        ? where.id.in
+        : (where.id != null ? [where.id] : null);
       const before = prismaState.endpoints.length;
       prismaState.endpoints = prismaState.endpoints.filter((e) => {
-        if (where.id && e.id !== where.id) return true;
+        if (ids && !ids.includes(e.id)) return true;
         if (where.organizationId && e.organizationId !== where.organizationId) return true;
         return false;
       });

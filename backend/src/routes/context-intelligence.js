@@ -268,10 +268,15 @@ router.post('/self-consistency', optionalAuth, standardRateLimit, (req, res) => 
   }
 });
 
-router.get('/user-profile/:userId', optionalAuth, standardRateLimit, (req, res) => {
+router.get('/user-profile/:userId', authenticateToken, standardRateLimit, (req, res) => {
   try {
     const { userId } = req.params;
     if (!userId) return res.status(400).json({ error: 'userId is required' });
+    // IDOR guard — a behavioral profile (intents, hidden goals, success rate) is
+    // private; only the owner may read it. Mirrors the sibling POST /record.
+    if (req.user?.id && req.user.id !== userId) {
+      return res.status(403).json({ error: 'can only read your own profile' });
+    }
     const summary = userProfile.getProfileSummary(userId);
     if (!summary) return res.status(404).json({ error: 'no profile for that user' });
     res.json({ profile: summary, prompt: userProfile.buildProfilePrompt(userId) });

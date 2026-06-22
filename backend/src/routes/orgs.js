@@ -2257,20 +2257,16 @@ router.post('/:id/webhooks/bulk-delete', authenticateToken, async (req, res) => 
       where: { id: { in: ids }, organizationId: orgId },
     });
     const existingById = new Map(existing.map((e) => [e.id, e]));
-    const deleted = [];
-    const notFound = [];
+    const deletableIds = existing.map((e) => e.id);
+    const notFound = ids.filter((id) => !existingById.has(id));
 
-    for (const id of ids) {
-      const ep = existingById.get(id);
-      if (!ep) {
-        notFound.push(id);
-        continue;
-      }
-      const result = await prisma.webhookEndpoint.deleteMany({
-        where: { id: ep.id, organizationId: orgId },
+    // Single batched delete instead of one deleteMany per id (org+id scope is
+    // already applied). Matches the batched bulk-toggle / api-key-revoke paths.
+    if (deletableIds.length > 0) {
+      await prisma.webhookEndpoint.deleteMany({
+        where: { id: { in: deletableIds }, organizationId: orgId },
       });
-      if (result && result.count > 0) {
-        deleted.push(ep.id);
+      for (const ep of existing) {
         void writeAuditLog(prisma, {
           action: 'org_webhook_bulk_delete',
           userId,
@@ -2280,12 +2276,10 @@ router.post('/:id/webhooks/bulk-delete', authenticateToken, async (req, res) => 
           metadata: { orgId },
           req,
         });
-      } else {
-        notFound.push(id);
       }
     }
 
-    res.json({ updated: deleted, notFound });
+    res.json({ updated: deletableIds, notFound });
   } catch (err) {
     if (err && err.status) return res.status(err.status).json({ error: err.message });
     console.error('[orgs] bulk-delete webhooks failed:', err.message);

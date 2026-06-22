@@ -39,6 +39,15 @@ describe('parseRange — degenerate input', () => {
   test('non-bytes unit → unsatisfiable', () => {
     assert.equal(parseRange('items=0-9', 1000), 'unsatisfiable');
   });
+  test('non-decimal numbers (hex/exponent/binary/sign/space) → unsatisfiable', () => {
+    // Plain Number() would accept these and serve the WRONG bytes.
+    assert.equal(parseRange('bytes=0x10-0x20', 1000), 'unsatisfiable');
+    assert.equal(parseRange('bytes=1e2-200', 1000), 'unsatisfiable');
+    assert.equal(parseRange('bytes=0b10-100', 1000), 'unsatisfiable');
+    assert.equal(parseRange('bytes=+5-10', 1000), 'unsatisfiable');
+    assert.equal(parseRange('bytes= 5 - 10 ', 1000), 'unsatisfiable');
+    assert.equal(parseRange('bytes=-0x10', 1000), 'unsatisfiable'); // suffix form
+  });
   test('reversed range → unsatisfiable', () => {
     assert.equal(parseRange('bytes=500-100', 1000), 'unsatisfiable');
   });
