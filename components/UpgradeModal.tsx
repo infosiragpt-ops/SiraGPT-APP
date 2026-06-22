@@ -37,21 +37,16 @@ interface UpgradeModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   user?: any
-  /**
-   * Called when user clicks subscribe. If provided, must accept plan and return a Promise.
-   * If omitted, modal initiates the standard Stripe Checkout flow via
-   * apiClient.createStripePayment (the legacy /api/payments/instant endpoint
-   * is super-admin-only and is no longer called from non-admin UI paths).
-   */
   onSubscribe?: (plan: Exclude<Plan, "FREE">) => Promise<void>
   isSubscribing?: boolean
 }
 
-// Palette — self-contained dark "spotlight" surface (cohesive with the auth
-// brand rail). All exotic effects are inline styles because the production
-// Tailwind build is curated (arbitrary colors/effects/`-950` may not exist).
-const VIOLET = "#a78bfa" // accent that reads well on dark
-const VIOLET_STRONG = "rgb(124,58,237)"
+// Brand palette — orange + white (curated-Tailwind safe: exotic effects inline).
+const ORANGE = "#FF6600"
+const INK = "#0a0a0a"
+const BODY = "#525252"
+const MUTED = "#737373"
+const BORDER = "rgba(10,10,10,0.10)"
 
 const POSITIONING = {
   eyebrow: "Todos los modelos. Todas las capacidades. Una cuenta.",
@@ -61,11 +56,10 @@ const POSITIONING = {
 }
 
 const TRUST_ROW = [
-  "Pago seguro con Stripe — nunca vemos ni guardamos tu tarjeta",
+  "Pago seguro con Stripe",
   "Cancela cuando quieras, sin permanencia",
   "Precio fijo, sin cargos ocultos",
   "Precios en USD, se cobra en tu moneda local",
-  "Tu trabajo es tuyo siempre, en cualquier plan",
 ]
 
 const upgradePlans: UpgradePlan[] = [
@@ -80,10 +74,10 @@ const upgradePlans: UpgradePlan[] = [
     badge: "Más popular",
     cta: "Empezar con Pro",
     features: [
-      { icon: Sparkles, title: "Cambia de modelo sin cambiar de app", desc: "GPT, Claude, Gemini, Grok y más en un solo chat — usa el mejor para cada tarea." },
-      { icon: ImageIcon, title: "Crea en cualquier formato", desc: "Imagen, voz, video y música con IA, más documentos y código, todo integrado." },
-      { icon: FileText, title: "Convierte ideas en entregables", desc: "34 herramientas visuales (SWOT, flujos, organigramas, dashboards) en segundos." },
-      { icon: Rocket, title: "Agentes que trabajan por ti", desc: "Investigación, búsqueda web y tareas multi-paso que se ejecutan solas." },
+      { icon: Sparkles, title: "Cambia de modelo sin cambiar de app", desc: "GPT, Claude, Gemini, Grok y más en un solo chat." },
+      { icon: ImageIcon, title: "Crea en cualquier formato", desc: "Imagen, voz, video, música, documentos y código." },
+      { icon: FileText, title: "Convierte ideas en entregables", desc: "34 herramientas visuales en segundos." },
+      { icon: Rocket, title: "Agentes que trabajan por ti", desc: "Investigación y tareas multi-paso que se ejecutan solas." },
     ],
   },
   {
@@ -95,10 +89,10 @@ const upgradePlans: UpgradePlan[] = [
     icon: Rocket,
     cta: "Elegir Pro Extendido",
     features: [
-      { icon: Globe, title: "El doble de capacidad mensual", desc: "Para quien usa IA todos los días sin pensar en el límite." },
-      { icon: Crown, title: "Todo Pro, sin recortes", desc: "Cada modelo, cada herramienta y cada agente, exactamente igual." },
-      { icon: Sparkles, title: "Aún la mitad de una sola rival", desc: "$10/mes frente a los $20 de ChatGPT, Claude o Gemini — y aquí tienes todos." },
-      { icon: ShieldCheck, title: "Prioridad y soporte reforzados", desc: "Continuidad superior para proyectos frecuentes y equipos pequeños." },
+      { icon: Globe, title: "El doble de capacidad mensual", desc: "Para quien usa IA todos los días." },
+      { icon: Crown, title: "Todo Pro, sin recortes", desc: "Cada modelo, herramienta y agente, igual." },
+      { icon: Sparkles, title: "La mitad de una sola rival", desc: "$10 vs los $20 de ChatGPT, Claude o Gemini." },
+      { icon: ShieldCheck, title: "Prioridad y soporte reforzados", desc: "Continuidad superior para proyectos frecuentes." },
     ],
   },
   {
@@ -110,30 +104,30 @@ const upgradePlans: UpgradePlan[] = [
     icon: Building2,
     cta: "Comunícate al WhatsApp",
     features: [
-      { icon: Building2, title: "Espacios de equipo compartidos", desc: "Contexto común y trabajo multi-usuario en un mismo espacio." },
-      { icon: ShieldCheck, title: "Seguridad de nivel empresa", desc: "SSO, listas de IP permitidas y accesos por rol." },
-      { icon: Globe, title: "Integraciones a tu flujo", desc: "Conecta Slack, GitHub y tus APIs internas." },
-      { icon: MessageCircle, title: "Onboarding y soporte directo", desc: "Acompañamiento por WhatsApp, precios y SLA a medida." },
+      { icon: Building2, title: "Espacios de equipo compartidos", desc: "Contexto común y trabajo multi-usuario." },
+      { icon: ShieldCheck, title: "Seguridad de nivel empresa", desc: "SSO, listas de IP y accesos por rol." },
+      { icon: Globe, title: "Integraciones a tu flujo", desc: "Slack, GitHub y tus APIs internas." },
+      { icon: MessageCircle, title: "Onboarding y soporte directo", desc: "Acompañamiento por WhatsApp y SLA a medida." },
     ],
   },
 ]
 
 function FeatureRow({ icon: Icon, title, desc, featured }: { icon: typeof Crown; title: string; desc: string; featured?: boolean }) {
   return (
-    <div className="flex gap-3 py-2.5">
+    <div className="flex gap-2.5 py-1.5">
       <div
-        className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full"
+        className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full"
         style={{
-          border: `1px solid ${featured ? "rgba(167,139,250,0.35)" : "rgba(255,255,255,0.12)"}`,
-          background: featured ? "rgba(124,58,237,0.12)" : "rgba(255,255,255,0.04)",
-          color: featured ? VIOLET : "rgba(255,255,255,0.75)",
+          border: `1px solid ${featured ? "rgba(255,102,0,0.35)" : BORDER}`,
+          background: featured ? "rgba(255,102,0,0.10)" : "rgba(10,10,10,0.03)",
+          color: featured ? ORANGE : MUTED,
         }}
       >
-        <Icon className="h-3.5 w-3.5" />
+        <Icon className="h-3 w-3" />
       </div>
       <div className="min-w-0">
-        <div className="text-sm font-medium leading-5" style={{ color: "rgba(255,255,255,0.95)" }}>{title}</div>
-        <div className="text-xs leading-5" style={{ color: "rgba(255,255,255,0.55)" }}>{desc}</div>
+        <div className="text-[13px] font-semibold leading-4" style={{ color: INK }}>{title}</div>
+        <div className="text-[11px] leading-4" style={{ color: MUTED }}>{desc}</div>
       </div>
     </div>
   )
@@ -152,9 +146,7 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
 
   const openEnterpriseWhatsapp = () => {
     const whatsappNumber = process.env.NEXT_PUBLIC_WHATSAPP_NUMBER || ""
-    const message = encodeURIComponent(
-      "Hola 👋, me interesa el plan Enterprise de SiraGPT. ¿Podrían ayudarme?",
-    )
+    const message = encodeURIComponent("Hola 👋, me interesa el plan Enterprise de SiraGPT. ¿Podrían ayudarme?")
     window.open(`https://wa.me/${whatsappNumber}?text=${message}`, "_blank", "noopener,noreferrer")
   }
 
@@ -163,37 +155,27 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
       openEnterpriseWhatsapp()
       return
     }
-
     try {
       setLoadingPlan(plan)
-
       if (onSubscribe) {
         await onSubscribe(plan)
         return
       }
-
       if (!currentUser) {
         toast.error("Inicia sesión para suscribirte")
         return
       }
-
       const response = await apiClient.createStripePayment({ plan })
-
       if (!response?.url) {
         throw new Error("No checkout URL received")
       }
-
       window.location.href = response.url
     } catch (err: any) {
       console.error("subscribe error", err)
       const status = err?.status ?? err?.statusCode
       const data = err?.errorData
-
       if (status === 503 || /not configured/i.test(err?.message || "")) {
-        toast.error(
-          data?.message || "El procesamiento de pagos aún no está disponible. Contacta a soporte.",
-          { duration: 6000 },
-        )
+        toast.error(data?.message || "El procesamiento de pagos aún no está disponible. Contacta a soporte.", { duration: 6000 })
       } else if (status === 401) {
         toast.error("Tu sesión expiró — inicia sesión de nuevo.")
       } else {
@@ -204,92 +186,75 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
     }
   }
 
-  // Thin progress ring for the honest "loss-framing" quota nudge.
-  const ringR = 13
-  const ringC = 2 * Math.PI * ringR
-  const ringOffset = ringC * (1 - Math.min(1, usageRatio))
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="max-h-[92vh] w-[96vw] max-w-5xl overflow-y-auto border-0 p-0 text-white"
-        style={{ background: "#0a0a0a", boxShadow: "0 50px 140px -28px rgba(0,0,0,0.85)" }}
+        className="w-[96vw] max-w-5xl overflow-y-auto border-0 p-0"
+        style={{ maxHeight: "94vh", background: "#ffffff", color: INK, boxShadow: "0 40px 120px -24px rgba(10,10,10,0.45)" }}
       >
         <div className="relative">
-          {/* Background layers — technical grid + top aurora (inline; curated-Tailwind safe) */}
+          {/* Subtle tech grid + orange aurora at top (inline → curated-Tailwind safe) */}
           <div
             aria-hidden="true"
             className="pointer-events-none absolute inset-0"
             style={{
               backgroundImage:
-                "linear-gradient(rgba(255,255,255,0.04) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,0.04) 1px,transparent 1px)",
-              backgroundSize: "40px 40px",
-              maskImage: "radial-gradient(120% 90% at 50% 0%, #000 40%, transparent 80%)",
-              WebkitMaskImage: "radial-gradient(120% 90% at 50% 0%, #000 40%, transparent 80%)",
+                "linear-gradient(rgba(10,10,10,0.035) 1px,transparent 1px),linear-gradient(90deg,rgba(10,10,10,0.035) 1px,transparent 1px)",
+              backgroundSize: "38px 38px",
+              maskImage: "radial-gradient(120% 80% at 50% 0%, #000 35%, transparent 78%)",
+              WebkitMaskImage: "radial-gradient(120% 80% at 50% 0%, #000 35%, transparent 78%)",
             }}
           />
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-x-0 top-0 h-72"
-            style={{ background: "radial-gradient(60% 100% at 50% 0%, rgba(124,58,237,0.20), transparent 70%)" }}
+            className="pointer-events-none absolute inset-x-0 top-0 h-56"
+            style={{ background: "radial-gradient(55% 100% at 50% 0%, rgba(255,102,0,0.12), transparent 70%)" }}
           />
 
-          {/* Content */}
-          <div className="relative px-6 py-7 sm:px-9 sm:py-9">
+          <div className="relative px-5 py-6 sm:px-7">
+            {/* Header — compact */}
             <DialogHeader>
               <div
-                className="mb-3 inline-flex w-fit items-center gap-2 rounded-full px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em]"
-                style={{ border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.04)", color: "rgba(255,255,255,0.7)" }}
+                className="mb-2.5 inline-flex w-fit items-center gap-2 rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em]"
+                style={{ border: `1px solid ${BORDER}`, background: "rgba(255,102,0,0.06)", color: BODY }}
               >
-                <Sparkles className="h-3.5 w-3.5" style={{ color: VIOLET }} />
+                <Sparkles className="h-3.5 w-3.5" style={{ color: ORANGE }} />
                 {POSITIONING.eyebrow}
               </div>
-              <DialogTitle className="max-w-3xl text-balance text-2xl font-semibold tracking-[-0.035em] sm:text-[32px] sm:leading-[1.12]" style={{ color: "#fff" }}>
+              <DialogTitle className="max-w-3xl text-balance text-xl font-semibold tracking-[-0.03em] sm:text-[26px] sm:leading-[1.12]" style={{ color: INK }}>
                 {POSITIONING.headline}
               </DialogTitle>
             </DialogHeader>
 
-            <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-              <p className="max-w-2xl text-sm leading-6" style={{ color: "rgba(255,255,255,0.6)" }}>
+            <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+              <p className="max-w-2xl text-[13px] leading-5" style={{ color: BODY }}>
                 {POSITIONING.subhead}
               </p>
-              <div className="shrink-0 rounded-full px-3 py-1 text-xs" style={{ border: "1px solid rgba(255,255,255,0.12)", color: "rgba(255,255,255,0.6)" }}>
-                Plan actual: <span style={{ color: "#fff", fontWeight: 600 }}>{currentPlan}</span>
+              <div className="hidden shrink-0 rounded-full px-3 py-1 text-xs sm:block" style={{ border: `1px solid ${BORDER}`, color: MUTED }}>
+                Plan actual: <span style={{ color: INK, fontWeight: 600 }}>{currentPlan}</span>
               </div>
             </div>
 
-            {/* Value-anchor banner (price anchoring from the market study) */}
+            {/* Value-anchor banner */}
             <div
-              className="mt-5 rounded-2xl px-4 py-3.5 text-sm leading-6 sm:px-5"
-              style={{ border: "1px solid rgba(167,139,250,0.22)", background: "rgba(124,58,237,0.07)", color: "rgba(255,255,255,0.78)" }}
+              className="mt-3.5 rounded-xl px-4 py-2.5 text-[13px] leading-5"
+              style={{ border: "1px solid rgba(255,102,0,0.25)", background: "rgba(255,102,0,0.05)", color: BODY }}
             >
               Una sola suscripción de ChatGPT, Claude o Gemini cuesta{" "}
-              <span style={{ color: VIOLET, fontWeight: 600 }}>$20/mes</span> — y trae un solo proveedor. SiraGPT te da{" "}
-              <span style={{ color: "#fff", fontWeight: 600 }}>todos los modelos líderes</span> más imagen, voz, video, documentos, código y agentes{" "}
-              <span style={{ color: VIOLET, fontWeight: 600 }}>desde $5/mes</span>: la mitad de precio, el doble de mundo.
+              <span style={{ color: ORANGE, fontWeight: 700 }}>$20/mes</span> — y trae un solo proveedor. SiraGPT te da{" "}
+              <span style={{ color: INK, fontWeight: 700 }}>todos los modelos líderes</span> más imagen, voz, video, documentos, código y agentes{" "}
+              <span style={{ color: ORANGE, fontWeight: 700 }}>desde $5/mes</span>.
             </div>
 
-            {/* Honest quota nudge — thin ring, only when usage is high */}
             {usageRatio >= 0.7 ? (
-              <div
-                className="mt-4 flex items-center gap-3 rounded-2xl px-4 py-3"
-                style={{ border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.03)" }}
-              >
-                <svg width="34" height="34" viewBox="0 0 34 34" className="shrink-0">
-                  <circle cx="17" cy="17" r={ringR} fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth="3" />
-                  <circle
-                    cx="17" cy="17" r={ringR} fill="none" stroke={VIOLET} strokeWidth="3" strokeLinecap="round"
-                    strokeDasharray={ringC} strokeDashoffset={ringOffset} transform="rotate(-90 17 17)"
-                  />
-                </svg>
-                <div className="text-sm" style={{ color: "rgba(255,255,255,0.8)" }}>
-                  Has usado <span style={{ color: "#fff", fontWeight: 600 }}>{usagePct}%</span> de tu actividad este mes. Mejora tu plan para seguir sin interrupciones.
-                </div>
+              <div className="mt-3 flex items-center gap-2 rounded-xl px-3.5 py-2 text-[13px]" style={{ border: `1px solid ${BORDER}`, background: "rgba(255,102,0,0.04)", color: BODY }}>
+                <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: ORANGE }} />
+                Has usado <span style={{ color: INK, fontWeight: 700 }}>{usagePct}%</span> de tu actividad este mes. Mejora tu plan para seguir sin interrupciones.
               </div>
             ) : null}
 
-            {/* Plans */}
-            <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
+            {/* Plans — compact, fits one screen */}
+            <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-3">
               {upgradePlans.map((plan, idx) => {
                 const Icon = plan.icon
                 const isCurrent = currentPlan === plan.id
@@ -300,68 +265,52 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
                 return (
                   <motion.article
                     key={plan.id}
-                    initial={reduceMotion ? false : { opacity: 0, y: 10 }}
+                    initial={reduceMotion ? false : { opacity: 0, y: 8 }}
                     animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.25, delay: reduceMotion ? 0 : idx * 0.07, ease: [0.22, 1, 0.36, 1] }}
-                    className="relative flex min-h-[480px] flex-col rounded-[22px] p-5"
+                    transition={{ duration: 0.22, delay: reduceMotion ? 0 : idx * 0.06, ease: [0.22, 1, 0.36, 1] }}
+                    className="relative flex flex-col rounded-2xl p-4"
                     style={{
-                      border: featured ? "1px solid rgba(167,139,250,0.55)" : "1px solid rgba(255,255,255,0.09)",
-                      background: featured ? "rgba(124,58,237,0.07)" : "rgba(255,255,255,0.025)",
-                      boxShadow: featured ? "0 24px 60px -24px rgba(124,58,237,0.5)" : "none",
+                      border: featured ? `1.5px solid ${ORANGE}` : `1px solid ${BORDER}`,
+                      background: featured ? "rgba(255,102,0,0.04)" : "#ffffff",
+                      boxShadow: featured ? "0 18px 44px -22px rgba(255,102,0,0.55)" : "0 1px 2px rgba(10,10,10,0.04)",
                     }}
                   >
-                    {/* Aurora glow only behind the featured card */}
-                    {featured ? (
-                      <div
-                        aria-hidden="true"
-                        className="pointer-events-none absolute -inset-px"
-                        style={{ borderRadius: 23, background: "radial-gradient(120% 70% at 50% 0%, rgba(124,58,237,0.20), transparent 60%)", filter: "blur(8px)" }}
-                      />
-                    ) : null}
-
                     <div className="relative flex flex-1 flex-col">
-                      {plan.badge ? (
-                        <motion.div
-                          initial={reduceMotion ? false : { opacity: 0, scale: 0.9 }}
-                          animate={{ opacity: 1, scale: 1 }}
-                          transition={{ duration: 0.3, delay: 0.15 }}
-                          className="absolute right-0 top-0 rounded-full px-2.5 py-1 text-[11px] font-semibold"
-                          style={{ border: `1px solid ${VIOLET}`, background: "rgba(124,58,237,0.16)", color: VIOLET }}
+                      <div className="flex items-center justify-between">
+                        <div
+                          className="flex h-9 w-9 items-center justify-center rounded-xl"
+                          style={{ border: `1px solid ${BORDER}`, background: "rgba(10,10,10,0.02)", color: featured ? ORANGE : INK }}
                         >
-                          {plan.badge}
-                        </motion.div>
-                      ) : null}
-
-                      <div
-                        className="flex h-11 w-11 items-center justify-center rounded-2xl"
-                        style={{ border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.04)", color: featured ? VIOLET : "rgba(255,255,255,0.85)" }}
-                      >
-                        <Icon className="h-5 w-5" />
+                          <Icon className="h-4 w-4" />
+                        </div>
+                        {plan.badge ? (
+                          <motion.div
+                            initial={reduceMotion ? false : { opacity: 0, scale: 0.9 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            transition={{ duration: 0.3, delay: 0.12 }}
+                            className="rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide"
+                            style={{ background: ORANGE, color: "#fff" }}
+                          >
+                            {plan.badge}
+                          </motion.div>
+                        ) : null}
                       </div>
 
-                      <div className="mt-6">
-                        <div className="text-xs font-medium uppercase tracking-[0.16em]" style={{ color: "rgba(255,255,255,0.5)" }}>
-                          {plan.eyebrow}
-                        </div>
-                        <h3 className="mt-3 text-2xl font-semibold tracking-[-0.03em]" style={{ color: "#fff" }}>{plan.name}</h3>
-                        <p className="mt-3 min-h-[44px] text-sm leading-6" style={{ color: "rgba(255,255,255,0.6)" }}>
-                          {plan.subtitle}
-                        </p>
+                      <div className="mt-3.5">
+                        <div className="text-[10px] font-semibold uppercase tracking-[0.14em]" style={{ color: MUTED }}>{plan.eyebrow}</div>
+                        <h3 className="mt-1.5 text-xl font-semibold tracking-[-0.02em]" style={{ color: INK }}>{plan.name}</h3>
+                        <p className="mt-1.5 text-[12px] leading-4" style={{ color: BODY }}>{plan.subtitle}</p>
                       </div>
 
-                      <div className="mt-6 border-t pt-6" style={{ borderColor: "rgba(255,255,255,0.08)" }}>
-                        <div className="flex items-baseline gap-1.5">
-                          <span className="text-[44px] font-semibold leading-none tracking-[-0.05em]" style={{ color: "#fff" }}>{plan.price}</span>
-                          {!isEnterprise ? (
-                            <span className="text-sm" style={{ color: "rgba(255,255,255,0.5)" }}>/mes</span>
-                          ) : null}
-                        </div>
-                        <div className="mt-1 text-xs" style={{ color: "rgba(255,255,255,0.45)" }}>
-                          {isEnterprise ? "Comunicación directa por WhatsApp" : "Facturación mensual · cancela cuando quieras"}
-                        </div>
+                      <div className="mt-3 flex items-baseline gap-1.5">
+                        <span className="text-[34px] font-semibold leading-none tracking-[-0.04em]" style={{ color: INK }}>{plan.price}</span>
+                        {!isEnterprise ? <span className="text-[13px]" style={{ color: MUTED }}>/mes</span> : null}
+                      </div>
+                      <div className="mt-1 text-[11px]" style={{ color: MUTED }}>
+                        {isEnterprise ? "Comunicación directa por WhatsApp" : "Facturación mensual · cancela cuando quieras"}
                       </div>
 
-                      <div className="mt-4 flex-1">
+                      <div className="mt-3 flex-1 border-t pt-2" style={{ borderColor: BORDER }}>
                         {plan.features.map((feature) => (
                           <FeatureRow key={feature.title} {...feature} featured={featured} />
                         ))}
@@ -369,26 +318,19 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
 
                       <Button
                         size="sm"
-                        variant="outline"
                         disabled={isCurrent || !!isLoading}
                         onClick={() => subscribe(plan.id)}
-                        className="mt-6 h-11 w-full rounded-full border-0 font-semibold"
+                        className="mt-3 h-10 w-full rounded-full border-0 text-[13px] font-semibold"
                         style={
                           featured
-                            ? { background: "#fff", color: "#0a0a0a" }
-                            : { background: "rgba(255,255,255,0.06)", color: "#fff", border: "1px solid rgba(255,255,255,0.18)" }
+                            ? { background: ORANGE, color: "#fff" }
+                            : { background: "#fff", color: INK, border: `1px solid ${BORDER}` }
                         }
                       >
                         {isCurrent ? (
-                          <>
-                            <Check className="mr-2 h-4 w-4" />
-                            Plan actual
-                          </>
+                          <><Check className="mr-2 h-4 w-4" />Plan actual</>
                         ) : isEnterprise ? (
-                          <>
-                            <MessageCircle className="mr-2 h-4 w-4" />
-                            {plan.cta}
-                          </>
+                          <><MessageCircle className="mr-2 h-4 w-4" />{plan.cta}</>
                         ) : (
                           plan.cta
                         )}
@@ -399,35 +341,24 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
               })}
             </div>
 
-            {/* Secondary ghost CTA + honesty line (reduces "trap" feeling, lifts primary conversion) */}
-            <div className="mt-6 text-center">
+            {/* Footer: free-plan exit + honesty + trust, all on one compact row block */}
+            <div className="mt-4 flex flex-col items-center gap-2 border-t pt-3 text-center" style={{ borderColor: BORDER }}>
+              <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
+                {TRUST_ROW.map((t, i) => (
+                  <span key={t} className="inline-flex items-center gap-1.5 text-[11px]" style={{ color: MUTED }}>
+                    {i === 0 ? <ShieldCheck className="h-3.5 w-3.5" style={{ color: ORANGE }} /> : <Check className="h-3 w-3" style={{ color: MUTED }} />}
+                    {t}
+                  </span>
+                ))}
+              </div>
               <button
                 type="button"
                 onClick={() => onOpenChange(false)}
-                className="text-sm underline-offset-4 transition-colors hover:underline"
-                style={{ color: "rgba(255,255,255,0.6)" }}
+                className="text-[12px] underline-offset-4 transition-colors hover:underline"
+                style={{ color: MUTED }}
               >
-                Seguir con el plan gratis
+                Seguir con el plan gratis · FlashGPT es gratis e ilimitado, siempre.
               </button>
-              <p className="mt-1.5 text-xs" style={{ color: "rgba(255,255,255,0.4)" }}>
-                FlashGPT es gratis e ilimitado, siempre. Pagas solo por los modelos premium y las herramientas.
-              </p>
-            </div>
-
-            {/* Trust row */}
-            <div className="mt-6 border-t pt-5" style={{ borderColor: "rgba(255,255,255,0.08)" }}>
-              <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
-                {TRUST_ROW.map((t, i) => (
-                  <div key={t} className="flex items-center gap-1.5 text-[11px]" style={{ color: "rgba(255,255,255,0.5)" }}>
-                    {i === 0 ? (
-                      <ShieldCheck className="h-3.5 w-3.5" style={{ color: VIOLET }} />
-                    ) : (
-                      <Check className="h-3 w-3" style={{ color: "rgba(255,255,255,0.4)" }} />
-                    )}
-                    {t}
-                  </div>
-                ))}
-              </div>
             </div>
           </div>
         </div>
