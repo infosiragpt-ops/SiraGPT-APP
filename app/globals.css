@@ -4301,20 +4301,12 @@ footer {
 /* ─── Composer — premium liquid surface ──────────────────────────── */
 .composer-liquid-surface {
   isolation: isolate;
-  backdrop-filter: blur(22px) saturate(1.14);
-  -webkit-backdrop-filter: blur(22px) saturate(1.14);
-  background:
-    linear-gradient(145deg, hsl(0 0% 100% / 0.9), hsl(210 22% 98% / 0.76) 62%, hsl(0 0% 100% / 0.86)),
-    radial-gradient(ellipse 62% 44% at 14% 0%, hsl(0 0% 100% / 0.7), transparent 70%),
-    radial-gradient(ellipse 44% 38% at 92% 100%, hsl(var(--primary) / 0.055), transparent 72%);
+  background: hsl(0 0% 100%);
 }
 .composer-liquid-surface::before,
 .composer-liquid-surface::after {
-  content: "";
-  position: absolute;
-  pointer-events: none;
-  border-radius: inherit;
-  z-index: 0;
+  content: none;
+  display: none !important;
 }
 .composer-liquid-surface::before {
   inset: 0;
@@ -4337,13 +4329,10 @@ footer {
 }
 
 .composer-surface {
-  border: 1px solid hsl(220 13% 91% / 0.72);
-  border-radius: 2rem;
-  background-color: hsl(0 0% 100% / 0.92);
-  box-shadow:
-    0 22px 58px -38px hsl(220 44% 18% / 0.55),
-    0 10px 26px -22px hsl(220 32% 18% / 0.34),
-    inset 0 1px 0 hsl(0 0% 100% / 0.84);
+  border: 1px solid hsl(220 13% 90% / 0.9);
+  border-radius: 1.75rem;
+  background-color: hsl(0 0% 100%);
+  box-shadow: 0 2px 10px -4px hsl(220 30% 18% / 0.1);
 }
 
 .composer-input-row {
@@ -4554,8 +4543,8 @@ footer {
   z-index: 2;
   min-height: 2.2rem !important;
   padding: 0.18rem 0.2rem 0.1rem !important;
-  font-size: 1.18rem;
-  line-height: 1.23;
+  font-size: 1rem;
+  line-height: 1.5;
 }
 
 .composer-textarea-highlights {
@@ -4695,10 +4684,7 @@ button.anti-bribery-context-chip:not(:disabled):active {
   text-overflow: ellipsis;
 }
 .dark .composer-liquid-surface {
-  background:
-    linear-gradient(145deg, hsl(212 37% 8% / 0.94), hsl(218 34% 7% / 0.86) 58%, hsl(216 30% 10% / 0.9)),
-    radial-gradient(ellipse 58% 34% at 14% 0%, hsl(0 0% 100% / 0.09), transparent 68%),
-    radial-gradient(ellipse 48% 40% at 92% 100%, hsl(var(--accent-violet) / 0.16), transparent 72%);
+  background: hsl(220 16% 9%);
 }
 .dark .composer-liquid-surface::before {
   background:
@@ -4782,7 +4768,7 @@ button.anti-bribery-context-chip:not(:disabled):active {
 .dark .composer-surface {
   background-color: hsl(var(--composer-bg));
   border: 1px solid hsl(var(--composer-border));
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28), 0 1px 2px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 2px 12px -4px rgba(0, 0, 0, 0.5);
   transition: border-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
               box-shadow   180ms cubic-bezier(0.2, 0.8, 0.2, 1),
               background-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
