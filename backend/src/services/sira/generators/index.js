@@ -72,6 +72,12 @@ function wrap(fn, defaultFormat) {
 function getLocalProviders() {
   return {
     "sira-rtf": wrap(generateRtf, "rtf"),
+    // rtf-writer is the registry's lower-preference node RTF fallback (pref 80
+    // vs sira-rtf's 86). It had no provider, so dispatchGenerate marked it
+    // provider_not_injected and the declared fallback could never run. Wire it
+    // to the same deterministic generator so the belt-and-suspenders is real;
+    // sira-rtf still wins on preference, so no current behavior changes.
+    "rtf-writer": wrap(generateRtf, "rtf"),
     "sira-odt": wrap(generateOdt, "odt"),
     "sira-epub": wrap(generateEpub, "epub"),
     "sira-markdown-frontmatter": wrap(generateMarkdownFrontmatter, "md"),

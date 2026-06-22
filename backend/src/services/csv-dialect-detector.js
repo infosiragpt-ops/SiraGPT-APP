@@ -229,7 +229,11 @@ async function detectDialect(input) {
   const usableLines = allLines.slice(skipRows, SAMPLE_LINES + skipRows).filter(l => l.trim());
   const dataLines = usableLines.slice(skipRows);
 
-  const scores = CANDIDATE_DELIMITERS.map(d => scoreDelimiter(dataLines, d.char));
+  // Carry the human-readable name through — scoreDelimiter only returns the
+  // delimiter char/score, so best.name (and thus dialect.delimiterName) used to
+  // come out undefined on the success path, surfacing as
+  // "Detected dialect: undefined" in formatCsvBlock.
+  const scores = CANDIDATE_DELIMITERS.map(d => ({ ...scoreDelimiter(dataLines, d.char), name: d.name }));
   scores.sort((a, b) => b.score - a.score);
   const best = scores[0];
 

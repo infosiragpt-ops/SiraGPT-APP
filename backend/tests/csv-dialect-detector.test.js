@@ -243,22 +243,20 @@ describe('detectDialect — buffer / non-fs paths', () => {
     assert.ok(d.rowsAnalyzed >= 4);
   });
 
-  it('QUIRK: a detected dialect returns delimiterName === undefined', async () => {
-    // scoreDelimiter() never carries the candidate `name` through, so
-    // `best.name` is undefined on the success path. delimiterName is only
-    // populated ('comma') on the hard-coded fallback paths. Locking this
-    // code-as-written behavior.
+  it('carries delimiterName through on the detected (success) path', async () => {
+    // scoreDelimiter now carries the candidate name, so best.name (and thus
+    // dialect.delimiterName) is populated on the success path, not just on the
+    // hard-coded fallbacks.
     const csv = 'name,age,city\nalice,30,madrid\nbob,25,paris\ncarol,40,rome\n';
     const d = await detectDialect(Buffer.from(csv, 'utf8'));
-    assert.equal(d.delimiterName, undefined);
-    assert.ok('delimiterName' in d);
+    assert.equal(d.delimiterName, 'comma');
   });
 
   it('detects a semicolon dialect from a buffer', async () => {
     const csv = 'product;price;qty\nwidget;9.99;3\ngadget;19.99;5\ngizmo;4.50;7\n';
     const d = await detectDialect(Buffer.from(csv, 'utf8'));
     assert.equal(d.delimiter, ';');
-    assert.equal(d.delimiterName, undefined);
+    assert.equal(d.delimiterName, 'semicolon');
     assert.equal(d.avgColumns, 3);
   });
 
@@ -334,9 +332,9 @@ describe('detectDialect + parseCSV — real fs path (tmpdir)', () => {
     const block = formatCsvBlock(result);
     assert.ok(block.includes('# Columns: name | age | city'));
     assert.ok(block.includes('alice,30,madrid'));
-    // QUIRK: because detectDialect leaves delimiterName === undefined (not
-    // 'comma'), formatCsvBlock emits a "# Detected dialect: undefined" comment
-    // even for a plain comma file. Locking the real behavior.
-    assert.ok(block.includes('# Detected dialect: undefined (encoding: utf8)'));
+    // A plain comma file is the default dialect, so formatCsvBlock emits NO
+    // "Detected dialect" comment (it only annotates non-comma dialects). Before
+    // the delimiterName fix this wrongly printed "Detected dialect: undefined".
+    assert.ok(!block.includes('# Detected dialect:'));
   });
 });
