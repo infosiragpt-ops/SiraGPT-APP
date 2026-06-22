@@ -173,6 +173,11 @@ const toolManifestSchema = {
       maxItems: 8,
       description: "Data classes the tool can touch — enforced at dispatch against the session's clearance.",
     },
+    _skillMeta: {
+      type: "object",
+      additionalProperties: true,
+      description: "Optional skill-derived metadata attached when a skill is adapted into a tool manifest (skillId, category, clearance, concreteTools, prerequisites, idempotent). Informational only — not consumed by the dispatch gates.",
+    },
   },
 };
 
@@ -1892,7 +1897,7 @@ function getResearchManifests() {
       examples_positive: [{ when: "user asks about quantum computing research", call: { query: "quantum computing error correction 2024" } }],
       examples_negative: [{ when: "user wants a simple chat answer", why: "use conversational_answer or self_rag_answer instead." }],
       recovery_policy: { on_timeout: "Return ok:false.", on_error: "Surface the error.", max_retries: 1 },
-      side_effect_level: "network",
+      side_effect_level: "remote-read",
       sandbox_required: false,
       audit_policy: "every-call",
       scopes: ["research.read"],
