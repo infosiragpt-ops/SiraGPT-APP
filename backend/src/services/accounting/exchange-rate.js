@@ -3,6 +3,12 @@
 const { z } = require('zod');
 const { round2 } = require('./money');
 
+// Exchange rates are stored at Decimal(18,6) precision — SBS/SUNAT publish
+// rates like 3.751 / 3.7234. round2 (money precision) must NOT be used on the
+// stored rate or every PEN conversion is corrupted; round2 stays on conversion
+// RESULTS only (convertWithRate).
+const round6 = (n) => Math.round(Number(n) * 1e6) / 1e6;
+
 /**
  * Tipo de cambio (TC): soles PEN por 1 unidad de moneda extranjera.
  * convert(amount, rate, toPen): extranjera→PEN = amount * rate; PEN→extranjera = amount / rate.
@@ -51,8 +57,8 @@ async function recordRate({ prisma, input } = {}) {
   const date = dayKey(data.date);
   return prisma.accountingExchangeRate.upsert({
     where: { date_currency_rateType: { date, currency: data.currency, rateType: data.rateType } },
-    update: { rate: round2(data.rate), source: data.source },
-    create: { date, currency: data.currency, rate: round2(data.rate), rateType: data.rateType, source: data.source },
+    update: { rate: round6(data.rate), source: data.source },
+    create: { date, currency: data.currency, rate: round6(data.rate), rateType: data.rateType, source: data.source },
   });
 }
 

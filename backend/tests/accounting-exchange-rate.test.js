@@ -50,7 +50,10 @@ test('recordRate: validates + upserts (normaliza currency a mayúsculas)', async
   const r = await fx.recordRate({ prisma, input: { date: '2026-06-15', currency: 'usd', rate: 3.751 } });
   assert.equal(r.currency, 'USD');
   assert.equal(r.rateType, 'VENTA');
-  assert.equal(Number(r.rate), 3.75); // round2
+  assert.equal(Number(r.rate), 3.751); // stored at 6-decimal rate precision, not money round2
+  // A 4-decimal SBS/SUNAT rate must survive (round2 would have corrupted it to 3.72).
+  const r2 = await fx.recordRate({ prisma, input: { date: '2026-06-16', currency: 'USD', rate: 3.7234 } });
+  assert.equal(Number(r2.rate), 3.7234);
   await assert.rejects(() => fx.recordRate({ prisma, input: { currency: 'US', rate: 3.7 } }), (e) => e.code === 'VALIDATION_ERROR');
   await assert.rejects(() => fx.recordRate({ prisma, input: { currency: 'USD', rate: -1 } }), (e) => e.code === 'VALIDATION_ERROR');
 });
