@@ -20,7 +20,14 @@
  */
 
 const path = require('path');
-const simpleGit = require('simple-git');
+
+let simpleGit;
+try {
+  simpleGit = require('simple-git');
+} catch {
+  simpleGit = null;
+}
+
 const { ensureParentDir, isGitRepo } = require('./workspace-manager');
 
 const CLONE_TIMEOUT_MS = 5 * 60 * 1000; // 5 min — large repos
