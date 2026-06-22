@@ -380,6 +380,19 @@ test('create_timeline: empty events fails gracefully', async () => {
   assert.equal(r.ok, false);
 });
 
+test('create_timeline: a hostile event color cannot break out of the SVG fill', async () => {
+  // Regression: ev.color was interpolated raw into fill="..."; a value with a
+  // quote could break the attribute. safeColor() now falls back to the palette.
+  const r = await tool('create_timeline').execute({
+    title: 'T',
+    events: [{ date: '2026', title: 'E', color: '"><script>alert(1)</script>' }],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const c = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(!c.includes('<script>alert(1)</script>'), 'hostile color must not inject markup');
+  assert.ok(!c.includes('fill="">'), 'attribute must not be broken open');
+});
+
 // ── create_kanban_board ──────────────────────────────────────────
 
 test('create_kanban_board: 3-column board', async () => {

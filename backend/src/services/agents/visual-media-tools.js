@@ -2251,7 +2251,7 @@ const generateVideo = {
           const safeAction = xmlEscape(scene.action || '').slice(0, 140);
           const safeVisual = xmlEscape(scene.visualStyle || '').slice(0, 140);
           const safeAudio = xmlEscape(scene.audio || '').slice(0, 100);
-          const accent = scene.color || '#3B82F6';
+          const accent = safeColor(scene.color, '#3B82F6');
           const tx = pad + thumbW + 24;
           // Build a stylized thumbnail using gradient + abstract shapes derived from scene index
           const gradId = `grad-scene-${i}`;
@@ -2419,7 +2419,7 @@ const createTimeline = {
 
         events12.forEach((ev, i) => {
           const cy = headerH + pad + i * eventH + eventH / 2;
-          const color = ev.color || palette[i % palette.length];
+          const color = safeColor(ev.color, palette[i % palette.length]);
           const date = xmlEscape(String(ev.date || '').slice(0, 24));
           const tt = xmlEscape(String(ev.title || '').slice(0, 80));
           const desc = xmlEscape(String(ev.description || '').slice(0, 180));
@@ -2458,7 +2458,7 @@ const createTimeline = {
         events12.forEach((ev, i) => {
           const cx = pad + (i + 0.5) * stepW;
           const above = i % 2 === 0;
-          const color = ev.color || palette[i % palette.length];
+          const color = safeColor(ev.color, palette[i % palette.length]);
           const date = xmlEscape(String(ev.date || '').slice(0, 20));
           const tt = xmlEscape(String(ev.title || '').slice(0, 50));
           const desc = xmlEscape(String(ev.description || '').slice(0, 110));
@@ -2624,7 +2624,7 @@ const createKanbanBoard = {
       cols.forEach((col, ci) => {
         const colX = pad + ci * (colW + colGap);
         const colY = headerH + pad;
-        const colColor = col.color || palette[ci % palette.length];
+        const colColor = safeColor(col.color, palette[ci % palette.length]);
         // Column background
         body += `<rect x="${colX}" y="${colY}" width="${colW}" height="${colInnerH}" rx="8" fill="${t.col}" stroke="${t.border}" stroke-width="1"/>`;
         // Column header
@@ -2978,7 +2978,7 @@ const createProcessFlow = {
         stepList.forEach((step, i) => {
           const sx = pad + i * (stepW + gapW);
           const sy = headerH + pad;
-          const color = step.color || palette[i % palette.length];
+          const color = safeColor(step.color, palette[i % palette.length]);
           const safeLabel = xmlEscape(String(step.label || '').slice(0, 30));
           const safeDesc = xmlEscape(String(step.description || '').slice(0, 90));
 
@@ -3041,7 +3041,7 @@ const createProcessFlow = {
         stepList.forEach((step, i) => {
           const sy = headerH + pad + i * (stepH + gapH);
           const sx = pad;
-          const color = step.color || palette[i % palette.length];
+          const color = safeColor(step.color, palette[i % palette.length]);
           const safeLabel = xmlEscape(String(step.label || '').slice(0, 50));
           const safeDesc = xmlEscape(String(step.description || '').slice(0, 140));
 
@@ -8377,7 +8377,7 @@ const createSwimlaneDiagram = {
         const ty = y + 18;
         const tw = stageColW - 32;
         const th = laneH - 36;
-        const color = task.color || t.palette[task.lane % t.palette.length];
+        const color = safeColor(task.color, t.palette[task.lane % t.palette.length]);
         return { task, x: tx, y: ty, w: tw, h: th, color };
       });
 
