@@ -42,6 +42,7 @@ const { authenticateToken } = require('../middleware/auth');
 const { writeAuditLog } = require('../utils/audit-log');
 const prisma = require('../config/database');
 const triggers = require('../services/trigger-registry');
+const { assertSafeUrl } = require('../services/agent-harness/tools/web-fetch-tool');
 const {
   slugify,
   uniqueSlug,
@@ -1872,8 +1873,13 @@ function validateWebhookUrl(url) {
   try {
     const u = new URL(url);
     if (u.protocol !== 'https:' && u.protocol !== 'http:') return 'url must be http(s)';
+    // SSRF guard — reject loopback/private/reserved/metadata targets.
+    assertSafeUrl(url);
     return null;
-  } catch {
+  } catch (err) {
+    if (err && err.code && String(err.code).startsWith('web_fetch_')) {
+      return err.message || 'url targets a host that is not allowed';
+    }
     return 'url is not a valid URL';
   }
 }

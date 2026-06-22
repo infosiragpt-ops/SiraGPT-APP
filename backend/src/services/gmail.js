@@ -69,7 +69,8 @@ class GmailService {
 
   // Check if required Gmail scopes are present
   hasRequiredScopes(tokens) {
-    console.log('Checking Gmail token scopes...',tokens);
+    // Log only the scope string / key names — never the raw token object.
+    console.log('Checking Gmail token scopes...', tokens && tokens.scope ? tokens.scope : (tokens ? Object.keys(tokens) : null));
     const requiredScopes = [
       'https://www.googleapis.com/auth/gmail.readonly',
       'https://www.googleapis.com/auth/gmail.send',

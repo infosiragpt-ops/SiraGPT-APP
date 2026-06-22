@@ -117,6 +117,20 @@ function safeColor(c, fallback) {
   return fallback;
 }
 
+// JSON.stringify a value for safe embedding inside an inline <script> block.
+// Plain JSON.stringify escapes quotes but NOT `<`, so a user string containing
+// `</script>` would terminate the script element in the HTML parser even inside
+// a JS string literal. Escaping `<`/`>` (and the JS line separators U+2028/
+// U+2029) to their \uXXXX form is byte-identical for normal data and only
+// changes the hostile case. Mirrors the mermaid-fallback escaping.
+function jsonForScript(v) {
+  // Escape < and > so a user string containing </script> cannot terminate the
+  // inline <script> element in the HTML parser (modern browsers accept raw
+  // U+2028/U+2029 in string literals since ES2019). Byte-identical for normal
+  // data; only changes the hostile case.
+  return JSON.stringify(v).replace(/</g, '\\u003c').replace(/>/g, '\\u003e');
+}
+
 function pick(obj, keys) {
   const out = {};
   for (const k of keys) if (obj && obj[k] !== undefined) out[k] = obj[k];
@@ -1849,8 +1863,8 @@ const createDashboardHtml = {
         const dsList = chart.datasets.map((ds, di) => {
           const color = safeColor(ds.color, colors[di % colors.length]);
           return `{
-          label: ${JSON.stringify(ds.label || `Serie ${di + 1}`)},
-          data: ${JSON.stringify(ds.data)},
+          label: ${jsonForScript(ds.label || `Serie ${di + 1}`)},
+          data: ${jsonForScript(ds.data)},
           borderColor: '${color}',
           backgroundColor: ${chart.type === 'pie' || chart.type === 'doughnut' ? JSON.stringify(ds.data.map((_, idx) => colors[idx % colors.length])) : `'${color}'`},
           ${chart.type === 'line' ? 'fill: false, tension: 0.3,' : ''}
@@ -1862,7 +1876,7 @@ const createDashboardHtml = {
     new Chart(document.getElementById('chart-${i}'), {
       type: '${chart.type}',
       data: {
-        labels: ${JSON.stringify(chart.labels)},
+        labels: ${jsonForScript(chart.labels)},
         datasets: [${dsList}]
       },
       options: {
@@ -1872,8 +1886,8 @@ const createDashboardHtml = {
           legend: { display: ${chart.datasets.length > 1}, position: 'bottom', labels: { color: '${t.muted}', font: { size: 11 } } }
         },
         scales: ${chart.type !== 'pie' && chart.type !== 'doughnut' && chart.type !== 'polarArea' ? `{
-          x: { title: { display: ${!!chart.xLabel}, text: ${JSON.stringify(chart.xLabel || '')}, color: '${t.muted}' }, ticks: { color: '${t.muted}' }, grid: { color: '${t.border}' } },
-          y: { title: { display: ${!!chart.yLabel}, text: ${JSON.stringify(chart.yLabel || '')}, color: '${t.muted}' }, ticks: { color: '${t.muted}' }, grid: { color: '${t.border}' }, beginAtZero: true }
+          x: { title: { display: ${!!chart.xLabel}, text: ${jsonForScript(chart.xLabel || '')}, color: '${t.muted}' }, ticks: { color: '${t.muted}' }, grid: { color: '${t.border}' } },
+          y: { title: { display: ${!!chart.yLabel}, text: ${jsonForScript(chart.yLabel || '')}, color: '${t.muted}' }, ticks: { color: '${t.muted}' }, grid: { color: '${t.border}' }, beginAtZero: true }
         }` : '{}'}
       }
     });`;

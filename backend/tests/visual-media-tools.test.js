@@ -704,6 +704,24 @@ test('create_dashboard_html: hostile metric/dataset color cannot break out of HT
   assert.ok(!c.includes("'+evil+'"), 'JS string-literal breakout must be neutralised');
 });
 
+test('create_dashboard_html: a chart label cannot close the inline <script>', async () => {
+  // Regression: chart label/data went through plain JSON.stringify into a
+  // <script> block; a label of "</script>…" terminated the script element.
+  const r = await tool('create_dashboard_html').execute({
+    title: 'Probe', metrics: [],
+    charts: [{
+      type: 'bar', title: 'C',
+      labels: ['</script><img src=x onerror=alert(1)>'],
+      datasets: [{ label: 'L', data: [1] }],
+    }],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const c = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(!c.includes('</script><img'), 'user </script> must be escaped, not terminate the script');
+  assert.ok(c.includes('\\u003c/script'), 'the < should be \\u003c-escaped inside the script');
+});
+
+
 // ── Tool metadata ────────────────────────────────────────────────
 
 test('all 35 tools have valid metadata', () => {

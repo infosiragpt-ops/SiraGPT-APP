@@ -22,7 +22,8 @@ router.get('/callback', async (req, res) => {
   try {
     const { access_token, refresh_token } = await spotifyService.handleCallback(code);
 
-    console.log(access_token, refresh_token);
+    // Never log raw OAuth tokens — only their presence.
+    console.log('[spotify] callback ok, tokens received:', !!access_token, !!refresh_token);
 
     const tokensToStore = {
       access_token: access_token,

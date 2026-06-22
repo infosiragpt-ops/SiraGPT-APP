@@ -23,7 +23,10 @@
  */
 
 const crypto = require('crypto');
+const net = require('net');
 const { withRetry } = require('../utils/retry-with-backoff');
+const { assertSafeUrl } = require('./agent-harness/tools/web-fetch-tool');
+const { resolveAndAssertSafe } = require('./connectors/web-fetch');
 // Optional metrics registry — observing latency is best-effort; never
 // let an instrumentation hiccup break delivery.
 let _metrics = null;
@@ -269,6 +272,14 @@ function createNonceCache({ maxSize = 4096 } = {}) {
 }
 
 async function defaultDeliver({ url, body, headers, timeoutMs }) {
+  // SSRF guard at delivery time: re-validate the literal URL and DNS-resolve
+  // the host to defeat rebinding (a webhook registered with a public host that
+  // later resolves to a private/metadata IP). Throws → delivery fails, which
+  // the retry/DLQ machinery already handles as a failed attempt.
+  const parsed = assertSafeUrl(url);
+  if (!net.isIP(parsed.hostname)) {
+    await resolveAndAssertSafe(parsed.hostname);
+  }
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
   try {
