@@ -1402,7 +1402,7 @@ export function AppSidebar() {
 
                       const renderChatItem = (chat: any) => {
                         const isEditing = editingChatId === chat.id
-                        const { emoji: chatEmoji, title: displayTitle } = getSidebarChatTitleParts(optimisticUpdates[chat.id] || chat.title)
+                        const { title: displayTitle } = getSidebarChatTitleParts(optimisticUpdates[chat.id] || chat.title)
                         const isTruncated = displayTitle.length > 25
                         // Per-chat status — compact left rail:
                         // spinner while generating, blue dot for a
@@ -1471,42 +1471,41 @@ export function AppSidebar() {
                                                 del emoji, de modo que el glifo queda alineado a
                                                 la izquierda y todas las filas comparten el mismo
                                                 ancho de columna (h-5 w-5). */}
-                                            <span
-                                              className="relative flex h-5 w-5 shrink-0 items-center justify-center text-[15px] leading-none"
-                                              aria-hidden={isStreaming ? undefined : true}
-                                              title={
-                                                isStreaming
-                                                  ? "Generando..."
-                                                  : isComplete
-                                                    ? "Tarea completada"
-                                                    : isFailed
-                                                      ? "Tarea con error"
-                                                      : undefined
-                                              }
-                                            >
-                                              {isStreaming ? (
-                                                <ThinkingIndicator
-                                                  size="xs"
-                                                  label="Chat en progreso"
-                                                  className="text-muted-foreground/80"
-                                                />
-                                              ) : (
-                                                <>
-                                                  <span>{chatEmoji}</span>
-                                                  {(isComplete || isFailed) && (
-                                                    <span
-                                                      className={cn(
-                                                        "absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full ring-2 ring-sidebar",
-                                                        isComplete
-                                                          ? "bg-sky-500 shadow-[0_0_0_3px_rgba(14,165,233,0.16)]"
-                                                          : "bg-destructive/85"
-                                                      )}
-                                                      aria-label={isComplete ? "Tarea completada" : "Tarea con error"}
-                                                    />
-                                                  )}
-                                                </>
-                                              )}
-                                            </span>
+                                            {/* No per-chat emoji — clean, ChatGPT-like titles.
+                                                A leading slot only appears for chats with an
+                                                actual status (generating / done / error); normal
+                                                chats keep the title flush-left. */}
+                                            {(isStreaming || isComplete || isFailed) && (
+                                              <span
+                                                className="relative flex h-4 w-4 shrink-0 items-center justify-center leading-none"
+                                                aria-hidden={isStreaming ? undefined : true}
+                                                title={
+                                                  isStreaming
+                                                    ? "Generando..."
+                                                    : isComplete
+                                                      ? "Tarea completada"
+                                                      : "Tarea con error"
+                                                }
+                                              >
+                                                {isStreaming ? (
+                                                  <ThinkingIndicator
+                                                    size="xs"
+                                                    label="Chat en progreso"
+                                                    className="text-muted-foreground/80"
+                                                  />
+                                                ) : (
+                                                  <span
+                                                    className={cn(
+                                                      "h-2 w-2 rounded-full",
+                                                      isComplete
+                                                        ? "bg-sky-500 shadow-[0_0_0_3px_rgba(14,165,233,0.16)]"
+                                                        : "bg-destructive/85"
+                                                    )}
+                                                    aria-label={isComplete ? "Tarea completada" : "Tarea con error"}
+                                                  />
+                                                )}
+                                              </span>
+                                            )}
                                             <span className="text-sm flex-1 truncate">
                                               {displayTitle}
                                             </span>
