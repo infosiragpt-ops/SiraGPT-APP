@@ -2,7 +2,7 @@
 
 const { z } = require('zod');
 const { computeInvoiceTotals } = require('./igv');
-const { round2 } = require('./money');
+const { round2, round6 } = require('./money');
 const { getOseAdapter } = require('./ose-adapter');
 
 const invoiceLineSchema = z.object({
@@ -84,7 +84,7 @@ async function createInvoice({ prisma, input, userId = null } = {}) {
       customerDoc: data.customerDoc || null,
       customerName: data.customerName,
       currency: data.currency,
-      exchangeRate: data.exchangeRate != null ? round2(data.exchangeRate) : null,
+      exchangeRate: data.exchangeRate != null ? round6(data.exchangeRate) : null,
       gravado: totals.gravado,
       exonerado: totals.exonerado,
       inafecto: totals.inafecto,

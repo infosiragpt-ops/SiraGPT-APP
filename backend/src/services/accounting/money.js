@@ -33,6 +33,15 @@ function round2(value) {
   return fromCents(toCents(value));
 }
 
+/**
+ * Round to 6 decimals — exchange-rate precision (the rate column is
+ * Decimal(18,6)). Using round2 (money precision) on a stored FX rate corrupts
+ * every conversion. round2 is for money AMOUNTS; round6 is for FX RATES.
+ */
+function round6(value) {
+  return Math.round(toNumber(value) * 1e6) / 1e6;
+}
+
 function sumCents(values) {
   return (Array.isArray(values) ? values : []).reduce((acc, v) => acc + toCents(v), 0);
 }
@@ -47,4 +56,4 @@ function eqMoney(a, b) {
   return toCents(a) === toCents(b);
 }
 
-module.exports = { toNumber, toCents, fromCents, round2, sumCents, sum2, eqMoney };
+module.exports = { toNumber, toCents, fromCents, round2, round6, sumCents, sum2, eqMoney };

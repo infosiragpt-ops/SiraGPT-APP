@@ -3,7 +3,7 @@
 const { z } = require('zod');
 const { assertBalanced } = require('./double-entry');
 const { assertDateOpen } = require('./periods');
-const { round2 } = require('./money');
+const { round2, round6 } = require('./money');
 
 /** Zod schema para una línea de asiento. */
 const journalLineSchema = z.object({
@@ -103,7 +103,7 @@ async function createJournalEntry({ prisma, input, userId = null } = {}) {
       date: data.date,
       glosa: data.glosa,
       currency: data.currency,
-      exchangeRate: data.exchangeRate != null ? round2(data.exchangeRate) : null,
+      exchangeRate: data.exchangeRate != null ? round6(data.exchangeRate) : null,
       status: 'POSTED',
       source: data.source,
       sourceId: data.sourceId || null,

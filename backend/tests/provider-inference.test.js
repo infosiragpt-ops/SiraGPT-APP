@@ -62,10 +62,12 @@ test('inferProviderFromModelId: Google Gemini family', () => {
   assert.equal(inferProviderFromModelId('imagen-3'), 'Gemini');
 });
 
-test('inferProviderFromModelId: Groq handles llama-3.x models', () => {
+test('inferProviderFromModelId: Groq -versatile vs bare-llama Cerebras (FlashGPT)', () => {
   assert.equal(inferProviderFromModelId('llama-3.3-70b-versatile'), 'Groq');
-  assert.equal(inferProviderFromModelId('llama-3.1-8b'), 'OpenAI');
-  assert.equal(inferProviderFromModelId('llama-3.1-70b'), 'OpenAI');
+  // Bare FlashGPT/Cerebras model ids route to Cerebras (not OpenAI, which
+  // doesn't serve them) — createProviderClient('Cerebras') gates on the key.
+  assert.equal(inferProviderFromModelId('llama-3.1-8b'), 'Cerebras');
+  assert.equal(inferProviderFromModelId('llama-3.1-70b'), 'Cerebras');
 });
 
 test('inferProviderFromModelId: Anthropic direct (bare claude-*)', () => {
@@ -130,8 +132,8 @@ test('inferProviderFromModelId: leading/trailing slashes infer same as clean for
   assert.equal(inferProviderFromModelId('llama-3.1-70b-versatile/'), 'Groq');
   assert.equal(inferProviderFromModelId('claude-haiku-4-5/'), 'Anthropic');
   // A stray leading slash must NOT trip the "/gpt-oss" OpenRouter slug rule:
-  // the clean form "gpt-oss-120b" is OpenAI-shaped.
-  assert.equal(inferProviderFromModelId('/gpt-oss-120b'), 'OpenAI');
+  // the clean form "gpt-oss-120b" is the bare FlashGPT/Cerebras id.
+  assert.equal(inferProviderFromModelId('/gpt-oss-120b'), 'Cerebras');
   // Internal slashes (real OpenRouter slugs) are preserved:
   assert.equal(inferProviderFromModelId('anthropic/claude-opus-4.7/'), 'OpenRouter');
   assert.equal(inferProviderFromModelId('/openai/gpt-oss-120b'), 'OpenRouter');

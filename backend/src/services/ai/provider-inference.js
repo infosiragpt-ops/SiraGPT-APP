@@ -28,6 +28,7 @@ const KNOWN_PROVIDERS = Object.freeze([
   'Mistral',
   'Z.ai',
   'Kimi',
+  'Cerebras',
   'OpenAI',
 ]);
 
@@ -95,6 +96,16 @@ function inferProviderFromModelId(modelId) {
 
   // 8) Kimi / Moonshot direct — bare ids (slug `moonshotai/...` already → OpenRouter).
   if (m.startsWith('kimi-') || m.startsWith('kimi.') || m.startsWith('moonshot-') || m.startsWith('moonshotai-')) return 'Kimi';
+
+  // 9) Cerebras / FlashGPT (free tier + cross-plan fallback). BARE ids only —
+  //    the OpenRouter slug forms (`meta-llama/...`, `*/gpt-oss*`, `z-ai/...`)
+  //    already matched above. The model served varies per deployment
+  //    (gpt-oss-120b, llama-3.x, zai-glm-*) but all go through the Cerebras
+  //    OpenAI-compatible endpoint; createProviderClient('Cerebras') gates on
+  //    CEREBRAS_API_KEY. Without this, a Custom GPT / org-default pinned to a
+  //    FlashGPT model id fell through to 'OpenAI' and called an OpenAI model
+  //    that doesn't exist.
+  if (m.startsWith('gpt-oss-') || /^llama-3(\.|-)/.test(m) || m.startsWith('zai-glm-')) return 'Cerebras';
 
   return 'OpenAI';
 }
