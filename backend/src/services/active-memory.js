@@ -191,6 +191,12 @@ function recall(userId, query, opts = {}) {
   const limit = Math.min(opts.limit || 10, 50);
   const tier = opts.tier || null;
   const category = opts.category || null;
+  // Whether this read counts as a genuine access. Prompt-building / display
+  // paths (getMemoryContext, read-only routes) pass bump:false so merely
+  // assembling the system prompt every turn doesn't inflate accessCount and
+  // force short_term facts into long_term via auto-promotion. Defaults to true
+  // so explicit recall() keeps its access-counting behavior.
+  const bump = opts.bump !== false;
 
   const now = Date.now();
   let entries = [...store.values()].filter(e => {
@@ -243,11 +249,13 @@ function recall(userId, query, opts = {}) {
 
   const results = entries.slice(0, limit);
 
-  for (const entry of results) {
-    const live = store.get(entry.id);
-    if (live) {
-      live.accessCount += 1;
-      live.lastAccessed = now;
+  if (bump) {
+    for (const entry of results) {
+      const live = store.get(entry.id);
+      if (live) {
+        live.accessCount += 1;
+        live.lastAccessed = now;
+      }
     }
   }
 
@@ -274,7 +282,8 @@ function getMemoryContext(userId, opts = {}) {
   const longTermCount = [...store.values()].filter(e => e.userId === userId && e.tier === 'long_term').length;
   const shortTermCount = [...store.values()].filter(e => e.userId === userId && e.tier === 'short_term').length;
 
-  const recentMemories = recall(userId, null, { limit: opts.limit || 20 });
+  // Read-only prompt assembly: do NOT bump accessCount (this runs every turn).
+  const recentMemories = recall(userId, null, { limit: opts.limit || 20, bump: false });
 
   const longTermFacts = recentMemories
     .filter(m => m.tier === 'long_term')

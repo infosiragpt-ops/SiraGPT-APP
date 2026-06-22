@@ -672,6 +672,25 @@ test('create_dashboard_html: no charts', async () => {
   assert.equal(r.ok, true);
 });
 
+test('create_dashboard_html: hostile metric/dataset color cannot break out of HTML/JS', async () => {
+  // Regression: m.color was interpolated raw into a style="" attribute and
+  // ds.color raw into a JS string literal. A safeColor() gate now falls back
+  // to the theme color for any non-hex/rgb value.
+  const r = await tool('create_dashboard_html').execute({
+    title: 'XSS Probe',
+    metrics: [{ label: 'x', value: '1', color: '"><script>alert(1)</script>' }],
+    charts: [{
+      type: 'bar', title: 'C', labels: ['a'],
+      datasets: [{ label: 'S', data: [1], color: "'+evil+'" }],
+    }],
+    theme: 'light',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const c = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(!c.includes('<script>alert(1)</script>'), 'HTML breakout must be neutralised');
+  assert.ok(!c.includes("'+evil+'"), 'JS string-literal breakout must be neutralised');
+});
+
 // ── Tool metadata ────────────────────────────────────────────────
 
 test('all 35 tools have valid metadata', () => {

@@ -144,7 +144,9 @@ router.get('/memory/all', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
     const limit = Math.min(Number(req.query.limit) || 200, 500);
-    const entries = activeMemory.recall(userId, null, { limit });
+    // Read-only listing: don't bump accessCount just because the user opened
+    // their memory view (that would skew tier auto-promotion).
+    const entries = activeMemory.recall(userId, null, { limit, bump: false });
     const items = (Array.isArray(entries) ? entries : []).map((m) => ({
       id: m.id,
       fact: m.fact,

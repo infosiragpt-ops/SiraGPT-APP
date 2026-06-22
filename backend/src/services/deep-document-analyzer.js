@@ -228,7 +228,9 @@ function assessRisks(text, domain, entities) {
   }
 
   if (domain === 'medical') {
-    const dosageEntities = entities.filter(e => e.type === 'dosage' || /\b(mg|ml|mcg|IU)\b/i.test(e.value));
+    // The medical risk is unconditional. (Removed a dead `dosageEntities`
+    // binding that was never read and filtered on a non-existent 'dosage'
+    // entity type — ENTITY_PATTERNS defines no such type.)
     risks.push({
       category: 'dosage_verification',
       severity: 'high',

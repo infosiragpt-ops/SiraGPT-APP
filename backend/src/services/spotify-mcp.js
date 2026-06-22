@@ -58,6 +58,9 @@ async function analyzeIntent(message) {
         temperature: 0.3,
         max_tokens: 200,
       }),
+      // Bound the call so a stalled OpenAI socket can't hang the Spotify
+      // chat request forever; the catch below degrades gracefully on abort.
+      signal: AbortSignal.timeout(Number(process.env.SPOTIFY_MCP_OPENAI_TIMEOUT_MS) || 15000),
     });
 
     const data = await response.json();
@@ -98,6 +101,7 @@ async function generateResponse(message, conversationHistory = []) {
         temperature: 0.7,
         max_tokens: 500,
       }),
+      signal: AbortSignal.timeout(Number(process.env.SPOTIFY_MCP_OPENAI_TIMEOUT_MS) || 15000),
     });
 
     const data = await response.json();

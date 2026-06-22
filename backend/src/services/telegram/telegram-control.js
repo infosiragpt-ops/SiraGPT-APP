@@ -96,6 +96,9 @@ async function sendTelegramMessage(token, chatId, text, opts = {}) {
         parse_mode: opts.parseMode || 'Markdown',
         disable_web_page_preview: true,
       }),
+      // sendTelegramMessage is awaited inside a 15s polling interval; without a
+      // deadline a hung api.telegram.org request stalls run-update delivery.
+      signal: AbortSignal.timeout(Number(process.env.TELEGRAM_API_TIMEOUT_MS) || 10000),
     });
     let body = null;
     try { body = await res.json(); } catch { /* non-json */ }
@@ -118,6 +121,7 @@ async function setTelegramWebhook(config) {
         secret_token: config.webhookSecret || undefined,
         allowed_updates: ['message'],
       }),
+      signal: AbortSignal.timeout(Number(process.env.TELEGRAM_API_TIMEOUT_MS) || 10000),
     });
     let body = null;
     try { body = await res.json(); } catch { /* non-json */ }

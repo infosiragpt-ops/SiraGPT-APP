@@ -102,6 +102,21 @@ function xmlEscape(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// Validate a user/model-supplied color before interpolating it into an SVG
+// attribute, an HTML style attribute, or a JS string literal. Only accepts a
+// 3- or 6-digit hex (with #) or a conservative rgb/rgba()/hsl() form; anything
+// else (e.g. `"><script>` or a quote that would break out of the context)
+// falls back to the theme color. Mirrors the inline /^#[0-9A-Fa-f]{6}$/ checks
+// the newer diagram tools already use, hoisted into one reusable helper.
+function safeColor(c, fallback) {
+  if (typeof c !== 'string') return fallback;
+  const v = c.trim();
+  if (/^#[0-9A-Fa-f]{3}$/.test(v) || /^#[0-9A-Fa-f]{6}$/.test(v)) return v;
+  if (/^rgba?\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+\s*(,\s*[\d.]+\s*)?\)$/.test(v)) return v;
+  if (/^hsla?\(\s*[\d.]+\s*,\s*[\d.]+%\s*,\s*[\d.]+%\s*(,\s*[\d.]+\s*)?\)$/.test(v)) return v;
+  return fallback;
+}
+
 function pick(obj, keys) {
   const out = {};
   for (const k of keys) if (obj && obj[k] !== undefined) out[k] = obj[k];
@@ -558,7 +573,7 @@ const createChart = {
       const tickFormat = (v) => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${(v / 1000).toFixed(1)}K` : v.toFixed(range < 10 ? 1 : 0);
 
       // Colors per dataset
-      const colors = datasets.map((d, i) => d.color || palette[i % palette.length]);
+      const colors = datasets.map((d, i) => safeColor(d.color, palette[i % palette.length]));
 
       function buildChartBody() {
         if (chartType === 'pie' || chartType === 'donut') {
@@ -1602,7 +1617,7 @@ const createInfographicSvg = {
       }
 
       function renderSectionContent(section, sy, contentX) {
-        const accent = section.color || t.accent;
+        const accent = safeColor(section.color, t.accent);
         const stype = inferSectionType(section);
         const safeContent = section.content;
 
@@ -1662,7 +1677,7 @@ const createInfographicSvg = {
       let sectionsSvg = '';
       sections.slice(0, maxSections).forEach((section, i) => {
         const sy = HEADER_H + PAD + i * SECTION_H;
-        const accent = section.color || t.accent;
+        const accent = safeColor(section.color, t.accent);
         const safeHeading = xmlEscape(String(section.heading).slice(0, 80));
         const hasMetrics = Array.isArray(section.metrics) && section.metrics.length > 0;
         const iconHtml = iconSvg[section.icon] ? `<g transform="translate(${PAD + 8}, ${sy + 14})" color="${accent}" stroke-width="auto">${iconSvg[section.icon]}</g>` : '';
@@ -1798,7 +1813,7 @@ const createDashboardHtml = {
         const val = xmlEscape(String(m.value || '').slice(0, 20));
         const label = xmlEscape(String(m.label || '').slice(0, 30));
         const change = m.change ? xmlEscape(m.change) : null;
-        const color = m.color || t.accent;
+        const color = safeColor(m.color, t.accent);
         return `
     <div class="metric-card" style="border-top: 3px solid ${color};">
       <div class="metric-value" style="color: ${color};">${val}</div>
@@ -1830,7 +1845,7 @@ const createDashboardHtml = {
 
       const chartScripts = maxCharts.map((chart, i) => {
         const dsList = chart.datasets.map((ds, di) => {
-          const color = ds.color || colors[di % colors.length];
+          const color = safeColor(ds.color, colors[di % colors.length]);
           return `{
           label: ${JSON.stringify(ds.label || `Serie ${di + 1}`)},
           data: ${JSON.stringify(ds.data)},
