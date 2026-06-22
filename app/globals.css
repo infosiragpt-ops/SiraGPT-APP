@@ -4556,10 +4556,10 @@ footer {
   overflow: hidden;
   padding: 0.375rem 0.25rem;
   color: hsl(var(--foreground));
-  font-size: 15px;
+  font-size: 1rem;
   font-weight: 400;
   letter-spacing: 0;
-  line-height: 1.45;
+  line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -4748,12 +4748,12 @@ button.anti-bribery-context-chip:not(:disabled):active {
   }
   .composer-textarea-shell .composer-textarea {
     min-height: 2.35rem !important;
-    font-size: 1.35rem;
-    line-height: 1.18;
+    font-size: 1rem;
+    line-height: 1.5;
   }
   .composer-textarea-highlights {
-    font-size: 1.35rem;
-    line-height: 1.18;
+    font-size: 1rem;
+    line-height: 1.5;
   }
   .composer-context-field[data-context-chip="true"] :is(input, textarea) {
     padding-left: 6.85rem !important;
