@@ -242,6 +242,27 @@ test('executeActionRequest blocks a redirect to a private address (manual re-val
   );
 });
 
+test('executeActionRequest strips the auth secret on a cross-origin redirect', async () => {
+  const action = actions.normalizeActionsForStore([{ ...VALID_ACTION, auth: { type: 'bearer', secret: 'super-secret-token' } }])[0];
+  const fetchImpl = fakeFetch((url, _init, i) => {
+    if (i === 0) return { ok: false, status: 302, headers: { get: (k) => (k.toLowerCase() === 'location' ? 'https://evil.example.org/' : null) }, body: null, async text() { return ''; } };
+    return jsonResponse('{"ok":true}');
+  });
+  await actions.executeActionRequest(action, { city: 'Lima' }, { fetch: fetchImpl, lookup: PUBLIC_LOOKUP });
+  assert.equal(fetchImpl.calls[0].init.headers.Authorization, 'Bearer super-secret-token');
+  assert.equal(fetchImpl.calls[1].init.headers.Authorization, undefined, 'auth must not follow a cross-origin redirect');
+});
+
+test('executeActionRequest keeps auth on a same-origin redirect', async () => {
+  const action = actions.normalizeActionsForStore([{ ...VALID_ACTION, auth: { type: 'bearer', secret: 'tok' } }])[0];
+  const fetchImpl = fakeFetch((url, _init, i) => {
+    if (i === 0) return { ok: false, status: 302, headers: { get: (k) => (k.toLowerCase() === 'location' ? 'https://api.example.com/weather/v2' : null) }, body: null, async text() { return ''; } };
+    return jsonResponse('{"ok":true}');
+  });
+  await actions.executeActionRequest(action, { city: 'Lima' }, { fetch: fetchImpl, lookup: PUBLIC_LOOKUP });
+  assert.equal(fetchImpl.calls[1].init.headers.Authorization, 'Bearer tok', 'same-origin redirect keeps auth');
+});
+
 test('executeActionRequest is blocked when DNS resolves to a private address', async () => {
   const { normalized } = actions.validateActionDefinition(VALID_ACTION);
   const fetchImpl = fakeFetch(() => jsonResponse('{}'));

@@ -318,11 +318,17 @@ async function executeActionRequest(action, args, options = {}) {
   }
 
   // 3. Headers + auth + body.
-  const headers = {
+  let headers = {
     'User-Agent': 'SiraGPT-GPT-Action/1.0',
     Accept: 'application/json, text/plain;q=0.9, */*;q=0.5',
   };
+  const baseHeaderKeys = new Set(Object.keys(headers));
   applyAuth(action.auth, parsed, headers);
+  // Header names applyAuth added (Authorization / a configured api_key header) —
+  // these carry the user's secret and must NOT follow a cross-origin redirect,
+  // or an attacker-controlled 30x could exfiltrate the credential.
+  const authHeaderKeys = Object.keys(headers).filter((k) => !baseHeaderKeys.has(k));
+  const originalOrigin = parsed.origin;
 
   let body;
   if (action.method !== 'GET' && action.method !== 'DELETE') {
@@ -361,7 +367,15 @@ async function executeActionRequest(action, args, options = {}) {
         const location = res.headers.get('location');
         if (!location) throw new Error(`redirect (${res.status}) without Location header`);
         if (hop === ACTION_MAX_REDIRECTS) throw new Error('too many redirects');
-        current = assertSafeUrl(new URL(location, current).toString());
+        const next = assertSafeUrl(new URL(location, current).toString());
+        // Strip the auth secret before following a redirect to a different
+        // origin (scheme+host+port) so it can't leak to an attacker host. Swap
+        // in a fresh headers object so the already-sent request keeps its auth.
+        if (next.origin !== originalOrigin && authHeaderKeys.length) {
+          headers = { ...headers };
+          for (const k of authHeaderKeys) delete headers[k];
+        }
+        current = next;
         continue;
       }
 
