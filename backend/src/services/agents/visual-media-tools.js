@@ -501,11 +501,11 @@ const editImage = {
 
 const createChart = {
   name: 'create_chart',
-  description: 'Generate a data chart or graph (bar, line, pie, scatter, histogram, area, radar, donut, bubble, horizontal_bar, funnel, gauge, waterfall, heatmap, treemap) from structured data. The chart is rendered as an SVG file and saved as a downloadable artifact. For complex multi-series or interactive charts, describe the data in detail.',
+  description: 'Generate a data chart or graph (bar, line, pie, scatter, histogram, area, donut, horizontal_bar, funnel, gauge, waterfall, heatmap, treemap) from structured data. The chart is rendered as an SVG file and saved as a downloadable artifact. For a radar/spider chart use the dedicated create_radar_chart tool. For complex multi-series or interactive charts, describe the data in detail.',
   parameters: {
     type: 'object',
     properties: {
-      chartType: { type: 'string', enum: ['bar', 'line', 'pie', 'scatter', 'histogram', 'area', 'radar', 'donut', 'bubble', 'horizontal_bar', 'funnel', 'gauge', 'waterfall', 'heatmap', 'treemap'], description: 'Type of chart to generate.' },
+      chartType: { type: 'string', enum: ['bar', 'line', 'pie', 'scatter', 'histogram', 'area', 'donut', 'horizontal_bar', 'funnel', 'gauge', 'waterfall', 'heatmap', 'treemap'], description: 'Type of chart to generate. For a radar/spider chart use the dedicated create_radar_chart tool.' },
       title: { type: 'string', description: 'Chart title.' },
       labels: { type: 'array', items: { type: 'string' }, description: 'Category labels (x-axis for bar/line, segments for pie/donut).' },
       datasets: { type: 'array', items: { type: 'object', properties: {
@@ -932,7 +932,9 @@ const createChart = {
           const cx = M.left + (i + 0.5) * seriesWidth;
           elements += `<text x="${cx}" y="${H - M.bottom + 18}" text-anchor="end" transform="rotate(-35, ${cx}, ${H - M.bottom + 18})" font-family="Arial" font-size="11" fill="#555">${label}</text>`;
 
-          if (chartType === 'bar' || chartType === 'horizontal_bar') {
+          // histogram renders as bars (a histogram is a bar chart of
+          // frequencies; create_chart receives already-bucketed data).
+          if (chartType === 'bar' || chartType === 'horizontal_bar' || chartType === 'histogram') {
             datasets.forEach((ds, di) => {
               const val = ds.data[i] || 0;
               const barX = cx - barGroupW / 2 + di * (barW + barGap);

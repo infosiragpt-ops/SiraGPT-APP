@@ -177,6 +177,19 @@ test('create_chart: bar chart SVG', async () => {
   assert.ok(c.includes('Test Chart'));
 });
 
+test('create_chart: histogram renders as bars (rect), not a line', async () => {
+  const r = await tool('create_chart').execute({
+    chartType: 'histogram', title: 'Distribution',
+    labels: ['0-10', '10-20', '20-30'],
+    datasets: [{ label: 'freq', data: [5, 12, 8] }],
+    theme: 'professional',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const c = fs.readFileSync(assertArtifact(r), 'utf8');
+  // Bars, not a line/area path connecting the points.
+  assert.ok(c.includes('<rect'), 'histogram should render rect bars');
+});
+
 test('create_chart: pie chart', async () => {
   const r = await tool('create_chart').execute({
     chartType: 'pie', title: 'Pie', labels: ['A', 'B'], datasets: [{ label: 'V', data: [60, 40] }],
