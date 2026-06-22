@@ -436,7 +436,8 @@ router.get('/test-stt', authenticateToken, async (req, res) => {
       method: 'OPTIONS',
       headers: {
         'xi-api-key': ELEVENLABS_API_KEY,
-      }
+      },
+      signal: AbortSignal.timeout(Number(process.env.ELEVENLABS_TIMEOUT_MS) || 30000),
     });
 
     console.log('ElevenLabs STT test response:', testResponse.status, testResponse.statusText);
@@ -465,6 +466,7 @@ router.get('/user/subscription', authenticateToken, async (req, res) => {
         'xi-api-key': ELEVENLABS_API_KEY,
         accept: 'application/json',
       },
+      signal: AbortSignal.timeout(Number(process.env.ELEVENLABS_TIMEOUT_MS) || 30000),
     });
 
     const subscription = await subscriptionResponse.json().catch(() => ({}));
@@ -517,6 +519,8 @@ router.post('/generate-music', [
 
     const musicResponse = await fetch('https://api.elevenlabs.io/v1/music', {
       method: 'POST',
+      // Music generation is slower than the probes — give it a larger budget.
+      signal: AbortSignal.timeout(Number(process.env.ELEVENLABS_MUSIC_TIMEOUT_MS) || 120000),
       headers: {
         'xi-api-key': ELEVENLABS_API_KEY,
         'Content-Type': 'application/json',

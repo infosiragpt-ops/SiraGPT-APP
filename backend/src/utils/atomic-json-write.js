@@ -172,6 +172,15 @@ async function writeJsonAtomic(filePath, data, opts = {}) {
         try { await fsp.unlink(tmp); } catch { /* ignore */ }
         throw err;
     }
+    // fsync the directory so the rename itself is durable across a crash —
+    // parity with the sync path's _fsyncDirSync (the async variant advertises
+    // "same guarantees" but previously skipped this).
+    if (opts.fsyncDir !== false) {
+        try {
+            const dh = await fsp.open(dir, 'r');
+            try { await dh.sync(); } finally { await dh.close(); }
+        } catch { /* directories aren't fsyncable on all platforms — best effort */ }
+    }
     return buf.length;
 }
 

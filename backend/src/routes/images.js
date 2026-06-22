@@ -49,7 +49,7 @@ async function persistAssetsToR2(userId, assets) {
     if (!src) continue;
     if (!objectStorage.enabled()) { urls.push(src); continue; }
     try {
-      const resp = await fetch(src);
+      const resp = await fetch(src, { signal: AbortSignal.timeout(Number(process.env.ASSET_FETCH_TIMEOUT_MS) || 30000) });
       if (!resp.ok) { urls.push(src); continue; }
       const buf = Buffer.from(await resp.arrayBuffer());
       const ct = resp.headers.get('content-type') || 'image/png';

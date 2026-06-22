@@ -1070,7 +1070,7 @@ async function generateVideoAsync(operationId, prompt, aspectRatio, duration, ne
 
       // Download and save the video
       console.log(`📥 Downloading video from: ${videoUrl}`);
-      const resp = await fetch(videoUrl);
+      const resp = await fetch(videoUrl, { signal: AbortSignal.timeout(Number(process.env.VIDEO_FETCH_TIMEOUT_MS) || 120000) });
       if (!resp.ok) {
         throw new Error(`Failed to download video: ${resp.status} ${resp.statusText}`);
       }

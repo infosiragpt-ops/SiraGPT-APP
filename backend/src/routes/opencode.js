@@ -134,7 +134,7 @@ const RUNNER_DEV_URL = process.env.CODE_RUNNER_DEV_URL || 'http://localhost:5173
 
 router.post('/run', authenticateToken, requireConfigured, async (req, res) => {
   try {
-    const r = await fetch(`${RUNNER_CTRL}/run`, { method: 'POST' });
+    const r = await fetch(`${RUNNER_CTRL}/run`, { method: 'POST', signal: AbortSignal.timeout(Number(process.env.RUNNER_CTRL_TIMEOUT_MS) || 10000) });
     const j = await r.json().catch(() => ({}));
     return res.json({ ...j, devUrl: RUNNER_DEV_URL });
   } catch (err) {
@@ -144,7 +144,7 @@ router.post('/run', authenticateToken, requireConfigured, async (req, res) => {
 
 router.get('/run/status', authenticateToken, requireConfigured, async (req, res) => {
   try {
-    const r = await fetch(`${RUNNER_CTRL}/status`);
+    const r = await fetch(`${RUNNER_CTRL}/status`, { signal: AbortSignal.timeout(Number(process.env.RUNNER_CTRL_TIMEOUT_MS) || 10000) });
     const j = await r.json().catch(() => ({}));
     return res.json({ ...j, devUrl: RUNNER_DEV_URL });
   } catch (err) {
@@ -154,7 +154,7 @@ router.get('/run/status', authenticateToken, requireConfigured, async (req, res)
 
 router.post('/run/stop', authenticateToken, requireConfigured, async (req, res) => {
   try {
-    await fetch(`${RUNNER_CTRL}/stop`, { method: 'POST' }).catch(() => {});
+    await fetch(`${RUNNER_CTRL}/stop`, { method: 'POST', signal: AbortSignal.timeout(Number(process.env.RUNNER_CTRL_TIMEOUT_MS) || 10000) }).catch(() => {});
     return res.json({ ok: true });
   } catch (err) {
     return res.status(502).json({ error: 'runner_unreachable', message: err.message });
