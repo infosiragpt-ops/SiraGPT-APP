@@ -11,7 +11,7 @@
  */
 
 import * as React from "react"
-import { Download, FolderGit2, Github, X } from "lucide-react"
+import { Download, FolderGit2, Github, Share2, X } from "lucide-react"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { toast } from "sonner"
 
@@ -134,6 +134,20 @@ export function CodeHub({ open, onClose }: Props) {
           >
             <Github className="mr-1.5 h-3.5 w-3.5" />
             GitHub
+            <span className="ml-1.5 rounded bg-muted px-1 py-px text-[9px] font-medium uppercase tracking-wide">
+              Pronto
+            </span>
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 cursor-not-allowed rounded-md px-2.5 text-[11px] font-normal text-muted-foreground/70"
+            onClick={() => toast.message("Compartir: enlace de solo lectura del código disponible próximamente.")}
+            aria-label="Compartir código (próximamente)"
+          >
+            <Share2 className="mr-1.5 h-3.5 w-3.5" />
+            Compartir
             <span className="ml-1.5 rounded bg-muted px-1 py-px text-[9px] font-medium uppercase tracking-wide">
               Pronto
             </span>

@@ -20,7 +20,7 @@
  */
 
 import * as React from "react"
-import Editor, { type OnChange, type OnMount } from "@monaco-editor/react"
+import Editor, { type BeforeMount, type OnChange, type OnMount } from "@monaco-editor/react"
 
 import { cn } from "@/lib/utils"
 
@@ -91,6 +91,56 @@ function resolveMonacoLanguage(hint: string): string {
   return LANGUAGE_ALIAS[normalized] || "plaintext"
 }
 
+// Refined dark theme — a GitHub-Dark-inspired palette that reads cleaner
+// and more professional than the stock `vs-dark` (softer background, calmer
+// token hues, dimmed line numbers). Defined once before the editor mounts.
+const handleBeforeMount: BeforeMount = (monaco) => {
+  monaco.editor.defineTheme("sira-dark", {
+    base: "vs-dark",
+    inherit: true,
+    rules: [
+      { token: "comment", foreground: "6e7681", fontStyle: "italic" },
+      { token: "keyword", foreground: "ff7b72" },
+      { token: "keyword.control", foreground: "ff7b72" },
+      { token: "string", foreground: "a5d6ff" },
+      { token: "string.escape", foreground: "7ee787" },
+      { token: "number", foreground: "79c0ff" },
+      { token: "regexp", foreground: "7ee787" },
+      { token: "type", foreground: "ffa657" },
+      { token: "type.identifier", foreground: "ffa657" },
+      { token: "function", foreground: "d2a8ff" },
+      { token: "identifier", foreground: "c9d1d9" },
+      { token: "variable", foreground: "c9d1d9" },
+      { token: "variable.predefined", foreground: "79c0ff" },
+      { token: "constant", foreground: "79c0ff" },
+      { token: "tag", foreground: "7ee787" },
+      { token: "attribute.name", foreground: "79c0ff" },
+      { token: "attribute.value", foreground: "a5d6ff" },
+      { token: "delimiter", foreground: "8b949e" },
+      { token: "operator", foreground: "ff7b72" },
+    ],
+    colors: {
+      "editor.background": "#0c0e12",
+      "editor.foreground": "#c9d1d9",
+      "editorLineNumber.foreground": "#484f58",
+      "editorLineNumber.activeForeground": "#8b949e",
+      "editor.lineHighlightBackground": "#ffffff08",
+      "editor.lineHighlightBorder": "#00000000",
+      "editor.selectionBackground": "#3392ff44",
+      "editor.inactiveSelectionBackground": "#3392ff22",
+      "editorCursor.foreground": "#c9d1d9",
+      "editorIndentGuide.background": "#ffffff0d",
+      "editorIndentGuide.activeBackground": "#ffffff1f",
+      "editorBracketMatch.background": "#3392ff33",
+      "editorBracketMatch.border": "#3392ff66",
+      "scrollbarSlider.background": "#ffffff14",
+      "scrollbarSlider.hoverBackground": "#ffffff22",
+      "editorWidget.background": "#0c0e12",
+      "editorWidget.border": "#ffffff14",
+    },
+  })
+}
+
 export default function MonacoCodeArea({ value, language, onChange, path }: Props) {
   const handleChange = React.useCallback<OnChange>(
     (next) => {
@@ -131,7 +181,8 @@ export default function MonacoCodeArea({ value, language, onChange, path }: Prop
           path={path}
           language={monacoLanguage}
           value={value}
-          theme="vs-dark"
+          theme="sira-dark"
+          beforeMount={handleBeforeMount}
           onChange={handleChange}
           onMount={handleMount}
           options={{
@@ -139,16 +190,27 @@ export default function MonacoCodeArea({ value, language, onChange, path }: Prop
             scrollBeyondLastLine: false,
             wordWrap: "on",
             fontSize: 13,
+            lineHeight: 21,
+            letterSpacing: 0.2,
+            fontLigatures: true,
             fontFamily:
               "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
             renderLineHighlight: "line",
             smoothScrolling: true,
-            // Minimalist surface: no line-number gutter, no folding column.
-            lineNumbers: "off",
+            cursorBlinking: "smooth",
+            cursorSmoothCaretAnimation: "on",
+            roundedSelection: true,
+            // Professional, readable surface: dimmed line-number gutter +
+            // bracket-pair colorization + breathing-room padding. Folding
+            // column stays off to keep the gutter minimal.
+            lineNumbers: "on",
+            lineNumbersMinChars: 3,
             glyphMargin: false,
             folding: false,
-            lineDecorationsWidth: 8,
-            lineNumbersMinChars: 0,
+            lineDecorationsWidth: 12,
+            padding: { top: 14, bottom: 14 },
+            bracketPairColorization: { enabled: true },
+            guides: { indentation: true, bracketPairs: false },
             scrollbar: {
               vertical: "auto",
               horizontal: "auto",
