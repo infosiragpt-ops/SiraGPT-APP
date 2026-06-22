@@ -61,7 +61,12 @@ function sendDomainError(res, err) {
 router.get('/accounts', authenticateToken, async (req, res) => {
   try {
     const where = { isActive: true };
-    if (req.query.element) where.element = Number(req.query.element);
+    if (req.query.element) {
+      // Guard against NaN reaching Prisma (a 500 on plainly-400 input).
+      const el = Number.parseInt(req.query.element, 10);
+      if (!Number.isInteger(el)) return res.status(400).json({ error: 'invalid_element' });
+      where.element = el;
+    }
     if (req.query.postable === 'true') where.postable = true;
     const accounts = await prisma.accountingAccount.findMany({ where, orderBy: { code: 'asc' } });
     res.json({ accounts, total: accounts.length });

@@ -131,7 +131,7 @@ router.get('/notifications', authenticateToken, async (req, res) => {
     const notifications = await prisma.notification.findMany({
       where: { userId: req.user.id },
       orderBy: { createdAt: 'desc' },
-      take: parseInt(req.query.limit) || 50
+      take: parsePositiveInt(req.query.limit, 50, { min: 1, max: 100 })
     });
 
     const unreadCount = await prisma.notification.count({

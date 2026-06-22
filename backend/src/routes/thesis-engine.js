@@ -65,7 +65,11 @@ router.post(
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders?.();
 
-    const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+    // Guard res.write: after a client disconnect the next write throws, which
+    // would otherwise surface as a misleading {type:'error'}. Heartbeat keeps
+    // buffering proxies from idle-timing-out a slow pipeline.
+    const send = (obj) => { try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { /* client gone */ } };
+    const heartbeat = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* client gone */ } }, 15_000);
     try {
       await runThesisPipeline(
         { topic: req.body.topic, onEvent: send },
@@ -76,6 +80,8 @@ router.post(
       send({ type: 'report_ready' });
     } catch (err) {
       send({ type: 'error', message: err && err.message ? err.message : String(err) });
+    } finally {
+      clearInterval(heartbeat);
     }
     res.end();
   },
