@@ -126,6 +126,27 @@ describe('error-telemetry', () => {
       assert.equal(classifyError(err), ERROR_CATEGORIES.NETWORK);
     });
 
+    it('classifies 504 Gateway Timeout as TIMEOUT (not NETWORK)', () => {
+      // Regression: a duplicated `code.startsWith('5')` check used to shadow
+      // the 504 branch, misclassifying gateway timeouts as NETWORK.
+      const err = new Error('Gateway Timeout');
+      err.statusCode = 504;
+      assert.equal(classifyError(err), ERROR_CATEGORIES.TIMEOUT);
+    });
+
+    it('classifies 408 Request Timeout as TIMEOUT', () => {
+      const err = new Error('Request Timeout');
+      err.code = '408';
+      assert.equal(classifyError(err), ERROR_CATEGORIES.TIMEOUT);
+    });
+
+    it('still classifies 502/503 as NETWORK after the 504 reorder', () => {
+      const e502 = Object.assign(new Error('Bad Gateway'), { code: '502' });
+      const e503 = Object.assign(new Error('Service Unavailable'), { code: '503' });
+      assert.equal(classifyError(e502), ERROR_CATEGORIES.NETWORK);
+      assert.equal(classifyError(e503), ERROR_CATEGORIES.NETWORK);
+    });
+
     it('returns UNKNOWN for generic errors', () => {
       assert.equal(classifyError(new Error('weird')), ERROR_CATEGORIES.UNKNOWN);
     });

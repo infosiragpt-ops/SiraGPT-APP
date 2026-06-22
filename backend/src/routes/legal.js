@@ -64,10 +64,24 @@ function _parseFrontMatter(markdown) {
 const LEGAL_CACHE_TTL_MS = Number.parseInt(process.env.SIRAGPT_LEGAL_CACHE_TTL_MS || '300000', 10);
 const _docCache = new Map(); // `${slug}::${version}` -> { doc, cachedAt }
 
+// A legal version is either the sentinel 'latest' or a short token of safe
+// filename characters. This is the security gate: `version` is attacker-
+// controlled (query string / request body) and flows into a filesystem path
+// in `_loadDocument`, so anything containing a path separator or `..` segment
+// must be rejected BEFORE it reaches `path.join` to prevent traversal
+// (e.g. `?version=../../../../etc/hosts` reading arbitrary `.md` files).
+function isSafeVersion(version) {
+  if (version === 'latest') return true;
+  return typeof version === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,32}$/.test(version);
+}
+
 function _loadDocument(slug, version) {
   const base = DOC_MAP[slug];
   if (!base) return null;
   const resolvedVersion = version || 'latest';
+  // Reject unsafe version tokens at the single chokepoint shared by the GET
+  // handlers and POST /accept — a malformed version resolves to "not found".
+  if (!isSafeVersion(resolvedVersion)) return null;
   const cacheKey = `${slug}::${resolvedVersion}`;
   const now = Date.now();
   const cached = _docCache.get(cacheKey);
@@ -154,5 +168,10 @@ router.post('/accept', authenticateToken, async (req, res) => {
   }
 });
 
+// The Express router is the default export; the path-safety helper and the
+// loader are attached for unit testing (legal.js has no DB dependency in the
+// read path, so the traversal guard can be exercised directly).
+router.isSafeVersion = isSafeVersion;
+router._loadDocument = _loadDocument;
 module.exports = router;
 module.exports._internals = { _parseFrontMatter, _loadDocument, DOC_MAP, LEGAL_DIR };

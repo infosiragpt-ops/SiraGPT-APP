@@ -229,6 +229,25 @@ describe('AsyncGuard', () => {
       // Listener fired, so it is removed as well (the leak fix must not break this).
       assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
     });
+
+    test('rejects promptly when the external signal is ALREADY aborted at entry (no hang)', async () => {
+      // Regression: previously the already-aborted branch set GUARD_TIMED_OUT
+      // but never aborted the internal controller, so the race ran against an
+      // un-aborted signal and the timeout watchdog no-ops once state leaves
+      // PENDING — a never-settling promise hung forever.
+      const guard = new AsyncGuard({ defaultTimeoutMs: 60000 });
+      const controller = new AbortController();
+      controller.abort();
+      const start = Date.now();
+      const err = await catchRejection(
+        guard.run(never(), { label: 'pre-aborted', signal: controller.signal })
+      );
+      const elapsed = Date.now() - start;
+      assert.ok(elapsed < 1000, `expected prompt rejection, took ${elapsed}ms`);
+      assert.ok(err instanceof GuardError, 'rejects with a GuardError, not a hang');
+      // Consistent with the mid-flight external-abort path above.
+      assert.equal(err.code, 'GUARD_TIMEOUT');
+    });
   });
 
   describe('fetch()', () => {

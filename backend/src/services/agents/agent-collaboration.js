@@ -48,13 +48,19 @@ const DEFAULT_RUNTIME_MS = 180_000;
 /** Default timeout for async-guard wrapping (ms) — slightly above runtime */
 const GUARD_TIMEOUT_MS = 300_000;
 
-/** Default circuit breaker config for sub-agent invocations */
+/**
+ * Default circuit breaker config for sub-agent invocations.
+ * NOTE: the keys must match CircuitBreaker's actual option names
+ * (`threshold`/`probeCount`) — the earlier `failureThreshold`/
+ * `successThreshold`/`halfOpenMaxCalls` were silently ignored by
+ * sanitizeOptions, so breakers ran with the library defaults (5/1) instead
+ * of the intended 3 failures-to-open / 2 probes-to-close.
+ */
 const DEFAULT_CB_CONFIG = {
   name: 'agent-subtask',
-  failureThreshold: 3,
-  successThreshold: 2,
+  threshold: 3,
+  probeCount: 2,
   timeoutMs: GUARD_TIMEOUT_MS,
-  halfOpenMaxCalls: 1,
 };
 
 /** Error reporter scope */
@@ -64,7 +70,9 @@ const ERROR_SCOPE = 'agent-collaboration';
 // order independent of OTel setup.
 let _reporter = null;
 function getReporter() {
-  if (!_reporter) _reporter = createErrorReporter({ scope: ERROR_SCOPE });
+  // createErrorReporter reads `service` (not `scope`); the wrong key made the
+  // reporter fall back to the generic 'siragpt-backend' label.
+  if (!_reporter) _reporter = createErrorReporter({ service: ERROR_SCOPE });
   return _reporter;
 }
 
@@ -178,7 +186,9 @@ async function executeSubTask(task, idx, user, options, patternKey, taskContext)
   } catch (err) {
     // Capture structured telemetry
     try {
-      reporter.capture(err, {
+      // The reporter exposes captureError (not capture) — the old call threw a
+      // TypeError on every sub-task failure, silently dropping all telemetry.
+      reporter.captureError(err, {
         component: 'agent-collaboration',
         pattern: patternKey,
         subTaskIndex: idx,
