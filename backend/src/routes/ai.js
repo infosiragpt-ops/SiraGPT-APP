@@ -2626,6 +2626,21 @@ router.post(
         console.warn('[saliency] classify failed (continuing without):', salClassErr?.message || salClassErr);
       }
 
+      // Adversarial-prompt safety block — analyses the raw user text for
+      // instruction-override / role-swap / prompt-exfil / jailbreak markers.
+      // Empty string for a normal prompt (verdict 'safe'), so it adds nothing
+      // to the prompt unless the turn looks like a manipulation attempt.
+      // Gated by SIRAGPT_ADVERSARIAL_DISABLED.
+      let adversarialBlock = '';
+      try {
+        if (String(process.env.SIRAGPT_ADVERSARIAL_DISABLED || '').toLowerCase() !== '1') {
+          const adversarialDetector = require('../services/adversarial-prompt-detector');
+          adversarialBlock = adversarialDetector.buildSafetyBlock(adversarialDetector.analyzePrompt(String(prompt || ''))) || '';
+        }
+      } catch (advErr) {
+        console.warn('[adversarial] analyze failed (continuing without):', advErr?.message || advErr);
+      }
+
       // Professional document analysis enrichment ─────────────────────────
       // Builds two markdown blocks the system prompt will absorb:
       //  - ## ATTACHED DOCUMENT PROFILE: per-file structural metadata,
@@ -4551,7 +4566,7 @@ router.post(
         }
       } catch (_calibErr) { /* fail-open: no posture directive */ }
 
-      const systemInstruction = { role: 'system', content: promptBundle.system + openclawRuntimeBlock + llmUnderstandingBlock + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + activeMemoryBlock + crossChatBlock + attributionBlock + circuitAttributionBlock + intentAttributionGraphBlock + saliencyBlock + feedbackBlock + evidenceBlock + documentAnalysisQualityBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock + reasoningEffortBlock + constraintBlock + postureDirectiveBlock };
+      const systemInstruction = { role: 'system', content: promptBundle.system + openclawRuntimeBlock + llmUnderstandingBlock + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + activeMemoryBlock + crossChatBlock + attributionBlock + circuitAttributionBlock + intentAttributionGraphBlock + saliencyBlock + adversarialBlock + feedbackBlock + evidenceBlock + documentAnalysisQualityBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock + reasoningEffortBlock + constraintBlock + postureDirectiveBlock };
       // Structured view of the system prompt — same content as
       // `systemInstruction.content`, but split into typed blocks with a
       // `cacheable` hint. When the downstream provider is Anthropic (or

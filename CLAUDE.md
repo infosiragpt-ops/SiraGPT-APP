@@ -417,9 +417,13 @@ Anthropic's "On the Biology of a Large Language Model"
 ### Integration in `ai.js`
 The chat route stacks these blocks into the system prompt (env-flag gated):
 `circuitAttributionBlock`, `intentAttributionGraphBlock`, `saliencyBlock`,
-`ambiguityBlock`, `adversarialBlock`. `prompt-budget-allocator` runs after
-assembly to trim overflow without dropping tier-0 (master prompt, safety
-alerts, contract).
+`adversarialBlock` (gated by `SIRAGPT_ADVERSARIAL_DISABLED`; empty unless the
+user text trips an injection/role-swap/exfil pattern). `ambiguityBlock` is
+NOT stacked on the default chat path — the chat path's intent report
+(intent-attribution-graph) has no `subIntents`, which `ambiguity-flagger`
+requires; it is produced via the `attribution-stack-runner` path instead.
+`prompt-budget-allocator` runs after assembly to trim overflow without
+dropping tier-0 (master prompt, safety alerts, contract).
 
 ### Tests
 ~40 dedicated test files in `backend/tests/attribution-*.test.js` + companions.

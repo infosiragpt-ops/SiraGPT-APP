@@ -9,6 +9,7 @@ const { chromium } = require('playwright');
 const fs = require('fs').promises;
 const fsSync = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 
 const router = express.Router();
@@ -1705,8 +1706,13 @@ router.post(
         return res.status(400).json({ error: 'No valid topics provided after removing duplicates' });
       }
 
-      // Generate session ID
-      const sessionId = `thesis-${userId}-${Date.now()}`;
+      // Generate session ID. The screenshot endpoint
+      // (GET /screenshots/:sessionId/:filename) is loaded by the frontend via
+      // plain <img src>, so it can't carry a bearer token — the sessionId IS
+      // the access capability. A predictable `thesis-<userId>-<timestamp>` was
+      // therefore enumerable (an attacker could guess another user's id and
+      // read their screenshots). Add 32 hex chars of unguessable entropy.
+      const sessionId = `thesis-${userId}-${Date.now()}-${crypto.randomBytes(16).toString('hex')}`;
 
       // Initialize session with all required fields
       const initialSession = {
