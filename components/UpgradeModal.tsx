@@ -41,14 +41,12 @@ interface UpgradeModalProps {
   isSubscribing?: boolean
 }
 
-// Brand: orange (#FF6600) neon accent on a dark, futuristic surface.
-// All exotic effects are inline (curated-Tailwind safe; #0a0a0a not -950).
+// Brand palette — orange + white (curated-Tailwind safe: exotic effects inline).
 const ORANGE = "#FF6600"
-const ORANGE_SOFT = "#FF8A3D"
-const TXT = "rgba(255,255,255,0.95)"
-const BODY = "rgba(255,255,255,0.64)"
-const MUTED = "rgba(255,255,255,0.45)"
-const HAIR = "rgba(255,255,255,0.10)"
+const INK = "#0a0a0a"
+const BODY = "#525252"
+const MUTED = "#737373"
+const BORDER = "rgba(10,10,10,0.10)"
 
 const POSITIONING = {
   eyebrow: "Todos los modelos. Todas las capacidades. Una cuenta.",
@@ -120,16 +118,15 @@ function FeatureRow({ icon: Icon, title, desc, featured }: { icon: typeof Crown;
       <div
         className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full"
         style={{
-          border: `1px solid ${featured ? "rgba(255,102,0,0.45)" : HAIR}`,
-          background: featured ? "rgba(255,102,0,0.14)" : "rgba(255,255,255,0.04)",
-          color: featured ? ORANGE_SOFT : "rgba(255,255,255,0.7)",
-          boxShadow: featured ? "0 0 12px rgba(255,102,0,0.25)" : "none",
+          border: `1px solid ${featured ? "rgba(255,102,0,0.35)" : BORDER}`,
+          background: featured ? "rgba(255,102,0,0.10)" : "rgba(10,10,10,0.03)",
+          color: featured ? ORANGE : MUTED,
         }}
       >
         <Icon className="h-3 w-3" />
       </div>
       <div className="min-w-0">
-        <div className="text-[13px] font-semibold leading-4" style={{ color: TXT }}>{title}</div>
+        <div className="text-[13px] font-semibold leading-4" style={{ color: INK }}>{title}</div>
         <div className="text-[11px] leading-4" style={{ color: MUTED }}>{desc}</div>
       </div>
     </div>
@@ -193,38 +190,20 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className="w-[96vw] max-w-5xl overflow-y-auto border-0 p-0"
-        style={{ maxHeight: "94vh", background: "#0a0a0a", color: TXT, boxShadow: "0 40px 120px -24px rgba(0,0,0,0.85), 0 0 0 1px rgba(255,255,255,0.06)" }}
+        style={{ maxHeight: "94vh", background: "#ffffff", color: INK, boxShadow: "0 40px 120px -24px rgba(10,10,10,0.45)" }}
       >
         <div className="relative">
-          {/* Futuristic background: tech grid + orange aurora */}
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-0"
-            style={{
-              backgroundImage:
-                "linear-gradient(rgba(255,255,255,0.05) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,0.05) 1px,transparent 1px)",
-              backgroundSize: "38px 38px",
-              maskImage: "radial-gradient(125% 85% at 50% 0%, #000 35%, transparent 80%)",
-              WebkitMaskImage: "radial-gradient(125% 85% at 50% 0%, #000 35%, transparent 80%)",
-            }}
-          />
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-x-0 top-0 h-64"
-            style={{ background: "radial-gradient(60% 100% at 50% 0%, rgba(255,102,0,0.22), transparent 70%)" }}
-          />
-
           <div className="relative px-5 py-6 sm:px-7">
             {/* Header — compact */}
             <DialogHeader>
               <div
                 className="mb-2.5 inline-flex w-fit items-center gap-2 rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em]"
-                style={{ border: `1px solid ${HAIR}`, background: "rgba(255,102,0,0.08)", color: "rgba(255,255,255,0.72)" }}
+                style={{ border: `1px solid ${BORDER}`, background: "rgba(255,102,0,0.06)", color: BODY }}
               >
-                <Sparkles className="h-3.5 w-3.5" style={{ color: ORANGE_SOFT }} />
+                <Sparkles className="h-3.5 w-3.5" style={{ color: ORANGE }} />
                 {POSITIONING.eyebrow}
               </div>
-              <DialogTitle className="max-w-3xl text-balance text-xl font-semibold tracking-[-0.03em] sm:text-[26px] sm:leading-[1.12]" style={{ color: "#fff" }}>
+              <DialogTitle className="max-w-3xl text-balance text-xl font-semibold tracking-[-0.03em] sm:text-[26px] sm:leading-[1.12]" style={{ color: INK }}>
                 {POSITIONING.headline}
               </DialogTitle>
             </DialogHeader>
@@ -233,26 +212,26 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
               <p className="max-w-2xl text-[13px] leading-5" style={{ color: BODY }}>
                 {POSITIONING.subhead}
               </p>
-              <div className="hidden shrink-0 rounded-full px-3 py-1 text-xs sm:block" style={{ border: `1px solid ${HAIR}`, color: MUTED }}>
-                Plan actual: <span style={{ color: "#fff", fontWeight: 600 }}>{currentPlan}</span>
+              <div className="hidden shrink-0 rounded-full px-3 py-1 text-xs sm:block" style={{ border: `1px solid ${BORDER}`, color: MUTED }}>
+                Plan actual: <span style={{ color: INK, fontWeight: 600 }}>{currentPlan}</span>
               </div>
             </div>
 
             {/* Value-anchor banner */}
             <div
               className="mt-3.5 rounded-xl px-4 py-2.5 text-[13px] leading-5"
-              style={{ border: "1px solid rgba(255,102,0,0.28)", background: "rgba(255,102,0,0.07)", color: BODY }}
+              style={{ border: "1px solid rgba(255,102,0,0.25)", background: "rgba(255,102,0,0.05)", color: BODY }}
             >
               Una sola suscripción de ChatGPT, Claude o Gemini cuesta{" "}
-              <span style={{ color: ORANGE_SOFT, fontWeight: 700 }}>$20/mes</span> — y trae un solo proveedor. SiraGPT te da{" "}
-              <span style={{ color: "#fff", fontWeight: 700 }}>todos los modelos líderes</span> más imagen, voz, video, documentos, código y agentes{" "}
-              <span style={{ color: ORANGE_SOFT, fontWeight: 700 }}>desde $5/mes</span>.
+              <span style={{ color: ORANGE, fontWeight: 700 }}>$20/mes</span> — y trae un solo proveedor. SiraGPT te da{" "}
+              <span style={{ color: INK, fontWeight: 700 }}>todos los modelos líderes</span> más imagen, voz, video, documentos, código y agentes{" "}
+              <span style={{ color: ORANGE, fontWeight: 700 }}>desde $5/mes</span>.
             </div>
 
             {usageRatio >= 0.7 ? (
-              <div className="mt-3 flex items-center gap-2 rounded-xl px-3.5 py-2 text-[13px]" style={{ border: `1px solid ${HAIR}`, background: "rgba(255,102,0,0.05)", color: BODY }}>
-                <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: ORANGE, boxShadow: "0 0 8px rgba(255,102,0,0.8)" }} />
-                Has usado <span style={{ color: "#fff", fontWeight: 700 }}>{usagePct}%</span> de tu actividad este mes. Mejora tu plan para seguir sin interrupciones.
+              <div className="mt-3 flex items-center gap-2 rounded-xl px-3.5 py-2 text-[13px]" style={{ border: `1px solid ${BORDER}`, background: "rgba(255,102,0,0.04)", color: BODY }}>
+                <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: ORANGE }} />
+                Has usado <span style={{ color: INK, fontWeight: 700 }}>{usagePct}%</span> de tu actividad este mes. Mejora tu plan para seguir sin interrupciones.
               </div>
             ) : null}
 
@@ -273,27 +252,16 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
                     transition={{ duration: 0.22, delay: reduceMotion ? 0 : idx * 0.06, ease: [0.22, 1, 0.36, 1] }}
                     className="relative flex flex-col rounded-2xl p-4"
                     style={{
-                      border: featured ? `1.5px solid rgba(255,102,0,0.65)` : `1px solid ${HAIR}`,
-                      background: featured ? "rgba(255,102,0,0.06)" : "rgba(255,255,255,0.03)",
-                      backdropFilter: "blur(6px)",
-                      WebkitBackdropFilter: "blur(6px)",
-                      boxShadow: featured ? "0 22px 56px -22px rgba(255,102,0,0.6)" : "none",
+                      border: featured ? `1.5px solid ${ORANGE}` : `1px solid ${BORDER}`,
+                      background: featured ? "rgba(255,102,0,0.04)" : "#ffffff",
+                      boxShadow: featured ? "0 18px 44px -22px rgba(255,102,0,0.55)" : "0 1px 2px rgba(10,10,10,0.04)",
                     }}
                   >
-                    {/* Aurora glow only behind the featured card */}
-                    {featured ? (
-                      <div
-                        aria-hidden="true"
-                        className="pointer-events-none absolute -inset-px"
-                        style={{ borderRadius: 18, background: "radial-gradient(120% 70% at 50% 0%, rgba(255,102,0,0.22), transparent 60%)", filter: "blur(8px)" }}
-                      />
-                    ) : null}
-
                     <div className="relative flex flex-1 flex-col">
                       <div className="flex items-center justify-between">
                         <div
                           className="flex h-9 w-9 items-center justify-center rounded-xl"
-                          style={{ border: `1px solid ${HAIR}`, background: "rgba(255,255,255,0.04)", color: featured ? ORANGE_SOFT : "rgba(255,255,255,0.88)" }}
+                          style={{ border: `1px solid ${BORDER}`, background: "rgba(10,10,10,0.02)", color: featured ? ORANGE : INK }}
                         >
                           <Icon className="h-4 w-4" />
                         </div>
@@ -303,7 +271,7 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
                             animate={{ opacity: 1, scale: 1 }}
                             transition={{ duration: 0.3, delay: 0.12 }}
                             className="rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide"
-                            style={{ background: ORANGE, color: "#0a0a0a", boxShadow: "0 0 16px rgba(255,102,0,0.55)" }}
+                            style={{ background: ORANGE, color: "#fff" }}
                           >
                             {plan.badge}
                           </motion.div>
@@ -312,19 +280,19 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
 
                       <div className="mt-3.5">
                         <div className="text-[10px] font-semibold uppercase tracking-[0.14em]" style={{ color: MUTED }}>{plan.eyebrow}</div>
-                        <h3 className="mt-1.5 text-xl font-semibold tracking-[-0.02em]" style={{ color: "#fff" }}>{plan.name}</h3>
+                        <h3 className="mt-1.5 text-xl font-semibold tracking-[-0.02em]" style={{ color: INK }}>{plan.name}</h3>
                         <p className="mt-1.5 text-[12px] leading-4" style={{ color: BODY }}>{plan.subtitle}</p>
                       </div>
 
                       <div className="mt-3 flex items-baseline gap-1.5">
-                        <span className="text-[34px] font-semibold leading-none tracking-[-0.04em]" style={{ color: "#fff" }}>{plan.price}</span>
+                        <span className="text-[34px] font-semibold leading-none tracking-[-0.04em]" style={{ color: INK }}>{plan.price}</span>
                         {!isEnterprise ? <span className="text-[13px]" style={{ color: MUTED }}>/mes</span> : null}
                       </div>
                       <div className="mt-1 text-[11px]" style={{ color: MUTED }}>
                         {isEnterprise ? "Comunicación directa por WhatsApp" : "Facturación mensual · cancela cuando quieras"}
                       </div>
 
-                      <div className="mt-3 flex-1 border-t pt-2" style={{ borderColor: HAIR }}>
+                      <div className="mt-3 flex-1 border-t pt-2" style={{ borderColor: BORDER }}>
                         {plan.features.map((feature) => (
                           <FeatureRow key={feature.title} {...feature} featured={featured} />
                         ))}
@@ -337,8 +305,8 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
                         className="mt-3 h-10 w-full rounded-full border-0 text-[13px] font-semibold"
                         style={
                           featured
-                            ? { background: ORANGE, color: "#0a0a0a", boxShadow: "0 0 24px rgba(255,102,0,0.45)" }
-                            : { background: "rgba(255,255,255,0.06)", color: "#fff", border: `1px solid rgba(255,255,255,0.18)` }
+                            ? { background: ORANGE, color: "#fff" }
+                            : { background: "#fff", color: INK, border: `1px solid ${BORDER}` }
                         }
                       >
                         {isCurrent ? (
@@ -355,12 +323,12 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
               })}
             </div>
 
-            {/* Footer: trust + free-plan exit */}
-            <div className="mt-4 flex flex-col items-center gap-2 border-t pt-3 text-center" style={{ borderColor: HAIR }}>
+            {/* Footer: free-plan exit + honesty + trust, all on one compact row block */}
+            <div className="mt-4 flex flex-col items-center gap-2 border-t pt-3 text-center" style={{ borderColor: BORDER }}>
               <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
                 {TRUST_ROW.map((t, i) => (
                   <span key={t} className="inline-flex items-center gap-1.5 text-[11px]" style={{ color: MUTED }}>
-                    {i === 0 ? <ShieldCheck className="h-3.5 w-3.5" style={{ color: ORANGE_SOFT }} /> : <Check className="h-3 w-3" style={{ color: MUTED }} />}
+                    {i === 0 ? <ShieldCheck className="h-3.5 w-3.5" style={{ color: ORANGE }} /> : <Check className="h-3 w-3" style={{ color: MUTED }} />}
                     {t}
                   </span>
                 ))}
