@@ -234,8 +234,9 @@ router.post('/speech-to-text', authenticateToken, requirePaidPlan({ feature: 'vo
     try {
       console.log('Using ElevenLabs client speechToText.convert method...');
 
-      // Read the audio file and create a Blob
-      const audioBuffer = fs.readFileSync(req.file.path);
+      // Read the audio file and create a Blob (async — don't block the event
+      // loop on disk I/O for the upload duration).
+      const audioBuffer = await fs.promises.readFile(req.file.path);
       const audioBlob = new Blob([audioBuffer], {
         type: req.file.mimetype || 'audio/webm'
       });

@@ -54,7 +54,10 @@ function expandField(token, [lo, hi]) {
       const [a, b] = head.split('-');
       from = Number(a); to = Number(b);
     } else {
-      from = Number(head); to = Number(head);
+      // A bare number WITH a step ("5/15") means "from 5 to the max, every 15"
+      // — expand to hi. Without a step it's the single value N.
+      from = Number(head);
+      to = slash === -1 ? Number(head) : hi;
     }
     if (!Number.isInteger(from) || !Number.isInteger(to)) throw new CronError(`bad range in "${part}"`);
     if (from < lo || to > hi || from > to) throw new CronError(`out-of-range "${part}" for ${lo}-${hi}`);

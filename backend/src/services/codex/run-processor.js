@@ -127,6 +127,12 @@ async function processCodexRunJob({
   }
   await eventStore.appendEvent(runId, 'run_status', { status }, { prisma });
 
+  // Free the per-run in-memory seq/append-chain caches now that the run is
+  // truly terminal (waiting_approval can still resume, so keep its cache).
+  if (status !== 'waiting_approval' && typeof eventStore.forgetRun === 'function') {
+    try { eventStore.forgetRun(runId); } catch { /* best-effort */ }
+  }
+
   return { status, error: errorMsg };
 }
 

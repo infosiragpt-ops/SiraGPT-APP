@@ -79,6 +79,13 @@ describe('parse', () => {
     assert.deepEqual(parse('tags[0]=a&tags[1]=b'), { tags: ['a', 'b'] });
   });
 
+  test('explicit indices are honoured even when keys arrive out of order', () => {
+    // Regression: used to push in arrival order, ignoring the [n] index.
+    assert.deepEqual(parse('a[1]=x&a[0]=y'), { a: ['y', 'x'] });
+    // Sparse indices compact their holes.
+    assert.deepEqual(parse('a[2]=c&a[0]=a'), { a: ['a', 'c'] });
+  });
+
   test('arrayFormat=comma splits comma-separated values', () => {
     assert.deepEqual(parse('tags=a,b,c', { arrayFormat: 'comma' }), { tags: ['a', 'b', 'c'] });
   });

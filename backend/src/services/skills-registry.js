@@ -203,6 +203,9 @@ function verifyPrerequisites(skillId, context = {}) {
   if (context.webAccess !== false) have.add('web_access_enabled');
   if (context.collectionIndexed) have.add('user_collection_indexed');
   if (context.dataset) have.add('dataset_attached');
+  // Without this, 'acceptance_criteria_clear' could never be satisfied, leaving
+  // the long_running_task skill permanently unverifiable.
+  if (context.acceptanceCriteria || context.acceptance_criteria) have.add('acceptance_criteria_clear');
 
   const missing = skill.prerequisites.filter(p => !have.has(p));
   return { ok: missing.length === 0, missing };

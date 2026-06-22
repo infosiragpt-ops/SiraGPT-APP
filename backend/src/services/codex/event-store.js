@@ -170,4 +170,15 @@ function _resetSeqCache(runId) {
   }
 }
 
-module.exports = { appendEvent, listEvents, createSeqGate, _resetSeqCache };
+/**
+ * Lifecycle hook: drop the per-run in-memory seq counter + append-chain once a
+ * run reaches a terminal state, so these process-local Maps don't grow one
+ * entry per run forever. The seq counter is rebuildable from the DB high-water
+ * mark if the run is ever touched again.
+ */
+function forgetRun(runId) {
+  if (runId === undefined) return;
+  _resetSeqCache(runId);
+}
+
+module.exports = { appendEvent, listEvents, createSeqGate, _resetSeqCache, forgetRun };
