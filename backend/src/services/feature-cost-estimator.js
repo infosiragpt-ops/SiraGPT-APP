@@ -345,9 +345,9 @@ function recommendUpgradeFromUsage(usage, currentPlan, { env = process.env } = {
  * ≤ maxUsdPerMonth. Useful for "I have $X to spend" sliders.
  *
  *   findCheapestPlanForBudget(0)     → FREE   ($0)
- *   findCheapestPlanForBudget(3)     → ENTERPRISE ($2 base — best fit)
- *   findCheapestPlanForBudget(5)     → PRO    ($5)
- *   findCheapestPlanForBudget(10)    → PRO_MAX ($10)
+ *   findCheapestPlanForBudget(3)     → ENTERPRISE ($2, unlimited budget wins)
+ *   findCheapestPlanForBudget(5)     → ENTERPRISE (still the largest budget ≤ $5)
+ *   findCheapestPlanForBudget(10)    → ENTERPRISE (unlimited beats PRO_MAX)
  *   findCheapestPlanForBudget(-1)    → FREE   (clamped to $0)
  *
  * Tie-breaks pick the plan with the largest budget (treating unlimited

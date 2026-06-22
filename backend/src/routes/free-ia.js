@@ -49,6 +49,9 @@ const {
   PROVIDER_NAME,
 } = require('../services/ai/cerebras-client');
 const freeIaMetrics = require('../services/free-ia-metrics');
+const fce = require('../services/feature-cost-estimator');
+const { userQuotaDigest } = require('../services/model-quota-router');
+const prisma = require('../config/database');
 
 router.get('/status', (_req, res) => {
   const cfg = getCerebrasConfig();
@@ -204,6 +207,85 @@ router.post('/metrics/reset', authenticateToken, requireAdmin, (req, res) => {
     by: req.user?.email || req.user?.id || 'unknown',
     at: new Date().toISOString(),
   });
+});
+
+// ── Billing / pricing preview ────────────────────────────────────────────
+// Thin read endpoints over feature-cost-estimator (the helpers are pure +
+// unit-tested). Documented in CLAUDE.md but previously unwired — the estimator
+// module was fully orphaned.
+
+router.get('/plans', (_req, res) => {
+  res.json({ plans: fce.pricingTable(), popular: fce.POPULAR_PLAN });
+});
+
+router.get('/budget', (req, res) => {
+  const maxUsd = Number(req.query.maxUsd);
+  if (!Number.isFinite(maxUsd) || maxUsd < 0) {
+    return res.status(400).json({ error: 'maxUsd must be a non-negative number' });
+  }
+  res.json({ maxUsd, plan: fce.findCheapestPlanForBudget(maxUsd) });
+});
+
+router.get('/compare', (req, res) => {
+  const { from, to } = req.query;
+  if (!from || !to) return res.status(400).json({ error: 'from and to plan names are required' });
+  try {
+    res.json({ comparison: fce.comparePlans(String(from), String(to)) });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.get('/affords', (req, res) => {
+  const plan = String(req.query.plan || '');
+  const feature = String(req.query.feature || '');
+  if (!plan || !feature) return res.status(400).json({ error: 'plan and feature query params are required' });
+  const usage = { calls: Number(req.query.calls) || 0, avgTextLength: Number(req.query.avgTextLength) || 0 };
+  try {
+    res.json({
+      affords: fce.affordsFeature(plan, feature, usage),
+      verdict: fce.explainBudgetVerdict(plan, feature, usage),
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.get('/faq', (_req, res) => {
+  res.json({ faq: fce.pricingFAQEntries() });
+});
+
+router.post('/estimate', (req, res) => {
+  const body = req.body || {};
+  const format = String(req.query.format || '').toLowerCase();
+  try {
+    // Monthly projection export (csv / markdown) when a usage object is given.
+    if ((format === 'csv' || format === 'markdown') && body.usage) {
+      const projection = fce.estimateMonthlyCost(body.usage);
+      const text = format === 'csv'
+        ? fce.monthlyBreakdownAsCsv(projection)
+        : fce.monthlyBreakdownAsMarkdown(projection);
+      res.type(format === 'csv' ? 'text/csv' : 'text/markdown').send(text);
+      return;
+    }
+    const items = Array.isArray(body.items) ? body.items : (Array.isArray(body) ? body : []);
+    const batch = fce.estimateCostBatch(items);
+    const upgrade = body.usage ? fce.recommendUpgradeFromUsage(body.usage, body.currentPlan) : null;
+    res.json({ batch, upgrade });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.get('/digest', authenticateToken, async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    if (!user) return res.status(404).json({ error: 'user not found' });
+    const digest = userQuotaDigest(user);
+    res.json({ digest, planInfo: fce.enrichPlanWithPricing(user.plan) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 module.exports = router;
