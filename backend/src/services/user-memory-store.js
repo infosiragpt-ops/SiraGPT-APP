@@ -58,6 +58,9 @@ async function postJson(url, headers, body, fetchImpl = globalThis.fetch) {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...headers },
     body: JSON.stringify(body),
+    // Bound the embedding-provider call (Voyage/Jina) so a stall can't hang the
+    // memory write/recall path.
+    signal: AbortSignal.timeout(Number(process.env.EMBED_TIMEOUT_MS) || 15000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');

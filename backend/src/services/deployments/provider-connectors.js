@@ -203,15 +203,33 @@ async function applyGoDaddyDnsRecords({ hostname, records, env = process.env, fe
     const url = `${baseUrl}/v1/domains/${encodeURIComponent(split.rootDomain)}/records/${encodeURIComponent(type)}/${encodeURIComponent(name)}`;
     const body = JSON.stringify([{ data: value, ttl }]);
     attemptedRecords.push({ type, name, value, ttl, url });
-    const response = await fetchImpl(url, {
-      method: 'PUT',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        Authorization: auth,
-      },
-      body,
-    });
+    let response;
+    try {
+      response = await fetchImpl(url, {
+        method: 'PUT',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          Authorization: auth,
+        },
+        body,
+        // Bound each record PUT so a hung GoDaddy API can't stall the handler.
+        signal: AbortSignal.timeout(Number(envValue(env, 'GODADDY_API_TIMEOUT_MS')) || 15000),
+      });
+    } catch (err) {
+      // Network error / timeout — return the structured provider_error result
+      // instead of throwing out of the function (preserves the result contract).
+      return {
+        applied: false,
+        providerId: 'godaddy_dns',
+        reason: 'provider_error',
+        status: 0,
+        message: String(err && err.message ? err.message : err).slice(0, 300),
+        rootDomain: split.rootDomain,
+        recordName: split.recordName,
+        attemptedRecords,
+      };
+    }
     if (!response || response.ok !== true) {
       const status = response && response.status ? response.status : 0;
       const text = response && typeof response.text === 'function' ? await response.text().catch(() => '') : '';

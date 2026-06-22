@@ -39,6 +39,9 @@ async function fetchOpenRouterCost({ generationId, env, fetchImpl }) {
   try {
     const res = await doFetch(`https://openrouter.ai/api/v1/generation?id=${encodeURIComponent(generationId)}`, {
       headers: { Authorization: `Bearer ${key}` },
+      // Best-effort cost lookup at build-close — bound it so a hung OpenRouter
+      // can't stall the run summary (the catch already degrades to null).
+      signal: AbortSignal.timeout(Number(env.CODEX_COST_TIMEOUT_MS) || 8000),
     });
     if (!res || !res.ok) return null;
     const body = await res.json().catch(() => null);
