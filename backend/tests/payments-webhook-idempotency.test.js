@@ -171,3 +171,86 @@ describe('POST /payments/stripe/webhook · checkout idempotency', () => {
     assert.equal(payments[0].status, 'COMPLETED');
   });
 });
+
+// ── #E2/#E3: critical webhook writes must surface failures as 500 so Stripe
+// retries (they used to be swallowed → silent 200 → lost renewal/downgrade) ──
+const USAGE_MONITOR_PATH = require.resolve('../src/services/usage-monitor');
+const TRIGGERS_PATH = require.resolve('../src/services/trigger-registry');
+const INVOICE_SYNC_PATH = require.resolve('../src/services/invoice-sync');
+
+describe('POST /payments/stripe/webhook · subscription/invoice critical-write retry', () => {
+  let restores = [];
+
+  function setupSub({ event, user, failUserUpdate = false, subscriptionEvents = [] }) {
+    const userUpdates = [];
+    const db = {
+      _userUpdates: userUpdates,
+      user: {
+        findUnique: async ({ where }) =>
+          (where.stripeCustomerId === user.stripeCustomerId || where.id === user.id ? { ...user } : null),
+        update: async ({ data }) => {
+          if (failUserUpdate) throw new Error('simulated user.update failure');
+          userUpdates.push(data);
+          Object.assign(user, data);
+          return { ...user };
+        },
+      },
+      subscriptionEvent: { create: async ({ data }) => { subscriptionEvents.push(data); return { id: 'evt1', ...data }; } },
+    };
+    restores = [
+      mockResolvedModule(DB_PATH, db),
+      mockResolvedModule(STRIPE_PATH, {
+        constructWebhookEvent: () => event,
+        toHttpError: (err) => ({ statusCode: 400, body: { message: err.message } }),
+        retrieveSubscription: async () => ({ status: 'active', current_period_end: 1700000000 }),
+      }),
+      mockResolvedModule(POSTHOG_PATH, { capturePostHogEvent: () => {} }),
+      mockResolvedModule(USAGE_MONITOR_PATH, { resetMonthlyUsage: async () => {} }),
+      mockResolvedModule(TRIGGERS_PATH, { publish: async () => {} }),
+      mockResolvedModule(INVOICE_SYNC_PATH, { syncInvoiceFromStripe: async () => {} }),
+    ];
+    delete require.cache[require.resolve('../src/routes/payments')];
+    return { app: buildRouteTestApp('/payments', reloadModule('../src/routes/payments')), db, subscriptionEvents };
+  }
+
+  afterEach(() => { restores.forEach((fn) => fn()); restores = []; delete require.cache[require.resolve('../src/routes/payments')]; });
+
+  function deliver(app) {
+    return request(app).post('/payments/stripe/webhook').set('stripe-signature', 'sig')
+      .set('Content-Type', 'application/json').send(Buffer.from('{}'));
+  }
+
+  const subDeletedEvent = { type: 'customer.subscription.deleted', data: { object: { customer: 'cus_1', ended_at: 1700000000 } } };
+  const invoicePaidEvent = { type: 'invoice.payment_succeeded', data: { object: { subscription: 'sub_1', customer: 'cus_1', id: 'in_1', amount_paid: 1000, currency: 'usd' } } };
+
+  test('subscription.deleted: a failed downgrade returns 500 (Stripe retries)', async () => {
+    const user = { id: 'u1', stripeCustomerId: 'cus_1', plan: 'PRO', monthlyLimit: 100000n };
+    const { app } = setupSub({ event: subDeletedEvent, user, failUserUpdate: true });
+    const res = await deliver(app);
+    assert.equal(res.status, 500);
+  });
+
+  test('subscription.deleted: a successful downgrade returns 200 and reverts to FREE', async () => {
+    const user = { id: 'u1', stripeCustomerId: 'cus_1', plan: 'PRO', monthlyLimit: 100000n };
+    const { app } = setupSub({ event: subDeletedEvent, user });
+    const res = await deliver(app);
+    assert.equal(res.status, 200);
+    assert.equal(user.plan, 'FREE');
+  });
+
+  test('invoice.payment_succeeded: a failed status update returns 500 (Stripe retries)', async () => {
+    const user = { id: 'u1', stripeCustomerId: 'cus_1', plan: 'PRO' };
+    const { app } = setupSub({ event: invoicePaidEvent, user, failUserUpdate: true });
+    const res = await deliver(app);
+    assert.equal(res.status, 500);
+  });
+
+  test('invoice.payment_succeeded: success returns 200 and records exactly one audit event', async () => {
+    const user = { id: 'u1', stripeCustomerId: 'cus_1', plan: 'PRO' };
+    const subscriptionEvents = [];
+    const { app } = setupSub({ event: invoicePaidEvent, user, subscriptionEvents });
+    const res = await deliver(app);
+    assert.equal(res.status, 200);
+    assert.equal(subscriptionEvents.length, 1, 'one payment_succeeded audit row');
+  });
+});

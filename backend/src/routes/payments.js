@@ -1070,18 +1070,24 @@ async function handleInvoicePaymentSucceeded(invoice) {
     // Reset monthly usage for new billing period
     await usageMonitor.resetMonthlyUsage(user.id);
 
-    // Record subscription event
-    await prisma.subscriptionEvent.create({
-      data: {
-        userId: user.id,
-        eventType: 'payment_succeeded',
-        eventData: serializeBigIntFields({
-          invoiceId: invoice.id,
-          amount: Number(invoice.amount_paid) / 100,
-          currency: invoice.currency
-        })
-      }
-    });
+    // Record subscription event — best-effort and LAST among the critical
+    // writes. Kept non-fatal (own try/catch) so a transient audit-row failure
+    // can't trigger a Stripe retry that would re-run it and duplicate the row.
+    try {
+      await prisma.subscriptionEvent.create({
+        data: {
+          userId: user.id,
+          eventType: 'payment_succeeded',
+          eventData: serializeBigIntFields({
+            invoiceId: invoice.id,
+            amount: Number(invoice.amount_paid) / 100,
+            currency: invoice.currency
+          })
+        }
+      });
+    } catch (evtErr) {
+      console.warn('[payments] subscriptionEvent payment_succeeded persist failed:', evtErr?.message || evtErr);
+    }
 
     console.log(`Invoice payment succeeded for user ${user.id}`);
 
@@ -1095,7 +1101,12 @@ async function handleInvoicePaymentSucceeded(invoice) {
     });
 
   } catch (error) {
+    // Re-throw so the webhook route returns 500 and Stripe redelivers. The
+    // critical writes here (status/period-end update, monthly-usage reset) are
+    // idempotent, so a retry is safe and far better than silently leaving a
+    // paying user un-renewed after a transient failure (we used to swallow).
     console.error('Error handling invoice payment succeeded:', error);
+    throw error;
   }
 }
 
@@ -1317,9 +1328,13 @@ async function handleSubscriptionDeleted(subscription) {
     });
 
     console.log(`Subscription canceled for user ${user.id}`);
-    
+
   } catch (error) {
+    // Re-throw so the webhook returns 500 and Stripe redelivers — the downgrade
+    // (revert to FREE + limits) is idempotent, and silently swallowing left a
+    // canceled user on paid limits indefinitely (revenue leak).
     console.error('Error handling subscription deleted:', error);
+    throw error;
   }
 }
 
