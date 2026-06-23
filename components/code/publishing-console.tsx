@@ -51,6 +51,8 @@ const TABS: TabDef[] = [
   { id: "manage", label: "Manage", icon: Settings },
 ]
 
+const PUBLISHING_ENDPOINT = "/publishing/state"
+
 const EMPTY_STATE: PublishingConsoleState = {
   appName: "siragpt",
   ownerName: "kk",
@@ -109,7 +111,7 @@ export function PublishingConsole({ open, onOpenChange }: PublishingConsoleProps
   const refresh = React.useCallback(async () => {
     setLoading(true)
     try {
-      const response = await fetch("/api/publishing", { cache: "no-store" })
+      const response = await fetch(PUBLISHING_ENDPOINT, { cache: "no-store" })
       if (!response.ok) throw new Error(`Publishing API returned ${response.status}`)
       setState((await response.json()) as PublishingConsoleState)
     } catch (error) {
@@ -148,7 +150,7 @@ export function PublishingConsole({ open, onOpenChange }: PublishingConsoleProps
 
       setBusyAction(action)
       try {
-        const response = await fetch("/api/publishing", {
+        const response = await fetch(PUBLISHING_ENDPOINT, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action }),
