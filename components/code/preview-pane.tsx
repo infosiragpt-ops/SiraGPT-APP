@@ -31,8 +31,10 @@ import { useCodeWorkspace } from "@/lib/code-workspace-context"
 import { buildPreviewDocument, type PreviewKind } from "@/lib/code-preview-build"
 import { CODE_TEMPLATES } from "@/lib/code-templates"
 import { opencodeService } from "@/lib/opencode/opencode-service"
+import { hostRunnerService } from "@/lib/code-runner/host-runner-service"
 
 type LiveRun = { phase: "idle" | "starting" | "ready" | "error"; devUrl: string; note: string }
+type RunnerStatus = { ready?: boolean; error?: string | null; framework?: string | null; tail?: string[]; devUrl?: string }
 
 type LogEntry = { level: string; text: string; id: number }
 type Device = "responsive" | "phone"
@@ -68,56 +70,88 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
   const [logs, setLogs] = React.useState<LogEntry[]>([])
   const logSeq = React.useRef(0)
 
-  // Phase B — run a real Node/Vite/Next app in the cloud runner and iframe it.
+  // Phase B — run a real Node/Vite/Next app and iframe it live. Prefer the
+  // no-Docker host runner (local); fall back to the opencode/Docker runner (prod).
   const [liveRun, setLiveRun] = React.useState<LiveRun>({ phase: "idle", devUrl: "", note: "" })
   const pollRef = React.useRef<number | null>(null)
+  const runIdRef = React.useRef<string>("")
+  const modeRef = React.useRef<"host" | "opencode">("host")
 
   const hasNodeProject = React.useMemo(
     () => Object.keys(files || {}).some((p) => /(^|\/)package\.json$/.test(p)),
     [files],
   )
 
-  const stopApp = React.useCallback(() => {
+  const clearPoll = React.useCallback(() => {
     if (pollRef.current) {
       window.clearInterval(pollRef.current)
       pollRef.current = null
     }
-    setLiveRun({ phase: "idle", devUrl: "", note: "" })
-    void opencodeService.stopRun()
   }, [])
+
+  const stopApp = React.useCallback(() => {
+    clearPoll()
+    setLiveRun({ phase: "idle", devUrl: "", note: "" })
+    if (modeRef.current === "opencode") void opencodeService.stopRun()
+    else if (runIdRef.current) void hostRunnerService.stop(runIdRef.current)
+  }, [clearPoll])
+
+  // Poll a runner's status until the dev server is ready (or fails / times out).
+  const pollUntilReady = React.useCallback(
+    (statusFn: () => Promise<RunnerStatus>, fallbackUrl: string) => {
+      clearPoll()
+      let tries = 0
+      pollRef.current = window.setInterval(async () => {
+        tries += 1
+        const st = await statusFn()
+        if (st.ready) {
+          clearPoll()
+          setLiveRun({ phase: "ready", devUrl: st.devUrl || fallbackUrl, note: st.framework || "app" })
+        } else if (st.error || tries > 80) {
+          // ~3.3 min budget: a cold npm install of vite + tailwind v4 +
+          // framer-motion + lucide plus dev-server boot can be slow.
+          clearPoll()
+          setLiveRun({ phase: "error", devUrl: "", note: st.error || "El dev server no arrancó a tiempo." })
+        } else {
+          setLiveRun((p) => ({ ...p, note: (st.tail && st.tail[st.tail.length - 1]) || p.note }))
+        }
+      }, 2500)
+    },
+    [clearPoll],
+  )
 
   const runApp = React.useCallback(async () => {
     setLiveRun({ phase: "starting", devUrl: "", note: "Instalando dependencias y arrancando el dev server…" })
+    if (!runIdRef.current) {
+      try {
+        runIdRef.current = crypto.randomUUID()
+      } catch {
+        runIdRef.current = `run-${Math.random().toString(36).slice(2)}`
+      }
+    }
+    // Workspace files are CodeFile objects; the runner wants path -> content.
+    const fileMap: Record<string, string> = {}
+    for (const [p, f] of Object.entries(files)) fileMap[p] = f?.content ?? ""
+    // 1) Local host runner (no Docker) — the default everywhere it's enabled.
+    const started = await hostRunnerService.start(fileMap, runIdRef.current)
+    if (!started.disabled) {
+      modeRef.current = "host"
+      if (started.error) {
+        setLiveRun({ phase: "error", devUrl: "", note: started.error })
+        return
+      }
+      pollUntilReady(() => hostRunnerService.status(runIdRef.current), started.devUrl || "")
+      return
+    }
+    // 2) Fallback: opencode/Docker runner (production).
+    modeRef.current = "opencode"
     const res = await opencodeService.runProject()
     if (res.error) {
       setLiveRun({ phase: "error", devUrl: "", note: res.error })
       return
     }
-    const fallbackUrl = res.devUrl || "http://localhost:5173"
-    if (pollRef.current) window.clearInterval(pollRef.current)
-    let tries = 0
-    pollRef.current = window.setInterval(async () => {
-      tries += 1
-      const st = await opencodeService.runStatus()
-      if (st.ready) {
-        if (pollRef.current) {
-          window.clearInterval(pollRef.current)
-          pollRef.current = null
-        }
-        setLiveRun({ phase: "ready", devUrl: st.devUrl || fallbackUrl, note: st.framework || "app" })
-      } else if (st.error || tries > 72) {
-        // ~3 min budget: a cold-cache `bun install` of vite + tailwind v4 +
-        // framer-motion + lucide can exceed the old ~112s window.
-        if (pollRef.current) {
-          window.clearInterval(pollRef.current)
-          pollRef.current = null
-        }
-        setLiveRun({ phase: "error", devUrl: "", note: st.error || "El dev server no arrancó a tiempo." })
-      } else {
-        setLiveRun((p) => ({ ...p, note: (st.tail && st.tail[st.tail.length - 1]) || p.note }))
-      }
-    }, 2500)
-  }, [])
+    pollUntilReady(() => opencodeService.runStatus(), res.devUrl || "http://localhost:5173")
+  }, [files, pollUntilReady])
 
   React.useEffect(
     () => () => {
