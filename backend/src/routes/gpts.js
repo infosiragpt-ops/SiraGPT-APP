@@ -307,6 +307,18 @@ router.post('/', authenticateToken, upload.single('icon'), async (req, res) => {
       iconUrl = `/uploads/${req.user.id}/${req.file.filename}`;
     }
 
+    // Type guards — the parsed `gpts` blob is untrusted; a non-string field
+    // would throw on .trim() or write a malformed row to Prisma.
+    if (typeof name !== 'string' || typeof instructions !== 'string') {
+      return res.status(400).json({ error: 'name and instructions must be strings' });
+    }
+    for (const [k, v] of [['description', description], ['greetingMessage', greetingMessage], ['modelName', modelName], ['category', category]]) {
+      if (v != null && typeof v !== 'string') return res.status(400).json({ error: `${k} must be a string` });
+    }
+    if (visibility != null && !['PRIVATE', 'UNLISTED', 'PUBLIC'].includes(String(visibility))) {
+      return res.status(400).json({ error: 'invalid visibility' });
+    }
+
     // Validation
     if (!name || !instructions) {
       return res.status(400).json({ error: 'Name and instructions are required' });
@@ -389,6 +401,15 @@ router.put('/:id', authenticateToken, upload.single('icon'), async (req, res) =>
     let iconUrl = gptData.iconUrl;
     if (req.file) {
       iconUrl = `/uploads/${req.user.id}/${req.file.filename}`;
+    }
+
+    // Type guards — partial update, so each field is optional, but if present
+    // it must be the right type (the parsed blob is untrusted).
+    for (const [k, v] of [['name', name], ['instructions', instructions], ['description', description], ['greetingMessage', greetingMessage], ['modelName', modelName], ['category', category]]) {
+      if (v != null && typeof v !== 'string') return res.status(400).json({ error: `${k} must be a string` });
+    }
+    if (visibility != null && !['PRIVATE', 'UNLISTED', 'PUBLIC'].includes(String(visibility))) {
+      return res.status(400).json({ error: 'invalid visibility' });
     }
 
     // Check if GPT exists and user owns it

@@ -29,6 +29,7 @@ const { authenticateToken } = require('../middleware/auth');
 const projectMemory = require('../services/project-memory');
 const { buildProjectContextManifest } = require('../services/project-context');
 const { buildChatListWhere, parsePositiveInt } = require('../services/chat-scope');
+const { softDeleteWhere } = require('../utils/prisma-soft-delete');
 const crypto = require('crypto');
 
 const router = express.Router();
@@ -44,7 +45,9 @@ const router = express.Router();
 router.get('/share/:shareId', param('shareId').isString(), async (req, res) => {
   try {
     const project = await prisma.project.findFirst({
-      where: { shareId: req.params.shareId },
+      // Soft-deleted (e.g. GDPR-erased) projects must not stay publicly
+      // reachable through their share link.
+      where: softDeleteWhere({ shareId: req.params.shareId }),
       select: {
         id: true, name: true, description: true,
         createdAt: true, updatedAt: true,
@@ -106,7 +109,7 @@ router.get(
         sort === 'edited'  ? { updatedAt: 'desc' } :
                              { updatedAt: 'desc' }; // 'activity' — most-recently-touched
 
-      const where = { userId: req.user.id };
+      const where = softDeleteWhere({ userId: req.user.id });
       if (type) where.type = type;
       if (search) {
         where.OR = [

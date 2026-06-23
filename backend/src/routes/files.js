@@ -2,6 +2,7 @@ const express = require('express');
 const fsSync = require('fs');
 const { authenticateToken } = require('../middleware/auth');
 const { parsePositiveInt } = require('../services/chat-scope');
+const { softDeleteWhere } = require('../utils/prisma-soft-delete');
 const { requireScope } = require('../middleware/require-scope');
 const upload = require('../middleware/upload');
 const fileProcessingStatus = require('../services/file-processing-status');
@@ -867,10 +868,10 @@ router.get('/', authenticateToken, async (req, res) => {
     const { type } = req.query;
     const skip = (page - 1) * limit;
 
-    const where = {
+    const where = softDeleteWhere({
       userId: req.user.id,
       ...(type && { mimeType: { startsWith: type } })
-    };
+    });
 
     const [files, total] = await Promise.all([
       prisma.file.findMany({
