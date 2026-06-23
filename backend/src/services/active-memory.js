@@ -120,9 +120,13 @@ function evictWeakest() {
   if (weakest) store.delete(weakest.id);
 }
 
-function promoteToLongTerm(entryId) {
+function promoteToLongTerm(entryId, { userId = null } = {}) {
   const entry = store.get(entryId);
   if (!entry) return null;
+  // When a userId is supplied (any user-facing path), enforce ownership BEFORE
+  // mutating — otherwise any authenticated user could promote (and read back)
+  // another user's memory entry by id. Internal callers omit userId.
+  if (userId != null && entry.userId !== userId) return null;
 
   if (entry.tier === 'long_term') return entry;
 

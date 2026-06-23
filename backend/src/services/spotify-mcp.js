@@ -1,7 +1,28 @@
 const SpotifyWebApi = require('spotify-web-api-node');
 const { PrismaClient } = require('@prisma/client');
+const jwt = require('jsonwebtoken');
 const { encrypt, decrypt } = require('../utils/encryption');
 const prisma = new PrismaClient();
+
+// OAuth `state` must be a SIGNED token, not the bare userId — otherwise an
+// attacker who completes the consent flow can tamper `state` to a victim's id
+// and overwrite the victim's stored Spotify tokens (account-linking CSRF).
+// Mirrors github-oauth.service.js signState/verifyState.
+const SPOTIFY_STATE_TTL_SECONDS = 600;
+function signState(userId) {
+  return jwt.sign({ uid: String(userId), kind: 'spotify_oauth' }, process.env.JWT_SECRET, {
+    expiresIn: SPOTIFY_STATE_TTL_SECONDS,
+  });
+}
+function verifyState(state) {
+  try {
+    const decoded = jwt.verify(String(state || ''), process.env.JWT_SECRET);
+    if (!decoded || decoded.kind !== 'spotify_oauth' || !decoded.uid) return null;
+    return String(decoded.uid);
+  } catch {
+    return null;
+  }
+}
 
 const spotifyApi = new SpotifyWebApi({
   clientId: process.env.SPOTIFY_CLIENT_ID,
@@ -124,7 +145,7 @@ const spotifyService = {
       'user-modify-playback-state',
       'user-read-recently-played'
     ];
-    const authorizeURL = spotifyApi.createAuthorizeURL(scopes, userId);
+    const authorizeURL = spotifyApi.createAuthorizeURL(scopes, signState(userId));
     return authorizeURL;
   },
 
@@ -238,3 +259,5 @@ const spotifyService = {
 };
 
 module.exports = spotifyService;
+module.exports.signState = signState;
+module.exports.verifyState = verifyState;

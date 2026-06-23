@@ -68,7 +68,9 @@ function recall(userId, query, opts = {}) {
 }
 
 function promote(userId, entryId) {
-  const entry = activeMemory.promoteToLongTerm(entryId);
+  // Pass userId so ownership is enforced BEFORE the entry is mutated (the
+  // post-hoc check below alone still promoted a foreign entry first).
+  const entry = activeMemory.promoteToLongTerm(entryId, { userId });
   if (!entry || entry.userId !== userId) return null;
   return entry;
 }

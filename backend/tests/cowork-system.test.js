@@ -356,6 +356,20 @@ describe('active-memory', () => {
     assert.ok(promoted.strength > 0.5);
   });
 
+  it('promote with a mismatched userId is rejected and does NOT mutate the entry (IDOR guard)', () => {
+    const entry = activeMemory.createMemoryEntry(testUserId, 'Owner-only promote probe', { strength: 0.4 });
+    const before = { tier: entry.tier, strength: entry.strength };
+    // Another user supplying this id must get null and leave the entry untouched.
+    const result = activeMemory.promoteToLongTerm(entry.id, { userId: 'someone-else' });
+    assert.equal(result, null);
+    const after = activeMemory.listEntries(testUserId).find((e) => e.id === entry.id);
+    assert.equal(after.tier, before.tier, 'tier unchanged');
+    assert.equal(after.strength, before.strength, 'strength unchanged');
+    // The legitimate owner still succeeds.
+    const owned = activeMemory.promoteToLongTerm(entry.id, { userId: testUserId });
+    assert.equal(owned.tier, 'long_term');
+  });
+
   it('auto-promotes based on access count', () => {
     const entry = activeMemory.createMemoryEntry(testUserId, 'Auto promote test ' + Date.now());
     for (let i = 0; i < activeMemory.PROMOTION_THRESHOLD; i++) {

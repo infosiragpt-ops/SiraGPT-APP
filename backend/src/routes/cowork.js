@@ -221,7 +221,7 @@ router.delete('/memory/:id', authenticateToken, memoryRateLimit, async (req, res
 
 router.post('/memory/promote/:entryId', authenticateToken, memoryRateLimit, async (req, res) => {
   try {
-    const entry = activeMemory.promoteToLongTerm(req.params.entryId);
+    const entry = activeMemory.promoteToLongTerm(req.params.entryId, { userId: req.user.id });
     if (!entry) return res.status(404).json({ error: 'entry not found' });
     res.json(entry);
   } catch (err) {
