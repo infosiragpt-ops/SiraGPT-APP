@@ -57,6 +57,26 @@ const customerInputSchema = z.object({
   }
 });
 
+// Partial schema for updates: every field optional with NO defaults (so an
+// absent key stays out of the update `data` rather than resetting a column to
+// its create-time default), and the doc-consistency check only fires when both
+// docType and docNumber are present in the patch. (The previous code did
+// `customerInputSchema.partial ? customerInputSchema : customerInputSchema` —
+// identical branches, and `.partial` doesn't even exist on a ZodEffects, so
+// updates always required the full create payload.)
+const customerUpdateSchema = z.object({
+  docType: z.enum(DOC_TYPES).optional(),
+  docNumber: z.string().trim().max(15).optional(),
+  name: z.string().trim().min(1, 'name requerido').max(200).optional(),
+  email: z.string().trim().email().max(200).optional().or(z.literal('')).transform((v) => v || undefined),
+  address: z.string().trim().max(300).optional(),
+  isActive: z.boolean().optional(),
+}).superRefine((val, ctx) => {
+  if (val.docType !== undefined && val.docNumber !== undefined && !isValidDoc(val.docType, val.docNumber)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['docNumber'], message: `docNumber inválido para ${val.docType}` });
+  }
+});
+
 async function createCustomer({ prisma, input } = {}) {
   if (!prisma) throw new Error('prisma requerido');
   const data = parse(customerInputSchema, input);
@@ -65,7 +85,7 @@ async function createCustomer({ prisma, input } = {}) {
 
 async function updateCustomer({ prisma, id, input } = {}) {
   if (!prisma) throw new Error('prisma requerido');
-  const data = parse(customerInputSchema.partial ? customerInputSchema : customerInputSchema, input);
+  const data = parse(customerUpdateSchema, input);
   return prisma.accountingCustomer.update({ where: { id }, data });
 }
 

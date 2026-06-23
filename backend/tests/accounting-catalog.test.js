@@ -65,6 +65,35 @@ test('list/get/update customer', async () => {
   assert.equal(u.name, 'Juan Pérez');
 });
 
+test('updateCustomer: partial patch changes only the given field (no default reset)', async () => {
+  const prisma = fakeCatalogPrisma();
+  const c = await catalog.createCustomer({ prisma, input: { docType: 'RUC', docNumber: '20512345678', name: 'ACME SAC', isActive: true } });
+  // Patch ONLY the name. docType/docNumber/isActive must be untouched — the old
+  // code required the full payload (and a naive .partial() would have reset them
+  // to schema defaults SIN_DOC/'0'/true).
+  const u = await catalog.updateCustomer({ prisma, id: c.id, input: { name: 'ACME Renombrada' } });
+  assert.equal(u.name, 'ACME Renombrada');
+  assert.equal(u.docType, 'RUC', 'docType preserved');
+  assert.equal(u.docNumber, '20512345678', 'docNumber preserved');
+});
+
+test('updateCustomer: a single-field patch with a valid value succeeds', async () => {
+  const prisma = fakeCatalogPrisma();
+  const c = await catalog.createCustomer({ prisma, input: { docType: 'DNI', docNumber: '12345678', name: 'Juan' } });
+  const u = await catalog.updateCustomer({ prisma, id: c.id, input: { isActive: false } });
+  assert.equal(u.isActive, false);
+  assert.equal(u.name, 'Juan', 'name preserved');
+});
+
+test('updateCustomer: still validates a doc pair when BOTH parts are patched', async () => {
+  const prisma = fakeCatalogPrisma();
+  const c = await catalog.createCustomer({ prisma, input: { docType: 'DNI', docNumber: '12345678', name: 'Juan' } });
+  await assert.rejects(
+    () => catalog.updateCustomer({ prisma, id: c.id, input: { docType: 'RUC', docNumber: '123' } }),
+    (e) => e.code === 'VALIDATION_ERROR' && e.issues.some((i) => i.path === 'docNumber'),
+  );
+});
+
 // ── productos ────────────────────────────────────────────────────────────────
 test('createProduct: servicio afecto a IGV con precio redondeado', async () => {
   const prisma = fakeCatalogPrisma();
