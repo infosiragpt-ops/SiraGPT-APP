@@ -311,13 +311,19 @@ function checkPaidTokenCap(user, { message = 'Monthly API limit exceeded' } = {}
  * @returns {Promise<Object>} the updated user row.
  */
 async function recordApiUsage({ prisma, userId, model, tokens } = {}) {
-  await prisma.apiUsage.create({
-    data: { userId, model, tokens, cost: tokens * 0.001 },
-  });
-  return prisma.user.update({
-    where: { id: userId },
-    data: { apiUsage: { increment: tokens } },
-  });
+  // Write the ApiUsage row and bump the user counter as ONE unit — otherwise a
+  // failure between them leaves the row-based FREE gate and the counter-based
+  // paid gate disagreeing about how much the user has spent.
+  const [, updatedUser] = await prisma.$transaction([
+    prisma.apiUsage.create({
+      data: { userId, model, tokens, cost: tokens * 0.001 },
+    }),
+    prisma.user.update({
+      where: { id: userId },
+      data: { apiUsage: { increment: tokens } },
+    }),
+  ]);
+  return updatedUser;
 }
 
 /**

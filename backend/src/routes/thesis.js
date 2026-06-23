@@ -2067,8 +2067,18 @@ async function processThesisGeneration(sessionId, topics, userId, chatId) {
       });
     }
 
-    // Save thesis message to chat - ONLY create the final completion message
-    if (chatId) {
+    // Save thesis message to chat - ONLY create the final completion message.
+    // Verify the chat belongs to this user first: chatId comes straight from
+    // the request body, so without this check an attacker could inject a forged
+    // "completed" assistant message (with a download link) into another user's
+    // conversation.
+    const ownsChat = chatId
+      ? await prisma.chat.findFirst({ where: { id: chatId, userId }, select: { id: true } })
+      : null;
+    if (chatId && !ownsChat) {
+      console.warn(`⚠️ thesis: chatId ${chatId} not owned by user ${userId}; skipping message persist`);
+    }
+    if (chatId && ownsChat) {
       await prisma.message.create({
         data: {
           chatId: chatId,
