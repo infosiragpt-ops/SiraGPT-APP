@@ -606,6 +606,13 @@ app.use('/api/agent', expensiveLimiter);
 app.use('/api/rag', expensiveLimiter);
 app.use('/api/document-ai', expensiveLimiter);
 app.use('/api/ai/generate', expensiveLimiter);
+// Autonomous research loop (planner→search→browser→vision LLM) and the
+// scientific-search fan-out (10-16 external APIs in parallel per call) are
+// per-request amplifiers — gate them at the stricter expensive tier so one
+// authed user can't run up LLM cost or get the platform IP banned by upstream
+// indices (Crossref/OpenAlex/…).
+app.use('/api/research-agent', expensiveLimiter);
+app.use('/api/scientific-search', expensiveLimiter);
 app.use('/api/', apiLimiter);
 
 // Idempotency runs AFTER rate-limit (so a flood of replays still
