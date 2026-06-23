@@ -128,7 +128,7 @@ describe('PublishingConsole', () => {
     fireEvent.click(await screen.findByRole('button', { name: /republish/i }))
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
-    expect(fetchMock.mock.calls[1][0]).toBe('/api/publishing')
+    expect(fetchMock.mock.calls[1][0]).toBe('/publishing/state')
     expect(fetchMock.mock.calls[1][1]).toEqual(expect.objectContaining({
       method: 'POST',
       body: JSON.stringify({ action: 'republish' }),
