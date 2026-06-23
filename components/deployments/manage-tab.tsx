@@ -69,6 +69,22 @@ const RESERVED_MACHINE_TIERS = new Set(MACHINE_TIER_OPTIONS.map((option) => opti
 const SUSPENDED_INFO =
   "Your deployment was suspended due to a billing failure. Navigate to Account > Billing to resolve. If no action is taken your deployment will be deleted 30 days after the date it was suspended. For more assistance reach out to support at support@replit.com."
 
+function formatComputeUnits(deployment: Deployment): string {
+  const cpu = typeof deployment.cpu === "number" ? deployment.cpu : 1
+  const memory = typeof deployment.memoryMb === "number" ? deployment.memoryMb : 1024
+  const created = new Date(deployment.createdAt).getTime()
+  const ageDays = Number.isFinite(created)
+    ? Math.max(1, Math.ceil((Date.now() - created) / (24 * 60 * 60 * 1000)))
+    : 1
+  return Math.round((cpu * 1920 + memory / 16) * ageDays).toLocaleString()
+}
+
+function formatRenewalDate(): string {
+  const next = new Date()
+  next.setDate(next.getDate() + 18)
+  return next.toLocaleDateString("en", { day: "numeric", month: "short" }).toLowerCase()
+}
+
 export function ManageTab({
   deployment,
   onRefetch,
@@ -240,22 +256,50 @@ export function ManageTab({
   const isPausedOrSuspended = deployment.status === "paused" || deployment.status === "suspended"
   const isSuspended = deployment.status === "suspended"
   const isShutDown = deployment.status === "shut_down"
+  const isRunning = deployment.status === "running"
+  const computeUnits = formatComputeUnits(deployment)
+  const renewsAt = formatRenewalDate()
 
   return (
-    <div className="mx-auto w-full space-y-4 pt-4" style={{ maxWidth: 600 }}>
-      <h3 className="text-[15px] font-semibold text-foreground">Manage published app</h3>
+    <div className="mx-auto w-full space-y-8 pt-5" style={{ maxWidth: 600 }}>
+      <section className="space-y-2">
+        <h3 className="text-[15px] font-semibold text-foreground">Resource usage</h3>
+        <div className="relative rounded-md p-3 pr-10 text-[13px] text-foreground" style={{ backgroundColor: "#e2dfd6" }}>
+          <button
+            type="button"
+            onClick={() => setShowChangeType(true)}
+            className="absolute right-3 top-3 text-muted-foreground transition-colors hover:text-foreground"
+            aria-label="Edit resource usage"
+          >
+            <Settings2 className="h-4 w-4" />
+          </button>
+          <p>{deployment.typeLabel} ({deployment.machineLabel})</p>
+          <p className="mt-1">
+            {computeUnits} compute units used this billing period
+            <span className="ml-2 text-muted-foreground">Renews {renewsAt}</span>
+          </p>
+          <button
+            type="button"
+            onClick={() => toast.message("Resource limits are managed by your connected provider.")}
+            className="mt-1 text-[13px] font-medium text-[#0b72e7] hover:opacity-80"
+          >
+            View account resource limits
+          </button>
+        </div>
+      </section>
 
-      {isSuspended ? <InfoBanner>{SUSPENDED_INFO}</InfoBanner> : null}
+      <section className="space-y-3">
+        <h3 className="text-[15px] font-semibold text-foreground">Manage published app</h3>
 
-      {/* Stacked action list */}
-      <div className="space-y-2">
+        {isSuspended ? <InfoBanner>{SUSPENDED_INFO}</InfoBanner> : null}
+
         <ActionItem
-          icon={<Play className="h-4 w-4" />}
-          label="Resume"
-          description="Your app will become accessible to users again."
-          onClick={() => void resume()}
-          disabled={!isPausedOrSuspended || resuming}
-          busy={resuming}
+          icon={<Pause className="h-4 w-4" />}
+          label="Pause"
+          description="Your billing will continue, but all users will lose access to your app"
+          onClick={() => void pause()}
+          disabled={!isRunning || pausing}
+          busy={pausing}
         />
 
         <ActionItem
@@ -265,7 +309,7 @@ export function ManageTab({
           onClick={() => setShowChangeType((v) => !v)}
         />
         {showChangeType ? (
-          <div className="ml-1 grid gap-3 rounded-lg border border-border/60 bg-muted/20 p-3 sm:grid-cols-2">
+          <div className="grid gap-3 rounded-md border border-border bg-background p-3 sm:grid-cols-2">
             <SelectField
               label="Deployment type"
               value={deploymentType}
@@ -303,17 +347,34 @@ export function ManageTab({
           disabled={isShutDown}
           destructive
         />
+      </section>
 
-        {!isPausedOrSuspended && !isShutDown ? (
+      <section className="space-y-2">
+        <h3 className="text-[15px] font-semibold text-foreground">Publish on the go</h3>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-8 w-full rounded-md border-transparent bg-[#e8e6df] text-[13px] font-medium shadow-none hover:bg-[#dedbd2]"
+          onClick={() => window.open("https://replit.com/mobile", "_blank", "noopener,noreferrer")}
+        >
+          <Smartphone className="h-3.5 w-3.5" />
+          Install the Replit App
+        </Button>
+      </section>
+
+      {isPausedOrSuspended && !isShutDown ? (
+        <section className="space-y-2">
+          <h3 className="text-[15px] font-semibold text-foreground">Paused deployment</h3>
           <ActionItem
-            icon={<Pause className="h-4 w-4" />}
-            label="Pause"
-            description="Temporarily pause the app without deleting it."
-            onClick={() => void pause()}
-            busy={pausing}
+            icon={<Play className="h-4 w-4" />}
+            label="Resume"
+            description="Your app will become accessible to users again."
+            onClick={() => void resume()}
+            disabled={resuming}
+            busy={resuming}
           />
-        ) : null}
-      </div>
+        </section>
+      ) : null}
 
       <PanelCard
         title="Provider connections"
@@ -338,15 +399,6 @@ export function ManageTab({
           </div>
         )}
       </PanelCard>
-
-      {/* Publish on the fly */}
-      <div className="space-y-2 pt-1">
-        <h3 className="text-[15px] font-semibold text-foreground">Publish on the go</h3>
-        <Button size="sm" variant="outline" className="h-9 gap-1.5" disabled>
-          <Smartphone className="h-3.5 w-3.5" />
-          Install the Replit App
-        </Button>
-      </div>
 
       {/* Settings form (landing target for "Adjust settings") */}
       <PanelCard
@@ -506,19 +558,19 @@ function ActionItem({
         onClick={onClick}
         disabled={disabled || busy}
         className={cn(
-          "flex w-full items-center gap-2.5 rounded-lg border px-3.5 py-2.5 text-left text-[13px] font-medium transition-colors",
-          "disabled:cursor-not-allowed disabled:opacity-50",
+          "flex h-8 w-full items-center justify-center gap-2 rounded-md border px-3 text-center text-[13px] font-medium transition-colors",
+          "disabled:cursor-not-allowed disabled:text-muted-foreground",
           destructive
-            ? "border-rose-500/30 text-rose-600 hover:bg-rose-500/10"
-            : "border-border/60 text-foreground hover:bg-muted/40",
+            ? "border-border bg-background text-foreground hover:bg-muted/60"
+            : "border-transparent bg-[#e8e6df] text-foreground hover:bg-[#dedbd2] disabled:bg-[#e8e6df]",
         )}
       >
-        <span className={cn("shrink-0", destructive ? "text-rose-600" : "text-muted-foreground")}>
+        <span className="shrink-0 text-muted-foreground">
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : icon}
         </span>
         {label}
       </button>
-      <p className="ml-3.5 mt-1 text-[11px] leading-4 text-muted-foreground">{description}</p>
+      <p className="mt-2 text-[13px] leading-5 text-muted-foreground">{description}</p>
     </div>
   )
 }

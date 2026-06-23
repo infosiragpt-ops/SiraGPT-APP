@@ -15,18 +15,18 @@ import { cn } from "@/lib/utils"
 import type { DeploymentStatus } from "@/lib/deployments/deployments-api"
 
 export const REPLIT_DEPLOYMENTS_STYLE = {
-  "--background": "45 31% 95%",
-  "--foreground": "40 8% 16%",
-  "--card": "44 28% 92%",
-  "--card-foreground": "40 8% 16%",
-  "--border": "40 21% 81%",
-  "--input": "40 21% 81%",
-  "--muted": "43 26% 89%",
-  "--muted-foreground": "34 7% 38%",
-  "--primary": "40 8% 8%",
+  "--background": "45 12% 93%",
+  "--foreground": "40 5% 16%",
+  "--card": "45 10% 90%",
+  "--card-foreground": "40 5% 16%",
+  "--border": "42 12% 80%",
+  "--input": "42 12% 80%",
+  "--muted": "43 10% 88%",
+  "--muted-foreground": "34 5% 39%",
+  "--primary": "40 5% 8%",
   "--primary-foreground": "0 0% 100%",
-  "--popover": "45 31% 95%",
-  "--popover-foreground": "40 8% 16%",
+  "--popover": "45 12% 93%",
+  "--popover-foreground": "40 5% 16%",
 } as React.CSSProperties
 
 export function ToolShell({

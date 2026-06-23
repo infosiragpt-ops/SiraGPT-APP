@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { ChevronDown, Link2, Loader2, Plus, ShoppingCart, Trash2 } from "lucide-react"
+import { AlertTriangle, ChevronDown, Loader2, Plus, Settings, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -24,6 +24,12 @@ function defaultDomainName(deployment: Deployment): string {
   } catch {
     return deployment.defaultDomain.replace(/^https?:\/\//, "")
   }
+}
+
+function registeredWith(domain: DeploymentDomain): string {
+  if (domain.kind === "purchased") return "Replit"
+  if (domain.kind === "custom") return "Custom DNS"
+  return "N/A"
 }
 
 export function DomainsTab({
@@ -100,21 +106,26 @@ export function DomainsTab({
   }
 
   return (
-    <div className="mx-auto w-full space-y-3 pt-4" style={{ maxWidth: 568 }}>
-      <div className="flex flex-wrap items-center justify-between gap-2">
+    <div className="mx-auto w-full space-y-4 pt-6" style={{ maxWidth: 568 }}>
+      <div className="flex items-center justify-between gap-3">
         <h3 className="text-[15px] font-semibold text-foreground">Domains</h3>
         <div className="flex items-center gap-2">
           <Button
             size="sm"
             variant="outline"
-            className="h-8 gap-1.5"
+            className="h-7 rounded-md border-border bg-background px-3 text-[12px] font-medium shadow-none hover:bg-muted disabled:bg-muted disabled:text-muted-foreground"
             onClick={() => toast.message("Domain purchasing is coming soon.")}
+            disabled={!hasLiveVersion}
           >
-            <ShoppingCart className="h-3.5 w-3.5" />
             Buy a new domain
           </Button>
-          <Button size="sm" className="h-8 gap-1.5" onClick={() => setShowConnect((v) => !v)}>
-            <Link2 className="h-3.5 w-3.5" />
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 rounded-md border-border bg-background px-3 text-[12px] font-medium shadow-none hover:bg-muted disabled:bg-muted disabled:text-muted-foreground"
+            onClick={() => setShowConnect((v) => !v)}
+            disabled={!hasLiveVersion}
+          >
             Connect your own domain
           </Button>
         </div>
@@ -125,7 +136,7 @@ export function DomainsTab({
       ) : null}
 
       {showConnect ? (
-        <div className="grid gap-2 rounded-lg border border-border/60 bg-card/80 p-3 sm:grid-cols-[1fr_150px_auto]">
+        <div className="grid gap-2 rounded-md border border-border bg-background p-3 sm:grid-cols-[1fr_150px_auto]">
           <Input
             value={hostname}
             onChange={(e) => setHostname(e.target.value)}
@@ -156,22 +167,23 @@ export function DomainsTab({
         </div>
       ) : null}
 
-      <div className="overflow-hidden rounded-lg border border-border/60 bg-card/80">
+      <div className="overflow-hidden rounded-md border border-border bg-background">
         <table className="w-full text-left text-[12px]">
-          <thead className="border-b border-border/60 bg-muted/30 text-[11px] font-medium text-muted-foreground">
+          <thead className="border-b border-border bg-[#edebe6] text-[12px] font-medium text-muted-foreground">
             <tr>
-              <th className="px-4 py-2 font-medium">Name</th>
-              <th className="px-4 py-2 font-medium">Registered With</th>
+              <th className="px-3 py-2 font-medium">Name</th>
+              <th className="px-3 py-2 font-medium">Registered With</th>
               <th className="w-[120px] px-4 py-2 text-right font-medium" />
             </tr>
           </thead>
           <tbody>
             {/* Default domain row */}
-            <tr className="border-b border-border/40">
-              <td className="px-4 py-2.5 font-mono text-[11px]">{defaultDomainName(deployment)}</td>
-              <td className="px-4 py-2.5 text-muted-foreground">N/A</td>
-              <td className="px-4 py-2.5 text-right">
-                <Button size="sm" variant="ghost" className="h-7 text-[11px] text-muted-foreground" disabled>
+            <tr className="border-b border-border">
+              <td className="px-3 py-2.5 font-mono text-[13px]">{defaultDomainName(deployment)}</td>
+              <td className="px-3 py-2.5 text-muted-foreground">N/A</td>
+              <td className="px-3 py-2.5 text-right">
+                <Button size="sm" variant="ghost" className="h-7 gap-1 rounded-md bg-muted px-2 text-[11px] text-muted-foreground" disabled>
+                  <Settings className="h-3.5 w-3.5" />
                   Manage
                 </Button>
               </td>
@@ -183,28 +195,34 @@ export function DomainsTab({
               const records: DnsRecord[] = domain.dnsRecords ?? []
               return (
                 <React.Fragment key={domain.id}>
-                  <tr className="border-b border-border/40 last:border-b-0">
-                    <td className="px-4 py-2.5">
-                      <span className="inline-flex items-center gap-2">
-                        <span className="font-mono text-[11px]">{domain.hostname}</span>
+                  <tr className="border-b border-border last:border-b-0">
+                    <td className="px-3 py-2.5">
+                      <div className="space-y-1">
+                        <span className="inline-flex items-center gap-1.5 font-mono text-[13px]">
+                          {domain.hostname}
+                          {domain.verificationStatus !== "verified" ? (
+                            <AlertTriangle className="h-3.5 w-3.5 text-orange-500" />
+                          ) : null}
+                        </span>
                         <VerificationPill status={domain.verificationStatus} />
-                      </span>
+                      </div>
                     </td>
-                    <td className="px-4 py-2.5 text-muted-foreground">Custom DNS</td>
-                    <td className="px-4 py-2.5 text-right">
+                    <td className="px-3 py-2.5 text-muted-foreground">{registeredWith(domain)}</td>
+                    <td className="px-3 py-2.5 text-right">
                       <Button
                         size="sm"
                         variant="ghost"
-                        className="h-7 gap-1 text-[11px]"
+                        className="h-7 gap-1 rounded-md bg-muted px-2 text-[11px] hover:bg-[#dedad0]"
                         onClick={() => setExpandedId((prev) => (prev === domain.id ? null : domain.id))}
                       >
+                        <Settings className="h-3.5 w-3.5" />
                         Manage
                         <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", expanded && "rotate-180")} />
                       </Button>
                     </td>
                   </tr>
                   {expanded ? (
-                    <tr className="border-b border-border/40 bg-muted/20 last:border-b-0">
+                    <tr className="border-b border-border bg-muted/20 last:border-b-0">
                       <td colSpan={3} className="px-4 py-3">
                         <div className="space-y-3">
                           <p className="text-[11px] text-muted-foreground">
@@ -272,17 +290,17 @@ function VerificationPill({ status }: { status: DeploymentDomain["verificationSt
   const map: Record<DeploymentDomain["verificationStatus"], { label: string; cls: string; dot: string }> = {
     verified: {
       label: "Verified",
-      cls: "border-emerald-500/25 bg-emerald-500/10 text-emerald-600",
+      cls: "text-muted-foreground",
       dot: "bg-emerald-500",
     },
     pending: {
       label: "Pending",
-      cls: "border-amber-500/25 bg-amber-500/10 text-amber-600",
+      cls: "text-muted-foreground",
       dot: "bg-amber-500",
     },
     failed: {
       label: "Failed",
-      cls: "border-rose-500/25 bg-rose-500/10 text-rose-600",
+      cls: "text-muted-foreground",
       dot: "bg-rose-500",
     },
   }
@@ -290,7 +308,7 @@ function VerificationPill({ status }: { status: DeploymentDomain["verificationSt
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium",
+        "flex w-fit items-center gap-1 text-[11px] font-medium",
         entry.cls,
       )}
     >

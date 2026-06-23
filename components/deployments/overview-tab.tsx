@@ -11,6 +11,7 @@ import {
   MapPin,
   QrCode,
   Rocket,
+  RotateCcw,
   ShoppingCart,
   Users,
 } from "lucide-react"
@@ -26,10 +27,9 @@ import {
   type PublishPhase,
 } from "@/lib/deployments/deployments-api"
 
-import { InfoBanner, PanelCard, StatusDot, copyToClipboard } from "./shared"
+import { InfoBanner, StatusDot, copyToClipboard, timeAgo } from "./shared"
 import type { DetailTab } from "./deployment-detail"
 import { PublishPipeline } from "./publish-pipeline"
-import { VersionTimeline } from "./version-timeline"
 
 const VISIBILITY_LABEL: Record<Deployment["visibility"], string> = {
   public: "Public",
@@ -69,6 +69,10 @@ export function OverviewTab({
   const customDomains = domains.filter((d) => d.kind !== "default")
   const hasPublished = versions.some((v) => v.status === "promoted")
   const liveVersion = versions.find((v) => v.isLive) ?? versions.find((v) => v.status === "promoted") ?? null
+  const rollbackTarget =
+    liveVersion != null
+      ? versions.find((v) => v.id !== liveVersion.id && (v.status === "promoted" || v.status === "rolled_back"))
+      : null
   const isSuspended = deployment.status === "suspended"
 
   const publish = async () => {
@@ -119,35 +123,39 @@ export function OverviewTab({
     <div className="space-y-3">
       {publishing && phases ? <PublishPipeline phases={phases} onDone={onPipelineDone} /> : null}
 
-      <PanelCard
-        title="Production"
-        action={!isSuspended ? (
-          <Button size="sm" className="h-8 gap-1.5" onClick={() => void publish()} disabled={publishing}>
-            <Rocket className="h-3.5 w-3.5" />
-            {hasPublished ? "Republish" : "Publish"}
-          </Button>
-        ) : null}
-      >
-        {/* Vertical timeline rail: dashed line down the left + a status dot at the top. */}
-        <div className="relative pl-5">
-          <span
-            aria-hidden
-            className="absolute left-[3px] top-1.5 bottom-1 border-l border-dashed border-border/70"
-          />
-          <span className="absolute left-0 top-1">
-            <StatusDot status={deployment.status} className="h-2 w-2" />
-          </span>
+      <div className="relative">
+        <span aria-hidden className="absolute -left-[17px] top-0 bottom-0 border-l border-dashed border-border" />
+        <StatusDot status={deployment.status} className="absolute -left-[20px] top-5 h-2 w-2" />
 
-          {isSuspended ? <InfoBanner className="mb-3">{SUSPENDED_INFO}</InfoBanner> : null}
+        <section
+          className="min-h-[336px] rounded-md px-4 py-4 text-[13px] text-foreground"
+          style={{ backgroundColor: "#e2dfd6" }}
+        >
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <h3 className="text-[15px] font-semibold">Production</h3>
+            {!isSuspended ? (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 gap-1.5 rounded-md border-border bg-background px-2.5 text-[12px] shadow-none hover:bg-muted"
+                onClick={() => void publish()}
+                disabled={publishing}
+              >
+                <Rocket className="h-3.5 w-3.5" />
+                {hasPublished ? "Republish" : "Publish"}
+              </Button>
+            ) : null}
+          </div>
 
-          <dl className="space-y-1">
-            <FieldRow label="Status" icon={<List className="h-3.5 w-3.5 text-muted-foreground" />}>
+          {isSuspended ? <InfoBanner className="mb-2.5 bg-[#f3f1ec]">{SUSPENDED_INFO}</InfoBanner> : null}
+
+          <dl className="space-y-0">
+            <FieldRow label="Status" trailing={<List className="h-3.5 w-3.5 text-muted-foreground" />}>
               <span className="inline-flex items-center gap-1.5">
                 <StatusDot status={deployment.status} />
-                <span className="font-mono text-[11px]">
-                  {liveVersion ? liveVersion.shortHash.slice(0, 8) : "—"}
+                <span className="font-semibold">
+                  {liveVersion ? liveVersion.shortHash.slice(0, 8) : "—"} {deployment.status}
                 </span>
-                <span className="text-muted-foreground">· {deployment.status}</span>
               </span>
             </FieldRow>
 
@@ -178,13 +186,11 @@ export function OverviewTab({
                 <button
                   type="button"
                   onClick={() => onNavigate("domains")}
-                  className="inline-flex items-center gap-1.5 rounded border border-border bg-background px-2 py-1 text-[11px] font-medium text-foreground transition-colors hover:bg-muted"
+                  className="mt-0.5 inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-background px-2 text-[11px] font-medium text-foreground transition-colors hover:bg-muted"
                 >
                   <ShoppingCart className="h-3 w-3" />
                   Buy a new domain
-                  <span className="rounded-full border border-border bg-muted px-1.5 py-0 text-[9px] font-medium text-muted-foreground">
-                    Beta
-                  </span>
+                  <span className="rounded bg-[#d7e8ff] px-1.5 py-0 text-[10px] font-medium text-[#1368c4]">Beta</span>
                 </button>
               </div>
             </FieldRow>
@@ -200,7 +206,7 @@ export function OverviewTab({
               <span className="inline-flex items-center gap-1.5">
                 {deployment.machineLabel}
                 {typeof deployment.monthlyUsd === "number" ? (
-                  <span className="text-muted-foreground">· ${deployment.monthlyUsd.toFixed(2)}/month</span>
+                  <span className="text-muted-foreground">(${deployment.monthlyUsd.toFixed(2)}/mo)</span>
                 ) : null}
                 <ManageLink onClick={() => onNavigate("manage")} />
               </span>
@@ -219,34 +225,53 @@ export function OverviewTab({
               </span>
             </FieldRow>
           </dl>
-        </div>
-      </PanelCard>
+        </section>
 
-      <PanelCard title="History" detail="Recent deploys from this workspace">
-        <VersionTimeline versions={versions} rollingBackId={rollingBackId} onRollback={(id) => void rollback(id)} />
-      </PanelCard>
+        {liveVersion ? (
+          <div className="relative mt-4 flex items-center gap-2 text-[13px] text-muted-foreground">
+            <StatusDot status="running" className="absolute -left-[20px] top-2 h-1.5 w-1.5" />
+            <span className="font-mono text-[12px] text-muted-foreground">{liveVersion.shortHash.slice(0, 8)}</span>
+            <span className="flex h-4 w-4 items-center justify-center rounded-full bg-[#1c8bdc] text-[10px] font-semibold text-white">
+              {deployment.name.slice(0, 1).toLowerCase() || "s"}
+            </span>
+            <span className="text-foreground">{deployment.name}</span>
+            <span>published {timeAgo(liveVersion.createdAt)}</span>
+            {rollbackTarget ? (
+              <button
+                type="button"
+                onClick={() => void rollback(rollbackTarget.id)}
+                disabled={rollingBackId === rollbackTarget.id}
+                className="ml-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+              >
+                <RotateCcw className={cn("h-3.5 w-3.5", rollingBackId === rollbackTarget.id && "animate-spin")} />
+                Roll back
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
     </div>
   )
 }
 
 function FieldRow({
   label,
-  icon,
+  trailing,
   children,
 }: {
   label: string
-  icon?: React.ReactNode
+  trailing?: React.ReactNode
   children: React.ReactNode
 }) {
   return (
     <div
-      className="grid items-start gap-3 rounded-md px-2 py-2 text-[12px] hover:bg-muted/30"
+      className="grid items-start gap-3 px-0 py-[5px] text-[13px]"
       style={{ gridTemplateColumns: "100px minmax(0, 1fr)" }}
     >
-      <span className="inline-flex items-center gap-1.5 pt-0.5 text-muted-foreground">{label}</span>
-      <span className="flex min-w-0 items-center justify-start gap-1.5 text-left font-medium">
+      <dt className="inline-flex items-center gap-1.5 pt-0.5 text-muted-foreground">{label}</dt>
+      <span className="flex min-w-0 items-center justify-start gap-1.5 overflow-hidden text-left font-medium">
         {children}
-        {icon}
+        {trailing}
       </span>
     </div>
   )
@@ -264,8 +289,8 @@ function DomainLine({
   onCopy: (key: string, value: string) => void
 }) {
   return (
-    <span className="inline-flex items-center gap-1.5">
-      <span className="truncate text-[12px]">{hostname}</span>
+    <span className="inline-flex max-w-full min-w-0 items-center gap-2">
+      <span className="min-w-0 max-w-[min(72vw,520px)] truncate text-[13px]">{hostname}</span>
       <button
         type="button"
         onClick={() => onCopy(copyKey, hostname)}
@@ -295,7 +320,7 @@ function ManageLink({ onClick }: { onClick: () => void }) {
     <button
       type="button"
       onClick={onClick}
-      className="text-[11px] font-medium text-[#0b72e7] transition-opacity hover:opacity-80"
+      className="text-[12px] font-medium text-[#0b72e7] transition-opacity hover:opacity-80"
     >
       Manage
     </button>

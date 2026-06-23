@@ -10,7 +10,7 @@
  */
 
 import * as React from "react"
-import { Check, Copy, Info, Search } from "lucide-react"
+import { Check, ChevronDown, Copy, Info, Palette, Search } from "lucide-react"
 
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
@@ -36,7 +36,7 @@ function shortDeployment(value: string | null): string {
 
 export function LogsTab({ deploymentId }: { deploymentId: string }) {
   const [entries, setEntries] = React.useState<LogEntry[]>([])
-  const [, setConnection] = React.useState<Connection>("connecting")
+  const [connection, setConnection] = React.useState<Connection>("connecting")
   const [search, setSearch] = React.useState("")
   const [onlyErrors, setOnlyErrors] = React.useState(false)
   const [dateFilter, setDateFilter] = React.useState<DateFilter>("all")
@@ -61,6 +61,7 @@ export function LogsTab({ deploymentId }: { deploymentId: string }) {
         const result = await deploymentsApi.logs(deploymentId)
         if (cancelled) return
         setEntries(result.entries)
+        setConnection("live")
       } catch {
         // The SSE stream may still fill it; fail soft.
       }
@@ -163,53 +164,61 @@ export function LogsTab({ deploymentId }: { deploymentId: string }) {
   }
 
   return (
-    <section className="overflow-hidden rounded-lg border border-border/60 bg-card/80 shadow-sm">
-      {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2">
+    <section className="flex h-full min-h-[520px] flex-col bg-background">
+      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-2">
         <div className="relative min-w-[180px] flex-1">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search"
-            className="h-8 pl-8 pr-7 text-[12px]"
+            className="h-7 rounded-md border-border bg-background px-2 pr-8 text-[12px] shadow-none"
           />
-          <Info
-            className="absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/70"
-            aria-label="Search log messages"
-          />
+          <Search className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-foreground" />
         </div>
-        <label className="inline-flex cursor-pointer items-center gap-1.5 text-[12px] text-muted-foreground">
-          <Checkbox checked={onlyErrors} onCheckedChange={(v) => setOnlyErrors(v === true)} />
+        <label className="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md border border-transparent bg-muted px-2.5 text-[12px] font-medium text-foreground hover:bg-[#ddd9cf]">
+          <Checkbox
+            checked={onlyErrors}
+            onCheckedChange={(v) => setOnlyErrors(v === true)}
+            className="h-4 w-4 rounded-[5px] border-border bg-background"
+          />
           Errors only
         </label>
-        <select
-          value={dateFilter}
-          onChange={(e) => setDateFilter(e.target.value as DateFilter)}
-          className="h-8 rounded-md border border-input bg-background px-2 text-[12px] outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-          aria-label="Filter by date"
-        >
-          <option value="all">Date</option>
-          <option value="hour">Last hour</option>
-          <option value="today">Today</option>
-        </select>
+        <label className="relative inline-flex h-7 items-center">
+          <select
+            value={dateFilter}
+            onChange={(e) => setDateFilter(e.target.value as DateFilter)}
+            className="h-7 appearance-none rounded-md border border-transparent bg-muted pl-2.5 pr-7 text-[12px] font-medium text-foreground outline-none hover:bg-[#ddd9cf] focus-visible:ring-2 focus-visible:ring-ring/40"
+            aria-label="Filter by date"
+          >
+            <option value="all">Date</option>
+            <option value="hour">Last hour</option>
+            <option value="today">Today</option>
+          </select>
+          <ChevronDown className="pointer-events-none absolute right-2 h-3.5 w-3.5 text-muted-foreground" />
+        </label>
       </div>
 
-      {/* Table */}
-      <div ref={scrollRef} className="max-h-[460px] min-h-[200px] overflow-auto">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">
         <table className="w-full border-collapse text-left text-[12px]">
-          <thead className="sticky top-0 z-10 bg-card/95 backdrop-blur">
-            <tr className="border-b border-border/60 text-[11px] font-medium text-muted-foreground">
-              <th className="w-[170px] px-3 py-1.5 font-medium">Date</th>
-              <th className="w-[120px] px-3 py-1.5 font-medium">Deployment</th>
-              <th className="w-[80px] px-3 py-1.5 font-medium">Source</th>
-              <th className="px-3 py-1.5 font-medium">Log</th>
+          <thead className="sticky top-0 z-10 bg-background">
+            <tr className="border-b border-border text-[12px] font-medium text-foreground">
+              <th className="w-[28px] px-1 py-1.5">
+                <Checkbox disabled className="h-4 w-4 rounded-[5px] border-border bg-muted" />
+              </th>
+              <th className="w-[174px] px-2 py-1.5 font-medium">
+                <span className="inline-flex items-center gap-1">
+                  Time <Info className="h-3 w-3 text-muted-foreground" />
+                </span>
+              </th>
+              <th className="w-[96px] px-2 py-1.5 font-medium">Deployment</th>
+              <th className="w-[64px] px-2 py-1.5 font-medium">Source</th>
+              <th className="px-2 py-1.5 font-medium">Log</th>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 ? (
               <tr>
-                <td colSpan={4} className="px-3 py-6 text-center text-[12px] text-muted-foreground">
+                <td colSpan={5} className="px-3 py-6 text-center text-[12px] text-muted-foreground">
                   {entries.length === 0 ? "Waiting for logs…" : "No logs match the filter."}
                 </td>
               </tr>
@@ -221,26 +230,27 @@ export function LogsTab({ deploymentId }: { deploymentId: string }) {
                   <tr
                     key={`${entry.ts}-${index}`}
                     className={cn(
-                      "group border-b border-border/30 align-top transition-colors hover:bg-muted/40",
-                      colors && isError && "bg-rose-500/5 hover:bg-rose-500/10",
+                      "group border-b border-border/50 align-top transition-colors hover:bg-muted/40",
+                      colors && isError && "border-[#b9534b] bg-[#dd9994] hover:bg-[#d98d87]",
                     )}
                   >
-                    <td className={cn("whitespace-nowrap px-3 font-mono text-[11px] text-muted-foreground", cellPad)}>
+                    <td className={cn("px-1", cellPad)} />
+                    <td className={cn("whitespace-nowrap px-2 font-mono text-[11px]", isError ? "text-black" : "text-muted-foreground", cellPad)}>
                       {formatTime(entry.ts)}
                     </td>
-                    <td className={cn("whitespace-nowrap px-3 font-mono text-[11px] text-muted-foreground", cellPad)}>
+                    <td className={cn("whitespace-nowrap px-2 font-mono text-[11px]", isError ? "text-black" : "text-muted-foreground", cellPad)}>
                       {shortDeployment(entry.deployment)}
                     </td>
-                    <td className={cn("whitespace-nowrap px-3 text-[11px] text-muted-foreground", cellPad)}>
+                    <td className={cn("whitespace-nowrap px-2 text-[11px]", isError ? "text-black" : "text-muted-foreground", cellPad)}>
                       {entry.source}
                     </td>
-                    <td className={cn("px-3", cellPad)}>
+                    <td className={cn("px-2", cellPad)}>
                       <div className="flex items-start gap-2">
                         <span
                           className={cn(
                             "min-w-0 flex-1 font-mono text-[11px] leading-5",
                             wrap ? "whitespace-pre-wrap break-words" : "truncate whitespace-pre",
-                            colors && isError ? "text-rose-600" : "text-foreground",
+                            colors && isError ? "text-black" : "text-foreground",
                           )}
                         >
                           {entry.message}
@@ -268,7 +278,7 @@ export function LogsTab({ deploymentId }: { deploymentId: string }) {
       </div>
 
       {/* Bottom status bar */}
-      <div className="flex flex-wrap items-center gap-3 border-t border-border/60 px-3 py-2 text-[11px] text-muted-foreground">
+      <div className="flex h-9 shrink-0 flex-wrap items-center gap-3 border-t border-border bg-background px-2 text-[12px] text-muted-foreground">
         <BarToggle active={collapsed} onClick={() => setCollapsed((v) => !v)}>
           Collapse
         </BarToggle>
@@ -276,14 +286,20 @@ export function LogsTab({ deploymentId }: { deploymentId: string }) {
           Wrap
         </BarToggle>
         <BarToggle active={colors} onClick={() => setColors((v) => !v)}>
+          <Palette className="h-3.5 w-3.5" />
           Colors
         </BarToggle>
         <span className="ml-auto inline-flex items-center gap-1.5">
           <span
-            className="h-2 w-2 rounded-full bg-emerald-500"
+            className={cn(
+              "h-2 w-2 rounded-full",
+              connection === "live" ? "bg-emerald-500" : connection === "connecting" ? "bg-amber-500" : "bg-muted-foreground",
+            )}
             aria-hidden
           />
-          <span className="text-emerald-600">Live</span>
+          <span className={connection === "live" ? "text-emerald-600" : "text-muted-foreground"}>
+            {connection === "live" ? "Live" : connection === "connecting" ? "Connecting" : "Offline"}
+          </span>
         </span>
       </div>
     </section>
@@ -305,7 +321,7 @@ function BarToggle({
       onClick={onClick}
       aria-pressed={active}
       className={cn(
-        "rounded px-1.5 py-0.5 transition-colors hover:text-foreground",
+        "inline-flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors hover:text-foreground",
         active ? "font-medium text-foreground" : "text-muted-foreground",
       )}
     >

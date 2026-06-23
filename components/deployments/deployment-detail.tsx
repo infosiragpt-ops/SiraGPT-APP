@@ -7,7 +7,7 @@
  */
 
 import * as React from "react"
-import { ExternalLink, Globe2, List, Loader2, Play, Settings, ShieldCheck, SlidersHorizontal } from "lucide-react"
+import { ExternalLink, Globe2, List, Loader2, Play, Settings, SlidersHorizontal } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -43,6 +43,8 @@ export function DeploymentDetail({
 
   const isPausedOrSuspended = deployment.status === "paused" || deployment.status === "suspended"
   const isSuspended = deployment.status === "suspended"
+  const contentClassName =
+    tab === "logs" ? "h-full w-full" : tab === "overview" ? "w-full px-7 py-3" : "w-full px-3 py-0"
 
   const resume = async () => {
     setResuming(true)
@@ -98,7 +100,7 @@ export function DeploymentDetail({
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="w-full px-7 py-3">
+          <div className={contentClassName}>
             {tab === "overview" ? (
               <>
                 {isSuspended ? <WarningBanner className="mb-3">{PENDING_PAYMENT_BANNER}</WarningBanner> : null}
@@ -106,7 +108,7 @@ export function DeploymentDetail({
                 <div className="mb-4 flex flex-wrap items-center gap-2">
                   <Button
                     size="sm"
-                    className="h-8 gap-1.5 bg-[#6aa7ff] text-white hover:bg-[#5f9bf0] disabled:bg-[#d9d4c8] disabled:text-[#8d867b]"
+                    className="h-8 rounded-md border-0 bg-[#6aa7ff] px-3 text-[13px] font-medium text-white shadow-none hover:bg-[#5f9bf0] disabled:bg-[#d9d4c8] disabled:text-[#8d867b]"
                     onClick={() => void resume()}
                     disabled={!isPausedOrSuspended || resuming}
                   >
@@ -116,7 +118,7 @@ export function DeploymentDetail({
                   <Button
                     size="sm"
                     variant="outline"
-                    className="h-8 gap-1.5 border-transparent bg-muted text-muted-foreground hover:bg-[#e1ddd2] hover:text-foreground"
+                    className="h-8 gap-1.5 rounded-md border-0 bg-[#e5e2da] px-3 text-[13px] font-medium text-muted-foreground shadow-none hover:bg-[#dad6cb] hover:text-foreground"
                     onClick={() => setTab("manage")}
                   >
                     <SlidersHorizontal className="h-3.5 w-3.5" />
@@ -125,13 +127,12 @@ export function DeploymentDetail({
                   <Button
                     size="sm"
                     variant="outline"
-                    className="h-8 gap-1.5 border-transparent bg-muted text-foreground hover:bg-[#e1ddd2]"
+                    className="h-8 gap-1.5 rounded-md border-0 bg-[#e5e2da] px-3 text-[13px] font-medium text-foreground shadow-none hover:bg-[#dad6cb]"
                     onClick={() => void runSecurityScan()}
                     disabled={scanning}
                   >
-                    {scanning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
+                    {scanning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ExternalLink className="h-3.5 w-3.5" />}
                     Run security scan
-                    <ExternalLink className="h-3 w-3 opacity-70" />
                   </Button>
                 </div>
               </>
@@ -146,7 +147,7 @@ export function DeploymentDetail({
                 onNavigate={setTab}
               />
             </TabsContent>
-            <TabsContent value="logs" className="mt-0">
+            <TabsContent value="logs" className="mt-0 h-full">
               <LogsTab deploymentId={deployment.id} />
             </TabsContent>
             <TabsContent value="domains" className="mt-0">
