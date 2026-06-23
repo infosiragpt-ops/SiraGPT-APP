@@ -29,6 +29,31 @@ test('money: tolerates strings and Decimal-like objects', () => {
   assert.equal(money.round2(null), 0);
 });
 
+test('money: round6 keeps 6-decimal FX-rate precision (distinct from round2)', () => {
+  // round6 is for exchange rates (Decimal(18,6)); rounding an FX rate with
+  // round2 corrupts every conversion — regression guard for that distinction.
+  assert.equal(money.round6(3.4567891), 3.456789);
+  assert.equal(money.round6(1 / 3), 0.333333);
+  assert.equal(money.round6(2), 2);
+  assert.equal(money.round6('3.78'), 3.78);
+  assert.equal(money.round6(null), 0);
+  // Same FX rate: round6 preserves it, round2 would destroy it.
+  assert.equal(money.round6(3.456789), 3.456789);
+  assert.equal(money.round2(3.456789), 3.46);
+});
+
+test('money: negative amounts round symmetrically half-up (negative nudge branch)', () => {
+  // The toCents nudge is sign-aware (n>=0 ? +1e-9 : -1e-9) so negatives round
+  // away from zero like positives — without it Math.round(-267.5) would be -267.
+  assert.equal(money.round2(-2.675), -2.68);
+  assert.equal(money.round2(-1.005), -1.01);
+  assert.equal(money.toCents(-1.005), -101);
+  assert.equal(money.fromCents(-268), -2.68);
+  assert.equal(money.sum2([-10.005, -20.004]), -30.01);
+  assert.ok(money.eqMoney(-0.1 + -0.2, -0.3));
+  assert.equal(money.toNumber(-5.5), -5.5);
+});
+
 // ── partida doble ────────────────────────────────────────────────────────────
 test('validateBalanced: a balanced entry passes', () => {
   const r = de.validateBalanced([
