@@ -4,6 +4,7 @@ const { z } = require('zod');
 const { computeInvoiceTotals } = require('./igv');
 const { round2, round6 } = require('./money');
 const { getOseAdapter } = require('./ose-adapter');
+const { withCorrelativeRetry } = require('./correlative');
 
 const invoiceLineSchema = z.object({
   productId: z.string().trim().max(64).optional(),
@@ -59,7 +60,6 @@ async function createInvoice({ prisma, input, userId = null } = {}) {
   if (!prisma) throw new Error('prisma requerido');
   const data = parseInvoiceInput(input);
   const totals = computeInvoiceTotals(data.lines);
-  const number = await nextInvoiceNumber(prisma, data.series);
 
   const lines = totals.lines.map((l) => ({
     productId: l.productId || null,
@@ -74,27 +74,33 @@ async function createInvoice({ prisma, input, userId = null } = {}) {
     total: l.total,
   }));
 
-  return prisma.accountingInvoice.create({
-    data: {
-      docType: data.docType,
-      series: data.series,
-      number,
-      issueDate: data.issueDate,
-      customerId: data.customerId || null,
-      customerDoc: data.customerDoc || null,
-      customerName: data.customerName,
-      currency: data.currency,
-      exchangeRate: data.exchangeRate != null ? round6(data.exchangeRate) : null,
-      gravado: totals.gravado,
-      exonerado: totals.exonerado,
-      inafecto: totals.inafecto,
-      igv: totals.igv,
-      total: totals.total,
-      status: 'DRAFT',
-      userId,
-      lines: { create: lines },
-    },
-    include: { lines: true },
+  // Correlative numbering is read-then-write; the (series, number) unique
+  // constraint guards integrity but a concurrent create would fail the loser
+  // with P2002. Recompute the next number and retry on conflict.
+  return withCorrelativeRetry(async () => {
+    const number = await nextInvoiceNumber(prisma, data.series);
+    return prisma.accountingInvoice.create({
+      data: {
+        docType: data.docType,
+        series: data.series,
+        number,
+        issueDate: data.issueDate,
+        customerId: data.customerId || null,
+        customerDoc: data.customerDoc || null,
+        customerName: data.customerName,
+        currency: data.currency,
+        exchangeRate: data.exchangeRate != null ? round6(data.exchangeRate) : null,
+        gravado: totals.gravado,
+        exonerado: totals.exonerado,
+        inafecto: totals.inafecto,
+        igv: totals.igv,
+        total: totals.total,
+        status: 'DRAFT',
+        userId,
+        lines: { create: lines },
+      },
+      include: { lines: true },
+    });
   });
 }
 

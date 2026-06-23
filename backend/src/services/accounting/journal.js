@@ -4,6 +4,7 @@ const { z } = require('zod');
 const { assertBalanced } = require('./double-entry');
 const { assertDateOpen } = require('./periods');
 const { round2, round6 } = require('./money');
+const { withCorrelativeRetry } = require('./correlative');
 
 /** Zod schema para una línea de asiento. */
 const journalLineSchema = z.object({
@@ -87,7 +88,6 @@ async function createJournalEntry({ prisma, input, userId = null } = {}) {
   const period = await assertDateOpen({ prisma, date: data.date });
 
   const byCode = await resolveAccounts(prisma, data.lines.map((l) => l.accountCode));
-  const number = await nextEntryNumber(prisma);
 
   const lines = data.lines.map((l) => ({
     accountId: byCode.get(l.accountCode).id,
@@ -97,21 +97,27 @@ async function createJournalEntry({ prisma, input, userId = null } = {}) {
     description: l.description || null,
   }));
 
-  return prisma.accountingJournalEntry.create({
-    data: {
-      number,
-      date: data.date,
-      glosa: data.glosa,
-      currency: data.currency,
-      exchangeRate: data.exchangeRate != null ? round6(data.exchangeRate) : null,
-      status: 'POSTED',
-      source: data.source,
-      sourceId: data.sourceId || null,
-      periodId: data.periodId || (period ? period.id : null),
-      userId,
-      lines: { create: lines },
-    },
-    include: { lines: true },
+  // The correlative `number` is read-then-write; `number @unique` guards
+  // integrity but a concurrent post would fail the loser with P2002.
+  // Recompute the next number and retry on conflict.
+  return withCorrelativeRetry(async () => {
+    const number = await nextEntryNumber(prisma);
+    return prisma.accountingJournalEntry.create({
+      data: {
+        number,
+        date: data.date,
+        glosa: data.glosa,
+        currency: data.currency,
+        exchangeRate: data.exchangeRate != null ? round6(data.exchangeRate) : null,
+        status: 'POSTED',
+        source: data.source,
+        sourceId: data.sourceId || null,
+        periodId: data.periodId || (period ? period.id : null),
+        userId,
+        lines: { create: lines },
+      },
+      include: { lines: true },
+    });
   });
 }
 

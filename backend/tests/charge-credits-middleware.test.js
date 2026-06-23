@@ -52,6 +52,15 @@ stubs.set('../config/database', {
     lifetimeSpent += a;
     return 1;
   },
+  // spendCredits now uses an UPDATE … RETURNING "balance" so the recorded
+  // balanceAfter is captured atomically with the debit.
+  async $queryRawUnsafe(_sql, amt, _userId) {
+    const a = BigInt(amt);
+    if (balance < a) return [];
+    balance -= a;
+    lifetimeSpent += a;
+    return [{ balance }];
+  },
 });
 
 Module.prototype.require = function (spec) {
@@ -255,6 +264,20 @@ test('spendCredits + refundCharge: round trip leaves balance unchanged', async (
   const spend = await spendCredits({ userId: 'u1', amount: 7, feature: 'paraphrase' });
   assert.equal(spend.ok, true);
   assert.equal(balance, 93n);
-  await refundCharge({ originalTxn: spend.txn, reason: 'engine_error' });
+  const refund = await refundCharge({ originalTxn: spend.txn, reason: 'engine_error' });
   assert.equal(balance, 100n, 'balance restored after refund');
+  assert.equal(refund.ok, true);
+});
+
+test('balanceAfter is captured atomically from the same update (not a re-read)', async () => {
+  balance = 100n;
+  lifetimeSpent = 0n;
+  const spend = await spendCredits({ userId: 'u1', amount: 30, feature: 'paraphrase' });
+  // 100 - 30 → the recorded balanceAfter must equal the post-debit balance,
+  // typed as BigInt to match the ledger column.
+  assert.equal(spend.txn.balanceAfter, 70n);
+  assert.equal(typeof spend.txn.balanceAfter, 'bigint');
+  const refund = await refundCharge({ originalTxn: spend.txn, reason: 'engine_error' });
+  // 70 + 30 → refund's balanceAfter reflects the increment's result.
+  assert.equal(refund.txn.balanceAfter, 100n);
 });
