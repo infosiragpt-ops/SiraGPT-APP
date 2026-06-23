@@ -514,7 +514,6 @@ class AIService {
         // and are ignored by EventSource parsers, so they never show up
         // as content on the client.
         const writeHeartbeat = () => { try { res.write(`: ping ${Date.now()}\n\n`); } catch { /* socket gone */ } };
-        const heartbeat = setInterval(writeHeartbeat, HEARTBEAT_INTERVAL_MS);
 
         // Fit the payload to the target model's context window BEFORE we
         // pick the client. Running this before vision expansion keeps the
@@ -565,6 +564,12 @@ class AIService {
                 console.log(`🧊 anthropic cache: applied=${cacheAttempt.applied} breakpoints=${cacheAttempt.breakpoints} provider=${provider} model=${model}`);
             }
         }
+
+        // Start the heartbeat only AFTER the throwing prep above
+        // (fitMessagesToContext / applyAnthropicCacheToMessages) so an
+        // exception there can't leak the 15s interval; declared here (not
+        // inside the try) so the `finally` below can still clear it.
+        const heartbeat = setInterval(writeHeartbeat, HEARTBEAT_INTERVAL_MS);
 
         try {
             // ✅ IMPROVED: Handle images properly for vision API

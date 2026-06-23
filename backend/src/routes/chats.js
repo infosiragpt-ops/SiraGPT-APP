@@ -352,6 +352,7 @@ router.post('/:chatId/run/:runId/cancel', authenticateToken, async (req, res) =>
 // then polls for partialContent/status changes until terminal.
 router.get('/:chatId/run/:runId/stream', authenticateToken, async (req, res) => {
   const { chatId, runId } = req.params;
+  let heartbeat = null; // hoisted so the catch can clear it on the error path
 
   try {
     const run = await prisma.chatRun.findFirst({
@@ -392,9 +393,10 @@ router.get('/:chatId/run/:runId/stream', authenticateToken, async (req, res) => 
       closed = true;
     });
 
-    const heartbeat = setInterval(() => {
+    heartbeat = setInterval(() => {
       if (!closed) res.write(': ping\n\n');
     }, 15_000);
+    heartbeat.unref?.();
 
     let lastSnapshotKey = `${run.status}:${run.partialContent?.length || 0}`;
     let lastChunkAtMs = run.lastChunkAt ? new Date(run.lastChunkAt).getTime() : 0;
@@ -432,6 +434,10 @@ router.get('/:chatId/run/:runId/stream', authenticateToken, async (req, res) => 
     clearInterval(heartbeat);
     if (!closed) res.end();
   } catch (error) {
+    // The polling loop awaits prisma.chatRun.findUnique each tick; a DB error
+    // there jumps here before the in-try clearInterval, so clear it on the
+    // error path too (the timer isn't unref-immortal but must not leak).
+    clearInterval(heartbeat);
     console.error('Stream chat run error:', error);
     if (!res.headersSent) {
       res.status(500).json({ error: 'Stream failed' });

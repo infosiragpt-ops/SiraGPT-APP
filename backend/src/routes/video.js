@@ -1399,14 +1399,17 @@ router.get('/watch/:filename', async (req, res) => {
 // Get video history
 router.get('/history', authenticateToken, async (req, res) => {
   try {
-    const { page = 1, limit = 10 } = req.query;
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    // Clamp pagination so non-numeric/negative input can't produce NaN offsets
+    // or `pages: NaN`.
+    const limit = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 10));
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const offset = (page - 1) * limit;
 
     // Get user's video operations from activeOperations
     const userOperations = Array.from(activeOperations.values())
       .filter(op => op.userId === req.user.id)
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-      .slice(offset, offset + parseInt(limit));
+      .slice(offset, offset + limit);
 
     const total = Array.from(activeOperations.values())
       .filter(op => op.userId === req.user.id).length;
@@ -1414,10 +1417,10 @@ router.get('/history', authenticateToken, async (req, res) => {
     res.json({
       videos: userOperations,
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
+        page,
+        limit,
         total: total,
-        pages: Math.ceil(total / parseInt(limit))
+        pages: Math.ceil(total / limit)
       }
     });
   } catch (error) {

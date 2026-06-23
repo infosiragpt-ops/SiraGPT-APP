@@ -550,8 +550,10 @@ router.put('/password', [
 // Get user usage stats
 router.get('/usage', authenticateToken, async (req, res) => {
   try {
-    const { period = '30' } = req.query;
-    const days = parseInt(period);
+    // Clamp the window: a non-numeric/negative `period` used to yield NaN →
+    // `new Date(NaN)` (Invalid Date) → a Prisma validation 500 on the queries
+    // below. Bound to 1–365 days with a 30-day default.
+    const days = Math.max(1, Math.min(365, parseInt(req.query.period, 10) || 30));
     const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
     const currentUsage = Number(req.user.apiUsage || 0);
     const monthlyLimit = Number(req.user.monthlyLimit || 0);

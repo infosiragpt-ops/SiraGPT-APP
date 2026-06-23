@@ -409,7 +409,9 @@ router.get('/skills/recommend', optionalAuth, (req, res) => {
       hasCode: hasCode === 'true',
       needsResearch: needsResearch === 'true',
       needsAnalysis: needsAnalysis === 'true',
-      tags: tags ? tags.split(',').map((t) => t.trim()).filter(Boolean) : [],
+      // Cap the tag list — recommendSkills scores O(skills × tags), so an
+      // unbounded comma string would be a CPU/memory amplification vector.
+      tags: tags ? tags.split(',').slice(0, 50).map((t) => t.trim()).filter(Boolean) : [],
       userClearance: req.user?.plan?.toLowerCase() || 'public',
     });
     res.json({ skills });
