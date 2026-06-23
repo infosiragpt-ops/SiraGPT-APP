@@ -1,82 +1,87 @@
 "use client"
 
 /**
- * /projects — APPS project gallery.
+ * /projects — index page.
  *
- * This surface intentionally mirrors the APPS/projects reference: open canvas,
- * compact filters, grid/list controls, and large app preview cards.
+ * Shape mirrors the Claude Projects UX from the user's reference
+ * screenshots:
+ *   - Title row: "Código" + "+ Nuevo proyecto" CTA
+ *   - Full-width search bar
+ *   - Right-aligned sort dropdown ("Actividad reciente" / "Última
+ *     edición" / "Fecha de creación")
+ *   - Responsive grid of project cards (title bold, description
+ *     muted 2-line clamp, "Actualizado hace X horas" footer)
+ *   - Empty state with a CTA that opens the same create dialog
+ *
+ * Loading uses a skeleton grid rather than a full-page spinner so the
+ * shell renders immediately and the list fills in.
  */
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
 import {
-  ChevronDown,
+  ArrowRight,
   Check,
-  Database,
-  Folder,
-  Globe2,
-  Grid3X3,
-  LayoutGrid,
-  List,
+  ChevronDown,
+  Code2,
+  FolderKanban,
+  FolderOpen,
+  Loader2,
+  MoreHorizontal,
   Plus,
   Search,
-  Server,
+  Star,
+  Trash2,
+  UploadCloud,
+  Pencil,
 } from "lucide-react"
 import { toast } from "sonner"
 import { formatDistanceToNow } from "date-fns"
 import { es as dfEs, enUS as dfEn } from "date-fns/locale"
 
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
+import { Card, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { cn } from "@/lib/utils"
-import { projectsService, type Project } from "@/lib/projects-service"
-import styles from "./projects-page.module.css"
 
-type StatusFilter = "any" | "active" | "draft"
-type ArtifactFilter = "any" | "webapp" | "mobileapp" | "dashboard"
-type ViewMode = "grid" | "list"
+import { getVisibleProjects, removeProjectFromList, upsertProjectList } from "@/lib/projects-logic"
+import { projectsService, type Project, type ProjectSort } from "@/lib/projects-service"
+import { CODEX_UPDATED_EVENT, codexIdForProject, upsertCodexProject } from "@/lib/codex-projects"
+import { canOpenLocalDirectory, importLocalFolderAsWorkspace } from "@/lib/local-folder-workspace"
+import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 
-interface AppProject {
-  id: string
-  name: string
-  description: string | null
-  timeLabel: string
-  status: "active" | "draft"
-  artifactType: "webapp" | "mobileapp" | "dashboard"
-  href: string
-  seeded?: boolean
-}
-
-const STATUS_OPTIONS: Array<{ value: StatusFilter; label: string }> = [
-  { value: "any", label: "Cualquier estado" },
-  { value: "active", label: "Activo" },
-  { value: "draft", label: "Borrador" },
-]
-
-const ARTIFACT_OPTIONS: Array<{ value: ArtifactFilter; label: string }> = [
-  { value: "any", label: "Cualquier tipo" },
-  { value: "webapp", label: "Web app" },
-  { value: "mobileapp", label: "App móvil" },
-  { value: "dashboard", label: "Dashboard" },
-]
-
-const SEEDED_APP_PROJECT: AppProject = {
-  id: "siragpt-app",
-  name: "SIRAGPT",
-  description: "Plataforma multi-LLM con chat, imagen, documentos y APPS.",
-  timeLabel: "hace 8 segundos",
-  status: "active",
-  artifactType: "webapp",
-  href: "/code",
-  seeded: true,
-}
+const SORTS: ProjectSort[] = ["activity", "edited", "created"]
+const STORAGE_ACTIVE_FOLDER = "code-workspace:active-folder"
+type ProjectCreateMode = "new" | "local"
 
 export default function ProjectsPage() {
   const t = useTranslations("projects")
@@ -85,476 +90,725 @@ export default function ProjectsPage() {
   const [projects, setProjects] = React.useState<Project[]>([])
   const [loading, setLoading] = React.useState(true)
   const [search, setSearch] = React.useState("")
-  const [statusFilter, setStatusFilter] = React.useState<StatusFilter>("any")
-  const [artifactFilter, setArtifactFilter] = React.useState<ArtifactFilter>("any")
-  const [viewMode, setViewMode] = React.useState<ViewMode>("grid")
-  const [openingProjectId, setOpeningProjectId] = React.useState<string | null>(null)
-  const [creatingFullStackProject, setCreatingFullStackProject] = React.useState(false)
+  const [sort, setSort] = React.useState<ProjectSort>("activity")
+  const [editingProject, setEditingProject] = React.useState<Project | null>(null)
+  const [createDialogOpen, setCreateDialogOpen] = React.useState(false)
+  const [createMode, setCreateMode] = React.useState<ProjectCreateMode>("new")
+  const [createName, setCreateName] = React.useState("")
+  const [creating, setCreating] = React.useState(false)
+  const [importingLocal, setImportingLocal] = React.useState(false)
+  const [deleteTarget, setDeleteTarget] = React.useState<Project | null>(null)
+  const [deleting, setDeleting] = React.useState(false)
+
+  // Debounced search — we don't want to hit the API on every
+  // keystroke. 220ms is fast enough to feel responsive without being
+  // wasteful on a user typing fluently.
+  const [debouncedSearch, setDebouncedSearch] = React.useState(search)
+  React.useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 220)
+    return () => clearTimeout(timer)
+  }, [search])
+
+  const load = React.useCallback(async () => {
+    setLoading(true)
+    try {
+      const rows = await projectsService.list({ search: debouncedSearch, sort })
+      setProjects(rows)
+    } catch (err: any) {
+      toast.error(err?.message || t("listFailed"))
+    } finally {
+      setLoading(false)
+    }
+  }, [debouncedSearch, sort, t])
+
+  React.useEffect(() => { load() }, [load])
 
   const dateLocale = React.useMemo(() => {
+    // next-intl doesn't expose the active locale here directly; sniff
+    // from the document if we can, else fall back to English. Good
+    // enough — projects page only uses this for relative dates.
     if (typeof document !== "undefined" && document.documentElement.lang?.startsWith("es")) return dfEs
     return dfEn
   }, [])
 
-  React.useEffect(() => {
-    let cancelled = false
-    setLoading(true)
-    projectsService
-      .list({ type: "webapp", sort: "activity" })
-      .then((rows) => {
-        if (!cancelled) setProjects(rows)
-      })
-      .catch((err: any) => {
-        if (!cancelled) {
-          setProjects([])
-          toast.error(err?.message || t("listFailed"))
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [t])
-
-  const appProjects = React.useMemo(() => {
-    const rows = projects.map((project) => toAppProject(project, dateLocale))
-    const hasSira = rows.some((project) => project.name.replace(/\s+/g, "").toLowerCase() === "siragpt")
-    return hasSira ? rows : [SEEDED_APP_PROJECT, ...rows]
-  }, [projects, dateLocale])
-
-  const visibleProjects = React.useMemo(() => {
-    const q = search.trim().toLowerCase()
-    return appProjects.filter((project) => {
-      if (statusFilter !== "any" && project.status !== statusFilter) return false
-      if (artifactFilter !== "any" && project.artifactType !== artifactFilter) return false
-      if (!q) return true
-      return `${project.name} ${project.description || ""}`.toLowerCase().includes(q)
-    })
-  }, [appProjects, artifactFilter, search, statusFilter])
-
-  const openAppProject = React.useCallback(
-    async (project: AppProject) => {
-      if (openingProjectId) return
-      setOpeningProjectId(project.id)
-      try {
-        if (!project.seeded) {
-          router.push(project.href)
-          return
-        }
-
-        const freshProjects = await projectsService.list({ type: "webapp", sort: "activity" })
-        const existing = freshProjects.find(
-          (row) => row.name.replace(/\s+/g, "").toLowerCase() === "siragpt"
-        )
-        const target = existing || await projectsService.create({
-          name: "SIRAGPT",
-          description: SEEDED_APP_PROJECT.description || undefined,
-          type: "webapp",
-          hostingProvider: "sira-cloud",
-        })
-
-        setProjects((prev) => {
-          const seen = prev.some((row) => row.id === target.id)
-          return seen ? prev : [target, ...prev]
-        })
-        router.push(codeWorkspaceHref(target.id))
-      } catch (err: any) {
-        toast.error(err?.message || "No se pudo abrir la app en APPS")
-      } finally {
-        setOpeningProjectId(null)
-      }
-    },
-    [openingProjectId, router],
+  const visibleProjects = React.useMemo(
+    () => getVisibleProjects(projects, debouncedSearch, sort),
+    [projects, debouncedSearch, sort]
   )
 
-  const createFullStackProject = React.useCallback(async () => {
-    if (creatingFullStackProject) return
-    setCreatingFullStackProject(true)
+  const openCodeProject = React.useCallback((project: Pick<Project, "id" | "name">) => {
+    const workspaceId = codexIdForProject(project.id)
+    upsertCodexProject({ id: workspaceId, name: project.name, kind: "project" })
+    if (typeof window !== "undefined") {
+      try {
+        window.localStorage.setItem(
+          STORAGE_ACTIVE_FOLDER,
+          JSON.stringify({ id: project.id, name: project.name }),
+        )
+      } catch {
+        /* fail soft */
+      }
+      window.dispatchEvent(new CustomEvent(CODEX_UPDATED_EVENT))
+    }
+    router.push(`/code?folder=${encodeURIComponent(project.id)}`)
+  }, [router])
+
+  function openCreate(mode: ProjectCreateMode = "new") {
+    setCreateMode(mode)
+    setCreateName("")
+    setCreating(false)
+    setImportingLocal(false)
+    setCreateDialogOpen(true)
+  }
+
+  async function handleCreateProject(e: React.FormEvent) {
+    e.preventDefault()
+    const cleanName = normalizeChatInput(createName).value.trim()
+    if (!cleanName || creating) return
+    setCreating(true)
     try {
       const project = await projectsService.create({
-        name: "Nueva app full-stack",
-        description: "Software profesional con frontend, backend y base de datos desde una sola instrucción.",
-        type: "webapp",
-        hostingProvider: "sira-cloud",
-        instructions:
-          "Modo APPS full-stack: construir con Next.js, API routes, Prisma y base de datos. Mantener frontend, backend y datos como capas explícitas.",
+        name: cleanName,
       })
-      setProjects((prev) => [project, ...prev.filter((row) => row.id !== project.id)])
-      router.push(codeWorkspaceHref(project.id))
+      setProjects(prev => upsertProjectList(prev, project, sort))
+      toast.success(`Proyecto "${project.name}" creado en Código y Apps web`)
+      setCreateDialogOpen(false)
+      openCodeProject(project)
     } catch (err: any) {
-      toast.error(err?.message || "No se pudo crear el software en APPS")
-    } finally {
-      setCreatingFullStackProject(false)
+      toast.error(err?.message || t("createFailed"))
+      setCreating(false)
     }
-  }, [creatingFullStackProject, router])
+  }
+
+  async function handleImportLocalProject() {
+    if (importingLocal) return
+    if (!canOpenLocalDirectory()) {
+      toast.error("Tu navegador no permite seleccionar carpetas locales. Usa Chrome o Edge.")
+      return
+    }
+    setImportingLocal(true)
+    try {
+      const imported = await importLocalFolderAsWorkspace()
+      toast.success(`Proyecto local "${imported.name}" abierto en Código`)
+      setCreateDialogOpen(false)
+      router.push(`/code?local=${encodeURIComponent(imported.codexId)}`)
+    } catch (err: any) {
+      if (err?.name !== "AbortError") {
+        toast.error(err?.message || "No se pudo importar la carpeta local")
+      }
+    } finally {
+      setImportingLocal(false)
+    }
+  }
+
+  async function handleToggleStar(project: Project) {
+    const next = !project.isStarred
+    setProjects(prev => upsertProjectList(prev, { ...project, isStarred: next }, sort))
+    try {
+      const updated = await projectsService.update(project.id, { isStarred: next })
+      setProjects(prev => upsertProjectList(prev, updated, sort))
+    } catch (err: any) {
+      setProjects(prev => upsertProjectList(prev, { ...project, isStarred: !next }, sort))
+      toast.error(err?.message || t("updateFailed"))
+    }
+  }
+
+  function handleUpdated(project: Project) {
+    setProjects(prev => upsertProjectList(prev, project, sort))
+  }
+
+  async function handleConfirmDelete() {
+    if (!deleteTarget || deleting) return
+    setDeleting(true)
+    try {
+      await projectsService.remove(deleteTarget.id)
+      setProjects(prev => removeProjectFromList(prev, deleteTarget.id))
+      toast.success(t("deleted"))
+      setDeleteTarget(null)
+    } catch (err: any) {
+      toast.error(err?.message || t("deleteFailed"))
+    } finally {
+      setDeleting(false)
+    }
+  }
 
   return (
-    <div className={styles.page}>
-      <div className={styles.mobileHeader}>
+    <div className="min-h-screen bg-background">
+      {/* Mobile header with sidebar toggle. The main page chrome
+          matches the gpts page so the app feels internally consistent. */}
+      <div className="lg:hidden sticky top-0 z-10 flex items-center gap-2 border-b bg-background px-3 py-2">
         <SidebarTrigger />
       </div>
 
-      <main className={styles.main}>
-        <header className={styles.header}>
-          <LayoutGrid className={styles.titleIcon} strokeWidth={2.25} />
-          <h1 className={styles.title} data-testid="projects-page-title">
-            Empresas
-          </h1>
+      <div className="mx-auto max-w-5xl px-4 sm:px-6 md:px-8 py-8 md:py-12">
+        <header className="flex items-center justify-between mb-6">
+          <h1 className="text-3xl font-serif tracking-tight" data-testid="projects-page-title">{t("title")}</h1>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => openCreate("local")} className="gap-1.5">
+              <UploadCloud className="h-4 w-4" />
+              Importar código
+            </Button>
+            <Button onClick={() => openCreate("new")} className="gap-1.5">
+              <Plus className="h-4 w-4" />
+              {t("newProject")}
+            </Button>
+          </div>
         </header>
 
-        <section className={styles.toolbar}>
-          <div className={styles.filters}>
-            <label className={styles.search} role="search">
-              <span className="sr-only">Buscar empresas APPS</span>
-              <input
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Buscar"
-                className={styles.searchInput}
-                data-testid="projects-search-input"
-              />
-              <Search className={styles.searchIcon} strokeWidth={1.8} />
-            </label>
-
-            <FilterDropdown
-              value={statusFilter}
-              options={STATUS_OPTIONS}
-              onChange={setStatusFilter}
-            />
-            <FilterDropdown
-              value={artifactFilter}
-              options={ARTIFACT_OPTIONS}
-              onChange={setArtifactFilter}
+        <div className="mb-4">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder={t("searchPlaceholder")}
+              className="h-11 pl-10"
+              data-testid="projects-search-input"
             />
           </div>
+        </div>
 
-          <div className={styles.viewControls}>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className={styles.scopeButton}
-                >
-                  <Folder strokeWidth={1.8} />
-                  Todas las empresas
-                  <ChevronDown strokeWidth={2} />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="min-w-[220px]">
-                <DropdownMenuItem className="justify-between">
-                  Todas las empresas
-                  <Check className="h-4 w-4" />
+        <div className="flex items-center justify-end gap-2 mb-4 text-sm">
+          <span className="text-muted-foreground">{t("sortBy")}</span>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="gap-1.5 h-8" data-testid="projects-sort-trigger">
+                {t(`sort.${sort}` as any)}
+                <ChevronDown className="h-3.5 w-3.5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-[200px]">
+              {SORTS.map(s => (
+                <DropdownMenuItem key={s} onClick={() => setSort(s)} className="justify-between">
+                  {t(`sort.${s}` as any)}
+                  {sort === s && <Check className="h-4 w-4 ml-2" />}
                 </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-
-            <ViewButton
-              active={viewMode === "grid"}
-              label="Vista de grilla"
-              onClick={() => setViewMode("grid")}
-            >
-              <Grid3X3 className="h-7 w-7" strokeWidth={1.8} />
-            </ViewButton>
-            <ViewButton
-              active={viewMode === "list"}
-              label="Vista de lista"
-              onClick={() => setViewMode("list")}
-            >
-              <List className="h-7 w-7" strokeWidth={1.8} />
-            </ViewButton>
-          </div>
-        </section>
-
-        <section className={styles.builderStrip} aria-label="Crear software profesional">
-          <div className={styles.builderCopy}>
-            <div className={styles.builderIcon}>
-              <LayoutGrid strokeWidth={2} />
-            </div>
-            <div>
-              <h2 className={styles.builderTitle}>Crear software profesional</h2>
-              <div className={styles.builderLayers}>
-                <span>
-                  <Globe2 strokeWidth={1.9} />
-                  Frontend
-                </span>
-                <span>
-                  <Server strokeWidth={1.9} />
-                  Backend
-                </span>
-                <span>
-                  <Database strokeWidth={1.9} />
-                  Base de datos
-                </span>
-              </div>
-            </div>
-          </div>
-          <Button
-            type="button"
-            className={styles.builderButton}
-            onClick={() => void createFullStackProject()}
-            disabled={creatingFullStackProject}
-          >
-            <Plus strokeWidth={2} />
-            {creatingFullStackProject ? "Creando..." : "Nuevo software"}
-          </Button>
-        </section>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
 
         {loading ? (
-          <ProjectsSkeleton />
+          <ProjectsGridSkeleton />
         ) : visibleProjects.length === 0 ? (
-          <NoResults />
-        ) : viewMode === "grid" ? (
-          <div className={styles.grid} data-testid="projects-grid">
-            {visibleProjects.map((project) => (
-              <AppProjectCard
-                key={project.id}
-                project={project}
-                opening={openingProjectId === project.id}
-                onOpen={() => void openAppProject(project)}
-              />
-            ))}
-          </div>
+          <EmptyState search={debouncedSearch} onCreate={openCreate} t={t} />
         ) : (
-          <div className="max-w-5xl space-y-3" data-testid="projects-list">
-            {visibleProjects.map((project) => (
-              <AppProjectRow
-                key={project.id}
-                project={project}
-                onOpen={() => void openAppProject(project)}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4" data-testid="projects-grid">
+            {visibleProjects.map(p => (
+              <ProjectCard
+                key={p.id}
+                project={p}
+                dateLocale={dateLocale}
+                onOpen={() => openCodeProject(p)}
+                onToggleStar={() => handleToggleStar(p)}
+                onEdit={() => setEditingProject(p)}
+                onDelete={() => setDeleteTarget(p)}
+                t={t}
               />
             ))}
           </div>
         )}
-      </main>
+      </div>
+
+      <CreateCodeProjectDialog
+        open={createDialogOpen}
+        name={createName}
+        mode={createMode}
+        creating={creating}
+        importingLocal={importingLocal}
+        onOpenChange={(open) => {
+          if (!creating && !importingLocal) setCreateDialogOpen(open)
+        }}
+        onModeChange={setCreateMode}
+        onNameChange={setCreateName}
+        onSubmit={handleCreateProject}
+        onImportLocal={handleImportLocalProject}
+        t={t}
+      />
+      <EditProjectDialog
+        project={editingProject}
+        onOpenChange={(open) => { if (!open) setEditingProject(null) }}
+        onSaved={handleUpdated}
+        t={t}
+      />
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open && !deleting) setDeleteTarget(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("deleteProject")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleteTarget ? t("deleteConfirm", { name: deleteTarget.name }) : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>{t("cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault()
+                handleConfirmDelete()
+              }}
+              className="bg-red-600 text-white hover:bg-red-700 focus:ring-red-500"
+              disabled={deleting}
+            >
+              {t("deleteProject")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
 
-function FilterDropdown<T extends string>({
-  value,
-  options,
-  onChange,
+// ─── Subcomponents ────────────────────────────────────────────────────────
+
+function CreateCodeProjectDialog({
+  open,
+  name,
+  mode,
+  creating,
+  importingLocal,
+  onOpenChange,
+  onModeChange,
+  onNameChange,
+  onSubmit,
+  onImportLocal,
+  t,
 }: {
-  value: T
-  options: Array<{ value: T; label: string }>
-  onChange: (value: T) => void
+  open: boolean
+  name: string
+  mode: ProjectCreateMode
+  creating: boolean
+  importingLocal: boolean
+  onOpenChange: (open: boolean) => void
+  onModeChange: (mode: ProjectCreateMode) => void
+  onNameChange: (name: string) => void
+  onSubmit: (event: React.FormEvent) => void
+  onImportLocal: () => void
+  t: ReturnType<typeof useTranslations>
 }) {
-  const selected = options.find((option) => option.value === value) || options[0]
+  const cleanName = normalizeChatInput(name).value.trim()
+  const canSubmit = cleanName.length > 0 && !creating && !importingLocal
+  const busy = creating || importingLocal
+  const [localSupported, setLocalSupported] = React.useState(true)
+
+  React.useEffect(() => {
+    setLocalSupported(canOpenLocalDirectory())
+  }, [])
+
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className={styles.filterTrigger}
-        >
-          <span>{selected.label}</span>
-          <ChevronDown strokeWidth={2} />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="min-w-[220px]">
-        {options.map((option) => (
-          <DropdownMenuItem
-            key={option.value}
-            onClick={() => onChange(option.value)}
-            className="justify-between"
-          >
-            {option.label}
-            {option.value === value && <Check className="h-4 w-4" />}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="overflow-hidden p-0 sm:max-w-[720px]">
+        <DialogHeader>
+          <div className="border-b border-border/60 px-6 pb-4 pt-5">
+            <DialogTitle className="text-2xl font-serif tracking-tight">
+              Crear proyecto de código
+            </DialogTitle>
+            <DialogDescription className="mt-1.5">
+              Elige cómo quieres empezar. Puedes importar una carpeta local o crear un software nuevo.
+            </DialogDescription>
+          </div>
+        </DialogHeader>
+
+        <div className="space-y-5 px-6 pb-6 pt-1">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <ProjectStartOption
+              selected={mode === "local"}
+              icon={<UploadCloud className="h-5 w-5" />}
+              title="Proyecto local"
+              description="Importa código desde tu computadora."
+              meta="Carpeta existente"
+              onClick={() => onModeChange("local")}
+              disabled={busy}
+            />
+            <ProjectStartOption
+              selected={mode === "new"}
+              icon={<Code2 className="h-5 w-5" />}
+              title="Proyecto nuevo"
+              description="Crea un workspace limpio para construir desde cero."
+              meta="Software nuevo"
+              onClick={() => onModeChange("new")}
+              disabled={busy}
+            />
+          </div>
+
+          {mode === "local" ? (
+            <div className="rounded-xl border border-border/70 bg-muted/20 p-4">
+              <div className="flex gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-background text-foreground shadow-sm ring-1 ring-border/70">
+                  <FolderOpen className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-sm font-semibold tracking-tight">Selecciona tu carpeta de código</h3>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Se abrirá en Código como proyecto local y podrás seguir editándolo desde el workspace.
+                  </p>
+                  {!localSupported && (
+                    <p className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+                      Para importar carpetas locales usa Chrome o Edge.
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <DialogFooter className="mt-5 gap-2 sm:gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => onOpenChange(false)}
+                  disabled={busy}
+                >
+                  {t("cancel")}
+                </Button>
+                <Button
+                  type="button"
+                  onClick={onImportLocal}
+                  disabled={busy || !localSupported}
+                  aria-busy={importingLocal}
+                  className="gap-2"
+                >
+                  {importingLocal ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderOpen className="h-4 w-4" />}
+                  {importingLocal ? "Importando..." : "Seleccionar carpeta"}
+                </Button>
+              </DialogFooter>
+            </div>
+          ) : (
+            <form onSubmit={onSubmit} className="rounded-xl border border-border/70 bg-muted/20 p-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="create-code-project-name" className="text-sm">
+                  Nombre del proyecto
+                </Label>
+                <Input
+                  id="create-code-project-name"
+                  autoFocus
+                  value={name}
+                  onChange={(e) => onNameChange(e.target.value)}
+                  placeholder="Ej. App de inventario"
+                  maxLength={120}
+                  disabled={busy}
+                  className="h-11 bg-background"
+                />
+                <p className="min-h-[1rem] text-xs text-muted-foreground" aria-live="polite">
+                  {creating ? "Creando proyecto..." : "Se guardará en Código y aparecerá en Apps web."}
+                </p>
+              </div>
+
+              <DialogFooter className="mt-5 gap-2 sm:gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => onOpenChange(false)}
+                  disabled={busy}
+                >
+                  {t("cancel")}
+                </Button>
+                <Button type="submit" disabled={!canSubmit} aria-busy={creating} className="gap-2">
+                  {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
+                  {creating ? t("creating") : "Crear y abrir"}
+                </Button>
+              </DialogFooter>
+            </form>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
-function ViewButton({
-  active,
-  label,
+function ProjectStartOption({
+  selected,
+  icon,
+  title,
+  description,
+  meta,
+  disabled,
   onClick,
-  children,
 }: {
-  active: boolean
-  label: string
+  selected: boolean
+  icon: React.ReactNode
+  title: string
+  description: string
+  meta: string
+  disabled?: boolean
   onClick: () => void
-  children: React.ReactNode
 }) {
   return (
     <button
       type="button"
-      aria-label={label}
-      aria-pressed={active}
       onClick={onClick}
+      disabled={disabled}
+      aria-pressed={selected}
       className={cn(
-        styles.viewButton,
-        active ? styles.viewButtonActive : styles.viewButtonInactive
+        "group flex min-h-[124px] flex-col rounded-xl border p-4 text-left transition",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+        selected
+          ? "border-foreground bg-background shadow-sm"
+          : "border-border/70 bg-background/60 hover:border-foreground/40 hover:bg-background",
+        disabled && "cursor-not-allowed opacity-60",
       )}
     >
-      {children}
+      <span className="flex items-start justify-between gap-3">
+        <span
+          className={cn(
+            "flex h-9 w-9 items-center justify-center rounded-lg border transition",
+            selected ? "border-foreground bg-foreground text-background" : "border-border bg-muted/40 text-muted-foreground",
+          )}
+        >
+          {icon}
+        </span>
+        <span
+          className={cn(
+            "flex h-5 w-5 items-center justify-center rounded-full border text-[10px]",
+            selected ? "border-foreground bg-foreground text-background" : "border-border text-transparent",
+          )}
+        >
+          <Check className="h-3.5 w-3.5" />
+        </span>
+      </span>
+      <span className="mt-4 text-sm font-semibold tracking-tight">{title}</span>
+      <span className="mt-1 text-sm leading-5 text-muted-foreground">{description}</span>
+      <span className="mt-auto pt-3 text-xs font-medium text-muted-foreground">{meta}</span>
     </button>
   )
 }
 
-function AppProjectCard({
-  project,
-  opening,
-  onOpen,
+function ProjectCard({
+  project, dateLocale, onOpen, onToggleStar, onEdit, onDelete, t,
 }: {
-  project: AppProject
-  opening: boolean
+  project: Project
+  dateLocale: Locale
   onOpen: () => void
+  onToggleStar: () => void
+  onEdit: () => void
+  onDelete: () => void
+  t: ReturnType<typeof useTranslations>
+}) {
+  const rel = React.useMemo(() => {
+    try {
+      return formatDistanceToNow(new Date(project.updatedAt), { addSuffix: true, locale: dateLocale })
+    } catch {
+      return ""
+    }
+  }, [project.updatedAt, dateLocale])
+
+  return (
+    <Card
+      onClick={onOpen}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault()
+          onOpen()
+        }
+      }}
+      role="button"
+      tabIndex={0}
+      aria-label={`Abrir proyecto ${project.name}`}
+      data-testid={`project-card-${project.id}`}
+      className={cn(
+        "group/project relative cursor-pointer transition-shadow duration-150 hover:shadow-md",
+        "border-border/60"
+      )}
+    >
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Más acciones"
+            className="absolute right-3 top-3 z-10 h-8 w-8 rounded-full opacity-100 transition-opacity md:opacity-0 md:group-hover/project:opacity-100 md:group-focus-within/project:opacity-100"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <MoreHorizontal className="h-4 w-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+          <DropdownMenuItem onClick={onToggleStar}>
+            <Star className={cn("mr-2 h-4 w-4", project.isStarred && "fill-yellow-400 text-yellow-500")} />
+            {project.isStarred ? "Quitar estrella" : "Marcar con estrella"}
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={onEdit}>
+            <Pencil className="mr-2 h-4 w-4" />
+            Editar detalles
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onClick={onDelete} className="text-red-600 focus:text-red-600">
+            <Trash2 className="mr-2 h-4 w-4" />
+            {t("deleteProject")}
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <CardHeader className="pb-3 pr-12">
+        <CardTitle className="text-base font-semibold tracking-tight line-clamp-1">
+          {project.name}
+        </CardTitle>
+        {project.description && (
+          <CardDescription className="line-clamp-2 text-sm">
+            {project.description}
+          </CardDescription>
+        )}
+      </CardHeader>
+      <CardFooter className="pt-0 text-xs text-muted-foreground">
+        {t("updatedRel", { rel })}
+      </CardFooter>
+    </Card>
+  )
+}
+
+function EditProjectDialog({
+  project,
+  onOpenChange,
+  onSaved,
+  t,
+}: {
+  project: Project | null
+  onOpenChange: (open: boolean) => void
+  onSaved: (project: Project) => void
+  t: ReturnType<typeof useTranslations>
+}) {
+  const [name, setName] = React.useState("")
+  const [description, setDescription] = React.useState("")
+  const [submitting, setSubmitting] = React.useState(false)
+
+  React.useEffect(() => {
+    if (project) {
+      setName(project.name || "")
+      setDescription(project.description || "")
+      setSubmitting(false)
+    } else {
+      setName("")
+      setDescription("")
+      setSubmitting(false)
+    }
+  }, [project])
+
+  const open = !!project
+  const canSubmit = name.trim().length > 0 && !submitting
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!project || !canSubmit) return
+    const cleanName = normalizeChatInput(name).value.trim()
+    const normalizedDesc = normalizeChatInput(description)
+    if (shouldWarnUser(normalizedDesc)) {
+      toast.error(
+        `La descripción supera el límite (${normalizedDesc.originalLength.toLocaleString()} caracteres). Se recortó.`,
+        { duration: 4500 },
+      )
+    }
+    const cleanDesc = normalizedDesc.value.trim()
+    setSubmitting(true)
+    try {
+      const updated = await projectsService.update(project.id, {
+        name: cleanName,
+        description: cleanDesc || null,
+      })
+      onSaved(updated)
+      toast.success("Proyecto actualizado")
+      onOpenChange(false)
+    } catch (err: any) {
+      toast.error(err?.message || t("updateFailed"))
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[540px]">
+        <DialogHeader>
+          <DialogTitle className="text-2xl font-serif tracking-tight">
+            Editar detalles
+          </DialogTitle>
+        </DialogHeader>
+
+        <form onSubmit={handleSubmit} className="space-y-5">
+          <div className="space-y-1.5">
+            <Label htmlFor="edit-project-name" className="text-sm">
+              {t("whatWorkingOn")}
+            </Label>
+            <Input
+              id="edit-project-name"
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder={t("namePlaceholder")}
+              maxLength={120}
+              disabled={submitting}
+              className="h-11"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="edit-project-description" className="text-sm">
+              {t("whatTryingAchieve")}
+            </Label>
+            <Textarea
+              id="edit-project-description"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder={t("descriptionPlaceholder")}
+              rows={4}
+              maxLength={4000}
+              disabled={submitting}
+              className="resize-none"
+            />
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              disabled={submitting}
+            >
+              {t("cancel")}
+            </Button>
+            <Button type="submit" disabled={!canSubmit}>
+              {submitting ? t("saving") : t("save")}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function ProjectsGridSkeleton() {
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {Array.from({ length: 4 }).map((_, i) => (
+        <div key={i} className="h-32 rounded-lg border border-border/60 bg-muted/20 animate-pulse" />
+      ))}
+    </div>
+  )
+}
+
+function EmptyState({
+  search, onCreate, t,
+}: {
+  search: string
+  onCreate: () => void
+  t: ReturnType<typeof useTranslations>
 }) {
   return (
-    <button
-      type="button"
-      aria-busy={opening}
-      aria-label={`Abrir empresa ${project.name}`}
-      data-testid={`project-card-${project.id}`}
-      disabled={opening}
-      onClick={onOpen}
-      className={styles.card}
-    >
-      <AppPreview />
-      <div className={styles.cardMeta}>
-        <h2 className={styles.cardTitle}>{project.name}</h2>
-        <div className={styles.cardTime}>
-          <Globe2 strokeWidth={2} />
-          <span aria-hidden="true">·</span>
-          <span>{opening ? "Abriendo en APPS..." : project.timeLabel}</span>
-        </div>
+    <div className="mx-auto max-w-md text-center py-16">
+      <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-muted">
+        <FolderKanban className="h-6 w-6 text-muted-foreground" />
       </div>
-    </button>
-  )
-}
-
-function AppProjectRow({ project, onOpen }: { project: AppProject; onOpen: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className={styles.row}
-    >
-      <div className={styles.rowThumb}>
-        <AppPreview compact />
-      </div>
-      <div className="min-w-0">
-        <h2 className="text-[23px] font-semibold text-[#343436]">{project.name}</h2>
-        <p className="mt-1 line-clamp-1 text-[15px] text-[#70737b]">{project.description}</p>
-        <div className="mt-2 flex items-center gap-2 text-[15px] font-medium text-[#797d86]">
-          <Globe2 className="h-4 w-4 text-[#2fbd73]" strokeWidth={2} />
-          <span>·</span>
-          <span>{project.timeLabel}</span>
-        </div>
-      </div>
-    </button>
-  )
-}
-
-function AppPreview({ compact = false }: { compact?: boolean }) {
-  return (
-    <div className={cn(styles.preview, compact && styles.previewCompact)}>
-      <div className={styles.previewLogo}>
-        <img src="/sira-gpt-192.png" alt="" className="h-5 w-5 rounded-sm object-contain" />
-      </div>
-
-      <div className={styles.previewMark}>
-        <div className={styles.previewMarkLines} aria-hidden="true">
-          <span />
-          <span />
-          <span />
-        </div>
-      </div>
-
-      <div className={cn(styles.previewScale, compact && styles.previewScaleCompact)}>
-        <div className={styles.previewCanvas}>
-          <nav className="mb-10 flex items-center justify-between text-[10px] font-medium text-[#35363a]">
-            <div className="flex items-center gap-2">
-              <img src="/sira-gpt-192.png" alt="" className="h-4 w-4 rounded-sm" />
-              <span>Sira GPT</span>
-            </div>
-            <div className="flex items-center gap-8">
-              <span>Características</span>
-              <span>Cómo funciona</span>
-              <span>Precios</span>
-            </div>
-            <div className="flex items-center gap-4">
-              <span>Login</span>
-              <span className="rounded-full bg-[#352dff] px-4 py-1.5 text-white">Sign Up</span>
-            </div>
-          </nav>
-
-          <div className="mx-auto max-w-[620px] text-center">
-            <span className="mb-8 inline-flex rounded-full bg-[#f1e9ff] px-4 py-1.5 text-[10px] font-semibold text-[#7b43d8]">
-              Plataforma de Inteligencia Artificial Multimodal
-            </span>
-            <h3 className="text-[42px] font-black leading-[0.96] text-[#111827]">
-              Todo el poder de la IA en
-              <br />
-              <span className="text-[#9b4dff]">un solo lugar</span>
-            </h3>
-            <p className="mx-auto mt-6 max-w-[430px] text-[13px] leading-5 text-[#687180]">
-              Chatea con GPT-5.5, Claude Opus 4.7, Gemini 3.5 Pro y más.
-              Genera imágenes, analiza documentos, diseña prototipos e investiga con agentes de IA especializados.
-            </p>
-            <div className="mx-auto mt-12 grid w-[470px] grid-cols-4 overflow-hidden rounded-[10px] bg-white shadow-[0_10px_35px_rgba(31,41,55,0.12)]">
-              {[
-                ["12+", "MODELOS DE IA"],
-                ["10K+", "USUARIOS ACTIVOS"],
-                ["500K+", "TOKENS PROCESADOS"],
-                ["40+", "PAÍSES"],
-              ].map(([value, label]) => (
-                <div key={value} className="px-7 py-5 text-center">
-                  <div className="text-[20px] font-black text-[#757b84]">{value}</div>
-                  <div className="mt-1 text-[6px] font-bold text-[#a4a8ae]">{label}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-          <div className="mx-auto mt-12 h-16 w-[520px] rounded-full bg-[#f0d5ff] blur-2xl" />
-        </div>
-      </div>
+      <h2 className="text-lg font-semibold tracking-tight mb-1">
+        {search ? t("noMatchTitle") : t("emptyTitle")}
+      </h2>
+      <p className="text-sm text-muted-foreground mb-6">
+        {search ? t("noMatchDesc") : t("emptyDesc")}
+      </p>
+      {!search && (
+        <Button onClick={onCreate} className="gap-1.5">
+          <Plus className="h-4 w-4" />
+          {t("newProject")}
+        </Button>
+      )}
     </div>
   )
 }
 
-function ProjectsSkeleton() {
-  return (
-    <div className={styles.skeletonGrid}>
-      <div className={styles.skeletonCard} />
-    </div>
-  )
-}
-
-function NoResults() {
-  return (
-    <div className={styles.noResults}>
-      No hay empresas APPS que coincidan.
-    </div>
-  )
-}
-
-function toAppProject(project: Project, dateLocale: Locale): AppProject {
-  let rel = "just now"
-  try {
-    rel = formatDistanceToNow(new Date(project.updatedAt), { addSuffix: true, locale: dateLocale })
-  } catch {
-    rel = "just now"
-  }
-  return {
-    id: project.id,
-    name: project.name,
-    description: project.description,
-    timeLabel: rel,
-    status: "active",
-    artifactType: "webapp",
-    href: codeWorkspaceHref(project.id),
-  }
-}
-
-function codeWorkspaceHref(projectId: string) {
-  return `/code?folder=${encodeURIComponent(projectId)}`
-}
-
+// Helper type for date-fns so we don't have to `import type { Locale }`
+// separately — keeping the file self-contained.
 type Locale = typeof dfEn
