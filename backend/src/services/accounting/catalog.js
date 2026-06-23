@@ -119,6 +119,22 @@ const productInputSchema = z.object({
   isActive: z.boolean().default(true),
 });
 
+// Partial schema for updates — every field optional, NO defaults, so a patch
+// touches only the keys it carries (the old code reused productInputSchema,
+// forcing the full create payload — code+name required — on every update).
+const productUpdateSchema = z.object({
+  code: z.string().trim().min(1, 'code requerido').max(40).optional(),
+  name: z.string().trim().min(1, 'name requerido').max(200).optional(),
+  kind: z.enum(['SERVICE', 'GOOD']).optional(),
+  unitPrice: z.coerce.number().nonnegative().optional(),
+  currency: z.enum(['PEN', 'USD']).optional(),
+  unit: z.string().trim().max(10).optional(),
+  igvAffected: z.boolean().optional(),
+  isSubscription: z.boolean().optional(),
+  incomeAccount: z.string().trim().max(12).optional(),
+  isActive: z.boolean().optional(),
+});
+
 async function createProduct({ prisma, input } = {}) {
   if (!prisma) throw new Error('prisma requerido');
   const data = parse(productInputSchema, input);
@@ -128,8 +144,9 @@ async function createProduct({ prisma, input } = {}) {
 
 async function updateProduct({ prisma, id, input } = {}) {
   if (!prisma) throw new Error('prisma requerido');
-  const data = parse(productInputSchema, input);
-  data.unitPrice = round2(data.unitPrice);
+  const data = parse(productUpdateSchema, input);
+  // Only round when the patch actually carries a price (else round2(undefined)).
+  if (data.unitPrice !== undefined) data.unitPrice = round2(data.unitPrice);
   return prisma.accountingProduct.update({ where: { id }, data });
 }
 

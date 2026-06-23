@@ -126,3 +126,21 @@ test('listProducts filtra por isSubscription', async () => {
   const all = await catalog.listProducts({ prisma });
   assert.equal(all.total, 2);
 });
+
+test('updateProduct: partial price patch rounds + preserves code/name', async () => {
+  const prisma = fakeCatalogPrisma();
+  const p = await catalog.createProduct({ prisma, input: { code: 'PLAN-PRO', name: 'Plan Pro', unitPrice: 50 } });
+  const u = await catalog.updateProduct({ prisma, id: p.id, input: { unitPrice: 79.999 } });
+  assert.equal(Number(u.unitPrice), 80.0, 'price rounded');
+  assert.equal(u.code, 'PLAN-PRO', 'code preserved');
+  assert.equal(u.name, 'Plan Pro', 'name preserved');
+});
+
+test('updateProduct: a non-price patch succeeds without NaN-rounding an absent price', async () => {
+  const prisma = fakeCatalogPrisma();
+  const p = await catalog.createProduct({ prisma, input: { code: 'X', name: 'Item', unitPrice: 10 } });
+  const u = await catalog.updateProduct({ prisma, id: p.id, input: { isActive: false } });
+  assert.equal(u.isActive, false);
+  assert.equal(Number(u.unitPrice), 10, 'price untouched (not NaN)');
+  assert.equal(u.name, 'Item');
+});
