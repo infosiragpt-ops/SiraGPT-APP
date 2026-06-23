@@ -133,7 +133,7 @@ export function PastePreviewOverlay({ result, onAction, visible }: PastePreviewO
     <div
       className={cn(
         "pointer-events-auto absolute inset-x-0 bottom-full z-50 mb-2 px-2",
-        "transition-all duration-220 ease-[cubic-bezier(0.16,1,0.3,1)]",
+        "transition-all duration-base ease-soft",
         animateIn && !animateOut
           ? "opacity-100 translate-y-0"
           : "opacity-0 translate-y-3",

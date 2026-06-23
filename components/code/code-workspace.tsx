@@ -32,6 +32,7 @@ import { CODE_TEMPLATES } from "@/lib/code-templates"
 
 import { AICodeChatPanel } from "./ai-code-chat-panel"
 import { EditorPanel } from "./editor-panel"
+import { PublishingConsole } from "./publishing-console"
 import { PreviewPane } from "./preview-pane"
 import { StatusBar } from "./status-bar"
 import { TerminalPanel } from "./terminal-panel"
@@ -78,6 +79,7 @@ export function CodeWorkspace() {
   }, [previewOpen])
   const [paletteOpen, setPaletteOpen] = React.useState(false)
   const [paletteQuery, setPaletteQuery] = React.useState("")
+  const [publishingOpen, setPublishingOpen] = React.useState(false)
   const [openPanels, setOpenPanels] = React.useState<Set<WorkspacePanelId>>(
     () => new Set<WorkspacePanelId>(["preview", "terminal"]),
   )
@@ -182,6 +184,7 @@ export function CodeWorkspace() {
         setPaletteOpen(true)
       },
       onNewFile: handleNewFileFromTools,
+      onOpenPublishing: () => setPublishingOpen(true),
       onFocusChat: () => {
         setChatOpen(true)
         chatRef.current?.expand()
@@ -456,6 +459,8 @@ export function CodeWorkspace() {
         chatOpen={chatOpen}
         onToggleChat={toggleChat}
       />
+
+      <PublishingConsole open={publishingOpen} onOpenChange={setPublishingOpen} />
 
       <Dialog
         open={paletteOpen}

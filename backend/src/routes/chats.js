@@ -16,6 +16,22 @@ const chatExport = require('../services/chat-export');
 const triggers = require('../services/trigger-registry');
 
 const router = express.Router();
+const chatCreateIdempotencyCache = new Map();
+
+function pruneChatCreateIdempotencyCache() {
+  const cutoff = Date.now() - 10 * 60 * 1000;
+  for (const [key, value] of chatCreateIdempotencyCache.entries()) {
+    if (!value || value.createdAtMs < cutoff) chatCreateIdempotencyCache.delete(key);
+  }
+}
+
+function getChatCreateIdempotencyKey(req) {
+  const raw = req.body?.idempotencyKey || req.headers['idempotency-key'];
+  if (!raw) return null;
+  const value = String(raw).trim();
+  if (!value || value.length > 200) return null;
+  return `chat-create:${req.user.id}:${value}`;
+}
 
 function stableStringify(value) {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
@@ -235,7 +251,8 @@ router.get('/active-runs', authenticateToken, async (req, res) => {
 // Create new chat
 router.post('/', [
   body('title').trim().isLength({ min: 1 }).withMessage('Title is required'),
-  body('model').trim().isLength({ min: 1 }).withMessage('Model is required')
+  body('model').trim().isLength({ min: 1 }).withMessage('Model is required'),
+  body('idempotencyKey').optional().isString().isLength({ min: 1, max: 200 })
 ], authenticateToken, async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -244,6 +261,22 @@ router.post('/', [
     }
 
     const { title, model, isWordConnectorChat, isExcelConnectorChat, projectId } = req.body;
+    pruneChatCreateIdempotencyCache();
+    const createKey = getChatCreateIdempotencyKey(req);
+    if (createKey && chatCreateIdempotencyCache.has(createKey)) {
+      const cached = chatCreateIdempotencyCache.get(createKey);
+      const existingChat = await prisma.chat.findFirst({
+        where: { id: cached.chatId, userId: req.user.id, deletedAt: null },
+        include: {
+          messages: true,
+          project: { select: projectChatSelect },
+        },
+      });
+      if (existingChat) {
+        return res.status(200).json({ chat: existingChat, duplicate: true });
+      }
+      chatCreateIdempotencyCache.delete(createKey);
+    }
 
     // If a projectId is supplied, verify ownership before associating.
     // Silently dropping a bogus id would create chats orphaned from
@@ -273,6 +306,9 @@ router.post('/', [
         project: { select: projectChatSelect },
       }
     });
+    if (createKey) {
+      chatCreateIdempotencyCache.set(createKey, { chatId: chat.id, createdAtMs: Date.now() });
+    }
 
     res.status(201).json({ chat });
     // Fire-and-forget trigger publish; never block response.

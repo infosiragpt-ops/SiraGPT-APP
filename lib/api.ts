@@ -2,6 +2,7 @@
 import { streamSseJson } from "./sse-client"
 import { sanitizeFetchHeaders } from "./fetch-sanitize"
 import { reportClientLog } from "./client-logs"
+import { safeUUID } from "./safe-uuid"
 export { getNormalizedApiBaseUrl } from "./api-base-url"
 import { getNormalizedApiBaseUrl } from "./api-base-url"
 // Codegen'd from backend/src/schemas/* — DO NOT edit by hand. Regenerate
@@ -368,15 +369,11 @@ class ApiClient {
     }
 
     // Idempotency-Key auto-injection. Only for mutating verbs and
-    // only when the caller didn't supply one. crypto.randomUUID is
-    // baseline in Node 18+ / Chrome 92+ / Safari 15.4+; the
-    // existence check covers older environments without crashing.
+    // only when the caller didn't supply one. safeUUID covers LAN /
+    // plain-HTTP browser contexts where crypto.randomUUID is missing.
     const isMutating = method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE';
     if (isMutating && method !== 'DELETE' && !headers.has('Idempotency-Key') && !headers.has('idempotency-key')) {
-      const cryptoObj = (typeof globalThis !== 'undefined' ? (globalThis as any).crypto : null);
-      if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
-        headers.set('Idempotency-Key', cryptoObj.randomUUID());
-      }
+      headers.set('Idempotency-Key', safeUUID());
     }
 
     // CSRF double-submit token. Backend requires X-CSRF-Token on mutating
@@ -1056,7 +1053,7 @@ class ApiClient {
   // surface to the caller so the UI can show the per-message error +
   // retry affordance without losing the user's message.
   async generateAIStream(
-    data: { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string, regenerate?: boolean, regenerationAttempt?: number },
+    data: { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string, regenerate?: boolean, regenerationAttempt?: number, idempotencyKey?: string },
     onData: (chunk: string) => void,
     onClose: () => void,
     onError: (error: Error) => void,

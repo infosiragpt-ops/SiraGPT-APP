@@ -485,16 +485,31 @@ export function AppSidebar() {
   // Defaults to expanded on first visit so users discover it; once
   // collapsed the choice is remembered across reloads via localStorage.
   const [codexCollapsed, setCodexCollapsed] = React.useState<boolean>(false)
+  const [collapsedChatGroups, setCollapsedChatGroups] = React.useState<Record<string, boolean>>({})
   React.useEffect(() => {
     try {
       const raw = window.localStorage.getItem("sira:sidebar:codex-collapsed")
       if (raw === "1") setCodexCollapsed(true)
     } catch { /* ignore */ }
   }, [])
+  React.useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem("sira:sidebar:chat-groups-collapsed")
+      const parsed = raw ? JSON.parse(raw) : {}
+      if (parsed && typeof parsed === "object") setCollapsedChatGroups(parsed)
+    } catch { /* ignore */ }
+  }, [])
   const toggleCodexCollapsed = React.useCallback(() => {
     setCodexCollapsed((prev) => {
       const next = !prev
       try { window.localStorage.setItem("sira:sidebar:codex-collapsed", next ? "1" : "0") } catch { /* ignore */ }
+      return next
+    })
+  }, [])
+  const toggleChatGroupCollapsed = React.useCallback((groupKey: string) => {
+    setCollapsedChatGroups((prev) => {
+      const next = { ...prev, [groupKey]: !prev[groupKey] }
+      try { window.localStorage.setItem("sira:sidebar:chat-groups-collapsed", JSON.stringify(next)) } catch { /* ignore */ }
       return next
     })
   }, [])
