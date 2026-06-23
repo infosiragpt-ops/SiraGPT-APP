@@ -27,9 +27,10 @@ const DB_PATH = require.resolve('../src/config/database');
 const STRIPE_PATH = require.resolve('../src/services/stripe');
 const POSTHOG_PATH = require.resolve('../src/services/observability/posthog');
 
-function makeFakePrisma({ payments, user }) {
+function makeFakePrisma({ payments, user, failUserUpdateTimes = 0 }) {
   const userUpdates = [];
-  return {
+  let remainingFailures = failUserUpdateTimes;
+  const db = {
     _userUpdates: userUpdates,
     _payments: payments,
     payment: {
@@ -58,12 +59,29 @@ function makeFakePrisma({ payments, user }) {
       findUnique: async ({ where }) => (where.id === user.id ? { ...user } : null),
       update: async ({ where, data }) => {
         assert.equal(where.id, user.id);
+        if (remainingFailures > 0) { remainingFailures -= 1; throw new Error('simulated user.update failure'); }
         userUpdates.push(data);
         Object.assign(user, data);
         return { ...user };
       },
     },
   };
+  // Rollback-capable interactive transaction: snapshot the mutable state and
+  // restore it if the callback throws, mirroring Postgres rollback so the
+  // claim-then-failed-grant case leaves the payment row claimable again.
+  db.$transaction = async (fn) => {
+    const snapPayments = payments.map((p) => ({ ...p }));
+    const snapUser = { ...user };
+    try {
+      return await fn(db);
+    } catch (err) {
+      payments.splice(0, payments.length, ...snapPayments);
+      Object.keys(user).forEach((k) => delete user[k]);
+      Object.assign(user, snapUser);
+      throw err;
+    }
+  };
+  return db;
 }
 
 function stripeEvent(sessionId, { userId = 'u1', plan = 'PRO' } = {}) {
@@ -79,8 +97,8 @@ describe('POST /payments/stripe/webhook · checkout idempotency', () => {
   let restorePosthog;
   let fake;
 
-  function setup({ payments, user, event }) {
-    fake = makeFakePrisma({ payments, user });
+  function setup({ payments, user, event, failUserUpdateTimes = 0 }) {
+    fake = makeFakePrisma({ payments, user, failUserUpdateTimes });
     restoreDb = mockResolvedModule(DB_PATH, fake);
     restoreStripe = mockResolvedModule(STRIPE_PATH, {
       constructWebhookEvent: () => event,
@@ -132,5 +150,24 @@ describe('POST /payments/stripe/webhook · checkout idempotency', () => {
     assert.equal(res.status, 200);
     assert.equal(fake._userUpdates.length, 1, 'grant still fires when no payment row exists');
     assert.ok(user.monthlyLimit > 0n);
+  });
+
+  test('a failed grant rolls back the COMPLETED claim and returns 500 (Stripe will retry)', async () => {
+    const user = { id: 'u1', plan: 'FREE', monthlyLimit: 0n, gemaTokenLimit: 0n };
+    const payments = [{ id: 'pay1', stripeSessionId: 'cs_2', userId: 'u1', status: 'PENDING' }];
+    // First grant throws → transaction rolls back the claim; second succeeds.
+    const app = setup({ payments, user, event: stripeEvent('cs_2'), failUserUpdateTimes: 1 });
+
+    const first = await deliver(app);
+    assert.equal(first.status, 500, 'failed grant surfaces as 500 so Stripe redelivers');
+    assert.equal(fake._userUpdates.length, 0, 'no grant committed');
+    assert.equal(payments[0].status, 'PENDING', 'COMPLETED claim was rolled back → still claimable');
+    assert.equal(user.monthlyLimit, 0n, 'balance untouched');
+
+    const second = await deliver(app);
+    assert.equal(second.status, 200, 'redelivery succeeds once the grant works');
+    assert.equal(fake._userUpdates.length, 1, 'granted exactly once across the retry');
+    assert.ok(user.monthlyLimit > 0n, 'credits granted on the successful retry');
+    assert.equal(payments[0].status, 'COMPLETED');
   });
 });

@@ -937,24 +937,30 @@ router.post('/stripe/webhook', express.raw({ type: 'application/json' }), async 
 
 // Webhook event handlers
 async function handleCheckoutSessionCompleted(session) {
-  try {
-    console.log('Processing checkout session completed:', session.id);
-    
-    const userId = session.metadata.userId;
-    const plan = session.metadata.plan;
-    
-    if (!userId || !plan) {
-      console.error('Missing metadata in checkout session:', session.id);
-      return;
-    }
+  console.log('Processing checkout session completed:', session.id);
 
-    // Idempotency guard (Stripe redelivers webhooks on timeout/retry, and may
-    // even send the same event twice). The credit grant below is ADDITIVE, so a
-    // duplicate delivery would double-grant plan credits. We claim the payment
-    // row with an atomic compare-and-swap: only the delivery that flips it from
-    // not-COMPLETED → COMPLETED proceeds to grant. A redelivery finds it already
-    // COMPLETED (count 0) and short-circuits. No new table/migration needed.
-    const claim = await prisma.payment.updateMany({
+  const userId = session.metadata.userId;
+  const plan = session.metadata.plan;
+
+  if (!userId || !plan) {
+    console.error('Missing metadata in checkout session:', session.id);
+    return;
+  }
+
+  // `monthlyLimit`/`gemaTokenLimit` are BigInt — coerce before adding (mixing
+  // BigInt + Number throws and would abort the grant). The grant is ADDITIVE.
+  const creditsForPlan = premiumCreditsForPlan(plan);
+
+  // Claim the payment row (idempotency CAS) AND grant the plan ATOMICALLY.
+  // Stripe redelivers webhooks on timeout/retry and may send a duplicate, so
+  // only the delivery that flips the row not-COMPLETED → COMPLETED grants; a
+  // redelivery finds it COMPLETED and short-circuits. Wrapping the claim and
+  // the grant in one transaction is what makes this safe: if the grant throws,
+  // the COMPLETED claim rolls back with it, so the row stays claimable and a
+  // Stripe retry can re-grant. We deliberately do NOT swallow the error — it
+  // propagates to the webhook route's 500 path, the correct retry signal.
+  const outcome = await prisma.$transaction(async (tx) => {
+    const claim = await tx.payment.updateMany({
       where: {
         stripeSessionId: session.id,
         userId: userId,
@@ -966,38 +972,24 @@ async function handleCheckoutSessionCompleted(session) {
       }
     });
     if (claim.count === 0) {
-      // Either this session was already processed (duplicate/redelivery) or no
-      // local payment row exists. Only short-circuit when a COMPLETED row is
-      // actually present — flows without a local payment row keep granting as
-      // before, so this never silently swallows a legitimate first delivery.
-      const alreadyCompleted = await prisma.payment.findFirst({
+      // Already processed (duplicate/redelivery) OR no local payment row.
+      // Only short-circuit when a COMPLETED row is actually present — flows
+      // without a local payment row keep granting (no regression).
+      const alreadyCompleted = await tx.payment.findFirst({
         where: { stripeSessionId: session.id, userId: userId, status: 'COMPLETED' },
         select: { id: true }
       });
-      if (alreadyCompleted) {
-        console.log(`Duplicate checkout.session.completed for ${session.id}; skipping credit grant`);
-        return;
-      }
+      if (alreadyCompleted) return { duplicate: true };
     }
 
-    // Update user subscription - ADD new plan limits to existing monthlyLimit.
-    // `monthlyLimit` is `BigInt` in the Prisma schema, so we must coerce
-    // both operands to BigInt before adding. Mixing `BigInt + Number`
-    // throws "Cannot mix BigInt and other types" and silently aborts
-    // the whole handler — leaving the user in FREE despite a paid
-    // checkout. This was the root cause of plans not activating
-    // after a successful Stripe charge.
-    const creditsForPlan = premiumCreditsForPlan(plan);
-
-    // Get current user to add to existing limits
-    const currentUser = await prisma.user.findUnique({ where: { id: userId } });
+    const currentUser = await tx.user.findUnique({ where: { id: userId } });
     const currentLimit = typeof currentUser?.monthlyLimit === 'bigint'
       ? currentUser.monthlyLimit
       : BigInt(currentUser?.monthlyLimit ?? 0);
     const newTotalLimit = currentLimit + creditsForPlan;
     const newGemaLimit = toBigIntSafe(currentUser?.gemaTokenLimit) + gemaLimitForPlan(plan);
 
-    await prisma.user.update({
+    await tx.user.update({
       where: { id: userId },
       data: {
         plan,
@@ -1009,34 +1001,32 @@ async function handleCheckoutSessionCompleted(session) {
         // monthlyCallLimit: NOT UPDATED - preserve current usage
       }
     });
+    return { duplicate: false, previousPlan: currentUser?.plan || null, newTotalLimit };
+  });
 
-    console.log(`Subscription activated for user ${userId}, plan: ${plan}`);
-
-    // Server-authoritative funnel event: a real Stripe webhook
-    // delivery completed AND we mutated the user row. We emit from
-    // the backend (not the frontend success page) because this is
-    // the single source of truth — a malicious frontend could spoof
-    // a "thank you" event without ever paying.
-    capturePostHogEvent({
-      distinctId: userId,
-      event: 'plan.upgraded',
-      properties: {
-        plan,
-        previous_plan: currentUser?.plan || null,
-        // BigInt cannot be JSON.stringify'd. PostHog properties only
-        // need fits-in-Number precision (credits never exceed 2^53),
-        // so we coerce explicitly here rather than risk a silent
-        // serialization throw inside the analytics client.
-        monthly_limit: Number(newTotalLimit),
-        added_credits: Number(creditsForPlan),
-        stripe_session_id: session.id,
-        source: 'stripe.checkout.session.completed',
-      },
-    });
-
-  } catch (error) {
-    console.error('Error handling checkout session completed:', error);
+  if (outcome.duplicate) {
+    console.log(`Duplicate checkout.session.completed for ${session.id}; skipping credit grant`);
+    return;
   }
+
+  console.log(`Subscription activated for user ${userId}, plan: ${plan}`);
+
+  // Server-authoritative funnel event (best-effort, after the grant committed).
+  // Emitted from the backend — the single source of truth — so a malicious
+  // frontend can't spoof a "thank you" without paying.
+  capturePostHogEvent({
+    distinctId: userId,
+    event: 'plan.upgraded',
+    properties: {
+      plan,
+      previous_plan: outcome.previousPlan,
+      // BigInt cannot be JSON.stringify'd; credits fit in Number precision.
+      monthly_limit: Number(outcome.newTotalLimit),
+      added_credits: Number(creditsForPlan),
+      stripe_session_id: session.id,
+      source: 'stripe.checkout.session.completed',
+    },
+  });
 }
 
 async function handleInvoicePaymentSucceeded(invoice) {
