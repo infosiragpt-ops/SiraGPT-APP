@@ -36,6 +36,47 @@ function requireDb(db) {
   return db;
 }
 
+// Fixed advisory-lock namespace for "codex active run per project" so the
+// per-project objId can't collide with other advisory-lock users.
+const CODEX_RUN_LOCK_CLASS = 0x0c0de; // 49374
+
+/** Stable signed-int32 hash of a string (FNV-1a) for the advisory-lock objId. */
+function hashInt32(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i += 1) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h | 0;
+}
+
+/**
+ * Insert the run row while holding the single-active-run invariant. The
+ * count→create pair is a TOCTOU race: two concurrent creates for the same
+ * project both count 0 and both insert. On real Postgres we serialize per
+ * project with a transaction-scoped advisory lock (auto-released at commit),
+ * so concurrent creates for the SAME project queue behind each other while
+ * other projects are unaffected. Test doubles (no $transaction/$queryRawUnsafe)
+ * fall back to the plain count→create.
+ */
+async function insertRunGuarded(prisma, { projectId, activeWhere, data }) {
+  const enforce = async (client) => {
+    const active = await client.codexRun.count({ where: activeWhere });
+    if (active > 0) throw new RunServiceError('run_in_progress', 'a run is already active for this project', 409);
+    return client.codexRun.create({ data });
+  };
+  const canLock = typeof prisma.$transaction === 'function' && typeof prisma.$queryRawUnsafe === 'function';
+  if (!canLock) return enforce(prisma);
+  return prisma.$transaction(async (tx) => {
+    await tx.$queryRawUnsafe(
+      'SELECT pg_advisory_xact_lock($1::int, $2::int)',
+      CODEX_RUN_LOCK_CLASS,
+      hashInt32(String(projectId)),
+    );
+    return enforce(tx);
+  });
+}
+
 /** Public projection — never leaks userId/jobId. */
 function publicRun(row) {
   if (!row) return null;
@@ -112,10 +153,10 @@ async function createRun({
   // continuation, not a conflict), so exclude the plan being approved.
   const activeWhere = { projectId, status: { in: ACTIVE_STATUSES } };
   if (mode === 'build' && planRunId) activeWhere.id = { not: planRunId };
-  const active = await prisma.codexRun.count({ where: activeWhere });
-  if (active > 0) throw new RunServiceError('run_in_progress', 'a run is already active for this project', 409);
 
-  const row = await prisma.codexRun.create({
+  const row = await insertRunGuarded(prisma, {
+    projectId,
+    activeWhere,
     data: { projectId, userId, mode, status: 'queued', prompt, model, tier, planRunId },
   });
 

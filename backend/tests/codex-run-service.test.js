@@ -119,6 +119,36 @@ test('createRun 409s when a run is already active for the project', async () => 
   );
 });
 
+// Postgres-shaped fake: adds the $transaction + $queryRawUnsafe surface so
+// createRun takes the advisory-lock-guarded path (the single-active count→create
+// is otherwise a TOCTOU race under concurrency).
+function makeLockingDb(opts = {}) {
+  const db = makeDb(opts);
+  const locks = [];
+  db._locks = locks;
+  db.$queryRawUnsafe = async (sql, klass, objId) => { locks.push({ sql, klass, objId }); return []; };
+  db.$transaction = async (fn) => fn(db);
+  return db;
+}
+
+test('createRun takes the advisory-lock path when the client supports transactions', async () => {
+  const db = makeLockingDb({ projects: [PROJECT] });
+  const run = await createRun({ userId: 'u1', projectId: 'p1', mode: 'plan', db, queue: fakeQueue() });
+  assert.equal(run.status, 'queued');
+  assert.equal(db._locks.length, 1, 'a per-project advisory lock was taken');
+  assert.match(db._locks[0].sql, /pg_advisory_xact_lock/);
+  assert.equal(typeof db._locks[0].objId, 'number');
+});
+
+test('advisory-lock path still enforces single-active inside the transaction', async () => {
+  const db = makeLockingDb({ projects: [PROJECT], runs: [{ id: 'r-active', projectId: 'p1', userId: 'u1', mode: 'plan', status: 'queued' }] });
+  await assert.rejects(
+    () => createRun({ userId: 'u1', projectId: 'p1', mode: 'plan', db, queue: fakeQueue() }),
+    (e) => e.code === 'run_in_progress' && e.status === 409,
+  );
+  assert.equal(db._locks.length, 1, 'lock acquired before the count check');
+});
+
 test('cancelRun flips to cancelled, removes the job, and emits one terminal event', async () => {
   const db = makeDb({ projects: [PROJECT], runs: [{ id: 'r1', projectId: 'p1', userId: 'u1', mode: 'build', status: 'running' }] });
   const calls = [];
