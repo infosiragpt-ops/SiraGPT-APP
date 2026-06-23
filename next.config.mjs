@@ -1,4 +1,6 @@
 import createNextIntlPlugin from 'next-intl/plugin'
+import { dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 // Point next-intl at our request-config loader (reads cookie / headers
 // and merges the per-locale message bundle with the English fallback).
@@ -9,6 +11,7 @@ const withNextIntl = createNextIntlPlugin('./lib/i18n/request.ts')
 const allowReplitPreview = process.env.ALLOW_REPLIT_PREVIEW === '1'
 const isReplitDeployment = process.env.REPLIT_DEPLOYMENT === '1'
 const replitBackendBase = 'http://127.0.0.1:5050'
+const projectRoot = dirname(fileURLToPath(import.meta.url))
 
 function resolveBackendInternalUrl() {
   const configured = process.env.BACKEND_INTERNAL_URL
@@ -20,6 +23,11 @@ function resolveBackendInternalUrl() {
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Keep Next.js file tracing scoped to this app. The OpenClaw workspace has
+  // its own lockfile one directory up, and Next 15 otherwise guesses the
+  // parent workspace as the root and prints a startup warning.
+  outputFileTracingRoot: projectRoot,
+
   // Standalone output produces a self-contained build at .next/standalone/
   // with only the runtime files needed. Ideal for Docker multi-stage builds
   // where we only copy that directory to the runner image.
@@ -41,6 +49,9 @@ const nextConfig = {
   },
   // Enable React strict mode in development to catch double-render bugs
   reactStrictMode: true,
+  // Local smoke checks hit 127.0.0.1 while Next prints localhost as the
+  // primary dev origin. Allow both hostnames for /_next/* dev assets.
+  allowedDevOrigins: ['127.0.0.1'],
 
   // Allow the Replit cross-origin dev-preview iframe to load Next.js
   // resources without the "Cross origin request detected" warning.
@@ -172,6 +183,15 @@ const nextConfig = {
       // → hydration fails → page goes blank below the header. Trading
       // dev source-map fidelity to keep dev usable on Replit.
       config.devtool = false
+    }
+    // next-intl 4.9 currently pulls webpack's dependency tracer through
+    // an internal `import(t)` used for optional extractor codecs. The app
+    // does not use that extractor at runtime, and the warning only affects
+    // webpack cache invalidation logs, so keep dev/build output clean while
+    // leaving real compilation warnings untouched.
+    config.infrastructureLogging = {
+      ...config.infrastructureLogging,
+      level: 'error',
     }
     config.watchOptions = {
       ...config.watchOptions,

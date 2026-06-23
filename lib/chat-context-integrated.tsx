@@ -24,30 +24,7 @@ import {
 } from "./pending-messages"
 import { devLog } from "./dev-log"
 import { createStreamBuffer, type StreamBuffer } from "./stream-buffer"
-
-// safeUUID: crypto.randomUUID() only exists in secure contexts (HTTPS or
-// http://localhost). When the app is opened over a LAN IP / plain HTTP it is
-// undefined and throws "crypto.randomUUID is not a function", breaking every
-// message send. This falls back to getRandomValues, then Math.random.
-function safeUUID(): string {
-  try {
-    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-      return crypto.randomUUID();
-    }
-    if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
-      const b = crypto.getRandomValues(new Uint8Array(16));
-      b[6] = (b[6] & 0x0f) | 0x40;
-      b[8] = (b[8] & 0x3f) | 0x80;
-      const h = Array.from(b, (x) => x.toString(16).padStart(2, "0"));
-      return `${h[0]}${h[1]}${h[2]}${h[3]}-${h[4]}${h[5]}-${h[6]}${h[7]}-${h[8]}${h[9]}-${h[10]}${h[11]}${h[12]}${h[13]}${h[14]}${h[15]}`;
-    }
-  } catch (_) {}
-  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
-  });
-}
-
+import { safeUUID } from "./safe-uuid"
 
 // Helper function to check if error is related to monthly API limit
 const isMonthlyLimitError = (errorMessage: string) => {
@@ -591,10 +568,10 @@ interface ChatContextType {
     type?: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis',
     initialContent?: string,
     initialFiles?: any[],
-    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string }
+    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string; idempotencyKey?: string }
   ) => Promise<any>
   selectChat: (chatId: string) => void
-  addMessage: (content: string, files?: any[], chat?: any, skipUserMessage?: boolean, intentOverride?: ChatIntent) => Promise<void>
+  addMessage: (content: string, files?: any[], chat?: any, skipUserMessage?: boolean, intentOverride?: ChatIntent, options?: { idempotencyKey?: string }) => Promise<void>
   addVideoMessage: (prompt: string, fileIds?: string[], chat?: any, options?: VideoGenerationOptions) => Promise<void>
   addThesisMessage: (topics: string[]) => Promise<void>
   clearCurrentChat: () => void
@@ -1065,7 +1042,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }
   }, [currentStreamId, isStreaming, isLoading, markChatIdle, setPendingStopSynced]);
   const addMessage = useCallback(
-    async (content: string, fileIds?: any[], chat?: any, skipUserMessage?: boolean, intentOverride?: ChatIntent) => { // Added skipUserMessage and forceFlowChartDiagram parameters
+    async (content: string, fileIds?: any[], chat?: any, skipUserMessage?: boolean, intentOverride?: ChatIntent, options?: { idempotencyKey?: string }) => { // Added skipUserMessage and forceFlowChartDiagram parameters
       const activeChat = chat || currentChat; // Use provided chat or fallback to currentChat
       if (!activeChat || !user || !token) return;
       const displayFiles = Array.isArray(fileIds)
@@ -1634,6 +1611,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               chatId: activeChat.id,
               files: requestFileIds,
               streamId: streamId,
+              idempotencyKey: options?.idempotencyKey,
             },
             (chunk) => {
               // Always accumulate in the background-streams store so
@@ -2029,7 +2007,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     type: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis' = 'text',
     initialContent?: string,
     initialFiles?: any[],
-    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string }
+    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string; idempotencyKey?: string }
   ) => {
     const chatModel = options?.model || selectedModel;
     if (!user || !token || !chatModel) return;
@@ -2041,6 +2019,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         isWordConnectorChat: options?.isWordConnectorChat || false,
         isExcelConnectorChat: options?.isExcelConnectorChat || false,
         projectId: options?.projectId,
+        idempotencyKey: options?.idempotencyKey,
       });
       const newChat = response.chat;
       newChat.messages = [];
@@ -2160,7 +2139,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               }
               break;
             default:
-              await addMessage(initialContent, initialFiles, newChat, false, options?.initialIntent);
+              await addMessage(initialContent, initialFiles, newChat, false, options?.initialIntent, { idempotencyKey: options?.idempotencyKey });
               break;
           }
         } catch (error) {

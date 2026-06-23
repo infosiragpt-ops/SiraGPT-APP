@@ -204,7 +204,6 @@ const NAV_ROW =
 const NAV_ROW_ACTIVE =
   "bg-foreground/[0.055] text-foreground ring-1 ring-border/45 dark:bg-white/[0.08] dark:ring-white/10"
 const NAV_ICON = "h-5 w-5 shrink-0 stroke-[1.85]"
-const RECENT_CHATS_COLLAPSE_STORAGE_KEY = "sira:sidebar:recent-collapsed"
 
 type SidebarNavItemProps = {
   href: string
@@ -489,10 +488,7 @@ export function AppSidebar() {
   // Defaults to expanded on first visit so users discover it; once
   // collapsed the choice is remembered across reloads via localStorage.
   const [codexCollapsed, setCodexCollapsed] = React.useState<boolean>(false)
-  // Single collapse toggle for the whole "Recent chats" section. The
-  // per-date-group toggles were replaced by this one control so the
-  // entire list folds/unfolds together from the section header.
-  const [recentChatsCollapsed, setRecentChatsCollapsed] = React.useState<boolean>(false)
+  const [collapsedChatGroups, setCollapsedChatGroups] = React.useState<Record<string, boolean>>({})
   React.useEffect(() => {
     try {
       const raw = window.localStorage.getItem("sira:sidebar:codex-collapsed")
@@ -501,8 +497,9 @@ export function AppSidebar() {
   }, [])
   React.useEffect(() => {
     try {
-      const raw = window.localStorage.getItem(RECENT_CHATS_COLLAPSE_STORAGE_KEY)
-      if (raw === "1") setRecentChatsCollapsed(true)
+      const raw = window.localStorage.getItem("sira:sidebar:chat-groups-collapsed")
+      const parsed = raw ? JSON.parse(raw) : {}
+      if (parsed && typeof parsed === "object") setCollapsedChatGroups(parsed)
     } catch { /* ignore */ }
   }, [])
   const toggleCodexCollapsed = React.useCallback(() => {
@@ -512,10 +509,10 @@ export function AppSidebar() {
       return next
     })
   }, [])
-  const toggleRecentChatsCollapsed = React.useCallback(() => {
-    setRecentChatsCollapsed((prev) => {
-      const next = !prev
-      try { window.localStorage.setItem(RECENT_CHATS_COLLAPSE_STORAGE_KEY, next ? "1" : "0") } catch { /* ignore */ }
+  const toggleChatGroupCollapsed = React.useCallback((groupKey: string) => {
+    setCollapsedChatGroups((prev) => {
+      const next = { ...prev, [groupKey]: !prev[groupKey] }
+      try { window.localStorage.setItem("sira:sidebar:chat-groups-collapsed", JSON.stringify(next)) } catch { /* ignore */ }
       return next
     })
   }, [])
@@ -1292,8 +1289,8 @@ export function AppSidebar() {
           <SidebarGroup>
             <button
               type="button"
-              onClick={toggleRecentChatsCollapsed}
-              aria-expanded={!recentChatsCollapsed}
+              onClick={() => toggleChatGroupCollapsed("recent")}
+              aria-expanded={!collapsedChatGroups["recent"]}
               aria-controls="sidebar-recent-chats-content"
               className={cn(
                 "group flex w-full items-center gap-1 px-3 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/60 transition-colors hover:text-foreground/80 select-none",
@@ -1303,7 +1300,7 @@ export function AppSidebar() {
               <ChevronDown
                 className={cn(
                   "h-3 w-3 transition-transform duration-150",
-                  recentChatsCollapsed && "-rotate-90"
+                  collapsedChatGroups["recent"] && "-rotate-90"
                 )}
                 aria-hidden="true"
               />
@@ -1324,7 +1321,7 @@ export function AppSidebar() {
             </button>
             <SidebarGroupContent
               id="sidebar-recent-chats-content"
-              className={cn(state === "closed" && "hidden", recentChatsCollapsed && "hidden")}
+              className={cn(state === "closed" && "hidden", collapsedChatGroups["recent"] && "hidden")}
             >
               <SidebarMenu>
                 {chats.length === 0 && isLoadingChats ? (

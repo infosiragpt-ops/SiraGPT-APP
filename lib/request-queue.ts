@@ -1,5 +1,7 @@
 "use client"
 
+import { safeUUID } from "./safe-uuid"
+
 /**
  * RequestQueue — queues fetch requests when the backend is
  * unreachable and replays them when connectivity is restored.
@@ -157,7 +159,7 @@ class RequestQueue {
   enqueue(executor: RequestExecutor, label?: string, options: EnqueueOptions = {}): Promise<Response> {
     return new Promise((resolve, reject) => {
       const item: InternalQueuedRequest = {
-        id: crypto.randomUUID(),
+        id: safeUUID(),
         executor,
         resolve,
         reject,
