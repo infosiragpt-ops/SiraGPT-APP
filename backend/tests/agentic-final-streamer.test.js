@@ -43,15 +43,43 @@ describe('chunkForStreaming', () => {
     assert.equal(chunks.join(''), text);
   });
 
-  test('never splits mid-word', () => {
+  // A boundary splits a word when chunk[k] ends on a non-space AND chunk[k+1]
+  // starts on a non-space (a word run spans the seam with no whitespace).
+  function midWordSeams(chunks) {
+    const seams = [];
+    for (let k = 0; k < chunks.length - 1; k += 1) {
+      const a = chunks[k];
+      const b = chunks[k + 1];
+      if (a && b && !/\s/.test(a[a.length - 1]) && !/\s/.test(b[0])) {
+        seams.push([a, b]);
+      }
+    }
+    return seams;
+  }
+
+  test('never splits mid-word for normal prose', () => {
     const text = 'palabra1 palabra2 palabra3 palabra4 palabra5 palabra6 palabra7 palabra8';
     const chunks = streamer.chunkForStreaming(text, { targetChars: 12 });
     assert.equal(chunks.join(''), text);
-    // Each chunk (except possibly via boundary) should not start/end inside a word run without whitespace
-    for (const c of chunks) {
-      // A chunk should not be a bare fragment like "palab" — every chunk ends at ws/sentence or text end
-      assert.ok(c.length > 0);
-    }
+    assert.deepEqual(midWordSeams(chunks), [], 'no chunk seam falls inside a word');
+  });
+
+  test('keeps a word whole when it starts in the first half and crosses the target', () => {
+    // Regression: the old i+0.5·target back-off floor split this word
+    // ("aa bbbbbbbbbbbb" → "aa bbbbbbbbb" | "bbb cc").
+    const text = `aa ${'b'.repeat(12)} cc`;
+    const chunks = streamer.chunkForStreaming(text, { targetChars: 12 });
+    assert.equal(chunks.join(''), text);
+    assert.deepEqual(midWordSeams(chunks), [], `unexpected mid-word seam: ${JSON.stringify(chunks)}`);
+  });
+
+  test('hard-splits a pathologically long token (no whitespace to break on)', () => {
+    const url = 'x'.repeat(500);
+    const chunks = streamer.chunkForStreaming(`see ${url} end`, { targetChars: 32 });
+    assert.equal(chunks.join(''), `see ${url} end`);
+    // The 500-char token MUST be split (unavoidable), but each chunk stays
+    // bounded — never the whole token in one frame.
+    for (const c of chunks) assert.ok(c.length <= 32 * 4, `chunk too long: ${c.length}`);
   });
 
   test('caps the number of chunks', () => {

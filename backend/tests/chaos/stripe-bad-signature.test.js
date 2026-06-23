@@ -1,121 +1,99 @@
 'use strict';
 
 /**
- * Chaos: Stripe webhook with a bad signature.
+ * Chaos: Stripe webhook with a bad signature — exercised against the REAL
+ * `/payments/stripe/webhook` route (not a local re-implementation).
  *
- * The webhook route in `routes/payments.js` does:
+ * The route does:
  *   try { event = stripeService.constructWebhookEvent(req.body, sig); }
- *   catch (err) { return res.status(400).send(`Webhook Error: ${err.message}`); }
+ *   catch (err) {
+ *     const r = stripeService.toHttpError(err, {...});
+ *     return res.status(r.statusCode).send(`Webhook Error: ${r.body.message}`);
+ *   }
+ *   switch (event.type) { … }  res.json({ received: true });
  *
- * We don't want this test to spin up the whole Express tree (it requires
- * Prisma, Redis, Stripe SDK env...). Instead we re-implement the exact
- * try/catch shape and verify that:
- *   - a stub `constructWebhookEvent` that throws yields a 400 with the
- *     `Webhook Error:` prefix preserved
- *   - the response body does NOT leak the secret or the raw payload
- *   - a successful verification yields 200 with { received: true }
- *
- * If `routes/payments.js` ever changes the failure shape, this test will
- * stay green only because it mirrors the contract — keep them in sync.
+ * We mock only the Stripe SDK seam (constructWebhookEvent / toHttpError) plus
+ * prisma + posthog so no network/DB is touched, and assert the route's real
+ * behavior: bad signature → 400 with the `Webhook Error:` prefix and no secret
+ * leak; valid event → 200 { received: true }.
  */
 
 const assert = require('node:assert/strict');
-const { describe, it } = require('node:test');
+const { describe, it, afterEach } = require('node:test');
+const request = require('supertest');
 
-function makeRes() {
-  const res = {
-    statusCode: 200,
-    body: null,
-    headers: {},
-    status(code) { this.statusCode = code; return this; },
-    send(s) { this.body = s; return this; },
-    json(o) { this.body = o; return this; },
-  };
-  return res;
+const {
+  buildRouteTestApp,
+  reloadModule,
+  mockResolvedModule,
+} = require('../http-test-utils');
+
+const DB_PATH = require.resolve('../../src/config/database');
+const STRIPE_PATH = require.resolve('../../src/services/stripe');
+const POSTHOG_PATH = require.resolve('../../src/services/observability/posthog');
+
+let restores = [];
+
+function setup(stripeStub) {
+  restores = [
+    mockResolvedModule(DB_PATH, { /* no DB op reached on these paths */ }),
+    mockResolvedModule(STRIPE_PATH, stripeStub),
+    mockResolvedModule(POSTHOG_PATH, { capturePostHogEvent: () => {} }),
+  ];
+  delete require.cache[require.resolve('../../src/routes/payments')];
+  // reloadModule resolves relative to http-test-utils.js (in tests/), so this
+  // path is tests/-relative — both resolve to the same absolute module.
+  return buildRouteTestApp('/payments', reloadModule('../src/routes/payments'));
 }
 
-async function handleWebhook(stripeService, req, res) {
-  try {
-    const sig = req.headers['stripe-signature'];
-    let event;
-    try {
-      event = stripeService.constructWebhookEvent(req.body, sig);
-    } catch (err) {
-      return res.status(400).send(`Webhook Error: ${err.message}`);
-    }
-    // No-op event handler — production switches on event.type.
-    void event;
-    return res.json({ received: true });
-  } catch (err) {
-    return res.status(500).json({ error: 'Webhook processing failed' });
-  }
+function post(app, sig) {
+  const r = request(app).post('/payments/stripe/webhook').set('Content-Type', 'application/json');
+  if (sig !== undefined) r.set('stripe-signature', sig);
+  return r.send(Buffer.from('{}'));
 }
 
-describe('chaos: Stripe webhook bad signature', () => {
-  it('returns 400 when signature verification throws', async () => {
-    const stripeService = {
+describe('chaos: Stripe webhook bad signature (real route)', () => {
+  afterEach(() => {
+    restores.forEach((fn) => fn());
+    restores = [];
+    delete require.cache[require.resolve('../../src/routes/payments')];
+  });
+
+  it('returns 400 with the Webhook Error prefix and no secret leak when verification throws', async () => {
+    const app = setup({
       constructWebhookEvent: () => {
         const err = new Error('No signatures found matching the expected signature for payload.');
         err.type = 'StripeSignatureVerificationError';
         throw err;
       },
-    };
-    const req = { headers: { 'stripe-signature': 't=1,v1=deadbeef' }, body: Buffer.from('{}') };
-    const res = makeRes();
-    await handleWebhook(stripeService, req, res);
-    assert.equal(res.statusCode, 400);
-    assert.match(res.body, /^Webhook Error:/);
-    assert.ok(!/STRIPE_WEBHOOK_SECRET/.test(res.body), 'response must not leak the secret name');
+      toHttpError: (err) => ({ statusCode: 400, body: { message: err.message } }),
+    });
+    const res = await post(app, 't=1,v1=deadbeef');
+    assert.equal(res.status, 400);
+    assert.match(res.text, /^Webhook Error:/);
+    assert.ok(!/STRIPE_WEBHOOK_SECRET/.test(res.text), 'response must not leak the secret name');
+    assert.ok(!/sk_(live|test)_/.test(res.text), 'response must not leak an API key');
   });
 
-  it('returns 400 with empty signature header', async () => {
-    const stripeService = {
+  it('returns 400 when the signature header is missing', async () => {
+    const app = setup({
       constructWebhookEvent: (_payload, sig) => {
         if (!sig) throw new Error('Missing stripe-signature header');
         return { type: 'noop' };
       },
-    };
-    const req = { headers: {}, body: Buffer.from('{}') };
-    const res = makeRes();
-    await handleWebhook(stripeService, req, res);
-    assert.equal(res.statusCode, 400);
-    assert.match(res.body, /Missing stripe-signature/);
+      toHttpError: (err) => ({ statusCode: 400, body: { message: err.message } }),
+    });
+    const res = await post(app, undefined);
+    assert.equal(res.status, 400);
+    assert.match(res.text, /Missing stripe-signature/);
   });
 
-  it('returns 200 when verification succeeds', async () => {
-    const stripeService = {
-      constructWebhookEvent: () => ({ type: 'checkout.session.completed', data: { object: {} } }),
-    };
-    const req = { headers: { 'stripe-signature': 't=1,v1=good' }, body: Buffer.from('{}') };
-    const res = makeRes();
-    await handleWebhook(stripeService, req, res);
-    assert.equal(res.statusCode, 200);
+  it('returns 200 { received: true } for a verified (unhandled) event', async () => {
+    const app = setup({
+      constructWebhookEvent: () => ({ type: 'some.unhandled.event', data: { object: {} } }),
+    });
+    const res = await post(app, 't=1,v1=good');
+    assert.equal(res.status, 200);
     assert.deepEqual(res.body, { received: true });
-  });
-
-  it('handler swallows downstream throws into 500 (not 400)', async () => {
-    const stripeService = {
-      constructWebhookEvent: () => ({ type: 'will.crash' }),
-    };
-    // Wrap with a poisoned res.json to simulate a downstream throw.
-    const res = {
-      statusCode: 200,
-      body: null,
-      _exploded: false,
-      status(c) { this.statusCode = c; return this; },
-      send(s) { this.body = s; return this; },
-      json(o) {
-        if (!this._exploded) {
-          this._exploded = true;
-          throw new Error('downstream boom');
-        }
-        this.body = o;
-        return this;
-      },
-    };
-    const req = { headers: { 'stripe-signature': 'ok' }, body: Buffer.from('{}') };
-    await handleWebhook(stripeService, req, res);
-    assert.equal(res.statusCode, 500);
-    assert.deepEqual(res.body, { error: 'Webhook processing failed' });
   });
 });

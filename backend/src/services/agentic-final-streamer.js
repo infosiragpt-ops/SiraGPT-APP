@@ -48,6 +48,11 @@ function chunkForStreaming(text, opts = {}) {
   const target = Math.max(8, Number(opts.targetChars) || DEFAULT_TARGET_CHARS);
   const maxChunks = Math.max(1, Number(opts.maxChunks) || DEFAULT_MAX_CHUNKS);
 
+  const isWs = (ch) => ch !== undefined && /\s/.test(ch);
+  // A token longer than this is split mid-word (URLs, base64…) — unavoidable,
+  // but bounded so one pathological token can't make an arbitrarily long chunk.
+  const hardTokenCap = target * 4;
+
   const chunks = [];
   let i = 0;
   const n = s.length;
@@ -62,13 +67,28 @@ function chunkForStreaming(text, opts = {}) {
       }
       if (boundary !== -1) {
         end = boundary;
-      } else {
-        // …else back off to the previous whitespace so we never split a word.
+      } else if (!isWs(s[end - 1]) && !isWs(s[end])) {
+        // `end` would fall inside a word run. Back off to the last whitespace
+        // after `i` so the word stays whole. (The previous version floored the
+        // back-off at i+0.5·target, which split words that started in the first
+        // half of the chunk and crossed the boundary.)
         let ws = -1;
-        for (let j = end; j > i + Math.floor(target * 0.5); j -= 1) {
-          if (/\s/.test(s[j])) { ws = j + 1; break; }
+        for (let j = end - 1; j > i; j -= 1) {
+          if (isWs(s[j])) { ws = j + 1; break; }
         }
-        if (ws !== -1) end = ws;
+        if (ws > i) {
+          end = ws;
+        } else {
+          // No whitespace in [i, end): the token is longer than `target`.
+          // Extend forward to the next whitespace to keep it whole, capping the
+          // reach so a pathological token still gets hard-split.
+          const hardCap = Math.min(i + hardTokenCap, n);
+          let fwd = -1;
+          for (let j = end; j < hardCap; j += 1) {
+            if (isWs(s[j])) { fwd = j + 1; break; }
+          }
+          end = fwd !== -1 ? fwd : hardCap;
+        }
       }
     }
     chunks.push(s.slice(i, end));
