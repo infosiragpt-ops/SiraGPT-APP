@@ -51,7 +51,7 @@ const TABS: TabDef[] = [
   { id: "manage", label: "Manage", icon: Settings },
 ]
 
-const PUBLISHING_ENDPOINT = "/publishing/state"
+const PUBLISHING_ENDPOINT = "/code/publishing-state"
 
 const EMPTY_STATE: PublishingConsoleState = {
   appName: "siragpt",
