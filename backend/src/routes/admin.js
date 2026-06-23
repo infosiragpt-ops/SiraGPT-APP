@@ -2345,13 +2345,17 @@ router.post('/users/:id/grant-credits', requireSuperAdmin, async (req, res) => {
     });
     if (!user) return res.status(404).json({ error: 'User not found' });
 
+    // Atomic increment so two concurrent grants (or a double-click) can't both
+    // read the same monthlyLimit and write back the same sum — a lost-update
+    // that silently dropped one grant. Audit `after` uses the authoritative
+    // post-increment value the DB returns.
     const previousLimit = BigInt(user.monthlyLimit || 0);
-    const newLimit = previousLimit + BigInt(Math.floor(credits));
     const updated = await prisma.user.update({
       where: { id: user.id },
-      data: { monthlyLimit: newLimit },
+      data: { monthlyLimit: { increment: BigInt(Math.floor(credits)) } },
       select: { id: true, email: true, monthlyLimit: true },
     });
+    const newLimit = BigInt(updated.monthlyLimit || 0);
 
     void writeAuditLog(prisma, {
       actorType: 'admin',
