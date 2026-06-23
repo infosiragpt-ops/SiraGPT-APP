@@ -948,17 +948,37 @@ async function handleCheckoutSessionCompleted(session) {
       return;
     }
 
-    // Update payment record
-    await prisma.payment.updateMany({
+    // Idempotency guard (Stripe redelivers webhooks on timeout/retry, and may
+    // even send the same event twice). The credit grant below is ADDITIVE, so a
+    // duplicate delivery would double-grant plan credits. We claim the payment
+    // row with an atomic compare-and-swap: only the delivery that flips it from
+    // not-COMPLETED → COMPLETED proceeds to grant. A redelivery finds it already
+    // COMPLETED (count 0) and short-circuits. No new table/migration needed.
+    const claim = await prisma.payment.updateMany({
       where: {
         stripeSessionId: session.id,
-        userId: userId
+        userId: userId,
+        status: { not: 'COMPLETED' }
       },
       data: {
         status: 'COMPLETED',
         stripeSubscriptionId: session.subscription
       }
     });
+    if (claim.count === 0) {
+      // Either this session was already processed (duplicate/redelivery) or no
+      // local payment row exists. Only short-circuit when a COMPLETED row is
+      // actually present — flows without a local payment row keep granting as
+      // before, so this never silently swallows a legitimate first delivery.
+      const alreadyCompleted = await prisma.payment.findFirst({
+        where: { stripeSessionId: session.id, userId: userId, status: 'COMPLETED' },
+        select: { id: true }
+      });
+      if (alreadyCompleted) {
+        console.log(`Duplicate checkout.session.completed for ${session.id}; skipping credit grant`);
+        return;
+      }
+    }
 
     // Update user subscription - ADD new plan limits to existing monthlyLimit.
     // `monthlyLimit` is `BigInt` in the Prisma schema, so we must coerce
