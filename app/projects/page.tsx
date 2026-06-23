@@ -5,7 +5,7 @@
  *
  * Shape mirrors the Claude Projects UX from the user's reference
  * screenshots:
- *   - Title row: "Proyectos" + "+ Nuevo proyecto" CTA
+ *   - Title row: "Código" + "+ Nuevo proyecto" CTA
  *   - Full-width search bar
  *   - Right-aligned sort dropdown ("Actividad reciente" / "Última
  *     edición" / "Fecha de creación")
@@ -20,7 +20,22 @@
 import * as React from "react"
 import { useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
-import { Plus, Search, ChevronDown, Check, FolderKanban, MoreHorizontal, Pencil, Star, Trash2 } from "lucide-react"
+import {
+  ArrowRight,
+  Check,
+  ChevronDown,
+  Code2,
+  FolderKanban,
+  FolderOpen,
+  Loader2,
+  MoreHorizontal,
+  Plus,
+  Search,
+  Star,
+  Trash2,
+  UploadCloud,
+  Pencil,
+} from "lucide-react"
 import { toast } from "sonner"
 import { formatDistanceToNow } from "date-fns"
 import { es as dfEs, enUS as dfEn } from "date-fns/locale"
@@ -40,6 +55,7 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -57,12 +73,15 @@ import {
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { cn } from "@/lib/utils"
 
-import { CreateProjectDialog } from "@/components/projects/create-project-dialog"
 import { getVisibleProjects, removeProjectFromList, upsertProjectList } from "@/lib/projects-logic"
 import { projectsService, type Project, type ProjectSort } from "@/lib/projects-service"
+import { CODEX_UPDATED_EVENT, codexIdForProject, upsertCodexProject } from "@/lib/codex-projects"
+import { canOpenLocalDirectory, importLocalFolderAsWorkspace } from "@/lib/local-folder-workspace"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 
 const SORTS: ProjectSort[] = ["activity", "edited", "created"]
+const STORAGE_ACTIVE_FOLDER = "code-workspace:active-folder"
+type ProjectCreateMode = "new" | "local"
 
 export default function ProjectsPage() {
   const t = useTranslations("projects")
@@ -72,8 +91,12 @@ export default function ProjectsPage() {
   const [loading, setLoading] = React.useState(true)
   const [search, setSearch] = React.useState("")
   const [sort, setSort] = React.useState<ProjectSort>("activity")
-  const [dialogOpen, setDialogOpen] = React.useState(false)
   const [editingProject, setEditingProject] = React.useState<Project | null>(null)
+  const [createDialogOpen, setCreateDialogOpen] = React.useState(false)
+  const [createMode, setCreateMode] = React.useState<ProjectCreateMode>("new")
+  const [createName, setCreateName] = React.useState("")
+  const [creating, setCreating] = React.useState(false)
+  const [importingLocal, setImportingLocal] = React.useState(false)
   const [deleteTarget, setDeleteTarget] = React.useState<Project | null>(null)
   const [deleting, setDeleting] = React.useState(false)
 
@@ -113,16 +136,69 @@ export default function ProjectsPage() {
     [projects, debouncedSearch, sort]
   )
 
-  function openCreate() {
-    setDialogOpen(true)
+  const openCodeProject = React.useCallback((project: Pick<Project, "id" | "name">) => {
+    const workspaceId = codexIdForProject(project.id)
+    upsertCodexProject({ id: workspaceId, name: project.name, kind: "project" })
+    if (typeof window !== "undefined") {
+      try {
+        window.localStorage.setItem(
+          STORAGE_ACTIVE_FOLDER,
+          JSON.stringify({ id: project.id, name: project.name }),
+        )
+      } catch {
+        /* fail soft */
+      }
+      window.dispatchEvent(new CustomEvent(CODEX_UPDATED_EVENT))
+    }
+    router.push(`/code?folder=${encodeURIComponent(project.id)}`)
+  }, [router])
+
+  function openCreate(mode: ProjectCreateMode = "new") {
+    setCreateMode(mode)
+    setCreateName("")
+    setCreating(false)
+    setImportingLocal(false)
+    setCreateDialogOpen(true)
   }
 
-  function handleCreated(p: Project) {
-    // Go straight into the new project so the user can start
-    // attaching files / chatting immediately. Also prepend locally
-    // so if they hit back, the card is already visible.
-    setProjects(prev => upsertProjectList(prev, p, sort))
-    router.push(`/projects/${p.id}`)
+  async function handleCreateProject(e: React.FormEvent) {
+    e.preventDefault()
+    const cleanName = normalizeChatInput(createName).value.trim()
+    if (!cleanName || creating) return
+    setCreating(true)
+    try {
+      const project = await projectsService.create({
+        name: cleanName,
+      })
+      setProjects(prev => upsertProjectList(prev, project, sort))
+      toast.success(`Proyecto "${project.name}" creado en Código y Apps web`)
+      setCreateDialogOpen(false)
+      openCodeProject(project)
+    } catch (err: any) {
+      toast.error(err?.message || t("createFailed"))
+      setCreating(false)
+    }
+  }
+
+  async function handleImportLocalProject() {
+    if (importingLocal) return
+    if (!canOpenLocalDirectory()) {
+      toast.error("Tu navegador no permite seleccionar carpetas locales. Usa Chrome o Edge.")
+      return
+    }
+    setImportingLocal(true)
+    try {
+      const imported = await importLocalFolderAsWorkspace()
+      toast.success(`Proyecto local "${imported.name}" abierto en Código`)
+      setCreateDialogOpen(false)
+      router.push(`/code?local=${encodeURIComponent(imported.codexId)}`)
+    } catch (err: any) {
+      if (err?.name !== "AbortError") {
+        toast.error(err?.message || "No se pudo importar la carpeta local")
+      }
+    } finally {
+      setImportingLocal(false)
+    }
   }
 
   async function handleToggleStar(project: Project) {
@@ -167,10 +243,16 @@ export default function ProjectsPage() {
       <div className="mx-auto max-w-5xl px-4 sm:px-6 md:px-8 py-8 md:py-12">
         <header className="flex items-center justify-between mb-6">
           <h1 className="text-3xl font-serif tracking-tight" data-testid="projects-page-title">{t("title")}</h1>
-          <Button onClick={openCreate} className="gap-1.5">
-            <Plus className="h-4 w-4" />
-            {t("newProject")}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => openCreate("local")} className="gap-1.5">
+              <UploadCloud className="h-4 w-4" />
+              Importar código
+            </Button>
+            <Button onClick={() => openCreate("new")} className="gap-1.5">
+              <Plus className="h-4 w-4" />
+              {t("newProject")}
+            </Button>
+          </div>
         </header>
 
         <div className="mb-4">
@@ -217,7 +299,7 @@ export default function ProjectsPage() {
                 key={p.id}
                 project={p}
                 dateLocale={dateLocale}
-                onOpen={() => router.push(`/projects/${p.id}`)}
+                onOpen={() => openCodeProject(p)}
                 onToggleStar={() => handleToggleStar(p)}
                 onEdit={() => setEditingProject(p)}
                 onDelete={() => setDeleteTarget(p)}
@@ -228,7 +310,21 @@ export default function ProjectsPage() {
         )}
       </div>
 
-      <CreateProjectDialog open={dialogOpen} onOpenChange={setDialogOpen} onCreated={handleCreated} />
+      <CreateCodeProjectDialog
+        open={createDialogOpen}
+        name={createName}
+        mode={createMode}
+        creating={creating}
+        importingLocal={importingLocal}
+        onOpenChange={(open) => {
+          if (!creating && !importingLocal) setCreateDialogOpen(open)
+        }}
+        onModeChange={setCreateMode}
+        onNameChange={setCreateName}
+        onSubmit={handleCreateProject}
+        onImportLocal={handleImportLocalProject}
+        t={t}
+      />
       <EditProjectDialog
         project={editingProject}
         onOpenChange={(open) => { if (!open) setEditingProject(null) }}
@@ -263,6 +359,216 @@ export default function ProjectsPage() {
 }
 
 // ─── Subcomponents ────────────────────────────────────────────────────────
+
+function CreateCodeProjectDialog({
+  open,
+  name,
+  mode,
+  creating,
+  importingLocal,
+  onOpenChange,
+  onModeChange,
+  onNameChange,
+  onSubmit,
+  onImportLocal,
+  t,
+}: {
+  open: boolean
+  name: string
+  mode: ProjectCreateMode
+  creating: boolean
+  importingLocal: boolean
+  onOpenChange: (open: boolean) => void
+  onModeChange: (mode: ProjectCreateMode) => void
+  onNameChange: (name: string) => void
+  onSubmit: (event: React.FormEvent) => void
+  onImportLocal: () => void
+  t: ReturnType<typeof useTranslations>
+}) {
+  const cleanName = normalizeChatInput(name).value.trim()
+  const canSubmit = cleanName.length > 0 && !creating && !importingLocal
+  const busy = creating || importingLocal
+  const [localSupported, setLocalSupported] = React.useState(true)
+
+  React.useEffect(() => {
+    setLocalSupported(canOpenLocalDirectory())
+  }, [])
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="overflow-hidden p-0 sm:max-w-[720px]">
+        <DialogHeader>
+          <div className="border-b border-border/60 px-6 pb-4 pt-5">
+            <DialogTitle className="text-2xl font-serif tracking-tight">
+              Crear proyecto de código
+            </DialogTitle>
+            <DialogDescription className="mt-1.5">
+              Elige cómo quieres empezar. Puedes importar una carpeta local o crear un software nuevo.
+            </DialogDescription>
+          </div>
+        </DialogHeader>
+
+        <div className="space-y-5 px-6 pb-6 pt-1">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <ProjectStartOption
+              selected={mode === "local"}
+              icon={<UploadCloud className="h-5 w-5" />}
+              title="Proyecto local"
+              description="Importa código desde tu computadora."
+              meta="Carpeta existente"
+              onClick={() => onModeChange("local")}
+              disabled={busy}
+            />
+            <ProjectStartOption
+              selected={mode === "new"}
+              icon={<Code2 className="h-5 w-5" />}
+              title="Proyecto nuevo"
+              description="Crea un workspace limpio para construir desde cero."
+              meta="Software nuevo"
+              onClick={() => onModeChange("new")}
+              disabled={busy}
+            />
+          </div>
+
+          {mode === "local" ? (
+            <div className="rounded-xl border border-border/70 bg-muted/20 p-4">
+              <div className="flex gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-background text-foreground shadow-sm ring-1 ring-border/70">
+                  <FolderOpen className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-sm font-semibold tracking-tight">Selecciona tu carpeta de código</h3>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Se abrirá en Código como proyecto local y podrás seguir editándolo desde el workspace.
+                  </p>
+                  {!localSupported && (
+                    <p className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+                      Para importar carpetas locales usa Chrome o Edge.
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <DialogFooter className="mt-5 gap-2 sm:gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => onOpenChange(false)}
+                  disabled={busy}
+                >
+                  {t("cancel")}
+                </Button>
+                <Button
+                  type="button"
+                  onClick={onImportLocal}
+                  disabled={busy || !localSupported}
+                  aria-busy={importingLocal}
+                  className="gap-2"
+                >
+                  {importingLocal ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderOpen className="h-4 w-4" />}
+                  {importingLocal ? "Importando..." : "Seleccionar carpeta"}
+                </Button>
+              </DialogFooter>
+            </div>
+          ) : (
+            <form onSubmit={onSubmit} className="rounded-xl border border-border/70 bg-muted/20 p-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="create-code-project-name" className="text-sm">
+                  Nombre del proyecto
+                </Label>
+                <Input
+                  id="create-code-project-name"
+                  autoFocus
+                  value={name}
+                  onChange={(e) => onNameChange(e.target.value)}
+                  placeholder="Ej. App de inventario"
+                  maxLength={120}
+                  disabled={busy}
+                  className="h-11 bg-background"
+                />
+                <p className="min-h-[1rem] text-xs text-muted-foreground" aria-live="polite">
+                  {creating ? "Creando proyecto..." : "Se guardará en Código y aparecerá en Apps web."}
+                </p>
+              </div>
+
+              <DialogFooter className="mt-5 gap-2 sm:gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => onOpenChange(false)}
+                  disabled={busy}
+                >
+                  {t("cancel")}
+                </Button>
+                <Button type="submit" disabled={!canSubmit} aria-busy={creating} className="gap-2">
+                  {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
+                  {creating ? t("creating") : "Crear y abrir"}
+                </Button>
+              </DialogFooter>
+            </form>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function ProjectStartOption({
+  selected,
+  icon,
+  title,
+  description,
+  meta,
+  disabled,
+  onClick,
+}: {
+  selected: boolean
+  icon: React.ReactNode
+  title: string
+  description: string
+  meta: string
+  disabled?: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-pressed={selected}
+      className={cn(
+        "group flex min-h-[124px] flex-col rounded-xl border p-4 text-left transition",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+        selected
+          ? "border-foreground bg-background shadow-sm"
+          : "border-border/70 bg-background/60 hover:border-foreground/40 hover:bg-background",
+        disabled && "cursor-not-allowed opacity-60",
+      )}
+    >
+      <span className="flex items-start justify-between gap-3">
+        <span
+          className={cn(
+            "flex h-9 w-9 items-center justify-center rounded-lg border transition",
+            selected ? "border-foreground bg-foreground text-background" : "border-border bg-muted/40 text-muted-foreground",
+          )}
+        >
+          {icon}
+        </span>
+        <span
+          className={cn(
+            "flex h-5 w-5 items-center justify-center rounded-full border text-[10px]",
+            selected ? "border-foreground bg-foreground text-background" : "border-border text-transparent",
+          )}
+        >
+          <Check className="h-3.5 w-3.5" />
+        </span>
+      </span>
+      <span className="mt-4 text-sm font-semibold tracking-tight">{title}</span>
+      <span className="mt-1 text-sm leading-5 text-muted-foreground">{description}</span>
+      <span className="mt-auto pt-3 text-xs font-medium text-muted-foreground">{meta}</span>
+    </button>
+  )
+}
 
 function ProjectCard({
   project, dateLocale, onOpen, onToggleStar, onEdit, onDelete, t,

@@ -145,10 +145,10 @@ export async function openLocalDirectoryWorkspace(): Promise<LocalWorkspaceImpor
 
   await walkDirectory(rootHandle, "", files, stats)
 
-  if (Object.keys(files).length === 0) {
-    throw new Error("No se encontraron archivos de texto compatibles en esa carpeta.")
-  }
-
+  // Las carpetas vacías (o sin archivos de texto compatibles) SON válidas: se
+  // abren como un workspace en blanco al que luego se le crean archivos o lo
+  // genera el agente. La carpeta queda enlazada (linkedRootHandle) para escribir
+  // de vuelta en disco. No bloqueamos por falta de archivos.
   linkedRootHandle = rootHandle
   linkedRootName = String(rootHandle.name || "Carpeta local")
 
