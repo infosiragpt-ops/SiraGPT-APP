@@ -1047,12 +1047,17 @@ router.get('/data-export', authenticateToken, async (req, res) => {
  * objects are merged key-by-key, everything else is assigned. Avoids
  * pulling in a lodash dep for this single use.
  */
+// Keys skipped during merge so a user-supplied settings body can't smuggle
+// `__proto__`/`constructor`/`prototype` into the persisted JSON (or reparent
+// the merged object's prototype).
+const DANGEROUS_MERGE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 function deepMerge(target, source) {
   if (source == null) return target;
   const isObj = (x) => x && typeof x === 'object' && !Array.isArray(x);
   if (!isObj(target) || !isObj(source)) return source;
   const out = { ...target };
   for (const k of Object.keys(source)) {
+    if (DANGEROUS_MERGE_KEYS.has(k)) continue;
     const sv = source[k];
     const tv = target[k];
     if (isObj(sv) && isObj(tv)) out[k] = deepMerge(tv, sv);

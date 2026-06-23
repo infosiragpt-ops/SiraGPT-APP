@@ -25,12 +25,17 @@ function isPlainObject(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
 }
 
+// Never merge these keys — assigning them reparents/pollutes the prototype
+// chain of the merged object. RFC 7396 is lenient, so we drop them silently.
+const FORBIDDEN_MERGE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
 function apply(target, patch) {
   // RFC 7396 §2: if patch is not an object, the result is the patch.
   if (!isPlainObject(patch)) return patch;
   // If target is not an object, start from a fresh empty object.
   const out = isPlainObject(target) ? Object.assign({}, target) : {};
   for (const key of Object.keys(patch)) {
+    if (FORBIDDEN_MERGE_KEYS.has(key)) continue;
     const value = patch[key];
     if (value === null) {
       delete out[key];

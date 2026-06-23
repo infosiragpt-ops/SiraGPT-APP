@@ -111,3 +111,24 @@ describe('del', () => {
     assert.equal(jp.del({ a: 1 }, ''), false);
   });
 });
+
+describe('set — prototype-pollution guard', () => {
+  test('refuses to write __proto__ / constructor / prototype keys', () => {
+    for (const ptr of ['/__proto__/polluted', '/constructor/polluted', '/prototype/polluted']) {
+      assert.throws(() => jp.set({}, ptr, 'PWNED'), /prototype-pollution guard|forbidden key/);
+    }
+    // The global prototype must be untouched.
+    assert.equal({}.polluted, undefined);
+  });
+
+  test('refuses __proto__ as the final token too', () => {
+    assert.throws(() => jp.set({ a: {} }, '/a/__proto__', { x: 1 }), /forbidden key/);
+    assert.equal({}.x, undefined);
+  });
+
+  test('still writes ordinary nested keys', () => {
+    const doc = {};
+    jp.set(doc, '/a/b/c', 42);
+    assert.equal(doc.a.b.c, 42);
+  });
+});

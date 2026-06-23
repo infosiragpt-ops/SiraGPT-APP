@@ -28,16 +28,23 @@ function startRunPoller(config, chatId, runId) {
     } catch {
       /* store unavailable */
     }
-    if (run && run.phase && run.phase !== lastPhase) {
-      lastPhase = run.phase;
-      await tg.sendTelegramMessage(config.token, chatId, tg.formatRunUpdate(run));
-    }
     const terminal = run && (run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled');
+    // Stop the poller BEFORE any await that could throw, so a Telegram send
+    // failure can never skip clearInterval and strand the 15s interval.
     if (terminal || polls >= maxPolls) {
       clearInterval(timer);
+    }
+    // Notifications are best-effort — a send failure must not crash the tick.
+    try {
+      if (run && run.phase && run.phase !== lastPhase) {
+        lastPhase = run.phase;
+        await tg.sendTelegramMessage(config.token, chatId, tg.formatRunUpdate(run));
+      }
       if (terminal) {
         await tg.sendTelegramMessage(config.token, chatId, tg.formatRunUpdate(run));
       }
+    } catch (err) {
+      console.warn('[telegram] run-poller notify failed:', err?.message || err);
     }
   }, 15_000);
   if (timer.unref) timer.unref();
