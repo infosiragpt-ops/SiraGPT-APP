@@ -137,7 +137,8 @@ async function chunkWithStrategy(doc = {}, opts = {}) {
     // falls through
     case 'sentence-window': {
       try {
-        const advanced = require('./rag/advanced-chunking');
+        // (was: require('./rag/advanced-chunking') — a wrong, unused path that
+        // threw and silently dropped this strategy to 'standard'. Removed.)
         const chunks = String(text)
           .replace(/\r\n/g, '\n')
           .split(/(?<=[.!?])\s+(?=[A-ZÁÉÍÓÚÑ])/)
@@ -156,7 +157,7 @@ async function chunkWithStrategy(doc = {}, opts = {}) {
     }
     // falls through
     default: {
-      const rag = require('./rag-service');
+      const rag = require('../rag-service');
       const chunks = rag.chunk(text, { size: size * 4, overlap: overlap * 4 });
       return { chunks, strategy: 'standard' };
     }
