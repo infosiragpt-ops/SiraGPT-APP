@@ -29,6 +29,9 @@ const { progressStream } = require('../services/upload-progress-sse');
 const {
   MAX_SIMULTANEOUS_DOCUMENTS,
 } = require('../config/document-batch-limits');
+// Never advertise a batch maxCount larger than multer actually accepts, else
+// over-limit uploads fail with LIMIT_FILE_COUNT instead of the route's contract.
+const UPLOAD_BATCH_MAX = Math.min(MAX_SIMULTANEOUS_DOCUMENTS, upload.filesLimit || MAX_SIMULTANEOUS_DOCUMENTS);
 const {
   contentDispositionHeader,
   safeDownloadFilename,
@@ -697,7 +700,7 @@ function scheduleCrossDocumentAnalysisWhenReady(fileIds, userId) {
 }
 
 // Upload files — parallel batch processing
-router.post('/upload', authenticateToken, requireScope('files:write'), upload.array('files', MAX_SIMULTANEOUS_DOCUMENTS), enforceOrgRateLimitSafe, async (req, res) => {
+router.post('/upload', authenticateToken, requireScope('files:write'), upload.array('files', UPLOAD_BATCH_MAX), enforceOrgRateLimitSafe, async (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: 'No files uploaded' });

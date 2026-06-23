@@ -67,12 +67,16 @@ function makeFakeDb() {
     });
   }
 
-  return {
+  const db = {
     deployment: table(deployments, 'depl', () => ({ deletedAt: null, currentVersionId: null, subdomain: null, suspendedReason: null, databaseConnected: false, databaseProvider: null })),
     deploymentVersion: table(versions, 'ver', () => ({ isLive: false, isRollback: false, rolledBackFromId: null })),
     deploymentDomain: table(domains, 'dom', () => ({})),
     _stores: { deployments, versions, domains },
   };
+  // Interactive-transaction shim so the service's create+demote unit runs through
+  // the same $transaction path it uses against real Postgres.
+  db.$transaction = async (fn) => fn(db);
+  return db;
 }
 
 const USER = 'user_1';
@@ -136,6 +140,9 @@ test('rollback re-promotes a prior version as a new rollback build', async () =>
   assert.equal(version.isRollback, true);
   assert.equal(version.rolledBackFromId, first.version.id);
   assert.equal(deployment.currentVersionId, version.id);
+  // The create+demote unit must leave exactly one live version after rollback.
+  const detail = await service.getDeployment({ userId: USER, id: d.id, db });
+  assert.equal(detail.versions.filter((v) => v.isLive).length, 1);
 });
 
 test('ownership: another user cannot see or mutate a deployment', async () => {

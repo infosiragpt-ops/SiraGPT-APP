@@ -20,6 +20,21 @@ const coworkRateLimit = rateLimitMiddleware({ windowMs: 60000, maxRequests: 30 }
 const analyzeDeepRateLimit = rateLimitMiddleware({ windowMs: 60000, maxRequests: 20 });
 const memoryRateLimit = rateLimitMiddleware({ windowMs: 60000, maxRequests: 60 });
 
+// Express parses repeated query keys (?intent=a&intent=b) as arrays and nested
+// keys (?tags[x]=1) as objects. The skills registry expects plain strings, so
+// coerce every query param to a single trimmed string at the route boundary —
+// otherwise `.split`/string ops downstream throw on the unexpected shape.
+function firstQueryString(value) {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return firstQueryString(value[0]);
+  return '';
+}
+function clampQueryLimit(value, fallback, max = 100) {
+  const n = Number(firstQueryString(value));
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.min(Math.floor(n), max);
+}
+
 router.post('/auto-file', authenticateToken, coworkRateLimit, async (req, res) => {
   try {
     const { content, fileName } = req.body;
@@ -370,10 +385,10 @@ router.post('/sessions/:sessionId/send', authenticateToken, coworkRateLimit, asy
 router.get('/skills', optionalAuth, (req, res) => {
   try {
     const skills = skillsRegistry.listSkills({
-      category: req.query.category,
-      tag: req.query.tag,
-      query: req.query.query,
-      limit: req.query.limit ? Number(req.query.limit) : undefined,
+      category: firstQueryString(req.query.category) || undefined,
+      tag: firstQueryString(req.query.tag) || undefined,
+      query: firstQueryString(req.query.query) || undefined,
+      limit: req.query.limit !== undefined ? clampQueryLimit(req.query.limit, undefined) : undefined,
       clearance: req.user?.plan?.toLowerCase() || 'public',
     });
     const categories = skillsRegistry.getCategories();
@@ -386,13 +401,15 @@ router.get('/skills', optionalAuth, (req, res) => {
 
 router.get('/skills/recommend', optionalAuth, (req, res) => {
   try {
-    const { intent, hasDocuments, hasCode, needsResearch, needsAnalysis, tags } = req.query;
+    const { hasDocuments, hasCode, needsResearch, needsAnalysis } = req.query;
+    const intent = firstQueryString(req.query.intent);
+    const tags = firstQueryString(req.query.tags);
     const skills = skillsRegistry.recommendSkills(intent, {
       hasDocuments: hasDocuments === 'true',
       hasCode: hasCode === 'true',
       needsResearch: needsResearch === 'true',
       needsAnalysis: needsAnalysis === 'true',
-      tags: tags ? tags.split(',') : [],
+      tags: tags ? tags.split(',').map((t) => t.trim()).filter(Boolean) : [],
       userClearance: req.user?.plan?.toLowerCase() || 'public',
     });
     res.json({ skills });
@@ -691,3 +708,5 @@ router.post('/intent-attribution-graph/validate', optionalAuth, coworkRateLimit,
 });
 
 module.exports = router;
+// Exposed for offline unit tests — see tests/cowork-query-coercion.test.js.
+module.exports._internals = { firstQueryString, clampQueryLimit };

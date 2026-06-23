@@ -23,6 +23,10 @@ const {
   safeDownloadFilename,
 } = require('../middleware/file-response-safety');
 
+// Mirror of the Prisma `Plan` enum — validated at the route boundary so an
+// unknown plan string surfaces a clean 400 instead of a Prisma enum 500.
+const PLAN_VALUES = ['FREE', 'PRO', 'PRO_MAX', 'ENTERPRISE'];
+
 function invalidateAiModelsCache() {
   return invalidateResponseCache({ namespace: 'ai-models' });
 }
@@ -646,9 +650,9 @@ router.put(
   '/users/:id',
   [
     // optional validations
-    body('name').optional().trim().isLength({ min: 1 }).withMessage('Name cannot be empty'),
+    body('name').optional().trim().isLength({ min: 1, max: 100 }).withMessage('Name must be 1–100 characters'),
     body('email').optional().isEmail().withMessage('Valid email required').normalizeEmail(),
-    body('plan').optional().isString(),
+    body('plan').optional().isIn(PLAN_VALUES).withMessage('Invalid plan'),
     body('isAdmin').optional().isBoolean(),
     body('monthlyLimit').optional().isInt({ min: 0 }).withMessage('monthlyLimit must be 0 or greater'),
   ],
@@ -781,10 +785,10 @@ router.delete('/users/:id', async (req, res) => {
 router.post(
   '/users',
   [
-    body('name').trim().isLength({ min: 2 }).withMessage('Name must be at least 2 characters'),
+    body('name').trim().isLength({ min: 2, max: 100 }).withMessage('Name must be 2–100 characters'),
     body('email').isEmail().normalizeEmail().withMessage('Valid email required'),
     body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
-    body('plan').optional().isString(),
+    body('plan').optional().isIn(PLAN_VALUES).withMessage('Invalid plan'),
     body('isAdmin').optional().isBoolean(),
     body('monthlyLimit').optional().isInt({ min: 0 }).withMessage('monthlyLimit must be 0 or greater'),
   ],

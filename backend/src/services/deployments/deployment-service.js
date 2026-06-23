@@ -28,6 +28,16 @@ function requireDb(db) {
   return db;
 }
 
+/**
+ * Run `fn` inside an interactive Prisma transaction when the client supports it,
+ * otherwise fall back to running it directly against the client. Keeps the
+ * create+demote version flip atomic on real Postgres while staying compatible
+ * with thin in-memory test doubles that don't implement `$transaction`.
+ */
+function runInTransaction(db, fn) {
+  return typeof db.$transaction === 'function' ? db.$transaction((tx) => fn(tx)) : fn(db);
+}
+
 function clampStr(v, max) {
   return typeof v === 'string' ? v.slice(0, max) : v;
 }
@@ -175,25 +185,28 @@ async function publishDeployment({ userId, id, hasFiles = true, db = defaultPris
   const result = pipeline.runPublishPipeline({ deployment: row, seq, hasFiles });
   const scan = { ...result.securityScan, scannedAt: new Date().toISOString() };
 
-  const version = await prisma.deploymentVersion.create({
-    data: {
-      deploymentId: id,
-      shortHash: result.shortHash,
-      status: result.promoted ? 'promoted' : 'failed',
-      isLive: result.promoted,
-      publishedById: userId,
-      buildLog: result.logs.join('\n'),
-      securityScan: scan,
-    },
-  });
-
-  if (result.promoted) {
-    // Demote the previously-live version, if any.
-    await prisma.deploymentVersion.updateMany({
-      where: { deploymentId: id, isLive: true, id: { not: version.id } },
-      data: { isLive: false },
+  // Create the new version and demote the previously-live one as one unit so a
+  // failure between the two can never leave two versions marked isLive.
+  const version = await runInTransaction(prisma, async (tx) => {
+    const created = await tx.deploymentVersion.create({
+      data: {
+        deploymentId: id,
+        shortHash: result.shortHash,
+        status: result.promoted ? 'promoted' : 'failed',
+        isLive: result.promoted,
+        publishedById: userId,
+        buildLog: result.logs.join('\n'),
+        securityScan: scan,
+      },
     });
-  }
+    if (result.promoted) {
+      await tx.deploymentVersion.updateMany({
+        where: { deploymentId: id, isLive: true, id: { not: created.id } },
+        data: { isLive: false },
+      });
+    }
+    return created;
+  });
 
   const spec = pipeline.machineSpec(row.deploymentType, row.machineTier);
   const updated = await prisma.deployment.update({
@@ -223,22 +236,25 @@ async function rollbackDeployment({ userId, id, versionId, db = defaultPrisma })
 
   const seq = await prisma.deploymentVersion.count({ where: { deploymentId: id } });
   const shortHash = pipeline.generateShortHash(id, seq);
-  const version = await prisma.deploymentVersion.create({
-    data: {
-      deploymentId: id,
-      shortHash,
-      status: 'promoted',
-      isLive: true,
-      isRollback: true,
-      rolledBackFromId: target.id,
-      publishedById: userId,
-      buildLog: target.buildLog,
-      securityScan: target.securityScan,
-    },
-  });
-  await prisma.deploymentVersion.updateMany({
-    where: { deploymentId: id, isLive: true, id: { not: version.id } },
-    data: { isLive: false },
+  const version = await runInTransaction(prisma, async (tx) => {
+    const created = await tx.deploymentVersion.create({
+      data: {
+        deploymentId: id,
+        shortHash,
+        status: 'promoted',
+        isLive: true,
+        isRollback: true,
+        rolledBackFromId: target.id,
+        publishedById: userId,
+        buildLog: target.buildLog,
+        securityScan: target.securityScan,
+      },
+    });
+    await tx.deploymentVersion.updateMany({
+      where: { deploymentId: id, isLive: true, id: { not: created.id } },
+      data: { isLive: false },
+    });
+    return created;
   });
   const updated = await prisma.deployment.update({
     where: { id },
