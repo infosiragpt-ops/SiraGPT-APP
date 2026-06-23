@@ -198,24 +198,30 @@ async function createSmsChallenge(prisma, user, destination) {
   const challengeId = mintChallengeId();
   const expiresAt = new Date(Date.now() + ttlMs());
 
-  try {
-    await prisma.twoFAChallenge.updateMany({
+  // Invalidate prior unconsumed challenges AND mint the new one as one unit —
+  // otherwise a failure between them could consume every active challenge yet
+  // create no replacement (locking the user out), or leave two challenges live.
+  const ops = [
+    prisma.twoFAChallenge.updateMany({
       where: { userId: user.id, consumedAt: null },
       data: { consumedAt: new Date() },
-    });
-  } catch { /* best-effort */ }
-
-  const row = await prisma.twoFAChallenge.create({
-    data: {
-      challengeId,
-      userId: user.id,
-      channel: 'sms',
-      destination,
-      lookup: lookupKey(destination),
-      codeHash,
-      expiresAt,
-    },
-  });
+    }),
+    prisma.twoFAChallenge.create({
+      data: {
+        challengeId,
+        userId: user.id,
+        channel: 'sms',
+        destination,
+        lookup: lookupKey(destination),
+        codeHash,
+        expiresAt,
+      },
+    }),
+  ];
+  // Fall back to sequential writes if the client lacks $transaction (test doubles).
+  const [, row] = typeof prisma.$transaction === 'function'
+    ? await prisma.$transaction(ops)
+    : await Promise.all(ops);
   return { challengeId, code, expiresAt, row };
 }
 

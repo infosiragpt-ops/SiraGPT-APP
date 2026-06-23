@@ -1185,9 +1185,16 @@ router.get(
     const errs = validationResult(req);
     if (!errs.isEmpty()) return fail(res, 400, errs.array());
     try {
-      const status = await ciraSharedStorage.getRunStatus(req.params.requestId);
       const envelope = await ciraSharedStorage.getEnvelope(req.params.requestId);
-      const artifacts = await ciraSharedStorage.listArtifactsForRequest(req.params.requestId);
+      // request_id is not an authorization token — scope to the owner so one
+      // user can't read another user's envelope (user_message, attachments)
+      // by knowing/guessing their requestId.
+      if (envelope && envelope.user_id && envelope.user_id !== req.user.id) {
+        return fail(res, 404, "not found");
+      }
+      const status = await ciraSharedStorage.getRunStatus(req.params.requestId);
+      const artifacts = (await ciraSharedStorage.listArtifactsForRequest(req.params.requestId))
+        .filter((a) => !a || !a.user_id || a.user_id === req.user.id);
       ok(res, { status, envelope, artifacts });
     } catch (err) {
       fail(res, 500, err.message || "sira status failed");

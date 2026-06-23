@@ -77,3 +77,37 @@ test('verifyChallenge: concurrent wrong codes increment atomically and trip the 
   const after = await twoFASms.verifyChallenge(prisma, challengeId, '000000');
   assert.equal(after.code, 'not_found'); // consumedAt set → treated as not-found
 });
+
+function makeCreateDb({ withTransaction = true } = {}) {
+  const calls = [];
+  const db = {
+    _calls: calls,
+    twoFAChallenge: {
+      updateMany: async (args) => { calls.push(['updateMany', args]); return { count: 1 }; },
+      create: async (args) => { calls.push(['create', args]); return { id: 'c1', ...args.data }; },
+    },
+  };
+  if (withTransaction) {
+    db.$transaction = async (ops) => { calls.push(['$transaction', ops.length]); return Promise.all(ops); };
+  }
+  return db;
+}
+
+test('createSmsChallenge invalidates prior + creates the new row in one $transaction', async () => {
+  const db = makeCreateDb({ withTransaction: true });
+  const res = await twoFASms.createSmsChallenge(db, { id: 'u1', phone: '+14155551234' }, '+14155551234');
+  assert.ok(res.challengeId && res.code && res.row, 'returns a challenge');
+  assert.equal(res.row.userId, 'u1');
+  const ops = db._calls.map((c) => c[0]);
+  assert.ok(ops.includes('updateMany'), 'invalidates prior challenges');
+  assert.ok(ops.includes('create'), 'creates the new challenge');
+  assert.ok(ops.includes('$transaction'), 'both writes routed through a transaction');
+});
+
+test('createSmsChallenge falls back to sequential writes without $transaction (test doubles)', async () => {
+  const db = makeCreateDb({ withTransaction: false });
+  const res = await twoFASms.createSmsChallenge(db, { id: 'u2', phone: '+14155550000' }, '+14155550000');
+  assert.equal(res.row.userId, 'u2');
+  assert.ok(!db._calls.some((c) => c[0] === '$transaction'));
+  assert.ok(db._calls.some((c) => c[0] === 'create'));
+});
