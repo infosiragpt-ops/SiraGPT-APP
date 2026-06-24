@@ -37,6 +37,35 @@ test('agentic execution profile: requires document intelligence and RAG for uplo
   assert.deepEqual(blocked.missingTools, ['rag_retrieve']);
 });
 
+test('agentic execution profile: document source wording does not trigger web research', () => {
+  const profile = buildExecutionProfile({
+    goal: 'Usando los documentos adjuntos, calcula cifras y dame fuentes por documento.',
+    fileIds: ['file_docx', 'file_pdf'],
+    fileMetadata: [
+      { id: 'file_docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', name: 'informe.docx' },
+      { id: 'file_pdf', mimeType: 'application/pdf', name: 'riesgos.pdf' },
+    ],
+  });
+
+  assert.equal(profile.capabilities.needsPrivateContext, true);
+  assert.equal(profile.capabilities.needsResearch, false);
+  assert.ok(profile.requiredTools.includes('docintel_analyze'));
+  assert.ok(profile.requiredTools.includes('rag_retrieve'));
+  assert.ok(!profile.requiredTools.includes('web_search'));
+});
+
+test('agentic execution profile: explicit external research with files keeps web gate', () => {
+  const profile = buildExecutionProfile({
+    goal: 'Resume el documento adjunto y busca fuentes externas recientes en la web.',
+    fileIds: ['file_docx'],
+    fileMetadata: [{ id: 'file_docx', mimeType: 'application/pdf', name: 'informe.pdf' }],
+  });
+
+  assert.equal(profile.capabilities.needsPrivateContext, true);
+  assert.equal(profile.capabilities.needsResearch, true);
+  assert.ok(profile.requiredTools.includes('web_search'));
+});
+
 test('agentic execution profile: plain transcription does not force document generation', () => {
   const profile = buildExecutionProfile({
     goal: 'transcribir este archivo',
@@ -99,6 +128,52 @@ test('agentic execution profile: blocks finalize until required tools have succe
     { actions: [{ tool: 'verify_artifact', observation: { ok: true, validation: { passed: true } } }] },
   ]);
   assert.equal(allowed.ok, true);
+});
+
+test('agentic execution profile: OpenClaw autonomous software fusion requires code verification gates', () => {
+  const profile = buildExecutionProfile({
+    goal: 'Quiero que mejores el sofware copiando ideas de https://github.com/openclaw/openclaw/tree/v2026.5.28 y fusionarlo como agente autonomo',
+  });
+
+  assert.equal(profile.capabilities.needsCodeOrRepair, true);
+  assert.equal(profile.capabilities.needsExternalRepoAdaptation, true);
+  assert.equal(profile.capabilities.needsAutonomousSoftware, true);
+  assert.ok(profile.requiredTools.includes('run_tests'));
+  assert.ok(profile.qualityGates.some((gate) => /external repository capabilities/i.test(gate)));
+  assert.ok(profile.qualityGates.some((gate) => /plan-execute-verify/i.test(gate)));
+});
+
+test('agentic execution profile: agent-runtime improvement requests trigger hardening gates', () => {
+  const profile = buildExecutionProfile({
+    goal: 'Sigamos mejorando los agentes del sofware para que trabajen de manera autonoma',
+  });
+
+  assert.equal(profile.capabilities.needsAgentRuntimeHardening, true);
+  assert.equal(profile.capabilities.needsCodeOrRepair, true);
+  assert.ok(profile.requiredTools.includes('run_tests'));
+  assert.ok(profile.qualityGates.some((gate) => /agent runtime contracts/i.test(gate)));
+});
+
+test('agentic execution profile: bulk source fusion requires inventory before activation', () => {
+  const profile = buildExecutionProfile({
+    goal: 'Son millones de lineas de codigo que tenemos que copiar y fusionar desde OpenClaw',
+  });
+
+  assert.equal(profile.capabilities.needsBulkSourceFusion, true);
+  assert.equal(profile.capabilities.needsCodeOrRepair, true);
+  assert.ok(profile.requiredTools.includes('run_tests'));
+  assert.ok(profile.qualityGates.some((gate) => /Inventory, attribute and rank bulk source/.test(gate)));
+});
+
+test('agentic execution profile: ordinary code copy does not require bulk source fusion', () => {
+  const profile = buildExecutionProfile({
+    goal: 'Copia este fragmento de codigo en la respuesta y explicalo breve',
+  });
+
+  assert.equal(profile.capabilities.needsCodeOrRepair, true);
+  assert.equal(profile.capabilities.needsBulkSourceFusion, false);
+  assert.ok(profile.requiredTools.includes('run_tests'));
+  assert.equal(profile.qualityGates.some((gate) => /bulk source/i.test(gate)), false);
 });
 
 test('classifyAttachmentKinds: separates images from documents by mime and extension', () => {

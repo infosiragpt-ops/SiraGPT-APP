@@ -2,8 +2,11 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
+const { parsePositiveInt } = require('../services/chat-scope');
 const prisma = require('../config/database');
 const stripeService = require('../services/stripe');
+const { logger } = require('../middleware/logger');
+const { redactErrorMessage } = require('../utils/secret-redactor');
 const { getPriceIdForPlan } = require('../utils/stripe-setup');
 const usageMonitor = require('../services/usage-monitor');
 const emailService = require('../services/email');
@@ -64,6 +67,32 @@ function toDateFromUnix(seconds) {
   return new Date(ms);
 }
 
+function requestIdFor(req) {
+  return req.requestId || req.id || req.headers?.['x-request-id'] || null;
+}
+
+function logRouteError(req, message, error, context = {}) {
+  const log = req.log || logger;
+  const payload = {
+    error: {
+      name: error?.name || 'Error',
+      message: redactErrorMessage(error),
+      code: error?.code || undefined,
+    },
+    requestId: requestIdFor(req),
+    ...context,
+  };
+  if (typeof log.error === 'function') log.error(payload, message);
+}
+
+function sendStripeError(res, req, error, operation) {
+  const response = stripeService.toHttpError(error, {
+    requestId: requestIdFor(req),
+    operation,
+  });
+  return res.status(response.statusCode).json(response.body);
+}
+
 // Rate limiting for payment endpoints
 const paymentLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -102,7 +131,7 @@ router.get('/notifications', authenticateToken, async (req, res) => {
     const notifications = await prisma.notification.findMany({
       where: { userId: req.user.id },
       orderBy: { createdAt: 'desc' },
-      take: parseInt(req.query.limit) || 50
+      take: parsePositiveInt(req.query.limit, 50, { min: 1, max: 100 })
     });
 
     const unreadCount = await prisma.notification.count({
@@ -175,9 +204,13 @@ router.post('/plan-change/preview', subscriptionLimiter, [
   body('newPlan').isIn(['PRO', 'PRO_MAX', 'ENTERPRISE']).withMessage('Invalid plan')
 ], authenticateToken, async (req, res) => {
   try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
     const { newPlan } = req.body;
     const userId = req.user.id;
-    
+
     const preview = await prorationService.previewPlanChange(userId, newPlan);
     res.json(preview);
     
@@ -190,12 +223,19 @@ router.post('/plan-change/preview', subscriptionLimiter, [
 // Execute plan change
 router.post('/plan-change/execute', subscriptionLimiter, [
   body('newPlan').isIn(['PRO', 'PRO_MAX', 'ENTERPRISE']).withMessage('Invalid plan'),
-  body('immediate').isBoolean().withMessage('Immediate must be boolean')
+  // `immediate` is optional — the handler defaults it to true. Without
+  // .optional(), activating validationResult below would reject every
+  // legitimate request that omits it.
+  body('immediate').optional().isBoolean().withMessage('Immediate must be boolean')
 ], authenticateToken, async (req, res) => {
   try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
     const { newPlan, immediate = true } = req.body;
     const userId = req.user.id;
-    
+
     const result = await prorationService.changePlan(userId, newPlan, immediate);
     res.json(result);
     
@@ -297,7 +337,7 @@ router.post('/stripe', paymentLimiter, [
       user.id,
       plan,
       `${frontendUrl}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
-      `${frontendUrl}/payment/cancel`
+      `${frontendUrl}/payment/cancel?plan=${encodeURIComponent(plan)}`
     );
 
     // Update payment record with session ID
@@ -316,20 +356,14 @@ router.post('/stripe', paymentLimiter, [
     });
 
   } catch (error) {
-    console.error('Stripe payment error:', error);
-    
-    // Check if it's a configuration issue
-    if (error.message.includes('Stripe is not configured')) {
-      return res.status(503).json({ 
-        error: 'Stripe not configured', 
-        message: 'Payment processing is not available. Please contact support or use demo mode.',
-        fallbackAvailable: true
-      });
+    if (error?.isStripeOperationalError || stripeService.isStripeLikeError?.(error)) {
+      return sendStripeError(res, req, error, 'createStripeCheckout');
     }
-    
+
+    logRouteError(req, 'payments.stripe.create_failed', error, { plan: req.body?.plan });
     res.status(500).json({ 
-      error: 'Payment creation failed', 
-      details: error.message 
+      error: 'Payment creation failed',
+      requestId: requestIdFor(req),
     });
   }
 });
@@ -441,7 +475,7 @@ router.get('/verify-session', authenticateToken, async (req, res) => {
     
     try {
       // Get session details from Stripe
-      session = await stripeService.stripe.checkout.sessions.retrieve(session_id);
+      session = await stripeService.retrieveCheckoutSession(session_id);
       console.log(`Stripe session status: ${session.payment_status}`);
       
       // If Stripe session is paid and our payment is still pending, update it
@@ -488,9 +522,11 @@ router.get('/verify-session', authenticateToken, async (req, res) => {
         paymentStatus = 'COMPLETED';
       }
     } catch (stripeError) {
-      console.log('Stripe not configured or session not found in Stripe, checking demo mode...');
-      
-      // In demo mode (without Stripe keys), simulate successful payment after a delay
+      if (!stripeService.demoAllowed || stripeService.isConfigured) {
+        return sendStripeError(res, req, stripeError, 'verifyStripeCheckoutSession');
+      }
+
+      // In explicit local demo mode (without Stripe keys), simulate successful payment.
       if (payment.status === 'PENDING') {
         console.log('Demo mode: Updating payment and user plan...');
         
@@ -540,8 +576,11 @@ router.get('/verify-session', authenticateToken, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error verifying payment session:', error);
-    res.status(500).json({ error: 'Failed to verify payment session' });
+    if (error?.isStripeOperationalError || stripeService.isStripeLikeError?.(error)) {
+      return sendStripeError(res, req, error, 'verifyStripeCheckoutSession');
+    }
+    logRouteError(req, 'payments.verify_session_failed', error);
+    res.status(500).json({ error: 'Failed to verify payment session', requestId: requestIdFor(req) });
   }
 });
 
@@ -549,14 +588,15 @@ router.get('/verify-session', authenticateToken, async (req, res) => {
 // Get user payments
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    const { page = 1, limit = 10 } = req.query;
+    const page = parsePositiveInt(req.query.page, 1, { min: 1, max: 100000 });
+    const limit = parsePositiveInt(req.query.limit, 10, { min: 1, max: 100 });
     const skip = (page - 1) * limit;
 
     const [payments, total] = await Promise.all([
       prisma.payment.findMany({
         where: { userId: req.user.id },
-        skip: parseInt(skip),
-        take: parseInt(limit),
+        skip,
+        take: limit,
         orderBy: { createdAt: 'desc' }
       }),
       prisma.payment.count({
@@ -591,7 +631,7 @@ router.get('/stripe/invoices', authenticateToken, async (req, res) => {
       return res.json({ invoices: [] });
     }
 
-    const invoices = await stripeService.stripe.invoices.list({
+    const invoices = await stripeService.listInvoices({
       customer: user.stripeCustomerId,
       limit: 50
     });
@@ -611,8 +651,11 @@ router.get('/stripe/invoices', authenticateToken, async (req, res) => {
       }))
     });
   } catch (error) {
-    console.error('Error listing invoices:', error);
-    res.status(500).json({ error: 'Failed to list invoices' });
+    if (error?.isStripeOperationalError || stripeService.isStripeLikeError?.(error)) {
+      return sendStripeError(res, req, error, 'listStripeInvoices');
+    }
+    logRouteError(req, 'payments.invoices.list_failed', error);
+    res.status(500).json({ error: 'Failed to list invoices', requestId: requestIdFor(req) });
   }
 });
 
@@ -624,7 +667,7 @@ router.get('/stripe/invoice/:invoiceId', authenticateToken, async (req, res) => 
     }
 
     const { invoiceId } = req.params;
-    const invoice = await stripeService.stripe.invoices.retrieve(invoiceId);
+    const invoice = await stripeService.retrieveInvoice(invoiceId);
 
     // Optional: ensure invoice belongs to the current user
     const user = await prisma.user.findUnique({ where: { id: req.user.id } });
@@ -634,7 +677,7 @@ router.get('/stripe/invoice/:invoiceId', authenticateToken, async (req, res) => 
 
     // Prefer direct invoice PDF if available
     if (invoice.invoice_pdf) {
-      const response = await axios.get(invoice.invoice_pdf, { responseType: 'stream' });
+      const response = await axios.get(invoice.invoice_pdf, { responseType: 'stream', timeout: 15000 });
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', contentDispositionHeader('attachment', invoicePdfFilename(invoice)));
       return response.data.pipe(res);
@@ -647,8 +690,11 @@ router.get('/stripe/invoice/:invoiceId', authenticateToken, async (req, res) => 
 
     return res.status(404).json({ error: 'Invoice PDF not available' });
   } catch (error) {
-    console.error('Error downloading invoice:', error);
-    res.status(500).json({ error: 'Failed to download invoice' });
+    if (error?.isStripeOperationalError || stripeService.isStripeLikeError?.(error)) {
+      return sendStripeError(res, req, error, 'downloadStripeInvoice');
+    }
+    logRouteError(req, 'payments.invoice.download_failed', error, { invoiceId: req.params.invoiceId });
+    res.status(500).json({ error: 'Failed to download invoice', requestId: requestIdFor(req) });
   }
 });
 
@@ -675,7 +721,7 @@ router.get('/invoice/:paymentId', authenticateToken, async (req, res) => {
     let invoice = null;
 
     if (payment.stripeSubscriptionId) {
-      const list = await stripeService.stripe.invoices.list({
+      const list = await stripeService.listInvoices({
         subscription: payment.stripeSubscriptionId,
         limit: 20
       });
@@ -683,7 +729,7 @@ router.get('/invoice/:paymentId', authenticateToken, async (req, res) => {
     }
 
     if (!invoice) {
-      const list = await stripeService.stripe.invoices.list({
+      const list = await stripeService.listInvoices({
         customer: payment.stripeCustomerId,
         limit: 50
       });
@@ -699,7 +745,7 @@ router.get('/invoice/:paymentId', authenticateToken, async (req, res) => {
 
     // Stream PDF if available, else redirect to hosted URL
     if (invoice.invoice_pdf) {
-      const response = await axios.get(invoice.invoice_pdf, { responseType: 'stream' });
+      const response = await axios.get(invoice.invoice_pdf, { responseType: 'stream', timeout: 15000 });
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', contentDispositionHeader('attachment', invoicePdfFilename(invoice)));
       return response.data.pipe(res);
@@ -711,8 +757,11 @@ router.get('/invoice/:paymentId', authenticateToken, async (req, res) => {
 
     return res.status(404).json({ error: 'Invoice PDF not available' });
   } catch (error) {
-    console.error('Download invoice by payment error:', error);
-    res.status(500).json({ error: 'Failed to download invoice' });
+    if (error?.isStripeOperationalError || stripeService.isStripeLikeError?.(error)) {
+      return sendStripeError(res, req, error, 'downloadStripeInvoiceByPayment');
+    }
+    logRouteError(req, 'payments.invoice_by_payment.download_failed', error, { paymentId: req.params.paymentId });
+    res.status(500).json({ error: 'Failed to download invoice', requestId: requestIdFor(req) });
   }
 });
 
@@ -839,8 +888,11 @@ router.post('/stripe/webhook', express.raw({ type: 'application/json' }), async 
     try {
       event = stripeService.constructWebhookEvent(req.body, sig);
     } catch (err) {
-      console.error('Webhook signature verification failed:', err.message);
-      return res.status(400).send(`Webhook Error: ${err.message}`);
+      const response = stripeService.toHttpError(err, {
+        requestId: requestIdFor(req),
+        operation: 'constructWebhookEvent',
+      });
+      return res.status(response.statusCode).send(`Webhook Error: ${response.body.message}`);
     }
 
     console.log('Received Stripe webhook:', event.type);
@@ -878,54 +930,66 @@ router.post('/stripe/webhook', express.raw({ type: 'application/json' }), async 
     res.json({ received: true });
 
   } catch (error) {
-    console.error('Webhook processing error:', error);
-    res.status(500).json({ error: 'Webhook processing failed' });
+    logRouteError(req, 'payments.webhook.processing_failed', error);
+    res.status(500).json({ error: 'Webhook processing failed', requestId: requestIdFor(req) });
   }
 });
 
 // Webhook event handlers
 async function handleCheckoutSessionCompleted(session) {
-  try {
-    console.log('Processing checkout session completed:', session.id);
-    
-    const userId = session.metadata.userId;
-    const plan = session.metadata.plan;
-    
-    if (!userId || !plan) {
-      console.error('Missing metadata in checkout session:', session.id);
-      return;
-    }
+  console.log('Processing checkout session completed:', session.id);
 
-    // Update payment record
-    await prisma.payment.updateMany({
+  const userId = session.metadata.userId;
+  const plan = session.metadata.plan;
+
+  if (!userId || !plan) {
+    console.error('Missing metadata in checkout session:', session.id);
+    return;
+  }
+
+  // `monthlyLimit`/`gemaTokenLimit` are BigInt — coerce before adding (mixing
+  // BigInt + Number throws and would abort the grant). The grant is ADDITIVE.
+  const creditsForPlan = premiumCreditsForPlan(plan);
+
+  // Claim the payment row (idempotency CAS) AND grant the plan ATOMICALLY.
+  // Stripe redelivers webhooks on timeout/retry and may send a duplicate, so
+  // only the delivery that flips the row not-COMPLETED → COMPLETED grants; a
+  // redelivery finds it COMPLETED and short-circuits. Wrapping the claim and
+  // the grant in one transaction is what makes this safe: if the grant throws,
+  // the COMPLETED claim rolls back with it, so the row stays claimable and a
+  // Stripe retry can re-grant. We deliberately do NOT swallow the error — it
+  // propagates to the webhook route's 500 path, the correct retry signal.
+  const outcome = await prisma.$transaction(async (tx) => {
+    const claim = await tx.payment.updateMany({
       where: {
         stripeSessionId: session.id,
-        userId: userId
+        userId: userId,
+        status: { not: 'COMPLETED' }
       },
       data: {
         status: 'COMPLETED',
         stripeSubscriptionId: session.subscription
       }
     });
+    if (claim.count === 0) {
+      // Already processed (duplicate/redelivery) OR no local payment row.
+      // Only short-circuit when a COMPLETED row is actually present — flows
+      // without a local payment row keep granting (no regression).
+      const alreadyCompleted = await tx.payment.findFirst({
+        where: { stripeSessionId: session.id, userId: userId, status: 'COMPLETED' },
+        select: { id: true }
+      });
+      if (alreadyCompleted) return { duplicate: true };
+    }
 
-    // Update user subscription - ADD new plan limits to existing monthlyLimit.
-    // `monthlyLimit` is `BigInt` in the Prisma schema, so we must coerce
-    // both operands to BigInt before adding. Mixing `BigInt + Number`
-    // throws "Cannot mix BigInt and other types" and silently aborts
-    // the whole handler — leaving the user in FREE despite a paid
-    // checkout. This was the root cause of plans not activating
-    // after a successful Stripe charge.
-    const creditsForPlan = premiumCreditsForPlan(plan);
-
-    // Get current user to add to existing limits
-    const currentUser = await prisma.user.findUnique({ where: { id: userId } });
+    const currentUser = await tx.user.findUnique({ where: { id: userId } });
     const currentLimit = typeof currentUser?.monthlyLimit === 'bigint'
       ? currentUser.monthlyLimit
       : BigInt(currentUser?.monthlyLimit ?? 0);
     const newTotalLimit = currentLimit + creditsForPlan;
     const newGemaLimit = toBigIntSafe(currentUser?.gemaTokenLimit) + gemaLimitForPlan(plan);
 
-    await prisma.user.update({
+    await tx.user.update({
       where: { id: userId },
       data: {
         plan,
@@ -937,34 +1001,32 @@ async function handleCheckoutSessionCompleted(session) {
         // monthlyCallLimit: NOT UPDATED - preserve current usage
       }
     });
+    return { duplicate: false, previousPlan: currentUser?.plan || null, newTotalLimit };
+  });
 
-    console.log(`Subscription activated for user ${userId}, plan: ${plan}`);
-
-    // Server-authoritative funnel event: a real Stripe webhook
-    // delivery completed AND we mutated the user row. We emit from
-    // the backend (not the frontend success page) because this is
-    // the single source of truth — a malicious frontend could spoof
-    // a "thank you" event without ever paying.
-    capturePostHogEvent({
-      distinctId: userId,
-      event: 'plan.upgraded',
-      properties: {
-        plan,
-        previous_plan: currentUser?.plan || null,
-        // BigInt cannot be JSON.stringify'd. PostHog properties only
-        // need fits-in-Number precision (credits never exceed 2^53),
-        // so we coerce explicitly here rather than risk a silent
-        // serialization throw inside the analytics client.
-        monthly_limit: Number(newTotalLimit),
-        added_credits: Number(creditsForPlan),
-        stripe_session_id: session.id,
-        source: 'stripe.checkout.session.completed',
-      },
-    });
-
-  } catch (error) {
-    console.error('Error handling checkout session completed:', error);
+  if (outcome.duplicate) {
+    console.log(`Duplicate checkout.session.completed for ${session.id}; skipping credit grant`);
+    return;
   }
+
+  console.log(`Subscription activated for user ${userId}, plan: ${plan}`);
+
+  // Server-authoritative funnel event (best-effort, after the grant committed).
+  // Emitted from the backend — the single source of truth — so a malicious
+  // frontend can't spoof a "thank you" without paying.
+  capturePostHogEvent({
+    distinctId: userId,
+    event: 'plan.upgraded',
+    properties: {
+      plan,
+      previous_plan: outcome.previousPlan,
+      // BigInt cannot be JSON.stringify'd; credits fit in Number precision.
+      monthly_limit: Number(outcome.newTotalLimit),
+      added_credits: Number(creditsForPlan),
+      stripe_session_id: session.id,
+      source: 'stripe.checkout.session.completed',
+    },
+  });
 }
 
 async function handleInvoicePaymentSucceeded(invoice) {
@@ -1008,18 +1070,24 @@ async function handleInvoicePaymentSucceeded(invoice) {
     // Reset monthly usage for new billing period
     await usageMonitor.resetMonthlyUsage(user.id);
 
-    // Record subscription event
-    await prisma.subscriptionEvent.create({
-      data: {
-        userId: user.id,
-        eventType: 'payment_succeeded',
-        eventData: serializeBigIntFields({
-          invoiceId: invoice.id,
-          amount: Number(invoice.amount_paid) / 100,
-          currency: invoice.currency
-        })
-      }
-    });
+    // Record subscription event — best-effort and LAST among the critical
+    // writes. Kept non-fatal (own try/catch) so a transient audit-row failure
+    // can't trigger a Stripe retry that would re-run it and duplicate the row.
+    try {
+      await prisma.subscriptionEvent.create({
+        data: {
+          userId: user.id,
+          eventType: 'payment_succeeded',
+          eventData: serializeBigIntFields({
+            invoiceId: invoice.id,
+            amount: Number(invoice.amount_paid) / 100,
+            currency: invoice.currency
+          })
+        }
+      });
+    } catch (evtErr) {
+      console.warn('[payments] subscriptionEvent payment_succeeded persist failed:', evtErr?.message || evtErr);
+    }
 
     console.log(`Invoice payment succeeded for user ${user.id}`);
 
@@ -1033,7 +1101,12 @@ async function handleInvoicePaymentSucceeded(invoice) {
     });
 
   } catch (error) {
+    // Re-throw so the webhook route returns 500 and Stripe redelivers. The
+    // critical writes here (status/period-end update, monthly-usage reset) are
+    // idempotent, so a retry is safe and far better than silently leaving a
+    // paying user un-renewed after a transient failure (we used to swallow).
     console.error('Error handling invoice payment succeeded:', error);
+    throw error;
   }
 }
 
@@ -1255,9 +1328,13 @@ async function handleSubscriptionDeleted(subscription) {
     });
 
     console.log(`Subscription canceled for user ${user.id}`);
-    
+
   } catch (error) {
+    // Re-throw so the webhook returns 500 and Stripe redelivers — the downgrade
+    // (revert to FREE + limits) is idempotent, and silently swallowing left a
+    // canceled user on paid limits indefinitely (revenue leak).
     console.error('Error handling subscription deleted:', error);
+    throw error;
   }
 }
 
@@ -1294,15 +1371,17 @@ router.get('/subscription', authenticateToken, async (req, res) => {
           }
         };
       } catch (error) {
-        console.error('Error fetching Stripe subscription:', error);
+        if (!error?.isStripeOperationalError && !stripeService.isStripeLikeError?.(error)) {
+          logRouteError(req, 'payments.subscription.stripe_fetch_failed', error);
+        }
       }
     }
 
     res.json(subscriptionInfo);
 
   } catch (error) {
-    console.error('Error fetching subscription info:', error);
-    res.status(500).json({ error: 'Failed to fetch subscription info' });
+    logRouteError(req, 'payments.subscription.fetch_failed', error);
+    res.status(500).json({ error: 'Failed to fetch subscription info', requestId: requestIdFor(req) });
   }
 });
 

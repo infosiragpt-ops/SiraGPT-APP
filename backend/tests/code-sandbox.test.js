@@ -8,6 +8,8 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const fsSync = require('fs');
+const os = require('os');
 const { run, runTests } = require('../src/services/agents/code-sandbox');
 
 // ─── Python basics ───────────────────────────────────────────────────────
@@ -202,4 +204,164 @@ test('sandbox/runTests: unsupported language returns full shape', async () => {
   assert.equal(r.exitCode, null);
   assert.equal(typeof r.durationMs, 'number');
   assert.deepEqual(r.failures, []);
+});
+
+// ─── Hardened input boundary (structured errors, never escaping throws) ──
+
+test('sandbox: run(null) resolves with structured error instead of throwing', async () => {
+  const r = await run(null);
+  assert.equal(r.ok, false);
+  assert.equal(r.exitCode, null);
+  assert.match(r.stderr, /unsupported language/);
+});
+
+test('sandbox: run() with no args resolves with structured error', async () => {
+  const r = await run();
+  assert.equal(r.ok, false);
+  assert.equal(r.exitCode, null);
+  assert.equal(typeof r.stderr, 'string');
+});
+
+test('sandbox: non-string source resolves with structured error', async () => {
+  const r = await run({ language: 'javascript', source: 42 });
+  assert.equal(r.ok, false);
+  assert.match(r.stderr, /invalid source.*number/);
+});
+
+test('sandbox: null source resolves with structured error', async () => {
+  const r = await run({ language: 'javascript', source: null });
+  assert.equal(r.ok, false);
+  assert.match(r.stderr, /invalid source.*null/);
+});
+
+test('sandbox/runTests: null opts resolves with full structured shape', async () => {
+  const r = await runTests(null);
+  assert.equal(r.ok, false);
+  assert.equal(r.passed, 0);
+  assert.equal(r.failed, 0);
+  assert.equal(r.exitCode, null);
+  assert.deepEqual(r.failures, []);
+});
+
+test('sandbox/runTests: non-string testSource is rejected cleanly', async () => {
+  const r = await runTests({ language: 'python', source: 'x = 1', testSource: null });
+  assert.equal(r.ok, false);
+  assert.match(r.stderr, /invalid testSource.*null/);
+  assert.equal(r.passed, 0);
+  assert.deepEqual(r.failures, []);
+});
+
+test('sandbox/runTests: non-string source is rejected cleanly', async () => {
+  const r = await runTests({ language: 'javascript', source: { code: 'x' }, testSource: '_check("t", true);' });
+  assert.equal(r.ok, false);
+  assert.match(r.stderr, /invalid source.*object/);
+});
+
+// ─── Output-cap hardening (cap must not be bypassable) ──────────────────
+
+test('sandbox: maxOutputBytes=Infinity falls back to the default cap', async () => {
+  const r = await run({
+    language: 'javascript',
+    source: 'for (let i = 0; i < 5000; i++) console.log("y".repeat(100));',
+    maxOutputBytes: Infinity,
+  });
+  assert.equal(r.truncated, true, 'oversized output must still be marked truncated');
+  assert.ok(r.stdout.length <= 70_000, `cap bypassed: got ${r.stdout.length} bytes`);
+});
+
+test('sandbox: maxOutputBytes=NaN does not destroy captured output', async () => {
+  const r = await run({
+    language: 'javascript',
+    source: 'console.log("hello-sandbox");',
+    maxOutputBytes: NaN,
+  });
+  assert.equal(r.ok, true);
+  assert.match(r.stdout, /hello-sandbox/);
+});
+
+test('sandbox: negative maxOutputBytes falls back to default cap', async () => {
+  const r = await run({
+    language: 'javascript',
+    source: 'console.log("neg-cap-ok");',
+    maxOutputBytes: -5,
+  });
+  assert.equal(r.ok, true);
+  assert.match(r.stdout, /neg-cap-ok/);
+});
+
+test('sandbox: cap holds against many small output chunks', async () => {
+  // 20k separate 2-byte writes — the cap must apply to the accumulated
+  // buffer, not per-chunk, so tiny chunks cannot slip past it.
+  const r = await run({
+    language: 'javascript',
+    source: 'for (let i = 0; i < 20000; i++) process.stdout.write("ab");',
+    maxOutputBytes: 2048,
+  });
+  assert.equal(r.truncated, true);
+  assert.ok(r.stdout.length <= 2048 + 64, `expected ≤${2048 + 64} chars, got ${r.stdout.length}`);
+});
+
+test('sandbox: timeoutMs=NaN falls back to default instead of insta-kill', async () => {
+  const r = await run({
+    language: 'javascript',
+    source: 'console.log("alive");',
+    timeoutMs: NaN,
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.timedOut, false);
+  assert.match(r.stdout, /alive/);
+});
+
+test('sandbox: non-numeric memoryMb falls back to default', async () => {
+  const r = await run({
+    language: 'javascript',
+    source: 'console.log("mem-ok");',
+    memoryMb: 'lots',
+  });
+  assert.equal(r.ok, true);
+  assert.match(r.stdout, /mem-ok/);
+});
+
+// ─── Resource release on rejected/errored runs ───────────────────────────
+
+test('sandbox: non-AbortSignal signal object is ignored, not fatal', async () => {
+  // A truthy non-signal used to throw `signal.addEventListener is not a
+  // function` AFTER spawning the child — leaking a live process + temp dir.
+  const r = await run({
+    language: 'javascript',
+    source: 'console.log("sig-ok");',
+    signal: { aborted: false },
+  });
+  assert.equal(r.ok, true);
+  assert.match(r.stdout, /sig-ok/);
+});
+
+test('sandbox: duck-typed pre-aborted signal still returns structured aborted result', async () => {
+  const r = await run({
+    language: 'javascript',
+    source: 'console.log(1);',
+    signal: { aborted: true },
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.aborted, true);
+  assert.match(r.stderr, /aborted/);
+});
+
+test('sandbox: fixture-write failure resolves cleanly and releases the temp dir', async () => {
+  const sandboxDirs = () =>
+    fsSync.readdirSync(os.tmpdir()).filter(n => n.startsWith('siragpt-sandbox-'));
+  const before = new Set(sandboxDirs());
+  // 'data' is written as a FILE first, so mkdir('data/') for the second
+  // fixture throws EEXIST mid-setup. That error used to escape as a
+  // rejected promise and leak the temp dir.
+  const r = await run({
+    language: 'python',
+    source: 'print("never runs")',
+    files: { data: 'I am a file', 'data/nested.txt': 'needs data/ to be a dir' },
+  });
+  assert.equal(r.ok, false);
+  assert.match(r.stderr, /sandbox internal error/);
+  for (const d of sandboxDirs()) {
+    assert.ok(before.has(d), `leaked sandbox temp dir: ${d}`);
+  }
 });

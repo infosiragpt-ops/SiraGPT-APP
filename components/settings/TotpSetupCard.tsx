@@ -8,6 +8,7 @@ import {
   verifyTotp,
   type TotpSetupResponse,
 } from "@/lib/auth/mfa-totp"
+import { writeText as copyTextSafe } from "@/lib/native/clipboard"
 
 /**
  * F3 PR13 — TOTP setup card for `app/settings/security/`.
@@ -225,7 +226,7 @@ export function TotpSetupCard({ enabledInitial, onChange }: TotpSetupCardProps) 
           <div className="flex gap-2">
             <button
               type="button"
-              onClick={() => navigator.clipboard.writeText(recoveryCodes.join("\n"))}
+              onClick={() => void copyTextSafe(recoveryCodes.join("\n"))}
               className="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
             >
               Copiar al portapapeles

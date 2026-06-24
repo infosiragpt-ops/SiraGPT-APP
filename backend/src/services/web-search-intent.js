@@ -50,9 +50,12 @@ const TEMPORAL_PATTERNS = [
 
 const LIVE_EVENT_PATTERNS = [
   { name: 'price_quote', re: /\b(?:precio(?:s)?\s+(?:de\s+|del\s+)?|cotizaci[oó]n|stock\s+price|share\s+price|bolsa|cryptocurrency|crypto|bitcoin|ethereum|usd\s*\/|tipo\s+de\s+cambio|exchange\s+rate)\b/i, weight: 0.40 },
-  { name: 'news', re: /\b(?:noticias?|news\s+about|qu[eé]\s+pas[oó]|qu[eé]\s+pasa|breaking|titular(?:es)?|headline(?:s)?|[uú]ltima\s+hora)\b/i, weight: 0.40 },
+  // Unicode-aware boundaries: JS `\b` is ASCII-only, so phrases ending in
+  // accented letters ("qué pasó") did not match before a space. Use explicit
+  // non-letter/number lookarounds for Spanish freshness questions.
+  { name: 'news', re: /(?<![\p{L}\p{N}_])(?:noticias?|news\s+about|qu[eé]\s+pas[oó]|qu[eé]\s+pasa|breaking|titular(?:es)?|headline(?:s)?|[uú]ltima\s+hora)(?![\p{L}\p{N}_])/iu, weight: 0.40 },
   { name: 'weather', re: /\b(?:clima|tiempo\s+(?:de|en|para)|weather|temperatura|pron[oó]stico|forecast|llover[aá]|raining|snow)\b/i, weight: 0.40 },
-  { name: 'sports_score', re: /\b(?:marcador|score|resultado(?:s)?\s+(?:del?|of)|partido\s+de|jug[oó]\s+ayer|won\s+yesterday|ganador|champion|standings)\b/i, weight: 0.40 },
+  { name: 'sports_score', re: /(?<![\p{L}\p{N}_])(?:marcador|score|resultado(?:s)?\s+(?:del?|of)|partido\s+de|partido\s+hoy|jug[oó]\s+ayer|gan[oó]|perdi[oó]|won\s+yesterday|ganador|champion|standings)(?![\p{L}\p{N}_])/iu, weight: 0.40 },
   { name: 'election_politics', re: /\b(?:elecci[oó]n(?:es)?|election(?:s)?|votaci[oó]n|results?\s+of|encuesta|polls?|presidente|gobierno)\b/i, weight: 0.25 },
   { name: 'release_date', re: /\b(?:lanzamiento|launch\s+date|release\s+date|cu[aá]ndo\s+sale|when\s+is\s+the|premiere|estreno)\b/i, weight: 0.40 },
 ];

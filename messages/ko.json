@@ -1,8 +1,15 @@
 {
   "sidebar": {
-    "newChat": "새 채팅", "searchChats": "채팅 검색", "library": "라이브러리", "gpts": "GPTs",
-    "recentChats": "최근 채팅", "noChats": "아직 채팅이 없습니다. 대화를 시작해 보세요!",
-    "settings": "설정", "profile": "프로필", "billing": "결제", "logout": "로그아웃",
+    "newChat": "새 채팅",
+    "searchChats": "채팅 검색",
+    "library": "라이브러리",
+    "gpts": "GPTs",
+    "recentChats": "최근 채팅",
+    "noChats": "아직 채팅이 없습니다. 대화를 시작해 보세요!",
+    "settings": "설정",
+    "profile": "프로필",
+    "billing": "결제",
+    "logout": "로그아웃",
     "today": "오늘",
     "last7Days": "지난 7일",
     "older": "이전",
@@ -99,15 +106,10 @@
     "cancel": "Cancel",
     "pipeline": "Pipeline",
     "phase": {
-
       "search": "Search academic sources",
-
       "validate": "Validate DOIs",
-
       "synthesize": "Write cited markdown",
-
       "format": "Build reference list"
-
     },
     "searchRunning": "Querying OpenAlex…",
     "validateRunning": "Checking CrossRef…",
@@ -131,67 +133,364 @@
     "backToProject": "← {name}"
   },
   "chat": {
-    "placeholder": "메시지 입력", "send": "보내기", "stop": "중지", "regenerate": "다시 생성",
-    "copy": "복사", "delete": "삭제", "edit": "편집", "share": "공유", "thinking": "생각 중…",
-    "attachFile": "파일 첨부", "voiceInput": "음성 입력", "webSearch": "웹 검색",
-    "imageGeneration": "이미지 생성", "videoGeneration": "동영상 생성",
-    "connectorActive": "커넥터 활성", "showSidebar": "사이드바 표시"
+    "placeholder": "메시지 입력",
+    "send": "보내기",
+    "stop": "중지",
+    "regenerate": "다시 생성",
+    "copy": "복사",
+    "delete": "삭제",
+    "edit": "편집",
+    "share": "공유",
+    "thinking": "생각 중…",
+    "attachFile": "파일 첨부",
+    "voiceInput": "음성 입력",
+    "webSearch": "웹 검색",
+    "imageGeneration": "이미지 생성",
+    "videoGeneration": "동영상 생성",
+    "connectorActive": "커넥터 활성",
+    "showSidebar": "사이드바 표시"
   },
   "settings": {
-    "title": "설정", "subtitle": "siraGPT를 당신의 방식에 맞게 구성하세요.",
-    "searchPlaceholder": "설정 검색…", "noResults": "결과 없음", "backToChat": "채팅으로 돌아가기",
-    "autoSync": "자동 동기화", "saving": "저장 중…", "saved": "저장됨", "offline": "오프라인 — 로컬 변경사항",
+    "title": "설정",
+    "subtitle": "siraGPT를 당신의 방식에 맞게 구성하세요.",
+    "searchPlaceholder": "설정 검색…",
+    "noResults": "결과 없음",
+    "backToChat": "채팅으로 돌아가기",
+    "autoSync": "자동 동기화",
+    "saving": "저장 중…",
+    "saved": "저장됨",
+    "offline": "오프라인 — 로컬 변경사항",
     "sections": {
-      "general":         { "label": "일반",           "desc": "외관, 언어 및 접근성" },
-      "models":          { "label": "AI 모델",        "desc": "사용 가능한 모델 및 즐겨찾기" },
-      "notifications":   { "label": "알림",           "desc": "채널 및 알림" },
-      "personalization": { "label": "개인화",         "desc": "스타일, 톤 및 기능" },
-      "apps":            { "label": "앱",             "desc": "연결 및 커넥터" },
-      "schedules":       { "label": "예약",           "desc": "예약된 실행" },
-      "data":            { "label": "데이터 제어",    "desc": "개인정보, 기록 및 데이터" },
-      "security":        { "label": "보안",           "desc": "MFA 및 세션" },
-      "account":         { "label": "계정",           "desc": "빌더 프로필" }
+      "general": {
+        "label": "일반",
+        "desc": "외관, 언어 및 접근성"
+      },
+      "models": {
+        "label": "AI 모델",
+        "desc": "사용 가능한 모델 및 즐겨찾기"
+      },
+      "notifications": {
+        "label": "알림",
+        "desc": "채널 및 알림"
+      },
+      "personalization": {
+        "label": "개인화",
+        "desc": "스타일, 톤 및 기능"
+      },
+      "apps": {
+        "label": "앱",
+        "desc": "연결 및 커넥터"
+      },
+      "schedules": {
+        "label": "예약",
+        "desc": "예약된 실행"
+      },
+      "data": {
+        "label": "데이터 제어",
+        "desc": "개인정보, 기록 및 데이터"
+      },
+      "security": {
+        "label": "보안",
+        "desc": "MFA 및 세션"
+      },
+      "account": {
+        "label": "계정",
+        "desc": "빌더 프로필"
+      }
     },
     "general": {
-      "display": { "title": "표시", "desc": "앱의 시각적 외관" },
-      "theme": { "label": "테마", "desc": "밝게, 어둡게, 시스템 설정", "light": "밝게", "dark": "어둡게", "system": "시스템" },
-      "accent": { "label": "강조 색상", "desc": "버튼의 기본 색상" },
-      "fontSize": { "label": "글꼴 크기", "desc": "기본 크기", "small": "작게", "medium": "보통", "large": "크게" },
-      "density": { "label": "밀도", "desc": "세로 간격", "compact": "좁게", "comfortable": "보통", "spacious": "넓게" },
-      "region": { "title": "언어 및 지역", "desc": "날짜, 시간대 및 언어" },
+      "display": {
+        "title": "표시",
+        "desc": "앱의 시각적 외관"
+      },
+      "theme": {
+        "label": "테마",
+        "desc": "밝게, 어둡게, 시스템 설정",
+        "light": "밝게",
+        "dark": "어둡게",
+        "system": "시스템"
+      },
+      "accent": {
+        "label": "강조 색상",
+        "desc": "버튼의 기본 색상"
+      },
+      "fontSize": {
+        "label": "글꼴 크기",
+        "desc": "기본 크기",
+        "small": "작게",
+        "medium": "보통",
+        "large": "크게"
+      },
+      "density": {
+        "label": "밀도",
+        "desc": "세로 간격",
+        "compact": "좁게",
+        "comfortable": "보통",
+        "spacious": "넓게"
+      },
+      "region": {
+        "title": "언어 및 지역",
+        "desc": "날짜, 시간대 및 언어"
+      },
       "interfaceLanguage": "인터페이스 언어",
-      "spokenLanguage": { "label": "음성 언어", "desc": "음성 인식용", "automatic": "자동" },
+      "spokenLanguage": {
+        "label": "음성 언어",
+        "desc": "음성 인식용",
+        "automatic": "자동"
+      },
       "dateFormat": "날짜 형식",
-      "timeZone": { "label": "시간대", "desc": "자동으로 감지됨" },
-      "timeFormat": { "label": "시간 형식", "h12": "12시간", "h24": "24시간" },
-      "voice": { "title": "음성 및 오디오", "assistantVoice": "어시스턴트 목소리", "autoPlay": "응답 자동 재생", "autoPlayDesc": "응답을 소리내어 읽기", "standalone": "독립 음성 모드", "standaloneDesc": "시각적 요소 없이 전체 화면" },
-      "aiModels": { "title": "AI 모델", "showExtras": "추가 모델 표시", "showExtrasDesc": "사용 가능한 모든 모델 보기", "stream": "응답 스트리밍", "streamDesc": "생성 중인 응답 보기" },
-      "accessibility": { "title": "접근성", "shortcuts": "키보드 단축키", "shortcutsDesc": "키보드 탐색 활성화", "reduceMotion": "모션 줄이기", "reduceMotionDesc": "애니메이션 최소화", "highContrast": "고대비", "highContrastDesc": "요소 가시성 향상" }
+      "timeZone": {
+        "label": "시간대",
+        "desc": "자동으로 감지됨"
+      },
+      "timeFormat": {
+        "label": "시간 형식",
+        "h12": "12시간",
+        "h24": "24시간"
+      },
+      "voice": {
+        "title": "음성 및 오디오",
+        "assistantVoice": "어시스턴트 목소리",
+        "autoPlay": "응답 자동 재생",
+        "autoPlayDesc": "응답을 소리내어 읽기",
+        "standalone": "독립 음성 모드",
+        "standaloneDesc": "시각적 요소 없이 전체 화면"
+      },
+      "aiModels": {
+        "title": "AI 모델",
+        "showExtras": "추가 모델 표시",
+        "showExtrasDesc": "사용 가능한 모든 모델 보기",
+        "stream": "응답 스트리밍",
+        "streamDesc": "생성 중인 응답 보기"
+      },
+      "accessibility": {
+        "title": "접근성",
+        "shortcuts": "키보드 단축키",
+        "shortcutsDesc": "키보드 탐색 활성화",
+        "reduceMotion": "모션 줄이기",
+        "reduceMotionDesc": "애니메이션 최소화",
+        "highContrast": "고대비",
+        "highContrastDesc": "요소 가시성 향상"
+      }
     }
   },
   "auth": {
-    "welcomeBack": "다시 오신 것을 환영합니다", "login": "로그인", "signIn": "로그인", "register": "회원가입",
-    "signUp": "계정 만들기", "logout": "로그아웃", "email": "이메일", "emailPlaceholder": "이메일 입력",
-    "password": "비밀번호", "passwordPlaceholder": "비밀번호 입력", "forgotPassword": "비밀번호를 잊으셨나요?",
-    "orContinueWith": "또는", "continueWithGoogle": "Google로 계속", "noAccount": "계정이 없으신가요?",
-    "haveAccount": "이미 계정이 있으신가요?", "tagline": "Sira Gpt 계정에 로그인"
+    "welcomeBack": "다시 오신 것을 환영합니다",
+    "login": "로그인",
+    "signIn": "로그인",
+    "register": "회원가입",
+    "signUp": "계정 만들기",
+    "logout": "로그아웃",
+    "email": "이메일",
+    "emailPlaceholder": "이메일 입력",
+    "password": "비밀번호",
+    "passwordPlaceholder": "비밀번호 입력",
+    "forgotPassword": "비밀번호를 잊으셨나요?",
+    "orContinueWith": "또는",
+    "continueWithGoogle": "Google로 계속",
+    "noAccount": "계정이 없으신가요?",
+    "haveAccount": "이미 계정이 있으신가요?",
+    "tagline": "Sira Gpt 계정에 로그인"
   },
   "documents": {
-    "download": "다운로드", "close": "닫기", "wordDocument": "Word 문서", "excelFile": "Excel 파일",
-    "presentation": "프레젠테이션", "pdfFile": "PDF 파일", "downloadAsWord": "Word (.docx)로 다운로드",
-    "downloadAsPdf": "PDF로 다운로드", "generating": "생성 중…"
+    "download": "다운로드",
+    "close": "닫기",
+    "wordDocument": "Word 문서",
+    "excelFile": "Excel 파일",
+    "presentation": "프레젠테이션",
+    "pdfFile": "PDF 파일",
+    "downloadAsWord": "Word (.docx)로 다운로드",
+    "downloadAsPdf": "PDF로 다운로드",
+    "generating": "생성 중…"
   },
   "errors": {
     "serverError": "요청을 처리하는 중에 문제가 발생했습니다. 다시 시도해 주세요.",
     "networkError": "연결 오류. 인터넷을 확인하세요.",
-    "unauthorized": "세션이 만료되었습니다. 다시 로그인하세요.", "notFound": "리소스를 찾을 수 없습니다."
+    "unauthorized": "세션이 만료되었습니다. 다시 로그인하세요.",
+    "notFound": "리소스를 찾을 수 없습니다."
   },
   "common": {
-    "loading": "로딩 중…", "noResults": "결과 없음", "confirm": "확인", "cancel": "취소",
-    "delete": "삭제", "edit": "편집", "save": "저장", "close": "닫기", "open": "열기",
-    "back": "뒤로", "next": "다음", "previous": "이전", "search": "검색", "filter": "필터",
-    "export": "내보내기", "import": "가져오기", "create": "만들기", "update": "업데이트", "yes": "예",
-    "no": "아니오", "all": "전체", "none": "없음", "select": "선택", "upload": "업로드",
-    "dragDrop": "여기에 파일을 드롭", "or": "또는", "processing": "메시지 처리 중…", "tryAgain": "다시 시도"
+    "loading": "로딩 중…",
+    "noResults": "결과 없음",
+    "confirm": "확인",
+    "cancel": "취소",
+    "delete": "삭제",
+    "edit": "편집",
+    "save": "저장",
+    "close": "닫기",
+    "open": "열기",
+    "back": "뒤로",
+    "next": "다음",
+    "previous": "이전",
+    "search": "검색",
+    "filter": "필터",
+    "export": "내보내기",
+    "import": "가져오기",
+    "create": "만들기",
+    "update": "업데이트",
+    "yes": "예",
+    "no": "아니오",
+    "all": "전체",
+    "none": "없음",
+    "select": "선택",
+    "upload": "업로드",
+    "dragDrop": "여기에 파일을 드롭",
+    "or": "또는",
+    "processing": "메시지 처리 중…",
+    "tryAgain": "다시 시도"
+  },
+  "thinking": {
+    "thinking": "생각 중…",
+    "thought": "사고 과정",
+    "thoughtFor": "{duration} 동안 생각했습니다",
+    "reasoningAria": "모델 추론",
+    "arguments": "인수",
+    "toolSearching": "정보 검색 중",
+    "toolReading": "출처 읽는 중",
+    "toolRunning": "코드 실행 중",
+    "toolUsing": "{name} 사용 중"
+  },
+  "agent": {
+    "working": "작업 중…",
+    "summary": "{duration} 동안 생각 · 도구 {count}개 사용",
+    "summaryOne": "{duration} 동안 생각 · 도구 1개 사용",
+    "summaryNoTools": "{duration} 동안 생각",
+    "interrupted": "사용자가 중지함",
+    "details": "세부정보",
+    "arguments": "인수",
+    "result": "결과",
+    "error": "오류",
+    "usingTool": "{name} 사용 중",
+    "permissionTitle": "에이전트가 {name}을(를) 사용하려고 합니다",
+    "allow": "허용",
+    "allowAlways": "이 채팅에서 항상 허용",
+    "deny": "거부",
+    "permissionDeniedChip": "거부됨",
+    "permissionError": "응답을 보낼 수 없습니다. 다시 시도해 주세요.",
+    "traceAria": "에이전트 활동"
+  },
+  "codex": {
+    "timeline": {
+      "actions": "{count, plural, one {# action} other {# actions}}",
+      "scrollToLatest": "Scroll to latest",
+      "running": "Running",
+      "done": "Done",
+      "error": "Error",
+      "reasoning": "Reasoning",
+      "durationSeconds": "({seconds}s)",
+      "unknownTool": "unknown tool: {name}"
+    },
+    "plan": {
+      "title": "Proposed plan",
+      "waiting": "waiting for approval",
+      "approved": "approved",
+      "approve": "Approve and build",
+      "adjust": "Adjust",
+      "pages": "Pages",
+      "components": "Components",
+      "tasks": "Tasks"
+    },
+    "checkpoint": {
+      "rollback": "Rollback here",
+      "changes": "Changes",
+      "viewPreview": "View preview",
+      "confirmTitle": "Roll back to this checkpoint?",
+      "confirmBody": "All changes made after this commit will be discarded from the workspace. This cannot be undone.",
+      "confirm": "Roll back",
+      "cancel": "Cancel",
+      "diffTitle": "Changes · +{additions} −{deletions} · {files} files",
+      "truncated": "Diff truncated (too long).",
+      "rolledBack": "Rolled back to checkpoint {sha}",
+      "rollbackFailed": "Rollback failed",
+      "export": "Copy to my disk",
+      "exported": "{count} files copied to {path}",
+      "exportedHint": "On your disk:",
+      "exportFailed": "Could not copy to disk"
+    },
+    "summary": {
+      "workedFor": "Worked for {duration}",
+      "timeWorked": "Time worked",
+      "workDone": "Work done",
+      "itemsRead": "Items read",
+      "codeChanged": "Code changed",
+      "agentUsage": "Agent Usage",
+      "estimated": "estimated",
+      "actions": "{count, plural, one {# action} other {# actions}}",
+      "lines": "{count, plural, one {# line} other {# lines}}",
+      "usageDetail": "Usage detail",
+      "model": "Model",
+      "inputTokens": "Input tokens",
+      "outputTokens": "Output tokens",
+      "inputCost": "Input cost",
+      "outputCost": "Output cost",
+      "totalCost": "Total cost",
+      "thisRun": "This run",
+      "sessionUsage": "Session",
+      "sessionRuns": "{count, plural, one {# run} other {# runs}}"
+    },
+    "actionRequired": {
+      "title": "Action required from you",
+      "copy": "Copy",
+      "copied": "Copied!",
+      "blockedCapabilities": "Blocked capabilities:",
+      "remediate": "Fix it"
+    },
+    "composer": {
+      "placeholder": "Make, test, iterate...",
+      "plan": "Plan",
+      "planTooltip": "Plan: restricts the run to planning only, executing nothing.",
+      "send": "Send",
+      "stop": "Stop",
+      "dictate": "Dictate",
+      "stopDictation": "Stop dictation",
+      "attach": "Attach file",
+      "tierEco": "Eco",
+      "tierStandard": "Standard",
+      "tierPower": "Power",
+      "tierEcoDesc": "Fast and free (FlashGPT)",
+      "tierStandardDesc": "Quality/cost balance",
+      "tierPowerDesc": "Maximum capability",
+      "free": "free"
+    },
+    "tabs": {
+      "preview": "Preview",
+      "agent": "Agent",
+      "web": "Web",
+      "connections": "Connections",
+      "checklist": "Checklist",
+      "files": "Files"
+    },
+    "preview": {
+      "start": "▶ Start / Reload",
+      "hint": "Boots this project's dev server and loads the preview."
+    },
+    "files": {
+      "title": "Code",
+      "refresh": "Refresh",
+      "loading": "Loading…",
+      "empty": "No files in the workspace yet.",
+      "none": "Select a file to view its content."
+    },
+    "errors": {
+      "createProject": "Could not create the project",
+      "startRun": "Could not start the run",
+      "approvePlan": "Could not approve the plan",
+      "stopRun": "Could not stop the run",
+      "loadDiff": "Could not load the diff",
+      "openPreview": "Could not open the preview",
+      "readFile": "Could not read {name}"
+    },
+    "panel": {
+      "newProject": "New",
+      "selectProject": "Select a project…",
+      "loading": "Loading…",
+      "emptyDescribe": "Describe what you want to build to propose a plan.",
+      "emptySelect": "Create or select a project to start.",
+      "filesHint": "The workspace file tree opens from the /code editor.",
+      "webUnavailable": "The preview is not available yet. Start it from a checkpoint or the Run button.",
+      "openInTab": "Open in new tab",
+      "checklistEmpty": "No approved plan with tasks yet.",
+      "defaultProjectName": "Project {n}"
+    }
   }
 }

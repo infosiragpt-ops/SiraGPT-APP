@@ -20,9 +20,10 @@
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
-import { Search as SearchIcon, Loader2, AlertCircle, MessageSquare } from "lucide-react"
+import { Search as SearchIcon, AlertCircle, MessageSquare } from "lucide-react"
 
 import { Input } from "@/components/ui/input"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { ScrollArea } from "@/components/ui/scroll-area"
 
 export interface SearchHit {
@@ -126,7 +127,7 @@ export function SearchPanel({ onClose, initialQuery = "", endpoint = "/api/searc
       <ScrollArea className="mt-3 max-h-[60vh]">
         {status === "loading" && (
           <div className="flex items-center gap-2 text-sm text-muted-foreground p-4">
-            <Loader2 className="h-4 w-4 animate-spin" /> Buscando…
+            <ThinkingIndicator size="sm" /> Buscando…
           </div>
         )}
         {status === "error" && (

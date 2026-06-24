@@ -5,10 +5,15 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+process.env.AGENT_TASK_PRISMA_SYNC = '0';
+
 const agentTaskRouter = require('../src/routes/agent-task');
 const { INTERNAL } = agentTaskRouter;
 const taskStore = require('../src/services/agents/task-store');
 const chatTaskScope = require('../src/services/agents/chat-task-scope');
+const {
+  buildCognitiveImprovementBundle,
+} = require('../src/services/agents/cognitive-improvements');
 
 test('agent task route: strips internal execution contracts from visible goals', () => {
   const raw = [
@@ -35,6 +40,138 @@ test('agent task route: stores taskId in meta state for reload/resume', () => {
 
   assert.equal(state.meta.taskId, 'task-123');
   assert.equal(state.meta.goal, 'Investiga fuentes');
+});
+
+test('agent task route: safeJsonStringify keeps oversized SSE events parseable', () => {
+  const serialized = INTERNAL.safeJsonStringify({
+    type: 'framework_status',
+    taskId: 'task-large-json',
+    seq: 7,
+    active: {
+      prompt: 'x'.repeat(80_000),
+      nested: Array.from({ length: 200 }, (_, index) => ({
+        index,
+        body: 'payload '.repeat(1200),
+      })),
+    },
+  });
+
+  assert.ok(serialized.length <= 32_768);
+  const parsed = JSON.parse(serialized);
+  assert.equal(parsed.type, 'framework_status');
+  assert.equal(parsed.taskId, 'task-large-json');
+  assert.equal(parsed.seq, 7);
+});
+
+test('agent task route: safeJsonStringify preserves cognitive meta summary under a hard SSE budget', () => {
+  const cognitive = buildCognitiveImprovementBundle({
+    goal: 'Implementa 100 mejoras en el backend y mejora el cerebro del software',
+  });
+  const serialized = INTERNAL.safeJsonStringify({
+    type: 'meta',
+    taskId: 'task-cognitive-meta',
+    goal: 'x'.repeat(80_000),
+    model: 'gpt-4o',
+    executionProfile: {
+      version: 'test-profile',
+      capabilities: { needsAgentRuntimeHardening: true },
+      requiredTools: ['run_tests', ...Array.from({ length: 120 }, (_, index) => `tool_${index}`)],
+      cognitiveImprovements: cognitive,
+    },
+    enterpriseRuntimeProfile: {
+      agenticOperatingCore: {
+        cognitiveImprovementCount: 100,
+        activeCognitiveImprovementCount: cognitive.summary.activeControlCount,
+      },
+      toolRuntime: { authorizedTools: Array.from({ length: 120 }, (_, index) => `tool_${index}`) },
+      qaPreflight: { decision: 'allow' },
+      durableExecution: { status: 'running' },
+      noisy: 'y'.repeat(120_000),
+    },
+    agenticOperatingCore: {
+      version: 'test-core',
+      core_id: 'core-cognitive-meta',
+      trace_id: 'trace-cognitive-meta',
+      summary: {
+        cognitiveImprovementCount: 100,
+        activeCognitiveImprovementCount: cognitive.summary.activeControlCount,
+        cognitiveCategoryCount: 10,
+      },
+      cognitive_improvements: cognitive,
+      validation: {
+        reports_required: Array.from({ length: 80 }, (_, index) => `report_${index}`),
+        deterministic_checks: [
+          ...cognitive.validation_checks,
+          ...Array.from({ length: 120 }, (_, index) => `extra_check_${index}`),
+        ],
+        qa_board_decision: 'allow',
+      },
+      observability: {
+        trace_id: 'trace-cognitive-meta',
+        events: [...cognitive.observability_events, ...Array.from({ length: 120 }, (_, index) => `event_${index}`)],
+        metrics: [...cognitive.metrics, ...Array.from({ length: 120 }, (_, index) => `metric_${index}`)],
+      },
+    },
+  }, 8192);
+
+  assert.ok(serialized.length <= 8192);
+  const parsed = JSON.parse(serialized);
+  assert.equal(parsed.type, 'meta');
+  assert.equal(parsed._compaction, 'meta_control_plane_summary');
+  assert.equal(parsed.agenticOperatingCore.cognitive_improvements.summary.totalControlCount, 100);
+  assert.equal(parsed.agenticOperatingCore.cognitive_improvements.summary.activeControlCount, 100);
+  assert.ok(parsed.agenticOperatingCore.validation.deterministic_checks.includes('cognitive.e2e-user-journey-probe'));
+});
+
+test('agent task route: detects weak attachment tool-unavailable final answers', () => {
+  assert.equal(
+    INTERNAL.looksLikeAttachmentRecoveryNeeded('No pude usar docintel_retrieve en esta tarea (falló de forma repetida). Vuelve a intentarlo.'),
+    true,
+  );
+  assert.equal(
+    INTERNAL.looksLikeAttachmentRecoveryNeeded('El total real combinado es 283000 USD y la fuente primaria es el DOCX.'),
+    false,
+  );
+});
+
+test('agent task route: meta state exposes compact OpenClaw runtime summary', () => {
+  const state = INTERNAL.reduceAgentState(INTERNAL.initialAgentState(), {
+    type: 'meta',
+    taskId: 'task-openclaw',
+    goal: 'Fusiona OpenClaw como agente autonomo',
+    model: 'gpt-4o',
+    tools: ['host_bash', 'run_tests'],
+    openclawRuntimeProfile: {
+      version: 'openclaw-capability-kernel-2026-05',
+      trustBoundary: 'user_chat_context',
+      signals: {
+        externalRepoAdaptation: true,
+        wantsAutonomousAgent: true,
+        nativeRewriteRequired: false,
+        likelyLongRunning: true,
+      },
+      capabilities: {
+        nativeRepoAdaptation: true,
+        autonomousExecution: true,
+        taskPlanning: true,
+        safeExternalActions: true,
+        evidenceLedger: true,
+      },
+      routing: { reason: 'test' },
+      executionDossier: {
+        operatingMode: { primary: 'software_agent' },
+        qualityGates: ['autonomous_plan_execute_verify_loop'],
+        workPackets: [{ id: 'autonomous_runtime', label: 'Autonomous runtime', required: true }],
+        riskControls: [{ risk: 'premature_autonomy_claim' }],
+      },
+    },
+  });
+  const serializable = INTERNAL.toSerializableAgentState(state);
+
+  assert.equal(serializable.meta.openclawRuntime.signals.externalRepoAdaptation, true);
+  assert.equal(serializable.meta.openclawRuntime.signals.wantsAutonomousAgent, true);
+  assert.equal(serializable.meta.openclawRuntime.operatingMode, 'software_agent');
+  assert.ok(serializable.meta.openclawRuntime.qualityGates.includes('autonomous_plan_execute_verify_loop'));
 });
 
 test('agent task route: keeps internal planning profiles out of visible meta state', () => {
@@ -160,6 +297,50 @@ test('agent task route: system prompt includes enterprise ExecutionGraph rules',
   assert.match(prompt, /ReleaseController/);
 });
 
+test('agent task route: system prompt includes OpenClaw autonomous runtime block when provided', () => {
+  const openclawProfile = {
+    version: 'openclaw-capability-kernel-2026-05',
+    trustBoundary: 'user_chat_context',
+    signals: {
+      externalRepoAdaptation: true,
+      wantsAutonomousAgent: true,
+      nativeRewriteRequired: false,
+      likelyLongRunning: true,
+    },
+    tools: ['memory_recall', 'host_bash', 'host_file', 'run_tests'],
+    routing: { reason: 'test' },
+    executionDossier: {
+      operatingMode: { primary: 'software_agent', confidence: 0.9 },
+      evidenceChannels: [{ name: 'current_user_message', present: true, trust: 'medium' }],
+      workPackets: [{ label: 'Preserve autonomous loop', doneWhen: 'verified' }],
+      toolPlan: { selected: ['host_bash', 'run_tests'], missingFamilies: [] },
+      qualityGates: ['autonomous_plan_execute_verify_loop'],
+      riskControls: [{ risk: 'premature_autonomy_claim', mitigation: 'verify first' }],
+    },
+  };
+  const prompt = INTERNAL.buildAgentSystemPrompt(
+    '',
+    [],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    '',
+    openclawProfile
+  );
+
+  assert.match(prompt, /OpenClaw-Level Runtime Policy/);
+  assert.match(prompt, /autonomous-agent software requests/);
+  assert.match(prompt, /autonomous_plan_execute_verify_loop/);
+});
+
+
 test('agent task route: does not drop tool events emitted without a current step', () => {
   let state = INTERNAL.initialAgentState();
   state = INTERNAL.reduceAgentState(state, {
@@ -233,6 +414,32 @@ test('agent task route: appendTaskEvent persists reloadable checkpoints', () => 
   INTERNAL.ACTIVE_AGENT_TASKS.delete(task.taskId);
 });
 
+test('agent task route: createTaskRecord persists OpenClaw runtime profile for retry', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-agent-route-store-'));
+  const openclawRuntimeProfile = {
+    version: 'openclaw-capability-kernel-2026-05',
+    signals: { externalRepoAdaptation: true, wantsAutonomousAgent: true },
+    capabilities: { autonomousExecution: true, nativeRepoAdaptation: true },
+  };
+  const task = INTERNAL.createTaskRecord({
+    taskId: 'task-openclaw-retry',
+    userId: 'user-a',
+    chatId: 'chat-a',
+    displayGoal: 'Fusiona OpenClaw como agente autonomo',
+    model: 'gpt-4o',
+    controller: new AbortController(),
+    maxSteps: 20,
+    maxRuntimeMs: 7200000,
+    streamState: INTERNAL.initialAgentState(),
+    openclawRuntimeProfile,
+  });
+
+  const payload = INTERNAL.formatTaskPayload(taskStore.getTaskSnapshotForUser('task-openclaw-retry', 'user-a'));
+  assert.equal(payload.openclawRuntimeProfile.version, 'openclaw-capability-kernel-2026-05');
+  assert.equal(payload.openclawRuntimeProfile.signals.wantsAutonomousAgent, true);
+  INTERNAL.ACTIVE_AGENT_TASKS.delete(task.taskId);
+});
+
 test('agent task route: system prompt keeps hidden contract separate from user goal', () => {
   const prompt = INTERNAL.buildAgentSystemPrompt('Verify every document before finalizing.', ['file_1']);
 
@@ -240,6 +447,65 @@ test('agent task route: system prompt keeps hidden contract separate from user g
   assert.match(prompt, /Verify every document/);
   assert.match(prompt, /file_1/);
   assert.doesNotMatch(INTERNAL.normalizeDisplayGoal('Haz un resumen'), /execution contract/i);
+});
+
+test('agent task route: system prompt includes deep document analysis contract for document summaries', () => {
+  const prompt = INTERNAL.buildAgentSystemPrompt(
+    '',
+    ['TESIS 2 - JESSICA PATINO - 15JUN2026.docx'],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    '',
+    null,
+    'dame un resumen en un solo parrafo',
+  );
+
+  assert.match(prompt, /CONTRATO DE ANALISIS DOCUMENTAL PROFUNDO/);
+  assert.match(prompt, /cubra el documento completo/);
+  assert.match(prompt, /resultados, conclusiones/);
+});
+
+test('agent task route: attached document/image tasks bypass queued runtime by default', () => {
+  assert.equal(
+    INTERNAL.shouldRunAttachmentTaskLocally({
+      fileIds: ['file-docx-1'],
+      goal: 'dame un resumen en dos parrafos',
+      env: {},
+    }),
+    true,
+  );
+  assert.equal(
+    INTERNAL.shouldRunAttachmentTaskLocally({
+      fileIds: [],
+      goal: 'transcribe esta imagen',
+      env: {},
+    }),
+    true,
+  );
+  assert.equal(
+    INTERNAL.shouldRunAttachmentTaskLocally({
+      fileIds: ['file-docx-1'],
+      goal: 'dame un resumen en dos parrafos',
+      env: { AGENT_TASK_QUEUE_ATTACHMENTS: '1' },
+    }),
+    false,
+  );
+  assert.equal(
+    INTERNAL.shouldRunAttachmentTaskLocally({
+      fileIds: [],
+      goal: 'investiga el tema sin adjuntos',
+      env: {},
+    }),
+    false,
+  );
 });
 
 test('agent task route: system prompt includes intent alignment without echoing the user prompt', () => {

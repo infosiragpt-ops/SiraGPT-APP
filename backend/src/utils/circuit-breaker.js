@@ -74,6 +74,54 @@ const DEFAULTS = Object.freeze({
   timeoutMs:  0,          // default call timeout (0 = no timeout)
 });
 
+// ── Config sanitization ───────────────────────────────────────────────────
+//
+// Merged options can arrive with non-finite (NaN/Infinity), negative, or
+// otherwise nonsensical values — e.g. `new CircuitBreaker({ threshold: NaN })`
+// silently produced a breaker that NEVER opens (`count >= NaN` is always
+// false), and `{ cooldownMs: NaN }` left `nextAttempt = now + NaN`, so the
+// OPEN → HALF_OPEN auto-transition could never fire and `toJSON()` leaked NaN.
+// Clamp every numeric knob to a safe domain so the state machine and the
+// metrics snapshot stay well-defined regardless of caller input. Documented
+// defaults are preserved for valid input — clamping only kicks in for values
+// that were already broken.
+
+/** Coerce to a finite integer ≥ min; fall back to `fallback` when invalid. */
+function clampInt(value, { min, max, fallback }) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  let v = Math.trunc(n);
+  if (v < min) v = min;
+  if (max != null && v > max) v = max;
+  return v;
+}
+
+/**
+ * Normalise raw constructor options into a safe, fully-finite config.
+ * Public option names and semantics are unchanged; only out-of-domain values
+ * are corrected.
+ */
+function sanitizeOptions(opts) {
+  const merged = { ...DEFAULTS, ...opts };
+  return {
+    // name: anything stringifiable; empty/nullish → default for stable logs.
+    name: (merged.name == null || merged.name === '')
+      ? DEFAULTS.name
+      : String(merged.name),
+    // threshold: at least 1 failure before opening (0/neg/NaN would open
+    // instantly or — for NaN — never open at all).
+    threshold:  clampInt(merged.threshold,  { min: 1, fallback: DEFAULTS.threshold }),
+    // cooldownMs: ≥ 0 (0 = immediate retry); non-finite → default.
+    cooldownMs: clampInt(merged.cooldownMs, { min: 0, fallback: DEFAULTS.cooldownMs }),
+    // probeCount: at least 1 success to close from HALF_OPEN.
+    probeCount: clampInt(merged.probeCount, { min: 1, fallback: DEFAULTS.probeCount }),
+    // windowMs: ≥ 0 (0 = lifetime counting); non-finite → default window.
+    windowMs:   clampInt(merged.windowMs,   { min: 0, fallback: DEFAULTS.windowMs }),
+    // timeoutMs: ≥ 0 (0 = no timeout); non-finite → 0 (disabled), never NaN.
+    timeoutMs:  clampInt(merged.timeoutMs,  { min: 0, fallback: 0 }),
+  };
+}
+
 // ── Rolling window counter ────────────────────────────────────────────────
 class RollingCounter {
   constructor(windowMs) {
@@ -117,7 +165,7 @@ class CircuitBreaker extends EventEmitter {
     super();
     this.setMaxListeners(100);
 
-    this[kOpts]   = { ...DEFAULTS, ...opts };
+    this[kOpts]   = sanitizeOptions(opts);
     this[kState]  = STATE.CLOSED;
     this[kFailures]  = new RollingCounter(this[kOpts].windowMs);
     this[kSuccesses] = new RollingCounter(0);
@@ -240,8 +288,19 @@ class CircuitBreaker extends EventEmitter {
       probeCount:        this[kOpts].probeCount,
       windowMs:          this[kOpts].windowMs,
       timeoutMs:         this[kOpts].timeoutMs,
-      cooldownRemainingMs: Math.max(0, this[kNextAttempt] - Date.now()),
+      cooldownRemainingMs: this._cooldownRemainingMs(),
     };
+  }
+
+  /**
+   * Remaining cooldown before an OPEN breaker probes again, always a finite
+   * non-negative integer (never NaN/Infinity even if kNextAttempt was
+   * corrupted), so metrics snapshots stay JSON-serialisable and dashboard-safe.
+   */
+  _cooldownRemainingMs() {
+    const remaining = this[kNextAttempt] - Date.now();
+    if (!Number.isFinite(remaining) || remaining <= 0) return 0;
+    return Math.trunc(remaining);
   }
 
   // ── Internal helpers ──────────────────────────────────────────────────

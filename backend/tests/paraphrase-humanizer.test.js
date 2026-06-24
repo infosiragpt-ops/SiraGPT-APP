@@ -378,3 +378,128 @@ test('estimateAIScoreDetailed: scores reflect weighted sum of components', () =>
   // Allow tiny rounding tolerance
   assert.ok(Math.abs(r.score - weighted) < 0.01, `score ${r.score} ≈ weighted ${weighted}`);
 });
+
+// ── Pathological-input hardening ──────────────────────────────────────
+// These tests fail on the pre-hardened module: null args crashed the
+// option destructuring, and the sentence-split regexes backtracked
+// O(n²) on terminator-free input (~5s at 100k chars, ~20s at 200k).
+
+function assertHumanizeEnvelope(r) {
+  assert.equal(typeof r.text, 'string');
+  assert.ok(Array.isArray(r.applied));
+  assert.ok(Number.isFinite(r.aiScoreBefore) && r.aiScoreBefore >= 0 && r.aiScoreBefore <= 1);
+  assert.ok(Number.isFinite(r.aiScoreAfter) && r.aiScoreAfter >= 0 && r.aiScoreAfter <= 1);
+  assert.ok(Number.isFinite(r.deltaScore));
+}
+
+test('hardening: humanizeText(null) / humanizeChunked(null) do not throw and return a typed envelope', () => {
+  for (const arg of [null, undefined]) {
+    const a = humanizeText(arg);
+    assertHumanizeEnvelope(a);
+    assert.equal(a.text, '');
+    const b = humanizeChunked(arg);
+    assertHumanizeEnvelope(b);
+    assert.equal(b.text, '');
+  }
+});
+
+test('hardening: non-string text values never throw and stay well-typed', () => {
+  const weird = [null, undefined, 0, false, NaN, 12345, ['a', 'b'], { toString: () => 'plain object text.' }];
+  for (const text of weird) {
+    const r = humanizeText({ text });
+    assertHumanizeEnvelope(r);
+    const s = estimateAIScore(text);
+    assert.ok(Number.isFinite(s) && s >= 0 && s <= 1, `estimateAIScore(${String(text)}) = ${s}`);
+  }
+});
+
+test('hardening: values whose string conversion throws are treated as empty', () => {
+  const hostile = Object.create(null); // String(hostile) throws TypeError
+  assert.equal(estimateAIScore(hostile), 0);
+  const r = humanizeText({ text: hostile });
+  assertHumanizeEnvelope(r);
+  assert.equal(r.text, '');
+});
+
+test('hardening: secondary option args survive an explicit null', () => {
+  assert.doesNotThrow(() => replaceAITells('Furthermore, fine.', null));
+  assert.doesNotThrow(() => topAITellsFound('Furthermore, fine.', null));
+  assert.doesNotThrow(() => topAITellsByLanguage('Furthermore, fine.', 'english', null));
+});
+
+test('hardening: 200k-char single token (no spaces) completes fast — no regex backtracking hang', () => {
+  const blob = 'a'.repeat(200000);
+  const t0 = Date.now();
+  const r = humanizeText({ text: blob });
+  const score = estimateAIScore(blob);
+  const elapsed = Date.now() - t0;
+  // Pre-fix this path took ~20s (O(n²) backtracking in the sentence
+  // regex); post-fix it is single-digit ms. 3s is a generous CI margin.
+  assert.ok(elapsed < 3000, `took ${elapsed}ms — quadratic backtracking is back`);
+  assertHumanizeEnvelope(r);
+  assert.equal(r.text, blob, 'tell-free single token must pass through unchanged');
+  assert.equal(score, 0);
+});
+
+test('hardening: 200k chars of words with NO sentence terminators scores fast and finite', () => {
+  const blob = 'word '.repeat(40000); // passes the 10-word guard, zero .!? chars
+  const t0 = Date.now();
+  const s = estimateAIScore(blob);
+  const elapsed = Date.now() - t0;
+  assert.ok(elapsed < 3000, `took ${elapsed}ms — quadratic backtracking is back`);
+  assert.ok(Number.isFinite(s) && s >= 0 && s <= 1);
+});
+
+test('hardening: long mid-string comma run does not blow up the burstiness comma-strip', () => {
+  // ≥25 words + ≥3 commas routes into the comma-split path; the old
+  // /[,]+$/ strip backtracked O(k²) on the 60k-comma run (~1.3s+).
+  const input = 'w '.repeat(30) + ','.repeat(60000) + ' middle words here, tail end.';
+  const t0 = Date.now();
+  const r = boostBurstiness(input);
+  const elapsed = Date.now() - t0;
+  assert.ok(elapsed < 1000, `took ${elapsed}ms — comma-strip backtracking is back`);
+  assert.equal(typeof r.text, 'string');
+});
+
+test('hardening: punctuation-only, emoji-only and control-char-only inputs stay finite', () => {
+  const inputs = [
+    '.'.repeat(5000),
+    '!?.,;:—'.repeat(2000),
+    '😀'.repeat(5000),
+    ' '.repeat(2000),
+    ', '.repeat(5000) + '.',
+  ];
+  for (const text of inputs) {
+    const r = humanizeText({ text });
+    assertHumanizeEnvelope(r);
+    const s = estimateAIScore(text);
+    assert.ok(Number.isFinite(s) && s >= 0 && s <= 1, `score for pathological input = ${s}`);
+  }
+});
+
+test('hardening: linear sentence scanners are byte-identical to the original regexes', () => {
+  const { splitSentenceRuns, splitSentencesWithTrail } = require('../src/services/paraphrase-humanizer');
+  // Deterministic mini-fuzz over the characters that exercise every
+  // branch (terminators, whitespace classes, emoji surrogates, runs).
+  const ALPHA = ['a', 'b', ' ', '.', '!', '?', '\n', '\t', ',', '—', ';', 'x', '😀'];
+  let seed = 1234567;
+  const rnd = () => {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 2147483648;
+  };
+  for (let iter = 0; iter < 5000; iter += 1) {
+    let s = '';
+    const len = Math.floor(rnd() * 30);
+    for (let i = 0; i < len; i += 1) s += ALPHA[Math.floor(rnd() * ALPHA.length)];
+    assert.deepEqual(
+      splitSentencesWithTrail(s),
+      s.match(/[^.!?]+[.!?]+(\s|$)/g),
+      `trail scan diverged on ${JSON.stringify(s)}`,
+    );
+    assert.deepEqual(
+      splitSentenceRuns(s),
+      s.match(/[^.!?]+[.!?]+/g) || [],
+      `run scan diverged on ${JSON.stringify(s)}`,
+    );
+  }
+});

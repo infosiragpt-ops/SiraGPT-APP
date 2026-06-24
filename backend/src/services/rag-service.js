@@ -112,11 +112,22 @@ function chunk(text, { size = DEFAULT_CHUNK_SIZE * 4, overlap = DEFAULT_CHUNK_OV
 }
 
 let openaiClient = null;
+// embed() is on both the document-ingest and query-retrieval hot paths. The
+// OpenAI SDK defaults to a 10-MINUTE request timeout, so a single hung call
+// could stall RAG for that long. Bound it (SIRA_EMBED_TIMEOUT_MS, default 30s)
+// and keep the SDK's built-in idempotent retry (embeddings are idempotent).
+function _embedClientOptions() {
+  return {
+    apiKey: process.env.OPENAI_API_KEY,
+    timeout: Number.parseInt(process.env.SIRA_EMBED_TIMEOUT_MS || '30000', 10),
+    maxRetries: Number.parseInt(process.env.SIRA_EMBED_MAX_RETRIES || '2', 10),
+  };
+}
 function getOpenAI() {
   if (openaiClient) return openaiClient;
   if (!process.env.OPENAI_API_KEY) return null;
   const OpenAIClient = loadOpenAI();
-  openaiClient = new OpenAIClient({ apiKey: process.env.OPENAI_API_KEY });
+  openaiClient = new OpenAIClient(_embedClientOptions());
   return openaiClient;
 }
 
@@ -236,6 +247,13 @@ async function ingest(userId, collection, docs, opts = {}) {
   if (allChunks.length === 0) return { chunksAdded: 0, totalChunks: 0 };
 
   const vectors = await embed(allChunks.map(c => c.text));
+  // Guard: embed() must return exactly one vector per chunk. A partial response
+  // would leave later chunks with `embedding: undefined`, which corrupts every
+  // future retrieval (cosine over undefined). Fail loudly so the caller marks
+  // indexing as failed / retries instead of silently storing broken chunks.
+  if (!Array.isArray(vectors) || vectors.length !== allChunks.length) {
+    throw new Error(`rag embed returned ${Array.isArray(vectors) ? vectors.length : 'a non-array'} vectors for ${allChunks.length} chunk(s)`);
+  }
   const key = storeKey(userId, collection);
 
   return runWithLock(`rag:${key}`, async () => {
@@ -968,6 +986,13 @@ async function ingestCode(userId, collection, files, opts = {}) {
   if (allChunks.length === 0) return { chunksAdded: 0, totalChunks: 0 };
 
   const vectors = await embed(allChunks.map(c => c.text));
+  // Guard: embed() must return exactly one vector per chunk. A partial response
+  // would leave later chunks with `embedding: undefined`, which corrupts every
+  // future retrieval (cosine over undefined). Fail loudly so the caller marks
+  // indexing as failed / retries instead of silently storing broken chunks.
+  if (!Array.isArray(vectors) || vectors.length !== allChunks.length) {
+    throw new Error(`rag embed returned ${Array.isArray(vectors) ? vectors.length : 'a non-array'} vectors for ${allChunks.length} chunk(s)`);
+  }
   const key = storeKey(userId, collection);
 
   return runWithLock(`rag:${key}`, async () => {
@@ -1003,12 +1028,32 @@ async function ingestTriples(userId, collection, { openai = null, sources = null
   const filter = Array.isArray(sources) && sources.length > 0 ? new Set(sources) : null;
   const targets = filter ? entries.filter(e => filter.has(e.source)) : entries;
 
+  // Phase 1 — extract triples for every chunk in parallel (bounded). Each
+  // extraction is an independent, read-only LLM call and is the dominant cost
+  // (~1-2s/chunk), so fanning them out turns a serial 50×1.5s ≈ 75s ingest into
+  // ~ceil(50/5)×1.5s ≈ 15s. Order is preserved and stopOnError matches the old
+  // loop (one failure aborts the whole ingest). The heuristic path is sync, so
+  // the cap is harmless there.
+  const { pMap } = require('../utils/p-map');
+  const EXTRACT_CONCURRENCY = Math.max(
+    1,
+    Number(process.env.SIRAGPT_TRIPLE_EXTRACT_CONCURRENCY) || 5,
+  );
+  const extracted = await pMap(
+    targets,
+    async (entry) => ({
+      triples: openai
+        ? await tripleExtractor.extractTriples(openai, entry.text, { source: entry.source, model })
+        : tripleExtractor.extractTriplesHeuristic(entry.text, { source: entry.source }),
+    }),
+    { concurrency: EXTRACT_CONCURRENCY },
+  );
+
+  // Phase 2 — write to the shared graph SEQUENTIALLY, preserving chunk order
+  // and avoiding concurrent-mutation races on the in-memory graph.
   let triplesAdded = 0;
-  for (const entry of targets) {
-    const triples = openai
-      ? await tripleExtractor.extractTriples(openai, entry.text, { source: entry.source, model })
-      : tripleExtractor.extractTriplesHeuristic(entry.text, { source: entry.source });
-    if (triples.length === 0) continue;
+  for (const { triples } of extracted) {
+    if (!triples || triples.length === 0) continue;
     const result = await tripleGraph.addTriples(userId, collection, triples, {
       embedder: openai ? null : async () => [], // skip embeddings in heuristic/no-key mode
     });
@@ -1081,6 +1126,7 @@ module.exports = {
   stats,
   cosine,        // exported for tests
   getOpenAI,     // exported so callers can pass the shared client to rerank
+  _embedClientOptions, // exported for tests
   // exported for tests / advanced callers
   fuseByRRF,
   expandWithGraph,

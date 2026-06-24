@@ -84,6 +84,9 @@ async function callOpenAICompatibleChat({ provider, messages, fetchImpl }) {
   const response = await fetcher(`${provider.baseUrl.replace(/\/$/, '')}/chat/completions`, {
     method: 'POST',
     headers,
+    // Bound the voice-turn reply so a stalled provider can't hang the request.
+    // Shares GROK_VOICE_TIMEOUT_MS with the sibling xai-audio STT/TTS path.
+    signal: AbortSignal.timeout(Number(process.env.GROK_VOICE_TIMEOUT_MS) || 30000),
     body: JSON.stringify({
       model: provider.model,
       messages,

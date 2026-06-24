@@ -42,6 +42,12 @@ function getVizGenerator() {
   return vizGeneratorMod;
 }
 
+let imageEngineMod;
+function getImageEngine() {
+  if (!imageEngineMod) imageEngineMod = require('../media/image-engine');
+  return imageEngineMod;
+}
+
 // ── Shared helpers ──────────────────────────────────────────────────────
 
 function ensureDir(p) {
@@ -94,6 +100,35 @@ function svgDocument({ width = 800, height = 600, body, title, description } = {
 
 function xmlEscape(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// Validate a user/model-supplied color before interpolating it into an SVG
+// attribute, an HTML style attribute, or a JS string literal. Only accepts a
+// 3- or 6-digit hex (with #) or a conservative rgb/rgba()/hsl() form; anything
+// else (e.g. `"><script>` or a quote that would break out of the context)
+// falls back to the theme color. Mirrors the inline /^#[0-9A-Fa-f]{6}$/ checks
+// the newer diagram tools already use, hoisted into one reusable helper.
+function safeColor(c, fallback) {
+  if (typeof c !== 'string') return fallback;
+  const v = c.trim();
+  if (/^#[0-9A-Fa-f]{3}$/.test(v) || /^#[0-9A-Fa-f]{6}$/.test(v)) return v;
+  if (/^rgba?\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+\s*(,\s*[\d.]+\s*)?\)$/.test(v)) return v;
+  if (/^hsla?\(\s*[\d.]+\s*,\s*[\d.]+%\s*,\s*[\d.]+%\s*(,\s*[\d.]+\s*)?\)$/.test(v)) return v;
+  return fallback;
+}
+
+// JSON.stringify a value for safe embedding inside an inline <script> block.
+// Plain JSON.stringify escapes quotes but NOT `<`, so a user string containing
+// `</script>` would terminate the script element in the HTML parser even inside
+// a JS string literal. Escaping `<`/`>` (and the JS line separators U+2028/
+// U+2029) to their \uXXXX form is byte-identical for normal data and only
+// changes the hostile case. Mirrors the mermaid-fallback escaping.
+function jsonForScript(v) {
+  // Escape < and > so a user string containing </script> cannot terminate the
+  // inline <script> element in the HTML parser (modern browsers accept raw
+  // U+2028/U+2029 in string literals since ES2019). Byte-identical for normal
+  // data; only changes the hostile case.
+  return JSON.stringify(v).replace(/</g, '\\u003c').replace(/>/g, '\\u003e');
 }
 
 function pick(obj, keys) {
@@ -185,28 +220,23 @@ function generateScenesFromPrompt(prompt, totalDuration) {
 
 const generateImage = {
   name: 'generate_image',
-  description: 'Generate an image from a text description using an AI image model (DALL-E, Stable Diffusion, or the user\'s configured provider). The resulting image is saved as a downloadable artifact. Use for photos, illustrations, diagrams, concept art, product mockups, or any visual content.',
+  description: 'Generate an image from a text description using ANY configured AI image model — OpenAI (gpt-image), Google (Imagen/Gemini), fal.ai (FLUX, etc.), OpenRouter or xAI. The model is routed to its provider automatically and, if that provider fails or has no API key, the engine fails over to the next configured one. The resulting image is saved as a downloadable artifact. Use for photos, illustrations, concept art, product mockups, or any visual content.',
   parameters: {
     type: 'object',
     properties: {
       prompt: { type: 'string', description: 'Detailed description of the image to generate. More detail = better results.' },
       style: { type: 'string', description: 'Optional style hint: "realistic", "vivid", "natural", "photographic", "digital-art", "anime", "oil-painting", "line-art". Default: "vivid".' },
-      aspectRatio: { type: 'string', enum: ['square', 'wide', 'portrait'], description: 'Aspect ratio hint. Default: "square" (1024×1024). wide → 1792×1024, portrait → 1024×1792.' },
+      aspectRatio: { type: 'string', enum: ['square', 'wide', 'portrait'], description: 'Aspect ratio hint. Default: "square". wide → landscape, portrait → vertical.' },
       quality: { type: 'string', enum: ['standard', 'hd'], description: 'Quality level. Default: "standard".' },
+      model: { type: 'string', description: 'Optional image model id, e.g. "gpt-image-2", "imagen-4.0-generate-001", "fal-ai/flux/schnell", "google/gemini-2.5-flash-image", "grok-2-image". Only pass it when the user asked for a specific model; omit to use the best configured provider.' },
     },
     required: ['prompt'],
     additionalProperties: false,
   },
-  async execute({ prompt, style = 'vivid', aspectRatio = 'square', quality = 'standard' }, ctx = {}) {
+  async execute({ prompt, style = 'vivid', aspectRatio = 'square', quality = 'standard', model }, ctx = {}) {
     emitEvent(ctx, 'tool_call', { tool: 'generate_image', preview: prompt });
 
     try {
-      const ai = getAiService();
-
-      // Map aspect ratio to size
-      const sizeMap = { square: '1024x1024', wide: '1792x1024', portrait: '1024x1792' };
-      const size = sizeMap[aspectRatio] || '1024x1024';
-
       // Enhance prompt with style hint
       const styleHints = {
         realistic: 'Photorealistic, highly detailed.',
@@ -223,15 +253,23 @@ const generateImage = {
 
       emitEvent(ctx, 'tool_output', { tool: 'generate_image', preview: 'Generando imagen…', partial: true });
 
-      // dall-e-3 was removed from this account (400 model does not exist);
-      // use gpt-image-2 to match ai-service.generateImage's new default.
-      const imageB64 = await ai.generateImage(enhancedPrompt, 'OpenAI', 'gpt-image-2');
-      if (!imageB64) {
-        emitEvent(ctx, 'tool_output', { tool: 'generate_image', ok: false, preview: 'El servicio de imágenes no devolvió resultado. Reintenta con un prompt más simple.' });
-        return { ok: false, error: 'image generation returned empty result' };
+      const engine = getImageEngine();
+      const result = await engine.generateImage({
+        prompt: enhancedPrompt,
+        model: model || ctx.imageModel || undefined,
+        aspectRatio,
+        quality,
+        n: 1,
+        signal: ctx.signal,
+      });
+
+      if (!result.ok || !result.images?.length) {
+        const msg = result.error || 'El servicio de imágenes no devolvió resultado. Reintenta con un prompt más simple.';
+        emitEvent(ctx, 'tool_output', { tool: 'generate_image', ok: false, preview: msg });
+        return { ok: false, error: msg, attempts: result.attempts };
       }
 
-      const buffer = Buffer.from(imageB64, 'base64');
+      const buffer = Buffer.from(result.images[0].b64, 'base64');
       const filename = `image_${crypto.randomBytes(4).toString('hex')}.png`;
 
       const artifact = finalizeArtifact({ filename, buffer, mime: 'image/png', ctx });
@@ -250,7 +288,7 @@ const generateImage = {
       emitEvent(ctx, 'tool_output', {
         tool: 'generate_image',
         ok: true,
-        preview: `Imagen lista: ${artifact.filename} (${Math.round(artifact.sizeBytes / 1024)} KB)`,
+        preview: `Imagen lista: ${artifact.filename} (${Math.round(artifact.sizeBytes / 1024)} KB, ${result.model} vía ${result.provider})`,
       });
 
       return {
@@ -261,10 +299,211 @@ const generateImage = {
         downloadUrl: artifact.downloadUrl,
         mime: 'image/png',
         prompt: enhancedPrompt,
+        provider: result.provider,
+        model: result.model,
       };
     } catch (err) {
       const msg = err?.message || String(err);
       emitEvent(ctx, 'tool_output', { tool: 'generate_image', ok: false, preview: `Error: ${msg}` });
+      return { ok: false, error: msg };
+    }
+  },
+};
+
+// ─────────────────────────────────────────────────────────────────────────
+// Tool 1b: edit_image (img2img — transform an existing image)
+// ─────────────────────────────────────────────────────────────────────────
+
+/** Resolve the source image for edit_image into a Buffer. */
+async function resolveEditSourceImage({ imageUrl, fileId }, ctx = {}) {
+  const prisma = ctx.prisma || (() => { try { return require('../../config/database'); } catch { return null; } })();
+
+  async function bufferFromFileRecord(record) {
+    if (!record || !record.path) return null;
+    try {
+      const buf = await fs.promises.readFile(record.path);
+      return buf && buf.length
+        ? { buffer: buf, mimeType: record.mimeType || 'image/png', source: record.originalName || record.filename }
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // 1. Explicit URL (http(s), data: or a local /uploads path).
+  const url = String(imageUrl || '').trim();
+  if (url) {
+    const dataMatch = url.match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i);
+    if (dataMatch) {
+      return { buffer: Buffer.from(dataMatch[2], 'base64'), mimeType: dataMatch[1], source: 'data-url' };
+    }
+    if (/^https?:\/\//i.test(url)) {
+      try {
+        // SSRF guard: the URL is an LLM-produced tool argument — block
+        // private / loopback / cloud-metadata targets with the same vetting
+        // the harness web_fetch tool uses, and refuse redirects (an
+        // approved host could otherwise bounce us to an internal one).
+        // eslint-disable-next-line global-require
+        const { assertSafeUrl } = require('../agent-harness/tools/web-fetch-tool');
+        assertSafeUrl(url);
+        const resp = await fetch(url, { redirect: 'error', ...(ctx.signal ? { signal: ctx.signal } : {}) });
+        if (resp && resp.ok) {
+          const buf = Buffer.from(await resp.arrayBuffer());
+          if (buf.length) {
+            return { buffer: buf, mimeType: resp.headers?.get?.('content-type') || 'image/png', source: url };
+          }
+        }
+      } catch { /* unsafe or unreachable URL → fall through to other sources */ }
+    }
+    const uploadsMatch = url.match(/\/uploads\/(.+)$/);
+    if (uploadsMatch) {
+      try {
+        // Containment check: the captured segment is attacker-influenced —
+        // resolve it and require it to stay inside the uploads root so
+        // "/uploads/../../etc/passwd" cannot escape.
+        const uploadsRoot = path.resolve(__dirname, '../../../uploads');
+        const local = path.resolve(uploadsRoot, uploadsMatch[1]);
+        if (local === uploadsRoot || !local.startsWith(uploadsRoot + path.sep)) return null;
+        const buf = await fs.promises.readFile(local);
+        if (buf.length) return { buffer: buf, mimeType: 'image/png', source: url };
+      } catch { /* fall through */ }
+    }
+  }
+
+  // 2. Explicit fileId (ownership-checked).
+  if (fileId && prisma && ctx.userId) {
+    try {
+      const record = await prisma.file.findFirst({ where: { id: String(fileId), userId: ctx.userId } });
+      const resolved = await bufferFromFileRecord(record);
+      if (resolved) return resolved;
+    } catch { /* fall through */ }
+  }
+
+  // 3. Image attached to THIS message (toolContext.fileIds).
+  if (prisma && ctx.userId && Array.isArray(ctx.fileIds) && ctx.fileIds.length) {
+    try {
+      const records = await prisma.file.findMany({
+        where: { id: { in: ctx.fileIds.map(String) }, userId: ctx.userId },
+      });
+      const image = records.find((r) => String(r.mimeType || '').startsWith('image/'));
+      const resolved = await bufferFromFileRecord(image);
+      if (resolved) return resolved;
+    } catch { /* fall through */ }
+  }
+
+  // 4. Most recent image in the chat (uploaded or generated via the
+  //    dedicated image route, which persists files on the message). The
+  //    fileId embedded in message.files is NOT trusted: the file record
+  //    must belong to the requesting user (same ownership filter as the
+  //    fileId branches above).
+  if (prisma && ctx.chatId && ctx.userId) {
+    try {
+      const messages = await prisma.message.findMany({
+        where: { chatId: ctx.chatId, files: { not: null } },
+        orderBy: { timestamp: 'desc' },
+        take: 10,
+      });
+      for (const message of messages) {
+        let files;
+        try {
+          files = typeof message.files === 'string' ? JSON.parse(message.files) : message.files;
+        } catch { continue; }
+        if (!Array.isArray(files)) continue;
+        const image = files.find((f) => f && (f.type === 'image' || String(f.type || '').startsWith('image/')) && (f.fileId || f.id));
+        if (!image) continue;
+        const record = await prisma.file.findFirst({
+          where: { id: String(image.fileId || image.id), userId: ctx.userId },
+        });
+        const resolved = await bufferFromFileRecord(record);
+        if (resolved) return resolved;
+      }
+    } catch { /* fall through */ }
+  }
+
+  return null;
+}
+
+const editImage = {
+  name: 'edit_image',
+  description: 'Edit / transform an EXISTING image with a natural-language instruction (img2img): remove or change the background, add/remove objects, change colors or style, retouch, restore, etc. The source image is resolved automatically from the file the user attached, an explicit imageUrl/fileId, or the most recent image in this chat. Use when the user says "edita/modifica/retoca esta foto", "quítale el fondo", "cámbiale el color", "remove the background". Do NOT use to create brand-new images — that is generate_image.',
+  parameters: {
+    type: 'object',
+    properties: {
+      instruction: { type: 'string', description: 'The transformation to apply, in natural language (e.g. "quita el fondo y déjalo transparente", "make the sky sunset orange").' },
+      imageUrl: { type: 'string', description: 'Optional URL of the source image (http(s), data: or an /uploads path from this chat).' },
+      fileId: { type: 'string', description: 'Optional id of an uploaded file to edit. Defaults to the image attached to the message or the last image in the chat.' },
+      model: { type: 'string', description: 'Optional edit model override (e.g. "gemini-2.5-flash-image", "gpt-image-1"). Omit to use the best configured provider.' },
+    },
+    required: ['instruction'],
+    additionalProperties: false,
+  },
+  async execute({ instruction, imageUrl, fileId, model } = {}, ctx = {}) {
+    emitEvent(ctx, 'tool_call', { tool: 'edit_image', preview: instruction });
+
+    try {
+      const cleanInstruction = String(instruction || '').trim();
+      if (!cleanInstruction) return { ok: false, error: 'La instrucción de edición está vacía.' };
+
+      emitEvent(ctx, 'tool_output', { tool: 'edit_image', preview: 'Buscando la imagen a editar…', partial: true });
+      const source = await resolveEditSourceImage({ imageUrl, fileId }, ctx);
+      if (!source) {
+        const msg = 'No encontré ninguna imagen para editar. Pide al usuario que adjunte la imagen o genera una primero con generate_image.';
+        emitEvent(ctx, 'tool_output', { tool: 'edit_image', ok: false, preview: msg });
+        return { ok: false, error: msg };
+      }
+
+      emitEvent(ctx, 'tool_output', { tool: 'edit_image', preview: 'Aplicando la edición a la imagen…', partial: true });
+      const engine = getImageEngine();
+      const result = await engine.editImage({
+        prompt: cleanInstruction,
+        imageBuffer: source.buffer,
+        mimeType: source.mimeType,
+        model,
+        signal: ctx.signal,
+      });
+
+      if (!result.ok || !result.images?.length) {
+        const msg = result.error || 'El servicio de edición de imágenes no devolvió resultado.';
+        emitEvent(ctx, 'tool_output', { tool: 'edit_image', ok: false, preview: msg });
+        return { ok: false, error: msg, attempts: result.attempts };
+      }
+
+      const buffer = Buffer.from(result.images[0].b64, 'base64');
+      const filename = `imagen_editada_${crypto.randomBytes(4).toString('hex')}.png`;
+      const artifact = finalizeArtifact({ filename, buffer, mime: 'image/png', ctx });
+
+      emitEvent(ctx, 'file_artifact', {
+        artifact: {
+          id: artifact.id,
+          filename: artifact.filename,
+          format: 'png',
+          mime: 'image/png',
+          sizeBytes: artifact.sizeBytes,
+          downloadUrl: artifact.downloadUrl,
+        },
+      });
+
+      emitEvent(ctx, 'tool_output', {
+        tool: 'edit_image',
+        ok: true,
+        preview: `Imagen editada: ${artifact.filename} (${Math.round(artifact.sizeBytes / 1024)} KB, ${result.model} vía ${result.provider})`,
+      });
+
+      return {
+        ok: true,
+        id: artifact.id,
+        filename: artifact.filename,
+        sizeBytes: artifact.sizeBytes,
+        downloadUrl: artifact.downloadUrl,
+        mime: 'image/png',
+        instruction: cleanInstruction,
+        sourceImage: source.source,
+        provider: result.provider,
+        model: result.model,
+      };
+    } catch (err) {
+      const msg = err?.message || String(err);
+      emitEvent(ctx, 'tool_output', { tool: 'edit_image', ok: false, preview: `Error: ${msg}` });
       return { ok: false, error: msg };
     }
   },
@@ -276,11 +515,11 @@ const generateImage = {
 
 const createChart = {
   name: 'create_chart',
-  description: 'Generate a data chart or graph (bar, line, pie, scatter, histogram, area, radar, donut, bubble, horizontal_bar, funnel, gauge, waterfall, heatmap, treemap) from structured data. The chart is rendered as an SVG file and saved as a downloadable artifact. For complex multi-series or interactive charts, describe the data in detail.',
+  description: 'Generate a data chart or graph (bar, line, pie, scatter, histogram, area, donut, horizontal_bar, funnel, gauge, waterfall, heatmap, treemap) from structured data. The chart is rendered as an SVG file and saved as a downloadable artifact. For a radar/spider chart use the dedicated create_radar_chart tool. For complex multi-series or interactive charts, describe the data in detail.',
   parameters: {
     type: 'object',
     properties: {
-      chartType: { type: 'string', enum: ['bar', 'line', 'pie', 'scatter', 'histogram', 'area', 'radar', 'donut', 'bubble', 'horizontal_bar', 'funnel', 'gauge', 'waterfall', 'heatmap', 'treemap'], description: 'Type of chart to generate.' },
+      chartType: { type: 'string', enum: ['bar', 'line', 'pie', 'scatter', 'histogram', 'area', 'donut', 'horizontal_bar', 'funnel', 'gauge', 'waterfall', 'heatmap', 'treemap'], description: 'Type of chart to generate. For a radar/spider chart use the dedicated create_radar_chart tool.' },
       title: { type: 'string', description: 'Chart title.' },
       labels: { type: 'array', items: { type: 'string' }, description: 'Category labels (x-axis for bar/line, segments for pie/donut).' },
       datasets: { type: 'array', items: { type: 'object', properties: {
@@ -348,7 +587,7 @@ const createChart = {
       const tickFormat = (v) => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${(v / 1000).toFixed(1)}K` : v.toFixed(range < 10 ? 1 : 0);
 
       // Colors per dataset
-      const colors = datasets.map((d, i) => d.color || palette[i % palette.length]);
+      const colors = datasets.map((d, i) => safeColor(d.color, palette[i % palette.length]));
 
       function buildChartBody() {
         if (chartType === 'pie' || chartType === 'donut') {
@@ -707,7 +946,9 @@ const createChart = {
           const cx = M.left + (i + 0.5) * seriesWidth;
           elements += `<text x="${cx}" y="${H - M.bottom + 18}" text-anchor="end" transform="rotate(-35, ${cx}, ${H - M.bottom + 18})" font-family="Arial" font-size="11" fill="#555">${label}</text>`;
 
-          if (chartType === 'bar' || chartType === 'horizontal_bar') {
+          // histogram renders as bars (a histogram is a bar chart of
+          // frequencies; create_chart receives already-bucketed data).
+          if (chartType === 'bar' || chartType === 'horizontal_bar' || chartType === 'histogram') {
             datasets.forEach((ds, di) => {
               const val = ds.data[i] || 0;
               const barX = cx - barGroupW / 2 + di * (barW + barGap);
@@ -1392,7 +1633,7 @@ const createInfographicSvg = {
       }
 
       function renderSectionContent(section, sy, contentX) {
-        const accent = section.color || t.accent;
+        const accent = safeColor(section.color, t.accent);
         const stype = inferSectionType(section);
         const safeContent = section.content;
 
@@ -1452,7 +1693,7 @@ const createInfographicSvg = {
       let sectionsSvg = '';
       sections.slice(0, maxSections).forEach((section, i) => {
         const sy = HEADER_H + PAD + i * SECTION_H;
-        const accent = section.color || t.accent;
+        const accent = safeColor(section.color, t.accent);
         const safeHeading = xmlEscape(String(section.heading).slice(0, 80));
         const hasMetrics = Array.isArray(section.metrics) && section.metrics.length > 0;
         const iconHtml = iconSvg[section.icon] ? `<g transform="translate(${PAD + 8}, ${sy + 14})" color="${accent}" stroke-width="auto">${iconSvg[section.icon]}</g>` : '';
@@ -1588,7 +1829,7 @@ const createDashboardHtml = {
         const val = xmlEscape(String(m.value || '').slice(0, 20));
         const label = xmlEscape(String(m.label || '').slice(0, 30));
         const change = m.change ? xmlEscape(m.change) : null;
-        const color = m.color || t.accent;
+        const color = safeColor(m.color, t.accent);
         return `
     <div class="metric-card" style="border-top: 3px solid ${color};">
       <div class="metric-value" style="color: ${color};">${val}</div>
@@ -1620,10 +1861,10 @@ const createDashboardHtml = {
 
       const chartScripts = maxCharts.map((chart, i) => {
         const dsList = chart.datasets.map((ds, di) => {
-          const color = ds.color || colors[di % colors.length];
+          const color = safeColor(ds.color, colors[di % colors.length]);
           return `{
-          label: ${JSON.stringify(ds.label || `Serie ${di + 1}`)},
-          data: ${JSON.stringify(ds.data)},
+          label: ${jsonForScript(ds.label || `Serie ${di + 1}`)},
+          data: ${jsonForScript(ds.data)},
           borderColor: '${color}',
           backgroundColor: ${chart.type === 'pie' || chart.type === 'doughnut' ? JSON.stringify(ds.data.map((_, idx) => colors[idx % colors.length])) : `'${color}'`},
           ${chart.type === 'line' ? 'fill: false, tension: 0.3,' : ''}
@@ -1635,7 +1876,7 @@ const createDashboardHtml = {
     new Chart(document.getElementById('chart-${i}'), {
       type: '${chart.type}',
       data: {
-        labels: ${JSON.stringify(chart.labels)},
+        labels: ${jsonForScript(chart.labels)},
         datasets: [${dsList}]
       },
       options: {
@@ -1645,8 +1886,8 @@ const createDashboardHtml = {
           legend: { display: ${chart.datasets.length > 1}, position: 'bottom', labels: { color: '${t.muted}', font: { size: 11 } } }
         },
         scales: ${chart.type !== 'pie' && chart.type !== 'doughnut' && chart.type !== 'polarArea' ? `{
-          x: { title: { display: ${!!chart.xLabel}, text: ${JSON.stringify(chart.xLabel || '')}, color: '${t.muted}' }, ticks: { color: '${t.muted}' }, grid: { color: '${t.border}' } },
-          y: { title: { display: ${!!chart.yLabel}, text: ${JSON.stringify(chart.yLabel || '')}, color: '${t.muted}' }, ticks: { color: '${t.muted}' }, grid: { color: '${t.border}' }, beginAtZero: true }
+          x: { title: { display: ${!!chart.xLabel}, text: ${jsonForScript(chart.xLabel || '')}, color: '${t.muted}' }, ticks: { color: '${t.muted}' }, grid: { color: '${t.border}' } },
+          y: { title: { display: ${!!chart.yLabel}, text: ${jsonForScript(chart.yLabel || '')}, color: '${t.muted}' }, ticks: { color: '${t.muted}' }, grid: { color: '${t.border}' }, beginAtZero: true }
         }` : '{}'}
       }
     });`;
@@ -1749,11 +1990,13 @@ const generateVideo = {
       duration: { type: 'integer', minimum: 3, maximum: 30, description: 'Target duration in seconds. Default 8.' },
       aspectRatio: { type: 'string', enum: ['16:9', '9:16', '1:1', '4:3'], description: 'Aspect ratio. Default "16:9".' },
       style: { type: 'string', description: 'Style hint: "cinematic", "realistic", "animated", "claymation", "retro", "3d-render".' },
+      model: { type: 'string', description: 'Optional fal.ai video model (e.g. "fal-ai/veo3/fast", "fal-ai/kling-video/v2.5-turbo/pro/text-to-video", "fal-ai/sora-2/text-to-video"). Only pass it when the user asked for a specific model; omit for the default (Veo 3 fast).' },
+      imageUrl: { type: 'string', description: 'Optional source image URL to animate (image-to-video). Use the URL of an image the user attached or one generated earlier in this chat.' },
     },
     required: ['prompt'],
     additionalProperties: false,
   },
-  async execute({ prompt, title, duration = 8, aspectRatio = '16:9', style }, ctx = {}) {
+  async execute({ prompt, title, duration = 8, aspectRatio = '16:9', style, model, imageUrl }, ctx = {}) {
     emitEvent(ctx, 'tool_call', { tool: 'generate_video', preview: prompt });
 
     try {
@@ -1898,20 +2141,44 @@ const generateVideo = {
           const { fal } = require('@fal-ai/client');
           fal.config({ credentials: falKey });
           const secs = Math.min(Math.max(Number(duration) || 8, 4), 15);
-          // Veo 3 fast supports 16:9 / 9:16 — map anything else to 16:9.
+          const sourceImageUrl = String(imageUrl || '').trim() || null;
+
+          // Resolve the requested model against the fal video catalog (any
+          // cataloged model works; an attached image flips the endpoint to
+          // the model's image-to-video variant). Unknown / incompatible
+          // requests fall back to Veo 3 fast instead of failing the turn.
+          const DEFAULT_FAL_VIDEO_ENDPOINT = 'fal-ai/veo3/fast';
+          let endpoint = DEFAULT_FAL_VIDEO_ENDPOINT;
+          const requestedVideoModel = String(model || '').trim();
+          // eslint-disable-next-line global-require
+          const falVideoCatalog = require('../fal-video-model-catalog');
+          const resolution = falVideoCatalog.resolveFalVideoModelRequest(
+            requestedVideoModel && !/^veo[-_]?fast$/i.test(requestedVideoModel)
+              ? requestedVideoModel
+              : DEFAULT_FAL_VIDEO_ENDPOINT,
+            { hasImage: Boolean(sourceImageUrl), imageCount: sourceImageUrl ? 1 : 0 }
+          );
+          if (resolution && resolution.ok && resolution.endpoint) {
+            endpoint = resolution.endpoint;
+          } else if (resolution && resolution.ok === false && requestedVideoModel) {
+            emitEvent(ctx, 'tool_output', { tool: 'generate_video', preview: `${resolution.message || 'Modelo de video no disponible'}; usando Veo 3 fast…`, partial: true });
+          }
+
+          // Veo supports 16:9 / 9:16 — map anything else to 16:9.
           const falAspect = (aspectRatio === '16:9' || aspectRatio === '9:16') ? aspectRatio : '16:9';
-          emitEvent(ctx, 'tool_output', { tool: 'generate_video', preview: `Generando video real con Veo (${secs}s)…`, partial: true });
-          const falResult = await fal.subscribe('fal-ai/veo3/fast', {
-            input: {
-              prompt: enhancedPrompt,
-              duration: `${secs}s`,
-              aspect_ratio: falAspect,
-              generate_audio: true,
-              resolution: '720p',
-            },
-            logs: false,
+          const falInput = falVideoCatalog.buildFalVideoInputPayload({
+            endpoint,
+            prompt: enhancedPrompt,
+            aspectRatio: falAspect,
+            duration: secs,
+            imageUrl: sourceImageUrl,
+            resolution: '720p',
+            audio: true,
           });
-          const veoUrl = falResult && falResult.data && falResult.data.video && falResult.data.video.url;
+          emitEvent(ctx, 'tool_output', { tool: 'generate_video', preview: `Generando video real con ${endpoint} (${secs}s)…`, partial: true });
+          const falResult = await fal.subscribe(endpoint, { input: falInput, logs: false });
+          const veoUrl = falVideoCatalog.extractFalVideoUrl(falResult)
+            || (falResult && falResult.data && falResult.data.video && falResult.data.video.url);
           if (veoUrl) {
             const dl = await fetch(veoUrl, { signal: ctx.signal });
             if (dl && dl.ok) {
@@ -1940,7 +2207,9 @@ const generateVideo = {
                 sizeBytes: artifact.sizeBytes,
                 downloadUrl: artifact.downloadUrl,
                 mime: 'video/mp4',
-                provider: 'fal/veo3-fast',
+                provider: `fal/${endpoint.replace(/^fal-ai\//, '')}`,
+                model: endpoint,
+                generationType: sourceImageUrl ? 'image-to-video' : 'text-to-video',
                 prompt: enhancedPrompt,
                 duration: secs,
                 aspectRatio: falAspect,
@@ -1982,7 +2251,7 @@ const generateVideo = {
           const safeAction = xmlEscape(scene.action || '').slice(0, 140);
           const safeVisual = xmlEscape(scene.visualStyle || '').slice(0, 140);
           const safeAudio = xmlEscape(scene.audio || '').slice(0, 100);
-          const accent = scene.color || '#3B82F6';
+          const accent = safeColor(scene.color, '#3B82F6');
           const tx = pad + thumbW + 24;
           // Build a stylized thumbnail using gradient + abstract shapes derived from scene index
           const gradId = `grad-scene-${i}`;
@@ -2150,7 +2419,7 @@ const createTimeline = {
 
         events12.forEach((ev, i) => {
           const cy = headerH + pad + i * eventH + eventH / 2;
-          const color = ev.color || palette[i % palette.length];
+          const color = safeColor(ev.color, palette[i % palette.length]);
           const date = xmlEscape(String(ev.date || '').slice(0, 24));
           const tt = xmlEscape(String(ev.title || '').slice(0, 80));
           const desc = xmlEscape(String(ev.description || '').slice(0, 180));
@@ -2189,7 +2458,7 @@ const createTimeline = {
         events12.forEach((ev, i) => {
           const cx = pad + (i + 0.5) * stepW;
           const above = i % 2 === 0;
-          const color = ev.color || palette[i % palette.length];
+          const color = safeColor(ev.color, palette[i % palette.length]);
           const date = xmlEscape(String(ev.date || '').slice(0, 20));
           const tt = xmlEscape(String(ev.title || '').slice(0, 50));
           const desc = xmlEscape(String(ev.description || '').slice(0, 110));
@@ -2355,7 +2624,7 @@ const createKanbanBoard = {
       cols.forEach((col, ci) => {
         const colX = pad + ci * (colW + colGap);
         const colY = headerH + pad;
-        const colColor = col.color || palette[ci % palette.length];
+        const colColor = safeColor(col.color, palette[ci % palette.length]);
         // Column background
         body += `<rect x="${colX}" y="${colY}" width="${colW}" height="${colInnerH}" rx="8" fill="${t.col}" stroke="${t.border}" stroke-width="1"/>`;
         // Column header
@@ -2709,7 +2978,7 @@ const createProcessFlow = {
         stepList.forEach((step, i) => {
           const sx = pad + i * (stepW + gapW);
           const sy = headerH + pad;
-          const color = step.color || palette[i % palette.length];
+          const color = safeColor(step.color, palette[i % palette.length]);
           const safeLabel = xmlEscape(String(step.label || '').slice(0, 30));
           const safeDesc = xmlEscape(String(step.description || '').slice(0, 90));
 
@@ -2772,7 +3041,7 @@ const createProcessFlow = {
         stepList.forEach((step, i) => {
           const sy = headerH + pad + i * (stepH + gapH);
           const sx = pad;
-          const color = step.color || palette[i % palette.length];
+          const color = safeColor(step.color, palette[i % palette.length]);
           const safeLabel = xmlEscape(String(step.label || '').slice(0, 50));
           const safeDesc = xmlEscape(String(step.description || '').slice(0, 140));
 
@@ -8108,7 +8377,7 @@ const createSwimlaneDiagram = {
         const ty = y + 18;
         const tw = stageColW - 32;
         const th = laneH - 36;
-        const color = task.color || t.palette[task.lane % t.palette.length];
+        const color = safeColor(task.color, t.palette[task.lane % t.palette.length]);
         return { task, x: tx, y: ty, w: tw, h: th, color };
       });
 
@@ -8206,6 +8475,7 @@ const createSwimlaneDiagram = {
 
 const VISUAL_MEDIA_TOOLS = [
   generateImage,
+  editImage,
   createChart,
   createOrganigram,
   createMermaidDiagram,

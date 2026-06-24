@@ -123,7 +123,7 @@ const MediaLibrary: React.FC = () => {
         }
         let cancelled = false;
         projectsService
-            .list({ sort: 'activity' })
+            .list({ type: 'webapp', sort: 'activity' })
             .then((projects) => {
                 if (!cancelled) setWebappProjects(projects);
             })

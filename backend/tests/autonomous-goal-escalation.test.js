@@ -46,6 +46,18 @@ test('honors explicit /goal commands as durable work even for code-heavy goals',
   assert.ok(decision.reasons.includes('code_task_prefers_codex'));
 });
 
+test('detects OpenClaw autonomous software fusion as durable codex-supported work', () => {
+  const decision = buildAutonomousGoalEscalation({
+    prompt: 'Quiero que mejores el sofware con OpenClaw y lo fusiones como agente autonomo potente.',
+  });
+
+  assert.equal(decision.shouldEscalate, true);
+  assert.equal(decision.agentKind, 'research-codex-support');
+  assert.ok(decision.reasons.includes('openclaw_autonomous_software_scope'));
+  assert.ok(decision.reasons.includes('code_task_prefers_codex'));
+});
+
+
 test('uses chat history to detect follow-up durable research work', () => {
   const decision = buildAutonomousGoalEscalation({
     history: [

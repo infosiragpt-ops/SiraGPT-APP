@@ -14,6 +14,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { writeJsonAtomic } = require('../utils/atomic-json-write');
 
 const STORE_DIR = path.join(
   process.env.SIRAGPT_DATA_DIR || path.join(require('os').tmpdir(), 'siragpt-data'),
@@ -89,7 +90,10 @@ async function storeEntry(userId, batchId, data) {
   };
 
   const filePath = entryPath(userId, batchId);
-  await fs.promises.writeFile(filePath, JSON.stringify(entry), 'utf8');
+  // Atomic temp+rename write: a crash or concurrent write must never leave a
+  // partial JSON file that getEntry() would then silently parse to null and
+  // drop cross-document batch context.
+  await writeJsonAtomic(filePath, entry, { ensureDir: true });
 }
 
 async function getEntry(userId, batchId) {

@@ -78,6 +78,17 @@ describe("code-chat-sessions", () => {
     const key = codexWorkspaceSessionKey("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
     assert.equal(key, "project:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
     assert.equal(listSessionsForWorkspace(key, store).length, 1)
+    // The migration must rewrite the persisted session's workspaceId too.
+    assert.equal(store.sessions[0]?.workspaceId, key)
+    // RFC-4122 v4 ids normalize as well; already-canonical / non-id values pass through.
+    assert.equal(
+      codexWorkspaceSessionKey("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"),
+      "project:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    )
+    assert.equal(codexWorkspaceSessionKey(key), key)
+    assert.equal(codexWorkspaceSessionKey("local:siragpt"), "local:siragpt")
+    assert.equal(codexWorkspaceSessionKey("not-a-uuid"), "not-a-uuid")
+    assert.equal(codexWorkspaceSessionKey(""), "__default__")
   })
 
   it("names parallel sessions Agente N", () => {

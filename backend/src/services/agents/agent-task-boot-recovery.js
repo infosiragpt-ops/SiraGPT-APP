@@ -3,6 +3,7 @@
 const defaultTaskStore = require('./task-store');
 
 const DEFAULT_BOOT_RECOVERY_STALE_MS = 60 * 1000;
+const DEFAULT_JOB_BACKED_STALE_MS = 24 * 60 * 60 * 1000;
 const TRUE_VALUES = new Set(['1', 'true', 'yes', 'on']);
 
 function envFlag(value) {
@@ -43,12 +44,20 @@ function recoverAgentTasksAfterBoot({
     DEFAULT_BOOT_RECOVERY_STALE_MS,
   );
   const skipJobBacked = Boolean(env.REDIS_URL);
+  // Job-backed rows get a longer grace (the worker may still own them),
+  // but beyond this ceiling they are zombies and must be failed honestly
+  // instead of being rescanned and skipped on every boot forever.
+  const jobBackedStaleAfterMs = parseNonNegativeInt(
+    env.AGENT_TASK_BOOT_RECOVERY_JOB_STALE_MS,
+    DEFAULT_JOB_BACKED_STALE_MS,
+  );
 
   try {
     const result = taskStore.recoverStaleRunningTasks({
       staleAfterMs,
       reason: 'recovered_after_boot',
       skipJobBacked,
+      jobBackedStaleAfterMs,
     });
     const recovered = Array.isArray(result.recovered) ? result.recovered : [];
     const skipped = Array.isArray(result.skipped) ? result.skipped : [];
@@ -96,5 +105,6 @@ function recoverAgentTasksAfterBoot({
 
 module.exports = {
   DEFAULT_BOOT_RECOVERY_STALE_MS,
+  DEFAULT_JOB_BACKED_STALE_MS,
   recoverAgentTasksAfterBoot,
 };

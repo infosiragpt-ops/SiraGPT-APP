@@ -30,7 +30,12 @@ const http = require('node:http');
 const request = require('supertest');
 
 const { ProviderOAuthService } = require('../src/services/ProviderOAuthService');
-const { popupResponseHtml } = require('../src/services/oauth-state');
+const {
+  signOAuthState,
+  verifyOAuthState,
+  popupResponseHtml,
+  _testOnly_clearUsedJtis,
+} = require('../src/services/oauth-state');
 
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'gmail-cb-smoke-test-secret-32chars!!';
 
@@ -233,7 +238,7 @@ describe('Gmail OAuth callback route — integration smoke', () => {
     assert.match(res.text, /invalid_state/);
   });
 
-  it('GET /api/auth/gmail/callback — token exchange throws redirect_uri_mismatch → meaningful HTML error', async () => {
+  it('GET /api/auth/gmail/callback — token exchange throws redirect_uri_mismatch → HTML error with redirect_uri_mismatch token', async () => {
     const redirectErr = Object.assign(new Error('redirect_uri_mismatch'), {
       code: 400,
       response: { data: { error: 'redirect_uri_mismatch' } },
@@ -249,8 +254,68 @@ describe('Gmail OAuth callback route — integration smoke', () => {
       .expect(200);
 
     assert.match(res.headers['content-type'], /text\/html/);
+    assert.match(res.text, /redirect_uri_mismatch/,
+      'redirect_uri_mismatch must surface as its own error token, not a silent empty page');
+    assert.doesNotMatch(res.text, /success/);
+  });
+
+  it('GET /api/auth/gmail/callback — token exchange throws invalid_grant → HTML error with invalid_grant token', async () => {
+    const grantErr = Object.assign(new Error('invalid_grant'), {
+      code: 400,
+      response: { data: { error: 'invalid_grant' } },
+    });
+    const appGrantErr = buildApp(
+      makeGmailService({ oauth2Client: makeOAuth2Client({ throwOnGetToken: grantErr }) }),
+      makeGoogleServicesService(),
+    );
+
+    const state = validGmailState('user-grant');
+    const res = await request(appGrantErr)
+      .get(`/api/auth/gmail/callback?code=EXPIREDCODE&state=${encodeURIComponent(state)}`)
+      .expect(200);
+
+    assert.match(res.headers['content-type'], /text\/html/);
+    assert.match(res.text, /invalid_grant/,
+      'invalid_grant must surface as its own error token');
+    assert.doesNotMatch(res.text, /success/);
+  });
+
+  it('GET /api/auth/gmail/callback — token exchange throws access_denied → HTML error with access_denied token', async () => {
+    const deniedErr = Object.assign(new Error('access_denied'), {
+      code: 400,
+      response: { data: { error: 'access_denied' } },
+    });
+    const appDenied = buildApp(
+      makeGmailService({ oauth2Client: makeOAuth2Client({ throwOnGetToken: deniedErr }) }),
+      makeGoogleServicesService(),
+    );
+
+    const state = validGmailState('user-denied');
+    const res = await request(appDenied)
+      .get(`/api/auth/gmail/callback?code=ANYCODE&state=${encodeURIComponent(state)}`)
+      .expect(200);
+
+    assert.match(res.headers['content-type'], /text\/html/);
+    assert.match(res.text, /access_denied/,
+      'access_denied must surface as its own error token');
+    assert.doesNotMatch(res.text, /success/);
+  });
+
+  it('GET /api/auth/gmail/callback — unknown token exchange error → generic HTML error (auth_failed)', async () => {
+    const unknownErr = new Error('Something unexpected from network');
+    const appUnknown = buildApp(
+      makeGmailService({ oauth2Client: makeOAuth2Client({ throwOnGetToken: unknownErr }) }),
+      makeGoogleServicesService(),
+    );
+
+    const state = validGmailState('user-unknown');
+    const res = await request(appUnknown)
+      .get(`/api/auth/gmail/callback?code=ANYCODE&state=${encodeURIComponent(state)}`)
+      .expect(200);
+
+    assert.match(res.headers['content-type'], /text\/html/);
     assert.match(res.text, /auth_failed/,
-      'A redirect_uri_mismatch must surface as a meaningful error, not a silent empty page');
+      'Unknown errors must collapse to the generic auth_failed token');
     assert.doesNotMatch(res.text, /success/);
   });
 
@@ -332,9 +397,10 @@ describe('Google Services OAuth callback route — integration smoke', () => {
     assert.match(res.text, /invalid_state/);
   });
 
-  it('GET /api/auth/google-services/callback — token exchange throws redirect_uri_mismatch → meaningful HTML error', async () => {
+  it('GET /api/auth/google-services/callback — token exchange throws redirect_uri_mismatch → HTML error with redirect_uri_mismatch token', async () => {
     const redirectErr = Object.assign(new Error('redirect_uri_mismatch'), {
       code: 400,
+      response: { data: { error: 'redirect_uri_mismatch' } },
     });
     const appMisconfigured = buildApp(
       makeGmailService(),
@@ -349,8 +415,74 @@ describe('Google Services OAuth callback route — integration smoke', () => {
       .expect(200);
 
     assert.match(res.headers['content-type'], /text\/html/);
+    assert.match(res.text, /redirect_uri_mismatch/,
+      'redirect_uri_mismatch must surface as its own error token, not a silent empty page');
+    assert.doesNotMatch(res.text, /success/);
+  });
+
+  it('GET /api/auth/google-services/callback — token exchange throws invalid_grant → HTML error with invalid_grant token', async () => {
+    const grantErr = Object.assign(new Error('invalid_grant'), {
+      code: 400,
+      response: { data: { error: 'invalid_grant' } },
+    });
+    const appGrantErr = buildApp(
+      makeGmailService(),
+      makeGoogleServicesService({
+        oauth2Client: makeOAuth2Client({ throwOnGetToken: grantErr }),
+      }),
+    );
+
+    const state = validGoogleServicesState('user-gs-grant');
+    const res = await request(appGrantErr)
+      .get(`/api/auth/google-services/callback?code=EXPIREDCODE&state=${encodeURIComponent(state)}`)
+      .expect(200);
+
+    assert.match(res.headers['content-type'], /text\/html/);
+    assert.match(res.text, /invalid_grant/,
+      'invalid_grant must surface as its own error token');
+    assert.doesNotMatch(res.text, /success/);
+  });
+
+  it('GET /api/auth/google-services/callback — token exchange throws access_denied → HTML error with access_denied token', async () => {
+    const deniedErr = Object.assign(new Error('access_denied'), {
+      code: 400,
+      response: { data: { error: 'access_denied' } },
+    });
+    const appDenied = buildApp(
+      makeGmailService(),
+      makeGoogleServicesService({
+        oauth2Client: makeOAuth2Client({ throwOnGetToken: deniedErr }),
+      }),
+    );
+
+    const state = validGoogleServicesState('user-gs-denied');
+    const res = await request(appDenied)
+      .get(`/api/auth/google-services/callback?code=ANYCODE&state=${encodeURIComponent(state)}`)
+      .expect(200);
+
+    assert.match(res.headers['content-type'], /text\/html/);
+    assert.match(res.text, /access_denied/,
+      'access_denied must surface as its own error token');
+    assert.doesNotMatch(res.text, /success/);
+  });
+
+  it('GET /api/auth/google-services/callback — unknown token exchange error → generic HTML error (auth_failed)', async () => {
+    const unknownErr = new Error('Something unexpected from network');
+    const appUnknown = buildApp(
+      makeGmailService(),
+      makeGoogleServicesService({
+        oauth2Client: makeOAuth2Client({ throwOnGetToken: unknownErr }),
+      }),
+    );
+
+    const state = validGoogleServicesState('user-gs-unknown');
+    const res = await request(appUnknown)
+      .get(`/api/auth/google-services/callback?code=ANYCODE&state=${encodeURIComponent(state)}`)
+      .expect(200);
+
+    assert.match(res.headers['content-type'], /text\/html/);
     assert.match(res.text, /auth_failed/,
-      'A redirect_uri_mismatch must surface as a meaningful error, not a silent empty page');
+      'Unknown errors must collapse to the generic auth_failed token');
     assert.doesNotMatch(res.text, /success/);
   });
 
@@ -381,5 +513,106 @@ describe('Google Services OAuth callback route — integration smoke', () => {
       assert.match(res.headers['content-type'], /text\/html/);
       assert.ok(res.text.length > 0);
     }
+  });
+});
+
+/**
+ * Security tests for OAuth state token expiry, replay protection, and
+ * cross-user flow isolation. These use the real signOAuthState /
+ * verifyOAuthState from oauth-state.js (including jti tracking) so
+ * they exercise the production one-time-use enforcement path.
+ */
+describe('OAuth state token security — expiry, replay, and cross-user isolation', () => {
+  let app;
+  const localPersistCalls = [];
+
+  before(() => {
+    localPersistCalls.length = 0;
+    _testOnly_clearUsedJtis();
+
+    const securityGmailSvc = new ProviderOAuthService({
+      provider: {
+        service: 'gmail',
+        oauth2Client: makeOAuth2Client(),
+        scopes: ['gmail.readonly', 'gmail.send', 'gmail.modify'],
+        scopeFallback: 'gmail',
+        requiredScopes: ['gmail.readonly', 'gmail.send', 'gmail.modify'],
+        scopeMatch: 'every',
+        persistTokens: async (uid, sealed) => localPersistCalls.push({ uid, sealed }),
+        clearTokens: async () => {},
+        readSealedTokens: async () => null,
+      },
+      tokenVault: makeVault(),
+      signState: ({ userId, service }) => signOAuthState({ userId, service }),
+      verifyState: (rawState, { service }) => verifyOAuthState(rawState, { service }),
+      logger: { warn: () => {}, error: () => {}, log: () => {} },
+    });
+
+    app = buildApp(securityGmailSvc, makeGoogleServicesService());
+  });
+
+  it('expired state JWT is rejected with invalid_state', async () => {
+    const jwt = require('jsonwebtoken');
+    const crypto = require('crypto');
+    const expiredState = jwt.sign(
+      { typ: 'oauth_state', userId: 'user-expiry-test', service: 'gmail', jti: crypto.randomUUID() },
+      process.env.JWT_SECRET,
+      { expiresIn: '-1s' },
+    );
+
+    const res = await request(app)
+      .get(`/api/auth/gmail/callback?code=SOMECODE&state=${encodeURIComponent(expiredState)}`)
+      .expect(200);
+
+    assert.match(res.headers['content-type'], /text\/html/);
+    assert.match(res.text, /invalid_state/,
+      'An expired state JWT must be rejected with invalid_state, not silently accepted');
+    assert.doesNotMatch(res.text, /success/);
+  });
+
+  it('replaying a state token after first use is rejected with invalid_state', async () => {
+    const state = signOAuthState({ userId: 'user-replay', service: 'gmail' });
+
+    const firstUse = await request(app)
+      .get(`/api/auth/gmail/callback?code=GOODCODE&state=${encodeURIComponent(state)}`)
+      .expect(200);
+
+    assert.match(firstUse.text, /success/,
+      'First use of a valid state must succeed');
+
+    const secondUse = await request(app)
+      .get(`/api/auth/gmail/callback?code=GOODCODE2&state=${encodeURIComponent(state)}`)
+      .expect(200);
+
+    assert.match(secondUse.text, /invalid_state/,
+      'Replaying an already-consumed state JWT must be rejected with invalid_state');
+    assert.doesNotMatch(secondUse.text, /success/);
+  });
+
+  it('state consumed by user-A cannot be replayed in a user-B code exchange', async () => {
+    const userAState = signOAuthState({ userId: 'user-xflow-a', service: 'gmail' });
+
+    const userAFlow = await request(app)
+      .get(`/api/auth/gmail/callback?code=CODE_FOR_A&state=${encodeURIComponent(userAState)}`)
+      .expect(200);
+
+    assert.match(userAFlow.text, /success/,
+      "user-A's flow should complete successfully on first use");
+    assert.ok(
+      localPersistCalls.find((c) => c.uid === 'user-xflow-a'),
+      'tokens must be persisted for user-A after their flow completes',
+    );
+
+    const userBTriesUserAState = await request(app)
+      .get(`/api/auth/gmail/callback?code=CODE_FOR_B&state=${encodeURIComponent(userAState)}`)
+      .expect(200);
+
+    assert.match(userBTriesUserAState.text, /invalid_state/,
+      "user-A's already-consumed state must be rejected when presented in a user-B code exchange");
+    assert.doesNotMatch(userBTriesUserAState.text, /success/);
+    assert.ok(
+      !localPersistCalls.find((c) => c.uid === 'user-xflow-b'),
+      'no tokens should be persisted for user-B via a replayed user-A state',
+    );
   });
 });

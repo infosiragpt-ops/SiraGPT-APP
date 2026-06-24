@@ -60,7 +60,8 @@ test('agent task boot recovery marks stale in-flight snapshots as terminal after
   taskStore.writeTaskSnapshot({ taskId: 'completed', userId: 'u', status: 'completed', displayGoal: 'done' });
   ageTask('stale-running', 'u', 2 * DEFAULT_BOOT_RECOVERY_STALE_MS);
 
-  const result = recoverAgentTasksAfterBoot({ logger, env: process.env });
+  // Hermetic: REDIS_URL in the runner's env would flip skipJobBacked.
+  const result = recoverAgentTasksAfterBoot({ logger, env: { ...process.env, REDIS_URL: '' } });
 
   assert.equal(result.count, 1);
   assert.equal(result.staleAfterMs, DEFAULT_BOOT_RECOVERY_STALE_MS);
@@ -152,4 +153,28 @@ test('agent task boot recovery fails open when the store throws', () => {
   assert.equal(result.error, 'snapshot dir unreadable');
   assert.equal(logger.entries.at(-1).level, 'warn');
   assert.equal(logger.entries.at(-1).message, 'agent_task_boot_recovery_failed');
+});
+
+test('job-backed tasks are skipped within the grace window but recovered past the hard ceiling', () => {
+  useTempStore();
+  const logger = captureLogger();
+
+  // Fresh-ish job-backed task (stale > 60s but inside the 24h job grace)
+  taskStore.writeTaskSnapshot({ taskId: 'job-fresh', userId: 'u', status: 'running', jobId: 'bull-1', displayGoal: 'x' });
+  ageTask('job-fresh', 'u', 5 * 60 * 1000);
+  // Zombie job-backed task (way past the ceiling — the bug: these were
+  // skipped forever and rescanned on every boot)
+  taskStore.writeTaskSnapshot({ taskId: 'job-zombie', userId: 'u', status: 'running', jobId: 'bull-2', displayGoal: 'y' });
+  ageTask('job-zombie', 'u', 3 * 24 * 60 * 60 * 1000);
+
+  const result = recoverAgentTasksAfterBoot({
+    logger,
+    env: { ...process.env, REDIS_URL: 'redis://localhost:6379' },
+  });
+
+  assert.equal(result.skipJobBacked, true);
+  assert.deepEqual(result.skipped.map((row) => row.taskId), ['job-fresh']);
+  assert.deepEqual(result.recovered.map((row) => row.taskId), ['job-zombie']);
+  assert.equal(taskStore.getTaskSnapshotForUser('job-zombie', 'u').status, 'error');
+  assert.equal(taskStore.getTaskSnapshotForUser('job-fresh', 'u').status, 'running');
 });

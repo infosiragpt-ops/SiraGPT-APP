@@ -130,11 +130,41 @@ function createUploadStaticAccessGuard({ uploadsDir, prisma, jwtSecret = process
   };
 }
 
+/**
+ * R2 fallback for `/uploads/*`. Mounted AFTER express.static, so it only runs
+ * when no local file exists — i.e. the binary lives in R2 (production / scaled
+ * deployments). Ownership/auth is already enforced by the access guard mounted
+ * before express.static, so by the time we get here the request is authorized.
+ *
+ * The R2 key mirrors the upload-relative path ("uploads/<rel>"), so we can
+ * redirect straight to a short-lived signed URL and let the browser pull the
+ * bytes directly from R2 (free egress, no VM bandwidth).
+ */
+function createUploadR2Fallback({ objectStorage = require('../services/object-storage') } = {}) {
+  return async function uploadR2Fallback(req, res, next) {
+    try {
+      if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+      if (!objectStorage.enabled()) return next();
+      const relativePath = normaliseUploadPath(req.path || req.url);
+      if (!relativePath) return next();
+      const ref = objectStorage.refFromKey(`uploads/${relativePath}`);
+      if (!(await objectStorage.exists(ref))) return next();
+      const url = await objectStorage.signedUrl(ref);
+      if (!url) return next();
+      res.setHeader('Cache-Control', 'private, max-age=60');
+      return res.redirect(302, url);
+    } catch (err) {
+      return next();
+    }
+  };
+}
+
 module.exports = {
   BLOCKED_UPLOAD_PREFIXES,
   PUBLIC_UPLOAD_PREFIXES,
   classifyUploadPath,
   createUploadStaticAccessGuard,
+  createUploadR2Fallback,
   normaliseUploadPath,
   resolveConfinedPath,
   tokenFromRequest,

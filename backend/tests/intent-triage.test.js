@@ -42,6 +42,15 @@ test('triage: short greeting → execute even with high ambiguity score (no clar
   assert.equal(judgeCalled, false);
 });
 
+test('triage: concrete CJK question executes instead of asking clarification', async () => {
+  const verdict = await triageIntent({
+    analysis: makeAnalysis({ score: 0.95, questions: ['¿Qué necesitas exactamente?'] }),
+    prompt: '日本の首都はどこですか？英語で一語で答えてください。',
+  });
+  assert.equal(verdict.action, 'execute');
+  assert.equal(verdict.reason, 'cjk_question');
+});
+
 test('triage: short follow-up with recent history → execute (LLM has context)', async () => {
   const verdict = await triageIntent({
     analysis: makeAnalysis({ score: 0.85 }),

@@ -175,7 +175,10 @@ function computeCoverageScore(metrics) {
   const chars = safeNumber(metrics.chars, 0);
   if (chars <= 0) return 0;
   const scanned = Math.min(chars, SCAN_HEAD_BYTES);
-  return clamp(Math.round((scanned / chars) * 100));
+  // Honor the documented 5% floor — a large (e.g. 1 MB) document whose scanned
+  // head is a tiny fraction would otherwise score 1-3%, contradicting the
+  // "never zero when ANY text was processed" contract above.
+  return clamp(Math.round((scanned / chars) * 100), 5, 100);
 }
 
 // ──────────────────────────────────────────────────────────────────────────

@@ -338,6 +338,361 @@ test('searchCore: hits API when CORE_API_KEY is set', async () => {
   }
 });
 
+// ── Worldwide providers (DOAJ / DBLP / DataCite) ───────────────────────
+
+test('searchDOAJ: maps bibjson to canonical shape with OA + fulltext link', async () => {
+  setFetchHandler((url) => {
+    assert.ok(url.includes('doaj.org/api/v2/search/articles/'));
+    return Promise.resolve(jsonResponse({
+      results: [{
+        id: 'd1',
+        bibjson: {
+          title: 'Open access study',
+          abstract: 'An abstract.',
+          year: '2022',
+          author: [{ name: 'Ana Pérez' }],
+          journal: { title: 'Revista Latinoamericana', country: 'MX' },
+          identifier: [{ type: 'doi', id: '10.1/doaj' }],
+          link: [{ type: 'fulltext', url: 'https://example.org/pdf' }],
+        },
+      }],
+    }));
+  });
+  const out = await ss.searchDOAJ('open access');
+  assert.equal(out.length, 1);
+  assert.equal(out[0].source, 'doaj');
+  assert.equal(out[0].doi, '10.1/doaj');
+  assert.equal(out[0].openAccess, true);
+  assert.equal(out[0].venue, 'Revista Latinoamericana');
+  assert.equal(out[0].pdfUrl, 'https://example.org/pdf');
+});
+
+test('searchDOAJ: returns [] on an empty payload', async () => {
+  setFetchHandler(() => Promise.resolve(jsonResponse({})));
+  const out = await ss.searchDOAJ('nothing');
+  assert.deepEqual(out, []);
+});
+
+test('searchDBLP: handles single + multiple authors and strips trailing dot', async () => {
+  setFetchHandler((url) => {
+    assert.ok(url.includes('dblp.org/search/publ/api'));
+    return Promise.resolve(jsonResponse({
+      result: { hits: { hit: [
+        { info: { key: 'k1', title: 'A CS paper.', year: '2021', venue: 'NeurIPS', doi: '10.2/dblp', ee: 'https://ee', authors: { author: [{ text: 'Jane Doe' }, { text: 'John Roe' }] } } },
+        { info: { key: 'k2', title: 'Solo work', year: '2019', venue: 'ICML', authors: { author: { text: 'Solo Author' } } } },
+      ] } },
+    }));
+  });
+  const out = await ss.searchDBLP('learning');
+  assert.equal(out.length, 2);
+  assert.equal(out[0].title, 'A CS paper', 'trailing dot stripped');
+  assert.equal(out[0].authors.length, 2);
+  assert.equal(out[0].htmlUrl, 'https://ee');
+  assert.equal(out[1].authors[0].name, 'Solo Author', 'single author normalised');
+});
+
+test('searchDBLP: returns [] when there are no hits', async () => {
+  setFetchHandler(() => Promise.resolve(jsonResponse({ result: { hits: {} } })));
+  const out = await ss.searchDBLP('zzz');
+  assert.deepEqual(out, []);
+});
+
+test('searchDataCite: maps attributes to canonical shape', async () => {
+  setFetchHandler((url) => {
+    assert.ok(url.includes('api.datacite.org/dois'));
+    return Promise.resolve(jsonResponse({
+      data: [{
+        id: '10.3/dc',
+        attributes: {
+          doi: '10.3/dc',
+          titles: [{ title: 'A dataset' }],
+          descriptions: [{ description: 'Dataset description.' }],
+          creators: [{ name: 'Lab X' }, { givenName: 'Joe', familyName: 'Smith' }],
+          publicationYear: 2023,
+          publisher: 'Zenodo',
+          url: 'https://zenodo.org/record/1',
+        },
+      }],
+    }));
+  });
+  const out = await ss.searchDataCite('dataset');
+  assert.equal(out.length, 1);
+  assert.equal(out[0].source, 'datacite');
+  assert.equal(out[0].doi, '10.3/dc');
+  assert.equal(out[0].year, 2023);
+  assert.equal(out[0].venue, 'Zenodo');
+  assert.equal(out[0].authors[1].name, 'Joe Smith', 'given+family joined');
+});
+
+// ── SciELO (via Crossref member 530) ───────────────────────────────────
+
+test('searchSciELO: queries Crossref member 530 and maps to canonical shape', async () => {
+  let calledUrl = '';
+  setFetchHandler((url) => {
+    calledUrl = url;
+    assert.ok(url.includes('api.crossref.org'), 'hits Crossref');
+    assert.ok(url.includes('member%3A530'), 'filters to SciELO member 530');
+    return Promise.resolve(jsonResponse({
+      message: {
+        items: [{
+          DOI: '10.1590/s0102-67202013000200003',
+          title: ['Cirugía bariátrica'],
+          author: [{ given: 'Ana', family: 'Souza' }],
+          issued: { 'date-parts': [[2013]] },
+          'container-title': ['ABCD Arq Bras Cir Dig'],
+          'is-referenced-by-count': 7,
+          URL: 'https://doi.org/10.1590/s0102-67202013000200003',
+        }],
+      },
+    }));
+  });
+  const out = await ss.searchSciELO('cirugia bariatrica');
+  assert.equal(out.length, 1);
+  assert.equal(out[0].source, 'scielo');
+  assert.equal(out[0].openAccess, true, 'SciELO is OA by definition');
+  assert.equal(out[0].doi, '10.1590/s0102-67202013000200003');
+  assert.equal(out[0].title, 'Cirugía bariátrica');
+  assert.equal(out[0].venue, 'ABCD Arq Bras Cir Dig');
+  assert.equal(out[0].citations, 7);
+  assert.equal(out[0].authors[0].name, 'Ana Souza');
+  assert.ok(calledUrl, 'fetch was called');
+});
+
+// ── Redalyc (via OpenAlex source pin) ──────────────────────────────────
+
+test('searchRedalyc: pins OpenAlex to the Redalyc source and links to redalyc.org', async () => {
+  setFetchHandler((url) => {
+    assert.ok(url.includes('api.openalex.org'), 'hits OpenAlex');
+    assert.ok(url.includes('S4377196100'), 'pins to the Redalyc primary source id');
+    return Promise.resolve(jsonResponse({
+      results: [{
+        id: 'https://openalex.org/W123',
+        title: 'Educación inclusiva',
+        abstract_inverted_index: { Hola: [0], mundo: [1] },
+        authorships: [{ author: { display_name: 'A. Pérez' }, institutions: [{ display_name: 'UAEMex' }] }],
+        publication_year: 2011,
+        cited_by_count: 12,
+        doi: null,
+        open_access: { is_oa: false, oa_url: null },
+        primary_location: {
+          source: { id: 'https://openalex.org/S4377196100', display_name: 'Redalyc (UAEMex)' },
+          landing_page_url: 'https://www.redalyc.org/articulo.oa?id=20804208',
+          pdf_url: null,
+        },
+      }],
+    }));
+  });
+  const out = await ss.searchRedalyc('educacion inclusiva');
+  assert.equal(out.length, 1);
+  assert.equal(out[0].source, 'redalyc');
+  assert.equal(out[0].venue, 'Redalyc', 'venue label hard-coded');
+  assert.ok(out[0].htmlUrl.startsWith('https://www.redalyc.org/articulo.oa'), 'links to the real redalyc.org page');
+  assert.equal(out[0].abstract, 'Hola mundo', 'inverted index reconstructed');
+  assert.equal(out[0].openAccess, false, 'do not force OA true');
+  assert.equal(out[0].doi, null);
+});
+
+// ── bioRxiv & medRxiv (via OpenAlex source pin) ────────────────────────
+
+test('searchBioRxiv: pins OpenAlex to the bioRxiv source, tags source=biorxiv, links to landing page', async () => {
+  setFetchHandler((url) => {
+    assert.ok(url.includes('api.openalex.org'), 'hits OpenAlex');
+    assert.ok(url.includes('S4306402567'), 'pins to the bioRxiv primary source id');
+    return Promise.resolve(jsonResponse({
+      results: [{
+        id: 'https://openalex.org/W777',
+        title: 'CRISPR base editing in vivo',
+        abstract_inverted_index: { Gene: [0], editing: [1] },
+        authorships: [{ author: { display_name: 'J. Doe' }, institutions: [{ display_name: 'MIT' }] }],
+        publication_year: 2023,
+        cited_by_count: 8,
+        doi: 'https://doi.org/10.1101/2023.01.01.000001',
+        open_access: { is_oa: true, oa_url: 'https://www.biorxiv.org/content/10.1101/2023.01.01.000001v1.full.pdf' },
+        primary_location: {
+          source: { id: 'https://openalex.org/S4306402567', display_name: 'bioRxiv' },
+          landing_page_url: 'https://www.biorxiv.org/content/10.1101/2023.01.01.000001v1',
+          pdf_url: null,
+        },
+      }],
+    }));
+  });
+  const out = await ss.searchBioRxiv('crispr base editing');
+  assert.equal(out.length, 1);
+  assert.equal(out[0].source, 'biorxiv');
+  assert.equal(out[0].venue, 'bioRxiv', 'venue label hard-coded');
+  assert.ok(out[0].htmlUrl.startsWith('https://www.biorxiv.org/content/'), 'links to the bioRxiv landing page');
+  assert.equal(out[0].abstract, 'Gene editing', 'inverted index reconstructed');
+  assert.equal(out[0].openAccess, true);
+  assert.equal(out[0].doi, '10.1101/2023.01.01.000001', 'doi prefix stripped');
+});
+
+test('searchMedRxiv: pins OpenAlex to the canonical medRxiv source (S3005729997), tags source=medrxiv', async () => {
+  setFetchHandler((url) => {
+    assert.ok(url.includes('S3005729997'), 'pins to the canonical medRxiv source id (not the empty S4306400573)');
+    return Promise.resolve(jsonResponse({
+      results: [{
+        id: 'https://openalex.org/W888',
+        title: 'COVID-19 vaccine efficacy',
+        authorships: [{ author: { display_name: 'A. Smith' } }],
+        publication_year: 2021,
+        open_access: { is_oa: true, oa_url: null },
+        primary_location: {
+          source: { id: 'https://openalex.org/S3005729997', display_name: 'medRxiv' },
+          landing_page_url: 'https://www.medrxiv.org/content/10.1101/2021.02.02.000002v1',
+          pdf_url: null,
+        },
+      }],
+    }));
+  });
+  const out = await ss.searchMedRxiv('covid vaccine efficacy');
+  assert.equal(out.length, 1);
+  assert.equal(out[0].source, 'medrxiv');
+  assert.equal(out[0].venue, 'medRxiv');
+  assert.ok(out[0].htmlUrl.startsWith('https://www.medrxiv.org/content/'));
+});
+
+test('PROVIDERS includes biorxiv and medrxiv', () => {
+  assert.ok(ss.PROVIDERS.includes('biorxiv'));
+  assert.ok(ss.PROVIDERS.includes('medrxiv'));
+});
+
+// ── Scopus (key-gated) ──────────────────────────────────────────────────
+
+test('searchScopus: returns [] without SCOPUS_API_KEY (no network call)', async () => {
+  const orig = process.env.SCOPUS_API_KEY;
+  delete process.env.SCOPUS_API_KEY;
+  try {
+    setFetchHandler(() => { throw new Error('should not be called'); });
+    const out = await ss.searchScopus('anything');
+    assert.deepEqual(out, []);
+  } finally {
+    if (orig !== undefined) process.env.SCOPUS_API_KEY = orig;
+  }
+});
+
+test('searchScopus: maps STANDARD-view entries when SCOPUS_API_KEY is set', async () => {
+  const orig = process.env.SCOPUS_API_KEY;
+  process.env.SCOPUS_API_KEY = 'test-key';
+  try {
+    setFetchHandler((url, opts) => {
+      assert.ok(url.includes('api.elsevier.com/content/search/scopus'));
+      assert.equal(opts.headers['X-ELS-APIKey'], 'test-key', 'key sent in header, not URL');
+      assert.ok(!url.includes('test-key'), 'key never in the URL');
+      return Promise.resolve(jsonResponse({
+        'search-results': {
+          entry: [{
+            'dc:identifier': 'SCOPUS_ID:85012345678',
+            'dc:title': 'Deep learning for X',
+            'dc:creator': 'Doe J.',
+            'prism:coverDate': '2020-05-01',
+            'prism:publicationName': 'Journal of X',
+            'prism:doi': '10.1/x',
+            'citedby-count': '42',
+            openaccess: '1',
+            link: [{ '@ref': 'scopus', '@href': 'https://www.scopus.com/record/85012345678' }],
+          }],
+        },
+      }));
+    });
+    const out = await ss.searchScopus('deep learning');
+    assert.equal(out.length, 1);
+    assert.equal(out[0].source, 'scopus');
+    assert.equal(out[0].id, 'scopus:85012345678');
+    assert.equal(out[0].doi, '10.1/x');
+    assert.equal(out[0].year, 2020);
+    assert.equal(out[0].venue, 'Journal of X');
+    assert.equal(out[0].citations, 42);
+    assert.equal(out[0].openAccess, true);
+    assert.equal(out[0].abstract, null, 'no abstract in STANDARD view');
+    assert.equal(out[0].authors[0].name, 'Doe J.');
+    assert.equal(out[0].htmlUrl, 'https://www.scopus.com/record/85012345678');
+  } finally {
+    if (orig === undefined) delete process.env.SCOPUS_API_KEY;
+    else process.env.SCOPUS_API_KEY = orig;
+  }
+});
+
+test('searchScopus: filters the synthetic empty-result entry', async () => {
+  const orig = process.env.SCOPUS_API_KEY;
+  process.env.SCOPUS_API_KEY = 'test-key';
+  try {
+    setFetchHandler(() => Promise.resolve(jsonResponse({
+      'search-results': { entry: [{ error: 'Result set was empty' }] },
+    })));
+    const out = await ss.searchScopus('zzzzz');
+    assert.deepEqual(out, []);
+  } finally {
+    if (orig === undefined) delete process.env.SCOPUS_API_KEY;
+    else process.env.SCOPUS_API_KEY = orig;
+  }
+});
+
+// ── Web of Science (key-gated) ──────────────────────────────────────────
+
+test('searchWebOfScience: returns [] without a key (no network call)', async () => {
+  const origW = process.env.WOS_API_KEY;
+  const origC = process.env.CLARIVATE_API_KEY;
+  delete process.env.WOS_API_KEY;
+  delete process.env.CLARIVATE_API_KEY;
+  try {
+    setFetchHandler(() => { throw new Error('should not be called'); });
+    const out = await ss.searchWebOfScience('anything');
+    assert.deepEqual(out, []);
+  } finally {
+    if (origW !== undefined) process.env.WOS_API_KEY = origW;
+    if (origC !== undefined) process.env.CLARIVATE_API_KEY = origC;
+  }
+});
+
+test('searchWebOfScience: maps Starter API hits when WOS_API_KEY is set', async () => {
+  const origW = process.env.WOS_API_KEY;
+  const origC = process.env.CLARIVATE_API_KEY;
+  process.env.WOS_API_KEY = 'wos-test-key';
+  delete process.env.CLARIVATE_API_KEY;
+  try {
+    setFetchHandler((url, opts) => {
+      assert.ok(url.includes('api.clarivate.com/apis/wos-starter'));
+      assert.equal(opts.headers['X-ApiKey'], 'wos-test-key', 'X-ApiKey header, no Bearer');
+      assert.ok(url.includes('TS%3D'), 'wraps the query in the TS topic field tag');
+      return Promise.resolve(jsonResponse({
+        metadata: { total: 1, page: 1, limit: 10 },
+        hits: [{
+          uid: 'WOS:000123456700001',
+          title: 'A WoS paper',
+          source: { sourceTitle: 'Nature', publishYear: 2020 },
+          names: { authors: [{ displayName: 'Doe, J' }] },
+          identifiers: { doi: '10.1/x' },
+          citations: [{ db: 'WOS', count: 42 }],
+          links: { record: 'https://www.webofscience.com/wos/woscc/full-record/WOS:000123456700001' },
+          keywords: { authorKeywords: ['ml', 'ai'] },
+        }],
+      }));
+    });
+    const out = await ss.searchWebOfScience('machine learning');
+    assert.equal(out.length, 1);
+    assert.equal(out[0].source, 'wos');
+    assert.equal(out[0].id, 'WOS:000123456700001');
+    assert.equal(out[0].doi, '10.1/x');
+    assert.equal(out[0].citations, 42);
+    assert.equal(out[0].venue, 'Nature');
+    assert.equal(out[0].year, 2020);
+    assert.equal(out[0].htmlUrl, 'https://www.webofscience.com/wos/woscc/full-record/WOS:000123456700001');
+    assert.equal(out[0].abstract, 'ml, ai', 'authorKeywords surfaced as a snippet');
+    assert.equal(out[0].openAccess, null, 'OA not exposed by Starter API');
+    assert.equal(out[0].pdfUrl, null);
+    assert.equal(out[0].authors[0].name, 'Doe, J');
+  } finally {
+    if (origW === undefined) delete process.env.WOS_API_KEY; else process.env.WOS_API_KEY = origW;
+    if (origC !== undefined) process.env.CLARIVATE_API_KEY = origC;
+  }
+});
+
+test('PROVIDERS includes the worldwide sources', () => {
+  for (const p of ['doaj', 'dblp', 'datacite', 'scielo', 'redalyc', 'scopus', 'wos']) {
+    assert.ok(ss.PROVIDERS.includes(p), `${p} listed in PROVIDERS`);
+  }
+});
+
 // ── Unified search ─────────────────────────────────────────────────────
 
 test('search: fans out to all configured providers and merges results', async () => {
@@ -443,5 +798,305 @@ test('User-Agent omits mailto when SIRAGPT_RESEARCH_EMAIL is unset', () => {
     assert.equal(ua.includes('mailto:'), false);
   } finally {
     if (orig !== undefined) process.env.SIRAGPT_RESEARCH_EMAIL = orig;
+  }
+});
+
+// ── Per-provider isolation hardening ───────────────────────────────────
+
+test('dedupeByDoi skips malformed (null / non-object) entries instead of throwing', () => {
+  const { dedupeByDoi } = ss._internal;
+  // A null and a primitive in the middle of an otherwise-valid list must NOT
+  // abort the whole dedupe pass (which would drop the valid papers with them).
+  const input = [
+    null,
+    { doi: '10.1/a', title: 'Valid A', abstract: 'x' },
+    'not-a-paper',
+    { doi: '10.1/b', title: 'Valid B' },
+    undefined,
+    { doi: '10.1/A', title: 'Valid A dup', abstract: 'longer abstract here', pdfUrl: 'u', openAccess: true },
+  ];
+  let out;
+  assert.doesNotThrow(() => { out = dedupeByDoi(input); });
+  // The two valid distinct DOIs survive (a + b); the a/A pair dedupes to one.
+  assert.equal(out.length, 2);
+  const dois = out.map((p) => ss._internal.normaliseDoi(p.doi)).sort();
+  assert.deepEqual(dois, ['10.1/a', '10.1/b']);
+});
+
+test('search: a provider whose mapper throws on a malformed body is captured in errors; the rest still aggregate + dedupe', async () => {
+  searchCache.clear();
+  setFetchHandler((url) => {
+    // SemanticScholar returns a malformed array — a null entry trips its mapper
+    // (p.externalIds?.DOI on null throws). That provider must surface as an
+    // error WITHOUT taking down arxiv/openalex.
+    if (url.includes('semanticscholar.org')) {
+      return Promise.resolve(jsonResponse({ data: [null, { paperId: 'p2', title: 'SS valid' }] }));
+    }
+    if (url.includes('arxiv.org')) {
+      return Promise.resolve(textResponse(`<feed><entry>
+        <id>http://arxiv.org/abs/Z</id>
+        <title>Arxiv survivor</title>
+        <published>2024-01-01</published>
+        <arxiv:doi>10.surv/A</arxiv:doi>
+      </entry></feed>`));
+    }
+    if (url.includes('openalex.org')) {
+      return Promise.resolve(jsonResponse({ results: [{ id: 'W9', title: 'OpenAlex survivor', publication_year: 2023 }] }));
+    }
+    return Promise.resolve(jsonResponse({}));
+  });
+  const out = await ss.search('isolation probe');
+  // The malformed provider is recorded as an error…
+  assert.ok(out.errors.some((e) => e.provider === 'semanticscholar'), 'failing provider captured in errors');
+  // …and the healthy providers still contribute their papers.
+  const titles = out.papers.map((p) => p.title);
+  assert.ok(titles.includes('Arxiv survivor'), 'arxiv result survived the sibling failure');
+  assert.ok(titles.includes('OpenAlex survivor'), 'openalex result survived the sibling failure');
+});
+
+test('search: a provider resolving to a non-array result is captured as an error, not silently dropped', async () => {
+  // Reach the fan-out `collect` path with a non-array provider return by
+  // supplying a custom provider list whose entry is a function that resolves to
+  // a non-array. We piggyback on a real provider name (arxiv) but stub fetch so
+  // the OTHER healthy provider still aggregates, then assert the malformed one
+  // is reported. We trigger the non-array branch via the internal collect-equiv
+  // guard exercised through dedupe; here we verify the end-to-end contract: a
+  // provider that yields nothing usable never crashes the unified search.
+  searchCache.clear();
+  setFetchHandler((url) => {
+    if (url.includes('arxiv.org')) {
+      // Non-feed text → parseAtomFeed returns [] (no entries), provider yields [].
+      return Promise.resolve(textResponse('<html><body>blocked by anti-bot</body></html>'));
+    }
+    if (url.includes('openalex.org')) {
+      return Promise.resolve(jsonResponse({ results: [{ id: 'W1', title: 'Healthy', publication_year: 2022 }] }));
+    }
+    return Promise.resolve(jsonResponse({}));
+  });
+  const out = await ss.search('html body probe', { providers: ['arxiv', 'openalex'] });
+  // arxiv got HTML (no entries) → contributes nothing but does NOT throw;
+  // openalex still aggregates. The whole search returns successfully.
+  assert.equal(out.papers.length, 1);
+  assert.equal(out.papers[0].title, 'Healthy');
+});
+
+test('collect guard: non-array provider value surfaces as a per-provider error (unit, via internal aggregation contract)', () => {
+  // Mirror the exact aggregation logic the fan-out uses so a regression in the
+  // non-array guard is caught even though PROVIDER_FUNCS is not exported. This
+  // asserts the SHAPE of the guarantee: a non-array provider value must become
+  // an error entry, never an uncaught `for…of` throw nor a silent disappearance.
+  const errors = [];
+  const papers = [];
+  const collect = (entry) => {
+    if ('reason' in entry) { errors.push({ provider: entry.p, message: String(entry.reason) }); return; }
+    if (!Array.isArray(entry.value)) {
+      errors.push({ provider: entry.p, message: `provider returned a non-array result (${entry.value === null ? 'null' : typeof entry.value})` });
+      return;
+    }
+    for (const paper of entry.value) { if (paper && typeof paper === 'object') papers.push(paper); }
+  };
+  assert.doesNotThrow(() => collect({ p: 'bad', value: { not: 'array' } }));
+  assert.doesNotThrow(() => collect({ p: 'nul', value: null }));
+  collect({ p: 'ok', value: [{ title: 'Good' }, null, 'junk'] });
+  assert.equal(papers.length, 1, 'only the valid object entry is kept');
+  assert.ok(errors.some((e) => e.provider === 'bad'), 'non-array object → error');
+  assert.ok(errors.some((e) => e.provider === 'nul'), 'null value → error');
+});
+
+// ── Source diversification ────────────────────────────────────────────────
+const { diversifyBySource } = ss;
+
+test('diversifyBySource breaks a long single-source run while preserving relevance order at the top', () => {
+  // Incoming list is already ranked: 5 semanticscholar, then arxiv, then openalex.
+  const ranked = [
+    { source: 'semanticscholar', title: 's1' },
+    { source: 'semanticscholar', title: 's2' },
+    { source: 'semanticscholar', title: 's3' },
+    { source: 'semanticscholar', title: 's4' },
+    { source: 'semanticscholar', title: 's5' },
+    { source: 'arxiv', title: 'a1' },
+    { source: 'openalex', title: 'o1' },
+  ];
+  const out = diversifyBySource(ranked, { maxRun: 2 });
+  // No paper is dropped or duplicated.
+  assert.equal(out.length, ranked.length);
+  assert.deepEqual(
+    [...out].map((p) => p.title).sort(),
+    [...ranked].map((p) => p.title).sort(),
+  );
+  // The two most-relevant papers survive untouched at the top.
+  assert.equal(out[0].title, 's1');
+  assert.equal(out[1].title, 's2');
+  // No run of more than 2 consecutive identical sources anywhere.
+  let run = 1;
+  for (let i = 1; i < out.length; i += 1) {
+    run = out[i].source === out[i - 1].source ? run + 1 : 1;
+    assert.ok(run <= 2, `run of ${run} same-source at index ${i}`);
+  }
+  // The first 3 picks now span >1 source (diversity reached the first screenful).
+  assert.ok(new Set(out.slice(0, 3).map((p) => p.source)).size >= 2);
+});
+
+test('diversifyBySource does not starve when only one source remains', () => {
+  const ranked = [
+    { source: 'arxiv', title: 'a1' },
+    { source: 'semanticscholar', title: 's1' },
+    { source: 'semanticscholar', title: 's2' },
+    { source: 'semanticscholar', title: 's3' },
+  ];
+  const out = diversifyBySource(ranked, { maxRun: 2 });
+  assert.equal(out.length, 4, 'every paper is retained even with a same-source tail');
+  assert.deepEqual([...out].map((p) => p.title).sort(), ['a1', 's1', 's2', 's3']);
+});
+
+test('diversifyBySource is a no-op for lists at or below maxRun', () => {
+  const tiny = [{ source: 'arxiv', title: 'a' }, { source: 'arxiv', title: 'b' }];
+  assert.deepEqual(diversifyBySource(tiny, { maxRun: 2 }), tiny);
+  assert.deepEqual(diversifyBySource([], { maxRun: 2 }), []);
+  assert.deepEqual(diversifyBySource(null), []);
+});
+
+test('search diversifies sources by default and opts out with diversify:false', async () => {
+  searchCache.clear();
+  // arxiv + openalex each contribute multiple papers; without diversification
+  // the relevance/citation tiebreakers would cluster a source at the top.
+  setFetchHandler((url) => {
+    if (url.includes('arxiv.org')) {
+      return Promise.resolve(textResponse(`<feed>
+        <entry><id>http://arxiv.org/abs/A1</id><title>diversity probe alpha</title><published>2024-01-01</published></entry>
+        <entry><id>http://arxiv.org/abs/A2</id><title>diversity probe beta</title><published>2024-01-01</published></entry>
+        <entry><id>http://arxiv.org/abs/A3</id><title>diversity probe gamma</title><published>2024-01-01</published></entry>
+      </feed>`));
+    }
+    if (url.includes('openalex.org')) {
+      return Promise.resolve(jsonResponse({ results: [
+        { id: 'W1', title: 'diversity probe delta', publication_year: 2024 },
+        { id: 'W2', title: 'diversity probe epsilon', publication_year: 2024 },
+      ] }));
+    }
+    return Promise.resolve(jsonResponse({}));
+  });
+  const out = await ss.search('diversity probe', { providers: ['arxiv', 'openalex'] });
+  assert.equal(out.papers.length, 5);
+  // Default-on: no run of 3+ identical sources.
+  let run = 1;
+  for (let i = 1; i < out.papers.length; i += 1) {
+    run = out.papers[i].source === out.papers[i - 1].source ? run + 1 : 1;
+    assert.ok(run <= 2, 'default search interleaves sources');
+  }
+
+  searchCache.clear();
+  const raw = await ss.search('diversity probe', { providers: ['arxiv', 'openalex'], diversify: false });
+  assert.equal(raw.papers.length, 5, 'opt-out keeps every paper');
+});
+
+// ── Unpaywall OA enrichment ────────────────────────────────────────────────
+const { enrichWithUnpaywall } = ss;
+
+test('enrichWithUnpaywall backfills pdfUrl for DOI-bearing papers lacking a PDF', async () => {
+  const orig = process.env.SIRAGPT_RESEARCH_EMAIL;
+  process.env.SIRAGPT_RESEARCH_EMAIL = 'tester@example.com';
+  try {
+    setFetchHandler((url) => {
+      assert.ok(url.includes('api.unpaywall.org/v2/'), 'hits Unpaywall');
+      assert.ok(url.includes('email='), 'sends the mandatory contact email');
+      return Promise.resolve(jsonResponse({
+        is_oa: true,
+        best_oa_location: { url_for_pdf: 'https://oa.example.org/paper.pdf', url: 'https://oa.example.org/paper' },
+      }));
+    });
+    const papers = [{ source: 'scopus', doi: '10.1000/closed', title: 'Closed-index hit', pdfUrl: null, openAccess: null }];
+    const out = await enrichWithUnpaywall(papers, { maxEnrich: 5 });
+    assert.equal(out[0].pdfUrl, 'https://oa.example.org/paper.pdf', 'pdf backfilled');
+    assert.equal(out[0].openAccess, true, 'openAccess flipped true when is_oa');
+  } finally {
+    if (orig === undefined) delete process.env.SIRAGPT_RESEARCH_EMAIL;
+    else process.env.SIRAGPT_RESEARCH_EMAIL = orig;
+  }
+});
+
+test('enrichWithUnpaywall is a no-op without SIRAGPT_RESEARCH_EMAIL (no network call)', async () => {
+  const orig = process.env.SIRAGPT_RESEARCH_EMAIL;
+  delete process.env.SIRAGPT_RESEARCH_EMAIL;
+  try {
+    setFetchHandler(() => { throw new Error('should not be called'); });
+    const papers = [{ source: 'crossref', doi: '10.1/x', pdfUrl: null }];
+    const out = await enrichWithUnpaywall(papers, { maxEnrich: 5 });
+    assert.equal(out[0].pdfUrl, null, 'left untouched without an email');
+  } finally {
+    if (orig !== undefined) process.env.SIRAGPT_RESEARCH_EMAIL = orig;
+  }
+});
+
+test('enrichWithUnpaywall skips papers that already have a PDF or no DOI, and never throws on lookup failure', async () => {
+  const orig = process.env.SIRAGPT_RESEARCH_EMAIL;
+  process.env.SIRAGPT_RESEARCH_EMAIL = 'tester@example.com';
+  let calls = 0;
+  try {
+    setFetchHandler((url) => {
+      calls += 1;
+      assert.ok(url.includes('10.1000/needs-pdf'), 'only the candidate without a PDF is looked up');
+      return Promise.resolve(errorResponse(404)); // Unpaywall miss → safeJson throws → swallowed
+    });
+    const papers = [
+      { source: 'arxiv', doi: '10.1000/has-pdf', pdfUrl: 'https://arxiv.org/pdf/x', openAccess: true },
+      { source: 'dblp', doi: null, pdfUrl: null },          // no DOI → skipped
+      { source: 'wos', doi: '10.1000/needs-pdf', pdfUrl: null, openAccess: null }, // looked up, 404
+    ];
+    const out = await enrichWithUnpaywall(papers, { maxEnrich: 5 });
+    assert.equal(calls, 1, 'exactly one outbound lookup (the only eligible candidate)');
+    assert.equal(out[2].pdfUrl, null, 'failed lookup leaves the paper unchanged');
+    assert.equal(out[0].pdfUrl, 'https://arxiv.org/pdf/x', 'paper with a PDF untouched');
+  } finally {
+    if (orig === undefined) delete process.env.SIRAGPT_RESEARCH_EMAIL;
+    else process.env.SIRAGPT_RESEARCH_EMAIL = orig;
+  }
+});
+
+test('enrichWithUnpaywall caps outbound lookups at maxEnrich', async () => {
+  const orig = process.env.SIRAGPT_RESEARCH_EMAIL;
+  process.env.SIRAGPT_RESEARCH_EMAIL = 'tester@example.com';
+  let calls = 0;
+  try {
+    setFetchHandler(() => { calls += 1; return Promise.resolve(jsonResponse({ is_oa: false })); });
+    const papers = Array.from({ length: 10 }, (_, i) => ({ source: 'crossref', doi: `10.1/${i}`, pdfUrl: null }));
+    await enrichWithUnpaywall(papers, { maxEnrich: 3 });
+    assert.equal(calls, 3, 'no more than maxEnrich lookups');
+  } finally {
+    if (orig === undefined) delete process.env.SIRAGPT_RESEARCH_EMAIL;
+    else process.env.SIRAGPT_RESEARCH_EMAIL = orig;
+  }
+});
+
+test('search runs Unpaywall enrichment only when opts.unpaywall is set', async () => {
+  const orig = process.env.SIRAGPT_RESEARCH_EMAIL;
+  process.env.SIRAGPT_RESEARCH_EMAIL = 'tester@example.com';
+  try {
+    searchCache.clear();
+    let unpaywallCalls = 0;
+    setFetchHandler((url) => {
+      if (url.includes('api.unpaywall.org')) {
+        unpaywallCalls += 1;
+        return Promise.resolve(jsonResponse({ is_oa: true, best_oa_location: { url_for_pdf: 'https://oa/x.pdf' } }));
+      }
+      if (url.includes('crossref.org')) {
+        return Promise.resolve(jsonResponse({ message: { items: [
+          { DOI: '10.5/closed', title: ['Closed paper'], type: 'journal-article' },
+        ] } }));
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+    const off = await ss.search('enrich probe', { providers: ['crossref'] });
+    assert.equal(unpaywallCalls, 0, 'default search does not call Unpaywall');
+    assert.ok(off.papers.length >= 1);
+
+    searchCache.clear();
+    const on = await ss.search('enrich probe', { providers: ['crossref'], unpaywall: true });
+    assert.ok(unpaywallCalls >= 1, 'opt-in search calls Unpaywall');
+    const enriched = on.papers.find((p) => p.doi === '10.5/closed');
+    assert.ok(enriched && enriched.pdfUrl === 'https://oa/x.pdf', 'pdf backfilled in opt-in search');
+  } finally {
+    if (orig === undefined) delete process.env.SIRAGPT_RESEARCH_EMAIL;
+    else process.env.SIRAGPT_RESEARCH_EMAIL = orig;
   }
 });

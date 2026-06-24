@@ -1,0 +1,92 @@
+# OpenCode engine — vendored into siraGPT
+
+This directory is the **OpenCode coding-agent engine**, vendored from
+[`sst/opencode`](https://github.com/sst/opencode) (`packages/opencode`).
+**License: MIT** (see `LICENSE`). Keep the upstream copyright notice.
+
+We bring the *engine implementation* here (not the TUI/desktop/web/docs/infra
+packages). The main agent package is vendored at the root of this directory;
+its sibling engine packages are under `packages/`:
+
+| Path | Upstream package | Purpose |
+|------|------------------|---------|
+| `./src` | `packages/opencode` | main agent: loop, tools, server, providers |
+| `packages/core` | `@opencode/core` | shared core runtime |
+| `packages/server` | `@opencode/server` | server layer |
+| `packages/llm` | `@opencode/llm` | LLM/provider layer |
+| `packages/sdk` | `@opencode/sdk` | TS SDK (HTTP client, OpenAPI-generated) |
+| `packages/plugin` | `@opencode/plugin` | plugin API |
+| `packages/identity` | `@opencode/identity` | identity helpers |
+| `packages/function` | `@opencode/function` | function utilities |
+| `packages/effect-drizzle-sqlite`, `packages/effect-sqlite-node` | Effect + SQLite bindings |
+
+`test/` fixtures and `node_modules` were excluded from every package when
+vendoring. The main agent lives under `src/`:
+
+- `src/agent`, `src/tool`, `src/skill` — the agent loop, tools, skills
+- `src/session`, `src/message` — conversations / message parts
+- `src/server` — the HTTP server (`opencode serve`, OpenAPI at `/doc`)
+- `src/provider`, `src/llm` — model providers
+- `src/lsp`, `src/mcp`, `src/permission`, `src/plugin` — LSP, MCP, perms, plugins
+- `src/index.ts` — entry point
+
+## Runtime reality (important)
+
+OpenCode runs on **Bun** (`bun@1.3.x`) and uses the **Effect** framework. It is
+**not** a Node/Express module — it does **not** merge into siraGPT's Express
+backend process. It runs as a **sidecar service**, and siraGPT's backend talks
+to it over HTTP.
+
+## Run it (sidecar)
+
+```bash
+cd vendor/opencode
+bun install
+bun run ./src/index.ts serve --port 4096 --hostname 127.0.0.1
+# optional auth: OPENCODE_SERVER_PASSWORD=... bun run ./src/index.ts serve ...
+```
+
+### Or as a Docker sidecar (recommended for the stack)
+
+`docker-compose.yml` ships an opt-in `opencode` service (Bun image) behind a
+profile:
+
+```bash
+# in .env:  OPENCODE_SERVER_URL=http://opencode:4096
+docker compose --profile opencode up
+```
+
+The siraGPT backend then reaches it at `http://opencode:4096` via
+`OPENCODE_SERVER_URL` (already wired in the backend service env).
+
+`test/` (heavy image fixtures) was excluded when vendoring; restore from
+upstream if you need to run OpenCode's own test suite.
+
+## How siraGPT connects
+
+siraGPT's Express backend drives this server via the thin client:
+
+- `backend/src/services/opencode/opencode-config.js` — reads
+  `OPENCODE_SERVER_URL` / `OPENCODE_SERVER_USERNAME` / `OPENCODE_SERVER_PASSWORD`
+- `backend/src/services/opencode/opencode-client.js` — sessions, prompt,
+  file/find, SSE event stream URL
+
+So the data flow is:
+
+```
+siraGPT /code UI  →  Express backend (opencode-client)  →  [ this engine: bun serve ]
+                  ←  SSE proxy  ←  /event
+```
+
+## Status & next steps
+
+1. ✅ Engine source vendored here (MIT).
+2. ▢ `bun install` + `bun run serve` on the host (or a container).
+3. ▢ Validate the client's endpoint paths against this server's `/doc`
+   (OpenAPI) and adjust `ENDPOINTS` in `opencode-client.js` if needed.
+4. ▢ Per-user sandbox/isolation for multi-tenant use (containers).
+5. ▢ Route siraGPT's provider keys + credits into OpenCode's provider config.
+6. ▢ Wire the siraGPT `/code` UI as the client (chat→prompt, events→SSE,
+   files→tree/editor/preview).
+
+Upstream: https://github.com/sst/opencode · https://opencode.ai/docs/

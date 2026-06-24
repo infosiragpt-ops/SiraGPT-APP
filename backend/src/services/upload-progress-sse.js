@@ -37,14 +37,19 @@ function progressStream(req, res) {
   let closed = false;
   let lastKnown = new Map();
   const handled = new Set();
+  let autoCleanupTimer = null;
 
-  req.on('close', () => { closed = true; });
+  // On disconnect, actually tear the stream down: previously this only set
+  // closed=true and left both intervals + the 5-min timeout running forever
+  // (one leaked interval pair per dropped client).
+  req.on('close', () => { closed = true; cleanup(); });
 
   // Heartbeat
   const heartbeatTimer = setInterval(() => {
     if (closed) return;
     res.write(`event: heartbeat\ndata: {"ts":${Date.now()}}\n\n`);
   }, 15000);
+  heartbeatTimer.unref?.();
 
   // Poll loop — check every 500ms
   const pollTimer = setInterval(async () => {
@@ -102,10 +107,15 @@ function progressStream(req, res) {
       }
     }
   }, 500);
+  pollTimer.unref?.();
 
   function cleanup() {
     clearInterval(heartbeatTimer);
     clearInterval(pollTimer);
+    if (autoCleanupTimer) {
+      clearTimeout(autoCleanupTimer);
+      autoCleanupTimer = null;
+    }
     if (!closed) {
       try { res.end(); } catch (_) {}
       closed = true;
@@ -113,12 +123,13 @@ function progressStream(req, res) {
   }
 
   // Auto-cleanup after 5 min max
-  setTimeout(() => {
+  autoCleanupTimer = setTimeout(() => {
     if (!closed) {
       res.write(`event: timeout\ndata: {"message":"Progress stream timed out"}\n\n`);
       cleanup();
     }
   }, 300000);
+  autoCleanupTimer.unref?.();
 }
 
 module.exports = { progressStream };

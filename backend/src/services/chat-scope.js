@@ -17,7 +17,7 @@ function buildChatListWhere({
 }) {
   if (!userId) throw new Error('userId is required');
 
-  const where = { userId };
+  const where = { userId, deletedAt: null };
 
   if (!includeArchived) {
     where.isArchived = false;

@@ -7,11 +7,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# Cancel outdated runs on the same branch — saves minutes and gives
-# PR authors faster feedback from the most recent commit only.
+# Keep runs on the same branch from cancelling each other. Main deploy
+# watches need a completed CI result for the exact pushed SHA.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   NODE_VERSION: '24'
@@ -150,13 +150,14 @@ jobs:
   backend:
     name: Backend · prisma + boot smoke test (shard ${{ matrix.shard }}/${{ matrix.total }})
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     strategy:
       # Sharded test execution — round-robin over the explicit test-file list
       # so each runner gets ~1/N of the suite. `fail-fast: false` lets us see
       # failures from every shard in a single run instead of cancelling on
       # the first red shard.
       fail-fast: false
+      max-parallel: 2
       matrix:
         shard: [1, 2, 3, 4]
         total: [4]
@@ -204,11 +205,11 @@ jobs:
       MAX_FILE_SIZE: 50
       UPLOAD_DIR: uploads
       # passport-google-oauth20 requires non-empty clientID/clientSecret at
-      # module-load (throws from src/config/passport.js). Dummies keep the
+      # module-load (throws from src/config/passport.js). Smoke-only values keep the
       # Google strategy wireable so the Express app can boot; OAuth flows
       # are not exercised by the smoke test.
-      GOOGLE_CLIENT_ID: ci-dummy-google-client-id.apps.googleusercontent.com
-      GOOGLE_CLIENT_SECRET: ci-dummy-google-client-secret
+      GOOGLE_CLIENT_ID: 123456789012-ci-smoke-oauth.apps.googleusercontent.com
+      GOOGLE_CLIENT_SECRET: ciSmokeOauthSecret0123456789abcdef
       GOOGLE_AUTH_URI: http://localhost:5000/api/auth/google/callback
       GOOGLE_REDIRECT_URI: http://localhost:5000/api/auth/gmail/callback
       GOOGLE_REDIRECT_CALENDAR_DRIVE_URI: http://localhost:5000/api/auth/google-services/callback
@@ -467,6 +468,7 @@ jobs:
             e2e/auth-forms.spec.ts
             e2e/admin-smoke.spec.ts
             e2e/chat-upload.spec.ts
+            e2e/chat-paste-ingest.spec.ts
           )
           timeout --kill-after=30s 8m npm run test:e2e -- --reporter=list "${E2E_SMOKE_SPECS[@]}"
           smoke_status=$?

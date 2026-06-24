@@ -65,7 +65,7 @@ const MODES = Object.freeze({
   research: {
     label: "Research",
     description: "Source-grounded answers. Citations required, fabrication blocked.",
-    tool_whitelist: ["web_search", "rag_retrieve", "openalex_search", "crossref_verify", "read_file", "session_history"],
+    tool_whitelist: ["web_search", "web_extract", "read_url", "rag_retrieve", "openalex_search", "crossref_verify", "read_file", "session_search", "session_history"],
     tool_blocklist: ["execute_sandboxed_code", "publish_online", "send_message", "database_write"],
     system_prompt_addendum: [
       "You are in RESEARCH mode.",
@@ -98,7 +98,7 @@ const MODES = Object.freeze({
     label: "Code",
     description: "Software engineering tasks. Sandboxed execution + lint/test gates.",
     tool_whitelist: ["code_generation", "execute_sandboxed_code", "read_file", "rag_retrieve"],
-    tool_blocklist: ["publish_online", "send_message", "database_write", "web_search"],
+    tool_blocklist: ["publish_online", "send_message", "database_write", "web_search", "web_extract", "read_url"],
     system_prompt_addendum: [
       "You are in CODE mode.",
       "All code must compile/parse cleanly.",

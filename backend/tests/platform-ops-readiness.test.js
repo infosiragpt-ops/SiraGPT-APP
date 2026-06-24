@@ -10,9 +10,9 @@ const {
   assertOpsReady,
 } = require('../src/services/agents/platform-ops-readiness');
 
-test('ops readiness covers config deploy security qa and automation', () => {
+test('ops readiness covers config deploy security qa automation and Linux bridge', () => {
   const ids = new Set(READINESS_LANES.map((lane) => lane.id));
-  for (const expected of ['config', 'deploy', 'security', 'qa', 'automation']) {
+  for (const expected of ['config', 'deploy', 'security', 'qa', 'automation', 'linux']) {
     assert.ok(ids.has(expected), `expected ${expected}`);
   }
 });

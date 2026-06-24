@@ -20,6 +20,7 @@ const path = require('path');
 const fs = require('fs');
 const { writeJsonAtomicSync } = require('../../utils/atomic-json-write');
 const crypto = require('crypto');
+const objectStorage = require('../object-storage');
 const sandbox = require('./code-sandbox');
 const {
   MIN_QUALITY_SCORE,
@@ -96,6 +97,35 @@ function metadataPathFor(id) {
   return path.join(ARTIFACT_DIR, `${id}.json`);
 }
 
+// R2 object key mirroring an artifact's on-disk relative path. Keeping the
+// path shape ("agent-artifacts/<storedRelPath>") makes the bucket layout
+// self-describing and lets the serving route reconstruct the key from
+// metadata alone.
+function artifactBinaryKey(storedRelPath) {
+  return `agent-artifacts/${String(storedRelPath).split(path.sep).join('/')}`;
+}
+
+// Best-effort offload of a freshly written artifact binary to R2, then drop
+// the local copy so the VM disk stays small. Fire-and-forget: saveArtifact
+// stays synchronous (it has many sync callers) while the upload happens in
+// the background. The local file keeps serving downloads until the upload
+// confirms; only then is it unlinked. The serving route falls back to R2
+// once the local binary is gone. The metadata JSON is intentionally NOT
+// uploaded/removed — it is tiny text and is required on disk by the artifact
+// listing scans.
+function startArtifactMirror({ id, full, storedRelPath, mime }) {
+  const key = artifactBinaryKey(storedRelPath);
+  (async () => {
+    try {
+      const buf = await fs.promises.readFile(full);
+      await objectStorage.putBuffer({ key, buffer: buf, contentType: mime || 'application/octet-stream' });
+      try { await fs.promises.unlink(full); } catch { /* best effort cleanup */ }
+    } catch (err) {
+      console.warn(`[task-tools] R2 artifact mirror failed for ${id}: ${err && err.message}`);
+    }
+  })();
+}
+
 function sanitizeArtifactFilename(filename) {
   // Replace unsafe chars, then cap total length to 120 while preserving
   // the extension. A naive slice(0, 120) on a long name would drop the
@@ -128,7 +158,30 @@ function assertArtifactSizeWithinLimit(ext, buffer) {
   throw err;
 }
 
-function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation, category }) {
+// Defensive re-sanitisation of a folder code at the storage boundary. The
+// professional-document-cycle service already sanitises it before enqueue,
+// but we never trust a value that becomes a filesystem path. Returns null on
+// any problem so callers fall back to the flat artifact dir.
+function safeFolderCode(folderCode) {
+  if (!folderCode) return null;
+  try {
+    const { sanitizeFolderCode } = require('./professional-document-cycle');
+    return sanitizeFolderCode(folderCode);
+  } catch {
+    // Fallback sanitiser if the service is unavailable (or input invalid).
+    const cleaned = String(folderCode)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9 _-]+/g, '_')
+      .replace(/\s+/g, '-')
+      .replace(/^[-_.]+/, '')
+      .replace(/[-_.]+$/, '')
+      .slice(0, 80);
+    return cleaned || null;
+  }
+}
+
+function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation, category, folderCode }) {
   try {
     const { requireDurableArtifactStorage } = require('../../orchestration/artifact-storage-policy');
     const policy = requireDurableArtifactStorage();
@@ -144,8 +197,26 @@ function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation,
   const scope = `${ownerUserId || 'anonymous'}:${chatId || 'no-chat'}:`;
   const id = artifactIdFor(Buffer.concat([Buffer.from(clean), buf]), scope);
   const stored = `${id}-${clean}`;
-  const full = path.join(ARTIFACT_DIR, stored);
+  // When a folder code is supplied (professional document cycle) the binary
+  // is grouped under ARTIFACT_DIR/<safeCode>/. The metadata JSON stays FLAT
+  // at ARTIFACT_DIR/<id>.json so readArtifactMetadata + listArtifactsByOwner
+  // keep working unchanged; `storedRelPath` records the real location.
+  const safeFolder = safeFolderCode(folderCode);
+  const targetDir = safeFolder ? path.join(ARTIFACT_DIR, safeFolder) : ARTIFACT_DIR;
+  if (safeFolder && !fs.existsSync(targetDir)) {
+    fs.mkdirSync(targetDir, { recursive: true });
+  }
+  const full = path.join(targetDir, stored);
+  const storedRelPath = safeFolder ? path.posix.join(safeFolder, stored) : stored;
   fs.writeFileSync(full, buf);
+  const resolvedMime = mime || EXTENSION_TO_MIME[ext] || 'application/octet-stream';
+  // When R2 is enabled the binary is offloaded off the VM disk; record the
+  // deterministic R2 ref in metadata so the serving route can stream it once
+  // the local copy is gone. The key is derived purely from storedRelPath so
+  // we can compute it before the (async) upload starts.
+  const storageRef = objectStorage.enabled()
+    ? objectStorage.refFromKey(artifactBinaryKey(storedRelPath))
+    : null;
   try {
     writeJsonAtomicSync(metadataPathFor(id), {
       id,
@@ -153,10 +224,13 @@ function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation,
       format: ext,
       ownerUserId: ownerUserId || null,
       chatId: chatId || null,
-      mime: mime || EXTENSION_TO_MIME[ext] || 'application/octet-stream',
+      mime: resolvedMime,
       sizeBytes: buf.length,
       validation: validation || null,
       category: category || null,
+      folderCode: safeFolder || null,
+      storedRelPath,
+      storageRef,
       createdAt: new Date().toISOString(),
     }, { pretty: 2 });
   } catch (err) {
@@ -166,13 +240,21 @@ function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation,
     try { fs.unlinkSync(full); } catch { /* best effort */ }
     throw err;
   }
+  // Kick off the R2 offload only after metadata is durably written, so a
+  // metadata failure can't leave an orphan object in the bucket.
+  if (storageRef) {
+    startArtifactMirror({ id, full, storedRelPath, mime: resolvedMime });
+  }
   return {
     id,
     filename: clean,
     format: ext,
-    mime: mime || EXTENSION_TO_MIME[ext] || 'application/octet-stream',
+    mime: resolvedMime,
     sizeBytes: buf.length,
     path: full,
+    folderCode: safeFolder || null,
+    storedRelPath,
+    storageRef,
     downloadUrl: `/api/agent/artifact/${id}?name=${encodeURIComponent(clean)}`,
   };
 }
@@ -493,6 +575,10 @@ const webSearch = {
       tool: 'web_search',
       ok: true,
       preview: `${payload.sources.length} fuentes top (${stats?.dedupedCount || 0} recopiladas)`,
+      // Claude-style search trace: the UI renders the top sources as a
+      // result list (favicon + title + domain) under the query line.
+      resultCount: payload.sources.length,
+      sources: payload.sources.slice(0, 8).map(s => ({ title: s.title, url: s.url })),
     });
     return payload;
   },
@@ -706,6 +792,7 @@ const createDocument = {
       ownerUserId: ctx.userId,
       chatId: ctx.chatId,
       validation: contractReview ? { ...validation, contractReview } : validation,
+      folderCode: ctx.folderCode || null,
     });
     try { fs.unlinkSync(tmpOut); } catch { /* may have been moved */ }
 
@@ -1530,19 +1617,35 @@ const verifyArtifact = {
       }
     }
 
+    // Resolve the on-disk path. Cycle artifacts are grouped under
+    // ARTIFACT_DIR/<folderCode>/ and record `storedRelPath` in their flat
+    // metadata; legacy artifacts live at the top level under `<id>-<name>`.
+    let full = null;
     let entry = null;
-    if (metadata?.filename) {
+    if (metadata?.storedRelPath) {
+      const root = path.resolve(ARTIFACT_DIR);
+      const candidate = path.resolve(ARTIFACT_DIR, metadata.storedRelPath);
+      // Traversal guard: the resolved path must stay inside ARTIFACT_DIR.
+      if ((candidate === root || candidate.startsWith(root + path.sep)) && fs.existsSync(candidate)) {
+        full = candidate;
+        entry = path.basename(candidate);
+      }
+    }
+    if (!full && metadata?.filename) {
       const candidate = `${id}-${metadata.filename}`;
-      if (fs.existsSync(path.join(ARTIFACT_DIR, candidate))) entry = candidate;
+      if (fs.existsSync(path.join(ARTIFACT_DIR, candidate))) {
+        entry = candidate;
+        full = path.join(ARTIFACT_DIR, candidate);
+      }
     }
-    if (!entry) {
+    if (!full) {
       entry = fs.readdirSync(ARTIFACT_DIR).find(f => f.startsWith(`${id}-`)) || null;
+      if (entry) full = path.join(ARTIFACT_DIR, entry);
     }
-    if (!entry) {
+    if (!full || !entry) {
       ctx.onEvent?.({ type: 'tool_output', tool: 'verify_artifact', ok: false, preview: 'artifact not found' });
       return { ok: false, error: `artifact ${id} not found` };
     }
-    const full = path.join(ARTIFACT_DIR, entry);
     const ext = path.extname(entry).slice(1).toLowerCase();
     const sizeBytes = fs.statSync(full).size;
 
@@ -1773,6 +1876,56 @@ const runTests = {
   },
 };
 
+// ─── Professional document cycle: per-stage progress ───────────────────
+// Lets the agent announce which of the 5 cycle stages it is entering so the
+// UI can render visible progress (cycle_stage events). Harmless for non-cycle
+// tasks: the agent only calls it when the cycle contract instructs it to.
+const CYCLE_STAGE_LABELS = {
+  guide_review: 'Revisión de la guía',
+  analysis: 'Análisis de tipo y campo',
+  research: 'Investigación de fuentes',
+  drafting: 'Redacción del documento',
+  finalize: 'Exportación y organización',
+};
+
+const reportStage = {
+  name: 'report_stage',
+  description: 'Marca el avance del ciclo profesional de documentos. Llama esta herramienta al INICIO de cada etapa (guide_review, analysis, research, drafting, finalize) y, opcionalmente, al terminarla con status="done". Sirve para que el usuario vea el progreso por etapas.',
+  parameters: {
+    type: 'object',
+    properties: {
+      stage: {
+        type: 'string',
+        enum: ['guide_review', 'analysis', 'research', 'drafting', 'finalize'],
+        description: 'Identificador de la etapa actual del ciclo.',
+      },
+      note: { type: 'string', description: 'Breve descripción en español de lo que harás (o hiciste) en esta etapa.' },
+      status: { type: 'string', enum: ['start', 'done'], description: 'start al comenzar la etapa (por defecto), done al completarla.' },
+    },
+    required: ['stage'],
+    additionalProperties: false,
+  },
+  async execute({ stage, note, status }, ctx = {}) {
+    const safeStage = CYCLE_STAGE_LABELS[stage] ? stage : null;
+    if (!safeStage) {
+      ctx.onEvent?.({ type: 'tool_output', tool: 'report_stage', ok: false, preview: `etapa desconocida: ${stage}` });
+      return { ok: false, error: `unknown stage: ${stage}` };
+    }
+    const safeStatus = status === 'done' ? 'done' : 'start';
+    const label = CYCLE_STAGE_LABELS[safeStage];
+    const cleanNote = typeof note === 'string' ? note.slice(0, 280) : '';
+    ctx.onEvent?.({ type: 'tool_call', tool: 'report_stage', preview: label });
+    ctx.onEvent?.({ type: 'cycle_stage', stage: safeStage, status: safeStatus, label, note: cleanNote });
+    ctx.onEvent?.({
+      type: 'tool_output',
+      tool: 'report_stage',
+      ok: true,
+      preview: `${safeStatus === 'done' ? '✓ ' : '▶ '}${label}${cleanNote ? ` — ${cleanNote}` : ''}`,
+    });
+    return { ok: true, stage: safeStage, status: safeStatus, label };
+  },
+};
+
 // ─── Assembly ──────────────────────────────────────────────────────────
 
 /**
@@ -1797,6 +1950,7 @@ function buildTaskTools() {
     compareDocuments,
     verifyArtifact,
     runTests,
+    reportStage,
     // Visual & media generation tools
     ...visualMediaTools,
   ];
@@ -1947,6 +2101,7 @@ module.exports = {
     compareDocuments,
     verifyArtifact,
     runTests,
+    reportStage,
     previewText,
     artifactIdFor,
     metadataPathFor,

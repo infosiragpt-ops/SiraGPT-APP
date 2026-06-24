@@ -68,7 +68,9 @@ function recall(userId, query, opts = {}) {
 }
 
 function promote(userId, entryId) {
-  const entry = activeMemory.promoteToLongTerm(entryId);
+  // Pass userId so ownership is enforced BEFORE the entry is mutated (the
+  // post-hoc check below alone still promoted a foreign entry first).
+  const entry = activeMemory.promoteToLongTerm(entryId, { userId });
   if (!entry || entry.userId !== userId) return null;
   return entry;
 }
@@ -91,6 +93,12 @@ function searchSessions(userId, query, opts = {}) {
   const hits = [];
   for (const session of sessions) {
     const history = sessionManager.getHistory(session.id, { limit: historyLimit }) || [];
+    // The session bookends and title are identical for every match in this
+    // session — compute them once instead of re-deriving per matching message
+    // (was O(matches × historyLen) of redundant history.map/filter work).
+    const bookendStart = sliceBookend(history, false, bookendSize);
+    const bookendEnd = sliceBookend(history, true, bookendSize);
+    const sessionTitle = session.label || session.summary || session.id;
     for (let i = 0; i < history.length; i++) {
       const msg = history[i];
       if (roleFilter && !roleFilter.has(msg.role || 'unknown')) continue;
@@ -101,21 +109,22 @@ function searchSessions(userId, query, opts = {}) {
       const anchorId = msg.id || `msg_${i}`;
       const start = Math.max(0, i - windowSize);
       const end = Math.min(history.length, i + windowSize + 1);
+      const excerpt = content.slice(0, 240);
       hits.push({
         sessionId: session.id,
-        title: session.label || session.summary || session.id,
+        title: sessionTitle,
         label: session.label || null,
         role: msg.role || 'unknown',
         score,
-        excerpt: content.slice(0, 240),
-        snippet: content.slice(0, 240),
+        excerpt,
+        snippet: excerpt,
         timestamp: msg.timestamp || msg.createdAt || session.lastActivity || null,
         matchMessageId: anchorId,
         messagesBefore: i,
         messagesAfter: Math.max(0, history.length - i - 1),
-        bookendStart: sliceBookend(history, false, bookendSize),
+        bookendStart,
         messages: history.slice(start, end).map((candidate, idx) => serializeMessage(candidate, start + idx, anchorId)),
-        bookendEnd: sliceBookend(history, true, bookendSize),
+        bookendEnd,
         matchedTerms: terms.filter((term) => normalizeText(content).includes(term)),
       });
     }

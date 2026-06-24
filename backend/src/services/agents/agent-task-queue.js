@@ -1,6 +1,6 @@
 const { Queue } = require('bullmq');
 const IORedis = require('ioredis');
-const { attachRedisListeners, isTransientRedisError, reconnectDelay } = require('./redis-resilience');
+const { attachRedisListeners, isTransientRedisError, markRedisFailure, reconnectDelay } = require('./redis-resilience');
 
 let queue;
 let queueConnection;
@@ -43,15 +43,62 @@ function getBullMQRuntimeOptions({ redisUrl = process.env.REDIS_URL, env = proce
   return shouldSkipBullMQVersionCheck({ redisUrl, env }) ? { skipVersionCheck: true } : {};
 }
 
-function createRedisConnection({ label = 'redis' } = {}) {
+function readPositiveInt(value, fallback) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function getQueueCommandTimeoutMs(env = process.env) {
+  return readPositiveInt(env.AGENT_TASK_QUEUE_COMMAND_TIMEOUT_MS, 10_000);
+}
+
+function getQueueEnqueueTimeoutMs(env = process.env) {
+  return readPositiveInt(env.AGENT_TASK_QUEUE_ENQUEUE_TIMEOUT_MS, 5_000);
+}
+
+function makeEnqueueTimeoutError(timeoutMs, taskId) {
+  const err = new Error(`agent task enqueue timed out after ${timeoutMs}ms${taskId ? ` for task ${taskId}` : ''}`);
+  err.code = 'agent_task_enqueue_timeout';
+  err.taskId = taskId;
+  return err;
+}
+
+function withEnqueueTimeout(promise, timeoutMs, taskId) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return promise;
+  let timer = null;
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const err = makeEnqueueTimeoutError(timeoutMs, taskId);
+      markRedisFailure(err);
+      Promise.resolve(closeAgentTaskQueue({ force: true }))
+        .catch(() => null)
+        .finally(() => reject(err));
+    }, timeoutMs);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+function createRedisConnection({
+  label = 'redis',
+  maxRetriesPerRequest = null,
+  enableOfflineQueue = true,
+  connectTimeout,
+  commandTimeout,
+} = {}) {
   const redisUrl = requireRedisUrl();
   const conn = new IORedis(redisUrl, {
-    maxRetriesPerRequest: null,
+    maxRetriesPerRequest,
     enableReadyCheck: false,
     retryStrategy: reconnectDelay,
-    // Keep BullMQ commands queued during a reconnect window instead of
-    // failing them — pairs with maxRetriesPerRequest:null.
-    enableOfflineQueue: true,
+    // Worker connections can keep commands queued during a reconnect window,
+    // but request-path producers must fail fast. `getAgentTaskQueue()` passes
+    // enableOfflineQueue:false so POST /api/agent/task can fall back to the
+    // local runtime instead of leaving the browser idle until its 90s watchdog.
+    enableOfflineQueue,
+    ...(connectTimeout ? { connectTimeout } : {}),
+    ...(commandTimeout ? { commandTimeout } : {}),
   });
   attachRedisListeners(conn, { label });
   return conn;
@@ -59,7 +106,14 @@ function createRedisConnection({ label = 'redis' } = {}) {
 
 function getAgentTaskQueue() {
   if (queue) return queue;
-  queueConnection = createRedisConnection({ label: 'agent-task-queue' });
+  const producerTimeoutMs = getQueueCommandTimeoutMs();
+  queueConnection = createRedisConnection({
+    label: 'agent-task-queue',
+    maxRetriesPerRequest: 1,
+    enableOfflineQueue: false,
+    connectTimeout: producerTimeoutMs,
+    commandTimeout: producerTimeoutMs,
+  });
   queue = new Queue(getQueueName(), {
     ...getBullMQRuntimeOptions(),
     connection: queueConnection,
@@ -116,9 +170,42 @@ async function enqueueAgentTask(payload, opts = {}) {
   }
 
   const q = getAgentTaskQueue();
-  return q.add('agent-task', payload, {
+  const addPromise = q.add('agent-task', payload, {
     jobId: opts.jobId || payload.taskId,
     priority: opts.priority,
+  });
+  return withEnqueueTimeout(addPromise, readPositiveInt(opts.timeoutMs, getQueueEnqueueTimeoutMs()), payload.taskId);
+}
+
+/**
+ * Liveness del productor: tras crear (lazy) la cola, espera a que la
+ * conexión ioredis esté 'ready'. Hoy se observaron procesos con la
+ * conexión zombi (status nunca ready, sin errores logueados): add()
+ * aparenta éxito pero el job jamás llega a Redis y la tarea queda
+ * "queued" para siempre. Con esto el caller decide caer al runtime
+ * local en vez de varar al usuario.
+ */
+async function waitForQueueReady(timeoutMs = 1500) {
+  getAgentTaskQueue();
+  const conn = queueConnection;
+  if (!conn) return false;
+  if (conn.status === 'ready') return true;
+  if (conn.status === 'end') return false;
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (ok) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      conn.removeListener('ready', onReady);
+      conn.removeListener('end', onEnd);
+      resolve(ok);
+    };
+    const onReady = () => finish(true);
+    const onEnd = () => finish(false);
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    conn.once('ready', onReady);
+    conn.once('end', onEnd);
   });
 }
 
@@ -145,17 +232,33 @@ async function getQueueHealth() {
   };
 }
 
-async function closeAgentTaskQueue() {
-  const closing = [];
-  if (queue) closing.push(queue.close());
-  if (queueConnection) closing.push(queueConnection.quit().catch(() => queueConnection.disconnect()));
+async function closeAgentTaskQueue({ force = false } = {}) {
+  const activeQueue = queue;
+  const activeConnection = queueConnection;
   queue = null;
   queueConnection = null;
+
+  if (force) {
+    if (activeQueue && typeof activeQueue.disconnect === 'function') {
+      try { activeQueue.disconnect(); } catch (_) { /* ignore */ }
+    }
+    if (activeConnection && typeof activeConnection.disconnect === 'function') {
+      try { activeConnection.disconnect(); } catch (_) { /* ignore */ }
+    }
+    return;
+  }
+
+  const closing = [];
+  if (activeQueue) closing.push(activeQueue.close());
+  if (activeConnection) {
+    closing.push(activeConnection.quit().catch(() => activeConnection.disconnect()));
+  }
   await Promise.allSettled(closing);
 }
 
 module.exports = {
   cancelQueuedTask,
+  waitForQueueReady,
   closeAgentTaskQueue,
   createRedisConnection,
   enqueueAgentTask,

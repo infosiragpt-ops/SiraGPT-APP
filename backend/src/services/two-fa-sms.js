@@ -198,24 +198,30 @@ async function createSmsChallenge(prisma, user, destination) {
   const challengeId = mintChallengeId();
   const expiresAt = new Date(Date.now() + ttlMs());
 
-  try {
-    await prisma.twoFAChallenge.updateMany({
+  // Invalidate prior unconsumed challenges AND mint the new one as one unit —
+  // otherwise a failure between them could consume every active challenge yet
+  // create no replacement (locking the user out), or leave two challenges live.
+  const ops = [
+    prisma.twoFAChallenge.updateMany({
       where: { userId: user.id, consumedAt: null },
       data: { consumedAt: new Date() },
-    });
-  } catch { /* best-effort */ }
-
-  const row = await prisma.twoFAChallenge.create({
-    data: {
-      challengeId,
-      userId: user.id,
-      channel: 'sms',
-      destination,
-      lookup: lookupKey(destination),
-      codeHash,
-      expiresAt,
-    },
-  });
+    }),
+    prisma.twoFAChallenge.create({
+      data: {
+        challengeId,
+        userId: user.id,
+        channel: 'sms',
+        destination,
+        lookup: lookupKey(destination),
+        codeHash,
+        expiresAt,
+      },
+    }),
+  ];
+  // Fall back to sequential writes if the client lacks $transaction (test doubles).
+  const [, row] = typeof prisma.$transaction === 'function'
+    ? await prisma.$transaction(ops)
+    : await Promise.all(ops);
   return { challengeId, code, expiresAt, row };
 }
 
@@ -260,18 +266,26 @@ async function verifyChallenge(prisma, challengeId, code) {
 
   const matches = await compareCode(code, row.codeHash);
   if (!matches) {
-    const nextAttempts = (row.attempts || 0) + 1;
-    const shouldConsume = nextAttempts >= MAX_VERIFY_ATTEMPTS;
+    // Atomic increment so concurrent wrong-code submissions can't all read the
+    // same `attempts` and each write the same +1 — a lost-update that let a
+    // parallel-guess burst slip past the brute-force cap. The DB serializes the
+    // increments; we decide from the returned post-increment value.
+    let nextAttempts = (row.attempts || 0) + 1;
     try {
-      await prisma.twoFAChallenge.update({
+      const updated = await prisma.twoFAChallenge.update({
         where: { id: row.id },
-        data: {
-          attempts: nextAttempts,
-          ...(shouldConsume ? { consumedAt: new Date() } : {}),
-        },
+        data: { attempts: { increment: 1 } },
       });
-    } catch { /* best-effort */ }
+      if (updated && typeof updated.attempts === 'number') nextAttempts = updated.attempts;
+    } catch { /* best-effort: fall back to the optimistic local count */ }
+    const shouldConsume = nextAttempts >= MAX_VERIFY_ATTEMPTS;
     if (shouldConsume) {
+      try {
+        await prisma.twoFAChallenge.update({
+          where: { id: row.id },
+          data: { consumedAt: new Date() },
+        });
+      } catch { /* best-effort */ }
       return { ok: false, code: 'too_many_attempts', attempts: nextAttempts };
     }
     return {

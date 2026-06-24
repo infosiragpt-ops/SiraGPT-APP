@@ -109,28 +109,81 @@ test('modelSupportsFunctionCalling allowlist', () => {
   assert.equal(agenticStream.modelSupportsFunctionCalling('Gemini', 'gemini-2.5-pro'), true);
   assert.equal(agenticStream.modelSupportsFunctionCalling('Gemini', 'gemini-3-pro'), true);
   assert.equal(agenticStream.modelSupportsFunctionCalling('DeepSeek', 'deepseek-v4-pro'), true);
+  // Kimi K2.6 (via OpenRouter) emits its native tool-call token format; the
+  // react-agent parser (parseNativeToolCalls) normalises it, so it reaches the
+  // agentic loop. Claude + Grok via OpenRouter expose OpenAI-normalised tools.
   assert.equal(agenticStream.modelSupportsFunctionCalling('OpenRouter', 'moonshotai/kimi-k2.6'), true);
+  assert.equal(agenticStream.modelSupportsFunctionCalling('OpenRouter', 'anthropic/claude-opus-4.7'), true);
+  assert.equal(agenticStream.modelSupportsFunctionCalling('OpenRouter', 'x-ai/grok-4.20'), true);
+  // Cerebras (default free model "FlashGPT" / llama-3.1-8b) is OpenAI
+  // tool-compatible — it MUST reach the agentic loop or most users get
+  // plain chat.
+  assert.equal(agenticStream.modelSupportsFunctionCalling('Cerebras', 'llama-3.1-8b'), true);
+  assert.equal(agenticStream.modelSupportsFunctionCalling('Cerebras', 'qwen-3-32b'), true);
+  // Family-based: tool-capable OSS models reach the loop even when the
+  // provider label is the generic fallback (the default-free-model case).
+  assert.equal(agenticStream.modelSupportsFunctionCalling('OpenAI', 'llama-3.1-8b'), true);
+  assert.equal(agenticStream.modelSupportsFunctionCalling('Groq', 'gpt-oss-120b'), true);
+  // ...but the family check must not over-match a non-tool OpenAI SKU.
   assert.equal(agenticStream.modelSupportsFunctionCalling('OpenAI', 'davinci-002'), false);
   assert.equal(agenticStream.modelSupportsFunctionCalling('Anthropic', 'claude-3-opus'), false);
 });
 
-test('shouldUseAgenticChat skips greetings and simple chat', () => {
+test('shouldUseAgenticChat skips greetings and trivial smalltalk', () => {
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'hola' }), false);
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'gracias!' }), false);
-  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿Puedes explicarme qué es una API?' }), false);
+  // Agent-first default: a real question IS an agent turn (the route still
+  // falls back to the plain stream on any degraded loop run).
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿Puedes explicarme qué es una API?' }), true);
+});
+
+test('shouldUseAgenticChat agent-first default routes plain chat turns through the agent', () => {
+  assert.equal(agenticStream.agentFirstEnabled(), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿cuál es la capital de Francia?' }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'escríbeme un poema sobre el mar' }), true);
+});
+
+test('shouldUseAgenticChat SIRAGPT_AGENT_FIRST=0 restores the legacy heuristic routing', () => {
+  const prev = process.env.SIRAGPT_AGENT_FIRST;
+  process.env.SIRAGPT_AGENT_FIRST = '0';
+  try {
+    assert.equal(agenticStream.agentFirstEnabled(), false);
+    assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿Puedes explicarme qué es una API?' }), false);
+    assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿cuál es la capital de Francia?' }), false);
+    assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'escríbeme un poema sobre el mar' }), false);
+    assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿cuánto es 2+2?' }), false);
+    // Tool-heavy turns still enter the loop with agent-first off.
+    assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'investiga esto y cita fuentes recientes' }), true);
+  } finally {
+    if (prev === undefined) delete process.env.SIRAGPT_AGENT_FIRST;
+    else process.env.SIRAGPT_AGENT_FIRST = prev;
+  }
 });
 
 test('shouldUseAgenticChat keeps tool-heavy and follow-up repair turns agentic', () => {
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'SiraGPT.com no funciona ChatGPT' }), true);
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'investiga esto y cita fuentes recientes' }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'deseo qeu mejoremos todo el cerebro de la IA de forma profesional y minimalista' }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'optimiza el contexto y razonamiento del agente' }), true);
   assert.equal(agenticStream.shouldUseAgenticChat({
     prompt: 'sigue con eso',
     history: [{ role: 'user', content: 'Arregla el deploy del repositorio en GitHub' }],
   }), true);
+  // Attachment turn that asks for a tool-backed DELIVERABLE → still agentic.
   assert.equal(agenticStream.shouldUseAgenticChat({
-    prompt: 'resume este archivo',
+    prompt: 'genera una tabla en Excel con los datos de este archivo',
     files: [{ id: 'file_1' }],
   }), true);
+});
+
+test('shouldUseAgenticChat keeps simple doc Q&A / summaries on the reliable plain stream', () => {
+  // A doc is attached (its text is injected into the prompt). Plain Q&A and
+  // summaries must NOT enter the react-agent loop — that stalled on weak
+  // tool-callers ("Analizando solicitud" → 90s timeout → user hits Regenerate).
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'dame un resumen en 200 palabras', files: [{ id: 'f1' }] }), false);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'cual es el titulo de la investigacion?', files: [{ id: 'f1' }] }), false);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'resume este archivo', files: [{ id: 'f1' }] }), false);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'que dice el documento sobre el presupuesto?', files: [{ id: 'f1' }] }), false);
 });
 
 test('shouldUseAgenticChat routes visual + document create requests through the agent', () => {
@@ -142,8 +195,21 @@ test('shouldUseAgenticChat routes visual + document create requests through the 
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'create a bar chart of revenue' }), true);
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'diseña una presentación en powerpoint' }), true);
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'haz un video corto del producto' }), true);
-  // Casual factual chat still skips the agentic loop.
-  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿cuál es la capital de Francia?' }), false);
+});
+
+test('shouldUseAgenticChat auto-routes freshness / live-data questions to web search', () => {
+  // Core fix: questions that need real-time / fresh info must reach the
+  // agentic loop (which owns web_search) even without an explicit search verb.
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿Quién ganó las elecciones en Perú este año?' }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿Cuál es el precio actual del bitcoin?' }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'dame el clima de hoy en Lima' }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿Qué pasó con OpenAI esta semana?' }), true);
+});
+
+test('shouldUseAgenticChat routes session search and browser automation requests', () => {
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'busca en mis conversaciones pasadas lo de la tesis' }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'haz scraping de esta web y extrae precios' }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'abre el navegador, haz click y baja con scroll' }), true);
 });
 
 test('serializeSentinel produces a fenced agent-task-state block', () => {
@@ -161,6 +227,12 @@ test('default toolset includes chat, document and verification tools', () => {
   const names = buildDefaultTools().map(tool => tool.name);
   assert.ok(names.includes('web_search'));
   assert.ok(names.includes('read_url'));
+  assert.ok(names.includes('web_extract'));
+  assert.ok(names.includes('session_search'));
+  assert.ok(names.includes('browser_navigate'));
+  assert.ok(names.includes('browser_click'));
+  assert.ok(names.includes('browser_type'));
+  assert.ok(names.includes('browser_scroll'));
   assert.ok(names.includes('memory_recall'));
   assert.ok(names.includes('rag_retrieve'));
   assert.ok(names.includes('python_exec'));
@@ -172,12 +244,50 @@ test('default toolset includes chat, document and verification tools', () => {
   assert.ok(names.includes('monitor_ci'));
 });
 
-test('default toolset stays lean (no media tools) when the turn is not a create request', () => {
+test('default toolset now ships creation tools on every turn (media-always default)', () => {
+  // Mid-conversation "ahora hazme un diagrama de eso" must work even when the
+  // opening turn had no media intent — creation tools are always available.
   const { buildDefaultTools } = agenticStream._internal;
   const names = buildDefaultTools({ userQuery: '¿cuál es la capital de Francia?' }).map(tool => tool.name);
   assert.ok(names.includes('web_search'));
-  assert.ok(!names.includes('generate_image'));
-  assert.ok(!names.includes('generate_music'));
+  assert.ok(names.includes('generate_image'));
+  assert.ok(names.includes('generate_music'));
+  assert.ok(names.includes('create_mermaid_diagram'));
+});
+
+test('SIRAGPT_MEDIA_TOOLS_ALWAYS=0 restores the legacy intent-gated media loading', () => {
+  const prev = process.env.SIRAGPT_MEDIA_TOOLS_ALWAYS;
+  process.env.SIRAGPT_MEDIA_TOOLS_ALWAYS = '0';
+  try {
+    const { buildDefaultTools } = agenticStream._internal;
+    const names = buildDefaultTools({ userQuery: '¿cuál es la capital de Francia?' }).map(tool => tool.name);
+    assert.ok(names.includes('web_search'));
+    assert.ok(!names.includes('generate_image'));
+    assert.ok(!names.includes('generate_music'));
+  } finally {
+    if (prev === undefined) delete process.env.SIRAGPT_MEDIA_TOOLS_ALWAYS;
+    else process.env.SIRAGPT_MEDIA_TOOLS_ALWAYS = prev;
+  }
+});
+
+test('resolveToolCallMode: native for allowlisted models, prompted for the rest', () => {
+  assert.equal(agenticStream.resolveToolCallMode('OpenAI', 'gpt-4o-mini'), 'native');
+  assert.equal(agenticStream.resolveToolCallMode('Cerebras', 'llama-3.1-8b'), 'native');
+  // Models WITHOUT native function calling now reach the loop via prompted
+  // tool-calling (tools described in the system prompt, fenced-JSON calls).
+  assert.equal(agenticStream.resolveToolCallMode('Anthropic', 'claude-3-opus'), 'prompted');
+  assert.equal(agenticStream.resolveToolCallMode('Mistral', 'mistral-large-2'), 'prompted');
+  assert.equal(agenticStream.resolveToolCallMode('OpenAI', 'davinci-002'), 'prompted');
+  // Env kill-switch restores the legacy hard gate.
+  const prev = process.env.SIRAGPT_PROMPTED_TOOLS;
+  process.env.SIRAGPT_PROMPTED_TOOLS = '0';
+  try {
+    assert.equal(agenticStream.resolveToolCallMode('Anthropic', 'claude-3-opus'), 'none');
+    assert.equal(agenticStream.resolveToolCallMode('OpenAI', 'gpt-4o-mini'), 'native');
+  } finally {
+    if (prev === undefined) delete process.env.SIRAGPT_PROMPTED_TOOLS;
+    else process.env.SIRAGPT_PROMPTED_TOOLS = prev;
+  }
 });
 
 test('default toolset adds image/video/audio/music tools for a create request', () => {
@@ -396,9 +506,21 @@ test('buildThreadWorkContext preserves standing user goals from prior turns', ()
   ], 'Aun no funciona, no entiende todo el hilo.');
 
   assert.match(context, /ongoing autonomous work session/);
+  assert.match(context, /Professional minimal cognition profile/);
+  assert.match(context, /direct answer or next action first/);
   assert.match(context, /cada chat sea un agente/);
   assert.match(context, /Claude Code/);
   assert.match(context, /Recent thread context/);
+});
+
+test('buildThreadWorkContext hardens broad AI-brain upgrade requests', () => {
+  const { buildThreadWorkContext } = agenticStream._internal;
+  const context = buildThreadWorkContext([], 'deseo qeu mejoremos todo el cerebro de la IA de forma profesional y minimalista');
+
+  assert.match(context, /Normalize noisy Spanish\/English internally/);
+  assert.match(context, /runtime behavior hardening/);
+  assert.match(context, /small verifiable change/);
+  assert.match(context, /avoid broad rewrites/);
 });
 
 test('runAgenticChat sends expanded thread context to the model', async () => {
@@ -430,7 +552,79 @@ test('runAgenticChat sends expanded thread context to the model', async () => {
   assert.match(system, /OpenClaw-Level Runtime Policy/);
   assert.match(system, /Capability Contract/);
   assert.match(system, /ongoing autonomous work session/);
+  assert.match(system, /Professional minimal cognition profile/);
   assert.match(system, /cada hilo recuerde la meta completa/);
+});
+
+test('runAgenticChat injects attached-document text directly into the system prompt', async () => {
+  let firstCreateArgs = null;
+  const openai = {
+    chat: {
+      completions: {
+        create: async (args) => { firstCreateArgs = args; return finalizeMessage('Listo.'); },
+      },
+    },
+  };
+  const { res } = makeFakeRes();
+
+  await agenticStream.runAgenticChat({
+    openai,
+    model: 'gpt-4o-mini',
+    userQuery: 'analiza este documento',
+    history: [],
+    res,
+    attachedDocuments: '--- informe.pdf ---\nEl ingreso neto del Q3 fue 4.2 millones de dólares.',
+  });
+
+  const system = firstCreateArgs.messages.find(m => m.role === 'system')?.content || '';
+  // The actual document content must reach the model so it never claims "no access".
+  assert.match(system, /DOCUMENTOS ADJUNTOS POR EL USUARIO/);
+  assert.match(system, /El ingreso neto del Q3 fue 4\.2 millones/);
+  assert.match(system, /NUNCA digas que no tienes acceso/);
+});
+
+test('runAgenticChat injects the custom GPT persona into the system prompt (so it follows its instructions)', async () => {
+  let firstCreateArgs = null;
+  const openai = {
+    chat: { completions: { create: async (args) => { firstCreateArgs = args; return finalizeMessage('Hecho.'); } } },
+  };
+  const { res } = makeFakeRes();
+
+  await agenticStream.runAgenticChat({
+    openai,
+    model: 'gpt-4o-mini',
+    userQuery: 'cual es la hipotesis 4?',
+    history: [],
+    res,
+    customGptPersona: '## CUSTOM GPT EXECUTION CONTRACT: "Antecedentes de tesis"\nResponde SIEMPRE en un solo párrafo académico con citas numeradas.',
+  });
+
+  const system = firstCreateArgs.messages.find(m => m.role === 'system')?.content || '';
+  assert.match(system, /CUSTOM GPT EXECUTION CONTRACT/);
+  assert.match(system, /Antecedentes de tesis/);
+  assert.match(system, /un solo párrafo académico/);
+});
+
+test('runAgenticChat omits the custom GPT persona when none is supplied', async () => {
+  let firstCreateArgs = null;
+  const openai = {
+    chat: { completions: { create: async (args) => { firstCreateArgs = args; return finalizeMessage('Ok.'); } } },
+  };
+  const { res } = makeFakeRes();
+  await agenticStream.runAgenticChat({ openai, model: 'gpt-4o-mini', userQuery: 'hola', history: [], res });
+  const system = firstCreateArgs.messages.find(m => m.role === 'system')?.content || '';
+  assert.equal(/CUSTOM GPT EXECUTION CONTRACT/.test(system), false);
+});
+
+test('runAgenticChat omits the attached-documents block when there are none', async () => {
+  let firstCreateArgs = null;
+  const openai = {
+    chat: { completions: { create: async (args) => { firstCreateArgs = args; return finalizeMessage('Listo.'); } } },
+  };
+  const { res } = makeFakeRes();
+  await agenticStream.runAgenticChat({ openai, model: 'gpt-4o-mini', userQuery: 'hola', history: [], res });
+  const system = firstCreateArgs.messages.find(m => m.role === 'system')?.content || '';
+  assert.equal(/DOCUMENTOS ADJUNTOS POR EL USUARIO/.test(system), false);
 });
 
 test('runAgenticChat emits sentinel + final answer with a stub tool', async () => {

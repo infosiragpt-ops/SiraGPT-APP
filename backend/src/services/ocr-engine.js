@@ -206,24 +206,32 @@ class OcrEngine {
     return this.asFailedResult(localResult.quality, localResult.error, { pages: pageBuffers.length });
   }
 
-  async createImageVariants(filePath) {
-    const base = sharp(filePath)
+  /**
+   * Returns an ordered list of lazy variant factories. Each factory
+   * produces a preprocessed image buffer on demand so callers that
+   * early-exit (e.g. a clean screenshot accepted on variant 1) never
+   * pay the sharp cost of generating variants they won't OCR.
+   * Order matters: variant 1 (normalize+sharpen) handles the common
+   * well-lit / screenshot case, so it runs first.
+   */
+  createImageVariants(filePath) {
+    const makeBase = () => sharp(filePath)
       .rotate()
       .resize(3000, 3000, { fit: 'inside', withoutEnlargement: false })
       .greyscale();
 
-    return Promise.all([
-      // 1. Normalize + sharpen (best for well-lit documents)
-      base.clone().normalize().sharpen().png().toBuffer(),
+    return [
+      // 1. Normalize + sharpen (best for well-lit documents / screenshots)
+      () => makeBase().normalize().sharpen().png().toBuffer(),
       // 2. High contrast — linear stretch (best for faded text)
-      base.clone().linear(1.25, -8).normalize().sharpen().png().toBuffer(),
+      () => makeBase().linear(1.25, -8).normalize().sharpen().png().toBuffer(),
       // 3. Hard threshold binarization (best for clean scans)
-      base.clone().normalize().threshold(165).png().toBuffer(),
+      () => makeBase().normalize().threshold(165).png().toBuffer(),
       // 4. Adaptive threshold via local contrast (best for uneven lighting)
-      this._adaptiveThreshold(base.clone()),
+      () => this._adaptiveThreshold(makeBase()),
       // 5. Inverted — white text on black (important for some diagrams)
-      base.clone().negate({ alpha: false }).normalize().sharpen().png().toBuffer(),
-    ]);
+      () => makeBase().negate({ alpha: false }).normalize().sharpen().png().toBuffer(),
+    ];
   }
 
   /**
@@ -245,23 +253,30 @@ class OcrEngine {
   }
 
   async runLocalImageOcr(filePath, options = {}) {
-    const variants = await this.createImageVariants(filePath);
+    const variantFactories = this.createImageVariants(filePath);
     const worker = await createWorker(options.language || this.defaultLanguage);
     let best = this.evaluateQuality({ text: '', confidence: 0 });
+    let variantsProcessed = 0;
 
     try {
-      for (const variant of variants) {
+      for (const makeVariant of variantFactories) {
+        const variant = await makeVariant();
         const { data: { text, confidence } } = await worker.recognize(variant);
+        variantsProcessed += 1;
         const quality = this.evaluateQuality({ text, confidence });
         const bestScore = best.usefulChars * 2 + best.confidence;
         const qualityScore = quality.usefulChars * 2 + quality.confidence;
         if (qualityScore > bestScore) best = quality;
+        // Early-exit: a clean screenshot / well-lit document is usually
+        // accepted on the first variant. Stop here instead of running all
+        // five variants (which can exceed the upstream extraction timeout).
+        if (best.accepted) break;
       }
     } finally {
       await worker.terminate();
     }
 
-    return { quality: best, variants: variants.length };
+    return { quality: best, variants: variantsProcessed };
   }
 
   async recognizePageBuffers(pageBuffers, options = {}) {

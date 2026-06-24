@@ -49,8 +49,8 @@ function formatDate(value?: string) {
   return Number.isFinite(date.getTime()) ? date.toLocaleString("es-BO") : "N/A"
 }
 
-function statusVariant(status: string): "default" | "secondary" | "destructive" | "outline" {
-  const normalized = status.toUpperCase()
+function statusVariant(status?: string): "default" | "secondary" | "destructive" | "outline" {
+  const normalized = (status || "").toUpperCase()
   if (normalized === "COMPLETED") return "default"
   if (normalized === "PENDING") return "secondary"
   if (normalized === "FAILED" || normalized === "CANCELLED") return "destructive"
@@ -201,7 +201,8 @@ export default function PaymentsPage() {
           <CardDescription>Mostrando hasta 500 registros reales ordenados por fecha</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="overflow-x-auto">
+          {/* Desktop/tablet table; phones get the card list below. */}
+          <div className="hidden overflow-x-auto md:block">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -234,13 +235,38 @@ export default function PaymentsPage() {
                     </TableCell>
                     <TableCell className="capitalize">{payment.provider || "N/A"}</TableCell>
                     <TableCell>
-                      <Badge variant={statusVariant(payment.status)}>{payment.status}</Badge>
+                      <Badge variant={statusVariant(payment.status)}>{payment.status || "N/A"}</Badge>
                     </TableCell>
                     <TableCell>{formatDate(payment.createdAt)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
+          </div>
+
+          {/* Mobile card list */}
+          <div className="space-y-2 md:hidden">
+            {payments.length === 0 ? (
+              <div className="rounded-lg border p-6 text-center text-sm text-muted-foreground">
+                {loading ? "Cargando pagos..." : "Sin pagos para este filtro."}
+              </div>
+            ) : payments.map((payment) => (
+              <div key={payment.id} className="rounded-lg border bg-card p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate text-sm font-medium">
+                    {payment.user?.name || payment.user?.email || payment.userId}
+                  </span>
+                  <span className="shrink-0 font-medium">{formatCurrency(payment.amount, payment.currency || "USD")}</span>
+                </div>
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                  <Badge variant={statusVariant(payment.status)}>{payment.status || "N/A"}</Badge>
+                  <Badge variant="outline">{payment.plan || "N/A"}</Badge>
+                  <span className="text-xs capitalize text-muted-foreground">{payment.provider || "N/A"}</span>
+                </div>
+                <div className="mt-1 text-xs text-muted-foreground">{formatDate(payment.createdAt)}</div>
+                <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground/70">{payment.id}</div>
+              </div>
+            ))}
           </div>
         </CardContent>
       </Card>

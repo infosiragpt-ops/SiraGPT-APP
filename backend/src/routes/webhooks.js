@@ -19,6 +19,7 @@ const { authenticateToken } = require('../middleware/auth');
 const prisma = require('../config/database');
 const triggers = require('../services/trigger-registry');
 const rateLimitStore = require('../middleware/rate-limit-store');
+const { assertSafeUrl } = require('../services/agent-harness/tools/web-fetch-tool');
 
 const router = express.Router();
 
@@ -106,8 +107,15 @@ function validateUrl(url) {
   try {
     const u = new URL(url);
     if (u.protocol !== 'https:' && u.protocol !== 'http:') return 'url must be http(s)';
+    // SSRF guard: reject loopback / private / reserved / cloud-metadata targets
+    // so a stored webhook can't be used to make the server POST to internal
+    // services. (The dispatcher re-validates with DNS at delivery time.)
+    assertSafeUrl(url);
     return null;
-  } catch {
+  } catch (err) {
+    if (err && err.code && String(err.code).startsWith('web_fetch_')) {
+      return err.message || 'url targets a host that is not allowed';
+    }
     return 'url is not a valid URL';
   }
 }

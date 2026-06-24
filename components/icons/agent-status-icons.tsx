@@ -1,5 +1,5 @@
 import * as React from "react"
-import { ThinkingBarsIcon } from "@/components/icons/thinking-bars-icon"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 
 export type AgentStatusIconKind =
   | "thinking"
@@ -218,7 +218,7 @@ export function AgentStatusIcon({
   kind: AgentStatusIconKind
   className?: string
 }) {
-  if (kind === "thinking") return <ThinkingBarsIcon className={className} />
+  if (kind === "thinking") return <ThinkingIndicator size="xs" label="Pensando" className={className} />
   if (kind === "coding") return <CodingIcon className={className} />
   if (kind === "verifying") return <VerifyingIcon className={className} />
   if (kind === "repairing") return <RepairingIcon className={className} />

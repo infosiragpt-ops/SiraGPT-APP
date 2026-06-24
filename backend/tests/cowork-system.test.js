@@ -330,11 +330,44 @@ describe('active-memory', () => {
     assert.ok(results.some(r => r.fact.includes('Acme')));
   });
 
+  it('getMemoryContext does not bump accessCount (read-only prompt path)', () => {
+    const entry = activeMemory.createMemoryEntry(testUserId, 'No-bump probe ' + Date.now(), { strength: 0.9 });
+    const findCount = () => activeMemory.listEntries(testUserId).find(e => e.id === entry.id).accessCount;
+    const before = findCount();
+    activeMemory.getMemoryContext(testUserId, { limit: 20 });
+    activeMemory.getMemoryContext(testUserId, { limit: 20 });
+    assert.equal(findCount(), before, 'building the prompt must not inflate accessCount');
+  });
+
+  it('recall honours bump:false but counts access by default', () => {
+    const entry = activeMemory.createMemoryEntry(testUserId, 'Bump flag probe ' + Date.now(), { strength: 0.9 });
+    const findCount = () => activeMemory.listEntries(testUserId).find(e => e.id === entry.id).accessCount;
+    const base = findCount();
+    activeMemory.recall(testUserId, null, { bump: false });
+    assert.equal(findCount(), base, 'bump:false must not increment');
+    activeMemory.recall(testUserId, null);
+    assert.ok(findCount() > base, 'default recall increments');
+  });
+
   it('promotes to long-term', () => {
     const entry = activeMemory.createMemoryEntry(testUserId, 'Promote me test', { strength: 0.9 });
     const promoted = activeMemory.promoteToLongTerm(entry.id);
     assert.equal(promoted.tier, 'long_term');
     assert.ok(promoted.strength > 0.5);
+  });
+
+  it('promote with a mismatched userId is rejected and does NOT mutate the entry (IDOR guard)', () => {
+    const entry = activeMemory.createMemoryEntry(testUserId, 'Owner-only promote probe', { strength: 0.4 });
+    const before = { tier: entry.tier, strength: entry.strength };
+    // Another user supplying this id must get null and leave the entry untouched.
+    const result = activeMemory.promoteToLongTerm(entry.id, { userId: 'someone-else' });
+    assert.equal(result, null);
+    const after = activeMemory.listEntries(testUserId).find((e) => e.id === entry.id);
+    assert.equal(after.tier, before.tier, 'tier unchanged');
+    assert.equal(after.strength, before.strength, 'strength unchanged');
+    // The legitimate owner still succeeds.
+    const owned = activeMemory.promoteToLongTerm(entry.id, { userId: testUserId });
+    assert.equal(owned.tier, 'long_term');
   });
 
   it('auto-promotes based on access count', () => {

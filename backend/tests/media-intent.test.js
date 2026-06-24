@@ -8,7 +8,15 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { detectMediaIntent, buildMediaIntentHint, _internal } = require('../src/services/agents/media-intent');
+const {
+  detectMediaIntent,
+  detectMediaIntents,
+  detectImageEditIntent,
+  buildMediaIntentHint,
+  buildMediaIntentsHint,
+  resolveVideoAspectRatio,
+  _internal,
+} = require('../src/services/agents/media-intent');
 
 test('detects an image create request and maps to generate_image', () => {
   const r = detectMediaIntent('créame una imagen de un gato astronauta');
@@ -130,6 +138,14 @@ test('detectOrientation maps ES/EN orientation words', () => {
   assert.equal(o('una imagen normal'), null);
 });
 
+test('resolveVideoAspectRatio maps natural language video shapes', () => {
+  assert.equal(resolveVideoAspectRatio('genera un video cuadrado'), '1:1');
+  assert.equal(resolveVideoAspectRatio('genera un video rectangular para youtube'), '16:9');
+  assert.equal(resolveVideoAspectRatio('genera un video vertical para reels'), '9:16');
+  assert.equal(resolveVideoAspectRatio('genera un video 21x9 cinematografico'), '21:9');
+  assert.equal(resolveVideoAspectRatio('genera un video normal'), null);
+});
+
 test('buildMediaIntentHint produces a directive naming the tool + specs', () => {
   const hint = buildMediaIntentHint(detectMediaIntent('genérame una canción de 3 minutos estilo lofi'));
   assert.match(hint, /generate_music/);
@@ -155,6 +171,95 @@ test('image-count hint instructs multiple generate_image calls', () => {
   const hint = buildMediaIntentHint(detectMediaIntent('hazme 4 imágenes de gatos'));
   assert.match(hint, /generate_image/);
   assert.match(hint, /4/);
+});
+
+// ── detectMediaIntents — multi-kind detection in one message ──────────────
+
+test('detectMediaIntents: "crea un video y una foto" activates BOTH tools', () => {
+  const intents = detectMediaIntents('crea un video y una foto de un perro');
+  assert.deepEqual(intents.map((i) => i.kind), ['video', 'image']);
+  assert.deepEqual(intents.map((i) => i.tool), ['generate_video', 'generate_image']);
+  assert.ok(intents.every((i) => i.confidence === 'high'));
+});
+
+test('detectMediaIntents: intents[0] matches the single-intent priority', () => {
+  const single = detectMediaIntent('hazme un video musical con una canción épica');
+  const multi = detectMediaIntents('hazme un video musical con una canción épica');
+  assert.equal(multi[0].kind, single.kind);
+});
+
+test('detectMediaIntents: per-kind specs do not bleed across kinds', () => {
+  const intents = detectMediaIntents('hazme un video de 15 segundos 9:16 y tres imágenes estilo anime');
+  const video = intents.find((i) => i.kind === 'video');
+  const image = intents.find((i) => i.kind === 'image');
+  assert.equal(video.specs.durationSeconds, 15);
+  assert.equal(video.specs.aspectRatio, '9:16');
+  assert.equal(image.specs.count, 3);
+  assert.equal(image.specs.durationSeconds, undefined);
+});
+
+test('detectMediaIntents: single kind still yields one intent; none yields []', () => {
+  assert.equal(detectMediaIntents('créame una imagen de un gato').length, 1);
+  assert.equal(detectMediaIntents('¿cuál es la capital de Francia?').length, 0);
+  assert.equal(detectMediaIntents('').length, 0);
+});
+
+test('detectMediaIntents: "audio de una canción" stays a single music intent', () => {
+  const intents = detectMediaIntents('hazme un audio de una canción');
+  assert.deepEqual(intents.map((i) => i.kind), ['music']);
+});
+
+// ── Image EDIT intent (img2img) ────────────────────────────────────────────
+
+test('edit phrasings route to edit_image', () => {
+  const intents = detectMediaIntents('quítale el fondo a esta foto');
+  assert.equal(intents[0].kind, 'image-edit');
+  assert.equal(intents[0].tool, 'edit_image');
+  assert.equal(intents[0].confidence, 'high');
+  assert.equal(detectMediaIntents('edita esta imagen y cámbiale el color del cielo')[0].tool, 'edit_image');
+  assert.equal(detectMediaIntents('remove the background from this photo')[0].tool, 'edit_image');
+});
+
+test('generation requests with edit-ish wording stay on generate_image', () => {
+  assert.equal(detectMediaIntents('crea una imagen de un perro sin fondo')[0].tool, 'generate_image');
+  assert.equal(detectMediaIntents('crea una imagen de un perro y quítale el fondo')[0].tool, 'generate_image');
+});
+
+test('an attached image lets implicit edit wording fire', () => {
+  assert.equal(detectMediaIntents('mejora la calidad', { hasImageAttachment: true })[0]?.tool, 'edit_image');
+  assert.equal(detectMediaIntents('mejora la calidad').length, 0);
+  assert.equal(detectMediaIntents('mejora el rendimiento del código').length, 0);
+});
+
+test('detectImageEditIntent is exported and pure', () => {
+  assert.equal(detectImageEditIntent('quita el fondo'), true);
+  assert.equal(detectImageEditIntent('crea una imagen de un perro'), false);
+  assert.equal(detectImageEditIntent(''), false);
+  assert.equal(detectImageEditIntent(null), false);
+});
+
+// ── buildMediaIntentsHint — multi-tool directive ──────────────────────────
+
+test('buildMediaIntentsHint lists every requested tool once', () => {
+  const hint = buildMediaIntentsHint(detectMediaIntents('crea un video y una foto de un perro'));
+  assert.match(hint, /generate_video/);
+  assert.match(hint, /generate_image/);
+  assert.match(hint, /PEDIDO MÚLTIPLE/);
+});
+
+test('buildMediaIntentsHint falls back to the single-intent hint', () => {
+  const single = buildMediaIntentsHint(detectMediaIntents('créame una canción de 3 minutos estilo lofi'));
+  assert.match(single, /generate_music/);
+  assert.match(single, /Activación automática/);
+  assert.doesNotMatch(single, /PEDIDO MÚLTIPLE/);
+  assert.equal(buildMediaIntentsHint([]), '');
+  assert.equal(buildMediaIntentsHint(null), '');
+});
+
+test('edit_image hint warns against generate_image', () => {
+  const hint = buildMediaIntentsHint(detectMediaIntents('quítale el fondo a esta foto'));
+  assert.match(hint, /edit_image/);
+  assert.match(hint, /NO generes una imagen nueva/);
 });
 
 // ── resolveImageAspectRatio — free-text → concrete image aspect ratio ──────

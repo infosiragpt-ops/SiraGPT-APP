@@ -40,6 +40,10 @@ describe("visible text model catalog", () => {
   })
 
   it("keeps admin-enabled flagship models FREE-eligible in the router catalog", () => {
+    // The admin row for Grok uses the legacy id "x-ai/grok-4.2" on purpose:
+    // OpenRouter rejects that slug (400), so the catalog canonicalises it to
+    // the valid "x-ai/grok-4.20" while keeping the legacy id as an alias
+    // (commit 3187ca244). The curated output must surface the canonical id.
     const enabledRows = [
       "openai/gpt-5.5",
       "anthropic/claude-opus-4.7",
@@ -58,8 +62,23 @@ describe("visible text model catalog", () => {
       isActive: true,
     }))
 
+    const expectedCanonicalNames = [
+      "openai/gpt-5.5",
+      "anthropic/claude-opus-4.7",
+      "google/gemini-3.5",
+      "x-ai/grok-4.20",
+      "moonshotai/kimi-k2.6",
+      "z-ai/glm-5.1",
+      "deepseek/deepseek-v4-pro",
+      "Gema4-31B",
+    ]
+
     const visible = curateVisibleTextModels(enabledRows)
-    assert.deepEqual(visible.map((model: any) => model.name), enabledRows.map((model) => model.name))
+    assert.deepEqual(visible.map((model: any) => model.name), expectedCanonicalNames)
+
+    // The user-facing label is untouched by the id correction.
+    const grok = visible.find((model: any) => model.name === "x-ai/grok-4.20")
+    assert.equal(grok?.displayName, "Grok 4.2")
 
     for (const model of visible) {
       const catalogEntry = modelRouter.getModel(model.name)

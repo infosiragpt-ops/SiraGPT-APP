@@ -500,6 +500,18 @@ describe('breaker diagnostics', () => {
     assert.ok('state' in states[0]);
   });
 
+  it('breakers use the intended threshold=3 / probeCount=2 (not library defaults 5/1)', async () => {
+    // Regression: DEFAULT_CB_CONFIG declared failureThreshold/successThreshold,
+    // which CircuitBreaker's sanitizeOptions ignores (it reads threshold/
+    // probeCount), so breakers silently ran at the lenient defaults.
+    mock.method(runnerModule, 'runAgentTaskJob', () => makeResult());
+    await collab.forkJoin({ subTasks: makeSubTasks(1), user: makeUser() });
+
+    const state = collab.getBreakerStates()[0];
+    assert.strictEqual(state.threshold, 3);
+    assert.strictEqual(state.probeCount, 2);
+  });
+
   it('resetBreakers clears state', async () => {
     mock.method(runnerModule, 'runAgentTaskJob', () => makeResult());
     await collab.forkJoin({ subTasks: makeSubTasks(1), user: makeUser() });

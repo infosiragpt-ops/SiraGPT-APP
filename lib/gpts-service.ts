@@ -14,6 +14,12 @@ export interface CustomGPT {
   maxTokens?: number
   actions?: any[]
   conversationStarters?: string[]
+  capabilities?: {
+    webBrowsing?: boolean
+    dataAnalysis?: boolean
+    imageGeneration?: boolean
+    codeInterpreter?: boolean
+  }
   visibility: 'PRIVATE' | 'UNLISTED' | 'PUBLIC'
   shareId: string
   category?: string
@@ -60,6 +66,25 @@ export interface GPTFilters {
   search?: string
   featured?: boolean
   visibility?: 'all' | 'mine' | 'public'
+}
+
+export interface GPTKnowledgeFile {
+  id: string
+  originalName: string
+  size: number
+  mimeType: string
+  extractedChars: number
+}
+
+export interface GPTPreviewMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export interface GPTPreviewResponse {
+  reply: string
+  model: string
+  displayName: string
 }
 
 class GPTsService {
@@ -265,6 +290,101 @@ class GPTsService {
       console.error('Error starting chat with GPT:', error)
       throw error
     }
+  }
+
+  // ── Knowledge files (Conocimientos) ──
+  async getGptKnowledge(id: string): Promise<GPTKnowledgeFile[]> {
+    try {
+      const response = await fetch(`${this.baseUrl}/${id}/knowledge`, {
+        credentials: 'include',
+        headers: this.authHeaders(),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || `Failed to fetch knowledge files: ${response.statusText}`)
+      }
+
+      const data = await response.json()
+      return data.files || []
+    } catch (error) {
+      console.error('Error fetching GPT knowledge files:', error)
+      throw error
+    }
+  }
+
+  async uploadGptKnowledge(id: string, files: File[]): Promise<GPTKnowledgeFile[]> {
+    try {
+      const formData = new FormData()
+      for (const file of files) {
+        formData.append('files', file)
+      }
+
+      const response = await fetch(`${this.baseUrl}/${id}/knowledge`, {
+        method: 'POST',
+        headers: this.authHeaders(false),
+        credentials: 'include',
+        body: formData,
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || `Failed to upload knowledge files: ${response.statusText}`)
+      }
+
+      const data = await response.json()
+      return data.files || []
+    } catch (error) {
+      console.error('Error uploading GPT knowledge files:', error)
+      throw error
+    }
+  }
+
+  async deleteGptKnowledge(id: string, fileId: string): Promise<void> {
+    try {
+      const response = await fetch(`${this.baseUrl}/${id}/knowledge/${fileId}`, {
+        method: 'DELETE',
+        credentials: 'include',
+        headers: this.authHeaders(),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || `Failed to delete knowledge file: ${response.statusText}`)
+      }
+    } catch (error) {
+      console.error('Error deleting GPT knowledge file:', error)
+      throw error
+    }
+  }
+
+  // Chat with the DRAFT GPT before it is saved. Stateless on the backend
+  // (nothing is persisted) and runs on the free FlashGPT model, so it is a
+  // fast, faithful persona preview that costs no credits.
+  async previewChat(input: {
+    instructions: string
+    name?: string
+    messages: GPTPreviewMessage[]
+  }): Promise<GPTPreviewResponse> {
+    const response = await fetch(`${this.baseUrl}/preview-chat`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: this.authHeaders(),
+      body: JSON.stringify({
+        instructions: input.instructions,
+        name: input.name,
+        messages: input.messages,
+      }),
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      throw new Error(
+        errorData.message || errorData.error || `Preview failed: ${response.statusText}`,
+      )
+    }
+
+    return response.json()
   }
 
   // Utility methods

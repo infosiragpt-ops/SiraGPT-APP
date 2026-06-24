@@ -12,6 +12,7 @@ import {
   Globe,
   Bot,
   ChevronDown,
+  ChevronRight,
   X,
   Upload,
   Palette,
@@ -23,6 +24,8 @@ import {
   Mail,
   Calendar,
   FolderOpen,
+  Chrome,
+  AppWindow,
   NetworkIcon,
   Network,
   Monitor,
@@ -41,10 +44,12 @@ import {
   Flag,
   Settings,
   PenSquare,
-  MessageSquare} from "lucide-react"
+  GraduationCap,
+  MessageSquare, Menu as MenuIcon} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
+import { motion, AnimatePresence } from "framer-motion"
 import { dedupeMessages } from "@/lib/message-preservation"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { CredentialWarning } from "@/components/credential-warning"
@@ -52,7 +57,6 @@ import { ComposerCharCounter } from "@/components/composer-char-counter"
 import { Input } from "@/components/ui/input"
 import { useChat } from "@/lib/chat-context-integrated"
 import { useAuth } from "@/lib/auth-context-integrated"
-import { ThemeToggle } from "@/components/theme-toggle"
 import WhatsAppButton from "@/components/WhatsAppButton"
 import { PremiumCardIcon } from "@/components/icons/premium-card-icon"
 import { SidebarOvalIcon } from "@/components/icons/sidebar-oval-icon"
@@ -87,9 +91,8 @@ import { SlashCommandMenu, detectSlashFilter, parseSlashPrefix } from "@/compone
 import {
   ImageAspectRatioMark,
   SelectedTextDisplay,
-  LinkContextDisplay,
 } from "@/components/chat/ComposerInlineDisplays"
-import { FileProcessingBadge } from "@/components/file-processing-badge"
+import { FileUploadProgress } from "@/components/file-upload-progress"
 import type { FileProcessingStatus } from "@/hooks/use-file-processing-status"
 import { isActiveProcessingStage, type FileProcessingStage } from "@/lib/file-processing-vocab"
 import {
@@ -101,8 +104,10 @@ import {
 } from "@/lib/attachment-ingest"
 import { Badge } from "@/components/ui/badge"
 import { apiClient } from "@/lib/api"
+import { shouldRecoverImageGenerationViaPolling } from "@/lib/image-generation-recovery"
 import { track } from "@/lib/analytics"
-import { aiService, buildProfessionalCapabilityPrompt, extractRequestedVideoDurationSeconds, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldAutoActivateVideoGeneration, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, type ChatIntent } from "@/lib/ai-service"
+import { aiService, buildProfessionalCapabilityPrompt, classifyIntentFastPath, extractRequestedVideoAspectRatio, extractRequestedVideoAudio, extractRequestedVideoDurationSeconds, extractRequestedVideoResolution, isImageAnalysisPrompt, isImageOnlyAttachmentTurn, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldAutoActivateVideoGeneration, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, type ChatIntent } from "@/lib/ai-service"
+import { resolveImageAttachmentUrl } from "@/lib/attachment-url"
 import { toast } from "sonner"
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
@@ -156,6 +161,7 @@ import {
 import { useTranslations } from "next-intl"
 import { useArtifactPanel } from "@/lib/artifact-panel-context"
 import { ArtifactPanel } from "@/components/chat/ArtifactPanel"
+import { SourcesPanel } from "@/components/sources-panel"
 import { ChatEmptyStateHero } from "@/components/chat/ChatEmptyStateHero"
 import { GrokVoicePanel } from "@/components/chat/grok-voice-panel"
 import { DocumentPreview, type DocumentPreviewTarget } from "./document-preview"
@@ -197,12 +203,24 @@ import {
   buildFileOnlyPrompt,
   createLongPasteDocumentFile,
   getLongPasteMetadata,
-  shouldCompilePastedTextAsDocument,
 } from "@/lib/long-paste"
 import { usePasteCapture } from "@/components/paste-preview-overlay"
 import { analyzePastedContent, type PasteCaptureResult, type PasteCaptureAction } from "@/lib/paste-capture"
+// Universal ingest modules — typed registry + pure paste routing + helpers.
+import { routePaste } from "@/lib/attachments/paste-router"
+import { htmlToMarkdown } from "@/lib/attachments/html-to-markdown"
+import { dedupeFiles } from "@/lib/attachments/file-hash"
+import { extractAudioMeta, extractVideoMeta } from "@/lib/attachments/media-meta"
+import { defaultAttachmentRegistry } from "@/lib/attachments/registry"
 import { useChatDraft } from "@/hooks/use-chat-draft"
 import { useVisualViewportCssVars } from "@/hooks/use-visual-viewport-css-vars"
+// Never-throwing clipboard (Capacitor → navigator.clipboard → execCommand fallback).
+// Direct navigator.clipboard.writeText() throws NotAllowedError in restrictive
+// contexts (preview iframes, denied permission, insecure origin) and, when not
+// awaited/caught, surfaces as an unhandled rejection in the dev overlay.
+import { writeText as copyTextSafe } from "@/lib/native/clipboard"
+
+type ComputerUseAppMode = "browser" | "chrome" | "computer"
 
 const resolveUploadFileId = (file: any): string | null => {
   if (!file) return null
@@ -221,6 +239,15 @@ const previewAttachmentKey = (attachment: AttachmentLike | null | undefined): st
 
 const isComposerFileUploadPending = (file: any): boolean =>
   Boolean(file && file.status === "uploading" && !resolveUploadFileId(file))
+
+// Universal ingest: pasted plain text longer than this becomes a "PEGADO"
+// (.txt) chip next to the input — expandable/removable — so the bar stays
+// clean. Shorter pastes insert inline at the caret. Configurable per
+// deployment via NEXT_PUBLIC_COMPOSER_PASTE_CHIP_THRESHOLD.
+const LONG_PASTE_CHIP_THRESHOLD = (() => {
+  const n = Number(process.env.NEXT_PUBLIC_COMPOSER_PASTE_CHIP_THRESHOLD)
+  return Number.isFinite(n) && n > 0 ? n : 1500
+})()
 
 const PROCESSING_CONTEXT_EXT_RE = /\.(?:pdf|docx?|xlsx?|csv|pptx?|txt|md|markdown|rtf|odt|ods|odp)$/i
 const PROCESSING_CONTEXT_MIME_RE =
@@ -308,6 +335,47 @@ const parseMessageFilesForRender = (files: any): any[] => {
   } catch {
     return []
   }
+}
+
+const VIDEO_SOURCE_IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|bmp|svg|heic|heif|avif|tiff?)$/i
+const IMAGE_TO_VIDEO_REFERENCE_RE =
+  /\b(?:image[- ]?to[- ]?video|imagen(?:es)?\s+a\s+video|foto(?:s)?\s+a\s+video)\b|\b(?:pasa(?:r|la|lo|las|los)?|pasar(?:la|lo|las|los)?|convierte(?:la|lo|las|los)?|convertir(?:la|lo|las|los)?|transforma(?:la|lo|las|los)?|transformar(?:la|lo|las|los)?|vuelve(?:la|lo|las|los)?)\b.{0,64}\bvideo\b|\b(?:anima(?:r|la|lo|las|los)?|animala|animalo|dale movimiento|darle movimiento|que se mueva)\b/
+
+const normalizeMediaPromptText = (value: string) =>
+  String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+
+const shouldUseLatestImageForVideo = (prompt: string) =>
+  IMAGE_TO_VIDEO_REFERENCE_RE.test(normalizeMediaPromptText(prompt))
+
+const isVideoSourceImageAttachment = (file: any) => {
+  if (!file) return false
+  const mimeType = String(file?.mimeType || file?.type || file?.contentType || "").toLowerCase()
+  const name = String(file?.originalName || file?.name || file?.filename || file?.url || file?.imageUrl || "").toLowerCase()
+  if (mimeType.startsWith("image/") || file?.type === "image") return true
+  return VIDEO_SOURCE_IMAGE_EXT_RE.test(name)
+}
+
+const collectLatestGeneratedImageUrls = (messages: any[] = [], maxImages = 4) => {
+  for (const message of [...(Array.isArray(messages) ? messages : [])].reverse()) {
+    if (String(message?.role || "").toUpperCase() !== "ASSISTANT") continue
+    const files = parseMessageFilesForRender(message?.files).filter(isVideoSourceImageAttachment)
+    const urls = files
+      .map((file: any) => resolveImageAttachmentUrl(file, process.env.NEXT_PUBLIC_IMAGE_URL))
+      .map((url: string) => String(url || "").trim())
+      .filter(Boolean)
+    if (urls.length > 0) return urls.slice(0, maxImages)
+
+    const content = String(message?.content || "").trim()
+    if (/^https?:\/\//i.test(content) && /\.(?:png|jpe?g|webp|gif|avif)(?:\?|#|$)/i.test(content)) {
+      return [content]
+    }
+  }
+  return []
 }
 
 const hasMessageTextForRender = (content: any): boolean => {
@@ -421,6 +489,12 @@ const isImageModelEntry = (model: any) => {
   const type = String(model?.type || model?.kind || '').toLowerCase();
   const label = `${model?.name || ''} ${model?.displayName || ''} ${model?.provider || ''}`;
   return type === 'image' || type === 'images' || type.includes('image') || /image|imagen|dall|seedream|flux|stable|midjourney|ideogram|recraft|gpt-image/i.test(label);
+}
+
+const isVideoModelEntry = (model: any) => {
+  const type = String(model?.type || model?.kind || '').toLowerCase();
+  const label = `${model?.name || ''} ${model?.displayName || ''} ${model?.provider || ''}`;
+  return type === 'video' || type === 'videos' || type.includes('video') || /video|text-to-video|image-to-video|veo|kling|sora|seedance|pixverse|hailuo|ltx|wan|cosmos|fal\.ai/i.test(label);
 }
 
 // `ImageAspectRatioMark` was extracted to
@@ -552,6 +626,44 @@ function extractDetectedLinks(value: string): DetectedLink[] {
     }
   }
   return links.slice(0, 8)
+}
+
+function ComposerInlineLinkHighlights({ value }: { value: string }) {
+  if (!value) return null
+
+  const nodes: React.ReactNode[] = []
+  let cursor = 0
+  let key = 0
+
+  for (const match of value.matchAll(URL_TOKEN_RE)) {
+    const token = match[0] || ""
+    const start = match.index ?? 0
+    const clean = cleanUrlToken(token)
+    if (!clean) continue
+
+    if (start > cursor) {
+      nodes.push(value.slice(cursor, start))
+    }
+
+    nodes.push(
+      <span key={`url-${key++}`} className="composer-inline-link-highlight">
+        {clean}
+      </span>,
+    )
+
+    const cleanEnd = start + clean.length
+    const tokenEnd = start + token.length
+    if (tokenEnd > cleanEnd) {
+      nodes.push(value.slice(cleanEnd, tokenEnd))
+    }
+    cursor = tokenEnd
+  }
+
+  if (cursor < value.length) {
+    nodes.push(value.slice(cursor))
+  }
+
+  return <>{nodes}</>
 }
 
 function appendTextToken(current: string, token: string) {
@@ -830,9 +942,8 @@ function SearchActivityPanel({ activity, onClose }: { activity: SearchActivitySt
 }
 
 // Selected Text Display Component
-// `SelectedTextDisplay` and `LinkContextDisplay` were extracted to
-// `components/chat/ComposerInlineDisplays.tsx`. They are imported at
-// the top of this file and used below with the exact same prop shape.
+// `SelectedTextDisplay` was extracted to
+// `components/chat/ComposerInlineDisplays.tsx` and is imported above.
 
 
 // Enhanced Actions Dropdown Component
@@ -852,6 +963,8 @@ const ActionsDropdown = ({
   setIsVideoGenerationActive,
   isComputerUseActive,
   setIsComputerUseActive,
+  computerUseAppMode,
+  setComputerUseAppMode,
   computerUseStatus,
   isGmailActive,
   setIsGmailActive,
@@ -892,6 +1005,7 @@ const ActionsDropdown = ({
   const [isOpen, setIsOpen] = React.useState(false);
   const [appsOpen, setAppsOpen] = React.useState(false);
   const [mobileAppsOpen, setMobileAppsOpen] = React.useState(false);
+  const [tooltipOpen, setTooltipOpen] = React.useState(false);
   const [justClosed, setJustClosed] = React.useState(false);
   const closeTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
   const isFreePlan = isFreePlanName(currentPlan);
@@ -987,16 +1101,34 @@ const ActionsDropdown = ({
     setIsMusicGenerationActive(newState);
   };
 
+  const handleComputerUseAppToggle = (mode: ComputerUseAppMode) => {
+    const isSameModeActive = isComputerUseActive && computerUseAppMode === mode;
 
-  const isMenuDisabled = isLoading || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices;
+    if (isSameModeActive) {
+      setIsComputerUseActive(false);
+      setComputerUseAppMode(null);
+      setChatType('text');
+      return;
+    }
+
+    closeAllToolsAndConnectors();
+    setComputerUseAppMode(mode);
+    setIsComputerUseActive(true);
+    setChatType('computer-use');
+    setIsOpen(false);
+  };
+
+
+  const isMenuDisabled = isLoading || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices;
   const isToolSwitchDisabled = isMenuDisabled || isGeneratingImage;
   // Premium tools are also marketing/configuration previews for FREE users.
   // Keep them selectable while a normal chat response is loading so users can
   // open the tool chip and inspect model/settings options without generating.
-  const isPremiumPreviewSwitchDisabled = isGeneratingImage || isGeneratingVideo || isUploading;
+  const isPremiumPreviewSwitchDisabled = isGeneratingImage || isUploading;
 
   const handleDropdownOpenChange = (open: boolean) => {
     setIsOpen(open);
+    setTooltipOpen(false);
     if (!open) {
       setAppsOpen(false);
       setMobileAppsOpen(false);
@@ -1015,6 +1147,14 @@ const ActionsDropdown = ({
       }
     }
   };
+
+  const handleTooltipOpenChange = React.useCallback((open: boolean) => {
+    if (open && (isOpen || justClosed || isMenuDisabled)) {
+      setTooltipOpen(false);
+      return;
+    }
+    setTooltipOpen(open);
+  }, [isMenuDisabled, isOpen, justClosed]);
 
   React.useEffect(() => {
     return () => {
@@ -1099,9 +1239,59 @@ const ActionsDropdown = ({
     },
   ];
 
-  const activeAppsCount = connectorItems.filter((item) => item.active).length;
+  const controlAppItems = [
+    {
+      key: "browser-control",
+      brand: "browser-control",
+      label: "Navegador",
+      description: "Navega, busca y extrae datos",
+      active: isComputerUseActive && computerUseAppMode === "browser",
+      disabled: isToolSwitchDisabled,
+      dotClassName: "bg-sky-500",
+      iconClassName: "bg-sky-100 dark:bg-sky-900/20",
+      icon: <AppWindow className="h-4 w-4 text-sky-600 dark:text-sky-400" />,
+      onClick: () => handleComputerUseAppToggle("browser"),
+    },
+    {
+      key: "chrome-control",
+      brand: "chrome-control",
+      label: "Chrome",
+      description: "Automatiza Chrome",
+      active: isComputerUseActive && computerUseAppMode === "chrome",
+      disabled: isToolSwitchDisabled,
+      dotClassName: "bg-blue-500",
+      iconClassName: "bg-blue-100 dark:bg-blue-900/20",
+      icon: <Chrome className="h-4 w-4 text-blue-600 dark:text-blue-400" />,
+      onClick: () => handleComputerUseAppToggle("chrome"),
+    },
+    {
+      key: "computer-control",
+      brand: "computer-control",
+      label: "Computadora",
+      description: "Control local seguro",
+      active: isComputerUseActive && computerUseAppMode === "computer",
+      disabled: isToolSwitchDisabled,
+      dotClassName: "bg-indigo-500",
+      iconClassName: "bg-indigo-100 dark:bg-indigo-900/20",
+      icon: <Monitor className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />,
+      onClick: () => handleComputerUseAppToggle("computer"),
+    },
+  ];
 
-  const renderConnectorItems = () => connectorItems.map((item) => (
+  const activeAppsCount = [...connectorItems, ...controlAppItems].filter((item) => item.active).length;
+
+  const renderAppMenuItem = (item: {
+    key: string;
+    brand: string;
+    label: string;
+    description?: string;
+    active: boolean;
+    disabled?: boolean;
+    dotClassName: string;
+    iconClassName: string;
+    icon: JSX.Element;
+    onClick: () => void;
+  }) => (
     <DropdownMenuItem
       key={item.key}
       className="liquid-menu-item chat-app-menu-item"
@@ -1118,28 +1308,48 @@ const ActionsDropdown = ({
           <div className="liquid-label truncate font-medium text-sm">
             {item.label}
           </div>
+          {item.description && (
+            <div className="truncate text-xs text-muted-foreground">
+              {item.description}
+            </div>
+          )}
         </div>
         {item.active && (
           <div className={`h-2 w-2 shrink-0 rounded-full ${item.dotClassName}`} aria-label="Activa" />
         )}
       </div>
     </DropdownMenuItem>
-  ));
+  );
+
+  const renderConnectorItems = () => connectorItems.map((item) => renderAppMenuItem(item));
+
+  const renderControlAppItems = () => controlAppItems.map((item) => renderAppMenuItem(item));
+
+  const renderAppsMenuContent = () => (
+    <>
+      {renderConnectorItems()}
+      <div className="my-1 h-px bg-border/45" />
+      <div className="px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+        Control
+      </div>
+      {renderControlAppItems()}
+    </>
+  );
 
   return (
     <TooltipProvider>
       <DropdownMenu dir="ltr" open={isOpen} onOpenChange={handleDropdownOpenChange}>
-        <Tooltip open={!isOpen && !justClosed ? undefined : false} delayDuration={300}>
+        <Tooltip open={tooltipOpen} onOpenChange={handleTooltipOpenChange} delayDuration={300}>
           <TooltipTrigger asChild>
             <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
                 size="sm"
                 aria-label="Adjuntar archivos y herramientas"
-                className="h-9 w-9 p-0 hover:bg-muted/50 rounded-full flex items-center justify-center"
+                className="composer-plus-liquid-button flex h-10 w-10 items-center justify-center rounded-full p-0"
                 disabled={isMenuDisabled}
               >
-                <Plus className="h-5 w-5" />
+                <Plus className="relative z-10 h-5 w-5" strokeWidth={2.2} />
               </Button>
             </DropdownMenuTrigger>
           </TooltipTrigger>
@@ -1162,12 +1372,12 @@ const ActionsDropdown = ({
             disabled={isUploading || isGeneratingImage}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-900/20 flex items-center justify-center">
+              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-blue-100 dark:bg-blue-900/20 flex items-center justify-center">
                 <Paperclip className="h-4 w-4 text-blue-600 dark:text-blue-400" />
               </div>
-              <div className="flex-1">
+              <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">Subir archivos</div>
-                <div className="text-xs text-muted-foreground">
+                <div className="truncate text-xs text-muted-foreground">
                   {isUploading ? 'Subiendo…' : 'Imágenes, PDFs, documentos'}
                 </div>
               </div>
@@ -1188,22 +1398,19 @@ const ActionsDropdown = ({
             disabled={isWebSearching || isGeneratingImage}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isWebSearchActive
-                ? 'bg-green-100 dark:bg-green-900/20'
-                : 'bg-emerald-100 dark:bg-emerald-900/20'
-                }`}>
-                <Globe className={`h-4 w-4 ${isWebSearchActive
-                  ? 'text-green-600 dark:text-green-400'
-                  : 'text-emerald-600 dark:text-emerald-400'
-                  }`} />
+              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-emerald-100 dark:bg-emerald-900/20 flex items-center justify-center">
+                <Globe className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
               </div>
-              <div className="flex-1">
+              <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">
-                  {isWebSearchActive ? 'Web Search Active' : 'Web Search'}
+                  {isWebSearchActive ? 'Web Search activo' : 'Web Search'}
+                </div>
+                <div className="truncate text-xs text-muted-foreground">
+                  Busca en internet en tiempo real
                 </div>
               </div>
               {isWebSearchActive && (
-                <div className="w-2 h-2 bg-green-500 rounded-full" />
+                <div className="w-2 h-2 shrink-0 bg-emerald-500 rounded-full" />
               )}
             </div>
           </DropdownMenuItem>
@@ -1215,13 +1422,13 @@ const ActionsDropdown = ({
             }}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon w-8 h-8 rounded-lg bg-gray-100 dark:bg-gray-900/20 flex items-center justify-center">
-                <Network width="13" height="13" />
+              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-gray-100 dark:bg-gray-900/20 flex items-center justify-center">
+                <Network className="h-4 w-4 text-gray-600 dark:text-gray-300" />
               </div>
               <div className="min-w-0 flex-1">
-                <div className="liquid-label font-semibold text-sm">APPs</div>
+                <div className="liquid-label font-medium text-sm">APPs</div>
                 <div className="truncate text-xs text-muted-foreground">
-                  {activeAppsCount > 0 ? `${activeAppsCount} activa${activeAppsCount > 1 ? "s" : ""}` : "Gmail, Calendar, Drive, Spotify"}
+                  {activeAppsCount > 0 ? `${activeAppsCount} activa${activeAppsCount > 1 ? "s" : ""}` : "Gmail, Drive, Navegador, Chrome"}
                 </div>
               </div>
               <ChevronDown className={cn("h-4 w-4 shrink-0 opacity-60 transition-transform", mobileAppsOpen && "rotate-180")} />
@@ -1229,7 +1436,7 @@ const ActionsDropdown = ({
           </DropdownMenuItem>
           {mobileAppsOpen && (
             <div className="chat-mobile-apps-panel md:hidden">
-              {renderConnectorItems()}
+              {renderAppsMenuContent()}
             </div>
           )}
           <DropdownMenuSub open={appsOpen} onOpenChange={setAppsOpen}>
@@ -1243,12 +1450,13 @@ const ActionsDropdown = ({
               }}
             >
               <div className="flex items-center gap-3 w-full">
-                <div className="liquid-icon w-8 h-8 rounded-lg bg-gray-100 dark:bg-gray-900/20 flex items-center justify-center">
-                  <Network width="13" height="13" />
+                <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-gray-100 dark:bg-gray-900/20 flex items-center justify-center">
+                  <Network className="h-4 w-4 text-gray-600 dark:text-gray-300" />
                 </div>
-                <div className="flex-1">
-                  <div className="liquid-label font-medium text-sm flex items-center">
-                    APPs
+                <div className="min-w-0 flex-1">
+                  <div className="liquid-label font-medium text-sm">APPs</div>
+                  <div className="truncate text-xs text-muted-foreground">
+                    {activeAppsCount > 0 ? `${activeAppsCount} activa${activeAppsCount > 1 ? "s" : ""}` : "Gmail, Drive, Navegador, Chrome"}
                   </div>
                 </div>
               </div>
@@ -1260,12 +1468,15 @@ const ActionsDropdown = ({
                 collisionPadding={12}
                 className="liquid-menu-surface w-64"
               >
-                {renderConnectorItems()}
+                {renderAppsMenuContent()}
               </DropdownMenuSubContent>
             </DropdownMenuPortal>
           </DropdownMenuSub>
 
-          <DropdownMenuSeparator />
+          <DropdownMenuSeparator className="liquid-menu-separator" />
+          <div className="px-2.5 pb-0.5 pt-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/80">
+            Generar con IA
+          </div>
 
           {/* Image Generation */}
           <DropdownMenuItem
@@ -1274,25 +1485,19 @@ const ActionsDropdown = ({
             disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isImageGenerationActive
-                ? 'bg-pink-100 dark:bg-pink-900/20'
-                : 'bg-pink-100 dark:bg-pink-900/20'
-                }`}>
-                <Palette className={`h-4 w-4 ${isImageGenerationActive
-                  ? 'text-pink-600 dark:text-pink-400'
-                  : 'text-pink-600 dark:text-pink-400'
-                  }`} />
+              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-pink-100 dark:bg-pink-900/20 flex items-center justify-center">
+                <Palette className="h-4 w-4 text-pink-600 dark:text-pink-400" />
               </div>
-              <div className="flex-1">
+              <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">
                   {isImageGenerationActive ? 'Imágenes activas' : 'Imágenes'}
                 </div>
-                <div className="text-xs text-muted-foreground">
+                <div className="truncate text-xs text-muted-foreground">
                   {isFreePlan ? 'Vista previa de generación con IA' : isGeneratingImage ? 'Generando ahora' : 'Genera imágenes con IA'}
                 </div>
               </div>
               {(isImageGenerationActive || isGeneratingImage) && (
-                <div className={cn("w-2 h-2 bg-pink-500 rounded-full", isGeneratingImage && "animate-pulse")} />
+                <div className={cn("w-2 h-2 shrink-0 bg-pink-500 rounded-full", isGeneratingImage && "animate-pulse")} />
               )}
               {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
@@ -1307,17 +1512,17 @@ const ActionsDropdown = ({
             disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon w-8 h-8 rounded-lg bg-cyan-100 dark:bg-cyan-900/20 flex items-center justify-center">
+              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-cyan-100 dark:bg-cyan-900/20 flex items-center justify-center">
                 <AudioLines className="h-4 w-4 text-cyan-600 dark:text-cyan-400" />
               </div>
-              <div className="flex-1">
+              <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">Voz</div>
-                <div className="text-xs text-muted-foreground">
+                <div className="truncate text-xs text-muted-foreground">
                   {isFreePlan ? 'Vista previa ElevenLabs / Mimo HD' : 'ElevenLabs / Mimo HD · TTS'}
                 </div>
               </div>
               {isVoiceGenerationActive && (
-                <div className="w-2 h-2 bg-cyan-500 rounded-full" />
+                <div className="w-2 h-2 shrink-0 bg-cyan-500 rounded-full" />
               )}
               {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
@@ -1332,25 +1537,19 @@ const ActionsDropdown = ({
             disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isVideoGenerationActive
-                ? 'bg-orange-100 dark:bg-orange-900/20'
-                : 'bg-orange-100 dark:bg-orange-900/20'
-                }`}>
-                <Video className={`h-4 w-4 ${isVideoGenerationActive
-                  ? 'text-orange-600 dark:text-orange-400'
-                  : 'text-orange-600 dark:text-orange-400'
-                  }`} />
+              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-emerald-100 dark:bg-emerald-900/20 flex items-center justify-center">
+                <Video className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
               </div>
-              <div className="flex-1">
+              <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">
-                  {isVideoGenerationActive ? 'Video Generation Active' : 'Video Generation'}
+                  {isVideoGenerationActive ? 'Video activo' : 'Video'}
                 </div>
-                <div className="text-xs text-muted-foreground">
-                  {isFreePlan ? 'Vista previa de video con IA' : 'Create videos with Google Veo 3'}
+                <div className="truncate text-xs text-muted-foreground">
+                  {isFreePlan ? 'Vista previa de video con IA' : 'Crea videos con fal.ai'}
                 </div>
               </div>
               {isVideoGenerationActive && (
-                <div className="w-2 h-2 bg-orange-500 rounded-full" />
+                <div className="w-2 h-2 shrink-0 bg-emerald-500 rounded-full" />
               )}
               {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
@@ -1365,19 +1564,19 @@ const ActionsDropdown = ({
             disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon w-8 h-8 rounded-lg bg-rose-100 dark:bg-rose-900/20 flex items-center justify-center">
+              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-rose-100 dark:bg-rose-900/20 flex items-center justify-center">
                 <Music className="h-4 w-4 text-rose-600 dark:text-rose-400" />
               </div>
-              <div className="flex-1">
+              <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">
                   {isMusicGenerationActive ? 'Música activa' : 'Música'}
                 </div>
-                <div className="text-xs text-muted-foreground">
+                <div className="truncate text-xs text-muted-foreground">
                   {isFreePlan ? 'Vista previa de música con IA' : 'Lyria 3 Pro · genera canciones con IA'}
                 </div>
               </div>
               {isMusicGenerationActive && (
-                <div className="w-2 h-2 bg-rose-500 rounded-full" />
+                <div className="w-2 h-2 shrink-0 bg-rose-500 rounded-full" />
               )}
               {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
@@ -1395,22 +1594,19 @@ const ActionsDropdown = ({
             disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${chatType === 'thesis'
-                ? 'bg-purple-100 dark:bg-purple-900/20'
-                : 'bg-purple-100 dark:bg-purple-900/20'
-                }`}>
-                <span className="text-base leading-none" aria-hidden="true">🎓</span>
+              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-purple-100 dark:bg-purple-900/20 flex items-center justify-center">
+                <GraduationCap className="h-4 w-4 text-purple-600 dark:text-purple-400" />
               </div>
-              <div className="flex-1">
+              <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">
                   {chatType === 'thesis' ? 'Generador de tesis activo' : 'Generador de tesis'}
                 </div>
-                <div className="text-xs text-muted-foreground">
+                <div className="truncate text-xs text-muted-foreground">
                   {isFreePlan ? 'Vista previa de tesis académica' : 'Genera tesis académicas completas'}
                 </div>
               </div>
               {chatType === 'thesis' && (
-                <div className="w-2 h-2 bg-purple-500 rounded-full" />
+                <div className="w-2 h-2 shrink-0 bg-purple-500 rounded-full" />
               )}
               {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
@@ -1477,16 +1673,43 @@ const getFileIcon = (file: any) => {
       return wrapIconInSmallSquare(<FileIcon className="h-5 w-5 text-white" />, "#9ca3af"); // gray
   }
 };
-// Active Options Display Component - Renders above the textarea
-const ActiveOptionsDisplay = ({
-  uploadedFiles,
-  removeFile,
-  uploadProgress,
-  retryUpload,
-  restoreLongPasteToInput,
-  onPreviewAttachment,
-  onFileProcessingStatusChange,
-}: {
+// Human-readable byte size for attachment chips ("1,5 MB").
+const formatChipBytes = (bytes: number | null | undefined): string => {
+  if (!Number.isFinite(bytes as number) || (bytes as number) <= 0) return "";
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes as number;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit++; }
+  const rounded = value >= 100 || unit === 0 ? Math.round(value).toString() : value.toFixed(1).replace(".", ",");
+  return `${rounded} ${units[unit]}`;
+};
+
+// "m:ss" / "h:mm:ss" duration label for audio/video chips.
+const formatChipDuration = (seconds: number | null | undefined): string => {
+  if (!Number.isFinite(seconds as number) || (seconds as number) <= 0) return "";
+  const total = Math.round(seconds as number);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return h > 0
+    ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+    : `${m}:${String(s).padStart(2, "0")}`;
+};
+
+// Mini-waveform for audio chips — normalized peaks (0..1) to bars.
+const ChipWaveform = ({ peaks }: { peaks: number[] }) => (
+  <span aria-hidden className="flex h-[16px] items-end gap-[1.5px]">
+    {peaks.slice(0, 36).map((p, i) => (
+      <span
+        key={i}
+        className="w-[2px] rounded-full bg-pink-500/70 dark:bg-pink-400/70"
+        style={{ height: `${Math.max(2, Math.round(p * 16))}px` }}
+      />
+    ))}
+  </span>
+);
+
+type ActiveOptionsDisplayProps = {
   uploadedFiles: any[];
   removeFile: (index: number) => void;
   uploadProgress: { [key: string]: number };
@@ -1494,7 +1717,40 @@ const ActiveOptionsDisplay = ({
   restoreLongPasteToInput?: (file: any, index: number) => void;
   onPreviewAttachment?: (attachment: AttachmentLike, siblings: AttachmentLike[], index: number) => void;
   onFileProcessingStatusChange?: (file: any, status: FileProcessingStatus) => void;
-}) => {
+  moveFile?: (index: number, delta: -1 | 1) => void;
+}
+
+function areActiveOptionsDisplayPropsEqual(
+  prev: ActiveOptionsDisplayProps,
+  next: ActiveOptionsDisplayProps,
+) {
+  return (
+    prev.uploadedFiles === next.uploadedFiles &&
+    prev.uploadProgress === next.uploadProgress &&
+    prev.removeFile === next.removeFile &&
+    prev.retryUpload === next.retryUpload &&
+    prev.restoreLongPasteToInput === next.restoreLongPasteToInput &&
+    prev.onPreviewAttachment === next.onPreviewAttachment &&
+    prev.onFileProcessingStatusChange === next.onFileProcessingStatusChange &&
+    prev.moveFile === next.moveFile
+  )
+}
+
+// Active Options Display Component - Renders above the textarea
+const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
+  uploadedFiles,
+  removeFile,
+  uploadProgress,
+  retryUpload,
+  restoreLongPasteToInput,
+  onPreviewAttachment,
+  onFileProcessingStatusChange,
+  moveFile,
+}: ActiveOptionsDisplayProps) {
+  // Screen-reader announcement for keyboard reordering (aria-live).
+  const [reorderAnnouncement, setReorderAnnouncement] = React.useState("");
+  // Inline expanded preview for "PEGADO" text-snippet chips.
+  const [expandedSnippetId, setExpandedSnippetId] = React.useState<string | null>(null);
   // Viewer state — same reusable viewer used by sent-message chips, so
   // the user gets identical high-fidelity preview in both contexts.
   const [viewingIndex, setViewingIndex] = React.useState<number | null>(null);
@@ -1539,7 +1795,14 @@ const ActiveOptionsDisplay = ({
 
   return (
     <div className="p-3  bg-background">
-      <div className="flex flex-wrap items-center gap-2 max-h-40 overflow-y-auto">
+      {/* aria-live announcer so keyboard reordering is narrated. */}
+      <span aria-live="polite" className="sr-only">{reorderAnnouncement}</span>
+      <div
+        role="list"
+        aria-label="Archivos adjuntos"
+        className="flex flex-wrap items-center gap-2 max-h-40 overflow-y-auto"
+      >
+        <AnimatePresence initial={false}>
         {uploadedFiles.map((file, index) => {
           const isImage = file.type?.startsWith('image/');
           const fileId = file.id || file.tempId;
@@ -1562,9 +1825,26 @@ const ActiveOptionsDisplay = ({
             }
           };
 
+          const chipKey = String(file.tempId || file.id || `${file.name}-${index}`);
+          const isAudio = (file.type || '').startsWith('audio/');
+          const isVideo = (file.type || '').startsWith('video/');
+          const chipLabel = `${longPasteMeta?.title || file.name}, adjunto ${index + 1} de ${uploadedFiles.length}`;
+          const handleReorder = (delta: -1 | 1) => {
+            if (!moveFile) return;
+            const target = index + delta;
+            if (target < 0 || target >= uploadedFiles.length) return;
+            moveFile(index, delta);
+            setReorderAnnouncement(`${file.name} movido a la posición ${target + 1} de ${uploadedFiles.length}`);
+          };
+
           return (
-            <div
-              key={index}
+            <motion.div
+              key={chipKey}
+              layout
+              initial={{ opacity: 0, scale: 0.85, y: 8 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.85, y: 8 }}
+              transition={{ type: 'spring', stiffness: 420, damping: 30, mass: 0.7 }}
               className={cn(
                 "relative text-sm rounded-xl",
                 "border",
@@ -1572,12 +1852,22 @@ const ActiveOptionsDisplay = ({
                 isImage ? `${imageSizeClass} p-0` : "flex items-center gap-2 px-2 py-1",
                 // Clickable chip — opens the unified high-fidelity viewer.
                 canPreview && "cursor-pointer hover:border-foreground/40 hover:shadow-sm transition-all",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
               )}
               title={isFailed ? `Subida fallida: ${file.uploadError || 'error'}` : canPreview ? 'Ver documento' : 'Preparando documento'}
               onClick={openPreview}
-              role={canPreview ? 'button' : undefined}
-              tabIndex={canPreview ? 0 : undefined}
-              onKeyDown={(e) => {
+              role="listitem"
+              aria-label={chipLabel}
+              tabIndex={0}
+              onKeyDown={(e: React.KeyboardEvent) => {
+                if (e.key === 'Delete' || e.key === 'Backspace') {
+                  e.preventDefault();
+                  removeFile(index);
+                  setReorderAnnouncement(`${file.name} eliminado`);
+                  return;
+                }
+                if (e.altKey && e.key === 'ArrowLeft') { e.preventDefault(); handleReorder(-1); return; }
+                if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); handleReorder(1); return; }
                 if (!canPreview) return;
                 if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPreview(); }
               }}
@@ -1624,26 +1914,54 @@ const ActiveOptionsDisplay = ({
                     )}
                   </div>
 
-                  {!isUploading && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="absolute top-1 right-1 h-6 w-6 p-0 bg-white dark:bg-background rounded-full shadow-md flex items-center justify-center hover:bg-gray-100"
-                      onClick={(e) => { e.stopPropagation(); removeFile(index); }}
-                      title="Quitar"
-                      aria-label="Quitar archivo"
-                    >
-                      <X className="h-4 w-4 text-gray-600 dark:text-foreground" />
-                    </Button>
-                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="absolute top-1 right-1 h-6 w-6 p-0 bg-white dark:bg-background rounded-full shadow-md flex items-center justify-center hover:bg-gray-100"
+                    onClick={(e) => { e.stopPropagation(); removeFile(index); }}
+                    title={isUploading ? "Cancelar subida" : "Quitar"}
+                    aria-label={isUploading ? "Cancelar subida" : "Quitar archivo"}
+                  >
+                    <X className="h-4 w-4 text-gray-600 dark:text-foreground" />
+                  </Button>
                 </>
               ) : (
                 <>
-                  {getFileIcon(file)}
+                  {isVideo && file.mediaMeta?.thumbnailDataUrl ? (
+                    <span className="relative h-9 w-12 shrink-0 overflow-hidden rounded-md bg-black/80">
+                      <img src={file.mediaMeta.thumbnailDataUrl} alt="" className="h-full w-full object-cover" />
+                      {formatChipDuration(file.mediaMeta?.durationSeconds) && (
+                        <span className="absolute bottom-0.5 right-0.5 rounded bg-black/75 px-1 text-[9px] font-medium leading-tight text-white tabular-nums">
+                          {formatChipDuration(file.mediaMeta?.durationSeconds)}
+                        </span>
+                      )}
+                    </span>
+                  ) : (
+                    getFileIcon(file)
+                  )}
                   <div className="flex flex-col flex-1 min-w-0">
                     <span className={`truncate font-medium text-[13px] ${isFailed ? 'text-red-600 dark:text-red-400' : ''}`}>
+                      {longPasteMeta && (
+                        <span className="mr-1.5 inline-flex items-center rounded bg-muted px-1 py-px align-middle text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">
+                          Pegado
+                        </span>
+                      )}
                       {longPasteMeta?.title || file.name}
                     </span>
+                    {/* Secondary metadata line — readable size + media details. */}
+                    {!longPasteMeta && !isFailed && (
+                      <span className="mt-0.5 flex items-center gap-1.5 text-[10.5px] leading-tight text-muted-foreground">
+                        {isAudio && Array.isArray(file.mediaMeta?.peaks) && file.mediaMeta.peaks.length > 0 && (
+                          <ChipWaveform peaks={file.mediaMeta.peaks} />
+                        )}
+                        {isAudio && formatChipDuration(file.mediaMeta?.durationSeconds) && (
+                          <span className="tabular-nums">{formatChipDuration(file.mediaMeta?.durationSeconds)}</span>
+                        )}
+                        {formatChipBytes(file.size) && (
+                          <span className="tabular-nums">{formatChipBytes(file.size)}</span>
+                        )}
+                      </span>
+                    )}
                     {longPasteMeta && !isUploading && !isFailed && (
                       <div className="mt-0.5 flex items-center gap-2 text-[11px] leading-tight text-muted-foreground">
                         {/* Solid stats so the user can verify the
@@ -1671,7 +1989,20 @@ const ActiveOptionsDisplay = ({
                         )}
                         <button
                           type="button"
-                          className="ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 underline-offset-2 hover:bg-muted/60 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                          className="ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setExpandedSnippetId((cur) => (cur === chipKey ? null : chipKey));
+                          }}
+                          aria-expanded={expandedSnippetId === chipKey}
+                          aria-label={expandedSnippetId === chipKey ? "Contraer vista previa del texto pegado" : "Expandir vista previa del texto pegado"}
+                          title={expandedSnippetId === chipKey ? "Contraer" : "Expandir"}
+                        >
+                          {expandedSnippetId === chipKey ? "Contraer ▴" : "Expandir ▾"}
+                        </button>
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 underline-offset-2 hover:bg-muted/60 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
                           onClick={(e) => {
                             e.stopPropagation();
                             restoreLongPasteToInput?.(file, index);
@@ -1683,24 +2014,23 @@ const ActiveOptionsDisplay = ({
                         </button>
                       </div>
                     )}
-                    {!isUploading && !isFailed && file.id && !longPasteMeta && (
-                      <div className="mt-0.5">
-                        <FileProcessingBadge
+                    {longPasteMeta && expandedSnippetId === chipKey && (
+                      <pre className="mt-1.5 max-h-36 max-w-[340px] overflow-y-auto whitespace-pre-wrap break-words rounded-md border border-border/50 bg-muted/30 px-2 py-1.5 font-sans text-[11.5px] leading-snug text-foreground/85">
+                        {longPasteMeta.preview || longPasteMeta.text?.slice(0, 700)}
+                        {(longPasteMeta.originalCharCount || 0) > 700 && (
+                          <span className="text-muted-foreground">{"\n"}… ({Intl.NumberFormat('es').format(longPasteMeta.originalCharCount)} caracteres en total)</span>
+                        )}
+                      </pre>
+                    )}
+                    {!isFailed && !longPasteMeta && (isUploading || file.id) && (
+                      <div className="mt-1">
+                        <FileUploadProgress
+                          uploading={isUploading}
+                          uploadProgress={progress}
                           fileId={file.id}
                           onReady={() => toast.success(`Documento listo: ${file.name}`)}
                           onStatusChange={(status) => onFileProcessingStatusChange?.(file, status)}
                         />
-                      </div>
-                    )}
-                    {isUploading && (
-                      <div className="flex items-center gap-1 mt-1">
-                        <div className="flex-1 h-1 bg-gray-200 dark:bg-muted rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-blue-500 transition-all duration-300"
-                            style={{ width: `${progress}%` }}
-                          />
-                        </div>
-                        <span className="text-[10px] text-muted-foreground">{Math.round(progress)}%</span>
                       </div>
                     )}
                     {isFailed && (
@@ -1709,37 +2039,36 @@ const ActiveOptionsDisplay = ({
                       </span>
                     )}
                   </div>
-                  {!isUploading && (
-                    <div className="flex items-center gap-0.5 ml-1">
-                      {isFailed && retryUpload && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-5 w-5 p-0 hover:bg-red-500/10 rounded-full text-red-600 dark:text-red-400"
-                          onClick={(e) => { e.stopPropagation(); retryUpload(file); }}
-                          title="Reintentar subida"
-                          aria-label="Reintentar subida"
-                        >
-                          <RefreshCw className="h-3.5 w-3.5" />
-                        </Button>
-                      )}
+                  <div className="flex items-center gap-0.5 ml-1">
+                    {isFailed && retryUpload && (
                       <Button
                         variant="ghost"
                         size="sm"
-                        className="h-5 w-5 p-0 hover:bg-gray-200 dark:hover:bg-muted rounded-full"
-                        onClick={(e) => { e.stopPropagation(); removeFile(index); }}
-                        title="Quitar"
-                        aria-label="Quitar archivo"
+                        className="h-5 w-5 p-0 hover:bg-red-500/10 rounded-full text-red-600 dark:text-red-400"
+                        onClick={(e) => { e.stopPropagation(); retryUpload(file); }}
+                        title="Reintentar subida"
+                        aria-label="Reintentar subida"
                       >
-                        <X className="h-4 w-4" />
+                        <RefreshCw className="h-3.5 w-3.5" />
                       </Button>
-                    </div>
-                  )}
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-5 w-5 p-0 hover:bg-gray-200 dark:hover:bg-muted rounded-full"
+                      onClick={(e) => { e.stopPropagation(); removeFile(index); }}
+                      title={isUploading ? "Cancelar subida" : "Quitar"}
+                      aria-label={isUploading ? "Cancelar subida" : "Quitar archivo"}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </>
               )}
-            </div>
+            </motion.div>
           );
         })}
+        </AnimatePresence>
       </div>
       <UnifiedDocumentViewer
         open={viewingIndex !== null}
@@ -1753,7 +2082,7 @@ const ActiveOptionsDisplay = ({
       />
     </div>
   );
-};
+}, areActiveOptionsDisplayPropsEqual);
 // Active Tools Display Component - Shows INSIDE the textarea at the bottom
 const ActiveToolsDisplay = ({
   isWebSearchActive,
@@ -1811,6 +2140,8 @@ const ActiveToolsDisplay = ({
   setSelectedVideoModel,
   isComputerUseActive,
   setIsComputerUseActive,
+  computerUseAppMode,
+  setComputerUseAppMode,
   computerUseStatus,
   isGmailActive,
   setIsGmailActive,
@@ -1830,6 +2161,7 @@ const ActiveToolsDisplay = ({
   setSelectedProvider,
   chatType,
   setChatType,
+  onVideoGenerationClose,
 
   handleComputerUseToggle,
   handleGmailToggle,
@@ -1894,6 +2226,8 @@ const ActiveToolsDisplay = ({
   setSelectedVideoModel: (model: string) => void;
   isComputerUseActive: boolean;
   setIsComputerUseActive: (value: boolean) => void;
+  computerUseAppMode: ComputerUseAppMode | null;
+  setComputerUseAppMode: (mode: ComputerUseAppMode | null) => void;
   computerUseStatus: 'idle' | 'running' | 'completed' | 'error';
   isGmailActive: boolean;
   setIsGmailActive: (value: boolean) => void;
@@ -1913,6 +2247,7 @@ const ActiveToolsDisplay = ({
   setSelectedProvider: (provider: string) => void;
   chatType: string;
   setChatType: (type: any) => void;
+  onVideoGenerationClose?: () => void;
 
   handleComputerUseToggle: () => void;
   handleGmailToggle: () => void;
@@ -1924,17 +2259,34 @@ const ActiveToolsDisplay = ({
 }) => {
   const [showAllVideoRatios, setShowAllVideoRatios] = React.useState(false);
   const [showAllVideoDurations, setShowAllVideoDurations] = React.useState(false);
+  const activeComputerUseMode = computerUseAppMode || "computer";
+  const computerUseAppMeta: Record<ComputerUseAppMode, { label: string; icon: JSX.Element }> = {
+    browser: { label: "Navegador", icon: <AppWindow className="h-4 w-4" /> },
+    chrome: { label: "Chrome", icon: <Chrome className="h-4 w-4" /> },
+    computer: { label: "Computadora", icon: <Monitor className="h-4 w-4" /> },
+  };
+  const computerUseStatusClass =
+    computerUseStatus === "running" ? "bg-green-500 animate-pulse" :
+      computerUseStatus === "completed" ? "bg-blue-500" :
+        computerUseStatus === "error" ? "bg-red-500" : "bg-gray-400";
+  const activeComputerUseIcon = (
+    <span className="relative inline-flex h-4 w-4 items-center justify-center">
+      {computerUseAppMeta[activeComputerUseMode].icon}
+      <span className={cn("absolute -right-1 -top-1 h-1.5 w-1.5 rounded-full ring-1 ring-background", computerUseStatusClass)} />
+    </span>
+  );
   const activeConnectors = [
-    isGmailActive && { id: 'gmail', icon: <img src="/icons/google.png" alt="Gmail" className="h-4 w-4" /> },
-    isGoogleCalendarActive && { id: 'calendar', icon: <img src="/icons/google-calendar.png" alt="Google Calendar" className="h-4 w-4" /> },
-    isGoogleDriveActive && { id: 'drive', icon: <img src="/icons/google-drive.png" alt="Google Drive" className="h-4 w-4" /> },
-    isSpotifyActive && { id: 'spotify', icon: <img src="/icons/spotify.png" alt="Spotify" className="h-4 w-4" /> },
-    isWordConnectorActive && { id: 'word', icon: <img src="/icons/Word.png" alt="Word" className="h-4 w-4" /> },
-    isExcelConnectorActive && { id: 'excel', icon: <img src="/icons/Excel.png" alt="Excel" className="h-4 w-4" /> },
-  ].filter(Boolean) as { id: string; icon: JSX.Element }[];
+    isGmailActive && { id: 'gmail', label: 'Gmail', icon: <img src="/icons/google.png" alt="Gmail" className="h-4 w-4" /> },
+    isGoogleCalendarActive && { id: 'calendar', label: 'Calendar', icon: <img src="/icons/google-calendar.png" alt="Google Calendar" className="h-4 w-4" /> },
+    isGoogleDriveActive && { id: 'drive', label: 'Drive', icon: <img src="/icons/google-drive.png" alt="Google Drive" className="h-4 w-4" /> },
+    isSpotifyActive && { id: 'spotify', label: 'Spotify', icon: <img src="/icons/spotify.png" alt="Spotify" className="h-4 w-4" /> },
+    isWordConnectorActive && { id: 'word', label: 'Word', icon: <img src="/icons/Word.png" alt="Word" className="h-4 w-4" /> },
+    isExcelConnectorActive && { id: 'excel', label: 'Excel', icon: <img src="/icons/Excel.png" alt="Excel" className="h-4 w-4" /> },
+    isComputerUseActive && { id: `computer-use-${activeComputerUseMode}`, label: computerUseAppMeta[activeComputerUseMode].label, icon: activeComputerUseIcon },
+  ].filter(Boolean) as { id: string; label: string; icon: JSX.Element }[];
 
   const hasConnectors = activeConnectors.length > 0;
-  const hasOtherTools = isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive || isWebSearchActive || isComputerUseActive;
+  const hasOtherTools = isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive || isWebSearchActive;
   const hasThesis = chatType === 'thesis';
 
   const handleCloseAllConnectors = () => {
@@ -1944,7 +2296,51 @@ const ActiveToolsDisplay = ({
     setIsSpotifyActive(false);
     setIsWordConnectorActive(false);
     setIsExcelConnectorActive(false);
+    setIsComputerUseActive(false);
+    setComputerUseAppMode(null);
     setChatType('text');
+  };
+
+  // Remove a single connector chip (mirrors the direct-setter approach of
+  // handleCloseAllConnectors so it never triggers a disconnect side-effect).
+  const removeConnector = (id: string) => {
+    if (id === 'gmail') setIsGmailActive(false);
+    else if (id === 'calendar') setIsGoogleCalendarActive(false);
+    else if (id === 'drive') setIsGoogleDriveActive(false);
+    else if (id === 'spotify') setIsSpotifyActive(false);
+    else if (id === 'word') setIsWordConnectorActive(false);
+    else if (id === 'excel') setIsExcelConnectorActive(false);
+    else if (id.startsWith('computer-use')) { setIsComputerUseActive(false); setComputerUseAppMode(null); }
+  };
+
+  const activateComputerUseMode = (mode: ComputerUseAppMode) => {
+    setIsWebSearchActive(false);
+    setIsImageGenerationActive(false);
+    setIsVoiceGenerationActive(false);
+    setIsMusicGenerationActive(false);
+    setIsVideoGenerationActive(false);
+    setIsGmailActive(false);
+    setIsGoogleCalendarActive(false);
+    setIsGoogleDriveActive(false);
+    setIsSpotifyActive(false);
+    setIsWordConnectorActive(false);
+    setIsExcelConnectorActive(false);
+    setComputerUseAppMode(mode);
+    setIsComputerUseActive(true);
+    setChatType('computer-use');
+  };
+
+  const handleComputerUseModeSwitch = (mode: ComputerUseAppMode, checked: boolean) => {
+    if (checked) {
+      activateComputerUseMode(mode);
+      return;
+    }
+
+    if (isComputerUseActive && activeComputerUseMode === mode) {
+      setIsComputerUseActive(false);
+      setComputerUseAppMode(null);
+      setChatType('text');
+    }
   };
 
   const handleImageGenerationClose = () => {
@@ -1965,6 +2361,7 @@ const ActiveToolsDisplay = ({
   };
 
   const handleVideoGenerationClose = () => {
+    onVideoGenerationClose?.();
     setIsVideoGenerationActive(false);
     setChatType('text');
   };
@@ -1986,20 +2383,16 @@ const ActiveToolsDisplay = ({
   const mediaModelOptions = React.useMemo(() => {
     const models = Array.isArray(availableModels) ? availableModels : [];
     const pickByKind = (kind: "image" | "video") => {
-      const pattern = kind === "image"
-        ? /image|imagen|dall|seedream|flux|stable|midjourney|ideogram|recraft|gpt-image/i
-        : /video|veo|kling|runway|pika|hailuo|luma/i;
-      const type = kind.toUpperCase();
-      return models.filter((model: any) => {
-        const label = `${model?.name || ""} ${model?.displayName || ""} ${model?.provider || ""}`;
-        return String(model?.type || "").toUpperCase() === type || pattern.test(label);
-      });
+      const predicate = kind === "image" ? isImageModelEntry : isVideoModelEntry;
+      return models.filter(predicate);
     };
     const normalize = (model: any) => ({
       name: model.name,
       displayName: model.displayName || model.name,
       provider: model.provider || null,
       iconName: resolveModelIconName(model),
+      mode: model?.apiData?.fal?.mode || model?.pricing?.mode || null,
+      qualityTier: model?.apiData?.fal?.qualityTier || model?.pricing?.qualityTier || null,
     });
 
     const imageModels = pickByKind("image").map(normalize);
@@ -2047,6 +2440,20 @@ const ActiveToolsDisplay = ({
     }
   }, [isVideoGenerationActive, mediaModelOptions.video, selectedVideoModel, setSelectedVideoModel]);
 
+  // Activate a model chosen from the floating fal.ai model gallery (mounted at
+  // the page level, decoupled from this composer). Image/video map onto the
+  // string-based pickers; audio/3d selections only surface the launcher toast.
+  React.useEffect(() => {
+    const handler = (e: Event) => {
+      const model = (e as CustomEvent).detail as { id?: string; group?: string } | undefined;
+      if (!model || !model.id) return;
+      if (model.group === "image") setSelectedImageModel(model.id);
+      else if (model.group === "video") setSelectedVideoModel(model.id);
+    };
+    window.addEventListener("siragpt:fal-model-selected", handler as EventListener);
+    return () => window.removeEventListener("siragpt:fal-model-selected", handler as EventListener);
+  }, [setSelectedImageModel, setSelectedVideoModel]);
+
   const renderMediaModelPicker = (
     tool: "image" | "voice" | "music" | "video",
     value: string,
@@ -2063,13 +2470,14 @@ const ActiveToolsDisplay = ({
           <Button
             variant="ghost"
             size="sm"
-            className="group/media-model relative isolate h-7 sm:h-8 max-w-[180px] sm:max-w-[212px] shrink-0 gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-zinc-200/72 bg-white/84 px-2 sm:px-3 py-0 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.86),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
+            className="media-model-trigger group/media-model relative isolate h-7 sm:h-8 max-w-[180px] sm:max-w-[212px] shrink-0 gap-1 sm:gap-1.5 overflow-hidden rounded-full px-2 sm:px-3 py-0 text-[12px] sm:text-[14px] font-semibold"
             aria-label={`Seleccionar modelo de ${tool}`}
             title={`Modelo: ${label}`}
             disabled={disabled}
+            data-media-tool={tool}
           >
             <span className="pointer-events-none absolute inset-y-[-55%] left-[-65%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-0 blur-sm transition-all duration-700 group-hover/media-model:left-[92%] group-hover/media-model:opacity-100 dark:via-white/20" />
-            <span className="flex h-[16px] sm:h-[18px] w-[16px] sm:w-[18px] shrink-0 items-center justify-center">
+            <span className="flex h-4 w-4 shrink-0 items-center justify-center">
               <IconProvider name={selected?.iconName || "Bot"} size={16} />
             </span>
             <span className="min-w-0 truncate max-w-[60px] sm:max-w-none">{label}</span>
@@ -2081,19 +2489,36 @@ const ActiveToolsDisplay = ({
           side="top"
           sideOffset={8}
           collisionPadding={12}
-          className="liquid-menu-surface w-[min(calc(100vw-1rem),18rem)] p-1.5"
+          className="liquid-menu-surface media-model-menu w-[min(calc(100vw-1rem),18rem)] overflow-hidden"
+          data-media-tool={tool}
+          style={{ maxHeight: "min(60dvh, 360px)" }}
         >
-          {options.length > 0 ? options.map((option: any) => (
-            <DropdownMenuItem
-              key={option.name}
-              className="chat-active-apps-menu-item h-9 gap-2 text-[12px]"
-              onClick={() => onChange(option.name, option.provider)}
-            >
-              <IconProvider name={option.iconName || "Bot"} size={16} className="shrink-0" />
-              <span className="min-w-0 flex-1 truncate">{option.displayName}</span>
-              {option.name === value && <Check className="h-3.5 w-3.5" />}
-            </DropdownMenuItem>
-          )) : (
+          {options.length > 0 ? (
+            <div className="media-model-scroll overflow-y-auto" style={{ maxHeight: "calc(min(60dvh, 360px) - 0.75rem)" }}>
+              <div className="flex flex-col gap-0.5">
+                {options.map((option: any) => (
+                  <DropdownMenuItem
+                    key={option.name}
+                    className="media-model-item gap-2"
+                    onClick={() => onChange(option.name, option.provider)}
+                    data-selected={option.name === value ? "true" : undefined}
+                    data-media-tool={tool}
+                  >
+                    <span className="media-model-logo-chip">
+                      <IconProvider name={option.iconName || "Bot"} size={17} className="shrink-0" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-semibold leading-4 text-zinc-900 dark:text-white/92">{option.displayName}</span>
+                      <span className="block truncate text-[10.5px] font-medium leading-3 text-zinc-500 dark:text-white/62">
+                        {[option.provider, option.qualityTier, option.mode].filter(Boolean).join(" / ") || "Modelo"}
+                      </span>
+                    </span>
+                    {option.name === value && <Check className="h-3.5 w-3.5 shrink-0 opacity-80" />}
+                  </DropdownMenuItem>
+                ))}
+              </div>
+            </div>
+          ) : (
             <div className="px-3 py-6 text-center text-xs text-muted-foreground">Activa modelos en Admin Models</div>
           )}
         </DropdownMenuContent>
@@ -2164,44 +2589,47 @@ const ActiveToolsDisplay = ({
           <Switch checked={isExcelConnectorActive} onCheckedChange={handleExcelConnectorToggle} />
         </div>
       </DropdownMenuItem>
+      <div className="my-1 h-px bg-border/45" />
+      <div className="px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+        Control
+      </div>
+      {(["browser", "chrome", "computer"] as ComputerUseAppMode[]).map((mode) => (
+        <DropdownMenuItem key={mode} className="chat-active-apps-menu-item" onSelect={(e) => e.preventDefault()}>
+          <div className="flex items-center justify-between w-full gap-4">
+            <div className="flex min-w-0 items-center gap-2.5">
+              {computerUseAppMeta[mode].icon}
+              <span className="truncate">{computerUseAppMeta[mode].label}</span>
+            </div>
+            <Switch
+              checked={isComputerUseActive && activeComputerUseMode === mode}
+              onCheckedChange={(checked) => handleComputerUseModeSwitch(mode, checked)}
+            />
+          </div>
+        </DropdownMenuItem>
+      ))}
     </>
   );
 
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1.5 sm:gap-2">
-      {hasConnectors && (
-        <div className="chat-active-apps-chip flex max-w-full items-center overflow-hidden rounded-full border border-blue-200 bg-blue-50 text-blue-700 shadow-sm dark:border-blue-800/70 dark:bg-blue-950/30 dark:text-blue-200">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                className="flex h-8 min-w-0 items-center gap-1.5 px-2.5 text-xs font-semibold"
-                aria-label="Abrir APPs activas"
-              >
-                <Network width="13" height="13" className="shrink-0" />
-                <span>APPs</span>
-                <div className="ml-0.5 flex min-w-0 items-center gap-0.5">
-                  {activeConnectors.map(c => <React.Fragment key={c.id}>{c.icon}</React.Fragment>)}
-                </div>
-                <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-70" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" side="top" sideOffset={8} collisionPadding={12} className="chat-active-apps-menu liquid-menu-surface w-[min(calc(100vw-1.25rem),18rem)] p-1.5">
-              {renderAppSwitchItems()}
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="mr-1 h-6 w-6 shrink-0 rounded-full p-0 hover:bg-blue-100 dark:hover:bg-blue-900/30"
-            onClick={handleCloseAllConnectors}
-            aria-label="Cerrar APPs"
-            title="Cerrar APPs"
+      {activeConnectors.map((c) => (
+        <span
+          key={c.id}
+          className="chat-active-apps-chip inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-border/60 bg-background/80 py-0 pl-2.5 pr-1.5 text-xs font-medium text-foreground shadow-sm"
+        >
+          <span className="grid h-4 w-4 shrink-0 place-items-center">{c.icon}</span>
+          <span className="max-w-[100px] truncate">{c.label}</span>
+          <button
+            type="button"
+            onClick={() => removeConnector(c.id)}
+            aria-label={`Quitar ${c.label}`}
+            title={`Quitar ${c.label}`}
+            className="ml-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
-            <X className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-      )}
+            <X className="h-3 w-3" />
+          </button>
+        </span>
+      ))}
       {isWebSearchActive && (
         <div
           className="group/web-search-tool flex h-7 w-7 items-center justify-center overflow-hidden rounded-full border border-green-200 bg-green-100 px-0 text-xs text-green-700 transition-[width,padding,box-shadow] duration-300 ease-out hover:w-[120px] hover:justify-start hover:px-2 hover:shadow-sm focus-within:w-[120px] focus-within:justify-start focus-within:px-2 focus-within:shadow-sm dark:border-green-800 dark:bg-green-900/20 dark:text-green-300"
@@ -2230,7 +2658,7 @@ const ActiveToolsDisplay = ({
             <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/image-liquid:translate-x-[155%] dark:via-white/25" />
             <span className="pointer-events-none absolute left-7 top-1 h-1.5 w-1.5 rounded-full bg-pink-400/75 shadow-[0_0_12px_rgba(236,72,153,0.75)] motion-safe:animate-pulse" />
             <span className="pointer-events-none absolute bottom-1 right-9 h-1 w-1 rounded-full bg-white/90 shadow-[0_0_10px_rgba(255,255,255,0.9)] motion-safe:animate-bounce" />
-            <Palette className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 drop-shadow-[0_0_8px_rgba(219,39,119,0.35)]" />
+            <Palette className="relative z-10 h-4 w-4 drop-shadow-[0_0_8px_rgba(219,39,119,0.35)]" />
             <span className="relative z-10 text-[12px] sm:text-[14px]">Imágenes</span>
             {isGeneratingImage && <span className="relative z-10 h-1.5 w-1.5 rounded-full bg-pink-500 animate-pulse" />}
             <Button
@@ -2260,12 +2688,12 @@ const ActiveToolsDisplay = ({
               <Button
                 variant="ghost"
                 size="sm"
-                className="group/ratio-trigger relative isolate h-7 sm:h-8 shrink-0 gap-1 sm:gap-2 overflow-hidden rounded-full border border-zinc-200/78 bg-white/84 px-2 sm:px-3 py-0 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
+                className="group/ratio-trigger relative isolate h-7 sm:h-8 shrink-0 gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-zinc-200/78 bg-white/84 px-2 sm:px-3 py-0 text-[12px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
                 title={`Imagen: ${selectedImageAspectRatio}, ${selectedImageQuality}, ${selectedImageCount}`}
                 aria-label={`Configurar imagen. Actual ${selectedImageAspectRatio}, ${selectedImageQuality}, ${selectedImageCount}`}
               >
                 <span className="pointer-events-none absolute inset-y-[-55%] left-[-65%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-0 blur-sm transition-all duration-700 group-hover/ratio-trigger:left-[92%] group-hover/ratio-trigger:opacity-100 dark:via-white/20" />
-                <ImageAspectRatioMark ratio={selectedImageAspectRatio} selected className="h-4 sm:h-5 w-4 sm:w-5 text-zinc-700 dark:text-white/88" />
+                <ImageAspectRatioMark ratio={selectedImageAspectRatio} selected className="h-4 w-4 text-zinc-700 dark:text-white/88" />
                 <span className="hidden sm:inline">{selectedImageAspectRatio}</span>
                 <span className="sm:hidden">{selectedImageAspectRatio.replace(':','×')}</span>
                 <span className="hidden sm:inline">{selectedImageQuality}</span>
@@ -2677,15 +3105,15 @@ const ActiveToolsDisplay = ({
 
       {isVideoGenerationActive && (
         <>
-          <div className="group/video-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-orange-300/70 bg-orange-100/88 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-orange-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_28px_-22px_rgba(234,88,12,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01] hover:border-orange-400/80 dark:border-orange-500/40 dark:bg-orange-900/25 dark:text-orange-200">
-            <span className="pointer-events-none absolute -inset-8 -z-10 rounded-full bg-[conic-gradient(from_90deg,transparent_0deg,rgba(251,146,60,0.0)_70deg,rgba(251,146,60,0.52)_135deg,rgba(249,115,22,0.24)_198deg,transparent_280deg)] opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
+          <div className="video-mode-chip group/video-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold backdrop-blur-xl transition-all duration-300 hover:scale-[1.01]">
+            <span className="video-mode-chip-flow pointer-events-none absolute -inset-8 -z-10 rounded-full opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
             <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/video-liquid:translate-x-[155%] dark:via-white/25" />
-            <Video className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 drop-shadow-[0_0_8px_rgba(234,88,12,0.35)]" />
+            <Video className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4" />
             <span className="relative z-10 text-[12px] sm:text-[14px]">Video</span>
             <Button
               variant="ghost"
               size="sm"
-              className="relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0 hover:bg-white/50 dark:hover:bg-orange-800/30"
+              className="relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0 hover:bg-white/50 dark:hover:bg-emerald-800/30"
               onClick={handleVideoGenerationClose}
               title="Cerrar video"
             >
@@ -2703,7 +3131,7 @@ const ActiveToolsDisplay = ({
               <Button
                 variant="ghost"
                 size="sm"
-                className="group/video-trigger relative isolate h-7 sm:h-8 shrink-0 gap-1 sm:gap-2 overflow-hidden rounded-full border border-zinc-200/78 bg-white/84 px-2 sm:px-3 py-0 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
+                className="video-settings-trigger group/video-trigger relative isolate h-7 sm:h-8 shrink-0 gap-1 sm:gap-2 overflow-hidden rounded-full px-2 sm:px-3 py-0 text-[11px] sm:text-[14px] font-semibold backdrop-blur-xl transition-all duration-200"
                 title={`Video: ${selectedVideoAspectRatio}, ${selectedVideoResolution}, ${selectedVideoDuration}s, audio ${selectedVideoAudio ? "on" : "off"}`}
                 aria-label={`Configurar video. Actual ${selectedVideoAspectRatio}, ${selectedVideoResolution}, ${selectedVideoDuration} segundos`}
               >
@@ -2718,13 +3146,12 @@ const ActiveToolsDisplay = ({
               align="start"
               sideOffset={9}
               collisionPadding={12}
-              className="w-[min(calc(100vw-1rem),15.5rem)] overflow-hidden rounded-[14px] border border-zinc-200/70 bg-white/92 p-0 text-zinc-950 shadow-[0_16px_48px_-32px_rgba(15,23,42,0.55),inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-2xl dark:border-white/18 dark:bg-[#08090c]/96 dark:text-white dark:shadow-[0_22px_70px_-38px_rgba(0,0,0,1),inset_0_1px_0_rgba(255,255,255,0.14)]"
+              className="video-settings-menu w-[min(calc(100vw-1rem),15.5rem)]"
             >
-              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_22%_10%,rgba(255,255,255,0.92),transparent_28%),radial-gradient(circle_at_82%_36%,rgba(251,146,60,0.12),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.78),rgba(255,255,255,0.32)_45%,rgba(255,255,255,0.62))] dark:bg-[radial-gradient(circle_at_18%_8%,rgba(255,255,255,0.13),transparent_26%),radial-gradient(circle_at_82%_36%,rgba(251,146,60,0.16),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.025)_45%,rgba(255,255,255,0.055))]" />
               <div className="relative z-10">
-                <section className="px-2.5 pb-2.5 pt-2.5">
-                  <h3 className="text-[12.5px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Resolution</h3>
-                  <div className="mt-2 flex flex-wrap items-center gap-1" role="radiogroup" aria-label="Video resolution">
+                <section className="video-settings-section">
+                  <h3 className="video-settings-label">Resolución</h3>
+                  <div className="mt-2 flex flex-wrap items-center gap-1" role="radiogroup" aria-label="Resolución de video">
                     {VIDEO_RESOLUTION_OPTIONS.map(option => {
                       const selected = option === selectedVideoResolution;
                       return (
@@ -2735,8 +3162,8 @@ const ActiveToolsDisplay = ({
                           aria-checked={selected}
                           onClick={() => setSelectedVideoResolution(option)}
                           className={cn(
-                            "h-6 rounded-md px-2.5 text-[11px] font-medium leading-none text-zinc-600 transition-all duration-200 hover:bg-zinc-950/[0.045] hover:text-zinc-950 dark:text-white/84 dark:hover:bg-white/[0.10] dark:hover:text-white",
-                            selected && "bg-zinc-950/[0.075] text-zinc-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_9px_18px_-16px_rgba(15,23,42,0.45)] dark:bg-white/18 dark:text-white dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_0_0_1px_rgba(255,255,255,0.06)]"
+                            "video-setting-pill",
+                            selected && "is-selected"
                           )}
                         >
                           {option}
@@ -2746,9 +3173,9 @@ const ActiveToolsDisplay = ({
                   </div>
                 </section>
 
-                <section className="border-t border-zinc-950/8 px-2.5 py-2.5 dark:border-white/12">
-                  <h3 className="text-[12.5px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Aspect Ratio</h3>
-                  <div className="mt-2 grid grid-cols-5 gap-0.5" role="radiogroup" aria-label="Video aspect ratio">
+                <section className="video-settings-section">
+                  <h3 className="video-settings-label">Formato</h3>
+                  <div className="mt-2 grid grid-cols-5 gap-0.5" role="radiogroup" aria-label="Formato de video">
                     {VIDEO_ASPECT_RATIO_OPTIONS.filter(option => showAllVideoRatios || option.visibleByDefault).map(option => {
                       const selected = option.value === selectedVideoAspectRatio;
                       return (
@@ -2759,21 +3186,19 @@ const ActiveToolsDisplay = ({
                           aria-checked={selected}
                           onClick={() => setSelectedVideoAspectRatio(option.value)}
                           className={cn(
-                            "group/video-ratio-option relative flex h-9 min-w-0 flex-col items-center justify-center gap-1 overflow-hidden rounded-md text-center transition-all duration-200",
-                            selected
-                              ? "bg-zinc-950/[0.075] text-zinc-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_9px_20px_-16px_rgba(15,23,42,0.55)] dark:bg-white/18 dark:text-white dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_0_0_1px_rgba(255,255,255,0.06)]"
-                              : "text-zinc-600 hover:bg-zinc-950/[0.045] hover:text-zinc-950 dark:text-white/84 dark:hover:bg-white/[0.10] dark:hover:text-white"
+                            "video-ratio-option group/video-ratio-option",
+                            selected && "is-selected"
                           )}
                           title={`${option.label} ${option.ratio}`}
                         >
                           <span className="relative z-10 text-[10px] font-medium leading-none tabular-nums">{option.ratio}</span>
                           <span className="relative z-10 flex h-4 items-center justify-center scale-[0.78]">
                             {option.value === "auto" ? (
-                              <span className={cn("grid h-5 w-5 place-items-center rounded-[5px] border transition-all duration-200", selected ? "border-zinc-950 bg-white/45 dark:border-white dark:bg-white/10" : "border-zinc-500/65 dark:border-white/68")}>
+                              <span className={cn("grid h-5 w-5 place-items-center rounded-[5px] border transition-all duration-200", selected ? "border-emerald-700 bg-emerald-50/70 dark:border-emerald-300 dark:bg-emerald-400/10" : "border-zinc-500/65 dark:border-white/68")}>
                                 <Plus className="h-3.5 w-3.5" />
                               </span>
                             ) : (
-                              <span className={cn("rounded-[4px] border transition-all duration-200", option.className, selected ? "border-zinc-950 bg-white/45 dark:border-white dark:bg-white/10" : "border-zinc-500/65 bg-white/20 dark:border-white/68 dark:bg-transparent")} />
+                              <span className={cn("rounded-[4px] border transition-all duration-200", option.className, selected ? "border-emerald-700 bg-emerald-50/70 dark:border-emerald-300 dark:bg-emerald-400/10" : "border-zinc-500/65 bg-white/20 dark:border-white/68 dark:bg-transparent")} />
                             )}
                           </span>
                         </button>
@@ -2783,16 +3208,16 @@ const ActiveToolsDisplay = ({
                   <button
                     type="button"
                     onClick={() => setShowAllVideoRatios(value => !value)}
-                    className="mt-2 inline-flex items-center gap-1 rounded-full text-[11px] font-medium leading-none text-zinc-600 transition-colors hover:text-zinc-950 dark:text-white/82 dark:hover:text-white"
+                    className="video-settings-more"
                     aria-expanded={showAllVideoRatios}
                   >
-                    {showAllVideoRatios ? "View Less" : "View All"} <ChevronDown className={cn("h-3 w-3 transition-transform", showAllVideoRatios && "rotate-180")} />
+                    {showAllVideoRatios ? "Menos" : "Más"} <ChevronDown className={cn("h-3 w-3 transition-transform", showAllVideoRatios && "rotate-180")} />
                   </button>
                 </section>
 
-                <section className="border-t border-zinc-950/8 px-2.5 py-2.5 dark:border-white/12">
-                  <h3 className="text-[12.5px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Duration</h3>
-                  <div className="mt-2 flex flex-wrap items-center gap-1" role="radiogroup" aria-label="Video duration">
+                <section className="video-settings-section">
+                  <h3 className="video-settings-label">Duración</h3>
+                  <div className="mt-2 flex flex-wrap items-center gap-1" role="radiogroup" aria-label="Duración de video">
                     {VIDEO_DURATION_OPTIONS.filter(option => showAllVideoDurations || option <= DEFAULT_VIDEO_DURATION).map(option => {
                       const selected = option === selectedVideoDuration;
                       return (
@@ -2803,8 +3228,8 @@ const ActiveToolsDisplay = ({
                           aria-checked={selected}
                           onClick={() => setSelectedVideoDuration(option)}
                           className={cn(
-                            "h-6 rounded-md px-2 text-[11px] font-medium leading-none text-zinc-600 transition-all duration-200 hover:bg-zinc-950/[0.045] hover:text-zinc-950 dark:text-white/84 dark:hover:bg-white/[0.10] dark:hover:text-white",
-                            selected && "bg-zinc-950/[0.075] text-zinc-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_9px_18px_-16px_rgba(15,23,42,0.45)] dark:bg-white/18 dark:text-white dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_0_0_1px_rgba(255,255,255,0.06)]"
+                            "video-setting-pill min-w-8",
+                            selected && "is-selected"
                           )}
                         >
                           {option}s
@@ -2815,49 +3240,30 @@ const ActiveToolsDisplay = ({
                   <button
                     type="button"
                     onClick={() => setShowAllVideoDurations(value => !value)}
-                    className="mt-2 inline-flex items-center gap-1 rounded-full text-[11px] font-medium leading-none text-zinc-600 transition-colors hover:text-zinc-950 dark:text-white/82 dark:hover:text-white"
+                    className="video-settings-more"
                     aria-expanded={showAllVideoDurations}
                   >
-                    {showAllVideoDurations ? "View Less" : "View All"} <ChevronDown className={cn("h-3 w-3 transition-transform", showAllVideoDurations && "rotate-180")} />
+                    {showAllVideoDurations ? "Menos" : "Más"} <ChevronDown className={cn("h-3 w-3 transition-transform", showAllVideoDurations && "rotate-180")} />
                   </button>
                 </section>
 
-                <section className="border-t border-zinc-950/8 px-2.5 py-2.5 dark:border-white/12">
+                <section className="video-settings-section">
                   <div className="flex items-center justify-between gap-4">
                     <div className="flex items-center gap-2">
-                      <h3 className="text-[12.5px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Audio</h3>
+                      <h3 className="video-settings-label">Audio</h3>
                       <Info className="h-3 w-3 text-zinc-500 dark:text-white/72" />
                     </div>
                     <Switch checked={selectedVideoAudio} onCheckedChange={setSelectedVideoAudio} aria-label="Audio" />
                   </div>
                 </section>
 
-                <div className="border-t border-zinc-950/8 px-2.5 py-1.5 text-[10.5px] font-medium text-zinc-600 dark:border-white/12 dark:text-white/80">
+                <div className="video-settings-summary">
                   {selectedVideoAspectRatio === "auto" ? "Auto" : selectedVideoAspectRatio} / {selectedVideoResolution} / {selectedVideoDuration}s / Audio {selectedVideoAudio ? "On" : "Off"}
                 </div>
               </div>
             </DropdownMenuContent>
           </DropdownMenu>
         </>
-      )}
-
-      {isComputerUseActive && (
-        <div className="flex items-center gap-1.5 bg-indigo-100 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300 px-2 py-1 rounded-full text-xs border border-indigo-200 dark:border-indigo-800">
-          <Monitor className="h-3 w-3" />
-          <span className="font-medium">Computer Use</span>
-          <div className={`h-2 w-2 rounded-full ml-1 ${computerUseStatus === 'running' ? 'bg-green-500 animate-pulse' :
-            computerUseStatus === 'completed' ? 'bg-blue-500' :
-              computerUseStatus === 'error' ? 'bg-red-500' : 'bg-gray-400'
-            }`} />
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-4 w-4 p-0 hover:bg-indigo-200 dark:hover:bg-indigo-800/30 rounded-full ml-1"
-            onClick={handleComputerUseClose}
-          >
-            <X className="h-3 w-3" />
-          </Button>
-        </div>
       )}
 
       {chatType === 'thesis' && (
@@ -2896,6 +3302,14 @@ const MODEL_BRAND_BY_ICON: Record<string, string> = {
   PoolsideLogo: "poolside",
   OllamaLogo: "ollama",
   SeedreamLogo: "bytedance",
+  FalLogo: "fal",
+  SoraLogo: "openai",
+  KlingLogo: "kling",
+  ByteDanceLogo: "bytedance",
+  PixverseLogo: "pixverse",
+  MinimaxLogo: "minimax",
+  WanLogo: "wan",
+  LtxLogo: "ltx",
   OpenRouterLogo: "openrouter",
   MessageSquare: "groq",
 }
@@ -2913,7 +3327,38 @@ const getModelDisplayLabel = (model: any) => {
     .trim() || label
 }
 
-const NavbarModelSelector = ({
+const getNavbarModelSelectorChatSignature = (chat: any) => [
+  chat?.id,
+  chat?.model,
+  chat?.title,
+  chat?.customGptId,
+  chat?.customGpt?.id,
+  chat?.customGpt?.name,
+  chat?.customGpt?.iconUrl,
+  chat?.customGpt?.modelName,
+  chat?.customGpt?.shareId,
+  chat?.projectId,
+  chat?.project?.id,
+  chat?.project?.name,
+  chat?.project?._count?.files,
+  chat?.project?._count?.chats,
+  chat?.project?._count?.memories,
+  chat?.project?._count?.documents,
+].map((part) => String(part ?? "")).join("\u0001")
+
+function areNavbarModelSelectorPropsEqual(prev: any, next: any) {
+  return (
+    prev.selectedModel === next.selectedModel &&
+    prev.availableModels === next.availableModels &&
+    prev.chatTypes === next.chatTypes &&
+    prev.setSelectedModel === next.setSelectedModel &&
+    prev.setSelectedProvider === next.setSelectedProvider &&
+    prev.setCurrentChat === next.setCurrentChat &&
+    getNavbarModelSelectorChatSignature(prev.currentChat) === getNavbarModelSelectorChatSignature(next.currentChat)
+  )
+}
+
+const NavbarModelSelector = React.memo(function NavbarModelSelector({
   selectedModel,
   setSelectedModel,
   availableModels,
@@ -2921,9 +3366,30 @@ const NavbarModelSelector = ({
   chatTypes,
   currentChat,
   setCurrentChat,
-}: any) => {
-  const selectedModelData = availableModels.find((m: any) => m.name === selectedModel);
+}: any) {
+  const liveSelectedModelData = availableModels.find((m: any) => m.name === selectedModel);
+  // Anti-flicker: hold the last model that actually matched `selectedModel`.
+  // refreshModels (dropdown-open / window-focus / tab-visibility) replaces the
+  // list with a new array; if it transiently omits the selected model, find()
+  // returns undefined for one render and the brand logo would flash to the
+  // generic Bot fallback. Holding the last-known-good entry keeps the chip
+  // stable until a real match (or an explicit selection change) replaces it.
+  const lastGoodSelectedModelRef = React.useRef<any>(liveSelectedModelData);
+  if (liveSelectedModelData) {
+    lastGoodSelectedModelRef.current = liveSelectedModelData;
+  } else if (
+    lastGoodSelectedModelRef.current &&
+    lastGoodSelectedModelRef.current.name !== selectedModel
+  ) {
+    // User picked a genuinely different model not yet in the list: drop the
+    // stale entry so we never show a logo for the wrong model.
+    lastGoodSelectedModelRef.current = undefined;
+  }
+  const selectedModelData = liveSelectedModelData || lastGoodSelectedModelRef.current;
   const [searchQuery, setSearchQuery] = React.useState("");
+  // Re-fetch the model list when the picker opens so a model an admin just
+  // activated shows up without a page reload (live admin → frontend sync).
+  const { refreshModels } = useChat();
 
   // Keep the call sites intact for model changes, but the picker no
   // longer surfaces a separate "recent models" section.
@@ -3001,12 +3467,9 @@ const NavbarModelSelector = ({
     const href = gpt?.shareId
       ? `${window.location.origin}/gpts/share/${gpt.shareId}`
       : `${window.location.origin}/chat?id=${currentChat?.id || ""}`;
-    try {
-      await navigator.clipboard.writeText(href);
-      toast.success("Enlace copiado");
-    } catch {
-      toast.error("No se pudo copiar el enlace. Cópialo manualmente.");
-    }
+    const r = await copyTextSafe(href);
+    if (r.ok) toast.success("Enlace copiado");
+    else toast.error("No se pudo copiar el enlace. Cópialo manualmente.");
   }, [currentChat?.customGpt, currentChat?.id]);
 
   const selectedGptModel = React.useMemo(() => {
@@ -3184,12 +3647,9 @@ const NavbarModelSelector = ({
   const copyProjectLink = React.useCallback(async () => {
     const projectId = currentChat?.project?.id || currentChat?.projectId;
     if (!projectId) return;
-    try {
-      await navigator.clipboard.writeText(`${window.location.origin}/projects/${projectId}`);
-      toast.success("Enlace del proyecto copiado");
-    } catch {
-      toast.error("No se pudo copiar el enlace del proyecto. Cópialo manualmente.");
-    }
+    const r = await copyTextSafe(`${window.location.origin}/projects/${projectId}`);
+    if (r.ok) toast.success("Enlace del proyecto copiado");
+    else toast.error("No se pudo copiar el enlace del proyecto. Cópialo manualmente.");
   }, [currentChat?.project?.id, currentChat?.projectId]);
 
   const ModelLogo = ({ model, compact = false }: { model: any; compact?: boolean }) => (
@@ -3197,7 +3657,7 @@ const NavbarModelSelector = ({
       className={cn("model-logo-chip chat-model-icon", compact && "model-logo-chip--sm")}
       data-model-brand={getModelBrandKey(model)}
     >
-      <IconProvider name={resolveModelIconName(model)} size={compact ? 15 : 20} />
+      <IconProvider name={resolveModelIconName(model)} size={compact ? 14 : 20} />
     </span>
   );
 
@@ -3350,6 +3810,7 @@ const NavbarModelSelector = ({
                             <div className="space-y-0.5">
                               {models.map((model: any) => {
                                 const isActive = model.name === activeProjectModelName;
+                                const isComingSoon = Boolean(model.comingSoon);
                                 const label = getModelDisplayLabel(model);
                                 const attribution = resolveModelAttributionName(model);
                                 return (
@@ -3357,14 +3818,20 @@ const NavbarModelSelector = ({
                                     key={model.name}
                                     onSelect={(event) => {
                                       event.preventDefault();
-                                      applyProjectModel(model);
+                                      if (!isComingSoon) applyProjectModel(model);
                                     }}
+                                    disabled={isComingSoon}
                                     data-selected={isActive ? "true" : undefined}
-                                    className="model-picker-row min-h-12 rounded-xl px-2.5 py-2"
+                                    className={cn("model-picker-row min-h-12 rounded-xl px-2.5 py-2", isComingSoon && "cursor-default opacity-55")}
                                   >
                                     <ModelLogo model={model} />
                                     <div className="min-w-0 flex-1">
-                                      <div className="liquid-label truncate text-[13.5px] font-semibold leading-5">{label}</div>
+                                      <div className="flex items-center gap-1.5">
+                                        <div className="liquid-label truncate text-[13.5px] font-semibold leading-5">{label}</div>
+                                        {isComingSoon && (
+                                          <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Pronto</span>
+                                        )}
+                                      </div>
                                       <div className="truncate text-[12px] font-medium leading-4 text-muted-foreground/82">{attribution}</div>
                                     </div>
                                     {isActive && <Check className="ml-2 h-4 w-4 shrink-0" />}
@@ -3530,6 +3997,7 @@ const NavbarModelSelector = ({
                             <div className="space-y-0.5">
                               {models.map((model: any) => {
                                 const isActive = model.name === activeModelName;
+                                const isComingSoon = Boolean(model.comingSoon);
                                 const label = getModelDisplayLabel(model);
                                 const attribution = resolveModelAttributionName(model);
                                 return (
@@ -3537,14 +4005,20 @@ const NavbarModelSelector = ({
                                     key={model.name}
                                     onSelect={(event) => {
                                       event.preventDefault();
-                                      applyGptModel(model);
+                                      if (!isComingSoon) applyGptModel(model);
                                     }}
+                                    disabled={isComingSoon}
                                     data-selected={isActive ? "true" : undefined}
-                                    className="model-picker-row min-h-12 rounded-xl px-2.5 py-2"
+                                    className={cn("model-picker-row min-h-12 rounded-xl px-2.5 py-2", isComingSoon && "cursor-default opacity-55")}
                                   >
                                     <ModelLogo model={model} />
                                     <div className="min-w-0 flex-1">
-                                      <div className="liquid-label truncate text-[13.5px] font-semibold leading-5">{label}</div>
+                                      <div className="flex items-center gap-1.5">
+                                        <div className="liquid-label truncate text-[13.5px] font-semibold leading-5">{label}</div>
+                                        {isComingSoon && (
+                                          <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Pronto</span>
+                                        )}
+                                      </div>
                                       <div className="truncate text-[12px] font-medium leading-4 text-muted-foreground/82">{attribution}</div>
                                     </div>
                                     {isActive && <Check className="ml-2 h-4 w-4 shrink-0" />}
@@ -3733,24 +4207,33 @@ const NavbarModelSelector = ({
   // the right; rows stay one-line and restrained for fast scanning.
   const ModelRow = ({ model }: { model: any }) => {
     const isSelected = model.name === selectedModel;
+    const isComingSoon = Boolean(model.comingSoon);
     const label = getModelDisplayLabel(model);
     const attribution = resolveModelAttributionName(model);
     return (
       <DropdownMenuItem
-        onSelect={() => onPick(model)}
+        aria-label={`${label}${attribution ? `, ${attribution}` : ""}`}
+        title={attribution ? `${label} - ${attribution}` : label}
+        onSelect={isComingSoon ? (e) => e.preventDefault() : () => onPick(model)}
         data-selected={isSelected ? "true" : undefined}
+        disabled={isComingSoon}
         className={cn(
-          "model-picker-row group/row flex min-h-[62px] cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5",
+          "model-picker-row group/row flex min-h-9 cursor-pointer items-center gap-2 rounded-md px-2 py-1",
           "text-foreground/90 focus:bg-transparent data-[highlighted]:bg-transparent",
+          isComingSoon && "cursor-default opacity-55",
         )}
       >
-        <ModelLogo model={model} />
+        <ModelLogo model={model} compact />
         <span className="min-w-0 flex-1">
-          <span className="liquid-label block truncate text-[15px] font-semibold leading-5">
-            {label}
-          </span>
-          <span className="block truncate text-[12.5px] font-medium leading-4 text-muted-foreground/82">
-            {attribution}
+          <span className="flex items-center gap-1.5">
+            <span className="liquid-label block truncate text-[12.5px] font-medium leading-4">
+              {label}
+            </span>
+            {isComingSoon && (
+              <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Pronto
+              </span>
+            )}
           </span>
         </span>
       </DropdownMenuItem>
@@ -3760,7 +4243,8 @@ const NavbarModelSelector = ({
   // Default model selector for regular chats
   return (
     <DropdownMenu onOpenChange={(open) => {
-      if (!open) setSearchQuery("");
+      if (open) { void refreshModels?.(); }
+      else setSearchQuery("");
     }}>
       {/* Model selector trigger — h-10, medium weight, subtle surface.
           The always-on red dot was removed: it was a dead indicator
@@ -3780,28 +4264,28 @@ const NavbarModelSelector = ({
         )}
       >
         {selectedModelData && <ModelLogo model={selectedModelData} compact />}
-        <span className="chat-model-label max-w-[180px] truncate font-medium">{selectedModelData ? getModelDisplayLabel(selectedModelData) : selectedModel}</span>
+        <span className="chat-model-label min-w-0 max-w-[180px] truncate font-medium">{selectedModelData ? getModelDisplayLabel(selectedModelData) : selectedModel}</span>
         <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-55 transition-transform duration-200 group-data-[state=open]/model:rotate-180" strokeWidth={2} />
       </DropdownMenuTrigger>
 
-      <DropdownMenuContent align="start" sideOffset={8} collisionPadding={12} className="model-picker-content w-[calc(100vw-1.5rem)] p-0 overflow-hidden sm:w-[392px]">
+      <DropdownMenuContent align="end" sideOffset={6} collisionPadding={12} className="model-picker-content w-[min(calc(100vw-1.5rem),16.25rem)] overflow-hidden p-0">
         <div className="model-picker-search-shell hidden sm:block">
           <div className="relative">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/60" />
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground/55" />
             <Input
               placeholder="Buscar modelos"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="model-picker-search-input h-9 rounded-xl border-0 bg-transparent pl-9 pr-3 text-base shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 sm:text-[13px]"
+              className="model-picker-search-input h-7 rounded-md border-0 bg-transparent pl-7 pr-2 text-base shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 sm:text-[13px]"
               onClick={(e) => e.stopPropagation()}
               onKeyDown={(e) => e.stopPropagation()}
             />
           </div>
         </div>
 
-        <ScrollArea className="chat-model-menu-scroll h-[min(70dvh,456px)]">
+        <ScrollArea className="chat-model-menu-scroll h-[min(52dvh,300px)]">
           {filteredModels.length > 0 ? (
-            <div className="model-picker-list flex flex-col gap-1 px-2 pb-2 pt-2">
+            <div className="model-picker-list flex flex-col gap-px px-1.5 pb-1.5 pt-1">
               {filteredModels.map((model: any) => (
                 <ModelRow key={model.name} model={model} />
               ))}
@@ -3815,7 +4299,7 @@ const NavbarModelSelector = ({
       </DropdownMenuContent>
     </DropdownMenu>
   );
-};
+}, areNavbarModelSelectorPropsEqual);
 
 export default function ChatInterface() {
   return <ChatInterfaceContent />
@@ -3823,7 +4307,7 @@ export default function ChatInterface() {
 
 function ChatInterfaceContent() {
   const tComposer = useTranslations("composer")
-  const { active: activeArtifact } = useArtifactPanel()
+  const { active: activeArtifact, close: closeArtifactPanel } = useArtifactPanel()
   const { user } = useAuth()
 
   const {
@@ -3836,6 +4320,8 @@ function ChatInterfaceContent() {
     selectedModel,
     createNewChat,
     setSelectedModel,
+    selectedEffort,
+    setSelectedEffort,
     setSelectedProivder,
     selectProvider,
     uploadedFiles,
@@ -3855,6 +4341,13 @@ function ChatInterfaceContent() {
   const currentChatId = currentChat?.id ?? null
   const currentChatIdRef = React.useRef<string | null>(null)
   React.useEffect(() => { currentChatIdRef.current = currentChatId }, [currentChatId])
+  // Live refs so stable (identity-fixed) callbacks like `branchMessage` can
+  // read the latest chat/model without re-creating — required because the
+  // memoized MessageComponent ignores callback prop changes.
+  const currentChatRef = React.useRef<any>(null)
+  React.useEffect(() => { currentChatRef.current = currentChat }, [currentChat])
+  const selectedModelRef = React.useRef<string | undefined>(undefined)
+  React.useEffect(() => { selectedModelRef.current = selectedModel }, [selectedModel])
   const isCurrentChatStreaming = Boolean(currentChatId && activeStreamingChatIds.includes(currentChatId))
   const isCurrentChatLoading = isCurrentChatStreaming
   // Per-chat draft persistence. The composer's text is saved (debounced)
@@ -3900,6 +4393,19 @@ function ChatInterfaceContent() {
     }
   }, [currentChat?.id])
 
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    try {
+      const draft = sessionStorage.getItem("publishing-debug-prefill")
+      if (draft) {
+        setInput(prev => prev.trim() ? prev : draft)
+        sessionStorage.removeItem("publishing-debug-prefill")
+      }
+    } catch {
+      /* private-mode / blocked storage — harmless */
+    }
+  }, [])
+
   // Restore a previously saved composer draft when entering a chat.
   // Runs AFTER the project-prefill effect so an explicit project draft
   // still wins. Each chat id is restored at most once per mount; further
@@ -3944,11 +4450,13 @@ function ChatInterfaceContent() {
   // Dedicated cancel handle for video generation, mirroring the image path so
   // every composer-driven media kind cancels through the same mechanism.
   const videoAbortControllerRef = React.useRef<AbortController | null>(null)
+  const currentVideoOperationIdRef = React.useRef<string | null>(null)
   const isGeneratingImageRef = React.useRef(false)
   const [isGeneratingVideo, setIsGeneratingVideo] = React.useState(false)
   const [isGeneratingPPT, setIsGeneratingPPT] = React.useState(false)
   const [isGeneratingWebDev, setIsGeneratingWebDev] = React.useState(false)
   const [imageCatalogModels, setImageCatalogModels] = React.useState<any[]>([])
+  const [videoCatalogModels, setVideoCatalogModels] = React.useState<any[]>([])
   const refreshImageModels = React.useCallback(async () => {
     const modelsResponse = await apiClient.getAIModels('IMAGE');
     const models = Array.isArray(modelsResponse?.models)
@@ -3957,23 +4465,41 @@ function ChatInterfaceContent() {
     setImageCatalogModels(models);
     return models;
   }, []);
+  const refreshVideoModels = React.useCallback(async () => {
+    const modelsResponse = await apiClient.getAIModels('VIDEO');
+    const models = Array.isArray(modelsResponse?.models)
+      ? modelsResponse.models.filter(isVideoModelEntry)
+      : [];
+    setVideoCatalogModels(models);
+    return models;
+  }, []);
   const imageModelsForComposer = React.useMemo(() => {
     const source = imageCatalogModels.length ? imageCatalogModels : availableModels;
     return (Array.isArray(source) ? source : []).filter(isImageModelEntry);
   }, [availableModels, imageCatalogModels]);
+  const videoModelsForComposer = React.useMemo(() => {
+    const source = videoCatalogModels.length ? videoCatalogModels : availableModels;
+    return (Array.isArray(source) ? source : []).filter(isVideoModelEntry);
+  }, [availableModels, videoCatalogModels]);
   const composerAvailableModels = React.useMemo(() => {
-    if (!imageCatalogModels.length) return availableModels;
     const byName = new Map<string, any>();
     for (const model of Array.isArray(availableModels) ? availableModels : []) {
       const name = String(model?.name || '').trim();
-      if (name && !isImageModelEntry(model)) byName.set(name, model);
+      if (name && !isImageModelEntry(model) && !isVideoModelEntry(model)) byName.set(name, model);
     }
     for (const model of imageCatalogModels) {
       const name = String(model?.name || '').trim();
       if (name) byName.set(name, model);
     }
+    for (const model of videoCatalogModels) {
+      const name = String(model?.name || '').trim();
+      if (name) byName.set(name, model);
+    }
+    if (!imageCatalogModels.length && !videoCatalogModels.length) {
+      return availableModels;
+    }
     return Array.from(byName.values());
-  }, [availableModels, imageCatalogModels]);
+  }, [availableModels, imageCatalogModels, videoCatalogModels]);
   const resolveFreshActiveImageModel = React.useCallback(async (candidate?: string) => {
     const models = await refreshImageModels();
     const requestedName = String(candidate || '').trim();
@@ -3987,13 +4513,18 @@ function ChatInterfaceContent() {
   const scrollAreaRef = React.useRef<HTMLDivElement>(null)
   const chatCreationInitiated = React.useRef(false);
   const prevChatIdRef = React.useRef<string | undefined>();
+  const composerHighlightOverlayRef = React.useRef<HTMLDivElement>(null);
   // Mirror of `uploadedFiles` for use inside async/event handlers that
   // outlive the render closure (paste listener, drop handler, etc.) —
   // reading from state directly would capture stale values.
   const uploadedFilesRef = React.useRef<any[]>([]);
   React.useEffect(() => { uploadedFilesRef.current = uploadedFiles; }, [uploadedFiles]);
   const inFlightSendKeysRef = React.useRef<Map<string, { startedAt: number; idempotencyKey: string }>>(new Map());
-
+  // Universal-ingest bookkeeping: chips cancelled mid-upload (their XHR
+  // result must not resurrect them) + content-hash dedup of attachments.
+  const cancelledTempIdsRef = React.useRef<Set<string>>(new Set());
+  const attachmentHashesRef = React.useRef<Set<string>>(new Set());
+  const attachmentHashByIdRef = React.useRef<Map<string, string>>(new Map());
   const updateUploadedFileById = React.useCallback((
     fileId: string,
     updater: (file: any) => any,
@@ -4072,7 +4603,6 @@ function ChatInterfaceContent() {
   )
 
   const pasteCapture = usePasteCapture(handlePasteCaptureAction);
-  const capturePastedText = pasteCapture.capture;
   const pasteCapturePendingRef = React.useRef<PasteCaptureResult | null>(null);
   React.useEffect(() => {
     pasteCapturePendingRef.current = pasteCapture.captureResult;
@@ -4299,7 +4829,7 @@ function ChatInterfaceContent() {
   const [showAudioPanel, setShowAudioPanel] = React.useState(false);
   const [audioTab, setAudioTab] = React.useState<'tts' | 'stt' | 'music' | 'video'>("tts");
 
-  // Speech-to-Text states 
+  // Speech-to-Text states
   const [isSpeechSupported, setIsSpeechSupported] = React.useState(false);
   const recognitionRef = React.useRef<SpeechRecognition | null>(null);
 
@@ -4335,6 +4865,7 @@ function ChatInterfaceContent() {
     return () => { cancelled = true; };
   }, [chatType, isImageGenerationActive, refreshImageModels]);
   const [isComputerUseActive, setIsComputerUseActive] = React.useState(false);
+  const [computerUseAppMode, setComputerUseAppMode] = React.useState<ComputerUseAppMode | null>(null);
   const [computerUseStatus, setComputerUseStatus] = React.useState<'idle' | 'running' | 'completed' | 'error'>('idle');
   const [computerUseScreenshot, setComputerUseScreenshot] = React.useState<string | null>(null);
   const [isWordConnectorActive, setIsWordConnectorActive] = React.useState(false);
@@ -4386,6 +4917,7 @@ function ChatInterfaceContent() {
     setIsGoogleDriveActive(false);
     setIsSpotifyActive(false);
     setIsComputerUseActive(false);
+    setComputerUseAppMode(null);
     setIsWordConnectorActive(false);
     setIsExcelConnectorActive(false);
   }, []);
@@ -4403,6 +4935,7 @@ function ChatInterfaceContent() {
     // Reset other UI states
     setShowAudioPanel(false);
     setDocumentPreviewUrl(null);
+    setSourcesPanelData(null);
     setActiveSearchActivityId(null);
     setSplitViewContent(null);
     setComposerPreviewIndex(null);
@@ -4417,6 +4950,7 @@ function ChatInterfaceContent() {
     // Clear Computer Use state
     if (clearReasoning) clearReasoning();
     setComputerUseStatus('idle');
+    setComputerUseAppMode(null);
     setComputerUseScreenshot(null);
   }, [closeAllToolsAndConnectors, setChatType, clearReasoning, setUploadedFiles]);
 
@@ -4491,6 +5025,13 @@ function ChatInterfaceContent() {
     if (videoAbortControllerRef.current) {
       videoAbortControllerRef.current.abort();
       videoAbortControllerRef.current = null;
+    }
+    const videoOperationId = currentVideoOperationIdRef.current;
+    if (videoOperationId) {
+      currentVideoOperationIdRef.current = null;
+      void apiClient.cancelVideoGeneration(videoOperationId).catch((err) => {
+        console.warn('Failed to cancel video generation:', err);
+      });
     }
     setIsGeneratingVideo(false);
     setIsGeneratingPPT(false);
@@ -4587,10 +5128,12 @@ function ChatInterfaceContent() {
 
     if (newState) {
       closeAllToolsAndConnectors();
+      setComputerUseAppMode('computer');
       setIsComputerUseActive(true);
       setChatType('computer-use');
     } else {
       setIsComputerUseActive(false);
+      setComputerUseAppMode(null);
       setChatType('text');
     }
   };
@@ -4741,7 +5284,7 @@ But first, you need to connect your Spotify account securely using the button be
 
         // Show upgrade modal for API limit errors
         setSubscribeOpen(true);
-        toast.error('Monthly API limit exceeded. Please upgrade to continue.');
+        toast.error('Tu plan necesita una mejora para continuar.');
 
         const updateChatWithLimitError = (prevChat: any) => {
           if (!prevChat) return prevChat;
@@ -4750,7 +5293,7 @@ But first, you need to connect your Spotify account securely using the button be
             if (msg.content === '[PROCESSING_SPOTIFY]') {
               return {
                 ...msg,
-                content: "Monthly API limit exceeded. Please upgrade your plan to continue using Spotify features.",
+                content: "Tu plan necesita una mejora para continuar usando Spotify.",
                 error: "Monthly API limit exceeded"
               };
             }
@@ -4786,6 +5329,27 @@ But first, you need to connect your Spotify account securely using the button be
     }
   }
   const [isVideoGenerationActive, setIsVideoGenerationActive] = React.useState(false);
+  React.useEffect(() => {
+    if (!isVideoGenerationActive && chatType !== 'video') return;
+    let cancelled = false;
+    refreshVideoModels()
+      .then((models) => {
+        if (cancelled) return;
+        if (!models.length) {
+          setSelectedVideoModel('');
+          return;
+        }
+        setSelectedVideoModel((current) => (
+          current && models.some((model: any) => model?.name === current)
+            ? current
+            : models[0].name
+        ));
+      })
+      .catch((error) => {
+        console.warn('No se pudo refrescar el catalogo de modelos de video:', error?.message || error);
+      });
+    return () => { cancelled = true; };
+  }, [chatType, isVideoGenerationActive, refreshVideoModels]);
   const [subscribeOpen, setSubscribeOpen] = React.useState(false);
   const [isSubscribing, setIsSubscribing] = React.useState(false);
   const [currentUserInfo, setCurrentUserInfo] = React.useState<any>(null);
@@ -4793,6 +5357,7 @@ But first, you need to connect your Spotify account securely using the button be
   const isFreePlan = isFreePlanName(currentPlan);
   const [splitViewContent, setSplitViewContent] = React.useState<any>(null)
   const [documentPreviewUrl, setDocumentPreviewUrl] = React.useState<DocumentPreviewTarget | null>(null);
+  const [sourcesPanelData, setSourcesPanelData] = React.useState<{ sources: any[]; activity: any; memory?: any[]; memoryMeta?: any; messageId?: string } | null>(null);
   const [composerPreviewIndex, setComposerPreviewIndex] = React.useState<number | null>(null);
   const [sidePreviewAttachment, setSidePreviewAttachment] = React.useState<AttachmentLike | null>(null);
   const [sidePreviewSiblings, setSidePreviewSiblings] = React.useState<AttachmentLike[]>([]);
@@ -4828,16 +5393,19 @@ But first, you need to connect your Spotify account securely using the button be
       if (requestedDuration && selectedVideoDuration !== requestedDuration) {
         setSelectedVideoDuration(requestedDuration as VideoDuration);
       }
-      return;
-    }
-
-    if (!wantsVideo && autoVideoActivationRef.current) {
-      if (isVideoGenerationActive && chatType === 'video') {
-        setIsVideoGenerationActive(false);
-        setChatType('text');
+      const requestedAspectRatio = extractRequestedVideoAspectRatio(input);
+      if (requestedAspectRatio && selectedVideoAspectRatio !== requestedAspectRatio) {
+        setSelectedVideoAspectRatio(requestedAspectRatio as VideoAspectRatio);
       }
-      setSelectedVideoDuration(DEFAULT_VIDEO_DURATION);
-      autoVideoActivationRef.current = false;
+      const requestedResolution = extractRequestedVideoResolution(input);
+      if (requestedResolution && selectedVideoResolution !== requestedResolution) {
+        setSelectedVideoResolution(requestedResolution as VideoResolution);
+      }
+      const requestedAudio = extractRequestedVideoAudio(input);
+      if (requestedAudio !== null && selectedVideoAudio !== requestedAudio) {
+        setSelectedVideoAudio(requestedAudio);
+      }
+      return;
     }
   }, [
     chatType,
@@ -4855,7 +5423,10 @@ But first, you need to connect your Spotify account securely using the button be
     isVoiceGenerationActive,
     isWebSearchActive,
     isWordConnectorActive,
+    selectedVideoAspectRatio,
+    selectedVideoAudio,
     selectedVideoDuration,
+    selectedVideoResolution,
     setChatType,
   ]);
 
@@ -4926,6 +5497,9 @@ But first, you need to connect your Spotify account securely using the button be
   const chatHeaderRef = React.useRef<HTMLDivElement>(null);
   const chatComposerDockRef = React.useRef<HTMLDivElement>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+  const chatLayoutVarsRef = React.useRef<Record<string, number>>({});
+  const composerResizeFrameRef = React.useRef<number | null>(null);
+  const textareaLayoutRef = React.useRef<{ height: number; overflowY: string }>({ height: 0, overflowY: "" });
 
   // Slash-command menu state. Tracks whether the menu is open and what filter
   // string the user has typed after the leading "/". The menu auto-opens
@@ -4953,23 +5527,32 @@ But first, you need to connect your Spotify account securely using the button be
   }, [input]);
 
   const detectedLinks = React.useMemo(() => extractDetectedLinks(input), [input]);
+  const hasDetectedLinks = detectedLinks.length > 0;
 
-  const removeDetectedLink = React.useCallback((link: DetectedLink) => {
-    setInput((prev) => {
-      const escapedRaw = link.raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-      const escapedUrl = link.url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-      const withoutRaw = prev.replace(new RegExp(`\\s*${escapedRaw}`, "g"), " ")
-      const withoutUrl = withoutRaw.replace(new RegExp(`\\s*${escapedUrl}`, "g"), " ")
-      return withoutUrl.replace(/[ \t]{2,}/g, " ").replace(/\n{3,}/g, "\n\n").trimStart()
-    });
-    window.setTimeout(() => textareaRef.current?.focus(), 0);
+  const syncComposerHighlightScroll = React.useCallback((textarea: HTMLTextAreaElement | null = textareaRef.current) => {
+    const overlay = composerHighlightOverlayRef.current;
+    if (!overlay || !textarea) return;
+    overlay.scrollTop = textarea.scrollTop;
+    overlay.scrollLeft = textarea.scrollLeft;
   }, []);
+
+  const handleComposerTextareaScroll = React.useCallback((event: React.UIEvent<HTMLTextAreaElement>) => {
+    syncComposerHighlightScroll(event.currentTarget);
+  }, [syncComposerHighlightScroll]);
+
+  React.useEffect(() => {
+    syncComposerHighlightScroll();
+  }, [input, hasDetectedLinks, syncComposerHighlightScroll]);
 
   const getComposerTextareaMaxHeight = React.useCallback(() => {
     if (typeof window === "undefined") return 200;
     const viewportHeight = window.visualViewport?.height || window.innerHeight || 720;
     const isMobileViewport = window.matchMedia("(max-width: 767px)").matches;
-    if (!isMobileViewport) return 200;
+    if (!isMobileViewport) {
+      // ChatGPT-style composer: grows up to ~45% of the viewport so a long
+      // paste reads inline; beyond that the textarea scrolls internally.
+      return Math.max(200, Math.min(560, Math.floor(viewportHeight * 0.45)));
+    }
     return Math.max(96, Math.min(180, Math.floor(viewportHeight * 0.28)));
   }, []);
 
@@ -4978,13 +5561,22 @@ But first, you need to connect your Spotify account securely using the button be
     if (!root) return;
 
     const setPx = (name: string, value: number) => {
-      root.style.setProperty(name, `${Math.max(0, Math.ceil(value))}px`);
+      const roundedValue = Math.max(0, Math.ceil(value));
+      if (chatLayoutVarsRef.current[name] === roundedValue) return;
+      chatLayoutVarsRef.current[name] = roundedValue;
+      root.style.setProperty(name, `${roundedValue}px`);
     };
 
     setPx("--chat-header-height", chatHeaderRef.current?.getBoundingClientRect().height || 64);
     setPx("--chat-composer-height", chatComposerDockRef.current?.getBoundingClientRect().height || 96);
     setPx("--chat-textarea-max-height", getComposerTextareaMaxHeight());
   }, [getComposerTextareaMaxHeight]);
+
+  const setComposerInputFocused = React.useCallback((focused: boolean) => {
+    const root = chatViewportRef.current;
+    if (!root) return;
+    root.dataset.chatInputFocused = focused ? "true" : "false";
+  }, []);
 
   const resizeComposerTextarea = React.useCallback(() => {
     const textarea = textareaRef.current;
@@ -4993,26 +5585,44 @@ But first, you need to connect your Spotify account securely using the button be
     const maxHeight = getComposerTextareaMaxHeight();
     textarea.style.height = "auto";
     const scrollHeight = textarea.scrollHeight;
+    const nextHeight = Math.min(scrollHeight, maxHeight);
+    const nextOverflowY = scrollHeight > maxHeight ? "auto" : "hidden";
+    const previousLayout = textareaLayoutRef.current;
+    const heightChanged = previousLayout.height !== nextHeight;
+    const overflowChanged = previousLayout.overflowY !== nextOverflowY;
 
-    if (scrollHeight > maxHeight) {
-      textarea.style.height = `${maxHeight}px`;
-      textarea.style.overflowY = "auto";
-      window.setTimeout(() => {
-        textarea.scrollTop = textarea.scrollHeight;
-      }, 0);
-    } else {
-      textarea.style.height = `${scrollHeight}px`;
-      textarea.style.overflowY = "hidden";
+    textarea.style.height = `${nextHeight}px`;
+    if (overflowChanged) {
+      textarea.style.overflowY = nextOverflowY;
+    }
+    if (heightChanged || overflowChanged) {
+      textareaLayoutRef.current = { height: nextHeight, overflowY: nextOverflowY };
+    }
+    if (nextOverflowY === "auto" && document.activeElement === textarea) {
+      textarea.scrollTop = textarea.scrollHeight;
     }
 
     syncChatLayoutVars();
-    window.requestAnimationFrame(() => {
+    if (composerResizeFrameRef.current !== null) {
+      window.cancelAnimationFrame(composerResizeFrameRef.current);
+    }
+    composerResizeFrameRef.current = window.requestAnimationFrame(() => {
+      composerResizeFrameRef.current = null;
       syncChatLayoutVars();
-      if (document.activeElement === textarea) {
+      if (heightChanged && document.activeElement === textarea) {
         scrollToBottom();
       }
     });
   }, [getComposerTextareaMaxHeight, scrollToBottom, syncChatLayoutVars]);
+
+  React.useEffect(() => {
+    return () => {
+      if (composerResizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(composerResizeFrameRef.current);
+        composerResizeFrameRef.current = null;
+      }
+    };
+  }, []);
 
   // Handle textarea input change with smooth scrolling
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -5020,18 +5630,53 @@ But first, you need to connect your Spotify account securely using the button be
     setInput(value);
     // Persist the in-progress draft per chat (debounced inside the hook).
     chatDraft.save(value);
-
-    // Use requestAnimationFrame to ensure DOM is updated before scrolling
-    requestAnimationFrame(resizeComposerTextarea);
   };
 
+  // Insert text at the textarea caret (replacing any selection), keeping
+  // the draft, the auto-grow height and the caret position consistent.
+  // Used by the universal paste router for orchestrated (non-native)
+  // insertions: markdown from rich HTML, link URLs, multi-item pastes.
+  const insertTextAtCaret = React.useCallback((snippet: string) => {
+    if (!snippet) return;
+    const ta = textareaRef.current;
+    if (!ta) {
+      setInput(prev => (prev ? `${prev}\n\n${snippet}` : snippet));
+      return;
+    }
+    const prevValue = ta.value;
+    const start = ta.selectionStart ?? prevValue.length;
+    const end = ta.selectionEnd ?? start;
+    const next = prevValue.slice(0, start) + snippet + prevValue.slice(end);
+    setInput(next);
+    chatDraft.save(next);
+    window.requestAnimationFrame(() => {
+      resizeComposerTextarea();
+      const caret = start + snippet.length;
+      try { ta.setSelectionRange(caret, caret); } catch { /* old Safari */ }
+      ta.focus();
+    });
+  }, [chatDraft, resizeComposerTextarea]);
+
   const handleTextareaFocus = React.useCallback(() => {
+    setComposerInputFocused(true);
     resizeComposerTextarea();
     window.requestAnimationFrame(() => {
       syncChatLayoutVars();
       scrollToBottom();
     });
-  }, [resizeComposerTextarea, scrollToBottom, syncChatLayoutVars]);
+    window.setTimeout(() => {
+      syncChatLayoutVars();
+      scrollToBottom();
+    }, 120);
+  }, [resizeComposerTextarea, scrollToBottom, setComposerInputFocused, syncChatLayoutVars]);
+
+  const handleTextareaBlur = React.useCallback(() => {
+    window.setTimeout(() => {
+      if (document.activeElement === textareaRef.current) return;
+      setComposerInputFocused(false);
+      syncChatLayoutVars();
+    }, 120);
+  }, [setComposerInputFocused, syncChatLayoutVars]);
 
   React.useEffect(() => {
     resizeComposerTextarea();
@@ -5102,7 +5747,7 @@ But first, you need to connect your Spotify account securely using the button be
       const errorMessage = customEvent.detail?.message || customEvent.detail?.error || '';
       if (isMonthlyLimitError(errorMessage)) {
         setSubscribeOpen(true);
-        toast.error('Monthly API limit exceeded. Please upgrade to continue.');
+        toast.error('Tu plan necesita una mejora para continuar.');
       }
     }
 
@@ -5129,6 +5774,7 @@ But first, you need to connect your Spotify account securely using the button be
 
   const handleDocumentPreview = (url: DocumentPreviewTarget) => {
     setSplitViewContent(null)
+    setSourcesPanelData(null)
     setComposerPreviewIndex(null)
     setSidePreviewAttachment(null)
     setSidePreviewSiblings([])
@@ -5143,6 +5789,7 @@ But first, you need to connect your Spotify account securely using the button be
   const handleAttachmentPreview = React.useCallback((attachment: AttachmentLike, siblings: AttachmentLike[] = [], index = 0) => {
     setSplitViewContent(null);
     setDocumentPreviewUrl(null);
+    setSourcesPanelData(null);
     setComposerPreviewIndex(null);
     setActiveSearchActivityId(null);
     setSplitRatio((current) => {
@@ -5155,6 +5802,95 @@ But first, you need to connect your Spotify account securely using the button be
     setSidePreviewAttachment(normalizedSiblings[index] || attachment);
   }, []);
 
+  // Open the integrated "Fuentes" pane for a message. Mirrors
+  // handleDocumentPreview: clears the other right-pane tenants (so the pane
+  // isn't suppressed by a stale viewer), rebalances the split, and stores the
+  // message's sources. The reverse direction (closing Fuentes when another
+  // pane opens) is enforced by the mutual-exclusion effect below.
+  const handleOpenSources = React.useCallback((payload: { sources: any[]; activity: any; memory?: any[]; memoryMeta?: any; messageId?: string }) => {
+    const hasSources = Array.isArray(payload?.sources) && payload.sources.length > 0;
+    const hasMemory = Array.isArray(payload?.memory) && payload.memory.length > 0;
+    if (!payload || (!hasSources && !hasMemory)) return;
+    setSplitViewContent(null);
+    setDocumentPreviewUrl(null);
+    setComposerPreviewIndex(null);
+    setSidePreviewAttachment(null);
+    setSidePreviewSiblings([]);
+    setActiveSearchActivityId(null);
+    setIsWordConnectorActive(false);
+    setIsExcelConnectorActive(false);
+    try { closeArtifactPanel(); } catch { /* ignore */ }
+    setShowAudioPanel(false);
+    setSplitRatio((current) => {
+      const balanced = current < 40 || current > 62 ? 48 : current;
+      try { localStorage.setItem(SPLIT_STORAGE_KEY, String(balanced)); } catch { /* ignore */ }
+      return balanced;
+    });
+    setSourcesPanelData(payload);
+  }, [closeArtifactPanel, setShowAudioPanel]);
+
+  // ── Bifurcar conversación ───────────────────────────────────────────────
+  // Forks the current chat into a brand-new conversation containing a copy of
+  // every message up to AND including the one the user branched from. The
+  // original chat is left untouched, so the user can explore an alternate
+  // direction without losing context — git-style branching applied to a
+  // conversation tree. Powered by the existing createChat + addMessage
+  // endpoints; no new backend needed. Reads live state from refs so the
+  // callback stays identity-stable (the memoized MessageComponent ignores
+  // callback prop changes).
+  const branchMessage = React.useCallback(async (messageId: string) => {
+    const chat = currentChatRef.current;
+    const msgs: any[] = chat?.messages || [];
+    const idx = msgs.findIndex((m) => m?.id === messageId);
+    if (idx < 0) {
+      toast.error("No se pudo bifurcar: mensaje no encontrado");
+      return;
+    }
+    const slice = msgs.slice(0, idx + 1).filter((m) => m && (m.content || m.files));
+    if (slice.length === 0) {
+      toast.error("No hay contenido para bifurcar");
+      return;
+    }
+
+    const baseTitle = (chat?.title || "Conversación").slice(0, 40);
+    const toastId = toast.loading("Bifurcando conversación…");
+    try {
+      const created = await apiClient.createChat({
+        title: `${baseTitle} (rama)`,
+        model: chat?.model || selectedModelRef.current,
+      });
+      const newChat = created?.chat || created;
+      const newChatId = newChat?.id;
+      if (!newChatId) throw new Error("createChat no devolvió id");
+
+      for (const m of slice) {
+        let files: string[] | undefined;
+        try {
+          if (Array.isArray(m.files)) files = m.files;
+          else if (typeof m.files === "string" && m.files.trim().startsWith("[")) files = JSON.parse(m.files);
+        } catch { /* non-fatal: forks can drop unparseable file refs */ }
+        await apiClient.addMessage(newChatId, {
+          role: String(m.role || "USER").toUpperCase(),
+          content: typeof m.content === "string" ? m.content : String(m.content ?? ""),
+          files,
+          metadata: typeof m.metadata === "string" ? m.metadata : undefined,
+        });
+      }
+
+      await selectChat(newChatId);
+      toast.success("Conversación bifurcada", {
+        id: toastId,
+        description: `${slice.length} mensaje${slice.length === 1 ? "" : "s"} copiado${slice.length === 1 ? "" : "s"} a la nueva rama`,
+      });
+    } catch (err: any) {
+      console.error("[branch] failed:", err);
+      toast.error("No se pudo bifurcar la conversación", {
+        id: toastId,
+        description: err?.message || "Inténtalo de nuevo",
+      });
+    }
+  }, [selectChat]);
+
   // Complete chat share functionality
   const handleCompleteShare = async () => {
     if (!currentChat?.id) {
@@ -5166,12 +5902,10 @@ But first, you need to connect your Spotify account securely using the button be
       const response = await apiClient.handleShare(currentChat.id);
       const baseUrl = process.env.NEXT_PUBLIC_URL || `http://localhost:${process.env.PORT || 3000}`;
       const url = `${baseUrl}/share/${response.shareableLink}`;
-      try {
-        await navigator.clipboard.writeText(url);
-        toast.success("Enlace para compartir copiado");
-      } catch {
-        toast.success("Enlace para compartir creado (no se pudo copiar automáticamente)");
-      }
+      const r = await copyTextSafe(url);
+      toast.success(r.ok
+        ? "Enlace para compartir copiado"
+        : "Enlace para compartir creado (no se pudo copiar automáticamente)");
       setShareUrl(url);
       setShareModalOpen(true);
     } catch (error) {
@@ -5465,6 +6199,25 @@ But first, you need to connect your Spotify account securely using the button be
     }
   };
 
+  // Composer model selector (Claude-style), rendered inline in the right action
+  // cluster next to the mic.
+  const renderComposerModelControls = () => {
+    if (isMediaToolActive) return null
+    return (
+      <div className="composer-model-inline flex min-w-0 max-w-[min(52vw,15rem)] shrink items-center justify-end">
+        <NavbarModelSelector
+          selectedModel={selectedModel}
+          setSelectedModel={setSelectedModel}
+          availableModels={availableModels}
+          setSelectedProvider={setSelectedProivder}
+          chatTypes={chatType}
+          currentChat={currentChat}
+          setCurrentChat={setCurrentChat}
+        />
+      </div>
+    )
+  }
+
   const renderDictationButton = () => (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -5633,6 +6386,7 @@ But first, you need to connect your Spotify account securely using the button be
   React.useEffect(() => {
     const handleResetChatState = () => {
       devLog('🔄 Resetting all chat states (New Chat clicked)');
+      autoVideoActivationRef.current = false;
       resetAllToolsAndConnectors();
       setComputerUseStatus('idle');
       setComputerUseScreenshot(null);
@@ -5786,6 +6540,22 @@ But first, you need to connect your Spotify account securely using the button be
     if (accepted.length === 0) return;
     filesToUpload = accepted;
 
+    // Content-hash dedup — the same bytes can't be attached twice in a
+    // conversation. Hashing must never block an upload, so any failure
+    // falls through to "no dedup" silently.
+    let batchHashes: Map<File, string> | null = null;
+    try {
+      const { unique, duplicates, hashes } = await dedupeFiles(filesToUpload, attachmentHashesRef.current);
+      if (duplicates.length > 0) {
+        toast.info(duplicates.length === 1
+          ? `"${duplicates[0].name}" ya está adjunto — duplicado omitido.`
+          : `${duplicates.length} archivos duplicados omitidos.`);
+      }
+      if (unique.length === 0) return;
+      filesToUpload = unique;
+      batchHashes = hashes;
+    } catch { /* hash dedup is best-effort */ }
+
     // Idempotency key — backend dedupes retries of the SAME batch attempt.
     const idempotencyKey = `upload-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
@@ -5794,6 +6564,11 @@ But first, you need to connect your Spotify account securely using the button be
       const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
       const preview = file.type.startsWith('image/') ? URL.createObjectURL(file) : null;
       const longPasteMeta = getLongPasteMetadata(file);
+      const contentHash = batchHashes?.get(file) || null;
+      if (contentHash) {
+        attachmentHashesRef.current.add(contentHash);
+        attachmentHashByIdRef.current.set(tempId, contentHash);
+      }
       return {
         tempId,
         name: file.name,
@@ -5804,6 +6579,7 @@ But first, you need to connect your Spotify account securely using the button be
         sourceChannel,
         longPasteMeta,
         isLongPasteDocument: Boolean(longPasteMeta),
+        mediaMeta: null as null | { durationSeconds?: number; peaks?: number[]; thumbnailDataUrl?: string | null },
         status: 'uploading' as 'uploading' | 'ready' | 'failed',
       };
     });
@@ -5812,6 +6588,27 @@ But first, you need to connect your Spotify account securely using the button be
       const next = [...cur, ...tempFiles];
       uploadedFilesRef.current = next;
       return next;
+    });
+
+    // Best-effort media metadata: mini-waveform + duration for audio,
+    // thumbnail + duration badge for video. Fire-and-forget; the chip
+    // upgrades in place when (and if) extraction succeeds.
+    tempFiles.forEach((tf) => {
+      const mime = tf.type || '';
+      const applyMediaMeta = (meta: { durationSeconds?: number; peaks?: number[]; thumbnailDataUrl?: string | null } | null) => {
+        if (!meta) return;
+        tf.mediaMeta = { ...(tf.mediaMeta || {}), ...meta };
+        setUploadedFiles((cur: any[]) => {
+          const next = cur.map(f => (f.tempId === tf.tempId ? { ...f, mediaMeta: tf.mediaMeta } : f));
+          uploadedFilesRef.current = next;
+          return next;
+        });
+      };
+      if (mime.startsWith('audio/')) {
+        void extractAudioMeta(tf.file).then(applyMediaMeta).catch(() => {});
+      } else if (mime.startsWith('video/')) {
+        void extractVideoMeta(tf.file).then(applyMediaMeta).catch(() => {});
+      }
     });
 
     // Initialize per-temp progress at 0.
@@ -5889,11 +6686,15 @@ But first, you need to connect your Spotify account securely using the button be
           const processingStage = f?.processingStage || f?.stage || null;
           return {
             ...f,
+            // Keep the tempId so chip identity (animations, hash bookkeeping,
+            // cancel tracking) survives the temp → server swap.
+            tempId: tempFiles[idx]?.tempId ?? f.tempId,
             file: tempFiles[idx]?.file ?? f.file,
             preview: tempFiles[idx]?.preview ?? f.preview,
             sourceChannel,
             longPasteMeta: tempFiles[idx]?.longPasteMeta ?? f.longPasteMeta,
             isLongPasteDocument: tempFiles[idx]?.isLongPasteDocument || Boolean(f.isLongPasteDocument),
+            mediaMeta: tempFiles[idx]?.mediaMeta ?? f.mediaMeta ?? null,
             processingStage,
             status: failed
               ? ('failed' as const)
@@ -5902,7 +6703,9 @@ But first, you need to connect your Spotify account securely using the button be
                 : ('ready' as const),
             uploadError: failed ? (f?.error || 'No se pudo procesar el archivo.') : f?.uploadError,
           };
-        });
+        // A chip removed while its upload was in flight acts as CANCEL —
+        // do not resurrect it when the XHR completes.
+        }).filter((m: any, idx: number) => !cancelledTempIdsRef.current.has(tempFiles[idx]?.tempId));
         const tempIds = new Set(tempFiles.map(tf => tf.tempId));
         setUploadedFiles((cur: any[]) => {
           const next = [
@@ -6196,49 +6999,76 @@ But first, you need to connect your Spotify account securely using the button be
 
     const { files, text, html } = extractFromClipboardEvent(native, { includeHtml: true });
 
-    // ─── No files ───────────────────────────────────────────────────
+    // ─── No files — route by content through the universal router ────
     if (files.length === 0) {
-      // text/uri-list — user copied a link from the address bar or a
-      // browser tab tab strip. Insert the URL(s) as plain text instead
-      // of letting Chrome paste the HTML <a> wrapper.
-      const uriList = cd.getData('text/uri-list');
-      if (uriList && !text) {
-        const urls = uriList.split('\n').map(s => s.trim()).filter(Boolean).filter(u => !u.startsWith('#'));
-        if (urls.length > 0) {
-          e.preventDefault();
-          setInput(prev => prev + (prev ? ' ' : '') + urls.join(' '));
-          return;
-        }
-      }
+      // HTML-only flavors (rare) still need a plain-text mirror so the
+      // router can apply the long-paste threshold and URL detection.
       let htmlFallbackText: string | null = null;
       if (!text && html) {
         const tmp = document.createElement('div');
         tmp.innerHTML = html;
         htmlFallbackText = (tmp.textContent || tmp.innerText || '').trim();
       }
-      const pastedText = (text && text.trim()) ? text : htmlFallbackText;
-      if (pastedText && shouldCompilePastedTextAsDocument(pastedText)) {
-        e.preventDefault();
-        // NO chooser popup. Direct paste, always:
-        //   · Clearly large content (≥1200 chars, ≥200 words, ≥20 lines)
-        //     → attach as document chip next to the input.
-        //   · Anything smaller → insert as plain text in the input bar.
-        const analyzed = analyzePastedContent(pastedText);
-        const isClearlyLarge =
-          analyzed.charCount >= 1200 ||
-          analyzed.wordCount >= 200 ||
-          analyzed.lineCount >= 20;
-        const action: PasteCaptureAction = isClearlyLarge ? "attach_document" : "insert_text";
-        handlePasteCaptureActionRef.current(action, analyzed);
+      const effectiveText = (text && text.trim()) ? text : htmlFallbackText;
+      const uriList = cd.getData('text/uri-list') || null;
+
+      let actions: ReturnType<typeof routePaste> = [];
+      try {
+        actions = routePaste(
+          { text: effectiveText, html, uriList },
+          {
+            longTextThreshold: LONG_PASTE_CHIP_THRESHOLD,
+            resolveKind: (mime, name) => defaultAttachmentRegistry.resolve(mime, name).kind,
+          },
+        );
+      } catch {
+        // Router failure must never eat a paste — native fallback.
         return;
       }
-      // HTML-only paste (rare — usually browsers attach text/plain too).
-      // Strip to text via DOM parsing so we don't lose the content.
-      if (!text && htmlFallbackText) {
-        e.preventDefault();
-        setInput(prev => prev + htmlFallbackText);
+      if (actions.length === 0) return;
+
+      // A single plain-text insert keeps the NATIVE paste (caret-aware,
+      // selection-replacing, undo-friendly). Everything else — snippet
+      // chips, Word/Docs Markdown, link inserts, multi-action pastes — is
+      // orchestrated by us.
+      if (actions.length === 1 && actions[0].type === 'insert-text') return;
+
+      e.preventDefault();
+      for (const action of actions) {
+        switch (action.type) {
+          case 'insert-text':
+            insertTextAtCaret(action.text);
+            break;
+          case 'link-chip':
+            // URLs stay in the editable text. The composer paints detected
+            // URLs inline with a subtle link color instead of creating a
+            // separate preview row above the conversation.
+            insertTextAtCaret(`${action.url} `);
+            break;
+          case 'text-snippet-chip':
+            // "PEGADO" chip — long pasted text becomes an expandable,
+            // removable .txt attachment to keep the bar clean.
+            handlePasteCaptureActionRef.current('attach_document', analyzePastedContent(action.text));
+            break;
+          case 'rich-html': {
+            // Word / Google Docs rich paste → sanitized Markdown that
+            // preserves bold, lists and tables. Falls back to plain text.
+            let content = '';
+            try { content = htmlToMarkdown(action.html); } catch { content = ''; }
+            if (!content.trim()) content = action.plainText || '';
+            content = content.trim();
+            if (!content) break;
+            if (content.length > LONG_PASTE_CHIP_THRESHOLD) {
+              handlePasteCaptureActionRef.current('attach_document', analyzePastedContent(content));
+            } else {
+              insertTextAtCaret(content);
+            }
+            break;
+          }
+          default:
+            break;
+        }
       }
-      // Otherwise let the browser do its native plain-text paste.
       return;
     }
 
@@ -6273,10 +7103,10 @@ But first, you need to connect your Spotify account securely using the button be
       // Prevent default so the OS file path string doesn't get pasted
       // as text next to the file. Then handle text ourselves if present.
       if ('preventDefault' in e) e.preventDefault();
-      if (text) setInput(prev => prev + text);
+      if (text) insertTextAtCaret(text);
       handleAndUploadFiles(filesToFileList(accepted), channel);
     }
-  }, [capturePastedText, handleAndUploadFiles]);
+  }, [handleAndUploadFiles, insertTextAtCaret]);
 
   const handleTextareaPaste = React.useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     handleClipboardPaste(e);
@@ -6320,6 +7150,18 @@ But first, you need to connect your Spotify account securely using the button be
   const pendingMsgQueueRef = React.useRef<Array<{ chatId: string | null; msg: string; files: any[] }>>([]);
   const queueBurstTimestampsRef = React.useRef<number[]>([]);
   const handleSendRef = React.useRef<() => void>(() => {});
+  // Reactive mirror of the per-chat queued-message count so the composer can
+  // SHOW the user that their extra tasks (sent while the agent is thinking)
+  // are queued and will run in order. The ref above is the source of truth;
+  // this state just drives the visible "N en cola" chip.
+  const [queuedCount, setQueuedCount] = React.useState(0);
+  const syncQueuedCount = React.useCallback((chatId?: string | null) => {
+    const cid = chatId ?? currentChatIdRef.current ?? null;
+    setQueuedCount(pendingMsgQueueRef.current.filter((q) => q.chatId === cid).length);
+  }, []);
+  React.useEffect(() => {
+    syncQueuedCount(currentChat?.id ?? null);
+  }, [currentChat?.id, syncQueuedCount]);
 
   // ────────────────────────────────────────────────────────────
   // Sidebar auto-collapse — when the user turns on any composer tool
@@ -6465,6 +7307,13 @@ But first, you need to connect your Spotify account securely using the button be
     });
     setComposerPreviewIndex(index);
   }, [uploadedFiles]);
+  const handleComposerAttachmentPreview = React.useCallback((
+    _attachment: AttachmentLike,
+    _siblings: AttachmentLike[],
+    index: number,
+  ) => {
+    openComposerDocumentPreview(index);
+  }, [openComposerDocumentPreview]);
 
   React.useEffect(() => {
     if (composerPreviewIndex === null) return;
@@ -6606,9 +7455,7 @@ But first, you need to connect your Spotify account securely using the button be
               duration: 8000,
               description: "Reporte copiado al portapapeles — pégalo en el chat para discutirlo.",
             });
-            try {
-              await navigator.clipboard.writeText(lastReport.report);
-            } catch { /* clipboard denied */ }
+            await copyTextSafe(lastReport.report);
           } else {
             toast.error(`⚠️ Goal terminado sin reporte`, { id: toastId });
           }
@@ -6778,6 +7625,7 @@ But first, you need to connect your Spotify account securely using the button be
       // Park the message — we'll drain the queue once the busy flags
       // flip back to idle (see the useEffect watching busy state).
       pendingMsgQueueRef.current.push({ chatId: currentChat?.id ?? null, msg, files: composerFiles });
+      syncQueuedCount(currentChat?.id ?? null);
       setInput("");
       uploadedFilesRef.current = [];
       setUploadedFiles([]);
@@ -6804,7 +7652,7 @@ But first, you need to connect your Spotify account securely using the button be
 
       // Construct prompt with full context but focus on selected text
       const rewritePrompt = `You are editing a specific part of a document.
-      
+
 CONTEXT:
 The user has selected the following text to edit:
 "${selectedWordText}"
@@ -7136,6 +7984,42 @@ REWRITTEN TEXT:`;
       }
     }
 
+    const deterministicAgenticIntent = classifyIntentFastPath(msg);
+    // Image-only turns ("resolver", "resuelve esta derivada", "¿qué dice esta
+    // imagen?") need VISION, which lives only in the plain /api/ai/generate
+    // path. The queued agent loop has no vision and stalls blind on the image.
+    // So even when the TEXT alone classifies as an agentic intent (e.g.
+    // "derivada" → math, "imagen" → image), keep image-only turns out of the
+    // agent loop entirely — the vision path reads the image and responds.
+    const imageOnlyTurn = isImageOnlyAttachmentTurn(filesToSend);
+    // NOTE: document-EDIT turns (attachment + "borra/elimina/agrega/edita…")
+    // are deliberately NOT forced into the queued agent-task path here. The
+    // queued runner (agent-task-runner) has NO document_edit tool and stalls
+    // ("Sin actualizaciones recientes"). Document edits must run on the INLINE
+    // /api/ai/generate path, which carries the document_edit (Cowork sandbox)
+    // tool plus a reliable plain-stream fallback. The intent switch +
+    // shouldRouteTextPromptThroughAgenticRuntime (which returns false → inline
+    // for edit intents) route them there.
+    const shouldStartAgenticLoopImmediately = deterministicAgenticIntent
+      && ['web_search', 'agent_task', 'math', 'viz', 'chart', 'ppt'].includes(deterministicAgenticIntent)
+      && !imageOnlyTurn
+      // Same gate as the semantic switch below: no-file analytical turns
+      // (web lookups, formulas, charts) belong on the RELIABLE inline
+      // /generate agentic loop, not the durable queued path. Without this,
+      // the deterministic fast-path queued "busca en la web…" style prompts
+      // straight into the agent-task pipeline and the chat froze on
+      // "Analizando solicitud" whenever the worker/relay hiccupped.
+      && shouldRouteTextPromptThroughAgenticRuntime(msg, filesToSend);
+
+    if (shouldStartAgenticLoopImmediately) {
+      try {
+        await handleAgentTask(msg, filesToSend, { userMessageAlreadyAdded: false });
+      } finally {
+        inFlightSendKeysRef.current.delete(sendKey);
+      }
+      return;
+    }
+
     if (sendInFlightRef.current) return;
     sendInFlightRef.current = true;
 
@@ -7197,11 +8081,17 @@ REWRITTEN TEXT:`;
         return;
       }
       if (isImageGenerationActive || chatType === 'image') {
-        await handleImageGeneration(buildImageEditPrompt(msg), collectUploadFileIds(filesToSend), imageModelForSendOverride);
-        return;
+        // Even with the "Imágenes" composer mode on (it can be left sticky by
+        // a previous generation), an ANALYSIS question about an image
+        // ("describe esta imagen", "¿qué ves?") must go to the vision chat
+        // path, not the generator — fall through to normal routing.
+        if (!isImageAnalysisPrompt(msg)) {
+          await handleImageGeneration(buildImageEditPrompt(msg), collectUploadFileIds(filesToSend), imageModelForSendOverride);
+          return;
+        }
       }
       if (isVideoGenerationActive || chatType === 'video') {
-        await handleVideoGeneration(msg, collectUploadFileIds(filesToSend));
+        await handleVideoGeneration(msg, collectUploadFileIds(filesToSend), filesToSend);
         return;
       }
       if (chatType === 'thesis' && !isNewChat) {
@@ -7284,7 +8174,7 @@ REWRITTEN TEXT:`;
 
         window.addEventListener('computer-use-extraction-complete', handleExtractionComplete);
 
-        await startComputerUse(msg, chatId, user?.id);
+        await startComputerUse(msg, chatId, user?.id, computerUseAppMode || 'browser');
 
         // Clean up listener
         setTimeout(() => {
@@ -7356,15 +8246,30 @@ REWRITTEN TEXT:`;
         }
       };
 
+      const runClassifiedAgentTask = () => handleAgentTask(msg, filesToSend, {
+        userMessageAlreadyAdded: !isNewChat,
+        assistantMessageId: !isNewChat ? assistantPlaceholder.id : undefined,
+      });
+
       switch (intent) {
         case 'image':
+          // "describe esta imagen / ¿qué ves? / transcribe" is image ANALYSIS:
+          // run the vision chat path (the plain stream reads attached and
+          // historical images). The async classifier can return 'image' for
+          // these because the text mentions "imagen" — generating a new image
+          // here was a real reported bug ("describir que ves en esta imagen"
+          // + attached photo started the image generator).
+          if (isImageAnalysisPrompt(msg)) {
+            await runContextPipeline('text');
+            break;
+          }
           await handleImageGeneration(buildImageEditPrompt(msg), collectUploadFileIds(filesToSend));
           break;
         case 'video':
-          await handleVideoGeneration(msg, collectUploadFileIds(filesToSend));
+          await handleVideoGeneration(msg, collectUploadFileIds(filesToSend), filesToSend);
           break;
         case 'ppt':
-          await handleAgentTask(msg, filesToSend);
+          await runClassifiedAgentTask();
           break;
         case 'webdev':
           await handleWebDevGeneration(msg);
@@ -7380,14 +8285,27 @@ REWRITTEN TEXT:`;
         case 'viz':
         case 'web_search':
         case 'agent_task':
-          await handleAgentTask(msg, filesToSend);
+          // Same gate as 'text': no-file analytical turns ("ejecuta la
+          // fórmula", "haz un gráfico de esto", quick web lookups) run on
+          // the RELIABLE inline /generate agentic loop — it owns web_search,
+          // chart/visual tools and math, streams live, and has per-step
+          // timeouts + a plain-stream fallback. The durable QUEUED agent
+          // path is for /goal and uploaded-document work; sending a pasted
+          // formula there used to trigger the doc-required pipeline (forced
+          // XLSX!), a 30+-step runaway on the failover model and a frozen
+          // "Analizando solicitud" card when the SSE relay dropped.
+          if (shouldRouteTextPromptThroughAgenticRuntime(msg, filesToSend)) {
+            await runClassifiedAgentTask();
+          } else {
+            await runContextPipeline(intent);
+          }
           break;
         case 'doc':
           await runContextPipeline(intent);
           break;
         case 'text':
           if (shouldRouteTextPromptThroughAgenticRuntime(msg, filesToSend)) {
-            await handleAgentTask(msg, filesToSend);
+            await runClassifiedAgentTask();
           } else {
             await runContextPipeline(intent);
           }
@@ -7398,7 +8316,7 @@ REWRITTEN TEXT:`;
           break;
         default:
           if (shouldRouteThroughAgenticRuntime(intent)) {
-            await handleAgentTask(msg, filesToSend);
+            await runClassifiedAgentTask();
           } else {
             await runContextPipeline(intent);
           }
@@ -7442,11 +8360,10 @@ REWRITTEN TEXT:`;
         // Show upgrade modal for API limit errors
         setSubscribeOpen(true);
 
-        // Extract usage information if available
+        // Extract a neutral usage signal if available without exposing internal quotas
         let usageInfo = '';
         if (errorData && errorData.usage) {
-          const { current, limit } = errorData.usage;
-          usageInfo = ` You've used ${current?.toLocaleString()} out of ${limit?.toLocaleString()} tokens this month.`;
+          usageInfo = ' Tu actividad del mes ya alcanzó el máximo disponible para tu plan.';
         }
 
         // Show proper error message in UI
@@ -7454,9 +8371,9 @@ REWRITTEN TEXT:`;
           id: `msg-error-${Date.now()}`,
           chatId: chatToUpdate?.id || 'unknown',
           role: 'ASSISTANT' as const,
-          content: `Monthly API limit exceeded.${usageInfo} Please upgrade your plan to continue using the service.`,
+          content: `Tu plan necesita una mejora para continuar.${usageInfo} Elige Pro, Pro Extendido o comunícate por WhatsApp para Enterprise.`,
           timestamp: new Date().toISOString(),
-          error: 'Monthly API limit exceeded',
+          error: 'Plan upgrade required',
         };
 
         setCurrentChat(prevChat => {
@@ -7465,7 +8382,7 @@ REWRITTEN TEXT:`;
           return { ...prevChat, messages: updatedMessages };
         });
 
-        toast.error(`Monthly API limit exceeded.${usageInfo ? ' ' + usageInfo : ''} Please upgrade to continue.`);
+        toast.error(`Tu plan necesita una mejora para continuar.${usageInfo ? ' ' + usageInfo : ''}`);
         return;
       }
 
@@ -7549,7 +8466,7 @@ REWRITTEN TEXT:`;
 
 I can help you with Gmail tasks like:
 - Reading your emails
-- Sending emails  
+- Sending emails
 - Searching for specific emails
 - Managing your inbox
 
@@ -7586,7 +8503,7 @@ But first, you need to connect your Gmail account securely using the button belo
 
         // Show upgrade modal for API limit errors
         setSubscribeOpen(true);
-        toast.error('Monthly API limit exceeded. Please upgrade to continue.');
+        toast.error('Tu plan necesita una mejora para continuar.');
 
         // Update placeholder with limit error
         const updateChatWithLimitError = (prevChat: any) => {
@@ -7596,7 +8513,7 @@ But first, you need to connect your Gmail account securely using the button belo
             if (msg.content === '[PROCESSING_GMAIL]') {
               return {
                 ...msg,
-                content: "Monthly API limit exceeded. Please upgrade your plan to continue using Gmail features.",
+                content: "Tu plan necesita una mejora para continuar usando Gmail.",
                 error: "Monthly API limit exceeded"
               };
             }
@@ -7702,7 +8619,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
         // Show upgrade modal for API limit errors
         setSubscribeOpen(true);
-        toast.error('Monthly API limit exceeded. Please upgrade to continue.');
+        toast.error('Tu plan necesita una mejora para continuar.');
 
         const updateChatWithLimitError = (prevChat: any) => {
           if (!prevChat) return prevChat;
@@ -7711,7 +8628,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             if (msg.content === '[PROCESSING_CALENDAR_ACTION]' || msg.content === '[PROCESSING_DRIVE_ACTION]') {
               return {
                 ...msg,
-                content: "Monthly API limit exceeded. Please upgrade your plan to continue using Google Services.",
+                content: "Tu plan necesita una mejora para continuar usando Google Services.",
                 error: "Monthly API limit exceeded"
               };
             }
@@ -7846,7 +8763,39 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         payload.fileId = files[0];
       }
       setUploadedFiles([]);
-      await apiClient.generateImage(payload, { signal: controller.signal });
+      const imageRequestStartedAt = Date.now();
+      try {
+        await apiClient.generateImage(payload, { signal: controller.signal });
+      } catch (genError: any) {
+        const userAborted = controller.signal.aborted || genError?.name === 'AbortError';
+        // Mobile Safari and edge proxies can drop a long image request without
+        // a usable response while the backend keeps generating and persists
+        // the result into the chat. Poll the conversation for the final
+        // image/error message on recoverable transport cuts. Functional HTTP
+        // errors and explicit user cancellation still go through the outer catch.
+        const connectionCut = shouldRecoverImageGenerationViaPolling(genError, imageRequestStartedAt, {
+          userAborted,
+        });
+        if (!connectionCut) {
+          throw genError;
+        }
+        const outcome = await apiClient.waitForGeneratedImage(activeChatId, imageRequestStartedAt, {
+          signal: controller.signal,
+        });
+        if (outcome === 'error') {
+          // El backend persistió el fallo como mensaje del chat: recargamos
+          // para mostrarlo y avisamos, sin pasar por el catch externo (el
+          // mensaje de error ya está en el hilo).
+          if (currentChatIdRef.current === activeChatId) {
+            await selectChat(activeChatId);
+          }
+          toast.error('No se pudo generar la imagen. Inténtalo de nuevo.');
+          return;
+        }
+        if (outcome !== 'image') {
+          throw genError;
+        }
+      }
 
       if (!controller.signal.aborted) {
         if (currentChatIdRef.current === activeChatId) {
@@ -7906,7 +8855,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
         // Show upgrade modal for API limit errors
         setSubscribeOpen(true);
-        toast.error('Monthly API limit exceeded. Please upgrade to continue.');
+        toast.error('Tu plan necesita una mejora para continuar.');
 
         const updateChatWithLimitError = (prevChat: any) => {
           if (!prevChat) return prevChat;
@@ -7914,7 +8863,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             if (msg.content === '[GENERATING_IMAGE]') {
               return {
                 ...msg,
-                content: 'Monthly API limit exceeded. Please upgrade your plan to continue using image generation.',
+                content: 'Tu plan necesita una mejora para continuar generando imágenes.',
                 error: 'Monthly API limit exceeded'
               };
             }
@@ -7953,27 +8902,66 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }
   }
 
-  const handleVideoGeneration = async (prompt: string, files?: string[]) => {
-    const activeVideoModel = selectedVideoModel.trim();
+  const handleVideoGeneration = async (prompt: string, files?: string[], sourceFiles: any[] = []) => {
+    const activeVideoModel = selectedVideoModel.trim() || videoModelsForComposer[0]?.name || "";
     if (!activeVideoModel) {
       toast.error('Activa un modelo VIDEO en Admin > AI Models antes de generar video.');
       return;
     }
 
     let activeChatId = currentChat?.id || null;
-    setIsGeneratingVideo(true)
     // Dedicated abort handle (same mechanism as image) so stopActiveGeneration
     // can cancel the kickoff request and return the composer to idle.
     const videoController = new AbortController();
+    let pollingStarted = false;
+    let operationIdForThisRun: string | null = null;
+    let localStateSettled = false;
+    const settleLocalVideoState = () => {
+      if (localStateSettled) return;
+      localStateSettled = true;
+      const stillCurrentController = videoAbortControllerRef.current === videoController;
+      const stillCurrentOperation = Boolean(operationIdForThisRun && currentVideoOperationIdRef.current === operationIdForThisRun);
+      const noNewVideoRun = !videoAbortControllerRef.current && !currentVideoOperationIdRef.current;
+      const shouldClearVisibleState = stillCurrentController || stillCurrentOperation || noNewVideoRun;
+      if (stillCurrentController) {
+        videoAbortControllerRef.current = null;
+      }
+      if (!operationIdForThisRun || stillCurrentOperation) {
+        currentVideoOperationIdRef.current = null;
+      }
+      markLocalJobIdle(activeChatId, videoController);
+      if (shouldClearVisibleState) {
+        setIsGeneratingVideo(false);
+      }
+    };
+
+    setIsGeneratingVideo(true)
     videoAbortControllerRef.current = videoController;
-    if (activeChatId) markLocalJobBusy(activeChatId);
+    if (activeChatId) markLocalJobBusy(activeChatId, videoController);
+    const promptAspectRatio = extractRequestedVideoAspectRatio(prompt);
+    const promptResolution = extractRequestedVideoResolution(prompt);
+    const promptAudio = extractRequestedVideoAudio(prompt);
+    const sourceImageUrls = (!files?.length && shouldUseLatestImageForVideo(prompt))
+      ? collectLatestGeneratedImageUrls(currentChat?.messages || [])
+      : [];
     const videoOptions = {
-      resolution: selectedVideoResolution,
-      aspectRatio: selectedVideoAspectRatio,
+      resolution: promptResolution || selectedVideoResolution,
+      aspectRatio: promptAspectRatio || selectedVideoAspectRatio,
       duration: selectedVideoDuration,
-      audio: selectedVideoAudio,
+      audio: promptAudio ?? selectedVideoAudio,
       model: activeVideoModel,
       signal: videoController.signal,
+      sourceImageUrls,
+      sourceImageFiles: sourceFiles,
+      onOperationStarted: (operationId: string) => {
+        pollingStarted = true;
+        operationIdForThisRun = operationId;
+        currentVideoOperationIdRef.current = operationId;
+        if (activeChatId) markLocalJobBusy(activeChatId, videoController);
+      },
+      onGenerationSettled: () => {
+        settleLocalVideoState();
+      },
     };
     try {
       if (!currentChat) {
@@ -7982,7 +8970,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           model: activeVideoModel || selectedModel,
         } as any)
         activeChatId = newChat?.id || activeChatId;
-        if (activeChatId) markLocalJobBusy(activeChatId);
+        if (activeChatId) markLocalJobBusy(activeChatId, videoController);
         await addVideoMessage(prompt, files, newChat, videoOptions as any)
       } else {
         await addVideoMessage(prompt, files, undefined, videoOptions as any)
@@ -8001,16 +8989,14 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
         // Show upgrade modal for API limit errors
         setSubscribeOpen(true);
-        toast.error('Monthly API limit exceeded. Please upgrade to continue.');
+        toast.error('Tu plan necesita una mejora para continuar.');
         return;
       }
 
       toast.error(errorMessage)
     } finally {
-      markLocalJobIdle(activeChatId);
-      setIsGeneratingVideo(false)
-      if (videoAbortControllerRef.current === videoController) {
-        videoAbortControllerRef.current = null;
+      if (!pollingStarted) {
+        settleLocalVideoState();
       }
       // Don't auto-reset - user must manually remove
     }
@@ -8269,13 +9255,14 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     const nextIndex = pendingMsgQueueRef.current.findIndex((item) => item.chatId === queueChatId);
     if (nextIndex < 0) return;
     const [next] = pendingMsgQueueRef.current.splice(nextIndex, 1);
+    syncQueuedCount(queueChatId);
     if (!next) return;
     setInput(next.msg);
     uploadedFilesRef.current = next.files || [];
     setUploadedFiles(next.files || []);
     const t = setTimeout(() => { handleSendRef.current(); }, 0);
     return () => clearTimeout(t);
-  }, [currentChat?.id, isCurrentChatStreaming, isCurrentChatLocalJobBusy, isUploading, setUploadedFiles]);
+  }, [currentChat?.id, isCurrentChatStreaming, isCurrentChatLocalJobBusy, isUploading, setUploadedFiles, syncQueuedCount]);
 
   // Prevent Enter key from adding new line when not holding Shift
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -8302,8 +9289,18 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }
   }
 
-  const removeFile = (index: number) => {
+  const removeFile = React.useCallback((index: number) => {
     setUploadedFiles((cur: any[]) => {
+      const removed = cur[index];
+      // Removing a chip mid-upload acts as CANCEL: remember the tempId so
+      // the XHR completion merge doesn't resurrect the chip, and free its
+      // dedup hash so the user can re-attach the same file later.
+      if (removed?.tempId) cancelledTempIdsRef.current.add(removed.tempId);
+      const removedHash = removed ? attachmentHashByIdRef.current.get(removed.tempId || removed.id) : null;
+      if (removedHash) {
+        attachmentHashesRef.current.delete(removedHash);
+        attachmentHashByIdRef.current.delete(removed.tempId || removed.id);
+      }
       const next = cur.filter((_, i) => i !== index);
       uploadedFilesRef.current = next;
       return next;
@@ -8313,7 +9310,27 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       if (current === index) return null;
       return index < current ? current - 1 : current;
     });
-  }
+  }, [setUploadedFiles])
+
+  // Keyboard reordering of attachment chips (Alt+←/→ on a focused chip).
+  // Preserves every other invariant: send order == visual order.
+  const moveFile = React.useCallback((index: number, delta: -1 | 1) => {
+    setUploadedFiles((cur: any[]) => {
+      const target = index + delta;
+      if (index < 0 || index >= cur.length || target < 0 || target >= cur.length) return cur;
+      const next = [...cur];
+      const [moved] = next.splice(index, 1);
+      next.splice(target, 0, moved);
+      uploadedFilesRef.current = next;
+      return next;
+    });
+    setComposerPreviewIndex((current) => {
+      if (current === null) return null;
+      if (current === index) return index + delta;
+      if (current === index + delta) return current - delta;
+      return current;
+    });
+  }, [setUploadedFiles]);
 
   const restoreLongPasteToInput = React.useCallback((file: any, index: number) => {
     const metadata = getLongPasteMetadata(file);
@@ -8344,6 +9361,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     || isSpotifyActive || isWordConnectorActive || isExcelConnectorActive
     || chatType === 'thesis'
   );
+  const shouldInlineActiveTools = isVideoGenerationActive;
   const isMediaToolActive = isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive;
   const requiresPromptBeforePrimarySend =
     isImageGenerationActive ||
@@ -8353,6 +9371,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     chatType === 'video';
   const isSendingForCurrentChat = isSending && sendingChatId === currentChatId;
   const isStopButtonVisible = isCurrentChatLoading || isCurrentChatStreaming || (pendingStop && isCurrentChatStreaming) || isSendingForCurrentChat || isCurrentChatLocalJobBusy || isGeneratingImage || isGeneratingVideo || isGeneratingPPT;
+  const composerHasInlineContext = uploadedFiles.length > 0 || Boolean(selectedWordText) || hasDetectedLinks;
+  const composerIsExpanded =
+    composerHasInlineContext ||
+    input.length > 120 ||
+    input.includes("\n");
 
   // Shared props bundle for <ActiveToolsDisplay /> — the component is
   // now rendered in a different spot (below the input instead of above)
@@ -8387,6 +9410,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     selectedVideoAudio, setSelectedVideoAudio,
     selectedVideoModel, setSelectedVideoModel,
     isComputerUseActive, setIsComputerUseActive,
+    computerUseAppMode, setComputerUseAppMode,
     computerUseStatus,
     isGmailActive, setIsGmailActive,
     isGoogleCalendarActive, setIsGoogleCalendarActive,
@@ -8398,6 +9422,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     availableModels: composerAvailableModels,
     setSelectedProvider: setSelectedProivder,
     chatType, setChatType,
+    onVideoGenerationClose: () => { autoVideoActivationRef.current = false; },
     handleComputerUseToggle, handleGmailToggle, handleGoogleCalendarToggle,
     handleGoogleDriveToggle, handleSpotifyToggle, handleWordConnectorToggle,
     handleExcelConnectorToggle,
@@ -8407,12 +9432,43 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     showAudioPanel ||
     searchActivityPanelOpen ||
     documentPreviewUrl ||
+    sourcesPanelData ||
     composerPreviewAttachment ||
     sidePreviewAttachment ||
     isWordConnectorActive ||
     isExcelConnectorActive ||
     activeArtifact
   );
+
+  // Mutual exclusion: the Fuentes pane is the lowest-priority right-pane
+  // tenant, so if any other viewer becomes active while it's open, close it.
+  // handleOpenSources clears the others when opening, so this only fires when
+  // a different pane opens afterwards (e.g. a streamed search, a doc preview).
+  React.useEffect(() => {
+    if (!sourcesPanelData) return;
+    if (
+      showAudioPanel ||
+      searchActivityPanelOpen ||
+      documentPreviewUrl ||
+      composerPreviewAttachment ||
+      sidePreviewAttachment ||
+      isWordConnectorActive ||
+      isExcelConnectorActive ||
+      activeArtifact
+    ) {
+      setSourcesPanelData(null);
+    }
+  }, [
+    sourcesPanelData,
+    showAudioPanel,
+    searchActivityPanelOpen,
+    documentPreviewUrl,
+    composerPreviewAttachment,
+    sidePreviewAttachment,
+    isWordConnectorActive,
+    isExcelConnectorActive,
+    activeArtifact,
+  ]);
 
   const mainPaneAudioPanelEnabled = false;
 
@@ -8847,8 +9903,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             const errorMessage = error.message || 'Agentic search failed';
             if (isMonthlyLimitError(errorMessage)) {
               setSubscribeOpen(true);
-              toast.error('Monthly API limit exceeded. Please upgrade to continue.');
-              updateBubble('Monthly API limit exceeded. Please upgrade your plan to continue using web search.');
+              toast.error('Tu plan necesita una mejora para continuar.');
+              updateBubble('Tu plan necesita una mejora para continuar usando búsqueda web.');
               markLocalJobIdle(activeChat.id, controller);
               setIsWebSearching(false);
               searchAbortControllerRef.current = null;
@@ -8878,11 +9934,16 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   // This way step cards live INSIDE the regular message bubble — no
   // parallel surface to maintain — and the persisted message survives
   // a chat reload (the JSON is the source of truth for replay).
-  const handleAgentTask = async (goalText: string, filesToSend: any[] = []) => {
+  const handleAgentTask = async (
+    goalText: string,
+    filesToSend: any[] = [],
+    options: { userMessageAlreadyAdded?: boolean; assistantMessageId?: string } = {},
+  ) => {
     if (!goalText) {
       toast.error('Please enter a task');
       return;
     }
+    const { userMessageAlreadyAdded = false, assistantMessageId } = options;
     const systemContract = PROFESSIONAL_CAPABILITY_CONTRACTS.agent_task || '';
     let activeChat = currentChat;
     const isNewChat = !activeChat;
@@ -8909,7 +9970,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     markLocalJobBusy(activeChat.id);
 
     try {
-      if (isNewChat) {
+      if (!userMessageAlreadyAdded) {
         const userMessage = {
           id: `msg-user-${Date.now()}`,
           chatId: activeChat.id,
@@ -8919,21 +9980,58 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           files: filesToSend,
         };
         setCurrentChat(prev => {
-          if (!prev || prev.id !== activeChat.id) return prev;
+          if (!prev) return { ...activeChat, messages: [userMessage] } as any;
+          if (prev.id !== activeChat.id) return prev;
           return { ...prev, messages: [...(prev.messages || []), userMessage] };
         });
       }
 
+      const clientBootstrapStepId = 'client-agent-bootstrap';
+      const makeInitialTaskState = (): AgentTaskState => ({
+        ...initialAgentState,
+        steps: [{
+          id: clientBootstrapStepId,
+          label: 'Analizando solicitud',
+          icon: 'thought',
+          reasoning: 'Preparando el plan, las fuentes y las herramientas antes de ejecutar la tarea.',
+          status: 'running',
+          toolCalls: [],
+        }],
+        artifacts: [],
+        approvals: [],
+        checkpoints: [],
+        qualityGates: [],
+        repairs: [],
+      });
+      const settleClientBootstrapStep = (current: AgentTaskState): AgentTaskState => {
+        if (!current.steps.some(step => step.id === clientBootstrapStepId && step.status === 'running')) return current;
+        return {
+          ...current,
+          steps: current.steps.map(step =>
+            step.id === clientBootstrapStepId ? { ...step, status: 'done' as const } : step
+          ),
+        };
+      };
+
+      const initialTaskState = makeInitialTaskState();
       const aiMessage = {
-        id: `msg-ai-${Date.now() + 1}`,
+        id: assistantMessageId || `msg-ai-${Date.now() + 1}`,
         chatId: activeChat.id,
         role: 'ASSISTANT' as const,
-        content: '```agent-task-state\n' + JSON.stringify({ ...initialAgentState, steps: [], artifacts: [], approvals: [], checkpoints: [], qualityGates: [], repairs: [] }) + '\n```',
+        content: '```agent-task-state\n' + JSON.stringify(initialTaskState) + '\n```',
         timestamp: new Date().toISOString(),
       };
       setCurrentChat(prev => {
-        if (!prev || prev.id !== activeChat.id) return prev;
-        return { ...prev, messages: [...(prev.messages || []), aiMessage] };
+        if (!prev) return { ...activeChat, messages: [aiMessage] } as any;
+        if (prev.id !== activeChat.id) return prev;
+        const messages = prev.messages || [];
+        const replaced = messages.some(m => m.id === aiMessage.id);
+        return {
+          ...prev,
+          messages: replaced
+            ? messages.map(m => m.id === aiMessage.id ? { ...m, ...aiMessage, error: undefined, progressStage: undefined, progressPct: undefined } : m)
+            : [...messages, aiMessage],
+        };
       });
 
       const updateBubble = (state: AgentTaskState) => {
@@ -8953,7 +10051,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       markLocalJobBusy(activeChat.id, controller);
       currentAgentTaskIdRef.current = null;
 
-      let state: AgentTaskState = { ...initialAgentState, steps: [], artifacts: [], approvals: [], checkpoints: [], qualityGates: [], repairs: [] };
+      let state: AgentTaskState = makeInitialTaskState();
       let taskWasAborted = false;
       try {
         const fileIds = collectUploadFileIds(filesToSend);
@@ -8974,6 +10072,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           if (taskIdFromEvent) {
             currentAgentTaskIdRef.current = taskIdFromEvent;
             agentTaskIdsByChatRef.current.set(activeChat.id, taskIdFromEvent);
+          }
+          const eventType = (evt as any).type;
+          if (eventType === 'step_start' || eventType === 'final_text' || eventType === 'done' || eventType === 'error') {
+            state = settleClientBootstrapStep(state);
           }
           state = reduceEvent(state, evt);
           updateBubble(state);
@@ -9051,14 +10153,15 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       onDrop={handleDrop}
     >
       {isDragging && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/80 p-6 backdrop-blur-sm">
+          <div className="composer-drop-ants pointer-events-none absolute inset-4 rounded-3xl" aria-hidden />
           <div className="flex max-w-sm flex-col items-center gap-3 rounded-3xl border-2 border-dashed border-primary/70 bg-background/95 p-10 text-center shadow-2xl">
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary">
               <Upload className="h-7 w-7" />
             </div>
-            <p className="text-base font-semibold">Soltar para adjuntar</p>
+            <p className="text-base font-semibold">Suelta tus archivos aquí</p>
             <p className="text-xs leading-5 text-muted-foreground">
-              PDF, Word, Excel, PowerPoint, imágenes y datos — sin límite de tamaño.
+              PDF, Office, imágenes, audio, video y datos — hasta 20 archivos, 100 MB c/u. Se conserva el orden en que los sueltes.
             </p>
           </div>
         </div>
@@ -9107,20 +10210,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     aria-label="Abrir el menú lateral"
                     title="Abrir el menú lateral"
                   >
-                    <SidebarOvalIcon className="h-5 w-5" />
+                    <MenuIcon className="h-5 w-5" />
                   </SidebarTrigger>
                 </div>
-                {!isMediaToolActive && (
-                  <NavbarModelSelector
-                    selectedModel={selectedModel}
-                    setSelectedModel={setSelectedModel}
-                    availableModels={availableModels}
-                    setSelectedProvider={setSelectedProivder}
-                    chatTypes={chatType}
-                    currentChat={currentChat}
-                    setCurrentChat={setCurrentChat}
-                  />
-                )}
+                {/* Model selector moved to the composer (next to the mic),
+                    Claude-style. See renderComposerModelControls(). */}
               </div>
               <div className="chat-header-actions flex shrink-0 items-center gap-0.5">
                 {/* Complete Chat Share Button - only show if there's a chat with messages.
@@ -9146,39 +10240,24 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     message="Hola 👋, me interesa SiraGPT. ¿Podrían contarme más sobre sus funciones y precios?"
                   />
                 )}
-                <ThemeToggle className="chat-header-icon-btn" />
-                {/* Plan / Upgrade button — unified icon-system:
-                    Free plan → text CTA "Subir de plan"
-                    Paid + near-quota → text CTA "Upgrade Now" + warning border
-                    Paid + healthy → compact icon button with Sparkles glyph
-                    The 💰 emoji was replaced with Lucide Sparkles (same stroke
-                    family as the rest of the header icons). */}
+                {/* Upgrade CTA: keep the header clean for paid users.
+                    Paid customers manage billing from the account/settings area. */}
                 {(() => {
-                  const usageRatio =
-                    currentUserInfo?.apiUsage && currentUserInfo?.monthlyLimit
-                      ? currentUserInfo.apiUsage / currentUserInfo.monthlyLimit
-                      : 0
-                  const isFree = currentPlan === 'FREE'
-                  // Collapse the text CTA to icon-only when a right-side
-                  // panel is active — the left pane is ~half width then,
-                  // and the "Subir de plan" pill was wrapping into the
-                  // message area.
+                  const isFree = isFreePlanName(currentPlan)
+                  if (!isFree) return null
+
                   const isSplitActive = rightPanelActive
-                  const showTextCta = !isSplitActive && (isFree || usageRatio >= 0.7)
-                  const warn = !isFree && usageRatio >= 0.9
-                  const caution = !isFree && usageRatio >= 0.7 && usageRatio < 0.9
+                  const showTextCta = !isSplitActive
                   return (
                     <Button
                       variant={showTextCta ? 'outline' : 'ghost'}
                       size={showTextCta ? 'sm' : 'icon'}
                       onClick={() => setSubscribeOpen(true)}
-                      aria-label={isFree ? 'Subir de plan' : 'Gestionar plan'}
-                      title={isFree ? 'Subir de plan' : 'Gestionar plan'}
+                      aria-label="Subir de plan"
+                      title="Subir de plan"
                       className={cn(
                         !showTextCta && 'h-11 w-11 rounded-full text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground active:scale-[0.96]',
                         showTextCta && 'h-11 gap-1.5 rounded-full px-3 text-[13px] font-semibold',
-                        warn && 'border-red-500/70 text-red-600 hover:bg-red-500/10 hover:text-red-600',
-                        caution && 'border-amber-500/70 text-amber-600 hover:bg-amber-500/10 hover:text-amber-600',
                         'chat-header-icon-btn',
                         'chat-plan-action',
                         'transition-all duration-200',
@@ -9187,7 +10266,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       {showTextCta ? (
                         <>
                           <PremiumCardIcon className="h-[18px] w-[24px] shrink-0 drop-shadow-[0_1px_1px_rgba(0,0,0,0.15)]" />
-                          <span>{isFree ? 'Subir de plan' : 'Mejorar plan'}</span>
+                          <span>Subir de plan</span>
                         </>
                       ) : (
                         <PremiumCardIcon className="h-[18px] w-[24px] drop-shadow-[0_1px_1px_rgba(0,0,0,0.15)]" />
@@ -9227,8 +10306,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           size="sm"
                           onClick={() => {
                             if (!shareUrl) return;
-                            navigator.clipboard.writeText(shareUrl);
-                            toast.success('Enlace copiado al portapapeles');
+                            void copyTextSafe(shareUrl).then((r) => {
+                              toast[r.ok ? 'success' : 'error'](
+                                r.ok
+                                  ? 'Enlace copiado al portapapeles'
+                                  : 'No se pudo copiar. Selecciónalo y cópialo manualmente.',
+                              );
+                            });
                           }}
                         >
                           Copiar enlace
@@ -9309,7 +10393,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     <CredentialWarning text={input} />
                     <div
                       className={cn(
-                        "composer-surface composer-liquid-surface group/composer relative rounded-3xl",
+                        "composer-surface composer-liquid-surface composer-focus-glow group/composer relative rounded-3xl",
                         pasteCapture.overlayVisible ? "overflow-visible" : "overflow-hidden",
                         "bg-background",
                         "ring-1 ring-black/[0.08] dark:ring-1 dark:ring-white/[0.06]",
@@ -9329,22 +10413,20 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       uploadProgress={uploadProgress}
                       retryUpload={retryUpload}
                       restoreLongPasteToInput={restoreLongPasteToInput}
-                      onPreviewAttachment={(_attachment, _siblings, index) => openComposerDocumentPreview(index)}
+                      moveFile={moveFile}
+                      onPreviewAttachment={handleComposerAttachmentPreview}
                       onFileProcessingStatusChange={handleFileProcessingStatusChange}
                     />
                     <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
-                    <LinkContextDisplay
-                      links={detectedLinks}
-                      removeLink={removeDetectedLink}
-                      isWebSearchActive={isWebSearchActive}
-                      setIsWebSearchActive={setIsWebSearchActive}
-                    />
                     {/* Tool pills used to live ABOVE the input; moved to
                         a secondary row BELOW the input (see after the
                         TooltipProvider) so the top surface is dedicated
                         to drag-and-drop of files / audio / images. */}
                     <TooltipProvider>
-                      <div className="flex items-center gap-2 pl-2 pr-2 py-1.5">
+                      <div
+                        className="composer-input-row flex items-end gap-2 pl-2 pr-2 py-1.5"
+                        data-expanded={composerIsExpanded ? "true" : undefined}
+                      >
                         {/* LEFT — Plus / attach + tool selector */}
                         <ActionsDropdown
                           chatType={chatType}
@@ -9362,6 +10444,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           setIsVideoGenerationActive={setIsVideoGenerationActive}
                           isComputerUseActive={isComputerUseActive}
                           setIsComputerUseActive={setIsComputerUseActive}
+                          computerUseAppMode={computerUseAppMode}
+                          setComputerUseAppMode={setComputerUseAppMode}
                           computerUseStatus={computerUseStatus}
                           isGmailActive={isGmailActive}
                           setIsGmailActive={setIsGmailActive}
@@ -9395,67 +10479,90 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           isProcessingGmail={isCurrentChatLocalJobBusy && isProcessingGmail}
                         />
 
-                        {/* CENTER — single-line textarea, expands vertically up to 200px */}
-                        <Textarea
-                          ref={textareaRef}
-                          value={input}
-                          onChange={handleTextareaChange}
-                          onKeyDown={handleKeyDown}
-                          onFocus={handleTextareaFocus}
-                          onPaste={handleTextareaPaste}
-                          onCompositionStart={() => { isComposingRef.current = true }}
-                          onCompositionEnd={() => { isComposingRef.current = false }}
-                          placeholder={
-                            isImageGenerationActive
-                              ? tComposer("placeholderImage")
-                              : isVideoGenerationActive
-                                ? tComposer("placeholderVideo")
-                                : isVoiceGenerationActive
-                                  ? "Describe la voz que quieres crear"
-                                  : isMusicGenerationActive
-                                    ? "Describe la música que quieres crear"
-                                    : isWebSearchActive
-                                      ? tComposer("placeholderWebSearch")
-                                      : isGmailActive
-                                        ? tComposer("placeholderGmail")
-                                        : (isGoogleCalendarActive || isGoogleDriveActive)
-                                          ? tComposer("placeholderGoogle")
-                                          : isSpotifyActive
-                                            ? tComposer("placeholderSpotify")
-                                            : isWordConnectorActive
-                                              ? tComposer("placeholderWord")
-                                              : tComposer("placeholderDefault")
-                          }
-                          className={cn(
-                            "textarea-scrollbar min-h-[24px] min-w-0 flex-1 resize-none border-none bg-transparent",
-                            "py-1.5 px-1",
-                            "text-[15px] leading-[1.45] tracking-[-0.01em] text-foreground",
-                            "placeholder:text-muted-foreground/65 placeholder:font-normal",
-                            "dark:placeholder:text-[hsl(var(--text-tertiary))]",
-                            "outline-none ring-0 focus:outline-none focus:ring-0",
-                            "rounded-none transition-colors duration-200",
-                          )}
-                          style={{
-                            minHeight: "24px",
-                            maxHeight: "var(--chat-textarea-max-height, 200px)",
-                            overflowY: "auto",
-                            overflowX: "hidden",
-                            wordWrap: "break-word",
-                            border: "none",
-                            outline: "none",
-                            boxShadow: "none",
-                          }}
-                          rows={1}
-                          disabled={isCurrentChatLoading || isCurrentChatLocalJobBusy}
-                        />
+                        {shouldInlineActiveTools && (
+                          <div className="composer-inline-active-tools">
+                            <ActiveToolsDisplay {...activeToolsProps} />
+                          </div>
+                        )}
+
+                        {/* CENTER — single-line textarea, expands vertically up to ~45% viewport (ChatGPT-style) */}
+                        <div className="composer-textarea-shell min-w-0 flex-1">
+                          {hasDetectedLinks && input ? (
+                            <div
+                              ref={composerHighlightOverlayRef}
+                              className="composer-textarea-highlights textarea-scrollbar"
+                              aria-hidden="true"
+                            >
+                              <ComposerInlineLinkHighlights value={input} />
+                            </div>
+                          ) : null}
+                          <Textarea
+                            ref={textareaRef}
+                            value={input}
+                            onChange={handleTextareaChange}
+                            onKeyDown={handleKeyDown}
+                            onFocus={handleTextareaFocus}
+                            onBlur={handleTextareaBlur}
+                            onPaste={handleTextareaPaste}
+                            onScroll={handleComposerTextareaScroll}
+                            onCompositionStart={() => { isComposingRef.current = true }}
+                            onCompositionEnd={() => { isComposingRef.current = false }}
+                            data-link-highlights={hasDetectedLinks ? "true" : undefined}
+                            placeholder={
+                              isImageGenerationActive
+                                ? tComposer("placeholderImage")
+                                : isVideoGenerationActive
+                                  ? tComposer("placeholderVideo")
+                                  : isVoiceGenerationActive
+                                    ? "Describe la voz que quieres crear"
+                                    : isMusicGenerationActive
+                                      ? "Describe la música que quieres crear"
+                                        : isWebSearchActive
+                                          ? tComposer("placeholderWebSearch")
+                                          : isComputerUseActive
+                                            ? tComposer("placeholderComputer")
+                                          : isGmailActive
+                                            ? tComposer("placeholderGmail")
+                                          : (isGoogleCalendarActive || isGoogleDriveActive)
+                                            ? tComposer("placeholderGoogle")
+                                            : isSpotifyActive
+                                              ? tComposer("placeholderSpotify")
+                                              : isWordConnectorActive
+                                                ? tComposer("placeholderWord")
+                                                : tComposer("placeholderDefault")
+                            }
+                            className={cn(
+                              "composer-textarea textarea-scrollbar min-h-[24px] min-w-0 w-full resize-none border-none bg-transparent",
+                              "py-1.5 px-1",
+                              "text-[15px] leading-[1.45] tracking-normal text-foreground",
+                              "placeholder:text-muted-foreground/65 placeholder:font-normal",
+                              "dark:placeholder:text-[hsl(var(--text-tertiary))]",
+                              "outline-none ring-0 focus:outline-none focus:ring-0",
+                              "rounded-none transition-colors duration-200",
+                            )}
+                            style={{
+                              minHeight: "24px",
+                              maxHeight: "var(--chat-textarea-max-height, 200px)",
+                              overflowY: "auto",
+                              overflowX: "hidden",
+                              wordWrap: "break-word",
+                              border: "none",
+                              outline: "none",
+                              boxShadow: "none",
+                            }}
+                            rows={1}
+                            disabled={isCurrentChatLoading || isCurrentChatLocalJobBusy}
+                          />
+                        </div>
 
                         {/* RIGHT — VoiceControls (mic, ghost) + primary action.
                             Primary swaps glyph based on state — never a
                             decorative button. */}
-                        <div className="flex shrink-0 items-center gap-1.5">
+                        <div className="composer-toolbar-actions flex shrink-0 items-center gap-1.5">
                           {/* Pulido · contador suave de caracteres. Aparece
                               sólo cuando ya escribiste bastante. */}
                           <ComposerCharCounter input={input} />
+                          {renderComposerModelControls()}
                           {!isStopButtonVisible && (
                             renderDictationButton()
                           )}
@@ -9540,7 +10647,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     {/* Secondary row — active tool / connector pills.
                         Only rendered when something is active, so the
                         composer stays a clean pill in the idle state. */}
-                    {hasActiveTools && (
+                    {hasActiveTools && !shouldInlineActiveTools && (
                       <div className="composer-media-controls-row mx-1 sm:mx-2 mb-2 flex flex-wrap items-center gap-1 sm:gap-2 overflow-visible px-0.5 py-1">
                         <ActiveToolsDisplay {...activeToolsProps} />
                       </div>
@@ -9652,8 +10759,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 </div>
               ) : (
                 <>
-                  {/* Messages */}
-                  <ScrollArea className="chat-message-scroll flex-1 w-full" ref={scrollAreaRef} onClickCapture={handleMessageAreaClick}>
+                  {/* Messages — `min-h-0` is REQUIRED so this flex-1 scroll
+                      area can shrink below its content size. Without it the
+                      flex item's implicit `min-height:auto` lets it grow with
+                      the message list and push the composer dock off a short
+                      (mobile) viewport — the "la barra de chat desaparece"
+                      bug after the 2nd message. */}
+                  <ScrollArea className="chat-message-scroll flex-1 min-h-0 w-full" ref={scrollAreaRef} onClickCapture={handleMessageAreaClick}>
                     <div className="chat-message-scroll-content space-y-2 max-w-3xl mx-auto w-full">
                       {(() => {
                         // dedupeMessages is the render-layer safety net against
@@ -9700,11 +10812,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                       message={message}
                                       user={user}
                                       onRegenerate={regenerateMessage}
+                                      onBranch={branchMessage}
                                       updateMessageInChat={editAndRegenerate}
                                       isStreaming={false}
                                       onToggleSplitView={handleToggleSplitView}
                                       onDocumentPreview={handleDocumentPreview}
                                       onAttachmentPreview={handleAttachmentPreview}
+                                      onOpenSources={handleOpenSources}
                                     />
                                   </ErrorBoundary>
                                 )}
@@ -9719,11 +10833,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                     message={message}
                                     user={user}
                                     onRegenerate={regenerateMessage}
+                                    onBranch={branchMessage}
                                     updateMessageInChat={editAndRegenerate}
                                     isStreaming={false}
                                     onToggleSplitView={handleToggleSplitView}
                                     onDocumentPreview={handleDocumentPreview}
                                     onAttachmentPreview={handleAttachmentPreview}
+                                    onOpenSources={handleOpenSources}
                                   />
                                 </ErrorBoundary>
                               ))
@@ -9765,6 +10881,21 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
                   <div ref={chatComposerDockRef} className="chat-composer-dock sticky bottom-0 left-0 right-0 z-10">
                     <div className="relative max-w-3xl mx-auto space-y-2 bg-background">
+                      {/* Queued-tasks chip — while the agent is thinking the
+                          user can keep sending; messages park in a queue and
+                          run in order. This makes that visible (the queue is
+                          otherwise a silent ref). */}
+                      {queuedCount > 0 && (
+                        <div className="flex items-center justify-center" aria-live="polite">
+                          <span className="inline-flex items-center gap-1.5 rounded-full border border-border/55 bg-muted/50 px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
+                            <span className="relative flex h-1.5 w-1.5">
+                              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[hsl(var(--accent-violet))] opacity-75" />
+                              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-[hsl(var(--accent-violet))]" />
+                            </span>
+                            {queuedCount} {queuedCount === 1 ? "tarea en cola" : "tareas en cola"} · se procesarán en orden
+                          </span>
+                        </div>
+                      )}
                       {/* Scroll-to-bottom pill — only shown when the
                           user has scrolled up. Floats just above the
                           composer surface so the click target sits in
@@ -9824,7 +10955,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         {pasteCapture.Overlay}
                         <div
                           className={cn(
-                            "composer-surface composer-liquid-surface group/composer relative rounded-3xl",
+                            "composer-surface composer-liquid-surface composer-focus-glow group/composer relative rounded-3xl",
                             pasteCapture.overlayVisible ? "overflow-visible" : "overflow-hidden",
                             "bg-background",
                             "ring-1 ring-black/[0.08] dark:ring-1 dark:ring-white/[0.06]",
@@ -9840,21 +10971,19 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           uploadProgress={uploadProgress}
                           retryUpload={retryUpload}
                           restoreLongPasteToInput={restoreLongPasteToInput}
-                          onPreviewAttachment={(_attachment, _siblings, index) => openComposerDocumentPreview(index)}
+                          moveFile={moveFile}
+                          onPreviewAttachment={handleComposerAttachmentPreview}
                           onFileProcessingStatusChange={handleFileProcessingStatusChange}
                         />
                         <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
-                        <LinkContextDisplay
-                          links={detectedLinks}
-                          removeLink={removeDetectedLink}
-                          isWebSearchActive={isWebSearchActive}
-                          setIsWebSearchActive={setIsWebSearchActive}
-                        />
                         {/* Tool pills relocated below the input — see
                             the matching block after the TooltipProvider
                             closes. Top surface is reserved for drop-zone. */}
                         <TooltipProvider>
-                          <div className="flex items-center gap-2 pl-2 pr-2 py-1.5">
+                          <div
+                            className="composer-input-row flex items-end gap-2 pl-2 pr-2 py-1.5"
+                            data-expanded={composerIsExpanded ? "true" : undefined}
+                          >
                             <ActionsDropdown
                               chatType={chatType}
                               setChatType={setChatType}
@@ -9871,6 +11000,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               setIsVideoGenerationActive={setIsVideoGenerationActive}
                               isComputerUseActive={isComputerUseActive}
                               setIsComputerUseActive={setIsComputerUseActive}
+                              computerUseAppMode={computerUseAppMode}
+                              setComputerUseAppMode={setComputerUseAppMode}
                               computerUseStatus={computerUseStatus}
                               isGmailActive={isGmailActive}
                               setIsGmailActive={setIsGmailActive}
@@ -9903,61 +11034,83 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               isGeneratingPPT={isGeneratingPPT}
                               isProcessingGmail={isCurrentChatLocalJobBusy && isProcessingGmail}
                             />
-                            <Textarea
-                              ref={textareaRef}
-                              value={input}
-                              onChange={handleTextareaChange}
-                              onKeyDown={handleKeyDown}
-                              onFocus={handleTextareaFocus}
-                              onPaste={handleTextareaPaste}
-                              onCompositionStart={() => { isComposingRef.current = true }}
-                              onCompositionEnd={() => { isComposingRef.current = false }}
-                              placeholder={
-                                isImageGenerationActive
-                                  ? tComposer("placeholderImage")
-                                  : isVideoGenerationActive
-                                    ? tComposer("placeholderVideo")
-                                    : isVoiceGenerationActive
-                                      ? "Describe la voz que quieres crear"
-                                      : isMusicGenerationActive
-                                        ? "Describe la música que quieres crear"
-                                        : isWebSearchActive
-                                          ? tComposer("placeholderWebSearch")
-                                          : isGmailActive
-                                            ? tComposer("placeholderGmail")
-                                            : (isGoogleCalendarActive || isGoogleDriveActive)
-                                              ? tComposer("placeholderGoogle")
-                                              : isSpotifyActive
-                                                ? tComposer("placeholderSpotify")
-                                                : isWordConnectorActive
-                                                  ? tComposer("placeholderWord")
-                                                  : tComposer("placeholderDefault")
-                              }
-                              className={cn(
-                                "textarea-scrollbar min-h-[24px] min-w-0 flex-1 resize-none border-none bg-transparent",
-                                "py-1.5 px-1",
-                                "text-[15px] leading-[1.45] tracking-[-0.01em] text-foreground",
-                                "placeholder:text-muted-foreground/65 placeholder:font-normal",
-                                "dark:placeholder:text-[hsl(var(--text-tertiary))]",
-                                "outline-none ring-0 focus:outline-none focus:ring-0",
-                                "rounded-none transition-colors duration-200",
-                              )}
-                              style={{
-                                minHeight: "24px",
-                                maxHeight: "var(--chat-textarea-max-height, 200px)",
-                                overflowY: "auto",
-                                overflowX: "hidden",
-                                wordWrap: "break-word",
-                                border: "none",
-                                outline: "none",
-                                boxShadow: "none",
-                              }}
-                              rows={1}
-                              disabled={isCurrentChatLoading || isCurrentChatLocalJobBusy}
-                            />
-                            <div className="flex shrink-0 items-center gap-1.5">
+                            {shouldInlineActiveTools && (
+                              <div className="composer-inline-active-tools">
+                                <ActiveToolsDisplay {...activeToolsProps} />
+                              </div>
+                            )}
+                            <div className="composer-textarea-shell min-w-0 flex-1">
+                              {hasDetectedLinks && input ? (
+                                <div
+                                  ref={composerHighlightOverlayRef}
+                                  className="composer-textarea-highlights textarea-scrollbar"
+                                  aria-hidden="true"
+                                >
+                                  <ComposerInlineLinkHighlights value={input} />
+                                </div>
+                              ) : null}
+                              <Textarea
+                                ref={textareaRef}
+                                value={input}
+                                onChange={handleTextareaChange}
+                                onKeyDown={handleKeyDown}
+                                onFocus={handleTextareaFocus}
+                                onBlur={handleTextareaBlur}
+                                onPaste={handleTextareaPaste}
+                                onScroll={handleComposerTextareaScroll}
+                                onCompositionStart={() => { isComposingRef.current = true }}
+                                onCompositionEnd={() => { isComposingRef.current = false }}
+                                data-link-highlights={hasDetectedLinks ? "true" : undefined}
+                                placeholder={
+                                  isImageGenerationActive
+                                    ? tComposer("placeholderImage")
+                                    : isVideoGenerationActive
+                                      ? tComposer("placeholderVideo")
+                                      : isVoiceGenerationActive
+                                        ? "Describe la voz que quieres crear"
+                                        : isMusicGenerationActive
+                                          ? "Describe la música que quieres crear"
+                                            : isWebSearchActive
+                                              ? tComposer("placeholderWebSearch")
+                                              : isComputerUseActive
+                                                ? tComposer("placeholderComputer")
+                                            : isGmailActive
+                                              ? tComposer("placeholderGmail")
+                                              : (isGoogleCalendarActive || isGoogleDriveActive)
+                                                ? tComposer("placeholderGoogle")
+                                                : isSpotifyActive
+                                                  ? tComposer("placeholderSpotify")
+                                                  : isWordConnectorActive
+                                                    ? tComposer("placeholderWord")
+                                                    : tComposer("placeholderDefault")
+                                }
+                                className={cn(
+                                  "composer-textarea textarea-scrollbar min-h-[24px] min-w-0 w-full resize-none border-none bg-transparent",
+                                  "py-1.5 px-1",
+                                  "text-[15px] leading-[1.45] tracking-normal text-foreground",
+                                  "placeholder:text-muted-foreground/65 placeholder:font-normal",
+                                  "dark:placeholder:text-[hsl(var(--text-tertiary))]",
+                                  "outline-none ring-0 focus:outline-none focus:ring-0",
+                                  "rounded-none transition-colors duration-200",
+                                )}
+                                style={{
+                                  minHeight: "24px",
+                                  maxHeight: "var(--chat-textarea-max-height, 200px)",
+                                  overflowY: "auto",
+                                  overflowX: "hidden",
+                                  wordWrap: "break-word",
+                                  border: "none",
+                                  outline: "none",
+                                  boxShadow: "none",
+                                }}
+                                rows={1}
+                                disabled={isCurrentChatLoading || isCurrentChatLocalJobBusy}
+                              />
+                            </div>
+                            <div className="composer-toolbar-actions flex shrink-0 items-center gap-1.5">
                               {/* Pulido · contador suave de caracteres. */}
                               <ComposerCharCounter input={input} />
+                              {renderComposerModelControls()}
                               {!isStopButtonVisible && (
                                 renderDictationButton()
                               )}
@@ -10009,7 +11162,34 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 )
                               })()}
 
-                              {isStopButtonVisible && (
+                              {/* While the agent is thinking, a non-empty
+                                  composer SENDS the new task to the queue
+                                  (runs in order after the current one). This
+                                  is what makes "send more while it thinks"
+                                  work on mobile, where Enter isn't available.
+                                  Empty composer → STOP button. */}
+                              {isStopButtonVisible && input.trim().length > 0 && (
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button
+                                      onClick={handleSend}
+                                      size="icon"
+                                      aria-label="Enviar a la cola"
+                                      title="Enviar a la cola · se procesa en orden"
+                                      className={cn(
+                                        "h-9 w-9 rounded-full p-0 transition-all duration-200",
+                                        "bg-[hsl(var(--accent-violet))] text-white",
+                                        "shadow-[0_1px_2px_rgba(0,0,0,0.10),0_4px_10px_-3px_rgba(0,0,0,0.22)]",
+                                        "hover:opacity-90 active:scale-[0.96]",
+                                      )}
+                                    >
+                                      <ArrowUp className="h-[16px] w-[16px]" strokeWidth={2.25} />
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent side="top"><p>Enviar a la cola · se procesa en orden</p></TooltipContent>
+                                </Tooltip>
+                              )}
+                              {isStopButtonVisible && input.trim().length === 0 && (
                                 <Button
                                   onClick={stopActiveGeneration}
                                   size="icon"
@@ -10038,7 +11218,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         {/* Secondary row — active tool / connector pills.
                             Mirrors the in-chat composer above so both
                             states feel identical to the user. */}
-                        {hasActiveTools && (
+                        {hasActiveTools && !shouldInlineActiveTools && (
                           <div className="composer-media-controls-row mx-1 sm:mx-2 mb-2 flex flex-wrap items-center gap-1 sm:gap-2 overflow-visible px-0.5 py-1">
                             <ActiveToolsDisplay {...activeToolsProps} />
                           </div>
@@ -10066,7 +11246,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             <ComputerUseInterface
               screenshot={computerUseScreenshot}
               status={computerUseStatus}
-              onClose={() => setIsComputerUseActive(false)}
+              onClose={() => {
+                setIsComputerUseActive(false);
+                setComputerUseAppMode(null);
+                setChatType('text');
+              }}
             />
           </div>
         )}
@@ -10251,6 +11435,15 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
               )}
               {!showAudioPanel && !activeSearchActivity && activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && !composerPreviewAttachment && !sidePreviewAttachment && (
                 <ArtifactPanel />
+              )}
+              {!showAudioPanel && !activeSearchActivity && !activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && !composerPreviewAttachment && !sidePreviewAttachment && sourcesPanelData && (
+                <SourcesPanel
+                  sources={sourcesPanelData.sources}
+                  activity={sourcesPanelData.activity}
+                  memory={sourcesPanelData.memory}
+                  memoryMeta={sourcesPanelData.memoryMeta}
+                  onClose={() => setSourcesPanelData(null)}
+                />
               )}
             </div>
           </>

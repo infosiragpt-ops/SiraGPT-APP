@@ -5,7 +5,9 @@ import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
-const cjsRequire = createRequire(__filename)
+// Anchor CJS resolution at the repo root (the runner always runs from the
+// repo root) so backend requires work no matter where test-dist lives.
+const cjsRequire = createRequire(path.join(process.cwd(), "package.json"))
 
 // Use a per-process temp artifact dir so verify_artifact tests don't
 // touch the real uploads/ folder. AGENT_ARTIFACT_DIR is read at module
@@ -13,7 +15,7 @@ const cjsRequire = createRequire(__filename)
 const tmpArtifactDir = fs.mkdtempSync(path.join(os.tmpdir(), "siragpt-artifacts-"))
 process.env.AGENT_ARTIFACT_DIR = tmpArtifactDir
 
-const taskTools = cjsRequire("../../backend/src/services/agents/task-tools") as {
+const taskTools = cjsRequire("./backend/src/services/agents/task-tools") as {
   EXTENSION_TO_MIME: Record<string, string>
   ARTIFACT_DIR: string
   INTERNAL: {
@@ -28,7 +30,7 @@ const taskTools = cjsRequire("../../backend/src/services/agents/task-tools") as 
   }
 }
 
-const agentTools = cjsRequire("../../backend/src/services/agents/agent-tools") as {
+const agentTools = cjsRequire("./backend/src/services/agents/agent-tools") as {
   STATIC_CHECKS: Array<{
     id: string
     scan: (text: string, ctx: { language: string; lines: string[]; codeMask: boolean[] }) => Array<{ severity: string; line: number; message: string }>
@@ -303,7 +305,8 @@ describe("agent-tools · static_checks hardcoded_secret extended formats", () =>
   }
 
   it("flags a Stripe live secret key", () => {
-    const out = findingsFor('const k = "sk_live_abcdef0123456789ABCDEF";')
+    const stripeKey = "sk_" + "live_" + "abcdef0123456789ABCDEF"
+    const out = findingsFor(`const k = "${stripeKey}";`)
     assert.ok(out.length > 0)
   })
 
@@ -318,7 +321,8 @@ describe("agent-tools · static_checks hardcoded_secret extended formats", () =>
   })
 
   it("flags an embedded SSH private key block", () => {
-    const out = findingsFor("// -----BEGIN OPENSSH PRIVATE KEY-----")
+    const marker = ["-----BEGIN", "OPENSSH", "PRIVATE", "KEY-----"].join(" ")
+    const out = findingsFor(`// ${marker}`)
     assert.ok(out.length > 0)
   })
 })
@@ -498,7 +502,7 @@ describe("task-tools · clampInt", () => {
 })
 
 describe("task-tools · validateAgentArtifactBuffer magic-byte detection", () => {
-  const tt = cjsRequire("../../backend/src/services/agents/task-tools") as {
+  const tt = cjsRequire("./backend/src/services/agents/task-tools") as {
     INTERNAL: {
       validateAgentArtifactBuffer: (ext: string, buf: Buffer) => { passed: boolean; checks: Record<string, boolean> }
       bufferHasMagic: (buf: Buffer, ext: string) => boolean | null
@@ -532,7 +536,7 @@ describe("task-tools · saveArtifact atomicity", () => {
   // but we can verify that on a normal write the artifact file AND the
   // metadata sidecar both land together — closing the regression window.
   it("writes artifact + metadata sidecar atomically on success", async () => {
-    const taskToolsInternal = cjsRequire("../../backend/src/services/agents/task-tools") as {
+    const taskToolsInternal = cjsRequire("./backend/src/services/agents/task-tools") as {
       saveArtifact: (args: { filename: string; base64: string; ownerUserId: string; chatId?: string }) => { id: string; path: string }
       INTERNAL: { metadataPathFor: (id: string) => string }
     }

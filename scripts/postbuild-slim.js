@@ -65,6 +65,11 @@ if (PRUNE_WORKSPACE) {
     ".local",
     "artifacts",
     "attached_assets",
+    // Stray duplicate copy of the whole project (~2.2 GB incl. its own
+    // gitignored node_modules). The active app never imports from it, but
+    // because deploys reuse the workspace it would otherwise be baked into
+    // the image and push it past the 8 GiB Reserved VM limit.
+    "siraGPT",
     "test-results",
     ".playwright-cli",
     ".test-dist",

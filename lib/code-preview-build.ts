@@ -206,7 +206,12 @@ ${workspaceCss}
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script src="https://unpkg.com/lodash/lodash.min.js"></script>
-<script src="https://unpkg.com/recharts/umd/Recharts.min.js"></script>
+<!-- Recharts UMD depends on React + PropTypes globals; load prop-types first.
+     The pinned recharts@2 umd path is required — the bare /recharts/umd/Recharts.min.js
+     path 404s on current unpkg, which left window.Recharts undefined and crashed
+     any chart preview. -->
+<script src="https://unpkg.com/prop-types@15/prop-types.min.js"></script>
+<script src="https://unpkg.com/recharts@2/umd/Recharts.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
 <script src="https://unpkg.com/lucide@latest"></script>
 <script src="https://unpkg.com/framer-motion@11/dist/framer-motion.js"></script>
@@ -277,12 +282,39 @@ function placeholder(note: string): string {
 <body><div class="box"><div style="font-size:13px">${escapeHtml(note)}</div></div></body></html>`
 }
 
+/** True when the workspace is a real Node bundler project (Vite/Next): its
+ * index.html loads /src/main.tsx through the dev server, so the sandboxed
+ * iframe can't render it — the user must press ▶ Ejecutar. */
+function isNodeBundlerProject(files: CodeFiles): boolean {
+  const pkgPath = Object.keys(files).find((p) => /(^|\/)package\.json$/.test(p))
+  if (!pkgPath) return false
+  try {
+    const pkg = JSON.parse(files[pkgPath]?.content ?? "")
+    const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) }
+    return Boolean(deps.vite || deps.next)
+  } catch {
+    return false
+  }
+}
+
 /** Pick the best entry + kind given the active file and the whole project. */
 export function buildPreviewDocument(files: CodeFiles, activePath: string | null): PreviewResult {
   const paths = Object.keys(files)
   if (paths.length === 0) return { html: placeholder("Aún no hay archivos. Empieza a programar y el preview aparecerá aquí."), kind: "empty", entry: null }
 
   const activeExt = activePath ? ext(activePath) : ""
+
+  // 0) Real Vite/Next projects need the dev server — a srcdoc render would be a
+  //    misleading blank page. Markdown/SVG files still preview individually.
+  if (isNodeBundlerProject(files) && !(activePath && ["md", "mdx", "svg"].includes(activeExt))) {
+    return {
+      html: placeholder(
+        "Este proyecto usa Vite con dependencias npm. Pulsa ▶ Ejecutar para instalar las dependencias y verlo en vivo en el dev server.",
+      ),
+      kind: "unsupported",
+      entry: activePath,
+    }
+  }
 
   // 1) Follow the active file when it is directly previewable.
   if (activePath) {
@@ -320,7 +352,7 @@ export function buildPreviewDocument(files: CodeFiles, activePath: string | null
   if (mdEntry) return { html: buildMarkdownDocument(files, mdEntry), kind: "markdown", entry: mdEntry }
 
   return {
-    html: placeholder("El preview en vivo soporta web (HTML/CSS/JS), React/JSX, Markdown y SVG. Para apps de servidor (Python, Go…), ejecútalas con el agente."),
+    html: placeholder("El preview en vivo ejecuta web (HTML/CSS/JS), React/JSX/TSX, Markdown y SVG. Vue, Angular, Flutter o apps con dependencias npm necesitan un entorno de build (WebContainers) — en camino; por ahora ejecútalas desde la Terminal/agente."),
     kind: "unsupported",
     entry: activePath,
   }

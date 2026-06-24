@@ -23,9 +23,20 @@ services:
       - uploads_data:/app/uploads
     environment:
       NODE_ENV: development
+      # schema.prisma migrated its datasource to env("DATABASE_URL") (commit
+      # "Fix Google login: bypass Prisma Accelerate") but the base compose only
+      # provides PRISMA_DATABASE_URL. Mirror the same direct postgres URL here so
+      # `prisma migrate deploy` + the runtime client resolve in dev.
+      DATABASE_URL: "postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-siragpt}"
     ports:
       - "9229:9229"   # Node.js inspector (debugger)
-    command: ["node", "--watch", "index.js"]
+    # Apply pending Prisma migrations on boot (so the DB never drifts behind the
+    # schema, e.g. a missing projects.type column → 500), then regenerate the
+    # Prisma client from the (bind-mounted) schema so new models — e.g. the
+    # codex_* tables added after the image was built — are present in the
+    # runtime client, then start with --watch for dev auto-reload.
+    # Set SKIP_MIGRATIONS=1 to bypass the migrate step.
+    command: ["sh", "-c", "if [ \"$$SKIP_MIGRATIONS\" != \"1\" ]; then npx prisma migrate deploy --schema=prisma/schema.prisma; fi; npx prisma generate --schema=prisma/schema.prisma; exec node --watch index.js"]
 
   # ── Frontend (dev) ────────────────────────────────────────
   # Runs Next.js in dev mode with Turbopack for HMR.
@@ -49,6 +60,11 @@ services:
       - ./components.json:/app/components.json
     environment:
       NODE_ENV: development
+      # Windows/Docker bind-mounts don't propagate inotify events, so Next.js'
+      # webpack watcher never sees host edits → no HMR. Polling fixes it: host
+      # edits to lib/ components/ app/ now hot-reload instantly (no restart).
+      WATCHPACK_POLLING: "true"
+      CHOKIDAR_USEPOLLING: "true"
     ports:
       - "3000:3000"
     command: ["npm", "run", "dev"]

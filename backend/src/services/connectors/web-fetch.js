@@ -126,6 +126,18 @@ function isPrivateOrReservedAddress(addr) {
   if (lower.startsWith('fe80:')) return true;       // link-local
   if (lower.startsWith('fc') || lower.startsWith('fd')) return true; // ULA
   if (lower.startsWith('ff')) return true;          // multicast
+  // IPv4-mapped / IPv4-compatible IPv6 (e.g. ::ffff:127.0.0.1, ::169.254.169.254,
+  // or the hex form ::ffff:7f00:1) can smuggle a private/loopback/metadata IPv4
+  // past the prefix checks above. Extract the embedded IPv4 and re-check it.
+  const mappedDotted = lower.match(/(?:^|:)((?:\d{1,3}\.){3}\d{1,3})$/);
+  if (mappedDotted && isPrivateOrReservedAddress(mappedDotted[1])) return true;
+  const hexMapped = lower.match(/^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (hexMapped) {
+    const hi = Number.parseInt(hexMapped[1], 16);
+    const lo = Number.parseInt(hexMapped[2], 16);
+    const ipv4 = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+    if (isPrivateOrReservedAddress(ipv4)) return true;
+  }
   return false;
 }
 

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import { Wifi, WifiOff, RefreshCw } from "lucide-react"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { cn } from "@/lib/utils"
 
 export type ConnectionState = "online" | "offline" | "checking"
@@ -117,7 +118,7 @@ export function ConnectionStatus({
         </>
       ) : state === "checking" ? (
         <>
-          <RefreshCw className="h-3 w-3 animate-spin" />
+          <ThinkingIndicator size="xs" />
           <span>Verificando...</span>
         </>
       ) : (

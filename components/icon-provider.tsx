@@ -90,6 +90,14 @@ export const iconMap: { [key: string]: IconConfig } = {
     NvidiaLogo: { type: 'png', imagePath: '/icons/nvidia.svg', preserveColor: true },
     PoolsideLogo: { type: 'png', imagePath: '/icons/poolside.svg', preserveColor: true },
     OllamaLogo: { type: 'png', imagePath: '/icons/ollama.svg', preserveColor: true },
+    FalLogo: { type: 'png', imagePath: '/icons/fal.svg', preserveColor: true },
+    SoraLogo: { type: 'png', imagePath: '/icons/openai-color.svg', preserveColor: true },
+    KlingLogo: { type: 'png', imagePath: '/icons/kling.svg', preserveColor: true },
+    ByteDanceLogo: { type: 'png', imagePath: '/icons/bytedance.svg', preserveColor: true },
+    PixverseLogo: { type: 'png', imagePath: '/icons/pixverse.svg', preserveColor: true },
+    MinimaxLogo: { type: 'png', imagePath: '/icons/minimax.svg', preserveColor: true },
+    WanLogo: { type: 'png', imagePath: '/icons/wan.svg', preserveColor: true },
+    LtxLogo: { type: 'png', imagePath: '/icons/ltx.svg', preserveColor: true },
 };
 
 // Hum LucideProps se 'name' ko hata rahe hain takay hum apni 'name' property define kar sakein.
@@ -125,8 +133,8 @@ export const IconProvider = ({ name, size = 24, className, style, ...props }: Ic
                     width={size}
                     height={size}
                     style={{
-                        width: "100%",
-                        height: "100%",
+                        width: size,
+                        height: size,
                         objectFit: "contain",
                         filter,
                     }}

@@ -18,18 +18,21 @@
 
 import * as React from "react"
 
-import { ThinkingBarsIcon } from "@/components/icons/thinking-bars-icon"
+import { DotmCircular15 } from "@/components/ui/dotm-circular-15"
 import { cn } from "@/lib/utils"
 
-const SIZE_CLASS = {
-  xs: "h-3 w-3",
-  sm: "h-4 w-4",
-  md: "h-6 w-6",
-  lg: "h-9 w-9",
-  xl: "h-14 w-14",
+// Pixel geometry per preset size. The dot size scales with the overall
+// footprint (~0.15x) so the circular dot-matrix reads cleanly from the
+// tiny inline button loader (xs) up to the full-page bootstrap (xl).
+const SIZE_PX = {
+  xs: { size: 12, dotSize: 2 },
+  sm: { size: 16, dotSize: 2 },
+  md: { size: 24, dotSize: 3 },
+  lg: { size: 36, dotSize: 5 },
+  xl: { size: 56, dotSize: 8 },
 } as const
 
-export type ThinkingIndicatorSize = keyof typeof SIZE_CLASS
+export type ThinkingIndicatorSize = keyof typeof SIZE_PX
 
 export interface ThinkingIndicatorProps {
   size?: ThinkingIndicatorSize
@@ -44,15 +47,19 @@ export function ThinkingIndicator({
   label = "Procesando",
   className,
 }: ThinkingIndicatorProps) {
+  const { size: px, dotSize } = SIZE_PX[size]
+  // DotmCircular15 already renders a `role="status"` element with the
+  // accessible label, so we render it directly — wrapping it in a <span>
+  // would nest a <div> inside a <span> (invalid DOM / hydration warning)
+  // and duplicate the role. `inline-flex align-middle` keeps it sitting
+  // cleanly inline next to button/label text.
   return (
-    <span
-      role="status"
-      aria-label={label}
-      className="inline-flex items-center justify-center"
-    >
-      <ThinkingBarsIcon className={cn(SIZE_CLASS[size], "shrink-0", className)} />
-      <span className="sr-only">{label}</span>
-    </span>
+    <DotmCircular15
+      size={px}
+      dotSize={dotSize}
+      ariaLabel={label}
+      className={cn("inline-flex shrink-0 align-middle", className)}
+    />
   )
 }
 

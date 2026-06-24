@@ -22,10 +22,39 @@ const SAFE_AUTO_ROLLBACK_MIGRATIONS = [
     pattern: /^20260520160000_add_org_pending_transfer$/,
     reason: "idempotent org pending-transfer schema migration",
   },
+  {
+    pattern: /^20250919203030_add_model_sync_fields$/,
+    reason:
+      "idempotent additive AiModel sync columns (ADD COLUMN IF NOT EXISTS); a merge renamed this migration and re-running ADD COLUMN re-failed with 42701 -> P3009 -> boot abort. Safe to roll back and retry.",
+  },
+  {
+    pattern: /^20260611120000_add_user_memory_confidence$/,
+    reason: "idempotent ADD COLUMN IF NOT EXISTS confidence to user_memories; safe to re-run.",
+  },
+  {
+    pattern: /^20260612120000_fix_user_memories_embedding_column$/,
+    reason: "idempotent CREATE EXTENSION IF NOT EXISTS vector + ADD COLUMN IF NOT EXISTS embedding; safe to re-run.",
+  },
 ];
 
 function log(msg, extra = {}) {
   process.stdout.write(JSON.stringify({ ts: new Date().toISOString(), scope: "boot", msg, ...extra }) + "\n");
+}
+
+// Wall-clock anchor so every structured phase event carries an elapsed_ms since
+// the wrapper started — turns a wall of free-text logs into a queryable boot
+// timeline (env-load -> db-preflight -> migrate-lock -> migrate -> backend-start).
+const BOOT_STARTED_AT = Date.now();
+
+function phase(name, extra = {}) {
+  process.stdout.write(JSON.stringify({
+    ts: new Date().toISOString(),
+    scope: "boot",
+    event: "boot_phase",
+    phase: name,
+    elapsed_ms: Date.now() - BOOT_STARTED_AT,
+    ...extra,
+  }) + "\n");
 }
 
 function pipeResult(result) {
@@ -53,7 +82,13 @@ function loadDotenv() {
 }
 
 function resolvePrismaDatabaseUrl(env = process.env) {
-  return env.PRISMA_DATABASE_URL || env.DATABASE_URL || "";
+  // Prefer DATABASE_URL (direct PostgreSQL) over PRISMA_DATABASE_URL.
+  // PRISMA_DATABASE_URL used to point at Prisma Accelerate; the schema now
+  // uses DATABASE_URL directly, so always favour the direct connection here
+  // so the advisory-lock preflight and pg.Client work correctly.
+  const direct = env.DATABASE_URL || env.PRISMA_DATABASE_URL || "";
+  if (direct) return direct;
+  return env.PRISMA_DATABASE_URL || "";
 }
 
 function makePgClientOptions(url) {
@@ -64,8 +99,94 @@ function makePgClientOptions(url) {
   };
 }
 
+// Only a direct postgres URL can be dialed by `pg` (and by `migrate deploy`).
+// A Prisma Accelerate / Data Proxy `prisma://` URL cannot, so preflight and the
+// advisory lock must skip — fast — rather than retry a connection that can
+// never succeed.
+function isDirectPostgresUrl(url) {
+  return typeof url === "string" && /^postgres(?:ql)?:\/\//i.test(url.trim());
+}
+
+function createPgClient(url = resolvePrismaDatabaseUrl()) {
+  const { Client } = require("pg");
+  return new Client(makePgClientOptions(url));
+}
+
 function isSafeAutoRollbackMigration(migrationName) {
   return SAFE_AUTO_ROLLBACK_MIGRATIONS.some(({ pattern }) => pattern.test(migrationName));
+}
+
+// Statements that are provably idempotent AND purely additive: re-running them
+// against a database that already has the object is a no-op, never destructive.
+const IDEMPOTENT_ADDITIVE_STATEMENT = [
+  /^CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\b/i,
+  /^CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\b/i,
+  /^CREATE\s+EXTENSION\s+IF\s+NOT\s+EXISTS\b/i,
+  /^CREATE\s+SCHEMA\s+IF\s+NOT\s+EXISTS\b/i,
+];
+
+// Any of these tokens makes a statement ineligible for auto-rollback because a
+// retry could lose data or fail outside a transaction (e.g. ALTER TYPE ADD
+// VALUE, CREATE INDEX CONCURRENTLY). Conservative on purpose.
+const FORBIDDEN_STATEMENT_TOKEN =
+  /\b(DROP|DELETE|TRUNCATE|UPDATE|INSERT|RENAME|ALTER\s+COLUMN|ADD\s+CONSTRAINT|ADD\s+PRIMARY|ADD\s+FOREIGN|ADD\s+UNIQUE|SET\s+NOT\s+NULL|CONCURRENTLY|ALTER\s+TYPE|CREATE\s+TYPE)\b/i;
+
+function stripSqlComments(sql) {
+  return sql.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/--[^\n]*/g, " ");
+}
+
+function splitSqlStatements(sql) {
+  return stripSqlComments(sql)
+    .split(";")
+    .map((statement) => statement.trim())
+    .filter((statement) => statement.length > 0);
+}
+
+// `ALTER TABLE … ADD COLUMN IF NOT EXISTS …[, ADD COLUMN IF NOT EXISTS …]` is the
+// most common additive migration. Treat it as safe only when EVERY `ADD COLUMN`
+// is guarded and no other (potentially destructive) operation is present.
+function isIdempotentAdditiveAlterTable(statement) {
+  if (!/^ALTER\s+TABLE\b/i.test(statement)) return false;
+  if (FORBIDDEN_STATEMENT_TOKEN.test(statement)) return false;
+  const addColumns = (statement.match(/\bADD\s+COLUMN\b/gi) || []).length;
+  if (addColumns === 0) return false;
+  const guardedAddColumns = (statement.match(/\bADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\b/gi) || []).length;
+  return addColumns === guardedAddColumns;
+}
+
+function isIdempotentAdditiveStatement(statement) {
+  if (FORBIDDEN_STATEMENT_TOKEN.test(statement)) return false;
+  if (IDEMPOTENT_ADDITIVE_STATEMENT.some((pattern) => pattern.test(statement))) return true;
+  return isIdempotentAdditiveAlterTable(statement);
+}
+
+// Static analysis of a migration's SQL. Returns true only when the file can be
+// fully parsed into statements that are ALL idempotent-additive. Dollar-quoted
+// blocks (DO $$ … $$) and any unrecognised statement make it ineligible, so the
+// explicit allowlist remains the only path for anything non-trivial.
+function migrationSqlIsIdempotentAdditive(migrationName, migrationsDir = MIGRATIONS_DIR) {
+  if (typeof migrationName !== "string" || !/^[A-Za-z0-9_]+$/.test(migrationName)) {
+    return false;
+  }
+  let sql;
+  try {
+    sql = fs.readFileSync(path.join(migrationsDir, migrationName, "migration.sql"), "utf8");
+  } catch {
+    return false;
+  }
+  if (/\$\w*\$/.test(sql)) return false; // dollar-quoted body — too complex to prove safe
+  const statements = splitSqlStatements(sql);
+  if (statements.length === 0) return false;
+  return statements.every(isIdempotentAdditiveStatement);
+}
+
+// A migration may be auto-rolled-back after a P3009 when it is either on the
+// explicit allowlist or its SQL is provably idempotent-additive.
+function isMigrationAutoRollbackSafe(migrationName, migrationsDir = MIGRATIONS_DIR) {
+  return (
+    isSafeAutoRollbackMigration(migrationName) ||
+    migrationSqlIsIdempotentAdditive(migrationName, migrationsDir)
+  );
 }
 
 function extractP3009MigrationNames(output) {
@@ -82,7 +203,7 @@ function extractP3009MigrationNames(output) {
 function shouldContinueAfterSafeP3009(output) {
   if (!output.includes("P3009")) return false;
   const names = extractP3009MigrationNames(output);
-  return names.length > 0 && names.every(isSafeAutoRollbackMigration);
+  return names.length > 0 && names.every((name) => isMigrationAutoRollbackSafe(name));
 }
 
 async function getActiveFailedMigrations() {
@@ -151,9 +272,9 @@ async function rollbackSafeFailedMigrations() {
     return false;
   }
 
-  const unsafe = failedMigrations.filter((name) => !isSafeAutoRollbackMigration(name));
+  const unsafe = failedMigrations.filter((name) => !isMigrationAutoRollbackSafe(name));
   if (unsafe.length > 0) {
-    log("refusing to auto-rollback unknown migration failures", { failedMigrations });
+    log("refusing to auto-rollback unknown migration failures", { failedMigrations, unsafe });
     return false;
   }
 
@@ -209,6 +330,134 @@ function isTransientMigrationError(result) {
 
 const MIGRATION_TRANSIENT_RETRIES = Number(process.env.MIGRATION_TRANSIENT_RETRIES ?? 6);
 const MIGRATION_RETRY_DELAY_MS = Number(process.env.MIGRATION_RETRY_DELAY_MS ?? 8000);
+
+// ── Boot v2: DB preflight + cross-instance migration advisory lock ──────────
+// All of this is best-effort and fail-safe: any error degrades to the prior
+// behaviour (proceed straight to `migrate deploy`). Nothing here can block boot
+// indefinitely or turn a healthy boot into a failed one.
+const MIGRATION_LOCK_NAME = "siragpt:prisma-migrate-deploy";
+const MIGRATION_PREFLIGHT_ATTEMPTS = Number(process.env.MIGRATION_PREFLIGHT_ATTEMPTS ?? 10);
+const MIGRATION_PREFLIGHT_DELAY_MS = Number(process.env.MIGRATION_PREFLIGHT_DELAY_MS ?? 3000);
+const MIGRATION_LOCK_TIMEOUT_MS = Number(process.env.MIGRATION_LOCK_TIMEOUT_MS ?? 120000);
+const MIGRATION_LOCK_POLL_MS = Number(process.env.MIGRATION_LOCK_POLL_MS ?? 1500);
+
+// Deterministic [int4, int4] key pair for pg_advisory_lock(int4, int4) derived
+// from a stable name via two differently-seeded FNV-1a passes. Same name ->
+// same pair on every instance, so all replicas contend for the same lock.
+function computeAdvisoryLockKeys(name) {
+  const str = String(name);
+  const fnv = (seed, reverse) => {
+    let h = seed >>> 0;
+    for (let i = 0; i < str.length; i++) {
+      const idx = reverse ? str.length - 1 - i : i;
+      h ^= str.charCodeAt(idx);
+      h = Math.imul(h, 0x01000193);
+    }
+    return h | 0; // signed 32-bit, valid Postgres int4
+  };
+  return [fnv(0x811c9dc5, false), fnv(0x811c9dc5 ^ 0x5a5a5a5a, true)];
+}
+
+// Wait (with retries) until the database accepts connections, so `migrate
+// deploy` doesn't fail immediately against a database that is still starting up
+// in an orchestrated deploy. Connection logic is injectable for tests.
+async function preflightDatabase(opts = {}) {
+  const {
+    attempts = MIGRATION_PREFLIGHT_ATTEMPTS,
+    delayMs = MIGRATION_PREFLIGHT_DELAY_MS,
+    connect = defaultPreflightConnect,
+    sleepFn = sleep,
+    logFn = phase,
+  } = opts;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      await connect();
+      logFn("db_preflight_ok", { attempt });
+      return true;
+    } catch (err) {
+      logFn("db_preflight_retry", { attempt, maxAttempts: attempts, error: err?.message });
+      if (attempt < attempts) await sleepFn(delayMs);
+    }
+  }
+  logFn("db_preflight_exhausted", { attempts });
+  return false;
+}
+
+async function defaultPreflightConnect() {
+  const url = resolvePrismaDatabaseUrl();
+  if (!url) throw new Error("no database url configured");
+  const client = createPgClient(url);
+  await client.connect();
+  try {
+    await client.query("SELECT 1");
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+// Acquire a Postgres session advisory lock so only one booting instance runs
+// `migrate deploy` at a time — two replicas applying the same migration
+// concurrently is a classic source of failed/half-applied migrations (P3009).
+// Returns an async release() function. Best-effort: on any failure it returns a
+// no-op release and lets boot proceed (an un-serialised migrate is still better
+// than a hung boot).
+async function acquireMigrationLock(opts = {}) {
+  const {
+    keys = computeAdvisoryLockKeys(MIGRATION_LOCK_NAME),
+    timeoutMs = MIGRATION_LOCK_TIMEOUT_MS,
+    pollMs = MIGRATION_LOCK_POLL_MS,
+    clientFactory = () => createPgClient(),
+    sleepFn = sleep,
+    logFn = phase,
+    now = Date.now,
+  } = opts;
+
+  const noop = async () => {};
+  let client;
+  try {
+    client = clientFactory();
+    await client.connect();
+  } catch (err) {
+    logFn("migration_lock_skipped", { reason: "connect_failed", error: err?.message });
+    if (client && client.end) await client.end().catch(() => {});
+    return noop;
+  }
+
+  const deadline = now() + timeoutMs;
+  let acquired = false;
+  while (now() < deadline) {
+    let res;
+    try {
+      res = await client.query("SELECT pg_try_advisory_lock($1::int4, $2::int4) AS locked", keys);
+    } catch (err) {
+      logFn("migration_lock_skipped", { reason: "query_failed", error: err?.message });
+      await client.end().catch(() => {});
+      return noop;
+    }
+    const locked = res && res.rows && (res.rows[0]?.locked === true || res.rows[0]?.locked === "t");
+    if (locked) { acquired = true; break; }
+    logFn("migration_lock_waiting", { pollMs });
+    await sleepFn(pollMs);
+  }
+
+  if (!acquired) {
+    logFn("migration_lock_timeout", { timeoutMs });
+    await client.end().catch(() => {});
+    return noop;
+  }
+
+  logFn("migration_lock_acquired", {});
+  return async () => {
+    try {
+      await client.query("SELECT pg_advisory_unlock($1::int4, $2::int4)", keys);
+      logFn("migration_lock_released", {});
+    } catch (err) {
+      logFn("migration_lock_release_failed", { error: err?.message });
+    } finally {
+      await client.end().catch(() => {});
+    }
+  };
+}
 
 async function runMigrations() {
   loadDotenv();
@@ -294,12 +543,217 @@ function startBackend() {
   });
 }
 
+// Run DB preflight + acquire the migration advisory lock when applicable.
+// Returns an async release() (a no-op when nothing was locked). Every branch is
+// gated by env and fail-safe: a bug here can never block boot or fail it.
+async function maybePreflightAndLock() {
+  const noop = async () => {};
+  if (process.env.SKIP_MIGRATIONS === "1") return noop;
+
+  loadDotenv();
+  const url = resolvePrismaDatabaseUrl();
+  if (!isDirectPostgresUrl(url)) {
+    // Accelerate/Data Proxy (prisma://) or no URL: pg can't dial it, so skip
+    // fast instead of burning preflight retries that can never succeed.
+    phase("migration_preflight_skipped", { reason: url ? "non_direct_postgres_url" : "no_database_url" });
+    return noop;
+  }
+
+  if (process.env.MIGRATION_PREFLIGHT_DISABLED !== "1") {
+    phase("db_preflight_start", { attempts: MIGRATION_PREFLIGHT_ATTEMPTS });
+    const ok = await preflightDatabase().catch((err) => {
+      phase("db_preflight_error", { error: err?.message });
+      return true; // never block boot on a preflight bug
+    });
+    if (!ok) phase("db_preflight_giving_up", { note: "continuing to migrate anyway" });
+  }
+
+  if (process.env.MIGRATION_ADVISORY_LOCK_DISABLED === "1") return noop;
+  phase("migration_lock_start", {});
+  return acquireMigrationLock().catch((err) => {
+    phase("migration_lock_error", { error: err?.message });
+    return noop;
+  });
+}
+
+/**
+ * Ensure Python document sandbox libraries are installed.
+ * Runs pip install --user silently in background — never blocks boot.
+ * Idempotent: pip skips packages already installed.
+ */
+function ensureSandboxPythonDeps() {
+  const PACKAGES = ['python-docx', 'openpyxl', 'pypdf', 'reportlab', 'pandas'];
+  const python = process.env.PYTHON_BIN || 'python3';
+  try {
+    const child = spawn(
+      python,
+      ['-m', 'pip', 'install', '--user', '--quiet', '--exists-action=i', ...PACKAGES],
+      { stdio: 'ignore', detached: false }
+    );
+    child.on('error', () => { /* non-critical */ });
+  } catch { /* non-critical */ }
+}
+
+/**
+ * Kill any stale process holding BACKEND_PORT (default 5050) so a workflow
+ * restart triggered by adding secrets never hits EADDRINUSE.
+ * Uses `fuser -k` which is always available on Linux/Nix. Non-fatal.
+ */
+function clearStalePortProcess() {
+  const port = process.env.BACKEND_PORT || process.env.PORT || '5050';
+  try {
+    spawnSync('fuser', ['-k', `${port}/tcp`], { stdio: 'ignore' });
+  } catch { /* non-critical — fuser may not exist on every OS */ }
+}
+
+/**
+ * Seed an admin user if SEED_ADMIN_EMAIL + SEED_ADMIN_PASSWORD are set.
+ * Runs after migrations, before the backend boots. Never throws — a seed
+ * failure is logged but never blocks boot.
+ */
+async function seedAdminIfNeeded() {
+  const email = process.env.SEED_ADMIN_EMAIL;
+  const rawPassword = process.env.SEED_ADMIN_PASSWORD;
+  if (!email || !rawPassword) return;
+
+  phase("seed_admin_check", { email });
+  try {
+    const { PrismaClient } = require("../node_modules/@prisma/client");
+    const bcrypt = require("../node_modules/bcryptjs");
+    const prisma = new PrismaClient();
+    try {
+      const existing = await prisma.user.findUnique({ where: { email } });
+      if (existing) {
+        // Update password so the seed password stays in sync on every deploy.
+        const hash = await bcrypt.hash(rawPassword, 12);
+        await prisma.user.update({
+          where: { email },
+          data: {
+            password: hash,
+            isAdmin: true,
+            isSuperAdmin: true,
+          },
+        });
+        phase("seed_admin_updated", { email });
+      } else {
+        const hash = await bcrypt.hash(rawPassword, 12);
+        await prisma.user.create({
+          data: {
+            email,
+            name: "Admin",
+            password: hash,
+            isAdmin: true,
+            isSuperAdmin: true,
+          },
+        });
+        phase("seed_admin_created", { email });
+      }
+    } finally {
+      await prisma.$disconnect().catch(() => {});
+    }
+  } catch (err) {
+    // Never block boot on seed failure.
+    phase("seed_admin_error", { email, error: err?.message });
+  }
+}
+
+/**
+ * Log a fingerprint of the database URL (host + db name only, never credentials)
+ * and count existing users so we can detect if production points to a wrong or
+ * empty database. Logged BEFORE migrations so mismatches are visible in boot logs.
+ */
+async function logDbSnapshot(label) {
+  const url = resolvePrismaDatabaseUrl();
+  let dbFingerprint = "(unknown)";
+  if (isDirectPostgresUrl(url)) {
+    try {
+      const parsed = new URL(url);
+      // Only log host + pathname (db name), never user/password.
+      dbFingerprint = `${parsed.hostname}${parsed.pathname}`;
+    } catch { /* ignore parse errors */ }
+  }
+
+  let userCount = null;
+  let chatCount = null;
+  try {
+    const { Client } = require("pg");
+    const client = new Client(makePgClientOptions(url));
+    await client.connect();
+    try {
+      const r = await client.query('SELECT COUNT(*) FROM "users"');
+      userCount = parseInt(r.rows[0].count, 10);
+      const r2 = await client.query('SELECT COUNT(*) FROM "chats"');
+      chatCount = parseInt(r2.rows[0].count, 10);
+    } catch { /* table may not exist yet on first boot */ }
+    await client.end().catch(() => {});
+  } catch { /* pg unavailable */ }
+
+  phase("db_snapshot", { label, db: dbFingerprint, users: userCount, chats: chatCount });
+
+  // Safety: if we already have users and this is a re-deploy, emit a prominent
+  // WARNING so data-loss incidents are immediately visible in logs.
+  if (label === "pre_migrate" && userCount !== null && userCount === 0) {
+    phase("db_snapshot_warn", {
+      label,
+      warning: "ZERO users found before migrations — database may be empty or wrong DATABASE_URL in production",
+      db: dbFingerprint,
+    });
+  }
+  return { userCount, chatCount, dbFingerprint };
+}
+
 async function main() {
-  const migrationStatus = await runMigrations();
+  phase("boot_start", { skipMigrations: process.env.SKIP_MIGRATIONS === "1" });
+  clearStalePortProcess();
+  ensureSandboxPythonDeps();
+
+  // Log DB fingerprint + user count BEFORE migrations to detect wrong-DB issues.
+  const pre = await logDbSnapshot("pre_migrate");
+
+  const release = await maybePreflightAndLock();
+
+  let migrationStatus;
+  try {
+    phase("migrate_start", {});
+    migrationStatus = await runMigrations();
+    phase("migrate_done", { status: migrationStatus });
+  } finally {
+    await release().catch(() => {});
+  }
+
   if (migrationStatus !== 0) {
+    // Opt-in safety valve (default OFF — byte-identical to before when unset):
+    // when MIGRATION_NONFATAL=1, boot the backend anyway so it can still bind
+    // its port and serve traffic in a degraded state instead of leaving the
+    // whole instance down (which surfaces as ECONNREFUSED on every /api call).
+    // The operator must still fix the underlying DB/migration condition.
+    if (process.env.MIGRATION_NONFATAL === "1") {
+      log("migrations failed but MIGRATION_NONFATAL=1 — booting anyway (degraded)", { status: migrationStatus });
+      phase("backend_start", { degraded: true });
+      startBackend();
+      return;
+    }
     log("migrations failed — aborting boot", { status: migrationStatus });
+    phase("boot_aborted", { status: migrationStatus });
     process.exit(migrationStatus);
   }
+
+  // Log user count AFTER migrations — a drop vs pre-count means data was lost.
+  const post = await logDbSnapshot("post_migrate");
+  if (pre.userCount !== null && post.userCount !== null && post.userCount < pre.userCount) {
+    phase("db_snapshot_data_loss", {
+      warning: "USER COUNT DROPPED after migrations!",
+      before: pre.userCount,
+      after: post.userCount,
+      lost: pre.userCount - post.userCount,
+      db: post.dbFingerprint,
+    });
+  }
+
+  // Seed the admin user into the production DB if env vars are configured.
+  await seedAdminIfNeeded();
+
+  phase("backend_start", { degraded: false });
   startBackend();
 }
 
@@ -313,7 +767,13 @@ if (require.main === module) {
 module.exports = {
   extractP3009MigrationNames,
   isSafeAutoRollbackMigration,
+  isMigrationAutoRollbackSafe,
+  migrationSqlIsIdempotentAdditive,
   makePgClientOptions,
   resolvePrismaDatabaseUrl,
   shouldContinueAfterSafeP3009,
+  isDirectPostgresUrl,
+  computeAdvisoryLockKeys,
+  preflightDatabase,
+  acquireMigrationLock,
 };

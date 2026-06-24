@@ -120,9 +120,13 @@ function evictWeakest() {
   if (weakest) store.delete(weakest.id);
 }
 
-function promoteToLongTerm(entryId) {
+function promoteToLongTerm(entryId, { userId = null } = {}) {
   const entry = store.get(entryId);
   if (!entry) return null;
+  // When a userId is supplied (any user-facing path), enforce ownership BEFORE
+  // mutating — otherwise any authenticated user could promote (and read back)
+  // another user's memory entry by id. Internal callers omit userId.
+  if (userId != null && entry.userId !== userId) return null;
 
   if (entry.tier === 'long_term') return entry;
 
@@ -191,6 +195,12 @@ function recall(userId, query, opts = {}) {
   const limit = Math.min(opts.limit || 10, 50);
   const tier = opts.tier || null;
   const category = opts.category || null;
+  // Whether this read counts as a genuine access. Prompt-building / display
+  // paths (getMemoryContext, read-only routes) pass bump:false so merely
+  // assembling the system prompt every turn doesn't inflate accessCount and
+  // force short_term facts into long_term via auto-promotion. Defaults to true
+  // so explicit recall() keeps its access-counting behavior.
+  const bump = opts.bump !== false;
 
   const now = Date.now();
   let entries = [...store.values()].filter(e => {
@@ -243,22 +253,41 @@ function recall(userId, query, opts = {}) {
 
   const results = entries.slice(0, limit);
 
-  for (const entry of results) {
-    const live = store.get(entry.id);
-    if (live) {
-      live.accessCount += 1;
-      live.lastAccessed = now;
+  if (bump) {
+    for (const entry of results) {
+      const live = store.get(entry.id);
+      if (live) {
+        live.accessCount += 1;
+        live.lastAccessed = now;
+      }
     }
   }
 
   return results;
 }
 
+/**
+ * Read-only listing of a user's live (non-expired) memory entries, newest
+ * first. Unlike recall(), it does NOT bump accessCount/lastAccessed — so the
+ * "consider memory every turn" path can scan facts without skewing the data.
+ */
+function listEntries(userId, opts = {}) {
+  hydrateUserMemory(userId);
+  const limit = Math.min(opts.limit || 50, 500);
+  const now = Date.now();
+  return [...store.values()]
+    .filter((e) => e.userId === userId && !(e.expiresAt && e.expiresAt < now))
+    .sort((a, b) => b.lastAccessed - a.lastAccessed)
+    .slice(0, limit)
+    .map((e) => ({ ...e }));
+}
+
 function getMemoryContext(userId, opts = {}) {
   const longTermCount = [...store.values()].filter(e => e.userId === userId && e.tier === 'long_term').length;
   const shortTermCount = [...store.values()].filter(e => e.userId === userId && e.tier === 'short_term').length;
 
-  const recentMemories = recall(userId, null, { limit: opts.limit || 20 });
+  // Read-only prompt assembly: do NOT bump accessCount (this runs every turn).
+  const recentMemories = recall(userId, null, { limit: opts.limit || 20, bump: false });
 
   const longTermFacts = recentMemories
     .filter(m => m.tier === 'long_term')
@@ -332,6 +361,39 @@ function clearUserMemory(userId) {
   return { cleared };
 }
 
+/**
+ * Delete a single entry by id, scoped to the owning user (so one user can
+ * never delete another's memory). Returns the removed fact for confirmation.
+ */
+function deleteById(userId, id) {
+  const entry = store.get(id);
+  if (!entry || entry.userId !== userId) return { removed: 0, fact: null };
+  store.delete(id);
+  schedulePersistUserMemory(userId);
+  return { removed: 1, fact: entry.fact };
+}
+
+/**
+ * Remove prior facts describing the same single-valued attribute so an updated
+ * fact (e.g. a new name) supersedes the stale one instead of accumulating
+ * contradictions. Matches on category + metadata.attribute. `exceptId` keeps
+ * the freshly-created entry.
+ */
+function supersede(userId, { category, attribute, exceptId } = {}) {
+  if (!attribute) return { removed: 0 };
+  let removed = 0;
+  for (const [id, entry] of store) {
+    if (entry.userId !== userId) continue;
+    if (id === exceptId) continue;
+    if (entry.category === category && entry.metadata && entry.metadata.attribute === attribute) {
+      store.delete(id);
+      removed++;
+    }
+  }
+  if (removed) schedulePersistUserMemory(userId);
+  return { removed };
+}
+
 function getStats(userId) {
   const userEntries = [...store.values()].filter(e => e.userId === userId);
   return {
@@ -381,6 +443,7 @@ startCleanup();
 module.exports = {
   createMemoryEntry,
   recall,
+  listEntries,
   getMemoryContext,
   buildMemoryPrompt,
   promoteToLongTerm,
@@ -388,6 +451,8 @@ module.exports = {
   autoPromote,
   autoDemote,
   forget,
+  deleteById,
+  supersede,
   clearUserMemory,
   getStats,
   expireStale,

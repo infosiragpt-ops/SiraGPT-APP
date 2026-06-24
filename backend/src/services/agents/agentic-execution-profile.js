@@ -11,12 +11,25 @@
 
 const PROFILE_VERSION = 'docsira-agentic-profile-2026-04';
 const { detectMediaIntent } = require('./media-intent');
+const {
+  buildCognitiveImprovementBundle,
+  buildCognitiveImprovementPrompt,
+} = require('./cognitive-improvements');
+const {
+  buildUniversalAgentFabric,
+  buildUniversalAgentFabricPrompt,
+} = require('./universal-agent-fabric');
 
 const PATTERNS = {
   research: /\b(investiga(?:r|cion)?|research|busca(?:r)?|recopila(?:r)?|fuentes|citas|referencias|art[ií]culos?|papers?|literatura|acad[eé]mic[oa]s?|cient[ií]fic[oa]s?|mercado|benchmark|estado del arte|revision sistem[aá]tica|metaan[aá]lisis|scielo|redalyc|dialnet|openalex|crossref|pubmed|doi|semantic scholar|doaj|scopus|web of science|wos)\b/i,
   document: /\b(docx|xlsx|pptx?|word|excel|power\s*point|powerpoint|pdf\b|csv\b|markdown|html\b|informe|reporte|presentaci[oó]n|diapositivas|slides|hoja de c[aá]lculo|spreadsheet|archivo|documento|matriz|descargar|exporta(?:r|me)?)\b/i,
   privateFiles: /\b(adjunt[oa]s?|archivo(?:s)? cargad[oa]s?|documento(?:s)? cargad[oa]s?|seg[uú]n (mis|el) archivo|seg[uú]n (mis|el) documento|este documento|esta tesis|pdf cargado|word cargado|docx cargado|mis archivos|mi proyecto)\b/i,
-  code: /\b(c[oó]digo|code|programa|script|funci[oó]n|clase|debug|bug|corrige(?:r)?|repara(?:r)?|test(?:s)?|prueba(?:s)?|unit test|typescript|javascript|python|react|next\.?js|backend|frontend|web app|autocorrige|auto corrige)\b/i,
+  externalResearch: /\b(web|internet|online|extern[ao]s?|fuentes externas|buscar afuera|busca afuera|noticias?|actual(?:es)?|actualidad|reciente(?:s)?|hoy|ahora|latest|current|doi|scopus|web of science|wos|openalex|crossref|pubmed|doaj|scielo|semantic scholar|papers?|art[ií]culos?|cient[ií]fic[oa]s?|acad[eé]mic[oa]s?)\b/i,
+  code: /\b(c[oó]digo|code|programa|software|sofware|script|funci[oó]n|clase|debug|bug|corrige(?:r)?|repara(?:r)?|test(?:s)?|prueba(?:s)?|unit test|typescript|javascript|python|react|next\.?js|backend|frontend|web app|github|repo(?:sitorio)?|openclaw|autocorrige|auto corrige)\b/i,
+  agentRuntime: /\b(agente(?:s)?|agent(?:s)?|agentic|aut[oó]nom[oa]s?|orquestador|orchestrator|planner|runner|workflow|agent-task|task\s+runner|tool\s+registry|capability\s+matrix|skill(?:s)?|checkpoint(?:s)?)\b/i,
+  externalRepo: /\b(openclaw|github\.com\/openclaw\/openclaw|upstream|external repo|repo externo|repositorio externo|otro repositorio|del otro software)\b/i,
+  autonomousSoftware: /\b(agente(?:s)?\s+aut[oó]nom[oa]s?|autonomous\s+agent|software\s+(?:muy\s+)?potente|sofware\s+(?:muy\s+)?potente|fusiona(?:r)?|fusi[oó]n|fusi[oó]nalo|integr[aá]lo|auto.?ejecut(?:a|able|or))\b/i,
+  bulkSourceFusion: /\b(millones|millions|miles|thousands|much[ií]simas?)\b.{0,80}\b(l[ií]neas?|lines?|c[oó]digo|code|archivos?|files?)\b|\b(copiar|copia(?:r)?|copy)\b.{0,100}\b(millones|millions|miles|thousands|repositorio|repo|openclaw)\b|\b(fusiona(?:r)?|fusi[oó]n|fusi[oó]nalo|merge)\b.{0,100}\b(millones|millions|miles|thousands|repositorio|repo|openclaw|c[oó]digo|code)\b|\b(c[oó]digo|code)\b.{0,80}\b(copiar\s+y\s+fusionar|copy\s+and\s+merge|fusionar(?:lo)?)\b/i,
   computation: /\b(calcula(?:r)?|analiza(?:r)?|procesa(?:r)?|limpia(?:r)?|estad[ií]stica|cronbach|spearman|anova|regresi[oó]n|correlaci[oó]n|likert|dataset|csv|datos|tabla|f[oó]rmula|matriz|integral|derivada|probabilidad)\b/i,
   strictEvidence: /\b(100%|extremadamente preciso|precisi[oó]n|verifica(?:r)?|validar|reales|doi|open access|acceso abierto|20|30|40|50|100|miles|202[0-9]|art[ií]culos cient[ií]ficos)\b/i,
   transcription: /\b(transcrib(?:e|ir|eme|irme|elo|elo|alo|al[oó]|irlo)?|transcripci[oó]n|transcript|transcribe)\b/i,
@@ -72,11 +85,20 @@ function buildExecutionProfile({ goal, fileIds = [], fileMetadata = [] } = {}) {
     attachmentKinds.total > 0 && attachmentKinds.documentCount === 0 && attachmentKinds.imageCount > 0;
   const mentionsPrivateFiles = PATTERNS.privateFiles.test(rawGoal) || PATTERNS.privateFiles.test(normalized);
   const mediaIntent = detectMediaIntent(rawGoal);
+  const cognitiveImprovements = buildCognitiveImprovementBundle({ goal: rawGoal });
+  const universalAgents = buildUniversalAgentFabric({ goal: rawGoal });
   const needsMedia = !!(mediaIntent && mediaIntent.kind && mediaIntent.tool && mediaIntent.confidence === 'high');
   const plainTranscription =
     (PATTERNS.transcription.test(rawGoal) || PATTERNS.transcription.test(normalized))
     && !(PATTERNS.explicitTranscriptionArtifact.test(rawGoal) || PATTERNS.explicitTranscriptionArtifact.test(normalized));
   const documentMentioned = PATTERNS.document.test(rawGoal) || PATTERNS.document.test(normalized);
+  const externalRepoAdaptation = PATTERNS.externalRepo.test(rawGoal) || PATTERNS.externalRepo.test(normalized);
+  const autonomousSoftwareWork = PATTERNS.autonomousSoftware.test(rawGoal) || PATTERNS.autonomousSoftware.test(normalized);
+  const bulkSourceFusion = PATTERNS.bulkSourceFusion.test(rawGoal) || PATTERNS.bulkSourceFusion.test(normalized);
+  const agentRuntimeHardening =
+    PATTERNS.agentRuntime.test(rawGoal)
+    || PATTERNS.agentRuntime.test(normalized)
+    || cognitiveImprovements.summary.backendBrainRequest;
   const explicitDeliverableRequested = PATTERNS.explicitDeliverable.test(rawGoal) || PATTERNS.explicitDeliverable.test(normalized);
   const mentionsAttachedPrivateFile = hasFiles && (
     PATTERNS.privateFiles.test(rawGoal)
@@ -85,16 +107,24 @@ function buildExecutionProfile({ goal, fileIds = [], fileMetadata = [] } = {}) {
     || /\b(?:word|documento|archivo|adjunto|docx?|pdf|excel|xlsx|pptx?)\s+(?:adjunto|subido|cargado|anterior)\b/i.test(rawGoal)
   );
   const documentRequested = documentMentioned && !(mentionsAttachedPrivateFile && !explicitDeliverableRequested);
+  const rawNeedsResearch = PATTERNS.research.test(rawGoal) || PATTERNS.research.test(normalized);
+  const explicitExternalResearch = PATTERNS.externalResearch.test(rawGoal) || PATTERNS.externalResearch.test(normalized);
+  const needsPrivateContext = (hasFiles && !onlyImageAttachments) || mentionsPrivateFiles;
   const capabilities = {
-    needsResearch: PATTERNS.research.test(rawGoal) || PATTERNS.research.test(normalized),
+    needsResearch: rawNeedsResearch && !(needsPrivateContext && !explicitExternalResearch),
     needsDocument: documentRequested && !plainTranscription,
     // Image-only attachments are answered by the multimodal model directly
     // (vision); they must NOT trigger the document-intelligence gate, which
     // fails on images and dead-ends the agent. Explicit private-file wording
     // ("según el documento adjunto") still forces the gate even with an image,
     // because the user may have photographed a document for OCR.
-    needsPrivateContext: (hasFiles && !onlyImageAttachments) || mentionsPrivateFiles,
-    needsCodeOrRepair: PATTERNS.code.test(rawGoal) || PATTERNS.code.test(normalized),
+    needsPrivateContext,
+    needsCodeOrRepair: PATTERNS.code.test(rawGoal) || PATTERNS.code.test(normalized) || externalRepoAdaptation || autonomousSoftwareWork || bulkSourceFusion,
+    needsAgentRuntimeHardening: agentRuntimeHardening,
+    needsUniversalAgentFabric: universalAgents.summary.universalAgentRequest || agentRuntimeHardening,
+    needsExternalRepoAdaptation: externalRepoAdaptation,
+    needsAutonomousSoftware: autonomousSoftwareWork,
+    needsBulkSourceFusion: bulkSourceFusion,
     needsComputation: PATTERNS.computation.test(rawGoal) || PATTERNS.computation.test(normalized),
     strictEvidence: PATTERNS.strictEvidence.test(rawGoal) || PATTERNS.strictEvidence.test(normalized),
     needsMedia,
@@ -131,9 +161,25 @@ function buildExecutionProfile({ goal, fileIds = [], fileMetadata = [] } = {}) {
     requiredTools.push('create_document', 'verify_artifact');
     qualityGates.push('Generate a real artifact and verify it technically before delivery.');
   }
-  if (capabilities.needsCodeOrRepair) {
+  if (capabilities.needsCodeOrRepair || capabilities.needsAgentRuntimeHardening) {
     requiredTools.push('run_tests');
     qualityGates.push('Run tests or invariant checks for generated or repaired code.');
+  }
+  if (capabilities.needsAgentRuntimeHardening) {
+    qualityGates.push('Inspect agent runtime contracts, tool gates, durable state, and verification checkpoints before claiming agent improvements.');
+    qualityGates.push(`Apply the 100-control cognitive upgrade catalog (${cognitiveImprovements.summary.activeControlCount}/100 active controls) for backend brain hardening.`);
+  }
+  if (capabilities.needsUniversalAgentFabric) {
+    qualityGates.push(`Select from the universal 1000-agent fabric (${universalAgents.summary.activeAgentCount}/${universalAgents.summary.totalAgentCount} active profiles) and cover every agentic cycle phase before finalizing.`);
+  }
+  if (capabilities.needsExternalRepoAdaptation) {
+    qualityGates.push('Audit external repository capabilities as reference-only input before integrating behavior.');
+  }
+  if (capabilities.needsAutonomousSoftware) {
+    qualityGates.push('Preserve a plan-execute-verify loop for autonomous software work before finalizing.');
+  }
+  if (capabilities.needsBulkSourceFusion) {
+    qualityGates.push('Inventory, attribute and rank bulk source before activating any copied or rewritten runtime slice.');
   }
 
   return {
@@ -142,6 +188,8 @@ function buildExecutionProfile({ goal, fileIds = [], fileMetadata = [] } = {}) {
     requiredTools: unique(requiredTools),
     minimumToolCalls,
     qualityGates,
+    cognitiveImprovements,
+    universalAgents,
   };
 }
 
@@ -214,8 +262,12 @@ function buildExecutionProfilePrompt(profile) {
     `Deterministic execution profile: ${profile.version}`,
     `Required tools before finalize: ${tools}`,
     `Minimum tool calls: ${JSON.stringify(profile.minimumToolCalls || {})}`,
+    `Cognitive brain upgrade: ${profile.cognitiveImprovements?.summary?.activeControlCount || 0}/100 controls active across ${profile.cognitiveImprovements?.summary?.activeCategoryCount || 0} categories`,
+    `Universal agent fabric: ${profile.universalAgents?.summary?.activeAgentCount || 0}/${profile.universalAgents?.summary?.totalAgentCount || 0} active agents across ${profile.universalAgents?.summary?.activeFamilyCount || 0}/${profile.universalAgents?.summary?.familyCount || 0} families`,
     'Quality gates:',
     gates,
+    profile.cognitiveImprovements ? buildCognitiveImprovementPrompt(profile.cognitiveImprovements) : '',
+    profile.universalAgents ? buildUniversalAgentFabricPrompt(profile.universalAgents) : '',
     'If a finalize call is rejected, read the tool observation, execute the missing tools, then finalize again.',
   ].join('\n');
 }

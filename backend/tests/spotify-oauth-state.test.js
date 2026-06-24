@@ -1,0 +1,46 @@
+'use strict';
+
+/**
+ * Spotify OAuth `state` must be a signed token, not the bare userId — otherwise
+ * an attacker who completes consent can tamper `state` to a victim's id and
+ * overwrite the victim's stored Spotify tokens (account-linking CSRF). These
+ * tests cover the signState/verifyState round-trip + rejection of tampered,
+ * foreign-secret, wrong-kind, and the OLD raw-userId state.
+ */
+
+process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-spotify-oauth-secret-at-least-32-chars!!';
+process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY
+  || '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const jwt = require('jsonwebtoken');
+
+const spotify = require('../src/services/spotify-mcp');
+
+test('signState → verifyState round-trips the userId', () => {
+  const token = spotify.signState('user-123');
+  assert.notEqual(token, 'user-123', 'state is signed, not the raw id');
+  assert.equal(spotify.verifyState(token), 'user-123');
+});
+
+test('verifyState rejects a raw userId (the old vulnerable state format)', () => {
+  // Pre-fix, the callback trusted `state` AS the userId. That must now fail.
+  assert.equal(spotify.verifyState('victim-user-id'), null);
+});
+
+test('verifyState rejects a token signed with a different secret', () => {
+  const forged = jwt.sign({ uid: 'victim', kind: 'spotify_oauth' }, 'attacker-secret');
+  assert.equal(spotify.verifyState(forged), null);
+});
+
+test('verifyState rejects a token with the wrong kind', () => {
+  const wrongKind = jwt.sign({ uid: 'victim', kind: 'github_oauth' }, process.env.JWT_SECRET);
+  assert.equal(spotify.verifyState(wrongKind), null);
+});
+
+test('verifyState rejects garbage / empty / null', () => {
+  for (const bad of ['', null, undefined, 'not.a.jwt', 123]) {
+    assert.equal(spotify.verifyState(bad), null);
+  }
+});

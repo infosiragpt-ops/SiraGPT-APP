@@ -139,7 +139,18 @@ async function tryNodeFallback(filePath) {
     const { spawn } = require('child_process');
     const child = spawn('unzip', ['-o', filePath, '-d', dest], { stdio: 'ignore' });
 
+    // Wall-clock cap: a malformed/zip-bomb EPUB can make `unzip` hang forever,
+    // which would never settle this Promise and would leak a zombie child.
+    // Mirror the SIGKILL-on-timeout pattern used in legacy-format-converter.js
+    // and documentRenderer.js.
+    const timeoutMs = Number(process.env.EPUB_UNZIP_TIMEOUT_MS) || 60000;
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch { /* already gone */ }
+      reject(new Error('EPUB extraction timed out.'));
+    }, timeoutMs);
+
     child.on('exit', async (code) => {
+      clearTimeout(timer);
       if (code !== 0) {
         reject(new Error('EPUB extraction failed. Install Python3 for best EPUB support.'));
         return;
@@ -162,7 +173,7 @@ async function tryNodeFallback(filePath) {
       }
     });
 
-    child.on('error', (e) => reject(e));
+    child.on('error', (e) => { clearTimeout(timer); reject(e); });
   });
 }
 

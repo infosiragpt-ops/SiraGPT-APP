@@ -39,6 +39,7 @@ import {
   upsertCodexProject,
 } from "./codex-projects"
 import { projectsService } from "./projects-service"
+import { mirrorWrite, mirrorDelete, mirrorRename, setMirrorSuppressed } from "./code-git-mirror"
 import {
   getLinkedLocalFolderName,
   hasLinkedLocalFolder,
@@ -58,19 +59,26 @@ import {
   readCodeChatStore,
   setActiveCodeChatSession as setActiveCodeChatSessionRecord,
   updateCodeChatSessionTurns,
+  updateCodeChatSessionAgent,
 } from "./code-chat-sessions"
+import type { AgentState } from "./code-agent/types"
 
 export const SWITCH_CODEX_WORKSPACE_EVENT = "siragpt:switch-codex-workspace"
+/** Fired (with detail {id}) when a workspace is deleted elsewhere (e.g. the app
+ *  sidebar) so the open /code workspace drops it from state and resets if active. */
+export const FORGET_CODEX_WORKSPACE_EVENT = "siragpt:forget-codex-workspace"
 export const TOGGLE_CODEX_SIDEBAR_EVENT = "siragpt:toggle-codex-sidebar"
 export const CODE_ACTIVITY_EVENT = "siragpt:code-activity"
 export const CODE_NEW_CODE_CHAT_EVENT = "siragpt:code-new-code-chat"
 export const CODE_SELECT_CHAT_SESSION_EVENT = "siragpt:code-select-chat-session"
+export const CODE_OPEN_TOOL_EVENT = "siragpt:code-open-tool"
 
 export type CodeNewChatDetail = {
   workspaceId: string
   name: string
   kind: "local-folder" | "project"
   projectId?: string
+  title?: string
 }
 
 const STORAGE_KEY = "code-workspace:v1"
@@ -124,6 +132,11 @@ export type CodeWorkspaceContextValue = {
   /** Reset the workspace to the starter project. */
   resetWorkspace: () => void
 
+  /** Delete a workspace folder's local state (persisted files/tabs). If it is
+   *  the one currently open, fall back to the starter project. Does NOT touch
+   *  the codex registry, the backend project, or the user's disk. */
+  forgetWorkspace: (id: string) => void
+
   /** Open a Desktop/local folder through the browser File System Access
    *  picker and replace the in-memory workspace with compatible files. */
   openLocalFolderWorkspace: () => Promise<void>
@@ -136,6 +149,10 @@ export type CodeWorkspaceContextValue = {
    *  the file if it does not exist; otherwise overwrites it. Returns
    *  the resolved path so the caller can open the editor on it. */
   applyBlock: (path: string, content: string) => string
+
+  /** Bulk-replace the workspace files (used to load a bound GitHub repo's
+   *  files into the editor). Does NOT mirror back to the clone. */
+  hydrateFiles: (files: { path: string; content: string }[]) => void
 
   /** Imperative bus shared with the chat / command palette. The chat
    *  panel registers a focus handler so ⌘L can move focus into the
@@ -163,6 +180,8 @@ export type CodeWorkspaceContextValue = {
     sessionId: string,
     updater: (prev: CodeChatTurn[]) => CodeChatTurn[],
   ) => void
+  /** Patch the agent FSM state of a session (intake → generate → debug). */
+  patchAgentState: (sessionId: string, updater: (prev: AgentState) => AgentState) => void
   listCodeChatSessionsForWorkspace: (workspaceId: string) => CodeChatSession[]
   openWorkspaceNewCodeChat: (detail: CodeNewChatDetail) => Promise<void>
   workspaceSource: WorkspaceSource
@@ -216,12 +235,12 @@ function buildInitialStateFor(folderId: string | null): PersistedState {
   const persisted = readPersisted(folderId)
   if (persisted && Object.keys(persisted.files).length > 0) return persisted
 
-  const starter = defaultStarterFiles()
-  const files: CodeFiles = {}
-  for (const f of starter) files[f.path] = f
-  const openTabs = starter.slice(0, 2).map((f) => f.path)
-  const activePath = openTabs[0] ?? null
-  return { files, openTabs, activePath }
+  // A brand-new workspace opens CLEAN — no example code, no sample
+  // folders. "Proyecto nuevo desde cero" should mean a blank canvas you
+  // start working in, not a demo app you have to delete first. The
+  // sample project is still one click away via "Restaurar ejemplo"
+  // (resetWorkspace) for anyone who wants a reference.
+  return { files: {}, openTabs: [], activePath: null }
 }
 
 function readStoredActiveFolder(): ActiveFolder | null {
@@ -244,6 +263,12 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
   // visible swap to the persisted ones.
   const initialFolder = React.useMemo(readStoredActiveFolder, [])
   const [activeFolder, setActiveFolderState] = React.useState<ActiveFolder | null>(initialFolder)
+  // Latest active project id, readable from stable callbacks without
+  // re-creating them on every folder switch (used by the git mirror).
+  const activeFolderIdRef = React.useRef<string | null>(initialFolder?.id ?? null)
+  React.useEffect(() => {
+    activeFolderIdRef.current = activeFolder?.id ?? null
+  }, [activeFolder?.id])
   const [state, setState] = React.useState<PersistedState>(() =>
     buildInitialStateFor(initialFolder?.id ?? null),
   )
@@ -355,18 +380,22 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
   }, [])
 
   const updateFile = React.useCallback((path: string, content: string) => {
+    let changed = false
     setState((prev) => {
       const existing = prev.files[path]
       if (!existing) return prev
       if (existing.content === content) return prev
+      changed = true
       const files = { ...prev.files, [path]: { ...existing, content, updatedAt: Date.now() } }
       return { ...prev, files }
     })
+    if (changed) mirrorWrite(activeFolderIdRef.current, path, content)
   }, [])
 
   const createFile = React.useCallback((path: string, content = "") => {
     const cleaned = normalizePath(path)
     if (!cleaned) return
+    let isNew = false
     setState((prev) => {
       if (prev.files[cleaned]) {
         // Treat as "open the existing file" rather than overwriting.
@@ -382,21 +411,25 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
         content,
         updatedAt: Date.now(),
       }
+      isNew = true
       return {
         files: { ...prev.files, [cleaned]: file },
         openTabs: [...prev.openTabs, cleaned],
         activePath: cleaned,
       }
     })
+    if (isNew) mirrorWrite(activeFolderIdRef.current, cleaned, content)
   }, [])
 
   const renameFile = React.useCallback((oldPath: string, newPath: string) => {
     const cleanedNew = normalizePath(newPath)
     if (!cleanedNew || cleanedNew === oldPath) return
+    let didRename = false
     setState((prev) => {
       const file = prev.files[oldPath]
       if (!file) return prev
       if (prev.files[cleanedNew]) return prev // refuse to clobber
+      didRename = true
       const renamed: CodeFile = {
         ...file,
         path: cleanedNew,
@@ -409,11 +442,14 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       const activePath = prev.activePath === oldPath ? cleanedNew : prev.activePath
       return { files, openTabs, activePath }
     })
+    if (didRename) mirrorRename(activeFolderIdRef.current, oldPath, cleanedNew)
   }, [])
 
   const deleteFile = React.useCallback((path: string) => {
+    let didDelete = false
     setState((prev) => {
       if (!prev.files[path]) return prev
+      didDelete = true
       const files = { ...prev.files }
       delete files[path]
       const openTabs = prev.openTabs.filter((p) => p !== path)
@@ -421,6 +457,7 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
         prev.activePath === path ? openTabs[openTabs.length - 1] ?? null : prev.activePath
       return { files, openTabs, activePath }
     })
+    if (didDelete) mirrorDelete(activeFolderIdRef.current, path)
   }, [])
 
   const resetWorkspace = React.useCallback(() => {
@@ -430,6 +467,26 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
     setState({ files, openTabs: starter.slice(0, 2).map((f) => f.path), activePath: starter[0]?.path ?? null })
     setWorkspaceSource({ kind: "starter", name: "Ejemplo local", linked: false })
   }, [])
+
+  const forgetWorkspace = React.useCallback(
+    (id: string) => {
+      if (!id) return
+      if (typeof window !== "undefined") {
+        try {
+          window.localStorage.removeItem(storageKeyFor(id))
+        } catch {
+          /* fail soft */
+        }
+      }
+      // If the deleted workspace is the one currently open, drop back to the
+      // starter project so the editor never points at a folder that's gone.
+      if (activeFolder?.id === id) {
+        setActiveFolder(null)
+        resetWorkspace()
+      }
+    },
+    [activeFolder?.id, setActiveFolder, resetWorkspace],
+  )
 
   const openLocalFolderWorkspace = React.useCallback(async () => {
     try {
@@ -462,6 +519,9 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
         window.dispatchEvent(new CustomEvent(CODEX_UPDATED_EVENT))
       }
       toast.success(`Carpeta "${imported.rootName}" abierta como workspace.`)
+      if (imported.fileCount === 0) {
+        toast.info("La carpeta está vacía — crea archivos o pídeselos al agente para empezar.")
+      }
       if (imported.skippedCount > 0) {
         toast.info(`${imported.skippedCount} archivo(s) se omitieron por tamaño, formato o carpeta ignorada.`)
       }
@@ -538,13 +598,20 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       if (!detail?.id) return
       void switchCodexWorkspace(detail)
     }
+    const forget = (event: Event) => {
+      const detail = (event as CustomEvent<{ id?: string }>).detail
+      if (!detail?.id) return
+      forgetWorkspace(detail.id)
+    }
     window.addEventListener("siragpt:open-local-folder", openFolder)
     window.addEventListener(SWITCH_CODEX_WORKSPACE_EVENT, switchWorkspace)
+    window.addEventListener(FORGET_CODEX_WORKSPACE_EVENT, forget)
     return () => {
       window.removeEventListener("siragpt:open-local-folder", openFolder)
       window.removeEventListener(SWITCH_CODEX_WORKSPACE_EVENT, switchWorkspace)
+      window.removeEventListener(FORGET_CODEX_WORKSPACE_EVENT, forget)
     }
-  }, [openLocalFolderWorkspace, switchCodexWorkspace])
+  }, [openLocalFolderWorkspace, switchCodexWorkspace, forgetWorkspace])
 
   const saveFileToWorkspace = React.useCallback(async (path?: string) => {
     const targetPath = path || state.activePath
@@ -585,12 +652,45 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       const openTabs = prev.openTabs.includes(cleaned) ? prev.openTabs : [...prev.openTabs, cleaned]
       return { files, openTabs, activePath: cleaned }
     })
+    // Mirror the agent's write to the bound GitHub clone (if any) so its
+    // edits land in the real, committable/pushable/downloadable repo.
+    mirrorWrite(activeFolderIdRef.current, cleaned, content)
     // Surface the live preview as soon as the agent writes code, so the
     // "instruct → build → see it" loop closes without a manual toggle.
     if (typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent("siragpt:code-open-preview"))
     }
     return cleaned
+  }, [])
+
+  // Bulk-load files into the workspace (e.g. from a bound GitHub repo) WITHOUT
+  // mirroring back to the clone — the clone is the source here.
+  const hydrateFiles = React.useCallback((incoming: { path: string; content: string }[]) => {
+    const folderId = activeFolderIdRef.current
+    setMirrorSuppressed(folderId, true)
+    setState((prev) => {
+      const files: CodeFiles = {}
+      for (const f of incoming) {
+        const cleaned = normalizePath(f.path)
+        if (!cleaned) continue
+        files[cleaned] = {
+          path: cleaned,
+          language: languageForPath(cleaned),
+          content: f.content,
+          updatedAt: Date.now(),
+        }
+      }
+      const firstPath = Object.keys(files)[0] ?? null
+      const keepActive = prev.activePath && files[prev.activePath] ? prev.activePath : firstPath
+      const openTabs = prev.openTabs.filter((p) => files[p])
+      return { files, openTabs: keepActive && !openTabs.includes(keepActive) ? [...openTabs, keepActive] : openTabs, activePath: keepActive }
+    })
+    // Let the suppression cover this render's persistence cycle, then re-enable.
+    if (typeof window !== "undefined") {
+      window.setTimeout(() => setMirrorSuppressed(folderId, false), 0)
+    } else {
+      setMirrorSuppressed(folderId, false)
+    }
   }, [])
 
   const registerChatFocusHandler = React.useCallback((handler: ChatFocusListener) => {
@@ -648,17 +748,27 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
 
   const setActiveCodeChatSession = React.useCallback(
     (sessionId: string) => {
-      setChatSessionStore(setActiveCodeChatSessionRecord(workspaceSessionKey, sessionId, chatSessionStore))
+      // Functional updater: never read the store from the closure — back-to-back
+      // store mutations in one tick must each see the previous result, or they
+      // clobber each other (e.g. setTurns + patchAgentState in the same dispatch).
+      setChatSessionStore((prev) => setActiveCodeChatSessionRecord(workspaceSessionKey, sessionId, prev))
       focusChat()
     },
-    [chatSessionStore, focusChat, workspaceSessionKey],
+    [focusChat, workspaceSessionKey],
   )
 
   const patchCodeChatSessionTurns = React.useCallback(
     (sessionId: string, updater: (prev: CodeChatTurn[]) => CodeChatTurn[]) => {
-      setChatSessionStore(updateCodeChatSessionTurns(sessionId, updater, chatSessionStore))
+      setChatSessionStore((prev) => updateCodeChatSessionTurns(sessionId, updater, prev))
     },
-    [chatSessionStore],
+    [],
+  )
+
+  const patchAgentState = React.useCallback(
+    (sessionId: string, updater: (prev: AgentState) => AgentState) => {
+      setChatSessionStore((prev) => updateCodeChatSessionAgent(sessionId, updater, prev))
+    },
+    [],
   )
 
   const openWorkspaceNewCodeChat = React.useCallback(
@@ -670,8 +780,19 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
         projectId: detail.projectId,
       })
       const key = codexWorkspaceSessionKey(detail.workspaceId)
-      const { store } = createCodeChatSessionRecord(key, undefined, chatSessionStore)
-      setChatSessionStore(store)
+      const existing = detail.title
+        ? listSessionsForWorkspace(key, chatSessionStore).find((session) => session.title === detail.title)
+        : null
+      if (existing) {
+        setChatSessionStore(setActiveCodeChatSessionRecord(key, existing.id, chatSessionStore))
+      } else {
+        const { store } = createCodeChatSessionRecord(
+          key,
+          detail.title ? { title: detail.title } : undefined,
+          chatSessionStore,
+        )
+        setChatSessionStore(store)
+      }
       focusChat()
     },
     [chatSessionStore, focusChat, switchCodexWorkspace],
@@ -727,9 +848,11 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       renameFile,
       deleteFile,
       resetWorkspace,
+      forgetWorkspace,
       openLocalFolderWorkspace,
       saveFileToWorkspace,
       applyBlock,
+      hydrateFiles,
       registerChatFocusHandler,
       focusChat,
       registerCommandPaletteHandler,
@@ -744,6 +867,7 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       createCodeChatSession,
       setActiveCodeChatSession,
       patchCodeChatSessionTurns,
+      patchAgentState,
       listCodeChatSessionsForWorkspace,
       openWorkspaceNewCodeChat,
     }),
@@ -759,9 +883,11 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       renameFile,
       deleteFile,
       resetWorkspace,
+      forgetWorkspace,
       openLocalFolderWorkspace,
       saveFileToWorkspace,
       applyBlock,
+      hydrateFiles,
       registerChatFocusHandler,
       focusChat,
       registerCommandPaletteHandler,
@@ -776,6 +902,7 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       createCodeChatSession,
       setActiveCodeChatSession,
       patchCodeChatSessionTurns,
+      patchAgentState,
       listCodeChatSessionsForWorkspace,
       openWorkspaceNewCodeChat,
     ],

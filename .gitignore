@@ -17,6 +17,8 @@
 /uploads/
 /tmp-smoke/
 /tmp-smoke-tel/
+# Codex Agent V2 hybrid "export to disk" mirror (runner bind-mount target)
+/.codex-workspaces/
 /.next.broken*/
 /.next.stale*/
 backend/prisma/dev.db
@@ -51,6 +53,9 @@ yarn-error.log*
 .env*.local
 .env
 
+# MCP config (contains secret tokens — keep local)
+.mcp.json
+
 # vercel
 .vercel
 
@@ -74,8 +79,10 @@ next-env.d.ts
 # OS
 Thumbs.db
 
-# Logs
-logs
+# Logs (runtime log directories only — the bare "logs" pattern used to
+# also swallow source dirs like app/admin/logs/)
+/logs
+backend/logs
 *.log
 
 # Runtime data

@@ -29,6 +29,12 @@ const PLACEHOLDER_PATTERNS = [
   /^sk-ci-/i,
   /^sk-ant-/i,
   /^sk-pro-/i,      // Real OpenAI keys start with sk-proj- or sk-svc-
+  /^replace[._-]?me$/i, // REPLACE_ME, replace-me, replace.me
+  /-here$/i,            // google-client-id-here, anything ending in -here
+  /^<.*>$/,             // <google_client_id> angle-bracket placeholders
+  /^your[._-]google/i,  // your-google-client-id, your_google_client_secret
+  /^google[._-]client/i, // google-client-id, google-client-secret
+  /^example/i,          // example, example-value
 ];
 
 // Severity levels
@@ -117,7 +123,30 @@ function checkApiKeyFormat(key, value, label) {
         severity: Severity.WARNING,
         message: `${label || key} format looks unusual. Expected 'sk_test_...', 'sk_live_...', 'rk_test_...', or 'rk_live_...'.`,
       });
+    } else if (!/^(sk|rk)_(test|live)_[A-Za-z0-9]+$/.test(value)) {
+      issues.push({
+        key,
+        label: label || key,
+        severity: Severity.WARNING,
+        message: `${label || key} looks masked or malformed. Paste the full Stripe secret/restricted key, not a redacted dashboard value.`,
+      });
     }
+  }
+}
+
+function checkGoogleClientIdFormat(key, value, label) {
+  if (!value || value.trim() === '') return;
+  const trimmed = value.trim();
+  // Real Google OAuth Client IDs always end in this suffix. A value that
+  // passes the placeholder check but lacks the suffix is very likely a fake
+  // or hand-edited value that will fail at the authorization step.
+  if (!trimmed.endsWith('.apps.googleusercontent.com')) {
+    issues.push({
+      key,
+      label: label || key,
+      severity: Severity.WARNING,
+      message: `${label || key} doesn't look like a real Google Client ID. Real values end in ".apps.googleusercontent.com".`,
+    });
   }
 }
 
@@ -212,6 +241,39 @@ function validateStartupEnvironment(env = process.env, options = {}) {
       severity: Severity.WARNING,
       message: 'CORS_ORIGINS is "*" in production. Restrict to specific origins.',
     });
+  }
+
+  // ─── Google OAuth credentials ──────────────────────────
+  // Warn when only one of the paired credentials is present — OAuth
+  // will fail at either the authorization or token-exchange step.
+  const hasGoogleClientId = !!(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_ID.trim());
+  const hasGoogleClientSecret = !!(env.GOOGLE_CLIENT_SECRET && env.GOOGLE_CLIENT_SECRET.trim());
+
+  if (hasGoogleClientId && !hasGoogleClientSecret) {
+    issues.push({
+      key: 'GOOGLE_CLIENT_SECRET',
+      label: 'Google Client Secret',
+      severity: Severity.WARNING,
+      message: 'GOOGLE_CLIENT_ID is set but GOOGLE_CLIENT_SECRET is missing. Google OAuth logins will fail at the token exchange step.',
+    });
+  }
+  if (!hasGoogleClientId && hasGoogleClientSecret) {
+    issues.push({
+      key: 'GOOGLE_CLIENT_ID',
+      label: 'Google Client ID',
+      severity: Severity.WARNING,
+      message: 'GOOGLE_CLIENT_SECRET is set but GOOGLE_CLIENT_ID is missing. Google OAuth logins will fail at the authorization step.',
+    });
+  }
+
+  checkPlaceholder('GOOGLE_CLIENT_ID', env.GOOGLE_CLIENT_ID, 'Google Client ID');
+  checkPlaceholder('GOOGLE_CLIENT_SECRET', env.GOOGLE_CLIENT_SECRET, 'Google Client Secret');
+
+  // Format hint: real Google Client IDs end in .apps.googleusercontent.com.
+  // Skip when the value already matched a placeholder pattern above to avoid
+  // a redundant double-warning on the same key.
+  if (hasGoogleClientId && !issues.some(i => i.key === 'GOOGLE_CLIENT_ID')) {
+    checkGoogleClientIdFormat('GOOGLE_CLIENT_ID', env.GOOGLE_CLIENT_ID, 'Google Client ID');
   }
 
   // ─── API key format checks ─────────────────────────────

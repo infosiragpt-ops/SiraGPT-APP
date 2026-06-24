@@ -27,7 +27,7 @@ interface ComputerUseHookReturn {
   reasoning: ReasoningStep[]
   extractedData: ExtractedData | null
   finalUrl: string | null
-  startComputerUse: (task: string, chatId?: string, userId?: string) => Promise<void>
+  startComputerUse: (task: string, chatId?: string, userId?: string, mode?: 'browser' | 'chrome' | 'computer') => Promise<void>
   stopComputerUse: () => Promise<void>
   addReasoningStep: (text: string, action?: string) => void
   clearReasoning: () => void
@@ -206,7 +206,7 @@ export const useComputerUse = (): ComputerUseHookReturn => {
   }, [handleWebSocketMessage])
 
   // Start Computer Use session
-  const startComputerUse = useCallback(async (task: string, chatId?: string, userId?: string) => {
+  const startComputerUse = useCallback(async (task: string, chatId?: string, userId?: string, mode: 'browser' | 'chrome' | 'computer' = 'browser') => {
     if (!task.trim()) {
       toast.error('Please provide a task description')
       return
@@ -235,7 +235,7 @@ export const useComputerUse = (): ComputerUseHookReturn => {
         const resp = await fetch(`${baseUrl}/computer-use/chat-integration`, {
           method: 'POST',
           headers,
-          body: JSON.stringify({ message: task, chatId })
+          body: JSON.stringify({ message: task, chatId, mode })
         })
 
         const data = await resp.json()
@@ -254,7 +254,7 @@ export const useComputerUse = (): ComputerUseHookReturn => {
         const response = await fetch(`${baseUrl}/computer-use/start`, {
           method: 'POST',
           headers,
-          body: JSON.stringify({ task, sessionId: newSessionId })
+          body: JSON.stringify({ task, sessionId: newSessionId, mode })
         })
 
         const result = await response.json()

@@ -61,6 +61,16 @@ const MAX_FACTS_PER_USER = Math.max(
   10,
   Number.parseInt(process.env.SIRAGPT_MEMORY_MAX_FACTS_PER_USER, 10) || 1000,
 );
+// Hard ceiling on the OUTER per-user map. pruneFactMeta() only prunes by TTL
+// and is not scheduled anywhere, so without this cap the number of distinct
+// users grows without bound (a slow multi-tenant leak that only resets on
+// restart). We keep an LRU over userId: touched users move to the most-recent
+// position and the least-recently-touched user's whole fact map is evicted
+// once the cap is exceeded.
+const MAX_USERS = Math.max(
+  10,
+  Number.parseInt(process.env.SIRAGPT_MEMORY_MAX_USERS, 10) || 10000,
+);
 
 // ─── Importance + decay ───────────────────────────────────────────────────────
 //
@@ -92,10 +102,25 @@ function normalizeFact(text) {
   return (text || '').toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
+function evictUsersOverCap() {
+  // Map preserves insertion/refresh order, so the first keys are the
+  // least-recently-touched users. Evict until back under the cap.
+  while (factMeta.size > MAX_USERS) {
+    const oldestUser = factMeta.keys().next().value;
+    if (oldestUser === undefined) break;
+    factMeta.delete(oldestUser);
+  }
+}
+
 function getUserMeta(userId) {
   let m = factMeta.get(userId);
   if (!m) {
     m = new Map();
+    factMeta.set(userId, m);
+    evictUsersOverCap();
+  } else {
+    // Refresh LRU recency: re-insert moves this user to the most-recent slot.
+    factMeta.delete(userId);
     factMeta.set(userId, m);
   }
   return m;
@@ -294,6 +319,15 @@ function extractFactsAsync({ openai, userId, userMessage, assistantMessage }) {
     try {
       const facts = await extractFacts(openai, userMessage, assistantMessage);
       if (facts.length === 0) return;
+      // Mirror the same facts into the per-user memory DOCUMENT (the
+      // enumerable/editable/queryable surface). Best-effort, lazy
+      // require to avoid a circular dependency; failures here must not
+      // affect vector-store ingestion below.
+      try {
+        require('./memory-document').recordFacts(userId, facts);
+      } catch (docErr) {
+        console.warn(`[long-term-memory] memory-document sink failed: ${docErr.message}`);
+      }
       const pgStore = userMemoryStore.getStore();
       if (pgStore) {
         await pgStore.upsertFacts(userId, facts.map(f => ({

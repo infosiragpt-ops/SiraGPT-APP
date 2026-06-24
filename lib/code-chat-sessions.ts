@@ -3,12 +3,20 @@
  */
 
 import { codexIdForProject } from "./codex-projects"
+import type { AgentState } from "./code-agent/types"
+import { defaultAgentState } from "./code-agent/types"
 
 export type CodeChatTurn = {
   id: string
   role: "user" | "assistant"
   content: string
   streaming?: boolean
+  /** Real action log + Worked-Summary metrics for a turn that did file work. */
+  actions?: import("./code-chat-metrics").CodeChatAction[]
+  metrics?: import("./code-chat-metrics").CodeChatMetrics
+  /** Real time (ms) from turn start to the first narrated line — the planning
+   *  duration shown on the "🧠 …" badge. Measured, never fabricated. */
+  planMs?: number
 }
 
 export type CodeChatSession = {
@@ -20,6 +28,8 @@ export type CodeChatSession = {
   updatedAt: number
   /** When true the user renamed it manually — don't re-derive the title from turns. */
   titleLocked?: boolean
+  /** FSM state of the /code agent for this session (intake → generate → debug). */
+  agent?: AgentState
 }
 
 type SessionStore = {
@@ -32,8 +42,11 @@ const MAX_SESSIONS_PER_WORKSPACE = 12
 
 export const CODE_CHAT_SESSIONS_UPDATED_EVENT = "siragpt:code-chat-sessions-updated"
 
+// Version/variant-agnostic on purpose: legacy stores may hold ids whose
+// version nibble isn't 1-5 (e.g. UUIDv7) — any 8-4-4-4-12 hex shape is a
+// bare project id that must migrate to the canonical `project:` key.
 const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /** Canonical workspace id for agent sessions (matches Codex tree node ids). */
 export function codexWorkspaceSessionKey(folderId: string | null | undefined): string {
@@ -106,7 +119,25 @@ function saveStore(store: SessionStore) {
   try {
     s.setItem(STORAGE_KEY, JSON.stringify(store))
     if (typeof window !== "undefined") {
-      window.dispatchEvent(new CustomEvent(CODE_CHAT_SESSIONS_UPDATED_EVENT))
+      // Defer the cross-component notification so it never fires during a
+      // React render. saveStore is invoked from inside setState updaters
+      // (e.g. ensureDefaultSession / setActiveCodeChatSession passed to
+      // setChatSessionStore), which React runs in the render phase and
+      // which must stay side-effect-free. Dispatching synchronously there
+      // makes listeners (SidebarFoldersDropdown) call setState mid-render —
+      // the "Cannot update a component while rendering a different
+      // component" warning. The localStorage write above stays synchronous
+      // so any immediate readCodeChatStore() still sees fresh data; only
+      // the event is pushed past the current render/commit.
+      const fire = () => {
+        try {
+          window.dispatchEvent(new CustomEvent(CODE_CHAT_SESSIONS_UPDATED_EVENT))
+        } catch {
+          /* noop */
+        }
+      }
+      if (typeof queueMicrotask === "function") queueMicrotask(fire)
+      else setTimeout(fire, 0)
     }
   } catch {
     /* quota */
@@ -152,6 +183,7 @@ export function ensureDefaultSession(workspaceId: string, store = loadStore()): 
     turns: [],
     createdAt: Date.now(),
     updatedAt: Date.now(),
+    agent: defaultAgentState(),
   }
   const next: SessionStore = {
     sessions: [...store.sessions, session],
@@ -176,6 +208,7 @@ export function createCodeChatSession(
     turns: [],
     createdAt: Date.now(),
     updatedAt: Date.now(),
+    agent: defaultAgentState(),
   }
   let sessions = [...ensured.sessions, session]
   const perWs = sessions.filter((s) => s.workspaceId === key)
@@ -226,6 +259,24 @@ export function updateCodeChatSessionTurns(
       // A manually renamed session keeps its title; otherwise derive from turns.
       const title = s.titleLocked ? s.title : deriveCodeChatSessionTitle(turns)
       return { ...s, turns, title, updatedAt: Date.now() }
+    }),
+  }
+  saveStore(next)
+  return next
+}
+
+/** Patch the agent FSM state of a session (persists immediately). */
+export function updateCodeChatSessionAgent(
+  sessionId: string,
+  updater: (prev: AgentState) => AgentState,
+  store = loadStore(),
+): SessionStore {
+  const next: SessionStore = {
+    ...store,
+    sessions: store.sessions.map((s) => {
+      if (s.id !== sessionId) return s
+      const agent = updater(s.agent ?? defaultAgentState())
+      return { ...s, agent, updatedAt: Date.now() }
     }),
   }
   saveStore(next)

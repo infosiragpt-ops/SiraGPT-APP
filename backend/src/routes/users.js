@@ -550,8 +550,10 @@ router.put('/password', [
 // Get user usage stats
 router.get('/usage', authenticateToken, async (req, res) => {
   try {
-    const { period = '30' } = req.query;
-    const days = parseInt(period);
+    // Clamp the window: a non-numeric/negative `period` used to yield NaN →
+    // `new Date(NaN)` (Invalid Date) → a Prisma validation 500 on the queries
+    // below. Bound to 1–365 days with a 30-day default.
+    const days = Math.max(1, Math.min(365, parseInt(req.query.period, 10) || 30));
     const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
     const currentUsage = Number(req.user.apiUsage || 0);
     const monthlyLimit = Number(req.user.monthlyLimit || 0);
@@ -1045,12 +1047,17 @@ router.get('/data-export', authenticateToken, async (req, res) => {
  * objects are merged key-by-key, everything else is assigned. Avoids
  * pulling in a lodash dep for this single use.
  */
+// Keys skipped during merge so a user-supplied settings body can't smuggle
+// `__proto__`/`constructor`/`prototype` into the persisted JSON (or reparent
+// the merged object's prototype).
+const DANGEROUS_MERGE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 function deepMerge(target, source) {
   if (source == null) return target;
   const isObj = (x) => x && typeof x === 'object' && !Array.isArray(x);
   if (!isObj(target) || !isObj(source)) return source;
   const out = { ...target };
   for (const k of Object.keys(source)) {
+    if (DANGEROUS_MERGE_KEYS.has(k)) continue;
     const sv = source[k];
     const tv = target[k];
     if (isObj(sv) && isObj(tv)) out[k] = deepMerge(tv, sv);

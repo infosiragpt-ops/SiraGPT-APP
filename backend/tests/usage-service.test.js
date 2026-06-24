@@ -23,6 +23,8 @@ const prismaMock = {
     update: async () => null,
     findUnique: async () => null,
   },
+  // recordUsage now wraps the create+increment in an array-form transaction.
+  $transaction: async (ops) => Promise.all(ops),
 };
 
 class FakePrismaClient {

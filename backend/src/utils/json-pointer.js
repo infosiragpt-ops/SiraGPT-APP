@@ -86,6 +86,17 @@ function has(doc, ptr) {
   return true;
 }
 
+// Keys that must never be written/traversed through an object — writing them
+// pollutes Object.prototype for the whole process. A pointer like
+// `/__proto__/x` (or an RFC-6902 patch / RFC-7396 merge that resolves to one)
+// would otherwise mutate the global prototype.
+const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+function assertSafeObjectKey(key) {
+  if (FORBIDDEN_KEYS.has(key)) {
+    throw new Error(`json-pointer: refusing to write forbidden key "${key}" (prototype-pollution guard)`);
+  }
+}
+
 function set(doc, ptr, value) {
   const tokens = parsePointer(ptr);
   if (tokens.length === 0) {
@@ -101,6 +112,7 @@ function set(doc, ptr, value) {
       if (cur[idx] == null) cur[idx] = /^\d+$|^-$/.test(nextToken) ? [] : {};
       cur = cur[idx];
     } else if (cur && typeof cur === 'object') {
+      assertSafeObjectKey(t);
       if (cur[t] == null) cur[t] = /^\d+$|^-$/.test(nextToken) ? [] : {};
       cur = cur[t];
     } else {
@@ -116,6 +128,7 @@ function set(doc, ptr, value) {
       cur[i] = value;
     }
   } else if (cur && typeof cur === 'object') {
+    assertSafeObjectKey(last);
     cur[last] = value;
   } else {
     throw new Error('json-pointer.set: parent is not object/array');

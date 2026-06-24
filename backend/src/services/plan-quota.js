@@ -268,7 +268,11 @@ async function fetchUserPlanQuota(userId, prisma) {
  */
 function checkPaidTokenCap(user, { message = 'Monthly API limit exceeded' } = {}) {
   if (!user) return { ok: true };
-  if (user.apiUsage >= user.monthlyLimit) {
+  // monthlyLimit === 0 means "no enforcement" (legacy / staff / unlimited
+  // accounts), matching getPlanQuotaSnapshot's `limit > 0 && …` posture. Without
+  // this guard, apiUsage >= 0 is always true and those accounts get bricked with
+  // a 429 on every paid route (paraphrase / image / video).
+  if (user.monthlyLimit > 0 && user.apiUsage >= user.monthlyLimit) {
     return {
       ok: false,
       status: 429,
@@ -307,13 +311,19 @@ function checkPaidTokenCap(user, { message = 'Monthly API limit exceeded' } = {}
  * @returns {Promise<Object>} the updated user row.
  */
 async function recordApiUsage({ prisma, userId, model, tokens } = {}) {
-  await prisma.apiUsage.create({
-    data: { userId, model, tokens, cost: tokens * 0.001 },
-  });
-  return prisma.user.update({
-    where: { id: userId },
-    data: { apiUsage: { increment: tokens } },
-  });
+  // Write the ApiUsage row and bump the user counter as ONE unit — otherwise a
+  // failure between them leaves the row-based FREE gate and the counter-based
+  // paid gate disagreeing about how much the user has spent.
+  const [, updatedUser] = await prisma.$transaction([
+    prisma.apiUsage.create({
+      data: { userId, model, tokens, cost: tokens * 0.001 },
+    }),
+    prisma.user.update({
+      where: { id: userId },
+      data: { apiUsage: { increment: tokens } },
+    }),
+  ]);
+  return updatedUser;
 }
 
 /**

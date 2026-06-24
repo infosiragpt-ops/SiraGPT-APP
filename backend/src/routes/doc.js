@@ -15,7 +15,6 @@ const { authenticateToken } = require('../middleware/auth');
 const prisma = require('../config/database');
 const { streamAdvancedDocumentPipeline } = require('../services/document-pipeline/advanced-document-pipeline');
 const {
-  isSourcePreservingEditRequest,
   tryGenerateSourcePreservingDocumentEdit,
 } = require('../services/source-preserving-document-edit');
 const {
@@ -25,6 +24,11 @@ const {
 const {
   MAX_SIMULTANEOUS_DOCUMENTS,
 } = require('../config/document-batch-limits');
+const {
+  buildPreviousContentDocumentPrompt,
+  findPreviousAssistantContent,
+  isPreviousContentExportRequest,
+} = require('../services/document-followup-context');
 
 const router = express.Router();
 router.use(authenticateToken);
@@ -148,6 +152,22 @@ async function loadProjectContextForChat(chatId, userId) {
   return { project, promptPrefix, referenceFiles };
 }
 
+async function loadPreviousAssistantContentForExport(chatId, userId) {
+  if (!chatId || !userId) return null;
+  const chat = await prisma.chat.findFirst({
+    where: { id: chatId, userId },
+    select: {
+      messages: {
+        where: { deletedAt: null, role: 'ASSISTANT' },
+        select: { role: true, content: true, files: true, timestamp: true },
+        orderBy: { timestamp: 'desc' },
+        take: 16,
+      },
+    },
+  });
+  return findPreviousAssistantContent(chat?.messages || []);
+}
+
 router.post(
   '/generate',
   [
@@ -191,9 +211,13 @@ router.post(
     let content = null, file = null, format = null, errorMsg = null;
 
     try {
-      const [explicitReferenceFiles, projectContext] = await Promise.all([
+      const shouldUsePreviousAssistantContent = isPreviousContentExportRequest(prompt);
+      const [explicitReferenceFiles, projectContext, previousAssistantContent] = await Promise.all([
         loadReferenceFiles(req.body.files, req.user.id),
         loadProjectContextForChat(chatId, req.user.id),
+        shouldUsePreviousAssistantContent
+          ? loadPreviousAssistantContentForExport(chatId, req.user.id)
+          : Promise.resolve(null),
       ]);
       const referenceFiles = [
         ...(projectContext?.referenceFiles || []),
@@ -203,7 +227,11 @@ router.post(
         return arr.findIndex(other => (other.id || `${other.originalName}:${other.mimeType}`) === key) === index;
       }).slice(0, MAX_SIMULTANEOUS_DOCUMENTS);
 
-      const wantsSourcePreservingEdit = isSourcePreservingEditRequest(displayPrompt || prompt, req.body.files);
+      // Devuelve un edit preservador SOLO cuando hay un archivo base/artefacto
+      // compatible que conservar. Si no hay nada que preservar devuelve null y
+      // generamos un documento NUEVO desde cero (no rechazamos la petición). Si
+      // había archivos de entrada pero ninguno editable, tryGenerate lanza un
+      // error descriptivo que captura el catch externo.
       const preservedEdit = await tryGenerateSourcePreservingDocumentEdit({
         prisma,
         userId: req.user.id,
@@ -220,12 +248,20 @@ router.post(
         file = preservedEdit.file;
         format = preservedEdit.format;
         send({ type: 'stage', label: 'Documento editado sin regenerar el archivo', pct: 92 });
-      } else if (wantsSourcePreservingEdit) {
-        throw new Error('No encontré un archivo editable compatible para modificar sin regenerar el documento. Formatos soportados: DOCX, XLSX, PDF, TXT, Markdown, CSV, HTML, SVG, JSON, XML o YAML.');
       } else {
-        const projectPrompt = projectContext?.promptPrefix
-          ? `${projectContext.promptPrefix}\n\nUSER DOCUMENT REQUEST:\n${prompt}`
+        const effectivePrompt = previousAssistantContent
+          ? buildPreviousContentDocumentPrompt({
+              prompt,
+              sourceContent: previousAssistantContent,
+              format: req.body.format || 'docx',
+            })
           : prompt;
+        if (previousAssistantContent) {
+          send({ type: 'stage', label: 'Recuperando contenido anterior', pct: 6 });
+        }
+        const projectPrompt = projectContext?.promptPrefix
+          ? `${projectContext.promptPrefix}\n\nUSER DOCUMENT REQUEST:\n${effectivePrompt}`
+          : effectivePrompt;
         const pipelineOptions = {
           prompt: projectPrompt,
           model: req.body.model,

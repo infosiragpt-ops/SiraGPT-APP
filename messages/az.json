@@ -106,15 +106,10 @@
     "cancel": "Cancel",
     "pipeline": "Pipeline",
     "phase": {
-
       "search": "Search academic sources",
-
       "validate": "Validate DOIs",
-
       "synthesize": "Write cited markdown",
-
       "format": "Build reference list"
-
     },
     "searchRunning": "Querying OpenAlex…",
     "validateRunning": "Checking CrossRef…",
@@ -165,34 +160,118 @@
     "saving": "Saving…",
     "saved": "Saved",
     "offline": "Offline — local changes",
-
     "sections": {
-      "general":         { "label": "General",         "desc": "Appearance, language and accessibility" },
-      "models":          { "label": "AI Models",       "desc": "Available models and favorites" },
-      "notifications":   { "label": "Notifications",   "desc": "Channels and alerts" },
-      "personalization": { "label": "Personalization", "desc": "Style, tone and capabilities" },
-      "apps":            { "label": "Apps",            "desc": "Connections and connectors" },
-      "schedules":       { "label": "Schedules",       "desc": "Scheduled runs" },
-      "data":            { "label": "Data controls",   "desc": "Privacy, history and data" },
-      "security":        { "label": "Security",        "desc": "MFA and sessions" },
-      "account":         { "label": "Account",         "desc": "Builder profile" }
+      "general": {
+        "label": "General",
+        "desc": "Appearance, language and accessibility"
+      },
+      "models": {
+        "label": "AI Models",
+        "desc": "Available models and favorites"
+      },
+      "notifications": {
+        "label": "Notifications",
+        "desc": "Channels and alerts"
+      },
+      "personalization": {
+        "label": "Personalization",
+        "desc": "Style, tone and capabilities"
+      },
+      "apps": {
+        "label": "Apps",
+        "desc": "Connections and connectors"
+      },
+      "schedules": {
+        "label": "Schedules",
+        "desc": "Scheduled runs"
+      },
+      "data": {
+        "label": "Data controls",
+        "desc": "Privacy, history and data"
+      },
+      "security": {
+        "label": "Security",
+        "desc": "MFA and sessions"
+      },
+      "account": {
+        "label": "Account",
+        "desc": "Builder profile"
+      }
     },
-
     "general": {
-      "display": { "title": "Display", "desc": "Visual appearance of the application" },
-      "theme": { "label": "Theme", "desc": "Light, dark or system theme", "light": "Light", "dark": "Dark", "system": "System" },
-      "accent": { "label": "Accent color", "desc": "Primary color used for buttons and accents" },
-      "fontSize": { "label": "Font size", "desc": "Base typography size", "small": "Small", "medium": "Medium", "large": "Large" },
-      "density": { "label": "Density", "desc": "Vertical spacing of the UI", "compact": "Compact", "comfortable": "Comfortable", "spacious": "Spacious" },
-      "region": { "title": "Language & region", "desc": "Date, time zone and language formatting" },
+      "display": {
+        "title": "Display",
+        "desc": "Visual appearance of the application"
+      },
+      "theme": {
+        "label": "Theme",
+        "desc": "Light, dark or system theme",
+        "light": "Light",
+        "dark": "Dark",
+        "system": "System"
+      },
+      "accent": {
+        "label": "Accent color",
+        "desc": "Primary color used for buttons and accents"
+      },
+      "fontSize": {
+        "label": "Font size",
+        "desc": "Base typography size",
+        "small": "Small",
+        "medium": "Medium",
+        "large": "Large"
+      },
+      "density": {
+        "label": "Density",
+        "desc": "Vertical spacing of the UI",
+        "compact": "Compact",
+        "comfortable": "Comfortable",
+        "spacious": "Spacious"
+      },
+      "region": {
+        "title": "Language & region",
+        "desc": "Date, time zone and language formatting"
+      },
       "interfaceLanguage": "Interface language",
-      "spokenLanguage": { "label": "Spoken language", "desc": "For voice recognition", "automatic": "Automatic" },
+      "spokenLanguage": {
+        "label": "Spoken language",
+        "desc": "For voice recognition",
+        "automatic": "Automatic"
+      },
       "dateFormat": "Date format",
-      "timeZone": { "label": "Time zone", "desc": "Detected automatically" },
-      "timeFormat": { "label": "Time format", "h12": "12-hour", "h24": "24-hour" },
-      "voice": { "title": "Voice & audio", "assistantVoice": "Assistant voice", "autoPlay": "Auto-play replies", "autoPlayDesc": "Read responses aloud", "standalone": "Standalone voice mode", "standaloneDesc": "Full screen with no visual elements" },
-      "aiModels": { "title": "AI Models", "showExtras": "Show additional models", "showExtrasDesc": "See every available model", "stream": "Stream responses", "streamDesc": "See responses as they're generated" },
-      "accessibility": { "title": "Accessibility", "shortcuts": "Keyboard shortcuts", "shortcutsDesc": "Enable keyboard navigation", "reduceMotion": "Reduce motion", "reduceMotionDesc": "Minimize animations across the app", "highContrast": "High contrast", "highContrastDesc": "Improve element visibility" }
+      "timeZone": {
+        "label": "Time zone",
+        "desc": "Detected automatically"
+      },
+      "timeFormat": {
+        "label": "Time format",
+        "h12": "12-hour",
+        "h24": "24-hour"
+      },
+      "voice": {
+        "title": "Voice & audio",
+        "assistantVoice": "Assistant voice",
+        "autoPlay": "Auto-play replies",
+        "autoPlayDesc": "Read responses aloud",
+        "standalone": "Standalone voice mode",
+        "standaloneDesc": "Full screen with no visual elements"
+      },
+      "aiModels": {
+        "title": "AI Models",
+        "showExtras": "Show additional models",
+        "showExtrasDesc": "See every available model",
+        "stream": "Stream responses",
+        "streamDesc": "See responses as they're generated"
+      },
+      "accessibility": {
+        "title": "Accessibility",
+        "shortcuts": "Keyboard shortcuts",
+        "shortcutsDesc": "Enable keyboard navigation",
+        "reduceMotion": "Reduce motion",
+        "reduceMotionDesc": "Minimize animations across the app",
+        "highContrast": "High contrast",
+        "highContrastDesc": "Improve element visibility"
+      }
     }
   },
   "auth": {
@@ -259,5 +338,159 @@
     "or": "or",
     "processing": "Processing your messages…",
     "tryAgain": "Try again"
+  },
+  "thinking": {
+    "thinking": "Düşünür…",
+    "thought": "Düşüncə prosesi",
+    "thoughtFor": "{duration} düşündü",
+    "reasoningAria": "Modelin mühakiməsi",
+    "arguments": "Arqumentlər",
+    "toolSearching": "Məlumat axtarır",
+    "toolReading": "Mənbəni oxuyur",
+    "toolRunning": "Kodu işə salır",
+    "toolUsing": "{name} istifadə edir"
+  },
+  "agent": {
+    "working": "Working…",
+    "summary": "Thought for {duration} · used {count} tools",
+    "summaryOne": "Thought for {duration} · used 1 tool",
+    "summaryNoTools": "Thought for {duration}",
+    "interrupted": "Stopped by user",
+    "details": "Details",
+    "arguments": "Arguments",
+    "result": "Result",
+    "error": "Error",
+    "usingTool": "Using {name}",
+    "permissionTitle": "The agent wants to use {name}",
+    "allow": "Allow",
+    "allowAlways": "Always allow in this chat",
+    "deny": "Deny",
+    "permissionDeniedChip": "Denied",
+    "permissionError": "Could not send your answer. Please try again.",
+    "traceAria": "Agent activity"
+  },
+  "codex": {
+    "timeline": {
+      "actions": "{count, plural, one {# action} other {# actions}}",
+      "scrollToLatest": "Scroll to latest",
+      "running": "Running",
+      "done": "Done",
+      "error": "Error",
+      "reasoning": "Reasoning",
+      "durationSeconds": "({seconds}s)",
+      "unknownTool": "unknown tool: {name}"
+    },
+    "plan": {
+      "title": "Proposed plan",
+      "waiting": "waiting for approval",
+      "approved": "approved",
+      "approve": "Approve and build",
+      "adjust": "Adjust",
+      "pages": "Pages",
+      "components": "Components",
+      "tasks": "Tasks"
+    },
+    "checkpoint": {
+      "rollback": "Rollback here",
+      "changes": "Changes",
+      "viewPreview": "View preview",
+      "confirmTitle": "Roll back to this checkpoint?",
+      "confirmBody": "All changes made after this commit will be discarded from the workspace. This cannot be undone.",
+      "confirm": "Roll back",
+      "cancel": "Cancel",
+      "diffTitle": "Changes · +{additions} −{deletions} · {files} files",
+      "truncated": "Diff truncated (too long).",
+      "rolledBack": "Rolled back to checkpoint {sha}",
+      "rollbackFailed": "Rollback failed",
+      "export": "Copy to my disk",
+      "exported": "{count} files copied to {path}",
+      "exportedHint": "On your disk:",
+      "exportFailed": "Could not copy to disk"
+    },
+    "summary": {
+      "workedFor": "Worked for {duration}",
+      "timeWorked": "Time worked",
+      "workDone": "Work done",
+      "itemsRead": "Items read",
+      "codeChanged": "Code changed",
+      "agentUsage": "Agent Usage",
+      "estimated": "estimated",
+      "actions": "{count, plural, one {# action} other {# actions}}",
+      "lines": "{count, plural, one {# line} other {# lines}}",
+      "usageDetail": "Usage detail",
+      "model": "Model",
+      "inputTokens": "Input tokens",
+      "outputTokens": "Output tokens",
+      "inputCost": "Input cost",
+      "outputCost": "Output cost",
+      "totalCost": "Total cost",
+      "thisRun": "This run",
+      "sessionUsage": "Session",
+      "sessionRuns": "{count, plural, one {# run} other {# runs}}"
+    },
+    "actionRequired": {
+      "title": "Action required from you",
+      "copy": "Copy",
+      "copied": "Copied!",
+      "blockedCapabilities": "Blocked capabilities:",
+      "remediate": "Fix it"
+    },
+    "composer": {
+      "placeholder": "Make, test, iterate...",
+      "plan": "Plan",
+      "planTooltip": "Plan: restricts the run to planning only, executing nothing.",
+      "send": "Send",
+      "stop": "Stop",
+      "dictate": "Dictate",
+      "stopDictation": "Stop dictation",
+      "attach": "Attach file",
+      "tierEco": "Eco",
+      "tierStandard": "Standard",
+      "tierPower": "Power",
+      "tierEcoDesc": "Fast and free (FlashGPT)",
+      "tierStandardDesc": "Quality/cost balance",
+      "tierPowerDesc": "Maximum capability",
+      "free": "free"
+    },
+    "tabs": {
+      "preview": "Preview",
+      "agent": "Agent",
+      "web": "Web",
+      "connections": "Connections",
+      "checklist": "Checklist",
+      "files": "Files"
+    },
+    "preview": {
+      "start": "▶ Start / Reload",
+      "hint": "Boots this project's dev server and loads the preview."
+    },
+    "files": {
+      "title": "Code",
+      "refresh": "Refresh",
+      "loading": "Loading…",
+      "empty": "No files in the workspace yet.",
+      "none": "Select a file to view its content."
+    },
+    "errors": {
+      "createProject": "Could not create the project",
+      "startRun": "Could not start the run",
+      "approvePlan": "Could not approve the plan",
+      "stopRun": "Could not stop the run",
+      "loadDiff": "Could not load the diff",
+      "openPreview": "Could not open the preview",
+      "readFile": "Could not read {name}"
+    },
+    "panel": {
+      "newProject": "New",
+      "selectProject": "Select a project…",
+      "loading": "Loading…",
+      "emptyDescribe": "Describe what you want to build to propose a plan.",
+      "emptySelect": "Create or select a project to start.",
+      "filesHint": "The workspace file tree opens from the /code editor.",
+      "webUnavailable": "The preview is not available yet. Start it from a checkpoint or the Run button.",
+      "openInTab": "Open in new tab",
+      "checklistEmpty": "No approved plan with tasks yet.",
+      "defaultProjectName": "Project {n}"
+    }
   }
 }

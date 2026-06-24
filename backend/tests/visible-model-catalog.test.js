@@ -69,6 +69,37 @@ test('curateVisibleTextModels honours the allowlist and requires an admin-active
   assert.strictEqual(curated[0].type, 'TEXT');
 });
 
+test('curateVisibleTextModels surfaces admin-activated TEXT models even when not catalogued ("activar = visible")', () => {
+  const out = curateVisibleTextModels([
+    { id: 'custom-1', name: 'CustomCorp/llama-99b', displayName: 'Llama 99B', provider: 'OpenRouter', type: 'TEXT', isActive: true },
+    { id: 'off-1', name: 'CustomCorp/off', type: 'TEXT', isActive: false },
+    { id: 'img-1', name: 'SomeImage', type: 'IMAGE', isActive: true },
+    { id: '__virtual_x__', name: 'VirtualOne', type: 'TEXT' },
+  ], {}); // no allowlist
+  const names = out.map((m) => m.name);
+  assert.ok(names.includes('CustomCorp/llama-99b'), 'active uncatalogued TEXT model is surfaced');
+  assert.ok(!names.includes('CustomCorp/off'), 'inactive model stays hidden');
+  assert.ok(!names.includes('SomeImage'), 'non-TEXT model is not surfaced by the TEXT curator');
+  assert.ok(!names.includes('VirtualOne'), 'virtual rows are excluded');
+  const passthrough = out.find((m) => m.name === 'CustomCorp/llama-99b');
+  assert.strictEqual(passthrough.displayName, 'Llama 99B');
+  assert.strictEqual(passthrough.id, 'custom-1');
+});
+
+test('passthrough still respects VISIBLE_MODELS_ALLOWLIST when set', () => {
+  const models = [
+    { id: 'c1', name: 'CustomCorp/llama-99b', type: 'TEXT', isActive: true },
+  ];
+  assert.deepStrictEqual(
+    curateVisibleTextModels(models, { VISIBLE_MODELS_ALLOWLIST: 'gpt-4o' }).map((m) => m.name),
+    [],
+  );
+  assert.deepStrictEqual(
+    curateVisibleTextModels(models, { VISIBLE_MODELS_ALLOWLIST: 'customcorp/llama-99b' }).map((m) => m.name),
+    ['CustomCorp/llama-99b'],
+  );
+});
+
 test('curateVisibleAdminMediaModels hides image rows that are inactive, virtual, or not allowed', () => {
   const allowed = new Set(['gpt-image-1', 'gpt-image-2']);
   const curated = curateVisibleAdminMediaModels([

@@ -1,8 +1,15 @@
 {
   "sidebar": {
-    "newChat": "Yeni sohbet", "searchChats": "Sohbetleri ara", "library": "Kütüphane", "gpts": "GPTs",
-    "recentChats": "Son sohbetler", "noChats": "Henüz sohbet yok. Bir konuşma başlatın!",
-    "settings": "Ayarlar", "profile": "Profil", "billing": "Faturalandırma", "logout": "Çıkış yap",
+    "newChat": "Yeni sohbet",
+    "searchChats": "Sohbetleri ara",
+    "library": "Kütüphane",
+    "gpts": "GPTs",
+    "recentChats": "Son sohbetler",
+    "noChats": "Henüz sohbet yok. Bir konuşma başlatın!",
+    "settings": "Ayarlar",
+    "profile": "Profil",
+    "billing": "Faturalandırma",
+    "logout": "Çıkış yap",
     "today": "Bugün",
     "last7Days": "Son 7 gün",
     "older": "Daha eski",
@@ -99,15 +106,10 @@
     "cancel": "Cancel",
     "pipeline": "Pipeline",
     "phase": {
-
       "search": "Search academic sources",
-
       "validate": "Validate DOIs",
-
       "synthesize": "Write cited markdown",
-
       "format": "Build reference list"
-
     },
     "searchRunning": "Querying OpenAlex…",
     "validateRunning": "Checking CrossRef…",
@@ -131,67 +133,364 @@
     "backToProject": "← {name}"
   },
   "chat": {
-    "placeholder": "Mesaj yazın", "send": "Gönder", "stop": "Durdur", "regenerate": "Yeniden oluştur",
-    "copy": "Kopyala", "delete": "Sil", "edit": "Düzenle", "share": "Paylaş", "thinking": "Düşünüyor…",
-    "attachFile": "Dosya ekle", "voiceInput": "Sesli giriş", "webSearch": "Web'de ara",
-    "imageGeneration": "Görsel oluştur", "videoGeneration": "Video oluştur",
-    "connectorActive": "Bağlantı aktif", "showSidebar": "Kenar çubuğunu göster"
+    "placeholder": "Mesaj yazın",
+    "send": "Gönder",
+    "stop": "Durdur",
+    "regenerate": "Yeniden oluştur",
+    "copy": "Kopyala",
+    "delete": "Sil",
+    "edit": "Düzenle",
+    "share": "Paylaş",
+    "thinking": "Düşünüyor…",
+    "attachFile": "Dosya ekle",
+    "voiceInput": "Sesli giriş",
+    "webSearch": "Web'de ara",
+    "imageGeneration": "Görsel oluştur",
+    "videoGeneration": "Video oluştur",
+    "connectorActive": "Bağlantı aktif",
+    "showSidebar": "Kenar çubuğunu göster"
   },
   "settings": {
-    "title": "Ayarlar", "subtitle": "siraGPT'yi çalışma şeklinize göre uyarlayın.",
-    "searchPlaceholder": "Ayar ara…", "noResults": "Sonuç yok", "backToChat": "Sohbete dön",
-    "autoSync": "Otomatik eşitlendi", "saving": "Kaydediliyor…", "saved": "Kaydedildi", "offline": "Çevrimdışı — yerel değişiklikler",
+    "title": "Ayarlar",
+    "subtitle": "siraGPT'yi çalışma şeklinize göre uyarlayın.",
+    "searchPlaceholder": "Ayar ara…",
+    "noResults": "Sonuç yok",
+    "backToChat": "Sohbete dön",
+    "autoSync": "Otomatik eşitlendi",
+    "saving": "Kaydediliyor…",
+    "saved": "Kaydedildi",
+    "offline": "Çevrimdışı — yerel değişiklikler",
     "sections": {
-      "general":         { "label": "Genel",          "desc": "Görünüm, dil ve erişilebilirlik" },
-      "models":          { "label": "AI Modelleri",   "desc": "Kullanılabilir modeller ve favoriler" },
-      "notifications":   { "label": "Bildirimler",    "desc": "Kanallar ve uyarılar" },
-      "personalization": { "label": "Kişiselleştirme","desc": "Stil, ton ve yetenekler" },
-      "apps":            { "label": "Uygulamalar",    "desc": "Bağlantılar ve konektörler" },
-      "schedules":       { "label": "Zamanlamalar",   "desc": "Zamanlanmış çalıştırmalar" },
-      "data":            { "label": "Veri denetimi",  "desc": "Gizlilik, geçmiş ve veriler" },
-      "security":        { "label": "Güvenlik",       "desc": "MFA ve oturumlar" },
-      "account":         { "label": "Hesap",          "desc": "Oluşturucu profili" }
+      "general": {
+        "label": "Genel",
+        "desc": "Görünüm, dil ve erişilebilirlik"
+      },
+      "models": {
+        "label": "AI Modelleri",
+        "desc": "Kullanılabilir modeller ve favoriler"
+      },
+      "notifications": {
+        "label": "Bildirimler",
+        "desc": "Kanallar ve uyarılar"
+      },
+      "personalization": {
+        "label": "Kişiselleştirme",
+        "desc": "Stil, ton ve yetenekler"
+      },
+      "apps": {
+        "label": "Uygulamalar",
+        "desc": "Bağlantılar ve konektörler"
+      },
+      "schedules": {
+        "label": "Zamanlamalar",
+        "desc": "Zamanlanmış çalıştırmalar"
+      },
+      "data": {
+        "label": "Veri denetimi",
+        "desc": "Gizlilik, geçmiş ve veriler"
+      },
+      "security": {
+        "label": "Güvenlik",
+        "desc": "MFA ve oturumlar"
+      },
+      "account": {
+        "label": "Hesap",
+        "desc": "Oluşturucu profili"
+      }
     },
     "general": {
-      "display": { "title": "Görüntü", "desc": "Uygulamanın görsel görünümü" },
-      "theme": { "label": "Tema", "desc": "Açık, koyu veya sistem", "light": "Açık", "dark": "Koyu", "system": "Sistem" },
-      "accent": { "label": "Vurgu rengi", "desc": "Düğmelerin ana rengi" },
-      "fontSize": { "label": "Yazı boyutu", "desc": "Temel boyut", "small": "Küçük", "medium": "Orta", "large": "Büyük" },
-      "density": { "label": "Yoğunluk", "desc": "Dikey boşluk", "compact": "Sıkışık", "comfortable": "Rahat", "spacious": "Geniş" },
-      "region": { "title": "Dil ve bölge", "desc": "Tarih, saat dilimi ve dil" },
+      "display": {
+        "title": "Görüntü",
+        "desc": "Uygulamanın görsel görünümü"
+      },
+      "theme": {
+        "label": "Tema",
+        "desc": "Açık, koyu veya sistem",
+        "light": "Açık",
+        "dark": "Koyu",
+        "system": "Sistem"
+      },
+      "accent": {
+        "label": "Vurgu rengi",
+        "desc": "Düğmelerin ana rengi"
+      },
+      "fontSize": {
+        "label": "Yazı boyutu",
+        "desc": "Temel boyut",
+        "small": "Küçük",
+        "medium": "Orta",
+        "large": "Büyük"
+      },
+      "density": {
+        "label": "Yoğunluk",
+        "desc": "Dikey boşluk",
+        "compact": "Sıkışık",
+        "comfortable": "Rahat",
+        "spacious": "Geniş"
+      },
+      "region": {
+        "title": "Dil ve bölge",
+        "desc": "Tarih, saat dilimi ve dil"
+      },
       "interfaceLanguage": "Arayüz dili",
-      "spokenLanguage": { "label": "Konuşulan dil", "desc": "Ses tanıma için", "automatic": "Otomatik" },
+      "spokenLanguage": {
+        "label": "Konuşulan dil",
+        "desc": "Ses tanıma için",
+        "automatic": "Otomatik"
+      },
       "dateFormat": "Tarih biçimi",
-      "timeZone": { "label": "Saat dilimi", "desc": "Otomatik algılanır" },
-      "timeFormat": { "label": "Saat biçimi", "h12": "12 saat", "h24": "24 saat" },
-      "voice": { "title": "Ses ve ses dosyası", "assistantVoice": "Asistan sesi", "autoPlay": "Yanıtları otomatik oynat", "autoPlayDesc": "Yanıtları sesli oku", "standalone": "Bağımsız ses modu", "standaloneDesc": "Görsel öğeler olmadan tam ekran" },
-      "aiModels": { "title": "AI Modelleri", "showExtras": "Ek modelleri göster", "showExtrasDesc": "Tüm kullanılabilir modelleri gör", "stream": "Yanıtları akış olarak göster", "streamDesc": "Yanıtları oluşturulurken gör" },
-      "accessibility": { "title": "Erişilebilirlik", "shortcuts": "Klavye kısayolları", "shortcutsDesc": "Klavye ile gezinmeyi etkinleştir", "reduceMotion": "Hareketi azalt", "reduceMotionDesc": "Animasyonları en aza indir", "highContrast": "Yüksek kontrast", "highContrastDesc": "Öğelerin görünürlüğünü artır" }
+      "timeZone": {
+        "label": "Saat dilimi",
+        "desc": "Otomatik algılanır"
+      },
+      "timeFormat": {
+        "label": "Saat biçimi",
+        "h12": "12 saat",
+        "h24": "24 saat"
+      },
+      "voice": {
+        "title": "Ses ve ses dosyası",
+        "assistantVoice": "Asistan sesi",
+        "autoPlay": "Yanıtları otomatik oynat",
+        "autoPlayDesc": "Yanıtları sesli oku",
+        "standalone": "Bağımsız ses modu",
+        "standaloneDesc": "Görsel öğeler olmadan tam ekran"
+      },
+      "aiModels": {
+        "title": "AI Modelleri",
+        "showExtras": "Ek modelleri göster",
+        "showExtrasDesc": "Tüm kullanılabilir modelleri gör",
+        "stream": "Yanıtları akış olarak göster",
+        "streamDesc": "Yanıtları oluşturulurken gör"
+      },
+      "accessibility": {
+        "title": "Erişilebilirlik",
+        "shortcuts": "Klavye kısayolları",
+        "shortcutsDesc": "Klavye ile gezinmeyi etkinleştir",
+        "reduceMotion": "Hareketi azalt",
+        "reduceMotionDesc": "Animasyonları en aza indir",
+        "highContrast": "Yüksek kontrast",
+        "highContrastDesc": "Öğelerin görünürlüğünü artır"
+      }
     }
   },
   "auth": {
-    "welcomeBack": "Tekrar hoş geldiniz", "login": "Giriş yap", "signIn": "Giriş yap", "register": "Kaydol",
-    "signUp": "Hesap oluştur", "logout": "Çıkış yap", "email": "E-posta", "emailPlaceholder": "E-postanızı girin",
-    "password": "Şifre", "passwordPlaceholder": "Şifrenizi girin", "forgotPassword": "Şifrenizi mi unuttunuz?",
-    "orContinueWith": "Veya devam et", "continueWithGoogle": "Google ile devam et",
-    "noAccount": "Hesabınız yok mu?", "haveAccount": "Zaten hesabınız var mı?", "tagline": "Sira Gpt hesabınıza giriş yapın"
+    "welcomeBack": "Tekrar hoş geldiniz",
+    "login": "Giriş yap",
+    "signIn": "Giriş yap",
+    "register": "Kaydol",
+    "signUp": "Hesap oluştur",
+    "logout": "Çıkış yap",
+    "email": "E-posta",
+    "emailPlaceholder": "E-postanızı girin",
+    "password": "Şifre",
+    "passwordPlaceholder": "Şifrenizi girin",
+    "forgotPassword": "Şifrenizi mi unuttunuz?",
+    "orContinueWith": "Veya devam et",
+    "continueWithGoogle": "Google ile devam et",
+    "noAccount": "Hesabınız yok mu?",
+    "haveAccount": "Zaten hesabınız var mı?",
+    "tagline": "Sira Gpt hesabınıza giriş yapın"
   },
   "documents": {
-    "download": "İndir", "close": "Kapat", "wordDocument": "Word Belgesi", "excelFile": "Excel Dosyası",
-    "presentation": "Sunum", "pdfFile": "PDF Dosyası", "downloadAsWord": "Word (.docx) olarak indir",
-    "downloadAsPdf": "PDF olarak indir", "generating": "Oluşturuluyor…"
+    "download": "İndir",
+    "close": "Kapat",
+    "wordDocument": "Word Belgesi",
+    "excelFile": "Excel Dosyası",
+    "presentation": "Sunum",
+    "pdfFile": "PDF Dosyası",
+    "downloadAsWord": "Word (.docx) olarak indir",
+    "downloadAsPdf": "PDF olarak indir",
+    "generating": "Oluşturuluyor…"
   },
   "errors": {
     "serverError": "İsteğiniz işlenirken bir sorun oluştu. Lütfen tekrar deneyin.",
     "networkError": "Bağlantı hatası. İnternet bağlantınızı kontrol edin.",
-    "unauthorized": "Oturumunuzun süresi doldu. Lütfen tekrar giriş yapın.", "notFound": "Kaynak bulunamadı."
+    "unauthorized": "Oturumunuzun süresi doldu. Lütfen tekrar giriş yapın.",
+    "notFound": "Kaynak bulunamadı."
   },
   "common": {
-    "loading": "Yükleniyor…", "noResults": "Sonuç yok", "confirm": "Onayla", "cancel": "İptal",
-    "delete": "Sil", "edit": "Düzenle", "save": "Kaydet", "close": "Kapat", "open": "Aç",
-    "back": "Geri", "next": "İleri", "previous": "Önceki", "search": "Ara", "filter": "Filtre",
-    "export": "Dışa aktar", "import": "İçe aktar", "create": "Oluştur", "update": "Güncelle", "yes": "Evet",
-    "no": "Hayır", "all": "Tümü", "none": "Hiçbiri", "select": "Seç", "upload": "Yükle",
-    "dragDrop": "Dosyaları buraya bırakın", "or": "veya", "processing": "Mesajlarınız işleniyor…", "tryAgain": "Tekrar dene"
+    "loading": "Yükleniyor…",
+    "noResults": "Sonuç yok",
+    "confirm": "Onayla",
+    "cancel": "İptal",
+    "delete": "Sil",
+    "edit": "Düzenle",
+    "save": "Kaydet",
+    "close": "Kapat",
+    "open": "Aç",
+    "back": "Geri",
+    "next": "İleri",
+    "previous": "Önceki",
+    "search": "Ara",
+    "filter": "Filtre",
+    "export": "Dışa aktar",
+    "import": "İçe aktar",
+    "create": "Oluştur",
+    "update": "Güncelle",
+    "yes": "Evet",
+    "no": "Hayır",
+    "all": "Tümü",
+    "none": "Hiçbiri",
+    "select": "Seç",
+    "upload": "Yükle",
+    "dragDrop": "Dosyaları buraya bırakın",
+    "or": "veya",
+    "processing": "Mesajlarınız işleniyor…",
+    "tryAgain": "Tekrar dene"
+  },
+  "thinking": {
+    "thinking": "Düşünüyor…",
+    "thought": "Düşünce süreci",
+    "thoughtFor": "{duration} boyunca düşündü",
+    "reasoningAria": "Model akıl yürütmesi",
+    "arguments": "Argümanlar",
+    "toolSearching": "Bilgi aranıyor",
+    "toolReading": "Kaynak okunuyor",
+    "toolRunning": "Kod çalıştırılıyor",
+    "toolUsing": "{name} kullanılıyor"
+  },
+  "agent": {
+    "working": "Çalışıyor…",
+    "summary": "{duration} düşündü · {count} araç kullandı",
+    "summaryOne": "{duration} düşündü · 1 araç kullandı",
+    "summaryNoTools": "{duration} düşündü",
+    "interrupted": "Kullanıcı tarafından durduruldu",
+    "details": "Ayrıntılar",
+    "arguments": "Argümanlar",
+    "result": "Sonuç",
+    "error": "Hata",
+    "usingTool": "{name} kullanılıyor",
+    "permissionTitle": "Ajan {name} kullanmak istiyor",
+    "allow": "İzin ver",
+    "allowAlways": "Bu sohbette her zaman izin ver",
+    "deny": "Reddet",
+    "permissionDeniedChip": "Reddedildi",
+    "permissionError": "Yanıtınız gönderilemedi. Tekrar deneyin.",
+    "traceAria": "Ajan etkinliği"
+  },
+  "codex": {
+    "timeline": {
+      "actions": "{count, plural, one {# action} other {# actions}}",
+      "scrollToLatest": "Scroll to latest",
+      "running": "Running",
+      "done": "Done",
+      "error": "Error",
+      "reasoning": "Reasoning",
+      "durationSeconds": "({seconds}s)",
+      "unknownTool": "unknown tool: {name}"
+    },
+    "plan": {
+      "title": "Proposed plan",
+      "waiting": "waiting for approval",
+      "approved": "approved",
+      "approve": "Approve and build",
+      "adjust": "Adjust",
+      "pages": "Pages",
+      "components": "Components",
+      "tasks": "Tasks"
+    },
+    "checkpoint": {
+      "rollback": "Rollback here",
+      "changes": "Changes",
+      "viewPreview": "View preview",
+      "confirmTitle": "Roll back to this checkpoint?",
+      "confirmBody": "All changes made after this commit will be discarded from the workspace. This cannot be undone.",
+      "confirm": "Roll back",
+      "cancel": "Cancel",
+      "diffTitle": "Changes · +{additions} −{deletions} · {files} files",
+      "truncated": "Diff truncated (too long).",
+      "rolledBack": "Rolled back to checkpoint {sha}",
+      "rollbackFailed": "Rollback failed",
+      "export": "Copy to my disk",
+      "exported": "{count} files copied to {path}",
+      "exportedHint": "On your disk:",
+      "exportFailed": "Could not copy to disk"
+    },
+    "summary": {
+      "workedFor": "Worked for {duration}",
+      "timeWorked": "Time worked",
+      "workDone": "Work done",
+      "itemsRead": "Items read",
+      "codeChanged": "Code changed",
+      "agentUsage": "Agent Usage",
+      "estimated": "estimated",
+      "actions": "{count, plural, one {# action} other {# actions}}",
+      "lines": "{count, plural, one {# line} other {# lines}}",
+      "usageDetail": "Usage detail",
+      "model": "Model",
+      "inputTokens": "Input tokens",
+      "outputTokens": "Output tokens",
+      "inputCost": "Input cost",
+      "outputCost": "Output cost",
+      "totalCost": "Total cost",
+      "thisRun": "This run",
+      "sessionUsage": "Session",
+      "sessionRuns": "{count, plural, one {# run} other {# runs}}"
+    },
+    "actionRequired": {
+      "title": "Action required from you",
+      "copy": "Copy",
+      "copied": "Copied!",
+      "blockedCapabilities": "Blocked capabilities:",
+      "remediate": "Fix it"
+    },
+    "composer": {
+      "placeholder": "Make, test, iterate...",
+      "plan": "Plan",
+      "planTooltip": "Plan: restricts the run to planning only, executing nothing.",
+      "send": "Send",
+      "stop": "Stop",
+      "dictate": "Dictate",
+      "stopDictation": "Stop dictation",
+      "attach": "Attach file",
+      "tierEco": "Eco",
+      "tierStandard": "Standard",
+      "tierPower": "Power",
+      "tierEcoDesc": "Fast and free (FlashGPT)",
+      "tierStandardDesc": "Quality/cost balance",
+      "tierPowerDesc": "Maximum capability",
+      "free": "free"
+    },
+    "tabs": {
+      "preview": "Preview",
+      "agent": "Agent",
+      "web": "Web",
+      "connections": "Connections",
+      "checklist": "Checklist",
+      "files": "Files"
+    },
+    "preview": {
+      "start": "▶ Start / Reload",
+      "hint": "Boots this project's dev server and loads the preview."
+    },
+    "files": {
+      "title": "Code",
+      "refresh": "Refresh",
+      "loading": "Loading…",
+      "empty": "No files in the workspace yet.",
+      "none": "Select a file to view its content."
+    },
+    "errors": {
+      "createProject": "Could not create the project",
+      "startRun": "Could not start the run",
+      "approvePlan": "Could not approve the plan",
+      "stopRun": "Could not stop the run",
+      "loadDiff": "Could not load the diff",
+      "openPreview": "Could not open the preview",
+      "readFile": "Could not read {name}"
+    },
+    "panel": {
+      "newProject": "New",
+      "selectProject": "Select a project…",
+      "loading": "Loading…",
+      "emptyDescribe": "Describe what you want to build to propose a plan.",
+      "emptySelect": "Create or select a project to start.",
+      "filesHint": "The workspace file tree opens from the /code editor.",
+      "webUnavailable": "The preview is not available yet. Start it from a checkpoint or the Run button.",
+      "openInTab": "Open in new tab",
+      "checklistEmpty": "No approved plan with tasks yet.",
+      "defaultProjectName": "Project {n}"
+    }
   }
 }

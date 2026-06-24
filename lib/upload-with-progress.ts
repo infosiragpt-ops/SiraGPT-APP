@@ -83,6 +83,61 @@ export interface UploadProgressOptions {
    * fans out fully in parallel.
    */
   concurrency?: number
+  /**
+   * How many times to retry a file that fails for a *transient* reason
+   * (network drop, timeout, or a 5xx from the server). 4xx responses and
+   * user aborts are never retried. Defaults to 2 (i.e. up to 3 attempts).
+   */
+  maxRetries?: number
+}
+
+/**
+ * A failure is transient — and therefore worth retrying — when it is a
+ * network error / timeout (status 0, not a user abort) or a 5xx server
+ * error. 4xx (validation, type rejected, too large, auth) is permanent.
+ */
+function isTransientFailure(res: UploadResult<unknown>): boolean {
+  if (res.aborted) return false
+  if (res.ok) return false
+  if (res.status === 0) return true
+  return res.status >= 500 && res.status < 600
+}
+
+/**
+ * Upload a single file with bounded retries on transient failures.
+ * Uses exponential backoff with jitter between attempts. Aborts short
+ * circuit immediately. Each attempt re-emits progress through the caller's
+ * onFileProgress so the UI reflects the retry.
+ */
+async function uploadOneWithRetry<T = unknown>(
+  file: File,
+  opts: UploadProgressOptions,
+  index: number,
+): Promise<UploadResult<T>> {
+  const maxRetries = Math.max(0, opts.maxRetries ?? 2)
+  let last: UploadResult<T> = {
+    ok: false,
+    status: 0,
+    body: null,
+    error: "Upload not attempted",
+  }
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (opts.signal?.aborted) {
+      return { ok: false, status: 0, body: null, aborted: true, error: "Upload aborted" }
+    }
+    if (attempt > 0) {
+      const delay = Math.min(8000, 500 * 2 ** (attempt - 1)) * (0.5 + Math.random() * 0.5)
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise<void>((r) => setTimeout(r, delay))
+      if (opts.signal?.aborted) {
+        return { ok: false, status: 0, body: null, aborted: true, error: "Upload aborted" }
+      }
+    }
+    // eslint-disable-next-line no-await-in-loop
+    last = await uploadOneWithProgress<T>(file, opts, index)
+    if (!isTransientFailure(last)) return last
+  }
+  return last
 }
 
 export interface UploadResult<T = unknown> {
@@ -340,7 +395,7 @@ export async function uploadFilesWithProgress<T = unknown>(
         continue
       }
       // eslint-disable-next-line no-await-in-loop
-      const res = await uploadOneWithProgress<T>(
+      const res = await uploadOneWithRetry<T>(
         files[i],
         { ...opts, onFileProgress: wrappedOnFileProgress },
         i,

@@ -56,6 +56,45 @@ async function checkDatabase(prisma) {
   }
 }
 
+async function checkMigrations(prisma) {
+  if (!prisma || typeof prisma.$queryRawUnsafe !== "function") {
+    return { name: "migrations", status: "skipped", critical: false, latency_ms: 0, details: { reason: "no_prisma_client_provided" } };
+  }
+  const start = Date.now();
+  try {
+    // A row that started but never finished and was never rolled back is a
+    // FAILED migration (P3009) — the exact condition that took the backend down
+    // in the production incident. Because `migrate deploy` runs to completion
+    // before the HTTP server starts, any such row at serving time is genuinely
+    // stuck, not an in-flight migration. Surfacing it as a critical readiness
+    // failure lets the load balancer drain a broken instance instead of routing
+    // traffic into 500s.
+    const rows = await prisma.$queryRawUnsafe(
+      'SELECT migration_name FROM "_prisma_migrations" WHERE finished_at IS NULL AND rolled_back_at IS NULL'
+    );
+    const failed = Array.isArray(rows) ? rows.map((r) => r && r.migration_name).filter(Boolean) : [];
+    if (failed.length > 0) {
+      return {
+        name: "migrations", status: "unhealthy", critical: true,
+        latency_ms: Date.now() - start,
+        details: { failed_count: failed.length, failed: failed.slice(0, 20) },
+        error: "failed migration(s) present (P3009)",
+      };
+    }
+    return { name: "migrations", status: "healthy", critical: true, latency_ms: Date.now() - start, details: { failed_count: 0 } };
+  } catch (err) {
+    // Table missing (fresh DB before first migrate), restricted permissions, or
+    // a non-Prisma datasource: never penalise readiness for an unreadable
+    // bookkeeping table — that would be a self-inflicted outage.
+    return {
+      name: "migrations", status: "skipped", critical: false,
+      latency_ms: Date.now() - start,
+      details: { reason: "migrations_table_unreadable" },
+      error: err && err.message ? String(err.message).slice(0, 200) : "unknown",
+    };
+  }
+}
+
 async function checkRedis(redis) {
   if (!redis || typeof redis.ping !== "function") {
     return { name: "redis", status: "skipped", critical: false, latency_ms: 0, details: { reason: "no_redis_client_provided" } };
@@ -123,16 +162,16 @@ function checkProcess() {
   };
 }
 
-function checkModelProvidersConfigured() {
+function checkModelProvidersConfigured(env = process.env) {
   // Informational only — environment configuration is an ops concern,
   // not a runtime invariant. Surfaces *which* providers are reachable
   // so dashboards can flag missing keys without 503'ing the API.
   const providers = {
-    openai: Boolean(process.env.OPENAI_API_KEY),
-    anthropic: Boolean(process.env.ANTHROPIC_API_KEY),
-    groq: Boolean(process.env.GROQ_API_KEY),
-    gemini: Boolean(process.env.GEMINI_API_KEY),
-    openrouter: Boolean(process.env.OPENROUTER_API_KEY),
+    openai: Boolean(env.OPENAI_API_KEY),
+    anthropic: Boolean(env.ANTHROPIC_API_KEY),
+    groq: Boolean(env.GROQ_API_KEY),
+    gemini: Boolean(env.GEMINI_API_KEY),
+    openrouter: Boolean(env.OPENROUTER_API_KEY),
   };
   const configured = Object.values(providers).filter(Boolean).length;
   return {
@@ -328,12 +367,101 @@ function checkPlaywright() {
   } catch {
     return {
       name: 'playwright',
-      status: 'degraded',
+      status: 'skipped',
       critical: false,
       latency_ms: Date.now() - start,
       details: { installed: false, reason: 'research_agent_text_only_mode' },
     };
   }
+}
+
+/**
+ * Surface the result of the boot-time Google OAuth configuration check
+ * (`validateOAuthCallbackUrl`) so monitoring probes and the ops dashboard
+ * can re-detect OAuth misconfigurations without reading startup logs or
+ * restarting the process.
+ *
+ * The boot validator already logs and (in production) can block startup on
+ * critical issues. Anything that survives boot but still has issues — host
+ * mismatches, missing paired credentials, malformed URLs in non-prod — is
+ * reported here as `degraded` so the app stays reachable but the problem is
+ * visible. Non-critical: a stale OAuth config should never 503 the API.
+ *
+ * @param {{checked: boolean, mismatch: boolean, issues: string[]}} [oauthResult]
+ */
+function checkGoogleOAuth(oauthResult) {
+  if (!oauthResult || typeof oauthResult !== "object") {
+    return {
+      name: "google_oauth",
+      status: "skipped",
+      critical: false,
+      latency_ms: 0,
+      details: { reason: "no_oauth_boot_result" },
+    };
+  }
+
+  const checked = Boolean(oauthResult.checked);
+  const mismatch = Boolean(oauthResult.mismatch);
+  const issues = Array.isArray(oauthResult.issues) ? oauthResult.issues : [];
+
+  let status;
+  if (!checked) status = "skipped";
+  else if (issues.length > 0) status = "degraded";
+  else status = "healthy";
+
+  return {
+    name: "google_oauth",
+    status,
+    critical: false,
+    latency_ms: 0,
+    details: { checked, mismatch, issues },
+  };
+}
+
+/**
+ * Surface the result of the boot-time startup environment validator
+ * (`validateStartupEnvironment`) so monitoring probes and the ops dashboard
+ * can re-detect config problems (missing/placeholder secrets, malformed URLs,
+ * out-of-range numeric settings) without reading startup logs or restarting
+ * the process.
+ *
+ * The boot validator already logs and (in production) blocks startup on
+ * blocking issues. Anything that survives boot but still has issues —
+ * warnings everywhere, or blocking issues in non-production where the server
+ * is allowed to keep running — is reported here as `degraded` so the app
+ * stays reachable but the problem is visible. Non-critical: a stale config
+ * issue should never 503 the API.
+ *
+ * @param {{checked: boolean, issues: Array<{key, label, severity, message, hint?}>}} [startupEnvResult]
+ */
+function checkStartupEnvironment(startupEnvResult) {
+  if (!startupEnvResult || typeof startupEnvResult !== "object") {
+    return {
+      name: "startup_env",
+      status: "skipped",
+      critical: false,
+      latency_ms: 0,
+      details: { reason: "no_startup_env_result" },
+    };
+  }
+
+  const checked = Boolean(startupEnvResult.checked);
+  const issues = Array.isArray(startupEnvResult.issues) ? startupEnvResult.issues : [];
+  const blocking = issues.filter((i) => i && i.severity === "BLOCKING").length;
+  const warnings = issues.filter((i) => i && i.severity === "WARNING").length;
+
+  let status;
+  if (!checked) status = "skipped";
+  else if (issues.length > 0) status = "degraded";
+  else status = "healthy";
+
+  return {
+    name: "startup_env",
+    status,
+    critical: false,
+    latency_ms: 0,
+    details: { checked, issue_count: issues.length, blocking, warnings, issues },
+  };
 }
 
 function checkCoworkSubsystem(coworkHealth) {
@@ -372,6 +500,7 @@ function runLivenessCheck() {
 async function runReadinessCheck({ prisma, redis, queue } = {}) {
   const checks = await Promise.all([
     checkDatabase(prisma),
+    checkMigrations(prisma),
     checkRedis(redis),
     checkQueue(queue),
   ]);
@@ -379,14 +508,15 @@ async function runReadinessCheck({ prisma, redis, queue } = {}) {
   return composeStatus(checks);
 }
 
-async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry, langfuse, posthog, circuitBreakers, coworkHealth } = {}) {
+async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry, langfuse, posthog, circuitBreakers, coworkHealth, googleOAuth, startupEnv, env = process.env } = {}) {
   const checks = await Promise.all([
     checkDatabase(prisma),
+    checkMigrations(prisma),
     checkRedis(redis),
     checkQueue(queue),
   ]);
   checks.push(checkProcess());
-  checks.push(checkModelProvidersConfigured());
+  checks.push(checkModelProvidersConfigured(env));
   checks.push(checkOpenTelemetry(telemetry));
   checks.push(checkSentry(sentry));
   checks.push(checkLangfuse(langfuse));
@@ -395,9 +525,27 @@ async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry, lan
   if (coworkHealth) {
     checks.push(checkCoworkSubsystem(coworkHealth));
   }
-  checks.push(checkR2Storage());
+  checks.push(checkR2Storage(env));
   checks.push(checkPlaywright());
-  return composeStatus(checks);
+
+  // OAuth boot-config health: pushed into the checks array so a stale
+  // misconfiguration drives the composite status to `degraded`, and also
+  // mirrored under a top-level `googleOAuth` key so monitoring probes can
+  // read `{ checked, mismatch, issues }` directly without scanning checks.
+  const googleOAuthCheck = checkGoogleOAuth(googleOAuth);
+  checks.push(googleOAuthCheck);
+
+  // Startup environment health: pushed into the checks array so lingering
+  // config issues drive the composite status to `degraded`, and also mirrored
+  // under a top-level `startupEnv` key so monitoring probes can read the issue
+  // list directly without scanning checks. Same pattern as googleOAuth above.
+  const startupEnvCheck = checkStartupEnvironment(startupEnv);
+  checks.push(startupEnvCheck);
+
+  const report = composeStatus(checks);
+  report.googleOAuth = googleOAuthCheck.details;
+  report.startupEnv = startupEnvCheck.details;
+  return report;
 }
 
 function composeStatus(checks) {
@@ -430,6 +578,7 @@ function reportToHttpStatus(report) {
 module.exports = {
   PROCESS_BOOT_AT,
   checkDatabase,
+  checkMigrations,
   checkRedis,
   checkQueue,
   checkProcess,
@@ -439,6 +588,8 @@ module.exports = {
   checkLangfuse,
   checkPostHog,
   checkCircuitBreakers,
+  checkGoogleOAuth,
+  checkStartupEnvironment,
   checkCoworkSubsystem,
   checkR2Storage,
   checkPlaywright,

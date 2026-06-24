@@ -46,6 +46,13 @@ const ALLOWED_MIMES = new Set<string>([
   "application/rtf", "text/rtf",
   "message/rfc822",
   "application/vnd.ms-outlook",
+  // Audio (mirror of upload-security-policy.js)
+  "audio/mpeg", "audio/wav", "audio/ogg", "audio/webm", "audio/mp4",
+  // Video
+  "video/mp4", "video/mpeg", "video/quicktime", "video/webm",
+  // Archives / e-books
+  "application/zip", "application/x-zip", "application/x-zip-compressed",
+  "application/epub+zip",
 ])
 
 const ALLOWED_EXTENSIONS = new Set<string>([
@@ -61,15 +68,22 @@ const ALLOWED_EXTENSIONS = new Set<string>([
   "html", "htm", "json", "xml",
   // Email
   "eml", "msg",
+  // Audio / video (mirror of upload-security-policy.js)
+  "mp3", "wav", "ogg", "m4a", "mp4", "mov", "webm", "mpeg", "mpg",
+  // Archives / e-books
+  "zip", "epub",
 ])
 
-// No client-side size cap — the product accepts arbitrarily large
-// uploads. Real-world ceilings (browser memory while reading the
-// blob, server disk space, OpenAI Files API at 512 MB) still apply
-// downstream and surface their own errors when they bite, but the
-// composer no longer pre-rejects on size.
-const DEFAULT_MAX_BYTES = Number.POSITIVE_INFINITY
-const DEFAULT_MAX_COUNT = 10                // matches backend `files: 10`
+// Configurable client-side caps (universal ingest spec): 20 files per
+// batch, 100 MB per file. Overridable per deployment via NEXT_PUBLIC_*
+// envs; callers can still pass tighter per-surface limits via opts.
+function envInt(value: string | undefined, fallback: number): number {
+  const n = Number(value)
+  return Number.isFinite(n) && n > 0 ? n : fallback
+}
+const DEFAULT_MAX_BYTES =
+  envInt(process.env.NEXT_PUBLIC_COMPOSER_MAX_FILE_MB, 100) * 1024 * 1024
+const DEFAULT_MAX_COUNT = envInt(process.env.NEXT_PUBLIC_COMPOSER_MAX_FILES, 20)
 
 export type IngestSource =
   | "picker"            // input[type=file]
@@ -138,9 +152,6 @@ export function validateFile(
       code: "office_temp_lock_file",
     }
   }
-  // The default cap is Infinity, so this branch only fires when a
-  // caller explicitly opts into a size limit (none do today). Kept
-  // for callers that may want a per-surface ceiling later.
   if (Number.isFinite(max) && file.size > max) {
     const mb = Math.round(max / (1024 * 1024))
     return {

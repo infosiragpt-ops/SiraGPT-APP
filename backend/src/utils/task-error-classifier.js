@@ -133,7 +133,10 @@ const RETRYABLE_RULES = [
     reason: 'server-error',
     ttlMs: 10_000,
     codePrefix: '5',
-    patterns: ['internal server', 'service unavailable', 'bad gateway', 'upstream 503', '502 bad gateway'],
+    // 'overloaded'/'overloaded_error' = provider capacity pressure (e.g.
+    // Anthropic HTTP 529) — transient, should be retried. Previously bare
+    // 'overloaded' fell through to 'unknown' (non-retryable).
+    patterns: ['internal server', 'service unavailable', 'bad gateway', 'upstream 503', '502 bad gateway', 'overloaded', 'overloaded_error', 'server is overloaded'],
   },
 ];
 

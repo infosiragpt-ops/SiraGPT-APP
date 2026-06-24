@@ -18,7 +18,7 @@
 services:
   # ── Database ──────────────────────────────────────────────
   db:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -62,6 +62,10 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    # Apply pending Prisma migrations on boot, then start the server. Without
+    # this the DB drifts behind the image's schema (e.g. a missing projects.type
+    # column → 500s). Set SKIP_MIGRATIONS=1 to bypass during local iteration.
+    command: ["node", "scripts/start-with-migrations.js"]
     ports:
       - "${BACKEND_PORT_EXTERNAL:-5000}:5000"
     environment:
@@ -72,10 +76,21 @@ services:
       CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:3000}"
       JWT_SECRET: "${JWT_SECRET}"
       SESSION_SECRET: "${SESSION_SECRET}"
+      ENCRYPTION_KEY: "${ENCRYPTION_KEY}"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       XAI_API_KEY: "${XAI_API_KEY:-}"
       GROQ_API_KEY: "${GROQ_API_KEY:-}"
+      CEREBRAS_API_KEY: "${CEREBRAS_API_KEY:-}"
+      CEREBRAS_BASE_URL: "${CEREBRAS_BASE_URL:-https://api.cerebras.ai/v1}"
+      FREE_IA_MODEL_ID: "${FREE_IA_MODEL_ID:-gpt-oss-120b}"
+      FREE_IA_DISPLAY_NAME: "${FREE_IA_DISPLAY_NAME:-Free IA}"
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+      GOOGLE_AI_API_KEY: "${GOOGLE_AI_API_KEY:-}"
+      DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      FAL_API_KEY: "${FAL_API_KEY:-}"
+      FAL_KEY: "${FAL_KEY:-}"
       GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
       GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET:-}"
       SPOTIFY_CLIENT_ID: "${SPOTIFY_CLIENT_ID:-}"
@@ -91,6 +106,21 @@ services:
       SMTP_PASS: "${SMTP_PASS:-}"
       MAX_FILE_SIZE: "${MAX_FILE_SIZE:-50}"
       UPLOAD_DIR: "/app/uploads"
+      # OpenCode engine (sidecar) — empty by default; set to http://opencode:4096
+      # and run `docker compose --profile opencode up` to enable.
+      OPENCODE_SERVER_URL: "${OPENCODE_SERVER_URL:-}"
+      OPENCODE_SERVER_PASSWORD: "${OPENCODE_SERVER_PASSWORD:-}"
+      # Steer the engine to a funded provider/model (its anthropic default has no
+      # credit). Defaults to OpenRouter gpt-4o-mini (verified to write files).
+      OPENCODE_MODEL_PROVIDER: "${OPENCODE_MODEL_PROVIDER:-openrouter}"
+      OPENCODE_MODEL_ID: "${OPENCODE_MODEL_ID:-openai/gpt-4o-mini}"
+      # Codex Agent V2 — flag + runner endpoint. Flag off (default) keeps /code
+      # identical to today; the runner (perfil opencode) provisiona el workspace.
+      CODEX_AGENT_V2: "${CODEX_AGENT_V2:-}"
+      CODE_RUNNER_URL: "${CODE_RUNNER_URL:-http://runner:4097}"
+      # Host-visible base dir the runner's /export bind-mount maps to (display
+      # only; shown to the user so they can find the mirrored project on disk).
+      CODEX_EXPORT_HOST_DIR: "${CODEX_EXPORT_HOST_DIR:-.codex-workspaces}"
     volumes:
       - uploads_data:/app/uploads
     depends_on:
@@ -102,7 +132,10 @@ services:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/health/live"]
       interval: 15s
       timeout: 5s
-      start_period: 20s
+      # Backend cold boot (Prisma migrate deploy + provider/plugin init) takes
+      # ~40s; a 20s grace period marked it unhealthy and blocked the frontend
+      # from starting. 75s leaves headroom on slower machines.
+      start_period: 75s
       retries: 3
     logging:
       driver: "json-file"
@@ -142,6 +175,80 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # ── OpenCode engine (Bun sidecar) — opt-in via profile ─────
+  # Runs the vendored agent (vendor/opencode) as an HTTP server. Enable with:
+  #   docker compose --profile opencode up
+  # and set OPENCODE_SERVER_URL=http://opencode:4096 in your .env so the
+  # backend connects to it.
+  opencode:
+    image: oven/bun:1
+    profiles: ["opencode"]
+    restart: unless-stopped
+    working_dir: /workspace
+    # Run the published, self-contained CLI (the vendored source in
+    # vendor/opencode is kept for reference/modification, but its Bun
+    # workspace+catalog deps don't `bun install` standalone).
+    command: sh -c "bunx opencode-ai@latest serve --hostname 0.0.0.0 --port 4096 --print-logs"
+    environment:
+      OPENCODE_SERVER_PASSWORD: "${OPENCODE_SERVER_PASSWORD:-}"
+      # Provider keys — pass everything in .env so the engine can use any model.
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+      GOOGLE_GENERATIVE_AI_API_KEY: "${GOOGLE_GENERATIVE_AI_API_KEY:-}"
+      GROQ_API_KEY: "${GROQ_API_KEY:-}"
+      MISTRAL_API_KEY: "${MISTRAL_API_KEY:-}"
+      DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"
+      XAI_API_KEY: "${XAI_API_KEY:-}"
+      CEREBRAS_API_KEY: "${CEREBRAS_API_KEY:-}"
+    volumes:
+      - opencode_workspace:/workspace
+    expose:
+      - "4096"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── Code runner (Phase B) — runs the agent's project (bun install + dev) ────
+  # Shares the OpenCode workspace volume so it sees the multi-file project the
+  # agent wrote, then serves its dev server on 5173 (published) for the preview.
+  # Same `opencode` profile: docker compose --profile opencode up.
+  runner:
+    build:
+      context: ./scripts
+      dockerfile: runner.Dockerfile
+    profiles: ["opencode"]
+    restart: unless-stopped
+    working_dir: /workspace
+    command: ["bun", "/scripts/code-runner.js"]
+    environment:
+      DEV_PORT: "5173"
+      CTRL_PORT: "4097"
+      RUNNER_WORKDIR: "/workspace"
+      EXPORT_DIR: "/export"
+    volumes:
+      - opencode_workspace:/workspace
+      - ./scripts/code-runner.js:/scripts/code-runner.js:ro
+      - ./scripts/code-runner-utils.js:/scripts/code-runner-utils.js:ro
+      - runner_bun_cache:/root/.bun/install/cache   # warm re-installs (vite/tailwind/framer-motion)
+      # Hybrid "export to disk": Codex V2 mirrors each project's source here so
+      # it lands in a real folder on the host (D:\…\.codex-workspaces\<id>).
+      - ./.codex-workspaces:/export
+    ports:
+      - "5173:5173"   # dev server → preview iframe
+    expose:
+      - "4097"        # control API (backend → runner)
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   pgdata:
   uploads_data:
+  opencode_workspace:
+  runner_bun_cache:

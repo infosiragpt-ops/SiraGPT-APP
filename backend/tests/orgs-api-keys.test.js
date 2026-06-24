@@ -43,6 +43,13 @@ let nextId = 0;
 function matchApiKeyWhere(row, where) {
   if (!where) return true;
   if (where.organizationId && row.organizationId !== where.organizationId) return false;
+  if (where.id) {
+    if (typeof where.id === 'object' && Array.isArray(where.id.in)) {
+      if (!where.id.in.includes(row.id)) return false;
+    } else if (row.id !== where.id) {
+      return false;
+    }
+  }
   if (Object.prototype.hasOwnProperty.call(where, 'deletedAt')) {
     if (where.deletedAt === null && row.deletedAt) return false;
   }
@@ -117,9 +124,17 @@ const prismaMock = {
       return row;
     },
     updateMany: async ({ where, data }) => {
+      prismaState.updateManyCalls = (prismaState.updateManyCalls || 0) + 1;
+      const idIn = where.id && typeof where.id === 'object' && Array.isArray(where.id.in)
+        ? new Set(where.id.in)
+        : null;
       let count = 0;
       for (const r of prismaState.apiKeys) {
-        if (where.id && r.id !== where.id) continue;
+        if (idIn) {
+          if (!idIn.has(r.id)) continue;
+        } else if (where.id && r.id !== where.id) {
+          continue;
+        }
         if (where.organizationId && r.organizationId !== where.organizationId) continue;
         if (Object.prototype.hasOwnProperty.call(where, 'deletedAt')) {
           if (where.deletedAt === null && r.deletedAt) continue;
@@ -221,6 +236,7 @@ function callRoute({ method, urlPath, body }) {
 function resetState({ role = 'ADMIN' } = {}) {
   prismaState.membership = { id: 'm1', orgId: 'org-1', userId: 'u-admin', role };
   prismaState.apiKeys = [];
+  prismaState.updateManyCalls = 0;
   auditMock._calls.length = 0;
   authMock._user = { id: 'u-admin', email: 'admin@example.com' };
   nextId = 0;
@@ -618,6 +634,8 @@ describe('POST /api/orgs/:id/api-keys/bulk-revoke', () => {
     // Two tombstones, one untouched.
     const tombstoned = prismaState.apiKeys.filter((r) => r.deletedAt instanceof Date);
     assert.equal(tombstoned.length, 2);
+    // Batched: the revocations land in ONE updateMany, not an N+1 loop.
+    assert.equal(prismaState.updateManyCalls, 1);
     // Org-facing list hides the tombstoned rows.
     const list = await callRoute({ method: 'GET', urlPath: '/api/orgs/org-1/api-keys' });
     assert.equal(list.body.total, 1);

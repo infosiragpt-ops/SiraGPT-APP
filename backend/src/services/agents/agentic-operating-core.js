@@ -23,6 +23,14 @@ const {
   buildAiProductOperatingSystem,
   buildAiProductOperatingPrompt,
 } = require('./ai-product-os');
+const {
+  buildCognitiveImprovementBundle,
+  buildCognitiveImprovementPrompt,
+} = require('./cognitive-improvements');
+const {
+  buildUniversalAgentFabric,
+  buildUniversalAgentFabricPrompt,
+} = require('./universal-agent-fabric');
 
 const OPERATING_CORE_VERSION = 'agentic-operating-core-2026-04';
 
@@ -178,13 +186,15 @@ function buildAgenticOperatingCore({
 
   const traceId = makeTraceId(contract, graph);
   const domains = inferOperatingDomains({ contract, graph });
+  const cognitiveImprovements = buildCognitiveImprovementBundle({ contract, graph, domains });
+  const universalAgents = buildUniversalAgentFabric({ contract, graph, domains });
   const toolGovernance = buildToolGovernance({ toolRuntimePlan });
   const workflow = buildWorkflowPlan({ contract, graph, domains });
-  const validation = buildValidationPlan({ contract, graph, qaBoardReview, domains });
-  const selfRepair = buildSelfRepairPolicy({ contract, qaBoardReview });
+  const validation = buildValidationPlan({ contract, graph, qaBoardReview, domains, cognitiveImprovements, universalAgents });
+  const selfRepair = buildSelfRepairPolicy({ contract, qaBoardReview, cognitiveImprovements, universalAgents });
   const release = buildReleasePolicy({ contract, graph, toolRuntimePlan, qaBoardReview, domains });
-  const observability = buildObservabilityPlan({ graph, traceId, domains });
-  const regression = buildRegressionPlan({ contract, domains });
+  const observability = buildObservabilityPlan({ graph, traceId, domains, cognitiveImprovements, universalAgents });
+  const regression = buildRegressionPlan({ contract, domains, cognitiveImprovements, universalAgents });
   const riskRegister = buildRiskRegister({ contract, graph, toolRuntimePlan, qaBoardReview, domains });
   const productStudio = buildProductStudioBlueprint({
     contract,
@@ -196,6 +206,8 @@ function buildAgenticOperatingCore({
     release,
     observability,
     regression,
+    cognitiveImprovements,
+    universalAgents,
   });
   const aiProductOS = buildAiProductOperatingSystem({
     contract,
@@ -233,6 +245,8 @@ function buildAgenticOperatingCore({
     release,
     observability,
     regression,
+    cognitive_improvements: cognitiveImprovements,
+    universal_agents: universalAgents,
     product_studio: productStudio,
     ai_product_os: aiProductOS,
     risk_register: riskRegister,
@@ -251,6 +265,13 @@ function buildAgenticOperatingCore({
       ),
       releaseDecision: qaBoardReview?.summary?.decision || 'pending',
       supportedByManifestGateway: toolRuntimePlan ? toolRuntimePlan.ok !== false : false,
+      cognitiveImprovementCount: cognitiveImprovements.summary.totalControlCount,
+      activeCognitiveImprovementCount: cognitiveImprovements.summary.activeControlCount,
+      cognitiveCategoryCount: cognitiveImprovements.summary.categoryCount,
+      universalAgentCatalogCount: universalAgents.summary.totalAgentCount,
+      activeUniversalAgentCount: universalAgents.summary.activeAgentCount,
+      universalAgentFamilyCount: universalAgents.summary.familyCount,
+      universalAgentCyclePhaseCount: universalAgents.summary.cyclePhaseCount,
     },
   };
 
@@ -354,7 +375,7 @@ function buildWorkflowPlan({ contract, graph, domains }) {
   };
 }
 
-function buildValidationPlan({ contract, graph, qaBoardReview, domains }) {
+function buildValidationPlan({ contract, graph, qaBoardReview, domains, cognitiveImprovements, universalAgents }) {
   const reportSet = new Set(graph.qa_board?.reports_required || []);
   for (const domain of domains) for (const report of domain.requiredReports || []) reportSet.add(report);
   const deterministicChecks = new Set(graph.gates?.validation_gate || []);
@@ -363,6 +384,8 @@ function buildValidationPlan({ contract, graph, qaBoardReview, domains }) {
   }
   if (contract.required_extension) deterministicChecks.add(`format:${contract.required_extension}`);
   if (contract.grounding_required || contract.source_requirements?.required) deterministicChecks.add('evidence_ledger_present');
+  for (const check of cognitiveImprovements?.validation_checks || []) deterministicChecks.add(check);
+  for (const check of universalAgents?.validation_checks || []) deterministicChecks.add(check);
 
   return {
     reports_required: Array.from(reportSet),
@@ -373,19 +396,24 @@ function buildValidationPlan({ contract, graph, qaBoardReview, domains }) {
   };
 }
 
-function buildSelfRepairPolicy({ contract, qaBoardReview }) {
+function buildSelfRepairPolicy({ contract, qaBoardReview, cognitiveImprovements, universalAgents }) {
   const maxAttempts = contract?.risk_level === 'critical' ? 1 : 3;
+  const triggers = new Set([
+    'format_validation_failed',
+    'semantic_validation_failed',
+    'security_blocker_found',
+    'build_or_test_failed',
+    'missing_grounding_or_source_gap',
+    'tool_runtime_blocked',
+  ]);
+  for (const trigger of cognitiveImprovements?.repair_triggers || []) triggers.add(trigger);
+  for (const phase of universalAgents?.cycle || []) {
+    if (phase.phase === 'validation' || phase.phase === 'self_repair') triggers.add(phase.gate);
+  }
   return {
     required: true,
     max_attempts: maxAttempts,
-    triggers: [
-      'format_validation_failed',
-      'semantic_validation_failed',
-      'security_blocker_found',
-      'build_or_test_failed',
-      'missing_grounding_or_source_gap',
-      'tool_runtime_blocked',
-    ],
+    triggers: Array.from(triggers),
     failure_report_schema: {
       required_fields: [
         'failed_stage',
@@ -427,7 +455,7 @@ function buildReleasePolicy({ contract, graph, toolRuntimePlan, qaBoardReview, d
   };
 }
 
-function buildObservabilityPlan({ graph, traceId, domains }) {
+function buildObservabilityPlan({ graph, traceId, domains, cognitiveImprovements, universalAgents }) {
   const baseEvents = [
     'request_received',
     'contract_created',
@@ -443,9 +471,18 @@ function buildObservabilityPlan({ graph, traceId, domains }) {
   return {
     trace_id: traceId,
     graph_id: graph.graph_id,
-    events: Array.from(new Set([...(graph.observability?.events || []), ...baseEvents])),
+    events: Array.from(new Set([
+      ...(graph.observability?.events || []),
+      ...baseEvents,
+      ...(cognitiveImprovements?.observability_events || []),
+      'universal_agent_team_selected',
+      'universal_agent_cycle_phase_started',
+      'universal_agent_cycle_phase_validated',
+    ])),
     metrics: Array.from(new Set([
       ...(graph.observability?.metrics || []),
+      ...(cognitiveImprovements?.metrics || []),
+      ...(universalAgents?.metrics || []),
       'tool_error_rate',
       'self_repair_rate',
       'format_confusion_rate',
@@ -458,7 +495,7 @@ function buildObservabilityPlan({ graph, traceId, domains }) {
   };
 }
 
-function buildRegressionPlan({ contract, domains }) {
+function buildRegressionPlan({ contract, domains, cognitiveImprovements, universalAgents }) {
   const tests = new Set(['contract_schema', 'format_sovereignty', 'release_decision']);
   if (contract.required_extension) tests.add(`artifact_${contract.required_extension.replace('.', '')}_validation`);
   if (domains.some((domain) => domain.id === 'software-engineering-pipeline')) {
@@ -474,6 +511,9 @@ function buildRegressionPlan({ contract, domains }) {
   if (domains.some((domain) => domain.id === 'research-market-intelligence-engine')) {
     tests.add('evidence_ledger_real_sources');
   }
+  for (const test of cognitiveImprovements?.regression_tests || []) tests.add(test);
+  if (universalAgents?.summary?.totalAgentCount === 1000) tests.add('universal_agent_catalog_1000');
+  if (universalAgents?.summary?.allCyclePhasesCovered) tests.add('universal_agent_cycle_phase_coverage');
   return {
     required: true,
     generated_acceptance_tests: Array.from(tests),
@@ -514,6 +554,8 @@ function buildProductStudioBlueprint({
   release,
   observability,
   regression,
+  cognitiveImprovements,
+  universalAgents,
 }) {
   const activePlaybooks = domains.map((domain) => buildDomainPlaybook({ domain, contract, graph }));
   const reportSet = new Set(validation.reports_required || []);
@@ -572,6 +614,21 @@ function buildProductStudioBlueprint({
         tests_reexecuted_required: true,
       },
       regression: regression.generated_acceptance_tests,
+      cognitive_improvements: {
+        version: cognitiveImprovements?.version || null,
+        total_controls: cognitiveImprovements?.summary?.totalControlCount || 0,
+        active_controls: cognitiveImprovements?.summary?.activeControlCount || 0,
+        active_categories: cognitiveImprovements?.active_categories || [],
+        validation_checks: cognitiveImprovements?.validation_checks || [],
+      },
+      universal_agents: {
+        version: universalAgents?.version || null,
+        total_agents: universalAgents?.summary?.totalAgentCount || 0,
+        active_agents: universalAgents?.summary?.activeAgentCount || 0,
+        active_families: universalAgents?.active_families || [],
+        all_cycle_phases_covered: Boolean(universalAgents?.summary?.allCyclePhasesCovered),
+        validation_checks: universalAgents?.validation_checks || [],
+      },
     },
     production_controls: {
       clean_architecture_required: activePlaybooks.some((p) => p.id === 'software-engineering-pipeline' || p.id === 'full-stack-web-builder'),
@@ -833,6 +890,30 @@ function validateAgenticOperatingCore(core) {
   if (!core.product_studio?.quality_system?.self_repair?.required) {
     errors.push('product_studio quality system must require self repair');
   }
+  if (core.cognitive_improvements?.summary?.totalControlCount !== 100) {
+    errors.push('cognitive_improvements must expose the 100-control catalog');
+  }
+  if (!Array.isArray(core.cognitive_improvements?.active_controls) || core.cognitive_improvements.active_controls.length < 40) {
+    errors.push('cognitive_improvements must activate a meaningful control set');
+  }
+  if (core.cognitive_improvements?.summary?.backendBrainRequest
+    && (!Array.isArray(core.validation?.deterministic_checks)
+      || !core.validation.deterministic_checks.includes('cognitive.e2e-user-journey-probe'))) {
+    errors.push('cognitive e2e user journey validation check is required for backend brain upgrades');
+  }
+  if (core.universal_agents?.summary?.totalAgentCount !== 1000) {
+    errors.push('universal_agents must expose the 1000-agent catalog');
+  }
+  if (!Array.isArray(core.universal_agents?.active_team) || core.universal_agents.active_team.length < 10) {
+    errors.push('universal_agents must select an active team');
+  }
+  if (!core.universal_agents?.summary?.allCyclePhasesCovered) {
+    errors.push('universal_agents must cover every agentic cycle phase');
+  }
+  if (!Array.isArray(core.universal_agents?.validation_checks)
+    || !core.universal_agents.validation_checks.includes('universal_agents.catalog_1000')) {
+    errors.push('universal_agents catalog validation check is required');
+  }
   if (!core.ai_product_os?.summary?.contractFirst) errors.push('ai_product_os contract-first summary is required');
   if (!core.ai_product_os?.system_law?.do_not_answer_freely) errors.push('ai_product_os must forbid free answers before contract execution');
   if (!core.ai_product_os?.runtime_bindings?.temporal?.required) errors.push('ai_product_os Temporal binding is required');
@@ -868,6 +949,31 @@ function buildAgenticOperatingPrompt(core) {
         metrics: core.observability.metrics,
       },
       regression: core.regression,
+      cognitive_improvements: {
+        version: core.cognitive_improvements.version,
+        mode: core.cognitive_improvements.mode,
+        summary: core.cognitive_improvements.summary,
+        active_categories: core.cognitive_improvements.active_categories,
+        validation_checks: core.cognitive_improvements.validation_checks,
+        regression_tests: core.cognitive_improvements.regression_tests,
+      },
+      universal_agents: {
+        version: core.universal_agents.version,
+        mode: core.universal_agents.mode,
+        summary: core.universal_agents.summary,
+        active_families: core.universal_agents.active_families,
+        active_team: core.universal_agents.active_team.map((agent) => ({
+          id: agent.id,
+          family: agent.family,
+          specialization: agent.specialization,
+          role: agent.role,
+          cycle_phases: agent.cycle_phases,
+          tools: agent.tools,
+          validation_checks: agent.validation_checks,
+        })),
+        cycle: core.universal_agents.cycle,
+        validation_checks: core.universal_agents.validation_checks,
+      },
       product_studio: {
         mission: core.product_studio.mission,
         execution_model: core.product_studio.execution_model,
@@ -911,6 +1017,8 @@ function buildAgenticOperatingPrompt(core) {
       summary: core.summary,
     }, null, 2),
     buildAiProductOperatingPrompt(core.ai_product_os),
+    buildCognitiveImprovementPrompt(core.cognitive_improvements),
+    buildUniversalAgentFabricPrompt(core.universal_agents),
     'Operating rules:',
     '- Execute exactly the UniversalTaskContract through this core; do not substitute format, tool, source policy or delivery mode.',
     '- Use typed tools only when authorized by Tool Runtime; never invent tools.',

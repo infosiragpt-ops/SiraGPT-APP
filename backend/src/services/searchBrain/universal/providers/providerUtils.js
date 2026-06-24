@@ -55,9 +55,9 @@ function limiterFor(id, minTime = 350) {
   return limiters.get(id);
 }
 
-function breakerFor(id, action) {
+function breakerFor(id) {
   if (!breakers.has(id)) {
-    breakers.set(id, new CircuitBreaker(action, {
+    breakers.set(id, new CircuitBreaker((fn) => fn(), {
       timeout: 12000,
       errorThresholdPercentage: 65,
       resetTimeout: 30000,
@@ -96,9 +96,9 @@ async function fetchText(url, opts = {}) {
 
 async function guardedSearch(providerId, fn, opts = {}) {
   const limiter = limiterFor(providerId, opts.minTime || 350);
-  const breaker = breakerFor(providerId, fn);
+  const breaker = breakerFor(providerId);
   try {
-    return await limiter.schedule(() => breaker.fire());
+    return await limiter.schedule(() => breaker.fire(fn));
   } catch (err) {
     if (process.env.SEARCH_BRAIN_DEBUG === "1") {
       console.warn(`[search-brain:${providerId}]`, err && err.message ? err.message : err);

@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const ocrEngine = require('./ocr-engine');
+const outputFormat = require('./output-format-contract');
 const {
   MAX_SIMULTANEOUS_DOCUMENTS,
 } = require('../config/document-batch-limits');
@@ -380,12 +381,14 @@ function isProfessionalDocumentSynthesisRequest(query) {
 }
 
 function wantsSingleParagraphSynthesis(query) {
-  const normalized = normalizeForSearch(query).replace(/[^a-z0-9]+/g, ' ');
-  return (
-    /\b(?:un|uno|1)\s+(?:solo\s+)?parrafo\b/.test(normalized) ||
-    /\ben\s+(?:un|uno|1)\s+parrafo\b/.test(normalized) ||
-    /\bparrafo\s+unico\b/.test(normalized)
-  );
+  return outputFormat.wantsSingleParagraphSynthesis(query);
+}
+
+// Returns the explicit number of paragraphs the user asked for (e.g. "en 2
+// parrafos" -> 2), or 0 when none was requested. Capped at 6 and only honored
+// for >= 2 so the dedicated single-paragraph path keeps handling "1 parrafo".
+function requestedParagraphCount(query) {
+  return outputFormat.requestedParagraphCount(query);
 }
 
 function stripDocumentExtractorHeader(text) {
@@ -625,6 +628,70 @@ async function resolveTranscriptionFileIds(prisma, {
   return [];
 }
 
+/**
+ * Does this text look like a QUESTION about an already-uploaded document
+ * (a follow-up), rather than a build/research/generation task? Used to decide
+ * whether to reattach a chat's prior document when no file is sent. Broad on
+ * doc-understanding signals, conservative against creation/external commands so
+ * an unrelated old upload is never hijacked by a "crea una app" task. Shared by
+ * the chat route and the agent-task route.
+ */
+function looksLikeDocumentFollowupQuestion(text) {
+  const raw = String(text || '').trim().toLowerCase();
+  if (!raw || raw.length > 400) return false;
+  const v = `${raw} ${raw.replace(/([a-z])\1+/g, '$1')}`;
+  if (/\b(crea|cre[aá]me|genera|gener[aá]me|construye|desarrolla|dise[ñn]a|build|create|develop|investiga en internet|busca en (la )?(web|internet)|descarga|deploy|sube a|haz una (app|web|p[aá]gina))\b/i.test(v)) {
+    return false;
+  }
+  return /\b(qu[eé]|cu[aá]l(es)?|c[oó]mo|cu[aá]ndo|d[oó]nde|qui[eé]n(es)?|cu[aá]nto?s?|por qu[eé]|what|which|who|where|when|how|why|resume|res[uú]men|res[uú]me|resumir|explica|expl[ií]came|analiza|an[aá]lisis|de qu[eé] trata|t[ií]tulo|title|autor|objetivo|conclusi[oó]n|secci[oó]n|cap[ií]tulo|p[aá]gina|menciona|dice|trata|contiene|summary|about|tell me|agrega\w*|a[ñn]ad\w*|borr\w*|elimin\w*|quit\w*|reemplaz\w*|complet\w*|rellen\w*|corrig\w*|edit[ae]\w*|modific\w*|insert\w*|cambi\w*)\b/i.test(v);
+}
+
+/**
+ * Resolve the most recent readable document(s) attached earlier in a chat.
+ *
+ * The frontend drops the prior attachment when a user asks a follow-up about an
+ * already-uploaded document ("cual es el titulo?"), sending `files: []`. This
+ * recovers those file ids from the chat's recent message history so the turn can
+ * still answer from the document instead of failing. Mirrors the chat-scan in
+ * `resolveTranscriptionFileIds` but without the transcription-only recent-file
+ * fallback (so it never grabs an unrelated upload from another chat).
+ */
+async function resolveChatDocumentFileIds(prisma, {
+  userId,
+  chatId = null,
+  providedFileIds = [],
+  take = 30,
+} = {}) {
+  const provided = uniqueFileIds(Array.isArray(providedFileIds) ? providedFileIds : []);
+  if (provided.length > 0 || !prisma || !userId || !chatId) return provided;
+  if (!prisma.chat?.findFirst || !prisma.message?.findMany) return [];
+
+  const chat = await prisma.chat.findFirst({
+    where: { id: String(chatId), userId },
+    select: { id: true },
+  }).catch(() => null);
+  if (!chat) return [];
+
+  const messages = await prisma.message.findMany({
+    where: { chatId: chat.id },
+    orderBy: { timestamp: 'desc' },
+    take: Math.max(1, Math.min(100, Number(take) || 30)),
+    select: { files: true },
+  }).catch(() => []);
+
+  const ids = [];
+  for (const message of messages) {
+    ids.push(...extractFileIdsFromMessageFiles(message.files));
+  }
+  const unique = uniqueFileIds(ids);
+  if (unique.length === 0) return [];
+
+  const rows = await loadFileRows(prisma, userId, unique);
+  const allowed = new Set(rows.filter(isReadableFileCandidate).map((row) => row.id));
+  // Preserve recency order (messages are newest-first, so `unique` is too).
+  return unique.filter((id) => allowed.has(id)).slice(0, MAX_SIMULTANEOUS_DOCUMENTS);
+}
+
 async function serializeMessageAttachments(prisma, { userId, fileIds = [], clientMetadata = [] } = {}) {
   const ids = uniqueFileIds(Array.isArray(fileIds) ? fileIds : []);
   if (ids.length === 0) return [];
@@ -778,7 +845,7 @@ async function buildUploadedFileContext(prisma, {
     'Contexto inicial de archivos adjuntos ya extraido por siraGPT.',
     'Usa este contenido para responder sobre el documento pegado/subido. Si el usuario pide analisis, resumen o conclusiones, responde desde la evidencia relevante del documento completo y no desde portada, indice, autores o metadatos preliminares.',
     'Para analisis profesionales: sintetiza con criterio academico/ejecutivo, no copies el indice, no enumeres metadatos internos y no empieces con "Indice de contenidos".',
-    wantsSingleParagraphSynthesis(query) ? 'El usuario pidio un solo parrafo: la respuesta final debe ser exactamente un parrafo, sin titulo, sin viñetas, sin tabla y sin saltos de seccion.' : '',
+    ...outputFormat.buildFormatDirectiveLines(query, { lang: 'es' }),
     query ? `Pregunta del usuario: ${query}` : '',
     bulkBatch ? `Lote grande detectado: ${withText.length} documentos adjuntos. Cada bloque incluye una muestra breve y los documentos completos quedan referenciados por id para recuperación adicional.` : '',
     'Para evidencia estructurada adicional llama docintel_retrieve/docintel_extract_tables; para busqueda semantica general llama rag_retrieve.',
@@ -825,17 +892,24 @@ async function buildTranscriptionTextFromFiles(prisma, { userId, fileIds = [], m
 }
 
 module.exports = {
+  buildFormatDirectiveLines: outputFormat.buildFormatDirectiveLines,
+  parseOutputFormatRequest: outputFormat.parseOutputFormatRequest,
   buildTranscriptionTextFromFiles,
   buildUploadedFileContext,
   describeUnextractedAttachment,
   extractFileIdsFromMessageFiles,
   ensureImageOcr,
   hasUsefulExtractedText,
+  isImageFile,
   isProfessionalDocumentSynthesisRequest,
   isPlainTranscriptionRequest,
   mapWithLimit,
   normalizeClientMetadata,
   prepareDocumentTextForProfessionalSynthesis,
+  looksLikeDocumentFollowupQuestion,
+  requestedParagraphCount,
+  resolveChatDocumentFileIds,
+  resolveStoredFilePath,
   resolveTranscriptionFileIds,
   serializeMessageAttachments,
   wantsSingleParagraphSynthesis,

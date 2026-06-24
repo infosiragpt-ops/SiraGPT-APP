@@ -388,6 +388,7 @@ router.post('/:chatId/run/:runId/cancel', authenticateToken, async (req, res) =>
 // then polls for partialContent/status changes until terminal.
 router.get('/:chatId/run/:runId/stream', authenticateToken, async (req, res) => {
   const { chatId, runId } = req.params;
+  let heartbeat = null; // hoisted so the catch can clear it on the error path
 
   try {
     const run = await prisma.chatRun.findFirst({
@@ -428,9 +429,10 @@ router.get('/:chatId/run/:runId/stream', authenticateToken, async (req, res) => 
       closed = true;
     });
 
-    const heartbeat = setInterval(() => {
+    heartbeat = setInterval(() => {
       if (!closed) res.write(': ping\n\n');
     }, 15_000);
+    heartbeat.unref?.();
 
     let lastSnapshotKey = `${run.status}:${run.partialContent?.length || 0}`;
     let lastChunkAtMs = run.lastChunkAt ? new Date(run.lastChunkAt).getTime() : 0;
@@ -468,6 +470,10 @@ router.get('/:chatId/run/:runId/stream', authenticateToken, async (req, res) => 
     clearInterval(heartbeat);
     if (!closed) res.end();
   } catch (error) {
+    // The polling loop awaits prisma.chatRun.findUnique each tick; a DB error
+    // there jumps here before the in-try clearInterval, so clear it on the
+    // error path too (the timer isn't unref-immortal but must not leak).
+    clearInterval(heartbeat);
     console.error('Stream chat run error:', error);
     if (!res.headersSent) {
       res.status(500).json({ error: 'Stream failed' });
@@ -485,7 +491,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
     // payload. If If-None-Match matches, return 304 immediately.
     try {
       const fingerprintRow = await prisma.chat.findFirst({
-        where: { id: req.params.id, userId: req.user.id },
+        where: { id: req.params.id, userId: req.user.id, deletedAt: null },
         select: {
           id: true,
           updatedAt: true,
@@ -493,16 +499,27 @@ router.get('/:id', authenticateToken, async (req, res) => {
           messages: {
             orderBy: { timestamp: 'desc' },
             take: 1,
-            select: { timestamp: true },
+            select: { id: true, timestamp: true, content: true, metadata: true },
           },
         },
       });
       if (fingerprintRow) {
-        const latestTs = fingerprintRow.messages[0]?.timestamp
-          ? new Date(fingerprintRow.messages[0].timestamp).getTime()
+        const latestMessage = fingerprintRow.messages[0] || null;
+        const latestTs = latestMessage?.timestamp
+          ? new Date(latestMessage.timestamp).getTime()
           : new Date(fingerprintRow.updatedAt || 0).getTime();
         const count = fingerprintRow._count?.messages || 0;
-        const etag = `W/"chat-${fingerprintRow.id}-${count}-${latestTs}"`;
+        const latestContent = typeof latestMessage?.content === 'string' ? latestMessage.content : '';
+        const latestMetadata = latestMessage?.metadata ? stableStringify(latestMessage.metadata) : '';
+        const latestDigest = crypto
+          .createHash('sha1')
+          .update(`${latestMessage?.id || ''}:${latestContent}:${latestMetadata}`)
+          .digest('hex')
+          .slice(0, 16);
+        // Agent-task updates often replace the content of the same assistant
+        // row without changing message count or timestamp. Include a digest
+        // so browser HTTP cache cannot keep showing the stale placeholder.
+        const etag = `W/"chat-${fingerprintRow.id}-${count}-${latestTs}-${latestDigest}"`;
         res.setHeader('ETag', etag);
         const ifNoneMatch = req.headers['if-none-match'];
         if (ifNoneMatch && ifNoneMatch === etag) {
@@ -516,10 +533,12 @@ router.get('/:id', authenticateToken, async (req, res) => {
     const chat = await prisma.chat.findFirst({
       where: {
         id: req.params.id,
-        userId: req.user.id
+        userId: req.user.id,
+        deletedAt: null,
       },
       include: {
         messages: {
+          where: { deletedAt: null },
           orderBy: { timestamp: 'asc' }
         },
         customGpt: {
@@ -625,7 +644,8 @@ router.put('/:id', [
     const chat = await prisma.chat.updateMany({
       where: {
         id: req.params.id,
-        userId: req.user.id
+        userId: req.user.id,
+        deletedAt: null,
       },
       data: updateData
     });
@@ -654,18 +674,39 @@ router.put('/:id', [
 // Delete chat
 router.delete('/:id', authenticateToken, async (req, res) => {
   try {
-    const deletedChat = await prisma.chat.deleteMany({
-      where: {
-        id: req.params.id,
-        userId: req.user.id
-      }
+    const chat = await prisma.chat.findFirst({
+      where: { id: req.params.id, userId: req.user.id, deletedAt: null },
+      select: { id: true },
     });
 
-    if (deletedChat.count === 0) {
+    if (!chat) {
       return res.status(404).json({ error: 'Chat not found' });
     }
 
-    res.json({ message: 'Chat deleted successfully' });
+    const deletedAt = new Date();
+    const updatedChat = await prisma.$transaction(async (tx) => {
+      await tx.message.updateMany({
+        where: { chatId: chat.id, deletedAt: null },
+        data: { deletedAt },
+      });
+
+      return tx.chat.update({
+        where: { id: chat.id },
+        data: {
+          deletedAt,
+          isArchived: true,
+          updatedAt: deletedAt,
+        },
+        select: { id: true, deletedAt: true, isArchived: true },
+      });
+    });
+
+    res.json({
+      ok: true,
+      success: true,
+      message: 'Chat deleted successfully',
+      chat: updatedChat,
+    });
   } catch (error) {
     console.error('Delete chat error:', error);
     res.status(500).json({ error: 'Failed to delete chat' });
@@ -706,7 +747,8 @@ router.post('/:id/messages', [
     const chat = await prisma.chat.findFirst({
       where: {
         id: req.params.id,
-        userId: req.user.id
+        userId: req.user.id,
+        deletedAt: null,
       }
     });
 

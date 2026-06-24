@@ -9,6 +9,20 @@ type ClipboardPayload = {
   rtf: string
 }
 
+function getErrorName(err: unknown): string {
+  return err instanceof Error ? err.name : ""
+}
+
+function getErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
+function isClipboardPermissionDenied(err: unknown): boolean {
+  const name = getErrorName(err)
+  const message = getErrorMessage(err)
+  return name === "NotAllowedError" || /write permission denied/i.test(message)
+}
+
 const START_FRAGMENT = "<!--StartFragment-->"
 const END_FRAGMENT = "<!--EndFragment-->"
 
@@ -395,13 +409,21 @@ export async function writeWordClipboardPayload(payload: ClipboardPayload) {
     } catch (err) {
       // Fall through to text-copy fallback below. The user still gets
       // a usable clipboard even if the browser denies rich MIME writes.
-      console.warn("[rich-clipboard] Falling back to text clipboard", err)
+      if (!isClipboardPermissionDenied(err)) {
+        console.warn("[rich-clipboard] Falling back to text clipboard", getErrorMessage(err))
+      }
     }
   }
 
   if (navigator.clipboard && typeof navigator.clipboard.writeText === "function" && window.isSecureContext) {
-    await navigator.clipboard.writeText(payload.text)
-    return
+    try {
+      await navigator.clipboard.writeText(payload.text)
+      return
+    } catch (err) {
+      if (!isClipboardPermissionDenied(err)) {
+        console.warn("[rich-clipboard] Falling back to legacy text clipboard", getErrorMessage(err))
+      }
+    }
   }
 
   legacyTextCopy(payload.text)

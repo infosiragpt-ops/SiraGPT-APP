@@ -28,6 +28,14 @@ describe('parseCron', () => {
     assert.deepEqual([...parseCron('*/15 * * * *').fields[0]].sort((a, b) => a - b), [0, 15, 30, 45]);
   });
 
+  test('bare-number step "N/S" expands N..max by S (not a single value)', () => {
+    // Regression: '5/15' used to collapse to just {5}.
+    assert.deepEqual([...parseCron('5/15 * * * *').fields[0]].sort((a, b) => a - b), [5, 20, 35, 50]);
+    assert.deepEqual([...parseCron('2/10 * * * *').fields[0]].sort((a, b) => a - b), [2, 12, 22, 32, 42, 52]);
+    // No step → still a single value.
+    assert.deepEqual([...parseCron('7 * * * *').fields[0]], [7]);
+  });
+
   test('DOW=7 normalized to 0 (Sunday)', () => {
     const p = parseCron('* * * * 7');
     assert.equal(p.fields[4].has(0), true);

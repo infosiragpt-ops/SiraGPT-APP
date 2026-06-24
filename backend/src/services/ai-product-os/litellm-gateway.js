@@ -359,6 +359,10 @@ function applyStreamingUsage(payload, runtime) {
 }
 
 function applyThinkingControls(payload, runtime, thinkingLevel) {
+  if (runtime.thinkingFormat === "openrouter") {
+    applyOpenRouterReasoningControls(payload, runtime, thinkingLevel);
+    return;
+  }
   if (runtime.thinkingFormat !== "deepseek" || !isDeepSeekV4ModelId(runtime.model_id)) return;
   if (isDisabledThinkingLevel(thinkingLevel)) {
     payload.thinking = { type: "disabled" };
@@ -370,8 +374,70 @@ function applyThinkingControls(payload, runtime, thinkingLevel) {
   payload.reasoning_effort = resolveDeepSeekReasoningEffort(thinkingLevel);
 }
 
+// ── OpenRouter unified reasoning ────────────────────────────────────────────
+// OpenRouter normalises every provider's thinking knob behind a single
+// `reasoning: { effort }` request param and streams the chain-of-thought back
+// in `delta.reasoning` / `delta.reasoning_details`. The param is sent ONLY to
+// models known to support it — an unsupported model receiving `reasoning` can
+// 404/400 — and is fully omitted otherwise. Per-model configurability:
+//   - the synced model catalog flag (`catalog.reasoning === true`) wins,
+//   - otherwise a conservative family allowlist,
+//   - env CSV overrides: SIRAGPT_OPENROUTER_REASONING_FORCE adds substring
+//     matches, SIRAGPT_OPENROUTER_REASONING_BLOCK removes them.
+// Effort comes from the runtime thinking level (default "medium", env
+// SIRAGPT_OPENROUTER_REASONING_EFFORT overrides the default).
+const OPENROUTER_REASONING_FAMILIES_RX = /(anthropic\/claude|openai\/(o[134]|gpt-5)|deepseek\/deepseek-r1|deepseek\/deepseek-v3\.1|google\/gemini-(2\.5|3)|x-ai\/grok|qwen\/qwq|qwen\/qwen3|moonshotai\/kimi-k2|openai\/gpt-oss|z-ai\/glm-4\.[56])/i;
+
+function envCsvMatches(envName, modelId) {
+  const raw = String(process.env[envName] || "").trim();
+  if (!raw) return false;
+  return raw.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean)
+    .some((pattern) => modelId.toLowerCase().includes(pattern));
+}
+
+function openRouterModelSupportsReasoning(modelId, catalog) {
+  const id = String(modelId || "");
+  if (!id) return false;
+  if (envCsvMatches("SIRAGPT_OPENROUTER_REASONING_BLOCK", id)) return false;
+  if (envCsvMatches("SIRAGPT_OPENROUTER_REASONING_FORCE", id)) return true;
+  if (catalog && catalog.reasoning === true) return true;
+  return OPENROUTER_REASONING_FAMILIES_RX.test(id);
+}
+
+function resolveOpenRouterReasoningEffort(thinkingLevel) {
+  const normalized = String(thinkingLevel || "").trim().toLowerCase();
+  if (normalized === "low" || normalized === "minimal") return "low";
+  // Only the explicit boost levels map to high. The plain "high" that
+  // currentThinkingLevel() defaults to is a DeepSeek-era global, not a user
+  // choice — OpenRouter reasoning defaults to "medium" (latency/cost balance),
+  // overridable via SIRAGPT_OPENROUTER_REASONING_EFFORT.
+  if (normalized === "xhigh" || normalized === "max") return "high";
+  const envDefault = String(process.env.SIRAGPT_OPENROUTER_REASONING_EFFORT || "").trim().toLowerCase();
+  return ["low", "medium", "high"].includes(envDefault) ? envDefault : "medium";
+}
+
+function applyOpenRouterReasoningControls(payload, runtime, thinkingLevel) {
+  // A caller-supplied `reasoning` (via extra, e.g. `{ exclude: true }`) is an
+  // explicit decision — never override it.
+  if (payload.reasoning !== undefined) return;
+  if (!openRouterModelSupportsReasoning(runtime.model_id, runtime.catalog)) return;
+  if (isDisabledThinkingLevel(thinkingLevel)) {
+    // Model thinks internally but the chain-of-thought is not streamed back.
+    payload.reasoning = { exclude: true };
+    return;
+  }
+  payload.reasoning = { effort: resolveOpenRouterReasoningEffort(thinkingLevel) };
+}
+
 function sanitizeMessagesForProvider(messages = [], runtime, thinkingLevel) {
   const cloned = cloneJson(Array.isArray(messages) ? messages : []);
+  // `reasoning_details` (raw OpenRouter thinking blocks, incl. Anthropic's
+  // signed thinking) must be replayed VERBATIM to OpenRouter on later
+  // tool-call turns, but is an unknown field for every other provider —
+  // strip it everywhere else so a history that carries it can't 400.
+  if (runtime.thinkingFormat !== "openrouter") {
+    stripReasoningDetails(cloned);
+  }
   if (runtime.thinkingFormat !== "deepseek" || !isDeepSeekV4ModelId(runtime.model_id)) {
     stripReasoningContent(cloned);
     return cloned;
@@ -402,6 +468,15 @@ function stripReasoningContent(messages) {
   for (const message of messages || []) {
     if (message && typeof message === "object") {
       delete message.reasoning_content;
+    }
+  }
+}
+
+function stripReasoningDetails(messages) {
+  for (const message of messages || []) {
+    if (message && typeof message === "object") {
+      delete message.reasoning_details;
+      delete message.reasoning;
     }
   }
 }
@@ -797,4 +872,7 @@ module.exports = {
   classifyProviderError,
   resolveRetryDelayMs,
   readRetryAfterMs,
+  // OpenRouter unified reasoning (exported for tests).
+  openRouterModelSupportsReasoning,
+  resolveOpenRouterReasoningEffort,
 };

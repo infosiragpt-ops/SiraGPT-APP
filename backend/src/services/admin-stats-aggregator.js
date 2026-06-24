@@ -159,14 +159,16 @@ function _buildUploadTrend(rows, now = new Date()) {
 async function aggregateUserStats(prisma, range) {
   const { from, to } = parseRange(range);
 
-  // Fixed window for the signup trend — last 7 days, independent of the
-  // caller's `range`. We surface both: the rolling 30d aggregates *and*
-  // the short-term trendline that admins actually look at every morning.
+  // Signup-trend window: follow the caller's range so the 7d/30d/90d
+  // selector actually changes the chart. When no explicit range is given
+  // (parseRange default), keep the classic 7-day morning trendline.
   const now = new Date();
-  const trendFrom = new Date(
+  const requestedSpanMs = Math.max(0, to.getTime() - from.getTime());
+  const defaultTrendFrom = new Date(
     Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
       - 6 * 24 * 60 * 60 * 1000
   );
+  const trendFrom = requestedSpanMs > 8 * 24 * 60 * 60 * 1000 ? from : defaultTrendFrom;
 
   const [newUsers, activeUsers, churnedUsers, activeSubs, planBreakdown, signupRows] =
     await Promise.all([
@@ -222,6 +224,12 @@ async function aggregateUserStats(prisma, range) {
 
   const signupTrend = _buildSignupTrend(signupRows, now);
 
+  // Total headcount for the status page (full base, not range-bound).
+  const totalUsers = await prisma.user.count({
+    where: { isSuperAdmin: false, deletedAt: null },
+  });
+
+  const mrrRounded = Math.round(mrrProxy * 100) / 100;
   return {
     range: { from: from.toISOString(), to: to.toISOString() },
     newUsers,
@@ -230,7 +238,13 @@ async function aggregateUserStats(prisma, range) {
     activeSubscriptions: subsByPlan,
     breakdownByPlan,
     signupTrend,
-    mrrProxyUsd: Math.round(mrrProxy * 100) / 100,
+    mrrProxyUsd: mrrRounded,
+    // Contract aliases consumed by the admin Status page — keep both
+    // namings so neither consumer breaks.
+    totalUsers,
+    newThisWeek: newUsers,
+    activeThisWeek: activeUsers,
+    mrrUsd: mrrRounded,
   };
 }
 

@@ -22,12 +22,102 @@ is much faster on dedicated CPU.
 
 **How to apply:** Deploy via `.replit` `[deployment] deploymentTarget` (this app is
 NOT an artifact-based deploy — the artifact.toml files for mockup-sandbox/api-server
-are skill scaffolding, not what ships). `.replit` is read-only to the agent, so the
-user must switch type to Reserved VM in the Publish UI and republish.
+are skill scaffolding, not what ships). `.replit` may be filesystem-writable, but the
+deployment *type* (Autoscale vs Reserved VM) is selected in the Publish UI — there is
+no clean `.replit` deploymentTarget value for Reserved VM (docs: it's a UI/machine-config
+choice). So the user must switch type to Reserved VM in the Publish UI and republish.
+This is also a billing change (Reserved VM = always-on fixed cost) — get user consent.
 
 Boot architecture: `backend/index.js` calls `startServer()` at the very bottom, so
 `app.listen()` only fires after ALL module requires + ~700 lines of middleware
 setup complete. The port cannot open until the whole module graph loads.
+
+## Deploy health-check probes the [[ports]] localPort mapped to externalPort=80 — NOT the injected PORT
+The deploy health-check expects the app to open the `localPort` from the `.replit`
+`[[ports]]` entry whose `externalPort = 80`. Replit ALSO injects `PORT=5000` as a
+container default, but that value does NOT drive the health-check — it is a red herring.
+The frontend must listen on the `[[ports]]` localPort (currently 3000), which the run
+command pins via `FRONTEND_PORT=3000`.
+
+**Symptom history (this repo):** Originally a second artifact (sira-promo video) declared
+a port-5000 → externalPort=80 mapping, so the health-check expected 5000 while Next.js
+ran on 3000 → "required port was never opened, expected port 5000". After the user removed
+the port-5000 mapping in Networking, `[[ports]]` had only `3000 → 80`, so the health-check
+expects **3000**. Briefly making `start-all.cjs` use the injected `PORT` (5000) flipped the
+failure to "expected port 3000". The correct fix is the simple `FRONTEND_PORT || 3000`.
+
+**Fix in `scripts/start-all.cjs`:** `const FRONTEND_PORT = Number(process.env.FRONTEND_PORT || 3000);`
+Do NOT prefer `process.env.PORT` — it is 5000 and does not match the `[[ports]]` mapping.
+
+**Why:** routing/health-check is driven by `[[ports]]` localPort↔externalPort=80, and the
+run command sets FRONTEND_PORT to match. Keep them in lockstep; the injected PORT is noise.
+
+## Reserved VM (& Autoscale) allow only ONE external port
+A Reserved VM / Autoscale deployment exposes exactly ONE external port. `.replit`
+must declare a single `[[ports]]` entry with `externalPort = 80`; the exposed
+internal port must bind `0.0.0.0` (not localhost). Declaring more than one
+`externalPort` makes the gce **promote/health-check step time out** (~4 min:
+"Waiting for deployment to be ready") and the publish FAILS — even though the
+build/compile phase succeeds. Autoscale tolerated extra ports (it only probes the
+`:80` port); Reserved VM does not.
+
+**Why:** SiraGPT's `.replit` historically declared 3 ports (3000→80 frontend,
+5000→5000 sira-promo dev-only video, 5050→3000 backend). Only the frontend should
+be external; the backend is reached via loopback `127.0.0.1:5050` (Next.js
+rewrites) and sira-promo via the `/sira-promo` proxy through the frontend —
+neither needs an external port. The dev-only 5000 never opens in prod, and 5050
+exceeds the readiness window, so both block the VM promote.
+
+**Recurrence trigger:** the `SiraGPT Video` / `sira-promo` workflow runs on port
+5000; whenever it runs, Replit auto-detects the open port and RE-ADDS the
+`5000 → 5000` external mapping to `.replit`, silently re-breaking the next VM
+promote. Symptom seen: a publish succeeds, then a later publish fails at "Waiting
+for deployment to be ready" with no code change — check `.replit` `[[ports]]` for a
+re-added 5000 external entry first. The user must remove it again before each
+publish (or avoid running the video workflow right before publishing).
+
+**How to apply:** The agent CANNOT edit `.replit` `[[ports]]` — the edit guard
+blocks it and there is NO agent callback for port mappings (verified: not in
+code_execution, workflows, or any skill). The USER must remove the extra mappings
+in the **Ports** pane, keeping only `3000 → 80`, then republish. The homepage
+`GET /` probe is safe to keep on `/` because the root layout/page do no blocking
+SSR backend fetch (generateMetadata only reads request headers), so `/` returns
+200 fast while the backend finishes booting in the background.
+
+## Backend `app.listen` must honor HOST or it grabs the second external port
+`backend/index.js` originally called `app.listen(PORT, cb)` with NO host arg, so
+Express bound `0.0.0.0:5050`. Even though the dev workflow passes `HOST=127.0.0.1`,
+that env was ignored — so Replit's port auto-detector saw 5050 listening on all
+interfaces and ADDED a `5050 → externalPort` mapping to `.replit`, recreating the
+forbidden "more than one external port" state (see ONE-external-port section) and
+breaking the VM promote. Fix: `const HOST = process.env.HOST || '0.0.0.0'` and
+`app.listen(PORT, HOST, cb)`. In dev the workflow's `HOST=127.0.0.1` now makes the
+backend loopback-only (unexposable → never auto-mapped); prod `npm start` leaves
+HOST unset → 0.0.0.0 (unchanged). Mirrors `scripts/start-all.cjs` BACKEND_HOST.
+**Why:** loopback binding is the deterministic, recurrence-proof guard — the backend
+can no longer be auto-detected as a second external port regardless of workflow runs.
+
+## Workflow lifecycle WIPES `.replit` [[ports]]; only the UI restores them
+Calling `removeWorkflow` (and, observed, plain workflow restarts) regenerates the
+`.replit` `[[ports]]` block from live port detection — and in a headless agent
+session it frequently leaves it EMPTY (zero `[[ports]]`), which 404s both the dev
+preview (riker domain → externalPort 80 → no mapping) and breaks the next publish.
+The agent CANNOT re-add the mapping (edit guard + no callback). It is restored only
+when the USER opens the workspace / Ports (Networking) pane, where Replit
+auto-detects the open port and writes the mapping — with the backend now loopback,
+the only detectable port is the frontend, so it deterministically becomes `3000 → 80`.
+**How to apply:** after any workflow add/remove/restart that clears ports, do NOT
+assume publish will work — have the user confirm exactly one `3000 → 80` entry in
+the Ports pane (Replit usually auto-adds it on workspace open) before republishing.
+
+**Also wiped by task-merge commits:** merging background project tasks regenerates
+`.replit` and drops `[[ports]]` too (observed: a "Git commit prior to merge" commit
+removed the whole block, turning later builds' promote step into "required port was
+never opened, expected port 3000" while the build phase still succeeded). When many
+tasks are merging concurrently, the safest sequence is: let the merges settle, then
+set `3000 → 80` in the Ports pane, then publish IMMEDIATELY — any merge between the
+set and the publish re-wipes it. Confirm via build history: successful builds carried
+`localPort=3000/externalPort=80`; failed ones had zero `[[ports]]`.
 
 ## Prod database != executeSql database
 `executeSql` (code_execution) connects to a DIFFERENT database than the backend.
@@ -49,6 +139,46 @@ production-only env vars. In dev, OAuth still shows the warning (expected).
   invalidates all existing user sessions. User must update via Replit Secrets UI.
 - `CORS_ORIGINS`: Replit secret is `*`; should be `https://siragpt.com,...`.
   User must update via Replit Secrets UI.
+
+## Health-check resilience: backend crash must not tear down frontend
+`scripts/start-all.cjs` `onChildExit` originally killed the WHOLE container if
+either child exited. Since the deploy health-check probes only the frontend
+(port 3000→80), a backend boot/migration crash would tear down the live frontend
+and fail the promote with ZERO production logs (nothing goes live → no streamed
+runtime logs → blind). Now, when `REPLIT_DEPLOYMENT === "1"`, a backend exit is
+logged and the frontend stays online (sets `backend=null`); only a FRONTEND exit
+tears the container down. Local `npm start` keeps strict teardown.
+**Why:** breaks the debug deadlock — a degraded-but-live deploy (UI up, /api 502)
+still passes the health-check, goes live, and finally exposes prod runtime logs.
+
+## Transient "Internal Server Error" on /api right after a fresh publish
+The backend takes ~45s to boot on the Reserved VM (heavy monolith). The deploy
+health-check only waits for the FRONTEND (3000→80), so the site goes live BEFORE
+the backend accepts connections. During that window every `/api/*` call (Next.js
+rewrite → `127.0.0.1:5050`) hits ECONNREFUSED and Next returns a raw 500
+"Internal Server Error" (logged as `Failed to proxy http://localhost:5050/... ECONNREFUSED`).
+This is exactly what a user sees if they log in (incl. Google OAuth) in the first
+~45s after publishing. It self-resolves once `backend is accepting connections`
+appears in logs. **Verify recovery:** `curl -sI https://siragpt.com/api/auth/google`
+→ 302 to accounts.google.com with `redirect_uri=https://siragpt.com/api/auth/google/callback`;
+`/api/auth/me` → 401 (NOT 500); `/` → 200. If those pass, OAuth is healthy and the
+500 was just the boot window — tell the user to retry.
+
+## Cannot reproduce the prod standalone build locally
+Foreground bash is capped ~120s (< the ~10-min Next build); detached builds
+(`nohup`, `setsid`, `&`) get KILLED by the sandbox shortly after the spawning
+tool call returns — they freeze at "Creating an optimized production build ..."
+with no error. So prod-only build/runtime failures are NOT locally reproducible;
+rely on a live (even degraded) deploy + `fetch_deployment_logs` instead.
+
+## Frontend `/` is crash-proof against missing traced files / network
+The root path is robust by design, so a standalone boot/runtime crash on `/` is
+unlikely: `app/page.tsx` is force-dynamic rendering a client component (no SSR
+backend fetch); `lib/i18n/request.ts` `loadMessages` wraps the dynamic
+`import(../../messages/${code}.json)` in try/catch returning `{}` (missing trace
+→ empty messages, NOT a 500); middleware geoloc (`ipapi.co`) is try/catch with a
+1.2s abort (worst case +1.2s latency per probe, never a crash). `next.config`
+`rewrites()` returns a plain object and cannot throw at standalone boot.
 
 ## Dev workflow packages
 Root `node_modules` is empty by default in this repo. Run `pnpm install` first

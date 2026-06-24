@@ -32,9 +32,40 @@ const chargeCredits = require('../middleware/charge-credits');
 const requirePaidPlan = require('../middleware/require-paid-plan');
 const { refundLastCharge } = chargeCredits;
 const imageProvider = require('../services/image-provider');
+const objectStorage = require('../services/object-storage');
+const crypto = require('crypto');
 const prisma = require('../config/database');
 
 const router = express.Router();
+
+// Copy provider asset URLs into R2 so they don't expire, returning stable app
+// URLs served by the /uploads R2 fallback ("images/" is a public prefix). On
+// any failure we keep the original provider URL so generation never appears to
+// fail. No-op passthrough when R2 is disabled (dev without R2 secrets).
+async function persistAssetsToR2(userId, assets) {
+  const urls = [];
+  for (const a of assets || []) {
+    const src = a && a.url;
+    if (!src) continue;
+    if (!objectStorage.enabled()) { urls.push(src); continue; }
+    try {
+      const resp = await fetch(src, { signal: AbortSignal.timeout(Number(process.env.ASSET_FETCH_TIMEOUT_MS) || 30000) });
+      if (!resp.ok) { urls.push(src); continue; }
+      const buf = Buffer.from(await resp.arrayBuffer());
+      const ct = resp.headers.get('content-type') || 'image/png';
+      const ext = ct.includes('jpeg') ? 'jpg' : ct.includes('webp') ? 'webp' : ct.includes('gif') ? 'gif' : 'png';
+      const seg = objectStorage.sanitizeSegment(userId);
+      const filename = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}.${ext}`;
+      const key = `uploads/images/${seg}/${filename}`;
+      await objectStorage.putBuffer({ key, buffer: buf, contentType: ct });
+      urls.push(`/uploads/images/${seg}/${filename}`);
+    } catch (err) {
+      console.warn(`[images] R2 asset copy failed, keeping provider URL: ${err && err.message}`);
+      urls.push(src);
+    }
+  }
+  return urls;
+}
 
 const SIZE_RE = /^(\d{3,5})x(\d{3,5})$/;
 
@@ -109,7 +140,7 @@ async function runGenerationAndPersist(req, dbRow, spec) {
       await refundLastCharge(req, `provider:${result.code}`);
       return { row, refunded: true, providerResult: result };
     }
-    const assetUrls = result.assets.map((a) => a.url).filter(Boolean);
+    const assetUrls = await persistAssetsToR2(dbRow.userId, result.assets || []);
     const row = await prisma.generatedImage.update({
       where: { id: dbRow.id },
       data: {

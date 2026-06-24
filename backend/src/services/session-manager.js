@@ -127,13 +127,18 @@ function addMessage(sessionId, message) {
 
   session.messages.push(msg);
   session.lastActivity = Date.now();
-  persistUserSessions(session.userId);
   session.tokenCount += msg.tokens;
 
   if (session.messages.length > MAX_HISTORY_MESSAGES) {
     const dropped = session.messages.length - MAX_HISTORY_MESSAGES;
     session.messages = session.messages.slice(dropped);
   }
+
+  // Persist AFTER updating tokenCount and trimming history so the on-disk
+  // snapshot reflects the final state. Persisting earlier saved a tokenCount
+  // lagging by one message and, on the cap-crossing turn, an un-trimmed
+  // messages array (defeating the storage bound on crash/restart).
+  persistUserSessions(session.userId);
 
   return msg;
 }

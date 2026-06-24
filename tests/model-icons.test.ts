@@ -71,7 +71,12 @@ describe("resolveModelIconName · brand detection by name", () => {
     assert.equal(resolveModelIconName({ name: "moonshot-v1" }), "KimiLogo")
     assert.equal(resolveModelIconName({ name: "z-ai/glm-4" }), "ZaiLogo")
     assert.equal(resolveModelIconName({ name: "chatglm-3" }), "ZaiLogo")
-    assert.equal(resolveModelIconName({ name: "doubao-pro" }), "SeedreamLogo")
+    // ByteDance family: since the fal.ai video polish (652ec78cc) the
+    // doubao / seedance / bytedance ids carry the dedicated ByteDance logo;
+    // only "seedream" image models keep the Seedream glyph. Both attribute
+    // to the "ByteDance Seed" provider group.
+    assert.equal(resolveModelIconName({ name: "doubao-pro" }), "ByteDanceLogo")
+    assert.equal(resolveModelIconName({ name: "seedance-1-pro" }), "ByteDanceLogo")
     assert.equal(resolveModelIconName({ name: "seedream-3" }), "SeedreamLogo")
     assert.equal(resolveModelIconName({ name: "qwen2.5-72b" }), "QwenLogo")
     assert.equal(resolveModelIconName({ name: "meta-llama/llama-3-70b" }), "MetaLogo")

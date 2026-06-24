@@ -16,6 +16,10 @@ const {
 } = require('../services/agents/hermes-runtime');
 const { executeSlashCommand, listSlashCommands } = require('../services/agents/hermes-tui-bridge');
 const { buildHermesIntegrationMap, recommendAdaptedPlaybooks } = require('../services/agents/hermes-playbook-bridge');
+const {
+  buildOpenClawIntegrationMap,
+  recommendAdaptedPlaybooks: recommendOpenClawPlaybooks,
+} = require('../services/agents/openclaw-playbook-bridge');
 const toolsetRegistry = require('../services/agents/toolset-registry');
 
 // ── Session rewind store ───────────────────────────────────────────────────
@@ -72,6 +76,18 @@ router.get('/map', optionalAuth, (_req, res) => {
 router.get('/map/recommend', optionalAuth, (req, res) => {
   const query = String(req.query.q || req.query.query || '').trim();
   res.json({ query, recommendations: recommendAdaptedPlaybooks(query) });
+});
+
+// OpenClaw integration map — parity with the Hermes map routes above. The
+// openclaw-playbook-bridge was previously reachable only from a CLI script +
+// test; these read-only endpoints expose it at runtime like its Hermes twin.
+router.get('/openclaw/map', optionalAuth, (_req, res) => {
+  res.json(buildOpenClawIntegrationMap());
+});
+
+router.get('/openclaw/map/recommend', optionalAuth, (req, res) => {
+  const query = String(req.query.q || req.query.query || '').trim();
+  res.json({ query, recommendations: recommendOpenClawPlaybooks(query) });
 });
 
 router.get('/toolsets', optionalAuth, (_req, res) => {

@@ -585,7 +585,7 @@ router.post('/login', loginRateLimit, validateBody(LoginRequestSchema, { codePre
   // Account-level lockout is distinct from the per-IP rate limit.
   const lockState = defaultLockout.isLocked(email);
   if ((!result.ok && result.kind === 'locked') || lockState.locked) {
-    const retryAfterMs = Number(result.retryAfterMs || lockState.retryAfterMs || 1000);
+    const retryAfterMs = Number(result.retryAfterMs ?? lockState.retryAfterMs ?? 1000);
     const retryAfterSec = Math.max(1, Math.ceil(retryAfterMs / 1000));
     const requestId = getRequestId(req);
     setValidationResponseHeaders(res);
@@ -601,6 +601,17 @@ router.post('/login', loginRateLimit, validateBody(LoginRequestSchema, { codePre
   }
 
     if (!result.ok && result.kind === 'invalid_credentials') {
+      // Security telemetry: the admin panel's "failed logins (24h)" KPI
+      // counts these rows. Fire-and-forget — never block the response.
+      try {
+        void writeAuditLog(prisma, {
+          action: 'login_failed',
+          actorType: 'anonymous',
+          resourceType: 'session',
+          metadata: { email: String(req.body?.email || '').slice(0, 120) },
+          req,
+        });
+      } catch (_) { /* best-effort */ }
       return res.status(401).json({ error: 'Invalid credentials' });
     }
     if (!result.ok && result.kind === 'org_2fa_required') {

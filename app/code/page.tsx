@@ -21,10 +21,24 @@ import dynamic from "next/dynamic"
 import * as React from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 
-import { CodeWorkspaceProvider, useCodeWorkspace } from "@/lib/code-workspace-context"
+import {
+  CODE_NEW_CODE_CHAT_EVENT,
+  CODE_OPEN_TOOL_EVENT,
+  CodeWorkspaceProvider,
+  type CodeNewChatDetail,
+  useCodeWorkspace,
+} from "@/lib/code-workspace-context"
 import { listCodexProjects } from "@/lib/codex-projects"
 import { projectsService } from "@/lib/projects-service"
 import { useAuth } from "@/lib/auth-context-integrated"
+import { useCodexHealth } from "@/lib/codex/use-codex-health"
+
+// Codex Agent V2 panel — only mounted when CODEX_AGENT_V2 is on (health probe).
+// Lazy so its chunk never ships when the flag is off.
+const CodexAgentPanel = dynamic(
+  () => import("@/components/codex/codex-agent-panel").then((mod) => mod.CodexAgentPanel),
+  { ssr: false, loading: () => <CodeWorkspaceSkeleton /> },
+)
 
 const CodeWorkspace = dynamic(
   () => import("@/components/code/code-workspace").then((mod) => mod.CodeWorkspace),
@@ -35,6 +49,20 @@ const CodeWorkspace = dynamic(
 )
 
 export default function CodeWorkspacePage() {
+  const { enabled } = useCodexHealth()
+
+  // Flag on (health.enabled) ⇒ the V2 agent experience. Flag off or still
+  // probing ⇒ /code renders exactly as before (no regression).
+  if (enabled) {
+    return (
+      <CodeWorkspaceGate>
+        <div className="h-screen min-h-0 overflow-hidden">
+          <CodexAgentPanel />
+        </div>
+      </CodeWorkspaceGate>
+    )
+  }
+
   return (
     <CodeWorkspaceGate>
       <CodeWorkspaceProvider>
@@ -79,7 +107,10 @@ function ActiveFolderHydrator() {
   const searchParams = useSearchParams()
   const folderId = searchParams?.get("folder") || null
   const localId = searchParams?.get("local") || null
+  const toolId = searchParams?.get("tool") || null
+  const agentId = searchParams?.get("agent") || null
   const { activeFolder, setActiveFolder, switchCodexWorkspace } = useCodeWorkspace()
+  const firedAgentRef = React.useRef<string | null>(null)
 
   React.useEffect(() => {
     if (localId) {
@@ -114,6 +145,46 @@ function ActiveFolderHydrator() {
       cancelled = true
     }
   }, [folderId, localId, activeFolder?.id, setActiveFolder, switchCodexWorkspace])
+
+  React.useEffect(() => {
+    if (!toolId) return
+    try {
+      window.localStorage.setItem("code-workspace:pending-tool", toolId)
+    } catch {
+      /* fail soft */
+    }
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent(CODE_OPEN_TOOL_EVENT, { detail: { toolId } }))
+    }, 120)
+  }, [toolId])
+
+  React.useEffect(() => {
+    const titleByAgent: Record<string, string> = {
+      builder: "Builder Agent",
+      assistant: "Assistant Agent",
+      debugger: "Debugger Agent",
+    }
+    const title = agentId ? titleByAgent[agentId] : null
+    if (!title) return
+    const workspaceId = localId || (folderId ? `project:${folderId}` : null)
+    if (!workspaceId) return
+    const signature = `${workspaceId}:${agentId}`
+    if (firedAgentRef.current === signature) return
+    firedAgentRef.current = signature
+
+    const detail: CodeNewChatDetail = {
+      workspaceId,
+      name: activeFolder?.name || workspaceId.replace(/^project:|^local:/, "") || "Workspace",
+      kind: localId ? "local-folder" : "project",
+      projectId: folderId || undefined,
+      title,
+    }
+    const openAgent = () => {
+      window.dispatchEvent(new CustomEvent(CODE_NEW_CODE_CHAT_EVENT, { detail }))
+    }
+    window.setTimeout(openAgent, 220)
+    window.setTimeout(openAgent, 900)
+  }, [activeFolder?.name, agentId, folderId, localId])
 
   return null
 }

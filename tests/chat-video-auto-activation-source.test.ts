@@ -23,13 +23,48 @@ describe("chat video auto-activation source contract", () => {
       /extractRequestedVideoDurationSeconds\(input\)/,
       "auto-activation should read explicit durations like '10 segundos' into video settings"
     )
+    assert.match(
+      source,
+      /extractRequestedVideoAspectRatio\(input\)/,
+      "auto-activation should read explicit shapes like 'cuadrado' or 'vertical' into video settings"
+    )
+    assert.match(
+      source,
+      /extractRequestedVideoResolution\(input\)/,
+      "auto-activation should read explicit resolutions like '480p' or '720p' into video settings"
+    )
+    assert.match(
+      source,
+      /extractRequestedVideoAudio\(input\)/,
+      "auto-activation should read 'sin audio' and 'con audio' into video settings"
+    )
+    assert.match(
+      source,
+      /setSelectedVideoAspectRatio\(requestedAspectRatio as VideoAspectRatio\)/,
+      "prompt-stated video aspect ratios must update the visible marker"
+    )
   })
 
   it("keeps image attachment ids when a normal chat prompt routes to video", () => {
     assert.match(
       source,
-      /case 'video':[\s\S]{0,180}handleVideoGeneration\(msg, collectUploadFileIds\(filesToSend\)\)/,
+      /case 'video':[\s\S]{0,220}handleVideoGeneration\(msg, collectUploadFileIds\(filesToSend\), filesToSend\)/,
       "intent-routed video generation must preserve attached image file ids for image-to-video"
+    )
+    assert.match(
+      source,
+      /isVideoGenerationActive \|\| chatType === 'video'[\s\S]{0,220}handleVideoGeneration\(msg, collectUploadFileIds\(filesToSend\), filesToSend\)/,
+      "explicit video mode sends must preserve original attachment objects for image-to-video context"
+    )
+    assert.match(
+      source,
+      /shouldUseLatestImageForVideo\(prompt\)[\s\S]{0,180}collectLatestGeneratedImageUrls\(currentChat\?\.messages \|\| \[\]\)/,
+      "image-to-video follow-ups must reuse the latest generated image when no new image is attached"
+    )
+    assert.match(
+      source,
+      /sourceImageFiles: sourceFiles,/,
+      "original uploaded image objects must be passed into the video request options before composer cleanup"
     )
   })
 
@@ -48,6 +83,42 @@ describe("chat video auto-activation source contract", () => {
       source,
       /const activeVideoModel = selectedVideoModel\.trim\(\)[\s\S]{0,220}Activa un modelo VIDEO en Admin > AI Models/,
       "video generation should block locally when no Admin-active VIDEO model is selected"
+    )
+  })
+
+  it("keeps auto-enabled video active until the user closes it or starts a new chat", () => {
+    assert.doesNotMatch(
+      source,
+      /hasReplacementPrompt && isVideoGenerationActive && chatType === 'video'/,
+      "typing a non-video follow-up must not auto-disable the sticky video tool"
+    )
+    assert.match(
+      source,
+      /autoVideoActivationRef\.current = false;[\s\S]{0,120}resetAllToolsAndConnectors\(\)/,
+      "Nuevo chat reset must clear the sticky video activation state"
+    )
+    assert.match(
+      source,
+      /handleVideoGenerationClose[\s\S]{0,160}setIsVideoGenerationActive\(false\)/,
+      "the explicit X on the video chip remains the manual way to close video mode"
+    )
+  })
+
+  it("renders video controls inline next to the plus button instead of the bottom tool row", () => {
+    assert.match(
+      source,
+      /const shouldInlineActiveTools = isVideoGenerationActive/,
+      "video mode should opt into inline composer controls"
+    )
+    assert.match(
+      source,
+      /composer-inline-active-tools[\s\S]{0,120}<ActiveToolsDisplay \{\.\.\.activeToolsProps\} \/>/,
+      "video controls should render next to the plus/action button"
+    )
+    assert.match(
+      source,
+      /hasActiveTools && !shouldInlineActiveTools/,
+      "the lower active-tools row should be suppressed while video controls are inline"
     )
   })
 

@@ -203,6 +203,9 @@ function verifyPrerequisites(skillId, context = {}) {
   if (context.webAccess !== false) have.add('web_access_enabled');
   if (context.collectionIndexed) have.add('user_collection_indexed');
   if (context.dataset) have.add('dataset_attached');
+  // Without this, 'acceptance_criteria_clear' could never be satisfied, leaving
+  // the long_running_task skill permanently unverifiable.
+  if (context.acceptanceCriteria || context.acceptance_criteria) have.add('acceptance_criteria_clear');
 
   const missing = skill.prerequisites.filter(p => !have.has(p));
   return { ok: missing.length === 0, missing };
@@ -434,12 +437,12 @@ function bootBuiltins() {
       id: 'session_orchestration',
       label: 'Multi-Session Orchestration',
       category: 'agentic',
-      description: 'Spawn and coordinate multiple agent sessions for complex tasks.',
-      tools: ['session_manager', 'agent_task_runner'],
+      description: 'Search, resume, spawn and coordinate agent sessions for complex tasks.',
+      tools: ['session_manager', 'session_search', 'agent_task_runner'],
       prerequisites: ['query_text'],
       clearance: 'authenticated',
       outputKind: 'pair',
-      tags: ['session', 'orchestration', 'multi-agent'],
+      tags: ['session', 'search', 'history', 'orchestration', 'multi-agent'],
     },
     {
       id: 'image_generation',

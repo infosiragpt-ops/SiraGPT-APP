@@ -26,15 +26,42 @@ const KNOWN_PROVIDERS = Object.freeze([
   'Anthropic',
   'Groq',
   'Mistral',
+  'Z.ai',
+  'Kimi',
+  'Cerebras',
   'OpenAI',
 ]);
 
+// Strip surrounding whitespace and stray leading/trailing slashes so that
+// decorated ids ("  claude-x ", "/mistral-large", "model/") infer the same
+// provider as their clean form. Internal slashes (OpenRouter slugs like
+// "anthropic/claude-x") are deliberately preserved.
+const EDGE_NOISE_RE = /^[\s/]+|[\s/]+$/g;
+
+function normaliseModelId(modelId) {
+  let raw;
+  if (typeof modelId === 'string') {
+    raw = modelId;
+  } else if (modelId == null) {
+    raw = '';
+  } else {
+    // Non-string inputs (numbers, objects…) are coerced defensively; hostile
+    // values (null-prototype objects, throwing toString) collapse to ''.
+    try {
+      raw = String(modelId);
+    } catch {
+      raw = '';
+    }
+  }
+  return raw.replace(EDGE_NOISE_RE, '');
+}
+
 function isDirectDeepSeekModel(modelName) {
-  return /^deepseek-(v\d|chat|reasoner)/i.test(String(modelName || '').trim());
+  return /^deepseek-(v\d|chat|reasoner)/i.test(normaliseModelId(modelName));
 }
 
 function inferProviderFromModelId(modelId) {
-  const m = String(modelId || '').toLowerCase();
+  const m = normaliseModelId(modelId).toLowerCase();
   if (!m) return 'OpenAI';
 
   // 1) Direct-API providers we explicitly route to.
@@ -63,6 +90,22 @@ function inferProviderFromModelId(modelId) {
 
   // 6) Mistral direct — bare `mistral-*` or `codestral-*` ids.
   if (m.startsWith('mistral-') || m.startsWith('codestral-')) return 'Mistral';
+
+  // 7) Z.ai GLM family — bare `glm-*` ids (slug `z-ai/...` already → OpenRouter).
+  if (m.startsWith('glm-') || m.startsWith('glm4') || m.startsWith('glm_')) return 'Z.ai';
+
+  // 8) Kimi / Moonshot direct — bare ids (slug `moonshotai/...` already → OpenRouter).
+  if (m.startsWith('kimi-') || m.startsWith('kimi.') || m.startsWith('moonshot-') || m.startsWith('moonshotai-')) return 'Kimi';
+
+  // 9) Cerebras / FlashGPT (free tier + cross-plan fallback). BARE ids only —
+  //    the OpenRouter slug forms (`meta-llama/...`, `*/gpt-oss*`, `z-ai/...`)
+  //    already matched above. The model served varies per deployment
+  //    (gpt-oss-120b, llama-3.x, zai-glm-*) but all go through the Cerebras
+  //    OpenAI-compatible endpoint; createProviderClient('Cerebras') gates on
+  //    CEREBRAS_API_KEY. Without this, a Custom GPT / org-default pinned to a
+  //    FlashGPT model id fell through to 'OpenAI' and called an OpenAI model
+  //    that doesn't exist.
+  if (m.startsWith('gpt-oss-') || /^llama-3(\.|-)/.test(m) || m.startsWith('zai-glm-')) return 'Cerebras';
 
   return 'OpenAI';
 }

@@ -1,6 +1,29 @@
 'use strict';
 
 /**
+ * Known Google OAuth error codes that should be surfaced verbatim to
+ * the popup layer instead of being collapsed into a generic
+ * 'auth_failed'. Keeping this set small and explicit avoids leaking
+ * internal API detail for unexpected/transient errors.
+ */
+const GOOGLE_KNOWN_ERROR_CODES = new Set([
+  'redirect_uri_mismatch',
+  'invalid_grant',
+  'access_denied',
+]);
+
+/**
+ * Extract an actionable error code from a Google token-exchange
+ * error. Google API errors embed the code in
+ * `err.response.data.error`; fall back to the message string for
+ * errors that have the code as the message (e.g. unit-test stubs).
+ */
+function extractGoogleErrorCode(err) {
+  const candidate = err?.response?.data?.error || err?.message;
+  return GOOGLE_KNOWN_ERROR_CODES.has(candidate) ? candidate : 'auth_failed';
+}
+
+/**
  * ProviderOAuthService — encapsulates the four-step lifecycle every
  * Google-style provider OAuth integration (Gmail, Calendar+Drive, …)
  * shares, so the route layer can stay focused on HTTP concerns
@@ -133,10 +156,12 @@ class ProviderOAuthService {
       await this.provider.persistTokens(userId, sealed);
       return { ok: true, service: this.provider.service, userId };
     } catch (err) {
+      const errorCode = extractGoogleErrorCode(err);
+      const callbackUrl = this.provider.oauth2Client.redirectUri ?? '(unknown)';
       this.logger.error?.(
-        `[oauth/${this.provider.service}] callback error:`, err?.message || err
+        `[oauth/${this.provider.service}] token exchange failed: ${errorCode} (configured callback: ${callbackUrl})`
       );
-      return { ok: false, service: this.provider.service, error: 'auth_failed' };
+      return { ok: false, service: this.provider.service, error: errorCode };
     }
   }
 

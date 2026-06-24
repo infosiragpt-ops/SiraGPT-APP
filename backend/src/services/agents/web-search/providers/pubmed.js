@@ -59,7 +59,7 @@ async function esearch(query, { maxResults, signal }) {
     db: 'pubmed',
     term: query,
     retmode: 'json',
-    retmax: String(Math.max(1, Math.min(maxResults, 20))),
+    retmax: String(Math.max(1, Math.min(maxResults, 50))),
     sort: 'relevance',
     tool: TOOL_NAME,
     email: POLITE_EMAIL,

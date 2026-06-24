@@ -17,6 +17,7 @@ function loadSdk() {
     S3Client: s3.S3Client,
     PutObjectCommand: s3.PutObjectCommand,
     GetObjectCommand: s3.GetObjectCommand,
+    HeadObjectCommand: s3.HeadObjectCommand,
     DeleteObjectCommand: s3.DeleteObjectCommand,
     getSignedUrl: signer.getSignedUrl,
   };
@@ -66,6 +67,22 @@ function createR2ArtifactStorage({ env = process.env, client = createR2Client(en
       if (!client || !bucket) throw new Error('R2 storage is not configured');
       const { GetObjectCommand, getSignedUrl } = loadSdk();
       return getSignedUrl(client, new GetObjectCommand({ Bucket: bucket, Key: key }), { expiresIn: ttl });
+    },
+    // Raw object fetch. `range` is an HTTP byte-range string ("bytes=0-1023")
+    // forwarded straight to R2 so callers can stream video range requests
+    // without pulling the whole object. Returns the AWS GetObject response:
+    // { Body (Node Readable), ContentLength, ContentType, ContentRange, ... }.
+    async getObject(key, { range } = {}) {
+      if (!client || !bucket) throw new Error('R2 storage is not configured');
+      const { GetObjectCommand } = loadSdk();
+      return client.send(new GetObjectCommand({ Bucket: bucket, Key: key, ...(range ? { Range: range } : {}) }));
+    },
+    // Cheap metadata probe (size / content-type) used to decide whether an
+    // object exists in R2 and to build range responses. Throws on 404.
+    async head(key) {
+      if (!client || !bucket) throw new Error('R2 storage is not configured');
+      const { HeadObjectCommand } = loadSdk();
+      return client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
     },
     async signedPutUrl({ key, contentType, ttl = expiresIn }) {
       if (!client || !bucket) throw new Error('R2 storage is not configured');

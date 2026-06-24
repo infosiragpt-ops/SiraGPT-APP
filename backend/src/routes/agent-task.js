@@ -34,6 +34,7 @@ const crypto = require('crypto');
 const { body, validationResult } = require('express-validator');
 const OpenAI = require('openai');
 
+const objectStorage = require('../services/object-storage');
 const { authenticateToken } = require('../middleware/auth');
 const { enforcePlanQuota } = require('../middleware/enforce-plan-quota');
 const { resolveRateLimitConfig, makeJwtAwareKeyGenerator, extractBearerToken } = require('../middleware/rate-limit-policy');
@@ -42,11 +43,14 @@ const { buildTaskTools, ARTIFACT_DIR } = require('../services/agents/task-tools'
 const taskStore = require('../services/agents/task-store');
 const auditLog = require('../services/agents/audit-log');
 const metrics = require('../services/agents/metrics');
+const openclawCapabilityKernel = require('../services/openclaw-capability-kernel');
 const {
   buildExecutionProfile,
   buildExecutionProfilePrompt,
-  validateFinalize,
 } = require('../services/agents/agentic-execution-profile');
+const {
+  validateAgentTaskFinalize,
+} = require('../services/agents/openclaw-autonomy-finalize-guard');
 const {
   buildUserIntentAlignmentProfile,
   buildUserIntentAlignmentPrompt,
@@ -73,10 +77,13 @@ const {
   buildAgenticOperatingCore,
   buildAgenticOperatingPrompt,
 } = require('../services/agents/agentic-operating-core');
+const { buildForbiddenToolNames } = require('../services/agents/agent-tool-policy');
 const durableExecutionStore = require('../services/agents/durable-execution-store');
 const { buildDocumentDeliveryPolicy } = require('../services/agents/document-delivery-policy');
+const documentAnalysisQuality = require('../services/document-analysis-quality');
 const { buildLangGraphLayer } = require('../services/agents/agentic-langgraph');
 const { buildAgenticFrameworkStatus } = require('../services/agents/agentic-frameworks');
+const { buildIntegrationRuntimeProfile } = require('../services/ai-product-os/integration-runtime-profile');
 const {
   cancelQueuedTask,
   enqueueAgentTask,
@@ -84,10 +91,13 @@ const {
   requireRedisUrl,
 } = require('../services/agents/agent-task-queue');
 const { cancelRunningTask } = require('../services/agents/agent-task-worker');
+const { resolveAttachmentFallbackMarkdown } = require('../services/agents/agent-task-runner');
 const agentTaskPersistence = require('../services/agents/agent-task-persistence');
 const {
   buildUploadedFileContext,
+  looksLikeDocumentFollowupQuestion,
   normalizeClientMetadata,
+  resolveChatDocumentFileIds,
   resolveTranscriptionFileIds,
   serializeMessageAttachments,
 } = require('../services/message-attachments');
@@ -101,6 +111,210 @@ const prisma = (() => {
 
 // ── Utility: safe JSON serialization ──────────────────────────────
 // Never throws on circular refs, BigInt, Symbol, or undefined values.
+// Important: never truncate the final JSON string with slice(). SSE
+// consumers JSON.parse every `data:` frame; cutting the serialized text
+// creates invalid JSON and kills long document-analysis streams before
+// `final_text` / `done` can arrive.
+function compactJsonValue(value, {
+  depth = 0,
+  maxDepth = 5,
+  maxString = 8000,
+  maxArray = 40,
+  seen = new WeakSet(),
+} = {}) {
+  if (value === undefined) return null;
+  if (typeof value === 'bigint') return `BigInt(${value.toString()})`;
+  if (typeof value === 'symbol') return value.toString();
+  if (typeof value === 'string') {
+    return value.length > maxString
+      ? `${value.slice(0, Math.max(0, maxString - 24))}...[truncated ${value.length - maxString + 24} chars]`
+      : value;
+  }
+  if (value instanceof Error) {
+    return {
+      message: compactJsonValue(value.message, { depth: depth + 1, maxDepth, maxString, maxArray, seen }),
+      stack: compactJsonValue(value.stack, { depth: depth + 1, maxDepth, maxString, maxArray, seen }),
+    };
+  }
+  if (!value || typeof value !== 'object') return value;
+  if (seen.has(value)) return '[Circular]';
+  if (depth >= maxDepth) return '[Truncated depth]';
+  seen.add(value);
+  if (Array.isArray(value)) {
+    const out = value
+      .slice(0, maxArray)
+      .map((item) => compactJsonValue(item, { depth: depth + 1, maxDepth, maxString, maxArray, seen }));
+    if (value.length > maxArray) out.push(`[Truncated ${value.length - maxArray} items]`);
+    return out;
+  }
+  const out = {};
+  for (const [key, child] of Object.entries(value)) {
+    const childMaxString = key === 'markdown' || key === 'finalText' ? Math.max(maxString, 24000) : maxString;
+    out[key] = compactJsonValue(child, {
+      depth: depth + 1,
+      maxDepth,
+      maxString: childMaxString,
+      maxArray,
+      seen,
+    });
+  }
+  return out;
+}
+
+function sliceWithCount(value, limit = 24, preserve = []) {
+  if (!Array.isArray(value)) return value;
+  const preserveSet = new Set((preserve || []).filter((item) => value.includes(item)));
+  const preserved = Array.from(preserveSet);
+  const headLimit = Math.max(0, limit - preserved.length);
+  const out = [];
+  for (const item of value) {
+    if (preserveSet.has(item)) continue;
+    if (out.length >= headLimit) break;
+    out.push(item);
+  }
+  for (const item of preserved) {
+    if (!out.includes(item) && out.length < limit) out.push(item);
+  }
+  if (value.length > out.length) out.push(`[Truncated ${value.length - out.length} items]`);
+  return out;
+}
+
+function stringifyWithinSseLimit(payload, maxLen, original = payload) {
+  const serialized = JSON.stringify(payload);
+  if (!Number.isFinite(maxLen) || serialized.length <= maxLen) return serialized;
+
+  const compact = compactJsonValue(payload, {
+    maxString: Math.max(160, Math.floor(maxLen / 8)),
+    maxArray: 8,
+    maxDepth: 4,
+  });
+  const compactSerialized = JSON.stringify(compact);
+  if (compactSerialized.length <= maxLen) return compactSerialized;
+
+  const messageLimit = Math.max(60, Math.min(600, maxLen - 320));
+  const minimal = {
+    type: (original && original.type) || payload?.type || 'event',
+    taskId: (original && original.taskId) || payload?.taskId || undefined,
+    seq: (original && original.seq) || payload?.seq || undefined,
+    label: original?.label ? String(original.label).slice(0, 160) : undefined,
+    status: original?.status || undefined,
+    message: original?.message ? String(original.message).slice(0, messageLimit) : undefined,
+    _truncated: true,
+    _compaction: payload?._compaction || 'sse_hard_limit',
+  };
+  const minimalSerialized = JSON.stringify(minimal);
+  if (minimalSerialized.length <= maxLen) return minimalSerialized;
+
+  return JSON.stringify({
+    type: minimal.type || 'event',
+    taskId: minimal.taskId,
+    _truncated: true,
+    _compaction: 'sse_minimal',
+  });
+}
+
+function compactEventForSse(obj, maxLen) {
+  if (obj?.type === 'meta') {
+    const cognitive = obj.agenticOperatingCore?.cognitive_improvements || null;
+    const executionCognitive = obj.executionProfile?.cognitiveImprovements || null;
+    return stringifyWithinSseLimit({
+      type: 'meta',
+      taskId: obj.taskId || undefined,
+      goal: obj.goal ? String(obj.goal).slice(0, 1200) : undefined,
+      model: obj.model || undefined,
+      executionProfile: obj.executionProfile ? {
+        version: obj.executionProfile.version,
+        capabilities: obj.executionProfile.capabilities,
+        requiredTools: sliceWithCount(obj.executionProfile.requiredTools, 24),
+        cognitiveImprovements: executionCognitive ? {
+          version: executionCognitive.version,
+          mode: executionCognitive.mode,
+          summary: executionCognitive.summary,
+          active_categories: sliceWithCount(executionCognitive.active_categories, 16),
+        } : null,
+        universalAgents: obj.executionProfile.universalAgents ? {
+          version: obj.executionProfile.universalAgents.version,
+          mode: obj.executionProfile.universalAgents.mode,
+          summary: obj.executionProfile.universalAgents.summary,
+          active_families: sliceWithCount(obj.executionProfile.universalAgents.active_families, 20),
+          active_team_ids: sliceWithCount(
+            (obj.executionProfile.universalAgents.active_team || []).map((agent) => agent.id),
+            24
+          ),
+        } : null,
+      } : undefined,
+      enterpriseRuntimeProfile: obj.enterpriseRuntimeProfile ? {
+        agenticOperatingCore: obj.enterpriseRuntimeProfile.agenticOperatingCore,
+        toolRuntime: obj.enterpriseRuntimeProfile.toolRuntime,
+        qaPreflight: obj.enterpriseRuntimeProfile.qaPreflight,
+        durableExecution: obj.enterpriseRuntimeProfile.durableExecution,
+      } : undefined,
+      agenticOperatingCore: obj.agenticOperatingCore ? {
+        version: obj.agenticOperatingCore.version,
+        core_id: obj.agenticOperatingCore.core_id,
+        trace_id: obj.agenticOperatingCore.trace_id,
+        summary: obj.agenticOperatingCore.summary,
+        cognitive_improvements: cognitive ? {
+          version: cognitive.version,
+          mode: cognitive.mode,
+          summary: cognitive.summary,
+          active_categories: sliceWithCount(cognitive.active_categories, 16),
+        } : null,
+        universal_agents: obj.agenticOperatingCore.universal_agents ? {
+          version: obj.agenticOperatingCore.universal_agents.version,
+          mode: obj.agenticOperatingCore.universal_agents.mode,
+          summary: obj.agenticOperatingCore.universal_agents.summary,
+          active_families: sliceWithCount(obj.agenticOperatingCore.universal_agents.active_families, 20),
+          active_team_ids: sliceWithCount(
+            (obj.agenticOperatingCore.universal_agents.active_team || []).map((agent) => agent.id),
+            24
+          ),
+          cycle: (obj.agenticOperatingCore.universal_agents.cycle || []).map((phase) => ({
+            phase: phase.phase,
+            order: phase.order,
+            gate: phase.gate,
+            assigned_agent_ids: sliceWithCount(phase.assigned_agents, 4),
+          })),
+        } : null,
+        validation: obj.agenticOperatingCore.validation ? {
+          reports_required: sliceWithCount(obj.agenticOperatingCore.validation.reports_required, 24),
+          deterministic_checks: sliceWithCount(obj.agenticOperatingCore.validation.deterministic_checks, 40, [
+            'cognitive.e2e-user-journey-probe',
+            'cognitive.stream-terminal-event-probe',
+            'cognitive.api-contract-probe',
+            'universal_agents.catalog_1000',
+            'universal_agents.all_cycle_phases_covered',
+            'universal_agents.release_not_before_validation',
+          ]),
+          qa_board_decision: obj.agenticOperatingCore.validation.qa_board_decision,
+        } : undefined,
+        observability: obj.agenticOperatingCore.observability ? {
+          trace_id: obj.agenticOperatingCore.observability.trace_id,
+          events: sliceWithCount(obj.agenticOperatingCore.observability.events, 24),
+          metrics: sliceWithCount(obj.agenticOperatingCore.observability.metrics, 40),
+        } : undefined,
+      } : undefined,
+      _truncated: true,
+      _compaction: 'meta_control_plane_summary',
+    }, maxLen, obj);
+  }
+  const compact = compactJsonValue(obj, {
+    maxString: Math.max(1200, Math.floor(maxLen / 4)),
+    maxArray: 24,
+  });
+  const str = JSON.stringify(compact);
+  if (str.length <= maxLen) return str;
+  return stringifyWithinSseLimit({
+    type: obj && obj.type ? obj.type : 'event',
+    taskId: obj && obj.taskId ? obj.taskId : undefined,
+    seq: obj && obj.seq ? obj.seq : undefined,
+    label: obj && obj.label ? String(obj.label).slice(0, 240) : undefined,
+    status: obj && obj.status ? obj.status : undefined,
+    message: obj && obj.message ? String(obj.message).slice(0, 1200) : undefined,
+    _truncated: true,
+  }, maxLen, obj);
+}
+
 function safeJsonStringify(obj, maxLen = 32_768) {
   const seen = new WeakSet();
   try {
@@ -115,7 +329,7 @@ function safeJsonStringify(obj, maxLen = 32_768) {
       if (value === undefined) return null;
       return value;
     });
-    return str.length > maxLen ? str.slice(0, maxLen) : str;
+    return str.length > maxLen ? compactEventForSse(obj, maxLen) : str;
   } catch {
     return JSON.stringify({ error: 'non-serializable', type: typeof obj });
   }
@@ -184,6 +398,7 @@ Rules:
     · If they want a CONCRETE ANSWER grounded on those docs (a question, a claim, a quote, a number) → call self_rag_answer. It runs the Self-RAG reflection-token loop (ISREL/ISSUP/ISUSE per segment, beam ranking) and returns a cited answer you can quote verbatim in finalize — do NOT rewrite supported segments, only compose around them.
     · If you only need RAW CHUNKS to combine with other data (build a table, cross-check with web_search, etc.) → call rag_retrieve instead.
 - When the user asks to transcribe ("transcribir", "transcribe", "transcripción") and there is uploaded or pasted content, return the readable content verbatim, preserving line breaks and headings when useful. Do NOT explain what transcription is, do NOT summarize, and do NOT create a Word/PDF/PPT/Excel unless the user explicitly asks for that output format. If no readable text is available, say that clearly and ask for a readable file/audio/image.
+- META-DOCUMENT TASKS: requests that apply TO an attached document are valid even when the answer is not literally written inside it. "cita en Vancouver/APA/MLA/Harvard/IEEE/ISO 690", "referencia bibliográfica", "cítame este documento/artículo/PDF" mean: BUILD the bibliographic reference of the attached document in that citation style from its own bibliographic data (title, authors, year, journal/institution, volume/pages, DOI/URL) found via docintel_retrieve/rag_retrieve on the FIRST pages; mark any missing field as [no disponible]. With an academic document attached, "cita" ALWAYS means citation/reference — never a calendar appointment. NEVER answer that the material lacks information for these meta-tasks; produce the best reference the document's own data allows.
 - When the user asks for a file (Excel, Word, PPT, PDF), use create_document. The deliverable must be authored by executable code, not placeholder prose: write a complete Python script that builds the real content, visual hierarchy, tables/slides/sections and writes to os.environ["OUT_PATH"]. Prefer openpyxl / python-docx / python-pptx / reportlab.
 - When the user uploads a Word/Excel/PowerPoint/PDF and asks to modify, improve, correct, fill, translate, summarize into, or continue "in my own file", treat the upload as a read-only source. Never overwrite or mutate the original. Create a new artifact in the same format unless the user explicitly asks for another format. Preserve logos/images, tables, formulas, sheet names, headers, footers, slide layouts, styling, and document order as far as the available libraries allow; change only what the user requested.
 - Use python_exec for data wrangling, verification, numeric work — ANY time you'd otherwise "estimate" a number.
@@ -202,19 +417,93 @@ Rules:
 - When ready, call the \`finalize\` tool with markdown that summarises what you delivered (numbers verified, file location, key findings). Do NOT write the final answer as free text — only via finalize.
 - Respond in the same language as the user. Keep thoughts short (1-2 sentences); save the depth for the finalize markdown. Each thought line should describe what you're about to do in concrete terms ("Construyendo el Excel con 30 filas en hoja 'Fuentes'", not just "Working on Excel").`;
 
+// ─── GET /api/agent/artifacts — galería "Mis documentos" ────────────────
+// Lista los documentos generados del usuario (DOCX/XLSX/PPTX/PDF…), más
+// recientes primero. Alimenta la página /documents (estilo Cowork): ver,
+// descargar y volver al chat de origen.
+router.get('/artifacts', authenticateToken, async (req, res) => {
+  try {
+    if (!prisma?.generatedArtifact?.findMany) {
+      return res.json({ ok: true, artifacts: [], total: 0 });
+    }
+    const limit = Math.max(1, Math.min(100, Number.parseInt(String(req.query.limit || '60'), 10) || 60));
+    const offset = Math.max(0, Number.parseInt(String(req.query.offset || '0'), 10) || 0);
+    const where = { userId: req.user.id };
+    const [rows, total] = await Promise.all([
+      prisma.generatedArtifact.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: offset,
+        take: limit,
+        select: {
+          id: true,
+          filename: true,
+          format: true,
+          mime: true,
+          sizeBytes: true,
+          createdAt: true,
+          chatId: true,
+        },
+      }),
+      prisma.generatedArtifact.count({ where }),
+    ]);
+    res.json({
+      ok: true,
+      total,
+      artifacts: rows.map((row) => ({
+        ...row,
+        downloadUrl: `/api/agent/artifact/${row.id}?name=${encodeURIComponent(row.filename || 'documento')}`,
+      })),
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'artifact list failed' });
+  }
+});
+
 // ─── GET /api/agent/artifact/:id ────────────────────────────────────────
 
-router.get('/artifact/:id', authenticateToken, (req, res) => {
+router.get('/artifact/:id', authenticateToken, async (req, res) => {
   const id = String(req.params.id || '').replace(/[^a-f0-9]/gi, '');
   if (!id || id.length > 40) return res.status(400).json({ error: 'bad id' });
 
-  // Find the file by stored-name prefix. We only stored one file per
-  // id (content-addressed), so a single readdir is enough.
+  // Metadata is the source of truth; the binary may live locally (dev / not
+  // yet offloaded) or only in R2 (after offload). The metadata JSON stays on
+  // disk in ARTIFACT_DIR, so a missing dir means there are genuinely no
+  // artifacts.
   if (!fs.existsSync(ARTIFACT_DIR)) return res.status(404).json({ error: 'no artifacts yet' });
-  const entry = fs.readdirSync(ARTIFACT_DIR).find(f => f.startsWith(`${id}-`));
-  if (!entry) return res.status(404).json({ error: 'artifact not found' });
 
   const metadata = readArtifactMetadata(id);
+
+  // Resolve the on-disk path. Cycle artifacts are grouped under
+  // ARTIFACT_DIR/<folderCode>/ and record `storedRelPath` in their flat
+  // metadata; legacy artifacts live at the top level under `<id>-<name>`.
+  let full = null;
+  let entry = null;
+  if (metadata?.storedRelPath) {
+    const root = path.resolve(ARTIFACT_DIR);
+    const candidate = path.resolve(ARTIFACT_DIR, metadata.storedRelPath);
+    // Traversal guard: the resolved path must stay inside ARTIFACT_DIR.
+    if ((candidate === root || candidate.startsWith(root + path.sep)) && fs.existsSync(candidate)) {
+      full = candidate;
+      entry = path.basename(candidate);
+    }
+  }
+  if (!full) {
+    // Legacy / fallback: find the file by stored-name prefix at top level.
+    try {
+      entry = fs.readdirSync(ARTIFACT_DIR).find(f => f.startsWith(`${id}-`));
+    } catch { entry = null; }
+    if (entry) full = path.join(ARTIFACT_DIR, entry);
+  }
+
+  // The binary may have been offloaded to R2 (local copy removed). When there
+  // is no usable local file, fall back to streaming from R2 using the
+  // metadata's storageRef. Ownership is still enforced from metadata.
+  const hasLocal = Boolean(full && entry && fs.existsSync(full));
+  if (!hasLocal && !(metadata && metadata.storageRef)) {
+    return res.status(404).json({ error: 'artifact not found' });
+  }
+
   if (!metadata?.ownerUserId) {
     return res.status(403).json({ error: 'artifact ownership metadata missing' });
   }
@@ -222,14 +511,135 @@ router.get('/artifact/:id', authenticateToken, (req, res) => {
     return res.status(403).json({ error: 'artifact not found' });
   }
 
-  const full = path.join(ARTIFACT_DIR, entry);
-  const userSuppliedName = typeof req.query.name === 'string' ? req.query.name : entry.slice(id.length + 1);
+  const fallbackName = entry ? entry.slice(id.length + 1) : (metadata.filename || 'artifact');
+  const userSuppliedName = typeof req.query.name === 'string' ? req.query.name : fallbackName;
   const safeName = userSuppliedName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'artifact';
   res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
-  res.sendFile(full);
+
+  if (hasLocal) {
+    return res.sendFile(full);
+  }
+
+  // Stream from R2.
+  try {
+    if (metadata.mime) res.setHeader('Content-Type', metadata.mime);
+    const meta = await objectStorage.stat(metadata.storageRef);
+    if (meta && meta.size != null) res.setHeader('Content-Length', meta.size);
+    const { stream } = await objectStorage.readStream(metadata.storageRef);
+    stream.on('error', (err) => {
+      console.error(`[agent-task] R2 artifact stream error for ${id}: ${err && err.message}`);
+      if (!res.headersSent) res.status(502).json({ error: 'artifact stream failed' });
+      else res.destroy();
+    });
+    return stream.pipe(res);
+  } catch (err) {
+    console.error(`[agent-task] R2 artifact fetch failed for ${id}: ${err && err.message}`);
+    return res.status(404).json({ error: 'artifact not found' });
+  }
 });
 
-// ─── GET /api/agent/task/:taskId ───────────────────────────────────────
+// ─── POST /api/agent/document-cycle/classify ───────────────────────────
+// Preview classification (document/study type + field/career), the resolved
+// guide outline, and the override option lists. Used by the UI before the
+// user approves and starts the cycle. Read-only — does not enqueue anything.
+router.post('/document-cycle/classify', authenticateToken, (req, res) => {
+  const cycleService = require('../services/agents/professional-document-cycle');
+  const topic = String(req.body?.topic || '').trim();
+  if (!topic) return res.status(400).json({ error: 'topic is required' });
+  try {
+    const classification = cycleService.classifyDocument({
+      topic,
+      documentTypeOverride: req.body?.documentType,
+      fieldOverride: req.body?.field,
+    });
+    const guide = cycleService.getGuide(classification.documentType.id, classification.field.id);
+    return res.json({
+      ok: true,
+      classification,
+      guide,
+      stages: cycleService.CYCLE_STAGES,
+      options: cycleService.listOptions(),
+    });
+  } catch (err) {
+    return res.status(400).json({ error: err?.message || 'classification failed' });
+  }
+});
+
+// ─── POST /api/agent/document-cycle ────────────────────────────────────
+// Start the professional document cycle: classify the approved topic, build
+// the staged agent contract, and run it through the existing queued task
+// pipeline (SSE stream). Requires `topic` and a folder `code`.
+router.post(
+  '/document-cycle',
+  // Same security/billing invariants as POST /task: the cycle creates a durable
+  // queued agent task that consumes LLM tokens and worker time, so it must pass
+  // the same rate limit, validation, plan-quota and chat-scope guards.
+  agentRateLimiter,
+  [
+    body('topic').isString().trim().isLength({ min: 3, max: 4000 }).withMessage('topic must be 3-4000 chars'),
+    body('code').isString().trim().isLength({ min: 1, max: 200 }).withMessage('code is required'),
+    body('documentType').optional().isString(),
+    body('field').optional().isString(),
+    body('citationStyle').optional().isString(),
+    body('chatId').optional().isString(),
+    body('scopeMode').optional().isIn(['chat', 'global']),
+    body('maxSteps').optional().isInt({ min: 2, max: 120 }),
+  ],
+  authenticateToken,
+  enforcePlanQuota({ surface: 'agent.task.create' }),
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    const cycleService = require('../services/agents/professional-document-cycle');
+    const topic = String(req.body?.topic || '').trim();
+    if (!topic) return res.status(400).json({ error: 'topic is required' });
+    if (!String(req.body?.code || '').trim()) return res.status(400).json({ error: 'code is required' });
+
+    // Reject cross-chat writes before any task is queued (broken-access-control
+    // / IDOR guard): the caller may only target a chat they own.
+    const scope = await chatTaskScope.assertChatScopeForAgentTask({
+      prisma,
+      userId: req.user?.id,
+      body: req.body,
+    });
+    if (!scope.ok) return res.status(scope.status).json(scope.body);
+    req.body.chatId = scope.chatId;
+
+    let built;
+    try {
+      built = cycleService.buildProfessionalCycleRequest({
+        topic,
+        documentTypeOverride: req.body?.documentType,
+        fieldOverride: req.body?.field,
+        citationStyleOverride: req.body?.citationStyle,
+        code: req.body.code,
+      });
+    } catch (err) {
+      return res.status(400).json({ error: err?.message || 'could not build document cycle' });
+    }
+
+    // Rewrite the request body into the shape handleQueuedTaskRequest expects
+    // and delegate so the cycle reuses queue, fallback, persistence and SSE.
+    // The validated chatId from chatTaskScope is preserved by the spread.
+    req.body = {
+      ...req.body,
+      goal: built.goal,
+      displayGoal: built.displayGoal,
+      systemContract: built.systemContract,
+      folderCode: built.folderCode,
+      cycle: {
+        stages: built.stages,
+        documentType: built.documentType,
+        field: built.field,
+        citationStyle: built.citationStyle,
+        code: built.folderCode,
+      },
+      maxSteps: Number.isFinite(Number.parseInt(req.body?.maxSteps, 10)) ? req.body.maxSteps : 80,
+    };
+    return handleQueuedTaskRequest(req, res);
+  },
+);
 
 router.get('/task/:taskId', authenticateToken, (req, res) => {
   const task = getTaskForUser(req.params.taskId, req.user?.id)
@@ -392,6 +802,7 @@ router.post('/task/:taskId/retry', authenticateToken, async (req, res) => {
       maxRuntimeMs: snapshot.maxRuntimeMs || 2 * 60 * 60 * 1000,
       retryOf: snapshot.taskId,
       documentPolicy: snapshot.documentPolicy || null,
+      openclawRuntimeProfile: snapshot.openclawRuntimeProfile || null,
     }, { priority: 1, jobId: `${snapshot.taskId}-retry-${Date.now()}` });
 
     let streamState = snapshot.streamState || initialAgentState();
@@ -563,6 +974,7 @@ router.post(
       executionProfile: payload.executionProfile,
       intentAlignmentProfile: payload.intentAlignmentProfile,
       taskPlan: plan,
+      openclawRuntimeProfile: payload.openclawRuntimeProfile || null,
       events: [],
       artifacts: [],
     });
@@ -613,6 +1025,28 @@ router.post(
     if (!scope.ok) return res.status(scope.status).json(scope.body);
     req.body.chatId = scope.chatId;
 
+    // Document-followup recovery: when a user asks about an already-uploaded
+    // document WITHOUT re-attaching it, the composer sends `files: []` and the
+    // no-file agentic path fails with a 5xx (the reported bug). Reattach the most
+    // recent readable document from this chat so the turn runs through the safe
+    // local-document runtime — the same path the first (working) turn used.
+    try {
+      const providedNow = Array.isArray(req.body.files) ? req.body.files.map(String).filter(Boolean) : [];
+      if (providedNow.length === 0 && req.body.chatId && looksLikeDocumentFollowupQuestion(req.body.goal)) {
+        const reattached = await resolveChatDocumentFileIds(prisma, {
+          userId: req.user?.id,
+          chatId: String(req.body.chatId),
+          providedFileIds: providedNow,
+        });
+        if (Array.isArray(reattached) && reattached.length > 0) {
+          req.body.files = reattached;
+          console.log(`[agent-task] reattached ${reattached.length} prior chat document(s) for follow-up question`);
+        }
+      }
+    } catch (reattachErr) {
+      console.warn('[agent-task] document reattach failed (continuing without):', reattachErr?.message || reattachErr);
+    }
+
     const requestedFileIds = Array.isArray(req.body.files)
       ? req.body.files.map(String).filter(Boolean).slice(0, MAX_SIMULTANEOUS_DOCUMENTS)
       : [];
@@ -647,6 +1081,13 @@ router.post(
     const clientFileMetadata = normalizeClientMetadata(req.body.fileMetadata, fileIds);
     const executionProfile = buildExecutionProfile({ goal: agentGoal, fileIds, fileMetadata: clientFileMetadata });
     const intentAlignmentProfile = buildUserIntentAlignmentProfile({ request: agentGoal, fileIds });
+    const openclawRuntimeProfile = buildOpenClawRuntimeProfile({
+      goal: agentGoal,
+      userId: req.user?.id || null,
+      chatId: typeof req.body.chatId === 'string' ? req.body.chatId : null,
+      fileIds,
+      model: typeof req.body.model === 'string' ? req.body.model : null,
+    });
     const universalTaskContract = buildUniversalTaskContract({
       rawUserRequest: agentGoal,
       fileIds,
@@ -675,6 +1116,7 @@ router.post(
       goal: agentGoal,
       executionProfile,
       intentAlignmentProfile,
+      openclawProfile: openclawRuntimeProfile,
       universalTaskContract,
       fileIds,
       maxRuntimeMs: Number.isFinite(Number.parseInt(req.body.maxRuntimeMs, 10))
@@ -705,6 +1147,11 @@ router.post(
       toolRuntimePlan: enterpriseToolRuntimePlan,
       qaBoardReview: enterpriseQaBoardReview,
     });
+    const integrationRuntimeProfile = buildIntegrationRuntimeProfile({
+      contract: universalTaskContract,
+      fileIds,
+      requiredTools: enterpriseToolRuntimePlan?.summary?.requestedTools || [],
+    });
     let durableExecution = null;
     try {
       durableExecution = durableExecutionStore.createDurableExecutionRecord({
@@ -724,6 +1171,7 @@ router.post(
       agenticOperatingCore: agenticOperatingCore.summary,
       toolRuntime: enterpriseToolRuntimePlan.summary,
       qaPreflight: enterpriseQaBoardReview.summary,
+      integrationRuntime: integrationRuntimeProfile.promptProfile,
       durableExecution: durableExecution
         ? {
           graphId: durableExecution.graphId,
@@ -803,6 +1251,7 @@ router.post(
       executionProfile,
       intentAlignmentProfile,
       taskPlan,
+      openclawRuntimeProfile,
       universalTaskContract,
       enterpriseExecutionGraph,
       enterpriseRuntimeProfile,
@@ -882,11 +1331,20 @@ router.post(
       if (!chatId) controller.abort();
     });
 
-    // Heartbeat keeps proxies (nginx, Cloudflare) from closing the stream
+    // Heartbeat keeps proxies (nginx, Cloudflare, GCLB) from closing the
+    // stream AND keeps the client's 90s idle watchdog reset during a long
+    // planning / first-LLM-call phase. A bare `: keep-alive` comment is not
+    // enough — edge proxies buffer/drop SSE comments — so we also send a real
+    // `data:` heartbeat frame (mirrors routes/ai.js). The client reducer
+    // treats unknown `heartbeat` events as a no-op.
+    const inlineHeartbeatMs = Math.max(2_000, Number.parseInt(process.env.AGENT_TASK_SSE_HEARTBEAT_MS || '15000', 10) || 15000);
     heartbeatTimer = setInterval(() => {
       if (!clientConnected || res.writableEnded) { clearTimers(); return; }
-      try { res.write(': keep-alive\n\n'); } catch { safeCloseConnection(); }
-    }, 25000);
+      try {
+        res.write(': keep-alive\n\n');
+        res.write(`data: ${safeJsonStringify({ type: 'heartbeat', at: Date.now() })}\n\n`);
+      } catch { safeCloseConnection(); }
+    }, inlineHeartbeatMs);
     if (typeof heartbeatTimer.unref === 'function') heartbeatTimer.unref();
 
     // Response timeout ensures we never leave a socket hanging
@@ -898,9 +1356,16 @@ router.post(
     if (typeof responseTimeoutTimer.unref === 'function') responseTimeoutTimer.unref();
 
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    const forbiddenToolNames = new Set(Array.isArray(universalTaskContract.forbidden_tools)
-      ? universalTaskContract.forbidden_tools
-      : []);
+    const forbiddenToolNames = buildForbiddenToolNames({
+      baseForbidden: Array.isArray(universalTaskContract.forbidden_tools)
+        ? universalTaskContract.forbidden_tools
+        : [],
+      goal: agentGoal,
+      fileIds,
+      documentPolicy,
+      executionProfile,
+      universalTaskContract,
+    });
     const tools = buildTaskTools().filter((tool) => !forbiddenToolNames.has(tool.name));
     const langGraphLayer = await buildLangGraphLayer({ taskId, documentPolicy });
     const frameworkStatus = await buildAgenticFrameworkStatus({ tools, langGraphLayer });
@@ -930,6 +1395,7 @@ router.post(
               executionProfile,
               intentAlignmentProfile,
               taskPlan,
+              openclawRuntimeProfile,
               universalTaskContract,
               enterpriseExecutionGraph,
               enterpriseRuntimeProfile,
@@ -1010,10 +1476,14 @@ router.post(
       enterpriseToolRuntimePlan,
       enterpriseQaBoardReview,
       agenticOperatingCore,
+      openclawRuntimeProfile,
       frameworks: frameworkStatus,
       taskContract,
       taskContractSource,
     });
+    for (const event of openclawCapabilityKernel.buildOpenClawRuntimeEvents(openclawRuntimeProfile)) {
+      emit(event);
+    }
 
     // Per-step id counter shared with the tool event bus so the UI
     // can group tool_call + tool_output events under the step card
@@ -1093,19 +1563,20 @@ router.post(
                 artifacts,
                 executionProfile,
                 intentAlignmentProfile,
-              taskPlan,
-              universalTaskContract,
-              enterpriseExecutionGraph,
-              enterpriseRuntimeProfile,
-              enterpriseToolRuntimePlan,
-              enterpriseQaBoardReview,
-              agenticOperatingCore,
-              documentPolicy,
-              frameworks: frameworkStatus,
-              durableExecution: enterpriseRuntimeProfile.durableExecution,
-              maxSteps,
-              maxRuntimeMs,
-              updatedAt: new Date().toISOString(),
+                taskPlan,
+                openclawRuntimeProfile,
+                universalTaskContract,
+                enterpriseExecutionGraph,
+                enterpriseRuntimeProfile,
+                enterpriseToolRuntimePlan,
+                enterpriseQaBoardReview,
+                agenticOperatingCore,
+                documentPolicy,
+                frameworks: frameworkStatus,
+                durableExecution: enterpriseRuntimeProfile.durableExecution,
+                maxSteps,
+                maxRuntimeMs,
+                updatedAt: new Date().toISOString(),
               },
             },
           });
@@ -1135,10 +1606,21 @@ router.post(
           enterpriseToolRuntimePlan,
           enterpriseQaBoardReview,
           agenticOperatingCore,
-          uploadedFileContext
+          uploadedFileContext,
+          openclawRuntimeProfile,
+          agentGoal
         ),
         ctx: toolCtx,
-        finalizeGuard: ({ steps, unavailableTools }) => validateFinalize(finalizeProfile, steps, { unavailableTools }),
+        finalizeGuard: ({ steps, unavailableTools }) => validateAgentTaskFinalize({
+          finalizeProfile,
+          openclawRuntimeProfile,
+          taskPlan,
+          steps,
+          unavailableTools,
+        }),
+        onCompact: ({ step, removedMessages, chars }) => {
+          try { console.log(`[agent-task] trace compacted at step ${step}: -${removedMessages} msgs, ${chars} chars`); } catch (_) {}
+        },
         onStepStart: (step) => {
           // react-agent gives us THE assistant turn (thought + tool
           // invocations). We turn the `thought` line into a
@@ -1151,7 +1633,11 @@ router.post(
           const firstAction = step.actions?.[0];
           const label = thought || firstAction?.tool || 'Pensando…';
           const icon = inferIconFor(firstAction?.tool);
-          emit({ type: 'step_start', id: currentStepId, label: shortLabel(label), icon });
+          // Surface the FULL reasoning narration (not just the truncated
+          // label) so the chat shows its thinking like Claude. The frontend
+          // renders it as the step's detail line; `label` stays a short header.
+          const reasoning = thought ? thought.replace(/\s+/g, ' ').trim().slice(0, 280) : undefined;
+          emit({ type: 'step_start', id: currentStepId, label: shortLabel(label), icon, ...(reasoning ? { reasoning } : {}) });
         },
         onStepDone: (step) => {
           const firstAction = step.actions?.[0];
@@ -1161,27 +1647,63 @@ router.post(
         },
       });
 
-      if (result.finalAnswer) {
-        emit({ type: 'final_text', markdown: result.finalAnswer });
+      let finalMarkdown = result.finalAnswer || '';
+      let stoppedReason = result.stoppedReason;
+      const attachmentFinalNeedsRecovery = fileIds.length > 0 && looksLikeAttachmentRecoveryNeeded(finalMarkdown);
+      if (attachmentFinalNeedsRecovery) {
+        const recoveredMarkdown = resolveAttachmentFallbackMarkdown({
+          goal: displayGoal || agentGoal,
+          uploadedFileContext,
+          reason: stoppedReason,
+        });
+        if (recoveredMarkdown && !looksLikeAttachmentRecoveryNeeded(recoveredMarkdown)) {
+          finalMarkdown = recoveredMarkdown;
+          stoppedReason = 'attachment_inline_recovery';
+          documentPolicy.reason = 'Respuesta recuperada desde el contenido extraido de los adjuntos.';
+          documentPolicy.thresholds = {
+            ...(documentPolicy.thresholds || {}),
+            attachmentFallback: true,
+            originalStoppedReason: result.stoppedReason,
+            fileCount: fileIds.length,
+          };
+          task.documentPolicy = documentPolicy;
+          emit({
+            type: 'repair_attempt',
+            attempt: 1,
+            status: 'recovered',
+            message: 'Recuperé la respuesta usando el contenido extraído de tus archivos.',
+          });
+          emit({
+            type: 'quality_gate',
+            gate: 'attachment_inline_recovery',
+            label: 'Respuesta recuperada',
+            passed: true,
+            summary: 'Se evitó entregar una disculpa vacía y se respondió desde el contenido de los adjuntos.',
+          });
+        }
+      }
+
+      if (finalMarkdown) {
+        emit({ type: 'final_text', markdown: finalMarkdown });
       }
 
       const doneEvent = applyEvent({
         type: 'done',
-        stoppedReason: result.stoppedReason,
+        stoppedReason,
         stats: { steps: result.steps.length, artifacts: artifacts.length },
       });
 
       // Persist the final assistant message with artifacts metadata.
       let dbMessage = null;
-      if (chatId && prisma && (result.finalAnswer || streamState.steps.length || artifacts.length)) {
+      if (chatId && prisma && (finalMarkdown || streamState.steps.length || artifacts.length)) {
         try {
           const data = {
               content: serializeAgentState(streamState),
-              tokens: Math.ceil((result.finalAnswer || serializeAgentState(streamState)).length / 4),
+              tokens: Math.ceil((finalMarkdown || serializeAgentState(streamState)).length / 4),
               metadata: {
                 source: 'agent-task',
                 taskId,
-                status: result.stoppedReason === 'aborted' ? 'cancelled' : 'completed',
+                status: stoppedReason === 'aborted' ? 'cancelled' : 'completed',
                 displayGoal,
                 artifacts,
                 executionProfile,
@@ -1194,7 +1716,7 @@ router.post(
                 enterpriseQaBoardReview,
                 agenticOperatingCore,
                 durableExecution: enterpriseRuntimeProfile.durableExecution,
-                stoppedReason: result.stoppedReason,
+                stoppedReason,
                 maxSteps,
                 maxRuntimeMs,
                 updatedAt: new Date().toISOString(),
@@ -1214,7 +1736,7 @@ router.post(
         ...doneEvent,
         dbMessageId: dbMessage?.id || null,
       };
-      task.status = result.stoppedReason === 'aborted' ? 'cancelled' : 'completed';
+      task.status = stoppedReason === 'aborted' ? 'cancelled' : 'completed';
       task.updatedAt = new Date().toISOString();
       taskStore.markTaskStatus(task, task.status, {
         streamState,
@@ -1222,7 +1744,7 @@ router.post(
           steps: result.steps.length,
           artifacts: artifacts.length,
           durationMs: Date.now() - taskStartedAt,
-          stoppedReason: result.stoppedReason,
+          stoppedReason,
         },
         artifacts,
       });
@@ -1318,6 +1840,35 @@ function runAgentJobInProcess(payload, userId) {
   });
 }
 
+function shouldRunAttachmentTaskLocally({ fileIds = [], goal = '', env = process.env } = {}) {
+  if (env.AGENT_TASK_QUEUE_ATTACHMENTS === '1') return false;
+  return (Array.isArray(fileIds) && fileIds.length > 0) || isTranscriptionRequest(goal);
+}
+
+// Resolve the step/runtime budget for an agent task. Explicit caller values
+// always win. Otherwise the default is gated on intent: a heavy document the
+// user actually asked us to auto-generate (or a caller that explicitly asked
+// for a large step count) legitimately needs a long, multi-step run; a plain
+// interactive chat answer does NOT. The chat client surfaces a "dejó de
+// responder" stall after ~90s and abandons the stream, so the old blanket
+// 60-step / 2-hour ceiling just let a misrouted/runaway loop burn ~50 min of
+// LLM calls on a result nobody would ever see. Bound the interactive case
+// tightly so a stuck task fails fast and cheap instead of grinding to the cap.
+function resolveAgentTaskBudget({ maxStepsRaw, maxRuntimeMsRaw, documentPolicy = null } = {}) {
+  const parsedSteps = Number.parseInt(maxStepsRaw, 10);
+  const parsedRuntime = Number.parseInt(maxRuntimeMsRaw, 10);
+  const hasSteps = Number.isFinite(parsedSteps);
+  const hasRuntime = Number.isFinite(parsedRuntime);
+  const heavy = Boolean(documentPolicy && documentPolicy.autoGenerate)
+    || (hasSteps && parsedSteps > 40);
+  const defaultSteps = heavy ? 60 : 28;
+  const defaultRuntimeMs = heavy ? 2 * 60 * 60 * 1000 : 8 * 60 * 1000;
+  return {
+    maxSteps: hasSteps ? parsedSteps : defaultSteps,
+    maxRuntimeMs: hasRuntime ? parsedRuntime : defaultRuntimeMs,
+  };
+}
+
 async function handleQueuedTaskRequest(req, res) {
   const rawGoal = String(req.body.goal || '');
   try {
@@ -1346,6 +1897,20 @@ async function handleQueuedTaskRequest(req, res) {
     });
   }
 
+  // Liveness del productor: una conexión de cola no-ready significa que el
+  // add() escribiría al vacío (jobs "queued" varados para siempre, visto en
+  // producción local). Mejor un run local degradado que un chat colgado.
+  {
+    const { waitForQueueReady } = require('../services/agents/agent-task-queue');
+    const queueReady = await waitForQueueReady(1500).catch(() => false);
+    if (!queueReady) {
+      return handleLocalTaskRequest(req, res, {
+        fallbackReason: 'redis_unready',
+        fallbackDetail: 'queue connection not ready (producer liveness check)',
+      });
+    }
+  }
+
   const displayGoal = normalizeDisplayGoal(req.body.displayGoal || rawGoal);
   const agentGoal = normalizeDisplayGoal(rawGoal);
   const systemContract = normalizeSystemContract(
@@ -1361,20 +1926,36 @@ async function handleQueuedTaskRequest(req, res) {
       providedFileIds: fileIds,
     });
   }
+  if (shouldRunAttachmentTaskLocally({ fileIds, goal: agentGoal })) {
+    return handleLocalTaskRequest(req, res, {
+      fallbackReason: 'attachment_local_runtime',
+      fallbackDetail: 'attached document/image analysis bypassed queued runtime',
+    });
+  }
   const clientFileMetadata = normalizeClientMetadata(req.body.fileMetadata, fileIds);
   const taskId = crypto.randomUUID();
   const traceId = crypto.randomUUID();
   const chatId = typeof req.body.chatId === 'string' ? req.body.chatId : null;
   const model = typeof req.body.model === 'string' && req.body.model.length > 0 ? req.body.model : 'gpt-4o';
-  const parsedMaxSteps = Number.parseInt(req.body.maxSteps, 10);
-  const parsedMaxRuntimeMs = Number.parseInt(req.body.maxRuntimeMs, 10);
-  const maxSteps = Number.isFinite(parsedMaxSteps) ? parsedMaxSteps : 60;
-  const maxRuntimeMs = Number.isFinite(parsedMaxRuntimeMs) ? parsedMaxRuntimeMs : 2 * 60 * 60 * 1000;
   const documentPolicy = buildDocumentDeliveryPolicy({
     goal: agentGoal,
     displayGoal,
     files: fileIds,
   });
+  const { maxSteps, maxRuntimeMs } = resolveAgentTaskBudget({
+    maxStepsRaw: req.body.maxSteps,
+    maxRuntimeMsRaw: req.body.maxRuntimeMs,
+    documentPolicy,
+  });
+  const openclawRuntimeProfile = buildOpenClawRuntimeProfile({
+    goal: agentGoal,
+    userId: req.user?.id || null,
+    chatId,
+    fileIds,
+    model,
+  });
+
+  const { folderCode: cycleFolderCode, cycle: cycleMeta } = extractCycleFields(req.body);
 
   const payload = {
     taskId,
@@ -1390,6 +1971,9 @@ async function handleQueuedTaskRequest(req, res) {
     maxSteps,
     maxRuntimeMs,
     documentPolicy,
+    openclawRuntimeProfile,
+    folderCode: cycleFolderCode,
+    cycle: cycleMeta,
   };
 
   let job;
@@ -1407,13 +1991,15 @@ async function handleQueuedTaskRequest(req, res) {
     if (isRedisFailure) {
       const { markRedisFailure } = require('../services/agents/redis-resilience');
       markRedisFailure(err);
-      console.warn('[agent-task] enqueue failed, falling back to local runtime:', message);
-      return handleLocalTaskRequest(req, res, {
-        fallbackReason: 'redis_unavailable',
-        fallbackDetail: message,
-      });
     }
-    throw err;
+    // Never surface a bare 5xx for an enqueue failure: a degraded in-process
+    // local run is always better UX than "El servidor tuvo un problema". This
+    // also covers non-redis enqueue errors that previously bubbled to Express.
+    console.warn('[agent-task] enqueue failed, falling back to local runtime:', message);
+    return handleLocalTaskRequest(req, res, {
+      fallbackReason: isRedisFailure ? 'redis_unavailable' : 'enqueue_failed',
+      fallbackDetail: message,
+    });
   }
   let streamState = initialAgentState();
   const snapshot = {
@@ -1433,6 +2019,7 @@ async function handleQueuedTaskRequest(req, res) {
     queueName: getQueueName(),
     traceId,
     documentPolicy,
+    openclawRuntimeProfile,
     streamState,
     events: [],
     artifacts: [],
@@ -1456,6 +2043,12 @@ async function handleQueuedTaskRequest(req, res) {
   streamState = reduceAgentState(streamState, policyEvent);
   written = taskStore.appendTaskEvent({ ...written, streamState }, policyEvent, streamState, { eventLimit: TASK_EVENT_LIMIT }) || written;
   await agentTaskPersistence.appendAgentTaskEvent(written, written.events?.[written.events.length - 1] || policyEvent);
+
+  for (const openclawEvent of openclawCapabilityKernel.buildOpenClawRuntimeEvents(openclawRuntimeProfile)) {
+    streamState = reduceAgentState(streamState, openclawEvent);
+    written = taskStore.appendTaskEvent({ ...written, streamState }, openclawEvent, streamState, { eventLimit: TASK_EVENT_LIMIT }) || written;
+    await agentTaskPersistence.appendAgentTaskEvent(written, written.events?.[written.events.length - 1] || openclawEvent);
+  }
 
   await agentTaskPersistence.upsertAgentTask({
     ...written,
@@ -1556,14 +2149,22 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
   const traceId = crypto.randomUUID();
   const chatId = typeof req.body.chatId === 'string' ? req.body.chatId : null;
   const model = typeof req.body.model === 'string' && req.body.model.length > 0 ? req.body.model : 'gpt-4o';
-  const parsedMaxSteps = Number.parseInt(req.body.maxSteps, 10);
-  const parsedMaxRuntimeMs = Number.parseInt(req.body.maxRuntimeMs, 10);
-  const maxSteps = Number.isFinite(parsedMaxSteps) ? parsedMaxSteps : 60;
-  const maxRuntimeMs = Number.isFinite(parsedMaxRuntimeMs) ? parsedMaxRuntimeMs : 2 * 60 * 60 * 1000;
   const documentPolicy = buildDocumentDeliveryPolicy({
     goal: agentGoal,
     displayGoal,
     files: fileIds,
+  });
+  const { maxSteps, maxRuntimeMs } = resolveAgentTaskBudget({
+    maxStepsRaw: req.body.maxSteps,
+    maxRuntimeMsRaw: req.body.maxRuntimeMs,
+    documentPolicy,
+  });
+  const openclawRuntimeProfile = buildOpenClawRuntimeProfile({
+    goal: agentGoal,
+    userId: req.user?.id || null,
+    chatId,
+    fileIds,
+    model,
   });
   let streamState = initialAgentState();
   const snapshot = {
@@ -1583,6 +2184,7 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
     queueName: 'local-agent-task',
     traceId,
     documentPolicy,
+    openclawRuntimeProfile,
     streamState,
     events: [],
     artifacts: [],
@@ -1603,6 +2205,11 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
   const policyEvent = { type: 'document_policy', policy: documentPolicy };
   streamState = reduceAgentState(streamState, policyEvent);
   appendTaskEvent(snapshot, policyEvent, streamState);
+
+  for (const openclawEvent of openclawCapabilityKernel.buildOpenClawRuntimeEvents(openclawRuntimeProfile)) {
+    streamState = reduceAgentState(streamState, openclawEvent);
+    appendTaskEvent(snapshot, openclawEvent, streamState);
+  }
 
   await agentTaskPersistence.upsertAgentTask({
     ...snapshot,
@@ -1627,6 +2234,8 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
   });
   metrics.counter('agent_task_invocations_total', { status: 'local_fallback' });
 
+  const { folderCode: cycleFolderCode, cycle: cycleMeta } = extractCycleFields(req.body);
+
   const payload = {
     taskId,
     traceId,
@@ -1641,6 +2250,9 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
     maxSteps,
     maxRuntimeMs,
     documentPolicy,
+    openclawRuntimeProfile,
+    folderCode: cycleFolderCode,
+    cycle: cycleMeta,
   };
 
   Promise.resolve().then(async () => {
@@ -1786,10 +2398,25 @@ function streamTaskEvents(req, res, taskId, userId) {
   };
 
   pollTimer = setInterval(flush, 450);
-  heartbeatTimer = setInterval(() => {
+  // Heartbeat keeps the client's idle watchdog (90s, see
+  // lib/agent-task-service.ts) from firing while the worker sits in a long
+  // planning / first-LLM-call phase that hasn't produced a step event yet
+  // (the "Analizando solicitud · 0 pasos" stall). We emit BOTH a comment
+  // frame (warms raw sockets) AND a real `data:` heartbeat frame — only the
+  // latter reliably survives edge proxies (GCLB / nginx / Cloudflare) that
+  // buffer or drop bare SSE comments, which is exactly why the chat stream
+  // (routes/ai.js) already sends a `data:` heartbeat. The client reducer
+  // ignores unknown `heartbeat` events (no-op) and resets its idle timer on
+  // every received chunk. Interval well under the 90s watchdog, env-tunable.
+  const heartbeatMs = Math.max(2_000, Number.parseInt(process.env.AGENT_TASK_SSE_HEARTBEAT_MS || '15000', 10) || 15000);
+  const writeHeartbeat = () => {
     if (!clientConnected || res.writableEnded || res.destroyed) return;
-    try { res.write(': keep-alive\n\n'); } catch { safeCloseQueuedConnection(); }
-  }, 25000);
+    try {
+      res.write(': keep-alive\n\n');
+      res.write(`data: ${safeJsonStringify({ type: 'heartbeat', at: Date.now() })}\n\n`);
+    } catch { safeCloseQueuedConnection(); }
+  };
+  heartbeatTimer = setInterval(writeHeartbeat, heartbeatMs);
 
   // Don't keep the process alive just for SSE polling
   if (typeof pollTimer.unref === 'function') pollTimer.unref();
@@ -1848,6 +2475,29 @@ function buildFinalizeProfile(executionProfile, universalTaskContract) {
   };
 }
 
+function buildOpenClawRuntimeProfile({ goal, userId = null, chatId = null, fileIds = [], model = null, context = {} } = {}) {
+  try {
+    return openclawCapabilityKernel.buildCapabilityProfile({
+      prompt: goal,
+      userId,
+      chatId,
+      attachmentCount: Array.isArray(fileIds) ? fileIds.length : 0,
+      model,
+      context: {
+        documents: Array.isArray(fileIds) ? fileIds.map((id) => ({ id, source: 'agent_task_file' })) : [],
+        ...context,
+      },
+    });
+  } catch (err) {
+    console.warn('[agent-task] openclaw runtime profile unavailable:', err?.message || err);
+    return null;
+  }
+}
+
+function buildOpenClawRuntimeMeta(profileOrSummary) {
+  return openclawCapabilityKernel.buildOpenClawRuntimeSummary(profileOrSummary) || profileOrSummary || null;
+}
+
 function readArtifactMetadata(id) {
   const metadataPath = path.join(ARTIFACT_DIR, `${id}.json`);
   try {
@@ -1882,11 +2532,61 @@ function isTranscriptionRequest(text) {
     .test(String(text || ''));
 }
 
+function looksLikeAttachmentRecoveryNeeded(text) {
+  const value = String(text || '').trim().toLowerCase();
+  if (!value) return true;
+  return (
+    value === 'null' ||
+    value === 'undefined' ||
+    value === '(agent returned empty message)' ||
+    value === 'respuesta vacía' ||
+    value === 'respuesta vacia' ||
+    value.includes('no pude usar docintel') ||
+    value.includes('no pude usar la herramienta') ||
+    value.includes('falló de forma repetida') ||
+    value.includes('fallo de forma repetida') ||
+    value.includes('vuelve a intentarlo') ||
+    value.includes('reformula la solicitud') ||
+    value.includes('no pude acceder al contenido') ||
+    value.includes('proporciona un archivo legible')
+  );
+}
+
 function normalizeSystemContract(text) {
   return String(text || '')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 4000);
+}
+
+// Pull the professional-document-cycle fields off a request body and
+// normalise them for the task payload. Returns nulls for ordinary tasks so
+// the generic /api/agent/task path is unaffected. folderCode is re-sanitised
+// here (defence in depth) before it ever reaches the artifact storage layer.
+function extractCycleFields(body) {
+  const out = { folderCode: null, cycle: null };
+  if (!body || typeof body !== 'object') return out;
+  if (typeof body.folderCode === 'string' && body.folderCode.trim()) {
+    try {
+      const { sanitizeFolderCode } = require('../services/agents/professional-document-cycle');
+      out.folderCode = sanitizeFolderCode(body.folderCode);
+    } catch {
+      out.folderCode = null;
+    }
+  }
+  if (body.cycle && typeof body.cycle === 'object' && Array.isArray(body.cycle.stages)) {
+    out.cycle = {
+      stages: body.cycle.stages
+        .filter((s) => s && typeof s.id === 'string')
+        .map((s) => ({ id: s.id, label: String(s.label || s.id) }))
+        .slice(0, 12),
+      documentType: body.cycle.documentType || null,
+      field: body.cycle.field || null,
+      citationStyle: body.cycle.citationStyle || null,
+      code: out.folderCode || (typeof body.cycle.code === 'string' ? body.cycle.code : null),
+    };
+  }
+  return out;
 }
 
 function buildAgentSystemPrompt(
@@ -1902,7 +2602,9 @@ function buildAgentSystemPrompt(
   enterpriseToolRuntimePlan = null,
   enterpriseQaBoardReview = null,
   agenticOperatingCore = null,
-  uploadedFileContext = ''
+  uploadedFileContext = '',
+  openclawRuntimeProfile = null,
+  agentGoal = ''
 ) {
   const parts = [TASK_SYSTEM_PROMPT];
   if (universalTaskContract) {
@@ -1919,6 +2621,9 @@ function buildAgentSystemPrompt(
   }
   if (agenticOperatingCore) {
     parts.push(buildAgenticOperatingPrompt(agenticOperatingCore));
+  }
+  if (openclawRuntimeProfile) {
+    parts.push(openclawCapabilityKernel.buildOpenClawPromptBlock(openclawRuntimeProfile));
   }
   if (enterpriseToolRuntimePlan) {
     parts.push(
@@ -1967,6 +2672,15 @@ function buildAgentSystemPrompt(
   if (fileIds.length) {
     parts.push(`Uploaded/reference file ids available to tools: ${fileIds.join(', ')}. If the user asks about their content, call rag_retrieve before answering. If the user asks to transcribe, produce the exact readable text from the uploaded/pasted content; do not create a document unless the prompt explicitly requests Word/PDF/PPT/Excel.`);
   }
+  const documentAnalysisQualityBlock = documentAnalysisQuality.buildPromptBlock({
+    prompt: agentGoal,
+    files: fileIds,
+    language: 'es',
+    source: 'agent.task',
+  });
+  if (documentAnalysisQualityBlock) {
+    parts.push(documentAnalysisQualityBlock);
+  }
   if (uploadedFileContext) {
     parts.push(uploadedFileContext);
   }
@@ -1986,6 +2700,7 @@ function createTaskRecord({
   executionProfile = null,
   intentAlignmentProfile = null,
   taskPlan = null,
+  openclawRuntimeProfile = null,
   universalTaskContract = null,
   enterpriseExecutionGraph = null,
   enterpriseRuntimeProfile = null,
@@ -2025,6 +2740,7 @@ function createTaskRecord({
     executionProfile,
     intentAlignmentProfile,
     taskPlan,
+    openclawRuntimeProfile,
     universalTaskContract,
     enterpriseExecutionGraph,
     enterpriseRuntimeProfile,
@@ -2125,6 +2841,7 @@ function formatTaskPayload(task) {
     executionProfile: task.executionProfile || null,
     intentAlignmentProfile: task.intentAlignmentProfile || null,
     taskPlan: task.taskPlan || null,
+    openclawRuntimeProfile: task.openclawRuntimeProfile || null,
     universalTaskContract: task.universalTaskContract || null,
     enterpriseExecutionGraph: task.enterpriseExecutionGraph || null,
     enterpriseRuntimeProfile: task.enterpriseRuntimeProfile || null,
@@ -2151,6 +2868,7 @@ function initialAgentState() {
     approvals: [],
     documentAnalysisIds: [],
     evidenceRefs: [],
+    cycle: null,
   };
 }
 
@@ -2158,6 +2876,31 @@ function reduceAgentState(state, evt) {
   switch (evt.type) {
     case 'queue_status':
       return { ...state, queue: { status: evt.status, queue: evt.queue, jobId: evt.jobId, position: evt.position ?? null, estimatedWaitMs: evt.estimatedWaitMs ?? null, updatedAt: evt.ts || new Date().toISOString() } };
+    case 'cycle_init':
+      return {
+        ...state,
+        cycle: {
+          stages: Array.isArray(evt.stages) ? evt.stages : [],
+          documentType: evt.documentType || null,
+          field: evt.field || null,
+          citationStyle: evt.citationStyle || null,
+          code: evt.code || null,
+          current: null,
+          history: [],
+        },
+      };
+    case 'cycle_stage': {
+      const base = state.cycle || { stages: [], documentType: null, field: null, citationStyle: null, code: null, current: null, history: [] };
+      const status = evt.status === 'done' ? 'done' : 'start';
+      const history = [
+        ...(base.history || []),
+        { stage: evt.stage, status, label: evt.label || evt.stage, note: evt.note || '', ts: evt.ts || new Date().toISOString() },
+      ].slice(-20);
+      return {
+        ...state,
+        cycle: { ...base, current: status === 'done' ? base.current : evt.stage, history },
+      };
+    }
     case 'document_policy':
       return { ...state, documentPolicy: evt.policy || evt.documentPolicy || null };
     case 'document_analysis':
@@ -2252,6 +2995,7 @@ function reduceAgentState(state, evt) {
           runtimeModel: evt.runtimeModel,
           runtimeProvider: evt.runtimeProvider,
           tools: evt.tools,
+          openclawRuntime: buildOpenClawRuntimeMeta(evt.openclawRuntimeSummary || evt.openclawRuntimeProfile),
         },
       };
     case 'step_start':
@@ -2261,6 +3005,7 @@ function reduceAgentState(state, evt) {
           id: evt.id,
           label: evt.label,
           icon: evt.icon,
+          ...(evt.reasoning ? { reasoning: evt.reasoning } : {}),
           status: 'running',
           toolCalls: [],
         }],
@@ -2348,6 +3093,7 @@ function toSerializableAgentState(state = {}) {
       id: step.id,
       label: step.label,
       icon: step.icon,
+      ...(step.reasoning ? { reasoning: step.reasoning } : {}),
       status: step.status,
       toolCalls: (step.toolCalls || []).map((call) => ({
         tool: call.tool,
@@ -2395,6 +3141,7 @@ function toSerializableAgentState(state = {}) {
         runtimeModel: state.meta.runtimeModel,
         runtimeProvider: state.meta.runtimeProvider,
         tools: state.meta.tools,
+        openclawRuntime: state.meta.openclawRuntime || undefined,
       }
       : undefined,
   };
@@ -2412,9 +3159,12 @@ router.INTERNAL = {
   getTaskForUser,
   inferIconFor,
   initialAgentState,
+  looksLikeAttachmentRecoveryNeeded,
   normalizeDisplayGoal,
   normalizeSystemContract,
   reduceAgentState,
+  safeJsonStringify,
+  shouldRunAttachmentTaskLocally,
   shortLabel,
   streamTaskEvents,
   serializeAgentState,
@@ -2422,3 +3172,8 @@ router.INTERNAL = {
 };
 
 module.exports = router;
+// Exposed for unit tests (document-followup recovery heuristic).
+module.exports.looksLikeDocumentFollowupQuestion = looksLikeDocumentFollowupQuestion;
+module.exports.isTranscriptionRequest = isTranscriptionRequest;
+// Exposed for unit tests (interactive vs heavy-document budget gating).
+module.exports.resolveAgentTaskBudget = resolveAgentTaskBudget;

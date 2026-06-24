@@ -20,6 +20,8 @@
  *   sira-odt  → application/vnd.oasis.opendocument.text
  *   sira-epub → application/epub+zip
  *   sira-markdown-frontmatter → text/markdown
+ *   text-writer/json-writer/csv-writer/tsv-writer/yaml-writer/xml-writer/
+ *   ndjson-writer/ics-writer/vcf-writer/bibtex-writer → plain text formats
  *
  * Adding a generator: register its module here and the registry will
  * pick it up automatically through its declared preference rank.
@@ -29,6 +31,18 @@ const { generateRtf } = require("./rtf");
 const { generateOdt } = require("./odt");
 const { generateEpub } = require("./epub");
 const { generateMarkdownFrontmatter } = require("./markdown-frontmatter");
+const {
+  generateText,
+  generateJson,
+  generateCsv,
+  generateTsv,
+  generateYaml,
+  generateXml,
+  generateNdjson,
+  generateIcs,
+  generateVcf,
+  generateBibtex,
+} = require("./text-writers");
 
 /**
  * Wraps a sync `generate*` function in the async provider shape required
@@ -58,9 +72,28 @@ function wrap(fn, defaultFormat) {
 function getLocalProviders() {
   return {
     "sira-rtf": wrap(generateRtf, "rtf"),
+    // rtf-writer is the registry's lower-preference node RTF fallback (pref 80
+    // vs sira-rtf's 86). It had no provider, so dispatchGenerate marked it
+    // provider_not_injected and the declared fallback could never run. Wire it
+    // to the same deterministic generator so the belt-and-suspenders is real;
+    // sira-rtf still wins on preference, so no current behavior changes.
+    "rtf-writer": wrap(generateRtf, "rtf"),
     "sira-odt": wrap(generateOdt, "odt"),
     "sira-epub": wrap(generateEpub, "epub"),
     "sira-markdown-frontmatter": wrap(generateMarkdownFrontmatter, "md"),
+    // Node-native text-format writers (previously declared in the registry
+    // but unimplemented — calling these formats used to throw
+    // all_generators_failed). Zero binary deps.
+    "text-writer": wrap(generateText, "txt"),
+    "json-writer": wrap(generateJson, "json"),
+    "csv-writer": wrap(generateCsv, "csv"),
+    "tsv-writer": wrap(generateTsv, "tsv"),
+    "yaml-writer": wrap(generateYaml, "yaml"),
+    "xml-writer": wrap(generateXml, "xml"),
+    "ndjson-writer": wrap(generateNdjson, "ndjson"),
+    "ics-writer": wrap(generateIcs, "ics"),
+    "vcf-writer": wrap(generateVcf, "vcf"),
+    "bibtex-writer": wrap(generateBibtex, "bib"),
   };
 }
 

@@ -6,7 +6,7 @@
 // Unicode property classes (`\p{L}\p{N}`) inside lookahead /
 // lookbehind so accented Spanish keywords ("últimos", "elección",
 // "recientemente") trigger as expected. Requires the `u` flag.
-const FRESH_WEB_CONTEXT_RE = /(?<![\p{L}\p{N}])(?:actual(?:es|mente)?|hoy|últim[ao]s?|latest|current|noticias?|paper\s+reciente|precio|202[5-9]|ahora|news|weather|clima|sismo|terremoto|elecci[oó]n|recien(?:te|tes|temente)|cotizaci[oó]n)(?![\p{L}\p{N}])/iu;
+const FRESH_WEB_CONTEXT_RE = /(?<![\p{L}\p{N}])(?:actual(?:es|mente)?|hoy|ayer|mañana|esta\s+semana|este\s+(?:mes|año)|últim[ao]s?|latest|current|recent(?:ly)?|noticias?|paper\s+reciente|precio|cotizaci[oó]n|tipo\s+de\s+cambio|d[oó]lar|euro|bitcoin|20(?:2[5-9]|[3-9][0-9])|ahora|news|weather|clima|pron[oó]stico|sismo|terremoto|elecci[oó]n|elecciones|resultados?|marcador|en\s+vivo|recien(?:te|tes|temente))(?![\p{L}\p{N}])/iu;
 
 function needsFreshWebContext(prompt = '') {
   return FRESH_WEB_CONTEXT_RE.test(String(prompt || ''));
@@ -83,12 +83,40 @@ async function searxngSearch(query, { env = process.env, fetchImpl = globalThis.
   };
 }
 
+// Free, key-less fallback (DuckDuckGo / Wikipedia / scientific tier). This is
+// what makes "fresh web context" work for everyone even when no paid search
+// keys are configured — without it, a deployment with no TAVILY/EXA/FIRECRAWL
+// keys would silently never inject web results and the model would answer
+// time-sensitive questions ("¿qué día es hoy?", "precio actual…") from stale
+// training data.
+async function freeTierSearch(query, { maxResults = 30, locale, freeSearch, includeScientific } = {}) {
+  // `freeSearch` is injectable so unit tests stay hermetic (no real network);
+  // production lazy-requires the agent web-search adapter so this module stays
+  // loadable in contexts where that adapter isn't present.
+  // eslint-disable-next-line global-require
+  const freeAdapter = freeSearch || require('../services/agents/web-search');
+  // Prefer the aggregating, relevance-ranked path (`searchMany`): it fans out
+  // to every relevant provider in parallel, merges + de-duplicates, and drops
+  // irrelevant hits — so the chat "Fuentes" panel gets many GOOD sources
+  // instead of the first provider's possibly-irrelevant list. Injected test
+  // stubs that only implement `.search` transparently fall back to it.
+  const out = typeof freeAdapter.searchMany === 'function'
+    ? await freeAdapter.searchMany(query, { maxResults, locale, includeScientific })
+    : await freeAdapter.search(query, { maxResults, locale });
+  const results = (out?.results || []).map((r) => ({
+    title: r.title || '',
+    url: r.url || '',
+    content: r.snippet || r.content || '',
+  }));
+  return { provider: out?.provider ? `free:${out.provider}` : 'free', configured: true, results };
+}
+
 async function searchFreshContext(query, opts = {}) {
   const errors = [];
 
   try {
     const primary = await tavilySearch(query, opts);
-    if (primary.results?.length || primary.configured) return primary;
+    if (primary.results?.length) return primary;
   } catch (err) { errors.push({ provider: 'tavily', message: err.message }); }
 
   try {
@@ -106,11 +134,27 @@ async function searchFreshContext(query, opts = {}) {
     if (searxng.results?.length) return { ...searxng, errors };
   } catch (err) { errors.push({ provider: 'searxng', message: err.message }); }
 
+  // No paid provider returned anything (or none configured) — always try the
+  // free, key-less tier before giving up so web search works out of the box.
+  // `disableFreeTier` lets hermetic tests opt out entirely.
+  if (opts.disableFreeTier !== true) {
+    try {
+      const free = await freeTierSearch(query, {
+        maxResults: opts.limit || 24,
+        locale: opts.locale,
+        freeSearch: opts.freeSearch,
+        includeScientific: opts.includeScientific,
+      });
+      if (free.results?.length) return { ...free, errors };
+    } catch (err) { errors.push({ provider: 'free', message: err.message }); }
+  }
+
   return { provider: 'none', configured: false, results: [], errors };
 }
 
 function listWebSearchProviders(env = process.env) {
   return {
+    duckduckgo: true,
     tavily: Boolean(env.TAVILY_API_KEY),
     exa: Boolean(env.EXA_API_KEY),
     firecrawl: Boolean(env.FIRECRAWL_API_KEY),

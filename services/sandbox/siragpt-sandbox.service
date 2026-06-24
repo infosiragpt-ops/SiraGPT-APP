@@ -1,0 +1,25 @@
+[Unit]
+Description=SiraGPT document-task sandbox microservice
+After=network.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+User=lenovo
+WorkingDirectory=/home/lenovo/siragpt-sandbox
+EnvironmentFile=/home/lenovo/siragpt-sandbox/.env
+ExecStart=/usr/bin/node /home/lenovo/siragpt-sandbox/server.js
+Restart=always
+RestartSec=3
+# Bind is 127.0.0.1 (set in .env) — never exposed directly; only via the tunnel.
+# Hardening: the process itself needs no privileges (it shells out to `docker`).
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=true
+# Allow writing the service's own dir (logs/staging) under the read-only home.
+ReadWritePaths=/home/lenovo/siragpt-sandbox /tmp
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

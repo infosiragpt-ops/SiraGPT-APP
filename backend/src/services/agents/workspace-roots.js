@@ -74,6 +74,44 @@ function isPathWithinWorkspace(targetPath, options = {}) {
   return allowedWorkspaceRoots(options).some((root) => isPathWithinRoot(targetPath, root));
 }
 
+/**
+ * The running product's own source tree. Derived from this file's location
+ * (this module lives at <repo>/backend/src/services/agents/) so it stays
+ * correct regardless of where the checkout is, plus the known desktop paths.
+ */
+function selfRepoRoot() {
+  return normalizeRoot(path.resolve(__dirname, '..', '..', '..', '..'));
+}
+
+/**
+ * Protected roots are READABLE but NOT writable by the agent's host tools.
+ * The agent must never edit / commit / push the source of the app it is
+ * running inside (a prompt-injected turn could otherwise self-modify the
+ * backend and `git push main` — and here .env local == prod). Override with
+ * SIRAGPT_PROTECTED_ROOTS, or disable entirely with SIRAGPT_ALLOW_SELF_MODIFY=1.
+ */
+function protectedRoots() {
+  if (process.env.SIRAGPT_ALLOW_SELF_MODIFY === '1') return [];
+  return uniqueRoots([
+    selfRepoRoot(),
+    path.join(os.homedir(), 'Desktop', 'siraGPT'),
+    path.join(os.homedir(), 'Documents', 'GitHub', 'siraGPT'),
+    ...splitRootList(process.env.SIRAGPT_PROTECTED_ROOTS),
+  ]);
+}
+
+function isPathProtected(targetPath) {
+  return protectedRoots().some((root) => isPathWithinRoot(targetPath, root));
+}
+
+/**
+ * A path is writable when it is inside an allowed workspace root AND not
+ * inside a protected (product-source) root.
+ */
+function isPathWritable(targetPath, options = {}) {
+  return isPathWithinWorkspace(targetPath, options) && !isPathProtected(targetPath);
+}
+
 function displayPath(root) {
   const normalized = normalizeRoot(root);
   const home = normalizeRoot(os.homedir());
@@ -94,6 +132,10 @@ module.exports = {
   expandHome,
   isPathWithinRoot,
   isPathWithinWorkspace,
+  isPathProtected,
+  isPathWritable,
   normalizeRoot,
+  protectedRoots,
+  selfRepoRoot,
   splitRootList,
 };

@@ -10,7 +10,7 @@ const axios = require('axios');
 const FormData = require('form-data');
 const PptxGenJS = require('pptxgenjs');
 const vectorPPTService = require('./vector-ppt-service');
-const { fitMessagesToContext } = require('./context-window');
+const { fitMessagesToContext, getCompletionLimit } = require('./context-window');
 const { evaluateResponse, buildCorrectivePrompt } = require('./quality-guard');
 const { getBreaker, CircuitBreakerError } = require('./circuit-breaker');
 const {
@@ -221,6 +221,14 @@ function currentThinkingLevel() {
     return process.env.SIRA_THINKING_LEVEL || process.env.DEEPSEEK_V4_THINKING || 'high';
 }
 
+// Claude-style reasoning streaming master switch. ON by default; set
+// SIRAGPT_REASONING_STREAM=0|off|false to restore the legacy behaviour
+// (chain-of-thought discarded, gpt-oss excluded for first-byte latency).
+function reasoningStreamEnabled() {
+    const v = String(process.env.SIRAGPT_REASONING_STREAM || '').trim().toLowerCase();
+    return v !== '0' && v !== 'off' && v !== 'false';
+}
+
 function normalizeTemperature(value, fallback = 0.55) {
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) return fallback;
@@ -416,7 +424,51 @@ class AIService {
         }
     }
 
-    async generateStream({ provider, model, messages, systemBlocks, chatId, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false }) {
+    /**
+     * Describe imágenes adjuntas con el runtime de visión que esté
+     * configurado (OpenAI → Gemini → OpenRouter, según selectVisionRuntime).
+     * A diferencia de describeImagesWithGemini, no depende de una key
+     * concreta. Devuelve la descripción en texto o null si no hay proveedor
+     * de visión disponible o la llamada falla; el caller decide cómo degradar.
+     * @param {Array<{path: string, mimeType: string}>} imageFiles
+     * @param {string} userText - pregunta original del usuario (contexto)
+     */
+    async describeAttachedImages(imageFiles, userText) {
+        const runtime = selectVisionRuntime('', '');
+        if (!runtime.switched) {
+            console.warn('[vision-describe] sin proveedor de visión configurado — no se pueden describir imágenes');
+            return null;
+        }
+        try {
+            const client = this.getClient(runtime.provider);
+            const contentArray = [{
+                type: 'text',
+                text: `Describe en español, con detalle y precisión, lo que aparece en la(s) imagen(es) adjunta(s). ` +
+                    `Si contienen texto, transcríbelo literalmente preservando saltos de línea. ` +
+                    `Si contienen ecuaciones, formúlalas en LaTeX. ` +
+                    `Si es un diagrama, logotipo o ilustración, describe su estructura, formas y colores. ` +
+                    `Pregunta original del usuario para contexto: "${(userText || '').slice(0, 500)}"`,
+            }];
+            for (const f of imageFiles) {
+                const img = await this.prepareImageForVision(f.path, f.mimeType);
+                if (img) contentArray.push(img);
+            }
+            if (contentArray.length === 1) return null;
+            const completion = await client.chat.completions.create({
+                model: runtime.model,
+                messages: [{ role: 'user', content: contentArray }],
+                stream: false,
+                temperature: 0.2,
+            });
+            const text = completion?.choices?.[0]?.message?.content || '';
+            return typeof text === 'string' && text.trim() ? text.trim() : null;
+        } catch (err) {
+            console.error('[vision-describe] fallo describiendo imágenes:', err?.message || err);
+            return null;
+        }
+    }
+
+    async generateStream({ provider, model, messages, systemBlocks, chatId, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false, reasoningSink = null }) {
         // ── Siragpt 1.0 — modelo combinado ──
         // Si el caller pidió siragpt-1.0 y hay imágenes adjuntas, las
         // describimos primero con Gemini 2.5 Flash Lite, inyectamos la
@@ -462,7 +514,6 @@ class AIService {
         // and are ignored by EventSource parsers, so they never show up
         // as content on the client.
         const writeHeartbeat = () => { try { res.write(`: ping ${Date.now()}\n\n`); } catch { /* socket gone */ } };
-        const heartbeat = setInterval(writeHeartbeat, HEARTBEAT_INTERVAL_MS);
 
         // Fit the payload to the target model's context window BEFORE we
         // pick the client. Running this before vision expansion keeps the
@@ -514,6 +565,12 @@ class AIService {
             }
         }
 
+        // Start the heartbeat only AFTER the throwing prep above
+        // (fitMessagesToContext / applyAnthropicCacheToMessages) so an
+        // exception there can't leak the 15s interval; declared here (not
+        // inside the try) so the `finally` below can still clear it.
+        const heartbeat = setInterval(writeHeartbeat, HEARTBEAT_INTERVAL_MS);
+
         try {
             // ✅ IMPROVED: Handle images properly for vision API
             if (files && files.length > 0) {
@@ -529,22 +586,23 @@ class AIService {
 
                     // Add hard vision instructions so text-only fallback answers
                     // never claim the uploaded image cannot be processed.
+                    // Task-first protocol: the previous "please transcribe and
+                    // format them using proper LaTeX" wording OVERRODE terse
+                    // user instructions — an attached exercise + "resolver"
+                    // came back as a bare transcription instead of the solved
+                    // exercise. The user's text is the TASK; the image is the
+                    // content it applies to.
                     const mathInstructionText = textContent +
                         '\n\nIMAGE PROCESSING CONTRACT: The uploaded image(s) are attached to this same message as vision inputs. ' +
                         'Inspect those image inputs directly. If the user asks to transcribe, return the visible text exactly and preserve line breaks when useful. ' +
                         'Do not say that images cannot be processed unless every image attachment failed to load server-side.' +
-                        '\n\nIMPORTANT: If the uploaded image(s) contain mathematical equations, formulas, or expressions, ' +
-                        'please transcribe and format them using proper LaTeX syntax. Use single dollar signs ($...$) for inline math ' +
-                        'and double dollar signs ($$...$$) for display math. For example: ' +
-                        'Inline: $E = mc^2$ or Display: $$\\int_{-\\infty}^{\\infty} e^{-x^2} dx = \\sqrt{\\pi}$$' +
-                        '\n\nExamples of proper LaTeX formatting:' +
-                        '\n- Fractions: $\\frac{a}{b}$' +
-                        '\n- Square roots: $\\sqrt{x}$ or $\\sqrt[n]{x}$' +
-                        '\n- Integrals: $\\int f(x) dx$ or $\\int_{a}^{b} f(x) dx$' +
-                        '\n- Summations: $\\sum_{i=1}^{n} x_i$' +
-                        '\n- Greek letters: $\\alpha, \\beta, \\gamma, \\pi, \\theta$' +
-                        '\n- Subscripts/Superscripts: $x_1, y^2, a_i^j$' +
-                        '\n- Matrix: $\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}$';
+                        '\n\nIMAGE TASK PROTOCOL:' +
+                        '\n- The user\'s instruction is the TASK; the attached image is the CONTENT it applies to.' +
+                        '\n- A brief instruction ("resolver", "deriva", "calcula", "simplifica", "solve", "derive", "evaluate") means: perform that operation COMPLETELY, step by step, on the exercise shown in the image — e.g. for a derivative, apply the quotient/chain/product rules and simplify to the final result.' +
+                        '\n- NEVER answer with only a transcription or description of the image unless the user explicitly asks for a transcription.' +
+                        '\n- Format every mathematical expression in LaTeX: inline $...$, display $$...$$. ' +
+                        'Fractions $\\frac{a}{b}$, roots $\\sqrt{x}$, integrals $\\int_{a}^{b} f(x) dx$, sums $\\sum_{i=1}^{n} x_i$, ' +
+                        'Greek $\\alpha, \\beta, \\pi$, sub/superscripts $x_1, y^2$, matrices $\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}$.';
 
                     // Build content array with text and images
                     const contentArray = [
@@ -607,14 +665,16 @@ class AIService {
                 const currentModel = modelChain[m];
                 const currentProvider = m === 0 ? provider : providerForModel(currentModel);
                 const currentRuntimeModel = normalizeModelForProvider(currentProvider, currentModel);
-                // OpenRouter reasoning models (gpt-oss family) stream their
-                // chain-of-thought in `delta.reasoning` and leave `delta.content`
-                // empty until the very end. Asking OpenRouter to exclude the
-                // reasoning makes the model still think internally but only
-                // stream the final answer, so the user sees tokens immediately
-                // instead of hitting the 30s first-byte timeout.
+                // Claude-style extended thinking. When reasoning streaming is
+                // ON (default) the chain-of-thought a reasoning model emits in
+                // `delta.reasoning` / `delta.reasoning_content` is forwarded to
+                // the client as typed SSE frames instead of being discarded —
+                // the gateway's applyThinkingControls adds the OpenRouter
+                // `reasoning: { effort }` param for supported models. When OFF
+                // we restore the old behaviour for gpt-oss (exclude, so the
+                // user isn't staring at silence until the final answer).
                 const extraPayload = { temperature: normalizedTemperature };
-                if (currentProvider === 'OpenRouter' && /gpt-oss/i.test(currentRuntimeModel)) {
+                if (!reasoningStreamEnabled() && currentProvider === 'OpenRouter' && /gpt-oss/i.test(currentRuntimeModel)) {
                     extraPayload.reasoning = { exclude: true };
                 }
                 const providerPayload = buildProviderChatPayload({
@@ -624,6 +684,7 @@ class AIService {
                     stream: true,
                     thinkingLevel: currentThinkingLevel(),
                     extra: extraPayload,
+                    maxOutputTokens: Math.min(getCompletionLimit(currentRuntimeModel), 16384),
                 });
                 const payload = providerPayload.payload;
 
@@ -661,6 +722,26 @@ class AIService {
                             client.chat.completions.create(payload, { signal: attemptCtrl.signal })
                         );
 
+                        // Per-attempt reasoning state. A retry/fallback restarts
+                        // the trace, so the accumulators reset with each attempt
+                        // and only the attempt that returns commits to the sink.
+                        const reasoningOn = reasoningStreamEnabled();
+                        let reasoningText = '';
+                        let reasoningDetails = [];
+                        let reasoningStartedAt = 0;
+                        let reasoningDoneSent = false;
+                        const emitReasoningDone = async () => {
+                            if (!reasoningStartedAt || reasoningDoneSent) return;
+                            reasoningDoneSent = true;
+                            const durationMs = Date.now() - reasoningStartedAt;
+                            if (reasoningSink && typeof reasoningSink === 'object') {
+                                reasoningSink.text = reasoningText;
+                                reasoningSink.details = reasoningDetails.length ? reasoningDetails : null;
+                                reasoningSink.durationMs = durationMs;
+                            }
+                            await writeWithBackpressure(res, `data: ${JSON.stringify({ type: 'reasoning_done', durationMs })}\n\n`);
+                        };
+
                         for await (const chunk of stream) {
                             const delta = chunk.choices[0]?.delta || {};
                             // DeepSeek emits `reasoning_content`; OpenRouter emits `reasoning`.
@@ -672,13 +753,51 @@ class AIService {
                                 firstByteSeen = true;
                                 clearTimeout(firstByteTimer);
                             }
+                            // Claude-style thinking trace: forward the reasoning
+                            // delta as a typed frame. The payload key is
+                            // `reasoning` (NOT `content`) on purpose — a stale
+                            // client that only reads `content` keeps ignoring
+                            // these frames instead of gluing the chain-of-thought
+                            // onto the visible answer.
+                            if (reasoningOn && reasoningChunk && typeof reasoningChunk === 'string') {
+                                if (!reasoningStartedAt) reasoningStartedAt = Date.now();
+                                reasoningText += reasoningChunk;
+                                await writeWithBackpressure(res, `data: ${JSON.stringify({ type: 'reasoning_delta', reasoning: reasoningChunk })}\n\n`);
+                            }
+                            // Raw OpenRouter reasoning_details blocks (signed
+                            // Anthropic thinking, encrypted traces…) — persisted
+                            // verbatim, never streamed to the client.
+                            if (reasoningOn && Array.isArray(delta.reasoning_details) && delta.reasoning_details.length) {
+                                reasoningDetails = reasoningDetails.concat(delta.reasoning_details);
+                            }
+                            // Tool-call deltas (name arrives on the first frame,
+                            // argument fragments after). The plain chat path
+                            // sends no tools today, but reasoning models routed
+                            // here must not have their tool intent silently
+                            // swallowed.
+                            if (Array.isArray(delta.tool_calls) && delta.tool_calls.length) {
+                                for (const tc of delta.tool_calls) {
+                                    await writeWithBackpressure(res, `data: ${JSON.stringify({
+                                        type: 'tool_call_delta',
+                                        index: tc.index ?? 0,
+                                        ...(tc.function?.name ? { name: tc.function.name } : {}),
+                                        ...(tc.function?.arguments ? { argsDelta: tc.function.arguments } : {}),
+                                    })}\n\n`);
+                                }
+                            }
                             if (contentChunk) {
                                 if (!firstByteSeen) { firstByteSeen = true; clearTimeout(firstByteTimer); }
+                                // First visible token closes the thinking phase.
+                                await emitReasoningDone();
                                 fullResponseContent += contentChunk;
                                 hasStreamedAnyContent = true;
-                                await writeWithBackpressure(res, `data: ${JSON.stringify({ content: contentChunk })}\n\n`);
+                                await writeWithBackpressure(res, `data: ${JSON.stringify({ type: 'text_delta', content: contentChunk })}\n\n`);
                             }
                         }
+                        // Model thought but never produced content (tool-call-only
+                        // or empty completion): still close the trace so the UI
+                        // collapses instead of shimmering forever.
+                        await emitReasoningDone();
 
                         if (!hasStreamedAnyContent) {
                             throw Object.assign(new Error('Empty completion — model returned no content'), { code: 'EMPTY_COMPLETION' });
@@ -849,6 +968,7 @@ class AIService {
                 stream: false,
                 thinkingLevel: currentThinkingLevel(),
                 extra: { temperature: normalizeTemperature(temperature) },
+                maxOutputTokens: Math.min(getCompletionLimit(model), 16384),
             });
             const resp = await client.chat.completions.create(
                 providerPayload.payload,

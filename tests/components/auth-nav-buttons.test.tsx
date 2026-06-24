@@ -11,28 +11,34 @@ describe('LoginButton', () => {
     expect(login).toHaveAttribute('href', '/auth/login')
   })
 
-  it('starts navigation from the first touch/pointer activation instead of waiting for a later click', () => {
+  it('starts navigation from a single click activation', () => {
     const navigate = vi.fn()
     render(<LoginButton href="/auth/login" navigate={navigate} />)
 
     const login = screen.getByRole('link', { name: /login/i })
-    fireEvent.pointerDown(login, {
-      pointerType: 'touch',
-      isPrimary: true,
-      button: 0,
-    })
+    fireEvent.click(login)
 
     expect(navigate).toHaveBeenCalledTimes(1)
     expect(navigate).toHaveBeenCalledWith('/auth/login')
   })
 
-  it('ignores repeated taps once navigation is already in flight', () => {
+  it('does not start navigation from passive touchstart handlers', () => {
     const navigate = vi.fn()
     render(<LoginButton href="/auth/login" navigate={navigate} />)
 
     const login = screen.getByRole('link', { name: /login/i })
+    fireEvent.touchStart(login)
     fireEvent.pointerDown(login, { pointerType: 'touch', isPrimary: true, button: 0 })
-    fireEvent.pointerDown(login, { pointerType: 'touch', isPrimary: true, button: 0 })
+
+    expect(navigate).not.toHaveBeenCalled()
+  })
+
+  it('ignores repeated clicks once navigation is already in flight', () => {
+    const navigate = vi.fn()
+    render(<LoginButton href="/auth/login" navigate={navigate} />)
+
+    const login = screen.getByRole('link', { name: /login/i })
+    fireEvent.click(login)
     fireEvent.click(login)
 
     expect(navigate).toHaveBeenCalledTimes(1)

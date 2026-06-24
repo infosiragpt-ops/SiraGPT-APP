@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+#
+# verify-ui-lock.sh — CI gate: fail if any tracked frontend file differs from
+# the committed baseline docs/UI_LOCK_HASHES.txt. The tracked file set lives in
+# scripts/ui-lock-files.sh (shared with update-ui-lock.sh so they never drift).
+# To accept an intentional change, run `npm run ui-lock:update`.
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,11 +22,7 @@ fi
 echo "==> Verifying UI lock..."
 echo "     Baseline: $LOCK_FILE"
 
-find app components hooks lib styles tailwind.config.js postcss.config.js postcss.config.mjs next.config.mjs \
-  -type f \( -name "*.tsx" -o -name "*.css" -o -name "*.ts" -o -name "*.js" -o -name "*.mjs" \) \
-  ! -path "*/node_modules/*" ! -path "*/.next/*" ! -path "*/.turbo/*" ! -path "*/dist/*" \
-  2>/dev/null \
-  | sort | xargs shasum -a 256 2>/dev/null | sort > "$TEMP_CURRENT"
+bash "$SCRIPT_DIR/ui-lock-files.sh" | xargs shasum -a 256 2>/dev/null | sort > "$TEMP_CURRENT"
 
 DIFF_OUTPUT=$(diff "$LOCK_FILE" "$TEMP_CURRENT" 2>&1) || true
 
@@ -29,13 +31,15 @@ if [[ -z "$DIFF_OUTPUT" ]]; then
   rm -f "$TEMP_CURRENT"
   exit 0
 else
-  echo "❌ UI LOCK VIOLATION DETECTED!"
+  echo "❌ UI LOCK VIOLATION DETECTED — these frontend files differ from the baseline:"
   DIFF_FILES=$(echo "$DIFF_OUTPUT" | grep '^[<>]' | awk '{print $NF}' | sed 's/^\.\///' | sort -u)
   if [[ -n "$DIFF_FILES" ]]; then
     echo "$DIFF_FILES" | head -20
   fi
   echo ""
-  echo "This build cannot proceed. Revert UI changes before committing."
+  echo "If the change is INTENTIONAL, re-baseline with:"
+  echo "    npm run ui-lock:update"
+  echo "then commit the updated docs/UI_LOCK_HASHES.txt alongside your change."
   rm -f "$TEMP_CURRENT"
   exit 1
 fi

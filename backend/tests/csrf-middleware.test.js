@@ -14,9 +14,13 @@ const {
   requireCsrf,
   hashToken,
   generateToken,
+  makeStatelessToken,
   hasBearerAuth,
   readHeader,
 } = require('../src/middleware/csrf');
+
+// Self-signed token shape: 32-byte-hex nonce, base36 timestamp, HMAC-hex sig.
+const STATELESS_TOKEN_RE = /^[0-9a-f]{64}\.[0-9a-z]+\.[0-9a-f]{64}$/;
 
 function mockRes() {
   const headers = {};
@@ -53,7 +57,7 @@ describe('csrfTokenRoute', () => {
     const res = mockRes();
     csrfTokenRoute(req, res);
     assert.ok(res.body && typeof res.body.csrfToken === 'string');
-    assert.equal(res.body.csrfToken.length, 64); // 32 bytes hex
+    assert.match(res.body.csrfToken, STATELESS_TOKEN_RE); // self-signed token
     assert.ok(res.cookies.csrf_token);
     assert.ok(res.cookies._csrf_secret);
     // The secret cookie MUST be httpOnly so JS / XSS cannot read it.
@@ -159,6 +163,72 @@ describe('requireCsrf — validation', () => {
     let called = false;
     requireCsrf(req, mockRes(), () => { called = true; });
     assert.equal(called, true);
+  });
+
+  test('accepts a valid self-signed token when the secret cookie is absent (iframe/Safari ITP)', () => {
+    // Simulates the cross-site iframe: GET /csrf-token issued the token but the
+    // browser dropped the _csrf_secret cookie, so only the header arrives.
+    const token = makeStatelessToken();
+    const req = mockReq({
+      headers: { 'X-CSRF-Token': token },
+      cookies: {}, // no _csrf_secret — blocked third-party cookie
+    });
+    let called = false;
+    requireCsrf(req, mockRes(), () => { called = true; });
+    assert.equal(called, true);
+  });
+
+  test('rejects a forged token when the secret cookie is absent', () => {
+    const res = mockRes();
+    const req = mockReq({
+      headers: { 'x-csrf-token': 'deadbeef.zzz.deadbeef' },
+      cookies: {},
+    });
+    requireCsrf(req, res, () => assert.fail('next should not be called'));
+    assert.equal(res.statusCode, 403);
+    assert.equal(res.body.reason, 'missing_token');
+  });
+
+  test('falls back to stateless check when secret cookie is stale (mismatch)', () => {
+    // Browser kept an old _csrf_secret but echoes a fresh self-signed token.
+    const token = makeStatelessToken();
+    const req = mockReq({
+      headers: { 'x-csrf-token': token },
+      cookies: { _csrf_secret: 'stale-unrelated-secret' },
+    });
+    let called = false;
+    requireCsrf(req, mockRes(), () => { called = true; });
+    assert.equal(called, true);
+  });
+
+  // --- CSRF attack regression tests ---------------------------------------
+  // A stateless token is GLOBAL (not session-bound), so it must NEVER be
+  // accepted from a body/form field — only from the X-CSRF-Token header (which
+  // requires a CORS preflight a cross-site attacker cannot pass). Otherwise an
+  // attacker could mint a valid token and replay it via a plain <form> POST.
+
+  test('REJECTS a valid stateless token submitted via body when no cookie (cross-site form attack)', () => {
+    const res = mockRes();
+    const token = makeStatelessToken(); // attacker mints their own valid token
+    const req = mockReq({
+      body: { _csrf: token }, // delivered through a cross-site <form> POST
+      cookies: {}, // victim's secret cookie not present / not forgeable
+    });
+    requireCsrf(req, res, () => assert.fail('next must not be called — body stateless token is a CSRF bypass'));
+    assert.equal(res.statusCode, 403);
+    assert.equal(res.body.reason, 'missing_token');
+  });
+
+  test('REJECTS a valid stateless token via body even with a stale secret cookie', () => {
+    const res = mockRes();
+    const token = makeStatelessToken();
+    const req = mockReq({
+      body: { csrfToken: token },
+      cookies: { _csrf_secret: 'stale-unrelated-secret' },
+    });
+    requireCsrf(req, res, () => assert.fail('next must not be called — body stateless token is a CSRF bypass'));
+    assert.equal(res.statusCode, 403);
+    assert.equal(res.body.reason, 'mismatch');
   });
 
   test('CSRF_DISABLED=1 bypasses for tests/dev', () => {

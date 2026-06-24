@@ -1,4 +1,5 @@
 const fs = require('fs');
+const objectStorage = require('./object-storage');
 const path = require('path');
 const PizZip = require('pizzip');
 const ExcelJS = require('exceljs');
@@ -7,6 +8,7 @@ const { renderPreview } = require('./doc-preview');
 const {
   saveArtifact,
   EXTENSION_TO_MIME,
+  ARTIFACT_DIR,
   INTERNAL: taskToolInternals,
 } = require('./agents/task-tools');
 const {
@@ -28,22 +30,77 @@ function normalizeText(value) {
     .trim();
 }
 
+// Typos de tecleo rapido duplican letras ("coompleta", "agreega"). Para el
+// MATCH DE VERBOS probamos tambien la version con letras repetidas colapsadas
+// (solo agrega coincidencias; el texto original sigue presente en el haystack).
+function withCollapsedRepeats(textNorm) {
+  return `${textNorm} ${String(textNorm).replace(/([a-z])\1+/g, '$1')}`;
+}
+
 function isSourcePreservingEditRequest(prompt, files = []) {
   const text = normalizeText(prompt);
   if (!text) return false;
+  const verbHay = withCollapsedRepeats(text);
   const hasFiles = Array.isArray(files) ? files.length > 0 : Boolean(files);
 
-  const editVerb = /\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|inclu\w*|pon|poner|coloc\w*|adjunt\w*|modific\w*|edit\w*|corrig\w*|correg\w*|mejor\w*|actualiz\w*|reescrib\w*|reemplaz\w*|quit\w*|elimin\w*|complet\w*)\b/.test(text);
+  const structuralEditVerb = /\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|inclu\w*|pon|poner|coloc\w*|modific\w*|edit\w*|corrig\w*|correg\w*|mejor\w*|actualiz\w*|reemplaz\w*|quit\w*|elimin\w*|borr\w*|complet\w*)\b/.test(verbHay);
+  // STRONG mutation verbs (delete / remove / insert / add / replace): on an
+  // attachment turn these unambiguously target the attached file even with no
+  // document/region noun ("borra el jurado evaluador", "elimina los anexos",
+  // "agrega una conclusión") — the only plausible target is the uploaded doc.
+  const strongStructuralVerb = /\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|quit\w*|elimin\w*|borr\w*|suprim\w*|remov\w*|reemplaz\w*|sustitu\w*|tach\w*)\b/.test(verbHay);
+  // Whole-document transforms (traduce / cambia / resume / reformula…) act on the
+  // entire file. They are recognized as edits, but require an explicit document
+  // noun (not just a demonstrative pronoun) so phrases like "traduce esta frase"
+  // or "cambia de tema" stay normal chat answers even when a file is attached.
+  // Match VERB forms only — generic stems like `cambi\w*` / `resum\w*` also match
+  // nouns ("cambio", "resumen", "traduccion") and would turn read-only prompts
+  // ("explica el cambio del documento") into a fake source-preserving edit.
+  // reescribir lives HERE (not in structuralEditVerb) so it needs an explicit
+  // document noun like the other whole-document transforms — keep this pattern
+  // byte-identical to lib/ai-service.ts WHOLE_DOCUMENT_TRANSFORM_RE.
+  const transformVerb = /\b(?:traduc(?:e\w*|ir\w*|iendo|id[oa])|traduzca\w*|reescrib(?:e\w*|ir\w*|iendo)|reescrit[oa]|cambi(?:a\w*|e\w*)|resum(?:e|es|ir\w*|a|as|amos|elo|ela|elos|elas|eme|emelo|iendo|id[oa])|reformul(?:e\w*|a|as|ar\w*|alo|ala|ame|ando|ad[oa])|parafrase\w*|sintetiz(?:a\w*|e\w*|ando|ad[oa])|sintetice\w*|transcrib(?:e\w*|ir\w*|a\w*|iendo)|transcrit[oa])\b/.test(text);
+  const primaryEditVerb = structuralEditVerb || transformVerb;
+  const adjuntarAction = /\badjunt(?:a|ar|ame|arme|alo|ala|alos|alas|arlo|arla|arlos|arlas)\b/.test(text)
+    && !/\b(?:documentos?|archivos?|pdf|word|docx|excel|xlsx|pptx?)\s+adjunt[oa]s?\b/.test(text);
+  const editVerb = primaryEditVerb || adjuntarAction;
   const existingDocRef = /\b(mi|mismo|misma|este|esta|ese|esa|documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx|powerpoint|pdf|tesis)\b/.test(text);
+  const documentNoun = /\b(documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx|powerpoint|pdf|tesis)\b/.test(text);
   const appendLocation = /\b(al final|final|anexo|anexos|apendice|ultima pagina|ultima hoja|nueva hoja|nueva pagina|nueva diapositiva)\b/.test(text);
   const preservation = /\b(sin cambiar|no cambies|no modificar lo demas|mismo word|mismo documento|conservar|preservar|mantener)\b/.test(text);
+  const explicitFreshDeliverable = /\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|dame|prepara(?:r|me)?|redacta(?:r|me)?|elabora(?:r|me)?|devu[eé]lv(?:e|eme|elo)|entr[eé]ga(?:r|me)?)\b[^.?!]{0,160}\b(?:un\s+|una\s+|el\s+|la\s+)?(?:word|docx|documento|informe|reporte|tesis|monografia|ensayo)\b/.test(text)
+    || /\b(?:quiero|necesito)\s+(?:un\s+|una\s+|el\s+|la\s+)(?:word|docx|documento|informe|reporte|tesis|monografia|ensayo)\b/.test(text);
   const instrument = /\b(instrumento|instrument|intuemtno|instumento|cuestionario|encuesta|escala|anexo)\b/.test(text);
   const documentRegion = /\b(portada|caratula|t[ií]tulo|encabezado|pie de pagina|indice|tabla|hoja|celda|fila|columna|diapositiva|pagina|seccion|capitulo)\b/.test(text);
   const strongImplicitFollowUp = appendLocation && (instrument || preservation || /\btesis\b/.test(text));
+  const continuationDocRef = /\b(mi|mismo|misma|documento|archivo|word|docx|tesis|general|principal)\b/.test(text);
+  const followUpDocumentEdit = continuationDocRef
+    && primaryEditVerb
+    && /\b(documento|archivo|word|docx|tesis|general|principal|contenido)\b/.test(text);
 
   if (!editVerb) return false;
-  if (hasFiles) return existingDocRef || appendLocation || preservation || instrument || documentRegion;
+  // "completa el anexo 3 … y dame un nuevo word" = edita el adjunto y
+  // entregame el archivo actualizado, NO un documento desde cero. El veto de
+  // entregable nuevo solo aplica cuando no hay un objetivo concreto dentro
+  // del documento adjunto.
+  // Solo una SECCIÓN NOMBRADA del documento adjunto ("el anexo 3", "capítulo
+  // 2") levanta el veto — palabras sueltas como "tabla/índice" en una
+  // enumeración de creación ("genera un word: incluye tabla, índice…") no.
+  const concreteEditTarget = hasFiles && Boolean(parseTargetSectionRequest(text));
+  if (explicitFreshDeliverable && !preservation && !concreteEditTarget) return false;
+  if (hasFiles) {
+    if (appendLocation || preservation || instrument || documentRegion) return true;
+    if (documentNoun) return true;
+    // A STRONG mutation verb alone is enough on an attachment turn — the
+    // uploaded file is the only plausible target ("borra el jurado evaluador").
+    if (strongStructuralVerb) return true;
+    // Weaker edit verbs (pon/mejora/modifica/edita…) still need an explicit
+    // reference, and transform verbs require a document noun (handled above) so
+    // "traduce esta frase" / "cambia de tema" stay normal chat answers.
+    return structuralEditVerb && existingDocRef;
+  }
   return preservation
+    || followUpDocumentEdit
     || (existingDocRef && (appendLocation || instrument || documentRegion))
     || strongImplicitFollowUp;
 }
@@ -58,6 +115,12 @@ function isXlsxFile(file = {}) {
   const mime = normalizeText(file.mimeType || file.type);
   const name = normalizeText(file.originalName || file.filename || file.name);
   return mime.includes('spreadsheet') || mime.includes('excel') || /\.xlsx$/i.test(name);
+}
+
+function isPptxFile(file = {}) {
+  const mime = normalizeText(file.mimeType || file.type);
+  const name = normalizeText(file.originalName || file.filename || file.name);
+  return mime.includes('presentation') || mime.includes('powerpoint') || /\.pptx$/i.test(name);
 }
 
 function extensionForFile(file = {}) {
@@ -94,11 +157,11 @@ function isTextLikeFile(file = {}) {
 }
 
 function isSupportedSourcePreservingFile(file = {}) {
-  return isDocxFile(file) || isXlsxFile(file) || isPdfFile(file) || isTextLikeFile(file);
+  return isDocxFile(file) || isXlsxFile(file) || isPptxFile(file) || isPdfFile(file) || isTextLikeFile(file);
 }
 
 function supportedSourceEditLabel() {
-  return 'DOCX, XLSX, PDF, TXT, Markdown, CSV, HTML, SVG, JSON, XML o YAML';
+  return 'DOCX, XLSX, PPTX, PDF, TXT, Markdown, CSV, HTML, SVG, JSON, XML o YAML';
 }
 
 function resolveStoredFilePath(row = {}, userId = '') {
@@ -162,8 +225,8 @@ function isPotentialEditableAttachmentRef(file) {
   const mime = normalizeText(file.mimeType || file.type || file.contentType);
   const name = normalizeText(file.name || file.originalName || file.filename || file.path || '');
   if (mime.startsWith('image/') || file.type === 'image') return false;
-  return /\.(docx?|xlsx?|pdf|csv|txt|md|markdown|html?|svg|json|xml|ya?ml)$/i.test(name)
-    || /\b(word|wordprocessingml|spreadsheet|excel|pdf|csv|plain|markdown|html|svg|json|xml|yaml)\b/.test(mime);
+  return /\.(docx?|xlsx?|pptx?|pdf|csv|txt|md|markdown|html?|svg|json|xml|ya?ml)$/i.test(name)
+    || /\b(word|wordprocessingml|spreadsheet|excel|presentation|powerpoint|pdf|csv|plain|markdown|html|svg|json|xml|yaml)\b/.test(mime);
 }
 
 async function resolveRecentEditableFileIds(prisma, { chatId, prompt } = {}) {
@@ -191,6 +254,7 @@ async function resolveRecentEditableFileIds(prisma, { chatId, prompt } = {}) {
 
 async function loadEditableSourceFiles(prisma, { userId, fileIds = [], chatId = null, prompt = '' } = {}) {
   let ids = normalizeFileIdList(fileIds);
+  const explicitFileIds = ids.length > 0;
   if (ids.length === 0) {
     ids = await resolveRecentEditableFileIds(prisma, { chatId, prompt });
   }
@@ -211,8 +275,268 @@ async function loadEditableSourceFiles(prisma, { userId, fileIds = [], chatId = 
   return ids
     .map((id) => byId.get(id))
     .filter(Boolean)
-    .map((row) => ({ ...row, path: resolveStoredFilePath(row, userId) }))
+    .map((row) => ({
+      ...row,
+      path: resolveStoredFilePath(row, userId),
+      source: explicitFileIds ? 'current_upload' : 'recent_attachment',
+    }))
     .filter((row) => row.path);
+}
+
+function resolveGeneratedArtifactPath(row = {}) {
+  const direct = String(row.path || '').trim();
+  if (direct) {
+    try {
+      if (fs.existsSync(direct) && fs.statSync(direct).isFile()) return direct;
+    } catch {
+      // Continue with metadata fallback.
+    }
+  }
+  try {
+    const metaPath = taskToolInternals.metadataPathFor
+      ? taskToolInternals.metadataPathFor(String(row.id || ''))
+      : path.join(ARTIFACT_DIR, `${row.id}.json`);
+    if (!metaPath || !fs.existsSync(metaPath)) return null;
+    const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+    const candidates = [];
+    if (meta.storedRelPath) candidates.push(path.join(ARTIFACT_DIR, meta.storedRelPath));
+    if (meta.filename && row.id) candidates.push(path.join(ARTIFACT_DIR, `${row.id}-${meta.filename}`));
+    return candidates.find((candidate) => {
+      try {
+        return candidate && fs.existsSync(candidate) && fs.statSync(candidate).isFile();
+      } catch {
+        return false;
+      }
+    }) || null;
+  } catch {
+    return null;
+  }
+}
+
+async function loadRecentGeneratedArtifactSourceFiles(prisma, { userId, chatId, limit = 8 } = {}) {
+  if (!userId || !chatId) return [];
+  const rows = prisma?.generatedArtifact?.findMany
+    ? await prisma.generatedArtifact.findMany({
+      where: {
+        userId,
+        chatId,
+        format: { in: ['docx', 'xlsx', 'pptx', 'pdf', 'txt', 'md', 'csv', 'html', 'htm', 'json', 'xml', 'yaml', 'yml'] },
+      },
+      select: {
+        id: true,
+        filename: true,
+        mime: true,
+        format: true,
+        path: true,
+        sizeBytes: true,
+        createdAt: true,
+        validation: true,
+      },
+      orderBy: { createdAt: 'desc' },
+      take: Math.max(1, Math.min(limit, 25)),
+    }).catch(() => [])
+    : [];
+
+  const dbArtifacts = rows
+    .map((row) => ({
+      id: `artifact:${row.id}`,
+      artifactId: row.id,
+      filename: row.filename,
+      originalName: row.filename,
+      mimeType: row.mime || EXTENSION_TO_MIME[row.format] || 'application/octet-stream',
+      size: row.sizeBytes || 0,
+      path: resolveGeneratedArtifactPath(row),
+      extractedText: '',
+      source: 'generated_artifact',
+      createdAt: row.createdAt,
+      validation: row.validation || null,
+    }))
+    .filter((row) => row.path && isSupportedSourcePreservingFile(row));
+  const messageArtifacts = await loadRecentAssistantArtifactSourceFiles(prisma, { chatId, limit });
+  return dedupeFiles([...dbArtifacts, ...messageArtifacts]);
+}
+
+function artifactIdFromUrl(url = '') {
+  const match = String(url || '').match(/\/api\/agent\/artifact\/([^/?#]+)/);
+  return match ? decodeURIComponent(match[1]) : '';
+}
+
+function artifactFormatFromFilename(filename = '', mime = '') {
+  const ext = path.extname(String(filename || '')).replace(/^\./, '').toLowerCase();
+  if (ext) return ext === 'markdown' ? 'md' : ext;
+  const normalized = normalizeText(mime);
+  if (normalized.includes('wordprocessingml')) return 'docx';
+  if (normalized.includes('spreadsheet') || normalized.includes('excel')) return 'xlsx';
+  if (normalized.includes('presentation') || normalized.includes('powerpoint')) return 'pptx';
+  if (normalized.includes('pdf')) return 'pdf';
+  if (normalized.includes('json')) return 'json';
+  if (normalized.includes('yaml')) return 'yaml';
+  if (normalized.includes('markdown')) return 'md';
+  if (normalized.startsWith('text/')) return 'txt';
+  return 'bin';
+}
+
+function normalizeAssistantArtifactFile(file = {}, timestamp = null) {
+  const artifactId = String(file.artifactId || file.id || artifactIdFromUrl(file.url || file.downloadUrl || file.download_url) || '').trim();
+  const filename = file.filename || file.name || file.title || (artifactId ? `${artifactId}.bin` : '');
+  const format = String(file.format || artifactFormatFromFilename(filename, file.mime || file.mimeType || file.type)).toLowerCase();
+  const directPath = String(file.path || '').trim();
+  const existingDirectPath = (() => {
+    try {
+      return directPath && fs.existsSync(directPath) && fs.statSync(directPath).isFile() ? directPath : '';
+    } catch {
+      return '';
+    }
+  })();
+  const resolvedPath = existingDirectPath || (artifactId ? resolveGeneratedArtifactPath({ id: artifactId, filename, format, mime: file.mime || file.mimeType }) : null);
+  if (!resolvedPath) return null;
+  return {
+    id: artifactId ? `artifact:${artifactId}` : `assistant-artifact:${filename}:${timestamp || ''}`,
+    artifactId: artifactId || null,
+    filename,
+    originalName: filename,
+    mimeType: file.mime || file.mimeType || file.type || EXTENSION_TO_MIME[format] || 'application/octet-stream',
+    size: file.size || file.sizeBytes || 0,
+    path: resolvedPath,
+    extractedText: '',
+    source: 'assistant_message_artifact',
+    createdAt: timestamp,
+    validation: file.metrics || file.validation || null,
+  };
+}
+
+async function loadRecentAssistantArtifactSourceFiles(prisma, { chatId, limit = 8 } = {}) {
+  if (!prisma?.message?.findMany || !chatId) return [];
+  const messages = await prisma.message.findMany({
+    where: { chatId, role: 'ASSISTANT', deletedAt: null },
+    select: { files: true, timestamp: true },
+    orderBy: { timestamp: 'desc' },
+    take: Math.max(1, Math.min(30, limit * 4)),
+  }).catch(() => []);
+  const files = [];
+  for (const message of messages) {
+    for (const file of parseMessageFiles(message.files)) {
+      const normalized = normalizeAssistantArtifactFile(file, message.timestamp);
+      if (!normalized || !isSupportedSourcePreservingFile(normalized)) continue;
+      files.push(normalized);
+      if (files.length >= limit) return dedupeFiles(files);
+    }
+  }
+  return dedupeFiles(files);
+}
+
+function fileStableKey(file) {
+  // `file = {}` solo aplica el default cuando el argumento es `undefined`; un
+  // `null` explícito (p. ej. cuando no hay archivo fuente seleccionable) hacía
+  // `null.id` → "Cannot read properties of null (reading 'id')". Blindamos
+  // contra cualquier valor no-objeto.
+  if (!file || typeof file !== 'object') return '';
+  return String(file.id || file.artifactId || file.path || file.filename || file.originalName || '');
+}
+
+function dedupeFiles(files = []) {
+  const seen = new Set();
+  const out = [];
+  for (const file of files) {
+    const key = fileStableKey(file);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(file);
+  }
+  return out;
+}
+
+function requestMentionsGeneralDocument(prompt = '') {
+  const text = normalizeText(prompt);
+  return /\b(mi\s+documento|documento\s+general|documento\s+principal|archivo\s+principal|word\s+principal|tesis\s+general|mi\s+word|mi\s+archivo)\b/.test(text);
+}
+
+function requestWantsReferenceIntegration(prompt = '') {
+  const text = normalizeText(prompt);
+  if (!text) return false;
+  const integrationVerb = /\b(analiz\w*|revis\w*|lee\w*|leeme|extrae\w*|usa\w*|toma\w*|integra\w*|incorpor\w*|agreg\w*|anad\w*|fusion\w*|combina\w*|mezcla\w*)\b/.test(text);
+  const externalSource = /\b(otro\s+documento|otro\s+archivo|nuevo\s+documento|nuevo\s+archivo|documento\s+adjunto|archivo\s+adjunto|documentos?\s+de\s+soporte|insumo|contenido\s+de\s+otro)\b/.test(text)
+    || /\b(?:este|esta|ese|esa|otro|otra|nuevo|nueva|adjunto|adjunta|subido|subida|cargado|cargada)\s+(?:pdf|docx|word|documento|archivo)\b/.test(text)
+    || /\b(?:pdf|docx|word|documento|archivo)\s+(?:adjunto|adjunta|subido|subida|cargado|cargada|de\s+soporte)\b/.test(text);
+  const targetGeneral = requestMentionsGeneralDocument(text) || /\b(en|a|dentro\s+de)\s+(?:mi\s+)?(?:documento|archivo|word|tesis)\b/.test(text);
+  return integrationVerb && (externalSource || targetGeneral) && /\b(agreg\w*|anad\w*|incorpor\w*|integra\w*|fusion\w*|combina\w*)\b/.test(text);
+}
+
+function requestExplicitlyUsesCurrentUploadAsBase(prompt = '') {
+  const text = normalizeText(prompt);
+  if (requestMentionsGeneralDocument(text) || requestWantsReferenceIntegration(text)) return false;
+  return /\b(este|esta|ese|esa)\s+(documento|archivo|word|docx|pdf|excel|xlsx|pptx|powerpoint|presentacion)\b/.test(text)
+    || /\b(documento|archivo)\s+(adjunto|subido|cargado|que\s+adjunto|que\s+subi)\b/.test(text);
+}
+
+function selectSourcePreservingDocumentSet({ requestText = '', sourceFiles = [], priorArtifacts = [] } = {}) {
+  const currentSupported = (sourceFiles || []).filter(isSupportedSourcePreservingFile);
+  const priorSupported = (priorArtifacts || []).filter(isSupportedSourcePreservingFile);
+  const currentDocx = currentSupported.filter(isDocxFile);
+  const priorDocx = priorSupported.filter(isDocxFile);
+  const hasExplicitCurrentUpload = currentSupported.some((file) => file.source === 'current_upload');
+  const wantsGeneral = requestMentionsGeneralDocument(requestText);
+  const wantsReferenceIntegration = requestWantsReferenceIntegration(requestText);
+  const explicitCurrentBase = requestExplicitlyUsesCurrentUploadAsBase(requestText);
+  const targetedSection = isTargetedSectionFillRequest(requestText);
+  const generatedContinuation = priorDocx.length
+    && !hasExplicitCurrentUpload
+    && !explicitCurrentBase
+    && isSourcePreservingEditRequest(requestText, priorDocx);
+
+  // Needle continuity: "borra/reemplaza X" donde X NO existe en el archivo
+  // re-adjuntado pero el hilo tiene un artifact editado más reciente (el
+  // usuario itera sobre "el documento" tras una edición previa, p.ej. borrar
+  // parte de una referencia que agregamos nosotros). Editar el original
+  // fallaría con "No encontré el texto…"; re-basamos sobre el artifact.
+  const continuityNeedle = (() => {
+    const norm = normalizeText(requestText);
+    const pair = extractReplacementPair(norm);
+    if (pair?.needle) return pair.needle;
+    if (clauseIsDelete(norm)) return extractDeletionNeedle(norm);
+    return '';
+  })();
+  const needleMissingInCurrentUpload = Boolean(
+    continuityNeedle
+    && currentDocx.length
+    && priorDocx.length
+    && !explicitCurrentBase
+    && !normalizeText(String(currentDocx[0].extractedText || '')).includes(normalizeText(continuityNeedle))
+  );
+
+  let sourceFile = null;
+  let selectionReason = 'first_supported_file';
+  if (!explicitCurrentBase && priorDocx.length && (wantsGeneral || wantsReferenceIntegration || currentSupported.length === 0 || generatedContinuation || needleMissingInCurrentUpload)) {
+    sourceFile = priorDocx[0];
+    selectionReason = needleMissingInCurrentUpload ? 'artifact_continuity_needle' : 'latest_generated_docx_artifact';
+  } else if (!explicitCurrentBase && priorSupported.length && currentSupported.length === 0) {
+    sourceFile = priorSupported[0];
+    selectionReason = 'latest_generated_artifact';
+  } else if (targetedSection && currentDocx.length) {
+    sourceFile = currentDocx[0];
+    selectionReason = 'current_docx_target_section';
+  } else if (currentSupported.length) {
+    sourceFile = currentSupported[0];
+    selectionReason = 'current_supported_file';
+  } else if (priorSupported.length) {
+    sourceFile = priorSupported[0];
+    selectionReason = 'latest_generated_artifact';
+  }
+
+  const sourceKey = fileStableKey(sourceFile);
+  const references = dedupeFiles([
+    ...currentSupported,
+    ...(sourceFile && sourceFile.source !== 'generated_artifact' ? [] : []),
+  ]).filter((file) => fileStableKey(file) !== sourceKey);
+  const allSourceFiles = dedupeFiles([sourceFile, ...references].filter(Boolean));
+  return {
+    sourceFile,
+    sourceFiles: allSourceFiles,
+    referenceFiles: references,
+    selectionReason,
+    wantsReferenceIntegration,
+    wantsGeneralDocument: wantsGeneral,
+  };
 }
 
 function xmlEscape(value) {
@@ -296,16 +620,16 @@ function block(kind, text) {
   return { kind, text: String(text || '').trim() };
 }
 
-function buildInstrumentAppendix({ prompt = '', sourceText = '', originalName = '' } = {}) {
+// Just the instrument content (no ANEXOS / Anexo-N heading), so it can be
+// reused either as a standalone appendix or as the body of a brand-new labeled
+// anexo (e.g. "Anexo 4. Instrumentos...").
+function buildInstrumentAppendixBody({ prompt = '', sourceText = '', originalName = '' } = {}) {
   const title = inferDocumentTitle(sourceText, originalName);
   const variables = inferResearchVariables(title);
   const population = inferPopulation(sourceText, title);
   const place = inferPlace(sourceText, title);
 
   return [
-    block('pageBreak', ''),
-    block('heading1', 'ANEXOS'),
-    block('heading2', 'Anexo 1. Instrumento de recolección de datos'),
     block('normal', `Título de la investigación: ${title}.`),
     block('normal', `Instrumento propuesto: cuestionario estructurado dirigido a ${population}.`),
     block('normal', `Objetivo del instrumento: recopilar información pertinente para analizar ${variables.independent} y su relación con ${variables.dependent} en ${place}.`),
@@ -334,6 +658,15 @@ function buildInstrumentAppendix({ prompt = '', sourceText = '', originalName = 
   ];
 }
 
+function buildInstrumentAppendix(options = {}) {
+  return [
+    block('pageBreak', ''),
+    block('heading1', 'ANEXOS'),
+    block('heading2', 'Anexo 1. Instrumento de recolección de datos'),
+    ...buildInstrumentAppendixBody(options),
+  ];
+}
+
 function buildGenericAppendix({ prompt = '', sourceText = '', originalName = '' } = {}) {
   const title = inferDocumentTitle(sourceText, originalName);
   return [
@@ -351,6 +684,20 @@ function buildAppendixBlocks(options = {}) {
     return buildInstrumentAppendix(options);
   }
   return buildGenericAppendix(options);
+}
+
+function applyTextReplacementsToBlocks(blocks = [], operations = []) {
+  const replacements = (operations || [])
+    .filter((op) => op?.kind === 'replace_text' && op.needle)
+    .map((op) => ({ needle: op.needle, replacement: op.replacement || '' }));
+  if (!replacements.length) return blocks;
+  return blocks.map((item) => {
+    let text = item.text;
+    for (const replacement of replacements) {
+      text = replaceNeedleText(text, replacement.needle, replacement.replacement);
+    }
+    return { ...item, text };
+  });
 }
 
 const ROMAN_VALUES = {
@@ -427,20 +774,139 @@ function isTargetedSectionFillRequest(prompt = '') {
   );
 }
 
-function paragraphXml(item = {}) {
+// Default visual styling used only when the source document offers no formatting
+// to inherit. Keeping pPr (paragraph) and rPr (run) separate lets us swap each
+// half independently for the source document's own properties.
+const PARAGRAPH_STYLE_DEFAULTS = {
+  heading1: {
+    pPr: '<w:pPr><w:spacing w:before="360" w:after="180"/><w:outlineLvl w:val="0"/></w:pPr>',
+    rPr: '<w:rPr><w:b/><w:sz w:val="32"/></w:rPr>',
+  },
+  heading2: {
+    pPr: '<w:pPr><w:spacing w:before="260" w:after="140"/><w:outlineLvl w:val="1"/></w:pPr>',
+    rPr: '<w:rPr><w:b/><w:sz w:val="28"/></w:rPr>',
+  },
+  heading3: {
+    pPr: '<w:pPr><w:spacing w:before="200" w:after="100"/><w:outlineLvl w:val="2"/></w:pPr>',
+    rPr: '<w:rPr><w:b/><w:sz w:val="24"/></w:rPr>',
+  },
+  normal: {
+    pPr: '<w:pPr><w:spacing w:before="80" w:after="120" w:line="360" w:lineRule="auto"/><w:jc w:val="both"/></w:pPr>',
+    rPr: '<w:rPr><w:sz w:val="24"/></w:rPr>',
+  },
+};
+
+// Pull the first <w:pPr>…</w:pPr> block (paragraph-level formatting: alignment,
+// spacing, indentation, the paragraph style reference) out of a single
+// paragraph's XML. Handles both the closing-tag form and the self-closing form.
+function extractParagraphProperties(paragraphXmlValue = '') {
+  const match = String(paragraphXmlValue || '').match(/<w:pPr\b(?:[\s\S]*?<\/w:pPr>|\s*\/>)/);
+  return match ? match[0] : '';
+}
+
+// Pull the first run's <w:rPr>…</w:rPr> block (font, size, colour, bold…) out of
+// a paragraph. The paragraph-mark rPr that lives inside <w:pPr> is stripped first
+// so we capture the formatting that actually applies to the visible text.
+function extractRunProperties(paragraphXmlValue = '') {
+  const withoutParagraphProps = String(paragraphXmlValue || '')
+    .replace(/<w:pPr\b(?:[\s\S]*?<\/w:pPr>|\s*\/>)/, '');
+  const match = withoutParagraphProps.match(/<w:rPr\b(?:[\s\S]*?<\/w:rPr>|\s*\/>)/);
+  return match ? match[0] : '';
+}
+
+// Captured paragraph properties may carry section breaks or list-numbering refs
+// that would corrupt inserted body text (spurious page sections / auto-numbered
+// lists). Drop those while keeping fonts, alignment, spacing and style refs.
+function sanitizeCapturedParagraphProperties(paragraphProps = '') {
+  return String(paragraphProps || '')
+    .replace(/<w:sectPr\b(?:[\s\S]*?<\/w:sectPr>|\s*\/>)/g, '')
+    .replace(/<w:numPr\b(?:[\s\S]*?<\/w:numPr>|\s*\/>)/g, '');
+}
+
+function looksLikeDocxHeadingParagraph(paragraph = {}) {
+  const xml = String(paragraph.xml || '');
+  if (/<w:pStyle\s+w:val="[^"]*(?:Heading|Titulo|T[ií]tulo|Title)[^"]*"/i.test(xml)) return true;
+  if (/<w:outlineLvl\b/.test(xml)) return true;
+  const text = String(paragraph.text || '').trim();
+  if (text && text.length <= 60 && /<w:b\s*\/>|<w:b\s+w:val="(?:true|1|on)"/i.test(xml) && !/[.;:]\s*$/.test(text)) {
+    return true;
+  }
+  return false;
+}
+
+// Pick the longest real body paragraph (not a heading, not a placeholder) as the
+// representative of the document's "normal text" formatting.
+function pickRepresentativeBodyParagraph(paragraphs = [], excludeIndexes = new Set()) {
+  let bestXml = '';
+  let bestLength = 0;
+  for (let i = 0; i < paragraphs.length; i += 1) {
+    if (excludeIndexes.has(i)) continue;
+    const paragraph = paragraphs[i];
+    const text = String(paragraph.text || '').trim();
+    if (text.length < 25) continue;
+    if (isPlaceholderParagraph(paragraph.text)) continue;
+    if (looksLikeDocxHeadingParagraph(paragraph)) continue;
+    if (text.length > bestLength) {
+      bestLength = text.length;
+      bestXml = paragraph.xml;
+    }
+  }
+  return bestXml;
+}
+
+function buildFormattingTemplate({ bodyXml = '', headingXml = '' } = {}) {
+  return {
+    bodyPPr: sanitizeCapturedParagraphProperties(extractParagraphProperties(bodyXml)),
+    bodyRPr: extractRunProperties(bodyXml),
+    headingPPr: sanitizeCapturedParagraphProperties(extractParagraphProperties(headingXml)),
+    headingRPr: extractRunProperties(headingXml),
+  };
+}
+
+// Template for filling a specific section: body text mirrors the document's own
+// normal paragraphs, generated sub-headings (rare) mirror the section heading.
+function buildSectionFormattingTemplate(paragraphs = [], headingIndex = -1) {
+  const heading = headingIndex >= 0 ? paragraphs[headingIndex] : null;
+  return buildFormattingTemplate({
+    bodyXml: pickRepresentativeBodyParagraph(paragraphs, new Set(headingIndex >= 0 ? [headingIndex] : [])),
+    headingXml: heading ? heading.xml : '',
+  });
+}
+
+// Template for appending a fresh appendix: only inherit body text formatting so
+// the new ANEXOS heading hierarchy keeps its readable size ladder.
+function buildDocumentFormattingTemplate(paragraphs = []) {
+  return buildFormattingTemplate({
+    bodyXml: pickRepresentativeBodyParagraph(paragraphs),
+    headingXml: '',
+  });
+}
+
+function paragraphXml(item = {}, template = null) {
   if (item.kind === 'pageBreak') {
     return '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
   }
 
   const text = xmlEscape(item.text || '');
-  const styles = {
-    heading1: '<w:pPr><w:spacing w:before="360" w:after="180"/><w:outlineLvl w:val="0"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="32"/></w:rPr>',
-    heading2: '<w:pPr><w:spacing w:before="260" w:after="140"/><w:outlineLvl w:val="1"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="28"/></w:rPr>',
-    heading3: '<w:pPr><w:spacing w:before="200" w:after="100"/><w:outlineLvl w:val="2"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="24"/></w:rPr>',
-    normal: '<w:pPr><w:spacing w:before="80" w:after="120" w:line="360" w:lineRule="auto"/><w:jc w:val="both"/></w:pPr><w:r><w:rPr><w:sz w:val="24"/></w:rPr>',
-  };
-  const prefix = styles[item.kind] || styles.normal;
-  return `<w:p>${prefix}<w:t xml:space="preserve">${text}</w:t></w:r></w:p>`;
+  const kind = PARAGRAPH_STYLE_DEFAULTS[item.kind] ? item.kind : 'normal';
+  const isHeading = kind.startsWith('heading');
+  let pPr = PARAGRAPH_STYLE_DEFAULTS[kind].pPr;
+  let rPr = PARAGRAPH_STYLE_DEFAULTS[kind].rPr;
+
+  if (template) {
+    const inheritedPPr = isHeading ? template.headingPPr : template.bodyPPr;
+    const inheritedRPr = isHeading ? template.headingRPr : template.bodyRPr;
+    if (inheritedPPr || inheritedRPr) {
+      // Adopt the source document's own formatting. Run properties are deferred
+      // to whatever the document declares (captured rPr, or the paragraph style
+      // referenced inside the captured pPr) so we never re-impose a default font
+      // size over the document's styling.
+      pPr = inheritedPPr || '';
+      rPr = inheritedRPr || '';
+    }
+  }
+
+  return `<w:p>${pPr}<w:r>${rPr}<w:t xml:space="preserve">${text}</w:t></w:r></w:p>`;
 }
 
 function xmlUnescape(value) {
@@ -464,6 +930,16 @@ function paragraphText(paragraphXmlValue = '') {
 
 function extractDocxParagraphs(documentXml = '') {
   const paragraphs = [];
+  const tableRanges = [];
+  const tableRe = /<w:tbl\b[\s\S]*?<\/w:tbl>/g;
+  let tableMatch;
+  while ((tableMatch = tableRe.exec(documentXml))) {
+    tableRanges.push({
+      start: tableMatch.index,
+      end: tableMatch.index + tableMatch[0].length,
+    });
+  }
+  const isInsideTable = (index) => tableRanges.some((range) => index >= range.start && index < range.end);
   const paragraphRe = /<w:p\b[\s\S]*?<\/w:p>/g;
   let match;
   while ((match = paragraphRe.exec(documentXml))) {
@@ -475,15 +951,53 @@ function extractDocxParagraphs(documentXml = '') {
       xml,
       text,
       normalized: normalizeText(text),
+      inTable: isInsideTable(match.index),
     });
   }
   return paragraphs;
 }
 
+function extractXmlSegments(xml = '', regex) {
+  const segments = [];
+  regex.lastIndex = 0;
+  let match;
+  while ((match = regex.exec(xml))) {
+    segments.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      xml: match[0],
+    });
+  }
+  return segments;
+}
+
+function extractDocxTables(documentXml = '') {
+  return extractXmlSegments(documentXml, /<w:tbl\b[\s\S]*?<\/w:tbl>/g)
+    .map((table) => ({
+      ...table,
+      text: paragraphText(table.xml),
+      normalized: normalizeText(paragraphText(table.xml)),
+    }));
+}
+
+function extractTableRows(tableXml = '') {
+  return extractXmlSegments(tableXml, /<w:tr\b[\s\S]*?<\/w:tr>/g);
+}
+
+function extractTableCells(rowXml = '') {
+  return extractXmlSegments(rowXml, /<w:tc\b[\s\S]*?<\/w:tc>/g)
+    .map((cell) => ({
+      ...cell,
+      text: paragraphText(cell.xml),
+      normalized: normalizeText(paragraphText(cell.xml)),
+    }));
+}
+
 function targetHeadingPattern(target) {
+  const numericPart = `0*${target.numeric}`;
   const numberPart = target.roman
-    ? `(?:${target.numeric}|${normalizeText(target.roman)})`
-    : target.numeric;
+    ? `(?:${numericPart}|${normalizeText(target.roman)})`
+    : numericPart;
   if (target.kind === 'anexo') {
     return new RegExp(`\\b(?:anexo|anexos|apendice|apendices)\\s*(?:n(?:ro|umero)?\\.?|num\\.?|no\\.?|#)?\\s*${numberPart}\\b`);
   }
@@ -519,8 +1033,8 @@ function isPlaceholderParagraph(text = '') {
     || /\b(?:pendiente de completar|completar aqui|completar aquí|rellenar aqui|rellenar aquí|desarrollar aqui|desarrollar aquí)\b/.test(normalized);
 }
 
-function sectionInsertionRange(documentXml, target) {
-  const paragraphs = extractDocxParagraphs(documentXml);
+function sectionInsertionRange(documentXml, target, precomputedParagraphs = null) {
+  const paragraphs = precomputedParagraphs || extractDocxParagraphs(documentXml);
   const headingIndex = paragraphs.findIndex((paragraph) => matchesTargetHeading(paragraph.normalized, target));
   if (headingIndex < 0) {
     const notFound = new Error(`No encontré "${target.label}" dentro del DOCX original.`);
@@ -535,6 +1049,7 @@ function sectionInsertionRange(documentXml, target) {
 
   for (let index = headingIndex + 1; index < paragraphs.length; index += 1) {
     const paragraph = paragraphs[index];
+    if (paragraph.inTable) continue;
     if (isSectionBoundary(paragraph.normalized, target)) break;
 
     if (isPlaceholderParagraph(paragraph.text)) {
@@ -554,23 +1069,635 @@ function sectionInsertionRange(documentXml, target) {
   };
 }
 
+function targetSectionBounds(documentXml, target, precomputedParagraphs = null) {
+  const paragraphs = precomputedParagraphs || extractDocxParagraphs(documentXml);
+  const headingIndex = paragraphs.findIndex((paragraph) => matchesTargetHeading(paragraph.normalized, target));
+  if (headingIndex < 0) {
+    const notFound = new Error(`No encontré "${target.label}" dentro del DOCX original.`);
+    notFound.code = 'SECTION_NOT_FOUND';
+    throw notFound;
+  }
+
+  const heading = paragraphs[headingIndex];
+  const bodyEnd = documentXml.lastIndexOf('</w:body>');
+  let sectionEnd = bodyEnd >= 0 ? bodyEnd : documentXml.length;
+  for (let index = headingIndex + 1; index < paragraphs.length; index += 1) {
+    const paragraph = paragraphs[index];
+    if (paragraph.inTable) continue;
+    if (isSectionBoundary(paragraph.normalized, target)) {
+      sectionEnd = paragraph.start;
+      break;
+    }
+  }
+  return {
+    heading,
+    headingIndex,
+    sectionStart: heading.end,
+    sectionEnd,
+  };
+}
+
+function isAnexo3CronogramaTarget(target = {}) {
+  return target?.kind === 'anexo' && Number(target.number) === 3;
+}
+
+function locateCronogramaTable(documentXml, target, precomputedParagraphs = null) {
+  if (!isAnexo3CronogramaTarget(target)) return null;
+  const paragraphs = precomputedParagraphs || extractDocxParagraphs(documentXml);
+  const bounds = targetSectionBounds(documentXml, target, paragraphs);
+  const sectionIntro = documentXml.slice(bounds.heading.start, Math.min(bounds.sectionEnd, bounds.heading.end + 1200));
+  const introText = normalizeText(paragraphText(sectionIntro));
+  const tables = extractDocxTables(documentXml);
+  return tables.find((table) => {
+    if (table.start < bounds.sectionStart || table.start >= bounds.sectionEnd) return false;
+    const normalized = table.normalized;
+    const tableLooksLikeSchedule = normalized.includes('avance de la tesis')
+      && normalized.includes('acciones')
+      && normalized.includes('estado')
+      && normalized.includes('fechas');
+    return tableLooksLikeSchedule || introText.includes('cronograma');
+  }) || null;
+}
+
+function detectCronogramaAnexo3Plan(buffer, target) {
+  if (!isAnexo3CronogramaTarget(target)) return null;
+  try {
+    const documentXml = new PizZip(buffer).file('word/document.xml')?.asText() || '';
+    if (!documentXml) return null;
+    const table = locateCronogramaTable(documentXml, target);
+    if (!table) return null;
+    return buildCronogramaAnexo3Plan();
+  } catch {
+    return null;
+  }
+}
+
+function buildCronogramaAnexo3Plan() {
+  const rows = [
+    {
+      avance: 'Planificación',
+      acciones: 'Lineamientos y cronograma de tesis.',
+      estado: 'Completado',
+      weeks: [0],
+    },
+    {
+      avance: 'Capítulo I',
+      acciones: 'Problema, objetivos y justificación.',
+      estado: 'Completado',
+      weeks: [0, 1],
+    },
+    {
+      avance: 'Capítulo II',
+      acciones: 'Antecedentes y marco teórico.',
+      estado: 'Completado',
+      weeks: [1, 2, 3],
+    },
+    {
+      avance: 'Matriz de consistencia',
+      acciones: 'Problema, objetivos, hipótesis y método.',
+      estado: 'Completado',
+      weeks: [2, 3],
+    },
+    {
+      avance: 'Operacionalización',
+      acciones: 'Variables, indicadores, ítems y escala.',
+      estado: 'Completado',
+      weeks: [3, 4],
+    },
+    {
+      avance: 'Metodología',
+      acciones: 'Tipo, diseño, población y muestra.',
+      estado: 'Completado',
+      weeks: [4, 5],
+    },
+    {
+      avance: 'Instrumentos',
+      acciones: 'Elaboración y validación del cuestionario.',
+      estado: 'Completado',
+      weeks: [5, 6],
+    },
+    {
+      avance: 'Trabajo de campo',
+      acciones: 'Aplicación de encuesta y base de datos.',
+      estado: 'Completado',
+      weeks: [7, 8, 9],
+    },
+    {
+      avance: 'Resultados',
+      acciones: 'Procesamiento estadístico e interpretación.',
+      estado: 'Completado',
+      weeks: [9, 10, 11],
+    },
+    {
+      avance: 'Discusión',
+      acciones: 'Contraste de hipótesis y antecedentes.',
+      estado: 'Completado',
+      weeks: [11, 12],
+    },
+    {
+      avance: 'Conclusiones',
+      acciones: 'Conclusiones, recomendaciones y anexos.',
+      estado: 'Completado',
+      weeks: [12, 13],
+    },
+    {
+      avance: 'Revisión final',
+      acciones: 'Corrección de estilo y normas APA.',
+      estado: 'Completado',
+      weeks: [14],
+    },
+    {
+      avance: 'Entrega',
+      acciones: 'Informe final y sustentación.',
+      estado: 'Completado',
+      weeks: [15, 16],
+    },
+  ];
+  return {
+    type: 'cronograma_anexo_3',
+    weekLabels: Array.from({ length: 17 }, (_, index) => `S${index + 1}`),
+    rows,
+    validationBlocks: rows.flatMap((row) => [
+      block('normal', row.avance),
+      block('normal', row.acciones),
+      block('normal', row.estado),
+    ]),
+  };
+}
+
+function firstParagraphXml(xml = '') {
+  return String(xml || '').match(/<w:p\b[\s\S]*?<\/w:p>/)?.[0] || '';
+}
+
+function cellParagraphXml(text = '', cellXml = '', template = null, options = {}) {
+  const sourceParagraph = firstParagraphXml(cellXml);
+  const inheritedPPr = sanitizeCapturedParagraphProperties(extractParagraphProperties(sourceParagraph));
+  const inheritedRPr = extractRunProperties(sourceParagraph);
+  let pPr = inheritedPPr || template?.bodyPPr || '';
+  const rPr = inheritedRPr || template?.bodyRPr || '';
+  if (options.center && !/<w:jc\b/.test(pPr)) {
+    pPr = pPr
+      ? pPr.replace(/<\/w:pPr>$/, '<w:jc w:val="center"/></w:pPr>')
+      : '<w:pPr><w:jc w:val="center"/></w:pPr>';
+  }
+  const value = String(text || '');
+  return `<w:p>${pPr}<w:r>${rPr}<w:t xml:space="preserve">${xmlEscape(value)}</w:t></w:r></w:p>`;
+}
+
+function replaceCellText(cellXml = '', text = '', template = null, options = {}) {
+  const tcPr = cellXml.match(/<w:tcPr\b(?:[\s\S]*?<\/w:tcPr>|\s*\/>)/)?.[0] || '';
+  return `<w:tc>${tcPr}${cellParagraphXml(text, cellXml, template, options)}</w:tc>`;
+}
+
+function replaceRowCells(rowXml = '', replacements = new Map()) {
+  const cells = extractTableCells(rowXml);
+  if (!cells.length || !replacements.size) return rowXml;
+  let updated = '';
+  let cursor = 0;
+  cells.forEach((cell, index) => {
+    updated += rowXml.slice(cursor, cell.start);
+    updated += replacements.has(index) ? replacements.get(index) : cell.xml;
+    cursor = cell.end;
+  });
+  updated += rowXml.slice(cursor);
+  return updated;
+}
+
+function replaceTableRows(tableXml = '', replacements = new Map()) {
+  const rows = extractTableRows(tableXml);
+  if (!rows.length || !replacements.size) return tableXml;
+  let updated = '';
+  let cursor = 0;
+  rows.forEach((row, index) => {
+    updated += tableXml.slice(cursor, row.start);
+    updated += replacements.has(index) ? replacements.get(index) : row.xml;
+    cursor = row.end;
+  });
+  updated += tableXml.slice(cursor);
+  return updated;
+}
+
+function fillCronogramaTableXml(tableXml = '', plan = buildCronogramaAnexo3Plan(), template = null) {
+  const rows = extractTableRows(tableXml);
+  const cellCounts = rows.map((row) => extractTableCells(row.xml).length);
+  const maxColumns = Math.max(0, ...cellCounts);
+  if (maxColumns < 4) {
+    const err = new Error('La tabla de cronograma no tiene suficientes columnas para completarse.');
+    err.code = 'CRONOGRAMA_TABLE_INVALID';
+    throw err;
+  }
+
+  const dateStartColumn = 3;
+  const availableDateColumns = maxColumns - dateStartColumn;
+  const dateLabels = plan.weekLabels.slice(0, availableDateColumns);
+  const firstRowCells = extractTableCells(rows[0]?.xml || '');
+  const headerRowIndex = firstRowCells.length === maxColumns
+    ? 0
+    : rows.findIndex((row, index) => index > 0 && extractTableCells(row.xml).length === maxColumns);
+  const dataStartRow = headerRowIndex >= 0 ? headerRowIndex + 1 : 1;
+  const rowReplacements = new Map();
+
+  if (headerRowIndex >= 0) {
+    const headerCells = extractTableCells(rows[headerRowIndex].xml);
+    const replacements = new Map();
+    dateLabels.forEach((label, index) => {
+      const cellIndex = dateStartColumn + index;
+      if (headerCells[cellIndex]) {
+        replacements.set(cellIndex, replaceCellText(headerCells[cellIndex].xml, label, template, { center: true }));
+      }
+    });
+    rowReplacements.set(headerRowIndex, replaceRowCells(rows[headerRowIndex].xml, replacements));
+  }
+
+  plan.rows.forEach((scheduleRow, offset) => {
+    const rowIndex = dataStartRow + offset;
+    const row = rows[rowIndex];
+    if (!row) return;
+    const cells = extractTableCells(row.xml);
+    if (cells.length < maxColumns) return;
+    const replacements = new Map();
+    replacements.set(0, replaceCellText(cells[0].xml, scheduleRow.avance, template));
+    replacements.set(1, replaceCellText(cells[1].xml, scheduleRow.acciones, template));
+    replacements.set(2, replaceCellText(cells[2].xml, scheduleRow.estado, template, { center: true }));
+    for (let index = 0; index < availableDateColumns; index += 1) {
+      const cellIndex = dateStartColumn + index;
+      if (!cells[cellIndex]) continue;
+      const marker = scheduleRow.weeks.includes(index) ? 'X' : '';
+      replacements.set(cellIndex, replaceCellText(cells[cellIndex].xml, marker, template, { center: true }));
+    }
+    rowReplacements.set(rowIndex, replaceRowCells(row.xml, replacements));
+  });
+
+  return replaceTableRows(tableXml, rowReplacements);
+}
+
+function fillDocxCronogramaSectionBuffer(buffer, target, plan = buildCronogramaAnexo3Plan()) {
+  const zip = new PizZip(buffer);
+  const documentFile = zip.file('word/document.xml');
+  if (!documentFile) throw new Error('DOCX inválido: falta word/document.xml.');
+  const documentXml = documentFile.asText();
+  const paragraphs = extractDocxParagraphs(documentXml);
+  const table = locateCronogramaTable(documentXml, target, paragraphs);
+  if (!table) {
+    const err = new Error(`No encontré una tabla de cronograma dentro de ${target.label}.`);
+    err.code = 'CRONOGRAMA_TABLE_NOT_FOUND';
+    throw err;
+  }
+  const bounds = targetSectionBounds(documentXml, target, paragraphs);
+  const template = buildSectionFormattingTemplate(paragraphs, bounds.headingIndex);
+  const updatedTable = fillCronogramaTableXml(table.xml, plan, template);
+  const updatedXml = `${documentXml.slice(0, table.start)}${updatedTable}${documentXml.slice(table.end)}`;
+  zip.file('word/document.xml', updatedXml);
+  return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
+}
+
+// ---------------------------------------------------------------------------
+// Generic, AI-driven table fill for ANY section (not just the Anexo 3
+// cronograma). It locates the first table inside the requested section,
+// figures out which leading columns are "content" columns (those with a text
+// header, before any wide grouping / date column), finds the empty data rows,
+// and writes generated values into those cells while preserving each cell's
+// own formatting and the table's structure.
+// ---------------------------------------------------------------------------
+
+function cellPropsXml(cellXml = '') {
+  return String(cellXml || '').match(/<w:tcPr\b(?:[\s\S]*?<\/w:tcPr>|\s*\/>)/)?.[0] || '';
+}
+
+function isVMergeContinuationCell(cellXml = '') {
+  const tcPr = cellPropsXml(cellXml);
+  return /<w:vMerge\s*\/>/.test(tcPr) || /<w:vMerge\s+w:val="continue"\s*\/>/.test(tcPr);
+}
+
+function cellGridSpan(cellXml = '') {
+  const tcPr = cellPropsXml(cellXml);
+  return parseInt((tcPr.match(/<w:gridSpan\s+w:val="(\d+)"\/>/) || [])[1] || '1', 10) || 1;
+}
+
+const TABLE_GROUPING_HEADER_RE = /\b(fecha|fechas|mes|meses|semana|semanas|cronograma|tiempo|periodo|periodos|trimestre|bimestre|d[ií]a|d[ií]as|a[nñ]o|a[nñ]os)\b/;
+
+function locateSectionTable(documentXml, target, precomputedParagraphs = null) {
+  const paragraphs = precomputedParagraphs || extractDocxParagraphs(documentXml);
+  const bounds = targetSectionBounds(documentXml, target, paragraphs);
+  const tables = extractDocxTables(documentXml);
+  return tables.find((table) => table.start >= bounds.sectionStart && table.start < bounds.sectionEnd) || null;
+}
+
+// Inspect a table and report the content columns + empty data rows we can fill.
+function analyzeTableForFill(tableXml = '') {
+  const rows = extractTableRows(tableXml);
+  if (rows.length < 2) return null;
+  const cellCounts = rows.map((row) => extractTableCells(row.xml).length);
+  const maxColumns = Math.max(0, ...cellCounts);
+  if (maxColumns < 2) return null;
+
+  const headerRowIndex = rows.findIndex((row) => extractTableCells(row.xml).some((cell) => cell.text.trim()));
+  if (headerRowIndex < 0) return null;
+
+  const headerCells = extractTableCells(rows[headerRowIndex].xml);
+  const labels = [];
+  let contentColCount = 0;
+  for (const cell of headerCells) {
+    const label = cell.text.trim();
+    if (!label) break;
+    if (cellGridSpan(cell.xml) >= 3) break;
+    if (TABLE_GROUPING_HEADER_RE.test(normalizeText(label))) break;
+    labels.push(label);
+    contentColCount += 1;
+  }
+  if (contentColCount === 0) return null;
+
+  const dataRows = [];
+  for (let i = headerRowIndex + 1; i < rows.length; i += 1) {
+    const cells = extractTableCells(rows[i].xml);
+    if (cells.length < contentColCount) continue;
+    let fillable = true;
+    for (let c = 0; c < contentColCount; c += 1) {
+      if (isVMergeContinuationCell(cells[c].xml) || cells[c].text.trim()) {
+        fillable = false;
+        break;
+      }
+    }
+    if (fillable) dataRows.push(i);
+  }
+  if (!dataRows.length) return null;
+  return { rows, headerRowIndex, contentColCount, labels, dataRows, maxColumns };
+}
+
+function detectSectionTablePlan(buffer, target) {
+  try {
+    const documentXml = readDocxDocumentXml(buffer);
+    if (!documentXml) return null;
+    const paragraphs = extractDocxParagraphs(documentXml);
+    const table = locateSectionTable(documentXml, target, paragraphs);
+    if (!table) return null;
+    const analysis = analyzeTableForFill(table.xml);
+    if (!analysis) return null;
+    return { labels: analysis.labels, dataRowCount: analysis.dataRows.length };
+  } catch {
+    return null;
+  }
+}
+
+// Ask the model to produce rows that fit the table's own column headers and the
+// document's real topic. Degrades to [] (caller falls back) when no key/result.
+async function generateTableRowsContent({ labels = [], maxRows = 0, sectionLabel = '', sourceText = '', prompt = '', signal } = {}) {
+  if (!process.env.OPENAI_API_KEY || !labels.length || maxRows <= 0) return [];
+  try {
+    const client = createContentClient('OpenAI');
+    const completion = await client.chat.completions.create({
+      model: DEFAULT_MODEL,
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'Eres un asistente académico experto en COMPLETAR TABLAS dentro de documentos Word sin alterar su estructura.',
+            'Te dan los encabezados de las columnas de contenido y el contexto real del documento.',
+            'Genera filas coherentes con esos encabezados y con el tema concreto del documento.',
+            'No inventes cifras, citas, autores ni DOI; usa únicamente lo que el contexto permita inferir de forma razonable.',
+          ].join(' '),
+        },
+        {
+          role: 'user',
+          content: [
+            `Solicitud del usuario: ${prompt}`,
+            `Tabla a completar: ${sectionLabel}`,
+            `Columnas de contenido, en orden: ${labels.join(' | ')}`,
+            `Genera entre 1 y ${maxRows} filas (las que el tema amerite).`,
+            'Contexto del documento:',
+            compact(sourceText, 12000),
+            '',
+            'Responde SOLO en JSON con esta forma exacta:',
+            `{"rows":[[${labels.map(() => '"valor"').join(', ')}]]}`,
+            'Cada fila es un arreglo con un valor de texto por columna, en el mismo orden de los encabezados.',
+          ].join('\n'),
+        },
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.3,
+    }, { signal, timeout: 30_000 });
+
+    const raw = completion?.choices?.[0]?.message?.content;
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    const rows = Array.isArray(parsed.rows) ? parsed.rows : [];
+    return rows
+      .filter((row) => Array.isArray(row))
+      .slice(0, maxRows)
+      .map((row) => row.map((value) => String(value == null ? '' : value).trim()));
+  } catch {
+    return [];
+  }
+}
+
+function fillGenericSectionTableXml(tableXml = '', generatedRows = [], template = null) {
+  const analysis = analyzeTableForFill(tableXml);
+  if (!analysis || !generatedRows.length) return null;
+  const { rows, contentColCount, dataRows } = analysis;
+  const rowReplacements = new Map();
+  const count = Math.min(dataRows.length, generatedRows.length);
+  for (let i = 0; i < count; i += 1) {
+    const rowIndex = dataRows[i];
+    const cells = extractTableCells(rows[rowIndex].xml);
+    const values = generatedRows[i] || [];
+    const cellReplacements = new Map();
+    for (let c = 0; c < contentColCount; c += 1) {
+      const value = values[c] != null ? String(values[c]).trim() : '';
+      if (!value || !cells[c]) continue;
+      cellReplacements.set(c, replaceCellText(cells[c].xml, value, template));
+    }
+    if (cellReplacements.size) {
+      rowReplacements.set(rowIndex, replaceRowCells(rows[rowIndex].xml, cellReplacements));
+    }
+  }
+  if (!rowReplacements.size) return null;
+  return replaceTableRows(tableXml, rowReplacements);
+}
+
+function fillGenericSectionTableBuffer(buffer, target, generatedRows = []) {
+  const zip = new PizZip(buffer);
+  const documentFile = zip.file('word/document.xml');
+  if (!documentFile) throw new Error('DOCX inválido: falta word/document.xml.');
+  const documentXml = documentFile.asText();
+  const paragraphs = extractDocxParagraphs(documentXml);
+  const table = locateSectionTable(documentXml, target, paragraphs);
+  if (!table) {
+    const err = new Error(`No encontré una tabla dentro de ${target.label}.`);
+    err.code = 'SECTION_TABLE_NOT_FOUND';
+    throw err;
+  }
+  const bounds = targetSectionBounds(documentXml, target, paragraphs);
+  const template = buildSectionFormattingTemplate(paragraphs, bounds.headingIndex);
+  const updatedTable = fillGenericSectionTableXml(table.xml, generatedRows, template);
+  if (!updatedTable) {
+    const err = new Error(`La tabla de ${target.label} no tiene celdas de contenido vacías para completar.`);
+    err.code = 'SECTION_TABLE_NOT_FILLABLE';
+    throw err;
+  }
+  const updatedXml = `${documentXml.slice(0, table.start)}${updatedTable}${documentXml.slice(table.end)}`;
+  zip.file('word/document.xml', updatedXml);
+  return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
+}
+
 function fillDocxSectionBuffer(buffer, target, blocks) {
   const zip = new PizZip(buffer);
   const documentFile = zip.file('word/document.xml');
   if (!documentFile) throw new Error('DOCX inválido: falta word/document.xml.');
   const documentXml = documentFile.asText();
+  const paragraphs = extractDocxParagraphs(documentXml);
+  const range = sectionInsertionRange(documentXml, target, paragraphs);
+  const headingIndex = paragraphs.findIndex((paragraph) => matchesTargetHeading(paragraph.normalized, target));
+  const template = buildSectionFormattingTemplate(paragraphs, headingIndex);
   const insertionXml = blocks
     .filter((item) => item.kind !== 'pageBreak')
-    .map(paragraphXml)
+    .map((item) => paragraphXml(item, template))
     .join('');
-  const range = sectionInsertionRange(documentXml, target);
   const updatedXml = `${documentXml.slice(0, range.replaceStart)}${insertionXml}${documentXml.slice(range.replaceEnd)}`;
   zip.file('word/document.xml', updatedXml);
   return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
-function appendBlocksToDocumentXml(documentXml, blocks) {
-  const insertionXml = blocks.map(paragraphXml).join('');
+function prependBlocksToDocumentXml(documentXml, blocks, template = null) {
+  const insertionXml = blocks.map((item) => paragraphXml(item, template)).join('');
+  const bodyStartMatch = documentXml.match(/<w:body>/);
+  if (!bodyStartMatch?.index && bodyStartMatch?.index !== 0) {
+    throw new Error('DOCX inválido: no se encontró el cuerpo del documento.');
+  }
+  const insertAt = bodyStartMatch.index + bodyStartMatch[0].length;
+  return `${documentXml.slice(0, insertAt)}${insertionXml}${documentXml.slice(insertAt)}`;
+}
+
+function buildCoverCompletionBlocks({ sourceText = '', originalName = '' } = {}) {
+  const title = inferDocumentTitle(sourceText, originalName);
+  return [
+    block('heading1', 'PORTADA COMPLETADA'),
+    block('normal', `Título de la investigación: ${title}.`),
+    block('normal', 'Tipo de documento: trabajo académico de investigación.'),
+    block('normal', 'Estado de la portada: completada con los datos disponibles en el documento fuente, conservando el contenido original posterior.'),
+  ];
+}
+
+function fillDocxCoverBuffer(buffer, blocks) {
+  const zip = new PizZip(buffer);
+  const documentFile = zip.file('word/document.xml');
+  if (!documentFile) throw new Error('DOCX inválido: falta word/document.xml.');
+  const documentXml = documentFile.asText();
+  const template = buildDocumentFormattingTemplate(extractDocxParagraphs(documentXml));
+  zip.file('word/document.xml', prependBlocksToDocumentXml(documentXml, blocks, template));
+  return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
+}
+
+function normalizedTextIncludes(haystack = '', needle = '') {
+  const normalizedNeedle = normalizeText(needle);
+  return Boolean(normalizedNeedle && normalizeText(haystack).includes(normalizedNeedle));
+}
+
+function escapeRegExp(value = '') {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function replaceNeedleText(text = '', needle = '', replacement = '') {
+  const source = String(text || '');
+  const exact = String(needle || '').trim();
+  if (!exact) return source;
+  const exactRe = new RegExp(escapeRegExp(exact), 'gi');
+  if (exactRe.test(source)) return source.replace(exactRe, String(replacement || ''));
+  const normalizedNeedle = normalizeText(exact);
+  if (normalizedNeedle && normalizeText(source).includes(normalizedNeedle)) {
+    return String(replacement || '');
+  }
+  return source;
+}
+
+function replaceTextInDocxBuffer(buffer, needle, replacement) {
+  const normalizedNeedle = normalizeText(needle);
+  if (!normalizedNeedle || normalizedNeedle.length < 3) {
+    const err = new Error('No se especificó el texto exacto que debo reemplazar dentro del DOCX.');
+    err.code = 'REPLACE_TEXT_UNSPECIFIED';
+    throw err;
+  }
+  const zip = new PizZip(buffer);
+  const documentFile = zip.file('word/document.xml');
+  if (!documentFile) throw new Error('DOCX inválido: falta word/document.xml.');
+  let documentXml = documentFile.asText();
+  const matches = extractDocxParagraphs(documentXml)
+    .filter((paragraph) => normalizedTextIncludes(paragraph.text, normalizedNeedle))
+    .sort((a, b) => b.start - a.start);
+
+  let changedCount = 0;
+  for (const paragraph of matches) {
+    const updatedText = replaceNeedleText(paragraph.text, needle, replacement);
+    const template = buildFormattingTemplate({ bodyXml: paragraph.xml });
+    const updatedParagraph = paragraphXml({ kind: 'normal', text: updatedText }, template);
+    documentXml = `${documentXml.slice(0, paragraph.start)}${updatedParagraph}${documentXml.slice(paragraph.end)}`;
+    changedCount += 1;
+  }
+
+  if (changedCount === 0) {
+    const escapedNeedle = xmlEscape(needle);
+    if (documentXml.includes(escapedNeedle)) {
+      documentXml = documentXml.split(escapedNeedle).join(xmlEscape(replacement));
+      changedCount = 1;
+    }
+  }
+
+  if (changedCount === 0) {
+    const err = new Error(`No encontré el texto "${needle}" dentro del DOCX para reemplazarlo sin afectar otra sección.`);
+    err.code = 'REPLACE_TEXT_NOT_FOUND';
+    throw err;
+  }
+
+  zip.file('word/document.xml', documentXml);
+  return {
+    buffer: zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' }),
+    changedCount,
+  };
+}
+
+function deleteTextFromDocxBuffer(buffer, needle) {
+  const normalizedNeedle = normalizeText(needle);
+  if (!normalizedNeedle || normalizedNeedle.length < 3) {
+    const err = new Error('No se especificó el texto exacto que debo borrar del DOCX.');
+    err.code = 'DELETE_TEXT_UNSPECIFIED';
+    throw err;
+  }
+  const zip = new PizZip(buffer);
+  const documentFile = zip.file('word/document.xml');
+  if (!documentFile) throw new Error('DOCX inválido: falta word/document.xml.');
+  let documentXml = documentFile.asText();
+  const paragraphs = extractDocxParagraphs(documentXml)
+    .filter((paragraph) => normalizedTextIncludes(paragraph.text, normalizedNeedle))
+    .sort((a, b) => b.start - a.start);
+
+  let removedCount = 0;
+  for (const paragraph of paragraphs) {
+    documentXml = `${documentXml.slice(0, paragraph.start)}${documentXml.slice(paragraph.end)}`;
+    removedCount += 1;
+  }
+
+  if (removedCount === 0) {
+    const exact = xmlEscape(needle);
+    if (exact && documentXml.includes(exact)) {
+      documentXml = documentXml.split(exact).join('');
+      removedCount = 1;
+    }
+  }
+
+  if (removedCount === 0) {
+    const err = new Error(`No encontré el texto "${needle}" dentro del DOCX para borrarlo sin afectar otra sección.`);
+    err.code = 'DELETE_TEXT_NOT_FOUND';
+    throw err;
+  }
+
+  zip.file('word/document.xml', documentXml);
+  return {
+    buffer: zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' }),
+    removedCount,
+  };
+}
+
+function appendBlocksToDocumentXml(documentXml, blocks, template = null) {
+  const insertionXml = blocks.map((item) => paragraphXml(item, template)).join('');
   const bodyEnd = documentXml.lastIndexOf('</w:body>');
   if (bodyEnd < 0) throw new Error('DOCX inválido: no se encontró el cuerpo del documento.');
   const beforeBodyEnd = documentXml.slice(0, bodyEnd);
@@ -588,7 +1715,8 @@ function appendToDocxBuffer(buffer, blocks) {
   const documentFile = zip.file('word/document.xml');
   if (!documentFile) throw new Error('DOCX inválido: falta word/document.xml.');
   const documentXml = documentFile.asText();
-  zip.file('word/document.xml', appendBlocksToDocumentXml(documentXml, blocks));
+  const template = buildDocumentFormattingTemplate(extractDocxParagraphs(documentXml));
+  zip.file('word/document.xml', appendBlocksToDocumentXml(documentXml, blocks, template));
   return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
@@ -614,6 +1742,308 @@ async function appendToXlsxBuffer(buffer, blocks) {
   sheet.getRow(1).font = { bold: true };
   const out = await workbook.xlsx.writeBuffer();
   return Buffer.from(out);
+}
+
+/**
+ * Append data rows to an EXISTING sheet, preserving everything else in the
+ * workbook (exceljs round-trips styles, widths, formulas, other sheets).
+ * sheetName falls back to the first worksheet when missing/unknown.
+ */
+async function appendRowsToXlsxBuffer(buffer, { sheetName = '', rows = [] } = {}) {
+  const cleanRows = (Array.isArray(rows) ? rows : [])
+    .slice(0, 200)
+    .map((r) => (Array.isArray(r) ? r.slice(0, 30).map((c) => (c == null ? '' : c)) : [String(r ?? '')]));
+  if (!cleanRows.length) {
+    const err = new Error('No se especificaron filas para agregar al XLSX.');
+    err.code = 'XLSX_APPEND_ROWS_EMPTY';
+    throw err;
+  }
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  const wanted = normalizeText(sheetName);
+  const sheet = (wanted && workbook.worksheets.find((s) => normalizeText(s.name) === wanted))
+    || workbook.worksheets[0];
+  if (!sheet) {
+    const err = new Error('El XLSX no tiene hojas editables.');
+    err.code = 'XLSX_NO_SHEETS';
+    throw err;
+  }
+  for (const r of cleanRows) {
+    const row = sheet.addRow(r);
+    row.alignment = { vertical: 'top', wrapText: true };
+  }
+  const out = await workbook.xlsx.writeBuffer();
+  return { buffer: Buffer.from(out), sheetName: sheet.name, added: cleanRows.length };
+}
+
+/** Add a NEW sheet with tabular data; first row styled as header. */
+async function addSheetToXlsxBuffer(buffer, { name = 'Datos', rows = [] } = {}) {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  const existing = new Set(workbook.worksheets.map((s) => s.name));
+  let sheetName = String(name || 'Datos').slice(0, 28).replace(/[\\/?*[\]:]/g, ' ').trim() || 'Datos';
+  let counter = 1;
+  while (existing.has(sheetName)) { counter += 1; sheetName = `${String(name || 'Datos').slice(0, 24)} ${counter}`; }
+  const sheet = workbook.addWorksheet(sheetName);
+  const cleanRows = (Array.isArray(rows) ? rows : [])
+    .slice(0, 200)
+    .map((r) => (Array.isArray(r) ? r.slice(0, 30).map((c) => (c == null ? '' : c)) : [String(r ?? '')]));
+  for (const r of cleanRows) sheet.addRow(r);
+  if (cleanRows.length) sheet.getRow(1).font = { bold: true };
+  const widest = Math.max(1, ...cleanRows.map((r) => r.length));
+  for (let c = 1; c <= widest; c += 1) sheet.getColumn(c).width = 24;
+  const out = await workbook.xlsx.writeBuffer();
+  return { buffer: Buffer.from(out), sheetName, added: cleanRows.length };
+}
+
+/** Compact workbook summary the LLM planner can reason about. */
+async function buildXlsxSummaryForPrompt(buffer, { maxSheets = 6, maxRows = 12, maxCols = 8 } = {}) {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  const lines = [];
+  for (const sheet of workbook.worksheets.slice(0, maxSheets)) {
+    lines.push(`Hoja "${sheet.name}" (${sheet.actualRowCount || sheet.rowCount} filas x ${sheet.actualColumnCount || sheet.columnCount} columnas):`);
+    let printed = 0;
+    sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+      if (printed >= maxRows) return;
+      printed += 1;
+      const cells = [];
+      for (let c = 1; c <= Math.min(maxCols, row.cellCount || maxCols); c += 1) {
+        const v = row.getCell(c).value;
+        const text = v == null ? '' : (typeof v === 'object' ? (v.text || v.result || v.richText?.map((p) => p.text).join('') || '') : String(v));
+        cells.push(String(text).slice(0, 30));
+      }
+      lines.push(`  fila ${rowNumber}: ${cells.join(' | ')}`);
+    });
+  }
+  return lines.join('\n').slice(0, 4000);
+}
+
+async function replaceTextInXlsxBuffer(buffer, needle, replacement = '') {
+  const normalizedNeedle = normalizeText(needle);
+  if (!normalizedNeedle || normalizedNeedle.length < 3) {
+    const err = new Error('No se especificó el texto exacto que debo reemplazar dentro del XLSX.');
+    err.code = 'XLSX_REPLACE_TEXT_UNSPECIFIED';
+    throw err;
+  }
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  let changedCount = 0;
+  workbook.worksheets.forEach((sheet) => {
+    sheet.eachRow({ includeEmpty: false }, (row) => {
+      row.eachCell({ includeEmpty: false }, (cell) => {
+        const value = cell.value;
+        if (typeof value === 'string' && normalizedTextIncludes(value, normalizedNeedle)) {
+          cell.value = replaceNeedleText(value, needle, replacement);
+          changedCount += 1;
+        } else if (value?.richText && Array.isArray(value.richText)) {
+          const text = value.richText.map((part) => part.text || '').join('');
+          if (normalizedTextIncludes(text, normalizedNeedle)) {
+            cell.value = replaceNeedleText(text, needle, replacement);
+            changedCount += 1;
+          }
+        } else if (value?.text && normalizedTextIncludes(value.text, normalizedNeedle)) {
+          cell.value = replaceNeedleText(value.text, needle, replacement);
+          changedCount += 1;
+        }
+      });
+    });
+  });
+  if (changedCount === 0) {
+    const err = new Error(`No encontré el texto "${needle}" dentro del XLSX.`);
+    err.code = 'XLSX_REPLACE_TEXT_NOT_FOUND';
+    throw err;
+  }
+  const out = await workbook.xlsx.writeBuffer();
+  return { buffer: Buffer.from(out), changedCount };
+}
+
+async function setXlsxCellBuffer(buffer, { sheetName = '', address = '', value = '' } = {}) {
+  const cellAddress = String(address || '').trim().toUpperCase();
+  if (!/^[A-Z]{1,3}[1-9][0-9]{0,6}$/.test(cellAddress)) {
+    const err = new Error('No se especificó una celda válida para editar en el XLSX.');
+    err.code = 'XLSX_CELL_ADDRESS_INVALID';
+    throw err;
+  }
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  let sheet = null;
+  if (sheetName) {
+    const wanted = normalizeText(sheetName);
+    sheet = workbook.worksheets.find((candidate) => normalizeText(candidate.name) === wanted)
+      || workbook.getWorksheet(sheetName);
+  }
+  sheet = sheet || workbook.worksheets[0];
+  if (!sheet) {
+    const err = new Error('El XLSX no tiene hojas editables.');
+    err.code = 'XLSX_NO_SHEETS';
+    throw err;
+  }
+  sheet.getCell(cellAddress).value = String(value || '');
+  sheet.getCell(cellAddress).alignment = {
+    ...(sheet.getCell(cellAddress).alignment || {}),
+    wrapText: true,
+    vertical: 'top',
+  };
+  const out = await workbook.xlsx.writeBuffer();
+  return {
+    buffer: Buffer.from(out),
+    sheetName: sheet.name,
+    address: cellAddress,
+  };
+}
+
+function pptxSlideFileNames(zip) {
+  return Object.keys(zip.files)
+    .filter((name) => /^ppt\/slides\/slide\d+\.xml$/i.test(name))
+    .sort((a, b) => {
+      const an = Number((a.match(/slide(\d+)\.xml/i) || [])[1] || 0);
+      const bn = Number((b.match(/slide(\d+)\.xml/i) || [])[1] || 0);
+      return an - bn;
+    });
+}
+
+function extractTextFromPptxXml(xml = '') {
+  const pieces = [];
+  const re = /<a:t\b[^>]*>([\s\S]*?)<\/a:t>/g;
+  let match;
+  while ((match = re.exec(xml))) pieces.push(xmlUnescape(match[1]));
+  return pieces.join('\n');
+}
+
+function extractTextFromPptxBuffer(buffer) {
+  const zip = new PizZip(buffer);
+  return pptxSlideFileNames(zip)
+    .map((name) => extractTextFromPptxXml(zip.file(name)?.asText() || ''))
+    .filter(Boolean)
+    .join('\n');
+}
+
+function replaceTextInPptxBuffer(buffer, needle, replacement = '') {
+  const normalizedNeedle = normalizeText(needle);
+  if (!normalizedNeedle || normalizedNeedle.length < 3) {
+    const err = new Error('No se especificó el texto exacto que debo reemplazar dentro del PPTX.');
+    err.code = 'PPTX_REPLACE_TEXT_UNSPECIFIED';
+    throw err;
+  }
+  const zip = new PizZip(buffer);
+  let changedCount = 0;
+  for (const name of pptxSlideFileNames(zip)) {
+    let xml = zip.file(name)?.asText() || '';
+    const updated = xml.replace(/<a:t\b([^>]*)>([\s\S]*?)<\/a:t>/g, (full, attrs, value) => {
+      const visible = xmlUnescape(value);
+      if (!normalizedTextIncludes(visible, normalizedNeedle)) return full;
+      changedCount += 1;
+      return `<a:t${attrs}>${xmlEscape(replaceNeedleText(visible, needle, replacement))}</a:t>`;
+    });
+    if (updated !== xml) zip.file(name, updated);
+  }
+  if (changedCount === 0) {
+    const err = new Error(`No encontré el texto "${needle}" dentro del PPTX.`);
+    err.code = 'PPTX_REPLACE_TEXT_NOT_FOUND';
+    throw err;
+  }
+  return {
+    buffer: zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' }),
+    changedCount,
+  };
+}
+
+function nextPptxRelationshipId(relsXml = '') {
+  const ids = Array.from(String(relsXml || '').matchAll(/\bId="rId(\d+)"/g))
+    .map((match) => Number(match[1]))
+    .filter(Number.isFinite);
+  return `rId${Math.max(0, ...ids) + 1}`;
+}
+
+function ensurePptxContentTypeOverride(contentTypesXml = '', partName = '') {
+  if (!partName || contentTypesXml.includes(`PartName="${partName}"`)) return contentTypesXml;
+  const override = `<Override PartName="${partName}" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>`;
+  return contentTypesXml.replace(/<\/Types>\s*$/i, `${override}</Types>`);
+}
+
+function updatePptxAppSlideCount(appXml = '', slideCount = 0) {
+  if (!appXml) return appXml;
+  if (/<Slides>\d+<\/Slides>/i.test(appXml)) {
+    return appXml.replace(/<Slides>\d+<\/Slides>/i, `<Slides>${slideCount}</Slides>`);
+  }
+  return appXml.replace(/<\/Properties>\s*$/i, `<Slides>${slideCount}</Slides></Properties>`);
+}
+
+function buildPptxSlideXml(blocks = []) {
+  const content = nonPageBreakBlocks(blocks);
+  const title = content.find((item) => /heading/.test(item.kind))?.text || 'Contenido agregado';
+  const body = content
+    .filter((item) => item.text !== title)
+    .map((item) => String(item.text || '').trim())
+    .filter(Boolean)
+    .slice(0, 10);
+  const bodyParagraphs = body.length
+    ? body.map((line) => `<a:p><a:r><a:rPr lang="es-ES" sz="1800"/><a:t>${xmlEscape(line)}</a:t></a:r></a:p>`).join('')
+    : '<a:p><a:r><a:rPr lang="es-ES" sz="1800"/><a:t>Contenido agregado por SiraGPT.</a:t></a:r></a:p>';
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld>
+    <p:spTree>
+      <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
+      <p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>
+      <p:sp>
+        <p:nvSpPr><p:cNvPr id="2" name="Título SiraGPT"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/></p:nvSpPr>
+        <p:spPr><a:xfrm><a:off x="685800" y="457200"/><a:ext cx="7772400" cy="914400"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln><a:noFill/></a:ln></p:spPr>
+        <p:txBody><a:bodyPr wrap="square"/><a:lstStyle/><a:p><a:r><a:rPr lang="es-ES" sz="3000" b="1"/><a:t>${xmlEscape(title)}</a:t></a:r></a:p></p:txBody>
+      </p:sp>
+      <p:sp>
+        <p:nvSpPr><p:cNvPr id="3" name="Contenido SiraGPT"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/></p:nvSpPr>
+        <p:spPr><a:xfrm><a:off x="685800" y="1524000"/><a:ext cx="10668000" cy="4572000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln><a:noFill/></a:ln></p:spPr>
+        <p:txBody><a:bodyPr wrap="square"/><a:lstStyle/>${bodyParagraphs}</p:txBody>
+      </p:sp>
+    </p:spTree>
+  </p:cSld>
+  <p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>
+</p:sld>`;
+}
+
+function appendToPptxBuffer(buffer, blocks) {
+  const zip = new PizZip(buffer);
+  const presentationFile = zip.file('ppt/presentation.xml');
+  const relsFile = zip.file('ppt/_rels/presentation.xml.rels');
+  const contentTypesFile = zip.file('[Content_Types].xml');
+  if (!presentationFile || !relsFile || !contentTypesFile) {
+    throw new Error('PPTX inválido: faltan archivos principales de presentación.');
+  }
+  const slideFiles = pptxSlideFileNames(zip);
+  const nextSlideNumber = Math.max(0, ...slideFiles.map((name) => Number((name.match(/slide(\d+)\.xml/i) || [])[1] || 0))) + 1;
+  const newSlidePath = `ppt/slides/slide${nextSlideNumber}.xml`;
+  const newPartName = `/ppt/slides/slide${nextSlideNumber}.xml`;
+  let presentationXml = presentationFile.asText();
+  let relsXml = relsFile.asText();
+  let contentTypesXml = contentTypesFile.asText();
+  const relId = nextPptxRelationshipId(relsXml);
+  const slideIds = Array.from(presentationXml.matchAll(/<p:sldId\b[^>]*\bid="(\d+)"/g))
+    .map((match) => Number(match[1]))
+    .filter(Number.isFinite);
+  const newSlideId = Math.max(255, ...slideIds) + 1;
+  const slideRef = `<p:sldId id="${newSlideId}" r:id="${relId}"/>`;
+  if (/<p:sldIdLst\b[^>]*>[\s\S]*?<\/p:sldIdLst>/.test(presentationXml)) {
+    presentationXml = presentationXml.replace(/<\/p:sldIdLst>/, `${slideRef}</p:sldIdLst>`);
+  } else {
+    presentationXml = presentationXml.replace(/<\/p:presentation>/, `<p:sldIdLst>${slideRef}</p:sldIdLst></p:presentation>`);
+  }
+  relsXml = relsXml.replace(/<\/Relationships>\s*$/i, `<Relationship Id="${relId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide${nextSlideNumber}.xml"/></Relationships>`);
+  contentTypesXml = ensurePptxContentTypeOverride(contentTypesXml, newPartName);
+  zip.file('ppt/presentation.xml', presentationXml);
+  zip.file('ppt/_rels/presentation.xml.rels', relsXml);
+  zip.file('[Content_Types].xml', contentTypesXml);
+  zip.file(newSlidePath, buildPptxSlideXml(blocks));
+
+  const firstSlideRels = zip.file('ppt/slides/_rels/slide1.xml.rels')?.asText();
+  const rels = firstSlideRels && firstSlideRels.includes('slideLayout')
+    ? firstSlideRels
+    : '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/></Relationships>';
+  zip.file(`ppt/slides/_rels/slide${nextSlideNumber}.xml.rels`, rels);
+  const appFile = zip.file('docProps/app.xml');
+  if (appFile) zip.file('docProps/app.xml', updatePptxAppSlideCount(appFile.asText(), slideFiles.length + 1));
+  return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
 function nonPageBreakBlocks(blocks) {
@@ -741,6 +2171,55 @@ function appendToTextLikeBuffer(buffer, blocks, format = 'txt') {
   return appendToPlainTextBuffer(buffer, blocks);
 }
 
+// Count how many times `needle` appears in `text` (case-insensitive exact, with
+// the same normalized fallback replaceNeedleText uses) so in-place text edits
+// can report a real changedCount and detect a no-op match.
+function countNeedleMatches(text, needle) {
+  const exact = String(needle || '').trim();
+  if (!exact) return 0;
+  const re = new RegExp(escapeRegExp(exact), 'gi');
+  const matches = String(text || '').match(re);
+  if (matches) return matches.length;
+  const norm = normalizeText(exact);
+  return norm && normalizeText(String(text || '')).includes(norm) ? 1 : 0;
+}
+
+// In-place edit for plain-text-like files (txt/md/csv/html/json/xml/yaml/svg).
+// Applies replace_text / delete_text operations to the decoded text first, then
+// appends generic blocks only when the request actually asked to ADD content.
+// Mirrors executeXlsxOperations so "reemplaza X por Y en el markdown" edits in
+// place instead of always appending an annex at the end. Pure & deterministic.
+function executeTextLikeOperations({ input, requestText = '', format = 'txt', blocks = [] }) {
+  const ops = planGenericOfficeOperations({ requestText, format });
+  let text = Buffer.isBuffer(input) ? input.toString('utf8') : String(input || '');
+  const steps = [];
+  const validationBlocks = [];
+  const appendBlocks = applyTextReplacementsToBlocks(blocks, ops);
+  let needsAppend = false;
+  for (const op of ops) {
+    if (op.kind === 'replace_text' && op.needle) {
+      const count = countNeedleMatches(text, op.needle);
+      if (count > 0) text = replaceNeedleText(text, op.needle, op.replacement || '');
+      validationBlocks.push(block('normal', op.replacement || ''));
+      steps.push({ kind: 'replace_text', mode: 'text_safe_replace', changedCount: count });
+    } else if (op.kind === 'delete_text' && op.needle) {
+      const count = countNeedleMatches(text, op.needle);
+      if (count > 0) text = replaceNeedleText(text, op.needle, '');
+      steps.push({ kind: 'delete_text', mode: 'text_safe_delete', removedCount: count });
+    } else {
+      // append_generic (or any other) → fall back to appending the blocks once.
+      needsAppend = true;
+    }
+  }
+  let buffer = Buffer.from(text, 'utf8');
+  if (needsAppend) {
+    buffer = appendToTextLikeBuffer(buffer, appendBlocks, format);
+    validationBlocks.push(...appendBlocks);
+    steps.push({ kind: 'append_generic', mode: 'text_append' });
+  }
+  return { buffer, steps, validationBlocks, ops };
+}
+
 function extractTextFromDocxBuffer(buffer) {
   const zip = new PizZip(buffer);
   const xml = zip.file('word/document.xml')?.asText() || '';
@@ -780,26 +2259,166 @@ async function extractTextFromXlsxBuffer(buffer) {
 async function extractTextFromFile(file = {}) {
   if (file.extractedText) return String(file.extractedText);
   if (!file.path) return '';
+  let materialized = null;
   try {
-    const buffer = await fs.promises.readFile(file.path);
+    // Source binary may live in R2 — materialize to a temp path for parsing.
+    const localPath = objectStorage.isRemote(file.path)
+      ? (materialized = await objectStorage.toLocalTemp(file.path)).path
+      : file.path;
+    const buffer = await fs.promises.readFile(localPath);
     if (isDocxFile(file)) return extractTextFromDocxBuffer(buffer);
     if (isXlsxFile(file)) return extractTextFromXlsxBuffer(buffer);
+    if (isPptxFile(file)) return extractTextFromPptxBuffer(buffer);
     if (isTextLikeFile(file)) return buffer.toString('utf8');
   } catch {
     return '';
+  } finally {
+    if (materialized) { try { await materialized.cleanup(); } catch { /* best-effort */ } }
   }
   return '';
 }
 
+async function mapWithConcurrency(items = [], limit = 6, mapper = async (value) => value) {
+  const input = Array.isArray(items) ? items : [];
+  const concurrency = Math.max(1, Math.min(Number(limit) || 1, input.length || 1));
+  const results = new Array(input.length);
+  let cursor = 0;
+  await Promise.all(Array.from({ length: concurrency }, async () => {
+    while (cursor < input.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await mapper(input[index], index);
+    }
+  }));
+  return results;
+}
+
+function sourceDocumentParallelism() {
+  const configured = Number.parseInt(process.env.SIRAGPT_DOCUMENT_AGENT_PARALLELISM || '', 10);
+  if (Number.isFinite(configured) && configured > 0) return Math.min(configured, 64);
+  return Math.min(8, Math.max(1, MAX_SIMULTANEOUS_DOCUMENTS));
+}
+
 async function buildCombinedSourceText(sourceFiles = []) {
-  const chunks = [];
-  for (const file of sourceFiles) {
+  const chunks = await mapWithConcurrency(sourceFiles, sourceDocumentParallelism(), async (file) => {
     const name = file.originalName || file.filename || file.id || 'documento';
     const text = compact(await extractTextFromFile(file), 5000);
-    if (!text) continue;
-    chunks.push(`Fuente: ${name}\n${text}`);
+    if (!text) return '';
+    return `Fuente: ${name}\n${text}`;
+  });
+  return chunks.filter(Boolean).join('\n\n---\n\n');
+}
+
+function referenceSourceFiles(sourceFiles = [], sourceFile = null) {
+  const baseKey = fileStableKey(sourceFile);
+  return dedupeFiles(sourceFiles)
+    .filter((file) => fileStableKey(file) !== baseKey);
+}
+
+function buildReferenceIntegrationFallbackBlocks({ prompt = '', referenceText = '', referenceFiles = [], sourceText = '' } = {}) {
+  const names = referenceFiles
+    .map((file) => file.originalName || file.filename || file.id)
+    .filter(Boolean)
+    .slice(0, 8);
+  const excerpts = referenceText
+    .split(/\n{2,}|---/)
+    .map((item) => compact(item, 520))
+    .filter((item) => item.length >= 45)
+    .slice(0, 6);
+  const baseTitle = inferDocumentTitle(sourceText, names[0] || '');
+  const blocks = [
+    block('pageBreak', ''),
+    block('heading2', 'Contenido integrado de documentos de soporte'),
+    block('normal', `Se integra información de ${names.length ? names.join(', ') : 'los documentos adjuntos'} al documento principal, conservando el archivo base y su formato.`),
+    block('heading3', 'Síntesis incorporada'),
+  ];
+  if (excerpts.length) {
+    for (const excerpt of excerpts) blocks.push(block('normal', excerpt));
+  } else {
+    blocks.push(block('normal', `La integración se realizó con base en la solicitud: ${compact(prompt, 360)}.`));
   }
-  return chunks.join('\n\n---\n\n');
+  blocks.push(block('heading3', 'Relación con el documento principal'));
+  blocks.push(block('normal', `El contenido añadido se articula con el tema central del documento: ${baseTitle}. Debe revisarse junto con las secciones metodológicas y anexos para mantener coherencia interna.`));
+  blocks.push(block('normal', 'Recomendación editorial: verificar que nombres, fechas, variables y anexos citados coincidan con el resto del documento antes de la entrega final.'));
+  return blocks;
+}
+
+async function generateReferenceIntegrationBlocks({
+  prompt = '',
+  sourceText = '',
+  referenceFiles = [],
+  signal,
+} = {}) {
+  const referenceText = await buildCombinedSourceText(referenceFiles);
+  const fallback = () => buildReferenceIntegrationFallbackBlocks({
+    prompt,
+    referenceText,
+    referenceFiles,
+    sourceText,
+  });
+  if (!referenceFiles.length) return fallback();
+  if (!process.env.OPENAI_API_KEY) return fallback();
+
+  try {
+    const client = createContentClient('OpenAI');
+    const completion = await client.chat.completions.create({
+      model: DEFAULT_MODEL,
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'Eres un editor académico senior. Debes integrar documentos de soporte dentro de un DOCX principal sin reemplazar ni borrar el contenido existente.',
+            'Redacta contenido formal, coherente y listo para Word. Usa solo información de los documentos dados; no inventes citas, autores, fechas, cifras ni DOI.',
+            'Devuelve bloques que se puedan insertar como una nueva sección profesional, con síntesis, aportes y recomendaciones de integración.',
+          ].join(' '),
+        },
+        {
+          role: 'user',
+          content: [
+            `Solicitud del usuario: ${prompt}`,
+            '',
+            'Documento principal:',
+            compact(sourceText, 6000),
+            '',
+            'Documentos de soporte a integrar:',
+            compact(referenceText, 10000),
+            '',
+            'Responde SOLO en JSON con esta forma exacta:',
+            '{"heading":"título breve","paragraphs":["3 a 6 párrafos sustantivos"],"bullets":["0 a 8 aportes concretos"],"recommendations":["2 a 5 recomendaciones editoriales"]}',
+          ].join('\n'),
+        },
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.22,
+    }, { signal, timeout: 35_000 });
+
+    const raw = completion?.choices?.[0]?.message?.content;
+    if (!raw) return fallback();
+    const parsed = JSON.parse(raw);
+    const blocks = [
+      block('pageBreak', ''),
+      block('heading2', String(parsed.heading || 'Contenido integrado de documentos de soporte').trim()),
+    ];
+    for (const paragraph of Array.isArray(parsed.paragraphs) ? parsed.paragraphs : []) {
+      const text = String(paragraph || '').trim();
+      if (text) blocks.push(block('normal', text));
+    }
+    const bullets = Array.isArray(parsed.bullets) ? parsed.bullets : [];
+    if (bullets.length) blocks.push(block('heading3', 'Aportes incorporados'));
+    for (const bullet of bullets) {
+      const text = String(bullet || '').trim();
+      if (text) blocks.push(block('normal', `• ${text}`));
+    }
+    const recommendations = Array.isArray(parsed.recommendations) ? parsed.recommendations : [];
+    if (recommendations.length) blocks.push(block('heading3', 'Recomendaciones de integración'));
+    for (const recommendation of recommendations) {
+      const text = String(recommendation || '').trim();
+      if (text) blocks.push(block('normal', `• ${text}`));
+    }
+    return blocks.length > 2 ? blocks.slice(0, 18) : fallback();
+  } catch {
+    return fallback();
+  }
 }
 
 function sectionFallbackBlocks({ prompt = '', target, sourceText = '', sourceFiles = [] } = {}) {
@@ -970,7 +2589,289 @@ async function persistEditedArtifact({
   return { artifact, previewHtml, mime };
 }
 
-async function validateEditedBuffer(buffer, format, blocks) {
+function extractDocxTextFromBuffer(buffer) {
+  try {
+    const xml = new PizZip(buffer).file('word/document.xml')?.asText() || '';
+    return paragraphText(xml);
+  } catch {
+    return '';
+  }
+}
+
+function visibleOoxmlText(value = '') {
+  const text = String(value || '');
+  return /<\/?w:[a-z0-9_-]+\b/i.test(text)
+    || /\bw:(?:type|val|rsid|sz|tcw|gridspan|vmerge)=/i.test(text)
+    || /<\?xml\b|<\/?(?:xml|document|body|tbl|tr|tc|p|r|t)\b/i.test(text);
+}
+
+function rowMatchesCronogramaLabel(rowLabel = '', expectedLabel = '') {
+  const row = normalizeText(rowLabel);
+  const expected = normalizeText(expectedLabel);
+  if (!row || !expected) return false;
+  return row === expected || row.includes(expected) || expected.includes(row);
+}
+
+function validateCronogramaCompletion(buffer, target) {
+  try {
+    const documentXml = readDocxDocumentXml(buffer);
+    if (!documentXml) return { ok: false, reason: 'missing_document_xml' };
+    const table = locateCronogramaTable(documentXml, target);
+    if (!table) return { ok: false, reason: 'cronograma_table_not_found' };
+    const text = normalizeText(table.text);
+    const rows = extractTableRows(table.xml).map((row) => extractTableCells(row.xml));
+    const cells = rows.flat();
+    const cellTexts = cells.map((cell) => normalizeText(cell.text));
+    const incomplete = cellTexts.filter((cellText) => /^(en proceso|pendiente|por completar|pendiente de completar)$/.test(cellText)).length;
+    const xmlLeaks = cells
+      .filter((cell) => visibleOoxmlText(cell.text))
+      .map((cell) => compact(cell.text, 100));
+    const rowReports = rows.map((row) => ({
+      label: row[0]?.text || '',
+      normalizedLabel: normalizeText(row[0]?.text || ''),
+      status: row[2]?.text || '',
+      normalizedStatus: normalizeText(row[2]?.text || ''),
+    }));
+    const expectedRows = buildCronogramaAnexo3Plan().rows;
+    const missing = expectedRows
+      .filter((expected) => !rowReports.some((row) => rowMatchesCronogramaLabel(row.label, expected.avance)))
+      .map((expected) => normalizeText(expected.avance));
+    const rowsNotCompleted = expectedRows
+      .map((expected) => {
+        const found = rowReports.find((row) => rowMatchesCronogramaLabel(row.label, expected.avance));
+        if (!found) return null;
+        return found.normalizedStatus === 'completado'
+          ? null
+          : { row: expected.avance, status: found.status || '(vacío)' };
+      })
+      .filter(Boolean);
+    const completed = rowReports.filter((row) => row.normalizedStatus === 'completado').length;
+    const required = ['planificacion', 'capitulo i', 'capitulo ii', 'matriz de consistencia', 'operacionalizacion', 'entrega'];
+    const missingRequiredText = required.filter((needle) => !text.includes(needle));
+    const ok = incomplete === 0
+      && xmlLeaks.length === 0
+      && completed >= expectedRows.length
+      && missing.length === 0
+      && missingRequiredText.length === 0
+      && rowsNotCompleted.length === 0;
+    return {
+      ok,
+      reason: incomplete > 0
+        ? 'incomplete_statuses_remaining'
+        : xmlLeaks.length > 0
+          ? 'visible_ooxml_text_in_table'
+          : missing.length || missingRequiredText.length
+            ? 'required_rows_missing'
+            : rowsNotCompleted.length
+              ? 'required_rows_not_completed'
+              : null,
+      incompleteStatuses: incomplete,
+      completedStatuses: completed,
+      missingRows: missing.length ? missing : missingRequiredText,
+      rowsNotCompleted,
+      xmlTextLeaks: xmlLeaks,
+    };
+  } catch (err) {
+    return { ok: false, reason: err?.message || 'cronograma_validation_failed' };
+  }
+}
+
+function validateTargetSectionCompletion(buffer, target) {
+  try {
+    const documentXml = readDocxDocumentXml(buffer);
+    if (!documentXml) return { ok: false, reason: 'missing_document_xml' };
+    const paragraphs = extractDocxParagraphs(documentXml);
+    const bounds = targetSectionBounds(documentXml, target, paragraphs);
+    const sectionXml = documentXml.slice(bounds.sectionStart, bounds.sectionEnd);
+    const sectionText = paragraphText(sectionXml);
+    const normalized = normalizeText(sectionText);
+    const nonTableParagraphs = paragraphs.filter((paragraph) => (
+      !paragraph.inTable
+      && paragraph.start >= bounds.sectionStart
+      && paragraph.end <= bounds.sectionEnd
+    ));
+    const nonTableText = normalizeText(nonTableParagraphs.map((paragraph) => paragraph.text).join('\n'));
+    const hasPlaceholder = /\b(pendiente|por completar|pendiente de completar|completar aqui|rellenar aqui)\b/.test(nonTableText);
+    const sectionTables = extractDocxTables(documentXml)
+      .filter((table) => table.start >= bounds.sectionStart && table.start < bounds.sectionEnd);
+    const emptyTableRows = sectionTables
+      .map((table) => analyzeTableForFill(table.xml)?.dataRows?.length || 0)
+      .reduce((sum, count) => sum + count, 0);
+    const hasNarrativeCompletion = nonTableText.length >= 20;
+    return {
+      ok: !hasPlaceholder && normalized.length >= 20 && (emptyTableRows === 0 || hasNarrativeCompletion),
+      reason: hasPlaceholder
+        ? 'placeholder_remaining'
+        : normalized.length < 20
+          ? 'section_too_short'
+          : emptyTableRows > 0 && !hasNarrativeCompletion
+            ? 'table_still_has_empty_rows'
+            : null,
+      emptyTableRows,
+    };
+  } catch (err) {
+    return { ok: false, reason: err?.message || 'section_validation_failed' };
+  }
+}
+
+function validateDocxOperationCriteria(buffer, operations = []) {
+  const text = extractDocxTextFromBuffer(buffer);
+  const normalized = normalizeText(text);
+  const checks = [];
+  for (const op of operations || []) {
+    if (op.kind === 'fill_section' && isAnexo3CronogramaTarget(op.target)) {
+      const result = validateCronogramaCompletion(buffer, op.target);
+      if (result.ok || result.reason !== 'cronograma_table_not_found') {
+        checks.push({ id: 'cronograma_anexo_3_completed', label: 'Anexo 3 sin estados pendientes', passed: result.ok, details: result });
+        continue;
+      }
+    }
+    if (op.kind === 'fill_section' && op.target) {
+      const result = validateTargetSectionCompletion(buffer, op.target);
+      checks.push({ id: `section_${normalizeText(op.target.label).replace(/\s+/g, '_')}_completed`, label: `${op.target.label} completado`, passed: result.ok, details: result });
+      continue;
+    }
+    if ((op.kind === 'append_generic' || op.kind === 'append_labeled') && op.wantsInstrument) {
+      const hasInstrumentHeading = normalized.includes('instrumento de recoleccion de datos')
+        || normalized.includes('instrumentos de recoleccion de datos')
+        || normalized.includes('instrumento propuesto');
+      const passed = hasInstrumentHeading && normalized.includes('escala de respuesta');
+      checks.push({ id: 'instrument_appended', label: 'Instrumento agregado al Word', passed });
+      continue;
+    }
+    if (op.kind === 'integrate_references') {
+      const passed = normalized.includes('contenido integrado de documentos de soporte');
+      checks.push({ id: 'reference_documents_integrated', label: 'Documento de soporte integrado', passed });
+      continue;
+    }
+    if (op.kind === 'fill_cover') {
+      const passed = normalized.includes('portada completada') && normalized.includes('titulo de la investigacion');
+      checks.push({ id: 'cover_completed', label: 'Portada completada', passed });
+      continue;
+    }
+    if (op.kind === 'delete_text') {
+      const passed = !normalizedTextIncludes(text, op.needle);
+      checks.push({ id: 'specific_text_deleted', label: 'Texto específico eliminado', passed, details: { needle: compact(op.needle, 120) } });
+      continue;
+    }
+    if (op.kind === 'replace_text') {
+      const passed = !normalizedTextIncludes(text, op.needle) && normalizedTextIncludes(text, op.replacement);
+      checks.push({
+        id: 'specific_text_replaced',
+        label: 'Texto específico reemplazado',
+        passed,
+        details: { needle: compact(op.needle, 120), replacement: compact(op.replacement, 120) },
+      });
+    }
+  }
+  return {
+    checks,
+    passed: checks.every((check) => check.passed !== false),
+  };
+}
+
+async function extractVisibleTextForFormat(buffer, format) {
+  try {
+    if (format === 'docx') return extractDocxTextFromBuffer(buffer);
+    if (format === 'xlsx') return extractTextFromXlsxBuffer(buffer);
+    if (format === 'pptx') return extractTextFromPptxBuffer(buffer);
+    if (TEXT_LIKE_EXTENSIONS.has(format)) return buffer.toString('utf8');
+  } catch {
+    return '';
+  }
+  return '';
+}
+
+async function readXlsxCellVisibleValue(buffer, { sheetName = '', address = '' } = {}) {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  let sheet = null;
+  if (sheetName) {
+    const wanted = normalizeText(sheetName);
+    sheet = workbook.worksheets.find((candidate) => normalizeText(candidate.name) === wanted)
+      || workbook.getWorksheet(sheetName);
+  }
+  sheet = sheet || workbook.worksheets[0];
+  if (!sheet) return '';
+  const value = sheet.getCell(String(address || '').toUpperCase()).value;
+  if (value == null) return '';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value.richText)) return value.richText.map((part) => part.text || '').join('');
+  if (value.text) return String(value.text);
+  if (value.result != null) return String(value.result);
+  return String(value);
+}
+
+async function validateOfficeOperationCriteria(buffer, format, operations = [], blocks = []) {
+  const text = await extractVisibleTextForFormat(buffer, format);
+  const checks = [];
+  for (const op of operations || []) {
+    if (op.kind === 'replace_text') {
+      checks.push({
+        id: `${format}_specific_text_replaced`,
+        label: 'Texto específico reemplazado',
+        passed: !normalizedTextIncludes(text, op.needle) && normalizedTextIncludes(text, op.replacement),
+        details: { needle: compact(op.needle, 120), replacement: compact(op.replacement, 120) },
+      });
+    } else if (op.kind === 'delete_text') {
+      checks.push({
+        id: `${format}_specific_text_deleted`,
+        label: 'Texto específico eliminado',
+        passed: !normalizedTextIncludes(text, op.needle),
+        details: { needle: compact(op.needle, 120) },
+      });
+    } else if (op.kind === 'set_cell') {
+      const cellValue = await readXlsxCellVisibleValue(buffer, op);
+      checks.push({
+        id: 'xlsx_cell_written',
+        label: 'Celda Excel actualizada',
+        passed: normalizedTextIncludes(cellValue, op.value),
+        details: { address: op.address, sheetName: op.sheetName || null, value: compact(cellValue, 120) },
+      });
+    } else if (op.kind === 'append_generic' && format === 'pptx') {
+      const hasAnyAddedText = nonPageBreakBlocks(blocks)
+        .map((item) => item.text)
+        .filter((value) => String(value || '').trim().length >= 8)
+        .some((value) => normalizedTextIncludes(text, String(value).slice(0, 120)));
+      checks.push({
+        id: 'pptx_slide_appended',
+        label: 'Diapositiva PowerPoint agregada',
+        passed: hasAnyAddedText,
+      });
+    }
+  }
+  return {
+    checks,
+    passed: checks.every((check) => check.passed !== false),
+  };
+}
+
+function buildAgenticDocumentCycle({ operations = [], semanticCriteria, previewHtml, validationChecks } = {}) {
+  const unresolvedChecks = [
+    ...(semanticCriteria?.checks || []),
+    ...Object.entries(validationChecks || {}).map(([id, passed]) => ({ id, passed })),
+  ].filter((check) => check.passed === false).map((check) => check.id);
+  return {
+    mode: 'execute_inspect_validate_repair',
+    stages: [
+      { id: 'intent_contract', status: 'completed' },
+      { id: 'document_structure_map', status: 'completed' },
+      { id: 'operation_plan', status: 'completed', operations: operations.map((op) => op.kind) },
+      { id: 'artifact_write', status: 'completed' },
+      { id: 'semantic_docx_validation', status: semanticCriteria?.passed === false ? 'failed' : 'completed' },
+      { id: 'preview_capture', status: previewHtml ? 'completed' : 'not_available' },
+      { id: 'finalize_gate', status: unresolvedChecks.length ? 'blocked' : 'passed' },
+    ],
+    semanticCriteria: semanticCriteria?.checks || [],
+    previewCapture: {
+      available: Boolean(previewHtml),
+      htmlBytes: previewHtml ? Buffer.byteLength(String(previewHtml), 'utf8') : 0,
+    },
+    unresolvedChecks,
+  };
+}
+
+async function validateEditedBuffer(buffer, format, blocks, context = {}) {
   const appendedNeedle = blocks
     .map((item) => String(item.text || '').trim())
     .find((text) => text.length >= 12) || '';
@@ -978,8 +2879,7 @@ async function validateEditedBuffer(buffer, format, blocks) {
     if (!appendedNeedle) return false;
     try {
       if (format === 'docx') {
-        const xml = new PizZip(buffer).file('word/document.xml')?.asText() || '';
-        return xml.includes(xmlEscape(appendedNeedle).slice(0, 24));
+        return normalizedTextIncludes(extractDocxTextFromBuffer(buffer), appendedNeedle.slice(0, 120));
       }
       if (format === 'xlsx') {
         const zip = new PizZip(buffer);
@@ -989,6 +2889,9 @@ async function validateEditedBuffer(buffer, format, blocks) {
           .map((name) => zip.file(name)?.asText() || '')
           .join('\n');
         return `${sharedStrings}\n${worksheets}`.includes(xmlEscape(appendedNeedle).slice(0, 24));
+      }
+      if (format === 'pptx') {
+        return normalizedTextIncludes(extractTextFromPptxBuffer(buffer), appendedNeedle.slice(0, 120));
       }
       if (format === 'pdf') {
         return buffer.slice(0, 5).toString('latin1') === '%PDF-';
@@ -1006,11 +2909,20 @@ async function validateEditedBuffer(buffer, format, blocks) {
     }
     return buffer.includes(Buffer.from(appendedNeedle.slice(0, Math.min(20, appendedNeedle.length))));
   })();
+  const semanticCriteria = format === 'docx'
+    ? validateDocxOperationCriteria(buffer, context.operations || [])
+    : await validateOfficeOperationCriteria(buffer, format, context.operations || [], blocks);
+  const hasSemanticCriteria = semanticCriteria.checks.length > 0;
+  const operationEffectApplied = semanticCriteria.checks.length > 0 ? semanticCriteria.passed : appendedTextPresent;
   const checks = {
     source_preserved: true,
-    content_appended: appendedTextPresent,
+    content_appended: hasSemanticCriteria ? operationEffectApplied : (appendedNeedle ? appendedTextPresent : operationEffectApplied),
+    operation_criteria: semanticCriteria.passed,
     non_empty: buffer.length > 0,
   };
+  if (Buffer.isBuffer(context.beforeBuffer)) {
+    checks.bytes_changed = !buffer.equals(context.beforeBuffer);
+  }
   try {
     const { validateMimeType } = require('./agents/mime-type-validator');
     const mimeReport = await validateMimeType({
@@ -1022,6 +2934,7 @@ async function validateEditedBuffer(buffer, format, blocks) {
   } catch {
     checks.mime_type = true;
   }
+  const editMode = hasSemanticCriteria ? 'source_preserving_operation_edit' : 'source_preserving_append';
   return {
     format,
     checks,
@@ -1030,16 +2943,1101 @@ async function validateEditedBuffer(buffer, format, blocks) {
     qualityScore: 100,
     overallScore: 100,
     details: {
-      editMode: 'source_preserving_append',
+      editMode,
       appendedBlocks: blocks.filter((item) => item.kind !== 'pageBreak').length,
       sizeBytes: buffer.length,
+      operationCriteria: semanticCriteria.checks,
+      agenticCycle: buildAgenticDocumentCycle({
+        operations: context.operations || [],
+        semanticCriteria,
+        previewHtml: context.previewHtml,
+        validationChecks: checks,
+      }),
     },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Agentic multi-step planner for source-preserving edits.
+//
+// A single user request can carry several intentions (e.g. "completa el anexo 3
+// y agrega los instrumentos como un anexo 4"). Instead of handling only the
+// first one, we (1) split the request into action clauses, (2) classify each
+// clause's intent, (3) inspect the document to decide the right operation, and
+// (4) execute every operation in order on the same evolving buffer.
+// ---------------------------------------------------------------------------
+
+const CLAUSE_ACTION_VERB = 'agreg\\w*|anad\\w*|incorpor\\w*|inclu\\w*|adjunt\\w*|complet\\w*|llen\\w*|rellen\\w*|desarroll\\w*|coloc\\w*|modific\\w*|edit\\w*|actualiz\\w*|reescrib\\w*|reemplaz\\w*|quit\\w*|elimin\\w*|borr\\w*';
+
+function splitRequestClauses(text) {
+  const normalized = normalizeText(text);
+  if (!normalized) return [];
+  const anchorRe = new RegExp(`\\b(?:${CLAUSE_ACTION_VERB})\\b`, 'g');
+  const rawAnchors = [];
+  let match;
+  while ((match = anchorRe.exec(normalized))) rawAnchors.push(match.index);
+  const anchors = rawAnchors.filter((index, position) => {
+    if (position === 0) return true;
+    const before = normalized.slice(Math.max(0, index - 32), index);
+    return /(?:^|[\s,.;:])(?:y|e|tambien|ademas|luego|despues)\s*$/.test(before)
+      || /[,.;:]\s*$/.test(before);
+  });
+  if (anchors.length <= 1) return [normalized];
+  const clauses = [];
+  for (let i = 0; i < anchors.length; i += 1) {
+    const start = anchors[i];
+    const end = i + 1 < anchors.length ? anchors[i + 1] : normalized.length;
+    const clause = normalized.slice(start, end).trim();
+    if (clause) clauses.push(clause);
+  }
+  return clauses;
+}
+
+function clauseWantsInstrument(clauseNorm) {
+  return /\b(instrumento\w*|instrument\w*|intuemtno|intrumneto|intrumento|cuestionario\w*|encuesta\w*|escala\w*)\b/.test(clauseNorm);
+}
+
+function clauseIsFill(clauseNorm) {
+  clauseNorm = withCollapsedRepeats(clauseNorm);
+  return /\b(complet\w*|llen\w*|rellen\w*|desarroll\w*|termin\w*|reescrib\w*|reemplaz\w*)\b/.test(clauseNorm);
+}
+
+function clauseIsAppend(clauseNorm) {
+  clauseNorm = withCollapsedRepeats(clauseNorm);
+  return /\b(agreg\w*|anad\w*|incorpor\w*|inclu\w*|adjunt\w*|coloc\w*)\b/.test(clauseNorm)
+    || /\bcomo\s+(?:un\s+|una\s+)?(?:nuevo\s+|nueva\s+)?(?:anexo|apendice|seccion)\b/.test(clauseNorm);
+}
+
+// "agrega dos referencias…", "añade citas a la bibliografía", "pon fuentes
+// bibliográficas al pie". clauseNorm llega sin acentos (normalizeText), y se
+// tolera el typo común "bliografia".
+const BIBLIOGRAPHY_RE = /\b(referencias?(\s+bibliografic\w*)?|b(?:ib)?liografia|citas?\s+bibliografic\w*|fuentes?\s+bibliografic\w*)\b/;
+
+function clauseWantsBibliography(clauseNorm) {
+  return BIBLIOGRAPHY_RE.test(clauseNorm);
+}
+
+const SPANISH_SMALL_COUNTS = { un: 1, una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7, ocho: 8, nueve: 9, diez: 10 };
+
+function extractReferenceCount(clauseNorm) {
+  const m = clauseNorm.match(/\b(\d{1,2}|un|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\s+(?:referencias?|citas?|fuentes?)\b/);
+  if (!m) return 2;
+  const n = Number(m[1]) || SPANISH_SMALL_COUNTS[m[1]] || 2;
+  return Math.max(1, Math.min(10, n));
+}
+
+function clauseIsDelete(clauseNorm) {
+  return /\b(quit\w*|elimin\w*|borr\w*)\b/.test(clauseNorm);
+}
+
+function clauseMentionsCover(clauseNorm) {
+  return /\b(portada|caratula|carátula|cover)\b/.test(clauseNorm);
+}
+
+function extractDeletionNeedle(clauseNorm = '') {
+  // Texto entrecomillado = needle literal del usuario ("borra la parte de
+  // \"15144\""). Antes se diluía con las palabras de relleno de la frase y
+  // el borrado fallaba por needle inexistente.
+  const quoted = extractQuotedValues(clauseNorm);
+  if (quoted.length && quoted[0].length >= 2) return quoted[0].slice(0, 180);
+  const deletionClause = String(clauseNorm || '')
+    .split(/\b(?:y|,|;)\s+(?:valid\w*|verific\w*|comprueb\w*|asegur\w*|revis\w*)\b/)[0] || clauseNorm;
+  const cleaned = deletionClause
+    .replace(/\b(?:la\s+)?parte\s+(?:de|del|donde|que\s+dice)\b/g, ' ')
+    .replace(/\b(?:quit\w*|elimin\w*|borr\w*|suprim\w*|remov\w*)\b/g, ' ')
+    .replace(/\b(?:del|de la|de el|el|la|los|las|un|una|este|esta|mi|mismo|misma|documento|archivo|word|docx|contenido|especifico|especifica|que diga|donde dice|dice|diga|final)\b/g, ' ')
+    .replace(/[:"'“”‘’.,;!?(){}\[\]]+/g, ' ')
+    // Drop dangling conjunctions left when a multi-clause prompt was split mid
+    // sentence ("borra el jurado evaluador y edita…" → needle would keep "y").
+    .replace(/(^|\s)(?:y|e|o|u|and|or)(\s|$)/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (cleaned.length < 3) return '';
+  return cleaned.slice(0, 180);
+}
+
+function extractQuotedValues(text = '') {
+  const values = [];
+  const re = /["“”'‘’]([^"“”'‘’]{1,500})["“”'‘’]/g;
+  let match;
+  while ((match = re.exec(String(text || '')))) values.push(match[1].trim());
+  return values.filter(Boolean);
+}
+
+function extractReplacementPair(text = '') {
+  const raw = String(text || '');
+  const quoted = extractQuotedValues(raw);
+  if (quoted.length >= 2 && /\b(reemplaz\w*|sustitu\w*|cambi\w*|modific\w*|corrig\w*)\b/i.test(raw)) {
+    return { needle: quoted[0], replacement: quoted[1] };
+  }
+  const normalized = normalizeText(raw);
+  const match = normalized.match(/\b(?:reemplaz\w*|sustitu\w*|cambi\w*|modific\w*|corrig\w*)\s+(.{3,120}?)\s+(?:por|con|a)\s+(.{3,220})$/);
+  if (!match) return null;
+  const needle = match[1]
+    .replace(/\b(?:el|la|los|las|texto|frase|palabra|contenido|que dice|donde dice)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  let replacement = match[2].replace(/[.;!?]+$/g, '').trim();
+  // Preserve the user's original casing/accents for the REPLACEMENT. The match
+  // above runs on normalizeText() output (lowercased, accents stripped), which
+  // would emit "introduccion" instead of "Introducción". Re-run the same
+  // pattern on the raw text and trust the raw capture only when it normalizes
+  // to the same span (guards against the raw regex matching a different range).
+  // The needle stays normalized — downstream replaceNeedleText matches it
+  // case-insensitively, so only the replacement's casing reaches the output.
+  const rawMatch = raw.match(/\b(?:reemplaz\w*|sustitu\w*|cambi\w*|modific\w*|corrig\w*)\s+(.{3,120}?)\s+(?:por|con|a)\s+(.{3,220})$/iu);
+  if (rawMatch && rawMatch[2]) {
+    const rawReplacement = rawMatch[2].replace(/[.;!?]+$/g, '').trim();
+    if (rawReplacement && normalizeText(rawReplacement) === normalizeText(replacement)) {
+      replacement = rawReplacement;
+    }
+  }
+  if (needle.length < 3 || replacement.length < 1) return null;
+  return { needle: needle.slice(0, 180), replacement: replacement.slice(0, 500) };
+}
+
+function extractXlsxCellWrite(text = '') {
+  const raw = String(text || '');
+  const cellMatch = raw.match(/\b(?:celda|cell)\s+([A-Z]{1,3}[1-9][0-9]{0,6})\b/i);
+  if (!cellMatch) return null;
+  const sheetMatch = raw.match(/\b(?:hoja|sheet)\s+["“]?([^"”',.;]{1,80})["”]?/i);
+  const afterCell = raw.slice(cellMatch.index + cellMatch[0].length);
+  let value = extractQuotedValues(afterCell)[0] || '';
+  if (!value) {
+    const valueMatch = afterCell.match(/\b(?:escrib\w*|pon\w*|coloc\w*|con|a|=|valor)\s+(.{1,500})$/i);
+    value = valueMatch ? valueMatch[1].replace(/[.;!?]+$/g, '').trim() : '';
+  }
+  if (!value) return null;
+  return {
+    address: cellMatch[1].toUpperCase(),
+    sheetName: sheetMatch ? sheetMatch[1].trim() : '',
+    value,
+  };
+}
+
+function sectionExistsInDoc(documentXml, target) {
+  if (!target) return false;
+  const paragraphs = extractDocxParagraphs(documentXml);
+  return paragraphs.some((paragraph) => matchesTargetHeading(paragraph.normalized, target));
+}
+
+let _documentVisualEmbedModule;
+function documentVisualEmbedModule() {
+  if (_documentVisualEmbedModule === undefined) {
+    try {
+      // eslint-disable-next-line global-require
+      _documentVisualEmbedModule = require('./document-visual-embed');
+    } catch {
+      _documentVisualEmbedModule = null;
+    }
+  }
+  return _documentVisualEmbedModule;
+}
+
+let _docxTableInsertModule;
+function docxTableInsertModule() {
+  if (_docxTableInsertModule === undefined) {
+    try {
+      // eslint-disable-next-line global-require
+      _docxTableInsertModule = require('./docx-table-insert');
+    } catch {
+      _docxTableInsertModule = null;
+    }
+  }
+  return _docxTableInsertModule;
+}
+
+function clauseWantsTable(clauseNorm) {
+  const mod = docxTableInsertModule();
+  return Boolean(mod && mod.detectTableRequest(clauseNorm).wantsTable);
+}
+
+function clauseWantsIndex(clauseNorm) {
+  const mod = docxTableInsertModule();
+  return Boolean(mod && mod.detectIndexRequest && mod.detectIndexRequest(clauseNorm).wantsIndex);
+}
+
+function clauseWantsVisual(clauseNorm) {
+  const mod = documentVisualEmbedModule();
+  return Boolean(mod && mod.detectVisualRequest(clauseNorm).wantsVisual);
+}
+
+function buildOperationFromClause(clauseNorm, documentXml) {
+  const target = parseTargetSectionRequest(clauseNorm);
+  const wantsInstrument = clauseWantsInstrument(clauseNorm);
+  const fill = clauseIsFill(clauseNorm);
+  const append = clauseIsAppend(clauseNorm);
+  const remove = clauseIsDelete(clauseNorm);
+  const replacement = extractReplacementPair(clauseNorm);
+
+  if (replacement) {
+    return { kind: 'replace_text', ...replacement };
+  }
+
+  if (remove) {
+    const needle = extractDeletionNeedle(clauseNorm);
+    if (needle) return { kind: 'delete_text', needle };
+  }
+
+  if (clauseMentionsCover(clauseNorm) && fill) {
+    return { kind: 'fill_cover' };
+  }
+
+  // "agrega N referencias / citas a la bibliografía" — referencias REALES
+  // (búsqueda científica) en una sección de Referencias, no un anexo genérico.
+  if (clauseWantsBibliography(clauseNorm) && (append || fill)) {
+    return { kind: 'append_references', count: extractReferenceCount(clauseNorm) };
+  }
+
+  if (target) {
+    const exists = sectionExistsInDoc(documentXml, target);
+    // "agrega … como anexo 4" when the anexo does not exist yet → create it.
+    if (append && !exists) return { kind: 'append_labeled', target, wantsInstrument };
+    if (exists) return { kind: 'fill_section', target, wantsInstrument };
+    if (fill) return { kind: 'fill_section', target, wantsInstrument };
+    return { kind: 'append_labeled', target, wantsInstrument };
+  }
+  // A chart/diagram request (no explicit section) → embed a visual instead of a
+  // generic text appendix.
+  if (clauseWantsIndex(clauseNorm)) return { kind: 'insert_index' };
+  if (clauseWantsTable(clauseNorm)) return { kind: 'insert_table' };
+  if (clauseWantsVisual(clauseNorm)) return { kind: 'insert_visual' };
+  if (append || wantsInstrument) return { kind: 'append_generic', wantsInstrument };
+  if (fill) return null;
+  return null;
+}
+
+function operationKey(op) {
+  return `${op.kind}:${op.target ? op.target.label : ''}:${op.wantsInstrument ? 'instr' : ''}:${normalizeText(op.needle || '')}:${normalizeText(op.replacement || '')}:${op.address || ''}`;
+}
+
+const BULK_FILL_SCOPE_RE = /\b(tablas?|anexos?|secciones?|cuadros?|matrices?|matriz|vac[ií]as?|vac[ií]os?|faltantes?|pendientes?|todo|todos|todas|que\s+falt\w*)\b/;
+
+function planSourcePreservingOperations({ requestText = '', documentXml = '', referenceFiles = [] } = {}) {
+  const clauses = splitRequestClauses(requestText);
+  const ops = [];
+  const seen = new Set();
+  const add = (op) => {
+    if (!op) return;
+    const key = operationKey(op);
+    if (seen.has(key)) return;
+    seen.add(key);
+    ops.push(op);
+  };
+
+  const rawReplacement = extractReplacementPair(requestText);
+  if (rawReplacement) add({ kind: 'replace_text', ...rawReplacement });
+  for (const clause of clauses) add(buildOperationFromClause(clause, documentXml));
+
+  // Broader understanding: "completa / rellena las tablas vacías / los anexos /
+  // todo lo que falte" with no explicit number → fill every empty-table or empty
+  // section the document actually has.
+  const norm = normalizeText(requestText);
+  const wantsBulkFill = clauseIsFill(norm) && BULK_FILL_SCOPE_RE.test(norm);
+  const hasExplicitTarget = ops.some((op) => op.target);
+  if (wantsBulkFill && !hasExplicitTarget) {
+    for (const section of analyzeDocumentStructure(documentXml).sections) {
+      if (section.target && (section.emptyTableRows > 0 || section.isEmpty)) {
+        add({ kind: 'fill_section', target: section.target, wantsInstrument: false });
+      }
+    }
+  }
+
+  const wantsReferenceIntegration = requestWantsReferenceIntegration(requestText) && referenceFiles.length > 0;
+  if (wantsReferenceIntegration && !ops.some((op) => op.kind === 'fill_section' || op.target)) {
+    ops.length = 0;
+    seen.clear();
+    add({ kind: 'integrate_references' });
+  }
+
+  if (ops.length === 0) {
+    ops.push({ kind: 'append_generic', wantsInstrument: clauseWantsInstrument(norm) });
+  }
+  return ops;
+}
+
+const SECTION_MENTION_RE = /\b(?:anexo|anexos|apendice|apendices|seccion|secciones|capitulo|capitulos|apartado|apartados)\s*(?:n(?:ro|umero)?\.?|num\.?|no\.?|#)?\s*(?:[0-9]{1,3}|[ivxlcdm]{1,10})\b/g;
+const TABLE_CONTENT_CUE_RE = /\b(cronograma\w*|matriz|matrices|tabla\w*|cuadro\w*|presupuesto\w*)\b/;
+
+// True when the heuristic is sure enough to skip the (slower) LLM brain. It
+// escalates when a named section produced no operation, or when a table cue
+// (cronograma/matriz/tabla…) has no matching fill and the sections aren't fully
+// covered — i.e. the request likely carries an intent the heuristic missed.
+function heuristicPlanIsConfident(ops, requestText) {
+  if (!ops.length) return false;
+  const norm = normalizeText(requestText);
+  const sectionMentions = (norm.match(SECTION_MENTION_RE) || []).length;
+  const targetedOps = ops.filter((op) => op.target).length;
+  const fullyTargeted = sectionMentions >= 1 && targetedOps >= sectionMentions;
+
+  if (TABLE_CONTENT_CUE_RE.test(norm) && !ops.some((op) => op.kind === 'fill_section') && !fullyTargeted) {
+    return false;
+  }
+  if (sectionMentions >= 1) return targetedOps >= sectionMentions;
+  if (ops.length === 1 && ops[0].kind === 'append_generic') {
+    return clauseIsAppend(norm) || clauseWantsInstrument(norm);
+  }
+  return true;
+}
+
+// Deterministic understanding of the document: enumerate its anexo/capítulo/
+// sección headings and, per section, whether the body holds a (fillable) table
+// or is empty/placeholder. Feeds both the bulk-fill heuristic and the LLM brain.
+function analyzeDocumentStructure(documentXml = '') {
+  if (!documentXml) return { sections: [] };
+  const paragraphs = extractDocxParagraphs(documentXml);
+  const tables = extractDocxTables(documentXml);
+  const headingRe = /\b(?:anexo|anexos|apendice|apendices|capitulo|capitulos|seccion|secciones)\s*(?:n(?:ro|umero)?\.?|num\.?|no\.?|#)?\s*(?:[0-9]{1,3}|[ivxlcdm]{1,10})\b/;
+  const headingIdx = [];
+  paragraphs.forEach((paragraph, idx) => {
+    if (paragraph.inTable) return;
+    if (headingRe.test(paragraph.normalized)) headingIdx.push(idx);
+  });
+  const bodyEnd = documentXml.lastIndexOf('</w:body>');
+  const docEnd = bodyEnd >= 0 ? bodyEnd : documentXml.length;
+
+  const sections = headingIdx.map((idx, order) => {
+    const heading = paragraphs[idx];
+    const sectionStart = heading.end;
+    const sectionEnd = order + 1 < headingIdx.length ? paragraphs[headingIdx[order + 1]].start : docEnd;
+    const table = tables.find((t) => t.start >= sectionStart && t.start < sectionEnd) || null;
+    const tableAnalysis = table ? analyzeTableForFill(table.xml) : null;
+    const bodyParagraphs = paragraphs.filter((p) => p.start >= sectionStart && p.start < sectionEnd);
+    const hasNarrative = bodyParagraphs.some((p) => p.text.trim() && !isPlaceholderParagraph(p.text));
+    const tableHasContent = Boolean(table) && !tableAnalysis;
+    const target = parseTargetSectionRequest(heading.text);
+    return {
+      label: target ? target.label : compact(heading.text, 60),
+      title: compact(heading.text, 120),
+      target,
+      hasTable: Boolean(table),
+      tableHeaders: tableAnalysis ? tableAnalysis.labels : null,
+      emptyTableRows: tableAnalysis ? tableAnalysis.dataRows.length : 0,
+      isEmpty: !hasNarrative && !tableHasContent,
+    };
+  });
+  return { sections };
+}
+
+function summarizeStructureForPrompt(structure = { sections: [] }) {
+  if (!structure.sections.length) return '(no se detectaron anexos ni secciones numeradas)';
+  return structure.sections.map((section) => {
+    let state;
+    if (section.hasTable && section.emptyTableRows > 0) {
+      state = `tabla por completar [columnas: ${(section.tableHeaders || []).join(', ') || '?'}; ${section.emptyTableRows} filas vacías]`;
+    } else if (section.hasTable) {
+      state = 'tabla ya completa';
+    } else if (section.isEmpty) {
+      state = 'vacía / por completar';
+    } else {
+      state = 'con contenido';
+    }
+    return `- ${section.label}: ${state}`;
+  }).join('\n');
+}
+
+// LLM "brain" — interprets the user's intent against the document structure and
+// returns a normalized operation plan. Returns null when unavailable/invalid so
+// the caller keeps the deterministic heuristic plan.
+async function planOperationsWithLLM({ requestText = '', documentXml = '', signal } = {}) {
+  if (!process.env.OPENAI_API_KEY) return null;
+  try {
+    const structure = analyzeDocumentStructure(documentXml);
+    const client = createContentClient('OpenAI');
+    const completion = await client.chat.completions.create({
+      model: DEFAULT_MODEL,
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'Eres el cerebro de un editor de documentos Word. Interpretas la intención del usuario y la conviertes en un PLAN de operaciones sobre el documento; no redactas el contenido.',
+            'Operaciones válidas: "fill" (completar una sección o tabla que YA existe) y "append" (agregar una sección/anexo nuevo).',
+            'Incluye solo lo que el usuario realmente pide, en orden. Si pide "todo lo que falte/tablas vacías", incluye una operación fill por cada sección por completar.',
+          ].join(' '),
+        },
+        {
+          role: 'user',
+          content: [
+            `Petición del usuario: ${requestText}`,
+            '',
+            'Estructura actual del documento:',
+            summarizeStructureForPrompt(structure),
+            '',
+            'Responde SOLO en JSON con esta forma exacta:',
+            '{"operations":[{"action":"fill"|"append","section":"Anexo 3"|null,"content":"instrument"|"table"|"text"|"auto"}]}',
+            'Usa "section" tal como aparece arriba (p. ej. "Anexo 3"), o null si no aplica. Para cuestionarios/encuestas/instrumentos usa content="instrument".',
+          ].join('\n'),
+        },
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.1,
+    }, { signal, timeout: 20_000 });
+
+    const raw = completion?.choices?.[0]?.message?.content;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const rawOps = Array.isArray(parsed.operations) ? parsed.operations : [];
+    const ops = [];
+    const seen = new Set();
+    for (const rawOp of rawOps) {
+      const action = String(rawOp?.action || '').toLowerCase();
+      const target = rawOp?.section ? parseTargetSectionRequest(String(rawOp.section)) : null;
+      const wantsInstrument = String(rawOp?.content || '').toLowerCase() === 'instrument';
+      let op = null;
+      if (action === 'fill' && target) {
+        op = { kind: sectionExistsInDoc(documentXml, target) ? 'fill_section' : 'append_labeled', target, wantsInstrument };
+      } else if (action === 'append') {
+        op = target ? { kind: 'append_labeled', target, wantsInstrument } : { kind: 'append_generic', wantsInstrument };
+      }
+      if (!op) continue;
+      const key = operationKey(op);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      ops.push(op);
+    }
+    return ops.length ? ops : null;
+  } catch {
+    return null;
+  }
+}
+
+// Heuristic first (fast, deterministic); escalate to the LLM brain only when the
+// heuristic is unsure about the user's intent.
+async function planSourcePreservingOperationsSmart({ requestText = '', documentXml = '', referenceFiles = [], signal } = {}) {
+  const heuristic = planSourcePreservingOperations({ requestText, documentXml, referenceFiles });
+  if (heuristic.some((op) => op.kind === 'integrate_references')) return heuristic;
+  if (heuristicPlanIsConfident(heuristic, requestText)) return heuristic;
+  const llm = await planOperationsWithLLM({ requestText, documentXml, signal });
+  return llm && llm.length ? llm : heuristic;
+}
+
+function readDocxDocumentXml(buffer) {
+  try {
+    return new PizZip(buffer).file('word/document.xml')?.asText() || '';
+  } catch {
+    return '';
+  }
+}
+
+async function runFillSectionOperation({ buffer, op, requestText, sourceText, allSourceFiles, sourceFile, signal }) {
+  // Step A — tuned, deterministic fast-path for the Anexo 3 thesis cronograma.
+  const plan = detectCronogramaAnexo3Plan(buffer, op.target);
+  if (plan?.type === 'cronograma_anexo_3') {
+    return {
+      buffer: fillDocxCronogramaSectionBuffer(buffer, op.target, plan),
+      validationBlocks: plan.validationBlocks || [],
+      step: { kind: 'fill_section', label: op.target.label, mode: 'cronograma_table' },
+    };
+  }
+  // Step B — generic, document-grounded table fill for ANY section whose body
+  // is a table (matrices, operacionalización, presupuesto, otros cronogramas…).
+  const tablePlan = detectSectionTablePlan(buffer, op.target);
+  if (tablePlan) {
+    const generatedRows = await generateTableRowsContent({
+      labels: tablePlan.labels,
+      maxRows: tablePlan.dataRowCount,
+      sectionLabel: op.target.label,
+      sourceText,
+      prompt: requestText,
+      signal,
+    });
+    if (generatedRows.length) {
+      try {
+        const filledBuffer = fillGenericSectionTableBuffer(buffer, op.target, generatedRows);
+        const validationBlocks = generatedRows
+          .flat()
+          .filter((value) => String(value || '').trim())
+          .map((value) => block('normal', String(value)));
+        return {
+          buffer: filledBuffer,
+          validationBlocks,
+          step: { kind: 'fill_section', label: op.target.label, mode: 'table' },
+        };
+      } catch (err) {
+        if (err?.code !== 'SECTION_TABLE_NOT_FOUND' && err?.code !== 'SECTION_TABLE_NOT_FILLABLE') throw err;
+        // fall through to the paragraph fill below
+      }
+    }
+  }
+  // Step C — narrative paragraph fill (AI-generated, grounded in the document).
+  const blocks = await generateTargetSectionBlocks({
+    prompt: requestText,
+    target: op.target,
+    sourceFiles: allSourceFiles,
+    sourceText,
+    signal,
+  });
+  try {
+    return {
+      buffer: fillDocxSectionBuffer(buffer, op.target, blocks),
+      validationBlocks: blocks,
+      step: { kind: 'fill_section', label: op.target.label, mode: 'paragraphs' },
+    };
+  } catch (err) {
+    if (err?.code !== 'SECTION_NOT_FOUND') throw err;
+    const labeled = [
+      block('pageBreak', ''),
+      block('heading2', op.target.label),
+      ...blocks.filter((item) => item.kind !== 'pageBreak'),
+    ];
+    return {
+      buffer: appendToDocxBuffer(buffer, labeled),
+      validationBlocks: labeled,
+      step: { kind: 'append_labeled', label: op.target.label, mode: 'fallback_paragraphs' },
+    };
+  }
+}
+
+async function runAppendLabeledOperation({ buffer, op, requestText, sourceText, allSourceFiles, sourceFile, signal }) {
+  const originalName = sourceFile.originalName || sourceFile.filename;
+  const bodyBlocks = op.wantsInstrument
+    ? buildInstrumentAppendixBody({ prompt: requestText, sourceText, originalName })
+    : await generateTargetSectionBlocks({
+      prompt: requestText,
+      target: op.target,
+      sourceFiles: allSourceFiles,
+      sourceText,
+      signal,
+    });
+  const heading = op.wantsInstrument
+    ? `${op.target.label}. Instrumentos de recolección de datos`
+    : op.target.label;
+  const labeled = [
+    block('pageBreak', ''),
+    block('heading2', heading),
+    ...bodyBlocks.filter((item) => item.kind !== 'pageBreak'),
+  ];
+  return {
+    buffer: appendToDocxBuffer(buffer, labeled),
+    validationBlocks: labeled,
+    step: { kind: 'append_labeled', label: op.target.label, mode: op.wantsInstrument ? 'instrument' : 'generic' },
+  };
+}
+
+function runAppendGenericOperation({ buffer, op, requestText, sourceText, sourceFile }) {
+  const originalName = sourceFile.originalName || sourceFile.filename;
+  const blocks = op.wantsInstrument
+    ? buildInstrumentAppendix({ prompt: requestText, sourceText, originalName })
+    : buildAppendixBlocks({ prompt: requestText, sourceText: sourceText || sourceFile.extractedText || '', originalName });
+  return {
+    buffer: appendToDocxBuffer(buffer, blocks),
+    validationBlocks: blocks,
+    step: { kind: 'append_generic', mode: op.wantsInstrument ? 'instrument' : 'generic' },
+  };
+}
+
+/**
+ * Referencias REALES para "agrega N referencias a la bibliografía": consulta
+ * la búsqueda científica multi-proveedor (key-free: OpenAlex/Crossref/SciELO/
+ * DOAJ/PubMed…) con el tema del documento y devuelve hasta `count` papers.
+ * En tests (NODE_ENV=test) no toca la red salvo opt-in explícito. Nunca
+ * inventa citas: sin resultados → [] y el paso lo reporta honestamente.
+ */
+async function fetchVerifiedReferences({ topic, count, signal }) {
+  if (String(process.env.NODE_ENV) === 'test' && process.env.SIRAGPT_REFERENCES_NETWORK !== '1') return [];
+  try {
+    const scientific = require('./scientific-search');
+    const result = await scientific.search(topic, { limit: Math.max(count * 4, 12), signal });
+    const papers = Array.isArray(result?.papers) ? result.papers : (Array.isArray(result) ? result : []);
+    return papers.filter((p) => p && p.title).slice(0, count);
+  } catch {
+    return [];
+  }
+}
+
+function formatReferenceApa(paper) {
+  const authors = (Array.isArray(paper.authors) ? paper.authors : [])
+    .slice(0, 6)
+    .map((a) => (typeof a === 'string' ? a : a?.name))
+    .filter(Boolean);
+  const authorPart = authors.length ? `${authors.join('; ')}.` : '';
+  const year = paper.year ? `(${paper.year}).` : '(s.f.).';
+  const venue = paper.journal || paper.venue || '';
+  const doi = paper.doi ? `https://doi.org/${String(paper.doi).replace(/^https?:\/\/(dx\.)?doi\.org\//i, '')}` : '';
+  const link = doi || paper.url || paper.htmlUrl || '';
+  return [authorPart, year, `${String(paper.title).trim()}.`, venue ? `${venue}.` : '', link]
+    .filter(Boolean)
+    .join(' ');
+}
+
+async function runAppendReferencesOperation({ buffer, op, sourceText, sourceFile, signal }) {
+  const originalName = sourceFile.originalName || sourceFile.filename || '';
+  const topic = compact(String(originalName).replace(/\.[a-z0-9]+$/i, '').replace(/[_-]+/g, ' '), 140)
+    || compact(String(sourceText || ''), 140);
+  const count = Math.max(1, Math.min(10, Number(op.count) || 2));
+  const papers = await fetchVerifiedReferences({ topic, count, signal });
+  if (!papers.length) {
+    // Sin fuentes verificables no se fabrica nada — el resumen del paso le
+    // dice al usuario que reintente, en vez de inventar citas académicas.
+    return {
+      buffer,
+      validationBlocks: [],
+      step: { kind: 'append_references', mode: 'unavailable', count: 0 },
+    };
+  }
+  const blocks = [
+    block('heading2', 'Referencias bibliográficas'),
+    ...papers.map((p) => block('normal', formatReferenceApa(p))),
+  ];
+  return {
+    buffer: appendToDocxBuffer(buffer, blocks),
+    validationBlocks: blocks,
+    step: { kind: 'append_references', mode: 'scientific_search', count: papers.length },
+  };
+}
+
+async function runIntegrateReferencesOperation({ buffer, requestText, sourceText, allSourceFiles, sourceFile, referenceFiles, signal }) {
+  const refs = referenceFiles?.length ? referenceFiles : referenceSourceFiles(allSourceFiles, sourceFile);
+  const blocks = await generateReferenceIntegrationBlocks({
+    prompt: requestText,
+    sourceText,
+    referenceFiles: refs,
+    signal,
+  });
+  return {
+    buffer: appendToDocxBuffer(buffer, blocks),
+    validationBlocks: blocks,
+    step: { kind: 'integrate_references', mode: 'reference_documents', references: refs.length },
+  };
+}
+
+function runFillCoverOperation({ buffer, sourceText, sourceFile }) {
+  const blocks = buildCoverCompletionBlocks({
+    sourceText,
+    originalName: sourceFile.originalName || sourceFile.filename,
+  });
+  return {
+    buffer: fillDocxCoverBuffer(buffer, blocks),
+    validationBlocks: blocks,
+    step: { kind: 'fill_cover', label: 'Portada', mode: 'cover_completion' },
+  };
+}
+
+function runDeleteTextOperation({ buffer, op }) {
+  const result = deleteTextFromDocxBuffer(buffer, op.needle);
+  return {
+    buffer: result.buffer,
+    validationBlocks: [],
+    step: { kind: 'delete_text', label: 'Texto específico', mode: 'safe_delete', removedCount: result.removedCount, needle: op.needle },
+  };
+}
+
+function runReplaceTextOperation({ buffer, op }) {
+  const result = replaceTextInDocxBuffer(buffer, op.needle, op.replacement);
+  return {
+    buffer: result.buffer,
+    validationBlocks: [block('normal', op.replacement)],
+    step: {
+      kind: 'replace_text',
+      label: 'Texto específico',
+      mode: 'safe_replace',
+      changedCount: result.changedCount,
+      needle: op.needle,
+      replacement: op.replacement,
+    },
+  };
+}
+
+// Design layer: render a chart/diagram from the request + document context and
+// embed it. A visual failure must never break the document edit.
+async function runInsertVisualOperation({ buffer, requestText, sourceText, signal }) {
+  const mod = documentVisualEmbedModule();
+  if (!mod) return { buffer, validationBlocks: [], step: { kind: 'insert_visual', label: 'gráfico', mode: 'unavailable' } };
+  try {
+    const visual = await mod.addVisualFromRequest(buffer, { requestText, sourceText, signal });
+    if (visual.added) {
+      const caption = String(visual.spec?.title || '').trim();
+      return {
+        buffer: visual.buffer,
+        validationBlocks: caption ? [block('normal', caption)] : [],
+        step: { kind: 'insert_visual', label: `gráfico ${visual.spec?.type || ''}`.trim() },
+      };
+    }
+    return { buffer, validationBlocks: [], step: { kind: 'insert_visual', label: 'gráfico', mode: visual.reason || 'skipped' } };
+  } catch {
+    return { buffer, validationBlocks: [], step: { kind: 'insert_visual', label: 'gráfico', mode: 'error' } };
+  }
+}
+
+// Design layer: insert a native, editable Word table from the request data.
+// A table failure must never break the document edit.
+async function runInsertTableOperation({ buffer, requestText, sourceText, signal }) {
+  const mod = docxTableInsertModule();
+  if (!mod) return { buffer, validationBlocks: [], step: { kind: 'insert_table', label: 'tabla', mode: 'unavailable' } };
+  try {
+    const result = await mod.addTableFromRequest(buffer, { requestText, sourceText, signal });
+    if (result.added) {
+      const caption = String(result.spec?.title || '').trim();
+      return {
+        buffer: result.buffer,
+        validationBlocks: caption ? [block('normal', caption)] : [],
+        step: { kind: 'insert_table', label: `tabla (${result.spec?.rowCount || 0} filas)` },
+      };
+    }
+    return { buffer, validationBlocks: [], step: { kind: 'insert_table', label: 'tabla', mode: result.reason || 'skipped' } };
+  } catch {
+    return { buffer, validationBlocks: [], step: { kind: 'insert_table', label: 'tabla', mode: 'error' } };
+  }
+}
+
+// Design layer: build an "Índice de figuras / tablas" from the captions already
+// in the document. A failure must never break the document edit.
+async function runInsertIndexOperation({ buffer, requestText }) {
+  const mod = docxTableInsertModule();
+  if (!mod || !mod.addIndexFromRequest) return { buffer, validationBlocks: [], step: { kind: 'insert_index', label: 'índice', mode: 'unavailable' } };
+  try {
+    const result = await mod.addIndexFromRequest(buffer, { requestText });
+    if (result.added) {
+      return { buffer: result.buffer, validationBlocks: [], step: { kind: 'insert_index', label: `índice (${result.spec?.figures || 0} fig / ${result.spec?.tables || 0} tab)` } };
+    }
+    return { buffer, validationBlocks: [], step: { kind: 'insert_index', label: 'índice', mode: result.reason || 'skipped' } };
+  } catch {
+    return { buffer, validationBlocks: [], step: { kind: 'insert_index', label: 'índice', mode: 'error' } };
+  }
+}
+
+async function executeDocxOperations({ input, ops, requestText, sourceText, allSourceFiles, sourceFile, referenceFiles = [], signal }) {
+  let buffer = input;
+  const steps = [];
+  const validationBlocks = [];
+  for (const op of ops) {
+    let result;
+    if (op.kind === 'fill_section') {
+      result = await runFillSectionOperation({ buffer, op, requestText, sourceText, allSourceFiles, sourceFile, signal });
+    } else if (op.kind === 'append_labeled') {
+      result = await runAppendLabeledOperation({ buffer, op, requestText, sourceText, allSourceFiles, sourceFile, signal });
+    } else if (op.kind === 'insert_visual') {
+      result = await runInsertVisualOperation({ buffer, requestText, sourceText, signal });
+    } else if (op.kind === 'insert_table') {
+      result = await runInsertTableOperation({ buffer, requestText, sourceText, signal });
+    } else if (op.kind === 'insert_index') {
+      result = await runInsertIndexOperation({ buffer, requestText });
+    } else if (op.kind === 'integrate_references') {
+      result = await runIntegrateReferencesOperation({ buffer, requestText, sourceText, allSourceFiles, sourceFile, referenceFiles, signal });
+    } else if (op.kind === 'append_references') {
+      result = await runAppendReferencesOperation({ buffer, op, sourceText, sourceFile, signal });
+    } else if (op.kind === 'fill_cover') {
+      result = runFillCoverOperation({ buffer, sourceText, sourceFile });
+    } else if (op.kind === 'delete_text') {
+      result = runDeleteTextOperation({ buffer, op });
+    } else if (op.kind === 'replace_text') {
+      result = runReplaceTextOperation({ buffer, op });
+    } else {
+      result = runAppendGenericOperation({ buffer, op, requestText, sourceText, sourceFile });
+    }
+    buffer = result.buffer;
+    steps.push(result.step);
+    validationBlocks.push(...(result.validationBlocks || []));
+  }
+  return { buffer, steps, validationBlocks };
+}
+
+// ── Smart office planner (XLSX/PPTX parity with the DOCX LLM planner) ──────
+// The heuristic planner below only understands regex-shaped requests
+// ("reemplaza X por Y", "celda B2 = 5"). Anything richer ("agrega las ventas
+// de marzo como filas", "añade una diapositiva con los 3 riesgos") used to
+// degrade to a generic appendix sheet/slide. This planner shows the LLM a
+// compact summary of the real workbook/presentation and asks for a bounded
+// JSON plan over the SAME executor operations, so Excel/PowerPoint edits
+// behave like the Word ones. Fail-open: any error → null → heuristic plan.
+function officeSmartPlanEnabled() {
+  const v = String(process.env.SIRAGPT_OFFICE_SMART_PLAN || '').trim().toLowerCase();
+  return v !== '0' && v !== 'off' && v !== 'false';
+}
+
+function sanitizeOfficeOperations(rawOps, format) {
+  if (!Array.isArray(rawOps)) return null;
+  const ops = [];
+  const str = (v, max = 400) => String(v ?? '').slice(0, max).trim();
+  const grid = (rows) => (Array.isArray(rows) ? rows : [])
+    .slice(0, 120)
+    .map((r) => (Array.isArray(r) ? r.slice(0, 30).map((c) => str(c, 200)) : [str(r, 200)]))
+    .filter((r) => r.some((c) => c !== ''));
+  for (const raw of rawOps.slice(0, 15)) {
+    const kind = str(raw?.kind || raw?.op, 40);
+    if (kind === 'replace_text' && str(raw.needle).length >= 3) {
+      ops.push({ kind: 'replace_text', needle: str(raw.needle), replacement: str(raw.replacement) });
+    } else if (kind === 'delete_text' && str(raw.needle).length >= 3) {
+      ops.push({ kind: 'delete_text', needle: str(raw.needle) });
+    } else if (format === 'xlsx' && kind === 'set_cell' && /^[A-Z]{1,3}[1-9][0-9]{0,6}$/i.test(str(raw.address, 12))) {
+      ops.push({ kind: 'set_cell', sheetName: str(raw.sheetName, 40), address: str(raw.address, 12).toUpperCase(), value: str(raw.value, 500) });
+    } else if (format === 'xlsx' && kind === 'append_rows') {
+      const rows = grid(raw.rows);
+      if (rows.length) ops.push({ kind: 'append_rows', sheetName: str(raw.sheetName, 40), rows });
+    } else if (format === 'xlsx' && kind === 'add_sheet') {
+      const rows = grid(raw.rows);
+      if (rows.length) ops.push({ kind: 'add_sheet', name: str(raw.name, 30) || 'Datos', rows });
+    } else if (format === 'pptx' && kind === 'add_slide') {
+      const title = str(raw.title, 120);
+      const bullets = (Array.isArray(raw.bullets) ? raw.bullets : []).slice(0, 12).map((b) => str(b, 220)).filter(Boolean);
+      if (title || bullets.length) ops.push({ kind: 'add_slide', title: title || 'Nueva diapositiva', bullets });
+    }
+  }
+  return ops.length ? ops : null;
+}
+
+async function planOfficeOperationsSmart({ requestText = '', format = '', input, signal } = {}) {
+  if (!officeSmartPlanEnabled() || !process.env.OPENAI_API_KEY) return null;
+  try {
+    let summary = '';
+    if (format === 'xlsx') summary = await buildXlsxSummaryForPrompt(input);
+    else if (format === 'pptx') summary = String(extractTextFromPptxBuffer(input) || '').slice(0, 3500);
+    const opsCatalog = format === 'xlsx'
+      ? [
+        '{"kind":"replace_text","needle":"texto exacto","replacement":"texto nuevo"}',
+        '{"kind":"delete_text","needle":"texto exacto"}',
+        '{"kind":"set_cell","sheetName":"Hoja1","address":"B2","value":"5000"}',
+        '{"kind":"append_rows","sheetName":"Hoja1","rows":[["Marzo",5000,"pagado"]]}  // filas NUEVAS al final de una hoja existente',
+        '{"kind":"add_sheet","name":"Resumen","rows":[["Mes","Total"],["Enero",1200]]}  // hoja NUEVA',
+      ]
+      : [
+        '{"kind":"replace_text","needle":"texto exacto","replacement":"texto nuevo"}',
+        '{"kind":"delete_text","needle":"texto exacto"}',
+        '{"kind":"add_slide","title":"Riesgos del proyecto","bullets":["Riesgo 1...","Riesgo 2..."]}  // diapositiva NUEVA al final',
+      ];
+    const client = createContentClient('OpenAI');
+    const completion = await client.chat.completions.create({
+      model: DEFAULT_MODEL,
+      response_format: { type: 'json_object' },
+      messages: [
+        {
+          role: 'system',
+          content: [
+            `Eres el cerebro de un editor de archivos ${format === 'xlsx' ? 'Excel' : 'PowerPoint'} que PRESERVA el archivo original.`,
+            'Convierte la petición del usuario en un plan de operaciones concretas sobre el archivo; cuando la petición requiera CONTENIDO (filas, viñetas, valores), redáctalo tú con datos fieles a la petición y al archivo.',
+            'Usa needles EXACTOS copiados del contenido actual. No inventes hojas/celdas que no existan salvo en add_sheet/add_slide/append_rows.',
+          ].join(' '),
+        },
+        {
+          role: 'user',
+          content: [
+            `Petición del usuario: ${String(requestText).slice(0, 1500)}`,
+            '',
+            'Contenido actual del archivo:',
+            summary || '(sin resumen disponible)',
+            '',
+            'Operaciones válidas (elige las necesarias, máximo 15):',
+            ...opsCatalog,
+            '',
+            'Responde SOLO JSON: {"operations":[ ... ]}',
+          ].join('\n'),
+        },
+      ],
+    }, signal ? { signal } : undefined);
+    const content = completion?.choices?.[0]?.message?.content || '';
+    const parsed = JSON.parse(content);
+    const ops = sanitizeOfficeOperations(parsed?.operations, format);
+    if (ops) {
+      try { console.log(`[source-preserving-edit] smart ${format} plan: ${ops.map((o) => o.kind).join(', ')}`); } catch (_) { /* noop */ }
+    }
+    return ops;
+  } catch (err) {
+    try { console.warn(`[source-preserving-edit] smart ${format} plan failed (fallback to heuristic): ${err?.message}`); } catch (_) { /* noop */ }
+    return null;
+  }
+}
+
+function planGenericOfficeOperations({ requestText = '', format = '' } = {}) {
+  const clauses = splitRequestClauses(requestText);
+  const ops = [];
+  const seen = new Set();
+  const add = (op) => {
+    if (!op) return;
+    const key = operationKey(op);
+    if (seen.has(key)) return;
+    seen.add(key);
+    ops.push(op);
+  };
+  const rawReplacement = extractReplacementPair(requestText);
+  if (rawReplacement) add({ kind: 'replace_text', ...rawReplacement });
+  if (format === 'xlsx') {
+    const rawCellWrite = extractXlsxCellWrite(requestText);
+    if (rawCellWrite) add({ kind: 'set_cell', ...rawCellWrite });
+  }
+  for (const clause of clauses) {
+    const replacement = extractReplacementPair(clause);
+    if (replacement) {
+      add({ kind: 'replace_text', ...replacement });
+      continue;
+    }
+    if (format === 'xlsx') {
+      const cellWrite = extractXlsxCellWrite(clause);
+      if (cellWrite) {
+        add({ kind: 'set_cell', ...cellWrite });
+        continue;
+      }
+    }
+    if (clauseIsDelete(clause)) {
+      const needle = extractDeletionNeedle(clause);
+      if (needle) {
+        add({ kind: 'delete_text', needle });
+        continue;
+      }
+    }
+    if (clauseIsAppend(clause) || clauseIsFill(clause) || clauseWantsInstrument(clause)) {
+      add({ kind: 'append_generic', wantsInstrument: clauseWantsInstrument(clause) });
+    }
+  }
+  if (ops.length === 0) ops.push({ kind: 'append_generic', wantsInstrument: clauseWantsInstrument(normalizeText(requestText)) });
+  return ops;
+}
+
+async function executeXlsxOperations({ input, ops, blocks }) {
+  let buffer = input;
+  const steps = [];
+  const validationBlocks = [];
+  const appendBlocks = applyTextReplacementsToBlocks(blocks, ops);
+  for (const op of ops) {
+    if (op.kind === 'replace_text') {
+      const result = await replaceTextInXlsxBuffer(buffer, op.needle, op.replacement);
+      buffer = result.buffer;
+      validationBlocks.push(block('normal', op.replacement));
+      steps.push({ kind: 'replace_text', mode: 'xlsx_safe_replace', changedCount: result.changedCount });
+    } else if (op.kind === 'delete_text') {
+      const result = await replaceTextInXlsxBuffer(buffer, op.needle, '');
+      buffer = result.buffer;
+      steps.push({ kind: 'delete_text', mode: 'xlsx_safe_delete', removedCount: result.changedCount });
+    } else if (op.kind === 'set_cell') {
+      const result = await setXlsxCellBuffer(buffer, op);
+      buffer = result.buffer;
+      validationBlocks.push(block('normal', op.value));
+      steps.push({ kind: 'set_cell', mode: 'xlsx_cell_write', label: `${result.sheetName}!${result.address}` });
+    } else if (op.kind === 'append_rows') {
+      const result = await appendRowsToXlsxBuffer(buffer, op);
+      buffer = result.buffer;
+      for (const r of op.rows.slice(0, 5)) validationBlocks.push(block('normal', r.join(' ')));
+      steps.push({ kind: 'append_rows', mode: 'xlsx_append_rows', label: result.sheetName, count: result.added });
+    } else if (op.kind === 'add_sheet') {
+      const result = await addSheetToXlsxBuffer(buffer, op);
+      buffer = result.buffer;
+      for (const r of op.rows.slice(0, 5)) validationBlocks.push(block('normal', r.join(' ')));
+      steps.push({ kind: 'add_sheet', mode: 'xlsx_new_sheet', label: result.sheetName, count: result.added });
+    } else {
+      buffer = await appendToXlsxBuffer(buffer, appendBlocks);
+      validationBlocks.push(...appendBlocks);
+      steps.push({ kind: 'append_generic', mode: 'xlsx_new_sheet' });
+    }
+  }
+  return { buffer, steps, validationBlocks: validationBlocks.length ? validationBlocks : appendBlocks };
+}
+
+function executePptxOperations({ input, ops, blocks }) {
+  let buffer = input;
+  const steps = [];
+  const validationBlocks = [];
+  const appendBlocks = applyTextReplacementsToBlocks(blocks, ops);
+  for (const op of ops) {
+    if (op.kind === 'replace_text') {
+      const result = replaceTextInPptxBuffer(buffer, op.needle, op.replacement);
+      buffer = result.buffer;
+      validationBlocks.push(block('normal', op.replacement));
+      steps.push({ kind: 'replace_text', mode: 'pptx_safe_replace', changedCount: result.changedCount });
+    } else if (op.kind === 'delete_text') {
+      const result = replaceTextInPptxBuffer(buffer, op.needle, '');
+      buffer = result.buffer;
+      steps.push({ kind: 'delete_text', mode: 'pptx_safe_delete', removedCount: result.changedCount });
+    } else if (op.kind === 'add_slide') {
+      const slideBlocks = [
+        block('heading1', op.title),
+        ...(op.bullets || []).map((b) => block('normal', `• ${b}`)),
+      ];
+      buffer = appendToPptxBuffer(buffer, slideBlocks);
+      validationBlocks.push(...slideBlocks);
+      steps.push({ kind: 'add_slide', mode: 'pptx_new_slide', label: op.title });
+    } else {
+      buffer = appendToPptxBuffer(buffer, appendBlocks);
+      validationBlocks.push(...appendBlocks);
+      steps.push({ kind: 'append_generic', mode: 'pptx_new_slide' });
+    }
+  }
+  return { buffer, steps, validationBlocks: validationBlocks.length ? validationBlocks : appendBlocks };
+}
+
+function joinSpanishList(items) {
+  const list = items.filter(Boolean);
+  if (list.length === 0) return '';
+  if (list.length === 1) return list[0];
+  return `${list.slice(0, -1).join(', ')} y ${list[list.length - 1]}`;
+}
+
+function describeStep(step) {
+  if (step.kind === 'append_rows') return `agregué ${step.count || ''} fila(s) a la hoja "${step.label}"`.replace('  ', ' ');
+  if (step.kind === 'add_sheet') return `agregué la hoja "${step.label}" con ${step.count || 0} fila(s)`;
+  if (step.kind === 'add_slide') return `agregué la diapositiva "${step.label}"`;
+  if (step.kind === 'fill_section' && step.mode === 'cronograma_table') return `completé la tabla del cronograma de ${step.label}`;
+  if (step.kind === 'fill_section') return `completé ${step.label} respetando su formato`;
+  if (step.kind === 'append_labeled' && step.mode === 'instrument') return `agregué ${step.label} con los instrumentos profesionales`;
+  if (step.kind === 'append_labeled' && step.mode === 'fallback_paragraphs') return `agregué ${step.label} al final (no existía en el documento)`;
+  if (step.kind === 'append_labeled') return `agregué ${step.label}`;
+  if (step.kind === 'append_generic' && step.mode === 'instrument') return 'agregué un anexo con el instrumento de recolección de datos';
+  if (step.kind === 'integrate_references') return `integré ${step.references || 0} documento(s) de soporte al documento principal`;
+  if (step.kind === 'append_references' && step.mode === 'unavailable') return 'no pude obtener referencias verificadas en línea en este intento (vuelve a pedirlo en unos minutos)';
+  if (step.kind === 'append_references') return `agregué ${step.count} referencia(s) bibliográfica(s) verificadas en la sección "Referencias bibliográficas"`;
+  if (step.kind === 'insert_visual' && !step.mode) return `inserté un ${step.label || 'gráfico'} en el documento`;
+  if (step.kind === 'insert_visual') return 'intenté insertar un gráfico, pero no había datos suficientes';
+  if (step.kind === 'insert_index' && !step.mode) return `generé el ${step.label || 'índice'} de figuras/tablas`;
+  if (step.kind === 'insert_index') return 'intenté generar el índice, pero aún no hay figuras/tablas numeradas';
+  if (step.kind === 'insert_table' && !step.mode) return `inserté una ${step.label || 'tabla'} en el documento`;
+  if (step.kind === 'insert_table') return 'intenté insertar una tabla, pero no había datos suficientes';
+  if (step.kind === 'fill_cover') return 'completé la portada con los datos disponibles del documento';
+  if (step.kind === 'delete_text') return `eliminé el texto específico solicitado (${step.removedCount || 0} coincidencia(s))`;
+  if (step.kind === 'replace_text') return `reemplacé el texto específico solicitado (${step.changedCount || 0} coincidencia(s))`;
+  if (step.kind === 'set_cell') return `actualicé la celda ${step.label || 'solicitada'}`;
+  if (step.kind === 'append_generic' && step.mode === 'xlsx_new_sheet') return 'agregué una hoja nueva con el contenido solicitado';
+  if (step.kind === 'append_generic' && step.mode === 'pptx_new_slide') return 'agregué una diapositiva nueva con el contenido solicitado';
+  return 'agregué el contenido solicitado en anexos';
+}
+
+const DOCUMENT_AGENT_ROLES = [
+  'base_selector',
+  'reference_reader',
+  'structure_mapper',
+  'intent_planner',
+  'academic_writer',
+  'format_guardian',
+  'design_reviewer',
+  'quality_validator',
+];
+
+function requestedAgentCount(prompt = '') {
+  const text = normalizeText(prompt);
+  if (/\bmil\s+agentes?\b/.test(text)) return 1000;
+  const match = text.match(/\b(\d{2,5})\s+agentes?\b/);
+  return match ? Number(match[1]) : null;
+}
+
+function buildDocumentOrchestrationPlan({ requestText = '', sourceFile = {}, referenceFiles = [], operations = [], selectionReason = '' } = {}) {
+  const requested = requestedAgentCount(requestText);
+  const active = Math.max(
+    DOCUMENT_AGENT_ROLES.length,
+    Math.min(requested || DOCUMENT_AGENT_ROLES.length, Math.max(DOCUMENT_AGENT_ROLES.length, sourceDocumentParallelism())),
+  );
+  return {
+    mode: 'source_preserving_document_swarm',
+    requestedAgents: requested,
+    activeAgents: active,
+    parallelism: sourceDocumentParallelism(),
+    roles: DOCUMENT_AGENT_ROLES,
+    sourceSelection: selectionReason || 'direct',
+    baseFile: sourceFile?.originalName || sourceFile?.filename || sourceFile?.id || null,
+    referenceFiles: referenceFiles.map((file) => file.originalName || file.filename || file.id).filter(Boolean),
+    operations: operations.map((op) => ({
+      kind: op.kind,
+      target: op.target?.label || null,
+      wantsInstrument: Boolean(op.wantsInstrument),
+      needle: (op.kind === 'delete_text' || op.kind === 'replace_text') ? compact(op.needle, 80) : undefined,
+      replacement: op.kind === 'replace_text' ? compact(op.replacement, 80) : undefined,
+      address: op.kind === 'set_cell' ? op.address : undefined,
+      value: op.kind === 'set_cell' ? compact(op.value, 80) : undefined,
+    })),
   };
 }
 
 async function generateSourcePreservingDocumentEdit({
   sourceFile,
   sourceFiles = null,
+  referenceFiles = [],
+  selectionReason = '',
   prompt,
   displayPrompt,
   userId,
@@ -1050,77 +4048,168 @@ async function generateSourcePreservingDocumentEdit({
   const requestText = displayPrompt || prompt || '';
   const allSourceFiles = Array.isArray(sourceFiles) && sourceFiles.length ? sourceFiles : [sourceFile];
   const sourceText = await buildCombinedSourceText(allSourceFiles);
-  const targetSection = isDocxFile(sourceFile) && isTargetedSectionFillRequest(requestText)
-    ? parseTargetSectionRequest(requestText)
-    : null;
-  let blocks = targetSection
-    ? await generateTargetSectionBlocks({
-      prompt: requestText,
-      target: targetSection,
-      sourceFiles: allSourceFiles,
-      sourceText,
-      signal,
-    })
-    : buildAppendixBlocks({
-      prompt: requestText,
-      sourceText: sourceText || sourceFile.extractedText || '',
-      originalName: sourceFile.originalName || sourceFile.filename,
-    });
   const input = await fs.promises.readFile(sourceFile.path);
+
   let format;
   let output;
   let suffix = 'con_anexos';
   let titleSuffix = 'con anexos';
   let explanation = 'Se conservó el archivo original y se agregó únicamente el bloque solicitado al final.';
   let content = 'Listo. Conservé el archivo original y agregué el contenido solicitado al final, en anexos, sin regenerar la portada ni reemplazar el documento.';
+  let validationBlocks;
+  let orchestration = null;
+  let operations = [];
+
   if (isDocxFile(sourceFile)) {
     format = 'docx';
-    if (targetSection) {
-      try {
-        output = fillDocxSectionBuffer(input, targetSection, blocks);
-        suffix = `${normalizeText(targetSection.kind).replace(/\s+/g, '_')}_${targetSection.number}_completado`;
-        titleSuffix = `${targetSection.label} completado`;
-        explanation = `Se conservó el DOCX original y se completó únicamente ${targetSection.label}.`;
-        content = `Listo. Conservé el DOCX original y completé únicamente ${targetSection.label} usando el contexto combinado de los documentos adjuntos.`;
-      } catch (err) {
-        if (err?.code !== 'SECTION_NOT_FOUND') throw err;
-        // Respaldo: la sección solicitada no existe dentro del documento.
-        // En lugar de fallar, la agregamos al final con su propio encabezado,
-        // conservando intacto el resto del archivo (portada, cuerpo, etc.).
-        blocks = [
-          block('pageBreak', ''),
-          block('heading2', targetSection.label),
-          ...blocks.filter((item) => item.kind !== 'pageBreak'),
-        ];
-        output = appendToDocxBuffer(input, blocks);
-        suffix = `${normalizeText(targetSection.kind).replace(/\s+/g, '_')}_${targetSection.number}`;
-        titleSuffix = `con ${targetSection.label}`;
-        explanation = `No se encontró ${targetSection.label} dentro del documento; se agregó al final conservando el resto del archivo.`;
-        content = `No encontré "${targetSection.label}" dentro del documento, así que agregué el contenido al final como ${targetSection.label}, conservando intacto el resto del archivo.`;
-      }
-    } else {
-      output = appendToDocxBuffer(input, blocks);
-      content = 'Listo. Conservé el DOCX original y agregué el contenido solicitado al final, en anexos, sin regenerar la portada ni reemplazar el documento.';
+    // Agentic step 1-3: analyse the request + document and plan one or more
+    // operations; step 4: execute every operation in order on the same buffer.
+    const documentXml = readDocxDocumentXml(input);
+    const refs = referenceFiles?.length ? referenceFiles : referenceSourceFiles(allSourceFiles, sourceFile);
+    operations = await planSourcePreservingOperationsSmart({ requestText, documentXml, referenceFiles: refs, signal });
+    const execution = await executeDocxOperations({
+      input,
+      ops: operations,
+      requestText,
+      sourceText,
+      allSourceFiles,
+      sourceFile,
+      referenceFiles: refs,
+      signal,
+    });
+    output = execution.buffer;
+    validationBlocks = execution.validationBlocks;
+    orchestration = buildDocumentOrchestrationPlan({
+      requestText,
+      sourceFile,
+      referenceFiles: refs,
+      operations,
+      selectionReason,
+    });
+
+    const labels = execution.steps.map((step) => step.label).filter(Boolean);
+    if (labels.length) {
+      suffix = `${labels.map((label) => normalizeText(label).replace(/\s+/g, '_')).join('_')}_completado`;
+      titleSuffix = `${labels.join(' y ')} completado`;
+    } else if (execution.steps.some((step) => step.kind === 'integrate_references')) {
+      suffix = 'documentos_integrados';
+      titleSuffix = 'con documentos integrados';
     }
-  } else if (isXlsxFile(sourceFile)) {
-    format = 'xlsx';
-    output = await appendToXlsxBuffer(input, blocks);
-    content = 'Listo. Conservé el XLSX original y agregué el contenido solicitado en una hoja nueva, sin reemplazar las hojas existentes.';
-  } else if (isPdfFile(sourceFile)) {
-    format = 'pdf';
-    output = await appendToPdfBuffer(input, blocks);
-    content = 'Listo. Conservé el PDF original y agregué el contenido solicitado al final, sin reemplazar las páginas existentes.';
-  } else if (isTextLikeFile(sourceFile)) {
-    format = textLikeFormatForFile(sourceFile) || 'txt';
-    output = appendToTextLikeBuffer(input, blocks, format);
-    content = `Listo. Conservé el ${format.toUpperCase()} original y agregué el contenido solicitado sin reemplazar el archivo base.`;
+    const stepSummary = joinSpanishList(execution.steps.map(describeStep));
+    explanation = stepSummary
+      ? `Se conservó el DOCX original; ${stepSummary}.`
+      : 'Se conservó el DOCX original y se aplicó la edición solicitada.';
+    content = stepSummary
+      ? `Listo. Conservé el DOCX original y, en ${execution.steps.length === 1 ? 'un paso' : `${execution.steps.length} pasos`}, ${stepSummary}, sin alterar el resto del archivo.`
+      : 'Listo. Conservé el DOCX original y apliqué la edición solicitada sin alterar el resto del archivo.';
   } else {
-    const ext = path.extname(sourceFile.originalName || sourceFile.filename || '').replace(/^\./, '').toLowerCase();
-    throw new Error(`La edición preservadora todavía no soporta archivos .${ext || 'desconocidos'}. Formatos soportados: ${supportedSourceEditLabel()}.`);
+    const blocks = buildAppendixBlocks({
+      prompt: requestText,
+      sourceText: sourceText || sourceFile.extractedText || '',
+      originalName: sourceFile.originalName || sourceFile.filename,
+    });
+    validationBlocks = blocks;
+    if (isXlsxFile(sourceFile)) {
+      format = 'xlsx';
+      operations = planGenericOfficeOperations({ requestText, format });
+      // When the regexes only produced the generic-appendix fallback, let the
+      // LLM planner read the real workbook and build a concrete plan
+      // (set_cell / append_rows / add_sheet / replace_text). Heuristic hits
+      // stay authoritative — they are exact by construction.
+      if (operations.every((op) => op.kind === 'append_generic')) {
+        const smart = await planOfficeOperationsSmart({ requestText, format, input, signal });
+        if (smart) operations = smart;
+      }
+      const execution = await executeXlsxOperations({ input, ops: operations, blocks });
+      output = execution.buffer;
+      validationBlocks = execution.validationBlocks;
+      orchestration = buildDocumentOrchestrationPlan({
+        requestText,
+        sourceFile,
+        referenceFiles,
+        operations,
+        selectionReason,
+      });
+      const stepSummary = joinSpanishList(execution.steps.map(describeStep));
+      suffix = execution.steps.some((step) => step.kind === 'set_cell') ? 'celda_actualizada' : 'editado';
+      titleSuffix = 'editado';
+      explanation = stepSummary
+        ? `Se conservó el XLSX original; ${stepSummary}.`
+        : 'Se conservó el XLSX original y se aplicó la edición solicitada.';
+      content = stepSummary
+        ? `Listo. Conservé el XLSX original y ${stepSummary}, sin reemplazar las hojas existentes.`
+        : 'Listo. Conservé el XLSX original y apliqué la edición solicitada sin reemplazar las hojas existentes.';
+    } else if (isPptxFile(sourceFile)) {
+      format = 'pptx';
+      operations = planGenericOfficeOperations({ requestText, format });
+      if (operations.every((op) => op.kind === 'append_generic')) {
+        const smart = await planOfficeOperationsSmart({ requestText, format, input, signal });
+        if (smart) operations = smart;
+      }
+      const execution = executePptxOperations({ input, ops: operations, blocks });
+      output = execution.buffer;
+      validationBlocks = execution.validationBlocks;
+      orchestration = buildDocumentOrchestrationPlan({
+        requestText,
+        sourceFile,
+        referenceFiles,
+        operations,
+        selectionReason,
+      });
+      const stepSummary = joinSpanishList(execution.steps.map(describeStep));
+      suffix = 'editado';
+      titleSuffix = 'editado';
+      explanation = stepSummary
+        ? `Se conservó el PPTX original; ${stepSummary}.`
+        : 'Se conservó el PPTX original y se aplicó la edición solicitada.';
+      content = stepSummary
+        ? `Listo. Conservé el PPTX original y ${stepSummary}, sin reconstruir la presentación completa.`
+        : 'Listo. Conservé el PPTX original y apliqué la edición solicitada sin reconstruir la presentación completa.';
+    } else if (isPdfFile(sourceFile)) {
+      format = 'pdf';
+      output = await appendToPdfBuffer(input, blocks);
+      content = 'Listo. Conservé el PDF original y agregué el contenido solicitado al final, sin reemplazar las páginas existentes.';
+    } else if (isTextLikeFile(sourceFile)) {
+      format = textLikeFormatForFile(sourceFile) || 'txt';
+      const execution = executeTextLikeOperations({ input, requestText, format, blocks });
+      output = execution.buffer;
+      validationBlocks = execution.validationBlocks;
+      operations = execution.ops;
+      orchestration = buildDocumentOrchestrationPlan({
+        requestText,
+        sourceFile,
+        referenceFiles,
+        operations,
+        selectionReason,
+      });
+      const stepSummary = joinSpanishList(execution.steps.map(describeStep));
+      const onlyAppend = execution.steps.every((step) => step.kind === 'append_generic');
+      suffix = onlyAppend ? 'con_anexos' : 'editado';
+      titleSuffix = onlyAppend ? 'con anexos' : 'editado';
+      explanation = stepSummary
+        ? `Se conservó el ${format.toUpperCase()} original; ${stepSummary}.`
+        : `Se conservó el ${format.toUpperCase()} original y se aplicó la edición solicitada.`;
+      content = stepSummary
+        ? `Listo. Conservé el ${format.toUpperCase()} original y ${stepSummary}, sin reemplazar el archivo base.`
+        : `Listo. Conservé el ${format.toUpperCase()} original y apliqué la edición solicitada sin reemplazar el archivo base.`;
+    } else {
+      const ext = path.extname(sourceFile.originalName || sourceFile.filename || '').replace(/^\./, '').toLowerCase();
+      throw new Error(`La edición preservadora todavía no soporta archivos .${ext || 'desconocidos'}. Formatos soportados: ${supportedSourceEditLabel()}.`);
+    }
   }
 
   const filename = safeFilename(sourceFile.originalName || sourceFile.filename, suffix, format);
-  const validation = await validateEditedBuffer(output, format, blocks);
+  const validation = await validateEditedBuffer(output, format, validationBlocks, {
+    beforeBuffer: input,
+    operations,
+    requestText,
+  });
+  if (orchestration) {
+    validation.details = {
+      ...(validation.details || {}),
+      orchestration,
+    };
+  }
   const { artifact, previewHtml, mime } = await persistEditedArtifact({
     buffer: output,
     format,
@@ -1129,6 +4218,14 @@ async function generateSourcePreservingDocumentEdit({
     chatId,
     validation,
   });
+  if (validation.details?.agenticCycle) {
+    validation.details.agenticCycle = buildAgenticDocumentCycle({
+      operations,
+      semanticCriteria: { checks: validation.details.operationCriteria || [], passed: validation.checks.operation_criteria },
+      previewHtml,
+      validationChecks: validation.checks,
+    });
+  }
   const title = `${path.basename(sourceFile.originalName || sourceFile.filename || 'Documento', path.extname(sourceFile.originalName || sourceFile.filename || ''))} ${titleSuffix}`;
   const file = {
     type: 'doc',
@@ -1150,6 +4247,7 @@ async function generateSourcePreservingDocumentEdit({
     validation,
     previewHtml,
     format,
+    orchestration,
   };
 }
 
@@ -1164,19 +4262,36 @@ async function tryGenerateSourcePreservingDocumentEdit({
 } = {}) {
   const requestText = displayPrompt || prompt || '';
   const sourceFiles = await loadEditableSourceFiles(prisma, { userId, fileIds, chatId, prompt: requestText });
-  if (!isSourcePreservingEditRequest(requestText, sourceFiles)) return null;
+  const priorArtifacts = await loadRecentGeneratedArtifactSourceFiles(prisma, { userId, chatId });
+  const intentFiles = sourceFiles.length ? sourceFiles : priorArtifacts;
+  if (!isSourcePreservingEditRequest(requestText, intentFiles)) return null;
   const targetedSection = isTargetedSectionFillRequest(requestText);
-  const supported = targetedSection
-    ? sourceFiles.find((file) => isDocxFile(file))
-    : sourceFiles.find((file) => isSupportedSourcePreservingFile(file));
+  const selection = selectSourcePreservingDocumentSet({ requestText, sourceFiles, priorArtifacts });
+  const supported = selection.sourceFile;
+  if (!supported && !sourceFiles.length && !priorArtifacts.length) {
+    // No hay ningún archivo adjunto ni artefacto previo que conservar. La
+    // petición ("coloca esta información en un word") es en realidad una
+    // solicitud de documento NUEVO, no una edición preservadora. Devolvemos
+    // null para que el caller genere el documento desde cero en lugar de
+    // rechazar la petición ("No generé un documento nuevo…"). Solo lanzamos el
+    // error de "necesito un archivo compatible" cuando SÍ había archivos de
+    // entrada pero ninguno era editable.
+    return null;
+  }
+  if (targetedSection && supported && !isDocxFile(supported)) {
+    const names = [...sourceFiles, ...priorArtifacts].map((file) => file.originalName || file.filename || file.id).join(', ');
+    throw new Error(`Para conservar el documento original necesito un archivo DOCX con la sección solicitada. Archivo recibido: ${names || 'sin archivo compatible'}.`);
+  }
   if (!supported) {
-    const names = sourceFiles.map((file) => file.originalName || file.filename || file.id).join(', ');
+    const names = [...sourceFiles, ...priorArtifacts].map((file) => file.originalName || file.filename || file.id).join(', ');
     const needed = targetedSection ? 'un archivo DOCX con la sección solicitada' : `un archivo editable compatible (${supportedSourceEditLabel()})`;
     throw new Error(`Para conservar el documento original necesito ${needed}. Archivo recibido: ${names || 'sin archivo compatible'}.`);
   }
   return generateSourcePreservingDocumentEdit({
     sourceFile: supported,
-    sourceFiles,
+    sourceFiles: selection.sourceFiles,
+    referenceFiles: selection.referenceFiles,
+    selectionReason: selection.selectionReason,
     prompt,
     displayPrompt,
     userId,
@@ -1189,6 +4304,7 @@ module.exports = {
   appendBlocksToDocumentXml,
   appendToDocxBuffer,
   buildAppendixBlocks,
+  fillDocxCronogramaSectionBuffer,
   fillDocxSectionBuffer,
   generateSourcePreservingDocumentEdit,
   inferDocumentTitle,
@@ -1197,10 +4313,65 @@ module.exports = {
   parseTargetSectionRequest,
   tryGenerateSourcePreservingDocumentEdit,
   INTERNAL: {
+    addSheetToXlsxBuffer,
+    appendRowsToXlsxBuffer,
+    buildXlsxSummaryForPrompt,
+    countNeedleMatches,
+    executePptxOperations,
+    executeTextLikeOperations,
+    executeXlsxOperations,
+    planOfficeOperationsSmart,
+    sanitizeOfficeOperations,
     buildCombinedSourceText,
+    buildCronogramaAnexo3Plan,
+    buildDocumentFormattingTemplate,
+    buildDocumentOrchestrationPlan,
     buildInstrumentAppendix,
+    buildInstrumentAppendixBody,
+    buildReferenceIntegrationFallbackBlocks,
+    buildSectionFormattingTemplate,
+    analyzeDocumentStructure,
+    analyzeTableForFill,
+    appendToPptxBuffer,
+    detectCronogramaAnexo3Plan,
+    loadRecentAssistantArtifactSourceFiles,
+    loadRecentGeneratedArtifactSourceFiles,
+    mapWithConcurrency,
+    planOperationsWithLLM,
+    planSourcePreservingOperationsSmart,
+    summarizeStructureForPrompt,
+    validateCronogramaCompletion,
+    validateDocxOperationCriteria,
+    detectSectionTablePlan,
+    extractParagraphProperties,
+    extractRunProperties,
+    extractTextFromPptxBuffer,
+    fillCronogramaTableXml,
+    fillGenericSectionTableBuffer,
+    fillGenericSectionTableXml,
+    generateTableRowsContent,
+    heuristicPlanIsConfident,
     inferResearchVariables,
     isTargetedSectionFillRequest,
+    locateCronogramaTable,
+    locateSectionTable,
+    planGenericOfficeOperations,
+    planSourcePreservingOperations,
+    clauseWantsBibliography,
+    extractReferenceCount,
+    formatReferenceApa,
+    runAppendReferencesOperation,
+    describeStep,
+    replaceTextInDocxBuffer,
+    replaceTextInPptxBuffer,
+    replaceTextInXlsxBuffer,
+    requestMentionsGeneralDocument,
+    requestWantsReferenceIntegration,
     resolveStoredFilePath,
+    sanitizeCapturedParagraphProperties,
+    selectSourcePreservingDocumentSet,
+    setXlsxCellBuffer,
+    sourceDocumentParallelism,
+    splitRequestClauses,
   },
 };

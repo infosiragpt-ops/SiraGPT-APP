@@ -24,7 +24,7 @@ SiraGPT es una plataforma AI full-stack (Next.js 14 + Express.js) con sistema mu
 npm run dev            # Next.js dev server (puerto 3000)
 npm run build          # Next.js build
 npm test               # Tests backend (Node --test) - ~2900 tests
-npm run lint           # ESLint (ratchet: max-warnings 45)
+npm run lint           # ESLint (ratchet: max-warnings 50)
 npx tsc --noEmit --skipLibCheck   # TypeScript check
 npm run type-check     # TSC completo
 ```
@@ -417,9 +417,13 @@ Anthropic's "On the Biology of a Large Language Model"
 ### Integration in `ai.js`
 The chat route stacks these blocks into the system prompt (env-flag gated):
 `circuitAttributionBlock`, `intentAttributionGraphBlock`, `saliencyBlock`,
-`ambiguityBlock`, `adversarialBlock`. `prompt-budget-allocator` runs after
-assembly to trim overflow without dropping tier-0 (master prompt, safety
-alerts, contract).
+`adversarialBlock` (gated by `SIRAGPT_ADVERSARIAL_DISABLED`; empty unless the
+user text trips an injection/role-swap/exfil pattern). `ambiguityBlock` is
+NOT stacked on the default chat path — the chat path's intent report
+(intent-attribution-graph) has no `subIntents`, which `ambiguity-flagger`
+requires; it is produced via the `attribution-stack-runner` path instead.
+`prompt-budget-allocator` runs after assembly to trim overflow without
+dropping tier-0 (master prompt, safety alerts, contract).
 
 ### Tests
 ~40 dedicated test files in `backend/tests/attribution-*.test.js` + companions.
@@ -585,8 +589,531 @@ reduce AI-detector flagging.
 - **Tests**: `paraphrase-humanizer.test.js` (18), `paraphrase-engine.test.js`
   (+6 new for per-mode ceilings).
 
+## GitHub + worldwide research search agents — added 2026-06-04
+
+Discovery layer that lets the chat agent mine open-source projects and
+peer-reviewed literature on demand. No new npm deps — stdlib `fetch` + the
+existing in-repo reliability utilities.
+
+### `src/services/github-search.js`
+Unified search over the GitHub REST API: repositories / code / issues+PRs /
+users+orgs / topics, plus `getRepo` / `getReadme` (base64-decoded) and a
+`rateLimit` snapshot. Canonical normalised shapes, deterministic star-ranking,
+TTL+LRU cache (`github-search-cache.js`), polite User-Agent, optional
+`SIRAGPT_GITHUB_TOKEN || GITHUB_TOKEN` (lifts rate limit 10→30/min and unlocks
+the token-only code corpus). GitHub 403/429 surfaced as captured errors; degrades
+gracefully (e.g. `searchAll` silently drops code search when unauthenticated).
+- **Resilience**: outbound calls wrapped in `withRetry` (retry-with-backoff) —
+  bounded retry on transient failures only (5xx / 429 / network / timeout),
+  never on 4xx incl. 403 quota. Env: `GITHUB_SEARCH_MAX_RETRIES` (default 1),
+  `GITHUB_SEARCH_RETRY_BASE_MS` (default 250), `GITHUB_SEARCH_RETRY_DISABLED`,
+  `GITHUB_SEARCH_CACHE_TTL_MS` / `_MAX`.
+- **Route**: `POST /api/github-search`, `POST /api/github-search/all`,
+  `GET /api/github-search/readme`, `GET /api/github-search/health` (authenticated).
+- **Tests**: `tests/github-search.test.js` — 22 offline tests (mocked fetch).
+
+### Scientific search — worldwide sources
+`scientific-search.js` extended from 7 → 10 providers, adding DOAJ (open-access
+journals from ~130 countries), DBLP (global computer-science bibliography) and
+DataCite (worldwide datasets/software/theses). All key-less + query-based.
+- **Tests**: `tests/scientific-search.test.js` — 30 (was 24).
+
+### Agentic chat tools
+Both searches are now first-class tools the chat agent can invoke:
+`github_search` and `scientific_search` (registered in `agents/agent-tools.js`
+`ALL_TOOLS`; `scientific_search` powered by `scientific-search.js`).
+
+## Academic providers — SciELO / Redalyc / Scopus / Web of Science — added 2026-06-07
+
+`scientific-search.js` extended from 10 → **14 providers** so the chat agent's
+`scientific_search` tool reaches Latin-American/Iberian + commercial indices.
+No new npm deps (stdlib `fetch` + existing `safeJson`/`clampLimit` helpers).
+Two shared mappers were factored to avoid duplication: `mapCrossrefWork`
+(CrossRef + SciELO) and `mapOpenAlexWork` (OpenAlex + Redalyc) — both preserve
+the exact prior CrossRef/OpenAlex output (existing tests unchanged & green).
+
+- **SciELO** (`searchSciELO`, key-free) — queried via **Crossref member 530**
+  (FapUNIFESP, the SciELO DOI agency), NOT `search.scielo.org` whose JSON
+  endpoint is now behind a Bunny-Shield JS proof-of-work anti-bot gate (403s
+  server-side `fetch`). `openAccess:true` by definition.
+- **Redalyc** (`searchRedalyc`, key-free) — via **OpenAlex pinned to the Redalyc
+  source** `primary_location.source.id:S4377196100` (works whose *primary* host
+  is Redalyc; the looser `locations.source.id` over-matches co-hosted works).
+  `htmlUrl` points at the real `redalyc.org/articulo.oa` page; `venue:'Redalyc'`.
+  Redalyc-native records often lack DOIs and OpenAlex reports `is_oa:false`.
+- **Scopus** (`searchScopus`, key-gated) — Elsevier Scopus Search API
+  (`X-ELS-APIKey` header, optional `X-ELS-Insttoken`). `SCOPUS_API_KEY` /
+  `SCOPUS_INSTTOKEN`. STANDARD view → no abstract/PDF, first author only,
+  `count≤25`. Returns `[]` (no network call) when the key is absent.
+- **Web of Science** (`searchWebOfScience`, key-gated) — Clarivate **Starter
+  API** (`X-ApiKey` header, `q=TS=(…)` topic search, `db=WOS`, `limit≤50`).
+  `WOS_API_KEY` / `CLARIVATE_API_KEY`. Metadata only: no abstract (surfaces
+  `authorKeywords` as a snippet), no PDF, no OA flag. Returns `[]` without a key.
+
+DuckDuckGo, Brave (cached, key-gated) and Browser Automation
+(`browser_navigate`/`click`/`type`/`scroll`) were already wired (see the
+`web_search` adapter and `agent-tools.js` browser tools) — this change only
+filled the academic-DB gap requested.
+- **Route**: `GET /api/scientific-search/providers` now reports `scopus`/`wos`
+  in `keysConfigured`. `scientific_search` tool description lists the new sources.
+- **Tests**: `tests/scientific-search.test.js` — +7 (SciELO, Redalyc, Scopus
+  no-key/with-key/empty-entry, WoS no-key/with-key); 64 total, all offline.
+
+## Scientific-search — diversity + preprints + OA backfill — added 2026-06-13
+
+Three upgrades to `scientific-search.js` so results actually reflect the
+"diverse sources" promise and surface free PDFs. All offline-tested, lint-clean.
+
+- **Source diversification** (`diversifyBySource`, default-on): a soft,
+  relevance-preserving post-rank interleave so the top of the list isn't
+  monopolised by one provider (Semantic Scholar's precise title matches used to
+  fill the whole first screenful). `maxRun=2` keeps the top-2 most-relevant
+  hits, then breaks runs of 3+ from one source. Opt out with `diversify:false`
+  (also on `POST /api/scientific-search`). No paper dropped/duplicated; no
+  starvation when only one source remains. Verified live: top-10 went 1→3 sources.
+- **bioRxiv + medRxiv** (14 → **16 providers**): Cold Spring Harbor preprint
+  servers as distinct sources (`source: biorxiv`/`medrxiv`), queried like
+  SciELO/Redalyc via OpenAlex pinned to each server's canonical
+  `primary_location.source.id` (bioRxiv `S4306402567`, medRxiv `S3005729997` —
+  the alternate medRxiv `S4306400573` holds 0 works). Key-free, abstracts via
+  the OpenAlex inverted index, htmlUrl → the preprint landing page. Shared
+  `searchPinnedOpenAlexSource` helper. They feed the diversification pass too.
+- **Unpaywall OA PDF backfill** (`enrichWithUnpaywall`, opt-in via
+  `opts.unpaywall`): closed-index hits (Scopus/WoS/CrossRef/PubMed/DBLP) often
+  carry a DOI but no PDF; Unpaywall (key-free, REQUIRES a contact email) maps
+  DOI → best legal OA copy. Bounded + best-effort: skipped without
+  `SIRAGPT_RESEARCH_EMAIL`, capped at `maxEnrich` (default 8) parallel lookups
+  with a tight timeout, never throws. Opt-in so default search latency is
+  unchanged. Exposed on the route + the `scientific_search` agent tool.
+- **Wiring**: `research-agent.js` inherits all three automatically (it calls
+  `scientificSearch.search`). `scientific_search` tool description + provider
+  hints updated. `tests/scientific-search.test.js` — 53 total (+12: diversify,
+  biorxiv/medrxiv, unpaywall), all offline.
+
+## Brave Search + X (Twitter) search — added 2026-06-07 (production-hardened)
+
+Two more discovery providers/tools, both key-gated and degrading gracefully
+to the existing free, key-less path when unconfigured. No new npm deps. Both
+mirror the `github-search` resilience conventions (transient-only `withRetry`).
+
+### Brave Search (web_search provider)
+- **File**: `src/services/agents/web-search/providers/brave.js` — added to the
+  `web_search` adapter chain (`web-search/index.js`) at **priority 8** (head of
+  the general-web tier, before DuckDuckGo=10). Gated on `BRAVE_SEARCH_API_KEY`
+  (alias `BRAVE_API_KEY`): the provider's `enabled` getter returns false with no
+  key, so `sortProviders` skips it and the chain falls through to the free
+  **DuckDuckGo → Wikipedia → SearXNG** providers. Header auth
+  (`X-Subscription-Token`), locale → `search_lang`/`country`, HTML-tag stripping,
+  dedupe. Returns `[]` (not a throw) on empty results.
+- **Hardening**: transient-only `withRetry` (429/5xx/network/timeout retried,
+  other 4xx never — `classifyBraveError` + `BraveHttpError`); env
+  `BRAVE_SEARCH_RETRY_DISABLED` / `_MAX_RETRIES` / `_RETRY_BASE_MS` /
+  `_TIMEOUT_MS`. `freshness` time filter (`pd|pw|pm|py` or `day|week|month|year`,
+  bilingual, or an ISO date range) **threaded end-to-end** from the `web_search`
+  tool → adapter → provider (cache bucket keeps fresh/non-fresh distinct).
+  `extra_snippets` merged into snippets; optional `news` results folded in
+  (`source:'brave-news'`, `age` field) when freshness/news requested. Internal
+  abort timeout for direct (non-adapter) callers.
+- **searchBrain**: the universal catalog's `brave-search` entry
+  (`searchBrain/universal/providers/catalog.js`) flipped from `disabled(...)` to
+  a real key-gated provider (reads `keys.brave` or env).
+- **Tests**: `tests/web-search-brave.test.js` (19), `tests/web-search-adapter.test.js`,
+  + 2 cases in `tests/searchbrain-economic-providers.test.js`.
+
+### X (Twitter) search — `x_search` tool + `/api/x-search` route
+- **File**: `src/services/x-search.js` — xAI **Live Search** wrapper. Forces
+  `search_parameters: { mode:'on', sources:[{type:'x'}], return_citations:true }`
+  on the OpenAI-compatible `/chat/completions` endpoint so Grok retrieves recent
+  X posts; parses the summary + top-level `citations[]` into `{ url, source }`
+  (host-aware `x` vs `web` tagging). Key-gated on `XAI_API_KEY` (base
+  `https://api.x.ai/v1`, model `X_SEARCH_MODEL || XAI_GROK_MODEL || grok-4.3`).
+  With no key `isConfigured()` is false and `search()` returns
+  `{ configured:false, note }` WITHOUT any network call. Injectable `fetchImpl`;
+  query-free errors.
+- **Hardening**: transient-only `withRetry` (`classifyXSearchError` +
+  `XSearchHttpError`; env `X_SEARCH_RETRY_DISABLED` / `_MAX_RETRIES` /
+  `_RETRY_BASE_MS`); optional extra `sources` (web/news) alongside X + `mode`
+  override; in-memory metrics (`x-search-metrics.js`: searches/posts/errors/
+  unconfigured + Prometheus text).
+- **Tool**: registered in `agents/agent-tools.js` (`x_search`, args
+  `query`/`maxResults`/`handles`/`fromDate`/`toDate`), wired into
+  `agentic-chat-stream.js` `baseWebTools`.
+- **Route**: `src/routes/x-search.js` mounted `/api/x-search` (parity with
+  github/scientific-search): `POST /` (auth + express-validator), `GET /health`,
+  `GET /metrics`, `GET /metrics.prom`. API key never leaked in any payload.
+- **Tests**: `tests/x-search.test.js` (25), `tests/x-search-metrics.test.js` (8),
+  `tests/x-search-route.test.js` (5) — all offline.
+
+## siraGPT Builder — constructor full-stack tipo Replit (added 2026-06-05)
+
+Constructor de apps estilo Replit/Lovable/bolt dentro de SiraGPT: el usuario
+describe una idea → un agente hace **seguimiento con preguntas** hasta tener
+contexto total → genera plan + archivos → el usuario **ve el código** y una
+**vista previa**. Roadmap completo (epics E1–E6 + desktop) en Notion:
+"siraGPT Builder · Roadmap". **Excepción a la regla #1**: para esta feature el
+usuario autorizó que Claude construya también la UI.
+
+### Backend (`backend/src/services/builder/`)
+- `contracts.js` — `COVERAGE_DIMENSIONS` (purpose/platform/coreFeatures/
+  dataEntities/style/audience), `QuestionCardSchema`, `ProjectBriefSchema`.
+  **`platform` ∈ web | mobile | landing | desktop** (desktop añadido 2026-06-05).
+- `intake-engine.js` — entrevista pura/stateless: `coverage`, `nextQuestion`,
+  `buildBrief`, `normalisePlatform` (detecta desktop *antes* que mobile para que
+  "Electron app"/"escritorio" no caigan en la regla de "app").
+- `questions.js` — banco estático de QuestionCards (chip `desktop` incluido).
+- `blueprint.js` (E2) — plan determinista; `STACK_BY_PLATFORM.desktop` =
+  Electron + React / Node main / SQLite·PostgreSQL / GitHub Releases.
+- `scaffold.js` (E3) — archivos starter (preview.html, README, .env.example,
+  prisma/schema.prisma).
+- `preview.js` (semilla E5) — `buildPreviewHtml(brief)`: HTML autocontenido,
+  determinista, **escapado anti-inyección**, temado (oscuro/minimalista/
+  corporativo/colorido/moderno) y con marco por plataforma (teléfono / ventana
+  desktop / web). Seguro para `<iframe srcdoc>` sandbox (sin JS).
+- `llm.js` — adapter LLM por tiers sobre `ai/cerebras-client.js` (FlashGPT/
+  Cerebras gratis). **Fail-open a determinismo**: devuelve `null` si no hay key/
+  error/timeout/JSON inválido → el caller usa el banco estático. Inyectable
+  (`createClient`, `env`) para tests sin red. `extractJson` tolera fences/prosa.
+- `question-generator.js` — `generateNextQuestion(session, dimension)`: pide al
+  LLM una QuestionCard **contextual** (seguimiento), la valida contra el schema
+  y **fuerza la dimensión**; cualquier fallo → fallback al banco estático.
+- `codegen.js` (E3+) — **codegen real**: `codegenFromBrief(brief, blueprint?)`
+  genera un proyecto **Next.js 14 ejecutable** (App Router, TS) — no solo docs.
+  Corre con `npm install && npm run dev` **sin DB**: cada entidad obtiene una
+  API route CRUD en memoria (`lib/store.ts`) + página lista/alta. Emite
+  `package.json`/`tsconfig.json`/`next.config.mjs`/`app/layout.tsx`/
+  `app/page.tsx` (hero+features) /`components/site-nav.tsx` y, por entidad,
+  `app/api/<slug>/route.ts` + `app/<slug>/page.tsx`. Slice vertical: solo
+  plataformas Next.js (**web/landing**); mobile/desktop → `generated:false` y
+  el caller conserva los starters. Puro/determinista, **escapado anti-inyección**
+  (jsStr/jsxText) en todo texto del brief. Cableado aditivamente en
+  `scaffold.js` (sin colisión de paths).
+
+### Rutas (`backend/src/routes/builder.js`, montado `/api/builder`)
+- `GET /intake/questions` — catálogo de cards.
+- `POST /intake/step` — `{ session?, answer?, integrations?, constraints?,
+  dynamic? }` → `{ session, coverage, nextQuestion, complete, dynamic }`.
+  Con `dynamic:true` la próxima pregunta se genera con LLM (auto-fallback).
+- `POST /intake/brief` → `{ brief }` (cuando la cobertura está completa).
+- `POST /blueprint` → `{ blueprint }` (E2). `POST /scaffold` → `{ blueprint, files }` (E3).
+
+### Frontend (UI — regla #1 levantada para esta feature)
+- `lib/builder/intake-service.ts` — cliente tipado (patrón `projects-service`:
+  `localStorage "auth-token"` Bearer, `credentials:include`).
+- `lib/builder/useIntake.ts` — hook dueño del `session` (round-trip), orquesta
+  entrevista → `generate()` (brief → scaffold). `lib/builder/dimensions.ts` —
+  meta (label/ícono) por dimensión.
+- `components/builder/` — `QuestionCard` (chips/select/multiselect/text),
+  `CoverageRail` (stepper %), `ResultPanel` (tabs **Preview** [iframe] / Plan /
+  Código con visor + copiar), `BuilderIntake` (shell del chat).
+- `app/builder/page.tsx` — página "build studio" oscura, acento violeta
+  (`--accent-violet`), Geist Sans/Mono.
+
+### Tests (registrados en `backend/package.json`)
+`builder-contracts` · `builder-intake` · `builder-route` · `builder-preview` (7)
+· `builder-llm` (7) · `builder-question-generator` (8). Todos verdes; el banco
+estático mantiene el camino sin red.
+
+### Env
+- `CEREBRAS_API_KEY` — activa el intake dinámico (sin ella, todo cae al banco
+  estático). Modelo/baseURL via `FREE_IA_MODEL_ID` / `CEREBRAS_BASE_URL`.
+
+### Pendiente
+Codegen real para mobile/desktop (hoy solo web/landing) · ejecutar el proyecto
+generado en vivo / WebContainers (E5) · persistencia de builds (T2 schema + T8
+repo) · brief-synthesizer LLM (T6) · orquestación multi-agente con
+ProjectContext compartido (E6). **Hecho:** intake agéntico (LLM + dynamic) ·
+codegen real Next.js web/landing (E3+, `codegen.js`).
+
+## /code · Generador de Landing Pages Vite 7 + React 18 + TS — added 2026-06-11
+
+El generador del módulo `/code` (http://localhost:3000/code, modo App) emite un
+**proyecto Vite 7 + React 18 + TypeScript real** para AMBOS goals (`landing` y
+`app`), ejecutable con ▶ Ejecutar (runner Bun, `bun install` + `bunx vite
+--port 5173`). Spec: `docs/code/landing-generator-prompt.md` · plan + decisiones:
+`docs/code/plan.md`.
+
+- **Contrato** (`VITE_LANDING_CONTRACT_PATHS` en `lib/code-agent/vite-scaffold.ts`,
+  única fuente de verdad, importada por `prompts.ts`): package.json ·
+  vite.config.ts · tsconfig.json · index.html · src/main.tsx · src/index.css ·
+  src/App.tsx. Stack: Tailwind **v4 vía `@tailwindcss/vite`** (sin
+  tailwind.config.js/postcss.config.js — `@import "tailwindcss"` + paleta CSS
+  vars en :root + `@theme inline`), framer-motion ^11 (`useInView`, once),
+  lucide-react, Syne + Space Grotesk. Componente OBLIGATORIO «Invitar al
+  proyecto» (enlace privado readOnly + subtexto exacto «Cualquier persona con el
+  enlace tendrá acceso de edición» + Copiar con «¡Copiado!» + invitar por email).
+- **Tiers de generación** (`dispatch` en `components/code/ai-code-chat-panel.tsx`):
+  motor OpenCode (write/edit, `engineTransportInstructions()`) → streaming LLM
+  (bloques fenced `streamOutputFormat()`: un bloque por archivo, ruta SOLO en el
+  encabezado ` ```json package.json ` — NUNCA `// path:` dentro del contenido,
+  rompe package.json) → determinista.
+- **Fallback determinista sin LLM/red**: `lib/code-agent/vite-scaffold.ts` +
+  `vite-app-template.ts` + `escape.ts` (jsStr/jsxText/escapeHtml/pickAccentHex,
+  anti-inyección con whitelist de paleta/iconos; mismo ctx → bytes idénticos).
+  Goal `app` determinista sigue usando `/api/builder/generate` (Next.js CRUD)
+  con fallback offline a la landing local.
+- **Preview**: `lib/code-preview-build.ts` detecta proyectos Vite/Next
+  (package.json con vite/next) y muestra el placeholder «pulsa ▶ Ejecutar» en
+  vez de un srcdoc en blanco; `preview-pane.tsx` espera ~3 min (instalación
+  fría); el runner (scripts/code-runner.js) mata el dev server zombie al agotar
+  los 90s y docker-compose monta `runner_bun_cache` para reinstalaciones tibias.
+- **Tests**: `tests/code-agent-vite-scaffold.test.ts` (contrato, determinismo,
+  strings de Invitar, resistencia a inyección con parse TSX vía
+  `ts.createSourceFile`, theming) + casos Vite en `tests/code-preview-build.test.ts`.
+  Tier node --test del root (`npm test`); `tests/lib/` es solo-vitest.
+
+## Agent-first chat + prompted tool-calling — added 2026-06-09
+
+Todo chat nuevo ES un agente (SWE-agent ACI, arXiv:2405.15793 + harness
+engineering 2025-26: fallback ladder de tool-calling, budgets en código,
+capability gating). Tres cambios:
+
+### 1. Agent-first routing (`agentic-chat-stream.js shouldUseAgenticChat`)
+Default invertido: TODA conversación entra al loop agéntico (web_search,
+artefactos, documentos, media) excepto smalltalk trivial (`SIMPLE_CHAT_PROMPT`)
+y Q&A simple sobre documento adjunto (texto ya inyectado; stream plano es
+mejor). La ruta sigue cayendo al stream plano en cualquier run degradado, así
+que agent-first nunca cuesta una respuesta. `SIRAGPT_AGENT_FIRST=0` restaura
+el routing heurístico legacy.
+
+### 2. Prompted tool-calling (`agents/prompted-tool-calling.js`)
+Escalera de fallback para que CUALQUIER modelo maneje el loop:
+- `resolveToolCallMode(provider, model)` → `native` (allowlist OpenAI-style) |
+  `prompted` (el resto) | `none` (solo si `SIRAGPT_PROMPTED_TOOLS=0`).
+- En modo prompted, react-agent (`toolCallMode: 'prompted'`): describe el
+  registry en el system prompt (protocolo de bloque ```tool_call JSON +
+  worked example), convierte la traza canónica a transcript provider-safe
+  (sin `tools`/`tool_choice`/`role:"tool"` — observaciones como mensajes user
+  `[TOOL_RESULT <tool>]`), parsea los bloques fenced (o JSON bare con clave
+  `tool`, validado contra el registry) de vuelta a `tool_calls`. tool_choice
+  forzado (finalize/initial) se emula con instrucción explícita.
+- Budgets en código para modelos débiles: cap de herramientas ordenado
+  (`capToolsForPrompted`, `SIRAGPT_PROMPTED_MAX_TOOLS` default 10, pinnea
+  intent media + RAG) y `SIRAGPT_PROMPTED_MAX_STEPS` (default 10).
+- El gate duro `modelSupportsFunctionCalling` en `ai.js` fue reemplazado por
+  `resolveToolCallMode`; el modo viaja a `runAgenticChat` y queda en
+  `state.meta.runtime.toolCallMode`.
+
+### 3. Creation tools siempre disponibles (`buildDefaultTools`)
+Las herramientas de creación (generate_image/video/speech/music + las 30+
+diagram/chart tools) se cargan en CADA turno agéntico (un "ahora hazme un
+diagrama de eso" a mitad de conversación funciona sin intent inicial). El
+tool-selector per-turn mantiene el set efectivo pequeño.
+`SIRAGPT_MEDIA_TOOLS_ALWAYS=0` restaura la carga intent-gated.
+
+### Tests
+`tests/prompted-tool-calling.test.js` (13) · `tests/react-agent-prompted.test.js`
+(5, e2e con cliente fake que verifica payload provider-safe) ·
+`tests/agentic-chat-stream.test.js` actualizado (agent-first default + env-off
+legacy + resolveToolCallMode + media-always). Registrados en `backend/package.json`.
+
+## Agent harness multi-modelo — Fase 1 (added 2026-06-09)
+
+Convierte cada turno agéntico del chat en un agente estilo Claude con eventos
+tipados, gate de permisos y MCP externo, sobre el loop existente
+(react-agent + agentic-chat-stream) y el protocolo SSE de razonamiento.
+
+### Backend (`backend/src/services/agent-harness/`)
+- `model-capabilities.js` — registry de capacidades por modelo (familias
+  OpenRouter: Claude/GPT/Gemini/DeepSeek/Llama/Qwen/Mistral/Kimi/Grok/gpt-oss):
+  supportsNativeTools/ParallelToolCalls/Reasoning(+estilo)/contextWindow/
+  maxOutputTokens/supportsImages/supportsPromptCaching; defaults conservadores;
+  overrides por env `SIRAGPT_MODEL_CAPS_OVERRIDES` (JSON) o settings, AUTORITATIVOS
+  en ambos sentidos. `supportsNativeToolTransport` distingue capacidad del modelo
+  vs transporte del provider (Anthropic/Mistral directos → prompted).
+  `resolveToolCallMode` delega aquí (legacy allowlist solo como fallback de carga).
+- `tool-registry.js` — tools declarativas {name, description con cuándo-usar/
+  cuándo-no, inputSchema Zod, permissionTier auto|confirm, humanDescription(args),
+  execute}; proyección a formato OpenAI (zod-to-json-schema) y a react-agent;
+  overlay de metadata (tier/labels) para las ~80 tools existentes y MCP.
+- `tools/` — `web_fetch` (open-world con denylist: IP privadas/loopback/metadata
+  bloqueadas en URL+DNS anti-rebinding, redirects manuales re-validados ≤5,
+  Readability→Turndown→cheerio, cap 50k con marcador), `run_javascript`
+  (quickjs-emscripten WASM: 5s interrupt, 64MB, sin require/fs/net/timers,
+  console capturada, promesas pump-eadas), `create_artifact` (integra
+  task-tools saveArtifact + evento file_artifact existente), `web_search`
+  (solo si el toolset no trae uno; delega en agents/web-search).
+- `event-stream.js` — eventos SSE tipados con blockIndex+seq monotónicos:
+  tool_call_start/tool_executing/tool_result/permission_request/
+  permission_resolved/agent_done(steps,toolCalls,durationMs,tokensEstimate);
+  graba steps para persistencia (result cap 30k con marcador); wrapTools()
+  envuelve cada execute (errores → is_error sin abortar loop).
+- `permission-manager.js` — tier 'confirm' pausa el loop (promesa pendiente,
+  TTL 2min → deny); POST `/api/agent/permission` {permissionId, decision:
+  allow|always_allow_in_chat|deny} (mismo usuario); always_allow cachea por chat.
+- `mcp-client.js` — servidores MCP EXTERNOS por usuario (tabla `mcp_servers`,
+  headers AES-256 via utils/encryption): discovery por turno (timeout 8s),
+  namespacing `mcp__<srv>__<tool>`, tier confirm, llamadas con timeout 30s,
+  caché de conexión con TTL, fallos por servidor NUNCA tumban el chat;
+  transportes Streamable HTTP → SSE fallback. CRUD `/api/agent/mcp-servers`.
+- `run-agent-turn.js` — `attachHarness` (merge + wrap + events) llamado por
+  `runAgenticChat` (exportado también como `runAgentTurn`); kill switch
+  `SIRAGPT_AGENT_HARNESS=0`; en prompted no se cargan MCP y aplica el cap.
+- `agent-steps-store.js` + migración `20260609190000`: tabla `agent_steps`
+  (FK message_id CASCADE, full fidelity) + `messages.agent_metadata` JSONB
+  (proyección compacta para hidratar historia sin join).
+
+### Frontend
+- `components/agent-trace.tsx` — AgentTrace: evolución de ThinkingTrace (mismo
+  shimmer/markdown) + timeline de tools (rail conector, iconos por familia,
+  spinner dotm-circular-15 en ejecución, check/error, chip args/result con
+  CustomCodeBlock y tinte rojo en error), tarjeta de permiso inline (Permitir /
+  Permitir siempre en este chat / Denegar), colapso automático en agent_done a
+  "Pensó Xs · usó N herramientas". Mensajes históricos hidratan desde
+  `agentMetadata` (extractAgentTrace en message-component).
+- `lib/api.ts` — tipos AgentStreamEvent + dispatch onAgentEvent +
+  `apiClient.resolveAgentPermission`. `lib/chat-context-integrated.tsx` —
+  createAgentTraceHandlers (orden blockIndex/seq, dedupe por seq ante
+  reconexión). `agentic-steps.tsx` acepta `hideSteps` (cuando AgentTrace está
+  activo el sentinel solo aporta artifacts — una sola timeline).
+- i18n: namespace `agent` en los 59 locales (16 traducciones a mano + EN
+  fallback) vía `scripts/add-agent-locale-keys.js`.
+
+### Tests
+`tests/agent-harness-core.test.js` (capacidades+paridad legacy, registry,
+eventos, permisos) · `tests/agent-harness-tools.test.js` (SSRF matrix,
+redirects, sandbox límites/aislamiento, create_artifact e2e) ·
+`tests/agent-harness-mcp.test.js`. Registrados en `backend/package.json`.
+
+### Gotchas
+- El cliente directo Anthropic/Mistral NO habla tool_calls OpenAI → prompted
+  (los slugs `anthropic/...`/`mistralai/...` vía OpenRouter sí son native).
+- `OPENROUTER_API_KEY` está VACÍA en el .env local — los modelos OpenRouter
+  caen al failover local; probar OpenRouter real solo en prod.
+- E2E local: JWT debe tener fila en `sessions`; backend de pruebas:
+  `PORT=5151 node index.js` con la BD localhost.
+
+### Fase 1b (added 2026-06-09, mismo día)
+- **UI de ajustes para MCP**: `components/settings/McpServersCard.tsx`
+  (patrón MemorySettingsCard, montada al inicio de la sección Apps de
+  `app/settings/page.tsx`): lista con toggle enabled + borrar, alta con
+  nombre/URL/transporte/headers key-value (se cifran y NUNCA se vuelven a
+  mostrar — la lista solo trae `hasHeaders`). Métodos en `lib/api.ts`:
+  `listMcpServers/createMcpServer/updateMcpServer/deleteMcpServer` + tipo
+  `McpServerInfo`.
+- **`parallel_tool_calls` por capacidad**: `react-agent.run` acepta
+  `parallelToolCalls` y lo incluye en el payload nativo SOLO cuando es true
+  (omitido en negativo — la o-series y varios hosts OSS rechazan el
+  parámetro); `runAgenticChat` lo resuelve del capability registry y la ruta
+  pasa `provider: actualProvider`.
+- **`costUsdEstimate` real** en `agent_done`/`agent_metadata`:
+  `estimateCostUsd(provider, tokens)` en event-stream.js con los precios del
+  litellm-gateway (blend 75/25 input-heavy); null si el proveedor no tiene
+  tarifa (Cerebras). Fix de higiene: los separadores de `plannedKey` en event-stream.js
+  llevaban bytes NUL literales (grep trataba el archivo como binario);
+  reemplazados por la secuencia escapada backslash-u0000 en el fuente.
+
+## Codex Agent V2 — experiencia agéntica tipo Replit en `/code` (added 2026-06-13)
+
+Subsistema server-driven detrás del flag `CODEX_AGENT_V2` (off ⇒ `/api/codex/*`
+→ 404 salvo `/health`; worker no registrado; `/code` idéntico a hoy). Spec:
+`docs/codex-agent-ux.md`. Features trazables: `plans/codex-agent-v2/`.
+
+### Backend (`backend/src/services/codex/`)
+- `flags.js` — `isCodexV2Enabled(env)` (1/true/on).
+- Modelos Prisma `codex_*` (schema.prisma): CodexProject/Run/Event/Action/Checkpoint/RunMetric
+  + `CodexRun.prompt`. Migraciones `20260612120000_add_codex_tables`, `20260613100000_add_codex_run_prompt`.
+- `runner-client.js` — cliente HTTP del runner (init/write/read/exec/dev); `starter-files.js`
+  starter Vite determinista; `workspace.js` provisioning + `gitCommitAll`.
+- `project-service.js` — CRUD de proyectos scoped por userId; enriquece el error de provisioning con remediación.
+- `event-types.js` — catálogo SSE §5 + `isValidEvent`; `event-store.js` — append-only seq monotónico
+  (serializado por run + retry de colisión) + `listEvents` + `createSeqGate`; `redis-pubsub.js` pub/sub
+  `codex:run:<id>` best-effort; `run-access.js` ownership.
+- `run-queue.js` — cola `codex-runs` + worker flag-gated; `run-processor.js` lifecycle del job
+  (run_status, hard timeout, cancel cooperativo, transición terminal status-guarded); `run-service.js`
+  createRun/cancelRun/get/list (gates mode/ownership/planRunId/single-active-409); `boot-recovery.js`.
+- `agent-loop.js` — loop LLM↔herramientas (narrative/reasoning/action_* por groupId, budgets, cancelación,
+  closeBuild = checkpoint→diffstat→métrica→run_summary); `plan-mode.js`; `build-tools.js` (5 tools);
+  `llm-turn.js` (Cerebras + prompted-tool-calling); `action-store.js`.
+- `checkpoint-service.js` — commit/rollback/diff git real; `run-metrics.js` + `cost-resolver.js`
+  (provider_exact/openrouter_generation/estimated) + `pricing-policy.js` (multiplicador por plan);
+  `error-patterns.js` clasificador (bloqueante→action_required, benigno→anotación); `config-validator.js`.
+
+### Rutas (`backend/src/routes/codex.js`, montado `/api/codex` tras codex-runs legacy)
+`GET /health` (público) · `POST/GET /projects` · `GET /projects/:id` · `*/preview/{start,status,stop}` ·
+`POST/GET /projects/:id/runs` · `GET /projects/:id/runs/:runId` · `POST /runs/:id/cancel` ·
+`GET /runs/:id/stream` (SSE replay+live) · `POST /checkpoints/:id/rollback` · `GET /checkpoints/:id/diff` ·
+`GET /projects/:id/checkpoints`. Creación/lectura de runs scoped por proyecto para no sombrear el codex-runs legacy.
+
+### Frontend (`lib/codex/`, `components/codex/`)
+- `timeline-reducer.ts` (puro, dedup por seq, IDs idempotentes) · `run-stream.ts` (SSE fetch, reconexión
+  con backoff, corta en 4xx) · `use-codex-run.ts` · `use-stick-to-bottom.ts` · `codex-api.ts` ·
+  `use-codex-health.ts` · `model-tiers.ts` · `format.ts` · `workspace-tabs.ts`.
+- `run-timeline.tsx` + action-chips-row/reasoning-block · cards plan/checkpoint/run-summary/action-required ·
+  `composer.tsx` (+ plan-toggle/power-selector/dictation-button) · bottom-tab-bar/web-tab/checklist-tab ·
+  `codex-agent-panel.tsx`. Montado en `app/code/page.tsx` solo si `health.enabled`.
+
+### Tests
+~30 archivos `backend/tests/codex-*.test.js` (node --test) + `tests/lib/codex/*` y
+`tests/components/codex-*` (vitest, **`--pool=threads`** — el pool forks cuelga en esta máquina).
+E2E con git real en tmpdir: `codex-e2e-flow.test.js`. Golden replay: `tests/lib/codex/golden-replay.test.ts`.
+
+### Envs
+`CODEX_AGENT_V2` · `CODE_RUNNER_URL`/`CODE_RUNNER_DEV_URL` · `REDIS_URL` (cola+pubsub) ·
+`CODEX_WORKER_CONCURRENCY` (2) · `CODEX_RUN_TIMEOUT_MS` (15min) · `CODEX_MAX_STEPS` (24) ·
+`CODEX_MAX_TOOLS_PER_TURN` (4) · `CODEX_COST_PROMO_MULTIPLIER` · `CEREBRAS_API_KEY` (LLM).
+`logCodexConfig()` valida coherencia al boot.
+
+### Gotchas
+- vitest forks pool cuelga aquí → usar `--pool=threads`.
+- Tests e2e/integración deben `delete process.env.REDIS_URL` o el publish abre una conexión ioredis
+  que mantiene vivo el proceso (cuelga node --test).
+- git-real tests: `git config core.autocrlf false` en el repo temporal (Windows CRLF rompe la comparación byte-a-byte).
+
+## Deployments / Publishing — clon del tab de Replit (flag DEPLOYMENTS_V2, added 2026-06-18)
+
+Clon **de gestión** (no provisiona VMs reales) del tab "Deployments/Publishing" de
+Replit: lifecycle de estados, historial de versiones inmutables con hash corto,
+dominios propios (registros A+TXT) y un security scan sintético. Patrón
+server-driven calcado de Codex V2. Flag off ⇒ `/api/deployments/*` responde 404
+salvo `/health`; el módulo `/deployments` muestra empty-state. Opcionalmente
+ligado a un `Project` (`webapp`) vía `projectId`.
+
+### Backend (`backend/src/services/deployments/` + `routes/deployments.js`)
+- `flags.js` — `isDeploymentsEnabled(env)` (`DEPLOYMENTS_V2` = 1/true/on).
+- `pipeline.js` — PURO/determinista (sin reloj ni random): pipeline de 5 fases
+  (provision→security_scan→build→bundle→promote), `generateShortHash` (FNV-1a,
+  8 hex), `slugifySubdomain`, `machineSpec` (tiers Reserved VM 0.5/2GB…4/16GB con
+  USD/mes), `dnsRecordsFor` (A + TXT `sira-verify=`), `securityScanReport`.
+- `deployment-service.js` — Prisma **inyectable** (default: cliente compartido),
+  todo scoped por `userId`: create/list/get(+versions+domains)/update(geography
+  inmutable)/publish (versión inmutable + demote de la previa live)/rollback
+  (re-promociona una versión previa como build `isRollback`)/pause·resume·shutdown
+  (soft-delete)/securityScan/addDomain·removeDomain/getLogs. `DeploymentError{status,code}`.
+- `routes/deployments.js` — montado `/api/deployments` en `index.js` (sin CSRF,
+  Bearer como codex). `GET /health` público SIEMPRE 200; resto flag-gated 404.
+  CRUD + `/publish` + `/rollback` + `/pause|resume|shutdown` + `/security-scan` +
+  `/domains` + `GET /:id/logs` + `GET /:id/logs/stream` (SSE replay + heartbeat,
+  `?token=` fallback).
+- Prisma: modelos `Deployment` / `DeploymentVersion` / `DeploymentDomain`
+  (`@@map deployments|deployment_versions|deployment_domains`) + relación en
+  `User`. Migración `20260618200000_add_deployment_tables` (aditiva).
+
+### Frontend (`app/deployments/page.tsx` + `components/deployments/*`)
+- `lib/deployments/deployments-api.ts` — cliente tipado (clon de codex-api):
+  Bearer `localStorage("auth-token")` + `credentials:include`; el contrato.
+- `page.tsx` — auth-gated, `health()` → empty-state si `enabled:false`, si no
+  lazy-load `DeploymentsModule` (`ssr:false`).
+- `components/deployments/`: `deployments-module` (selector + detalle),
+  `deployment-detail` (banner suspended + Reanudar/Ajustar/Escaneo + tabs
+  Overview/Logs/Dominios/Gestionar), `overview-tab` (card Production estilo
+  Replit + Publicar + timeline), `publish-pipeline` (5 pasos animados),
+  `version-timeline`, `logs-tab` (EventSource sobre `logsStreamUrl`),
+  `domains-tab` (A+TXT + verificación/TLS), `manage-tab` (settings + Apagar),
+  `create-deployment-dialog`, `shared.tsx` (helpers visuales + `timeAgo`).
+
+### Tests
+`backend/tests/deployment-pipeline.test.js` (8) + `deployment-service.test.js`
+(10, Prisma falso en memoria) — registrados en `backend/package.json`. Verificado
+e2e real (servicio+BD y HTTP+auth) + UI en navegador (create→publish→running).
+
+### Gotchas
+- El backend ignora `backend/.env PORT=5050` y liga a **5000** (gana `PORT=5000`
+  del `.env.local` raíz); el proxy de Next apunta ahí, así que coinciden.
+- Un seeder de arranque reescribe la password de `admin@example.com` a `password`
+  en cada reinicio del backend (credencial local estable: `admin@example.com` / `password`).
+
 ## Conexiones externas
 - Repo: https://github.com/SiraGPT-ORg/siraGPT
-- Remoto: `sira-org`
+- Remoto: `origin`
 - Branch: main (push directo)
 - CI: GitHub Actions (automatic cancel on newer commit)

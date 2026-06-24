@@ -405,10 +405,22 @@ class AsyncGuard {
     // accumulating one dead listener per guarded call (a slow leak that
     // also trips Node's MaxListenersExceededWarning).
     let externalAbortListener = null;
+    let abortedAtEntry = false;
     if (opts.signal) {
       if (opts.signal.aborted) {
-        // Signal already aborted — reject immediately
+        // Signal already aborted at entry. Mark the timeout flag so the
+        // GuardError is classified consistently with the mid-flight path,
+        // and record `abortedAtEntry` so the race below fails fast. We do
+        // NOT abort `token.controller` here: doing so makes raceWithSignal
+        // take its already-aborted short-circuit, which rejects WITHOUT
+        // attaching a handler to the user promise — leaking the user
+        // promise's eventual rejection as an unhandledRejection. Instead we
+        // keep racing against the (unaborted) controller signal so the user
+        // promise stays handled, and add a fast-reject racer below. Without
+        // this, a never-settling promise would hang forever (the timeout
+        // watchdog no-ops once state has left GUARD_PENDING).
         timedOut = true;
+        abortedAtEntry = true;
         token.state = GUARD_TIMED_OUT;
       } else {
         externalAbortListener = () => {
@@ -433,7 +445,16 @@ class AsyncGuard {
     }, token.timeoutMs);
 
     try {
-      const result = await raceWithSignal(promise, token.controller.signal);
+      // raceWithSignal attaches handlers to `promise`, so its eventual
+      // settlement/rejection is always consumed (no unhandledRejection leak).
+      // When the external signal was already aborted at entry, additionally
+      // race a synchronously-rejected promise so we fail fast instead of
+      // waiting on a (possibly never-settling) user promise. Promise.race
+      // consumes both racers' outcomes, so neither leaks.
+      const guarded = raceWithSignal(promise, token.controller.signal);
+      const result = await (abortedAtEntry
+        ? Promise.race([guarded, Promise.reject(opts.signal.reason || new Error('aborted before start'))])
+        : guarded);
       token.settle();
       return result;
     } catch (err) {

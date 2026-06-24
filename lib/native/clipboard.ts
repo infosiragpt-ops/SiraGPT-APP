@@ -46,6 +46,19 @@ async function loadCapacitor(): Promise<any | null> {
   }
 }
 
+function getErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err || "")
+}
+
+function isClipboardPermissionDenied(err: unknown): boolean {
+  const name = err && typeof err === "object" && "name" in err
+    ? String((err as { name?: unknown }).name || "")
+    : ""
+  const message = getErrorMessage(err)
+  return name === "NotAllowedError"
+    || /write permission denied|permission denied|not allowed/i.test(message)
+}
+
 export async function writeText(value: string): Promise<ClipboardWriteResult> {
   return write({ string: value })
 }
@@ -70,8 +83,10 @@ export async function write(opts: ClipboardWriteOptions): Promise<ClipboardWrite
       return { ok: true, via: "web" }
     } catch (err) {
       // fall through to legacy
-      // eslint-disable-next-line no-console
-      console.warn("[lib/native/clipboard] navigator.clipboard failed, falling back", err)
+      if (!isClipboardPermissionDenied(err)) {
+        // eslint-disable-next-line no-console
+        console.warn("[lib/native/clipboard] navigator.clipboard failed, falling back", getErrorMessage(err))
+      }
     }
   }
 

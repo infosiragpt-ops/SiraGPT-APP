@@ -172,6 +172,23 @@ function resolveImageAspectRatio(text) {
   return null;
 }
 
+function resolveVideoAspectRatio(text) {
+  const norm = normalize(text);
+  if (!norm) return null;
+
+  const colon = norm.match(/\b(1:1|9:16|16:9|4:3|3:4|21:9)\b/);
+  if (colon) return colon[1];
+  const cross = norm.match(/\b(1x1|9x16|16x9|4x3|3x4|21x9)\b/);
+  if (cross) return cross[1].replace('x', ':');
+
+  if (/\b(cuadrad[oa]s?|square|post de instagram|feed de instagram)\b/.test(norm)) return '1:1';
+  if (/\b(vertical(?:es)?|retrato|portrait|tiktok|reels?|histori(?:a|as)|story|stories|shorts?|para movil|formato movil|mas alto que ancho)\b/.test(norm)) return '9:16';
+  if (/\b(rectangular(?:es)?|horizontal(?:es)?|apaisad[oa]s?|panoramic[oa]s?|landscape|widescreen|youtube|miniatura|thumbnail|banner|portada|cover|cabecera|mas ancho que alto)\b/.test(norm)) return '16:9';
+  if (/\b(cinema|cinematico|cinematografico|ultrawide|panavision)\b/.test(norm)) return '21:9';
+
+  return null;
+}
+
 const ORIENTATION_TO_IMAGE = { vertical: 'portrait', horizontal: 'wide', square: 'square', standard: 'square' };
 const ORIENTATION_TO_VIDEO = { vertical: '9:16', horizontal: '16:9', square: '1:1', standard: '4:3' };
 const DEFAULT_VIDEO_DURATION_SECONDS = 8;
@@ -228,10 +245,80 @@ function detectStyle(normText) {
 
 const KIND_TO_TOOL = {
   image: 'generate_image',
+  'image-edit': 'edit_image',
   video: 'generate_video',
   audio: 'generate_speech',
   music: 'generate_music',
 };
+
+// ── Image EDIT detection (img2img) ────────────────────────────────────────
+// "edita/modifica/retoca esta foto", "quítale el fondo", "ponle un sombrero
+// a la imagen", "remove the background" → the user wants to TRANSFORM an
+// existing image, not create a new one. Routed to `edit_image`, which
+// resolves the source from the chat (attachment or last generated image).
+
+const EDIT_VERB = /\b(edita(?:r|me|la|lo)?|modific(?:a|ame|ar|alo|ala)|retoc(?:a|ame|ar)|ajust(?:a|ale|ar)|cambi(?:a|ale|ar|emos)|quit(?:a|ale|ar|emos)|elimin(?:a|ale|ar)|borr(?:a|ale|ar)|agreg(?:a|ale|ar)|anad(?:e|ele|ir)|recort(?:a|ame|ar)|restaur(?:a|ame|ar)|coloriz(?:a|ar)|aclar(?:a|ar)|oscurec(?:e|er)|volte(?:a|ar)|gir(?:a|ar)|rot(?:a|ar)|amplia(?:r)?|escala(?:r)?|mejor(?:a|ame|ar)|ponle|edit|modify|retouch|adjust|remove|erase|crop|restore|colorize|brighten|darken|flip|rotate|upscale|enhance|improve)\b/;
+
+// A reference to an EXISTING image ("esta foto", "la imagen", "mi logo",
+// "the picture") — required so edit verbs inside generation requests
+// ("crea una imagen y cámbiale el fondo" → generation) don't misroute.
+const EXISTING_IMAGE_REF = /\b(?:est[ae]s?|es[ae]s?|aquell[ao]s?|la|mi|tu|dich[ao]|this|that|the|my)\s+(?:ultim[ao]\s+|misma?\s+|last\s+)?(?:imagen(?:es)?|foto(?:s|grafias?)?|ilustracion(?:es)?|dibujos?|logos?|logotipos?|retratos?|avatar(?:es)?|images?|photos?|pictures?|drawings?)\b/;
+
+// Standalone edit operations that imply an existing image even without an
+// explicit noun reference ("quita el fondo", "remove the background").
+const IMPLICIT_EDIT_OP = /\b(?:quit(?:a|ale|ar)|elimin(?:a|ale|ar)|borr(?:a|ale|ar)|remove|erase)\b.{0,24}\b(?:fondo|background)\b|\bsin fondo\b|\bbackground removal\b/;
+
+/**
+ * Detect an image-EDIT intent (transform an existing image).
+ * @param {string} text raw user message
+ * @param {{hasImageAttachment?: boolean}} [opts] context hint: the message
+ *   carries an attached image, so referential cues can be implicit.
+ * @returns {boolean}
+ */
+function detectImageEditIntent(text, opts = {}) {
+  const norm = normalize(text);
+  if (!norm) return false;
+  if (!EDIT_VERB.test(norm)) return false;
+  if (IMPLICIT_EDIT_OP.test(norm)) return true;
+  if (EXISTING_IMAGE_REF.test(norm)) return true;
+  // With an image attached, an edit verb + any image noun is enough
+  // ("mejora la calidad", "recorta la imagen").
+  if (opts.hasImageAttachment && (IMAGE_NOUNS.test(norm) || /\b(fondo|background|calidad|colores?)\b/.test(norm))) return true;
+  return false;
+}
+
+/** Extract the per-kind specs the user stated in natural language. */
+function buildSpecsForKind(kind, norm) {
+  const durationSeconds = parseDurationSeconds(norm);
+  const orientation = detectOrientation(norm);
+  const style = detectStyle(norm);
+  const hd = detectHighQuality(norm);
+
+  const specs = {};
+  if (kind === 'image' || kind === 'image-edit') {
+    if (orientation) specs.aspectRatio = ORIENTATION_TO_IMAGE[orientation] || 'square';
+    if (hd) specs.quality = 'hd';
+    const count = detectImageCount(norm);
+    if (count && count > 1) specs.count = count;
+    if (style) specs.style = style;
+  } else if (kind === 'video') {
+    specs.durationSeconds = durationSeconds || DEFAULT_VIDEO_DURATION_SECONDS;
+    specs.aspectRatio = orientation ? (ORIENTATION_TO_VIDEO[orientation] || DEFAULT_VIDEO_ASPECT_RATIO) : DEFAULT_VIDEO_ASPECT_RATIO;
+    specs.model = DEFAULT_VIDEO_MODEL;
+    if (style) specs.style = style;
+  } else if (kind === 'audio') {
+    if (durationSeconds) specs.durationSeconds = durationSeconds;
+    // language hint for narration
+    if (/\b(en ingles|in english|english)\b/.test(norm)) specs.language = 'en';
+    else if (/\b(en espanol|en castellano|spanish)\b/.test(norm)) specs.language = 'es';
+    if (/\b(voz femenina|female voice|mujer|femenina)\b/.test(norm)) specs.voice = 'female';
+    else if (/\b(voz masculina|male voice|hombre|masculina)\b/.test(norm)) specs.voice = 'male';
+  } else if (kind === 'music') {
+    if (durationSeconds) specs.durationSeconds = durationSeconds;
+    if (style) specs.genre = style;
+  }
+  return specs;
+}
 
 /**
  * Detect which media kind the user is asking the assistant to create and
@@ -263,34 +350,7 @@ function detectMediaIntent(text) {
   if (!kind) return empty;
 
   const hasCreateVerb = CREATE_VERB.test(norm);
-  const durationSeconds = parseDurationSeconds(norm);
-  const orientation = detectOrientation(norm);
-  const style = detectStyle(norm);
-  const hd = detectHighQuality(norm);
-
-  const specs = {};
-  if (kind === 'image') {
-    if (orientation) specs.aspectRatio = ORIENTATION_TO_IMAGE[orientation] || 'square';
-    if (hd) specs.quality = 'hd';
-    const count = detectImageCount(norm);
-    if (count && count > 1) specs.count = count;
-    if (style) specs.style = style;
-  } else if (kind === 'video') {
-    specs.durationSeconds = durationSeconds || DEFAULT_VIDEO_DURATION_SECONDS;
-    specs.aspectRatio = orientation ? (ORIENTATION_TO_VIDEO[orientation] || DEFAULT_VIDEO_ASPECT_RATIO) : DEFAULT_VIDEO_ASPECT_RATIO;
-    specs.model = DEFAULT_VIDEO_MODEL;
-    if (style) specs.style = style;
-  } else if (kind === 'audio') {
-    if (durationSeconds) specs.durationSeconds = durationSeconds;
-    // language hint for narration
-    if (/\b(en ingles|in english|english)\b/.test(norm)) specs.language = 'en';
-    else if (/\b(en espanol|en castellano|spanish)\b/.test(norm)) specs.language = 'es';
-    if (/\b(voz femenina|female voice|mujer|femenina)\b/.test(norm)) specs.voice = 'female';
-    else if (/\b(voz masculina|male voice|hombre|masculina)\b/.test(norm)) specs.voice = 'male';
-  } else if (kind === 'music') {
-    if (durationSeconds) specs.durationSeconds = durationSeconds;
-    if (style) specs.genre = style;
-  }
+  const specs = buildSpecsForKind(kind, norm);
 
   // Confidence: an explicit create verb next to a media noun is a clear
   // "do it" request; a bare media noun is weaker (could be conversational).
@@ -308,8 +368,69 @@ function detectMediaIntent(text) {
   };
 }
 
+// Strict creation verbs (subset of CREATE_VERB): when one of these targets
+// the request, a generation intent beats an edit cue inside the same message
+// ("crea una imagen de un perro y quítale el fondo" → generation; the
+// prompt itself carries the "sin fondo" requirement).
+const STRICT_CREATE_VERB = /\b(cr[ée]a|cre[ée]me|gener(?:a|ame|ar)|haz(?:me)?|hag(?:a|ame)|dibuj(?:a|ame|ar)|dise[nñ](?:a|ame|ar)|elabor(?:a|ame|ar)|make|create|generate|draw|design|render)\b/;
+
+/**
+ * Multi-intent variant of detectMediaIntent: detects EVERY media kind the
+ * user asked for in a single message, so "crea un video y una foto de un
+ * perro" activates BOTH generate_video and generate_image instead of only
+ * the highest-priority kind.
+ *
+ * Ordering follows the single-intent priority (video → music → audio →
+ * image) so intents[0] is always what detectMediaIntent would have chosen —
+ * existing callers can treat it as the primary intent. An image-EDIT cue
+ * ("quítale el fondo a esta foto") replaces the image-generation intent
+ * with kind 'image-edit' / tool 'edit_image'.
+ *
+ * @param {string} text raw user message
+ * @param {{hasImageAttachment?: boolean}} [opts]
+ * @returns {Array<{kind: string, tool: string, confidence: string, hasCreateVerb: boolean, specs: object, reason: string}>}
+ */
+function detectMediaIntents(text, opts = {}) {
+  const raw = String(text == null ? '' : text);
+  if (!raw.trim()) return [];
+  const norm = normalize(raw);
+
+  const kinds = [];
+  if (VIDEO_NOUNS.test(norm)) kinds.push('video');
+  if (MUSIC_NOUNS.test(norm)) kinds.push('music');
+  // The generic "audio" noun loses to music ("audio de una canción" is a song).
+  if (!kinds.includes('music') && AUDIO_NOUNS.test(norm)) kinds.push('audio');
+
+  const editIntent = detectImageEditIntent(raw, opts);
+  const hasImageNoun = IMAGE_NOUNS.test(norm);
+  if (editIntent && !(hasImageNoun && STRICT_CREATE_VERB.test(norm) && !EXISTING_IMAGE_REF.test(norm))) {
+    kinds.push('image-edit');
+  } else if (hasImageNoun) {
+    kinds.push('image');
+  } else if (editIntent) {
+    kinds.push('image-edit');
+  }
+
+  if (!kinds.length) return [];
+
+  const hasCreateVerb = CREATE_VERB.test(norm);
+  let confidence = 'medium';
+  if (QUESTION_START.test(norm) || MEDIA_IDEATION_OR_LEARNING.test(norm)) confidence = 'low';
+  else if (hasCreateVerb || kinds.includes('image-edit')) confidence = 'high';
+
+  return kinds.map((kind) => ({
+    kind,
+    tool: KIND_TO_TOOL[kind],
+    confidence,
+    hasCreateVerb,
+    specs: buildSpecsForKind(kind, norm),
+    reason: kind === 'image-edit' ? 'edit-verb+image-ref' : (hasCreateVerb ? 'create-verb+noun' : 'noun-only'),
+  }));
+}
+
 const KIND_LABEL_ES = {
   image: 'una imagen',
+  'image-edit': 'una edición de una imagen existente',
   video: 'un video',
   audio: 'un audio (voz / narración)',
   music: 'música (una canción)',
@@ -330,7 +451,10 @@ function buildMediaIntentHint(intent) {
 
   const s = intent.specs || {};
   const params = [];
-  if (intent.kind === 'image') {
+  if (intent.kind === 'image-edit') {
+    params.push('- instruction: la transformación que pidió el usuario (extráela literal del mensaje).');
+    params.push('- NO generes una imagen nueva con `generate_image`: el usuario quiere MODIFICAR una imagen existente (la adjunta o la última del chat).');
+  } else if (intent.kind === 'image') {
     if (s.aspectRatio) params.push(`- aspectRatio: "${s.aspectRatio}"`);
     if (s.quality) params.push(`- quality: "${s.quality}"`);
     if (s.style) params.push(`- style: "${s.style}"`);
@@ -357,10 +481,43 @@ function buildMediaIntentHint(intent) {
   return lines.join('\n');
 }
 
+/**
+ * Multi-intent variant of buildMediaIntentHint: one directive covering EVERY
+ * media tool the user asked for in the same message, so the agent calls all
+ * of them (e.g. generate_video AND generate_image) before finalizing.
+ * Falls back to the single-intent hint when only one intent was detected.
+ */
+function buildMediaIntentsHint(intents) {
+  const list = Array.isArray(intents) ? intents.filter((i) => i && i.kind && i.tool) : [];
+  if (!list.length) return '';
+  if (list.length === 1) return buildMediaIntentHint(list[0]);
+
+  const lines = [];
+  lines.push('[Activación automática de herramientas multimedia — PEDIDO MÚLTIPLE]');
+  lines.push(`El usuario pidió ${list.length} recursos distintos en el mismo mensaje: ${list.map((i) => KIND_LABEL_ES[i.kind]).join(' y ')}.`);
+  lines.push('DEBES llamar TODAS estas herramientas en este turno (una tras otra), sin pedir confirmación, y NO responder solo con texto ni omitir ninguna:');
+  for (const intent of list) {
+    const single = buildMediaIntentHint(intent);
+    // Reuse the per-intent parameter lines, dropping the shared header/footer.
+    const body = single
+      .split('\n')
+      .filter((line) => line.startsWith('- '))
+      .join('\n');
+    lines.push(`• \`${intent.tool}\` → ${KIND_LABEL_ES[intent.kind]}.`);
+    if (body) lines.push(body);
+  }
+  lines.push('Tras generar TODOS los recursos, finaliza con una breve descripción en español de cada uno.');
+  return lines.join('\n');
+}
+
 module.exports = {
   detectMediaIntent,
+  detectMediaIntents,
+  detectImageEditIntent,
   buildMediaIntentHint,
+  buildMediaIntentsHint,
   resolveImageAspectRatio,
+  resolveVideoAspectRatio,
   // Exposed for unit testing:
   _internal: {
     normalize,
@@ -373,6 +530,9 @@ module.exports = {
     DEFAULT_VIDEO_ASPECT_RATIO,
     DEFAULT_VIDEO_MODEL,
     resolveImageAspectRatio,
+    resolveVideoAspectRatio,
     KIND_TO_TOOL,
+    buildSpecsForKind,
+    detectImageEditIntent,
   },
 };

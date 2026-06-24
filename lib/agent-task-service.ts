@@ -76,8 +76,10 @@ export type AgentTaskEvent =
   | { type: "repair_attempt"; attempt?: number; status?: string; message?: string; ts?: string; seq?: number }
   | { type: "document_policy"; policy?: DocumentPolicy; documentPolicy?: DocumentPolicy; seq?: number }
   | { type: "document_analysis"; analysisIds?: string[]; evidenceRefs?: Array<Record<string, unknown>>; summary?: string; ts?: string; seq?: number }
+  | { type: "cycle_init"; taskId?: string; stages?: Array<{ id: string; label: string }>; documentType?: string | null; field?: string | null; citationStyle?: string | null; code?: string | null; ts?: string; seq?: number }
+  | { type: "cycle_stage"; taskId?: string; stage: string; status: "start" | "done" | string; label?: string; note?: string; ts?: string; seq?: number }
   | { type: "meta"; taskId?: string; goal: string; model: string; runtimeModel?: string; runtimeProvider?: string; tools: string[]; executionProfile?: Record<string, unknown>; intentAlignmentProfile?: Record<string, unknown>; taskPlan?: Record<string, unknown>; frameworks?: AgentFrameworkStatus }
-  | { type: "step_start"; id: string; label: string; icon?: AgenticIcon }
+  | { type: "step_start"; id: string; label: string; icon?: AgenticIcon; reasoning?: string }
   | { type: "tool_call"; stepId: string; tool: string; preview?: string; language?: string; codePreview?: string }
   | { type: "tool_output"; stepId: string; tool: string; ok: boolean; preview?: string; partial?: boolean }
   | { type: "step_done"; id: string; ok: boolean; summary?: string }
@@ -113,6 +115,21 @@ export interface AgentTaskRunArgs {
    * browser stream closes into an agentic reconnect instead of a failed chat.
    */
   closedStreamRecoveryMs?: number
+  /**
+   * Override the POST endpoint (relative to API_ROOT). Defaults to
+   * "/agent/task". The professional document cycle uses
+   * "/agent/document-cycle", which builds the staged contract server-side
+   * and then streams through the same SSE pipeline.
+   */
+  endpoint?: string
+  /** Approved topic — only consumed by the document-cycle endpoint. */
+  topic?: string
+  /** User-provided folder code — only consumed by the document-cycle endpoint. */
+  code?: string
+  /** Optional classification overrides for the document cycle. */
+  documentType?: string
+  field?: string
+  citationStyle?: string
 }
 
 const DEFAULT_IDLE_TIMEOUT_MS = 90_000
@@ -285,7 +302,8 @@ async function* recoverClosedStreamEvents(
 }
 
 export async function* runIterator(args: AgentTaskRunArgs): AsyncGenerator<AgentTaskEvent> {
-  const { signal, idleTimeoutMs, closedStreamRecoveryMs, ...body } = args
+  const { signal, idleTimeoutMs, closedStreamRecoveryMs, endpoint, ...body } = args
+  const postPath = endpoint && endpoint.trim() ? endpoint.trim() : "/agent/task"
   const idleMs = typeof idleTimeoutMs === "number" && idleTimeoutMs > 0
     ? idleTimeoutMs
     : DEFAULT_IDLE_TIMEOUT_MS
@@ -303,7 +321,7 @@ export async function* runIterator(args: AgentTaskRunArgs): AsyncGenerator<Agent
     else signal.addEventListener("abort", onUpstreamAbort, { once: true })
   }
 
-  const resp = await fetch(`${API_ROOT}/agent/task`, {
+  const resp = await fetch(`${API_ROOT}${postPath}`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json", ...authHeader() },
@@ -381,13 +399,22 @@ export interface AgentTaskState {
     id: string
     label: string
     icon?: AgenticIcon
+    // The model's natural-language reasoning for this step (1-2 sentences),
+    // surfaced in the timeline so the chat shows its thinking like Claude.
+    reasoning?: string
     status: "running" | "done" | "error"
     toolCalls: Array<{
       tool: string
       preview?: string
       language?: string
       codePreview?: string
-      output?: { ok: boolean; preview?: string }
+      output?: {
+        ok: boolean
+        preview?: string
+        /** Claude-style search trace payload (web_search & friends). */
+        resultCount?: number
+        sources?: Array<{ title?: string; url?: string }>
+      }
     }>
   }>
   artifacts: AgentArtifact[]
@@ -405,9 +432,19 @@ export interface AgentTaskState {
   done: boolean
   stoppedReason?: string
   error?: string
+  /** ISO timestamp of the last SSE event seen (heartbeats included). */
+  lastEventAt?: string
 }
 
-export function reduceEvent(state: AgentTaskState, evt: AgentTaskEvent): AgentTaskState {
+export function reduceEvent(prevState: AgentTaskState, evt: AgentTaskEvent): AgentTaskState {
+  // Liveness stamp — EVERY event (heartbeats included, which otherwise
+  // fall through to `default` untouched) refreshes lastEventAt so the
+  // UI's stale-stream guard can tell "model thinking quietly" apart
+  // from "stream actually dead".
+  const state: AgentTaskState = {
+    ...prevState,
+    lastEventAt: (evt as { ts?: string }).ts || new Date().toISOString(),
+  }
   switch (evt.type) {
     case "queue_status":
       return {
@@ -525,6 +562,7 @@ export function reduceEvent(state: AgentTaskState, evt: AgentTaskEvent): AgentTa
           id: evt.id,
           label: evt.label,
           icon: evt.icon,
+          ...(evt.reasoning ? { reasoning: evt.reasoning } : {}),
           status: "running",
           toolCalls: [],
         }],
@@ -544,7 +582,9 @@ export function reduceEvent(state: AgentTaskState, evt: AgentTaskEvent): AgentTa
         ...state,
         steps: callSteps.map(s =>
           s.id === callStepId
-            ? { ...s, toolCalls: [...s.toolCalls, { tool: evt.tool }] }
+            // Keep the preview (e.g. the search query) — the Claude-style
+            // trace renders it as the visible line for the tool call.
+            ? { ...s, toolCalls: [...s.toolCalls, { tool: evt.tool, preview: evt.preview }] }
             : s
         ),
       }
@@ -560,6 +600,15 @@ export function reduceEvent(state: AgentTaskState, evt: AgentTaskEvent): AgentTa
           status: "running" as const,
           toolCalls: [{ tool: evt.tool }],
         }]
+      // Partial provider progress events would overwrite the final
+      // output otherwise; only the non-partial event closes the call.
+      const isPartial = Boolean((evt as { partial?: boolean }).partial)
+      const output = {
+        ok: evt.ok,
+        preview: (evt as { preview?: string }).preview,
+        resultCount: (evt as { resultCount?: number }).resultCount,
+        sources: (evt as { sources?: Array<{ title?: string; url?: string }> }).sources,
+      }
       return {
         ...state,
         steps: outputSteps.map(s => {
@@ -568,13 +617,13 @@ export function reduceEvent(state: AgentTaskState, evt: AgentTaskEvent): AgentTa
           // Attach the output to the most recent unattached call for this tool.
           let attached = false
           for (let i = calls.length - 1; i >= 0; i--) {
-            if (calls[i].tool === evt.tool && !calls[i].output) {
-              calls[i] = { ...calls[i], output: { ok: evt.ok } }
+            if (calls[i].tool === evt.tool && (!calls[i].output || isPartial)) {
+              if (!isPartial) calls[i] = { ...calls[i], output }
               attached = true
               break
             }
           }
-          if (!attached) calls.push({ tool: evt.tool, output: { ok: evt.ok } })
+          if (!attached && !isPartial) calls.push({ tool: evt.tool, output })
           return { ...s, toolCalls: calls }
         }),
       }

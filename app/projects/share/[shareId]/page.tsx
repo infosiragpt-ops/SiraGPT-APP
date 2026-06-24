@@ -24,6 +24,7 @@ import { formatDistanceToNow } from "date-fns"
 import { es as dfEs, enUS as dfEn } from "date-fns/locale"
 
 import { projectsService, type SharedProjectSnapshot } from "@/lib/projects-service"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 
 export default function PublicProjectSharePage() {
   const { shareId } = useParams<{ shareId: string }>()
@@ -49,7 +50,7 @@ export default function PublicProjectSharePage() {
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="h-8 w-8 rounded-full border-2 border-muted-foreground/30 border-t-foreground animate-spin" />
+        <ThinkingIndicator size="xl" className="text-muted-foreground" />
       </div>
     )
   }

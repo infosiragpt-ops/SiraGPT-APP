@@ -23,9 +23,8 @@
  */
 
 import * as React from "react"
-import { Plus, SquareTerminal, Trash2, X } from "lucide-react"
+import { ChevronDown, Search, Trash2, X } from "lucide-react"
 
-import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { useCodeWorkspace } from "@/lib/code-workspace-context"
 
@@ -36,27 +35,27 @@ export type TerminalPanelProps = {
 
 type Line = { id: string; kind: "in" | "out" | "err" | "info"; text: string }
 
-const PROMPT = "siragpt $"
+const PROMPT = "~/workspace$"
+const TERMINAL_SURFACE = "#fbfbfa"
+const TERMINAL_HEADER = "#f6f5f2"
+const TERMINAL_TEXT = "#151515"
+const TERMINAL_MUTED = "#4f5661"
+const TERMINAL_BORDER = "#dddddd"
+const TERMINAL_PROMPT = "#005cc5"
 
 let lineCounter = 0
 const nextLineId = () => `line-${Date.now().toString(36)}-${++lineCounter}`
 
-function nowGreeting() {
-  return [
-    `Cursor Workspace Terminal · sesión efímera`,
-    `Sin acceso real al sistema. Escribe \`help\` para ver los comandos disponibles.`,
-  ]
-}
-
 export function TerminalPanel({ open, onClose }: TerminalPanelProps) {
-  const { files, activeFolder, workspaceSource } = useCodeWorkspace()
-  const [lines, setLines] = React.useState<Line[]>(() =>
-    nowGreeting().map((text) => ({ id: nextLineId(), kind: "info" as const, text })),
-  )
+  const { files, activeFolder } = useCodeWorkspace()
+  const [lines, setLines] = React.useState<Line[]>([])
   const [input, setInput] = React.useState("")
+  const [searchOpen, setSearchOpen] = React.useState(false)
+  const [searchTerm, setSearchTerm] = React.useState("")
   const [history, setHistory] = React.useState<string[]>([])
   const [historyIdx, setHistoryIdx] = React.useState<number | null>(null)
   const inputRef = React.useRef<HTMLInputElement>(null)
+  const searchRef = React.useRef<HTMLInputElement>(null)
   const scrollRef = React.useRef<HTMLDivElement>(null)
 
   // Always scroll to the bottom on new output.
@@ -72,12 +71,16 @@ export function TerminalPanel({ open, onClose }: TerminalPanelProps) {
     if (open) inputRef.current?.focus()
   }, [open])
 
+  React.useEffect(() => {
+    if (open && searchOpen) searchRef.current?.focus()
+  }, [open, searchOpen])
+
   const print = React.useCallback((text: string, kind: Line["kind"] = "out") => {
     setLines((prev) => [...prev, { id: nextLineId(), kind, text }])
   }, [])
 
   const clearLines = React.useCallback(() => {
-    setLines(nowGreeting().map((text) => ({ id: nextLineId(), kind: "info" as const, text })))
+    setLines([])
   }, [])
 
   const runCommand = React.useCallback(
@@ -95,7 +98,7 @@ export function TerminalPanel({ open, onClose }: TerminalPanelProps) {
         case "help":
           print(
             [
-              "Comandos sandbox disponibles:",
+              "Comandos disponibles:",
               "  help                  muestra esta ayuda",
               "  ls | dir              lista archivos del workspace",
               "  cat <ruta>            muestra el contenido de un archivo",
@@ -105,7 +108,7 @@ export function TerminalPanel({ open, onClose }: TerminalPanelProps) {
               "  node --version        imprime una versión simulada",
               "  js <expr>             evalúa una expresión JavaScript pura",
               "",
-              "Aviso: este terminal no tiene acceso al sistema operativo.",
+              "Aviso: esta vista ejecuta comandos simulados del workspace.",
             ].join("\n"),
             "info",
           )
@@ -121,7 +124,7 @@ export function TerminalPanel({ open, onClose }: TerminalPanelProps) {
           return
         }
         case "pwd":
-          print(activeFolder?.name || workspaceSource.name || "/workspace", "out")
+          print(activeFolder?.name ? `~/workspace/${activeFolder.name}` : "~/workspace", "out")
           return
         case "clear":
           clearLines()
@@ -131,10 +134,10 @@ export function TerminalPanel({ open, onClose }: TerminalPanelProps) {
           return
         case "node": {
           if (rest[0] === "--version" || rest[0] === "-v") {
-            print("v22.0.0 (sandbox emulation)", "out")
+            print("v22.0.0", "out")
             return
           }
-          print(`comando \`node ${rest.join(" ")}\` no soportado en sandbox`, "err")
+          print(`comando \`node ${rest.join(" ")}\` no soportado en esta terminal`, "err")
           return
         }
         case "cat": {
@@ -162,7 +165,7 @@ export function TerminalPanel({ open, onClose }: TerminalPanelProps) {
           print(`command not found: ${head}`, "err")
       }
     },
-    [activeFolder?.name, clearLines, files, print, workspaceSource.name],
+    [activeFolder?.name, clearLines, files, print],
   )
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -205,73 +208,147 @@ export function TerminalPanel({ open, onClose }: TerminalPanelProps) {
 
   if (!open) return null
 
+  const normalizedSearch = searchTerm.trim().toLowerCase()
+
   return (
     <section
-      aria-label="Terminal integrada"
-      className="flex h-full min-h-0 flex-col border-t border-border/60 bg-background"
+      aria-label="Shell - Terminal integrada"
+      className="flex h-full min-h-0 flex-col border-t border-[#d8d8d8] bg-[#fbfbfa]"
+      style={{
+        backgroundColor: TERMINAL_SURFACE,
+        borderTopColor: "#d8d8d8",
+        color: TERMINAL_TEXT,
+      }}
     >
-      <header className="flex h-8 shrink-0 items-center justify-between border-b border-border/60 bg-muted/40 px-2">
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <SquareTerminal className="h-3.5 w-3.5" />
-          <span className="font-medium text-foreground">Terminal</span>
-          <span className="rounded bg-muted px-1.5 py-px text-[10px] uppercase tracking-wide">
-            sandbox
+      <header
+        className="flex h-[30px] shrink-0 items-center justify-between border-b border-[#dddddd] bg-[#f6f5f2] px-2 text-[#4f5661]"
+        style={{
+          backgroundColor: TERMINAL_HEADER,
+          borderBottomColor: TERMINAL_BORDER,
+          color: TERMINAL_MUTED,
+          height: "30px",
+          minHeight: "30px",
+        }}
+      >
+        <div className="flex min-w-0 items-center gap-2">
+          <ChevronDown className="h-3.5 w-3.5 shrink-0" style={{ color: "#7a7f87" }} />
+          <span
+            className="truncate font-mono text-[13px] leading-none"
+            style={{ color: "#3f4650", fontSize: "13px" }}
+          >
+            ~/workspace: bash
           </span>
         </div>
-        <div className="flex items-center gap-1">
-          <Button
+        <div className="flex min-w-0 items-center gap-1">
+          {searchOpen ? (
+            <input
+              ref={searchRef}
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  setSearchOpen(false)
+                  setSearchTerm("")
+                  inputRef.current?.focus()
+                }
+              }}
+              className="h-6 w-36 rounded border border-[#d5d5d5] bg-white px-2 font-mono text-[12px] text-[#151515] outline-none focus:border-[#9aa8bd]"
+              style={{
+                backgroundColor: "#ffffff",
+                borderColor: "#d5d5d5",
+                color: TERMINAL_TEXT,
+                fontSize: "12px",
+                outline: "none",
+              }}
+              placeholder="Buscar"
+              aria-label="Buscar en terminal"
+            />
+          ) : null}
+          <button
             type="button"
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6"
-            title="Nueva sesión"
-            onClick={clearLines}
+            className="grid h-6 w-6 place-items-center rounded text-[#555b64] hover:bg-[#e9e9e7] hover:text-[#14171c]"
+            style={{ color: "#555b64" }}
+            title="Buscar"
+            aria-label="Buscar en terminal"
+            onClick={() => setSearchOpen((value) => !value)}
           >
-            <Plus className="h-3.5 w-3.5" />
-          </Button>
-          <Button
+            <Search className="h-3.5 w-3.5" />
+          </button>
+          <button
             type="button"
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6"
+            className="grid h-6 w-6 place-items-center rounded text-[#555b64] hover:bg-[#e9e9e7] hover:text-[#14171c]"
+            style={{ color: "#555b64" }}
             title="Limpiar"
+            aria-label="Limpiar terminal"
             onClick={clearLines}
           >
             <Trash2 className="h-3.5 w-3.5" />
-          </Button>
-          <Button
+          </button>
+          <button
             type="button"
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6"
-            title="Cerrar terminal"
+            className="grid h-6 w-6 place-items-center rounded text-[#555b64] hover:bg-[#e9e9e7] hover:text-[#14171c]"
+            style={{ color: "#555b64" }}
+            title="Cerrar"
+            aria-label="Cerrar terminal"
             onClick={onClose}
           >
             <X className="h-3.5 w-3.5" />
-          </Button>
+          </button>
         </div>
       </header>
 
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto px-3 py-2 font-mono text-[12.5px] leading-[1.55]"
+        className="flex-1 overflow-y-auto bg-[#fbfbfa] px-3 py-2 font-mono text-[13px] leading-[1.45] text-[#151515]"
+        style={{
+          backgroundColor: TERMINAL_SURFACE,
+          color: TERMINAL_TEXT,
+          fontSize: "13px",
+          lineHeight: 1.45,
+        }}
+        onClick={() => inputRef.current?.focus()}
       >
-        {lines.map((line) => (
-          <pre
-            key={line.id}
-            className={cn(
-              "whitespace-pre-wrap text-foreground/95",
-              line.kind === "in" && "text-primary",
-              line.kind === "err" && "text-rose-500",
-              line.kind === "info" && "text-muted-foreground",
-            )}
-          >
-            {line.text}
-          </pre>
-        ))}
+        {lines.map((line) => {
+          const matchesSearch =
+            normalizedSearch.length > 0 && line.text.toLowerCase().includes(normalizedSearch)
+          const inputLine = line.kind === "in" && line.text.startsWith(PROMPT)
+          return (
+            <pre
+              key={line.id}
+              className={cn(
+                "whitespace-pre-wrap rounded-sm text-[#151515]",
+                line.kind === "err" && "text-[#c92a2a]",
+                line.kind === "info" && "text-[#6b7280]",
+                matchesSearch && "bg-[#fff3b0]",
+              )}
+              style={{
+                backgroundColor: matchesSearch ? "#fff3b0" : "transparent",
+                color:
+                  line.kind === "err"
+                    ? "#c92a2a"
+                    : line.kind === "info"
+                      ? "#6b7280"
+                      : TERMINAL_TEXT,
+              }}
+            >
+              {inputLine ? (
+                <>
+                  <span className="font-semibold" style={{ color: TERMINAL_PROMPT }}>
+                    {PROMPT}
+                  </span>
+                  <span>{line.text.slice(PROMPT.length)}</span>
+                </>
+              ) : (
+                line.text
+              )}
+            </pre>
+          )
+        })}
 
-        <form onSubmit={handleSubmit} className="mt-1 flex items-center gap-2">
-          <span className="select-none text-emerald-500">{PROMPT}</span>
+        <form onSubmit={handleSubmit} className="mt-0.5 flex items-center gap-1.5">
+          <span className="select-none font-semibold" style={{ color: TERMINAL_PROMPT }}>
+            {PROMPT}
+          </span>
           <input
             ref={inputRef}
             value={input}
@@ -280,8 +357,13 @@ export function TerminalPanel({ open, onClose }: TerminalPanelProps) {
             spellCheck={false}
             autoCapitalize="off"
             autoCorrect="off"
-            className="flex-1 bg-transparent font-mono text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground"
-            placeholder="escribe un comando…"
+            className="flex-1 bg-transparent font-mono text-[13px] text-[#151515] caret-black outline-none"
+            style={{
+              color: TERMINAL_TEXT,
+              caretColor: "#000000",
+              fontSize: "13px",
+              outline: "none",
+            }}
             aria-label="Entrada de terminal"
           />
         </form>

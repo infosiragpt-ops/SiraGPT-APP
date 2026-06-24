@@ -1,7 +1,8 @@
 "use client"
 
-import { useCallback, useRef, type MouseEvent, type PointerEvent, type TouchEvent } from "react"
+import { useCallback, useRef, type MouseEvent } from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 
 const GoogleIcon = ({ size = 15 }: { size?: number }) => (
   <svg
@@ -31,16 +32,11 @@ const GoogleIcon = ({ size = 15 }: { size?: number }) => (
   </svg>
 )
 
-type InstantNavigationEvent =
-  | MouseEvent<HTMLAnchorElement>
-  | PointerEvent<HTMLAnchorElement>
-  | TouchEvent<HTMLAnchorElement>
-
 type InstantNavigationHandler = (href: string) => void
 
 type LoginButtonProps = {
   href?: string
-  /** @internal Test hook; production uses native browser navigation. */
+  /** @internal Test hook; production uses the App Router (client-side). */
   navigate?: InstantNavigationHandler
 }
 
@@ -49,14 +45,8 @@ function navigateWithBrowser(href: string) {
   window.location.assign(href)
 }
 
-function hasModifiedActivation(event: InstantNavigationEvent) {
+function hasModifiedActivation(event: MouseEvent<HTMLAnchorElement>) {
   return Boolean(event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
-}
-
-function isNonPrimaryPointer(event: PointerEvent<HTMLAnchorElement>) {
-  if (typeof event.isPrimary === "boolean" && !event.isPrimary) return true
-  if (typeof event.button === "number" && event.button !== 0) return true
-  return false
 }
 
 function isNonPrimaryClick(event: MouseEvent<HTMLAnchorElement>) {
@@ -64,38 +54,55 @@ function isNonPrimaryClick(event: MouseEvent<HTMLAnchorElement>) {
   return false
 }
 
-export function LoginButton({ href = "/auth/login", navigate = navigateWithBrowser }: LoginButtonProps) {
+function useOptionalRouter() {
+  // useRouter throws an invariant when no App Router is mounted (jsdom
+  // unit tests, isolated storybook-style mounts). The hook call itself is
+  // unconditional — only the missing-context failure is absorbed — so the
+  // Rules of Hooks ordering stays stable.
+  try {
+    return useRouter()
+  } catch {
+    return null
+  }
+}
+
+export function LoginButton({ href = "/auth/login", navigate }: LoginButtonProps) {
+  const router = useOptionalRouter()
   const navigationStartedRef = useRef(false)
 
   const startNavigation = useCallback(
-    (event: InstantNavigationEvent) => {
+    (event: MouseEvent<HTMLAnchorElement>) => {
       if (hasModifiedActivation(event)) return
 
       event.preventDefault()
 
       if (navigationStartedRef.current) return
       navigationStartedRef.current = true
-      navigate(href)
-    },
-    [href, navigate],
-  )
+      // Self-heal: if the route change never lands (rare router stall),
+      // re-arm so a second tap still works instead of being swallowed.
+      window.setTimeout(() => { navigationStartedRef.current = false }, 3000)
 
-  const handlePointerDownCapture = useCallback(
-    (event: PointerEvent<HTMLAnchorElement>) => {
-      // Mobile Safari/Chrome can feel unresponsive when route loading waits
-      // for the later synthetic click. Start on the first touch/pen signal.
-      if (event.pointerType === "mouse" || isNonPrimaryPointer(event)) return
-      startNavigation(event)
+      if (navigate) {
+        navigate(href)
+        return
+      }
+      // Client-side navigation reuses the <Link prefetch> payload. The short
+      // browser fallback covers rare mobile router stalls without swallowing
+      // the user's first tap.
+      if (router) {
+        try {
+          router.push(href)
+          window.setTimeout(() => {
+            if (window.location.pathname !== href) navigateWithBrowser(href)
+          }, 700)
+          return
+        } catch {
+          /* fall through to the browser fallback */
+        }
+      }
+      navigateWithBrowser(href)
     },
-    [startNavigation],
-  )
-
-  const handleTouchStartCapture = useCallback(
-    (event: TouchEvent<HTMLAnchorElement>) => {
-      // Fallback for older iOS WebViews that do not emit PointerEvent.
-      startNavigation(event)
-    },
-    [startNavigation],
+    [href, navigate, router],
   )
 
   const handleClick = useCallback(
@@ -111,16 +118,15 @@ export function LoginButton({ href = "/auth/login", navigate = navigateWithBrows
       <Link
         href={href}
         prefetch={true}
-        onPointerDownCapture={handlePointerDownCapture}
-        onTouchStartCapture={handleTouchStartCapture}
         onClick={handleClick}
         data-instant-nav="login"
-        className="group relative inline-flex touch-manipulation select-none items-center justify-center rounded-full p-[1px] overflow-hidden transition-all duration-300 hover:scale-[1.02] active:scale-[0.98]"
+        className="group relative z-30 inline-flex touch-manipulation select-none items-center justify-center overflow-hidden rounded-full p-[1px] transition-all duration-200 hover:scale-[1.01] active:scale-[0.99]"
+        style={{ height: 48, minWidth: 120 }}
       >
         {/* Refined rotating border beam — tri-tone indigo → violet → rose, slow */}
         <span
           aria-hidden
-          className="absolute inset-[-120%] z-0"
+          className="pointer-events-none absolute inset-[-120%] z-0"
           style={{
             background:
               "conic-gradient(from 0deg, transparent 0deg 285deg, rgba(79,70,229,0.85) 315deg, rgba(139,92,246,0.9) 335deg, rgba(236,72,153,0.7) 350deg, rgba(236,72,153,0) 360deg)",
@@ -131,14 +137,14 @@ export function LoginButton({ href = "/auth/login", navigate = navigateWithBrows
         {/* Base ring — refined, always present */}
         <span
           aria-hidden
-          className="absolute inset-0 rounded-full"
+          className="pointer-events-none absolute inset-0 rounded-full"
           style={{
             background:
               "linear-gradient(135deg, rgba(15,23,42,0.08), rgba(99,102,241,0.10), rgba(15,23,42,0.08))",
           }}
         />
         {/* Inner surface */}
-        <span className="relative z-10 inline-flex items-center gap-2 rounded-full bg-white dark:bg-zinc-950 px-6 py-[9px] text-[13.5px] font-medium tracking-tight text-slate-900 dark:text-zinc-100">
+        <span className="relative z-10 inline-flex h-full w-full items-center justify-center gap-2 rounded-full bg-white px-5 text-[13.5px] font-medium tracking-tight text-slate-900 dark:bg-zinc-950 dark:text-zinc-100">
           {/* Subtle top sheen */}
           <span
             aria-hidden

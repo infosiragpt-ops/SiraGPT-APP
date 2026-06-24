@@ -38,7 +38,9 @@ validateConfigOrExit(process.env);
 // dangerous configurations before the server accepts traffic.
 // Blocking issues call process.exit(1); warnings are logged.
 const { validateStartupEnvironment } = require('./src/utils/startup-validator');
-validateStartupEnvironment(process.env, { failOnBlocking: true });
+// Capture the issue list so /health can re-surface lingering config problems
+// at runtime (see startupEnvResult snapshot near the health route below).
+const startupEnvIssues = validateStartupEnvironment(process.env, { failOnBlocking: true });
 
 // ── Process-level error handlers ───────────────────────────
 // Prevent the process from silently crashing on unhandled
@@ -206,8 +208,8 @@ startLangfuse();
 // manual_edit) appears as a "score" on its associated trace. Best-effort:
 // the sink swallows all errors and noops when Langfuse is disabled.
 try {
-  const __misSignals = require('./src/services/agents/misunderstanding-signals');
-  __misSignals.setLangfuseSink({ scoreTrace: langfuseScoreTrace });
+    const __misSignals = require('./src/services/agents/misunderstanding-signals');
+    __misSignals.setLangfuseSink({ scoreTrace: langfuseScoreTrace });
 } catch (_misWireErr) { /* noop — telemetry must never block boot */ }
 const {
     getPostHogStatus,
@@ -316,6 +318,7 @@ const adminUserContextRoutes = require('./src/routes/admin-user-context');
 const plansRoutes = require('./src/routes/plans');
 const creditsRoutes = require('./src/routes/credits');
 const paraphraseRoutes = require('./src/routes/paraphrase');
+const freeIaRoutes = require('./src/routes/free-ia');
 const rbacRoutes = require('./src/routes/rbac');
 const imagesRoutes = require('./src/routes/images');
 const videoProviderStatusRoutes = require('./src/routes/video-provider-status');
@@ -343,8 +346,22 @@ const thesisEngineRoutes = require('./src/routes/thesis-engine');
 const voiceGrokRoutes = require('./src/routes/voice-grok');
 const researchRoutes = require('./src/routes/research');
 const scientificSearchRoutes = require('./src/routes/scientific-search');
+const answerRoutes = require('./src/routes/answer');
+const builderRoutes = require('./src/routes/builder');
+const githubSearchRoutes = require('./src/routes/github-search');
+const githubRoutes = require('./src/routes/github');
+const xSearchRoutes = require('./src/routes/x-search');
+const accountingRoutes = require('./src/routes/accounting');
+const linkPreviewRoutes = require('./src/routes/link-preview');
+const adminSecurityRoutes = require('./src/routes/admin/security');
+const adminSettingsRoutes = require('./src/routes/admin/settings');
+const adminReportsRoutes = require('./src/routes/admin/reports');
+const docAgentRoutes = require('./src/routes/doc-agent');
+const opencodeRoutes = require('./src/routes/opencode');
+const codeRunnerRoutes = require('./src/routes/code-runner');
 const researchAgentRoutes = require('./src/routes/research-agent');
 const goalsRoutes = require('./src/routes/goals');
+const sandboxRoutes = require('./src/routes/sandbox');
 const intentRoutes = require('./src/routes/intent');
 const circuitAttributionRoutes = require('./src/routes/circuit-attribution');
 const attributionExplainerRoutes = require('./src/routes/attribution-explainer');
@@ -354,10 +371,11 @@ const ragRoutes = require('./src/routes/rag');
 const agentRoutes = require('./src/routes/agent');
 const agentTaskRoutes = require('./src/routes/agent-task');
 const agentBatchRoutes = require('./src/routes/agent-batch');
+const agentHarnessRoutes = require('./src/routes/agent-harness');
 const seAgentsRoutes = require('./src/routes/se-agents');
 const searchBrainRoutes = require('./src/routes/search-brain');
 const searchBrainUniversalRoutes = require('./src/routes/search-brain-universal');
-const { createUploadStaticAccessGuard } = require('./src/middleware/upload-static-access');
+const { createUploadStaticAccessGuard, createUploadR2Fallback } = require('./src/middleware/upload-static-access');
 const searchAgenticRoutes = require('./src/routes/search-agentic');
 const artifactsRoutes = require('./src/routes/artifacts');
 const hooksRoutes = require('./src/routes/hooks');
@@ -376,9 +394,12 @@ const enterpriseRoutes = require('./src/routes/enterprise');
 const socialPostsRoutes = require('./src/routes/social-posts');
 const githubCodexRoutes = require('./src/routes/github-codex');
 const codexRunsRoutes = require('./src/routes/codex-runs');
+const codexV2Routes = require('./src/routes/codex');
+const deploymentsRoutes = require('./src/routes/deployments');
 const telegramRoutes = require('./src/routes/telegram');
 const pushRoutes = require('./src/routes/push');
 const coworkRoutes = require('./src/routes/cowork');
+const memoryRoutes = require('./src/routes/memory');
 const contextIntelligenceRoutes = require('./src/routes/context-intelligence');
 const orchestrationRoutes = require('./src/routes/orchestration');
 const hermesRoutes = require('./src/routes/hermes');
@@ -394,6 +415,12 @@ const { startGoalWorker, closeGoalWorker } = require('./src/services/goal-worker
 const { closeGoalQueue } = require('./src/services/goal-queue');
 const { recoverGoalRunsAfterBoot, stopGoalRecovery } = require('./src/services/goal-boot-recovery');
 const { startGoalCleanup, stopGoalCleanup } = require('./src/services/goal-cleanup');
+// Codex Agent V2 run engine (feature 05). startCodexWorker self-gates on the
+// CODEX_AGENT_V2 flag (no-op when off), so it's always safe to call.
+const { startCodexWorker, closeCodexWorker, closeCodexQueue } = require('./src/services/codex/run-queue');
+const { recoverCodexRunsAfterBoot } = require('./src/services/codex/boot-recovery');
+const { logCodexConfig } = require('./src/services/codex/config-validator');
+const { validate: validateAttributionConfig } = require('./src/services/attribution-config-validator');
 const alerting = require('./src/services/alerting');
 const sloTracker = require('./src/services/slo-tracker');
 const shutdownRegistry = require('./src/utils/shutdown');
@@ -401,6 +428,13 @@ const telemetryRoutes = require('./src/routes/telemetry');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+// Bind host. In development the workflow passes HOST=127.0.0.1 so the backend
+// listens on loopback only — it is reached exclusively via the Next.js /api
+// proxy (BACKEND_INTERNAL_URL=http://localhost:5050). Loopback binding keeps
+// Replit's automatic port detection from exposing 5050 as a second external
+// port, which would break the single-external-port Reserved VM deploy. When
+// HOST is unset (production `npm start`) it falls back to 0.0.0.0 as before.
+const HOST = process.env.HOST || '0.0.0.0';
 app.set('trust proxy', 1)
 
 // Security middleware. CSP defaults to report-only mode so a fresh
@@ -573,6 +607,13 @@ app.use('/api/agent', expensiveLimiter);
 app.use('/api/rag', expensiveLimiter);
 app.use('/api/document-ai', expensiveLimiter);
 app.use('/api/ai/generate', expensiveLimiter);
+// Autonomous research loop (planner→search→browser→vision LLM) and the
+// scientific-search fan-out (10-16 external APIs in parallel per call) are
+// per-request amplifiers — gate them at the stricter expensive tier so one
+// authed user can't run up LLM cost or get the platform IP banned by upstream
+// indices (Crossref/OpenAlex/…).
+app.use('/api/research-agent', expensiveLimiter);
+app.use('/api/scientific-search', expensiveLimiter);
 app.use('/api/', apiLimiter);
 
 // Idempotency runs AFTER rate-limit (so a flood of replays still
@@ -715,6 +756,7 @@ app.use('/api/bookmarks', requireCsrf);
 app.use('/api/orgs', requireCsrf);
 app.use('/api/library', requireCsrf);
 app.use('/api/cowork', requireCsrf);
+app.use('/api/memory', requireCsrf);
 app.use('/api/context-intelligence', requireCsrf);
 app.use('/api/thesis', requireCsrf);
 
@@ -798,6 +840,10 @@ app.use('/uploads', express.static(uploadsDir, {
         }
     }
 }));
+// When the binary is not on local disk (R2-backed / scaled deploys), redirect
+// to a short-lived signed R2 URL. Runs only for authorized requests (the
+// access guard above already enforced ownership).
+app.use('/uploads', createUploadR2Fallback());
 
 
 // ── Health probes ───────────────────────────────────────────────
@@ -811,98 +857,34 @@ app.use('/uploads', express.static(uploadsDir, {
 //
 // A dedicated, lazy IORedis client is used only for the health probe
 // so a flaky Redis can't poison the live BullMQ queue connection.
-const {
-    runLivenessCheck,
-    runReadinessCheck,
-    runFullHealthCheck,
-    reportToHttpStatus,
-} = require('./src/services/observability/health-check');
-
 const coworkHealth = require('./src/services/cowork-health');
 
-// ── Health-check result cache ──────────────────────────────
-// Prevents /health and /health/ready from hammering the DB on
-// every request when monitoring systems poll aggressively.
-// Cache is TTL-based: stale entries trigger a fresh probe.
-// Liveness (/health/live) is NEVER cached — it must always
-// reflect the current process state.
-const healthCache = new Map();
-const HEALTH_CACHE_TTL_MS = parseInt(process.env.HEALTH_CACHE_TTL_MS || '5000', 10); // 5s default
+// ── Startup-environment snapshot ───────────────────────────
+// Captured once at module load by validateStartupEnvironment (see top of
+// file). Surfaced in the full /health report so the broader config validator
+// findings (missing/placeholder secrets, malformed URLs, out-of-range numeric
+// settings) stay visible at runtime instead of vanishing into boot logs.
+const startupEnvResult = {
+    checked: true,
+    issues: Array.isArray(startupEnvIssues) ? startupEnvIssues : [],
+};
 
-async function getCachedOrFresh(cacheKey, fetcher) {
-    const cached = healthCache.get(cacheKey);
-    if (cached && (Date.now() - cached.at) < HEALTH_CACHE_TTL_MS) {
-        return cached.report;
-    }
-    const report = await fetcher();
-    healthCache.set(cacheKey, { at: Date.now(), report });
-    // Prevent unbounded growth (should never exceed 2-3 entries in practice)
-    if (healthCache.size > 10) {
-        const now = Date.now();
-        for (const [key, entry] of healthCache) {
-            if ((now - entry.at) > HEALTH_CACHE_TTL_MS * 2) healthCache.delete(key);
-        }
-    }
-    return report;
-}
-
-// Health cache is only used for probes that touch I/O (readiness,
-// full health). Liveness is always fresh.
-
-let _healthRedisClient = null;
-function getHealthRedisClient() {
-    if (!process.env.REDIS_URL) return null;
-    if (_healthRedisClient) return _healthRedisClient;
-    try {
-        const IORedis = require('ioredis');
-        _healthRedisClient = new IORedis(process.env.REDIS_URL, {
-            lazyConnect: true,
-            // Health check ping should not retry — a stuck Redis IS the
-            // signal we want to surface. One attempt, fail fast.
-            maxRetriesPerRequest: 1,
-            enableReadyCheck: false,
-            connectTimeout: 2000,
-        });
-        // Swallow background errors. The health probe will still observe
-        // the connection state on the next ping().
-        _healthRedisClient.on('error', () => {});
-        return _healthRedisClient;
-    } catch (_e) {
-        return null;
-    }
-}
-
-function sendHealthReport(res, report) {
-    res.status(reportToHttpStatus(report)).json(report);
-}
-
-app.get(['/health/live', '/api/health/live'], (_req, res) => {
-    const report = runLivenessCheck();
-    sendHealthReport(res, report);
+// Build and mount the health endpoints. The route handlers (and the boot-time
+// OAuth/startup-env snapshot threading they perform) live in a dedicated,
+// dependency-injected module so they can be exercised end-to-end by a test
+// without booting the whole server. `startServer` later calls
+// `healthRoutes.setOAuthBootResult(...)` to feed in the boot-time OAuth result.
+const { createHealthRoutes } = require('./src/routes/health-routes');
+const healthRoutes = createHealthRoutes({
+    prisma,
+    coworkHealth,
+    getOpenTelemetryStatus,
+    getSentryStatus,
+    getLangfuseStatus,
+    getPostHogStatus,
+    startupEnv: startupEnvResult,
 });
-
-app.get(['/health/ready', '/api/health/ready'], async (_req, res) => {
-    const report = await getCachedOrFresh('ready', () => runReadinessCheck({
-        prisma,
-        redis: getHealthRedisClient(),
-        queue: null,
-    }));
-    sendHealthReport(res, report);
-});
-
-app.get(['/health', '/api/health'], async (_req, res) => {
-    const report = await getCachedOrFresh('full', () => runFullHealthCheck({
-        prisma,
-        redis: getHealthRedisClient(),
-        queue: null,
-        telemetry: getOpenTelemetryStatus(),
-        sentry: getSentryStatus(),
-        langfuse: getLangfuseStatus(),
-        posthog: getPostHogStatus(),
-        coworkHealth,
-    }));
-    sendHealthReport(res, report);
-});
+healthRoutes.register(app);
 
 // ── Prometheus metrics ──────────────────────────────────────────
 // Single scrape endpoint for the entire process. Both SE-agent
@@ -1005,11 +987,15 @@ app.use('/api/admin/credits', creditsRoutes.adminRouter);
 app.use('/api/credits', creditsRoutes);
 app.use('/api/admin/goals', goalsRoutes.adminRouter);
 app.use('/api/paraphrase', paraphraseRoutes);
+app.use('/api/free-ia', freeIaRoutes);
 app.use('/api/admin/rbac', rbacRoutes.adminRouter);
 app.use('/api/rbac', rbacRoutes);
 app.use('/api/images', imagesRoutes);
 app.use('/api/video/provider', videoProviderStatusRoutes);
 app.use('/metrics', metricsRoutes);
+app.use('/api/admin/security', adminSecurityRoutes);
+app.use('/api/admin/settings', adminSettingsRoutes);
+app.use('/api/admin/reports', adminReportsRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/legal', legalRoutes);
@@ -1036,8 +1022,19 @@ app.use('/api/thesis', thesisEngineRoutes);
 app.use('/api/voice/grok', voiceGrokRoutes);
 app.use('/api/research', researchRoutes);
 app.use('/api/scientific-search', scientificSearchRoutes);
+app.use('/api/answer', answerRoutes);
+app.use('/api/builder', builderRoutes);
+app.use('/api/github-search', githubSearchRoutes);
+app.use('/api/github', githubRoutes);
+app.use('/api/x-search', xSearchRoutes);
+app.use('/api/accounting', accountingRoutes);
+app.use('/api/link-preview', linkPreviewRoutes);
+app.use('/api/doc-agent', docAgentRoutes);
+app.use('/api/opencode', opencodeRoutes);
+app.use('/api/code-runner', codeRunnerRoutes);
 app.use('/api/research-agent', researchAgentRoutes);
 app.use('/api/goals', goalsRoutes);
+app.use('/api/sandbox', sandboxRoutes);
 app.use('/api/intent', intentRoutes);
 app.use('/api/circuit-attribution', circuitAttributionRoutes);
 app.use('/api/attribution-explainer', attributionExplainerRoutes);
@@ -1053,6 +1050,9 @@ app.use('/api/agent', idempotency);
 app.use('/api/agent', agentTaskRoutes);
 app.use('/api/agent', agentBatchRoutes);
 app.use('/api/agent', agentRoutes);
+// Agent harness (Phase 1): interactive tool-permission decisions + external
+// MCP server registration for the chat agent.
+app.use('/api/agent', agentHarnessRoutes);
 app.use('/api/se-agents', seAgentsRoutes);
 app.use('/api/artifacts', artifactsRoutes);
 app.use('/api/document-ai', documentGenerateAiRoutes);
@@ -1074,23 +1074,31 @@ app.use('/api/enterprise', enterpriseRoutes);
 app.use('/api/social-posts', socialPostsRoutes);
 app.use('/api/codex/github', githubCodexRoutes);
 app.use('/api/codex', codexRunsRoutes);
+// Codex Agent V2 (flag CODEX_AGENT_V2). Mounted AFTER codex-runs so the legacy
+// /runs flow keeps priority; V2 lives under /health + /projects/* (and F2 run
+// routes scoped per project). Flag off ⇒ every V2 route except /health is 404.
+app.use('/api/codex', codexV2Routes);
+// Deployments / Publishing (flag DEPLOYMENTS_V2). Bearer-auth, CSRF-exempt like
+// codex; flag off ⇒ every route except /health is 404.
+app.use('/api/deployments', deploymentsRoutes);
 // Telegram remote control for dev agents. CSRF-exempt (external POST gated by a
 // secret-token header) and fully inert unless TELEGRAM_BOT_TOKEN is set.
 app.use('/api/telegram', telegramRoutes);
 try {
-  const tgControl = require('./src/services/telegram/telegram-control');
-  const tgCfg = tgControl.getTelegramConfig();
-  if (tgCfg.enabled && tgCfg.webhookUrl) {
-    tgControl
-      .setTelegramWebhook(tgCfg)
-      .then((r) => console.log(r.ok ? '[telegram] webhook registered' : '[telegram] setWebhook failed'))
-      .catch(() => {});
-  }
+    const tgControl = require('./src/services/telegram/telegram-control');
+    const tgCfg = tgControl.getTelegramConfig();
+    if (tgCfg.enabled && tgCfg.webhookUrl) {
+        tgControl
+            .setTelegramWebhook(tgCfg)
+            .then((r) => console.log(r.ok ? '[telegram] webhook registered' : '[telegram] setWebhook failed'))
+            .catch(() => { });
+    }
 } catch {
-  /* telegram is optional */
+    /* telegram is optional */
 }
 app.use('/api/push', pushRoutes);
 app.use('/api/cowork', coworkRoutes);
+app.use('/api/memory', memoryRoutes);
 app.use('/api/context-intelligence', contextIntelligenceRoutes);
 app.use('/api/orchestration', orchestrationRoutes);
 app.use('/api/hermes', hermesRoutes);
@@ -1130,6 +1138,46 @@ const { globalErrorHandler: buildGlobalErrorHandler } = require('./src/middlewar
 app.use(buildGlobalErrorHandler({ logger, captureException: captureSentryException }));
 
 async function startServer() {
+    // ── Google OAuth configuration check ───────────────────────
+    // Run before app.listen so a broken OAuth config is caught
+    // before the server accepts any traffic. In production, critical
+    // issues (localhost callback, malformed base URL, host mismatch)
+    // are treated as blocking failures and halt startup with a clear
+    // error message. In non-production environments, the same checks
+    // run but only emit warnings — the server still starts.
+    try {
+        const { validateOAuthCallbackUrl } = require('./src/utils/oauth-callback-boot-validator');
+        const oauthResult = validateOAuthCallbackUrl({ logger });
+        // Snapshot the result so /health can re-surface it at runtime.
+        // setOAuthBootResult stores only the monitoring-relevant fields
+        // (shouldBlock is a boot-time-only directive and never reaches a
+        // running server) and the live /health route reads this snapshot.
+        healthRoutes.setOAuthBootResult(oauthResult);
+        if (oauthResult.shouldBlock) {
+            logger.error(
+                {
+                    issues: oauthResult.issues,
+                    hint:
+                        'Google OAuth is misconfigured. The server will not start in production ' +
+                        'with a broken OAuth configuration. Fix the issues listed above and restart.',
+                },
+                'oauth_config_boot_check_failed',
+            );
+            console.error('[FATAL] Google OAuth configuration is invalid — aborting startup.');
+            console.error(`[FATAL] Issues: ${oauthResult.issues.join(', ')}`);
+            console.error('[FATAL] Check GOOGLE_AUTH_BASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and related redirect URI secrets.');
+            // Exit synchronously so app.listen is never reached.
+            // process.exit flushes stdio in Node ≥ 18; the exitCode is set
+            // first as a belt-and-braces fallback in case exit is deferred
+            // by a signal trap elsewhere in the process.
+            process.exitCode = 1;
+            process.exit(1);
+            return; // unreachable — guards static analysis / linters
+        }
+    } catch (err) {
+        logger.warn({ err: err && err.message }, 'oauth_callback_boot_validator_failed');
+    }
+
     // Await the database connection (with its built-in retry/backoff) BEFORE
     // binding the port. Previously connectDatabase() was fire-and-forget, so
     // app.listen() accepted traffic while Prisma was still mid-handshake — the
@@ -1138,7 +1186,7 @@ async function startServer() {
     // that window; healthy boots are unaffected (connect resolves on attempt 1,
     // and connectDatabase still process.exit(1)s if all retries are exhausted).
     await prisma.connectDatabase();
-    const server = app.listen(PORT, () => {
+    const server = app.listen(PORT, HOST, () => {
         // --- HTTP timeouts ---------------------------------------------------
         // The Next.js front-end proxies every /api/* call to this Express
         // process over a keep-alive HTTP connection. Node's default
@@ -1159,8 +1207,8 @@ async function startServer() {
         //     (image generation has its own 200 s ceiling, file uploads,
         //     model warm-ups) don't get cut off mid-flight.
         server.keepAliveTimeout = 120_000;
-        server.headersTimeout   = 125_000;
-        server.requestTimeout   = 300_000;
+        server.headersTimeout = 125_000;
+        server.requestTimeout = 300_000;
         const startInfo = {
             port: PORT,
             env: process.env.NODE_ENV || 'development',
@@ -1201,6 +1249,16 @@ async function startServer() {
                 'cors_allowlist_empty_in_production',
             );
         }
+        // SECURITY: the CSRF stateless-header fallback (csrf.js) is only safe
+        // while CORS rejects unknown origins — a wildcard origin with
+        // credentials would let any site send X-CSRF-Token cross-site and
+        // bypass CSRF. Loudly flag this dangerous combo in production.
+        if (process.env.NODE_ENV === 'production' && ALLOWED_ORIGINS.includes('*')) {
+            logger.warn(
+                { hint: 'replace CORS_ORIGINS=* with an explicit allowlist; wildcard + credentials defeats CSRF protection' },
+                'cors_wildcard_origin_in_production_csrf_risk',
+            );
+        }
     });
 
     recoverAgentTasksAfterBoot({ logger });
@@ -1208,6 +1266,19 @@ async function startServer() {
     startGoalCleanup({ logger });
     startAgentTaskWorker();
     startGoalWorker();
+    // Codex V2: validate config, recover interrupted runs, then start the worker
+    // (all no-op when the flag is off). Fire-and-forget recovery never throws.
+    try { logCodexConfig(process.env, logger); } catch { /* never blocks boot */ }
+    // Attribution stack config coherence check (CLAUDE.md mandates running it on
+    // boot). Warnings only — never blocks boot.
+    try {
+      const attrReport = validateAttributionConfig(process.env);
+      if (!attrReport.ok || attrReport.warnings.length) {
+        logger.warn({ failures: attrReport.failures, warnings: attrReport.warnings, checked: attrReport.checked }, 'attribution_config_validation');
+      }
+    } catch { /* never blocks boot */ }
+    recoverCodexRunsAfterBoot().catch((err) => logger.warn({ err: err.message }, 'codex_boot_recovery_failed'));
+    startCodexWorker();
 
     // Apply any admin-curated provider keys (panel /admin/connections)
     // by overriding the corresponding process.env vars in this worker.
@@ -1234,18 +1305,6 @@ async function startServer() {
         }
     })();
 
-    // OAuth callback URL sanity check — when GOOGLE_AUTH_BASE_URL is
-    // set, assert the resolved callback host matches. A mismatch means
-    // a secret was changed mid-deploy or env vars loaded out of order;
-    // the warning surfaces immediately in logs and existing monitoring
-    // (Sentry / PostHog) picks it up automatically. Fire-and-forget.
-    try {
-        const { validateOAuthCallbackUrl } = require('./src/utils/oauth-callback-boot-validator');
-        validateOAuthCallbackUrl({ logger });
-    } catch (err) {
-        logger.warn({ err: err && err.message }, 'oauth_callback_boot_validator_failed');
-    }
-
     // Initialize WebSocket server for Computer Use
     initializeWebSocketServer(server);
 
@@ -1253,9 +1312,9 @@ async function startServer() {
     // Lives on a separate path (`/ws/realtime`) so it can't collide with
     // the computer-use socket above.
     try {
-      initRealtimeServer(server, { logger });
+        initRealtimeServer(server, { logger });
     } catch (err) {
-      logger.warn({ err: err.message }, 'realtime_socket_init_failed');
+        logger.warn({ err: err.message }, 'realtime_socket_init_failed');
     }
 
     // Wire scheduler → agent: register the invoker so cron/webhook jobs
@@ -1270,11 +1329,11 @@ async function startServer() {
     scheduler.start();
 
     try {
-      const { bootHermesRuntime } = require('./src/services/agents/hermes-runtime');
-      bootHermesRuntime();
-      logger.info('hermes_runtime_booted');
+        const { bootHermesRuntime } = require('./src/services/agents/hermes-runtime');
+        bootHermesRuntime();
+        logger.info('hermes_runtime_booted');
     } catch (err) {
-      logger.warn({ err: err && err.message }, 'hermes_runtime_boot_failed');
+        logger.warn({ err: err && err.message }, 'hermes_runtime_boot_failed');
     }
 
     // System cron — daily GDPR housekeeping (scrub @ 02:30 UTC,
@@ -1284,7 +1343,7 @@ async function startServer() {
         const systemCron = require('./src/jobs/system-cron');
         systemCron.start({ logger });
         shutdownRegistry.register('system_cron_stop', () => {
-            try { systemCron.stop(); } catch {}
+            try { systemCron.stop(); } catch { }
         }, 5000);
     } catch (err) {
         logger.warn({ err: err && err.message }, 'system_cron_init_failed');
@@ -1323,31 +1382,33 @@ async function startServer() {
 
     // 4. Close realtime WS server (cycle 24).
     shutdownRegistry.register('realtime_ws_close', () => {
-        try { closeRealtimeServer(); } catch {}
+        try { closeRealtimeServer(); } catch { }
     }, 5000);
 
     // 3. Close BullMQ workers + queue.
     shutdownRegistry.register('bullmq_workers_close', async () => {
-        try { stopGoalRecovery(); } catch {}
-        try { stopGoalCleanup(); } catch {}
+        try { stopGoalRecovery(); } catch { }
+        try { stopGoalCleanup(); } catch { }
         await Promise.allSettled([
             closeAgentTaskWorker(),
             closeAgentTaskQueue(),
             closeGoalWorker(),
             closeGoalQueue(),
+            closeCodexWorker(),
+            closeCodexQueue(),
         ]);
     }, 5000);
 
     // 2. Disconnect Prisma.
     shutdownRegistry.register('prisma_disconnect', async () => {
-        try { if (typeof prisma.$disconnect === 'function') await prisma.$disconnect(); } catch {}
+        try { if (typeof prisma.$disconnect === 'function') await prisma.$disconnect(); } catch { }
     }, 5000);
 
     // 1. Disconnect Redis (lazy health client + any others we own).
     shutdownRegistry.register('redis_disconnect', async () => {
-        const c = (typeof getHealthRedisClient === 'function') ? getHealthRedisClient() : null;
+        const c = (typeof healthRoutes.getHealthRedisClient === 'function') ? healthRoutes.getHealthRedisClient() : null;
         if (c && typeof c.quit === 'function') {
-            try { await c.quit(); } catch {}
+            try { await c.quit(); } catch { }
         }
     }, 5000);
 
@@ -1369,11 +1430,11 @@ async function startServer() {
     // Scheduler stop — registered last (first to run) so cron jobs
     // can't enqueue new work during shutdown.
     shutdownRegistry.register('scheduler_stop', () => {
-        try { scheduler.stop?.(); } catch {}
+        try { scheduler.stop?.(); } catch { }
         try {
             const { shutdownHermesRuntime } = require('./src/services/agents/hermes-runtime');
             shutdownHermesRuntime();
-        } catch {}
+        } catch { }
     }, 5000);
 
     async function shutdown(signal) {
@@ -1416,7 +1477,7 @@ async function startServer() {
                     heapLimitMb: Math.round(heapLimit / 1024 / 1024),
                     heapTotalMb: Math.round(m.heapTotal / 1024 / 1024),
                     rssMb: Math.round(m.rss / 1024 / 1024),
-                })).catch(() => {});
+                })).catch(() => { });
             }
         } catch { /* never throw from monitor */ }
     }, 30_000);
@@ -1449,7 +1510,7 @@ async function startServer() {
                 Promise.resolve().then(() => alerting.notifyHigh5xxRate(ratePct, {
                     windowSize: total,
                     errors: errs,
-                })).catch(() => {});
+                })).catch(() => { });
             }
         } catch { /* never throw */ }
     }, 60_000);

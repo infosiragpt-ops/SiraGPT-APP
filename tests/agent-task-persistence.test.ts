@@ -1,10 +1,13 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { createRequire } from "node:module"
+import * as path from "node:path"
 
-const cjsRequire = createRequire(__filename)
+// Anchor CJS resolution at the repo root (the runner always runs from the
+// repo root) so backend requires work no matter where test-dist lives.
+const cjsRequire = createRequire(path.join(process.cwd(), "package.json"))
 
-const persistence = cjsRequire("../../backend/src/services/agents/agent-task-persistence") as {
+const persistence = cjsRequire("./backend/src/services/agents/agent-task-persistence") as {
   INTERNAL: {
     buildExistingTaskLookup: (data: Record<string, unknown>) => Record<string, unknown>
     isTerminalStatus: (status?: string) => boolean

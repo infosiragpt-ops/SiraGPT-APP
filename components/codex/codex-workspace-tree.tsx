@@ -85,6 +85,7 @@ export type CodexWorkspaceTreeProps = {
   listCodeSessions?: (workspaceId: string) => { id: string; title: string; updatedAt?: number; createdAt?: number }[]
   headerRight?: React.ReactNode
   onOpenSettings?: (node: WorkspaceTreeNode) => void
+  onDeleteWorkspace?: (node: WorkspaceTreeNode) => void
   onRenameRow?: (row: ChatRow, title: string) => void
   onDeleteRow?: (row: ChatRow) => void
   onMarkRead?: (row: ChatRow) => void
@@ -124,6 +125,7 @@ export function CodexWorkspaceTree(props: CodexWorkspaceTreeProps) {
     listCodeSessions,
     headerRight,
     onOpenSettings,
+    onDeleteWorkspace,
   } = props
 
   const pinned = pinnedRows ?? EMPTY_SET
@@ -316,6 +318,7 @@ export function CodexWorkspaceTree(props: CodexWorkspaceTreeProps) {
                 onOpenWorkspace={() => onOpenWorkspace(ws)}
                 onNewCodeChat={onNewCodeChat}
                 onOpenSettings={onOpenSettings}
+                onDeleteWorkspace={onDeleteWorkspace}
                 sharedRowProps={sharedRowProps}
               />
             ))}
@@ -395,6 +398,7 @@ function WorkspaceFolderBlock({
   onOpenWorkspace,
   onNewCodeChat,
   onOpenSettings,
+  onDeleteWorkspace,
   sharedRowProps,
 }: {
   node: WorkspaceTreeNode
@@ -404,6 +408,7 @@ function WorkspaceFolderBlock({
   onOpenWorkspace: () => void
   onNewCodeChat?: (node: WorkspaceTreeNode) => void
   onOpenSettings?: (node: WorkspaceTreeNode) => void
+  onDeleteWorkspace?: (node: WorkspaceTreeNode) => void
   sharedRowProps: SharedRowProps
 }) {
   return (
@@ -433,6 +438,11 @@ function WorkspaceFolderBlock({
           {onNewCodeChat ? (
             <FolderIconButton label="Nuevo chat" onClick={() => onNewCodeChat(node)}>
               <Plus className="h-4 w-4" />
+            </FolderIconButton>
+          ) : null}
+          {onDeleteWorkspace ? (
+            <FolderIconButton label="Eliminar proyecto" onClick={() => onDeleteWorkspace(node)}>
+              <Trash2 className="h-3.5 w-3.5" />
             </FolderIconButton>
           ) : null}
         </div>

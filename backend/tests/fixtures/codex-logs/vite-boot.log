@@ -1,0 +1,12 @@
+> code-runner@1.0.0 dev
+> vite --port 5173 --host
+
+  VITE v5.4.10  ready in 387 ms
+
+  ➜  Local:   http://localhost:5173/
+  ➜  Network: use --host to expose
+npm WARN deprecated sourcemap-codec@1.4.8: Please use @jridgewell/sourcemap-codec instead
+[vite] http proxy error at /assets while contacting dev backend:
+Error: connect ECONNREFUSED 127.0.0.1:5173
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1607:16)
+[vite] retrying proxy connection to 127.0.0.1:5173 ...

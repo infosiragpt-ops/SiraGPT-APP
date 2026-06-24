@@ -1,0 +1,700 @@
+2026-06-03T04:31:34.457Z a port configuration was specified but the required port was never opened, expected port 3000
+2026-06-03T04:31:47.743Z [backend] For more information, see: https://pris.ly/prisma-config
+2026-06-03T04:31:47.743Z [backend] warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).
+2026-06-03T04:31:47.743Z [backend] Environment variables loaded from .env
+2026-06-03T04:31:47.834Z [backend]   - [production] Recommended env var OTEL_EXPORTER_OTLP_ENDPOINT is not set — feature may be disabled.
+2026-06-03T04:31:47.834Z [backend] WARN:
+2026-06-03T04:31:47.834Z [backend] [config-validator] 2 warning(s) for env=production
+2026-06-03T04:31:47.834Z [backend]   - [production] Recommended env var SLACK_ENCRYPTION_KEY is not set — feature may be disabled.
+2026-06-03T04:31:49.430Z [backend] prisma:warn In production, we recommend using `prisma generate --no-engine` (See: `prisma generate --help`)
+2026-06-03T04:32:39.189Z a port configuration was specified but the required port was never opened, expected port 3000
+2026-06-03T04:32:53.478Z [backend] warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).
+2026-06-03T04:32:53.478Z [backend] For more information, see: https://pris.ly/prisma-config
+2026-06-03T04:32:53.569Z [backend] [config-validator] 2 warning(s) for env=production
+2026-06-03T04:32:53.570Z [backend] WARN:
+2026-06-03T04:32:53.570Z [backend]   - [production] Recommended env var OTEL_EXPORTER_OTLP_ENDPOINT is not set — feature may be disabled.
+2026-06-03T04:32:53.571Z [backend]   - [production] Recommended env var SLACK_ENCRYPTION_KEY is not set — feature may be disabled.
+2026-06-03T04:32:55.201Z [backend] prisma:warn In production, we recommend using `prisma generate --no-engine` (See: `prisma generate --help`)
+2026-06-03T04:33:44.739Z a port configuration was specified but the required port was never opened, expected port 3000
+2026-06-03T04:34:00.084Z [backend] warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).
+2026-06-03T04:34:00.084Z [backend] Environment variables loaded from .env
+2026-06-03T04:34:00.177Z [backend] WARN:
+2026-06-03T04:34:00.177Z [backend] [config-validator] 2 warning(s) for env=production
+2026-06-03T04:34:00.177Z [backend]   - [production] Recommended env var OTEL_EXPORTER_OTLP_ENDPOINT is not set — feature may be disabled.
+2026-06-03T04:34:00.177Z [backend]   - [production] Recommended env var SLACK_ENCRYPTION_KEY is not set — feature may be disabled.
+2026-06-03T04:34:01.866Z [backend] prisma:warn In production, we recommend using `prisma generate --no-engine` (See: `prisma generate --help`)
+2026-06-03T04:34:51.626Z a port configuration was specified but the required port was never opened, expected port 3000
+2026-06-03T04:35:04.836Z [backend] warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).
+2026-06-03T04:35:04.836Z [backend] For more information, see: https://pris.ly/prisma-config
+2026-06-03T04:35:04.934Z [backend]   - [production] Recommended env var OTEL_EXPORTER_OTLP_ENDPOINT is not set — feature may be disabled.
+2026-06-03T04:35:04.934Z [backend] [config-validator] 2 warning(s) for env=production
+2026-06-03T04:35:04.934Z [backend]   - [production] Recommended env var SLACK_ENCRYPTION_KEY is not set — feature may be disabled.
+2026-06-03T04:35:04.934Z [backend] WARN:
+2026-06-03T04:35:06.653Z [backend] prisma:warn In production, we recommend using `prisma generate --no-engine` (See: `prisma generate --help`)
+2026-06-03T04:35:56.306Z a port configuration was specified but the required port was never opened, expected port 3000
+2026-06-03T04:36:12.129Z [backend] WARN:
+2026-06-03T04:36:12.129Z [backend]   - [production] Recommended env var OTEL_EXPORTER_OTLP_ENDPOINT is not set — feature may be disabled.
+2026-06-03T04:36:12.129Z [backend]   - [production] Recommended env var SLACK_ENCRYPTION_KEY is not set — feature may be disabled.
+2026-06-03T04:36:12.129Z [backend] [config-validator] 2 warning(s) for env=production
+2026-06-03T04:36:13.787Z [backend] prisma:warn In production, we recommend using `prisma generate --no-engine` (See: `prisma generate --help`)
+2026-06-03T04:37:03.563Z a port configuration was specified but the required port was never opened, expected port 3000
+2026-06-03T04:37:46.850Z [backend] warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).
+2026-06-03T04:37:46.850Z [backend] For more information, see: https://pris.ly/prisma-config
+2026-06-03T04:37:46.940Z [backend] [config-validator] 2 warning(s) for env=production
+2026-06-03T04:37:46.940Z [backend]   - [production] Recommended env var OTEL_EXPORTER_OTLP_ENDPOINT is not set — feature may be disabled.
+2026-06-03T04:37:46.940Z [backend] WARN:
+2026-06-03T04:37:46.940Z [backend]   - [production] Recommended env var SLACK_ENCRYPTION_KEY is not set — feature may be disabled.
+2026-06-03T04:37:48.578Z [backend] prisma:warn In production, we recommend using `prisma generate --no-engine` (See: `prisma generate --help`)
+2026-06-03T04:38:07.705Z [backend] For more information, see: https://pris.ly/prisma-config
+2026-06-03T04:38:07.705Z [backend] warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).
+2026-06-03T04:38:07.705Z [backend] Environment variables loaded from .env
+2026-06-03T04:38:08.578Z [backend] [config-validator] 2 warning(s) for env=production
+2026-06-03T04:38:08.621Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T04:38:08.691Z Failed to proxy http://localhost:5050/api/auth/me [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T04:38:08.693Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T04:38:09.393Z Failed to proxy http://localhost:5050/api/auth/me [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T04:38:09.395Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T04:38:10.305Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T04:38:10.328Z Failed to proxy http://localhost:5050/api/auth/me [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T04:38:10.329Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T04:38:11.031Z Failed to proxy http://localhost:5050/api/auth/me [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T04:38:11.033Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T04:38:18.392Z [backend] prisma:warn In production, we recommend using `prisma generate --no-engine` (See: `prisma generate --help`)
+2026-06-03T04:51:04.615Z [backend] [ai] memory recall failed (continuing without): VOYAGE_API_KEY not configured for pgvector user memory
+2026-06-03T04:51:10.174Z [backend] {"t":"2026-06-03T04:51:10.173Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpeptffh0006xdf5kk7za0en","model":"openai/gpt-5.5","provider":"OpenRouter","durationMs":6337,"promptChars":4,"responseChars":33,"approxTokens":10,"aborted":false,"abortReason":null}
+2026-06-03T04:51:10.178Z [backend] [ai/generate] active duplicate turn replayed { chatId: 'cmpxl9enj00043ueu9o7jc1ip' }
+2026-06-03T04:51:17.394Z [Error: aborted] { code: 'ECONNRESET' }
+2026-06-03T05:09:08.363Z [backend] [ai] memory recall failed (continuing without): VOYAGE_API_KEY not configured for pgvector user memory
+2026-06-03T05:09:18.270Z [backend] {"t":"2026-06-03T05:09:18.269Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpeptffh0006xdf5kk7za0en","model":"openai/gpt-5.5","provider":"OpenRouter","durationMs":10165,"promptChars":11,"responseChars":70,"approxTokens":21,"aborted":false,"abortReason":null}
+2026-06-03T05:09:18.275Z [backend] [ai/generate] active duplicate turn replayed { chatId: 'cmpxlwnac000i3ueuft0e0qe6' }
+2026-06-03T05:11:30.910Z [backend] [ai] memory recall failed (continuing without): VOYAGE_API_KEY not configured for pgvector user memory
+2026-06-03T05:11:39.878Z [backend] {"t":"2026-06-03T05:11:39.877Z","event":"web_search","provider":"crossref","hits":5,"durationMs":1799,"queryLen":52,"locale":"es-es","attempts":[{"id":"crossref","ok":true,"ms":1799,"count":5}],"cached":false}
+2026-06-03T05:11:42.799Z [backend] {"t":"2026-06-03T05:11:42.798Z","event":"web_search","provider":"crossref","hits":5,"durationMs":380,"queryLen":50,"locale":"es-es","attempts":[{"id":"crossref","ok":true,"ms":380,"count":5}],"cached":false}
+2026-06-03T05:11:46.001Z [backend] {"t":"2026-06-03T05:11:46.000Z","event":"web_search","provider":"crossref","hits":5,"durationMs":713,"queryLen":78,"locale":"es-es","attempts":[{"id":"crossref","ok":true,"ms":713,"count":5}],"cached":false}
+2026-06-03T05:11:52.915Z [backend] {"t":"2026-06-03T05:11:52.914Z","event":"web_search","provider":"crossref","hits":5,"durationMs":446,"queryLen":62,"locale":"es-es","attempts":[{"id":"crossref","ok":true,"ms":446,"count":5}],"cached":false}
+2026-06-03T05:11:58.643Z [backend] {"t":"2026-06-03T05:11:58.642Z","event":"web_search","provider":"crossref","hits":10,"durationMs":513,"queryLen":51,"locale":"es-es","attempts":[{"id":"crossref","ok":true,"ms":513,"count":10}],"cached":false}
+2026-06-03T05:12:00.395Z Failed to proxy http://localhost:5050/api/ai/generate [Error: socket hang up] { code: 'ECONNRESET' }
+2026-06-03T05:12:00.398Z [Error: socket hang up] { code: 'ECONNRESET' }
+2026-06-03T05:12:07.728Z [backend] {"t":"2026-06-03T05:12:07.727Z","event":"web_search","provider":"crossref","hits":5,"durationMs":623,"queryLen":44,"locale":"es-es","attempts":[{"id":"crossref","ok":true,"ms":623,"count":5}],"cached":false}
+2026-06-03T05:12:08.366Z [backend] {"t":"2026-06-03T05:12:08.365Z","event":"web_search","provider":"crossref","hits":5,"durationMs":637,"queryLen":101,"locale":"es-es","attempts":[{"id":"crossref","ok":true,"ms":637,"count":5}],"cached":false}
+2026-06-03T05:12:18.924Z [backend] {"t":"2026-06-03T05:12:18.922Z","event":"web_search","provider":"crossref","hits":5,"durationMs":312,"queryLen":75,"locale":"es-es","attempts":[{"id":"crossref","ok":true,"ms":312,"count":5}],"cached":false}
+2026-06-03T05:12:25.361Z [backend] {"t":"2026-06-03T05:12:25.360Z","event":"web_search","provider":"crossref","hits":5,"durationMs":183,"queryLen":44,"locale":"es-es","attempts":[{"id":"crossref","ok":true,"ms":183,"count":5}],"cached":false}
+2026-06-03T05:12:26.005Z [backend] [ai] memory recall failed (continuing without): VOYAGE_API_KEY not configured for pgvector user memory
+2026-06-03T05:12:27.565Z [backend] {"t":"2026-06-03T05:12:27.565Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpeptffh0006xdf5kk7za0en","model":"deepseek/deepseek-v4-pro","provider":"OpenRouter","durationMs":1818,"promptChars":33,"responseChars":74,"approxTokens":27,"aborted":false,"abortReason":null}
+2026-06-03T05:12:31.748Z Failed to proxy http://localhost:5050/api/ai/generate [Error: socket hang up] { code: 'ECONNRESET' }
+2026-06-03T05:12:31.748Z [Error: socket hang up] { code: 'ECONNRESET' }
+2026-06-03T05:12:44.032Z [backend]   chatId: 'cmpxlzpc0000q3ueul0uj21z4',
+2026-06-03T05:12:44.032Z [backend]   userMessageId: 'cmpxm0xc3000s3ueuvtm0zabb',
+2026-06-03T05:12:44.032Z [backend] }
+2026-06-03T05:12:44.032Z [backend] [ai/generate] duplicate completed turn skipped during save {
+2026-06-03T05:12:44.032Z [backend]   assistantMessageId: 'cmpxm0xdp000u3ueu9mm932wd'
+2026-06-03T05:12:44.278Z [backend] {"t":"2026-06-03T05:12:44.278Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpeptffh0006xdf5kk7za0en","model":"deepseek/deepseek-v4-pro","provider":"OpenRouter","durationMs":73664,"promptChars":33,"responseChars":2780,"approxTokens":704,"aborted":false,"abortReason":null}
+2026-06-03T05:12:44.279Z [backend] [ai/generate] active duplicate turn replayed { chatId: 'cmpxlzpc0000q3ueul0uj21z4' }
+2026-06-03T05:12:44.281Z [backend] [ai/generate] active duplicate turn replayed { chatId: 'cmpxlzpc0000q3ueul0uj21z4' }
+2026-06-03T05:16:10.223Z [backend] [ai] memory recall failed (continuing without): VOYAGE_API_KEY not configured for pgvector user memory
+2026-06-03T05:16:15.100Z [backend] {"t":"2026-06-03T05:16:15.100Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpeptffh0006xdf5kk7za0en","model":"x-ai/grok-4.20","provider":"OpenRouter","durationMs":5130,"promptChars":4,"responseChars":95,"approxTokens":25,"aborted":false,"abortReason":null}
+2026-06-03T05:16:15.102Z [backend] [ai/generate] active duplicate turn replayed { chatId: 'cmpxm5owy000y3ueuqmcfq132' }
+2026-06-03T05:17:03.408Z [Error: aborted] { code: 'ECONNRESET' }
+2026-06-03T06:55:16.322Z [Error: aborted] { code: 'ECONNRESET' }
+2026-06-03T06:55:23.634Z [Error: aborted] { code: 'ECONNRESET' }
+2026-06-03T07:43:12.314Z [Error: aborted] { code: 'ECONNRESET' }
+2026-06-03T09:08:39.987Z [Error: aborted] { code: 'ECONNRESET' }
+2026-06-03T11:09:56.436Z [backend] [agent-task-queue] reconnecting in 2000ms
+2026-06-03T13:28:58.766Z [Error: aborted] { code: 'ECONNRESET' }
+2026-06-03T17:09:58.877Z [backend] [agent-task-queue] reconnecting in 2000ms
+2026-06-03T17:11:37.729Z [backend] [agent-task-worker] connection ended; serving requests via local runtime until Redis recovers; queued tasks will use local fallback until Redis reconnects
+2026-06-03T17:11:37.729Z [backend] [agent-task-queue] connection ended; serving requests via local runtime until Redis recovers; queued tasks will use local fallback until Redis reconnects
+2026-06-03T17:11:37.791Z [backend] [goal-worker] connection ended; serving requests via local runtime until Redis recovers; queued tasks will use local fallback until Redis reconnects
+2026-06-03T17:11:38.229Z npm notice
+2026-06-03T17:11:38.229Z npm notice Changelog: https://github.com/npm/cli/releases/tag/v11.16.0
+2026-06-03T17:11:38.229Z npm notice New major version of npm available! 10.9.2 -> 11.16.0
+2026-06-03T17:11:53.411Z [backend] For more information, see: https://pris.ly/prisma-config
+2026-06-03T17:11:53.411Z [backend] warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).
+2026-06-03T17:11:54.376Z [backend]   - [production] Recommended env var OTEL_EXPORTER_OTLP_ENDPOINT is not set — feature may be disabled.
+2026-06-03T17:11:54.376Z [backend]   - [production] Recommended env var SLACK_ENCRYPTION_KEY is not set — feature may be disabled.
+2026-06-03T17:11:54.376Z [backend] WARN:
+2026-06-03T17:11:54.376Z [backend] [config-validator] 2 warning(s) for env=production
+2026-06-03T17:12:06.282Z [backend] prisma:warn In production, we recommend using `prisma generate --no-engine` (See: `prisma generate --help`)
+2026-06-03T17:12:08.336Z Failed to proxy http://localhost:5050/api/auth/google/callback?iss=https%3A%2F%2Faccounts.google.com&code=4%2F0AeoWuM_8t8wnUwBVtq7TOjFycCcd2w1K3Moan4r22LWgyFGcVlK3-nf-iev70v46nrSTRw&scope=email%20profile%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.profile%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.email%20openid&authuser=0&prompt=consent [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:08.337Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:15.291Z Failed to proxy http://localhost:5050/api/auth/google/callback?error=access_denied [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:15.291Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:19.585Z Failed to proxy http://localhost:5050/api/auth/google/callback?error=access_denied [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:19.588Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:35.495Z Failed to proxy http://localhost:5050/api/auth/csrf-token [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:35.500Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:35.749Z Failed to proxy http://localhost:5050/api/auth/login [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:35.752Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:36.554Z Failed to proxy http://localhost:5050/api/auth/login [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:36.558Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:37.783Z Failed to proxy http://localhost:5050/api/auth/login [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:37.786Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:38.101Z Failed to proxy http://localhost:5050/api/telemetry/error [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:38.104Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:40.247Z Failed to proxy http://localhost:5050/api/auth/csrf-token [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:40.250Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:40.546Z Failed to proxy http://localhost:5050/api/auth/login [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:40.552Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:41.384Z Failed to proxy http://localhost:5050/api/auth/login [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:41.384Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:42.700Z Failed to proxy http://localhost:5050/api/auth/login [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:42.704Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:42.909Z Failed to proxy http://localhost:5050/api/telemetry/error [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:42.911Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:50.629Z Failed to proxy http://localhost:5050/api/auth/csrf-token [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:50.635Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:50.854Z Failed to proxy http://localhost:5050/api/auth/login [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:50.857Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:51.611Z Failed to proxy http://localhost:5050/api/auth/login [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:51.613Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:52.839Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:53.056Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:54.549Z Failed to proxy http://localhost:5050/api/auth/google [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:12:54.552Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:14:47.796Z [backend] [ai] memory recall failed (continuing without): VOYAGE_API_KEY not configured for pgvector user memory
+2026-06-03T17:14:54.087Z [backend] {"t":"2026-06-03T17:14:54.085Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpeptffh0006xdf5kk7za0en","model":"openai/gpt-5.5","provider":"OpenRouter","durationMs":7097,"promptChars":4,"responseChars":33,"approxTokens":10,"aborted":false,"abortReason":null}
+2026-06-03T17:16:17.358Z Failed to proxy http://localhost:5050/api/ai/generate-image [Error: aborted] { code: 'ECONNRESET' }
+2026-06-03T17:18:10.154Z Failed to proxy http://localhost:5050/api/ai/generate-image [Error: aborted] { code: 'ECONNRESET' }
+2026-06-03T17:19:12.642Z Failed to proxy http://localhost:5050/api/ai/generate-image [Error: aborted] { code: 'ECONNRESET' }
+2026-06-03T17:54:39.253Z [backend] {"t":"2026-06-03T17:54:39.250Z","event":"agent_task_queued","taskId":"2d85dee1-1bf7-412e-a65d-672c3e6b6dba","userId":"cmpeptffh0006xdf5kk7za0en","chatId":"cmpyd92gg001s3ueuixwiyrki","model":"openai/gpt-5.5","queue":"siragpt-agent-tasks","jobId":"2d85dee1-1bf7-412e-a65d-672c3e6b6dba","traceId":"dc6065b0-56d0-4585-9bb6-fc2424af5dac","documentPolicy":{"mode":"chat_only","format":"docx","template":"business","complexity":"simple","autoGenerate":false,"reason":"Solicitud de analisis documental; se responde primero en chat y se sugiere documento solo si hace falta."}}
+2026-06-03T17:56:10.215Z Failed to proxy http://localhost:5050/api/chats/cmpyd92gg001s3ueuixwiyrki [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:56:10.218Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:56:10.680Z [backend] Environment variables loaded from .env
+2026-06-03T17:56:10.680Z [backend] warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).
+2026-06-03T17:56:10.680Z [backend] For more information, see: https://pris.ly/prisma-config
+2026-06-03T17:56:11.070Z Failed to proxy http://localhost:5050/api/chats/cmpyd92gg001s3ueuixwiyrki [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:56:11.074Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:56:13.270Z Failed to proxy http://localhost:5050/api/projects?sort=activity [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:56:13.273Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T17:56:23.531Z [backend] prisma:warn In production, we recommend using `prisma generate --no-engine` (See: `prisma generate --help`)
+2026-06-03T18:22:21.836Z [backend] {"t":"2026-06-03T18:22:21.835Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpeptffh0006xdf5kk7za0en","model":"moonshotai/kimi-k2.6","provider":"OpenRouter","durationMs":15301,"promptChars":4,"responseChars":200,"approxTokens":51,"aborted":false,"abortReason":null}
+2026-06-03T18:22:48.647Z [backend] {"t":"2026-06-03T18:22:48.646Z","event":"agent_task_queued","taskId":"c83bb244-69df-476d-a5ae-cbb24e1e52e5","userId":"cmpeptffh0006xdf5kk7za0en","chatId":"cmpye8f0t00ac3ueul7d3mvc4","model":"moonshotai/kimi-k2.6","queue":"siragpt-agent-tasks","jobId":"c83bb244-69df-476d-a5ae-cbb24e1e52e5","traceId":"4a9ed2ac-da51-44c0-970c-e57f96e785c1","documentPolicy":{"mode":"chat_only","format":"docx","template":"business","complexity":"simple","autoGenerate":false,"reason":"Solicitud de analisis documental; se responde primero en chat y se sugiere documento solo si hace falta."}}
+2026-06-03T18:25:35.311Z Failed to proxy http://localhost:5050/api/ai/generate-image [Error: aborted] { code: 'ECONNRESET' }
+2026-06-03T18:31:32.301Z [backend]     at generateSingleImage (/home/runner/workspace/backend/src/routes/ai.js:6112:19)
+2026-06-03T18:31:32.301Z [backend]     at /home/runner/workspace/backend/src/routes/ai.js:6165:62
+2026-06-03T18:31:32.301Z [backend] Image generation error: Error: OpenRouter image editing is not enabled yet. Use prompt-only image generation or choose OpenAI/Gemini for editing.
+2026-06-03T18:31:32.302Z [backend]     at Function.from (<anonymous>)
+2026-06-03T18:31:32.302Z [backend]     at /home/runner/workspace/backend/src/routes/ai.js:6165:27
+2026-06-03T18:31:32.302Z [backend]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+2026-06-03T19:13:43.658Z [backend] warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).
+2026-06-03T19:13:43.658Z [backend] Environment variables loaded from .env
+2026-06-03T19:13:43.658Z [backend] For more information, see: https://pris.ly/prisma-config
+2026-06-03T19:13:44.950Z [backend] WARN:
+2026-06-03T19:13:44.950Z [backend]   - [production] Recommended env var SLACK_ENCRYPTION_KEY is not set — feature may be disabled.
+2026-06-03T19:13:44.950Z [backend] [config-validator] 2 warning(s) for env=production
+2026-06-03T19:13:44.950Z [backend]   - [production] Recommended env var OTEL_EXPORTER_OTLP_ENDPOINT is not set — feature may be disabled.
+2026-06-03T19:13:57.006Z [backend] prisma:warn In production, we recommend using `prisma generate --no-engine` (See: `prisma generate --help`)
+2026-06-03T19:27:40.943Z [backend] [ai] memory recall failed (continuing without): VOYAGE_API_KEY not configured for pgvector user memory
+2026-06-03T19:27:46.142Z [backend] {"t":"2026-06-03T19:27:46.140Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpeptffh0006xdf5kk7za0en","model":"x-ai/grok-4.20","provider":"OpenRouter","durationMs":6014,"promptChars":4,"responseChars":49,"approxTokens":14,"aborted":false,"abortReason":null}
+2026-06-03T19:32:02.022Z [backend] [ai] memory recall failed (continuing without): VOYAGE_API_KEY not configured for pgvector user memory
+2026-06-03T19:32:05.643Z [backend] {"t":"2026-06-03T19:32:05.642Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpeptffh0006xdf5kk7za0en","model":"x-ai/grok-4.20","provider":"OpenRouter","durationMs":3943,"promptChars":18,"responseChars":240,"approxTokens":65,"aborted":false,"abortReason":null}
+2026-06-03T19:32:37.156Z [backend] [ai] memory recall failed (continuing without): VOYAGE_API_KEY not configured for pgvector user memory
+2026-06-03T19:32:39.958Z [backend] {"t":"2026-06-03T19:32:39.957Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpeptffh0006xdf5kk7za0en","model":"x-ai/grok-4.20","provider":"OpenRouter","durationMs":3275,"promptChars":10,"responseChars":157,"approxTokens":42,"aborted":false,"abortReason":null}
+2026-06-03T19:33:02.271Z [backend] [ai] memory recall failed (continuing without): VOYAGE_API_KEY not configured for pgvector user memory
+2026-06-03T19:33:05.818Z [backend] {"t":"2026-06-03T19:33:05.817Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpeptffh0006xdf5kk7za0en","model":"x-ai/grok-4.20","provider":"OpenRouter","durationMs":3861,"promptChars":17,"responseChars":235,"approxTokens":63,"aborted":false,"abortReason":null}
+2026-06-03T19:33:38.134Z [backend] [ai] memory recall failed (continuing without): VOYAGE_API_KEY not configured for pgvector user memory
+2026-06-03T19:33:42.331Z [backend] {"t":"2026-06-03T19:33:42.330Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpeptffh0006xdf5kk7za0en","model":"x-ai/grok-4.20","provider":"OpenRouter","durationMs":4496,"promptChars":10,"responseChars":327,"approxTokens":85,"aborted":false,"abortReason":null}
+2026-06-03T19:35:33.765Z [backend] [ai] memory recall failed (continuing without): VOYAGE_API_KEY not configured for pgvector user memory
+2026-06-03T19:35:37.329Z [backend] {"t":"2026-06-03T19:35:37.328Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpeptffh0006xdf5kk7za0en","model":"x-ai/grok-4.20","provider":"OpenRouter","durationMs":3847,"promptChars":14,"responseChars":349,"approxTokens":91,"aborted":false,"abortReason":null}
+2026-06-03T19:35:37.518Z [backend] [long-term-memory] store failed: VOYAGE_API_KEY not configured for pgvector user memory
+2026-06-03T19:37:35.862Z Failed to proxy http://localhost:5050/api/ai/generate-image [Error: aborted] { code: 'ECONNRESET' }
+2026-06-03T19:44:09.844Z [backend]     'openai-project': 'proj_4AJNtqvtlSCqTPhH1rIEfVMi',
+2026-06-03T19:44:09.844Z [backend]     'openai-version': '2020-10-01',
+2026-06-03T19:44:09.844Z [backend]   headers: Headers {
+2026-06-03T19:44:09.844Z [backend]     'x-content-type-options': 'nosniff',
+2026-06-03T19:44:09.844Z [backend]     'strict-transport-security': 'max-age=31536000; includeSubDomains; preload',
+2026-06-03T19:44:09.844Z [backend]     'cf-ray': 'a06130dc0d1b1877-IAD',
+2026-06-03T19:44:09.844Z [backend]     'x-ratelimit-limit-requests': '5000',
+2026-06-03T19:44:09.844Z [backend]     at APIError.generate (/home/runner/workspace/backend/node_modules/openai/core/error.js:66:20)
+2026-06-03T19:44:09.844Z [backend]     'openai-organization': 'siragpt',
+2026-06-03T19:44:09.844Z [backend]     'openai-processing-ms': '194',
+2026-06-03T19:44:09.844Z [backend]     connection: 'keep-alive',
+2026-06-03T19:44:09.844Z [backend]     date: 'Wed, 03 Jun 2026 19:44:09 GMT',
+2026-06-03T19:44:09.844Z [backend]     'cf-cache-status': 'DYNAMIC',
+2026-06-03T19:44:09.844Z [backend]     'content-type': 'application/json',
+2026-06-03T19:44:09.844Z [backend]     'access-control-expose-headers': 'X-Request-ID, CF-Ray, CF-Ray',
+2026-06-03T19:44:09.844Z [backend]     server: 'cloudflare',
+2026-06-03T19:44:09.844Z [backend]     'x-ratelimit-limit-tokens': '4000000',
+2026-06-03T19:44:09.844Z [backend]     'x-openai-proxy-wasm': 'v0.1',
+2026-06-03T19:44:09.844Z [backend]     'content-length': '175',
+2026-06-03T19:44:12.008Z [backend]     at APIError.generate (/home/runner/workspace/backend/node_modules/openai/core/error.js:63:20)
+2026-06-03T19:44:12.008Z [backend]     'x-content-type-options': 'nosniff',
+2026-06-03T19:44:12.008Z [backend] Error proxying to OpenAI: RateLimitError: 429 status code (no body)
+2026-06-03T19:44:12.008Z [backend]     at OpenAI.makeStatusError (/home/runner/workspace/backend/node_modules/openai/client.js:163:32)
+2026-06-03T19:44:12.008Z [backend]     'transfer-encoding': 'chunked'
+2026-06-03T19:44:12.008Z [backend]   requestID: null,
+2026-06-03T19:44:12.008Z [backend]     'content-type': 'application/json; charset=UTF-8',
+2026-06-03T19:44:12.008Z [backend]     at OpenAI.makeRequest (/home/runner/workspace/backend/node_modules/openai/client.js:331:30)
+2026-06-03T19:44:12.008Z [backend]   },
+2026-06-03T19:44:12.008Z [backend]     server: 'scaffolding on HTTPServer2',
+2026-06-03T19:44:12.008Z [backend]   param: undefined,
+2026-06-03T19:44:12.008Z [backend]   error: undefined,
+2026-06-03T19:44:12.008Z [backend]     'x-frame-options': 'SAMEORIGIN',
+2026-06-03T19:44:12.008Z [backend]     date: 'Wed, 03 Jun 2026 19:44:12 GMT',
+2026-06-03T19:44:12.008Z [backend]     'x-xss-protection': '0',
+2026-06-03T19:44:12.008Z [backend]     'server-timing': 'gfet4t7; dur=237',
+2026-06-03T19:44:12.008Z [backend]   code: undefined,
+2026-06-03T19:44:12.008Z [backend]     vary: 'Origin, X-Origin, Referer',
+2026-06-03T19:44:12.008Z [backend]     'content-encoding': 'gzip',
+2026-06-03T19:44:12.008Z [backend]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+2026-06-03T19:44:17.053Z [backend] {"t":"2026-06-03T19:44:17.052Z","event":"agent_task_queued","taskId":"7c8070d7-2a79-4c9f-85f8-767a0f3cda9e","userId":"cmpyh53ba00ni3ueu7tr41ciw","chatId":"cmpyh61co00nm3ueupobeimne","model":"openai/gpt-5.5","queue":"siragpt-agent-tasks","jobId":"7c8070d7-2a79-4c9f-85f8-767a0f3cda9e","traceId":"396b013b-b895-4695-a401-38b1d9b6636c","documentPolicy":{"mode":"doc_suggested","format":"docx","template":"business","complexity":"simple","autoGenerate":false,"reason":"La respuesta tiene suficiente densidad para sugerir un documento profesional."}}
+2026-06-03T19:48:43.369Z [backend] Both GOOGLE_API_KEY and GEMINI_API_KEY are set. Using GOOGLE_API_KEY.
+2026-06-03T19:48:44.024Z [backend] Error: {"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.5-flash-preview-image\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.5-flash-preview-image\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.5-flash-preview-image\nPlease retry in 16.095490658s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.5-flash-preview-image"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.5-flash-preview-image"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.5-flash-preview-image"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"16s"}]}}
+2026-06-03T19:48:44.025Z [backend] Image generation error: ApiError: {"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.5-flash-preview-image\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.5-flash-preview-image\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.5-flash-preview-image\nPlease retry in 16.095490658s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.5-flash-preview-image"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.5-flash-preview-image"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"location":"global","model":"gemini-2.5-flash-preview-image"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"16s"}]}}
+2026-06-03T19:48:44.025Z [backend]     at throwErrorIfNotOK (/home/runner/workspace/backend/node_modules/@google/genai/dist/node/index.cjs:11124:30)
+2026-06-03T19:48:44.026Z [backend]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+2026-06-03T19:48:44.027Z [backend]     at async /home/runner/workspace/backend/src/routes/ai.js:6178:22 {
+2026-06-03T19:48:44.027Z [backend]     at async AIService.generateImageFromImage (/home/runner/workspace/backend/src/services/ai-service.js:891:34)
+2026-06-03T19:48:44.027Z [backend]     at async Promise.all (index 0)
+2026-06-03T19:48:44.027Z [backend] }
+2026-06-03T19:48:44.027Z [backend]     at async Models.generateContent (/home/runner/workspace/backend/node_modules/@google/genai/dist/node/index.cjs:12158:24)
+2026-06-03T19:48:44.027Z [backend]   status: 429
+2026-06-03T19:48:44.027Z [backend]     at async /home/runner/workspace/backend/node_modules/@google/genai/dist/node/index.cjs:10901:13
+2026-06-03T20:25:45.236Z [Error: aborted] { code: 'ECONNRESET' }
+2026-06-03T20:25:47.043Z [Error: aborted] { code: 'ECONNRESET' }
+2026-06-03T20:27:29.989Z Failed to proxy http://localhost:5050/api/auth/google [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T20:27:29.991Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T20:27:32.047Z [backend] For more information, see: https://pris.ly/prisma-config
+2026-06-03T20:27:32.047Z [backend] Environment variables loaded from .env
+2026-06-03T20:27:32.047Z [backend] warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).
+2026-06-03T20:27:43.906Z [backend] prisma:warn In production, we recommend using `prisma generate --no-engine` (See: `prisma generate --help`)
+2026-06-03T20:28:06.992Z Failed to proxy http://localhost:5050/api/auth/me [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T20:28:06.995Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T20:28:07.024Z Failed to proxy http://localhost:5050/api/users/settings [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T20:28:07.024Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T20:28:07.728Z Failed to proxy http://localhost:5050/api/auth/me [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T20:28:07.729Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T20:28:08.906Z Failed to proxy http://localhost:5050/api/auth/me [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T20:28:08.908Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T20:28:10.912Z Failed to proxy http://localhost:5050/api/auth/google [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T20:28:10.914Z [AggregateError: ] { code: 'ECONNREFUSED' }
+2026-06-03T21:10:00.178Z [backend]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+2026-06-03T21:10:00.178Z [backend]     at async /home/runner/workspace/backend/src/routes/admin.js:47:5 {
+2026-06-03T21:10:00.178Z [backend]   clientVersion: '6.19.3'
+2026-06-03T21:10:00.178Z [backend] Unique constraint failed on the fields: (`name`)
+2026-06-03T21:10:00.178Z [backend]     at async ModelSyncService.ensureStaticCatalogModels (/home/runner/workspace/backend/src/services/model-sync-service.js:573:7)
+2026-06-03T21:10:00.178Z [backend]   code: 'P2002',
+2026-06-03T21:10:00.178Z [backend]     at ei.handleRequestError (/home/runner/workspace/backend/node_modules/@prisma/client/runtime/library.js:121:7268)
+2026-06-03T21:10:00.178Z [backend] }
+2026-06-03T21:10:00.178Z [backend] Invalid `prisma.aiModel.create()` invocation:
+2026-06-03T21:10:00.178Z [backend]     at async a (/home/runner/workspace/backend/node_modules/@prisma/client/runtime/library.js:130:9551)
+2026-06-03T21:10:00.178Z [backend]   meta: { modelName: 'AiModel', target: [ 'name' ] },
+2026-06-03T21:10:00.178Z [backend]     at ei.request (/home/runner/workspace/backend/node_modules/@prisma/client/runtime/library.js:121:6300)
+2026-06-03T21:10:00.178Z [backend] Get models error: PrismaClientKnownRequestError: 
+2026-06-03T21:10:00.178Z [backend]     at ei.handleAndLogRequestError (/home/runner/workspace/backend/node_modules/@prisma/client/runtime/library.js:121:6593)
+2026-06-03T21:10:04.477Z [backend] ⚠️ Gemini OpenAI-compatible model listing failed: Request failed with status code 400
+2026-06-03T21:10:34.199Z Failed to proxy http://localhost:5050/api/admin/models/sync [Error: socket hang up] { code: 'ECONNRESET' }
+2026-06-03T21:10:34.202Z [Error: socket hang up] { code: 'ECONNRESET' }
+2026-06-03T21:12:21.095Z Failed to proxy http://localhost:5050/api/admin/models/sync [Error: socket hang up] { code: 'ECONNRESET' }
+2026-06-03T21:12:21.099Z [Error: socket hang up] { code: 'ECONNRESET' }
+2026-06-03T21:20:37.875Z [backend] [ai] memory recall failed (continuing without): VOYAGE_API_KEY not configured for pgvector user memory
+2026-06-03T21:20:43.060Z [backend] {"t":"2026-06-03T21:20:43.059Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpeptffh0006xdf5kk7za0en","model":"x-ai/grok-4.20","provider":"OpenRouter","durationMs":6015,"promptChars":4,"responseChars":52,"approxTokens":14,"aborted":false,"abortReason":null}
+2026-06-03T21:20:54.176Z [backend] [ai] memory recall failed (continuing without): VOYAGE_API_KEY not configured for pgvector user memory
+2026-06-03T21:20:57.249Z [backend] {"t":"2026-06-03T21:20:57.248Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpeptffh0006xdf5kk7za0en","model":"x-ai/grok-4.20","provider":"OpenRouter","durationMs":3437,"promptChars":18,"responseChars":289,"approxTokens":77,"aborted":false,"abortReason":null}
+2026-06-03T21:21:15.138Z [backend] [ai] memory recall failed (continuing without): VOYAGE_API_KEY not configured for pgvector user memory
+2026-06-03T21:21:21.086Z [backend] {"t":"2026-06-03T21:21:21.085Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpeptffh0006xdf5kk7za0en","model":"openai/gpt-5.5","provider":"OpenRouter","durationMs":6251,"promptChars":25,"responseChars":260,"approxTokens":72,"aborted":false,"abortReason":null}
+2026-06-03T21:21:50.258Z [backend] [ai] memory recall failed (continuing without): VOYAGE_API_KEY not configured for pgvector user memory
+2026-06-03T21:21:55.771Z [backend] {"t":"2026-06-03T21:21:55.769Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpeptffh0006xdf5kk7za0en","model":"openai/gpt-5.5","provider":"OpenRouter","durationMs":5834,"promptChars":17,"responseChars":195,"approxTokens":53,"aborted":false,"abortReason":null}
+2026-06-03T21:22:04.219Z [backend] [ai] memory recall failed (continuing without): VOYAGE_API_KEY not configured for pgvector user memory
+2026-06-03T21:22:13.888Z [backend] {"t":"2026-06-03T21:22:13.887Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpeptffh0006xdf5kk7za0en","model":"openai/gpt-5.5","provider":"OpenRouter","durationMs":9951,"promptChars":29,"responseChars":674,"approxTokens":176,"aborted":false,"abortReason":null}
+2026-06-03T21:23:34.298Z [backend] {"t":"2026-06-03T21:23:34.297Z","event":"agent_task_queued","taskId":"e5449cb4-dd70-476c-9151-8947f8bd9e37","userId":"cmpeptffh0006xdf5kk7za0en","chatId":"cmpyklzc100o73ueu922mx63a","model":"openai/gpt-5.5","queue":"siragpt-agent-tasks","jobId":"e5449cb4-dd70-476c-9151-8947f8bd9e37","traceId":"163b6782-bcd8-4b7e-88bd-bc51ba4049f8","documentPolicy":{"mode":"chat_only","format":"docx","template":"business","complexity":"simple","autoGenerate":false,"reason":"Solicitud de transcripción literal; se responde en chat salvo que el usuario pida un archivo."}}
+2026-06-03T21:23:37.954Z [backend]       sourceLabel: "10. —¿Qué hace un pez mago?",
+2026-06-03T21:23:37.954Z [backend]         sectionPath: "10. —¿Qué hace un pez mago?",
+2026-06-03T21:23:37.954Z [backend]       sectionPath: "10. —¿Qué hace un pez mago?",
+2026-06-03T21:23:37.954Z [backend]       analysisId: "cmpykpsml00pd3ueu7552wnnl",
+2026-06-03T21:23:37.954Z [backend]       sectionTitle: "10. —¿Qué hace un pez mago?",
+2026-06-03T21:23:46.428Z [backend] {"t":"2026-06-03T21:23:46.427Z","event":"agent_task_queue_handoff_local","taskId":"e5449cb4-dd70-476c-9151-8947f8bd9e37","userId":"cmpeptffh0006xdf5kk7za0en","jobId":"e5449cb4-dd70-476c-9151-8947f8bd9e37"}
+2026-06-03T21:23:46.428Z [backend] [agent-task] queue handoff → local for task e5449cb4-dd70-476c-9151-8947f8bd9e37 (worker idle 12000ms)
+2026-06-03T21:23:51.625Z [backend] {"t":"2026-06-03T21:23:51.625Z","event":"agent_task_worker_started","taskId":"e5449cb4-dd70-476c-9151-8947f8bd9e37","userId":"cmpeptffh0006xdf5kk7za0en","chatId":"cmpyklzc100o73ueu922mx63a","model":"openai/gpt-5.5","runtimeModel":"gpt-4o-mini","runtimeProvider":"OpenAI","modelRemapped":true,"queue":"siragpt-agent-tasks","jobId":"local-e5449cb4-dd70-476c-9151-8947f8bd9e37","traceId":"163b6782-bcd8-4b7e-88bd-bc51ba4049f8","documentPolicy":{"mode":"chat_only","format":"docx","template":"business","complexity":"simple","autoGenerate":false,"reason":"Solicitud de transcripción literal; se responde en chat salvo que el usuario pida un archivo."}}
+2026-06-03T21:23:52.938Z [backend] {"t":"2026-06-03T21:23:52.937Z","event":"agent_task_worker_finished","taskId":"e5449cb4-dd70-476c-9151-8947f8bd9e37","userId":"cmpeptffh0006xdf5kk7za0en","chatId":"cmpyklzc100o73ueu922mx63a","status":"completed","stoppedReason":"transcription_finalize","steps":2,"artifacts":0,"durationMs":6498,"transcriptionFileCount":1,"transcriptionTextLength":58}
+2026-06-03T21:32:02.277Z [backend] [ai] memory recall failed (continuing without): VOYAGE_API_KEY not configured for pgvector user memory
+2026-06-03T21:32:08.518Z [backend] {"t":"2026-06-03T21:32:08.516Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpykzxga00sx3ueu09zeqyq2","model":"openai/gpt-5.5","provider":"OpenRouter","durationMs":6595,"promptChars":4,"responseChars":33,"approxTokens":10,"aborted":false,"abortReason":null}
+2026-06-03T21:51:27.764Z [backend]   detail: undefined,
+2026-06-03T21:51:27.764Z [backend]     message: 'Invalid API Key provided: sk_live_***********************************************************************************************tlKU',
+2026-06-03T21:51:27.764Z [backend]       'access-control-allow-origin': '*',
+2026-06-03T21:51:27.764Z [backend]       'x-wc': '383',
+2026-06-03T21:51:27.764Z [backend]   rawType: 'invalid_request_error',
+2026-06-03T21:51:27.764Z [backend]   code: undefined,
+2026-06-03T21:51:27.764Z [backend]       'content-type': 'application/json',
+2026-06-03T21:51:27.764Z [backend]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5) {
+2026-06-03T21:51:27.764Z [backend]     requestId: undefined
+2026-06-03T21:51:27.764Z [backend]       'access-control-max-age': '300',
+2026-06-03T21:51:27.764Z [backend]     at res.toJSON.then.Error_js_1.StripeAPIError.message (/home/runner/workspace/backend/node_modules/stripe/cjs/RequestSender.js:96:31)
+2026-06-03T21:51:27.764Z [backend]       'access-control-allow-credentials': 'true',
+2026-06-03T21:51:27.764Z [backend]   doc_url: undefined,
+2026-06-03T21:51:27.764Z [backend]       server: 'nginx',
+2026-06-03T21:51:27.764Z [backend]     connection: 'keep-alive',
+2026-06-03T21:51:27.764Z [backend]     type: 'invalid_request_error',
+2026-06-03T21:51:27.764Z [backend] Error creating Stripe customer: StripeAuthenticationError: Invalid API Key provided: sk_live_***********************************************************************************************tlKU
+2026-06-03T21:51:27.764Z [backend]   type: 'StripeAuthenticationError',
+2026-06-03T21:51:27.764Z [backend]       'access-control-allow-methods': 'GET, HEAD, PUT, PATCH, POST, DELETE',
+2026-06-03T21:51:27.764Z [backend]     server: 'nginx',
+2026-06-03T21:51:27.764Z [backend]       date: 'Wed, 03 Jun 2026 21:51:27 GMT',
+2026-06-03T21:51:27.764Z [backend]   param: undefined,
+2026-06-03T21:51:27.764Z [backend]       'access-control-expose-headers': 'Request-Id, Stripe-Manage-Version, Stripe-Should-Retry, X-Stripe-External-Auth-Required, X-Stripe-Privileged-Session-Required',
+2026-06-03T21:51:27.764Z [backend]       'strict-transport-security': 'max-age=63072000; includeSubDomains; preload'
+2026-06-03T21:51:27.764Z [backend]       'x-robots-tag': 'none',
+2026-06-03T21:51:27.764Z [backend]   raw: {
+2026-06-03T21:51:27.764Z [backend]     headers: {
+2026-06-03T21:51:27.764Z [backend]       connection: 'keep-alive',
+2026-06-03T21:51:27.764Z [backend]   headers: {
+2026-06-03T21:51:27.764Z [backend]       'cache-control': 'no-cache, no-store',
+2026-06-03T21:51:27.764Z [backend]   },
+2026-06-03T21:51:27.764Z [backend]       vary: 'Origin',
+2026-06-03T21:51:27.764Z [backend]       'www-authenticate': 'Bearer realm="Stripe"',
+2026-06-03T21:51:27.764Z [backend]     date: 'Wed, 03 Jun 2026 21:51:27 GMT',
+2026-06-03T21:51:27.764Z [backend]     },
+2026-06-03T21:51:27.764Z [backend]       'content-security-policy': "base-uri 'none'; default-src 'none'; form-action 'none'; frame-ancestors 'none'; upgrade-insecure-requests",
+2026-06-03T21:51:27.764Z [backend]       'content-length': '209',
+2026-06-03T21:51:27.764Z [backend]     'content-type': 'application/json',
+2026-06-03T21:51:27.764Z [backend]     'content-length': '209',
+2026-06-03T21:51:28.801Z [backend]       'access-control-max-age': '300',
+2026-06-03T21:51:28.801Z [backend]       'access-control-allow-methods': 'GET, HEAD, PUT, PATCH, POST, DELETE',
+2026-06-03T21:51:28.801Z [backend]       connection: 'keep-alive',
+2026-06-03T21:51:28.801Z [backend]       'cache-control': 'no-cache, no-store',
+2026-06-03T21:51:28.801Z [backend]       'access-control-expose-headers': 'Request-Id, Stripe-Manage-Version, Stripe-Should-Retry, X-Stripe-External-Auth-Required, X-Stripe-Privileged-Session-Required',
+2026-06-03T21:51:28.801Z [backend]       'content-type': 'application/json',
+2026-06-03T21:51:28.801Z [backend]       server: 'nginx',
+2026-06-03T21:51:28.801Z [backend]       'content-security-policy': "base-uri 'none'; default-src 'none'; form-action 'none'; frame-ancestors 'none'; upgrade-insecure-requests",
+2026-06-03T21:51:28.801Z [backend]       date: 'Wed, 03 Jun 2026 21:51:28 GMT',
+2026-06-03T21:51:28.801Z [backend]   type: 'StripeAuthenticationError',
+2026-06-03T21:51:28.801Z [backend] Error creating Stripe customer: StripeAuthenticationError: Invalid API Key provided: sk_live_***********************************************************************************************tlKU
+2026-06-03T21:51:28.801Z [backend]     at res.toJSON.then.Error_js_1.StripeAPIError.message (/home/runner/workspace/backend/node_modules/stripe/cjs/RequestSender.js:96:31)
+2026-06-03T21:51:28.801Z [backend]     type: 'invalid_request_error',
+2026-06-03T21:51:28.801Z [backend]   raw: {
+2026-06-03T21:51:28.801Z [backend]     headers: {
+2026-06-03T21:51:28.801Z [backend]       'access-control-allow-credentials': 'true',
+2026-06-03T21:51:28.801Z [backend]       'access-control-allow-origin': '*',
+2026-06-03T21:51:28.801Z [backend]       'content-length': '209',
+2026-06-03T21:51:28.801Z [backend]     message: 'Invalid API Key provided: sk_live_***********************************************************************************************tlKU',
+2026-06-03T21:51:28.801Z [backend]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5) {
+2026-06-03T21:51:34.716Z [backend]       'access-control-allow-origin': '*',
+2026-06-03T21:51:34.716Z [backend]     at res.toJSON.then.Error_js_1.StripeAPIError.message (/home/runner/workspace/backend/node_modules/stripe/cjs/RequestSender.js:96:31)
+2026-06-03T21:51:34.716Z [backend]       'access-control-allow-credentials': 'true',
+2026-06-03T21:51:34.716Z [backend]       'access-control-max-age': '300',
+2026-06-03T21:51:34.716Z [backend]       'content-security-policy': "base-uri 'none'; default-src 'none'; form-action 'none'; frame-ancestors 'none'; upgrade-insecure-requests",
+2026-06-03T21:51:34.716Z [backend]       'access-control-allow-methods': 'GET, HEAD, PUT, PATCH, POST, DELETE',
+2026-06-03T21:51:34.716Z [backend]       vary: 'Origin',
+2026-06-03T21:51:34.716Z [backend]   type: 'StripeAuthenticationError',
+2026-06-03T21:51:34.716Z [backend]     type: 'invalid_request_error',
+2026-06-03T21:51:34.716Z [backend] Error creating Stripe customer: StripeAuthenticationError: Invalid API Key provided: sk_live_***********************************************************************************************tlKU
+2026-06-03T21:51:34.716Z [backend]       'cache-control': 'no-cache, no-store',
+2026-06-03T21:51:34.716Z [backend]       'content-length': '209',
+2026-06-03T21:51:34.716Z [backend]       'access-control-expose-headers': 'Request-Id, Stripe-Manage-Version, Stripe-Should-Retry, X-Stripe-External-Auth-Required, X-Stripe-Privileged-Session-Required',
+2026-06-03T21:51:34.716Z [backend]       server: 'nginx',
+2026-06-03T21:51:34.716Z [backend]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5) {
+2026-06-03T21:51:34.716Z [backend]       date: 'Wed, 03 Jun 2026 21:51:34 GMT',
+2026-06-03T21:51:34.716Z [backend]     headers: {
+2026-06-03T21:51:34.716Z [backend]   raw: {
+2026-06-03T21:51:34.716Z [backend]     message: 'Invalid API Key provided: sk_live_***********************************************************************************************tlKU',
+2026-06-03T21:51:34.716Z [backend]       connection: 'keep-alive',
+2026-06-03T22:08:19.528Z [backend] [ai] memory recall failed (continuing without): VOYAGE_API_KEY not configured for pgvector user memory
+2026-06-03T22:08:24.432Z [backend] {"t":"2026-06-03T22:08:24.431Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpymaymx00tb3ueuou41s65t","model":"openai/gpt-5.5","provider":"OpenRouter","durationMs":5335,"promptChars":4,"responseChars":33,"approxTokens":10,"aborted":false,"abortReason":null}
+2026-06-03T22:08:59.822Z [backend] [ai] memory recall failed (continuing without): VOYAGE_API_KEY not configured for pgvector user memory
+2026-06-03T22:09:03.703Z [backend] {"t":"2026-06-03T22:09:03.702Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpymaymx00tb3ueuou41s65t","model":"openai/gpt-5.5","provider":"OpenRouter","durationMs":4250,"promptChars":11,"responseChars":85,"approxTokens":24,"aborted":false,"abortReason":null}
+2026-06-03T22:09:11.788Z [backend] [ai] memory recall failed (continuing without): VOYAGE_API_KEY not configured for pgvector user memory
+2026-06-03T22:09:15.507Z [backend] {"t":"2026-06-03T22:09:15.506Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpymaymx00tb3ueuou41s65t","model":"openai/gpt-5.5","provider":"OpenRouter","durationMs":4091,"promptChars":18,"responseChars":91,"approxTokens":28,"aborted":false,"abortReason":null}
+2026-06-03T22:09:24.299Z [backend] {"t":"2026-06-03T22:09:24.297Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpymaymx00tb3ueuou41s65t","model":"openai/gpt-5.5","provider":"OpenRouter","durationMs":194,"promptChars":10,"responseChars":0,"approxTokens":3,"aborted":false,"abortReason":null}
+2026-06-03T22:09:26.464Z [backend] {"t":"2026-06-03T22:09:26.462Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpymaymx00tb3ueuou41s65t","model":"openai/gpt-5.5","provider":"OpenRouter","durationMs":185,"promptChars":10,"responseChars":0,"approxTokens":3,"aborted":false,"abortReason":null}
+2026-06-03T22:09:29.753Z [backend] {"t":"2026-06-03T22:09:29.753Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpymaymx00tb3ueuou41s65t","model":"openai/gpt-5.5","provider":"OpenRouter","durationMs":187,"promptChars":10,"responseChars":0,"approxTokens":3,"aborted":false,"abortReason":null}
+2026-06-03T22:09:35.315Z [backend] {"t":"2026-06-03T22:09:35.313Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpymaymx00tb3ueuou41s65t","model":"openai/gpt-5.5","provider":"OpenRouter","durationMs":193,"promptChars":10,"responseChars":0,"approxTokens":3,"aborted":false,"abortReason":null}
+2026-06-03T22:12:09.571Z [backend]       'access-control-max-age': '300',
+2026-06-03T22:12:09.571Z [backend]       'www-authenticate': 'Bearer realm="Stripe"',
+2026-06-03T22:12:14.805Z [backend]   raw: {
+2026-06-03T22:12:14.805Z [backend]       'access-control-max-age': '300',
+2026-06-03T22:12:14.805Z [backend]       date: 'Wed, 03 Jun 2026 22:12:14 GMT',
+2026-06-03T22:12:14.805Z [backend] Error creating Stripe customer: StripeAuthenticationError: Invalid API Key provided: sk_live_***********************************************************************************************tlKU
+2026-06-03T22:12:14.805Z [backend]       server: 'nginx',
+2026-06-03T22:12:14.805Z [backend]       'content-type': 'application/json',
+2026-06-03T22:12:14.805Z [backend]       vary: 'Origin',
+2026-06-03T22:12:14.805Z [backend]       'content-length': '209',
+2026-06-03T22:12:14.805Z [backend]       'access-control-allow-methods': 'GET, HEAD, PUT, PATCH, POST, DELETE',
+2026-06-03T22:12:14.805Z [backend]     headers: {
+2026-06-03T22:12:14.805Z [backend]       'access-control-allow-origin': '*',
+2026-06-03T22:12:14.805Z [backend]       'cache-control': 'no-cache, no-store',
+2026-06-03T22:12:14.805Z [backend]     type: 'invalid_request_error',
+2026-06-03T22:12:14.805Z [backend]     at res.toJSON.then.Error_js_1.StripeAPIError.message (/home/runner/workspace/backend/node_modules/stripe/cjs/RequestSender.js:96:31)
+2026-06-03T22:12:14.805Z [backend]       'access-control-expose-headers': 'Request-Id, Stripe-Manage-Version, Stripe-Should-Retry, X-Stripe-External-Auth-Required, X-Stripe-Privileged-Session-Required',
+2026-06-03T22:12:14.805Z [backend]   type: 'StripeAuthenticationError',
+2026-06-03T22:12:14.805Z [backend]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5) {
+2026-06-03T22:12:14.805Z [backend]       connection: 'keep-alive',
+2026-06-03T22:12:14.805Z [backend]       'access-control-allow-credentials': 'true',
+2026-06-03T22:12:14.805Z [backend]     message: 'Invalid API Key provided: sk_live_***********************************************************************************************tlKU',
+2026-06-03T22:12:22.243Z [backend]     message: 'Invalid API Key provided: sk_live_***********************************************************************************************tlKU',
+2026-06-03T22:12:22.243Z [backend]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5) {
+2026-06-03T22:12:22.243Z [backend]     headers: {
+2026-06-03T22:12:22.243Z [backend]       date: 'Wed, 03 Jun 2026 22:12:22 GMT',
+2026-06-03T22:12:22.243Z [backend]       server: 'nginx',
+2026-06-03T22:12:22.243Z [backend]       connection: 'keep-alive',
+2026-06-03T22:12:22.243Z [backend]     at res.toJSON.then.Error_js_1.StripeAPIError.message (/home/runner/workspace/backend/node_modules/stripe/cjs/RequestSender.js:96:31)
+2026-06-03T22:12:22.243Z [backend]       'access-control-expose-headers': 'Request-Id, Stripe-Manage-Version, Stripe-Should-Retry, X-Stripe-External-Auth-Required, X-Stripe-Privileged-Session-Required',
+2026-06-03T22:12:22.243Z [backend]   type: 'StripeAuthenticationError',
+2026-06-03T22:12:22.243Z [backend]       'content-length': '209',
+2026-06-03T22:12:22.243Z [backend]     type: 'invalid_request_error',
+2026-06-03T22:12:22.243Z [backend]       'access-control-max-age': '300',
+2026-06-03T22:12:22.243Z [backend]       'access-control-allow-origin': '*',
+2026-06-03T22:12:22.243Z [backend]       'content-type': 'application/json',
+2026-06-03T22:12:22.243Z [backend]       'access-control-allow-credentials': 'true',
+2026-06-03T22:12:22.243Z [backend]   raw: {
+2026-06-03T22:12:22.243Z [backend]       'access-control-allow-methods': 'GET, HEAD, PUT, PATCH, POST, DELETE',
+2026-06-03T22:12:22.243Z [backend] Error creating Stripe customer: StripeAuthenticationError: Invalid API Key provided: sk_live_***********************************************************************************************tlKU
+2026-06-03T22:12:24.774Z [backend]       'access-control-allow-methods': 'GET, HEAD, PUT, PATCH, POST, DELETE',
+2026-06-03T22:12:24.774Z [backend]   type: 'StripeAuthenticationError',
+2026-06-03T22:12:24.774Z [backend]     message: 'Invalid API Key provided: sk_live_***********************************************************************************************tlKU',
+2026-06-03T22:12:24.774Z [backend]       server: 'nginx',
+2026-06-03T22:12:24.774Z [backend]       connection: 'keep-alive',
+2026-06-03T22:12:24.774Z [backend]     type: 'invalid_request_error',
+2026-06-03T22:12:24.774Z [backend] Error creating Stripe customer: StripeAuthenticationError: Invalid API Key provided: sk_live_***********************************************************************************************tlKU
+2026-06-03T22:12:24.774Z [backend]       'access-control-allow-credentials': 'true',
+2026-06-03T22:12:24.774Z [backend]       'content-security-policy': "base-uri 'none'; default-src 'none'; form-action 'none'; frame-ancestors 'none'; upgrade-insecure-requests",
+2026-06-03T22:12:24.774Z [backend]       'cache-control': 'no-cache, no-store',
+2026-06-03T22:12:24.774Z [backend]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5) {
+2026-06-03T22:12:24.774Z [backend]     headers: {
+2026-06-03T22:12:24.774Z [backend]       'access-control-allow-origin': '*',
+2026-06-03T22:12:24.774Z [backend]       'content-type': 'application/json',
+2026-06-03T22:12:24.774Z [backend]     at res.toJSON.then.Error_js_1.StripeAPIError.message (/home/runner/workspace/backend/node_modules/stripe/cjs/RequestSender.js:96:31)
+2026-06-03T22:12:24.774Z [backend]       date: 'Wed, 03 Jun 2026 22:12:24 GMT',
+2026-06-03T22:12:24.774Z [backend]   raw: {
+2026-06-03T22:12:24.774Z [backend]       'content-length': '209',
+2026-06-03T22:12:24.774Z [backend]       'access-control-expose-headers': 'Request-Id, Stripe-Manage-Version, Stripe-Should-Retry, X-Stripe-External-Auth-Required, X-Stripe-Privileged-Session-Required',
+2026-06-03T22:12:24.774Z [backend]       'access-control-max-age': '300',
+2026-06-03T22:22:17.658Z [backend]       'content-length': '209',
+2026-06-03T22:22:17.658Z [backend]       date: 'Wed, 03 Jun 2026 22:22:17 GMT',
+2026-06-03T22:22:17.658Z [backend]     message: 'Invalid API Key provided: sk_live_***********************************************************************************************tlKU',
+2026-06-03T22:22:17.658Z [backend]     at res.toJSON.then.Error_js_1.StripeAPIError.message (/home/runner/workspace/backend/node_modules/stripe/cjs/RequestSender.js:96:31)
+2026-06-03T22:22:17.658Z [backend]       server: 'nginx',
+2026-06-03T22:22:17.658Z [backend]     headers: {
+2026-06-03T22:22:17.658Z [backend]       connection: 'keep-alive',
+2026-06-03T22:22:17.658Z [backend]       'content-type': 'application/json',
+2026-06-03T22:22:17.658Z [backend]     type: 'invalid_request_error',
+2026-06-03T22:22:17.660Z [backend]       'content-security-policy': "base-uri 'none'; default-src 'none'; form-action 'none'; frame-ancestors 'none'; upgrade-insecure-requests",
+2026-06-03T22:22:17.660Z [backend]       'access-control-allow-methods': 'GET, HEAD, PUT, PATCH, POST, DELETE',
+2026-06-03T22:22:17.660Z [backend]       'www-authenticate': 'Bearer realm="Stripe"',
+2026-06-03T22:22:17.660Z [backend]       'x-robots-tag': 'none',
+2026-06-03T22:22:17.660Z [backend]       vary: 'Origin',
+2026-06-03T22:22:17.660Z [backend]       'access-control-expose-headers': 'Request-Id, Stripe-Manage-Version, Stripe-Should-Retry, X-Stripe-External-Auth-Required, X-Stripe-Privileged-Session-Required',
+2026-06-03T22:22:17.660Z [backend]       'cache-control': 'no-cache, no-store',
+2026-06-03T22:22:17.660Z [backend]       'access-control-allow-origin': '*',
+2026-06-03T22:22:17.660Z [backend]       'x-wc': '383',
+2026-06-03T22:22:17.660Z [backend]       'access-control-allow-credentials': 'true',
+2026-06-03T22:22:17.660Z [backend]       'access-control-max-age': '300',
+2026-06-03T22:22:19.485Z [backend]   type: 'StripeAuthenticationError',
+2026-06-03T22:22:19.485Z [backend]     message: 'Invalid API Key provided: sk_live_***********************************************************************************************tlKU',
+2026-06-03T22:22:19.485Z [backend]       'cache-control': 'no-cache, no-store',
+2026-06-03T22:22:19.485Z [backend]       'content-security-policy': "base-uri 'none'; default-src 'none'; form-action 'none'; frame-ancestors 'none'; upgrade-insecure-requests",
+2026-06-03T22:22:19.485Z [backend]       'access-control-allow-credentials': 'true',
+2026-06-03T22:22:19.485Z [backend]       'access-control-allow-origin': '*',
+2026-06-03T22:22:19.485Z [backend]       server: 'nginx',
+2026-06-03T22:22:19.485Z [backend]       connection: 'keep-alive',
+2026-06-03T22:22:19.485Z [backend]   raw: {
+2026-06-03T22:22:19.485Z [backend]       'access-control-allow-methods': 'GET, HEAD, PUT, PATCH, POST, DELETE',
+2026-06-03T22:22:19.485Z [backend]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5) {
+2026-06-03T22:22:19.485Z [backend] Error creating Stripe customer: StripeAuthenticationError: Invalid API Key provided: sk_live_***********************************************************************************************tlKU
+2026-06-03T22:22:19.485Z [backend]     type: 'invalid_request_error',
+2026-06-03T22:22:19.485Z [backend]       date: 'Wed, 03 Jun 2026 22:22:19 GMT',
+2026-06-03T22:22:19.485Z [backend]       'content-type': 'application/json',
+2026-06-03T22:22:19.485Z [backend]     headers: {
+2026-06-03T22:22:19.485Z [backend]       'access-control-max-age': '300',
+2026-06-03T22:22:19.485Z [backend]       'access-control-expose-headers': 'Request-Id, Stripe-Manage-Version, Stripe-Should-Retry, X-Stripe-External-Auth-Required, X-Stripe-Privileged-Session-Required',
+2026-06-03T22:22:19.485Z [backend]       'content-length': '209',
+2026-06-03T22:22:19.485Z [backend]     at res.toJSON.then.Error_js_1.StripeAPIError.message (/home/runner/workspace/backend/node_modules/stripe/cjs/RequestSender.js:96:31)
+2026-06-03T22:22:28.177Z [backend]       connection: 'keep-alive',
+2026-06-03T22:22:28.177Z [backend]       vary: 'Origin',
+2026-06-03T22:22:28.177Z [backend]       'content-length': '209',
+2026-06-03T22:22:28.177Z [backend]       'access-control-allow-methods': 'GET, HEAD, PUT, PATCH, POST, DELETE',
+2026-06-03T22:22:28.177Z [backend]       'access-control-allow-credentials': 'true',
+2026-06-03T22:22:28.177Z [backend]     headers: {
+2026-06-03T22:22:28.177Z [backend]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5) {
+2026-06-03T22:22:28.177Z [backend]       'access-control-max-age': '300',
+2026-06-03T22:22:28.177Z [backend]       'access-control-allow-origin': '*',
+2026-06-03T22:22:28.177Z [backend]       'content-security-policy': "base-uri 'none'; default-src 'none'; form-action 'none'; frame-ancestors 'none'; upgrade-insecure-requests",
+2026-06-03T22:22:28.177Z [backend]       'access-control-expose-headers': 'Request-Id, Stripe-Manage-Version, Stripe-Should-Retry, X-Stripe-External-Auth-Required, X-Stripe-Privileged-Session-Required',
+2026-06-03T22:22:28.177Z [backend]       'cache-control': 'no-cache, no-store',
+2026-06-03T22:22:28.177Z [backend]   type: 'StripeAuthenticationError',
+2026-06-03T22:22:28.177Z [backend]       'content-type': 'application/json',
+2026-06-03T22:22:28.177Z [backend]     message: 'Invalid API Key provided: sk_live_***********************************************************************************************tlKU',
+2026-06-03T22:22:28.177Z [backend]   raw: {
+2026-06-03T22:22:28.177Z [backend] Error creating Stripe customer: StripeAuthenticationError: Invalid API Key provided: sk_live_***********************************************************************************************tlKU
+2026-06-03T22:22:29.394Z [backend]       'www-authenticate': 'Bearer realm="Stripe"',
+2026-06-03T22:22:29.394Z [backend]       vary: 'Origin',
+2026-06-03T22:22:29.394Z [backend]       'content-length': '209',
+2026-06-03T22:22:29.394Z [backend] Error creating Stripe customer: StripeAuthenticationError: Invalid API Key provided: sk_live_***********************************************************************************************tlKU
+2026-06-03T22:22:29.394Z [backend]       'access-control-allow-origin': '*',
+2026-06-03T22:22:29.394Z [backend]       'access-control-allow-credentials': 'true',
+2026-06-03T22:22:29.394Z [backend]       connection: 'keep-alive',
+2026-06-03T22:22:29.394Z [backend]       'content-type': 'application/json',
+2026-06-03T22:22:29.394Z [backend]       'access-control-allow-methods': 'GET, HEAD, PUT, PATCH, POST, DELETE',
+2026-06-03T22:22:29.394Z [backend]       'access-control-expose-headers': 'Request-Id, Stripe-Manage-Version, Stripe-Should-Retry, X-Stripe-External-Auth-Required, X-Stripe-Privileged-Session-Required',
+2026-06-03T22:22:29.394Z [backend]     headers: {
+2026-06-03T22:22:29.394Z [backend]     at res.toJSON.then.Error_js_1.StripeAPIError.message (/home/runner/workspace/backend/node_modules/stripe/cjs/RequestSender.js:96:31)
+2026-06-03T22:22:29.394Z [backend]       'x-wc': '383',
+2026-06-03T22:22:29.394Z [backend]       'cache-control': 'no-cache, no-store',
+2026-06-03T22:22:29.394Z [backend]     },
+2026-06-03T22:22:29.394Z [backend]       'access-control-max-age': '300',
+2026-06-03T22:22:29.394Z [backend]       date: 'Wed, 03 Jun 2026 22:22:29 GMT',
+2026-06-03T22:22:29.394Z [backend]       'content-security-policy': "base-uri 'none'; default-src 'none'; form-action 'none'; frame-ancestors 'none'; upgrade-insecure-requests",
+2026-06-03T22:22:29.394Z [backend]       'strict-transport-security': 'max-age=63072000; includeSubDomains; preload'
+2026-06-03T22:22:29.394Z [backend]       server: 'nginx',
+2026-06-03T22:22:30.917Z [backend]     vary: 'Origin',
+2026-06-03T22:22:30.917Z [backend]     'x-wc': '383',
+2026-06-03T22:22:30.917Z [backend]     'x-robots-tag': 'none',
+2026-06-03T22:23:02.140Z [backend]     message: 'Invalid API Key provided: sk_live_***********************************************************************************************tlKU',
+2026-06-03T22:23:02.140Z [backend]       connection: 'keep-alive',
+2026-06-03T22:23:02.140Z [backend]       server: 'nginx',
+2026-06-03T22:23:02.140Z [backend]       'access-control-allow-methods': 'GET, HEAD, PUT, PATCH, POST, DELETE',
+2026-06-03T22:23:02.140Z [backend]       'access-control-allow-origin': '*',
+2026-06-03T22:23:02.140Z [backend]     type: 'invalid_request_error',
+2026-06-03T22:23:02.140Z [backend]       'access-control-allow-credentials': 'true',
+2026-06-03T22:23:02.140Z [backend]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5) {
+2026-06-03T22:23:02.140Z [backend]     at res.toJSON.then.Error_js_1.StripeAPIError.message (/home/runner/workspace/backend/node_modules/stripe/cjs/RequestSender.js:96:31)
+2026-06-03T22:23:02.140Z [backend]     headers: {
+2026-06-03T22:23:02.140Z [backend]       'cache-control': 'no-cache, no-store',
+2026-06-03T22:23:02.140Z [backend]   raw: {
+2026-06-03T22:23:02.140Z [backend]       'content-security-policy': "base-uri 'none'; default-src 'none'; form-action 'none'; frame-ancestors 'none'; upgrade-insecure-requests",
+2026-06-03T22:23:02.140Z [backend]       date: 'Wed, 03 Jun 2026 22:23:02 GMT',
+2026-06-03T22:23:02.140Z [backend]       'content-length': '209',
+2026-06-03T22:23:02.140Z [backend]       'access-control-expose-headers': 'Request-Id, Stripe-Manage-Version, Stripe-Should-Retry, X-Stripe-External-Auth-Required, X-Stripe-Privileged-Session-Required',
+2026-06-03T22:23:02.140Z [backend]   type: 'StripeAuthenticationError',
+2026-06-03T22:23:02.140Z [backend]       'access-control-max-age': '300',
+2026-06-03T22:23:02.140Z [backend]       'content-type': 'application/json',
+2026-06-03T22:23:02.140Z [backend] Error creating Stripe customer: StripeAuthenticationError: Invalid API Key provided: sk_live_***********************************************************************************************tlKU
+2026-06-03T22:23:05.057Z [backend]     at res.toJSON.then.Error_js_1.StripeAPIError.message (/home/runner/workspace/backend/node_modules/stripe/cjs/RequestSender.js:96:31)
+2026-06-03T22:23:05.057Z [backend]       'access-control-allow-methods': 'GET, HEAD, PUT, PATCH, POST, DELETE',
+2026-06-03T22:23:05.057Z [backend]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5) {
+2026-06-03T22:23:05.057Z [backend]     type: 'invalid_request_error',
+2026-06-03T22:23:05.057Z [backend]       'access-control-max-age': '300',
+2026-06-03T22:23:05.057Z [backend]       'access-control-expose-headers': 'Request-Id, Stripe-Manage-Version, Stripe-Should-Retry, X-Stripe-External-Auth-Required, X-Stripe-Privileged-Session-Required',
+2026-06-03T22:23:05.057Z [backend] Error creating Stripe customer: StripeAuthenticationError: Invalid API Key provided: sk_live_***********************************************************************************************tlKU
+2026-06-03T22:23:05.057Z [backend]       connection: 'keep-alive',
+2026-06-03T22:23:05.057Z [backend]     headers: {
+2026-06-03T22:23:05.057Z [backend]       'access-control-allow-credentials': 'true',
+2026-06-03T22:23:05.057Z [backend]       server: 'nginx',
+2026-06-03T22:23:05.057Z [backend]       'content-length': '209',
+2026-06-03T22:23:05.057Z [backend]     message: 'Invalid API Key provided: sk_live_***********************************************************************************************tlKU',
+2026-06-03T22:23:05.057Z [backend]       'cache-control': 'no-cache, no-store',
+2026-06-03T22:23:05.057Z [backend]   type: 'StripeAuthenticationError',
+2026-06-03T22:23:05.057Z [backend]       'access-control-allow-origin': '*',
+2026-06-03T22:23:05.057Z [backend]       'content-type': 'application/json',
+2026-06-03T22:23:05.057Z [backend]       'content-security-policy': "base-uri 'none'; default-src 'none'; form-action 'none'; frame-ancestors 'none'; upgrade-insecure-requests",
+2026-06-03T22:23:05.057Z [backend]       date: 'Wed, 03 Jun 2026 22:23:05 GMT',
+2026-06-03T22:23:05.057Z [backend]   raw: {
+2026-06-03T22:23:16.133Z [backend]       'access-control-max-age': '300',
+2026-06-03T22:23:16.133Z [backend]       'access-control-expose-headers': 'Request-Id, Stripe-Manage-Version, Stripe-Should-Retry, X-Stripe-External-Auth-Required, X-Stripe-Privileged-Session-Required',
+2026-06-03T22:23:16.133Z [backend]       connection: 'keep-alive',
+2026-06-03T22:23:16.133Z [backend] Error creating Stripe customer: StripeAuthenticationError: Invalid API Key provided: sk_live_***********************************************************************************************tlKU
+2026-06-03T22:23:16.133Z [backend]       'content-security-policy': "base-uri 'none'; default-src 'none'; form-action 'none'; frame-ancestors 'none'; upgrade-insecure-requests",
+2026-06-03T22:23:16.133Z [backend]   raw: {
+2026-06-03T22:23:16.133Z [backend]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5) {
+2026-06-03T22:23:16.133Z [backend]       'cache-control': 'no-cache, no-store',
+2026-06-03T22:23:16.133Z [backend]       vary: 'Origin',
+2026-06-03T22:23:16.133Z [backend]       'access-control-allow-origin': '*',
+2026-06-03T22:23:16.133Z [backend]       'content-type': 'application/json',
+2026-06-03T22:23:16.133Z [backend]     message: 'Invalid API Key provided: sk_live_***********************************************************************************************tlKU',
+2026-06-03T22:23:16.133Z [backend]     headers: {
+2026-06-03T22:23:16.133Z [backend]     type: 'invalid_request_error',
+2026-06-03T22:23:16.133Z [backend]   type: 'StripeAuthenticationError',
+2026-06-03T22:23:16.133Z [backend]       'content-length': '209',
+2026-06-03T22:23:16.133Z [backend]       date: 'Wed, 03 Jun 2026 22:23:16 GMT',
+2026-06-03T22:23:16.133Z [backend]       'access-control-allow-credentials': 'true',
+2026-06-03T22:23:16.133Z [backend]       'access-control-allow-methods': 'GET, HEAD, PUT, PATCH, POST, DELETE',
+2026-06-03T22:23:16.133Z [backend]     at res.toJSON.then.Error_js_1.StripeAPIError.message (/home/runner/workspace/backend/node_modules/stripe/cjs/RequestSender.js:96:31)
+2026-06-03T22:23:18.707Z [backend]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5) {
+2026-06-03T22:23:18.707Z [backend]   raw: {
+2026-06-03T22:23:18.707Z [backend]       connection: 'keep-alive',
+2026-06-03T22:23:18.707Z [backend]       server: 'nginx',
+2026-06-03T22:23:18.707Z [backend]       'access-control-allow-credentials': 'true',
+2026-06-03T22:23:18.707Z [backend]       'strict-transport-security': 'max-age=63072000; includeSubDomains; preload'
+2026-06-03T22:23:18.707Z [backend]     statusCode: 401,
+2026-06-03T22:23:18.707Z [backend]     message: 'Invalid API Key provided: sk_live_***********************************************************************************************tlKU',
+2026-06-03T22:23:38.202Z [backend]       'access-control-allow-credentials': 'true',
+2026-06-03T22:23:38.202Z [backend]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5) {
+2026-06-03T22:23:38.202Z [backend]       'access-control-allow-origin': '*',
+2026-06-03T22:23:38.202Z [backend] Error creating Stripe customer: StripeAuthenticationError: Invalid API Key provided: sk_live_***********************************************************************************************tlKU
+2026-06-03T22:23:38.202Z [backend]       server: 'nginx',
+2026-06-03T22:23:38.202Z [backend]       date: 'Wed, 03 Jun 2026 22:23:38 GMT',
+2026-06-03T22:23:38.202Z [backend]       'www-authenticate': 'Bearer realm="Stripe"',
+2026-06-03T22:23:38.202Z [backend]     message: 'Invalid API Key provided: sk_live_***********************************************************************************************tlKU',
+2026-06-03T22:23:38.202Z [backend]       'access-control-expose-headers': 'Request-Id, Stripe-Manage-Version, Stripe-Should-Retry, X-Stripe-External-Auth-Required, X-Stripe-Privileged-Session-Required',
+2026-06-03T22:23:38.202Z [backend]       'access-control-allow-methods': 'GET, HEAD, PUT, PATCH, POST, DELETE',
+2026-06-03T22:23:38.202Z [backend]     type: 'invalid_request_error',
+2026-06-03T22:23:38.202Z [backend]       vary: 'Origin',
+2026-06-03T22:23:38.202Z [backend]     at res.toJSON.then.Error_js_1.StripeAPIError.message (/home/runner/workspace/backend/node_modules/stripe/cjs/RequestSender.js:96:31)
+2026-06-03T22:23:38.202Z [backend]       'content-security-policy': "base-uri 'none'; default-src 'none'; form-action 'none'; frame-ancestors 'none'; upgrade-insecure-requests",
+2026-06-03T22:23:38.202Z [backend]       'content-length': '209',
+2026-06-03T22:23:38.202Z [backend]       'cache-control': 'no-cache, no-store',
+2026-06-03T22:23:38.202Z [backend]       'access-control-max-age': '300',
+2026-06-03T22:23:38.202Z [backend]       connection: 'keep-alive',
+2026-06-03T22:23:38.202Z [backend]     headers: {
+2026-06-03T22:23:38.202Z [backend]       'content-type': 'application/json',
+2026-06-03T22:23:39.495Z [backend]       'cache-control': 'no-cache, no-store',
+2026-06-03T22:23:39.495Z [backend]       'access-control-max-age': '300',
+2026-06-03T22:23:39.495Z [backend]       connection: 'keep-alive',
+2026-06-03T22:23:39.495Z [backend]     at res.toJSON.then.Error_js_1.StripeAPIError.message (/home/runner/workspace/backend/node_modules/stripe/cjs/RequestSender.js:96:31)
+2026-06-03T22:23:39.495Z [backend]       'access-control-allow-credentials': 'true',
+2026-06-03T22:23:39.495Z [backend]     message: 'Invalid API Key provided: sk_live_***********************************************************************************************tlKU',
+2026-06-03T22:23:39.495Z [backend]       'content-security-policy': "base-uri 'none'; default-src 'none'; form-action 'none'; frame-ancestors 'none'; upgrade-insecure-requests",
+2026-06-03T22:23:39.495Z [backend]     type: 'invalid_request_error',
+2026-06-03T22:23:39.495Z [backend]       'www-authenticate': 'Bearer realm="Stripe"',
+2026-06-03T22:23:39.495Z [backend]       'access-control-expose-headers': 'Request-Id, Stripe-Manage-Version, Stripe-Should-Retry, X-Stripe-External-Auth-Required, X-Stripe-Privileged-Session-Required',
+2026-06-03T22:23:39.495Z [backend]       'x-robots-tag': 'none',
+2026-06-03T22:23:39.495Z [backend]       'content-length': '209',
+2026-06-03T22:23:39.495Z [backend]   type: 'StripeAuthenticationError',
+2026-06-03T22:23:39.495Z [backend]       'access-control-allow-origin': '*',
+2026-06-03T22:23:39.495Z [backend]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5) {
+2026-06-03T22:23:39.495Z [backend]       vary: 'Origin',
+2026-06-03T22:23:39.495Z [backend]   raw: {
+2026-06-03T22:23:39.495Z [backend] Error creating Stripe customer: StripeAuthenticationError: Invalid API Key provided: sk_live_***********************************************************************************************tlKU
+2026-06-03T22:23:39.495Z [backend]     headers: {
+2026-06-03T22:23:39.495Z [backend]       'access-control-allow-methods': 'GET, HEAD, PUT, PATCH, POST, DELETE',
+2026-06-03T22:23:43.207Z [backend]   },
+2026-06-03T22:23:43.207Z [backend]     'access-control-max-age': '300',
+2026-06-03T22:23:43.207Z [backend]     'x-wc': '383',
+2026-06-03T22:23:43.207Z [backend]     'cache-control': 'no-cache, no-store',
+2026-06-03T22:23:43.207Z [backend]     vary: 'Origin',
+2026-06-03T22:23:43.207Z [backend]     'content-security-policy': "base-uri 'none'; default-src 'none'; form-action 'none'; frame-ancestors 'none'; upgrade-insecure-requests",
+2026-06-03T22:23:45.038Z [backend]     type: 'invalid_request_error',
+2026-06-03T22:23:45.038Z [backend]       'access-control-allow-methods': 'GET, HEAD, PUT, PATCH, POST, DELETE',
+2026-06-03T22:23:45.038Z [backend]       'access-control-expose-headers': 'Request-Id, Stripe-Manage-Version, Stripe-Should-Retry, X-Stripe-External-Auth-Required, X-Stripe-Privileged-Session-Required',
+2026-06-03T22:23:45.038Z [backend]       'access-control-allow-credentials': 'true',
+2026-06-03T22:23:45.038Z [backend]       'access-control-max-age': '300',
+2026-06-03T22:23:45.038Z [backend]     at res.toJSON.then.Error_js_1.StripeAPIError.message (/home/runner/workspace/backend/node_modules/stripe/cjs/RequestSender.js:96:31)
+2026-06-03T22:23:45.038Z [backend]       'content-type': 'application/json',
+2026-06-03T22:23:45.038Z [backend]       date: 'Wed, 03 Jun 2026 22:23:45 GMT',
+2026-06-03T22:23:45.038Z [backend]   type: 'StripeAuthenticationError',
+2026-06-03T22:23:45.038Z [backend] Error creating Stripe customer: StripeAuthenticationError: Invalid API Key provided: sk_live_***********************************************************************************************tlKU
+2026-06-03T22:23:45.038Z [backend]       server: 'nginx',
+2026-06-03T22:23:45.038Z [backend]   raw: {
+2026-06-03T22:23:45.038Z [backend]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5) {
+2026-06-03T22:23:45.038Z [backend]       'content-security-policy': "base-uri 'none'; default-src 'none'; form-action 'none'; frame-ancestors 'none'; upgrade-insecure-requests",
+2026-06-03T22:23:45.038Z [backend]       'cache-control': 'no-cache, no-store',
+2026-06-03T22:23:45.038Z [backend]       connection: 'keep-alive',
+2026-06-03T22:23:45.038Z [backend]     headers: {
+2026-06-03T22:23:45.038Z [backend]       'access-control-allow-origin': '*',
+2026-06-03T22:23:45.038Z [backend]     message: 'Invalid API Key provided: sk_live_***********************************************************************************************tlKU',
+2026-06-03T22:23:45.038Z [backend]       'content-length': '209',
+2026-06-03T23:56:42.200Z [backend] {"t":"2026-06-03T23:56:42.200Z","event":"agent_task_queued","taskId":"4ced7d23-6841-4713-8b81-00df1b0653b4","userId":"cmpeptffh0006xdf5kk7za0en","chatId":"cmpyq6o0400uh3ueudsq93k6g","model":"openai/gpt-5.5","queue":"siragpt-agent-tasks","jobId":"4ced7d23-6841-4713-8b81-00df1b0653b4","traceId":"ce765683-c36c-49c1-9033-ede2a6fc99e1","documentPolicy":{"mode":"chat_only","format":"docx","template":"business","complexity":"simple","autoGenerate":false,"reason":"Solicitud de analisis documental; se responde primero en chat y se sugiere documento solo si hace falta."}}
+2026-06-03T23:56:45.910Z [backend] {"t":"2026-06-03T23:56:45.909Z","event":"agent_task_worker_started","taskId":"4ced7d23-6841-4713-8b81-00df1b0653b4","userId":"cmpeptffh0006xdf5kk7za0en","chatId":"cmpyq6o0400uh3ueudsq93k6g","model":"openai/gpt-5.5","runtimeModel":"gpt-4o-mini","runtimeProvider":"OpenAI","modelRemapped":true,"queue":"siragpt-agent-tasks","jobId":"4ced7d23-6841-4713-8b81-00df1b0653b4","traceId":"ce765683-c36c-49c1-9033-ede2a6fc99e1","documentPolicy":{"mode":"chat_only","format":"docx","template":"business","complexity":"simple","autoGenerate":false,"reason":"Solicitud de analisis documental; se responde primero en chat y se sugiere documento solo si hace falta."}}
+2026-06-03T23:58:37.315Z [backend] {"t":"2026-06-03T23:58:37.313Z","event":"agent_task_worker_finished","taskId":"4ced7d23-6841-4713-8b81-00df1b0653b4","userId":"cmpeptffh0006xdf5kk7za0en","chatId":"cmpyq6o0400uh3ueudsq93k6g","status":"completed","stoppedReason":"finalized","steps":16,"artifacts":0,"durationMs":116480}
+2026-06-04T00:17:05.195Z [backend] warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).
+2026-06-04T00:17:05.195Z [backend] Environment variables loaded from .env
+2026-06-04T00:17:06.246Z [backend]   - [production] Recommended env var OTEL_EXPORTER_OTLP_ENDPOINT is not set — feature may be disabled.
+2026-06-04T00:17:06.246Z [backend]   - [production] Recommended env var SLACK_ENCRYPTION_KEY is not set — feature may be disabled.
+2026-06-04T00:17:06.246Z [backend] WARN:
+2026-06-04T00:17:21.551Z [backend] prisma:warn In production, we recommend using `prisma generate --no-engine` (See: `prisma generate --help`)
+2026-06-04T01:02:32.731Z [backend] [ai] memory recall failed (continuing without): VOYAGE_API_KEY not configured for pgvector user memory
+2026-06-04T01:02:42.273Z [backend] {"t":"2026-06-04T01:02:42.272Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpeptffh0006xdf5kk7za0en","model":"openai/gpt-5.5","provider":"OpenRouter","durationMs":10457,"promptChars":30,"responseChars":375,"approxTokens":102,"aborted":false,"abortReason":null}
+2026-06-04T02:50:06.576Z [backend] [ai] memory recall failed (continuing without): VOYAGE_API_KEY not configured for pgvector user memory
+2026-06-04T02:50:15.544Z [backend] {"t":"2026-06-04T02:50:15.543Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpeptffh0006xdf5kk7za0en","model":"openai/gpt-5.5","provider":"OpenRouter","durationMs":9295,"promptChars":30,"responseChars":260,"approxTokens":73,"aborted":false,"abortReason":null}
+2026-06-04T02:50:16.586Z [backend] [long-term-memory] store failed: VOYAGE_API_KEY not configured for pgvector user memory
+2026-06-04T03:28:00.155Z [backend] [ai] memory recall failed (continuing without): VOYAGE_API_KEY not configured for pgvector user memory
+2026-06-04T03:28:04.192Z [backend] {"t":"2026-06-04T03:28:04.190Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpeptffh0006xdf5kk7za0en","model":"openai/gpt-5.5","provider":"OpenRouter","durationMs":4325,"promptChars":4,"responseChars":33,"approxTokens":10,"aborted":false,"abortReason":null}
+2026-06-04T03:28:22.114Z [backend] {"t":"2026-06-04T03:28:22.114Z","event":"agent_task_queued","taskId":"4eabc245-636c-47ae-89b7-7f44274f070d","userId":"cmpeptffh0006xdf5kk7za0en","chatId":"cmpyxqfrc014f3ueu9p08l9mu","model":"openai/gpt-5.5","queue":"siragpt-agent-tasks","jobId":"4eabc245-636c-47ae-89b7-7f44274f070d","traceId":"d8f8421d-dbac-45e5-8658-0c03ed12f6b3","documentPolicy":{"mode":"doc_suggested","format":"docx","template":"business","complexity":"standard","autoGenerate":false,"reason":"La respuesta tiene suficiente densidad para sugerir un documento profesional."}}
+2026-06-04T03:40:35.505Z [backend] [ai] memory recall failed (continuing without): VOYAGE_API_KEY not configured for pgvector user memory
+2026-06-04T03:40:47.812Z [Error: aborted] { code: 'ECONNRESET' }
+2026-06-04T03:40:52.678Z [backend] {"t":"2026-06-04T03:40:52.676Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpeptffh0006xdf5kk7za0en","model":"z-ai/glm-5.1","provider":"OpenRouter","durationMs":17492,"promptChars":4,"responseChars":237,"approxTokens":61,"aborted":false,"abortReason":null}
+2026-06-04T03:41:02.399Z [Error: aborted] { code: 'ECONNRESET' }
+2026-06-04T03:41:04.350Z [Error: aborted] { code: 'ECONNRESET' }
+2026-06-04T03:41:04.874Z [Error: aborted] { code: 'ECONNRESET' }
+2026-06-04T03:41:05.431Z [Error: aborted] { code: 'ECONNRESET' }
+2026-06-04T03:41:05.501Z [Error: aborted] { code: 'ECONNRESET' }
+2026-06-04T03:41:05.837Z [Error: aborted] { code: 'ECONNRESET' }

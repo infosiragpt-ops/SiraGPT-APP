@@ -35,10 +35,20 @@ const PROVIDER_ENV_MAP = Object.freeze({
   mistral: 'MISTRAL_API_KEY',
   groq: 'GROQ_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
+  cerebras: 'CEREBRAS_API_KEY',
+  zai: 'ZAI_API_KEY',
+  kimi: 'MOONSHOT_API_KEY',
   deepseek: 'DEEPSEEK_API_KEY',
   xai: 'XAI_API_KEY',
   together: 'TOGETHER_API_KEY',
   fireworks: 'FIREWORKS_API_KEY',
+  fal: 'FAL_KEY',
+});
+
+const PROVIDER_ENV_ALIASES = Object.freeze({
+  fal: ['FAL_API_KEY'],
+  cerebras: ['GEMA4_API_KEY'],
+  kimi: ['KIMI_API_KEY'],
 });
 
 // providerKey (lowercase, panel form) → provider value in AiModel.provider column
@@ -49,10 +59,14 @@ const PROVIDER_CATALOG_MAP = Object.freeze({
   mistral: 'Mistral',
   groq: 'Groq',
   openrouter: 'OpenRouter',
+  cerebras: 'Cerebras',
+  zai: 'Z.ai',
+  kimi: 'Kimi',
   deepseek: 'DeepSeek',
   xai: 'xAI',
   together: 'Together',
   fireworks: 'Fireworks',
+  fal: 'fal.ai',
 });
 
 // providerKey → { url, authHeader: (key) => headers }
@@ -63,10 +77,14 @@ const PROVIDER_PROBE = Object.freeze({
   mistral:    { url: 'https://api.mistral.ai/v1/models',                            auth: (k) => ({ Authorization: `Bearer ${k}` }) },
   groq:       { url: 'https://api.groq.com/openai/v1/models',                       auth: (k) => ({ Authorization: `Bearer ${k}` }) },
   openrouter: { url: 'https://openrouter.ai/api/v1/auth/key',                       auth: (k) => ({ Authorization: `Bearer ${k}` }) }, // /auth/key requires valid user
+  cerebras:   { url: 'https://api.cerebras.ai/v1/models',                           auth: (k) => ({ Authorization: `Bearer ${k}` }) },
+  zai:        { url: 'https://api.z.ai/api/paas/v4/models',                          auth: (k) => ({ Authorization: `Bearer ${k}` }) },
+  kimi:       { url: 'https://api.moonshot.ai/v1/models',                            auth: (k) => ({ Authorization: `Bearer ${k}` }) },
   deepseek:   { url: 'https://api.deepseek.com/v1/models',                          auth: (k) => ({ Authorization: `Bearer ${k}` }) },
   xai:        { url: 'https://api.x.ai/v1/models',                                  auth: (k) => ({ Authorization: `Bearer ${k}` }) },
   together:   { url: 'https://api.together.xyz/v1/models',                          auth: (k) => ({ Authorization: `Bearer ${k}` }) },
   fireworks:  { url: 'https://api.fireworks.ai/inference/v1/models',                auth: (k) => ({ Authorization: `Bearer ${k}` }) },
+  fal:        { url: 'https://api.fal.ai/v1/models?limit=1',                         auth: (k) => ({ Authorization: /^key\s+/i.test(k) ? k : `Key ${k}` }) },
 });
 
 const KEY_PREFIX = 'enc:v1:';
@@ -89,8 +107,10 @@ let snapshotCaptured = false;
 
 function captureSnapshotOnce() {
   if (snapshotCaptured) return;
-  for (const env of Object.values(PROVIDER_ENV_MAP)) {
-    envSnapshot[env] = process.env[env] || '';
+  for (const providerKey of Object.keys(PROVIDER_ENV_MAP)) {
+    for (const env of [PROVIDER_ENV_MAP[providerKey], ...(PROVIDER_ENV_ALIASES[providerKey] || [])]) {
+      envSnapshot[env] = process.env[env] || '';
+    }
   }
   snapshotCaptured = true;
 }
@@ -118,20 +138,25 @@ async function applyAdminConnections() {
     const applied = [];
     const restored = [];
     for (const [providerKey, envVar] of Object.entries(PROVIDER_ENV_MAP)) {
+      const envVars = [envVar, ...(PROVIDER_ENV_ALIASES[providerKey] || [])];
       const winner = winners.get(providerKey);
       if (winner) {
         const plain = unwrap(winner.apiKey);
         if (plain) {
-          process.env[envVar] = plain;
+          for (const name of envVars) process.env[name] = plain;
           applied.push(providerKey);
           continue;
         }
       }
       // No winner — restore original .env value if it changed.
-      if (process.env[envVar] !== envSnapshot[envVar]) {
-        process.env[envVar] = envSnapshot[envVar];
-        restored.push(providerKey);
+      let didRestore = false;
+      for (const name of envVars) {
+        if (process.env[name] !== envSnapshot[name]) {
+          process.env[name] = envSnapshot[name];
+          didRestore = true;
+        }
       }
+      if (didRestore) restored.push(providerKey);
     }
 
     if (applied.length || restored.length) {
@@ -184,7 +209,9 @@ async function reconcileCatalog() {
   const prisma = require('../config/database');
   const results = {};
   for (const [providerKey, envVar] of Object.entries(PROVIDER_ENV_MAP)) {
-    const key = process.env[envVar];
+    const key = [envVar, ...(PROVIDER_ENV_ALIASES[providerKey] || [])]
+      .map((name) => process.env[name])
+      .find((value) => value && String(value).trim());
     if (!key) {
       results[providerKey] = { healthy: false, reason: 'no_key' };
       continue;

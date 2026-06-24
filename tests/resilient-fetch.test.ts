@@ -1,10 +1,13 @@
 import assert from "node:assert/strict"
 import { createRequire } from "node:module"
+import * as path from "node:path"
 import { describe, it } from "node:test"
 
-const cjsRequire = createRequire(__filename)
+// Anchor CJS resolution at the repo root (the runner always runs from the
+// repo root) so backend requires work no matter where test-dist lives.
+const cjsRequire = createRequire(path.join(process.cwd(), "package.json"))
 
-const { createResilientFetch } = cjsRequire("../../backend/src/utils/resilient-fetch") as {
+const { createResilientFetch } = cjsRequire("./backend/src/utils/resilient-fetch") as {
   createResilientFetch: (opts: Record<string, unknown>) => {
     send: (url: string, init?: Record<string, unknown>) => Promise<{ status: number; headers: { get(name: string): string | null } }>
   }
@@ -40,7 +43,13 @@ describe("resilient-fetch caller abort handling", () => {
     assert.equal(calls, 0, "pre-aborted caller signal must short-circuit before fetch")
   })
 
-  it("does not attach redundant caller abort listeners during normal retries", async () => {
+  it("keeps caller abort listeners balanced during normal retries (one abortable backoff sleep, no leaks)", async () => {
+    // Contract since 5950c2c36 ("fix(backend): abort deadline retry backoff
+    // promptly"): each backoff wait attaches exactly ONE abort listener to the
+    // caller signal — so a caller abort interrupts the sleep immediately — and
+    // removes it as soon as the wait ends. The resilient-fetch layer itself
+    // must NOT wrap/merge the caller signal per attempt (fetch receives the
+    // original signal), and no listener may leak after send() resolves.
     const caller = new AbortController()
     const originalAdd = caller.signal.addEventListener.bind(caller.signal)
     const originalRemove = caller.signal.removeEventListener.bind(caller.signal)
@@ -66,14 +75,14 @@ describe("resilient-fetch caller abort handling", () => {
       },
       maxAttempts: 2,
       deadlineMs: 1_000,
-      backoff: { next: () => 0 },
+      backoff: { next: () => 1 },
     })
 
     const res = await client.send("https://api.example.test/retry", { signal: caller.signal })
 
     assert.equal(res.status, 200)
     assert.equal(calls, 2)
-    assert.equal(added, 0)
-    assert.equal(removed, 0)
+    assert.equal(added, 1, "exactly one abort listener per backoff sleep — sleep must stay abortable, attempts must not merge/wrap the caller signal")
+    assert.equal(removed, added, "every backoff abort listener is detached — no leak after send() resolves")
   })
 })

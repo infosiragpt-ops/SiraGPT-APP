@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Mail, Shield, ArrowRight, CheckCircle } from 'lucide-react';
 import { gmailService } from '@/lib/gmail-service';
+import { ThinkingIndicator } from '@/components/ui/thinking-indicator';
 import { toast } from 'sonner';
 
 interface GmailConnectionCardProps {
@@ -71,7 +72,7 @@ export const GmailConnectionCard: React.FC<GmailConnectionCardProps> = ({
         >
           {isConnecting ? (
             <div className="flex items-center gap-2">
-              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              <ThinkingIndicator size="sm" className="text-white" />
               Conectando…
             </div>
           ) : (

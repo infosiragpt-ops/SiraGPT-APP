@@ -13,6 +13,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+process.env.AGENT_TASK_PRISMA_SYNC = '0';
 process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-fail-terminal-'));
 
 const taskStore = require('../src/services/agents/task-store');

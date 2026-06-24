@@ -1,71 +1,55 @@
 "use client"
 
 import * as React from "react"
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { useSearchParams } from "next/navigation"
 import {
   ArrowLeft,
-  Bot,
-  Save,
   Eye,
   Upload,
   X,
-  Plus,
-  Trash2,
   Wand2,
-  Settings,
-  MessageSquare,
   Globe,
-  Database,
   ImageIcon,
   Code,
-  Sparkles,
-  BookOpen,
-  Briefcase,
   Palette,
-  Search,
-  Users,
-  Heart,
-  Gamepad2,
-  TrendingUp,
-  Star} from "lucide-react"
+  Plus,
+  Mic,
+  ArrowUp,
+  Star,
+  Lock,
+  Link2,
+  LayoutGrid,
+  Check} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Slider } from "@/components/ui/slider"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { useChat } from "@/lib/chat-context-integrated"
+import { cn } from "@/lib/utils"
 import { toast } from "sonner"
-import { gptsService, type CustomGPT } from "@/lib/gpts-service"
+import { gptsService, type CustomGPT, type GPTKnowledgeFile } from "@/lib/gpts-service"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
-// Categories - matching the GPTs page
-const categories = [
-  { name: "Writing", icon: <BookOpen className="w-4 h-4" /> },
-  { name: "Productivity", icon: <Briefcase className="w-4 h-4" /> },
-  { name: "Programming", icon: <Code className="w-4 h-4" /> },
-  { name: "Design", icon: <Palette className="w-4 h-4" /> },
-  { name: "DALL·E", icon: <ImageIcon className="w-4 h-4" /> },
-  { name: "Research & Analysis", icon: <Search className="w-4 h-4" /> },
-  { name: "Education", icon: <BookOpen className="w-4 h-4" /> },
-  { name: "Data Analysis", icon: <Users className="w-4 h-4" /> },
-  { name: "Lifestyle", icon: <Heart className="w-4 h-4" /> },
-  { name: "Entertainment", icon: <Gamepad2 className="w-4 h-4" /> },
-  { name: "Marketing", icon: <TrendingUp className="w-4 h-4" /> },
-  { name: "Finance", icon: <Users className="w-4 h-4" /> },
-  { name: "Health & Fitness", icon: <Heart className="w-4 h-4" /> },
-  { name: "Travel", icon: <Globe className="w-4 h-4" /> },
-  { name: "Other", icon: <Star className="w-4 h-4" /> },
-]
+import { GptActionsEditor, type GptAction } from "@/components/gpts/gpt-actions-editor"
+
+const liquidPanel =
+  "relative overflow-hidden rounded-[24px] border border-white/60 bg-white/75 shadow-[0_18px_50px_-28px_rgba(15,23,42,0.35),inset_0_1px_0_rgba(255,255,255,0.78)] backdrop-blur-2xl dark:border-white/10 dark:bg-zinc-950/55 dark:shadow-[0_18px_60px_-30px_rgba(0,0,0,0.85),inset_0_1px_0_rgba(255,255,255,0.08)]"
+
+const liquidField =
+  "rounded-2xl border-white/65 bg-white/78 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)] backdrop-blur-xl placeholder:text-zinc-400 focus-visible:ring-2 focus-visible:ring-zinc-950/10 dark:border-white/10 dark:bg-white/[0.055] dark:placeholder:text-zinc-500 dark:focus-visible:ring-white/15"
+
+const liquidGhost =
+  "rounded-full border-white/70 bg-white/70 text-zinc-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)] backdrop-blur-xl hover:bg-white/90 hover:text-zinc-950 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-300 dark:hover:bg-white/[0.1] dark:hover:text-white"
 
 interface GPTFormData {
   name: string
@@ -102,6 +86,21 @@ export default function CreateGPTPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [uploadedImage, setUploadedImage] = useState<string | null>(null)
   const [isEditMode, setIsEditMode] = useState(false)
+  const [isShareOpen, setIsShareOpen] = useState(false)
+
+  // Conocimientos (knowledge files) — only meaningful in edit mode, since a
+  // GPT id is required to link uploaded files. In create mode the user is
+  // prompted to save first.
+  const [knowledgeFiles, setKnowledgeFiles] = useState<GPTKnowledgeFile[]>([])
+  const [isUploadingKnowledge, setIsUploadingKnowledge] = useState(false)
+  const knowledgeInputRef = useRef<HTMLInputElement | null>(null)
+
+  // Live draft preview chat — talks to POST /gpts/preview-chat (stateless,
+  // free FlashGPT model). Lets the creator try the persona before saving.
+  const [previewMessages, setPreviewMessages] = useState<{ role: "user" | "assistant"; content: string }[]>([])
+  const [previewInput, setPreviewInput] = useState("")
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const previewScrollRef = useRef<HTMLDivElement | null>(null)
 
   const [formData, setFormData] = useState<GPTFormData>({
     name: "",
@@ -118,9 +117,9 @@ export default function CreateGPTPage() {
     category: "",
     actions: [],
     capabilities: {
-      webBrowsing: false,
-      dataAnalysis: false,
-      imageGeneration: false,
+      webBrowsing: true,
+      dataAnalysis: true,
+      imageGeneration: true,
       codeInterpreter: false,
     }
   })
@@ -175,10 +174,10 @@ export default function CreateGPTPage() {
         category: gpt.category || "",
         actions: gpt.actions || [],
         capabilities: {
-          webBrowsing: false,
-          dataAnalysis: false,
-          imageGeneration: false,
-          codeInterpreter: false,
+          webBrowsing: gpt.capabilities?.webBrowsing ?? false,
+          dataAnalysis: gpt.capabilities?.dataAnalysis ?? false,
+          imageGeneration: gpt.capabilities?.imageGeneration ?? false,
+          codeInterpreter: gpt.capabilities?.codeInterpreter ?? false,
         }
       })
 
@@ -186,11 +185,69 @@ export default function CreateGPTPage() {
       if (gpt.iconUrl && (gpt.iconUrl.startsWith('http') || gpt.iconUrl.startsWith('https') || gpt.iconUrl.startsWith('data:'))) {
         setUploadedImage(gpt.iconUrl)
       }
+
+      // Load existing knowledge files (best-effort — a failure here must not
+      // block editing the rest of the GPT).
+      try {
+        const files = await gptsService.getGptKnowledge(gptId)
+        setKnowledgeFiles(files)
+      } catch (knowledgeError) {
+        console.warn('Failed to load GPT knowledge files:', knowledgeError)
+      }
     } catch (error: any) {
       toast.error(error.message || 'Failed to load GPT')
       router.push('/gpts')
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  // Format a byte count as a compact human-readable size for the file list.
+  const formatKnowledgeSize = (bytes: number): string => {
+    if (!Number.isFinite(bytes) || bytes <= 0) return "0 B"
+    const units = ["B", "KB", "MB", "GB"]
+    const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
+    return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`
+  }
+
+  const handleKnowledgeUploadClick = () => {
+    // In create mode there is no GPT id to attach files to yet.
+    if (!isEditMode || !editId) {
+      toast.info("Guarda el GPT primero para añadir conocimientos.")
+      return
+    }
+    knowledgeInputRef.current?.click()
+  }
+
+  const handleKnowledgeFilesSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || [])
+    // Reset the input so selecting the same file again re-triggers onChange.
+    event.target.value = ""
+    if (files.length === 0) return
+    if (!isEditMode || !editId) {
+      toast.info("Guarda el GPT primero para añadir conocimientos.")
+      return
+    }
+
+    setIsUploadingKnowledge(true)
+    try {
+      const updated = await gptsService.uploadGptKnowledge(editId, files)
+      setKnowledgeFiles(updated)
+      toast.success(files.length === 1 ? "Archivo añadido" : `${files.length} archivos añadidos`)
+    } catch (error: any) {
+      toast.error(error.message || "No se pudieron subir los archivos")
+    } finally {
+      setIsUploadingKnowledge(false)
+    }
+  }
+
+  const handleRemoveKnowledgeFile = async (fileId: string) => {
+    if (!isEditMode || !editId) return
+    try {
+      await gptsService.deleteGptKnowledge(editId, fileId)
+      setKnowledgeFiles(prev => prev.filter(f => f.id !== fileId))
+    } catch (error: any) {
+      toast.error(error.message || "No se pudo eliminar el archivo")
     }
   }
 
@@ -238,6 +295,42 @@ export default function CreateGPTPage() {
       }
     }))
   }
+
+  // Send a message to the live draft preview (POST /gpts/preview-chat).
+  const sendPreviewMessage = async (text: string) => {
+    const content = text.trim()
+    if (!content || previewLoading) return
+    if (!formData.instructions.trim()) {
+      toast.info("Escribe las instrucciones del GPT para probar la vista previa.")
+      return
+    }
+    const nextMessages = [...previewMessages, { role: "user" as const, content }]
+    setPreviewMessages(nextMessages)
+    setPreviewInput("")
+    setPreviewLoading(true)
+    try {
+      const res = await gptsService.previewChat({
+        instructions: formData.instructions,
+        name: formData.name,
+        messages: nextMessages,
+      })
+      setPreviewMessages(prev => [...prev, { role: "assistant" as const, content: res.reply || "…" }])
+    } catch (err) {
+      console.error("Preview chat error:", err)
+      setPreviewMessages(prev => [
+        ...prev,
+        { role: "assistant" as const, content: "No pude generar la respuesta de vista previa. Inténtalo de nuevo." },
+      ])
+    } finally {
+      setPreviewLoading(false)
+    }
+  }
+
+  // Keep the preview conversation pinned to the latest message.
+  useEffect(() => {
+    const el = previewScrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [previewMessages, previewLoading])
 
   const validateForm = () => {
     if (!formData.name.trim()) {
@@ -298,15 +391,15 @@ export default function CreateGPTPage() {
 
       if (isEditMode && editId) {
         result = await gptsService.updateGPT(editId, gptData)
-        toast.success("GPT updated successfully!")
+        toast.success("GPT actualizado")
       } else {
         result = await gptsService.createGPT(gptData)
-        toast.success("GPT created successfully!")
+        toast.success("GPT creado")
       }
 
       router.push("/gpts")
     } catch (error: any) {
-      toast.error(error.message || "Failed to save GPT")
+      toast.error(error.message || "No se pudo guardar el GPT")
     } finally {
       setIsSaving(false)
     }
@@ -370,7 +463,7 @@ export default function CreateGPTPage() {
 
   const generateInstructions = (): void => {
     if (!formData.name || !formData.description) {
-      toast.error("Please fill in name and description first");
+      toast.error("Completa nombre y descripción primero");
       return;
     }
 
@@ -426,7 +519,7 @@ export default function CreateGPTPage() {
 
   const generateGreeting = (): void => {
     if (!formData.name || !formData.description) {
-      toast.error("Please fill in name and description first");
+      toast.error("Completa nombre y descripción primero");
       return;
     }
 
@@ -484,7 +577,7 @@ export default function CreateGPTPage() {
     const file = event.target.files?.[0]
     if (file) {
       if (file.size > 5 * 1024 * 1024) { // 5MB limit
-        toast.error("Image size should be less than 5MB")
+        toast.error("La imagen debe pesar menos de 5MB")
         return
       }
 
@@ -525,30 +618,30 @@ export default function CreateGPTPage() {
       <div className="flex min-h-full items-center justify-center bg-background">
         <div className="text-center">
           <ThinkingIndicator size="lg" className="mx-auto mb-4" />
-          <p className="text-sm text-muted-foreground">Loading GPT...</p>
+          <p className="text-sm text-muted-foreground">Cargando GPT...</p>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="flex min-h-full flex-col bg-background">
+    <div className="flex min-h-full flex-col bg-[linear-gradient(180deg,#fbfbfb_0%,#f6f7f8_100%)] text-zinc-950 dark:bg-[linear-gradient(180deg,#09090b_0%,#111113_100%)] dark:text-zinc-50">
       {/* Header */}
-      <header className="sticky top-0 z-30 border-b border-border/60 bg-background/80 backdrop-blur-xl supports-[backdrop-filter]:bg-background/60">
-        <div className="mx-auto flex w-full max-w-5xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
+      <header className="sticky top-0 z-30 border-b border-black/[0.06] bg-white/80 backdrop-blur-xl dark:border-white/10 dark:bg-zinc-950/80">
+        <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
           <div className="flex min-w-0 items-center gap-2 sm:gap-3">
             <SidebarTrigger className="md:hidden" />
             <Button
               variant="ghost"
               size="icon"
               onClick={() => router.back()}
-              className="h-9 w-9 flex-shrink-0 rounded-full text-muted-foreground hover:text-foreground"
-              aria-label="Back"
+              className="h-9 w-9 flex-shrink-0 rounded-full text-zinc-500 hover:bg-black/[0.04] hover:text-zinc-950 dark:text-zinc-400 dark:hover:bg-white/10 dark:hover:text-white"
+              aria-label="Volver"
             >
               <ArrowLeft className="h-4 w-4" />
             </Button>
             <div className="flex min-w-0 items-center gap-2.5">
-              <div className="grid h-9 w-9 flex-shrink-0 place-items-center overflow-hidden rounded-xl bg-gradient-to-br from-violet-500 to-indigo-600 text-base font-semibold text-white shadow-sm ring-1 ring-black/5">
+              <div className="grid h-9 w-9 flex-shrink-0 place-items-center overflow-hidden rounded-full border border-black/[0.06] bg-zinc-950 text-base font-semibold text-white dark:border-white/10 dark:bg-white dark:text-zinc-950">
                 {uploadedImage ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={uploadedImage} alt="Avatar" className="h-full w-full object-cover" />
@@ -557,226 +650,209 @@ export default function CreateGPTPage() {
                 )}
               </div>
               <div className="min-w-0">
-                <h1 className="truncate text-base font-semibold leading-tight tracking-tight sm:text-lg">
-                  {isEditMode ? "Edit GPT" : "Create GPT"}
+                <h1 className="truncate text-base font-semibold leading-tight sm:text-lg">
+                  {isEditMode ? "Editar GPT" : "Crear GPT"}
                 </h1>
                 <p className="hidden truncate text-xs text-muted-foreground sm:block">
-                  {formData.name ? formData.name : "Configure your assistant"}
+                  {formData.name ? formData.name : "Borrador"}
                 </p>
               </div>
             </div>
           </div>
           <div className="flex flex-shrink-0 items-center gap-2">
+            {/* Mobile preview opens the Dialog */}
             <Button
               variant="outline"
               size="sm"
               onClick={() => setIsPreviewOpen(true)}
               disabled={!formData.name}
-              className="h-9 rounded-full px-3"
+              className={cn("h-9 px-3 lg:hidden", liquidGhost)}
             >
               <Eye className="h-4 w-4 sm:mr-2" />
-              <span className="hidden sm:inline">Preview</span>
+              <span className="hidden sm:inline">Vista previa</span>
             </Button>
             <Button
-              onClick={handleSave}
+              onClick={() => setIsShareOpen(true)}
               disabled={isSaving || !formData.name}
               size="sm"
-              className="h-9 rounded-full px-4 font-medium shadow-sm"
+              className="h-9 rounded-full bg-zinc-950 px-4 font-medium text-white hover:bg-zinc-800 dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200"
             >
               {isSaving ? (
                 <span className="flex items-center gap-2">
-                  <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                  Saving...
+                  <ThinkingIndicator size="xs" />
+                  Guardando...
                 </span>
               ) : isEditMode ? (
-                "Update"
+                "Actualizar"
               ) : (
-                "Create"
+                "Crear"
               )}
             </Button>
           </div>
         </div>
+
+        {/* Tabs */}
+        <div className="mx-auto w-full max-w-6xl px-4 sm:px-6">
+          <div className="flex items-center gap-6">
+            <button
+              type="button"
+              disabled
+              title="Próximamente"
+              className="cursor-not-allowed border-b-2 border-transparent pb-2.5 pt-0.5 text-sm font-medium text-zinc-400 dark:text-zinc-600"
+            >
+              Crear
+            </button>
+            <button
+              type="button"
+              className="-mb-px border-b-2 border-zinc-950 pb-2.5 pt-0.5 text-sm font-medium text-zinc-950 dark:border-white dark:text-white"
+            >
+              Configurar
+            </button>
+          </div>
+        </div>
       </header>
 
-      {/* Main Content */}
-      <div className="flex-1 px-4 py-6 sm:px-6 sm:py-8">
-        <div className="mx-auto w-full max-w-3xl space-y-6">
+      {/* Two-pane builder */}
+      <div className="flex-1">
+        <div className="mx-auto w-full max-w-6xl lg:grid lg:grid-cols-2 lg:gap-0">
 
-          <div className="space-y-1.5">
-            <h2 className="text-xl font-semibold tracking-tight sm:text-2xl">
-              {isEditMode ? "Edit your GPT" : "Create a new GPT"}
-            </h2>
-            <p className="text-sm text-muted-foreground">
-              Customize an assistant with its own name, instructions and personality. Your changes are saved when you press {isEditMode ? "Update" : "Create"}.
-            </p>
-          </div>
+          {/* LEFT — Configurar (form) */}
+          <div className="px-4 py-6 sm:px-6 sm:py-8 lg:border-r lg:border-black/[0.06] dark:lg:border-white/10">
+            <div className="mx-auto w-full max-w-xl space-y-6">
 
-          {/* Basic Information Section */}
-          <Card className="overflow-hidden border-border/70 shadow-sm">
-            <CardHeader className="gap-1 pb-4">
-              <CardTitle className="flex items-center gap-2.5 text-base sm:text-lg">
-                <span className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
-                  <Bot className="h-4 w-4" />
-                </span>
-                <span>Basic Information</span>
-              </CardTitle>
-              <CardDescription className="text-xs sm:text-sm">
-                Define the basic properties of your GPT
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4 sm:space-y-6 pt-0">
-              {/* Avatar Selection */}
-              <div className="space-y-3">
-                <Label className="text-sm font-medium">Avatar</Label>
-
-                <div className="flex flex-col items-start gap-5 sm:flex-row sm:items-center">
-                  {/* Avatar Preview */}
-                  <div className="relative h-20 w-20 flex-shrink-0">
-                    <div className="grid h-full w-full place-items-center overflow-hidden rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 text-3xl font-bold text-white shadow-md ring-1 ring-black/5">
-                      {uploadedImage ? (
-                        <img src={uploadedImage} alt="Avatar" className="h-full w-full object-cover" />
-                      ) : formData.iconUrl ? (
-                        <span>{formData.iconUrl}</span>
-                      ) : (
-                        <span>{getNameInitial()}</span>
-                      )}
-                    </div>
-                    {hasCustomIcon() && (
-                      <button
-                        type="button"
-                        onClick={removeImage}
-                        className="absolute -right-1.5 -top-1.5 grid h-6 w-6 place-items-center rounded-full bg-foreground text-background shadow-md transition hover:scale-105"
-                        aria-label="Remove avatar"
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
+              {/* Avatar */}
+              <div className="flex flex-col items-center gap-3">
+                <div className="relative h-24 w-24">
+                  <label
+                    htmlFor="icon-upload"
+                    className="grid h-full w-full cursor-pointer place-items-center overflow-hidden rounded-full border border-dashed border-black/15 bg-white text-3xl font-semibold text-zinc-700 transition hover:border-black/30 hover:bg-zinc-50 dark:border-white/15 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:border-white/30 dark:hover:bg-zinc-800"
+                  >
+                    {uploadedImage ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={uploadedImage} alt="Avatar" className="h-full w-full object-cover" />
+                    ) : formData.iconUrl ? (
+                      <span>{formData.iconUrl}</span>
+                    ) : formData.name ? (
+                      <span>{getNameInitial()}</span>
+                    ) : (
+                      <Plus className="h-7 w-7 text-zinc-400" />
                     )}
-                  </div>
-
-                  {/* Controls */}
-                  <div className="w-full flex-1 space-y-3">
-                    {/* Emoji Options */}
-                    <div>
-                      <Label className="text-xs text-muted-foreground">Quick Icons</Label>
-                      <div className="mt-2 flex flex-wrap gap-1.5">
-                        {emojiOptions.map((emoji) => (
-                          <button
-                            key={emoji}
-                            type="button"
-                            onClick={() => handleEmojiIcon(emoji)}
-                            className={`grid h-9 w-9 place-items-center rounded-xl border text-lg transition hover:border-primary hover:bg-primary/5 ${formData.iconUrl === emoji ? 'border-primary bg-primary/10 ring-1 ring-primary' : 'border-border'
-                              }`}
-                          >
-                            {emoji}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Upload Image Button */}
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Button variant="outline" size="sm" className="rounded-full" asChild>
-                        <label htmlFor="icon-upload" className="cursor-pointer">
-                          <Upload className="mr-2 h-4 w-4" />
-                          Upload Image
-                        </label>
-                      </Button>
-                      <input
-                        id="icon-upload"
-                        type="file"
-                        accept="image/*"
-                        onChange={handleImageUpload}
-                        className="hidden"
-                      />
-                      {hasCustomIcon() && (
-                        <Button variant="ghost" size="sm" onClick={removeImage} className="rounded-full text-muted-foreground">
-                          Remove
-                        </Button>
+                  </label>
+                  {hasCustomIcon() && (
+                    <button
+                      type="button"
+                      onClick={removeImage}
+                      className="absolute -right-1 -top-1 grid h-6 w-6 place-items-center rounded-full bg-zinc-950 text-white shadow-md transition hover:scale-105 dark:bg-white dark:text-zinc-950"
+                      aria-label="Quitar avatar"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                  <input
+                    id="icon-upload"
+                    type="file"
+                    accept="image/*"
+                    onChange={handleImageUpload}
+                    className="hidden"
+                  />
+                </div>
+                {/* Quick emoji icons */}
+                <div className="flex flex-wrap justify-center gap-1.5">
+                  {emojiOptions.map((emoji) => (
+                    <button
+                      key={emoji}
+                      type="button"
+                      onClick={() => handleEmojiIcon(emoji)}
+                      className={cn(
+                        "grid h-8 w-8 place-items-center rounded-lg border text-base transition hover:bg-zinc-50 dark:hover:bg-zinc-800",
+                        formData.iconUrl === emoji
+                          ? "border-zinc-950 bg-zinc-50 dark:border-white dark:bg-zinc-800"
+                          : "border-black/[0.08] bg-white dark:border-white/10 dark:bg-zinc-900"
                       )}
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      Choose an emoji, upload an image, or use the first letter of your GPT's name
-                    </p>
-                  </div>
+                    >
+                      {emoji}
+                    </button>
+                  ))}
                 </div>
               </div>
 
               {/* Name */}
               <div className="space-y-2">
-                <Label htmlFor="name" className="text-sm sm:text-base">Name *</Label>
+                <Label htmlFor="name" className="text-sm font-medium">Nombre</Label>
                 <Input
                   id="name"
-                  placeholder="e.g., Code Reviewer, Creative Writer"
+                  placeholder="Ej. Revisor de código"
                   value={formData.name}
                   onChange={(e) => handleInputChange("name", e.target.value)}
                   maxLength={100}
-                  className="text-sm sm:text-base"
+                  className={cn("text-sm", liquidField)}
                 />
-                <div className="text-xs text-muted-foreground">
-                  {formData.name.length}/100 characters
-                </div>
               </div>
 
               {/* Description */}
               <div className="space-y-2">
-                <Label htmlFor="description" className="text-sm sm:text-base">Description *</Label>
-                <Textarea
+                <Label htmlFor="description" className="text-sm font-medium">Descripción</Label>
+                <Input
                   id="description"
-                  placeholder="Describe what your GPT does and how it helps users. Be specific about its capabilities and use cases."
+                  placeholder="Añade una descripción breve sobre lo que hace este GPT"
                   value={formData.description}
                   onChange={(e) => handleInputChange("description", e.target.value)}
                   maxLength={500}
-                  rows={3}
-                  className="text-sm sm:text-base resize-none"
+                  className={cn("text-sm", liquidField)}
                 />
-                <div className="text-xs text-muted-foreground">
-                  {formData.description.length}/500 characters
-                </div>
               </div>
 
-              {/* Category */}
+              {/* Instructions */}
               <div className="space-y-2">
-                <Label htmlFor="category" className="text-sm sm:text-base">Category</Label>
-                <Select value={formData.category} onValueChange={(value) => handleInputChange("category", value)}>
-                  <SelectTrigger className="text-sm sm:text-base">
-                    <SelectValue placeholder="Select a category" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {categories.map((category) => (
-                      <SelectItem key={category.name} value={category.name}>
-                        <div className="flex items-center gap-2">
-                          {category.icon}
-                          <span className="text-sm sm:text-base">{category.name}</span>
-                        </div>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="instructions" className="text-sm font-medium">Instrucciones</Label>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={generateInstructions}
+                    disabled={!formData.name || !formData.description}
+                    className="h-7 px-2 text-xs text-zinc-500 hover:text-zinc-950 dark:hover:text-white"
+                  >
+                    <Wand2 className="mr-1.5 h-3.5 w-3.5" />
+                    Generar
+                  </Button>
+                </div>
+                <Textarea
+                  id="instructions"
+                  placeholder="¿Qué hace este GPT? ¿Cómo se comporta? ¿Qué debe evitar?"
+                  value={formData.instructions}
+                  onChange={(e) => handleInputChange("instructions", e.target.value)}
+                  rows={8}
+                  maxLength={50000}
+                  className={cn("text-sm", liquidField)}
+                />
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  Las conversaciones con tu GPT pueden potencialmente incluir todas las instrucciones o parte de ellas.
+                </p>
               </div>
 
               {/* Conversation Starters */}
-              {/* <div className="space-y-2">
-                <Label>Conversation Starters</Label>
-                <p className="text-sm text-muted-foreground">
-                  Provide example prompts to help users get started with your GPT
-                </p>
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">Frases para iniciar una conversación</Label>
                 <div className="space-y-2">
                   {formData.conversationStarters.map((starter, index) => (
-                    <div key={index} className="flex gap-2">
+                    <div key={index} className="flex items-center gap-2">
                       <Input
-                        placeholder={`Example: "Help me write a professional email" or "Analyze this data set"`}
+                        placeholder="Ej. «Ayúdame a redactar un correo profesional»"
                         value={starter}
                         onChange={(e) => handleConversationStarterChange(index, e.target.value)}
                         maxLength={200}
+                        className={cn("text-sm", liquidField)}
                       />
-                      {formData.conversationStarters.length > 2 && (
+                      {formData.conversationStarters.length > 1 && (
                         <Button
-                          variant="outline"
+                          variant="ghost"
                           size="icon"
                           onClick={() => removeConversationStarter(index)}
-                          className="shrink-0"
+                          className="h-9 w-9 flex-shrink-0 rounded-lg text-zinc-400 hover:text-zinc-950 dark:hover:text-white"
+                          aria-label="Quitar frase"
                         >
-                          <Trash2 className="h-4 w-4" />
+                          <X className="h-4 w-4" />
                         </Button>
                       )}
                     </div>
@@ -786,113 +862,85 @@ export default function CreateGPTPage() {
                       variant="outline"
                       size="sm"
                       onClick={addConversationStarter}
-                      className="w-full"
+                      className={cn("w-full justify-center", liquidGhost)}
                     >
-                      <Plus className="h-4 w-4 mr-2" />
-                      Add Conversation Starter
+                      <Plus className="mr-2 h-4 w-4" />
+                      Añadir frase
                     </Button>
                   )}
                 </div>
-              </div> */}
-            </CardContent>
-          </Card>
+              </div>
 
-          {/* Behavior Configuration Section */}
-          <Card className="overflow-hidden border-border/70 shadow-sm">
-            <CardHeader className="gap-1 pb-4">
-              <CardTitle className="flex items-center gap-2.5 text-base sm:text-lg">
-                <span className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
-                  <MessageSquare className="h-4 w-4" />
-                </span>
-                <span>Behavior Configuration</span>
-              </CardTitle>
-              <CardDescription className="text-xs sm:text-sm">
-                Define how your GPT should behave and respond to users
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4 sm:space-y-6 pt-0">
-              {/* Instructions */}
+              {/* Conocimientos */}
               <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="instructions">Instructions *</Label>
+                <Label className="text-sm font-medium">Conocimientos</Label>
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  Si subes archivos en Conocimientos, las conversaciones con tu GPT pueden potencialmente revelar todos los archivos o parte de su contenido. Las funciones que requieran intérprete de código permiten la descarga de los archivos.
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    ref={knowledgeInputRef}
+                    type="file"
+                    multiple
+                    className="hidden"
+                    onChange={handleKnowledgeFilesSelected}
+                  />
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={generateInstructions}
-                    disabled={!formData.name || !formData.description}
+                    type="button"
+                    className={liquidGhost}
+                    disabled={isUploadingKnowledge}
+                    onClick={handleKnowledgeUploadClick}
                   >
-                    <Wand2 className="h-4 w-4 mr-2" />
-                    Generate
+                    <Upload className="mr-2 h-4 w-4" />
+                    {isUploadingKnowledge ? "Subiendo..." : "Cargar archivos"}
                   </Button>
                 </div>
-                <Textarea
-                  id="instructions"
-                  placeholder="Provide detailed instructions for how your GPT should behave, respond, and interact with users. Include its personality, expertise level, response style, and any specific guidelines."
-                  value={formData.instructions}
-                  onChange={(e) => handleInputChange("instructions", e.target.value)}
-                  rows={8}
-                  maxLength={50000}
-                />
-                <div className="text-xs text-muted-foreground">
-                  {formData.instructions.length}/50000 characters
-                </div>
+                {!isEditMode && (
+                  <p className="text-xs text-muted-foreground">
+                    Guarda el GPT primero para añadir conocimientos.
+                  </p>
+                )}
+                {knowledgeFiles.length > 0 && (
+                  <ul className="mt-1 space-y-1">
+                    {knowledgeFiles.map((file) => (
+                      <li
+                        key={file.id}
+                        className="flex items-center justify-between gap-2 rounded-md border border-border/60 bg-background/40 px-3 py-2 text-sm"
+                      >
+                        <span className="min-w-0 flex-1 truncate" title={file.originalName}>
+                          {file.originalName}
+                        </span>
+                        <span className="shrink-0 text-xs text-muted-foreground">
+                          {formatKnowledgeSize(file.size)}
+                        </span>
+                        <button
+                          type="button"
+                          aria-label={`Eliminar ${file.originalName}`}
+                          className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
+                          onClick={() => handleRemoveKnowledgeFile(file.id)}
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
 
-              {/* Greeting Message */}
+              {/* Modelo recomendado */}
               <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="greeting">Greeting Message</Label>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={generateGreeting}
-                    disabled={!formData.name || !formData.description}
-                  >
-                    <Wand2 className="h-4 w-4 mr-2" />
-                    Generate
-                  </Button>
-                </div>
-                <Textarea
-                  id="greeting"
-                  placeholder="The first message your GPT will send to users when they start a conversation"
-                  value={formData.greetingMessage}
-                  onChange={(e) => handleInputChange("greetingMessage", e.target.value)}
-                  rows={4}
-                  maxLength={1000}
-                />
-                <div className="text-xs text-muted-foreground">
-                  {formData.greetingMessage.length}/1000 characters
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Model Settings Section */}
-          <Card className="overflow-hidden border-border/70 shadow-sm">
-            <CardHeader className="gap-1 pb-4">
-              <CardTitle className="flex items-center gap-2.5 text-base sm:text-lg">
-                <span className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
-                  <Settings className="h-4 w-4" />
-                </span>
-                <span>Model & Visibility Settings</span>
-              </CardTitle>
-              <CardDescription className="text-xs sm:text-sm">
-                Configure the AI model and who can access your GPT
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4 sm:space-y-6 pt-0">
-              {/* Model Selection */}
-              <div className="space-y-2">
-                <Label className="text-sm sm:text-base">AI Model *</Label>
+                <Label className="text-sm font-medium">Modelo recomendado</Label>
                 <Select value={formData.modelName} onValueChange={(value) => handleInputChange("modelName", value)}>
-                  <SelectTrigger className="text-sm sm:text-base">
-                    <SelectValue placeholder="Select a model" />
+                  <SelectTrigger className={cn("text-sm", liquidField)}>
+                    <SelectValue placeholder="Selecciona un modelo" />
                   </SelectTrigger>
                   <SelectContent>
                     {availableModels.map((model) => (
                       <SelectItem key={model.name} value={model.name}>
                         <div className="flex flex-col">
-                          <span className="font-medium text-sm sm:text-base">{model.displayName || model.name}</span>
+                          <span className="text-sm font-medium">{model.displayName || model.name}</span>
                           {model.description && (
                             <span className="text-xs text-muted-foreground">{model.description}</span>
                           )}
@@ -902,118 +950,171 @@ export default function CreateGPTPage() {
                   </SelectContent>
                 </Select>
                 {availableModels.length === 0 && (
-                  <p className="text-xs text-muted-foreground">Loading available models...</p>
+                  <p className="text-xs text-muted-foreground">Cargando modelos disponibles...</p>
                 )}
               </div>
 
-              {/* Temperature - Commented out for now */}
-              {/* <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label>Creativity Level (Temperature)</Label>
-                  <span className="text-sm text-muted-foreground">{formData.temperature}</span>
-                </div>
-                <Slider
-                  value={[formData.temperature]}
-                  onValueChange={(value) => handleInputChange("temperature", value[0])}
-                  max={2}
-                  min={0}
-                  step={0.1}
-                  className="w-full"
-                />
-                <div className="flex justify-between text-xs text-muted-foreground">
-                  <span>More Focused</span>
-                  <span>More Creative</span>
-                </div>
-              </div> */}
-
-              {/* Visibility */}
+              {/* Funcionalidades — per-GPT tool capabilities (ChatGPT-style) */}
               <div className="space-y-2">
-                <Label className="text-sm sm:text-base">Visibility</Label>
-                <Select value={formData.visibility} onValueChange={(value) => handleInputChange("visibility", value as "PRIVATE" | "UNLISTED" | "PUBLIC")}>
-                  <SelectTrigger className="text-sm sm:text-base">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="PRIVATE">
-                      <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 bg-red-500 rounded-full flex-shrink-0"></div>
-                        <div>
-                          <div className="font-medium text-sm sm:text-base">Private</div>
-                          <div className="text-xs text-muted-foreground">Only you can access</div>
-                        </div>
-                      </div>
-                    </SelectItem>
-                    <SelectItem value="UNLISTED">
-                      <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 bg-yellow-500 rounded-full flex-shrink-0"></div>
-                        <div>
-                          <div className="font-medium text-sm sm:text-base">Unlisted</div>
-                          <div className="text-xs text-muted-foreground">Accessible via link only</div>
-                        </div>
-                      </div>
-                    </SelectItem>
-                    <SelectItem value="PUBLIC">
-                      <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 bg-green-500 rounded-full flex-shrink-0"></div>
-                        <div>
-                          <div className="font-medium text-sm sm:text-base">Public</div>
-                          <div className="text-xs text-muted-foreground">Anyone can discover and use</div>
-                        </div>
-                      </div>
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
+                <Label className="text-sm font-medium">Funcionalidades</Label>
+                <p className="text-xs text-muted-foreground">Elige qué herramientas puede usar este GPT.</p>
+                <div className="mt-1 overflow-hidden rounded-lg border border-border/60 bg-background/40">
+                  {([
+                    { key: "webBrowsing", icon: Globe, label: "Búsqueda en la web", desc: "Consulta información actualizada en internet." },
+                    { key: "dataAnalysis", icon: Palette, label: "Lienzo", desc: "Crea y edita documentos y diagramas." },
+                    { key: "imageGeneration", icon: ImageIcon, label: "Generación de imagen", desc: "Genera imágenes a partir de texto." },
+                    { key: "codeInterpreter", icon: Code, label: "Intérprete de código y análisis de datos", desc: "Ejecuta código y analiza archivos." },
+                  ] as { key: keyof GPTFormData["capabilities"]; icon: any; label: string; desc: string }[]).map((cap) => {
+                    const Icon = cap.icon
+                    return (
+                      <label
+                        key={cap.key}
+                        htmlFor={`cap-${cap.key}`}
+                        className="flex cursor-pointer select-none items-center gap-3 border-t border-border/50 px-3 py-3 transition-colors first:border-t-0 hover:bg-muted/40"
+                      >
+                        <Checkbox
+                          id={`cap-${cap.key}`}
+                          checked={formData.capabilities[cap.key]}
+                          onCheckedChange={(checked) => handleCapabilityChange(cap.key, checked === true)}
+                        />
+                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted/60 text-muted-foreground">
+                          <Icon className="h-4 w-4" />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-sm font-medium leading-tight text-foreground">{cap.label}</span>
+                          <span className="mt-0.5 block text-xs leading-tight text-muted-foreground">{cap.desc}</span>
+                        </span>
+                      </label>
+                    )
+                  })}
+                </div>
               </div>
-            </CardContent>
-          </Card>
 
-        </div>
-      </div>
+              {/* Acciones */}
+              <GptActionsEditor
+                actions={formData.actions as GptAction[]}
+                onChange={(next) => handleInputChange("actions", next)}
+              />
 
-      {/* Sticky action bar — keeps the primary save action reachable at all times */}
-      <div className="sticky bottom-0 z-30 border-t border-border/60 bg-background/80 backdrop-blur-xl supports-[backdrop-filter]:bg-background/60">
-        <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
-          <p className="hidden text-xs text-muted-foreground sm:block">
-            {formData.name ? "Ready when you are." : "A name is required to save your GPT."}
-          </p>
-          <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
-            <Button variant="ghost" onClick={() => router.back()} className="h-10 rounded-full px-4">
-              Cancel
-            </Button>
-            <Button
-              onClick={handleSave}
-              disabled={isSaving || !formData.name}
-              className="h-10 flex-1 rounded-full px-6 font-medium shadow-sm sm:flex-none"
-            >
-              {isSaving ? (
-                <span className="flex items-center gap-2">
-                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                  Saving...
-                </span>
-              ) : isEditMode ? (
-                "Update GPT"
-              ) : (
-                "Create GPT"
-              )}
-            </Button>
+            </div>
           </div>
+
+          {/* RIGHT — Vista previa (live, desktop only) */}
+          <div className="hidden bg-[#fafafa] dark:bg-zinc-900/40 lg:flex lg:min-h-[calc(100vh-7rem)] lg:flex-col">
+            <div className="flex min-h-0 flex-1 flex-col px-6 py-8">
+              <p className="mb-6 text-center text-sm font-medium text-zinc-500 dark:text-zinc-400">Vista previa</p>
+
+              {previewMessages.length === 0 ? (
+                <div className="flex flex-1 flex-col items-center justify-center text-center">
+                  <div className="grid h-20 w-20 place-items-center overflow-hidden rounded-full border border-black/[0.06] bg-zinc-950 text-3xl font-semibold text-white dark:border-white/10 dark:bg-white dark:text-zinc-950">
+                    {uploadedImage ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={uploadedImage} alt="Avatar" className="h-full w-full object-cover" />
+                    ) : formData.iconUrl ? (
+                      <span>{formData.iconUrl}</span>
+                    ) : (
+                      <span>{getNameInitial()}</span>
+                    )}
+                  </div>
+                  <h2 className="mt-4 text-xl font-semibold text-zinc-950 dark:text-zinc-50">
+                    {formData.name || "Nuevo GPT"}
+                  </h2>
+                  <p className="mt-1.5 max-w-sm text-sm text-zinc-500 dark:text-zinc-400">
+                    {formData.description || "Añade una descripción breve sobre lo que hace este GPT"}
+                  </p>
+
+                  {formData.greetingMessage.trim() && (
+                    <div className="mt-5 max-w-sm rounded-2xl border border-black/[0.06] bg-white px-4 py-2.5 text-left text-sm text-zinc-700 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-300">
+                      {formData.greetingMessage}
+                    </div>
+                  )}
+
+                  {formData.conversationStarters.filter((s) => s.trim()).length > 0 && (
+                    <div className="mt-6 grid w-full max-w-md grid-cols-1 gap-2 sm:grid-cols-2">
+                      {formData.conversationStarters.filter((s) => s.trim()).map((starter, index) => (
+                        <button
+                          key={index}
+                          type="button"
+                          onClick={() => sendPreviewMessage(starter)}
+                          className="rounded-xl border border-black/[0.06] bg-white px-3 py-2.5 text-left text-sm text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                        >
+                          {starter}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div ref={previewScrollRef} className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
+                  {previewMessages.map((msg, index) => (
+                    <div
+                      key={index}
+                      className={cn(
+                        "max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm",
+                        msg.role === "user"
+                          ? "self-end bg-zinc-950 text-white dark:bg-white dark:text-zinc-950"
+                          : "self-start border border-black/[0.06] bg-white text-zinc-800 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-100",
+                      )}
+                    >
+                      <p className="whitespace-pre-wrap break-words">{msg.content}</p>
+                    </div>
+                  ))}
+                  {previewLoading && (
+                    <div className="self-start rounded-2xl border border-black/[0.06] bg-white px-3.5 py-2.5 dark:border-white/10 dark:bg-zinc-900">
+                      <ThinkingIndicator />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Live preview composer — talks to the draft via FlashGPT */}
+              <div className="mx-auto mt-6 w-full max-w-md">
+                <div className="flex items-center gap-2 rounded-full border border-black/[0.08] bg-white px-3 py-2 dark:border-white/10 dark:bg-zinc-900">
+                  <Plus className="h-5 w-5 flex-shrink-0 text-zinc-400" />
+                  <Input
+                    value={previewInput}
+                    onChange={(e) => setPreviewInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault()
+                        sendPreviewMessage(previewInput)
+                      }
+                    }}
+                    disabled={previewLoading}
+                    placeholder={formData.instructions.trim() ? "Prueba tu GPT…" : "Escribe instrucciones para probarlo"}
+                    className="min-w-0 flex-1 border-0 bg-transparent px-1 text-sm shadow-none focus-visible:ring-0"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => sendPreviewMessage(previewInput)}
+                    disabled={previewLoading || !previewInput.trim()}
+                    className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-full bg-zinc-950 text-white transition-opacity disabled:opacity-40 dark:bg-white dark:text-zinc-950"
+                  >
+                    <ArrowUp className="h-4 w-4" />
+                  </button>
+                </div>
+                <p className="mt-2 text-center text-[11px] text-zinc-400">Vista previa con FlashGPT · no se guarda</p>
+              </div>
+            </div>
+          </div>
+
         </div>
       </div>
 
       {/* Preview Dialog */}
       <Dialog open={isPreviewOpen} onOpenChange={setIsPreviewOpen}>
-        <DialogContent className="max-w-2xl mx-auto p-4 sm:p-6">
+        <DialogContent className="mx-auto max-w-2xl rounded-[28px] border-white/60 bg-white/82 p-4 shadow-[0_24px_70px_-36px_rgba(15,23,42,0.55)] backdrop-blur-2xl sm:p-6 dark:border-white/10 dark:bg-zinc-950/82">
           <DialogHeader className="pb-4">
-            <DialogTitle className="text-lg sm:text-xl">GPT Preview</DialogTitle>
+            <DialogTitle className="text-lg sm:text-xl">Vista previa</DialogTitle>
             <DialogDescription className="text-sm">
-              Preview how your GPT will appear to users in the store
+              Así se verá tu GPT en la biblioteca.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             {/* GPT Card Preview */}
-            <div className="bg-white dark:bg-card rounded-lg p-3 sm:p-4 md:p-6 border border-border">
+            <div className="rounded-[22px] border border-white/65 bg-white/75 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)] backdrop-blur-xl sm:p-4 md:p-6 dark:border-white/10 dark:bg-white/[0.055]">
               <div className="flex items-start space-x-3 sm:space-x-4">
-                <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full flex items-center justify-center text-lg sm:text-xl font-bold overflow-hidden flex-shrink-0">
+                <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded-2xl text-lg font-bold sm:h-12 sm:w-12 sm:text-xl">
                   {uploadedImage ? (
                     <img
                       src={uploadedImage}
@@ -1021,11 +1122,11 @@ export default function CreateGPTPage() {
                       className="w-full h-full object-cover rounded-full"
                     />
                   ) : formData.iconUrl ? (
-                    <div className="w-full h-full bg-gradient-to-br from-purple-500 to-indigo-600 rounded-full flex items-center justify-center text-white">
+                    <div className="flex h-full w-full items-center justify-center rounded-2xl bg-zinc-950 text-white dark:bg-white dark:text-zinc-950">
                       {formData.iconUrl}
                     </div>
                   ) : (
-                    <div className="w-full h-full bg-gradient-to-br from-purple-500 to-indigo-600 rounded-full flex items-center justify-center text-white">
+                    <div className="flex h-full w-full items-center justify-center rounded-2xl bg-zinc-950 text-white dark:bg-white dark:text-zinc-950">
                       {getNameInitial()}
                     </div>
                   )}
@@ -1039,13 +1140,13 @@ export default function CreateGPTPage() {
                   </p>
                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                     <div className="flex items-center flex-wrap gap-2 sm:gap-4 text-xs text-muted-foreground">
-                      <span className="truncate">By {user?.name || 'You'}</span>
+                      <span className="truncate">Por {user?.name || 'ti'}</span>
                       <div className="flex items-center space-x-1 flex-shrink-0">
                         <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
-                        <span>New</span>
+                        <span>Nuevo</span>
                       </div>
                     </div>
-                    <Button size="sm" className="px-2 sm:px-3 py-1 text-xs self-start sm:self-auto">
+                    <Button size="sm" className="self-start rounded-full bg-zinc-950 px-3 py-1 text-xs text-white hover:bg-zinc-800 sm:self-auto dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200">
                       Chat
                     </Button>
                   </div>
@@ -1061,10 +1162,10 @@ export default function CreateGPTPage() {
 
             {/* Greeting Preview */}
             {formData.greetingMessage && (
-              <Card>
+              <Card className={liquidPanel}>
                 <CardContent className="pt-4">
                   <div className="flex items-start gap-3">
-                    <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-white text-sm">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-2xl bg-zinc-950 text-sm text-white dark:bg-white dark:text-zinc-950">
                       {formData.iconUrl || getNameInitial()}
                     </div>
                     <div className="flex-1">
@@ -1092,6 +1193,71 @@ export default function CreateGPTPage() {
                 </div>
               </div>
             )} */}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Compartir GPT — visibility chooser shown on Crear/Actualizar (ChatGPT-style) */}
+      <Dialog open={isShareOpen} onOpenChange={setIsShareOpen}>
+        <DialogContent className="sm:max-w-[460px]">
+          <DialogHeader>
+            <DialogTitle>Compartir GPT</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-0.5">
+            {([
+              { v: "PRIVATE", icon: Lock, label: "Solo yo" },
+              { v: "UNLISTED", icon: Link2, label: "Cualquiera que tenga el enlace" },
+              { v: "PUBLIC", icon: LayoutGrid, label: "GPT Store" },
+            ] as const).map((opt) => {
+              const Icon = opt.icon
+              const selected = formData.visibility === opt.v
+              return (
+                <button
+                  key={opt.v}
+                  type="button"
+                  onClick={() => handleInputChange("visibility", opt.v)}
+                  className="flex w-full items-center gap-3 rounded-lg px-2 py-3 text-left transition-colors hover:bg-muted/50"
+                >
+                  <Icon className="h-5 w-5 shrink-0 text-muted-foreground" />
+                  <span className="flex-1 text-sm font-medium">{opt.label}</span>
+                  {selected && (
+                    <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-foreground text-background">
+                      <Check className="h-3 w-3" />
+                    </span>
+                  )}
+                </button>
+              )
+            })}
+          </div>
+          <div className="mt-1 flex items-center gap-3 rounded-xl border border-border/60 bg-muted/30 px-3 py-2.5">
+            <div className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-full border border-border/60 bg-background text-sm font-semibold">
+              {uploadedImage ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={uploadedImage} alt="" className="h-full w-full object-cover" />
+              ) : (
+                <span>{getNameInitial()}</span>
+              )}
+            </div>
+            <div className="min-w-0">
+              <div className="truncate text-sm font-medium">{formData.name || "Nuevo GPT"}</div>
+              <div className="truncate text-xs text-muted-foreground">Por {user?.name || "ti"}</div>
+            </div>
+          </div>
+          <div className="flex justify-end pt-1">
+            <Button
+              onClick={handleSave}
+              disabled={isSaving || !formData.name}
+              className="h-9 rounded-full bg-zinc-950 px-5 font-medium text-white hover:bg-zinc-800 dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200"
+            >
+              {isSaving ? (
+                <span className="flex items-center gap-2">
+                  <ThinkingIndicator size="xs" />
+                  Guardando...
+                </span>
+              ) : (
+                "Guardar"
+              )}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

@@ -6,6 +6,7 @@ const { optionalAuth } = require('../middleware/optionalAuth');
 const autoFileBridge = require('../services/auto-file-bridge');
 const deepDocumentAnalyzer = require('../services/deep-document-analyzer');
 const activeMemory = require('../services/active-memory');
+const memoryMetrics = require('../services/memory-metrics');
 const sessionManager = require('../services/session-manager');
 const skillsRegistry = require('../services/skills-registry');
 const coworkEngine = require('../services/cowork-engine');
@@ -18,6 +19,21 @@ const router = express.Router();
 const coworkRateLimit = rateLimitMiddleware({ windowMs: 60000, maxRequests: 30 });
 const analyzeDeepRateLimit = rateLimitMiddleware({ windowMs: 60000, maxRequests: 20 });
 const memoryRateLimit = rateLimitMiddleware({ windowMs: 60000, maxRequests: 60 });
+
+// Express parses repeated query keys (?intent=a&intent=b) as arrays and nested
+// keys (?tags[x]=1) as objects. The skills registry expects plain strings, so
+// coerce every query param to a single trimmed string at the route boundary —
+// otherwise `.split`/string ops downstream throw on the unexpected shape.
+function firstQueryString(value) {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return firstQueryString(value[0]);
+  return '';
+}
+function clampQueryLimit(value, fallback, max = 100) {
+  const n = Number(firstQueryString(value));
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.min(Math.floor(n), max);
+}
 
 router.post('/auto-file', authenticateToken, coworkRateLimit, async (req, res) => {
   try {
@@ -137,6 +153,41 @@ router.get('/memory', authenticateToken, async (req, res) => {
   }
 });
 
+// Full structured list of everything the system remembers about the user —
+// powers a "ver toda mi memoria" management view (transparency + control).
+router.get('/memory/all', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const limit = Math.min(Number(req.query.limit) || 200, 500);
+    // Read-only listing: don't bump accessCount just because the user opened
+    // their memory view (that would skew tier auto-promotion).
+    const entries = activeMemory.recall(userId, null, { limit, bump: false });
+    const items = (Array.isArray(entries) ? entries : []).map((m) => ({
+      id: m.id,
+      fact: m.fact,
+      category: m.category || 'general',
+      tier: m.tier || 'short_term',
+      polarity: m.metadata?.polarity || 'positive',
+      confidence: typeof m.confidence === 'number' ? Number(m.confidence.toFixed(2)) : null,
+      accessCount: m.accessCount || 0,
+      createdAt: m.createdAt || null,
+      lastAccessed: m.lastAccessed || null,
+    }));
+    res.json({ items, stats: activeMemory.getStats(userId) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Memory-system observability snapshot (counts + recall hit-rate).
+router.get('/memory/metrics', authenticateToken, async (req, res) => {
+  try {
+    res.json(memoryMetrics.snapshot());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.delete('/memory', authenticateToken, async (req, res) => {
   try {
     const { query } = req.body;
@@ -153,9 +204,24 @@ router.delete('/memory', authenticateToken, async (req, res) => {
   }
 });
 
+// Forget a single memory by id (scoped to the owning user). Powers the
+// "Olvidar" action on each item in the MEMORIA panel.
+router.delete('/memory/:id', authenticateToken, memoryRateLimit, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const id = String(req.params.id || '');
+    if (!id) return res.status(400).json({ error: 'id required' });
+    const result = activeMemory.deleteById(userId, id);
+    if (!result.removed) return res.status(404).json({ error: 'memory not found' });
+    res.json({ ok: true, removed: result.removed, fact: result.fact });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/memory/promote/:entryId', authenticateToken, memoryRateLimit, async (req, res) => {
   try {
-    const entry = activeMemory.promoteToLongTerm(req.params.entryId);
+    const entry = activeMemory.promoteToLongTerm(req.params.entryId, { userId: req.user.id });
     if (!entry) return res.status(404).json({ error: 'entry not found' });
     res.json(entry);
   } catch (err) {
@@ -233,7 +299,7 @@ router.get('/sessions/:sessionId/history', authenticateToken, async (req, res) =
     }
     const history = sessionManager.getHistory(req.params.sessionId, {
       after: req.query.after,
-      limit: req.query.limit ? Number(req.query.limit) : undefined,
+      limit: req.query.limit ? Math.min(Math.max(1, Number(req.query.limit) || 1), 500) : undefined,
       role: req.query.role,
     });
     res.json({ messages: history });
@@ -319,10 +385,10 @@ router.post('/sessions/:sessionId/send', authenticateToken, coworkRateLimit, asy
 router.get('/skills', optionalAuth, (req, res) => {
   try {
     const skills = skillsRegistry.listSkills({
-      category: req.query.category,
-      tag: req.query.tag,
-      query: req.query.query,
-      limit: req.query.limit ? Number(req.query.limit) : undefined,
+      category: firstQueryString(req.query.category) || undefined,
+      tag: firstQueryString(req.query.tag) || undefined,
+      query: firstQueryString(req.query.query) || undefined,
+      limit: req.query.limit !== undefined ? clampQueryLimit(req.query.limit, undefined) : undefined,
       clearance: req.user?.plan?.toLowerCase() || 'public',
     });
     const categories = skillsRegistry.getCategories();
@@ -335,13 +401,17 @@ router.get('/skills', optionalAuth, (req, res) => {
 
 router.get('/skills/recommend', optionalAuth, (req, res) => {
   try {
-    const { intent, hasDocuments, hasCode, needsResearch, needsAnalysis, tags } = req.query;
+    const { hasDocuments, hasCode, needsResearch, needsAnalysis } = req.query;
+    const intent = firstQueryString(req.query.intent);
+    const tags = firstQueryString(req.query.tags);
     const skills = skillsRegistry.recommendSkills(intent, {
       hasDocuments: hasDocuments === 'true',
       hasCode: hasCode === 'true',
       needsResearch: needsResearch === 'true',
       needsAnalysis: needsAnalysis === 'true',
-      tags: tags ? tags.split(',') : [],
+      // Cap the tag list — recommendSkills scores O(skills × tags), so an
+      // unbounded comma string would be a CPU/memory amplification vector.
+      tags: tags ? tags.split(',').slice(0, 50).map((t) => t.trim()).filter(Boolean) : [],
       userClearance: req.user?.plan?.toLowerCase() || 'public',
     });
     res.json({ skills });
@@ -640,3 +710,5 @@ router.post('/intent-attribution-graph/validate', optionalAuth, coworkRateLimit,
 });
 
 module.exports = router;
+// Exposed for offline unit tests — see tests/cowork-query-coercion.test.js.
+module.exports._internals = { firstQueryString, clampQueryLimit };

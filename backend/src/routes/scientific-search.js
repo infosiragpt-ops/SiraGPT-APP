@@ -5,7 +5,7 @@
  * OpenAlex / CrossRef / PubMed / Europe PMC / CORE.
  *
  *   POST /api/scientific-search
- *     body: { query, providers?, limit?, timeoutMs? }
+ *     body: { query, providers?, limit?, timeoutMs?, diversify?, unpaywall? }
  *     →    { papers, errors, providers, count }
  *
  *   GET  /api/scientific-search/providers
@@ -20,6 +20,7 @@ const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const { responseCache } = require('../middleware/response-cache');
 const scientificSearch = require('../services/scientific-search');
+const { buildLiteratureReview } = require('../services/research/literature-review-engine');
 
 const router = express.Router();
 
@@ -31,6 +32,8 @@ router.get('/providers', responseCache({ ttlMs: 5 * 60_000, namespace: 'sci-prov
       core: !!process.env.CORE_API_KEY,
       ncbi: !!process.env.NCBI_API_KEY,
       semanticscholar: !!process.env.SEMANTIC_SCHOLAR_API_KEY,
+      scopus: !!process.env.SCOPUS_API_KEY,
+      wos: !!(process.env.WOS_API_KEY || process.env.CLARIVATE_API_KEY),
       mailto: !!process.env.SIRAGPT_RESEARCH_EMAIL,
     },
   });
@@ -42,19 +45,23 @@ router.post(
   [
     body('query').isString().trim().isLength({ min: 2, max: 500 })
       .withMessage('query must be 2-500 chars'),
-    body('providers').optional().isArray({ max: 7 })
+    body('providers').optional().isArray({ max: 10 })
       .withMessage('providers must be an array of provider names'),
     body('limit').optional().isInt({ min: 1, max: 50 }),
     body('timeoutMs').optional().isInt({ min: 500, max: 30_000 }),
+    body('diversify').optional().isBoolean()
+      .withMessage('diversify must be a boolean'),
+    body('unpaywall').optional().isBoolean()
+      .withMessage('unpaywall must be a boolean'),
   ],
   async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({ error: 'validation_failed', details: errors.array() });
     }
-    const { query, providers, limit, timeoutMs } = req.body;
+    const { query, providers, limit, timeoutMs, diversify, unpaywall } = req.body;
     try {
-      const result = await scientificSearch.search(query, { providers, limit, timeoutMs });
+      const result = await scientificSearch.search(query, { providers, limit, timeoutMs, diversify, unpaywall });
       return res.json({
         ...result,
         count: result.papers.length,
@@ -63,6 +70,42 @@ router.post(
     } catch (err) {
       console.error('[scientific-search] uncaught:', err);
       return res.status(500).json({ error: 'scientific_search_failed', message: err.message });
+    }
+  }
+);
+
+/**
+ * POST /api/scientific-search/review — turn a natural-language research request
+ * into a full literature review: multilingual query expansion, multi-provider
+ * search, evidence extraction, thematic synthesis, consensus/gaps, APA/IEEE/MLA
+ * bibliography, a comparison table and an assembled Markdown report.
+ *
+ *   body: { query, providers?, limit?, maxPapers?, timeoutMs? }
+ *   →    { query, papers, synthesis, bibliography, comparisonTable, report, meta }
+ */
+router.post(
+  '/review',
+  authenticateToken,
+  [
+    body('query').isString().trim().isLength({ min: 2, max: 500 })
+      .withMessage('query must be 2-500 chars'),
+    body('providers').optional().isArray({ max: 10 }),
+    body('limit').optional().isInt({ min: 1, max: 50 }),
+    body('maxPapers').optional().isInt({ min: 1, max: 50 }),
+    body('timeoutMs').optional().isInt({ min: 500, max: 30_000 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+    }
+    const { query, providers, limit, maxPapers, timeoutMs } = req.body;
+    try {
+      const review = await buildLiteratureReview(query, { providers, limit, maxPapers, timeoutMs });
+      return res.json(review);
+    } catch (err) {
+      console.error('[scientific-search/review] uncaught:', err);
+      return res.status(500).json({ error: 'literature_review_failed', message: err.message });
     }
   }
 );

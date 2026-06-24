@@ -1,11 +1,14 @@
 const express = require('express');
 const { authenticateToken, requireAdmin, requireSuperAdmin } = require('../middleware/auth');
+const { parsePositiveInt } = require('../services/chat-scope');
 const prisma = require('../config/database');
 const { body, validationResult } = require('express-validator');
 const { ProviderType, ModelType } = require('@prisma/client'); // Enums ko import karein
 const bcrypt = require('bcryptjs');
 const router = express.Router();
 const stripeService = require('../services/stripe');
+const { logger } = require('../middleware/logger');
+const { redactErrorMessage } = require('../utils/secret-redactor');
 const axios = require('axios');
 const { serializeUser, serializeBigIntFields } = require('../utils/bigint-serializer');
 const modelSyncService = require('../services/model-sync-service');
@@ -20,6 +23,10 @@ const {
   safeDownloadFilename,
 } = require('../middleware/file-response-safety');
 
+// Mirror of the Prisma `Plan` enum — validated at the route boundary so an
+// unknown plan string surfaces a clean 400 instead of a Prisma enum 500.
+const PLAN_VALUES = ['FREE', 'PRO', 'PRO_MAX', 'ENTERPRISE'];
+
 function invalidateAiModelsCache() {
   return invalidateResponseCache({ namespace: 'ai-models' });
 }
@@ -31,14 +38,55 @@ function invoicePdfFilename(invoice) {
   });
 }
 
+function requestIdFor(req) {
+  return req.requestId || req.id || req.headers?.['x-request-id'] || null;
+}
+
+function logAdminRouteError(req, message, error, context = {}) {
+  const log = req.log || logger;
+  if (typeof log.error !== 'function') return;
+  log.error({
+    error: {
+      name: error?.name || 'Error',
+      message: redactErrorMessage(error),
+      code: error?.code || undefined,
+    },
+    requestId: requestIdFor(req),
+    ...context,
+  }, message);
+}
+
+function sendStripeError(res, req, error, operation) {
+  const response = stripeService.toHttpError(error, {
+    requestId: requestIdFor(req),
+    operation,
+  });
+  return res.status(response.statusCode).json(response.body);
+}
+
 // Apply admin middleware to all routes
 router.use(authenticateToken, requireAdmin);
 
 
-router.get('/providers', (req, res) => {
-  // Prisma se ProviderType enum ki values hasil karein
-  const providers = Object.keys(ProviderType);
-  res.json({ providers });
+router.get('/providers', async (req, res) => {
+  // Union of the ProviderType enum AND the providers actually present in
+  // the catalog: AiModel.provider is a plain String, and real rows carry
+  // providers outside the enum (e.g. 'fal.ai' with 250+ active models).
+  // Without the union, the largest provider can't be filtered or edited.
+  try {
+    const distinct = await prisma.aiModel.findMany({
+      distinct: ['provider'],
+      select: { provider: true },
+    });
+    const providers = Array.from(new Set([
+      ...Object.keys(ProviderType),
+      ...distinct.map((row) => row.provider).filter(Boolean),
+    ])).sort((a, b) => a.localeCompare(b));
+    res.json({ providers });
+  } catch (error) {
+    console.error('List providers error:', error);
+    res.json({ providers: Object.keys(ProviderType) });
+  }
 });
 // AI Models Management
 router.get('/models', async (req, res) => {
@@ -95,9 +143,14 @@ router.post('/models', [
 
 router.put('/models/:id', [
   body('displayName').optional().trim().isLength({ min: 1 }),
-  body('provider').optional().isIn(Object.keys(ProviderType)),
+  // AiModel.provider is a plain String column and the catalog already
+  // holds providers outside the enum (fal.ai etc.) — validate shape, not
+  // membership, or every edit of a fal.ai model 400s.
+  body('provider').optional().isString().trim().isLength({ min: 1, max: 60 }),
   body('type').optional().isIn(Object.keys(ModelType)),
   body('icon').optional({ nullable: true }).trim(),
+  body('name').optional().trim().isLength({ min: 1, max: 200 }),
+  body('contextLength').optional({ nullable: true }).isInt({ min: 0 }),
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -105,7 +158,7 @@ router.put('/models/:id', [
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { displayName, provider, type, icon, description, apiKey, isActive } = req.body;
+    const { displayName, provider, type, icon, description, apiKey, isActive, name, contextLength } = req.body;
     const updateData = {};
 
     if (displayName) updateData.displayName = displayName;
@@ -115,6 +168,10 @@ router.put('/models/:id', [
     if (description !== undefined) updateData.description = description;
     if (apiKey !== undefined) updateData.apiKey = apiKey;
     if (typeof isActive === 'boolean') updateData.isActive = isActive;
+    // The admin page already sends these two — they were silently dropped,
+    // making renames/context edits a no-op that looked successful.
+    if (name) updateData.name = name;
+    if (contextLength !== undefined && contextLength !== null) updateData.contextLength = Number(contextLength);
 
     const model = await prisma.aiModel.update({
       where: { id: req.params.id },
@@ -125,6 +182,12 @@ router.put('/models/:id', [
     res.json({ model });
   } catch (error) {
     console.error('Update model error:', error);
+    if (error.code === 'P2002') {
+      return res.status(400).json({ error: 'Ya existe un modelo con ese nombre' });
+    }
+    if (error.code === 'P2025') {
+      return res.status(404).json({ error: 'Modelo no encontrado' });
+    }
     res.status(500).json({ error: 'Failed to update model' });
   }
 });
@@ -159,6 +222,12 @@ router.get('/models/fetch', async (req, res) => {
         gemini: models.filter(m => m.provider === 'Gemini').length,
         openrouter: models.filter(m => m.provider === 'OpenRouter').length,
         deepseek: models.filter(m => m.provider === 'DeepSeek').length,
+        anthropic: models.filter(m => m.provider === 'Anthropic').length,
+        groq: models.filter(m => m.provider === 'Groq').length,
+        mistral: models.filter(m => m.provider === 'Mistral').length,
+        xai: models.filter(m => m.provider === 'xAI').length,
+        together: models.filter(m => m.provider === 'Together').length,
+        fireworks: models.filter(m => m.provider === 'Fireworks').length,
         video: models.filter(m => m.type === 'VIDEO').length
       }
     });
@@ -375,7 +444,9 @@ router.post('/models/sync/run', async (req, res) => {
 // Get all users
 router.get('/users', async (req, res) => {
   try {
-    const { page = 1, limit = 20, search = '', plan = '' } = req.query;
+    const page = parsePositiveInt(req.query.page, 1, { min: 1, max: 100000 });
+    const limit = parsePositiveInt(req.query.limit, 20, { min: 1, max: 100 });
+    const { search = '', plan = '' } = req.query;
     const skip = (page - 1) * limit;
 
     const where = {
@@ -388,7 +459,9 @@ router.get('/users', async (req, res) => {
         } : {},
         plan ? { plan } : {},
         // Exclude super admin users from the list
-        { isSuperAdmin: false }
+        { isSuperAdmin: false },
+        // Soft-deleted accounts must not resurface in the panel list
+        { deletedAt: null }
       ]
     };
 
@@ -407,8 +480,8 @@ router.get('/users', async (req, res) => {
           createdAt: true,
           updatedAt: true
         },
-        skip: parseInt(skip),
-        take: parseInt(limit),
+        skip,
+        take: limit,
         orderBy: { createdAt: 'desc' }
       }),
       prisma.user.count({ where })
@@ -527,10 +600,18 @@ router.get('/analytics', async (req, res) => {
 // Get all payments
 router.get('/payments', async (req, res) => {
   try {
-    const { page = 1, limit = 20, status = '' } = req.query;
+    const page = parsePositiveInt(req.query.page, 1, { min: 1, max: 100000 });
+    const limit = parsePositiveInt(req.query.limit, 20, { min: 1, max: 100 });
+    const { status = '' } = req.query;
     const skip = (page - 1) * limit;
 
-    const where = status ? { status } : {};
+    // Validate against the enum instead of passing raw input to Prisma —
+    // an unknown value used to surface as a 500 from enum coercion.
+    const VALID_PAYMENT_STATUSES = ['PENDING', 'COMPLETED', 'FAILED', 'CANCELLED'];
+    if (status && !VALID_PAYMENT_STATUSES.includes(String(status).toUpperCase())) {
+      return res.status(400).json({ error: `Estado de pago inválido: ${status}` });
+    }
+    const where = status ? { status: String(status).toUpperCase() } : {};
 
     const [payments, total] = await Promise.all([
       prisma.payment.findMany({
@@ -543,8 +624,8 @@ router.get('/payments', async (req, res) => {
             }
           }
         },
-        skip: parseInt(skip),
-        take: parseInt(limit),
+        skip,
+        take: limit,
         orderBy: { createdAt: 'desc' }
       }),
       prisma.payment.count({ where })
@@ -569,9 +650,9 @@ router.put(
   '/users/:id',
   [
     // optional validations
-    body('name').optional().trim().isLength({ min: 1 }).withMessage('Name cannot be empty'),
+    body('name').optional().trim().isLength({ min: 1, max: 100 }).withMessage('Name must be 1–100 characters'),
     body('email').optional().isEmail().withMessage('Valid email required').normalizeEmail(),
-    body('plan').optional().isString(),
+    body('plan').optional().isIn(PLAN_VALUES).withMessage('Invalid plan'),
     body('isAdmin').optional().isBoolean(),
     body('monthlyLimit').optional().isInt({ min: 0 }).withMessage('monthlyLimit must be 0 or greater'),
   ],
@@ -693,6 +774,9 @@ router.delete('/users/:id', async (req, res) => {
     res.json({ message: 'User deleted successfully' });
   } catch (error) {
     console.error('Delete user error:', error);
+    if (error.code === 'P2025') {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
     res.status(500).json({ error: 'Failed to delete user' });
   }
 });
@@ -701,10 +785,10 @@ router.delete('/users/:id', async (req, res) => {
 router.post(
   '/users',
   [
-    body('name').trim().isLength({ min: 2 }).withMessage('Name must be at least 2 characters'),
+    body('name').trim().isLength({ min: 2, max: 100 }).withMessage('Name must be 2–100 characters'),
     body('email').isEmail().normalizeEmail().withMessage('Valid email required'),
     body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
-    body('plan').optional().isString(),
+    body('plan').optional().isIn(PLAN_VALUES).withMessage('Invalid plan'),
     body('isAdmin').optional().isBoolean(),
     body('monthlyLimit').optional().isInt({ min: 0 }).withMessage('monthlyLimit must be 0 or greater'),
   ],
@@ -1300,6 +1384,15 @@ async function collectServiceHealth({
     systemCron,
     trust,
   };
+  // Contract aliases: the admin Status page reads `latency_ms` and
+  // `detail` per probe; the probes natively emit latencyMs/error. Emit
+  // both names so neither consumer breaks.
+  for (const probe of Object.values(services)) {
+    if (probe && typeof probe === 'object') {
+      if (probe.latencyMs !== undefined && probe.latency_ms === undefined) probe.latency_ms = probe.latencyMs;
+      if (probe.error !== undefined && probe.detail === undefined) probe.detail = probe.error;
+    }
+  }
   return {
     timestamp: new Date().toISOString(),
     overall: deriveOverall(services),
@@ -1745,7 +1838,7 @@ router.get('/system-snapshot', requireSuperAdmin, async (_req, res) => {
   });
 });
 
-router.get('/health/services', requireSuperAdmin, async (_req, res) => {
+router.get('/health/services', async (_req, res) => {
   try {
     const emailService = (() => { try { return require('../services/email'); } catch (_) { return null; } })();
     const queueModule = (() => { try { return require('../services/agents/agent-task-queue'); } catch (_) { return null; } })();
@@ -1781,7 +1874,7 @@ router.get('/health/services', requireSuperAdmin, async (_req, res) => {
 // When no row exists (fresh install or backup never ran) we return 200
 // with `lastBackupAt: null` so the admin UI can render a "never run"
 // state — distinct from a 5xx telling the operator something is broken.
-router.get('/backups', requireSuperAdmin, async (_req, res) => {
+router.get('/backups', async (_req, res) => {
   try {
     const row = await prisma.systemSettings.findUnique({
       where: { key: 'last_db_backup' },
@@ -2015,10 +2108,10 @@ async function _handleStatsRoute(fn, req, res, label) {
   }
 }
 
-router.get('/stats/users', requireSuperAdmin, STATS_CACHE, (req, res) =>
+router.get('/stats/users', STATS_CACHE, (req, res) =>
   _handleStatsRoute(adminStats.aggregateUserStats, req, res, 'users')
 );
-router.get('/stats/usage', requireSuperAdmin, STATS_CACHE, (req, res) =>
+router.get('/stats/usage', STATS_CACHE, (req, res) =>
   _handleStatsRoute(adminStats.aggregateUsageStats, req, res, 'usage')
 );
 router.get('/stats/files', requireSuperAdmin, STATS_CACHE, (req, res) =>
@@ -2033,7 +2126,7 @@ router.get('/stats/agents', requireSuperAdmin, STATS_CACHE, (req, res) =>
 // These JSON endpoints add ergonomic admin-only operations for monitoring
 // dashboards. Errors are surfaced as 503 when Redis is unconfigured so the
 // UI can render an empty-state instead of a 500.
-router.get('/queues', requireSuperAdmin, async (_req, res) => {
+router.get('/queues', async (_req, res) => {
   try {
     const queueSvc = require('../services/agents/agent-task-queue');
     if (!process.env.REDIS_URL) {
@@ -2252,13 +2345,17 @@ router.post('/users/:id/grant-credits', requireSuperAdmin, async (req, res) => {
     });
     if (!user) return res.status(404).json({ error: 'User not found' });
 
+    // Atomic increment so two concurrent grants (or a double-click) can't both
+    // read the same monthlyLimit and write back the same sum — a lost-update
+    // that silently dropped one grant. Audit `after` uses the authoritative
+    // post-increment value the DB returns.
     const previousLimit = BigInt(user.monthlyLimit || 0);
-    const newLimit = previousLimit + BigInt(Math.floor(credits));
     const updated = await prisma.user.update({
       where: { id: user.id },
-      data: { monthlyLimit: newLimit },
+      data: { monthlyLimit: { increment: BigInt(Math.floor(credits)) } },
       select: { id: true, email: true, monthlyLimit: true },
     });
+    const newLimit = BigInt(updated.monthlyLimit || 0);
 
     void writeAuditLog(prisma, {
       actorType: 'admin',
@@ -2389,7 +2486,7 @@ router.post('/webhooks/retry-failed', requireSuperAdmin, async (req, res) => {
 
 // ── Audit log query DSL endpoint ───────────────────────────────────────────
 // GET /api/admin/audit-logs?userId=&action=&resource=&resourceId=&orgId=&apiKeyId=&tags=&from=&to=&page=&limit=
-router.get('/audit-logs', requireSuperAdmin, async (req, res) => {
+router.get('/audit-logs', async (req, res) => {
   try {
     const result = await runAuditLogQuery(req);
     res.json(result);
@@ -2406,7 +2503,7 @@ router.get('/audit-logs', requireSuperAdmin, async (req, res) => {
 // path it lives at. `q` must be at least 2 chars to keep the pattern
 // from matching every row in a 50M-row table. Default page size 50,
 // hard cap 200 (see SEARCH_LIMIT_MAX in services/audit-query).
-router.get('/audit-logs/search', requireSuperAdmin, async (req, res) => {
+router.get('/audit-logs/search', async (req, res) => {
   try {
     const raw = typeof req.query.q === 'string' ? req.query.q.trim() : '';
     if (raw.length < 2) {
@@ -2434,7 +2531,7 @@ router.get('/audit-logs/search', requireSuperAdmin, async (req, res) => {
 // follows RFC4180: any field containing ", \r, \n, or , is wrapped in
 // double quotes with inner quotes doubled. JSON columns (`before`,
 // `after`, `metadata`) are serialised inline.
-router.get('/audit-logs.csv', requireSuperAdmin, async (req, res) => {
+router.get('/audit-logs.csv', async (req, res) => {
   try {
     // Force a generous default + cap so a CSV export doesn't degenerate
     // into a tiny paginated slice. Callers can still pass ?limit=.
@@ -2699,15 +2796,44 @@ module.exports.INTERNAL = {
   webhookDispatcher,
 };
 // Stripe invoices (admin)
+// DB fallback for the invoices panel: when Stripe is unreachable or its
+// key is invalid, serve the locally-synced prisma.Invoice rows mapped to
+// the exact shape the page expects. The panel keeps working (read-only)
+// through Stripe outages and key rotations.
+async function listInvoicesFromDb({ limit }) {
+  const rows = await prisma.invoice.findMany({
+    take: limit,
+    orderBy: { createdAt: 'desc' },
+    include: { user: { select: { id: true, name: true, email: true } } },
+  });
+  return {
+    invoices: rows.map((inv) => ({
+      id: inv.stripeInvoiceId || inv.id,
+      number: inv.number,
+      status: String(inv.status || '').toLowerCase(),
+      amountPaid: (inv.amountPaidCents || 0) / 100,
+      currency: inv.currency,
+      hostedInvoiceUrl: inv.hostedInvoiceUrl,
+      invoicePdf: inv.invoicePdfUrl,
+      customer: inv.stripeCustomerId || '',
+      created: inv.createdAt,
+      user: inv.user || null,
+    })),
+    has_more: false,
+    source: 'db_fallback',
+  };
+}
+
 router.get('/stripe/invoices', async (req, res) => {
   try {
     if (!stripeService.isConfigured) {
-      return res.status(503).json({ error: 'Stripe not configured' });
+      const fallback = await listInvoicesFromDb({ limit: Math.min(parseInt(req.query.limit, 10) || 50, 100) });
+      return res.json(fallback);
     }
 
     const { limit = 50, starting_after } = req.query;
 
-    const invoices = await stripeService.stripe.invoices.list({
+    const invoices = await stripeService.listInvoices({
       limit: Math.min(parseInt(limit, 10) || 50, 100),
       ...(starting_after ? { starting_after } : {})
     });
@@ -2735,8 +2861,18 @@ router.get('/stripe/invoices', async (req, res) => {
       has_more: invoices.has_more
     });
   } catch (error) {
-    console.error('Admin list invoices error:', error);
-    res.status(500).json({ error: 'Failed to list invoices' });
+    if (error?.isStripeOperationalError || stripeService.isStripeLikeError?.(error)) {
+      // Stripe rejected the call (auth/network) — degrade to the DB copy
+      // instead of an empty 5xx panel.
+      try {
+        const fallback = await listInvoicesFromDb({ limit: Math.min(parseInt(req.query.limit, 10) || 50, 100) });
+        return res.json(fallback);
+      } catch (_) {
+        return sendStripeError(res, req, error, 'adminListStripeInvoices');
+      }
+    }
+    logAdminRouteError(req, 'admin.stripe.invoices.list_failed', error);
+    res.status(500).json({ error: 'Failed to list invoices', requestId: requestIdFor(req) });
   }
 });
 
@@ -2746,11 +2882,11 @@ router.get('/stripe/invoice/:invoiceId', async (req, res) => {
       return res.status(503).json({ error: 'Stripe not configured' });
     }
 
-    const invoice = await stripeService.stripe.invoices.retrieve(req.params.invoiceId);
+    const invoice = await stripeService.retrieveInvoice(req.params.invoiceId);
 
     // Stream PDF if available
     if (invoice.invoice_pdf) {
-      const response = await axios.get(invoice.invoice_pdf, { responseType: 'stream' });
+      const response = await axios.get(invoice.invoice_pdf, { responseType: 'stream', timeout: 15000 });
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', contentDispositionHeader('attachment', invoicePdfFilename(invoice)));
       return response.data.pipe(res);
@@ -2762,15 +2898,20 @@ router.get('/stripe/invoice/:invoiceId', async (req, res) => {
 
     return res.status(404).json({ error: 'Invoice PDF not available' });
   } catch (error) {
-    console.error('Admin download invoice error:', error);
-    res.status(500).json({ error: 'Failed to download invoice' });
+    if (error?.isStripeOperationalError || stripeService.isStripeLikeError?.(error)) {
+      return sendStripeError(res, req, error, 'adminDownloadStripeInvoice');
+    }
+    logAdminRouteError(req, 'admin.stripe.invoice.download_failed', error, { invoiceId: req.params.invoiceId });
+    res.status(500).json({ error: 'Failed to download invoice', requestId: requestIdFor(req) });
   }
 });
 
 // Export all user emails to CSV
 router.get('/users/export/csv', async (req, res) => {
   try {
+    // Match the /users list semantics: no super admins, no soft-deleted.
     const users = await prisma.user.findMany({
+      where: { isSuperAdmin: false, deletedAt: null },
       select: {
         email: true,
         name: true,
@@ -2788,12 +2929,11 @@ router.get('/users/export/csv', async (req, res) => {
     // CSV header
     let csv = 'Email,Name,Registration Date\n';
 
-    // CSV rows
+    // CSV rows — RFC-4180 escaping via the shared helper (embedded quotes
+    // in a name used to break the file with naive concatenation).
     users.forEach(user => {
-      const email = user.email || '';
-      const name = user.name || '';
       const date = user.createdAt ? user.createdAt.toISOString().split('T')[0] : '';
-      csv += `"${email}","${name}","${date}"\n`;
+      csv += `${csvEscape(user.email)},${csvEscape(user.name)},${csvEscape(date)}\n`;
     });
 
     res.setHeader('Content-Type', 'text/csv');

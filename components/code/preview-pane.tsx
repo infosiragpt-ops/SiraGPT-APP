@@ -14,10 +14,11 @@ import {
   Circle,
   Eraser,
   ExternalLink,
-  Loader2,
   Monitor,
+  Play,
   RefreshCw,
   Smartphone,
+  Square,
   TerminalSquare,
   X,
   Zap,
@@ -25,9 +26,15 @@ import {
 } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { useCodeWorkspace } from "@/lib/code-workspace-context"
 import { buildPreviewDocument, type PreviewKind } from "@/lib/code-preview-build"
 import { CODE_TEMPLATES } from "@/lib/code-templates"
+import { opencodeService } from "@/lib/opencode/opencode-service"
+import { hostRunnerService } from "@/lib/code-runner/host-runner-service"
+
+type LiveRun = { phase: "idle" | "starting" | "ready" | "error"; devUrl: string; note: string }
+type RunnerStatus = { ready?: boolean; error?: string | null; framework?: string | null; tail?: string[]; devUrl?: string }
 
 type LogEntry = { level: string; text: string; id: number }
 type Device = "responsive" | "phone"
@@ -62,6 +69,96 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
   const [consoleOpen, setConsoleOpen] = React.useState(false)
   const [logs, setLogs] = React.useState<LogEntry[]>([])
   const logSeq = React.useRef(0)
+
+  // Phase B — run a real Node/Vite/Next app and iframe it live. Prefer the
+  // no-Docker host runner (local); fall back to the opencode/Docker runner (prod).
+  const [liveRun, setLiveRun] = React.useState<LiveRun>({ phase: "idle", devUrl: "", note: "" })
+  const pollRef = React.useRef<number | null>(null)
+  const runIdRef = React.useRef<string>("")
+  const modeRef = React.useRef<"host" | "opencode">("host")
+
+  const hasNodeProject = React.useMemo(
+    () => Object.keys(files || {}).some((p) => /(^|\/)package\.json$/.test(p)),
+    [files],
+  )
+
+  const clearPoll = React.useCallback(() => {
+    if (pollRef.current) {
+      window.clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+  }, [])
+
+  const stopApp = React.useCallback(() => {
+    clearPoll()
+    setLiveRun({ phase: "idle", devUrl: "", note: "" })
+    if (modeRef.current === "opencode") void opencodeService.stopRun()
+    else if (runIdRef.current) void hostRunnerService.stop(runIdRef.current)
+  }, [clearPoll])
+
+  // Poll a runner's status until the dev server is ready (or fails / times out).
+  const pollUntilReady = React.useCallback(
+    (statusFn: () => Promise<RunnerStatus>, fallbackUrl: string) => {
+      clearPoll()
+      let tries = 0
+      pollRef.current = window.setInterval(async () => {
+        tries += 1
+        const st = await statusFn()
+        if (st.ready) {
+          clearPoll()
+          setLiveRun({ phase: "ready", devUrl: st.devUrl || fallbackUrl, note: st.framework || "app" })
+        } else if (st.error || tries > 80) {
+          // ~3.3 min budget: a cold npm install of vite + tailwind v4 +
+          // framer-motion + lucide plus dev-server boot can be slow.
+          clearPoll()
+          setLiveRun({ phase: "error", devUrl: "", note: st.error || "El dev server no arrancó a tiempo." })
+        } else {
+          setLiveRun((p) => ({ ...p, note: (st.tail && st.tail[st.tail.length - 1]) || p.note }))
+        }
+      }, 2500)
+    },
+    [clearPoll],
+  )
+
+  const runApp = React.useCallback(async () => {
+    setLiveRun({ phase: "starting", devUrl: "", note: "Instalando dependencias y arrancando el dev server…" })
+    if (!runIdRef.current) {
+      try {
+        runIdRef.current = crypto.randomUUID()
+      } catch {
+        runIdRef.current = `run-${Math.random().toString(36).slice(2)}`
+      }
+    }
+    // Workspace files are CodeFile objects; the runner wants path -> content.
+    const fileMap: Record<string, string> = {}
+    for (const [p, f] of Object.entries(files)) fileMap[p] = f?.content ?? ""
+    // 1) Local host runner (no Docker) — the default everywhere it's enabled.
+    const started = await hostRunnerService.start(fileMap, runIdRef.current)
+    if (!started.disabled) {
+      modeRef.current = "host"
+      if (started.error) {
+        setLiveRun({ phase: "error", devUrl: "", note: started.error })
+        return
+      }
+      pollUntilReady(() => hostRunnerService.status(runIdRef.current), started.devUrl || "")
+      return
+    }
+    // 2) Fallback: opencode/Docker runner (production).
+    modeRef.current = "opencode"
+    const res = await opencodeService.runProject()
+    if (res.error) {
+      setLiveRun({ phase: "error", devUrl: "", note: res.error })
+      return
+    }
+    pollUntilReady(() => opencodeService.runStatus(), res.devUrl || "http://localhost:5173")
+  }, [files, pollUntilReady])
+
+  React.useEffect(
+    () => () => {
+      if (pollRef.current) window.clearInterval(pollRef.current)
+    },
+    [],
+  )
 
   // Debounce rebuilds so typing stays smooth; manual refresh bypasses it.
   const [snapshot, setSnapshot] = React.useState({ files, activePath })
@@ -130,7 +227,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
           aria-label="Recargar preview"
           title="Recargar"
         >
-          {building ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+          {building ? <ThinkingIndicator size="xs" /> : <RefreshCw className="h-3.5 w-3.5" />}
         </button>
 
         <div className="flex min-w-0 flex-1 items-center gap-2 rounded-full border border-border/40 bg-muted/30 px-3 py-1 text-[11px] text-muted-foreground shadow-inner backdrop-blur">
@@ -152,6 +249,34 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
           <GlassToggle active={device === "phone"} onClick={() => setDevice("phone")} label="Móvil">
             <Smartphone className="h-3.5 w-3.5" />
           </GlassToggle>
+
+          {/* Phase B — run a real Node/Vite/Next app (npm install + dev server). */}
+          {hasNodeProject ? (
+            <>
+              <span className="mx-0.5 h-4 w-px bg-border/50" />
+              {liveRun.phase === "ready" || liveRun.phase === "starting" ? (
+                <button
+                  type="button"
+                  onClick={stopApp}
+                  title="Detener el dev server"
+                  className="flex h-6 items-center gap-1 rounded-md bg-rose-500/15 px-2 text-[11px] font-medium text-rose-500 transition-colors hover:bg-rose-500/25"
+                >
+                  {liveRun.phase === "starting" ? <ThinkingIndicator size="xs" /> : <Square className="h-3 w-3" />}
+                  <span>{liveRun.phase === "starting" ? "Arrancando…" : "Detener"}</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={runApp}
+                  title="Instalar dependencias y correr el app (npm)"
+                  className="flex h-6 items-center gap-1 rounded-md bg-[hsl(var(--accent-violet)/0.16)] px-2 text-[11px] font-medium text-[hsl(var(--accent-violet))] transition-colors hover:bg-[hsl(var(--accent-violet)/0.28)]"
+                >
+                  <Play className="h-3 w-3" />
+                  <span>Ejecutar</span>
+                </button>
+              )}
+            </>
+          ) : null}
 
           <span className="mx-0.5 h-4 w-px bg-border/50" />
 
@@ -201,7 +326,45 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
 
       {/* Viewport */}
       <div className="min-h-0 flex-1 overflow-auto bg-zinc-100/60 p-0 dark:bg-zinc-900/40">
-        {result.kind === "empty" || result.kind === "unsupported" ? (
+        {liveRun.phase === "ready" ? (
+          // Real running app from the cloud runner (npm dev server).
+          <div
+            className={cn(
+              "mx-auto h-full bg-white transition-all dark:bg-zinc-900",
+              device === "phone" && "my-3 h-[calc(100%-1.5rem)] max-w-[390px] overflow-hidden rounded-[28px] border-[6px] border-zinc-800 shadow-2xl",
+            )}
+          >
+            <iframe
+              src={liveRun.devUrl}
+              title="App en vivo (dev server)"
+              // El dev server corre en otro puerto (cross-origin): sin este
+              // permiso, navigator.clipboard.writeText falla dentro del iframe
+              // (p.ej. el botón Copiar del componente «Invitar al proyecto»).
+              allow="clipboard-write"
+              className="h-full w-full border-0 bg-white dark:bg-zinc-900"
+            />
+          </div>
+        ) : liveRun.phase === "starting" ? (
+          <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
+            <ThinkingIndicator size="sm" />
+            <div>
+              <p className="text-sm font-medium text-foreground">Compilando tu app…</p>
+              <p className="mx-auto mt-1 max-w-md font-mono text-[11px] leading-relaxed text-muted-foreground">{liveRun.note}</p>
+            </div>
+          </div>
+        ) : liveRun.phase === "error" ? (
+          <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
+            <p className="text-sm font-medium text-rose-500">No se pudo correr el app</p>
+            <p className="mx-auto max-w-md font-mono text-[11px] leading-relaxed text-muted-foreground">{liveRun.note}</p>
+            <button
+              type="button"
+              onClick={runApp}
+              className="rounded-md bg-[hsl(var(--accent-violet)/0.16)] px-3 py-1.5 text-[12px] font-medium text-[hsl(var(--accent-violet))] hover:bg-[hsl(var(--accent-violet)/0.28)]"
+            >
+              Reintentar
+            </button>
+          </div>
+        ) : result.kind === "empty" || result.kind === "unsupported" ? (
           <PreviewLaunchpad kind={result.kind} note={result.note} />
         ) : (
           <div

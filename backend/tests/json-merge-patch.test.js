@@ -94,3 +94,13 @@ describe('round-trip property: apply(s, diff(s, t)) === t', () => {
     });
   }
 });
+
+describe('apply — prototype-pollution guard', () => {
+  test('drops __proto__ / constructor / prototype keys instead of merging them', () => {
+    const out = apply({ a: 1 }, JSON.parse('{"__proto__":{"polluted":"x"},"constructor":{"y":1},"b":2}'));
+    assert.equal(out.a, 1);
+    assert.equal(out.b, 2);
+    assert.equal({}.polluted, undefined, 'global prototype untouched');
+    assert.ok(!Object.prototype.hasOwnProperty.call(out, 'polluted'));
+  });
+});

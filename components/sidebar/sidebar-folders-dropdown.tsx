@@ -6,10 +6,29 @@
 
 import * as React from "react"
 import { usePathname, useRouter } from "next/navigation"
-import { Cloud, FolderOpen, FolderPlus, RefreshCw, SlidersHorizontal } from "lucide-react"
+import {
+  Cloud,
+  FolderOpen,
+  FolderPlus,
+  Github,
+  Globe,
+  RefreshCw,
+  SlidersHorizontal,
+} from "lucide-react"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -34,6 +53,7 @@ import {
 import {
   CODE_NEW_CODE_CHAT_EVENT,
   CODE_SELECT_CHAT_SESSION_EVENT,
+  FORGET_CODEX_WORKSPACE_EVENT,
   type CodeNewChatDetail,
 } from "@/lib/code-workspace-context"
 import { useChat } from "@/lib/chat-context-integrated"
@@ -41,6 +61,7 @@ import {
   CODEX_UPDATED_EVENT,
   codexIdForProject,
   listCodexProjects,
+  removeCodexProject,
   type CodexProjectEntry,
   upsertCodexProject,
 } from "@/lib/codex-projects"
@@ -60,11 +81,21 @@ import {
 } from "@/lib/codex-conversation-prefs"
 import { canOpenLocalDirectory, importLocalFolderAsWorkspace } from "@/lib/local-folder-workspace"
 import { apiClient } from "@/lib/api"
-import { projectsService, type Project, type ProjectChatSummary } from "@/lib/projects-service"
+import {
+  projectsService,
+  type Project,
+  type ProjectChatSummary,
+  type ProjectHostingProvider,
+  type ProjectType,
+} from "@/lib/projects-service"
+import { normalizeChatInput } from "@/lib/chat-input-normalize"
 import { cn } from "@/lib/utils"
 
 const STORAGE_EXPANDED = "code-workspace:expanded-workspaces"
 const STORAGE_ACTIVE_FOLDER = "code-workspace:active-folder"
+// Prefix of the per-workspace files/tabs bucket the /code provider persists
+// (storageKeyFor → `code-workspace:v1:<id>`). Cleared when a workspace is deleted.
+const WORKSPACE_STATE_PREFIX = "code-workspace:v1"
 
 type Props = {
   collapsed: boolean
@@ -81,6 +112,15 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
   const [codexProjects, setCodexProjects] = React.useState<CodexProjectEntry[]>([])
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
+
+  // "Proyecto en la nube" modal — replaces the native window.prompt.
+  const [cloudDialogOpen, setCloudDialogOpen] = React.useState(false)
+  const [cloudName, setCloudName] = React.useState("")
+  const [creatingCloud, setCreatingCloud] = React.useState(false)
+  // New-project choices: kind (general vs web app) + where it's hosted.
+  // GitHub hosting is a placeholder until the OAuth/push flow ships.
+  const [cloudType, setCloudType] = React.useState<ProjectType>("general")
+  const [cloudHosting, setCloudHosting] = React.useState<ProjectHostingProvider>("sira-cloud")
 
   const [expandedIds, setExpandedIds] = React.useState<Set<string>>(new Set())
   const [chatsByFolder, setChatsByFolder] = React.useState<
@@ -305,7 +345,15 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
       if (opts.folderId) params.set("folder", opts.folderId)
       if (opts.localId) params.set("local", opts.localId)
       const query = params.toString()
-      router.push(query ? `/code?${query}` : "/code")
+      const target = query ? `/code?${query}` : "/code"
+      router.push(target)
+      if (typeof window !== "undefined") {
+        window.setTimeout(() => {
+          if (!window.location.pathname.startsWith("/code")) {
+            window.location.assign(target)
+          }
+        }, 450)
+      }
       onMobileNavigate?.()
     },
     [folders, localProjects, onMobileNavigate, router],
@@ -333,6 +381,49 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
       handleOpenInCode({ localId: node.id })
     },
     [handleOpenInCode, refreshCodexProjects],
+  )
+
+  const handleDeleteWorkspace = React.useCallback(
+    async (node: WorkspaceTreeNode) => {
+      const isCloud = node.kind === "project"
+      const message = isCloud
+        ? `¿Eliminar el proyecto "${node.name}"? Se borrarán también sus archivos y chats. Esta acción no se puede deshacer.`
+        : `¿Quitar la carpeta "${node.name}" de tus proyectos? Se elimina del panel y se borra su contenido en el navegador (no se toca ningún archivo de tu disco).`
+      if (typeof window !== "undefined" && !window.confirm(message)) return
+      try {
+        if (isCloud) {
+          await projectsService.remove(node.chatListId)
+        }
+        // Drop the registry entry + the persisted files/folders bucket, and tell
+        // an open /code workspace to forget it (resetting the editor if active).
+        removeCodexProject(node.id)
+        if (typeof window !== "undefined") {
+          try {
+            window.localStorage.removeItem(`${WORKSPACE_STATE_PREFIX}:${node.id}`)
+          } catch {
+            /* fail soft */
+          }
+          window.dispatchEvent(
+            new CustomEvent(FORGET_CODEX_WORKSPACE_EVENT, { detail: { id: node.id } }),
+          )
+        }
+        setChatsByFolder((prev) => {
+          if (!(node.chatListId in prev)) return prev
+          const next = { ...prev }
+          delete next[node.chatListId]
+          return next
+        })
+        refreshCodexProjects()
+        if (isCloud) await refresh()
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent(CODEX_UPDATED_EVENT))
+        }
+        toast.success(isCloud ? `Proyecto "${node.name}" eliminado.` : `Carpeta "${node.name}" quitada.`)
+      } catch (err: any) {
+        toast.error(err?.message || "No se pudo eliminar el proyecto")
+      }
+    },
+    [refresh, refreshCodexProjects],
   )
 
   const handleOpenChat = React.useCallback(
@@ -502,13 +593,44 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
     }
   }, [handleOpenDesktopFolder, onMobileNavigate, refreshCodexProjects, router])
 
-  // Secondary entry: a cloud-only project (no local files).
-  const handleNewCloudProject = React.useCallback(async () => {
-    const name = typeof window !== "undefined" ? window.prompt("Nombre del proyecto en la nube") : null
-    const clean = name?.trim()
-    if (!clean) return
+  // Secondary entry: a cloud-only project (no local files). Opens a
+  // styled modal instead of the native window.prompt.
+  const handleNewCloudProject = React.useCallback(() => {
+    setCloudName("")
+    setCreatingCloud(false)
+    setCloudType("general")
+    setCloudHosting("sira-cloud")
+    setCloudDialogOpen(true)
+  }, [])
+
+  // Empty on open; validated live. We normalise the same way the backend
+  // stores it (strips invisible chars/BOM) so the button only lights up for
+  // a name that will actually persist cleanly.
+  const cloudNameClean = normalizeChatInput(cloudName).value.trim()
+  // Soft, NON-blocking warning only: the backend (projects model has no
+  // unique constraint on name) accepts duplicates, so we surface the
+  // collision but never hard-block a valid create.
+  const cloudNameDuplicate = React.useMemo(
+    () =>
+      cloudNameClean.length > 0 &&
+      folders.some((f) => f.name.trim().toLowerCase() === cloudNameClean.toLowerCase()),
+    [cloudNameClean, folders],
+  )
+  // GitHub hosting isn't available yet — selecting it disables submit and
+  // shows a "coming soon" note instead of creating an orphaned project.
+  const githubSelected = cloudHosting === "github"
+  const canSubmitCloud = cloudNameClean.length > 0 && !creatingCloud && !githubSelected
+
+  const submitCloudProject = React.useCallback(async () => {
+    const clean = normalizeChatInput(cloudName).value.trim()
+    if (!clean || creatingCloud || cloudHosting === "github") return
+    setCreatingCloud(true)
     try {
-      const project = await projectsService.create({ name: clean })
+      const project = await projectsService.create({
+        name: clean,
+        type: cloudType,
+        hostingProvider: "sira-cloud",
+      })
       await refresh()
       handleOpenWorkspace({
         id: codexIdForProject(project.id),
@@ -516,11 +638,28 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
         kind: "project",
         chatListId: project.id,
       })
-      toast.success(`Proyecto "${project.name}" creado`)
+      toast.success(
+        cloudType === "webapp"
+          ? `App web "${project.name}" creada · disponible en Biblioteca → Apps web`
+          : `Proyecto "${project.name}" creado`,
+      )
+      setCloudDialogOpen(false)
     } catch (err: any) {
       toast.error(err?.message || "No se pudo crear el proyecto")
+      setCreatingCloud(false)
     }
-  }, [handleOpenWorkspace, refresh])
+  }, [cloudName, cloudType, cloudHosting, creatingCloud, handleOpenWorkspace, refresh])
+
+  // House pattern (create-project-dialog): clear state whenever the dialog
+  // closes so a second open never inherits a stale name or a frozen spinner.
+  React.useEffect(() => {
+    if (!cloudDialogOpen) {
+      setCloudName("")
+      setCreatingCloud(false)
+      setCloudType("general")
+      setCloudHosting("sira-cloud")
+    }
+  }, [cloudDialogOpen])
 
   const handleSetDisplay = React.useCallback(
     <K extends keyof CodexDisplayOptions>(key: K, value: CodexDisplayOptions[K]) => {
@@ -576,7 +715,7 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
   }
 
   return (
-    <div className="flex max-h-[min(420px,50vh)] min-h-[120px] flex-col px-1 pt-3">
+    <div className="flex max-h-[min(560px,62vh)] min-h-[180px] flex-col px-1 pt-3">
       {error ? (
         <div className="mx-2 mb-2 rounded-md border border-rose-300/40 bg-rose-500/5 px-3 py-2 text-xs text-rose-700 dark:text-rose-300">
           {error}
@@ -596,6 +735,7 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
         readRows={readRows}
         onToggleExpand={toggleExpanded}
         onOpenWorkspace={handleOpenWorkspace}
+        onDeleteWorkspace={handleDeleteWorkspace}
         onOpenChat={handleOpenChat}
         onNewCodeChat={handleNewCodeChat}
         onSelectCodeSession={handleSelectCodeSession}
@@ -666,25 +806,217 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
                   <FolderPlus className="h-3.5 w-3.5" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-60">
-                <DropdownMenuItem onClick={handleOpenLocalProject}>
-                  <FolderOpen className="mr-2 h-4 w-4" />
-                  Nuevo proyecto (carpeta local)
+              <DropdownMenuContent align="end" className="liquid-menu-surface w-64">
+                <DropdownMenuItem
+                  onClick={handleOpenLocalProject}
+                  className="group liquid-menu-item gap-2.5 focus:bg-transparent data-[highlighted]:bg-transparent"
+                >
+                  <div className="liquid-icon flex h-7 w-7 items-center justify-center rounded-lg bg-zinc-500/10 dark:bg-white/[0.06]">
+                    <FolderOpen className="h-3.5 w-3.5 text-zinc-600 dark:text-zinc-300" />
+                  </div>
+                  <span className="liquid-label text-sm">Nuevo proyecto (carpeta local)</span>
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={handleNewCloudProject}>
-                  <Cloud className="mr-2 h-4 w-4" />
-                  Proyecto en la nube
+                <DropdownMenuItem
+                  onClick={handleNewCloudProject}
+                  data-accent="cloud"
+                  className="group liquid-menu-item gap-2.5 focus:bg-transparent data-[highlighted]:bg-transparent"
+                >
+                  <div className="liquid-icon flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-violet-400/25 via-indigo-400/15 to-cyan-300/25 dark:from-violet-500/20 dark:via-indigo-500/15 dark:to-cyan-400/20">
+                    <Cloud className="h-3.5 w-3.5 text-violet-700 dark:text-violet-200" />
+                  </div>
+                  <span className="liquid-label text-sm font-medium text-violet-900/90 dark:text-violet-100/90">
+                    Proyecto en la nube
+                  </span>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => refresh()} disabled={loading}>
-                  <RefreshCw className="mr-2 h-4 w-4" />
-                  Actualizar
+                <DropdownMenuItem
+                  onClick={() => refresh()}
+                  disabled={loading}
+                  className="group liquid-menu-item gap-2.5 focus:bg-transparent data-[highlighted]:bg-transparent"
+                >
+                  <div className="liquid-icon flex h-7 w-7 items-center justify-center rounded-lg bg-zinc-500/10 dark:bg-white/[0.06]">
+                    <RefreshCw className={`h-3.5 w-3.5 text-zinc-600 dark:text-zinc-300 ${loading ? "animate-spin" : ""}`} />
+                  </div>
+                  <span className="liquid-label text-sm">Actualizar</span>
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </>
         }
       />
+
+      <Dialog
+        open={cloudDialogOpen}
+        onOpenChange={(open) => {
+          if (!creatingCloud) setCloudDialogOpen(open)
+        }}
+      >
+        <DialogContent showCloseButton={!creatingCloud} className="sm:max-w-[460px]">
+          <DialogHeader>
+            <div className="mb-1 flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-sky-500/15 to-indigo-500/15 ring-1 ring-sky-500/20">
+              <Cloud className="h-5 w-5 text-sky-500" />
+            </div>
+            <DialogTitle className="text-xl tracking-tight">Nuevo proyecto en la nube</DialogTitle>
+            <DialogDescription>
+              Crea un workspace sincronizado en la nube. Podrás organizar tus chats y código dentro de él.
+            </DialogDescription>
+          </DialogHeader>
+
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              void submitCloudProject()
+            }}
+            className="space-y-4 pt-1"
+          >
+            <div className="space-y-1.5">
+              <Label htmlFor="cloud-project-name" className="text-sm">
+                Nombre del proyecto
+              </Label>
+              <Input
+                id="cloud-project-name"
+                autoFocus
+                value={cloudName}
+                onChange={(e) => setCloudName(e.target.value)}
+                placeholder="Ej. Marketing Q3, App de finanzas…"
+                maxLength={120}
+                disabled={creatingCloud}
+                aria-describedby="cloud-project-hint"
+                className={cn(
+                  "h-11",
+                  cloudNameDuplicate && "border-amber-500/60 focus-visible:ring-amber-500/40",
+                )}
+              />
+              <p
+                id="cloud-project-hint"
+                role="status"
+                aria-live="polite"
+                className={cn(
+                  "min-h-[1rem] text-xs",
+                  cloudNameDuplicate && !creatingCloud
+                    ? "text-amber-700 dark:text-amber-400"
+                    : "text-muted-foreground",
+                )}
+              >
+                {creatingCloud
+                  ? "Creando proyecto…"
+                  : cloudNameDuplicate
+                    ? "Ya tienes un proyecto con ese nombre — puedes crearlo igualmente."
+                    : canSubmitCloud
+                      ? "Pulsa ⏎ para crear · Esc para cancelar"
+                      : "Escribe un nombre · Esc para cancelar"}
+              </p>
+            </div>
+
+            {/* Project kind — "App web" projects also surface in Library → Apps web. */}
+            <div className="space-y-1.5">
+              <Label className="text-sm">Tipo de proyecto</Label>
+              <div className="grid grid-cols-2 gap-2">
+                {(
+                  [
+                    { value: "general" as const, label: "Proyecto general", Icon: FolderOpen },
+                    { value: "webapp" as const, label: "App web", Icon: Globe },
+                  ]
+                ).map(({ value, label, Icon }) => {
+                  const active = cloudType === value
+                  return (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setCloudType(value)}
+                      disabled={creatingCloud}
+                      aria-pressed={active}
+                      className={cn(
+                        "flex items-center gap-2.5 rounded-lg border px-3 py-2.5 text-left text-sm transition-colors disabled:opacity-60",
+                        active
+                          ? "border-sky-500/60 bg-sky-500/10 text-foreground ring-1 ring-sky-500/30"
+                          : "border-border/60 hover:bg-muted/50",
+                      )}
+                    >
+                      <Icon className={cn("h-4 w-4 shrink-0", active ? "text-sky-500" : "text-muted-foreground")} />
+                      <span className="min-w-0 truncate">{label}</span>
+                    </button>
+                  )
+                })}
+              </div>
+              {cloudType === "webapp" ? (
+                <p className="text-xs text-muted-foreground">
+                  Aparecerá en <span className="font-medium">Biblioteca → Apps web</span>.
+                </p>
+              ) : null}
+            </div>
+
+            {/* Hosting destination — GitHub is reserved for the upcoming flow. */}
+            <div className="space-y-1.5">
+              <Label className="text-sm">Alojamiento</Label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCloudHosting("sira-cloud")}
+                  disabled={creatingCloud}
+                  aria-pressed={cloudHosting === "sira-cloud"}
+                  className={cn(
+                    "flex items-center gap-2.5 rounded-lg border px-3 py-2.5 text-left text-sm transition-colors disabled:opacity-60",
+                    cloudHosting === "sira-cloud"
+                      ? "border-sky-500/60 bg-sky-500/10 text-foreground ring-1 ring-sky-500/30"
+                      : "border-border/60 hover:bg-muted/50",
+                  )}
+                >
+                  <Cloud className={cn("h-4 w-4 shrink-0", cloudHosting === "sira-cloud" ? "text-sky-500" : "text-muted-foreground")} />
+                  <span className="min-w-0 truncate">Nube de SiraGPT</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCloudHosting("github")}
+                  disabled={creatingCloud}
+                  aria-pressed={cloudHosting === "github"}
+                  className={cn(
+                    "flex items-center gap-2.5 rounded-lg border px-3 py-2.5 text-left text-sm transition-colors disabled:opacity-60",
+                    cloudHosting === "github"
+                      ? "border-amber-500/60 bg-amber-500/10 text-foreground ring-1 ring-amber-500/30"
+                      : "border-border/60 hover:bg-muted/50",
+                  )}
+                >
+                  <Github className={cn("h-4 w-4 shrink-0", cloudHosting === "github" ? "text-amber-500" : "text-muted-foreground")} />
+                  <span className="min-w-0 flex-1 truncate">GitHub</span>
+                  <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                    Próximamente
+                  </span>
+                </button>
+              </div>
+              {githubSelected ? (
+                <p className="text-xs text-amber-700 dark:text-amber-400">
+                  La conexión con GitHub aún no está disponible. Usa la nube de SiraGPT por ahora.
+                </p>
+              ) : null}
+            </div>
+
+            <DialogFooter className="gap-2 sm:gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setCloudDialogOpen(false)}
+                disabled={creatingCloud}
+              >
+                Cancelar
+              </Button>
+              <Button type="submit" disabled={!canSubmitCloud} aria-busy={creatingCloud}>
+                {creatingCloud ? (
+                  <>
+                    <ThinkingIndicator size="sm" className="mr-2" />
+                    Creando…
+                  </>
+                ) : (
+                  <>
+                    <Cloud aria-hidden="true" className="mr-2 h-4 w-4" />
+                    Crear proyecto
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

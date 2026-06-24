@@ -29,8 +29,6 @@ import {
   EyeOff,
   CalendarDays,
   FolderKanban,
-  Palette,
-  Loader2,
   PenSquare,
   Shield,
 
@@ -44,7 +42,6 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
@@ -100,6 +97,7 @@ import { cn, downloadBlob } from "@/lib/utils"
 import Link from "next/link"
 import UpgradeModal from "./UpgradeModal"
 import { ChatSearchDialog } from "./ChatSearchDialog"
+import { SettingsDialog } from "@/components/settings/settings-dialog"
 import { SidebarFoldersDropdown } from "./sidebar/sidebar-folders-dropdown"
 import {
   normalizeNavigationHref,
@@ -206,6 +204,7 @@ const NAV_ROW =
 const NAV_ROW_ACTIVE =
   "bg-foreground/[0.055] text-foreground ring-1 ring-border/45 dark:bg-white/[0.08] dark:ring-white/10"
 const NAV_ICON = "h-5 w-5 shrink-0 stroke-[1.85]"
+const RECENT_CHATS_COLLAPSE_STORAGE_KEY = "sira:sidebar:recent-collapsed"
 
 type SidebarNavItemProps = {
   href: string
@@ -370,7 +369,7 @@ export function AppSidebar() {
   // ────────────────────────────────────────────────────────────
   const SIDEBAR_ROUTES = React.useMemo(
     () => [
-      '/chat', '/gpts', '/parafraseo', '/projects', '/design', '/code', '/library',
+      '/chat', '/gpts', '/parafraseo', '/projects', '/code', '/library',
       '/billing', '/settings', '/profile',
     ],
     [],
@@ -444,6 +443,9 @@ export function AppSidebar() {
   }, [markSharedNavigationIntent, t])
   const [upgradeOpen, setUpgradeOpen] = React.useState(false)
   const [searchOpen, setSearchOpen] = React.useState(false)
+  // Settings now open as a floating Claude-style modal (the /settings
+  // route still exists for deep-links / command palette).
+  const [settingsOpen, setSettingsOpen] = React.useState(false)
 
   // ── Global keyboard shortcut: ⌘K / Ctrl+K opens chat search ──────
   // Mirrors the affordance every Claude / Linear / Notion user
@@ -473,10 +475,12 @@ export function AppSidebar() {
   // #44 — reemplaza window.confirm() por AlertDialog accesible.
   // Guarda {id, title} del chat pendiente; null = diálogo cerrado.
   const [chatPendingDelete, setChatPendingDelete] = React.useState<{ id: string; title: string } | null>(null)
+  const [deletingChatId, setDeletingChatId] = React.useState<string | null>(null)
   const [editTitle, setEditTitle] = React.useState("")
   const [optimisticUpdates, setOptimisticUpdates] = React.useState<Record<string, string>>({})
   const [pinnedGpts, setPinnedGpts] = React.useState<Array<{ id: string; name: string; iconUrl?: string | null; modelName?: string | null }>>([])
   const [pinnedChatIds, setPinnedChatIds] = React.useState<string[]>([])
+  const [pinnedChatOverrides, setPinnedChatOverrides] = React.useState<Record<string, boolean>>({})
   const [archivedChatIds, setArchivedChatIds] = React.useState<string[]>([])
   const [hiddenChatIds, setHiddenChatIds] = React.useState<string[]>([])
   const [chatFolders, setChatFolders] = React.useState<Record<string, string>>({})
@@ -485,7 +489,10 @@ export function AppSidebar() {
   // Defaults to expanded on first visit so users discover it; once
   // collapsed the choice is remembered across reloads via localStorage.
   const [codexCollapsed, setCodexCollapsed] = React.useState<boolean>(false)
-  const [collapsedChatGroups, setCollapsedChatGroups] = React.useState<Record<string, boolean>>({})
+  // Single collapse toggle for the whole "Recent chats" section. The
+  // per-date-group toggles were replaced by this one control so the
+  // entire list folds/unfolds together from the section header.
+  const [recentChatsCollapsed, setRecentChatsCollapsed] = React.useState<boolean>(false)
   React.useEffect(() => {
     try {
       const raw = window.localStorage.getItem("sira:sidebar:codex-collapsed")
@@ -494,9 +501,8 @@ export function AppSidebar() {
   }, [])
   React.useEffect(() => {
     try {
-      const raw = window.localStorage.getItem("sira:sidebar:chat-groups-collapsed")
-      const parsed = raw ? JSON.parse(raw) : {}
-      if (parsed && typeof parsed === "object") setCollapsedChatGroups(parsed)
+      const raw = window.localStorage.getItem(RECENT_CHATS_COLLAPSE_STORAGE_KEY)
+      if (raw === "1") setRecentChatsCollapsed(true)
     } catch { /* ignore */ }
   }, [])
   const toggleCodexCollapsed = React.useCallback(() => {
@@ -506,10 +512,10 @@ export function AppSidebar() {
       return next
     })
   }, [])
-  const toggleChatGroupCollapsed = React.useCallback((groupKey: string) => {
-    setCollapsedChatGroups((prev) => {
-      const next = { ...prev, [groupKey]: !prev[groupKey] }
-      try { window.localStorage.setItem("sira:sidebar:chat-groups-collapsed", JSON.stringify(next)) } catch { /* ignore */ }
+  const toggleRecentChatsCollapsed = React.useCallback(() => {
+    setRecentChatsCollapsed((prev) => {
+      const next = !prev
+      try { window.localStorage.setItem(RECENT_CHATS_COLLAPSE_STORAGE_KEY, next ? "1" : "0") } catch { /* ignore */ }
       return next
     })
   }, [])
@@ -581,19 +587,45 @@ export function AppSidebar() {
     })
   }, [])
 
-  const togglePinnedChat = React.useCallback((chat: any) => {
-    persistArrayState("sira:pinned-chat-ids", setPinnedChatIds, (current) => {
-      const exists = current.includes(chat.id)
-      toast.success(exists ? "Chat desfijado" : "Chat fijado")
-      return exists ? current.filter((id) => id !== chat.id) : [chat.id, ...current]
-    })
-  }, [persistArrayState])
+  const deferChatMenuAction = React.useCallback((action: () => void) => {
+    window.setTimeout(action, 0)
+  }, [])
 
-  const archiveChatLocally = React.useCallback((chat: any) => {
+  const isChatPinned = React.useCallback((chat: any) => {
+    if (!chat?.id) return false
+    if (Object.prototype.hasOwnProperty.call(pinnedChatOverrides, chat.id)) {
+      return Boolean(pinnedChatOverrides[chat.id])
+    }
+    return Boolean(chat?.isPinned) || pinnedChatIds.includes(chat.id)
+  }, [pinnedChatIds, pinnedChatOverrides])
+
+  const togglePinnedChat = React.useCallback(async (chat: any) => {
+    if (!chat?.id) return
+    const nextPinned = !isChatPinned(chat)
+    setPinnedChatOverrides((current) => ({ ...current, [chat.id]: nextPinned }))
+    persistArrayState("sira:pinned-chat-ids", setPinnedChatIds, (current) => {
+      const deduped = current.filter((id) => id !== chat.id)
+      return nextPinned ? [chat.id, ...deduped] : deduped
+    })
+    toast.success(nextPinned ? "Chat fijado" : "Chat desfijado")
+    try {
+      await apiClient.pinChat(chat.id, nextPinned)
+    } catch (error) {
+      toast.warning("Guardado solo en este navegador; reinicia el backend para sincronizarlo.")
+    }
+  }, [isChatPinned, persistArrayState])
+
+  const archiveChat = React.useCallback(async (chat: any) => {
+    if (!chat?.id) return
     persistArrayState("sira:archived-chat-ids", setArchivedChatIds, (current) => (
       current.includes(chat.id) ? current : [chat.id, ...current]
     ))
     toast.success("Chat archivado")
+    try {
+      await apiClient.archiveChat(chat.id, true)
+    } catch (error) {
+      toast.warning("Archivado localmente; reinicia el backend para sincronizarlo.")
+    }
   }, [persistArrayState])
 
   const hideChatLocally = React.useCallback((chat: any) => {
@@ -683,7 +715,55 @@ export function AppSidebar() {
     toast.success("Chat programado")
   }, [scheduleAt, scheduleNote, scheduleTarget])
 
+  const removeChatLocalMetadata = React.useCallback((chatId: string) => {
+    persistArrayState("sira:pinned-chat-ids", setPinnedChatIds, (current) => current.filter((id) => id !== chatId))
+    persistArrayState("sira:archived-chat-ids", setArchivedChatIds, (current) => current.filter((id) => id !== chatId))
+    persistArrayState("sira:hidden-chat-ids", setHiddenChatIds, (current) => current.filter((id) => id !== chatId))
+    setChatFolders((current) => {
+      const next = { ...(current || {}) }
+      delete next[chatId]
+      try { localStorage.setItem("sira:chat-folders", JSON.stringify(next)) } catch (err) { console.debug('storage unavailable', err) }
+      return next
+    })
+    setScheduledChats((current) => {
+      const next = { ...(current || {}) }
+      delete next[chatId]
+      try { localStorage.setItem("sira:scheduled-chats", JSON.stringify(next)) } catch (err) { console.debug('storage unavailable', err) }
+      return next
+    })
+  }, [persistArrayState])
+
+  const confirmDeleteChat = React.useCallback(async () => {
+    const id = chatPendingDelete?.id
+    if (!id || deletingChatId === id) return
+    setDeletingChatId(id)
+    try {
+      const deleted = await deleteChat(id)
+      if (!deleted) {
+        toast.error("No se pudo eliminar el chat")
+        return
+      }
+      removeChatLocalMetadata(id)
+      setChatPendingDelete(null)
+      toast.success("Chat eliminado")
+    } catch (error) {
+      toast.error("No se pudo eliminar el chat")
+    } finally {
+      setDeletingChatId(null)
+    }
+  }, [chatPendingDelete?.id, deleteChat, deletingChatId, removeChatLocalMetadata])
+
+  const requestDeleteChat = React.useCallback((chat: any, title: string) => {
+    if (!chat?.id) return
+    setChatPendingDelete({ id: chat.id, title })
+  }, [])
+
   const handleNewChat = () => {
+    // Guest preview (public home): starting a chat requires a session.
+    if (!user) {
+      router.push("/auth/login")
+      return
+    }
     markNewChatIntent()
     setCurrentChat(null);
     localStorage.removeItem('currentChatId');
@@ -965,10 +1045,7 @@ export function AppSidebar() {
   const isOnChatPage = activePathname.startsWith('/chat')
   const isOnLibraryPage = activePathname.startsWith('/library')
   const isOnGPTsPage = activePathname.startsWith('/gpts')
-  const isOnParaphrasePage = activePathname.startsWith('/parafraseo')
   const isOnProjectsPage = activePathname.startsWith('/projects')
-  const isOnDesignPage = activePathname.startsWith('/design')
-
   return (
     <Sidebar className="w-[--sidebar-width] border-r border-border/40 bg-sidebar" collapsible="icon">
       <SidebarHeader
@@ -1143,19 +1220,6 @@ export function AppSidebar() {
             onNavigate={closeMobileSidebar}
           />
 
-          <SidebarNavItem
-            href="/parafraseo"
-            label="Parafraseo"
-            tooltip="Parafraseo"
-            icon={Sparkles}
-            active={isOnParaphrasePage}
-            pending={isPendingRoute("/parafraseo")}
-            sidebarState={state}
-            markNavigationIntent={markNavigationIntent}
-            prefetchOnHover={prefetchOnHover}
-            navigate={navigate}
-            onNavigate={closeMobileSidebar}
-          />
 
           {/* Projects — file-bucket workspaces. Placed right after GPTs
               because both are "context-rich chat entry points": GPTs
@@ -1169,25 +1233,6 @@ export function AppSidebar() {
             icon={FolderKanban}
             active={isOnProjectsPage}
             pending={isPendingRoute("/projects")}
-            sidebarState={state}
-            markNavigationIntent={markNavigationIntent}
-            prefetchOnHover={prefetchOnHover}
-            navigate={navigate}
-            onNavigate={closeMobileSidebar}
-          />
-
-          {/* Design — siraGPT's Claude-Design-style canvas, placed
-              right under Projects since both are workspace-shaped
-              artifacts (design extends the workflow with a visual
-              output surface). Palette icon keeps it distinct from
-              FolderKanban without clashing visually. */}
-          <SidebarNavItem
-            href="/design"
-            label={t("design")}
-            tooltip={t("design")}
-            icon={Palette}
-            active={isOnDesignPage}
-            pending={isPendingRoute("/design")}
             sidebarState={state}
             markNavigationIntent={markNavigationIntent}
             prefetchOnHover={prefetchOnHover}
@@ -1227,7 +1272,7 @@ export function AppSidebar() {
                   )}
                   aria-hidden="true"
                 />
-                <span>Codex</span>
+                <span>Apps</span>
               </button>
             )}
             <div
@@ -1245,28 +1290,41 @@ export function AppSidebar() {
         {/* Recent Chats - Only show for Text Chat */}
         {selectedType === "Text Chat" && (
           <SidebarGroup>
-            <SidebarGroupLabel
+            <button
+              type="button"
+              onClick={toggleRecentChatsCollapsed}
+              aria-expanded={!recentChatsCollapsed}
+              aria-controls="sidebar-recent-chats-content"
               className={cn(
-                "flex items-center justify-between px-3 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/60 select-none",
+                "group flex w-full items-center gap-1 px-3 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/60 transition-colors hover:text-foreground/80 select-none",
                 state === "closed" && "hidden"
               )}
             >
-              <span>{t("recentChats")}</span>
+              <ChevronDown
+                className={cn(
+                  "h-3 w-3 transition-transform duration-150",
+                  recentChatsCollapsed && "-rotate-90"
+                )}
+                aria-hidden="true"
+              />
+              <span className="truncate">{t("recentChats")}</span>
               {isLoadingChats || isLoadingMore ? (
-                <Loader2
-                  className="h-3 w-3 animate-spin text-muted-foreground/70"
-                  aria-label="Cargando historial de chats"
+                <ThinkingIndicator
+                  size="xs"
+                  label="Cargando historial de chats"
+                  className="ml-auto text-muted-foreground/70"
                 />
               ) : (
                 <span
-                  className="h-1.5 w-1.5 rounded-full bg-sky-500/85 shadow-[0_0_0_3px_rgba(14,165,233,0.12)]"
+                  className="ml-auto h-1.5 w-1.5 rounded-full bg-sky-500/85 shadow-[0_0_0_3px_rgba(14,165,233,0.12)]"
                   aria-label="Historial cargado"
                   title="Historial cargado"
                 />
               )}
-            </SidebarGroupLabel>
+            </button>
             <SidebarGroupContent
-              className={cn(state === "closed" && "hidden")}
+              id="sidebar-recent-chats-content"
+              className={cn(state === "closed" && "hidden", recentChatsCollapsed && "hidden")}
             >
               <SidebarMenu>
                 {chats.length === 0 && isLoadingChats ? (
@@ -1284,7 +1342,7 @@ export function AppSidebar() {
                             no desplace el contenido. */}
                         <span className="flex h-5 w-5 shrink-0 items-center justify-center">
                           {i === 0 ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground/70" />
+                            <ThinkingIndicator size="xs" className="text-muted-foreground/70" />
                           ) : (
                             <Skeleton className="h-4 w-4 rounded-full" />
                           )}
@@ -1321,11 +1379,17 @@ export function AppSidebar() {
                       const visibleChats = chats.filter((c) => {
                         if (!c?.id || seenChatIds.has(c.id)) return false
                         seenChatIds.add(c.id)
-                        if (hiddenChatIds.includes(c.id) || archivedChatIds.includes(c.id)) return false
+                        const persistedState = c as any
+                        if (persistedState.deletedAt || persistedState.isArchived || hiddenChatIds.includes(c.id) || archivedChatIds.includes(c.id)) return false
                         return true
                       })
                       const visibleById = new Map(visibleChats.map((chat) => [chat.id, chat]))
-                      const pinnedChats = pinnedChatIds.map((id) => visibleById.get(id)).filter(Boolean) as any[]
+                      const serverPinnedIds = visibleChats
+                        .filter((chat) => Boolean((chat as any)?.isPinned))
+                        .sort((a, b) => new Date((b as any).pinnedAt || b.updatedAt || 0).getTime() - new Date((a as any).pinnedAt || a.updatedAt || 0).getTime())
+                        .map((chat) => chat.id)
+                      const renderPinnedIds = Array.from(new Set([...serverPinnedIds, ...pinnedChatIds]))
+                      const pinnedChats = renderPinnedIds.map((id) => visibleById.get(id)).filter(Boolean) as any[]
                       const pinnedSet = new Set(pinnedChats.map((chat) => chat.id))
                       const validChats = visibleChats.filter((chat) => !pinnedSet.has(chat.id))
                       const buckets = groupChatsByTime(validChats)
@@ -1338,7 +1402,7 @@ export function AppSidebar() {
 
                       const renderChatItem = (chat: any) => {
                         const isEditing = editingChatId === chat.id
-                        const { emoji: chatEmoji, title: displayTitle } = getSidebarChatTitleParts(optimisticUpdates[chat.id] || chat.title)
+                        const { title: displayTitle } = getSidebarChatTitleParts(optimisticUpdates[chat.id] || chat.title)
                         const isTruncated = displayTitle.length > 25
                         // Per-chat status — compact left rail:
                         // spinner while generating, blue dot for a
@@ -1388,11 +1452,10 @@ export function AppSidebar() {
                                 </div>
                               ) : (
                                 <>
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <SidebarMenuButton
+                                  <SidebarMenuButton
                                         isActive={currentChatId === chat.id && pathname.startsWith('/chat')}
                                         aria-current={currentChatId === chat.id && pathname.startsWith('/chat') ? 'page' : undefined}
+                                        title={isTruncated ? displayTitle : undefined}
                                         onClick={() => !isEditing && handleChatClick(chat.id)}
                                         className={cn(
                                           "h-8 min-w-0 flex-1 justify-start py-0 pr-1 transition-all",
@@ -1408,47 +1471,46 @@ export function AppSidebar() {
                                                 del emoji, de modo que el glifo queda alineado a
                                                 la izquierda y todas las filas comparten el mismo
                                                 ancho de columna (h-5 w-5). */}
-                                            <span
-                                              className="relative flex h-5 w-5 shrink-0 items-center justify-center text-[15px] leading-none"
-                                              aria-hidden={isStreaming ? undefined : true}
-                                              title={
-                                                isStreaming
-                                                  ? "Generando..."
-                                                  : isComplete
-                                                    ? "Tarea completada"
-                                                    : isFailed
-                                                      ? "Tarea con error"
-                                                      : undefined
-                                              }
-                                            >
-                                              {isStreaming ? (
-                                                <Loader2
-                                                  aria-label="Chat en progreso"
-                                                  className="h-3.5 w-3.5 animate-spin text-muted-foreground/80"
-                                                  strokeWidth={2.25}
-                                                />
-                                              ) : (
-                                                <>
-                                                  <span>{chatEmoji}</span>
-                                                  {(isComplete || isFailed) && (
-                                                    <span
-                                                      className={cn(
-                                                        "absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full ring-2 ring-sidebar",
-                                                        isComplete
-                                                          ? "bg-sky-500 shadow-[0_0_0_3px_rgba(14,165,233,0.16)]"
-                                                          : "bg-destructive/85"
-                                                      )}
-                                                      aria-label={isComplete ? "Tarea completada" : "Tarea con error"}
-                                                    />
-                                                  )}
-                                                </>
-                                              )}
-                                            </span>
+                                            {/* No per-chat emoji — clean, ChatGPT-like titles.
+                                                A leading slot only appears for chats with an
+                                                actual status (generating / done / error); normal
+                                                chats keep the title flush-left. */}
+                                            {(isStreaming || isComplete || isFailed) && (
+                                              <span
+                                                className="relative flex h-4 w-4 shrink-0 items-center justify-center leading-none"
+                                                aria-hidden={isStreaming ? undefined : true}
+                                                title={
+                                                  isStreaming
+                                                    ? "Generando..."
+                                                    : isComplete
+                                                      ? "Tarea completada"
+                                                      : "Tarea con error"
+                                                }
+                                              >
+                                                {isStreaming ? (
+                                                  <ThinkingIndicator
+                                                    size="xs"
+                                                    label="Chat en progreso"
+                                                    className="text-muted-foreground/80"
+                                                  />
+                                                ) : (
+                                                  <span
+                                                    className={cn(
+                                                      "h-2 w-2 rounded-full",
+                                                      isComplete
+                                                        ? "bg-sky-500 shadow-[0_0_0_3px_rgba(14,165,233,0.16)]"
+                                                        : "bg-destructive/85"
+                                                    )}
+                                                    aria-label={isComplete ? "Tarea completada" : "Tarea con error"}
+                                                  />
+                                                )}
+                                              </span>
+                                            )}
                                             <span className="text-sm flex-1 truncate">
                                               {displayTitle}
                                             </span>
                                             <span className="flex shrink-0 items-center gap-1 text-muted-foreground/55">
-                                              {pinnedChatIds.includes(chat.id) && (
+                                              {isChatPinned(chat) && (
                                                 <Pin className="h-3 w-3" aria-label="Chat fijado" />
                                               )}
                                               {chatFolders[chat.id] && (
@@ -1482,14 +1544,7 @@ export function AppSidebar() {
                                               {formatChatTimeCompact(chat.updatedAt)}
                                             </span>
                                           </div>
-                                      </SidebarMenuButton>
-                                    </TooltipTrigger>
-                                    {isTruncated && (
-                                      <TooltipContent side="right" className="max-w-xs">
-                                        <p className="break-words">{displayTitle}</p>
-                                      </TooltipContent>
-                                    )}
-                                  </Tooltip>
+                                  </SidebarMenuButton>
                                   <DropdownMenu>
                                     <DropdownMenuTrigger asChild>
                                       <Button
@@ -1509,20 +1564,14 @@ export function AppSidebar() {
                                       className={CHAT_ACTION_MENU}
                                     >
                                       <DropdownMenuItem
-                                        onSelect={(event) => {
-                                          event.preventDefault()
-                                          togglePinnedChat(chat)
-                                        }}
+                                        onSelect={() => { void togglePinnedChat(chat) }}
                                         className={CHAT_ACTION_ITEM}
                                       >
                                         <Pin className={CHAT_ACTION_ICON} />
-                                        {pinnedChatIds.includes(chat.id) ? "Desfijar chat" : "Fijar chat"}
+                                        {isChatPinned(chat) ? "Desfijar chat" : "Fijar chat"}
                                       </DropdownMenuItem>
                                       <DropdownMenuItem
-                                        onSelect={(event) => {
-                                          event.preventDefault()
-                                          handleEditClick(chat, event as any)
-                                        }}
+                                        onSelect={() => deferChatMenuAction(() => handleEditClick(chat))}
                                         className={CHAT_ACTION_ITEM}
                                       >
                                         <Edit2 className={CHAT_ACTION_ICON} />
@@ -1538,10 +1587,7 @@ export function AppSidebar() {
                                             {["Trabajo", "Proyecto", "Personal"].map((folder) => (
                                               <DropdownMenuItem
                                                 key={folder}
-                                                onSelect={(event) => {
-                                                  event.preventDefault()
-                                                  moveChatToFolder(chat, folder)
-                                                }}
+                                                onSelect={() => moveChatToFolder(chat, folder)}
                                                 className={CHAT_ACTION_ITEM}
                                               >
                                                 <Folder className={CHAT_ACTION_ICON} />
@@ -1551,10 +1597,7 @@ export function AppSidebar() {
                                             ))}
                                             <DropdownMenuSeparator className={CHAT_ACTION_SEP} />
                                             <DropdownMenuItem
-                                              onSelect={(event) => {
-                                                event.preventDefault()
-                                                createFolderAndMove(chat)
-                                              }}
+                                              onSelect={() => deferChatMenuAction(() => createFolderAndMove(chat))}
                                               className={CHAT_ACTION_ITEM}
                                             >
                                               <Plus className={CHAT_ACTION_ICON} />
@@ -1562,10 +1605,7 @@ export function AppSidebar() {
                                             </DropdownMenuItem>
                                             {chatFolders[chat.id] && (
                                               <DropdownMenuItem
-                                                onSelect={(event) => {
-                                                  event.preventDefault()
-                                                  moveChatToFolder(chat, null)
-                                                }}
+                                                onSelect={() => moveChatToFolder(chat, null)}
                                                 className={CHAT_ACTION_ITEM}
                                               >
                                                 <X className={CHAT_ACTION_ICON} />
@@ -1576,20 +1616,14 @@ export function AppSidebar() {
                                         </DropdownMenuPortal>
                                       </DropdownMenuSub>
                                       <DropdownMenuItem
-                                        onSelect={(event) => {
-                                          event.preventDefault()
-                                          downloadChatExport(chat)
-                                        }}
+                                        onSelect={() => { void downloadChatExport(chat) }}
                                         className={CHAT_ACTION_ITEM}
                                       >
                                         <Download className={CHAT_ACTION_ICON} />
                                         Descargar
                                       </DropdownMenuItem>
                                       <DropdownMenuItem
-                                        onSelect={(event) => {
-                                          event.preventDefault()
-                                          openScheduleDialog(chat)
-                                        }}
+                                        onSelect={() => deferChatMenuAction(() => openScheduleDialog(chat))}
                                         className={CHAT_ACTION_ITEM}
                                       >
                                         <CalendarDays className={CHAT_ACTION_ICON} />
@@ -1597,20 +1631,14 @@ export function AppSidebar() {
                                       </DropdownMenuItem>
                                       <DropdownMenuSeparator className={CHAT_ACTION_SEP} />
                                       <DropdownMenuItem
-                                        onSelect={(event) => {
-                                          event.preventDefault()
-                                          archiveChatLocally(chat)
-                                        }}
+                                        onSelect={() => { void archiveChat(chat) }}
                                         className={CHAT_ACTION_ITEM}
                                       >
                                         <Archive className={CHAT_ACTION_ICON} />
                                         Archivar
                                       </DropdownMenuItem>
                                       <DropdownMenuItem
-                                        onSelect={(event) => {
-                                          event.preventDefault()
-                                          hideChatLocally(chat)
-                                        }}
+                                        onSelect={() => hideChatLocally(chat)}
                                         className={CHAT_ACTION_ITEM}
                                       >
                                         <EyeOff className={CHAT_ACTION_ICON} />
@@ -1618,15 +1646,8 @@ export function AppSidebar() {
                                       </DropdownMenuItem>
                                       <DropdownMenuSeparator className={CHAT_ACTION_SEP} />
                                       <DropdownMenuItem
-                                        onSelect={(event) => {
-                                          event.preventDefault()
-                                          // #44 — abre AlertDialog accesible
-                                          // en lugar del window.confirm() del
-                                          // navegador (que no recibe foco
-                                          // teclado correctamente y rompe el
-                                          // estilo del producto).
-                                          setChatPendingDelete({ id: chat.id, title: displayTitle })
-                                        }}
+                                        onSelect={() => deferChatMenuAction(() => requestDeleteChat(chat, displayTitle))}
+                                        onClick={() => deferChatMenuAction(() => requestDeleteChat(chat, displayTitle))}
                                         className={cn(
                                           CHAT_ACTION_ITEM,
                                           "text-red-600 focus:bg-red-500/10 focus:text-red-700 data-[highlighted]:bg-red-500/10 data-[highlighted]:text-red-700 dark:text-red-400 dark:focus:text-red-300 dark:data-[highlighted]:text-red-300",
@@ -1644,14 +1665,26 @@ export function AppSidebar() {
                         )
                       }
 
+                      // Static date separators — they only label/count each
+                      // bucket now. Collapsing happens once at the "Recent
+                      // chats" header, so these are no longer interactive.
+                      const renderChatGroupHeader = (label: string, count: number) => (
+                        <div className="flex w-full items-center gap-1 px-3 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/50 select-none">
+                          <span className="truncate">{label}</span>
+                          <span className="ml-auto rounded-full bg-muted/70 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground/70">
+                            {count}
+                          </span>
+                        </div>
+                      )
+
                       return (
                         <>
                           {pinnedChats.length > 0 && (
                             <React.Fragment key="pinned">
-                              <div className="px-3 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/50 select-none">
-                                Fijados
+                              {renderChatGroupHeader("Fijados", pinnedChats.length)}
+                              <div>
+                                {pinnedChats.map(renderChatItem)}
                               </div>
-                              {pinnedChats.map(renderChatItem)}
                             </React.Fragment>
                           )}
                           {groupDefs.map(([key, label]) => {
@@ -1659,10 +1692,10 @@ export function AppSidebar() {
                             if (items.length === 0) return null
                             return (
                               <React.Fragment key={key}>
-                                <div className="px-3 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/50 select-none">
-                                  {label}
+                                {renderChatGroupHeader(label, items.length)}
+                                <div>
+                                  {items.map(renderChatItem)}
                                 </div>
-                                {items.map(renderChatItem)}
                               </React.Fragment>
                             )
                           })}
@@ -1711,6 +1744,30 @@ export function AppSidebar() {
       </SidebarContent>
 
       <SidebarFooter className="border-t border-border/40 p-2">
+        {/* Guest preview (public home): the user menu makes no sense
+            without a session — offer the way in instead. */}
+        {!user ? (
+          <div className={cn("flex flex-col gap-1.5 p-1", state === "closed" && "items-center")}>
+            <Button
+              size="sm"
+              onClick={() => router.push("/auth/login")}
+              className={cn("w-full rounded-xl text-[13px] font-semibold", state === "closed" && "h-8 w-8 p-0")}
+              title="Iniciar sesión"
+            >
+              {state === "closed" ? <User className="h-4 w-4" /> : "Iniciar sesión"}
+            </Button>
+            {state === "open" && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => router.push("/auth/register")}
+                className="w-full rounded-xl text-[13px] font-semibold"
+              >
+                Registrarse gratis
+              </Button>
+            )}
+          </div>
+        ) : (
         <SidebarMenu>
           <SidebarMenuItem>
             <div className="flex items-center w-full">
@@ -1776,8 +1833,14 @@ export function AppSidebar() {
                     {t("billing")}
                   </DropdownMenuItem>
                   <DropdownMenuItem
-                    onClick={() => navigate("/settings")}
-                    onMouseEnter={() => prefetchOnHover("/settings")}
+                    onSelect={(e) => {
+                      // Open the floating settings modal instead of navigating.
+                      // Defer so the dropdown finishes closing before the dialog
+                      // grabs focus (avoids a Radix focus-trap race).
+                      e.preventDefault()
+                      if (isMobile) setOpenMobile(false)
+                      setTimeout(() => setSettingsOpen(true), 0)
+                    }}
                     className={LG_ITEM}
                   >
                     <Settings className="mr-2 h-4 w-4" />
@@ -1869,6 +1932,7 @@ export function AppSidebar() {
             </div>
           </SidebarMenuItem>
         </SidebarMenu>
+        )}
       </SidebarFooter>
 
       {/* Shared Upgrade modal */}
@@ -1887,12 +1951,17 @@ export function AppSidebar() {
         }}
       />
 
+      {/* Floating settings modal (Claude-style) — opened from the user menu */}
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+
       {/* #44 — Confirmación accesible de borrado de chat. Sustituye al
           window.confirm() nativo: foco teclado correcto, ESC y click
           fuera para cancelar, botón rojo destacado, texto en español. */}
       <AlertDialog
         open={Boolean(chatPendingDelete)}
-        onOpenChange={(open) => { if (!open) setChatPendingDelete(null) }}
+        onOpenChange={(open) => {
+          if (!open && !deletingChatId) setChatPendingDelete(null)
+        }}
       >
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -1903,16 +1972,23 @@ export function AppSidebar() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogCancel disabled={Boolean(deletingChatId)}>Cancelar</AlertDialogCancel>
             <AlertDialogAction
               className="bg-red-600 text-white hover:bg-red-700 focus-visible:ring-red-500/50"
-              onClick={() => {
-                const id = chatPendingDelete?.id
-                setChatPendingDelete(null)
-                if (id) deleteChat(id)
+              disabled={Boolean(deletingChatId)}
+              onClick={(event) => {
+                event.preventDefault()
+                void confirmDeleteChat()
               }}
             >
-              Eliminar
+              {deletingChatId ? (
+                <>
+                  <ThinkingIndicator size="sm" className="mr-2" />
+                  Eliminando
+                </>
+              ) : (
+                "Eliminar"
+              )}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

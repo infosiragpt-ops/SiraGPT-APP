@@ -29,6 +29,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { toast } from "sonner"
 import { IconProvider } from "@/components/icon-provider"
 import { getNormalizedApiBaseUrl } from "@/lib/api-base-url"
@@ -201,7 +202,10 @@ export default function ModelsPage() {
 
       if (response.ok) {
         const data = await response.json()
-        setSyncStatus(data)
+        // The API wraps the payload: { status: { isScheduled, nextRun, … } }.
+        // Reading the top level left isScheduled always undefined, which
+        // made the scheduler toggle always send action:'start'.
+        setSyncStatus(data?.status ?? data)
       }
     } catch (error) {
       console.error('Failed to load sync status:', error)
@@ -305,29 +309,6 @@ export default function ModelsPage() {
       toast.error('Failed to run sync')
     } finally {
       setIsSyncing(false)
-    }
-  }
-
-  const bulkUpdateModels = async (action: 'enable' | 'disable', provider?: string) => {
-    try {
-      const token = localStorage.getItem('auth-token')
-      const response = await fetch(`${API_ROOT}/admin/models/bulk`, {
-        method: 'PUT',
-        headers: adminAuthHeaders(token, true),
-        body: JSON.stringify({ action, provider })
-      })
-
-      const data = await response.json()
-      
-      if (data.success) {
-        toast.success(data.message)
-        await Promise.all([loadModels(), loadStats()])
-      } else {
-        toast.error(data.error)
-      }
-    } catch (error) {
-      console.error('Failed to bulk update models:', error)
-      toast.error('Failed to update models')
     }
   }
 
@@ -495,7 +476,7 @@ export default function ModelsPage() {
     return (
       <div className="mx-auto w-full max-w-7xl space-y-6 px-4 py-4 pb-24 sm:px-6 lg:px-8">
         <div className="flex items-center space-x-2">
-          <RefreshCw className="h-4 w-4 animate-spin" />
+          <ThinkingIndicator size="sm" />
           <span>Loading models...</span>
         </div>
       </div>
@@ -515,11 +496,13 @@ export default function ModelsPage() {
         </div>
         
         <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center">
-          {/* Fetch Models - Commented out, auto-sync handles this
-          <Button 
-            variant="outline" 
-            onClick={fetchModelsFromProviders} 
+          {/* Vista previa de modelos disponibles en los proveedores (GET
+              /admin/models/fetch — verificado en vivo: 574 modelos). */}
+          <Button
+            variant="outline"
+            onClick={fetchModelsFromProviders}
             disabled={isFetching}
+            size="sm"
           >
             {isFetching ? (
               <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
@@ -528,7 +511,6 @@ export default function ModelsPage() {
             )}
             Fetch Models
           </Button>
-          */}
           
           <Button 
             variant="outline" 
@@ -537,7 +519,7 @@ export default function ModelsPage() {
             size="sm"
           >
             {isSyncing ? (
-              <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+              <ThinkingIndicator size="sm" className="mr-2" />
             ) : (
               <Upload className="mr-2 h-4 w-4" />
             )}
@@ -585,9 +567,9 @@ export default function ModelsPage() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="OpenAI">OpenAI</SelectItem>
-                      <SelectItem value="Gemini">Gemini</SelectItem>
-                      <SelectItem value="OpenRouter">OpenRouter</SelectItem>
+                      {(providers.length ? providers : ['OpenAI', 'Gemini', 'OpenRouter']).map((p) => (
+                        <SelectItem key={p} value={p}>{p}</SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
@@ -669,7 +651,9 @@ export default function ModelsPage() {
         </div>
       )}
 
-      {/* Auto-Sync Status - Commented out for now, will auto-sync on deployment
+      {/* Auto-Sync Status — restored: GET /models/sync/status and the
+          scheduler/run endpoints work (verified live); the card was hidden
+          while the status shape bug made isScheduled read undefined. */}
       {syncStatus && (
         <Card>
           <CardHeader>
@@ -702,7 +686,7 @@ export default function ModelsPage() {
                   disabled={isSyncing}
                 >
                   {isSyncing ? (
-                    <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                    <ThinkingIndicator size="sm" className="mr-2" />
                   ) : (
                     <Zap className="mr-2 h-4 w-4" />
                   )}
@@ -757,7 +741,6 @@ export default function ModelsPage() {
           </CardContent>
         </Card>
       )}
-      */}
 
       {/* Filters and Search */}
       <Card>
@@ -769,15 +752,15 @@ export default function ModelsPage() {
                 Showing {startIndex + 1}-{Math.min(endIndex, totalFilteredModels)} of {totalFilteredModels} models
               </CardDescription>
             </div>
-            <div className="flex items-center space-x-2">
+            <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:gap-2">
               <Input
                 placeholder="Search models..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-48"
+                className="w-full sm:w-48"
               />
               <Select value={selectedProvider} onValueChange={setSelectedProvider}>
-                <SelectTrigger className="w-40">
+                <SelectTrigger className="w-full sm:w-40">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -790,7 +773,7 @@ export default function ModelsPage() {
                 </SelectContent>
               </Select>
               <Select value={selectedType} onValueChange={setSelectedType}>
-                <SelectTrigger className="w-32">
+                <SelectTrigger className="w-full sm:w-32">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -806,8 +789,8 @@ export default function ModelsPage() {
           </div>
         </CardHeader>
         <CardContent>
-          {/* Models Table */}
-          <div className="overflow-x-auto">
+          {/* Models Table — desktop/tablet only; phones get the card list below */}
+          <div className="hidden overflow-x-auto md:block">
           <Table>
             <TableHeader>
               <TableRow>
@@ -881,14 +864,15 @@ export default function ModelsPage() {
                   </TableCell>
                   
                   <TableCell>
-                    <div className="flex items-center space-x-2">
+                    <div className="flex items-center gap-2">
                       <Switch
                         checked={model.isActive}
                         onCheckedChange={() => toggleModelStatus(model.id, model.isActive)}
+                        aria-label={model.isActive ? "Desactivar modelo" : "Activar modelo"}
                       />
-                      <Badge variant={model.isActive ? "default" : "secondary"}>
-                        {model.isActive ? "Active" : "Inactive"}
-                      </Badge>
+                      <span className={model.isActive ? "text-xs font-medium text-green-600 dark:text-green-500" : "text-xs font-medium text-muted-foreground"}>
+                        {model.isActive ? "Activo" : "Inactivo"}
+                      </span>
                     </div>
                   </TableCell>
                   
@@ -939,12 +923,6 @@ export default function ModelsPage() {
                           <Settings className="mr-2 h-4 w-4" />
                           Edit Model
                         </DropdownMenuItem>
-                        <DropdownMenuItem 
-                          onClick={() => toggleModelStatus(model.id, model.isActive)}
-                        >
-                          {model.isActive ? "Deactivate" : "Activate"}
-                        </DropdownMenuItem>
-                        <DropdownMenuItem>View Details</DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </TableCell>
@@ -952,6 +930,64 @@ export default function ModelsPage() {
               ))}
             </TableBody>
           </Table>
+          </div>
+
+          {/* Mobile card list — phones get a stacked, tappable layout instead
+              of a side-scrolling 8-column table. Reuses the same handlers. */}
+          <div className="space-y-2 md:hidden">
+            {paginatedModels.map((model) => {
+              const cost = formatModelCost(model.pricing)
+              const typeLabel = model.type === 'TEXT' ? 'Texto'
+                : model.type === 'IMAGE' ? 'Imagen'
+                : model.type === 'VIDEO' ? 'Video'
+                : model.type === 'AUDIO' ? 'Audio'
+                : model.type === 'MUSIC' ? 'Música'
+                : model.type
+              return (
+                <div key={model.id} className="rounded-lg border bg-card p-3">
+                  <div className="flex items-start gap-2">
+                    <IconProvider name={resolveModelIconName(model)} className="h-6 w-6 shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate font-medium">{model.displayName}</div>
+                      <div className="truncate text-xs text-muted-foreground">{model.name}</div>
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                        <Badge variant="secondary" className="text-[11px]">{typeLabel}</Badge>
+                        <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                          <IconProvider name={getProviderIcon(model.provider)} className="h-3.5 w-3.5" />
+                          {model.provider}
+                        </span>
+                      </div>
+                    </div>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="ghost" className="h-8 w-8 shrink-0 p-0">
+                          <MoreHorizontal className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => handleEditModel(model)}>
+                          <Settings className="mr-2 h-4 w-4" />
+                          Edit Model
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between border-t border-border/60 pt-2">
+                    <div className="flex items-center gap-2">
+                      <Switch
+                        checked={model.isActive}
+                        onCheckedChange={() => toggleModelStatus(model.id, model.isActive)}
+                        aria-label={model.isActive ? "Desactivar modelo" : "Activar modelo"}
+                      />
+                      <span className={model.isActive ? "text-xs font-medium text-green-600 dark:text-green-500" : "text-xs font-medium text-muted-foreground"}>
+                        {model.isActive ? "Activo" : "Inactivo"}
+                      </span>
+                    </div>
+                    <span className="whitespace-nowrap text-xs text-muted-foreground">{cost.main}</span>
+                  </div>
+                </div>
+              )
+            })}
           </div>
 
           {paginatedModels.length === 0 && (
@@ -1057,9 +1093,9 @@ export default function ModelsPage() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="OpenAI">OpenAI</SelectItem>
-                    <SelectItem value="Gemini">Gemini</SelectItem>
-                    <SelectItem value="OpenRouter">OpenRouter</SelectItem>
+                    {(providers.length ? providers : ['OpenAI', 'Gemini', 'OpenRouter']).map((p) => (
+                      <SelectItem key={p} value={p}>{p}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>

@@ -254,6 +254,27 @@ const DOCUMENT_UNDERSTANDING_RE =
 const EXISTING_DOCUMENT_EDIT_RE =
   /\b(?:agrega(?:r|me|s)?|a[ñn]ad(?:e|ir|eme|as)?|inserta(?:r|me|s)?|incorpora(?:r|me|s)?|inclu(?:ye|ir|yeme|yas)?|completa(?:r|me|s)?|llen(?:a|ar|ame|as)?|rellena(?:r|me|s)?|desarrolla(?:r|me|s)?|modifica(?:r|me|s)?|edita(?:r|me|s)?|corrige(?:r|me|s)?|actualiza(?:r|me|s)?|reemplaza(?:r|me|s)?|cambia(?:r|me|s)?|pon(?:er|me)?|coloca(?:r|me|s)?)\b[^.?!]{0,180}\b(?:al\s+final|anexos?|ap[eé]ndice|secci[oó]n|apartado|cap[ií]tulo|portada|car[aá]tula|t[ií]tulo|encabezado|pie\s+de\s+p[aá]gina|tabla|hoja|celda|fila|columna|diapositiva|instrumento|cuestionario|encuesta|escala|tesis|mismo\s+word|mismo\s+documento|sin\s+cambiar|conserva(?:r)?|preserva(?:r)?)\b/i
 
+// STRONG document-mutation verbs: an imperative command to change the file's
+// content (delete / remove / insert / add / edit / replace / restructure). On
+// an attachment turn these unambiguously mean "edit the attached document" even
+// with NO structure keyword ("borra el jurado evaluador", "elimina los anexos",
+// "agrega una conclusión") — so unlike EXISTING_DOCUMENT_EDIT_RE they need no
+// target noun. They never appear in plain read-only Q&A ("¿qué dice?",
+// "resume", "explica"). Used to route document EDITS to the INLINE
+// /api/ai/generate path, where the document_edit (Cowork sandbox) tool lives.
+const DOCUMENT_MUTATION_STRONG_RE =
+  /\b(?:borra\w*|borre\w*|elimin\w*|quita\w*|quite\w*|suprim\w*|remov\w*|remueve\w*|tach(?:a|e|ar)\w*|descart\w*|s[aá]ca\w*|agrega\w*|agr[eé]ga\w*|a[ñn]ad\w*|inserta\w*|insert\w*|incorpora\w*|edita\w*|edit[aá]\w*|modific\w*|corrig\w*|correg\w*|reemplaz\w*|sustitu\w*|renombr\w*|reescrib\w*|reorganiz\w*|reordena\w*|reformate\w*|reenumera\w*|delete\w*|remove\w*|erase\w*|append\w*|modify\w*|replace\w*|rewrite\w*|rename\w*)\b/i
+
+// Whole-document transforms (translate / rewrite / summarize / rephrase)
+// operate on the entire uploaded file, so unlike EXISTING_DOCUMENT_EDIT_RE
+// they don't require a sub-region target keyword. When a document is
+// attached, these verbs should route to the source-preserving editor.
+// IMPORTANT: match VERB forms only — generic stems like `cambi\w*` / `resum\w*`
+// also capture nouns ("cambio", "resumen", "traducción") and would hijack
+// read-only prompts ("explica el cambio del documento") into a fake edit.
+const WHOLE_DOCUMENT_TRANSFORM_RE =
+  /\b(?:traduc(?:e\w*|ir\w*|iendo|id[oa])|traduzca\w*|reescrib(?:e\w*|ir\w*|iendo)|reescrit[oa]|reformul(?:e\w*|a|as|ar\w*|alo|ala|ame|ando|ad[oa])|parafrase\w*|sintetiz(?:a\w*|e\w*|ando|ad[oa])|sintetice\w*|resum(?:e|es|ir\w*|a|as|amos|elo|ela|elos|elas|eme|emelo|iendo|id[oa])|transcrib(?:e\w*|ir\w*|a\w*|iendo)|transcrit[oa]|cambi(?:a\w*|e\w*))\b/i
+
 const OUTPUT_FORMAT_REQUEST_RE =
   /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|svg)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|prepara(?:r|me)?|elabora(?:r|me)?|redacta(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|svg|documento|archivo|informe|reporte|presentaci[oó]n)\b/i
 
@@ -287,6 +308,15 @@ const DEFAULT_VIDEO_DURATION_SECONDS = Object.freeze([4, 5, 6, 7, 8, 9, 10, 11, 
 const VIDEO_DURATION_SECONDS_RE =
   /\b(1[0-5]|[4-9])\s*(?:s|seg(?:undo)?s?|sec(?:ond)?s?)\b/i
 
+export type RequestedVideoAspectRatio = '16:9' | '9:16' | '1:1' | '4:3' | '3:4' | '21:9'
+export type RequestedVideoResolution = '480p' | '720p'
+
+const VIDEO_RATIO_TOKEN_RE =
+  /\b(16:9|9:16|1:1|4:3|3:4|21:9|16x9|9x16|1x1|4x3|3x4|21x9)\b/i
+
+const VIDEO_RESOLUTION_TOKEN_RE =
+  /\b(480|720)\s*p\b/i
+
 export function extractRequestedVideoDurationSeconds(
   prompt: string,
   allowedDurations: readonly number[] = DEFAULT_VIDEO_DURATION_SECONDS,
@@ -296,6 +326,45 @@ export function extractRequestedVideoDurationSeconds(
   if (!match) return null
   const duration = Number(match[1])
   return allowedDurations.includes(duration) ? duration : null
+}
+
+export function extractRequestedVideoAspectRatio(prompt: string): RequestedVideoAspectRatio | null {
+  const normalized = normalizePrompt(prompt)
+  if (!normalized) return null
+
+  const ratio = normalized.match(VIDEO_RATIO_TOKEN_RE)
+  if (ratio) return ratio[1].replace('x', ':') as RequestedVideoAspectRatio
+
+  if (/\b(?:cuadrad[oa]s?|square|post de instagram|feed de instagram)\b/.test(normalized)) return '1:1'
+  if (/\b(?:vertical(?:es)?|retrato|portrait|tiktok|reels?|historias?|story|stories|shorts?|para movil|formato movil|mas alto que ancho)\b/.test(normalized)) return '9:16'
+  if (/\b(?:rectangular(?:es)?|horizontal(?:es)?|apaisad[oa]s?|panoramic[oa]s?|landscape|widescreen|youtube|miniatura|thumbnail|banner|portada|cover|cabecera|mas ancho que alto)\b/.test(normalized)) return '16:9'
+  if (/\b(?:cinema|cinematico|cinematografico|ultrawide|panavision)\b/.test(normalized)) return '21:9'
+
+  return null
+}
+
+export function extractRequestedVideoResolution(prompt: string): RequestedVideoResolution | null {
+  const normalized = normalizePrompt(prompt)
+  if (!normalized) return null
+
+  const match = normalized.match(VIDEO_RESOLUTION_TOKEN_RE)
+  if (match?.[1] === '480') return '480p'
+  if (match?.[1] === '720') return '720p'
+
+  if (/\b(?:sd|baja resolucion|resolucion baja|ligero|liviano)\b/.test(normalized)) return '480p'
+  if (/\b(?:hd|alta resolucion|resolucion alta|calidad alta)\b/.test(normalized)) return '720p'
+
+  return null
+}
+
+export function extractRequestedVideoAudio(prompt: string): boolean | null {
+  const normalized = normalizePrompt(prompt)
+  if (!normalized) return null
+
+  if (/\b(?:sin audio|sin sonido|sin musica|sin voz|mudo|silencioso|audio off|mute|muted|no audio|no sound)\b/.test(normalized)) return false
+  if (/\b(?:con audio|con sonido|con musica|con voz|audio on|sonido activado|audio activado)\b/.test(normalized)) return true
+
+  return null
 }
 
 const parseFilesFromMessage = (message: any): any[] => {
@@ -330,6 +399,25 @@ const isSpreadsheetLikeAttachment = (file: any) => {
   return SPREADSHEET_FILE_EXT_RE.test(name) || SPREADSHEET_MIME_RE.test(mimeType)
 }
 
+const IMAGE_FILE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|svg|heic|heif|avif|tiff?)$/i
+const isImageLikeAttachment = (file: any) => {
+  if (!file) return false
+  if (typeof file === 'string') return IMAGE_FILE_EXT_RE.test(file)
+  const name = String(file.name || file.originalName || file.filename || file.path || '')
+  const mimeType = String(file.mimeType || file.type || file.contentType || '')
+  return mimeType.toLowerCase().startsWith('image/') || file.type === 'image' || IMAGE_FILE_EXT_RE.test(name)
+}
+
+/**
+ * True when EVERY attachment is an image (and there is at least one). Such
+ * turns need VISION, which lives only in the plain /api/ai/generate path — the
+ * queued agent-task / react-agent loop has no vision and stalls on the image.
+ */
+export function isImageOnlyAttachmentTurn(files: any[] = []): boolean {
+  const list = Array.isArray(files) ? files : []
+  return list.length > 0 && list.every(isImageLikeAttachment)
+}
+
 export function hasDocumentAttachmentContext(conversationHistory: any[] = []): boolean {
   return (Array.isArray(conversationHistory) ? conversationHistory : []).some((message) =>
     parseFilesFromMessage(message).some(isDocumentLikeAttachment)
@@ -342,8 +430,21 @@ export function shouldEditExistingDocument(
 ): boolean {
   const normalized = normalizePrompt(prompt)
   if (!normalized) return false
-  if (!EXISTING_DOCUMENT_EDIT_RE.test(normalized)) return false
-  return EXISTING_DOCUMENT_REFERENCE_RE.test(normalized) || hasDocumentAttachmentContext(conversationHistory)
+  const referencesExistingDocument =
+    EXISTING_DOCUMENT_REFERENCE_RE.test(normalized) || hasDocumentAttachmentContext(conversationHistory)
+  if (EXISTING_DOCUMENT_EDIT_RE.test(normalized)) return referencesExistingDocument
+  // Whole-document transforms (traduce / resume / reescribe / reformula) count
+  // as edits only when the prompt explicitly references a document AND a file is
+  // attached — so "traduce esta frase" / "cambia de tema" stay normal chat
+  // answers, and pure format conversions ("pásalo a PDF") go to doc generation.
+  if (
+    WHOLE_DOCUMENT_TRANSFORM_RE.test(normalized)
+    && EXISTING_DOCUMENT_REFERENCE_RE.test(normalized)
+    && !OUTPUT_FORMAT_REQUEST_RE.test(normalized)
+  ) {
+    return hasDocumentAttachmentContext(conversationHistory)
+  }
+  return false
 }
 
 export function shouldAnswerFromExistingDocument(
@@ -412,6 +513,49 @@ export function shouldAutoActivateVideoGeneration(prompt: string): boolean {
   return !!normalized && ROUTING_PATTERNS.video.test(normalized)
 }
 
+// Analysis/understanding questions ABOUT an image ("describe esta imagen",
+// "¿qué ves?", "transcribe la foto", "what does it say"). These mention image
+// words, so the bare `image` routing pattern misreads them as image
+// GENERATION — which hijacked "describir que ves en esta imagen" + an attached
+// photo into the image generator instead of the vision chat path. Inputs are
+// matched after normalizePrompt (lowercase, accents stripped).
+const IMAGE_ANALYSIS_PROMPT_RE = new RegExp(
+  '(' + [
+    // Spanish analysis verbs / question shapes
+    '\\bdescrib',                                  // describe / describir / descríbeme
+    '\\btranscrib',                                // transcribe / transcribir / transcríbela
+    '\\bque\\s+(se\\s+)?ves?\\b',                  // qué ves / que se ve
+    '\\bque\\s+dice\\b',
+    '\\bque\\s+hay\\b',
+    '\\bque\\s+observas\\b',
+    '\\bocr\\b',
+    '\\bextrae\\w*\\s+(el\\s+)?texto',
+    '\\blee\\w*\\s+(la|el|esta|este)\\b',
+    '\\b(analiza\\w*|explica\\w*|interpreta\\w*|identifica\\w*|reconoce\\w*|traduce\\w*|resume\\w*)\\s+(la\\s+|el\\s+|esta\\s+|este\\s+)?(imagen|foto|captura|screenshot|pantallazo)',
+    '\\bdescripcion\\s+de\\s+(la|esta)\\s+(imagen|foto|captura)',
+    // English
+    '\\btranscribe\\b', '\\bcaption\\b',
+    '\\bwhat\\s+do\\s+you\\s+see\\b',
+    '\\bwhat\\s+does\\s+(it|this|the)\\s+\\w*\\s*say\\b',
+    '\\bwhat.?s\\s+in\\s+(the|this)\\b',
+    '\\bread\\s+(the|this)\\b',
+    '\\bextract\\s+(the\\s+)?text',
+    '\\b(analyze|explain|identify|translate|summarize)\\s+(the\\s+|this\\s+)?(image|photo|picture|screenshot)',
+  ].join('|') + ')',
+  'i',
+)
+
+/**
+ * True when the prompt asks to ANALYSE / read / describe an image rather than
+ * generate one. Used to keep "describe esta imagen" turns on the vision chat
+ * path — the image generator must never hijack an understanding question.
+ */
+export function isImageAnalysisPrompt(prompt: string): boolean {
+  const normalized = normalizePrompt(prompt)
+  if (!normalized) return false
+  return IMAGE_ANALYSIS_PROMPT_RE.test(normalized)
+}
+
 const CONTEXT_FOLLOWUP_RE =
   /\b(?:eso|esto|aquello|lo anterior|anterior|mismo|misma|tambien|también|ahora|despues|después|luego|ademas|además|hazlo|hacelo|con eso|usa eso|usalo|úsalo|en base a eso|basado en eso|convierte(?:lo)?|pasalo|pásalo|exportalo|expórtalo)\b/i
 
@@ -478,7 +622,10 @@ const signalIntentFromText = (text: string): ChatIntent | null => {
   if (ROUTING_PATTERNS.viz.test(normalized)) return 'viz'
   if (ROUTING_PATTERNS.video.test(normalized)) return 'video'
   if (ROUTING_PATTERNS.musicGeneration.test(normalized) || ROUTING_PATTERNS.voiceGeneration.test(normalized)) return 'agent_task'
-  if (ROUTING_PATTERNS.image.test(normalized)) return 'image'
+  // "describe esta imagen / ¿qué ves? / transcribe la foto" is image
+  // ANALYSIS (vision chat), not generation — don't let the bare image-word
+  // pattern hijack it into the image generator.
+  if (ROUTING_PATTERNS.image.test(normalized) && !IMAGE_ANALYSIS_PROMPT_RE.test(normalized)) return 'image'
   if (ROUTING_PATTERNS.figma.test(normalized)) return 'figma'
   if (ROUTING_PATTERNS.webdev.test(normalized) && ROUTING_PATTERNS.webdevBuildAction.test(normalized)) return 'webdev'
   return null
@@ -533,8 +680,11 @@ export function buildIntentAttributionGraph(
   const hasDocumentContext = allFiles.some(isDocumentLikeAttachment)
   const hasSpreadsheetContext = allFiles.some(isSpreadsheetLikeAttachment)
   const editsExistingDocument = hasDocumentContext
-    && EXISTING_DOCUMENT_EDIT_RE.test(normalized)
     && !OUTPUT_FORMAT_REQUEST_RE.test(normalized)
+    && (
+      EXISTING_DOCUMENT_EDIT_RE.test(normalized)
+      || (WHOLE_DOCUMENT_TRANSFORM_RE.test(normalized) && EXISTING_DOCUMENT_REFERENCE_RE.test(normalized))
+    )
   const isShortContextualFragment =
     words.length <= 6
     && !!historyIntent
@@ -614,9 +764,9 @@ export function buildIntentAttributionGraph(
     confidence = words.length <= 4 ? 0.65 : 0.72
     rationale.push('Short follow-up inherits the latest concrete user goal from conversation history.')
   } else if (editsExistingDocument) {
-    inferredIntent = 'doc'
+    inferredIntent = 'agent_task'
     confidence = 0.9
-    rationale.push('Existing document attachment plus edit wording implies a source-preserving document edit.')
+    rationale.push('Existing document attachment plus edit wording requires the agentic source-preserving document editor.')
   } else if (!currentIntent && hasSpreadsheetContext && ROUTING_PATTERNS.dataWork.test(normalized)) {
     inferredIntent = 'math'
     confidence = 0.7
@@ -696,6 +846,45 @@ export function shouldRouteTextPromptThroughAgenticRuntime(prompt: string, files
   if (GOAL_COMMAND_RE.test(prompt)) return true
   if (files.length > 0) {
     const fileList = Array.isArray(files) ? files : []
+    // Image-only analysis turns ("resolver", "¿qué dice?", "transcribe",
+    // "resuelve esta derivada") need VISION, which lives ONLY in the plain
+    // /api/ai/generate path (base64 image → vision model, with auto-routing to
+    // a vision-capable model when the selected one is text-only). The queued
+    // agent-task / react-agent loop has no vision: it never receives the image,
+    // so the model spins blind until the 90s stale guard fires ("Sin
+    // actualizaciones recientes"). Route pure image-analysis turns to the
+    // vision path; keep the agentic loop only when the user explicitly asks to
+    // CREATE a deliverable (image/video/diagram/doc/code) from the image.
+    // An image-only turn can NEVER be served by the queued agent / react-agent
+    // loop — that loop has no vision, so it receives no image and stalls blind
+    // until the 90s stale guard. ALWAYS send image-only turns to the plain
+    // /api/ai/generate vision path, which reads the image (auto-routing to a
+    // vision-capable model when the selected one is text-only) and can analyse,
+    // transcribe, solve, or describe-to-create from it.
+    const everyFileIsImage = fileList.length > 0 && fileList.every(isImageLikeAttachment)
+    if (everyFileIsImage) return false
+    // Document EDIT requests ("borra el jurado evaluador", "elimina los anexos",
+    // "agrega una conclusión", "cambia el título del informe") must run on the
+    // INLINE /api/ai/generate path: that is where the document_edit (Cowork
+    // sandbox-editing) tool lives, and it is the RELIABLE path (per-step
+    // timeout + plain-stream fallback). The queued agent-task path has no
+    // document_edit tool and, when the worker can't relay events, leaves the
+    // chat stuck on "Sin actualizaciones recientes" — exactly the doc-edit
+    // failure users hit. Strong mutation verb alone, or an edit verb + region.
+    // A STRONG mutation verb (borra/elimina/agrega/edita/reemplaza…) is an edit
+    // of the attached file REGARDLESS of any format mention — "borra el jurado
+    // evaluador y dámelo en word" is still an edit, not a fresh generation.
+    // Only the weaker edit/transform verbs stay gated by OUTPUT_FORMAT (where
+    // "en un word" may mean "create a new word from scratch").
+    if (
+      DOCUMENT_MUTATION_STRONG_RE.test(normalized)
+      || (
+        !OUTPUT_FORMAT_REQUEST_RE.test(normalized)
+        && (EXISTING_DOCUMENT_EDIT_RE.test(normalized) || WHOLE_DOCUMENT_TRANSFORM_RE.test(normalized))
+      )
+    ) {
+      return false
+    }
     const hasDocumentForSynthesis = fileList.some((file) =>
       isDocumentLikeAttachment(file) && !isSpreadsheetLikeAttachment(file)
     )
@@ -714,21 +903,16 @@ export function shouldRouteTextPromptThroughAgenticRuntime(prompt: string, files
   }
   if (isLightweightConversationalPrompt(normalized)) return false
 
-  const words = normalized.split(/\s+/).filter(Boolean)
-  if (words.length >= 80) return true
-
-  return [
-    ROUTING_PATTERNS.urlReference,
-    ROUTING_PATTERNS.externalResearch,
-    ROUTING_PATTERNS.deliverableFile,
-    ROUTING_PATTERNS.dataWork,
-    ROUTING_PATTERNS.codeWork,
-    ROUTING_PATTERNS.implementationWork,
-    ROUTING_PATTERNS.repoOperation,
-    ROUTING_PATTERNS.longRunningAgent,
-    ROUTING_PATTERNS.musicGeneration,
-    ROUTING_PATTERNS.voiceGeneration,
-  ].some((pattern) => pattern.test(normalized))
+  // No-file interactive prompts (research, deliverables, code, data work,
+  // long questions, etc.) run through the RELIABLE inline /generate agentic
+  // loop — which already owns web_search/read_url + artifact tools, a
+  // per-step timeout and a plain-stream fallback, and streams its reasoning
+  // live. The durable QUEUED agent-task path is reserved for /goal (handled
+  // at the top) and uploaded-document tasks (the files branch above): for
+  // plain text prompts it could leave the chat stuck on
+  // "stream_closed_without_done / 0 pasos" when the worker doesn't relay
+  // events. Routing them inline is what makes the chat respond reliably.
+  return false
 }
 
 export function shouldUseFastTextRoute(prompt: string): boolean {
@@ -876,7 +1060,9 @@ export function classifyIntentFastPath(prompt: string): ChatIntent | null {
   if (ROUTING_PATTERNS.viz.test(lc)) return 'viz'
   if (ROUTING_PATTERNS.video.test(lc)) return 'video'
   if (ROUTING_PATTERNS.musicGeneration.test(lc) || ROUTING_PATTERNS.voiceGeneration.test(lc)) return 'agent_task'
-  if (ROUTING_PATTERNS.image.test(lc)) return 'image'
+  // Image ANALYSIS questions ("describe esta imagen") are vision chat, not
+  // generation — same gate as signalIntentFromText.
+  if (ROUTING_PATTERNS.image.test(lc) && !IMAGE_ANALYSIS_PROMPT_RE.test(lc)) return 'image'
   if (ROUTING_PATTERNS.figma.test(lc)) return 'figma'
   if (ROUTING_PATTERNS.webdev.test(lc) && ROUTING_PATTERNS.webdevBuildAction.test(lc)) return 'webdev'
 
@@ -952,7 +1138,7 @@ export class AIService {
   ): Promise<ChatIntent> {
 
     if (shouldEditExistingDocument(prompt, conversationHistory)) {
-      return 'doc';
+      return 'agent_task';
     }
 
     if (shouldAnswerFromExistingDocument(prompt, conversationHistory)) {
@@ -997,7 +1183,7 @@ export class AIService {
   * "what's the latest news on OpenAI?" / "últimas noticias de la NASA"
   * "investiga sobre X" / "investigate X" / "research X"
   * Any question where the user wants citations, a literature scan, or an answer grounded in real web/scholarly sources. If in doubt AND the request asks for information the LLM cannot safely answer from memory, prefer 'web_search' over 'text'.
-- 'image': Generating images. Examples: "create an image of a sunset", "genera una imagen de un gato".
+- 'image': GENERATING a new image. Examples: "create an image of a sunset", "genera una imagen de un gato". NOT for questions ABOUT an attached or previous image — "describe esta imagen", "¿qué ves en la foto?", "transcribe la captura", "what does this image say" are 'text' (vision analysis), never 'image'.
 - 'video': Generating videos. Examples: "make a video of a beach", "crea un video de la ciudad".
 - 'ppt': Creating PowerPoint presentations. Examples in multiple languages:
 * English: "create a presentation about AI", "make a PPT on climate change", "generate slides about marketing"

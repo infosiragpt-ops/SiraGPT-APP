@@ -63,7 +63,7 @@ const TOKEN_PATTERNS = Object.freeze([
   { name: 'aws-access-key', pattern: /\bAKIA[0-9A-Z]{16}\b/g },
   { name: 'anthropic-key', pattern: /\bsk-ant-[A-Za-z0-9_-]{20,}\b/g },
   { name: 'openai-key', pattern: /\bsk-[A-Za-z0-9_-]{20,}\b/g },
-  { name: 'stripe-key', pattern: /\bsk_(?:live|test)_[A-Za-z0-9]{16,}\b/g },
+  { name: 'stripe-key', pattern: /\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9*._-]{4,}\b/g },
   { name: 'github-token', pattern: /\bgh[pousr]_[A-Za-z0-9_]{30,}\b/g },
   { name: 'slack-token', pattern: /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/g },
   { name: 'google-api-key', pattern: /\bAIza[A-Za-z0-9_-]{35}\b/g },

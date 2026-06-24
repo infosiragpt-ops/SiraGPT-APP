@@ -123,8 +123,22 @@ test('normalizeBackendAssetUrl returns absolute URL unchanged when no baseUrl is
   // resolved base is meaningful, so an absolute /uploads/ URL with
   // a missing-frontend-config gets to stay as-is rather than
   // bouncing to the dev default.
-  assert.equal(
-    normalizeBackendAssetUrl('https://api.example.com/uploads/u1/file.pdf', ''),
-    'https://api.example.com/uploads/u1/file.pdf',
-  );
+  //
+  // Hermetic: hasRuntimeAssetBase also consults NEXT_PUBLIC_IMAGE_URL /
+  // NEXT_PUBLIC_API_URL — CI exports both for `next build`, which would
+  // legitimately enable the rewrite. Clear them so this case really
+  // exercises the "nothing configured" contract in any environment.
+  const savedImage = process.env.NEXT_PUBLIC_IMAGE_URL;
+  const savedApi = process.env.NEXT_PUBLIC_API_URL;
+  delete process.env.NEXT_PUBLIC_IMAGE_URL;
+  delete process.env.NEXT_PUBLIC_API_URL;
+  try {
+    assert.equal(
+      normalizeBackendAssetUrl('https://api.example.com/uploads/u1/file.pdf', ''),
+      'https://api.example.com/uploads/u1/file.pdf',
+    );
+  } finally {
+    if (savedImage !== undefined) process.env.NEXT_PUBLIC_IMAGE_URL = savedImage;
+    if (savedApi !== undefined) process.env.NEXT_PUBLIC_API_URL = savedApi;
+  }
 });

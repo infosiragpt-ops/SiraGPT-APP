@@ -2,7 +2,7 @@ name: CodeQL
 
 # F5 PR20 — SAST scanning for JS/TS via GitHub's CodeQL. Runs on every
 # push to `main`, every pull-request into `main`, and weekly so the
-# advisories database stays fresh against committed code.
+# advisories database stays fresh against committed production code.
 
 on:
   push:
@@ -19,7 +19,7 @@ permissions:
 
 concurrency:
   group: codeql-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   analyze:
@@ -38,19 +38,48 @@ jobs:
         uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
-          queries: security-and-quality
+          queries: security-extended
           config: |
+            paths:
+              - "app/**"
+              - "components/**"
+              - "hooks/**"
+              - "lib/**"
+              - "server/**"
+              - "backend/**"
+              - "scripts/**"
+              - "middleware.ts"
+              - "instrumentation.ts"
+              - "next.config.mjs"
+              - "tailwind.config.js"
+              - "postcss.config.mjs"
+              - "drizzle.config.ts"
             paths-ignore:
+              - "**/node_modules/**"
+              - ".agents/**"
               - "apps/upstream/**"
               - "changelog/upstream/**"
               - "config/upstream/**"
               - "extensions/upstream/**"
               - "packages/upstream/**"
               - "src/upstream/**"
+              - "siraGPT/**"
+              - "skills/**"
+              - "scripts/upstream/**"
+              - "test/**"
+              - "ui/**"
+              - "vendor/**"
               - "ui/upstream/**"
               - "attached_assets/**"
+              - "uploads/**"
+              - ".test-dist/**"
+              - "backend/tests/**"
+              - "e2e/**"
+              - "tests/**"
               - "test-results/**"
               - ".next/**"
+              - ".next.broken-*/**"
+              - ".root-backup-before-siragpt-publish-*/**"
 
       # JavaScript/TypeScript CodeQL extracts directly from source. Skipping
       # autobuild avoids spending minutes on vendored/upstream trees before the

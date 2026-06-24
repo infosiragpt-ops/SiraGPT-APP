@@ -21,6 +21,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import { Textarea } from "@/components/ui/textarea"
+import { CODE_OPEN_TOOL_EVENT } from "@/lib/code-workspace-context"
 import {
   filterWorkspaceTools,
   groupWorkspaceTools,
@@ -32,14 +33,15 @@ import {
 } from "@/lib/workspace-tools-registry"
 import { startWorkspaceWorkflow } from "@/lib/workspace-workflow-service"
 import type { WorkspacePanelId } from "@/components/code/workspace-top-bar"
+import type { WorkspaceToolId } from "@/lib/code-workspace-tools"
 
 export type WorkspaceToolsHandlers = {
   onTogglePanel: (id: WorkspacePanelId) => void
   onOpenPalette: (query?: string) => void
   onNewFile: () => void
-  onOpenPublishing: () => void
   onFocusChat: () => void
   onOpenComposer: () => void
+  onOpenTool?: (id: WorkspaceToolId) => void
 }
 
 type Props = {
@@ -66,6 +68,15 @@ export function WorkspaceToolsMenu({ children, handlers }: Props) {
         case "panel":
           handlers.onTogglePanel(action.panel)
           break
+        case "code-tool":
+          if (handlers.onOpenTool) {
+            handlers.onOpenTool(action.toolId)
+          } else if (typeof window !== "undefined") {
+            window.dispatchEvent(
+              new CustomEvent(CODE_OPEN_TOOL_EVENT, { detail: { toolId: action.toolId } }),
+            )
+          }
+          break
         case "palette":
           handlers.onOpenPalette(action.query)
           break
@@ -76,9 +87,6 @@ export function WorkspaceToolsMenu({ children, handlers }: Props) {
           if (typeof window !== "undefined") {
             window.open(window.location.origin, "_blank", "noopener,noreferrer")
           }
-          break
-        case "publishing":
-          window.setTimeout(() => handlers.onOpenPublishing(), 0)
           break
         case "navigate":
           if (typeof window !== "undefined") window.location.href = action.href

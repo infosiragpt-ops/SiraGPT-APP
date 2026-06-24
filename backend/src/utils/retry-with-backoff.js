@@ -53,10 +53,17 @@ function defaultClassifier(err) {
  * Full jitter (rather than capped or equal jitter) avoids thundering
  * herd when N workers all try the same retry for the same upstream.
  *
+ * A `minDelayMs` floor (e.g. a server-supplied Retry-After / classifier
+ * ttlMs) is honoured *after* jitter so an explicit cooldown hint is never
+ * jittered down toward zero. The floor itself is clamped to `maxDelayMs`
+ * and validated, so a malformed (NaN / Infinity / negative) hint can never
+ * push the delay non-finite or below zero.
+ *
  * @param {object}  opts
  * @param {number}  [opts.baseDelayMs=1000]
  * @param {number}  [opts.maxDelayMs=30000]
  * @param {number}  [opts.attempt=0]
+ * @param {number}  [opts.minDelayMs=0]  Lower bound (clamped to maxDelayMs)
  * @returns {number}  delay in milliseconds
  */
 function computeBackoff(opts = {}) {
@@ -66,7 +73,24 @@ function computeBackoff(opts = {}) {
   const rng = typeof opts.rng === 'function' ? opts.rng : Math.random;
   const rand = clampRandom(rng());
   const cap = Math.min(max, base * Math.pow(2, attempt));
-  return normalizeDelay(Math.round(rand * cap), 0);
+  const jittered = normalizeDelay(Math.round(rand * cap), 0);
+  // A non-finite / negative floor degrades to 0 (no floor), never to NaN.
+  const floor = Math.min(normalizeDelay(opts.minDelayMs, 0), max);
+  return Math.max(jittered, floor);
+}
+
+/**
+ * Extract a safe retry-after floor (in ms) from a classifier result.
+ * Tolerates a malformed shape or a non-finite/negative `ttlMs`:
+ * anything that isn't a finite, non-negative number degrades to 0
+ * (no floor) instead of throwing or corrupting the delay computation.
+ *
+ * @param {*} classification
+ * @returns {number}  >= 0, finite
+ */
+function ttlFloorFromClassification(classification) {
+  if (!classification || typeof classification !== 'object') return 0;
+  return normalizeDelay(classification.ttlMs, 0);
 }
 
 /**
@@ -134,12 +158,15 @@ async function withRetry(fn, opts = {}) {
         break;
       }
 
-      // Retryable: wait with backoff
+      // Retryable: wait with backoff. Honour the classifier's ttlMs
+      // (e.g. a Retry-After hint) as a lower bound, guarded so a
+      // malformed/non-finite/negative ttlMs degrades to no floor.
       const delayMs = computeBackoff({
         baseDelayMs: opts.baseDelayMs,
         maxDelayMs: opts.maxDelayMs,
         attempt,
         rng: opts.rng,
+        minDelayMs: ttlFloorFromClassification(classification),
       });
 
       if (onRetry) {
@@ -266,6 +293,7 @@ module.exports = {
   normalizeDelay,
   clampRandom,
   safeClassify,
+  ttlFloorFromClassification,
   MAX_RETRIES,
   MAX_TIMER_MS,
 };

@@ -69,7 +69,7 @@ function parseModelOutput(raw) {
 
 function makeGeminiJudge({ apiKey = process.env.GEMINI_API_KEY, fetchImpl = global.fetch } = {}) {
   if (!apiKey || typeof fetchImpl !== "function") return null;
-  return async function geminiJudge({ prompt, recentTurns, hintedQuestion }) {
+  return async function geminiJudge({ prompt, recentTurns, hintedQuestion, signal }) {
     const body = {
       systemInstruction: { role: "system", parts: [{ text: SYSTEM }] },
       contents: [
@@ -89,6 +89,7 @@ function makeGeminiJudge({ apiKey = process.env.GEMINI_API_KEY, fetchImpl = glob
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
+      signal,
     });
     if (!resp.ok) {
       throw new Error(`gemini_http_${resp.status}`);
@@ -168,7 +169,7 @@ function parseCorefOutput(raw) {
 
 function makeGeminiCorefJudge({ apiKey = process.env.GEMINI_API_KEY, fetchImpl = global.fetch } = {}) {
   if (!apiKey || typeof fetchImpl !== "function") return null;
-  return async function corefJudge({ anaphor, prompt, recentTurns, attachments }) {
+  return async function corefJudge({ anaphor, prompt, recentTurns, attachments, signal }) {
     const body = {
       systemInstruction: { role: "system", parts: [{ text: COREF_SYSTEM }] },
       contents: [
@@ -188,6 +189,7 @@ function makeGeminiCorefJudge({ apiKey = process.env.GEMINI_API_KEY, fetchImpl =
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
+      signal,
     });
     if (!resp.ok) {
       throw new Error(`gemini_http_${resp.status}`);
@@ -209,7 +211,7 @@ function makeHaikuJudge({
   model = "claude-haiku-4-5",
 } = {}) {
   if (!apiKey || typeof fetchImpl !== "function") return null;
-  return async function haikuJudge({ prompt, recentTurns, hintedQuestion }) {
+  return async function haikuJudge({ prompt, recentTurns, hintedQuestion, signal }) {
     const body = {
       model,
       max_tokens: 150,
@@ -227,6 +229,7 @@ function makeHaikuJudge({
         "anthropic-version": ANTHROPIC_VERSION,
       },
       body: JSON.stringify(body),
+      signal,
     });
     if (!resp.ok) {
       throw new Error(`anthropic_http_${resp.status}`);
@@ -249,7 +252,7 @@ function makeGroqJudge({
   model = "llama-3.3-70b-versatile",
 } = {}) {
   if (!apiKey || typeof fetchImpl !== "function") return null;
-  return async function groqJudge({ prompt, recentTurns, hintedQuestion }) {
+  return async function groqJudge({ prompt, recentTurns, hintedQuestion, signal }) {
     const body = {
       model,
       max_tokens: 150,
@@ -267,6 +270,7 @@ function makeGroqJudge({
         authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify(body),
+      signal,
     });
     if (!resp.ok) {
       throw new Error(`groq_http_${resp.status}`);

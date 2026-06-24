@@ -9,8 +9,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import { Button } from "@/components/ui/button"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import { useChat } from "@/lib/chat-context-integrated"
 import { useRouter, usePathname } from "next/navigation"
 
@@ -167,53 +165,43 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[600px] max-h-[80vh] p-0">
-        <DialogHeader className="px-6 pt-6 pb-2">
-          <DialogTitle className="flex items-center gap-2">
-            <Search className="h-5 w-5" />
-            Buscar chats
-            <span className="ml-auto inline-flex h-6 items-center rounded-md border border-border/55 bg-muted/40 px-2 font-mono text-[10.5px] font-medium tracking-wide text-muted-foreground">
-              ⌘K
-            </span>
-          </DialogTitle>
-        </DialogHeader>
-
-        {/* Search Input */}
-        <div className="px-6 pb-4">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+      <DialogContent position="top-start" className="flex max-h-[70vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[600px] bg-white dark:bg-[#0E131B] border-zinc-200 dark:border-zinc-800/80 shadow-[0_24px_70px_-36px_rgba(15,23,42,0.55)] dark:shadow-[0_24px_70px_-36px_rgba(0,0,0,0.8)] text-zinc-900 dark:text-zinc-100">
+        <DialogHeader className="shrink-0 space-y-0 border-b border-zinc-200/80 dark:border-zinc-800/80 bg-white dark:bg-[#0E131B] px-4 py-3 text-zinc-900 dark:text-zinc-100">
+          <DialogTitle className="sr-only">Buscar chats</DialogTitle>
+          <div className="flex items-center gap-3">
+            <Search className="h-[18px] w-[18px] shrink-0 text-zinc-400 dark:text-zinc-500" />
             <Input
               placeholder="Buscar en tus chats…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10"
+              className="h-9 flex-1 border-0 bg-transparent px-0 text-[15px] shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
               autoFocus
             />
             {isSearching && (
-              <Loader2 className="absolute right-3 top-1/2 transform -translate-y-1/2 h-4 w-4 animate-spin text-muted-foreground" />
+              <Loader2 className="h-4 w-4 shrink-0 animate-spin text-zinc-400 dark:text-zinc-500" />
+            )}
+            {!isSearching && !searchQuery && (
+              <kbd className="hidden shrink-0 items-center rounded-md border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800/40 px-1.5 py-0.5 font-mono text-[10.5px] font-medium tracking-wide text-zinc-400 dark:text-zinc-500 sm:inline-flex">
+                ⌘K
+              </kbd>
             )}
           </div>
-        </div>
+        </DialogHeader>
 
-        {/* Search Results */}
-        <ScrollArea
-          className="flex-1 max-h-[400px]"
-          ref={scrollAreaRef}
-          onScrollCapture={handleScroll}
-        >
-          <div className="px-6 pb-6">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-white dark:bg-[#0E131B]" onScrollCapture={handleScroll}>
+          <div className="px-4 py-2">
             {searchResults.length === 0 && !isSearching ? (
-              <div className="text-center py-8 text-muted-foreground">
+              <div className="text-center py-8 text-zinc-500 dark:text-zinc-400">
                 {searchQuery ? (
                   <>
-                    <MessageSquare className="h-12 w-12 mx-auto mb-3 opacity-50" />
-                    <p>No hay chats que coincidan con &quot;{searchQuery}&quot;</p>
+                    <MessageSquare className="h-12 w-12 mx-auto mb-3 opacity-50 text-zinc-400 dark:text-zinc-500" />
+                    <p className="text-zinc-900 dark:text-zinc-100 font-medium">No hay chats que coincidan con &quot;{searchQuery}&quot;</p>
                     <p className="text-sm mt-1">Intenta con otras palabras clave</p>
                   </>
                 ) : (
                   <>
-                    <History className="h-12 w-12 mx-auto mb-3 opacity-50" />
-                    <p>Aún no tienes chats</p>
+                    <History className="h-12 w-12 mx-auto mb-3 opacity-50 text-zinc-400 dark:text-zinc-500" />
+                    <p className="text-zinc-900 dark:text-zinc-100 font-medium">Aún no tienes chats</p>
                     <p className="text-sm mt-1">Empieza una conversación para verla aquí</p>
                   </>
                 )}
@@ -223,47 +211,47 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
 
                 {/* Chat results */}
                 {searchResults.map((chat, index) => (
-                  <Button
+                  <button
                     key={`${chat.id}-${index}`}
-                    variant="ghost"
-                    className="w-full justify-start p-3 h-auto text-left hover:bg-accent/50"
+                    type="button"
+                    className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800/50"
                     onClick={() => handleChatSelect(chat.id)}
                   >
-                    <div className="flex items-start gap-3 w-full">
-                      <div className="flex-shrink-0 mt-1">
-                        <MessageCircle className="h-4 w-4 text-muted-foreground" />
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-zinc-200/50 dark:border-zinc-800/50 bg-zinc-50 dark:bg-zinc-800/40">
+                      <MessageCircle className="h-4 w-4 text-zinc-400 dark:text-zinc-500" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-medium text-zinc-950 dark:text-zinc-50">
+                        {searchQuery ? highlightSearchTerm(chat.title, searchQuery) : chat.title}
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="font-medium text-sm truncate">
-                          {searchQuery ? highlightSearchTerm(chat.title, searchQuery) : chat.title}
-                        </div>
-                        <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
+                      <div className="mt-0.5 flex items-center gap-2 text-xs text-zinc-400 dark:text-zinc-500">
+                        <span className="inline-flex items-center gap-1">
                           <Clock className="h-3 w-3" />
                           {formatChatTime(chat.updatedAt)}
-                        </div>
+                        </span>
                       </div>
                     </div>
-                  </Button>
+                  </button>
                 ))}
 
                 {/* Loading indicator for infinite scroll */}
                 {isLoadingMore && !searchQuery && (
-                  <div className="flex items-center justify-center py-4">
+                  <div className="flex items-center justify-center py-4 text-zinc-500 dark:text-zinc-400">
                     <ThinkingIndicator size="sm" className="mr-2" />
-                    <span className="text-sm text-muted-foreground">Loading more chats...</span>
+                    <span className="text-sm">Loading more chats...</span>
                   </div>
                 )}
 
                 {/* End of results indicator */}
                 {!hasMoreChats && !searchQuery && searchResults.length > 10 && (
-                  <div className="text-center py-4 text-xs text-muted-foreground">
+                  <div className="text-center py-4 text-xs text-zinc-400 dark:text-zinc-500">
                     You've reached the end of your chats
                   </div>
                 )}
               </div>
             )}
           </div>
-        </ScrollArea>
+        </div>
       </DialogContent>
     </Dialog>
   )

@@ -1,10 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import {
-  describeGeoHintStatus,
-  type AppshotsGeoHintStatus,
-} from './geo-status';
+import { describeGeoHintStatus } from '@/lib/appshots-geo-hint';
 
 /**
  * Página de vinculación de la extensión Sira Appshots.
@@ -38,7 +35,7 @@ type AppshotsSession = {
   userAgent: string | null;
   ipHint: string | null;
   geoHint: string | null;
-  geoHintStatus?: AppshotsGeoHintStatus;
+  geoHintStatus?: 'ok' | 'private' | 'unresolved';
   device: string | null;
   isCurrent?: boolean;
 };
@@ -476,6 +473,10 @@ export default function AppshotsSettingsPage() {
     </div>
   );
 }
+
+// Extracted to lib/appshots-geo-hint.ts: Next.js App Router page files
+// only allow a fixed allowlist of named exports (any extra `export` here
+// breaks the production build), and the unit test needs to import it.
 
 function describeRevocationReason(code: string): string {
   // Stable codes come from the backend (backend/src/routes/appshots.js

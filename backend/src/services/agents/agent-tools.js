@@ -4,12 +4,13 @@
  * The survey (Liu et al., 2024) §5.1 treats Action (tools) as THE
  * component that extends an LLM's reach past its token output. Which
  * tools you expose defines what the agent can do. In a chat-app context
- * like siraGPT we deliberately avoid shell, network, and write tools:
+ * like siraGPT we deliberately avoid shell and write tools:
  *   - No `run_command` / shell: a chat app is the wrong place to
  *     execute arbitrary code with user-level privileges.
  *   - No `write_file`: agents can propose diffs; applying them is the
  *     user's decision.
- *   - No outbound HTTP: prevents SSRF and data exfiltration.
+ *   - Outbound HTTP is limited to hardened web_search/read_url/web_extract
+ *     adapters with SSRF, robots.txt, redirect and timeout controls.
  *
  * What agents CAN do through these tools:
  *   - read_file      — read a chunk already ingested into the user's
@@ -22,6 +23,10 @@
  *   - static_checks  — deterministic structural lints (complexity,
  *                      long functions, TODOs, etc.)
  *   - propose_patch  — output-only structured diff proposal
+ *   - web_search / web_extract — safe public-web research and scraping
+ *   - session_search / session_list / session_history — user-owned
+ *                      conversation continuity (search → browse → resume)
+ *   - browser_*     — browser automation only when the caller injects a driver
  *
  * Each tool declares an OpenAPI-ish `schema` field that the agent-core
  * renders into the system prompt. Tool handlers are `(args, ctx) => obs`
@@ -39,6 +44,83 @@ const webSearch = require('./web-search');
 function ensureCollection(ctx) {
   if (!ctx?.userId || !ctx?.collection) {
     throw new Error('tool requires ctx.userId and ctx.collection');
+  }
+}
+
+function safeBrowserRecord(record) {
+  if (!record || typeof record !== 'object') return record;
+  const args = record.action === 'type'
+    ? {
+        selector: record.args?.selector,
+        textLength: String(record.args?.text || '').length,
+      }
+    : record.args;
+  return { ...record, args };
+}
+
+function slimScreenshot(screenshot) {
+  if (!screenshot || typeof screenshot !== 'object') return null;
+  return {
+    id: screenshot.id || null,
+    mime: screenshot.mime || null,
+    bytes: Number.isFinite(Number(screenshot.bytes)) ? Number(screenshot.bytes) : null,
+  };
+}
+
+function resolveBrowserAgent(ctx = {}) {
+  if (ctx?.browserAgent && typeof ctx.browserAgent.run === 'function') {
+    return ctx.browserAgent;
+  }
+
+  let driver = null;
+  if (ctx?.browserDriver && typeof ctx.browserDriver.run === 'function') {
+    driver = ctx.browserDriver;
+  } else if (ctx?.browserAdapter && typeof ctx.browserAdapter.driver === 'function') {
+    driver = ctx.browserAdapter.driver();
+  } else if (ctx?.browser && typeof ctx.browser.driver === 'function') {
+    driver = ctx.browser.driver();
+  } else if (ctx?.browser && typeof ctx.browser.run === 'function') {
+    driver = ctx.browser;
+  }
+
+  if (!driver || typeof driver.run !== 'function') return null;
+
+  // eslint-disable-next-line global-require
+  const { createBrowserAgent, DEFAULT_POLICY } = require('../ai-product-os/browser-agent');
+  const agent = createBrowserAgent({
+    driver,
+    policy: ctx.browserPolicy || DEFAULT_POLICY,
+  });
+  if (ctx && typeof ctx === 'object') ctx.browserAgent = agent;
+  return agent;
+}
+
+async function runBrowserAction(action, args = {}, ctx = {}) {
+  try {
+    const browserAgent = resolveBrowserAgent(ctx);
+    if (!browserAgent) {
+      return {
+        ok: false,
+        action,
+        error: 'browser_driver_required',
+        message: 'No active browser driver/session is available for browser automation.',
+      };
+    }
+    const out = await browserAgent.run(action, args);
+    return {
+      ok: true,
+      action,
+      record: safeBrowserRecord(out?.record),
+      result: out?.result || null,
+      screenshot: slimScreenshot(out?.screenshot),
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      action,
+      error: err?.code || 'browser_action_failed',
+      message: String(err?.message || err).slice(0, 300),
+    };
   }
 }
 
@@ -1084,22 +1166,28 @@ const propose_patch = {
 
 const web_search = {
   name: 'web_search',
-  description: 'Search the open web through free, key-less providers (DuckDuckGo → Wikipedia → SearXNG). Use only when the answer needs information past the model cutoff or specific recent facts. Returns up to maxResults normalised hits.',
+  description: 'Search the open web. Uses Brave Search when BRAVE_SEARCH_API_KEY is set (freshest, highest quality) and otherwise free, key-less providers (DuckDuckGo → Wikipedia → SearXNG). Use when the answer needs information past the model cutoff or specific recent facts. Pass freshness ("pd"=day, "pw"=week, "pm"=month, "py"=year) for recent/news queries. Returns up to maxResults normalised hits.',
   schema: {
     query: 'string (required — the search query)',
     maxResults: 'number (optional, default 5, max 15)',
     locale: 'string (optional — BCP47-ish like "es-es" or "en"; nudges provider region/language)',
+    freshness: 'string (optional — recency window: pd|pw|pm|py or day|week|month|year; honoured by Brave)',
   },
   async handler(args) {
     const query = typeof args?.query === 'string' ? args.query.trim() : '';
     if (!query) return { error: 'missing "query"' };
     const maxResults = Math.max(1, Math.min(Number(args?.maxResults) || 5, 15));
     const locale = typeof args?.locale === 'string' ? args.locale : null;
-    const { results, provider, cached, attempts } = await webSearch.search(query, { maxResults, locale });
+    const freshness = typeof args?.freshness === 'string' ? args.freshness : undefined;
+    // Use the aggregating/relevance-ranked path for chat. The legacy
+    // first-non-empty search() path can be fooled by a broad academic provider
+    // returning unrelated papers before the general-web providers answer.
+    const { results, provider, providers, cached, attempts } = await webSearch.searchMany(query, { maxResults, locale, freshness });
     // Return structured JSON (not a concatenated string) so the model can
     // cite individual URLs rather than treat the whole response as prose.
     return {
       provider,
+      providers,
       cached,
       count: results.length,
       results,
@@ -1136,10 +1224,291 @@ const read_url = {
   },
 };
 
+const web_extract = {
+  name: 'web_extract',
+  description: 'Extract readable markdown from a public web page. Alias of read_url for web scraping workflows; use after web_search when snippets are insufficient. Applies the same SSRF, robots.txt, redirect, timeout and content-size protections.',
+  schema: {
+    url: 'string (required — absolute http(s) URL)',
+    maxChars: 'number (optional, default 12000, max 50000)',
+  },
+  async handler(args, ctx) {
+    return read_url.handler(args, ctx);
+  },
+};
+
+const session_search = {
+  name: 'session_search',
+  description: 'Search past chat conversations owned by the current user. Use when the user asks to find, recall, resume, or quote something from previous sessions. Returns matching message snippets with session ids and titles.',
+  schema: {
+    query: 'string (required — terms to search in past messages)',
+    limit: 'number (optional, default 8, max 25)',
+    sessionId: 'string (optional — restrict search to one chat session)',
+    includeArchived: 'boolean (optional, default false)',
+  },
+  async handler(args, ctx) {
+    // eslint-disable-next-line global-require
+    const { searchSessions } = require('../session-search');
+    return searchSessions(args || {}, ctx || {});
+  },
+};
+
+const session_list = {
+  name: 'session_list',
+  description: 'List the current user\u2019s recent chat sessions (id, title, model, message count, last-updated). Use when the user asks "what was I working on", "show my recent chats", or to find a prior thread to resume before answering.',
+  schema: {
+    limit: 'number (optional, default 10, max 50 — most-recently-updated first)',
+    includeArchived: 'boolean (optional, default false)',
+  },
+  async handler(args, ctx) {
+    // eslint-disable-next-line global-require
+    const { listSessions } = require('../session-recall');
+    return listSessions(args || {}, ctx || {});
+  },
+};
+
+const session_history = {
+  name: 'session_history',
+  description: 'Read the most recent messages from one of the user\u2019s own past chat sessions, in chronological order. Use after session_list/session_search to open a prior thread and recall exactly what was discussed before continuing the work. Only returns sessions owned by the current user.',
+  schema: {
+    sessionId: 'string (required — chat/session id, e.g. from session_list or session_search)',
+    limit: 'number (optional, default 20, max 50 — most recent messages)',
+  },
+  async handler(args, ctx) {
+    // eslint-disable-next-line global-require
+    const { fetchSessionHistory } = require('../session-recall');
+    return fetchSessionHistory(args || {}, ctx || {});
+  },
+};
+
+// ─── Sub-agents (OpenClaw sessions_send / spawn — cost-guarded) ─────────────
+
+const session_send = {
+  name: 'session_send',
+  description: 'Append a message to one of the user\u2019s own existing chat sessions. By default leaves an assistant NOTE (cheap, no agent run) — use this to record a result/follow-up in another session. Set runAgent:true to run a sub-agent on the message (sandboxed, depth- and budget-limited; may cost credits).',
+  schema: {
+    sessionId: 'string (required — target chat id, must belong to the user)',
+    message: 'string (required — content to append)',
+    runAgent: 'boolean (optional, default false — if true, run a sandboxed sub-agent on the message)',
+    thinking: 'string (optional — low|medium|high, only when runAgent:true)',
+  },
+  async handler(args, ctx) {
+    const context = ctx || {};
+    if (args && args.runAgent) {
+      // eslint-disable-next-line global-require
+      const { reserveSpawn } = require('./subagent-guard');
+      const verdict = reserveSpawn(context);
+      if (!verdict.allowed) {
+        return { appended: false, ran: false, reason: verdict.reason };
+      }
+    }
+    // eslint-disable-next-line global-require
+    const { execute } = require('../../skills/session_send/handler');
+    return execute(args || {}, context);
+  },
+};
+
+const session_spawn = {
+  name: 'session_spawn',
+  description: 'Launch a sandboxed sub-agent in a NEW chat session with a focused, self-contained prompt. Use to parallelise a side-task ("research this in the background") without losing the main thread. Runs at depth+1 in sandbox mode, capped by a per-turn budget; returns the new session id and the sub-agent\u2019s answer. May cost credits.',
+  schema: {
+    prompt: 'string (required — self-contained task for the sub-agent; it does NOT see this chat\u2019s history)',
+    title: 'string (optional — short title for the new session, <= 80 chars)',
+    thinking: 'string (optional — low|medium|high, default low)',
+  },
+  async handler(args, ctx) {
+    const context = ctx || {};
+    // eslint-disable-next-line global-require
+    const { reserveSpawn } = require('./subagent-guard');
+    const verdict = reserveSpawn(context);
+    if (!verdict.allowed) {
+      return { spawned: false, reason: verdict.reason };
+    }
+    // eslint-disable-next-line global-require
+    const { execute } = require('../../skills/session_spawn/handler');
+    return execute(args || {}, context);
+  },
+};
+
+// ─── Browser automation (driver injected by caller) ────────────────────────
+
+const browser_navigate = {
+  name: 'browser_navigate',
+  description: 'Navigate the active browser session to an absolute http(s) URL. Requires ctx.browserAgent, ctx.browserDriver, ctx.browserAdapter, or ctx.browser to be injected by the caller.',
+  schema: {
+    url: 'string (required — absolute http(s) URL)',
+  },
+  async handler(args, ctx) {
+    return runBrowserAction('navigate', { url: args?.url }, ctx || {});
+  },
+};
+
+const browser_click = {
+  name: 'browser_click',
+  description: 'Click an element in the active browser session using a CSS selector.',
+  schema: {
+    selector: 'string (required — CSS selector to click)',
+  },
+  async handler(args, ctx) {
+    return runBrowserAction('click', { selector: args?.selector }, ctx || {});
+  },
+};
+
+const browser_type = {
+  name: 'browser_type',
+  description: 'Type text into an element in the active browser session using a CSS selector. The returned evidence redacts the typed text and reports only its length.',
+  schema: {
+    selector: 'string (required — CSS selector for the target input/textarea)',
+    text: 'string (required — text to type)',
+  },
+  async handler(args, ctx) {
+    return runBrowserAction('type', { selector: args?.selector, text: args?.text }, ctx || {});
+  },
+};
+
+const browser_scroll = {
+  name: 'browser_scroll',
+  description: 'Scroll the active browser session. Provide y for pixel delta, selector to scroll to an element, or neither to scroll down one viewport.',
+  schema: {
+    y: 'number (optional — vertical pixel delta; default 800 when selector is omitted)',
+    selector: 'string (optional — CSS selector to scroll into view)',
+  },
+  async handler(args, ctx) {
+    const payload = {};
+    const selector = typeof args?.selector === 'string' && args.selector.trim() ? args.selector.trim() : '';
+    if (selector) payload.selector = selector;
+    const y = Number(args?.y);
+    if (Number.isFinite(y)) payload.y = y;
+    if (!selector && !Number.isFinite(y)) payload.y = 800;
+    return runBrowserAction('scroll', payload, ctx || {});
+  },
+};
+
+// ─── GitHub search (repos / code / issues / users / topics) ─────────────────
+//
+// Mines open-source projects worldwide for libraries, prior art and reference
+// implementations. Repositories / issues / users / topics work with no API key
+// (GitHub's 10 req/min anonymous search budget); code search needs a token
+// (SIRAGPT_GITHUB_TOKEN || GITHUB_TOKEN). Degrades gracefully without one.
+
+const github_search = {
+  name: 'github_search',
+  description: 'Search GitHub for open-source repositories, code, issues/PRs, users/orgs or topics. Use to find libraries, reference implementations and prior art across projects worldwide. type defaults to "repositories" (ranked by stars). Code search needs a configured token. Returns up to limit normalised hits.',
+  schema: {
+    query: 'string (required — keywords, optionally with GitHub qualifiers)',
+    type: 'string (optional — repositories|code|issues|users|topics; default repositories)',
+    limit: 'number (optional, default 10, max 50)',
+    language: 'string (optional — restrict by programming language, e.g. "typescript")',
+    sort: 'string (optional — stars|forks|updated for repos; comments|reactions|updated for issues)',
+    minStars: 'number (optional — minimum star count for repositories)',
+    repo: 'string (optional — owner/name to scope code/issue search)',
+  },
+  async handler(args) {
+    const query = typeof args?.query === 'string' ? args.query.trim() : '';
+    if (!query) return { error: 'missing "query"' };
+    // eslint-disable-next-line global-require
+    const githubSearch = require('../github-search');
+    const opts = {
+      type: args?.type,
+      limit: Math.max(1, Math.min(Number(args?.limit) || 10, 50)),
+      language: typeof args?.language === 'string' ? args.language : undefined,
+      sort: typeof args?.sort === 'string' ? args.sort : undefined,
+      minStars: Number.isFinite(Number(args?.minStars)) ? Number(args.minStars) : undefined,
+      repo: typeof args?.repo === 'string' ? args.repo : undefined,
+    };
+    const { items, type, count, errors, authenticated } = await githubSearch.search(query, opts);
+    return { type, count, authenticated, items, errors: Array.isArray(errors) ? errors : [] };
+  },
+};
+
+// ─── Scientific paper search (arXiv / OpenAlex / CrossRef / PubMed / …) ──────
+//
+// Unified key-less search over the major open scientific-paper APIs plus
+// worldwide regional indices (DOAJ open-access journals, DBLP computer science,
+// DataCite datasets). Use for peer-reviewed sources, citations and lit reviews.
+
+const scientific_search = {
+  name: 'scientific_search',
+  description: 'Search peer-reviewed scientific papers across APIs worldwide (arXiv, OpenAlex, CrossRef, PubMed, Europe PMC, Semantic Scholar, CORE, DOAJ, DBLP, DataCite, SciELO + Redalyc for Latin-American/Iberian sources, bioRxiv + medRxiv for life-science/medical preprints, plus Scopus and Web of Science when their API keys are configured). Results are interleaved across sources so the top reflects diverse providers, not just one. Use when the user needs academic sources, citations, DOIs or a literature review. Returns ranked papers with title, authors, year, venue, citations, abstract and PDF/HTML links.',
+  schema: {
+    query: 'string (required — research topic or keywords)',
+    limit: 'number (optional per-provider cap, default 8, max 25)',
+    providers: 'array (optional subset, e.g. ["biorxiv","medrxiv","scielo","redalyc","scopus","wos"]; default all)',
+    unpaywall: 'boolean (optional — backfill open-access PDF links for DOI hits that lack one, e.g. Scopus/WoS/CrossRef; slightly slower)',
+  },
+  async handler(args) {
+    const query = typeof args?.query === 'string' ? args.query.trim() : '';
+    if (!query) return { error: 'missing "query"' };
+    // eslint-disable-next-line global-require
+    const scientificSearch = require('../scientific-search');
+    const limit = Math.max(1, Math.min(Number(args?.limit) || 8, 25));
+    const providers = Array.isArray(args?.providers) ? args.providers : undefined;
+    const unpaywall = args?.unpaywall === true || args?.unpaywall === 'true';
+    const { papers, errors, providers: used } = await scientificSearch.search(query, { limit, providers, unpaywall });
+    // Slim the payload: the model rarely needs every field and abstracts are long.
+    const slim = (papers || []).slice(0, limit).map((p) => ({
+      source: p.source,
+      title: p.title,
+      authors: (p.authors || []).slice(0, 6).map((a) => a.name).filter(Boolean),
+      year: p.year,
+      venue: p.venue,
+      citations: p.citations,
+      doi: p.doi,
+      openAccess: p.openAccess,
+      url: p.htmlUrl || p.pdfUrl || null,
+      pdfUrl: p.pdfUrl || null,
+      abstract: p.abstract ? String(p.abstract).slice(0, 600) : null,
+    }));
+    return { count: slim.length, providers: used, papers: slim, errors: Array.isArray(errors) ? errors : [] };
+  },
+};
+
+// ─── X (Twitter) live search via xAI Live Search ────────────────────────────
+//
+// Real-time X/Twitter retrieval. Key-gated on XAI_API_KEY: with no key the
+// tool returns `{ configured:false, note }` instead of failing, so the agent
+// can tell the user it needs configuration rather than hallucinating posts.
+
+const x_search = {
+  name: 'x_search',
+  description: 'Search X (Twitter) in real time for recent posts about a topic, person, event or $ticker. Use for breaking news, public sentiment or what people are saying right now on X. Requires XAI_API_KEY (xAI Live Search); when unconfigured it returns configured:false with a note — never invent posts. Returns a concise summary plus the source post URLs (citations).',
+  schema: {
+    query: 'string (required — what to look up on X/Twitter)',
+    maxResults: 'number (optional, default 15, max 30)',
+    handles: 'array (optional — restrict to specific X handles, without the @)',
+    fromDate: 'string (optional — ISO date YYYY-MM-DD lower bound)',
+    toDate: 'string (optional — ISO date YYYY-MM-DD upper bound)',
+  },
+  async handler(args) {
+    const query = typeof args?.query === 'string' ? args.query.trim() : '';
+    if (!query) return { error: 'missing "query"' };
+    // eslint-disable-next-line global-require
+    const xSearch = require('../x-search');
+    const out = await xSearch.search(query, {
+      maxResults: Math.max(1, Math.min(Number(args?.maxResults) || 15, 30)),
+      handles: Array.isArray(args?.handles) ? args.handles : undefined,
+      fromDate: typeof args?.fromDate === 'string' ? args.fromDate : undefined,
+      toDate: typeof args?.toDate === 'string' ? args.toDate : undefined,
+    });
+    return {
+      configured: out.configured,
+      query: out.query,
+      model: out.model,
+      summary: out.summary,
+      count: Array.isArray(out.results) ? out.results.length : 0,
+      results: out.results || [],
+      note: out.note,
+    };
+  },
+};
+
 // ─── Registry ───────────────────────────────────────────────────────────────
 
 const ALL_TOOLS = [
-  read_file, list_files, search_docs, search_code, search_graph, get_symbol, static_checks, propose_patch, web_search, read_url,
+  read_file, list_files, search_docs, search_code, search_graph, get_symbol, static_checks, propose_patch,
+  web_search, read_url, web_extract, session_search, session_list, session_history,
+  session_send, session_spawn,
+  browser_navigate, browser_click, browser_type, browser_scroll,
+  github_search, scientific_search, x_search,
 ];
 
 const TOOLS_BY_NAME = new Map(ALL_TOOLS.map(t => [t.name, t]));
@@ -1153,7 +1522,11 @@ module.exports = {
   TOOLS_BY_NAME,
   pick,
   // individual exports for tests
-  read_file, list_files, search_docs, search_code, search_graph, get_symbol, static_checks, propose_patch, web_search, read_url,
+  read_file, list_files, search_docs, search_code, search_graph, get_symbol, static_checks, propose_patch,
+  web_search, read_url, web_extract, session_search, session_list, session_history,
+  session_send, session_spawn,
+  browser_navigate, browser_click, browser_type, browser_scroll,
+  github_search, scientific_search, x_search,
   STATIC_CHECKS,
   buildCommentCodeMask, // exported for tests
   stripStringLiterals,  // exported for tests

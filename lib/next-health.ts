@@ -70,16 +70,32 @@ export async function backendHealthCheck(
         ? await response.json().catch(() => null)
         : null
 
+      const backendStatus = payload && typeof payload === "object"
+        ? (payload as { status?: unknown }).status
+        : undefined
+      // Propagate the backend's own verdict: a 200 whose body says
+      // "degraded"/"unhealthy" must not read as fully healthy here.
+      const status: HealthStatus = !response.ok
+        ? "unhealthy"
+        : backendStatus === "unhealthy"
+          ? "unhealthy"
+          : backendStatus === "degraded"
+            ? "degraded"
+            : "healthy"
+
       return {
         name: "backend",
-        status: response.ok ? "healthy" : "unhealthy",
+        status,
         critical: true,
         latency_ms: Date.now() - started,
         details: {
           http_status: response.status,
-          backend_status: payload && typeof payload === "object" ? (payload as { status?: unknown }).status : undefined,
+          backend_status: backendStatus,
           endpoint,
           host: safeHost(url),
+          // Full nested check list from the backend's 16-probe /health —
+          // consumed by /admin/health to render per-service cards.
+          checks: extractBackendChecks(payload),
         },
       }
     } catch (error) {
@@ -99,6 +115,24 @@ export async function backendHealthCheck(
       attempts: failures,
     },
   }
+}
+
+// Normalize the backend's nested checks (array of {name,status,...}) into
+// HealthCheck entries; tolerant to missing/garbled payloads.
+export function extractBackendChecks(payload: unknown): HealthCheck[] {
+  if (!payload || typeof payload !== "object") return []
+  const rawChecks = (payload as { checks?: unknown }).checks
+  if (!Array.isArray(rawChecks)) return []
+  const valid: HealthStatus[] = ["healthy", "degraded", "unhealthy", "skipped"]
+  return rawChecks
+    .filter((check): check is Record<string, unknown> => Boolean(check) && typeof check === "object")
+    .map((check) => ({
+      name: `backend:${String(check.name || "desconocido")}`,
+      status: valid.includes(check.status as HealthStatus) ? (check.status as HealthStatus) : "skipped",
+      critical: Boolean(check.critical),
+      latency_ms: Number.isFinite(check.latency_ms as number) ? (check.latency_ms as number) : 0,
+      details: (check.details && typeof check.details === "object") ? (check.details as Record<string, unknown>) : undefined,
+    }))
 }
 
 export function resolveBackendHealthUrls(endpoint = "/health"): string[] {

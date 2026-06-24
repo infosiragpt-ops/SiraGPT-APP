@@ -2,6 +2,11 @@ const prisma = (() => {
   try { return require('../../config/database'); } catch { return null; }
 })();
 
+// Process-level dedup: suppress repeated "orphaned task" warnings for the
+// same taskId — concurrent persistence calls for a single task can produce
+// dozens of identical log lines in a short window. Log once, then stay quiet.
+const _orphanedTaskIds = new Set();
+
 function hasModel(name) {
   return Boolean(prisma && prisma[name]);
 }
@@ -119,6 +124,21 @@ async function upsertAgentTask(task = {}) {
     failedAt: task.failedAt ? new Date(task.failedAt) : null,
   }, task);
   try {
+    // Avoid the classic find-then-create race. Several durable event
+    // writers can persist the same freshly queued task concurrently; a
+    // preflight findFirst() lets all of them observe "missing", then all
+    // but one create() fail with P2002 and Prisma logs a noisy error. A
+    // skip-duplicates insert is idempotent at the database boundary.
+    if (typeof prisma.agentTask.createMany === 'function') {
+      const created = await prisma.agentTask.createMany({
+        data: [data],
+        skipDuplicates: true,
+      });
+      if (created?.count > 0) {
+        return await prisma.agentTask.findFirst({ where: { id: data.id } });
+      }
+    }
+
     const existing = await prisma.agentTask.findFirst({
       where: buildExistingTaskLookup(data),
       select: { id: true },
@@ -141,6 +161,19 @@ async function upsertAgentTask(task = {}) {
         }
         return null;
       }
+    }
+    // P2003 = foreign key constraint failed. The task references a userId
+    // (agent_tasks_userId_fkey) that no longer exists in the User table —
+    // e.g. a deleted account or a session minted against a different DB.
+    // Persistence is impossible by definition, so there is nothing to
+    // retry. Collapse the noisy multi-line Prisma dump into one concise,
+    // intelligible line instead of falling through to the generic warn.
+    if (err?.code === 'P2003') {
+      if (process.env.NODE_ENV !== 'test' && !_orphanedTaskIds.has(data.id)) {
+        _orphanedTaskIds.add(data.id);
+        console.warn(`[agent-task-persistence] task ${data.id} not persisted: userId ${data.userId} has no matching User row (orphaned task)`);
+      }
+      return null;
     }
     if (process.env.NODE_ENV !== 'test') {
       console.warn('[agent-task-persistence] upsert skipped:', err?.message || err);

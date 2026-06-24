@@ -38,12 +38,14 @@ const USE_EXTERNAL_BACKEND =
     !isLoopbackBackendUrl(EXTERNAL_BACKEND_URL) &&
     process.env.REPLIT_BACKEND_MODE !== "sidecar");
 const BACKEND_PROXY_URL = USE_EXTERNAL_BACKEND ? EXTERNAL_BACKEND_URL : LOCAL_BACKEND_URL;
-// Frontend must bind to the port declared in .replit's deploy config
-// (localPort=3000 → externalPort=80). Replit Autoscale also injects
-// PORT=5000 into the container, which we deliberately ignore — using
-// it here would leave port 3000 closed and Autoscale would mark the
-// deployment as failed ("required port was never opened, expected port 3000").
-// FRONTEND_PORT is overridable for local dev only.
+// Replit's deploy health-check probes the localPort declared in .replit's
+// [[ports]] entry that maps to externalPort=80 (currently 3000), and the run
+// command sets FRONTEND_PORT=3000 to match. We honor FRONTEND_PORT so the
+// frontend opens exactly the port Replit probes.
+// NOTE: Replit also injects PORT=5000 as a container default, but that value
+// does NOT match the [[ports]] mapping (3000 → 80), so we must NOT use it for
+// the frontend — doing so makes the health-check fail with
+// "required port was never opened, expected port 3000".
 const FRONTEND_PORT = Number(process.env.FRONTEND_PORT || 3000);
 const BACKEND_READY_TIMEOUT_MS = Number(process.env.BACKEND_READY_TIMEOUT_MS || 120_000);
 
@@ -161,6 +163,21 @@ function onChildExit(name, code, signal) {
     log("start-all", `${name} exited during shutdown`, { code, signal });
     return;
   }
+  // In a Replit deployment the health-check probes the FRONTEND (local port
+  // 3000 → external 80). Only the frontend dying means there is nothing left
+  // to serve, so that is the one case that should tear the whole container
+  // down. If the BACKEND exits (e.g. a transient boot/migration hiccup), keep
+  // the frontend online: the health-check still passes, the deployment can go
+  // live, and the backend failure becomes visible in production runtime logs
+  // instead of failing the entire promote with zero diagnostics. This mirrors
+  // the intent of the waitForPort() timeout path below. Outside deployments
+  // (a plain local `npm start`) we keep the strict teardown so a developer
+  // notices immediately when the backend dies.
+  if (name === "backend" && process.env.REPLIT_DEPLOYMENT === "1") {
+    log("start-all", "backend exited — keeping frontend online so the deploy health-check can still pass", { code, signal });
+    backend = null;
+    return;
+  }
   log("start-all", `${name} exited unexpectedly — tearing down container`, { code, signal });
   shuttingDown = true;
   for (const c of [backend, frontend]) {
@@ -220,6 +237,26 @@ async function main() {
     });
     return;
   }
+
+  // On a constrained single-vCPU deploy VM, the backend's heavy boot (DB
+  // migrations, ~20 cron jobs, BullMQ workers, model/catalog loading) competes
+  // with the frontend for CPU during the exact window when Replit's startup
+  // probe is hitting GET / on FRONTEND_PORT. If the probe is starved it times
+  // out and the whole promote fails even though the build was fine. Let the
+  // frontend open its port (the probe target) before starting the CPU-heavy
+  // backend so the health-check is not contended. Non-fatal: if the port never
+  // opens in time, start the backend anyway so we never deadlock the boot.
+  // Guard against a non-numeric override (e.g. "90s") producing NaN, which
+  // would make waitForPort's deadline NaN and loop forever — deadlocking boot
+  // since this wait is awaited before the backend spawns.
+  const parsedFrontendTimeout = Number(process.env.FRONTEND_READY_TIMEOUT_MS);
+  const frontendReadyTimeoutMs =
+    Number.isFinite(parsedFrontendTimeout) && parsedFrontendTimeout > 0
+      ? parsedFrontendTimeout
+      : 90_000;
+  await waitForPort("127.0.0.1", FRONTEND_PORT, frontendReadyTimeoutMs)
+    .then(() => log("start-all", "frontend port open; starting backend", { port: FRONTEND_PORT }))
+    .catch((err) => log("start-all", "frontend readiness wait timed out; starting backend anyway", { error: err?.message }));
 
   backend = spawnBackend();
   const timeoutMs = Number(process.env.BACKEND_READY_TIMEOUT_MS || 300_000);

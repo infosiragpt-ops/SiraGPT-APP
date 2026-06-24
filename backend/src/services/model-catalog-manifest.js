@@ -1,3 +1,5 @@
+const { listFalVideoModels } = require('./fal-video-model-catalog');
+
 const PROVIDER_CATALOGS = Object.freeze([
   {
     key: 'openai',
@@ -25,6 +27,13 @@ const PROVIDER_CATALOGS = Object.freeze([
     provider: 'DeepSeek',
     displayName: 'DeepSeek',
     apiKeyEnv: 'DEEPSEEK_API_KEY',
+    supportsModelCatalog: true,
+  },
+  {
+    key: 'falai',
+    provider: 'fal.ai',
+    displayName: 'fal.ai Video',
+    apiKeyEnv: 'FAL_API_KEY',
     supportsModelCatalog: true,
   },
 ]);
@@ -194,6 +203,15 @@ const STATIC_MODEL_MANIFEST = Object.freeze([
     tags: ['openrouter', 'google', 'gemini', 'image', 'professional'],
   },
   {
+    id: 'google/gemini-2.5-flash-image',
+    name: 'google/gemini-2.5-flash-image',
+    displayName: 'Gemini 2.5 Flash Image',
+    provider: 'OpenRouter',
+    type: 'IMAGE',
+    description: 'Google Gemini 2.5 Flash Image via OpenRouter for reliable image fallback generation.',
+    tags: ['openrouter', 'google', 'gemini', 'image', 'fast'],
+  },
+  {
     id: 'bytedance-seed/seedream-4.5',
     name: 'bytedance-seed/seedream-4.5',
     displayName: 'Seedream 4.5',
@@ -239,6 +257,51 @@ const STATIC_MODEL_MANIFEST = Object.freeze([
     tags: ['openrouter', 'flux', 'image', 'photorealistic', 'ultra'],
   },
   {
+    id: 'gpt-image-2',
+    name: 'gpt-image-2',
+    displayName: 'GPT Image 2',
+    provider: 'OpenAI',
+    type: 'IMAGE',
+    description: 'OpenAI GPT Image 2: high quality image generation through the direct OpenAI Images API.',
+    tags: ['openai', 'gpt', 'image', 'professional'],
+  },
+  {
+    id: 'gpt-image-1',
+    name: 'gpt-image-1',
+    displayName: 'GPT Image 1',
+    provider: 'OpenAI',
+    type: 'IMAGE',
+    description: 'OpenAI GPT Image 1: reliable image generation through the direct OpenAI Images API.',
+    tags: ['openai', 'gpt', 'image', 'reliable'],
+  },
+  {
+    id: 'gpt-image-1.5',
+    name: 'gpt-image-1.5',
+    displayName: 'GPT Image 1.5',
+    provider: 'OpenAI',
+    type: 'IMAGE',
+    description: 'OpenAI GPT Image 1.5: reliable image generation through the direct OpenAI Images API.',
+    tags: ['openai', 'gpt', 'image', 'reliable'],
+  },
+  {
+    id: 'gpt-image-1-mini',
+    name: 'gpt-image-1-mini',
+    displayName: 'GPT Image 1 Mini',
+    provider: 'OpenAI',
+    type: 'IMAGE',
+    description: 'OpenAI GPT Image 1 Mini: compact image generation through the direct OpenAI Images API.',
+    tags: ['openai', 'gpt', 'image', 'fast'],
+  },
+  {
+    id: 'gpt-image-2-2026-04-21',
+    name: 'gpt-image-2-2026-04-21',
+    displayName: 'GPT Image 2 (2026-04-21)',
+    provider: 'OpenAI',
+    type: 'IMAGE',
+    description: 'Pinned OpenAI GPT Image 2 release for high quality image generation.',
+    tags: ['openai', 'gpt', 'image', 'professional'],
+  },
+  {
     id: 'dall-e-3',
     name: 'dall-e-3',
     displayName: 'DALL-E 3',
@@ -265,6 +328,38 @@ const STATIC_MODEL_MANIFEST = Object.freeze([
     description: 'Imagen 4 de Google: generacion de imagenes fotorealistas.',
     tags: ['gemini', 'google', 'imagen', 'image', 'photorealistic'],
   },
+  {
+    id: 'fal-ai/flux/schnell',
+    name: 'fal-ai/flux/schnell',
+    displayName: 'FLUX Schnell (fal.ai)',
+    provider: 'Fal',
+    type: 'IMAGE',
+    description: 'FLUX.1 [schnell] vía fal.ai: generación de imágenes ultrarrápida (1-3 s), ideal para evitar timeouts.',
+    pricing: { provider: 'fal.ai', billing: 'per_generation' },
+    tags: ['fal.ai', 'flux', 'image', 'fast'],
+  },
+  {
+    id: 'fal-ai/flux/dev',
+    name: 'fal-ai/flux/dev',
+    displayName: 'FLUX Dev (fal.ai)',
+    provider: 'Fal',
+    type: 'IMAGE',
+    description: 'FLUX.1 [dev] vía fal.ai: alta calidad fotorealista con buen balance velocidad/detalle.',
+    pricing: { provider: 'fal.ai', billing: 'per_generation' },
+    tags: ['fal.ai', 'flux', 'image', 'photorealistic'],
+  },
+  {
+    id: 'fal-ai/flux-pro/v1.1',
+    name: 'fal-ai/flux-pro/v1.1',
+    displayName: 'FLUX 1.1 Pro (fal.ai)',
+    provider: 'Fal',
+    type: 'IMAGE',
+    description: 'FLUX 1.1 Pro vía fal.ai: máxima calidad profesional de imagen.',
+    pricing: { provider: 'fal.ai', billing: 'per_generation' },
+    tags: ['fal.ai', 'flux', 'image', 'professional', 'ultra'],
+  },
+  // ── VIDEO models via fal.ai, ordered from highest to lower quality ──────
+  ...listFalVideoModels(),
   // ── AUDIO models ───────────────────────────────────────────────────────
   {
     id: 'whisper-1',
@@ -400,6 +495,7 @@ function normalizeModelRecord(model, providerOverride = null, source = 'api') {
     displayName: model.displayName || model.name || model.id,
     provider,
     type: model.type || 'TEXT',
+    icon: model.icon || null,
     description: model.description || '',
     contextLength: model.contextLength || model.context_length || null,
     maxTokens: model.maxTokens || model.max_tokens || null,
@@ -509,9 +605,24 @@ function getProviderCatalogDiagnostics({ includeModels = false } = {}) {
   });
 }
 
+// Curated set of IMAGE models that should be ACTIVE and selectable out of the
+// box. Keep this to models verified against the production credentials; models
+// that require different billing or provider keys remain in the catalog but
+// inactive until an admin validates them. This set is shared with the seeding
+// layer and /generate-image allow-list, so active defaults are accepted by chat.
+const DEFAULT_ACTIVE_IMAGE_MODEL_NAMES = new Set([
+  'gpt-image-2',
+  'gpt-image-1',
+  'gpt-image-1.5',
+  'gpt-image-1-mini',
+  'gpt-image-2-2026-04-21',
+  'google/gemini-3.1-flash-image-preview',
+]);
+
 module.exports = {
   PROVIDER_CATALOGS,
   STATIC_MODEL_MANIFEST,
+  DEFAULT_ACTIVE_IMAGE_MODEL_NAMES,
   getProviderCatalogDiagnostics,
   listManifestModels,
   mergeProviderModels,

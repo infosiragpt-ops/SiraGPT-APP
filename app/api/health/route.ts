@@ -13,7 +13,15 @@ export async function HEAD(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
-  const checks = [frontendCheck(), await backendHealthCheck("/health")]
+  const backend = await backendHealthCheck("/health")
+  // Surface the backend's 16 nested probes (database, redis, queue,
+  // model_providers, …) as first-class checks so /admin/health can render
+  // its per-service cards; the backend summary entry keeps its name for
+  // existing consumers. summarizeHealth propagates "degraded" honestly.
+  const nested = Array.isArray(backend.details?.checks)
+    ? (backend.details.checks as ReturnType<typeof frontendCheck>[])
+    : []
+  const checks = [frontendCheck(), backend, ...nested]
   const status = summarizeHealth(checks)
 
   return noStoreJson(request, {

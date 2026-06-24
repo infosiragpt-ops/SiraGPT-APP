@@ -8,23 +8,25 @@ const usageService = {
      */
     async recordUsage(userId, modelName, tokensUsed, costTotal) {
         try {
-            // ✅ Save in ApiUsage
-            await prisma.apiUsage.create({
-                data: {
-                    userId,
-                    model: modelName,
-                    tokens: tokensUsed,
-                    cost: costTotal,
-                },
-            });
-
-            // ✅ Update user's total usage
-            await prisma.user.update({
-                where: { id: userId },
-                data: {
-                    apiUsage: { increment: tokensUsed },
-                },
-            });
+            // Save the ApiUsage row and bump the user counter atomically — a
+            // failure between the two would leave the row-based and
+            // counter-based usage views disagreeing.
+            await prisma.$transaction([
+                prisma.apiUsage.create({
+                    data: {
+                        userId,
+                        model: modelName,
+                        tokens: tokensUsed,
+                        cost: costTotal,
+                    },
+                }),
+                prisma.user.update({
+                    where: { id: userId },
+                    data: {
+                        apiUsage: { increment: tokensUsed },
+                    },
+                }),
+            ]);
         } catch (error) {
             console.error("Error recording usage:", error);
             throw new Error("Failed to record usage.");

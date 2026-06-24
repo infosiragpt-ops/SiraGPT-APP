@@ -52,6 +52,7 @@
     ".test-dist",
     "vitest.config.ts",
     "packages",
+    "vendor",
     "**/upstream/**"
   ]
 }

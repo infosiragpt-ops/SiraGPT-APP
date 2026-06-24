@@ -105,8 +105,8 @@ class BulkheadPool extends EventEmitter {
     // Higher priority numbers execute first. Default priority = 0.
     this._queue = [];
 
-    // Track active operation IDs for cancellation
-    this._activeOps = new Map();
+    // Monotonic operation-id counter — opId is surfaced in acquired/released
+    // events and threaded into each release closure.
     this._opCounter = 0;
 
     if (this.maxConcurrent < 1) {
@@ -141,7 +141,6 @@ class BulkheadPool extends EventEmitter {
       if (this._active < this.maxConcurrent) {
         this._active++;
         const opId = ++this._opCounter;
-        this._activeOps.set(opId, true);
         this.emit('acquired', { name: this.name, active: this._active, opId });
 
         resolve(this._createRelease(opId));
@@ -230,7 +229,6 @@ class BulkheadPool extends EventEmitter {
     return () => {
       if (released) return;
       released = true;
-      this._activeOps.delete(opId);
       this._active--;
       this.emit('released', { name: this.name, active: this._active, opId });
 
@@ -258,7 +256,6 @@ class BulkheadPool extends EventEmitter {
       this._detachAbort(entry);
       this._active++;
       const opId = ++this._opCounter;
-      this._activeOps.set(opId, true);
       this.emit('acquired', { name: this.name, active: this._active, opId, fromQueue: true });
       entry.resolve(this._createRelease(opId));
     }
@@ -326,20 +323,27 @@ class BulkheadPool extends EventEmitter {
 
     if (this._active === 0) return;
 
-    // Wait for active operations to complete (or timeout)
-    return new Promise((resolve, reject) => {
+    // Wait for active operations to complete (or timeout).
+    // The 'released' listener is named and detached on BOTH settle paths
+    // so a drained (and possibly re-cached) pool never accumulates stale
+    // listeners — leaving it attached leaked a closure per drain and
+    // tripped MaxListenersExceededWarning after 10 drains on a reused pool.
+    return new Promise((resolve) => {
+      const onReleased = () => {
+        if (this._active === 0) {
+          clearTimeout(timer);
+          this.removeListener('released', onReleased);
+          this.emit('drained', { name: this.name });
+          resolve();
+        }
+      };
       const timer = setTimeout(() => {
+        this.removeListener('released', onReleased);
         this.emit('drain_timeout', { name: this.name, remainingActive: this._active });
         resolve(); // Resolve anyway — don't block shutdown forever
       }, timeoutMs);
 
-      this.on('released', () => {
-        if (this._active === 0) {
-          clearTimeout(timer);
-          this.emit('drained', { name: this.name });
-          resolve();
-        }
-      });
+      this.on('released', onReleased);
     });
   }
 }

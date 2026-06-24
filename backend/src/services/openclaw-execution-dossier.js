@@ -59,6 +59,7 @@ function scoreMode(prompt, profile = {}) {
   if (profile.signals?.wantsRepair) scores.set('repair_agent', (scores.get('repair_agent') || 0) + 0.45);
   if (profile.signals?.referencesVisualContext) scores.set('document_intelligence', (scores.get('document_intelligence') || 0) + 0.35);
   if (profile.signals?.likelyLongRunning) scores.set('software_agent', (scores.get('software_agent') || 0) + 0.2);
+  if (profile.signals?.wantsAutonomousAgent) scores.set('software_agent', (scores.get('software_agent') || 0) + 0.3);
   if (!scores.size) scores.set('conversation_agent', 0.5);
   const ranked = [...scores.entries()].sort((a, b) => b[1] - a[1]);
   return {
@@ -173,6 +174,30 @@ function buildWorkPackets(mode, prompt, profile = {}) {
     });
   }
 
+  if (profile.signals?.massiveSourceFusion) {
+    packets.splice(2, 0, {
+      id: 'bulk_source_inventory',
+      label: 'Inventory and triage bulk source before fusion',
+      required: true,
+      doneWhen: 'source folders, licenses, dependencies, side effects, tests, and activation candidates are mapped before any runtime copy is enabled',
+    });
+    packets.push({
+      id: 'activation_budget',
+      label: 'Activate only verified native slices',
+      required: true,
+      doneWhen: 'each activated slice has a SiraGPT owner surface, rollback path, and focused test proof',
+    });
+  }
+
+  if (profile.signals?.wantsAutonomousAgent) {
+    packets.splice(3, 0, {
+      id: 'autonomous_runtime',
+      label: 'Preserve autonomous agent execution loop',
+      required: true,
+      doneWhen: 'plan, tool execution, checkpoints, verification, and residual risk are represented in runtime state',
+    });
+  }
+
   if (profile.signals?.wantsRepair || mode === 'repair_agent') {
     packets.splice(1, 0, {
       id: 'repair',
@@ -212,6 +237,15 @@ function buildQualityGates(mode, profile = {}) {
   if (profile.signals?.externalRepoAdaptation || profile.signals?.nativeRewriteRequired) {
     gates.push('external_repo_mapped', 'native_rewrite_no_verbatim_copy', 'active_runtime_import_boundary_checked');
   }
+  if (profile.signals?.massiveSourceFusion) {
+    gates.push(
+      'bulk_source_inventory_completed',
+      'license_attribution_preserved',
+      'activation_budget_enforced',
+      'bulk_copy_kept_out_of_active_runtime',
+    );
+  }
+  if (profile.signals?.wantsAutonomousAgent) gates.push('autonomous_plan_execute_verify_loop');
   if (profile.signals?.referencesVisualContext) gates.push('attachment_or_visual_evidence_checked');
   if (profile.signals?.wantsRepair) gates.push('previous_mismatch_corrected');
   if (mode === 'software_agent') gates.push('repo_inspected', 'tests_or_typecheck_attempted', 'changed_files_summarized');
@@ -254,6 +288,22 @@ function buildRiskControls(profile = {}) {
     controls.push({
       risk: 'upstream_code_contamination',
       mitigation: 'use upstream as reference-only input and implement equivalent behavior through SiraGPT-owned contracts and tests',
+    });
+  }
+  if (profile.signals?.massiveSourceFusion) {
+    controls.push({
+      risk: 'mass_copy_bloat',
+      mitigation: 'inventory and rank upstream modules, then activate only the smallest verified SiraGPT-native slices',
+    });
+    controls.push({
+      risk: 'license_attribution_loss',
+      mitigation: 'preserve MIT notices for reference snapshots and document source commit before any copied material is stored',
+    });
+  }
+  if (profile.signals?.wantsAutonomousAgent) {
+    controls.push({
+      risk: 'premature_autonomy_claim',
+      mitigation: 'represent autonomous work as durable plan, executed tools, checkpoints, and verification instead of branding language',
     });
   }
   return controls;

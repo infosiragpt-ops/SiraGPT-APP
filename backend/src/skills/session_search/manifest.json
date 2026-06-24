@@ -1,0 +1,32 @@
+{
+  "id": "session_search",
+  "name": "Search chat sessions",
+  "version": "1.0.0",
+  "description": "Search the user's past chat conversations and return matching message snippets with session ids and titles.",
+  "capabilities": ["agent:read"],
+  "params": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "Terms to search in past chat messages."
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 25,
+        "description": "How many matching snippets to return. Default 8."
+      },
+      "sessionId": {
+        "type": "string",
+        "description": "Optional chat/session id to restrict the search."
+      },
+      "includeArchived": {
+        "type": "boolean",
+        "description": "Include archived chats too. Default false."
+      }
+    },
+    "required": ["query"],
+    "additionalProperties": false
+  }
+}

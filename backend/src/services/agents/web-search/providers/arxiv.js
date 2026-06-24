@@ -79,7 +79,7 @@ function parseEntries(xml, maxResults) {
 async function search(query, { maxResults = 5, signal } = {}) {
   const params = new URLSearchParams({
     search_query: `all:${query}`,
-    max_results: String(Math.max(1, Math.min(maxResults, 20))),
+    max_results: String(Math.max(1, Math.min(maxResults, 50))),
     sortBy: 'relevance',
     sortOrder: 'descending',
   });

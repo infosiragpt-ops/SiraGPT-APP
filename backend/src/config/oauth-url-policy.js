@@ -177,18 +177,16 @@ function buildCallbackUrl(env, explicitEnvKey, callbackPath) {
   const backendBaseUrl = resolvePublicBackendUrl(env);
   const configured = stripTrailingSlash(env[explicitEnvKey]);
   if (configured && isUsablePublicUrl(configured, env, backendBaseUrl)) {
-    // When GOOGLE_AUTH_BASE_URL is explicitly set it is the authoritative
-    // backend origin. A stale explicit callback URI pointing to a different
-    // host (e.g. GOOGLE_AUTH_URI still set to api.siragpt.com while
-    // GOOGLE_AUTH_BASE_URL is siragpt.com) must be ignored so the env var
-    // fix actually takes effect without requiring the caller to also clear
-    // every per-flow URI secret.
-    if (env.GOOGLE_AUTH_BASE_URL) {
-      const configuredHost = normalizeHostname(parseUrl(configured)?.hostname || '');
-      const backendHost = normalizeHostname(parseUrl(backendBaseUrl)?.hostname || '');
-      if (configuredHost && backendHost && configuredHost !== backendHost) {
-        return `${backendBaseUrl}${callbackPath}`;
-      }
+    // Reject any explicit callback URI that points to a different host than
+    // the resolved backend origin. This catches stale per-flow URI secrets
+    // (e.g. GOOGLE_AUTH_URI still set to api.siragpt.com when the backend
+    // now lives on siragpt.com) without requiring GOOGLE_AUTH_BASE_URL to be
+    // set. Same-host URIs are accepted as-is so custom callback paths on the
+    // correct host still work.
+    const configuredHost = normalizeHostname(parseUrl(configured)?.hostname || '');
+    const backendHost = normalizeHostname(parseUrl(backendBaseUrl)?.hostname || '');
+    if (configuredHost && backendHost && configuredHost !== backendHost) {
+      return `${backendBaseUrl}${callbackPath}`;
     }
     return configured;
   }

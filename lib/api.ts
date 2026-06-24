@@ -2,7 +2,6 @@
 import { streamSseJson } from "./sse-client"
 import { sanitizeFetchHeaders } from "./fetch-sanitize"
 import { reportClientLog } from "./client-logs"
-import { safeUUID } from "./safe-uuid"
 export { getNormalizedApiBaseUrl } from "./api-base-url"
 import { getNormalizedApiBaseUrl } from "./api-base-url"
 // Codegen'd from backend/src/schemas/* — DO NOT edit by hand. Regenerate
@@ -187,8 +186,171 @@ function isExpectedAuthApiFailure(args: {
   return false
 }
 
+// A benign 404 on GET /chats/<id> (chat deleted, or a stale id restored from
+// localStorage) is expected — don't report it as an api error. Kept narrow:
+// GET only, 404 only, EXACT /chats/<id> (never nested routes like
+// /chats/:id/messages), so genuine failures still surface.
+function isExpectedMissingChat(args: {
+  endpoint: string
+  method: string
+  status?: number | null
+}): boolean {
+  if (Number(args.status) !== 404) return false
+  if (String(args.method || "GET").toUpperCase() !== "GET") return false
+  return /^\/chats\/[^/]+$/.test(normalizedEndpointPath(args.endpoint))
+}
+
+export type WebSource = {
+  title: string
+  url: string
+  snippet?: string
+  domain?: string
+  confidence?: string
+}
+
+export type WebSourcesPayload = {
+  provider?: string
+  query?: string
+  elapsedMs?: number
+  sources: WebSource[]
+}
+
+export type MemoryItem = {
+  id?: string
+  fact: string
+  category?: string
+  tier?: string
+  polarity?: string
+  confidence?: number | null
+  relevance?: number | null
+  matchedTopics?: string[]
+  semantic?: number | null
+  why?: string
+  ageMs?: number | null
+  strength?: number | null
+  score?: number | null
+}
+
+export type MemoryPayload = {
+  reason?: string
+  confidence?: number | null
+  items: MemoryItem[]
+}
+
+// ── Agent harness (Phase 1) typed SSE events ───────────────────────────────
+// Every frame carries a globally monotonic `seq` plus a `blockIndex` (one
+// block per tool call), so the store renders deterministically regardless of
+// frame interleaving or stream reconnects.
+export type AgentToolCallStartEvent = {
+  type: 'tool_call_start'
+  seq: number
+  blockIndex: number
+  id: string
+  name: string
+  humanDescription?: string
+  args?: string
+  permissionTier?: 'auto' | 'confirm'
+}
+export type AgentToolExecutingEvent = {
+  type: 'tool_executing'
+  seq: number
+  blockIndex: number
+  id: string
+  name?: string
+}
+export type AgentToolResultEvent = {
+  type: 'tool_result'
+  seq: number
+  blockIndex: number
+  id: string
+  name?: string
+  preview?: string
+  isError?: boolean
+  durationMs?: number
+  status?: string
+}
+export type AgentPermissionRequestEvent = {
+  type: 'permission_request'
+  seq: number
+  blockIndex: number
+  id: string
+  permissionId: string
+  name: string
+  humanDescription?: string
+  args?: string
+  expiresInMs?: number
+}
+export type AgentPermissionResolvedEvent = {
+  type: 'permission_resolved'
+  seq: number
+  blockIndex: number
+  id: string
+  decision?: string
+  scope?: string
+  cached?: boolean
+}
+export type AgentDoneEvent = {
+  type: 'agent_done'
+  seq: number
+  blockIndex?: number
+  steps?: number
+  toolCalls?: number
+  errors?: number
+  durationMs?: number
+  tokensEstimate?: number
+  costUsdEstimate?: number | null
+  stoppedReason?: string | null
+  interrupted?: boolean
+}
+export type AgentStreamEvent =
+  | AgentToolCallStartEvent
+  | AgentToolExecutingEvent
+  | AgentToolResultEvent
+  | AgentPermissionRequestEvent
+  | AgentPermissionResolvedEvent
+  | AgentDoneEvent
+
+/** Registered external MCP server (headers never leave the backend). */
+export type McpServerInfo = {
+  id: string
+  name: string
+  url: string
+  transport: 'streamable-http' | 'sse'
+  enabled: boolean
+  hasHeaders: boolean
+  createdAt?: string
+  updatedAt?: string
+}
+
+const AGENT_STREAM_EVENT_TYPES = new Set([
+  'tool_call_start',
+  'tool_executing',
+  'tool_result',
+  'permission_request',
+  'permission_resolved',
+  'agent_done',
+])
+
 type AIStreamOptions = {
   onReplace?: (content: string) => void
+  onSources?: (payload: WebSourcesPayload) => void
+  onMemory?: (payload: MemoryPayload) => void
+  // Claude-style extended thinking. `onReasoning` receives each
+  // chain-of-thought delta while the model is in its thinking phase;
+  // `onReasoningDone` fires once with the total thinking duration when the
+  // first visible token arrives (or the stream ends thought-only).
+  onReasoning?: (delta: string) => void
+  onReasoningDone?: (durationMs: number) => void
+  // Tool-call deltas surfaced by reasoning models mid-stream: `name` arrives
+  // on the first frame for an index, `argsDelta` carries argument fragments.
+  onToolCall?: (payload: { index: number; name?: string; argsDelta?: string }) => void
+  // Agent harness: typed tool-call / permission / done frames (AgentTrace).
+  onAgentEvent?: (event: AgentStreamEvent) => void
+  // Real token usage (+ optional USD cost) emitted once at stream end, so a
+  // caller can show an honest "Agent Usage" figure. costOriginalUsd is the
+  // provider list price; costAppliedUsd is after the plan policy (struck-through
+  // original → applied when they differ).
+  onUsage?: (payload: { tokensIn: number; tokensOut: number; model?: string; costOriginalUsd?: number; costAppliedUsd?: number }) => void
 }
 
 export type GrokVoiceSessionSnapshot = {
@@ -294,6 +456,7 @@ class ApiClient {
   // JS-readable) and an httpOnly `_csrf_secret` cookie. Mutating requests
   // must echo the public token in the `X-CSRF-Token` header.
   private _csrfTokenInFlight: Promise<string | null> | null = null;
+  private _csrfToken: string | null = null; // cached stateless token (Safari ITP path)
 
   constructor(baseURL: string) {
     this.baseURL = baseURL;
@@ -314,6 +477,13 @@ class ApiClient {
   }): void {
     if (args.endpoint.startsWith("/telemetry")) return
     if (isExpectedAuthApiFailure(args)) return
+    if (isExpectedMissingChat(args)) return
+    // A stable "not configured" 503 (e.g. Stripe billing off) is an expected
+    // config state, not a server outage — don't report it as a server-error.
+    if (
+      Number(args.status) === 503 &&
+      /not[ _]?configured/i.test(`${args.message || ""} ${JSON.stringify(args.extra || {})}`)
+    ) return
     reportClientLog({
       source: "api",
       severity: args.status && args.status >= 500 ? "error" : "warn",
@@ -348,9 +518,22 @@ class ApiClient {
    *     RETRY_AFTER_MAX_MS so a misbehaving server with a 1-hour
    *     Retry-After can't pin the UI for an hour.
    */
-  private async request(endpoint: string, options: RequestInit & { timeoutMs?: number } = {}) {
+  private async request(endpoint: string, options: RequestInit & { timeoutMs?: number; maxRetries?: number; suppressFailureLog?: boolean } = {}) {
     const url = `${this.baseURL}${endpoint}`;
     const timeoutMs = options.timeoutMs ?? this.DEFAULT_TIMEOUT_MS;
+    const callerSignal = options.signal as AbortSignal | undefined;
+    const makeAbortError = () => {
+      const error = typeof DOMException !== 'undefined'
+        ? new DOMException('Request aborted', 'AbortError')
+        : new Error('Request aborted');
+      (error as any).name = 'AbortError';
+      return error;
+    };
+    // Per-request retry override. Expensive, non-idempotent generations
+    // (image/video) pass 0: an automatic retry of a timed-out generation
+    // triples the provider spend and multiplies the user's wait — the
+    // caller recovers via chat polling instead.
+    const maxRetries = options.maxRetries ?? this.MAX_RETRIES;
 
     // Build headers once (they don't change between retries — and
     // Idempotency-Key MUST stay stable across retries for the
@@ -369,11 +552,15 @@ class ApiClient {
     }
 
     // Idempotency-Key auto-injection. Only for mutating verbs and
-    // only when the caller didn't supply one. safeUUID covers LAN /
-    // plain-HTTP browser contexts where crypto.randomUUID is missing.
+    // only when the caller didn't supply one. crypto.randomUUID is
+    // baseline in Node 18+ / Chrome 92+ / Safari 15.4+; the
+    // existence check covers older environments without crashing.
     const isMutating = method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE';
     if (isMutating && method !== 'DELETE' && !headers.has('Idempotency-Key') && !headers.has('idempotency-key')) {
-      headers.set('Idempotency-Key', safeUUID());
+      const cryptoObj = (typeof globalThis !== 'undefined' ? (globalThis as any).crypto : null);
+      if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
+        headers.set('Idempotency-Key', cryptoObj.randomUUID());
+      }
     }
 
     // CSRF double-submit token. Backend requires X-CSRF-Token on mutating
@@ -390,10 +577,18 @@ class ApiClient {
     // Track last error for re-throw on final failure
     let lastError: Error & { status?: number; statusCode?: number; errorData?: any } | null = null;
 
-    for (let attempt = 0; attempt <= this.MAX_RETRIES; attempt++) {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      if (callerSignal?.aborted) {
+        throw makeAbortError();
+      }
+
       // AbortController for timeout
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      const abortFromCaller = () => controller.abort();
+      if (callerSignal) {
+        callerSignal.addEventListener('abort', abortFromCaller, { once: true });
+      }
 
       try {
         const config: RequestInit = {
@@ -422,7 +617,7 @@ class ApiClient {
         // because 429 IS retryable (unlike 400, 403, 404, 409).
         if (response.status === 429 || response.status === 503) {
           clearTimeout(timeoutId);
-          if (attempt < this.MAX_RETRIES) {
+          if (attempt < maxRetries) {
             const retryAfterMs = this._parseRetryAfter(getResponseHeader(response, 'retry-after'));
             const waitMs = retryAfterMs !== null
               ? Math.min(retryAfterMs, this.RETRY_AFTER_MAX_MS)
@@ -479,8 +674,7 @@ class ApiClient {
               // by re-fetching) and retry once. We cap at one CSRF retry by
               // tagging the headers so we don't loop indefinitely.
               if (!headers.has('X-CSRF-Retry')) {
-                this._csrfTokenInFlight = null;
-                const fresh = await this._ensureCsrfToken();
+                const fresh = await this._ensureCsrfToken(true);
                 if (fresh) {
                   headers.set('X-CSRF-Token', fresh);
                   headers.set('X-CSRF-Retry', '1');
@@ -516,7 +710,7 @@ class ApiClient {
         (lastError as any).statusCode = response.status;
 
         // If it's the last attempt, try to parse the body for better error
-        if (attempt === this.MAX_RETRIES) {
+        if (attempt === maxRetries) {
           const errorData = await response.json().catch(() => ({ error: 'Server error' }));
           lastError!.message = errorData.error || lastError!.message;
           (lastError as any).errorData = errorData;
@@ -526,6 +720,9 @@ class ApiClient {
 
         // AbortError (timeout) — retry
         if (error.name === 'AbortError') {
+          if (callerSignal?.aborted) {
+            throw makeAbortError();
+          }
           lastError = new Error(`Request timed out after ${timeoutMs}ms`);
           (lastError as any).status = 408;
           (lastError as any).statusCode = 408;
@@ -538,7 +735,7 @@ class ApiClient {
           (lastError as any).status = 0;
           (lastError as any).statusCode = 0;
           // Not the last attempt — retry
-          if (attempt < this.MAX_RETRIES) {
+          if (attempt < maxRetries) {
             const delay = this.BASE_RETRY_DELAY_MS * Math.pow(2, attempt);
             await new Promise(r => setTimeout(r, delay));
             continue;
@@ -547,10 +744,15 @@ class ApiClient {
 
         // For errors thrown inside our block (4xx, already handled), re-throw
         throw error;
+      } finally {
+        clearTimeout(timeoutId);
+        if (callerSignal) {
+          callerSignal.removeEventListener('abort', abortFromCaller);
+        }
       }
 
       // Exponential backoff before retry
-      if (attempt < this.MAX_RETRIES) {
+      if (attempt < maxRetries) {
         const delay = this.BASE_RETRY_DELAY_MS * Math.pow(2, attempt);
         await new Promise(r => setTimeout(r, delay));
       }
@@ -558,14 +760,16 @@ class ApiClient {
 
     // All retries exhausted
     const finalError = lastError || new Error('Request failed after retries');
-    console.error(`[ApiClient] Request failed after ${this.MAX_RETRIES + 1} attempts:`, endpoint, finalError.message);
-    this._reportApiFailure({
-      endpoint,
-      method,
-      status: (finalError as any).status ?? null,
-      requestId: (finalError as any).errorData?.requestId || null,
-      message: finalError.message,
-    })
+    if (!options.suppressFailureLog) {
+      console.error(`[ApiClient] Request failed after ${maxRetries + 1} attempts:`, endpoint, finalError.message);
+      this._reportApiFailure({
+        endpoint,
+        method,
+        status: (finalError as any).status ?? null,
+        requestId: (finalError as any).errorData?.requestId || null,
+        message: finalError.message,
+      })
+    }
     throw finalError;
   }
 
@@ -621,10 +825,17 @@ class ApiClient {
    * GET /api/csrf-token once (deduped via _csrfTokenInFlight) to have the
    * backend mint a fresh pair and surface the public token in the body.
    */
-  private async _ensureCsrfToken(): Promise<string | null> {
+  private async _ensureCsrfToken(forceRefresh = false): Promise<string | null> {
     if (typeof window === 'undefined') return null;
-    const existing = this._readCsrfCookie();
-    if (existing) return existing;
+    if (forceRefresh) { this._csrfToken = null; this._csrfTokenInFlight = null; }
+    // Reuse the last good stateless token first. On Safari ITP the public
+    // csrf_token cookie is dropped/partitioned (split-host) and goes stale,
+    // so the cached stateless token is the only value that keeps validating.
+    if (this._csrfToken) return this._csrfToken;
+    if (!forceRefresh) {
+      const existing = this._readCsrfCookie();
+      if (existing) return existing; // double-submit path (non-Safari / same-origin)
+    }
     if (this._csrfTokenInFlight) return this._csrfTokenInFlight;
     this._csrfTokenInFlight = (async () => {
       try {
@@ -634,7 +845,9 @@ class ApiClient {
         });
         if (!res.ok) return null;
         const data = await res.json().catch(() => null) as { csrfToken?: string } | null;
-        return (data && data.csrfToken) || this._readCsrfCookie();
+        const token = (data && data.csrfToken) || this._readCsrfCookie();
+        if (token) this._csrfToken = token; // cache the freshly minted stateless token
+        return token;
       } catch {
         return null;
       } finally {
@@ -814,6 +1027,17 @@ class ApiClient {
 
   async getActiveChatRuns(): Promise<{ runs: ChatRunSummary[] }> {
     return (await this.request('/chats/active-runs')) as { runs: ChatRunSummary[] };
+  }
+
+  /** Forget a single recalled memory by id (powers the "Olvidar" action). */
+  async forgetMemory(id: string): Promise<boolean> {
+    if (!id) return false;
+    try {
+      await this.request(`/cowork/memory/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async getActiveChatRun(chatId: string): Promise<{ run: ChatRunSummary | null }> {
@@ -1045,6 +1269,60 @@ class ApiClient {
     });
   }
 
+  /**
+   * Answer a pending agent tool-permission request (permission_request SSE
+   * frame). `allow` resumes the paused tool call, `always_allow_in_chat`
+   * additionally whitelists the tool for the rest of the chat, `deny` feeds
+   * a permission-denied tool result back to the model.
+   */
+  async resolveAgentPermission(permissionId: string, decision: 'allow' | 'always_allow_in_chat' | 'deny') {
+    return this.request('/agent/permission', {
+      method: 'POST',
+      body: JSON.stringify({ permissionId, decision }),
+    });
+  }
+
+  // ── External MCP servers (agent harness) ─────────────────────────────────
+  // Registered servers join every agent turn as mcp__<server>__<tool> with
+  // the 'confirm' permission tier. Auth headers are encrypted server-side
+  // and NEVER returned by the API (the list only carries `hasHeaders`).
+
+  async listMcpServers(): Promise<{ servers: McpServerInfo[] }> {
+    return this.request('/agent/mcp-servers', { method: 'GET' });
+  }
+
+  async createMcpServer(data: {
+    name: string
+    url: string
+    transport?: 'streamable-http' | 'sse'
+    headers?: Record<string, string>
+    enabled?: boolean
+  }): Promise<{ server: McpServerInfo }> {
+    return this.request('/agent/mcp-servers', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateMcpServer(id: string, data: {
+    name?: string
+    url?: string
+    transport?: 'streamable-http' | 'sse'
+    headers?: Record<string, string>
+    enabled?: boolean
+  }): Promise<{ server: McpServerInfo }> {
+    return this.request(`/agent/mcp-servers/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteMcpServer(id: string): Promise<{ ok: boolean }> {
+    return this.request(`/agent/mcp-servers/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+  }
+
 
   // Stream chat completions from /ai/generate. Resilient by design:
   // automatically reconnects at the transport layer BEFORE the user sees
@@ -1053,7 +1331,7 @@ class ApiClient {
   // surface to the caller so the UI can show the per-message error +
   // retry affordance without losing the user's message.
   async generateAIStream(
-    data: { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string, regenerate?: boolean, regenerationAttempt?: number, idempotencyKey?: string },
+    data: { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string, regenerate?: boolean, regenerationAttempt?: number, disableAgentic?: boolean, reasoningEffort?: string, idempotencyKey?: string },
     onData: (chunk: string) => void,
     onClose: () => void,
     onError: (error: Error) => void,
@@ -1246,6 +1524,61 @@ class ApiClient {
                   jsonData.content.includes('\n');
 
                 if (shouldProcess) flushBatch();
+              } else if (jsonData.type === 'reasoning_delta' && typeof jsonData.reasoning === 'string') {
+                // Chain-of-thought delta (ThinkingTrace). Deliberately keyed
+                // `reasoning` (not `content`) so legacy parsers ignore it.
+                if (options.onReasoning) options.onReasoning(jsonData.reasoning);
+                lastProcessTime = Date.now();
+              } else if (jsonData.type === 'reasoning_done') {
+                if (options.onReasoningDone) {
+                  options.onReasoningDone(typeof jsonData.durationMs === 'number' ? jsonData.durationMs : 0);
+                }
+              } else if (jsonData.type === 'tool_call_delta') {
+                if (options.onToolCall) {
+                  options.onToolCall({
+                    index: typeof jsonData.index === 'number' ? jsonData.index : 0,
+                    ...(jsonData.name ? { name: jsonData.name } : {}),
+                    ...(jsonData.argsDelta ? { argsDelta: jsonData.argsDelta } : {}),
+                  });
+                }
+              } else if (typeof jsonData.type === 'string' && AGENT_STREAM_EVENT_TYPES.has(jsonData.type)) {
+                // Agent harness typed frames (tool_call_start / tool_executing /
+                // tool_result / permission_request / permission_resolved /
+                // agent_done) — ordered by seq/blockIndex in the store.
+                if (options.onAgentEvent) {
+                  options.onAgentEvent(jsonData as AgentStreamEvent);
+                }
+              } else if (jsonData.type === 'usage' && typeof jsonData.tokensIn === 'number') {
+                // Real token usage (+ optional USD cost) for the Worked Summary.
+                if (options.onUsage) {
+                  options.onUsage({
+                    tokensIn: jsonData.tokensIn,
+                    tokensOut: typeof jsonData.tokensOut === 'number' ? jsonData.tokensOut : 0,
+                    ...(typeof jsonData.model === 'string' ? { model: jsonData.model } : {}),
+                    ...(typeof jsonData.costOriginalUsd === 'number' ? { costOriginalUsd: jsonData.costOriginalUsd } : {}),
+                    ...(typeof jsonData.costAppliedUsd === 'number' ? { costAppliedUsd: jsonData.costAppliedUsd } : {}),
+                  })
+                }
+              } else if (jsonData.type === 'web_sources' && Array.isArray(jsonData.sources)) {
+                // ChatGPT-style searched-sources frame. Surface to the UI
+                // so it can render the "Fuentes" chip + Activity panel.
+                if (options.onSources) {
+                  options.onSources({
+                    provider: jsonData.provider,
+                    query: jsonData.query,
+                    elapsedMs: jsonData.elapsedMs,
+                    sources: jsonData.sources,
+                  });
+                }
+              } else if (jsonData.type === 'memory' && Array.isArray(jsonData.items)) {
+                // Autonomous-memory frame: the turn decided to recall stored
+                // facts. Surface them so the UI shows the "MEMORIA" section.
+                if (options.onMemory) {
+                  options.onMemory({
+                    reason: jsonData.reason,
+                    items: jsonData.items,
+                  });
+                }
               } else if (jsonData.error) {
                 // When the backend recovered the turn with a localized
                 // fallback message, we've already delivered a useful
@@ -1312,15 +1645,30 @@ class ApiClient {
     data: { prompt: string; chatId?: string; provider: string; model: string; fileId?: string; aspectRatio?: string; quality?: string; imageCount?: number },
     options: { signal?: AbortSignal } = {},
   ) {
-    const response = await this.request('/ai/generate-image', {
+    const timeoutMs = 210000;
+    const imageRequestStartedAt = Date.now();
+    const requestPromise = this.request('/ai/generate-image', {
       method: 'POST',
       body: JSON.stringify(data),
       signal: options.signal,
       // Image generation routinely takes 60-180s (gpt-image-2, Seedream,
-      // Imagen). The default 30s client timeout aborted the request while
-      // the backend was still working, surfacing "Request timed out after
-      // 30000ms" even though the image generated fine server-side.
-      timeoutMs: 180000,
+      // Imagen). The backend enforces its own 200s deadline and answers
+      // with a real result or error by then — waiting 210s (> 200s)
+      // guarantees that verdict arrives within a single attempt instead
+      // of the client aborting at 180s while the server is still working.
+      timeoutMs: 210000,
+      // Never auto-retry: a retried generation is a NEW paid generation
+      // (3x provider spend) and 3x the wait. On timeout the caller falls
+      // back to waitForGeneratedImage(), which picks up the image the
+      // backend persists to the chat.
+      maxRetries: 0,
+      suppressFailureLog: true,
+    });
+    const response = await this.resolveImageRequestWithChatRecovery(requestPromise, {
+      chatId: data.chatId,
+      sinceMs: imageRequestStartedAt,
+      signal: options.signal,
+      timeoutMs,
     });
     // El backend ahora envía cabeceras 200 al inicio (para no morir
     // en el proxy de 30 s) y, si la generación falla después, devuelve
@@ -1334,17 +1682,136 @@ class ApiClient {
     return response;
   }
   async generateImageByImage(data: { fileId: string, prompt: string; chatId?: string, provider: string; model: string; }) {
-    const response = await this.request('/ai/generate-image', {
+    const timeoutMs = 210000;
+    const imageRequestStartedAt = Date.now();
+    const requestPromise = this.request('/ai/generate-image', {
       method: 'POST',
       body: JSON.stringify(data),
-      timeoutMs: 180000, // image edit takes 60-180s; see generateImage
+      timeoutMs, // > backend 200s deadline; see generateImage
+      maxRetries: 0,     // non-idempotent paid generation — never auto-retry
+      suppressFailureLog: true,
     })
+    const response = await this.resolveImageRequestWithChatRecovery(requestPromise, {
+      chatId: data.chatId,
+      sinceMs: imageRequestStartedAt,
+      timeoutMs,
+    });
     if (response && typeof response === 'object' && (response as any).error) {
       const err: any = new Error((response as any).error);
       err.code = (response as any).code;
       throw err;
     }
     return response
+  }
+
+  private async resolveImageRequestWithChatRecovery(
+    requestPromise: Promise<any>,
+    options: { chatId?: string; sinceMs: number; signal?: AbortSignal; timeoutMs: number },
+  ): Promise<any> {
+    const chatId = String(options.chatId || '').trim();
+    if (!chatId) return requestPromise;
+
+    let requestSettled = false;
+    const trackedRequest = requestPromise.finally(() => {
+      requestSettled = true;
+    });
+
+    const edgeRecoveryDelayMs = Math.min(31_000, Math.max(0, options.timeoutMs - 1_000));
+    const recoveryPromise = (async () => {
+      await new Promise((resolve) => setTimeout(resolve, edgeRecoveryDelayMs));
+      if (requestSettled || options.signal?.aborted) return null;
+
+      const outcome = await this.waitForGeneratedImage(chatId, options.sinceMs, {
+        signal: options.signal,
+        timeoutMs: Math.max(1_000, options.timeoutMs - edgeRecoveryDelayMs),
+        intervalMs: 2000,
+      });
+
+      if (outcome === 'image') return { recoveredFromChat: true as const };
+      if (outcome === 'error') {
+        return {
+          error: 'No se pudo generar la imagen. Inténtalo de nuevo.',
+          code: 'image_generation_failed',
+        };
+      }
+      return null;
+    })();
+
+    try {
+      return await Promise.race([
+        trackedRequest,
+        recoveryPromise.then((recovered) => recovered ?? trackedRequest),
+      ]);
+    } catch (error: any) {
+      const status = Number(error?.status ?? error?.statusCode);
+      const message = String(error?.message || '');
+      const isTimeout = status === 408 || /timed out|timeout/i.test(message);
+      if (!isTimeout) throw error;
+
+      const finalOutcome = await this.waitForGeneratedImage(chatId, options.sinceMs, {
+        signal: options.signal,
+        timeoutMs: 15_000,
+        intervalMs: 2_000,
+      });
+      if (finalOutcome === 'image') return { recoveredFromChat: true as const };
+      if (finalOutcome === 'error') {
+        return {
+          error: 'No se pudo generar la imagen. Inténtalo de nuevo.',
+          code: 'image_generation_failed',
+        };
+      }
+
+      const friendly: any = new Error('La generación de imagen tardó demasiado. Inténtalo de nuevo o baja la calidad/cantidad.');
+      friendly.status = 408;
+      friendly.statusCode = 408;
+      friendly.code = 'image_generation_timeout';
+      throw friendly;
+    }
+  }
+
+  // El Load Balancer de la Reserved VM corta la petición a los ~30s, pero el
+  // backend sigue generando y persiste la imagen (o un mensaje de error) en el
+  // chat. Cuando el POST se corta, sondeamos el chat hasta que aparezca un
+  // mensaje del asistente con una imagen posterior a `sinceMs` (o se agote el
+  // tiempo). Devuelve 'image' si la imagen está lista, 'error' si el backend
+  // persistió un fallo, o 'timeout' si se agotó el tiempo / se canceló.
+  async waitForGeneratedImage(
+    chatId: string,
+    sinceMs: number,
+    options: { signal?: AbortSignal; timeoutMs?: number; intervalMs?: number } = {},
+  ): Promise<'image' | 'error' | 'timeout'> {
+    const timeoutMs = options.timeoutMs ?? 210000;
+    const intervalMs = options.intervalMs ?? 3000;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (options.signal?.aborted) return 'timeout';
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      if (options.signal?.aborted) return 'timeout';
+      try {
+        const resp: any = await this.getChat(chatId);
+        const messages: any[] = resp?.chat?.messages || [];
+        for (const m of messages) {
+          if (String(m?.role || '').toUpperCase() !== 'ASSISTANT') continue;
+          const ts = m?.timestamp ? new Date(m.timestamp).getTime() : 0;
+          if (ts && ts < sinceMs - 5000) continue;
+          let files: any = m?.files;
+          if (typeof files === 'string') {
+            try { files = JSON.parse(files); } catch { files = []; }
+          }
+          const hasImage = Array.isArray(files)
+            && files.some((f: any) => f && f.type === 'image' && (f.url || f.fileId));
+          if (hasImage) return 'image';
+          // El backend persiste los fallos post-desconexión como un mensaje
+          // del asistente con este texto; lo detectamos para salir rápido en
+          // vez de esperar al timeout completo.
+          const content = typeof m?.content === 'string' ? m.content : '';
+          if (content.includes('No se pudo generar la imagen')) return 'error';
+        }
+      } catch {
+        /* transient network/auth hiccup — keep polling */
+      }
+    }
+    return 'timeout';
   }
 
   async generateGmailResponse(data: { prompt: string; chatId?: string; model: string; type: string }) {
@@ -1520,7 +1987,10 @@ class ApiClient {
   // }
   async getAIModels(type?: 'TEXT' | 'IMAGE' | 'VIDEO') { // type ko optional parameter banayein
     const endpoint = type ? `/ai/models?type=${type}` : '/ai/models';
-    return this.request(endpoint);
+    // Always read the live list: the picker must reflect an admin model
+    // activation immediately, so bypass the 5-min server response-cache
+    // (response-cache honours Cache-Control: no-cache → forced MISS).
+    return this.request(endpoint, { headers: { 'Cache-Control': 'no-cache' } });
   }
 
   // Admin connections — CRUD + test
@@ -1678,6 +2148,26 @@ class ApiClient {
 
   async clearChatHistory() {
     return this.request('/users/chats/clear-history', { method: 'POST' });
+  }
+
+  // ── Memory document (per-user, auto-learned + editable) ──────────
+  async getMemory(): Promise<{ entries: any[]; markdown: string; stats: { total: number; byCategory: Record<string, number> } }> {
+    return this.request('/memory');
+  }
+  async searchMemory(q: string): Promise<{ query: string; results: any[] }> {
+    return this.request(`/memory/search?q=${encodeURIComponent(q)}`);
+  }
+  async addMemoryEntry(text: string, category?: string): Promise<{ entry: any }> {
+    return this.request('/memory', { method: 'POST', body: JSON.stringify({ text, category }) });
+  }
+  async updateMemoryEntry(id: string, patch: { text?: string; category?: string }): Promise<{ entry: any }> {
+    return this.request(`/memory/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) });
+  }
+  async deleteMemoryEntry(id: string): Promise<{ ok: boolean }> {
+    return this.request(`/memory/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+  async clearMemory(): Promise<{ ok: boolean }> {
+    return this.request('/memory', { method: 'DELETE' });
   }
 
   async changePassword(data: { currentPassword: string; newPassword: string }) {
@@ -2233,6 +2723,7 @@ class ApiClient {
     chatId?: string;
     files?: string[];
     image_url?: string;
+    image_urls?: string[];
     model?: string;
   }, opts?: { signal?: AbortSignal }) {
     return this.request('/ai/generate-video', {
@@ -2250,6 +2741,15 @@ class ApiClient {
   async getVideoStatus(operationId: string) {
     // Was: return this.request(`/video/status/${operationId}`);
     return this.request(`/ai/video-status/${operationId}`);
+  }
+  async cancelVideoGeneration(operationId: string) {
+    return this.request(`/ai/video-cancel/${encodeURIComponent(operationId)}`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+      timeoutMs: 15000,
+      maxRetries: 0,
+      suppressFailureLog: true,
+    });
   }
   async getVideoHistory(params?: {
     page?: number;
@@ -2665,8 +3165,20 @@ class ApiClient {
     return this.request('/spotify/status');
   }
 
-  async startComputerUseChatIntegration(data: { message: string; chatId: string; sessionId?: string }) {
+  async startComputerUseChatIntegration(data: { message: string; chatId: string; sessionId?: string; mode?: 'browser' | 'chrome' | 'computer' }) {
     return this.request('/computer-use/chat-integration', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  // Professional document cycle (Ciclo profesional de agentes para documentos)
+  async classifyDocumentCycle(data: {
+    topic: string;
+    documentType?: string;
+    field?: string;
+  }) {
+    return this.request('/agent/document-cycle/classify', {
       method: 'POST',
       body: JSON.stringify(data),
     });
@@ -2713,6 +3225,48 @@ class ApiClient {
     const a = document.createElement('a');
     a.href = downloadUrl;
     a.download = `thesis-${sessionId}.docx`;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(downloadUrl);
+    document.body.removeChild(a);
+  }
+
+  // ── Contabilidad (módulo contable PCGE) ────────────────────────────────────
+  async getAccountingTrialBalance(params: { from?: string; to?: string } = {}) {
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v)).toString();
+    return this.request(`/accounting/trial-balance${qs ? `?${qs}` : ''}`);
+  }
+  async listAccountingJournalEntries(params: { from?: string; to?: string; take?: number } = {}) {
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)])).toString();
+    return this.request(`/accounting/journal-entries${qs ? `?${qs}` : ''}`);
+  }
+  async listAccountingInvoices(params: { docType?: string; status?: string; take?: number } = {}) {
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)])).toString();
+    return this.request(`/accounting/invoices${qs ? `?${qs}` : ''}`);
+  }
+  async getAccountingIncomeStatement(params: { from?: string; to?: string } = {}) {
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v)).toString();
+    return this.request(`/accounting/reports/income-statement${qs ? `?${qs}` : ''}`);
+  }
+  async getAccountingBalanceSheet(params: { asOf?: string } = {}) {
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v)).toString();
+    return this.request(`/accounting/reports/balance-sheet${qs ? `?${qs}` : ''}`);
+  }
+  async getAccountingCashFlow(params: { from?: string; to?: string } = {}) {
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v)).toString();
+    return this.request(`/accounting/reports/cash-flow${qs ? `?${qs}` : ''}`);
+  }
+  /** Download an accounting export (xlsx/pdf) with auth, triggering a browser save. */
+  async downloadAccountingExport(path: string, filename: string) {
+    const headers = new Headers();
+    if (this.token) headers.set('Authorization', `Bearer ${this.token}`);
+    const response = await fetch(`${this.baseURL}/accounting/export/${path}`, { method: 'GET', headers, credentials: 'include' });
+    if (!response.ok) throw new Error('No se pudo generar la exportación');
+    const blob = await response.blob();
+    const downloadUrl = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = downloadUrl;
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     window.URL.revokeObjectURL(downloadUrl);

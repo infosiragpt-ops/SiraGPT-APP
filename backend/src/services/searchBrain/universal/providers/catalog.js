@@ -307,7 +307,42 @@ const webProviders = [
   },
   noKeyJsonProvider({ id: "wikipedia-opensearch", name: "Wikipedia OpenSearch", region: "global", category: "web", license: "open", rateLimit: "Public API" }, (q, opts) => `https://${opts.language === "zh" ? "zh" : opts.language === "es" ? "es" : "en"}.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(q)}&limit=${Math.min(opts.maxResults || 10, 20)}&namespace=0&format=json`, (json) => asArray(json?.[1]).map((title, i) => ({ title, snippet: json[2]?.[i], url: json[3]?.[i] })), (it) => result(hashId("wikipedia", it.url || it.title), "web", "wikipedia-opensearch", it.title, { url: it.url, snippet: it.snippet })),
   disabled({ id: "searxng-public", name: "SearXNG JSON", region: "global", category: "web", license: "open", rateLimit: "Self-host recommended", requiresKey: false }, "Use local SearXNG for stable production; public instances vary."),
-  disabled({ id: "brave-search", name: "Brave Search", region: "global", category: "web", license: "requires-key", rateLimit: "Free registered tier", requiresKey: true }, "Requires free Brave Search API key."),
+  {
+    id: "brave-search",
+    name: "Brave Search",
+    region: "global",
+    category: "web",
+    license: "requires-key",
+    rateLimit: "Free registered tier",
+    requiresKey: true,
+    metadata: { keyName: "brave" },
+    async search(query, opts = {}) {
+      if (!query || typeof query !== "string") return [];
+      // Key gated: user-configured key (settings store under "brave") or
+      // any of the env aliases. No key → return [] just like the other
+      // optional-key providers, so the brain falls through to the
+      // key-less DuckDuckGo / Wikipedia web providers.
+      const key = opts.keys?.brave
+        || opts.keys?.["brave-search"]
+        || process.env.BRAVE_SEARCH_API_KEY
+        || process.env.BRAVE_API_KEY
+        || process.env.SEARCH_BRAIN_BRAVE_KEY;
+      if (!key) return [];
+      return guardedSearch("brave-search", async () => {
+        const json = await fetchJson(
+          `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${Math.min(opts.maxResults || 10, 20)}&result_filter=web&safesearch=moderate`,
+          { timeoutMs: opts.timeoutMs, headers: { Accept: "application/json", "X-Subscription-Token": key } },
+        );
+        return asArray(json?.web?.results).slice(0, opts.maxResults || 10).map((it) =>
+          result(hashId("brave-search", it.url || it.title), "web", "brave-search", it.title, {
+            url: it.url,
+            snippet: it.description,
+            metadata: { age: it.age, language: it.language },
+          })
+        ).filter((r) => r.title && r.url);
+      });
+    },
+  },
   disabled({ id: "mojeek", name: "Mojeek", region: "global", category: "web", license: "requires-key", rateLimit: "Free registered tier", requiresKey: true }, "Requires key."),
   disabled({ id: "marginalia", name: "Marginalia", region: "global", category: "web", license: "open", rateLimit: "Public API availability varies", requiresKey: false }, "Endpoint availability changes; keep disabled until configured."),
 ];
@@ -354,6 +389,80 @@ const financeProviders = [
         const vals = row.split(",");
         const data = Object.fromEntries(keys.map((k, i) => [k, vals[i]]));
         return [result(`stooq:${data.Symbol}`, "finance", "stooq", data.Symbol, { snippet: `Close ${data.Close} · Volume ${data.Volume}`, datePublished: data.Date, metadata: data })];
+      });
+    },
+  },
+  optionalKeyJsonProvider(
+    { id: "fred", name: "FRED (St. Louis Fed)", region: "usa", category: "finance", license: "requires-key", rateLimit: "Free registered key" },
+    "fred",
+    (q, opts, key) => `https://api.stlouisfed.org/fred/series/search?search_text=${encodeURIComponent(q)}&api_key=${encodeURIComponent(key)}&file_type=json&limit=${Math.min(opts.maxResults || 20, 50)}&order_by=popularity&sort_order=desc`,
+    (json) => json?.seriess,
+    (it) => result(`fred:${it.id}`, "finance", "fred", it.title, {
+      url: `https://fred.stlouisfed.org/series/${it.id}`,
+      snippet: `${it.units || ""} · ${it.frequency || ""} · ${it.observation_start || "?"}→${it.observation_end || "?"}`.trim(),
+      datePublished: it.last_updated,
+      metadata: {
+        seriesId: it.id,
+        units: it.units,
+        frequency: it.frequency,
+        seasonalAdjustment: it.seasonal_adjustment_short,
+        popularity: it.popularity,
+        notes: cleanText(it.notes || "", 400),
+      },
+    }),
+  ),
+  {
+    id: "worldbank-indicators",
+    name: "World Bank Indicators",
+    region: "global",
+    category: "finance",
+    license: "open",
+    rateLimit: "Public API",
+    requiresKey: false,
+    async search(query, opts = {}) {
+      return guardedSearch("worldbank-indicators", async () => {
+        const q = String(query || "").toLowerCase();
+        const WB_INDICATORS = [
+          { code: "NY.GDP.MKTP.CD", label: "GDP (current US$)", keywords: ["gdp", "pib", "producto interno bruto", "gross domestic"] },
+          { code: "NY.GDP.MKTP.KD.ZG", label: "GDP growth (annual %)", keywords: ["gdp growth", "crecimiento economico", "economic growth", "crecimiento del pib"] },
+          { code: "NY.GDP.PCAP.CD", label: "GDP per capita (current US$)", keywords: ["gdp per capita", "pib per capita", "income per capita", "ingreso per capita"] },
+          { code: "FP.CPI.TOTL.ZG", label: "Inflation, consumer prices (annual %)", keywords: ["inflation", "inflacion", "cpi", "consumer price", "precios al consumidor"] },
+          { code: "SL.UEM.TOTL.ZS", label: "Unemployment, total (% of labor force)", keywords: ["unemployment", "desempleo", "paro", "tasa de desempleo"] },
+          { code: "SP.POP.TOTL", label: "Population, total", keywords: ["population", "poblacion", "habitantes"] },
+          { code: "NE.EXP.GNFS.CD", label: "Exports of goods and services (current US$)", keywords: ["exports", "exportaciones"] },
+          { code: "NE.IMP.GNFS.CD", label: "Imports of goods and services (current US$)", keywords: ["imports", "importaciones"] },
+          { code: "BX.KLT.DINV.CD.WD", label: "Foreign direct investment, net inflows (current US$)", keywords: ["foreign direct investment", "fdi", "inversion extranjera"] },
+        ];
+        const matches = WB_INDICATORS.filter((ind) => ind.keywords.some((k) => q.includes(k)));
+        if (matches.length === 0) return [];
+        const country = String(opts.raw?.countryCode || opts.raw?.country || "WLD").toUpperCase();
+        const out = [];
+        for (const ind of matches.slice(0, 3)) {
+          let json;
+          try {
+            json = await fetchJson(`https://api.worldbank.org/v2/country/${encodeURIComponent(country)}/indicator/${ind.code}?format=json&per_page=5&mrv=5`, { timeoutMs: opts.timeoutMs });
+          } catch {
+            continue;
+          }
+          const rows = asArray(json?.[1]).filter((r) => r && r.value !== null && r.value !== undefined);
+          if (rows.length === 0) continue;
+          const latest = rows[0];
+          const countryName = latest.country?.value || country;
+          out.push(result(`worldbank-indicators:${ind.code}:${country}`, "finance", "worldbank-indicators", `${ind.label} — ${countryName}`, {
+            url: `https://data.worldbank.org/indicator/${ind.code}?locations=${country}`,
+            snippet: `${countryName} ${latest.date}: ${latest.value} (${ind.label})`,
+            datePublished: latest.date,
+            location: countryName,
+            metadata: {
+              indicatorCode: ind.code,
+              country: countryName,
+              countryCode: latest.countryiso3code || country,
+              latest: { date: latest.date, value: latest.value },
+              series: rows.map((r) => ({ date: r.date, value: r.value })),
+            },
+          }));
+        }
+        return out;
       });
     },
   },
@@ -459,7 +568,6 @@ const extraCatalog = [
   ["usaspending", "USAspending", "government", "usa", false],
   ["census", "US Census API", "government", "usa", false],
   ["bls", "BLS", "government", "usa", true],
-  ["fred", "FRED", "finance", "usa", true],
   ["nasa", "NASA APIs", "government", "usa", true],
   ["usgs", "USGS", "government", "usa", false],
   ["cdc", "CDC", "health", "usa", false],

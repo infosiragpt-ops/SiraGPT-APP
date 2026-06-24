@@ -31,6 +31,25 @@ Inspirado en OpenClaw, cada skill es una guía operacional + herramientas para u
 | **e2e-proof-recorder** | Pruebas, CI, browser proof y health checks | Antes de publicar cambios | Sí |
 | **agent-capability-matrix** | Matriz de cobertura entre OpenClaw y SiraGPT | Priorización de próximos ports | No |
 
+### Skills externas vendorizadas (diseño + marketing)
+
+Copiadas tal cual desde sus repos upstream (cada carpeta incluye `SOURCE.md` + `LICENSE`).
+Pensadas para potenciar el generador del módulo `/code` (landing pages, UI/UX, copy).
+
+| Skill | Propósito | Fuente |
+|-------|-----------|--------|
+| **ui-ux-pro-max** | Inteligencia de diseño UI/UX: 50+ estilos, 161 paletas, 57 font-pairings, 99 guías UX, datos en `data/*.csv` + `scripts/search.py` | [nextlevelbuilder/ui-ux-pro-max-skill](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill) |
+| **canvas-design** | Diseño visual de artefactos (manifiesto de diseño → PDF/PNG nivel museo) | [anthropics/skills · canvas-design](https://github.com/anthropics/skills/tree/main/skills/canvas-design) |
+| **cro** | Conversion Rate Optimization de páginas y formularios | [coreyhaines31/marketingskills](https://github.com/coreyhaines31/marketingskills) |
+| **copywriting** | Redacción persuasiva de copy de marketing | ↑ |
+| **copy-editing** | Edición/pulido de copy | ↑ |
+| **pricing** | Estrategia y presentación de precios | ↑ |
+| **popups** | Diseño de popups/modales de captación | ↑ |
+| **onboarding** | Activación post-registro | ↑ |
+| **ab-testing** | Diseño y análisis de experimentos A/B | ↑ |
+| **marketing-psychology** | Principios de psicología aplicada a marketing | ↑ |
+| **launch** | Estrategia de lanzamiento | ↑ |
+
 ## Integración en Flujo
 
 ### Desarrollo Local

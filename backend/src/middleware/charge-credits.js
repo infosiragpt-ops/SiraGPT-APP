@@ -27,6 +27,16 @@
 
 const prisma = require('../config/database');
 
+// `$queryRaw` maps Postgres int8 to BigInt, but a value can arrive as a string
+// under some drivers/mocks — coerce defensively so `balanceAfter` is always a
+// BigInt matching the column type.
+function toBigIntBalance(value) {
+  if (typeof value === 'bigint') return value;
+  if (value === null || value === undefined) return 0n;
+  try { return BigInt(typeof value === 'number' ? Math.trunc(value) : value); }
+  catch { return 0n; }
+}
+
 function pickIdempotencyKey(req) {
   return (
     req.get?.('Idempotency-Key') ||
@@ -63,27 +73,31 @@ async function spendCredits({ userId, amount, feature, reason, metadata, idempot
     if (existing) return { ok: true, replay: true, txn: existing };
   }
 
-  // Atomic guarded debit.
-  const affected = await prisma.$executeRawUnsafe(
+  // Atomic guarded debit. `RETURNING "balance"` captures the post-debit balance
+  // in the SAME statement, so the ledger's `balanceAfter` reflects exactly this
+  // transaction's result — a separate re-read could observe a concurrent
+  // spend/refund and record a balance that never corresponded to this txn.
+  const rows = await prisma.$queryRawUnsafe(
     `UPDATE "credits"
        SET "balance" = "balance" - $1::BIGINT,
            "lifetimeSpent" = "lifetimeSpent" + $1::BIGINT,
            "updatedAt" = CURRENT_TIMESTAMP
      WHERE "userId" = $2
-       AND "balance" >= $1::BIGINT`,
+       AND "balance" >= $1::BIGINT
+     RETURNING "balance"`,
     amt.toString(),
     userId,
   );
-  if (affected === 0) {
+  if (!Array.isArray(rows) || rows.length === 0) {
     return { ok: false, code: 'INSUFFICIENT' };
   }
-  const after = await prisma.credit.findUnique({ where: { userId } });
+  const balanceAfter = toBigIntBalance(rows[0].balance);
   const txn = await prisma.creditTransaction.create({
     data: {
       userId,
       type: 'SPEND',
       amount: -amt,
-      balanceAfter: after.balance,
+      balanceAfter,
       reason: reason || `spend(${feature})`,
       metadata: { feature, ...(metadata || {}) },
       idempotencyKey: idempotencyKey || null,
@@ -101,14 +115,16 @@ async function spendCredits({ userId, amount, feature, reason, metadata, idempot
 async function refundCharge({ originalTxn, reason, metadata }) {
   if (!originalTxn) return { ok: false, code: 'NO_TXN' };
   const absAmt = originalTxn.amount < 0n ? -originalTxn.amount : originalTxn.amount;
-  await prisma.credit.update({
+  // `update` issues an atomic UPDATE … RETURNING; use its returned balance
+  // directly so `balanceAfter` matches this refund's result rather than a
+  // separately-read snapshot that a concurrent write could have shifted.
+  const after = await prisma.credit.update({
     where: { userId: originalTxn.userId },
     data: {
       balance: { increment: absAmt },
       lifetimeSpent: { decrement: absAmt },
     },
   });
-  const after = await prisma.credit.findUnique({ where: { userId: originalTxn.userId } });
   const txn = await prisma.creditTransaction.create({
     data: {
       userId: originalTxn.userId,

@@ -1,16 +1,59 @@
+- [spawn EIO in production](spawn-eio-production.md) — spawn() can throw synchronously (EIO) in prod Nix env; always wrap Promise executor with try-catch in commandExists-style helpers.
+- [Orphaned task log dedup](orphaned-task-dedup.md) — P2003 (foreign-key userId missing) fires per concurrent upsert call; use process-level Set to log once per taskId lifetime.
+- [Document sandbox architecture](doc-sandbox-architecture.md) — session-manager + remote-driver + 4 sandbox_* tools; Python libs installed via pip --user in boot; semaphore 12; no Docker needed.
+- [Python pip in Nix/Replit](python-pip-nix.md) — pip3 missing but python3 -m pip works; --user installs to ~/.local/lib/python3.11; run at boot via ensureSandboxPythonDeps() in start-with-migrations.js.
+- [goalRunEvent seq race](goal-run-event-seq-race.md) — count()→create TOCTOU; use $transaction Serializable + findFirst(max seq) + catch P2002/P2034; cap listEventsSince at 200 + select.
+- [OpenRouter default max_tokens](openrouter-default-max-tokens.md) — if max_tokens absent, OpenRouter uses model max (65536); always pass maxOutputTokens capped at 16384 to buildProviderChatPayload.
 - [Duplicate message dedup](duplicate-message-dedup.md) — role comparisons must be case-insensitive; run dedupeMessages on filtered list too.
 - [iOS keyboard sticky fix](ios-keyboard-fix.md) — position:fixed on composer when keyboard open; sticky breaks inside overflow:hidden on iOS.
 - [SiraGPT deployment architecture](siragpt-deployment.md) — executeSql hits local DB not backend DB; use node -e with backend Prisma client for real data
 - [Dev workflow package setup](dev-workflow-packages.md) — root node_modules is empty by default; run `pnpm install` (5s with cache) before restarting workflow
-- [OAuth callback URL policy](oauth-callback-fix.md) — GOOGLE_AUTH_BASE_URL is authoritative; it short-circuits all heuristics including frontend-host rejection and stale per-flow URI secrets
+- [OAuth callback URL policy](oauth-callback-fix.md) — GOOGLE_AUTH_BASE_URL=siragpt.com in shared env; per-flow secrets aligned to siragpt.com; cross-host guard removed so stale URIs rejected unconditionally
 - [Console.log printf override](console-log-override.md) — backend/index.js overrides console.log joining args with space; always use template literals not %s format strings
 - [Next.js dynamic ssr:false in Server Components](nextjs-dynamic-ssr-crash.md) — ssr:false is forbidden inside Server Components; move the dynamic() call into a "use client" wrapper file.
 - [Per-model token caps](per-model-token-caps.md) — resolveMaxTokens() replaces blanket 4096 default; MODEL_TOKEN_CAPS registry in llm-gateway.js; SIRAGPT_LLM_MAX_TOKENS env var still works as override.
 - [Semantic cache model versioning](semantic-cache-versioning.md) — bump MODEL_CACHE_VERSIONS[model] to invalidate stale cache entries without Redis SCAN; version baked into sha256 hash as _v key.
 - [Two-tier cron scanner](two-tier-cron-scanner.md) — hermes-cron-scanner.js: tier1=keyword bloom, tier2=structural marker; BOTH must match to avoid false-positives from prose mentioning time.
 - [Session rewind store](session-rewind-store.md) — in-memory Map (sessionId→rewindCount); safe on restart (messages stay in DB, cursor resets to head); max 20 turns per session.
+- [SSE heartbeat vs proxy idle](sse-heartbeat-proxy-idle.md) — keepalive must outpace pre-first-token window; 15s caused ECONNRESET+duplicate-turn replay, set to 5s.
+- [Health-snapshot deploy gating](health-snapshot-deploy-gating.md) — ops:health must exit 1 when /health is wedged but liveness answers; never false-green a deploy.
 - [ai.js generate latency](ai-generate-latency.md) — flushHeaders moved to after quota check (line ~1828); chat+user+org queries parallelized; memory trio parallelized; duplicate history query merged into one take:80 load stored on req._earlyHistory80.
 - [Double AI response bug](double-ai-response.md) — two root causes: (1) activeGenerateTurns deleted immediately on success, so client retries after TCP drop found nothing; (2) retryPendingMessage called addMessage even when assistant already replied.
 - [SiraGPT promo video routing](sira-promo-artifact-routing.md) — createArtifact always fails (ARTIFACT_NOT_FOUND env-var step); video served via workflow port 5000 + Next.js beforeFiles rewrite with skipTrailingSlashRedirect:true.
 - [Head hydration devtools fix](head-hydration-devtools.md) — suppressHydrationWarning must go on both <head> AND the <script> child; parent prop doesn't propagate to children.
 - [CSRF SameSite iframe](csrf-samesite-iframe.md) — SameSite=Strict/Lax blocks cookies in Replit cross-site iframe; use SameSite=None;Secure when REPLIT_BACKEND_MODE=sidecar.
+- [Reserved VM GCLB 30s timeout](reserved-vm-gclb-timeout.md) — GCLB hard ~30s total-response cut; heartbeats don't reset it (unlike Autoscale). For >30s work: persist-then-poll, don't keep request alive.
+- [Image gen vs edit providers](image-edit-provider-matrix.md) — editing (imagePath) only works on OpenAI/Gemini; OpenRouter is generation-only and must be rerouted, never hard-fail.
+- [Backend test CI wiring](backend-test-ci-wiring.md) — new backend tests only run in CI if added to package.json `test` string; /health routes live in injectable createHealthRoutes for supertest.
+- [Doc-attached routing paths](doc-attached-routing-paths.md) — edit (source-preserving) vs answer (understanding) both hit agent_task; transform verbs need a document NOUN, not just a pronoun.
+- [npm firewall transient 404](npm-firewall-transient-404.md) — prod build 404s a transitive tarball (mirror lag, not 403 security block) while dev works; pin via overrides + regen lockfile, don't just retry.
+- [R2 binary offload](r2-binary-offload.md) — user binaries offloaded to R2 as `r2:<key>` refs (text stays in PG); piping R2 readStream to res REQUIRES stream.on('error') or it crashes the request.
+- [Task-tool manifest requirement](task-tool-manifest-required.md) — every LLM-callable tool in buildTaskTools needs a tool-manifest.js entry or both dispatch gates deny it as unknown_tool (only 'finalize' is exempt).
+- [R2 account-id mispaste](r2-account-id-misparse.md) — "ENOTFOUND https" = R2_ACCOUNT_ID holds full endpoint URL → set non-secret R2_ENDPOINT override; also test embed keys for validity (presence ≠ valid).
+- [Reserved VM 8 GiB image limit](deploy-image-8gib-limit.md) — deploys reuse the workspace; gitignored/stray dirs bake into the image unless postbuild-slim prunes them. libreoffice+playwright are runtime-needed, don't cut them.
+- [Prisma renamed-migration P3009](prisma-renamed-migration-p3009.md) — renaming an applied migration re-runs its DDL → "already exists" → P3009 → backend never boots; fix with idempotent SQL + `migrate resolve --applied`, then republish.
+- [Web-search sources UX](source-presentation-chips.md) — sources are app-rendered (Fuentes chip + Actividad drawer next to action rail), NOT inline markdown; allowlist source URLs (http/https) before any href.
+- [Authoritative current datetime](authoritative-datetime.md) — inject a current-datetime block as system authority so the model stops hallucinating "today"; never answer volatile facts from memory.
+- [Intent alignment signals](intent-alignment-signals.md) — new tone/length/language/count signals must be additive + guarded against domain false-positives; always add negative tests.
+- [Output-format contract](output-format-contract.md) — single source of truth for answer-format detection (paragraphs/lists/table/limits); consumers delegate, never re-regex; bare "lista" is content not format.
+- [npm mirror flakiness vs optional deps](npm-mirror-optional-deps.md) — deploy npm ci 502 on a build-irrelevant tarball → move its devDep consumer to optionalDependencies.
+- [Attachment scaffolding leak + format reqs](attachment-scaffolding-format.md) — strip-list must stay synced w/ injected directives (case-insensitive, prefer startsWith); honor explicit "N párrafos" in LLM directive AND fallback.
+- [Forget-me fail closed](forget-me-fail-closed.md) — multi-store "delete my data" endpoints must return non-2xx if ANY store's clear fails; never false-report success.
+- [Agent task duplicate execution](agent-task-duplicate-execution.md) — runAgentTaskJob has many callers (worker, watchdog, routes, temporal); in-flight Map guard collapses concurrent same-taskId runs; audit dedup only hid log spam.
+- [Upload sync-path proxy budget](upload-proxy-budget.md) — /files/upload sync steps must be withTimeout-bounded + run concurrently so worst-case stays under the ~30s proxy cut.
+- [searchBrain breaker stale-closure](searchbrain-breaker-stale-closure.md) — per-provider CircuitBreaker must invoke `(fn)=>fn()` via `.fire(fn)`, never bake the query closure into the cached breaker.
+- [LaTeX bracket delimiters](latex-bracket-delimiters.md) — LLM `\( \)`/`\[ \]` math needs a pre-parse STRING normalizer (CommonMark strips the backslash before remark plugins see it); convert to `$`/`$$`.
+- [UI lock re-baseline](ui-lock-rebaseline.md) — verify-ui-lock.sh has no update mode; after approved frontend changes regen docs/UI_LOCK_HASHES.txt with its exact find|shasum command.
+- [OpenClaw agentic already integrated](openclaw-agentic-state.md) — OpenClaw tools/skills/agentic loop already live: agentic-chat-stream isEnabled() defaults true, buildDefaultTools wires broad real toolset; map "covered", don't re-port.
+- [Document chunk persistence](docintel-chunk-persistence.md) — createMany must whitelist DocumentChunk columns; raw `...chunk` spread throws Unknown argument sectionLevel and hangs analysis; stored chunks keep sectionPath in metadata.
+- [Deploy promote frontend gating](deploy-promote-frontend-gating.md) — Reserved VM promote health-checks frontend port 3000, not backend; backend-only deltas can't fail promote → a "waiting for ready" fail is transient, just republish.
+- [Curated IMAGE activation](curated-image-activation.md) — ensureStaticCatalogModels is hot-path; gate any "reactivate curated rows" write behind a per-instance once-per-process flag, never unconditional.
+- [Filter config override](filter-config-override.md) — FILTERS_CONFIG.enabled overrides each filter module's own enabled flag; change both or they silently disagree.
+- [Post-deploy warmup window](post-deploy-warmup-window.md) — frontend live ~90s before backend; /api/* gives raw 500; gate auth actions on HEAD /api/health/ready (204/503) via useBackendReady.
+- [Deploy build failure modes](deploy-build-time-limit.md) — gce build fails 2 ways: intermittent next-build OOM (keep heap 4096 + webpackMemoryOptimizations, pin NODE_OPTIONS in .replit) vs install timeout (parallel npm ci).
+- [postbuild-slim is destructive](postbuild-slim-destructive.md) — `npm run build` w/ REPLIT_DEPLOYMENT=1 DELETES node_modules/.next/artifacts/attached_assets from live workspace; test with `next build` only.
+- [Agent runtime model slugs](agent-runtime-model-slugs.md) — any `provider/model` slug must route to OpenRouter in agent-task-runner (like chat's inferProviderFromModelId), else openai/gpt-5.5 force-remaps to gpt-4o-mini.
+- [OCR image variant early-exit](ocr-variant-early-exit.md) — local image OCR must lazily generate sharp variants + break on first accepted result, or 5 variants × Tesseract blows past the 20s extraction timeout (screenshots silently lose text).
+- [Finalize-guard runaway loop](finalize-guard-runaway.md) — guard rejections were uncapped → react-agent spun to maxSteps/2h; add total+consecutive breaker; gate interactive vs heavy-doc budgets.
+- [Agent task stale banner root cause](agent-task-stale-banner.md) — step_start only fires via onStepStart AFTER first LLM reply; emit a pre-loop step_start before reactAgent.run() and close it in onStepStart.
+- [user_memories confidence column](user-memory-confidence.md) — confidence column missing from schema/DB; raw SQL in upsert+recall silently failed; fix: ADD COLUMN IF NOT EXISTS migration + schema update.

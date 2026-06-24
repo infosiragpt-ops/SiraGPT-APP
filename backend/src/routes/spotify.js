@@ -18,11 +18,18 @@ router.get('/connect', authenticateToken, async (req, res) => {
 
 // Route to handle Spotify callback
 router.get('/callback', async (req, res) => {
-  const { code, state: userId } = req.query;
+  const { code, state } = req.query;
+  // Recover the user id from the SIGNED state — never trust a raw id in the
+  // query, or an attacker could overwrite another user's Spotify tokens.
+  const userId = spotifyService.verifyState(state);
+  if (!userId) {
+    return res.redirect('http://localhost:3000/connections?spotify_connected=false');
+  }
   try {
     const { access_token, refresh_token } = await spotifyService.handleCallback(code);
 
-    console.log(access_token, refresh_token);
+    // Never log raw OAuth tokens — only their presence.
+    console.log('[spotify] callback ok, tokens received:', !!access_token, !!refresh_token);
 
     const tokensToStore = {
       access_token: access_token,

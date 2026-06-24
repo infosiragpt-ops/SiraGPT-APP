@@ -18,6 +18,7 @@ const {
   normalizeDelay,
   clampRandom,
   safeClassify,
+  ttlFloorFromClassification,
   MAX_RETRIES,
 } = require('../src/utils/retry-with-backoff');
 
@@ -485,6 +486,116 @@ describe('retry-with-backoff', () => {
       assert.equal(clampRandom(2), 1);
       assert.equal(safeClassify(() => null, new Error('x')).retryable, false);
       assert.equal(safeClassify(() => { throw new Error('boom'); }, new Error('x')).reason, 'classifier_error');
+    });
+  });
+
+  // ── ttlMs floor (Retry-After hint) hardening ─────────────────
+
+  describe('ttlMs floor (Retry-After hint)', () => {
+    it('honours minDelayMs as a lower bound after jitter', () => {
+      // rng=0 would normally yield 0; the floor must lift it to 500.
+      const result = computeBackoff({
+        baseDelayMs: 1000,
+        maxDelayMs: 8000,
+        attempt: 2,
+        rng: () => 0,
+        minDelayMs: 500,
+      });
+      assert.equal(result, 500);
+    });
+
+    it('clamps the floor to maxDelayMs (floor never exceeds the cap)', () => {
+      const result = computeBackoff({
+        baseDelayMs: 1000,
+        maxDelayMs: 2000,
+        attempt: 0,
+        rng: () => 0,
+        minDelayMs: 999_999,
+      });
+      assert.equal(result, 2000);
+    });
+
+    it('never lowers a high jitter roll below its value', () => {
+      // rng=1 → full cap (min(4000, 1000*2^2)=4000); a small floor must not reduce it.
+      const result = computeBackoff({
+        baseDelayMs: 1000,
+        maxDelayMs: 8000,
+        attempt: 2,
+        rng: () => 1,
+        minDelayMs: 10,
+      });
+      assert.equal(result, 4000);
+    });
+
+    it('tolerates a non-finite / negative minDelayMs without producing NaN or a negative', () => {
+      for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -500, undefined, null, '10']) {
+        const result = computeBackoff({
+          baseDelayMs: 1000,
+          maxDelayMs: 8000,
+          attempt: 1,
+          rng: () => 0,
+          minDelayMs: bad,
+        });
+        assert.ok(Number.isFinite(result), `minDelayMs=${String(bad)} produced non-finite ${result}`);
+        assert.ok(result >= 0, `minDelayMs=${String(bad)} produced negative ${result}`);
+      }
+    });
+
+    it('ttlFloorFromClassification returns a safe finite floor for valid ttlMs', () => {
+      assert.equal(ttlFloorFromClassification({ ttlMs: 250 }), 250);
+    });
+
+    it('ttlFloorFromClassification degrades malformed shapes and bad ttlMs to 0', () => {
+      assert.equal(ttlFloorFromClassification(null), 0);
+      assert.equal(ttlFloorFromClassification(undefined), 0);
+      assert.equal(ttlFloorFromClassification('nope'), 0);
+      assert.equal(ttlFloorFromClassification(42), 0);
+      assert.equal(ttlFloorFromClassification({}), 0);
+      assert.equal(ttlFloorFromClassification({ ttlMs: Number.NaN }), 0);
+      assert.equal(ttlFloorFromClassification({ ttlMs: Number.POSITIVE_INFINITY }), 0);
+      assert.equal(ttlFloorFromClassification({ ttlMs: -100 }), 0);
+    });
+  });
+
+  describe('withRetry ttlMs honouring', () => {
+    it('uses the classifier ttlMs as a minimum backoff delay', async () => {
+      const sleeps = [];
+      const err = new Error('rate-limited');
+      await assert.rejects(
+        withRetry(async () => { throw err; }, {
+          maxRetries: 1,
+          baseDelayMs: 1,        // tiny base → jitter would be ~0
+          maxDelayMs: 30_000,
+          rng: () => 0,          // force jitter to 0 so only the floor remains
+          classifyError: () => ({ retryable: true, reason: 'rate-limited', ttlMs: 750 }),
+          // Intercept the wait so the test stays fast and observes the delay.
+          sleep: async (ms) => { sleeps.push(ms); },
+        }),
+        { message: 'rate-limited' },
+      );
+      assert.deepEqual(sleeps, [750], `expected ttlMs floor 750, got ${JSON.stringify(sleeps)}`);
+    });
+
+    it('does not throw and falls back to backoff when the classifier ttlMs is malformed', async () => {
+      const sleeps = [];
+      const err = new Error('weird-classifier');
+      await assert.rejects(
+        withRetry(async () => { throw err; }, {
+          maxRetries: 1,
+          baseDelayMs: 20,
+          maxDelayMs: 30_000,
+          rng: () => 1,          // full jitter so backoff (not the floor) drives the value
+          // Non-finite ttlMs must not corrupt the delay.
+          classifyError: () => ({ retryable: true, reason: 'weird', ttlMs: Number.POSITIVE_INFINITY }),
+          sleep: async (ms) => { sleeps.push(ms); },
+        }),
+        { message: 'weird-classifier' },
+      );
+      assert.equal(sleeps.length, 1);
+      assert.ok(Number.isInteger(sleeps[0]), `delay should be a finite integer, got ${sleeps[0]}`);
+      assert.ok(sleeps[0] >= 0, `delay should be >= 0, got ${sleeps[0]}`);
+      // attempt 0: cap = min(30000, 20*2^0) = 20, rng=1 → 20ms backoff, no NaN floor.
+      assert.equal(sleeps[0], 20);
     });
   });
 });

@@ -46,6 +46,9 @@ export type SettingsShape = {
   defaultModel: string | null
   showAdditionalModels: boolean
   streamResponses: boolean
+  // GENERAL — response speed/depth preference (persisted; mirrors Claude's
+  // "Velocidad"). thorough = más reflexiva · normal · fast = más directa.
+  responseSpeed: "thorough" | "normal" | "fast"
 
   // GENERAL — accessibility
   keyboardShortcuts: boolean
@@ -120,6 +123,7 @@ export const DEFAULT_SETTINGS: SettingsShape = {
   defaultModel: null,
   showAdditionalModels: true,
   streamResponses: true,
+  responseSpeed: "normal",
   keyboardShortcuts: true,
   reducedMotion: false,
   highContrast: false,
@@ -184,10 +188,12 @@ function applyPreviewVars(s: SettingsShape) {
   if (typeof document === "undefined") return
   const root = document.documentElement
 
-  // Theme — prefer explicit choice, else system preference.
-  root.classList.remove("dark")
-  const systemDark = typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches
-  if (s.theme === "dark" || (s.theme === "system" && systemDark)) root.classList.add("dark")
+  // Theme — owned exclusively by next-themes (the `dark`/`light` class) +
+  // the `.midnight` flag class, the same system the header ThemeToggle and
+  // the settings Theme picker drive. We deliberately do NOT touch the theme
+  // class here: doing so previously fought next-themes (e.g. a toggle change
+  // left `light` and `dark` both applied), so settings.theme is now just a
+  // persisted mirror and next-themes is the single source of truth.
 
   // Accent — drives --primary for tailwind/shadcn tokens.
   root.style.setProperty("--primary", ACCENT_HSL[s.accent])

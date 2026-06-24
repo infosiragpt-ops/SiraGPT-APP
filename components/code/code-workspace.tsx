@@ -7,7 +7,7 @@
  */
 
 import * as React from "react"
-import { AlertTriangle, Command as CommandIcon, Plus } from "lucide-react"
+import { Command as CommandIcon, Plus } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 
@@ -26,23 +26,26 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable"
-import { useCodeWorkspace } from "@/lib/code-workspace-context"
-import { browserSupportsLocalFolderSync } from "@/lib/code-workspace-utils"
+import {
+  CODE_OPEN_TOOL_EVENT,
+  useCodeWorkspace,
+} from "@/lib/code-workspace-context"
 import { CODE_TEMPLATES } from "@/lib/code-templates"
 
 import { AICodeChatPanel } from "./ai-code-chat-panel"
-import { EditorPanel } from "./editor-panel"
-import { PublishingConsole } from "./publishing-console"
+import { CodeHub } from "./code-hub"
 import { PreviewPane } from "./preview-pane"
-import { StatusBar } from "./status-bar"
 import { TerminalPanel } from "./terminal-panel"
-import { WorkspaceToolsMenu } from "./workspace-tools-menu"
+import { ToolLauncher } from "./tool-launcher"
+import { ToolScreen } from "./tool-screen"
 import { WorkspaceTopBar, type WorkspacePanelId } from "./workspace-top-bar"
+import { WORKSPACE_TOOLS, type WorkspaceToolId } from "@/lib/code-workspace-tools"
 
 const CHAT_DEFAULT_SIZE = 30
 const CHAT_MIN_SIZE = 22
 const TERMINAL_DEFAULT_SIZE = 32
 const TERMINAL_MIN_SIZE = 14
+const PENDING_CODE_TOOL_KEY = "code-workspace:pending-tool"
 
 type PaletteCommand = {
   id: string
@@ -79,11 +82,16 @@ export function CodeWorkspace() {
   }, [previewOpen])
   const [paletteOpen, setPaletteOpen] = React.useState(false)
   const [paletteQuery, setPaletteQuery] = React.useState("")
-  const [publishingOpen, setPublishingOpen] = React.useState(false)
   const [openPanels, setOpenPanels] = React.useState<Set<WorkspacePanelId>>(
     () => new Set<WorkspacePanelId>(["preview", "terminal"]),
   )
   const [activePanel, setActivePanel] = React.useState<WorkspacePanelId | null>("preview")
+
+  // Tool launcher (Replit-style dock) + the single active tool screen.
+  const [launcherOpen, setLauncherOpen] = React.useState(false)
+  const [activeTool, setActiveTool] = React.useState<WorkspaceToolId | null>(null)
+  // "Código" hub — file tree + editor, opened from the top-bar button.
+  const [codeHubOpen, setCodeHubOpen] = React.useState(false)
 
   const chatRef = React.useRef<ImperativePanelHandle>(null)
 
@@ -129,8 +137,8 @@ export function CodeWorkspace() {
         return
       }
       if (id === "git" || id === "validation") {
-        setPaletteQuery("")
-        setPaletteOpen(true)
+        setCodeHubOpen(false)
+        setActiveTool(id)
       }
     },
     [],
@@ -156,12 +164,69 @@ export function CodeWorkspace() {
     }
   }, [focusChat])
 
-  const handleNewFileFromTools = React.useCallback(() => {
-    if (typeof window === "undefined") return
-    const path = window.prompt("Nombre del archivo (incluye ruta)")
-    if (!path) return
-    createFile(path, "")
-  }, [createFile])
+  // Which tools count as "open tabs" in the launcher's dynamic section.
+  const openToolIds = React.useMemo<WorkspaceToolId[]>(() => {
+    const ids = new Set<WorkspaceToolId>()
+    if (chatOpen) ids.add("agent")
+    if (previewOpen || openPanels.has("preview")) ids.add("preview")
+    if (terminalOpen || openPanels.has("terminal")) ids.add("shell")
+    if (activeTool) ids.add(activeTool)
+    return Array.from(ids)
+  }, [activeTool, chatOpen, openPanels, previewOpen, terminalOpen])
+
+  // Pick a tool from the launcher: inline actions run immediately; everything
+  // else opens the single active tool screen ("una pantalla a la vez").
+  const handleSelectTool = React.useCallback(
+    (id: WorkspaceToolId) => {
+      setLauncherOpen(false)
+      const tool = WORKSPACE_TOOLS[id]
+      if (!tool) return
+      if (tool.behavior === "action") {
+        if (id === "agent") {
+          openComposer()
+          return
+        }
+        if (id === "new-file") {
+          if (typeof window === "undefined") return
+          const path = window.prompt("Nombre del archivo (incluye ruta)")
+          if (path) createFile(path, "")
+          return
+        }
+        if (id === "code-search") {
+          setPaletteQuery("open ")
+          setPaletteOpen(true)
+          return
+        }
+        return
+      }
+      setCodeHubOpen(false)
+      setActiveTool(id)
+    },
+    [createFile, openComposer],
+  )
+
+  React.useEffect(() => {
+    const openTool = (id: unknown) => {
+      if (typeof id !== "string" || !(id in WORKSPACE_TOOLS)) return
+      handleSelectTool(id as WorkspaceToolId)
+    }
+
+    try {
+      const pending = window.localStorage.getItem(PENDING_CODE_TOOL_KEY)
+      if (pending) {
+        window.localStorage.removeItem(PENDING_CODE_TOOL_KEY)
+        window.setTimeout(() => openTool(pending), 0)
+      }
+    } catch {
+      /* fail soft */
+    }
+
+    const onOpenTool = (event: Event) => {
+      openTool((event as CustomEvent<{ toolId?: string }>).detail?.toolId)
+    }
+    window.addEventListener(CODE_OPEN_TOOL_EVENT, onOpenTool)
+    return () => window.removeEventListener(CODE_OPEN_TOOL_EVENT, onOpenTool)
+  }, [handleSelectTool])
 
   const loadTemplate = React.useCallback(
     (templateId: string) => {
@@ -174,25 +239,6 @@ export function CodeWorkspace() {
       openFile(tpl.entry)
     },
     [applyBlock, files, openFile],
-  )
-
-  const toolsHandlers = React.useMemo(
-    () => ({
-      onTogglePanel: handleTogglePanel,
-      onOpenPalette: (query?: string) => {
-        setPaletteQuery(query ?? "")
-        setPaletteOpen(true)
-      },
-      onNewFile: handleNewFileFromTools,
-      onOpenPublishing: () => setPublishingOpen(true),
-      onFocusChat: () => {
-        setChatOpen(true)
-        chatRef.current?.expand()
-        focusChat()
-      },
-      onOpenComposer: openComposer,
-    }),
-    [focusChat, handleNewFileFromTools, handleTogglePanel, openComposer],
   )
 
   React.useEffect(() => {
@@ -250,6 +296,11 @@ export function CodeWorkspace() {
       if (key === "e") {
         e.preventDefault()
         setPreviewOpen((v) => !v)
+        return
+      }
+      if (key === "b") {
+        e.preventDefault()
+        setLauncherOpen((v) => !v)
         return
       }
       if (key === "l") {
@@ -336,7 +387,7 @@ export function CodeWorkspace() {
       },
       {
         id: "toggle-terminal",
-        label: terminalOpen ? "Ocultar terminal" : "Mostrar terminal",
+        label: terminalOpen ? "Ocultar Shell" : "Mostrar Shell",
         keywords: "terminal shell repl",
         hint: "⌘J",
         run: toggleTerminal,
@@ -372,8 +423,6 @@ export function CodeWorkspace() {
 
   return (
     <div className="flex h-screen min-w-0 flex-col overflow-hidden bg-background text-foreground">
-      <BrowserCompatBanner />
-
       <WorkspaceTopBar
         openPanels={openPanels}
         activePanel={activePanel}
@@ -387,22 +436,28 @@ export function CodeWorkspace() {
           setPaletteQuery("open ")
           setPaletteOpen(true)
         }}
+        onOpenLauncher={() => setLauncherOpen(true)}
+        launcherOpen={launcherOpen}
+        onOpenCode={() => {
+          setActiveTool(null)
+          setCodeHubOpen(true)
+        }}
+        codeOpen={codeHubOpen}
         toolsMenu={
-          <WorkspaceToolsMenu handlers={toolsHandlers}>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7 shrink-0 rounded-md text-muted-foreground"
-              aria-label="Herramientas y archivos"
-            >
-              <Plus className="h-3.5 w-3.5" />
-            </Button>
-          </WorkspaceToolsMenu>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
+            aria-label="Herramientas"
+            onClick={() => setLauncherOpen(true)}
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </Button>
         }
       />
 
-      <div className="min-h-0 flex-1">
+      <div className="relative min-h-0 flex-1">
         <div className="flex h-full min-h-0">
           <div className="min-w-0 flex-1">
             <ResizablePanelGroup direction="horizontal" className="h-full">
@@ -421,46 +476,50 @@ export function CodeWorkspace() {
               </ResizablePanel>
               <ResizableHandle withHandle />
 
-              <ResizablePanel defaultSize={70} minSize={32}>
-                <ResizablePanelGroup direction="horizontal">
-                  <ResizablePanel defaultSize={previewOpen ? 56 : 100} minSize={28} className="min-w-0">
-                    <ResizablePanelGroup direction="vertical">
-                      <ResizablePanel defaultSize={terminalOpen ? 100 - TERMINAL_DEFAULT_SIZE : 100} minSize={30}>
-                        <EditorPanel />
-                      </ResizablePanel>
-                      {terminalOpen ? (
-                        <>
-                          <ResizableHandle withHandle />
-                          <ResizablePanel defaultSize={TERMINAL_DEFAULT_SIZE} minSize={TERMINAL_MIN_SIZE} maxSize={70}>
-                            <TerminalPanel open={terminalOpen} onClose={() => setTerminalOpen(false)} />
-                          </ResizablePanel>
-                        </>
-                      ) : null}
-                    </ResizablePanelGroup>
-                  </ResizablePanel>
-                  {previewOpen ? (
-                    <>
-                      <ResizableHandle withHandle />
-                      <ResizablePanel defaultSize={44} minSize={24} className="min-w-0">
-                        <PreviewPane onClose={() => handleClosePanel("preview")} />
-                      </ResizablePanel>
-                    </>
-                  ) : null}
-                </ResizablePanelGroup>
+              <ResizablePanel defaultSize={70} minSize={32} className="relative min-w-0">
+                {/* The single active surface (the region right of the chat):
+                    live preview by default; the selected tool and the "Código"
+                    hub pin here via absolute inset-0 — never over the chat. */}
+                <div className="absolute inset-0">
+                  <ResizablePanelGroup direction="vertical">
+                    <ResizablePanel defaultSize={terminalOpen ? 100 - TERMINAL_DEFAULT_SIZE : 100} minSize={30}>
+                      <PreviewPane onClose={() => handleClosePanel("preview")} />
+                    </ResizablePanel>
+                    {terminalOpen ? (
+                      <>
+                        <ResizableHandle withHandle />
+                        <ResizablePanel defaultSize={TERMINAL_DEFAULT_SIZE} minSize={TERMINAL_MIN_SIZE} maxSize={70}>
+                          <TerminalPanel open={terminalOpen} onClose={() => setTerminalOpen(false)} />
+                        </ResizablePanel>
+                      </>
+                    ) : null}
+                  </ResizablePanelGroup>
+                </div>
+
+                {codeHubOpen ? (
+                  <CodeHub open onClose={() => setCodeHubOpen(false)} />
+                ) : activeTool ? (
+                  <ToolScreen
+                    toolId={activeTool}
+                    onClose={() => setActiveTool(null)}
+                    onBackToLauncher={() => {
+                      setActiveTool(null)
+                      setLauncherOpen(true)
+                    }}
+                  />
+                ) : null}
+
+                <ToolLauncher
+                  open={launcherOpen}
+                  onClose={() => setLauncherOpen(false)}
+                  onSelect={handleSelectTool}
+                  openToolIds={openToolIds}
+                />
               </ResizablePanel>
             </ResizablePanelGroup>
           </div>
         </div>
       </div>
-
-      <StatusBar
-        terminalOpen={terminalOpen}
-        onToggleTerminal={toggleTerminal}
-        chatOpen={chatOpen}
-        onToggleChat={toggleChat}
-      />
-
-      <PublishingConsole open={publishingOpen} onOpenChange={setPublishingOpen} />
 
       <Dialog
         open={paletteOpen}
@@ -514,29 +573,11 @@ export function CodeWorkspace() {
               )}
             </div>
             <p className="mt-3 text-[11px] text-muted-foreground">
-              Atajos: ⌘P abre archivos · ⌘⇧P paleta · ⌘K editar con IA · ⌘L Cursor Chat · ⌘I Composer · ⌘J terminal.
+              Atajos: ⌘P abre archivos · ⌘⇧P paleta · ⌘K editar con IA · ⌘L Cursor Chat · ⌘I Composer · ⌘J Shell.
             </p>
           </div>
         </DialogContent>
       </Dialog>
-    </div>
-  )
-}
-
-function BrowserCompatBanner() {
-  const [supported, setSupported] = React.useState<boolean | null>(null)
-  React.useEffect(() => {
-    setSupported(browserSupportsLocalFolderSync())
-  }, [])
-  if (supported !== false) return null
-  return (
-    <div className="flex shrink-0 items-start gap-2 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-[12px] text-amber-700 dark:text-amber-300">
-      <AlertTriangle className="mt-[1px] h-3.5 w-3.5 shrink-0" />
-      <p className="leading-snug">
-        Tu navegador no permite sincronizar con una carpeta local del disco. Tus cambios se guardan en este navegador,
-        pero <strong>se perderán si limpias los datos del sitio</strong>. Abre <code>/code</code> en Chrome o Edge para
-        enlazar una carpeta de tu escritorio.
-      </p>
     </div>
   )
 }

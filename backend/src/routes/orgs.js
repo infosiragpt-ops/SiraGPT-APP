@@ -42,6 +42,7 @@ const { authenticateToken } = require('../middleware/auth');
 const { writeAuditLog } = require('../utils/audit-log');
 const prisma = require('../config/database');
 const triggers = require('../services/trigger-registry');
+const { assertSafeUrl } = require('../services/agent-harness/tools/web-fetch-tool');
 const {
   slugify,
   uniqueSlug,
@@ -1872,8 +1873,13 @@ function validateWebhookUrl(url) {
   try {
     const u = new URL(url);
     if (u.protocol !== 'https:' && u.protocol !== 'http:') return 'url must be http(s)';
+    // SSRF guard — reject loopback/private/reserved/metadata targets.
+    assertSafeUrl(url);
     return null;
-  } catch {
+  } catch (err) {
+    if (err && err.code && String(err.code).startsWith('web_fetch_')) {
+      return err.message || 'url targets a host that is not allowed';
+    }
     return 'url is not a valid URL';
   }
 }
@@ -2187,20 +2193,25 @@ router.post('/:id/webhooks/bulk-toggle', authenticateToken, async (req, res) => 
       where: { id: { in: ids }, organizationId: orgId },
     });
     const existingById = new Map(existing.map((e) => [e.id, e]));
-    const updated = [];
-    const notFound = [];
+    // Preserve the caller's id order for a stable response.
+    const updated = ids.filter((id) => existingById.has(id));
+    const notFound = ids.filter((id) => !existingById.has(id));
 
-    for (const id of ids) {
-      const ep = existingById.get(id);
-      if (!ep) {
-        notFound.push(id);
-        continue;
-      }
-      const next = await prisma.webhookEndpoint.update({
-        where: { id: ep.id },
+    // Batch the flip into ONE updateMany instead of an N+1 loop of single-row
+    // UPDATEs. On the prod VPS each single-row write costs ~130ms (per-commit
+    // fsync), so a 50-endpoint toggle went from ~6.5s to a single round-trip.
+    // Every matched row gets the same isActive value, so this is behaviour-
+    // preserving (same `updated`/`notFound` split, same audit logs).
+    if (updated.length > 0) {
+      await prisma.webhookEndpoint.updateMany({
+        where: { id: { in: updated }, organizationId: orgId },
         data: { isActive: enabled },
       });
-      updated.push(next.id);
+    }
+
+    // Audit logs stay one-per-endpoint (fire-and-forget, non-critical path).
+    for (const id of updated) {
+      const ep = existingById.get(id);
       void writeAuditLog(prisma, {
         action: 'org_webhook_bulk_toggle',
         userId,
@@ -2246,20 +2257,16 @@ router.post('/:id/webhooks/bulk-delete', authenticateToken, async (req, res) => 
       where: { id: { in: ids }, organizationId: orgId },
     });
     const existingById = new Map(existing.map((e) => [e.id, e]));
-    const deleted = [];
-    const notFound = [];
+    const deletableIds = existing.map((e) => e.id);
+    const notFound = ids.filter((id) => !existingById.has(id));
 
-    for (const id of ids) {
-      const ep = existingById.get(id);
-      if (!ep) {
-        notFound.push(id);
-        continue;
-      }
-      const result = await prisma.webhookEndpoint.deleteMany({
-        where: { id: ep.id, organizationId: orgId },
+    // Single batched delete instead of one deleteMany per id (org+id scope is
+    // already applied). Matches the batched bulk-toggle / api-key-revoke paths.
+    if (deletableIds.length > 0) {
+      await prisma.webhookEndpoint.deleteMany({
+        where: { id: { in: deletableIds }, organizationId: orgId },
       });
-      if (result && result.count > 0) {
-        deleted.push(ep.id);
+      for (const ep of existing) {
         void writeAuditLog(prisma, {
           action: 'org_webhook_bulk_delete',
           userId,
@@ -2269,12 +2276,10 @@ router.post('/:id/webhooks/bulk-delete', authenticateToken, async (req, res) => 
           metadata: { orgId },
           req,
         });
-      } else {
-        notFound.push(id);
       }
     }
 
-    res.json({ updated: deleted, notFound });
+    res.json({ updated: deletableIds, notFound });
   } catch (err) {
     if (err && err.status) return res.status(err.status).json({ error: err.message });
     console.error('[orgs] bulk-delete webhooks failed:', err.message);
@@ -2749,19 +2754,28 @@ router.post('/:id/api-keys/bulk-revoke', authenticateToken, async (req, res) => 
       if (!ok) return undefined;
     }
 
-    const revoked = [];
-    const notFound = [];
-    for (const keyId of uniqueIds) {
-      // eslint-disable-next-line no-await-in-loop
-      const tombstoned = await prisma.apiKey.updateMany({
-        where: { id: keyId, organizationId: orgId, deletedAt: null },
+    // Determine which ids are actually revocable (exist, in this org, not
+    // already tombstoned) in ONE query, then soft-delete them in ONE
+    // updateMany — instead of an N+1 loop of single-row updateManys. On the
+    // prod VPS each write costs ~130ms (per-commit fsync), so revoking 50 keys
+    // went from ~6.5s to two round-trips. Same revoked/notFound split and
+    // one-audit-per-key behaviour.
+    const revocable = await prisma.apiKey.findMany({
+      where: { id: { in: uniqueIds }, organizationId: orgId, deletedAt: null },
+      select: { id: true },
+    });
+    const revocableSet = new Set(revocable.map((k) => k.id));
+    const revoked = uniqueIds.filter((id) => revocableSet.has(id));
+    const notFound = uniqueIds.filter((id) => !revocableSet.has(id));
+
+    if (revoked.length > 0) {
+      await prisma.apiKey.updateMany({
+        where: { id: { in: revoked }, organizationId: orgId, deletedAt: null },
         data: { deletedAt: new Date() },
       });
-      if (tombstoned.count === 0) {
-        notFound.push(keyId);
-        continue;
-      }
-      revoked.push(keyId);
+    }
+
+    for (const keyId of revoked) {
       void writeAuditLog(prisma, {
         action: 'org_api_key_delete',
         userId,

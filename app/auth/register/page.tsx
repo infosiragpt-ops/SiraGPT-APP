@@ -4,22 +4,35 @@ import * as React from "react"
 import Image from "next/image"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { Eye, EyeOff} from "lucide-react"
+import { ArrowLeft, Check, Eye, EyeOff } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Separator } from "@/components/ui/separator"
 import { useAuth } from "@/lib/auth-context-integrated"
+import { getNormalizedApiBaseUrl } from "@/lib/api"
+import { useBackendReady } from "@/lib/use-backend-ready"
 import { toast } from "sonner"
 import { useTranslations } from "next-intl"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+
+type FieldErrors = {
+  name?: string
+  email?: string
+  password?: string
+  confirmPassword?: string
+  agreeToTerms?: string
+}
+
 export default function RegisterPage() {
   const t = useTranslations("auth")
   const [showPassword, setShowPassword] = React.useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = React.useState(false)
   const [isLoading, setIsLoading] = React.useState(false)
+  const [googleLoading, setGoogleLoading] = React.useState(false)
   const [formData, setFormData] = React.useState({
     name: "",
     email: "",
@@ -27,9 +40,24 @@ export default function RegisterPage() {
     confirmPassword: "",
     agreeToTerms: false,
   })
+  const [errors, setErrors] = React.useState<FieldErrors>({})
 
   const { register, user } = useAuth()
   const router = useRouter()
+
+  // Prefetch the post-signup destination so the jump to /chat is instant.
+  React.useEffect(() => {
+    try { router.prefetch("/chat") } catch { /* prefetch is best-effort */ }
+  }, [router])
+
+  // Backend may still be booting right after a publish — queue the action and
+  // run it once it answers instead of showing a misleading 500 error.
+  const backendState = useBackendReady()
+  const [pendingAction, setPendingAction] = React.useState<null | "google" | "register">(null)
+
+  const goToGoogle = React.useCallback(() => {
+    window.location.href = `${getNormalizedApiBaseUrl()}/auth/google`
+  }, [])
 
   // Redirect if already logged in
   React.useEffect(() => {
@@ -38,23 +66,18 @@ export default function RegisterPage() {
     }
   }, [user, router])
 
-  const handleRegister = async (e: React.FormEvent) => {
-    e.preventDefault()
-
-    if (formData.password !== formData.confirmPassword) {
-      toast.error("Las contraseñas no coinciden")
+  const handleBack = () => {
+    if (window.history.length > 1) {
+      router.back()
       return
     }
+    router.push("/auth")
+  }
 
-    if (formData.password.length < 6) {
-      toast.error("La contraseña debe tener al menos 6 caracteres")
-      return
-    }
-
+  const runRegister = React.useCallback(async () => {
     setIsLoading(true)
-
     try {
-      const success = await register(formData.name, formData.email, formData.password)
+      const success = await register(formData.name.trim(), formData.email.trim(), formData.password)
       if (success) {
         toast.success("Cuenta creada con éxito")
         router.push("/chat")
@@ -66,21 +89,127 @@ export default function RegisterPage() {
     } finally {
       setIsLoading(false)
     }
+  }, [formData.name, formData.email, formData.password, register, router])
+
+  // Inline, field-level validation (mirrors the login page) so users get
+  // immediate feedback instead of a sequence of toasts.
+  const validateForm = React.useCallback(() => {
+    const next: FieldErrors = {}
+    if (!formData.name.trim()) next.name = t("nameRequired")
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email.trim())) next.email = t("emailInvalid")
+    if (formData.password.length < 6) next.password = t("passwordTooShort")
+    if (formData.confirmPassword !== formData.password) next.confirmPassword = t("passwordsNoMatch")
+    if (!formData.agreeToTerms) next.agreeToTerms = t("agreeTermsRequired")
+    setErrors(next)
+    return Object.keys(next).length === 0
+  }, [formData, t])
+
+  const handleRegister = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!validateForm()) return
+    if (backendState !== "ready") {
+      setPendingAction("register")
+      return
+    }
+    void runRegister()
   }
 
-  const handleInputChange = (field: string, value: string | boolean) => {
+  const handleGoogle = () => {
+    setGoogleLoading(true)
+    if (backendState === "ready") {
+      goToGoogle()
+      return
+    }
+    setPendingAction("google")
+  }
+
+  // Flush a queued action once the backend reports ready.
+  React.useEffect(() => {
+    if (backendState !== "ready" || !pendingAction) return
+    const action = pendingAction
+    setPendingAction(null)
+    if (action === "google") {
+      goToGoogle()
+    } else if (action === "register") {
+      void runRegister()
+    }
+  }, [backendState, pendingAction, goToGoogle, runRegister])
+
+  const isWarming = backendState === "warming" || (backendState !== "ready" && pendingAction !== null)
+
+  const handleInputChange = (field: keyof typeof formData, value: string | boolean) => {
     setFormData((prev) => ({ ...prev, [field]: value }))
+    setErrors((prev) => (prev[field as keyof FieldErrors] ? { ...prev, [field]: undefined } : prev))
   }
 
   const fieldClassName =
-    "border-neutral-300 bg-white text-neutral-900 placeholder:text-neutral-500 focus-visible:border-neutral-900 focus-visible:ring-neutral-900/15 dark:border-white/20 dark:bg-black dark:text-white dark:placeholder:text-zinc-500 dark:focus-visible:border-white/45 dark:focus-visible:ring-white/20"
+    "border-neutral-300 bg-white text-neutral-900 placeholder:text-neutral-500 focus-visible:border-neutral-900 focus-visible:ring-neutral-900/15"
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-neutral-50 p-4 dark:bg-black">
-      <Card className="w-full max-w-md border-neutral-200 bg-white text-neutral-950 shadow-[0_24px_64px_-16px_rgba(0,0,0,0.18)] dark:border-white/15 dark:bg-zinc-950 dark:text-zinc-50 dark:shadow-[0_28px_70px_-18px_rgba(0,0,0,0.75)]">
-        <CardHeader className="text-center">
-          <div className="mb-4 flex justify-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-neutral-200 bg-white dark:border-white/15 dark:bg-white">
+    <div className="flex min-h-[100svh] bg-neutral-50 text-neutral-950 sm:min-h-screen" style={{ colorScheme: "light" }}>
+      {/* Brand panel — premium marketing rail (desktop only) */}
+      <aside
+        className="relative hidden w-[45%] flex-col justify-between overflow-hidden p-12 text-white lg:flex xl:p-14"
+        style={{ backgroundColor: "#0a0a0a", colorScheme: "dark" }}
+      >
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0"
+          style={{
+            background:
+              "radial-gradient(55% 45% at 12% 12%, rgba(124,58,237,0.28), transparent 70%), radial-gradient(50% 45% at 100% 100%, rgba(79,70,229,0.20), transparent 70%)",
+          }}
+        />
+
+        <div className="relative flex items-center gap-3">
+          <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/10 ring-1 ring-white/15 backdrop-blur">
+            <Image src="/sira-gpt.png" alt="" width={28} height={28} className="rounded-md object-contain" />
+          </div>
+          <span className="text-lg font-semibold tracking-tight">SiraGPT</span>
+        </div>
+
+        <div className="relative space-y-8">
+          <h2 className="max-w-md text-4xl font-semibold leading-[1.15] tracking-tight">
+            {t("brandTagline")}
+          </h2>
+          <ul className="space-y-4">
+            {[t("brandFeature1"), t("brandFeature2"), t("brandFeature3")].map((feature) => (
+              <li key={feature} className="flex items-start gap-3 text-white/80">
+                <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/10 ring-1 ring-white/15">
+                  <Check className="h-3.5 w-3.5 text-white" />
+                </span>
+                <span className="text-[15px] leading-6">{feature}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <div className="relative text-sm text-white/50">{t("brandFooter")}</div>
+      </aside>
+
+      {/* Form panel */}
+      <main className="flex w-full flex-col items-center justify-center overflow-y-auto px-4 py-6 sm:py-10 lg:w-[55%]">
+      <Card
+        data-testid="register-card"
+        className="w-full max-w-md border-neutral-200 bg-white text-neutral-950 shadow-[0_24px_64px_-16px_rgba(0,0,0,0.18)]"
+      >
+        <CardHeader className="px-6 pt-7 text-center sm:px-8 sm:pt-8">
+          <div className="mb-5 grid grid-cols-[1fr_auto_1fr] items-center">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={handleBack}
+              className="h-9 w-fit gap-1.5 justify-self-start rounded-full border border-neutral-200 bg-white/90 px-3 text-sm font-medium text-neutral-700 shadow-sm backdrop-blur transition hover:bg-neutral-50 hover:text-neutral-950"
+              aria-label="Volver atras"
+              data-testid="register-back-button"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Volver
+            </Button>
+            <div
+              data-testid="register-logo"
+              className="flex h-14 w-14 items-center justify-center rounded-2xl border border-neutral-200 bg-white"
+            >
               <Image
                 src="/sira-gpt.png"
                 alt=""
@@ -89,17 +218,72 @@ export default function RegisterPage() {
                 className="rounded-lg object-contain"
               />
             </div>
+            <div aria-hidden="true" />
           </div>
-          <CardTitle className="text-2xl font-semibold tracking-tight text-neutral-900 dark:text-white">
+          <CardTitle className="text-2xl font-semibold tracking-tight text-neutral-900">
             {t("createYourAccount")}
           </CardTitle>
-          <CardDescription className="text-neutral-600 dark:text-zinc-400">{t("registerTagline")}</CardDescription>
+          <CardDescription className="text-neutral-600">{t("registerTagline")}</CardDescription>
         </CardHeader>
 
         <CardContent>
-          <form onSubmit={handleRegister} className="space-y-4">
+          {isWarming && (
+            <div
+              role="status"
+              aria-live="polite"
+              data-testid="register-server-warming"
+              className="mb-4 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800"
+            >
+              <ThinkingIndicator size="sm" />
+              <span>{t("serverWarming")}</span>
+            </div>
+          )}
+
+          {/* Social-first: Google sign-up is the primary path, above the form. */}
+          <Button
+            variant="outline"
+            type="button"
+            disabled={isLoading || googleLoading}
+            onClick={handleGoogle}
+            className="h-11 w-full border-neutral-300 bg-white font-medium text-neutral-900 hover:bg-neutral-100"
+          >
+            {(googleLoading || pendingAction === "google") ? (
+              <ThinkingIndicator size="sm" className="mr-2" />
+            ) : (
+              <svg className="mr-2 h-4 w-4" viewBox="0 0 24 24">
+                <path
+                  d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                  fill="#4285F4"
+                />
+                <path
+                  d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                  fill="#34A853"
+                />
+                <path
+                  d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
+                  fill="#FBBC05"
+                />
+                <path
+                  d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+                  fill="#EA4335"
+                />
+              </svg>
+            )}
+            {pendingAction === "google" ? t("serverWarmingButton") : t("signUpWithGoogle")}
+          </Button>
+
+          <div className="relative my-6">
+            <div className="absolute inset-0 flex items-center">
+              <Separator className="w-full" />
+            </div>
+            <div className="relative flex justify-center text-xs uppercase tracking-wider">
+              <span className="bg-white px-2 text-neutral-500">{t("orWithEmail")}</span>
+            </div>
+          </div>
+
+          <form onSubmit={handleRegister} noValidate className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="name" className="text-neutral-900 dark:text-zinc-100">
+              <Label htmlFor="name" className="text-neutral-900">
                 {t("name")}
               </Label>
               <Input
@@ -111,29 +295,47 @@ export default function RegisterPage() {
                 onChange={(e) => handleInputChange("name", e.target.value)}
                 required
                 disabled={isLoading}
-                className={fieldClassName}
+                aria-invalid={errors.name ? true : undefined}
+                aria-describedby={errors.name ? "name-error" : undefined}
+                className={`${fieldClassName}${errors.name ? " border-red-400" : ""}`}
               />
+              {errors.name && (
+                <p id="name-error" role="alert" className="text-sm text-red-600">
+                  {errors.name}
+                </p>
+              )}
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="email" className="text-neutral-900 dark:text-zinc-100">
+              <Label htmlFor="email" className="text-neutral-900">
                 {t("email")}
               </Label>
               <Input
                 id="email"
                 type="email"
+                inputMode="email"
                 autoComplete="email"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
                 placeholder={t("emailPlaceholder")}
                 value={formData.email}
                 onChange={(e) => handleInputChange("email", e.target.value)}
                 required
                 disabled={isLoading}
-                className={fieldClassName}
+                aria-invalid={errors.email ? true : undefined}
+                aria-describedby={errors.email ? "email-error" : undefined}
+                className={`${fieldClassName}${errors.email ? " border-red-400" : ""}`}
               />
+              {errors.email && (
+                <p id="email-error" role="alert" className="text-sm text-red-600">
+                  {errors.email}
+                </p>
+              )}
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="password" className="text-neutral-900 dark:text-zinc-100">
+              <Label htmlFor="password" className="text-neutral-900">
                 {t("password")}
               </Label>
               <div className="relative">
@@ -146,23 +348,32 @@ export default function RegisterPage() {
                   onChange={(e) => handleInputChange("password", e.target.value)}
                   required
                   disabled={isLoading}
-                  className={`${fieldClassName} pr-11`}
+                  aria-invalid={errors.password ? true : undefined}
+                  aria-describedby={errors.password ? "password-error" : undefined}
+                  className={`${fieldClassName} pr-11${errors.password ? " border-red-400" : ""}`}
                 />
                 <Button
                   type="button"
                   variant="ghost"
                   size="sm"
-                  className="absolute right-0 top-0 h-full px-3 py-2 text-neutral-600 hover:bg-transparent hover:text-neutral-900 dark:text-zinc-400 dark:hover:text-white"
+                  className="absolute right-0 top-0 h-full px-3 py-2 text-neutral-600 hover:bg-transparent hover:text-neutral-900"
                   onClick={() => setShowPassword(!showPassword)}
                   disabled={isLoading}
                 >
                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </Button>
               </div>
+              {errors.password ? (
+                <p id="password-error" role="alert" className="text-sm text-red-600">
+                  {errors.password}
+                </p>
+              ) : (
+                <p className="text-xs text-neutral-500">{t("passwordMinHint")}</p>
+              )}
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="confirmPassword" className="text-neutral-900 dark:text-zinc-100">
+              <Label htmlFor="confirmPassword" className="text-neutral-900">
                 {t("confirmPassword")}
               </Label>
               <div className="relative">
@@ -175,38 +386,52 @@ export default function RegisterPage() {
                   onChange={(e) => handleInputChange("confirmPassword", e.target.value)}
                   required
                   disabled={isLoading}
-                  className={`${fieldClassName} pr-11`}
+                  aria-invalid={errors.confirmPassword ? true : undefined}
+                  aria-describedby={errors.confirmPassword ? "confirm-error" : undefined}
+                  className={`${fieldClassName} pr-11${errors.confirmPassword ? " border-red-400" : ""}`}
                 />
                 <Button
                   type="button"
                   variant="ghost"
                   size="sm"
-                  className="absolute right-0 top-0 h-full px-3 py-2 text-neutral-600 hover:bg-transparent hover:text-neutral-900 dark:text-zinc-400 dark:hover:text-white"
+                  className="absolute right-0 top-0 h-full px-3 py-2 text-neutral-600 hover:bg-transparent hover:text-neutral-900"
                   onClick={() => setShowConfirmPassword(!showConfirmPassword)}
                   disabled={isLoading}
                 >
                   {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </Button>
               </div>
+              {errors.confirmPassword && (
+                <p id="confirm-error" role="alert" className="text-sm text-red-600">
+                  {errors.confirmPassword}
+                </p>
+              )}
             </div>
 
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="terms"
-                checked={formData.agreeToTerms}
-                onCheckedChange={(checked) => handleInputChange("agreeToTerms", checked as boolean)}
-                disabled={isLoading}
-                className="border-neutral-900 data-[state=checked]:bg-neutral-900 data-[state=checked]:text-white dark:border-white dark:data-[state=checked]:bg-white dark:data-[state=checked]:text-black"
-              />
-              <Label htmlFor="terms" className="text-sm text-neutral-700 dark:text-zinc-300">
-                {t("agreeTerms")}
-              </Label>
+            <div className="space-y-1">
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="terms"
+                  checked={formData.agreeToTerms}
+                  onCheckedChange={(checked) => handleInputChange("agreeToTerms", checked as boolean)}
+                  disabled={isLoading}
+                  className="border-neutral-900 data-[state=checked]:bg-neutral-900 data-[state=checked]:text-white"
+                />
+                <Label htmlFor="terms" className="text-sm text-neutral-700">
+                  {t("agreeTerms")}
+                </Label>
+              </div>
+              {errors.agreeToTerms && (
+                <p role="alert" className="text-sm text-red-600">
+                  {errors.agreeToTerms}
+                </p>
+              )}
             </div>
 
             <Button
               type="submit"
-              className="w-full bg-neutral-900 font-semibold text-white shadow-sm hover:bg-neutral-800 dark:bg-white dark:text-black dark:hover:bg-zinc-200"
-              disabled={!formData.agreeToTerms || isLoading}
+              className="w-full bg-neutral-900 font-semibold text-white shadow-sm hover:bg-neutral-800"
+              disabled={isLoading}
             >
               {isLoading ? (
                 <>
@@ -221,17 +446,18 @@ export default function RegisterPage() {
         </CardContent>
 
         <CardFooter className="justify-center text-center">
-          <p className="text-sm text-neutral-600 dark:text-zinc-400">
+          <p className="text-sm text-neutral-600">
             {t("haveAccount")}{" "}
             <Link
               href="/auth/login"
-              className="font-semibold text-neutral-900 underline decoration-neutral-900/30 underline-offset-4 transition-colors hover:decoration-neutral-900 dark:text-white dark:decoration-white/40 dark:hover:decoration-white"
+              className="font-semibold text-neutral-900 underline decoration-neutral-900/30 underline-offset-4 transition-colors hover:decoration-neutral-900"
             >
               {t("signIn")}
             </Link>
           </p>
         </CardFooter>
       </Card>
+      </main>
     </div>
   )
 }

@@ -20,6 +20,11 @@ function PaymentSuccessContent() {
   const [success, setSuccess] = useState(false)
   const [sessionInfo, setSessionInfo] = useState<any>(null)
   const [subscriptionInfo, setSubscriptionInfo] = useState<any>(null)
+  const [paymentDate, setPaymentDate] = useState<string>("")
+
+  // Set the date only on the client to avoid SSR/client locale mismatch
+  // (server renders with server locale, client with user locale → hydration error).
+  useEffect(() => { setPaymentDate(new Date().toLocaleDateString()) }, [])
 
   const sessionId = searchParams.get('session_id')
 
@@ -307,7 +312,7 @@ function PaymentSuccessContent() {
                       </div>
                       <div className="flex justify-between">
                         <span>Fecha de pago:</span>
-                        <span>{new Date().toLocaleDateString()}</span>
+                        <span suppressHydrationWarning>{paymentDate || "—"}</span>
                       </div>
                       <div className="flex justify-between">
                         <span>Método:</span>

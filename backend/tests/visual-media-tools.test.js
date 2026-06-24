@@ -32,6 +32,27 @@ require.cache[require.resolve(path.join(SERVICE_DIR, 'ai-service'))] = {
   },
 };
 
+// Stub the multi-provider image engine (generate_image / edit_image route
+// through it now) so tests never hit a real provider.
+require.cache[require.resolve(path.join(SERVICE_DIR, 'media/image-engine'))] = {
+  exports: {
+    generateImage: async () => ({
+      ok: true,
+      images: [{ b64: Buffer.from('fake-image-bytes').toString('base64'), mime: 'image/png' }],
+      provider: 'openai',
+      model: 'gpt-image-2',
+      attempts: [{ provider: 'openai', model: 'gpt-image-2', ok: true }],
+    }),
+    editImage: async () => ({
+      ok: true,
+      images: [{ b64: Buffer.from('fake-edited-bytes').toString('base64'), mime: 'image/png' }],
+      provider: 'gemini',
+      model: 'gemini-2.5-flash-image',
+      attempts: [{ provider: 'gemini', model: 'gemini-2.5-flash-image', ok: true }],
+    }),
+  },
+};
+
 // Stub viz-generator
 require.cache[require.resolve(path.join(SERVICE_DIR, 'viz-generator'))] = {
   exports: {},
@@ -154,6 +175,19 @@ test('create_chart: bar chart SVG', async () => {
   const fp = assertArtifact(r);
   const c = fs.readFileSync(fp, 'utf8');
   assert.ok(c.includes('Test Chart'));
+});
+
+test('create_chart: histogram renders as bars (rect), not a line', async () => {
+  const r = await tool('create_chart').execute({
+    chartType: 'histogram', title: 'Distribution',
+    labels: ['0-10', '10-20', '20-30'],
+    datasets: [{ label: 'freq', data: [5, 12, 8] }],
+    theme: 'professional',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const c = fs.readFileSync(assertArtifact(r), 'utf8');
+  // Bars, not a line/area path connecting the points.
+  assert.ok(c.includes('<rect'), 'histogram should render rect bars');
 });
 
 test('create_chart: pie chart', async () => {
@@ -344,6 +378,19 @@ test('create_timeline: empty events fails gracefully', async () => {
     title: 'Empty', events: [],
   }, fakeCtx());
   assert.equal(r.ok, false);
+});
+
+test('create_timeline: a hostile event color cannot break out of the SVG fill', async () => {
+  // Regression: ev.color was interpolated raw into fill="..."; a value with a
+  // quote could break the attribute. safeColor() now falls back to the palette.
+  const r = await tool('create_timeline').execute({
+    title: 'T',
+    events: [{ date: '2026', title: 'E', color: '"><script>alert(1)</script>' }],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const c = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(!c.includes('<script>alert(1)</script>'), 'hostile color must not inject markup');
+  assert.ok(!c.includes('fill="">'), 'attribute must not be broken open');
 });
 
 // ── create_kanban_board ──────────────────────────────────────────
@@ -651,10 +698,47 @@ test('create_dashboard_html: no charts', async () => {
   assert.equal(r.ok, true);
 });
 
+test('create_dashboard_html: hostile metric/dataset color cannot break out of HTML/JS', async () => {
+  // Regression: m.color was interpolated raw into a style="" attribute and
+  // ds.color raw into a JS string literal. A safeColor() gate now falls back
+  // to the theme color for any non-hex/rgb value.
+  const r = await tool('create_dashboard_html').execute({
+    title: 'XSS Probe',
+    metrics: [{ label: 'x', value: '1', color: '"><script>alert(1)</script>' }],
+    charts: [{
+      type: 'bar', title: 'C', labels: ['a'],
+      datasets: [{ label: 'S', data: [1], color: "'+evil+'" }],
+    }],
+    theme: 'light',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const c = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(!c.includes('<script>alert(1)</script>'), 'HTML breakout must be neutralised');
+  assert.ok(!c.includes("'+evil+'"), 'JS string-literal breakout must be neutralised');
+});
+
+test('create_dashboard_html: a chart label cannot close the inline <script>', async () => {
+  // Regression: chart label/data went through plain JSON.stringify into a
+  // <script> block; a label of "</script>…" terminated the script element.
+  const r = await tool('create_dashboard_html').execute({
+    title: 'Probe', metrics: [],
+    charts: [{
+      type: 'bar', title: 'C',
+      labels: ['</script><img src=x onerror=alert(1)>'],
+      datasets: [{ label: 'L', data: [1] }],
+    }],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const c = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(!c.includes('</script><img'), 'user </script> must be escaped, not terminate the script');
+  assert.ok(c.includes('\\u003c/script'), 'the < should be \\u003c-escaped inside the script');
+});
+
+
 // ── Tool metadata ────────────────────────────────────────────────
 
-test('all 34 tools have valid metadata', () => {
-  assert.equal(VISUAL_MEDIA_TOOLS.length, 34);
+test('all 35 tools have valid metadata', () => {
+  assert.equal(VISUAL_MEDIA_TOOLS.length, 35);
   for (const t of VISUAL_MEDIA_TOOLS) {
     assert.ok(t.name);
     assert.ok(t.description);

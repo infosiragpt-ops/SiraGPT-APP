@@ -17,13 +17,22 @@ class UsageMonitorService {
 
       if (!user) return;
 
-      const usagePercentage = user.apiUsage / user.monthlyLimit;
-      const callUsagePercentage = user.monthlyCallLimit > 0 ? user.monthlyCallLimit / (user.plan === 'FREE' ? 3 : 1000) : 0;
+      // Guard the 0/0 → NaN case (FREE users have monthlyLimit 0).
+      const usagePercentage = user.monthlyLimit > 0 ? user.apiUsage / user.monthlyLimit : 0;
+      // `monthlyCallLimit` holds calls REMAINING (decrements from the cap; see
+      // plan-quota.js). The previous code divided remaining by the cap, which
+      // inverted the percentage — a brand-new FREE user (3 remaining) read as
+      // "100% used" and a fully-spent one (0 remaining) as "0% used". Compute
+      // CONSUMED = cap - remaining.
+      const callCap = user.plan === 'FREE' ? 3 : 1000;
+      const callsRemaining = Number(user.monthlyCallLimit ?? callCap);
+      const callsConsumed = Math.max(0, callCap - callsRemaining);
+      const callUsagePercentage = callCap > 0 ? callsConsumed / callCap : 0;
 
       // Check API usage alerts
       await this.checkApiUsageAlerts(user, usagePercentage);
-      
-      // Check call limit alerts  
+
+      // Check call limit alerts
       await this.checkCallLimitAlerts(user, callUsagePercentage);
 
       return {
@@ -33,8 +42,8 @@ class UsageMonitorService {
           percentage: usagePercentage
         },
         callUsage: {
-          current: user.monthlyCallLimit,
-          limit: user.plan === 'FREE' ? 3 : 1000,
+          current: callsConsumed,
+          limit: callCap,
           percentage: callUsagePercentage
         }
       };
@@ -65,19 +74,21 @@ class UsageMonitorService {
 
   async checkCallLimitAlerts(user, callUsagePercentage) {
     if (user.plan === 'FREE') {
-      const callThreshold = user.monthlyCallLimit / 3;
-      
-      if (callThreshold >= 0.8) {
+      // Use the consumed-based ratio passed in (was recomputing
+      // `monthlyCallLimit / 3`, which is the inverted remaining-as-consumed bug
+      // — it alerted brand-new users at "100%" and never alerted spent ones).
+      if (callUsagePercentage >= 0.8) {
         const lastAlertSent = await this.getLastAlertSent(user.id, 'call_usage');
-        
+
         if (!lastAlertSent || new Date() - new Date(lastAlertSent.sentAt) > 24 * 60 * 60 * 1000) {
-          await this.sendUsageAlert(user, callThreshold, 'call_usage', {
-            current: user.monthlyCallLimit,
+          const callsConsumed = Math.max(0, 3 - Number(user.monthlyCallLimit ?? 3));
+          await this.sendUsageAlert(user, callUsagePercentage, 'call_usage', {
+            current: callsConsumed,
             limit: 3,
-            percentage: callThreshold
+            percentage: callUsagePercentage
           });
 
-          await this.recordAlertSent(user.id, 'call_usage', callThreshold);
+          await this.recordAlertSent(user.id, 'call_usage', callUsagePercentage);
         }
       }
     }

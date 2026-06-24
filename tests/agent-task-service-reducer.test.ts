@@ -203,10 +203,35 @@ describe("reduceEvent · final_text / done / error", () => {
 })
 
 describe("reduceEvent · unknown event", () => {
-  it("returns the state object unchanged for an unhandled type", () => {
+  // Since the stale-stream fix (commit 6101919c1) EVERY event — heartbeats
+  // and unknown types included — refreshes state.lastEventAt so the UI's
+  // stale guard can tell "model thinking quietly" apart from "stream dead".
+  // Nothing else may change, and the input state must not be mutated.
+  it("only refreshes the liveness stamp for an unhandled type", () => {
     const before = fresh()
-    const after = reduceEvent(before, { type: "totally_unknown_event" } as any)
-    // Same object reference is returned via the default branch.
-    assert.equal(after, before)
+    const snapshot = JSON.parse(JSON.stringify(before))
+    const after = reduceEvent(before, {
+      type: "totally_unknown_event",
+      ts: "2026-06-11T00:00:00.000Z",
+    } as any)
+
+    // The event's own ts wins as the liveness stamp.
+    const { lastEventAt, ...rest } = after
+    assert.equal(lastEventAt, "2026-06-11T00:00:00.000Z")
+    // Everything else is untouched...
+    assert.deepEqual(rest, snapshot)
+    // ...and the reducer stays pure: the input object was not mutated.
+    assert.deepEqual(before, snapshot)
+  })
+
+  it("falls back to a fresh ISO timestamp when the event has no ts", () => {
+    const t0 = Date.now()
+    const after = reduceEvent(fresh(), { type: "totally_unknown_event" } as any)
+    assert.ok(after.lastEventAt, "lastEventAt should be stamped")
+    const stamped = Date.parse(after.lastEventAt!)
+    assert.ok(
+      stamped >= t0 - 1000 && stamped <= Date.now() + 1000,
+      `lastEventAt (${after.lastEventAt}) should be ~now`,
+    )
   })
 })

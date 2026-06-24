@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { SidebarTrigger } from "@/components/ui/sidebar"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { apiClient } from "@/lib/api"
 import { toast } from "sonner"
 
@@ -305,7 +306,7 @@ export function AdminDashboard() {
           </CardHeader>
           <CardContent className="space-y-2">
             <Button variant="outline" size="sm" className="w-full justify-start gap-2" onClick={exportUsers} disabled={exportingUsers}>
-              {exportingUsers ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+              {exportingUsers ? <ThinkingIndicator size="sm" /> : <Download className="h-4 w-4" />}
               Exportar usuarios
             </Button>
             <Button variant="outline" size="sm" className="w-full justify-start gap-2" onClick={() => window.location.assign("/admin/reports")}>

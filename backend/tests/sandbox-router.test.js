@@ -79,9 +79,9 @@ beforeEach(() => {
 
 describe('readPreference', () => {
   it('returns default [e2b, local] when SANDBOX_PREFERENCE is unset', () => {
-    assert.deepEqual(router.readPreference({}), ['e2b', 'local']);
-    assert.deepEqual(router.readPreference({ SANDBOX_PREFERENCE: '' }), ['e2b', 'local']);
-    assert.deepEqual(router.readPreference({ SANDBOX_PREFERENCE: '   ' }), ['e2b', 'local']);
+    assert.deepEqual(router.readPreference({}), ['remote', 'e2b', 'local']);
+    assert.deepEqual(router.readPreference({ SANDBOX_PREFERENCE: '' }), ['remote', 'e2b', 'local']);
+    assert.deepEqual(router.readPreference({ SANDBOX_PREFERENCE: '   ' }), ['remote', 'e2b', 'local']);
   });
 
   it('parses a comma-separated preference', () => {
@@ -126,7 +126,7 @@ describe('readPreference', () => {
   it('falls back to default when ALL tokens are unknown', () => {
     assert.deepEqual(
       router.readPreference({ SANDBOX_PREFERENCE: 'docker,wasm' }),
-      ['e2b', 'local'],
+      ['remote', 'e2b', 'local'],
     );
   });
 
@@ -135,7 +135,7 @@ describe('readPreference', () => {
     const b = router.readPreference({});
     assert.notStrictEqual(a, b);
     a.length = 0;
-    assert.equal(router.readPreference({}).length, 2);
+    assert.equal(router.readPreference({}).length, 3);
   });
 });
 
@@ -149,7 +149,7 @@ describe('describeBackends', () => {
     assert.equal(out.e2b.available, true);
     assert.equal(out.e2b.configured, true);
     assert.equal(out.local.available, false);
-    assert.deepEqual(out.preference, ['e2b', 'local']);
+    assert.deepEqual(out.preference, ['remote', 'e2b', 'local']);
   });
 
   it('includes the resolved preference', () => {
@@ -166,7 +166,7 @@ describe('executeCode · no backend enabled', () => {
     assert.equal(out.ok, false);
     assert.equal(out.code, 'sandbox_no_backend');
     assert.equal(out.backend, 'none');
-    assert.match(out.message, /no sandbox backend is enabled/);
+    assert.match(out.message, /no sandbox backend enabled/);
   });
 });
 

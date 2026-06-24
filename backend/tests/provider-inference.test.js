@@ -62,10 +62,12 @@ test('inferProviderFromModelId: Google Gemini family', () => {
   assert.equal(inferProviderFromModelId('imagen-3'), 'Gemini');
 });
 
-test('inferProviderFromModelId: Groq handles llama-3.x models', () => {
+test('inferProviderFromModelId: Groq -versatile vs bare-llama Cerebras (FlashGPT)', () => {
   assert.equal(inferProviderFromModelId('llama-3.3-70b-versatile'), 'Groq');
-  assert.equal(inferProviderFromModelId('llama-3.1-8b'), 'OpenAI');
-  assert.equal(inferProviderFromModelId('llama-3.1-70b'), 'OpenAI');
+  // Bare FlashGPT/Cerebras model ids route to Cerebras (not OpenAI, which
+  // doesn't serve them) — createProviderClient('Cerebras') gates on the key.
+  assert.equal(inferProviderFromModelId('llama-3.1-8b'), 'Cerebras');
+  assert.equal(inferProviderFromModelId('llama-3.1-70b'), 'Cerebras');
 });
 
 test('inferProviderFromModelId: Anthropic direct (bare claude-*)', () => {
@@ -91,6 +93,73 @@ test('inferProviderFromModelId: unknown ids fall back to OpenAI (safe)', () => {
   assert.equal(inferProviderFromModelId('gpt-5'), 'OpenAI');
   assert.equal(inferProviderFromModelId('gpt-4o-mini'), 'OpenAI');
   assert.equal(inferProviderFromModelId('something-totally-new'), 'OpenAI');
+});
+
+test('inferProviderFromModelId: hostile non-string inputs never throw → OpenAI default', () => {
+  // Null-prototype object — String() throws "Cannot convert object to primitive value".
+  assert.equal(inferProviderFromModelId(Object.create(null)), 'OpenAI');
+  // toString that throws.
+  assert.equal(
+    inferProviderFromModelId({ toString() { throw new Error('boom'); } }),
+    'OpenAI'
+  );
+  // Plain non-strings coerce safely to the fallback.
+  assert.equal(inferProviderFromModelId(123), 'OpenAI');
+  assert.equal(inferProviderFromModelId(true), 'OpenAI');
+  assert.equal(inferProviderFromModelId({}), 'OpenAI');
+});
+
+test('isDirectDeepSeekModel: hostile non-string inputs never throw', () => {
+  assert.equal(isDirectDeepSeekModel(Object.create(null)), false);
+  assert.equal(isDirectDeepSeekModel({ toString() { throw new Error('boom'); } }), false);
+  assert.equal(isDirectDeepSeekModel(42), false);
+});
+
+test('inferProviderFromModelId: surrounding whitespace infers same as clean form', () => {
+  assert.equal(inferProviderFromModelId('  claude-opus-4-7  '), 'Anthropic');
+  assert.equal(inferProviderFromModelId('\tmistral-large-latest\n'), 'Mistral');
+  assert.equal(inferProviderFromModelId(' codestral-latest'), 'Mistral');
+  assert.equal(inferProviderFromModelId('llama-3.3-70b-versatile  '), 'Groq');
+  assert.equal(inferProviderFromModelId('  deepseek-chat '), 'DeepSeek');
+  assert.equal(inferProviderFromModelId('  gemini-2.5-pro '), 'Gemini');
+  assert.equal(inferProviderFromModelId(' anthropic/claude-opus-4.7 '), 'OpenRouter');
+});
+
+test('inferProviderFromModelId: leading/trailing slashes infer same as clean form', () => {
+  assert.equal(inferProviderFromModelId('/claude-sonnet-4-6'), 'Anthropic');
+  assert.equal(inferProviderFromModelId('/mistral-large-latest'), 'Mistral');
+  assert.equal(inferProviderFromModelId('/deepseek-reasoner'), 'DeepSeek');
+  assert.equal(inferProviderFromModelId('llama-3.1-70b-versatile/'), 'Groq');
+  assert.equal(inferProviderFromModelId('claude-haiku-4-5/'), 'Anthropic');
+  // A stray leading slash must NOT trip the "/gpt-oss" OpenRouter slug rule:
+  // the clean form "gpt-oss-120b" is the bare FlashGPT/Cerebras id.
+  assert.equal(inferProviderFromModelId('/gpt-oss-120b'), 'Cerebras');
+  // Internal slashes (real OpenRouter slugs) are preserved:
+  assert.equal(inferProviderFromModelId('anthropic/claude-opus-4.7/'), 'OpenRouter');
+  assert.equal(inferProviderFromModelId('/openai/gpt-oss-120b'), 'OpenRouter');
+});
+
+test('inferProviderFromModelId: mixed case + decoration combine correctly', () => {
+  assert.equal(inferProviderFromModelId('  CLAUDE-OPUS-4-7 '), 'Anthropic');
+  assert.equal(inferProviderFromModelId(' /MISTRAL-LARGE-LATEST'), 'Mistral');
+  assert.equal(inferProviderFromModelId('DeepSeek-Chat  '), 'DeepSeek');
+});
+
+test('inferProviderFromModelId: whitespace-only / slash-only ids → OpenAI default', () => {
+  assert.equal(inferProviderFromModelId('   '), 'OpenAI');
+  assert.equal(inferProviderFromModelId('///'), 'OpenAI');
+  assert.equal(inferProviderFromModelId(' / '), 'OpenAI');
+});
+
+test('inferProviderFromModelId: Z.ai (GLM) and Kimi (Moonshot) direct ids', () => {
+  // Bare ids route to the direct provider…
+  assert.equal(inferProviderFromModelId('glm-4.6'), 'Z.ai');
+  assert.equal(inferProviderFromModelId('glm-4-air'), 'Z.ai');
+  assert.equal(inferProviderFromModelId('kimi-k2'), 'Kimi');
+  assert.equal(inferProviderFromModelId('moonshot-v1-128k'), 'Kimi');
+  // …while aggregator slugs still go through OpenRouter.
+  assert.equal(inferProviderFromModelId('z-ai/glm-4.6'), 'OpenRouter');
+  assert.equal(inferProviderFromModelId('moonshotai/kimi-k2'), 'OpenRouter');
 });
 
 test('listKnownProviders / KNOWN_PROVIDERS: stable canonical set', () => {

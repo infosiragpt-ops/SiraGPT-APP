@@ -70,8 +70,13 @@ function classifyError(err) {
   if (name.includes('circuitopen') || name === 'circuitopenerror') return ERROR_CATEGORIES.SYSTEM;
   if (name.includes('circuittimeout') || name === 'circuittimeouterror') return ERROR_CATEGORIES.TIMEOUT;
   if (name.includes('guard') || name === 'guarderror') return ERROR_CATEGORIES.TIMEOUT;
-  if (code.startsWith('5') || code.startsWith('5')) return ERROR_CATEGORIES.NETWORK;
+  // Specific timeout statuses (408 Request Timeout, 504 Gateway Timeout) must
+  // be checked BEFORE the broad 5xx → NETWORK rule, otherwise 504 ('504'
+  // starts with '5') would be misclassified as NETWORK and the explicit '504'
+  // branch would be dead. (The original 5xx check also had a copy-paste
+  // duplicate `|| code.startsWith('5')`.)
   if (code === '408' || code === '504' || name.includes('timeout') || msg.includes('timeout') || msg.includes('etimedout')) return ERROR_CATEGORIES.TIMEOUT;
+  if (code.startsWith('5')) return ERROR_CATEGORIES.NETWORK;
   if (code.includes('429') || msg.includes('rate limit') || msg.includes('too many requests')) return ERROR_CATEGORIES.RATE_LIMIT;
   if (code === '401' || code === '403' || name.includes('auth') || msg.includes('unauthorized') || msg.includes('api_key')) return ERROR_CATEGORIES.AUTH;
 

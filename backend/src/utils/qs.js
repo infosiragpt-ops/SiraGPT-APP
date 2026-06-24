@@ -98,12 +98,21 @@ function parse(qs, opts = {}) {
     let value = safeDec(decoder, vRaw.replace(/\+/g, ' '));
 
     let isArrayHint = false;
+    let idx = null;
     if (key.endsWith('[]')) { key = key.slice(0, -2); isArrayHint = true; }
     const idxMatch = /^(.+)\[(\d+)\]$/.exec(key);
-    if (idxMatch) { key = idxMatch[1]; isArrayHint = true; }
+    if (idxMatch) { key = idxMatch[1]; isArrayHint = true; idx = Number(idxMatch[2]); }
 
     if (arrayFormat === 'comma' && value.includes(',')) {
       out[key] = value.split(',');
+      continue;
+    }
+
+    // Explicit array index ("a[2]=x") — honour the position so out-of-order
+    // keys land at their declared index instead of arrival order.
+    if (idx !== null) {
+      if (!Array.isArray(out[key])) out[key] = (out[key] != null) ? [out[key]] : [];
+      out[key][idx] = value;
       continue;
     }
 
@@ -114,6 +123,13 @@ function parse(qs, opts = {}) {
       out[key] = [value];
     } else {
       out[key] = value;
+    }
+  }
+  // Compact any holes left by sparse explicit indices (qs values are strings,
+  // never undefined, so this only removes index gaps).
+  for (const k of Object.keys(out)) {
+    if (Array.isArray(out[k]) && out[k].includes(undefined)) {
+      out[k] = out[k].filter((v) => v !== undefined);
     }
   }
   return out;

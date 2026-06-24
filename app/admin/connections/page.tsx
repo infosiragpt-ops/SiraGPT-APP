@@ -10,9 +10,9 @@
  *   - test a connection (calls the upstream /models endpoint)
  *   - edit/delete
  *
- * The chat path doesn't read from this table yet — adding a row stages
- * the config so the swap-from-env follow-up has a real contract. The
- * page itself is auth-gated by the admin layout above (requireAdmin).
+ * Enabled keys are applied to the backend provider bridge. Saving/testing a
+ * connection also imports provider models into Admin → AI Models, where they
+ * remain inactive until the admin explicitly publishes them.
  */
 
 import { useState, useEffect, useCallback, useMemo } from "react"
@@ -30,30 +30,74 @@ import { toast } from "sonner"
 import { apiClient } from "@/lib/api"
 
 const KNOWN_URLS = [
+  "https://api.fal.ai/v1",
   "https://api.openai.com/v1",
   "https://api.anthropic.com/v1",
   "https://generativelanguage.googleapis.com/v1beta/openai",
   "https://api.mistral.ai/v1",
   "https://api.groq.com/openai/v1",
   "https://openrouter.ai/api/v1",
+  "https://api.cerebras.ai/v1",
+  "https://api.z.ai/api/paas/v4",
+  "https://api.moonshot.ai/v1",
   "https://api.together.xyz/v1",
   "https://api.fireworks.ai/inference/v1",
   "https://api.deepseek.com/v1",
   "https://api.x.ai/v1",
 ]
 
+type AuthType = "Bearer" | "Key" | "None" | "Custom"
+type ApiType = "chat_completions" | "responses" | "embeddings" | "video"
+
+const PROVIDER_DEFAULTS: Record<string, { url: string; authType: AuthType; apiType: ApiType }> = {
+  fal: { url: "https://api.fal.ai/v1", authType: "Key", apiType: "video" },
+  openai: { url: "https://api.openai.com/v1", authType: "Bearer", apiType: "chat_completions" },
+  anthropic: { url: "https://api.anthropic.com/v1", authType: "Bearer", apiType: "chat_completions" },
+  gemini: { url: "https://generativelanguage.googleapis.com/v1beta/openai", authType: "Bearer", apiType: "chat_completions" },
+  mistral: { url: "https://api.mistral.ai/v1", authType: "Bearer", apiType: "chat_completions" },
+  groq: { url: "https://api.groq.com/openai/v1", authType: "Bearer", apiType: "chat_completions" },
+  openrouter: { url: "https://openrouter.ai/api/v1", authType: "Bearer", apiType: "chat_completions" },
+  cerebras: { url: "https://api.cerebras.ai/v1", authType: "Bearer", apiType: "chat_completions" },
+  zai: { url: "https://api.z.ai/api/paas/v4", authType: "Bearer", apiType: "chat_completions" },
+  kimi: { url: "https://api.moonshot.ai/v1", authType: "Bearer", apiType: "chat_completions" },
+  together: { url: "https://api.together.xyz/v1", authType: "Bearer", apiType: "chat_completions" },
+  fireworks: { url: "https://api.fireworks.ai/inference/v1", authType: "Bearer", apiType: "chat_completions" },
+  deepseek: { url: "https://api.deepseek.com/v1", authType: "Bearer", apiType: "chat_completions" },
+  xai: { url: "https://api.x.ai/v1", authType: "Bearer", apiType: "chat_completions" },
+}
+
 const PROVIDERS: Array<{ key: string; label: string }> = [
+  { key: "fal", label: "fal.ai Video API" },
   { key: "openai", label: "OpenAI API" },
   { key: "anthropic", label: "Anthropic API" },
   { key: "gemini", label: "Google Gemini API" },
   { key: "mistral", label: "Mistral API" },
   { key: "groq", label: "Groq API" },
   { key: "openrouter", label: "OpenRouter API" },
+  { key: "cerebras", label: "Cerebras API" },
+  { key: "zai", label: "Z.ai (GLM) API" },
+  { key: "kimi", label: "Kimi (Moonshot) API" },
   { key: "together", label: "Together AI API" },
   { key: "fireworks", label: "Fireworks AI API" },
   { key: "deepseek", label: "DeepSeek API" },
   { key: "xai", label: "xAI API" },
   { key: "custom", label: "Custom API" },
+]
+
+// Minimalist provider quick-pick shown at the top of the Add Connection
+// dialog. Click a provider → URL + auth + API type auto-fill, then just paste
+// the API key. Friendly names map to provider keys (Claude→anthropic, Grok→xai).
+const QUICK_PICK: Array<{ key: string; label: string }> = [
+  { key: "openai", label: "OpenAI" },
+  { key: "anthropic", label: "Claude" },
+  { key: "gemini", label: "Gemini" },
+  { key: "xai", label: "Grok" },
+  { key: "openrouter", label: "OpenRouter" },
+  { key: "cerebras", label: "Cerebras" },
+  { key: "zai", label: "Z.ai" },
+  { key: "kimi", label: "Kimi" },
+  { key: "fal", label: "fal.ai" },
+  { key: "mistral", label: "Mistral" },
 ]
 
 type Connection = {
@@ -63,8 +107,8 @@ type Connection = {
   providerLabel: string
   apiKey: string | null
   apiKeySet: boolean
-  authType: "Bearer" | "None" | "Custom"
-  apiType: "chat_completions" | "responses" | "embeddings"
+  authType: AuthType
+  apiType: ApiType
   headers: Record<string, string> | null
   prefixId: string | null
   modelIds: string[]
@@ -84,12 +128,16 @@ type ProviderGroup = {
 
 function inferProviderFromUrl(u: string): string {
   const lower = (u || "").toLowerCase()
+  if (lower.includes("fal.ai") || lower.includes("fal.run")) return "fal"
   if (lower.includes("openai.com")) return "openai"
   if (lower.includes("anthropic.com")) return "anthropic"
   if (lower.includes("googleapis.com") || lower.includes("generativelanguage")) return "gemini"
   if (lower.includes("mistral.ai")) return "mistral"
   if (lower.includes("groq.com")) return "groq"
   if (lower.includes("openrouter.ai")) return "openrouter"
+  if (lower.includes("cerebras.ai")) return "cerebras"
+  if (lower.includes("z.ai") || lower.includes("bigmodel.cn")) return "zai"
+  if (lower.includes("moonshot.ai") || lower.includes("moonshot.cn") || lower.includes("kimi.com")) return "kimi"
   if (lower.includes("together.xyz") || lower.includes("together.ai")) return "together"
   if (lower.includes("fireworks.ai")) return "fireworks"
   if (lower.includes("deepseek.com")) return "deepseek"
@@ -133,6 +181,14 @@ export default function AdminConnectionsPage() {
     () => groups.flatMap((g) => g.connections.filter((c) => !c.enabled)),
     [groups]
   )
+
+  // Providers the admin can connect but hasn't yet — surfaced as one-click
+  // "add key" cards so every provider is visible on the page (not only the
+  // ones already configured). Driven by the QUICK_PICK catalogue.
+  const availableToAdd = useMemo(() => {
+    const connected = new Set(renderedGroups.map((g) => g.providerKey))
+    return QUICK_PICK.filter((p) => !connected.has(p.key))
+  }, [renderedGroups])
 
   const openAdd = (providerKey: string) => {
     setEditing(null)
@@ -222,7 +278,7 @@ export default function AdminConnectionsPage() {
             <Plug className="h-6 w-6" /> Conexiones
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            API keys de proveedores. Lo que actives aquí aparece en Modelos IA.
+            API keys de proveedores. Las conexiones activas sincronizan modelos en AI Models como inactivos; publícalos desde AI Models.
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -239,6 +295,10 @@ export default function AdminConnectionsPage() {
           <Button variant="outline" onClick={load} disabled={loading}>
             <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
             Refrescar
+          </Button>
+          <Button variant="outline" onClick={() => openAdd("fal")}>
+            <Plus className="h-4 w-4 mr-2" />
+            Agregar fal.ai
           </Button>
           <Button onClick={() => openAdd("openai")}>
             <Plus className="h-4 w-4 mr-2" />
@@ -335,6 +395,25 @@ export default function AdminConnectionsPage() {
         </div>
       )}
 
+      {!loading && availableToAdd.length > 0 && (
+        <div className="space-y-2 mt-6">
+          <p className="text-xs font-medium text-muted-foreground">Proveedores disponibles</p>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+            {availableToAdd.map((p) => (
+              <button
+                key={p.key}
+                type="button"
+                onClick={() => openAdd(p.key)}
+                className="flex items-center justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent"
+              >
+                <span className="truncate">{p.label}</span>
+                <Plus className="h-4 w-4 shrink-0 text-muted-foreground" />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       <ConnectionDialog
         open={modalOpen}
         onOpenChange={setModalOpen}
@@ -364,8 +443,8 @@ function ConnectionDialog({
   const [providerKey, setProviderKey] = useState(defaultProvider)
   const [apiKey, setApiKey] = useState("")
   const [showKey, setShowKey] = useState(false)
-  const [authType, setAuthType] = useState<"Bearer" | "None" | "Custom">("Bearer")
-  const [apiType, setApiType] = useState<"chat_completions" | "responses" | "embeddings">("chat_completions")
+  const [authType, setAuthType] = useState<AuthType>("Bearer")
+  const [apiType, setApiType] = useState<ApiType>("chat_completions")
   const [headersJson, setHeadersJson] = useState("")
   const [prefixId, setPrefixId] = useState("")
   const [modelIdsInput, setModelIdsInput] = useState("")
@@ -388,11 +467,12 @@ function ConnectionDialog({
         setModelIds(connection.modelIds || [])
         setTags(connection.tags || [])
       } else {
-        setUrl("")
+        const defaults = PROVIDER_DEFAULTS[defaultProvider]
+        setUrl(defaults?.url || "")
         setProviderKey(defaultProvider)
         setApiKey("")
-        setAuthType("Bearer")
-        setApiType("chat_completions")
+        setAuthType(defaults?.authType || "Bearer")
+        setApiType(defaults?.apiType || "chat_completions")
         setHeadersJson("")
         setPrefixId("")
         setModelIds([])
@@ -404,6 +484,15 @@ function ConnectionDialog({
       setShowSuggestions(false)
     }
   }, [open, connection, defaultProvider])
+
+  const applyProviderDefaults = (nextProvider: string) => {
+    setProviderKey(nextProvider)
+    const defaults = PROVIDER_DEFAULTS[nextProvider]
+    if (!defaults || isEdit) return
+    setUrl((current) => (!current || KNOWN_URLS.includes(current) ? defaults.url : current))
+    setAuthType(defaults.authType)
+    setApiType(defaults.apiType)
+  }
 
   const submit = async () => {
     if (!url.trim()) {
@@ -428,15 +517,30 @@ function ConnectionDialog({
         tags,
       }
       if (apiKey) payload.apiKey = apiKey
+      let savedConnection: Connection
       if (isEdit) {
-        await apiClient.updateAdminConnection(connection!.id, payload)
-        toast.success("Conexión actualizada")
+        savedConnection = await apiClient.updateAdminConnection(connection!.id, payload) as Connection
       } else {
         payload.enabled = true
-        await apiClient.createAdminConnection(payload)
-        toast.success("Conexión creada")
+        savedConnection = await apiClient.createAdminConnection(payload) as Connection
       }
-      onSaved()
+
+      const canSyncModels = savedConnection.enabled && (authType === "None" || savedConnection.apiKeySet)
+      if (canSyncModels) {
+        const t = toast.loading("Sincronizando modelos en AI Models…")
+        try {
+          const syncResult: any = await apiClient.testAdminConnection(savedConnection.id)
+          toast.dismiss(t)
+          toast.success(`Conexión guardada. ${syncResult?.imported ?? syncResult?.count ?? 0} modelo(s) sincronizado(s) como inactivos.`)
+        } catch (syncError: any) {
+          toast.dismiss(t)
+          toast.warning(`Conexión guardada, pero no se pudieron sincronizar modelos: ${syncError?.message || syncError}`)
+        }
+      } else {
+        toast.success(isEdit ? "Conexión actualizada" : "Conexión creada")
+      }
+
+      await Promise.resolve(onSaved())
       onOpenChange(false)
     } catch (e: any) {
       toast.error(`Error: ${e?.message || e}`)
@@ -457,6 +561,31 @@ function ConnectionDialog({
             <span>External</span>
           </div>
 
+          {!isEdit && (
+            <div className="space-y-1.5">
+              <Label>Proveedor</Label>
+              <div className="flex flex-wrap gap-1.5">
+                {QUICK_PICK.map((p) => (
+                  <button
+                    key={p.key}
+                    type="button"
+                    onClick={() => applyProviderDefaults(p.key)}
+                    className={`rounded-full border px-3 py-1 text-xs transition-colors ${
+                      providerKey === p.key
+                        ? "border-foreground bg-foreground text-background"
+                        : "border-border text-muted-foreground hover:bg-accent"
+                    }`}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Elige un proveedor y pega tu API key — el resto se completa solo.
+              </p>
+            </div>
+          )}
+
           <div className="space-y-1.5 relative">
             <Label>URL</Label>
             <div className="flex items-center gap-2">
@@ -465,7 +594,14 @@ function ConnectionDialog({
                 onChange={(e) => {
                   setUrl(e.target.value)
                   const inferred = inferProviderFromUrl(e.target.value)
-                  if (inferred !== "custom" && !isEdit) setProviderKey(inferred)
+                  if (inferred !== "custom" && !isEdit) {
+                    setProviderKey(inferred)
+                    const defaults = PROVIDER_DEFAULTS[inferred]
+                    if (defaults) {
+                      setAuthType(defaults.authType)
+                      setApiType(defaults.apiType)
+                    }
+                  }
                 }}
                 onFocus={() => setShowSuggestions(true)}
                 onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
@@ -483,7 +619,7 @@ function ConnectionDialog({
                     onClick={() => {
                       setUrl(u)
                       const inferred = inferProviderFromUrl(u)
-                      if (inferred !== "custom") setProviderKey(inferred)
+                      if (inferred !== "custom") applyProviderDefaults(inferred)
                       setShowSuggestions(false)
                     }}
                   >
@@ -497,10 +633,11 @@ function ConnectionDialog({
           <div className="space-y-1.5">
             <Label>Auth</Label>
             <div className="flex items-center gap-2">
-              <Select value={authType} onValueChange={(v: any) => setAuthType(v)}>
+              <Select value={authType} onValueChange={(v) => setAuthType(v as AuthType)}>
                 <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="Bearer">Bearer</SelectItem>
+                  <SelectItem value="Key">Key</SelectItem>
                   <SelectItem value="None">None</SelectItem>
                   <SelectItem value="Custom">Custom</SelectItem>
                 </SelectContent>
@@ -510,7 +647,7 @@ function ConnectionDialog({
                   type={showKey ? "text" : "password"}
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
-                  placeholder={isEdit ? (connection?.apiKeySet ? "Dejar vacío para conservar la actual" : "API Key") : "API Key"}
+                  placeholder={isEdit ? (connection?.apiKeySet ? "Dejar vacío para conservar la actual" : "API Key") : (providerKey === "fal" ? "fal.ai API Key" : "API Key")}
                   className="pr-9"
                 />
                 <button
@@ -547,7 +684,7 @@ function ConnectionDialog({
             </div>
             <div className="space-y-1.5">
               <Label>Provider</Label>
-              <Select value={providerKey} onValueChange={setProviderKey}>
+              <Select value={providerKey} onValueChange={applyProviderDefaults}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {PROVIDERS.map((p) => (
@@ -560,19 +697,24 @@ function ConnectionDialog({
 
           <div className="space-y-1.5">
             <Label>API Type</Label>
-            <Select value={apiType} onValueChange={(v: any) => setApiType(v)}>
+            <Select value={apiType} onValueChange={(v) => setApiType(v as ApiType)}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="chat_completions">Chat Completions</SelectItem>
                 <SelectItem value="responses">Responses</SelectItem>
                 <SelectItem value="embeddings">Embeddings</SelectItem>
+                <SelectItem value="video">Video Generation</SelectItem>
               </SelectContent>
             </Select>
           </div>
 
           <div className="space-y-1.5">
             <Label>Model IDs</Label>
-            <div className="text-xs text-muted-foreground">Leave empty to include all models from "/models" endpoint</div>
+            <div className="text-xs text-muted-foreground">
+              {providerKey === "fal"
+                ? "Opcional. Déjalo vacío para sincronizar el catálogo de video de fal.ai."
+                : 'Leave empty to include all models from "/models" endpoint'}
+            </div>
             <div className="flex items-center gap-2">
               <Input
                 value={modelIdsInput}

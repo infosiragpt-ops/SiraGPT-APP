@@ -12,6 +12,7 @@ const assert = require("node:assert/strict");
 
 const {
   checkDatabase,
+  checkMigrations,
   checkRedis,
   checkQueue,
   checkProcess,
@@ -20,6 +21,7 @@ const {
   checkSentry,
   checkLangfuse,
   checkPostHog,
+  checkStartupEnvironment,
   runLivenessCheck,
   runReadinessCheck,
   runFullHealthCheck,
@@ -54,6 +56,54 @@ describe("checkDatabase", () => {
     const r = await checkDatabase(null);
     assert.equal(r.status, "skipped");
     assert.equal(r.critical, false);
+  });
+});
+
+// ── checkMigrations ────────────────────────────────────────────────
+
+describe("checkMigrations", () => {
+  test("healthy when no failed migrations", async () => {
+    const fakePrisma = { $queryRawUnsafe: async () => [] };
+    const r = await checkMigrations(fakePrisma);
+    assert.equal(r.name, "migrations");
+    assert.equal(r.status, "healthy");
+    assert.equal(r.critical, true);
+    assert.equal(r.details.failed_count, 0);
+  });
+
+  test("unhealthy + critical when a failed migration is present (P3009)", async () => {
+    const fakePrisma = {
+      $queryRawUnsafe: async () => [{ migration_name: "20250919203030_add_model_sync_fields" }],
+    };
+    const r = await checkMigrations(fakePrisma);
+    assert.equal(r.status, "unhealthy");
+    assert.equal(r.critical, true);
+    assert.equal(r.details.failed_count, 1);
+    assert.deepEqual(r.details.failed, ["20250919203030_add_model_sync_fields"]);
+  });
+
+  test("skipped (non-critical) when the migrations table is unreadable", async () => {
+    const fakePrisma = { $queryRawUnsafe: async () => { throw new Error('relation "_prisma_migrations" does not exist'); } };
+    const r = await checkMigrations(fakePrisma);
+    assert.equal(r.status, "skipped");
+    assert.equal(r.critical, false);
+    assert.equal(r.details.reason, "migrations_table_unreadable");
+  });
+
+  test("skipped when no client passed", async () => {
+    const r = await checkMigrations(null);
+    assert.equal(r.status, "skipped");
+    assert.equal(r.critical, false);
+  });
+
+  test("a failed migration drives readiness to 503-worthy unhealthy", async () => {
+    const r = await runReadinessCheck({
+      prisma: { $queryRawUnsafe: async (sql) => (/_prisma_migrations/.test(sql) ? [{ migration_name: "x" }] : 1) },
+      redis: { ping: async () => "PONG" },
+      queue: { getJobCounts: async () => ({ waiting: 0 }) },
+    });
+    assert.equal(r.status, "unhealthy");
+    assert.ok(r.checks.find((c) => c.name === "migrations" && c.status === "unhealthy"));
   });
 });
 
@@ -310,7 +360,7 @@ describe("runReadinessCheck", () => {
     });
     assert.equal(r.status, "healthy");
     const names = r.checks.map((c) => c.name).sort();
-    assert.deepEqual(names, ["database", "process", "queue", "redis"]);
+    assert.deepEqual(names, ["database", "migrations", "process", "queue", "redis"]);
   });
 
   test("503 when DB is unhealthy", async () => {
@@ -320,6 +370,36 @@ describe("runReadinessCheck", () => {
     });
     assert.equal(r.status, "unhealthy");
     assert.equal(reportToHttpStatus(r), 503);
+  });
+});
+
+describe("checkStartupEnvironment", () => {
+  test("skipped when no result is provided", () => {
+    const r = checkStartupEnvironment();
+    assert.equal(r.name, "startup_env");
+    assert.equal(r.status, "skipped");
+    assert.equal(r.critical, false);
+  });
+
+  test("healthy when checked with no issues", () => {
+    const r = checkStartupEnvironment({ checked: true, issues: [] });
+    assert.equal(r.status, "healthy");
+    assert.equal(r.details.issue_count, 0);
+  });
+
+  test("degraded (never unhealthy) when issues are present", () => {
+    const r = checkStartupEnvironment({
+      checked: true,
+      issues: [
+        { key: "JWT_SECRET", severity: "BLOCKING", message: "missing" },
+        { key: "REDIS_URL", severity: "WARNING", message: "not set" },
+      ],
+    });
+    assert.equal(r.status, "degraded");
+    assert.equal(r.critical, false);
+    assert.equal(r.details.issue_count, 2);
+    assert.equal(r.details.blocking, 1);
+    assert.equal(r.details.warnings, 1);
   });
 });
 
@@ -333,6 +413,109 @@ describe("runFullHealthCheck", () => {
     assert.ok(r.checks.find((c) => c.name === "model_providers"));
     assert.ok(r.checks.find((c) => c.name === "opentelemetry"));
   });
+
+  test("surfaces startup_env check and mirrors it under top-level startupEnv", async () => {
+    const r = await runFullHealthCheck({
+      prisma: { $queryRawUnsafe: async () => 1 },
+      redis: { ping: async () => "PONG" },
+      startupEnv: { checked: true, issues: [{ key: "REDIS_URL", severity: "WARNING", message: "not set" }] },
+    });
+    const check = r.checks.find((c) => c.name === "startup_env");
+    assert.ok(check);
+    assert.equal(check.status, "degraded");
+    assert.deepEqual(r.startupEnv, check.details);
+    // A startup-env warning drives the composite to degraded but never 503s.
+    assert.equal(r.status, "degraded");
+    assert.equal(reportToHttpStatus(r), 200);
+  });
+});
+
+// ── Google OAuth boot-config exposure in /health ───────────────────
+//
+// Guards the contract monitors depend on: the boot-time Google OAuth
+// config result must surface in runFullHealthCheck both as a
+// `google_oauth` entry in the checks array AND mirrored under a
+// top-level `googleOAuth` key, and an OAuth issue must drive the
+// composite status to "degraded" (never 503 — it's non-critical).
+//
+// A provider key is set so model_providers is healthy, isolating the
+// overall status to the OAuth signal under test.
+
+describe("runFullHealthCheck google_oauth exposure", () => {
+  function withProviderKey(fn) {
+    const env = {
+      ...process.env,
+      OPENAI_API_KEY: "sk-test",
+      NODE_ENV: "test",
+      SIRAGPT_REQUIRE_R2_ARTIFACTS: "0",
+    };
+    return Promise.resolve().then(() => fn(env));
+  }
+
+  test("oauth mismatch drives overall degraded + exposes googleOAuth key and google_oauth check", () =>
+    withProviderKey(async (env) => {
+      const r = await runFullHealthCheck({
+        prisma: { $queryRawUnsafe: async () => 1 },
+        redis: { ping: async () => "PONG" },
+        env,
+        googleOAuth: {
+          checked: true,
+          mismatch: true,
+          issues: ["redirect host mismatch: expected siragpt.com"],
+        },
+      });
+
+      assert.equal(r.status, "degraded");
+      // Never page on a stale OAuth config — degraded maps to 200.
+      assert.equal(reportToHttpStatus(r), 200);
+
+      // Top-level mirror for monitoring probes.
+      assert.ok(r.googleOAuth, "expected top-level googleOAuth key");
+      assert.equal(r.googleOAuth.checked, true);
+      assert.equal(r.googleOAuth.mismatch, true);
+      assert.deepEqual(r.googleOAuth.issues, [
+        "redirect host mismatch: expected siragpt.com",
+      ]);
+
+      // Entry inside the checks array.
+      const check = r.checks.find((c) => c.name === "google_oauth");
+      assert.ok(check, "expected a google_oauth check entry");
+      assert.equal(check.status, "degraded");
+      assert.equal(check.critical, false);
+    }));
+
+  test("no googleOAuth dep → google_oauth check is skipped and does not force degraded", () =>
+    withProviderKey(async (env) => {
+      const r = await runFullHealthCheck({
+        prisma: { $queryRawUnsafe: async () => 1 },
+        redis: { ping: async () => "PONG" },
+        env,
+      });
+
+      const check = r.checks.find((c) => c.name === "google_oauth");
+      assert.ok(check, "expected a google_oauth check entry");
+      assert.equal(check.status, "skipped");
+      assert.equal(check.critical, false);
+      assert.equal(check.details.reason, "no_oauth_boot_result");
+      // A skipped OAuth check must not by itself degrade the report.
+      assert.equal(r.status, "healthy");
+    }));
+
+  test("clean oauth result ({checked:true, issues:[]}) reports healthy", () =>
+    withProviderKey(async (env) => {
+      const r = await runFullHealthCheck({
+        prisma: { $queryRawUnsafe: async () => 1 },
+        redis: { ping: async () => "PONG" },
+        env,
+        googleOAuth: { checked: true, mismatch: false, issues: [] },
+      });
+
+      assert.equal(r.status, "healthy");
+      const check = r.checks.find((c) => c.name === "google_oauth");
+      assert.ok(check, "expected a google_oauth check entry");
+      assert.equal(check.status, "healthy");
+      assert.deepEqual(r.googleOAuth.issues, []);
+    }));
 });
 
 // ── Sira metrics inventory ─────────────────────────────────────────

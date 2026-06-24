@@ -1,8 +1,15 @@
 {
   "sidebar": {
-    "newChat": "Nuova chat", "searchChats": "Cerca chat", "library": "Libreria", "gpts": "GPTs",
-    "recentChats": "Chat recenti", "noChats": "Ancora nessuna chat. Inizia una conversazione!",
-    "settings": "Impostazioni", "profile": "Profilo", "billing": "Fatturazione", "logout": "Esci",
+    "newChat": "Nuova chat",
+    "searchChats": "Cerca chat",
+    "library": "Libreria",
+    "gpts": "GPTs",
+    "recentChats": "Chat recenti",
+    "noChats": "Ancora nessuna chat. Inizia una conversazione!",
+    "settings": "Impostazioni",
+    "profile": "Profilo",
+    "billing": "Fatturazione",
+    "logout": "Esci",
     "today": "Oggi",
     "last7Days": "Ultimi 7 giorni",
     "older": "Precedenti",
@@ -99,15 +106,10 @@
     "cancel": "Cancel",
     "pipeline": "Pipeline",
     "phase": {
-
       "search": "Search academic sources",
-
       "validate": "Validate DOIs",
-
       "synthesize": "Write cited markdown",
-
       "format": "Build reference list"
-
     },
     "searchRunning": "Querying OpenAlex…",
     "validateRunning": "Checking CrossRef…",
@@ -131,68 +133,364 @@
     "backToProject": "← {name}"
   },
   "chat": {
-    "placeholder": "Scrivi un messaggio", "send": "Invia", "stop": "Ferma", "regenerate": "Rigenera",
-    "copy": "Copia", "delete": "Elimina", "edit": "Modifica", "share": "Condividi", "thinking": "Sto pensando…",
-    "attachFile": "Allega file", "voiceInput": "Input vocale", "webSearch": "Ricerca web",
-    "imageGeneration": "Genera immagine", "videoGeneration": "Genera video",
-    "connectorActive": "Connector attivo", "showSidebar": "Mostra barra laterale"
+    "placeholder": "Scrivi un messaggio",
+    "send": "Invia",
+    "stop": "Ferma",
+    "regenerate": "Rigenera",
+    "copy": "Copia",
+    "delete": "Elimina",
+    "edit": "Modifica",
+    "share": "Condividi",
+    "thinking": "Sto pensando…",
+    "attachFile": "Allega file",
+    "voiceInput": "Input vocale",
+    "webSearch": "Ricerca web",
+    "imageGeneration": "Genera immagine",
+    "videoGeneration": "Genera video",
+    "connectorActive": "Connector attivo",
+    "showSidebar": "Mostra barra laterale"
   },
   "settings": {
-    "title": "Impostazioni", "subtitle": "Personalizza siraGPT per adattarsi al tuo modo di lavorare.",
-    "searchPlaceholder": "Cerca un'impostazione…", "noResults": "Nessun risultato", "backToChat": "Torna alla chat",
-    "autoSync": "Sincronizzato automaticamente", "saving": "Salvataggio…", "saved": "Salvato", "offline": "Offline — modifiche locali",
+    "title": "Impostazioni",
+    "subtitle": "Personalizza siraGPT per adattarsi al tuo modo di lavorare.",
+    "searchPlaceholder": "Cerca un'impostazione…",
+    "noResults": "Nessun risultato",
+    "backToChat": "Torna alla chat",
+    "autoSync": "Sincronizzato automaticamente",
+    "saving": "Salvataggio…",
+    "saved": "Salvato",
+    "offline": "Offline — modifiche locali",
     "sections": {
-      "general":         { "label": "Generale",       "desc": "Aspetto, lingua e accessibilità" },
-      "models":          { "label": "Modelli AI",     "desc": "Modelli disponibili e preferiti" },
-      "notifications":   { "label": "Notifiche",      "desc": "Canali e avvisi" },
-      "personalization": { "label": "Personalizzazione","desc": "Stile, tono e funzionalità" },
-      "apps":            { "label": "App",            "desc": "Connessioni e connector" },
-      "schedules":       { "label": "Pianificazioni", "desc": "Esecuzioni programmate" },
-      "data":            { "label": "Controllo dati", "desc": "Privacy, cronologia e dati" },
-      "security":        { "label": "Sicurezza",      "desc": "MFA e sessioni" },
-      "account":         { "label": "Account",        "desc": "Profilo del creatore" }
+      "general": {
+        "label": "Generale",
+        "desc": "Aspetto, lingua e accessibilità"
+      },
+      "models": {
+        "label": "Modelli AI",
+        "desc": "Modelli disponibili e preferiti"
+      },
+      "notifications": {
+        "label": "Notifiche",
+        "desc": "Canali e avvisi"
+      },
+      "personalization": {
+        "label": "Personalizzazione",
+        "desc": "Stile, tono e funzionalità"
+      },
+      "apps": {
+        "label": "App",
+        "desc": "Connessioni e connector"
+      },
+      "schedules": {
+        "label": "Pianificazioni",
+        "desc": "Esecuzioni programmate"
+      },
+      "data": {
+        "label": "Controllo dati",
+        "desc": "Privacy, cronologia e dati"
+      },
+      "security": {
+        "label": "Sicurezza",
+        "desc": "MFA e sessioni"
+      },
+      "account": {
+        "label": "Account",
+        "desc": "Profilo del creatore"
+      }
     },
     "general": {
-      "display": { "title": "Visualizzazione", "desc": "Aspetto visivo dell'applicazione" },
-      "theme": { "label": "Tema", "desc": "Chiaro, scuro o di sistema", "light": "Chiaro", "dark": "Scuro", "system": "Sistema" },
-      "accent": { "label": "Colore d'accento", "desc": "Colore primario dei pulsanti" },
-      "fontSize": { "label": "Dimensione testo", "desc": "Dimensione di base", "small": "Piccolo", "medium": "Medio", "large": "Grande" },
-      "density": { "label": "Densità", "desc": "Spaziatura verticale", "compact": "Compatta", "comfortable": "Comoda", "spacious": "Spaziosa" },
-      "region": { "title": "Lingua e regione", "desc": "Data, fuso orario e lingua" },
+      "display": {
+        "title": "Visualizzazione",
+        "desc": "Aspetto visivo dell'applicazione"
+      },
+      "theme": {
+        "label": "Tema",
+        "desc": "Chiaro, scuro o di sistema",
+        "light": "Chiaro",
+        "dark": "Scuro",
+        "system": "Sistema"
+      },
+      "accent": {
+        "label": "Colore d'accento",
+        "desc": "Colore primario dei pulsanti"
+      },
+      "fontSize": {
+        "label": "Dimensione testo",
+        "desc": "Dimensione di base",
+        "small": "Piccolo",
+        "medium": "Medio",
+        "large": "Grande"
+      },
+      "density": {
+        "label": "Densità",
+        "desc": "Spaziatura verticale",
+        "compact": "Compatta",
+        "comfortable": "Comoda",
+        "spacious": "Spaziosa"
+      },
+      "region": {
+        "title": "Lingua e regione",
+        "desc": "Data, fuso orario e lingua"
+      },
       "interfaceLanguage": "Lingua dell'interfaccia",
-      "spokenLanguage": { "label": "Lingua parlata", "desc": "Per il riconoscimento vocale", "automatic": "Automatico" },
+      "spokenLanguage": {
+        "label": "Lingua parlata",
+        "desc": "Per il riconoscimento vocale",
+        "automatic": "Automatico"
+      },
       "dateFormat": "Formato data",
-      "timeZone": { "label": "Fuso orario", "desc": "Rilevato automaticamente" },
-      "timeFormat": { "label": "Formato ora", "h12": "12 ore", "h24": "24 ore" },
-      "voice": { "title": "Voce", "assistantVoice": "Voce dell'assistente", "autoPlay": "Riproduci le risposte automaticamente", "autoPlayDesc": "Leggi le risposte ad alta voce", "standalone": "Modalità voce autonoma", "standaloneDesc": "A schermo intero senza elementi visivi" },
-      "aiModels": { "title": "Modelli AI", "showExtras": "Mostra modelli aggiuntivi", "showExtrasDesc": "Vedi tutti i modelli disponibili", "stream": "Trasmetti le risposte", "streamDesc": "Vedi le risposte durante la generazione" },
-      "accessibility": { "title": "Accessibilità", "shortcuts": "Scorciatoie da tastiera", "shortcutsDesc": "Abilita la navigazione da tastiera", "reduceMotion": "Riduci il movimento", "reduceMotionDesc": "Riduci al minimo le animazioni", "highContrast": "Alto contrasto", "highContrastDesc": "Migliora la visibilità" }
+      "timeZone": {
+        "label": "Fuso orario",
+        "desc": "Rilevato automaticamente"
+      },
+      "timeFormat": {
+        "label": "Formato ora",
+        "h12": "12 ore",
+        "h24": "24 ore"
+      },
+      "voice": {
+        "title": "Voce",
+        "assistantVoice": "Voce dell'assistente",
+        "autoPlay": "Riproduci le risposte automaticamente",
+        "autoPlayDesc": "Leggi le risposte ad alta voce",
+        "standalone": "Modalità voce autonoma",
+        "standaloneDesc": "A schermo intero senza elementi visivi"
+      },
+      "aiModels": {
+        "title": "Modelli AI",
+        "showExtras": "Mostra modelli aggiuntivi",
+        "showExtrasDesc": "Vedi tutti i modelli disponibili",
+        "stream": "Trasmetti le risposte",
+        "streamDesc": "Vedi le risposte durante la generazione"
+      },
+      "accessibility": {
+        "title": "Accessibilità",
+        "shortcuts": "Scorciatoie da tastiera",
+        "shortcutsDesc": "Abilita la navigazione da tastiera",
+        "reduceMotion": "Riduci il movimento",
+        "reduceMotionDesc": "Riduci al minimo le animazioni",
+        "highContrast": "Alto contrasto",
+        "highContrastDesc": "Migliora la visibilità"
+      }
     }
   },
   "auth": {
-    "welcomeBack": "Bentornato", "login": "Accedi", "signIn": "Accedi", "register": "Registrati",
-    "signUp": "Crea account", "logout": "Esci", "email": "Email", "emailPlaceholder": "Inserisci la tua email",
-    "password": "Password", "passwordPlaceholder": "Inserisci la password", "forgotPassword": "Password dimenticata?",
-    "orContinueWith": "Oppure continua con", "continueWithGoogle": "Continua con Google",
-    "noAccount": "Non hai un account?", "haveAccount": "Hai già un account?", "tagline": "Accedi al tuo account Sira Gpt"
+    "welcomeBack": "Bentornato",
+    "login": "Accedi",
+    "signIn": "Accedi",
+    "register": "Registrati",
+    "signUp": "Crea account",
+    "logout": "Esci",
+    "email": "Email",
+    "emailPlaceholder": "Inserisci la tua email",
+    "password": "Password",
+    "passwordPlaceholder": "Inserisci la password",
+    "forgotPassword": "Password dimenticata?",
+    "orContinueWith": "Oppure continua con",
+    "continueWithGoogle": "Continua con Google",
+    "noAccount": "Non hai un account?",
+    "haveAccount": "Hai già un account?",
+    "tagline": "Accedi al tuo account Sira Gpt"
   },
   "documents": {
-    "download": "Scarica", "close": "Chiudi", "wordDocument": "Documento Word", "excelFile": "File Excel",
-    "presentation": "Presentazione", "pdfFile": "File PDF", "downloadAsWord": "Scarica come Word (.docx)",
-    "downloadAsPdf": "Scarica come PDF", "generating": "Generazione…"
+    "download": "Scarica",
+    "close": "Chiudi",
+    "wordDocument": "Documento Word",
+    "excelFile": "File Excel",
+    "presentation": "Presentazione",
+    "pdfFile": "File PDF",
+    "downloadAsWord": "Scarica come Word (.docx)",
+    "downloadAsPdf": "Scarica come PDF",
+    "generating": "Generazione…"
   },
   "errors": {
     "serverError": "Si è verificato un problema durante l'elaborazione della richiesta. Riprova.",
     "networkError": "Errore di connessione. Controlla la tua connessione internet.",
-    "unauthorized": "Sessione scaduta. Accedi di nuovo.", "notFound": "Risorsa non trovata."
+    "unauthorized": "Sessione scaduta. Accedi di nuovo.",
+    "notFound": "Risorsa non trovata."
   },
   "common": {
-    "loading": "Caricamento…", "noResults": "Nessun risultato", "confirm": "Conferma", "cancel": "Annulla",
-    "delete": "Elimina", "edit": "Modifica", "save": "Salva", "close": "Chiudi", "open": "Apri",
-    "back": "Indietro", "next": "Avanti", "previous": "Precedente", "search": "Cerca", "filter": "Filtra",
-    "export": "Esporta", "import": "Importa", "create": "Crea", "update": "Aggiorna", "yes": "Sì",
-    "no": "No", "all": "Tutti", "none": "Nessuno", "select": "Seleziona", "upload": "Carica",
-    "dragDrop": "Trascina i file qui", "or": "o", "processing": "Elaborazione dei messaggi…",
+    "loading": "Caricamento…",
+    "noResults": "Nessun risultato",
+    "confirm": "Conferma",
+    "cancel": "Annulla",
+    "delete": "Elimina",
+    "edit": "Modifica",
+    "save": "Salva",
+    "close": "Chiudi",
+    "open": "Apri",
+    "back": "Indietro",
+    "next": "Avanti",
+    "previous": "Precedente",
+    "search": "Cerca",
+    "filter": "Filtra",
+    "export": "Esporta",
+    "import": "Importa",
+    "create": "Crea",
+    "update": "Aggiorna",
+    "yes": "Sì",
+    "no": "No",
+    "all": "Tutti",
+    "none": "Nessuno",
+    "select": "Seleziona",
+    "upload": "Carica",
+    "dragDrop": "Trascina i file qui",
+    "or": "o",
+    "processing": "Elaborazione dei messaggi…",
     "tryAgain": "Riprova"
+  },
+  "thinking": {
+    "thinking": "Sto pensando…",
+    "thought": "Ragionamento",
+    "thoughtFor": "Ha pensato per {duration}",
+    "reasoningAria": "Ragionamento del modello",
+    "arguments": "Argomenti",
+    "toolSearching": "Ricerca di informazioni",
+    "toolReading": "Lettura di una fonte",
+    "toolRunning": "Esecuzione del codice",
+    "toolUsing": "Uso di {name}"
+  },
+  "agent": {
+    "working": "Al lavoro…",
+    "summary": "Ha riflettuto {duration} · {count} strumenti usati",
+    "summaryOne": "Ha riflettuto {duration} · 1 strumento usato",
+    "summaryNoTools": "Ha riflettuto {duration}",
+    "interrupted": "Interrotto dall'utente",
+    "details": "Dettagli",
+    "arguments": "Argomenti",
+    "result": "Risultato",
+    "error": "Errore",
+    "usingTool": "Uso di {name}",
+    "permissionTitle": "L'agente vuole usare {name}",
+    "allow": "Consenti",
+    "allowAlways": "Consenti sempre in questa chat",
+    "deny": "Nega",
+    "permissionDeniedChip": "Negato",
+    "permissionError": "Impossibile inviare la risposta. Riprova.",
+    "traceAria": "Attività dell'agente"
+  },
+  "codex": {
+    "timeline": {
+      "actions": "{count, plural, one {# action} other {# actions}}",
+      "scrollToLatest": "Scroll to latest",
+      "running": "Running",
+      "done": "Done",
+      "error": "Error",
+      "reasoning": "Reasoning",
+      "durationSeconds": "({seconds}s)",
+      "unknownTool": "unknown tool: {name}"
+    },
+    "plan": {
+      "title": "Proposed plan",
+      "waiting": "waiting for approval",
+      "approved": "approved",
+      "approve": "Approve and build",
+      "adjust": "Adjust",
+      "pages": "Pages",
+      "components": "Components",
+      "tasks": "Tasks"
+    },
+    "checkpoint": {
+      "rollback": "Rollback here",
+      "changes": "Changes",
+      "viewPreview": "View preview",
+      "confirmTitle": "Roll back to this checkpoint?",
+      "confirmBody": "All changes made after this commit will be discarded from the workspace. This cannot be undone.",
+      "confirm": "Roll back",
+      "cancel": "Cancel",
+      "diffTitle": "Changes · +{additions} −{deletions} · {files} files",
+      "truncated": "Diff truncated (too long).",
+      "rolledBack": "Rolled back to checkpoint {sha}",
+      "rollbackFailed": "Rollback failed",
+      "export": "Copy to my disk",
+      "exported": "{count} files copied to {path}",
+      "exportedHint": "On your disk:",
+      "exportFailed": "Could not copy to disk"
+    },
+    "summary": {
+      "workedFor": "Worked for {duration}",
+      "timeWorked": "Time worked",
+      "workDone": "Work done",
+      "itemsRead": "Items read",
+      "codeChanged": "Code changed",
+      "agentUsage": "Agent Usage",
+      "estimated": "estimated",
+      "actions": "{count, plural, one {# action} other {# actions}}",
+      "lines": "{count, plural, one {# line} other {# lines}}",
+      "usageDetail": "Usage detail",
+      "model": "Model",
+      "inputTokens": "Input tokens",
+      "outputTokens": "Output tokens",
+      "inputCost": "Input cost",
+      "outputCost": "Output cost",
+      "totalCost": "Total cost",
+      "thisRun": "This run",
+      "sessionUsage": "Session",
+      "sessionRuns": "{count, plural, one {# run} other {# runs}}"
+    },
+    "actionRequired": {
+      "title": "Action required from you",
+      "copy": "Copy",
+      "copied": "Copied!",
+      "blockedCapabilities": "Blocked capabilities:",
+      "remediate": "Fix it"
+    },
+    "composer": {
+      "placeholder": "Make, test, iterate...",
+      "plan": "Plan",
+      "planTooltip": "Plan: restricts the run to planning only, executing nothing.",
+      "send": "Send",
+      "stop": "Stop",
+      "dictate": "Dictate",
+      "stopDictation": "Stop dictation",
+      "attach": "Attach file",
+      "tierEco": "Eco",
+      "tierStandard": "Standard",
+      "tierPower": "Power",
+      "tierEcoDesc": "Fast and free (FlashGPT)",
+      "tierStandardDesc": "Quality/cost balance",
+      "tierPowerDesc": "Maximum capability",
+      "free": "free"
+    },
+    "tabs": {
+      "preview": "Preview",
+      "agent": "Agent",
+      "web": "Web",
+      "connections": "Connections",
+      "checklist": "Checklist",
+      "files": "Files"
+    },
+    "preview": {
+      "start": "▶ Start / Reload",
+      "hint": "Boots this project's dev server and loads the preview."
+    },
+    "files": {
+      "title": "Code",
+      "refresh": "Refresh",
+      "loading": "Loading…",
+      "empty": "No files in the workspace yet.",
+      "none": "Select a file to view its content."
+    },
+    "errors": {
+      "createProject": "Could not create the project",
+      "startRun": "Could not start the run",
+      "approvePlan": "Could not approve the plan",
+      "stopRun": "Could not stop the run",
+      "loadDiff": "Could not load the diff",
+      "openPreview": "Could not open the preview",
+      "readFile": "Could not read {name}"
+    },
+    "panel": {
+      "newProject": "New",
+      "selectProject": "Select a project…",
+      "loading": "Loading…",
+      "emptyDescribe": "Describe what you want to build to propose a plan.",
+      "emptySelect": "Create or select a project to start.",
+      "filesHint": "The workspace file tree opens from the /code editor.",
+      "webUnavailable": "The preview is not available yet. Start it from a checkpoint or the Run button.",
+      "openInTab": "Open in new tab",
+      "checklistEmpty": "No approved plan with tasks yet.",
+      "defaultProjectName": "Project {n}"
+    }
   }
 }

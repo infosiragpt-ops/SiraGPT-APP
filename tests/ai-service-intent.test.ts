@@ -6,10 +6,15 @@ import {
   buildIntentAttributionGraph,
   buildProfessionalCapabilityPrompt,
   classifyIntentFastPath,
+  extractRequestedVideoAspectRatio,
+  extractRequestedVideoAudio,
   extractRequestedVideoDurationSeconds,
+  extractRequestedVideoResolution,
   shouldAutoActivateVideoGeneration,
   shouldRouteThroughAgenticRuntime,
   shouldRouteTextPromptThroughAgenticRuntime,
+  isImageAnalysisPrompt,
+  isImageOnlyAttachmentTurn,
   shouldUseFastTextRoute,
   shouldAnswerFromExistingDocument,
   shouldEditExistingDocument,
@@ -57,6 +62,39 @@ describe("ai-service · deterministic intent routing", () => {
     assert.equal(shouldRouteTextPromptThroughAgenticRuntime(prompt, history[0].files), true)
   })
 
+  it("routes whole-document transforms (translate/summarize/rewrite) over an attachment to the source-preserving agent", async () => {
+    const docFile = {
+      id: "file-docx-transform",
+      name: "tesis.docx",
+      mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }
+    const history = [{ role: "USER", content: "tesis.docx", files: [docFile] }]
+    for (const prompt of [
+      "traduce este documento al inglés",
+      "resume este documento",
+      "reescribe el documento adjunto en un tono más formal",
+    ]) {
+      assert.equal(shouldEditExistingDocument(prompt, history), true)
+      assert.equal(await aiService.classifyIntent(prompt, history), "agent_task")
+    }
+    // A pure format conversion still goes to document generation, not preserve-edit.
+    assert.equal(shouldEditExistingDocument("pásalo a PDF", history), false)
+    // Transform verb without an explicit document reference must not hijack the
+    // request, even when a document happens to be attached.
+    assert.equal(shouldEditExistingDocument("traduce esta frase al inglés", history), false)
+    assert.equal(shouldEditExistingDocument("cambia de tema", history), false)
+    // Noun forms (cambio / resumen) in read-only questions must not be mistaken
+    // for transform verbs, even with a document attached.
+    assert.equal(shouldEditExistingDocument("explica el cambio del documento", history), false)
+    assert.equal(shouldEditExistingDocument("¿cuál es el resumen del documento?", history), false)
+    // reescribir parity with the backend transformVerb: needs an explicit doc
+    // noun (a bare sentence reference is not enough), and the noun "reescritura"
+    // in a read-only question must not trigger an edit.
+    assert.equal(shouldEditExistingDocument("reescribe esta frase", history), false)
+    assert.equal(shouldEditExistingDocument("reescribe este documento en un tono formal", history), true)
+    assert.equal(shouldEditExistingDocument("explica la reescritura del documento", history), false)
+  })
+
   it("routes document follow-up questions like title lookup through the agent runtime", async () => {
     const history = [
       {
@@ -102,7 +140,7 @@ describe("ai-service · deterministic intent routing", () => {
     )
   })
 
-  it("routes targeted edits of an uploaded Word document to the document editor", async () => {
+  it("routes targeted edits of an uploaded Word document to the agentic document editor", async () => {
     const history = [
       {
         role: "USER",
@@ -121,7 +159,7 @@ describe("ai-service · deterministic intent routing", () => {
     assert.equal(shouldAnswerFromExistingDocument(prompt, history), false)
     assert.equal(shouldEditExistingDocument(prompt, history), true)
     assert.equal(shouldUseExistingDocumentFileContext(prompt, history), true)
-    assert.equal(await aiService.classifyIntent(prompt, history), "doc")
+    assert.equal(await aiService.classifyIntent(prompt, history), "agent_task")
   })
 
   it("keeps spreadsheet data work on the agentic route when a spreadsheet is attached", () => {
@@ -135,6 +173,58 @@ describe("ai-service · deterministic intent routing", () => {
       ]),
       true,
     )
+  })
+
+  it("routes image-only analysis turns to the vision path (plain /generate), NOT the queued agent loop", () => {
+    // Regression: an image + "resolver" was sent to the queued agent-task /
+    // react-agent loop, which has no vision — the model never saw the image
+    // and the run stalled until the 90s stale guard. Image analysis must reach
+    // the plain /api/ai/generate vision path instead.
+    const img = { id: "f-img", name: "captura.png", mimeType: "image/png" }
+    assert.equal(isImageOnlyAttachmentTurn([img]), true)
+    // Every image-only turn goes to the vision path — even ones whose text
+    // mentions "imagen" or classifies as math; the vision-less agent loop can
+    // never handle an image, so it must never receive one.
+    for (const prompt of ["resolver", "resuelve esta derivada", "¿qué dice esta imagen?", "transcribe la fórmula", "describe la foto", "genera un diagrama a partir de esta imagen"]) {
+      assert.equal(shouldRouteTextPromptThroughAgenticRuntime(prompt, [img]), false, `image turn must go to vision: ${prompt}`)
+    }
+    // A document attachment is unaffected: Q&A over the file still routes to
+    // the queued agentic runtime (private-context retrieval).
+    const doc = { id: "f-doc", name: "x.pdf", mimeType: "application/pdf" }
+    assert.equal(isImageOnlyAttachmentTurn([doc]), false)
+    assert.equal(shouldRouteTextPromptThroughAgenticRuntime("¿cuál es la primera palabra del documento?", [doc]), true)
+    // Whole-document transforms ("resume este documento") deliberately run on
+    // the INLINE /api/ai/generate path instead — that is where the
+    // document_edit tool lives (doc-edit routing fix, commits 61c9bb8dc and
+    // 798c376d6) — so the gate must return false for them.
+    assert.equal(shouldRouteTextPromptThroughAgenticRuntime("resume este documento", [doc]), false)
+  })
+
+  it("image ANALYSIS questions never classify as image GENERATION", () => {
+    // Regression: "describir que ves en esta imagen" + an attached photo
+    // started the image GENERATOR (GPT Image 2) instead of describing the
+    // image — the bare image-word pattern hijacked an understanding question.
+    const analysis = [
+      "describir que ves en esta imagen",
+      "describe esta imagen",
+      "transcribe la foto",
+      "¿qué ves en la imagen?",
+      "que dice la imagen",
+      "extrae el texto de la captura",
+      "analiza esta imagen",
+      "explica la imagen",
+      "what do you see in this picture",
+      "transcribe this image",
+    ]
+    for (const prompt of analysis) {
+      assert.equal(isImageAnalysisPrompt(prompt), true, `analysis: ${prompt}`)
+      assert.notEqual(classifyIntentFastPath(prompt), "image", `must NOT be generation: ${prompt}`)
+    }
+    // Real generation prompts still classify as 'image'.
+    for (const prompt of ["genera una imagen de un gato", "crea una imagen de un atardecer", "create an image of a sunset"]) {
+      assert.equal(isImageAnalysisPrompt(prompt), false, `generation: ${prompt}`)
+      assert.equal(classifyIntentFastPath(prompt), "image", `must stay generation: ${prompt}`)
+    }
   })
 
   it("still creates a Word file when Word is requested as the output format", async () => {
@@ -286,16 +376,17 @@ describe("ai-service · deterministic intent routing", () => {
   })
 
   it("routes external reference plus software implementation to the task agent", async () => {
-    const intent = await aiService.classifyIntent(
-      "implementa mejoras de este link https://transformer-circuits.pub/2025/attribution-graphs/biology.html para mejorar el software",
-    )
+    const prompt =
+      "implementa mejoras de este link https://transformer-circuits.pub/2025/attribution-graphs/biology.html para mejorar el software"
+    const intent = await aiService.classifyIntent(prompt)
     assert.equal(intent, "agent_task")
-    assert.equal(
-      shouldRouteTextPromptThroughAgenticRuntime(
-        "implementa mejoras de este link https://transformer-circuits.pub/2025/attribution-graphs/biology.html para mejorar el software",
-      ),
-      true,
-    )
+    // Since commit 53a46aa89, no-file prompts run through the RELIABLE inline
+    // /generate agentic loop (the queued agent-task path is reserved for
+    // /goal and uploaded-document turns), so the queued-route gate is false…
+    assert.equal(shouldRouteTextPromptThroughAgenticRuntime(prompt), false)
+    // …but the prompt is still WORK: it must never fall to the plain fast
+    // text route, or the inline agentic loop (web tools) would be skipped.
+    assert.equal(shouldUseFastTextRoute(prompt), false)
   })
 
   it("routes plural 3D animation requests to live artifacts", async () => {
@@ -345,13 +436,25 @@ describe("ai-service · deterministic intent routing", () => {
     const normalChatVideoPrompt = "que un perro este volando crea un video de 10 segundos"
     assert.equal(shouldAutoActivateVideoGeneration(normalChatVideoPrompt), true)
     assert.equal(extractRequestedVideoDurationSeconds(normalChatVideoPrompt), 10)
+    assert.equal(extractRequestedVideoAspectRatio("genera un video cuadrado de un perro"), "1:1")
+    assert.equal(extractRequestedVideoAspectRatio("genera un video rectangular para youtube"), "16:9")
+    assert.equal(extractRequestedVideoAspectRatio("crea un video vertical para reels"), "9:16")
+    assert.equal(extractRequestedVideoAspectRatio("crea un video 21x9 cinematográfico"), "21:9")
+    assert.equal(extractRequestedVideoResolution("crea un video 480p sin audio"), "480p")
+    assert.equal(extractRequestedVideoResolution("crea un video en 720p con audio"), "720p")
+    assert.equal(extractRequestedVideoAudio("crea un video 480p sin audio"), false)
+    assert.equal(extractRequestedVideoAudio("crea un video en 720p con audio"), true)
     assert.equal(classifyIntentFastPath("qué video me recomiendas para aprender React?"), null)
     assert.equal(await aiService.classifyIntent("qué video me recomiendas para aprender React?"), "text")
 
     const musicPrompt = "genérame una canción de 10 segundos estilo lofi"
     assert.equal(classifyIntentFastPath(musicPrompt), "agent_task")
     assert.equal(await aiService.classifyIntent(musicPrompt), "agent_task")
-    assert.equal(shouldRouteTextPromptThroughAgenticRuntime("crea una canción lofi"), true)
+    // Since commit 53a46aa89, no-file creation prompts run on the inline
+    // /generate agentic loop, not the queued agent-task path — the queued
+    // gate is false, but the prompt must still skip the plain fast text route.
+    assert.equal(shouldRouteTextPromptThroughAgenticRuntime("crea una canción lofi"), false)
+    assert.equal(shouldUseFastTextRoute("crea una canción lofi"), false)
 
     const voicePrompt = "crea un audio narrando este texto con voz femenina"
     assert.equal(classifyIntentFastPath(voicePrompt), "agent_task")

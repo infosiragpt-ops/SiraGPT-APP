@@ -338,7 +338,7 @@ const DEFAULTS = [
   d("create_xlsx_dashboard", "spreadsheet", "low", ["write_artifact"], "Dashboard Excel con KPIs + gráficos."),
   d("add_formulas_to_xlsx", "spreadsheet", "low", ["write_artifact"], "Inyecta fórmulas en celdas específicas."),
   d("add_charts_to_xlsx", "spreadsheet", "low", ["write_artifact"], "Añade gráficos a hojas existentes."),
-  d("validate_xlsx", "validator", "low", [], "Valida que el .xlsx abra y cumpla shape esperada."),
+  dv("validate_xlsx", "validator", "low", [], "Valida que el .xlsx abra y cumpla shape esperada.", { module: "xlsx-workbook-validator", fn: "validateXlsxWorkbook" }),
 
   // Presentation
   d("create_pptx", "presentation", "low", ["write_artifact"], "PowerPoint profesional desde plan de slides."),
@@ -346,14 +346,14 @@ const DEFAULTS = [
   d("create_academic_presentation", "presentation", "low", ["write_artifact"], "Presentación académica."),
   d("create_training_deck", "presentation", "low", ["write_artifact"], "Material formativo con notas del orador."),
   d("redesign_slides", "presentation", "low", ["read_uploaded_file", "write_artifact"], "Mejora un .pptx existente."),
-  d("validate_pptx", "validator", "low", [], "Valida estructura, slides mínimos y notas."),
+  dv("validate_pptx", "validator", "low", [], "Valida estructura, slides mínimos y notas.", { module: "pptx-package-validator", fn: "validatePptxPackage" }),
 
   // PDF
   d("render_pdf_from_html", "pdf", "low", ["write_artifact"], "Render PDF desde HTML usando un renderer headless."),
   d("render_pdf_from_docx", "pdf", "low", ["write_artifact"], "Convierte DOCX a PDF."),
   d("merge_pdfs", "pdf", "low", ["write_artifact"], "Combina varios PDFs en uno."),
   d("annotate_pdf", "pdf", "low", ["write_artifact"], "Añade marcas, comentarios o highlights."),
-  d("validate_pdf", "validator", "low", [], "Valida que el PDF abra y tenga páginas legibles."),
+  dv("validate_pdf", "validator", "low", [], "Valida que el PDF abra y tenga páginas legibles.", { module: "pdf-render-validator", fn: "validatePdfRender" }),
 
   // SVG / visual
   d("create_svg", "svg", "low", ["write_artifact"], "Genera SVG limpio y minificado."),
@@ -452,6 +452,60 @@ function d(name, category, riskLevel, permissionsRequired, description) {
       };
     },
   };
+}
+
+// Extract the artifact bytes from a tool input, if the caller supplied them.
+function bufferFromInput(input) {
+  if (!input) return null;
+  if (Buffer.isBuffer(input.buffer)) return input.buffer;
+  for (const k of ["buffer", "base64", "bytes"]) {
+    if (typeof input[k] === "string" && input[k]) {
+      try { return Buffer.from(input[k], "base64"); } catch { /* not base64 */ }
+    }
+  }
+  return null;
+}
+
+/**
+ * dv() — like d(), but for the file-validator tools that have a real in-repo
+ * implementation. When the caller supplies the artifact bytes (input.buffer as
+ * a Buffer or base64 string) the tool runs the actual validator instead of the
+ * {stub:true} placeholder; with no bytes it falls back to d()'s default
+ * executor, so this is purely additive (no behavior change for callers that
+ * don't pass bytes).
+ */
+function dv(name, category, riskLevel, permissionsRequired, description, validatorRef) {
+  const base = d(name, category, riskLevel, permissionsRequired, description);
+  const stubExecute = base.execute;
+  base.execute = async function execute(input, context) {
+    const buffer = bufferFromInput(input);
+    if (buffer) {
+      try {
+        const mod = require(`../agents/${validatorRef.module}`);
+        const result = await mod[validatorRef.fn]({
+          buffer,
+          prompt: input?.prompt,
+          sourceText: input?.sourceText,
+          minSlides: input?.minSlides,
+          minCells: input?.minCells,
+          minTextChars: input?.minTextChars,
+        });
+        return {
+          status: "success",
+          output: { tool: name, validated: true, ...result },
+          metadata: { category, riskLevel, request_id: context?.requestId || null },
+        };
+      } catch (err) {
+        return {
+          status: "success",
+          output: { tool: name, validated: false, ok: false, error: err && err.message ? err.message : String(err) },
+          metadata: { category, riskLevel, request_id: context?.requestId || null },
+        };
+      }
+    }
+    return stubExecute(input, context);
+  };
+  return base;
 }
 
 function humanise(s) {

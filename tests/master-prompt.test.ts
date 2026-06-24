@@ -1,13 +1,14 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { createRequire } from "node:module"
+import * as path from "node:path"
 
 // The backend is CommonJS JavaScript — we load it via require() rather
 // than `import`, so TypeScript doesn't try to type-check files outside
-// the tests/ include list. createRequire anchors resolution to THIS
-// source file's path so the relative jump is stable regardless of
-// where the test-dist directory ends up.
-const cjsRequire = createRequire(__filename)
+// the tests/ include list. createRequire anchors resolution at the repo
+// root (process.cwd() — the runner's cwd is always the repo root), so
+// the require works regardless of where the test-dist directory ends up.
+const cjsRequire = createRequire(path.join(process.cwd(), "package.json"))
 
 type IntentResult = { intent: string; context: string }
 
@@ -40,7 +41,7 @@ type MasterPrompt = {
   THESIS_RESEARCH_CONTRACT: string
 }
 
-const masterPrompt = cjsRequire("../../backend/src/services/master-prompt") as MasterPrompt
+const masterPrompt = cjsRequire("./backend/src/services/master-prompt") as MasterPrompt
 
 describe("master-prompt · classifyIntent", () => {
   it("tags a Word-document request as GENERATE_DOCUMENT", () => {
@@ -131,7 +132,10 @@ describe("master-prompt · buildSystemPrompt", () => {
     assert.match(built.system, /SIRAGPT PRODUCT OPERATING CONTRACT/)
     assert.match(built.system, /durable work session/)
     assert.match(built.system, /Preserve the existing user interface/)
-    assert.match(built.system, /Gema4-31B/)
+    // Post-rebrand (Gema4 → Cerebras/FlashGPT) the operating contract names
+    // the fallback generically ("configured fallback model") instead of a
+    // hard-coded model id. Assert the current, brand-agnostic copy.
+    assert.match(built.system, /configured fallback model/)
     assert.match(built.system, /Never claim GitHub/)
   })
 
@@ -200,7 +204,7 @@ describe("master-prompt · buildSystemPrompt", () => {
 
 describe("master-prompt · research route config", () => {
   it("loads the research route module without syntax errors", () => {
-    const mod = cjsRequire("../../backend/src/routes/research")
+    const mod = cjsRequire("./backend/src/routes/research")
     assert.ok(mod, "research route should export an Express router")
     assert.equal(typeof mod, "function", "exported Express router is a function-like object")
   })

@@ -18,8 +18,8 @@ export const LOCALE_COOKIE = "NEXT_LOCALE"
  * just shows English for the missing strings.
  */
 export default getRequestConfig(async () => {
-  const cookieStore = cookies()
-  const headerStore = headers()
+  const cookieStore = await cookies()
+  const headerStore = await headers()
 
   let locale: string | undefined = cookieStore.get(LOCALE_COOKIE)?.value
   if (!isSupportedLocale(locale)) {

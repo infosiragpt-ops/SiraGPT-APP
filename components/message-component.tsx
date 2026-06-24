@@ -49,9 +49,11 @@ import {
 import { toast } from "sonner"
 import { apiClient } from "@/lib/api"
 import { useVoiceControls } from './voice-controls';
+import { getNaturalSpeechEngine, isSpeechSupported } from '@/lib/speech/natural-speech-engine';
 import ReactMarkdown from 'react-markdown'
 import { PerformanceOptimizer } from "@/lib/performance-optimizer"
 import { markdownRehypePlugins, markdownRemarkPlugins } from '@/lib/markdown-sanitize'
+import { normalizeMathDelimiters } from '@/lib/markdown/normalize-math'
 import MemoMarkdownBlock from '@/components/markdown/memo-markdown-block'
 import { splitStableHead } from '@/lib/markdown-block-split'
 import { DownloadButtons } from './download-buttons';
@@ -79,7 +81,10 @@ import ProcessingGoogleServicesCard from "./ProcessingGoogleServicesCard"
 import SpotifyConnectionCard from "./SpotifyConnectionCard"
 import SpotifyResults from "./spotify-results"
 import { ThinkingPlaceholder } from "./thinking-placeholder"
+import ThinkingTrace from "./thinking-trace"
+import AgentTrace from "./agent-trace"
 import MessageActionRail from "./MessageActionRail"
+import SourcesChip from "./SourcesChip"
 import ComputerUseReasoning from "./ComputerUseReasoning"
 import type { DocumentPreviewTarget } from "./document-preview"
 import { appendUploadAuthToken, resolveImageAttachmentUrl } from "@/lib/attachment-url"
@@ -108,6 +113,125 @@ const truncateUrl = (url: unknown, maxLength: number = 30) => {
     const path = parts.slice(3).join('/');
     const truncatedPath = path.length > 25 ? `${path.slice(0, 25)}...` : path;
     return path ? `${domain}/${truncatedPath}` : domain;
+};
+
+// Extract web-search sources for the ChatGPT-style "Fuentes" chip. Live
+// turns attach `sources`/`searchActivity` to the message during streaming;
+// reloaded turns carry them inside the persisted `metadata` JSON
+// (webSources / webSearchMeta). This reads whichever is available.
+const extractWebSources = (message: any): { sources: any[]; activity: any } => {
+    let sources = Array.isArray(message?.sources) ? message.sources : [];
+    let activity = message?.searchActivity || null;
+    if (!sources.length || !activity) {
+        try {
+            const meta = typeof message?.metadata === 'string'
+                ? JSON.parse(message.metadata)
+                : (message?.metadata && typeof message.metadata === 'object' ? message.metadata : {});
+            if (!sources.length && Array.isArray(meta?.webSources)) sources = meta.webSources;
+            if (!activity && meta?.webSearchMeta) activity = meta.webSearchMeta;
+        } catch { /* malformed metadata — ignore */ }
+    }
+    return { sources, activity };
+};
+
+// Claude-style extended thinking. Live turns accumulate `message.reasoning`
+// (+ `reasoningStreaming` / `reasoningToolCalls`) from the typed SSE frames;
+// reloaded turns carry `reasoning` as a first-class column on the Message row
+// and the thinking duration inside the persisted metadata JSON
+// (`reasoningDurationMs`).
+// Agent harness (AgentTrace): live turns carry `agentSteps`/`agentRun`
+// straight on the message (typed SSE frames); historically loaded messages
+// hydrate from the persisted `agentMetadata` column (compact projection
+// written by the backend next to the agent_steps rows).
+const extractAgentTrace = (message: any): {
+    steps: any[];
+    run: any | null;
+    permission: any | null;
+} => {
+    if (Array.isArray(message?.agentSteps) && message.agentSteps.length > 0) {
+        return {
+            steps: message.agentSteps,
+            run: message?.agentRun || null,
+            permission: message?.agentPermission || null,
+        };
+    }
+    const meta = message?.agentMetadata;
+    const parsed = meta && typeof meta === 'string'
+        ? (() => { try { return JSON.parse(meta); } catch { return null; } })()
+        : (meta && typeof meta === 'object' ? meta : null);
+    if (parsed && Array.isArray(parsed.steps)) {
+        const steps = parsed.steps
+            .filter((s: any) => s && s.type === 'tool_call')
+            .map((s: any, i: number) => ({
+                id: `hist_${s.stepIndex ?? i}`,
+                blockIndex: s.stepIndex ?? i,
+                seq: i,
+                type: 'tool_call',
+                name: s.toolName || 'tool',
+                humanDescription: s.humanDescription,
+                args: s.argsPreview,
+                preview: s.resultPreview,
+                status: s.status === 'running' ? 'interrupted' : (s.status || 'completed'),
+                isError: Boolean(s.isError),
+                durationMs: s.durationMs,
+            }));
+        return {
+            steps,
+            run: {
+                status: parsed.status === 'interrupted' ? 'interrupted' : 'completed',
+                toolCalls: parsed.toolCalls,
+                errors: parsed.errors,
+                durationMs: parsed.durationMs,
+                tokensEstimate: parsed.tokensEstimate,
+                costUsdEstimate: parsed.costUsdEstimate ?? null,
+                stoppedReason: parsed.stoppedReason ?? null,
+            },
+            permission: null,
+        };
+    }
+    return { steps: [], run: null, permission: null };
+};
+
+const extractReasoning = (message: any): {
+    reasoning: string;
+    reasoningStreaming: boolean;
+    reasoningDurationMs: number | null;
+    reasoningToolCalls: any[];
+} => {
+    const reasoning = typeof message?.reasoning === 'string' ? message.reasoning : '';
+    let reasoningDurationMs = typeof message?.reasoningDurationMs === 'number' ? message.reasoningDurationMs : null;
+    if (reasoningDurationMs == null) {
+        try {
+            const meta = typeof message?.metadata === 'string'
+                ? JSON.parse(message.metadata)
+                : (message?.metadata && typeof message.metadata === 'object' ? message.metadata : {});
+            if (typeof meta?.reasoningDurationMs === 'number') reasoningDurationMs = meta.reasoningDurationMs;
+        } catch { /* malformed metadata — ignore */ }
+    }
+    return {
+        reasoning,
+        reasoningStreaming: !!message?.reasoningStreaming,
+        reasoningDurationMs,
+        reasoningToolCalls: Array.isArray(message?.reasoningToolCalls) ? message.reasoningToolCalls : [],
+    };
+};
+
+// Mirror of extractWebSources for autonomously-recalled memory: live turns
+// attach `message.memory`; reloaded turns carry it inside the persisted
+// metadata JSON as `memory` (+ `memoryMeta`).
+const extractMemory = (message: any): { memory: any[]; memoryMeta: any } => {
+    let memory = Array.isArray(message?.memory) ? message.memory : [];
+    let memoryMeta = message?.memoryMeta || null;
+    if (!memory.length || !memoryMeta) {
+        try {
+            const meta = typeof message?.metadata === 'string'
+                ? JSON.parse(message.metadata)
+                : (message?.metadata && typeof message.metadata === 'object' ? message.metadata : {});
+            if (!memory.length && Array.isArray(meta?.memory)) memory = meta.memory;
+            if (!memoryMeta && meta?.memoryMeta) memoryMeta = meta.memoryMeta;
+        } catch { /* malformed metadata — ignore */ }
+    }
+    return { memory, memoryMeta };
 };
 
 const NON_IMAGE_EXTENSIONS = new Set([
@@ -157,6 +281,34 @@ const resolveUserImageAttachmentUrl = (file: any) => {
 
 const formatAgentTaskUserContent = (content: string) => {
     return String(content || "").replace(/^🤖\s*Tarea:\s*/i, "").trim();
+};
+
+const extractRenderableAgentTaskContent = (content: string) => {
+    const raw = String(content || "");
+    const match = raw.match(/^```agent-task-state\s*\n([\s\S]*?)\n```\s*/);
+    if (!match) return raw;
+
+    // A completed run with deliverables must KEEP the state block: it is
+    // what mounts AgenticStepsRenderer -> the artifact cards (Word/PDF
+    // download). Collapsing to plain text alone made every finished
+    // document edit lose its file card.
+    let state: { done?: boolean; error?: unknown; finalText?: string; artifacts?: unknown[] } | null = null;
+    try {
+        state = JSON.parse(match[1]);
+    } catch {
+        state = null;
+    }
+    const hasArtifacts = Array.isArray(state?.artifacts) && state.artifacts.length > 0;
+
+    const trailing = raw.slice(match[0].length).trim();
+    if (trailing) return hasArtifacts ? `${trailing}\n\n${match[0].trim()}` : trailing;
+
+    const finalText = typeof state?.finalText === "string" ? state.finalText.trim() : "";
+    if (state?.done && !state?.error && finalText) {
+        return hasArtifacts ? `${finalText}\n\n${match[0].trim()}` : finalText;
+    }
+
+    return raw;
 };
 
 const getDocumentChipIcon = (name: string) => {
@@ -655,16 +807,20 @@ const GeneratedImageCard = ({
     );
 };
 
-const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, isStreaming, onToggleSplitView, isGeneratingImage, onDocumentPreview, onAttachmentPreview, children }: {
+const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessageInChat, isStreaming, onToggleSplitView, isGeneratingImage, onDocumentPreview, onAttachmentPreview, onOpenSources, children }: {
     message: any;
     user: any;
     onRegenerate: (messageId: string) => void;
+    /** Fork the conversation from this message into a new branch. Optional —
+     *  the Branch action only renders when this is supplied. */
+    onBranch?: (messageId: string) => void | Promise<void>;
     updateMessageInChat: (messageId: string, newContent: string, files?: any[]) => void;
     isStreaming?: boolean;
     onToggleSplitView?: (content: any) => void;
     isGeneratingImage?: boolean;
     onDocumentPreview?: (target: DocumentPreviewTarget) => void;
     onAttachmentPreview?: (attachment: AttachmentLike, siblings: AttachmentLike[], index: number) => void;
+    onOpenSources?: (payload: { sources: any[]; activity: any; memory?: any[]; memoryMeta?: any; messageId?: string }) => void;
     children?: React.ReactNode;
 }) => {
     // Performance monitoring disabled to prevent overhead
@@ -795,6 +951,11 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             if (typeof window !== "undefined" && window.speechSynthesis) {
                 try { window.speechSynthesis.cancel() } catch { /* ignore */ }
             }
+            // Also reset the NaturalSpeechEngine so its internal queue/state
+            // doesn't leak across route changes.
+            if (isSpeechSupported()) {
+                try { getNaturalSpeechEngine().cancel() } catch { /* ignore */ }
+            }
         };
     }, [currentAudio]);
 
@@ -826,8 +987,9 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         }
     };
 
-    const downloadVideo = async () => {
-        if (message.videoData?.filename) {
+    const downloadVideo = async (filenameOverride?: string) => {
+        const targetFilename = filenameOverride || message.videoData?.filename;
+        if (targetFilename) {
             try {
                 setVideoLoading(true);
                 // apiClient.downloadVideo returns a URL string, not a blob. We need to fetch the file as a blob.
@@ -835,11 +997,11 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                 // const response = await fetch(downloadUrl);
                 // if (!response.ok) throw new Error('Network response was not ok');
                 // const blob = await response.blob();
-                const blob = await apiClient.downloadVideo(message.videoData.filename);
+                const blob = await apiClient.downloadVideo(targetFilename);
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = message.videoData.filename;
+                a.download = targetFilename;
                 document.body.appendChild(a);
                 a.click();
                 window.URL.revokeObjectURL(url);
@@ -893,7 +1055,14 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     // metadata (progressStage / progressPct set by the plan / math /
     // viz dispatchers) as "thinking" so the unified placeholder with
     // the animated SVG bars stays visible for the whole activity.
-    const isThinking = isAssistant && !message.error && (
+    // Claude-style thinking trace: live reasoning replaces the generic
+    // placeholder — the trace itself carries the "Pensando…" header, so
+    // showing both would duplicate the affordance.
+    const reasoningView = extractReasoning(message);
+    const agentTraceView = extractAgentTrace(message);
+    const hasAgentTrace = isAssistant && agentTraceView.steps.length > 0;
+    const hasLiveReasoning = isAssistant && (reasoningView.reasoningStreaming || (isStreaming && !!reasoningView.reasoning));
+    const isThinking = isAssistant && !message.error && !hasLiveReasoning && (
       (isStreaming && !message.content) || !!(message as any).progressStage
     );
     // const isThinking = isAssistant && message.content === null;
@@ -933,7 +1102,36 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         }
     };
 
-
+    // ── Recordar (memoria persistente del agente) ────────────────────────
+    // Pins this answer into the user's long-term memory document so future
+    // chats start already knowing it. Self-contained: hits the existing
+    // /memory endpoint via apiClient.addMemoryEntry — no parent plumbing,
+    // which also keeps it safe from the concurrent edits churning the big
+    // chat-interface file. We strip non-copyable artifact fences and cap the
+    // length so we store a clean, useful fact rather than a giant blob.
+    const handleRemember = async () => {
+        const raw = stripNonCopyableArtifactBlocks(extractRenderableAgentTaskContent(message.content || "")).trim();
+        if (!raw) {
+            toast.error("No hay contenido para recordar");
+            throw new Error("empty-remember");
+        }
+        // Memory entries are short facts; keep the most salient opening slice.
+        const MAX_MEMORY_CHARS = 1200;
+        const text = raw.length > MAX_MEMORY_CHARS ? `${raw.slice(0, MAX_MEMORY_CHARS - 1).trimEnd()}…` : raw;
+        try {
+            await apiClient.addMemoryEntry(text, "chat");
+            toast.success("Guardado en la memoria de tu agente", {
+                description: "Tus próximas conversaciones partirán recordando esto.",
+            });
+        } catch (err: any) {
+            const status = err?.status || err?.statusCode;
+            const detail = err?.errorData?.error || err?.message || "error desconocido";
+            console.error("[remember] failed:", { status, detail, messageId: message.id });
+            if (status === 401) toast.error("Tu sesión expiró. Inicia sesión de nuevo.");
+            else toast.error(`No se pudo guardar en memoria: ${detail}`);
+            throw err;
+        }
+    };
 
     const handleEditSave = async () => {
         if (editedContent.trim() === message.content || editedContent.trim() === "") {
@@ -956,7 +1154,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     // source, so pasting into Word keeps headings, lists, tables and
     // emphasis without carrying chat UI borders or buttons.
     const handleGlobalCopy = async () => {
-        const source = stripNonCopyableArtifactBlocks(String(message.content || ""));
+        const source = stripNonCopyableArtifactBlocks(extractRenderableAgentTaskContent(String(message.content || "")));
         if (!source) {
             toast.error("Nada que copiar.");
             throw new Error("empty_content");
@@ -967,7 +1165,6 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             setTimeout(() => setIsCopied(false), 2000);
             toast.success("Copiado con formato profesional para Word");
         } catch (err: any) {
-            console.error("[copy] failed:", err);
             toast.error(`No se pudo copiar: ${err?.message || "error desconocido"}`);
             throw err;
         }
@@ -1017,15 +1214,26 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             return;
         }
 
-        // Toggle path 2 — browser-TTS fallback was speaking. The
-        // SpeechSynthesisUtterance API has no per-handle stop; we
-        // cancel the entire queue and reset state. Without this,
-        // every click that lands here while the browser is talking
-        // would queue another utterance on top of the current one.
-        if (isSpeaking && typeof window !== "undefined" && window.speechSynthesis) {
-            try { window.speechSynthesis.cancel() } catch { /* ignore */ }
-            setIsSpeaking(false);
-            return;
+        // Toggle path 2 — the NaturalSpeechEngine fallback is active.
+        // The engine owns play/pause/resume across sentence chunks, so a
+        // click while it's talking pauses, and a click while paused
+        // resumes — no re-fetch, no utterances stacking on top of each
+        // other (the old naive SpeechSynthesisUtterance path did both).
+        if (isSpeechSupported()) {
+            const engine = getNaturalSpeechEngine();
+            if (engine.isActive) {
+                if (engine.state === "speaking") {
+                    engine.pause();
+                    setIsSpeaking(false);
+                } else if (engine.state === "paused") {
+                    engine.resume();
+                    setIsSpeaking(true);
+                } else {
+                    engine.cancel();
+                    setIsSpeaking(false);
+                }
+                return;
+            }
         }
 
         const textToSpeak = message.content
@@ -1077,29 +1285,57 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                 };
             }
         } catch (error) {
-            // Fallback to browser TTS
-            // ElevenLabs TTS failed → fall back to browser TTS (caught above)
+            // ElevenLabs TTS unavailable → fall back to the on-device
+            // NaturalSpeechEngine. Unlike the old naive
+            // `new SpeechSynthesisUtterance(text)` call, this engine
+            // auto-detects the language, scores + picks the highest-quality
+            // voice the platform exposes (neural/natural/premium), tunes
+            // prosody, and streams the answer sentence-by-sentence with a
+            // watchdog + keep-alive so long replies don't get cut off after
+            // ~15s on Chrome. Pure client-side voice engineering — no API
+            // key, no country-locked cloud provider.
             void error;
             setIsLoadingAudio(false);
             setShowAudioPlayer(false);
-            // Cancel any utterance still queued from a previous
-            // failure path so we don't talk over ourselves.
-            try { window.speechSynthesis?.cancel() } catch { /* ignore */ }
-            const utterance = new SpeechSynthesisUtterance(textToSpeak);
-            utterance.onstart = () => setIsSpeaking(true);
-            utterance.onend = () => {
+
+            if (!isSpeechSupported()) {
+                setIsSpeaking(false);
+                toast.error("Tu navegador no soporta lectura en voz alta");
+                return;
+            }
+
+            const engine = getNaturalSpeechEngine();
+            // Subscribe once per run; listeners are replaced (not stacked)
+            // because speak() bumps an internal run token that invalidates
+            // stale callbacks, and we unsubscribe on terminal states below.
+            const offState = engine.on("state", (next) => {
+                if (next === "speaking") setIsSpeaking(true);
+                else if (next === "paused" || next === "stopped" || next === "idle") setIsSpeaking(false);
+            });
+            const cleanup = () => {
+                offState();
+                offEnd();
+                offError();
+            };
+            const offEnd = engine.on("end", () => {
                 setIsSpeaking(false);
                 setCurrentAudio(null);
-            };
-            utterance.onerror = () => {
+                cleanup();
+            });
+            const offError = engine.on("error", () => {
                 setIsSpeaking(false);
                 setCurrentAudio(null);
-            };
-            window.speechSynthesis.speak(utterance);
-            // Optimistically flip the visual state — onstart can
-            // be slow on Safari and the user expects immediate
-            // feedback when they pressed the button.
+                cleanup();
+                toast.error("Falló la lectura en voz alta");
+            });
+
+            // Optimistically flip the visual state — onstart can be slow on
+            // Safari and the user expects immediate feedback on click.
             setIsSpeaking(true);
+            engine.speak(textToSpeak).catch(() => {
+                setIsSpeaking(false);
+                cleanup();
+            });
         }
     };
 
@@ -1117,6 +1353,11 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         if (currentAudio) {
             currentAudio.pause();
             currentAudio.currentTime = 0;
+        }
+        // Stop the on-device speech engine too, in case the browser-TTS
+        // fallback is what's currently reading.
+        if (isSpeechSupported()) {
+            try { getNaturalSpeechEngine().cancel() } catch { /* ignore */ }
         }
         setIsSpeaking(false);
         setAudioProgress(0);
@@ -1167,7 +1408,10 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             if (language === 'agent-task-state') {
                 try {
                     const state = JSON.parse(codeString);
-                    return <AgenticStepsRenderer state={state} onDocumentPreview={onDocumentPreview} />;
+                    // When the typed AgentTrace timeline is active for this
+                    // message, the sentinel contributes only its artifacts —
+                    // one timeline, not two.
+                    return <AgenticStepsRenderer state={state} hideSteps={hasAgentTrace} onDocumentPreview={onDocumentPreview} />;
                 } catch {
                     return null;
                 }
@@ -1189,7 +1433,13 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     };
 
     // Optimized message content rendering with performance safeguards
-    const MessageContent = ({ content }: { content: string }) => {
+    const MessageContent = ({ content: rawContent }: { content: string }) => {
+        // Normalize `\( \)` / `\[ \]` TeX bracket delimiters (commonly emitted
+        // by LLMs) to `$ $` / `$$ $$` once, up front, so every downstream
+        // branch — direct ReactMarkdown, the streaming head/tail split, and the
+        // memoized block — renders math via KaTeX. Code spans/blocks are left
+        // untouched and the helper is a no-op when no brackets are present.
+        const content = React.useMemo(() => normalizeMathDelimiters(rawContent), [rawContent]);
         // ✅ PERFORMANCE FIX: Use simple rendering for streaming messages
         // if (isStreaming) {
         //     return (
@@ -1200,37 +1450,10 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         // }
 
 
-        // ── Expand / collapse (Ver más / Ver menos) ──────────────────
-        // Long final messages are clamped to a comfortable reading height
-        // with a soft fade + a toggle, so a single huge answer doesn't
-        // dominate the scroll. Streaming bubbles are NEVER clamped (their
-        // height grows token-by-token). We seed `overflowing` from a cheap
-        // char heuristic so a long message paints already-collapsed (no
-        // expand-then-snap flash), then refine it with the real measured
-        // height after mount.
-        const COLLAPSED_MAX_PX = 360;
+        // Messages always render at full height — the old "Ver más / Ver
+        // menos" clamp was removed by user request (having to expand every
+        // long answer was friction, not comfort).
         const contentRef = useRef<HTMLDivElement>(null);
-        const [isExpanded, setIsExpanded] = useState(false);
-        const [overflow, setOverflow] = useState<{ overflowing: boolean; fullHeight: number }>(() => ({
-            overflowing: !isStreaming && typeof content === 'string' && content.length > 1400,
-            fullHeight: 0,
-        }));
-        useEffect(() => {
-            if (isStreaming) {
-                setOverflow({ overflowing: false, fullHeight: 0 });
-                return;
-            }
-            const el = contentRef.current;
-            if (!el) return;
-            // scrollHeight reports the full content height even while the
-            // element is clamped via max-height, so this is accurate in
-            // both collapsed and expanded states.
-            const sh = el.scrollHeight;
-            setOverflow({ overflowing: sh > COLLAPSED_MAX_PX + 48, fullHeight: sh });
-        // isStreaming is a closure prop, not local state, but we DO want to
-        // re-measure when a bubble transitions streaming -> final.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-        }, [content, isStreaming]);
 
         // Tag-renderers that don't depend on streaming/final mode. Kept
         // as a single useMemo so both maps reuse the same references and
@@ -1294,7 +1517,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                     if (lang === 'agent-task-state') {
                         try {
                             const state = JSON.parse(codeString);
-                            return <AgenticStepsRenderer state={state} onDocumentPreview={onDocumentPreview} />;
+                            return <AgenticStepsRenderer state={state} hideSteps={hasAgentTrace} onDocumentPreview={onDocumentPreview} />;
                         } catch {
                             return null;
                         }
@@ -1332,9 +1555,11 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                 );
             },
         // onDocumentPreview is typically stable (callback from parent);
-        // baseComponents is stable. Deps stay narrow on purpose.
+        // baseComponents is stable. hasAgentTrace flips once when the first
+        // typed tool frame lands — the map must recompute then so the live
+        // sentinel hands the timeline over to AgentTrace.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-        }), [baseComponents, onDocumentPreview]);
+        }), [baseComponents, onDocumentPreview, hasAgentTrace]);
 
         // Final (post-streaming) map: enriches the table with controls
         // tied to the now-stable message.content. Recomputed only when
@@ -1418,14 +1643,12 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             toast.success("Selección copiada con formato para Word");
         };
 
-        const collapsible = !isStreaming && overflow.overflowing;
-        const isClamped = collapsible && !isExpanded;
         return (
             // [&_p:last-child]:!mb-0 trims the trailing 1em margin that
             // `prose-sm` adds to the final paragraph — that margin was
             // pushing the action rail visually too far from the message.
-            // We keep all other prose typography intact. The outer wrapper
-            // hosts the optional expand/collapse affordance for long answers.
+            // We keep all other prose typography intact. (The class name is a
+            // stable DOM hook; the expand/collapse it once hosted was removed.)
             <div className="sgpt-message-collapsible">
               <div className="relative">
                 <div
@@ -1434,12 +1657,8 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                         "prose prose-sm dark:prose-invert max-w-none text-current leading-relaxed",
                         "[&_p:last-child]:!mb-0 [&_p:first-child]:!mt-0",
                         "[&_ul:last-child]:!mb-0 [&_ol:last-child]:!mb-0 [&_pre:last-child]:!mb-0",
-                        collapsible && "transition-[max-height] duration-300 ease-in-out",
-                        isClamped && "overflow-hidden",
                     )}
-                    style={collapsible ? { maxHeight: isExpanded ? overflow.fullHeight : COLLAPSED_MAX_PX } : undefined}
                     data-sgpt-rich-copy-root=""
-                    data-collapsed={isClamped ? "true" : undefined}
                     onCopyCapture={handleRenderedCopy}
                 >
                 {(() => {
@@ -1497,35 +1716,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                     />
                 ) : null}
                 </div>
-                {isClamped && (
-                    <div
-                        aria-hidden="true"
-                        className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-background to-transparent"
-                    />
-                )}
               </div>
-              {collapsible && (
-                <button
-                    type="button"
-                    onClick={() => setIsExpanded((v) => !v)}
-                    aria-expanded={isExpanded}
-                    className="mt-1.5 inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors select-none rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-                >
-                    {isExpanded ? "Ver menos" : "Ver más"}
-                    <svg
-                        aria-hidden="true"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        className={cn("h-3.5 w-3.5 transition-transform duration-200", isExpanded && "rotate-180")}
-                    >
-                        <path d="m6 9 6 6 6-6" />
-                    </svg>
-                </button>
-              )}
             </div>
         );
     };
@@ -1543,7 +1734,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     const isPPTMessage = !!pptEntry
 
     const displayedContent = useMemo(() => {
-        let content = message.content;
+        let content = extractRenderableAgentTaskContent(message.content);
 
         // Check if there's a figma file (diagram)
         const hasFigmaFile = Array.isArray(parsedFiles) && parsedFiles.some((f: any) => f.type === 'figma');
@@ -2010,24 +2201,105 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
 
         const status = String(videoEntry.status || '').toLowerCase()
         const filename = videoEntry.filename
+        const sourceImageUrls = [
+            ...(Array.isArray(videoEntry.sourceImageUrls) ? videoEntry.sourceImageUrls : []),
+            videoEntry.sourceImageUrl,
+        ]
+            .map((url: unknown) => String(url || '').trim())
+            .filter(Boolean)
+            .filter((url: string, index: number, urls: string[]) => urls.indexOf(url) === index)
+        const imageCount = Number(videoEntry.imageCount || sourceImageUrls.length || 0)
+        const durationValue = String(videoEntry.requestedDuration || videoEntry.duration || '').replace(/s$/i, '')
+        const durationLabel = durationValue ? `${durationValue}s` : null
+        const metaLine = [
+            videoEntry.generationType === 'reference-to-video'
+                ? 'Referencias'
+                : videoEntry.generationType === 'image-to-video'
+                    ? 'Imagen a video'
+                    : 'Texto a video',
+            videoEntry.resolution,
+            durationLabel,
+            videoEntry.aspect_ratio || videoEntry.aspectRatio,
+        ].filter(Boolean).join(' / ')
+        const modelLabel = videoEntry.modelDisplayName || videoEntry.model || 'SiraGPT Video'
+        const isProcessing = status === 'processing' || status === 'in_progress' || status === 'queued'
+        const isCancelled = status === 'cancelled'
+        const terminalError = typeof videoEntry.error === 'string' && videoEntry.error.trim()
+            ? videoEntry.error.trim()
+            : isCancelled
+                ? 'Generación de video detenida por el usuario.'
+                : 'No se pudo crear el video. Prueba con un prompt más corto o cambia de modelo.'
 
         return (
-            <div className="mt-3 p-3 rounded-lg border border-border/20 bg-muted/20">
-                <div className="flex items-center gap-2 text-sm">
-                    <VideoIcon className="h-4 w-4" />
-                    <span className="font-medium">AI Video</span>
+            <div className="video-liquid-card mt-3" data-status={status || 'processing'}>
+                <div className="flex items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                        <span className="video-liquid-icon">
+                            <VideoIcon className="h-4 w-4" />
+                        </span>
+                        <div className="min-w-0">
+                            <div className="truncate text-[13px] font-semibold text-emerald-950 dark:text-emerald-50">
+                                {isProcessing ? 'Creando video' : status === 'completed' ? 'Video listo' : isCancelled ? 'Video detenido' : 'Video'}
+                            </div>
+                            <div className="truncate text-[11px] font-medium text-emerald-800/70 dark:text-emerald-100/62">
+                                {modelLabel}
+                            </div>
+                        </div>
+                    </div>
+                    {imageCount > 0 ? (
+                        <span className="rounded-full border border-emerald-500/18 bg-emerald-500/8 px-2 py-1 text-[10.5px] font-semibold text-emerald-800 dark:text-emerald-100/78">
+                            {imageCount} img
+                        </span>
+                    ) : null}
                 </div>
 
-                {status === 'processing' || status === 'in_progress' ? (
-                    <div className="mt-2 flex items-center gap-2 text-muted-foreground">
-                        <ThinkingIndicator size="sm" />
-                        <span>Generating video… This may take 2–5 minutes.</span>
+                <div className="mt-2 text-[11px] font-medium text-emerald-900/58 dark:text-emerald-100/50">
+                    {metaLine}
+                </div>
+
+                {isProcessing ? (
+                    <div className="video-liquid-stage mt-3">
+                        <div className="video-liquid-preview" aria-hidden="true">
+                            <span className="video-liquid-scan" />
+                            <span className="video-liquid-contour video-liquid-contour-a" />
+                            <span className="video-liquid-contour video-liquid-contour-b" />
+                            <span className="video-liquid-frame-line video-liquid-frame-line-a" />
+                            <span className="video-liquid-frame-line video-liquid-frame-line-b" />
+                        </div>
+                        <div className="mt-3 flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                                <div className="text-[12px] font-semibold text-emerald-950 dark:text-emerald-50">Render en progreso</div>
+                                <div className="mt-0.5 truncate text-[11px] font-medium text-emerald-900/58 dark:text-emerald-100/52">
+                                    {sourceImageUrls.length > 1 ? 'Componiendo referencias e indicaciones' : sourceImageUrls.length === 1 ? 'Animando la imagen y el prompt' : 'Interpretando el prompt'}
+                                </div>
+                            </div>
+                            <span className="video-liquid-pulse" aria-hidden="true" />
+                        </div>
+                        <div className="video-liquid-progress mt-3" aria-hidden="true">
+                            <span />
+                        </div>
+                        {sourceImageUrls.length > 0 ? (
+                            <div className="mt-3 flex items-center gap-1.5">
+                                {sourceImageUrls.slice(0, 4).map((url: string, index: number) => (
+                                    <img
+                                        key={`${url}-${index}`}
+                                        src={backendUrl(url)}
+                                        alt=""
+                                        className="video-liquid-thumb"
+                                        loading="lazy"
+                                    />
+                                ))}
+                                {sourceImageUrls.length > 4 ? (
+                                    <span className="video-liquid-thumb-more">+{sourceImageUrls.length - 4}</span>
+                                ) : null}
+                            </div>
+                        ) : null}
                     </div>
                 ) : null}
 
-                {status === 'failed' ? (
-                    <div className="mt-2 text-red-500 text-sm">
-                        Generation failed. Please try again with a shorter prompt.
+                {status === 'failed' || isCancelled ? (
+                    <div className="mt-3 rounded-md border border-red-300/45 bg-red-500/8 px-3 py-2 text-[12px] font-medium text-red-600 dark:border-red-400/25 dark:text-red-200">
+                        {terminalError}
                     </div>
                 ) : null}
 
@@ -2036,7 +2308,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                         <video
                             key={filename}             // don’t remount unless the file changes
                             ref={videoRef}
-                            className="w-full rounded-md"
+                            className="video-liquid-player"
                             controls
                             preload="auto"
                             playsInline
@@ -2047,14 +2319,14 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 toast.error('Failed to play video inline. Try “Open in new tab”.')
                             }}
                         />
-                        <div className="flex gap-2">
-                            <Button size="sm" variant="outline" onClick={downloadVideo}>
+                        <div className="flex flex-wrap gap-2">
+                            <Button size="sm" variant="outline" onClick={() => downloadVideo(filename)} className="video-liquid-action">
                                 <Download className="h-4 w-4 mr-1" />
-                                Download
+                                Descargar
                             </Button>
-                            <Button size="sm" variant="outline" asChild>
+                            <Button size="sm" variant="outline" asChild className="video-liquid-action">
                                 <a href={getWatchUrl(filename)} target="_blank" rel="noopener noreferrer">
-                                    Open in new tab
+                                    Abrir
                                 </a>
                             </Button>
                         </div>
@@ -2601,7 +2873,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                     <div key={index} className="relative inline-block group">
                                         {imageLoading[`file-${index}`] && (
                                             <div className="absolute inset-0 flex items-center justify-center bg-gray-100 dark:bg-gray-800 rounded-lg">
-                                                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+                                                <ThinkingIndicator size="lg" className="text-primary" />
                                             </div>
                                         )}
                                         {imageError[`file-${index}`] ? (
@@ -2652,7 +2924,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                     <div className="relative inline-block group">
                                         {imageLoading['content-image'] && (
                                             <div className="absolute inset-0 flex items-center justify-center bg-gray-100 dark:bg-gray-800 rounded-lg">
-                                                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+                                                <ThinkingIndicator size="lg" className="text-primary" />
                                             </div>
                                         )}
                                         {imageError['content-image'] ? (
@@ -2787,7 +3059,14 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                         />
                                         <div className="flex gap-2 justify-end">
                                             <Button size="sm" variant="ghost" onClick={() => setIsEditing(false)}>Cancelar</Button>
-                                            <Button size="sm" onClick={handleEditSave}>Guardar</Button>
+                                            <Button
+                                                size="sm"
+                                                onClick={handleEditSave}
+                                                className="liquid-send-btn"
+                                            >
+                                                <Sparkles size={13} strokeWidth={2} className="opacity-90" />
+                                                Enviar
+                                            </Button>
                                         </div>
                                     </div>
                                 ) : (
@@ -2806,15 +3085,20 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                     className="h-6 w-6"
                                     onClick={() => {
                                         copyMarkdownToWordClipboard(formatAgentTaskUserContent(message.content))
-                                            .then(() => toast.success("Copiado con formato para Word"))
+                                            .then(() => {
+                                                setIsCopied(true);
+                                                setTimeout(() => setIsCopied(false), 2000);
+                                                toast.success("Copiado con formato para Word");
+                                            })
                                             .catch((err) => {
-                                                console.error("[copy] failed:", err)
-                                                toast.error("No se pudo copiar")
+                                                toast.error(`No se pudo copiar: ${err?.message || "error desconocido"}`)
                                             })
                                     }}
-                                    title="Copiar"
+                                    title={isCopied ? "Copiado" : "Copiar"}
                                 >
-                                    <Copy size={14} />
+                                    {isCopied
+                                        ? <Check size={14} strokeWidth={2.5} className="text-emerald-500 animate-in zoom-in-50 duration-200" />
+                                        : <Copy size={14} />}
                                 </Button>
                                 <Button
                                     variant="ghost"
@@ -2832,6 +3116,26 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
 
                 {message.role === 'ASSISTANT' && (
                     <div className="chat-assistant-message w-full max-w-full md:max-w-3xl">
+                        {!message.error && hasAgentTrace ? (
+                            // AgentTrace = ThinkingTrace evolved: same shimmer
+                            // header + reasoning markdown, plus the typed
+                            // tool-call timeline and inline permission card.
+                            <AgentTrace
+                                reasoning={reasoningView.reasoning}
+                                reasoningStreaming={reasoningView.reasoningStreaming}
+                                reasoningDurationMs={reasoningView.reasoningDurationMs}
+                                steps={agentTraceView.steps}
+                                run={agentTraceView.run}
+                                permission={agentTraceView.permission}
+                            />
+                        ) : !message.error && (reasoningView.reasoning || reasoningView.reasoningStreaming) ? (
+                            <ThinkingTrace
+                                reasoning={reasoningView.reasoning}
+                                streaming={reasoningView.reasoningStreaming}
+                                durationMs={reasoningView.reasoningDurationMs}
+                                toolCalls={reasoningView.reasoningToolCalls}
+                            />
+                        ) : null}
                         {message.error ? (
                             <ErrorMessage onRegenerate={onRegenerate} />
                         ) : isThinking ? (
@@ -2914,23 +3218,42 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                             </div>
                         ) : null}
                         {!isVideoMessage && (
-                            <MessageActionRail
-                                messageId={message.id}
-                                chatId={message.chatId}
-                                model={(message as any).model}
-                                content={stripNonCopyableArtifactBlocks(message.content || "")}
-                                hasError={!!message.error}
-                                regenerationAttempt={regenerationAttempt}
-                                isStreaming={isStreaming}
-                                feedback={feedbackSent}
-                                isSpeaking={isSpeaking}
-                                isLoadingAudio={isLoadingAudio}
-                                onCopy={handleGlobalCopy}
-                                onSpeak={handleSpeak}
-                                onFeedback={async (kind) => { await handleFeedback(kind) }}
-                                onRegenerate={() => onRegenerate(message.id)}
-                                onShare={handleShare}
-                            />
+                            <div className="flex flex-wrap items-center gap-2">
+                                <MessageActionRail
+                                    messageId={message.id}
+                                    chatId={message.chatId}
+                                    model={(message as any).model}
+                                    content={stripNonCopyableArtifactBlocks(extractRenderableAgentTaskContent(message.content || ""))}
+                                    hasError={!!message.error}
+                                    regenerationAttempt={regenerationAttempt}
+                                    isStreaming={isStreaming}
+                                    feedback={feedbackSent}
+                                    isSpeaking={isSpeaking}
+                                    isLoadingAudio={isLoadingAudio}
+                                    onCopy={handleGlobalCopy}
+                                    onSpeak={handleSpeak}
+                                    onFeedback={async (kind) => { await handleFeedback(kind) }}
+                                    onRegenerate={() => onRegenerate(message.id)}
+                                    onShare={handleShare}
+                                    onBranch={onBranch ? () => onBranch(message.id) : undefined}
+                                    onRemember={message.role === 'ASSISTANT' ? handleRemember : undefined}
+                                />
+                                {message.role === 'ASSISTANT' && !isStreaming ? (() => {
+                                    const { sources, activity } = extractWebSources(message)
+                                    const { memory, memoryMeta } = extractMemory(message)
+                                    return (sources.length > 0 || memory.length > 0) ? (
+                                        <SourcesChip
+                                            sources={sources}
+                                            activity={activity}
+                                            memory={memory}
+                                            memoryMeta={memoryMeta}
+                                            onOpenSources={onOpenSources
+                                                ? (payload) => onOpenSources({ ...payload, memory, memoryMeta, messageId: message.id })
+                                                : undefined}
+                                        />
+                                    ) : null
+                                })() : null}
+                            </div>
                         )}
                     </div>
                 )}

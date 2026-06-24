@@ -1,8 +1,11 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { createRequire } from "node:module"
+import * as path from "node:path"
 
-const cjsRequire = createRequire(__filename)
+// Anchor CJS resolution at the repo root (the runner always runs from the
+// repo root) so backend requires work no matter where test-dist lives.
+const cjsRequire = createRequire(path.join(process.cwd(), "package.json"))
 
 type Fact = { text: string; category: string; score?: number }
 type LTM = {
@@ -12,7 +15,7 @@ type LTM = {
   EXTRACTION_SYSTEM_PROMPT: string
 }
 
-const ltm = cjsRequire("../../backend/src/services/long-term-memory") as LTM
+const ltm = cjsRequire("./backend/src/services/long-term-memory") as LTM
 
 describe("long-term-memory · buildMemoryBlock", () => {
   it("returns empty string for empty or null input", () => {

@@ -53,6 +53,21 @@ const nextConfig = {
   // primary dev origin. Allow both hostnames for /_next/* dev assets.
   allowedDevOrigins: ['127.0.0.1'],
 
+  // Allow the Replit cross-origin dev-preview iframe to load Next.js
+  // resources without the "Cross origin request detected" warning.
+  // (*.riker.replit.dev is the Replit dev-preview domain.)
+  allowedDevOrigins: ['127.0.0.1', '127.0.0.1:3000', 'localhost:3000', '*.riker.replit.dev', '*.replit.dev'],
+
+  // Cap webpack's peak memory during `next build`. The deploy builder is an
+  // 8 GiB e2-standard-2, and this app's compile + static-generation phase can
+  // push RSS past 8 GiB and get OOM-killed — surfacing as intermittent publish
+  // failures with no error in the build log (the build just dies right as
+  // `next build` starts). This trades a little build speed for a much lower
+  // memory ceiling. Paired with a lower --max-old-space-size in the build script.
+  experimental: {
+    webpackMemoryOptimizations: true,
+  },
+
   // Prevent Next.js from issuing a 308 redirect when the URL has a trailing
   // slash. Without this, /sira-promo/ → 308 → /sira-promo happens BEFORE
   // beforeFiles rewrites run, which causes the Replit cloud proxy to 502.
@@ -131,6 +146,13 @@ const nextConfig = {
         {
           source: '/uploads/:path*',
           destination: `${backendBase}/uploads/:path*`,
+        },
+        // Express exposes latency/route metrics at /metrics; the admin
+        // Estado page's "Latencias" card fetches it same-origin. Without
+        // this rewrite it received Next's 404 HTML and rendered nothing.
+        {
+          source: '/metrics',
+          destination: `${backendBase}/metrics`,
         },
       ],
       fallback: [],

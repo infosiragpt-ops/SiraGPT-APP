@@ -237,6 +237,14 @@ describe("checkPaidTokenCap — paid token cap gate", () => {
     assert.deepEqual(res.body.usage, { current: 750, limit: 500 });
   });
 
+  test("monthlyLimit=0 → ok:true (unlimited/legacy, NOT bricked)", () => {
+    // Matches getPlanQuotaSnapshot's `limit > 0 && …` posture: 0 means "no
+    // enforcement", so a high-usage unlimited account must NOT be 429'd.
+    assert.deepEqual(checkPaidTokenCap({ apiUsage: 9_999_999, monthlyLimit: 0 }), { ok: true });
+    // A missing/undefined limit is also treated as no-enforcement, not a 0-cap.
+    assert.deepEqual(checkPaidTokenCap({ apiUsage: 5, monthlyLimit: undefined }), { ok: true });
+  });
+
   test("message override is honored (video route keeps its own string)", () => {
     const res = checkPaidTokenCap(
       { apiUsage: 500, monthlyLimit: 500 },
@@ -276,8 +284,9 @@ describe("checkPaidTokenCap — paid token cap gate", () => {
 describe("recordApiUsage — usage write + counter increment", () => {
   function makePrismaStub(updatedUser) {
     const calls = [];
-    return {
+    const stub = {
       calls,
+      txCount: 0,
       apiUsage: {
         create: async (args) => {
           calls.push(["create", args]);
@@ -290,7 +299,11 @@ describe("recordApiUsage — usage write + counter increment", () => {
           return updatedUser;
         },
       },
+      // Array-form interactive transaction; recordApiUsage must route the
+      // create+increment through this so the two writes commit as one unit.
+      $transaction: async (ops) => { stub.txCount += 1; return Promise.all(ops); },
     };
+    return stub;
   }
 
   test("writes an ApiUsage row then increments the user counter, returns updatedUser", async () => {
@@ -307,6 +320,8 @@ describe("recordApiUsage — usage write + counter increment", () => {
     assert.deepEqual(result, updatedUser);
     // create first, then update — ordering preserved from the inline code.
     assert.deepEqual(prisma.calls.map((c) => c[0]), ["create", "update"]);
+    // Both writes must commit as one unit.
+    assert.equal(prisma.txCount, 1, "create+increment routed through a single $transaction");
 
     const [, createArgs] = prisma.calls[0];
     assert.deepEqual(createArgs, {

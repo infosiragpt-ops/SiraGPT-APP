@@ -18,6 +18,14 @@
  *   suffixToAbsolute(suffix, total)       → { start, end }
  */
 
+// Strict RFC 7233 integer: ASCII digits only. Plain Number() would accept
+// hex (0x10), exponent (1e2), binary (0b1), signs and surrounding whitespace,
+// causing a malformed Range to resolve to the WRONG byte offsets instead of
+// 416. Returns NaN for anything that isn't a run of decimal digits.
+function decInt(s) {
+  return /^\d+$/.test(s) ? Number(s) : NaN;
+}
+
 function suffixToAbsolute(suffix, total) {
   // 'bytes=-N' → last N bytes
   if (!Number.isInteger(suffix) || suffix <= 0 || total <= 0) return null;
@@ -45,16 +53,16 @@ function parseRange(header, totalSize) {
     const endStr = part.slice(dash + 1);
     let start, end;
     if (startStr === '' && endStr !== '') {
-      const suffix = Number(endStr);
+      const suffix = decInt(endStr);
       const abs = suffixToAbsolute(suffix, totalSize);
       if (!abs) return 'unsatisfiable';
       start = abs.start; end = abs.end;
     } else if (startStr !== '' && endStr === '') {
-      start = Number(startStr);
+      start = decInt(startStr);
       end = totalSize - 1;
     } else if (startStr !== '' && endStr !== '') {
-      start = Number(startStr);
-      end = Number(endStr);
+      start = decInt(startStr);
+      end = decInt(endStr);
     } else {
       return 'unsatisfiable';
     }

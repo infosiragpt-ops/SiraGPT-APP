@@ -17,6 +17,7 @@ const assert = require('node:assert/strict');
 const webSearch = require('../src/services/agents/web-search');
 const auditLog = require('../src/services/agents/audit-log');
 const agentTools = require('../src/services/agents/agent-tools');
+const duckduckgo = require('../src/services/agents/web-search/providers/duckduckgo');
 
 let auditCaptured = [];
 const originalAudit = auditLog.audit;
@@ -77,6 +78,49 @@ test('skips a provider that returns an empty list and falls through', async () =
   assert.equal(out.attempts.length, 2);
   assert.equal(out.attempts[0].ok, true);
   assert.equal(out.attempts[0].count, 0);
+});
+
+test('search excludes scientific providers for casual/general-web prompts', async () => {
+  let scientificHit = false;
+  webSearch.setProviders([
+    {
+      id: 'openalex',
+      name: 'openalex',
+      priority: 3,
+      enabled: true,
+      async search() {
+        scientificHit = true;
+        return [{ title: 'Unrelated academic paper', url: 'https://doi.org/nope', snippet: 'paper', source: 'openalex' }];
+      },
+    },
+    makeProvider({ id: 'duckduckgo', priority: 10, results: [{ title: 'AI news today', url: 'https://news.test/ai', snippet: 'latest ai news' }] }),
+  ]);
+
+  const out = await webSearch.search('últimas noticias inteligencia artificial', { maxResults: 5 });
+  assert.equal(scientificHit, false, 'OpenAlex/Crossref tier must not run for casual news prompts');
+  assert.equal(out.provider, 'duckduckgo');
+  assert.equal(out.results[0].url, 'https://news.test/ai');
+});
+
+test('search includes scientific providers for explicit research prompts', async () => {
+  let scientificHit = false;
+  webSearch.setProviders([
+    {
+      id: 'openalex',
+      name: 'openalex',
+      priority: 3,
+      enabled: true,
+      async search() {
+        scientificHit = true;
+        return [{ title: 'Cancer study', url: 'https://doi.org/study', snippet: 'study', source: 'openalex' }];
+      },
+    },
+    makeProvider({ id: 'duckduckgo', priority: 10, results: [{ title: 'Cancer overview', url: 'https://web.test/cancer', snippet: 'overview' }] }),
+  ]);
+
+  const out = await webSearch.search('estudios sobre cáncer', { maxResults: 5 });
+  assert.equal(scientificHit, true, 'scientific tier should run for research prompts');
+  assert.equal(out.provider, 'openalex');
 });
 
 test('falls through when a provider throws', async () => {
@@ -228,8 +272,9 @@ test('web_search tool returns structured JSON with normalised shape', async () =
   webSearch.setProviders([
     makeProvider({ id: 't', priority: 10, results: [{ title: 'Tool', url: 'https://t.test', snippet: 'tool' }] }),
   ]);
-  const obs = await agentTools.web_search.handler({ query: 'hi', maxResults: 3 });
-  assert.equal(obs.provider, 't');
+  const obs = await agentTools.web_search.handler({ query: 'tool news', maxResults: 3 });
+  assert.equal(obs.provider, 'aggregate:1');
+  assert.deepEqual(obs.providers, ['t']);
   assert.equal(obs.count, 1);
   assert.equal(obs.results[0].url, 'https://t.test');
   assert.equal(Array.isArray(obs.attempts), true);
@@ -238,6 +283,43 @@ test('web_search tool returns structured JSON with normalised shape', async () =
 test('web_search tool rejects missing query with a structured error', async () => {
   const obs = await agentTools.web_search.handler({});
   assert.equal(obs.error, 'missing "query"');
+});
+
+test('DuckDuckGo provider parses instant-answer topics', () => {
+  const rows = duckduckgo._internal.parseInstantAnswer({
+    AbstractText: 'Privacy-focused search engine.',
+    AbstractURL: 'https://duckduckgo.com/about',
+    Heading: 'DuckDuckGo',
+    RelatedTopics: [
+      { Text: 'DuckDuckGo - Search engine', FirstURL: 'https://duckduckgo.com/' },
+    ],
+  }, 5);
+
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].title, 'DuckDuckGo');
+  assert.equal(rows[0].source, 'duckduckgo');
+  assert.equal(rows[1].url, 'https://duckduckgo.com/');
+});
+
+test('DuckDuckGo provider parses organic HTML results and unwraps redirect URLs', () => {
+  const html = `
+    <div class="result">
+      <a class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.com%2Farticle%3Fx%3D1&amp;rut=abc">
+        Example <b>Article</b>
+      </a>
+      <a class="result__snippet">A useful &amp; current result.</a>
+    </div>
+    <div class="result">
+      <a class="result__a" href="javascript:alert(1)">Bad</a>
+    </div>
+  `;
+
+  const rows = duckduckgo._internal.parseHtmlResults(html, 5);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].title, 'Example Article');
+  assert.equal(rows[0].url, 'https://example.com/article?x=1');
+  assert.equal(rows[0].snippet, 'A useful & current result.');
+  assert.equal(rows[0].source, 'duckduckgo');
 });
 
 test('LRU evicts oldest beyond capacity', () => {

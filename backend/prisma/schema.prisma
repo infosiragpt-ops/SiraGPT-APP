@@ -7,7 +7,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("PRISMA_DATABASE_URL")
+  url      = env("DATABASE_URL")
 }
 
 model User {
@@ -136,6 +136,9 @@ model User {
   subscriptionEvents      SubscriptionEvent[]
   agentTasks              AgentTask[]
   goalRuns                GoalRun[]
+  codexProjects           CodexProject[]
+  codexRuns               CodexRun[]
+  deployments             Deployment[]
   generatedArtifacts      GeneratedArtifact[]
   documentAnalyses        DocumentAnalysis[]
   pushSubscriptions       PushSubscription[]
@@ -166,11 +169,20 @@ model User {
   // User memory relations (orchestration)
   memories UserMemory[]
 
+  // Agent harness — external MCP servers registered by this user.
+  mcpServers McpServer[]
+
   // F1 — declarative RBAC. `userRoles` joins to `user_roles` and
   // ultimately to `roles` + `permissions`. The legacy `isSuperAdmin`
   // flag stays as a shadow until F5 sunset.
-  userRoles UserRole[] @relation("UserRoleAssignedTo")
+  userRoles     UserRole[] @relation("UserRoleAssignedTo")
   assignedRoles UserRole[] @relation("UserRoleAssignedBy")
+
+  // GitHub integration (Replit-style git). One GitHub identity per user,
+  // many connected repos, each repo with at most one host workspace checkout.
+  githubAccount         GithubAccount?
+  connectedRepositories ConnectedRepository[]
+  workspaces            Workspace[]
 
   @@index([deletedAt])
   @@map("users")
@@ -191,6 +203,81 @@ model PushSubscription {
 
   @@index([userId])
   @@map("push_subscriptions")
+}
+
+// ──────────────────────────────────────────────────────────────
+// GitHub integration — OAuth account, connected repos, workspaces.
+// Tokens are AES-256 sealed (see services/TokenVault.js) before they
+// ever reach `encryptedTokens`; the column never holds plaintext.
+// ──────────────────────────────────────────────────────────────
+
+model GithubAccount {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  githubUserId    String  @unique // numeric GitHub user id, stored as string
+  login           String // GitHub username (handle)
+  name            String?
+  avatarUrl       String?
+  scope           String? // granted scopes, space/comma separated
+  tokenType       String  @default("bearer")
+  encryptedTokens String // sealed JSON: { accessToken, refreshToken?, scope, expiresAt }
+
+  connectedAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  repositories ConnectedRepository[]
+
+  @@index([userId])
+  @@map("github_accounts")
+}
+
+model ConnectedRepository {
+  id              String        @id @default(cuid())
+  userId          String
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  githubAccountId String
+  githubAccount   GithubAccount @relation(fields: [githubAccountId], references: [id], onDelete: Cascade)
+
+  repoId        String // GitHub repo numeric id, stored as string
+  fullName      String // "owner/repo"
+  owner         String
+  name          String
+  private       Boolean @default(false)
+  defaultBranch String  @default("main")
+  cloneUrl      String // https clone url
+  htmlUrl       String?
+
+  connectedAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace?
+
+  @@unique([userId, repoId])
+  @@index([userId])
+  @@index([githubAccountId])
+  @@map("connected_repositories")
+}
+
+model Workspace {
+  id           String              @id @default(cuid())
+  userId       String
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  repositoryId String              @unique
+  repository   ConnectedRepository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  localPath     String // absolute path of the host checkout
+  currentBranch String?
+  status        String  @default("pending") // pending | cloning | ready | error
+  lastError     String?
+
+  lastSyncAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("workspaces")
 }
 
 model AiModel {
@@ -380,6 +467,21 @@ model Message {
   metadata  Json? // Store message metadata (like Gmail connection requirements)
   feedback  String?
 
+  // Claude-style extended thinking. `reasoning` is the human-readable
+  // chain-of-thought streamed by reasoning models (OpenRouter `reasoning`,
+  // DeepSeek `reasoning_content`); `reasoningDetails` is the RAW OpenRouter
+  // `reasoning_details` array, persisted verbatim because Anthropic models
+  // require it replayed intact on later tool-call turns (signed thinking
+  // chain). Assistant rows only; null elsewhere.
+  reasoning        String? @db.Text
+  reasoningDetails Json?   @map("reasoning_details")
+
+  // Agent harness (Phase 1): compact projection of the agent run that
+  // produced this assistant message — status, totals and per-step previews
+  // so chat history re-renders the collapsed AgentTrace without joining
+  // agent_steps. The full-fidelity trace lives in the AgentStep relation.
+  agentMetadata Json? @map("agent_metadata")
+
   // Soft-delete tombstone — mirrors Chat.deletedAt so GDPR delete can
   // cascade without losing chat shape (foreign-key cascade still works
   // on hard purge from the cron).
@@ -403,11 +505,61 @@ model Message {
   generatedArtifacts GeneratedArtifact[]
   bookmarks          Bookmark[]
   run                ChatRun?            @relation("RunMessage", fields: [runId], references: [id], onDelete: SetNull)
+  agentSteps         AgentStep[]
 
   @@index([chatId, timestamp])
   @@index([chatId, deletedAt])
   @@index([runId])
   @@map("messages")
+}
+
+// ────────────────────────────────────────────────────────────
+// AgentStep — full-fidelity trace of one agent-harness step (a reasoning
+// burst or a tool call) for the assistant message it produced. Streamed
+// live over SSE during the turn; persisted here after the message row
+// exists so history re-renders complete AgentTrace timelines. Results are
+// capped at 30k chars (explicit truncation marker) by the event stream.
+model AgentStep {
+  id         String   @id @default(cuid())
+  messageId  String   @map("message_id")
+  stepIndex  Int      @map("step_index")
+  type       String // 'tool_call' | 'reasoning'
+  toolName   String?  @map("tool_name")
+  args       Json?
+  result     Json?
+  status     String   @default("completed") // completed | error | denied | interrupted | running
+  durationMs Int?     @map("duration_ms")
+  isError    Boolean  @default(false) @map("is_error")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId, stepIndex])
+  @@map("agent_steps")
+}
+
+// ────────────────────────────────────────────────────────────
+// McpServer — a user-registered EXTERNAL MCP server (Model Context
+// Protocol) whose tools are discovered at the start of an agent turn and
+// merged into the chat toolset as mcp__<server>__<tool> with permission
+// tier 'confirm'. `headersEncrypted` holds the AES-256-CBC encrypted JSON
+// of auth headers (utils/encryption) — never returned by the API.
+model McpServer {
+  id               String   @id @default(cuid())
+  userId           String   @map("user_id")
+  name             String
+  url              String
+  transport        String   @default("streamable-http") // streamable-http | sse
+  headersEncrypted String?  @map("headers_encrypted") @db.Text
+  enabled          Boolean  @default(true)
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, name])
+  @@index([userId, enabled])
+  @@map("mcp_servers")
 }
 
 // ────────────────────────────────────────────────────────────
@@ -625,27 +777,27 @@ model AgentTaskEvent {
 // forward-looking discriminator (research today; code / image / video /
 // song planned) so the same queue can drive multiple slash commands.
 model GoalRun {
-  id              String    @id @default(cuid())
-  userId          String
-  chatId          String?
-  jobId           String?   @unique
-  status          String    @default("queued")
-  prompt          String    @db.Text
-  depth           String    @default("standard")
-  agentKind       String    @default("research")
-  papersCount     Int       @default(0)
-  findingsCount   Int       @default(0)
-  pagesCount      Int       @default(0)
-  phase           String?
-  finalReport     String?   @db.Text
-  error           String?   @db.Text
-  cancelReason    String?
-  createdAt       DateTime  @default(now())
-  startedAt       DateTime?
-  updatedAt       DateTime  @updatedAt
-  completedAt     DateTime?
-  cancelledAt     DateTime?
-  failedAt        DateTime?
+  id            String    @id @default(cuid())
+  userId        String
+  chatId        String?
+  jobId         String?   @unique
+  status        String    @default("queued")
+  prompt        String    @db.Text
+  depth         String    @default("standard")
+  agentKind     String    @default("research")
+  papersCount   Int       @default(0)
+  findingsCount Int       @default(0)
+  pagesCount    Int       @default(0)
+  phase         String?
+  finalReport   String?   @db.Text
+  error         String?   @db.Text
+  cancelReason  String?
+  createdAt     DateTime  @default(now())
+  startedAt     DateTime?
+  updatedAt     DateTime  @updatedAt
+  completedAt   DateTime?
+  cancelledAt   DateTime?
+  failedAt      DateTime?
 
   user   User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   chat   Chat?          @relation(fields: [chatId], references: [id], onDelete: SetNull)
@@ -1037,13 +1189,13 @@ model PlanCatalog {
 // to an organization). The legacy `OrgRole` enum is kept for back-compat
 // on `OrgMembership.role`; PR4 backfills `user_roles` from it.
 model Role {
-  id          String           @id @default(cuid())
-  code        String           @unique
+  id          String   @id @default(cuid())
+  code        String   @unique
   name        String
   description String?
-  isSystem    Boolean          @default(false)
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @default(now()) @updatedAt
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now()) @updatedAt
 
   permissions RolePermission[]
   userRoles   UserRole[]
@@ -1052,11 +1204,11 @@ model Role {
 }
 
 model Permission {
-  id          String           @id @default(cuid())
-  code        String           @unique
+  id          String   @id @default(cuid())
+  code        String   @unique
   description String?
-  isSystem    Boolean          @default(false)
-  createdAt   DateTime         @default(now())
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
 
   roles RolePermission[]
 
@@ -1091,8 +1243,8 @@ model UserRole {
   assignedBy String?
   assignedAt DateTime  @default(now())
 
-  user     User @relation("UserRoleAssignedTo", fields: [userId], references: [id], onDelete: Cascade)
-  role     Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  user     User  @relation("UserRoleAssignedTo", fields: [userId], references: [id], onDelete: Cascade)
+  role     Role  @relation(fields: [roleId], references: [id], onDelete: Cascade)
   assigner User? @relation("UserRoleAssignedBy", fields: [assignedBy], references: [id], onDelete: SetNull)
 
   @@index([userId, scope])
@@ -1248,6 +1400,10 @@ model CustomGpt {
   actions              Json?
   conversationStarters Json?
 
+  // Per-GPT tool capability toggles: { webBrowsing, dataAnalysis,
+  // imageGeneration, codeInterpreter }. null = legacy GPT (no gating).
+  capabilities         Json?
+
   // Publishing
   visibility GptVisibility @default(PRIVATE)
   shareId    String        @unique @default(cuid())
@@ -1286,6 +1442,16 @@ model Project {
   name         String
   description  String? @db.Text
   instructions String? @db.Text // Optional custom instructions; may be edited any time.
+
+  // Project kind — chosen at creation. "general" is the default
+  // task workspace; "webapp" projects also surface in the Library →
+  // "Apps web" gallery so the user can find their web apps there.
+  type String @default("general")
+
+  // Where the project's code is hosted. "sira-cloud" is the built-in
+  // SiraGPT cloud workspace; "github" is reserved for the upcoming
+  // GitHub-backed flow (OAuth + repo push) — not yet wired.
+  hostingProvider String @default("sira-cloud")
 
   // Optional star / favourite — powers the "starred first" sort the
   // UI offers alongside recent activity.
@@ -1825,6 +1991,244 @@ model OrgInvitation {
   @@map("org_invitations")
 }
 
+// ── Codex Agent V2 (flag CODEX_AGENT_V2) — spec docs/codex-agent-ux.md §4 ──
+// Proyectos con workspace git en el runner + corridas server-driven con
+// timeline append-only (codex_events) reproducible tras recarga.
+
+model CodexProject {
+  id            String   @id @default(cuid())
+  userId        String
+  name          String
+  status        String   @default("provisioning") // provisioning | ready | error
+  workspacePath String? // relativo al volumen del runner: projects/<id>
+  previewUrl    String?
+  brief         Json?
+  error         String?  @db.Text
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  runs        CodexRun[]
+  checkpoints CodexCheckpoint[]
+
+  @@index([userId, updatedAt])
+  @@map("codex_projects")
+}
+
+model CodexRun {
+  id         String    @id @default(cuid())
+  projectId  String
+  userId     String
+  mode       String // plan | build
+  status     String    @default("queued") // queued | running | waiting_approval | done | error | cancelled
+  jobId      String?   @unique
+  prompt     String?   @db.Text // user's context/instructions for this run
+  model      String?
+  tier       String?
+  planRunId  String?
+  error      String?   @db.Text
+  createdAt  DateTime  @default(now())
+  startedAt  DateTime?
+  finishedAt DateTime?
+  updatedAt  DateTime  @updatedAt
+
+  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project     CodexProject      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  events      CodexEvent[]
+  actions     CodexAction[]
+  checkpoints CodexCheckpoint[]
+  metric      CodexRunMetric?
+
+  @@index([projectId, createdAt])
+  @@index([userId, status, updatedAt])
+  @@map("codex_runs")
+}
+
+model CodexEvent {
+  id        String   @id @default(cuid())
+  runId     String
+  seq       Int
+  type      String
+  payload   Json
+  createdAt DateTime @default(now())
+
+  run CodexRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, seq])
+  @@index([runId, createdAt])
+  @@map("codex_events")
+}
+
+model CodexAction {
+  id            String   @id @default(cuid())
+  runId         String
+  kind          String // terminal | file_read | file_write | reasoning | web
+  command       String?  @db.Text
+  path          String?
+  outputSummary String?  @db.Text
+  status        String   @default("running") // running | done | error
+  durationMs    Int?
+  linesRead     Int?
+  groupId       String?
+  createdAt     DateTime @default(now())
+
+  run CodexRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, createdAt])
+  @@map("codex_actions")
+}
+
+model CodexCheckpoint {
+  id        String   @id @default(cuid())
+  runId     String
+  projectId String
+  commitSha String
+  title     String
+  createdAt DateTime @default(now())
+
+  run     CodexRun     @relation(fields: [runId], references: [id], onDelete: Cascade)
+  project CodexProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, createdAt])
+  @@map("codex_checkpoints")
+}
+
+model CodexRunMetric {
+  id              String   @id @default(cuid())
+  runId           String   @unique
+  timeWorkedMs    Int      @default(0)
+  actionsCount    Int      @default(0)
+  itemsReadLines  Int      @default(0)
+  additions       Int      @default(0)
+  deletions       Int      @default(0)
+  tokensIn        Int      @default(0)
+  tokensOut       Int      @default(0)
+  model           String? // model id behind the run (for the Agent Usage detail)
+  costUsd         Float    @default(0)
+  costSource      String   @default("estimated") // provider_exact | openrouter_generation | estimated
+  costOriginalUsd Float    @default(0)
+  costAppliedUsd  Float    @default(0)
+  costInputUsd    Float    @default(0) // applied cost attributed to input tokens
+  costOutputUsd   Float    @default(0) // applied cost attributed to output tokens
+  createdAt       DateTime @default(now())
+
+  run CodexRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@map("codex_run_metrics")
+}
+
+// Deployments / Publishing (flag DEPLOYMENTS_V2). A faithful management clone
+// of Replit's Deployments tab: status lifecycle, version history (immutable
+// snapshots with a short hash), custom domains and a synthetic security scan.
+// Management-only — it tracks/records deployments, it does NOT provision real
+// VMs. Optionally linked to a Project ("webapp") via projectId.
+model Deployment {
+  id        String  @id @default(cuid())
+  userId    String
+  projectId String? // optional link to a Project (webapp)
+  name      String
+
+  // autoscale | reserved_vm | static | scheduled
+  deploymentType  String  @default("autoscale")
+  // building | running | failed | paused | suspended | shut_down
+  status          String  @default("building")
+  // payment_failure | budget_limit | manual | null
+  suspendedReason String?
+
+  // public | workspace | private | password
+  visibility  String @default("public")
+  // na | eu | sa | asia | au  — fixed after first publish (Replit parity)
+  geography   String @default("na")
+  // reserved_vm: 0.5vcpu_2gb | 1vcpu_4gb | 2vcpu_8gb | 4vcpu_16gb ; else label
+  machineTier String @default("autoscale")
+  cpu         Float?
+  memoryMb    Int?
+
+  subdomain    String? @unique // <subdomain>.sira.app default domain
+  buildCommand String?
+  runCommand   String?
+  publicDir    String?
+  externalPort Int?    @default(80)
+
+  databaseConnected Boolean @default(false)
+  databaseProvider  String?
+
+  // id of the DeploymentVersion currently serving (isLive). Plain scalar
+  // (no relation) to avoid a circular required FK with the version table.
+  currentVersionId String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  user     User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  versions DeploymentVersion[]
+  domains  DeploymentDomain[]
+  logs     DeploymentLog[]
+
+  @@index([userId, updatedAt])
+  @@index([userId, deletedAt])
+  @@map("deployments")
+}
+
+model DeploymentVersion {
+  id               String   @id @default(cuid())
+  deploymentId     String
+  shortHash        String // 8-char build identifier shown in the timeline
+  // provisioning | security_scan | building | bundling | promoted | failed | rolled_back
+  status           String   @default("promoting")
+  isLive           Boolean  @default(false)
+  isRollback       Boolean  @default(false)
+  rolledBackFromId String?
+  publishedById    String?
+  buildLog         String?  @db.Text
+  securityScan     Json?
+  createdAt        DateTime @default(now())
+
+  deployment Deployment      @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
+  logs       DeploymentLog[]
+
+  @@index([deploymentId, createdAt])
+  @@map("deployment_versions")
+}
+
+model DeploymentDomain {
+  id                 String   @id @default(cuid())
+  deploymentId       String
+  hostname           String
+  kind               String   @default("custom") // default | custom | purchased
+  isPrimary          Boolean  @default(false)
+  // pending | verified | failed
+  verificationStatus String   @default("pending")
+  // provisioning | active
+  tlsStatus          String   @default("provisioning")
+  dnsRecords         Json?
+  createdAt          DateTime @default(now())
+
+  deployment Deployment @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
+
+  @@index([deploymentId])
+  @@map("deployment_domains")
+}
+
+model DeploymentLog {
+  id           String   @id @default(cuid())
+  deploymentId String
+  versionId    String?
+  source       String   @default("Runtime") // User | System | Runtime
+  level        String   @default("info") // info | warn | error
+  message      String   @db.Text
+  createdAt    DateTime @default(now())
+
+  deployment Deployment         @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
+  version    DeploymentVersion? @relation(fields: [versionId], references: [id], onDelete: SetNull)
+
+  @@index([deploymentId, createdAt])
+  @@index([deploymentId, level, createdAt])
+  @@index([versionId, createdAt])
+  @@map("deployment_logs")
+}
+
 // Ratchet 44 — pending ownership transfer (cycle 76).
 //
 // When `settings.transfer.requireApprovalDays > 0`, the existing OWNER
@@ -2078,6 +2482,7 @@ model UserMemory {
   content         String   @db.Text
   category        String?
   importanceScore Float    @default(0) @map("importance_score")
+  confidence      Float    @default(0.8) @map("confidence")
   lastAccessedAt  DateTime @default(now()) @map("last_accessed_at")
   accessCount     Int      @default(0) @map("access_count")
   createdAt       DateTime @default(now()) @map("created_at")
@@ -2101,4 +2506,207 @@ model UserMemoryEmbedding {
 
   @@index([memoryId])
   @@map("user_memory_embeddings")
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Contabilidad (PCGE peruano · partida doble) — feat/contabilidad
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Plan de cuentas jerárquico basado en el PCGE peruano.
+model AccountingAccount {
+  id         String   @id @default(cuid())
+  code       String   @unique // código PCGE, p.ej. "10", "1011", "70"
+  name       String
+  element    Int // 1–9 (elemento/clase PCGE)
+  level      Int // profundidad (1=elemento, 2=2 dígitos, …)
+  parentCode String? // código PCGE del padre
+  nature     String // DEUDORA | ACREEDORA (saldo normal)
+  type       String // ACTIVO | PASIVO | PATRIMONIO | INGRESO | GASTO | COSTO | ORDEN
+  postable   Boolean  @default(false) // sólo las cuentas de detalle (hoja) aceptan asientos
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  lines AccountingJournalLine[]
+
+  @@index([element])
+  @@index([parentCode])
+  @@index([postable])
+  @@map("accounting_accounts")
+}
+
+/// Asiento del libro diario (partida doble: Σ debe = Σ haber).
+model AccountingJournalEntry {
+  id           String   @id @default(cuid())
+  number       Int      @unique // correlativo del diario
+  date         DateTime
+  glosa        String // descripción / glosa del asiento
+  currency     String   @default("PEN") // PEN | USD
+  exchangeRate Decimal? @db.Decimal(18, 6) // tipo de cambio cuando currency != PEN
+  status       String   @default("POSTED") // DRAFT | POSTED | VOID
+  source       String   @default("MANUAL") // MANUAL | SALE | PAYMENT | OPENING | CLOSING
+  sourceId     String? // id del comprobante/cobro que originó el asiento
+  periodId     String?
+  userId       String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  lines AccountingJournalLine[]
+
+  @@index([date])
+  @@index([status])
+  @@index([source, sourceId])
+  @@index([periodId])
+  @@map("accounting_journal_entries")
+}
+
+/// Línea de un asiento (un cargo o abono sobre una cuenta).
+model AccountingJournalLine {
+  id          String   @id @default(cuid())
+  entryId     String
+  accountId   String
+  accountCode String // desnormalizado para reportes rápidos
+  debit       Decimal  @default(0) @db.Decimal(18, 2)
+  credit      Decimal  @default(0) @db.Decimal(18, 2)
+  description String?
+  createdAt   DateTime @default(now())
+
+  entry   AccountingJournalEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  account AccountingAccount      @relation(fields: [accountId], references: [id])
+
+  @@index([entryId])
+  @@index([accountId])
+  @@index([accountCode])
+  @@map("accounting_journal_lines")
+}
+
+/// Periodo contable mensual con apertura/cierre. Un periodo CERRADO bloquea
+/// el alta de asientos cuya fecha caiga dentro de él.
+model AccountingPeriod {
+  id        String    @id @default(cuid())
+  year      Int
+  month     Int // 1–12
+  startDate DateTime
+  endDate   DateTime
+  status    String    @default("OPEN") // OPEN | CLOSED
+  closedAt  DateTime?
+  closedBy  String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@unique([year, month])
+  @@index([status])
+  @@map("accounting_periods")
+}
+
+/// Tipo de cambio por fecha y moneda (rate = soles PEN por 1 unidad de la
+/// moneda extranjera). SUNAT publica compra/venta; se guarda por rateType.
+model AccountingExchangeRate {
+  id        String   @id @default(cuid())
+  date      DateTime
+  currency  String // moneda extranjera, p.ej. "USD"
+  rate      Decimal  @db.Decimal(18, 6)
+  rateType  String   @default("VENTA") // COMPRA | VENTA
+  source    String   @default("MANUAL") // MANUAL | SUNAT | SBS
+  createdAt DateTime @default(now())
+
+  @@unique([date, currency, rateType])
+  @@index([currency, date])
+  @@map("accounting_exchange_rates")
+}
+
+/// Cliente del módulo contable (para facturación/comprobantes).
+model AccountingCustomer {
+  id        String   @id @default(cuid())
+  docType   String // RUC | DNI | CE | PASAPORTE | SIN_DOC
+  docNumber String
+  name      String
+  email     String?
+  address   String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([docType, docNumber])
+  @@index([name])
+  @@map("accounting_customers")
+}
+
+/// Catálogo de productos/servicios facturables, incluidas las suscripciones del SaaS.
+model AccountingProduct {
+  id             String   @id @default(cuid())
+  code           String   @unique
+  name           String
+  kind           String   @default("SERVICE") // SERVICE | GOOD
+  unitPrice      Decimal  @default(0) @db.Decimal(18, 2)
+  currency       String   @default("PEN") // PEN | USD
+  unit           String   @default("NIU") // unidad de medida SUNAT
+  igvAffected    Boolean  @default(true) // afecto a IGV (18%)
+  isSubscription Boolean  @default(false) // suscripción del propio SaaS
+  incomeAccount  String? // cuenta PCGE de ingreso (p.ej. 7011)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([kind])
+  @@index([isSubscription])
+  @@map("accounting_products")
+}
+
+/// Comprobante electrónico peruano (boleta/factura) con cálculo de IGV.
+model AccountingInvoice {
+  id             String   @id @default(cuid())
+  docType        String // BOLETA | FACTURA
+  series         String // p.ej. F001, B001
+  number         Int // correlativo por serie
+  issueDate      DateTime
+  customerId     String?
+  customerDoc    String?
+  customerName   String
+  currency       String   @default("PEN") // PEN | USD
+  exchangeRate   Decimal? @db.Decimal(18, 6)
+  gravado        Decimal  @default(0) @db.Decimal(18, 2)
+  exonerado      Decimal  @default(0) @db.Decimal(18, 2)
+  inafecto       Decimal  @default(0) @db.Decimal(18, 2)
+  igv            Decimal  @default(0) @db.Decimal(18, 2)
+  total          Decimal  @default(0) @db.Decimal(18, 2)
+  status         String   @default("DRAFT") // DRAFT | ISSUED | VOID
+  sunatStatus    String? // PENDING | ACCEPTED | REJECTED
+  sunatTicket    String?
+  cdrHash        String?
+  oseProvider    String?
+  journalEntryId String?
+  userId         String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  lines AccountingInvoiceLine[]
+
+  @@unique([series, number])
+  @@index([docType])
+  @@index([customerId])
+  @@index([status])
+  @@index([issueDate])
+  @@map("accounting_invoices")
+}
+
+/// Línea de un comprobante.
+model AccountingInvoiceLine {
+  id          String  @id @default(cuid())
+  invoiceId   String
+  productId   String?
+  code        String?
+  description String
+  quantity    Decimal @default(1) @db.Decimal(18, 4)
+  unitPrice   Decimal @default(0) @db.Decimal(18, 4)
+  unit        String  @default("NIU")
+  taxType     String  @default("GRAVADO") // GRAVADO | EXONERADO | INAFECTO
+  base        Decimal @default(0) @db.Decimal(18, 2)
+  igv         Decimal @default(0) @db.Decimal(18, 2)
+  total       Decimal @default(0) @db.Decimal(18, 2)
+
+  invoice AccountingInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("accounting_invoice_lines")
 }

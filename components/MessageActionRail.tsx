@@ -2,8 +2,10 @@
 
 import * as React from "react"
 import {
+  BrainCircuit,
   Check,
   Clipboard,
+  GitBranch,
   RefreshCw,
   Share2,
   ThumbsDown,
@@ -17,11 +19,12 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { writeText as copyTextSafe } from "@/lib/native/clipboard"
 import { cn } from "@/lib/utils"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 type FeedbackKind = "liked" | "disliked"
-type ActionKind = "copy" | "speak" | "like" | "dislike" | "regenerate" | "share"
+type ActionKind = "copy" | "speak" | "like" | "dislike" | "regenerate" | "share" | "branch" | "remember"
 
 export interface MessageActionRailProps {
   /** Message identity — passed straight through to telemetry. */
@@ -55,6 +58,14 @@ export interface MessageActionRailProps {
   canFeedback?: boolean
   canRegenerate?: boolean
   canShare?: boolean
+  /** Branch / fork the conversation from this message. Defaults to true,
+   *  but the button only renders when an `onBranch` handler is supplied —
+   *  this keeps it opt-in for call sites that don't yet support forking. */
+  canBranch?: boolean
+  /** Save this answer to the user's persistent agent memory. Defaults to
+   *  true, but the button only renders when an `onRemember` handler is
+   *  supplied. */
+  canRemember?: boolean
 
   /** TTS state owned by the parent (so multiple messages share one
    *  audio context). */
@@ -71,6 +82,12 @@ export interface MessageActionRailProps {
   onFeedback?: (kind: FeedbackKind) => Promise<void> | void
   onRegenerate?: () => void
   onShare?: () => Promise<void> | void
+  /** Fork the conversation from this message into a new branch. When
+   *  omitted the Branch button is hidden entirely. */
+  onBranch?: () => Promise<void> | void
+  /** Persist this answer to the user's long-term agent memory. When
+   *  omitted the Remember button is hidden entirely. */
+  onRemember?: () => Promise<void> | void
 
   /** Telemetry hook — fires after every action with timing + outcome.
    *  Defaults to console.log so dev sees it; wire to a real
@@ -94,8 +111,34 @@ const DEFAULT_TELEMETRY: NonNullable<MessageActionRailProps["onTelemetry"]> = (e
 }
 
 /**
+ * Animated three-bar equalizer shown inside the Speak button while audio
+ * is playing — a clearer, more futuristic "now reading" affordance than a
+ * static mute glyph. Pure CSS, GPU-friendly (transform/scaleY only), and
+ * respects `prefers-reduced-motion` via the keyframes injected by the rail.
+ */
+function SpeakingEqualizer() {
+  return (
+    <span aria-hidden="true" className="flex h-4 w-4 items-end justify-center gap-[2px]">
+      {[0, 1, 2].map((i) => (
+        <span
+          key={i}
+          className="w-[2.5px] origin-bottom rounded-full bg-current motion-safe:animate-[rail-eq_900ms_ease-in-out_infinite]"
+          style={{ height: "70%", animationDelay: `${i * 150}ms` }}
+        />
+      ))}
+    </span>
+  )
+}
+
+/**
  * Single icon button used by the rail. All sizing/state styling lives
  * here so every action looks identical and the rail is self-consistent.
+ *
+ * The visual language is intentionally "futuristic glass": a soft layered
+ * gradient + inset hairline ring on hover, an accent glow when active, and
+ * a crisp tactile press. It reads as professional on both light and dark
+ * surfaces because every colour is derived from design-system tokens
+ * (foreground / border / ring) rather than hard-coded hues.
  */
 function RailButton({
   label,
@@ -106,6 +149,7 @@ function RailButton({
   loading,
   pulse,
   destructive,
+  glow,
 }: {
   label: string
   icon: React.ReactNode
@@ -117,6 +161,8 @@ function RailButton({
   /** Subtle attention pulse for one-shot success feedback. */
   pulse?: "success" | "error" | null
   destructive?: boolean
+  /** Accent halo for live/streaming-style states (e.g. Speaking). */
+  glow?: "accent" | null
 }) {
   return (
     <Tooltip>
@@ -128,22 +174,35 @@ function RailButton({
           disabled={disabled || loading}
           onClick={onClick}
           className={cn(
-            // 36px hit area (h-9 w-9) — tighter than 40px which felt
-            // heavy when the rail had no container. Icon optical size
-            // stays 14-15px via RailButton callers.
-            "group/rb inline-flex h-9 w-9 items-center justify-center rounded-lg",
-            "text-muted-foreground/85 transition-all duration-fast ease-smooth",
-            "hover:bg-foreground/[0.06] hover:text-foreground",
-            "active:scale-[0.94]",
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-offset-1 focus-visible:ring-offset-background",
-            "disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-muted-foreground disabled:active:scale-100",
-            pressed && !destructive && "bg-foreground/[0.08] text-foreground shadow-[inset_0_0_0_1px_hsl(var(--border))]",
-            pressed && destructive && "bg-red-500/10 text-red-500 dark:text-red-400 shadow-[inset_0_0_0_1px_hsl(0_84%_60%/0.3)]",
+            // 36px hit area (h-9 w-9). Icon optical size stays 14-15px via
+            // RailButton callers. rounded-xl + relative for the glow layer.
+            "group/rb relative inline-flex h-9 w-9 items-center justify-center rounded-xl",
+            "text-muted-foreground/80 transition-all duration-200 ease-out will-change-transform",
+            // Futuristic glass hover: layered gradient + inset hairline +
+            // a soft lift shadow.
+            "hover:text-foreground",
+            "hover:bg-[linear-gradient(180deg,hsl(var(--foreground)/0.10),hsl(var(--foreground)/0.03))]",
+            "hover:shadow-[inset_0_0_0_1px_hsl(var(--border)/0.6),0_2px_10px_-3px_hsl(var(--foreground)/0.18)]",
+            "active:scale-[0.92]",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+            "disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-muted-foreground/80 disabled:hover:shadow-none disabled:active:scale-100",
+            pressed && !destructive && "bg-[linear-gradient(180deg,hsl(var(--foreground)/0.12),hsl(var(--foreground)/0.04))] text-foreground shadow-[inset_0_0_0_1px_hsl(var(--border)/0.8)]",
+            pressed && destructive && "bg-red-500/10 text-red-500 dark:text-red-400 shadow-[inset_0_0_0_1px_hsl(0_84%_60%/0.35)]",
+            glow === "accent" && "text-sky-500 dark:text-sky-400 shadow-[inset_0_0_0_1px_hsl(199_89%_55%/0.35),0_0_16px_-3px_hsl(199_89%_55%/0.6)]",
             pulse === "success" && "text-emerald-500 dark:text-emerald-400",
             pulse === "error" && "text-red-500 dark:text-red-400",
           )}
         >
-          {loading ? <ThinkingIndicator size="sm" /> : icon}
+          {/* Soft animated halo behind the icon while a state is "live". */}
+          {glow === "accent" && (
+            <span
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 rounded-xl bg-sky-400/10 motion-safe:animate-[rail-halo_1800ms_ease-in-out_infinite]"
+            />
+          )}
+          <span className="relative inline-flex items-center justify-center">
+            {loading ? <ThinkingIndicator size="sm" /> : icon}
+          </span>
         </button>
       </TooltipTrigger>
       <TooltipContent side="bottom" sideOffset={6} className="text-[11.5px] font-medium">
@@ -166,6 +225,7 @@ export function MessageActionRail({
   canFeedback = true,
   canRegenerate = true,
   canShare = true,
+  canBranch = true,
   isSpeaking = false,
   isLoadingAudio = false,
   feedback = null,
@@ -174,6 +234,9 @@ export function MessageActionRail({
   onFeedback,
   onRegenerate,
   onShare,
+  onBranch,
+  onRemember,
+  canRemember = true,
   onTelemetry = DEFAULT_TELEMETRY,
 }: MessageActionRailProps) {
   // ── Local UI state ───────────────────────────────────────────────
@@ -181,6 +244,10 @@ export function MessageActionRail({
   const [sharePulse, setSharePulse] = React.useState<"success" | "error" | null>(null)
   const [isCopying, setIsCopying] = React.useState(false)
   const [isSharing, setIsSharing] = React.useState(false)
+  const [isBranching, setIsBranching] = React.useState(false)
+  const [isRemembering, setIsRemembering] = React.useState(false)
+  const [rememberPulse, setRememberPulse] = React.useState<"success" | "error" | null>(null)
+  const [remembered, setRemembered] = React.useState(false)
   const [isSubmittingFeedback, setIsSubmittingFeedback] = React.useState<FeedbackKind | null>(null)
   const [localFeedback, setLocalFeedback] = React.useState<FeedbackKind | null>(feedback)
 
@@ -203,6 +270,12 @@ export function MessageActionRail({
   const showFeedback = canFeedback && hasText && !hasError && !isLive
   const showRegenerate = canRegenerate && !isLive && (hasText || hasError)
   const showShare = canShare && hasText && !hasError && !isLive
+  // Branching is opt-in: the button only appears when the parent actually
+  // wired an `onBranch` handler (forking the conversation tree).
+  const showBranch = canBranch && !!onBranch && hasText && !hasError && !isLive
+  // Remember (persistent agent memory) is opt-in too — only assistant answers
+  // worth keeping should expose it, so it's gated on an `onRemember` handler.
+  const showRemember = canRemember && !!onRemember && hasText && !hasError && !isLive
   const regenerationBadge = Number.isFinite(regenerationAttempt) && regenerationAttempt > 0
     ? (regenerationAttempt > 99 ? "99+" : String(Math.floor(regenerationAttempt)))
     : null
@@ -214,7 +287,7 @@ export function MessageActionRail({
 
   // Nothing to render? Don't render the container either — keeps the
   // bubble visually clean for messages that genuinely have no actions.
-  if (!showCopy && !showSpeak && !showFeedback && !showRegenerate && !showShare && !showModelBadge) {
+  if (!showCopy && !showSpeak && !showFeedback && !showRegenerate && !showShare && !showBranch && !showRemember && !showModelBadge) {
     return null
   }
 
@@ -266,7 +339,8 @@ export function MessageActionRail({
         if (onCopy) {
           await onCopy()
         } else {
-          await navigator.clipboard.writeText(trimmed)
+          const result = await copyTextSafe(trimmed)
+          if (!result.ok) throw new Error(result.error || "clipboard_unavailable")
         }
       }, setCopyPulse)
     } catch { /* pulse already handled */ }
@@ -308,6 +382,27 @@ export function MessageActionRail({
     fire("regenerate", () => onRegenerate()).catch(() => {})
   }
 
+  const handleBranchClick = async () => {
+    if (isBranching || !onBranch) return
+    setIsBranching(true)
+    try {
+      await fire("branch", () => onBranch())
+    } catch { /* telemetry already recorded */ }
+    finally { setIsBranching(false) }
+  }
+
+  const handleRememberClick = async () => {
+    if (isRemembering || !onRemember) return
+    setIsRemembering(true)
+    try {
+      await fire("remember", () => onRemember(), setRememberPulse)
+      // Latch a persistent "saved" affordance so the user knows this answer
+      // already lives in their agent's long-term memory.
+      setRemembered(true)
+    } catch { /* pulse already handled */ }
+    finally { setIsRemembering(false) }
+  }
+
   const handleSpeakClick = () => {
     if (!onSpeak) return
     fire("speak", () => onSpeak()).catch(() => {})
@@ -347,8 +442,22 @@ export function MessageActionRail({
             disabled={allDisabled}
             loading={isLoadingAudio}
             pressed={isSpeaking}
+            glow={isSpeaking ? "accent" : null}
             onClick={handleSpeakClick}
-            icon={isSpeaking ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+            icon={
+              isSpeaking ? (
+                <span className="group/sp relative inline-flex h-4 w-4 items-center justify-center">
+                  {/* Equalizer by default; swaps to a Stop glyph on hover so
+                      the click affordance stays obvious. */}
+                  <span className="group-hover/sp:opacity-0 transition-opacity">
+                    <SpeakingEqualizer />
+                  </span>
+                  <VolumeX className="absolute h-4 w-4 opacity-0 transition-opacity group-hover/sp:opacity-100" />
+                </span>
+              ) : (
+                <Volume2 className="h-4 w-4" />
+              )
+            }
           />
         )}
         {showFeedback && (
@@ -404,6 +513,46 @@ export function MessageActionRail({
             pulse={sharePulse}
             onClick={handleShareClick}
             icon={sharePulse === "success" ? <Check className="h-4 w-4" /> : sharePulse === "error" ? <XIcon className="h-4 w-4" /> : <Share2 className="h-4 w-4" />}
+          />
+        )}
+        {showBranch && (
+          // ── "Bifurcar conversación" ──────────────────────────────────
+          // The new, future-facing action. As AI moves from single linear
+          // chats to *exploring a tree of reasoning paths*, branching a
+          // conversation from any answer (git-style, without losing the
+          // original) becomes a core primitive — non-destructive
+          // experimentation with prompts, models and directions. Wired as
+          // an optional handler so it lights up only where the host app
+          // supports forking.
+          <RailButton
+            label="Bifurcar conversación"
+            disabled={allDisabled}
+            loading={isBranching}
+            onClick={handleBranchClick}
+            icon={<GitBranch className="h-4 w-4" />}
+          />
+        )}
+        {showRemember && (
+          // ── "Recordar" (memoria persistente del agente) ──────────────
+          // The most future-facing action of all: software that *remembers*.
+          // The next generation of AI tools is defined by agents with durable,
+          // cross-session memory — pin an answer and the assistant keeps it as
+          // a long-term fact about you, so future chats start already knowing
+          // it. Self-contained: the parent persists it to the user's memory
+          // document. Once saved, the icon latches to a filled/accent state.
+          <RailButton
+            label={remembered ? "Guardado en memoria" : "Recordar esto"}
+            disabled={allDisabled}
+            loading={isRemembering}
+            pressed={remembered}
+            pulse={rememberPulse}
+            glow={remembered ? "accent" : null}
+            onClick={handleRememberClick}
+            icon={
+              rememberPulse === "success" || remembered
+                ? <BrainCircuit className="h-4 w-4" strokeWidth={2.25} />
+                : <BrainCircuit className="h-4 w-4" />
+            }
           />
         )}
         {showModelBadge && (

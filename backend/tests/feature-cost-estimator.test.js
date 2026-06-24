@@ -165,7 +165,7 @@ test('getRecommendedPlan: small usage → PRO', () => {
 });
 
 test('getRecommendedPlan: medium usage → PRO_MAX', () => {
-  // 50_000 calls × 3 = 150_000 credits → exceeds PRO (100k), fits PRO_MAX (300k)
+  // 50_000 calls × 3 = 150_000 credits → exceeds PRO (100k), fits PRO_MAX (200k)
   const r = getRecommendedPlan({
     paraphrase: { calls: 50000, avgTextLength: 2000 },
   });
@@ -173,7 +173,7 @@ test('getRecommendedPlan: medium usage → PRO_MAX', () => {
 });
 
 test('getRecommendedPlan: huge usage → ENTERPRISE', () => {
-  // 100_000 calls × 11 = 1_100_000 credits → exceeds PRO_MAX (300k)
+  // 100_000 calls × 11 = 1_100_000 credits → exceeds PRO_MAX (200k)
   const r = getRecommendedPlan({
     paraphrase: { calls: 100000, avgTextLength: 10000 },
   });
@@ -321,8 +321,8 @@ test('PLAN_BUDGETS: matches the values plan-credits-catalog grants', () => {
   assert.equal(PLAN_BUDGETS.FREE, 0);
   // PRO grants 100k premium tokens per the spec
   assert.equal(PLAN_BUDGETS.PRO, 100_000);
-  // PRO_MAX grants 300k
-  assert.equal(PLAN_BUDGETS.PRO_MAX, 300_000);
+  // PRO_MAX grants 200k
+  assert.equal(PLAN_BUDGETS.PRO_MAX, 200_000);
   // ENTERPRISE is unlimited (null)
   assert.equal(PLAN_BUDGETS.ENTERPRISE, null);
 });
@@ -506,7 +506,7 @@ test('comparePlans: PRO_MAX → PRO is a downgrade with negative deltas', () => 
   const cmp = comparePlans('PRO_MAX', 'PRO');
   assert.equal(cmp.direction, 'downgrade');
   assert.equal(cmp.priceDeltaUsd, -5);
-  assert.equal(cmp.budgetDeltaCredits, -200_000);
+  assert.equal(cmp.budgetDeltaCredits, -100_000);
 });
 
 test('comparePlans: same plan is direction "same" with zero deltas', () => {
@@ -615,7 +615,7 @@ test('findCheapestPlanForBudget: $5 → ENTERPRISE (unlimited beats PRO 100k)', 
   assert.equal(findCheapestPlanForBudget(5).plan, 'ENTERPRISE');
 });
 
-test('findCheapestPlanForBudget: $10 → ENTERPRISE (still unlimited beats PRO_MAX 300k)', () => {
+test('findCheapestPlanForBudget: $10 → ENTERPRISE (still unlimited beats PRO_MAX 200k)', () => {
   const { findCheapestPlanForBudget } = require('../src/services/feature-cost-estimator');
   assert.equal(findCheapestPlanForBudget(10).plan, 'ENTERPRISE');
 });
@@ -813,7 +813,7 @@ test('pricingFAQEntries: prices match canonical PLAN_PRICES_USD', () => {
   assert.ok(proAnswer.includes('100,000'));
   const proMaxAnswer = faq.find((e) => e.q.includes('PRO_MAX')).a;
   assert.ok(proMaxAnswer.includes('$10'));
-  assert.ok(proMaxAnswer.includes('300,000'));
+  assert.ok(proMaxAnswer.includes('200,000'));
 });
 
 test('pricingFAQEntries: describes premium credit exhaustion without FlashGPT fallback', () => {
@@ -852,4 +852,105 @@ test('suggestDowngradeFromUsage: PRO with heavy usage → no downgrade (need PRO
 test('suggestDowngradeFromUsage: unknown plan returns null', () => {
   const { suggestDowngradeFromUsage } = require('../src/services/feature-cost-estimator');
   assert.equal(suggestDowngradeFromUsage({}, 'MYSTERY'), null);
+});
+
+// ---------------------------------------------------------------------------
+// Non-finite / negative input hardening — every credit/USD computation must
+// stay finite and non-negative when fed garbage (Infinity, -Infinity, NaN,
+// negatives, non-numeric). Without the toFiniteNonNegative boundary guards
+// these would return Infinity / NaN / "≈ $Infinity" / negative figures.
+// ---------------------------------------------------------------------------
+
+const isFiniteNonNeg = (n) => Number.isFinite(n) && n >= 0;
+
+test('estimateCost: textLength=Infinity stays finite (falls back to base/minCost)', () => {
+  const r = estimateCost('paraphrase', { textLength: Infinity });
+  assert.ok(isFiniteNonNeg(r.credits), `credits not finite/non-neg: ${r.credits}`);
+  assert.ok(isFiniteNonNeg(r.breakdown.lengthCost), `lengthCost not finite/non-neg: ${r.breakdown.lengthCost}`);
+  // Infinity length contributes nothing → just the base cost (minCost).
+  assert.equal(r.credits, 1);
+  assert.equal(r.breakdown.lengthCost, 0);
+});
+
+test('estimateCost: -Infinity / NaN / negative / non-numeric textLength → minCost', () => {
+  for (const bad of [-Infinity, NaN, -5000, 'abc', null, '']) {
+    const r = estimateCost('paraphrase', { textLength: bad });
+    assert.ok(isFiniteNonNeg(r.credits), `credits not finite/non-neg for ${String(bad)}: ${r.credits}`);
+    assert.equal(r.credits, 1, `expected minCost for textLength=${String(bad)}`);
+  }
+});
+
+test('estimateCost: image_generation with Infinity textLength still returns minCost (5)', () => {
+  const r = estimateCost('image_generation', { textLength: Infinity });
+  assert.equal(r.credits, 5);
+  assert.ok(isFiniteNonNeg(r.credits));
+});
+
+test('creditsToUsdCents: ±Infinity / NaN → 0 (never non-finite)', () => {
+  const { creditsToUsdCents } = require('../src/services/feature-cost-estimator');
+  assert.equal(creditsToUsdCents(Infinity), 0);
+  assert.equal(creditsToUsdCents(-Infinity), 0);
+  assert.equal(creditsToUsdCents(NaN), 0);
+  for (const bad of [Infinity, -Infinity, NaN, '1e999']) {
+    assert.ok(isFiniteNonNeg(creditsToUsdCents(bad)), `non-finite for ${String(bad)}`);
+  }
+});
+
+test('creditsForUsd: ±Infinity → 0 credits (never Infinity)', () => {
+  const { creditsForUsd } = require('../src/services/feature-cost-estimator');
+  assert.equal(creditsForUsd(Infinity), 0);
+  assert.equal(creditsForUsd(-Infinity), 0);
+  assert.ok(isFiniteNonNeg(creditsForUsd(Infinity)));
+});
+
+test('formatCreditsAsUsd: ±Infinity → "" (never "≈ $Infinity")', () => {
+  assert.equal(formatCreditsAsUsd(Infinity), '');
+  assert.equal(formatCreditsAsUsd(-Infinity), '');
+  assert.ok(!formatCreditsAsUsd(Infinity).includes('Infinity'));
+});
+
+test('estimateMonthlyCost: calls=Infinity stays finite + no "Infinity" in USD label', () => {
+  const r = estimateMonthlyCost({ paraphrase: { calls: Infinity, avgTextLength: 1000 } });
+  assert.ok(isFiniteNonNeg(r.totalMonthly), `totalMonthly not finite/non-neg: ${r.totalMonthly}`);
+  assert.ok(!r.totalMonthlyUsd.includes('Infinity'), `USD label leaked Infinity: ${r.totalMonthlyUsd}`);
+  // Infinity calls is non-actionable garbage → projects nothing.
+  assert.equal(r.totalMonthly, 0);
+});
+
+test('estimateMonthlyCost: avgTextLength=Infinity stays finite (per-call falls back to minCost)', () => {
+  const r = estimateMonthlyCost({ paraphrase: { calls: 10, avgTextLength: Infinity } });
+  assert.ok(isFiniteNonNeg(r.totalMonthly), `totalMonthly not finite/non-neg: ${r.totalMonthly}`);
+  // 10 calls × minCost(1) = 10, length contributes nothing.
+  assert.equal(r.totalMonthly, 10);
+  assert.ok(isFiniteNonNeg(r.perFeature.paraphrase.monthlyCredits));
+});
+
+test('estimateMonthlyCost: negative calls treated as 0 (skipped, not a credit)', () => {
+  const r = estimateMonthlyCost({ paraphrase: { calls: -100, avgTextLength: 1000 } });
+  assert.equal(r.totalMonthly, 0);
+  assert.deepEqual(r.perFeature, {});
+});
+
+test('affordsFeature: calls=Infinity → finite non-negative projectedCredits', () => {
+  const { affordsFeature } = require('../src/services/feature-cost-estimator');
+  const r = affordsFeature('PRO', 'paraphrase', { calls: Infinity });
+  assert.ok(isFiniteNonNeg(r.projectedCredits), `projectedCredits not finite/non-neg: ${r.projectedCredits}`);
+  assert.equal(r.projectedCredits, 0);
+});
+
+test('affordsFeature: NaN / negative calls → 0 projected credits, still affords on paid plan', () => {
+  const { affordsFeature } = require('../src/services/feature-cost-estimator');
+  for (const bad of [NaN, -50, 'lots']) {
+    const r = affordsFeature('PRO', 'paraphrase', { calls: bad });
+    assert.ok(isFiniteNonNeg(r.projectedCredits), `non-finite projected for calls=${String(bad)}`);
+    assert.equal(r.projectedCredits, 0);
+    assert.equal(r.affords, true);
+  }
+});
+
+test('estimateCostBatch: Infinity textLength items stay finite', () => {
+  const out = estimateCostBatch([{ feature: 'paraphrase', textLength: Infinity }]);
+  assert.equal(out.length, 1);
+  assert.ok(isFiniteNonNeg(out[0].credits), `batch credits not finite/non-neg: ${out[0].credits}`);
+  assert.ok(!out[0].usdLabel.includes('Infinity'));
 });

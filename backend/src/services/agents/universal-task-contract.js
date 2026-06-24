@@ -675,7 +675,10 @@ function extractCountConstraints(raw) {
   return Array.from(new Set(constraints));
 }
 
-function extractSourceRequirements(raw, tokenAnalysis = null) {
+const PRIVATE_ATTACHMENT_SOURCE_RE = /\b(adjunt[oa]s?|archivo(?:s)? cargad[oa]s?|documento(?:s)? cargad[oa]s?|segun (?:mis|el|los) archivo|segun (?:mis|el|los) documento|según (?:mis|el|los) archivo|según (?:mis|el|los) documento|este documento|esta tesis|pdf cargado|word cargado|docx cargado|mis archivos|mi proyecto)\b/i;
+const EXPLICIT_EXTERNAL_SOURCE_RE = /\b(web|internet|online|extern[ao]s?|fuentes externas|buscar afuera|busca afuera|noticias?|actual(?:es)?|actualidad|reciente(?:s)?|hoy|ahora|latest|current|doi|scopus|web of science|wos|openalex|crossref|pubmed|doaj|scielo|semantic scholar|papers?|art[ií]culos?|cient[ií]fic[oa]s?|acad[eé]mic[oa]s?)\b/i;
+
+function extractSourceRequirements(raw, tokenAnalysis = null, { hasFiles = false } = {}) {
   const n = normalize(raw);
   const providers = [];
   if (/\b(scopus)\b/.test(n)) providers.push('Scopus');
@@ -693,7 +696,11 @@ function extractSourceRequirements(raw, tokenAnalysis = null) {
     /\b(?:hoy|ahora|actual(?:es)?|actualidad|reciente(?:s)?|[uú]ltim[oa]s?|latest|today|current)\b.*\b(?:noticias?|pas[oó]|ocurri[oó]|precio|estado|resultado|marcador|avance)\b/i,
   ]));
   const tokenResearch = !noSearch && Boolean(tokenAnalysis?.context?.has_research_requirement || tokenAnalysis?.evidence?.research?.present);
-  const sourceRequired = !noSearch && (tokenResearch || freshnessLookup || matchAny(raw, [
+  const privateDocumentOnlySource =
+    hasFiles &&
+    (PRIVATE_ATTACHMENT_SOURCE_RE.test(raw) || PRIVATE_ATTACHMENT_SOURCE_RE.test(n)) &&
+    !(EXPLICIT_EXTERNAL_SOURCE_RE.test(raw) || EXPLICIT_EXTERNAL_SOURCE_RE.test(n));
+  const sourceRequired = !noSearch && !privateDocumentOnlySource && (tokenResearch || freshnessLookup || matchAny(raw, [
     /\b(busca|buscar|investiga|investigar|fuentes|referencias|citas|art[ií]culos?|papers?|doi|scopus|wos|openalex|crossref|pubmed|doaj|scielo|cient[ií]fic[oa]s?|acad[eé]mic[oa]s?)\b/i,
   ]));
   const strict = Boolean(tokenAnalysis?.evidence?.strict?.present) || matchAny(raw, [/\b(100%|reales|verifica|validar|doi|open access|acceso abierto|no invent|precis[ao]|art[ií]culos cient[ií]ficos)\b/i]);
@@ -717,7 +724,7 @@ function inferIntentAndPipeline({ raw, fileIds = [], tokenAnalysis = null }) {
   const hasFiles = Array.isArray(fileIds) && fileIds.length > 0;
   const textOnly = hasTextOnlyDirective(raw) || Boolean(tokenAnalysis?.context?.has_text_only_directive);
   const explicitExt = inferExplicitExtension(raw, tokenAnalysis);
-  const research = extractSourceRequirements(raw, tokenAnalysis).required;
+  const research = extractSourceRequirements(raw, tokenAnalysis, { hasFiles }).required;
   const action = matchAny(raw, [/\b(envia|enviar|correo|email|gmail|calendario|calendar|reserva|reservar|whatsapp|telegram|navegador|browser|agenda|programa una reunion)\b/i]);
   const editImage = matchAny(raw, [/\b(edita|editar|modifica|retoca|inpaint|pincel|mascara|mask)\b/i]) && matchAny(raw, [/\b(imagen|foto|png|jpg|jpeg|webp)\b/i]);
   const image = !editImage && matchAny(raw, [/\b(genera una imagen|crear imagen|imagen de|foto de|png|jpg|jpeg|webp)\b/i]);
@@ -964,13 +971,18 @@ function buildExecutionPlan({ pipeline, primaryIntent, requiredTools, validation
   return plan;
 }
 
-function inferAmbiguityScore({ raw, requiredExtension, pipeline, sourceRequirements, requestTokenAnalysis = null }) {
+function inferAmbiguityScore({ raw, requiredExtension, pipeline, sourceRequirements, requestTokenAnalysis = null, hasFiles = false }) {
   const n = normalize(raw);
   if (!n) return 1;
   if (hasTextOnlyDirective(raw) || requestTokenAnalysis?.context?.has_text_only_directive) return 0.12;
   if (requestTokenAnalysis?.context?.has_contextual_followup) return 0.15;
   if (isPlainTranscriptionRequest(raw, requiredExtension)) return 0.15;
-  if (/\b(archivo|documento|haz algo|lo que sea|cualquier cosa)\b/.test(n) && !requiredExtension) return 0.85;
+  // "documento/archivo" with NO attachment and no target format is vague
+  // ("haz algo con un documento") — but when a file IS attached the word is a
+  // concrete REFERENCE to it ("edita mi documento: …"), not ambiguity; that
+  // turn must execute, not stall on a clarifying question.
+  const attached = hasFiles || Boolean(requestTokenAnalysis?.context?.has_files);
+  if (/\b(archivo|documento|haz algo|lo que sea|cualquier cosa)\b/.test(n) && !requiredExtension && !attached) return 0.85;
   if (sourceRequirements.required && /\b(articulos|fuentes|papers)\b/.test(n) && !/\b(\d{1,5}|varios|algunos|lista)\b/.test(n)) return 0.45;
   if (pipeline === 'DirectAnswerPipeline') return 0.15;
   return requiredExtension || sourceRequirements.required ? 0.12 : 0.3;
@@ -1005,8 +1017,8 @@ function buildUniversalTaskContract({ rawUserRequest, fileIds = [], now = new Da
   const raw = String(rawUserRequest || '');
   const normalized = normalize(raw);
   const requestTokenAnalysis = tokenAnalysis || analyzeRequestTokens({ rawUserRequest: raw, fileIds });
-  const sourceRequirements = extractSourceRequirements(raw, requestTokenAnalysis);
   const hasFiles = Array.isArray(fileIds) && fileIds.length > 0;
+  const sourceRequirements = extractSourceRequirements(raw, requestTokenAnalysis, { hasFiles });
   const textOnly = hasTextOnlyDirective(raw) || Boolean(requestTokenAnalysis?.context?.has_text_only_directive);
   const explicitExt = inferExplicitExtension(raw, requestTokenAnalysis);
   const route = inferIntentAndPipeline({ raw, fileIds, tokenAnalysis: requestTokenAnalysis });
@@ -1081,6 +1093,7 @@ function buildUniversalTaskContract({ rawUserRequest, fileIds = [], now = new Da
     pipeline: primaryPipeline,
     sourceRequirements,
     requestTokenAnalysis,
+    hasFiles,
   });
   const riskLevel = inferRiskLevel({
     sourceRequirements,

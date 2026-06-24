@@ -1,6 +1,8 @@
 const express = require('express');
 const fsSync = require('fs');
 const { authenticateToken } = require('../middleware/auth');
+const { parsePositiveInt } = require('../services/chat-scope');
+const { softDeleteWhere } = require('../utils/prisma-soft-delete');
 const { requireScope } = require('../middleware/require-scope');
 const upload = require('../middleware/upload');
 const fileProcessingStatus = require('../services/file-processing-status');
@@ -22,10 +24,14 @@ const path = require('path');
 const OpenAI = require('openai');
 const documentIntentAnalyzer = require('../services/document-intent-analyzer');
 const fileIntegrityValidator = require('../services/file-integrity-validator');
+const objectStorage = require('../services/object-storage');
 const { progressStream } = require('../services/upload-progress-sse');
 const {
   MAX_SIMULTANEOUS_DOCUMENTS,
 } = require('../config/document-batch-limits');
+// Never advertise a batch maxCount larger than multer actually accepts, else
+// over-limit uploads fail with LIMIT_FILE_COUNT instead of the route's contract.
+const UPLOAD_BATCH_MAX = Math.min(MAX_SIMULTANEOUS_DOCUMENTS, upload.filesLimit || MAX_SIMULTANEOUS_DOCUMENTS);
 const {
   contentDispositionHeader,
   safeDownloadFilename,
@@ -233,6 +239,69 @@ async function unlinkQuiet(p) {
   try { await fs.unlink(p); } catch (_) { /* already gone */ }
 }
 
+// Bound a slow/best-effort step so a hung upstream (OpenAI Files API, a
+// parser stuck on a pathological document, etc.) can never consume the
+// whole HTTP response budget. The reverse proxy / GCLB cuts a request at
+// ~30s regardless of heartbeats, so an un-bounded external call here would
+// surface to the user as a *failed upload* even though the binary is
+// already safely on disk. We reject fast and let the caller's existing
+// try/catch degrade gracefully (text/thumbnail/OpenAI are all optional).
+// The underlying promise may keep running in the background; that's fine —
+// we only care that the response path is bounded.
+function withTimeout(promise, ms, label) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const err = new Error(`${label || 'operation'} timed out after ${ms}ms`);
+      err.code = 'step_timeout';
+      reject(err);
+    }, ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+// Per-step timeout budgets. Kept well under the ~30s proxy cut so the
+// synchronous upload path always returns a JSON result, even when an
+// upstream is degraded. Overridable via env for ops tuning.
+const EXTRACT_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_EXTRACT_TIMEOUT_MS || '20000', 10);
+const THUMBNAIL_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_THUMBNAIL_TIMEOUT_MS || '12000', 10);
+const OPENAI_FILE_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_OPENAI_FILE_TIMEOUT_MS || '15000', 10);
+const ANALYZE_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_ANALYZE_TIMEOUT_MS || '8000', 10);
+
+const OPENAI_FILE_MIMES = new Set([
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+]);
+
+// Upload a document to the OpenAI Files API, bounded by a timeout and with
+// SDK retries disabled (retries would multiply the wall-clock cost and risk
+// the proxy cut). Returns the OpenAI file id, or null on any failure —
+// OpenAI Files is an optional enhancement, never a hard upload dependency.
+async function uploadToOpenAiFiles(file) {
+  if (!OPENAI_FILE_MIMES.has(file.mimetype) && !file.mimetype.startsWith('text/')) {
+    return null;
+  }
+  try {
+    const buf = await fs.readFile(file.path);
+    const oaFile = await withTimeout(
+      openai.files.create(
+        { file: new File([buf], file.originalname, { type: file.mimetype }), purpose: 'assistants' },
+        { timeout: OPENAI_FILE_TIMEOUT_MS, maxRetries: 0 },
+      ),
+      OPENAI_FILE_TIMEOUT_MS + 2000,
+      'OpenAI Files upload',
+    );
+    return oaFile.id;
+  } catch (openaiError) {
+    console.error('OpenAI file upload error:', openaiError?.message || openaiError);
+    return null;
+  }
+}
+
 
 // ─── Parallel batch processor ──────────────────────────────────────────────
 // Processes files in chunks of MAX_CONCURRENT to avoid overwhelming the
@@ -321,30 +390,26 @@ async function processFilesInParallel(files, userId, prismaClient) {
         // just lands with no locally-extracted text. This is the core of the
         // "any document uploads without failure" guarantee.
         await fileProcessingStatus.setStage(prismaClient, fileRecord.id, 'extracting', { userId });
-        let result;
-        try {
-          result = await fileProcessor.processFile(file);
-        } catch (extractErr) {
-          console.warn(`[files] text extraction failed for ${file.originalname} — upload still succeeds:`, extractErr?.message || extractErr);
-          result = { success: false, extractedText: '', error: `extraction_degraded: ${extractErr?.message || extractErr}` };
-        }
-        let thumbnailPath = null;
-        try {
-          thumbnailPath = await fileProcessor.generateThumbnail(file.path, file.mimetype);
-        } catch (thumbErr) {
-          console.warn(`[files] thumbnail generation failed for ${file.originalname}:`, thumbErr?.message || thumbErr);
-        }
 
-        // ── Upload to OpenAI Files API ──
-        let openaiFileId = null;
-        const oaMimes = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.ms-powerpoint', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'];
-        if (oaMimes.includes(file.mimetype) || file.mimetype.startsWith('text/')) {
-          try {
-            const buf = await fs.readFile(file.path);
-            const oaFile = await openai.files.create({ file: new File([buf], file.originalname, { type: file.mimetype }), purpose: 'assistants' });
-            openaiFileId = oaFile.id;
-          } catch (openaiError) { console.error('OpenAI file upload error:', openaiError); }
-        }
+        // Run extraction, thumbnail, and the OpenAI Files upload CONCURRENTLY.
+        // They're independent (all read only the on-disk binary), so racing
+        // them keeps the worst-case wall-clock at max(step), not the sum —
+        // critical because the reverse proxy cuts the response at ~30s. Each
+        // is individually bounded and degrades to a safe default on failure,
+        // so a slow/down upstream never fails the upload.
+        const [result, thumbnailPath, openaiFileId] = await Promise.all([
+          withTimeout(fileProcessor.processFile(file), EXTRACT_TIMEOUT_MS, `text extraction (${file.originalname})`)
+            .catch((extractErr) => {
+              console.warn(`[files] text extraction failed for ${file.originalname} — upload still succeeds:`, extractErr?.message || extractErr);
+              return { success: false, extractedText: '', error: `extraction_degraded: ${extractErr?.message || extractErr}` };
+            }),
+          withTimeout(fileProcessor.generateThumbnail(file.path, file.mimetype), THUMBNAIL_TIMEOUT_MS, `thumbnail (${file.originalname})`)
+            .catch((thumbErr) => {
+              console.warn(`[files] thumbnail generation failed for ${file.originalname}:`, thumbErr?.message || thumbErr);
+              return null;
+            }),
+          uploadToOpenAiFiles(file),
+        ]);
 
         // ── Update DB record ──
         fileRecord = await prismaClient.file.update({
@@ -356,8 +421,21 @@ async function processFilesInParallel(files, userId, prismaClient) {
         const ocrMeta = serializeOcrMeta(result);
         let analysis = null;
         try {
-          analysis = await documentIntelligence.analyzeFile(prismaClient, { userId, fileRecord, extractionResult: result, force: true });
+          analysis = await withTimeout(
+            documentIntelligence.analyzeFile(prismaClient, { userId, fileRecord, extractionResult: result, force: true }),
+            ANALYZE_TIMEOUT_MS,
+            `document analysis (${file.originalname})`,
+          );
         } catch (analysisError) { console.warn('[files] document analysis failed:', analysisError.message || analysisError); }
+
+        // Offload the binary (+ thumbnail) to R2 AFTER extraction and analysis,
+        // which may re-read the local file. Keeps nothing durable on the VM.
+        try {
+          const { ref: storedRef } = await persistUploadBinary({ file, userId, thumbnailPath });
+          if (storedRef && storedRef !== file.path) {
+            fileRecord = await prismaClient.file.update({ where: { id: fileRecord.id }, data: { path: storedRef } });
+          }
+        } catch (offloadErr) { console.warn('[files] R2 offload step failed:', offloadErr?.message || offloadErr); }
 
         // The upload itself succeeded (binary stored + record updated), so we
         // always report success. A degraded extraction is surfaced as a soft
@@ -375,6 +453,43 @@ async function processFilesInParallel(files, userId, prismaClient) {
     for (let j = 0; j < batchResults.length; j++) results[i + j] = batchResults[j];
   }
   return results;
+}
+
+// Move an uploaded binary (and optional thumbnail) off the VM into R2 so
+// nothing durable lives on local disk. The R2 key MIRRORS the public
+// "/uploads/<userId>/<filename>" path, so the response URL stays the same and
+// is served by the R2 fallback middleware. Returns the storage ref to persist
+// in File.path. When R2 is disabled (dev) this is a no-op and returns the local
+// path, preserving legacy local-disk behaviour. Best-effort: on any R2 error we
+// fall back to the local path so an upload never fails because of offload.
+async function persistUploadBinary({ file, userId, thumbnailPath }) {
+  if (!objectStorage.enabled()) return { ref: file.path, thumbRef: thumbnailPath || null };
+  let ref = file.path;
+  let thumbRef = thumbnailPath || null;
+  try {
+    const up = await objectStorage.persistLocalFile({
+      localPath: file.path,
+      key: objectStorage.uploadKey(userId, file.filename),
+      contentType: file.mimetype,
+    });
+    ref = up.ref;
+  } catch (err) {
+    console.warn(`[files] R2 offload failed for ${file.originalname}, keeping local: ${err?.message || err}`);
+    return { ref: file.path, thumbRef };
+  }
+  if (thumbnailPath) {
+    try {
+      const th = await objectStorage.persistLocalFile({
+        localPath: thumbnailPath,
+        key: objectStorage.uploadKey(userId, path.basename(thumbnailPath)),
+        contentType: 'image/jpeg',
+      });
+      thumbRef = th.ref;
+    } catch (err) {
+      console.warn(`[files] R2 thumbnail offload failed: ${err?.message || err}`);
+    }
+  }
+  return { ref, thumbRef };
 }
 
 function isAsyncUploadRequest(req) {
@@ -423,27 +538,19 @@ async function processFileAfterFastUpload(file, userId, prismaClient, fileRecord
     // just without locally-extracted text.
     let result;
     try {
-      result = await fileProcessor.processFile(file);
+      result = await withTimeout(fileProcessor.processFile(file), EXTRACT_TIMEOUT_MS, `text extraction (${file.originalname})`);
     } catch (extractErr) {
       console.warn(`[files] async text extraction failed for ${file.originalname} — file stays usable:`, extractErr?.message || extractErr);
       result = { success: false, extractedText: '', error: `extraction_degraded: ${extractErr?.message || extractErr}` };
     }
     let thumbnailPath = null;
     try {
-      thumbnailPath = await fileProcessor.generateThumbnail(file.path, file.mimetype);
+      thumbnailPath = await withTimeout(fileProcessor.generateThumbnail(file.path, file.mimetype), THUMBNAIL_TIMEOUT_MS, `thumbnail (${file.originalname})`);
     } catch (thumbErr) {
       console.warn(`[files] async thumbnail generation failed for ${file.originalname}:`, thumbErr?.message || thumbErr);
     }
 
-    let openaiFileId = null;
-    const oaMimes = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.ms-powerpoint', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'];
-    if (oaMimes.includes(file.mimetype) || file.mimetype.startsWith('text/')) {
-      try {
-        const buf = await fs.readFile(file.path);
-        const oaFile = await openai.files.create({ file: new File([buf], file.originalname, { type: file.mimetype }), purpose: 'assistants' });
-        openaiFileId = oaFile.id;
-      } catch (openaiError) { console.error('OpenAI file upload error:', openaiError); }
-    }
+    const openaiFileId = await uploadToOpenAiFiles(file);
 
     fileRecord = await prismaClient.file.update({
       where: { id: fileRecord.id },
@@ -454,6 +561,14 @@ async function processFileAfterFastUpload(file, userId, prismaClient, fileRecord
     try {
       await documentIntelligence.analyzeFile(prismaClient, { userId, fileRecord, extractionResult: result, force: true });
     } catch (analysisError) { console.warn('[files] document analysis failed:', analysisError.message || analysisError); }
+
+    // Offload binary (+ thumbnail) to R2 after extraction + analysis.
+    try {
+      const { ref: storedRef } = await persistUploadBinary({ file, userId, thumbnailPath });
+      if (storedRef && storedRef !== file.path) {
+        fileRecord = await prismaClient.file.update({ where: { id: fileRecord.id }, data: { path: storedRef } });
+      }
+    } catch (offloadErr) { console.warn('[files] R2 offload step failed:', offloadErr?.message || offloadErr); }
 
     if (thumbnailPath) {
       // Thumbnail is stored on disk for later consumers; no extra DB field exists
@@ -585,7 +700,7 @@ function scheduleCrossDocumentAnalysisWhenReady(fileIds, userId) {
 }
 
 // Upload files — parallel batch processing
-router.post('/upload', authenticateToken, requireScope('files:write'), upload.array('files', MAX_SIMULTANEOUS_DOCUMENTS), enforceOrgRateLimitSafe, async (req, res) => {
+router.post('/upload', authenticateToken, requireScope('files:write'), upload.array('files', UPLOAD_BATCH_MAX), enforceOrgRateLimitSafe, async (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: 'No files uploaded' });
@@ -748,13 +863,18 @@ router.get('/progress-stream', authenticateToken, async (req, res) => {
 // Get user files
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    const { page = 1, limit = 20, type } = req.query;
+    // Clamp pagination: bare parseInt(NaN)/negatives would crash Prisma's
+    // take/skip (500 on 400-class input) and an unbounded limit could pull the
+    // whole table.
+    const page = parsePositiveInt(req.query.page, 1, { min: 1, max: 100000 });
+    const limit = parsePositiveInt(req.query.limit, 20, { min: 1, max: 100 });
+    const { type } = req.query;
     const skip = (page - 1) * limit;
 
-    const where = {
+    const where = softDeleteWhere({
       userId: req.user.id,
       ...(type && { mimeType: { startsWith: type } })
-    };
+    });
 
     const [files, total] = await Promise.all([
       prisma.file.findMany({
@@ -767,8 +887,8 @@ router.get('/', authenticateToken, async (req, res) => {
           size: true,
           createdAt: true
         },
-        skip: parseInt(skip),
-        take: parseInt(limit),
+        skip,
+        take: limit,
         orderBy: { createdAt: 'desc' }
       }),
       prisma.file.count({ where })
@@ -970,15 +1090,16 @@ router.get('/:id/render', authenticateToken, async (req, res) => {
 
     const isPdf = file.mimeType === 'application/pdf' || /\.pdf$/i.test(file.originalName || '');
     if (isPdf) {
-      if (!fsSync.existsSync(file.path)) {
-        return res.status(404).json({ error: 'File not found on disk' });
+      if (!(await objectStorage.exists(file.path))) {
+        return res.status(404).json({ error: 'File not found' });
       }
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', contentDispositionHeader('inline', renderPdfFilename(file.originalName)));
       res.setHeader('Cache-Control', 'private, max-age=86400');
       res.setHeader('X-Render-Engine', 'native-pdf');
       res.setHeader('X-Render-From-Cache', 'true');
-      return fsSync.createReadStream(file.path).pipe(res);
+      const { stream } = await objectStorage.readStream(file.path);
+      return stream.pipe(res);
     }
 
     if (!documentRenderer.isConvertible(file.mimeType, file.originalName)) {
@@ -989,10 +1110,15 @@ router.get('/:id/render', authenticateToken, async (req, res) => {
     }
 
     let pdfPath;
+    // The renderer (LibreOffice/Gotenberg) needs a real filesystem path. When
+    // the source binary lives in R2, materialize it to a temp file first and
+    // clean it up once conversion is done.
+    let materialized = null;
     try {
+      materialized = await objectStorage.toLocalTemp(file.path);
       const out = await documentRenderer.renderToPdf({
         id: file.id,
-        path: file.path,
+        path: materialized.path,
         mimeType: file.mimeType,
         originalName: file.originalName,
       });
@@ -1008,6 +1134,8 @@ router.get('/:id/render', authenticateToken, async (req, res) => {
       }
       console.error('[files] render failed:', err);
       return res.status(500).json({ error: 'Render failed', detail: err.message });
+    } finally {
+      if (materialized) { try { await materialized.cleanup(); } catch { /* best-effort */ } }
     }
 
     res.setHeader('Content-Type', 'application/pdf');
@@ -1034,9 +1162,9 @@ router.delete('/:id', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    // Delete file from filesystem
+    // Delete the binary from durable storage (R2 ref or local path).
     try {
-      await fs.unlink(file.path);
+      await objectStorage.remove(file.path);
       // Also try to delete thumbnail if it exists
       const thumbnailPath = file.path + '_thumb.jpg';
       try {

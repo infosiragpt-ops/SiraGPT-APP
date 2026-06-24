@@ -1,5 +1,6 @@
 "use client"
-import { Moon, Sun, Monitor } from "lucide-react"
+import * as React from "react"
+import { Moon, MoonStar, Sun, Monitor, Check } from "lucide-react"
 import { useTheme } from "next-themes"
 
 import { Button } from "@/components/ui/button"
@@ -10,8 +11,77 @@ type ThemeToggleProps = {
   className?: string
 }
 
+// "Medianoche" is an OLED flavor of the dark theme, not a separate
+// next-themes theme: a persisted flag + the `midnight` class next to
+// `dark` (CSS scoped to `.dark.midnight`). The boot script in
+// app/layout.tsx applies the class before first paint so there is no
+// canvas flash on reload.
+const MIDNIGHT_KEY = "sira-theme-midnight"
+
+function readMidnightFlag(): boolean {
+  try {
+    return localStorage.getItem(MIDNIGHT_KEY) === "1"
+  } catch {
+    return false
+  }
+}
+
+// Broadcast so the settings Theme picker (and any other tab) re-reads the
+// midnight flag live — keeps the toggle and Configuración perfectly in sync.
+const MIDNIGHT_EVENT = "sira:midnight"
+
+function applyMidnight(on: boolean) {
+  try {
+    if (on) localStorage.setItem(MIDNIGHT_KEY, "1")
+    else localStorage.removeItem(MIDNIGHT_KEY)
+  } catch { /* storage unavailable — class still applies for the session */ }
+  document.documentElement.classList.toggle("midnight", on)
+  try { window.dispatchEvent(new Event(MIDNIGHT_EVENT)) } catch { /* noop */ }
+}
+
+const OPTIONS = [
+  { key: "light", label: "Claro", hint: "Fondo blanco clásico", icon: Sun },
+  { key: "dark", label: "Oscuro", hint: "Gris profundo, bajo contraste", icon: Moon },
+  { key: "midnight", label: "Medianoche", hint: "Negro puro · OLED", icon: MoonStar },
+  { key: "system", label: "Sistema", hint: "Sigue tu dispositivo", icon: Monitor },
+] as const
+
+type ThemeKey = (typeof OPTIONS)[number]["key"]
+
 export function ThemeToggle({ className }: ThemeToggleProps) {
   const { setTheme, theme } = useTheme()
+  // Hydration-safe: the selected state only renders after mount, when
+  // localStorage/theme are knowable on the client.
+  const [mounted, setMounted] = React.useState(false)
+  const [isMidnight, setIsMidnight] = React.useState(false)
+
+  React.useEffect(() => {
+    setMounted(true)
+    setIsMidnight(readMidnightFlag())
+    // Stay in sync when midnight is toggled elsewhere (settings picker) or
+    // in another tab.
+    const sync = () => setIsMidnight(readMidnightFlag())
+    const onStorage = (e: StorageEvent) => { if (e.key === MIDNIGHT_KEY) sync() }
+    window.addEventListener(MIDNIGHT_EVENT, sync)
+    window.addEventListener("storage", onStorage)
+    return () => {
+      window.removeEventListener(MIDNIGHT_EVENT, sync)
+      window.removeEventListener("storage", onStorage)
+    }
+  }, [])
+
+  const selected: ThemeKey | null = !mounted
+    ? null
+    : theme === "dark" && isMidnight
+      ? "midnight"
+      : (theme as ThemeKey) ?? null
+
+  const pick = (key: ThemeKey) => {
+    const midnight = key === "midnight"
+    applyMidnight(midnight)
+    setIsMidnight(midnight)
+    setTheme(midnight ? "dark" : key)
+  }
 
   return (
     <DropdownMenu>
@@ -42,28 +112,30 @@ export function ThemeToggle({ className }: ThemeToggleProps) {
           <span className="sr-only">Cambiar tema</span>
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-[9rem] rounded-xl p-1">
-        <DropdownMenuItem
-          onClick={() => setTheme("light")}
-          className={cn("cursor-pointer rounded-lg gap-2 text-[13px]", theme === 'light' && 'bg-muted/60 font-medium')}
-        >
-          <Sun className="h-4 w-4" strokeWidth={1.75} />
-          <span>Claro</span>
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          onClick={() => setTheme("dark")}
-          className={cn("cursor-pointer rounded-lg gap-2 text-[13px]", theme === 'dark' && 'bg-muted/60 font-medium')}
-        >
-          <Moon className="h-4 w-4" strokeWidth={1.75} />
-          <span>Oscuro</span>
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          onClick={() => setTheme("system")}
-          className={cn("cursor-pointer rounded-lg gap-2 text-[13px]", theme === 'system' && 'bg-muted/60 font-medium')}
-        >
-          <Monitor className="h-4 w-4" strokeWidth={1.75} />
-          <span>Sistema</span>
-        </DropdownMenuItem>
+      <DropdownMenuContent align="end" className="liquid-menu-surface min-w-[12.5rem]">
+        {OPTIONS.map(({ key, label, hint, icon: Icon }) => {
+          const active = selected === key
+          return (
+            <DropdownMenuItem
+              key={key}
+              onClick={() => pick(key)}
+              className="liquid-menu-item cursor-pointer"
+            >
+              <div className="flex w-full items-center gap-3">
+                <div className="liquid-icon flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-foreground/[0.05] dark:bg-foreground/[0.07]">
+                  <Icon className="h-4 w-4 text-foreground/75" strokeWidth={1.75} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className={cn("liquid-label text-sm", active ? "font-semibold" : "font-medium")}>
+                    {label}
+                  </div>
+                  <div className="truncate text-xs text-muted-foreground">{hint}</div>
+                </div>
+                {active && <Check className="h-4 w-4 shrink-0 text-foreground/80" strokeWidth={2} />}
+              </div>
+            </DropdownMenuItem>
+          )
+        })}
       </DropdownMenuContent>
     </DropdownMenu>
   )

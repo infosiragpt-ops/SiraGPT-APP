@@ -1,8 +1,11 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { createRequire } from "node:module"
+import * as path from "node:path"
 
-const cjsRequire = createRequire(__filename)
+// Anchor CJS resolution at the repo root (the runner always runs from the
+// repo root) so backend requires work no matter where test-dist lives.
+const cjsRequire = createRequire(path.join(process.cwd(), "package.json"))
 
 type ReactStep = { step: number; thought: string; actions: Array<{ tool: string; args: string; observation: unknown }> }
 type ReactResult = { finalAnswer: string | null; steps: ReactStep[]; stoppedReason: string }
@@ -28,7 +31,7 @@ type ReactAgent = {
   DEFAULT_MAX_STEPS: number
 }
 
-const reactAgent = cjsRequire("../../backend/src/services/react-agent") as ReactAgent
+const reactAgent = cjsRequire("./backend/src/services/react-agent") as ReactAgent
 
 // ──────────────────────────────────────────────────────────────────
 // Fake OpenAI — plays back a scripted list of assistant messages so
@@ -298,7 +301,7 @@ describe("react-agent · input validation", () => {
 
 describe("react-agent · module integration", () => {
   it("agent route module loads cleanly", () => {
-    const mod = cjsRequire("../../backend/src/routes/agent")
+    const mod = cjsRequire("./backend/src/routes/agent")
     assert.ok(mod)
   })
 })

@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { AlertTriangle, CheckCircle, XCircle, MinusCircle, RefreshCw, Activity, Server, Database, Wifi, HardDrive, Eye, EyeOff } from "lucide-react"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 
 type CheckStatus = "healthy" | "degraded" | "unhealthy" | "skipped"
 
@@ -40,6 +41,7 @@ function statusLabel(s: CheckStatus) {
     case "degraded": return "Degradado"
     case "unhealthy": return "Caído"
     case "skipped": return "Omitido"
+    default: return String(s || "Desconocido")
   }
 }
 
@@ -143,7 +145,7 @@ export default function HealthDashboard() {
       {loading && !health && !error && (
         <Card>
           <CardContent className="pt-6 text-center">
-            <RefreshCw className="h-8 w-8 animate-spin mx-auto text-muted-foreground" />
+            <ThinkingIndicator size="lg" className="mx-auto text-muted-foreground" />
             <p className="mt-2 text-sm text-muted-foreground">Verificando estado del sistema...</p>
           </CardContent>
         </Card>
@@ -193,7 +195,7 @@ export default function HealthDashboard() {
           {/* Check cards */}
           <div className="grid gap-4">
             {health.checks.map((check) => {
-              const cfg = statusConfig[check.status]
+              const cfg = statusConfig[check.status] ?? statusConfig.skipped
               const Icon = cfg.Icon
               const CheckIcon = iconForCheck(check.name)
               const hasDetails = check.details && Object.keys(check.details).length > 0

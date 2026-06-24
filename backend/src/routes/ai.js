@@ -64,6 +64,8 @@ function enforceOrgBudgetSafe(req, res, next) {
 const prisma = require('../config/database');
 const { tryConsumePlanQuota, checkPaidTokenCap, recordApiUsage } = require('../services/plan-quota');
 const aiService = require('../services/ai-service');
+const imageEngine = require('../services/media/image-engine');
+const { classifyImageGenError } = require('../services/image-error-classifier');
 const agentFilters = require('../services/agents/filters');
 const OpenAI = require('openai');
 const usageService = require("../services/usage-service");
@@ -89,6 +91,7 @@ const {
   curateVisibleAdminMediaModels,
   curateVisibleTextModels,
 } = require('../services/visible-model-catalog');
+const { sortFalVideoModels } = require('../services/fal-video-model-catalog');
 const streamResume = require('../services/ai/stream-resume');
 const promptInjectionDetector = require('../services/ai/prompt-injection-detector');
 const longTermMemory = require('../services/long-term-memory');
@@ -119,10 +122,12 @@ const operationalRag = require('../services/rag/operational-runtime');
 const documentProfessionalAnalyzer = require('../services/document-professional-analyzer');
 const documentResponseFidelity = require('../services/document-response-fidelity');
 const documentBlockBudget = require('../services/document-block-budget');
+const documentAnalysisQuality = require('../services/document-analysis-quality');
+const directAnswerNormalizer = require('../services/direct-answer-normalizer');
 const feedbackLedger = require('../services/agents/feedback-ledger');
 const modelRouter = require('../services/ai-product-os/model-router');
 const modelSyncService = require('../services/model-sync-service');
-const { listManifestModels } = require('../services/model-catalog-manifest');
+const { listManifestModels, DEFAULT_ACTIVE_IMAGE_MODEL_NAMES } = require('../services/model-catalog-manifest');
 const {
   buildUniversalTaskContract,
   buildUniversalContractPrompt,
@@ -162,6 +167,7 @@ const __intentTriageJudge = __ensembleJudges.length > 0
   ? buildEnsembleJudge({ judges: __ensembleJudges, budgetMs: 350 })
   : null;
 const ciraEngine = require('../services/sira/engine');
+const { buildIntegrationRuntimeProfile } = require('../services/ai-product-os/integration-runtime-profile');
 const {
   buildAttributionGraphContext: buildSiraAttributionGraphContext,
   buildLLMUnderstandingPacket,
@@ -172,6 +178,13 @@ const {
 const postResponseBrainHook = require('../services/sira/post-response-brain-hook');
 const coworkEngine = require('../services/cowork-engine');
 const activeMemory = require('../services/active-memory');
+const memoryDecision = require('../services/memory-decision');
+const memoryIntelligence = require('../services/memory-intelligence');
+const memoryEngine = require('../services/memory-engine');
+const memoryMetrics = require('../services/memory-metrics');
+const memorySemantic = require('../services/memory-semantic');
+const memoryLlmExtract = require('../services/memory-llm-extract');
+const memoryDocument = require('../services/memory-document');
 const conversationUnderstanding = require('../services/conversation-understanding');
 const chatAttachmentRecovery = require('../services/chat-attachment-recovery');
 const messageAttachments = require('../services/message-attachments');
@@ -188,6 +201,7 @@ const { exec } = require('child_process');
 // Dependencies ko file ke top par import karen
 const fs = require('fs').promises;
 const fsSync = require('fs'); // ✅ For synchronous file operations
+const objectStorage = require('../services/object-storage');
 const path = require('path');
 const { use } = require('passport');
 
@@ -231,10 +245,10 @@ const DEEPSEEK_TEXT_MODELS = [
 
 const ADMIN_MANAGED_IMAGE_MODELS = listManifestModels({ type: 'IMAGE' });
 const ADMIN_MANAGED_IMAGE_MODEL_NAMES = new Set(ADMIN_MANAGED_IMAGE_MODELS.map(model => model.name));
-const VERIFIED_CHAT_IMAGE_MODEL_NAMES = new Set([
-  'gpt-image-2',
-  'openai/gpt-5.4-image-2',
-]);
+// Allow-list of IMAGE models accepted by /generate-image. Single source of
+// truth shared with the seeding layer (manifest) so any model that is seeded
+// ACTIVE is also accepted here — covering OpenAI, Gemini, OpenRouter and fal.ai.
+const VERIFIED_CHAT_IMAGE_MODEL_NAMES = DEFAULT_ACTIVE_IMAGE_MODEL_NAMES;
 
 function isVerifiedChatImageModelName(name) {
   return VERIFIED_CHAT_IMAGE_MODEL_NAMES.has(String(name || '').trim());
@@ -263,16 +277,44 @@ function createProviderClient(provider) {
   }
 
   if (provider === "OpenRouter") {
-    return new OpenAI({
+    // afford-guard: low-credit 402s retry once with a clamped max_tokens
+    // instead of dead-ending the turn. See services/ai/openrouter-afford-guard.
+    const { wrapOpenRouterClient } = require('../services/ai/openrouter-afford-guard');
+    return wrapOpenRouterClient(new OpenAI({
       apiKey: process.env.OPENROUTER_API_KEY,
       baseURL: "https://openrouter.ai/api/v1",
-    });
+    }));
   }
 
   if (provider === "DeepSeek") {
     return new OpenAI({
       apiKey: process.env.DEEPSEEK_API_KEY,
       baseURL: "https://api.deepseek.com",
+    });
+  }
+
+  // Providers wired via Admin → Connections (the bridge injects the key into
+  // env when the admin saves the connection). Each branch only activates when
+  // its key is present, so an unconfigured provider falls through to the OpenAI
+  // default exactly as before — no behaviour change for existing routing.
+  if (provider === "Cerebras" && process.env.CEREBRAS_API_KEY) {
+    return new OpenAI({
+      apiKey: process.env.CEREBRAS_API_KEY,
+      baseURL: process.env.CEREBRAS_BASE_URL || "https://api.cerebras.ai/v1",
+    });
+  }
+
+  if ((provider === "Z.ai" || provider === "ZAI") && process.env.ZAI_API_KEY) {
+    return new OpenAI({
+      apiKey: process.env.ZAI_API_KEY,
+      baseURL: process.env.ZAI_BASE_URL || "https://api.z.ai/api/paas/v4",
+    });
+  }
+
+  if ((provider === "Kimi" || provider === "Moonshot") && (process.env.MOONSHOT_API_KEY || process.env.KIMI_API_KEY)) {
+    return new OpenAI({
+      apiKey: process.env.MOONSHOT_API_KEY || process.env.KIMI_API_KEY,
+      baseURL: process.env.MOONSHOT_BASE_URL || process.env.KIMI_BASE_URL || "https://api.moonshot.ai/v1",
     });
   }
 
@@ -635,9 +677,31 @@ router.post(
   }
 );
 
+// ✅ Full fal.ai creative-model catalog for the chat model gallery (image /
+// video / audio / 3d), ordered highest→lowest quality. Public + cached; the
+// list is a baked manifest (scripts/build-fal-catalog.js), so this is cheap.
+router.get('/fal-models', optionalAuth, responseCache({ ttlMs: 10 * 60_000, namespace: 'fal-models' }), (req, res) => {
+  try {
+    const { listFalModels, getFalCatalog } = require('../services/fal-model-catalog');
+    const group = Array.isArray(req.query.group) ? req.query.group[0] : req.query.group;
+    const search = Array.isArray(req.query.search) ? req.query.search[0] : req.query.search;
+    if (!group && !search) {
+      const catalog = getFalCatalog();
+      return res.json({ success: true, ...catalog });
+    }
+    const models = listFalModels({ group, search });
+    return res.json({ success: true, count: models.length, models });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: 'fal_catalog_unavailable', message: err.message });
+  }
+});
+
 // ✅ Get available AI models
 router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace: 'ai-models' }), async (req, res) => {
+  const __dbgT0 = Date.now();
+  const __dbg = (m) => { try { console.error(`[models-dbg] +${Date.now() - __dbgT0}ms ${m}`); } catch (_) {} };
   try {
+    __dbg('handler-enter');
     const rawType = Array.isArray(req.query.type) ? req.query.type[0] : req.query.type;
     const type = String(rawType || '').trim().toUpperCase();
     const userPlan = req.user?.plan || 'FREE';
@@ -645,6 +709,7 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
       ? await countDailyApiCalls(req.user.id)
       : null;
     const modelPolicy = buildModelQuotaPolicy(req.user, process.env, { freeDailyCallsUsed });
+    __dbg(`after-quota-policy type=${type}`);
     const wantText = !type || type === 'TEXT';
     const wantImage = !type || type === 'IMAGE';
     const wantVideo = !type || type === 'VIDEO';
@@ -671,6 +736,7 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
     }
 
 
+    __dbg('before-main-findMany');
     let models = await prisma.aiModel.findMany({
       where: whereClause,
       select: {
@@ -685,6 +751,7 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
       },
       orderBy: { createdAt: 'asc' }
     });
+    __dbg(`after-main-findMany count=${models.length}`);
 
     // If OpenRouter is configured but Kimi was never seeded (or DB is empty),
     // expose Kimi K2.6 anyway so the picker always shows it. Skip when a DB row
@@ -706,6 +773,7 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
       }
     }
 
+    __dbg('after-deepseek-block');
     if (wantText && hasEnv('OPENROUTER_API_KEY')) {
       const alreadyListed = models.some((m) => m.name === KIMI_K26_OPENROUTER.name);
       if (!alreadyListed) {
@@ -733,6 +801,7 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
 
     if (type === 'VIDEO') {
       models = curateVisibleAdminMediaModels(models, 'VIDEO');
+      models = sortFalVideoModels(models);
     }
 
     if (wantVoice) {
@@ -805,6 +874,7 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
       }
     }
 
+    __dbg('after-openrouter-block');
     if (wantText) {
       const fallbackModel = buildGema4VirtualModel();
       const alreadyListed = models.some((m) => m.name === fallbackModel.name);
@@ -821,9 +891,11 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
       }
     }
 
+    __dbg('after-fallback-block');
     if (wantText) {
       models = curateVisibleTextModels(models);
     }
+    __dbg('after-curate');
 
     // Plan gating — drop catalogued models the user's plan can't use, but
     // leave models not in the catalog untouched (DB-only / virtual entries
@@ -855,7 +927,9 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
     // their upstream 503 only when actually invoked, instead of being
     // hidden from the picker.
 
+    __dbg(`before-res-json count=${models.length}`);
     res.json({ models, policy: modelPolicy });
+    __dbg('after-res-json');
   } catch (error) {
     console.error('Get AI models error:', error);
     res.status(500).json({ error: 'Failed to fetch AI models' });
@@ -871,8 +945,8 @@ router.post('/intent/semantic', optionalAuth, async (req, res) => {
 
     const analysis = buildSemanticIntentAnalysis({
       rawUserRequest,
-      conversationHistory: Array.isArray(req.body?.conversationHistory) ? req.body.conversationHistory : [],
-      files: Array.isArray(req.body?.files) ? req.body.files : [],
+      conversationHistory: Array.isArray(req.body?.conversationHistory) ? req.body.conversationHistory.slice(0, 100) : [],
+      files: Array.isArray(req.body?.files) ? req.body.files.slice(0, 50) : [],
       userId: req.user?.id || null,
       chatId: typeof req.body?.chatId === 'string' ? req.body.chatId : null,
     });
@@ -1155,6 +1229,46 @@ async function loadUserFile(fileRef, userId) {
   return toProcessedFile(file);
 }
 
+/**
+ * Recover the document(s) a user attached earlier in THIS chat so
+ * follow-up turns keep their context even when the client doesn't
+ * re-send the file ids (the common case: ask once about a doc, then
+ * ask again — or reload the page and ask again). We read the chat's
+ * recent USER messages straight from the DB, pull the attachment ids,
+ * load the files and drop images (only documents are useful as RAG /
+ * text context). Bounded by recency + count, and fail-open: any error
+ * just yields no recovered files so the turn proceeds normally.
+ */
+async function recoverRecentChatDocumentFiles({ chatId, userId, maxFiles = 4, lookbackMessages = 12 } = {}) {
+  if (!chatId || !userId) return [];
+
+  const recent = await prisma.message.findMany({
+    where: { chatId, role: 'USER', deletedAt: null },
+    orderBy: { timestamp: 'desc' },
+    take: lookbackMessages,
+    select: { files: true },
+  });
+  if (!recent.length) return [];
+
+  const ids = [];
+  const seen = new Set();
+  for (const message of recent) {
+    if (!message.files) continue;
+    for (const id of messageAttachments.extractFileIdsFromMessageFiles(message.files)) {
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      ids.push(id);
+      if (ids.length >= maxFiles) break;
+    }
+    if (ids.length >= maxFiles) break;
+  }
+  if (!ids.length) return [];
+
+  const loaded = await Promise.all(ids.map((id) => loadUserFile(id, userId).catch(() => null)));
+  // Only documents help as reusable thread context; skip images + misses.
+  return loaded.filter((f) => f && f.attachmentKind !== 'image');
+}
+
 const normalizeDuplicateTurnContent = (value) =>
   String(value || '').trim().replace(/\s+/g, ' ');
 
@@ -1411,7 +1525,7 @@ async function findExistingGenerateTurn({ chatId, idempotencyKey, streamId, fing
   return { userMessage: matchingUser, assistantMessage: matchingAssistant || null };
 }
 
-async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false, extraMetadata = null, userPlan = null) {
+async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false, extraMetadata = null, userPlan = null, reasoningPayload = null, agentRun = null) {
   const safeExtraMetadata = extraMetadata && typeof extraMetadata === 'object' ? extraMetadata : {};
   const idempotencyKey = safeExtraMetadata.idempotencyKey || null;
   const streamId = safeExtraMetadata.streamId || null;
@@ -1522,6 +1636,12 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
             tokens,
             files: assistantFiles.length > 0 ? JSON.stringify(assistantFiles) : null,
             metadata: metadataPayload,
+            reasoning: (reasoningPayload && typeof reasoningPayload.text === 'string' && reasoningPayload.text.trim())
+              ? reasoningPayload.text
+              : null,
+            reasoningDetails: (reasoningPayload && reasoningPayload.details != null)
+              ? reasoningPayload.details
+              : undefined,
           }
         });
 
@@ -1534,6 +1654,15 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
               : chat.title
           }
         });
+
+        if (agentRun && assistantMessage?.id) {
+          try {
+            const { persistAgentRun } = require('../services/agent-harness/agent-steps-store');
+            await persistAgentRun({ prisma, messageId: assistantMessage.id, run: agentRun, model });
+          } catch (agentPersistErr) {
+            console.warn('[ai/generate] agent run persist failed:', agentPersistErr && agentPersistErr.message);
+          }
+        }
       }
 
       // ✅ Track usage
@@ -1581,6 +1710,9 @@ router.post(
     body('chatId').optional().isString(),
     body('files').optional().isArray(),
     body('idempotencyKey').optional().isString().isLength({ min: 1, max: 200 }),
+    // Composer effort picker (Bajo/Medio/Extra/Max → low/medium/high/max).
+    // Optional; when present it overrides the auto-decided reasoning depth.
+    body('reasoningEffort').optional().isString().isLength({ max: 16 }),
   ],
   authenticateToken,
   requireScope('ai:generate'),
@@ -1643,6 +1775,32 @@ router.post(
       const isAuth = !!req.user;
       const userId = isAuth ? req.user.id : null;
       const canPersist = isAuth && !!chatId;
+
+      // 🔒 IDOR guard (read side): a supplied chatId must reference a chat THIS
+      // user owns — or one that doesn't exist yet (brand-new chat). The
+      // downstream context prefetch + history reads in this handler key on
+      // chatId alone, so without this gate a foreign chatId would inject
+      // another user's conversation history, project documents and custom-GPT
+      // knowledge files into this generation. The WRITE side is already
+      // owner-scoped (saveChatAndTrackUsage uses { id, userId }); this closes
+      // the read side. Single PK lookup, so every later chatId read is safe by
+      // transitivity. Fail-open on a transient DB error (matches the other
+      // reads in this handler) rather than turning a DB blip into a broken chat.
+      if (canPersist && chatId) {
+        try {
+          const __chatOwner = await prisma.chat.findUnique({
+            where: { id: chatId },
+            select: { userId: true },
+          });
+          if (__chatOwner && __chatOwner.userId !== userId) {
+            controller.abort();
+            return res.status(404).json({ error: 'Chat not found' });
+          }
+        } catch (ownerErr) {
+          console.warn('[ai/generate] chat ownership pre-check failed (continuing):', ownerErr?.message || ownerErr);
+        }
+      }
+
       const regenerationAttemptNumber = Math.floor(Number(regenerationAttempt));
       const normalizedRegenerationAttempt = regenerate
         ? Math.max(1, Math.min(999, Number.isFinite(regenerationAttemptNumber) ? regenerationAttemptNumber : 1))
@@ -1791,7 +1949,11 @@ router.post(
               role: (m.role || '').toLowerCase(),
               content: m.content || '',
             }));
-          } catch (_) { /* fail-open: empty history */ }
+          } catch (e) {
+            // Was silently swallowed — that made thread context loss invisible.
+            // Log so we can tell a real DB failure from a genuinely empty chat.
+            console.warn('[ai/generate] early history load failed', { chatId, err: e?.message });
+          }
         }
         req._filterCtx = {
           scope: 'ai.generate',
@@ -1818,9 +1980,16 @@ router.post(
         if (typeof req._filterCtx.prompt === 'string' && req._filterCtx.prompt) {
           prompt = req._filterCtx.prompt;
         }
-        if (req._filterCtx.extraContext) {
-          prompt = String(req._filterCtx.extraContext).trim() + '\n\n' + (prompt || '');
-        }
+        // NOTE: we deliberately do NOT fold `extraContext` into `prompt`.
+        // `prompt` is what gets persisted as the USER message and shown in the
+        // UI, so prepending anything here leaks internal text (e.g. the old
+        // "[Recent user turns]" block) into the visible message — and because
+        // that polluted text is then re-read as history on the next turn, it
+        // compounds/nests on every request. The model already receives the
+        // full conversation history as structured messages, so re-injecting
+        // recent turns into the user prompt is redundant. If a future filter
+        // needs to enrich what the model sees, it must target the system
+        // prompt, never the persisted user prompt.
   
       // ─── SSE resumption preflight ──────────────────────────────────
       // If the client sends `Last-Event-ID: <streamId>:<position>` we
@@ -1935,7 +2104,29 @@ router.post(
           res.write(`: ping ${Date.now()}\n\n`);
           res.write(`data: ${JSON.stringify({ type: 'heartbeat', at: Date.now() })}\n\n`);
         } catch { clearInterval(keepAlive); keepAlive = null; }
-      }, 15000);
+      }, 5000);
+
+      // Document-followup recovery (chat path): when a user asks about an
+      // already-uploaded document WITHOUT re-attaching it, reattach the most
+      // recent chat document so RAG + file context still ground the answer.
+      // Mirrors the agent-task fix — defense-in-depth so document analysis never
+      // silently loses context on a follow-up. Best-effort; never blocks.
+      if (isAuth && userId && canPersist && (!Array.isArray(files) || files.length === 0)
+        && messageAttachments.looksLikeDocumentFollowupQuestion(prompt)) {
+        try {
+          const __reattachedDocs = await messageAttachments.resolveChatDocumentFileIds(prisma, {
+            userId,
+            chatId,
+            providedFileIds: [],
+          });
+          if (Array.isArray(__reattachedDocs) && __reattachedDocs.length > 0) {
+            files = __reattachedDocs;
+            console.log(`[ai/generate] reattached ${__reattachedDocs.length} prior chat document(s) for follow-up question`);
+          }
+        } catch (__reattachErr) {
+          console.warn('[ai/generate] document reattach failed (continuing without):', __reattachErr?.message || __reattachErr);
+        }
+      }
 
       // ✅ Process attached files
       let processedFiles = [];
@@ -1962,6 +2153,40 @@ router.post(
           } catch (attachCtxErr) {
             console.warn('[ai] uploaded file context build failed (continuing with raw extracts):', attachCtxErr.message);
           }
+        }
+      }
+
+      // ✅ Follow-up turns in the same thread: the user asks again about a
+      // document they uploaded earlier WITHOUT re-attaching it. The client
+      // may not re-send the file ids (and can't after a page reload), so we
+      // recover the recently-attached document(s) from this chat's history.
+      // This keeps multi-turn Q&A over an uploaded file working reliably.
+      // Fail-open: any error here just means no recovered files.
+      if (
+        isAuth && userId && canPersist && chatId
+        && processedFiles.length === 0
+        && !operationalRag.isPureGreetingPrompt(prompt)
+      ) {
+        try {
+          const recovered = await recoverRecentChatDocumentFiles({ chatId, userId });
+          if (recovered.length > 0) {
+            processedFiles = recovered;
+            for (const pf of recovered) {
+              if (pf?.openaiFileId) openaiFiles.push(pf.openaiFileId);
+            }
+            try {
+              processedFiles = await chatAttachmentRecovery.refreshProcessedFileExtracts(prisma, processedFiles);
+              uploadedFileContextForTurn = await chatAttachmentRecovery.buildChatUploadedFileContext(
+                prisma,
+                { userId, processedFiles, prompt },
+              );
+            } catch (recoverCtxErr) {
+              console.warn('[ai] recovered file context build failed (continuing with raw extracts):', recoverCtxErr.message);
+            }
+            console.log(`[ai] recovered ${processedFiles.length} document(s) from chat history for follow-up turn (chat ${chatId})`);
+          }
+        } catch (recoverErr) {
+          console.warn('[ai] recent chat document recovery failed (continuing without):', recoverErr.message || recoverErr);
         }
       }
 
@@ -2092,7 +2317,18 @@ router.post(
         if (userId && canPersist && chatId) {
           // Reuse the 80-message snapshot loaded earlier (filter block) to
           // avoid a second identical prisma.message.findMany round-trip.
-          const __historyMsgs = req._earlyHistory80 || [];
+          let __historyMsgs = req._earlyHistory80 || [];
+          // Fallback: if the earlier snapshot is missing (its query threw, or
+          // ran before this turn's rows existed), re-query directly so an
+          // in-thread turn still gets its history instead of threadTurns=0.
+          if (__historyMsgs.length === 0) {
+            __historyMsgs = await prisma.message.findMany({
+              where: { chatId },
+              orderBy: { timestamp: 'desc' },
+              take: 40,
+              select: { role: true, content: true },
+            });
+          }
           // Map oldest → newest, normalized shape for the resolver.
           __conversationHistoryForUnderstanding = __historyMsgs.slice().reverse().map((m) => ({
             role: m.role === 'ASSISTANT' ? 'assistant' : 'user',
@@ -2232,6 +2468,14 @@ router.post(
         ]);
         recalledMemoryFacts = Array.isArray(_memRecalled) ? _memRecalled : [];
         memoryBlock = longTermMemory.buildMemoryBlock(_memRecalled);
+        // Always-on memory DOCUMENT block: surfaces manually-curated and
+        // high-priority identity facts even when no semantic match fired.
+        try {
+          const _docBlock = memoryDocument.buildDocumentBlock(userId, { maxEntries: 12 });
+          if (_docBlock) memoryBlock = `${memoryBlock}\n\n${_docBlock}`;
+        } catch (e) {
+          console.warn(`[ai] memory-document block failed (continuing without): ${e.message}`);
+        }
         crossChatTurnsForAttribution = Array.isArray(_crossChatTurns) ? _crossChatTurns : [];
         if (_crossChatEnabled && _crossChatMod) {
           crossChatBlock = _crossChatMod.buildCrossChatBlock(_crossChatTurns) || '';
@@ -2501,6 +2745,21 @@ router.post(
         console.warn('[saliency] classify failed (continuing without):', salClassErr?.message || salClassErr);
       }
 
+      // Adversarial-prompt safety block — analyses the raw user text for
+      // instruction-override / role-swap / prompt-exfil / jailbreak markers.
+      // Empty string for a normal prompt (verdict 'safe'), so it adds nothing
+      // to the prompt unless the turn looks like a manipulation attempt.
+      // Gated by SIRAGPT_ADVERSARIAL_DISABLED.
+      let adversarialBlock = '';
+      try {
+        if (String(process.env.SIRAGPT_ADVERSARIAL_DISABLED || '').toLowerCase() !== '1') {
+          const adversarialDetector = require('../services/adversarial-prompt-detector');
+          adversarialBlock = adversarialDetector.buildSafetyBlock(adversarialDetector.analyzePrompt(String(prompt || ''))) || '';
+        }
+      } catch (advErr) {
+        console.warn('[adversarial] analyze failed (continuing without):', advErr?.message || advErr);
+      }
+
       // Professional document analysis enrichment ─────────────────────────
       // Builds two markdown blocks the system prompt will absorb:
       //  - ## ATTACHED DOCUMENT PROFILE: per-file structural metadata,
@@ -2514,7 +2773,14 @@ router.post(
       // <20 ms to the chat path on a warm DB. Never throws.
       let documentEnrichment = null;
       let documentEnrichmentBlock = '';
+      let documentAnalysisQualityBlock = '';
       if (processedFiles.length > 0) {
+        documentAnalysisQualityBlock = documentAnalysisQuality.buildPromptBlock({
+          prompt,
+          files: processedFiles,
+          language: (langResolution && langResolution.language) || 'es',
+          source: 'ai.generate',
+        });
         try {
           documentEnrichment = await documentProfessionalAnalyzer.buildEnrichedFileContext({
             prisma,
@@ -3761,6 +4027,7 @@ router.post(
       let intentTriageDecision = null;
       let ciraRuntimeBundle = null;
       let ciraRuntimeBlock = '';
+      let integrationRuntimeProfile = null;
       let enterpriseExecutionBlock = '';
       try {
         universalTaskContract = buildUniversalTaskContract({
@@ -3841,6 +4108,164 @@ router.post(
           console.warn('[intent-triage] failed (continuing without):', triageErr && triageErr.message);
           intentTriageDecision = null;
         }
+
+        // ─── Cognitive core: reasoning orchestrator ───────────────────────
+        // One pure, deterministic decision that assesses difficulty + risk,
+        // recommends the best model for the task, and PLANS how much test-time
+        // compute + verification the turn deserves. Recommend-only by default
+        // (SIRAGPT_AUTO_ROUTING=off): it emits telemetry and stores the
+        // decision on req for later phases (verification / test-time compute)
+        // WITHOUT changing the model. Set SIRAGPT_AUTO_ROUTING=escalate|auto to
+        // let it intelligently re-route the model. Fail-open: any error leaves
+        // the turn untouched.
+        try {
+          const reasoningOrchestrator = require('../services/reasoning-orchestrator');
+          const __ctxChars = Array.isArray(__conversationHistoryForUnderstanding)
+            ? __conversationHistoryForUnderstanding.reduce((sum, t) => sum + String((t && (t.content || t.text)) || '').length, 0)
+            : 0;
+          const __hasImagesForRoute = processedFiles.some((f) => f && isImageMime(f.mimeType));
+          const __hasGrounding = processedFiles.length > 0
+            || !!(operationalRagContext && operationalRagContext.active);
+          // Nivel 1: constrain intelligent routing to models that are actually
+          // reachable (provider key configured + not an aspirational catalog
+          // placeholder), so escalate/auto never re-routes to a dead model id.
+          let __reachableModelIds;
+          try {
+            const modelAvailability = require('../services/model-availability');
+            __reachableModelIds = modelAvailability.reachableModelIds(modelRouter.CATALOG);
+          } catch (_reachErr) { __reachableModelIds = undefined; }
+          // Outcome-based learning: bias routing away from models with a poor
+          // track record for this (intent, difficulty). Penalties only bite when
+          // intelligent routing is enabled; recording is always safe.
+          let __routingFeedback = null;
+          try { __routingFeedback = require('../services/routing-feedback'); } catch (_) { __routingFeedback = null; }
+          const cognitiveDecision = reasoningOrchestrator.decide({
+            prompt,
+            reachableModelIds: __reachableModelIds,
+            penaltyProvider: __routingFeedback ? (sig) => __routingFeedback.getModelPenalties(sig) : undefined,
+            userModel: actualModel,
+            userProvider: actualProvider,
+            plan: (req.user && req.user.plan) || 'FREE',
+            attachments: processedFiles,
+            contextSize: __ctxChars,
+            hasGrounding: __hasGrounding,
+            semanticIntent: semanticIntentAnalysis,
+            language: (langResolution && langResolution.language) || 'es',
+          });
+          req._cognitiveDecision = cognitiveDecision;
+          // User-controlled reasoning effort (composer Bajo/Medio/Extra/Max).
+          // When the user picks an effort, FORCE the compute plan so the
+          // reasoning directive matches their choice instead of the auto plan.
+          try {
+            const __effortOverride = reasoningOrchestrator.computeForEffort(req.body && req.body.reasoningEffort);
+            if (__effortOverride && cognitiveDecision) {
+              cognitiveDecision.compute = __effortOverride;
+              console.log(`[reasoning-effort] user override "${req.body.reasoningEffort}" → mode=${__effortOverride.mode} effort=${__effortOverride.reasoningEffort}`);
+            }
+          } catch (_) { /* effort override must never break the turn */ }
+          try {
+            const __documentCompute = documentAnalysisQuality.upgradeComputeForDocumentAnalysis(
+              cognitiveDecision && cognitiveDecision.compute,
+              { prompt, files: processedFiles },
+            );
+            if (__documentCompute.upgraded && cognitiveDecision) {
+              cognitiveDecision.compute = __documentCompute.compute;
+              console.log(`[document-analysis-quality] upgraded compute: mode=${__documentCompute.compute.mode} effort=${__documentCompute.compute.reasoningEffort} reason=${__documentCompute.reason}`);
+            }
+          } catch (_) { /* document-analysis guard must never break the turn */ }
+          try { console.log(reasoningOrchestrator.summarizeForLog(cognitiveDecision)); } catch (_) { /* noop */ }
+
+          // Instruction-following: extract the user's EXPLICIT constraints
+          // (one paragraph, in English, include X, without Y, max N words) and
+          // inject them as a hard MUST-satisfy checklist so the model honors
+          // them — the #1 perceived-quality lever. Stored on req for the
+          // post-generation adherence check. On unless SIRAGPT_CONSTRAINT_ADHERENCE=0.
+          req._constraints = [];
+          req._constraintBlock = '';
+          try {
+            if (String(process.env.SIRAGPT_CONSTRAINT_ADHERENCE || '').trim().toLowerCase() !== '0'
+              && String(process.env.SIRAGPT_CONSTRAINT_ADHERENCE || '').trim().toLowerCase() !== 'off') {
+              const constraintAdherence = require('../services/constraint-adherence');
+              const __constraints = constraintAdherence.extractConstraints(prompt);
+              if (Array.isArray(__constraints) && __constraints.length > 0) {
+                req._constraints = __constraints;
+                req._constraintBlock = constraintAdherence.buildConstraintPromptBlock(__constraints);
+                console.log(`[constraint-adherence] extracted ${__constraints.length}: ${__constraints.map((c) => c.kind).join(',')}`);
+              }
+            }
+          } catch (_caErr) { /* fail-open: no constraint block */ }
+
+          // A regenerate request is a negative signal: the prior answer for this
+          // signature was unsatisfactory. Feed it into the learning loop.
+          try {
+            if (regenerate && __routingFeedback) {
+              __routingFeedback.recordOutcome({
+                intent: cognitiveDecision.intent,
+                difficulty: cognitiveDecision.difficulty,
+                model: actualModel,
+                outcome: 'regenerated',
+              });
+            }
+          } catch (_) { /* learning must never break the turn */ }
+
+          // Phase 6: record cognitive-core decisions for observability
+          // (router action/difficulty/risk + compute mode). Invisible counters,
+          // no behavior change. Exposed at /metrics.
+          try {
+            const cognitiveMetrics = require('../services/cognitive-metrics');
+            cognitiveMetrics.recordRoutingDecision(cognitiveDecision);
+            cognitiveMetrics.recordCompute({ mode: cognitiveDecision.compute && cognitiveDecision.compute.mode });
+          } catch (_) { /* metrics must never break the turn */ }
+
+          // Phase 3: test-time compute. Turn the orchestrator's compute plan
+          // into a reasoning directive injected into the system prompt (extended
+          // thinking / self-consistency / best-of-N). ADAPTIVE: the directive is
+          // only emitted on moderate/complex turns (buildReasoningDirective
+          // returns '' for easy/direct ones), so simple turns stay fast and
+          // cheap. On by default; disable with SIRAGPT_TEST_TIME_COMPUTE=0|off.
+          // Fail-open.
+          req._reasoningKernelBlock = '';
+          try {
+            const __ttcFlag = String(process.env.SIRAGPT_TEST_TIME_COMPUTE || '').trim().toLowerCase();
+            if (__ttcFlag !== '0' && __ttcFlag !== 'off' && __ttcFlag !== 'false') {
+              const testTimeCompute = require('../services/test-time-compute');
+              req._reasoningKernelBlock = testTimeCompute.buildReasoningDirective(cognitiveDecision, {
+                language: (langResolution && langResolution.language) || 'es',
+              });
+              if (req._reasoningKernelBlock) {
+                console.log(`[test-time-compute] mode=${cognitiveDecision.compute.mode} effort=${cognitiveDecision.compute.reasoningEffort} injected=${req._reasoningKernelBlock.length}c`);
+              }
+            }
+          } catch (_ttcErr) { /* fail-open: no directive */ }
+
+          // Apply intelligent re-routing only when the orchestrator says so AND
+          // it's safe: no images (the vision path owns its own model choice),
+          // a real provider can be inferred, and the target is plan-eligible.
+          const __route = cognitiveDecision.routing;
+          if (
+            __route
+            && __route.shouldApply
+            && __route.selectedModel
+            && __route.selectedModel !== actualModel
+            && !__hasImagesForRoute
+          ) {
+            const __targetModel = __route.selectedModel;
+            const __targetCatalog = modelRouter.getModel(__targetModel);
+            const __planOk = !__targetCatalog
+              || modelRouter.isPlanEligible(__targetCatalog.plans, (req.user && req.user.plan) || 'FREE');
+            const __targetProvider = inferProviderFromModelId(__targetModel) || __route.selectedProvider;
+            if (__planOk && __targetProvider) {
+              console.log(`[reasoning-orchestrator] re-route ${actualProvider}:${actualModel} → ${__targetProvider}:${__targetModel} (${__route.action}/${__route.reason})`);
+              actualModel = __targetModel;
+              actualProvider = __targetProvider;
+            } else {
+              console.log(`[reasoning-orchestrator] re-route skipped for ${__targetModel} (planOk=${__planOk} provider=${__targetProvider || 'none'})`);
+            }
+          }
+        } catch (orchErr) {
+          console.warn('[reasoning-orchestrator] decision failed (continuing without):', orchErr && orchErr.message);
+        }
+
         ciraRuntimeBundle = await ciraEngine.runUserMessage({
           text: prompt,
           attachments: processedFiles.map(toCiraAttachment).filter(Boolean),
@@ -3854,6 +4279,13 @@ router.post(
           requestId: req.requestId || req.id || null,
         });
         ciraRuntimeBlock = buildCiraRuntimePromptBlock(ciraRuntimeBundle);
+        integrationRuntimeProfile = buildIntegrationRuntimeProfile({
+          contract: universalTaskContract,
+          semanticIntentAnalysis,
+          ciraRuntimeBundle,
+          attachments: processedFiles,
+          fileIds: processedFiles.map(f => f.id || f.fileId || f.openaiFileId || f.name || 'attachment'),
+        });
         const aiProductOsProfile = semanticIntentAnalysis ? {
           structuredIntent: {
             intent_primary: semanticIntentAnalysis.structured_intent.intent_primary,
@@ -3898,6 +4330,7 @@ router.post(
             release_decision: ciraRuntimeBundle.final_response_frame?.release_decision || null,
             ready_to_deliver: ciraRuntimeBundle.validation_frame?.ready_to_deliver || false,
           } : null,
+          integrationRuntime: integrationRuntimeProfile?.promptProfile || null,
         };
         enterpriseExecutionBlock = `\n\n${buildEnterpriseExecutionPrompt(enterpriseExecutionGraph)}\n\n${buildAgenticOperatingPrompt(agenticOperatingCore)}\n\nEnterprise runtime profile (policy summary, do not reveal to user):\n${JSON.stringify(enterpriseRuntimeProfile, null, 2)}${ciraRuntimeBlock}`;
       } catch (contractErr) {
@@ -3942,21 +4375,181 @@ router.post(
       // ── Orchestration enrichment: web search + orchestration memory ──
       let webSearchBlock = '';
       let orchMemoryBlock = '';
+      let webSearchSources = null;
+      let webSearchMeta = null;
+      // Callers that want a plain LLM stream (e.g. the /code chat, which
+      // generates code blocks) set disableAgentic:true and must NOT detour
+      // into web search — it adds latency and pollutes the code prompt. An
+      // explicit disableWebSearch:true also opts out.
+      const _webSearchAllowed =
+        req.body.disableAgentic !== true && req.body.disableWebSearch !== true;
       if (typeof prompt === 'string' && prompt.length > 0) {
         // Run web search + orchestration memory in parallel — both are
         // independent reads on the same prompt/userId.
         const _memoryAdapter = userId ? getMemoryAdapter() : null;
+        const _wsStart = Date.now();
         const [_webCtx, _orchMem] = await Promise.all([
-          enrichWithWebSearch(prompt, {
-            mode: webSearchMode === 'dedicated' ? 'dedicated' : 'auto',
-          }).catch(() => null),
+          _webSearchAllowed
+            ? enrichWithWebSearch(prompt, {
+                mode: webSearchMode === 'dedicated' ? 'dedicated' : 'auto',
+              }).catch(() => null)
+            : Promise.resolve(null),
           _memoryAdapter
             ? _memoryAdapter.buildMemoryPrompt(userId, prompt).catch(() => null)
             : Promise.resolve(null),
         ]);
         if (_webCtx?.block) webSearchBlock = _webCtx.block;
         if (_orchMem) orchMemoryBlock = _orchMem;
+        if (Array.isArray(_webCtx?.sources) && _webCtx.sources.length > 0) {
+          const elapsedMs = Date.now() - _wsStart;
+          webSearchSources = _webCtx.sources;
+          webSearchMeta = {
+            provider: _webCtx.source || 'web',
+            query: _webCtx.query || prompt.slice(0, 200),
+            elapsedMs,
+          };
+          // Stream the searched sources to the client so the UI can render
+          // the ChatGPT-style "Fuentes" chip + right-side Activity panel.
+          // Best-effort: never let a socket error break generation.
+          try {
+            res.write(`data: ${JSON.stringify({ type: 'web_sources', provider: webSearchMeta.provider, query: webSearchMeta.query, elapsedMs, sources: webSearchSources })}\n\n`);
+          } catch { /* socket gone */ }
+        }
       }
+
+      // ── Autonomous memory (professional): the turn DECIDES on its own ────
+      // memory-intelligence inspects the prompt and produces a structured
+      // decision: (a) durable FACTS the user shared (precise, typed, with
+      // polarity), (b) a FORGET request, and (c) a confidence-scored RECALL
+      // decision. We store facts (superseding stale single-valued ones so a
+      // new name replaces the old), honour forget requests, and — only when
+      // recall is warranted AND relevant memory clears a relevance bar — inject
+      // it into the prompt (so the model USES it) + stream a `memory` frame
+      // (so the UI shows the "MEMORIA" section). Best-effort: never break the turn.
+      let activeMemoryBlock = '';
+      let memoryItems = null;
+      let memoryMeta = null;
+      try {
+        if (userId && typeof prompt === 'string' && prompt.trim()) {
+          memoryMetrics.record('turn');
+          const mem = memoryIntelligence.analyze(prompt);
+          // (a) FORGET: honour explicit "olvida eso / forget that".
+          if (mem.forget?.should && Array.isArray(mem.forget.targets)) {
+            for (const t of mem.forget.targets) {
+              try {
+                if (t?.query) {
+                  const r = activeMemory.forget(userId, t.query);
+                  if (r?.removed) memoryMetrics.record('forgotten', r.removed);
+                }
+              } catch { /* best effort */ }
+            }
+          }
+          // (b) STORE structured facts; supersede stale single-valued attrs.
+          if (Array.isArray(mem.store?.facts)) {
+            for (const f of mem.store.facts) {
+              try {
+                const entry = activeMemory.createMemoryEntry(userId, f.fact, {
+                  source: 'chat',
+                  category: f.category || 'general',
+                  confidence: typeof f.confidence === 'number' ? f.confidence : 0.8,
+                  metadata: { attribute: f.attribute || null, polarity: f.polarity || 'positive' },
+                });
+                memoryMetrics.record('stored');
+                // A new name/role/company/location/project replaces the old one.
+                if (f.attribute && entry?.id) {
+                  const s = activeMemory.supersede(userId, { category: f.category, attribute: f.attribute, exceptId: entry.id });
+                  if (s?.removed) memoryMetrics.record('superseded', s.removed);
+                }
+              } catch { /* per-fact best effort */ }
+            }
+          }
+          // (b2) LLM-assisted extraction (fire-and-forget): catches durable
+          // facts stated in ANY phrasing the regex misses. Runs after the
+          // response is on its way, so it never adds latency; the facts it finds
+          // are stored for FUTURE recall. No-op when no fast model is configured.
+          if (memoryLlmExtract.available()) {
+            const _uid = userId;
+            const _prompt = prompt;
+            setImmediate(async () => {
+              try {
+                const llmFacts = await memoryLlmExtract.extractFacts(_prompt);
+                for (const f of llmFacts) {
+                  try {
+                    activeMemory.createMemoryEntry(_uid, f.fact, {
+                      source: 'chat-llm',
+                      category: f.category || 'general',
+                      confidence: f.confidence,
+                      metadata: { attribute: null, polarity: f.polarity || 'positive', extractor: 'llm' },
+                    });
+                    memoryMetrics.record('stored');
+                  } catch { /* per-fact */ }
+                }
+              } catch { /* best effort */ }
+            });
+          }
+          // (c) RECALL — use memory WHENEVER it can help, not only on explicit
+          // cues. We consider memory on every substantive turn and let a
+          // relevance bar decide if it's actually needed; an explicit "recuerdas"
+          // lowers the bar. Trivial turns (greetings) skip it entirely.
+          const explicitCue = mem.recall?.should === true;
+          const IMPLICIT_BAR = Number(process.env.SIRAGPT_MEMORY_MIN_RELEVANCE || 0.5);
+          const EXPLICIT_BAR = Number(process.env.SIRAGPT_MEMORY_MIN_RELEVANCE_EXPLICIT || 0.35);
+          if (!memoryIntelligence.isTrivialMessage(prompt)) {
+            // Lexical hits (carry a keyword score) + a read-only recent listing
+            // so MEANING-only matches with no shared words can still surface.
+            let lexical = [];
+            let recent = [];
+            try { lexical = activeMemory.recall(userId, prompt, { limit: 8 }) || []; } catch { lexical = []; }
+            try { recent = activeMemory.listEntries(userId, { limit: 15 }) || []; } catch { recent = []; }
+            let candidates = memoryEngine.dedupeCandidates(lexical, recent);
+            if (candidates.length > 0) {
+              memoryMetrics.record('recall_decision');
+              const reason = explicitCue
+                ? (mem.recall.reason || 'El usuario hace referencia a algo dicho anteriormente.')
+                : 'Datos relevantes de tu memoria para responder mejor.';
+              memoryMetrics.recordReason(reason);
+              // Semantic re-rank: understands MEANING (real embeddings when a key
+              // is configured). Fail-open — keeps lexical order if unavailable.
+              try { candidates = await memorySemantic.semanticRerank(prompt, candidates, { limit: 12 }); } catch { /* keep lexical */ }
+              const bar = explicitCue ? EXPLICIT_BAR : IMPLICIT_BAR;
+              const relevant = candidates.filter((m) => typeof m.score !== 'number' || m.score >= bar);
+            if (relevant.length > 0) {
+              const now = Date.now();
+              // Explainable, blended ranking: surfaces WHY each item was recalled.
+              const ranked = memoryEngine.rankRecall(prompt, relevant, { topics: mem.recall.topics, limit: 6 });
+              memoryItems = ranked.map((m) => ({
+                id: m.id,
+                fact: m.fact,
+                category: m.category || 'general',
+                tier: m.tier || 'short_term',
+                polarity: m.metadata?.polarity || 'positive',
+                confidence: typeof m.confidence === 'number' ? Number(m.confidence.toFixed(2)) : null,
+                relevance: typeof m.blendedScore === 'number' ? m.blendedScore : (typeof m.score === 'number' ? Number(Math.min(1, m.score).toFixed(2)) : null),
+                semantic: typeof m.semantic === 'number' ? Number(Math.min(1, Math.max(0, (m.semantic + 1) / 2)).toFixed(2)) : null,
+                matchedTopics: Array.isArray(m.matchedTopics) ? m.matchedTopics.slice(0, 4) : [],
+                why: m.why || '',
+                ageMs: typeof m.createdAt === 'number' ? Math.max(0, now - m.createdAt) : null,
+              }));
+               memoryMetrics.record('recalled', memoryItems.length);
+               memoryMeta = {
+                 reason,
+                 explicit: explicitCue,
+                 confidence: explicitCue && typeof mem.recall.confidence === 'number' ? mem.recall.confidence : null,
+                 recalled: memoryItems.length,
+               };
+               // Inject so the model actually USES + CITES what it remembered.
+               activeMemoryBlock = memoryEngine.buildBlock(memoryItems);
+               // Stream a memory frame so the UI can render the MEMORIA section.
+               try {
+                 res.write(`data: ${JSON.stringify({ type: 'memory', reason: memoryMeta.reason, confidence: memoryMeta.confidence, items: memoryItems })}\n\n`);
+               } catch { /* socket gone */ }
+             } else {
+               memoryMetrics.record('recall_empty');
+             }
+            }
+          }
+        }
+      } catch (_memErr) { /* memory is best-effort, never break generation */ }
 
       // PR-5: Grounding preface para tareas de alto coste. Detecta si
       // el contrato es de alto coste (presentations, video, deep
@@ -4056,7 +4649,43 @@ router.post(
         console.warn('[ai] llm understanding packet unavailable (continuing without):', llmUnderstandingErr && llmUnderstandingErr.message);
       }
 
-      const systemInstruction = { role: 'system', content: promptBundle.system + openclawRuntimeBlock + llmUnderstandingBlock + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + crossChatBlock + attributionBlock + circuitAttributionBlock + intentAttributionGraphBlock + saliencyBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock };
+      const reasoningEffortBlock = (req._reasoningKernelBlock || '');
+      const constraintBlock = (req._constraintBlock || '');
+
+      // Confidence calibration / abstention: decide whether to answer, answer
+      // with a caveat, ask ONE clarifying question, or refuse-to-invent when
+      // info is missing. Computed here (after web search is known) so a
+      // realtime question that WILL get web results isn't told "I lack data".
+      // On unless SIRAGPT_CONFIDENCE_CALIBRATION=0. Fail-open.
+      let postureDirectiveBlock = '';
+      try {
+        if (String(process.env.SIRAGPT_CONFIDENCE_CALIBRATION || '').trim().toLowerCase() !== '0'
+          && String(process.env.SIRAGPT_CONFIDENCE_CALIBRATION || '').trim().toLowerCase() !== 'off'
+          && req._cognitiveDecision) {
+          const confidenceCalibration = require('../services/confidence-calibration');
+          const __calib = confidenceCalibration.calibrate({
+            prompt,
+            difficulty: req._cognitiveDecision.difficulty,
+            risk: req._cognitiveDecision.risk,
+            hasGrounding: processedFiles.length > 0
+              || !!(operationalRagContext && operationalRagContext.active)
+              || (typeof evidenceBlock === 'string' && evidenceBlock.trim().length > 0),
+            hasWebSearch: typeof webSearchBlock === 'string' && webSearchBlock.trim().length > 0,
+            hasHistory: Array.isArray(__conversationHistoryForUnderstanding) && __conversationHistoryForUnderstanding.length > 0,
+            needsClarification: !!(semanticIntentAnalysis && semanticIntentAnalysis.needs_clarification),
+            triageAction: intentTriageDecision && intentTriageDecision.action,
+          });
+          if (__calib.posture !== 'answer') {
+            postureDirectiveBlock = confidenceCalibration.buildPostureDirective(__calib, {
+              language: (langResolution && langResolution.language) || 'es',
+            });
+          }
+          req._calibration = __calib;
+          console.log(confidenceCalibration.summarizeForLog(__calib));
+        }
+      } catch (_calibErr) { /* fail-open: no posture directive */ }
+
+      const systemInstruction = { role: 'system', content: promptBundle.system + openclawRuntimeBlock + llmUnderstandingBlock + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + activeMemoryBlock + crossChatBlock + attributionBlock + circuitAttributionBlock + intentAttributionGraphBlock + saliencyBlock + adversarialBlock + feedbackBlock + evidenceBlock + documentAnalysisQualityBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock + reasoningEffortBlock + constraintBlock + postureDirectiveBlock };
       // Structured view of the system prompt — same content as
       // `systemInstruction.content`, but split into typed blocks with a
       // `cacheable` hint. When the downstream provider is Anthropic (or
@@ -4082,11 +4711,48 @@ router.post(
         { kind: 'intent-attribution-graph', text: intentAttributionGraphBlock, cacheable: false },
         { kind: 'feedback', text: feedbackBlock, cacheable: false },
         { kind: 'evidence', text: evidenceBlock, cacheable: false },
+        { kind: 'document-analysis-quality', text: documentAnalysisQualityBlock, cacheable: false },
         { kind: 'document-enrichment', text: documentEnrichmentBlock, cacheable: false },
         { kind: 'cowork', text: coworkBlock, cacheable: false },
         { kind: 'web-search', text: webSearchBlock, cacheable: false },
         { kind: 'pr5-grounding', text: __pr5GroundingBlock, cacheable: false },
+        { kind: 'reasoning-effort', text: reasoningEffortBlock, cacheable: false },
+        { kind: 'constraints', text: constraintBlock, cacheable: false },
+        { kind: 'response-posture', text: postureDirectiveBlock, cacheable: false },
       ].filter((b) => typeof b.text === 'string' && b.text.trim().length > 0);
+
+      // Phase 4: prompt kernel — need-based block activation. On easy, low-risk,
+      // non-agentic turns, prune the heavy "attribution theater" + policy blocks
+      // that only dilute the answer and drown the persona + reasoning directive;
+      // keep the full stack for hard/ambiguous/agentic/high-risk turns. Load-
+      // bearing blocks (persona, contract, evidence, memory, reasoning-effort,
+      // constraints, posture) are NEVER dropped. On by default; disable with
+      // SIRAGPT_PROMPT_KERNEL=0|off; fail-open.
+      try {
+        const __pkFlag = String(process.env.SIRAGPT_PROMPT_KERNEL || '').trim().toLowerCase();
+        if (__pkFlag !== '0' && __pkFlag !== 'off' && __pkFlag !== 'false' && req._cognitiveDecision) {
+          const promptKernel = require('../services/prompt-kernel');
+          const __kernelPlan = promptKernel.planBlocks({
+            intent: req._cognitiveDecision.intent,
+            difficulty: req._cognitiveDecision.difficulty,
+            risk: req._cognitiveDecision.risk,
+            signals: {
+              ambiguous: !!(semanticIntentAnalysis && semanticIntentAnalysis.needs_clarification),
+              agentic: !!(intentTriageDecision && intentTriageDecision.action === 'agentic'),
+            },
+            presentKinds: systemBlocks.map((b) => b.kind),
+          });
+          if (__kernelPlan.drop.length > 0) {
+            const __pruned = promptKernel.applyPlan(systemBlocks, __kernelPlan);
+            systemBlocks.length = 0;
+            for (const b of __pruned) systemBlocks.push(b);
+            systemInstruction.content = systemBlocks.map((b) => b.text || '').join('');
+            try { console.log(promptKernel.summarizeForLog(__kernelPlan)); } catch (_) { /* noop */ }
+          }
+        }
+      } catch (__kernelErr) {
+        console.warn('[prompt-kernel] pruning failed (continuing without):', __kernelErr && __kernelErr.message);
+      }
 
       // Prompt-budget allocator — trims overflowing systemBlocks so the
       // stacking attribution / circuit / saliency / RAG / cowork surfaces
@@ -4124,9 +4790,18 @@ router.post(
         historyMessages = await prisma.message.findMany({
           where: { chatId },
           orderBy: { timestamp: 'asc' },
-          select: { role: true, content: true, files: true }
+          // reasoningDetails: raw OpenRouter thinking blocks (incl. signed
+          // Anthropic thinking) replayed verbatim on later turns — see the
+          // history-mapping loop below.
+          select: { role: true, content: true, files: true, reasoningDetails: true }
         });
       }
+      // Anthropic models via OpenRouter require the raw `reasoning_details`
+      // of prior assistant turns replayed INTACT when the conversation
+      // continues (the thinking chain is signed; dropping it breaks
+      // tool-call turns). Other providers never see the field — the gateway
+      // sanitizer strips it for every non-OpenRouter runtime.
+      const __replayReasoningDetails = actualProvider === 'OpenRouter' && /anthropic\//i.test(String(actualModel || ''));
 
       const currentTurnHasNonImageFiles = processedFiles.some(f => !isImageMime(f.mimeType));
       // Decide once whether this turn's image(s) should be handed to a
@@ -4178,9 +4853,10 @@ router.post(
             let textContent = m.content;
 
             if (m.role === 'USER' && imageFiles.length > 0) {
-              textContent += '\n\nIMPORTANT: If the uploaded image(s) contain mathematical equations, formulas, or expressions, ' +
-                'please transcribe and format them using proper LaTeX syntax. Use single dollar signs ($...$) for inline math ' +
-                'and double dollar signs ($$...$$) for display math.';
+              // Task-first: the user's text is the task, the image is its
+              // content. The old "please transcribe" wording hijacked terse
+              // instructions into bare transcriptions.
+              textContent += '\n\n[Image attached: execute the instruction above on its content; format any math you write in LaTeX ($...$ inline, $$...$$ display). Do not merely transcribe unless asked.]';
             }
 
             const contentArray = [
@@ -4191,7 +4867,9 @@ router.post(
               try {
                 const imagePath = imgFile.path;
                 if (imagePath && fsSync.existsSync(imagePath)) {
-                  const imageData = fsSync.readFileSync(imagePath);
+                  // Async read: a multi-MB image read with readFileSync blocks
+                  // the event loop and stalls every concurrent SSE stream.
+                  const imageData = await fs.readFile(imagePath);
                   const base64Image = imageData.toString('base64');
                   const mimeType = imgFile.mimeType || imgFile.type || 'image/png';
 
@@ -4250,7 +4928,13 @@ router.post(
 
             messages.push({
               role: messageRole,
-              content: messageContent
+              content: messageContent,
+              // Replay the signed thinking chain verbatim for Anthropic-via-
+              // OpenRouter turns. The gateway strips this field for every
+              // other runtime, so adding it here is provider-safe.
+              ...(__replayReasoningDetails && messageRole === 'assistant' && m.reasoningDetails
+                ? { reasoning_details: m.reasoningDetails }
+                : {}),
             });
           }
         }
@@ -4275,13 +4959,19 @@ router.post(
         const visionImageFiles = keepImagesForVision
           ? processedFiles.filter(f => isImageMime(f.mimeType))
           : [];
+        const rawFileContext = processedFiles.map(describeFileForText).join('\n\n');
         let fileContext;
         if (visionImageFiles.length > 0) {
-          const textContextFiles = processedFiles.filter(f => !isImageMime(f.mimeType));
+          const textContextFiles = processedFiles.filter((f) => {
+            if (!isImageMime(f.mimeType)) return true;
+            return typeof f.extractedText === 'string' && f.extractedText.trim().length >= 8;
+          });
           fileContext = textContextFiles.map(describeFileForText).join('\n\n');
+        } else if (processedFiles.length > 1) {
+          fileContext = rawFileContext;
         } else {
           fileContext = uploadedFileContextForTurn
-            || processedFiles.map(describeFileForText).join('\n\n');
+            || rawFileContext;
         }
 
         // ✅ Check if there are any image files that might contain math
@@ -4323,18 +5013,18 @@ router.post(
         // ✅ Add LaTeX instruction for images
         let mathInstructions = '';
         if (hasImageFiles) {
-          mathInstructions = '\n\nIMPORTANT: If any uploaded image contains mathematical equations, formulas, or expressions, ' +
-            'please transcribe and format them using proper LaTeX syntax. Use single dollar signs ($...$) for inline math ' +
-            'and double dollar signs ($$...$$) for display math. For example: ' +
-            'Inline: $E = mc^2$ or Display: $$\\int_{-\\infty}^{\\infty} e^{-x^2} dx = \\sqrt{\\pi}$$' +
-            '\n\nExamples of proper LaTeX formatting:' +
-            '\n- Fractions: $\\frac{a}{b}$' +
-            '\n- Square roots: $\\sqrt{x}$ or $\\sqrt[n]{x}$' +
-            '\n- Integrals: $\\int f(x) dx$ or $\\int_{a}^{b} f(x) dx$' +
-            '\n- Summations: $\\sum_{i=1}^{n} x_i$' +
-            '\n- Greek letters: $\\alpha, \\beta, \\gamma, \\pi, \\theta$' +
-            '\n- Subscripts/Superscripts: $x_1, y^2, a_i^j$' +
-            '\n- Matrix: $\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}$';
+          // Task-first protocol. The previous wording ("please transcribe and
+          // format them using proper LaTeX") OVERRODE terse user instructions:
+          // an attached exercise + "resolver" came back as a bare LaTeX
+          // transcription instead of the solved exercise (reported live). The
+          // user's text is the TASK; the image is the content it applies to.
+          mathInstructions = '\n\nIMAGE TASK PROTOCOL:' +
+            '\n- The user\'s instruction is the TASK; the attached image is the CONTENT it applies to.' +
+            '\n- A brief instruction ("resolver", "deriva", "calcula", "simplifica", "solve", "derive", "evaluate") means: perform that operation COMPLETELY, step by step, on the exercise shown in the image — e.g. for a derivative, apply the quotient/chain/product rules and simplify to the final result.' +
+            '\n- NEVER answer with only a transcription or description of the image unless the user explicitly asks for a transcription.' +
+            '\n- Format every mathematical expression in LaTeX: inline $...$, display $$...$$. ' +
+            'Fractions $\\frac{a}{b}$, roots $\\sqrt{x}$, integrals $\\int_{a}^{b} f(x) dx$, sums $\\sum_{i=1}^{n} x_i$, ' +
+            'Greek $\\alpha, \\beta, \\pi$, sub/superscripts $x_1, y^2$, matrices $\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}$.';
         }
 
         const documentTurnGuard = currentTurnHasNonImageFiles
@@ -4342,11 +5032,11 @@ router.post(
             'CURRENT TURN DOCUMENT LOCK:',
             '- The attached document/spreadsheet/PDF files below are the active source for this user request.',
             '- If the user asks for a summary, resumen, analysis, extraction, or explanation, answer from these current files first.',
+            '- META-DOCUMENT TASKS: requests that apply TO the document itself are valid even when the answer is not literally written inside it. In particular, "cita en Vancouver/APA/MLA/Harvard/IEEE/ISO 690", "referencia bibliográfica", "cítame este documento/artículo" mean: BUILD the bibliographic reference of the attached document in that citation style, using its own bibliographic data (title, authors, year, journal/institution, volume/pages, DOI/URL) as found in the text; clearly mark any field the document does not reveal as [no disponible]. With an academic document attached, "cita" means citation/reference — never a calendar appointment. NEVER reply that the material lacks information for these meta-tasks.',
             '- For professional analysis, synthesize the argument and implications; do not reproduce the table of contents, index links, cover metadata, advisor names, or internal extraction labels.',
             '- Never start the final answer with "Indice de contenidos", "Índice de contenidos", raw markdown links, or filename metadata.',
-            messageAttachments.wantsSingleParagraphSynthesis(prompt)
-              ? '- The user requested one paragraph: answer in exactly one polished paragraph, with no heading, no bullets, no table, and no section breaks.'
-              : '',
+            ...documentAnalysisQuality.buildGuardLines(prompt, { files: processedFiles, language: 'en' }),
+            ...messageAttachments.buildFormatDirectiveLines(prompt, { lang: 'en' }),
             '- Do not answer from prior images, weather cards, generated visuals, or unrelated chat history unless the user explicitly asks for that older context.',
             '- Preserve file identity: refer to each attachment by filename and never reinterpret a document as an image.'
           ].filter(Boolean).join('\n')
@@ -4660,8 +5350,14 @@ router.post(
           for (const f of processedFiles) {
             if (!f || !f.mimeType || !f.mimeType.startsWith('image/')) continue;
             try {
-              if (f.path && fsSync.existsSync(f.path)) {
-                const b64 = fsSync.readFileSync(f.path).toString('base64');
+              if (f.path && objectStorage.isRemote(f.path)) {
+                // Image lives in R2 — pull the bytes to base64-encode for vision.
+                const { stream } = await objectStorage.readStream(f.path);
+                const chunks = [];
+                for await (const c of stream) chunks.push(c);
+                imageDataUrls.push(`data:${f.mimeType};base64,${Buffer.concat(chunks).toString('base64')}`);
+              } else if (f.path && fsSync.existsSync(f.path)) {
+                const b64 = (await fs.readFile(f.path)).toString('base64');
                 imageDataUrls.push(`data:${f.mimeType};base64,${b64}`);
               }
             } catch (readErr) {
@@ -4696,6 +5392,11 @@ router.post(
           console.warn('[artifact] branch errored, falling through:', artifactErr.message);
         }
       }
+      // Collector filled by aiService.generateStream when the model streams
+      // chain-of-thought: { text, details, durationMs }. Declared at handler
+      // scope (NOT inside the !artifactHandled block) because the persistence
+      // path below reads it for every branch.
+      const __reasoningSink = {};
       try {
         if (!artifactHandled) {
         // Keep images in the payload whenever this turn can reach a vision
@@ -4730,6 +5431,10 @@ router.post(
             planTier: __spanPlanTier,
           },
           async (span) => {
+            // Set true once the agentic loop has streamed a sentinel to the
+            // client; if we then fall back to the plain stream we must wipe
+            // that sentinel first (aiService.generateStream only appends).
+            let __agenticDidStream = false;
             // ─── Agentic chat path (feature-flagged) ─────────────────
             // When AGENTIC_TOOLS_IN_CHAT=1 AND the selected model can
             // do OpenAI-style tool calls AND there are no images
@@ -4741,41 +5446,161 @@ router.post(
             try {
               const agenticStream = require('../services/agentic-chat-stream');
               const hasImages = (filesForVision || []).some(f => f && f.mimeType && f.mimeType.startsWith('image/'));
+              const priorHistory = Array.isArray(messages) ? messages.slice(0, -1) : [];
+              const shouldRunAgentic = agenticStream.shouldUseAgenticChat({
+                prompt,
+                history: priorHistory,
+                files: filesForVision || [],
+              });
+              // Tool-calling fallback ladder: 'native' (OpenAI-style
+              // tool_calls), 'prompted' (tools described in the system prompt,
+              // fenced-JSON calls parsed back — lets ANY model drive the
+              // loop), or 'none' (prompted disabled via env → legacy gate).
+              const __toolCallMode = agenticStream.resolveToolCallMode(actualProvider, actualModel);
               if (
                 agenticStream.isEnabled()
-                && agenticStream.modelSupportsFunctionCalling(actualProvider, actualModel)
+                && shouldRunAgentic
+                // Callers that want a plain LLM stream (e.g. the /code chat,
+                // which generates code blocks and must never detour into the
+                // web_search/artifact agentic loop) set disableAgentic:true.
+                && req.body.disableAgentic !== true
+                && __toolCallMode !== 'none'
                 && !hasImages
               ) {
                 const agenticClient = createProviderClient(actualProvider);
-                const priorHistory = Array.isArray(messages) ? messages.slice(0, -1) : [];
                 const agenticFileIds = (processedFiles || [])
                   .map((file) => file && (file.id || file.fileId || file.uploadId || file.databaseId))
                   .filter(Boolean)
                   .map(String);
+                // Inject the attached documents' extracted text directly into the
+                // agentic loop so it ALWAYS sees the content (the loop used to get
+                // only fileIds + a "call rag_retrieve" hint, so weak tool-callers
+                // or a RAG miss made it answer "no tengo acceso al documento").
+                // Per-file budget keeps multi-file turns ("compara estos 2") fair;
+                // rag_retrieve/docintel remain the fallback for the overflow.
+                let agenticAttachedDocuments = '';
+                try {
+                  const agenticDocs = (processedFiles || [])
+                    .filter((file) => file && !isImageMime(file.mimeType || file.type));
+                  const AGENTIC_DOC_INJECT_CHARS = Number(process.env.SIRAGPT_AGENTIC_DOC_INJECT_CHARS) || 120000;
+                  const perFileCap = agenticDocs.length
+                    ? Math.max(8000, Math.floor(AGENTIC_DOC_INJECT_CHARS / agenticDocs.length))
+                    : AGENTIC_DOC_INJECT_CHARS;
+                  agenticAttachedDocuments = agenticDocs.map((file) => {
+                    const name = file.originalName || file.name || file.filename || 'documento';
+                    const raw = typeof file.extractedText === 'string' ? file.extractedText.trim() : '';
+                    let body = raw
+                      ? messageAttachments.prepareDocumentTextForProfessionalSynthesis(raw)
+                      : messageAttachments.describeUnextractedAttachment(file);
+                    if (body && body.length > perFileCap) {
+                      body = body.slice(0, perFileCap) + '\n... [contenido recortado por límite; usa rag_retrieve para el resto] ...';
+                    }
+                    return body ? `--- ${name} ---\n${body}` : null;
+                  }).filter(Boolean).join('\n\n');
+                } catch (_) { agenticAttachedDocuments = ''; }
+                // Inject the custom GPT persona into the agentic loop so a
+                // selected GPT actually follows its own instructions. The agentic
+                // path previously dropped it entirely (only the plain stream got
+                // it via masterPrompt.buildSystemPrompt) — reuse the SAME builder.
+                let agenticCustomGptPersona = '';
+                try {
+                  agenticCustomGptPersona = customGpt ? (masterPrompt.buildCustomGptPromptBlock(customGpt) || '') : '';
+                } catch (_) { agenticCustomGptPersona = ''; }
+                __agenticDidStream = true;
                 const agenticResult = await agenticStream.runAgenticChat({
                   openai: agenticClient,
                   model: actualModel,
+                  provider: actualProvider,
+                  attachedDocuments: agenticAttachedDocuments,
+                  customGptPersona: agenticCustomGptPersona,
+                  customGptCapabilities: customGpt ? (customGpt.capabilities || null) : null,
+                  // Actions execute with the CREATOR's encrypted auth secret, so
+                  // only inject them when the current user IS the creator. This
+                  // prevents a non-owner (incl. anyone using a PUBLIC GPT, or a
+                  // foreign chatId) from making external calls authenticated with
+                  // someone else's stored credentials.
+                  customGptActions:
+                    customGpt && userId && customGpt.creatorId === userId
+                      ? (customGpt.actions || null)
+                      : null,
                   userQuery: prompt,
                   history: priorHistory,
                   res,
                   signal,
+                  toolCallMode: __toolCallMode,
+                  // A1: per-turn tool selection context — the cognitive decision
+                  // (intent/difficulty) lets the agentic loop hand the model a
+                  // small, relevant tool subset instead of all ~37-73 tools.
+                  selection: {
+                    decision: req._cognitiveDecision || null,
+                    signals: {
+                      hasFiles: Array.isArray(agenticFileIds) && agenticFileIds.length > 0,
+                      hasCode: !!(req._cognitiveDecision && req._cognitiveDecision.difficulty && req._cognitiveDecision.difficulty.hasCode),
+                    },
+                  },
                   toolContext: {
                     userId,
                     chatId: canPersist ? chatId : null,
                     userEmail: req.user?.email || null,
+                    clearance: req.user?.clearance || null,
                     prisma,
                     openai: agenticClient,
                     collection: 'default',
                     fileIds: agenticFileIds,
+                    // Lets media-intent treat edit phrasings ("mejora la
+                    // calidad", "recorta la imagen") as img2img edits.
+                    hasImageAttachment: (processedFiles || []).some(
+                      (file) => file && isImageMime(file.mimeType || file.type)
+                    ),
                   },
                 });
-                return agenticResult.finalAnswer || '';
+                // The agentic loop reports success via stoppedReason:
+                // 'finalized' (model called the finalize tool) or
+                // 'plain_text_finalize' (model answered directly). ANY other
+                // reason (max_steps / model_error / no_message / aborted /
+                // runtime_budget_exhausted / degraded_no_finalize / tool_*) is
+                // a degraded run whose finalAnswer is empty OR a generic
+                // apology ("No logré cerrar la tarea…"). Returning either of
+                // those is what surfaced "El asistente dejó de responder" /
+                // the apology on perfectly simple prompts.
+                const __agenticAnswer = (agenticResult && typeof agenticResult.finalAnswer === 'string')
+                  ? agenticResult.finalAnswer.trim()
+                  : '';
+                const __SUCCESS_REASONS = new Set(['finalized', 'plain_text_finalize']);
+                const __agenticOk =
+                  agenticResult
+                  && __SUCCESS_REASONS.has(agenticResult.stoppedReason)
+                  && __agenticAnswer.length > 0
+                  && __agenticAnswer !== '(agent returned empty message)';
+                if (__agenticOk) {
+                  // Carry the harness trace to the persistence layer so the
+                  // assistant message gets agent_steps + agent_metadata.
+                  req._agentRun = agenticResult.agentRun || null;
+                  return agenticResult.finalAnswer;
+                }
+                // Stop button / client abort: keep the partial trace and mark
+                // the run interrupted — what WAS generated stays visible.
+                if (agenticResult && agenticResult.stoppedReason === 'aborted' && agenticResult.agentRun) {
+                  req._agentRun = agenticResult.agentRun;
+                }
+                // Degraded/empty → do NOT return it. Fall through to the
+                // reliable plain stream below; aiService.generateStream emits a
+                // `replace` frame that overwrites any agent-task-state sentinel
+                // already streamed, so the user always gets a real answer.
+                console.warn('[agentic-chat] degraded result (stoppedReason=' + (agenticResult && agenticResult.stoppedReason) + ', len=' + __agenticAnswer.length + ') — falling back to plain stream');
               }
             } catch (agenticErr) {
               console.warn('[agentic-chat] loop failed, falling back to plain stream:', agenticErr && agenticErr.message);
-              // Fall through to aiService.generateStream below. The
-              // sentinel block we may have already written is harmless:
-              // the next replace frame from aiService overwrites it.
+              // Fall through to aiService.generateStream below.
+            }
+
+            // If the agentic path streamed a sentinel (success-but-degraded or
+            // a throw mid-loop) we must CLEAR the client buffer before the
+            // plain stream: aiService.generateStream APPENDS content frames and
+            // does NOT emit a leading replace, so without this the plain answer
+            // would render glued onto the discarded agent-task-state sentinel.
+            if (__agenticDidStream && !res.writableEnded) {
+              try { res.write(`data: ${JSON.stringify({ replace: true, content: '' })}\n\n`); } catch (_) { /* socket gone */ }
             }
 
             const out = await aiService.generateStream({
@@ -4792,6 +5617,7 @@ router.post(
               userPrompt: prompt,
               qualityGuard: true,
               skipDoneSentinel: true,
+              reasoningSink: __reasoningSink,
             });
             // Annotate the span with tokensIn / tokensOut now that we
             // have a final completion. Best-effort: failures don't
@@ -4807,9 +5633,65 @@ router.post(
                 });
               }
             } catch (_e) { /* swallow */ }
+            // Emit a REAL token-usage frame so the /code chat (and any consumer)
+            // can show an honest "Agent Usage" in its Worked Summary. Cost comes
+            // from model-pricing-service, raced against an 800ms cap so a cold
+            // price fetch never stalls the stream close. Guarded + best-effort:
+            // a failure here must never break the stream. Unknown to other
+            // consumers (they ignore frames with an unrecognised `type`).
+            try {
+              if (!res.writableEnded) {
+                const usageTokensIn = usageService.calculateTextTokens(prompt || '', actualModel);
+                const usageTokensOut = usageService.calculateTextTokens(out || '', actualModel);
+                let usageCostOriginalUsd = null;
+                let usageCostAppliedUsd = null;
+                try {
+                  const modelPricing = require('../services/model-pricing-service');
+                  const pricing = await Promise.race([
+                    modelPricing.resolvePricing(actualModel).catch(() => null),
+                    new Promise((r) => { const tm = setTimeout(() => r(null), 800); if (tm.unref) tm.unref(); }),
+                  ]);
+                  if (pricing && (pricing.input != null || pricing.output != null)) {
+                    // List price from the provider's per-token rates (Agent Usage original).
+                    usageCostOriginalUsd = (usageTokensIn / 1e6) * (pricing.input || 0) + (usageTokensOut / 1e6) * (pricing.output || 0);
+                    // Applied price via the app's real plan-pricing policy (the
+                    // struck-through → optimized figure). Unknown plan → no discount.
+                    try {
+                      const { applyPlanPricing } = require('../services/codex/pricing-policy');
+                      const userPlan = (req.user && req.user.plan) ? req.user.plan : 'PRO';
+                      usageCostAppliedUsd = applyPlanPricing(userPlan, usageCostOriginalUsd).costAppliedUsd;
+                    } catch { usageCostAppliedUsd = usageCostOriginalUsd; }
+                  }
+                } catch { /* pricing unavailable → emit tokens only */ }
+                res.write(`data: ${JSON.stringify({ type: 'usage', tokensIn: usageTokensIn, tokensOut: usageTokensOut, model: actualModel, ...(usageCostOriginalUsd != null ? { costOriginalUsd: usageCostOriginalUsd, costAppliedUsd: usageCostAppliedUsd != null ? usageCostAppliedUsd : usageCostOriginalUsd } : {}) })}\n\n`);
+              }
+            } catch (_e) { /* usage frame is best-effort */ }
             return out;
           },
         );
+
+        if (processedFiles.length > 0) {
+          try {
+            const directContext = uploadedFileContextForTurn
+              || chatAttachmentRecovery.buildProcessedFilesContext(processedFiles, prompt);
+            const directAnswer = chatAttachmentRecovery.buildDirectExtractedFieldAnswer(prompt, directContext);
+            const directShortRequest = /\b(?:solo\s+(?:el\s+)?n[uú]mero|solo\s+una\s+palabra|una\s+sola\s+palabra|one\s+word|only\s+the\s+(?:number|word))\b/i.test(prompt);
+            const allowDirectFieldRecovery = processedFiles.length === 1 || directShortRequest;
+            if (allowDirectFieldRecovery && chatAttachmentRecovery.shouldUseDirectExtractedFieldAnswer({
+              prompt,
+              response: fullResponseContent,
+              directAnswer,
+            })) {
+              if (!res.writableEnded) {
+                res.write(`data: ${JSON.stringify({ replace: true, content: directAnswer })}\n\n`);
+              }
+              fullResponseContent = directAnswer;
+              console.log(`[ai] direct extracted-field recovery applied (${directAnswer.length} chars)`);
+            }
+          } catch (directRecoveryErr) {
+            console.warn('[ai] direct extracted-field recovery failed:', directRecoveryErr.message);
+          }
+        }
 
         if (
           processedFiles.length > 0
@@ -4830,7 +5712,9 @@ router.post(
               reason: 'chat_attachment_recovery',
             });
             const cleanRecovered = (recovered || '').trim();
-            if (cleanRecovered && cleanRecovered.length >= 40) {
+            const acceptShortRecovered = /\b(?:solo\s+(?:el\s+)?n[uú]mero|solo\s+una\s+palabra|una\s+sola\s+palabra|one\s+word|only\s+the\s+(?:number|word))\b/i.test(prompt)
+              && cleanRecovered.length >= 1;
+            if (cleanRecovered && (cleanRecovered.length >= 40 || acceptShortRecovered)) {
               if (!res.writableEnded) {
                 res.write(`data: ${JSON.stringify({ replace: true, content: cleanRecovered })}\n\n`);
               }
@@ -4840,6 +5724,142 @@ router.post(
           } catch (recoveryErr) {
             console.warn('[ai] attachment recovery failed:', recoveryErr.message);
           }
+        }
+
+        if (processedFiles.length > 0 && fullResponseContent) {
+          try {
+            const spreadsheetDirectShortRequest = /\b(?:solo\s+(?:el\s+)?n[uú]mero|solo\s+una\s+palabra|una\s+sola\s+palabra|one\s+word|only\s+the\s+(?:number|word))\b/i.test(prompt);
+            const allowSpreadsheetDirectRecovery = processedFiles.length === 1 || spreadsheetDirectShortRequest;
+            const spreadsheetDirect = allowSpreadsheetDirectRecovery
+              ? documentAnalysisQuality.buildSpreadsheetDirectAnswer({
+                prompt,
+                response: fullResponseContent,
+                files: processedFiles,
+              })
+              : null;
+            if (spreadsheetDirect?.answer) {
+              if (!res.writableEnded) {
+                res.write(`data: ${JSON.stringify({ replace: true, content: spreadsheetDirect.answer })}\n\n`);
+              }
+              fullResponseContent = spreadsheetDirect.answer;
+              console.log(`[ai] spreadsheet direct recovery applied op=${spreadsheetDirect.operation} rows=${(spreadsheetDirect.rows || []).join(',')} column=${spreadsheetDirect.column || '-'} source=${spreadsheetDirect.source || '-'}`);
+            }
+            const spreadsheetFollowUp = documentAnalysisQuality.buildSpreadsheetFollowUpAnswer({
+              prompt,
+              response: fullResponseContent,
+              files: processedFiles,
+              history: historyMessages,
+            });
+            if (spreadsheetFollowUp?.answer) {
+              if (!res.writableEnded) {
+                res.write(`data: ${JSON.stringify({ replace: true, content: spreadsheetFollowUp.answer })}\n\n`);
+              }
+              fullResponseContent = spreadsheetFollowUp.answer;
+              console.log(`[ai] spreadsheet follow-up recovery applied row=${spreadsheetFollowUp.rowLabel} column=${spreadsheetFollowUp.column || '-'} source=${spreadsheetFollowUp.source || '-'}`);
+            }
+          } catch (spreadsheetRecoveryErr) {
+            console.warn('[ai] spreadsheet follow-up recovery failed:', spreadsheetRecoveryErr.message);
+          }
+        }
+
+        if (fullResponseContent) {
+          try {
+            const normalizedDirectAnswer = directAnswerNormalizer.normalizeDirectAnswer({
+              prompt,
+              response: fullResponseContent,
+            });
+            if (normalizedDirectAnswer) {
+              if (!res.writableEnded) {
+                res.write(`data: ${JSON.stringify({ replace: true, content: normalizedDirectAnswer })}\n\n`);
+              }
+              fullResponseContent = normalizedDirectAnswer;
+              console.log(`[ai] direct answer normalization applied (${normalizedDirectAnswer.length} chars)`);
+            }
+          } catch (normalizationErr) {
+            console.warn('[ai] direct answer normalization failed:', normalizationErr.message);
+          }
+        }
+
+        // ─── Cognitive core: selective faithfulness / grounding self-check ──
+        // When the reasoning orchestrator flagged this turn for verification
+        // (grounded + non-trivial, or high-stakes domain), score the final
+        // answer against the grounding context. If it makes ungrounded claims
+        // (numbers/entities/URLs not in the evidence), append a transparent
+        // "self-check" footer flagging the unverified items (localized to the
+        // user's language). ADAPTIVE: only runs on grounded, non-trivial turns
+        // the orchestrator flagged AND only annotates when the answer scores
+        // below threshold — clean answers ship untouched. On by default;
+        // disable with SIRAGPT_FAITHFULNESS_CHECK=0|off; fail-open so a bad
+        // check never blocks the reply. Skipped on artifact turns (we're inside
+        // `if (!artifactHandled)`).
+        try {
+          const __faithFlag = String(process.env.SIRAGPT_FAITHFULNESS_CHECK || '').trim().toLowerCase();
+          const __faithCheckOn = __faithFlag !== '0' && __faithFlag !== 'off' && __faithFlag !== 'false';
+          if (__faithCheckOn && req._cognitiveDecision && fullResponseContent) {
+            const faithGate = require('../services/chat-faithfulness-gate');
+            const __faith = faithGate.verify({
+              response: fullResponseContent,
+              decision: req._cognitiveDecision,
+              language: (langResolution && langResolution.language) || 'es',
+              blocks: {
+                evidenceBlock,
+                uploadedFileContext: uploadedFileContextForTurn,
+                documentEnrichmentBlock,
+                memoryBlock,
+                activeMemoryBlock,
+                crossChatBlock,
+                webSearchBlock,
+              },
+            });
+            if (__faith.ran) {
+              console.log(`[faithfulness-gate] ran action=${__faith.action} grade=${__faith.grade || '-'} score=${__faith.score ?? '-'} sources=${__faith.contextSources} model=${actualModel}`);
+              // Phase 6: faithfulness grade per model (observability).
+              try { require('../services/cognitive-metrics').recordFaithfulness({ grade: __faith.grade, action: __faith.action, model: actualModel }); } catch (_) { /* noop */ }
+              // Outcome learning: feed the faithfulness grade back into routing
+              // so chronically-ungrounded models get deprioritized for this signature.
+              try {
+                const __rf = require('../services/routing-feedback');
+                const __g = String(__faith.grade || '');
+                const __outcome = (__g === 'D' || __g === 'F') ? 'low_faithfulness'
+                  : (__g === 'A' || __g === 'B') ? 'high_faithfulness' : null;
+                if (__outcome && req._cognitiveDecision) {
+                  __rf.recordOutcome({ intent: req._cognitiveDecision.intent, difficulty: req._cognitiveDecision.difficulty, model: actualModel, outcome: __outcome });
+                }
+              } catch (_) { /* noop */ }
+            }
+            if (__faith.action === 'annotate' && __faith.footer && !res.writableEnded) {
+              res.write(`data: ${JSON.stringify({ content: __faith.footer })}\n\n`);
+              fullResponseContent = `${fullResponseContent}${__faith.footer}`;
+            }
+          }
+        } catch (faithErr) {
+          console.warn('[faithfulness-gate] check failed (continuing without):', faithErr && faithErr.message);
+        }
+
+        // Instruction-following audit: verify the final answer against the
+        // user's explicit constraints (one paragraph, language, include/exclude,
+        // word count). Observability only here — the pre-generation checklist is
+        // the prevention; this surfaces any miss for telemetry + the learning
+        // loop. Fail-open; never blocks the reply.
+        try {
+          if (Array.isArray(req._constraints) && req._constraints.length > 0 && fullResponseContent) {
+            const constraintAdherence = require('../services/constraint-adherence');
+            const __adh = constraintAdherence.verifyAdherence(fullResponseContent, req._constraints);
+            console.log(constraintAdherence.summarizeForLog(__adh));
+            if (!__adh.satisfied) {
+              // A constraint miss is a negative quality signal for the router.
+              try {
+                require('../services/routing-feedback').recordOutcome({
+                  intent: req._cognitiveDecision && req._cognitiveDecision.intent,
+                  difficulty: req._cognitiveDecision && req._cognitiveDecision.difficulty,
+                  model: actualModel,
+                  outcome: 'constraint_violation',
+                });
+              } catch (_) { /* noop */ }
+            }
+          }
+        } catch (caVerifyErr) {
+          console.warn('[constraint-adherence] verify failed (continuing without):', caVerifyErr && caVerifyErr.message);
         }
 
         if (cacheHandle) cacheHandle.complete();
@@ -4998,7 +6018,9 @@ router.post(
               reason: apiError?.message || 'stream_failed',
             });
             const cleanRecovered = (recovered || '').trim();
-            if (cleanRecovered.length >= 40) {
+            const acceptShortRecovered = /\b(?:solo\s+(?:el\s+)?n[uú]mero|solo\s+una\s+palabra|una\s+sola\s+palabra|one\s+word|only\s+the\s+(?:number|word))\b/i.test(prompt)
+              && cleanRecovered.length >= 1;
+            if (cleanRecovered.length >= 40 || acceptShortRecovered) {
               fullResponseContent = cleanRecovered;
               if (!res.writableEnded) {
                 res.write(`data: ${JSON.stringify({ replace: true, content: cleanRecovered })}\n\n`);
@@ -5212,6 +6234,13 @@ router.post(
           ...(normalizedRegenerationAttempt ? { regeneration: { attempt: normalizedRegenerationAttempt } } : {}),
           ...(idempotencyKey ? { idempotencyKey } : {}),
           ...(streamId ? { streamId } : {}),
+          ...(webSearchSources ? { webSources: webSearchSources, webSearchMeta } : {}),
+          ...(memoryItems ? { memory: memoryItems, memoryMeta } : {}),
+          // Thinking duration for the collapsed trace header ("Pensó durante
+          // 12 s") on historically loaded messages.
+          ...(__reasoningSink && __reasoningSink.durationMs
+            ? { reasoningDurationMs: __reasoningSink.durationMs }
+            : {}),
         };
         const savedChat = await saveChatAndTrackUsage(
           userId,
@@ -5225,6 +6254,8 @@ router.post(
           regenerate,
           Object.keys(assistantMeta).length > 0 ? assistantMeta : null,
           req.user?.plan || null,
+          __reasoningSink,
+          req._agentRun || null,
         );
         if (req._activeGenerateTurn && !req._activeGenerateTurn.settled) {
           req._activeGenerateTurn.resolve(savedChat);
@@ -5534,9 +6565,11 @@ router.post(
 
 
           const imagePromise = openai.images.generate({
+            // Google's OpenAI-compatible image endpoint returns b64_json by
+            // default and REJECTS `response_format` with
+            // "400 Unknown parameter: 'response_format'". Do not send it.
             model: "imagen-3.0-generate-002",
             prompt: prompt,
-            response_format: "b64_json",
             n: 1,
             size: "1024x1024"
           });
@@ -5710,6 +6743,7 @@ function normalizeImageAspectRatio(value) {
 function imageGenerationSizeFor(provider, aspectRatio) {
   if (provider === "Gemini") return "1024x1024";
   if (provider === "OpenRouter") return "1024x1024";
+  if (provider === "Fal") return "1024x1024"; // fal.ai uses image_size enum; px size unused
   if (aspectRatio === '2:3' || aspectRatio === '3:4' || aspectRatio === '9:16') return "1024x1792";
   if (aspectRatio === '3:2' || aspectRatio === '4:3' || aspectRatio === '16:9') return "1792x1024";
   return "1024x1024";
@@ -5745,6 +6779,34 @@ function usagePayloadFor(user) {
 
 function openRouterImageSizeFor(quality) {
   return quality === '2K' || quality === '4K' ? '2K' : '1K';
+}
+
+const ENGINE_PROVIDER_TO_ROUTE_PROVIDER = {
+  openai: 'OpenAI',
+  gemini: 'Gemini',
+  openrouter: 'OpenRouter',
+  fal: 'Fal',
+  xai: 'xAI',
+};
+
+function toImageEngineProvider(provider) {
+  const normalized = String(provider || '').trim().toLowerCase();
+  if (normalized === 'openrouter') return 'openrouter';
+  if (normalized === 'openai') return 'openai';
+  if (normalized === 'gemini') return 'gemini';
+  if (normalized === 'fal' || normalized === 'fal.ai') return 'fal';
+  if (normalized === 'xai' || normalized === 'x-ai') return 'xai';
+  return undefined;
+}
+
+function fromImageEngineProvider(provider, fallback) {
+  return ENGINE_PROVIDER_TO_ROUTE_PROVIDER[String(provider || '').trim().toLowerCase()] || fallback;
+}
+
+function imageProviderAttemptTimeoutMs() {
+  const raw = Number(process.env.CHAT_IMAGE_PROVIDER_TIMEOUT_MS || process.env.IMAGE_GEN_PROVIDER_TIMEOUT_MS || 120000);
+  if (!Number.isFinite(raw)) return 120000;
+  return Math.min(180000, Math.max(5000, raw));
 }
 
 // gpt-image-2 only accepts a fixed set of sizes (1024x1024 | 1536x1024 |
@@ -5849,10 +6911,10 @@ function createOpenRouterClient() {
   });
 }
 
-// Reliable OpenRouter image fallback — FLUX 1.1 Pro has broad endpoint
-// availability and does not require special output-modality negotiation.
-// Replaces gpt-5.4-image-2 which was returning ECONNRESET on OpenRouter.
-const BEST_OPENROUTER_IMAGE_MODEL = 'black-forest-labs/flux-1.1-pro';
+// Reliable OpenRouter image fallback. Keep this aligned with the current
+// OpenRouter model catalog: the route uses it when a requested image model has
+// no usable image output endpoint.
+const BEST_OPENROUTER_IMAGE_MODEL = 'google/gemini-2.5-flash-image';
 
 async function generateOpenRouterImage(openrouter, { model, prompt, aspectRatio, quality, signal }) {
   if (!process.env.OPENROUTER_API_KEY) {
@@ -5904,9 +6966,73 @@ async function generateOpenRouterImage(openrouter, { model, prompt, aspectRatio,
   }
 }
 
+// Map the app's "w:h" aspect ratio to fal.ai's `image_size` enum. fal.ai flux
+// endpoints accept a fixed set of named sizes (or an explicit {width,height});
+// we use the named enum so requests stay valid across flux/schnell|dev|pro.
+function falImageSizeFor(aspectRatio) {
+  switch (aspectRatio) {
+    case '9:16':
+    case '2:3': return 'portrait_16_9';
+    case '3:4': return 'portrait_4_3';
+    case '16:9':
+    case '3:2': return 'landscape_16_9';
+    case '4:3': return 'landscape_4_3';
+    case '1:1':
+    default: return 'square_hd';
+  }
+}
+
+// Generate an image via fal.ai (FLUX family). fal.ai is fast (~1-3s for schnell)
+// which sidesteps the GCLB ~30s response cut that made the slower OpenAI/Gemini
+// paths drop the connection. Returns the image as a base64 string (no data:
+// prefix) to match the other provider branches. Accepts FAL_KEY or FAL_API_KEY.
+async function generateFalImage({ model, prompt, aspectRatio, signal }) {
+  const credentials = process.env.FAL_KEY || process.env.FAL_API_KEY || '';
+  if (!credentials) {
+    throw new Error('La generación con fal.ai requiere FAL_KEY o FAL_API_KEY. Configúrala o elige otro modelo de imagen.');
+  }
+  // eslint-disable-next-line global-require
+  const { fal } = require('@fal-ai/client');
+  fal.config({ credentials });
+
+  const endpoint = String(model || 'fal-ai/flux/schnell').trim() || 'fal-ai/flux/schnell';
+  const result = await fal.subscribe(endpoint, {
+    input: {
+      prompt,
+      image_size: falImageSizeFor(aspectRatio),
+      num_images: 1,
+    },
+    logs: false,
+  });
+
+  const url = result?.data?.images?.[0]?.url || result?.images?.[0]?.url;
+  if (!url) {
+    throw new Error('fal.ai no devolvió ninguna imagen.');
+  }
+
+  const resp = await fetch(url, signal ? { signal } : undefined);
+  if (!resp || !resp.ok) {
+    throw new Error(`fal.ai: no se pudo descargar la imagen generada (HTTP ${resp ? resp.status : 'sin respuesta'}).`);
+  }
+  const buffer = Buffer.from(await resp.arrayBuffer());
+  return buffer.toString('base64');
+}
+
 function promptWithImageAspectRatio(prompt, aspectRatio, quality = '2K') {
   const descriptor = IMAGE_ASPECT_RATIOS[aspectRatio]?.prompt || IMAGE_ASPECT_RATIOS['1:1'].prompt;
   return `${prompt}\n\nImage framing requirement: ${descriptor}. Quality target: ${quality}, crisp professional detail. Keep the main subject safely inside the frame.`;
+}
+
+function publicUploadUrl(pathname) {
+  const relative = String(pathname || '').startsWith('/')
+    ? String(pathname || '')
+    : `/${String(pathname || '')}`;
+  const publicBase = String(
+    process.env.PUBLIC_MEDIA_BASE_URL ||
+    process.env.NEXT_PUBLIC_IMAGE_URL ||
+    '',
+  ).trim().replace(/\/+$/, '');
+  return publicBase ? `${publicBase}${relative}` : relative;
 }
 
 async function cropImageToAspectRatio(imageBuffer, aspectRatio) {
@@ -5968,8 +7094,7 @@ async function saveBase64Image(base64Data, userId, prompt, aspectRatio = '1:1') 
   await fs.writeFile(filepath, imageBuffer);
 
 
-  const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
-  const imageUrl = `${baseUrl}/uploads/images/${filename}`;
+  const imageUrl = publicUploadUrl(`/uploads/images/${filename}`);
   // Create a file record in the database
   const newFile = await prisma.file.create({
     data: {
@@ -6008,10 +7133,27 @@ router.post(
     // scope dentro del catch). Se reasigna cuando arrancamos el
     // heartbeat; mientras tanto es un no-op seguro.
     let stopKeepAlive = () => {};
+    // Cuando hay un chatId válido la imagen se persiste como mensaje del
+    // chat, así que la generación debe SOBREVIVIR a un corte de conexión.
+    // El Load Balancer de la Reserved VM (GCE/GCLB) corta cualquier request
+    // a los ~30s y la imagen suele tardar más; ese timeout es un límite duro
+    // del tiempo total de respuesta que los heartbeats NO resetean. En ese
+    // caso NO abortamos al proveedor: dejamos que termine y guarde el
+    // resultado en el chat, y el frontend lo recupera por polling.
+    let detachOnDisconnect = false;
+    let persistChatId = null;
     res.on('close', () => {
       if (!res.writableEnded) {
         clientDisconnected = true;
-        requestAbortController.abort();
+        // In mobile Safari and behind edge/load-balancer proxies, the request
+        // socket can close while the user still expects the result. Once we
+        // have a valid chat target, keep the provider call alive and persist
+        // the image into the conversation; the client recovers it by polling.
+        // Before chat validation, abort normally because there is nowhere safe
+        // to store the result.
+        if (!detachOnDisconnect) {
+          requestAbortController.abort();
+        }
       }
       stopKeepAlive();
     });
@@ -6037,15 +7179,12 @@ router.post(
       const userId = req.user.id;
       console.log('userId', userId);
 
-      const openai = provider === "OpenRouter"
-        ? createOpenRouterClient()
-        : createProviderClient(provider);
-
       // ✅ Paid-plan token cap (single source of truth: plan-quota.js)
       const quotaCap = checkPaidTokenCap(req.user);
       if (!quotaCap.ok) return res.status(quotaCap.status).json(quotaCap.body);
 
       let imagePath;
+      let imageMimeType = 'image/png';
       // If fileId is not provided, check the last message in the chat for an image
       if (!fileId && chatId) {
         const lastMessage = await prisma.message.findFirst({
@@ -6078,6 +7217,7 @@ router.post(
           where: { id: fileId, userId: userId }
         });
         if (inputFileRecord) {
+          imageMimeType = inputFileRecord.mimeType || imageMimeType;
           // ✅ Check if this is a generated image - more precise detection to avoid false positives
           const isGeneratedImage = (
             // Check if filename starts with 'generated-' (our specific pattern)
@@ -6093,8 +7233,7 @@ router.post(
             imagePath = inputFileRecord.path; // Use for editing but don't attach to user message
           } else {
             // ✅ Construct URL from available data for real user uploads
-            const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
-            const fileUrl = `${baseUrl}/uploads/${userId}/${inputFileRecord.filename}`;
+            const fileUrl = publicUploadUrl(`/uploads/${userId}/${inputFileRecord.filename}`);
 
             userMessageFiles = JSON.stringify([{
               id: inputFileRecord.id,
@@ -6119,10 +7258,10 @@ router.post(
       // devolvería un 404 "no body" (visto en prod con server: 'elb',
       // x-ds-trace-id). Lo cortamos aquí con un mensaje claro en español
       // antes de gastar tiempo en una llamada que va a fallar igual.
-      const IMAGE_CAPABLE_PROVIDERS = new Set(['OpenAI', 'Gemini', 'OpenRouter']);
+      const IMAGE_CAPABLE_PROVIDERS = new Set(['OpenAI', 'Gemini', 'OpenRouter', 'Fal']);
       if (!IMAGE_CAPABLE_PROVIDERS.has(provider)) {
         return res.status(400).json({
-          error: `El proveedor "${provider || 'desconocido'}" no soporta generación de imágenes. Usa OpenAI, Gemini u OpenRouter.`,
+          error: `El proveedor "${provider || 'desconocido'}" no soporta generación de imágenes. Usa OpenAI, Gemini, OpenRouter o fal.ai.`,
           code: 'image_provider_unsupported',
           provider: provider || null,
           supported: Array.from(IMAGE_CAPABLE_PROVIDERS),
@@ -6131,7 +7270,7 @@ router.post(
 
       if (!isVerifiedChatImageModelName(model)) {
         return res.status(400).json({
-          error: `El modelo "${model || 'desconocido'}" no esta verificado para generar imagenes en esta instalacion. Usa GPT Image 2 o GPT-5.4 Image 2.`,
+          error: `El modelo "${model || 'desconocido'}" no esta verificado para generar imagenes en esta instalacion. Elige uno de los modelos de imagen disponibles en el selector.`,
           code: 'image_model_unverified',
           model,
           supported: Array.from(VERIFIED_CHAT_IMAGE_MODEL_NAMES),
@@ -6167,6 +7306,13 @@ router.post(
         }
       }
 
+      // Con un chat válido podemos persistir el resultado, así que a partir
+      // de aquí la generación continúa aunque el cliente (o el edge proxy a
+      // los ~30s) cierre la conexión. persistChatId se usa en el catch
+      // (donde `chatId` del try no está en scope) para registrar un error.
+      detachOnDisconnect = Boolean(chatId && preValidatedChat);
+      if (detachOnDisconnect) persistChatId = chatId;
+
       // --- Keep-alive del proxy de ingreso ---------------------------------
       // El edge de Replit Autoscale corta cualquier petición que no haya
       // empezado a enviar headers de respuesta en ~30 s. La generación de
@@ -6191,7 +7337,7 @@ router.post(
       let keepAliveTimer = setInterval(() => {
         if (res.writableEnded || clientDisconnected) return;
         try { res.write(' '); } catch (_e) { /* socket already closed */ }
-      }, 15_000);
+      }, 5_000);
       keepAliveTimer.unref?.();
       stopKeepAlive = () => {
         if (keepAliveTimer) {
@@ -6200,84 +7346,101 @@ router.post(
         }
       };
 
-      let imageBase64s;
+      let imageResults;
       const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Image generation timeout')), 200000);
+        setTimeout(() => {
+          // Deadline reached: the response below becomes an error either
+          // way, so cancel the in-flight provider call too — otherwise the
+          // SDK keeps generating (default timeout up to 600s) burning paid
+          // quota for a result nobody will consume. Clients wait 210s
+          // (> this 200s) so this verdict always reaches them in-band.
+          requestAbortController.abort();
+          reject(new Error('Image generation timeout'));
+        }, 200000);
       });
 
       const generateSingleImage = async () => {
         if (imagePath) {
-          if (provider === "OpenRouter") {
-            throw new Error('OpenRouter image editing is not enabled yet. Use prompt-only image generation or choose OpenAI/Gemini for editing.');
-          }
-          return aiService.generateImageFromImage(imagePath, imagePrompt, provider);
-        }
-
-        if (provider === "OpenRouter") {
-          return generateOpenRouterImage(openai, {
+          const sourceImageBuffer = await fs.readFile(imagePath);
+          const result = await imageEngine.editImage({
+            prompt: imagePrompt,
+            imageBuffer: sourceImageBuffer,
+            mimeType: imageMimeType,
             model,
-            prompt: imagePrompt,
-            aspectRatio,
-            quality,
+            provider: toImageEngineProvider(provider),
             signal: requestAbortController.signal,
+            timeoutMs: imageProviderAttemptTimeoutMs(),
           });
+          if (!result.ok || !result.images?.length) {
+            const err = new Error(result.error || 'Image provider did not return any edited image data.');
+            err.code = result.code || 'image_edit_failed';
+            err.attempts = result.attempts || [];
+            throw err;
+          }
+          const actualProvider = fromImageEngineProvider(result.provider, provider);
+          return result.images.map((img) => ({
+            b64: img.b64,
+            provider: actualProvider,
+            model: result.model || model,
+            attempts: result.attempts || [],
+          }));
         }
-
-        if (provider === "Gemini") {
-          const geminiImageModel = String(model || '').trim() || 'imagen-4.0-generate-001';
-          const response = await openai.images.generate({
-            model: geminiImageModel,
-            prompt: imagePrompt,
-            response_format: "b64_json",
-            n: 1,
-            size: requestedImageSize
-          }, { signal: requestAbortController.signal });
-          return response.data?.[0]?.b64_json;
+        const result = await imageEngine.generateImage({
+          prompt: imagePrompt,
+          model,
+          provider: toImageEngineProvider(provider),
+          aspectRatio,
+          quality,
+          n: imageCount,
+          signal: requestAbortController.signal,
+          timeoutMs: imageProviderAttemptTimeoutMs(),
+          failover: true,
+        });
+        if (!result.ok || !result.images?.length) {
+          const err = new Error(result.error || 'Image provider did not return any image data.');
+          err.code = result.code || 'image_generation_failed';
+          err.attempts = result.attempts || [];
+          throw err;
         }
-
-        const openAiImageModel = String(model || '').trim() || 'gpt-image-2';
-        const openAiImagePayload = isOpenAiResponsesImageModel(openAiImageModel)
-          ? {
-              model: openAiImageModel,
-              prompt: imagePrompt,
-              n: 1,
-              size: gptImageSizeFor(aspectRatio),
-              quality: gptImageQualityFor(quality),
-            }
-          : {
-              model: openAiImageModel,
-              prompt: imagePrompt,
-              response_format: 'b64_json',
-              n: 1,
-              size: requestedImageSize,
-              quality: openAiImageQualityFor(quality),
-            };
-
-        const response = await openai.images.generate(openAiImagePayload, { signal: requestAbortController.signal });
-        const { b64_json, ...rest } = response.data[0];
-
-        console.log("📦 Remaining fields in imageData (excluding b64_json):", rest);
-        return b64_json;
+        const actualProvider = fromImageEngineProvider(result.provider, provider);
+        return result.images.map((img) => ({
+          b64: img.b64,
+          provider: actualProvider,
+          model: result.model || model,
+          attempts: result.attempts || [],
+        }));
       };
 
-      imageBase64s = await Promise.race([
-        Promise.all(Array.from({ length: imageCount }, () => generateSingleImage())),
+      imageResults = await Promise.race([
+        imagePath
+          ? Promise.all(Array.from({ length: imageCount }, () => generateSingleImage()))
+          : generateSingleImage(),
         timeoutPromise,
       ]);
-      imageBase64s = imageBase64s.filter(Boolean);
+      imageResults = imageResults.flat().filter((item) => item && (item.b64 || typeof item === 'string'));
 
-      if (!imageBase64s.length) {
+      if (!imageResults.length) {
         throw new Error('Image provider did not return any image data.');
       }
 
-      if (clientDisconnected || requestAbortController.signal.aborted) {
+      // Si el usuario canceló de verdad (abort explícito) no persistimos.
+      // Pero un simple cierre de conexión con chat válido (detachOnDisconnect)
+      // NO debe descartar la imagen: seguimos para guardarla en el chat.
+      if (requestAbortController.signal.aborted && !clientDisconnected) {
+        console.log('Image generation cancelled by client before persistence.');
+        return;
+      }
+      if (clientDisconnected && !detachOnDisconnect) {
         console.log('Image generation cancelled by client before persistence.');
         return;
       }
 
       const generatedFiles = [];
-      for (let index = 0; index < imageBase64s.length; index += 1) {
-        const { imageUrl, fileId: newFileId } = await saveBase64Image(imageBase64s[index], userId, prompt, aspectRatio);
+      for (let index = 0; index < imageResults.length; index += 1) {
+        const imageResult = typeof imageResults[index] === 'string'
+          ? { b64: imageResults[index], provider, model }
+          : imageResults[index];
+        const { imageUrl, fileId: newFileId } = await saveBase64Image(imageResult.b64, userId, prompt, aspectRatio);
         generatedFiles.push({
           type: 'image',
           url: imageUrl,
@@ -6285,9 +7448,9 @@ router.post(
           fileId: newFileId,
           aspectRatio,
           index: index + 1,
-          count: imageBase64s.length,
-          model,
-          provider,
+          count: imageResults.length,
+          model: imageResult.model || model,
+          provider: imageResult.provider || provider,
           quality,
         });
       }
@@ -6327,36 +7490,73 @@ router.post(
       }
 
       // ✅ Track usage (single source of truth: plan-quota.js)
-      const updatedUser = await recordApiUsage({ prisma, userId, model, tokens: 1000 * generatedFiles.length });
+      const usageModel = generatedFiles[0]?.model || model;
+      const updatedUser = await recordApiUsage({ prisma, userId, model: usageModel, tokens: 1000 * generatedFiles.length });
 
       // Headers ya enviados arriba para sobrevivir al proxy; cerramos
       // con el payload JSON real (los espacios de heartbeat al inicio
       // son whitespace válido para JSON.parse).
       stopKeepAlive();
-      res.end(JSON.stringify({
-        imageUrl: primaryImageUrl,
-        imageUrls: generatedFiles.map((file) => file.url),
-        aspectRatio,
-        quality,
-        imageCount: generatedFiles.length,
-        tokens: 1000 * generatedFiles.length,
-        usage: usagePayloadFor(updatedUser)
-      }));
+      // Si el cliente ya se desconectó (corte del edge proxy a los ~30s) la
+      // imagen ya quedó persistida en el chat y el frontend la recupera por
+      // polling; escribir en un socket cerrado lanzaría un error, así que
+      // solo cerramos la respuesta cuando la conexión sigue viva.
+      if (!clientDisconnected && !res.writableEnded) {
+        res.end(JSON.stringify({
+          imageUrl: primaryImageUrl,
+          imageUrls: generatedFiles.map((file) => file.url),
+          aspectRatio,
+          quality,
+          imageCount: generatedFiles.length,
+          tokens: 1000 * generatedFiles.length,
+          usage: usagePayloadFor(updatedUser)
+        }));
+      }
 
     } catch (error) {
       stopKeepAlive();
-      if (clientDisconnected || requestAbortController.signal.aborted || error?.name === 'AbortError') {
+      // Cancelación REAL del usuario (abort explícito): no persistimos nada.
+      const wasRealAbort =
+        !clientDisconnected &&
+        requestAbortController.signal.aborted &&
+        error?.name === 'AbortError';
+      if (wasRealAbort) {
         console.log('Image generation request aborted by client.');
         if (!res.writableEnded) res.end();
         return;
       }
-      console.error('Image generation error:', error);
+      // Classify into a clean, client-safe shape: maps provider quota/429
+      // (e.g. Gemini RESOURCE_EXHAUSTED) to HTTP 429 and never echoes the raw
+      // multi-KB provider JSON to the client or into a persisted chat message.
+      const classified = classifyImageGenError(error);
+      console.error('Image generation error:', classified.code, error?.status || '', classified.message);
+      // El cliente se fue (corte del edge proxy) pero teníamos un chat para
+      // persistir: dejamos constancia del fallo como mensaje del asistente
+      // para que el polling del frontend lo muestre en vez de colgarse.
+      if (clientDisconnected && detachOnDisconnect && persistChatId) {
+        try {
+          await prisma.message.create({
+            data: {
+              chatId: persistChatId,
+              role: 'ASSISTANT',
+              content: `⚠️ No se pudo generar la imagen: ${classified.message}`,
+            },
+          });
+        } catch (persistErr) {
+          console.error('Failed to persist image-generation error message:', persistErr);
+        }
+        return;
+      }
+      if (clientDisconnected) {
+        if (!res.writableEnded) res.end();
+        return;
+      }
       if (!res.headersSent) {
-        res.status(500).json({ error: error.message || 'Image generation failed' });
+        res.status(classified.httpStatus).json({ error: classified.message, code: classified.code });
       } else if (!res.writableEnded) {
         // Headers ya enviados como 200 (estábamos en modo keep-alive).
         // Mandamos el error en el cuerpo JSON para que el cliente lo vea.
-        res.end(JSON.stringify({ error: error.message || 'Image generation failed', code: 'image_generation_failed' }));
+        res.end(JSON.stringify({ error: classified.message, code: classified.code }));
       }
     }
   }
@@ -6379,6 +7579,9 @@ router.post(
     body('negative_prompt').optional().isString(),
     body('files').optional().isArray(),
     body('image_url').optional().isString(),
+    body('image_urls').optional().isArray({ max: 12 }),
+    body('image_urls.*').optional().isString(),
+    body('model').optional().isString().withMessage('Invalid video model'),
   ],
   authenticateToken,
   requirePaidPlan({ feature: 'video_generation' }),
@@ -6389,9 +7592,14 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { prompt, chatId, aspect_ratio = '16:9', resolution = '720p', duration = 8, audio = true, negative_prompt, files, image_url, model
+      const { prompt, chatId, aspect_ratio = '16:9', resolution = '720p', duration = 8, audio = true, negative_prompt, files, image_url, image_urls, model
       } = req.body;
       const userId = req.user.id;
+      let effectiveAspectRatio = aspect_ratio;
+      try {
+        const promptAspectRatio = require('../services/agents/media-intent').resolveVideoAspectRatio(prompt);
+        if (promptAspectRatio) effectiveAspectRatio = promptAspectRatio;
+      } catch (_) { /* best-effort: keep the selected video aspect ratio */ }
       const requestedVideoModel = String(model || '').trim();
       if (!requestedVideoModel) {
         return res.status(400).json({
@@ -6421,20 +7629,39 @@ router.post(
           ? 8
           : duration;
 
-      console.log('🎬 Video generation request:', { prompt, aspect_ratio, userId, chatId, hasFiles: !!files?.length, hasImageUrl: !!image_url });
+      console.log('🎬 Video generation request:', {
+        prompt,
+        aspect_ratio: effectiveAspectRatio,
+        selectedAspectRatio: aspect_ratio,
+        userId,
+        chatId,
+        hasFiles: !!files?.length,
+        hasImageUrl: !!image_url,
+        imageUrlCount: Array.isArray(image_urls) ? image_urls.length : 0,
+      });
 
       // ✅ Paid-plan token cap (single source of truth: plan-quota.js).
       // Keeps the domain-specific video limit message.
       const quotaCap = checkPaidTokenCap(req.user, { message: 'Monthly video generation limit exceeded' });
       if (!quotaCap.ok) return res.status(quotaCap.status).json(quotaCap.body);
 
-      // ✅ Process attached files (for image-to-video)
-      let processedImageUrl = image_url;
-      console.log('Initial image URL:', processedImageUrl);
-      if (files && files.length > 0 && !processedImageUrl) {
+      // ✅ Process attached files (for image-to-video/reference-to-video)
+      const processedImageUrls = [];
+      const addProcessedImageUrl = (rawUrl) => {
+        const value = String(rawUrl || '').trim();
+        if (!value) return;
+        if (!processedImageUrls.includes(value)) processedImageUrls.push(value);
+      };
+
+      if (Array.isArray(image_urls)) {
+        image_urls.forEach(addProcessedImageUrl);
+      }
+      addProcessedImageUrl(image_url);
+
+      console.log('Initial image URLs:', processedImageUrls.length);
+      if (files && files.length > 0) {
         try {
-          // Find the first image file
-          const imageFile = await prisma.file.findFirst({
+          const imageFiles = await prisma.file.findMany({
             where: {
               id: { in: files },
               userId,
@@ -6442,16 +7669,19 @@ router.post(
             }
           });
 
-          if (imageFile) {
-            // Construct the full image URL
+          if (imageFiles.length > 0) {
             const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
-            processedImageUrl = `${baseUrl}/uploads/${userId}/${imageFile.filename}`;
-            console.log('🖼️ Using image for video generation:', processedImageUrl);
+            const fileOrder = new Map(files.map((id, index) => [id, index]));
+            imageFiles
+              .sort((a, b) => (fileOrder.get(a.id) ?? 9999) - (fileOrder.get(b.id) ?? 9999))
+              .forEach((imageFile) => addProcessedImageUrl(`${baseUrl}/uploads/${userId}/${imageFile.filename}`));
+            console.log('🖼️ Using images for video generation:', processedImageUrls.length);
           }
         } catch (fileError) {
           console.error('Error processing files for video:', fileError);
         }
       }
+      const processedImageUrl = processedImageUrls[0] || null;
 
       // ✅ Make internal API call to video service using axios
       const axios = require('axios');
@@ -6469,12 +7699,13 @@ router.post(
 
         const videoPayload = {
           prompt,
-          aspect_ratio,
+          aspect_ratio: effectiveAspectRatio,
           resolution,
           duration: effectiveDuration,
           audio,
           negative_prompt,
           ...(processedImageUrl && { image_url: processedImageUrl }),
+          ...(processedImageUrls.length > 0 && { image_urls: processedImageUrls }),
           model: requestedVideoModel
         };
 
@@ -6611,11 +7842,19 @@ router.post(
                 status: 'processing',
                 filename: videoResponse.data.filename,
                 prompt: prompt,
-                aspect_ratio: aspect_ratio,
+                aspect_ratio: effectiveAspectRatio,
                 resolution,
-                duration,
+                duration: effectiveDuration,
+                requestedDuration: duration,
                 audio,
-                sourceImageUrl: processedImageUrl
+                requestedModel: requestedVideoModel,
+                model: videoResponse.data.model || requestedVideoModel,
+                modelDisplayName: videoResponse.data.modelDisplayName || adminModel.displayName || requestedVideoModel,
+                usingPairedEndpoint: Boolean(videoResponse.data.usingPairedEndpoint),
+                sourceImageUrl: processedImageUrl,
+                sourceImageUrls: processedImageUrls,
+                imageCount: processedImageUrls.length,
+                generationType: processedImageUrls.length > 1 ? 'reference-to-video' : (processedImageUrl ? 'image-to-video' : 'text-to-video')
               }])
             }
           });
@@ -6636,7 +7875,7 @@ router.post(
 
         // ✅ Track usage (single source of truth: plan-quota.js)
         const tokens = 1000; // Fixed token count for video generation
-        const updatedUser = await recordApiUsage({ prisma, userId, model: processedImageUrl ? 'veo-3.0-img2vid' : 'veo-3.0', tokens });
+        const updatedUser = await recordApiUsage({ prisma, userId, model: videoResponse.data.model || requestedVideoModel, tokens });
 
         console.log('📊 Usage tracked for video generation');
 
@@ -6647,11 +7886,19 @@ router.post(
           message: processedImageUrl ? 'Image-to-video generation started successfully' : 'Video generation started successfully',
           tokens,
           usage: usagePayloadFor(updatedUser),
-          aspect_ratio,
+          aspect_ratio: effectiveAspectRatio,
           resolution,
-          duration,
+          duration: effectiveDuration,
+          requestedDuration: duration,
           audio,
-          sourceImageUrl: processedImageUrl
+          requestedModel: requestedVideoModel,
+          model: videoResponse.data.model || requestedVideoModel,
+          modelDisplayName: videoResponse.data.modelDisplayName || adminModel.displayName || requestedVideoModel,
+          usingPairedEndpoint: Boolean(videoResponse.data.usingPairedEndpoint),
+          sourceImageUrl: processedImageUrl,
+          sourceImageUrls: processedImageUrls,
+          imageCount: processedImageUrls.length,
+          generationType: processedImageUrls.length > 1 ? 'reference-to-video' : (processedImageUrl ? 'image-to-video' : 'text-to-video')
         });
 
       } catch (videoServiceError) {
@@ -6667,6 +7914,12 @@ router.post(
         if (videoServiceError.response?.status === 400) {
           return res.status(400).json({
             error: videoServiceError.response.data.error || 'Invalid video generation parameters'
+          });
+        } else if ([401, 403, 422].includes(videoServiceError.response?.status)) {
+          return res.status(videoServiceError.response.status).json({
+            error: videoServiceError.response.data.message || videoServiceError.response.data.error || 'Video provider rejected the request',
+            code: videoServiceError.response.data.code || videoServiceError.response.data.error || 'video_provider_error',
+            details: videoServiceError.response.data.details || videoServiceError.response.data.body || null,
           });
         } else if (videoServiceError.response?.status === 429) {
           return res.status(429).json({
@@ -6685,6 +7938,83 @@ router.post(
     }
   }
 );
+
+router.post('/video-cancel/:operationId', authenticateToken, async (req, res) => {
+  try {
+    const { operationId } = req.params;
+    const axios = require('axios');
+    const internalBase = `http://127.0.0.1:${process.env.PORT || 5000}`;
+    const url = `${internalBase}/api/video/cancel/${operationId}`;
+
+    const cancelResponse = await axios.post(url, {}, {
+      headers: {
+        'Authorization': req.headers.authorization,
+        'User-Agent': req.headers['user-agent'] || 'siragpt-internal',
+        'X-Forwarded-For': req.ip,
+      },
+      timeout: 10000,
+    });
+
+    const candidates = await prisma.message.findMany({
+      where: {
+        role: 'ASSISTANT',
+        chat: { userId: req.user.id },
+      },
+      orderBy: { timestamp: 'desc' },
+      take: 200,
+      select: { id: true, files: true },
+    });
+
+    const target = candidates.find((message) => {
+      try {
+        const files = typeof message.files === 'string' ? JSON.parse(message.files) : message.files;
+        return Array.isArray(files) && files.some((file) => file && file.operationId === operationId);
+      } catch {
+        return false;
+      }
+    });
+
+    if (target) {
+      let files = [];
+      try {
+        files = typeof target.files === 'string' ? JSON.parse(target.files) : target.files;
+      } catch {
+        files = [];
+      }
+
+      const updatedFiles = Array.isArray(files)
+        ? files.map((file) => file && file.operationId === operationId
+          ? {
+            ...file,
+            status: 'cancelled',
+            error: 'Generación de video detenida por el usuario.',
+            cancelledAt: new Date().toISOString(),
+          }
+          : file)
+        : files;
+
+      await prisma.message.update({
+        where: { id: target.id },
+        data: {
+          content: 'Generación de video detenida por el usuario.',
+          files: JSON.stringify(updatedFiles),
+        },
+      });
+    }
+
+    res.json({ success: true, ...cancelResponse.data });
+  } catch (error) {
+    console.error('🚨 Video cancel error:', error.response?.data || error.message);
+    if (error.response?.status === 404) {
+      return res.status(404).json({ error: 'Video operation not found' });
+    }
+    if (error.response?.status === 403) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    res.status(500).json({ error: error.message || 'Failed to cancel video generation' });
+  }
+});
+
 // ✅ Check video generation status (Fixed)
 router.get('/video-status/:operationId', authenticateToken, async (req, res) => {
   try {
@@ -6829,7 +8159,11 @@ router.get('/video-status/:operationId', authenticateToken, async (req, res) => 
                     resolution: result.resolution,
                     aspect_ratio: result.aspect_ratio || statusResponse.data.aspect_ratio,
                     fal_video_url: result.fal_video_url,
-                    fal_request_id: result.fal_request_id
+                    fal_request_id: result.fal_request_id,
+                    sourceImageUrl: result.sourceImageUrl || statusResponse.data.sourceImageUrl || f.sourceImageUrl,
+                    sourceImageUrls: result.sourceImageUrls || statusResponse.data.sourceImageUrls || f.sourceImageUrls,
+                    imageCount: result.imageCount || statusResponse.data.imageCount || f.imageCount,
+                    generationType: result.generationType || statusResponse.data.generationType || f.generationType
                   }
                   : f
               )
@@ -6846,6 +8180,73 @@ router.get('/video-status/:operationId', authenticateToken, async (req, res) => 
           }
         } catch (dbError) {
           console.error('❌ Database update error:', dbError);
+        }
+      }
+
+      if (['failed', 'cancelled'].includes(String(statusResponse.data.status || '').toLowerCase())) {
+        try {
+          const { operationId } = req.params;
+          const finalStatus = String(statusResponse.data.status || '').toLowerCase();
+
+          const candidates = await prisma.message.findMany({
+            where: {
+              role: 'ASSISTANT',
+              chat: { userId: req.user.id }
+            },
+            orderBy: { timestamp: 'desc' },
+            take: 200,
+            select: { id: true, files: true }
+          });
+
+          const target = candidates.find(m => {
+            try {
+              const files = typeof m.files === 'string' ? JSON.parse(m.files) : m.files;
+              return Array.isArray(files) && files.some(f => f && f.operationId === operationId);
+            } catch {
+              return false;
+            }
+          });
+
+          if (target) {
+            let files = [];
+            try {
+              files = typeof target.files === 'string' ? JSON.parse(target.files) : target.files;
+            } catch {
+              files = [];
+            }
+
+            const messageError = finalStatus === 'cancelled'
+              ? 'Generación de video detenida por el usuario.'
+              : (statusResponse.data.error || statusResponse.data.message || 'No se pudo crear el video.');
+            const assistantContent = finalStatus === 'cancelled'
+              ? 'Generación de video detenida por el usuario.'
+              : `No se pudo crear el video. ${messageError}`;
+            const updatedFiles = Array.isArray(files)
+              ? files.map(f =>
+                f && f.operationId === operationId
+                  ? {
+                    ...f,
+                    status: finalStatus,
+                    error: messageError,
+                    errorDetails: statusResponse.data.errorDetails || statusResponse.data.details || f.errorDetails,
+                    cancelledAt: finalStatus === 'cancelled' ? (statusResponse.data.cancelledAt || new Date().toISOString()) : f.cancelledAt,
+                    failedAt: finalStatus === 'failed' ? (statusResponse.data.updatedAt || new Date().toISOString()) : f.failedAt,
+                  }
+                  : f
+              )
+              : files;
+
+            await prisma.message.update({
+              where: { id: target.id },
+              data: {
+                content: assistantContent,
+                files: JSON.stringify(updatedFiles)
+              }
+            });
+            console.log(`💾 Message updated with ${finalStatus} video state`);
+          }
+        } catch (dbError) {
+          console.error('❌ Database terminal-state update error:', dbError);
         }
       }
 
@@ -7941,7 +9342,7 @@ Every element should feel intentionally designed, polished, and premium. The use
         } catch {
           // Socket may already be closed by the browser.
         }
-      }, 15000);
+      }, 5000);
 
       try {
         const bufferedRes = {

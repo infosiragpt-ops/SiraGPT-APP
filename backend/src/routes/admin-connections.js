@@ -9,11 +9,8 @@
  * apply automatically. We re-apply it here at the router level so
  * the route file stays self-contained.
  *
- * The chat path (backend/src/routes/ai.js) still reads provider
- * credentials from env vars today. This module records the admin's
- * preferred upstream config but does not yet redirect provider
- * traffic to the DB-stored connection. That swap is a follow-up:
- * the connection row is the contract the swap will read from.
+ * The bridge applies enabled provider credentials into process.env so
+ * runtime paths can pick up admin-managed keys without a server restart.
  */
 
 const express = require('express');
@@ -22,6 +19,8 @@ const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const prisma = require('../config/database');
 const { encrypt, decrypt } = require('../utils/encryption');
 const { applyAdminConnections, reconcileCatalog } = require('../services/admin-connections-bridge');
+const modelSyncService = require('../services/model-sync-service');
+const { invalidate: invalidateResponseCache } = require('../middleware/response-cache');
 
 const router = express.Router();
 router.use(authenticateToken, requireAdmin);
@@ -32,6 +31,54 @@ function refreshBridge() {
   applyAdminConnections().catch((e) =>
     console.error('[admin-connections] bridge refresh failed:', e.message)
   );
+}
+
+// Guards against overlapping discoveries for the same connection (rapid
+// double-saves) — upserts are idempotent so it's only wasted work, but the
+// guard keeps a single in-flight run per connection.
+const _discoveryInFlight = new Set();
+
+// Auto-discover the provider's models the moment a key is set and persist
+// them (inactive) into the AiModel catalog, so they appear in Admin → Modelos
+// without the manual Fetch/Sync dance. Fire-and-forget — never blocks the
+// response, never throws. The connection row records the sync verdict.
+async function discoverConnectionModels(connId) {
+  if (_discoveryInFlight.has(connId)) return;
+  _discoveryInFlight.add(connId);
+  try {
+    const conn = await prisma.adminConnection.findUnique({ where: { id: connId } });
+    if (!conn || !conn.enabled) return;
+    const apiKey = decryptKey(conn.apiKey);
+    if (!apiKey && conn.authType !== 'None') return;
+
+    const result = await modelSyncService.syncConnectionModels({
+      providerKey: conn.providerKey,
+      providerLabel: conn.providerLabel,
+      url: conn.url,
+      authType: conn.authType,
+      headers: conn.headers,
+      modelIds: conn.modelIds,
+      apiKey,
+    });
+
+    await prisma.adminConnection.update({
+      where: { id: conn.id },
+      data: {
+        lastSyncedAt: new Date(),
+        lastSyncOk: !!result.ok,
+        lastSyncError: result.ok ? null : String(result.error || 'discovery failed').slice(0, 240),
+      },
+    }).catch(() => {});
+
+    if (result.ok && (result.created || result.updated)) {
+      invalidateResponseCache({ namespace: 'ai-models' });
+      console.log(`[admin-connections] discovered ${conn.providerKey}: +${result.created} new, ${result.updated} updated`);
+    }
+  } catch (e) {
+    console.error('[admin-connections] discoverConnectionModels failed:', e.message);
+  } finally {
+    _discoveryInFlight.delete(connId);
+  }
 }
 
 // API keys are stored encrypted at rest. The `enc:v1:` prefix is a
@@ -68,10 +115,14 @@ const KNOWN_PROVIDERS = new Set([
   'mistral',
   'groq',
   'openrouter',
+  'cerebras',
+  'zai',
+  'kimi',
   'together',
   'fireworks',
   'deepseek',
   'xai',
+  'fal',
   'custom',
 ]);
 
@@ -82,10 +133,14 @@ const DEFAULT_PROVIDER_LABELS = {
   mistral: 'Mistral API',
   groq: 'Groq API',
   openrouter: 'OpenRouter API',
+  cerebras: 'Cerebras API',
+  zai: 'Z.ai (GLM) API',
+  kimi: 'Kimi (Moonshot) API',
   together: 'Together AI API',
   fireworks: 'Fireworks AI API',
   deepseek: 'DeepSeek API',
   xai: 'xAI API',
+  fal: 'fal.ai Video API',
   custom: 'Custom API',
 };
 
@@ -152,8 +207,8 @@ router.post(
     body('url').isURL({ require_tld: false, require_protocol: true }).withMessage('URL must be a full URL with protocol'),
     body('providerKey').isString().isLength({ min: 2, max: 40 }),
     body('apiKey').optional({ nullable: true }).isString().isLength({ min: 0, max: 400 }),
-    body('authType').optional().isIn(['Bearer', 'None', 'Custom']),
-    body('apiType').optional().isIn(['chat_completions', 'responses', 'embeddings']),
+    body('authType').optional().isIn(['Bearer', 'Key', 'None', 'Custom']),
+    body('apiType').optional().isIn(['chat_completions', 'responses', 'embeddings', 'video']),
     body('headers').optional({ nullable: true }),
     body('prefixId').optional({ nullable: true }).isString().isLength({ max: 80 }),
     body('modelIds').optional().isArray(),
@@ -173,8 +228,8 @@ router.post(
           providerKey: safeProvider,
           providerLabel: req.body.providerLabel || DEFAULT_PROVIDER_LABELS[safeProvider] || null,
           apiKey: encryptKey(req.body.apiKey || null),
-          authType: req.body.authType || 'Bearer',
-          apiType: req.body.apiType || 'chat_completions',
+          authType: req.body.authType || (safeProvider === 'fal' ? 'Key' : 'Bearer'),
+          apiType: req.body.apiType || (safeProvider === 'fal' ? 'video' : 'chat_completions'),
           headers: req.body.headers || null,
           prefixId: req.body.prefixId || null,
           modelIds: Array.isArray(req.body.modelIds) ? req.body.modelIds : [],
@@ -184,6 +239,8 @@ router.post(
       });
       res.status(201).json(shapeConnection(created));
       refreshBridge();
+      // Auto-populate Admin → Modelos with this provider's models.
+      if (created.enabled && created.apiKey) discoverConnectionModels(created.id);
     } catch (err) {
       console.error('[admin-connections] create failed:', err);
       res.status(500).json({ error: err.message });
@@ -207,12 +264,26 @@ router.patch('/:id', async (req, res) => {
       const lc = String(data.providerKey).toLowerCase().trim();
       data.providerKey = KNOWN_PROVIDERS.has(lc) ? lc : 'custom';
     }
+    // Read the prior enabled state so we only re-discover on a real off→on
+    // transition — not on every save that happens to echo `enabled: true`.
+    const prior = await prisma.adminConnection.findUnique({
+      where: { id },
+      select: { enabled: true },
+    });
     const updated = await prisma.adminConnection.update({
       where: { id },
       data,
     });
     res.json(shapeConnection(updated));
     refreshBridge();
+    // Re-discover models only when the key or URL actually changed, or the
+    // connection was just turned on — a plain toggle, re-save or tag edit
+    // must not hit the upstream.
+    const keyOrUrlChanged = ('apiKey' in data) || ('url' in data);
+    const justEnabled = data.enabled === true && prior && prior.enabled === false;
+    if (updated.enabled && updated.apiKey && (keyOrUrlChanged || justEnabled)) {
+      discoverConnectionModels(updated.id);
+    }
   } catch (err) {
     if (err.code === 'P2025') {
       return res.status(404).json({ error: 'Connection not found' });
@@ -228,6 +299,9 @@ router.delete('/:id', async (req, res) => {
     await prisma.adminConnection.delete({ where: { id: req.params.id } });
     res.json({ deleted: true });
     refreshBridge();
+    // Deleting a provider's connection can change which models are available,
+    // so drop the cached ai-models response (mirrors create/patch/sync paths).
+    invalidateResponseCache({ namespace: 'ai-models' });
   } catch (err) {
     if (err.code === 'P2025') return res.status(404).json({ error: 'Connection not found' });
     console.error('[admin-connections] delete failed:', err);
@@ -258,33 +332,44 @@ router.post('/:id/test', async (req, res) => {
     conn = await prisma.adminConnection.findUnique({ where: { id: req.params.id } });
     if (!conn) return res.status(404).json({ error: 'Connection not found' });
 
-    const baseUrl = conn.url.replace(/\/+$/, '');
-    const target = `${baseUrl}/models`;
-    const headers = { 'Accept': 'application/json' };
-    const plainKey = decryptKey(conn.apiKey);
-    if (conn.authType === 'Bearer' && plainKey) headers['Authorization'] = `Bearer ${plainKey}`;
-    if (conn.headers && typeof conn.headers === 'object') Object.assign(headers, conn.headers);
+    // Provider-agnostic discovery (handles Anthropic x-api-key auth too) that
+    // ALSO persists the models into the catalog — testing a connection now
+    // populates Admin → Modelos in one click.
+    const result = await modelSyncService.syncConnectionModels({
+      providerKey: conn.providerKey,
+      providerLabel: conn.providerLabel,
+      url: conn.url,
+      authType: conn.authType,
+      headers: conn.headers,
+      modelIds: conn.modelIds,
+      apiKey: decryptKey(conn.apiKey),
+    });
 
-    const r = await fetch(target, { method: 'GET', headers, signal: AbortSignal.timeout(15_000) });
-    if (!r.ok) {
-      const txt = await r.text().catch(() => '');
-      await prisma.adminConnection.update({
-        where: { id: conn.id },
-        data: { lastSyncedAt: new Date(), lastSyncOk: false, lastSyncError: `HTTP ${r.status} ${txt.slice(0, 160)}` },
-      });
-      return res.status(502).json({ ok: false, status: r.status, error: txt.slice(0, 400) });
-    }
-    const body = await r.json();
-    // OpenAI-shape: { data: [{ id, ... }] }. Anthropic-shape varies.
-    const list = Array.isArray(body?.data) ? body.data
-      : Array.isArray(body?.models) ? body.models
-      : Array.isArray(body) ? body
-      : [];
     await prisma.adminConnection.update({
       where: { id: conn.id },
-      data: { lastSyncedAt: new Date(), lastSyncOk: true, lastSyncError: null },
+      data: {
+        lastSyncedAt: new Date(),
+        lastSyncOk: !!result.ok,
+        lastSyncError: result.ok ? null : String(result.error || 'probe failed').slice(0, 240),
+      },
+    }).catch(() => {});
+
+    if (!result.ok) {
+      return res.status(502).json({ ok: false, status: result.status || 0, error: String(result.error || 'probe failed').slice(0, 400) });
+    }
+
+    if (result.created || result.updated) invalidateResponseCache({ namespace: 'ai-models' });
+
+    res.json({
+      ok: true,
+      count: result.count,
+      imported: result.created + result.updated,
+      created: result.created,
+      updated: result.updated,
+      models: (result.models || []).slice(0, 200).map((m) => ({
+        id: m.name, name: m.name, displayName: m.displayName, type: m.type, provider: m.provider,
+      })),
     });
-    res.json({ ok: true, count: list.length, models: list.slice(0, 200) });
   } catch (err) {
     console.error('[admin-connections] test failed:', err);
     try {

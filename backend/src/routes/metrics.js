@@ -71,6 +71,11 @@ function formatExposition() {
   lines.push('# HELP siragpt_event_loop_lag_ms Approximate event loop lag, sampled.');
   lines.push('# TYPE siragpt_event_loop_lag_ms gauge');
   lines.push(`siragpt_event_loop_lag_ms ${lastLagMs}`);
+  // Cognitive-core metrics: router decisions, faithfulness grades, compute mix.
+  try {
+    const cognitive = require('../services/cognitive-metrics').toPrometheusText();
+    if (cognitive && cognitive.trim()) lines.push(cognitive.trimEnd());
+  } catch (_) { /* metrics must never break the endpoint */ }
   return lines.join('\n') + '\n';
 }
 

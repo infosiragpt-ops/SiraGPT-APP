@@ -6,21 +6,129 @@ const path = require('path');
 
 const QUEUE_PATH = path.resolve(__dirname, '../src/services/agents/agent-task-queue');
 const CLIENT_PATH = path.resolve(__dirname, '../src/services/agents/temporal/temporal-client');
+const BULLMQ_PATH = require.resolve('bullmq');
+const IOREDIS_PATH = require.resolve('ioredis');
+const REAL_BULLMQ = require('bullmq');
+const REAL_IOREDIS = require('ioredis');
 
-function freshQueueModule({ temporalClientStub }) {
+function installModule(modulePath, exports) {
+  require.cache[modulePath] = {
+    id: modulePath,
+    filename: modulePath,
+    loaded: true,
+    exports,
+  };
+}
+
+function freshQueueModule({ temporalClientStub, bullmqStub, ioredisStub } = {}) {
   delete require.cache[require.resolve(QUEUE_PATH)];
   delete require.cache[require.resolve(CLIENT_PATH)];
-  if (temporalClientStub) {
-    require.cache[require.resolve(CLIENT_PATH)] = {
-      id: require.resolve(CLIENT_PATH),
-      filename: require.resolve(CLIENT_PATH),
-      loaded: true,
-      exports: temporalClientStub,
-    };
-  }
+  if (temporalClientStub) installModule(require.resolve(CLIENT_PATH), temporalClientStub);
+  installModule(BULLMQ_PATH, bullmqStub || REAL_BULLMQ);
+  installModule(IOREDIS_PATH, ioredisStub || REAL_IOREDIS);
   // eslint-disable-next-line global-require
   return require(QUEUE_PATH);
 }
+
+test('getAgentTaskQueue: producer Redis connection fails fast instead of offline-queue hanging', () => {
+  const prevRedis = process.env.REDIS_URL;
+  const prevTimeout = process.env.AGENT_TASK_QUEUE_COMMAND_TIMEOUT_MS;
+  process.env.REDIS_URL = 'redis://localhost:6379';
+  process.env.AGENT_TASK_QUEUE_COMMAND_TIMEOUT_MS = '4321';
+
+  let redisUrl = null;
+  let redisOptions = null;
+  let queueOptions = null;
+  function FakeRedis(url, opts) {
+    redisUrl = url;
+    redisOptions = opts;
+  }
+  FakeRedis.prototype.on = function on() { return this; };
+  class FakeQueue {
+    constructor(name, opts) {
+      this.name = name;
+      queueOptions = opts;
+    }
+    on() { return this; }
+  }
+
+  try {
+    const queue = freshQueueModule({
+      bullmqStub: { Queue: FakeQueue },
+      ioredisStub: FakeRedis,
+    });
+    queue.getAgentTaskQueue();
+
+    assert.equal(redisUrl, 'redis://localhost:6379');
+    assert.equal(redisOptions.enableOfflineQueue, false);
+    assert.equal(redisOptions.maxRetriesPerRequest, 1);
+    assert.equal(redisOptions.connectTimeout, 4321);
+    assert.equal(redisOptions.commandTimeout, 4321);
+    assert.equal(queueOptions.connection.constructor, FakeRedis);
+  } finally {
+    if (prevRedis === undefined) delete process.env.REDIS_URL;
+    else process.env.REDIS_URL = prevRedis;
+    if (prevTimeout === undefined) delete process.env.AGENT_TASK_QUEUE_COMMAND_TIMEOUT_MS;
+    else process.env.AGENT_TASK_QUEUE_COMMAND_TIMEOUT_MS = prevTimeout;
+  }
+});
+
+test('enqueueAgentTask: times out a BullMQ add that never settles and closes the producer', async () => {
+  const prevRedis = process.env.REDIS_URL;
+  const prevCommandTimeout = process.env.AGENT_TASK_QUEUE_COMMAND_TIMEOUT_MS;
+  const prevEnqueueTimeout = process.env.AGENT_TASK_QUEUE_ENQUEUE_TIMEOUT_MS;
+  process.env.REDIS_URL = 'redis://localhost:6379';
+  process.env.AGENT_TASK_QUEUE_COMMAND_TIMEOUT_MS = '1000';
+  process.env.AGENT_TASK_QUEUE_ENQUEUE_TIMEOUT_MS = '20';
+
+  let addCalled = false;
+  let queueClosed = false;
+  let queueDisconnected = false;
+  let redisQuit = false;
+  let redisDisconnected = false;
+  function FakeRedis() {}
+  FakeRedis.prototype.on = function on() { return this; };
+  FakeRedis.prototype.quit = async function quit() { redisQuit = true; };
+  FakeRedis.prototype.disconnect = function disconnect() { redisDisconnected = true; };
+  class FakeQueue {
+    on() { return this; }
+    add() {
+      addCalled = true;
+      return new Promise(() => {});
+    }
+    async close() { queueClosed = true; }
+    async disconnect() { queueDisconnected = true; }
+  }
+
+  try {
+    const queue = freshQueueModule({
+      bullmqStub: { Queue: FakeQueue },
+      ioredisStub: FakeRedis,
+    });
+    const result = await Promise.race([
+      queue.enqueueAgentTask({ taskId: 'hung-add' }).then(
+        () => 'resolved',
+        (err) => err
+      ),
+      new Promise((resolve) => setTimeout(() => resolve('still-pending'), 80)),
+    ]);
+
+    assert.notEqual(result, 'still-pending', 'enqueue must reject before the chat client idle watchdog fires');
+    assert.match(result && result.message, /enqueue timed out/i);
+    assert.equal(addCalled, true);
+    assert.equal(queueClosed, false, 'timeout cleanup must not wait for graceful BullMQ close');
+    assert.equal(queueDisconnected, true);
+    assert.equal(redisQuit, false, 'timeout cleanup must force-disconnect Redis instead of queueing QUIT');
+    assert.equal(redisDisconnected, true);
+  } finally {
+    if (prevRedis === undefined) delete process.env.REDIS_URL;
+    else process.env.REDIS_URL = prevRedis;
+    if (prevCommandTimeout === undefined) delete process.env.AGENT_TASK_QUEUE_COMMAND_TIMEOUT_MS;
+    else process.env.AGENT_TASK_QUEUE_COMMAND_TIMEOUT_MS = prevCommandTimeout;
+    if (prevEnqueueTimeout === undefined) delete process.env.AGENT_TASK_QUEUE_ENQUEUE_TIMEOUT_MS;
+    else process.env.AGENT_TASK_QUEUE_ENQUEUE_TIMEOUT_MS = prevEnqueueTimeout;
+  }
+});
 
 test('enqueueAgentTask: dispatches to Temporal when shouldUseTemporalForTaskType is true', async () => {
   let startCalled = null;

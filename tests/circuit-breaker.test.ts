@@ -1,8 +1,11 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { createRequire } from "node:module"
+import * as path from "node:path"
 
-const cjsRequire = createRequire(__filename)
+// Anchor CJS resolution at the repo root (the runner always runs from the
+// repo root) so backend requires work no matter where test-dist lives.
+const cjsRequire = createRequire(path.join(process.cwd(), "package.json"))
 
 type BreakerStats = { name: string; state: "CLOSED" | "OPEN" | "HALF_OPEN"; failureCount: number; lastFailureAt: Date | null; nextAttemptAt: Date | null }
 type Breaker = {
@@ -19,7 +22,7 @@ type CircuitModule = {
   STATES: { CLOSED: string; OPEN: string; HALF_OPEN: string }
 }
 
-const cb = cjsRequire("../../backend/src/services/circuit-breaker") as CircuitModule
+const cb = cjsRequire("./backend/src/services/circuit-breaker") as CircuitModule
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
 

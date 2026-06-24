@@ -4,10 +4,13 @@ const { buildTaskTools } = require('./task-tools');
 const taskStore = require('./task-store');
 const auditLog = require('./audit-log');
 const metrics = require('./metrics');
+const openclawCapabilityKernel = require('../openclaw-capability-kernel');
 const {
   buildExecutionProfile,
-  validateFinalize,
 } = require('./agentic-execution-profile');
+const {
+  validateAgentTaskFinalize,
+} = require('./openclaw-autonomy-finalize-guard');
 const { buildUserIntentAlignmentProfile } = require('./user-intent-alignment');
 const { buildAgentTaskPlan } = require('./agent-task-plan');
 const { resolveTaskContract } = require('./task-contract-resolver');
@@ -25,7 +28,8 @@ const { buildToolRuntimePlan } = require('./enterprise-tool-gateway');
 const { buildAgenticQaBoardReview } = require('./agentic-qa-board');
 const { buildAgenticOperatingCore } = require('./agentic-operating-core');
 const durableExecutionStore = require('./durable-execution-store');
-const { buildDocumentDeliveryPolicy } = require('./document-delivery-policy');
+const { buildDocumentDeliveryPolicy, normalizeDocumentPolicyCoherence } = require('./document-delivery-policy');
+const outputFormat = require('../output-format-contract');
 const { getQueueName } = require('./agent-task-queue');
 const persistence = require('./agent-task-persistence');
 const { generateAutoDocument } = require('./auto-document-delivery');
@@ -39,10 +43,14 @@ const {
 } = require('./vancouver-table-document');
 const { buildLangGraphLayer } = require('./agentic-langgraph');
 const { buildAgenticFrameworkStatus } = require('./agentic-frameworks');
+const { buildForbiddenToolNames } = require('./agent-tool-policy');
+const { buildIntegrationRuntimeProfile } = require('../ai-product-os/integration-runtime-profile');
 const {
   buildTranscriptionTextFromFiles,
   buildUploadedFileContext,
+  isImageFile,
   isPlainTranscriptionRequest,
+  resolveStoredFilePath,
   resolveTranscriptionFileIds,
   serializeMessageAttachments,
 } = require('../message-attachments');
@@ -50,6 +58,7 @@ const {
   assessAttachmentContext,
   countUsefulWords,
   stripScaffolding,
+  DEFAULT_THIN_THRESHOLD,
 } = require('./attachment-context-guard');
 const apa7 = require('../marco-teorico/apa7');
 
@@ -87,6 +96,25 @@ function buildFinalizeProfile(executionProfile, universalTaskContract) {
         : {}),
     },
   };
+}
+
+function buildOpenClawRuntimeProfile({ goal, userId = null, chatId = null, fileIds = [], model = null, context = {} } = {}) {
+  try {
+    return openclawCapabilityKernel.buildCapabilityProfile({
+      prompt: goal,
+      userId,
+      chatId,
+      attachmentCount: Array.isArray(fileIds) ? fileIds.length : 0,
+      model,
+      context: {
+        documents: Array.isArray(fileIds) ? fileIds.map((id) => ({ id, source: 'agent_task_worker_file' })) : [],
+        ...context,
+      },
+    });
+  } catch (err) {
+    console.warn('[agent-task-runner] openclaw runtime profile unavailable:', err?.message || err);
+    return null;
+  }
 }
 
 function summarizeForChat(text, policy) {
@@ -149,7 +177,7 @@ function splitReadableSentences(text) {
     .replace(/\s+/g, ' ')
     .split(/(?<=[.!?;:])\s+|\n+/)
     .map((sentence) => sentence.trim())
-    .filter((sentence) => sentence.length >= 35)
+    .filter((sentence) => sentence.length >= 35 || /\b\d+(?:[.,]\d+)?\b/.test(sentence))
     .filter((sentence) => {
       const key = normalizedKey(sentence);
       if (!key || seen.has(key)) return false;
@@ -164,6 +192,7 @@ function scoreAttachmentSentence(sentence, request = '') {
   let score = 0;
   if (/\b(se encontro|se evidencio|se identifico|se observo|muestra|indica|concluye|recomienda|sugiere|resultado|resultados|hallazgo|hallazgos|asocia|asociacion|relacion significativa|incrementa|reduce|mejora)\b/.test(normalized)) score += 5;
   if (/\b(ansiedad|depresion|estres|riesgo|impacto|efecto|efectos|salud mental|rendimiento|adiccion|vulnerabilidad|malestar)\b/.test(normalized)) score += 2;
+  if (/\b(pdf|docx|xlsx|churn|retencion|contrato|contratado|real|total|diferencia|riesgo|legal|dpa|fuente|oficial|preliminar|cliente|norte|sur|este)\b/.test(normalized)) score += 2;
   if (sentence.length >= 80 && sentence.length <= 420) score += 1;
   if (/\b(cuantitativo|cualitativo|transversal|probabilistico|conveniencia|cuestionario|escala|inventario|modelo teorico|autores|publicacion)\b/.test(normalized)) score -= 2;
 
@@ -186,6 +215,509 @@ function selectAttachmentSentences(sentences, request = '', limit = 8) {
   return strong.length ? strong : sentences.slice(0, limit);
 }
 
+// Splits an ordered list of sentences into `paragraphCount` balanced paragraphs,
+// preserving document order. Used when the user asks for a specific number of
+// paragraphs (e.g. "resumen en 2 párrafos").
+function distributeSentencesIntoParagraphs(sentences, paragraphCount) {
+  const list = (Array.isArray(sentences) ? sentences : []).filter(Boolean);
+  if (list.length === 0) return [];
+  const count = Math.max(1, Math.min(paragraphCount, list.length));
+  // Remainder-based allocation: the first `remainder` paragraphs take one extra
+  // sentence so the output always has exactly `count` non-empty paragraphs.
+  const base = Math.floor(list.length / count);
+  const remainder = list.length % count;
+  const paragraphs = [];
+  let cursor = 0;
+  for (let index = 0; index < count; index += 1) {
+    const size = base + (index < remainder ? 1 : 0);
+    const group = list.slice(cursor, cursor + size);
+    cursor += size;
+    if (group.length === 0) break;
+    paragraphs.push(group.join(' ').replace(/\s+/g, ' ').trim());
+  }
+  return paragraphs;
+}
+
+function parseAttachmentNumber(value) {
+  const normalized = String(value || '')
+    .replace(/\s+/g, '')
+    .replace(/,/g, '.')
+    .replace(/[^0-9.-]/g, '');
+  const parsed = Number.parseFloat(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function formatAttachmentNumber(value, { decimals = null } = {}) {
+  if (!Number.isFinite(value)) return '';
+  if (Number.isInteger(value)) return String(value);
+  const fixed = value.toFixed(decimals == null ? 2 : decimals);
+  return fixed.replace(/\.?0+$/, '');
+}
+
+function matchAttachmentNumber(text, patterns = []) {
+  for (const pattern of patterns) {
+    const match = String(text || '').match(pattern);
+    if (match) {
+      const parsed = parseAttachmentNumber(match[1]);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return null;
+}
+
+function extractClientMetricRows(text) {
+  const rows = [];
+  const seen = new Set();
+  const compact = String(text || '').replace(/\|/g, ' ').replace(/\r/g, '\n');
+  const rowRegexes = [
+    // Cliente Contrato Real Satisfaccion/SLA Churn Region
+    /(?:^|\n|\s)([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]{2,})\s+(\d{4,})\s+(\d{4,})\s+(\d{1,3}(?:[.,]\d+)?)\s+(\d{1,3}(?:[.,]\d+)?)\s+([A-Za-zÁÉÍÓÚÑáéíóúñ_-]{2,})/g,
+    // Cliente Pais Contrato Real SLA Churn Tickets
+    /(?:^|\n|\s)([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]{2,})\s+([A-Za-zÁÉÍÓÚÑáéíóúñ_-]{2,})\s+(\d{4,})\s+(\d{4,})\s+(\d{1,3}(?:[.,]\d+)?)\s+(\d{1,3}(?:[.,]\d+)?)\s+(\d{1,4})/g,
+  ];
+  let match;
+  for (const rowRegex of rowRegexes) {
+    while ((match = rowRegex.exec(compact))) {
+      const client = match[1];
+      const key = normalizedKey(client);
+      if (['sheet', 'total', 'resumen', 'columns', 'cliente', 'contrato'].includes(key) || seen.has(key)) continue;
+      const hasCountryBeforeNumbers = match.length >= 8;
+      const region = hasCountryBeforeNumbers ? match[2] : match[6];
+      const contract = parseAttachmentNumber(hasCountryBeforeNumbers ? match[3] : match[2]);
+      const real = parseAttachmentNumber(hasCountryBeforeNumbers ? match[4] : match[3]);
+      const satisfaction = parseAttachmentNumber(hasCountryBeforeNumbers ? match[5] : match[4]);
+      const churn = parseAttachmentNumber(hasCountryBeforeNumbers ? match[6] : match[5]);
+      const tickets = hasCountryBeforeNumbers ? parseAttachmentNumber(match[7]) : null;
+      if (![contract, real, satisfaction, churn].every(Number.isFinite)) continue;
+      seen.add(key);
+      rows.push({
+        client,
+        contract,
+        real,
+        satisfaction,
+        churn,
+        region,
+        tickets,
+        gap: real - contract,
+      });
+    }
+  }
+  return rows;
+}
+
+function extractAttachmentRisks(text) {
+  const value = String(text || '');
+  const riskId = '[A-Z][0-9]+';
+  const risks = [];
+  const seen = new Set();
+  const pushRisk = (match) => {
+    if (!match) return;
+    const id = String(match[1] || '').trim();
+    if (!id) return;
+    const key = id.toUpperCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    risks.push({
+      id,
+      owner: String(match[2] || '').trim(),
+      severity: String(match[3] || '').trim(),
+      mitigation: String(match[4] || '').trim(),
+      due: match[5] ? String(match[5]).trim() : null,
+      blocks: match[6] ? String(match[6]).trim() : null,
+    });
+  };
+
+  const structured = new RegExp(`\\b(${riskId})\\s*[-–]\\s*([^-–\\n.]+?)\\s*[-–]\\s*Severidad\\s+([^-–\\n.]+?)\\s*[-–]\\s*Mitigaci[oó]n:\\s*([^-–\\n.]+)(?:\\s*[-–]\\s*Fecha\\s+l[ií]mite:\\s*([0-9-]+))?(?:\\s*[-–]\\s*Bloquea:\\s*([^\\n.]+))?`, 'gi');
+  let match;
+  while ((match = structured.exec(value))) pushRisk(match);
+
+  const prose = new RegExp(`\\bRiesgo\\s+(${riskId})\\s*:\\s*([^,\\n.]+),\\s*severidad\\s+([^,\\n.]+),\\s*mitigaci[oó]n:\\s*([^\\n.]+)`, 'gi');
+  while ((match = prose.exec(value))) pushRisk(match);
+
+  return risks;
+}
+
+function findAttachmentRisk(text) {
+  return extractAttachmentRisks(text)[0] || null;
+}
+
+function extractAttachmentFileNames(text) {
+  const names = [];
+  const seen = new Set();
+  const regex = /(?:^|\n)\s*#{0,6}\s*Archivo adjunto\s+\d+\s*:\s*([^\n]+\.(?:txt|csv|md|xlsx|docx|pdf))\s*$/gim;
+  let match;
+  while ((match = regex.exec(String(text || '')))) {
+    const name = match[1].trim();
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    names.push(name);
+  }
+  const inlineRegex = /(?:^|\s)([A-Za-z0-9._+-]+\.(?:txt|csv|md|xlsx|docx|pdf))/gim;
+  while ((match = inlineRegex.exec(String(text || '')))) {
+    const name = match[1].trim();
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    names.push(name);
+  }
+  return names;
+}
+
+function matchAttachmentText(text, patterns = []) {
+  for (const pattern of patterns) {
+    const match = String(text || '').match(pattern);
+    if (match && match[1]) return match[1].trim();
+  }
+  return null;
+}
+
+function extractTicketRows(text) {
+  const rows = [];
+  const raw = String(text || '').replace(/\|/g, ',');
+  const regex = /(?:^|\n)([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]{2,})\s*,\s*([A-Za-zÁÉÍÓÚÑáéíóúñ_-]{2,})\s*,\s*(\d{1,4})\s*,\s*([A-Za-zÁÉÍÓÚÑáéíóúñ_-]{2,})\s*,\s*([^\n]+)/g;
+  let match;
+  while ((match = regex.exec(raw))) {
+    if (/cliente/i.test(match[1])) continue;
+    rows.push({
+      client: match[1].trim(),
+      module: match[2].trim(),
+      tickets: parseAttachmentNumber(match[3]),
+      severity: match[4].trim(),
+      note: match[5].trim(),
+    });
+  }
+  return rows.filter((row) => Number.isFinite(row.tickets));
+}
+
+function extractStructuredAttachmentFacts(text) {
+  const raw = String(text || '');
+  const rows = extractClientMetricRows(raw);
+  const totalContract = matchAttachmentNumber(raw, [
+    /Total\s+contrato\s*[:\t ]+\$?\s*(\d+(?:[.,]\d+)?)/i,
+    /total\s+contratad[oa]\s+(?:es|validado\s+es|validada\s+es)?\s*[:\t ]*\$?\s*(\d+(?:[.,]\d+)?)/i,
+    /total[_\s-]*contratad[oa]['"]?\s*[:=]\s*\$?\s*(\d+(?:[.,]\d+)?)/i,
+  ]) ?? (rows.length ? rows.reduce((sum, row) => sum + row.contract, 0) : null);
+  const totalReal = matchAttachmentNumber(raw, [
+    /Total\s+real\s*[:\t ]+\$?\s*(\d+(?:[.,]\d+)?)/i,
+    /total\s+real\s+(?:combinado\s+)?(?:validado\s+)?(?:es|:)?\s*\$?\s*(\d+(?:[.,]\d+)?)/i,
+    /total[_\s-]*real(?:[_\s-]*combinado)?['"]?\s*[:=]\s*\$?\s*(\d+(?:[.,]\d+)?)/i,
+  ]) ?? (rows.length ? rows.reduce((sum, row) => sum + row.real, 0) : null);
+  const preliminaryTotalReal = matchAttachmentNumber(raw, [
+    /Total\s+real\s+preliminar\s*:\s*\$?\s*(\d+(?:[.,]\d+)?)/i,
+    /total[_\s-]*real[_\s-]*preliminar['"]?\s*[:=]\s*\$?\s*(\d+(?:[.,]\d+)?)/i,
+  ]);
+  const difference = matchAttachmentNumber(raw, [
+    /Diferencia\s*[:\t ]+\$?\s*(\d+(?:[.,]\d+)?)/i,
+    /diferencia\s+(?:es|validada\s+es)?\s*[:\t ]*\$?\s*(\d+(?:[.,]\d+)?)/i,
+    /diferencia(?:[_\s-]*exacta)?['"]?\s*[:=]\s*\$?\s*(\d+(?:[.,]\d+)?)/i,
+    /Varianza\s+neta\s*:\s*\$?\s*(\d+(?:[.,]\d+)?)/i,
+  ]) ?? (Number.isFinite(totalReal) && Number.isFinite(totalContract) ? totalReal - totalContract : null);
+  const weightedRetention = matchAttachmentNumber(raw, [
+    /Retenci[oó]n\s+ponderada\s*[:\t ]+\s*(\d+(?:[.,]\d+)?)/i,
+    /retenci[oó]n\s+ponderada\s+(?:validada\s+)?(?:es|:)?\s*(\d+(?:[.,]\d+)?)/i,
+    /retenci[oó]n[_\s-]*ponderada['"]?\s*[:=]\s*(\d+(?:[.,]\d+)?)/i,
+    /SLA\s+ponderado(?:\s+validado)?\s*:\s*(\d+(?:[.,]\d+)?)/i,
+    /SLA\s+ponderado(?:\s+validado)?\s*[\t ]+\s*(\d+(?:[.,]\d+)?)/i,
+  ]);
+  const officialChurn = matchAttachmentNumber(raw, [
+    /churn\s+total\s+oficial\s+es\s+(\d+(?:[.,]\d+)?)\s*%/i,
+    /DOCX[^.\n]{0,100}churn[^.\n]{0,40}?(\d+(?:[.,]\d+)?)\s*%?/i,
+    /churn\s+final\s+(\d+(?:[.,]\d+)?)\s*%?/i,
+  ]);
+  const preliminaryChurn = matchAttachmentNumber(raw, [
+    /Churn\s+total\s+preliminar:\s*(\d+(?:[.,]\d+)?)\s*%/i,
+    /PDF[^.\n]{0,100}(?:preliminar|dice)[^.\n]{0,40}?(\d+(?:[.,]\d+)?)\s*%?/i,
+    /no\s+(\d+(?:[.,]\d+)?)\s*%/i,
+  ]);
+  const risks = extractAttachmentRisks(raw);
+  const risk = risks[0] || null;
+  const ticketRows = extractTicketRows(raw);
+  const criticalTicket = ticketRows
+    .filter((row) => /critica|critico|critical/i.test(row.severity))
+    .sort((a, b) => b.tickets - a.tickets)[0] || null;
+  const highestTicket = ticketRows.slice().sort((a, b) => b.tickets - a.tickets)[0] || null;
+  const explicitWorstGapClient = matchAttachmentText(raw, [
+    /Mayor\s+brecha\s+negativa\s*[:\t ]+\s*([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]+)/i,
+    /mayor\s+brecha\s+negativa\s+(?:es|corresponde\s+a)?\s*([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]+)/i,
+  ]);
+  const computedWorstGap = rows.length
+    ? rows.slice().sort((a, b) => a.gap - b.gap || b.churn - a.churn)[0]
+    : null;
+  const invalidWorstGapClient = /^(por|cliente|clientes|mayor|brecha|negativa|contrato|real)$/i.test(explicitWorstGapClient || '');
+  const explicitWorstGap = explicitWorstGapClient && !invalidWorstGapClient
+    ? rows.find((row) => normalizedKey(row.client) === normalizedKey(explicitWorstGapClient))
+      || {
+        client: explicitWorstGapClient,
+        contract: null,
+        real: null,
+        satisfaction: null,
+        churn: null,
+        region: null,
+        tickets: null,
+        gap: null,
+      }
+    : null;
+  const worstGap = explicitWorstGap || computedWorstGap;
+  const lowSlaRows = rows.filter((row) => Number.isFinite(row.satisfaction) && row.satisfaction < 95)
+    .sort((a, b) => a.satisfaction - b.satisfaction || b.churn - a.churn);
+  const recommendsNoExpansion = /\bno\s+expandir\b/i.test(raw);
+  const successClientMatch = raw.match(/Cliente\s+([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]+)\s+como\s+caso\s+de\s+[eé]xito/i)
+    || raw.match(/Cliente\s+([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]+)\s+supera\s+contrato\s+y\s+sirve\s+como\s+caso\s+de\s+[eé]xito/i)
+    || raw.match(/usar\s+([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]+)\s+como\s+caso\s+de\s+[eé]xito/i)
+    || raw.match(/Cliente\s+de\s+referencia:\s*([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]+)/i)
+    || raw.match(/Cliente\s+de\s+[eé]xito\s+comercial:\s*([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]+)/i);
+  const successCandidate = successClientMatch ? successClientMatch[1].trim() : null;
+  const invalidSuccessCandidate = /^(usar|que|cual|cu[aá]l|cliente|caso)$/i.test(successCandidate || '');
+  const fallbackSuccessClient = rows.length
+    ? rows.slice().sort((a, b) => b.gap - a.gap || b.satisfaction - a.satisfaction)[0]?.client
+    : null;
+  const officialLaunchDate = matchAttachmentText(raw, [
+    /Fecha\s+oficial\s+de\s+lanzamiento:\s*([0-9-]+)/i,
+    /lanzamiento\s+oficial\s+para\s+([0-9-]+)/i,
+  ]);
+  const preliminaryLaunchDate = matchAttachmentText(raw, [
+    /Fecha\s+preliminar\s+de\s+lanzamiento:\s*([0-9-]+)/i,
+    /(?:indican|indica)\s+([0-9-]{10}),\s*esa\s+fecha\s+es\s+preliminar/i,
+  ]);
+  const contingency = matchAttachmentNumber(raw, [
+    /Contingencia\s+(?:disponible:|:)?\s*\$?\s*(\d+(?:[.,]\d+)?)/i,
+    /los\s+(\d+(?:[.,]\d+)?)\s*USD\s+solo\s+se\s+liberan/i,
+  ]);
+  const slaThreshold = matchAttachmentNumber(raw, [
+    /SLA\s+(\d+(?:[.,]\d+)?)%/i,
+    /SLA\s+de\s+[^.\n]+?\s+por\s+encima\s+de\s+(\d+(?:[.,]\d+)?)%/i,
+  ]);
+  const contingencyClientMatch = raw.match(/SLA\s+(?:de\s+)?([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]+)\s+y\s+([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]+)\s+por\s+encima/i);
+  const contingencyClients = contingencyClientMatch
+    ? [contingencyClientMatch[1].trim(), contingencyClientMatch[2].trim()]
+    : [];
+  const goCountriesMatch = raw.match(/(?:lanzar|launch)\s+([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]+)\s+y\s+([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]+)/i);
+  const goCountries = goCountriesMatch
+    ? [goCountriesMatch[1].trim(), goCountriesMatch[2].trim()]
+    : [];
+  const pausedCountry = risk?.blocks || matchAttachmentText(raw, [
+    /pausar\s+([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]+)/i,
+    /pause\s+([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]+)/i,
+  ]);
+  const fileNames = extractAttachmentFileNames(raw);
+
+  return {
+    rows,
+    ticketRows,
+    totalContract,
+    totalReal,
+    preliminaryTotalReal,
+    difference,
+    weightedRetention,
+    officialChurn,
+    preliminaryChurn,
+    risk,
+    risks,
+    worstGap,
+    lowSlaRows,
+    criticalTicket,
+    highestTicket,
+    recommendsNoExpansion,
+    officialLaunchDate,
+    preliminaryLaunchDate,
+    contingency,
+    slaThreshold,
+    contingencyClients,
+    goCountries,
+    pausedCountry,
+    fileNames,
+    successClient: successCandidate && !invalidSuccessCandidate ? successCandidate : fallbackSuccessClient,
+    hasBusinessFacts: rows.length > 0
+      || ticketRows.length > 0
+      || Number.isFinite(totalContract)
+      || Number.isFinite(totalReal)
+      || Number.isFinite(preliminaryTotalReal)
+      || Number.isFinite(contingency)
+      || Boolean(officialLaunchDate)
+      || Boolean(preliminaryLaunchDate)
+      || Number.isFinite(officialChurn)
+      || Number.isFinite(preliminaryChurn)
+      || risks.length > 0,
+  };
+}
+
+function buildStructuredAttachmentAnalysisAnswer({ goal, uploadedFileContext }) {
+  const request = String(goal || '');
+  const normalizedRequest = normalizedKey(request);
+  const facts = extractStructuredAttachmentFacts(uploadedFileContext);
+  if (!facts.hasBusinessFacts) return '';
+
+  const wantsCalculation = /\b(calcula|calcular|total|diferencia|brecha|retencion|ponderad[ao]|contrato|contratado|real)\b/.test(normalizedRequest);
+  const wantsRisk = /\b(riesgo|bloquea|presupuesto|dpa|legal|severidad|mitigacion|fecha limite)\b/.test(normalizedRequest);
+  const wantsRecommendation = /\b(recomendacion|recomendaciones|direccion|priorizar|expandir|caso de exito)\b/.test(normalizedRequest);
+  const wantsConflict = /\b(conflicto|contrasta|reconcilia|discrepancia|churn|pdf|docx|fuente primaria|oficial|preliminar)\b/.test(normalizedRequest);
+  const wantsLaunch = /\b(lanzamiento|fecha|go|no go|go no go|cronograma)\b/.test(normalizedRequest);
+  const wantsTickets = /\b(ticket|tickets|modulo|modulos|soporte|billing|integraciones)\b/.test(normalizedRequest);
+  const wantsSla = /\b(sla|retencion|churn|prioridad|priorizar|cliente)\b/.test(normalizedRequest);
+  const wantsContingency = /\b(contingencia|liberar|presupuesto)\b/.test(normalizedRequest);
+  const wantsSources = /\b(fuente|fuentes|cita|documento|documentos)\b/.test(normalizedRequest);
+  if (!wantsCalculation && !wantsRisk && !wantsRecommendation && !wantsConflict && !wantsLaunch && !wantsTickets && !wantsSla && !wantsContingency && !/\b(resumen|analiza|analisis|sintesis)\b/.test(normalizedRequest)) {
+    return '';
+  }
+
+  const paragraphs = [];
+  if (wantsCalculation && Number.isFinite(facts.totalReal) && Number.isFinite(facts.totalContract)) {
+    const diff = Number.isFinite(facts.difference) ? facts.difference : facts.totalReal - facts.totalContract;
+    const diffLabel = diff >= 0 ? 'por encima' : 'por debajo';
+    paragraphs.push(
+      `El total real combinado es **${formatAttachmentNumber(facts.totalReal)} USD** frente a **${formatAttachmentNumber(facts.totalContract)} USD** contratados; la diferencia es **${formatAttachmentNumber(Math.abs(diff))} USD** ${diffLabel} del contrato.`
+    );
+  }
+  if ((wantsCalculation || wantsRecommendation) && facts.worstGap) {
+    if ([facts.worstGap.contract, facts.worstGap.real, facts.worstGap.gap].every(Number.isFinite)) {
+      const gap = facts.worstGap.gap;
+      paragraphs.push(
+        `La peor brecha está en **${facts.worstGap.client}**: contrato de **${formatAttachmentNumber(facts.worstGap.contract)} USD** contra real de **${formatAttachmentNumber(facts.worstGap.real)} USD**, una variación de **${formatAttachmentNumber(gap)} USD**.`
+      );
+    } else {
+      paragraphs.push(`La mayor brecha negativa corresponde a **${facts.worstGap.client}** según el resumen del **XLSX**.`);
+    }
+  }
+  if (wantsCalculation && Number.isFinite(facts.weightedRetention)) {
+    paragraphs.push(`El SLA/retención ponderada validado es **${formatAttachmentNumber(facts.weightedRetention, { decimals: 1 })}%**.`);
+  }
+  if ((wantsCalculation || wantsConflict) && Number.isFinite(facts.preliminaryTotalReal) && Number.isFinite(facts.totalReal) && facts.preliminaryTotalReal !== facts.totalReal) {
+    paragraphs.push(`La cifra real preliminar del **PDF** es **${formatAttachmentNumber(facts.preliminaryTotalReal)} USD**, pero la cifra oficial a usar es **${formatAttachmentNumber(facts.totalReal)} USD** del **XLSX**.`);
+  }
+  if (wantsConflict && Number.isFinite(facts.officialChurn)) {
+    const prelim = Number.isFinite(facts.preliminaryChurn)
+      ? ` El **PDF** conserva el churn preliminar de **${formatAttachmentNumber(facts.preliminaryChurn, { decimals: 1 })}%**, marcado como no oficial.`
+      : '';
+    paragraphs.push(
+      `Para churn debe usarse **${formatAttachmentNumber(facts.officialChurn, { decimals: 1 })}%** del **DOCX**, porque el informe ejecutivo declara que es la **fuente primaria** cuando existe conflicto.${prelim}`
+    );
+  }
+  if (wantsLaunch && (facts.officialLaunchDate || facts.preliminaryLaunchDate)) {
+    const prelim = facts.preliminaryLaunchDate
+      ? ` La fecha **${facts.preliminaryLaunchDate}** queda como preliminar.`
+      : '';
+    paragraphs.push(`La fecha oficial de lanzamiento es **${facts.officialLaunchDate || facts.preliminaryLaunchDate}** según el **DOCX**, que es la fuente autoritativa para el go/no-go.${prelim}`);
+  }
+  if (wantsLaunch && (facts.goCountries.length || facts.pausedCountry)) {
+    const go = facts.goCountries.length ? `avanzan **${facts.goCountries.join('** y **')}**` : '';
+    const paused = facts.pausedCountry ? `queda pausado **${facts.pausedCountry}**` : '';
+    const condition = facts.risk
+      ? ` hasta cerrar **${facts.risk.id}**${facts.risk.due ? ` antes de **${facts.risk.due}**` : ''}`
+      : '';
+    paragraphs.push(`Go/no-go por país: ${[go, paused ? `${paused}${condition}` : ''].filter(Boolean).join('; ')}.`);
+  }
+  if ((wantsRisk || wantsRecommendation) && facts.risks.length) {
+    const riskText = facts.risks.map((risk) => {
+      const due = risk.due ? ` Fecha límite: **${risk.due}**.` : '';
+      const blocks = risk.blocks ? ` Bloquea: **${risk.blocks}**.` : '';
+      return `**${risk.id} - ${risk.owner} - Severidad ${risk.severity}**; mitigación: **${risk.mitigation}**.${due}${blocks}`;
+    }).join(' ');
+    paragraphs.push(
+      facts.risks.length > 1
+        ? `Riesgos identificados: ${riskText}`
+        : `El riesgo que bloquea aumentar presupuesto/expansión es ${riskText}`
+    );
+  }
+  if ((wantsSla || wantsRecommendation) && facts.lowSlaRows.length > 0) {
+    const summary = facts.lowSlaRows
+      .slice(0, 4)
+      .map((row) => `**${row.client}** (SLA ${formatAttachmentNumber(row.satisfaction, { decimals: 1 })}%, churn ${formatAttachmentNumber(row.churn, { decimals: 1 })}%, tickets ${Number.isFinite(row.tickets) ? formatAttachmentNumber(row.tickets) : 'n/d'})`)
+      .join('; ');
+    paragraphs.push(`Clientes prioritarios por SLA/churn: ${summary}.`);
+  }
+  if (wantsRecommendation && facts.successClient) {
+    const successRow = facts.rows.find((row) => normalizedKey(row.client) === normalizedKey(facts.successClient));
+    if (successRow && [successRow.satisfaction, successRow.churn, successRow.real, successRow.contract].every(Number.isFinite)) {
+      paragraphs.push(`Cliente como caso de exito: **${successRow.client}** por SLA **${formatAttachmentNumber(successRow.satisfaction, { decimals: 1 })}%**, churn **${formatAttachmentNumber(successRow.churn, { decimals: 1 })}%**, real **${formatAttachmentNumber(successRow.real)} USD** y contrato **${formatAttachmentNumber(successRow.contract)} USD**.`);
+    } else {
+      paragraphs.push(`Cliente como caso de exito: **${facts.successClient}**.`);
+    }
+  }
+  if (wantsTickets && (facts.criticalTicket || facts.highestTicket)) {
+    const critical = facts.criticalTicket
+      ? `El módulo crítico es **${facts.criticalTicket.client} / ${facts.criticalTicket.module}** con **${formatAttachmentNumber(facts.criticalTicket.tickets)}** tickets y severidad **${facts.criticalTicket.severity}**.`
+      : '';
+    const highest = facts.highestTicket
+      ? `La mayor carga total por módulo está en **${facts.highestTicket.client} / ${facts.highestTicket.module}** con **${formatAttachmentNumber(facts.highestTicket.tickets)}** tickets.`
+      : '';
+    paragraphs.push([critical, highest].filter(Boolean).join(' '));
+  }
+  if (wantsContingency && Number.isFinite(facts.contingency)) {
+    const thresholdClients = facts.contingencyClients.length
+      ? ` de **${facts.contingencyClients.join('** y **')}**`
+      : facts.lowSlaRows.length
+        ? ` de **${facts.lowSlaRows.slice(0, 2).map((row) => row.client).join('** y **')}**`
+        : '';
+    const threshold = Number.isFinite(facts.slaThreshold) ? ` y SLA${thresholdClients} por encima de **${formatAttachmentNumber(facts.slaThreshold)}%**` : '';
+    const riskGate = facts.risk ? ` cerrar **${facts.risk.id}**` : ' cerrar el riesgo bloqueante';
+    paragraphs.push(`La contingencia de **${formatAttachmentNumber(facts.contingency)} USD** no debe liberarse todavía; la condición es${riskGate}${threshold}.`);
+  }
+  if (wantsRecommendation) {
+    const actions = [];
+    if (facts.goCountries.length || facts.pausedCountry) {
+      const go = facts.goCountries.length ? `países go: **${facts.goCountries.join('** y **')}**` : '';
+      const paused = facts.pausedCountry ? `país pausado: **${facts.pausedCountry}**` : '';
+      actions.push([go, paused].filter(Boolean).join('; '));
+    }
+    if (facts.worstGap) actions.push(`priorizar **${facts.worstGap.client}** por brecha negativa y churn alto`);
+    if (facts.risk) actions.push(`cerrar **${facts.risk.id}** con **${facts.risk.mitigation}** antes de expandir`);
+    if (facts.successClient) actions.push(`usar **${facts.successClient}** como caso de exito`);
+    if (facts.recommendsNoExpansion) actions.push(`**no expandir** presupuesto hasta cerrar ${facts.risk?.id || 'el riesgo bloqueante'}`);
+    if (actions.length) {
+      paragraphs.push(`Recomendación ejecutiva: ${actions.join('; ')}.`);
+    }
+  }
+  if (wantsRisk && facts.recommendsNoExpansion && !paragraphs.some((line) => /\bno\s+expandir\b/i.test(line))) {
+    paragraphs.push(`La recomendación final es **no expandir** presupuesto comercial hasta cerrar ${facts.risk?.id || 'el riesgo bloqueante'}.`);
+  }
+  if (wantsSources) {
+    if (/\b(mapa|nombre\s+de\s+archivo|filename|archivo)\b/.test(normalizedRequest) && facts.fileNames.length) {
+      const sourceLabels = {
+        '.txt': 'memo operativo, totales y regla de contingencia',
+        '.csv': 'tickets por cliente, módulo y severidad',
+        '.md': 'playbook de expansión y secuencia operativa',
+        '.xlsx': 'métricas, totales, SLA, churn y brechas',
+        '.docx': 'acta autoritativa, fecha oficial y go/no-go',
+        '.pdf': 'riesgos y cifras preliminares',
+      };
+      const mappedFiles = facts.fileNames.map((name) => {
+        const lower = name.toLowerCase();
+        const ext = Object.keys(sourceLabels).find((candidate) => lower.endsWith(candidate));
+        return `**${name}**: ${sourceLabels[ext] || 'evidencia documental adjunta'}`;
+      });
+      paragraphs.push(`Mapa de fuentes por archivo: ${mappedFiles.join('; ')}.`);
+    }
+    const sources = [];
+    const byExt = (ext) => facts.fileNames.filter((name) => name.toLowerCase().endsWith(ext)).join(', ');
+    if (Number.isFinite(facts.totalReal) || facts.rows.length) sources.push(`**XLSX**${byExt('.xlsx') ? ` (${byExt('.xlsx')})` : ''}: métricas de clientes, totales, diferencia y SLA/retención ponderada`);
+    if (facts.ticketRows.length) sources.push(`**CSV**${byExt('.csv') ? ` (${byExt('.csv')})` : ''}: tickets por cliente, módulo y severidad`);
+    if (facts.officialLaunchDate || facts.successClient) sources.push(`**DOCX**${byExt('.docx') ? ` (${byExt('.docx')})` : ''}: fecha oficial, go/no-go y decisiones del comité`);
+    if (Number.isFinite(facts.preliminaryTotalReal) || Number.isFinite(facts.preliminaryChurn) || facts.risk) sources.push(`**PDF**${byExt('.pdf') ? ` (${byExt('.pdf')})` : ''}: cifras preliminares y riesgos`);
+    if (facts.recommendsNoExpansion || Number.isFinite(facts.contingency)) sources.push(`**TXT**${byExt('.txt') ? ` (${byExt('.txt')})` : ''}: consolidado operativo y regla de contingencia`);
+    if (byExt('.md')) sources.push(`**MD** (${byExt('.md')}): playbook de expansión y condiciones de liberación`);
+    if (sources.length) paragraphs.push(`Fuentes por documento: ${sources.join('; ')}.`);
+  }
+
+  if (paragraphs.length === 0 && facts.hasBusinessFacts) {
+    if (Number.isFinite(facts.totalReal) && Number.isFinite(facts.totalContract)) {
+      paragraphs.push(`Los adjuntos muestran **${formatAttachmentNumber(facts.totalReal)} USD** reales contra **${formatAttachmentNumber(facts.totalContract)} USD** contratados.`);
+    }
+    if (facts.risk) {
+      paragraphs.push(`El riesgo principal es **${facts.risk.id} - ${facts.risk.owner}**, severidad **${facts.risk.severity}**, con mitigación **${facts.risk.mitigation}**.`);
+    }
+    if (facts.officialLaunchDate) {
+      paragraphs.push(`La fecha oficial de lanzamiento es **${facts.officialLaunchDate}**.`);
+    }
+    if (Number.isFinite(facts.officialChurn)) {
+      paragraphs.push(`El churn oficial es **${formatAttachmentNumber(facts.officialChurn, { decimals: 1 })}%** según el **DOCX**.`);
+    }
+  }
+
+  if (paragraphs.length === 0) return '';
+  return ['### Análisis de documentos adjuntos', '', paragraphs.join('\n\n')].join('\n');
+}
+
 function looksLikeMissingAttachmentAnswer(text) {
   const value = String(text || '').toLowerCase();
   if (!value.trim()) return true;
@@ -194,7 +726,13 @@ function looksLikeMissingAttachmentAnswer(text) {
     value.includes('no se encontró texto disponible') ||
     value.includes('no se encontro texto disponible') ||
     value.includes('proporciona un archivo legible') ||
-    value.includes('no pude acceder al contenido')
+    value.includes('no pude acceder al contenido') ||
+    value.includes('no pude usar docintel') ||
+    value.includes('no pude usar la herramienta') ||
+    value.includes('falló de forma repetida') ||
+    value.includes('fallo de forma repetida') ||
+    value.includes('vuelve a intentarlo') ||
+    value.includes('reformula la solicitud')
   );
 }
 
@@ -212,7 +750,8 @@ function looksLikeEmptyOrWeakFinalAnswer(text) {
 
 function wantsBibliographyAnswer(request) {
   const value = normalizedKey(request);
-  return /\b(bibliograf|referenc|citas?|apa|vancouver|harvard|chicago|mla|formato bibliograf)/.test(value);
+  if (/\bcita\s+(?:fuente|fuentes|por\s+documento|documentos)\b/.test(value)) return false;
+  return /\b(bibliograf|referencias?\s+bibliograf|citas?\s+(?:bibliograf|apa|vancouver|harvard|chicago|mla)|apa|vancouver|harvard|chicago|mla|formato bibliograf)/.test(value);
 }
 
 function detectApaEditionLabel(request) {
@@ -222,6 +761,9 @@ function detectApaEditionLabel(request) {
 }
 
 function mapSpreadsheetCitationColumns(headerCells) {
+  if (!Array.isArray(headerCells)) {
+    return { title: -1, authors: -1, year: -1, venue: -1, doi: -1 };
+  }
   const columnMap = { title: -1, authors: -1, year: -1, venue: -1, doi: -1 };
   headerCells.forEach((label, columnIndex) => {
     const key = normalizedKey(label);
@@ -424,13 +966,127 @@ function resolveAttachmentFallbackMarkdown({ goal, uploadedFileContext, reason =
   );
 }
 
+function pickAttachmentRecoveryRuntime(env = process.env) {
+  const flag = String(env.AGENT_TASK_LLM_RECOVERY || '').trim();
+  if (flag === '0') return null;
+  // Determinismo en tests: sin opt-in explícito no se hace ninguna llamada
+  // de red (los shards de CI exportan keys dummy que aquí harían requests).
+  if (String(env.NODE_ENV) === 'test' && flag !== '1') return null;
+  if (env.OPENAI_API_KEY) return { provider: 'OpenAI', model: env.AGENT_TASK_RECOVERY_MODEL || 'gpt-4o-mini' };
+  if (env.GEMINI_API_KEY) return { provider: 'Gemini', model: env.GEMINI_VISION_MODEL || 'gemini-2.5-flash' };
+  if (env.OPENROUTER_API_KEY) return { provider: 'OpenRouter', model: 'openai/gpt-4o-mini' };
+  return null;
+}
+
+/**
+ * Última línea de defensa con LLM: cuando el agente termina con una
+ * respuesta vacía o débil sobre un adjunto, intenta una respuesta directa
+ * de un solo turno (sin loop agéntico) con el primer proveedor configurado
+ * antes de degradar al volcado mecánico de fragmentos — que responde con
+ * estadísticas sueltas e ignora la pregunta concreta del usuario.
+ * Devuelve markdown o null (sin proveedor, error o respuesta vacía).
+ */
+async function buildLlmAttachmentRecoveryAnswer({ goal, uploadedFileContext, env = process.env, clientFactory = null }) {
+  const question = String(goal || '').trim();
+  const material = stripScaffolding(uploadedFileContext);
+  if (!question || !material || countUsefulWords(uploadedFileContext) < 8) return null;
+  const runtime = pickAttachmentRecoveryRuntime(env);
+  if (!runtime) return null;
+  try {
+    const aiService = require('../ai-service');
+    const client = clientFactory ? clientFactory(runtime.provider) : aiService.getClient(runtime.provider);
+    const completion = await client.chat.completions.create({
+      model: runtime.model,
+      stream: false,
+      temperature: 0.3,
+      messages: [
+        {
+          role: 'system',
+          content: 'Responde en español la pregunta concreta del usuario usando exclusivamente el material adjunto. '
+            + 'TAREAS META sobre el documento: si el usuario pide la cita o referencia bibliográfica del documento '
+            + '(en Vancouver, APA, MLA, Harvard, IEEE, ISO 690…), CONSTRUYE esa referencia con los datos bibliográficos '
+            + 'del propio material (título, autores, año, revista/institución, volumen/páginas, DOI/URL) y marca como '
+            + '[no disponible] cualquier campo que el material no revele; con un documento académico adjunto, "cita" '
+            + 'significa SIEMPRE referencia bibliográfica, nunca una cita de calendario. '
+            + 'Solo para preguntas de contenido cuya respuesta no aparece en el material: dilo explícitamente en una '
+            + 'frase y resume en otra qué contiene el material. '
+            + 'No inventes datos que no estén en el material.',
+        },
+        {
+          role: 'user',
+          content: `Pregunta del usuario: ${question.slice(0, 1000)}\n\nMaterial adjunto:\n${material.slice(0, 48000)}`,
+        },
+      ],
+    });
+    const text = completion?.choices?.[0]?.message?.content;
+    return typeof text === 'string' && text.trim().length >= 20 ? text.trim() : null;
+  } catch (err) {
+    console.warn('[agent-task] LLM attachment recovery falló:', err?.message || err);
+    return null;
+  }
+}
+
+function buildToolObservationFallbackContext(steps = []) {
+  if (!Array.isArray(steps) || steps.length === 0) return '';
+  const snippets = [];
+  for (const step of steps) {
+    for (const action of step?.actions || []) {
+      const tool = String(action?.tool || '').trim();
+      if (!tool || tool === 'finalize') continue;
+      const observation = action?.observation;
+      if (!observation || observation.error) continue;
+      let text = '';
+      if (typeof observation === 'string') {
+        text = observation;
+      } else if (typeof observation.stdout === 'string') {
+        text = observation.stdout;
+      } else if (typeof observation.output === 'string') {
+        text = observation.output;
+      } else if (typeof observation.result === 'string') {
+        text = observation.result;
+      } else {
+        try { text = JSON.stringify(observation); } catch { text = ''; }
+      }
+      const cleaned = String(text || '').replace(/\s+/g, ' ').trim();
+      if (!cleaned || cleaned === '{}' || cleaned === '[]') continue;
+      snippets.push(`Herramienta ${tool}: ${cleaned.slice(0, 2000)}`);
+    }
+  }
+  return snippets.join('\n');
+}
+
+function shouldUseDeterministicAttachmentAnswer({
+  goal,
+  documentPolicy,
+  files = [],
+  env = process.env,
+} = {}) {
+  if (String(env.AGENT_TASK_ATTACHMENT_FASTPATH || '').trim() === '0') return false;
+  if (!Array.isArray(files) || files.length === 0) return false;
+  if (documentPolicy?.mode !== 'chat_only' || documentPolicy?.autoGenerate) return false;
+
+  const request = normalizedKey(goal);
+  if (!request) return false;
+  const mentionsExternalLookup = /\b(?:web|internet|google|busca|buscar|investiga|investigar|fuentes externas|papers recientes|articulos recientes)\b/.test(request);
+  const forbidsExternalLookup = /\b(?:no\s+(?:uses?|usar|busques?|buscar|investigues?|investigar)\s+(?:en\s+)?(?:la\s+)?(?:web|internet|google|fuentes externas)|sin\s+(?:web|internet|google|fuentes externas))\b/.test(request);
+  if (mentionsExternalLookup && !forbidsExternalLookup) {
+    return false;
+  }
+  if (/\b(?:entregable|descargable|convierte|exporta|exportar)\b/.test(request)) {
+    return false;
+  }
+  const inlineSourceMap = /\b(?:mapa\s+de\s+fuentes|fuentes?\s+por\s+(?:archivo|documento)|enumera\s+cada\s+archivo|cita\s+(?:la\s+)?fuente\s+por\s+documento)\b/.test(request);
+  if (/\b(?:crea|crear|genera|generar|formatea)\b/.test(request)
+    && !inlineSourceMap
+    && !/\b(?:no\s+(?:crees|crear|generes|generar)|sin\s+(?:crear|generar)|responde\s+solo\s+en\s+chat|solo\s+en\s+chat)\b/.test(request)) {
+    return false;
+  }
+
+  return /\b(?:resumen|resume|sintesis|analiza|analisis|explica|describe|descripcion|que dice|de que trata|conclusion|conclusiones|recomendacion|recomendaciones|extrae|lee|revisa|identifica|resuelve|detecta|calcula|calcular|comput[ao]|total(?:es)?|diferencia|promedio|ponderad[ao]|porcentaje|margen|variaci[oó]n|contradicci[oó]n|conflicto|discrepa|discrepancia|reconcilia|compar[ao]|contrasta|cruza|exact[ao]s?|cifra\s+final|fuentes?|riesgos?|tickets?|modulos?|m[oó]dulos?|fecha|go|pais|pa[ií]s|cliente|clientes|caso\s+de\s+exito|exito|bloquea|bloqueado|bloqueante|mitigacion|severidad|limite|fecha\s+limite|dueno|dueño|imagen|foto|documento|archivo|adjunto|parrafo|parrafos)\b/.test(request);
+}
+
 function wantsSingleParagraphAnswer(request) {
-  const value = normalizedKey(request);
-  return (
-    /\b(?:un|uno|1)\s+(?:solo\s+)?parrafo\b/.test(value) ||
-    /\ben\s+(?:un|uno|1)\s+parrafo\b/.test(value) ||
-    /\bparrafo\s+unico\b/.test(value)
-  );
+  return outputFormat.wantsSingleParagraphSynthesis(request);
 }
 
 /**
@@ -440,15 +1096,7 @@ function wantsSingleParagraphAnswer(request) {
  * the user-facing directive "análisis de documentos sin viñetas".
  */
 function wantsBulletList(request) {
-  const value = normalizedKey(request);
-  return (
-    /\bvinetas?\b/.test(value) ||
-    /\bbullets?\b/.test(value) ||
-    /\blistas?\b/.test(value) ||
-    /\bpuntos?\s+(?:clave|principales)\b/.test(value) ||
-    /\bchecklist\b/.test(value) ||
-    /\benumera(?:r|cion)?\b/.test(value)
-  );
+  return outputFormat.wantsBulletList(request);
 }
 
 function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext, reason = '' }) {
@@ -458,15 +1106,25 @@ function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext, reas
   if (bibliographyAnswer) return bibliographyAnswer;
 
   const cleanedRaw = stripScaffolding(uploadedFileContext);
+  const structuredAnswer = buildStructuredAttachmentAnalysisAnswer({
+    goal: request,
+    uploadedFileContext,
+  });
+  if (structuredAnswer) return structuredAnswer;
+
   const cleaned = normalizeAttachmentFallbackContent(cleanedRaw)
     .replace(/\s+/g, ' ')
     .trim();
   const minUsefulWords = wantsBibliographyAnswer(request) ? 8 : 30;
   if (!cleaned || countUsefulWords(cleaned) < minUsefulWords) return '';
-  const requestedParagraphs = Math.max(
-    1,
-    Math.min(6, Number((request.match(/\b(\d{1,2})\s+p[aá]rrafos?\b/i) || [])[1]) || 0)
-  );
+  const formatSpec = outputFormat.parseOutputFormatRequest(request);
+  // Honor explicit paragraph counts in digit ("2 párrafos") or word ("dos
+  // párrafos") form. A single-paragraph request is handled by its own branch
+  // below, so we only surface counts >= 2 here.
+  const explicitParagraphs = formatSpec.paragraphs && formatSpec.paragraphs >= 2
+    ? Math.min(6, formatSpec.paragraphs)
+    : 0;
+  const requestedParagraphs = Math.max(1, explicitParagraphs);
   const wantsConclusions = /\b(conclusi[oó]n|conclusiones|concluye|concluir)\b/i.test(request);
   const wantsSummary = /\b(resumen|resume|sintesis|s[ií]ntesis|de qu[eé] trata|qu[eé] dice|explica)\b/i.test(request);
   const wantsRecommendations = /\b(recomendaci[oó]n|recomendaciones|sugerencia|sugerencias|propuesta|propuestas)\b/i.test(request);
@@ -502,7 +1160,11 @@ function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext, reas
   }
 
   if (!wantsConclusions) {
-    const body = sentences.slice(0, Math.max(4, paragraphCount * 2)).join(' ');
+    const denseEvidenceRequest = /\b(?:calcula|calcular|total|diferencia|contradiccion|contradicci[oó]n|conflicto|compara|comparar|contrasta|cruza|riesgo|riesgos|matriz|recomendacion|recomendaciones|fuente|fuentes)\b/i.test(request);
+    const narrativeSentences = bulletSentences.length ? bulletSentences : sentences;
+    const body = narrativeSentences
+      .slice(0, denseEvidenceRequest ? Math.max(8, paragraphCount * 4) : Math.max(4, paragraphCount * 2))
+      .join(' ');
     const clippedBody = body.length > 1800 ? `${body.slice(0, 1800).trim()}...` : body;
     if (wantsSummary || wantsRecommendations) {
       // When the user didn't ask for bullets we render the executive
@@ -511,6 +1173,19 @@ function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext, reas
       // list, so the whole answer stays bullet-free unless the user
       // opts in via wantsBulletList.
       const heading = '### Análisis del documento adjunto';
+      // Honor an explicit multi-paragraph request (e.g. "resumen en 2 párrafos")
+      // even for summaries, so the output format matches what the user asked for.
+      if (explicitParagraphs >= 2 && !allowBullets) {
+        const paragraphSource = (bulletSentences.length >= explicitParagraphs ? bulletSentences : sentences)
+          .slice(0, Math.max(explicitParagraphs * 2, Math.min(sentences.length, explicitParagraphs * 3)));
+        const summaryParagraphs = distributeSentencesIntoParagraphs(paragraphSource, explicitParagraphs);
+        if (summaryParagraphs.length >= 2) {
+          const recBlock = wantsRecommendations
+            ? '\n**Siguiente paso recomendado.** Usa estos hallazgos como base y pídeme una matriz, informe Word/PDF o tabla comparativa si necesitas un entregable descargable.'
+            : '';
+          return [heading, '', summaryParagraphs.join('\n\n'), recBlock].filter(Boolean).join('\n');
+        }
+      }
       const summaryBlock = executiveSummary
         ? allowBullets
           ? `**Resumen ejecutivo**\n${executiveSummary}`
@@ -595,20 +1270,38 @@ function buildAttachmentUnavailableFallbackAnswer({ goal = '', uploadedFileConte
 function detectAgentRuntimeProvider(modelId) {
   const id = String(modelId || '').trim();
   if (!id) return null;
-  if (/^(gpt-|o\d|chatgpt-|ft:gpt-|ft:o)/i.test(id)) {
+  // Bare OpenAI-native ids (NO aggregator slug): gpt-4o, o1, chatgpt-*, fine-tunes.
+  // A slug form like `openai/gpt-5.5` is NOT native OpenAI — it routes through
+  // OpenRouter (see the slug branch below), which is how the main chat flow
+  // resolves it (provider-inference.js). Guarding on the absence of a `/`
+  // is what stops openai/gpt-5.5 from silently falling through to the
+  // gpt-4o-mini fallback.
+  if (!id.includes('/') && /^(gpt-|o\d|chatgpt-|ft:gpt-|ft:o)/i.test(id)) {
     return { provider: 'OpenAI', apiKeyEnv: 'OPENAI_API_KEY', baseURL: null };
   }
-  if (/^deepseek(-|\/|$)/i.test(id)) {
+  // Direct DeepSeek API only for bare `deepseek-v*/chat/reasoner` ids. The
+  // slug form `deepseek/...` is an OpenRouter aggregator id and is handled
+  // by the slug branch below (matches isDirectDeepSeekModel in
+  // provider-inference.js).
+  if (/^deepseek-(v\d|chat|reasoner)/i.test(id)) {
     return { provider: 'DeepSeek', apiKeyEnv: 'DEEPSEEK_API_KEY', baseURL: 'https://api.deepseek.com' };
   }
-  if (/^gemini-/i.test(id) || /^imagen-/i.test(id)) {
+  // Google Gemini family (bare gemini-*/imagen-* ids, no slug).
+  if (!id.includes('/') && (/^gemini-/i.test(id) || /^imagen-/i.test(id))) {
     return {
       provider: 'Gemini',
       apiKeyEnv: 'GEMINI_API_KEY',
       baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
     };
   }
-  if (/^(anthropic|meta-llama|moonshotai|x-ai|openrouter)\//i.test(id)) {
+  // Any aggregator slug ("provider/model") routes through OpenRouter — this is
+  // exactly how the main chat flow (provider-inference.js) maps openai/*,
+  // google/*, anthropic/*, x-ai/*, qwen/*, mistralai/*, moonshotai/*, etc.
+  // Previously only a short allowlist (anthropic|meta-llama|moonshotai|x-ai|
+  // openrouter) matched, so openai/gpt-5.5 returned null and got force-remapped
+  // to gpt-4o-mini (modelRemapped:true). Catching every slug keeps the agent
+  // runtime in lockstep with the user's selected model.
+  if (id.includes('/')) {
     return {
       provider: 'OpenRouter',
       apiKeyEnv: 'OPENROUTER_API_KEY',
@@ -622,13 +1315,24 @@ function detectAgentRuntimeProvider(modelId) {
   return null;
 }
 
-function buildOpenAICompatibleClient(target) {
+function buildOpenAICompatibleClient(target, env = process.env) {
   if (!target || !target.apiKeyEnv) return null;
-  const apiKey = process.env[target.apiKeyEnv];
+  const apiKey = env[target.apiKeyEnv];
   if (!apiKey) return null;
   const opts = { apiKey };
   if (target.baseURL) opts.baseURL = target.baseURL;
   if (target.defaultHeaders) opts.defaultHeaders = target.defaultHeaders;
+  // Bound every model call. The OpenAI SDK defaults to a 600s (10 min)
+  // per-request timeout — a hung or degraded provider would otherwise freeze
+  // the planning phase ("Analizando solicitud", 0 steps / 0 tools) for
+  // minutes while the client's 90s idle watchdog aborts the run. A tight
+  // timeout makes a stalled call reject fast so react-agent breaks with a
+  // clean `model_error` (and the contract resolver falls back to its
+  // heuristic) instead of stalling silently. Both knobs are env-tunable.
+  const timeoutMs = Number.parseInt(process.env.AGENT_TASK_LLM_TIMEOUT_MS || '', 10);
+  opts.timeout = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60_000;
+  const maxRetries = Number.parseInt(process.env.AGENT_TASK_LLM_MAX_RETRIES || '', 10);
+  opts.maxRetries = Number.isFinite(maxRetries) && maxRetries >= 0 ? maxRetries : 2;
   return new OpenAI(opts);
 }
 
@@ -654,6 +1358,45 @@ function normalizeAgentRuntimeModel(selectedModel) {
   };
 }
 
+function agentModelFailoverEnabled(env = process.env) {
+  const flag = String(env.AGENT_TASK_MODEL_FAILOVER || '').trim();
+  if (flag === '0') return false;
+  // Determinismo en tests: los shards de CI exportan keys dummy que aquí
+  // dispararían llamadas de red reales en el reintento.
+  if (String(env.NODE_ENV) === 'test' && flag !== '1') return false;
+  return true;
+}
+
+/**
+ * Runtime de respaldo cross-provider para cuando el modelo seleccionado
+ * falla EN EJECUCIÓN (402 sin créditos, 401, caída del proveedor) aunque
+ * su key exista. Elige el primer proveedor DISTINTO al que acaba de
+ * fallar que tenga key configurada. Devuelve null si no hay alternativa.
+ */
+function resolveAgentModelFailoverRuntime(profile, env = process.env) {
+  const failedProvider = String(profile?.detected?.provider || 'OpenAI');
+  const fallbackModel = String(
+    env.AGENT_TASK_OPENAI_MODEL || env.AGENT_TASK_RUNTIME_MODEL || 'gpt-4o-mini'
+  ).trim() || 'gpt-4o-mini';
+  const candidates = [
+    { provider: 'OpenAI', apiKeyEnv: 'OPENAI_API_KEY', baseURL: null, model: fallbackModel },
+    {
+      provider: 'Gemini',
+      apiKeyEnv: 'GEMINI_API_KEY',
+      baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+      model: env.GEMINI_VISION_MODEL || 'gemini-2.5-flash',
+    },
+    { provider: 'DeepSeek', apiKeyEnv: 'DEEPSEEK_API_KEY', baseURL: 'https://api.deepseek.com', model: 'deepseek-v4-flash' },
+  ];
+  for (const target of candidates) {
+    if (target.provider === failedProvider) continue;
+    if (!env[target.apiKeyEnv]) continue;
+    const client = buildOpenAICompatibleClient(target, env);
+    if (client) return { client, model: target.model, provider: target.provider };
+  }
+  return null;
+}
+
 // Resolve the OpenAI-compatible client the agent runtime should drive.
 // Tries the user's selected provider first; if that provider has no API
 // key configured, walks a small fallback list so we never hand the
@@ -673,8 +1416,20 @@ function resolveAgentRuntimeClient(profile) {
     return { client: primary, model: profile.runtimeModel, provider: profile.detected.provider };
   }
 
+  // The user's selected provider has no usable key. Walk a small fallback
+  // list — but each fallback MUST use a model ITS OWN provider accepts. The
+  // selected model id (e.g. an OpenRouter "moonshotai/kimi-k2.6" when
+  // OPENROUTER_API_KEY is unset/empty) would be rejected by the OpenAI or
+  // DeepSeek endpoints, which previously left the runtime driving a valid
+  // client with a FOREIGN model id → every LLM call failed and the run
+  // stalled silently at "Analizando solicitud" (0 steps / 0 tools) until the
+  // client's 90s idle watchdog fired. So the OpenAI fallback uses a known
+  // OpenAI model (env-tunable), never the originally-selected id.
+  const openAIFallbackModel = String(
+    process.env.AGENT_TASK_OPENAI_MODEL || process.env.AGENT_TASK_RUNTIME_MODEL || 'gpt-4o-mini'
+  ).trim() || 'gpt-4o-mini';
   const fallbackTargets = [
-    { provider: 'OpenAI', apiKeyEnv: 'OPENAI_API_KEY', baseURL: null, model: profile?.runtimeModel || 'gpt-4o-mini' },
+    { provider: 'OpenAI', apiKeyEnv: 'OPENAI_API_KEY', baseURL: null, model: openAIFallbackModel },
     { provider: 'DeepSeek', apiKeyEnv: 'DEEPSEEK_API_KEY', baseURL: 'https://api.deepseek.com', model: 'deepseek-v4-flash' },
     {
       provider: 'OpenRouter',
@@ -684,7 +1439,9 @@ function resolveAgentRuntimeClient(profile) {
         'HTTP-Referer': process.env.NEXT_PUBLIC_URL || process.env.FRONTEND_URL || 'http://localhost:3000',
         'X-Title': 'SiraGPT',
       },
-      model: 'moonshotai/kimi-k2.6',
+      // Honor the selected model when it really is an OpenRouter model;
+      // otherwise drive a known OpenRouter default.
+      model: profile?.detected?.provider === 'OpenRouter' ? profile.runtimeModel : 'moonshotai/kimi-k2.6',
     },
   ];
   for (const target of fallbackTargets) {
@@ -724,11 +1481,11 @@ async function persistAssistantMessage({
       },
     };
     if (assistantMessageId) {
-      return prisma.message.update({ where: { id: assistantMessageId }, data });
+      return await prisma.message.update({ where: { id: assistantMessageId }, data });
     }
     const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
     if (!chat) return null;
-    return prisma.message.create({
+    return await prisma.message.create({
       data: { chatId, role: 'ASSISTANT', timestamp: new Date(), ...data },
     });
   } catch {
@@ -736,7 +1493,45 @@ async function persistAssistantMessage({
   }
 }
 
-async function runAgentTaskJob(payload = {}, job = null) {
+// ── in-flight idempotency guard ──────────────────────────────────────
+//
+// `runAgentTaskJob` is reachable from several independent execution
+// backends for the SAME taskId: the BullMQ worker, the queue→local handoff
+// watchdog (routes/agent-task.js runAgentJobInProcess), the local-fallback
+// route, the Telegram/codex/batch entrypoints, and the Temporal activity.
+// On the 1-vCPU VM, when the queue is slow the watchdog fires a local run
+// WHILE the worker also picks the job up, and a client that reconnects after
+// the ~30s GCLB response cut can trigger yet another. Each entry re-runs the
+// full pipeline → duplicate `agent_task_worker_started` log lines and, worse,
+// duplicate LLM spend. We collapse concurrent invocations for one taskId to a
+// single in-flight run; late callers await the SAME promise instead of
+// starting a parallel one. The entry clears once the run settles, so BullMQ's
+// legitimate failure-retry path (a fresh run after the previous finished) is
+// unaffected.
+const inFlightAgentTasks = new Map(); // taskId → Promise
+
+function runAgentTaskJob(payload = {}, job = null) {
+  const taskId = payload && payload.taskId;
+  if (!taskId) return _runAgentTaskJobImpl(payload, job);
+  const existingRun = inFlightAgentTasks.get(taskId);
+  if (existingRun) {
+    try {
+      auditLog.audit({
+        event: 'agent_task_duplicate_invocation_skipped',
+        taskId,
+        jobId: job?.id ? String(job.id) : (payload.jobId || null),
+      });
+    } catch (_) { /* never throw from the dedup guard */ }
+    return existingRun;
+  }
+  const run = Promise.resolve()
+    .then(() => _runAgentTaskJobImpl(payload, job))
+    .finally(() => { inFlightAgentTasks.delete(taskId); });
+  inFlightAgentTasks.set(taskId, run);
+  return run;
+}
+
+async function _runAgentTaskJobImpl(payload = {}, job = null) {
   const {
     taskId,
     traceId,
@@ -750,11 +1545,14 @@ async function runAgentTaskJob(payload = {}, job = null) {
     model = 'gpt-4o',
     maxSteps = 60,
     maxRuntimeMs = 2 * 60 * 60 * 1000,
+    folderCode = null,
+    cycle = null,
   } = payload;
   if (!taskId) throw new Error('agent task payload missing taskId');
   if (!user?.id) throw new Error('agent task payload missing user.id');
   const plainTranscriptionRequest = isPlainTranscriptionRequest(goal);
   const hasAttachedFiles = Array.isArray(files) && files.length > 0;
+  let wantsSourcePreservingEdit = isSourcePreservingEditRequest(displayGoal || goal, files);
   const deterministicVancouverRequest = isVancouverMatrixWordRequest(`${goal || ''} ${displayGoal || ''}`) &&
     hasAttachedFiles;
   if (!process.env.OPENAI_API_KEY && !plainTranscriptionRequest && !deterministicVancouverRequest && !hasAttachedFiles) {
@@ -799,15 +1597,24 @@ async function runAgentTaskJob(payload = {}, job = null) {
   const startedAt = Date.now();
   const existing = taskStore.getTaskSnapshotForUser(taskId, user.id);
   let streamState = existing?.streamState || internals.initialAgentState();
-  let documentPolicy = payload.documentPolicy || existing?.documentPolicy || buildDocumentDeliveryPolicy({
-    goal,
-    displayGoal,
-    files,
-  });
+  let documentPolicy = normalizeDocumentPolicyCoherence(
+    payload.documentPolicy || existing?.documentPolicy || buildDocumentDeliveryPolicy({
+      goal,
+      displayGoal,
+      files,
+    })
+  );
   const runtimeModelProfile = normalizeAgentRuntimeModel(model);
 
   const executionProfile = buildExecutionProfile({ goal, fileIds: files, fileMetadata });
   const intentAlignmentProfile = buildUserIntentAlignmentProfile({ request: goal, fileIds: files });
+  const openclawRuntimeProfile = payload.openclawRuntimeProfile || existing?.openclawRuntimeProfile || buildOpenClawRuntimeProfile({
+    goal,
+    userId: user.id,
+    chatId,
+    fileIds: files,
+    model,
+  });
   // Attribution telemetry — runs the executive summary on the goal so we
   // can record what the system thought the user wanted before any step
   // executes. Pure local, no LLM. Posted as a task event so reviewers see
@@ -851,7 +1658,12 @@ async function runAgentTaskJob(payload = {}, job = null) {
     runtimeModelProfile.remapped = runtimeClientResolution.model !== runtimeModelProfile.displayModel
       || runtimeClientResolution.provider !== runtimeModelProfile.detected?.provider;
   }
-  if (!plainTranscriptionRequest && openai) {
+  const deterministicAttachmentAnswer = shouldUseDeterministicAttachmentAnswer({
+    goal: displayGoal || goal,
+    documentPolicy,
+    files,
+  });
+  if (!plainTranscriptionRequest && openai && !deterministicAttachmentAnswer && !wantsSourcePreservingEdit) {
     try {
       const resolved = await resolveTaskContract({
         goal,
@@ -870,9 +1682,11 @@ async function runAgentTaskJob(payload = {}, job = null) {
     goal,
     executionProfile,
     intentAlignmentProfile,
+    openclawProfile: openclawRuntimeProfile,
     universalTaskContract,
     fileIds: files,
     maxRuntimeMs,
+    toolManifests: listManifests(),
   });
   const enterpriseExecutionGraph = buildEnterpriseExecutionGraph({
     contract: universalTaskContract,
@@ -896,6 +1710,11 @@ async function runAgentTaskJob(payload = {}, job = null) {
     toolRuntimePlan: enterpriseToolRuntimePlan,
     qaBoardReview: enterpriseQaBoardReview,
   });
+  const integrationRuntimeProfile = buildIntegrationRuntimeProfile({
+    contract: universalTaskContract,
+    fileIds: files,
+    requiredTools: enterpriseToolRuntimePlan?.summary?.requestedTools || [],
+  });
   let durableExecution = null;
   try {
     durableExecution = durableExecutionStore.createDurableExecutionRecord({
@@ -915,6 +1734,7 @@ async function runAgentTaskJob(payload = {}, job = null) {
     agenticOperatingCore: agenticOperatingCore.summary,
     toolRuntime: enterpriseToolRuntimePlan.summary,
     qaPreflight: enterpriseQaBoardReview.summary,
+    integrationRuntime: integrationRuntimeProfile.promptProfile,
     durableExecution: durableExecution
       ? {
         graphId: durableExecution.graphId,
@@ -938,6 +1758,7 @@ async function runAgentTaskJob(payload = {}, job = null) {
     executionProfile,
     intentAlignmentProfile,
     taskPlan,
+    openclawRuntimeProfile,
     universalTaskContract,
     enterpriseExecutionGraph,
     enterpriseRuntimeProfile,
@@ -1008,9 +1829,16 @@ async function runAgentTaskJob(payload = {}, job = null) {
   emit({ type: 'document_policy', policy: documentPolicy });
 
   const langGraphLayer = await buildLangGraphLayer({ taskId, documentPolicy });
-  const forbiddenToolNames = new Set(Array.isArray(universalTaskContract.forbidden_tools)
-    ? universalTaskContract.forbidden_tools
-    : []);
+  const forbiddenToolNames = buildForbiddenToolNames({
+    baseForbidden: Array.isArray(universalTaskContract.forbidden_tools)
+      ? universalTaskContract.forbidden_tools
+      : [],
+    goal,
+    fileIds: files,
+    documentPolicy,
+    executionProfile,
+    universalTaskContract,
+  });
   const tools = buildTaskTools().filter((tool) => !forbiddenToolNames.has(tool.name));
   const frameworkStatus = await buildAgenticFrameworkStatus({ tools, langGraphLayer });
   emit({
@@ -1049,10 +1877,14 @@ async function runAgentTaskJob(payload = {}, job = null) {
     enterpriseToolRuntimePlan,
     enterpriseQaBoardReview,
     agenticOperatingCore,
+    openclawRuntimeProfile,
     frameworks: frameworkStatus,
     taskContract,
     taskContractSource,
   });
+  for (const event of openclawCapabilityKernel.buildOpenClawRuntimeEvents(openclawRuntimeProfile)) {
+    emit(event);
+  }
 
   auditLog.audit({
     event: 'agent_task_worker_started',
@@ -1070,11 +1902,59 @@ async function runAgentTaskJob(payload = {}, job = null) {
   });
 
   let assistantMessageId = existing?.assistantMessageId || null;
-  const uploadedFileContext = await buildUploadedFileContext(prisma, {
-    userId: user.id,
-    fileIds: files,
-    query: displayGoal || goal,
-  });
+  let uploadedFileContext = wantsSourcePreservingEdit
+    ? ''
+    : await buildUploadedFileContext(prisma, {
+      userId: user.id,
+      fileIds: files,
+      query: deterministicAttachmentAnswer ? '' : displayGoal || goal,
+      maxChars: deterministicAttachmentAnswer ? 120000 : 36000,
+    });
+
+  // ── Vision grounding para imágenes adjuntas ────────────────────────
+  // Cuando la extracción de texto deja casi nada (logos, fotos, diagramas,
+  // capturas sin OCR útil), el guard de adjunto-insuficiente rechazaría el
+  // turno aunque un modelo de visión pueda leer la imagen directamente.
+  // Describimos las imágenes con el runtime de visión configurado y
+  // anexamos la descripción al contexto: el guard deja de dispararse y el
+  // agente responde con contexto visual real.
+  if (!wantsSourcePreservingEdit && prisma && Array.isArray(files) && files.length > 0
+    && countUsefulWords(uploadedFileContext) < DEFAULT_THIN_THRESHOLD) {
+    try {
+      const fileRows = await prisma.file.findMany({
+        where: { id: { in: files }, userId: user.id },
+        select: { id: true, filename: true, originalName: true, mimeType: true, path: true },
+      });
+      const imageFiles = fileRows
+        .filter((row) => isImageFile(row))
+        .map((row) => {
+          const resolvedPath = resolveStoredFilePath(row, user.id);
+          return resolvedPath
+            ? { path: resolvedPath, mimeType: row.mimeType || 'image/png' }
+            : null;
+        })
+        .filter(Boolean);
+      if (imageFiles.length > 0) {
+        const aiService = require('../ai-service');
+        const visualDescription = await aiService.describeAttachedImages(
+          imageFiles,
+          displayGoal || goal,
+        );
+        if (visualDescription) {
+          uploadedFileContext = [
+            uploadedFileContext,
+            `Análisis visual de ${imageFiles.length} imagen(es) adjunta(s) realizado por un modelo de visión:`,
+            visualDescription,
+          ].filter(Boolean).join('\n\n');
+          console.log(`[agent-task] vision grounding aplicado: ${imageFiles.length} imagen(es), ${visualDescription.length} chars (task ${taskId})`);
+        } else {
+          console.warn(`[agent-task] vision grounding sin descripción (¿proveedor de visión no configurado?) (task ${taskId})`);
+        }
+      }
+    } catch (visionErr) {
+      console.warn('[agent-task] vision grounding falló (se continúa con el texto extraído):', visionErr?.message || visionErr);
+    }
+  }
   if (chatId && prisma) {
     try {
       const chat = await prisma.chat.findFirst({ where: { id: chatId, userId: user.id } });
@@ -1201,6 +2081,7 @@ async function runAgentTaskJob(payload = {}, job = null) {
         executionProfile,
         intentAlignmentProfile,
         taskPlan,
+        openclawRuntimeProfile,
         universalTaskContract,
         enterpriseExecutionGraph,
         enterpriseRuntimeProfile,
@@ -1262,6 +2143,161 @@ async function runAgentTaskJob(payload = {}, job = null) {
   };
 
   try {
+    if (wantsSourcePreservingEdit && documentPolicy?.autoGenerate) {
+      stepIdCounter = 1;
+      currentStepId = 's1';
+      emit({ type: 'step_start', id: currentStepId, label: 'Editando documento original', icon: 'file-text' });
+      try {
+        emit({
+          type: 'checkpoint',
+          label: 'Editando documento original',
+          status: 'running',
+          payload: {
+            mode: 'source_preserving_append',
+            fileCount: Array.isArray(files) ? files.length : 0,
+            orchestration: 'source_preserving_document_swarm',
+          },
+        });
+        const preserved = await tryGenerateSourcePreservingDocumentEdit({
+          prisma,
+          userId: user.id,
+          chatId,
+          fileIds: files,
+          prompt: goal,
+          displayPrompt: displayGoal,
+        });
+        if (preserved === null) {
+          // No había archivo adjunto ni artefacto previo que conservar: la
+          // petición es en realidad un documento NUEVO. Señalamos el caso con
+          // un sentinel para que el catch lo trate como "generar desde cero"
+          // (fallthrough) en vez de rechazar la creación del documento.
+          const fresh = new Error('source_preserving_no_base');
+          fresh.__fallthroughFreshDocument = true;
+          throw fresh;
+        }
+        if (!preserved.validation?.passed) {
+          const unresolved = preserved.validation?.details?.agenticCycle?.unresolvedChecks || [];
+          throw new Error(`La edición se generó pero no pasó la autoevaluación del DOCX${unresolved.length ? `: ${unresolved.join(', ')}` : '.'}`);
+        }
+        const artifactEvent = {
+          id: preserved.artifact.id,
+          filename: preserved.artifact.filename,
+          format: preserved.artifact.format,
+          mime: preserved.artifact.mime,
+          sizeBytes: preserved.artifact.sizeBytes,
+          downloadUrl: preserved.artifact.downloadUrl,
+          previewHtml: preserved.previewHtml,
+          validation: preserved.validation,
+        };
+        artifacts.push(artifactEvent);
+        emit({ type: 'file_artifact', artifact: artifactEvent });
+        emit({
+          type: 'checkpoint',
+          label: 'Autoevaluación del documento',
+          status: 'completed',
+          payload: preserved.validation?.details?.agenticCycle || null,
+        });
+        for (const criterion of preserved.validation?.details?.agenticCycle?.semanticCriteria || []) {
+          emit({
+            type: 'quality_gate',
+            gate: `docx_${criterion.id}`,
+            label: criterion.label || criterion.id,
+            passed: Boolean(criterion.passed),
+            summary: criterion.passed
+              ? 'Criterio verificado en el DOCX generado.'
+              : 'Criterio no cumplido en el DOCX generado.',
+            payload: criterion,
+          });
+        }
+        emit({
+          type: 'quality_gate',
+          gate: 'source_preserving_document_edit',
+          label: 'Documento original conservado',
+          passed: Boolean(preserved.validation?.passed),
+          summary: 'Se completó el archivo original sin regenerar portada, tablas ni estructura previa.',
+          payload: {
+            ...(preserved.validation || {}),
+            orchestration: preserved.orchestration || preserved.validation?.details?.orchestration || null,
+          },
+        });
+        await persistence.persistGeneratedArtifact({
+          artifact: { ...preserved.artifact, validation: preserved.validation },
+          task,
+          previewHtml: preserved.previewHtml,
+          validation: preserved.validation,
+        });
+        emit({ type: 'step_done', id: currentStepId, ok: Boolean(preserved.validation?.passed) });
+        currentStepId = null;
+        return finishDeterministicTask({
+          finalMarkdown: preserved.content,
+          stoppedReason: 'source_preserving_document_edit',
+          steps: stepIdCounter,
+          artifactsList: artifacts,
+          metadata: {
+            sourcePreservingEdit: true,
+            sourceFileIds: files,
+            sourcePreservingOrchestration: preserved.orchestration || null,
+          },
+        });
+      } catch (err) {
+        // "Target-not-located" failures (the literal editor couldn't find the
+        // exact string/section to delete/replace) are NOT terminal: the request
+        // is well-formed, the deterministic literal matcher just can't resolve
+        // natural language ("borra el jurado evaluador"). Fall through to the
+        // generative path (grounded in the file's text) instead of dead-ending
+        // with "No pude editar…". The semantic document_edit tool on the inline
+        // /api/ai/generate path is the primary handler; this keeps the queued
+        // surface from giving the user an error on a perfectly valid edit.
+        const TARGET_NOT_LOCATED = new Set([
+          'DELETE_TEXT_NOT_FOUND', 'DELETE_TEXT_UNSPECIFIED',
+          'REPLACE_TEXT_NOT_FOUND', 'REPLACE_TEXT_UNSPECIFIED',
+          'SECTION_TABLE_NOT_FOUND', 'CRONOGRAMA_TABLE_NOT_FOUND',
+          'XLSX_REPLACE_TEXT_NOT_FOUND', 'XLSX_REPLACE_TEXT_UNSPECIFIED',
+          'PPTX_REPLACE_TEXT_NOT_FOUND', 'PPTX_REPLACE_TEXT_UNSPECIFIED',
+        ]);
+        if (err && err.__fallthroughFreshDocument) {
+          // Sin archivo base que conservar: cerramos el paso de edición y
+          // dejamos que el flujo genere un documento nuevo más abajo en lugar
+          // de rechazar la creación del documento.
+          wantsSourcePreservingEdit = false;
+          emit({ type: 'step_done', id: currentStepId, ok: true });
+          currentStepId = null;
+        } else if (err && TARGET_NOT_LOCATED.has(err.code)) {
+          wantsSourcePreservingEdit = false;
+          emit({ type: 'step_done', id: currentStepId, ok: true });
+          currentStepId = null;
+          emit({
+            type: 'quality_gate',
+            gate: 'source_preserving_document_edit',
+            label: 'Reintentando la edición de forma semántica',
+            passed: true,
+            summary: 'El editor literal no ubicó el fragmento exacto; el agente reintenta la edición sobre el documento.',
+          });
+        } else {
+          emit({ type: 'step_done', id: currentStepId, ok: false });
+          currentStepId = null;
+          emit({
+            type: 'quality_gate',
+            gate: 'source_preserving_document_edit',
+            label: 'Edición preservadora no disponible',
+            passed: false,
+            summary: err?.message || 'No se pudo editar el archivo original.',
+          });
+          return finishDeterministicTask({
+            finalMarkdown: `No pude editar el archivo original sin cambiarlo: ${err?.message || 'error desconocido'}. No generé un documento nuevo para evitar entregarte contenido ajeno al archivo.`,
+            stoppedReason: 'source_preserving_document_edit_failed',
+            steps: stepIdCounter,
+            artifactsList: [],
+            metadata: {
+              sourcePreservingEdit: true,
+              sourcePreservingError: err?.message || 'unknown_error',
+              sourceFileIds: files,
+            },
+          });
+        }
+      }
+    }
+
     if (plainTranscriptionRequest) {
       const transcriptionFileIds = Array.isArray(files) && files.length
         ? files.map(String).filter(Boolean)
@@ -1538,6 +2574,60 @@ async function runAgentTaskJob(payload = {}, job = null) {
       return { taskId, status, artifacts: 0 };
     }
 
+    if (deterministicAttachmentAnswer) {
+      const recoveredMarkdown = buildBibliographyFallbackAnswer({
+        goal: displayGoal || goal,
+        uploadedFileContext,
+      }) || buildAttachmentGroundedFallbackAnswer({
+        goal: displayGoal || goal,
+        uploadedFileContext,
+        reason: 'attachment_chat_fast_path',
+      });
+      const finalFallbackMarkdown = recoveredMarkdown || buildAttachmentUnavailableFallbackAnswer({
+        goal: displayGoal || goal,
+        uploadedFileContext,
+      });
+      documentPolicy = {
+        ...(documentPolicy || {}),
+        mode: 'chat_only',
+        autoGenerate: false,
+        reason: recoveredMarkdown
+          ? 'Respuesta directa generada desde el contenido extraído del adjunto.'
+          : 'Adjunto sin texto legible suficiente para una respuesta directa.',
+        thresholds: {
+          ...(documentPolicy?.thresholds || {}),
+          attachmentFastPath: true,
+          usefulWords: countUsefulWords(uploadedFileContext),
+          fileCount: files.length,
+        },
+      };
+      task.documentPolicy = documentPolicy;
+      emit({ type: 'document_policy', policy: documentPolicy });
+      stepIdCounter = 1;
+      emit({ type: 'step_start', id: 's1', label: 'Analizando adjunto', icon: 'file-text' });
+      emit({ type: 'step_done', id: 's1', ok: Boolean(recoveredMarkdown) });
+      emit({
+        type: 'quality_gate',
+        gate: 'attachment_chat_fast_path',
+        label: recoveredMarkdown ? 'Respuesta desde adjunto' : 'Adjunto requiere más contenido',
+        passed: Boolean(recoveredMarkdown),
+        summary: recoveredMarkdown
+          ? 'Se respondió sin depender del bucle de herramientas ni de la cola.'
+          : 'Se explicó cómo aportar contenido legible en lugar de dejar el stream abierto.',
+      });
+      return finishDeterministicTask({
+        finalMarkdown: finalFallbackMarkdown,
+        stoppedReason: recoveredMarkdown ? 'attachment_chat_fast_path' : 'attachment_unreadable_fast_path',
+        steps: 1,
+        artifactsList: [],
+        metadata: {
+          attachmentFastPath: true,
+          sourceFileIds: files,
+          usefulWords: countUsefulWords(uploadedFileContext),
+        },
+      });
+    }
+
     if (!openai && hasAttachedFiles) {
       const recoveredMarkdown = buildBibliographyFallbackAnswer({
         goal: displayGoal || goal,
@@ -1661,6 +2751,7 @@ async function runAgentTaskJob(payload = {}, job = null) {
       signal: controller.signal,
       chatId,
       taskId,
+      folderCode,
       fileIds: files,
       displayGoal,
       taskContract,
@@ -1712,7 +2803,23 @@ async function runAgentTaskJob(payload = {}, job = null) {
       ? Math.min(maxSteps, 20)
       : maxSteps;
 
-    const result = await reactAgent.run(openai, {
+    // Professional document cycle: announce the ordered stages up-front so
+    // the UI can render the full progress track before the agent reports
+    // each transition via report_stage (cycle_stage events).
+    if (cycle && Array.isArray(cycle.stages) && cycle.stages.length > 0) {
+      emit({
+        type: 'cycle_init',
+        stages: cycle.stages,
+        documentType: cycle.documentType || null,
+        field: cycle.field || null,
+        citationStyle: cycle.citationStyle || null,
+        code: cycle.code || folderCode || null,
+      });
+    }
+
+    let preLoopStepId = null;
+
+    const reactRunArgs = {
       query: goal,
       tools,
       maxSteps: effectiveMaxSteps,
@@ -1731,11 +2838,25 @@ async function runAgentTaskJob(payload = {}, job = null) {
         enterpriseToolRuntimePlan,
         enterpriseQaBoardReview,
         agenticOperatingCore,
-        uploadedFileContext
+        uploadedFileContext,
+        openclawRuntimeProfile
       ),
       ctx: toolCtx,
-      finalizeGuard: ({ steps, unavailableTools }) => validateFinalize(finalizeProfile, steps, { unavailableTools }),
+      finalizeGuard: ({ steps, unavailableTools }) => validateAgentTaskFinalize({
+        finalizeProfile,
+        openclawRuntimeProfile,
+        taskPlan,
+        steps,
+        unavailableTools,
+      }),
+      onCompact: ({ step, removedMessages, chars }) => {
+        try { console.log(`[agent-task-runner] trace compacted at step ${step}: -${removedMessages} msgs, ${chars} chars (task ${taskId})`); } catch (_) {}
+      },
       onStepStart: (step) => {
+        if (preLoopStepId && currentStepId === preLoopStepId) {
+          emit({ type: 'step_done', id: preLoopStepId, ok: true });
+          preLoopStepId = null;
+        }
         stepIdCounter += 1;
         currentStepId = `s${stepIdCounter}`;
         const thought = (step.thought || '').trim();
@@ -1755,26 +2876,83 @@ async function runAgentTaskJob(payload = {}, job = null) {
         });
         currentStepId = null;
       },
-    });
+    };
+
+    // Emit an immediate "thinking" step before the first LLM round-trip so
+    // the frontend stale-detection timer (90 s of no step events) does NOT
+    // fire during a slow model response. Without this, a DeepSeek / OpenRouter
+    // call that takes >90 s produces "Sin actualizaciones recientes" even
+    // though the task is actively running.
+    stepIdCounter += 1;
+    currentStepId = `s${stepIdCounter}`;
+    preLoopStepId = currentStepId;
+    const preLoopLabel = (() => {
+      const g = (goal || '').toLowerCase();
+      if (/busca|artículo|investiga|paper|paper|científico|científica|search|find/.test(g)) return 'Buscando información...';
+      if (/analiz|resume|resumir|resum|analys/.test(g)) return 'Analizando solicitud...';
+      if (/escribe|redacta|crea|genera|write|draft/.test(g)) return 'Redactando respuesta...';
+      return 'Procesando solicitud...';
+    })();
+    emit({ type: 'step_start', id: preLoopStepId, label: preLoopLabel, icon: 'brain' });
+
+    let result = await reactAgent.run(openai, reactRunArgs);
+
+    if (preLoopStepId && currentStepId === preLoopStepId) {
+      emit({ type: 'step_done', id: preLoopStepId, ok: true });
+      preLoopStepId = null;
+      currentStepId = null;
+    }
+
+    // ── Cross-provider model failover (OpenClaw-style) ─────────────────
+    // The tool stack (búsquedas científicas key-free, documentos, etc.) es
+    // agnóstico del modelo: si el modelo seleccionado muere (402 sin
+    // créditos, 401 key inválida, caída del proveedor), la tarea NO debe
+    // morir con él. Reintentamos UNA vez con el primer runtime sano de
+    // otro proveedor antes de degradar la respuesta.
+    const modelFailed = String(result.stoppedReason || '').startsWith('model_error');
+    if (modelFailed && agentModelFailoverEnabled()) {
+      const failoverRuntime = resolveAgentModelFailoverRuntime(runtimeModelProfile);
+      if (failoverRuntime?.client) {
+        console.warn(`[agent-task] model failover: ${runtimeModelProfile.runtimeModel} → ${failoverRuntime.provider}:${failoverRuntime.model} (task ${taskId})`);
+        emit({
+          type: 'checkpoint',
+          label: `Modelo de respaldo activado: ${failoverRuntime.model}`,
+          status: 'warning',
+          payload: { from: runtimeModelProfile.runtimeModel, to: failoverRuntime.model, reason: result.stoppedReason },
+        });
+        result = await reactAgent.run(failoverRuntime.client, {
+          ...reactRunArgs,
+          model: failoverRuntime.model,
+        });
+      }
+    }
 
     let finalMarkdown = result.finalAnswer || '';
     let stoppedReason = result.stoppedReason;
+    const recoveryUploadedFileContext = [
+      uploadedFileContext,
+      buildToolObservationFallbackContext(result.steps),
+    ].filter(Boolean).join('\n');
     const attachmentFinalNeedsRecovery = Array.isArray(files) && files.length > 0 && (
       looksLikeEmptyOrWeakFinalAnswer(finalMarkdown) ||
       looksLikeMissingAttachmentAnswer(finalMarkdown)
     );
     if (attachmentFinalNeedsRecovery) {
-      const recoveredMarkdown = buildBibliographyFallbackAnswer({
+      const llmRecoveredMarkdown = await buildLlmAttachmentRecoveryAnswer({
         goal: displayGoal || goal,
-        uploadedFileContext,
+        uploadedFileContext: recoveryUploadedFileContext,
+      });
+      const recoveredMarkdown = llmRecoveredMarkdown || buildBibliographyFallbackAnswer({
+        goal: displayGoal || goal,
+        uploadedFileContext: recoveryUploadedFileContext,
       }) || buildAttachmentGroundedFallbackAnswer({
         goal: displayGoal || goal,
-        uploadedFileContext,
+        uploadedFileContext: recoveryUploadedFileContext,
         reason: result.stoppedReason,
       });
       const finalFallbackMarkdown = recoveredMarkdown || buildAttachmentUnavailableFallbackAnswer({
         goal: displayGoal || goal,
-        uploadedFileContext,
+        uploadedFileContext: recoveryUploadedFileContext,
       });
       finalMarkdown = finalFallbackMarkdown;
       stoppedReason = recoveredMarkdown
@@ -1834,7 +3012,6 @@ async function runAgentTaskJob(payload = {}, job = null) {
     emit({ type: 'document_policy', policy: documentPolicy });
 
     if (documentPolicy.autoGenerate && artifacts.length === 0) {
-      const wantsSourcePreservingEdit = isSourcePreservingEditRequest(displayGoal || goal, files);
       if (wantsSourcePreservingEdit) {
         try {
           emit({
@@ -1852,6 +3029,10 @@ async function runAgentTaskJob(payload = {}, job = null) {
             displayPrompt: displayGoal,
           });
           if (preserved?.artifact) {
+            if (!preserved.validation?.passed) {
+              const unresolved = preserved.validation?.details?.agenticCycle?.unresolvedChecks || [];
+              throw new Error(`La edición se generó pero no pasó la autoevaluación del DOCX${unresolved.length ? `: ${unresolved.join(', ')}` : '.'}`);
+            }
             const artifactEvent = {
               id: preserved.artifact.id,
               filename: preserved.artifact.filename,
@@ -1864,6 +3045,24 @@ async function runAgentTaskJob(payload = {}, job = null) {
             };
             artifacts.push(artifactEvent);
             emit({ type: 'file_artifact', artifact: artifactEvent });
+            emit({
+              type: 'checkpoint',
+              label: 'Autoevaluación del documento',
+              status: 'completed',
+              payload: preserved.validation?.details?.agenticCycle || null,
+            });
+            for (const criterion of preserved.validation?.details?.agenticCycle?.semanticCriteria || []) {
+              emit({
+                type: 'quality_gate',
+                gate: `docx_${criterion.id}`,
+                label: criterion.label || criterion.id,
+                passed: Boolean(criterion.passed),
+                summary: criterion.passed
+                  ? 'Criterio verificado en el DOCX generado.'
+                  : 'Criterio no cumplido en el DOCX generado.',
+                payload: criterion,
+              });
+            }
             emit({
               type: 'quality_gate',
               gate: 'source_preserving_document_edit',
@@ -1880,22 +3079,46 @@ async function runAgentTaskJob(payload = {}, job = null) {
             });
             finalMarkdown = preserved.content;
           } else {
-            finalMarkdown = 'No encontré un archivo editable compatible asociado a este turno para modificarlo sin regenerarlo. No generé un documento nuevo para evitar cambiar tu archivo base.';
+            // preserved === null: no hay archivo base que conservar, así que
+            // generamos un documento NUEVO más abajo en vez de rechazar la
+            // petición.
+            wantsSourcePreservingEdit = false;
           }
         } catch (err) {
-          emit({
-            type: 'quality_gate',
-            gate: 'source_preserving_document_edit',
-            label: 'Edición preservadora no disponible',
-            passed: false,
-            summary: err?.message || 'No se pudo editar el archivo original.',
-          });
-          finalMarkdown = `No pude editar el archivo original sin cambiarlo: ${err?.message || 'error desconocido'}. No generé un documento nuevo para evitar entregarte contenido ajeno al archivo.`;
+          // A "target-not-located" literal failure is not terminal — fall
+          // through to the generative path (grounded in the file's text)
+          // instead of returning an apology, mirroring the BEFORE-loop catch.
+          const TARGET_NOT_LOCATED_POST = new Set([
+            'DELETE_TEXT_NOT_FOUND', 'DELETE_TEXT_UNSPECIFIED',
+            'REPLACE_TEXT_NOT_FOUND', 'REPLACE_TEXT_UNSPECIFIED',
+            'SECTION_TABLE_NOT_FOUND', 'CRONOGRAMA_TABLE_NOT_FOUND',
+            'XLSX_REPLACE_TEXT_NOT_FOUND', 'XLSX_REPLACE_TEXT_UNSPECIFIED',
+            'PPTX_REPLACE_TEXT_NOT_FOUND', 'PPTX_REPLACE_TEXT_UNSPECIFIED',
+          ]);
+          if (err && TARGET_NOT_LOCATED_POST.has(err.code)) {
+            emit({
+              type: 'quality_gate',
+              gate: 'source_preserving_document_edit',
+              label: 'Reintentando la edición de forma semántica',
+              passed: true,
+              summary: 'El editor literal no ubicó el fragmento exacto; se genera el documento editado sobre el contenido del archivo.',
+            });
+            wantsSourcePreservingEdit = false;
+          } else {
+            emit({
+              type: 'quality_gate',
+              gate: 'source_preserving_document_edit',
+              label: 'Edición preservadora no disponible',
+              passed: false,
+              summary: err?.message || 'No se pudo editar el archivo original.',
+            });
+            finalMarkdown = `No pude editar el archivo original sin cambiarlo: ${err?.message || 'error desconocido'}. No generé un documento nuevo para evitar entregarte contenido ajeno al archivo.`;
+          }
         }
       }
     }
 
-    if (documentPolicy.autoGenerate && artifacts.length === 0 && !isSourcePreservingEditRequest(displayGoal || goal, files)) {
+    if (documentPolicy.autoGenerate && artifacts.length === 0 && !wantsSourcePreservingEdit) {
       try {
         const generated = await generateAutoDocument({
           task,
@@ -2123,12 +3346,20 @@ const { classifyTaskError } = require('../../utils/task-error-classifier');
 module.exports = {
   runAgentTaskJob,
   buildFinalizeProfile,
+  buildOpenAICompatibleClient,
   classifyTaskError,
   normalizeAgentRuntimeModel,
+  resolveAgentRuntimeClient,
+  detectAgentRuntimeProvider,
   buildAttachmentGroundedFallbackAnswer,
   buildBibliographyFallbackAnswer,
   buildAttachmentUnavailableFallbackAnswer,
+  buildLlmAttachmentRecoveryAnswer,
+  pickAttachmentRecoveryRuntime,
+  agentModelFailoverEnabled,
+  resolveAgentModelFailoverRuntime,
   parseSpreadsheetCitationRows,
   parseCitationAuthors,
   resolveAttachmentFallbackMarkdown,
+  shouldUseDeterministicAttachmentAnswer,
 };

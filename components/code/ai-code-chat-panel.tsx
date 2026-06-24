@@ -22,15 +22,18 @@
 
 import * as React from "react"
 import {
+  AlertTriangle,
   ArrowUp,
   BookOpen,
   Bug,
   Check,
   ChevronDown,
   CircleHelp,
+  ExternalLink,
   Image as ImageIcon,
   ListChecks,
   Plus,
+  Rocket,
   Server,
   Sparkles,
   StopCircle,
@@ -57,16 +60,48 @@ import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { useChat } from "@/lib/chat-context-integrated"
 import { useCodeWorkspace } from "@/lib/code-workspace-context"
+import { intakeService } from "@/lib/builder/intake-service"
 import type { CodeChatTurn } from "@/lib/code-chat-sessions"
 import { computeLineDiff, parseCodeBlocks, type CodeBlock } from "@/lib/code-workspace-utils"
+import { detectBlocker } from "@/lib/code-chat-blocker"
+import { extractPlanLabel } from "@/lib/code-chat-plan-label"
+import {
+  buildWriteMetrics,
+  formatUsd,
+  formatWorked,
+  glyphForAction,
+  type CodeChatAction,
+  type CodeChatMetrics,
+} from "@/lib/code-chat-metrics"
+import { defaultAgentState, type AgentBuildContext } from "@/lib/code-agent/types"
+import {
+  classifyBuildError,
+  mergeOverridesIntoPackageJson,
+  nextAgentAction,
+  promptFromContext,
+  renderFiveSections,
+} from "@/lib/code-agent/orchestrator"
+import {
+  engineTransportInstructions,
+  landingSystemPrompt,
+  sreSystemPrompt,
+  streamOutputFormat,
+} from "@/lib/code-agent/prompts"
+import { buildViteLandingFiles } from "@/lib/code-agent/vite-scaffold"
+import { isSlowModel, recommendFastModel } from "@/lib/code-agent/model-policy"
+import { fetchCodeIntakeQuestion } from "@/lib/code/intake-question"
+import { opencodeService } from "@/lib/opencode/opencode-service"
+import { useOpencodeEngine } from "@/lib/opencode/use-opencode-engine"
 
 import { DiffView } from "./diff-view"
+import { AgentSwarm } from "./agent-swarm"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 
-type ComposerMode = "build" | "plan" | "debug" | "ask" | "image"
+type ComposerMode = "app" | "build" | "plan" | "debug" | "ask" | "image"
 
 const COMPOSER_MODE_LABEL: Record<ComposerMode, string> = {
+  app: "App",
   build: "Build",
   plan: "Plan",
   debug: "Debug",
@@ -75,6 +110,7 @@ const COMPOSER_MODE_LABEL: Record<ComposerMode, string> = {
 }
 
 const COMPOSER_PLACEHOLDER: Record<ComposerMode, string> = {
+  app: "Describe tu idea — te haré unas preguntas y la construyo…",
   build: "Pide un cambio, pega código o / para comandos",
   plan: "Objetivo o plan antes de editar archivos…",
   debug: "Error, stack trace o comportamiento esperado…",
@@ -83,6 +119,17 @@ const COMPOSER_PLACEHOLDER: Record<ComposerMode, string> = {
 }
 
 const COMPOSER_MODE_INSTRUCTION: Record<ComposerMode, string> = {
+  app:
+    "Modo App (construir desde cero, estilo Replit/Lovable): tu meta es entregar una landing/app COMPLETA y VISTOSA como un proyecto Vite + React + TypeScript real que el usuario ejecuta con ▶ Ejecutar (dev server).\n" +
+    "1) INTAKE OBLIGATORIO (como un product manager) — Si el usuario pide construir algo desde cero (p.ej. 'créame un landing', 'hazme una app', 'crea una web') y NO incluyó ya todos los detalles, tu PRIMERA respuesta DEBE ser ÚNICAMENTE preguntas para entender el contexto. NUNCA generes código en esa primera respuesta. Haz una tanda breve (3-5 preguntas, con opciones cuando ayude), por ejemplo: '¿Qué tipo de producto o servicio vas a ofrecer?', '¿Tienes nombre de marca/negocio o quieres que proponga uno?', '¿Qué estilo visual prefieres (minimalista, oscuro, streetwear, corporativo, colorido…)?', '¿Qué secciones quieres (hero, colecciones/productos, sobre nosotros, testimonios, contacto…)?', '¿Algún color o referencia que te guste?'. Termina pidiendo las respuestas y espera.\n" +
+    "   REGLA DE GENERACIÓN: SOLO cuando el usuario ya respondió ese contexto (su segunda respuesta en adelante) o dice explícitamente 'genera'/'hazlo'/'dale', construye el proyecto COMPLETO, asumiendo defaults sensatos para lo que falte. A partir de ahí NUNCA vuelvas a quedarte solo en preguntas: tu salida pasa a ser CÓDIGO.\n" +
+    "2) GENERAR — entrega un PROYECTO Vite 7 + React 18 + TypeScript COMPLETO (package.json, vite.config.ts, tsconfig.json, index.html, src/main.tsx, src/index.css, src/App.tsx) con Tailwind v4 vía @tailwindcss/vite (SIN tailwind.config.js ni postcss.config.js — `@import \"tailwindcss\"` en src/index.css y la paleta como CSS custom properties en :root), animaciones de entrada por scroll con Framer Motion (`useInView`/`whileInView` + `viewport={{ once: true }}`), iconos lucide-react y fuentes Syne + Space Grotesk (Google Fonts → --font-display/--font-body). Exigencias (PROHIBIDO entregar algo básico o tipo plantilla):\n" +
+    "   • COHERENCIA DE NICHO [CRÍTICO]: analiza el rubro (ropa, restaurante, gym, software…) y alinea TODO a él — copy REAL del negocio (NADA de lorem ipsum) e imágenes que ilustren ese rubro (ilustraciones SVG integradas o `https://images.unsplash.com/...` con términos del nicho); PROHIBIDAS fotos genéricas sin relación.\n" +
+    "   • Hero potente con titular Syne MUY grande (clamp), nav sticky translúcido, secciones diferenciadas (productos/features, about, testimonios, CTA final, footer completo), paleta cohesiva con 1 acento, hover/transiciones suaves, responsive MÓVIL-PRIMERO y accesible WCAG AA (alt/aria, foco visible, contraste ≥ 4.5:1).\n" +
+    "   • Componente OBLIGATORIO «Invitar al proyecto»: botón «Invitar» (Lucide UserPlus) + panel/modal animado (AnimatePresence) con «Enlace privado para unirse» (input readOnly), subtexto EXACTO «Cualquier persona con el enlace tendrá acceso de edición», botón Copiar (navigator.clipboard.writeText + «¡Copiado!») e input de email con botón «Invitar por correo electrónico» (validación simple, sin llamada real).\n" +
+    streamOutputFormat({ strictStart: false }) +
+    "\n" +
+    "3) Cierra con 1-3 siguientes pasos sugeridos para iterar (ej. 'añade sección de precios', 'conecta un formulario', 'modo claro/oscuro').",
   build:
     "Modo Build: implementa cambios de código concretos. Si creas o modificas archivos, entrega bloques aplicables con ruta.",
   plan:
@@ -95,10 +142,48 @@ const COMPOSER_MODE_INSTRUCTION: Record<ComposerMode, string> = {
     "Modo Image: ayuda a razonar sobre assets, interfaces, capturas o diseño visual. Si se requiere implementación, tradúcelo a cambios de código.",
 }
 
+// Gather config files from the workspace to give the SRE agent enough context
+// to propose real overrides (package.json, lockfile, next.config, tsconfig…).
+function collectConfigFiles(
+  files: Record<string, { path: string; language: string; content: string }>,
+): string {
+  const wanted = new Set([
+    "package.json",
+    "package-lock.json",
+    "next.config.mjs",
+    "next.config.js",
+    "vite.config.ts",
+    "vite.config.js",
+    "tsconfig.json",
+    ".npmrc",
+  ])
+  return Object.values(files)
+    .filter((f) => wanted.has(f.path.split("/").pop() || ""))
+    .map((f) => `// ${f.path}\n${f.content}`)
+    .join("\n\n")
+}
+
+// Agent-style narration block (docs/code/code-chat-agent-style-prompt.md): makes
+// every assistant reply read like the live-dashboard agent — first-person,
+// technical, step-by-step, validating env constraints by name. The badges /
+// action-glyph rows / Worked Summary are added by the UI from REAL data; the
+// model must NOT fabricate them.
+const AGENT_STYLE_BLOCK = [
+  "ESTILO DE RESPUESTA (obligatorio):",
+  "- Eres un Agente de Ingeniería de Software Senior: planificas, ejecutas y reportas como un dashboard de desarrollo en vivo.",
+  "- Escribe en PRIMERA PERSONA y en PRESENTE, con tono técnico, objetivo y proactivo: \"Analizo todos los errores en paralelo\", \"Veo los problemas claramente\", \"Tengo el panorama completo\", \"Los ordeno por prioridad\". Frases cortas (1-2 líneas), sin relleno.",
+  "- Abre SIEMPRE con una línea de planificación que empiece con un GERUNDIO y nombre la operación (\"Planificando la verificación de la migración…\", \"Revisando el código de memoria…\", \"Buscando las queries SQL…\"). Ponla como primera línea, sola, seguida del resto en líneas aparte.",
+  "- Narra PASO A PASO: una frase breve anuncia la acción → realizas la acción (generas el archivo / usas la herramienta) → describes lo que observas → siguiente acción. No vuelques un bloque de código gigante sin narrar.",
+  "- Antes de cambiar o ejecutar código, VALIDA los supuestos del entorno y NÓMBRALOS: columnas/tablas que quizá no existan (p. ej. column \"embedding\" does not exist), dependencias, variables. No asumas que algo existe sin verificarlo.",
+  "- Cierra con una síntesis del panorama (\"Tengo el panorama completo: identifico N problemas distintos. Los ordeno por prioridad:\").",
+  "- NO inventes resultados ni métricas (tiempo, acciones, líneas, tokens y costo se miden y se muestran solos). Si algo falla por falta de créditos/cuota/clave (402), detente, no reintentes en bucle, y explica qué quedó bloqueado.",
+].join("\n")
+
 function buildSystemContext(
   files: Record<string, { path: string; language: string; content: string }>,
   activePath: string | null,
   folder: { name: string; description?: string | null; instructions?: string | null } | null,
+  mode?: ComposerMode,
 ) {
   const fileList = Object.values(files)
     .map((f) => `- ${f.path} (${f.language})`)
@@ -117,27 +202,49 @@ function buildSystemContext(
         .filter(Boolean)
         .join("\n")
     : ""
+  const hasNodeProject = Object.keys(files).some((p) => /(^|\/)package\.json$/.test(p))
+  // App mode builds the Vite contract even on an empty workspace — emitting the
+  // static-preview rules there would contradict COMPOSER_MODE_INSTRUCTION.app.
+  const expectViteProject = hasNodeProject || mode === "app"
+  const previewBlock = expectViteProject
+    ? [
+        hasNodeProject
+          ? "El workspace contiene un PROYECTO Node REAL (hay package.json) — típicamente"
+          : "El workspace alojará un PROYECTO Node REAL (modo App) — típicamente",
+        "Vite 7 + React 18 + TypeScript. Usa imports npm normales y extensiones",
+        ".tsx/.ts; el usuario lo ejecuta con ▶ Ejecutar (dev server). RESPETA el",
+        "contrato del proyecto: Tailwind v4 vía @tailwindcss/vite (PROHIBIDO crear",
+        "tailwind.config.js/postcss.config.js o usar directivas v3 `@tailwind`),",
+        'src/index.css empieza con `@import "tailwindcss";` + paleta como CSS custom',
+        "properties en :root, animaciones con Framer Motion e iconos lucide-react.",
+      ].join("\n")
+    : [
+        "El workspace tiene un PREVIEW EN VIVO (navegador embebido) que se",
+        "actualiza solo. Escribe SIEMPRE código que se pueda previsualizar sin",
+        "build ni npm:",
+        "- Web estática: un único index.html autocontenido (puedes usar el CDN de",
+        "  Tailwind y enlazar styles.css / app.js locales).",
+        "- React/JSX: define un componente App exportado por defecto (export default",
+        "  function App()). React 18 y los globales Recharts, d3, lucide, motion y",
+        "  AnimatePresence, además de Tailwind, ya están disponibles — NO uses",
+        "  imports de paquetes npm (no hay bundler). Importar archivos locales",
+        "  .css/.json sí funciona.",
+        "- Mantén cada entrega autocontenida y lista para renderizar.",
+      ].join("\n")
   return [
     "Eres un asistente de programación que trabaja en un workspace en memoria del navegador.",
     "Cuando devuelvas código pensado para un archivo, usa SIEMPRE este formato para que la app pueda aplicarlo:",
     "",
     "\u0060\u0060\u0060<lenguaje> <ruta>",
-    "// path: <ruta>",
-    "<contenido del archivo>",
+    "<contenido COMPLETO del archivo>",
     "\u0060\u0060\u0060",
+    "(la ruta va SOLO en el encabezado del bloque — NO añadas líneas `// path:` dentro del contenido;",
+    "en package.json un comentario rompe el JSON)",
     folderBlock,
     "",
-    "El workspace tiene un PREVIEW EN VIVO (navegador embebido) que se",
-    "actualiza solo. Escribe SIEMPRE código que se pueda previsualizar sin",
-    "build ni npm:",
-    "- Web estática: un único index.html autocontenido (puedes usar el CDN de",
-    "  Tailwind y enlazar styles.css / app.js locales).",
-    "- React/JSX: define un componente App exportado por defecto (export default",
-    "  function App()). React 18 y los globales Recharts, d3, lucide, motion y",
-    "  AnimatePresence, además de Tailwind, ya están disponibles — NO uses",
-    "  imports de paquetes npm (no hay bundler). Importar archivos locales",
-    "  .css/.json sí funciona.",
-    "- Mantén cada entrega autocontenida y lista para renderizar.",
+    previewBlock,
+    "",
+    AGENT_STYLE_BLOCK,
     "",
     "Archivos disponibles:",
     fileList || "(workspace vacío)",
@@ -150,8 +257,6 @@ export function AICodeChatPanel() {
   const {
     selectedModel,
     selectProvider,
-    setSelectedModel,
-    setSelectedProivder,
     availableModels,
   } = useChat()
   const {
@@ -166,6 +271,7 @@ export function AICodeChatPanel() {
     createCodeChatSession,
     setActiveCodeChatSession,
     patchCodeChatSessionTurns,
+    patchAgentState,
   } = useCodeWorkspace()
 
   const sessionId = activeCodeChatSessionId
@@ -186,13 +292,64 @@ export function AICodeChatPanel() {
 
   const [input, setInput] = React.useState("")
   const [busy, setBusy] = React.useState(false)
+  const [buildingApp, setBuildingApp] = React.useState(false)
   const [includeContext, setIncludeContext] = React.useState(true)
-  const [composerMode, setComposerMode] = React.useState<ComposerMode>("build")
+  const [composerMode, setComposerMode] = React.useState<ComposerMode>("app")
+
+  // The /code chat picks its OWN model — a fast, streaming one — independent of
+  // the main chat (whose default may be a slow reasoning model that times out
+  // the live stream). Auto-selected from the catalog, persisted, user-overridable.
+  const [codeModel, setCodeModel] = React.useState<{ name: string; provider?: string } | null>(null)
+
+  React.useEffect(() => {
+    if (codeModel || !availableModels || availableModels.length === 0) return
+    let restored: { name: string; provider?: string } | null = null
+    try {
+      const raw = typeof window !== "undefined" ? window.localStorage.getItem("code-workspace:model") : null
+      if (raw) {
+        const parsed = JSON.parse(raw)
+        if (parsed?.name && availableModels.some((m) => m.name === parsed.name)) restored = parsed
+      }
+    } catch {
+      /* ignore corrupt value */
+    }
+    const chosen = restored || recommendFastModel(availableModels) || availableModels[0]
+    if (chosen) setCodeModel({ name: chosen.name, provider: chosen.provider })
+  }, [availableModels, codeModel])
+
+  const chooseCodeModel = React.useCallback((m: { name: string; provider?: string }) => {
+    setCodeModel(m)
+    try {
+      window.localStorage.setItem("code-workspace:model", JSON.stringify(m))
+    } catch {
+      /* quota / private mode */
+    }
+  }, [])
+
+  // Resolved model the code chat actually uses. Priority:
+  //  1. an explicit code-chat choice (codeModel),
+  //  2. a fast model derived inline from the catalog (so the FIRST request is
+  //     already fast even before the auto-pick effect has run),
+  //  3. the main-chat selection as a last resort (may be a slow model).
+  const autoFastModel = React.useMemo(
+    () => recommendFastModel(availableModels || []),
+    [availableModels],
+  )
+  const activeModelName = codeModel?.name || autoFastModel?.name || selectedModel
+  const activeProvider = codeModel?.provider || autoFastModel?.provider || selectProvider
+  // Fast = streaming-friendly (good for the live preview); slow = reasoning/heavy.
+  const modelIsFast = !!activeModelName && !isSlowModel(activeModelName)
+
+  // OpenCode engine (opt-in): when configured/reachable, the chat can route
+  // prompts through the real agent engine instead of the LLM/builder path.
+  const { available: engineAvailable } = useOpencodeEngine()
+  const [engineMode, setEngineMode] = React.useState(false)
+  // Map<chatSessionId, engineSessionId> so each code chat reuses one engine session.
+  const engineSessionRef = React.useRef<Record<string, string>>({})
 
   const abortRef = React.useRef<AbortController | null>(null)
   const inputRef = React.useRef<HTMLTextAreaElement | null>(null)
   const scrollerRef = React.useRef<HTMLDivElement | null>(null)
-
   // Allow Cmd/Ctrl+L from anywhere in the workspace to focus the
   // composer. The provider exposes a small bus so we don't drill refs.
   React.useEffect(() => {
@@ -264,7 +421,7 @@ export function AICodeChatPanel() {
   }, [setTurns])
 
   const sendPrompt = React.useCallback(
-    async (prompt: string) => {
+    async (prompt: string, override?: { systemPrompt?: string; autoApply?: boolean }) => {
       const normalized = normalizeChatInput(prompt)
       if (shouldWarnUser(normalized)) {
         toast.error(
@@ -278,8 +435,8 @@ export function AICodeChatPanel() {
         toast.error("Inicia sesión para usar el chat de código.")
         return
       }
-      if (!selectedModel) {
-        toast.error("No hay modelo seleccionado todavía. Abre el chat principal una vez para inicializar.")
+      if (!activeModelName) {
+        toast.error("Cargando modelos… intenta de nuevo en un momento.")
         return
       }
 
@@ -288,6 +445,9 @@ export function AICodeChatPanel() {
         return
       }
 
+      // Intake / routing is decided by the agent FSM (nextAgentAction) in
+      // `dispatch`; sendPrompt is now a pure LLM-streaming executor. The system
+      // prompt can be overridden per role (landing generator, SRE, …).
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
       const assistantId = `${id}-a`
       setTurns((prev) => [
@@ -302,30 +462,128 @@ export function AICodeChatPanel() {
       abortRef.current = controller
 
       const modeInstruction = COMPOSER_MODE_INSTRUCTION[composerMode]
-      const finalPrompt = includeContext
-        ? `${buildSystemContext(files, activePath, activeFolder)}\n\n${modeInstruction}\n\n---\n\n${text}`
-        : `${modeInstruction}\n\n${text}`
+      // Include the recent conversation so the agent actually accumulates the
+      // intake context across turns. Without this the chat was stateless per
+      // message — it kept re-asking the same questions and never had enough
+      // context to generate. `turns` here is the state BEFORE this message was
+      // appended, i.e. the genuine prior history.
+      const transcript = turns
+        .filter((t) => !t.streaming && t.content.trim())
+        .slice(-12)
+        .map((t) => `${t.role === "user" ? "Usuario" : "Asistente"}: ${t.content}`)
+        .join("\n\n")
+      const convoBlock = transcript ? `Conversación hasta ahora:\n${transcript}\n\n---\n\n` : ""
+      const finalPrompt = override?.systemPrompt
+        ? `${AGENT_STYLE_BLOCK}\n\n${override.systemPrompt}\n\n${convoBlock}Usuario: ${text}`
+        : includeContext
+          ? `${buildSystemContext(files, activePath, activeFolder, composerMode)}\n\n${modeInstruction}\n\n${convoBlock}Usuario: ${text}`
+          : `${modeInstruction}\n\n${convoBlock}Usuario: ${text}`
+
+      // Accumulate the streamed answer locally so onDone can auto-apply the
+      // generated files without reading it back out of a setState updater
+      // (updaters must stay pure — applyBlock is a side effect).
+      let assistantText = ""
+      const startedAt = Date.now()
+      // Real token usage (+ optional USD cost) from the stream's `usage` frame,
+      // delivered just before onClose so it's available when we build metrics.
+      let usage: { tokensIn: number; tokensOut: number; costOriginalUsd?: number; costAppliedUsd?: number } | null = null
 
       try {
         await apiClient.generateAIStream(
           {
-            provider: selectProvider,
-            model: selectedModel,
+            provider: activeProvider,
+            model: activeModelName,
             prompt: finalPrompt,
             streamId: id,
+            // The code chat generates code blocks (e.g. a full index.html);
+            // it must use a plain LLM stream, never the web_search/artifact
+            // agentic loop (which times out and returns the empty fallback
+            // for build-an-app prompts).
+            disableAgentic: true,
           },
           (chunk) => {
+            assistantText += chunk
             setTurns((prev) =>
-              prev.map((t) =>
-                t.id === assistantId ? { ...t, content: t.content + chunk } : t,
-              ),
+              prev.map((t) => {
+                if (t.id !== assistantId) return t
+                const nextContent = t.content + chunk
+                // The first completed line = the planning line is done → stamp the
+                // REAL planning duration once (turn start → first line emitted).
+                const planPatch =
+                  t.planMs == null && nextContent.includes("\n")
+                    ? { planMs: Date.now() - startedAt }
+                    : {}
+                return { ...t, content: nextContent, ...planPatch }
+              }),
             )
           },
           () => {
+            // App mode (or an explicit override) = Replit-style "presented
+            // output": auto-apply the generated files and open the live preview
+            // so the user sees the result immediately. Other modes keep the
+            // manual "Aplicar" button (review-before-write). `applied` is fed to
+            // the Worked-Summary/action-log metrics on the turn (real numbers).
+            let applied: Array<{ path: string; content: string }> = []
+            if (override?.autoApply ?? composerMode === "app") {
+              try {
+                const blocks = parseCodeBlocks(assistantText).filter((b) => b.path)
+                if (blocks.length > 0) {
+                  for (const b of blocks) {
+                    if (b.path) applyBlock(b.path, b.content)
+                  }
+                  applied = blocks.map((b) => ({ path: b.path as string, content: b.content }))
+                  const hasPkg = blocks.some((b) => /(^|\/)package\.json$/i.test(b.path || ""))
+                  const hasHtml = blocks.some((b) => /\.html?$/i.test(b.path || ""))
+                  toast.success(
+                    hasPkg
+                      ? "Proyecto generado — pulsa ▶ Ejecutar para levantar el dev server"
+                      : hasHtml
+                        ? "App generada — revisa el preview en vivo →"
+                        : `Generados ${blocks.length} archivo(s) — abriendo preview`,
+                  )
+                  // applyBlock already emits "siragpt:code-open-preview"; make
+                  // sure the preview pane is shown even if it was collapsed.
+                  if (typeof window !== "undefined") {
+                    window.dispatchEvent(new CustomEvent("siragpt:code-open-preview"))
+                  }
+                }
+              } catch {
+                /* parsing/apply failure → user can still apply manually */
+              }
+            }
             setTurns((prev) =>
-              prev.map((t) =>
-                t.id === assistantId ? { ...t, streaming: false } : t,
-              ),
+              prev.map((t) => {
+                if (t.id !== assistantId) return t
+                const base = { ...t, streaming: false }
+                // Attach the Worked Summary when the turn did file work OR the
+                // stream reported real token usage (the Agent Usage figure).
+                if (applied.length > 0 || usage) {
+                  const { actions, metrics } = buildWriteMetrics(applied, {
+                    startedAt,
+                    now: Date.now(),
+                    getPrevContent: (p) => files[p]?.content ?? "",
+                  })
+                  // Even a no-file text answer shows an action row (the model
+                  // reasoned + produced the reply).
+                  const effectiveActions =
+                    actions.length > 0 ? actions : [{ kind: "reasoning" as const, label: "Genero la respuesta" }]
+                  const withUsage = usage
+                    ? {
+                        ...metrics,
+                        tokensIn: usage.tokensIn,
+                        tokensOut: usage.tokensOut,
+                        ...(usage.costOriginalUsd != null ? { costOriginalUsd: usage.costOriginalUsd } : {}),
+                        ...(usage.costAppliedUsd != null ? { costAppliedUsd: usage.costAppliedUsd } : {}),
+                      }
+                    : metrics
+                  return {
+                    ...base,
+                    actions: effectiveActions,
+                    metrics: withUsage,
+                  }
+                }
+                return base
+              }),
             )
             setBusy(false)
             abortRef.current = null
@@ -347,6 +605,7 @@ export function AICodeChatPanel() {
             abortRef.current = null
           },
           controller.signal,
+          { onUsage: (u) => { usage = u } },
         )
       } catch (err: any) {
         toast.error(err?.message || "Error en el chat de código")
@@ -357,12 +616,555 @@ export function AICodeChatPanel() {
     [
       activePath,
       activeFolder,
+      activeModelName,
+      activeProvider,
+      applyBlock,
       busy,
       composerMode,
       files,
       includeContext,
-      selectProvider,
-      selectedModel,
+      sessionId,
+      setTurns,
+      token,
+      turns,
+      user,
+    ],
+  )
+
+  // Deterministic "Construir app" path: bypasses the LLM entirely. For a
+  // LANDING goal it builds the Vite 7 + React 18 + TS project locally
+  // (lib/code-agent/vite-scaffold — zero network); for APP goals it sends the
+  // prompt to /api/builder/generate (pure heuristics → runnable Next.js CRUD).
+  // This is the reliable build flow that works even when the chat model / API
+  // keys are down.
+  const buildApp = React.useCallback(
+    async (prompt: string, ctx?: AgentBuildContext) => {
+      const text = prompt.trim()
+      if (!text || busy || buildingApp) return
+      if (!user || !token) {
+        toast.error("Inicia sesión para construir la app.")
+        return
+      }
+      if (!sessionId) {
+        toast.error("Selecciona o crea un agente de código.")
+        return
+      }
+
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      setTurns((prev) => [
+        ...prev,
+        { id, role: "user", content: text },
+        { id: `${id}-a`, role: "assistant", content: "⚙️ Construyendo la app (modo determinista, sin LLM)…", streaming: true },
+      ])
+      setInput("")
+      setBuildingApp(true)
+
+      try {
+        let appliedFiles: Array<{ path: string; content: string }>
+        let summary: string
+        let toastMsg: string
+        if (ctx && ctx.goal === "landing") {
+          // Landing → local Vite scaffold (no network, full landing + Invitar).
+          appliedFiles = buildViteLandingFiles(ctx)
+          summary = [
+            `✅ Landing generada (determinista) — ${appliedFiles.length} archivo(s).`,
+            ``,
+            `- **Stack:** Vite 7 + React 18 + TypeScript + Tailwind v4`,
+            `- **Incluye:** animaciones de scroll (Framer Motion) y el componente «Invitar al proyecto»`,
+            ``,
+            `Pulsa **▶ Ejecutar** para instalar dependencias y ver la landing en vivo. Itera pidiéndome cambios en el chat.`,
+          ].join("\n")
+          toastMsg = "Landing generada — pulsa ▶ Ejecutar →"
+        } else {
+          const result = await intakeService.generate(text)
+          appliedFiles = result.files || []
+          if (appliedFiles.length === 0) {
+            throw new Error("La generación no devolvió archivos.")
+          }
+          const entities = result.brief.dataEntities.map((e) => e.name).join(", ") || "—"
+          summary = [
+            `✅ App generada (determinista) — ${appliedFiles.length} archivo(s).`,
+            ``,
+            `- **Plataforma:** ${result.brief.platform}`,
+            `- **Entidades:** ${entities}`,
+            `- **Stack:** ${result.blueprint.stack.frontend}`,
+            ``,
+            `Revisa el **preview en vivo** → y el código en el árbol de archivos. Itera pidiéndome cambios en el chat.`,
+          ].join("\n")
+          toastMsg = "App generada — revisa el preview en vivo →"
+        }
+        // Apply index.html LAST so it stays the active tab and the live preview
+        // lands on the runnable app rather than a doc file.
+        const ordered = [...appliedFiles].sort((a, b) =>
+          (/(^|\/)index\.html?$/i.test(a.path) ? 1 : 0) - (/(^|\/)index\.html?$/i.test(b.path) ? 1 : 0),
+        )
+        for (const file of ordered) {
+          applyBlock(file.path, file.content)
+        }
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("siragpt:code-open-preview"))
+        }
+        setTurns((prev) =>
+          prev.map((t) => (t.id === `${id}-a` ? { ...t, content: summary, streaming: false } : t)),
+        )
+        toast.success(toastMsg)
+      } catch (err: any) {
+        const msg = err?.message || "No se pudo generar la app"
+        setTurns((prev) =>
+          prev.map((t) =>
+            t.id === `${id}-a` ? { ...t, content: `_${msg}_`, streaming: false } : t,
+          ),
+        )
+        toast.error(msg)
+      } finally {
+        setBuildingApp(false)
+      }
+    },
+    [applyBlock, busy, buildingApp, sessionId, setTurns, token, user],
+  )
+
+  // SRE tier-0: classify the build log locally (no LLM), render the strict
+  // 5-section diagnosis, and auto-apply a package.json `overrides` patch when
+  // the fix is deterministic. Works even with the model down.
+  const runDeterministicSRE = React.useCallback(
+    async (log: string, userText: string, sid: string) => {
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      setTurns((prev) => [
+        ...prev,
+        { id, role: "user", content: userText },
+        { id: `${id}-a`, role: "assistant", content: "🔧 Diagnosticando el build (modo determinista)…", streaming: true },
+      ])
+      setInput("")
+      const verdict = classifyBuildError(log)
+      let body = renderFiveSections(verdict)
+      const pkg = files["package.json"]
+      if (verdict.suggestedOverrides && pkg) {
+        const patched = mergeOverridesIntoPackageJson(pkg.content, verdict.suggestedOverrides)
+        if (patched) {
+          applyBlock("package.json", patched)
+          body += "\n\n_`package.json` actualizado con `overrides` — pulsa **⚡ Construir** para reinstalar._"
+        }
+      }
+      setTurns((prev) => prev.map((t) => (t.id === `${id}-a` ? { ...t, content: body, streaming: false } : t)))
+      patchAgentState(sid, (s) => ({ ...s, phase: "idle" }))
+    },
+    [applyBlock, files, patchAgentState, setTurns],
+  )
+
+  // Apply a set of {path,content} files to the workspace (index.html last so the
+  // live preview lands on the runnable app) and open the preview.
+  const applyFilesToWorkspace = React.useCallback(
+    (files: Array<{ path: string; content: string }>) => {
+      const ordered = [...files].sort(
+        (a, b) =>
+          (/(^|\/)index\.html?$/i.test(a.path) ? 1 : 0) - (/(^|\/)index\.html?$/i.test(b.path) ? 1 : 0),
+      )
+      for (const f of ordered) applyBlock(f.path, f.content)
+      if (files.length > 0 && typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("siragpt:code-open-preview"))
+      }
+    },
+    [applyBlock],
+  )
+
+  // Run the deterministic builder for a context and apply its files. Returns the
+  // file count. Used as the reliable fallback when the engine yields no code.
+  // Landings build locally (vite-scaffold, zero network); app goals use the
+  // backend builder and degrade to a local landing shell if it's unreachable.
+  const runDeterministicInto = React.useCallback(
+    async (ctx: AgentBuildContext): Promise<number> => {
+      if (ctx.goal === "landing") {
+        const scaffold = buildViteLandingFiles(ctx)
+        applyFilesToWorkspace(scaffold)
+        return scaffold.length
+      }
+      try {
+        const result = await intakeService.generate(promptFromContext(ctx))
+        const files = result.files || []
+        if (files.length > 0) {
+          applyFilesToWorkspace(files)
+          return files.length
+        }
+      } catch {
+        /* backend unreachable → offline landing shell below */
+      }
+      const fallback = buildViteLandingFiles({ ...ctx, goal: "landing" })
+      applyFilesToWorkspace(fallback)
+      return fallback.length
+    },
+    [applyFilesToWorkspace],
+  )
+
+  // OpenCode engine path. For a normal chat turn it sends the text; for a BUILD
+  // (opts.buildContext) it sends the Vite 7 + React 18 + TS contract prompt and
+  // the engine writes the project files into its /workspace (write/edit tools);
+  // runEngine then reads the whole tree back into the editor. If the engine
+  // yields no usable code (or errors), it falls back to the deterministic
+  // builder in the SAME turn — so a build always produces a result.
+  const runEngine = React.useCallback(
+    async (text: string, sid: string, opts?: { buildContext?: AgentBuildContext; iterate?: boolean }) => {
+      const ctx = opts?.buildContext
+      const isBuild = !!ctx
+      const iterate = !!opts?.iterate
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const assistantId = `${id}-a`
+      setTurns((prev) => [
+        ...prev,
+        { id, role: "user", content: text },
+        {
+          id: assistantId,
+          role: "assistant",
+          content: isBuild ? "⚙️ Motor OpenCode construyendo…" : "⚙️ Motor OpenCode trabajando…",
+          streaming: true,
+        },
+      ])
+      setInput("")
+      setBusy(true)
+      const controller = new AbortController()
+      abortRef.current = controller
+
+      const startedAt = Date.now()
+      const finish = (
+        content: string,
+        meta?: { written?: Array<{ path: string; content: string }>; read?: Array<{ path: string; content: string }> },
+      ) =>
+        setTurns((prev) =>
+          prev.map((t) => {
+            if (t.id !== assistantId) return t
+            const base = { ...t, content, streaming: false }
+            if (meta?.written && meta.written.length > 0) {
+              const { actions, metrics } = buildWriteMetrics(meta.written, {
+                startedAt,
+                now: Date.now(),
+                getPrevContent: (p) => files[p]?.content ?? "",
+                read: meta.read,
+              })
+              return { ...base, actions, metrics }
+            }
+            return base
+          }),
+        )
+
+      try {
+        let esid = engineSessionRef.current[sid]
+        if (!esid) {
+          const s = await opencodeService.createSession({})
+          esid = String((s && (s.id as string)) || "")
+          if (!esid) throw new Error("El motor no devolvió un id de sesión.")
+          engineSessionRef.current[sid] = esid
+        }
+
+        const sendText = ctx
+          ? `${landingSystemPrompt(ctx)}\n\n${engineTransportInstructions()}`
+          : iterate
+            ? `MODIFICA los archivos que YA existen en tu workspace para lograr: ${text}.\n\nPrimero LEE el código actual con tus herramientas, haz cambios DIRIGIDOS solo donde corresponde y CONSERVA el resto intacto. NO regeneres todo desde cero — edita los archivos existentes (write/edit). Si el proyecto es Vite + React + TypeScript, RESPETA su contrato: extensiones .tsx/.ts y Tailwind v4 vía @tailwindcss/vite (PROHIBIDO crear tailwind.config.js/postcss.config.js o usar directivas v3 \`@tailwind\`).`
+            : text
+
+        // OpenCode is event-driven: the POST /message returns an empty shell and
+        // the assistant reply arrives over the SSE event stream. We accumulate
+        // text parts (by part.id, dropping the echoed user prompt) and resolve
+        // when the session goes idle.
+        const byId = new Map<string, string>()
+        const order: string[] = []
+        let resolveIdle: () => void = () => {}
+        const idle = new Promise<void>((r) => {
+          resolveIdle = r
+        })
+        const assistantText = () =>
+          order
+            .map((pid) => byId.get(pid) || "")
+            .filter((txt) => txt && txt !== sendText)
+            .join("\n")
+            .trim()
+
+        const streamP = opencodeService
+          .streamEvents((ev) => {
+            const d = ev?.data as any
+            if (!d || d.sessionID !== esid) return
+            if (ev.type === "message.part.updated" && d.part?.type === "text" && typeof d.part.text === "string") {
+              if (!byId.has(d.part.id)) order.push(d.part.id)
+              byId.set(d.part.id, d.part.text)
+              const live = assistantText()
+              if (live) setTurns((prev) => prev.map((t) => (t.id === assistantId ? { ...t, content: live.slice(0, 12000) } : t)))
+            } else if (ev.type === "session.idle" || ev.type === "session.error") {
+              resolveIdle()
+            }
+          }, controller.signal)
+          .catch(() => {})
+
+        // Kick off the turn (fire-and-forget; content comes via events) and wait
+        // for idle, with a safety timeout so we never hang the UI.
+        opencodeService.prompt(esid, sendText).catch(() => {})
+        // Safety net only: the engine resolves `idle` as soon as it finishes, so
+        // simple builds return in seconds and we never wait the full window.
+        // This cap only fires if the engine *hangs*. Keep it generous so the
+        // agent can build real, larger systems (full web app / ecommerce), then
+        // fall back to the deterministic builder so a result is always produced.
+        const engineTimeoutMs = isBuild ? 150_000 : 60_000
+        await Promise.race([idle, new Promise<void>((r) => setTimeout(r, engineTimeoutMs))])
+        controller.abort() // close the events stream
+        await streamP.catch(() => {})
+
+        const reply = assistantText()
+        const blocks = parseCodeBlocks(reply).filter((b) => b.path)
+
+        if (ctx) {
+          // BUILD: read back the ENTIRE project the agent wrote to its /workspace
+          // — a real multi-file tree (index.html, styles, scripts, components,
+          // config…), not just one file. Falls back to known entry paths + reply
+          // code blocks if the listing is empty.
+          let engineFiles = await opencodeService.listProjectFiles()
+          if (engineFiles.length === 0) {
+            const candidates = [
+              "package.json",
+              "vite.config.ts",
+              "tsconfig.json",
+              "index.html",
+              "src/main.tsx",
+              "src/index.css",
+              "src/App.tsx",
+              // Legacy single-html era entries (old engine sessions).
+              "styles.css",
+              "style.css",
+              "app.js",
+              "script.js",
+              "main.js",
+            ]
+            for (const p of candidates) {
+              try {
+                const c = await opencodeService.readFile(p)
+                if (c && c.trim()) engineFiles.push({ path: p, content: c })
+              } catch {
+                /* missing file → skip */
+              }
+            }
+          }
+          const seen = new Set<string>()
+          const merged: Array<{ path: string; content: string }> = []
+          for (const f of [...engineFiles, ...blocks.map((b) => ({ path: b.path as string, content: b.content }))]) {
+            if (f.path && !seen.has(f.path)) {
+              seen.add(f.path)
+              merged.push(f)
+            }
+          }
+          // Accept a real project: a runnable/known entry, or simply ≥2 files.
+          const hasEntry = merged.some((f) => /(^|\/)(index\.html?|package\.json)$/i.test(f.path))
+          if (merged.length > 0 && (hasEntry || merged.length >= 2)) {
+            applyFilesToWorkspace(merged)
+            finish(
+              reply ? `${reply}\n\n_(Motor OpenCode: ${merged.length} archivo(s) →)_` : `✅ Motor OpenCode — ${merged.length} archivo(s) →`,
+              { written: merged, read: engineFiles },
+            )
+            toast.success(`Motor OpenCode — ${merged.length} archivo(s) →`)
+            return
+          }
+          // Engine produced nothing usable → reliable deterministic fallback.
+          const n = await runDeterministicInto(ctx)
+          finish(
+            reply
+              ? `${reply}\n\n_(El motor no dejó archivos; usé el builder determinista: ${n} archivos.)_`
+              : `✅ App generada (builder determinista, ${n} archivos).`,
+          )
+          toast.success("App generada (builder determinista) →")
+          return
+        }
+
+        // Iterate: the agent edited files in its workspace ("change the header").
+        // Read the whole project back and sync it so edits land in the tree +
+        // preview — this is the Replit-style "modify what's not well done" loop.
+        if (iterate) {
+          const projectFiles = await opencodeService.listProjectFiles()
+          const seen = new Set<string>()
+          const synced: Array<{ path: string; content: string }> = []
+          for (const f of [...projectFiles, ...blocks.map((b) => ({ path: b.path as string, content: b.content }))]) {
+            if (f.path && !seen.has(f.path)) {
+              seen.add(f.path)
+              synced.push(f)
+            }
+          }
+          if (synced.length > 0) {
+            applyFilesToWorkspace(synced)
+            finish(
+              reply ? `${reply}\n\n_(Motor OpenCode: ${synced.length} archivo(s) →)_` : `✅ Cambios aplicados — ${synced.length} archivo(s) →`,
+              { written: synced },
+            )
+            toast.success(`Cambios aplicados — ${synced.length} archivo(s) →`)
+            return
+          }
+        }
+
+        // Plain engine chat: render the reply + apply any code blocks it returned.
+        if (blocks.length > 0) {
+          applyFilesToWorkspace(blocks.map((b) => ({ path: b.path as string, content: b.content })))
+          finish(reply || `✅ Motor OpenCode — ${blocks.length} archivo(s) aplicados →`, {
+            written: blocks.map((b) => ({ path: b.path as string, content: b.content })),
+          })
+          toast.success(`Motor OpenCode — ${blocks.length} archivo(s) →`)
+          return
+        }
+
+        finish(reply || "_(el motor no devolvió texto)_")
+      } catch (err: any) {
+        if (ctx) {
+          // Engine unreachable/error during a build → still deliver via the builder.
+          try {
+            const n = await runDeterministicInto(ctx)
+            finish(`✅ App generada (builder determinista, ${n} archivos). El motor no respondió.`)
+            toast.success("App generada (builder determinista) →")
+            return
+          } catch {
+            /* fall through to error */
+          }
+        }
+        finish(`_${err?.message || "El motor OpenCode no respondió"}_`)
+        toast.error(err?.message || "El motor OpenCode no respondió")
+      } finally {
+        try {
+          controller.abort()
+        } catch {
+          /* already closed */
+        }
+        abortRef.current = null
+        setBusy(false)
+      }
+    },
+    [applyFilesToWorkspace, files, runDeterministicInto, setTurns],
+  )
+
+  const dispatch = React.useCallback(
+    async (rawInput: string, opts?: { forceDeterministic?: boolean }) => {
+      const text = rawInput.trim()
+      if (!text) return
+      if (busy || buildingApp) {
+        toast("Espera — sigo procesando el mensaje anterior…")
+        return
+      }
+      if (!user || !token) {
+        toast.error("Inicia sesión para usar el chat de código.")
+        return
+      }
+      if (!sessionId) {
+        toast.error("Abre o crea un chat de código (la carpeta/agente no está activo). Recarga si abriste una carpeta local que no montó.")
+        return
+      }
+      const sid = sessionId
+      const agent = activeCodeChatSession?.agent ?? defaultAgentState()
+      const action = nextAgentAction(agent, text, {
+        mode: composerMode,
+        forceDeterministic: opts?.forceDeterministic,
+        hasModel: !!activeModelName,
+      })
+
+      switch (action.type) {
+        case "ask": {
+          const qid = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+          const assistantId = `${qid}-a`
+          const staticQuestion = action.question
+          setTurns((prev) => [
+            ...prev,
+            { id: qid, role: "user", content: text },
+            { id: assistantId, role: "assistant", content: staticQuestion, streaming: true },
+          ])
+          setInput("")
+          patchAgentState(sid, (s) => ({
+            ...s,
+            phase: "intake",
+            intakeStep: action.nextStep,
+            context: action.context,
+          }))
+          // Upgrade the hardcoded question to a context-aware, LLM-phrased one
+          // (adapts to what the user already said). Static stays as the fallback.
+          const convo = [...turns, { role: "user", content: text }]
+          const dynamicQuestion = await fetchCodeIntakeQuestion(action.slot, convo, staticQuestion)
+          // Real steps this turn took, so even an intake question shows an action
+          // row (the agent reviewed the conversation + formulated the question).
+          const askActions: CodeChatAction[] = [
+            { kind: "file_read", label: "Reviso el contexto de la conversación" },
+            { kind: "reasoning", label: "Formulo la siguiente pregunta" },
+          ]
+          setTurns((prev) =>
+            prev.map((t) =>
+              t.id === assistantId
+                ? { ...t, content: dynamicQuestion, streaming: false, actions: askActions }
+                : t,
+            ),
+          )
+          return
+        }
+        case "generate": {
+          patchAgentState(sid, (s) => ({ ...s, phase: "generating", context: action.context }))
+          const hasIntake = !!(action.context.productType || action.context.brand)
+          const genPrompt = hasIntake ? promptFromContext(action.context) : text
+          if (!opts?.forceDeterministic && engineAvailable) {
+            // Prefer the OpenCode agent: it writes the Vite project files into
+            // its /workspace (via a funded model), and runEngine reads them back
+            // into the editor — falling back to the deterministic builder if the
+            // agent leaves no usable project. Rich AND reliable in Docker.
+            await runEngine(text, sid, { buildContext: action.context })
+            patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "llm" }))
+          } else if (!opts?.forceDeterministic && activeModelName) {
+            // No engine but a chat model is available → stream the Vite project
+            // as fenced blocks (the contract format parseCodeBlocks understands)
+            // and auto-apply them into the workspace.
+            await sendPrompt(genPrompt, {
+              systemPrompt: `${landingSystemPrompt(action.context)}\n\n${streamOutputFormat()}`,
+              autoApply: true,
+            })
+            patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "llm" }))
+          } else {
+            // Deterministic tier: enrich a bare context with the raw prompt so
+            // the local scaffold still produces niche-coherent copy.
+            const buildCtx = hasIntake ? action.context : { ...action.context, productType: text }
+            await buildApp(genPrompt, buildCtx)
+            patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "deterministic" }))
+          }
+          return
+        }
+        case "patch": {
+          if (engineMode && engineAvailable) {
+            await runEngine(action.instruction, sid, { iterate: true })
+          } else {
+            await sendPrompt(action.instruction, { autoApply: true })
+          }
+          return
+        }
+        case "debug": {
+          patchAgentState(sid, (s) => ({ ...s, phase: "debugging", lastError: action.log }))
+          if (composerMode === "debug" && activeModelName) {
+            await sendPrompt(text, {
+              systemPrompt: sreSystemPrompt(action.log, collectConfigFiles(files)),
+              autoApply: true,
+            })
+          } else {
+            await runDeterministicSRE(action.log, text, sid)
+          }
+          return
+        }
+        default:
+          if (engineMode && engineAvailable) {
+            await runEngine(text, sid)
+          } else {
+            await sendPrompt(text, { autoApply: composerMode === "app" })
+          }
+      }
+    },
+    [
+      activeCodeChatSession,
+      activePath,
+      activeFolder,
+      activeModelName,
+      buildApp,
+      busy,
+      buildingApp,
+      composerMode,
+      engineAvailable,
+      engineMode,
+      files,
+      includeContext,
+      patchAgentState,
+      runDeterministicSRE,
+      runEngine,
+      sendPrompt,
       sessionId,
       setTurns,
       token,
@@ -372,13 +1174,13 @@ export function AICodeChatPanel() {
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    sendPrompt(input)
+    dispatch(input)
   }
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault()
-      sendPrompt(input)
+      dispatch(input)
     }
   }
 
@@ -429,6 +1231,7 @@ export function AICodeChatPanel() {
       </div>
 
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto p-3">
+        <AgentSwarm active={busy || buildingApp} />
         {turns.length === 0 ? (
           <EmptyChat />
         ) : (
@@ -478,12 +1281,34 @@ export function AICodeChatPanel() {
             />
             <ModelPickerInline
               models={availableModels || []}
-              selectedModel={selectedModel}
-              onSelect={(m) => {
-                setSelectedModel(m.name)
-                if (m.provider) setSelectedProivder(m.provider)
-              }}
+              selectedModel={activeModelName || ""}
+              fast={modelIsFast}
+              onSelect={(m) => chooseCodeModel({ name: m.name, provider: m.provider })}
             />
+            {engineAvailable ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className={cn(
+                  "h-7 shrink-0 gap-1 rounded-md px-2 text-[11px] font-medium",
+                  engineMode
+                    ? "bg-[hsl(var(--accent-violet)/0.16)] text-[hsl(var(--accent-violet))] hover:bg-[hsl(var(--accent-violet)/0.24)]"
+                    : "text-muted-foreground hover:bg-muted/80 hover:text-foreground",
+                )}
+                onClick={() => setEngineMode((v) => !v)}
+                aria-pressed={engineMode}
+                aria-label="Usar el motor OpenCode"
+                title={
+                  engineMode
+                    ? "Motor OpenCode activo — el chat usa el agente real"
+                    : "Activar el motor OpenCode (agente real) para este chat"
+                }
+              >
+                <Server className="h-3.5 w-3.5" />
+                <span>Motor{engineMode ? " ✓" : ""}</span>
+              </Button>
+            ) : null}
             <span className="min-w-0 flex-1" />
             {busy ? (
               <Button
@@ -521,11 +1346,24 @@ export function AICodeChatPanel() {
 
 function EmptyChat() {
   return (
-    <div className="flex h-full items-center justify-center text-center">
-      <div className="max-w-xs space-y-3">
-        <Sparkles className="mx-auto h-6 w-6 text-sky-500/80" />
-        <p className="text-sm text-muted-foreground">
-          Pide un cambio sobre el archivo activo, genera un nuevo archivo o pega un error y pídeme una corrección.
+    <div className="flex h-full items-center justify-center px-2 text-center">
+      <div className="max-w-[17rem] space-y-3">
+        <div className="relative mx-auto flex h-12 w-12 items-center justify-center">
+          <div
+            aria-hidden
+            className="absolute inset-0 rounded-2xl bg-[radial-gradient(circle,hsl(var(--accent-violet)/0.28),transparent_70%)] blur-md"
+          />
+          <div className="relative flex h-12 w-12 items-center justify-center rounded-2xl border border-[hsl(var(--accent-violet)/0.35)] bg-[hsl(var(--accent-violet)/0.10)] text-[hsl(var(--accent-violet))]">
+            <Sparkles className="h-6 w-6" />
+          </div>
+        </div>
+        <p className="text-sm font-semibold tracking-tight text-foreground">
+          Describe tu idea y se pone a trabajar un enjambre de agentes
+        </p>
+        <p className="text-[12.5px] leading-relaxed text-muted-foreground">
+          Más de 1000 agentes en paralelo buscan información, generan imágenes y
+          código, refactorizan, revisan y te entregan el resultado en el preview
+          en vivo.
         </p>
       </div>
     </div>
@@ -547,23 +1385,51 @@ function ChatBubble({
     [turn.content, turn.role],
   )
 
+  // USER messages: right-aligned dark-blue bubble with light text (the spec's
+  // user style). No code-block parsing — the user types prompts, not code cards.
+  if (isUser) {
+    return (
+      <div className="flex justify-end">
+        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl bg-blue-900 px-3.5 py-2 text-sm leading-relaxed text-zinc-50 shadow-sm">
+          {turn.content}
+        </div>
+      </div>
+    )
+  }
+
+  // ASSISTANT messages: left-aligned, plain background, clean typography (no
+  // colored bubble) — direct text on the interface, with the code-block cards.
+  const blocker = detectBlocker(turn.content)
+  // Pull the model's gerund-led planning line into the "🧠 …" badge (like the
+  // agent dashboard) and narrate the rest. Falls back to a generic badge while
+  // streaming before the planning line lands.
+  const { label: planLabel, body } = extractPlanLabel(turn.content)
   return (
-    <div
-      className={cn(
-        "rounded-lg border border-border/60 p-3 text-sm",
-        isUser ? "bg-muted/30" : "bg-background",
+    <div className="text-sm">
+      <div className="mb-1 flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-wide text-muted-foreground">
+        Asistente
+        {planLabel || turn.streaming ? (
+          <span className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-violet-500/10 px-2 py-0.5 normal-case tracking-normal text-violet-300">
+            <span aria-hidden="true">🧠</span>
+            <span className="truncate font-medium">{planLabel || "Pensando"}</span>
+            {!turn.streaming && typeof turn.planMs === "number" ? (
+              <span className="opacity-60">({formatWorked(turn.planMs)})</span>
+            ) : null}
+            {turn.streaming ? <ThinkingIndicator size="xs" className="inline" /> : null}
+          </span>
+        ) : null}
+      </div>
+      {/* An out-of-credits / quota error surfaces as a high-visibility panel
+          instead of plain prose; otherwise render the assistant text normally. */}
+      {blocker ? (
+        <ChatBlockerPanel title={blocker.title} rawError={turn.content} url={blocker.url} />
+      ) : (
+        <div className="whitespace-pre-wrap text-sm leading-relaxed">
+          {/* `body` already drops the planning line (now in the badge); strip
+              fenced blocks too so prose isn't shown twice (here + block cards). */}
+          {blocks.length > 0 ? stripFences(body) : body}
+        </div>
       )}
-    >
-      <div className="mb-1 text-[11px] uppercase tracking-wide text-muted-foreground">
-        {isUser ? "Tú" : "Asistente"}
-        {turn.streaming ? <ThinkingIndicator size="xs" className="ml-2 inline" /> : null}
-      </div>
-      <div className="whitespace-pre-wrap text-sm leading-relaxed">
-        {/* Strip fenced blocks from the prose so the user does not see
-            the raw markdown twice — once here and once inside each
-            block card below. */}
-        {blocks.length > 0 ? stripFences(turn.content) : turn.content}
-      </div>
       {(() => {
         const applicable = blocks.filter((b) => b.path)
         return applicable.length >= 2 ? (
@@ -589,12 +1455,118 @@ function ChatBubble({
           existingContent={block.path ? lookupContent(block.path) : ""}
         />
       ))}
+      {/* Real action log + mandatory Worked Summary — only when the turn did
+          measurable file work (build/app/engine paths populate these). */}
+      {turn.actions && turn.actions.length > 0 ? <ChatActionLog actions={turn.actions} /> : null}
+      {turn.metrics ? <ChatWorkedSummary metrics={turn.metrics} /> : null}
     </div>
   )
 }
 
 function stripFences(text: string): string {
   return text.replace(/```[^\n`]*\n[\s\S]*?```/g, "").trim()
+}
+
+// Compact action log: the FULL ordered glyph sequence (">_ 📖 ✎ …") + an
+// expandable list of the real file paths the agent wrote/read this turn.
+function ChatActionLog({ actions }: { actions: CodeChatAction[] }) {
+  const [open, setOpen] = React.useState(false)
+  if (!actions.length) return null
+  return (
+    <div className="mt-2">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex max-w-full flex-wrap items-center gap-1.5 rounded-full border border-border/60 bg-muted/30 px-2.5 py-1 text-xs text-muted-foreground hover:bg-muted/50"
+        aria-expanded={open}
+      >
+        <span className="flex flex-wrap items-center gap-x-1 font-mono leading-none" aria-hidden="true">
+          {actions.map((a, i) => (
+            <span key={i}>{glyphForAction(a.kind)}</span>
+          ))}
+        </span>
+        <span className="tabular-nums">
+          {actions.length} {actions.length === 1 ? "acción" : "acciones"}
+        </span>
+      </button>
+      {open && (
+        <ul className="mt-1.5 space-y-1 border-l border-border/60 pl-3 text-xs">
+          {actions.map((a, i) => (
+            <li key={i} className="flex items-center gap-1.5 text-muted-foreground">
+              <span className="font-mono" aria-hidden="true">{glyphForAction(a.kind)}</span>
+              <code className="truncate">{a.label}</code>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+// "Trabajó N s" — the mandatory Worked Summary, from REAL measured numbers.
+// File/line groups show only when there was file work; tokens/cost show only
+// when the stream reported real usage (cost omitted when the price is unknown).
+function ChatWorkedSummary({ metrics }: { metrics: CodeChatMetrics }) {
+  const hasFiles = metrics.filesChanged > 0
+  const hasTokens = typeof metrics.tokensIn === "number" || typeof metrics.tokensOut === "number"
+  const orig = metrics.costOriginalUsd
+  const applied = typeof metrics.costAppliedUsd === "number" ? metrics.costAppliedUsd : orig
+  const hasCost = typeof orig === "number" || typeof applied === "number"
+  const showStrike = typeof orig === "number" && typeof applied === "number" && applied < orig
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-border/60 bg-muted/20 px-2.5 py-1.5 text-[11px] text-muted-foreground">
+      <span className="font-medium text-foreground">⏱️ Trabajó {formatWorked(metrics.timeWorkedMs)}</span>
+      {hasFiles ? (
+        <>
+          <span>· {metrics.actionsCount} {metrics.actionsCount === 1 ? "acción" : "acciones"}</span>
+          <span>· {metrics.filesChanged} archivo(s)</span>
+          <span className="tabular-nums">· +{metrics.linesAdded} −{metrics.linesRemoved}</span>
+        </>
+      ) : null}
+      {metrics.itemsReadLines > 0 ? (
+        <span className="tabular-nums">· {metrics.itemsReadLines} líneas leídas</span>
+      ) : null}
+      {hasTokens ? (
+        <span className="tabular-nums">
+          · {(metrics.tokensIn ?? 0) + (metrics.tokensOut ?? 0)} tokens
+        </span>
+      ) : null}
+      {hasCost ? (
+        <span className="tabular-nums">
+          ·{" "}
+          {showStrike ? (
+            <span className="mr-1 text-muted-foreground/60 line-through">{formatUsd(orig as number)}</span>
+          ) : null}
+          {formatUsd((applied ?? orig) as number)}
+        </span>
+      ) : null}
+    </div>
+  )
+}
+
+function ChatBlockerPanel({ title, rawError, url }: { title: string; rawError: string; url?: string }) {
+  const isInternal = url?.startsWith("/")
+  return (
+    <div className="my-1 rounded-xl border border-red-500/30 bg-red-500/10 p-3">
+      <div className="flex items-center gap-1.5 text-sm font-semibold text-red-300">
+        <AlertTriangle className="h-4 w-4" /> Acción requerida de su parte
+      </div>
+      <div className="mt-1 text-sm text-foreground">{title}</div>
+      <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-black/40 p-2.5 text-[11px] leading-relaxed text-zinc-300">
+        {rawError.trim()}
+      </pre>
+      {url && (
+        <a
+          href={url}
+          target={isInternal ? undefined : "_blank"}
+          rel={isInternal ? undefined : "noopener noreferrer"}
+          className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-500"
+        >
+          Añadir créditos <ExternalLink className="h-3.5 w-3.5" />
+        </a>
+      )}
+    </div>
+  )
 }
 
 function ComposerPlusMenu({
@@ -636,6 +1608,13 @@ function ComposerPlusMenu({
           {COMPOSER_MODE_LABEL[mode]}
           {activeFileLabel && includeContext ? ` · ${activeFileLabel}` : ""}
         </DropdownMenuLabel>
+        <DropdownMenuItem
+          className={cn(itemClass, mode === "app" && "bg-muted font-medium")}
+          onClick={() => onModeChange("app")}
+        >
+          <Rocket className={iconClass} />
+          <span>App · construir desde cero</span>
+        </DropdownMenuItem>
         <DropdownMenuItem
           className={cn(itemClass, mode === "build" && "bg-muted font-medium")}
           onClick={() => onModeChange("build")}
@@ -721,10 +1700,12 @@ type ModelOption = { name: string; provider?: string; displayName?: string }
 function ModelPickerInline({
   models,
   selectedModel,
+  fast,
   onSelect,
 }: {
   models: ModelOption[]
   selectedModel: string
+  fast?: boolean
   onSelect: (model: ModelOption) => void
 }) {
   const grouped = React.useMemo(() => {
@@ -747,10 +1728,24 @@ function ModelPickerInline({
           type="button"
           variant="ghost"
           size="sm"
-          className="h-7 min-w-0 gap-0.5 rounded-md px-1.5 text-[11px] font-normal text-muted-foreground hover:bg-muted/80 hover:text-foreground data-[state=open]:bg-muted/80"
+          className="h-7 min-w-0 gap-1 rounded-md px-1.5 text-[11px] font-normal text-muted-foreground hover:bg-muted/80 hover:text-foreground data-[state=open]:bg-muted/80"
           aria-label="Seleccionar modelo"
+          title={
+            fast
+              ? "Modelo rápido (auto-seleccionado) — ideal para el preview en vivo"
+              : "Modelo lento (reasoning) — puede cortar el preview en vivo"
+          }
         >
-          <span className="max-w-[120px] truncate">{label}</span>
+          {fast ? (
+            <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-violet-500/15 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-violet-600 dark:text-violet-300">
+              ⚡ rápido
+            </span>
+          ) : (
+            <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-amber-500/15 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">
+              ⏳ lento
+            </span>
+          )}
+          <span className="max-w-[110px] truncate">{label}</span>
           <ChevronDown className="h-3 w-3 opacity-50" />
         </Button>
       </DropdownMenuTrigger>

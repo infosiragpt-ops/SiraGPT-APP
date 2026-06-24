@@ -438,7 +438,8 @@ export default function UsersPage() {
             <div className="py-8 text-center text-red-600">Error: {error}</div>
           ) : (
             <>
-              <div className="overflow-x-auto">
+              {/* Desktop/tablet table; phones get the card list below. */}
+              <div className="hidden overflow-x-auto md:block">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -461,7 +462,7 @@ export default function UsersPage() {
                       </TableCell>
                       <TableCell>
                         <Badge
-                          variant={user.plan === "ENTERPRISE" ? "default" : user.plan === "Pro" ? "secondary" : "outline"}
+                          variant={user.plan === "ENTERPRISE" ? "default" : (user.plan === "PRO" || user.plan === "PRO_MAX") ? "secondary" : "outline"}
                         >
                           {user.plan || "FREE"}
                         </Badge>
@@ -502,6 +503,53 @@ export default function UsersPage() {
                   ))}
                 </TableBody>
               </Table>
+              </div>
+
+              {/* Mobile card list */}
+              <div className="space-y-2 md:hidden">
+                {users.map((user) => (
+                  <div key={user.id} className="rounded-lg border bg-card p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate font-medium">{user.name}</div>
+                        <div className="truncate text-xs text-muted-foreground">{user.email}</div>
+                      </div>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="sm" className="h-8 w-8 shrink-0 p-0">
+                            <MoreHorizontal className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => openEditModal(user)}>Edit User</DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => confirmDeleteUser(user.id, user.name)} className="text-red-600">
+                            Delete User
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                      <Badge variant={user.plan === "ENTERPRISE" ? "default" : (user.plan === "PRO" || user.plan === "PRO_MAX") ? "secondary" : "outline"}>
+                        {user.plan || "FREE"}
+                      </Badge>
+                      <Badge variant="default">{user.isAdmin ? "Admin" : "Active"}</Badge>
+                      <span className="text-xs text-muted-foreground">
+                        {user.createdAt ? new Date(user.createdAt).toLocaleDateString() : "N/A"}
+                      </span>
+                    </div>
+                    <div className="mt-2">
+                      <div className="text-xs text-muted-foreground">
+                        {(user.apiUsage ?? 0).toLocaleString()} / {(user.monthlyLimit ?? 0).toLocaleString()}
+                      </div>
+                      <div className="mt-1 h-1 w-full rounded-full bg-muted">
+                        <div
+                          className="h-1 rounded-full bg-primary"
+                          style={{ width: `${Math.min(((user.apiUsage || 0) / (user.monthlyLimit || 1)) * 100, 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
 
               {/* Simple pagination controls */}

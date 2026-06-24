@@ -68,10 +68,28 @@ const prismaMock = {
       Object.assign(ep, data);
       return { ...ep };
     },
+    updateMany: async ({ where, data }) => {
+      prismaState.updateManyCalls = (prismaState.updateManyCalls || 0) + 1;
+      const wanted = where.id && Array.isArray(where.id.in) ? new Set(where.id.in) : null;
+      let count = 0;
+      for (const e of prismaState.endpoints) {
+        if (where.organizationId && e.organizationId !== where.organizationId) continue;
+        if (wanted && !wanted.has(e.id)) continue;
+        if (where.id && !wanted && e.id !== where.id) continue;
+        Object.assign(e, data);
+        count++;
+      }
+      return { count };
+    },
     deleteMany: async ({ where }) => {
+      // Support both a scalar `id` and the `{ id: { in: [...] } }` operator
+      // (bulk-delete now batches into a single deleteMany).
+      const ids = where.id && typeof where.id === 'object' && Array.isArray(where.id.in)
+        ? where.id.in
+        : (where.id != null ? [where.id] : null);
       const before = prismaState.endpoints.length;
       prismaState.endpoints = prismaState.endpoints.filter((e) => {
-        if (where.id && e.id !== where.id) return true;
+        if (ids && !ids.includes(e.id)) return true;
         if (where.organizationId && e.organizationId !== where.organizationId) return true;
         return false;
       });
@@ -150,6 +168,7 @@ function seedEndpoints(n) {
 describe('POST /api/orgs/:id/webhooks/bulk-toggle', () => {
   beforeEach(() => {
     prismaState.membership = { id: 'm1', orgId: 'org-1', userId: 'u-admin', role: 'ADMIN' };
+    prismaState.updateManyCalls = 0;
     auditEntries.length = 0;
     seedEndpoints(3);
   });
@@ -170,6 +189,8 @@ describe('POST /api/orgs/:id/webhooks/bulk-toggle', () => {
     assert.equal(auditEntries[0].action, 'org_webhook_bulk_toggle');
     assert.equal(auditEntries[0].before.isActive, true);
     assert.equal(auditEntries[0].after.isActive, false);
+    // Batched: the two endpoints flip in ONE updateMany, not an N+1 loop.
+    assert.equal(prismaState.updateManyCalls, 1);
   });
 
   test('ADMIN re-enables endpoints with enabled=true', async () => {

@@ -21,6 +21,10 @@ const USER_AGENT = 'siraGPT/1.0 (mailto:support@siragpt.io)';
 const BASE_URL = 'https://api.openalex.org/works';
 const DEFAULT_PER_PAGE = 25;
 const MAX_PER_PAGE = 50;
+// Per-page request deadline (sibling crossref.js has the same bound). The
+// caller's `signal` is the user-cancellation token, NOT a timeout, so without
+// this a stalled OpenAlex page could block the search phase indefinitely.
+const PER_CALL_TIMEOUT_MS = Number(process.env.OPENALEX_TIMEOUT_MS) || 8000;
 
 /**
  * Search OpenAlex for works matching `query`.
@@ -69,9 +73,15 @@ async function search({ query, limit = 30, yearRange = null, lang = null, signal
 
     let resp;
     try {
+      // Combine the caller's cancellation signal with a per-call timeout.
+      // A timeout aborts with a TimeoutError (name 'TimeoutError'), which the
+      // catch below treats as a transient failure → break → partial results;
+      // only a real user cancel (AbortError) is rethrown.
+      const timeoutSignal = AbortSignal.timeout(PER_CALL_TIMEOUT_MS);
+      const fetchSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
       resp = await fetch(`${BASE_URL}?${params.toString()}`, {
         headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
-        signal,
+        signal: fetchSignal,
       });
     } catch (err) {
       if (err.name === 'AbortError') throw err;

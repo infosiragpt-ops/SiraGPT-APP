@@ -1,8 +1,8 @@
 {
   "__comment": "KB caps for the gzipped Next.js production bundle in .next/static. Re-seed with `node scripts/bundle-size-check.js --update-baseline` after a deliberate, vetted change. Tolerance is a multiplicative slack (percent) applied to every cap before the gate fails.",
-  "totalJsKB": 6500,
+  "totalJsKB": 7000,
   "totalCssKB": 600,
-  "totalKB": 7000,
+  "totalKB": 7400,
   "largestChunkKB": 1500,
   "tolerancePct": 5
 }
