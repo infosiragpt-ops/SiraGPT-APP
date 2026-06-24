@@ -92,6 +92,37 @@ CREATE INDEX IF NOT EXISTS "deployment_logs_deploymentId_createdAt_idx" ON "depl
 CREATE INDEX IF NOT EXISTS "deployment_logs_deploymentId_level_createdAt_idx" ON "deployment_logs"("deploymentId", "level", "createdAt");
 CREATE INDEX IF NOT EXISTS "deployment_logs_versionId_createdAt_idx" ON "deployment_logs"("versionId", "createdAt");
 
+CREATE TABLE IF NOT EXISTS "hosting_targets" (
+    "id" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "provider" TEXT NOT NULL DEFAULT 'hostinger',
+    "label" TEXT NOT NULL,
+    "protocol" TEXT NOT NULL DEFAULT 'sftp',
+    "host" TEXT NOT NULL,
+    "port" INTEGER NOT NULL DEFAULT 22,
+    "username" TEXT NOT NULL,
+    "encryptedCreds" TEXT NOT NULL,
+    "remoteBaseDir" TEXT NOT NULL DEFAULT '/public_html',
+    "siteUrl" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "hosting_targets_pkey" PRIMARY KEY ("id")
+);
+
+CREATE TABLE IF NOT EXISTS "deploy_envs" (
+    "id" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "connectedRepositoryId" TEXT NOT NULL,
+    "encryptedEnv" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "deploy_envs_pkey" PRIMARY KEY ("id")
+);
+
+CREATE INDEX IF NOT EXISTS "hosting_targets_userId_idx" ON "hosting_targets"("userId");
+CREATE UNIQUE INDEX IF NOT EXISTS "deploy_envs_connectedRepositoryId_key" ON "deploy_envs"("connectedRepositoryId");
+CREATE INDEX IF NOT EXISTS "deploy_envs_userId_idx" ON "deploy_envs"("userId");
+
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'deployments_userId_fkey') THEN
@@ -114,5 +145,14 @@ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'deployment_logs_versionId_fkey') THEN
     ALTER TABLE "deployment_logs" ADD CONSTRAINT "deployment_logs_versionId_fkey" FOREIGN KEY ("versionId") REFERENCES "deployment_versions"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'hosting_targets_userId_fkey') THEN
+    ALTER TABLE "hosting_targets" ADD CONSTRAINT "hosting_targets_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'deploy_envs_userId_fkey') THEN
+    ALTER TABLE "deploy_envs" ADD CONSTRAINT "deploy_envs_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'deploy_envs_connectedRepositoryId_fkey') THEN
+    ALTER TABLE "deploy_envs" ADD CONSTRAINT "deploy_envs_connectedRepositoryId_fkey" FOREIGN KEY ("connectedRepositoryId") REFERENCES "connected_repositories"("id") ON DELETE CASCADE ON UPDATE CASCADE;
   END IF;
 END $$;
