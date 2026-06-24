@@ -54,6 +54,31 @@ test('runPublishPipeline fails the build with no files (no promote/bundle)', () 
   assert.equal(r.phases.some((x) => x.name === 'promote'), false);
 });
 
+test('runPublishPipeline stops at security scan when blocking findings exist', () => {
+  const dep = { id: 'depl_2', name: 'App', deploymentType: 'autoscale', machineTier: 'autoscale', geography: 'na' };
+  const r = p.runPublishPipeline({ deployment: dep, seq: 0, hasFiles: true });
+  assert.equal(r.finalStatus, 'failed');
+  assert.equal(r.promoted, false);
+  assert.equal(r.failedPhase, 'security_scan');
+  assert.equal(r.phases.find((x) => x.name === 'security_scan').status, 'failed');
+  assert.equal(r.phases.some((x) => x.name === 'build'), false);
+  assert.equal(r.phases.some((x) => x.name === 'promote'), false);
+});
+
+test('runPublishPipeline can stop at bundle/promote provider gates', () => {
+  const dep = { id: 'depl_1', name: 'App', deploymentType: 'autoscale', machineTier: 'autoscale', geography: 'na' };
+  const bundle = p.runPublishPipeline({ deployment: dep, seq: 0, hasFiles: true, failPhase: 'bundle' });
+  assert.equal(bundle.finalStatus, 'failed');
+  assert.equal(bundle.failedPhase, 'bundle');
+  assert.equal(bundle.phases.find((x) => x.name === 'bundle').status, 'failed');
+  assert.equal(bundle.phases.some((x) => x.name === 'promote'), false);
+
+  const promote = p.runPublishPipeline({ deployment: dep, seq: 0, hasFiles: true, failPhase: 'promote' });
+  assert.equal(promote.finalStatus, 'failed');
+  assert.equal(promote.failedPhase, 'promote');
+  assert.equal(promote.phases.find((x) => x.name === 'promote').status, 'failed');
+});
+
 test('dnsRecordsFor returns A + permanent TXT verify record', () => {
   const recs = p.dnsRecordsFor('www.example.com', 'depl_1');
   assert.equal(recs[0].type, 'A');

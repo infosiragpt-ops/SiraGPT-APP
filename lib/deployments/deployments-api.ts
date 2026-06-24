@@ -93,6 +93,13 @@ export interface LogEntry {
   index?: number
 }
 export interface PublishPhase { name: string; status: "done" | "failed"; logs: string[] }
+export interface PublishResult {
+  deployment: Deployment
+  version: DeploymentVersion
+  phases: PublishPhase[]
+  failedPhase?: string | null
+  failureMessage?: string | null
+}
 export interface DeploymentDetail { deployment: Deployment; versions: DeploymentVersion[]; domains: DeploymentDomain[] }
 export interface DeploymentsHealth { ok: boolean; enabled: boolean }
 
@@ -164,7 +171,7 @@ export const deploymentsApi = {
   get: (id: string) => req<DeploymentDetail>(`/${id}`),
   update: (id: string, patch: DeploymentPatch) => req<{ deployment: Deployment }>(`/${id}`, { method: "PATCH", body: JSON.stringify(patch) }).then((r) => r.deployment),
 
-  publish: (id: string, hasFiles = true) => req<{ deployment: Deployment; version: DeploymentVersion; phases: PublishPhase[] }>(`/${id}/publish`, { method: "POST", body: JSON.stringify({ hasFiles }) }),
+  publish: (id: string, hasFiles = true) => req<PublishResult>(`/${id}/publish`, { method: "POST", body: JSON.stringify({ hasFiles }) }),
   rollback: (id: string, versionId: string) => req<{ deployment: Deployment; version: DeploymentVersion }>(`/${id}/rollback`, { method: "POST", body: JSON.stringify({ versionId }) }),
 
   pause: (id: string) => req<{ deployment: Deployment }>(`/${id}/pause`, { method: "POST" }).then((r) => r.deployment),

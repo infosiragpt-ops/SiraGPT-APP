@@ -284,13 +284,18 @@ async function getDeployment({ userId, id, db = defaultPrisma }) {
 }
 
 /** Publish a new immutable version, running the 5-phase pipeline. */
-async function publishDeployment({ userId, id, hasFiles = true, db = defaultPrisma }) {
+async function publishDeployment({ userId, id, hasFiles = true, db = defaultPrisma, env = process.env }) {
   const prisma = requireDb(db);
   const row = await loadOwned(prisma, userId, id);
   if (row.status === 'shut_down') throw new DeploymentError(409, 'deployment_shut_down', 'deployment was shut down');
 
   const seq = await prisma.deploymentVersion.count({ where: { deploymentId: id } });
-  const result = pipeline.runPublishPipeline({ deployment: row, seq, hasFiles });
+  const result = pipeline.runPublishPipeline({
+    deployment: row,
+    seq,
+    hasFiles,
+    failPhase: env.SIRAGPT_DEPLOYMENT_FAIL_PHASE || env.SIRAGPT_PUBLISH_FAIL_PHASE,
+  });
   const scan = { ...result.securityScan, scannedAt: new Date().toISOString() };
   const buildLog = result.logs.join('\n');
 
@@ -333,7 +338,13 @@ async function publishDeployment({ userId, id, hasFiles = true, db = defaultPris
     },
   });
 
-  return { deployment: publicDeployment(updated), version: publicVersion(version), phases: result.phases };
+  return {
+    deployment: publicDeployment(updated),
+    version: publicVersion(version),
+    phases: result.phases,
+    failedPhase: result.failedPhase || null,
+    failureMessage: result.failureMessage || null,
+  };
 }
 
 /** Roll back to a prior promoted version (re-promote it as a new rollback build). */

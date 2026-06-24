@@ -133,6 +133,15 @@ function dnsRecordsFor(hostname, deploymentId) {
   ];
 }
 
+function normalizePublishPhase(value) {
+  const normalized = String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  return PUBLISH_PHASES.includes(normalized) ? normalized : null;
+}
+
+function blockingSecurityFindings(findings) {
+  return findings.filter((finding) => finding.severity === 'critical' || finding.severity === 'high');
+}
+
 /** Synthetic security scan (Semgrep/dependency-style). Deterministic from a
  *  seed so the same version always reports the same findings. */
 function securityScanReport(seed) {
@@ -146,12 +155,17 @@ function securityScanReport(seed) {
   const count = h % 3; // 0..2 findings
   const findings = [];
   for (let i = 0; i < count; i += 1) findings.push(CANDIDATES[(h + i) % CANDIDATES.length]);
-  const hasCritical = findings.some((f) => f.severity === 'critical');
+  const blocking = blockingSecurityFindings(findings);
   return {
-    status: hasCritical ? 'failed' : 'passed',
+    status: blocking.length > 0 ? 'failed' : 'passed',
     scannedAt: null, // route stamps this
     findings,
-    summary: findings.length === 0 ? 'No issues found.' : `${findings.length} issue(s) found.`,
+    summary:
+      findings.length === 0
+        ? 'No issues found.'
+        : blocking.length > 0
+          ? `${blocking.length} blocking security issue(s) found.`
+          : `${findings.length} issue(s) found.`,
   };
 }
 
@@ -161,17 +175,45 @@ function securityScanReport(seed) {
  * lets the caller fail a publish with no workspace files (parity with the
  * old mock). The route persists the outcome and streams the phases over SSE.
  */
-function runPublishPipeline({ deployment, seq = 0, hasFiles = true }) {
+function failedResult({ shortHash, phases, logs, securityScan, subdomain, phase, message }) {
+  phases.push({ name: phase, status: 'failed', logs: [message] });
+  logs.push(`[${phase}] failed: ${message}`);
+  return {
+    shortHash,
+    phases,
+    logs,
+    finalStatus: 'failed',
+    promoted: false,
+    securityScan,
+    subdomain,
+    failedPhase: phase,
+    failureMessage: message,
+  };
+}
+
+function runPublishPipeline({ deployment, seq = 0, hasFiles = true, failPhase = null }) {
   const shortHash = generateShortHash(deployment.id, seq);
   const spec = machineSpec(deployment.deploymentType, deployment.machineTier);
   const subdomain = deployment.subdomain || slugifySubdomain(deployment.name, deployment.id);
   const scan = securityScanReport(`${deployment.id}:${seq}`);
+  const forcedFailurePhase = normalizePublishPhase(failPhase);
 
   const phases = [];
   const logs = [];
   const push = (line) => logs.push(line);
 
   // provision
+  if (forcedFailurePhase === 'provision') {
+    return failedResult({
+      shortHash,
+      phases,
+      logs,
+      securityScan: scan,
+      subdomain,
+      phase: 'provision',
+      message: 'Provisioning failed before compute resources were ready',
+    });
+  }
   phases.push({ name: 'provision', status: 'done', logs: [`Provisioning ${spec.label}`] });
   push(`[provision] ${spec.label} in ${GEOGRAPHY_LABELS[deployment.geography] || deployment.geography}`);
 
@@ -183,22 +225,90 @@ function runPublishPipeline({ deployment, seq = 0, hasFiles = true }) {
     logs: [scan.summary],
   });
   push(`[security] ${scan.summary}`);
+  if (!scanOk) {
+    return {
+      shortHash,
+      phases,
+      logs,
+      finalStatus: 'failed',
+      promoted: false,
+      securityScan: scan,
+      subdomain,
+      failedPhase: 'security_scan',
+      failureMessage: scan.summary,
+    };
+  }
+  if (forcedFailurePhase === 'security_scan') {
+    phases.pop();
+    return failedResult({
+      shortHash,
+      phases,
+      logs,
+      securityScan: scan,
+      subdomain,
+      phase: 'security_scan',
+      message: 'Security scan failed by policy',
+    });
+  }
 
   // build
   if (!hasFiles) {
     phases.push({ name: 'build', status: 'failed', logs: ['Build failed: no workspace files found'] });
     push('[build] failed: no workspace files found');
-    return { shortHash, phases, logs, finalStatus: 'failed', promoted: false, securityScan: scan, subdomain };
+    return {
+      shortHash,
+      phases,
+      logs,
+      finalStatus: 'failed',
+      promoted: false,
+      securityScan: scan,
+      subdomain,
+      failedPhase: 'build',
+      failureMessage: 'Build failed: no workspace files found',
+    };
+  }
+  if (forcedFailurePhase === 'build') {
+    return failedResult({
+      shortHash,
+      phases,
+      logs,
+      securityScan: scan,
+      subdomain,
+      phase: 'build',
+      message: 'Build command exited with a non-zero status',
+    });
   }
   phases.push({ name: 'build', status: 'done', logs: [deployment.buildCommand || 'npm run build', 'Compiled successfully'] });
   push(`[build] ${deployment.buildCommand || 'npm run build'}`);
   push('[build] compiled successfully');
 
   // bundle
+  if (forcedFailurePhase === 'bundle') {
+    return failedResult({
+      shortHash,
+      phases,
+      logs,
+      securityScan: scan,
+      subdomain,
+      phase: 'bundle',
+      message: 'Bundle upload failed before the release artifact was stored',
+    });
+  }
   phases.push({ name: 'bundle', status: 'done', logs: ['Bundled image', 'Uploaded snapshot'] });
   push('[bundle] snapshot uploaded');
 
   // promote (gated by a health check at "/")
+  if (forcedFailurePhase === 'promote') {
+    return failedResult({
+      shortHash,
+      phases,
+      logs,
+      securityScan: scan,
+      subdomain,
+      phase: 'promote',
+      message: 'Health check failed, so the release was not promoted',
+    });
+  }
   phases.push({ name: 'promote', status: 'done', logs: [`Health check 200 on /`, `Serving ${defaultDomain(subdomain)}`] });
   push(`[promote] health check passed`);
   push(`[promote] serving ${defaultDomain(subdomain)}`);

@@ -4392,6 +4392,19 @@ function ChatInterfaceContent() {
     }
   }, [currentChat?.id])
 
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    try {
+      const draft = sessionStorage.getItem("publishing-debug-prefill")
+      if (draft) {
+        setInput(prev => prev.trim() ? prev : draft)
+        sessionStorage.removeItem("publishing-debug-prefill")
+      }
+    } catch {
+      /* private-mode / blocked storage — harmless */
+    }
+  }, [])
+
   // Restore a previously saved composer draft when entering a chat.
   // Runs AFTER the project-prefill effect so an explicit project draft
   // still wins. Each chat id is restored at most once per mount; further

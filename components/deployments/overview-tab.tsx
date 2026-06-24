@@ -63,6 +63,7 @@ export function OverviewTab({
 }) {
   const [publishing, setPublishing] = React.useState(false)
   const [phases, setPhases] = React.useState<PublishPhase[] | null>(null)
+  const [failureMessage, setFailureMessage] = React.useState<string | null>(null)
   const [rollingBackId, setRollingBackId] = React.useState<string | null>(null)
   const [copiedKey, setCopiedKey] = React.useState<string | null>(null)
 
@@ -78,9 +79,11 @@ export function OverviewTab({
   const publish = async () => {
     setPublishing(true)
     setPhases(null)
+    setFailureMessage(null)
     try {
       const result = await deploymentsApi.publish(deployment.id)
       setPhases(result.phases)
+      setFailureMessage(result.failureMessage ?? null)
     } catch (error) {
       setPublishing(false)
       toast.error(error instanceof Error ? error.message : "Could not publish.")
@@ -90,6 +93,7 @@ export function OverviewTab({
   const onPipelineDone = () => {
     setPublishing(false)
     setPhases(null)
+    setFailureMessage(null)
     const failed = (phases ?? []).some((p) => p.status === "failed")
     toast[failed ? "error" : "success"](failed ? "Publish failed." : "Deployment published.")
     onRefetch()
@@ -121,7 +125,15 @@ export function OverviewTab({
 
   return (
     <div className="space-y-3">
-      {publishing && phases ? <PublishPipeline phases={phases} onDone={onPipelineDone} /> : null}
+      {publishing && phases ? (
+        <PublishPipeline
+          phases={phases}
+          deployment={deployment}
+          failureMessage={failureMessage}
+          onDone={onPipelineDone}
+          onViewLogs={() => onNavigate("logs")}
+        />
+      ) : null}
 
       <div className="relative">
         <span aria-hidden className="absolute -left-[17px] top-0 bottom-0 border-l border-dashed border-border" />
