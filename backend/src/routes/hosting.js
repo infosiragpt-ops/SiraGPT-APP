@@ -28,6 +28,7 @@ const buildService = require('../services/hosting/build.service');
 const deployService = require('../services/hosting/deploy.service');
 const deployEnvs = require('../repositories/DeployEnvRepository');
 const domain = require('../services/hosting/domain');
+const { assertSafeRemoteHost } = require('../services/hosting/safety');
 
 const router = express.Router();
 
@@ -98,6 +99,12 @@ router.post('/targets', authenticateToken, async (req, res) => {
     if (!credBundle.password && !credBundle.privateKey) {
       return res.status(400).json({ error: 'A password or private key is required', code: 'no_credentials' });
     }
+    // SECURITY: refuse internal/reserved hosts (SSRF) before connecting.
+    try {
+      await assertSafeRemoteHost(data.host);
+    } catch (e) {
+      return res.status(e.status || 400).json({ error: e.message, code: e.code || 'host_blocked' });
+    }
     // Verify the connection before persisting.
     const transport = deployService.transportFor(data.protocol);
     try {
@@ -152,6 +159,7 @@ router.post('/targets/:id/test', authenticateToken, async (req, res) => {
     const target = await targets.findByIdForUser(req.params.id, req.user.id);
     if (!target) return res.status(404).json({ error: 'Target not found', code: 'not_found' });
     const bundle = creds.openCreds(target.encryptedCreds) || {};
+    await assertSafeRemoteHost(target.host); // SSRF guard before connecting
     const transport = deployService.transportFor(target.protocol);
     await transport.testConnection({ ...target, ...bundle });
     return res.json({ ok: true });

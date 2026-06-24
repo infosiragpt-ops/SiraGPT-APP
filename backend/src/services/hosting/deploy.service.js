@@ -20,6 +20,7 @@ const ftp = require('./ftp-transport');
 const sshExec = require('./ssh-exec');
 const nginx = require('./nginx.service');
 const { verifyUrl, normalizeDomain } = require('./domain');
+const { assertSafeRemoteHost, assertSafeRemotePath } = require('./safety');
 
 const LOG_MAX = 400;
 const jobs = new Map(); // deploymentId → job
@@ -157,6 +158,12 @@ async function _run(job, { localPath, target, config }) {
   ensureLocalExcludes(localPath);
   const buildEnv = config.env || {};
 
+  // SECURITY: refuse to aim the platform's SSH/SFTP/FTP client at an internal/
+  // reserved address (SSRF), and reject a remotePath/webroot that could inject
+  // into the nginx config the platform writes on the VPS.
+  await assertSafeRemoteHost(target.host);
+  if (config.remotePath) assertSafeRemotePath(config.remotePath, 'remotePath');
+
   if (config.mode === 'node') return _runNode(job, { localPath, target, config, buildEnv });
 
   // ── Static: build locally → upload output ──
@@ -247,7 +254,13 @@ async function _runNode(job, { localPath, target, config, buildEnv }) {
     `cd ${remoteDir} && command -v pm2 >/dev/null 2>&1 || npm install -g pm2; ${envPrefix ? envPrefix + ' ' : ''}npm install && (npm run build || true) && ` +
     `(pm2 delete ${appName} >/dev/null 2>&1; ${envPrefix ? envPrefix + ' ' : ''}pm2 start npm --name ${appName} -- run start) && pm2 save`;
   const remoteCommand = config.remoteCommand || defaultCmd;
-  pushLog(job, `[node] ejecutando: ${remoteCommand}`);
+  // SECURITY: the command inlines the build-env VALUES (user secrets) — log a
+  // redacted form so they don't land in the persisted plaintext deploy log.
+  const redactedPrefix = Object.keys(env).map((k) => `${k}=***`).join(' ');
+  const loggedCommand = config.remoteCommand
+    ? remoteCommand
+    : (envPrefix ? defaultCmd.split(envPrefix).join(redactedPrefix) : defaultCmd);
+  pushLog(job, `[node] ejecutando: ${loggedCommand}`);
   try {
     const { code } = await sshExec.exec(
       {

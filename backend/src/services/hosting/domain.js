@@ -60,6 +60,13 @@ function dnsInstructions(target, domain) {
 /** Single HTTP attempt; never throws. Surfaces the underlying cause code. */
 async function tryFetch(target, { fetchImpl = globalThis.fetch, timeoutMs = 8000 } = {}) {
   const started = Date.now();
+  // SECURITY: this fetches a user-supplied URL — refuse internal/reserved hosts
+  // (SSRF) before connecting so the verify check can't probe internal services.
+  try {
+    await require('./safety').assertSafeUrl(target);
+  } catch (e) {
+    return { reachable: false, status: 0, ms: Date.now() - started, error: e.message, code: e.code || 'host_blocked', url: target };
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {

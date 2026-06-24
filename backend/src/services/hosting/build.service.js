@@ -11,6 +11,7 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const { scrubbedBuildEnv, assertSafeBuildCommand, assertSafeRelPath } = require('./safety');
 
 const IS_WIN = process.platform === 'win32';
 const BUILD_TIMEOUT_MS = 10 * 60 * 1000; // 10 min — install + build
@@ -65,6 +66,9 @@ function detectBuildPlan(localPath) {
 
 /** Pick the real output dir after a build: prefer the hint, else known dirs. */
 function resolveOutputDir(localPath, hintDir) {
+  // SECURITY: a user-supplied outputDir must stay inside the workspace — reject
+  // absolute paths and `..` so the deploy can't read/upload platform files.
+  assertSafeRelPath(hintDir, 'outputDir');
   if (hintDir && hintDir !== '.') {
     const abs = path.join(localPath, hintDir);
     if (dirHasFiles(abs)) return hintDir;
@@ -88,24 +92,28 @@ function runBuild(localPath, { buildCommand, onLog = () => {}, signal, env: extr
       onLog('[build] static project — no build step');
       return resolve({ skipped: true });
     }
-    const full = `npm install && ${buildCommand}`;
+    // SECURITY: buildCommand is user-supplied and runs through a shell on the
+    // PLATFORM host — reject shell metacharacters so it can't break out of the
+    // intended `npm install && <cmd>`.
+    let safeBuildCommand;
+    try {
+      safeBuildCommand = assertSafeBuildCommand(buildCommand);
+    } catch (err) {
+      onLog(`[build] ${err.message}`);
+      return reject(err);
+    }
+    const full = `npm install && ${safeBuildCommand}`;
     onLog(`[build] ${full}`);
     const proc = spawn(full, {
       cwd: localPath,
       shell: true,
       // NOTE: do NOT set NODE_ENV=production here — that makes `npm install`
       // skip devDependencies (vite, typescript live there), breaking the build.
-      // Force devDeps in + quiet output. Vite/Next set production mode themselves.
-      env: {
-        ...process.env,
-        CI: '1',
-        FORCE_COLOR: '0',
-        npm_config_include: 'dev',
-        npm_config_production: 'false',
-        npm_config_fund: 'false',
-        npm_config_audit: 'false',
-        ...extraEnv, // build-time secrets (VITE_*, etc.) — last so they win
-      },
+      // SECURITY: an untrusted repo's install/build scripts run here, so use a
+      // scrubbed env (allowlist) — NEVER spread process.env, which would leak
+      // ENCRYPTION_KEY (seals every user's hosting creds), JWT_SECRET, Stripe
+      // keys, DATABASE_URL, etc. into the build.
+      env: scrubbedBuildEnv(extraEnv),
       windowsHide: true,
     });
 

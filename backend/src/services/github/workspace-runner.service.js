@@ -258,7 +258,9 @@ async function start(connectionId, localPath) {
   const proc = spawn(plan.command, {
     cwd: localPath,
     shell: true,
-    env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', BROWSER: 'none', FORCE_COLOR: '0', CI: '1' },
+    // SECURITY: the user's repo run-command must not inherit the platform's
+    // secrets (ENCRYPTION_KEY/JWT_SECRET/Stripe/DB) — scrubbed allowlist env.
+    env: require('../hosting/safety').scrubbedBuildEnv({ PORT: String(port), HOST: '127.0.0.1', BROWSER: 'none' }),
     detached: !IS_WIN, // POSIX: own process group so we can kill the tree
     windowsHide: true,
   });
