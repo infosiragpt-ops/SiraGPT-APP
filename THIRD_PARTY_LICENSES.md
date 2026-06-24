@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1516**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1519**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -453,7 +453,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yargs-parser` | 21.1.1 | ISC | [link](https://github.com/yargs/yargs-parser) |
 | `zod-to-json-schema` | 3.25.2 | ISC | [link](https://github.com/StefanTerdell/zod-to-json-schema) |
 
-## MIT (1118)
+## MIT (1121)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -513,7 +513,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@kurkle/color` | 0.3.4 | MIT | [link](https://github.com/kurkle/color) |
 | `@kwsites/file-exists` | 1.1.1 | MIT | [link](https://github.com/kwsites/file-exists) |
 | `@kwsites/promise-deferred` | 1.1.1 | MIT | [link](https://github.com/kwsites/promise-deferred) |
-| `@langchain/core` | 1.1.41 | MIT | [link](https://github.com/langchain-ai/langchainjs) |
+| `@langchain/core` | 1.1.41, 1.1.47 | MIT | [link](https://github.com/langchain-ai/langchainjs) |
 | `@langchain/langgraph` | 1.2.9 | MIT | [link](https://github.com/langchain-ai/langgraphjs) |
 | `@langchain/langgraph-checkpoint` | 1.0.1 | MIT | [link](https://github.com/langchain-ai/langgraphjs) |
 | `@langchain/langgraph-sdk` | 1.8.10 | MIT | [link](https://github.com/langchain-ai/langgraphjs) |
@@ -522,8 +522,8 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@langfuse/langchain` | 5.3.0 | MIT | [link](https://github.com/langfuse/langfuse-js) |
 | `@langfuse/tracing` | 5.3.0 | MIT | [link](https://github.com/langfuse/langfuse-js) |
 | `@levischuck/tiny-cbor` | 0.2.11 | MIT | [link](https://github.com/levischuck/tiny-cbor) |
-| `@llamaindex/core` | 0.6.22 | MIT | [link](https://github.com/run-llama/LlamaIndexTS) |
-| `@llamaindex/env` | 0.1.30 | MIT | [link](https://github.com/run-llama/LlamaIndexTS) |
+| `@llamaindex/core` | 0.6.22, 0.6.23 | MIT | [link](https://github.com/run-llama/LlamaIndexTS) |
+| `@llamaindex/env` | 0.1.30, 0.1.31 | MIT | [link](https://github.com/run-llama/LlamaIndexTS) |
 | `@llamaindex/node-parser` | 2.0.22 | MIT | [link](https://github.com/run-llama/LlamaIndexTS) |
 | `@llamaindex/openai` | 0.4.23 | MIT | [link](https://github.com/run-llama/LlamaIndexTS) |
 | `@llamaindex/workflow` | 1.1.24, 1.1.25 | MIT | [link](https://github.com/run-llama/LlamaIndexTS) |
@@ -1220,11 +1220,12 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `next-themes` | 0.4.6 | MIT | [link](https://github.com/pacocoursey/next-themes) |
 | `node-abi` | 3.89.0, 3.92.0 | MIT | [link](https://github.com/electron/node-abi) |
 | `node-abort-controller` | 3.1.1 | MIT | [link](https://github.com/southpolesteve/node-abort-controller) |
-| `node-addon-api` | 7.1.1 | MIT | [link](https://github.com/nodejs/node-addon-api) |
+| `node-addon-api` | 7.1.1, 8.7.0 | MIT | [link](https://github.com/nodejs/node-addon-api) |
 | `node-domexception` | 1.0.0 | MIT | [link](https://github.com/jimmywarting/node-domexception) |
 | `node-ensure` | 0.0.0 | MIT | [link](https://github.com/bauerca/node-ensure) |
 | `node-fetch` | 2.7.0, 3.3.2 | MIT | [link](https://github.com/bitinn/node-fetch) |
 | `node-fetch-native` | 1.6.7 | MIT | [link](https://github.com/unjs/node-fetch-native) |
+| `node-gyp-build` | 4.8.4 | MIT | [link](https://github.com/prebuild/node-gyp-build) |
 | `node-gyp-build-optional-packages` | 5.2.2 | MIT | [link](https://github.com/prebuild/node-gyp-build) |
 | `node-pandoc` | 0.3.0 | MIT | [link](https://github.com/eshinn/node-pandoc) |
 | `node-readable-to-web-readable-stream` | 0.4.2 | MIT | [link](https://github.com/Borewit/node-readable-to-web-readable-stream) |
@@ -1369,7 +1370,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `raw-body` | 2.5.3, 3.0.2 | MIT | [link](https://github.com/stream-utils/raw-body) |
 | `rc` | 1.2.8 | BSD-2-Clause OR MIT OR Apache-2.0 | [link](https://github.com/dominictarr/rc) |
 | `rc9` | 2.1.2 | MIT | [link](https://github.com/unjs/rc9) |
-| `react` | 18.3.1 | MIT | [link](https://github.com/facebook/react) |
+| `react` | 18.3.1, 19.2.6 | MIT | [link](https://github.com/facebook/react) |
 | `react-day-picker` | 9.14.0 | MIT | [link](https://github.com/gpbl/react-day-picker) |
 | `react-dom` | 18.3.1 | MIT | [link](https://github.com/facebook/react) |
 | `react-hook-form` | 7.73.1 | MIT | [link](https://github.com/react-hook-form/react-hook-form) |
@@ -1505,6 +1506,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `token-types` | 6.1.2 | MIT | [link](https://github.com/Borewit/token-types) |
 | `tr46` | 0.0.3, 5.1.1 | MIT | [link](https://github.com/Sebmaster/tr46.js) |
 | `traverse` | 0.3.9 | MIT | [link](https://github.com/substack/js-traverse) |
+| `tree-sitter` | 0.22.4 | MIT | [link](https://github.com/tree-sitter/node-tree-sitter) |
 | `treeify` | 1.1.0 | MIT | [link](https://github.com/notatestuser/treeify) |
 | `trigram-utils` | 2.0.1 | MIT | [link](https://github.com/wooorm/trigram-utils) |
 | `trim-lines` | 3.0.1 | MIT | [link](https://github.com/wooorm/trim-lines) |
@@ -1556,6 +1558,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `warning` | 4.0.3 | MIT | [link](https://github.com/BerkeleyTrue/warning) |
 | `web-namespaces` | 2.0.1 | MIT | [link](https://github.com/wooorm/web-namespaces) |
 | `web-streams-polyfill` | 3.3.3 | MIT | [link](https://github.com/MattiasBuelens/web-streams-polyfill) |
+| `web-tree-sitter` | 0.24.7 | MIT | [link](https://github.com/tree-sitter/tree-sitter) |
 | `whatwg-encoding` | 3.1.1 | MIT | [link](https://github.com/jsdom/whatwg-encoding) |
 | `whatwg-mimetype` | 4.0.0 | MIT | [link](https://github.com/jsdom/whatwg-mimetype) |
 | `whatwg-url` | 14.2.0, 5.0.0 | MIT | [link](https://github.com/jsdom/whatwg-url) |
@@ -1573,7 +1576,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yocto-queue` | 1.2.2 | MIT | [link](https://github.com/sindresorhus/yocto-queue) |
 | `zip-stream` | 4.1.1 | MIT | [link](https://github.com/archiverjs/node-zip-stream) |
 | `zlibjs` | 0.3.1 | MIT | [link](https://github.com/imaya/zlib.js) |
-| `zod` | 3.25.76, 4.3.6 | MIT | [link](https://github.com/colinhacks/zod) |
+| `zod` | 3.25.76, 4.3.6, 4.4.3 | MIT | [link](https://github.com/colinhacks/zod) |
 | `zwitch` | 2.0.4 | MIT | [link](https://github.com/wooorm/zwitch) |
 
 ## MPL-2.0 (1)
