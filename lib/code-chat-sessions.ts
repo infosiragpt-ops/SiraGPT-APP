@@ -11,12 +11,24 @@ export type CodeChatTurn = {
   role: "user" | "assistant"
   content: string
   streaming?: boolean
+  /** Live Codex-style execution phases for the /code agent turn. */
+  agentPhases?: CodeAgentPhase[]
+  agentLabel?: string
   /** Real action log + Worked-Summary metrics for a turn that did file work. */
   actions?: import("./code-chat-metrics").CodeChatAction[]
   metrics?: import("./code-chat-metrics").CodeChatMetrics
   /** Real time (ms) from turn start to the first narrated line — the planning
    *  duration shown on the "🧠 …" badge. Measured, never fabricated. */
   planMs?: number
+}
+
+export type CodeAgentPhaseStatus = "pending" | "running" | "done" | "error"
+
+export type CodeAgentPhase = {
+  key: string
+  label: string
+  status: CodeAgentPhaseStatus
+  detail?: string
 }
 
 export type CodeChatSession = {

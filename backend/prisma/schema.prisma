@@ -184,7 +184,6 @@ model User {
   connectedRepositories ConnectedRepository[]
   workspaces            Workspace[]
   hostingTargets        HostingTarget[]
-  deployments           Deployment[]
   deployEnvs            DeployEnv[]
 
   @@index([deletedAt])
@@ -312,34 +311,6 @@ model HostingTarget {
 
   @@index([userId])
   @@map("hosting_targets")
-}
-
-model Deployment {
-  id     String @id @default(cuid())
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  connectedRepositoryId String
-  connectedRepository   ConnectedRepository @relation(fields: [connectedRepositoryId], references: [id], onDelete: Cascade)
-  hostingTargetId       String
-  hostingTarget         HostingTarget       @relation(fields: [hostingTargetId], references: [id], onDelete: Cascade)
-
-  branch       String?
-  buildCommand String?
-  outputDir    String?
-  remotePath   String?
-  status       String  @default("queued") // queued | building | uploading | success | error
-  url          String?
-  error        String?
-  logTail      String? // last N log lines (truncated) for history
-
-  startedAt  DateTime?
-  finishedAt DateTime?
-  createdAt  DateTime  @default(now())
-
-  @@index([userId])
-  @@index([connectedRepositoryId])
-  @@map("deployments")
 }
 
 // Build-time env vars / secrets for a project's deploys (Replit "deployment
@@ -2206,7 +2177,19 @@ model Deployment {
   id        String  @id @default(cuid())
   userId    String
   projectId String? // optional link to a Project (webapp)
-  name      String
+  name      String  @default("Deployment")
+
+  // Optional real-hosting linkage used by the Hostinger/SFTP publisher.
+  connectedRepositoryId String?
+  hostingTargetId       String?
+  branch                String?
+  outputDir             String?
+  remotePath            String?
+  url                   String?
+  error                 String?
+  logTail               String? @db.Text
+  startedAt             DateTime?
+  finishedAt            DateTime?
 
   // autoscale | reserved_vm | static | scheduled
   deploymentType  String  @default("autoscale")
@@ -2241,13 +2224,17 @@ model Deployment {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  user     User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  versions DeploymentVersion[]
-  domains  DeploymentDomain[]
-  logs     DeploymentLog[]
+  user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  connectedRepository ConnectedRepository?  @relation(fields: [connectedRepositoryId], references: [id], onDelete: Cascade)
+  hostingTarget       HostingTarget?        @relation(fields: [hostingTargetId], references: [id], onDelete: Cascade)
+  versions            DeploymentVersion[]
+  domains             DeploymentDomain[]
+  logs                DeploymentLog[]
 
   @@index([userId, updatedAt])
   @@index([userId, deletedAt])
+  @@index([connectedRepositoryId])
+  @@index([hostingTargetId])
   @@map("deployments")
 }
 

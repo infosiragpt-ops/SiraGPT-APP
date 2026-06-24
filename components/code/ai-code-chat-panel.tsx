@@ -61,7 +61,7 @@ import { useAuth } from "@/lib/auth-context-integrated"
 import { useChat } from "@/lib/chat-context-integrated"
 import { useCodeWorkspace } from "@/lib/code-workspace-context"
 import { intakeService } from "@/lib/builder/intake-service"
-import type { CodeChatTurn } from "@/lib/code-chat-sessions"
+import type { CodeAgentPhase, CodeChatTurn } from "@/lib/code-chat-sessions"
 import { computeLineDiff, parseCodeBlocks, type CodeBlock } from "@/lib/code-workspace-utils"
 import { detectBlocker } from "@/lib/code-chat-blocker"
 import { extractPlanLabel } from "@/lib/code-chat-plan-label"
@@ -178,6 +178,47 @@ const AGENT_STYLE_BLOCK = [
   "- Cierra con una síntesis del panorama (\"Tengo el panorama completo: identifico N problemas distintos. Los ordeno por prioridad:\").",
   "- NO inventes resultados ni métricas (tiempo, acciones, líneas, tokens y costo se miden y se muestran solos). Si algo falla por falta de créditos/cuota/clave (402), detente, no reintentes en bucle, y explica qué quedó bloqueado.",
 ].join("\n")
+
+const CODE_AGENT_PHASE_BLUEPRINT = [
+  { key: "plan", label: "Plan" },
+  { key: "context", label: "Contexto" },
+  { key: "generate", label: "Generar" },
+  { key: "apply", label: "Aplicar" },
+  { key: "verify", label: "Verificar" },
+] as const
+
+type CodeAgentPhaseKey = (typeof CODE_AGENT_PHASE_BLUEPRINT)[number]["key"]
+
+function buildCodeAgentPhases(
+  activeKey: CodeAgentPhaseKey,
+  overrides: Partial<Record<CodeAgentPhaseKey, Partial<CodeAgentPhase>>> = {},
+): CodeAgentPhase[] {
+  const activeIndex = Math.max(0, CODE_AGENT_PHASE_BLUEPRINT.findIndex((p) => p.key === activeKey))
+  return CODE_AGENT_PHASE_BLUEPRINT.map((phase, index) => {
+    const override = overrides[phase.key]
+    const status =
+      override?.status ??
+      (index < activeIndex ? "done" : index === activeIndex ? "running" : "pending")
+    return {
+      key: phase.key,
+      label: phase.label,
+      status,
+      ...(override?.detail ? { detail: override.detail } : {}),
+    }
+  })
+}
+
+function countWorkspaceContextLines(
+  files: Record<string, { path: string; language: string; content: string }>,
+  activePath: string | null,
+  includeContext: boolean,
+): number {
+  if (!includeContext) return 0
+  const active = activePath && files[activePath] ? files[activePath] : null
+  const fileListLines = Object.keys(files).length
+  const activeLines = active?.content ? active.content.split("\n").length : 0
+  return fileListLines + activeLines
+}
 
 function buildSystemContext(
   files: Record<string, { path: string; language: string; content: string }>,
@@ -453,13 +494,26 @@ export function AICodeChatPanel() {
       setTurns((prev) => [
         ...prev,
         { id, role: "user", content: text },
-        { id: assistantId, role: "assistant", content: "", streaming: true },
+        {
+          id: assistantId,
+          role: "assistant",
+          content: "",
+          streaming: true,
+          agentLabel: "Planificando el turno",
+          agentPhases: buildCodeAgentPhases("plan"),
+        },
       ])
       setInput("")
       setBusy(true)
 
       const controller = new AbortController()
       abortRef.current = controller
+
+      const patchAssistant = (patch: Partial<CodeChatTurn>) => {
+        setTurns((prev) =>
+          prev.map((t) => (t.id === assistantId ? { ...t, ...patch } : t)),
+        )
+      }
 
       const modeInstruction = COMPOSER_MODE_INSTRUCTION[composerMode]
       // Include the recent conversation so the agent actually accumulates the
@@ -479,6 +533,26 @@ export function AICodeChatPanel() {
           ? `${buildSystemContext(files, activePath, activeFolder, composerMode)}\n\n${modeInstruction}\n\n${convoBlock}Usuario: ${text}`
           : `${modeInstruction}\n\n${convoBlock}Usuario: ${text}`
 
+      const contextLines = countWorkspaceContextLines(files, activePath, includeContext)
+      const baseActions: CodeChatAction[] = [
+        { kind: "reasoning", label: "Planifico el objetivo y el modo del composer" },
+        ...(includeContext
+          ? [{ kind: "file_read" as const, label: activePath ? `Leo contexto de ${activePath}` : "Leo contexto del workspace" }]
+          : []),
+      ]
+
+      patchAssistant({
+        agentLabel: includeContext ? "Leyendo contexto del workspace" : "Preparando generación",
+        agentPhases: buildCodeAgentPhases("context", {
+          context: {
+            status: "running",
+            detail: includeContext
+              ? `${Object.keys(files).length} archivo(s) disponibles`
+              : "Sin contexto del workspace",
+          },
+        }),
+      })
+
       // Accumulate the streamed answer locally so onDone can auto-apply the
       // generated files without reading it back out of a setState updater
       // (updaters must stay pure — applyBlock is a side effect).
@@ -489,16 +563,23 @@ export function AICodeChatPanel() {
       let usage: { tokensIn: number; tokensOut: number; costOriginalUsd?: number; costAppliedUsd?: number } | null = null
 
       try {
+        patchAssistant({
+          agentLabel: "Generando respuesta con el agente de código",
+          agentPhases: buildCodeAgentPhases("generate", {
+            context: { status: "done", detail: includeContext ? "Contexto inyectado" : "Omitido por usuario" },
+          }),
+        })
         await apiClient.generateAIStream(
           {
             provider: activeProvider,
             model: activeModelName,
             prompt: finalPrompt,
             streamId: id,
-            // The code chat generates code blocks (e.g. a full index.html);
-            // it must use a plain LLM stream, never the web_search/artifact
-            // agentic loop (which times out and returns the empty fallback
-            // for build-an-app prompts).
+            // The /code panel owns a browser-workspace agent (intake FSM,
+            // OpenCode engine, deterministic builder, auto-apply + preview).
+            // Do not route this turn into the backend host-file/web agent:
+            // that runtime sees the server filesystem, not the in-browser
+            // workspace the user is editing here.
             disableAgentic: true,
           },
           (chunk) => {
@@ -524,6 +605,13 @@ export function AICodeChatPanel() {
             // manual "Aplicar" button (review-before-write). `applied` is fed to
             // the Worked-Summary/action-log metrics on the turn (real numbers).
             let applied: Array<{ path: string; content: string }> = []
+            patchAssistant({
+              agentLabel: "Aplicando cambios al workspace",
+              agentPhases: buildCodeAgentPhases("apply", {
+                context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
+                generate: { status: "done", detail: "Stream completado" },
+              }),
+            })
             if (override?.autoApply ?? composerMode === "app") {
               try {
                 const blocks = parseCodeBlocks(assistantText).filter((b) => b.path)
@@ -551,38 +639,49 @@ export function AICodeChatPanel() {
                 /* parsing/apply failure → user can still apply manually */
               }
             }
+            const writeSummary = buildWriteMetrics(applied, {
+              startedAt,
+              now: Date.now(),
+              getPrevContent: (p) => files[p]?.content ?? "",
+            })
+            const effectiveActions: CodeChatAction[] = [
+              ...baseActions,
+              ...(writeSummary.actions.length > 0
+                ? writeSummary.actions
+                : [{ kind: "reasoning" as const, label: "Genero la respuesta final" }]),
+            ]
+            const effectiveMetrics: CodeChatMetrics = {
+              ...writeSummary.metrics,
+              actionsCount: effectiveActions.length,
+              itemsReadLines: writeSummary.metrics.itemsReadLines + contextLines,
+              ...(usage
+                ? {
+                    tokensIn: usage.tokensIn,
+                    tokensOut: usage.tokensOut,
+                    ...(usage.costOriginalUsd != null ? { costOriginalUsd: usage.costOriginalUsd } : {}),
+                    ...(usage.costAppliedUsd != null ? { costAppliedUsd: usage.costAppliedUsd } : {}),
+                  }
+                : {}),
+            }
+            const verifyDetail = applied.length > 0
+              ? `${applied.length} archivo(s) aplicado(s)`
+              : "Respuesta sin escritura de archivos"
             setTurns((prev) =>
               prev.map((t) => {
                 if (t.id !== assistantId) return t
                 const base = { ...t, streaming: false }
-                // Attach the Worked Summary when the turn did file work OR the
-                // stream reported real token usage (the Agent Usage figure).
-                if (applied.length > 0 || usage) {
-                  const { actions, metrics } = buildWriteMetrics(applied, {
-                    startedAt,
-                    now: Date.now(),
-                    getPrevContent: (p) => files[p]?.content ?? "",
-                  })
-                  // Even a no-file text answer shows an action row (the model
-                  // reasoned + produced the reply).
-                  const effectiveActions =
-                    actions.length > 0 ? actions : [{ kind: "reasoning" as const, label: "Genero la respuesta" }]
-                  const withUsage = usage
-                    ? {
-                        ...metrics,
-                        tokensIn: usage.tokensIn,
-                        tokensOut: usage.tokensOut,
-                        ...(usage.costOriginalUsd != null ? { costOriginalUsd: usage.costOriginalUsd } : {}),
-                        ...(usage.costAppliedUsd != null ? { costAppliedUsd: usage.costAppliedUsd } : {}),
-                      }
-                    : metrics
-                  return {
-                    ...base,
-                    actions: effectiveActions,
-                    metrics: withUsage,
-                  }
+                return {
+                  ...base,
+                  agentLabel: "Turno completado",
+                  agentPhases: buildCodeAgentPhases("verify", {
+                    context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
+                    generate: { status: "done", detail: "Respuesta generada" },
+                    apply: { status: "done", detail: applied.length > 0 ? "Cambios escritos" : "Nada que aplicar" },
+                    verify: { status: "done", detail: verifyDetail },
+                  }),
+                  actions: effectiveActions,
+                  metrics: effectiveMetrics,
                 }
-                return base
               }),
             )
             setBusy(false)
@@ -596,6 +695,10 @@ export function AICodeChatPanel() {
                   ? {
                       ...t,
                       streaming: false,
+                      agentLabel: "Error en el turno",
+                      agentPhases: buildCodeAgentPhases("generate", {
+                        generate: { status: "error", detail: msg },
+                      }),
                       content: t.content ? `${t.content}\n\n_${msg}_` : `_${msg}_`,
                     }
                   : t,
@@ -605,10 +708,23 @@ export function AICodeChatPanel() {
             abortRef.current = null
           },
           controller.signal,
-          { onUsage: (u) => { usage = u } },
+          {
+            onUsage: (u) => { usage = u },
+            onReplace: (replacement) => {
+              assistantText = replacement
+              patchAssistant({ content: replacement })
+            },
+          },
         )
       } catch (err: any) {
         toast.error(err?.message || "Error en el chat de código")
+        patchAssistant({
+          streaming: false,
+          agentLabel: "Error en el turno",
+          agentPhases: buildCodeAgentPhases("generate", {
+            generate: { status: "error", detail: err?.message || "Error en el chat de código" },
+          }),
+        })
         setBusy(false)
         abortRef.current = null
       }
@@ -654,10 +770,22 @@ export function AICodeChatPanel() {
       setTurns((prev) => [
         ...prev,
         { id, role: "user", content: text },
-        { id: `${id}-a`, role: "assistant", content: "⚙️ Construyendo la app (modo determinista, sin LLM)…", streaming: true },
+        {
+          id: `${id}-a`,
+          role: "assistant",
+          content: "Construyendo la app (modo determinista, sin LLM)...",
+          streaming: true,
+          agentLabel: "Construyendo app",
+          agentPhases: buildCodeAgentPhases("generate", {
+            plan: { status: "done", detail: "Brief recibido" },
+            context: { status: "done", detail: ctx ? "Contexto de intake listo" : "Prompt directo" },
+            generate: { status: "running", detail: "Generando archivos" },
+          }),
+        },
       ])
       setInput("")
       setBuildingApp(true)
+      const startedAt = Date.now()
 
       try {
         let appliedFiles: Array<{ path: string; content: string }>
@@ -704,15 +832,48 @@ export function AICodeChatPanel() {
         if (typeof window !== "undefined") {
           window.dispatchEvent(new CustomEvent("siragpt:code-open-preview"))
         }
+        const { actions, metrics } = buildWriteMetrics(appliedFiles, {
+          startedAt,
+          now: Date.now(),
+          getPrevContent: (p) => files[p]?.content ?? "",
+        })
         setTurns((prev) =>
-          prev.map((t) => (t.id === `${id}-a` ? { ...t, content: summary, streaming: false } : t)),
+          prev.map((t) =>
+            t.id === `${id}-a`
+              ? {
+                  ...t,
+                  content: summary,
+                  streaming: false,
+                  agentLabel: "App construida",
+                  agentPhases: buildCodeAgentPhases("verify", {
+                    plan: { status: "done", detail: "Brief validado" },
+                    context: { status: "done", detail: ctx ? "Intake usado" : "Prompt directo" },
+                    generate: { status: "done", detail: `${appliedFiles.length} archivo(s)` },
+                    apply: { status: "done", detail: "Workspace actualizado" },
+                    verify: { status: "done", detail: "Preview abierto" },
+                  }),
+                  actions,
+                  metrics,
+                }
+              : t,
+          ),
         )
         toast.success(toastMsg)
       } catch (err: any) {
         const msg = err?.message || "No se pudo generar la app"
         setTurns((prev) =>
           prev.map((t) =>
-            t.id === `${id}-a` ? { ...t, content: `_${msg}_`, streaming: false } : t,
+            t.id === `${id}-a`
+              ? {
+                  ...t,
+                  content: `_${msg}_`,
+                  streaming: false,
+                  agentLabel: "Error al construir",
+                  agentPhases: buildCodeAgentPhases("generate", {
+                    generate: { status: "error", detail: msg },
+                  }),
+                }
+              : t,
           ),
         )
         toast.error(msg)
@@ -720,7 +881,7 @@ export function AICodeChatPanel() {
         setBuildingApp(false)
       }
     },
-    [applyBlock, busy, buildingApp, sessionId, setTurns, token, user],
+    [applyBlock, busy, buildingApp, files, sessionId, setTurns, token, user],
   )
 
   // SRE tier-0: classify the build log locally (no LLM), render the strict
@@ -816,6 +977,11 @@ export function AICodeChatPanel() {
           role: "assistant",
           content: isBuild ? "⚙️ Motor OpenCode construyendo…" : "⚙️ Motor OpenCode trabajando…",
           streaming: true,
+          agentLabel: isBuild ? "OpenCode construyendo" : "OpenCode trabajando",
+          agentPhases: buildCodeAgentPhases("generate", {
+            plan: { status: "done", detail: isBuild ? "Contrato de build preparado" : "Instrucción recibida" },
+            context: { status: "running", detail: "Sincronizando sesión del motor" },
+          }),
         },
       ])
       setInput("")
@@ -839,15 +1005,51 @@ export function AICodeChatPanel() {
                 getPrevContent: (p) => files[p]?.content ?? "",
                 read: meta.read,
               })
-              return { ...base, actions, metrics }
+              return {
+                ...base,
+                agentLabel: "Motor completado",
+                agentPhases: buildCodeAgentPhases("verify", {
+                  plan: { status: "done", detail: "Objetivo definido" },
+                  context: { status: "done", detail: meta.read?.length ? `${meta.read.length} archivo(s) leido(s)` : "Sesión lista" },
+                  generate: { status: "done", detail: "Respuesta recibida" },
+                  apply: { status: "done", detail: `${meta.written.length} archivo(s)` },
+                  verify: { status: "done", detail: "Workspace sincronizado" },
+                }),
+                actions,
+                metrics,
+              }
             }
-            return base
+            return {
+              ...base,
+              agentLabel: "Motor completado",
+              agentPhases: buildCodeAgentPhases("verify", {
+                plan: { status: "done", detail: "Objetivo definido" },
+                context: { status: "done", detail: "Sesión lista" },
+                generate: { status: "done", detail: "Respuesta recibida" },
+                apply: { status: "done", detail: "Nada que aplicar" },
+                verify: { status: "done", detail: "Texto entregado" },
+              }),
+            }
           }),
         )
 
       try {
         let esid = engineSessionRef.current[sid]
         if (!esid) {
+          setTurns((prev) =>
+            prev.map((t) =>
+              t.id === assistantId
+                ? {
+                    ...t,
+                    agentLabel: "Creando sesión OpenCode",
+                    agentPhases: buildCodeAgentPhases("context", {
+                      plan: { status: "done", detail: "Objetivo definido" },
+                      context: { status: "running", detail: "Creando sesión" },
+                    }),
+                  }
+                : t,
+            ),
+          )
           const s = await opencodeService.createSession({})
           esid = String((s && (s.id as string)) || "")
           if (!esid) throw new Error("El motor no devolvió un id de sesión.")
@@ -895,6 +1097,21 @@ export function AICodeChatPanel() {
         // Kick off the turn (fire-and-forget; content comes via events) and wait
         // for idle, with a safety timeout so we never hang the UI.
         opencodeService.prompt(esid, sendText).catch(() => {})
+        setTurns((prev) =>
+          prev.map((t) =>
+            t.id === assistantId
+              ? {
+                  ...t,
+                  agentLabel: "Ejecutando herramientas",
+                  agentPhases: buildCodeAgentPhases("generate", {
+                    plan: { status: "done", detail: "Objetivo definido" },
+                    context: { status: "done", detail: "Sesión conectada" },
+                    generate: { status: "running", detail: "Esperando eventos del motor" },
+                  }),
+                }
+              : t,
+          ),
+        )
         // Safety net only: the engine resolves `idle` as soon as it finishes, so
         // simple builds return in seconds and we never wait the full window.
         // This cap only fires if the engine *hangs*. Keep it generous so the
@@ -1016,7 +1233,22 @@ export function AICodeChatPanel() {
             /* fall through to error */
           }
         }
-        finish(`_${err?.message || "El motor OpenCode no respondió"}_`)
+        const msg = err?.message || "El motor OpenCode no respondió"
+        setTurns((prev) =>
+          prev.map((t) =>
+            t.id === assistantId
+              ? {
+                  ...t,
+                  content: `_${msg}_`,
+                  streaming: false,
+                  agentLabel: "Error en OpenCode",
+                  agentPhases: buildCodeAgentPhases("generate", {
+                    generate: { status: "error", detail: msg },
+                  }),
+                }
+              : t,
+          ),
+        )
         toast.error(err?.message || "El motor OpenCode no respondió")
       } finally {
         try {
@@ -1063,7 +1295,17 @@ export function AICodeChatPanel() {
           setTurns((prev) => [
             ...prev,
             { id: qid, role: "user", content: text },
-            { id: assistantId, role: "assistant", content: staticQuestion, streaming: true },
+            {
+              id: assistantId,
+              role: "assistant",
+              content: staticQuestion,
+              streaming: true,
+              agentLabel: "Revisando contexto",
+              agentPhases: buildCodeAgentPhases("context", {
+                plan: { status: "done", detail: "Detecto dato faltante" },
+                context: { status: "running", detail: "Analizando conversación" },
+              }),
+            },
           ])
           setInput("")
           patchAgentState(sid, (s) => ({
@@ -1085,7 +1327,20 @@ export function AICodeChatPanel() {
           setTurns((prev) =>
             prev.map((t) =>
               t.id === assistantId
-                ? { ...t, content: dynamicQuestion, streaming: false, actions: askActions }
+                ? {
+                    ...t,
+                    content: dynamicQuestion,
+                    streaming: false,
+                    agentLabel: "Pregunta lista",
+                    agentPhases: buildCodeAgentPhases("verify", {
+                      plan: { status: "done", detail: "Dato faltante identificado" },
+                      context: { status: "done", detail: "Conversación revisada" },
+                      generate: { status: "done", detail: "Pregunta formulada" },
+                      apply: { status: "done", detail: "Nada que aplicar" },
+                      verify: { status: "done", detail: "Esperando respuesta del usuario" },
+                    }),
+                    actions: askActions,
+                  }
                 : t,
             ),
           )
@@ -1404,14 +1659,15 @@ function ChatBubble({
   // agent dashboard) and narrate the rest. Falls back to a generic badge while
   // streaming before the planning line lands.
   const { label: planLabel, body } = extractPlanLabel(turn.content)
+  const liveAgentLabel = planLabel || turn.agentLabel || (turn.streaming ? "Pensando" : "")
   return (
     <div className="text-sm">
       <div className="mb-1 flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-wide text-muted-foreground">
         Asistente
-        {planLabel || turn.streaming ? (
+        {liveAgentLabel ? (
           <span className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-violet-500/10 px-2 py-0.5 normal-case tracking-normal text-violet-300">
             <span aria-hidden="true">🧠</span>
-            <span className="truncate font-medium">{planLabel || "Pensando"}</span>
+            <span className="truncate font-medium">{liveAgentLabel}</span>
             {!turn.streaming && typeof turn.planMs === "number" ? (
               <span className="opacity-60">({formatWorked(turn.planMs)})</span>
             ) : null}
@@ -1419,6 +1675,7 @@ function ChatBubble({
           </span>
         ) : null}
       </div>
+      <CodeAgentProgress phases={turn.agentPhases} />
       {/* An out-of-credits / quota error surfaces as a high-visibility panel
           instead of plain prose; otherwise render the assistant text normally. */}
       {blocker ? (
@@ -1465,6 +1722,49 @@ function ChatBubble({
 
 function stripFences(text: string): string {
   return text.replace(/```[^\n`]*\n[\s\S]*?```/g, "").trim()
+}
+
+function CodeAgentProgress({ phases }: { phases?: CodeAgentPhase[] }) {
+  if (!phases || phases.length === 0) return null
+
+  return (
+    <div className="mb-2 grid gap-1.5 sm:grid-cols-5">
+      {phases.map((phase) => {
+        const isDone = phase.status === "done"
+        const isRunning = phase.status === "running"
+        const isError = phase.status === "error"
+        return (
+          <div
+            key={phase.key}
+            className={cn(
+              "min-w-0 rounded-md border px-2 py-1.5 text-[11px] leading-tight transition-colors",
+              isDone && "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+              isRunning && "border-blue-500/35 bg-blue-500/10 text-blue-700 dark:text-blue-300",
+              isError && "border-red-500/35 bg-red-500/10 text-red-700 dark:text-red-300",
+              phase.status === "pending" && "border-border/60 bg-muted/20 text-muted-foreground",
+            )}
+          >
+            <div className="flex min-w-0 items-center gap-1.5">
+              <span
+                className={cn(
+                  "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border text-[9px]",
+                  isDone && "border-emerald-500/40 bg-emerald-500 text-white",
+                  isRunning && "border-blue-500/40 bg-blue-500 text-white",
+                  isError && "border-red-500/40 bg-red-500 text-white",
+                  phase.status === "pending" && "border-border bg-background text-muted-foreground",
+                )}
+                aria-hidden="true"
+              >
+                {isDone ? <Check className="h-3 w-3" /> : isError ? <AlertTriangle className="h-3 w-3" /> : isRunning ? <ThinkingIndicator size="xs" className="text-white" /> : null}
+              </span>
+              <span className="truncate font-medium">{phase.label}</span>
+            </div>
+            {phase.detail ? <div className="mt-1 truncate opacity-75">{phase.detail}</div> : null}
+          </div>
+        )
+      })}
+    </div>
+  )
 }
 
 // Compact action log: the FULL ordered glyph sequence (">_ 📖 ✎ …") + an
