@@ -27,7 +27,7 @@ type PanelDef = {
 
 const PANELS: PanelDef[] = [
   { id: "preview", label: "Preview", icon: Monitor },
-  { id: "terminal", label: "Terminal", icon: Terminal },
+  { id: "terminal", label: "Shell", icon: Terminal },
   { id: "git", label: "Git", icon: GitBranch },
   { id: "validation", label: "Validation", icon: CheckCircle2 },
 ]

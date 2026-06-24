@@ -387,7 +387,7 @@ export function CodeWorkspace() {
       },
       {
         id: "toggle-terminal",
-        label: terminalOpen ? "Ocultar terminal" : "Mostrar terminal",
+        label: terminalOpen ? "Ocultar Shell" : "Mostrar Shell",
         keywords: "terminal shell repl",
         hint: "⌘J",
         run: toggleTerminal,
@@ -573,7 +573,7 @@ export function CodeWorkspace() {
               )}
             </div>
             <p className="mt-3 text-[11px] text-muted-foreground">
-              Atajos: ⌘P abre archivos · ⌘⇧P paleta · ⌘K editar con IA · ⌘L Cursor Chat · ⌘I Composer · ⌘J terminal.
+              Atajos: ⌘P abre archivos · ⌘⇧P paleta · ⌘K editar con IA · ⌘L Cursor Chat · ⌘I Composer · ⌘J Shell.
             </p>
           </div>
         </DialogContent>

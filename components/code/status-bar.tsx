@@ -35,7 +35,7 @@ export function StatusBar({ terminalOpen, onToggleTerminal, chatOpen, onToggleCh
           onClick={onToggleTerminal}
         >
           <TerminalSquare className="h-3 w-3" />
-          Terminal
+          Shell
           <kbd className="ml-0.5 rounded bg-muted px-1 py-px text-[9px]">⌘J</kbd>
         </Button>
         <Button
