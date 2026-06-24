@@ -54,12 +54,16 @@ export function OverviewTab({
   domains,
   onRefetch,
   onNavigate,
+  autoPublishSignal = 0,
+  onAutoPublishConsumed,
 }: {
   deployment: Deployment
   versions: DeploymentVersion[]
   domains: DeploymentDomain[]
   onRefetch: () => void
   onNavigate: (tab: DetailTab) => void
+  autoPublishSignal?: number
+  onAutoPublishConsumed?: () => void
 }) {
   const [publishing, setPublishing] = React.useState(false)
   const [phases, setPhases] = React.useState<PublishPhase[] | null>(null)
@@ -76,7 +80,7 @@ export function OverviewTab({
       : null
   const isSuspended = deployment.status === "suspended"
 
-  const publish = async () => {
+  const publish = React.useCallback(async () => {
     setPublishing(true)
     setPhases(null)
     setFailureMessage(null)
@@ -85,10 +89,18 @@ export function OverviewTab({
       setPhases(result.phases)
       setFailureMessage(result.failureMessage ?? null)
     } catch (error) {
-      setPublishing(false)
-      toast.error(error instanceof Error ? error.message : "Could not publish.")
+      const message = error instanceof Error ? error.message : "Could not publish."
+      setFailureMessage(message)
+      setPhases([{ name: "provision", status: "failed", logs: [message] }])
+      toast.error(message)
     }
-  }
+  }, [deployment.id])
+
+  React.useEffect(() => {
+    if (!autoPublishSignal || publishing) return
+    onAutoPublishConsumed?.()
+    void publish()
+  }, [autoPublishSignal, onAutoPublishConsumed, publish, publishing])
 
   const onPipelineDone = () => {
     setPublishing(false)
@@ -125,9 +137,10 @@ export function OverviewTab({
 
   return (
     <div className="space-y-3">
-      {publishing && phases ? (
+      {publishing ? (
         <PublishPipeline
-          phases={phases}
+          phases={phases ?? []}
+          resolved={phases !== null}
           deployment={deployment}
           failureMessage={failureMessage}
           onDone={onPipelineDone}
