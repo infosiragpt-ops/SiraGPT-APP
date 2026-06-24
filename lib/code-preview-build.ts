@@ -39,6 +39,7 @@ function stripLead(p: string): string {
 }
 
 const JS_EXTS = new Set(["js", "jsx", "ts", "tsx", "mjs", "cjs"])
+const REACT_PREVIEW_EXTS = new Set(["jsx", "tsx"])
 
 // Forwarded into every previewed document — captures console + errors and
 // posts them to the parent window. Uses string concat (no backticks) so it
@@ -282,6 +283,10 @@ function placeholder(note: string): string {
 <body><div class="box"><div style="font-size:13px">${escapeHtml(note)}</div></div></body></html>`
 }
 
+function looksLikeRenderableReact(code: string): boolean {
+  return /<\s*[A-Za-z][\w.:/-]*(?:\s|>|\/>)/.test(code) || /\bReact\.createElement\s*\(/.test(code)
+}
+
 /** True when the workspace is a real Node bundler project (Vite/Next): its
  * index.html loads /src/main.tsx through the dev server, so the sandboxed
  * iframe can't render it — the user must press ▶ Ejecutar. */
@@ -297,12 +302,26 @@ function isNodeBundlerProject(files: CodeFiles): boolean {
   }
 }
 
+function findProjectEntry(files: CodeFiles): string | null {
+  const paths = Object.keys(files)
+  return (
+    paths.find((p) => stripLead(p).toLowerCase() === "index.html") ??
+    paths.find((p) => /(^|\/)app\.(t|j)sx$/i.test(p)) ??
+    paths.find((p) => /(^|\/)src\/app\.(t|j)sx$/i.test(p)) ??
+    paths.find((p) => /(^|\/)src\/(main|index)\.(t|j)sx$/i.test(p)) ??
+    paths.find((p) => /(^|\/)(main|index)\.(t|j)sx$/i.test(p)) ??
+    null
+  )
+}
+
 /** Pick the best entry + kind given the active file and the whole project. */
 export function buildPreviewDocument(files: CodeFiles, activePath: string | null): PreviewResult {
   const paths = Object.keys(files)
   if (paths.length === 0) return { html: placeholder("Aún no hay archivos. Empieza a programar y el preview aparecerá aquí."), kind: "empty", entry: null }
 
   const activeExt = activePath ? ext(activePath) : ""
+  const activeFile = activePath ? files[activePath] : null
+  const projectEntry = findProjectEntry(files)
 
   // 0) Real Vite/Next projects need the dev server — a srcdoc render would be a
   //    misleading blank page. Markdown/SVG files still preview individually.
@@ -312,7 +331,7 @@ export function buildPreviewDocument(files: CodeFiles, activePath: string | null
         "Este proyecto usa Vite con dependencias npm. Pulsa ▶ Ejecutar para instalar las dependencias y verlo en vivo en el dev server.",
       ),
       kind: "unsupported",
-      entry: activePath,
+      entry: projectEntry ?? activePath,
     }
   }
 
@@ -327,6 +346,12 @@ export function buildPreviewDocument(files: CodeFiles, activePath: string | null
     if (activeExt === "svg") {
       return { html: buildSvgDocument(files, activePath), kind: "svg", entry: activePath }
     }
+    if (REACT_PREVIEW_EXTS.has(activeExt)) {
+      return { html: buildReactDocument(files, activePath), kind: "react", entry: activePath }
+    }
+    if (JS_EXTS.has(activeExt) && activeFile && looksLikeRenderableReact(activeFile.content)) {
+      return { html: buildReactDocument(files, activePath), kind: "react", entry: activePath }
+    }
   }
 
   // 2) Project-level detection.
@@ -338,11 +363,12 @@ export function buildPreviewDocument(files: CodeFiles, activePath: string | null
   const jsPaths = paths.filter((p) => JS_EXTS.has(ext(p)))
   if (jsPaths.length > 0) {
     const reactEntry =
-      (activePath && JS_EXTS.has(activeExt) ? activePath : null) ??
+      projectEntry ??
+      (activePath && REACT_PREVIEW_EXTS.has(activeExt) ? activePath : null) ??
       paths.find((p) => /(^|\/)app\.(t|j)sx?$/i.test(p)) ??
       paths.find((p) => /(^|\/)(src\/)?(main|index)\.(t|j)sx?$/i.test(p)) ??
-      jsPaths[0]
-    return { html: buildReactDocument(files, reactEntry), kind: "react", entry: reactEntry }
+      null
+    if (reactEntry) return { html: buildReactDocument(files, reactEntry), kind: "react", entry: reactEntry }
   }
 
   if (activePath && (activeExt === "md" || activeExt === "mdx")) {
@@ -352,7 +378,7 @@ export function buildPreviewDocument(files: CodeFiles, activePath: string | null
   if (mdEntry) return { html: buildMarkdownDocument(files, mdEntry), kind: "markdown", entry: mdEntry }
 
   return {
-    html: placeholder("El preview en vivo ejecuta web (HTML/CSS/JS), React/JSX/TSX, Markdown y SVG. Vue, Angular, Flutter o apps con dependencias npm necesitan un entorno de build (WebContainers) — en camino; por ahora ejecútalas desde la Terminal/agente."),
+    html: placeholder("Este archivo no es una pantalla web renderizable. Abre index.html, App.tsx o pulsa App/Build para que el agente cree un proyecto completo con preview."),
     kind: "unsupported",
     entry: activePath,
   }

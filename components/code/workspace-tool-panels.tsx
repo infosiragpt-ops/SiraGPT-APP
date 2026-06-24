@@ -17,6 +17,7 @@ import {
   ExternalLink,
   FileCode2,
   FileJson,
+  FolderOpen,
   GitBranch,
   GitCommit,
   Globe2,
@@ -1086,10 +1087,32 @@ function DataTable({ columns, rows }: { columns: string[]; rows: Record<string, 
 }
 
 function StorageTool() {
+  const { openLocalFolderWorkspace, workspaceSource } = useCodeWorkspace()
   const [assets, setAssets] = useWorkspacePersistedState<{ id: string; name: string; size: number; type: string; createdAt: number }[]>("storage", [])
   return (
-    <ToolShell eyebrow="Storage" title="App Storage" detail="Guarda metadatos de archivos del workspace y prepara assets para la app.">
+    <ToolShell
+      eyebrow="Storage"
+      title="App Storage"
+      detail="Guarda metadatos de archivos del workspace, assets y vinculos a carpetas locales para que el agente pueda construir con tus documentos."
+    >
       <PanelGrid>
+        <PanelCard
+          title="Carpeta local"
+          detail={workspaceSource.linked ? `Vinculada: ${workspaceSource.name}` : "Vincula una carpeta de tu computadora al workspace"}
+          icon={<FolderOpen className="h-4 w-4" />}
+        >
+          <Button
+            size="sm"
+            className="h-8 gap-1.5"
+            onClick={() => void openLocalFolderWorkspace()}
+          >
+            <FolderOpen className="h-3.5 w-3.5" />
+            {workspaceSource.linked ? "Cambiar carpeta" : "Vincular carpeta local"}
+          </Button>
+          <p className="mt-2 text-[11px] leading-5 text-muted-foreground">
+            El agente lee archivos compatibles de esa carpeta en el workspace y puedes guardar cambios de vuelta al disco.
+          </p>
+        </PanelCard>
         <PanelCard title="Subir archivo" detail="El archivo no sale de tu navegador; se registra como asset local." icon={<Upload className="h-4 w-4" />}>
           <input
             type="file"
@@ -1273,7 +1296,18 @@ function SecurityTool() {
                   <p className="truncate font-mono text-[12px]">{row.path}</p>
                   <p className="text-[12px] text-muted-foreground">{row.detail}</p>
                 </div>
-                <Button size="sm" variant="outline" className="h-7 shrink-0 gap-1.5">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 shrink-0 gap-1.5"
+                  onClick={() =>
+                    window.dispatchEvent(
+                      new CustomEvent("siragpt:code-fix-error", {
+                        detail: { text: `${row.path}: ${row.detail}` },
+                      }),
+                    )
+                  }
+                >
                   <Wrench className="h-3 w-3" />
                   Fix with Agent
                 </Button>
@@ -1494,6 +1528,7 @@ function WorkflowsTool() {
   const run = (row: WorkflowRun) => {
     const consoleId = makeId("console")
     const startedAt = Date.now()
+    const isDevServer = /\b(npm|pnpm|yarn|bun)\s+run\s+dev\b|\bvite\b|\bnext\s+dev\b/i.test(row.command)
     const pendingRun: ConsoleRun = {
       id: consoleId,
       command: row.command,
@@ -1506,6 +1541,9 @@ function WorkflowsTool() {
     }
     setRuns((prev) => prev.map((item) => item.id === row.id ? { ...item, status: "running", lastRun: startedAt } : item))
     setConsoleRuns((prev) => [pendingRun, ...prev].slice(0, 20))
+    if (isDevServer) {
+      window.dispatchEvent(new CustomEvent("siragpt:code-run-app"))
+    }
     window.setTimeout(() => {
       setRuns((prev) => prev.map((item) => item.id === row.id ? { ...item, status: "success", lastRun: Date.now() } : item))
       setConsoleRuns((prev) => prev.map((item) => item.id === consoleId
@@ -1515,7 +1553,12 @@ function WorkflowsTool() {
             endedAt: Date.now(),
             lines: [
               ...item.lines,
-              { stream: "stdout", text: "Workspace command completed" },
+              {
+                stream: "stdout",
+                text: isDevServer
+                  ? "Dev server requested in Preview. Watch the Preview panel for install/boot output."
+                  : "Workspace command completed",
+              },
               { stream: "system", text: "Exit code 0" },
             ],
           }
@@ -1604,6 +1647,14 @@ function ConsoleTool() {
   const [runs, setRuns] = useWorkspacePersistedState<ConsoleRun[]>("console-runs", [])
   const [latestOnly, setLatestOnly] = React.useState(true)
   const visibleRuns = latestOnly ? runs.slice(0, 1) : runs
+  const latestError = React.useMemo(() => {
+    for (const row of runs) {
+      if (row.status === "failed" || row.lines.some((line) => line.stream === "stderr")) {
+        return [`$ ${row.command}`, ...row.lines.map((line) => line.text)].join("\n")
+      }
+    }
+    return ""
+  }, [runs])
 
   const seedRun = () => {
     const id = makeId("console")
@@ -1673,7 +1724,18 @@ function ConsoleTool() {
                 No hay errores recientes en Console.
               </div>
             )}
-            <Button size="sm" variant="outline" className="h-8 gap-1.5" onClick={() => window.dispatchEvent(new CustomEvent("siragpt:code-composer-mode"))}>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 gap-1.5"
+              onClick={() =>
+                window.dispatchEvent(
+                  latestError
+                    ? new CustomEvent("siragpt:code-fix-error", { detail: { text: latestError } })
+                    : new CustomEvent("siragpt:code-composer-mode", { detail: { mode: "debug" } }),
+                )
+              }
+            >
               <Wrench className="h-3.5 w-3.5" />
               Ask Agent to fix
             </Button>

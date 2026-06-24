@@ -11,9 +11,12 @@
 
 import * as React from "react"
 import {
+  Bot,
   Circle,
+  Code2,
   Eraser,
   ExternalLink,
+  FolderOpen,
   Monitor,
   Play,
   RefreshCw,
@@ -49,7 +52,7 @@ const KIND_LABEL: Record<PreviewKind, string> = {
 }
 
 export function PreviewPane({ onClose }: { onClose?: () => void }) {
-  const { files, activePath } = useCodeWorkspace()
+  const { files, activePath, openLocalFolderWorkspace } = useCodeWorkspace()
 
   const [auto, setAuto] = React.useState(true)
   const [device, setDevice] = React.useState<Device>(() =>
@@ -153,6 +156,17 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
     pollUntilReady(() => opencodeService.runStatus(), res.devUrl || "http://localhost:5173")
   }, [files, pollUntilReady])
 
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const onRun = () => {
+      if (Object.keys(files || {}).some((p) => /(^|\/)package\.json$/.test(p))) {
+        void runApp()
+      }
+    }
+    window.addEventListener("siragpt:code-run-app", onRun)
+    return () => window.removeEventListener("siragpt:code-run-app", onRun)
+  }, [files, runApp])
+
   React.useEffect(
     () => () => {
       if (pollRef.current) window.clearInterval(pollRef.current)
@@ -201,11 +215,15 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
 
   const openInNewTab = React.useCallback(() => {
     if (typeof window === "undefined") return
+    if (liveRun.phase === "ready" && liveRun.devUrl) {
+      window.open(liveRun.devUrl, "_blank", "noopener,noreferrer")
+      return
+    }
     const blob = new Blob([result.html], { type: "text/html" })
     const url = URL.createObjectURL(blob)
     window.open(url, "_blank", "noopener,noreferrer")
     setTimeout(() => URL.revokeObjectURL(url), 30_000)
-  }, [result.html])
+  }, [liveRun.devUrl, liveRun.phase, result.html])
 
   const errorCount = logs.filter((l) => l.level === "error").length
   const entryLabel = result.entry ? result.entry.split("/").pop() : "preview"
@@ -365,7 +383,13 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
             </button>
           </div>
         ) : result.kind === "empty" || result.kind === "unsupported" ? (
-          <PreviewLaunchpad kind={result.kind} note={result.note} />
+          <PreviewLaunchpad
+            kind={result.kind}
+            note={result.note}
+            hasNodeProject={hasNodeProject}
+            onRunApp={runApp}
+            onOpenLocalFolder={() => void openLocalFolderWorkspace()}
+          />
         ) : (
           <div
             className={cn(
@@ -441,18 +465,83 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
   )
 }
 
-function PreviewLaunchpad({ kind, note }: { kind: PreviewKind; note?: string }) {
+function PreviewLaunchpad({
+  kind,
+  note,
+  hasNodeProject,
+  onRunApp,
+  onOpenLocalFolder,
+}: {
+  kind: PreviewKind
+  note?: string
+  hasNodeProject?: boolean
+  onRunApp?: () => void
+  onOpenLocalFolder?: () => void
+}) {
+  const openAgent = React.useCallback(() => {
+    window.dispatchEvent(
+      new CustomEvent("siragpt:code-agent-prompt", {
+        detail: {
+          mode: "app",
+          prompt: "Quiero construir una app web completa. Ayúdame como ingeniero: hazme las preguntas necesarias y luego genera el proyecto con preview.",
+        },
+      }),
+    )
+  }, [])
+
+  const openFiles = React.useCallback(() => {
+    window.dispatchEvent(new CustomEvent("siragpt:code-open-tool", { detail: { toolId: "files" } }))
+  }, [])
+
   return (
     <div className="flex h-full flex-col items-center justify-center gap-5 p-8 text-center">
       <div>
         <p className="text-sm font-medium text-foreground">
-          {kind === "empty" ? "Tu preview en vivo" : "Este archivo no se previsualiza"}
+          {kind === "empty" ? "Tu app aparecerá aquí" : "Este archivo no es una pantalla web"}
         </p>
         <p className="mx-auto mt-1 max-w-xs text-xs leading-relaxed text-muted-foreground">
           {note || "Empieza desde una plantilla o pídele algo al agente — lo verás aquí al instante."}
         </p>
       </div>
-      <div className="grid w-full max-w-xs gap-2">
+      <div className="grid w-full max-w-sm gap-2">
+        <button
+          type="button"
+          onClick={openAgent}
+          className="flex items-center gap-3 rounded-xl border border-[hsl(var(--accent-violet)/0.28)] bg-[hsl(var(--accent-violet)/0.10)] px-4 py-3 text-left transition-colors hover:bg-[hsl(var(--accent-violet)/0.16)]"
+        >
+          <Bot className="h-4 w-4 shrink-0 text-[hsl(var(--accent-violet))]" />
+          <span className="min-w-0">
+            <span className="block text-[13px] font-medium text-foreground">Construir con Agent</span>
+            <span className="block text-[11px] text-muted-foreground">Describe una idea y el agente crea archivos, preview y siguientes pasos.</span>
+          </span>
+        </button>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          <button
+            type="button"
+            onClick={onOpenLocalFolder}
+            className="flex min-h-16 flex-col items-center justify-center gap-1 rounded-xl border border-border/50 bg-background/60 px-3 py-2 text-[11px] text-muted-foreground backdrop-blur transition-colors hover:border-border hover:bg-muted/40 hover:text-foreground"
+          >
+            <FolderOpen className="h-4 w-4" />
+            Carpeta local
+          </button>
+          <button
+            type="button"
+            onClick={openFiles}
+            className="flex min-h-16 flex-col items-center justify-center gap-1 rounded-xl border border-border/50 bg-background/60 px-3 py-2 text-[11px] text-muted-foreground backdrop-blur transition-colors hover:border-border hover:bg-muted/40 hover:text-foreground"
+          >
+            <Code2 className="h-4 w-4" />
+            Archivos
+          </button>
+          <button
+            type="button"
+            onClick={onRunApp}
+            disabled={!hasNodeProject}
+            className="flex min-h-16 flex-col items-center justify-center gap-1 rounded-xl border border-border/50 bg-background/60 px-3 py-2 text-[11px] text-muted-foreground backdrop-blur transition-colors hover:border-border hover:bg-muted/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45"
+          >
+            <Play className="h-4 w-4" />
+            Ejecutar
+          </button>
+        </div>
         {CODE_TEMPLATES.map((t) => (
           <button
             key={t.id}

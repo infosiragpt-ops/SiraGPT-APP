@@ -83,6 +83,16 @@ describe("buildPreviewDocument", () => {
     assert.match(r.html, /typeof Card !== 'undefined' && Card/)
   })
 
+  it("does not treat a plain TypeScript utility file as a blank React screen", () => {
+    const r = buildPreviewDocument(
+      files({ "control-ui-chunking.ts": "export function chunk(items: string[]) { return items.join(',') }" }),
+      "control-ui-chunking.ts",
+    )
+    assert.equal(r.kind, "unsupported")
+    assert.equal(r.entry, "control-ui-chunking.ts")
+    assert.match(r.html, /no es una pantalla web renderizable/i)
+  })
+
   it("server-only languages are unsupported", () => {
     const r = buildPreviewDocument(files({ "main.py": "print('hi')" }), "main.py")
     assert.equal(r.kind, "unsupported")
@@ -119,7 +129,22 @@ describe("buildPreviewDocument", () => {
     })
     const r = buildPreviewDocument(vite, "index.html")
     assert.equal(r.kind, "unsupported")
+    assert.equal(r.entry, "index.html")
     assert.match(r.html, /Ejecutar/)
+  })
+
+  it("a Vite project keeps the project entry in the preview bar when a source file is active", () => {
+    const vite = files({
+      "package.json": '{"devDependencies":{"vite":"^7.1.0"}}',
+      "index.html": '<html><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>',
+      "src/control-ui-chunking.ts": "export const chunk = 2",
+      "src/main.tsx": "import App from './App'",
+      "src/App.tsx": "export default function App(){ return <div>landing</div> }",
+    })
+    const r = buildPreviewDocument(vite, "src/control-ui-chunking.ts")
+    assert.equal(r.kind, "unsupported")
+    assert.equal(r.entry, "index.html")
+    assert.match(r.html, /dev server/)
   })
 
   it("markdown/svg files still preview inside a Vite project", () => {

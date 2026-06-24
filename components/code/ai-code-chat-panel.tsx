@@ -404,12 +404,29 @@ export function AICodeChatPanel() {
   // input without coupling shell ↔ panel through props.
   React.useEffect(() => {
     if (typeof window === "undefined") return
-    const handler = () => {
-      setComposerMode("build")
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ mode?: ComposerMode; prompt?: string }>).detail
+      setComposerMode(detail?.mode ?? "build")
+      if (typeof detail?.prompt === "string") setInput(detail.prompt)
       window.requestAnimationFrame(() => inputRef.current?.focus())
     }
     window.addEventListener("siragpt:code-composer-mode", handler)
     return () => window.removeEventListener("siragpt:code-composer-mode", handler)
+  }, [])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ mode?: ComposerMode; prompt?: string }>).detail
+      setComposerMode(detail?.mode ?? "app")
+      setInput(
+        detail?.prompt ??
+          "Quiero construir una app web completa. Ayúdame a definirla y genera el proyecto con preview.",
+      )
+      window.requestAnimationFrame(() => inputRef.current?.focus())
+    }
+    window.addEventListener("siragpt:code-agent-prompt", handler)
+    return () => window.removeEventListener("siragpt:code-agent-prompt", handler)
   }, [])
 
   // "Arreglar con IA" from the preview console pre-loads the composer with the
@@ -419,6 +436,7 @@ export function AICodeChatPanel() {
     const handler = (e: Event) => {
       const text = (e as CustomEvent<{ text?: string }>).detail?.text?.trim()
       if (!text) return
+      setComposerMode("debug")
       setInput(`Arregla este error que aparece en el preview en vivo:\n\n${text}`)
       window.requestAnimationFrame(() => inputRef.current?.focus())
     }
