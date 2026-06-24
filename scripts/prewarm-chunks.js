@@ -18,6 +18,7 @@ const CHUNK_FETCH_DELAY_MS = 5_000;
 
 const CHUNKS = [
   '/_next/static/chunks/app/global-error.js',
+  '/api/health/ready',
 ];
 
 function get(path, timeoutMs = 8_000) {
