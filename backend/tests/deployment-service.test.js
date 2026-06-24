@@ -11,6 +11,7 @@ function makeFakeDb() {
   const deployments = [];
   const versions = [];
   const domains = [];
+  const logs = [];
 
   const matchWhere = (row, where) => Object.entries(where).every(([k, v]) => {
     if (v === null) return row[k] === null || row[k] === undefined;
@@ -23,6 +24,14 @@ function makeFakeDb() {
       const row = { id: id(prefix), createdAt: new Date(), updatedAt: new Date(), ...defaults(), ...data };
       store.push(row);
       return { ...row };
+    },
+    createMany: async ({ data }) => {
+      const rows = Array.isArray(data) ? data : [];
+      for (const item of rows) {
+        const row = { id: id(prefix), createdAt: new Date(), updatedAt: new Date(), ...defaults(), ...item };
+        store.push(row);
+      }
+      return { count: rows.length };
     },
     findFirst: async ({ where, orderBy }) => {
       let rows = store.filter((r) => matchWhere(r, where));
@@ -71,7 +80,8 @@ function makeFakeDb() {
     deployment: table(deployments, 'depl', () => ({ deletedAt: null, currentVersionId: null, subdomain: null, suspendedReason: null, databaseConnected: false, databaseProvider: null })),
     deploymentVersion: table(versions, 'ver', () => ({ isLive: false, isRollback: false, rolledBackFromId: null })),
     deploymentDomain: table(domains, 'dom', () => ({})),
-    _stores: { deployments, versions, domains },
+    deploymentLog: table(logs, 'log', () => ({ versionId: null, source: 'Runtime', level: 'info' })),
+    _stores: { deployments, versions, domains, logs },
   };
   // Interactive-transaction shim so the service's create+demote unit runs through
   // the same $transaction path it uses against real Postgres.
@@ -230,7 +240,46 @@ test('getLogs returns the live version log lines', async () => {
   const { lines, entries, versionHash } = await service.getLogs({ userId: USER, id: d.id, db });
   assert.ok(lines.length > 0);
   assert.ok(entries.length > 0);
-  assert.ok(entries.every((e) => ["User", "System"].includes(e.source) && ["info", "error"].includes(e.level) && typeof e.message === "string"));
+  assert.ok(db._stores.logs.length > 0);
+  assert.ok(entries.every((e) => ["User", "System", "Runtime"].includes(e.source) && ["info", "warn", "error"].includes(e.level) && typeof e.message === "string"));
   assert.equal(entries[0].deployment, versionHash);
   assert.match(versionHash, /^[0-9a-f]{8}$/);
+});
+
+test('recordRuntimeLog appends a redacted runtime error to deployment logs', async () => {
+  const db = makeFakeDb();
+  const d = await service.createDeployment({ userId: USER, name: 'App', db });
+  await service.publishDeployment({ userId: USER, id: d.id, db });
+  const entry = await service.recordRuntimeLog({
+    userId: USER,
+    id: d.id,
+    db,
+    payload: {
+      source: 'Runtime',
+      level: 'error',
+      message: 'Unhandled rejection token=super-secret-value',
+      url: 'https://app.example.com/dashboard',
+    },
+  });
+  assert.equal(entry.source, 'Runtime');
+  assert.equal(entry.level, 'error');
+  assert.doesNotMatch(entry.message, /super-secret-value/);
+
+  const { entries } = await service.getLogs({ userId: USER, id: d.id, db });
+  assert.ok(entries.some((e) => e.id === entry.id && e.level === 'error' && e.message.includes('Unhandled rejection')));
+});
+
+test('recordRuntimeLogByToken accepts only the deployment ingest token', async () => {
+  const db = makeFakeDb();
+  const env = { DEPLOYMENT_LOG_TOKEN_SECRET: 'test-secret' };
+  const d = await service.createDeployment({ userId: USER, name: 'App', db });
+  await service.publishDeployment({ userId: USER, id: d.id, db });
+  await assert.rejects(
+    () => service.recordRuntimeLogByToken({ id: d.id, token: 'wrong', payload: { message: 'boom' }, db, env }),
+    (e) => e.code === 'invalid_log_token',
+  );
+  const token = service.deploymentLogToken(db._stores.deployments[0], env);
+  const entry = await service.recordRuntimeLogByToken({ id: d.id, token, payload: { message: 'client crash', level: 'error' }, db, env });
+  assert.equal(entry.level, 'error');
+  assert.equal(entry.source, 'Runtime');
 });

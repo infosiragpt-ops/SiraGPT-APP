@@ -39,6 +39,9 @@ export interface Deployment {
   memoryMb: number | null
   subdomain: string
   defaultDomain: string
+  logIngestPath: string
+  logIngestToken: string
+  runtimeMonitorScriptPath: string
   buildCommand: string | null
   runCommand: string | null
   publicDir: string | null
@@ -80,7 +83,15 @@ export interface DeploymentDomain {
 export interface SecurityFinding { severity: "critical" | "high" | "medium" | "low"; category: string; title: string }
 export interface SecurityScan { status: "passed" | "failed"; scannedAt: string | null; findings: SecurityFinding[]; summary: string }
 
-export interface LogEntry { ts: string; source: "User" | "System"; level: "info" | "error"; message: string; deployment: string | null; index?: number }
+export interface LogEntry {
+  id?: string
+  ts: string
+  source: "User" | "System" | "Runtime"
+  level: "info" | "warn" | "error"
+  message: string
+  deployment: string | null
+  index?: number
+}
 export interface PublishPhase { name: string; status: "done" | "failed"; logs: string[] }
 export interface DeploymentDetail { deployment: Deployment; versions: DeploymentVersion[]; domains: DeploymentDomain[] }
 export interface DeploymentsHealth { ok: boolean; enabled: boolean }

@@ -10,6 +10,8 @@
 
 const pipeline = require('./pipeline');
 const providers = require('./provider-connectors');
+const crypto = require('node:crypto');
+const { redactPayloadDeep } = require('../../utils/log-redaction');
 
 const defaultPrisma = (() => {
   try { return require('../../config/database'); } catch { return null; }
@@ -42,10 +44,113 @@ function clampStr(v, max) {
   return typeof v === 'string' ? v.slice(0, max) : v;
 }
 
+const LOG_SOURCES = new Set(['User', 'System', 'Runtime']);
+const LOG_LEVELS = new Set(['info', 'warn', 'error']);
+const MAX_LOG_MESSAGE_CHARS = 8000;
+
+function deploymentLogSecret(env = process.env) {
+  return env.DEPLOYMENT_LOG_TOKEN_SECRET || env.JWT_SECRET || env.SESSION_SECRET || env.NEXTAUTH_SECRET || 'siragpt-development-deployment-log-token';
+}
+
+function deploymentLogToken(row, env = process.env) {
+  const h = crypto.createHmac('sha256', deploymentLogSecret(env));
+  h.update(`${row.userId}:${row.id}`);
+  return h.digest('hex');
+}
+
+function constantTimeEqual(a, b) {
+  const left = Buffer.from(String(a || ''), 'utf8');
+  const right = Buffer.from(String(b || ''), 'utf8');
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+function verifyDeploymentLogToken(row, token, env = process.env) {
+  return constantTimeEqual(token, deploymentLogToken(row, env));
+}
+
+function normalizeLogSource(source) {
+  return LOG_SOURCES.has(source) ? source : 'Runtime';
+}
+
+function normalizeLogLevel(level, message = '') {
+  if (LOG_LEVELS.has(level)) return level;
+  return /\b(error|failed|fail|exception|rejection|crash|timeout)\b/i.test(String(message)) ? 'error' : 'info';
+}
+
+function redactLogText(value) {
+  return String(value || '')
+    .replace(/\b(authorization\s*[:=]\s*bearer\s+)[^\s,;]+/gi, '$1[REDACTED]')
+    .replace(/\b((?:access|refresh|id)[_-]?token\s*[:=]\s*)["']?[^"',\s&]+/gi, '$1[REDACTED]')
+    .replace(/\b((?:api[_-]?key|secret|password|passwd|pwd|token)\s*[:=]\s*)["']?[^"',\s&]+/gi, '$1[REDACTED]')
+    .replace(/\b(sk-[A-Za-z0-9_-]{12,})\b/g, '[REDACTED]')
+    .replace(/\b([A-Za-z0-9_]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,})\b/g, '[REDACTED]');
+}
+
+function normalizeRuntimeLogPayload(input = {}) {
+  const redacted = redactPayloadDeep(input);
+  const parts = [];
+  if (redacted.message) parts.push(String(redacted.message));
+  if (redacted.url) parts.push(`url=${redacted.url}`);
+  if (redacted.line || redacted.column) parts.push(`at=${redacted.line || '?'}:${redacted.column || '?'}`);
+  if (redacted.stack) parts.push(String(redacted.stack));
+  if (parts.length === 0) parts.push(JSON.stringify(redacted));
+  const message = clampStr(redactLogText(parts.join(' | ')), MAX_LOG_MESSAGE_CHARS);
+  return {
+    source: normalizeLogSource(redacted.source),
+    level: normalizeLogLevel(redacted.level, message),
+    message,
+  };
+}
+
+function publicLogEntry(row, versionHash = null, index = undefined) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    ts: row.createdAt instanceof Date ? row.createdAt.toISOString() : new Date(row.createdAt || Date.now()).toISOString(),
+    source: normalizeLogSource(row.source),
+    level: normalizeLogLevel(row.level, row.message),
+    message: String(row.message || ''),
+    deployment: versionHash,
+    ...(Number.isFinite(index) ? { index } : {}),
+  };
+}
+
+async function persistDeploymentLogs(prisma, rows) {
+  if (!prisma.deploymentLog || !Array.isArray(rows) || rows.length === 0) return;
+  const data = rows.map((row) => ({
+    deploymentId: row.deploymentId,
+    versionId: row.versionId || null,
+    source: normalizeLogSource(row.source),
+    level: normalizeLogLevel(row.level, row.message),
+    message: clampStr(redactLogText(row.message), MAX_LOG_MESSAGE_CHARS),
+    createdAt: row.createdAt || new Date(),
+  }));
+  if (typeof prisma.deploymentLog.createMany === 'function') {
+    await prisma.deploymentLog.createMany({ data });
+    return;
+  }
+  for (const entry of data) await prisma.deploymentLog.create({ data: entry });
+}
+
+async function seedVersionLogs(prisma, version, buildLog) {
+  if (!prisma.deploymentLog || !version) return;
+  const baseMs = version.createdAt ? new Date(version.createdAt).getTime() : Date.now();
+  const parsed = pipeline.parseLogEntries(buildLog, baseMs);
+  await persistDeploymentLogs(prisma, parsed.map((entry) => ({
+    deploymentId: version.deploymentId,
+    versionId: version.id,
+    source: entry.source,
+    level: entry.level,
+    message: entry.message,
+    createdAt: new Date(entry.ts),
+  })));
+}
+
 function publicDeployment(row) {
   if (!row) return null;
   const spec = pipeline.machineSpec(row.deploymentType, row.machineTier);
   const subdomain = row.subdomain || pipeline.slugifySubdomain(row.name, row.id);
+  const logIngestToken = deploymentLogToken(row);
   return {
     id: row.id,
     name: row.name,
@@ -64,6 +169,9 @@ function publicDeployment(row) {
     memoryMb: row.memoryMb,
     subdomain,
     defaultDomain: pipeline.defaultDomain(subdomain),
+    logIngestPath: `/api/deployments/${row.id}/logs/ingest`,
+    logIngestToken,
+    runtimeMonitorScriptPath: `/api/deployments/${row.id}/logs/client.js?token=${logIngestToken}`,
     buildCommand: row.buildCommand,
     runCommand: row.runCommand,
     publicDir: row.publicDir,
@@ -184,6 +292,7 @@ async function publishDeployment({ userId, id, hasFiles = true, db = defaultPris
   const seq = await prisma.deploymentVersion.count({ where: { deploymentId: id } });
   const result = pipeline.runPublishPipeline({ deployment: row, seq, hasFiles });
   const scan = { ...result.securityScan, scannedAt: new Date().toISOString() };
+  const buildLog = result.logs.join('\n');
 
   // Create the new version and demote the previously-live one as one unit so a
   // failure between the two can never leave two versions marked isLive.
@@ -195,7 +304,7 @@ async function publishDeployment({ userId, id, hasFiles = true, db = defaultPris
         status: result.promoted ? 'promoted' : 'failed',
         isLive: result.promoted,
         publishedById: userId,
-        buildLog: result.logs.join('\n'),
+        buildLog,
         securityScan: scan,
       },
     });
@@ -205,6 +314,7 @@ async function publishDeployment({ userId, id, hasFiles = true, db = defaultPris
         data: { isLive: false },
       });
     }
+    await seedVersionLogs(tx, created, buildLog);
     return created;
   });
 
@@ -254,6 +364,7 @@ async function rollbackDeployment({ userId, id, versionId, db = defaultPrisma })
       where: { deploymentId: id, isLive: true, id: { not: created.id } },
       data: { isLive: false },
     });
+    await seedVersionLogs(tx, created, target.buildLog || '');
     return created;
   });
   const updated = await prisma.deployment.update({
@@ -381,14 +492,65 @@ async function removeDomain({ userId, id, domainId, db = defaultPrisma }) {
   return { ok: true };
 }
 
-/** Recent runtime logs (from the live version's stored build/run log) as both
- *  raw lines and structured entries for the Logs table. */
-async function getLogs({ userId, id, db = defaultPrisma }) {
-  const prisma = requireDb(db);
-  const row = await loadOwned(prisma, userId, id);
+async function liveOrLatestVersion(prisma, row, id) {
   let version = null;
   if (row.currentVersionId) version = await prisma.deploymentVersion.findUnique({ where: { id: row.currentVersionId } });
   if (!version) version = await prisma.deploymentVersion.findFirst({ where: { deploymentId: id }, orderBy: { createdAt: 'desc' } });
+  return version;
+}
+
+async function versionHashMap(prisma, id) {
+  const versions = await prisma.deploymentVersion.findMany({ where: { deploymentId: id }, orderBy: { createdAt: 'desc' }, take: 200 });
+  return new Map(versions.map((v) => [v.id, v.shortHash]));
+}
+
+async function createRuntimeLog(prisma, row, payload) {
+  if (!prisma.deploymentLog) throw new DeploymentError(500, 'deployment_logs_unavailable', 'deployment logs are unavailable');
+  const version = await liveOrLatestVersion(prisma, row, row.id);
+  const entry = normalizeRuntimeLogPayload(payload);
+  const created = await prisma.deploymentLog.create({
+    data: {
+      deploymentId: row.id,
+      versionId: version ? version.id : null,
+      source: entry.source,
+      level: entry.level,
+      message: entry.message,
+    },
+  });
+  return publicLogEntry(created, version ? version.shortHash : null);
+}
+
+async function recordRuntimeLog({ userId, id, payload = {}, db = defaultPrisma }) {
+  const prisma = requireDb(db);
+  const row = await loadOwned(prisma, userId, id);
+  return createRuntimeLog(prisma, row, payload);
+}
+
+async function recordRuntimeLogByToken({ id, token, payload = {}, db = defaultPrisma, env = process.env }) {
+  const prisma = requireDb(db);
+  const row = await prisma.deployment.findFirst({ where: { id, deletedAt: null } });
+  if (!row) throw new DeploymentError(404, 'deployment_not_found', 'deployment not found');
+  if (!verifyDeploymentLogToken(row, token, env)) throw new DeploymentError(401, 'invalid_log_token', 'invalid deployment log token');
+  return createRuntimeLog(prisma, row, payload);
+}
+
+/** Recent build/runtime logs as both raw lines and structured entries for the
+ * Logs table. New deployments store rows in deployment_logs; older versions
+ * still fall back to parsing DeploymentVersion.buildLog. */
+async function getLogs({ userId, id, db = defaultPrisma }) {
+  const prisma = requireDb(db);
+  const row = await loadOwned(prisma, userId, id);
+  const version = await liveOrLatestVersion(prisma, row, id);
+  if (prisma.deploymentLog) {
+    const [logs, hashes] = await Promise.all([
+      prisma.deploymentLog.findMany({ where: { deploymentId: id }, orderBy: { createdAt: 'desc' }, take: 1000 }),
+      versionHashMap(prisma, id),
+    ]);
+    if (logs.length > 0) {
+      const entries = logs.reverse().map((log, index) => publicLogEntry(log, hashes.get(log.versionId) || (version ? version.shortHash : null), index));
+      return { lines: entries.map((entry) => entry.message), entries, versionHash: version ? version.shortHash : null };
+    }
+  }
   const lines = version && version.buildLog ? version.buildLog.split('\n').filter((l) => l.length > 0) : [];
   const baseMs = version && version.createdAt ? new Date(version.createdAt).getTime() : 0;
   const entries = pipeline.parseLogEntries(version ? version.buildLog : '', baseMs).map((e) => ({
@@ -415,5 +577,8 @@ module.exports = {
   runSecurityScan,
   addDomain,
   removeDomain,
+  deploymentLogToken,
+  recordRuntimeLog,
+  recordRuntimeLogByToken,
   getLogs,
 };

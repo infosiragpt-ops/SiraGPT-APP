@@ -4,9 +4,9 @@
  * LogsTab — Replit-style log table.
  *
  * Initial fill from deploymentsApi.logs(id).entries; then a live SSE tail via
- * new EventSource(logsStreamUrl(id)) listening to open / log / eof events. Each
- * `log` event carries a LogEntry-shaped object. Toolbar: search + "Errors only"
- * + date filter. Bottom status bar: Collapse / Wrap / Colors + ● Live.
+ * new EventSource(logsStreamUrl(id)) listening to open / log events. Each `log`
+ * event carries a LogEntry-shaped object. Toolbar: search + "Errors only" +
+ * date filter. Bottom status bar: Collapse / Wrap / Colors + Live.
  */
 
 import * as React from "react"
@@ -32,6 +32,38 @@ function formatTime(iso: string): string {
 function shortDeployment(value: string | null): string {
   if (!value) return "—"
   return value.length > 12 ? value.slice(0, 12) : value
+}
+
+function normalizeLogEntry(payload: Partial<LogEntry>): LogEntry | null {
+  if (!payload || typeof payload.message !== "string") return null
+  const source = payload.source === "User" || payload.source === "System" || payload.source === "Runtime" ? payload.source : "System"
+  const level = payload.level === "error" || payload.level === "warn" || payload.level === "info" ? payload.level : "info"
+  return {
+    id: typeof payload.id === "string" ? payload.id : undefined,
+    ts: typeof payload.ts === "string" ? payload.ts : new Date().toISOString(),
+    source,
+    level,
+    message: payload.message,
+    deployment: typeof payload.deployment === "string" ? payload.deployment : null,
+    index: typeof payload.index === "number" ? payload.index : undefined,
+  }
+}
+
+function logEntryKey(entry: LogEntry): string {
+  return entry.id || `${entry.ts}|${entry.source}|${entry.level}|${entry.deployment || ""}|${entry.message}`
+}
+
+function mergeLogEntries(current: LogEntry[], incoming: LogEntry[]): LogEntry[] {
+  const merged = new Map<string, LogEntry>()
+  for (const entry of current) merged.set(logEntryKey(entry), entry)
+  for (const entry of incoming) merged.set(logEntryKey(entry), entry)
+  return Array.from(merged.values()).sort((a, b) => {
+    const at = new Date(a.ts).getTime()
+    const bt = new Date(b.ts).getTime()
+    const byTime = (Number.isFinite(at) ? at : 0) - (Number.isFinite(bt) ? bt : 0)
+    if (byTime !== 0) return byTime
+    return (a.index ?? 0) - (b.index ?? 0)
+  })
 }
 
 export function LogsTab({ deploymentId }: { deploymentId: string }) {
@@ -60,7 +92,10 @@ export function LogsTab({ deploymentId }: { deploymentId: string }) {
       try {
         const result = await deploymentsApi.logs(deploymentId)
         if (cancelled) return
-        setEntries(result.entries)
+        const normalized = result.entries
+          .map((entry) => normalizeLogEntry(entry))
+          .filter((entry): entry is LogEntry => entry !== null)
+        setEntries((prev) => mergeLogEntries(prev, normalized))
         setConnection("live")
       } catch {
         // The SSE stream may still fill it; fail soft.
@@ -86,43 +121,25 @@ export function LogsTab({ deploymentId }: { deploymentId: string }) {
     const onLog = (event: MessageEvent) => {
       try {
         const payload = JSON.parse(event.data) as Partial<LogEntry>
-        if (payload && typeof payload.message === "string") {
-          setEntries((prev) => [
-            ...prev,
-            {
-              ts: typeof payload.ts === "string" ? payload.ts : new Date().toISOString(),
-              source: payload.source === "User" ? "User" : "System",
-              level: payload.level === "error" ? "error" : "info",
-              message: payload.message as string,
-              deployment: typeof payload.deployment === "string" ? payload.deployment : null,
-              index: typeof payload.index === "number" ? payload.index : undefined,
-            },
-          ])
-        }
+        const entry = normalizeLogEntry(payload)
+        if (entry) setEntries((prev) => mergeLogEntries(prev, [entry]))
       } catch {
         if (typeof event.data === "string") {
-          setEntries((prev) => [
-            ...prev,
-            { ts: new Date().toISOString(), source: "System", level: "info", message: event.data, deployment: null },
-          ])
+          setEntries((prev) =>
+            mergeLogEntries(prev, [{ ts: new Date().toISOString(), source: "System", level: "info", message: event.data, deployment: null }]),
+          )
         }
       }
-    }
-    const onEof = () => {
-      setConnection("closed")
-      source?.close()
     }
     const onError = () => setConnection("closed")
 
     source.addEventListener("open", onOpen)
     source.addEventListener("log", onLog as EventListener)
-    source.addEventListener("eof", onEof)
     source.onerror = onError
 
     return () => {
       source?.removeEventListener("open", onOpen)
       source?.removeEventListener("log", onLog as EventListener)
-      source?.removeEventListener("eof", onEof)
       source?.close()
     }
   }, [deploymentId])

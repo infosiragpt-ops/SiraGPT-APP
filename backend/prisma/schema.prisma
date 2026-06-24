@@ -2164,6 +2164,7 @@ model Deployment {
   user     User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   versions DeploymentVersion[]
   domains  DeploymentDomain[]
+  logs     DeploymentLog[]
 
   @@index([userId, updatedAt])
   @@index([userId, deletedAt])
@@ -2184,7 +2185,8 @@ model DeploymentVersion {
   securityScan     Json?
   createdAt        DateTime @default(now())
 
-  deployment Deployment @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
+  deployment Deployment      @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
+  logs       DeploymentLog[]
 
   @@index([deploymentId, createdAt])
   @@map("deployment_versions")
@@ -2207,6 +2209,24 @@ model DeploymentDomain {
 
   @@index([deploymentId])
   @@map("deployment_domains")
+}
+
+model DeploymentLog {
+  id           String   @id @default(cuid())
+  deploymentId String
+  versionId    String?
+  source       String   @default("Runtime") // User | System | Runtime
+  level        String   @default("info") // info | warn | error
+  message      String   @db.Text
+  createdAt    DateTime @default(now())
+
+  deployment Deployment         @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
+  version    DeploymentVersion? @relation(fields: [versionId], references: [id], onDelete: SetNull)
+
+  @@index([deploymentId, createdAt])
+  @@index([deploymentId, level, createdAt])
+  @@index([versionId, createdAt])
+  @@map("deployment_logs")
 }
 
 // Ratchet 44 — pending ownership transfer (cycle 76).
