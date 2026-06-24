@@ -66,6 +66,50 @@ function isGitRepo(targetPath) {
   }
 }
 
+/**
+ * Keep build artifacts out of `git status` by appending standard ignore
+ * patterns to the repo's LOCAL excludes (`.git/info/exclude`). This is
+ * local-only (never committed, never shown as a change) — so running a build
+ * (`npm install` → node_modules, `dist/`) doesn't flood the Git pane with
+ * thousands of untracked files. Idempotent.
+ */
+const DEFAULT_EXCLUDES = [
+  'node_modules/',
+  'dist/',
+  'build/',
+  'out/',
+  '.next/',
+  '.turbo/',
+  '.cache/',
+  '.output/',
+  'coverage/',
+  '*.log',
+  '.DS_Store',
+];
+
+function ensureLocalExcludes(targetPath, patterns = DEFAULT_EXCLUDES) {
+  try {
+    const infoDir = path.join(targetPath, '.git', 'info');
+    if (!fs.existsSync(path.join(targetPath, '.git'))) return false;
+    fs.mkdirSync(infoDir, { recursive: true });
+    const excludeFile = path.join(infoDir, 'exclude');
+    let current = '';
+    try {
+      current = fs.readFileSync(excludeFile, 'utf8');
+    } catch {
+      /* no exclude file yet */
+    }
+    const have = new Set(current.split(/\r?\n/).map((s) => s.trim()));
+    const missing = patterns.filter((p) => !have.has(p));
+    if (missing.length === 0) return false;
+    const prefix = current && !current.endsWith('\n') ? '\n' : '';
+    fs.appendFileSync(excludeFile, `${prefix}# Added by SiraGPT — build artifacts\n${missing.join('\n')}\n`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Recursively remove a workspace — only ever inside a writable root. */
 function removeWorkspace(targetPath) {
   const normalized = normalizeRoot(targetPath);
@@ -82,5 +126,6 @@ module.exports = {
   workspacePathFor,
   ensureParentDir,
   isGitRepo,
+  ensureLocalExcludes,
   removeWorkspace,
 };

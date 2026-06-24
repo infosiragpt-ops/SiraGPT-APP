@@ -277,6 +277,8 @@ export const githubService = {
     send<{ ok: boolean; pushed: unknown; branch: string | null }>("POST", `/connected/${id}/push`, opts),
   pull: (id: string, branch?: string) =>
     send<{ ok: boolean }>("POST", `/connected/${id}/pull`, branch ? { branch } : {}),
+  sync: (id: string) =>
+    send<{ ok: boolean; pulled: boolean; pushed: boolean; status: GitStatus }>("POST", `/connected/${id}/sync`),
   fetch: (id: string, branch?: string) =>
     send<{ ok: boolean }>("POST", `/connected/${id}/fetch`, branch ? { branch } : {}),
   branches: (id: string) => get<{ branches: GitBranches }>(`/connected/${id}/branches`),

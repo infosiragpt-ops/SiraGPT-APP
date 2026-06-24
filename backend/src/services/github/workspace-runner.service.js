@@ -22,6 +22,7 @@ const http = require('http');
 const net = require('net');
 const fs = require('fs');
 const path = require('path');
+const { ensureLocalExcludes } = require('./workspace-manager');
 
 const IS_WIN = process.platform === 'win32';
 const READY_TIMEOUT_MS = 180_000; // 3 min — covers a cold `npm install` + boot
@@ -213,6 +214,13 @@ async function start(connectionId, localPath) {
   // Restart if already running.
   if (runs.has(connectionId)) stop(connectionId);
 
+  ensureLocalExcludes(localPath); // npm install will create node_modules — keep it out of git
+  // Vite needs an entry <script> in index.html or the dev page is blank too.
+  try {
+    require('../hosting/build.service').ensureViteEntry(localPath);
+  } catch {
+    /* non-fatal */
+  }
   const port = await findFreePort();
   const plan = detectRunPlan(localPath, port);
   if (plan.kind === 'none') {

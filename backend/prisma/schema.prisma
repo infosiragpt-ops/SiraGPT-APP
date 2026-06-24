@@ -183,6 +183,9 @@ model User {
   githubAccount         GithubAccount?
   connectedRepositories ConnectedRepository[]
   workspaces            Workspace[]
+  hostingTargets        HostingTarget[]
+  deployments           Deployment[]
+  deployEnvs            DeployEnv[]
 
   @@index([deletedAt])
   @@map("users")
@@ -252,7 +255,9 @@ model ConnectedRepository {
   connectedAt DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  workspace Workspace?
+  workspace   Workspace?
+  deployments Deployment[]
+  deployEnv   DeployEnv?
 
   @@unique([userId, repoId])
   @@index([userId])
@@ -278,6 +283,81 @@ model Workspace {
 
   @@index([userId])
   @@map("workspaces")
+}
+
+// ──────────────────────────────────────────────────────────────
+// Publishing — deploy a connected repo's build to Hostinger (or any
+// SFTP/FTP host). Credentials are AES-256 sealed (services/TokenVault.js /
+// services/hosting/credentials.js) before they reach `encryptedCreds`.
+// ──────────────────────────────────────────────────────────────
+
+model HostingTarget {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  provider       String  @default("hostinger") // hostinger | generic
+  label          String // user-friendly name
+  protocol       String  @default("sftp") // sftp | ftp | ftps
+  host           String
+  port           Int     @default(22)
+  username       String
+  encryptedCreds String // sealed JSON: { password? , privateKey? , passphrase? }
+  remoteBaseDir  String  @default("/public_html") // remote target directory
+  siteUrl        String? // https://your-domain — shown as the live URL
+
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  deployments Deployment[]
+
+  @@index([userId])
+  @@map("hosting_targets")
+}
+
+model Deployment {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  connectedRepositoryId String
+  connectedRepository   ConnectedRepository @relation(fields: [connectedRepositoryId], references: [id], onDelete: Cascade)
+  hostingTargetId       String
+  hostingTarget         HostingTarget       @relation(fields: [hostingTargetId], references: [id], onDelete: Cascade)
+
+  branch       String?
+  buildCommand String?
+  outputDir    String?
+  remotePath   String?
+  status       String  @default("queued") // queued | building | uploading | success | error
+  url          String?
+  error        String?
+  logTail      String? // last N log lines (truncated) for history
+
+  startedAt  DateTime?
+  finishedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+  @@index([connectedRepositoryId])
+  @@map("deployments")
+}
+
+// Build-time env vars / secrets for a project's deploys (Replit "deployment
+// secrets"). One sealed JSON blob per connected repo. AES-256 at rest.
+model DeployEnv {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  connectedRepositoryId String              @unique
+  connectedRepository   ConnectedRepository @relation(fields: [connectedRepositoryId], references: [id], onDelete: Cascade)
+
+  encryptedEnv String // sealed JSON: { KEY: value, ... }
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([userId])
+  @@map("deploy_envs")
 }
 
 model AiModel {

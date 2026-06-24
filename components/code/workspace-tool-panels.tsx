@@ -57,6 +57,7 @@ import { useCodeWorkspace } from "@/lib/code-workspace-context"
 import type { WorkspaceToolId } from "@/lib/code-workspace-tools"
 import { RealGitPanel } from "@/components/code/git-tool-real"
 import { WorkspaceDeploymentsTool } from "@/components/deployments/workspace-deployments-tool"
+import { RealPublishingPanel } from "@/components/code/publishing-tool-real"
 
 type Deployment = {
   id: string
@@ -387,6 +388,22 @@ function copyToClipboard(value: string, success: string) {
 }
 
 function PublishingTool() {
+  const { activeFolder } = useCodeWorkspace()
+  // Legacy simulation kept behind a flag (set true to bring it back).
+  const SHOW_LEGACY: boolean = false
+  if (SHOW_LEGACY) return <LegacyPublishingTool />
+  return (
+    <ToolShell
+      eyebrow="Deployments"
+      title="Publishing"
+      detail="Publica tu proyecto en Hostinger: build + subida (SFTP/FTP), URL en vivo e historial."
+    >
+      <RealPublishingPanel projectId={activeFolder?.id || null} />
+    </ToolShell>
+  )
+}
+
+function LegacyPublishingTool() {
   const { files, activeFolder, workspaceSource } = useCodeWorkspace()
   const [deployments, setDeployments] = useWorkspacePersistedState<Deployment[]>("deployments", [])
   const [settings, setSettings] = useWorkspacePersistedState("publishing-settings", {

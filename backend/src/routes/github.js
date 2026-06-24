@@ -59,6 +59,8 @@ async function loadClonedWorkspace(req) {
     e.code = 'not_cloned';
     throw e;
   }
+  // Keep build artifacts (node_modules/, dist/, …) out of every git view.
+  workspaceManager.ensureLocalExcludes(workspace.localPath);
   return { connection, workspace, localPath: workspace.localPath };
 }
 
@@ -596,6 +598,63 @@ router.post('/connected/:id/pull', authenticateToken, async (req, res) => {
     });
     await touchWorkspace(connection.id, req.user.id, localPath, { lastSyncAt: new Date(), status: 'ready' });
     return res.json({ ok: true, ...result });
+  } catch (err) {
+    const n = githubApi.normalizeError(err);
+    return res.status(n.status).json(n.body);
+  }
+});
+
+// POST /api/github/connected/:id/sync → Replit-style "Sync Changes":
+// fetch → (if behind) pull/merge → (if ahead) push. Uses FRESH server-side
+// git state at each step so it never pushes a branch that is behind the remote
+// (the "non-fast-forward" rejection).
+router.post('/connected/:id/sync', authenticateToken, async (req, res) => {
+  try {
+    const { connection, localPath } = await loadClonedWorkspace(req);
+    const { accessToken } = await githubApi.resolveUserToken(req.user.id);
+    const remote = { remoteUrl: connection.cloneUrl, token: accessToken };
+
+    // 1. Refresh remote-tracking refs so ahead/behind are accurate.
+    await gitService.fetch(localPath, remote);
+
+    // 2. Pull first if we're behind (integrate remote commits before pushing).
+    let status = await gitService.getStatus(localPath);
+    let pulled = false;
+    if (status.behind > 0) {
+      if (!status.clean) {
+        return res.status(409).json({
+          error: 'Tienes cambios sin confirmar — haz commit antes de sincronizar',
+          code: 'dirty_tree',
+        });
+      }
+      try {
+        await gitService.pull(localPath, { ...remote, branch: status.current });
+        pulled = true;
+      } catch (e) {
+        if (/conflict|merge|CONFLICT|fix conflicts/i.test(e.message || '')) {
+          return res.status(409).json({
+            error: 'Conflicto de merge — resuélvelo manualmente (o descarta) antes de volver a sincronizar',
+            code: 'merge_conflict',
+          });
+        }
+        throw e;
+      }
+    }
+
+    // 3. Push if we have local commits ahead.
+    status = await gitService.getStatus(localPath);
+    let pushed = false;
+    if (status.ahead > 0) {
+      await gitService.push(localPath, {
+        ...remote,
+        branch: status.current,
+        setUpstream: !status.tracking,
+      });
+      pushed = true;
+    }
+
+    await touchWorkspace(connection.id, req.user.id, localPath, { lastSyncAt: new Date(), status: 'ready' });
+    return res.json({ ok: true, pulled, pushed, status: await gitService.getStatus(localPath) });
   } catch (err) {
     const n = githubApi.normalizeError(err);
     return res.status(n.status).json(n.body);
