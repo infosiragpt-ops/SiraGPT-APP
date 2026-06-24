@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1509**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1516**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -24,7 +24,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 |---|---|---|---|
 | `json-schema` | 0.4.0 | AFL-2.1 OR BSD-3-Clause | [link](https://github.com/kriszyp/json-schema) |
 
-## Apache-2.0 (207)
+## Apache-2.0 (208)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -224,6 +224,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `readdir-glob` | 1.1.3 | Apache-2.0 | [link](https://github.com/Yqnn/node-readdir-glob) |
 | `sharp` | 0.34.4, 0.34.5 | Apache-2.0 | [link](https://github.com/lovell/sharp) |
 | `spdx-correct` | 3.2.0 | Apache-2.0 | [link](https://github.com/jslicense/spdx-correct.js) |
+| `ssh2-sftp-client` | 11.0.0 | Apache-2.0 | [link](https://github.com/theophilusx/ssh2-sftp-client) |
 | `swagger-ui-dist` | 5.32.5 | Apache-2.0 | [link](https://github.com/swagger-api/swagger-ui) |
 | `tesseract.js` | 5.1.1, 7.0.0 | Apache-2.0 | [link](https://github.com/naptha/tesseract.js) |
 | `tesseract.js-core` | 5.1.1, 7.0.0 | Apache-2.0 | [link](https://github.com/naptha/tesseract.js-core) |
@@ -236,7 +237,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `webdriver-bidi-protocol` | 0.3.8 | Apache-2.0 | [link](https://github.com/GoogleChromeLabs/webdriver-bidi-protocol) |
 | `xml-name-validator` | 5.0.0 | Apache-2.0 | [link](https://github.com/jsdom/xml-name-validator) |
 
-## BSD (60)
+## BSD (61)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -252,6 +253,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@protobufjs/pool` | 1.1.0 | BSD-3-Clause | [link](https://github.com/dcodeIO/protobuf.js) |
 | `@protobufjs/utf8` | 1.1.1 | BSD-3-Clause | [link](https://github.com/dcodeIO/protobuf.js) |
 | `asn1js` | 3.0.10 | BSD-3-Clause | [link](https://github.com/PeculiarVentures/ASN1.js) |
+| `bcrypt-pbkdf` | 1.0.2 | BSD-3-Clause | [link](https://github.com/joyent/node-bcrypt-pbkdf) |
 | `bcryptjs` | 3.0.2, 3.0.3 | BSD-3-Clause | [link](https://github.com/dcodeIO/bcrypt.js) |
 | `buffer-equal-constant-time` | 1.0.1 | BSD-3-Clause | [link](https://github.com/goinstant/buffer-equal-constant-time) |
 | `cheerio-select` | 2.1.0 | BSD-2-Clause | [link](https://github.com/cheeriojs/cheerio-select) |
@@ -451,7 +453,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yargs-parser` | 21.1.1 | ISC | [link](https://github.com/yargs/yargs-parser) |
 | `zod-to-json-schema` | 3.25.2 | ISC | [link](https://github.com/StefanTerdell/zod-to-json-schema) |
 
-## MIT (1114)
+## MIT (1118)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -511,7 +513,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@kurkle/color` | 0.3.4 | MIT | [link](https://github.com/kurkle/color) |
 | `@kwsites/file-exists` | 1.1.1 | MIT | [link](https://github.com/kwsites/file-exists) |
 | `@kwsites/promise-deferred` | 1.1.1 | MIT | [link](https://github.com/kwsites/promise-deferred) |
-| `@langchain/core` | 1.1.41, 1.1.47 | MIT | [link](https://github.com/langchain-ai/langchainjs) |
+| `@langchain/core` | 1.1.41 | MIT | [link](https://github.com/langchain-ai/langchainjs) |
 | `@langchain/langgraph` | 1.2.9 | MIT | [link](https://github.com/langchain-ai/langgraphjs) |
 | `@langchain/langgraph-checkpoint` | 1.0.1 | MIT | [link](https://github.com/langchain-ai/langgraphjs) |
 | `@langchain/langgraph-sdk` | 1.8.10 | MIT | [link](https://github.com/langchain-ai/langgraphjs) |
@@ -520,8 +522,8 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@langfuse/langchain` | 5.3.0 | MIT | [link](https://github.com/langfuse/langfuse-js) |
 | `@langfuse/tracing` | 5.3.0 | MIT | [link](https://github.com/langfuse/langfuse-js) |
 | `@levischuck/tiny-cbor` | 0.2.11 | MIT | [link](https://github.com/levischuck/tiny-cbor) |
-| `@llamaindex/core` | 0.6.22, 0.6.23 | MIT | [link](https://github.com/run-llama/LlamaIndexTS) |
-| `@llamaindex/env` | 0.1.30, 0.1.31 | MIT | [link](https://github.com/run-llama/LlamaIndexTS) |
+| `@llamaindex/core` | 0.6.22 | MIT | [link](https://github.com/run-llama/LlamaIndexTS) |
+| `@llamaindex/env` | 0.1.30 | MIT | [link](https://github.com/run-llama/LlamaIndexTS) |
 | `@llamaindex/node-parser` | 2.0.22 | MIT | [link](https://github.com/run-llama/LlamaIndexTS) |
 | `@llamaindex/openai` | 0.4.23 | MIT | [link](https://github.com/run-llama/LlamaIndexTS) |
 | `@llamaindex/workflow` | 1.1.24, 1.1.25 | MIT | [link](https://github.com/run-llama/LlamaIndexTS) |
@@ -797,6 +799,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `array-find-index` | 1.0.2 | MIT | [link](https://github.com/sindresorhus/array-find-index) |
 | `array-flatten` | 1.1.1 | MIT | [link](https://github.com/blakeembrey/array-flatten) |
 | `asap` | 2.0.6 | MIT | [link](https://github.com/kriskowal/asap) |
+| `asn1` | 0.2.6 | MIT | [link](https://github.com/joyent/node-asn1) |
 | `ast-types` | 0.13.4 | MIT | [link](https://github.com/benjamn/ast-types) |
 | `async` | 3.2.6 | MIT | [link](https://github.com/caolan/async) |
 | `asynckit` | 0.4.0 | MIT | [link](https://github.com/alexindigo/asynckit) |
@@ -826,6 +829,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `buffer-crc32` | 0.2.13 | MIT | [link](https://github.com/brianloveswords/buffer-crc32) |
 | `buffer-from` | 1.1.2 | MIT | [link](https://github.com/LinusU/buffer-from) |
 | `buffer-indexof-polyfill` | 1.0.2 | MIT | [link](https://github.com/sarosia/buffer-indexof-polyfill) |
+| `buildcheck` | 0.0.7 | MIT | [link](https://github.com/mscdex/buildcheck) |
 | `bullmq` | 5.76.10 | MIT | [link](https://github.com/taskforcesh/bullmq) |
 | `busboy` | 1.6.0 | MIT | [link](https://github.com/mscdex/busboy) |
 | `bytes` | 3.1.2 | MIT | [link](https://github.com/visionmedia/bytes.js) |
@@ -880,6 +884,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `cors` | 2.8.5 | MIT | [link](https://github.com/expressjs/cors) |
 | `cose-base` | 1.0.3, 2.2.0 | MIT | [link](https://github.com/iVis-at-Bilkent/cose-base) |
 | `cosmiconfig` | 9.0.0 | MIT | [link](https://github.com/cosmiconfig/cosmiconfig) |
+| `cpu-features` | 0.0.10 | MIT | [link](https://github.com/mscdex/cpu-features) |
 | `crc32-stream` | 4.0.3 | MIT | [link](https://github.com/archiverjs/node-crc32-stream) |
 | `cron-parser` | 4.9.0 | MIT | [link](https://github.com/harrisiirak/cron-parser) |
 | `cross-fetch` | 4.1.0 | MIT | [link](https://github.com/lquixada/cross-fetch) |
@@ -936,6 +941,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `encoding-sniffer` | 0.2.1 | MIT | [link](https://github.com/fb55/encoding-sniffer) |
 | `end-of-stream` | 1.4.5 | MIT | [link](https://github.com/mafintosh/end-of-stream) |
 | `env-paths` | 2.2.1 | MIT | [link](https://github.com/sindresorhus/env-paths) |
+| `err-code` | 2.0.3 | MIT | [link](https://github.com/IndigoUnited/js-err-code) |
 | `error-ex` | 1.3.4 | MIT | [link](https://github.com/qix-/node-error-ex) |
 | `es-define-property` | 1.0.1 | MIT | [link](https://github.com/ljharb/es-define-property) |
 | `es-errors` | 1.3.0 | MIT | [link](https://github.com/ljharb/es-errors) |
@@ -1203,6 +1209,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `mustache` | 4.2.0 | MIT | [link](https://github.com/janl/mustache.js) |
 | `mz` | 2.7.0 | MIT | [link](https://github.com/normalize/mz) |
 | `n-gram` | 2.0.2 | MIT | [link](https://github.com/words/n-gram) |
+| `nan` | 2.27.0 | MIT | [link](https://github.com/nodejs/nan) |
 | `nanoid` | 3.3.12, 5.1.6, 5.1.9 | MIT | [link](https://github.com/ai/nanoid) |
 | `napi-build-utils` | 2.0.0 | MIT | [link](https://github.com/inspiredware/napi-build-utils) |
 | `negotiator` | 0.6.3, 0.6.4, 1.0.0 | MIT | [link](https://github.com/jshttp/negotiator) |
@@ -1213,12 +1220,11 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `next-themes` | 0.4.6 | MIT | [link](https://github.com/pacocoursey/next-themes) |
 | `node-abi` | 3.89.0, 3.92.0 | MIT | [link](https://github.com/electron/node-abi) |
 | `node-abort-controller` | 3.1.1 | MIT | [link](https://github.com/southpolesteve/node-abort-controller) |
-| `node-addon-api` | 7.1.1, 8.7.0 | MIT | [link](https://github.com/nodejs/node-addon-api) |
+| `node-addon-api` | 7.1.1 | MIT | [link](https://github.com/nodejs/node-addon-api) |
 | `node-domexception` | 1.0.0 | MIT | [link](https://github.com/jimmywarting/node-domexception) |
 | `node-ensure` | 0.0.0 | MIT | [link](https://github.com/bauerca/node-ensure) |
 | `node-fetch` | 2.7.0, 3.3.2 | MIT | [link](https://github.com/bitinn/node-fetch) |
 | `node-fetch-native` | 1.6.7 | MIT | [link](https://github.com/unjs/node-fetch-native) |
-| `node-gyp-build` | 4.8.4 | MIT | [link](https://github.com/prebuild/node-gyp-build) |
 | `node-gyp-build-optional-packages` | 5.2.2 | MIT | [link](https://github.com/prebuild/node-gyp-build) |
 | `node-pandoc` | 0.3.0 | MIT | [link](https://github.com/eshinn/node-pandoc) |
 | `node-readable-to-web-readable-stream` | 0.4.2 | MIT | [link](https://github.com/Borewit/node-readable-to-web-readable-stream) |
@@ -1327,6 +1333,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `process-nextick-args` | 2.0.1 | MIT | [link](https://github.com/calvinmetcalf/process-nextick-args) |
 | `process-warning` | 5.0.0 | MIT | [link](https://github.com/fastify/process-warning) |
 | `progress` | 2.0.3 | MIT | [link](https://github.com/visionmedia/node-progress) |
+| `promise-retry` | 2.0.1 | MIT | [link](https://github.com/IndigoUnited/node-promise-retry) |
 | `prop-types` | 15.8.1 | MIT | [link](https://github.com/facebook/prop-types) |
 | `property-information` | 7.1.0 | MIT | [link](https://github.com/wooorm/property-information) |
 | `prosemirror-changeset` | 2.4.1 | MIT | [link](git+https://code.haverbeke.berlin/prosemirror/prosemirror-changeset) |
@@ -1362,7 +1369,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `raw-body` | 2.5.3, 3.0.2 | MIT | [link](https://github.com/stream-utils/raw-body) |
 | `rc` | 1.2.8 | BSD-2-Clause OR MIT OR Apache-2.0 | [link](https://github.com/dominictarr/rc) |
 | `rc9` | 2.1.2 | MIT | [link](https://github.com/unjs/rc9) |
-| `react` | 18.3.1, 19.2.6 | MIT | [link](https://github.com/facebook/react) |
+| `react` | 18.3.1 | MIT | [link](https://github.com/facebook/react) |
 | `react-day-picker` | 9.14.0 | MIT | [link](https://github.com/gpbl/react-day-picker) |
 | `react-dom` | 18.3.1 | MIT | [link](https://github.com/facebook/react) |
 | `react-hook-form` | 7.73.1 | MIT | [link](https://github.com/react-hook-form/react-hook-form) |
@@ -1446,6 +1453,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `spdx-ranges` | 2.1.1 | MIT AND CC-BY-3.0 | [link](https://github.com/kemitchell/spdx-ranges.js) |
 | `spdx-satisfies` | 5.0.1 | MIT | [link](https://github.com/kemitchell/spdx-satisfies.js) |
 | `spotify-web-api-node` | 5.0.2 | MIT | [link](https://github.com/thelinmichael/spotify-web-api-node) |
+| `ssh2` | 1.17.0 | MIT | [link](https://github.com/mscdex/ssh2) |
 | `standard-as-callback` | 2.1.0 | MIT | [link](https://github.com/luin/asCallback) |
 | `state-local` | 1.0.7 | MIT | [link](https://github.com/suren-atoyan/state-local) |
 | `statuses` | 2.0.1, 2.0.2 | MIT | [link](https://github.com/jshttp/statuses) |
@@ -1497,7 +1505,6 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `token-types` | 6.1.2 | MIT | [link](https://github.com/Borewit/token-types) |
 | `tr46` | 0.0.3, 5.1.1 | MIT | [link](https://github.com/Sebmaster/tr46.js) |
 | `traverse` | 0.3.9 | MIT | [link](https://github.com/substack/js-traverse) |
-| `tree-sitter` | 0.22.4 | MIT | [link](https://github.com/tree-sitter/node-tree-sitter) |
 | `treeify` | 1.1.0 | MIT | [link](https://github.com/notatestuser/treeify) |
 | `trigram-utils` | 2.0.1 | MIT | [link](https://github.com/wooorm/trigram-utils) |
 | `trim-lines` | 3.0.1 | MIT | [link](https://github.com/wooorm/trim-lines) |
@@ -1549,7 +1556,6 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `warning` | 4.0.3 | MIT | [link](https://github.com/BerkeleyTrue/warning) |
 | `web-namespaces` | 2.0.1 | MIT | [link](https://github.com/wooorm/web-namespaces) |
 | `web-streams-polyfill` | 3.3.3 | MIT | [link](https://github.com/MattiasBuelens/web-streams-polyfill) |
-| `web-tree-sitter` | 0.24.7 | MIT | [link](https://github.com/tree-sitter/tree-sitter) |
 | `whatwg-encoding` | 3.1.1 | MIT | [link](https://github.com/jsdom/whatwg-encoding) |
 | `whatwg-mimetype` | 4.0.0 | MIT | [link](https://github.com/jsdom/whatwg-mimetype) |
 | `whatwg-url` | 14.2.0, 5.0.0 | MIT | [link](https://github.com/jsdom/whatwg-url) |
@@ -1567,7 +1573,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yocto-queue` | 1.2.2 | MIT | [link](https://github.com/sindresorhus/yocto-queue) |
 | `zip-stream` | 4.1.1 | MIT | [link](https://github.com/archiverjs/node-zip-stream) |
 | `zlibjs` | 0.3.1 | MIT | [link](https://github.com/imaya/zlib.js) |
-| `zod` | 3.25.76, 4.3.6, 4.4.3 | MIT | [link](https://github.com/colinhacks/zod) |
+| `zod` | 3.25.76, 4.3.6 | MIT | [link](https://github.com/colinhacks/zod) |
 | `zwitch` | 2.0.4 | MIT | [link](https://github.com/wooorm/zwitch) |
 
 ## MPL-2.0 (1)
@@ -1576,13 +1582,14 @@ Each entry below carries a non-permissive declared license but is permitted with
 |---|---|---|---|
 | `dxf-viewer` | 1.0.47 | MPL-2.0 | [link](https://github.com/vagran/dxf-viewer) |
 
-## Public Domain (3)
+## Public Domain (4)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
 | `big-integer` | 1.6.52 | Unlicense | [link](https://github.com/peterolson/BigInteger.js) |
 | `postgres` | 3.4.9 | Unlicense | [link](https://github.com/porsager/postgres) |
 | `robust-predicates` | 3.0.3 | Unlicense | [link](https://github.com/mourner/robust-predicates) |
+| `tweetnacl` | 0.14.5 | Unlicense | [link](https://github.com/dchest/tweetnacl-js) |
 
 ## UNKNOWN (2)
 
