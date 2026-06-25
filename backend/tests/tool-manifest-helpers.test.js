@@ -154,6 +154,19 @@ test('checkOutputFormat enforces forbidden_formats and allowed_formats', () => {
   assert.equal(allowed.ok, true);
 });
 
+test('checkOutputFormat allows an extensionless filename (no false format_not_allowed)', () => {
+  // create_chart has a non-empty allowed_formats. An extensionless name used to
+  // be treated as extension === the whole name ('chart') via split('.').pop(),
+  // so it was wrongly rejected as format_not_allowed. With no real extension
+  // there is nothing to enforce → allow.
+  const r = checkOutputFormat('create_chart', 'chart');
+  assert.equal(r.ok, true, 'extensionless filename must not be rejected');
+  // A trailing dot is still "no extension".
+  assert.equal(checkOutputFormat('create_chart', 'chart.').ok, true);
+  // A real disallowed extension is still rejected.
+  assert.equal(checkOutputFormat('create_chart', 'chart.png').ok, false);
+});
+
 test('checkTimeoutBudget clamps timeouts that exceed the manifest max', () => {
   // python_exec has timeout_ms_max: 60000
   const within = checkTimeoutBudget('python_exec', 30000);
