@@ -65,6 +65,19 @@ test('normaliseDocs keeps text documents and skips images / tiny text', () => {
   assert.equal(docs[0].title, 'a.pdf');
 });
 
+test('normaliseDocs: a truncated doc reports the truncated char count, not the original', () => {
+  // > default MAX_DOC_CHARS (1,000,000) so it is truncated.
+  const big = 'a'.repeat(1_100_000);
+  const [doc] = runtime.normaliseDocs([
+    { id: 'big', originalName: 'big.txt', mimeType: 'text/plain', extractedText: big },
+  ]);
+  assert.ok(doc, 'doc produced');
+  assert.equal(doc.truncated, true);
+  // chars used to report the pre-truncation length (1,100,000) while text was cut.
+  assert.equal(doc.chars, doc.text.length, 'chars must match the returned text length');
+  assert.ok(doc.chars < big.length, 'truncated chars reflect the cut');
+});
+
 test('ensureIndexed skips sources already present in the collection', async () => {
   const rag = fakeRag({ existingSources: ['file:already'] });
   const out = await runtime.ensureIndexed({

@@ -148,7 +148,10 @@ function generateScenesFromPrompt(prompt, totalDuration) {
   const words = safePrompt.split(/\s+/).filter(Boolean);
   const sceneCount = Math.min(Math.max(Math.ceil(words.length / 20), 3), 8);
   const durationPerScene = Math.max(2, Math.floor(totalDuration / sceneCount));
-  const remainingDuration = totalDuration - (durationPerScene * (sceneCount - 1));
+  // Clamp to ≥1s: durationPerScene has a floor of 2, so for a short
+  // totalDuration the earlier scenes can consume more than the total, leaving a
+  // negative remainder for the last scene.
+  const remainingDuration = Math.max(1, totalDuration - (durationPerScene * (sceneCount - 1)));
 
   const colors = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#14B8A6', '#F97316'];
   const visualStyles = [

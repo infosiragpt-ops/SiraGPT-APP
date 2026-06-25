@@ -77,7 +77,9 @@ function normaliseDocs(files = []) {
         source: sourceIdForFile(file),
         title: titleForFile(file),
         originalName: titleForFile(file),
-        chars: raw.length,
+        // Report the char count of the TEXT actually returned, not the
+        // pre-truncation original — downstream consumers index/budget on `text`.
+        chars: truncated ? MAX_DOC_CHARS : raw.length,
         truncated,
       };
     })

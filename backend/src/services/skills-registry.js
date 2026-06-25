@@ -74,11 +74,17 @@ function unregisterSkill(id) {
   if (!skill) return false;
 
   const catSet = categoryIndex.get(skill.category);
-  if (catSet) catSet.delete(id);
+  if (catSet) {
+    catSet.delete(id);
+    if (catSet.size === 0) categoryIndex.delete(skill.category);
+  }
 
   for (const tag of skill.tags) {
     const tagSet = tagIndex.get(tag);
-    if (tagSet) tagSet.delete(id);
+    if (tagSet) {
+      tagSet.delete(id);
+      if (tagSet.size === 0) tagIndex.delete(tag);
+    }
   }
 
   registry.delete(id);
@@ -123,7 +129,9 @@ function listSkills(opts = {}) {
 
   skills.sort((a, b) => a.order - b.order);
 
-  if (opts.limit) {
+  // Honour an explicit limit of 0 ("return none"): `if (opts.limit)` treated 0
+  // as "no limit" and returned every skill.
+  if (typeof opts.limit === 'number' && opts.limit >= 0) {
     skills = skills.slice(0, opts.limit);
   }
 

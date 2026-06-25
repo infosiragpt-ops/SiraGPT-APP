@@ -150,6 +150,9 @@ function runBuild(localPath, { buildCommand, onLog = () => {}, signal, env: extr
     proc.on('error', (err) => {
       clearTimeout(timer);
       if (killTimer) clearTimeout(killTimer);
+      // Remove the abort listener on the error path too — only the exit handler
+      // did, so a spawn failure leaked the listener on the AbortSignal.
+      if (signal) signal.removeEventListener?.('abort', onAbort);
       reject(new Error(`Build failed to start: ${err.message}`));
     });
     proc.on('exit', (code) => {

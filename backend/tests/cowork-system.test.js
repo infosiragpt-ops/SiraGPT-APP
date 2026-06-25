@@ -563,6 +563,12 @@ describe('skills-registry', () => {
     assert.ok(skills.length >= 10);
   });
 
+  it('honours an explicit limit of 0 (returns none)', () => {
+    // `if (opts.limit)` treated 0 as "no limit" and returned every skill.
+    assert.equal(skillsRegistry.listSkills({ limit: 0 }).length, 0);
+    assert.equal(skillsRegistry.listSkills({ limit: 2 }).length, 2);
+  });
+
   it('gets a skill by id', () => {
     const skill = skillsRegistry.getSkill('deep_document_analysis');
     assert.ok(skill);

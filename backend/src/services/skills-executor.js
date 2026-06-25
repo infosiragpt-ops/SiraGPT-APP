@@ -38,7 +38,13 @@ async function executeSkill(skillId, ctx = {}) {
 
   const prereq = skillsRegistry.verifyPrerequisites(skillId, ctx);
   if (prereq && prereq.ok === false) {
-    return { ok: false, error: prereq.reason || prereq.missing || 'prerequisites_failed' };
+    // verifyPrerequisites returns { ok:false, missing:[...] } (an array, no
+    // `reason`). Format it as a string so `error` honours the string contract
+    // callers expect — it used to return the raw array.
+    const reason = prereq.reason
+      || (Array.isArray(prereq.missing) ? `missing prerequisites: ${prereq.missing.join(', ')}` : prereq.missing)
+      || 'prerequisites_failed';
+    return { ok: false, error: reason, missing: prereq.missing };
   }
 
   const handler = HANDLERS[skill.id];
