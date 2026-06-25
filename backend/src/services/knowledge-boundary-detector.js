@@ -177,8 +177,15 @@ function assertionStrength(snippet) {
 
 function findGrounding(claim, haystack) {
   if (!claim?.value || !haystack) return { found: false, occurrences: 0 };
-  const escaped = claim.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re = new RegExp(escaped, 'gi');
+  const value = claim.value;
+  const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // Anchor on word boundaries when the value's edges are word characters, so a
+  // claim like "42" isn't counted as grounded just because it appears INSIDE
+  // "1942" / "420" — that falsely marked ungrounded numeric/short-token claims
+  // as grounded. Edges that are non-word chars (e.g. "$1,500", "30%") skip \b.
+  const left = /^\w/.test(value) ? '\\b' : '';
+  const right = /\w$/.test(value) ? '\\b' : '';
+  const re = new RegExp(`${left}${escaped}${right}`, 'gi');
   const matches = haystack.match(re);
   if (!matches) return { found: false, occurrences: 0 };
   return { found: true, occurrences: matches.length };
