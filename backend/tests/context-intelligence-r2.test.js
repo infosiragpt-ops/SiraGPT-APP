@@ -172,6 +172,21 @@ describe('prompt-provenance-tracker', () => {
     assert.ok(built.prompt.includes('A'));
   });
 
+  it('keeps (truncated) the highest-weight block when it alone exceeds maxChars — never empties the prompt', () => {
+    // Regression: when one block was larger than maxChars, removing the low-weight
+    // blocks never got under the cap, so the loop removed EVERY block (incl. the
+    // tier-0 system_base) and returned an empty prompt.
+    const t = provenance.createTracker({ maxChars: 2000 });
+    t.add(provenance.SOURCE_KINDS.SYSTEM_BASE, 'S'.repeat(3000), { weight: 1.0 });
+    t.add(provenance.SOURCE_KINDS.MEMORY, 'mem block', { weight: 0.3 });
+    t.add(provenance.SOURCE_KINDS.RAG, 'rag block', { weight: 0.2 });
+    const built = t.buildPrompt();
+    assert.ok(built.prompt.length > 0, 'the system prompt must never be emptied');
+    assert.ok(built.prompt.length <= 2000, 'still within the cap');
+    assert.ok(built.prompt.includes('S'.repeat(50)), 'the tier-0 block survives (truncated)');
+    assert.equal(built.trimmed, true);
+  });
+
   it('addMany inserts an array of blocks', () => {
     const t = provenance.createTracker();
     t.addMany([

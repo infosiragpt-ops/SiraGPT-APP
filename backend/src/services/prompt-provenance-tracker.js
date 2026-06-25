@@ -142,6 +142,11 @@ class ProvenanceTracker {
     let estimatedLength = prompt.length;
     for (const candidate of ranked) {
       if (estimatedLength <= maxChars) break;
+      // Never drop the LAST (highest-weight) block — when a single block alone
+      // exceeds maxChars, removing the low-weight ones never gets under the cap,
+      // so the loop used to remove EVERY block (incl. tier-0 system_base) and
+      // return an empty prompt. Keep ≥1 block; the trailing slice truncates it.
+      if (removeIds.size >= this.blocks.length - 1) break;
       removeIds.add(candidate.blockId);
       estimatedLength -= candidate.length + this.separator.length;
     }
