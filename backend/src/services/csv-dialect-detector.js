@@ -226,8 +226,11 @@ async function detectDialect(input) {
 
   const allLines = text.split(/\r\n|\n|\r/);
   const skipRows = allLines.filter(l => l.startsWith('#')).length;
-  const usableLines = allLines.slice(skipRows, SAMPLE_LINES + skipRows).filter(l => l.trim());
-  const dataLines = usableLines.slice(skipRows);
+  // usableLines has ALREADY dropped the leading `#` comment rows (the slice
+  // starts at skipRows) and filtered blanks — re-slicing by skipRows here used
+  // to drop that many *real* data rows too, corrupting header detection +
+  // rowsAnalyzed for any file with leading comment lines.
+  const dataLines = allLines.slice(skipRows, SAMPLE_LINES + skipRows).filter(l => l.trim());
 
   // Carry the human-readable name through — scoreDelimiter only returns the
   // delimiter char/score, so best.name (and thus dialect.delimiterName) used to
