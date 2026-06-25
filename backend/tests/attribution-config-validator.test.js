@@ -156,3 +156,11 @@ test('hot path: 100 validations under 200ms', () => {
   for (let i = 0; i < 100; i += 1) validator.validate({ SIRAGPT_PROMPT_BUDGET_TOKENS: '12000' });
   assert.ok(Date.now() - t0 < 500);
 });
+
+test('explicit 0 / non-numeric values are flagged, not silently defaulted', () => {
+  // Regression: `Number(x) || default` made an explicit 0 (or "abc") fall back
+  // to the default for the check, so a catastrophic value passed validation.
+  assert.equal(validator.validate({}).ok, true, 'empty env uses defaults → ok');
+  assert.equal(validator.validate({ SIRAGPT_PROMPT_BUDGET_TOKENS: '0' }).ok, false, 'explicit 0 budget is flagged');
+  assert.equal(validator.validate({ SIRAGPT_PROMPT_BUDGET_TOKENS: 'abc' }).ok, false, 'non-numeric budget is flagged');
+});
