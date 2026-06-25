@@ -405,13 +405,12 @@ function buildGitignore() {
   return ['node_modules', '.next', 'dev.db', 'dev.db-journal', 'prisma/dev.db', 'prisma/dev.db-journal', ''].join('\n');
 }
 
-function buildApiRoute(model) {
-  const accessor = prismaAccessor(model.entity); // prisma.<accessor>
-  const editable = editableFields(model.fields);
-  // Coerce each editable field from the request body to EXACTLY its Prisma
-  // column type, so an insert never throws on a type mismatch (Int rejects a
-  // float; DateTime rejects a non-date string — handled by storing dates as text).
-  const coercions = editable.map((f) => {
+// Coerce each editable field from the request body to EXACTLY its Prisma column
+// type — shared by create (POST) and update (PUT) so neither throws on a type
+// mismatch (Int rejects a float; dates are stored as text). Indented for a
+// `data: { … }` block.
+function dataCoercions(model) {
+  return editableFields(model.fields).map((f) => {
     const key = camelCase(f.name);
     const pt = prismaType(f.type);
     if (pt === 'Int') return '      ' + key + ': Math.trunc(Number((body as any)[' + jsStr(key) + '] ?? 0)) || 0,';
@@ -419,6 +418,11 @@ function buildApiRoute(model) {
     if (pt === 'Boolean') return '      ' + key + ': Boolean((body as any)[' + jsStr(key) + ']),';
     return '      ' + key + ': String((body as any)[' + jsStr(key) + '] ?? ""),';
   });
+}
+
+function buildApiRoute(model) {
+  const accessor = prismaAccessor(model.entity); // prisma.<accessor>
+  const coercions = dataCoercions(model);
   return [
     'import { NextResponse } from "next/server";',
     'import { prisma } from "@/lib/db";',
@@ -450,6 +454,18 @@ function buildItemApiRoute(model) {
     '',
     'export async function GET(_request: Request, { params }: { params: { id: string } }) {',
     '  const item = await prisma.' + accessor + '.findUnique({ where: { id: params.id } });',
+    '  if (!item) return NextResponse.json({ error: "not found" }, { status: 404 });',
+    '  return NextResponse.json({ item });',
+    '}',
+    '',
+    'export async function PUT(request: Request, { params }: { params: { id: string } }) {',
+    '  const body = await request.json().catch(() => ({}));',
+    '  const item = await prisma.' + accessor + '.update({',
+    '    where: { id: params.id },',
+    '    data: {',
+    ...dataCoercions(model),
+    '    },',
+    '  }).catch(() => null);',
     '  if (!item) return NextResponse.json({ error: "not found" }, { status: 404 });',
     '  return NextResponse.json({ item });',
     '}',
@@ -494,6 +510,11 @@ function buildEntityPage(model) {
     const key = colKey(f);
     return '    ' + key + ': ' + (tsType(f.type) === 'number' ? '0' : tsType(f.type) === 'boolean' ? 'false' : '""') + ',';
   });
+  // Loads the editable fields of a row into the form for editing.
+  const editLoaders = editable.map((f) => {
+    const key = colKey(f);
+    return '      ' + key + ': row.' + key + ' as any,';
+  });
   // Form inputs.
   const inputs = editable.map((f) => {
     const key = colKey(f);
@@ -535,6 +556,21 @@ function buildEntityPage(model) {
     ...initialState,
     '  });',
     '  const [loading, setLoading] = useState(true);',
+    '  const [editingId, setEditingId] = useState<string | null>(null);',
+    '',
+    '  function resetForm() {',
+    '    setEditingId(null);',
+    '    setForm({',
+    ...initialState,
+    '    });',
+    '  }',
+    '',
+    '  function startEdit(row: ' + typeName + ') {',
+    '    setEditingId(row.id);',
+    '    setForm({',
+    ...editLoaders,
+    '    });',
+    '  }',
     '',
     '  async function load() {',
     '    const res = await fetch(API);',
@@ -547,11 +583,12 @@ function buildEntityPage(model) {
     '',
     '  async function onSubmit(e: React.FormEvent) {',
     '    e.preventDefault();',
-    '    await fetch(API, {',
-    '      method: "POST",',
+    '    await fetch(editingId ? API + "/" + editingId : API, {',
+    '      method: editingId ? "PUT" : "POST",',
     '      headers: { "Content-Type": "application/json" },',
     '      body: JSON.stringify(form),',
     '    });',
+    '    resetForm();',
     '    await load();',
     '  }',
     '',
@@ -565,7 +602,10 @@ function buildEntityPage(model) {
     '      <h1>' + jsxText(model.entity) + '</h1>',
     '      <form className="stack" onSubmit={onSubmit}>',
     ...inputs,
-    '        <button className="btn" type="submit">Crear</button>',
+    '        <button className="btn" type="submit">{editingId ? "Guardar" : "Crear"}</button>',
+    '        {editingId && (',
+    '          <button className="btn" type="button" onClick={resetForm}>Cancelar</button>',
+    '        )}',
     '      </form>',
     '      {loading ? (',
     '        <p>Cargando…</p>',
@@ -581,7 +621,10 @@ function buildEntityPage(model) {
     '            {items.map((row) => (',
     '              <tr key={row.id}>',
     ...rowCells,
-    '              <td><button className="btn" onClick={() => onDelete(row.id)}>Borrar</button></td>',
+    '              <td>',
+    '                <button className="btn" onClick={() => startEdit(row)}>Editar</button>{" "}',
+    '                <button className="btn" onClick={() => onDelete(row.id)}>Borrar</button>',
+    '              </td>',
     '              </tr>',
     '            ))}',
     '          </tbody>',

@@ -185,16 +185,23 @@ test('app generates a real Prisma + SQLite database layer wired to the API', () 
   assert.ok(!/@\/lib\/store/.test(api), 'no in-memory store import');
 });
 
-test('app generates full CRUD — a per-id route (GET/DELETE) + a delete action in the UI', () => {
+test('app generates full CRUD — per-id route (GET/PUT/DELETE) + edit & delete UI', () => {
   const { files } = codegenFromBrief(makeBrief());
   const map = fileMap(files);
   const item = map.get('app/api/producto/[id]/route.ts');
   assert.ok(item, 'per-id route exists');
   assert.match(item.content, /export async function GET/);
+  assert.match(item.content, /export async function PUT/);
   assert.match(item.content, /export async function DELETE/);
+  assert.match(item.content, /prisma\.producto\.update\(/);
   assert.match(item.content, /prisma\.producto\.delete\(\{ where: \{ id: params\.id \} \}\)/);
-  // UI wires a delete button per row.
+  // UI wires edit + delete per row, and the form switches to update mode.
   const page = map.get('app/producto/page.tsx').content;
+  assert.match(page, /function startEdit\(row: Producto\)/);
+  assert.match(page, /const \[editingId, setEditingId\] = useState/);
+  assert.match(page, /editingId \? "PUT" : "POST"/);
+  assert.match(page, /editingId \? "Guardar" : "Crear"/);
+  assert.match(page, /onClick=\{\(\) => startEdit\(row\)\}/);
   assert.match(page, /async function onDelete\(id: string\)/);
   assert.match(page, /onClick=\{\(\) => onDelete\(row\.id\)\}/);
 });
