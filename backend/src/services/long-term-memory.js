@@ -197,6 +197,81 @@ function pruneFactMeta(opts = {}) {
   return pruned;
 }
 
+// ---------------------------------------------------------------------------
+// Scheduled pruning. pruneFactMeta() only removed facts when called, and
+// nothing called it (see the note at MAX_FACTS_PER_USER above) — so per-user
+// factMeta grew until the LRU cap kicked in, dropping *recent* facts instead of
+// aging out stale, unreinforced ones first. Mirror the active-memory.js
+// cleanup-timer pattern: a single unref'd interval. Disable with
+// SIRAGPT_MEMORY_PRUNE_DISABLED=1; tune via the env vars below.
+// ---------------------------------------------------------------------------
+const PRUNE_INTERVAL_MS = Math.max(
+  60 * 1000, // never tighter than 1 min
+  Number.parseInt(process.env.SIRAGPT_MEMORY_PRUNE_INTERVAL_MS, 10) || 6 * 60 * 60 * 1000,
+);
+const PRUNE_MAX_AGE_DAYS = Math.max(
+  1,
+  Number.parseInt(process.env.SIRAGPT_MEMORY_PRUNE_MAX_AGE_DAYS, 10) || 90,
+);
+const PRUNE_MIN_MENTIONS = Number.isFinite(Number.parseInt(process.env.SIRAGPT_MEMORY_PRUNE_MIN_MENTIONS, 10))
+  ? Math.max(0, Number.parseInt(process.env.SIRAGPT_MEMORY_PRUNE_MIN_MENTIONS, 10))
+  : 1;
+
+let pruneTimer = null;
+const pruneMetrics = { runs: 0, lastRunAt: null, lastPrunedCount: 0, totalPruned: 0 };
+
+// One prune pass with the configured aging policy + metrics. Shared by the
+// interval, ops endpoints, and tests. Never throws — pruning the in-memory
+// cache must not be able to crash the request loop.
+function runPruneNow() {
+  let pruned = 0;
+  try {
+    pruned = pruneFactMeta({ maxAgeDays: PRUNE_MAX_AGE_DAYS, minMentions: PRUNE_MIN_MENTIONS });
+  } catch (_err) {
+    pruned = 0;
+  }
+  pruneMetrics.runs += 1;
+  pruneMetrics.lastRunAt = Date.now();
+  pruneMetrics.lastPrunedCount = pruned;
+  pruneMetrics.totalPruned += pruned;
+  return pruned;
+}
+
+function startPruneScheduler(opts = {}) {
+  if (pruneTimer) return false;
+  const intervalMs = Math.max(1, Number(opts.intervalMs) || PRUNE_INTERVAL_MS);
+  pruneTimer = setInterval(() => { runPruneNow(); }, intervalMs);
+  if (pruneTimer.unref) pruneTimer.unref();
+  return true;
+}
+
+function stopPruneScheduler() {
+  if (!pruneTimer) return false;
+  clearInterval(pruneTimer);
+  pruneTimer = null;
+  return true;
+}
+
+function pruneSchedulerStats() {
+  return {
+    running: pruneTimer !== null,
+    intervalMs: PRUNE_INTERVAL_MS,
+    maxAgeDays: PRUNE_MAX_AGE_DAYS,
+    minMentions: PRUNE_MIN_MENTIONS,
+    ...pruneMetrics,
+  };
+}
+
+function pruneSchedulerDisabled() {
+  const v = String(process.env.SIRAGPT_MEMORY_PRUNE_DISABLED || '').toLowerCase();
+  return v === '1' || v === 'true' || v === 'on' || v === 'yes';
+}
+
+// Auto-start unless memory is globally off or pruning is explicitly disabled.
+if (!MEMORY_DISABLED && !pruneSchedulerDisabled()) {
+  startPruneScheduler();
+}
+
 /**
  * Snapshot of a user's in-memory fact metadata. Useful for diagnostics
  * (e.g. an `/admin/memory/:userId` endpoint) and for tests asserting
@@ -448,4 +523,9 @@ module.exports = {
   listFactMeta,
   MAX_FACTS_PER_USER,
   MEMORY_DISABLED,
+  // scheduled pruning (added 2026-06)
+  runPruneNow,
+  startPruneScheduler,
+  stopPruneScheduler,
+  pruneSchedulerStats,
 };
