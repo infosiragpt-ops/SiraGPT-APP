@@ -120,7 +120,22 @@ function extractEntities(text) {
     }
   }
 
-  return entities.sort((a, b) => a.index - b.index);
+  // Overlap resolution. A critical value (credit card, IBAN, SSN) is often ALSO
+  // matched by a lower-sensitivity pattern — e.g. the 'phone' regex grabs the
+  // digits of a 16-digit card — and only 'critical' entities get redacted, so the
+  // unredacted sub-match would leak the sensitive value in cleartext. Drop any
+  // non-critical entity whose character span overlaps a critical entity's span.
+  const criticalSpans = entities
+    .filter((e) => e.sensitivity === 'critical')
+    .map((e) => [e.index, e.index + String(e.value).length]);
+  const overlapsCritical = (e) => {
+    if (e.sensitivity === 'critical' || !criticalSpans.length) return false;
+    const start = e.index;
+    const end = e.index + String(e.value).length;
+    return criticalSpans.some(([cs, ce]) => start < ce && end > cs);
+  };
+
+  return entities.filter((e) => !overlapsCritical(e)).sort((a, b) => a.index - b.index);
 }
 
 function redactValue(value) {

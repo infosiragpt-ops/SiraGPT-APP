@@ -175,6 +175,18 @@ describe('deep-document-analyzer', () => {
       assert.ok(entities.some(e => e.type === 'ip_address'));
     });
 
+    it('does not leak a critical card/IBAN in cleartext via an overlapping non-critical match', () => {
+      // Regression: the medium-sensitivity 'phone' pattern matched a 16-digit
+      // card's digits and was emitted UNREDACTED, defeating the credit_card
+      // redaction. Overlapping non-critical entities must be dropped.
+      const entities = deepDocumentAnalyzer.extractEntities('Card 4111-1111-1111-1111 IBAN DE89370400440532013000');
+      assert.ok(entities.some(e => e.type === 'credit_card' && e.sensitivity === 'critical'));
+      assert.ok(entities.some(e => e.type === 'iban' && e.sensitivity === 'critical'));
+      // No non-critical entity may carry 6+ consecutive digits of the sensitive values.
+      const leak = entities.filter(e => e.sensitivity !== 'critical' && /\d{6,}/.test(String(e.value).replace(/[-\s]/g, '')));
+      assert.equal(leak.length, 0, `non-critical entities leaked digits: ${JSON.stringify(leak)}`);
+    });
+
     it('identifies critical entities', () => {
       const entities = deepDocumentAnalyzer.extractEntities('SSN: 123-45-6789');
       const ssn = entities.find(e => e.type === 'ssn');
