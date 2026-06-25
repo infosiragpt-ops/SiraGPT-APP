@@ -140,6 +140,13 @@ function observe({ userId, chatId, turnIndex = 0, prompt = '' } = {}) {
         prev.lastSeenAt = now;
         prev.lastTurnIndex = turnIndex;
         prev.strength = Math.min(1, prev.strength + 0.15);
+        // Re-asserting a belief resolves any earlier contradiction: the user is
+        // affirming it again, so it returns to "active". Leaving contradictedAt
+        // set made buildBeliefBlock list a freshly re-stated belief under
+        // "Previously stated but contradicted (do not assume still true)" — i.e.
+        // it told the model the OPPOSITE of the user's latest message.
+        prev.contradictedAt = null;
+        prev.contradictedBy = null;
         observed.push({ ...prev, isNew: false });
       } else {
         const entry = {
