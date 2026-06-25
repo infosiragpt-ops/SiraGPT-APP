@@ -563,10 +563,15 @@ function buildStructuredAttachmentAnalysisAnswer({ goal, uploadedFileContext }) 
 
   const paragraphs = [];
   if (wantsCalculation && Number.isFinite(facts.totalReal) && Number.isFinite(facts.totalContract)) {
-    const diff = Number.isFinite(facts.difference) ? facts.difference : facts.totalReal - facts.totalContract;
-    const diffLabel = diff >= 0 ? 'por encima' : 'por debajo';
+    // The SIGN must come from the totals, not from facts.difference: an explicit
+    // "Diferencia:" line in the document is parsed as a non-negative magnitude
+    // (the matcher captures only \d+...), so using it for the direction reported
+    // "por encima" even when real < contract (it should be "por debajo").
+    const signedDiff = facts.totalReal - facts.totalContract;
+    const diffMagnitude = Number.isFinite(facts.difference) ? Math.abs(facts.difference) : Math.abs(signedDiff);
+    const diffLabel = signedDiff >= 0 ? 'por encima' : 'por debajo';
     paragraphs.push(
-      `El total real combinado es **${formatAttachmentNumber(facts.totalReal)} USD** frente a **${formatAttachmentNumber(facts.totalContract)} USD** contratados; la diferencia es **${formatAttachmentNumber(Math.abs(diff))} USD** ${diffLabel} del contrato.`
+      `El total real combinado es **${formatAttachmentNumber(facts.totalReal)} USD** frente a **${formatAttachmentNumber(facts.totalContract)} USD** contratados; la diferencia es **${formatAttachmentNumber(diffMagnitude)} USD** ${diffLabel} del contrato.`
     );
   }
   if ((wantsCalculation || wantsRecommendation) && facts.worstGap) {
