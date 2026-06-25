@@ -185,6 +185,20 @@ test('app generates a real Prisma + SQLite database layer wired to the API', () 
   assert.ok(!/@\/lib\/store/.test(api), 'no in-memory store import');
 });
 
+test('app generates full CRUD — a per-id route (GET/DELETE) + a delete action in the UI', () => {
+  const { files } = codegenFromBrief(makeBrief());
+  const map = fileMap(files);
+  const item = map.get('app/api/producto/[id]/route.ts');
+  assert.ok(item, 'per-id route exists');
+  assert.match(item.content, /export async function GET/);
+  assert.match(item.content, /export async function DELETE/);
+  assert.match(item.content, /prisma\.producto\.delete\(\{ where: \{ id: params\.id \} \}\)/);
+  // UI wires a delete button per row.
+  const page = map.get('app/producto/page.tsx').content;
+  assert.match(page, /async function onDelete\(id: string\)/);
+  assert.match(page, /onClick=\{\(\) => onDelete\(row\.id\)\}/);
+});
+
 test('tsconfig.json is valid JSON with the @/* path alias', () => {
   const { files } = codegenFromBrief(makeBrief());
   const cfg = JSON.parse(fileMap(files).get('tsconfig.json').content);

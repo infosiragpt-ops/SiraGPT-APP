@@ -441,6 +441,27 @@ function buildApiRoute(model) {
   ].join('\n');
 }
 
+// Per-record route: GET one + DELETE (completes the CRUD surface).
+function buildItemApiRoute(model) {
+  const accessor = prismaAccessor(model.entity);
+  return [
+    'import { NextResponse } from "next/server";',
+    'import { prisma } from "@/lib/db";',
+    '',
+    'export async function GET(_request: Request, { params }: { params: { id: string } }) {',
+    '  const item = await prisma.' + accessor + '.findUnique({ where: { id: params.id } });',
+    '  if (!item) return NextResponse.json({ error: "not found" }, { status: 404 });',
+    '  return NextResponse.json({ item });',
+    '}',
+    '',
+    'export async function DELETE(_request: Request, { params }: { params: { id: string } }) {',
+    '  await prisma.' + accessor + '.delete({ where: { id: params.id } }).catch(() => {});',
+    '  return NextResponse.json({ ok: true });',
+    '}',
+    '',
+  ].join('\n');
+}
+
 function buildEntityPage(model) {
   const slug = model.slug || kebabCase(model.entity);
   const typeName = pascalCase(model.entity);
@@ -534,6 +555,11 @@ function buildEntityPage(model) {
     '    await load();',
     '  }',
     '',
+    '  async function onDelete(id: string) {',
+    '    await fetch(API + "/" + id, { method: "DELETE" });',
+    '    await load();',
+    '  }',
+    '',
     '  return (',
     '    <section>',
     '      <h1>' + jsxText(model.entity) + '</h1>',
@@ -548,12 +574,14 @@ function buildEntityPage(model) {
     '          <thead>',
     '            <tr>',
     ...headerCells,
+    '            <th>Acciones</th>',
     '            </tr>',
     '          </thead>',
     '          <tbody>',
     '            {items.map((row) => (',
     '              <tr key={row.id}>',
     ...rowCells,
+    '              <td><button className="btn" onClick={() => onDelete(row.id)}>Borrar</button></td>',
     '              </tr>',
     '            ))}',
     '          </tbody>',
@@ -625,6 +653,11 @@ function codegenFromBrief(rawBrief, blueprintArg) {
         path: `app/api/${slug}/route.ts`,
         language: 'typescript',
         content: buildApiRoute(model),
+      });
+      files.push({
+        path: `app/api/${slug}/[id]/route.ts`,
+        language: 'typescript',
+        content: buildItemApiRoute(model),
       });
       files.push({
         path: `app/${slug}/page.tsx`,
