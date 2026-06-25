@@ -1101,7 +1101,14 @@ async function search(query, opts = {}) {
     });
   }
   const result = { papers: papersOut, errors, providers: chosen };
-  searchCache.set(cleanQuery, opts, result);
+  // Only cache fully-successful searches. A result carrying provider errors
+  // (rejections, non-array bodies) is incomplete/degraded — caching it would
+  // serve those transient failures for the whole TTL, long after the providers
+  // recovered. A genuinely empty result with no errors IS cacheable. Let the
+  // next identical query retry when something failed this time.
+  if (!errors.length) {
+    searchCache.set(cleanQuery, opts, result);
+  }
   return result;
 }
 

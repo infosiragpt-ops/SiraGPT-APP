@@ -1144,3 +1144,31 @@ test('search runs Unpaywall enrichment only when opts.unpaywall is set', async (
     else process.env.SIRAGPT_RESEARCH_EMAIL = orig;
   }
 });
+
+// ── cache poisoning guard (#10): never cache a result with provider errors ──
+test('search does NOT cache when a provider errored (transient failure)', async () => {
+  searchCache.clear();
+  setFetchHandler(async () => { throw new Error('network down'); });
+  const opts = { providers: ['arxiv'], retries: 0, timeoutMs: 2000 };
+  const res = await ss.search('cache poisoning regression query', opts);
+  assert.ok(res.errors.length >= 1, 'the failing provider is surfaced as an error');
+  // The degraded result must NOT have been cached — a later identical query
+  // (once the provider recovers) must be free to retry.
+  assert.equal(
+    searchCache.get('cache poisoning regression query', opts),
+    null,
+    'a search with provider errors must not be cached',
+  );
+});
+
+test('search DOES cache a clean, error-free result (even when empty)', async () => {
+  searchCache.clear();
+  // Valid (empty) arXiv Atom feed → mapper yields [] with no error.
+  setFetchHandler(async () => textResponse('<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom"></feed>'));
+  const opts = { providers: ['arxiv'], retries: 0, timeoutMs: 2000 };
+  const res = await ss.search('clean cacheable empty query', opts);
+  assert.equal(res.errors.length, 0, 'no provider errors');
+  const cached = searchCache.get('clean cacheable empty query', opts);
+  assert.ok(cached, 'an error-free result is cached');
+  assert.deepEqual(cached.errors, []);
+});
