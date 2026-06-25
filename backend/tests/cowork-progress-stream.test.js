@@ -172,6 +172,7 @@ test('writeSSE wires SSE headers and forwards stage/complete events to res.write
   assert.equal(headers['Content-Type'], 'text/event-stream');
   assert.equal(headers['Cache-Control'], 'no-cache');
   assert.equal(headers['Connection'], 'keep-alive');
+  assert.equal(headers['X-Accel-Buffering'], 'no'); // proxies must not buffer SSE
   assert.equal(headersSent, true);
 
   s.start();
