@@ -21,7 +21,14 @@
 
 'use strict';
 
-const DEFAULT_GRACE_DAYS = Number(process.env.GDPR_HARD_DELETE_GRACE_DAYS || 30);
+// Resilient to a non-numeric env (e.g. "30d", "thirty", ""): Number("abc") is
+// NaN, which would propagate into the cutoff date and make the purge filter
+// invalid. Fall back to 30 days whenever the env isn't a finite, non-negative
+// number.
+const DEFAULT_GRACE_DAYS = (() => {
+  const n = Number(process.env.GDPR_HARD_DELETE_GRACE_DAYS);
+  return Number.isFinite(n) && n >= 0 ? n : 30;
+})();
 
 /**
  * @param {{ prisma?: import('@prisma/client').PrismaClient, dryRun?: boolean, graceDays?: number, now?: Date, logger?: { info: Function, warn: Function, error: Function } }} [opts]
@@ -29,10 +36,22 @@ const DEFAULT_GRACE_DAYS = Number(process.env.GDPR_HARD_DELETE_GRACE_DAYS || 30)
 async function run(opts = {}) {
   const logger = opts.logger || console;
   const prisma = opts.prisma || require('../config/database');
-  const graceDays = Number.isFinite(opts.graceDays) ? Number(opts.graceDays) : DEFAULT_GRACE_DAYS;
+  // A negative grace would push the cutoff into the future and purge
+  // recently-deleted users — reject it along with non-finite values.
+  const graceDays = Number.isFinite(opts.graceDays) && opts.graceDays >= 0
+    ? Number(opts.graceDays)
+    : DEFAULT_GRACE_DAYS;
   const dryRun = Boolean(opts.dryRun);
-  const now = opts.now instanceof Date ? opts.now : new Date();
+  const now = opts.now instanceof Date && !Number.isNaN(opts.now.getTime()) ? opts.now : new Date();
   const cutoff = new Date(now.getTime() - graceDays * 24 * 60 * 60 * 1000);
+
+  // Hard safety net: never issue a deleteMany with an invalid cutoff. A NaN
+  // cutoff would make the `deletedAt < cutoff` filter behave unpredictably
+  // (potentially an unbounded purge), so abort instead.
+  if (Number.isNaN(cutoff.getTime())) {
+    logger.error('[hard-delete] computed an invalid cutoff date — aborting to avoid an unbounded purge');
+    return { deleted: 0, candidates: 0, dryRun, error: 'invalid_cutoff' };
+  }
 
   logger.info(
     `[hard-delete] starting; cutoff=${cutoff.toISOString()} graceDays=${graceDays} dryRun=${dryRun}`,
