@@ -794,8 +794,13 @@ class FileProcessor {
     if (!options.openai && !process.env.OPENAI_API_KEY) return false;
     const text = String(result?.text || '');
     const confidence = typeof result?.ocr?.confidence === 'number' ? result.ocr.confidence : 1;
-    const minChars = Number.parseInt(process.env.SIRAGPT_VISION_FALLBACK_MIN_CHARS, 10) || 100;
-    const minConf = Number.parseFloat(process.env.SIRAGPT_VISION_FALLBACK_MIN_CONFIDENCE) || 0.5;
+    // NaN-only fallbacks: a configured 0 is meaningful (minChars=0 → never fall
+    // back on char count; minConf=0 → never on confidence). `|| default` skipped
+    // a legitimate 0.
+    const rawMinChars = Number.parseInt(process.env.SIRAGPT_VISION_FALLBACK_MIN_CHARS, 10);
+    const minChars = Number.isFinite(rawMinChars) ? rawMinChars : 100;
+    const rawMinConf = Number.parseFloat(process.env.SIRAGPT_VISION_FALLBACK_MIN_CONFIDENCE);
+    const minConf = Number.isFinite(rawMinConf) ? rawMinConf : 0.5;
     return text.length < minChars || confidence < minConf;
   }
 

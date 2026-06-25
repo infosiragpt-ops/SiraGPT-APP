@@ -17,6 +17,21 @@ function clampInt(value, fallback, min, max) {
   return Math.max(min, Math.min(Math.floor(n), max));
 }
 
+// 1→A, 26→Z, 27→AA, 52→AZ, 703→AAA. The old `String.fromCharCode(64+min(n,26))`
+// capped every column past 26 at 'Z', mislabelling formula cell references in
+// wide sheets.
+function excelColLetter(n) {
+  let col = Number(n);
+  if (!Number.isInteger(col) || col < 1) return '';
+  let out = '';
+  while (col > 0) {
+    col -= 1;
+    out = String.fromCharCode(65 + (col % 26)) + out;
+    col = Math.floor(col / 26);
+  }
+  return out;
+}
+
 function getXlsxMaxSheets(value = process.env.SIRAGPT_XLSX_MAX_SHEETS) {
   return clampInt(value, DEFAULT_MAX_SHEETS, 1, MAX_SHEET_CAP);
 }
@@ -156,7 +171,7 @@ function evaluateFormulas(workbook) {
               computedValue: cell.result !== undefined && cell.result !== null
                 ? String(cell.result).substring(0, 80)
                 : null,
-              colLetter: String.fromCharCode(64 + Math.min(colNumber, 26)),
+              colLetter: excelColLetter(colNumber),
             });
           }
         }
@@ -189,6 +204,7 @@ module.exports = {
   DEFAULT_MAX_COLUMNS,
   DEFAULT_MAX_ROWS,
   DEFAULT_MAX_SHEETS,
+  excelColLetter,
   addRowsWorksheet,
   cellToText,
   createWorkbook,

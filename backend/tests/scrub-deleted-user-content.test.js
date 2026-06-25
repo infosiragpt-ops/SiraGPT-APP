@@ -18,7 +18,7 @@ function buildPrismaStub() {
     },
     messages: {
       'c-1': [
-        { id: 'm-1', content: 'call me at +14155552671', metadata: {} },
+        { id: 'm-1', content: 'call me at +14155552671', metadata: { note: 'reach carol@example.com' }, files: JSON.stringify([{ originalName: 'dave@example.com.pdf' }]) },
         { id: 'm-2', content: 'no pii', metadata: { piiScrubbed: true } }, // skipped
       ],
       'c-2': [
@@ -110,6 +110,13 @@ describe('scrub-deleted-user-content', () => {
     assert.match(f1.data.originalName, /<EMAIL>/);
     assert.match(f1.data.extractedText, /<SSN>/);
     assert.equal(f1.data.processingError, SCRUB_MARKER);
+
+    // GDPR: user content inside the message metadata + files JSON must be
+    // masked too, not just the message text.
+    assert.match(m1.data.metadata.note, /<EMAIL>/, 'metadata JSON is deep-scrubbed');
+    assert.equal(m1.data.metadata.piiScrubbed, true, 'control flag preserved');
+    assert.match(m1.data.files, /<EMAIL>/, 'files JSON (originalName) is scrubbed');
+    assert.ok(!/dave@example\.com/.test(m1.data.files), 'raw email no longer present in files');
   });
 
   test('dry-run does not call update', async () => {

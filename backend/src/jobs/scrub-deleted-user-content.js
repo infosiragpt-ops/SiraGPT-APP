@@ -100,7 +100,7 @@ async function run(opts = {}) {
     if (chatIds.length > 0) {
       const messages = await prisma.message.findMany({
         where: { chatId: { in: chatIds } },
-        select: { id: true, content: true, metadata: true },
+        select: { id: true, content: true, metadata: true, files: true },
       });
 
       for (const m of messages) {
@@ -109,9 +109,20 @@ async function run(opts = {}) {
 
         const original = typeof m.content === 'string' ? m.content : '';
         const masked = original ? piiMask.mask(original) : original;
-        // Always set the scrubbed flag so re-runs are stable, even if
-        // the content didn't contain detectable PII.
-        const newMeta = { ...meta, piiScrubbed: true, piiScrubbedAt: now.toISOString() };
+        // Deep-scrub the metadata + files JSON too: labels/annotations
+        // (metadata) and original filenames (files) are user-supplied personal
+        // data that must be erased, not just the message text. The control
+        // flags are re-applied AFTER masking so re-runs stay stable.
+        const newMeta = { ...piiMask.maskObject(meta), piiScrubbed: true, piiScrubbedAt: now.toISOString() };
+        let scrubbedFiles = m.files;
+        if (m.files != null) {
+          if (typeof m.files === 'string') {
+            try { scrubbedFiles = JSON.stringify(piiMask.maskObject(JSON.parse(m.files))); }
+            catch { scrubbedFiles = piiMask.mask(m.files); }
+          } else {
+            scrubbedFiles = piiMask.maskObject(m.files);
+          }
+        }
 
         if (dryRun) {
           totalMessages++; userMessages++;
@@ -120,7 +131,7 @@ async function run(opts = {}) {
         try {
           await prisma.message.update({
             where: { id: m.id },
-            data: { content: masked, metadata: newMeta },
+            data: { content: masked, metadata: newMeta, files: scrubbedFiles },
           });
           totalMessages++; userMessages++;
           _bumpScrubCounter('message', 1);
