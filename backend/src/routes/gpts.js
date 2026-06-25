@@ -318,6 +318,14 @@ router.post('/', authenticateToken, upload.single('icon'), async (req, res) => {
     if (visibility != null && !['PRIVATE', 'UNLISTED', 'PUBLIC'].includes(String(visibility))) {
       return res.status(400).json({ error: 'invalid visibility' });
     }
+    // Numeric guards — temperature/maxTokens come from the untrusted blob and
+    // are written straight to the Float/Int columns; reject NaN / out-of-range.
+    if (temperature != null && (!Number.isFinite(temperature) || temperature < 0 || temperature > 2)) {
+      return res.status(400).json({ error: 'temperature must be a number between 0 and 2' });
+    }
+    if (maxTokens != null && (!Number.isInteger(maxTokens) || maxTokens < 1)) {
+      return res.status(400).json({ error: 'maxTokens must be a positive integer' });
+    }
 
     // Validation
     if (!name || !instructions) {
@@ -410,6 +418,13 @@ router.put('/:id', authenticateToken, upload.single('icon'), async (req, res) =>
     }
     if (visibility != null && !['PRIVATE', 'UNLISTED', 'PUBLIC'].includes(String(visibility))) {
       return res.status(400).json({ error: 'invalid visibility' });
+    }
+    // Numeric guards — reject NaN / out-of-range before the Prisma update.
+    if (temperature != null && (!Number.isFinite(temperature) || temperature < 0 || temperature > 2)) {
+      return res.status(400).json({ error: 'temperature must be a number between 0 and 2' });
+    }
+    if (maxTokens != null && (!Number.isInteger(maxTokens) || maxTokens < 1)) {
+      return res.status(400).json({ error: 'maxTokens must be a positive integer' });
     }
 
     // Check if GPT exists and user owns it

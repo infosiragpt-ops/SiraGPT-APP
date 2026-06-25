@@ -45,6 +45,8 @@ function injectFakeModule(requestPath, exportsValue) {
 // ── Fake Prisma client ──
 function buildFakePrisma() {
   let fileSeq = 0;
+  let gptSeq = 0;
+  const withCreator = (gpt) => ({ ...gpt, creator: { id: gpt.creatorId, name: 'Owner', avatar: null } });
   return {
     customGpt: {
       async findFirst({ where, include }) {
@@ -60,6 +62,23 @@ function buildFakePrisma() {
           return result;
         }
         return null;
+      },
+      async create({ data }) {
+        const id = `gpt_new_${++gptSeq}`;
+        const row = { id, ...data };
+        store.gpts.set(id, row);
+        return withCreator(row);
+      },
+      async findUnique({ where }) {
+        const g = store.gpts.get(where.id);
+        return g ? { ...g } : null;
+      },
+      async update({ where, data }) {
+        const existing = store.gpts.get(where.id);
+        if (!existing) throw new Error('not found');
+        const updated = { ...existing, ...data };
+        store.gpts.set(where.id, updated);
+        return withCreator(updated);
       },
     },
     file: {
@@ -341,4 +360,53 @@ test('DELETE /:id/knowledge/:fileId 404s for a file belonging to a different GPT
   const res = await request(app).delete('/api/gpts/gpt-a/knowledge/f1').send();
   assert.equal(res.status, 404);
   assert.equal(store.files.has('f1'), true);
+});
+
+test('POST / rejects out-of-range temperature / invalid maxTokens (400 before create)', async () => {
+  resetState();
+  const app = buildApp();
+  const bad = [
+    [JSON.stringify({ name: 'A', instructions: 'do', temperature: 5 }), /temperature/],
+    [JSON.stringify({ name: 'A', instructions: 'do', temperature: -0.5 }), /temperature/],
+    [JSON.stringify({ name: 'A', instructions: 'do', temperature: 'hot' }), /temperature/],
+    [JSON.stringify({ name: 'A', instructions: 'do', maxTokens: 0 }), /maxTokens/],
+    [JSON.stringify({ name: 'A', instructions: 'do', maxTokens: -3 }), /maxTokens/],
+    [JSON.stringify({ name: 'A', instructions: 'do', maxTokens: 1.5 }), /maxTokens/],
+  ];
+  for (const [gpts, m] of bad) {
+    const res = await request(app).post('/api/gpts').send({ gpts });
+    assert.equal(res.status, 400, `expected 400 for ${gpts}`);
+    assert.match(res.body.error, m);
+  }
+  assert.equal(store.gpts.size, 0, 'no GPT row created for any rejected request');
+});
+
+test('POST / accepts boundary-valid temperature/maxTokens and creates the GPT', async () => {
+  resetState();
+  const app = buildApp();
+  const res = await request(app).post('/api/gpts').send({
+    gpts: JSON.stringify({ name: 'Good', instructions: 'be helpful', temperature: 2, maxTokens: 100 }),
+  });
+  assert.equal(res.status, 201);
+  assert.equal(res.body.gpt.name, 'Good');
+  assert.equal(store.gpts.size, 1);
+});
+
+test('PUT /:id rejects out-of-range temperature (400 before the ownership lookup)', async () => {
+  resetState();
+  seedGpt('gpt-a', 'owner-1');
+  const app = buildApp();
+  const res = await request(app).put('/api/gpts/gpt-a').send({ gpts: JSON.stringify({ temperature: 9 }) });
+  assert.equal(res.status, 400);
+  assert.match(res.body.error, /temperature/);
+});
+
+test('PUT /:id accepts a valid temperature/maxTokens update for an owned GPT', async () => {
+  resetState();
+  seedGpt('gpt-a', 'owner-1');
+  const app = buildApp();
+  const res = await request(app).put('/api/gpts/gpt-a').send({ gpts: JSON.stringify({ temperature: 1.2, maxTokens: 50 }) });
+  assert.equal(res.status, 200);
+  assert.equal(store.gpts.get('gpt-a').temperature, 1.2);
+  assert.equal(store.gpts.get('gpt-a').maxTokens, 50);
 });
