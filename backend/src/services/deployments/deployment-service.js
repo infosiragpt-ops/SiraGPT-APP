@@ -12,6 +12,7 @@ const pipeline = require('./pipeline');
 const providers = require('./provider-connectors');
 const crypto = require('node:crypto');
 const { redactPayloadDeep } = require('../../utils/log-redaction');
+const { logger } = require('../../utils/logger');
 
 const defaultPrisma = (() => {
   try { return require('../../config/database'); } catch { return null; }
@@ -395,7 +396,14 @@ async function updateDeployment({ userId, id, patch = {}, db = defaultPrisma }) 
     if (patch[key] === undefined) continue;
     if (key === 'visibility' && !pipeline.VISIBILITIES.includes(patch[key])) throw new DeploymentError(400, 'invalid_visibility', 'invalid visibility');
     if (key === 'deploymentType' && !pipeline.DEPLOYMENT_TYPES.includes(patch[key])) throw new DeploymentError(400, 'invalid_type', 'invalid deployment type');
-    if (key === 'externalPort') { data.externalPort = Number(patch[key]) || 80; continue; }
+    if (key === 'externalPort') {
+      const port = Number(patch[key]);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        throw new DeploymentError(400, 'invalid_port', 'externalPort must be an integer in 1-65535');
+      }
+      data.externalPort = port;
+      continue;
+    }
     data[key] = typeof patch[key] === 'string' ? clampStr(patch[key], 400) : patch[key];
   }
   // Geography is immutable after creation (Replit parity) — silently ignored.
@@ -429,7 +437,15 @@ async function runSecurityScan({ userId, id, db = defaultPrisma }) {
   const seq = await prisma.deploymentVersion.count({ where: { deploymentId: id } });
   const scan = { ...pipeline.securityScanReport(`${id}:scan:${seq}`), scannedAt: new Date().toISOString() };
   if (row.currentVersionId) {
-    await prisma.deploymentVersion.update({ where: { id: row.currentVersionId }, data: { securityScan: scan } }).catch(() => {});
+    // Persist best-effort, but surface a failure: silently dropping it loses
+    // the (expensive) scan result with zero signal on a DB/permission/conflict
+    // error. The scan is still returned to the caller either way.
+    await prisma.deploymentVersion
+      .update({ where: { id: row.currentVersionId }, data: { securityScan: scan } })
+      .catch((err) => logger.warn(
+        { deploymentId: id, versionId: row.currentVersionId, err: err && err.message },
+        'security-scan-persist-failed',
+      ));
   }
   return scan;
 }

@@ -283,3 +283,47 @@ test('recordRuntimeLogByToken accepts only the deployment ingest token', async (
   assert.equal(entry.level, 'error');
   assert.equal(entry.source, 'Runtime');
 });
+
+test('updateDeployment rejects out-of-range / non-integer externalPort', async () => {
+  const db = makeFakeDb();
+  const d = await service.createDeployment({ userId: USER, name: 'App', db });
+  for (const bad of [-1, 0, 99999, 1.5, 'abc', NaN]) {
+    await assert.rejects(
+      () => service.updateDeployment({ userId: USER, id: d.id, patch: { externalPort: bad }, db }),
+      (e) => e.code === 'invalid_port',
+      `externalPort=${String(bad)} must be rejected`,
+    );
+  }
+  const up = await service.updateDeployment({ userId: USER, id: d.id, patch: { externalPort: 8080 }, db });
+  assert.equal(up.externalPort, 8080);
+});
+
+test('runSecurityScan persists the scan on the live version (happy path)', async () => {
+  const db = makeFakeDb();
+  const d = await service.createDeployment({ userId: USER, name: 'App', db });
+  const { version } = await service.publishDeployment({ userId: USER, id: d.id, db });
+  const scan = await service.runSecurityScan({ userId: USER, id: d.id, db });
+  assert.ok(scan.scannedAt);
+  const row = db._stores.versions.find((v) => v.id === version.id);
+  assert.deepEqual(row.securityScan, scan, 'scan persisted to the live version');
+});
+
+test('runSecurityScan logs (does not swallow) a failed scan persist', async () => {
+  const db = makeFakeDb();
+  const d = await service.createDeployment({ userId: USER, name: 'App', db });
+  await service.publishDeployment({ userId: USER, id: d.id, db });
+  // Point currentVersionId at a now-missing version so the persist update throws.
+  db._stores.deployments[0].currentVersionId = 'ver_missing';
+  const loggerMod = require('../src/utils/logger');
+  const origWarn = loggerMod.logger.warn;
+  const warned = [];
+  loggerMod.logger.warn = (...a) => { warned.push(a); };
+  try {
+    const scan = await service.runSecurityScan({ userId: USER, id: d.id, db });
+    assert.ok(scan && scan.scannedAt, 'the scan is still returned to the caller');
+    assert.equal(warned.length, 1, 'the persist failure is logged, not swallowed');
+    assert.match(String(warned[0][1] || ''), /security-scan-persist-failed/);
+  } finally {
+    loggerMod.logger.warn = origWarn;
+  }
+});
