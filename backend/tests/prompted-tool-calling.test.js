@@ -163,3 +163,22 @@ test('capToolsForPrompted is a no-op for already-small toolsets', () => {
   const tools = [{ name: 'a' }, { name: 'b' }];
   assert.deepEqual(capToolsForPrompted(tools), tools);
 });
+
+test('parsePromptedToolCalls strips an unknown-tool fenced block instead of leaking its markup', () => {
+  const known = new Set(['web_search']);
+  const text = 'Here is the answer.\n```tool_call\n{"tool":"made_up_tool","arguments":{}}\n```\nDone.';
+  const { toolCalls, cleanedContent } = parsePromptedToolCalls(text, known);
+  // Unknown tool is NOT executed…
+  assert.equal(toolCalls.length, 0);
+  // …but its protocol markup must not survive into the user-visible answer.
+  assert.doesNotMatch(cleanedContent, /tool_call|made_up_tool/);
+  assert.match(cleanedContent, /Here is the answer/);
+  assert.match(cleanedContent, /Done/);
+});
+
+test('parsePromptedToolCalls leaves a bare prose object with a "tool" key alone when unknown', () => {
+  const known = new Set(['web_search']);
+  const { toolCalls, cleanedContent } = parsePromptedToolCalls('Config {"tool":"hammer","size":5} here.', known);
+  assert.equal(toolCalls.length, 0);
+  assert.match(cleanedContent, /hammer/, 'bare prose JSON is conservative — not stripped');
+});
