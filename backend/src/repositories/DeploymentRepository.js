@@ -7,19 +7,19 @@
 const prisma = require('../config/database');
 
 function create(data) {
-  return prisma.deployment.create({ data });
+  return prisma.hostingDeployment.create({ data });
 }
 
 function update(id, patch) {
-  return prisma.deployment.update({ where: { id }, data: patch });
+  return prisma.hostingDeployment.update({ where: { id }, data: patch });
 }
 
 function findByIdForUser(id, userId) {
-  return prisma.deployment.findFirst({ where: { id, userId } });
+  return prisma.hostingDeployment.findFirst({ where: { id, userId } });
 }
 
 function listForConnection(connectedRepositoryId, userId, limit = 20) {
-  return prisma.deployment.findMany({
+  return prisma.hostingDeployment.findMany({
     where: { connectedRepositoryId, userId },
     orderBy: { createdAt: 'desc' },
     take: Math.min(100, Math.max(1, limit)),

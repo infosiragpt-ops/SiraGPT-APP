@@ -1,0 +1,24 @@
+{
+  "exportedAt": "2026-06-24T22:00:01.278Z",
+  "deployments": [
+    {
+      "id": "cmqqyn8hz0013uid4jnur88z8",
+      "userId": "cmgjl1cur000cui3kc2phxs4m",
+      "connectedRepositoryId": "cmqqyl5qe000vuid4o9d8jymx",
+      "hostingTargetId": "cmqqxsq600001uid4olxb2lq4",
+      "branch": null,
+      "buildCommand": "npm run build",
+      "outputDir": "dist",
+      "remotePath": "/public_html",
+      "status": "success",
+      "url": "https://chatgpt66.com",
+      "error": null,
+      "logTail": "[deploy] modo: static\n[build] npm install && npm run build\nnpm warn config production Use `--omit=dev` instead.\nnpm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.\nnpm warn deprecated @humanwhocodes/config-array@0.11.14: Use @eslint/config-array instead\nnpm warn deprecated rimraf@3.0.2: Rimraf versions prior to v4 are no longer supported\nnpm warn deprecated glob@7.2.3: Glob versions prior to v9 are no longer supported\nnpm warn deprecated @humanwhocodes/object-schema@2.0.3: Use @eslint/object-schema instead\nadded 546 packages in 35s\nnpm warn config production Use `--omit=dev` instead.\n> threejscc-portfolio@0.0.0 build\n> vite build\n\u001b[36mvite v5.4.2 \u001b[32mbuilding for production...\u001b[36m\u001b[39m\ntransforming...\nBrowserslist: caniuse-lite is outdated. Please run:\n  npx update-browserslist-db@latest\n  Why you should do it regularly: https://github.com/browserslist/update-db#readme\nnode_modules/three-stdlib/libs/lottie.js (13062:32): Use of eval in \"node_modules/three-stdlib/libs/lottie.js\" is strongly discouraged as it poses security risks and may cause issues with minification.\n\u001b[32m✓\u001b[39m 1114 modules transformed.\nrendering chunks...\ncomputing gzip size...\n\u001b[2mdist/\u001b[22m\u001b[32mindex.html                 \u001b[39m\u001b[1m\u001b[2m    0.48 kB\u001b[22m\u001b[1m\u001b[22m\u001b[2m │ gzip:   0.31 kB\u001b[22m\n\u001b[2mdist/\u001b[22m\u001b[35massets/index-BCyK9OB2.css  \u001b[39m\u001b[1m\u001b[2m   25.16 kB\u001b[22m\u001b[1m\u001b[22m\u001b[2m │ gzip:   4.87 kB\u001b[22m\n\u001b[2mdist/\u001b[22m\u001b[36massets/hls-7gLXPgjZ.js     \u001b[39m\u001b[1m\u001b[2m  401.27 kB\u001b[22m\u001b[1m\u001b[22m\u001b[2m │ gzip: 121.29 kB\u001b[22m\n\u001b[2mdist/\u001b[22m\u001b[36massets/index-1y4wxgQA.js   \u001b[39m\u001b[1m\u001b[33m2,401.18 kB\u001b[39m\u001b[22m\u001b[2m │ gzip: 695.69 kB\u001b[22m\n\u001b[33m\n(!) Some chunks are larger than 500 kB after minification. Consider:\n- Using dynamic import() to code-split the application\n- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks\n- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.\u001b[39m\n\u001b[32m✓ built in 22.85s\u001b[39m\n[deploy] añadido .htaccess (SPA routing)\n[deploy] output dir: dist\n[sftp] connecting to 62.72.11.231:22…\n[sftp] ensuring /public_html\n[sftp] uploading C:\\Users\\ZBOOK 15 G7\\Desktop\\sira-projects\\cmgjl1cur000cui3kc2phxs4m\\hamzabhiinder-portfolio\\dist → /public_html\n[sftp] upload complete\n[verify] comprobando https://chatgpt66.com …\n[verify] ✓ en vivo (HTTP 200, 900ms)",
+      "startedAt": "2026-06-23T18:11:02.469Z",
+      "finishedAt": "2026-06-23T18:14:40.810Z",
+      "createdAt": "2026-06-23T18:11:02.471Z"
+    }
+  ],
+  "deployment_versions": [],
+  "deployment_domains": []
+}

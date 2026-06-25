@@ -17,8 +17,10 @@ CREATE TABLE "hosting_targets" (
     CONSTRAINT "hosting_targets_pkey" PRIMARY KEY ("id")
 );
 
--- CreateTable: deployments (build + upload history per connected repo)
-CREATE TABLE "deployments" (
+-- CreateTable: hosting_deployments (build + upload history per connected repo).
+-- Named hosting_deployments (NOT deployments) to avoid colliding with the
+-- Deployments-module "deployments" table (migration 20260618200000).
+CREATE TABLE "hosting_deployments" (
     "id" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
     "connectedRepositoryId" TEXT NOT NULL,
@@ -35,16 +37,16 @@ CREATE TABLE "deployments" (
     "finishedAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT "deployments_pkey" PRIMARY KEY ("id")
+    CONSTRAINT "hosting_deployments_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateIndex
 CREATE INDEX "hosting_targets_userId_idx" ON "hosting_targets"("userId");
-CREATE INDEX "deployments_userId_idx" ON "deployments"("userId");
-CREATE INDEX "deployments_connectedRepositoryId_idx" ON "deployments"("connectedRepositoryId");
+CREATE INDEX "hosting_deployments_userId_idx" ON "hosting_deployments"("userId");
+CREATE INDEX "hosting_deployments_connectedRepositoryId_idx" ON "hosting_deployments"("connectedRepositoryId");
 
 -- AddForeignKey
 ALTER TABLE "hosting_targets" ADD CONSTRAINT "hosting_targets_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-ALTER TABLE "deployments" ADD CONSTRAINT "deployments_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-ALTER TABLE "deployments" ADD CONSTRAINT "deployments_connectedRepositoryId_fkey" FOREIGN KEY ("connectedRepositoryId") REFERENCES "connected_repositories"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-ALTER TABLE "deployments" ADD CONSTRAINT "deployments_hostingTargetId_fkey" FOREIGN KEY ("hostingTargetId") REFERENCES "hosting_targets"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "hosting_deployments" ADD CONSTRAINT "hosting_deployments_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "hosting_deployments" ADD CONSTRAINT "hosting_deployments_connectedRepositoryId_fkey" FOREIGN KEY ("connectedRepositoryId") REFERENCES "connected_repositories"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "hosting_deployments" ADD CONSTRAINT "hosting_deployments_hostingTargetId_fkey" FOREIGN KEY ("hostingTargetId") REFERENCES "hosting_targets"("id") ON DELETE CASCADE ON UPDATE CASCADE;

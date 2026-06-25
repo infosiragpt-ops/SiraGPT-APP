@@ -184,7 +184,7 @@ model User {
   connectedRepositories ConnectedRepository[]
   workspaces            Workspace[]
   hostingTargets        HostingTarget[]
-  deployments           Deployment[]
+  hostingDeployments    HostingDeployment[]
   deployEnvs            DeployEnv[]
 
   @@index([deletedAt])
@@ -255,9 +255,9 @@ model ConnectedRepository {
   connectedAt DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  workspace   Workspace?
-  deployments Deployment[]
-  deployEnv   DeployEnv?
+  workspace          Workspace?
+  hostingDeployments HostingDeployment[]
+  deployEnv          DeployEnv?
 
   @@unique([userId, repoId])
   @@index([userId])
@@ -306,15 +306,15 @@ model HostingTarget {
   remoteBaseDir  String  @default("/public_html") // remote target directory
   siteUrl        String? // https://your-domain — shown as the live URL
 
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-  deployments Deployment[]
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  hostingDeployments HostingDeployment[]
 
   @@index([userId])
   @@map("hosting_targets")
 }
 
-model Deployment {
+model HostingDeployment {
   id     String @id @default(cuid())
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -339,7 +339,7 @@ model Deployment {
 
   @@index([userId])
   @@index([connectedRepositoryId])
-  @@map("deployments")
+  @@map("hosting_deployments")
 }
 
 // Build-time env vars / secrets for a project's deploys (Replit "deployment
@@ -2206,6 +2206,10 @@ model Deployment {
   id        String  @id @default(cuid())
   userId    String
   projectId String? // optional link to a Project (webapp)
+  // Model A (git-backed real deploy): connected GitHub repo whose cloned
+  // workspace is the build/source dir for hostinger_vps deploys. Plain scalar
+  // (resolved + ownership-checked by the executor) to avoid a back-relation.
+  connectedRepositoryId String?
   name      String
 
   // autoscale | reserved_vm | static | scheduled

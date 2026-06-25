@@ -10,6 +10,7 @@
 
 const pipeline = require('./pipeline');
 const providers = require('./provider-connectors');
+const { deployHostingerVps } = require('./connectors/hostinger-vps-executor');
 const crypto = require('node:crypto');
 const { redactPayloadDeep } = require('../../utils/log-redaction');
 
@@ -226,7 +227,7 @@ function normalizedTierFor(deploymentType, machineTier) {
   return deploymentType;
 }
 
-async function createDeployment({ userId, name, projectId = null, deploymentType = 'autoscale', visibility = 'public', geography = 'na', machineTier, db = defaultPrisma }) {
+async function createDeployment({ userId, name, projectId = null, connectedRepositoryId = null, deploymentType = 'autoscale', visibility = 'public', geography = 'na', machineTier, db = defaultPrisma }) {
   const prisma = requireDb(db);
   if (!pipeline.DEPLOYMENT_TYPES.includes(deploymentType)) throw new DeploymentError(400, 'invalid_type', 'invalid deployment type');
   if (!pipeline.VISIBILITIES.includes(visibility)) throw new DeploymentError(400, 'invalid_visibility', 'invalid visibility');
@@ -238,6 +239,7 @@ async function createDeployment({ userId, name, projectId = null, deploymentType
     data: {
       userId,
       projectId,
+      connectedRepositoryId: connectedRepositoryId || null,
       name: clampStr(String(name).trim(), 80),
       deploymentType,
       visibility,
@@ -283,11 +285,96 @@ async function getDeployment({ userId, id, db = defaultPrisma }) {
   };
 }
 
+/** Map a real-executor result onto the UI's 5-phase shape (done | failed). */
+function realDeployPhases(result) {
+  const order = pipeline.PUBLISH_PHASES;
+  if (result.promoted) return order.map((name) => ({ name, status: 'done', logs: [] }));
+  const failIdx = order.indexOf(result.failedPhase);
+  return order.map((name, i) => ({
+    name,
+    status: failIdx === -1 ? (i === 0 ? 'failed' : 'done') : i < failIdx ? 'done' : 'failed',
+    logs: [],
+  }));
+}
+
+/**
+ * Publish via the REAL Hostinger VPS executor (build + SFTP/ssh2 + nginx) and
+ * persist the resulting version + logs + status, mirroring the synthetic path's
+ * transactional version flip so the live version is never ambiguous.
+ */
+async function publishViaExecutor({ prisma, row, userId, env, executor }) {
+  const id = row.id;
+  let hostname = null;
+  try {
+    const domains = await prisma.deploymentDomain.findMany({ where: { deploymentId: id }, orderBy: { createdAt: 'asc' } });
+    const primary = domains.find((dm) => dm.isPrimary) || domains[0];
+    hostname = primary ? primary.hostname : null;
+  } catch { /* domains optional */ }
+
+  const result = await executor({ deployment: row, userId, env, hostname });
+  const buildLog = (result.logs || []).join('\n');
+  const seq = await prisma.deploymentVersion.count({ where: { deploymentId: id } });
+  const shortHash = pipeline.generateShortHash(id, seq);
+  const scan = { ...pipeline.securityScanReport(`${id}:scan:${seq}`), scannedAt: new Date().toISOString() };
+
+  const version = await runInTransaction(prisma, async (tx) => {
+    const created = await tx.deploymentVersion.create({
+      data: {
+        deploymentId: id,
+        shortHash,
+        status: result.promoted ? 'promoted' : 'failed',
+        isLive: result.promoted,
+        publishedById: userId,
+        buildLog,
+        securityScan: scan,
+      },
+    });
+    if (result.promoted) {
+      await tx.deploymentVersion.updateMany({
+        where: { deploymentId: id, isLive: true, id: { not: created.id } },
+        data: { isLive: false },
+      });
+    }
+    await seedVersionLogs(tx, created, buildLog);
+    return created;
+  });
+
+  const spec = pipeline.machineSpec(row.deploymentType, row.machineTier);
+  const updated = await prisma.deployment.update({
+    where: { id },
+    data: {
+      status: result.promoted ? 'running' : 'failed',
+      suspendedReason: null,
+      currentVersionId: result.promoted ? version.id : row.currentVersionId,
+      subdomain: row.subdomain || pipeline.slugifySubdomain(row.name, id),
+      cpu: spec.cpu,
+      memoryMb: spec.memoryMb,
+    },
+  });
+
+  return {
+    deployment: publicDeployment(updated),
+    version: publicVersion(version),
+    phases: realDeployPhases(result),
+    failedPhase: result.failedPhase || null,
+    failureMessage: result.failureMessage || null,
+    url: result.url || null,
+  };
+}
+
 /** Publish a new immutable version, running the 5-phase pipeline. */
-async function publishDeployment({ userId, id, hasFiles = true, db = defaultPrisma, env = process.env }) {
+async function publishDeployment({ userId, id, hasFiles = true, db = defaultPrisma, env = process.env, executor = deployHostingerVps }) {
   const prisma = requireDb(db);
   const row = await loadOwned(prisma, userId, id);
   if (row.status === 'shut_down') throw new DeploymentError(409, 'deployment_shut_down', 'deployment was shut down');
+
+  // Real path: a Hostinger VPS deployment with the provider configured runs the
+  // actual build + upload + nginx via the hosting engine. Otherwise (managed
+  // types, or VPS not configured) fall back to the deterministic synthetic
+  // pipeline so the UX stays consistent and offline tests stay green.
+  if (row.deploymentType === 'hostinger_vps' && providers.providerReadiness('hostinger_vps', env).configured) {
+    return publishViaExecutor({ prisma, row, userId, env, executor });
+  }
 
   const seq = await prisma.deploymentVersion.count({ where: { deploymentId: id } });
   const result = pipeline.runPublishPipeline({
@@ -438,7 +525,7 @@ function listProviders({ env = process.env } = {}) {
   return providers.listProviders(env);
 }
 
-async function connectProvider({ userId, id, providerId, db = defaultPrisma, env = process.env }) {
+async function connectProvider({ userId, id, providerId, connectedRepositoryId = null, db = defaultPrisma, env = process.env }) {
   const prisma = requireDb(db);
   const row = await loadOwned(prisma, userId, id);
   if (!['hostinger_vps', 'aws'].includes(providerId)) {
@@ -460,6 +547,8 @@ async function connectProvider({ userId, id, providerId, db = defaultPrisma, env
       buildCommand: row.buildCommand || 'npm run build',
       runCommand: row.runCommand || 'npm run start',
       externalPort: row.externalPort || 3000,
+      // Model A: bind the git repo whose workspace the executor will deploy.
+      ...(connectedRepositoryId ? { connectedRepositoryId } : {}),
     },
   });
   return {

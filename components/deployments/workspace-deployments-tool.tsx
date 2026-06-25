@@ -17,6 +17,7 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { useCodeWorkspace } from "@/lib/code-workspace-context"
+import { getGitBinding } from "@/lib/code-git-mirror"
 import {
   deploymentsApi,
   type Deployment,
@@ -110,12 +111,16 @@ export function WorkspaceDeploymentsTool({ fallback }: { fallback?: React.ReactN
 
     setQuickPublishing(true)
     try {
+      // Model A: bind the project's connected GitHub repo (if any) so a later
+      // Hostinger VPS deploy can build + upload its cloned workspace.
+      const connectedRepositoryId = projectId ? getGitBinding(projectId) : null
       const deployment = await deploymentsApi.create({
         name: projectName || "siraGPT",
         deploymentType: "autoscale",
         visibility: "public",
         geography: "sa",
         ...(projectId ? { projectId } : {}),
+        ...(connectedRepositoryId ? { connectedRepositoryId } : {}),
       })
       setPendingAutoPublishId(deployment.id)
       await loadList(deployment.id)
