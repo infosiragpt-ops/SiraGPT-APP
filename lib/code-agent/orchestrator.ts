@@ -21,12 +21,11 @@ import type {
   BuildErrorVerdict,
 } from "./types"
 
-// ---- intake ----------------------------------------------------------------
+// ---- autonomous brief -------------------------------------------------------
 
-// The intake is a short product-planning interview. The first three questions
-// are shared; the last two adapt to the goal (a landing asks about sections +
-// colour refs, an app asks about features + data). Kept tiny + goal-driven so
-// it stays a fast "seguimiento" without turning into a form.
+// Kept for legacy sessions that may already be mid-intake in local storage.
+// New build requests do not ask these questions; they generate immediately and
+// the agent proposes missing brief details internally.
 type IntakeQuestion = { slot: keyof AgentBuildContext; q: string }
 
 const COMMON_QUESTIONS: readonly IntakeQuestion[] = [
@@ -69,12 +68,28 @@ export function isBuildRequest(text: string): boolean {
 
 /**
  * Looser build-intent check: a build VERB alone ("créame…", "quiero…",
- * "hazme…"). In App mode the user is always trying to build, so a typo'd or
- * noun-less phrase ("crea un alding panaderia") should still open the intake
- * rather than fall through to a bare chat turn that produces nothing.
+ * "hazme…"). In App mode this should generate directly, even with typos or a
+ * missing noun ("crea un alding panaderia").
  */
 export function hasBuildVerb(text: string): boolean {
   return BUILD_VERB.test(text.toLowerCase())
+}
+
+/** Short social greeting: should stay instant and never open the app intake. */
+export function isQuickGreeting(text: string): boolean {
+  const raw = clean(text)
+  if (!raw || raw.length > 72) return false
+  if (isBuildRequest(raw) || hasBuildVerb(raw) || BUILD_NOUN.test(raw.toLowerCase())) return false
+  const t = raw
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[¡!¿?.,;:]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+  return /^(hola|holi|buenas|buenos dias|buenas tardes|buenas noches|saludos|hey|hi|hello)( (que tal|como estas|como va|todo bien))?$/.test(
+    t,
+  )
 }
 
 /** Heuristic: the text looks like a build/install/deploy error log. */
@@ -84,14 +99,16 @@ export function isBuildLog(text: string): boolean {
   )
 }
 
-/** Asks for the user's intent to generate now without further questions. */
-function wantsImmediate(text: string): boolean {
-  return /\b(genera ya|h[aá]zlo ya|sin preguntas|hazlo ya|ya tengo todo|usa defaults|adelante)\b/i.test(text)
-}
-
 function seedGoal(ctx: AgentBuildContext, text: string): AgentBuildContext {
   const goal = /\b(app|aplicaci[oó]n|dashboard|sistema|crud)\b/i.test(text) ? "app" : "landing"
   return { ...ctx, goal }
+}
+
+function seedAutonomousBrief(ctx: AgentBuildContext, text: string): AgentBuildContext {
+  const seeded = seedGoal(ctx, text)
+  const value = clean(text)
+  if (!value || seeded.productType) return seeded
+  return { ...seeded, productType: value }
 }
 
 /** Fill the slot the agent just asked about. "propón uno"/"sorpréndeme"/"-" → leave empty. */
@@ -116,7 +133,7 @@ export function nextAgentAction(state: AgentState, input: string, signal: AgentS
   if (signal.fixErrorText) return { type: "debug", log: signal.fixErrorText }
   if (signal.mode === "debug" || isBuildLog(text)) return { type: "debug", log: text }
 
-  // 2) ⚡ Construir or "genera ya" → generate immediately (skip intake).
+  // 2) ⚡ Construir → generate immediately.
   if (signal.forceDeterministic) {
     return { type: "generate", context: seedGoal(state.context, text), tier: "deterministic" }
   }
@@ -132,36 +149,22 @@ export function nextAgentAction(state: AgentState, input: string, signal: AgentS
   }
 
   const inIntake = state.phase === "intake"
-  // In App/Build mode the user is always trying to build something, so a build
-  // VERB alone is enough to open the intake — typos or a missing noun
-  // ("crea un alding panaderia") must NOT fall through to a bare chat turn.
-  const isStart = (signal.mode === "app" || signal.mode === "build") && (isBuildRequest(text) || hasBuildVerb(text))
+  const isBuildSeed =
+    isBuildRequest(text) ||
+    hasBuildVerb(text) ||
+    BUILD_NOUN.test(text.toLowerCase()) ||
+    (signal.mode === "app" && text.length > 80)
+  const isStart = (signal.mode === "app" || signal.mode === "build") && isBuildSeed
 
   // 5) Intake gate (app/build).
   if (isStart || inIntake) {
     if (inIntake) {
-      const list = questionsFor(state.context.goal)
       const idx = Math.max(0, state.intakeStep - 1) // the slot we just asked about
       const ctx = fillSlot(state.context, idx, text)
-      if (state.intakeStep >= list.length || wantsImmediate(text)) {
-        return { type: "generate", context: ctx, tier }
-      }
-      return {
-        type: "ask",
-        question: list[state.intakeStep].q,
-        slot: list[state.intakeStep].slot,
-        nextStep: state.intakeStep + 1,
-        context: ctx,
-      }
+      return { type: "generate", context: seedAutonomousBrief(ctx, text), tier }
     }
 
-    // First contact. A rich prompt (>160 chars) or "genera ya" skips the intake.
-    if (wantsImmediate(text) || text.length > 160) {
-      return { type: "generate", context: seedGoal(state.context, text), tier }
-    }
-    const seeded = seedGoal(state.context, text)
-    const first = questionsFor(seeded.goal)[0]
-    return { type: "ask", question: first.q, slot: first.slot, nextStep: 1, context: seeded }
+    return { type: "generate", context: seedAutonomousBrief(state.context, text), tier }
   }
 
   // 6) Default (e.g. app-mode follow-up that is not a build request).

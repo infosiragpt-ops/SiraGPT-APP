@@ -43,6 +43,11 @@ export function landingSystemPrompt(ctx: AgentBuildContext): string {
       : "Genera el código COMPLETO de una LANDING PAGE profesional como un PROYECTO Vite 7 + React 18 + TypeScript REAL, ejecutable con ▶ Ejecutar (dev server). NO un único index.html autocontenido.",
     "Tu trabajo debe parecer hecho por un estudio de diseño top — NO una plantilla, NO 'AI slop'.",
     "",
+    "AUTONOMÍA:",
+    "• NO hagas preguntas ni esperes confirmación. Si falta contexto, inventa un brief plausible y coherente con el prompt.",
+    "• Diseña internamente un plan extendido (producto, UX, arquitectura, componentes, datos demo, responsive, accesibilidad) y ejecútalo en archivos.",
+    "• El resultado final debe funcionar en preview; prioriza entregar una versión completa antes que pedir más datos.",
+    "",
     "CONTEXTO CONSOLIDADO (no vuelvas a preguntar):",
     `- Producto/servicio: ${product}`,
     `- Marca: ${brand}`,
@@ -130,7 +135,7 @@ export function streamOutputFormat(opts?: { strictStart?: boolean }): string {
       ? "• El PRIMER carácter de tu respuesta DEBE ser un backtick: empieza EXACTAMENTE con ```json package.json\n" +
         "  PROHIBIDO escribir cualquier cosa antes (ni saludos, ni «Aquí tienes…», ni explicaciones)."
       : "• En la respuesta de GENERACIÓN el PRIMER carácter DEBE ser un backtick (```json package.json) — sin saludos\n" +
-        "  ni explicaciones antes. (Las preguntas del intake previas a generar van en texto normal.)",
+        "  ni explicaciones antes. Planifica internamente y ejecuta; NO hagas preguntas previas.",
     "• La ruta va SOLO en el encabezado del fence. PROHIBIDO añadir líneas `// path:` dentro del contenido",
     "  (package.json es JSON puro: un comentario lo rompe).",
     "• Cada bloque contiene el archivo COMPLETO (nunca fragmentos ni «…»).",

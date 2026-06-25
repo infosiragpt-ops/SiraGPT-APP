@@ -73,9 +73,10 @@ import {
   type CodeChatAction,
   type CodeChatMetrics,
 } from "@/lib/code-chat-metrics"
-import { defaultAgentState, type AgentBuildContext } from "@/lib/code-agent/types"
+import { defaultAgentState, type AgentBuildContext, type AgentPhase } from "@/lib/code-agent/types"
 import {
   classifyBuildError,
+  isQuickGreeting,
   mergeOverridesIntoPackageJson,
   nextAgentAction,
   promptFromContext,
@@ -110,7 +111,7 @@ const COMPOSER_MODE_LABEL: Record<ComposerMode, string> = {
 }
 
 const COMPOSER_PLACEHOLDER: Record<ComposerMode, string> = {
-  app: "Describe tu idea — te haré unas preguntas y la construyo…",
+  app: "Describe tu idea — propongo el plan, diseño y construyo…",
   build: "Pide un cambio, pega código o / para comandos",
   plan: "Objetivo o plan antes de editar archivos…",
   debug: "Error, stack trace o comportamiento esperado…",
@@ -118,12 +119,33 @@ const COMPOSER_PLACEHOLDER: Record<ComposerMode, string> = {
   image: "Describe UI, asset o captura…",
 }
 
+type AgentRuntimeStep = {
+  phase: AgentPhase
+  label: string
+  icon: React.ComponentType<{ className?: string }>
+}
+
+const AGENT_RUNTIME_STEPS: AgentRuntimeStep[] = [
+  { phase: "intake", label: "Plan", icon: CircleHelp },
+  { phase: "generating", label: "Diseñar", icon: Rocket },
+  { phase: "preview", label: "Resultado", icon: Check },
+  { phase: "debugging", label: "Reparar", icon: Bug },
+]
+
+const AGENT_RUNTIME_STATUS: Record<AgentPhase, string> = {
+  idle: "Listo",
+  intake: "Planificando",
+  generating: "Diseñando",
+  preview: "Resultado listo",
+  debugging: "Diagnosticando",
+}
+
 const COMPOSER_MODE_INSTRUCTION: Record<ComposerMode, string> = {
   app:
     "Modo App (construir desde cero, estilo Replit/Lovable): tu meta es entregar una landing/app COMPLETA y VISTOSA como un proyecto Vite + React + TypeScript real que el usuario ejecuta con ▶ Ejecutar (dev server).\n" +
-    "1) INTAKE OBLIGATORIO (como un product manager) — Si el usuario pide construir algo desde cero (p.ej. 'créame un landing', 'hazme una app', 'crea una web') y NO incluyó ya todos los detalles, tu PRIMERA respuesta DEBE ser ÚNICAMENTE preguntas para entender el contexto. NUNCA generes código en esa primera respuesta. Haz una tanda breve (3-5 preguntas, con opciones cuando ayude), por ejemplo: '¿Qué tipo de producto o servicio vas a ofrecer?', '¿Tienes nombre de marca/negocio o quieres que proponga uno?', '¿Qué estilo visual prefieres (minimalista, oscuro, streetwear, corporativo, colorido…)?', '¿Qué secciones quieres (hero, colecciones/productos, sobre nosotros, testimonios, contacto…)?', '¿Algún color o referencia que te guste?'. Termina pidiendo las respuestas y espera.\n" +
-    "   REGLA DE GENERACIÓN: SOLO cuando el usuario ya respondió ese contexto (su segunda respuesta en adelante) o dice explícitamente 'genera'/'hazlo'/'dale', construye el proyecto COMPLETO, asumiendo defaults sensatos para lo que falte. A partir de ahí NUNCA vuelvas a quedarte solo en preguntas: tu salida pasa a ser CÓDIGO.\n" +
-    "2) GENERAR — entrega un PROYECTO Vite 7 + React 18 + TypeScript COMPLETO (package.json, vite.config.ts, tsconfig.json, index.html, src/main.tsx, src/index.css, src/App.tsx) con Tailwind v4 vía @tailwindcss/vite (SIN tailwind.config.js ni postcss.config.js — `@import \"tailwindcss\"` en src/index.css y la paleta como CSS custom properties en :root), animaciones de entrada por scroll con Framer Motion (`useInView`/`whileInView` + `viewport={{ once: true }}`), iconos lucide-react y fuentes Syne + Space Grotesk (Google Fonts → --font-display/--font-body). Exigencias (PROHIBIDO entregar algo básico o tipo plantilla):\n" +
+    "1) AUTONOMÍA TOTAL — NO hagas preguntas de intake. Si falta contexto, PROPÓN internamente un brief completo con defaults razonables (producto, marca, público, estética, secciones/funciones, datos demo) y ejecuta. El usuario pidió que la IA proponga y que los agentes trabajen: diseña el plan extendido tú mismo y entrega resultado.\n" +
+    "2) PLAN + EJECUCIÓN — antes de escribir código, planifica internamente arquitectura, layout, componentes, datos, estados, responsive, accesibilidad y validación del preview. No esperes confirmación; convierte ese plan en archivos aplicables.\n" +
+    "3) GENERAR — entrega un PROYECTO Vite 7 + React 18 + TypeScript COMPLETO (package.json, vite.config.ts, tsconfig.json, index.html, src/main.tsx, src/index.css, src/App.tsx) con Tailwind v4 vía @tailwindcss/vite (SIN tailwind.config.js ni postcss.config.js — `@import \"tailwindcss\"` en src/index.css y la paleta como CSS custom properties en :root), animaciones de entrada por scroll con Framer Motion (`useInView`/`whileInView` + `viewport={{ once: true }}`), iconos lucide-react y fuentes Syne + Space Grotesk (Google Fonts → --font-display/--font-body). Exigencias (PROHIBIDO entregar algo básico o tipo plantilla):\n" +
     "   • COHERENCIA DE NICHO [CRÍTICO]: analiza el rubro (ropa, restaurante, gym, software…) y alinea TODO a él — copy REAL del negocio (NADA de lorem ipsum) e imágenes que ilustren ese rubro (ilustraciones SVG integradas o `https://images.unsplash.com/...` con términos del nicho); PROHIBIDAS fotos genéricas sin relación.\n" +
     "   • Hero potente con titular Syne MUY grande (clamp), nav sticky translúcido, secciones diferenciadas (productos/features, about, testimonios, CTA final, footer completo), paleta cohesiva con 1 acento, hover/transiciones suaves, responsive MÓVIL-PRIMERO y accesible WCAG AA (alt/aria, foco visible, contraste ≥ 4.5:1).\n" +
     "   • Componente OBLIGATORIO «Invitar al proyecto»: botón «Invitar» (Lucide UserPlus) + panel/modal animado (AnimatePresence) con «Enlace privado para unirse» (input readOnly), subtexto EXACTO «Cualquier persona con el enlace tendrá acceso de edición», botón Copiar (navigator.clipboard.writeText + «¡Copiado!») e input de email con botón «Invitar por correo electrónico» (validación simple, sin llamada real).\n" +
@@ -1298,6 +1320,22 @@ export function AICodeChatPanel() {
         return
       }
       const sid = sessionId
+      if (isQuickGreeting(text)) {
+        const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        setTurns((prev) => [
+          ...prev,
+          { id, role: "user", content: text },
+          {
+            id: `${id}-a`,
+            role: "assistant",
+            content: "Hola. Dime qué quieres construir o cambiar en esta app y empiezo.",
+            streaming: false,
+          },
+        ])
+        setInput("")
+        patchAgentState(sid, (s) => ({ ...s, phase: "idle" }))
+        return
+      }
       const agent = activeCodeChatSession?.agent ?? defaultAgentState()
       const action = nextAgentAction(agent, text, {
         mode: composerMode,
@@ -1458,6 +1496,8 @@ export function AICodeChatPanel() {
   }
 
   const activeFileLabel = activePath ? activePath.split("/").pop() || activePath : null
+  const agentPhase = activeCodeChatSession?.agent?.phase ?? "idle"
+  const agentsActive = busy || buildingApp || agentPhase === "generating" || agentPhase === "debugging"
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
@@ -1504,9 +1544,9 @@ export function AICodeChatPanel() {
       </div>
 
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto p-3">
-        <AgentSwarm active={busy || buildingApp} />
+        <AgentSwarm active={agentsActive && turns.length > 0} />
         {turns.length === 0 ? (
-          <EmptyChat />
+          <EmptyChat active={agentsActive} phase={agentPhase} />
         ) : (
           <div className="space-y-3">
             {turns.map((turn) => (
@@ -1617,28 +1657,84 @@ export function AICodeChatPanel() {
   )
 }
 
-function EmptyChat() {
+function EmptyChat({ active, phase }: { active: boolean; phase: AgentPhase }) {
+  const currentIndex = AGENT_RUNTIME_STEPS.findIndex((step) => step.phase === phase)
+
   return (
-    <div className="flex h-full items-center justify-center px-2 text-center">
-      <div className="max-w-[17rem] space-y-3">
-        <div className="relative mx-auto flex h-12 w-12 items-center justify-center">
-          <div
-            aria-hidden
-            className="absolute inset-0 rounded-2xl bg-[radial-gradient(circle,hsl(var(--accent-violet)/0.28),transparent_70%)] blur-md"
-          />
-          <div className="relative flex h-12 w-12 items-center justify-center rounded-2xl border border-[hsl(var(--accent-violet)/0.35)] bg-[hsl(var(--accent-violet)/0.10)] text-[hsl(var(--accent-violet))]">
-            <Sparkles className="h-6 w-6" />
+    <div className="flex min-h-full items-center justify-center px-2 py-4">
+      <section
+        aria-live="polite"
+        data-testid="code-agent-runtime"
+        data-agent-active={active ? "true" : "false"}
+        data-agent-phase={phase}
+        className="w-full max-w-[19rem] rounded-2xl border border-border/60 bg-background/80 p-3 text-left shadow-sm"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-[hsl(var(--accent-violet)/0.28)] bg-[hsl(var(--accent-violet)/0.10)] text-[hsl(var(--accent-violet))]">
+              <Sparkles className={cn("h-4 w-4", active && "animate-pulse")} />
+            </span>
+            <div className="min-w-0">
+              <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">Agentes</h2>
+              <p className="truncate text-[11px] text-muted-foreground">1,044 en paralelo</p>
+            </div>
           </div>
+          <span
+            className={cn(
+              "shrink-0 rounded-full px-2 py-1 text-[10.5px] font-medium",
+              active
+                ? "bg-[hsl(var(--accent-violet)/0.12)] text-[hsl(var(--accent-violet))]"
+                : "bg-muted text-muted-foreground",
+            )}
+          >
+            {AGENT_RUNTIME_STATUS[phase]}
+          </span>
         </div>
-        <p className="text-sm font-semibold tracking-tight text-foreground">
-          Describe tu idea y se pone a trabajar un enjambre de agentes
-        </p>
-        <p className="text-[12.5px] leading-relaxed text-muted-foreground">
-          Más de 1000 agentes en paralelo buscan información, generan imágenes y
-          código, refactorizan, revisan y te entregan el resultado en el preview
-          en vivo.
-        </p>
-      </div>
+
+        <ol className="mt-3 space-y-1.5">
+          {AGENT_RUNTIME_STEPS.map((step, index) => {
+            const Icon = step.icon
+            const isPreview = phase === "preview"
+            const state =
+              phase === "idle"
+                ? "pending"
+                : phase === step.phase
+                  ? isPreview
+                    ? "done"
+                    : "running"
+                  : currentIndex >= 0 && index < currentIndex
+                    ? "done"
+                    : "pending"
+
+            return (
+              <li key={step.phase} className="flex h-8 items-center gap-2">
+                <span
+                  className={cn(
+                    "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border",
+                    state === "done" && "border-emerald-500/35 bg-emerald-500/10 text-emerald-600",
+                    state === "running" &&
+                      "border-[hsl(var(--accent-violet)/0.45)] bg-[hsl(var(--accent-violet)/0.12)] text-[hsl(var(--accent-violet))]",
+                    state === "pending" && "border-border/50 bg-muted/30 text-muted-foreground/55",
+                  )}
+                >
+                  <Icon className={cn("h-3.5 w-3.5", state === "running" && "animate-pulse")} />
+                </span>
+                <span
+                  className={cn(
+                    "min-w-0 flex-1 truncate text-[12px] font-medium",
+                    state === "pending" ? "text-muted-foreground" : "text-foreground",
+                  )}
+                >
+                  {step.label}
+                </span>
+                <span className="w-11 shrink-0 text-right font-mono text-[10px] text-muted-foreground/75">
+                  {state === "done" ? "done" : state === "running" ? "run" : "wait"}
+                </span>
+              </li>
+            )
+          })}
+        </ol>
+      </section>
     </div>
   )
 }

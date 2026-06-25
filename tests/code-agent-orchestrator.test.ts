@@ -11,6 +11,7 @@ import {
   classifyBuildError,
   isBuildLog,
   isBuildRequest,
+  isQuickGreeting,
   mergeOverridesIntoPackageJson,
   nextAgentAction,
   promptFromContext,
@@ -21,86 +22,69 @@ function state(partial: Partial<AgentState> = {}): AgentState {
   return { ...defaultAgentState(), ...partial }
 }
 
-// ---- intake gate ----------------------------------------------------------
+// ---- autonomous build routing ---------------------------------------------
 
-test("app build request starts the intake with the product question", () => {
+test("app build request generates immediately with an autonomous brief", () => {
   const a = nextAgentAction(state(), "hazme una landing para vender ropa", {
     mode: "app",
     hasModel: true,
   })
-  assert.equal(a.type, "ask")
-  if (a.type === "ask") {
-    assert.match(a.question, /producto o servicio/i)
-    assert.equal(a.nextStep, 1)
+  assert.equal(a.type, "generate")
+  if (a.type === "generate") {
+    assert.equal(a.tier, "llm")
+    assert.equal(a.context.goal, "landing")
+    assert.equal(a.context.productType, "hazme una landing para vender ropa")
   }
 })
 
-test("intake advances through brand then style, filling slots", () => {
+test("legacy intake answer now generates instead of asking another question", () => {
   // step 1 already asked productType; user answers it
   const a1 = nextAgentAction(state({ phase: "intake", intakeStep: 1 }), "ropa streetwear", {
     mode: "app",
     hasModel: true,
   })
-  assert.equal(a1.type, "ask")
-  if (a1.type === "ask") {
-    assert.match(a1.question, /nombre/i)
+  assert.equal(a1.type, "generate")
+  if (a1.type === "generate") {
     assert.equal(a1.context.productType, "ropa streetwear")
-    assert.equal(a1.nextStep, 2)
   }
-  // step 2: answer brand → ask style
+  // step 2: answer brand → generate with accumulated context
   const a2 = nextAgentAction(
     state({ phase: "intake", intakeStep: 2, context: { goal: "landing", productType: "ropa" } }),
     "Farceque",
     { mode: "app", hasModel: true },
   )
-  assert.equal(a2.type, "ask")
-  if (a2.type === "ask") {
-    assert.match(a2.question, /estilo/i)
+  assert.equal(a2.type, "generate")
+  if (a2.type === "generate") {
     assert.equal(a2.context.brand, "Farceque")
-    assert.equal(a2.nextStep, 3)
   }
 })
 
-test("landing intake: step 3 asks sections (after style), last step generates", () => {
-  // step 3 — fills styleAudience, asks for sections (landing-specific)
-  const a3 = nextAgentAction(
-    state({ phase: "intake", intakeStep: 3, context: { goal: "landing", productType: "ropa", brand: "Farceque" } }),
-    "streetwear minimalista oscuro",
-    { mode: "app", hasModel: true },
-  )
-  assert.equal(a3.type, "ask")
-  if (a3.type === "ask") {
-    assert.match(a3.question, /secciones/i)
-    assert.equal(a3.context.styleAudience, "streetwear minimalista oscuro")
-    assert.equal(a3.nextStep, 4)
-  }
-  // last step (5 of 5) — fills the colour slot, then generates (LLM tier)
-  const a5 = nextAgentAction(
-    state({ phase: "intake", intakeStep: 5, context: { goal: "landing", productType: "ropa" } }),
-    "tonos tierra y negro",
-    { mode: "app", hasModel: true },
-  )
-  assert.equal(a5.type, "generate")
-  if (a5.type === "generate") {
-    assert.equal(a5.tier, "llm")
-    assert.equal(a5.context.colorRef, "tonos tierra y negro")
-  }
-})
-
-test("app intake adapts: step 3 asks for key features (not sections)", () => {
+test("noun-only app prompt generates directly", () => {
   const a = nextAgentAction(
-    state({ phase: "intake", intakeStep: 3, context: { goal: "app", productType: "gestión", brand: "Acme" } }),
-    "panel corporativo",
+    state(),
+    "una tienda",
     { mode: "app", hasModel: true },
   )
-  assert.equal(a.type, "ask")
-  if (a.type === "ask") {
-    assert.match(a.question, /funcionalidades/i)
-    assert.equal(a.nextStep, 4)
+  assert.equal(a.type, "generate")
+  if (a.type === "generate") {
+    assert.equal(a.tier, "llm")
+    assert.equal(a.context.productType, "una tienda")
   }
 })
 
-test('"genera ya" during intake skips remaining questions', () => {
+test("app request sets app goal and generates directly", () => {
+  const a = nextAgentAction(
+    state(),
+    "crea una app de gestión con panel corporativo",
+    { mode: "app", hasModel: true },
+  )
+  assert.equal(a.type, "generate")
+  if (a.type === "generate") {
+    assert.equal(a.context.goal, "app")
+  }
+})
+
+test('"genera ya" during legacy intake generates immediately', () => {
   const a = nextAgentAction(state({ phase: "intake", intakeStep: 1 }), "genera ya", {
     mode: "app",
     hasModel: true,
@@ -108,7 +92,7 @@ test('"genera ya" during intake skips remaining questions', () => {
   assert.equal(a.type, "generate")
 })
 
-test("a rich prompt (>160 chars) skips the intake", () => {
+test("a rich prompt generates immediately", () => {
   const long = "Quiero una landing para mi marca de ropa premium ".repeat(5)
   const a = nextAgentAction(state(), long, { mode: "app", hasModel: true })
   assert.equal(a.type, "generate")
@@ -119,8 +103,8 @@ test('"propón uno" leaves the brand slot empty', () => {
     mode: "app",
     hasModel: true,
   })
-  assert.equal(a.type, "ask")
-  if (a.type === "ask") assert.equal(a.context.brand, undefined)
+  assert.equal(a.type, "generate")
+  if (a.type === "generate") assert.equal(a.context.brand, undefined)
 })
 
 // ---- forced / tiers -------------------------------------------------------
@@ -132,7 +116,7 @@ test("forceDeterministic generates immediately in the deterministic tier", () =>
 })
 
 test("no model → generation falls back to the deterministic tier", () => {
-  // intakeStep 5 of 5 (landing) → past the last question → generate
+  // Legacy intake state still generates without asking another question.
   const a = nextAgentAction(state({ phase: "intake", intakeStep: 5 }), "moderno", { mode: "app", hasModel: false })
   assert.equal(a.type, "generate")
   if (a.type === "generate") assert.equal(a.tier, "deterministic")
@@ -163,18 +147,21 @@ test("debug mode and pasted logs route to the SRE agent", () => {
 
 test("isBuildRequest / isBuildLog heuristics", () => {
   assert.equal(isBuildRequest("hazme una app"), true)
-  // "realiza/realizar/desarrolla" must count as build verbs (was missing → no intake)
+  // "realiza/realizar/desarrolla" must count as build verbs.
   assert.equal(isBuildRequest("realiza un landing"), true)
   assert.equal(isBuildRequest("realízame una web"), true)
   assert.equal(isBuildRequest("desarrolla una tienda"), true)
   assert.equal(isBuildRequest("hola"), false)
+  assert.equal(isQuickGreeting("hola"), true)
+  assert.equal(isQuickGreeting("hola, ¿cómo estás?"), true)
+  assert.equal(isQuickGreeting("hola hazme una app"), false)
   assert.equal(isBuildLog("npm ERR! code ERESOLVE"), true)
   assert.equal(isBuildLog("buenas tardes"), false)
 })
 
-test('"realiza un landing" starts the intake (not a passthrough to the LLM)', () => {
+test('"realiza un landing" generates directly (not an intake question)', () => {
   const a = nextAgentAction(state(), "realiza un landing", { mode: "app", hasModel: true })
-  assert.equal(a.type, "ask")
+  assert.equal(a.type, "generate")
 })
 
 test("promptFromContext builds a landing prompt", () => {

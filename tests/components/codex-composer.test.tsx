@@ -3,7 +3,7 @@ import { renderWithIntl as render, screen, fireEvent } from '../lib/codex/intl-t
 import { Composer } from '@/components/codex/composer'
 
 function type(text: string) {
-  fireEvent.change(screen.getByPlaceholderText('Make, test, iterate...'), { target: { value: text } })
+  fireEvent.change(screen.getByPlaceholderText('Describe tu idea — la IA propone el plan y ejecuta…'), { target: { value: text } })
 }
 
 describe('Composer', () => {
@@ -16,13 +16,13 @@ describe('Composer', () => {
     expect(onSend.mock.calls[0][0]).toMatchObject({ prompt: 'haz una landing', planOnly: false, tier: 'eco' })
   })
 
-  it('the Plan toggle forces planOnly on the sent payload', () => {
+  it('does not render a Plan toggle and always sends planOnly false', () => {
     const onSend = vi.fn()
     render(<Composer onSend={onSend} />)
     type('x')
-    fireEvent.click(screen.getByText('Plan'))
+    expect(screen.queryByText('Plan')).toBeNull()
     fireEvent.click(screen.getByLabelText('Enviar'))
-    expect(onSend.mock.calls[0][0].planOnly).toBe(true)
+    expect(onSend.mock.calls[0][0].planOnly).toBe(false)
   })
 
   it('the selected Power tier travels in the payload', () => {
@@ -49,7 +49,7 @@ describe('Composer', () => {
   it('Enter submits, Shift+Enter does not', () => {
     const onSend = vi.fn()
     render(<Composer onSend={onSend} />)
-    const ta = screen.getByPlaceholderText('Make, test, iterate...')
+    const ta = screen.getByPlaceholderText('Describe tu idea — la IA propone el plan y ejecuta…')
     fireEvent.change(ta, { target: { value: 'go' } })
     fireEvent.keyDown(ta, { key: 'Enter', shiftKey: true })
     expect(onSend).not.toHaveBeenCalled()

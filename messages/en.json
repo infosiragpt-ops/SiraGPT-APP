@@ -547,9 +547,9 @@
       "remediate": "Fix it"
     },
     "composer": {
-      "placeholder": "Make, test, iterate...",
+      "placeholder": "Describe the idea — AI plans and builds…",
       "plan": "Plan",
-      "planTooltip": "Plan: restricts the run to planning only, executing nothing.",
+      "planTooltip": "The agent plans internally and builds automatically.",
       "send": "Send",
       "stop": "Stop",
       "dictate": "Dictate",
