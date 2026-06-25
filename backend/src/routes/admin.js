@@ -813,7 +813,10 @@ router.post(
           plan,
           isAdmin,
           apiUsage: 0,
-          monthlyLimit: Number(monthlyLimit),
+          // monthlyLimit is a BigInt column; coerce explicitly (matches
+          // grant-credits) instead of handing Prisma a JS Number. Input is
+          // validated isInt({min:0}) and defaults to 0, so this never NaNs.
+          monthlyLimit: BigInt(Math.floor(Number(monthlyLimit) || 0)),
         },
         select: {
           id: true,

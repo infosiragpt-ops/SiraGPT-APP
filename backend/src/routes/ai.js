@@ -3856,7 +3856,11 @@ router.post(
             // survive any pressure. Default 80 KB cap (~20 K tokens
             // of enrichment, leaving plenty for chat history + raw
             // file text). Override via SIRAGPT_ENRICHMENT_MAX_CHARS.
-            const enrichmentSoftCap = Number.parseInt(process.env.SIRAGPT_ENRICHMENT_MAX_CHARS, 10) || 80_000;
+            // NaN-only fallback: an explicit 0 ("keep only always-on blocks")
+            // is a valid cap; `|| 80_000` silently dropped it.
+            const _rawEnrichmentCap = Number.parseInt(process.env.SIRAGPT_ENRICHMENT_MAX_CHARS, 10);
+            const enrichmentSoftCap = Number.isFinite(_rawEnrichmentCap) && _rawEnrichmentCap >= 0
+              ? _rawEnrichmentCap : 80_000;
             if (documentEnrichmentBlock.length > enrichmentSoftCap) {
               try {
                 const ENRICHMENT_BLOCK_ORDER = [
@@ -5373,7 +5377,11 @@ router.post(
                 try {
                   const agenticDocs = (processedFiles || [])
                     .filter((file) => file && !isImageMime(file.mimeType || file.type));
-                  const AGENTIC_DOC_INJECT_CHARS = Number(process.env.SIRAGPT_AGENTIC_DOC_INJECT_CHARS) || 120000;
+                  // NaN-only fallback: respect an explicit 0 (floors to the
+                  // 8 KB/file minimum below) instead of `|| 120000` eating it.
+                  const _rawDocInject = Number(process.env.SIRAGPT_AGENTIC_DOC_INJECT_CHARS);
+                  const AGENTIC_DOC_INJECT_CHARS = Number.isFinite(_rawDocInject) && _rawDocInject >= 0
+                    ? _rawDocInject : 120000;
                   const perFileCap = agenticDocs.length
                     ? Math.max(8000, Math.floor(AGENTIC_DOC_INJECT_CHARS / agenticDocs.length))
                     : AGENTIC_DOC_INJECT_CHARS;

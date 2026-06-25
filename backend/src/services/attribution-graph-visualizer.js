@@ -97,7 +97,7 @@ function toMermaid(graph, opts = {}) {
 function toCytoscape(graph, opts = {}) {
   const nodes = nodesFromGraph(graph);
   const edges = edgesFromGraph(graph);
-  const minEdgeWeight = Number(opts.minEdgeWeight) || 0.05;
+  const minEdgeWeight = Number.isFinite(Number(opts.minEdgeWeight)) ? Number(opts.minEdgeWeight) : 0.05;
   return {
     nodes: nodes.map((n) => ({
       data: {
@@ -154,7 +154,7 @@ function legendDescription(type) {
 function toCompactJSON(graph, opts = {}) {
   const nodes = nodesFromGraph(graph);
   const edges = edgesFromGraph(graph);
-  const minEdgeWeight = Number(opts.minEdgeWeight) || 0.05;
+  const minEdgeWeight = Number.isFinite(Number(opts.minEdgeWeight)) ? Number(opts.minEdgeWeight) : 0.05;
   return {
     nodes: nodes.map((n) => ({
       id: sanitizeId(n.id),

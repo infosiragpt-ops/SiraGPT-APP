@@ -98,20 +98,25 @@ async function readCappedBody(response, maxBytes) {
   let body = '';
   let bytesRead = 0;
   let truncated = false;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    const remaining = maxBytes - bytesRead;
-    if (value.byteLength >= remaining) {
-      body += decoder.decode(value.subarray(0, remaining), { stream: false });
-      truncated = true;
-      try { reader.cancel(); } catch (_) { /* ignore */ }
-      break;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const remaining = maxBytes - bytesRead;
+      if (value.byteLength >= remaining) {
+        body += decoder.decode(value.subarray(0, remaining), { stream: false });
+        truncated = true;
+        break;
+      }
+      body += decoder.decode(value, { stream: true });
+      bytesRead += value.byteLength;
     }
-    body += decoder.decode(value, { stream: true });
-    bytesRead += value.byteLength;
+    if (!truncated) body += decoder.decode();
+  } finally {
+    // Release the stream on every exit path (done, truncation, mid-read
+    // throw) — previously only truncation cancelled, leaking the socket.
+    try { reader.cancel(); } catch (_) { /* ignore */ }
   }
-  if (!truncated) body += decoder.decode();
   return { body, truncated };
 }
 

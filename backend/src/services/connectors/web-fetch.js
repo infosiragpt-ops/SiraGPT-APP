@@ -307,23 +307,30 @@ async function executeWebFetch(args = {}, env = process.env, options = {}) {
   let truncated = false;
   if (reader) {
     const decoder = new TextDecoder('utf-8', { fatal: false });
-    while (bytesRead < maxBytes) {
-      // eslint-disable-next-line no-await-in-loop
-      const { done, value } = await reader.read();
-      if (done) break;
-      const chunk = value;
-      const remaining = maxBytes - bytesRead;
-      if (chunk.byteLength > remaining) {
-        body += decoder.decode(chunk.subarray(0, remaining), { stream: false });
-        bytesRead += remaining;
-        truncated = true;
-        try { reader.cancel(); } catch (_) { /* ignore */ }
-        break;
+    try {
+      while (bytesRead < maxBytes) {
+        // eslint-disable-next-line no-await-in-loop
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = value;
+        const remaining = maxBytes - bytesRead;
+        if (chunk.byteLength > remaining) {
+          body += decoder.decode(chunk.subarray(0, remaining), { stream: false });
+          bytesRead += remaining;
+          truncated = true;
+          break;
+        }
+        body += decoder.decode(chunk, { stream: true });
+        bytesRead += chunk.byteLength;
       }
-      body += decoder.decode(chunk, { stream: true });
-      bytesRead += chunk.byteLength;
+      body += decoder.decode();
+    } finally {
+      // Always release the stream. The normal (done), exact-fill (loop
+      // condition turns false) and mid-read throw paths previously left the
+      // reader uncancelled, leaking the underlying socket per fetch. Only the
+      // truncation path cancelled. cancel() after done is a harmless no-op.
+      try { reader.cancel(); } catch (_) { /* ignore */ }
     }
-    body += decoder.decode();
   } else {
     // Older runtimes / mocks return a string body via `.text()`.
     const fullText = await response.text();

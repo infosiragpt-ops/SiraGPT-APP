@@ -105,11 +105,17 @@ async function streamToBuffer(stream) {
   if (typeof stream.getReader === 'function') {
     const reader = stream.getReader();
     const chunks = [];
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value) chunks.push(Buffer.from(value));
+    try {
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) chunks.push(Buffer.from(value));
+      }
+    } finally {
+      // Release the stream even if read() throws mid-collection, so a
+      // failed TTS/audio fetch doesn't leak the underlying socket.
+      try { reader.cancel(); } catch (_) { /* ignore */ }
     }
     return Buffer.concat(chunks);
   }
