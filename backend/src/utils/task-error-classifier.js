@@ -140,11 +140,19 @@ const RETRYABLE_RULES = [
   },
 ];
 
-function matchesRule(rule, msg, code, errName) {
-  const combined = `${errName} ${code} ${msg}`;
+function matchesByCode(rule, code) {
+  if (!code) return false;
   if (rule.codePrefix && code.startsWith(rule.codePrefix)) return true;
   if (rule.codes && rule.codes.some((c) => code === c || code.startsWith(c))) return true;
+  return false;
+}
+
+function matchesByMessage(rule, combined) {
   return includesAny(combined, rule.patterns || []);
+}
+
+function matchesRule(rule, msg, code, errName) {
+  return matchesByCode(rule, code) || matchesByMessage(rule, `${errName} ${code} ${msg}`);
 }
 
 function classifyTaskError(err) {
@@ -164,16 +172,28 @@ function classifyTaskError(err) {
     return { retryable: true, reason: 'network-timeout', ttlMs: withJitter(5_000) };
   }
 
+  const combined = `${errName} ${code} ${msg}`;
+
+  // Structured HTTP status is authoritative — classify by status code BEFORE any
+  // soft message-keyword rule. This keeps a transient 5xx retryable even when its
+  // body happens to contain "invalid"/"unauthorized" (previously such errors hit
+  // the NON_RETRYABLE auth/validation message rules and were given up on), while
+  // genuinely permanent statuses (401/403 auth, 402 quota, 413 payload, 501
+  // not-implemented) are still caught by their NON_RETRYABLE code rules, and 504
+  // keeps its more specific 'network-timeout' reason.
   for (const rule of NON_RETRYABLE_RULES) {
-    if (matchesRule(rule, msg, code, errName)) {
-      return { retryable: false, reason: rule.reason };
-    }
+    if (matchesByCode(rule, code)) return { retryable: false, reason: rule.reason };
+  }
+  for (const rule of RETRYABLE_RULES) {
+    if (matchesByCode(rule, code)) return { retryable: true, reason: rule.reason, ttlMs: withJitter(rule.ttlMs) };
   }
 
+  // No usable status code — fall back to message-keyword matching.
+  for (const rule of NON_RETRYABLE_RULES) {
+    if (matchesByMessage(rule, combined)) return { retryable: false, reason: rule.reason };
+  }
   for (const rule of RETRYABLE_RULES.slice(1)) {
-    if (matchesRule(rule, msg, code, errName)) {
-      return { retryable: true, reason: rule.reason, ttlMs: withJitter(rule.ttlMs) };
-    }
+    if (matchesByMessage(rule, combined)) return { retryable: true, reason: rule.reason, ttlMs: withJitter(rule.ttlMs) };
   }
 
   if (msg.includes('missing') || msg.includes('invalid') || msg.includes('required')) {
