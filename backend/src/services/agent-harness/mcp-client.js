@@ -200,6 +200,28 @@ function sanitizeInputSchema(schema) {
 }
 
 /**
+ * Build `mcp__<slug>__<tool>` names, capped at 64 chars. The TOOL-NAME segment
+ * is truncated (not the whole id, which would lose the prefix) and names are
+ * de-duped within the server with a numeric suffix — two tool names that collide
+ * after truncation used to map to the same namespaced name and shadow each other.
+ */
+function namespaceToolNames(slug, rawNames) {
+  const prefix = `mcp__${slug}__`;
+  const nameBudget = Math.max(8, 64 - prefix.length);
+  const emitted = new Set();
+  return (rawNames || []).map((rawName) => {
+    const clean = String(rawName || 'tool').replace(/[^a-zA-Z0-9_]/g, '_').slice(0, nameBudget);
+    let namespaced = `${prefix}${clean}`;
+    for (let n = 2; emitted.has(namespaced); n += 1) {
+      const suffix = `_${n}`;
+      namespaced = `${prefix}${clean.slice(0, nameBudget - suffix.length)}${suffix}`;
+    }
+    emitted.add(namespaced);
+    return namespaced;
+  });
+}
+
+/**
  * Discover a server's tools and project them as harness tool definitions
  * ({name, description, parameters, execute} — react-agent shape, plus
  * `mcp: true` so the registry assigns the 'confirm' tier by default).
@@ -209,8 +231,9 @@ async function discoverServerTools(server) {
   const listed = await withTimeout(client.listTools(), DISCOVERY_TIMEOUT_MS, 'mcp listTools');
   const slug = slugifyServerName(server.name);
   const tools = Array.isArray(listed && listed.tools) ? listed.tools.slice(0, MAX_TOOLS_PER_SERVER) : [];
-  return tools.map((tool) => {
-    const namespaced = `mcp__${slug}__${String(tool.name || 'tool').replace(/[^a-zA-Z0-9_]/g, '_')}`.slice(0, 64);
+  const namespacedNames = namespaceToolNames(slug, tools.map((t) => t && t.name));
+  return tools.map((tool, idx) => {
+    const namespaced = namespacedNames[idx];
     return {
       name: namespaced,
       description: `[MCP · ${server.name}] ${String(tool.description || tool.name || '').slice(0, 800)}`,
@@ -324,6 +347,7 @@ function resetForTests() {
 module.exports = {
   loadUserMcpTools,
   discoverServerTools,
+  namespaceToolNames,
   normalizeCallResult,
   sanitizeInputSchema,
   slugifyServerName,

@@ -18,6 +18,7 @@ const {
   encryptHeaders,
   decryptHeaders,
   loadUserMcpTools,
+  namespaceToolNames,
 } = require('../src/services/agent-harness/mcp-client');
 
 test('mcp: server names slugify into stable namespaces', () => {
@@ -113,4 +114,15 @@ test('mcp: unreachable servers are skipped with an error entry, chat keeps its t
   assert.equal(out.tools.length, 0);
   assert.equal(out.errors.length, 1);
   assert.equal(out.errors[0].server, 'down server');
+});
+
+test('mcp: namespaceToolNames caps at 64 chars and de-dupes collisions per server', () => {
+  const long = 'a'.repeat(70);
+  const names = namespaceToolNames('srv', [`${long}_one`, `${long}_two`, 'short', 'short']);
+  // Every namespaced name fits the 64-char registry limit.
+  assert.ok(names.every((n) => n.length <= 64), 'all names within 64 chars');
+  // The `mcp__<slug>__` prefix is never truncated away.
+  assert.ok(names.every((n) => n.startsWith('mcp__srv__')), 'prefix preserved');
+  // Names that collide after truncation get distinct suffixes — no shadowing.
+  assert.equal(new Set(names).size, names.length, 'no duplicate namespaced names');
 });
