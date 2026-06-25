@@ -56,9 +56,15 @@ function softDeleteWhere(extra) {
   if (typeof extra !== 'object' || Array.isArray(extra)) {
     throw new TypeError('softDeleteWhere(extra): extra must be a plain object');
   }
-  // If the caller already set `deletedAt`, respect their intent (e.g.
-  // `{ deletedAt: { not: null } }` for "show only trash").
-  if (Object.prototype.hasOwnProperty.call(extra, 'deletedAt')) return { ...extra };
+  // If the caller set an EXPLICIT, defined `deletedAt`, respect their intent
+  // (e.g. `{ deletedAt: { not: null } }` for "show only trash"). But
+  // `deletedAt: undefined` is NOT an intent to see everything — in Prisma a
+  // `where` key set to undefined is dropped entirely, which would silently leak
+  // tombstoned rows. Treat undefined like "not provided" and apply the safe
+  // `deletedAt: null` default.
+  if (Object.prototype.hasOwnProperty.call(extra, 'deletedAt') && extra.deletedAt !== undefined) {
+    return { ...extra };
+  }
   return { ...extra, deletedAt: null };
 }
 
