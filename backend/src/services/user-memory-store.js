@@ -192,7 +192,11 @@ function createPgUserMemoryStore({ prisma, embedder = embedTexts } = {}) {
       return rows.map(r => ({
         text: r.content,
         category: r.category || 'knowledge',
-        score: Number(r.cosine || 0) * 0.75 + Number(r.importance_score || 0) * 0.2,
+        // Mirror the SQL ORDER BY exactly — the returned score dropped the
+        // access_count term, so it disagreed with the order rows came back in.
+        score: Number(r.cosine || 0) * 0.75
+          + Number(r.importance_score || 0) * 0.2
+          + (Math.min(Number(r.access_count || 0), 10) / 10) * 0.05,
         cosine: Number(r.cosine || 0),
         importance: Number(r.importance_score || 0),
         confidence: Number(r.confidence || 0),

@@ -72,7 +72,10 @@ test('pg store upsert and recall use parameterized vector SQL', async () => {
   const recalled = await store.recall('user_1', 'como responder a Luis', 3);
   assert.equal(recalled.length, 1);
   assert.equal(recalled[0].category, 'preference');
-  assert.ok(recalled[0].score > 0);
+  // Score must mirror the SQL ORDER BY incl. the access_count term:
+  // cosine 0.8*0.75 + importance 0.4*0.2 + min(3,10)/10*0.05 = 0.695 (the
+  // returned score used to drop the access_count component → 0.68).
+  assert.ok(Math.abs(recalled[0].score - 0.695) < 1e-9, `expected 0.695, got ${recalled[0].score}`);
 
   const stats = await store.stats('user_1');
   assert.equal(stats.store, 'pgvector');
