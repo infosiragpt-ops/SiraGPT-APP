@@ -68,6 +68,9 @@ test('inferProviderFromModelId: Groq -versatile vs bare-llama Cerebras (FlashGPT
   // doesn't serve them) — createProviderClient('Cerebras') gates on the key.
   assert.equal(inferProviderFromModelId('llama-3.1-8b'), 'Cerebras');
   assert.equal(inferProviderFromModelId('llama-3.1-70b'), 'Cerebras');
+  // Suffixless `gpt-oss` alias must also route to Cerebras (was falling to OpenAI).
+  assert.equal(inferProviderFromModelId('gpt-oss'), 'Cerebras');
+  assert.equal(inferProviderFromModelId('gpt-oss-120b'), 'Cerebras');
 });
 
 test('inferProviderFromModelId: Anthropic direct (bare claude-*)', () => {
@@ -87,6 +90,9 @@ test('inferProviderFromModelId: Mistral direct (bare mistral-*/codestral-*)', ()
   assert.equal(inferProviderFromModelId('mistral-large-latest'), 'Mistral');
   assert.equal(inferProviderFromModelId('mistral-small-latest'), 'Mistral');
   assert.equal(inferProviderFromModelId('codestral-latest'), 'Mistral');
+  // Suffixless aliases must also route to Mistral (were falling to OpenAI).
+  assert.equal(inferProviderFromModelId('mistral'), 'Mistral');
+  assert.equal(inferProviderFromModelId('codestral'), 'Mistral');
 });
 
 test('inferProviderFromModelId: unknown ids fall back to OpenAI (safe)', () => {

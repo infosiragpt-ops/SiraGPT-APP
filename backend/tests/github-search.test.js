@@ -171,6 +171,38 @@ test('search caches identical repository queries', async () => {
   assert.ok(second._cache && second._cache.hit, 'cache hit flag present');
 });
 
+test('cacheKey scopes result-affecting opts so distinct scopes never collide', () => {
+  // Regression: cacheKey hashed only query|type|sort|order|limit|lang|timeout,
+  // so {state:'open'} and {state:'closed'} (and repo/kind/minStars/topic/filename
+  // variants) collided on one key and the 2nd call got the 1st call's wrong-scope
+  // results for the 5-min TTL.
+  const issues = { type: 'issues' };
+  assert.notEqual(
+    ghCache.cacheKey('q', { ...issues, state: 'open' }),
+    ghCache.cacheKey('q', { ...issues, state: 'closed' }),
+    'state must scope the key',
+  );
+  assert.notEqual(ghCache.cacheKey('q', { ...issues, repo: 'a/b' }), ghCache.cacheKey('q', issues), 'repo must scope the key');
+  assert.notEqual(
+    ghCache.cacheKey('q', { ...issues, kind: 'pr' }),
+    ghCache.cacheKey('q', { ...issues, kind: 'issue' }),
+    'kind must scope the key',
+  );
+  assert.notEqual(
+    ghCache.cacheKey('q', { type: 'repositories', minStars: 100 }),
+    ghCache.cacheKey('q', { type: 'repositories', minStars: 0 }),
+    'minStars must scope the key',
+  );
+  assert.notEqual(ghCache.cacheKey('q', { type: 'repositories', topic: 'ml' }), ghCache.cacheKey('q', { type: 'repositories' }), 'topic must scope the key');
+  assert.notEqual(ghCache.cacheKey('q', { type: 'code', filename: 'x.js' }), ghCache.cacheKey('q', { type: 'code' }), 'filename must scope the key');
+  // Identical opts still collapse to one key — the cache keeps working.
+  assert.equal(
+    ghCache.cacheKey('q', { ...issues, state: 'open' }),
+    ghCache.cacheKey('q', { ...issues, state: 'open' }),
+    'identical opts share a key',
+  );
+});
+
 // ── Code (token-gated) ─────────────────────────────────────────────────
 
 test('searchCode throws without a token', async () => {

@@ -88,8 +88,9 @@ function inferProviderFromModelId(modelId) {
   //    Anthropic SDK route uses `claude-*` ids without a slash.
   if (/^claude(-|_)/.test(m)) return 'Anthropic';
 
-  // 6) Mistral direct — bare `mistral-*` or `codestral-*` ids.
-  if (m.startsWith('mistral-') || m.startsWith('codestral-')) return 'Mistral';
+  // 6) Mistral direct — bare `mistral-*`/`codestral-*` ids, incl. the
+  //    suffixless `mistral`/`codestral` aliases (else they fell through to OpenAI).
+  if (m === 'mistral' || m.startsWith('mistral-') || m === 'codestral' || m.startsWith('codestral-')) return 'Mistral';
 
   // 7) Z.ai GLM family — bare `glm-*` ids (slug `z-ai/...` already → OpenRouter).
   if (m.startsWith('glm-') || m.startsWith('glm4') || m.startsWith('glm_')) return 'Z.ai';
@@ -105,7 +106,7 @@ function inferProviderFromModelId(modelId) {
   //    CEREBRAS_API_KEY. Without this, a Custom GPT / org-default pinned to a
   //    FlashGPT model id fell through to 'OpenAI' and called an OpenAI model
   //    that doesn't exist.
-  if (m.startsWith('gpt-oss-') || /^llama-3(\.|-)/.test(m) || m.startsWith('zai-glm-')) return 'Cerebras';
+  if (m === 'gpt-oss' || m.startsWith('gpt-oss-') || /^llama-3(\.|-)/.test(m) || m.startsWith('zai-glm-')) return 'Cerebras';
 
   return 'OpenAI';
 }
