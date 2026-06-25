@@ -218,6 +218,15 @@ test('contentQualityScore: empty / non-string returns score 0', () => {
   assert.equal(contentQualityScore(123, 'md').score, 0);
 });
 
+test('contentQualityScore: whitespace-only trims to empty → content_too_short (not no_content)', () => {
+  // Distinct branch from the falsy/non-string path: a truthy string that trims
+  // to '' reaches the length checks, flagging content_too_short.
+  const r = contentQualityScore('   \n\t  ', 'md');
+  assert.ok(r.issues.includes('content_too_short'), 'flags too-short body');
+  assert.equal(r.issues.includes('no_content'), false, 'not the empty/non-string path');
+  assert.ok(r.score < 100);
+});
+
 test('contentQualityScore: detects markdown table rows', () => {
   const md = `# Report
 
