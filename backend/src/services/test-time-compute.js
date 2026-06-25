@@ -35,7 +35,10 @@
  */
 
 const COMPUTE_MODES = Object.freeze(['direct', 'extended', 'self_consistency', 'best_of_n']);
-const MAX_DIRECTIVE_CHARS = Number(process.env.SIRAGPT_TEST_TIME_COMPUTE_MAX_CHARS) || 1400;
+// NaN-only fallback: an explicit 0 disables directive text; `|| 1400` dropped it.
+const _rawMaxDirectiveChars = Number(process.env.SIRAGPT_TEST_TIME_COMPUTE_MAX_CHARS);
+const MAX_DIRECTIVE_CHARS = Number.isFinite(_rawMaxDirectiveChars) && _rawMaxDirectiveChars >= 0
+  ? _rawMaxDirectiveChars : 1400;
 
 function shouldApply(decision) {
   const c = decision && decision.compute;

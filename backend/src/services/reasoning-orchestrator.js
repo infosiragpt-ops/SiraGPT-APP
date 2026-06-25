@@ -340,8 +340,12 @@ function filterReachable(base, input) {
   return base;
 }
 
-const PENALTY_THRESHOLD = Number(process.env.SIRAGPT_ROUTING_PENALTY_THRESHOLD) || 0.4;
-const PENALTY_MARGIN = Number(process.env.SIRAGPT_ROUTING_PENALTY_MARGIN) || 0.1;
+// NaN-only fallbacks: an explicit 0 is a valid config (threshold 0 = always
+// apply penalties; margin 0 = no safety margin). `|| default` dropped it.
+const PENALTY_THRESHOLD = Number.isFinite(Number(process.env.SIRAGPT_ROUTING_PENALTY_THRESHOLD))
+  ? Number(process.env.SIRAGPT_ROUTING_PENALTY_THRESHOLD) : 0.4;
+const PENALTY_MARGIN = Number.isFinite(Number(process.env.SIRAGPT_ROUTING_PENALTY_MARGIN))
+  ? Number(process.env.SIRAGPT_ROUTING_PENALTY_MARGIN) : 0.1;
 
 /** Resolve a {modelId: penalty} map from a precomputed object or a provider fn. */
 function resolveModelPenalties(input) {

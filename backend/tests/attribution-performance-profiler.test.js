@@ -130,3 +130,13 @@ test('hot path: 500 measure calls under 50ms', () => {
   const stats = profiler.getAggregateStats('bench');
   assert.ok(stats.samples > 0);
 });
+
+test('percentile: nearest-rank (not floor over-shoot)', () => {
+  const a = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+  // p50 nearest-rank = ceil(0.5*10)-1 = idx 4 = 50 (floor would give idx 5 = 60).
+  assert.equal(profiler.percentile(a, 0.5), 50);
+  assert.equal(profiler.percentile(a, 0.95), 100);
+  assert.equal(profiler.percentile(a, 0), 10);
+  assert.equal(profiler.percentile(a, 1), 100);
+  assert.equal(profiler.percentile([], 0.5), 0);
+});

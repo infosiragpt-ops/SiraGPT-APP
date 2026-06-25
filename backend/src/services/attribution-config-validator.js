@@ -36,7 +36,11 @@ const RULES = Object.freeze([
       return Number.isFinite(v) && v > 0;
     } },
   { id: 'saliency_dead_age_gt_halflife', severity: 'warning', description: 'dead-age should be ≥ 2 × half-life',
-    check: (e) => (num(e.SIRAGPT_SALIENCY_DEAD_AGE_MS, 6) * 60 * 60 * 1000) >= 2 * (num(e.SIRAGPT_SALIENCY_HALFLIFE_MS, 1_800_000)) },
+    // SIRAGPT_SALIENCY_DEAD_AGE_MS is already in milliseconds (saliency-decay-
+    // tracker default 6*60*60*1000). The old `num(...,6) * 60*60*1000` treated it
+    // as hours and multiplied any ms value by 3.6M, so the coherence check was
+    // always true and never warned. Compare ms-to-ms.
+    check: (e) => num(e.SIRAGPT_SALIENCY_DEAD_AGE_MS, 6 * 60 * 60 * 1000) >= 2 * num(e.SIRAGPT_SALIENCY_HALFLIFE_MS, 1_800_000) },
 
   { id: 'anomaly_buffer_gt_min_samples', severity: 'error', description: 'buffer size must allow min samples + 2',
     check: (e) => (num(e.SIRAGPT_ANOMALY_BUFFER_SIZE, 12)) >= (num(e.SIRAGPT_ANOMALY_MIN_SAMPLES, 3)) + 2 },
