@@ -360,15 +360,18 @@ function prismaAccessor(entityName) {
 
 function buildPrismaSchema(entities) {
   const lines = [
-    '// Data layer. SQLite keeps the app runnable locally with no external',
-    '// database; for production swap `provider`/`url` for PostgreSQL or MySQL.',
+    '// Data layer. Defaults to SQLite so the app runs locally with zero setup',
+    '// (DATABASE_URL in .env points at a file). FOR PRODUCTION switch to Postgres:',
+    '//   1) change `provider` below to "postgresql"',
+    '//   2) set DATABASE_URL to your Postgres connection string (see .env.example)',
+    '// Nothing else in the app changes — the API/queries are database-agnostic.',
     'generator client {',
     '  provider = "prisma-client-js"',
     '}',
     '',
     'datasource db {',
     '  provider = "sqlite"',
-    '  url      = "file:./dev.db"',
+    '  url      = env("DATABASE_URL")',
     '}',
     '',
   ];
@@ -402,7 +405,25 @@ function buildDbLib() {
 }
 
 function buildGitignore() {
-  return ['node_modules', '.next', 'dev.db', 'dev.db-journal', 'prisma/dev.db', 'prisma/dev.db-journal', ''].join('\n');
+  return ['node_modules', '.next', '.env', 'dev.db', 'dev.db-journal', 'prisma/dev.db', 'prisma/dev.db-journal', ''].join('\n');
+}
+
+// Real .env so the app runs out of the box on SQLite (the file is a dev DB, not a
+// secret). Production sets DATABASE_URL to a Postgres connection string instead.
+function buildEnvFile() {
+  return 'DATABASE_URL="file:./dev.db"\n';
+}
+
+function buildEnvExample() {
+  return [
+    '# Local development (default): a zero-setup SQLite file.',
+    'DATABASE_URL="file:./dev.db"',
+    '',
+    '# Production: switch prisma/schema.prisma `provider` to "postgresql" and use',
+    '# a Postgres connection string, e.g.:',
+    '# DATABASE_URL="postgresql://user:password@host:5432/dbname?schema=public"',
+    '',
+  ].join('\n');
 }
 
 // Coerce each editable field from the request body to EXACTLY its Prisma column
@@ -689,6 +710,8 @@ function codegenFromBrief(rawBrief, blueprintArg) {
     // Database layer: Prisma schema (one model per entity) + a client singleton.
     files.push({ path: 'prisma/schema.prisma', language: 'prisma', content: buildPrismaSchema(entities) });
     files.push({ path: 'lib/db.ts', language: 'typescript', content: buildDbLib() });
+    files.push({ path: '.env', language: 'text', content: buildEnvFile() });
+    files.push({ path: '.env.example', language: 'text', content: buildEnvExample() });
     files.push({ path: '.gitignore', language: 'text', content: buildGitignore() });
     for (const model of entities) {
       const slug = model.slug || kebabCase(model.entity);

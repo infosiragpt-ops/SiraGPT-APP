@@ -171,10 +171,17 @@ test('app generates a real Prisma + SQLite database layer wired to the API', () 
   const map = fileMap(files);
   const schema = map.get('prisma/schema.prisma').content;
   assert.match(schema, /provider = "sqlite"/);
+  // URL comes from env so it runs on SQLite by default but switches to Postgres
+  // for production with just a connection-string + provider change.
+  assert.match(schema, /url\s+= env\("DATABASE_URL"\)/);
+  assert.match(schema, /postgresql/i, 'documents the Postgres production switch');
   assert.match(schema, /model Producto \{/);
   assert.match(schema, /model Proveedor \{/);
   assert.match(schema, /id\s+String\s+@id @default\(cuid\(\)\)/);
   assert.match(schema, /createdAt DateTime @default\(now\(\)\)/);
+  // .env makes it runnable out of the box (SQLite); .env.example shows Postgres.
+  assert.match(map.get('.env').content, /DATABASE_URL="file:\.\/dev\.db"/);
+  assert.match(map.get('.env.example').content, /postgresql:\/\//);
   // Prisma client singleton (the backend's gateway to the DB).
   assert.match(map.get('lib/db.ts').content, /export const prisma/);
   // API route persists to the database instead of an in-memory store.
