@@ -4585,6 +4585,11 @@ router.post(
         { kind: 'enterprise-execution', text: enterpriseExecutionBlock, cacheable: false },
         { kind: 'memory', text: memoryBlock, cacheable: true },
         { kind: 'orchestration-memory', text: orchMemoryBlock, cacheable: true },
+        // active-memory was present in the flat system prompt but missing here,
+        // so recalled user memory was dropped for Anthropic/Claude and on any
+        // systemBlocks-based (kernel/budget) rebuild. cacheable:false — it's
+        // recalled per turn and must not be cached stale.
+        { kind: 'active-memory', text: activeMemoryBlock, cacheable: false },
         { kind: 'cross-chat', text: crossChatBlock, cacheable: false },
         { kind: 'attribution', text: attributionBlock, cacheable: false },
         { kind: 'circuit-attribution', text: circuitAttributionBlock, cacheable: false },
