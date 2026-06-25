@@ -88,7 +88,7 @@ const EXTENSION_TO_MIMES = new Map([
   ['bmp', new Set(['image/bmp'])],
   ['tif', new Set(['image/tiff'])],
   ['tiff', new Set(['image/tiff'])],
-  ['svg', new Set(['image/svg+xml'])],
+  ['svg', new Set(['image/svg+xml', 'application/xml', 'text/xml'])], // some detectors report SVG as generic XML
   ['heic', new Set(['image/heic', 'image/heif'])],
   ['heif', new Set(['image/heif', 'image/heic'])],
   ['pdf', new Set(['application/pdf'])],

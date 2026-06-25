@@ -173,3 +173,13 @@ test('upload limits honour deployment env caps', () => {
   assert.equal(limits.fileSize, 25 * 1024 * 1024);
   assert.equal(limits.files, 3);
 });
+
+test('an SVG reported as generic XML is accepted (still active-content sanitized)', () => {
+  // Some detectors report an SVG as application/xml; the ext→mime map only had
+  // image/svg+xml, so a legit .svg got an extension_mime_mismatch.
+  const r = validateUploadPolicy({ originalName: 'logo.svg', declaredMime: 'application/xml', detectedMime: 'application/xml', detectionSource: 'magic-bytes', size: 1000 });
+  assert.equal(r.ok, true, r.code);
+  // The native image/svg+xml form still works too.
+  const native = validateUploadPolicy({ originalName: 'logo.svg', declaredMime: 'image/svg+xml', size: 1000 });
+  assert.equal(native.ok, true, native.code);
+});
