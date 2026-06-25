@@ -215,7 +215,11 @@ function dedupeByDoi(papers) {
     // dedupe pass and drop every other paper that came with it.
     if (!p || typeof p !== 'object') continue;
     const doi = normaliseDoi(p.doi);
-    const key = doi || `t:${normaliseTitle(p.title)}`;
+    const normTitle = normaliseTitle(p.title);
+    // A paper with neither a DOI nor a title can't be deduped meaningfully —
+    // give it a unique key so distinct title-less records don't all collapse
+    // onto the same `t:` key and get merged into one.
+    const key = doi || (normTitle ? `t:${normTitle}` : `u:${order.length}`);
     const prev = seen.get(key);
     if (!prev) {
       seen.set(key, p);
@@ -695,7 +699,7 @@ async function searchEuropePMC(query, opts = {}) {
     citations: typeof r.citedByCount === 'number' ? r.citedByCount : null,
     openAccess: r.isOpenAccess === 'Y',
     pdfUrl: (r.fullTextUrlList?.fullTextUrl || [])
-      .find((u) => u.documentStyle === 'pdf')?.url || null,
+      .find((u) => u && u.documentStyle === 'pdf')?.url || null,
     htmlUrl: r.doi ? `https://doi.org/${r.doi}` : (r.pmid ? `https://europepmc.org/article/MED/${r.pmid}` : null),
   }));
 }
@@ -806,12 +810,12 @@ async function searchDataCite(query, opts = {}) {
       source: 'datacite',
       id: d.id || null,
       doi,
-      title: Array.isArray(a.titles) && a.titles.length ? a.titles[0].title : '',
-      abstract: Array.isArray(a.descriptions) && a.descriptions.length ? a.descriptions[0].description : null,
-      authors: (a.creators || []).map((c) => ({
+      title: (Array.isArray(a.titles) && a.titles[0] && a.titles[0].title) || '',
+      abstract: (Array.isArray(a.descriptions) && a.descriptions[0] && a.descriptions[0].description) || null,
+      authors: (a.creators || []).filter(Boolean).map((c) => ({
         name: c.name || [c.givenName, c.familyName].filter(Boolean).join(' ') || null,
       })).filter((c) => c.name),
-      year: a.publicationYear || null,
+      year: a.publicationYear ? (parseInt(a.publicationYear, 10) || null) : null,
       venue: a.publisher || null,
       citations: typeof a.citationCount === 'number' ? a.citationCount : null,
       openAccess: null,

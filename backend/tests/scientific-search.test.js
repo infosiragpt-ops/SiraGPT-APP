@@ -87,6 +87,17 @@ test('dedupeByDoi falls back to normalised title when DOIs missing', () => {
   assert.equal(out.length, 1);
 });
 
+test('dedupeByDoi keeps DISTINCT title-less DOI-less papers separate (no collapse)', () => {
+  const { dedupeByDoi } = ss._internal;
+  // Both lack a DOI and a title — they must not all merge onto one 't:' key.
+  const out = dedupeByDoi([
+    { source: 'a', doi: null, title: '', year: 2020 },
+    { source: 'b', doi: null, title: null, year: 2021 },
+    { source: 'c', doi: null, title: '   ', year: 2022 },
+  ]);
+  assert.equal(out.length, 3);
+});
+
 test('invertedIndexToText reconstructs sentence from OpenAlex inverted index', () => {
   const { invertedIndexToText } = ss._internal;
   const idx = { 'Hello': [0], 'world': [1], '!': [2] };
