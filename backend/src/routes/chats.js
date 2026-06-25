@@ -1241,10 +1241,19 @@ router.post('/:chatId/messages/:messageId/share', authenticateToken, async (req,
     const { chatId, messageId } = req.params;
     console.log('messageId', messageId, chatId);
 
-    // Check if chat belongs to user
+    // Check if chat belongs to user. Load messages in conversation order
+    // (timestamp asc) and EXCLUDE soft-deleted ones: the adjacency lookup below
+    // pairs messages[index-1]/[index+1], so an unordered include could pair the
+    // wrong message, and a tombstoned (deletedAt) message must never resurface
+    // through a public share.
     const chat = await prisma.chat.findFirst({
       where: { id: chatId, userId: req.user.id },
-      include: { messages: true }
+      include: {
+        messages: {
+          where: { deletedAt: null },
+          orderBy: { timestamp: 'asc' },
+        },
+      },
     });
     if (!chat) {
       return res.status(404).json({ error: 'Chat not found' });
