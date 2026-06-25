@@ -794,7 +794,9 @@ router.post('/generate', [
       where: {
         userId: req.user.id,
         timestamp: {
-          gte: new Date(new Date().getFullYear(), new Date().getMonth(), 1)
+          // UTC month start — `new Date(y,m,1)` is local-time and on a TZ-offset
+          // host drops the month's first hours, under-counting the Veo3 cap.
+          gte: new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1))
         },
         model: 'veo-3.0'
       },

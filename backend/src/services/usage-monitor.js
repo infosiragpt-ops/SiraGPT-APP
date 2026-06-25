@@ -1,6 +1,16 @@
 const prisma = require('../config/database');
 // const emailService = require('./email'); // Commented out temporarily
 
+// Start of the current month in UTC. `new Date(y, m, 1)` builds the boundary in
+// LOCAL time, so on a TZ-offset host (prod VPS) it is shifted by the offset and
+// the query drops (negative offset) or pulls in (positive offset) the first
+// hours of the month relative to the UTC `timestamp` column — under-counting
+// monthly usage so a user can slip past their cap. Always build it in UTC.
+function currentMonthStartUtc() {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+}
+
 class UsageMonitorService {
   constructor() {
     this.warningThresholds = [0.8, 0.9, 1.0]; // 80%, 90%, 100%
@@ -179,7 +189,7 @@ class UsageMonitorService {
         where: {
           userId,
           sentAt: {
-            lt: new Date(new Date().getFullYear(), new Date().getMonth(), 1)
+            lt: currentMonthStartUtc()
           }
         }
       });
@@ -203,7 +213,7 @@ class UsageMonitorService {
           apiUsages: {
             where: period === 'current_month' ? {
               timestamp: {
-                gte: new Date(new Date().getFullYear(), new Date().getMonth(), 1)
+                gte: currentMonthStartUtc()
               }
             } : {},
             orderBy: { timestamp: 'desc' },
@@ -311,3 +321,4 @@ class UsageMonitorService {
 }
 
 module.exports = new UsageMonitorService();
+module.exports.currentMonthStartUtc = currentMonthStartUtc;
