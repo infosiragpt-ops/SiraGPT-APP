@@ -221,6 +221,11 @@ router.post(
 router.post('/:id/publish', authenticateToken, async (req, res) => {
   try {
     const result = await service.publishDeployment({ userId: req.user.id, id: req.params.id, hasFiles: req.body?.hasFiles !== false });
+    // The publish pipeline can complete the HTTP call yet still fail to promote
+    // (e.g. a blocking security-scan phase). Reflect that at the HTTP layer with
+    // 422 so a client polling on status alone doesn't read a failed build as a
+    // successful publish. The body (with failedPhase/failureMessage) is unchanged.
+    if (result && result.failedPhase) return res.status(422).json(result);
     return res.status(201).json(result);
   } catch (err) { return sendError(res, err); }
 });

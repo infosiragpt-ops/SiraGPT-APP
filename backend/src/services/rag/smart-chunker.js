@@ -98,11 +98,18 @@ async function chunkWithStrategy(doc = {}, opts = {}) {
   switch (strategy) {
     case 'code': {
       try {
-        const codeChunker = require('./code-chunker');
-        const ext = String(title || '').toLowerCase().split('.').pop() || '';
-        const language = CODE_LANGUAGES[`.${ext}`] || null;
-        const chunked = codeChunker.chunk(text, { language, size: size * 4, overlap: overlap * 4 });
-        return { chunks: chunked, strategy: 'code' };
+        // Real module lives at services/code-chunker (not services/rag/), and
+        // the export is chunkCode(filename, content, opts) which auto-detects the
+        // language and returns Array<{text,...}> — map to the string[] contract.
+        // (Was require('./code-chunker').chunk(...) → MODULE_NOT_FOUND +
+        // chunk-is-not-a-function, silently degrading every code doc to recursive.)
+        const codeChunker = require('../code-chunker');
+        const chunked = codeChunker
+          .chunkCode(String(title || 'code.txt'), text, { size: size * 4, overlap: overlap * 4 })
+          .map((c) => (c && typeof c === 'object' ? c.text : c))
+          .filter(Boolean);
+        if (chunked.length) return { chunks: chunked, strategy: 'code' };
+        // empty (no structural nodes + empty text) → fall through to recursive
       } catch {
         // Fall through to recursive
       }

@@ -90,7 +90,14 @@ function scheduleDefaultRagIndex(userId, fileRecord) {
   setImmediate(async () => {
     // Mark the entry into the async pipeline so the frontend can
     // distinguish "extraction done, still indexing" from "ready".
-    await fileProcessingStatus.setStage(prisma, fileRecord.id, 'chunking', { userId });
+    // Guarded: this is the one await outside the try blocks below, so a
+    // rejection here would escape the background callback as an
+    // unhandledRejection ([FATAL] in the global handler) — log and continue.
+    try {
+      await fileProcessingStatus.setStage(prisma, fileRecord.id, 'chunking', { userId });
+    } catch (stageErr) {
+      console.warn('[files] chunking-stage marker failed (non-fatal):', stageErr?.message || stageErr);
+    }
 
     // Retry helper: retries RAG indexing up to RAG_INDEX_MAX_RETRIES (default 3)
     // with exponential backoff. Recoverable failures (network, rate-limit,
