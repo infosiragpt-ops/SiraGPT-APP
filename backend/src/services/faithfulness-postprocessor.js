@@ -43,6 +43,14 @@ function postprocess({
     return { ok: true, action: 'none', report, response, repair: null };
   }
 
+  // No grounding context: faithfulness is undefined here. Every claim scores as
+  // "unsupported" only because there was nothing to check against (score → 0),
+  // so gating would slap a false "ungrounded" footer on a context-free turn
+  // (general conversation, the model's own knowledge). Skip the gate.
+  if (report.hasContext === false) {
+    return { ok: true, action: 'none', report, response, repair: null };
+  }
+
   const passed = report.score >= threshold;
   if (passed) {
     return { ok: true, action: 'pass', report, response, repair: null };

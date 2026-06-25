@@ -12,6 +12,20 @@ describe('faithfulness-postprocessor', () => {
     assert.equal(r.repair, null);
   });
 
+  test('no grounding context → action=none (no false F-grade footer)', () => {
+    // A claim-rich response with NO context must not be flagged: there was
+    // nothing to ground against, so the score-0 fail is meaningless.
+    const r = pp.postprocess({
+      response: 'The Eiffel Tower is 330 metres tall and was completed in 1889.',
+      context: [],
+      mode: 'annotate',
+    });
+    assert.equal(r.action, 'none', 'context-free turns must not be annotated');
+    assert.equal(r.repair, null);
+    assert.equal(r.ok, true);
+    assert.equal(r.response, 'The Eiffel Tower is 330 metres tall and was completed in 1889.', 'response unchanged');
+  });
+
   test('grounded response → action=pass', () => {
     const r = pp.postprocess({
       response: 'Revenue reached 1,234 USD with 42% growth.',
