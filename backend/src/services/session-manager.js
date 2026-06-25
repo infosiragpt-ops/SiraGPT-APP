@@ -233,11 +233,14 @@ async function compactSession(sessionId, opts = {}) {
       });
       if (result && Array.isArray(result.messages)) {
         const kept = result.messages;
-        const dropped = total - kept.length;
         session.messages = session.messages.filter((m, i) => {
           if (i < 2 || i >= total - 6) return true;
           return kept.some(km => (km.content || '').slice(0, 80) === (m.content || '').slice(0, 80));
         });
+        // Count drops from the ACTUAL surviving length — the filter also keeps
+        // the first 2 + last 6 unconditionally, so `total - kept.length` would
+        // overstate the drop (and make kept + dropped != total).
+        const dropped = total - session.messages.length;
         if (opts.summary) session.summary = opts.summary;
         return {
           compacted: true,
