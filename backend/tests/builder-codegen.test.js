@@ -88,6 +88,31 @@ test('codegenFromBrief gives kebab-colliding entity slugs distinct file paths', 
   }
 });
 
+test('buildEntityPage useState init object is comma-separated (valid for 2+ fields)', () => {
+  // With 2+ editable fields the initial form-state lines are emitted one per
+  // property inside useState({ … }). Missing trailing commas produced
+  // `{ name: "" price: 0 }`, an invalid object literal that fails to compile.
+  const brief = makeBrief({ platform: 'web' });
+  const blueprint = {
+    dataModel: [
+      { entity: 'Item', fields: [
+        { name: 'name', type: 'string' },
+        { name: 'price', type: 'number' },
+        { name: 'in stock', type: 'boolean' },
+      ] },
+    ],
+  };
+  const { files } = codegenFromBrief(brief, blueprint);
+  const page = files.find((f) => f.path === 'app/item/page.tsx').content;
+  const block = page.match(/useState\(\{\n([\s\S]*?)\n\s*\}\)/);
+  assert.ok(block, 'found the useState init object');
+  const props = block[1].split('\n').map((l) => l.trim()).filter(Boolean);
+  assert.ok(props.length >= 2, 'multi-field entity emits 2+ init properties');
+  for (const p of props) {
+    assert.ok(p.endsWith(','), `init property must end with a comma, got: ${JSON.stringify(p)}`);
+  }
+});
+
 test('buildEntityPage gives camelCase-colliding field names distinct keys', () => {
   const brief = makeBrief({ platform: 'web' });
   const blueprint = {

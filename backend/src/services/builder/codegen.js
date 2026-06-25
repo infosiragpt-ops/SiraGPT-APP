@@ -393,10 +393,13 @@ function buildEntityPage(model) {
 
   // TS interface for a row.
   const ifaceFields = model.fields.map((f) => '  ' + colKey(f) + ': ' + tsType(f.type) + ';');
-  // Initial form state.
+  // Initial form state. NOTE the trailing comma — these lines are emitted one
+  // per property inside `useState({ … })`, so without it a 2+-field entity
+  // produces `{ name: "" price: 0 }`, an invalid object literal that fails to
+  // compile (`npm run build`) in the generated project.
   const initialState = editable.map((f) => {
     const key = colKey(f);
-    return '    ' + key + ': ' + (tsType(f.type) === 'number' ? '0' : tsType(f.type) === 'boolean' ? 'false' : '""');
+    return '    ' + key + ': ' + (tsType(f.type) === 'number' ? '0' : tsType(f.type) === 'boolean' ? 'false' : '""') + ',';
   });
   // Form inputs.
   const inputs = editable.map((f) => {
