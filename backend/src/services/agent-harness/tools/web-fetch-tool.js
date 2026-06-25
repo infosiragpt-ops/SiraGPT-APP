@@ -198,6 +198,9 @@ async function executeAgentWebFetch(args, options = {}) {
     const contentType = String(response.headers.get('content-type') || '').toLowerCase();
     const isTexty = /text\/|application\/(json|xml|xhtml|javascript|rss|atom)|\+json|\+xml/.test(contentType) || contentType === '';
     if (!isTexty) {
+      // Cancel the unread body before returning — leaving it unconsumed leaks the
+      // underlying socket/stream (mirrors the redirect path's cancel above).
+      try { if (response.body && response.body.cancel) await response.body.cancel(); } catch (_) { /* ignore */ }
       return {
         url: args.url,
         finalUrl: current.toString(),
