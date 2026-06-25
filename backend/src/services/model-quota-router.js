@@ -170,7 +170,13 @@ function resolveModelForUser(user, requestedModel, env = process.env) {
   const gemaUsage = toBigInt(user?.gemaTokenUsage);
   const gemaLimit = toBigInt(user?.gemaTokenLimit);
 
-  const premiumExhausted = premiumLimit > 0n && premiumUsage >= premiumLimit;
+  // A plan whose catalog premiumTokens is null (ENTERPRISE) has an UNLIMITED
+  // premium pool — never treat it as exhausted, even if the user's monthlyLimit
+  // field happens to carry a finite value. Otherwise an enterprise user got
+  // silently downgraded to the free Gema4 fallback after "exhausting" a grant
+  // they don't actually have.
+  const premiumUnlimited = catalog.premiumTokens == null;
+  const premiumExhausted = !premiumUnlimited && premiumLimit > 0n && premiumUsage >= premiumLimit;
   const gemaExhausted = !catalog.gemaUnlimited && gemaLimit > 0n && gemaUsage >= gemaLimit;
 
   if (plan === 'FREE') {

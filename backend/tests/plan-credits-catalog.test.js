@@ -40,6 +40,21 @@ test('model router falls back to default Gema4 model when premium exhausted', ()
   assert.equal(routed.blocked, false);
 });
 
+test('ENTERPRISE keeps the requested premium model even with a finite, exhausted monthlyLimit', () => {
+  // Regression: ENTERPRISE has an unlimited premium pool (catalog premiumTokens
+  // null), but a finite monthlyLimit on the user used to trigger premiumExhausted
+  // and silently downgrade them to the free Gema4 fallback.
+  const routed = resolveModelForUser({
+    plan: 'ENTERPRISE',
+    apiUsage: 999_999n,
+    monthlyLimit: 100_000n, // finite + exhausted, but ENTERPRISE is unlimited
+    gemaTokenUsage: 0n,
+    gemaTokenLimit: 0n,
+  }, 'gpt-5');
+  assert.equal(routed.model, 'gpt-5', 'enterprise keeps the requested model');
+  assert.equal(routed.blocked, false);
+});
+
 test('model quota policy exposes free daily call state', () => {
   const policy = buildModelQuotaPolicy({
     plan: 'FREE',
