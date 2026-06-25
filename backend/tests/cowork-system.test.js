@@ -539,6 +539,27 @@ describe('skills-registry', () => {
     assert.ok(skills.length >= 1);
   });
 
+  it('does not throw on an object intent (cowork passes { query, tags })', () => {
+    // Regression: recommendSkills used to TypeError on `(object).toLowerCase()`,
+    // and the throw was swallowed upstream — the whole cowork skills path was
+    // silently dead on every turn.
+    const out = skillsRegistry.recommendSkills({ query: 'analyze this document', tags: ['cowork'] }, {});
+    assert.ok(Array.isArray(out) && out.length > 0, 'an object intent still yields recommendations');
+  });
+
+  it('returns no skills for a blank/null intent (no includes("") garbage)', () => {
+    // Regression: String.includes('') is always true, so a blank intent scored
+    // EVERY skill 0.5 and returned the first 5 as bogus recommendations.
+    assert.deepEqual(skillsRegistry.recommendSkills('', {}), []);
+    assert.deepEqual(skillsRegistry.recommendSkills(null, {}), []);
+    assert.deepEqual(skillsRegistry.recommendSkills(undefined, {}), []);
+  });
+
+  it('still recommends by signals when the intent is blank', () => {
+    const out = skillsRegistry.recommendSkills('', { hasDocuments: true });
+    assert.ok(out.length > 0 && out.every((s) => s && s.id), 'document signals still drive recommendations');
+  });
+
   it('verifies prerequisites', () => {
     const result = skillsRegistry.verifyPrerequisites('deep_document_analysis', {
       hasDocuments: true,

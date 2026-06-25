@@ -56,7 +56,15 @@ async function executeSkill(skillId, ctx = {}) {
 
 async function executeRecommendedSkills(intent, ctx = {}, opts = {}) {
   const limit = Math.max(1, Math.min(Number(opts.limit) || 2, 5));
-  const recommended = skillsRegistry.recommendSkills(intent, ctx) || [];
+  // Degrade to no-skills if recommendation throws (e.g. a malformed intent)
+  // instead of propagating the throw to the cowork pipeline — defense in depth
+  // alongside the intent normalization in recommendSkills.
+  let recommended = [];
+  try {
+    recommended = skillsRegistry.recommendSkills(intent, ctx) || [];
+  } catch (_err) {
+    recommended = [];
+  }
   const slice = Array.isArray(recommended) ? recommended.slice(0, limit) : [];
   const results = [];
   for (const entry of slice) {

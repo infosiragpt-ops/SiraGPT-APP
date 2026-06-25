@@ -159,6 +159,17 @@ test('executeRecommendedSkills tolerates non-array recommendations', async () =>
   });
 });
 
+test('executeRecommendedSkills degrades to no-skills when recommendSkills throws', async () => {
+  const orig = skillsRegistry.recommendSkills;
+  skillsRegistry.recommendSkills = () => { throw new TypeError('boom'); };
+  try {
+    const out = await executeRecommendedSkills({ query: 'x' }, {});
+    assert.deepEqual(out, [], 'a throwing recommendation must not propagate — degrade to []');
+  } finally {
+    skillsRegistry.recommendSkills = orig;
+  }
+});
+
 test('executeRecommendedSkills resolves skill ids from multiple shapes', async () => {
   await withRegistryStubs({
     skills: { x: { id: 'x' } },
