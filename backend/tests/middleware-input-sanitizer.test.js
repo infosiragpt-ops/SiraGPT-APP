@@ -204,3 +204,26 @@ test('createInputSanitizer caps reported violations at 10 for the client respons
   assert.equal(state.statusCode, 400);
   assert.ok(state.body.violations.length <= 10, 'client response must not include more than 10');
 });
+
+test('scanValue detects an XSS payload in array elements past index 50 (no scan-cap bypass)', () => {
+  // Regression: scanValue capped the array loop at Math.min(length, 50), so a
+  // payload buried past index 50 — e.g. a large agent-batch `tasks` array —
+  // slipped through entirely. Every element must be scanned.
+  const arr = [];
+  for (let i = 0; i < 60; i++) arr.push(i < 55 ? `benign-${i}` : '<script>alert(1)</script>');
+  const violations = scanValue({ tasks: arr });
+  assert.ok(violations.length > 0, 'a payload at index 55 must still be detected');
+  assert.ok(
+    violations.some((v) => /tasks\[5[5-9]\]/.test(v.path || '')),
+    'the violation path points at the >50 index',
+  );
+});
+
+test('scanValue detects an XSS payload under object keys past the 30th (no key-cap bypass)', () => {
+  // Sibling of the array cap: Object.keys(value).slice(0, 30) let a payload
+  // under the 31st+ key bypass detection. Every key must be scanned.
+  const obj = {};
+  for (let i = 0; i < 40; i++) obj[`k${i}`] = i < 35 ? `benign-${i}` : '<script>alert(1)</script>';
+  const violations = scanValue(obj);
+  assert.ok(violations.length > 0, 'a payload under the 35th key must still be detected');
+});

@@ -6,7 +6,7 @@
  */
 
 const express = require('express');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const prisma = require('../config/database');
 
 const journal = require('../services/accounting/journal');
@@ -74,11 +74,12 @@ router.get('/accounts', authenticateToken, async (req, res) => {
 });
 
 // Seed idempotente del catálogo PCGE base (solo admin).
-router.post('/accounts/seed', authenticateToken, async (req, res) => {
+// La puerta de admin usa el middleware canónico requireAdmin: el chequeo inline
+// previo miraba `req.user.role` — campo que el modelo User no tiene (sólo
+// isAdmin/isSuperAdmin) — así que era SIEMPRE verdadero y devolvía 403 a todos,
+// incluidos los admins, dejando el endpoint inalcanzable.
+router.post('/accounts/seed', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    if (!req.user || (req.user.role !== 'ADMIN' && req.user.role !== 'SUPER_ADMIN')) {
-      return res.status(403).json({ error: 'forbidden', message: 'Solo administradores pueden sembrar el catálogo PCGE' });
-    }
     const result = await seedPcge(prisma);
     res.json({ ok: true, ...result });
   } catch (err) { sendDomainError(res, err); }

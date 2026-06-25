@@ -79,7 +79,10 @@ function scanValue(value, depth = 0, path = '') {
 
   if (Array.isArray(value)) {
     const results = [];
-    for (let i = 0; i < Math.min(value.length, 50); i++) {
+    // Scan EVERY element — capping at 50 let an XSS/injection payload past
+    // index 50 (e.g. a large agent-batch tasks array) bypass detection entirely.
+    // MAX_DEPTH bounds recursion and the body-parser bounds total size.
+    for (let i = 0; i < value.length; i++) {
       results.push(...scanValue(value[i], depth + 1, `${path}[${i}]`));
     }
     return results;
@@ -87,7 +90,9 @@ function scanValue(value, depth = 0, path = '') {
 
   if (typeof value === 'object') {
     const results = [];
-    const keys = Object.keys(value).slice(0, 30);
+    // Scan every key for the same reason — a payload under key 31+ used to slip
+    // through. (Sibling of the array cap above.)
+    const keys = Object.keys(value);
     for (const key of keys) {
       results.push(...scanValue(value[key], depth + 1, path ? `${path}.${key}` : key));
     }
