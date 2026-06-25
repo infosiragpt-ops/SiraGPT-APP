@@ -323,6 +323,11 @@ test('validateGeneratorPlan: tabular formats need rows', () => {
   assert.equal(validateGeneratorPlan('csv', [{ a: 1 }]).ok, true);
   assert.equal(validateGeneratorPlan('xlsx', { data: [{ a: 1 }] }).ok, true);
   assert.equal(validateGeneratorPlan('tsv', { rows: [] }).ok, false);
+  // `records` is a valid tabular carrier (the generator's tabularize accepts it)
+  // — it must not be rejected as tabular_plan_needs_rows.
+  assert.equal(validateGeneratorPlan('csv', { records: [{ a: 1 }] }).ok, true);
+  assert.equal(validateGeneratorPlan('xlsx', { records: [{ a: 1 }] }).ok, true);
+  assert.equal(validateGeneratorPlan('csv', { records: [] }).ok, false);
 });
 
 test('validateGeneratorPlan: ndjson/ics/vcf need their respective collections', () => {
