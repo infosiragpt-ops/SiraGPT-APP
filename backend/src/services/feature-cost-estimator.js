@@ -332,10 +332,21 @@ function recommendUpgradeFromUsage(usage, currentPlan, { env = process.env } = {
   if (!enrichPlanWithPricing(currentPlan)) return null;
   const recommendation = getRecommendedPlan(usage, { env });
   const comparison = comparePlans(currentPlan, recommendation.plan);
+  // shouldUpgrade must reflect CAPACITY, not $ price. ENTERPRISE is priced $2 —
+  // below PRO ($5)/PRO_MAX ($10) — so an over-budget PRO/PRO_MAX user gets
+  // recommended ENTERPRISE with a *negative* price delta, and the old
+  // `direction === 'upgrade'` (price-based) check told them NOT to upgrade,
+  // suppressing the very plan change that would unblock their usage. Upgrade iff
+  // the recommended plan differs AND the current plan's budget can't cover the
+  // projected usage.
+  const cur = String(currentPlan).toUpperCase();
+  const currentBudget = PLAN_BUDGETS[cur];
+  const projectedCredits = recommendation.monthlyCredits;
+  const currentCovers = currentBudget == null || projectedCredits <= currentBudget;
   return {
     recommendation,
     comparison,
-    shouldUpgrade: comparison ? comparison.direction === 'upgrade' : false,
+    shouldUpgrade: recommendation.plan !== cur && !currentCovers,
   };
 }
 
