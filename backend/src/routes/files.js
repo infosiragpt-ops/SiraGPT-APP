@@ -25,6 +25,7 @@ const OpenAI = require('openai');
 const documentIntentAnalyzer = require('../services/document-intent-analyzer');
 const fileIntegrityValidator = require('../services/file-integrity-validator');
 const objectStorage = require('../services/object-storage');
+const { pipeStreamToResponse } = require('../utils/pipe-stream-to-response');
 const { progressStream } = require('../services/upload-progress-sse');
 const {
   MAX_SIMULTANEOUS_DOCUMENTS,
@@ -1106,7 +1107,7 @@ router.get('/:id/render', authenticateToken, async (req, res) => {
       res.setHeader('X-Render-Engine', 'native-pdf');
       res.setHeader('X-Render-From-Cache', 'true');
       const { stream } = await objectStorage.readStream(file.path);
-      return stream.pipe(res);
+      return pipeStreamToResponse(stream, res, 'native-pdf');
     }
 
     if (!documentRenderer.isConvertible(file.mimeType, file.originalName)) {
@@ -1148,7 +1149,7 @@ router.get('/:id/render', authenticateToken, async (req, res) => {
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', contentDispositionHeader('inline', renderPdfFilename(file.originalName)));
     res.setHeader('Cache-Control', 'private, max-age=86400');
-    fsSync.createReadStream(pdfPath).pipe(res);
+    pipeStreamToResponse(fsSync.createReadStream(pdfPath), res, 'rendered-pdf');
   } catch (error) {
     console.error('Render route error:', error);
     res.status(500).json({ error: 'Failed to render document' });
