@@ -396,3 +396,21 @@ test('inspectFormat: csv reports tables capability', () => {
   assert.equal(s.capabilities.tables, true);
   assert.equal(s.extension, 'csv');
 });
+
+test('registry: legacy doc/ppt route to a parser (markitdown) instead of being rejected', () => {
+  // Regression: .doc/.ppt inferred to formats "doc"/"ppt" that NO parser
+  // declared, so every legacy Office upload was rejected. markitdown (the
+  // catch-all office converter) now covers them.
+  const md = getParserById('markitdown');
+  assert.ok(md, 'markitdown parser exists');
+  assert.ok(md.formats.includes('doc'), 'legacy .doc has a parser');
+  assert.ok(md.formats.includes('ppt'), 'legacy .ppt has a parser');
+  assert.equal(inferFormat('application/msword', '.doc'), 'doc');
+  assert.equal(inferFormat('application/vnd.ms-powerpoint', '.ppt'), 'ppt');
+});
+
+test('formatAdvice tolerates a non-string format without throwing', () => {
+  assert.doesNotThrow(() => formatAdvice(123, {}));
+  assert.doesNotThrow(() => formatAdvice(null));
+  assert.equal(typeof formatAdvice('pdf', 'report'), 'object');
+});
