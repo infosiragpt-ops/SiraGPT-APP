@@ -8,7 +8,20 @@
 const assert = require('node:assert/strict');
 const { describe, test } = require('node:test');
 
-const { detectDomain } = require('../src/services/deep-document-analyzer');
+const { detectDomain, extractEntities } = require('../src/services/deep-document-analyzer');
+
+describe('extractEntities ip_address octet validation', () => {
+  const ips = (text) => extractEntities(text).filter((e) => e.type === 'ip_address').map((e) => e.value);
+
+  test('matches valid IPv4 addresses', () => {
+    assert.deepEqual(ips('hosts: 192.168.1.1 and 8.8.8.8 and 0.0.0.0 and 255.255.255.255'),
+      ['192.168.1.1', '8.8.8.8', '0.0.0.0', '255.255.255.255']);
+  });
+
+  test('rejects out-of-range octets (no false-positive PII flags)', () => {
+    assert.deepEqual(ips('garbage 999.999.999.999 and 256.1.1.1 and 300.400.500.600 here'), []);
+  });
+});
 
 describe('deep-document-analyzer detectDomain', () => {
   test('detects the legal domain from legal terminology', () => {

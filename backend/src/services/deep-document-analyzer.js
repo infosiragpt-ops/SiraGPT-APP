@@ -60,7 +60,7 @@ const ENTITY_PATTERNS = [
   { type: 'date', pattern: /\b\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}\b|\b\d{4}[\/-]\d{1,2}[\/-]\d{1,2}\b/g, sensitivity: 'low' },
   { type: 'money', pattern: /[\$€£¥]\s?[\d,]+(?:\.\d{1,2})?|\b\d+(?:,\d{3})*(?:\.\d{1,2})?\s?(?:USD|EUR|GBP|MXN|COP|ARS|CLP|PEN|BRL)\b/gi, sensitivity: 'medium' },
   { type: 'percentage', pattern: /\b\d+(?:\.\d+)?%/g, sensitivity: 'low' },
-  { type: 'ip_address', pattern: /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g, sensitivity: 'high' },
+  { type: 'ip_address', pattern: /\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b/g, sensitivity: 'high' },
   { type: 'ssn', pattern: /\b\d{3}-\d{2}-\d{4}\b/g, sensitivity: 'critical' },
   { type: 'credit_card', pattern: /\b(?:\d{4}[-\s]?){3}\d{4}\b/g, sensitivity: 'critical' },
   { type: 'doi', pattern: /\b10\.\d{4,9}\/[^\s]+\b/g, sensitivity: 'low' },
