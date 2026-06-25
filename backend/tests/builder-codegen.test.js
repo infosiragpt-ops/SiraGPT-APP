@@ -145,19 +145,44 @@ test('web codegen emits a runnable Next.js project skeleton', () => {
     'app/layout.tsx',
     'app/page.tsx',
     'components/site-nav.tsx',
-    'lib/store.ts',
+    'prisma/schema.prisma',
+    'lib/db.ts',
   ]) {
     assert.ok(map.has(p), `expected file ${p}`);
   }
+  assert.ok(!map.has('lib/store.ts'), 'in-memory store replaced by a real database');
 });
 
-test('package.json is valid JSON with Next.js deps', () => {
+test('package.json is valid JSON with Next.js + Prisma deps (3-tier app)', () => {
   const { files } = codegenFromBrief(makeBrief());
   const pkg = JSON.parse(fileMap(files).get('package.json').content);
   assert.ok(pkg.dependencies.next, 'has next dependency');
   assert.ok(pkg.dependencies.react, 'has react dependency');
-  assert.equal(pkg.scripts.dev, 'next dev');
+  assert.ok(pkg.dependencies['@prisma/client'], 'has @prisma/client (database layer)');
+  assert.ok(pkg.devDependencies.prisma, 'has prisma CLI');
+  // The DB schema is pushed before dev/build so the app runs from a clean checkout.
+  assert.equal(pkg.scripts.dev, 'prisma db push --skip-generate && next dev');
+  assert.equal(pkg.scripts.postinstall, 'prisma generate');
   assert.ok(pkg.devDependencies.typescript, 'has typescript');
+});
+
+test('app generates a real Prisma + SQLite database layer wired to the API', () => {
+  const { files } = codegenFromBrief(makeBrief());
+  const map = fileMap(files);
+  const schema = map.get('prisma/schema.prisma').content;
+  assert.match(schema, /provider = "sqlite"/);
+  assert.match(schema, /model Producto \{/);
+  assert.match(schema, /model Proveedor \{/);
+  assert.match(schema, /id\s+String\s+@id @default\(cuid\(\)\)/);
+  assert.match(schema, /createdAt DateTime @default\(now\(\)\)/);
+  // Prisma client singleton (the backend's gateway to the DB).
+  assert.match(map.get('lib/db.ts').content, /export const prisma/);
+  // API route persists to the database instead of an in-memory store.
+  const api = map.get('app/api/producto/route.ts').content;
+  assert.match(api, /from "@\/lib\/db"/);
+  assert.match(api, /prisma\.producto\.findMany/);
+  assert.match(api, /prisma\.producto\.create/);
+  assert.ok(!/@\/lib\/store/.test(api), 'no in-memory store import');
 });
 
 test('tsconfig.json is valid JSON with the @/* path alias', () => {
@@ -185,9 +210,11 @@ test('each entity yields a CRUD API route + a list/create page', () => {
 test('API route coerces numeric/boolean fields to their types', () => {
   const { files } = codegenFromBrief(makeBrief());
   const route = fileMap(files).get('app/api/producto/route.ts').content;
-  // precio (decimal) + stock (integer) → Number(...); activo (boolean) → Boolean(...)
+  // Coercions match the exact Prisma column type so an insert never throws:
+  // precio (decimal→Float) → Number; stock (integer→Int) → Math.trunc(Number);
+  // activo (boolean) → Boolean.
   assert.match(route, /precio: Number\(/);
-  assert.match(route, /stock: Number\(/);
+  assert.match(route, /stock: Math\.trunc\(Number\(/);
   assert.match(route, /activo: Boolean\(/);
   // id + createdAt are server-managed → never coerced from the body
   assert.doesNotMatch(route, /\bid: (String|Number|Boolean)\(/);

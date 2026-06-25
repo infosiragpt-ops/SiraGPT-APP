@@ -93,28 +93,34 @@ function editableFields(fields) {
 }
 
 // ── individual file builders ──────────────────────────────────────
-function buildPackageJson(brief) {
+function buildPackageJson(brief, entities = []) {
   const name = kebabCase(brief.purpose || 'siragpt-app');
+  const hasDb = entities.length > 0;
   const pkg = {
     name: name.slice(0, 60),
     version: '0.1.0',
     private: true,
     scripts: {
-      dev: 'next dev',
-      build: 'next build',
+      // With a database, push the schema to SQLite before `next dev`/`build` so
+      // the app is runnable from a clean checkout with a single `npm run dev`.
+      dev: hasDb ? 'prisma db push --skip-generate && next dev' : 'next dev',
+      build: hasDb ? 'prisma generate && prisma db push --skip-generate && next build' : 'next build',
       start: 'next start',
       lint: 'next lint',
+      ...(hasDb ? { postinstall: 'prisma generate', 'db:push': 'prisma db push' } : {}),
     },
     dependencies: {
       next: '14.2.5',
       react: '18.3.1',
       'react-dom': '18.3.1',
+      ...(hasDb ? { '@prisma/client': '5.18.0' } : {}),
     },
     devDependencies: {
       typescript: '5.5.4',
       '@types/node': '20.14.0',
       '@types/react': '18.3.3',
       '@types/react-dom': '18.3.0',
+      ...(hasDb ? { prisma: '5.18.0' } : {}),
     },
   };
   return JSON.stringify(pkg, null, 2) + '\n';
@@ -311,59 +317,125 @@ function buildHomePage(brief, entities) {
   return lines.join('\n');
 }
 
-function buildStoreLib() {
-  // Generic in-memory store — keeps the generated app runnable with no DB.
+// ── Database layer (Prisma + SQLite) ──────────────────────────────
+// The generated app is a real 3-tier stack: React/Next pages (frontend) →
+// API routes (backend) → Prisma over SQLite (a persistent database that runs
+// locally with zero external setup). Swap the datasource for Postgres in prod.
+
+// Blueprint field type → Prisma scalar type.
+const PRISMA_TYPES = {
+  id: 'String',
+  string: 'String',
+  text: 'String',
+  email: 'String',
+  url: 'String',
+  phone: 'String',
+  // Editable date fields are stored as the raw string the form submits — a
+  // user-entered value that isn't a valid Date would otherwise make a Prisma
+  // DateTime insert throw. (The server-managed `createdAt` is a real DateTime.)
+  datetime: 'String',
+  decimal: 'Float',
+  integer: 'Int',
+  boolean: 'Boolean',
+};
+
+function prismaType(fieldType) {
+  return PRISMA_TYPES[fieldType] || 'String';
+}
+
+// A safe default so a create with partial form data never violates a NOT NULL.
+function prismaDefault(fieldType) {
+  const t = prismaType(fieldType);
+  if (t === 'Int' || t === 'Float') return ' @default(0)';
+  if (t === 'Boolean') return ' @default(false)';
+  if (t === 'DateTime') return ' @default(now())';
+  return ' @default("")';
+}
+
+// Prisma model accessor = model name with a lowercased first letter (Event → event).
+function prismaAccessor(entityName) {
+  const n = pascalCase(entityName);
+  return n.charAt(0).toLowerCase() + n.slice(1);
+}
+
+function buildPrismaSchema(entities) {
+  const lines = [
+    '// Data layer. SQLite keeps the app runnable locally with no external',
+    '// database; for production swap `provider`/`url` for PostgreSQL or MySQL.',
+    'generator client {',
+    '  provider = "prisma-client-js"',
+    '}',
+    '',
+    'datasource db {',
+    '  provider = "sqlite"',
+    '  url      = "file:./dev.db"',
+    '}',
+    '',
+  ];
+  for (const model of entities) {
+    lines.push(`model ${pascalCase(model.entity)} {`);
+    lines.push('  id        String   @id @default(cuid())');
+    lines.push('  createdAt DateTime @default(now())');
+    for (const f of editableFields(model.fields)) {
+      const key = camelCase(f.name);
+      lines.push(`  ${key} ${prismaType(f.type)}${prismaDefault(f.type)}`);
+    }
+    lines.push('}');
+    lines.push('');
+  }
+  return lines.join('\n');
+}
+
+function buildDbLib() {
+  // Prisma client singleton — reused across hot reloads so dev doesn't exhaust
+  // database connections. This is the backend's single gateway to the database.
   return [
-    '// Tiny in-memory store. Replace with a real DB (Prisma) for production;',
-    '// state resets when the server restarts.',
-    'export type Row = { id: string; createdAt: string; [key: string]: unknown };',
+    'import { PrismaClient } from "@prisma/client";',
     '',
-    'const tables: Record<string, Row[]> = {};',
+    'const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };',
     '',
-    'export function list(table: string): Row[] {',
-    '  return tables[table] ?? [];',
-    '}',
+    'export const prisma = globalForPrisma.prisma ?? new PrismaClient();',
     '',
-    'export function create(table: string, data: Record<string, unknown>): Row {',
-    '  const row: Row = {',
-    '    id: Math.random().toString(36).slice(2, 10),',
-    '    createdAt: new Date().toISOString(),',
-    '    ...data,',
-    '  };',
-    '  tables[table] = [row, ...(tables[table] ?? [])];',
-    '  return row;',
-    '}',
+    'if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;',
     '',
   ].join('\n');
 }
 
+function buildGitignore() {
+  return ['node_modules', '.next', 'dev.db', 'dev.db-journal', 'prisma/dev.db', 'prisma/dev.db-journal', ''].join('\n');
+}
+
 function buildApiRoute(model) {
-  const slug = model.slug || kebabCase(model.entity);
+  const accessor = prismaAccessor(model.entity); // prisma.<accessor>
   const editable = editableFields(model.fields);
-  // Coerce each editable field from the request body to its TS type.
+  // Coerce each editable field from the request body to EXACTLY its Prisma
+  // column type, so an insert never throws on a type mismatch (Int rejects a
+  // float; DateTime rejects a non-date string — handled by storing dates as text).
   const coercions = editable.map((f) => {
     const key = camelCase(f.name);
-    const t = tsType(f.type);
-    if (t === 'number') return '    ' + key + ': Number((body as any)[' + jsStr(key) + '] ?? 0),';
-    if (t === 'boolean') return '    ' + key + ': Boolean((body as any)[' + jsStr(key) + ']),';
-    return '    ' + key + ': String((body as any)[' + jsStr(key) + '] ?? ""),';
+    const pt = prismaType(f.type);
+    if (pt === 'Int') return '      ' + key + ': Math.trunc(Number((body as any)[' + jsStr(key) + '] ?? 0)) || 0,';
+    if (pt === 'Float') return '      ' + key + ': Number((body as any)[' + jsStr(key) + '] ?? 0) || 0,';
+    if (pt === 'Boolean') return '      ' + key + ': Boolean((body as any)[' + jsStr(key) + ']),';
+    return '      ' + key + ': String((body as any)[' + jsStr(key) + '] ?? ""),';
   });
   return [
     'import { NextResponse } from "next/server";',
-    'import { list, create } from "@/lib/store";',
-    '',
-    'const TABLE = ' + jsStr(slug) + ';',
+    'import { prisma } from "@/lib/db";',
     '',
     'export async function GET() {',
-    '  return NextResponse.json({ items: list(TABLE) });',
+    '  const items = await prisma.' + accessor + '.findMany({ orderBy: { createdAt: "desc" } });',
+    '  return NextResponse.json({ items });',
     '}',
     '',
     'export async function POST(request: Request) {',
     '  const body = await request.json().catch(() => ({}));',
-    '  const row = create(TABLE, {',
+    '  const item = await prisma.' + accessor + '.create({',
+    '    data: {',
     ...coercions,
+    '    },',
     '  });',
-    '  return NextResponse.json({ item: row }, { status: 201 });',
+    '  return NextResponse.json({ item }, { status: 201 });',
     '}',
     '',
   ].join('\n');
@@ -533,7 +605,7 @@ function codegenFromBrief(rawBrief, blueprintArg) {
   });
 
   const files = [
-    { path: 'package.json', language: 'json', content: buildPackageJson(brief) },
+    { path: 'package.json', language: 'json', content: buildPackageJson(brief, entities) },
     { path: 'tsconfig.json', language: 'json', content: buildTsConfig() },
     { path: 'next.config.mjs', language: 'javascript', content: buildNextConfig() },
     { path: 'app/globals.css', language: 'css', content: buildGlobalsCss(brief) },
@@ -543,7 +615,10 @@ function codegenFromBrief(rawBrief, blueprintArg) {
   ];
 
   if (entities.length > 0) {
-    files.push({ path: 'lib/store.ts', language: 'typescript', content: buildStoreLib() });
+    // Database layer: Prisma schema (one model per entity) + a client singleton.
+    files.push({ path: 'prisma/schema.prisma', language: 'prisma', content: buildPrismaSchema(entities) });
+    files.push({ path: 'lib/db.ts', language: 'typescript', content: buildDbLib() });
+    files.push({ path: '.gitignore', language: 'text', content: buildGitignore() });
     for (const model of entities) {
       const slug = model.slug || kebabCase(model.entity);
       files.push({
