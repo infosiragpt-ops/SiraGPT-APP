@@ -116,7 +116,14 @@ async function ingestPastedContent(userId, content, opts = {}) {
     await prisma.file.update({
       where: { id: fileRecord.id },
       data: {
-        processingStage: 'analyzing',
+        // Persist the extracted text + analysis metadata only. Do NOT write
+        // processingStage here: 'analyzing' is not a valid stage in the
+        // file-processing state machine (STAGES = uploaded…validating…
+        // extracting…chunking…embedding…indexing…ready/failed). Writing it
+        // directly bypassed setStage()'s validation and left an invalid stage
+        // that consumers/isTerminal can't map. The stage stays 'extracting'
+        // (set above) until scheduleAutoFileRagIndex + setStage('ready') advance
+        // it through the real machine.
         extractedText: content,
         metadata: {
           ...fileRecord.metadata,
