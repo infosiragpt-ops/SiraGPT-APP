@@ -759,27 +759,11 @@ router.post('/refresh', authenticateToken, async (req, res) => {
       req,
     });
 
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-
-    // Update session - re-bind fingerprint to the refreshing client
-    // so subsequent verifications track the current network/UA.
-    const refreshedFp = computeFingerprint(req);
-    try {
-      await prisma.session.update({
-        where: { token: req.token },
-        data: { token: newToken, expiresAt, fingerprint: refreshedFp }
-      });
-    } catch (e) {
-      if (e && /fingerprint/i.test(String(e.message))) {
-        await prisma.session.update({
-          where: { token: req.token },
-          data: { token: newToken, expiresAt }
-        });
-      } else {
-        throw e;
-      }
-    }
-
+    // getSessionService().refresh() above already rotated this session row
+    // (token + expiresAt + re-bound fingerprint) via sessions.updateByToken().
+    // A second inline prisma.session.update keyed on the now-stale req.token
+    // matched zero rows → Prisma threw P2025 → every /refresh returned 500.
+    // The service is the single source of truth; no extra write here.
     setSessionCookie(res, newToken);
     const body = { token: newToken };
     if (refreshRotation.enabled()) {
