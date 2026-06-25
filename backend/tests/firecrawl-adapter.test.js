@@ -116,3 +116,31 @@ test('deepSearch result content falls back to .content when .markdown is absent'
   const out = await scraper.deepSearch('q');
   assert.equal(out.results[0].content, 'fallback');
 });
+
+// --- request timeout (AbortSignal) -----------------------------------------
+// A fetch that never resolves until its AbortSignal fires — models a hung
+// Firecrawl service so the timeout path is deterministic + offline.
+const hangUntilAbort = (_url, init) => new Promise((_, reject) => {
+  init.signal.addEventListener('abort', () => reject(init.signal.reason || new Error('aborted')));
+});
+
+test('scrape passes an AbortSignal in the request init', async () => {
+  let captured = null;
+  const fetchImpl = async (_url, opts) => { captured = opts; return { ok: true, async json() { return { data: {} }; } }; };
+  const scraper = createFirecrawlScraper({ env: { FIRECRAWL_API_KEY: 'sk' }, fetchImpl });
+  await scraper.scrape('https://example.com');
+  assert.ok(captured.signal instanceof AbortSignal, 'init.signal must be an AbortSignal');
+});
+
+test('scrape rejects (does not hang) when the request times out', async () => {
+  const scraper = createFirecrawlScraper({ env: { FIRECRAWL_API_KEY: 'sk' }, fetchImpl: hangUntilAbort });
+  await assert.rejects(() => scraper.scrape('https://example.com', { timeoutMs: 10 }));
+});
+
+test('deepSearch bounds the request and swallows an abort', async () => {
+  const scraper = createFirecrawlScraper({ env: { FIRECRAWL_API_KEY: 'sk' }, fetchImpl: hangUntilAbort });
+  const out = await scraper.deepSearch('q', { timeoutMs: 10 });
+  assert.equal(out.configured, true);
+  assert.deepEqual(out.results, []);
+  assert.ok(out.error, 'returns an error string instead of hanging');
+});
