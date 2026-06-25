@@ -74,6 +74,20 @@ describe('BulkheadPool', () => {
     await assert.rejects(pool.acquire(), { name: 'BulkheadRejectedError' });
   });
 
+  it('emits drain_timeout (and resolves, not hangs) when active ops do not finish in time', async () => {
+    const pool = new BulkheadPool('test-drain-timeout', { maxConcurrent: 2 });
+    const release = await pool.acquire(); // 1 active, deliberately never released
+    let event = null;
+    pool.once('drain_timeout', (e) => { event = e; });
+    await pool.drain(25); // active op never completes → timeout branch (must resolve)
+    assert.ok(event, 'drain_timeout event fired');
+    assert.strictEqual(event.name, 'test-drain-timeout');
+    assert.ok(event.remainingActive >= 1, 'reports the still-active operation count');
+    // Drain still flipped _draining, so new acquisitions are rejected.
+    await assert.rejects(pool.acquire(), { name: 'BulkheadRejectedError' });
+    release(); // cleanup
+  });
+
   it('stats() returns meaningful data', async () => {
     const pool = new BulkheadPool('test-stats', { maxConcurrent: 3, queueCapacity: 10 });
     const hold = await pool.acquire();
