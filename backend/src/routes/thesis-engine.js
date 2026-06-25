@@ -11,7 +11,8 @@ router.post(
   '/engine/run',
   [
     body('topic').isString().trim().isLength({ min: 8, max: 4000 }),
-    body('chapterIds').optional().isArray(),
+    body('chapterIds').optional().isArray({ max: 30 }),
+    body('chapterIds.*').optional().isString().trim().isLength({ min: 1, max: 64 }),
   ],
   authenticateToken,
   async (req, res) => {

@@ -8480,8 +8480,9 @@ router.post(
         }
       });
 
-      // Update chat title
-      const chat = await prisma.chat.findUnique({ where: { id: chatId } });
+      // Update chat title — scope the re-fetch to the owner (defense-in-depth:
+      // every other chat lookup in this file pairs the query with a userId check).
+      const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
       if (chat) {
         await prisma.chat.update({
           where: { id: chatId },

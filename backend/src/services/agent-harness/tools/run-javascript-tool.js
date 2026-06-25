@@ -149,10 +149,16 @@ async function executeRunJavascript(args) {
         if (jobs && jobs.error) { jobs.error.dispose(); break; }
         if (Date.now() >= deadline) break;
       }
-      const settled = await Promise.race([
-        nativePromise,
-        new Promise((resolve) => setTimeout(() => resolve({ __sandboxTimeout: true }), Math.max(10, deadline - Date.now()) + 50)),
-      ]);
+      // Hoist the race timer so it's cleared when the sandbox promise wins (the
+      // normal case) — otherwise a dangling setTimeout self-fires up to ~5s after
+      // run_javascript already returned, accumulating on the hot path.
+      let raceTimer;
+      const timeoutP = new Promise((resolve) => {
+        raceTimer = setTimeout(() => resolve({ __sandboxTimeout: true }), Math.max(10, deadline - Date.now()) + 50);
+        raceTimer.unref?.();
+      });
+      const settled = await Promise.race([nativePromise, timeoutP]);
+      clearTimeout(raceTimer);
       if (settled && settled.__sandboxTimeout) {
         return {
           ok: false,
