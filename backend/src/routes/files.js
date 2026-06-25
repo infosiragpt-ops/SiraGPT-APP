@@ -988,7 +988,10 @@ router.get('/:id/evidence', authenticateToken, async (req, res) => {
       userId: req.user.id,
       fileId: file.id,
       query: req.query.query || '',
-      limit: req.query.limit || 8,
+      // Validate + clamp the untrusted query param (same as the /files list
+      // endpoint). A raw string like ?limit=abc → NaN and ?limit=999999999 →
+      // an unbounded evidence scan.
+      limit: parsePositiveInt(req.query.limit, 8, { min: 1, max: 100 }),
     });
     res.json({
       analysis: result.analysis || analysis,

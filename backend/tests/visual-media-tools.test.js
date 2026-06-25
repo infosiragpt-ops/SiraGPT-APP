@@ -190,6 +190,19 @@ test('create_chart: histogram renders as bars (rect), not a line', async () => {
   assert.ok(c.includes('<rect'), 'histogram should render rect bars');
 });
 
+test('create_chart: horizontal_bar with fewer labels than data uses a fallback, not "undefined"', async () => {
+  const r = await tool('create_chart').execute({
+    chartType: 'horizontal_bar', title: 'Sparse labels',
+    labels: ['First'], // only one label for three bars
+    datasets: [{ label: 'V', data: [10, 20, 30] }],
+    theme: 'professional',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const c = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(!c.includes('>undefined<'), 'missing labels must not render the literal "undefined"');
+  assert.ok(c.includes('Bar 2') && c.includes('Bar 3'), 'unlabelled bars get a positional fallback');
+});
+
 test('create_chart: pie chart', async () => {
   const r = await tool('create_chart').execute({
     chartType: 'pie', title: 'Pie', labels: ['A', 'B'], datasets: [{ label: 'V', data: [60, 40] }],

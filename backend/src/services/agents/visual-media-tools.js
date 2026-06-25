@@ -922,7 +922,7 @@ const createChart = {
           const y = M.top + i * (barH + 6) + 4;
           const color = colors[0] || palette[i % palette.length];
           bars += `<rect x="${M.left}" y="${y}" width="${Math.max(barW, 1)}" height="${barH}" fill="${color}" rx="4" opacity="0.9"/>`;
-          bars += `<text x="${M.left - 8}" y="${y + barH / 2}" text-anchor="end" dominant-baseline="middle" font-family="Arial" font-size="12" fill="#555">${safeLabels[i]}</text>`;
+          bars += `<text x="${M.left - 8}" y="${y + barH / 2}" text-anchor="end" dominant-baseline="middle" font-family="Arial" font-size="12" fill="#555">${safeLabels[i] || `Bar ${i + 1}`}</text>`;
           bars += `<text x="${M.left + barW + 6}" y="${y + barH / 2}" dominant-baseline="middle" font-family="Arial" font-size="11" fill="#333">${tickFormat(val)}</text>`;
         });
 
