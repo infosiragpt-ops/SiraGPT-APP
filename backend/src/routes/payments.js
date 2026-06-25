@@ -527,47 +527,49 @@ router.get('/verify-session', authenticateToken, async (req, res) => {
       session = await stripeService.retrieveCheckoutSession(session_id);
       console.log(`Stripe session status: ${session.payment_status}`);
       
-      // If Stripe session is paid and our payment is still pending, update it
+      // If Stripe session is paid and our payment is still pending, claim the
+      // row and grant the plan ATOMICALLY — the same idempotency compare-and-set
+      // the webhook uses (handleCheckoutSessionCompleted). Without the atomic
+      // claim, two concurrent verify-session calls — or a verify racing the
+      // checkout.session.completed webhook — each read PENDING and granted
+      // credits, double-granting. Only the request that flips the row
+      // not-COMPLETED → COMPLETED grants; the loser short-circuits. monthlyLimit
+      // is BigInt in Prisma, so both operands are coerced to BigInt.
       if (session.payment_status === 'paid' && payment.status === 'PENDING') {
         console.log('Payment is successful in Stripe, updating user plan...');
-        
-        // Update payment status
-        await prisma.payment.update({
-          where: { id: payment.id },
-          data: { 
-            status: 'COMPLETED',
-            stripeSubscriptionId: session.subscription 
-          }
-        });
 
-        // Update user subscription - ADD new plan limits to existing monthlyLimit.
-        // `monthlyLimit` is BigInt in Prisma — coerce both operands to BigInt
-        // before adding. Mixing BigInt+Number throws and silently aborts the
-        // handler, leaving the user on FREE after a successful charge.
         const creditsForPlan = premiumCreditsForPlan(payment.plan);
+        const granted = await prisma.$transaction(async (tx) => {
+          const claim = await tx.payment.updateMany({
+            where: { id: payment.id, status: { not: 'COMPLETED' } },
+            data: { status: 'COMPLETED', stripeSubscriptionId: session.subscription },
+          });
+          if (claim.count === 0) return false; // already granted by a racer/webhook
 
-        // Get current user to add to existing limits
-        const currentUser = await prisma.user.findUnique({ where: { id: req.user.id } });
-        const currentLimit = typeof currentUser?.monthlyLimit === 'bigint'
-          ? currentUser.monthlyLimit
-          : BigInt(currentUser?.monthlyLimit ?? 0);
-        const newTotalLimit = currentLimit + creditsForPlan;
-        const currentGemaLimit = toBigIntSafe(currentUser?.gemaTokenLimit);
-        const newGemaLimit = currentGemaLimit + gemaLimitForPlan(payment.plan);
+          const currentUser = await tx.user.findUnique({ where: { id: req.user.id } });
+          const currentLimit = typeof currentUser?.monthlyLimit === 'bigint'
+            ? currentUser.monthlyLimit
+            : BigInt(currentUser?.monthlyLimit ?? 0);
+          const newTotalLimit = currentLimit + creditsForPlan;
+          const newGemaLimit = toBigIntSafe(currentUser?.gemaTokenLimit) + gemaLimitForPlan(payment.plan);
 
-        const updatedUser = await prisma.user.update({
-          where: { id: req.user.id },
-          data: {
-            plan: payment.plan,
-            monthlyLimit: newTotalLimit,
-            gemaTokenLimit: newGemaLimit,
-            stripeSubscriptionId: session.subscription,
-            subscriptionStatus: 'active'
-            // monthlyCallLimit: NOT UPDATED - preserve current usage
-          }
+          await tx.user.update({
+            where: { id: req.user.id },
+            data: {
+              plan: payment.plan,
+              monthlyLimit: newTotalLimit,
+              gemaTokenLimit: newGemaLimit,
+              stripeSubscriptionId: session.subscription,
+              subscriptionStatus: 'active',
+              // monthlyCallLimit: NOT UPDATED - preserve current usage
+            },
+          });
+          return true;
         });
 
-        console.log(`Successfully updated user ${req.user.id} to plan ${payment.plan}`);
+        console.log(granted
+          ? `Successfully updated user ${req.user.id} to plan ${payment.plan}`
+          : `Payment ${payment.id} already completed elsewhere; skipping duplicate grant`);
         paymentStatus = 'COMPLETED';
       }
     } catch (stripeError) {
@@ -578,35 +580,34 @@ router.get('/verify-session', authenticateToken, async (req, res) => {
       // In explicit local demo mode (without Stripe keys), simulate successful payment.
       if (payment.status === 'PENDING') {
         console.log('Demo mode: Updating payment and user plan...');
-        
-        // Update payment status
-        await prisma.payment.update({
-          where: { id: payment.id },
-          data: { status: 'COMPLETED' }
-        });
 
-        // Update user subscription - ADD new plan limits to existing monthlyLimit.
-        // BigInt-safe: see comment in the Stripe branch above for context.
+        // Same atomic claim-then-grant as the Stripe branch — a duplicate
+        // verify in demo mode must not double-grant either. BigInt-safe.
         const creditsForPlan = premiumCreditsForPlan(payment.plan);
+        await prisma.$transaction(async (tx) => {
+          const claim = await tx.payment.updateMany({
+            where: { id: payment.id, status: { not: 'COMPLETED' } },
+            data: { status: 'COMPLETED' },
+          });
+          if (claim.count === 0) return; // already granted by a racer
 
-        // Get current user to add to existing limits
-        const currentUser = await prisma.user.findUnique({ where: { id: req.user.id } });
-        const currentLimit = typeof currentUser?.monthlyLimit === 'bigint'
-          ? currentUser.monthlyLimit
-          : BigInt(currentUser?.monthlyLimit ?? 0);
-        const newTotalLimit = currentLimit + creditsForPlan;
-        const currentGemaLimit = toBigIntSafe(currentUser?.gemaTokenLimit);
-        const newGemaLimit = currentGemaLimit + gemaLimitForPlan(payment.plan);
+          const currentUser = await tx.user.findUnique({ where: { id: req.user.id } });
+          const currentLimit = typeof currentUser?.monthlyLimit === 'bigint'
+            ? currentUser.monthlyLimit
+            : BigInt(currentUser?.monthlyLimit ?? 0);
+          const newTotalLimit = currentLimit + creditsForPlan;
+          const newGemaLimit = toBigIntSafe(currentUser?.gemaTokenLimit) + gemaLimitForPlan(payment.plan);
 
-        const updatedUser = await prisma.user.update({
-          where: { id: req.user.id },
-          data: {
-            plan: payment.plan,
-            monthlyLimit: newTotalLimit,
-            gemaTokenLimit: newGemaLimit,
-            subscriptionStatus: 'active'
-            // monthlyCallLimit: NOT UPDATED - preserve current usage
-          }
+          await tx.user.update({
+            where: { id: req.user.id },
+            data: {
+              plan: payment.plan,
+              monthlyLimit: newTotalLimit,
+              gemaTokenLimit: newGemaLimit,
+              subscriptionStatus: 'active',
+              // monthlyCallLimit: NOT UPDATED - preserve current usage
+            },
+          });
         });
 
         console.log(`Demo mode: Successfully updated user ${req.user.id} to plan ${payment.plan}`);
