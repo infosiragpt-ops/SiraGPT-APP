@@ -18,5 +18,12 @@ A plain `<style>` tag (without `precedence`) also risks the same mismatch in Rea
 ## What was fixed
 - `BottomGlowBar.tsx`: `<style jsx global>` with `glow-slide`, `glow-hue`, `comet-sweep`, `comet-sweep-rev`
 - `AuthNavButtons.tsx`: `<style>` with `login-beam`
-- Both sets of keyframes moved to `app/globals.css`
+- `BrandLogo.tsx`: `<style jsx global>` with `brand-wave` — found later as a third offender
+- All keyframes moved to `app/globals.css`
 - Also removed the `loading` fallback from `root-providers-dynamic.tsx` (`RootProviders` ssr:false) — the `<span sr-only>` placeholder caused a secondary structural mismatch between the server's loading state and the client's full provider tree.
+
+## How to scan for future offenders
+```bash
+grep -rn "jsx\s*global\|<style\s*jsx\|styled-jsx" --include="*.tsx" --include="*.ts" components/ app/ lib/
+```
+Zero output = clean. Run this grep when debugging any hydration mismatch — there may be more components not yet discovered.

@@ -22,6 +22,10 @@ const CHUNKS = [
   // sentry-client-init loads lazily via ssr:false dynamic(); without a prewarm
   // the first browser request hits a cold compile and times out through Replit proxy
   '/_next/static/chunks/_app-pages-browser_components_sentry-client-init_tsx.js',
+  // /auth/login RSC payload: first client-side navigation to login triggers
+  // a cold compile; the RSC fetch fails and Next.js falls back to browser
+  // navigation (TypeError "Load failed" in console). Pre-compile it at boot.
+  '/auth/login',
 ];
 
 function get(path, timeoutMs = 8_000) {

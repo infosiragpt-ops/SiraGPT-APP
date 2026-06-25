@@ -8,7 +8,11 @@ import "./video-liquid.css"
 import { NextIntlClientProvider } from "next-intl"
 import { getLocale, getMessages } from "next-intl/server"
 import { isRTL } from "@/lib/i18n/locales"
-import { LayoutClientEffects } from "@/components/layout-client-effects"
+// LayoutClientEffects is loaded via a "use client" dynamic wrapper (ssr:false)
+// to prevent React from emitting a <div hidden=""> RSC transport container
+// before the <a> skip-link in the server HTML. That hidden div made the first
+// body child differ between server and client → structural hydration mismatch.
+import { LayoutClientEffects } from "@/components/layout-client-effects-dynamic"
 // RootProviders is loaded from a Client Component wrapper that uses
 // next/dynamic with ssr:false. Moving the dynamic() call into a "use client"
 // file is required — Next.js 15 forbids ssr:false in Server Components.
