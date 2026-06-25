@@ -109,6 +109,20 @@ test('resolveCost: function, number, numeric-string', () => {
   assert.equal(resolveCost('not-a-number', {}), 0);
 });
 
+test('resolveCost: fractional values round UP to an integer (never crash on BigInt, never under-charge)', () => {
+  // A fractional price env (e.g. CREDITS_IMAGE_BASE=5.5) used to flow verbatim
+  // into BigInt() inside spendCredits → RangeError → HTTP 500 on EVERY charged
+  // request. Now coerced via Math.ceil at the chokepoint.
+  assert.equal(resolveCost(5.5, {}), 6);
+  assert.equal(resolveCost(0.5, {}), 1);
+  assert.equal(resolveCost(() => 1.01, {}), 2);
+  // non-chargeable / invalid → 0 (the middleware then bypasses the ledger)
+  assert.equal(resolveCost(0, {}), 0);
+  assert.equal(resolveCost(-3, {}), 0);
+  assert.equal(resolveCost(NaN, {}), 0);
+  assert.equal(resolveCost(Infinity, {}), 0);
+});
+
 test('pickIdempotencyKey: prefers header over body', () => {
   const req = {
     get: (n) => (n.toLowerCase() === 'idempotency-key' ? 'from-header' : undefined),
@@ -267,6 +281,25 @@ test('spendCredits + refundCharge: round trip leaves balance unchanged', async (
   const refund = await refundCharge({ originalTxn: spend.txn, reason: 'engine_error' });
   assert.equal(balance, 100n, 'balance restored after refund');
   assert.equal(refund.ok, true);
+});
+
+test('spendCredits: a fractional amount rounds up instead of throwing RangeError', async () => {
+  balance = 100n;
+  lifetimeSpent = 0n;
+  const spend = await spendCredits({ userId: 'u1', amount: 5.5, feature: 'image' });
+  assert.equal(spend.ok, true);
+  assert.equal(balance, 94n, '5.5 rounded up to 6 and debited (no crash)');
+});
+
+test('spendCredits: non-finite / non-positive amounts reject cleanly as INVALID_AMOUNT', async () => {
+  balance = 100n;
+  lifetimeSpent = 0n;
+  for (const bad of [NaN, Infinity, 0, -1, 'x', null]) {
+    const r = await spendCredits({ userId: 'u1', amount: bad, feature: 'image' });
+    assert.equal(r.ok, false, `amount=${String(bad)} must be rejected`);
+    assert.equal(r.code, 'INVALID_AMOUNT');
+  }
+  assert.equal(balance, 100n, 'balance untouched on invalid amounts');
 });
 
 test('balanceAfter is captured atomically from the same update (not a re-read)', async () => {

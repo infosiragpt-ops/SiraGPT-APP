@@ -1173,33 +1173,44 @@ async function handleInvoicePaymentFailed(invoice) {
       console.error('Payment failure email dispatch failed (non-fatal):', mailErr.message);
     }
 
-    // Create in-app notification
-    await prisma.notification.create({
-      data: {
-        userId: user.id,
-        type: 'payment_failed',
-        title: 'Payment Failed',
-        message: `Your payment of $${amountDue} could not be processed. We'll retry automatically.`,
-        severity: 'warning',
-        metadata: serializeBigIntFields({
-          invoiceId: invoice.id,
-          amount: amountDue
-        })
-      }
-    });
+    // Create in-app notification + record the audit event — both non-idempotent
+    // (no unique guard on invoice.id), so each is isolated in its own
+    // log-and-continue try/catch. Only the idempotent past_due update above
+    // gates the rethrow below, so a Stripe redelivery can't duplicate these.
+    try {
+      await prisma.notification.create({
+        data: {
+          userId: user.id,
+          type: 'payment_failed',
+          title: 'Payment Failed',
+          message: `Your payment of $${amountDue} could not be processed. We'll retry automatically.`,
+          severity: 'warning',
+          metadata: serializeBigIntFields({
+            invoiceId: invoice.id,
+            amount: amountDue
+          })
+        }
+      });
+    } catch (notifErr) {
+      console.warn('[payments] payment_failed notification persist failed:', notifErr?.message || notifErr);
+    }
 
     // Record subscription event
-    await prisma.subscriptionEvent.create({
-      data: {
-        userId: user.id,
-        eventType: 'payment_failed',
-        eventData: serializeBigIntFields({
-          invoiceId: invoice.id,
-          amount: amountDue,
-          reason: invoice.last_finalization_error?.message || 'Payment declined'
-        })
-      }
-    });
+    try {
+      await prisma.subscriptionEvent.create({
+        data: {
+          userId: user.id,
+          eventType: 'payment_failed',
+          eventData: serializeBigIntFields({
+            invoiceId: invoice.id,
+            amount: amountDue,
+            reason: invoice.last_finalization_error?.message || 'Payment declined'
+          })
+        }
+      });
+    } catch (evtErr) {
+      console.warn('[payments] subscriptionEvent payment_failed persist failed:', evtErr?.message || evtErr);
+    }
 
     console.log(`Invoice payment failed for user ${user.id}`);
 
@@ -1216,7 +1227,12 @@ async function handleInvoicePaymentFailed(invoice) {
     });
 
   } catch (error) {
+    // Re-throw so the webhook returns 500 and Stripe redelivers — the
+    // subscriptionStatus='past_due' write is revenue-critical (dunning state)
+    // and idempotent. The in-app notification + audit-event writes are isolated
+    // above so a retry can't duplicate them.
     console.error('Error handling invoice payment failed:', error);
+    throw error;
   }
 }
 
@@ -1247,24 +1263,36 @@ async function handleSubscriptionCreated(subscription) {
     // Send welcome email
     // await emailService.sendWelcomeEmail(updatedUser); // Commented out temporarily
     
-    // Record subscription event
-    await prisma.subscriptionEvent.create({
-      data: {
-        userId: user.id,
-        eventType: 'created',
-        newPlan: updatedUser.plan,
-        eventData: {
-          subscriptionId: subscription.id,
-          planName: subscription.items.data[0]?.price?.nickname || updatedUser.plan
-        },
-        stripeEventId: subscription.id
-      }
-    });
+    // Record subscription event — best-effort and LAST among the writes. Kept
+    // non-fatal (own try/catch) so a transient audit-row failure can't trigger a
+    // Stripe retry that would re-run it and duplicate the row; only the
+    // idempotent user.update above governs the retry/throw decision below.
+    try {
+      await prisma.subscriptionEvent.create({
+        data: {
+          userId: user.id,
+          eventType: 'created',
+          newPlan: updatedUser.plan,
+          eventData: {
+            subscriptionId: subscription.id,
+            planName: subscription.items.data[0]?.price?.nickname || updatedUser.plan
+          },
+          stripeEventId: subscription.id
+        }
+      });
+    } catch (evtErr) {
+      console.warn('[payments] subscriptionEvent created persist failed:', evtErr?.message || evtErr);
+    }
 
     console.log(`Subscription created for user ${user.id}`);
-    
+
   } catch (error) {
+    // Re-throw so the webhook returns 500 and Stripe redelivers — persisting
+    // stripeSubscriptionId is critical (cancel/reactivate/renewal all look the
+    // user up by it) and the user.update is idempotent. The audit-row write is
+    // isolated above so a retry can't duplicate it.
     console.error('Error handling subscription created:', error);
+    throw error;
   }
 }
 
@@ -1292,9 +1320,14 @@ async function handleSubscriptionUpdated(subscription) {
     });
 
     console.log(`Subscription updated for user ${user.id}, status: ${subscription.status}`);
-    
+
   } catch (error) {
+    // Re-throw so the webhook returns 500 and Stripe redelivers — the single
+    // write here (subscriptionStatus + period-end) is idempotent, and silently
+    // swallowing left subscription state permanently stale on a transient DB
+    // failure (mirrors handleSubscriptionDeleted/handleInvoicePaymentSucceeded).
     console.error('Error handling subscription updated:', error);
+    throw error;
   }
 }
 
