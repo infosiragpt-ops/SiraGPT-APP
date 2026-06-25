@@ -33,6 +33,7 @@ const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const { isDeploymentsEnabled } = require('../services/deployments/flags');
 const service = require('../services/deployments/deployment-service');
+const { isDomainAllowed } = require('../services/deployments/domain-allow');
 
 const router = express.Router();
 
@@ -134,6 +135,16 @@ router.get('/health', (_req, res) => {
   res.end(payload);
 });
 
+// Caddy on-demand TLS gate — PUBLIC, no auth, NOT flag-gated (Caddy can't send
+// a bearer token, and certs must work even with DEPLOYMENTS_V2 off). Caddy
+// calls GET /domain-allow?domain=<host>; we reply 200 only when that domain has
+// a deployed site under PUBLISHED_SITES_DIR (host: /var/www/published-sites),
+// which is fully isolated from the SiraGPT app.
+router.get('/domain-allow', (req, res) => {
+  const allowed = isDomainAllowed(req.query && req.query.domain);
+  return res.status(allowed ? 200 : 403).type('text/plain').send(allowed ? 'ok' : 'denied');
+});
+
 router.use((req, res, next) => {
   if (!isDeploymentsEnabled()) return res.status(404).json({ error: 'not_found' });
   next();
@@ -166,6 +177,7 @@ router.post(
     body('geography').optional().isString(),
     body('machineTier').optional().isString(),
     body('projectId').optional({ nullable: true }).isString(),
+    body('connectedRepositoryId').optional({ nullable: true }).isString(),
   ],
   async (req, res) => {
     const errors = validationResult(req);
@@ -175,6 +187,7 @@ router.post(
         userId: req.user.id,
         name: req.body.name.trim(),
         projectId: req.body.projectId || null,
+        connectedRepositoryId: req.body.connectedRepositoryId || null,
         deploymentType: req.body.deploymentType || 'autoscale',
         visibility: req.body.visibility || 'public',
         geography: req.body.geography || 'na',
@@ -203,7 +216,10 @@ router.patch('/:id', authenticateToken, async (req, res) => {
 router.post(
   '/:id/providers/connect',
   authenticateToken,
-  [body('provider').isString().bail().trim().notEmpty()],
+  [
+    body('provider').isString().bail().trim().notEmpty(),
+    body('connectedRepositoryId').optional({ nullable: true }).isString(),
+  ],
   async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
@@ -212,6 +228,7 @@ router.post(
         userId: req.user.id,
         id: req.params.id,
         providerId: req.body.provider,
+        connectedRepositoryId: req.body.connectedRepositoryId || null,
       });
       return res.json(result);
     } catch (err) { return sendError(res, err); }
