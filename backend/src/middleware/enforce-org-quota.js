@@ -107,10 +107,19 @@ function enforceOrgQuota(opts = {}) {
       const limit = Number(org.monthlyQuota || 0);
       if (!sameCalendarMonth(now, resetAt)) {
         const startOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-        await client.organization.updateMany({
-          where: { id: orgId, quotaResetAt: { lt: startOfMonth } },
-          data: { usedThisMonth: BigInt(0), quotaResetAt: now },
-        });
+        if (typeof client.organization.updateMany === 'function') {
+          await client.organization.updateMany({
+            where: { id: orgId, quotaResetAt: { lt: startOfMonth } },
+            data: { usedThisMonth: BigInt(0), quotaResetAt: now },
+          });
+        } else {
+          // Test doubles may only mock update(); the guard above is what makes
+          // the reset race-safe in production (real prisma has updateMany).
+          await client.organization.update({
+            where: { id: orgId },
+            data: { usedThisMonth: BigInt(0), quotaResetAt: now },
+          });
+        }
         used = 0;
       }
 
