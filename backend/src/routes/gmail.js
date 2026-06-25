@@ -5,6 +5,15 @@ const prisma = require('../config/database');
 
 const router = express.Router();
 
+// Clamp a user-supplied `limit` to a sane positive integer (radix-10; NaN / 0 /
+// blank → default). A bare parseInt(req.query.limit) returned NaN for 'abc'
+// (default params don't rescue NaN) and auto-detected hex for '0x10' — both
+// reached the Gmail API's maxResults and 500'd / mis-counted.
+function clampMaxResults(raw, def = 10, max = 100) {
+  const n = Number.parseInt(String(raw), 10);
+  return Math.max(1, Math.min(max, n || def));
+}
+
 // Helper function to get user's Gmail tokens
 async function getUserGmailTokens(userId) {
   const user = await prisma.user.findUnique({
@@ -135,7 +144,7 @@ router.get('/emails', authenticateToken, async (req, res) => {
 
     const emails = await gmailService.getEmails({
       query,
-      maxResults: parseInt(limit)
+      maxResults: clampMaxResults(limit)
     });
 
     res.json({
@@ -213,7 +222,7 @@ router.get('/search', authenticateToken, async (req, res) => {
 
     const emails = await gmailService.searchEmails({
       query: q,
-      maxResults: parseInt(limit)
+      maxResults: clampMaxResults(limit)
     });
 
     res.json({
@@ -317,3 +326,4 @@ router.get('/thread/:threadId', authenticateToken, async (req, res) => {
 });
 
 module.exports = router;
+module.exports.clampMaxResults = clampMaxResults;

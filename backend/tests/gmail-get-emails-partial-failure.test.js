@@ -10,6 +10,19 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const gmailService = require('../src/services/gmail');
+const { clampMaxResults } = require('../src/routes/gmail');
+
+test('clampMaxResults bounds limit + radix-10 + sane default (no NaN/hex to the Gmail API)', () => {
+  assert.equal(clampMaxResults('5'), 5);
+  assert.equal(clampMaxResults('abc'), 10); // NaN → default (was NaN → Gmail 400/500)
+  assert.equal(clampMaxResults(undefined), 10);
+  assert.equal(clampMaxResults(''), 10);
+  assert.equal(clampMaxResults('0x10'), 10); // radix 10 → 0, not hex 16
+  assert.equal(clampMaxResults('10abc'), 10);
+  assert.equal(clampMaxResults('999'), 100); // capped at max
+  assert.equal(clampMaxResults('-5'), 1); // floored at 1
+  assert.equal(clampMaxResults('0'), 10); // 0 → default
+});
 
 function fakeClient({ failIds = [], messages = ['1', '2', '3'] } = {}) {
   return {
