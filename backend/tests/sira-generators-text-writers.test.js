@@ -94,6 +94,12 @@ test("ndjson writer: one JSON object per line, trailing newline", () => {
   assert.equal(asText(W.generateNdjson({ records: [] })), "");
 });
 
+test("ndjson writer: undefined values are omitted, never serialized as 'undefined'", () => {
+  const out = asText(W.generateNdjson({ records: [{ a: 1, b: undefined, c: 3 }] }));
+  assert.equal(out, '{"a":1,"c":3}\n'); // JSON.stringify drops the undefined key
+  assert.equal(out.includes("undefined"), false);
+});
+
 // ── ics ───────────────────────────────────────────────────────────────────
 test("ics writer: VCALENDAR/VEVENT with pinned dtstamp and escaping", () => {
   const out = asText(
