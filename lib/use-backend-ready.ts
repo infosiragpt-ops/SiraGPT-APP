@@ -36,7 +36,7 @@ export function useBackendReady(pollMs = 2500): BackendReadyState {
       const controller = new AbortController()
       // Abort a stalled probe so a hung request can't pin the hook in
       // "checking"/"warming" forever; the next poll tick retries cleanly.
-      const abortTimer = setTimeout(() => controller.abort(), 4000)
+      const abortTimer = setTimeout(() => controller.abort(), 7000)
       try {
         const res = await fetch(`${getNormalizedApiBaseUrl()}/health/ready`, {
           method: "HEAD",
