@@ -26,6 +26,7 @@ const ROUTER_PATH = path.join(ROUTES_DIR, 'gpts.js');
 let store; // { gpts: Map, files: Map }
 let currentUserId; // who the auth middleware authenticates as
 let extractionBehavior; // 'ok' | 'empty' | 'throw'
+let gptFindManyCalls = []; // captured customGpt.findMany args (for soft-delete checks)
 
 function resolveFrom(request_path) {
   // Resolve a dependency exactly as the router would (relative to its dir).
@@ -62,6 +63,10 @@ function buildFakePrisma() {
           return result;
         }
         return null;
+      },
+      async findMany(arg) {
+        gptFindManyCalls.push(arg);
+        return [];
       },
       async create({ data }) {
         const id = `gpt_new_${++gptSeq}`;
@@ -194,6 +199,7 @@ function resetState() {
   store = { gpts: new Map(), files: new Map() };
   currentUserId = 'owner-1';
   extractionBehavior = 'ok';
+  gptFindManyCalls = [];
 }
 
 function seedGpt(id, creatorId) {
@@ -409,4 +415,24 @@ test('PUT /:id accepts a valid temperature/maxTokens update for an owned GPT', a
   assert.equal(res.status, 200);
   assert.equal(store.gpts.get('gpt-a').temperature, 1.2);
   assert.equal(store.gpts.get('gpt-a').maxTokens, 50);
+});
+
+test('GET / excludes soft-deleted GPTs (deletedAt:null in the where)', async () => {
+  resetState();
+  const app = buildApp();
+  await request(app).get('/api/gpts').send();
+  assert.ok(gptFindManyCalls.length >= 1, 'list endpoint queried customGpt.findMany');
+  assert.ok(
+    JSON.stringify(gptFindManyCalls).includes('"deletedAt":null'),
+    'the list where-clause must constrain deletedAt:null so tombstoned GPTs never leak',
+  );
+});
+
+test('GET /categories excludes soft-deleted GPTs', async () => {
+  resetState();
+  const app = buildApp();
+  await request(app).get('/api/gpts/categories').send();
+  const catCall = gptFindManyCalls.find((c) => c && c.distinct);
+  assert.ok(catCall, 'categories endpoint queried customGpt.findMany with distinct');
+  assert.equal(catCall.where.deletedAt, null, 'categories where filters out soft-deleted rows');
 });

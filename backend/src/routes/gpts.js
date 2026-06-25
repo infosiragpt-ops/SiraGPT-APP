@@ -127,6 +127,9 @@ router.get('/', authenticateToken, async (req, res) => {
       andClauses.push({ isFeatured: true });
     }
 
+    // Never surface soft-deleted GPTs (e.g. tombstoned by the GDPR account-delete
+    // cascade) — they must disappear from both public and owner listings.
+    andClauses.push({ deletedAt: null });
     const whereClause = andClauses.length > 1 ? { AND: andClauses } : andClauses[0] || {};
 
     if (process.env.NODE_ENV !== 'production' && process.env.SIRAGPT_DEBUG_GPTS === '1') {
@@ -181,7 +184,8 @@ router.get('/categories', async (req, res) => {
         category: {
           not: null
         },
-        visibility: 'PUBLIC'
+        visibility: 'PUBLIC',
+        deletedAt: null // exclude soft-deleted GPTs so dead rows can't ghost a category
       },
       select: {
         category: true
