@@ -153,9 +153,15 @@ async function validateStructure(filePath, mimeType, fileSize) {
         issues.push({ code: 'very_large', message: 'JSON file is very large (>20MB), parsing may be slow' });
       }
       const headerBytes = await readHeader(filePath, 4);
-      const firstChar = String.fromCharCode(headerBytes[0]);
-      if (firstChar !== '{' && firstChar !== '[' && firstChar !== '"') {
-        issues.push({ code: 'invalid_start', message: 'JSON does not start with {, [, or "' });
+      // Only inspect the first byte when there IS one. For a 0-byte file
+      // headerBytes[0] is undefined → String.fromCharCode(undefined) is NUL,
+      // which failed the start-char check and added a spurious 'invalid_start'
+      // issue on top of the accurate 'too_small'.
+      if (headerBytes.length > 0) {
+        const firstChar = String.fromCharCode(headerBytes[0]);
+        if (firstChar !== '{' && firstChar !== '[' && firstChar !== '"') {
+          issues.push({ code: 'invalid_start', message: 'JSON does not start with {, [, or "' });
+        }
       }
     } catch (err) {
       issues.push({ code: 'json_read_error', message: `Failed to validate JSON: ${err.message}` });

@@ -145,7 +145,11 @@ function analyzePrompt(text, opts = {}) {
     else if (score >= 0.6) verdict = 'medium_risk';
     else verdict = 'suspect';
   }
-  const threshold = Number(opts.minScore) > 0 ? Number(opts.minScore) : 0.5;
+  // Accept an explicit minScore of 0 ("flag everything"): `> 0 ? … : 0.5`
+  // treated 0 as falsy and silently used the 0.5 default.
+  const threshold = opts.minScore != null && Number.isFinite(Number(opts.minScore)) && Number(opts.minScore) >= 0
+    ? Number(opts.minScore)
+    : 0.5;
   if (score < threshold && !hasHighStakesHit) verdict = 'safe';
 
   return {

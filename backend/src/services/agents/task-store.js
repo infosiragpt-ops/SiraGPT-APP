@@ -323,7 +323,11 @@ function listTaskSnapshotsForUser(userId, { limit = 50, useIndex = true } = {}) 
       .slice(0, limit);
     for (const [taskId] of matching) {
       const snapshot = readTaskSnapshot(taskId);
-      if (snapshot) rows.push(snapshot);
+      // Re-validate ownership after loading. The index is a cache that can drift
+      // out of sync with the snapshot files; trusting its userId blindly would
+      // leak another user's task if the index ever mapped a taskId to the wrong
+      // owner. The slow path already does this check.
+      if (snapshot && String(snapshot.userId) === String(userId || '')) rows.push(snapshot);
     }
     return rows;
   }

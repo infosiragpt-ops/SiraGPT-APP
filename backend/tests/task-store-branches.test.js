@@ -256,6 +256,20 @@ test('listTaskSnapshotsForUser: respects limit', () => {
   assert.equal(rows.length, 3);
 });
 
+test('listTaskSnapshotsForUser: fast path re-validates ownership against a corrupt index (no IDOR)', () => {
+  freshDir();
+  // Snapshot truly belongs to "other"; corrupt the index to claim it for "u".
+  taskStore.writeTaskSnapshot({ taskId: 't-x', userId: 'other', status: 'completed' });
+  const idx = taskStore.readIndex();
+  idx['t-x'].userId = 'u'; // index now lies about ownership
+  taskStore.writeIndex(idx);
+
+  // Fast path (useIndex=true) trusts the index to SELECT but must re-validate
+  // the loaded snapshot's real userId before returning it.
+  const rows = taskStore.listTaskSnapshotsForUser('u', { useIndex: true });
+  assert.equal(rows.length, 0, "a mislabelled index entry must not leak another user's task");
+});
+
 // ─── compressSnapshotBytes ────────────────────────────────────────────────
 
 test('compressSnapshotBytes: returns input unchanged when below MAX_SNAPSHOT_BYTES', () => {

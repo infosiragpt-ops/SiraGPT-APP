@@ -60,7 +60,13 @@ function resolveRemoteConfig(env = process.env) {
     enabled,
     url,
     apiKey,
-    timeoutMs: parseInt(env.SANDBOX_REMOTE_TIMEOUT_MS || String(DEFAULT_TIMEOUT_MS), 10),
+    // Validate the env override: a non-numeric SANDBOX_REMOTE_TIMEOUT_MS made
+    // parseInt return NaN, which propagated to AbortSignal.timeout(NaN) and
+    // crashed the whole remote exec ("delay must be an integer. Received NaN").
+    timeoutMs: (() => {
+      const n = Number.parseInt(env.SANDBOX_REMOTE_TIMEOUT_MS, 10);
+      return Number.isFinite(n) && n > 0 ? n : DEFAULT_TIMEOUT_MS;
+    })(),
     remoteOnly: ['1', 'true'].includes(String(env.SANDBOX_REMOTE_ONLY || '').toLowerCase()),
   };
 }

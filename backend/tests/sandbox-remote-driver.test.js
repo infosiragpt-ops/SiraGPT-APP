@@ -174,3 +174,14 @@ test('config reader: enabled only with both url+key; remoteOnly flag parsed', ()
   assert.equal(cfg.enabled, true);
   assert.equal(cfg.remoteOnly, true);
 });
+
+test('config reader: a non-numeric timeout env yields a finite default, never NaN', () => {
+  // A NaN timeoutMs propagated to AbortSignal.timeout(NaN) and crashed the
+  // remote exec. The reader must clamp to a finite default.
+  for (const raw of ['abc', '', '  ', 'NaN']) {
+    const cfg = resolveRemoteConfig({ SANDBOX_SERVICE_URL: 'x', SANDBOX_API_KEY: 'y', SANDBOX_REMOTE_TIMEOUT_MS: raw });
+    assert.ok(Number.isFinite(cfg.timeoutMs) && cfg.timeoutMs > 0, `timeoutMs must be finite for ${JSON.stringify(raw)}, got ${cfg.timeoutMs}`);
+  }
+  // A valid numeric override is honoured.
+  assert.equal(resolveRemoteConfig({ SANDBOX_SERVICE_URL: 'x', SANDBOX_API_KEY: 'y', SANDBOX_REMOTE_TIMEOUT_MS: '12345' }).timeoutMs, 12345);
+});
