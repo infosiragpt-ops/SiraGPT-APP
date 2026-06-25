@@ -68,3 +68,16 @@ test('throws when the user is missing entirely', async () => {
   userRow = null;
   await assert.rejects(() => proration.calculateProration('ghost', 'PRO', CHANGE_DATE), /no active subscription/i);
 });
+
+test('degenerate zero-length billing period does not divide by zero', async () => {
+  // current_period_start === current_period_end → totalPeriodDays would be 0,
+  // and (price * remainingDays) / 0 produced Infinity/NaN net amounts.
+  userRow = { id: 'u1', plan: 'PRO', stripeSubscriptionId: 'sub_1' };
+  const T = SEC('2026-06-15T00:00:00Z');
+  subscription = { current_period_start: T, current_period_end: T };
+  const r = await proration.calculateProration('u1', 'PRO_MAX', new Date('2026-06-15T00:00:00Z'));
+  assert.equal(r.totalPeriodDays, 1, 'a degenerate period clamps to 1 day');
+  assert.ok(Number.isFinite(r.netAmount), `netAmount must be finite, got ${r.netAmount}`);
+  assert.ok(Number.isFinite(r.unusedAmount), `unusedAmount must be finite, got ${r.unusedAmount}`);
+  assert.ok(Number.isFinite(r.newPlanProrated), `newPlanProrated must be finite, got ${r.newPlanProrated}`);
+});

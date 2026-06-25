@@ -52,8 +52,17 @@ class ProrationService {
       
       const currentPeriodStart = new Date(subscription.current_period_start * 1000);
       const currentPeriodEnd = new Date(subscription.current_period_end * 1000);
-      const totalPeriodDays = Math.ceil((currentPeriodEnd - currentPeriodStart) / (1000 * 60 * 60 * 24));
-      const remainingDays = Math.ceil((currentPeriodEnd - changeDate) / (1000 * 60 * 60 * 24));
+      const DAY_MS = 1000 * 60 * 60 * 24;
+      // Guard against a degenerate billing period (start === end, or malformed
+      // Stripe timestamps): totalPeriodDays must be ≥ 1 or the proration ratios
+      // below divide by zero → Infinity/NaN net amounts. remainingDays is
+      // clamped to [0, total] so a change after period-end can't yield a
+      // negative ratio and a pre-start change can't exceed the full period.
+      const totalPeriodDays = Math.max(1, Math.ceil((currentPeriodEnd - currentPeriodStart) / DAY_MS));
+      const remainingDays = Math.min(
+        totalPeriodDays,
+        Math.max(0, Math.ceil((currentPeriodEnd - changeDate) / DAY_MS)),
+      );
 
       // Plan pricing (in cents)
       const planPricing = {
