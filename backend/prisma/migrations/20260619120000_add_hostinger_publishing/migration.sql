@@ -1,5 +1,5 @@
 -- CreateTable: hosting_targets (SFTP/FTP deploy targets; creds AES-256 sealed)
-CREATE TABLE "hosting_targets" (
+CREATE TABLE IF NOT EXISTS "hosting_targets" (
     "id" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
     "provider" TEXT NOT NULL DEFAULT 'hostinger',
@@ -18,7 +18,7 @@ CREATE TABLE "hosting_targets" (
 );
 
 -- CreateTable: deployments (build + upload history per connected repo)
-CREATE TABLE "deployments" (
+CREATE TABLE IF NOT EXISTS "deployments" (
     "id" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
     "connectedRepositoryId" TEXT NOT NULL,
@@ -39,12 +39,43 @@ CREATE TABLE "deployments" (
 );
 
 -- CreateIndex
-CREATE INDEX "hosting_targets_userId_idx" ON "hosting_targets"("userId");
-CREATE INDEX "deployments_userId_idx" ON "deployments"("userId");
-CREATE INDEX "deployments_connectedRepositoryId_idx" ON "deployments"("connectedRepositoryId");
+CREATE INDEX IF NOT EXISTS "hosting_targets_userId_idx" ON "hosting_targets"("userId");
+CREATE INDEX IF NOT EXISTS "deployments_userId_idx" ON "deployments"("userId");
+CREATE INDEX IF NOT EXISTS "deployments_connectedRepositoryId_idx" ON "deployments"("connectedRepositoryId");
 
--- AddForeignKey
-ALTER TABLE "hosting_targets" ADD CONSTRAINT "hosting_targets_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-ALTER TABLE "deployments" ADD CONSTRAINT "deployments_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-ALTER TABLE "deployments" ADD CONSTRAINT "deployments_connectedRepositoryId_fkey" FOREIGN KEY ("connectedRepositoryId") REFERENCES "connected_repositories"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-ALTER TABLE "deployments" ADD CONSTRAINT "deployments_hostingTargetId_fkey" FOREIGN KEY ("hostingTargetId") REFERENCES "hosting_targets"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+-- AddForeignKey (idempotent via DO block)
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'hosting_targets_userId_fkey'
+  ) THEN
+    ALTER TABLE "hosting_targets" ADD CONSTRAINT "hosting_targets_userId_fkey"
+      FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'deployments_userId_fkey'
+  ) THEN
+    ALTER TABLE "deployments" ADD CONSTRAINT "deployments_userId_fkey"
+      FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'deployments_connectedRepositoryId_fkey'
+  ) THEN
+    ALTER TABLE "deployments" ADD CONSTRAINT "deployments_connectedRepositoryId_fkey"
+      FOREIGN KEY ("connectedRepositoryId") REFERENCES "connected_repositories"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'deployments_hostingTargetId_fkey'
+  ) THEN
+    ALTER TABLE "deployments" ADD CONSTRAINT "deployments_hostingTargetId_fkey"
+      FOREIGN KEY ("hostingTargetId") REFERENCES "hosting_targets"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;

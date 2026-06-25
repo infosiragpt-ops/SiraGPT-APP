@@ -6303,3 +6303,33 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
     opacity: 0.55;
   }
 }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   BottomGlowBar keyframes — moved from component <style> to avoid
+   styled-jsx SSR→client injection mismatch (React hydration error)
+   ────────────────────────────────────────────────────────────────────────── */
+@keyframes glow-slide {
+  0%   { background-position: 0% 50%; }
+  100% { background-position: 300% 50%; }
+}
+@keyframes glow-hue {
+  0%, 100% { filter: blur(22px) hue-rotate(0deg); }
+  50%       { filter: blur(22px) hue-rotate(45deg); }
+}
+@keyframes comet-sweep {
+  0%   { left: -10%; opacity: 0; }
+  8%   { opacity: 1; }
+  92%  { opacity: 1; }
+  100% { left: 105%; opacity: 0; }
+}
+@keyframes comet-sweep-rev {
+  0%   { right: -10%; opacity: 0; }
+  12%  { opacity: 1; }
+  88%  { opacity: 1; }
+  100% { right: 105%; opacity: 0; }
+}
+
+/* AuthNavButtons keyframes — same reason */
+@keyframes login-beam {
+  to { transform: rotate(360deg); }
+}

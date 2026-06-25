@@ -1,4 +1,5 @@
 - [Next.js chunk timeout prewarm](nextjs-chunk-prewarm.md) — global-error.js (and other lazy chunks) compile on first demand; Replit proxy times out during that compile; fix: scripts/prewarm-chunks.js polls / then fetches chunks proactively at startup.
+- [Inline style tags hydration mismatch](inline-style-hydration.md) — `<style jsx global>` (styled-jsx) and raw `<style>` in SSR'd client components cause structural server→client mismatch; move all @keyframes to globals.css.
 - [spawn EIO in production](spawn-eio-production.md) — spawn() can throw synchronously (EIO) in prod Nix env; always wrap Promise executor with try-catch in commandExists-style helpers.
 - [Orphaned task log dedup](orphaned-task-dedup.md) — P2003 (foreign-key userId missing) fires per concurrent upsert call; use process-level Set to log once per taskId lifetime.
 - [Document sandbox architecture](doc-sandbox-architecture.md) — session-manager + remote-driver + 4 sandbox_* tools; Python libs installed via pip --user in boot; semaphore 12; no Docker needed.
