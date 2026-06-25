@@ -4196,6 +4196,33 @@ test('create_swimlane_diagram: emits expected events', async () => {
   assert.ok(types.includes('tool_output'));
 });
 
+// ── Truncation must not split an XML entity (regression) ─────────
+// A label/desc/persona is xmlEscaped, so an '&' becomes '&amp;'. Slicing the
+// ESCAPED string for display could cut '&amp;' in half → invalid SVG. The fixed
+// code slices the RAW string then escapes. An '&' placed just before each cut
+// boundary would have produced a partial entity under the old code.
+const PARTIAL_ENTITY = /&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[0-9a-f]+;)/i;
+
+test('create_process_flow (chevrons): truncated description does not split an XML entity', async () => {
+  const desc = `${'x'.repeat(33)}& tail text well beyond the 35-char chevron cut`;
+  const r = await tool('create_process_flow').execute(
+    { title: 'T', steps: [{ label: 'Step one', description: desc }], style: 'chevrons' },
+    fakeCtx(),
+  );
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(!PARTIAL_ENTITY.test(svg), 'no partial &entity in the chevron description');
+});
+
+test('create_empathy_map: truncated persona does not split an XML entity', async () => {
+  const persona = `${'x'.repeat(27)}& a long persona name beyond 56 chars total here yes`;
+  const r = await tool('create_empathy_map').execute(
+    { title: 'Map', persona, says: ['a'], thinks: ['b'], does: ['c'], feels: ['d'] },
+    fakeCtx(),
+  );
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(!PARTIAL_ENTITY.test(svg), 'no partial &entity in the persona text');
+});
+
 // ── Cleanup ──────────────────────────────────────────────────────
 
 test.after(() => {

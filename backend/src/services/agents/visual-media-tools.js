@@ -681,7 +681,13 @@ const createChart = {
         // Treemap: squarified-ish layout for datasets[0].data values, labelled by safeLabels
         const ds = datasets[0];
         if (!ds || !ds.data.length) return '';
-        const items = ds.data.map((v, i) => ({ v: Math.max(0, v), label: safeLabels[i] || `Item ${i + 1}` }))
+        const items = ds.data.map((v, i) => ({
+          v: Math.max(0, v),
+          label: safeLabels[i] || `Item ${i + 1}`,
+          // Keep the RAW label so the small-cell truncation can slice + escape
+          // (slicing the pre-escaped label could cut an entity like &amp; in half).
+          rawLabel: labels[i] ? String(labels[i]) : `Item ${i + 1}`,
+        }))
           .filter(it => it.v > 0);
         if (!items.length) return '';
         items.sort((a, b) => b.v - a.v);
@@ -726,7 +732,7 @@ const createChart = {
             body += `<text x="${c.x + 8}" y="${c.y + 18}" font-family="Arial" font-size="12" font-weight="bold" fill="#fff">${c.label}</text>`;
             body += `<text x="${c.x + 8}" y="${c.y + 34}" font-family="Arial" font-size="11" fill="#fff" opacity="0.85">${tickFormat(c.v)} (${((c.v / total) * 100).toFixed(1)}%)</text>`;
           } else if (c.w > 30 && c.h > 16) {
-            body += `<text x="${c.x + 4}" y="${c.y + 14}" font-family="Arial" font-size="10" fill="#fff">${c.label.slice(0, 8)}</text>`;
+            body += `<text x="${c.x + 4}" y="${c.y + 14}" font-family="Arial" font-size="10" fill="#fff">${xmlEscape((c.rawLabel || '').slice(0, 8))}</text>`;
           }
         });
         return body;
@@ -2987,7 +2993,7 @@ const createProcessFlow = {
             const arrowW = 22;
             body += `<path d="M ${sx} ${sy} L ${sx + stepW - arrowW} ${sy} L ${sx + stepW} ${sy + stepH / 2} L ${sx + stepW - arrowW} ${sy + stepH} L ${sx} ${sy + stepH} L ${sx + arrowW} ${sy + stepH / 2} Z" fill="${color}" opacity="0.85" stroke="#fff" stroke-width="1.5"/>`;
             body += `<text x="${sx + stepW / 2}" y="${sy + stepH / 2 - 4}" text-anchor="middle" font-family="Arial" font-size="14" font-weight="bold" fill="#fff">${i + 1}. ${safeLabel}</text>`;
-            if (safeDesc) body += `<text x="${sx + stepW / 2}" y="${sy + stepH / 2 + 16}" text-anchor="middle" font-family="Arial" font-size="10" fill="#fff" opacity="0.9">${safeDesc.slice(0, 35)}</text>`;
+            if (safeDesc) body += `<text x="${sx + stepW / 2}" y="${sy + stepH / 2 + 16}" text-anchor="middle" font-family="Arial" font-size="10" fill="#fff" opacity="0.9">${xmlEscape(String(step.description || '').slice(0, 35))}</text>`;
           } else if (style === 'circles') {
             const cx = sx + stepW / 2;
             const cy = sy + 50;
@@ -6156,7 +6162,8 @@ const createEmpathyMap = {
       const t = themes[theme] || themes.professional;
 
       const safeTitle = xmlEscape(String(title).slice(0, 120));
-      const safePersona = xmlEscape(String(persona || 'Persona').slice(0, 60));
+      const rawPersona = String(persona || 'Persona').slice(0, 60);
+      const safePersona = xmlEscape(rawPersona);
       const hasPains = pains.length > 0;
       const hasGains = gains.length > 0;
       const showStrip = hasPains || hasGains;
@@ -6232,9 +6239,9 @@ const createEmpathyMap = {
       body += `<circle cx="${cx}" cy="${cy}" r="${centerR + 6}" fill="${t.bg}"/>`;
       body += `<circle cx="${cx}" cy="${cy}" r="${centerR}" fill="${t.accent}" stroke="#fff" stroke-width="3"/>`;
       body += `<text x="${cx}" y="${cy - 8}" text-anchor="middle" font-family="Arial" font-size="14" font-weight="bold" fill="#fff" opacity="0.85">PERSONA</text>`;
-      body += `<text x="${cx}" y="${cy + 12}" text-anchor="middle" font-family="Arial" font-size="13" font-weight="bold" fill="#fff">${safePersona.slice(0, 28)}</text>`;
-      if (safePersona.length > 28) {
-        body += `<text x="${cx}" y="${cy + 28}" text-anchor="middle" font-family="Arial" font-size="11" fill="#fff" opacity="0.85">${safePersona.slice(28, 56)}</text>`;
+      body += `<text x="${cx}" y="${cy + 12}" text-anchor="middle" font-family="Arial" font-size="13" font-weight="bold" fill="#fff">${xmlEscape(rawPersona.slice(0, 28))}</text>`;
+      if (rawPersona.length > 28) {
+        body += `<text x="${cx}" y="${cy + 28}" text-anchor="middle" font-family="Arial" font-size="11" fill="#fff" opacity="0.85">${xmlEscape(rawPersona.slice(28, 56))}</text>`;
       }
 
       // ── Optional Pains / Gains strips ──
