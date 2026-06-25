@@ -567,8 +567,14 @@ function invertedIndexToText(idx) {
     }
   }
   if (maxPos < 0) return null;
+  // Bound the reconstruction. Positions come from an external API
+  // (OpenAlex/Redalyc/bioRxiv abstract_inverted_index); a malformed or hostile
+  // position would size `out` to maxPos+1 and OOM the process. Real abstracts
+  // are a few hundred words, so 20k is generous headroom.
+  const MAX_ABSTRACT_WORDS = 20_000;
+  const limit = Math.min(maxPos, MAX_ABSTRACT_WORDS);
   const out = [];
-  for (let i = 0; i <= maxPos; i++) out.push(positionToWord.get(i) || '');
+  for (let i = 0; i <= limit; i++) out.push(positionToWord.get(i) || '');
   return out.join(' ').replace(/\s+/g, ' ').trim() || null;
 }
 
@@ -942,7 +948,13 @@ const searchCache = require('./scientific-search-cache');
 // A transient failure is worth retrying; a 4xx (bad query, auth, not-found) is
 // not. Keep this conservative so we never hammer an API over a permanent error.
 function isTransientError(err) {
-  const m = String(err?.message || err || '').toLowerCase();
+  const full = String(err?.message || err || '').toLowerCase();
+  // safeJson/safeText throw `HTTP <code> <text> — <url>`, and the URL embeds the
+  // (URL-encoded) user query. Testing the whole string let a query token like
+  // "404" mis-flag a genuine 5xx as a permanent 4xx, so the provider was dropped
+  // instead of retried. Judge only on the status/signature part — everything
+  // before the ' — <url>' tail (network errors have no tail, so m === full).
+  const m = full.split(' — ')[0];
   if (/\b4\d\d\b/.test(m) && !/\b429\b/.test(m)) return false; // 4xx except 429
   return /timed out|timeout|429|too many|\b5\d\d\b|econnreset|enotfound|eai_again|network|fetch failed|socket|abort/.test(m);
 }

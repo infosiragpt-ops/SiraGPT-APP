@@ -93,6 +93,39 @@ test('invertedIndexToText reconstructs sentence from OpenAlex inverted index', (
   assert.equal(invertedIndexToText(idx), 'Hello world !');
 });
 
+test('invertedIndexToText bounds a hostile position (no unbounded allocation)', () => {
+  const { invertedIndexToText } = ss._internal;
+  // A malformed external index claims a word sits at position 50 million — the
+  // old code allocated a 50M-slot array. Must stay bounded and still return text.
+  const out = invertedIndexToText({ Early: [0], Far: [50_000_000] });
+  assert.ok(typeof out === 'string' && out.startsWith('Early'), 'still reconstructs the in-range words');
+  assert.ok(out.split(' ').length <= 20_001, 'reconstruction length is capped');
+});
+
+test('isTransientError judges on the HTTP status, not a 4xx-looking token in the URL', () => {
+  const { isTransientError } = ss._internal;
+  // A genuine 503 whose URL embeds the query "understanding 404 error semantics".
+  const e503 = new Error('HTTP 503 Service Unavailable — https://api.crossref.org/works?query=understanding+404+error+semantics&rows=10');
+  assert.equal(isTransientError(e503), true, 'a real 5xx must be retried despite a 404 in the URL');
+  // A genuine 404 is permanent even if the URL query mentions "500".
+  const e404 = new Error('HTTP 404 Not Found — https://api.example.org/works?query=http+500+errors');
+  assert.equal(isTransientError(e404), false, 'a real 4xx is not retried');
+  assert.equal(isTransientError(new Error('HTTP 429 Too Many Requests — https://x/y')), true, '429 is transient');
+  assert.equal(isTransientError(new Error('ECONNRESET')), true, 'network errors are transient');
+});
+
+test('cacheKey scopes diversify / unpaywall opt-in flags (no silent no-op on cache hit)', () => {
+  const cache = require('../src/services/scientific-search-cache');
+  const base = cache.cacheKey('q', {});
+  assert.notEqual(cache.cacheKey('q', { unpaywall: true }), base, 'unpaywall must scope the key');
+  assert.notEqual(cache.cacheKey('q', { diversify: false }), base, 'diversify:false must scope the key');
+  assert.notEqual(cache.cacheKey('q', { maxRun: 5 }), base, 'maxRun must scope the key');
+  assert.notEqual(cache.cacheKey('q', { maxEnrichUnpaywall: 20 }), base, 'maxEnrichUnpaywall must scope the key');
+  // Defaults / identical opts still collapse to one key (cache still works).
+  assert.equal(cache.cacheKey('q', { diversify: true }), base, 'diversify:true === default');
+  assert.equal(cache.cacheKey('q', { unpaywall: false }), base, 'unpaywall:false === default');
+});
+
 test('rankPapers orders open-access > more citations > newer > shorter title', () => {
   const { rankPapers } = ss._internal;
   const papers = [

@@ -28,7 +28,16 @@ function cacheKey(query, opts = {}) {
   const providers = Array.isArray(opts.providers) ? opts.providers.slice().sort().join(',') : 'all';
   const limit = Number(opts.limit) || 10;
   const timeoutMs = Number(opts.timeoutMs) || 'default';
-  const raw = `${String(query || '').trim().toLowerCase()}|${providers}|${limit}|${timeoutMs}`;
+  // Result-shaping flags MUST be part of the key. Omitting them let a cached
+  // non-enriched/diversified result be returned when a later call flips an
+  // opt-in flag — so `unpaywall:true` silently skipped the OA-PDF backfill and
+  // `diversify:false` could return a diversified list, with no way for the
+  // caller to tell.
+  const diversify = opts.diversify === false ? '0' : '1';
+  const unpaywall = opts.unpaywall ? '1' : '0';
+  const maxRun = Number(opts.maxRun) || 'd';
+  const maxEnrich = Number(opts.maxEnrichUnpaywall) || 'd';
+  const raw = `${String(query || '').trim().toLowerCase()}|${providers}|${limit}|${timeoutMs}|${diversify}|${unpaywall}|${maxRun}|${maxEnrich}`;
   return crypto.createHash('sha256').update(raw).digest('hex').slice(0, 24);
 }
 
