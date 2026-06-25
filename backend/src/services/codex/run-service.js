@@ -185,8 +185,17 @@ async function cancelRun({ userId, runId, db = defaultPrisma, queue = runQueue, 
   }
 
   await queue.cancelQueuedCodexRun(runId).catch(() => {});
-  await prisma.codexRun.update({ where: { id: runId }, data: { status: 'cancelled', finishedAt: new Date() } });
-  await eventStore.appendEvent(runId, 'run_status', { status: 'cancelled' }, { prisma }).catch(() => {});
+  // Conditional flip — the processor may have stamped a terminal status between
+  // our read above and here. Only cancel (and emit the terminal event) when the
+  // run is still active, so we don't overwrite a just-finished done/error status
+  // or double-emit run_status.
+  const flip = await prisma.codexRun.updateMany({
+    where: { id: runId, status: { in: ACTIVE_STATUSES } },
+    data: { status: 'cancelled', finishedAt: new Date() },
+  });
+  if (flip && flip.count > 0) {
+    await eventStore.appendEvent(runId, 'run_status', { status: 'cancelled' }, { prisma }).catch(() => {});
+  }
 
   const fresh = await prisma.codexRun.findUnique({ where: { id: runId } });
   return publicRun(fresh);
