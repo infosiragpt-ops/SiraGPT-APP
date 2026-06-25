@@ -184,6 +184,15 @@ function cleanHtmlText(value) {
     .trim());
 }
 
+// String.fromCodePoint throws RangeError on values < 0 or > 0x10FFFF, so a
+// crafted numeric entity (e.g. &#x110000; or &#9999999999;) in a search snippet
+// would crash the whole DuckDuckGo provider — the free web-search fallback. Pass
+// out-of-range / unparsable entities through verbatim instead of throwing.
+function safeFromCodePoint(cp, original) {
+  if (!Number.isInteger(cp) || cp < 0 || cp > 0x10ffff) return original;
+  try { return String.fromCodePoint(cp); } catch { return original; }
+}
+
 function decodeHtml(value) {
   return String(value || '')
     .replace(/&amp;/g, '&')
@@ -191,8 +200,8 @@ function decodeHtml(value) {
     .replace(/&#39;|&apos;/g, "'")
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
-    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
-    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)));
+    .replace(/&#x([0-9a-f]+);/gi, (m, hex) => safeFromCodePoint(parseInt(hex, 16), m))
+    .replace(/&#(\d+);/g, (m, dec) => safeFromCodePoint(parseInt(dec, 10), m));
 }
 
 function uniqueResults(results, maxResults = 5) {
@@ -218,5 +227,6 @@ module.exports = {
     parseHtmlResults,
     parseInstantAnswer,
     unwrapDuckDuckGoUrl,
+    decodeHtml,
   },
 };
