@@ -131,6 +131,12 @@ function addMessage(sessionId, message) {
 
   if (session.messages.length > MAX_HISTORY_MESSAGES) {
     const dropped = session.messages.length - MAX_HISTORY_MESSAGES;
+    // Subtract the trimmed messages' tokens — otherwise tokenCount only ever
+    // grows and drifts unbounded above the real total of the kept messages.
+    const droppedTokens = session.messages
+      .slice(0, dropped)
+      .reduce((sum, m) => sum + (m.tokens || 0), 0);
+    session.tokenCount = Math.max(0, session.tokenCount - droppedTokens);
     session.messages = session.messages.slice(dropped);
   }
 
@@ -155,7 +161,11 @@ function getHistory(sessionId, opts = {}) {
   }
 
   if (opts.limit) {
-    messages = messages.slice(-opts.limit);
+    // Forward pagination (a cursor was given): take the FIRST N after the cursor
+    // — the next page. `slice(-limit)` here took the NEWEST N, skipping every
+    // message between the cursor and the tail. Without a cursor, the tail N is
+    // the intended "most recent" window.
+    messages = opts.after ? messages.slice(0, opts.limit) : messages.slice(-opts.limit);
   }
 
   if (opts.role) {

@@ -335,6 +335,18 @@ describe('active-memory', () => {
     assert.ok(e2.accessCount >= 2);
   });
 
+  it('stores the normalized-fact hash so the dedup fast-path is live', () => {
+    // Regression: entry.hash used to be a hash of the RAW fact while the dedup
+    // compared the normalized hash, so the hash branch was dead. They now agree.
+    const base = 'Normalized hash probe ' + Date.now();
+    const e1 = activeMemory.createMemoryEntry(testUserId, base);
+    // Same fact with different surrounding whitespace/case → normalizes the same.
+    const e2 = activeMemory.createMemoryEntry(testUserId, `  ${base.toUpperCase()}  `);
+    assert.equal(e1.id, e2.id, 'whitespace/case variants dedup to the same entry');
+    assert.equal(typeof e1.hash, 'string');
+    assert.equal(e1.hash.length, 16);
+  });
+
   it('recalls memories by query', () => {
     activeMemory.createMemoryEntry(testUserId, 'User works at Acme Corp', { category: 'work' });
     const results = activeMemory.recall(testUserId, 'work');
@@ -460,6 +472,32 @@ describe('session-manager', () => {
     sessionManager.addMessage(session.id, { role: 'assistant', content: 'A1', tokens: 3 });
     const history = sessionManager.getHistory(session.id);
     assert.equal(history.length, 2);
+  });
+
+  it('paginates forward from a cursor (next page, not the newest N)', () => {
+    // Regression: with `after` set, `slice(-limit)` returned the NEWEST N and
+    // skipped the messages right after the cursor. Forward pagination must walk.
+    const session = sessionManager.createSession(testUserId, { label: 'Paginate' });
+    const ids = [];
+    for (let i = 0; i < 6; i += 1) {
+      ids.push(sessionManager.addMessage(session.id, { role: 'user', content: `m${i}`, tokens: 1 }).id);
+    }
+    // After m0, the next 2 must be m1, m2 — NOT the tail m4, m5.
+    const page = sessionManager.getHistory(session.id, { after: ids[0], limit: 2 });
+    assert.deepEqual(page.map((m) => m.content), ['m1', 'm2']);
+  });
+
+  it('keeps tokenCount accurate when old messages are trimmed', () => {
+    const session = sessionManager.createSession(testUserId, { label: 'TokenDrift' });
+    // Push well past MAX_HISTORY_MESSAGES so trimming kicks in.
+    for (let i = 0; i < 600; i += 1) {
+      sessionManager.addMessage(session.id, { role: 'user', content: `t${i}`, tokens: 5 });
+    }
+    const live = sessionManager.getHistory(session.id);
+    const actualTokens = live.reduce((sum, m) => sum + (m.tokens || 0), 0);
+    const stored = sessionManager.getSession(session.id);
+    // tokenCount must match the kept messages, not keep growing past them.
+    assert.equal(stored.tokenCount, actualTokens, 'tokenCount tracks the kept messages');
   });
 
   it('spawns a child session', () => {

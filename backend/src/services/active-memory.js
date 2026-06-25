@@ -14,9 +14,6 @@ const MEMORY_TTL_MS = Number.parseInt(process.env.SIRAGPT_MEMORY_TTL_MS || `${30
 const store = new Map();
 const promotionLog = [];
 
-function contentHash(text) {
-  return crypto.createHash('sha256').update(String(text || '')).digest('hex').slice(0, 16);
-}
 
 function normalizeFactForDedup(fact) {
   return String(fact || '')
@@ -67,7 +64,10 @@ function createMemoryEntry(userId, fact, opts = {}) {
   }
 
   const id = `mem_${crypto.randomBytes(6).toString('hex')}`;
-  const hash = contentHash(fact);
+  // Store the NORMALIZED-fact hash so the dedup fast-path (entry.hash === nearHash
+  // above) actually fires — it previously stored a hash of the RAW fact while the
+  // comparison used the normalized hash, so that branch never matched (dead code).
+  const hash = nearHash;
 
   const entry = {
     id,
