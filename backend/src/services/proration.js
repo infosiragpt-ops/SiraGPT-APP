@@ -2,6 +2,7 @@ const stripeService = require('./stripe');
 const prisma = require('../config/database');
 const { logger } = require('../middleware/logger');
 const { redactErrorMessage } = require('../utils/secret-redactor');
+const { monthlyLimitForStripePlan } = require('./plan-credits-catalog');
 
 function logProrationError(operation, error, context = {}) {
   if (error?.isStripeOperationalError || stripeService.isStripeLikeError?.(error)) return;
@@ -133,16 +134,19 @@ class ProrationService {
         stripeResult = await this.scheduleNextCyclePlanChange(user, newPlan, newPriceId);
       }
 
-      // Update database - SET monthlyLimit to plan baseline credits (no accumulation)
-      const planLimits = {
-        'PRO': { monthlyLimit: 500000 },
-        'PRO_MAX': { monthlyLimit: 1000000 },
-        'ENTERPRISE': { monthlyLimit: 10000000 }
-      };
-
-      // Get current user data to add to existing limits
+      // Update database — ADD the new plan's baseline grant to the existing
+      // monthlyLimit, mirroring the Stripe webhook's credit-grant semantics
+      // (routes/payments.js). The grant comes from the shared plan-credits
+      // catalog so proration and the webhook can never diverge — they
+      // previously granted 5× different amounts for PRO/PRO_MAX (500k vs 100k).
+      // `monthlyLimit` is BigInt in Prisma, so BOTH operands must be BigInt:
+      // `bigint + number` throws, which used to crash every immediate plan
+      // change *after* Stripe had already charged the customer.
       const currentUser = await prisma.user.findUnique({ where: { id: userId } });
-      const newTotalLimit = (currentUser.monthlyLimit || 0) + planLimits[newPlan].monthlyLimit;
+      const currentLimit = typeof currentUser?.monthlyLimit === 'bigint'
+        ? currentUser.monthlyLimit
+        : BigInt(currentUser?.monthlyLimit ?? 0);
+      const newTotalLimit = currentLimit + monthlyLimitForStripePlan(newPlan);
 
       const updatedUser = await prisma.user.update({
         where: { id: userId },
