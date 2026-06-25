@@ -5499,12 +5499,15 @@ const createRadarChart = {
         const safeName = xmlEscape(String(s.name || `Serie ${sIdx + 1}`).slice(0, 32));
         body += `<rect x="${legendX}" y="${lY - 10}" width="14" height="14" rx="3" fill="${color}" fill-opacity="0.6" stroke="${color}" stroke-width="1.5"/>`;
         body += `<text x="${legendX + 22}" y="${lY}" font-family="Arial" font-size="12" fill="${t.text}">${safeName}</text>`;
-        // Sum the values to show a tiny "total"
-        const sum = (Array.isArray(s.values) ? s.values : [])
+        // Average over the FINITE values only. Dividing the finite-only sum by
+        // the raw values.length (which counts NaN/null/non-numeric entries too)
+        // skewed the average low — e.g. [10, 20, 'x', null] reported 7.5
+        // instead of the correct 15.
+        const finiteVals = (Array.isArray(s.values) ? s.values : [])
           .map(v => Number(v))
-          .filter(Number.isFinite)
-          .reduce((acc, v) => acc + v, 0);
-        const avg = (s.values && s.values.length) ? (sum / s.values.length) : 0;
+          .filter(Number.isFinite);
+        const sum = finiteVals.reduce((acc, v) => acc + v, 0);
+        const avg = finiteVals.length ? (sum / finiteVals.length) : 0;
         body += `<text x="${legendX + 22}" y="${lY + 14}" font-family="Arial" font-size="10" fill="${t.muted}">avg ${avg.toFixed(1)}</text>`;
         lY += 36;
       });

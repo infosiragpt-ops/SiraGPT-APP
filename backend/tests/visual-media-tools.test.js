@@ -2411,6 +2411,22 @@ test('create_radar_chart: auto-detects max from values', async () => {
   assert.equal(r.max, 7);
 });
 
+test('create_radar_chart: legend average divides by finite values only', async () => {
+  const r = await tool('create_radar_chart').execute({
+    title: 'Mixed values',
+    axes: ['A', 'B', 'C'],
+    series: [{ name: 'S', values: [10, 20, 'x'] }], // 'x' → NaN, must be ignored
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  // avg = (10 + 20) / 2 = 15.0 — NOT (10 + 20) / 3 = 10.0 (raw length).
+  assert.ok(
+    svg.includes('avg 15.0'),
+    `expected 'avg 15.0', got ${(svg.match(/avg [0-9.]+/g) || []).join() || 'none'}`,
+  );
+  assert.ok(!svg.includes('avg 10.0'), 'must not divide the finite sum by the raw values length');
+});
+
 test('create_radar_chart: explicit max overrides auto-detect', async () => {
   const r = await tool('create_radar_chart').execute({
     title: 'Explicit',
