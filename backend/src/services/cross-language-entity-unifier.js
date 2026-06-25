@@ -77,6 +77,11 @@ function unify({ userId, chatId, limit = 50 } = {}) {
   const clusters = new Map();
   for (const e of list) {
     const surfaces = new Set([e.canonicalSurface, ...(e.aliases || [])].filter(Boolean));
+    // Track which clusters THIS entity already contributed to, so its mentions
+    // and membership are counted once per cluster even when several of its
+    // surfaces (e.g. "OpenAI" + alias "openai") collapse to the same
+    // fingerprint. Without this, totalMentions was inflated per-surface.
+    const seenFp = new Set();
     for (const s of surfaces) {
       const fp = fingerprint(s);
       if (!fp) continue;
@@ -92,7 +97,9 @@ function unify({ userId, chatId, limit = 50 } = {}) {
         };
         clusters.set(fp, slot);
       }
-      slot.surfaces.add(s);
+      slot.surfaces.add(s); // record every surface variant for display
+      if (seenFp.has(fp)) continue;
+      seenFp.add(fp);
       slot.totalMentions += e.mentions || 0;
       slot.members.push({ id: e.id, canonicalSurface: e.canonicalSurface, kind: e.kind, mentions: e.mentions });
     }
