@@ -352,3 +352,9 @@ test('runQualityAudit stores compact Self-RAG metadata on the assistant message'
     else process.env.SIRAGPT_RAGAS_AUTO_EVAL = oldRagas;
   }
 });
+
+test('dedupeDocs does not throw on a doc lacking both source and text', () => {
+  const out = runtime.dedupeDocs([{ title: 'a' }, { source: 's' }, {}]);
+  assert.ok(Array.isArray(out));
+  assert.equal(out.length, 3);
+});

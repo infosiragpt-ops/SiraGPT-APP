@@ -88,7 +88,9 @@ function dedupeDocs(docs) {
   const seen = new Set();
   const out = [];
   for (const doc of docs || []) {
-    const key = doc.source || `${doc.title}:${doc.text.slice(0, 80)}`;
+    // Guard the fallback key — a doc lacking both source and text used to throw
+    // on `doc.text.slice`, aborting the whole dedupe pass.
+    const key = doc.source || `${doc.title || ''}:${String(doc.text || '').slice(0, 80)}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(doc);

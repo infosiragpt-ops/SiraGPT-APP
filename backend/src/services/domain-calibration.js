@@ -162,14 +162,20 @@ function detectDomain(text, opts = {}) {
     let hits = 0;
     const matched = [];
     for (const kw of keywords) {
-      // boundary-aware contains
-      const idx = lower.indexOf(kw);
-      if (idx === -1) continue;
-      const before = idx === 0 ? ' ' : lower[idx - 1];
-      const after = lower[idx + kw.length] || ' ';
-      if (/[a-z0-9]/.test(before) || /[a-z0-9]/.test(after)) continue;
-      hits += 1;
-      matched.push(kw);
+      // boundary-aware contains — scan ALL occurrences, not just the first: a
+      // decoy substring (e.g. "syntax" for "tax") at the first position used to
+      // fail the boundary check and skip the keyword entirely, dropping a real
+      // standalone hit later in the text.
+      let from = 0;
+      let idx;
+      let found = false;
+      while ((idx = lower.indexOf(kw, from)) !== -1) {
+        const before = idx === 0 ? ' ' : lower[idx - 1];
+        const after = lower[idx + kw.length] || ' ';
+        if (!/[a-z0-9]/.test(before) && !/[a-z0-9]/.test(after)) { found = true; break; }
+        from = idx + kw.length;
+      }
+      if (found) { hits += 1; matched.push(kw); }
     }
     if (hits > 0) {
       scores[domain] = hits;

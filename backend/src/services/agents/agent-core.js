@@ -427,10 +427,13 @@ async function run({
     } else {
       try {
         observation = await tool.handler(parsed.args || {}, context);
+        // Only cache SUCCESSFUL observations — caching a (possibly transient)
+        // tool error meant an identical retry replayed the failure and blocked
+        // the ReAct agent from ever recovering.
+        toolCache.set(cacheKey, observation);
       } catch (err) {
         observation = { error: err.message || 'tool error' };
       }
-      toolCache.set(cacheKey, observation);
       stats.toolCalls++;
     }
 
