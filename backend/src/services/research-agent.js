@@ -134,8 +134,12 @@ function createBrowserSession({ totalBudgetMs }) {
       if (png && png.length <= screenshotMaxBytes) {
         stub.screenshotBase64 = png.toString('base64');
       } else if (png) {
-        stub.screenshotBase64 = png.slice(0, screenshotMaxBytes).toString('base64');
-        stub.error = 'screenshot_truncated';
+        // Do NOT slice raw PNG bytes: a PNG is a chunked binary format with CRCs
+        // and a trailing IEND, so a byte-truncated PNG is undecodable. Feeding
+        // that to the vision model wastes the call on garbage. Drop the
+        // screenshot instead so the vision step skips it gracefully.
+        stub.screenshotBase64 = null;
+        stub.error = 'screenshot_too_large';
       }
     } catch (err) {
       stub.error = err.message || String(err);
