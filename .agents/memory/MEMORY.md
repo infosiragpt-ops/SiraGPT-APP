@@ -59,3 +59,4 @@
 - [Finalize-guard runaway loop](finalize-guard-runaway.md) — guard rejections were uncapped → react-agent spun to maxSteps/2h; add total+consecutive breaker; gate interactive vs heavy-doc budgets.
 - [Agent task stale banner root cause](agent-task-stale-banner.md) — step_start only fires via onStepStart AFTER first LLM reply; emit a pre-loop step_start before reactAgent.run() and close it in onStepStart.
 - [user_memories confidence column](user-memory-confidence.md) — confidence column missing from schema/DB; raw SQL in upsert+recall silently failed; fix: ADD COLUMN IF NOT EXISTS migration + schema update.
+- [React 18.3 window.reportError false crash](react18-reporterror-crash.md) — React 18.3+ uses window.reportError() for recoverable hydration errors; Replit crash detector sees it; fix: override in layout head + EOF-reload guard.

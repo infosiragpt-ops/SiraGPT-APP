@@ -4,8 +4,12 @@
  * through the Replit dev proxy on first access (e.g. app/global-error.js).
  *
  * Run in the background right after the frontend starts. Polls until
- * Next.js answers 200 on /, then fetches each chunk so the compiler
- * pre-builds it before the browser ever needs it.
+ * Next.js answers 200 on /, then fetches each target SEQUENTIALLY so
+ * Next.js's single-threaded webpack compiler never gets more than one
+ * concurrent compilation request (parallel requests cause all pages to
+ * timeout when the compiler deadlocks).
+ *
+ * Order: most user-critical pages first, then JS chunks, then API routes.
  */
 'use strict';
 
@@ -16,25 +20,28 @@ const MAX_WAIT_MS = 180_000;
 const POLL_MS = 3_000;
 const CHUNK_FETCH_DELAY_MS = 5_000;
 
-const CHUNKS = [
-  '/_next/static/chunks/app/global-error.js',
-  '/api/health/ready',
-  // sentry-client-init loads lazily via ssr:false dynamic(); without a prewarm
-  // the first browser request hits a cold compile and times out through Replit proxy
-  '/_next/static/chunks/_app-pages-browser_components_sentry-client-init_tsx.js',
-  // /auth/login RSC payload: first client-side navigation to login triggers
-  // a cold compile; the RSC fetch fails and Next.js falls back to browser
-  // navigation (TypeError "Load failed" in console). Pre-compile it at boot.
+// Fetched SEQUENTIALLY — keep /auth/login first (most critical).
+const TARGETS = [
+  // Most critical: the first client-side navigation users make.
+  // Pre-compiling this eliminates the "Load failed" RSC TypeError.
   '/auth/login',
+  // Secondary auth pages
+  '/auth/register',
+  // JS chunks — already compiled after / loads, returns 200 instantly
+  '/_next/static/chunks/app/global-error.js',
+  // sentry-client-init: ssr:false dynamic(), compiles lazily on first browser render
+  '/_next/static/chunks/_app-pages-browser_components_sentry-client-init_tsx.js',
+  // Backend health route: compile it early so useBackendReady gets fast responses
+  '/api/health/ready',
 ];
 
-function get(path, timeoutMs = 8_000) {
+function get(path, timeoutMs = 35_000) {
   return new Promise((resolve) => {
     const req = http.get(
       { host: 'localhost', port: PORT, path, headers: { 'user-agent': 'prewarm/1.0' } },
       (res) => { res.resume(); resolve(res.statusCode); },
     );
-    req.on('error', () => resolve(null));
+    req.on('error', (err) => { resolve(null); });
     req.setTimeout(timeoutMs, () => { req.destroy(); resolve(null); });
   });
 }
@@ -42,7 +49,7 @@ function get(path, timeoutMs = 8_000) {
 async function waitForNextJs() {
   const deadline = Date.now() + MAX_WAIT_MS;
   while (Date.now() < deadline) {
-    const status = await get('/');
+    const status = await get('/', 8_000);
     if (status === 200) return true;
     await new Promise((r) => setTimeout(r, POLL_MS));
   }
@@ -59,9 +66,10 @@ async function main() {
   process.stdout.write('[prewarm] Next.js ready — waiting ' + (CHUNK_FETCH_DELAY_MS / 1000) + 's for initial compilation to settle…\n');
   await new Promise((r) => setTimeout(r, CHUNK_FETCH_DELAY_MS));
 
-  for (const chunk of CHUNKS) {
-    const status = await get(chunk, 30_000);
-    process.stdout.write('[prewarm] ' + chunk + ' → ' + (status || 'error') + '\n');
+  // Sequential: one at a time to avoid overwhelming Next.js webpack compiler.
+  for (const target of TARGETS) {
+    const status = await get(target, 35_000);
+    process.stdout.write('[prewarm] ' + target + ' → ' + (status !== null ? status : 'error') + '\n');
   }
   process.stdout.write('[prewarm] done\n');
 }
