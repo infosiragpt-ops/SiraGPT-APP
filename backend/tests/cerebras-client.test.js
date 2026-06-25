@@ -41,7 +41,7 @@ test('getCerebrasConfig: enabled with API key — uses defaults for base/model/n
   assert.equal(cfg.reason, 'ok');
   assert.equal(cfg.apiKey, 'csk-abc');
   assert.equal(cfg.baseURL, DEFAULT_BASE_URL);
-  assert.equal(cfg.model, 'llama-3.1-8b');
+  assert.equal(cfg.model, 'gpt-oss-120b');
   assert.equal(cfg.displayName, 'Free IA');
   assert.equal(cfg.provider, 'Cerebras');
 });
@@ -113,20 +113,20 @@ test('createCerebrasClient: instantiates OpenAI ctor with Cerebras apiKey + base
 
 test('buildFreeIaModelDescriptor: shape matches what /api/ai/models expects', () => {
   const desc = buildFreeIaModelDescriptor({ env: { CEREBRAS_API_KEY: 'csk-abc' } });
-  assert.equal(desc.name, 'llama-3.1-8b');
+  assert.equal(desc.name, 'gpt-oss-120b');
   assert.equal(desc.displayName, 'Free IA');
   assert.equal(desc.provider, 'Cerebras');
   assert.equal(desc.type, 'TEXT');
   assert.equal(desc.virtual, true);
   assert.equal(desc.enabled, true);
   assert.match(desc.id, /^__virtual_/);
-  assert.match(desc.id, /llama_3_1_8b/);
+  assert.match(desc.id, /gpt_oss_120b/);
 });
 
 test('buildFreeIaModelDescriptor: enabled:false when Cerebras key missing — descriptor still well-formed', () => {
   const desc = buildFreeIaModelDescriptor({ env: {} });
   assert.equal(desc.enabled, false);
-  assert.equal(desc.name, 'llama-3.1-8b');
+  assert.equal(desc.name, 'gpt-oss-120b');
   assert.equal(desc.provider, 'Cerebras');
 });
 
@@ -266,7 +266,7 @@ test('buildFreeIaModelDescriptor: includes pricing block + family', () => {
   assert.equal(desc.pricing.priceUsd, 0);
   assert.equal(desc.pricing.isFree, true);
   assert.equal(desc.pricing.badge, 'Gratis');
-  assert.equal(desc.family, 'llama-3.1', 'descriptor should expose the model family for picker grouping');
+  assert.equal(desc.family, 'gpt-oss', 'descriptor should expose the model family for picker grouping');
 });
 
 test('integration: instrumented client → real metrics module captures error+message', async () => {

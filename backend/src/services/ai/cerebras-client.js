@@ -194,6 +194,8 @@ function inferModelFamily(modelId) {
   if (!m) return 'unknown';
   const llamaMatch = m.match(/llama[-_]?(\d+\.\d+)/);
   if (llamaMatch) return `llama-${llamaMatch[1]}`;
+  if (m.startsWith('gpt-oss')) return 'gpt-oss';        // current Cerebras default
+  if (m.startsWith('zai-glm') || m.startsWith('glm-')) return 'zai-glm';
   if (m.startsWith('cerebras:') || m.startsWith('cerebras-')) return 'cerebras';
   return 'unknown';
 }
