@@ -227,3 +227,16 @@ test('scanValue detects an XSS payload under object keys past the 30th (no key-c
   const violations = scanValue(obj);
   assert.ok(violations.length > 0, 'a payload under the 35th key must still be detected');
 });
+
+test('scanString does not catastrophically backtrack on non-ASCII + whitespace (ReDoS)', () => {
+  // Regression: the homoglyph_url pattern `[^\x00-\x7F]{3,}\s*(...)` backtracked
+  // O(n^2) on a benign paste of CJK text + spaces (no URL), blocking the event
+  // loop for seconds. Bounded quantifiers make it linear.
+  const evil = '中'.repeat(40000) + ' '.repeat(40000); // 80k chars, no URL marker
+  const t0 = Date.now();
+  scanString(evil);
+  const elapsed = Date.now() - t0;
+  assert.ok(elapsed < 500, `scanString took ${elapsed}ms on 80k mixed input (must be near-linear)`);
+  // A genuine homoglyph URL is still flagged.
+  assert.ok(scanString('оар@evil.com').some((v) => v.code === 'unicode.homoglyph_url'));
+});

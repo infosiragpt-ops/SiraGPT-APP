@@ -45,7 +45,11 @@ const PROMPT_INJECTION_PATTERNS = [
 const UNICODE_ATTACK_PATTERNS = [
   [/[\u202A-\u202E]/g, 'unicode.direction_override'],
   [/[\u200B\u200C\u200D\uFEFF]/g, 'unicode.zero_width'],
-  [/[^\x00-\x7F]{3,}\s*(?:@|www\.|https?:\/\/)/, 'unicode.homoglyph_url'],
+  // Bounded quantifiers — the unbounded `{3,}\s*` backtracked quadratically on a
+  // benign paste of non-ASCII text + whitespace (no URL marker), blocking the
+  // event loop (ReDoS/DoS). A real homoglyph-URL prefix is short, so 100/8 caps
+  // lose no detection while making the scan linear.
+  [/[^\x00-\x7F]{3,100}\s{0,8}(?:@|www\.|https?:\/\/)/, 'unicode.homoglyph_url'],
 ];
 
 const MAX_DEPTH = Math.max(2, Number.parseInt(process.env.SIRAGPT_INPUT_SANITIZER_MAX_DEPTH || '10', 10));
