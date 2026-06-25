@@ -166,3 +166,14 @@ test('hot path: 1000 record + rollup under 200ms', () => {
   agg.rollup();
   assert.ok(Date.now() - t0 < 500);
 });
+
+test('rollup scope=user without a userId must NOT return other users (cross-user leak)', () => {
+  agg.__resetForTests();
+  agg.record({ userId: 'alice', faithfulness: 0.9, accepted: true });
+  agg.record({ userId: 'bob', faithfulness: 0.1, accepted: false });
+  assert.strictEqual(agg.rollup({ scope: 'all' }).samples, 2);
+  // A per-user rollup with no userId used to fall through and leak everyone.
+  assert.strictEqual(agg.rollup({ scope: 'user' }).samples, 0);
+  assert.strictEqual(agg.rollup({ scope: 'user', userId: null }).samples, 0);
+  assert.strictEqual(agg.rollup({ scope: 'user', userId: 'alice' }).samples, 1);
+});
