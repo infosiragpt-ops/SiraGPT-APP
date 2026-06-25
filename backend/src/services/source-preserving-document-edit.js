@@ -49,6 +49,7 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   // document/region noun ("borra el jurado evaluador", "elimina los anexos",
   // "agrega una conclusión") — the only plausible target is the uploaded doc.
   const strongStructuralVerb = /\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|quit\w*|elimin\w*|borr\w*|suprim\w*|remov\w*|reemplaz\w*|sustitu\w*|tach\w*)\b/.test(verbHay);
+  const implicitFileEditVerb = /\b(corrig\w*|correg\w*|mejor\w*|modific\w*|edit\w*|actualiz\w*|formaliz\w*|ajust\w*|optim\w*)\b/.test(verbHay);
   // Whole-document transforms (traduce / cambia / resume / reformula…) act on the
   // entire file. They are recognized as edits, but require an explicit document
   // noun (not just a demonstrative pronoun) so phrases like "traduce esta frase"
@@ -94,7 +95,11 @@ function isSourcePreservingEditRequest(prompt, files = []) {
     // A STRONG mutation verb alone is enough on an attachment turn — the
     // uploaded file is the only plausible target ("borra el jurado evaluador").
     if (strongStructuralVerb) return true;
-    // Weaker edit verbs (pon/mejora/modifica/edita…) still need an explicit
+    // Editorial instructions like "corrige la redacción" are also document
+    // edits when a Word/PDF/Office file is already attached; the attachment is
+    // the only durable text surface the user can mean.
+    if (implicitFileEditVerb) return true;
+    // Remaining weak verbs (for example "pon") still need an explicit
     // reference, and transform verbs require a document noun (handled above) so
     // "traduce esta frase" / "cambia de tema" stay normal chat answers.
     return structuralEditVerb && existingDocRef;

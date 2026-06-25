@@ -162,6 +162,30 @@ describe("ai-service · deterministic intent routing", () => {
     assert.equal(await aiService.classifyIntent(prompt, history), "agent_task")
   })
 
+  it("routes freeform editorial changes of an uploaded Word document to the agentic document editor", async () => {
+    const history = [
+      {
+        role: "USER",
+        content: "propuesta.docx",
+        files: [
+          {
+            id: "file-docx-edit",
+            name: "propuesta.docx",
+            mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          },
+        ],
+      },
+    ]
+
+    const prompt = "corrige la redacción y mejora el tono profesional"
+    const graph = buildIntentAttributionGraph(prompt, history)
+    assert.equal(shouldAnswerFromExistingDocument(prompt, history), false)
+    assert.equal(shouldEditExistingDocument(prompt, history), true)
+    assert.equal(shouldUseExistingDocumentFileContext(prompt, history), true)
+    assert.equal(graph.inferredIntent, "agent_task")
+    assert.equal(await aiService.classifyIntent(prompt, history), "agent_task")
+  })
+
   it("keeps spreadsheet data work on the agentic route when a spreadsheet is attached", () => {
     assert.equal(
       shouldRouteTextPromptThroughAgenticRuntime("analiza estos datos de ventas", [

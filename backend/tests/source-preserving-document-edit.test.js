@@ -169,6 +169,9 @@ describe('source-preserving document edit', () => {
     assert.equal(isSourcePreservingEditRequest(prompt, []), true);
     assert.equal(isSourcePreservingEditRequest('agrega una tabla de presupuesto', []), false);
     assert.equal(isSourcePreservingEditRequest('agrega al final una tabla de presupuesto', []), false);
+    assert.equal(isSourcePreservingEditRequest('corrige la redacción', ['file-docx']), true);
+    assert.equal(isSourcePreservingEditRequest('mejora el tono profesional', ['file-docx']), true);
+    assert.equal(isSourcePreservingEditRequest('corrige la redacción', []), false);
     assert.equal(isSourcePreservingEditRequest('dame un resumen en un solo párrafo', ['file-docx']), false);
     assert.equal(isSourcePreservingEditRequest('calcula la diferencia usando los documentos adjuntos', ['file-docx']), false);
     assert.equal(isSourcePreservingEditRequest('compara el PDF y el DOCX adjuntos e indica la cifra final', ['file-docx']), false);
