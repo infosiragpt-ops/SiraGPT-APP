@@ -163,35 +163,42 @@ function splitSentenceRuns(str) {
 }
 
 /**
- * Linear-time equivalent of `str.match(/[^.!?]+[.!?]+(\s|$)/g)` — same
- * runs as splitSentenceRuns, but the trailing `(\s|$)` group means a
- * run only matches when followed by a whitespace char (consumed into
- * the match) or end-of-string. Returns null when nothing matches,
- * exactly like String.prototype.match.
+ * LOSSLESS sentence partition: split `str` into contiguous segments that
+ * together cover EVERY character (`out.join('') === str`). A boundary is a run
+ * of sentence terminators `[.!?]+` immediately followed by whitespace (or EOS);
+ * the trailing whitespace stays with the left segment. A terminator that is NOT
+ * followed by whitespace (a decimal like `3.5`, an abbreviation like `U.S.`) is
+ * NOT a boundary, and any terminator-free trailing fragment becomes the final
+ * segment.
+ *
+ * This replaced an earlier `str.match(/[^.!?]+[.!?]+(\s|$)/g)` equivalent whose
+ * matches did NOT cover the whole input — so boostBurstiness, which rebuilds the
+ * text from the segments, silently dropped terminator-free tails AND the clause
+ * preceding any mid-text decimal (e.g. "First. The value 3.5 is high." →
+ * "First. 5 is high."). Returns null only when there is nothing to emit.
  */
 function splitSentencesWithTrail(str) {
   const out = [];
   const len = str.length;
+  let start = 0;
   let i = 0;
   while (i < len) {
-    if (isSentenceTerminator(str[i])) {
-      i += 1;
-      continue;
+    if (!isSentenceTerminator(str[i])) { i += 1; continue; }
+    // Consume the whole terminator run.
+    let j = i + 1;
+    while (j < len && isSentenceTerminator(str[j])) j += 1;
+    // A boundary only when end-of-string or whitespace follows the run.
+    if (j >= len || /\s/.test(str[j])) {
+      let k = j;
+      while (k < len && /\s/.test(str[k])) k += 1; // trailing ws joins the segment
+      out.push(str.slice(start, k));
+      start = k;
+      i = k;
+    } else {
+      i = j; // not a boundary (decimal / abbreviation) — keep scanning
     }
-    const start = i;
-    while (i < len && !isSentenceTerminator(str[i])) i += 1;
-    if (i >= len) break;
-    while (i < len && isSentenceTerminator(str[i])) i += 1;
-    if (i >= len) {
-      out.push(str.slice(start));
-    } else if (/\s/.test(str[i])) {
-      out.push(str.slice(start, i + 1));
-      i += 1;
-    }
-    // else: terminator run followed by a non-space char — the regex
-    // fails at every position of this run and resumes scanning at the
-    // next run, which is exactly where `i` already points.
   }
+  if (start < len) out.push(str.slice(start)); // terminator-free trailing fragment
   return out.length > 0 ? out : null;
 }
 
@@ -537,8 +544,11 @@ function humanizeChunked(opts = {}) {
   }
   // Split on paragraph boundaries (double newlines). When the input
   // has none, fall back to single-newline boundaries to avoid running
-  // the whole blob in one pass.
-  const splitter = input.includes('\n\n') ? /\n{2,}/ : /\n+/;
+  // the whole blob in one pass. Remember which separator was used so the
+  // chunks are rejoined with the SAME boundary — rejoining single-newline
+  // chunks with '\n\n' used to double every line break and mangle structure.
+  const usedDoubleNewline = input.includes('\n\n');
+  const splitter = usedDoubleNewline ? /\n{2,}/ : /\n+/;
   const paragraphs = input.split(splitter).filter((p) => p.trim());
 
   let aiScoreBeforeSum = 0;
@@ -556,7 +566,7 @@ function humanizeChunked(opts = {}) {
   const before = Math.round((aiScoreBeforeSum / n) * 1000) / 1000;
   const after = Math.round((aiScoreAfterSum / n) * 1000) / 1000;
   return {
-    text: outParts.join('\n\n'),
+    text: outParts.join(usedDoubleNewline ? '\n\n' : '\n'),
     applied: allApplied,
     aiScoreBefore: before,
     aiScoreAfter: after,

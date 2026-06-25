@@ -477,7 +477,7 @@ test('hardening: punctuation-only, emoji-only and control-char-only inputs stay 
   }
 });
 
-test('hardening: linear sentence scanners are byte-identical to the original regexes', () => {
+test('hardening: splitSentenceRuns mirrors its regex; splitSentencesWithTrail covers every char', () => {
   const { splitSentenceRuns, splitSentencesWithTrail } = require('../src/services/paraphrase-humanizer');
   // Deterministic mini-fuzz over the characters that exercise every
   // branch (terminators, whitespace classes, emoji surrogates, runs).
@@ -491,15 +491,54 @@ test('hardening: linear sentence scanners are byte-identical to the original reg
     let s = '';
     const len = Math.floor(rnd() * 30);
     for (let i = 0; i < len; i += 1) s += ALPHA[Math.floor(rnd() * ALPHA.length)];
-    assert.deepEqual(
-      splitSentencesWithTrail(s),
-      s.match(/[^.!?]+[.!?]+(\s|$)/g),
-      `trail scan diverged on ${JSON.stringify(s)}`,
-    );
+    // splitSentenceRuns is an analysis-only scanner (feeds the burstiness
+    // SCORE, never rebuilds text) so it still mirrors its regex exactly.
     assert.deepEqual(
       splitSentenceRuns(s),
       s.match(/[^.!?]+[.!?]+/g) || [],
       `run scan diverged on ${JSON.stringify(s)}`,
     );
+    // splitSentencesWithTrail feeds boostBurstiness, which REBUILDS the text
+    // from the segments — so it must be a lossless partition (covers every
+    // char). The old regex-equivalent dropped terminator-free tails and the
+    // clause before a mid-text decimal, silently truncating the user's text.
+    const segs = splitSentencesWithTrail(s) || [];
+    assert.equal(segs.join(''), s, `trail scan dropped characters on ${JSON.stringify(s)}`);
   }
+});
+
+test('splitSentencesWithTrail splits real boundaries but not decimals/abbreviations', () => {
+  const { splitSentencesWithTrail } = require('../src/services/paraphrase-humanizer');
+  assert.deepEqual(splitSentencesWithTrail('A. B.'), ['A. ', 'B.']);
+  assert.deepEqual(splitSentencesWithTrail('3.5'), ['3.5']);
+  assert.deepEqual(
+    splitSentencesWithTrail('First sentence. The value 3.5 is high.'),
+    ['First sentence. ', 'The value 3.5 is high.'],
+  );
+  assert.equal(splitSentencesWithTrail(''), null);
+});
+
+test('boostBurstiness never drops the trailing fragment or the clause before a decimal', () => {
+  const { boostBurstiness } = require('../src/services/paraphrase-humanizer');
+  for (const input of [
+    'Hello world. This is a tail without period',
+    'First sentence. The value 3.5 is high.',
+    'First. 3.5 more',
+  ]) {
+    const out = boostBurstiness(input).text;
+    for (const word of input.split(/\s+/).filter(Boolean)) {
+      assert.ok(
+        out.includes(word.replace(/[.,;]+$/, '')),
+        `word "${word}" lost from "${input}" → "${out}"`,
+      );
+    }
+  }
+});
+
+test('humanizeChunked preserves single-newline structure (no double-newline mangling)', () => {
+  const { humanizeChunked } = require('../src/services/paraphrase-humanizer');
+  const text = Array.from({ length: 30 }, (_, i) => `Linea ${i} con contenido normal de prueba`).join('\n');
+  assert.ok(!text.includes('\n\n'));
+  const r = humanizeChunked({ text, maxChunkChars: 200 });
+  assert.ok(!r.text.includes('\n\n'), 'single-newline input must not gain double newlines');
 });
