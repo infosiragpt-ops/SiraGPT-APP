@@ -165,6 +165,15 @@ describe('multi-hop-intent-reasoner', () => {
     assert.ok(tooling.metadata.tools.includes('create_chart'));
   });
 
+  it('does not detect an output kind from a hint token buried inside another word', () => {
+    // Regression: substring matching fired "chart" on "merchant", "map" on
+    // "example", etc. Word-boundary matching only.
+    assert.notEqual(multiHop.detectOutputKind('the merchant tracks orders')?.kind, 'visualization');
+    assert.equal(multiHop.detectOutputKind('the merchant tracks orders'), null);
+    // A real, whole-word mention still detects; and the EARLIEST one wins.
+    assert.equal(multiHop.detectOutputKind('first a table then a chart').kind, 'tabular');
+  });
+
   it('flags missing prerequisites when "this document" referenced but no docs provided', () => {
     const result = multiHop.reason('Summarize this document', { documents: [] });
     assert.ok(result.missingPrerequisites.includes('document_missing'));

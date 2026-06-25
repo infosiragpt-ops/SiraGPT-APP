@@ -142,10 +142,20 @@ function clamp(value, min = 0, max = 1) {
 function detectOutputKind(query) {
   if (!query) return null;
   const lower = query.toLowerCase();
+  let best = null;
   for (const [token, kind] of Object.entries(OUTPUT_KIND_HINTS)) {
-    if (lower.includes(token)) return { token, kind };
+    // Word-boundary match, not a raw substring — "chart" must not fire on
+    // "merchant", "map" on "example", "code" on "decode", etc.
+    const re = new RegExp(`\\b${token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+    const m = re.exec(lower);
+    if (!m) continue;
+    // Prefer the EARLIEST mention (most salient), breaking ties toward the longer
+    // token — rather than whichever object key happened to iterate first.
+    if (best == null || m.index < best.pos || (m.index === best.pos && token.length > best.token.length)) {
+      best = { token, kind, pos: m.index };
+    }
   }
-  return null;
+  return best ? { token: best.token, kind: best.kind } : null;
 }
 
 function detectConstraints(query) {
