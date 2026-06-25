@@ -19,6 +19,9 @@ const CHUNK_FETCH_DELAY_MS = 5_000;
 const CHUNKS = [
   '/_next/static/chunks/app/global-error.js',
   '/api/health/ready',
+  // sentry-client-init loads lazily via ssr:false dynamic(); without a prewarm
+  // the first browser request hits a cold compile and times out through Replit proxy
+  '/_next/static/chunks/_app-pages-browser_components_sentry-client-init_tsx.js',
 ];
 
 function get(path, timeoutMs = 8_000) {
