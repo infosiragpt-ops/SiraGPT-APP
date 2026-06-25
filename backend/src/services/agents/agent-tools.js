@@ -172,6 +172,21 @@ function formatChunkSeparator(prefix, title) {
   return `${prefix} ${title}`;
 }
 
+// Join a source's ingested chunks back into a single document string, in
+// ingestion order, re-inserting the comment-style separators read_file uses.
+// Shared by read_file (40k display cap) and static_checks (200k scan cap) so
+// both reconstruct the file identically.
+function joinSourceChunks(chunks, src) {
+  const prefix = commentPrefixFor(src);
+  return chunks
+    .map(c => {
+      if (!c.title) return c.text;
+      const sep = formatChunkSeparator(prefix, c.title);
+      return sep ? `${sep}\n${c.text}` : c.text;
+    })
+    .join('\n\n');
+}
+
 const read_file = {
   name: 'read_file',
   description: 'Read the full text of a file from the user\'s knowledge collection, in ingestion order.',
@@ -185,14 +200,7 @@ const read_file = {
     const chunks = await rag.getBySource(ctx.userId, ctx.collection, src);
     if (chunks.length === 0) return { error: `no chunks with source="${src}"` };
 
-    const prefix = commentPrefixFor(src);
-    const joined = chunks
-      .map(c => {
-        if (!c.title) return c.text;
-        const sep = formatChunkSeparator(prefix, c.title);
-        return sep ? `${sep}\n${c.text}` : c.text;
-      })
-      .join('\n\n');
+    const joined = joinSourceChunks(chunks, src);
 
     // Surrogate-safe slice: pulling the cut back by one when the
     // last kept code unit is a high surrogate avoids handing the LLM
@@ -1075,15 +1083,24 @@ const static_checks = {
 
     // Hard cap on inspected content. Without this a caller could pass
     // a 10 MB string and the checks (regex scans, comment-mask builder)
-    // would happily allocate hundreds of megabytes of intermediate
-    // state. 200_000 chars matches the default read_file ceiling.
+    // would happily allocate hundreds of megabytes of intermediate state.
     const STATIC_CHECK_MAX_CHARS = 200000;
     let content = args?.content;
     let inputTruncated = false;
     if (!content) {
-      const fileObs = await read_file.handler({ source: src, max_chars: STATIC_CHECK_MAX_CHARS }, ctx);
-      if (fileObs.error) return fileObs;
-      content = fileObs.text;
+      // Reconstruct the FULL source directly — NOT via read_file, whose public
+      // max_chars is hard-capped at 40_000. Routing the scan through read_file
+      // silently truncated every file to 40k, so any vulnerability past the
+      // first 40k chars (weak crypto, unsafe_html, TLS-disabled, …) escaped
+      // detection on large files. We re-join the chunks and apply the scan's
+      // own 200k ceiling instead.
+      const chunks = await rag.getBySource(ctx.userId, ctx.collection, src);
+      if (!chunks || chunks.length === 0) return { error: `no chunks with source="${src}"` };
+      content = joinSourceChunks(chunks, src);
+      if (content.length > STATIC_CHECK_MAX_CHARS) {
+        content = content.slice(0, STATIC_CHECK_MAX_CHARS);
+        inputTruncated = true;
+      }
     } else if (typeof content !== 'string') {
       return { error: '"content" must be a string when provided' };
     } else if (content.length > STATIC_CHECK_MAX_CHARS) {
