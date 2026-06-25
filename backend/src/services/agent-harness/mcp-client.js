@@ -86,17 +86,29 @@ async function connectClient(server) {
       const { StreamableHTTPClientTransport } = require('@modelcontextprotocol/sdk/client/streamableHttp.js');
       transport = new StreamableHTTPClientTransport(url, { requestInit: { headers } });
     }
-    await client.connect(transport);
+    try {
+      await client.connect(transport);
+    } catch (err) {
+      // A failed kind must close its (possibly half-open) transport before the
+      // loop tries the next one — otherwise the EventSource/socket leaks.
+      try { await client.close(); } catch (_) { /* noop */ }
+      throw err;
+    }
     return client;
   }
 
   const preferred = server.transport === 'sse' ? ['sse'] : ['streamable-http', 'sse'];
   let lastErr = null;
   for (const kind of preferred) {
+    const attemptPromise = attempt(kind);
     try {
-      return await withTimeout(attempt(kind), DISCOVERY_TIMEOUT_MS, `mcp connect (${kind})`);
+      return await withTimeout(attemptPromise, DISCOVERY_TIMEOUT_MS, `mcp connect (${kind})`);
     } catch (err) {
       lastErr = err;
+      // The timeout abandons the in-flight attempt: if connect() later resolves,
+      // close the orphaned client (open transport/EventSource) instead of leaking
+      // it for the process lifetime. Rejections (already closed above) are no-ops.
+      attemptPromise.then((client) => { try { client.close(); } catch (_) { /* noop */ } }).catch(() => {});
     }
   }
   throw lastErr || new Error('mcp connect failed');
