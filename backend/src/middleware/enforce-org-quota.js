@@ -97,38 +97,55 @@ function enforceOrgQuota(opts = {}) {
       const org = await client.organization.findUnique({ where: { id: orgId } });
       if (!org) return res.status(404).json({ error: 'organization not found' });
 
-      // Reset counter if month rolled over.
+      // Reset counter if month rolled over. Guard the reset so only the first
+      // concurrent request in the new month performs it — the others match 0
+      // rows (quotaResetAt already advanced) rather than each re-zeroing the
+      // counter and momentarily clearing enforcement for a burst.
       const now = new Date();
       const resetAt = org.quotaResetAt instanceof Date ? org.quotaResetAt : new Date(org.quotaResetAt);
       let used = Number(org.usedThisMonth || 0);
       const limit = Number(org.monthlyQuota || 0);
       if (!sameCalendarMonth(now, resetAt)) {
-        used = 0;
-        await client.organization.update({
-          where: { id: orgId },
+        const startOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+        await client.organization.updateMany({
+          where: { id: orgId, quotaResetAt: { lt: startOfMonth } },
           data: { usedThisMonth: BigInt(0), quotaResetAt: now },
         });
+        used = 0;
       }
 
       setHeaders(res, { used, limit, orgId });
 
       const enforced = isEnforced();
-      if (enforced && used + cost > limit) {
-        return res.status(429).json({
-          error: 'organization monthly quota exceeded',
+      // Reserve atomically so concurrent requests can't all pass a stale read and
+      // overshoot the quota (TOCTOU): a single conditional UPDATE only reserves
+      // when still under the cap; zero rows affected == over quota. Falls back to
+      // the legacy read-check-increment for test doubles (no $queryRawUnsafe) and
+      // when enforcement is disabled (telemetry-only — never blocks).
+      let newUsed;
+      if (enforced && typeof client.$queryRawUnsafe === 'function') {
+        const rows = await client.$queryRawUnsafe(
+          `UPDATE "organizations"
+             SET "usedThisMonth" = "usedThisMonth" + $1::BIGINT
+           WHERE "id" = $2 AND "usedThisMonth" + $1::BIGINT <= "monthlyQuota"
+           RETURNING "usedThisMonth"`,
+          String(cost),
           orgId,
-          used,
-          limit,
+        );
+        if (!Array.isArray(rows) || rows.length === 0) {
+          return res.status(429).json({ error: 'organization monthly quota exceeded', orgId, used, limit });
+        }
+        newUsed = Number(rows[0].usedThisMonth);
+      } else {
+        if (enforced && used + cost > limit) {
+          return res.status(429).json({ error: 'organization monthly quota exceeded', orgId, used, limit });
+        }
+        await client.organization.update({
+          where: { id: orgId },
+          data: { usedThisMonth: { increment: BigInt(cost) } },
         });
+        newUsed = used + cost;
       }
-
-      // Optimistic reservation: increment first; expose refund() in
-      // case the wrapped handler decides to bail out without consuming.
-      await client.organization.update({
-        where: { id: orgId },
-        data: { usedThisMonth: { increment: BigInt(cost) } },
-      });
-      const newUsed = used + cost;
       setHeaders(res, { used: newUsed, limit, orgId });
 
       req.orgContext = {
