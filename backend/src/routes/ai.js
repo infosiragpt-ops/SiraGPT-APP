@@ -1510,7 +1510,12 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
           chatId,
           role: 'ASSISTANT',
           content: normalizedResponseContent,
-          tokens,
+          // Store the REAL token count (tiktoken over the saved content), not
+          // the `tokens` param — callers pass a char-length approximation
+          // (fullResponseContent.length + prompt.length), which made
+          // Message.tokens disagree with ApiUsage.tokens (which already uses
+          // totalTokens) and corrupted per-message analytics/billing.
+          tokens: totalTokens,
           files: assistantFiles.length > 0 ? JSON.stringify(assistantFiles) : null,
           metadata: metadataPayload,
           // Claude-style extended thinking: chain-of-thought text + the raw
