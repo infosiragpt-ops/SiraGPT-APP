@@ -186,6 +186,42 @@ test('addDomain validates hostname and returns A+TXT records', async () => {
   assert.equal(detail.domains.length, 0);
 });
 
+test('publishDeployment on a shut-down deployment returns 409, not a confusing 404', async () => {
+  const db = makeFakeDb();
+  const d = await service.createDeployment({ userId: USER, name: 'App', db });
+  await service.setStatus({ userId: USER, id: d.id, status: 'shut_down', db });
+  await assert.rejects(
+    () => service.publishDeployment({ userId: USER, id: d.id, db }),
+    (e) => e.status === 409 && e.code === 'deployment_shut_down',
+  );
+});
+
+test('addDomain rejects a hostname already attached to another deployment', async () => {
+  const db = makeFakeDb();
+  const a = await service.createDeployment({ userId: USER, name: 'A', db });
+  const b = await service.createDeployment({ userId: USER, name: 'B', db });
+  await service.addDomain({ userId: USER, id: a.id, hostname: 'shared.example.com', db });
+  await assert.rejects(
+    () => service.addDomain({ userId: USER, id: b.id, hostname: 'shared.example.com', db }),
+    (e) => e.status === 409 && e.code === 'domain_taken',
+  );
+});
+
+test('addDomain hostname validation rejects malformed labels and accepts punycode IDN', async () => {
+  const db = makeFakeDb();
+  const d = await service.createDeployment({ userId: USER, name: 'App', db });
+  for (const bad of ['-foo.com', 'foo-.com', 'a..b.com', 'nodot', 'foo.c']) {
+    await assert.rejects(
+      () => service.addDomain({ userId: USER, id: d.id, hostname: bad, db }),
+      (e) => e.code === 'invalid_hostname',
+      `should reject ${bad}`,
+    );
+  }
+  // Valid punycode IDN domain (рф) — the old letters-only TLD regex wrongly rejected it.
+  const dom = await service.addDomain({ userId: USER, id: d.id, hostname: 'xn--80akhbyknj4f.xn--p1ai', db });
+  assert.equal(dom.hostname, 'xn--80akhbyknj4f.xn--p1ai');
+});
+
 test('updateDeployment changes commands but ignores geography (immutable)', async () => {
   const db = makeFakeDb();
   const d = await service.createDeployment({ userId: USER, name: 'App', geography: 'na', db });

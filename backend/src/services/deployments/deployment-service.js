@@ -287,8 +287,14 @@ async function getDeployment({ userId, id, db = defaultPrisma }) {
 /** Publish a new immutable version, running the 5-phase pipeline. */
 async function publishDeployment({ userId, id, hasFiles = true, db = defaultPrisma, env = process.env }) {
   const prisma = requireDb(db);
-  const row = await loadOwned(prisma, userId, id);
+  // Load INCLUDING soft-deleted rows: shutdown sets deletedAt, so loadOwned
+  // (which filters deletedAt:null) used to 404 here, making the shut_down 409
+  // below unreachable. Surface the clearer 409 for a shut-down deployment and a
+  // plain 404 for any other soft-deleted/absent row.
+  const row = await prisma.deployment.findFirst({ where: { id, userId } });
+  if (!row) throw new DeploymentError(404, 'deployment_not_found', 'deployment not found');
   if (row.status === 'shut_down') throw new DeploymentError(409, 'deployment_shut_down', 'deployment was shut down');
+  if (row.deletedAt) throw new DeploymentError(404, 'deployment_not_found', 'deployment not found');
 
   const seq = await prisma.deploymentVersion.count({ where: { deploymentId: id } });
   const result = pipeline.runPublishPipeline({
@@ -485,11 +491,29 @@ async function connectProvider({ userId, id, providerId, db = defaultPrisma, env
   };
 }
 
+// RFC-1123-ish hostname validation: ≥2 dot-separated labels, each 1–63 chars
+// with alphanumeric start/end and only interior hyphens; the TLD is letters or
+// a punycode `xn--` label. Replaces a loose `[a-z0-9.-]+\.[a-z]{2,}` that
+// accepted malformed labels (-foo, foo-, a..b.com) and rejected valid IDN/
+// punycode TLDs (xn--p1ai for .рф).
+function isValidHostname(h) {
+  if (typeof h !== 'string' || h.length === 0 || h.length > 253) return false;
+  const labels = h.split('.');
+  if (labels.length < 2) return false;
+  const tld = labels[labels.length - 1];
+  if (!/^(?:[a-z]{2,}|xn--[a-z0-9]+)$/.test(tld)) return false;
+  return labels.every((l) => l.length >= 1 && l.length <= 63 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(l));
+}
+
 async function addDomain({ userId, id, hostname, providerId = null, db = defaultPrisma, env = process.env }) {
   const prisma = requireDb(db);
   await loadOwned(prisma, userId, id);
   const clean = String(hostname || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
-  if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(clean)) throw new DeploymentError(400, 'invalid_hostname', 'invalid hostname');
+  if (!isValidHostname(clean)) throw new DeploymentError(400, 'invalid_hostname', 'invalid hostname');
+  // A hostname may only be attached to one deployment — otherwise two
+  // deployments claim the same custom domain and DNS verification is ambiguous.
+  const existingDomain = await prisma.deploymentDomain.findFirst({ where: { hostname: clean } });
+  if (existingDomain) throw new DeploymentError(409, 'domain_taken', 'hostname already attached to a deployment');
   const dnsRecords = pipeline.dnsRecordsFor(clean, id);
   let providerResult = null;
   if (providerId === 'godaddy_dns') {

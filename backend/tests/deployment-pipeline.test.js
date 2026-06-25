@@ -12,6 +12,14 @@ test('generateShortHash is deterministic, 8 chars, seq-sensitive', () => {
   assert.match(p.generateShortHash('depl_1', 0), /^[0-9a-f]{8}$/);
 });
 
+test('generateShortHash folds in the salt hash — well-distributed, no clustering', () => {
+  // Guards against the prior dead-`b` form (which kept only the first FNV hash):
+  // the mix must stay collision-free across a run of sequential versions.
+  const seen = new Set();
+  for (let seq = 0; seq < 256; seq++) seen.add(p.generateShortHash('depl_dist', seq));
+  assert.ok(seen.size >= 254, `expected near-unique hashes, got ${seen.size}/256`);
+});
+
 test('slugifySubdomain strips diacritics + unsafe chars, adds stable suffix', () => {
   const a = p.slugifySubdomain('Mi App Probada áéí!!', 'depl_abc');
   assert.match(a, /^mi-app-probada-aei-[a-z0-9]{1,4}$/);

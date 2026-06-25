@@ -70,7 +70,10 @@ function fnv1a(str) {
 function generateShortHash(deploymentId, seq = 0) {
   const a = fnv1a(`${deploymentId}:${seq}`);
   const b = fnv1a(`${seq}:${deploymentId}:salt`);
-  return (a.toString(16).padStart(8, '0') + b.toString(16).padStart(8, '0')).slice(0, 8);
+  // Mix BOTH hashes into the 8-hex output. The previous
+  // `(aHex8 + bHex8).slice(0, 8)` kept only aHex8 — the salt hash `b` was dead
+  // and added no distribution. XOR folds b's entropy back in within 8 hex chars.
+  return ((a ^ b) >>> 0).toString(16).padStart(8, '0');
 }
 
 /** URL-safe subdomain from a name, with a short deterministic suffix so two
