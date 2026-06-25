@@ -46,6 +46,10 @@ const {
   contentDispositionHeader,
   safeDownloadFilename,
 } = require('../middleware/file-response-safety');
+const {
+  assertOutboundUrlSafe,
+  parseSafeOutboundUrl,
+} = require('../utils/url-ssrf-guard');
 
 const router = express.Router();
 
@@ -91,6 +95,51 @@ function sendStripeError(res, req, error, operation) {
     operation,
   });
   return res.status(response.statusCode).json(response.body);
+}
+
+// Stripe invoice assets (invoice_pdf / hosted_invoice_url) live on *.stripe.com.
+// Restricting outbound fetches + redirects to those hosts — on top of the shared
+// private-IP / DNS-rebinding guard — closes an SSRF + open-redirect vector where a
+// tampered invoice object could point invoice_pdf at an internal service such as
+// http://127.0.0.1:6379 or the cloud metadata endpoint. Env-extendable so an ops
+// change never requires a code change.
+const STRIPE_INVOICE_ALLOWED_HOSTS = (() => {
+  const base = ['stripe.com'];
+  const extra = String(process.env.STRIPE_INVOICE_ALLOWED_HOSTS || '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  return Array.from(new Set([...base, ...extra]));
+})();
+
+// Streams the invoice PDF (after validating the outbound URL) or, failing that,
+// redirects to the hosted invoice URL (after validating it too). Returns the
+// Express response. Shared by both invoice-download routes.
+async function streamInvoicePdfOrRedirect(req, res, invoice) {
+  if (invoice.invoice_pdf) {
+    try {
+      await assertOutboundUrlSafe(invoice.invoice_pdf, { allowHosts: STRIPE_INVOICE_ALLOWED_HOSTS });
+    } catch (err) {
+      logRouteError(req, 'payments.invoice.url_rejected', err, { field: 'invoice_pdf' });
+      return res.status(502).json({ error: 'Invoice URL failed safety validation', requestId: requestIdFor(req) });
+    }
+    const response = await axios.get(invoice.invoice_pdf, { responseType: 'stream', timeout: 15000 });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', contentDispositionHeader('attachment', invoicePdfFilename(invoice)));
+    return response.data.pipe(res);
+  }
+
+  if (invoice.hosted_invoice_url) {
+    try {
+      parseSafeOutboundUrl(invoice.hosted_invoice_url, { allowHosts: STRIPE_INVOICE_ALLOWED_HOSTS });
+    } catch (err) {
+      logRouteError(req, 'payments.invoice.redirect_rejected', err, { field: 'hosted_invoice_url' });
+      return res.status(502).json({ error: 'Invoice URL failed safety validation', requestId: requestIdFor(req) });
+    }
+    return res.redirect(invoice.hosted_invoice_url);
+  }
+
+  return res.status(404).json({ error: 'Invoice PDF not available' });
 }
 
 // Rate limiting for payment endpoints
@@ -675,20 +724,9 @@ router.get('/stripe/invoice/:invoiceId', authenticateToken, async (req, res) => 
       return res.status(403).json({ error: 'Forbidden' });
     }
 
-    // Prefer direct invoice PDF if available
-    if (invoice.invoice_pdf) {
-      const response = await axios.get(invoice.invoice_pdf, { responseType: 'stream', timeout: 15000 });
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', contentDispositionHeader('attachment', invoicePdfFilename(invoice)));
-      return response.data.pipe(res);
-    }
-
-    // Fallback: redirect to hosted invoice URL
-    if (invoice.hosted_invoice_url) {
-      return res.redirect(invoice.hosted_invoice_url);
-    }
-
-    return res.status(404).json({ error: 'Invoice PDF not available' });
+    // Prefer direct invoice PDF if available; otherwise redirect to the hosted
+    // URL. Both outbound URLs are SSRF/open-redirect validated in the helper.
+    return await streamInvoicePdfOrRedirect(req, res, invoice);
   } catch (error) {
     if (error?.isStripeOperationalError || stripeService.isStripeLikeError?.(error)) {
       return sendStripeError(res, req, error, 'downloadStripeInvoice');
@@ -743,19 +781,9 @@ router.get('/invoice/:paymentId', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'No related invoice found for this payment' });
     }
 
-    // Stream PDF if available, else redirect to hosted URL
-    if (invoice.invoice_pdf) {
-      const response = await axios.get(invoice.invoice_pdf, { responseType: 'stream', timeout: 15000 });
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', contentDispositionHeader('attachment', invoicePdfFilename(invoice)));
-      return response.data.pipe(res);
-    }
-
-    if (invoice.hosted_invoice_url) {
-      return res.redirect(invoice.hosted_invoice_url);
-    }
-
-    return res.status(404).json({ error: 'Invoice PDF not available' });
+    // Stream PDF if available, else redirect to hosted URL. Both outbound URLs
+    // are SSRF/open-redirect validated in the helper.
+    return await streamInvoicePdfOrRedirect(req, res, invoice);
   } catch (error) {
     if (error?.isStripeOperationalError || stripeService.isStripeLikeError?.(error)) {
       return sendStripeError(res, req, error, 'downloadStripeInvoiceByPayment');
