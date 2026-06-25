@@ -164,8 +164,11 @@ class GmailService {
         return [];
       }
 
-      // Get detailed information for each message
-      const emails = await Promise.all(
+      // Get detailed information for each message. allSettled (not all) so one
+      // failing message — a 429 from the parallel fan-out, a 404 if it moved in
+      // the list→get window, or a transient network error — doesn't throw away
+      // the other N-1 messages that fetched successfully.
+      const settled = await Promise.allSettled(
         listResponse.data.messages.map(async (message) => {
           const messageResponse = await gmail.users.messages.get({
             userId,
@@ -231,6 +234,12 @@ class GmailService {
           };
         })
       );
+      for (const r of settled) {
+        if (r.status === 'rejected') {
+          console.warn('Failed to fetch a Gmail message:', (r.reason && r.reason.message) || r.reason);
+        }
+      }
+      const emails = settled.filter((r) => r.status === 'fulfilled').map((r) => r.value);
 
       return emails;
     } catch (error) {
