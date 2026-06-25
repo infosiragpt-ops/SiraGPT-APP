@@ -59,6 +59,52 @@ test('tsType maps blueprint field types and editableFields drops id/timestamps',
   ];
   const editable = editableFields(fields);
   assert.deepEqual(editable.map((f) => f.name), ['nombre']);
+  // The created-match is anchored — legit "created_*"/"creator" data fields stay
+  // editable; only the bare created/createdAt timestamp is dropped.
+  const editable2 = editableFields([
+    { name: 'created_campaigns', type: 'integer' },
+    { name: 'creator', type: 'string' },
+    { name: 'createdAt', type: 'datetime' },
+    { name: 'user_id', type: 'string' },
+  ]);
+  assert.deepEqual(editable2.map((f) => f.name).sort(), ['created_campaigns', 'creator']);
+});
+
+test('codegenFromBrief gives kebab-colliding entity slugs distinct file paths', () => {
+  const brief = makeBrief({ platform: 'web' });
+  const blueprint = {
+    dataModel: [
+      { entity: 'User Post', fields: [{ name: 'title', type: 'string' }] },
+      { entity: 'user-post', fields: [{ name: 'body', type: 'text' }] }, // same kebab slug
+    ],
+  };
+  const { files } = codegenFromBrief(brief, blueprint);
+  const paths = files.map((f) => f.path);
+  // No two files share a path — the second entity used to clobber the first.
+  assert.equal(new Set(paths).size, paths.length, 'no duplicate file paths');
+  // Both entities produced a page + api route under distinct slugs.
+  for (const p of ['app/user-post/page.tsx', 'app/user-post-2/page.tsx', 'app/api/user-post/route.ts', 'app/api/user-post-2/route.ts']) {
+    assert.ok(paths.includes(p), `expected ${p}`);
+  }
+});
+
+test('buildEntityPage gives camelCase-colliding field names distinct keys', () => {
+  const brief = makeBrief({ platform: 'web' });
+  const blueprint = {
+    dataModel: [
+      { entity: 'Item', fields: [
+        { name: 'user name', type: 'string' },
+        { name: 'user_name', type: 'string' }, // both camelCase → userName
+      ] },
+    ],
+  };
+  const { files } = codegenFromBrief(brief, blueprint);
+  const page = files.find((f) => f.path === 'app/item/page.tsx').content;
+  assert.ok(page.includes('userName2'), 'the colliding second field got a distinct key');
+  // The row interface declares each key exactly once (no corrupt duplicate).
+  const iface = page.match(/interface Item \{([\s\S]*?)\n\}/)[1];
+  const keys = [...iface.matchAll(/\s(\w+): /g)].map((m) => m[1]);
+  assert.equal(new Set(keys).size, keys.length, 'interface keys are unique');
 });
 
 // ── web codegen ───────────────────────────────────────────────────

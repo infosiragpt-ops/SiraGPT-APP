@@ -86,7 +86,9 @@ function tsType(fieldType) {
 /** Fields a user fills in a create form (skip id + server-managed timestamps). */
 function editableFields(fields) {
   return fields.filter(
-    (f) => f.type !== 'id' && !/(^|_)id$/i.test(f.name) && !/created/i.test(f.name),
+    // The created-timestamp match is ANCHORED — a bare `/created/` substring
+    // wrongly dropped legit data fields like "created_campaigns" / "creator".
+    (f) => f.type !== 'id' && !/(^|_)id$/i.test(f.name) && !/^created(_?at)?$/i.test(f.name),
   );
 }
 
@@ -222,7 +224,7 @@ function buildGlobalsCss(brief) {
 function buildSiteNav(brief, entities) {
   const brand = jsxText((brief.purpose || 'App').slice(0, 32));
   const links = entities.map((e) => {
-    const slug = kebabCase(e.entity);
+    const slug = e.slug || kebabCase(e.entity);
     return '      <Link href="/' + slug + '">' + jsxText(e.entity) + '</Link>';
   });
   return [
@@ -278,7 +280,7 @@ function buildHomePage(brief, entities) {
     (f) => '          <div className="card">' + jsxText(f) + '</div>',
   );
   const entityLinks = entities.map((e) => {
-    const slug = kebabCase(e.entity);
+    const slug = e.slug || kebabCase(e.entity);
     return '          <a className="card" href="/' + slug + '">Gestionar ' + jsxText(e.entity) + ' →</a>';
   });
   const lines = [
@@ -336,7 +338,7 @@ function buildStoreLib() {
 }
 
 function buildApiRoute(model) {
-  const slug = kebabCase(model.entity);
+  const slug = model.slug || kebabCase(model.entity);
   const editable = editableFields(model.fields);
   // Coerce each editable field from the request body to its TS type.
   const coercions = editable.map((f) => {
@@ -368,21 +370,37 @@ function buildApiRoute(model) {
 }
 
 function buildEntityPage(model) {
-  const slug = kebabCase(model.entity);
+  const slug = model.slug || kebabCase(model.entity);
   const typeName = pascalCase(model.entity);
   const editable = editableFields(model.fields);
-  const allCols = model.fields.map((f) => camelCase(f.name));
+  // Assign each field a UNIQUE camelCase key. Two field names that camelCase-
+  // collapse (e.g. "user name" + "user_name" → "userName", or accented variants)
+  // would otherwise emit duplicate keys across the interface / initial state /
+  // inputs / table cells, corrupting the generated row type. editableFields keeps
+  // the same object references, so the editable subset reads the same keys.
+  const usedKeys = new Set();
+  const keyOf = new Map();
+  for (const f of model.fields) {
+    const base = camelCase(f.name) || 'field';
+    let key = base;
+    let n = 2;
+    while (usedKeys.has(key)) { key = `${base}${n}`; n += 1; }
+    usedKeys.add(key);
+    keyOf.set(f, key);
+  }
+  const colKey = (f) => keyOf.get(f) || camelCase(f.name);
+  const allCols = model.fields.map(colKey);
 
   // TS interface for a row.
-  const ifaceFields = model.fields.map((f) => '  ' + camelCase(f.name) + ': ' + tsType(f.type) + ';');
+  const ifaceFields = model.fields.map((f) => '  ' + colKey(f) + ': ' + tsType(f.type) + ';');
   // Initial form state.
   const initialState = editable.map((f) => {
-    const key = camelCase(f.name);
+    const key = colKey(f);
     return '    ' + key + ': ' + (tsType(f.type) === 'number' ? '0' : tsType(f.type) === 'boolean' ? 'false' : '""');
   });
   // Form inputs.
   const inputs = editable.map((f) => {
-    const key = camelCase(f.name);
+    const key = colKey(f);
     const t = tsType(f.type);
     const inputType = t === 'number' ? 'number' : f.type === 'email' ? 'email' : 'text';
     const onChange =
@@ -496,7 +514,20 @@ function codegenFromBrief(rawBrief, blueprintArg) {
   }
 
   // Landing pages stay single-page (marketing); apps get entity CRUD.
-  const entities = brief.platform === 'landing' ? [] : blueprint.dataModel;
+  const rawEntities = brief.platform === 'landing' ? [] : blueprint.dataModel;
+  // Assign each entity a UNIQUE url/file slug up front. Two entity names that
+  // kebab-collapse to the same slug (e.g. "User Post" and "user-post") would
+  // otherwise emit two files at the same path — the second clobbering the first
+  // — and desync the nav links from the pages. Every builder reads model.slug.
+  const usedSlugs = new Set();
+  const entities = rawEntities.map((m) => {
+    const base = kebabCase(m.entity) || 'item';
+    let slug = base;
+    let n = 2;
+    while (usedSlugs.has(slug)) { slug = `${base}-${n}`; n += 1; }
+    usedSlugs.add(slug);
+    return { ...m, slug };
+  });
 
   const files = [
     { path: 'package.json', language: 'json', content: buildPackageJson(brief) },
@@ -511,7 +542,7 @@ function codegenFromBrief(rawBrief, blueprintArg) {
   if (entities.length > 0) {
     files.push({ path: 'lib/store.ts', language: 'typescript', content: buildStoreLib() });
     for (const model of entities) {
-      const slug = kebabCase(model.entity);
+      const slug = model.slug || kebabCase(model.entity);
       files.push({
         path: `app/api/${slug}/route.ts`,
         language: 'typescript',

@@ -50,7 +50,10 @@ function appName(brief) {
   if (!purpose) return 'Mi App';
   const firstClause = purpose.split(/[.,;\n]/)[0].trim();
   const words = firstClause.split(/\s+/).slice(0, 4).join(' ');
-  return words.length > 38 ? `${words.slice(0, 38)}…` : words;
+  // Truncate by CODE POINT, not UTF-16 code unit — slicing at 38 units could cut
+  // a surrogate pair (emoji) in half and emit a lone surrogate before the ellipsis.
+  const chars = [...words];
+  return chars.length > 38 ? `${chars.slice(0, 38).join('')}…` : words;
 }
 
 function navLinks(blueprint) {
