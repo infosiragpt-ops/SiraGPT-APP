@@ -387,8 +387,17 @@ function buildSystemPromptBlock(report, opts = {}) {
   }
 
   const combined = blocks.join('\n\n');
-  if (combined.length > MAX_PROMPT_BLOCK_CHARS) {
-    return combined.slice(0, MAX_PROMPT_BLOCK_CHARS - 3) + '...';
+  const maxChars = Number.isFinite(opts.maxChars) && opts.maxChars > 0 ? opts.maxChars : MAX_PROMPT_BLOCK_CHARS;
+  if (combined.length > maxChars) {
+    const cap = maxChars - 3;
+    let head = combined.slice(0, cap);
+    // Never leave a lone high surrogate at the cut (a split emoji → invalid char).
+    const lastCode = head.charCodeAt(head.length - 1);
+    if (lastCode >= 0xD800 && lastCode <= 0xDBFF) head = head.slice(0, -1);
+    // Prefer a recent line boundary so a markdown line isn't cut mid-token.
+    const lastNl = head.lastIndexOf('\n');
+    if (lastNl > cap - 200 && lastNl > 0) head = head.slice(0, lastNl);
+    return head + '...';
   }
   return combined;
 }

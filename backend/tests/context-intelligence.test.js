@@ -473,6 +473,24 @@ describe('context-intelligence-engine (orchestrator)', () => {
     assert.ok(block.length <= engine.MAX_PROMPT_BLOCK_CHARS);
   });
 
+  it('buildSystemPromptBlock truncation never splits a surrogate pair', () => {
+    // An emoji positioned right at the cut boundary used to be sliced in half,
+    // emitting a lone surrogate (invalid char). opts.maxChars exercises it
+    // deterministically.
+    const report = {
+      recommendations: [{
+        severity: 'high', category: 'x',
+        message: 'y'.repeat(200) + '😀😀😀😀😀' + 'z'.repeat(80),
+      }],
+    };
+    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    for (const maxChars of [60, 120, 240, 250, 252]) {
+      const block = engine.buildSystemPromptBlock(report, { maxChars });
+      assert.ok(block.length <= maxChars, `within cap at maxChars=${maxChars}`);
+      assert.ok(!loneSurrogate.test(block), `no lone surrogate at maxChars=${maxChars}`);
+    }
+  });
+
   it('summariseForLog returns a compact telemetry shape', () => {
     const report = engine.analyzeContext('u', 'Make a chart for revenue', {});
     const summary = engine.summariseForLog(report);
