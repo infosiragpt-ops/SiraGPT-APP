@@ -95,3 +95,22 @@ test('POST /session/:id/prompt forwards the prompt to the engine', async () => {
   assert.equal(calls[0].url, 'http://127.0.0.1:4096/session/s1/message');
   assert.deepEqual(JSON.parse(calls[0].init.body).parts, [{ type: 'text', text: 'hola' }]);
 });
+
+test('upstreamFail returns a generic 502 and never leaks the raw upstream message', () => {
+  const realErr = console.error;
+  console.error = () => {};
+  try {
+    const calls = {};
+    const res = { status(c) { calls.status = c; return res; }, json(b) { calls.body = b; return res; } };
+    const ret = opencodeRoutes.upstreamFail(res, new Error('opencode POST /session/secret-abc123 → HTTP 502'));
+    assert.equal(ret, res);
+    assert.equal(calls.status, 502);
+    assert.equal(calls.body.error, 'opencode_upstream');
+    assert.equal(calls.body.message, 'Upstream service error');
+    assert.ok(!JSON.stringify(calls.body).includes('secret-abc123'), 'internal endpoint path must not leak to the client');
+    opencodeRoutes.upstreamFail(res, new Error('boom'), 'runner_unreachable');
+    assert.equal(calls.body.error, 'runner_unreachable');
+  } finally {
+    console.error = realErr;
+  }
+});

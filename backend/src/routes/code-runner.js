@@ -37,7 +37,10 @@ router.post('/start', authenticateToken, async (req, res) => {
     if (err && err.code === 'no_package') {
       return res.status(400).json({ error: 'no_package', message: err.message });
     }
-    return res.status(500).json({ error: 'start_failed', message: err.message });
+    // Don't echo err.message — fs failures (ENOENT/ENOTDIR/EACCES) embed the
+    // absolute server tmp path (CWE-209). Log server-side, return generic.
+    console.error('[code-runner] start failed:', (err && err.message) || err);
+    return res.status(500).json({ error: 'start_failed', message: 'No se pudo iniciar el runner.' });
   }
 });
 
