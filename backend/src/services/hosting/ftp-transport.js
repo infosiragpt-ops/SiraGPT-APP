@@ -41,6 +41,13 @@ async function uploadDir(cfg, deps = {}) {
   const client = getClient(deps);
   try {
     onLog(`[ftp] connecting to ${cfg.host}:${cfg.port || 21}…`);
+    if (cfg.protocol !== 'ftps') {
+      // Plain FTP is fully unencrypted — the username/password (decrypted from
+      // the user's sealed creds) and the whole payload travel in cleartext. We
+      // don't hard-block it (some shared-hosting plans only offer plain FTP),
+      // but surface the risk so the user can switch to SFTP/FTPS.
+      onLog('[ftp] ⚠ conexión SIN cifrar (FTP) — credenciales y archivos viajan en texto plano; usa SFTP o FTPS si tu hosting lo permite');
+    }
     await client.access(accessConfig(cfg));
     await client.ensureDir(remote);
     if (cleanSlate) {

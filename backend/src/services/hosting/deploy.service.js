@@ -23,11 +23,48 @@ const { verifyUrl, normalizeDomain } = require('./domain');
 const { assertSafeRemoteHost, assertSafeRemotePath } = require('./safety');
 
 const LOG_MAX = 400;
+// Retain a terminal job briefly so late SSE subscribers / status polls still see
+// the final snapshot, then evict it so the in-memory Map can't grow unbounded
+// across the process lifetime (the route falls back to the persisted DB row).
+const JOB_TTL_MS = Number(process.env.SIRAGPT_DEPLOY_JOB_TTL_MS) || 10 * 60 * 1000;
+// Per-connection deploys are already serialized (one in flight); this is a
+// GLOBAL ceiling so many connections/users can't fan out unbounded local builds
+// (npm install + build are CPU/RAM heavy) and exhaust the platform host.
+const MAX_CONCURRENT = Number(process.env.SIRAGPT_DEPLOY_MAX_CONCURRENT) || 3;
+const ACTIVE_STATES = ['queued', 'building', 'uploading'];
 const jobs = new Map(); // deploymentId → job
 const runningConnections = new Set(); // connectionId currently deploying
 
 function isDisabled() {
   return /^(1|true|on)$/i.test(String(process.env.SIRAGPT_DEPLOY_DISABLED || ''));
+}
+
+function activeJobCount() {
+  let n = 0;
+  for (const j of jobs.values()) if (ACTIVE_STATES.includes(j.status)) n += 1;
+  return n;
+}
+
+/** Schedule one-shot eviction of a terminal job after the retention window. */
+function scheduleEviction(job) {
+  if (job._evict) return;
+  const t = setTimeout(() => jobs.delete(job.id), JOB_TTL_MS);
+  t.unref?.();
+  job._evict = t;
+}
+
+/**
+ * Redact known secret VALUES (from the user's injected build env) out of a log
+ * line before it is buffered/persisted — remote `npm install`/pm2 scripts often
+ * echo env contents, which would otherwise land in cleartext in the deploy log.
+ */
+function redactSecrets(line, secrets) {
+  if (!secrets || !secrets.length) return line;
+  let out = line;
+  for (const v of secrets) {
+    if (v && out.includes(v)) out = out.split(v).join('***');
+  }
+  return out;
 }
 
 function snapshot(job) {
@@ -70,8 +107,9 @@ function emit(job, event) {
 }
 
 function pushLog(job, line) {
-  const text = String(line).replace(/\s+$/, '');
+  let text = String(line).replace(/\s+$/, '');
   if (!text) return;
+  if (job.secrets) text = redactSecrets(text, job.secrets);
   job.log.push(text);
   if (job.log.length > LOG_MAX) job.log.splice(0, job.log.length - LOG_MAX);
   emit(job, { type: 'log', line: text });
@@ -82,6 +120,7 @@ function setStatus(job, st, extra = {}) {
   Object.assign(job, extra);
   emit(job, { type: 'status', ...snapshot(job) });
   job.onEvent?.({ type: 'status', status: st, ...extra, tail: job.log.slice(-50).join('\n') });
+  if (st === 'success' || st === 'error') scheduleEviction(job);
 }
 
 function transportFor(protocol) {
@@ -110,6 +149,18 @@ function start(deploymentId, { localPath, target, config = {}, connectionId, onE
     e.code = 'deploy_in_progress';
     throw e;
   }
+  if (activeJobCount() >= MAX_CONCURRENT) {
+    const e = new Error('Hay demasiados despliegues en curso — inténtalo de nuevo en un momento');
+    e.status = 429;
+    e.code = 'deploy_busy';
+    throw e;
+  }
+  // Secret VALUES to scrub from the persisted log (see redactSecrets). Sourced
+  // from the user-supplied build env only; ≥6 chars to avoid nuking short
+  // non-secret values like a port number.
+  const secrets = Object.values(config.env || {})
+    .map((v) => String(v))
+    .filter((v) => v.length >= 6);
   const job = {
     id: deploymentId,
     connectionId,
@@ -123,6 +174,7 @@ function start(deploymentId, { localPath, target, config = {}, connectionId, onE
     startedAt: new Date().toISOString(),
     finishedAt: null,
     onEvent,
+    secrets,
   };
   jobs.set(deploymentId, job);
   if (connectionId) runningConnections.add(connectionId);
@@ -272,7 +324,7 @@ async function _runNode(job, { localPath, target, config, buildEnv }) {
         passphrase: target.passphrase,
       },
       remoteCommand,
-      { onLog: (l) => pushLog(job, l) },
+      { onLog: (l) => pushLog(job, l), signal: job.abort.signal },
     );
     if (code !== 0) throw new Error(`El comando remoto terminó con código ${code}`);
   } catch (err) {
@@ -307,7 +359,7 @@ async function _configureNginx(job, target, { domain, webroot, appPort, ssl, ema
         passphrase: target.passphrase,
       },
       command,
-      { onLog: (l) => pushLog(job, l) },
+      { onLog: (l) => pushLog(job, l), signal: job.abort.signal },
     );
     if (code !== 0) throw new Error(`nginx terminó con código ${code}`);
     pushLog(job, `[nginx] ✓ ${dom} servido por nginx`);
@@ -339,4 +391,4 @@ process.once('exit', () => {
   }
 });
 
-module.exports = { start, cancel, status, subscribe, isDisabled, isRunningForConnection, transportFor, friendlyError, _jobs: jobs };
+module.exports = { start, cancel, status, subscribe, isDisabled, isRunningForConnection, transportFor, friendlyError, redactSecrets, _jobs: jobs };

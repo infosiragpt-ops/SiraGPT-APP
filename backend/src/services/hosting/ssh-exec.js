@@ -26,45 +26,50 @@ function connectConfig(cfg) {
  * Run `command` on the remote host. Resolves { code } (0 = success); rejects on
  * connection error. Streams output through onLog.
  */
-function exec(cfg, command, { onLog = () => {}, timeoutMs = 10 * 60 * 1000 } = {}) {
+function exec(cfg, command, { onLog = () => {}, timeoutMs = 10 * 60 * 1000, signal } = {}) {
   return new Promise((resolve, reject) => {
     const conn = getClient(cfg.__deps);
     let settled = false;
+    let stream = null;
+    let timer = null;
+    function onAbort() { finish(reject, new Error('SSH command cancelled')); }
     const finish = (fn, arg) => {
       if (settled) return;
       settled = true;
-      try {
-        conn.end();
-      } catch {
-        /* ignore */
+      if (timer) clearTimeout(timer);
+      if (signal) { try { signal.removeEventListener?.('abort', onAbort); } catch { /* ignore */ } }
+      if (fn === reject) {
+        // Abandoning an in-flight command (timeout / cancel / error): best-effort
+        // ask the remote to terminate it (some sshds honour signal forwarding),
+        // then hard-tear-down — conn.end() alone is graceful and can leave a hung
+        // remote command (e.g. `npm install`) running on the user's VPS.
+        try { stream?.signal?.('KILL'); } catch { /* ignore */ }
+        try { stream?.close?.(); } catch { /* ignore */ }
       }
+      try { conn.end(); } catch { /* ignore */ }
+      if (fn === reject) { try { conn.destroy?.(); } catch { /* ignore */ } }
       fn(arg);
     };
-    const timer = setTimeout(() => finish(reject, new Error('SSH command timed out')), timeoutMs);
+    if (signal) {
+      if (signal.aborted) return finish(reject, new Error('SSH command cancelled'));
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+    timer = setTimeout(() => finish(reject, new Error('SSH command timed out')), timeoutMs);
 
     conn.on('ready', () => {
-      conn.exec(command, (err, stream) => {
-        if (err) {
-          clearTimeout(timer);
-          return finish(reject, err);
-        }
+      conn.exec(command, (err, st) => {
+        if (err) return finish(reject, err);
+        stream = st;
         stream
-          .on('close', (code) => {
-            clearTimeout(timer);
-            finish(resolve, { code: Number(code) || 0 });
-          })
+          .on('close', (code) => finish(resolve, { code: Number(code) || 0 }))
           .on('data', (d) => String(d).split('\n').forEach((l) => l.trim() && onLog(l.replace(/\s+$/, ''))))
           .stderr.on('data', (d) => String(d).split('\n').forEach((l) => l.trim() && onLog(l.replace(/\s+$/, ''))));
       });
     });
-    conn.on('error', (err) => {
-      clearTimeout(timer);
-      finish(reject, err);
-    });
+    conn.on('error', (err) => finish(reject, err));
     try {
       conn.connect(connectConfig(cfg));
     } catch (err) {
-      clearTimeout(timer);
       finish(reject, err);
     }
   });

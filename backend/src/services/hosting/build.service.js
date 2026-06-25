@@ -15,6 +15,10 @@ const { scrubbedBuildEnv, assertSafeBuildCommand, assertSafeRelPath } = require(
 
 const IS_WIN = process.platform === 'win32';
 const BUILD_TIMEOUT_MS = 10 * 60 * 1000; // 10 min — install + build
+// Grace after SIGTERM before escalating to SIGKILL — a build (or a
+// SIGTERM-trapping npm/postinstall grandchild) that ignores the polite signal
+// would otherwise leak as an orphaned process on the platform host.
+const SIGKILL_GRACE_MS = Number(process.env.SIRAGPT_BUILD_SIGKILL_GRACE_MS) || 5000;
 const OUTPUT_CANDIDATES = ['dist', 'build', 'out', '.output/public', 'public'];
 
 function readJson(file) {
@@ -121,10 +125,17 @@ function runBuild(localPath, { buildCommand, onLog = () => {}, signal, env: extr
     proc.stdout?.on('data', onData);
     proc.stderr?.on('data', onData);
 
+    let killTimer = null;
     const onAbort = () => {
       try {
-        if (IS_WIN) spawn('taskkill', ['/pid', String(proc.pid), '/T', '/F'], { stdio: 'ignore' });
-        else proc.kill('SIGTERM');
+        if (IS_WIN) {
+          spawn('taskkill', ['/pid', String(proc.pid), '/T', '/F'], { stdio: 'ignore' });
+        } else {
+          proc.kill('SIGTERM');
+          // Escalate to SIGKILL if it's still alive after the grace window.
+          killTimer = setTimeout(() => { try { proc.kill('SIGKILL'); } catch { /* ignore */ } }, SIGKILL_GRACE_MS);
+          killTimer.unref?.();
+        }
       } catch {
         /* ignore */
       }
@@ -138,10 +149,12 @@ function runBuild(localPath, { buildCommand, onLog = () => {}, signal, env: extr
 
     proc.on('error', (err) => {
       clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
       reject(new Error(`Build failed to start: ${err.message}`));
     });
     proc.on('exit', (code) => {
       clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
       if (signal) signal.removeEventListener?.('abort', onAbort);
       if (code === 0) resolve({ code });
       else reject(new Error(`Build exited with code ${code}`));
