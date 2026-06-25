@@ -74,9 +74,14 @@ function buildFakePrisma() {
         store.gpts.set(id, row);
         return withCreator(row);
       },
-      async findUnique({ where }) {
+      async findUnique({ where, include }) {
         const g = store.gpts.get(where.id);
-        return g ? { ...g } : null;
+        if (!g) return null;
+        const result = { ...g };
+        if (include && include.knowledgeFiles) {
+          result.knowledgeFiles = [...store.files.values()].filter((f) => f.customGptId === g.id);
+        }
+        return result;
       },
       async update({ where, data }) {
         const existing = store.gpts.get(where.id);
@@ -435,4 +440,26 @@ test('GET /categories excludes soft-deleted GPTs', async () => {
   const catCall = gptFindManyCalls.find((c) => c && c.distinct);
   assert.ok(catCall, 'categories endpoint queried customGpt.findMany with distinct');
   assert.equal(catCall.where.deletedAt, null, 'categories where filters out soft-deleted rows');
+});
+
+test('GET /:id does not leak knowledge-file path/userId/openaiFileId/extractedText to the client', async () => {
+  resetState();
+  const app = buildApp();
+  seedGpt('gpt-x', 'owner-1'); // owner-1 is the default authed user
+  store.files.set('kf1', {
+    id: 'kf1', customGptId: 'gpt-x', userId: 'owner-1',
+    originalName: 'secret.txt', size: 10, mimeType: 'text/plain',
+    path: '/tmp/uploads/secret.txt', openaiFileId: 'file-abc123',
+    extractedText: 'TOP-SECRET-KNOWLEDGE-CONTENTS', createdAt: new Date(),
+  });
+  const res = await request(app).get('/api/gpts/gpt-x');
+  assert.equal(res.status, 200);
+  const kf = res.body.gpt.knowledgeFiles && res.body.gpt.knowledgeFiles[0];
+  assert.ok(kf, 'knowledge file is present in the response');
+  assert.equal(kf.path, undefined, 'path must not leak');
+  assert.equal(kf.userId, undefined, 'userId must not leak');
+  assert.equal(kf.openaiFileId, undefined, 'openaiFileId must not leak');
+  assert.equal(kf.extractedText, undefined, 'extractedText must not leak');
+  assert.equal(kf.extractedChars, 'TOP-SECRET-KNOWLEDGE-CONTENTS'.length, 'safe view exposes only a char count');
+  assert.ok(!JSON.stringify(res.body).includes('TOP-SECRET-KNOWLEDGE-CONTENTS'), 'extracted text not leaked anywhere');
 });

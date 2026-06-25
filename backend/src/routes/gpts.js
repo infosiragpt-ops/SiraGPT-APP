@@ -17,8 +17,15 @@ const prisma = new PrismaClient();
 // Return a GPT object safe to send to the client: its Actions never expose the
 // encrypted auth secret (redactActionsForClient → auth.hasSecret boolean only).
 function withRedactedActions(gpt) {
-  if (!gpt || typeof gpt !== 'object' || gpt.actions == null) return gpt;
-  return { ...gpt, actions: gptActions.redactActionsForClient(gpt.actions) };
+  if (!gpt || typeof gpt !== 'object') return gpt;
+  const out = { ...gpt };
+  if (out.actions != null) out.actions = gptActions.redactActionsForClient(out.actions);
+  // Knowledge files must NEVER expose path/userId/openaiFileId/extractedText to
+  // a client — the detail/share/chat routes returned the raw relation, leaking a
+  // GPT's full knowledge-base contents (incl. extracted text) to non-owners.
+  // Project through the same client-safe view the owner list route uses.
+  if (Array.isArray(out.knowledgeFiles)) out.knowledgeFiles = out.knowledgeFiles.map(knowledgeFileView);
+  return out;
 }
 
 // ─── Live draft preview ────────────────────────────────────────────────────
