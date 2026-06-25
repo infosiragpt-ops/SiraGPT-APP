@@ -155,6 +155,44 @@ test('rollback re-promotes a prior version as a new rollback build', async () =>
   assert.equal(detail.versions.filter((v) => v.isLive).length, 1);
 });
 
+test('publish/rollback refuse a suspended (payment-failure) deployment — no billing bypass', async () => {
+  const db = makeFakeDb();
+  const d = await service.createDeployment({ userId: USER, name: 'App', db });
+  await service.publishDeployment({ userId: USER, id: d.id, db });
+  await service.setStatus({ userId: USER, id: d.id, status: 'suspended', suspendedReason: 'payment_failure', db });
+  await assert.rejects(
+    () => service.publishDeployment({ userId: USER, id: d.id, db }),
+    (e) => e.status === 409 && e.code === 'deployment_suspended',
+  );
+  // It must stay suspended (publishing didn't silently un-suspend it).
+  assert.equal((await service.getDeployment({ userId: USER, id: d.id, db })).deployment.status, 'suspended');
+});
+
+test('rollback does not duplicate the rolled-back version build log in the Logs tab', async () => {
+  const db = makeFakeDb();
+  const d = await service.createDeployment({ userId: USER, name: 'App', db });
+  const first = await service.publishDeployment({ userId: USER, id: d.id, db });
+  await service.publishDeployment({ userId: USER, id: d.id, db });
+  const before = (await service.getLogs({ userId: USER, id: d.id, db })).entries.length;
+  await service.rollbackDeployment({ userId: USER, id: d.id, versionId: first.version.id, db });
+  const after = (await service.getLogs({ userId: USER, id: d.id, db })).entries;
+  // Rollback adds a single synthetic line, not a replay of the old build log.
+  assert.ok(after.length <= before + 2, `rollback should not re-seed the full build log (${before} → ${after.length})`);
+  const promoteServing = after.filter((l) => /serving https/i.test(l.message || ''));
+  assert.ok(promoteServing.length <= 2, 'the original promote line is not tripled by rollback');
+});
+
+test('a hostname freed by a shut-down deployment can be re-claimed by another', async () => {
+  const db = makeFakeDb();
+  const a = await service.createDeployment({ userId: USER, name: 'A', db });
+  await service.addDomain({ userId: USER, id: a.id, hostname: 'reuse.example.com', db });
+  await service.setStatus({ userId: USER, id: a.id, status: 'shut_down', db }); // soft-deletes A
+  const b = await service.createDeployment({ userId: USER, name: 'B', db });
+  // The hostname is no longer claimed by a LIVE deployment → re-addable.
+  const dom = await service.addDomain({ userId: USER, id: b.id, hostname: 'reuse.example.com', db });
+  assert.equal(dom.hostname, 'reuse.example.com');
+});
+
 test('ownership: another user cannot see or mutate a deployment', async () => {
   const db = makeFakeDb();
   const d = await service.createDeployment({ userId: USER, name: 'App', db });

@@ -295,6 +295,10 @@ async function publishDeployment({ userId, id, hasFiles = true, db = defaultPris
   if (!row) throw new DeploymentError(404, 'deployment_not_found', 'deployment not found');
   if (row.status === 'shut_down') throw new DeploymentError(409, 'deployment_shut_down', 'deployment was shut down');
   if (row.deletedAt) throw new DeploymentError(404, 'deployment_not_found', 'deployment not found');
+  // Publishing promotes the new version and flips status to 'running' — which
+  // would silently clear a 'suspended' (payment_failure) state. Block it so a
+  // suspended deployment can't be un-suspended by publishing (billing bypass).
+  if (row.status === 'suspended') throw new DeploymentError(409, 'deployment_suspended', 'resolve the suspension before publishing');
 
   const seq = await prisma.deploymentVersion.count({ where: { deploymentId: id } });
   const result = pipeline.runPublishPipeline({
@@ -358,6 +362,8 @@ async function publishDeployment({ userId, id, hasFiles = true, db = defaultPris
 async function rollbackDeployment({ userId, id, versionId, db = defaultPrisma }) {
   const prisma = requireDb(db);
   const row = await loadOwned(prisma, userId, id);
+  // Don't let a rollback silently un-suspend a payment-failure deployment.
+  if (row.status === 'suspended') throw new DeploymentError(409, 'deployment_suspended', 'resolve the suspension before rolling back');
   const target = await prisma.deploymentVersion.findFirst({ where: { id: versionId, deploymentId: id } });
   if (!target) throw new DeploymentError(404, 'version_not_found', 'version not found');
   if (target.status !== 'promoted') throw new DeploymentError(409, 'version_not_promotable', 'only successfully promoted builds can be rolled back to');
@@ -382,7 +388,10 @@ async function rollbackDeployment({ userId, id, versionId, db = defaultPrisma })
       where: { deploymentId: id, isLive: true, id: { not: created.id } },
       data: { isLive: false },
     });
-    await seedVersionLogs(tx, created, target.buildLog || '');
+    // Seed a SINGLE synthetic line, not the target version's whole build log —
+    // re-persisting the historical lines duplicated them in the Logs tab (getLogs
+    // aggregates rows across every version with no de-dup).
+    await seedVersionLogs(tx, created, `[promote] Rolled back to ${target.shortHash}`);
     return created;
   });
   const updated = await prisma.deployment.update({
@@ -513,7 +522,12 @@ async function addDomain({ userId, id, hostname, providerId = null, db = default
   // A hostname may only be attached to one deployment — otherwise two
   // deployments claim the same custom domain and DNS verification is ambiguous.
   const existingDomain = await prisma.deploymentDomain.findFirst({ where: { hostname: clean } });
-  if (existingDomain) throw new DeploymentError(409, 'domain_taken', 'hostname already attached to a deployment');
+  if (existingDomain) {
+    // Only block if the claiming deployment is still LIVE. A shut-down
+    // (soft-deleted) deployment must not permanently squat the hostname.
+    const owner = await prisma.deployment.findFirst({ where: { id: existingDomain.deploymentId, deletedAt: null } });
+    if (owner) throw new DeploymentError(409, 'domain_taken', 'hostname already attached to a deployment');
+  }
   const dnsRecords = pipeline.dnsRecordsFor(clean, id);
   let providerResult = null;
   if (providerId === 'godaddy_dns') {
