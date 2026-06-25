@@ -380,7 +380,11 @@ function idempotencyMiddleware(options = {}) {
     // (genuine retry) hits here and short-circuits before any locking.
     const cachedExisting = await store.get(cacheKey);
     if (cachedExisting && cachedExisting.state === 'final') {
-      if (cachedExisting.bodyHash && bodyHash && cachedExisting.bodyHash !== bodyHash) {
+      // Treat an absent hash as a distinct value: the old `a && b && a!==b`
+      // guard skipped the check whenever either hash was null, so a no-body
+      // request (bodyHash=null) could replay a previous bodied request's
+      // response under the same key. null≡null still replays (two empty bodies).
+      if ((cachedExisting.bodyHash ?? null) !== (bodyHash ?? null)) {
         return respondMismatch(res, rawKey);
       }
       return replayCached(res, cachedExisting, rawKey);
@@ -400,13 +404,13 @@ function idempotencyMiddleware(options = {}) {
       }
       const existing = attempt.existing;
       if (existing && existing.state === 'final') {
-        if (existing.bodyHash && bodyHash && existing.bodyHash !== bodyHash) {
+        if ((existing.bodyHash ?? null) !== (bodyHash ?? null)) {
           return respondMismatch(res, rawKey);
         }
         return replayCached(res, existing, rawKey);
       }
       if (existing && existing.state === 'pending') {
-        if (existing.bodyHash && bodyHash && existing.bodyHash !== bodyHash) {
+        if ((existing.bodyHash ?? null) !== (bodyHash ?? null)) {
           return respondMismatch(res, rawKey);
         }
       }

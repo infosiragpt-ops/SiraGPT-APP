@@ -172,7 +172,21 @@ class ProvenanceTracker {
       cursor += block.content.length;
     }
     let truncated = parts.join('');
-    if (truncated.length > maxChars) truncated = truncated.slice(0, maxChars - 3) + '...';
+    if (truncated.length > maxChars) {
+      const cut = Math.max(0, maxChars - 3);
+      truncated = truncated.slice(0, cut) + '...';
+      // Re-align the provenance map to the truncated prompt: drop entries that
+      // fell entirely past the cut and clamp the one that spans it. Without
+      // this, attribute(offset) returned entries pointing past the end of the
+      // actual (truncated) prompt.
+      const adjusted = [];
+      for (const e of newMap) {
+        if (e.offset >= cut) continue;
+        const clampedLen = Math.min(e.length, cut - e.offset);
+        adjusted.push(clampedLen === e.length ? e : { ...e, length: clampedLen });
+      }
+      return { prompt: truncated, map: adjusted };
+    }
     return { prompt: truncated, map: newMap };
   }
 

@@ -6,6 +6,9 @@ const fetch = require('node-fetch');
 const OpenAI = require('openai');
 const { serializeBigIntFields } = require('../utils/bigint-serializer');
 const { semanticBoostForMessages, mergeHybridResults } = require('../services/chat-hybrid-search');
+// runAgenticBatch is consumed by the POST /web streaming route below; it was
+// used without ever being imported → ReferenceError on every call.
+const { runAgenticBatch } = require('../services/searchBrain/agenticBatch');
 
 const router = express.Router();
 

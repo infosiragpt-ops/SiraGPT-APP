@@ -147,6 +147,26 @@ describe('middleware — body fingerprint', () => {
     assert.equal(res2._state().headers[REPLAY_KEY_HEADER], 'op-2');
   });
 
+  test('SAME key, bodied original then NO-body retry → 409 mismatch (null hash is distinct)', async () => {
+    const store = createInMemoryIdempotencyStore();
+    const mw = idempotencyMiddleware({ store, env: { IDEMPOTENCY_ENABLED: 'true' } });
+
+    const req1 = fakeReq({ user: { id: 'u-1' }, headers: { 'idempotency-key': 'op-3' }, body: { goal: 'first' } });
+    const res1 = fakeRes();
+    await mw(req1, res1, fakeNext());
+    res1.status(200).json({ taskId: 't-A' });
+
+    // No body → bodyHash=null. The old `a && b && a!==b` guard skipped the check
+    // (b is null) → it replayed t-A for a different (empty) request.
+    const req2 = fakeReq({ user: { id: 'u-1' }, headers: { 'idempotency-key': 'op-3' } });
+    const res2 = fakeRes();
+    const next2 = fakeNext();
+    await mw(req2, res2, next2);
+
+    assert.equal(res2._state().statusCode, 409, 'a no-body retry of a bodied op must mismatch, not replay');
+    assert.equal(res2._state().headers[REPLAY_HEADER], 'mismatch');
+  });
+
   test('object key reordering does NOT trigger a 409 — stable hashing', async () => {
     const store = createInMemoryIdempotencyStore();
     const mw = idempotencyMiddleware({ store, env: { IDEMPOTENCY_ENABLED: 'true' } });

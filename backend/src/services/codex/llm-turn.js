@@ -41,8 +41,11 @@ function appendToolsToSystem(messages, tools) {
 function extractUsage(resp, model) {
   const u = resp?.usage || {};
   return {
-    tokensIn: Number(u.prompt_tokens || u.input_tokens || 0) || 0,
-    tokensOut: Number(u.completion_tokens || u.output_tokens || 0) || 0,
+    // Prefer the canonical field even when it is a legitimate 0 (e.g. cached
+    // responses report prompt_tokens=0); `||` skipped a 0 and fell through to
+    // the alternate field, inflating the count.
+    tokensIn: Number(u.prompt_tokens ?? u.input_tokens ?? 0) || 0,
+    tokensOut: Number(u.completion_tokens ?? u.output_tokens ?? 0) || 0,
     provider: 'Cerebras',
     model,
     generationId: resp?.id || null,

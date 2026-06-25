@@ -105,7 +105,9 @@ router.post("/search", async (req, res) => {
     const q = validateQuery(body.query);
     if (!q.valid) return res.status(400).json({ error: q.error });
     const uid = userId(req);
-    const userSettings = settings.get(uid);
+    // settings.get is async — without await, userSettings is a Promise and
+    // every `.region/.mode/.keys/.userEmail` access below is undefined.
+    const userSettings = await settings.get(uid);
     const out = await runUniversalSearch({
       query: q.query,
       categories: validateCategories(body.categories),

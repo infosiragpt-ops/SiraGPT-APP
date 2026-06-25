@@ -85,7 +85,11 @@ function coerceTriple(raw, source) {
     predicate: normaliseElement(raw.predicate),
     object: normaliseElement(raw.object),
     source: source || raw.source || null,
-    confidence: typeof raw.confidence === 'number' ? raw.confidence : 0.8,
+    // Clamp to [0,1] — an LLM can emit a confidence of 5 or -2, which would then
+    // skew any downstream weighting/thresholding that assumes a probability.
+    confidence: typeof raw.confidence === 'number' && Number.isFinite(raw.confidence)
+      ? Math.max(0, Math.min(1, raw.confidence))
+      : 0.8,
   };
 }
 

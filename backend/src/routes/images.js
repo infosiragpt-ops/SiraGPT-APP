@@ -215,7 +215,10 @@ router.get('/jobs/:id', authenticateToken, async (req, res, next) => {
 // ── GET /api/images/history ────────────────────────────────────────
 router.get('/history', authenticateToken, async (req, res, next) => {
   try {
-    const limit = Math.min(parseInt(req.query.limit, 10) || 24, 100);
+    // Clamp to [1,100]: `parseInt || 24` turned an explicit 0 into 24, and a
+    // negative ?limit slipped through to Prisma's `take` (negative take reverses
+    // pagination).
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit, 10) || 24, 100));
     const cursor = req.query.cursor ? { id: String(req.query.cursor) } : undefined;
     const rows = await prisma.generatedImage.findMany({
       where: { userId: req.user.id, deletedAt: null },
