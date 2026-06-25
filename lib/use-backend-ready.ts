@@ -30,6 +30,16 @@ export function useBackendReady(pollMs = 2500): BackendReadyState {
   React.useEffect(() => {
     let active = true
     let timer: ReturnType<typeof setTimeout> | null = null
+    let consecutiveFailures = 0
+    // A single slow/aborted probe (cold-start route compile, a GC pause, a
+    // transient network blip, the first probe of a fresh page load) must NOT
+    // flip the UI to the alarming "El servidor se está iniciando" banner —
+    // that produced a persistent false positive even though the backend was
+    // healthy. Only declare "warming" after this many *consecutive* failures,
+    // so the banner reflects a genuinely unreachable backend (the real
+    // post-publish warmup window, where probes fail repeatedly) instead of one
+    // unlucky request. We stay in "checking" (no banner) until then.
+    const FAILURES_BEFORE_WARMING = 2
 
     const check = async () => {
       let ready = false
@@ -54,11 +64,15 @@ export function useBackendReady(pollMs = 2500): BackendReadyState {
       if (!active) return
 
       if (ready) {
+        consecutiveFailures = 0
         setState("ready")
         return
       }
 
-      setState("warming")
+      consecutiveFailures += 1
+      if (consecutiveFailures >= FAILURES_BEFORE_WARMING) {
+        setState("warming")
+      }
       timer = setTimeout(check, pollMs)
     }
 

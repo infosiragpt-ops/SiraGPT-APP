@@ -135,7 +135,13 @@ export default function RegisterPage() {
     }
   }, [backendState, pendingAction, goToGoogle, runRegister])
 
-  const isWarming = backendState === "warming" || (backendState !== "ready" && pendingAction !== null)
+  // Only surface the amber "server is starting" banner when the readiness
+  // poller has *confirmed* the backend is warming (repeated probe failures).
+  // The previous `pendingAction` term also raised it during the sub-second
+  // "checking" window before the first probe resolves, so a quick click on a
+  // healthy backend flashed the alarming banner for no reason. A queued action
+  // is still reflected by the button spinner below.
+  const isWarming = backendState === "warming"
 
   const handleInputChange = (field: keyof typeof formData, value: string | boolean) => {
     setFormData((prev) => ({ ...prev, [field]: value }))
