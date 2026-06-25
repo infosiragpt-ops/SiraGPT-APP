@@ -607,8 +607,10 @@ class FileProcessor {
     md = md.replace(/<br\s*\/?>/gi, '\n');
     // Strip any remaining tags; we've handled the load-bearing ones.
     md = md.replace(/<[^>]+>/g, '');
-    // Decode the five HTML entities mammoth actually emits.
-    md = md.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&nbsp;/g, ' ');
+    // Decode the HTML entities mammoth actually emits. `&amp;` MUST be decoded
+    // LAST — decoding it first turns an escaped `&amp;lt;` (literal "&lt;") into
+    // `&lt;` and then into `<`, double-decoding the markup.
+    md = md.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&');
     // Collapse runs of blank lines to at most two — mammoth loves to
     // emit empty paragraphs around headings.
     md = md.replace(/\n{3,}/g, '\n\n').trim();

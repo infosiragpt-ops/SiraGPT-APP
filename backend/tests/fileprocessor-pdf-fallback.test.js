@@ -88,3 +88,14 @@ test('streaming WITH a real text layer still returns directly (no regression)', 
   assert.equal(out.ocr.streaming, true, 'kept the fast streaming path');
   assert.equal(/SHOULD-NOT-BE-USED/.test(out.extractedText), false);
 });
+
+test('_htmlToMarkdown decodes &amp; last (no double-decode of escaped markup)', () => {
+  // "&amp;lt;" is the escaped form of the literal text "&lt;" — it must survive
+  // as "&lt;", NOT be double-decoded into a real "<".
+  const md = fileProcessor._htmlToMarkdown('<p>a &amp;lt; b</p>');
+  assert.ok(md.includes('&lt;'), 'escaped &lt; survives as text');
+  assert.ok(!md.includes('<'), 'no spurious < from double-decoding');
+  // Plain entities still decode exactly once.
+  const md2 = fileProcessor._htmlToMarkdown('<p>x &lt; y &amp; z</p>');
+  assert.ok(md2.includes('x < y & z'), 'plain entities decode once');
+});
