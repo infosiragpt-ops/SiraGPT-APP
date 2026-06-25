@@ -397,6 +397,9 @@ class FetchInstrument {
             });
           }
 
+          // End the span on the SUCCESS path — it was only ended in the outer
+          // catch, so successful (and HTTP-error) responses leaked their span.
+          activeSpan.end();
           return response;
         }
       );
@@ -408,6 +411,7 @@ class FetchInstrument {
       this[kErrorCount]++;
       this[kSumLatency] += elapsed;
       if (elapsed > this[kMaxLatency]) this[kMaxLatency] = elapsed;
+      if (elapsed < this[kMinLatency]) this[kMinLatency] = elapsed;
 
       // Detect timeout
       const isTimeout = err?.message === 'request timed out'

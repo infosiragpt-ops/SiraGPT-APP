@@ -161,6 +161,30 @@ describe('FetchInstrument', () => {
       assert.equal(fi.metrics.errors, 0);
     });
 
+    it('ends the OTel span exactly once on success and on an HTTP-error response (no span leak)', async () => {
+      const makeTracer = (counter) => ({
+        startActiveSpan(_name, _opts, cb) {
+          const span = { setAttributes() {}, setAttribute() {}, setStatus() {}, end() { counter.n += 1; } };
+          return cb(span);
+        },
+      });
+      // The success path used to never end the span.
+      const okCounter = { n: 0 };
+      const fiOk = new FetchInstrument({ logRequests: false });
+      fiOk._tracer = makeTracer(okCounter);
+      globalThis.fetch = async () => makeResponse('ok');
+      await fiOk._tracedFetch('http://example.com/');
+      assert.equal(okCounter.n, 1, 'span ended once on success');
+
+      // A non-throwing HTTP-error response must also end the span.
+      const errCounter = { n: 0 };
+      const fiErr = new FetchInstrument({ logRequests: false });
+      fiErr._tracer = makeTracer(errCounter);
+      globalThis.fetch = async () => makeResponse('nope', { status: 500 });
+      await fiErr._tracedFetch('http://example.com/500');
+      assert.equal(errCounter.n, 1, 'span ended once on an HTTP-error response');
+    });
+
     it('increments error counter on HTTP error status', async () => {
       globalThis.fetch = async () => makeResponse('not found', { status: 404 });
       const res = await fi._tracedFetch('http://example.com/404');
