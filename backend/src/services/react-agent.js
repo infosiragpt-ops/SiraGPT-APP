@@ -1402,7 +1402,12 @@ async function run(openai, opts) {
     } else {
       finalAnswer = buildDegradedAnswer(stoppedReason);
       if (!stoppedReason || stoppedReason === 'max_steps') {
-        stoppedReason = stoppedReason || 'degraded_no_finalize';
+        // Unconditional: `stoppedReason || 'degraded_no_finalize'` kept
+        // 'max_steps' (truthy left operand), so a run that hit the step cap
+        // without ever finalising reported a plain 'max_steps' instead of the
+        // degraded-no-finalize signal (cf. the exhaustedTools branch above,
+        // which assigns degraded_no_finalize:… unconditionally).
+        stoppedReason = 'degraded_no_finalize';
       }
     }
   }

@@ -202,6 +202,25 @@ test('event-stream: calls that never reach execute() settle from onStepDone obse
   assert.equal(run.steps.find((s) => s.type === 'tool_call').isError, true);
 });
 
+test('event-stream: onStepDone settles a planned call even when arg key order differs', () => {
+  const registry = sampleRegistry();
+  const frames = [];
+  const events = createAgentEventStream({ write: async (f) => frames.push(f), registry });
+  events.wrapTools([registry.toAgentTool('echo_tool')]);
+
+  // onStepStart registers with one key order; onStepDone observes with the other
+  // → JSON.stringify produces a different plannedKey, so the exact-key lookup
+  // misses. The name-based fallback must still settle the planned call instead
+  // of leaving it to be marked 'interrupted'.
+  events.onStepStart({ actions: [{ tool: 'echo_tool', args: { text: 'x', lang: 'es' } }] });
+  events.onStepDone({ actions: [{ tool: 'echo_tool', args: { lang: 'es', text: 'x' }, observation: { echoed: 'x' } }] });
+  const run = events.finish({ stoppedReason: 'finalized', finalAnswer: 'ok' });
+
+  const call = run.steps.find((s) => s.type === 'tool_call');
+  assert.equal(call.status, 'completed', 'planned call settled via the name fallback, not interrupted');
+  assert.equal(call.isError, false);
+});
+
 test('event-stream: interrupted runs settle dangling calls and flag agent_done', async () => {
   const registry = sampleRegistry();
   const frames = [];

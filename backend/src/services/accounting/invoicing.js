@@ -33,6 +33,20 @@ const invoiceInputSchema = z.object({
   if (v.currency !== 'PEN' && !v.exchangeRate) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['exchangeRate'], message: 'exchangeRate requerido cuando currency != PEN' });
   }
+  // Reject the PLE delimiter (|) and line breaks in fields written verbatim
+  // into the pipe-delimited, CRLF-line-delimited PLE register (ple.js). A
+  // customerName like "ACME|Corp" would shift every downstream field and make
+  // the SUNAT export invalid.
+  const PLE_FORBIDDEN = /[|\r\n]/;
+  for (const field of ['customerName', 'series', 'customerDoc']) {
+    if (v[field] != null && PLE_FORBIDDEN.test(String(v[field]))) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [field],
+        message: `${field} no puede contener '|' ni saltos de línea (formato PLE)`,
+      });
+    }
+  }
 });
 
 function parseInvoiceInput(input) {

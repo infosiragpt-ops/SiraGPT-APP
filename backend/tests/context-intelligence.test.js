@@ -31,6 +31,20 @@ describe('context-attribution-graph', () => {
     assert.ok(graph.confidence > 0.4);
   });
 
+  it('falls back to EXPLAIN (not CONVERSE) when signals exist but no intent maps', () => {
+    // Substantive content (entities + quantities) with no action verb → respond
+    // to the content, not treat it as smalltalk. (The fallback ternary used to
+    // return CONVERSE in both branches.)
+    const graph = attributionGraph.buildGraph('Acme Corporation reported 42 widgets and 1500 dollars.', {});
+    assert.ok(graph.signals.length > 0, 'the turn carried surface signals');
+    assert.equal(graph.primaryIntent.kind, attributionGraph.INTENT_KINDS.EXPLAIN);
+  });
+
+  it('falls back to CONVERSE for a truly empty/trivial turn (no signals)', () => {
+    const graph = attributionGraph.buildGraph('', {});
+    assert.equal(graph.primaryIntent.kind, attributionGraph.INTENT_KINDS.CONVERSE);
+  });
+
   it('maps Spanish imperative "implementa" to CODE intent', () => {
     const graph = attributionGraph.buildGraph('Implementa una función que sume números', {});
     assert.equal(graph.primaryIntent.kind, attributionGraph.INTENT_KINDS.CODE);

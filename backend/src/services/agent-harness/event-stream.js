@@ -278,7 +278,18 @@ function createAgentEventStream(opts = {}) {
         const queue = plannedQueue.get(key);
         const id = queue && queue.length ? queue.shift() : null;
         if (queue && !queue.length) plannedQueue.delete(key);
-        const call = id ? calls.get(id) : null;
+        let call = id ? calls.get(id) : null;
+        // The exact-key lookup can miss when args serialize with different key
+        // ordering than at onStepStart. claimPlanned() handles this with a
+        // name-based fallback; onStepDone did not, so a key miss left the call
+        // 'planned' → later finish() marked it 'interrupted' instead of done.
+        // Fall back to the oldest still-'planned' call with the same tool name.
+        if (!call || call.state !== 'planned') {
+          call = null;
+          for (const c of calls.values()) {
+            if (c.state === 'planned' && c.name === name) { call = c; break; }
+          }
+        }
         if (!call || call.state === 'done') continue;
         const observation = action.observation;
         const isError = Boolean(observation && observation.error);

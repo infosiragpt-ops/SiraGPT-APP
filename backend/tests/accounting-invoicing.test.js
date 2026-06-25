@@ -145,6 +145,23 @@ test('parseInvoiceInput rejects an empty lines array', () => {
   );
 });
 
+test('parseInvoiceInput rejects PLE-breaking characters (pipe / newline) in exported fields', () => {
+  // customerName with a pipe would shift every downstream field in the
+  // pipe-delimited PLE register → SUNAT-invalid.
+  assert.throws(
+    () => invoicing.parseInvoiceInput({ docType: 'BOLETA', series: 'B001', customerName: 'ACME|Corp', lines: [{ description: 'Item' }] }),
+    (e) => e.code === 'VALIDATION_ERROR' && e.issues.some((i) => i.path === 'customerName'),
+  );
+  // A newline in the series breaks the CRLF line delimiter.
+  assert.throws(
+    () => invoicing.parseInvoiceInput({ docType: 'BOLETA', series: 'B0\n01', customerName: 'ACME', lines: [{ description: 'Item' }] }),
+    (e) => e.code === 'VALIDATION_ERROR' && e.issues.some((i) => i.path === 'series'),
+  );
+  // A clean name still parses.
+  const ok = invoicing.parseInvoiceInput({ docType: 'BOLETA', series: 'B001', customerName: 'ACME SAC', lines: [{ description: 'Item' }] });
+  assert.equal(ok.customerName, 'ACME SAC');
+});
+
 test('parseInvoiceInput accepts a valid BOLETA and defaults currency to PEN', () => {
   const data = invoicing.parseInvoiceInput({ docType: 'BOLETA', series: 'B001', customerName: 'ACME', lines: [{ description: 'Item', quantity: 2, unitPrice: 10 }] });
   assert.equal(data.currency, 'PEN');

@@ -485,7 +485,13 @@ function buildIntents(signals, abstractions) {
   }
 
   if (intentBuckets.size === 0) {
-    const fallback = signals.length > 0 ? INTENT_KINDS.CONVERSE : INTENT_KINDS.CONVERSE;
+    // No intent could be inferred. If the turn carried surface signals (named
+    // entities, quantities, references, …) the user said something substantive
+    // with no mapped action — default to EXPLAIN (respond to their content),
+    // consistent with coreference→EXPLAIN above. Only a truly empty/trivial turn
+    // (no signals) falls back to CONVERSE. The two branches were identical
+    // (both CONVERSE), making the signals check dead.
+    const fallback = signals.length > 0 ? INTENT_KINDS.EXPLAIN : INTENT_KINDS.CONVERSE;
     addToIntent(fallback, 0.4, signals[0]?.id || 'none');
   }
 

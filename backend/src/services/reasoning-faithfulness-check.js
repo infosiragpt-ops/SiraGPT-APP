@@ -236,7 +236,12 @@ function checkFaithfulness(reasoningTrace, context = {}) {
 
   let faithfulness;
   if (steps.length === 0) faithfulness = 1;
-  else faithfulness = clamp(supported / steps.length - unsupported * 0.25);
+  // Score per step: each supported step counts +1, each unsupported step a
+  // -0.25 penalty, normalised by the step count. The penalty MUST be inside the
+  // division — `supported / steps.length - unsupported * 0.25` (operator
+  // precedence) applied it on the absolute [0,1] scale, so one unsupported step
+  // in a 5-step trace dropped the score a flat 0.25 (0.8 → 0.55, not 0.75).
+  else faithfulness = clamp((supported - unsupported * 0.25) / steps.length);
 
   let severity = 'low';
   if (faithfulness < 0.4) severity = 'high';
