@@ -10,7 +10,19 @@
 import * as React from "react"
 import { useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
-import { ChevronDown, Check, Folder, Globe2, Grid3X3, LayoutGrid, List, Search } from "lucide-react"
+import {
+  ChevronDown,
+  Check,
+  Database,
+  Folder,
+  Globe2,
+  Grid3X3,
+  LayoutGrid,
+  List,
+  Plus,
+  Search,
+  Server,
+} from "lucide-react"
 import { toast } from "sonner"
 import { formatDistanceToNow } from "date-fns"
 import { es as dfEs, enUS as dfEn } from "date-fns/locale"
@@ -77,6 +89,7 @@ export default function ProjectsPage() {
   const [artifactFilter, setArtifactFilter] = React.useState<ArtifactFilter>("any")
   const [viewMode, setViewMode] = React.useState<ViewMode>("grid")
   const [openingProjectId, setOpeningProjectId] = React.useState<string | null>(null)
+  const [creatingFullStackProject, setCreatingFullStackProject] = React.useState(false)
 
   const dateLocale = React.useMemo(() => {
     if (typeof document !== "undefined" && document.documentElement.lang?.startsWith("es")) return dfEs
@@ -156,6 +169,27 @@ export default function ProjectsPage() {
     [openingProjectId, router],
   )
 
+  const createFullStackProject = React.useCallback(async () => {
+    if (creatingFullStackProject) return
+    setCreatingFullStackProject(true)
+    try {
+      const project = await projectsService.create({
+        name: "Nueva app full-stack",
+        description: "Software profesional con frontend, backend y base de datos desde una sola instrucción.",
+        type: "webapp",
+        hostingProvider: "sira-cloud",
+        instructions:
+          "Modo APPS full-stack: construir con Next.js, API routes, Prisma y base de datos. Mantener frontend, backend y datos como capas explícitas.",
+      })
+      setProjects((prev) => [project, ...prev.filter((row) => row.id !== project.id)])
+      router.push(codeWorkspaceHref(project.id))
+    } catch (err: any) {
+      toast.error(err?.message || "No se pudo crear el software en APPS")
+    } finally {
+      setCreatingFullStackProject(false)
+    }
+  }, [creatingFullStackProject, router])
+
   return (
     <div className={styles.page}>
       <div className={styles.mobileHeader}>
@@ -232,6 +266,40 @@ export default function ProjectsPage() {
               <List className="h-7 w-7" strokeWidth={1.8} />
             </ViewButton>
           </div>
+        </section>
+
+        <section className={styles.builderStrip} aria-label="Crear software profesional">
+          <div className={styles.builderCopy}>
+            <div className={styles.builderIcon}>
+              <LayoutGrid strokeWidth={2} />
+            </div>
+            <div>
+              <h2 className={styles.builderTitle}>Crear software profesional</h2>
+              <div className={styles.builderLayers}>
+                <span>
+                  <Globe2 strokeWidth={1.9} />
+                  Frontend
+                </span>
+                <span>
+                  <Server strokeWidth={1.9} />
+                  Backend
+                </span>
+                <span>
+                  <Database strokeWidth={1.9} />
+                  Base de datos
+                </span>
+              </div>
+            </div>
+          </div>
+          <Button
+            type="button"
+            className={styles.builderButton}
+            onClick={() => void createFullStackProject()}
+            disabled={creatingFullStackProject}
+          >
+            <Plus strokeWidth={2} />
+            {creatingFullStackProject ? "Creando..." : "Nuevo software"}
+          </Button>
         </section>
 
         {loading ? (

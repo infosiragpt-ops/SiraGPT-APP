@@ -18,12 +18,30 @@ import type { AgentBuildContext } from "./types"
 import { VITE_DEPS, VITE_DEV_DEPS, VITE_LANDING_CONTRACT_PATHS } from "./vite-scaffold"
 
 const CONTRACT_FILES = VITE_LANDING_CONTRACT_PATHS.join(", ")
+export const FULL_STACK_APP_CONTRACT_PATHS = [
+  "package.json",
+  "tsconfig.json",
+  "next.config.mjs",
+  ".env.example",
+  "README.md",
+  "app/globals.css",
+  "app/layout.tsx",
+  "app/page.tsx",
+  "components/site-nav.tsx",
+  "prisma/schema.prisma",
+  "lib/db.ts",
+] as const
+const FULL_STACK_APP_CONTRACT_FILES = FULL_STACK_APP_CONTRACT_PATHS.join(", ")
 const DEPS_LINE = Object.entries(VITE_DEPS)
   .map(([name, version]) => `${name} ${version}`)
   .join(", ")
 const DEV_DEPS_LINE = Object.entries(VITE_DEV_DEPS)
   .map(([name, version]) => `${name} ${version}`)
   .join(", ")
+
+export function contractPathsForContext(ctx?: Pick<AgentBuildContext, "goal"> | null): readonly string[] {
+  return ctx?.goal === "app" ? FULL_STACK_APP_CONTRACT_PATHS : VITE_LANDING_CONTRACT_PATHS
+}
 
 /** Generator role: agency-grade landing/app as a REAL Vite 7 + React 18 + TS project. */
 export function landingSystemPrompt(ctx: AgentBuildContext): string {
@@ -35,11 +53,12 @@ export function landingSystemPrompt(ctx: AgentBuildContext): string {
   const features = ctx.features ? `- Funcionalidades clave: ${ctx.features}` : null
   const colorRef = ctx.colorRef ? `- Color/paleta/referencias: ${ctx.colorRef}` : null
   const data = ctx.dataEntities ? `- Entidades de datos: ${ctx.dataEntities}` : null
+  const contractFiles = isApp ? FULL_STACK_APP_CONTRACT_FILES : CONTRACT_FILES
 
   return [
     `[ROL: INGENIERO DE SOFTWARE SENIOR + DIRECTOR DE DISEÑO — estudio premium]`,
     isApp
-      ? "Genera el código COMPLETO de una APLICACIÓN WEB real y pulida como un PROYECTO Vite 7 + React 18 + TypeScript REAL, ejecutable con ▶ Ejecutar (dev server). NO un único index.html autocontenido."
+      ? "Genera el código COMPLETO de una APLICACIÓN WEB FULL-STACK real y pulida como un proyecto Next.js 14 App Router + TypeScript + Prisma. Debe tener frontend, backend y base de datos desde una sola instrucción; NO es un mock estático ni un único index.html."
       : "Genera el código COMPLETO de una LANDING PAGE profesional como un PROYECTO Vite 7 + React 18 + TypeScript REAL, ejecutable con ▶ Ejecutar (dev server). NO un único index.html autocontenido.",
     "Tu trabajo debe parecer hecho por un estudio de diseño top — NO una plantilla, NO 'AI slop'.",
     "",
@@ -58,33 +77,51 @@ export function landingSystemPrompt(ctx: AgentBuildContext): string {
     data,
     "",
     "ESTRUCTURA DE ARCHIVOS (EXACTA — rutas relativas a la raíz del workspace):",
-    `  ${CONTRACT_FILES}  (+ public/ SOLO si aplica: favicon/og-image)`,
+    `  ${contractFiles}  (+ public/ SOLO si aplica: favicon/og-image)`,
     isApp
-      ? "• Puedes añadir src/components/*.tsx (máximo 6) para vistas/secciones grandes; src/App.tsx orquesta el layout."
+      ? "• Por cada entidad de datos añade rutas reales: app/api/<entidad>/route.ts, app/api/<entidad>/[id]/route.ts y app/<entidad>/page.tsx."
       : "• TODA la landing vive en src/App.tsx: secciones, animaciones y componentes internos en el MISMO archivo (SPA de un solo árbol). NO crees src/components/.",
     "• Extensiones SIEMPRE .tsx/.ts — PROHIBIDO .jsx/.js. Tipado estricto, sin `any` salvo necesidad real.",
-    "• index.html en la raíz: <div id=\"root\"> + <script type=\"module\" src=\"/src/main.tsx\">.",
-    "• src/main.tsx: createRoot(...).render(<App/>) e importa ./index.css.",
+    isApp
+      ? "• app/layout.tsx monta app/globals.css y components/site-nav.tsx; app/page.tsx es el dashboard/home profesional del software."
+      : "• index.html en la raíz: <div id=\"root\"> + <script type=\"module\" src=\"/src/main.tsx\">.",
+    isApp ? null : "• src/main.tsx: createRoot(...).render(<App/>) e importa ./index.css.",
     "",
     "STACK OBLIGATORIO (versiones exactas en package.json):",
-    `  dependencies: ${DEPS_LINE}`,
-    `  devDependencies: ${DEV_DEPS_LINE}`,
-    '  scripts: { "dev": "vite", "build": "vite build", "preview": "vite preview" } y "type": "module".',
-    "TAILWIND v4 [CRÍTICO — la sintaxis v3 está PROHIBIDA aquí]:",
-    "• PROHIBIDO crear tailwind.config.js o postcss.config.js, e instalar postcss/autoprefixer.",
-    "• PROHIBIDAS las directivas v3 `@tailwind base; @tailwind components; @tailwind utilities;`.",
-    '• src/index.css: primero el @import de Google Fonts, luego `@import "tailwindcss";`, luego :root { } con la paleta',
-    "  como CSS custom properties (--bg, --surface, --fg, --muted, --accent, --line, --font-display, --font-body)",
-    "  y un bloque @theme inline que mapee los colores (--color-bg: var(--bg); …).",
-    '• vite.config.ts: import react de "@vitejs/plugin-react" + import tailwindcss de "@tailwindcss/vite" → plugins: [react(), tailwindcss()].',
-    '• tsconfig.json mínimo en una pieza: target ES2022, module ESNext, moduleResolution "bundler", jsx "react-jsx", strict, noEmit, include ["src"].',
-    "• Fuentes: Syne (display/titulares) + Space Grotesk (cuerpo) vía Google Fonts, mapeadas a --font-display / --font-body.",
-    "• Iconos: SOLO lucide-react (imports nominales). NADA de emojis como iconos.",
+    isApp
+      ? '  dependencies: next 14.2.5, react 18.3.1, react-dom 18.3.1, @prisma/client. devDependencies: typescript, @types/node, @types/react, @types/react-dom, prisma. scripts: dev, build, start, lint, db:push, postinstall.'
+      : `  dependencies: ${DEPS_LINE}`,
+    isApp ? null : `  devDependencies: ${DEV_DEPS_LINE}`,
+    isApp ? null : '  scripts: { "dev": "vite", "build": "vite build", "preview": "vite preview" } y "type": "module".',
+    isApp
+      ? "CAPAS OBLIGATORIAS:"
+      : "TAILWIND v4 [CRÍTICO — la sintaxis v3 está PROHIBIDA aquí]:",
+    isApp
+      ? "• Frontend: pantallas completas en app/**/page.tsx con formularios, tablas, estados vacío/cargando/error, navegación clara y responsive."
+      : "• PROHIBIDO crear tailwind.config.js o postcss.config.js, e instalar postcss/autoprefixer.",
+    isApp
+      ? "• Backend: Route Handlers reales en app/api/**/route.ts con GET, POST, PUT y DELETE cuando aplique; no simules persistencia con arrays como fuente principal."
+      : "• PROHIBIDAS las directivas v3 `@tailwind base; @tailwind components; @tailwind utilities;`.",
+    isApp
+      ? "• Base de datos: prisma/schema.prisma con modelos por entidad, lib/db.ts como singleton de Prisma, .env.example con DATABASE_URL y comandos documentados en README.md."
+      : '• src/index.css: primero el @import de Google Fonts, luego `@import "tailwindcss";`, luego :root { } con la paleta',
+    isApp
+      ? "• La app debe correr localmente con base de datos de desarrollo y quedar lista para producción con DATABASE_URL PostgreSQL sin reescribir el código de negocio."
+      : "  como CSS custom properties (--bg, --surface, --fg, --muted, --accent, --line, --font-display, --font-body)",
+    isApp ? null : "  y un bloque @theme inline que mapee los colores (--color-bg: var(--bg); …).",
+    isApp ? null : '• vite.config.ts: import react de "@vitejs/plugin-react" + import tailwindcss de "@tailwindcss/vite" → plugins: [react(), tailwindcss()].',
+    isApp ? null : '• tsconfig.json mínimo en una pieza: target ES2022, module ESNext, moduleResolution "bundler", jsx "react-jsx", strict, noEmit, include ["src"].',
+    isApp ? "• CSS profesional en app/globals.css con variables, layout estable y estados de UI. NADA de emojis como iconos." : "• Fuentes: Syne (display/titulares) + Space Grotesk (cuerpo) vía Google Fonts, mapeadas a --font-display / --font-body.",
+    isApp ? null : "• Iconos: SOLO lucide-react (imports nominales). NADA de emojis como iconos.",
     "",
     "ARQUITECTURA:",
-    "• SPA sin React Router. 100% ESTÁTICO: sin backend ni llamadas reales a APIs — datos demo en memoria.",
-    "• ANIMACIONES POR SCROLL OBLIGATORIAS con Framer Motion: `useInView` (o `whileInView` + `viewport={{ once: true }}`)",
-    "  para la entrada de CADA sección. Movimiento elegante: fades + translate + stagger, nunca exagerado.",
+    isApp
+      ? "• Software de tres capas: páginas Next.js → API Route Handlers → Prisma/database. Cada acción visible debe hablar con una API real."
+      : "• SPA sin React Router. 100% ESTÁTICO: sin backend ni llamadas reales a APIs — datos demo en memoria.",
+    isApp
+      ? "• Diseña un dominio de negocio completo: entidades, relaciones simples, validaciones de formulario, operaciones CRUD y datos iniciales útiles."
+      : "• ANIMACIONES POR SCROLL OBLIGATORIAS con Framer Motion: `useInView` (o `whileInView` + `viewport={{ once: true }}`)",
+    isApp ? null : "  para la entrada de CADA sección. Movimiento elegante: fades + translate + stagger, nunca exagerado.",
     "• Responsive MÓVIL PRIMERO con breakpoints de Tailwind (sm/md/lg). Menú hamburguesa en móvil.",
     "• Accesibilidad WCAG AA: HTML semántico (header/nav/main/section/footer), alt/aria, foco visible, contraste ≥ 4.5:1.",
     "",
@@ -122,15 +159,21 @@ export function landingSystemPrompt(ctx: AgentBuildContext): string {
  * NOT strip `// path:` comment lines when the header already carries the path,
  * and a comment inside package.json breaks `bun install`.
  */
-export function streamOutputFormat(opts?: { strictStart?: boolean }): string {
+export function streamOutputFormat(opts?: { strictStart?: boolean; paths?: readonly string[] }): string {
   const strictStart = opts?.strictStart !== false
+  const paths = opts?.paths ?? VITE_LANDING_CONTRACT_PATHS
+  const requiredFiles = paths.join(", ")
+  const isFullStackApp = paths.includes("prisma/schema.prisma")
   return [
     "FORMATO DE SALIDA (ESTRICTO — respétalo al 100%):",
     "• Devuelve CADA archivo en su PROPIO bloque de código. El encabezado del fence es `lenguaje ruta`, p.ej.:",
     "  ```json package.json",
     "  { …archivo completo… }",
     "  ```",
-    `• Bloques requeridos, en este orden: ${CONTRACT_FILES}.`,
+    `• Bloques requeridos, en este orden: ${requiredFiles}.`,
+    isFullStackApp
+      ? "• Para cada entidad de datos añade también app/api/<entidad>/route.ts, app/api/<entidad>/[id]/route.ts y app/<entidad>/page.tsx con CRUD real."
+      : null,
     strictStart
       ? "• El PRIMER carácter de tu respuesta DEBE ser un backtick: empieza EXACTAMENTE con ```json package.json\n" +
         "  PROHIBIDO escribir cualquier cosa antes (ni saludos, ni «Aquí tienes…», ni explicaciones)."
@@ -140,19 +183,29 @@ export function streamOutputFormat(opts?: { strictStart?: boolean }): string {
     "  (package.json es JSON puro: un comentario lo rompe).",
     "• Cada bloque contiene el archivo COMPLETO (nunca fragmentos ni «…»).",
     "• Tras el último bloque: como MÁXIMO una sola línea con 1-3 siguientes pasos.",
-  ].join("\n")
+  ]
+    .filter((line): line is string => line !== null)
+    .join("\n")
 }
 
 /** Transport instructions for the OpenCode ENGINE (write/edit file tools). */
-export function engineTransportInstructions(): string {
+export function engineTransportInstructions(opts?: { paths?: readonly string[] }): string {
+  const paths = opts?.paths ?? VITE_LANDING_CONTRACT_PATHS
+  const requiredFiles = paths.join(", ")
+  const isFullStackApp = paths.includes("prisma/schema.prisma")
   return [
     "IMPORTANTE — TRANSPORTE (motor con herramientas):",
     "• ESCRIBE cada archivo del contrato en el workspace con tus herramientas (write/edit), uno por uno,",
     "  con su ruta EXACTA relativa a la raíz (p.ej. `src/App.tsx` — sin prefijos tipo `artifacts/`).",
+    isFullStackApp
+      ? "• En modo App, crea además rutas API por entidad y páginas CRUD conectadas a Prisma; no dejes la persistencia en arrays en memoria."
+      : null,
     "• NO pegues el código en el chat: el chat es SOLO para un resumen final de 1-3 líneas",
     "  («archivos creados — pulsa ▶ Ejecutar para levantar el dev server»).",
-    `• Verifica antes de terminar que existen: ${CONTRACT_FILES}.`,
-  ].join("\n")
+    `• Verifica antes de terminar que existen: ${requiredFiles}.`,
+  ]
+    .filter((line): line is string => line !== null)
+    .join("\n")
 }
 
 /** SRE role: diagnose a build log, output the strict 5-section format. */

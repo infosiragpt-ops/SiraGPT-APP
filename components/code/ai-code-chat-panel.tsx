@@ -84,6 +84,8 @@ import {
 } from "@/lib/code-agent/orchestrator"
 import {
   engineTransportInstructions,
+  FULL_STACK_APP_CONTRACT_PATHS,
+  contractPathsForContext,
   landingSystemPrompt,
   sreSystemPrompt,
   streamOutputFormat,
@@ -142,16 +144,17 @@ const AGENT_RUNTIME_STATUS: Record<AgentPhase, string> = {
 
 const COMPOSER_MODE_INSTRUCTION: Record<ComposerMode, string> = {
   app:
-    "Modo App (construir desde cero, estilo Replit/Lovable): tu meta es entregar una landing/app COMPLETA y VISTOSA como un proyecto Vite + React + TypeScript real que el usuario ejecuta con ▶ Ejecutar (dev server).\n" +
+    "Modo App (construir desde cero, estilo Replit/Codex): tu meta es entregar software FULL-STACK profesional como un proyecto Next.js 14 + TypeScript + Prisma, con frontend, backend y base de datos desde una sola instrucción.\n" +
     "1) AUTONOMÍA TOTAL — NO hagas preguntas de intake. Si falta contexto, PROPÓN internamente un brief completo con defaults razonables (producto, marca, público, estética, secciones/funciones, datos demo) y ejecuta. El usuario pidió que la IA proponga y que los agentes trabajen: diseña el plan extendido tú mismo y entrega resultado.\n" +
-    "2) PLAN + EJECUCIÓN — antes de escribir código, planifica internamente arquitectura, layout, componentes, datos, estados, responsive, accesibilidad y validación del preview. No esperes confirmación; convierte ese plan en archivos aplicables.\n" +
-    "3) GENERAR — entrega un PROYECTO Vite 7 + React 18 + TypeScript COMPLETO (package.json, vite.config.ts, tsconfig.json, index.html, src/main.tsx, src/index.css, src/App.tsx) con Tailwind v4 vía @tailwindcss/vite (SIN tailwind.config.js ni postcss.config.js — `@import \"tailwindcss\"` en src/index.css y la paleta como CSS custom properties en :root), animaciones de entrada por scroll con Framer Motion (`useInView`/`whileInView` + `viewport={{ once: true }}`), iconos lucide-react y fuentes Syne + Space Grotesk (Google Fonts → --font-display/--font-body). Exigencias (PROHIBIDO entregar algo básico o tipo plantilla):\n" +
-    "   • COHERENCIA DE NICHO [CRÍTICO]: analiza el rubro (ropa, restaurante, gym, software…) y alinea TODO a él — copy REAL del negocio (NADA de lorem ipsum) e imágenes que ilustren ese rubro (ilustraciones SVG integradas o `https://images.unsplash.com/...` con términos del nicho); PROHIBIDAS fotos genéricas sin relación.\n" +
-    "   • Hero potente con titular Syne MUY grande (clamp), nav sticky translúcido, secciones diferenciadas (productos/features, about, testimonios, CTA final, footer completo), paleta cohesiva con 1 acento, hover/transiciones suaves, responsive MÓVIL-PRIMERO y accesible WCAG AA (alt/aria, foco visible, contraste ≥ 4.5:1).\n" +
-    "   • Componente OBLIGATORIO «Invitar al proyecto»: botón «Invitar» (Lucide UserPlus) + panel/modal animado (AnimatePresence) con «Enlace privado para unirse» (input readOnly), subtexto EXACTO «Cualquier persona con el enlace tendrá acceso de edición», botón Copiar (navigator.clipboard.writeText + «¡Copiado!») e input de email con botón «Invitar por correo electrónico» (validación simple, sin llamada real).\n" +
-    streamOutputFormat({ strictStart: false }) +
+    "2) PLAN + EJECUCIÓN — antes de escribir código, planifica internamente arquitectura, entidades, relaciones, API, UX, estados, responsive, accesibilidad y validación del preview. No esperes confirmación; convierte ese plan en archivos aplicables.\n" +
+    "3) GENERAR — entrega un PROYECTO Next.js 14 App Router COMPLETO. Capas obligatorias:\n" +
+    "   • Frontend: app/page.tsx y app/<entidad>/page.tsx con navegación, formularios, tablas, filtros, estados vacío/cargando/error y UI responsive profesional.\n" +
+    "   • Backend: app/api/<entidad>/route.ts y app/api/<entidad>/[id]/route.ts con CRUD real. Cada acción visible debe usar fetch contra una API propia.\n" +
+    "   • Base de datos: prisma/schema.prisma, lib/db.ts, .env.example y README con comandos. Usa Prisma como fuente de verdad; PROHIBIDO dejar arrays en memoria como persistencia principal.\n" +
+    "   • Calidad: dominio coherente, copy real del negocio, diseño sobrio de software operativo, validaciones de formulario y rutas listas para publicación.\n" +
+    streamOutputFormat({ strictStart: false, paths: FULL_STACK_APP_CONTRACT_PATHS }) +
     "\n" +
-    "3) Cierra con 1-3 siguientes pasos sugeridos para iterar (ej. 'añade sección de precios', 'conecta un formulario', 'modo claro/oscuro').",
+    "4) Cierra con 1-3 siguientes pasos sugeridos para iterar (ej. 'añade autenticación', 'conecta pagos', 'agrega roles').",
   build:
     "Modo Build: implementa cambios de código concretos. Si creas o modificas archivos, entrega bloques aplicables con ruta.",
   plan:
@@ -266,14 +269,23 @@ function buildSystemContext(
         .join("\n")
     : ""
   const hasNodeProject = Object.keys(files).some((p) => /(^|\/)package\.json$/.test(p))
-  // App mode builds the Vite contract even on an empty workspace — emitting the
-  // static-preview rules there would contradict COMPOSER_MODE_INSTRUCTION.app.
-  const expectViteProject = hasNodeProject || mode === "app"
-  const previewBlock = expectViteProject
+  const expectFullStackApp = mode === "app"
+  const expectViteProject = hasNodeProject && !expectFullStackApp
+  const previewBlock = expectFullStackApp
+    ? [
+        hasNodeProject
+          ? "El workspace contiene un PROYECTO Node REAL y el modo App debe mantenerlo como software full-stack."
+          : "El workspace alojará un PROYECTO Node REAL (modo App) con tres capas.",
+        "Contrato App: Next.js 14 App Router + TypeScript, páginas en app/**, Route Handlers",
+        "en app/api/**, Prisma como capa de base de datos, lib/db.ts como cliente compartido,",
+        ".env.example con DATABASE_URL y README con comandos de ejecución/publicación.",
+        "Cada entidad visible debe tener UI, API y modelo de datos; no uses arrays en memoria como persistencia principal.",
+      ].join("\n")
+    : expectViteProject
     ? [
         hasNodeProject
           ? "El workspace contiene un PROYECTO Node REAL (hay package.json) — típicamente"
-          : "El workspace alojará un PROYECTO Node REAL (modo App) — típicamente",
+          : "El workspace alojará un PROYECTO Node REAL — típicamente",
         "Vite 7 + React 18 + TypeScript. Usa imports npm normales y extensiones",
         ".tsx/.ts; el usuario lo ejecuta con ▶ Ejecutar (dev server). RESPETA el",
         "contrato del proyecto: Tailwind v4 vía @tailwindcss/vite (PROHIBIDO crear",
@@ -1097,7 +1109,7 @@ export function AICodeChatPanel() {
         }
 
         const sendText = ctx
-          ? `${landingSystemPrompt(ctx)}\n\n${engineTransportInstructions()}`
+          ? `${landingSystemPrompt(ctx)}\n\n${engineTransportInstructions({ paths: contractPathsForContext(ctx) })}`
           : iterate
             ? `MODIFICA los archivos que YA existen en tu workspace para lograr: ${text}.\n\nPrimero LEE el código actual con tus herramientas, haz cambios DIRIGIDOS solo donde corresponde y CONSERVA el resto intacto. NO regeneres todo desde cero — edita los archivos existentes (write/edit). Si el proyecto es Vite + React + TypeScript, RESPETA su contrato: extensiones .tsx/.ts y Tailwind v4 vía @tailwindcss/vite (PROHIBIDO crear tailwind.config.js/postcss.config.js o usar directivas v3 \`@tailwind\`).`
             : text
@@ -1418,7 +1430,9 @@ export function AICodeChatPanel() {
             // as fenced blocks (the contract format parseCodeBlocks understands)
             // and auto-apply them into the workspace.
             await sendPrompt(genPrompt, {
-              systemPrompt: `${landingSystemPrompt(action.context)}\n\n${streamOutputFormat()}`,
+              systemPrompt: `${landingSystemPrompt(action.context)}\n\n${streamOutputFormat({
+                paths: contractPathsForContext(action.context),
+              })}`,
               autoApply: true,
             })
             patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "llm" }))
