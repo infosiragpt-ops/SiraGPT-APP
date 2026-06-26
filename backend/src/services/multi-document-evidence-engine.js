@@ -1,6 +1,12 @@
 'use strict';
 
-const crypto = require('crypto');
+const DEFAULT_MAX_EVIDENCE_PAIRS = 2500;
+const DEFAULT_MAX_CROSS_REFERENCES = 1000;
+
+function positiveInt(value, fallback) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 function tokenize(text) {
   return (text || '').toLowerCase().match(/[\p{L}\p{N}]{4,}/gu) || [];
@@ -15,11 +21,45 @@ function jaccard(a, b) {
   return inter / (sa.size + sb.size - inter);
 }
 
-function buildEvidenceChain(documents, analysisResults) {
-  if (!Array.isArray(documents) || documents.length < 2) return { chains: [], crossReferences: [] };
-  const chains = [];
-  const crossReferences = [];
+function scoreChain(chain) {
+  const sharedWeight = Math.min(0.25, (chain.sharedEntities?.length || 0) * 0.025);
+  const contradictionWeight = Math.min(0.45, (chain.contradictions?.length || 0) * 0.09);
+  const complementaryWeight = Math.min(0.15, (chain.complementary?.length || 0) * 0.05);
+  return Number((
+    chain.alignmentScore * 0.45 +
+    chain.similarity * 0.25 +
+    sharedWeight +
+    contradictionWeight +
+    complementaryWeight
+  ).toFixed(5));
+}
+
+function buildEvidenceChain(documents, analysisResults, options = {}) {
+  if (!Array.isArray(documents) || documents.length < 2) {
+    return {
+      chains: [],
+      crossReferences: [],
+      meta: {
+        documentCount: Array.isArray(documents) ? documents.length : 0,
+        totalPairs: 0,
+        analyzedPairs: 0,
+        truncated: false,
+        maxEvidencePairs: 0,
+      },
+    };
+  }
+  const maxEvidencePairs = positiveInt(
+    options.maxEvidencePairs ?? process.env.SIRAGPT_MAX_EVIDENCE_PAIRS,
+    DEFAULT_MAX_EVIDENCE_PAIRS,
+  );
+  const maxCrossReferences = positiveInt(
+    options.maxCrossReferences ?? process.env.SIRAGPT_MAX_CROSS_REFERENCES,
+    DEFAULT_MAX_CROSS_REFERENCES,
+  );
+  const candidateChains = [];
+  const priorityCrossReferences = [];
   const docTokens = documents.map(d => tokenize(d.text || d.extractedText || ''));
+  const totalPairs = (documents.length * (documents.length - 1)) / 2;
   for (let i = 0; i < documents.length; i++) {
     for (let j = i + 1; j < documents.length; j++) {
       const sim = jaccard(docTokens[i], docTokens[j]);
@@ -45,19 +85,41 @@ function buildEvidenceChain(documents, analysisResults) {
         complementary,
         alignmentScore: computeAlignment(ai, aj, sim),
       };
-      chains.push(chain);
+      chain.rankScore = scoreChain(chain);
+      candidateChains.push(chain);
       if (sharedEntities.length > 0 || contradictions.length > 0) {
-        crossReferences.push({
+        priorityCrossReferences.push({
           from: chain.docA,
           to: chain.docB,
           type: contradictions.length > 0 ? 'contradiction' : sharedEntities.length > 0 ? 'shared_context' : 'weak',
           evidence: sharedEntities.slice(0, 10),
           contradictions: contradictions.slice(0, 5),
+          rankScore: chain.rankScore,
         });
       }
     }
   }
-  return { chains, crossReferences };
+  const chains = candidateChains
+    .sort((a, b) => b.rankScore - a.rankScore || b.alignmentScore - a.alignmentScore || b.similarity - a.similarity)
+    .slice(0, maxEvidencePairs)
+    .map(({ rankScore, ...chain }) => chain);
+  const crossReferences = priorityCrossReferences
+    .sort((a, b) => b.rankScore - a.rankScore)
+    .slice(0, maxCrossReferences)
+    .map(({ rankScore, ...ref }) => ref);
+  return {
+    chains,
+    crossReferences,
+    meta: {
+      documentCount: documents.length,
+      totalPairs,
+      analyzedPairs: chains.length,
+      crossReferences: crossReferences.length,
+      truncated: candidateChains.length > chains.length || priorityCrossReferences.length > crossReferences.length,
+      maxEvidencePairs,
+      maxCrossReferences,
+    },
+  };
 }
 
 function detectContradictions(a, b) {
@@ -132,8 +194,8 @@ function computeAlignment(a, b, similarity) {
   return Number(Math.min(1, score).toFixed(3));
 }
 
-function buildCrossAnalysisReport(documents, analysisResults) {
-  const evidence = buildEvidenceChain(documents, analysisResults);
+function buildCrossAnalysisReport(documents, analysisResults, options = {}) {
+  const evidence = buildEvidenceChain(documents, analysisResults, options);
   const highContradictions = evidence.chains.filter(c => c.contradictions.length > 0);
   const strongAlignments = evidence.chains.filter(c => c.alignmentScore >= 0.7);
   const synthesis = {
@@ -150,6 +212,7 @@ function buildCrossAnalysisReport(documents, analysisResults) {
   return {
     evidenceChains: evidence.chains,
     crossReferences: evidence.crossReferences,
+    evidenceMeta: evidence.meta,
     synthesis,
     analyzedAt: new Date().toISOString(),
   };

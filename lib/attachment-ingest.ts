@@ -34,6 +34,7 @@ const ALLOWED_MIMES = new Set<string>([
   "application/pdf",
   "application/msword",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   "application/vnd.ms-powerpoint",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -60,7 +61,7 @@ const ALLOWED_EXTENSIONS = new Set<string>([
   "jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff",
   "svg", "heic", "heif",
   // Office / OpenDocument
-  "pdf", "doc", "docx", "xlsx", "ppt", "pptx",
+  "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
   "odt", "ods", "odp",
   // Text
   "txt", "md", "markdown", "csv", "tsv", "rtf",
@@ -74,7 +75,7 @@ const ALLOWED_EXTENSIONS = new Set<string>([
   "zip", "epub",
 ])
 
-// Configurable client-side caps (universal ingest spec): 20 files per
+// Configurable client-side caps (universal ingest spec): 400 files per
 // batch, 100 MB per file. Overridable per deployment via NEXT_PUBLIC_*
 // envs; callers can still pass tighter per-surface limits via opts.
 function envInt(value: string | undefined, fallback: number): number {
@@ -83,7 +84,7 @@ function envInt(value: string | undefined, fallback: number): number {
 }
 const DEFAULT_MAX_BYTES =
   envInt(process.env.NEXT_PUBLIC_COMPOSER_MAX_FILE_MB, 100) * 1024 * 1024
-const DEFAULT_MAX_COUNT = envInt(process.env.NEXT_PUBLIC_COMPOSER_MAX_FILES, 20)
+const DEFAULT_MAX_COUNT = envInt(process.env.NEXT_PUBLIC_COMPOSER_MAX_FILES, 400)
 
 export type IngestSource =
   | "picker"            // input[type=file]

@@ -28,7 +28,9 @@ const objectStorage = require('../services/object-storage');
 const { pipeStreamToResponse } = require('../utils/pipe-stream-to-response');
 const { progressStream } = require('../services/upload-progress-sse');
 const {
+  DOCUMENT_FAMILY_LIMITS,
   MAX_SIMULTANEOUS_DOCUMENTS,
+  validateDocumentBatch,
 } = require('../config/document-batch-limits');
 // Never advertise a batch maxCount larger than multer actually accepts, else
 // over-limit uploads fail with LIMIT_FILE_COUNT instead of the route's contract.
@@ -714,6 +716,19 @@ router.post('/upload', authenticateToken, requireScope('files:write'), upload.ar
       return res.status(400).json({ error: 'No files uploaded' });
     }
 
+    const batchPolicy = validateDocumentBatch(req.files);
+    if (!batchPolicy.ok) {
+      await Promise.all((req.files || []).map(file => unlinkQuiet(file.path)));
+      return res.status(413).json({
+        error: batchPolicy.message,
+        code: batchPolicy.code,
+        total: batchPolicy.total,
+        maxDocuments: batchPolicy.maxDocuments,
+        counts: batchPolicy.counts,
+        familyLimits: batchPolicy.familyLimits,
+      });
+    }
+
     const asyncProcessing = isAsyncUploadRequest(req);
     const processedFiles = asyncProcessing
       ? await processFilesForAsyncPreview(req.files, req.user.id, prisma)
@@ -742,6 +757,13 @@ router.post('/upload', authenticateToken, requireScope('files:write'), upload.ar
         ? 'Files processed successfully'
         : `${ok} of ${req.files.length} files processed`,
       files: processedFiles,
+      batch: {
+        asyncProcessing,
+        total: req.files.length,
+        maxDocuments: MAX_SIMULTANEOUS_DOCUMENTS,
+        counts: batchPolicy.counts,
+        familyLimits: DOCUMENT_FAMILY_LIMITS,
+      },
     });
   } catch (error) {
     console.error('Upload error:', error);

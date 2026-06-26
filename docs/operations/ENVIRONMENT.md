@@ -113,7 +113,9 @@ APP_DIR=/root/siraNew/siraGPT scripts/deploy-production.sh
 | `MAX_FILE_SIZE` | Max file size in MB | `50` |
 | `UPLOAD_DIR` | Upload directory path | `uploads` |
 | `UPLOAD_MAX_FILE_MB` | Alternative file size limit var | `50` |
-| `MAX_UPLOAD_FILES` | Max files per upload | `10` |
+| `MAX_UPLOAD_FILES` | Max files per upload request | `400` |
+| `SIRAGPT_MAX_SIMULTANEOUS_DOCUMENTS` | Max documents attached/analyzed in one chat turn | `400` |
+| `NEXT_PUBLIC_COMPOSER_MAX_FILES` | Browser composer max files per message | `400` |
 | `SIRAGPT_XLSX_MAX_SHEETS` | Max worksheets extracted per XLSX workbook; extra sheets are skipped with an explicit marker | `5` |
 | `SIRAGPT_XLSX_DEFANG_FORMULAS` | Prefix formula-like spreadsheet text with `'` during extraction to prevent formula injection on reuse | `true` |
 | `OCR_MODE` | OCR processing mode | `hybrid` |

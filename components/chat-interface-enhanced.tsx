@@ -336,6 +336,34 @@ const parseMessageFilesForRender = (files: any): any[] => {
   }
 }
 
+const CHAT_UPLOAD_REQUEST_MAX_FILES = 50
+const CHAT_UPLOAD_REQUEST_MAX_BYTES = 220 * 1024 * 1024
+
+function buildChatUploadChunks(files: File[], tempFiles: any[]) {
+  const chunks: Array<{ files: File[]; temps: any[] }> = []
+  let currentFiles: File[] = []
+  let currentTemps: any[] = []
+  let currentBytes = 0
+
+  files.forEach((file, index) => {
+    const fileBytes = Number(file.size || 0)
+    const wouldOverflowCount = currentFiles.length >= CHAT_UPLOAD_REQUEST_MAX_FILES
+    const wouldOverflowBytes = currentFiles.length > 0 && currentBytes + fileBytes > CHAT_UPLOAD_REQUEST_MAX_BYTES
+    if (wouldOverflowCount || wouldOverflowBytes) {
+      chunks.push({ files: currentFiles, temps: currentTemps })
+      currentFiles = []
+      currentTemps = []
+      currentBytes = 0
+    }
+    currentFiles.push(file)
+    currentTemps.push(tempFiles[index])
+    currentBytes += fileBytes
+  })
+
+  if (currentFiles.length > 0) chunks.push({ files: currentFiles, temps: currentTemps })
+  return chunks
+}
+
 const VIDEO_SOURCE_IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|bmp|svg|heic|heif|avif|tiff?)$/i
 const IMAGE_TO_VIDEO_REFERENCE_RE =
   /\b(?:image[- ]?to[- ]?video|imagen(?:es)?\s+a\s+video|foto(?:s)?\s+a\s+video)\b|\b(?:pasa(?:r|la|lo|las|los)?|pasar(?:la|lo|las|los)?|convierte(?:la|lo|las|los)?|convertir(?:la|lo|las|los)?|transforma(?:la|lo|las|los)?|transformar(?:la|lo|las|los)?|vuelve(?:la|lo|las|los)?)\b.{0,64}\bvideo\b|\b(?:anima(?:r|la|lo|las|los)?|animala|animalo|dale movimiento|darle movimiento|que se mueva)\b/
@@ -6640,100 +6668,116 @@ But first, you need to connect your Spotify account securely using the button be
         }
       }, 90);
 
-      const dt = new DataTransfer();
-      filesToUpload.forEach(file => dt.items.add(file));
+      const uploadChunks = buildChatUploadChunks(filesToUpload, tempFiles);
+      let failedChunkCount = 0;
 
-      // Real upload progress via XHR (see lib/api.ts uploadFiles).
-      // The total covers all files in this batch — we apply the same
-      // percent to every temp chip in the batch (multipart form makes
-      // per-file progress impossible without a chunked endpoint).
-      const response: any = await apiClient.uploadFiles(dt.files, {
-        sourceChannel,
-        idempotencyKey,
-        asyncProcessing: true,
-        onProgress: (pct) => {
-          setUploadProgress(prev => {
-            const next = { ...prev };
-            tempFiles.forEach(tf => { next[tf.tempId] = Math.max(next[tf.tempId] || 0, pct); });
-            return next;
-          });
-        },
-      });
+      for (let chunkIndex = 0; chunkIndex < uploadChunks.length; chunkIndex += 1) {
+        const chunk = uploadChunks[chunkIndex];
+        const chunkTemps = chunk.temps;
+        const chunkTempIds = new Set(chunkTemps.map(tf => tf.tempId));
 
-      if (response.files) {
-        // Snap to 100% and swap temps for server entries — preserve the
-        // original File blob and preview so the chip thumbnail doesn't
-        // flash off during the swap.
-        setUploadProgress(prev => {
-          const next = { ...prev };
-          tempFiles.forEach(tf => { next[tf.tempId] = 100; });
-          return next;
-        });
-        const failedServerFiles = response.files.filter((f: any) => f?.success === false);
-        if (failedServerFiles.length > 0) {
-          const grouped: Record<string, number> = {};
-          failedServerFiles.forEach((f: any) => {
-            const reason = f?.error || 'No se pudo procesar el archivo.';
-            grouped[reason] = (grouped[reason] || 0) + 1;
-          });
-          Object.entries(grouped).forEach(([reason, n]) => {
-            toast.error(n > 1 ? `${reason} (${n} archivos)` : reason);
-          });
-        }
-        const merged = response.files.map((f: any, idx: number) => {
-          const failed = f?.success === false;
-          const processingStage = f?.processingStage || f?.stage || null;
-          return {
-            ...f,
-            // Keep the tempId so chip identity (animations, hash bookkeeping,
-            // cancel tracking) survives the temp → server swap.
-            tempId: tempFiles[idx]?.tempId ?? f.tempId,
-            file: tempFiles[idx]?.file ?? f.file,
-            preview: tempFiles[idx]?.preview ?? f.preview,
+        try {
+          // Real upload progress via XHR (see lib/api.ts uploadFiles).
+          // Large selections are split into bounded multipart requests so
+          // 400 documents do not exceed the edge/body-size guard.
+          const response: any = await apiClient.uploadFiles(filesToFileList(chunk.files), {
             sourceChannel,
-            longPasteMeta: tempFiles[idx]?.longPasteMeta ?? f.longPasteMeta,
-            isLongPasteDocument: tempFiles[idx]?.isLongPasteDocument || Boolean(f.isLongPasteDocument),
-            mediaMeta: tempFiles[idx]?.mediaMeta ?? f.mediaMeta ?? null,
-            processingStage,
-            status: failed
-              ? ('failed' as const)
-              : isActiveProcessingStage(processingStage)
-                ? ('processing' as const)
-                : ('ready' as const),
-            uploadError: failed ? (f?.error || 'No se pudo procesar el archivo.') : f?.uploadError,
-          };
-        // A chip removed while its upload was in flight acts as CANCEL —
-        // do not resurrect it when the XHR completes.
-        }).filter((m: any, idx: number) => !cancelledTempIdsRef.current.has(tempFiles[idx]?.tempId));
-        const tempIds = new Set(tempFiles.map(tf => tf.tempId));
-        setUploadedFiles((cur: any[]) => {
-          const next = [
-            ...cur.filter((f: any) => !tempIds.has(f.tempId)),
-            ...merged,
-          ];
-          uploadedFilesRef.current = next;
-          return next;
-        });
+            idempotencyKey: `${idempotencyKey}-${chunkIndex + 1}`,
+            asyncProcessing: true,
+            onProgress: (pct) => {
+              setUploadProgress(prev => {
+                const next = { ...prev };
+                chunkTemps.forEach(tf => { next[tf.tempId] = Math.max(next[tf.tempId] || 0, pct); });
+                return next;
+              });
+            },
+          });
 
-        setTimeout(() => {
+          if (!response.files) {
+            failedChunkCount += 1;
+            setUploadedFiles((cur: any[]) => {
+              const next = cur.map(f => chunkTempIds.has(f.tempId) ? { ...f, status: 'failed', uploadError: 'Respuesta sin archivos' } : f);
+              uploadedFilesRef.current = next;
+              return next;
+            });
+            toast.error('La subida falló. Toca el ícono de reintento en el archivo.');
+            continue;
+          }
+
+          // Snap this sub-batch to 100% and swap temps for server entries.
           setUploadProgress(prev => {
             const next = { ...prev };
-            tempFiles.forEach(tf => { delete next[tf.tempId]; });
+            chunkTemps.forEach(tf => { next[tf.tempId] = 100; });
             return next;
           });
-        }, 500);
+          const failedServerFiles = response.files.filter((f: any) => f?.success === false);
+          if (failedServerFiles.length > 0) {
+            failedChunkCount += 1;
+            const grouped: Record<string, number> = {};
+            failedServerFiles.forEach((f: any) => {
+              const reason = f?.error || 'No se pudo procesar el archivo.';
+              grouped[reason] = (grouped[reason] || 0) + 1;
+            });
+            Object.entries(grouped).forEach(([reason, n]) => {
+              toast.error(n > 1 ? `${reason} (${n} archivos)` : reason);
+            });
+          }
+          const merged = response.files.map((f: any, idx: number) => {
+            const failed = f?.success === false;
+            const processingStage = f?.processingStage || f?.stage || null;
+            return {
+              ...f,
+              // Keep the tempId so chip identity (animations, hash bookkeeping,
+              // cancel tracking) survives the temp → server swap.
+              tempId: chunkTemps[idx]?.tempId ?? f.tempId,
+              file: chunkTemps[idx]?.file ?? f.file,
+              preview: chunkTemps[idx]?.preview ?? f.preview,
+              sourceChannel,
+              longPasteMeta: chunkTemps[idx]?.longPasteMeta ?? f.longPasteMeta,
+              isLongPasteDocument: chunkTemps[idx]?.isLongPasteDocument || Boolean(f.isLongPasteDocument),
+              mediaMeta: chunkTemps[idx]?.mediaMeta ?? f.mediaMeta ?? null,
+              processingStage,
+              status: failed
+                ? ('failed' as const)
+                : isActiveProcessingStage(processingStage)
+                  ? ('processing' as const)
+                  : ('ready' as const),
+              uploadError: failed ? (f?.error || 'No se pudo procesar el archivo.') : f?.uploadError,
+            };
+          // A chip removed while its upload was in flight acts as CANCEL —
+          // do not resurrect it when the XHR completes.
+          }).filter((m: any, idx: number) => !cancelledTempIdsRef.current.has(chunkTemps[idx]?.tempId));
+          setUploadedFiles((cur: any[]) => {
+            const next = [
+              ...cur.filter((f: any) => !chunkTempIds.has(f.tempId)),
+              ...merged,
+            ];
+            uploadedFilesRef.current = next;
+            return next;
+          });
 
-        // Quiet on success — the chip itself is the confirmation.
-        // (Toast was noisy after every drag-drop.)
-      } else {
-        // Mark temps as failed so the chip shows a retry button.
-        const tempIds = new Set(tempFiles.map(tf => tf.tempId));
-        setUploadedFiles((cur: any[]) => {
-          const next = cur.map(f => tempIds.has(f.tempId) ? { ...f, status: 'failed', uploadError: 'Respuesta sin archivos' } : f);
-          uploadedFilesRef.current = next;
-          return next;
-        });
-        toast.error('La subida falló. Toca el ícono de reintento en el archivo.');
+          setTimeout(() => {
+            setUploadProgress(prev => {
+              const next = { ...prev };
+              chunkTemps.forEach(tf => { delete next[tf.tempId]; });
+              return next;
+            });
+          }, 500);
+        } catch (chunkError: any) {
+          failedChunkCount += 1;
+          console.error('File upload chunk failed:', chunkError);
+          const reason = chunkError?.message || 'Error de subida';
+          setUploadedFiles((cur: any[]) => {
+            const next = cur.map(f => chunkTempIds.has(f.tempId) ? { ...f, status: 'failed', uploadError: reason } : f);
+            uploadedFilesRef.current = next;
+            return next;
+          });
+          toast.error(reason);
+        }
+      }
+
+      if (filesToUpload.length >= 25 && failedChunkCount === 0) {
+        toast.success(`${filesToUpload.length} archivos recibidos. SiraGPT los analizará en segundo plano.`);
       }
     } catch (error: any) {
       console.error('File upload failed:', error);
@@ -6752,6 +6796,11 @@ But first, you need to connect your Spotify account securely using the button be
     } finally {
       if (optimisticTimer) clearInterval(optimisticTimer);
       setIsUploading(false);
+      setUploadProgress(prev => {
+        const next = { ...prev };
+        tempFiles.forEach(tf => { delete next[tf.tempId]; });
+        return next;
+      });
     }
   }, [chatType, setUploadedFiles]);
 
