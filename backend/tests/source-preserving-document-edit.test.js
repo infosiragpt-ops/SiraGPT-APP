@@ -119,6 +119,60 @@ async function makeDocxWithAnexo3CronogramaBuffer({
   return Buffer.from(await Packer.toBuffer(doc));
 }
 
+async function makeDocxWithOperationalMatrixBuffer() {
+  const cell = (text = '') => new TableCell({ children: [new Paragraph(text)] });
+  const doc = new Document({
+    sections: [{
+      children: [
+        new Paragraph('Matriz de categorización ACTUAL'),
+        new Paragraph('Tabla 01. Matriz operacional'),
+        new Table({
+          rows: [
+            new TableRow({
+              children: [
+                cell('Categoría'),
+                cell('Subcategoría'),
+                cell('Indicador'),
+                cell('Técnica'),
+                cell('Instrumento'),
+              ],
+            }),
+            new TableRow({
+              children: [
+                cell('Informe pericial'),
+                cell('Valoración económica'),
+                cell('Criterios de cuantificación'),
+                cell('Análisis documental'),
+                cell('Guía de análisis documental'),
+              ],
+            }),
+            new TableRow({
+              children: [
+                cell('Capacidad económica'),
+                cell('Ingresos declarados'),
+                cell('Nivel de ingresos'),
+                cell('Revisión documental'),
+                cell('Ficha de registro'),
+              ],
+            }),
+            new TableRow({
+              children: [
+                cell('Capacidad económica'),
+                cell('Patrimonio disponible'),
+                cell('Bienes registrables'),
+                cell('Revisión documental'),
+                cell('Ficha de registro'),
+              ],
+            }),
+          ],
+        }),
+        new Paragraph('Nota. Esta matriz operacional debe conservarse sin cambios.'),
+      ],
+    }],
+  });
+  return Buffer.from(await Packer.toBuffer(doc));
+}
+
 async function makeDocxWithAnexo3CronogramaStatusBuffer({ statusForRow = () => 'Completado', leakText = false } = {}) {
   const plan = sourcePreservingInternals.buildCronogramaAnexo3Plan();
   const blankCells = (count) => Array.from({ length: count }, () => new TableCell({ children: [new Paragraph('')] }));
@@ -725,6 +779,55 @@ describe('source-preserving document edit', () => {
     assert.match(xml, /Portada original UPN/);
     assert.match(xml, /ANEXOS/);
     assert.match(xml, /Instrumento de recolección de datos/);
+  });
+
+  it('adds a real consistency matrix table derived from the DOCX operational matrix', async () => {
+    const originalOpenAIKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-consistency-matrix-'));
+      const originalPath = path.join(tmp, 'Matriz de categorización ACTUAL.docx');
+      fs.writeFileSync(originalPath, await makeDocxWithOperationalMatrixBuffer());
+
+      const result = await generateSourcePreservingDocumentEdit({
+        sourceFile: {
+          id: 'file-docx',
+          path: originalPath,
+          originalName: 'Matriz de categorización ACTUAL.docx',
+          filename: 'Matriz de categorización ACTUAL.docx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          extractedText: 'Tabla 01. Matriz operacional con categorías, subcategorías e indicadores.',
+        },
+        prompt: 'agrega en el word matriz de cosistencia en base a la matriz operacional',
+        displayPrompt: 'agrega en el word matriz de cosistencia en base a la matriz operacional',
+        userId: 'user-1',
+        chatId: 'chat-1',
+      });
+
+      assert.equal(result.format, 'docx');
+      assert.equal(result.validation.passed, true);
+      assert.equal(result.validation.checks.operation_criteria, true);
+      assert.match(result.file.filename, /matriz_de_consistencia_completado\.docx$/);
+      assert.match(result.content, /matriz de consistencia derivada de la matriz operacional/i);
+
+      const edited = fs.readFileSync(result.artifact.path);
+      const xml = new PizZip(edited).file('word/document.xml').asText();
+      assert.equal((xml.match(/<w:tbl\b/g) || []).length, 2);
+      assert.ok(xml.indexOf('Matriz de consistencia') > xml.indexOf('Tabla 01'));
+      assert.match(xml, /Tabla 01\. Matriz operacional/);
+      assert.match(xml, /Matriz de consistencia basada en la matriz operacional/);
+      assert.match(xml, /Problema/);
+      assert.match(xml, /Objetivo/);
+      assert.match(xml, /Supuesto\/Hipótesis/);
+      assert.match(xml, /Informe pericial/);
+      assert.match(xml, /Capacidad económica/);
+      assert.match(xml, /Criterios de cuantificación/);
+      assert.match(xml, /Bienes registrables/);
+      assert.doesNotMatch(xml, /ANEXOS/);
+    } finally {
+      if (originalOpenAIKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = originalOpenAIKey;
+    }
   });
 
   it('completes a targeted DOCX appendix using the combined uploaded document context', async () => {

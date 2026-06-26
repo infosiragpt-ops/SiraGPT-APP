@@ -21,6 +21,48 @@ function normalizeText(value) {
   return String(value || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
 }
 
+function xmlUnescape(value) {
+  return String(value || '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+function paragraphText(xml = '') {
+  const pieces = [];
+  const textRe = /<w:t\b[^>]*>([\s\S]*?)<\/w:t>/g;
+  let match;
+  while ((match = textRe.exec(String(xml || '')))) pieces.push(xmlUnescape(match[1]));
+  return pieces.join('');
+}
+
+function extractXmlSegments(xml = '', regex) {
+  const segments = [];
+  regex.lastIndex = 0;
+  let match;
+  while ((match = regex.exec(String(xml || '')))) {
+    segments.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      xml: match[0],
+    });
+  }
+  return segments;
+}
+
+function extractTableCells(rowXml = '') {
+  return extractXmlSegments(rowXml, /<w:tc\b[\s\S]*?<\/w:tc>/g)
+    .map((cell) => paragraphText(cell.xml).replace(/\s+/g, ' ').trim());
+}
+
+function extractTableRows(tableXml = '') {
+  return extractXmlSegments(tableXml, /<w:tr\b[\s\S]*?<\/w:tr>/g)
+    .map((row) => extractTableCells(row.xml))
+    .filter((row) => row.some((cell) => String(cell || '').trim()));
+}
+
 function tableCellXml(text, { header = false, width } = {}) {
   const shd = header ? '<w:shd w:val="clear" w:color="auto" w:fill="E7EEF7"/>' : '';
   const rPr = header ? '<w:rPr><w:b/><w:sz w:val="22"/></w:rPr>' : '<w:rPr><w:sz w:val="22"/></w:rPr>';
@@ -78,12 +120,17 @@ function insertBeforeBodyEnd(documentXml, fragment) {
 
 // Insert a native table into the DOCX (caption + table + trailing paragraph so
 // Word stays well-formed), preserving everything else.
-function insertTableIntoDocxBuffer(buffer, { headers = [], rows = [], title = '' } = {}) {
+function insertTableIntoDocxBuffer(buffer, { headers = [], rows = [], title = '', afterIndex = null } = {}) {
   const zip = new PizZip(buffer);
   const documentFile = zip.file('word/document.xml');
   if (!documentFile) throw new Error('DOCX inválido: falta word/document.xml.');
+  const documentXml = documentFile.asText();
   const fragment = `${captionParagraphXml(title)}${buildTableXml(headers, rows)}<w:p/>`;
-  zip.file('word/document.xml', insertBeforeBodyEnd(documentFile.asText(), fragment));
+  const insertionIndex = Number.isFinite(afterIndex) ? Number(afterIndex) : -1;
+  const nextXml = insertionIndex > 0 && insertionIndex < documentXml.lastIndexOf('</w:body>')
+    ? `${documentXml.slice(0, insertionIndex)}<w:p/>${fragment}${documentXml.slice(insertionIndex)}`
+    : insertBeforeBodyEnd(documentXml, fragment);
+  zip.file('word/document.xml', nextXml);
   return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
@@ -126,6 +173,176 @@ function detectTableRequest(text) {
 
 function tableSpecHasContent(spec) {
   return Boolean(spec && Array.isArray(spec.rows) && spec.rows.length && Array.isArray(spec.headers) && spec.headers.length);
+}
+
+function requestWantsConsistencyMatrix(text = '') {
+  const norm = normalizeText(text);
+  return /\bmatriz\b/.test(norm)
+    && /\b(?:consisten\w*|cosisten\w*)\b/.test(norm)
+    && /\b(?:operacional\w*|operacionalizacion\w*|categorizaci\w*|categoriza\w*)\b/.test(norm);
+}
+
+function findColumn(headers = [], patterns = []) {
+  const normalized = headers.map((header) => normalizeText(header));
+  for (const pattern of patterns) {
+    const found = normalized.findIndex((header) => pattern.test(header));
+    if (found >= 0) return found;
+  }
+  return -1;
+}
+
+function uniqCompact(values = [], max = 6) {
+  const out = [];
+  const seen = new Set();
+  for (const value of values) {
+    const text = String(value || '').replace(/\s+/g, ' ').trim();
+    const key = normalizeText(text);
+    if (!text || seen.has(key)) continue;
+    seen.add(key);
+    out.push(text);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+function joinList(values = [], fallback = '') {
+  const items = uniqCompact(values);
+  if (!items.length) return fallback;
+  if (items.length === 1) return items[0];
+  return `${items.slice(0, -1).join(', ')} y ${items[items.length - 1]}`;
+}
+
+function lcFirst(value = '') {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (/^[A-ZÁÉÍÓÚÜÑ0-9\s]{2,}$/.test(text)) return text;
+  return `${text.charAt(0).toLowerCase()}${text.slice(1)}`;
+}
+
+function sourceTableScore(table) {
+  const norm = normalizeText(`${table.context || ''} ${table.text || ''}`);
+  let score = 0;
+  if (/\btabla\s*0?1\b/.test(norm)) score += 4;
+  if (/\bmatriz\b/.test(norm)) score += 3;
+  if (/\boperacional\w*|operacionalizacion\w*\b/.test(norm)) score += 5;
+  if (/\bcategorizaci\w*|categoriza\w*\b/.test(norm)) score += 4;
+  if (/\bcategor[ií]a\w*|subcategor[ií]a\w*|dimension\w*|indicador\w*|variable\w*\b/.test(norm)) score += 4;
+  if (table.rows.length >= 2) score += 2;
+  return score;
+}
+
+function extractDocxTablesWithContext(buffer) {
+  try {
+    const xml = new PizZip(buffer).file('word/document.xml')?.asText() || '';
+    return extractXmlSegments(xml, /<w:tbl\b[\s\S]*?<\/w:tbl>/g)
+      .map((table) => {
+        const contextXml = xml.slice(Math.max(0, table.start - 1800), table.start);
+        const rows = extractTableRows(table.xml);
+        return {
+          ...table,
+          rows,
+          text: rows.flat().join(' '),
+          context: paragraphText(contextXml),
+        };
+      });
+  } catch {
+    return [];
+  }
+}
+
+function buildConsistencyMatrixSpec(buffer, { requestText = '' } = {}) {
+  if (!requestWantsConsistencyMatrix(requestText)) return null;
+  const candidates = extractDocxTablesWithContext(buffer)
+    .filter((table) => table.rows.length >= 2)
+    .map((table) => ({ table, score: sourceTableScore(table) }))
+    .filter((item) => item.score >= 6)
+    .sort((a, b) => b.score - a.score);
+  const source = candidates[0]?.table;
+  if (!source) return null;
+
+  const headers = source.rows[0] || [];
+  const dataRows = source.rows.slice(1)
+    .map((row) => row.map((cell) => String(cell || '').replace(/\s+/g, ' ').trim()))
+    .filter((row) => row.some(Boolean))
+    .slice(0, 18);
+  if (!dataRows.length) return null;
+
+  const categoryCol = findColumn(headers, [/\bcategor[ií]a\w*\b/, /\bvariable\w*\b/]);
+  const subcategoryCol = findColumn(headers, [/\bsubcategor[ií]a\w*\b/, /\bdimension\w*\b/, /\bfactor\w*\b/]);
+  const indicatorCol = findColumn(headers, [/\bindicador\w*\b/, /\bitems?\b/, /\bcriterio\w*\b/]);
+  const techniqueCol = findColumn(headers, [/\bt[eé]cnica\w*\b/, /\bmetodo\w*\b/, /\bfuente\w*\b/]);
+  const instrumentCol = findColumn(headers, [/\binstrumento\w*\b/, /\bgu[ií]a\w*\b/, /\bficha\w*\b/]);
+
+  const cellAt = (row, idx) => (idx >= 0 ? row[idx] : '');
+  const normalizedRows = dataRows.map((row) => {
+    const category = cellAt(row, categoryCol) || row[0] || '';
+    const subcategory = cellAt(row, subcategoryCol) || row[1] || '';
+    const indicator = cellAt(row, indicatorCol) || row[2] || subcategory || category || '';
+    const technique = cellAt(row, techniqueCol);
+    const instrument = cellAt(row, instrumentCol);
+    return {
+      category,
+      subcategory,
+      indicator,
+      techniqueInstrument: joinList([technique, instrument], 'Según la matriz operacional'),
+    };
+  }).filter((row) => row.category || row.subcategory || row.indicator);
+
+  const deduped = [];
+  const seen = new Set();
+  for (const row of normalizedRows) {
+    const key = normalizeText([row.category, row.subcategory, row.indicator].join('|'));
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(row);
+  }
+  if (!deduped.length) return null;
+
+  const categories = joinList(deduped.map((row) => row.category), 'las categorías identificadas');
+  const subcategories = joinList(deduped.map((row) => row.subcategory), 'las subcategorías identificadas');
+  const indicators = joinList(deduped.map((row) => row.indicator), 'los indicadores definidos');
+  const generalRow = [
+    `¿Cómo se articula ${lcFirst(categories)} con ${lcFirst(indicators)}?`,
+    `Analizar la articulación entre ${lcFirst(categories)} y ${lcFirst(indicators)}.`,
+    `Existe correspondencia entre ${lcFirst(categories)}, ${lcFirst(subcategories)} y ${lcFirst(indicators)}.`,
+    categories,
+    subcategories,
+    indicators,
+    'Análisis documental de la matriz operacional',
+  ];
+
+  const rows = [
+    generalRow,
+    ...deduped.map((row, index) => {
+      const focus = row.indicator || row.subcategory || row.category;
+      const context = row.subcategory || row.category || 'la categoría de estudio';
+      return [
+        `¿Cómo se manifiesta ${lcFirst(focus)} en ${lcFirst(context)}?`,
+        `Examinar ${lcFirst(focus)} en ${lcFirst(context)}.`,
+        `El comportamiento de ${lcFirst(focus)} se relaciona con ${lcFirst(context)}.`,
+        row.category || `Categoría ${index + 1}`,
+        row.subcategory || row.category || '',
+        row.indicator || row.subcategory || row.category || '',
+        row.techniqueInstrument,
+      ];
+    }),
+  ];
+
+  return {
+    kind: 'consistency_matrix',
+    title: 'Matriz de consistencia basada en la matriz operacional',
+    headers: [
+      'Problema',
+      'Objetivo',
+      'Supuesto/Hipótesis',
+      'Categoría/Variable',
+      'Subcategoría/Dimensión',
+      'Indicador',
+      'Técnica/Instrumento',
+    ],
+    rows,
+    insertAfterTableEnd: source.end,
+  };
 }
 
 async function extractTableSpecWithLLM({ requestText, sourceText, signal }) {
@@ -183,14 +400,15 @@ function nextTableNumber(buffer) {
 // insert a native table. Returns { added, buffer, reason }. Never throws on "no".
 async function addTableFromRequest(buffer, { requestText = '', sourceText = '', signal } = {}) {
   if (!detectTableRequest(requestText).wantsTable) return { added: false, buffer, reason: 'no_table_intent' };
-  let spec = parseTableFromText(requestText);
+  let spec = buildConsistencyMatrixSpec(buffer, { requestText, sourceText });
+  if (!tableSpecHasContent(spec)) spec = parseTableFromText(requestText);
   if (!tableSpecHasContent(spec)) spec = await extractTableSpecWithLLM({ requestText, sourceText, signal });
   if (!tableSpecHasContent(spec)) return { added: false, buffer, reason: 'no_data' };
   const number = nextTableNumber(buffer);
   const base = String(spec.title || '').trim();
   const caption = base ? `Tabla ${number}. ${base}` : `Tabla ${number}`;
-  const out = insertTableIntoDocxBuffer(buffer, { headers: spec.headers, rows: spec.rows, title: caption });
-  return { added: true, buffer: out, spec: { headers: spec.headers, rowCount: spec.rows.length, title: caption } };
+  const out = insertTableIntoDocxBuffer(buffer, { headers: spec.headers, rows: spec.rows, title: caption, afterIndex: spec.insertAfterTableEnd });
+  return { added: true, buffer: out, spec: { headers: spec.headers, rowCount: spec.rows.length, title: caption, kind: spec.kind || 'table' } };
 }
 
 // ---------------------------------------------------------------------------
@@ -263,10 +481,11 @@ module.exports = {
   insertTableIntoDocxBuffer,
   parseTableFromText,
   detectTableRequest,
+  requestWantsConsistencyMatrix,
   addTableFromRequest,
   buildCaptionIndex,
   insertCaptionIndexIntoDocxBuffer,
   detectIndexRequest,
   addIndexFromRequest,
-  INTERNAL: { tableSpecHasContent, captionParagraphXml, insertBeforeBodyEnd, normalizeText },
+  INTERNAL: { tableSpecHasContent, captionParagraphXml, insertBeforeBodyEnd, normalizeText, buildConsistencyMatrixSpec },
 };

@@ -2817,6 +2817,56 @@ function validateTargetSectionCompletion(buffer, target) {
   }
 }
 
+function validateConsistencyMatrixInsertion(buffer) {
+  try {
+    const documentXml = readDocxDocumentXml(buffer);
+    if (!documentXml) return { ok: false, reason: 'missing_document_xml' };
+    const paragraphs = extractDocxParagraphs(documentXml);
+    const tables = extractDocxTables(documentXml);
+    const visibleText = normalizeText([
+      ...paragraphs.map((paragraph) => paragraph.text),
+      ...tables.map((table) => table.text),
+    ].join(' '));
+    const matrixTable = tables.find((table) => {
+      const norm = normalizeText(table.text);
+      return norm.includes('problema')
+        && norm.includes('objetivo')
+        && (norm.includes('supuesto') || norm.includes('hipotesis'))
+        && (norm.includes('categoria') || norm.includes('variable'))
+        && norm.includes('indicador');
+    }) || null;
+    const matrixRowCount = matrixTable ? extractTableRows(matrixTable.xml).length : 0;
+    const sourcePreserved = /\btabla\s*0?1\b/.test(visibleText)
+      && /\bmatriz\b/.test(visibleText)
+      && /\b(operacional\w*|operacionalizacion\w*|categorizaci\w*|categoriza\w*)\b/.test(visibleText);
+    const matrixCaption = visibleText.includes('matriz de consistencia')
+      || visibleText.includes('matriz de cosistencia');
+    const ok = sourcePreserved
+      && matrixCaption
+      && tables.length >= 2
+      && Boolean(matrixTable)
+      && matrixRowCount >= 3;
+    return {
+      ok,
+      reason: !sourcePreserved
+        ? 'source_operational_matrix_not_preserved'
+        : !matrixCaption
+          ? 'missing_consistency_matrix_caption'
+          : tables.length < 2
+            ? 'new_table_not_inserted'
+            : !matrixTable
+              ? 'consistency_matrix_columns_missing'
+              : matrixRowCount < 3
+                ? 'consistency_matrix_too_short'
+                : null,
+      tableCount: tables.length,
+      matrixRowCount,
+    };
+  } catch (err) {
+    return { ok: false, reason: err?.message || 'consistency_matrix_validation_failed' };
+  }
+}
+
 function validateDocxOperationCriteria(buffer, operations = []) {
   const text = extractDocxTextFromBuffer(buffer);
   const normalized = normalizeText(text);
@@ -2845,6 +2895,16 @@ function validateDocxOperationCriteria(buffer, operations = []) {
     if (op.kind === 'integrate_references') {
       const passed = normalized.includes('contenido integrado de documentos de soporte');
       checks.push({ id: 'reference_documents_integrated', label: 'Documento de soporte integrado', passed });
+      continue;
+    }
+    if (op.kind === 'insert_table' && op.tableKind === 'consistency_matrix') {
+      const result = validateConsistencyMatrixInsertion(buffer);
+      checks.push({
+        id: 'consistency_matrix_inserted',
+        label: 'Matriz de consistencia agregada al Word',
+        passed: result.ok,
+        details: result,
+      });
       continue;
     }
     if (op.kind === 'fill_cover') {
@@ -3256,6 +3316,11 @@ function clauseWantsTable(clauseNorm) {
   return Boolean(mod && mod.detectTableRequest(clauseNorm).wantsTable);
 }
 
+function clauseWantsConsistencyMatrix(clauseNorm) {
+  const mod = docxTableInsertModule();
+  return Boolean(mod && mod.requestWantsConsistencyMatrix && mod.requestWantsConsistencyMatrix(clauseNorm));
+}
+
 function clauseWantsIndex(clauseNorm) {
   const mod = docxTableInsertModule();
   return Boolean(mod && mod.detectIndexRequest && mod.detectIndexRequest(clauseNorm).wantsIndex);
@@ -3304,7 +3369,9 @@ function buildOperationFromClause(clauseNorm, documentXml) {
   // A chart/diagram request (no explicit section) → embed a visual instead of a
   // generic text appendix.
   if (clauseWantsIndex(clauseNorm)) return { kind: 'insert_index' };
-  if (clauseWantsTable(clauseNorm)) return { kind: 'insert_table' };
+  if (clauseWantsTable(clauseNorm)) {
+    return { kind: 'insert_table', tableKind: clauseWantsConsistencyMatrix(clauseNorm) ? 'consistency_matrix' : 'table' };
+  }
   if (clauseWantsVisual(clauseNorm)) return { kind: 'insert_visual' };
   if (append || wantsInstrument) return { kind: 'append_generic', wantsInstrument };
   if (fill) return null;
@@ -3312,7 +3379,7 @@ function buildOperationFromClause(clauseNorm, documentXml) {
 }
 
 function operationKey(op) {
-  return `${op.kind}:${op.target ? op.target.label : ''}:${op.wantsInstrument ? 'instr' : ''}:${normalizeText(op.needle || '')}:${normalizeText(op.replacement || '')}:${op.address || ''}`;
+  return `${op.kind}:${op.target ? op.target.label : ''}:${op.wantsInstrument ? 'instr' : ''}:${op.tableKind || ''}:${normalizeText(op.needle || '')}:${normalizeText(op.replacement || '')}:${op.address || ''}`;
 }
 
 const BULK_FILL_SCOPE_RE = /\b(tablas?|anexos?|secciones?|cuadros?|matrices?|matriz|vac[ií]as?|vac[ií]os?|faltantes?|pendientes?|todo|todos|todas|que\s+falt\w*)\b/;
@@ -3510,6 +3577,7 @@ async function planOperationsWithLLM({ requestText = '', documentXml = '', signa
 async function planSourcePreservingOperationsSmart({ requestText = '', documentXml = '', referenceFiles = [], signal } = {}) {
   const heuristic = planSourcePreservingOperations({ requestText, documentXml, referenceFiles });
   if (heuristic.some((op) => op.kind === 'integrate_references')) return heuristic;
+  if (heuristic.some((op) => op.kind === 'insert_table' && op.tableKind === 'consistency_matrix')) return heuristic;
   if (heuristicPlanIsConfident(heuristic, requestText)) return heuristic;
   const llm = await planOperationsWithLLM({ requestText, documentXml, signal });
   return llm && llm.length ? llm : heuristic;
@@ -3765,17 +3833,23 @@ async function runInsertVisualOperation({ buffer, requestText, sourceText, signa
 
 // Design layer: insert a native, editable Word table from the request data.
 // A table failure must never break the document edit.
-async function runInsertTableOperation({ buffer, requestText, sourceText, signal }) {
+async function runInsertTableOperation({ buffer, op = {}, requestText, sourceText, signal }) {
   const mod = docxTableInsertModule();
   if (!mod) return { buffer, validationBlocks: [], step: { kind: 'insert_table', label: 'tabla', mode: 'unavailable' } };
   try {
     const result = await mod.addTableFromRequest(buffer, { requestText, sourceText, signal });
     if (result.added) {
       const caption = String(result.spec?.title || '').trim();
+      const tableKind = result.spec?.kind || op.tableKind || 'table';
       return {
         buffer: result.buffer,
         validationBlocks: caption ? [block('normal', caption)] : [],
-        step: { kind: 'insert_table', label: `tabla (${result.spec?.rowCount || 0} filas)` },
+        step: {
+          kind: 'insert_table',
+          label: tableKind === 'consistency_matrix' ? 'Matriz de consistencia' : `tabla (${result.spec?.rowCount || 0} filas)`,
+          tableKind,
+          rowCount: result.spec?.rowCount || 0,
+        },
       };
     }
     return { buffer, validationBlocks: [], step: { kind: 'insert_table', label: 'tabla', mode: result.reason || 'skipped' } };
@@ -3813,7 +3887,7 @@ async function executeDocxOperations({ input, ops, requestText, sourceText, allS
     } else if (op.kind === 'insert_visual') {
       result = await runInsertVisualOperation({ buffer, requestText, sourceText, signal });
     } else if (op.kind === 'insert_table') {
-      result = await runInsertTableOperation({ buffer, requestText, sourceText, signal });
+      result = await runInsertTableOperation({ buffer, op, requestText, sourceText, signal });
     } else if (op.kind === 'insert_index') {
       result = await runInsertIndexOperation({ buffer, requestText });
     } else if (op.kind === 'integrate_references') {
@@ -4081,6 +4155,9 @@ function describeStep(step) {
   if (step.kind === 'insert_visual') return 'intenté insertar un gráfico, pero no había datos suficientes';
   if (step.kind === 'insert_index' && !step.mode) return `generé el ${step.label || 'índice'} de figuras/tablas`;
   if (step.kind === 'insert_index') return 'intenté generar el índice, pero aún no hay figuras/tablas numeradas';
+  if (step.kind === 'insert_table' && step.tableKind === 'consistency_matrix' && !step.mode) {
+    return `agregué la matriz de consistencia derivada de la matriz operacional (${step.rowCount || 0} filas)`;
+  }
   if (step.kind === 'insert_table' && !step.mode) return `inserté una ${step.label || 'tabla'} en el documento`;
   if (step.kind === 'insert_table') return 'intenté insertar una tabla, pero no había datos suficientes';
   if (step.kind === 'fill_cover') return 'completé la portada con los datos disponibles del documento';
@@ -4138,6 +4215,7 @@ function buildDocumentOrchestrationPlan({ requestText = '', sourceFile = {}, ref
       kind: op.kind,
       target: op.target?.label || null,
       wantsInstrument: Boolean(op.wantsInstrument),
+      tableKind: op.kind === 'insert_table' ? (op.tableKind || 'table') : undefined,
       needle: (op.kind === 'delete_text' || op.kind === 'replace_text') ? compact(op.needle, 80) : undefined,
       replacement: op.kind === 'replace_text' ? compact(op.replacement, 80) : undefined,
       address: op.kind === 'set_cell' ? op.address : undefined,
