@@ -11,6 +11,7 @@
 const pipeline = require('./pipeline');
 const providers = require('./provider-connectors');
 const { deployHostingerVps } = require('./connectors/hostinger-vps-executor');
+const creds = require('../../services/hosting/credentials');
 const crypto = require('node:crypto');
 const { redactPayloadDeep } = require('../../utils/log-redaction');
 const { logger } = require('../../utils/logger');
@@ -340,6 +341,22 @@ async function publishViaExecutor({ prisma, row, userId, env, executor }) {
     return created;
   });
 
+  // Persist a newly-provisioned DATABASE_URL into the connection's sealed
+  // DeployEnv so redeploys reuse it (idempotent — never overwrite a user's own).
+  // Uses the INJECTED prisma + guards on prisma.deployEnv so offline tests skip it.
+  if (result.promoted && result.databaseUrl && row.connectedRepositoryId && prisma.deployEnv) {
+    try {
+      const existing = await prisma.deployEnv.findFirst({ where: { connectedRepositoryId: row.connectedRepositoryId, userId } });
+      const envObj = existing ? creds.openJson(existing.encryptedEnv) : {};
+      if (!envObj.DATABASE_URL) {
+        envObj.DATABASE_URL = result.databaseUrl;
+        const sealed = creds.sealJson(envObj);
+        if (existing) await prisma.deployEnv.update({ where: { id: existing.id }, data: { encryptedEnv: sealed } });
+        else await prisma.deployEnv.create({ data: { userId, connectedRepositoryId: row.connectedRepositoryId, encryptedEnv: sealed } });
+      }
+    } catch { /* best-effort */ }
+  }
+
   const spec = pipeline.machineSpec(row.deploymentType, row.machineTier);
   const updated = await prisma.deployment.update({
     where: { id },
@@ -350,6 +367,9 @@ async function publishViaExecutor({ prisma, row, userId, env, executor }) {
       subdomain: row.subdomain || pipeline.slugifySubdomain(row.name, id),
       cpu: spec.cpu,
       memoryMb: spec.memoryMb,
+      url: result.promoted ? (result.url || row.url) : row.url,
+      databaseConnected: result.promoted ? (result.databaseConnected ?? row.databaseConnected) : row.databaseConnected,
+      databaseProvider: result.promoted ? (result.databaseProvider ?? row.databaseProvider) : row.databaseProvider,
     },
   });
 

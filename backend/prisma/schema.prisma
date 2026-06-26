@@ -2761,7 +2761,7 @@ model AccountingInvoice {
 model AccountingInvoiceLine {
   id          String  @id @default(cuid())
   invoiceId   String
-  productId   String?
+  productId    String?
   code        String?
   description String
   quantity    Decimal @default(1) @db.Decimal(18, 4)

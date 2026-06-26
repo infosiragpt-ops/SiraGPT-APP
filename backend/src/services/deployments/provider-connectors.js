@@ -14,8 +14,13 @@ const PROVIDERS = {
     mode: 'ssh',
     description: 'Deploys to a Hostinger VPS over SSH and can optionally read Hostinger API metadata.',
     requiredEnv: ['HOSTINGER_VPS_HOST', 'HOSTINGER_VPS_USER', 'HOSTINGER_VPS_SSH_PRIVATE_KEY'],
-    optionalEnv: ['HOSTINGER_VPS_PORT', 'HOSTINGER_VPS_APP_PATH', 'HOSTINGER_API_TOKEN', 'HOSTINGER_VPS_ID', 'HOSTINGER_VPS_IPV4'],
-    capabilities: ['ssh_deploy', 'reverse_proxy', 'runtime_logs', 'custom_domain'],
+    optionalEnv: [
+      'HOSTINGER_VPS_PORT', 'HOSTINGER_VPS_APP_PATH', 'HOSTINGER_API_TOKEN', 'HOSTINGER_VPS_ID', 'HOSTINGER_VPS_IPV4',
+      // Full-stack container mode (Docker + Caddy on the VPS):
+      'SIRAGPT_DEPLOY_RUNTIME', 'SIRAGPT_DOCKER_NETWORK', 'SIRAGPT_DB_CONTAINER', 'SIRAGPT_CADDY_CONTAINER',
+      'SIRAGPT_DB_SUPERUSER', 'SIRAGPT_DB_SUPERUSER_PASSWORD', 'PUBLISHED_APPS_DIR', 'CADDY_SNIPPETS_DIR',
+    ],
+    capabilities: ['ssh_deploy', 'reverse_proxy', 'container_deploy', 'database', 'runtime_logs', 'custom_domain'],
     docsUrl: 'https://www.hostinger.com/support/5723772-how-to-connect-to-your-vps-via-ssh-at-hostinger/',
   },
   aws: {

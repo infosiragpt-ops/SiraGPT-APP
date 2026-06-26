@@ -30,6 +30,7 @@ import {
   Power,
   SlidersHorizontal,
   AlertTriangle,
+  Sparkles,
 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -87,7 +88,42 @@ const settingsKey = (p: string | null) => `siragpt:code-publishing:${p || "defau
 function StatusDot({ status }: { status?: string }) {
   const color =
     status === "success" ? "bg-emerald-500" : status === "error" ? "bg-red-500" : status === "uploading" || status === "building" ? "bg-sky-500" : "bg-zinc-400"
-  return <span className={cn("inline-block h-2 w-2 rounded-full", color)} />
+  const pulse = status === "uploading" || status === "building" || status === "queued"
+  return <span className={cn("inline-block h-2 w-2 rounded-full", color, pulse && "animate-pulse")} />
+}
+
+/** Replit-style status pill: colored dot + short hash + label. */
+function StatusPill({ status, hash }: { status?: string; hash?: string }) {
+  const label =
+    status === "success" ? "running" : status === "error" ? "failed" : status === "uploading" ? "uploading" : status === "building" ? "building" : status === "queued" ? "queued" : "sin desplegar"
+  const tone =
+    status === "success"
+      ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+      : status === "error"
+        ? "bg-red-500/10 text-red-600 dark:text-red-400"
+        : status === "uploading" || status === "building" || status === "queued"
+          ? "bg-sky-500/10 text-sky-600 dark:text-sky-400"
+          : "bg-muted text-muted-foreground"
+  return (
+    <span className={cn("inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium", tone)}>
+      <StatusDot status={status} />
+      {hash ? <code className="font-mono text-[11px] opacity-80">{hash.slice(0, 8)}</code> : null}
+      {label}
+    </span>
+  )
+}
+
+/** Compact relative time ("hace 3h"). */
+function relativeTime(iso: string): string {
+  const t = new Date(iso).getTime()
+  if (!Number.isFinite(t)) return ""
+  const s = Math.max(1, Math.floor((Date.now() - t) / 1000))
+  if (s < 60) return `hace ${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `hace ${m}m`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `hace ${h}h`
+  return `hace ${Math.floor(h / 24)}d`
 }
 
 export function RealPublishingPanel({ projectId }: { projectId: string | null }) {
@@ -351,14 +387,23 @@ export function RealPublishingPanel({ projectId }: { projectId: string | null })
           </div>
 
           {/* Production card */}
-          <div className="rounded-lg border border-border">
-            <div className="border-b border-border px-4 py-2 text-sm font-semibold">Production</div>
+          <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+            <div className="flex items-center justify-between border-b border-border bg-muted/30 px-4 py-2.5">
+              <span className="text-sm font-semibold">Production</span>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 gap-1.5 text-xs"
+                disabled={deploying || !connectionId || !settings.targetId}
+                onClick={deploy}
+              >
+                {deploying ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                Republicar
+              </Button>
+            </div>
             <dl className="divide-y divide-border/60 text-sm">
               <Row label="Status">
-                <span className="inline-flex items-center gap-2">
-                  <StatusDot status={liveStatus} />
-                  {liveStatus || "sin desplegar"}
-                </span>
+                <StatusPill status={liveStatus} hash={latest?.id} />
               </Row>
               <Row label="Visibility">
                 <span className="inline-flex items-center gap-1.5">
@@ -400,12 +445,50 @@ export function RealPublishingPanel({ projectId }: { projectId: string | null })
                   {target?.protocol?.toUpperCase()} · {target?.username}@{target?.host}
                 </span>
               </Row>
-              <Row label="Remote path">{settings.remotePath || target?.remoteBaseDir}</Row>
+              <Row label="Remote path">
+                <code className="rounded bg-muted px-1.5 py-0.5 text-xs">{settings.remotePath || target?.remoteBaseDir}</code>
+              </Row>
               <Row label="Last deploy">
-                {latest ? `${latest.status} · ${new Date(latest.createdAt).toLocaleString()}` : "—"}
+                {latest ? (
+                  <span className="inline-flex items-center gap-1.5">
+                    <StatusDot status={latest.status} />
+                    {latest.status} · {relativeTime(latest.createdAt)}
+                  </span>
+                ) : (
+                  "—"
+                )}
               </Row>
             </dl>
           </div>
+
+          {/* Deploy history — Replit-style timeline */}
+          {history.length > 0 && (
+            <div className="space-y-2">
+              <div className="px-1 text-xs font-medium text-muted-foreground">Historial de despliegues</div>
+              <ol className="relative ml-1 space-y-3 border-l border-border pl-4">
+                {history.slice(0, 8).map((d) => (
+                  <li key={d.id} className="relative">
+                    <span
+                      className={cn(
+                        "absolute -left-[21px] top-1 h-2.5 w-2.5 rounded-full ring-2 ring-background",
+                        d.status === "success" ? "bg-emerald-500" : d.status === "error" ? "bg-red-500" : "bg-sky-500",
+                      )}
+                    />
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm">
+                      <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">{d.id.slice(0, 8)}</code>
+                      <span className="text-muted-foreground">{d.status}</span>
+                      <span className="text-xs text-muted-foreground">· {relativeTime(d.createdAt)}</span>
+                      {d.url && (
+                        <a href={d.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-xs text-sky-500 hover:underline">
+                          <ExternalLink className="h-3 w-3" /> abrir
+                        </a>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
 
           {showSettings && (
             <SettingsForm plan={plan} settings={settings} persist={persist} />
@@ -553,7 +636,7 @@ function SettingsForm({
               onClick={() => persist({ ...settings, mode: m })}
               className={cn("rounded px-2 py-1", settings.mode === m ? "bg-foreground text-background" : "text-muted-foreground")}
             >
-              {m === "static" ? "Static (shared)" : "Node (VPS)"}
+              {m === "static" ? "Static (web)" : "Full-stack (Node)"}
             </button>
           ))}
         </div>
@@ -576,21 +659,26 @@ function SettingsForm({
         </div>
       ) : (
         <div className="space-y-2">
-          <div className="rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
-            Node mode (VPS): sube el código fuente y ejecuta install/build/pm2 por SSH. Requiere Node + pm2 en el VPS y
-            un proxy (nginx) hacia el puerto de la app.
+          <div className="space-y-1.5 rounded-md bg-violet-500/10 px-3 py-2 text-xs text-violet-700 dark:text-violet-300">
+            <p>
+              <b>Full-stack:</b> tu app (Node/Next.js) se despliega como un <b>contenedor Docker</b> aislado y Caddy le
+              da dominio + HTTPS automáticamente. Pon tu dominio en la pestaña <b>Domains</b>.
+            </p>
+            <p>
+              <b>Base de datos (híbrida):</b> por defecto se crea una <b>Postgres dedicada</b> y se inyecta{" "}
+              <code className="rounded bg-black/10 px-1 dark:bg-white/10">DATABASE_URL</code> sola. ¿Tu propia DB? Añade{" "}
+              <code className="rounded bg-black/10 px-1 dark:bg-white/10">DATABASE_URL</code> en <b>Build secrets</b> (abajo en Manage) y se usará esa.
+            </p>
+            <p className="opacity-80">No necesitas activar nginx — Caddy enruta el dominio al contenedor.</p>
           </div>
           <div className="grid gap-2 sm:grid-cols-2">
-            <Field label="App name (pm2)">
-              <Input value={settings.appName} onChange={(e) => persist({ ...settings, appName: e.target.value })} placeholder="app" className="h-8 text-sm" />
+            <Field label="App name">
+              <Input value={settings.appName} onChange={(e) => persist({ ...settings, appName: e.target.value })} placeholder="my-app" className="h-8 text-sm" />
             </Field>
-            <Field label="Remote dir">
-              <Input value={settings.remotePath} onChange={(e) => persist({ ...settings, remotePath: e.target.value })} placeholder="/var/www/app" className="h-8 text-sm" />
+            <Field label="App port (PORT)">
+              <Input value={settings.appPort} onChange={(e) => persist({ ...settings, appPort: e.target.value })} placeholder="8080" className="h-8 text-sm" />
             </Field>
           </div>
-          <Field label="Comando remoto (opcional — sobreescribe el por defecto)">
-            <Input value={settings.remoteCommand} onChange={(e) => persist({ ...settings, remoteCommand: e.target.value })} placeholder="cd /var/www/app && npm install && npm run build && pm2 restart app" className="h-8 text-sm" />
-          </Field>
         </div>
       )}
       {/* VPS: auto-configure nginx so the site is served at the domain. */}
@@ -639,6 +727,20 @@ function LogsTab({ lines, deploying, url, status }: { lines: string[]; deploying
     if (q && !l.toLowerCase().includes(q.toLowerCase())) return false
     return true
   })
+  const errorLines = lines.filter((l) => /error|fail|⚠/i.test(l))
+  const askAiToFix = () => {
+    const tail = (errorLines.length ? errorLines : lines).slice(-40).join("\n")
+    const prompt = `Mi despliegue falló. Ayúdame a diagnosticar y arreglarlo paso a paso.\n\nLogs del error:\n\`\`\`\n${tail}\n\`\`\`\n\n¿Cuál es la causa raíz y cómo lo soluciono?`
+    try {
+      window.dispatchEvent(new CustomEvent("siragpt:ask-deploy-help", { detail: { prompt } }))
+    } catch {
+      /* ignore */
+    }
+    navigator.clipboard?.writeText(prompt).then(
+      () => toast.success("Copiado — pégalo en el chat (Agente) para que la IA lo arregle"),
+      () => toast.error("No se pudo copiar"),
+    )
+  }
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2">
@@ -647,6 +749,11 @@ function LogsTab({ lines, deploying, url, status }: { lines: string[]; deploying
           <input type="checkbox" checked={errorsOnly} onChange={(e) => setErrorsOnly(e.target.checked)} />
           Errors only
         </label>
+        {(status === "error" || errorLines.length > 0) && (
+          <Button size="sm" variant="outline" className="h-8 shrink-0 gap-1.5 text-violet-600 hover:text-violet-700" onClick={askAiToFix}>
+            <Sparkles className="h-3.5 w-3.5" /> Arreglar con IA
+          </Button>
+        )}
         {deploying && <Loader2 className="h-4 w-4 animate-spin text-sky-500" />}
       </div>
       {status === "success" && url && (

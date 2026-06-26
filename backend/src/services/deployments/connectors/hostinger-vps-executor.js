@@ -23,6 +23,8 @@
  */
 
 const path = require('path');
+const fs = require('node:fs');
+const { deployNodeContainer, safeSlug } = require('./node-container-executor');
 
 function defaultDeps() {
   return {
@@ -216,9 +218,22 @@ async function deployHostingerVps({ deployment, userId, env = process.env, hostn
     // 4. Static vs Node (full-stack) — decide from the build plan.
     const buildPlan = d.buildService.detectBuildPlan(localPath);
     const appName = String(deployment.subdomain || deployment.name || 'app').replace(/[^A-Za-z0-9_-]/g, '') || 'app';
-    const isStatic = buildPlan.kind === 'static' || buildPlan.framework === 'static';
+    const mode = String(buildEnv.DEPLOY_MODE || '').toLowerCase();
+    const isStatic = mode === 'static' || (mode !== 'container' && mode !== 'node' && (buildPlan.kind === 'static' || buildPlan.framework === 'static'));
     if (isStatic) {
       return await deployStatic({ d, conn, target, localPath, buildPlan, buildEnv, deployment, hostname, push, logs });
+    }
+    // Full-stack Node: container-per-app behind Caddy (opt-in for Docker/Caddy
+    // VPS) vs legacy pm2+nginx. Container mode is enabled when the VPS runtime
+    // is declared (SIRAGPT_DEPLOY_RUNTIME=container|docker or SIRAGPT_DOCKER_NETWORK set).
+    const runtimeIsContainer =
+      /^(container|docker)$/i.test(String(env.SIRAGPT_DEPLOY_RUNTIME || '')) ||
+      Boolean(String(env.SIRAGPT_DOCKER_NETWORK || '').trim());
+    if (runtimeIsContainer) {
+      const slug = safeSlug(deployment);
+      let hasPrismaSchema = false;
+      try { hasPrismaSchema = fs.existsSync(path.join(localPath, 'prisma', 'schema.prisma')); } catch { /* ignore */ }
+      return await deployNodeContainer({ d: { ...d, hasPrismaSchema }, conn, localPath, buildEnv, slug, hostname, deployment, env, push, logs });
     }
     return await deployNode({ d, conn, target, localPath, buildEnv, appName, hostname, push, logs });
   } catch (err) {

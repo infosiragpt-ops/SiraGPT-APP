@@ -21,6 +21,7 @@ const sshExec = require('./ssh-exec');
 const nginx = require('./nginx.service');
 const { verifyUrl, normalizeDomain } = require('./domain');
 const { assertSafeRemoteHost, assertSafeRemotePath } = require('./safety');
+const { deployNodeContainer, safeSlug } = require('../deployments/connectors/node-container-executor');
 
 const LOG_MAX = 400;
 // Retain a terminal job briefly so late SSE subscribers / status polls still see
@@ -270,7 +271,61 @@ async function _run(job, { localPath, target, config }) {
   await _finish(job, target);
 }
 
+/** Container runtime is opt-in for the Docker/Caddy VPS. */
+function containerRuntimeEnabled() {
+  return /^(container|docker)$/i.test(String(process.env.SIRAGPT_DEPLOY_RUNTIME || '')) ||
+    Boolean(String(process.env.SIRAGPT_DOCKER_NETWORK || '').trim());
+}
+
+/**
+ * Full-stack Node deploy as a Docker container behind Caddy (Docker/Caddy VPS).
+ * Delegates to the shared, tested deployNodeContainer; maps its result onto the
+ * hosting job status. Hybrid DB (auto Postgres unless DATABASE_URL is a secret).
+ */
+async function _runNodeContainer(job, { localPath, target, config, buildEnv }) {
+  setStatus(job, 'building');
+  const conn = {
+    host: target.host,
+    port: target.port,
+    username: target.username,
+    password: target.password,
+    privateKey: target.privateKey,
+    passphrase: target.passphrase,
+  };
+  const slug = safeSlug({ name: config.appName || config.domain || 'app' });
+  let hasPrismaSchema = false;
+  try { hasPrismaSchema = require('fs').existsSync(path.join(localPath, 'prisma', 'schema.prisma')); } catch { /* ignore */ }
+  const deployment = {
+    id: job.id,
+    name: config.appName || 'app',
+    subdomain: slug,
+    externalPort: Number(config.appPort) || 8080,
+    connectedRepositoryId: job.connectionId || null,
+  };
+  const result = await deployNodeContainer({
+    d: { sshExec, sftp, friendlyError, hasPrismaSchema },
+    conn,
+    localPath,
+    buildEnv,
+    slug,
+    hostname: config.domain || null,
+    deployment,
+    env: process.env,
+    push: (l) => pushLog(job, l),
+    logs: [],
+  });
+  if (job.cancelled) return;
+  if (!result.promoted) throw new Error(result.failureMessage || 'deploy fallido');
+  setStatus(job, 'success', { url: result.url || target.siteUrl || null, finishedAt: new Date().toISOString() });
+  pushLog(job, '[deploy] ✓ completado' + (result.url ? ` — ${result.url}` : ''));
+}
+
 async function _runNode(job, { localPath, target, config, buildEnv }) {
+  // Docker/Caddy VPS → run as a container behind Caddy (full-stack + hybrid DB).
+  if (containerRuntimeEnabled()) {
+    return _runNodeContainer(job, { localPath, target, config, buildEnv });
+  }
+  // ── Legacy pm2 + nginx path (bare VPS without Docker/Caddy) ──
   // 1. Upload source (no node_modules / .git / build output) over SFTP.
   setStatus(job, 'uploading');
   const remoteDir = config.remotePath || target.remoteBaseDir || '/var/www/app';

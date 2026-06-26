@@ -44,4 +44,42 @@ function isDomainAllowed(domain, { env = process.env, fsImpl = fs } = {}) {
   }
 }
 
-module.exports = { isDomainAllowed, publishedSitesDir, PUBLISH_DOMAIN_RE };
+/**
+ * Look up whether `domain` is bound to a RUNNING full-stack Node-app deployment
+ * (container behind Caddy). Used so Caddy issues certs for Node-app domains
+ * that have no static `index.html` folder. Best-effort: returns false on any
+ * error (no cert) rather than throwing.
+ */
+async function defaultLookupNodeDomain(domain) {
+  let prisma;
+  try {
+    prisma = require('../../config/database');
+  } catch {
+    return false;
+  }
+  if (!prisma || !prisma.deploymentDomain || !prisma.deployment) return false;
+  const dom = await prisma.deploymentDomain.findFirst({ where: { hostname: domain } });
+  if (!dom) return false;
+  const dep = await prisma.deployment.findFirst({
+    where: { id: dom.deploymentId, deletedAt: null, status: 'running', deploymentType: 'hostinger_vps' },
+  });
+  return Boolean(dep);
+}
+
+/**
+ * Async gate used by the Caddy on-demand-TLS endpoint: allow a domain that has
+ * EITHER a deployed static site (fast-path, filesystem) OR a running Node-app
+ * deployment (DB lookup). `lookupNodeDomain` is injectable for offline tests.
+ */
+async function isDomainAllowedAsync(domain, { env = process.env, fsImpl = fs, lookupNodeDomain = defaultLookupNodeDomain } = {}) {
+  const d = String(domain || '').trim().toLowerCase();
+  if (!d || d.length > 253 || d.includes('..') || !PUBLISH_DOMAIN_RE.test(d)) return false;
+  if (isDomainAllowed(d, { env, fsImpl })) return true; // static fast-path (no DB)
+  try {
+    return Boolean(await lookupNodeDomain(d));
+  } catch {
+    return false;
+  }
+}
+
+module.exports = { isDomainAllowed, isDomainAllowedAsync, defaultLookupNodeDomain, publishedSitesDir, PUBLISH_DOMAIN_RE };

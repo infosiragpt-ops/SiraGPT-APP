@@ -33,7 +33,7 @@ const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const { isDeploymentsEnabled } = require('../services/deployments/flags');
 const service = require('../services/deployments/deployment-service');
-const { isDomainAllowed } = require('../services/deployments/domain-allow');
+const { isDomainAllowedAsync } = require('../services/deployments/domain-allow');
 
 const router = express.Router();
 
@@ -137,11 +137,16 @@ router.get('/health', (_req, res) => {
 
 // Caddy on-demand TLS gate — PUBLIC, no auth, NOT flag-gated (Caddy can't send
 // a bearer token, and certs must work even with DEPLOYMENTS_V2 off). Caddy
-// calls GET /domain-allow?domain=<host>; we reply 200 only when that domain has
-// a deployed site under PUBLISHED_SITES_DIR (host: /var/www/published-sites),
-// which is fully isolated from the SiraGPT app.
-router.get('/domain-allow', (req, res) => {
-  const allowed = isDomainAllowed(req.query && req.query.domain);
+// calls GET /domain-allow?domain=<host>; we reply 200 when that domain has a
+// deployed static site under PUBLISHED_SITES_DIR OR a running full-stack
+// Node-app deployment — both fully isolated from the SiraGPT app.
+router.get('/domain-allow', async (req, res) => {
+  let allowed = false;
+  try {
+    allowed = await isDomainAllowedAsync(req.query && req.query.domain);
+  } catch {
+    allowed = false;
+  }
   return res.status(allowed ? 200 : 403).type('text/plain').send(allowed ? 'ok' : 'denied');
 });
 

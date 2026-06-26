@@ -32,6 +32,13 @@ api.siragpt.com {
 	reverse_proxy backend:5000
 }
 
+# ── User-published full-stack Node apps (one site block per domain) ─────
+# Each container deploy drops a <domain>.caddy snippet here (reverse_proxy to
+# the app's container). These are EXPLICIT host matchers, so they win over the
+# static https:// catch-all below — a Node-app domain bypasses /srv/sites.
+# Safe: a malformed snippet is rejected by `caddy validate` before reload.
+import /etc/caddy/apps/*.caddy
+
 # ── User-published custom domains (e.g. chatgpt66.com) ──────────────────
 # Any domain NOT matched above. Auto HTTPS via on-demand TLS (gated by
 # /api/deployments/domain-allow). Serves the deployed static site from
