@@ -84,6 +84,11 @@ async function ingestPastedContent(userId, content, opts = {}) {
   const detected = detectContentType(content);
   const fileName = opts.fileName || generateAutoFileName(content, detected);
   const sizeBytes = Buffer.byteLength(content, 'utf8');
+  // Compute once: `content` is never reassigned, so the split() result is
+  // identical at both use sites (DB metadata + response). Avoids a second
+  // full-string split + array allocation on the auto-file hot path (content
+  // can be up to MAX_PASTE_LENGTH = 2 MB).
+  const lineCount = content.split('\n').length;
 
   try {
     const fileRecord = await prisma.file.create({
@@ -103,7 +108,7 @@ async function ingestPastedContent(userId, content, opts = {}) {
           autoFiled: true,
           detectedFormat: detected.format,
           charCount: content.length,
-          lineCount: content.split('\n').length,
+          lineCount,
           createdAt: new Date().toISOString(),
         },
       },
@@ -137,7 +142,13 @@ async function ingestPastedContent(userId, content, opts = {}) {
       },
     });
 
-    scheduleAutoFileRagIndex(userId, fileRecord, content);
+    // The background indexer (when scheduled) owns the terminal 'ready'
+    // transition, advancing chunking→embedding→indexing→ready. Setting 'ready'
+    // here in the foreground would race that setImmediate callback and make the
+    // stage regress terminal→non-terminal (a poller watching isTerminal would
+    // stop early). Mirror scheduleDefaultRagIndex: only finalize here when no
+    // background work was scheduled (empty docs — unreachable for pasted text).
+    const indexScheduled = scheduleAutoFileRagIndex(userId, fileRecord, content);
 
     let intentAnalysis = null;
     try {
@@ -149,10 +160,13 @@ async function ingestPastedContent(userId, content, opts = {}) {
         size: sizeBytes,
       });
     } catch (_e) {
+      console.warn('[auto-file-bridge] intent analysis failed (continuing without):', _e && _e.message);
       intentAnalysis = null;
     }
 
-    await fileProcessingStatus.setStage(prisma, fileRecord.id, 'ready', { userId });
+    if (!indexScheduled) {
+      await fileProcessingStatus.setStage(prisma, fileRecord.id, 'ready', { userId });
+    }
 
     return {
       autoFiled: true,
@@ -162,7 +176,7 @@ async function ingestPastedContent(userId, content, opts = {}) {
       mime: detected.mime,
       sizeBytes,
       charCount: content.length,
-      lineCount: content.split('\n').length,
+      lineCount,
       analysis: {
         language: analysis.language,
         chunkCount: analysis.chunks?.length || 0,
@@ -171,6 +185,10 @@ async function ingestPastedContent(userId, content, opts = {}) {
       intent: intentAnalysis,
     };
   } catch (err) {
+    // Surface total ingestion failure (DB create/update, analyzeFile, setStage):
+    // the caller only sees autoFiled:false and silently skips the auto-filed
+    // prompt block, so without this a regression here is invisible in prod logs.
+    console.warn('[auto-file-bridge] ingestPastedContent failed:', err && err.message);
     return {
       autoFiled: false,
       reason: 'ingestion_failed',
@@ -179,12 +197,15 @@ async function ingestPastedContent(userId, content, opts = {}) {
   }
 }
 
+// Returns true when a background indexer was scheduled (it then owns the
+// terminal 'ready' stage transition); false when there were no indexable docs,
+// in which case the caller is responsible for finalizing the stage.
 function scheduleAutoFileRagIndex(userId, fileRecord, text) {
   const docs = operationalRag.normaliseDocs([{
     ...fileRecord,
     extractedText: text,
   }]);
-  if (docs.length === 0) return;
+  if (docs.length === 0) return false;
 
   setImmediate(async () => {
     try {
@@ -202,6 +223,7 @@ function scheduleAutoFileRagIndex(userId, fileRecord, text) {
       console.warn('[auto-file-bridge] RAG indexing failed:', err.message);
     }
   });
+  return true;
 }
 
 async function ingestDroppedFiles(userId, files, opts = {}) {

@@ -375,13 +375,8 @@ class FileProcessor {
     const streamingMod = getStreamingPdf();
     if (streamingMod) {
       try {
-        // Determine file size to decide if memory-safe path needed
-        let fileSize = 0;
-        try {
-          const stat = await require('fs').promises.stat(filePath);
-          fileSize = stat.size;
-        } catch {}
-
+        // (The memory-safe decision is made earlier in processFile() from the
+        // multer-provided size; no per-extraction fs.stat is needed here.)
         const streamingResult = await streamingMod.extractPdfStreaming(filePath, {
           maxRssMb: Number.parseInt(process.env.SIRAGPT_STREAM_MAX_RSS_MB || '1200', 10),
           collectText: true,
@@ -558,7 +553,11 @@ class FileProcessor {
       try {
         const fallback = await mammoth.extractRawText({ path: filePath });
         return fallback.value;
-      } catch {
+      } catch (fallbackErr) {
+        // Log the fallback's distinct failure reason (often a different jszip
+        // corruption signature) before rethrowing with the original message —
+        // the thrown error and control flow are unchanged.
+        console.warn(`[fileProcessor] Word raw-text fallback also failed for ${filePath}:`, fallbackErr && fallbackErr.message || fallbackErr);
         throw new Error(`Word document processing failed: ${conciseMessage}`);
       }
     }

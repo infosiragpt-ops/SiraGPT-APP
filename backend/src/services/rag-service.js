@@ -415,9 +415,6 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
     };
   });
   scored.sort((a, b) => b.score - a.score);
-  scored.forEach((s, rank) => {
-    s.semanticRank = rank + 1;
-  });
 
   let pool;
 
@@ -486,6 +483,13 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
       // see a unified metric.
       .map(e => ({ ...e, score: e.fusedScore, fusionScore: e.fusedScore }));
   } else {
+    // semanticRank is only consumed in the non-hybrid path (surfaced via
+    // formatRetrievalHit diagnostics); the hybrid branch sets it on its own
+    // fused objects, so assigning it here avoids a redundant O(N) pass over
+    // all chunks in that path. `scored` is still sorted desc from above.
+    scored.forEach((s, rank) => {
+      s.semanticRank = rank + 1;
+    });
     pool = scored.slice(0, Math.max(1, cappedPool));
   }
 

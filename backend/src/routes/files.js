@@ -69,7 +69,14 @@ function enforceOrgRateLimitSafe(req, res, next) {
 
 // Initialize OpenAI client
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
+  apiKey: process.env.OPENAI_API_KEY,
+  // Bound time-to-first-headers so a hung OpenAI upstream can't stall a
+  // summary/cite/decompose/deep-ask handler for the SDK's 10-minute default
+  // (×2 retries). 120s is far above any healthy latency for these calls, so it
+  // never fires on the happy path; per-call overrides (e.g. the Files-upload
+  // create) still win. Mirrors rag-service.js's _embedClientOptions pattern.
+  timeout: Number.parseInt(process.env.SIRAGPT_FILES_OPENAI_TIMEOUT_MS || '120000', 10),
+  maxRetries: Number.parseInt(process.env.SIRAGPT_FILES_OPENAI_MAX_RETRIES || '2', 10),
 });
 
 // `file-type` v22 is ESM-only; we use a dynamic import wrapped in a
@@ -391,7 +398,11 @@ async function processFilesInParallel(files, userId, prismaClient) {
           if (integrity.issues.length > 0) {
             console.warn(`[files] integrity warnings for ${file.originalname}:`, integrity.issues.map(i => i.message).join('; '));
           }
-        } catch { /* integrity validation is best-effort */ }
+        } catch (integrityErr) {
+          // Best-effort: still continue to extraction, but surface that the
+          // integrity step (empty-file rejection + warnings) was skipped.
+          console.warn(`[files] integrity validation step failed (best-effort), continuing for ${file.originalname}:`, integrityErr && integrityErr.message || integrityErr);
+        }
 
         // ── Extract text (BEST-EFFORT) ──
         // A parser failure must NEVER fail the upload. The binary is already
@@ -540,7 +551,11 @@ async function processFileAfterFastUpload(file, userId, prismaClient, fileRecord
       if (integrity.issues.length > 0) {
         console.warn(`[files] integrity warnings for ${file.originalname}:`, integrity.issues.map(i => i.message).join('; '));
       }
-    } catch { /* integrity validation is best-effort */ }
+    } catch (integrityErr) {
+      // Best-effort (async/fast-upload path): continue to extraction, but
+      // surface that the integrity step was skipped.
+      console.warn(`[files] async integrity validation step failed (best-effort), continuing for ${file.originalname}:`, integrityErr && integrityErr.message || integrityErr);
+    }
 
     await fileProcessingStatus.setStage(prismaClient, fileRecord.id, 'extracting', { userId });
     // Best-effort extraction: a parser failure must not flip the file to
@@ -569,7 +584,9 @@ async function processFileAfterFastUpload(file, userId, prismaClient, fileRecord
 
     scheduleDefaultRagIndex(userId, fileRecord);
     try {
-      await documentIntelligence.analyzeFile(prismaClient, { userId, fileRecord, extractionResult: result, force: true });
+      // Bound analyzeFile with the same budget the synchronous path uses, so a
+      // hung analysis can't leave the R2 offload + path update below unrun.
+      await withTimeout(documentIntelligence.analyzeFile(prismaClient, { userId, fileRecord, extractionResult: result, force: true }), ANALYZE_TIMEOUT_MS, `document analysis (${file.originalname})`);
     } catch (analysisError) { console.warn('[files] document analysis failed:', analysisError.message || analysisError); }
 
     // Offload binary (+ thumbnail) to R2 after extraction + analysis.
@@ -1132,6 +1149,10 @@ router.get('/:id/render', authenticateToken, async (req, res) => {
       res.setHeader('X-Render-Engine', 'native-pdf');
       res.setHeader('X-Render-From-Cache', 'true');
       const { stream } = await objectStorage.readStream(file.path);
+      // Release the underlying fd/socket if the client aborts mid-download:
+      // stream.pipe does not destroy the source on destination close. On a
+      // normal finish, 'close' fires after writableEnded → destroy is skipped.
+      res.on('close', () => { if (!res.writableEnded) stream.destroy(); });
       return pipeStreamToResponse(stream, res, 'native-pdf');
     }
 
@@ -1174,7 +1195,11 @@ router.get('/:id/render', authenticateToken, async (req, res) => {
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', contentDispositionHeader('inline', renderPdfFilename(file.originalName)));
     res.setHeader('Cache-Control', 'private, max-age=86400');
-    pipeStreamToResponse(fsSync.createReadStream(pdfPath), res, 'rendered-pdf');
+    const renderedStream = fsSync.createReadStream(pdfPath);
+    // Release the fd if the client aborts mid-download (pipe leaves the source
+    // open on destination close). No-op on a normal finish (writableEnded).
+    res.on('close', () => { if (!res.writableEnded) renderedStream.destroy(); });
+    pipeStreamToResponse(renderedStream, res, 'rendered-pdf');
   } catch (error) {
     console.error('Render route error:', error);
     res.status(500).json({ error: 'Failed to render document' });
