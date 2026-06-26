@@ -1,6 +1,9 @@
 const fs = require('fs');
 const objectStorage = require('./object-storage');
+const os = require('os');
 const path = require('path');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
 const PizZip = require('pizzip');
 const ExcelJS = require('exceljs');
 const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
@@ -20,6 +23,7 @@ const {
 } = require('./document-pipeline/content/llm-client');
 
 const BACKEND_ROOT = path.resolve(__dirname, '..', '..');
+const execFileAsync = promisify(execFile);
 
 function normalizeText(value) {
   return String(value || '')
@@ -2569,6 +2573,96 @@ async function appendToPdfBuffer(buffer, blocks) {
   return Buffer.from(await pdf.save());
 }
 
+async function buildPdfFromPlainText({ title = 'Documento editado', text = '' } = {}) {
+  const pdf = await PDFDocument.create();
+  let page = pdf.addPage([612, 792]);
+  let { width, height } = page.getSize();
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  const boldFont = await pdf.embedFont(StandardFonts.HelveticaBold);
+  const margin = 54;
+  let y = height - margin;
+  let maxWidth = width - (margin * 2);
+
+  const addPageIfNeeded = () => {
+    if (y >= margin) return;
+    page = pdf.addPage([612, 792]);
+    ({ width, height } = page.getSize());
+    maxWidth = width - (margin * 2);
+    y = height - margin;
+  };
+  const drawWrapped = (value, currentFont, fontSize, lineHeight) => {
+    const lines = wrapPdfText(value, currentFont, fontSize, maxWidth);
+    for (const line of lines) {
+      addPageIfNeeded();
+      page.drawText(line || ' ', { x: margin, y, size: fontSize, font: currentFont, color: rgb(0.08, 0.1, 0.14) });
+      y -= line ? lineHeight : Math.ceil(lineHeight / 2);
+    }
+  };
+
+  drawWrapped(String(title || 'Documento editado').slice(0, 180), boldFont, 15, 20);
+  y -= 8;
+  for (const paragraph of String(text || '').split(/\n{2,}/)) {
+    drawWrapped(paragraph, font, 10.5, 14);
+    y -= 6;
+  }
+  return Buffer.from(await pdf.save());
+}
+
+async function extractTextFromPdfBuffer(buffer) {
+  const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'siragpt-pdf-text-'));
+  const pdfPath = path.join(tmp, 'input.pdf');
+  const txtPath = path.join(tmp, 'output.txt');
+  try {
+    await fs.promises.writeFile(pdfPath, buffer);
+    await execFileAsync('pdftotext', [pdfPath, txtPath], { timeout: 20_000, maxBuffer: 20 * 1024 * 1024 });
+    return await fs.promises.readFile(txtPath, 'utf8');
+  } catch {
+    return '';
+  } finally {
+    fs.promises.rm(tmp, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function executePdfOperations({ input, requestText, sourceText, blocks, sourceFile } = {}) {
+  const ops = planGenericOfficeOperations({ requestText, format: 'pdf' });
+  const textEditOps = ops.filter((op) => op.kind === 'replace_text' || op.kind === 'delete_text');
+  if (textEditOps.length === 0) {
+    return {
+      buffer: await appendToPdfBuffer(input, blocks),
+      steps: [{ kind: 'append_generic', mode: 'pdf_append_page' }],
+      validationBlocks: blocks,
+      ops,
+    };
+  }
+
+  let text = String(sourceFile?.extractedText || sourceText || '').trim();
+  if (!text) text = (await extractTextFromPdfBuffer(input)).trim();
+  let edited = text;
+  const steps = [];
+  const validationBlocks = [];
+  for (const op of textEditOps) {
+    const changedCount = countNeedleMatches(edited, op.needle);
+    if (op.kind === 'replace_text') {
+      edited = replaceNeedleText(edited, op.needle, op.replacement);
+      validationBlocks.push(block('normal', op.replacement));
+      steps.push({ kind: 'replace_text', mode: 'pdf_text_rewrite', changedCount });
+    } else {
+      edited = replaceNeedleText(edited, op.needle, '');
+      steps.push({ kind: 'delete_text', mode: 'pdf_text_rewrite', removedCount: changedCount });
+    }
+  }
+
+  return {
+    buffer: await buildPdfFromPlainText({
+      title: `${sourceFile?.originalName || sourceFile?.filename || 'PDF'} editado`,
+      text: edited,
+    }),
+    steps,
+    validationBlocks: validationBlocks.length ? validationBlocks : blocks,
+    ops: textEditOps,
+  };
+}
+
 async function persistEditedArtifact({
   buffer,
   format,
@@ -2784,6 +2878,7 @@ async function extractVisibleTextForFormat(buffer, format) {
     if (format === 'docx') return extractDocxTextFromBuffer(buffer);
     if (format === 'xlsx') return extractTextFromXlsxBuffer(buffer);
     if (format === 'pptx') return extractTextFromPptxBuffer(buffer);
+    if (format === 'pdf') return await extractTextFromPdfBuffer(buffer);
     if (TEXT_LIKE_EXTENSIONS.has(format)) return buffer.toString('utf8');
   } catch {
     return '';
@@ -4185,8 +4280,33 @@ async function generateSourcePreservingDocumentEdit({
         : 'Listo. Conservé el PPTX original y apliqué la edición solicitada sin reconstruir la presentación completa.';
     } else if (isPdfFile(sourceFile)) {
       format = 'pdf';
-      output = await appendToPdfBuffer(input, blocks);
-      content = 'Listo. Conservé el PDF original y agregué el contenido solicitado al final, sin reemplazar las páginas existentes.';
+      const execution = await executePdfOperations({
+        input,
+        requestText,
+        sourceText,
+        blocks,
+        sourceFile,
+      });
+      output = execution.buffer;
+      validationBlocks = execution.validationBlocks;
+      operations = execution.ops;
+      orchestration = buildDocumentOrchestrationPlan({
+        requestText,
+        sourceFile,
+        referenceFiles,
+        operations,
+        selectionReason,
+      });
+      const stepSummary = joinSpanishList(execution.steps.map(describeStep));
+      const onlyAppend = execution.steps.every((step) => step.kind === 'append_generic');
+      suffix = onlyAppend ? 'con_anexos' : 'editado';
+      titleSuffix = onlyAppend ? 'con anexos' : 'editado';
+      explanation = stepSummary
+        ? `Se conservó el contenido del PDF original; ${stepSummary}.`
+        : 'Se conservó el contenido del PDF original y se aplicó la edición solicitada.';
+      content = stepSummary
+        ? `Listo. Conservé el contenido completo del PDF original y ${stepSummary}.`
+        : 'Listo. Conservé el contenido completo del PDF original y apliqué la edición solicitada.';
     } else if (isTextLikeFile(sourceFile)) {
       format = textLikeFormatForFile(sourceFile) || 'txt';
       const execution = executeTextLikeOperations({ input, requestText, format, blocks });

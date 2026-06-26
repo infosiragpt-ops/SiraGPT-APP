@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const { describe, it } = require('node:test');
+const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -7,6 +8,7 @@ const { Document, Packer, Paragraph, TextRun, AlignmentType, Table, TableRow, Ta
 const ExcelJS = require('exceljs');
 const PptxGenJS = require('pptxgenjs');
 const PizZip = require('pizzip');
+const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
 
 const {
   appendToDocxBuffer,
@@ -35,6 +37,37 @@ async function makeDocxBuffer() {
     }],
   });
   return Buffer.from(await Packer.toBuffer(doc));
+}
+
+function hasPdfToText() {
+  try {
+    execFileSync('pdftotext', ['-v'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function makePdfBuffer() {
+  const pdf = await PDFDocument.create();
+  const page = pdf.addPage([612, 792]);
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  page.drawText('SiraGPT banco real PDF', { x: 72, y: 720, size: 16, font, color: rgb(0, 0, 0) });
+  page.drawText('Estado: BORRADOR', { x: 72, y: 690, size: 14, font, color: rgb(0, 0, 0) });
+  return Buffer.from(await pdf.save());
+}
+
+function extractPdfTextForTest(buffer) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-pdf-text-'));
+  const pdfPath = path.join(tmp, 'input.pdf');
+  const txtPath = path.join(tmp, 'output.txt');
+  try {
+    fs.writeFileSync(pdfPath, buffer);
+    execFileSync('pdftotext', [pdfPath, txtPath]);
+    return fs.readFileSync(txtPath, 'utf8');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 async function makeDocxWithAnexo3Buffer() {
@@ -1573,6 +1606,36 @@ describe('source-preserving Office edit — generic XLSX/PPTX operations', () =>
     assert.match(text, /Título nuevo/);
     assert.doesNotMatch(text, /Título viejo/);
     assert.match(text, /matriz de riesgos/i);
+  });
+
+  it('rewrites PDF text for explicit replacement requests instead of only appending', { skip: hasPdfToText() ? false : 'pdftotext unavailable' }, async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-pdf-generic-'));
+    const originalPath = path.join(tmp, 'estado.pdf');
+    fs.writeFileSync(originalPath, await makePdfBuffer());
+
+    const result = await generateSourcePreservingDocumentEdit({
+      sourceFile: {
+        id: 'file-pdf',
+        path: originalPath,
+        originalName: 'estado.pdf',
+        filename: 'estado.pdf',
+        mimeType: 'application/pdf',
+        extractedText: 'SiraGPT banco real PDF\nEstado: BORRADOR',
+      },
+      prompt: 'reemplaza BORRADOR por APROBADO en este PDF y devuelve el PDF editado',
+      displayPrompt: 'reemplaza BORRADOR por APROBADO en este PDF y devuelve el PDF editado',
+      userId: 'user-office',
+      chatId: 'chat-office',
+    });
+
+    assert.equal(result.format, 'pdf');
+    assert.equal(result.validation.passed, true);
+    assert.equal(result.validation.checks.operation_criteria, true);
+    assert.equal(result.orchestration.operations.some((op) => op.kind === 'replace_text'), true);
+
+    const text = extractPdfTextForTest(fs.readFileSync(result.artifact.path));
+    assert.match(text, /APROBADO/);
+    assert.doesNotMatch(text, /BORRADOR/);
   });
 
   it('replaces and deletes PPTX slide text without rebuilding the deck', async () => {
