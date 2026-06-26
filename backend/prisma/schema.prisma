@@ -125,6 +125,9 @@ model User {
   apiUsages               ApiUsage[]
   sessions                Session[]
   files                   File[]
+  documentCollections     DocumentCollection[]
+  collectionDocuments     CollectionDocument[]
+  documentCollectionChunks DocumentCollectionChunk[]
   createdGpts             CustomGpt[]
   projects                Project[]
   designs                 DesignProject[]
@@ -943,6 +946,8 @@ model File {
   user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   documentAnalysis DocumentAnalysis?
   documentChunks   DocumentChunk[]
+  collectionDocuments CollectionDocument[]
+  collectionChunks    DocumentCollectionChunk[]
   documentTables   DocumentTable[]
   documentNodes    DocumentNode[]
 
@@ -1021,6 +1026,71 @@ model DocumentChunk {
   @@index([analysisId, ordinal])
   @@index([fileId, ordinal])
   @@map("document_chunks")
+}
+
+model DocumentCollection {
+  id          String   @id @default(cuid())
+  ownerId     String   @map("owner_id")
+  name        String
+  description String?  @db.Text
+  status      String   @default("ready")
+  docCount    Int      @default(0) @map("doc_count")
+  chunkCount  Int      @default(0) @map("chunk_count")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  owner     User                      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  documents CollectionDocument[]
+  chunks    DocumentCollectionChunk[]
+
+  @@index([ownerId, createdAt])
+  @@map("document_collections")
+}
+
+model CollectionDocument {
+  id           String   @id @default(cuid())
+  collectionId String   @map("collection_id")
+  documentId   String   @map("document_id")
+  ownerId      String   @map("owner_id")
+  status       String   @default("queued")
+  chunkCount   Int      @default(0) @map("chunk_count")
+  lastError    String?  @map("last_error") @db.Text
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  collection DocumentCollection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  document   File               @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  owner      User               @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@unique([collectionId, documentId])
+  @@index([ownerId, status])
+  @@index([documentId])
+  @@map("collection_documents")
+}
+
+model DocumentCollectionChunk {
+  id           String                 @id @default(cuid())
+  collectionId String                 @map("collection_id")
+  documentId   String                 @map("document_id")
+  ownerId      String                 @map("owner_id")
+  content      String                 @db.Text
+  embedding    Unsupported("vector")?
+  page         Int?
+  offset       Int?
+  tokenCount   Int                    @default(0) @map("token_count")
+  contentHash  String                 @map("content_hash")
+  metadata     Json?
+  createdAt    DateTime               @default(now()) @map("created_at")
+
+  collection DocumentCollection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  document   File               @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  owner      User               @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@unique([collectionId, documentId, contentHash])
+  @@index([collectionId, contentHash])
+  @@index([ownerId, collectionId])
+  @@index([documentId])
+  @@map("document_collection_chunks")
 }
 
 model DocumentTable {
