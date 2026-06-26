@@ -1074,7 +1074,6 @@ model DocumentCollectionChunk {
   documentId   String                 @map("document_id")
   ownerId      String                 @map("owner_id")
   content      String                 @db.Text
-  embedding    Unsupported("vector")?
   page         Int?
   offset       Int?
   tokenCount   Int                    @default(0) @map("token_count")
