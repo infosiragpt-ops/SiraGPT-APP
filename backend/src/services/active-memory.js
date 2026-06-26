@@ -283,8 +283,16 @@ function listEntries(userId, opts = {}) {
 }
 
 function getMemoryContext(userId, opts = {}) {
-  const longTermCount = [...store.values()].filter(e => e.userId === userId && e.tier === 'long_term').length;
-  const shortTermCount = [...store.values()].filter(e => e.userId === userId && e.tier === 'short_term').length;
+  // Count both tiers in a single pass over the store instead of two full
+  // spread+filter materializations (this runs every chat turn). Same semantics
+  // as the original .filter()s: by userId, by tier, no expiry filter, no limit.
+  let longTermCount = 0;
+  let shortTermCount = 0;
+  for (const e of store.values()) {
+    if (e.userId !== userId) continue;
+    if (e.tier === 'long_term') longTermCount += 1;
+    else if (e.tier === 'short_term') shortTermCount += 1;
+  }
 
   // Read-only prompt assembly: do NOT bump accessCount (this runs every turn).
   const recentMemories = recall(userId, null, { limit: opts.limit || 20, bump: false });

@@ -109,7 +109,8 @@ const PREFETCH_PENDING = Symbol('prefetch_pending');
  * returning a Map<call.id, dispatchResult | {__pending: Promise}>. Mutating
  * calls are skipped here (they run inline, sequentially, in the main loop).
  * Bounded by TOOL_PARALLEL_MAX; each batch waits at most
- * PREFETCH_CALL_TIMEOUT_MS for stragglers (partial results, never a stall).
+ * prefetchCallTimeoutMs() (env SIRAGPT_TOOL_PREFETCH_TIMEOUT_MS, default 8000)
+ * for stragglers (partial results, never a stall).
  */
 async function prefetchParallelDispatch(registry, toolCalls, ctx, exhaustedTools) {
   const out = new Map();
@@ -590,7 +591,10 @@ function compactMessages(messages, opts = {}) {
     ? Math.floor(opts.tailRounds)
     : DEFAULT_COMPACT_TAIL_ROUNDS;
 
-  if (estimateMessagesChars(messages) <= maxChars) return messages;
+  // Stringifying the whole trace is expensive (JSON.stringify per message);
+  // compute it once and reuse for the post-compaction comparison below.
+  const originalChars = estimateMessagesChars(messages);
+  if (originalChars <= maxChars) return messages;
 
   // Head: leading non-assistant messages (system + first user query).
   let headEnd = 0;
@@ -631,7 +635,7 @@ function compactMessages(messages, opts = {}) {
 
   const compacted = head.concat([summaryMessage], ...tail);
   // Only adopt the compacted form if it genuinely shrinks the payload.
-  if (estimateMessagesChars(compacted) >= estimateMessagesChars(messages)) return messages;
+  if (estimateMessagesChars(compacted) >= originalChars) return messages;
   return compacted;
 }
 

@@ -34,6 +34,11 @@ const LIVE_THRESHOLD = Number(process.env.SIRAGPT_SALIENCY_LIVE_THRESHOLD) || 0.
 const FADING_THRESHOLD = Number(process.env.SIRAGPT_SALIENCY_FADING_THRESHOLD) || 0.15;
 const MAX_FEATURES_PER_CHAT = Number(process.env.SIRAGPT_SALIENCY_MAX_FEATURES) || 64;
 const DEAD_AGE_MS = Number(process.env.SIRAGPT_SALIENCY_DEAD_AGE_MS) || 6 * 60 * 60 * 1000;
+// Hard cap on the number of tracked chats so the outer Map can't grow without
+// bound over the process lifetime (ageOut() is never called in runtime). 5000 ≫
+// concurrent active chats, so the LRU victim is always long-idle. Mirrors the
+// FIFO/LRU cap already used in permission-manager.js / react-agent's caches.
+const MAX_TRACKED_CHATS = Math.max(256, Number(process.env.SIRAGPT_SALIENCY_MAX_CHATS) || 5000);
 
 const trackerState = new Map();
 
@@ -51,7 +56,22 @@ const clamp01 = (v) => Math.max(0, Math.min(1, Number(v) || 0));
 function getOrCreateChat(userId, chatId) {
   const k = keyFor(userId, chatId);
   let map = trackerState.get(k);
-  if (!map) { map = new Map(); trackerState.set(k, map); }
+  if (map) {
+    // Refresh recency: re-insert so Map iteration order tracks LRU.
+    trackerState.delete(k);
+    trackerState.set(k, map);
+    return map;
+  }
+  // Evict the least-recently-used chat before inserting a new one. The victim is
+  // always long-idle (5000 ≫ active chats); at the 30-min half-life / 6h dead-age
+  // its features would already be excluded from the live-only saliency block, so
+  // the visible prompt/answer is unchanged. A re-touched chat just re-seeds.
+  if (trackerState.size >= MAX_TRACKED_CHATS) {
+    const oldest = trackerState.keys().next().value;
+    if (oldest !== undefined) trackerState.delete(oldest);
+  }
+  map = new Map();
+  trackerState.set(k, map);
   return map;
 }
 

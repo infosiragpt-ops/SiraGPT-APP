@@ -1738,10 +1738,13 @@ router.post(
         const activeTurn = activeGenerateTurns.get(activeGenerateTurnKey);
         if (activeTurn) {
           try {
+            let dupTimer;
             const duplicateTurn = await Promise.race([
               activeTurn.promise,
-              new Promise((resolve) => setTimeout(() => resolve(null), 55_000)),
-            ]);
+              new Promise((resolve) => {
+                dupTimer = setTimeout(() => resolve(null), 55_000);
+              }),
+            ]).finally(() => clearTimeout(dupTimer));
             if (duplicateTurn && duplicateTurn.assistantMessage) {
               fullResponseContent = duplicateTurn.assistantMessage.content || '';
               console.warn('[ai/generate] active duplicate turn replayed', { chatId });
@@ -4282,10 +4285,10 @@ router.post(
           _webSearchAllowed
             ? enrichWithWebSearch(prompt, {
                 mode: webSearchMode === 'dedicated' ? 'dedicated' : 'auto',
-              }).catch(() => null)
+              }).catch((e) => { console.warn('[ai] web search unavailable (continuing without):', e && e.message ? e.message : e); return null; })
             : Promise.resolve(null),
           _memoryAdapter
-            ? _memoryAdapter.buildMemoryPrompt(userId, prompt).catch(() => null)
+            ? _memoryAdapter.buildMemoryPrompt(userId, prompt).catch((e) => { console.warn('[ai] orchestration memory unavailable (continuing without):', e && e.message ? e.message : e); return null; })
             : Promise.resolve(null),
         ]);
         if (_webCtx?.block) webSearchBlock = _webCtx.block;
@@ -5130,7 +5133,11 @@ router.post(
               const raw = payload.slice(5).trim();
               if (raw && raw !== '[DONE]') {
                 const obj = JSON.parse(raw);
-                if (obj && typeof obj.content === 'string' && !obj._resumed) {
+                // Only mirror incremental content deltas. `replace:true` frames are
+                // full cumulative snapshots (agentic sentinel / final-answer); the
+                // resume buffer is append-only, so storing them makes a reconnect
+                // re-append every full snapshot, duplicating/garbling the answer.
+                if (obj && typeof obj.content === 'string' && !obj._resumed && !obj.replace) {
                   // fire-and-forget — never block the write path
                   streamResume.append(sid, obj.content).catch(() => {});
                 }
@@ -6456,7 +6463,7 @@ router.post(
         try {
           // Add timeout to prevent hanging
           const timeoutPromise = new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('Image generation timeout')), 50000); // 30 second timeout
+            setTimeout(() => reject(new Error('Image generation timeout')), 50000); // 50 second timeout
           });
 
 
@@ -7244,8 +7251,9 @@ router.post(
       };
 
       let imageResults;
+      let imageTimeoutTimer;
       const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => {
+        imageTimeoutTimer = setTimeout(() => {
           // Deadline reached: the response below becomes an error either
           // way, so cancel the in-flight provider call too — otherwise the
           // SDK keeps generating (default timeout up to 600s) burning paid
@@ -7313,7 +7321,7 @@ router.post(
           ? Promise.all(Array.from({ length: imageCount }, () => generateSingleImage()))
           : generateSingleImage(),
         timeoutPromise,
-      ]);
+      ]).finally(() => { clearTimeout(imageTimeoutTimer); });
       imageResults = imageResults.flat().filter((item) => item && (item.b64 || typeof item === 'string'));
 
       if (!imageResults.length) {
