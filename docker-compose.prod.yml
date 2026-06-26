@@ -18,7 +18,10 @@
 services:
   # ── PostgreSQL ────────────────────────────────────────────
   db:
-    image: postgres:16-alpine
+    build:
+      context: .
+      dockerfile: deploy/postgres-pgvector.Dockerfile
+    image: siragpt-postgres-pgvector:16-alpine
     restart: unless-stopped
     volumes:
       - db_data:/var/lib/postgresql/data
