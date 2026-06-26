@@ -71,6 +71,10 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   const preservation = /\b(sin cambiar|no cambies|no modificar lo demas|mismo word|mismo documento|conservar|preservar|mantener)\b/.test(text);
   const explicitFreshDeliverable = /\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|dame|prepara(?:r|me)?|redacta(?:r|me)?|elabora(?:r|me)?|devu[eé]lv(?:e|eme|elo)|entr[eé]ga(?:r|me)?)\b[^.?!]{0,160}\b(?:un\s+|una\s+|el\s+|la\s+)?(?:word|docx|documento|informe|reporte|tesis|monografia|ensayo)\b/.test(text)
     || /\b(?:quiero|necesito)\s+(?:un\s+|una\s+|el\s+|la\s+)(?:word|docx|documento|informe|reporte|tesis|monografia|ensayo)\b/.test(text);
+  const explicitAttachedMutation = hasFiles && (
+    /\b(reemplaz\w*|sustitu\w*|quit\w*|elimin\w*|borr\w*|suprim\w*|remov\w*|tach\w*)\b/.test(verbHay)
+    || (documentNoun && /\b(corrig\w*|correg\w*|modific\w*|edit\w*|actualiz\w*|cambi(?:a\w*|e\w*))\b/.test(verbHay))
+  );
   const instrument = /\b(instrumento|instrument|intuemtno|instumento|cuestionario|encuesta|escala|anexo)\b/.test(text);
   const documentRegion = /\b(portada|caratula|t[ií]tulo|encabezado|pie de pagina|indice|tabla|hoja|celda|fila|columna|diapositiva|pagina|seccion|capitulo)\b/.test(text);
   const strongImplicitFollowUp = appendLocation && (instrument || preservation || /\btesis\b/.test(text));
@@ -88,7 +92,7 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   // 2") levanta el veto — palabras sueltas como "tabla/índice" en una
   // enumeración de creación ("genera un word: incluye tabla, índice…") no.
   const concreteEditTarget = hasFiles && Boolean(parseTargetSectionRequest(text));
-  if (explicitFreshDeliverable && !preservation && !concreteEditTarget) return false;
+  if (explicitFreshDeliverable && !preservation && !concreteEditTarget && !explicitAttachedMutation) return false;
   if (hasFiles) {
     if (appendLocation || preservation || instrument || documentRegion) return true;
     if (documentNoun) return true;

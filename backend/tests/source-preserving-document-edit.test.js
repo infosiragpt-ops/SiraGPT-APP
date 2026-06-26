@@ -177,6 +177,7 @@ describe('source-preserving document edit', () => {
     assert.equal(isSourcePreservingEditRequest('compara el PDF y el DOCX adjuntos e indica la cifra final', ['file-docx']), false);
     assert.equal(isSourcePreservingEditRequest('Genera un Word profesional: incluye tabla Excel, índice y conclusiones.', []), false);
     assert.equal(isSourcePreservingEditRequest('Genera un Word profesional sobre el documento adjunto: incluye tabla Excel, índice y conclusiones.', ['file-docx']), false);
+    assert.equal(isSourcePreservingEditRequest('reemplaza BORRADOR por APROBADO en los documentos adjuntos y devuelve un DOCX completo', ['file-docx', 'file-xlsx']), true);
     assert.equal(isSourcePreservingEditRequest('completa el anexo 3', ['file-docx']), true);
     assert.equal(isSourcePreservingEditRequest('modifica mi documento general con este nuevo contenido', []), true);
     assert.equal(isSourcePreservingEditRequest('analiza este documento adjunto y agrégalo a mi documento general', ['file-ref']), true);
