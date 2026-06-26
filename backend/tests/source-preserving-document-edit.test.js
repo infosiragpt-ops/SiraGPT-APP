@@ -221,6 +221,22 @@ describe('source-preserving document edit', () => {
     });
   });
 
+  it('describes a 1000-agent virtual pool while bounding execution parallelism', () => {
+    const plan = sourcePreservingInternals.buildDocumentOrchestrationPlan({
+      requestText: 'corrige el documento y usa mil agentes en segundo plano',
+      sourceFile: { originalName: 'tesis.docx' },
+      operations: [{ kind: 'replace_text', needle: 'error', replacement: 'corrección' }],
+      selectionReason: 'current_supported_file',
+    });
+
+    assert.equal(plan.mode, 'source_preserving_document_swarm');
+    assert.equal(plan.virtualAgentPool, 1000);
+    assert.equal(plan.requestedAgents, 1000);
+    assert.equal(plan.executionMode, 'bounded_background_worker');
+    assert.ok(plan.activeAgents >= 8);
+    assert.ok(plan.activeAgents <= plan.parallelism);
+  });
+
   it('falls back to the newest recent editable chat attachment when the follow-up omits file ids', async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-doc-'));
     const original = await makeDocxBuffer();

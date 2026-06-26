@@ -1840,9 +1840,21 @@ function runAgentJobInProcess(payload, userId) {
   });
 }
 
-function shouldRunAttachmentTaskLocally({ fileIds = [], goal = '', env = process.env } = {}) {
+function shouldRunAttachmentTaskLocally({ fileIds = [], goal = '', documentPolicy = null, env = process.env } = {}) {
   if (env.AGENT_TASK_QUEUE_ATTACHMENTS === '1') return false;
+  if (documentPolicy?.autoGenerate || documentPolicy?.mode === 'doc_required') return false;
   return (Array.isArray(fileIds) && fileIds.length > 0) || isTranscriptionRequest(goal);
+}
+
+function resolveQueuedStreamTimeoutMs({ taskId, userId, env = process.env } = {}) {
+  const configured = Number.parseInt(env.AGENT_RESPONSE_TIMEOUT_MS || '', 10);
+  if (Number.isFinite(configured) && configured > 0) return Math.max(30_000, configured);
+  const snapshot = getTaskForUser(taskId, userId) || taskStore.getTaskSnapshotForUser(taskId, userId);
+  const heavyDocumentRun = Boolean(
+    snapshot?.documentPolicy?.autoGenerate
+    || snapshot?.documentPolicy?.mode === 'doc_required'
+  );
+  return heavyDocumentRun ? 3 * 60 * 60 * 1000 : 300_000;
 }
 
 // Resolve the step/runtime budget for an agent task. Explicit caller values
@@ -1926,12 +1938,6 @@ async function handleQueuedTaskRequest(req, res) {
       providedFileIds: fileIds,
     });
   }
-  if (shouldRunAttachmentTaskLocally({ fileIds, goal: agentGoal })) {
-    return handleLocalTaskRequest(req, res, {
-      fallbackReason: 'attachment_local_runtime',
-      fallbackDetail: 'attached document/image analysis bypassed queued runtime',
-    });
-  }
   const clientFileMetadata = normalizeClientMetadata(req.body.fileMetadata, fileIds);
   const taskId = crypto.randomUUID();
   const traceId = crypto.randomUUID();
@@ -1942,6 +1948,12 @@ async function handleQueuedTaskRequest(req, res) {
     displayGoal,
     files: fileIds,
   });
+  if (shouldRunAttachmentTaskLocally({ fileIds, goal: agentGoal, documentPolicy })) {
+    return handleLocalTaskRequest(req, res, {
+      fallbackReason: 'attachment_local_runtime',
+      fallbackDetail: 'attached document/image chat analysis bypassed queued runtime',
+    });
+  }
   const { maxSteps, maxRuntimeMs } = resolveAgentTaskBudget({
     maxStepsRaw: req.body.maxSteps,
     maxRuntimeMsRaw: req.body.maxRuntimeMs,
@@ -2371,8 +2383,10 @@ function streamTaskEvents(req, res, taskId, userId) {
   res.on('drain', () => { /* no-op, reserved for backpressure tracking */ });
   req.on('aborted', () => { safeCloseQueuedConnection(); });
 
-  // Response timeout (5 min default, configurable via env)
-  const TIMEOUT = Math.max(30_000, Number.parseInt(process.env.AGENT_RESPONSE_TIMEOUT_MS || '300000', 10));
+  // Response timeout: short interactive queued runs stay bounded, but heavy
+  // document-edit/deliverable runs can legitimately take much longer while the
+  // worker keeps writing progress in the background.
+  const TIMEOUT = resolveQueuedStreamTimeoutMs({ taskId, userId });
   res.setTimeout(TIMEOUT, () => {
     safeCloseQueuedConnection('La tarea agéntica no respondió a tiempo (timeout). El runtime puede estar saturado; intenta de nuevo.');
     console.warn('[agent-task] queued SSE response timeout');
@@ -3164,6 +3178,7 @@ router.INTERNAL = {
   normalizeSystemContract,
   reduceAgentState,
   safeJsonStringify,
+  resolveQueuedStreamTimeoutMs,
   shouldRunAttachmentTaskLocally,
   shortLabel,
   streamTaskEvents,

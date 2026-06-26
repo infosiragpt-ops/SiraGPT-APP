@@ -12,3 +12,19 @@ test('backend Dockerfile creates uploads instead of copying an optional director
   assert.doesNotMatch(dockerfile, /COPY --from=build[^\n]+\/app\/uploads/);
   assert.match(dockerfile, /mkdir -p \/app\/uploads/);
 });
+
+test('backend Dockerfile includes Linux Office/PDF/OCR tooling for document edits', () => {
+  const dockerfile = fs.readFileSync(path.join(root, 'backend/Dockerfile'), 'utf8');
+  for (const pkg of [
+    'libreoffice',
+    'poppler-utils',
+    'tesseract-ocr',
+    'tesseract-ocr-data-spa',
+    'font-liberation',
+    'font-noto',
+    'pandoc',
+    'python3',
+  ]) {
+    assert.match(dockerfile, new RegExp(`\\b${pkg}\\b`));
+  }
+});

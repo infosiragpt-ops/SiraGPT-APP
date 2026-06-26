@@ -473,11 +473,12 @@ test('agent task route: system prompt includes deep document analysis contract f
   assert.match(prompt, /resultados, conclusiones/);
 });
 
-test('agent task route: attached document/image tasks bypass queued runtime by default', () => {
+test('agent task route: chat-only attached document/image tasks bypass queued runtime by default', () => {
   assert.equal(
     INTERNAL.shouldRunAttachmentTaskLocally({
       fileIds: ['file-docx-1'],
       goal: 'dame un resumen en dos parrafos',
+      documentPolicy: { mode: 'chat_only', autoGenerate: false },
       env: {},
     }),
     true,
@@ -486,6 +487,7 @@ test('agent task route: attached document/image tasks bypass queued runtime by d
     INTERNAL.shouldRunAttachmentTaskLocally({
       fileIds: [],
       goal: 'transcribe esta imagen',
+      documentPolicy: { mode: 'chat_only', autoGenerate: false },
       env: {},
     }),
     true,
@@ -494,6 +496,7 @@ test('agent task route: attached document/image tasks bypass queued runtime by d
     INTERNAL.shouldRunAttachmentTaskLocally({
       fileIds: ['file-docx-1'],
       goal: 'dame un resumen en dos parrafos',
+      documentPolicy: { mode: 'chat_only', autoGenerate: false },
       env: { AGENT_TASK_QUEUE_ATTACHMENTS: '1' },
     }),
     false,
@@ -502,10 +505,62 @@ test('agent task route: attached document/image tasks bypass queued runtime by d
     INTERNAL.shouldRunAttachmentTaskLocally({
       fileIds: [],
       goal: 'investiga el tema sin adjuntos',
+      documentPolicy: { mode: 'chat_only', autoGenerate: false },
       env: {},
     }),
     false,
   );
+});
+
+test('agent task route: document deliverables with attachments stay on the background worker', () => {
+  assert.equal(
+    INTERNAL.shouldRunAttachmentTaskLocally({
+      fileIds: ['file-docx-1'],
+      goal: 'corrige la redacción y devuélveme el documento completo',
+      documentPolicy: { mode: 'doc_required', autoGenerate: true },
+      env: {},
+    }),
+    false,
+  );
+  assert.equal(
+    INTERNAL.shouldRunAttachmentTaskLocally({
+      fileIds: ['file-xlsx-1'],
+      goal: 'agrega esta hoja y devuelve el Excel actualizado',
+      documentPolicy: { mode: 'doc_required', autoGenerate: true },
+      env: {},
+    }),
+    false,
+  );
+});
+
+test('agent task route: queued stream timeout is longer for heavy document runs', () => {
+  const taskId = 'task-document-timeout';
+  const userId = 'user-document-timeout';
+  const task = INTERNAL.createTaskRecord({
+    taskId,
+    userId,
+    chatId: 'chat-document-timeout',
+    displayGoal: 'edita el documento completo',
+    model: 'gpt-4o',
+    controller: new AbortController(),
+    maxSteps: 60,
+    maxRuntimeMs: 7200000,
+    streamState: INTERNAL.initialAgentState(),
+    documentPolicy: { mode: 'doc_required', autoGenerate: true },
+    status: 'queued',
+  });
+  try {
+    assert.equal(
+      INTERNAL.resolveQueuedStreamTimeoutMs({ taskId, userId, env: {} }),
+      3 * 60 * 60 * 1000,
+    );
+    assert.equal(
+      INTERNAL.resolveQueuedStreamTimeoutMs({ taskId, userId, env: { AGENT_RESPONSE_TIMEOUT_MS: '90000' } }),
+      90000,
+    );
+  } finally {
+    INTERNAL.ACTIVE_AGENT_TASKS.delete(task.taskId);
+  }
 });
 
 test('agent task route: system prompt includes intent alignment without echoing the user prompt', () => {

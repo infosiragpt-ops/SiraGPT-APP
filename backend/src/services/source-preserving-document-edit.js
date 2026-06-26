@@ -4004,6 +4004,12 @@ const DOCUMENT_AGENT_ROLES = [
   'quality_validator',
 ];
 
+function configuredDocumentVirtualAgentPool(env = process.env) {
+  const configured = Number.parseInt(env.SIRAGPT_DOCUMENT_VIRTUAL_AGENT_POOL || '', 10);
+  if (Number.isFinite(configured) && configured > 0) return Math.min(Math.max(configured, 1000), 5000);
+  return 1000;
+}
+
 function requestedAgentCount(prompt = '') {
   const text = normalizeText(prompt);
   if (/\bmil\s+agentes?\b/.test(text)) return 1000;
@@ -4013,15 +4019,18 @@ function requestedAgentCount(prompt = '') {
 
 function buildDocumentOrchestrationPlan({ requestText = '', sourceFile = {}, referenceFiles = [], operations = [], selectionReason = '' } = {}) {
   const requested = requestedAgentCount(requestText);
+  const virtualAgentPool = Math.max(configuredDocumentVirtualAgentPool(), requested || 0);
   const active = Math.max(
     DOCUMENT_AGENT_ROLES.length,
     Math.min(requested || DOCUMENT_AGENT_ROLES.length, Math.max(DOCUMENT_AGENT_ROLES.length, sourceDocumentParallelism())),
   );
   return {
     mode: 'source_preserving_document_swarm',
-    requestedAgents: requested,
+    virtualAgentPool,
+    requestedAgents: requested || virtualAgentPool,
     activeAgents: active,
     parallelism: sourceDocumentParallelism(),
+    executionMode: 'bounded_background_worker',
     roles: DOCUMENT_AGENT_ROLES,
     sourceSelection: selectionReason || 'direct',
     baseFile: sourceFile?.originalName || sourceFile?.filename || sourceFile?.id || null,
@@ -4331,6 +4340,7 @@ module.exports = {
     buildCronogramaAnexo3Plan,
     buildDocumentFormattingTemplate,
     buildDocumentOrchestrationPlan,
+    configuredDocumentVirtualAgentPool,
     buildInstrumentAppendix,
     buildInstrumentAppendixBody,
     buildReferenceIntegrationFallbackBlocks,
