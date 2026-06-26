@@ -267,7 +267,13 @@ class AIService {
     getClient(provider) {
         // Route every provider through the shared keep-alive fetch so we
         // amortize TLS handshakes across requests. See provider-http-agent.js.
-        const baseOpts = { fetch: sharedFetch };
+        // Bound time-to-first-headers so a stalled/half-open connection on a
+        // non-streaming call (vision describe, image/PPT structure) fails fast
+        // instead of inheriting the SDK's 10-minute default. For streaming the
+        // per-attempt AbortController + 30s first-byte timer fire earlier, and
+        // the SDK clears this timer once headers arrive, so it never truncates
+        // a long healthy stream — it is a strict backstop on the happy path.
+        const baseOpts = { fetch: sharedFetch, timeout: OPENAI_HTTP_TIMEOUT_MS };
 
         if (provider === "Gemini") {
             return new OpenAI({
@@ -743,7 +749,13 @@ class AIService {
                         };
 
                         for await (const chunk of stream) {
-                            const delta = chunk.choices[0]?.delta || {};
+                            // Guard `choices` itself, not just `[0]`: OpenRouter (and others)
+                            // legitimately emit usage-only / keep-alive chunks with NO `choices`
+                            // array. `chunk.choices[0]` on such a frame throws a non-retryable
+                            // TypeError from inside the read loop, truncating an otherwise-healthy
+                            // turn. With the full optional chain such frames yield `delta = {}`
+                            // and the loop body is a no-op for them — identical visible output.
+                            const delta = chunk?.choices?.[0]?.delta || {};
                             // DeepSeek emits `reasoning_content`; OpenRouter emits `reasoning`.
                             // Tracking both prevents the first-byte timeout from firing while
                             // a reasoning model is still in its internal-thinking phase.

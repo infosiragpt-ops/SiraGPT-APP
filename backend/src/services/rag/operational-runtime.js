@@ -119,7 +119,11 @@ async function ensureIndexed({
       );
       const allowed = new Set(gated.sources.map((s) => String(s.source || s.fileId || '')));
       cleanDocs = cleanDocs.filter((d) => allowed.has(String(d.source)) || allowed.has(String(d.fileId || '')));
-    } catch { /* gate is best-effort */ }
+    } catch (e) {
+      // Best-effort: the doc set proceeds unfiltered (unchanged behavior), but
+      // surface the degradation so a broken gate isn't silently no-op forever.
+      console.warn('[operational-rag] intent rag-gate skipped:', e?.message || e);
+    }
   }
   if (cleanDocs.length === 0) return { indexed: false, reason: 'no text docs', chunksAdded: 0, totalChunks: 0, skippedSources: [] };
 
@@ -388,7 +392,11 @@ async function maybeQueryGraphRag({ openai, userId, collection, query, enabled }
       level: index?.summaries?.super?.length > 0 ? 'super' : 'leaf',
       mapMax: 12,
     });
-  } catch {
+  } catch (err) {
+    // Returning null correctly falls through to normal vector retrieval, but a
+    // real GraphRAG outage must not be indistinguishable from the legitimate
+    // no-index / non-sensemaking null returns above.
+    console.warn('[operational-rag] graphrag query failed:', err?.message || err);
     return null;
   }
 }
@@ -505,23 +513,19 @@ async function runQualityAudit({
     }
   }
 
-  const existing = await prisma.message.findUnique({
-    where: { id: messageId },
-    select: { metadata: true },
-  });
-  const metadata = existing?.metadata && typeof existing.metadata === 'object' && !Array.isArray(existing.metadata)
-    ? existing.metadata
-    : {};
-
-  await prisma.message.update({
-    where: { id: messageId },
-    data: {
-      metadata: {
-        ...metadata,
-        ragAudit: audit,
-      },
-    },
-  });
+  // Atomic JSONB merge instead of read-modify-write. This audit runs detached
+  // (setImmediate) after the assistant message is persisted, so a concurrent
+  // metadata writer (e.g. agent-task-runner) could land between a read and a
+  // write-back and have its keys clobbered. `||` shallow-sets only the
+  // `ragAudit` top-level key, preserving any other concurrently-written keys;
+  // the no-concurrency result is identical to the prior `{ ...metadata, ragAudit }`.
+  // metadata is a JSONB column, so no migration is needed. A missing row simply
+  // affects 0 rows (silent no-op), matching the prior best-effort behavior.
+  await prisma.$executeRaw`
+    UPDATE messages
+    SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('ragAudit', ${JSON.stringify(audit)}::jsonb)
+    WHERE id = ${messageId}
+  `;
 
   return { audited: true, audit };
 }
