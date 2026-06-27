@@ -302,6 +302,34 @@ function isNodeBundlerProject(files: CodeFiles): boolean {
   }
 }
 
+/** A standalone HTML document that runs in the sandboxed srcdoc iframe as-is:
+ * it inlines its logic or pulls deps from a CDN, rather than pointing at a
+ * bundler entry like `/src/main.tsx` that only resolves through a dev server.
+ * The deterministic Builder emits exactly this kind of self-contained
+ * index.html, so it must preview instantly even though the project also ships a
+ * Next/Vite package.json. A real bundler index.html (module script → /src/…)
+ * stays gated behind ▶ Ejecutar. */
+function isSelfContainedHtml(content: string): boolean {
+  if (!content) return false
+  const isLocal = (src: string) => !/^(?:https?:)?\/\//i.test(src) && !/^data:/i.test(src)
+  // 1) A <script src="…"> pointing at a LOCAL TS/JSX entry, or anything under a
+  //    src/ folder, only resolves through a Vite/Next dev server. (CDN scripts —
+  //    https:// or //… — and inline runtime, the builder's output, are fine.)
+  const scriptSrc = /<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi
+  for (let m = scriptSrc.exec(content); m; m = scriptSrc.exec(content)) {
+    const src = m[1]
+    if (!isLocal(src)) continue
+    if (/\.(?:tsx?|jsx|mts|cts)(?:$|[?#])/i.test(src)) return false
+    if (/(?:^|\/)src\//i.test(src)) return false
+  }
+  // 2) An inline ES-module script that imports a LOCAL module also needs bundling.
+  const moduleScript = /<script\b[^>]*\btype\s*=\s*["']module["'][^>]*>([\s\S]*?)<\/script>/gi
+  for (let m = moduleScript.exec(content); m; m = moduleScript.exec(content)) {
+    if (/\bimport\b[^;\n]*["'](?:\.{0,2}\/|src\/)/.test(m[1])) return false
+  }
+  return true
+}
+
 function findProjectEntry(files: CodeFiles): string | null {
   const paths = Object.keys(files)
   return (
@@ -324,8 +352,19 @@ export function buildPreviewDocument(files: CodeFiles, activePath: string | null
   const projectEntry = findProjectEntry(files)
 
   // 0) Real Vite/Next projects need the dev server — a srcdoc render would be a
-  //    misleading blank page. Markdown/SVG files still preview individually.
-  if (isNodeBundlerProject(files) && !(activePath && ["md", "mdx", "svg"].includes(activeExt))) {
+  //    misleading blank page. Markdown/SVG files still preview individually, and
+  //    a self-contained index.html (the deterministic Builder's live preview,
+  //    React via CDN + inline runtime) renders instantly even though the project
+  //    also ships a Next/Vite package.json.
+  const activeHtmlRenderable =
+    !!activePath &&
+    (activeExt === "html" || activeExt === "htm") &&
+    isSelfContainedHtml(activeFile?.content ?? "")
+  if (
+    isNodeBundlerProject(files) &&
+    !(activePath && ["md", "mdx", "svg"].includes(activeExt)) &&
+    !activeHtmlRenderable
+  ) {
     return {
       html: placeholder(
         "Este proyecto usa Vite con dependencias npm. Pulsa ▶ Ejecutar para instalar las dependencias y verlo en vivo en el dev server.",

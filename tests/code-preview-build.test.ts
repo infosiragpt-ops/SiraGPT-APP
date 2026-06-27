@@ -164,4 +164,34 @@ describe("buildPreviewDocument", () => {
     const r = buildPreviewDocument(plain, null)
     assert.equal(r.kind, "html")
   })
+
+  it("a bundler index.html whose entry has no leading slash still routes to ▶ Ejecutar", () => {
+    const vite = files({
+      "package.json": '{"devDependencies":{"vite":"^7.1.0"}}',
+      "index.html": '<html><body><div id="root"></div><script type="module" src="src/main.tsx"></script></body></html>',
+      "src/main.tsx": "import App from './App'",
+    })
+    const r = buildPreviewDocument(vite, "index.html")
+    assert.equal(r.kind, "unsupported")
+    assert.match(r.html, /Ejecutar/)
+  })
+
+  it("a self-contained index.html previews instantly even alongside a Next package.json (deterministic builder output)", () => {
+    const builderApp = files({
+      "package.json": '{"dependencies":{"next":"^14.0.0","react":"^18.0.0"}}',
+      "app/page.tsx": "export default function Page(){ return <div>app</div> }",
+      "index.html":
+        '<!doctype html><html lang="es"><head>' +
+        '<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>' +
+        '<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>' +
+        "</head><body><div id=\"root\"></div>" +
+        '<script>window.__APP__ = {"name":"Mi App"};</script>' +
+        '<script>ReactDOM.createRoot(document.getElementById("root")).render(React.createElement("h1", null, "Hola"));</script>' +
+        "</body></html>",
+    })
+    const r = buildPreviewDocument(builderApp, "index.html")
+    assert.equal(r.kind, "html")
+    assert.equal(r.entry, "index.html")
+    assert.match(r.html, /Hola/)
+  })
 })

@@ -1417,28 +1417,22 @@ export function AICodeChatPanel() {
           patchAgentState(sid, (s) => ({ ...s, phase: "generating", context: action.context }))
           const hasIntake = !!(action.context.productType || action.context.brand)
           const genPrompt = hasIntake ? promptFromContext(action.context) : text
+          // Deterministic tier: enrich a bare context with the raw prompt so the
+          // local scaffold still produces niche-coherent copy.
+          const buildCtx = hasIntake ? action.context : { ...action.context, productType: text }
           if (!opts?.forceDeterministic && engineAvailable) {
-            // Prefer the OpenCode agent: it writes the Vite project files into
-            // its /workspace (via a funded model), and runEngine reads them back
-            // into the editor — falling back to the deterministic builder if the
-            // agent leaves no usable project. Rich AND reliable in Docker.
+            // Prefer the OpenCode agent (only truly available in Docker): it
+            // writes the project files into its /workspace via a funded model and
+            // runEngine reads them back — with a deterministic fallback inside.
             await runEngine(text, sid, { buildContext: action.context })
             patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "llm" }))
-          } else if (!opts?.forceDeterministic && activeModelName) {
-            // No engine but a chat model is available → stream the Vite project
-            // as fenced blocks (the contract format parseCodeBlocks understands)
-            // and auto-apply them into the workspace.
-            await sendPrompt(genPrompt, {
-              systemPrompt: `${landingSystemPrompt(action.context)}\n\n${streamOutputFormat({
-                paths: contractPathsForContext(action.context),
-              })}`,
-              autoApply: true,
-            })
-            patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "llm" }))
           } else {
-            // Deterministic tier: enrich a bare context with the raw prompt so
-            // the local scaffold still produces niche-coherent copy.
-            const buildCtx = hasIntake ? action.context : { ...action.context, productType: text }
+            // First build → the deterministic builder is the PRIMARY path. It is
+            // LLM-free, returns in seconds, and emits a self-contained index.html
+            // live preview, so it never hits the ~30s GCLB stream cut that left
+            // the chat-streaming generation "cargando" forever on the Reserved VM.
+            // (This branch previously streamed the whole project from the chat
+            // model — the source of the hang/errors the user reported.)
             await buildApp(genPrompt, buildCtx)
             patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "deterministic" }))
           }
