@@ -257,6 +257,19 @@ export async function importLocalFolderAsWorkspace(): Promise<LocalFolderRegistr
  * Resolves null when the user cancels the picker.
  */
 export async function importLocalFolderViaInput(): Promise<LocalFolderRegistration | null> {
+  const imported = await readLocalFolderViaInput()
+  if (!imported) return null
+  return registerImportedWorkspace(imported)
+}
+
+/**
+ * Reads a local folder via <input webkitdirectory> and returns the filtered
+ * snapshot WITHOUT registering it. Callers that manage their own workspace
+ * state (e.g. the /code editor) use this directly; `importLocalFolderViaInput`
+ * wraps it to also register the workspace in the sidebar. Resolves null when
+ * the user cancels the picker.
+ */
+export async function readLocalFolderViaInput(): Promise<LocalWorkspaceImport | null> {
   if (typeof window === "undefined" || typeof document === "undefined") {
     throw new Error("La subida de carpetas solo está disponible en el navegador.")
   }
@@ -333,7 +346,7 @@ export async function importLocalFolderViaInput(): Promise<LocalFolderRegistrati
     fileCount: Object.keys(files).length,
     skippedCount: stats.skipped,
   }
-  return registerImportedWorkspace(imported)
+  return imported
 }
 
 function pickDirectoryViaInput(): Promise<FileList | null> {
@@ -353,7 +366,6 @@ function pickDirectoryViaInput(): Promise<FileList | null> {
     const finish = (value: FileList | null) => {
       if (settled) return
       settled = true
-      window.removeEventListener("focus", onFocus)
       try {
         input.remove()
       } catch {
@@ -362,19 +374,15 @@ function pickDirectoryViaInput(): Promise<FileList | null> {
       resolve(value)
     }
 
-    // When the picker closes the window regains focus. If no selection landed
-    // shortly after, treat it as a cancel — covers browsers that never emit the
-    // "cancel" event (avoids a pending promise + a leaked hidden input).
-    const onFocus = () => {
-      window.setTimeout(() => {
-        if (!settled && (!input.files || input.files.length === 0)) finish(null)
-      }, 500)
-    }
-
+    // Resolve only on real picker outcomes. We intentionally do NOT use a
+    // window "focus" timeout to detect cancel: a directory upload triggers a
+    // SECOND browser confirmation ("Upload N files to this site?") AFTER the OS
+    // dialog closes (which already restores focus). A focus-based timer fires
+    // before the user confirms that prompt, so it would discard a valid folder
+    // selection mid-flight. "change" (selection) and "cancel" (dismiss) cover
+    // every modern browser; worst case on a legacy browser is a pending promise.
     input.addEventListener("change", () => finish(input.files && input.files.length ? input.files : null))
-    // Modern browsers fire "cancel" when the picker is dismissed with nothing.
     input.addEventListener("cancel", () => finish(null))
-    window.addEventListener("focus", onFocus)
 
     document.body.appendChild(input)
     input.click()

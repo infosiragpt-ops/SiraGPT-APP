@@ -440,15 +440,6 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
     [onMobileNavigate, router, selectChat],
   )
 
-  const handleOpenDesktopFolder = React.useCallback(() => {
-    if (typeof window === "undefined") return
-    handleOpenInCode({})
-    window.setTimeout(() => {
-      window.dispatchEvent(new CustomEvent("siragpt:open-local-folder"))
-    }, 120)
-    onMobileNavigate?.()
-  }, [handleOpenInCode, onMobileNavigate])
-
   const listCodeSessions = React.useCallback(
     (workspaceId: string) =>
       listSessionsForWorkspace(workspaceId, codeAgentStore).map((s) => ({
@@ -613,10 +604,12 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
     if (inIframe || !canOpenLocalDirectory()) {
       try {
         const reg = await importLocalFolderViaInput()
+        // reg is null only when the user cancels the picker — stay put.
         if (reg) finishLocalImport(reg)
-      } catch {
-        // Last resort if even the <input> upload is unavailable.
-        handleOpenDesktopFolder()
+      } catch (err: any) {
+        // Surface a clear error instead of silently creating a cloud project
+        // or re-triggering the cross-origin-blocked native picker.
+        toast.error(err?.message || "No se pudo subir la carpeta local")
       }
       return
     }
@@ -639,7 +632,7 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
       }
       toast.error(err?.message || "No se pudo abrir la carpeta local")
     }
-  }, [finishLocalImport, handleOpenDesktopFolder])
+  }, [finishLocalImport])
 
   // Secondary entry: a cloud-only project (no local files). Opens a
   // styled modal instead of the native window.prompt.
