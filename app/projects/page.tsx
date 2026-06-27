@@ -55,15 +55,15 @@ interface AppProject {
 }
 
 const STATUS_OPTIONS: Array<{ value: StatusFilter; label: string }> = [
-  { value: "any", label: "Any status" },
-  { value: "active", label: "Active" },
-  { value: "draft", label: "Draft" },
+  { value: "any", label: "Cualquier estado" },
+  { value: "active", label: "Activo" },
+  { value: "draft", label: "Borrador" },
 ]
 
 const ARTIFACT_OPTIONS: Array<{ value: ArtifactFilter; label: string }> = [
-  { value: "any", label: "Any artifact type" },
+  { value: "any", label: "Cualquier tipo" },
   { value: "webapp", label: "Web app" },
-  { value: "mobileapp", label: "Mobile app" },
+  { value: "mobileapp", label: "App móvil" },
   { value: "dashboard", label: "Dashboard" },
 ]
 
@@ -71,7 +71,7 @@ const SEEDED_APP_PROJECT: AppProject = {
   id: "siragpt-app",
   name: "SIRAGPT",
   description: "Plataforma multi-LLM con chat, imagen, documentos y APPS.",
-  timeLabel: "8 seconds ago",
+  timeLabel: "hace 8 segundos",
   status: "active",
   artifactType: "webapp",
   href: "/code",
