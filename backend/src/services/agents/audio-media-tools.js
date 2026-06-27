@@ -62,13 +62,17 @@ function getElevenClient() {
   try {
     // eslint-disable-next-line global-require
     mod = require('@elevenlabs/elevenlabs-js');
-  } catch {
+  } catch (err) {
+    // The key IS set (guarded above), so this is a genuine SDK load failure —
+    // log it so it isn't misreported to the user as "missing ELEVENLABS_API_KEY".
+    console.warn('[audio-media-tools] ElevenLabs SDK require failed:', err && err.message);
     return null;
   }
   const Ctor = mod.ElevenLabsClient || mod.default || mod;
   try {
     return new Ctor({ apiKey: key });
-  } catch {
+  } catch (err) {
+    console.warn('[audio-media-tools] ElevenLabs client construction failed:', err && err.message);
     return null;
   }
 }
@@ -279,7 +283,7 @@ const generateMusic = {
       if (!resp || !resp.ok) {
         const status = resp ? resp.status : 0;
         let detail = '';
-        try { detail = resp && typeof resp.text === 'function' ? await resp.text() : ''; } catch { /* ignore */ }
+        try { detail = resp && typeof resp.text === 'function' ? await resp.text() : ''; } catch (e) { console.warn('[audio-media-tools] failed to read music error body:', e && e.message); }
         const msg = status === 402
           ? 'Créditos insuficientes para generar música en ElevenLabs.'
           : `El servicio de música respondió ${status}. ${String(detail).slice(0, 200)}`.trim();

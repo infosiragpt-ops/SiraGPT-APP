@@ -692,6 +692,9 @@ function streamFile(res, filePath, { status = 200, headers = {}, start, end } = 
       res.destroy(err);
     }
   });
+  // Release the fd if the client aborts mid-download (pipe doesn't destroy the
+  // source on destination close). No-op on a complete response (writableFinished).
+  res.on('close', () => { if (!res.writableFinished) stream.destroy(); });
   stream.pipe(res);
 }
 
@@ -1035,26 +1038,48 @@ async function generateVideoAsync(operationId, prompt, aspectRatio, duration, ne
         payload: sanitizedPayload,
       });
 
-      //  Make API call with better error handling
-      const result = await fal.subscribe(endpoint, {
-        input: requestPayload,
-        logs: true,
-        onQueueUpdate: (update) => {
-          let updateData = activeOperations.get(operationId) || {};
-          if (updateData.status === 'cancelled') return;
-          updateData.queuePosition = update.queue_position;
-          updateData.status = update.status === "IN_PROGRESS" ? 'processing' : updateData.status;
-          updateData.updatedAt = new Date().toISOString();
-          activeOperations.set(operationId, updateData);
+      //  Make API call with better error handling.
+      //  Bound the fal.subscribe poll: the SDK's own `timeout` is documented as
+      //  NOT enforced, so a provider stall / dropped queue entry would make this
+      //  await never settle (the op would stay 'processing' forever — neither the
+      //  cancel route nor the cleanup interval can unblock it). Race it against a
+      //  generous deadline (default 10 min, well above the 2-5 min healthy time)
+      //  and abort the in-flight poll on timeout. On a healthy generation the
+      //  deadline never fires; on a stall it throws into the existing
+      //  catch → classifyFalVideoError → op marked 'failed', identical to any
+      //  other provider error.
+      const subscribeTimeoutMs = Number(process.env.SIRAGPT_VIDEO_SUBSCRIBE_TIMEOUT_MS) || 600000;
+      const subscribeAbort = new AbortController();
+      let subscribeTimer = null;
+      const result = await Promise.race([
+        fal.subscribe(endpoint, {
+          input: requestPayload,
+          logs: true,
+          abortSignal: subscribeAbort.signal,
+          onQueueUpdate: (update) => {
+            let updateData = activeOperations.get(operationId) || {};
+            if (updateData.status === 'cancelled') return;
+            updateData.queuePosition = update.queue_position;
+            updateData.status = update.status === "IN_PROGRESS" ? 'processing' : updateData.status;
+            updateData.updatedAt = new Date().toISOString();
+            activeOperations.set(operationId, updateData);
 
-          // Log progress updates
-          if (update.logs) {
-            update.logs.forEach(log => {
-              console.log(`📊 ${operationId}: ${log.message}`);
-            });
-          }
-        },
-      });
+            // Log progress updates
+            if (update.logs) {
+              update.logs.forEach(log => {
+                console.log(`📊 ${operationId}: ${log.message}`);
+              });
+            }
+          },
+        }),
+        new Promise((_resolve, reject) => {
+          subscribeTimer = setTimeout(() => {
+            try { subscribeAbort.abort(); } catch { /* noop */ }
+            reject(new Error(`fal.subscribe timed out after ${subscribeTimeoutMs}ms`));
+          }, subscribeTimeoutMs);
+          subscribeTimer.unref?.();
+        }),
+      ]).finally(() => { if (subscribeTimer) clearTimeout(subscribeTimer); });
 
       console.log(`✅ Fal.ai API response for ${operationId}:`, JSON.stringify(result, null, 2));
       if (activeOperations.get(operationId)?.status === 'cancelled') {
@@ -1074,6 +1099,9 @@ async function generateVideoAsync(operationId, prompt, aspectRatio, duration, ne
       console.log(`📥 Downloading video from: ${videoUrl}`);
       const resp = await fetch(videoUrl, { signal: AbortSignal.timeout(Number(process.env.VIDEO_FETCH_TIMEOUT_MS) || 120000) });
       if (!resp.ok) {
+        // Drain the undici response body so the socket returns to the pool
+        // instead of leaking until GC across retries on a flaky CDN.
+        try { await resp.body?.cancel?.(); } catch { /* noop */ }
         throw new Error(`Failed to download video: ${resp.status} ${resp.statusText}`);
       }
 
@@ -1301,6 +1329,8 @@ router.get('/download/:filename', async (req, res) => {
           if (!res.headersSent) res.status(502).json({ error: 'Error downloading video file' });
           else res.destroy();
         });
+        // Release the R2 socket if the client aborts mid-download.
+        res.on('close', () => { if (!res.writableFinished) stream.destroy(); });
         return stream.pipe(res);
       }
     }
@@ -1365,6 +1395,8 @@ router.get('/watch/:filename', async (req, res) => {
           console.error(`Error streaming video range from R2: ${err && err.message}`);
           res.destroy();
         });
+        // Release the R2 socket if the client aborts mid-download.
+        res.on('close', () => { if (!res.writableFinished) stream.destroy(); });
         return stream.pipe(res);
       }
       streamFile(res, resolved.filePath, {
@@ -1387,6 +1419,8 @@ router.get('/watch/:filename', async (req, res) => {
           console.error(`Error streaming video from R2: ${err && err.message}`);
           res.destroy();
         });
+        // Release the R2 socket if the client aborts mid-download.
+        res.on('close', () => { if (!res.writableFinished) stream.destroy(); });
         return stream.pipe(res);
       }
       streamFile(res, resolved.filePath, { headers: head });
@@ -1407,14 +1441,14 @@ router.get('/history', authenticateToken, async (req, res) => {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const offset = (page - 1) * limit;
 
-    // Get user's video operations from activeOperations
-    const userOperations = Array.from(activeOperations.values())
-      .filter(op => op.userId === req.user.id)
+    // Get user's video operations from activeOperations (materialize + filter
+    // the map ONCE; total derives from the same array's length).
+    const userVideos = Array.from(activeOperations.values())
+      .filter(op => op.userId === req.user.id);
+    const total = userVideos.length;
+    const userOperations = userVideos
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
       .slice(offset, offset + limit);
-
-    const total = Array.from(activeOperations.values())
-      .filter(op => op.userId === req.user.id).length;
 
     res.json({
       videos: userOperations,

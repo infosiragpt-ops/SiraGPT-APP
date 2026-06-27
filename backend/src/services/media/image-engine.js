@@ -220,6 +220,9 @@ async function imageResponseDataToBase64s(data, signal) {
     if (!doFetch) throw new Error('fetch is not available in this runtime.');
     const resp = await doFetch(url, signal ? { signal } : undefined);
     if (!resp || !resp.ok) {
+      // Drain the undici body so the socket returns to the pool (not leaked
+      // until GC) on a failed download. Only runs on the already-failing path.
+      try { await resp?.body?.cancel?.(); } catch { /* noop */ }
       throw new Error(`OpenAI: no se pudo descargar la imagen generada (HTTP ${resp ? resp.status : 'sin respuesta'}).`);
     }
     out.push(Buffer.from(await resp.arrayBuffer()).toString('base64'));
@@ -426,6 +429,7 @@ async function generateWithFal({ model, prompt, ratio, n, signal, timeoutMs }) {
   for (const url of urls.slice(0, n)) {
     const resp = await doFetch(url, signal ? { signal } : undefined);
     if (!resp || !resp.ok) {
+      try { await resp?.body?.cancel?.(); } catch { /* noop */ }
       throw new Error(`fal.ai: no se pudo descargar la imagen generada (HTTP ${resp ? resp.status : 'sin respuesta'}).`);
     }
     b64s.push(Buffer.from(await resp.arrayBuffer()).toString('base64'));
