@@ -283,9 +283,11 @@ function withTimeout(promise, ms, label) {
 // synchronous upload path always returns a JSON result, even when an
 // upstream is degraded. Overridable via env for ops tuning.
 const EXTRACT_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_EXTRACT_TIMEOUT_MS || '20000', 10);
+const ASYNC_EXTRACT_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_ASYNC_EXTRACT_TIMEOUT_MS || '900000', 10);
 const THUMBNAIL_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_THUMBNAIL_TIMEOUT_MS || '12000', 10);
 const OPENAI_FILE_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_OPENAI_FILE_TIMEOUT_MS || '15000', 10);
 const ANALYZE_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_ANALYZE_TIMEOUT_MS || '8000', 10);
+const ASYNC_ANALYZE_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_ASYNC_ANALYZE_TIMEOUT_MS || '120000', 10);
 
 const OPENAI_FILE_MIMES = new Set([
   'application/pdf',
@@ -324,6 +326,28 @@ async function uploadToOpenAiFiles(file) {
 // Processes files in chunks of MAX_CONCURRENT to avoid overwhelming the
 // event loop, DB connection pool, and upstream API rate limits.
 const MAX_CONCURRENT = Number.parseInt(process.env.SIRAGPT_UPLOAD_CONCURRENCY || '5', 10);
+const ASYNC_FILE_PROCESSING_CONCURRENCY = Math.max(1, Number.parseInt(process.env.SIRAGPT_ASYNC_FILE_PROCESSING_CONCURRENCY || '2', 10));
+const asyncFileProcessingQueue = [];
+let activeAsyncFileProcessors = 0;
+
+function drainAsyncFileProcessingQueue() {
+  while (activeAsyncFileProcessors < ASYNC_FILE_PROCESSING_CONCURRENCY && asyncFileProcessingQueue.length > 0) {
+    const task = asyncFileProcessingQueue.shift();
+    activeAsyncFileProcessors += 1;
+    Promise.resolve()
+      .then(task)
+      .catch(err => console.warn('[files] async post-upload processing failed:', err?.message || err))
+      .finally(() => {
+        activeAsyncFileProcessors = Math.max(0, activeAsyncFileProcessors - 1);
+        drainAsyncFileProcessingQueue();
+      });
+  }
+}
+
+function enqueueAsyncFileProcessing(task) {
+  asyncFileProcessingQueue.push(task);
+  setImmediate(drainAsyncFileProcessingQueue);
+}
 
 /**
  * Process files in parallel batches. Each batch goes through:
@@ -563,7 +587,7 @@ async function processFileAfterFastUpload(file, userId, prismaClient, fileRecord
     // just without locally-extracted text.
     let result;
     try {
-      result = await withTimeout(fileProcessor.processFile(file), EXTRACT_TIMEOUT_MS, `text extraction (${file.originalname})`);
+      result = await withTimeout(fileProcessor.processFile(file), ASYNC_EXTRACT_TIMEOUT_MS, `async text extraction (${file.originalname})`);
     } catch (extractErr) {
       console.warn(`[files] async text extraction failed for ${file.originalname} — file stays usable:`, extractErr?.message || extractErr);
       result = { success: false, extractedText: '', error: `extraction_degraded: ${extractErr?.message || extractErr}` };
@@ -586,7 +610,7 @@ async function processFileAfterFastUpload(file, userId, prismaClient, fileRecord
     try {
       // Bound analyzeFile with the same budget the synchronous path uses, so a
       // hung analysis can't leave the R2 offload + path update below unrun.
-      await withTimeout(documentIntelligence.analyzeFile(prismaClient, { userId, fileRecord, extractionResult: result, force: true }), ANALYZE_TIMEOUT_MS, `document analysis (${file.originalname})`);
+      await withTimeout(documentIntelligence.analyzeFile(prismaClient, { userId, fileRecord, extractionResult: result, force: true }), ASYNC_ANALYZE_TIMEOUT_MS, `async document analysis (${file.originalname})`);
     } catch (analysisError) { console.warn('[files] document analysis failed:', analysisError.message || analysisError); }
 
     // Offload binary (+ thumbnail) to R2 after extraction + analysis.
@@ -610,10 +634,7 @@ async function processFileAfterFastUpload(file, userId, prismaClient, fileRecord
 }
 
 function scheduleFileAfterFastUpload(file, userId, prismaClient, fileRecord) {
-  setImmediate(() => {
-    processFileAfterFastUpload(file, userId, prismaClient, fileRecord)
-      .catch(err => console.warn('[files] async post-upload processing failed:', err?.message || err));
-  });
+  enqueueAsyncFileProcessing(() => processFileAfterFastUpload(file, userId, prismaClient, fileRecord));
 }
 
 async function processFilesForAsyncPreview(files, userId, prismaClient) {

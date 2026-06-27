@@ -55,6 +55,42 @@ function contentHash(text) {
     .digest('hex');
 }
 
+function splitTextByPageMarkers(text) {
+  const source = String(text || '');
+  const markerRe = /(?:^|\n)\[page\s+(\d+)\]\s*\n/gi;
+  const markers = [];
+  let match;
+  while ((match = markerRe.exec(source)) !== null) {
+    markers.push({
+      page: Number.parseInt(match[1], 10),
+      markerStart: match.index,
+      contentStart: markerRe.lastIndex,
+    });
+  }
+  if (markers.length === 0) {
+    return [{ page: null, text: source, startOffset: 0 }];
+  }
+
+  const segments = [];
+  const first = markers[0];
+  const preface = source.slice(0, first.markerStart).trim();
+  if (preface) segments.push({ page: null, text: preface, startOffset: 0 });
+
+  for (let i = 0; i < markers.length; i += 1) {
+    const current = markers[i];
+    const next = markers[i + 1];
+    const end = next ? next.markerStart : source.length;
+    const segmentText = source.slice(current.contentStart, end).trim();
+    if (!segmentText) continue;
+    segments.push({
+      page: Number.isFinite(current.page) ? current.page : null,
+      text: segmentText,
+      startOffset: current.contentStart,
+    });
+  }
+  return segments;
+}
+
 function vectorLiteral(vector) {
   if (!vector || typeof vector[Symbol.iterator] !== 'function') {
     throw new Error('embedding vector is required');
@@ -90,30 +126,37 @@ function normalizeDocumentIds(documentIds) {
 function makeChunkRecords(file, options = {}) {
   const text = String(file?.extractedText || '').trim();
   if (!text) return [];
-  const pieces = rag.chunk(text, {
-    size: positiveInt(options.chunkSizeChars, DEFAULT_CHUNK_SIZE_CHARS),
-    overlap: positiveInt(options.chunkOverlapChars, DEFAULT_CHUNK_OVERLAP_CHARS),
-  });
-  let cursor = 0;
-  return pieces.map((piece, ordinal) => {
-    const probe = piece.slice(0, Math.min(80, piece.length));
-    const foundAt = probe ? text.indexOf(probe, cursor) : -1;
-    const offset = foundAt >= 0 ? foundAt : cursor;
-    cursor = Math.max(offset + piece.length, cursor);
-    return {
-      content: piece,
-      contentHash: contentHash(piece),
-      page: null,
-      offset,
-      tokenCount: approxTokens(piece),
-      metadata: {
-        ordinal,
-        source: 'file.extractedText',
-        mimeType: file.mimeType || null,
-        originalName: file.originalName || null,
-      },
-    };
-  });
+  const chunkSize = positiveInt(options.chunkSizeChars, DEFAULT_CHUNK_SIZE_CHARS);
+  const overlap = positiveInt(options.chunkOverlapChars, DEFAULT_CHUNK_OVERLAP_CHARS);
+  const records = [];
+  const segments = splitTextByPageMarkers(text);
+
+  for (const segment of segments) {
+    const pieces = rag.chunk(segment.text, { size: chunkSize, overlap });
+    let cursor = 0;
+    for (const piece of pieces) {
+      const probe = piece.slice(0, Math.min(80, piece.length));
+      const foundAt = probe ? segment.text.indexOf(probe, cursor) : -1;
+      const localOffset = foundAt >= 0 ? foundAt : cursor;
+      const offset = segment.startOffset + localOffset;
+      cursor = Math.max(localOffset + piece.length, cursor);
+      records.push({
+        content: piece,
+        contentHash: contentHash(piece),
+        page: segment.page,
+        offset,
+        tokenCount: approxTokens(piece),
+        metadata: {
+          ordinal: records.length,
+          source: segment.page ? 'file.extractedText.page_marker' : 'file.extractedText',
+          mimeType: file.mimeType || null,
+          originalName: file.originalName || null,
+          page: segment.page,
+        },
+      });
+    }
+  }
+  return records;
 }
 
 function createPostgresChunkStore(prisma) {
@@ -693,6 +736,7 @@ module.exports = {
   _internals: {
     approxTokens,
     vectorLiteral,
+    splitTextByPageMarkers,
     fuseSearchRows,
     lexicalOverlapScore,
     bestEvidenceSentence,

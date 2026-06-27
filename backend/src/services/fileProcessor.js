@@ -120,7 +120,7 @@ class FileProcessor {
           console.warn('[mem-safe] streaming PDF failed:', err && err.message);
           return null;
         });
-        if (streaming) {
+        if (streaming && streaming.totalChars > 0) {
           return {
             success: true,
             extractedText: streaming.text,
@@ -142,10 +142,13 @@ class FileProcessor {
             },
           };
         }
-
-        // If streaming fails outright, try memory-safe fallback
-        // but DO NOT sample — just warn and let the user know
-        console.warn('[mem-safe] streaming unavailable; falling back to standard extraction. Large PDF may be slow.');
+        if (streaming && streaming.totalChars === 0) {
+          console.warn('[mem-safe] large PDF has no embedded text layer; falling through to page OCR.');
+        } else {
+          // If streaming fails outright, try memory-safe fallback
+          // but DO NOT sample — just warn and let the user know.
+          console.warn('[mem-safe] streaming unavailable; falling back to standard extraction. Large PDF may be slow.');
+        }
         // Fall through to normal processing
       }
 
@@ -429,8 +432,15 @@ class FileProcessor {
     }
 
     // Legacy pdf-parse fallback — works for small PDFs or when streaming
-    // module is unavailable
+    // module is unavailable. For large scanned PDFs, skip it: pdf-parse reads
+    // the whole file into memory and can OOM before OCR even starts.
+    const stat = await fs.stat(filePath).catch(() => null);
+    const skipLegacyPdfParse = stat && stat.size > STREAMING_PDF_THRESHOLD;
+    if (skipLegacyPdfParse) {
+      console.warn(`[fileProcessor] skipping in-memory pdf-parse for large PDF (${(stat.size / 1024 / 1024).toFixed(1)} MB); using page OCR`);
+    }
     try {
+      if (skipLegacyPdfParse) throw new Error('skip_legacy_pdf_parse_large_pdf');
       const dataBuffer = await fs.readFile(filePath);
       const data = await pdf(dataBuffer);
 
@@ -451,8 +461,22 @@ class FileProcessor {
       }
 
       console.log(`Detected scanned PDF -> running hybrid OCR...`);
-      const result = await ocrEngine.extractFromPdfImages(filePath);
-      const extractedText = result.text || 'No text detected in image PDF';
+    } catch (error) {
+      if (error?.message !== 'skip_legacy_pdf_parse_large_pdf') {
+        console.warn(`PDF text-layer fallback unavailable, continuing with OCR for ${filePath}:`, error.message || error);
+      }
+    }
+
+    try {
+      const result = await ocrEngine.extractFromPdfImages(filePath, {
+        streaming: true,
+      });
+      const header = `PDF OCR document — ${result.ocr?.pages || 0} page(s) processed, ` +
+        `${result.ocr?.pagesWithText || 0} page(s) with readable text, ` +
+        `${String(result.text || '').length} characters` +
+        (result.ocr?.partial ? ` (partial — ${result.ocr.partialReason || 'limit reached'})` : '') +
+        `\n---\n`;
+      const extractedText = result.text ? header + result.text : 'No text detected in image PDF';
       console.log(`OCR complete: ${extractedText.length} chars extracted`);
       return options.detailed ? { extractedText, ocr: result.ocr } : extractedText;
     } catch (error) {

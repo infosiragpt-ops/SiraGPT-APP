@@ -226,6 +226,33 @@ test('ingests idempotently and does not re-embed an existing content hash', asyn
   assert.equal(chunkStore.rows.length, 2);
 });
 
+test('collection chunks preserve page and offset from PDF page markers', async () => {
+  const records = service.makeChunkRecords({
+    id: 'file-pages',
+    originalName: 'escaneo.pdf',
+    mimeType: 'application/pdf',
+    extractedText: [
+      'PDF OCR document — 2 page(s) processed',
+      '---',
+      '[page 1]',
+      'Contrato marco Alfa con obligaciones iniciales.',
+      '',
+      '[page 2]',
+      'La penalidad de incumplimiento es 10%.',
+    ].join('\n'),
+  }, {
+    chunkSizeChars: 160,
+    chunkOverlapChars: 0,
+  });
+
+  assert.equal(records.length, 3);
+  assert.equal(records[0].page, null, 'preface keeps a null page');
+  assert.equal(records[1].page, 1);
+  assert.equal(records[2].page, 2);
+  assert.equal(records[2].metadata.page, 2);
+  assert.ok(records[2].offset > records[1].offset);
+});
+
 test('retrieval is bounded and reports omitted chunks', async () => {
   const prisma = createFakePrisma();
   const collection = await service.createCollection({ prisma, ownerId: 'user-1', name: 'Colección' });

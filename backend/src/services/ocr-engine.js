@@ -10,6 +10,11 @@ function numberFromEnv(name, fallback) {
   return Number.isFinite(value) ? value : fallback;
 }
 
+function positiveIntFromEnv(name, fallback) {
+  const value = Number.parseInt(process.env[name] || '', 10);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
 function normalizeOcrText(text) {
   return String(text || '')
     .replace(/\u0000/g, '')
@@ -40,6 +45,10 @@ class OcrEngine {
       visionModel: process.env.OCR_VISION_MODEL || process.env.VISION_MODEL || 'gpt-4o-mini',
       visionPdfMaxPages: numberFromEnv('OCR_VISION_PDF_MAX_PAGES', 20),
       visionPdfStrategy: process.env.OCR_VISION_PDF_STRATEGY || 'first', // first | first-last-middle | first
+      pdfMaxPages: numberFromEnv('OCR_PDF_MAX_PAGES', 0),
+      pdfMaxChars: positiveIntFromEnv('OCR_PDF_MAX_CHARS', 6_000_000),
+      pdfScale: numberFromEnv('OCR_PDF_RENDER_SCALE', 2.4),
+      pdfMaxSide: positiveIntFromEnv('OCR_PDF_MAX_SIDE', 2600),
     };
   }
 
@@ -143,7 +152,11 @@ class OcrEngine {
     const mode = String(options.mode || config.mode).toLowerCase();
     if (mode === 'off') return this.skipped('ocr_disabled');
 
-    const pageBuffers = await this.renderPdfPages(filePath);
+    if (options.streaming !== false) {
+      return this.extractFromPdfImagesStreaming(filePath, options);
+    }
+
+    const pageBuffers = await this.renderPdfPages(filePath, options);
     if (pageBuffers.length === 0) {
       return {
         text: '',
@@ -305,24 +318,146 @@ class OcrEngine {
     };
   }
 
-  async renderPdfPages(filePath) {
+  async preprocessPdfPage(page, config = this.config) {
+    return sharp(page)
+      .rotate()
+      .resize(config.pdfMaxSide || 2600, config.pdfMaxSide || 2600, { fit: 'inside', withoutEnlargement: false })
+      .greyscale()
+      .normalize()
+      .sharpen()
+      .png()
+      .toBuffer();
+  }
+
+  async renderPdfPages(filePath, options = {}) {
+    const config = this.config;
     const { pdf } = await import('pdf-to-img');
-    const pages = await pdf(filePath, { scale: 3 });
+    const pages = await pdf(filePath, { scale: options.scale || config.pdfScale || 2.4 });
     const buffers = [];
+    const maxPages = Number.parseInt(options.maxPages ?? config.pdfMaxPages ?? 0, 10) || 0;
+    let pageNumber = 0;
 
     for await (const page of pages) {
-      const buffer = await sharp(page)
-        .rotate()
-        .resize(3000, 3000, { fit: 'inside', withoutEnlargement: false })
-        .greyscale()
-        .normalize()
-        .sharpen()
-        .png()
-        .toBuffer();
+      pageNumber += 1;
+      if (maxPages > 0 && pageNumber > maxPages) break;
+      const buffer = await this.preprocessPdfPage(page, config);
       buffers.push(buffer);
     }
 
     return buffers;
+  }
+
+  async extractFromPdfImagesStreaming(filePath, options = {}) {
+    const config = this.config;
+    const mode = String(options.mode || config.mode).toLowerCase();
+    if (mode === 'off') return this.skipped('ocr_disabled');
+
+    const { pdf } = await import('pdf-to-img');
+    const pages = await pdf(filePath, { scale: options.scale || config.pdfScale || 2.4 });
+    const maxPages = Number.parseInt(options.maxPages ?? config.pdfMaxPages ?? 0, 10) || 0;
+    const maxChars = positiveIntFromEnv('OCR_PDF_MAX_CHARS', config.pdfMaxChars || 6_000_000);
+    const language = options.language || this.defaultLanguage;
+    const onPage = typeof options.onPage === 'function' ? options.onPage : null;
+    const worker = await createWorker(language);
+    const pageResults = [];
+    const textParts = [];
+    const startedAt = Date.now();
+    let pageNumber = 0;
+    let processedPages = 0;
+    let totalUsefulChars = 0;
+    let totalConfidence = 0;
+    let outputChars = 0;
+    let partial = false;
+    let partialReason = null;
+
+    try {
+      for await (const page of pages) {
+        pageNumber += 1;
+        if (maxPages > 0 && pageNumber > maxPages) {
+          partial = true;
+          partialReason = 'page_cap';
+          break;
+        }
+
+        const buffer = await this.preprocessPdfPage(page, config);
+        const { data: { text, confidence } } = await worker.recognize(buffer);
+        const normalized = normalizeOcrText(text);
+        const quality = this.evaluateQuality({ text: normalized, confidence }, config);
+        const pageResult = {
+          page: pageNumber,
+          text: quality.text,
+          confidence: Number(confidence || 0),
+          usefulChars: quality.usefulChars,
+          lineCount: quality.lineCount,
+          accepted: quality.accepted || quality.enoughText || quality.legibleShort,
+          reason: quality.reason,
+        };
+        pageResults.push(pageResult);
+        processedPages += 1;
+        totalUsefulChars += quality.usefulChars;
+        totalConfidence += Number(confidence || 0);
+
+        if (pageResult.accepted && pageResult.text) {
+          const pageBlock = `[page ${pageNumber}]\n${pageResult.text}`;
+          const separatorChars = textParts.length > 0 ? 2 : 0;
+          if (outputChars + separatorChars + pageBlock.length > maxChars) {
+            partial = true;
+            partialReason = 'char_cap';
+            break;
+          }
+          textParts.push(pageBlock);
+          outputChars += separatorChars + pageBlock.length;
+        }
+
+        if (onPage) {
+          await onPage({
+            page: pageNumber,
+            processedPages,
+            usefulChars: quality.usefulChars,
+            confidence: Number(confidence || 0),
+            accepted: pageResult.accepted,
+          });
+        }
+      }
+    } finally {
+      await worker.terminate();
+    }
+
+    const joinedText = normalizeOcrText(textParts.join('\n\n'));
+    const avgConfidence = processedPages ? totalConfidence / processedPages : 0;
+    const quality = this.evaluateQuality({ text: joinedText, confidence: avgConfidence }, config);
+    const acceptedPages = pageResults.filter(page => page.accepted && page.text).length;
+
+    if (quality.enoughText || quality.legibleShort) {
+      return {
+        text: quality.text,
+        pages: pageResults,
+        ocr: {
+          status: 'local_ok',
+          confidence: Math.round(avgConfidence),
+          provider: 'tesseract',
+          usefulChars: totalUsefulChars,
+          lineCount: quality.lineCount,
+          pages: processedPages,
+          pagesWithText: acceptedPages,
+          streaming: true,
+          partial,
+          partialReason,
+          elapsedMs: Date.now() - startedAt,
+          language,
+          maxPages: maxPages || null,
+        },
+      };
+    }
+
+    return this.asFailedResult(quality, 'local_pdf_ocr_empty', {
+      pages: processedPages,
+      pagesWithText: acceptedPages,
+      streaming: true,
+      partial,
+      partialReason,
+      elapsedMs: Date.now() - startedAt,
+    });
   }
 
   async runVisionPdfFallback(pageBuffers, { config = this.config, localQuality = null } = {}) {
