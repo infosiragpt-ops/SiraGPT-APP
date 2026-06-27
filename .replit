@@ -96,6 +96,8 @@ GOOGLE_AUTH_BASE_URL = "https://siragpt.com"
 SIRAGPT_USER_MEMORY_STORE = "pgvector"
 SIRAGPT_MEMORY_EMBED_PROVIDER = "jina"
 R2_ENDPOINT = "https://c6a66a858f460a12b7b0d373637efc00.r2.cloudflarestorage.com"
+CODE_HOST_RUNNER = "1"
+CODE_HOST_RUNNER_ALLOWED_USER_IDS = "cmprr3bh4jpA2M7TAvTQV30js0mbC"
 
 [postMerge]
 path = "scripts/post-merge.sh"

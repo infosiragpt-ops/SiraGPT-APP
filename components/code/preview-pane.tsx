@@ -33,7 +33,6 @@ import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { useCodeWorkspace } from "@/lib/code-workspace-context"
 import { buildPreviewDocument, type PreviewKind } from "@/lib/code-preview-build"
 import { CODE_TEMPLATES } from "@/lib/code-templates"
-import { opencodeService } from "@/lib/opencode/opencode-service"
 import { hostRunnerService } from "@/lib/code-runner/host-runner-service"
 
 type LiveRun = { phase: "idle" | "starting" | "ready" | "error"; devUrl: string; note: string }
@@ -73,12 +72,12 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
   const [logs, setLogs] = React.useState<LogEntry[]>([])
   const logSeq = React.useRef(0)
 
-  // Phase B — run a real Node/Vite/Next app and iframe it live. Prefer the
-  // no-Docker host runner (local); fall back to the opencode/Docker runner (prod).
+  // Phase B — run a real Vite app and iframe it live via the no-Docker host
+  // runner. The dev server stays private on the server; the browser reaches it
+  // through the same-origin reverse proxy (/api/code-runner/<id>/app/).
   const [liveRun, setLiveRun] = React.useState<LiveRun>({ phase: "idle", devUrl: "", note: "" })
   const pollRef = React.useRef<number | null>(null)
   const runIdRef = React.useRef<string>("")
-  const modeRef = React.useRef<"host" | "opencode">("host")
 
   const hasNodeProject = React.useMemo(
     () => Object.keys(files || {}).some((p) => /(^|\/)package\.json$/.test(p)),
@@ -95,8 +94,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
   const stopApp = React.useCallback(() => {
     clearPoll()
     setLiveRun({ phase: "idle", devUrl: "", note: "" })
-    if (modeRef.current === "opencode") void opencodeService.stopRun()
-    else if (runIdRef.current) void hostRunnerService.stop(runIdRef.current)
+    if (runIdRef.current) void hostRunnerService.stop(runIdRef.current)
   }, [clearPoll])
 
   // Poll a runner's status until the dev server is ready (or fails / times out).
@@ -135,25 +133,22 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
     // Workspace files are CodeFile objects; the runner wants path -> content.
     const fileMap: Record<string, string> = {}
     for (const [p, f] of Object.entries(files)) fileMap[p] = f?.content ?? ""
-    // 1) Local host runner (no Docker) — the default everywhere it's enabled.
+    // No-Docker host runner: install deps + boot a real vite dev server, then
+    // iframe it through the same-origin reverse proxy (started.devUrl).
     const started = await hostRunnerService.start(fileMap, runIdRef.current)
-    if (!started.disabled) {
-      modeRef.current = "host"
-      if (started.error) {
-        setLiveRun({ phase: "error", devUrl: "", note: started.error })
-        return
-      }
-      pollUntilReady(() => hostRunnerService.status(runIdRef.current), started.devUrl || "")
+    if (started.disabled) {
+      setLiveRun({
+        phase: "error",
+        devUrl: "",
+        note: "El motor de ejecución está desactivado en este entorno. Para correr apps aquí hay que activar CODE_HOST_RUNNER.",
+      })
       return
     }
-    // 2) Fallback: opencode/Docker runner (production).
-    modeRef.current = "opencode"
-    const res = await opencodeService.runProject()
-    if (res.error) {
-      setLiveRun({ phase: "error", devUrl: "", note: res.error })
+    if (started.error) {
+      setLiveRun({ phase: "error", devUrl: "", note: started.error })
       return
     }
-    pollUntilReady(() => opencodeService.runStatus(), res.devUrl || "http://localhost:5173")
+    pollUntilReady(() => hostRunnerService.status(runIdRef.current), started.devUrl || "")
   }, [files, pollUntilReady])
 
   React.useEffect(() => {
@@ -215,15 +210,16 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
 
   const openInNewTab = React.useCallback(() => {
     if (typeof window === "undefined") return
-    if (liveRun.phase === "ready" && liveRun.devUrl) {
-      window.open(liveRun.devUrl, "_blank", "noopener,noreferrer")
-      return
-    }
+    // NUNCA abrir el runner en vivo en una pestaña top-level: ahí no hay sandbox
+    // y el código generado NO confiable correría con el origen real de SiraGPT
+    // (acceso a localStorage/cookies/APIs). La app en vivo solo se ve dentro del
+    // iframe aislado. Para la preview estática (HTML) sí abrimos un blob.
+    if (liveRun.phase === "ready") return
     const blob = new Blob([result.html], { type: "text/html" })
     const url = URL.createObjectURL(blob)
     window.open(url, "_blank", "noopener,noreferrer")
     setTimeout(() => URL.revokeObjectURL(url), 30_000)
-  }, [liveRun.devUrl, liveRun.phase, result.html])
+  }, [liveRun.phase, result.html])
 
   const errorCount = logs.filter((l) => l.level === "error").length
   const entryLabel = result.entry ? result.entry.split("/").pop() : "preview"
@@ -322,9 +318,10 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
           <button
             type="button"
             onClick={openInNewTab}
-            className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+            disabled={liveRun.phase === "ready"}
+            className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
             aria-label="Abrir en pestaña nueva"
-            title="Abrir en pestaña nueva"
+            title={liveRun.phase === "ready" ? "La app en vivo solo se ve aquí (aislada por seguridad)" : "Abrir en pestaña nueva"}
           >
             <ExternalLink className="h-3.5 w-3.5" />
           </button>
@@ -355,9 +352,13 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
             <iframe
               src={liveRun.devUrl}
               title="App en vivo (dev server)"
-              // El dev server corre en otro puerto (cross-origin): sin este
-              // permiso, navigator.clipboard.writeText falla dentro del iframe
+              // El dev server se sirve same-origin (vía proxy /api/code-runner)
+              // pero ejecuta CÓDIGO GENERADO NO CONFIABLE: el sandbox SIN
+              // allow-same-origin lo aísla en un origen opaco para que no pueda
+              // leer el localStorage/cookies de SiraGPT ni llamar a sus APIs.
+              // allow="clipboard-write" mantiene navigator.clipboard.writeText
               // (p.ej. el botón Copiar del componente «Invitar al proyecto»).
+              sandbox="allow-scripts allow-forms allow-popups allow-modals allow-pointer-lock"
               allow="clipboard-write"
               className="h-full w-full border-0 bg-white dark:bg-zinc-900"
             />
