@@ -112,3 +112,33 @@ test('document pipeline embeds uploaded image references into generated DOCX', a
   const telemetry = JSON.parse(await fs.readFile(result.telemetryPath, 'utf8'));
   assert.equal(telemetry.plan.referenceFiles[0].localPath, undefined);
 });
+
+test('document pipeline generates a validated XLSX without missing runtime dependencies', async () => {
+  const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), 'siragpt-doc-chat-xlsx-'));
+  const telemetryDir = await fs.mkdtemp(path.join(os.tmpdir(), 'siragpt-doc-chat-xlsx-telemetry-'));
+  const result = await runAdvancedDocumentPipeline({
+    prompt: 'Crea un Excel con ventas mensuales, costos, margen, validaciones y resumen ejecutivo.',
+    format: 'xlsx',
+    outputDir,
+    telemetryDir,
+  });
+
+  assert.equal(result.validation.passed, true);
+  assert.match(result.artifact.filename, /\.xlsx$/);
+  assert.equal(result.artifact.mime, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  assert.ok(result.buffer.length > 8_000, 'expected a non-empty workbook');
+
+  const zip = new PizZip(result.buffer);
+  const entries = Object.keys(zip.files);
+  assert.ok(entries.includes('xl/workbook.xml'));
+  assert.ok(entries.some((entry) => entry.startsWith('xl/charts/')), 'expected chart XML');
+
+  const sheetXml = entries
+    .filter((entry) => /^xl\/worksheets\/sheet\d+\.xml$/.test(entry))
+    .map((entry) => zip.file(entry)?.asText() || '')
+    .join('\n');
+  assert.match(sheetXml, /<f[ >]/, 'expected formulas');
+  assert.match(sheetXml, /conditionalFormatting/, 'expected conditional formatting');
+  assert.match(sheetXml, /dataValidation/, 'expected data validation');
+  assert.match(sheetXml, /<pane\b/, 'expected frozen pane');
+});

@@ -9,7 +9,7 @@ FROM node:22-alpine AS deps
 WORKDIR /app
 
 # Install OS deps needed for native modules and document processing.
-RUN apk add --no-cache pandoc python3 py3-pip
+RUN apk add --no-cache pandoc py3-openpyxl python3 py3-pip
 
 # Install Node deps
 COPY package.json package-lock.json ./
@@ -19,7 +19,7 @@ RUN npm ci --omit=dev --prefer-offline --no-audit --no-fund
 FROM node:22-alpine AS build
 WORKDIR /app
 
-RUN apk add --no-cache pandoc python3 py3-pip
+RUN apk add --no-cache pandoc py3-openpyxl python3 py3-pip
 
 # Copy prod node_modules from deps stage (avoids re-download)
 COPY --from=deps /app/node_modules ./node_modules
@@ -42,6 +42,7 @@ RUN apk add --no-cache \
     ghostscript \
     libreoffice \
     pandoc \
+    py3-openpyxl \
     poppler-utils \
     py3-pip \
     python3 \

@@ -23,6 +23,7 @@ test('backend Dockerfile includes Linux Office/PDF/OCR tooling for document edit
     'font-liberation',
     'font-noto',
     'pandoc',
+    'py3-openpyxl',
     'python3',
   ]) {
     assert.match(dockerfile, new RegExp(`\\b${pkg}\\b`));

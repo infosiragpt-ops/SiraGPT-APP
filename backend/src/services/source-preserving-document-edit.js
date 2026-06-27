@@ -3340,6 +3340,19 @@ function extractReplacementPair(text = '') {
   return { needle: needle.slice(0, 180), replacement: replacement.slice(0, 500) };
 }
 
+function cleanupXlsxCellWriteValue(value = '') {
+  return String(value || '')
+    .replace(/[.;!?]+$/g, '')
+    .replace(/\s+y\s+(?:devu[eé]lveme|devuelve|retorna|regresa|entr[eé]game|dame|manda|env[ií]a)\b.*$/iu, '')
+    .replace(/\s+(?:por favor|gracias)\s*$/iu, '')
+    .replace(/^["“”'`]+|["“”'`]+$/g, '')
+    .trim();
+}
+
+function replacementTargetsXlsxCell(pair = {}) {
+  return /\b(?:celda|cell)\s+[a-z]{1,3}[1-9][0-9]{0,6}\b/i.test(String(pair.needle || ''));
+}
+
 function extractXlsxCellWrite(text = '') {
   const raw = String(text || '');
   const cellMatch = raw.match(/\b(?:celda|cell)\s+([A-Z]{1,3}[1-9][0-9]{0,6})\b/i);
@@ -3349,8 +3362,14 @@ function extractXlsxCellWrite(text = '') {
   let value = extractQuotedValues(afterCell)[0] || '';
   if (!value) {
     const valueMatch = afterCell.match(/\b(?:escrib\w*|pon\w*|coloc\w*|con|a|=|valor)\s+(.{1,500})$/i);
-    value = valueMatch ? valueMatch[1].replace(/[.;!?]+$/g, '').trim() : '';
+    value = valueMatch ? valueMatch[1] : '';
   }
+  if (!value) {
+    const beforeCell = raw.slice(0, cellMatch.index);
+    const beforeMatch = beforeCell.match(/\b(?:escrib\w*|pon\w*|coloc\w*|cambi\w*|actualiz\w*)\s+(.{1,220}?)\s+(?:en|a)\s+(?:la\s+)?$/i);
+    value = beforeMatch ? beforeMatch[1] : '';
+  }
+  value = cleanupXlsxCellWriteValue(value);
   if (!value) return null;
   return {
     address: cellMatch[1].toUpperCase(),
@@ -4131,24 +4150,26 @@ function planGenericOfficeOperations({ requestText = '', format = '' } = {}) {
     seen.add(key);
     ops.push(op);
   };
+  const rawCellWrite = format === 'xlsx' ? extractXlsxCellWrite(requestText) : null;
+  if (rawCellWrite) add({ kind: 'set_cell', ...rawCellWrite });
   const rawReplacement = extractReplacementPair(requestText);
-  if (rawReplacement) add({ kind: 'replace_text', ...rawReplacement });
-  if (format === 'xlsx') {
-    const rawCellWrite = extractXlsxCellWrite(requestText);
-    if (rawCellWrite) add({ kind: 'set_cell', ...rawCellWrite });
+  if (rawReplacement && !(format === 'xlsx' && replacementTargetsXlsxCell(rawReplacement))) {
+    add({ kind: 'replace_text', ...rawReplacement });
   }
   for (const clause of clauses) {
-    const replacement = extractReplacementPair(clause);
-    if (replacement) {
-      add({ kind: 'replace_text', ...replacement });
-      continue;
-    }
     if (format === 'xlsx') {
       const cellWrite = extractXlsxCellWrite(clause);
       if (cellWrite) {
         add({ kind: 'set_cell', ...cellWrite });
         continue;
       }
+    }
+    const replacement = extractReplacementPair(clause);
+    if (replacement) {
+      if (!(format === 'xlsx' && replacementTargetsXlsxCell(replacement))) {
+        add({ kind: 'replace_text', ...replacement });
+      }
+      continue;
     }
     if (clauseIsDelete(clause)) {
       const needle = extractDeletionNeedle(clause);
