@@ -71,6 +71,13 @@ function buildProvisionSql(dbName, dbUser, dbPass) {
     `SELECT 'CREATE DATABASE "${dbName}" OWNER "${dbUser}"'`,
     `  WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = ${pgLit(dbName)})\\gexec`,
     `GRANT ALL PRIVILEGES ON DATABASE "${dbName}" TO "${dbUser}";`,
+    // Postgres 15+ stopped granting CREATE on the `public` schema to non-schema
+    // owners. The role owns the DATABASE but not the public SCHEMA, so without
+    // this a `prisma migrate deploy` fails with "permission denied for schema
+    // public". Switch into the new DB and hand the public schema to the role.
+    `\\connect "${dbName}"`,
+    `GRANT ALL ON SCHEMA public TO "${dbUser}";`,
+    `ALTER SCHEMA public OWNER TO "${dbUser}";`,
     '',
   ].join('\n');
 }
@@ -256,14 +263,21 @@ async function deployNodeContainer({ d, conn, localPath, buildEnv, slug, hostnam
   }
 
   // ── 7. Health check ───────────────────────────────────────────────
+  // A crashed container fails the deploy; a container that is up but whose `/`
+  // doesn't return 200 (common for an API) passes with a note — we don't want a
+  // false failure for apps that only expose /api routes.
   push('[promote] comprobando salud del contenedor…');
   const healthCmd =
-    `for i in $(seq 1 30); do ` +
-    `if docker exec ${containerName} wget -qO- http://localhost:${port}/ >/dev/null 2>&1; then echo HEALTHY; exit 0; fi; ` +
-    `sleep 1; done; echo UNHEALTHY; docker logs --tail 50 ${containerName} 2>&1 || true; exit 1`;
+    `sleep 3; ok=0; ` +
+    `for i in $(seq 1 20); do ` +
+    `running=$(docker inspect -f '{{.State.Running}}' ${containerName} 2>/dev/null || echo false); ` +
+    `if [ "$running" != "true" ]; then echo "[health] el contenedor se detuvo (crash):"; docker logs --tail 50 ${containerName} 2>&1 || true; exit 1; fi; ` +
+    `if docker exec ${containerName} wget -q -T 3 -O /dev/null http://localhost:${port}/ 2>/dev/null; then ok=1; break; fi; ` +
+    `sleep 2; done; ` +
+    `if [ "$ok" = "1" ]; then echo "[health] ✓ responde HTTP en :${port}"; else echo "[health] ⚠ contenedor activo pero / no devolvió 200 (normal para una API)"; fi; exit 0`;
   try {
     const { code } = await d.sshExec.exec(conn, healthCmd, { onLog: push });
-    if (code !== 0) return fail('promote', 'el contenedor no respondió a tiempo (revisa los logs arriba)');
+    if (code !== 0) return fail('promote', 'el contenedor se detuvo (crash) — revisa los logs arriba');
   } catch (err) {
     return fail('promote', d.friendlyError(err));
   }

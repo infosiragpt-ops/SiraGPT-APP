@@ -61,6 +61,9 @@ test('dbIdent + buildProvisionSql are idempotent + injection-safe', () => {
   assert.match(sql, /IF NOT EXISTS/);
   assert.match(sql, /CREATE DATABASE "app_my_app"/);
   assert.match(sql, /\\gexec/);
+  // PG15 public-schema grant so migrations can create tables.
+  assert.match(sql, /\\connect "app_my_app"/);
+  assert.match(sql, /GRANT ALL ON SCHEMA public TO "app_my_app"/);
 });
 
 test('buildCaddySnippet emits an explicit reverse_proxy site block', () => {
@@ -92,7 +95,7 @@ test('container deploy: default DB provisions Postgres + builds + runs + Caddy +
   assert.ok(sshHas(calls, /docker run -d --name app-my-app --restart unless-stopped --network siragpt_default/), 'runs container');
   assert.ok(sshHas(calls, /caddy validate .* && .*caddy reload/), 'validates before reload');
   assert.ok(sshHas(calls, /chatgpt66\.com\.caddy/), 'writes per-domain snippet');
-  assert.ok(sshHas(calls, /seq 1 30/), 'health-checks');
+  assert.ok(sshHas(calls, /State\.Running/), 'health-checks (crash-aware)');
 });
 
 test('container deploy: own DATABASE_URL skips provisioning (external)', async () => {
@@ -129,8 +132,8 @@ test('container deploy: Caddy validate failure reverts snippet + fails promote',
   assert.match(caddyCmd, /rm -f .*chatgpt66\.com\.caddy/, 'reverts the snippet on invalid config');
 });
 
-test('container deploy: unhealthy container fails the promote phase', async () => {
-  const { args } = run({ codeFor: (c) => (/seq 1 30/.test(c) ? 1 : 0) });
+test('container deploy: a crashed container fails the promote phase', async () => {
+  const { args } = run({ codeFor: (c) => (/State\.Running/.test(c) ? 1 : 0) });
   const res = await deployNodeContainer(args);
   assert.equal(res.promoted, false);
   assert.equal(res.failedPhase, 'promote');
