@@ -177,7 +177,7 @@ export default function LoginPage() {
   const isWarming = backendState === "warming" || (backendState !== "ready" && pendingAction !== null)
 
   const fieldClassName =
-    "border-neutral-300 bg-white text-neutral-900 placeholder:text-neutral-500 focus-visible:border-neutral-900 focus-visible:ring-neutral-900/15"
+    "auth-red-focus border-neutral-300 bg-white text-neutral-900 placeholder:text-neutral-500"
 
   return (
     <div className="flex min-h-[100svh] bg-neutral-50 text-neutral-950 sm:min-h-screen" style={{ colorScheme: "light" }}>
@@ -191,12 +191,12 @@ export default function LoginPage() {
           className="pointer-events-none absolute inset-0"
           style={{
             background:
-              "radial-gradient(55% 45% at 12% 12%, rgba(124,58,237,0.28), transparent 70%), radial-gradient(50% 45% at 100% 100%, rgba(79,70,229,0.20), transparent 70%)",
+              "radial-gradient(55% 45% at 12% 12%, rgba(255,0,0,0.30), transparent 70%), radial-gradient(50% 45% at 100% 100%, rgba(255,0,0,0.16), transparent 70%)",
           }}
         />
 
         <div className="relative flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/10 ring-1 ring-white/15 backdrop-blur">
+          <div className="auth-red-brandmark flex h-11 w-11 items-center justify-center rounded-2xl bg-white/10 ring-1 ring-white/15 backdrop-blur">
             <Image src="/sira-gpt.png" alt="" width={28} height={28} className="rounded-md object-contain" />
           </div>
           <span className="text-lg font-semibold tracking-tight">SiraGPT</span>
@@ -209,7 +209,7 @@ export default function LoginPage() {
           <ul className="space-y-4">
             {[t("brandFeature1"), t("brandFeature2"), t("brandFeature3")].map((feature) => (
               <li key={feature} className="flex items-start gap-3 text-white/80">
-                <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/10 ring-1 ring-white/15">
+                <span className="auth-red-check mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/10 ring-1 ring-white/15">
                   <Check className="h-3.5 w-3.5 text-white" />
                 </span>
                 <span className="text-[15px] leading-6">{feature}</span>
@@ -225,7 +225,7 @@ export default function LoginPage() {
       <main className="flex w-full flex-col items-center justify-center overflow-y-auto px-4 py-6 sm:py-10 lg:w-[55%]">
       <Card
         data-testid="login-card"
-        className="w-full max-w-md border-neutral-200 bg-white text-neutral-950 shadow-[0_24px_64px_-16px_rgba(0,0,0,0.18)]"
+        className="auth-red-card w-full max-w-md border-neutral-200 bg-white text-neutral-950"
       >
         <CardHeader className="px-6 pt-7 text-center sm:px-8 sm:pt-8">
           <div className="mb-5 grid grid-cols-[1fr_auto_1fr] items-center">
@@ -233,7 +233,7 @@ export default function LoginPage() {
               type="button"
               variant="ghost"
               onClick={handleBack}
-              className="h-9 w-fit gap-1.5 justify-self-start rounded-full border border-neutral-200 bg-white/90 px-3 text-sm font-medium text-neutral-700 shadow-sm backdrop-blur transition hover:bg-neutral-50 hover:text-neutral-950"
+              className="auth-red-back h-9 w-fit gap-1.5 justify-self-start rounded-full border border-neutral-200 bg-white/90 px-3 text-sm font-medium text-neutral-700 shadow-sm backdrop-blur transition hover:bg-neutral-50"
               aria-label="Volver atras"
               data-testid="login-back-button"
             >
@@ -242,7 +242,7 @@ export default function LoginPage() {
             </Button>
             <div
               data-testid="login-logo"
-              className="flex h-14 w-14 items-center justify-center rounded-2xl border border-neutral-200 bg-white"
+              className="auth-red-logo flex h-14 w-14 items-center justify-center rounded-2xl border border-neutral-200 bg-white"
             >
               <Image
                 src="/sira-gpt.png"
@@ -279,7 +279,7 @@ export default function LoginPage() {
             type="button"
             disabled={isLoading || googleLoading}
             onClick={handleGoogle}
-            className="h-11 w-full border-neutral-300 bg-white font-medium text-neutral-900 hover:bg-neutral-100"
+            className="auth-red-outline h-11 w-full border-neutral-300 bg-white font-medium text-neutral-900 hover:bg-neutral-100"
           >
             {(googleLoading || pendingAction === "google") ? (
               <ThinkingIndicator size="sm" className="mr-2" />
@@ -386,7 +386,7 @@ export default function LoginPage() {
             <div className="flex items-center justify-between">
               <Link
                 href="/auth/forgot-password"
-                className="text-sm text-neutral-600 underline-offset-4 hover:text-neutral-900 hover:underline"
+                className="auth-red-link text-sm text-neutral-600 underline-offset-4 hover:underline"
               >
                 {t("forgotPassword")}
               </Link>
@@ -394,7 +394,7 @@ export default function LoginPage() {
 
             <Button
               type="submit"
-              className="w-full bg-neutral-900 font-semibold text-white shadow-sm hover:bg-neutral-800"
+              className="auth-red-submit w-full font-semibold text-white shadow-sm"
               disabled={isLoading}
             >
               {isLoading ? (
@@ -414,7 +414,7 @@ export default function LoginPage() {
             {t("noAccount")}{" "}
             <Link
               href="/auth/register"
-              className="font-semibold text-neutral-900 underline decoration-neutral-900/30 underline-offset-4 transition-colors hover:decoration-neutral-900"
+              className="auth-red-link font-semibold text-neutral-900 underline decoration-neutral-900/30 underline-offset-4 transition-colors"
             >
               {t("signUp")}
             </Link>
@@ -422,6 +422,62 @@ export default function LoginPage() {
         </CardFooter>
       </Card>
       </main>
+      <style jsx global>{`
+        .auth-red-brandmark {
+          background: rgba(255, 0, 0, 0.16);
+          box-shadow: 0 18px 55px rgba(255, 0, 0, 0.16);
+        }
+
+        .auth-red-check {
+          background: rgba(255, 0, 0, 0.20);
+          box-shadow: 0 0 0 1px rgba(255, 0, 0, 0.28) inset;
+        }
+
+        .auth-red-card {
+          box-shadow: 0 24px 64px -16px rgba(255, 0, 0, 0.16), 0 18px 54px -32px rgba(0, 0, 0, 0.32);
+        }
+
+        .auth-red-logo {
+          border-color: rgba(255, 0, 0, 0.22);
+          box-shadow: 0 12px 32px rgba(255, 0, 0, 0.08);
+        }
+
+        .auth-red-back:hover,
+        .auth-red-link:hover {
+          color: #ff0000;
+        }
+
+        .auth-red-back:hover,
+        .auth-red-outline:hover {
+          border-color: rgba(255, 0, 0, 0.42);
+        }
+
+        .auth-red-link:hover {
+          text-decoration-color: #ff0000;
+        }
+
+        .auth-red-focus:focus-visible {
+          border-color: #ff0000 !important;
+          box-shadow: 0 0 0 3px rgba(255, 0, 0, 0.12) !important;
+        }
+
+        .auth-red-submit {
+          background: #ff0000 !important;
+          box-shadow: 0 16px 32px rgba(255, 0, 0, 0.20);
+        }
+
+        .auth-red-submit:hover {
+          background: #e60000 !important;
+        }
+
+        .auth-red-submit:focus-visible,
+        .auth-red-outline:focus-visible,
+        .auth-red-back:focus-visible,
+        .auth-red-link:focus-visible {
+          outline: 2px solid #ff0000;
+          outline-offset: 3px;
+        }
+      `}</style>
     </div>
   )
 }
