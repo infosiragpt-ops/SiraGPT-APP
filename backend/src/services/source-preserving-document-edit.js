@@ -45,7 +45,7 @@ function requestWantsMinimalProofreading(prompt = '') {
   const text = normalizeText(prompt);
   if (!text) return false;
   const hay = withCollapsedRepeats(text);
-  const correctionNoun = /\b(correccion(?:es)?|ortografia|gramatica|redaccion|erratas?|errores?)\b/.test(hay);
+  const correctionNoun = /\b(correccion(?:es)?|correcci\w*|ortografia|gramatica|redaccion|erratas?|errores?)\b/.test(hay);
   const correctionAction = /\b(aplic\w*|haz|hacer|realiz\w*|corrig\w*|correg\w*|revis\w*|arregl\w*|ajust\w*|mejora\w*)\b/.test(hay);
   return correctionNoun && correctionAction;
 }
@@ -1155,6 +1155,40 @@ function isAnexo3CronogramaTarget(target = {}) {
   return target?.kind === 'anexo' && Number(target.number) === 3;
 }
 
+function requestWantsCronogramaAnexo3(text = '', target = {}) {
+  const norm = normalizeText(text);
+  return isAnexo3CronogramaTarget(target)
+    && /\bcronograma\w*\b/.test(norm)
+    && /\b(?:tesis|desarrollo|culminacion)\b/.test(norm);
+}
+
+function requestWantsPlacementAfterOperationalMatrix(text = '') {
+  const norm = normalizeText(text);
+  return /\b(?:luego|despues|posterior)\b/.test(norm)
+    && /\b(?:matriz|matrix)\b/.test(norm)
+    && /\boperacional\w*\b/.test(norm);
+}
+
+function extractTargetHeadingFromRequest(requestText = '', target = {}) {
+  if (requestWantsCronogramaAnexo3(requestText, target)) {
+    return `${target.label}. Cronograma del Desarrollo y Culminación de la Tesis`;
+  }
+  const kindPattern = target.kind === 'anexo'
+    ? '(?:anexo|anexos|apendice|apendices)'
+    : escapeRegExp(normalizeText(target.kind || 'seccion'));
+  const raw = String(requestText || '');
+  const number = escapeRegExp(String(target.number || target.numeric || ''));
+  const re = new RegExp(`\\b${kindPattern}\\s*(?:n(?:ro|umero)?\\.?|num\\.?|no\\.?|#)?\\s*0*${number}\\s*(?:[.:\\-–—]\\s*)?([^\\n.!?]{4,140})`, 'iu');
+  const match = raw.match(re);
+  if (!match?.[1]) return target.label;
+  const tail = match[1]
+    .replace(/\s+(?:de\s+forma\s+profesional|profesionalmente|por\s*favor|en\s+su\s+mismo\s+formato)\b[\s\S]*$/iu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!tail || normalizeText(tail) === normalizeText(target.label)) return target.label;
+  return `${target.label}. ${tail.replace(/^[.:;\-–—\s]+/, '')}`.trim();
+}
+
 function locateCronogramaTable(documentXml, target, precomputedParagraphs = null) {
   if (!isAnexo3CronogramaTarget(target)) return null;
   const paragraphs = precomputedParagraphs || extractDocxParagraphs(documentXml);
@@ -1277,6 +1311,18 @@ function buildCronogramaAnexo3Plan() {
       block('normal', row.estado),
     ]),
   };
+}
+
+function buildCronogramaAnexo3AppendixBlocks() {
+  const plan = buildCronogramaAnexo3Plan();
+  return [
+    block('normal', 'El presente cronograma organiza las actividades necesarias para el desarrollo y culminación de la tesis, considerando las etapas de planificación, elaboración, validación, ejecución, análisis, redacción final y entrega.'),
+    block('heading3', 'Cronograma de actividades'),
+    ...plan.rows.flatMap((row, index) => [
+      block('normal', `${index + 1}. ${row.avance}: ${row.acciones} Estado: ${row.estado}. Periodo: ${row.weeks.map((week) => plan.weekLabels[week]).filter(Boolean).join(', ')}.`),
+    ]),
+    block('normal', 'Este cronograma puede ajustarse según las observaciones del asesor, la disponibilidad de la población de estudio y los plazos administrativos de la universidad.'),
+  ];
 }
 
 function firstParagraphXml(xml = '') {
@@ -1904,13 +1950,37 @@ function appendBlocksToDocumentXml(documentXml, blocks, template = null) {
   return `${beforeBodyEnd}${insertionXml}${afterBodyEnd}`;
 }
 
-function appendToDocxBuffer(buffer, blocks) {
+function insertionIndexAfterOperationalMatrix(documentXml = '') {
+  const tables = extractDocxTables(documentXml);
+  let best = null;
+  for (const table of tables) {
+    const contextXml = documentXml.slice(Math.max(0, table.start - 1800), table.start);
+    const norm = normalizeText(`${paragraphText(contextXml)} ${table.text}`);
+    let score = 0;
+    if (/\btabla\s*0?1\b/.test(norm)) score += 4;
+    if (/\b(?:matriz|matrix)\b/.test(norm)) score += 3;
+    if (/\b(?:operacional\w*|operacionalizacion\w*|matrix\s+operacional)\b/.test(norm)) score += 6;
+    if (/\b(categor[ií]a\w*|subcategor[ií]a\w*|dimension\w*|indicador\w*|variable\w*)\b/.test(norm)) score += 3;
+    if (score >= 7 && (!best || score > best.score)) best = { index: table.end, score };
+  }
+  return best?.index || null;
+}
+
+function insertBlocksToDocumentXml(documentXml, blocks, template = null, { afterIndex = null } = {}) {
+  if (!Number.isFinite(afterIndex) || afterIndex <= 0 || afterIndex >= docxBodyEnd(documentXml)) {
+    return appendBlocksToDocumentXml(documentXml, blocks, template);
+  }
+  const insertionXml = blocks.map((item) => paragraphXml(item, template)).join('');
+  return `${documentXml.slice(0, afterIndex)}<w:p/>${insertionXml}${documentXml.slice(afterIndex)}`;
+}
+
+function appendToDocxBuffer(buffer, blocks, options = {}) {
   const zip = new PizZip(buffer);
   const documentFile = zip.file('word/document.xml');
   if (!documentFile) throw new Error('DOCX inválido: falta word/document.xml.');
   const documentXml = documentFile.asText();
   const template = buildDocumentFormattingTemplate(extractDocxParagraphs(documentXml));
-  zip.file('word/document.xml', appendBlocksToDocumentXml(documentXml, blocks, template));
+  zip.file('word/document.xml', insertBlocksToDocumentXml(documentXml, blocks, template, options));
   return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
@@ -3085,6 +3155,25 @@ function validateDocxOperationCriteria(buffer, operations = []) {
       checks.push({ id: `section_${normalizeText(op.target.label).replace(/\s+/g, '_')}_completed`, label: `${op.target.label} completado`, passed: result.ok, details: result });
       continue;
     }
+    if (op.kind === 'append_labeled' && (op.contentKind === 'cronograma_anexo_3' || requestWantsCronogramaAnexo3(text, op.target))) {
+      const required = [
+        'anexo 3',
+        'cronograma del desarrollo y culminacion de la tesis',
+        'planificacion',
+        'capitulo i',
+        'matriz de consistencia',
+        'operacionalizacion',
+        'entrega',
+      ];
+      const missing = required.filter((needle) => !normalized.includes(needle));
+      checks.push({
+        id: 'cronograma_anexo_3_appended',
+        label: 'Anexo 3 Cronograma agregado al Word',
+        passed: missing.length === 0,
+        details: { missing },
+      });
+      continue;
+    }
     if ((op.kind === 'append_generic' || op.kind === 'append_labeled') && op.wantsInstrument) {
       const hasInstrumentHeading = normalized.includes('instrumento de recoleccion de datos')
         || normalized.includes('instrumentos de recoleccion de datos')
@@ -3558,6 +3647,22 @@ function clauseWantsConsistencyMatrix(clauseNorm) {
   return Boolean(mod && mod.requestWantsConsistencyMatrix && mod.requestWantsConsistencyMatrix(clauseNorm));
 }
 
+function clauseHasStructuralEditIntent(clauseNorm) {
+  const target = parseTargetSectionRequest(clauseNorm);
+  return Boolean(
+    target
+    || clauseIsAppend(clauseNorm)
+    || clauseIsFill(clauseNorm)
+    || clauseIsDelete(clauseNorm)
+    || extractReplacementPair(clauseNorm)
+    || clauseMentionsCover(clauseNorm)
+    || clauseWantsBibliography(clauseNorm)
+    || clauseWantsIndex(clauseNorm)
+    || clauseWantsTable(clauseNorm)
+    || clauseWantsVisual(clauseNorm)
+  );
+}
+
 function clauseWantsIndex(clauseNorm) {
   const mod = docxTableInsertModule();
   return Boolean(mod && mod.detectIndexRequest && mod.detectIndexRequest(clauseNorm).wantsIndex);
@@ -3580,7 +3685,7 @@ function buildOperationFromClause(clauseNorm, documentXml) {
     return { kind: 'replace_text', ...replacement };
   }
 
-  if (requestWantsMinimalProofreading(clauseNorm)) {
+  if (requestWantsMinimalProofreading(clauseNorm) && !clauseHasStructuralEditIntent(clauseNorm)) {
     return { kind: 'proofread_minimal' };
   }
 
@@ -3609,11 +3714,14 @@ function buildOperationFromClause(clauseNorm, documentXml) {
 
   if (target) {
     const exists = sectionExistsInDoc(documentXml, target);
+    const contentKind = requestWantsCronogramaAnexo3(clauseNorm, target) ? 'cronograma_anexo_3' : undefined;
+    const base = { target, wantsInstrument };
+    if (contentKind) base.contentKind = contentKind;
     // "agrega … como anexo 4" when the anexo does not exist yet → create it.
-    if (append && !exists) return { kind: 'append_labeled', target, wantsInstrument };
-    if (exists) return { kind: 'fill_section', target, wantsInstrument };
-    if (fill) return { kind: 'fill_section', target, wantsInstrument };
-    return { kind: 'append_labeled', target, wantsInstrument };
+    if (append && !exists) return { kind: 'append_labeled', ...base };
+    if (exists) return { kind: 'fill_section', ...base };
+    if (fill) return { kind: 'fill_section', ...base };
+    return { kind: 'append_labeled', ...base };
   }
   // A chart/diagram request (no explicit section) → embed a visual instead of a
   // generic text appendix.
@@ -3628,7 +3736,7 @@ function buildOperationFromClause(clauseNorm, documentXml) {
 }
 
 function operationKey(op) {
-  return `${op.kind}:${op.target ? op.target.label : ''}:${op.wantsInstrument ? 'instr' : ''}:${op.tableKind || ''}:${normalizeText(op.needle || '')}:${normalizeText(op.replacement || '')}:${op.address || ''}`;
+  return `${op.kind}:${op.target ? op.target.label : ''}:${op.wantsInstrument ? 'instr' : ''}:${op.tableKind || ''}:${op.contentKind || ''}:${normalizeText(op.needle || '')}:${normalizeText(op.replacement || '')}:${op.address || ''}`;
 }
 
 const BULK_FILL_SCOPE_RE = /\b(tablas?|anexos?|secciones?|cuadros?|matrices?|matriz|vac[ií]as?|vac[ií]os?|faltantes?|pendientes?|todo|todos|todas|que\s+falt\w*)\b/;
@@ -3647,12 +3755,13 @@ function planSourcePreservingOperations({ requestText = '', documentXml = '', re
 
   const rawReplacement = extractReplacementPair(requestText);
   if (rawReplacement) add({ kind: 'replace_text', ...rawReplacement });
+  const norm = normalizeText(requestText);
+  if (requestWantsMinimalProofreading(norm)) add({ kind: 'proofread_minimal' });
   for (const clause of clauses) add(buildOperationFromClause(clause, documentXml));
 
   // Broader understanding: "completa / rellena las tablas vacías / los anexos /
   // todo lo que falte" with no explicit number → fill every empty-table or empty
   // section the document actually has.
-  const norm = normalizeText(requestText);
   const wantsBulkFill = clauseIsFill(norm) && BULK_FILL_SCOPE_RE.test(norm);
   const hasExplicitTarget = ops.some((op) => op.target);
   if (wantsBulkFill && !hasExplicitTarget) {
@@ -3915,27 +4024,41 @@ async function runFillSectionOperation({ buffer, op, requestText, sourceText, al
 
 async function runAppendLabeledOperation({ buffer, op, requestText, sourceText, allSourceFiles, sourceFile, signal }) {
   const originalName = sourceFile.originalName || sourceFile.filename;
-  const bodyBlocks = op.wantsInstrument
-    ? buildInstrumentAppendixBody({ prompt: requestText, sourceText, originalName })
-    : await generateTargetSectionBlocks({
+  let bodyBlocks;
+  if (op.wantsInstrument) {
+    bodyBlocks = buildInstrumentAppendixBody({ prompt: requestText, sourceText, originalName });
+  } else if (op.contentKind === 'cronograma_anexo_3' || requestWantsCronogramaAnexo3(requestText, op.target)) {
+    bodyBlocks = buildCronogramaAnexo3AppendixBlocks();
+  } else {
+    bodyBlocks = await generateTargetSectionBlocks({
       prompt: requestText,
       target: op.target,
       sourceFiles: allSourceFiles,
       sourceText,
       signal,
     });
+  }
   const heading = op.wantsInstrument
     ? `${op.target.label}. Instrumentos de recolección de datos`
-    : op.target.label;
+    : extractTargetHeadingFromRequest(requestText, op.target);
   const labeled = [
     block('pageBreak', ''),
     block('heading2', heading),
     ...bodyBlocks.filter((item) => item.kind !== 'pageBreak'),
   ];
+  let afterIndex = null;
+  if (requestWantsPlacementAfterOperationalMatrix(requestText)) {
+    afterIndex = insertionIndexAfterOperationalMatrix(readDocxDocumentXml(buffer));
+  }
   return {
-    buffer: appendToDocxBuffer(buffer, labeled),
+    buffer: appendToDocxBuffer(buffer, labeled, { afterIndex }),
     validationBlocks: labeled,
-    step: { kind: 'append_labeled', label: op.target.label, mode: op.wantsInstrument ? 'instrument' : 'generic' },
+    step: {
+      kind: 'append_labeled',
+      label: op.target.label,
+      mode: op.wantsInstrument ? 'instrument' : (op.contentKind === 'cronograma_anexo_3' ? 'cronograma_appendix' : 'generic'),
+      placement: afterIndex ? 'after_operational_matrix' : 'append',
+    },
   };
 }
 

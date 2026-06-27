@@ -198,6 +198,44 @@ async function makeDocxWithOperationalMatrixBuffer() {
   return Buffer.from(await Packer.toBuffer(doc));
 }
 
+async function makeDocxWithOperationalMatrixAndProofreadBuffer() {
+  const cell = (text = '') => new TableCell({ children: [new Paragraph(text)] });
+  const doc = new Document({
+    sections: [{
+      children: [
+        new Paragraph('Resumen'),
+        new Paragraph('Palabras claves: informe pericial; capacidad económica.'),
+        new Paragraph('Matriz de categorización ACTUAL'),
+        new Paragraph('Tabla 01. Matriz operacional'),
+        new Table({
+          rows: [
+            new TableRow({
+              children: [
+                cell('Categoría'),
+                cell('Subcategoría'),
+                cell('Indicador'),
+                cell('Técnica'),
+                cell('Instrumento'),
+              ],
+            }),
+            new TableRow({
+              children: [
+                cell('Informe pericial'),
+                cell('Valoración económica'),
+                cell('Criterios de cuantificación'),
+                cell('Análisis documental'),
+                cell('Guía de análisis documental'),
+              ],
+            }),
+          ],
+        }),
+        new Paragraph('Contenido posterior que debe permanecer después del cronograma agregado.'),
+      ],
+    }],
+  });
+  return Buffer.from(await Packer.toBuffer(doc));
+}
+
 async function makeDocxWithAnexo3CronogramaStatusBuffer({ statusForRow = () => 'Completado', leakText = false } = {}) {
   const plan = sourcePreservingInternals.buildCronogramaAnexo3Plan();
   const blankCells = (count) => Array.from({ length: count }, () => new TableCell({ children: [new Paragraph('')] }));
@@ -916,6 +954,59 @@ describe('source-preserving document edit', () => {
       assert.match(xml, /Criterios de cuantificación/);
       assert.match(xml, /Bienes registrables/);
       assert.doesNotMatch(xml, /ANEXOS/);
+    } finally {
+      if (originalOpenAIKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = originalOpenAIKey;
+    }
+  });
+
+  it('returns the same DOCX with minimal proofreading and Anexo 3 cronograma inserted after the operational matrix', async () => {
+    const originalOpenAIKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-proofread-cronograma-'));
+      const originalPath = path.join(tmp, '540_694_correccion_corregido.docx');
+      fs.writeFileSync(originalPath, await makeDocxWithOperationalMatrixAndProofreadBuffer());
+
+      const prompt = 'aplica correccioens minimas y agrega luego de la matrix operacional agrega Anexo 3. Cronograma del Desarrollo y Culminación de la Tesis de forma profesional';
+      const result = await generateSourcePreservingDocumentEdit({
+        sourceFile: {
+          id: 'file-docx',
+          path: originalPath,
+          originalName: '540_694_correccion_corregido.docx',
+          filename: '540_694_correccion_corregido.docx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          extractedText: 'Tabla 01. Matriz operacional con categorías, subcategorías e indicadores. Palabras claves: informe pericial.',
+        },
+        prompt,
+        displayPrompt: prompt,
+        userId: 'user-1',
+        chatId: 'chat-1',
+      });
+
+      assert.equal(result.format, 'docx');
+      assert.equal(result.validation.passed, true);
+      assert.equal(result.validation.checks.operation_criteria, true);
+      assert.match(result.file.filename, /\.docx$/);
+      assert.ok(result.file.url);
+
+      const edited = fs.readFileSync(result.artifact.path);
+      const xml = new PizZip(edited).file('word/document.xml').asText();
+      assert.match(xml, /Palabras clave:/);
+      assert.doesNotMatch(xml, /Palabras claves:/);
+      assert.match(xml, /Anexo 3\. Cronograma del Desarrollo y Culminación de la Tesis/);
+      assert.match(xml, /Planificaci[oó]n/);
+      assert.match(xml, /Matriz de consistencia/);
+      assert.match(xml, /Operacionalizaci[oó]n/);
+      assert.match(xml, /Entrega/);
+
+      const matrixIndex = xml.indexOf('Tabla 01. Matriz operacional');
+      const anexoIndex = xml.indexOf('Anexo 3. Cronograma');
+      const posteriorIndex = xml.indexOf('Contenido posterior que debe permanecer');
+      assert.ok(matrixIndex >= 0, 'source operational matrix should remain');
+      assert.ok(anexoIndex > matrixIndex, 'Anexo 3 should be inserted after the operational matrix');
+      assert.ok(posteriorIndex > anexoIndex, 'existing later content should remain after the inserted Anexo 3');
+      assert.doesNotMatch(result.content, /no pude|demasiado grande|opciones para/i);
     } finally {
       if (originalOpenAIKey === undefined) delete process.env.OPENAI_API_KEY;
       else process.env.OPENAI_API_KEY = originalOpenAIKey;
