@@ -38,12 +38,32 @@ const LOG_TAIL = 200;
 /** runId -> run state */
 const runs = new Map();
 
+function flagEnabled(value, fallback = false) {
+  const raw = String(value == null ? '' : value).trim().toLowerCase();
+  if (['1', 'true', 'on', 'yes'].includes(raw)) return true;
+  if (['0', 'false', 'off', 'no'].includes(raw)) return false;
+  return fallback;
+}
+
 function enabled() {
   const flag = String(process.env.CODE_HOST_RUNNER || '').toLowerCase();
   if (flag === '1' || flag === 'true' || flag === 'on') return true;
   if (flag === '0' || flag === 'false' || flag === 'off') return false;
   // Default: on for dev, off in production (don't run untrusted installs on the web server).
   return process.env.NODE_ENV !== 'production';
+}
+
+function proxyUrlsEnabled() {
+  return flagEnabled(process.env.CODE_RUNNER_PROXY_URLS, process.env.NODE_ENV === 'production');
+}
+
+function publicBasePath(runId) {
+  return `/api/code-runner/${encodeURIComponent(safeId(runId))}/proxy/`;
+}
+
+function publicDevUrl(runId, port) {
+  if (proxyUrlsEnabled()) return publicBasePath(runId);
+  return `http://localhost:${port}`;
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -209,6 +229,9 @@ function startDev(dir, fw, port, run) {
   } else if (fw.name === 'vite') {
     cmd = 'npx';
     args = ['--no-install', 'vite', '--host', '127.0.0.1', '--port', String(port), '--strictPort'];
+    if (proxyUrlsEnabled()) {
+      args.push('--base', publicBasePath(run.runId));
+    }
   } else {
     cmd = 'npm';
     args = ['run', 'dev'];
@@ -260,7 +283,8 @@ async function pipeline(run) {
   run.phase = 'starting';
   const port = await findFreePort();
   run.port = port;
-  run.devUrl = `http://localhost:${port}`;
+  run.internalUrl = `http://127.0.0.1:${port}`;
+  run.devUrl = publicDevUrl(run.runId, port);
   pushLog(run, `dev server en ${run.devUrl}`);
   startDev(run.dir, fw, port, run);
   await probeReady(port, Date.now() + READY_TIMEOUT_MS, run);
@@ -303,6 +327,7 @@ async function startRun({ runId, userId, files }) {
     framework: null,
     port: null,
     devUrl: '',
+    internalUrl: '',
     logs: [],
     error: null,
     child: null,
@@ -358,6 +383,18 @@ function getStatus(runId, userId) {
   };
 }
 
+function getProxyTarget(runId, userId) {
+  const id = safeId(runId);
+  const run = runs.get(id);
+  if (!run) return { error: 'not_found' };
+  if (userId && run.userId && run.userId !== userId) return { error: 'forbidden' };
+  run.lastTouch = Date.now();
+  if (!run.port || !['starting', 'ready'].includes(run.phase)) {
+    return { error: 'not_ready', phase: run.phase, message: run.error || 'dev server not ready' };
+  }
+  return { port: run.port, phase: run.phase, framework: run.framework };
+}
+
 // Idle reaper — stop dev servers nobody is watching.
 const reaper = setInterval(() => {
   const now = Date.now();
@@ -376,4 +413,13 @@ process.on('exit', () => {
   }
 });
 
-module.exports = { enabled, startRun, stopRun, getStatus };
+module.exports = {
+  enabled,
+  startRun,
+  stopRun,
+  getStatus,
+  getProxyTarget,
+  publicBasePath,
+  publicDevUrl,
+  proxyUrlsEnabled,
+};

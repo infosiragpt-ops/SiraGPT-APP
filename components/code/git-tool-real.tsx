@@ -32,6 +32,7 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useCodeWorkspace } from "@/lib/code-workspace-context"
+import { CODE_GIT_BINDING_CHANGED_EVENT } from "@/lib/code-git-mirror"
 import { GithubConnectCard } from "@/components/workspace/github-connect-card"
 import { GitPane } from "@/components/workspace/git-pane"
 import {
@@ -54,6 +55,9 @@ function writeBinding(projectId: string | null, connectionId: string | null) {
   try {
     if (connectionId) window.localStorage.setItem(bindKey(projectId), connectionId)
     else window.localStorage.removeItem(bindKey(projectId))
+    window.dispatchEvent(
+      new CustomEvent(CODE_GIT_BINDING_CHANGED_EVENT, { detail: { projectId, connectionId } }),
+    )
   } catch {
     /* quota / private mode — non-fatal */
   }
@@ -195,7 +199,7 @@ export function RealGitPanel({ projectId }: { projectId: string | null; projectN
   // Action bar (Descargar / Cargar del repo / Subir al repo / Abrir editor /
   // Cambiar) hidden for a clean Replit-style pane. Kept in code — set to `true`
   // to bring it back. Typed as boolean so the JSX stays type-checked.
-  const SHOW_ACTION_BAR: boolean = false
+  const SHOW_ACTION_BAR: boolean = true
 
   return (
     <div className="space-y-3">

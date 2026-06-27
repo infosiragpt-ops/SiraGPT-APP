@@ -35,8 +35,10 @@ RUN npx prisma generate
 FROM node:22-alpine AS runner
 WORKDIR /app
 
-# Install pandoc in the final image (needed at runtime)
-RUN apk add --no-cache pandoc
+# Runtime tools:
+# - pandoc: document conversion routes
+# - git/openssh-client: APPS/GitHub workspaces clone, pull, diff, push
+RUN apk add --no-cache pandoc git openssh-client
 
 # Create non-root user and group if they don't exist
 RUN addgroup -S appgroup 2>/dev/null || true; \

@@ -547,9 +547,9 @@
       "remediate": "Remediar"
     },
     "composer": {
-      "placeholder": "Make, test, iterate...",
+      "placeholder": "Describe tu idea — la IA propone el plan y ejecuta…",
       "plan": "Plan",
-      "planTooltip": "Plan: restringe la corrida a solo planificación, sin ejecutar nada.",
+      "planTooltip": "El agente planifica internamente y ejecuta en modo automático.",
       "send": "Enviar",
       "stop": "Detener",
       "dictate": "Dictar",

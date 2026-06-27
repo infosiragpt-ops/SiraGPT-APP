@@ -69,7 +69,10 @@ function pickHeuristicQuestion(analysis) {
 }
 
 function readScore(analysis) {
-  const s = analysis?.request_intelligence?.ambiguity_score;
+  const contractScore = analysis?.contract?.ambiguity_score;
+  const s = typeof contractScore === "number" && Number.isFinite(contractScore)
+    ? contractScore
+    : analysis?.request_intelligence?.ambiguity_score;
   if (typeof s !== "number" || !Number.isFinite(s)) return 0;
   if (s < 0) return 0;
   if (s > 1) return 1;

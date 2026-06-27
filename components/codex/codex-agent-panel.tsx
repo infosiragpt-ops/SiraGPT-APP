@@ -55,10 +55,6 @@ export function CodexAgentPanel() {
   const [project, setProject] = useState<CodexProject | null>(null)
   const [activeRunId, setActiveRunId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  // Latest composer Plan-toggle choice. When on, the run is planning-only: the
-  // plan card hides "Aprobar y construir" and approvePlan is a guarded no-op, so
-  // no build run can ever be created from a planning-only send (feature 12 acc.).
-  const [planOnly, setPlanOnly] = useState(false)
 
   const { state, status, active, markApproved } = useCodexRun(activeRunId)
 
@@ -130,8 +126,6 @@ export function CodexAgentPanel() {
   // covers the in-flight state while we await.
   async function approvePlan() {
     if (!project || !activeRunId) return
-    // Plan toggle on → planning-only: refuse to create the build run.
-    if (planOnly) return
     try {
       const build = await codexApi.approvePlan(project.id, activeRunId)
       markApproved()
@@ -153,7 +147,6 @@ export function CodexAgentPanel() {
             tasks={item.tasks}
             approved={item.approved}
             waiting={status === "waiting_approval"}
-            planOnly={planOnly}
             onApprove={approvePlan}
             onAdjust={() => document.querySelector<HTMLTextAreaElement>("[data-codex-composer]")?.focus()}
           />
@@ -203,20 +196,27 @@ export function CodexAgentPanel() {
     }
   }
 
-  // A composer send always starts a PLAN run (plan-first); the build run is
-  // created later by the plan card's approval. Attachments are inlined into the
-  // run prompt (feature 12 minimal scope). The chosen tier travels to the run.
+  // A composer send starts a direct build run. The prompt includes the
+  // autonomous contract so the agent plans internally, executes, and only asks
+  // the user when an external blocker requires it.
   async function send(payload: ComposerSendPayload) {
     if (!project) return
     const attachText = payload.attachments.map((a) => `--- ${a.name} ---\n${a.content}`).join("\n\n")
     const fullPrompt = [attachText, payload.prompt].filter(Boolean).join("\n\n").trim()
     if (!fullPrompt) return
-    // Remember the Plan-toggle choice so the resulting plan card can suppress
-    // the build path while the toggle is active (req 2: forces planning-only).
-    setPlanOnly(payload.planOnly)
+    const autonomousPrompt = [
+      "MODO AUTONOMO OBLIGATORIO:",
+      "- No hagas preguntas de intake ni esperes confirmacion del usuario.",
+      "- Si falta contexto, propone internamente un brief completo con defaults razonables.",
+      "- Disena un plan extendido, ejecutalo, prueba/itera y entrega el resultado en el preview/codigo.",
+      "- Solo pide accion del usuario si hay un bloqueo externo real: creditos, secreto, permisos o servicio caido.",
+      "",
+      "SOLICITUD DEL USUARIO:",
+      fullPrompt,
+    ].join("\n")
     setBusy(true)
     try {
-      const run = await codexApi.createRun(project.id, { mode: "plan", prompt: fullPrompt, tier: payload.tier })
+      const run = await codexApi.createRun(project.id, { mode: "build", prompt: autonomousPrompt, tier: payload.tier })
       setActiveRunId(run.id)
     } catch (e: any) {
       toast.error(e?.message || t("errors.startRun"))

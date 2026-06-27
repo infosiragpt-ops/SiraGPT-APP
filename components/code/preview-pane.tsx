@@ -32,6 +32,8 @@ import { buildPreviewDocument, type PreviewKind } from "@/lib/code-preview-build
 import { CODE_TEMPLATES } from "@/lib/code-templates"
 import { opencodeService } from "@/lib/opencode/opencode-service"
 import { hostRunnerService } from "@/lib/code-runner/host-runner-service"
+import { githubService } from "@/lib/github-service"
+import { CODE_GIT_BINDING_CHANGED_EVENT, getGitBinding } from "@/lib/code-git-mirror"
 
 type LiveRun = { phase: "idle" | "starting" | "ready" | "error"; devUrl: string; note: string }
 type RunnerStatus = { ready?: boolean; error?: string | null; framework?: string | null; tail?: string[]; devUrl?: string }
@@ -49,7 +51,7 @@ const KIND_LABEL: Record<PreviewKind, string> = {
 }
 
 export function PreviewPane({ onClose }: { onClose?: () => void }) {
-  const { files, activePath } = useCodeWorkspace()
+  const { files, activePath, activeFolder } = useCodeWorkspace()
 
   const [auto, setAuto] = React.useState(true)
   const [device, setDevice] = React.useState<Device>(() =>
@@ -75,12 +77,28 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
   const [liveRun, setLiveRun] = React.useState<LiveRun>({ phase: "idle", devUrl: "", note: "" })
   const pollRef = React.useRef<number | null>(null)
   const runIdRef = React.useRef<string>("")
-  const modeRef = React.useRef<"host" | "opencode">("host")
+  const modeRef = React.useRef<"host" | "opencode" | "github">("host")
+  const [gitBinding, setGitBinding] = React.useState<string | null>(() =>
+    typeof window === "undefined" ? null : getGitBinding(activeFolder?.id ?? null),
+  )
 
   const hasNodeProject = React.useMemo(
     () => Object.keys(files || {}).some((p) => /(^|\/)package\.json$/.test(p)),
     [files],
   )
+  const canRunProject = hasNodeProject || Boolean(gitBinding)
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const refreshBinding = () => setGitBinding(getGitBinding(activeFolder?.id ?? null))
+    refreshBinding()
+    window.addEventListener(CODE_GIT_BINDING_CHANGED_EVENT, refreshBinding)
+    window.addEventListener("storage", refreshBinding)
+    return () => {
+      window.removeEventListener(CODE_GIT_BINDING_CHANGED_EVENT, refreshBinding)
+      window.removeEventListener("storage", refreshBinding)
+    }
+  }, [activeFolder?.id])
 
   const clearPoll = React.useCallback(() => {
     if (pollRef.current) {
@@ -93,6 +111,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
     clearPoll()
     setLiveRun({ phase: "idle", devUrl: "", note: "" })
     if (modeRef.current === "opencode") void opencodeService.stopRun()
+    else if (modeRef.current === "github" && runIdRef.current) void githubService.stop(runIdRef.current)
     else if (runIdRef.current) void hostRunnerService.stop(runIdRef.current)
   }, [clearPoll])
 
@@ -129,6 +148,30 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
         runIdRef.current = `run-${Math.random().toString(36).slice(2)}`
       }
     }
+    const boundRepo = getGitBinding(activeFolder?.id ?? null)
+    if (boundRepo) {
+      modeRef.current = "github"
+      runIdRef.current = boundRepo
+      const started = await githubService.run(boundRepo).catch((err) => ({ error: err instanceof Error ? err.message : "runner unreachable" }))
+      if ("error" in started && started.error) {
+        setLiveRun({ phase: "error", devUrl: "", note: started.error })
+        return
+      }
+      pollUntilReady(
+        async () => {
+          const st = await githubService.runStatus(boundRepo)
+          return {
+            ready: Boolean(st.ready || st.status === "ready"),
+            error: st.error || null,
+            framework: st.framework || st.kind || null,
+            tail: st.tail,
+            devUrl: st.previewUrl,
+          }
+        },
+        "previewUrl" in started ? started.previewUrl || "" : "",
+      )
+      return
+    }
     // Workspace files are CodeFile objects; the runner wants path -> content.
     const fileMap: Record<string, string> = {}
     for (const [p, f] of Object.entries(files)) fileMap[p] = f?.content ?? ""
@@ -151,7 +194,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
       return
     }
     pollUntilReady(() => opencodeService.runStatus(), res.devUrl || "http://localhost:5173")
-  }, [files, pollUntilReady])
+  }, [activeFolder?.id, files, pollUntilReady])
 
   React.useEffect(
     () => () => {
@@ -251,7 +294,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
           </GlassToggle>
 
           {/* Phase B — run a real Node/Vite/Next app (npm install + dev server). */}
-          {hasNodeProject ? (
+          {canRunProject ? (
             <>
               <span className="mx-0.5 h-4 w-px bg-border/50" />
               {liveRun.phase === "ready" || liveRun.phase === "starting" ? (
@@ -272,7 +315,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
                   className="flex h-6 items-center gap-1 rounded-md bg-[hsl(var(--accent-violet)/0.16)] px-2 text-[11px] font-medium text-[hsl(var(--accent-violet))] transition-colors hover:bg-[hsl(var(--accent-violet)/0.28)]"
                 >
                   <Play className="h-3 w-3" />
-                  <span>Ejecutar</span>
+                  <span>{gitBinding ? "Ejecutar repo" : "Ejecutar"}</span>
                 </button>
               )}
             </>

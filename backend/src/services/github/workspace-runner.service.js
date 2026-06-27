@@ -24,13 +24,48 @@ const fs = require('fs');
 const path = require('path');
 
 const IS_WIN = process.platform === 'win32';
-const READY_TIMEOUT_MS = 180_000; // 3 min — covers a cold `npm install` + boot
+const DEFAULT_READY_TIMEOUT_MS = 180_000; // 3 min — covers a cold `npm install` + boot
 const READY_POLL_MS = 1500;
 const LOG_MAX_LINES = 200;
 const PORT_RANGE = [4300, 4999];
 
 // connectionId → run state
 const runs = new Map();
+
+function flagEnabled(value, fallback = false) {
+  const raw = String(value == null ? '' : value).trim().toLowerCase();
+  if (['1', 'true', 'on', 'yes'].includes(raw)) return true;
+  if (['0', 'false', 'off', 'no'].includes(raw)) return false;
+  return fallback;
+}
+
+function positiveInt(value, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
+
+function readyTimeoutMs() {
+  return positiveInt(process.env.SIRAGPT_WORKSPACE_RUN_READY_TIMEOUT_MS, DEFAULT_READY_TIMEOUT_MS);
+}
+
+function workspaceNodeOptions() {
+  const configured = String(process.env.SIRAGPT_WORKSPACE_RUN_NODE_OPTIONS || '--max-old-space-size=4096').trim();
+  const existing = String(process.env.NODE_OPTIONS || '').trim();
+  return [existing, configured].filter(Boolean).join(' ');
+}
+
+function proxyUrlsEnabled() {
+  return flagEnabled(process.env.SIRAGPT_WORKSPACE_RUN_PROXY_URLS, process.env.NODE_ENV === 'production');
+}
+
+function publicBasePath(connectionId) {
+  return `/api/github/connected/${encodeURIComponent(String(connectionId))}/proxy/`;
+}
+
+function publicPreviewUrl(connectionId, port) {
+  if (proxyUrlsEnabled()) return publicBasePath(connectionId);
+  return `http://localhost:${port}`;
+}
 
 function isDisabled() {
   return /^(1|true|on)$/i.test(String(process.env.SIRAGPT_WORKSPACE_RUN_DISABLED || ''));
@@ -65,7 +100,7 @@ function findFreePort() {
  * Decide how to run the project from package.json (or static fallback).
  * Returns { framework, command, kind } where kind is 'node' | 'static' | 'none'.
  */
-function detectRunPlan(localPath, port) {
+function detectRunPlan(localPath, port, connectionId = null) {
   const pkg = readJson(path.join(localPath, 'package.json'));
   if (pkg) {
     const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
@@ -77,7 +112,8 @@ function detectRunPlan(localPath, port) {
       dev = `npm exec -- next dev -p ${port} -H 127.0.0.1`;
     } else if (deps.vite || /vite/.test(scripts.dev || '')) {
       framework = 'vite';
-      dev = `npm exec -- vite --port ${port} --host 127.0.0.1 --strictPort`;
+      const base = proxyUrlsEnabled() && connectionId ? ` --base ${JSON.stringify(publicBasePath(connectionId))}` : '';
+      dev = `npm exec -- vite --port ${port} --host 127.0.0.1 --strictPort${base}`;
     } else if (scripts.dev) {
       framework = 'custom-dev';
       dev = 'npm run dev';
@@ -146,7 +182,7 @@ function startStaticServer(localPath, port, pushLog) {
 
 /** Poll the dev server until it answers (any HTTP response = ready). */
 function pollReady(port, onReady, onTimeout) {
-  const deadline = Date.now() + READY_TIMEOUT_MS;
+  const deadline = Date.now() + readyTimeoutMs();
   const tick = () => {
     const req = http.get({ host: '127.0.0.1', port, path: '/', timeout: 2000 }, (res) => {
       res.resume();
@@ -214,7 +250,7 @@ async function start(connectionId, localPath) {
   if (runs.has(connectionId)) stop(connectionId);
 
   const port = await findFreePort();
-  const plan = detectRunPlan(localPath, port);
+  const plan = detectRunPlan(localPath, port, connectionId);
   if (plan.kind === 'none') {
     const e = new Error('No runnable entrypoint found (no dev/start script, vite/next dep, or index.html)');
     e.status = 422;
@@ -235,7 +271,7 @@ async function start(connectionId, localPath) {
     proc: null,
     server: null,
     log: [],
-    previewUrl: `http://localhost:${port}`,
+    previewUrl: publicPreviewUrl(connectionId, port),
   };
   runs.set(connectionId, state);
 
@@ -250,7 +286,15 @@ async function start(connectionId, localPath) {
   const proc = spawn(plan.command, {
     cwd: localPath,
     shell: true,
-    env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', BROWSER: 'none', FORCE_COLOR: '0', CI: '1' },
+    env: {
+      ...process.env,
+      PORT: String(port),
+      HOST: '127.0.0.1',
+      BROWSER: 'none',
+      FORCE_COLOR: '0',
+      CI: '1',
+      NODE_OPTIONS: workspaceNodeOptions(),
+    },
     detached: !IS_WIN, // POSIX: own process group so we can kill the tree
     windowsHide: true,
   });
@@ -320,6 +364,15 @@ function status(connectionId) {
   return snapshot(runs.get(connectionId));
 }
 
+function getProxyTarget(connectionId) {
+  const state = runs.get(connectionId);
+  if (!state) return { error: 'not_found' };
+  if (!state.port || !['starting', 'ready'].includes(state.status)) {
+    return { error: 'not_ready', status: state.status, message: state.error || 'dev server not ready' };
+  }
+  return { port: state.port, status: state.status, framework: state.framework };
+}
+
 // Best-effort cleanup of all child processes on shutdown.
 function stopAll() {
   for (const id of Array.from(runs.keys())) stop(id);
@@ -338,6 +391,10 @@ module.exports = {
   start,
   stop,
   status,
+  getProxyTarget,
+  publicBasePath,
+  publicPreviewUrl,
+  proxyUrlsEnabled,
   stopAll,
   detectRunPlan,
   findFreePort,

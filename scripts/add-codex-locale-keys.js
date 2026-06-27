@@ -88,9 +88,9 @@ const ES = {
     "remediate": "Remediar"
   },
   "composer": {
-    "placeholder": "Make, test, iterate...",
+    "placeholder": "Describe tu idea — la IA propone el plan y ejecuta…",
     "plan": "Plan",
-    "planTooltip": "Plan: restringe la corrida a solo planificación, sin ejecutar nada.",
+    "planTooltip": "El agente planifica internamente y ejecuta en modo automático.",
     "send": "Enviar",
     "stop": "Detener",
     "dictate": "Dictar",
@@ -213,9 +213,9 @@ const EN = {
     "remediate": "Fix it"
   },
   "composer": {
-    "placeholder": "Make, test, iterate...",
+    "placeholder": "Describe the idea — AI plans and builds…",
     "plan": "Plan",
-    "planTooltip": "Plan: restricts the run to planning only, executing nothing.",
+    "planTooltip": "The agent plans internally and builds automatically.",
     "send": "Send",
     "stop": "Stop",
     "dictate": "Dictate",
@@ -277,7 +277,7 @@ const TRANSLATIONS = {
   en: EN,
   pt: {
     ...EN,
-    composer: { ...EN.composer, placeholder: "Make, test, iterate...", send: "Enviar", stop: "Parar" },
+    composer: { ...EN.composer, placeholder: "Descreva sua ideia — a IA propõe o plano e executa…", send: "Enviar", stop: "Parar" },
     plan: { ...EN.plan, approve: "Aprovar e construir", adjust: "Ajustar" },
   },
   fr: {

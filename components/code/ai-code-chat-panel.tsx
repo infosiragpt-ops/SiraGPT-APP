@@ -73,15 +73,17 @@ import {
   type CodeChatAction,
   type CodeChatMetrics,
 } from "@/lib/code-chat-metrics"
-import { defaultAgentState, type AgentBuildContext } from "@/lib/code-agent/types"
+import { defaultAgentState, type AgentBuildContext, type AgentPhase } from "@/lib/code-agent/types"
 import {
   classifyBuildError,
+  isQuickGreeting,
   mergeOverridesIntoPackageJson,
   nextAgentAction,
   promptFromContext,
   renderFiveSections,
 } from "@/lib/code-agent/orchestrator"
 import {
+  FULL_STACK_APP_CONTRACT_PATHS,
   engineTransportInstructions,
   landingSystemPrompt,
   sreSystemPrompt,
@@ -110,7 +112,7 @@ const COMPOSER_MODE_LABEL: Record<ComposerMode, string> = {
 }
 
 const COMPOSER_PLACEHOLDER: Record<ComposerMode, string> = {
-  app: "Describe tu idea — te haré unas preguntas y la construyo…",
+  app: "Describe tu idea — propongo el plan, diseño y construyo…",
   build: "Pide un cambio, pega código o / para comandos",
   plan: "Objetivo o plan antes de editar archivos…",
   debug: "Error, stack trace o comportamiento esperado…",
@@ -118,16 +120,39 @@ const COMPOSER_PLACEHOLDER: Record<ComposerMode, string> = {
   image: "Describe UI, asset o captura…",
 }
 
+type AgentRuntimeStep = {
+  phase: AgentPhase
+  label: string
+  icon: React.ComponentType<{ className?: string }>
+}
+
+const AGENT_RUNTIME_STEPS: AgentRuntimeStep[] = [
+  { phase: "intake", label: "Plan", icon: CircleHelp },
+  { phase: "generating", label: "Diseñar", icon: Rocket },
+  { phase: "preview", label: "Resultado", icon: Check },
+  { phase: "debugging", label: "Reparar", icon: Bug },
+]
+
+const AGENT_RUNTIME_STATUS: Record<AgentPhase, string> = {
+  idle: "Listo",
+  intake: "Planificando",
+  generating: "Diseñando",
+  preview: "Resultado listo",
+  debugging: "Diagnosticando",
+}
+
 const COMPOSER_MODE_INSTRUCTION: Record<ComposerMode, string> = {
   app:
-    "Modo App (construir desde cero, estilo Replit/Lovable): tu meta es entregar una landing/app COMPLETA y VISTOSA como un proyecto Vite + React + TypeScript real que el usuario ejecuta con ▶ Ejecutar (dev server).\n" +
-    "1) INTAKE OBLIGATORIO (como un product manager) — Si el usuario pide construir algo desde cero (p.ej. 'créame un landing', 'hazme una app', 'crea una web') y NO incluyó ya todos los detalles, tu PRIMERA respuesta DEBE ser ÚNICAMENTE preguntas para entender el contexto. NUNCA generes código en esa primera respuesta. Haz una tanda breve (3-5 preguntas, con opciones cuando ayude), por ejemplo: '¿Qué tipo de producto o servicio vas a ofrecer?', '¿Tienes nombre de marca/negocio o quieres que proponga uno?', '¿Qué estilo visual prefieres (minimalista, oscuro, streetwear, corporativo, colorido…)?', '¿Qué secciones quieres (hero, colecciones/productos, sobre nosotros, testimonios, contacto…)?', '¿Algún color o referencia que te guste?'. Termina pidiendo las respuestas y espera.\n" +
-    "   REGLA DE GENERACIÓN: SOLO cuando el usuario ya respondió ese contexto (su segunda respuesta en adelante) o dice explícitamente 'genera'/'hazlo'/'dale', construye el proyecto COMPLETO, asumiendo defaults sensatos para lo que falte. A partir de ahí NUNCA vuelvas a quedarte solo en preguntas: tu salida pasa a ser CÓDIGO.\n" +
-    "2) GENERAR — entrega un PROYECTO Vite 7 + React 18 + TypeScript COMPLETO (package.json, vite.config.ts, tsconfig.json, index.html, src/main.tsx, src/index.css, src/App.tsx) con Tailwind v4 vía @tailwindcss/vite (SIN tailwind.config.js ni postcss.config.js — `@import \"tailwindcss\"` en src/index.css y la paleta como CSS custom properties en :root), animaciones de entrada por scroll con Framer Motion (`useInView`/`whileInView` + `viewport={{ once: true }}`), iconos lucide-react y fuentes Syne + Space Grotesk (Google Fonts → --font-display/--font-body). Exigencias (PROHIBIDO entregar algo básico o tipo plantilla):\n" +
-    "   • COHERENCIA DE NICHO [CRÍTICO]: analiza el rubro (ropa, restaurante, gym, software…) y alinea TODO a él — copy REAL del negocio (NADA de lorem ipsum) e imágenes que ilustren ese rubro (ilustraciones SVG integradas o `https://images.unsplash.com/...` con términos del nicho); PROHIBIDAS fotos genéricas sin relación.\n" +
-    "   • Hero potente con titular Syne MUY grande (clamp), nav sticky translúcido, secciones diferenciadas (productos/features, about, testimonios, CTA final, footer completo), paleta cohesiva con 1 acento, hover/transiciones suaves, responsive MÓVIL-PRIMERO y accesible WCAG AA (alt/aria, foco visible, contraste ≥ 4.5:1).\n" +
-    "   • Componente OBLIGATORIO «Invitar al proyecto»: botón «Invitar» (Lucide UserPlus) + panel/modal animado (AnimatePresence) con «Enlace privado para unirse» (input readOnly), subtexto EXACTO «Cualquier persona con el enlace tendrá acceso de edición», botón Copiar (navigator.clipboard.writeText + «¡Copiado!») e input de email con botón «Invitar por correo electrónico» (validación simple, sin llamada real).\n" +
-    streamOutputFormat({ strictStart: false }) +
+    "Modo App (construir desde cero, estilo Replit/Codex): tu meta es entregar un SOFTWARE FULL-STACK profesional que el usuario pueda abrir en APPS, ejecutar y evolucionar desde el chat.\n" +
+    "1) AUTONOMÍA TOTAL — NO hagas preguntas de intake. Si falta contexto, PROPÓN internamente un brief completo con defaults razonables (producto, marca, público, estética, módulos, entidades, datos demo) y ejecuta.\n" +
+    "2) PLAN + EJECUCIÓN — diseña internamente arquitectura, UX, modelo de datos, API, validaciones, estados, responsive, accesibilidad y pasos de ejecución. No esperes confirmación; convierte ese plan en archivos aplicables.\n" +
+    "3) GENERAR — entrega un proyecto Next.js 14 + TypeScript + Prisma + PostgreSQL con tres capas claras:\n" +
+    "   • Frontend: app/page.tsx y app/<entidad>/page.tsx con formularios, tablas, loading/empty/error states y navegación.\n" +
+    "   • Backend: app/api/<entidad>/route.ts con GET/POST reales por cada entidad.\n" +
+    "   • Base de datos: prisma/schema.prisma, lib/db.ts, prisma/seed.ts, .env.example y docker-compose.yml para Postgres local.\n" +
+    "   • README.md con comandos: docker compose up -d db, npm install, cp .env.example .env, npm run db:push, npm run db:seed, npm run dev.\n" +
+    "   • PROHIBIDO usar arrays globales o almacenamiento en memoria como persistencia primaria. Los datos deben pasar por Prisma.\n" +
+    streamOutputFormat({ strictStart: false, paths: FULL_STACK_APP_CONTRACT_PATHS }) +
     "\n" +
     "3) Cierra con 1-3 siguientes pasos sugeridos para iterar (ej. 'añade sección de precios', 'conecta un formulario', 'modo claro/oscuro').",
   build:
@@ -203,20 +228,26 @@ function buildSystemContext(
         .join("\n")
     : ""
   const hasNodeProject = Object.keys(files).some((p) => /(^|\/)package\.json$/.test(p))
-  // App mode builds the Vite contract even on an empty workspace — emitting the
-  // static-preview rules there would contradict COMPOSER_MODE_INSTRUCTION.app.
-  const expectViteProject = hasNodeProject || mode === "app"
-  const previewBlock = expectViteProject
+  // App mode builds the full-stack APPS contract even on an empty workspace —
+  // emitting the static-preview rules there would contradict the builder.
+  const expectNodeProject = hasNodeProject || mode === "app"
+  const previewBlock = mode === "app"
+    ? [
+        "El workspace alojará un SOFTWARE FULL-STACK real: Next.js 14 App Router",
+        "+ TypeScript + Prisma + PostgreSQL. Usa package.json, app/**,",
+        "app/api/**, lib/db.ts, prisma/schema.prisma, .env.example y",
+        "docker-compose.yml. El usuario lo ejecuta con ▶ Ejecutar (dev server)",
+        "y prepara la base de datos con db:push/db:seed. NO uses arrays globales",
+        "ni almacenamiento en memoria como persistencia primaria.",
+      ].join("\n")
+    : expectNodeProject
     ? [
         hasNodeProject
           ? "El workspace contiene un PROYECTO Node REAL (hay package.json) — típicamente"
-          : "El workspace alojará un PROYECTO Node REAL (modo App) — típicamente",
-        "Vite 7 + React 18 + TypeScript. Usa imports npm normales y extensiones",
-        ".tsx/.ts; el usuario lo ejecuta con ▶ Ejecutar (dev server). RESPETA el",
-        "contrato del proyecto: Tailwind v4 vía @tailwindcss/vite (PROHIBIDO crear",
-        "tailwind.config.js/postcss.config.js o usar directivas v3 `@tailwind`),",
-        'src/index.css empieza con `@import "tailwindcss";` + paleta como CSS custom',
-        "properties en :root, animaciones con Framer Motion e iconos lucide-react.",
+          : "El workspace alojará un PROYECTO Node REAL.",
+        "Usa imports npm normales y extensiones .tsx/.ts; el usuario lo ejecuta",
+        "con ▶ Ejecutar (dev server). Respeta el stack ya presente en package.json",
+        "si existe.",
       ].join("\n")
     : [
         "El workspace tiene un PREVIEW EN VIVO (navegador embebido) que se",
@@ -279,6 +310,7 @@ export function AICodeChatPanel() {
     () => activeCodeChatSession?.turns ?? [],
     [activeCodeChatSession?.turns],
   )
+  const agentPhase = activeCodeChatSession?.agent?.phase ?? "idle"
 
   const setTurns = React.useCallback(
     (updater: React.SetStateAction<CodeChatTurn[]>) => {
@@ -293,6 +325,8 @@ export function AICodeChatPanel() {
   const [input, setInput] = React.useState("")
   const [busy, setBusy] = React.useState(false)
   const [buildingApp, setBuildingApp] = React.useState(false)
+  const agentsActive =
+    busy || buildingApp || agentPhase === "generating" || agentPhase === "debugging"
   const [includeContext, setIncludeContext] = React.useState(true)
   const [composerMode, setComposerMode] = React.useState<ComposerMode>("app")
 
@@ -683,15 +717,18 @@ export function AICodeChatPanel() {
           }
           const entities = result.brief.dataEntities.map((e) => e.name).join(", ") || "—"
           summary = [
-            `✅ App generada (determinista) — ${appliedFiles.length} archivo(s).`,
+            `✅ Software full-stack generado (determinista) — ${appliedFiles.length} archivo(s).`,
             ``,
             `- **Plataforma:** ${result.brief.platform}`,
             `- **Entidades:** ${entities}`,
-            `- **Stack:** ${result.blueprint.stack.frontend}`,
+            `- **Frontend:** ${result.blueprint.stack.frontend}`,
+            `- **Backend:** ${result.blueprint.stack.backend}`,
+            `- **Base de datos:** ${result.blueprint.stack.database}`,
+            `- **Incluye:** API routes, Prisma schema, seed, .env.example y Docker Compose para Postgres`,
             ``,
-            `Revisa el **preview en vivo** → y el código en el árbol de archivos. Itera pidiéndome cambios en el chat.`,
+            `Revisa el **preview en vivo** → y el código en el árbol de archivos. Para ejecutar la capa real: **▶ Ejecutar**, luego \`npm run db:push\` y \`npm run db:seed\` si el workspace no lo hizo automáticamente.`,
           ].join("\n")
-          toastMsg = "App generada — revisa el preview en vivo →"
+          toastMsg = "Software full-stack generado — revisa el preview en vivo →"
         }
         // Apply index.html LAST so it stays the active tab and the live preview
         // lands on the runnable app rather than a doc file.
@@ -1048,6 +1085,22 @@ export function AICodeChatPanel() {
         return
       }
       const sid = sessionId
+      if (isQuickGreeting(text)) {
+        const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        setTurns((prev) => [
+          ...prev,
+          { id, role: "user", content: text },
+          {
+            id: `${id}-a`,
+            role: "assistant",
+            content: "Hola. Dime qué quieres construir o cambiar en esta app y empiezo.",
+            streaming: false,
+          },
+        ])
+        setInput("")
+        patchAgentState(sid, (s) => ({ ...s, phase: "idle" }))
+        return
+      }
       const agent = activeCodeChatSession?.agent ?? defaultAgentState()
       const action = nextAgentAction(agent, text, {
         mode: composerMode,
@@ -1072,23 +1125,34 @@ export function AICodeChatPanel() {
             intakeStep: action.nextStep,
             context: action.context,
           }))
-          // Upgrade the hardcoded question to a context-aware, LLM-phrased one
-          // (adapts to what the user already said). Static stays as the fallback.
-          const convo = [...turns, { role: "user", content: text }]
-          const dynamicQuestion = await fetchCodeIntakeQuestion(action.slot, convo, staticQuestion)
-          // Real steps this turn took, so even an intake question shows an action
-          // row (the agent reviewed the conversation + formulated the question).
-          const askActions: CodeChatAction[] = [
-            { kind: "file_read", label: "Reviso el contexto de la conversación" },
-            { kind: "reasoning", label: "Formulo la siguiente pregunta" },
-          ]
-          setTurns((prev) =>
-            prev.map((t) =>
-              t.id === assistantId
-                ? { ...t, content: dynamicQuestion, streaming: false, actions: askActions }
-                : t,
-            ),
-          )
+          setBusy(true)
+          try {
+            // Upgrade the hardcoded question to a context-aware, LLM-phrased one
+            // (adapts to what the user already said). Static stays as the fallback.
+            const convo = [...turns, { role: "user", content: text }]
+            const dynamicQuestion = await fetchCodeIntakeQuestion(action.slot, convo, staticQuestion)
+            // Real steps this turn took, so even an intake question shows an action
+            // row (the agent reviewed the conversation + formulated the question).
+            const askActions: CodeChatAction[] = [
+              { kind: "file_read", label: "Reviso el contexto de la conversación" },
+              { kind: "reasoning", label: "Formulo la siguiente pregunta" },
+            ]
+            setTurns((prev) =>
+              prev.map((t) =>
+                t.id === assistantId
+                  ? { ...t, content: dynamicQuestion, streaming: false, actions: askActions }
+                  : t,
+              ),
+            )
+          } catch {
+            setTurns((prev) =>
+              prev.map((t) =>
+                t.id === assistantId ? { ...t, content: staticQuestion, streaming: false } : t,
+              ),
+            )
+          } finally {
+            setBusy(false)
+          }
           return
         }
         case "generate": {
@@ -1102,18 +1166,11 @@ export function AICodeChatPanel() {
             // agent leaves no usable project. Rich AND reliable in Docker.
             await runEngine(text, sid, { buildContext: action.context })
             patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "llm" }))
-          } else if (!opts?.forceDeterministic && activeModelName) {
-            // No engine but a chat model is available → stream the Vite project
-            // as fenced blocks (the contract format parseCodeBlocks understands)
-            // and auto-apply them into the workspace.
-            await sendPrompt(genPrompt, {
-              systemPrompt: `${landingSystemPrompt(action.context)}\n\n${streamOutputFormat()}`,
-              autoApply: true,
-            })
-            patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "llm" }))
           } else {
-            // Deterministic tier: enrich a bare context with the raw prompt so
-            // the local scaffold still produces niche-coherent copy.
+            // If the engine is unavailable, build locally instead of routing
+            // first-turn generation through the general chat backend. The
+            // general backend can ask generic "output format" clarification
+            // questions, which leaves /code without files or preview.
             const buildCtx = hasIntake ? action.context : { ...action.context, productType: text }
             await buildApp(genPrompt, buildCtx)
             patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "deterministic" }))
@@ -1231,9 +1288,9 @@ export function AICodeChatPanel() {
       </div>
 
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto p-3">
-        <AgentSwarm active={busy || buildingApp} />
+        <AgentSwarm active={agentsActive && turns.length > 0} />
         {turns.length === 0 ? (
-          <EmptyChat />
+          <EmptyChat active={agentsActive} phase={agentPhase} />
         ) : (
           <div className="space-y-3">
             {turns.map((turn) => (
@@ -1344,28 +1401,84 @@ export function AICodeChatPanel() {
   )
 }
 
-function EmptyChat() {
+function EmptyChat({ active, phase }: { active: boolean; phase: AgentPhase }) {
+  const currentIndex = AGENT_RUNTIME_STEPS.findIndex((step) => step.phase === phase)
+
   return (
-    <div className="flex h-full items-center justify-center px-2 text-center">
-      <div className="max-w-[17rem] space-y-3">
-        <div className="relative mx-auto flex h-12 w-12 items-center justify-center">
-          <div
-            aria-hidden
-            className="absolute inset-0 rounded-2xl bg-[radial-gradient(circle,hsl(var(--accent-violet)/0.28),transparent_70%)] blur-md"
-          />
-          <div className="relative flex h-12 w-12 items-center justify-center rounded-2xl border border-[hsl(var(--accent-violet)/0.35)] bg-[hsl(var(--accent-violet)/0.10)] text-[hsl(var(--accent-violet))]">
-            <Sparkles className="h-6 w-6" />
+    <div className="flex min-h-full items-center justify-center px-2 py-4">
+      <section
+        aria-live="polite"
+        data-testid="code-agent-runtime"
+        data-agent-active={active ? "true" : "false"}
+        data-agent-phase={phase}
+        className="w-full max-w-[19rem] rounded-2xl border border-border/60 bg-background/80 p-3 text-left shadow-sm"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-[hsl(var(--accent-violet)/0.28)] bg-[hsl(var(--accent-violet)/0.10)] text-[hsl(var(--accent-violet))]">
+              <Sparkles className={cn("h-4 w-4", active && "animate-pulse")} />
+            </span>
+            <div className="min-w-0">
+              <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">Agentes</h2>
+              <p className="truncate text-[11px] text-muted-foreground">1,044 en paralelo</p>
+            </div>
           </div>
+          <span
+            className={cn(
+              "shrink-0 rounded-full px-2 py-1 text-[10.5px] font-medium",
+              active
+                ? "bg-[hsl(var(--accent-violet)/0.12)] text-[hsl(var(--accent-violet))]"
+                : "bg-muted text-muted-foreground",
+            )}
+          >
+            {AGENT_RUNTIME_STATUS[phase]}
+          </span>
         </div>
-        <p className="text-sm font-semibold tracking-tight text-foreground">
-          Describe tu idea y se pone a trabajar un enjambre de agentes
-        </p>
-        <p className="text-[12.5px] leading-relaxed text-muted-foreground">
-          Más de 1000 agentes en paralelo buscan información, generan imágenes y
-          código, refactorizan, revisan y te entregan el resultado en el preview
-          en vivo.
-        </p>
-      </div>
+
+        <ol className="mt-3 space-y-1.5">
+          {AGENT_RUNTIME_STEPS.map((step, index) => {
+            const Icon = step.icon
+            const isPreview = phase === "preview"
+            const state =
+              phase === "idle"
+                ? "pending"
+                : phase === step.phase
+                  ? isPreview
+                    ? "done"
+                    : "running"
+                  : currentIndex >= 0 && index < currentIndex
+                    ? "done"
+                    : "pending"
+
+            return (
+              <li key={step.phase} className="flex h-8 items-center gap-2">
+                <span
+                  className={cn(
+                    "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border",
+                    state === "done" && "border-emerald-500/35 bg-emerald-500/10 text-emerald-600",
+                    state === "running" &&
+                      "border-[hsl(var(--accent-violet)/0.45)] bg-[hsl(var(--accent-violet)/0.12)] text-[hsl(var(--accent-violet))]",
+                    state === "pending" && "border-border/50 bg-muted/30 text-muted-foreground/55",
+                  )}
+                >
+                  <Icon className={cn("h-3.5 w-3.5", state === "running" && "animate-pulse")} />
+                </span>
+                <span
+                  className={cn(
+                    "min-w-0 flex-1 truncate text-[12px] font-medium",
+                    state === "pending" ? "text-muted-foreground" : "text-foreground",
+                  )}
+                >
+                  {step.label}
+                </span>
+                <span className="w-11 shrink-0 text-right font-mono text-[10px] text-muted-foreground/75">
+                  {state === "done" ? "done" : state === "running" ? "run" : "wait"}
+                </span>
+              </li>
+            )
+          })}
+        </ol>
+      </section>
     </div>
   )
 }

@@ -62,7 +62,7 @@ test('tsType maps blueprint field types and editableFields drops id/timestamps',
 });
 
 // ── web codegen ───────────────────────────────────────────────────
-test('web codegen emits a runnable Next.js project skeleton', () => {
+test('web codegen emits a runnable full-stack Next.js project skeleton', () => {
   const { files, generated } = codegenFromBrief(makeBrief());
   assert.equal(generated, true);
   const map = fileMap(files);
@@ -70,22 +70,30 @@ test('web codegen emits a runnable Next.js project skeleton', () => {
     'package.json',
     'tsconfig.json',
     'next.config.mjs',
+    'docker-compose.yml',
     'app/globals.css',
     'app/layout.tsx',
     'app/page.tsx',
     'components/site-nav.tsx',
-    'lib/store.ts',
+    'lib/db.ts',
+    'prisma/seed.ts',
   ]) {
     assert.ok(map.has(p), `expected file ${p}`);
   }
 });
 
-test('package.json is valid JSON with Next.js deps', () => {
+test('package.json is valid JSON with Next.js and Prisma deps', () => {
   const { files } = codegenFromBrief(makeBrief());
   const pkg = JSON.parse(fileMap(files).get('package.json').content);
   assert.ok(pkg.dependencies.next, 'has next dependency');
   assert.ok(pkg.dependencies.react, 'has react dependency');
+  assert.ok(pkg.dependencies['@prisma/client'], 'has Prisma client');
   assert.equal(pkg.scripts.dev, 'next dev');
+  assert.equal(pkg.scripts['db:push'], 'prisma db push');
+  assert.equal(pkg.scripts['db:seed'], 'tsx prisma/seed.ts');
+  assert.equal(pkg.scripts.postinstall, 'prisma generate');
+  assert.ok(pkg.devDependencies.prisma, 'has Prisma CLI');
+  assert.ok(pkg.devDependencies.tsx, 'has seed runner');
   assert.ok(pkg.devDependencies.typescript, 'has typescript');
 });
 
@@ -104,6 +112,8 @@ test('each entity yields a CRUD API route + a list/create page', () => {
     const page = map.get(`app/${slug}/page.tsx`);
     assert.ok(route, `route for ${slug}`);
     assert.ok(page, `page for ${slug}`);
+    assert.match(route.content, /from "@\/lib\/db"/);
+    assert.match(route.content, /prisma\.[a-zA-Z]+\.findMany/);
     assert.match(route.content, /export async function GET/);
     assert.match(route.content, /export async function POST/);
     assert.match(page.content, /"use client";/);
@@ -117,9 +127,19 @@ test('API route coerces numeric/boolean fields to their types', () => {
   // precio (decimal) + stock (integer) → Number(...); activo (boolean) → Boolean(...)
   assert.match(route, /precio: Number\(/);
   assert.match(route, /stock: Number\(/);
-  assert.match(route, /activo: Boolean\(/);
+  assert.match(route, /activo: toBoolean\(/);
   // id + createdAt are server-managed → never coerced from the body
   assert.doesNotMatch(route, /\bid: (String|Number|Boolean)\(/);
+});
+
+test('full-stack codegen includes Prisma client, seed and local Postgres compose', () => {
+  const { files } = codegenFromBrief(makeBrief());
+  const map = fileMap(files);
+  assert.match(map.get('lib/db.ts').content, /new PrismaClient/);
+  assert.match(map.get('prisma/seed.ts').content, /new PrismaClient/);
+  assert.match(map.get('prisma/seed.ts').content, /prisma\.producto\.createMany/);
+  assert.match(map.get('docker-compose.yml').content, /postgres:16-alpine/);
+  assert.match(map.get('docker-compose.yml').content, /siragpt_app/);
 });
 
 test('generated home page lists the core features', () => {
@@ -135,7 +155,11 @@ test('landing platform generates a single page, no entity CRUD', () => {
   assert.equal(generated, true);
   const map = fileMap(files);
   assert.ok(map.has('app/page.tsx'));
-  assert.ok(!map.has('lib/store.ts'), 'no store on a landing page');
+  assert.ok(!map.has('lib/db.ts'), 'no database client on a landing page');
+  assert.ok(!map.has('docker-compose.yml'), 'no database compose on a landing page');
+  const pkg = JSON.parse(map.get('package.json').content);
+  assert.equal(pkg.dependencies['@prisma/client'], undefined);
+  assert.equal(pkg.scripts['db:push'], undefined);
   for (const path of map.keys()) {
     assert.ok(!path.startsWith('app/api/'), `landing should not emit API route: ${path}`);
   }
@@ -190,6 +214,8 @@ test('scaffoldFromBrief now includes real code alongside the starters', () => {
   assert.ok(map.has('package.json'));
   assert.ok(map.has('app/page.tsx'));
   assert.ok(map.has('app/api/producto/route.ts'));
+  assert.ok(map.has('prisma/schema.prisma'));
+  assert.ok(map.has('lib/db.ts'));
 });
 
 test('scaffold keeps starters-only for out-of-slice platforms', () => {
