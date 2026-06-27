@@ -41,7 +41,19 @@ export function AuthGuard({ children, requireAdmin = false, requireSuperAdmin = 
   }
 
   if (redirect) {
-    return null
+    return (
+      <div className="flex min-h-screen w-full items-center justify-center bg-background text-foreground">
+        <div className="flex flex-col items-center gap-4 px-6 text-center" role="status" aria-live="polite">
+          <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-border/60 bg-card shadow-sm">
+            <ThinkingIndicator size="md" className="text-primary" />
+          </div>
+          <div className="space-y-1">
+            <p className="text-sm font-medium">Redirigiendo a inicio de sesión</p>
+            <p className="text-xs text-muted-foreground">Protegiendo tu espacio de trabajo...</p>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   return <>{children}</>
