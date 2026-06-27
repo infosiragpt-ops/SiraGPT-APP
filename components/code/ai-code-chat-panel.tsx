@@ -98,7 +98,6 @@ import { opencodeService } from "@/lib/opencode/opencode-service"
 import { useOpencodeEngine } from "@/lib/opencode/use-opencode-engine"
 
 import { DiffView } from "./diff-view"
-import { AgentSwarm } from "./agent-swarm"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 
@@ -1640,7 +1639,6 @@ export function AICodeChatPanel() {
       </div>
 
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto p-3">
-        <AgentSwarm active={agentsActive && turns.length > 0} />
         {turns.length === 0 ? (
           <EmptyChat active={agentsActive} phase={agentPhase} />
         ) : (
@@ -1775,8 +1773,8 @@ function EmptyChat({ active, phase }: { active: boolean; phase: AgentPhase }) {
               <Sparkles className={cn("h-4 w-4", active && "animate-pulse")} />
             </span>
             <div className="min-w-0">
-              <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">Agentes</h2>
-              <p className="truncate text-[11px] text-muted-foreground">1,044 en paralelo</p>
+              <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">Agente de código</h2>
+              <p className="truncate text-[11px] text-muted-foreground">Planifica, genera y verifica</p>
             </div>
           </div>
           <span
