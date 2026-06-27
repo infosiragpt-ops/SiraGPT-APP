@@ -498,11 +498,79 @@ function normalizeReferenceFiles(referenceFiles = []) {
         mimeType,
         size: Number(file.size || 0),
         isImage,
+        filename: isImage ? String(file.filename || '') : '',
         localPath: isImage ? String(file.path || '') : '',
         extractedChars: extractedText.length,
         excerpt: extractedText.slice(0, 600),
       };
     });
+}
+
+function uniqueStrings(values = []) {
+  return Array.from(new Set(values.filter((value) => typeof value === 'string' && value.trim()).map((value) => value.trim())));
+}
+
+function uploadRootCandidates() {
+  return uniqueStrings([
+    process.env.UPLOAD_DIR ? path.resolve(process.env.UPLOAD_DIR) : '',
+    path.resolve(process.cwd(), 'uploads'),
+    path.resolve(__dirname, '../../../uploads'),
+    '/app/uploads',
+  ]);
+}
+
+function referencePathCandidates(ref = {}) {
+  const candidates = [];
+  const localPath = String(ref.localPath || '');
+  if (localPath) {
+    candidates.push(localPath);
+    if (!path.isAbsolute(localPath)) {
+      candidates.push(path.resolve(process.cwd(), localPath));
+      candidates.push(path.resolve(__dirname, '../../../', localPath));
+    }
+  }
+  const filename = path.basename(String(ref.filename || ''));
+  if (filename && filename === String(ref.filename || '')) {
+    for (const root of uploadRootCandidates()) {
+      candidates.push(path.join(root, filename));
+    }
+  }
+  return uniqueStrings(candidates);
+}
+
+async function fileIsReadable(filePath) {
+  try {
+    await fsp.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function findUploadFileByName(filename) {
+  const safeName = path.basename(String(filename || ''));
+  if (!safeName || safeName !== String(filename || '')) return '';
+  for (const root of uploadRootCandidates()) {
+    try {
+      if (await fileIsReadable(path.join(root, safeName))) return path.join(root, safeName);
+      const entries = await fsp.readdir(root, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const candidate = path.join(root, entry.name, safeName);
+        if (await fileIsReadable(candidate)) return candidate;
+      }
+    } catch {
+      // Some deployments keep uploads in object storage or mount them lazily.
+    }
+  }
+  return '';
+}
+
+async function resolveReferenceImagePath(ref = {}) {
+  for (const candidate of referencePathCandidates(ref)) {
+    if (await fileIsReadable(candidate)) return candidate;
+  }
+  return findUploadFileByName(ref.filename);
 }
 
 function imageRunTypeFor(ref = {}) {
@@ -533,9 +601,11 @@ function fitImageDimensions(dimensions, maxWidth = 520, maxHeight = 620) {
 async function readReferenceImages(plan = {}) {
   const images = [];
   for (const ref of plan.referenceFiles || []) {
-    if (!ref?.isImage || !ref.localPath) continue;
+    if (!ref?.isImage) continue;
     try {
-      const buffer = await fsp.readFile(ref.localPath);
+      const imagePath = await resolveReferenceImagePath(ref);
+      if (!imagePath) continue;
+      const buffer = await fsp.readFile(imagePath);
       if (!buffer.length) continue;
       images.push({
         name: ref.name || 'Imagen adjunta',
@@ -1447,11 +1517,13 @@ async function buildDocxWithPandoc(plan, outputPath) {
     await fsp.writeFile(imagePath, TINY_PNG);
     const copiedReferenceImages = [];
     for (const ref of plan.referenceFiles || []) {
-      if (!ref?.isImage || !ref.localPath) continue;
+      if (!ref?.isImage) continue;
       try {
+        const sourceImagePath = await resolveReferenceImagePath(ref);
+        if (!sourceImagePath) continue;
         const ext = imageRunTypeFor(ref) === 'jpg' ? 'jpg' : 'png';
         const imageFileName = `reference-image-${copiedReferenceImages.length + 1}.${ext}`;
-        await fsp.copyFile(ref.localPath, path.join(runDir, imageFileName));
+        await fsp.copyFile(sourceImagePath, path.join(runDir, imageFileName));
         copiedReferenceImages.push({ name: ref.name, markdownPath: imageFileName });
       } catch {
         // Keep document generation going even when a reference image disappeared.

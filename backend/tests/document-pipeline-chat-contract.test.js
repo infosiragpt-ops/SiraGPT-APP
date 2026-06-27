@@ -65,27 +65,38 @@ test('document pipeline incorporates authenticated reference-file metadata and s
 test('document pipeline embeds uploaded image references into generated DOCX', async () => {
   const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), 'siragpt-doc-chat-image-'));
   const telemetryDir = await fs.mkdtemp(path.join(os.tmpdir(), 'siragpt-doc-chat-image-telemetry-'));
-  const imagePath = path.join(outputDir, 'captura.png');
+  const uploadRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'siragpt-doc-chat-image-uploads-'));
+  const userUploadDir = path.join(uploadRoot, 'user_1');
+  await fs.mkdir(userUploadDir, { recursive: true });
+  const imagePath = path.join(userUploadDir, 'captura.png');
   const png = Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
     'base64',
   );
   await fs.writeFile(imagePath, png);
 
-  const result = await runAdvancedDocumentPipeline({
-    prompt: 'Crea esto en un Word editable. Reproduce la ficha visual de la imagen adjunta lo mejor posible.',
-    format: 'docx',
-    outputDir,
-    telemetryDir,
-    referenceFiles: [{
-      id: 'img_1',
-      originalName: 'captura.png',
-      mimeType: 'image/png',
-      size: png.length,
-      path: imagePath,
-      extractedText: '',
-    }],
-  });
+  const previousUploadDir = process.env.UPLOAD_DIR;
+  process.env.UPLOAD_DIR = uploadRoot;
+  let result;
+  try {
+    result = await runAdvancedDocumentPipeline({
+      prompt: 'Crea esto en un Word editable. Reproduce la ficha visual de la imagen adjunta lo mejor posible.',
+      format: 'docx',
+      outputDir,
+      telemetryDir,
+      referenceFiles: [{
+        id: 'img_1',
+        originalName: 'captura.png',
+        filename: 'captura.png',
+        mimeType: 'image/png',
+        size: png.length,
+        extractedText: '',
+      }],
+    });
+  } finally {
+    if (previousUploadDir === undefined) delete process.env.UPLOAD_DIR;
+    else process.env.UPLOAD_DIR = previousUploadDir;
+  }
 
   assert.equal(result.validation.passed, true);
   assert.equal(result.plan.referenceFiles[0].isImage, true);
