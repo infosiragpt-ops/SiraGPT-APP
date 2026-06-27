@@ -141,10 +141,13 @@ export default function LoginPage() {
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault()
     if (!validateForm()) return
-    // If the backend is still warming up after a publish, queue the login and
-    // let the effect below fire it once the backend is ready, rather than
-    // showing a misleading "invalid credentials" error from a 500.
-    if (backendState !== "ready") {
+    // Defer ONLY when the poller has confirmed a genuine post-publish warmup
+    // (a real 503 from the readiness route). In "checking" the backend is a
+    // separate process and is reachable even while the Next.js dev server is
+    // busy compiling a heavy route — gating on "ready" there trapped the user
+    // with a login button that silently queued forever. Attempt the login
+    // directly; runLogin already surfaces failures via a toast.
+    if (backendState === "warming") {
       setPendingAction("email")
       return
     }
@@ -153,12 +156,15 @@ export default function LoginPage() {
 
   const handleGoogle = () => {
     setGoogleLoading(true)
-    if (backendState === "ready") {
-      goToGoogle()
+    // goToGoogle() is a full-page redirect we cannot catch, so during a
+    // confirmed post-publish warmup we queue it and let the effect fire it once
+    // ready (avoids bouncing the user into a raw 500). In "checking"/"ready" we
+    // go now — the backend is reachable even while the dev server is mid-compile.
+    if (backendState === "warming") {
+      setPendingAction("google")
       return
     }
-    // Warming up: queue the redirect; the effect runs it once ready.
-    setPendingAction("google")
+    goToGoogle()
   }
 
   // Once the backend reports ready, flush any action the user queued while it
