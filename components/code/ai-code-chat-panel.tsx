@@ -99,7 +99,7 @@ import { useOpencodeEngine } from "@/lib/opencode/use-opencode-engine"
 
 import { DiffView } from "./diff-view"
 
-import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import { DotmCircular15, THINKING_GLYPH_COLOR } from "@/components/ui/dotm-circular-15"
 
 const COMPOSER_MODE_LABEL: Record<ComposerMode, string> = {
   app: "App",
@@ -709,11 +709,13 @@ export function AICodeChatPanel() {
             )
           },
           () => {
-            // App mode (or an explicit override) = Replit-style "presented
-            // output": auto-apply the generated files and open the live preview
-            // so the user sees the result immediately. Other modes keep the
-            // manual "Aplicar" button (review-before-write). `applied` is fed to
-            // the Worked-Summary/action-log metrics on the turn (real numbers).
+            // Agentic write modes (app/build, plus debug/patch via explicit
+            // override) = Replit-style "presented output": the agent applies the
+            // generated files itself and opens the live preview, with NO manual
+            // "Aplicar" button (the user asked the agentic system to do the
+            // writing). Read-only modes (ask/plan/image) pass autoApply:false and
+            // never apply. `applied` feeds the Worked-Summary/action-log metrics
+            // on the turn (real numbers).
             let applied: Array<{ path: string; content: string }> = []
             patchAssistant({
               agentLabel: "Aplicando cambios al workspace",
@@ -722,7 +724,7 @@ export function AICodeChatPanel() {
                 generate: { status: "done", detail: "Stream completado" },
               }),
             })
-            if (override?.autoApply ?? composerMode === "app") {
+            if (override?.autoApply ?? (composerMode === "app" || composerMode === "build")) {
               try {
                 const blocks = parseCodeBlocks(assistantText).filter((b) => b.path)
                 if (blocks.length > 0) {
@@ -746,7 +748,18 @@ export function AICodeChatPanel() {
                   }
                 }
               } catch {
-                /* parsing/apply failure → user can still apply manually */
+                // Auto-apply failed (parse/write error). There is no manual
+                // "Aplicar" button anymore, so surface the failure explicitly and
+                // tell the user they can still copy the code as a fallback.
+                toast.error("No se pudieron aplicar los cambios automáticamente. Usa el botón Copiar de cada bloque.")
+                patchAssistant({
+                  agentLabel: "No se pudieron aplicar los cambios",
+                  agentPhases: buildCodeAgentPhases("apply", {
+                    context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
+                    generate: { status: "done", detail: "Stream completado" },
+                    apply: { status: "error", detail: "Fallo al aplicar — copia manual disponible" },
+                  }),
+                })
               }
             }
             const writeSummary = buildWriteMetrics(applied, {
@@ -1530,7 +1543,7 @@ export function AICodeChatPanel() {
           ) {
             await runEngine(text, sid)
           } else {
-            await sendPrompt(text, { autoApply: composerMode === "app" })
+            await sendPrompt(text, { autoApply: composerMode === "app" || composerMode === "build" })
           }
       }
     },
@@ -1647,14 +1660,6 @@ export function AICodeChatPanel() {
               <ChatBubble
                 key={turn.id}
                 turn={turn}
-                onApply={(block) => {
-                  if (!block.path) {
-                    toast.message("Este bloque no incluye una ruta de archivo. Usa el botón de copiar.")
-                    return
-                  }
-                  applyBlock(block.path, block.content)
-                  toast.success(`Aplicado a ${block.path}`)
-                }}
                 lookupContent={(path) => files[path]?.content ?? ""}
               />
             ))}
@@ -1839,11 +1844,9 @@ function EmptyChat({ active, phase }: { active: boolean; phase: AgentPhase }) {
 
 function ChatBubble({
   turn,
-  onApply,
   lookupContent,
 }: {
   turn: CodeChatTurn
-  onApply: (block: CodeBlock) => void
   lookupContent: (path: string) => string
 }) {
   const isUser = turn.role === "user"
@@ -1883,7 +1886,9 @@ function ChatBubble({
             {!turn.streaming && typeof turn.planMs === "number" ? (
               <span className="opacity-60">({formatWorked(turn.planMs)})</span>
             ) : null}
-            {turn.streaming ? <ThinkingIndicator size="xs" className="inline" /> : null}
+            {turn.streaming ? (
+              <DotmCircular15 size={16} dotSize={2} color={THINKING_GLYPH_COLOR} ariaLabel="Pensando" className="inline shrink-0" />
+            ) : null}
           </span>
         ) : null}
       </div>
@@ -1902,17 +1907,10 @@ function ChatBubble({
       {(() => {
         const applicable = blocks.filter((b) => b.path)
         return applicable.length >= 2 ? (
-          <div className="mt-2 flex items-center justify-between gap-2 rounded-md border border-border/50 bg-muted/20 px-2.5 py-1.5">
+          <div className="mt-2 flex items-center gap-2 rounded-md border border-border/50 bg-muted/20 px-2.5 py-1.5">
             <span className="text-[11px] text-muted-foreground">
               {applicable.length} archivos en esta respuesta
             </span>
-            <button
-              type="button"
-              onClick={() => applicable.forEach((b) => onApply(b))}
-              className="inline-flex items-center gap-1 rounded-md bg-foreground px-2.5 py-1 text-[11px] font-medium text-background transition-opacity hover:opacity-90"
-            >
-              Aplicar todo y ver
-            </button>
           </div>
         ) : null
       })()}
@@ -1920,7 +1918,6 @@ function ChatBubble({
         <CodeBlockCard
           key={block.index}
           block={block}
-          onApply={() => onApply(block)}
           existingContent={block.path ? lookupContent(block.path) : ""}
         />
       ))}
@@ -1967,7 +1964,7 @@ function CodeAgentProgress({ phases }: { phases?: CodeAgentPhase[] }) {
                 )}
                 aria-hidden="true"
               >
-                {isDone ? <Check className="h-3 w-3" /> : isError ? <AlertTriangle className="h-3 w-3" /> : isRunning ? <ThinkingIndicator size="xs" className="text-white" /> : null}
+                {isDone ? <Check className="h-3 w-3" /> : isError ? <AlertTriangle className="h-3 w-3" /> : isRunning ? <DotmCircular15 size={14} dotSize={2} color="#ffffff" ariaLabel="Trabajando" className="shrink-0" /> : null}
               </span>
               <span className="truncate font-medium">{phase.label}</span>
             </div>
@@ -2359,11 +2356,9 @@ function ModelPickerInline({
 
 function CodeBlockCard({
   block,
-  onApply,
   existingContent,
 }: {
   block: CodeBlock
-  onApply: () => void
   existingContent: string
 }) {
   const [open, setOpen] = React.useState(false)
@@ -2403,14 +2398,6 @@ function CodeBlockCard({
                 onClick={() => setOpen((v) => !v)}
               >
                 {open ? "Ocultar diff" : "Ver diff"}
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                className="h-6 px-2 text-[11px]"
-                onClick={onApply}
-              >
-                Aplicar
               </Button>
             </>
           ) : null}
