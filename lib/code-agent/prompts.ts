@@ -114,7 +114,7 @@ export function landingSystemPrompt(ctx: AgentBuildContext): string {
     "",
     "ARQUITECTURA:",
     isApp
-      ? "• Tres capas obligatorias: frontend (páginas y formularios), backend (Route Handlers GET/POST por entidad), base de datos (Prisma/PostgreSQL)."
+      ? "• Tres capas obligatorias: frontend, backend y base de datos (páginas Next.js → Route Handlers → Prisma/PostgreSQL)."
       : "• SPA sin React Router. 100% ESTÁTICO: sin backend ni llamadas reales a APIs — datos demo en memoria.",
     isApp
       ? "• El frontend debe consumir sus propias API routes con fetch, mostrar loading/empty/error states, crear registros y refrescar datos."
@@ -163,17 +163,18 @@ export function contractPathsForContext(ctx?: AgentBuildContext): readonly strin
 
 export function streamOutputFormat(opts?: { strictStart?: boolean; paths?: readonly string[] }): string {
   const strictStart = opts?.strictStart !== false
-  const paths = opts?.paths || VITE_LANDING_CONTRACT_PATHS
-  const contractFiles = paths.join(", ")
+  const paths = opts?.paths ?? VITE_LANDING_CONTRACT_PATHS
+  const requiredFiles = paths.join(", ")
+  const isFullStackApp = paths.includes("prisma/schema.prisma")
   return [
     "FORMATO DE SALIDA (ESTRICTO — respétalo al 100%):",
     "• Devuelve CADA archivo en su PROPIO bloque de código. El encabezado del fence es `lenguaje ruta`, p.ej.:",
     "  ```json package.json",
     "  { …archivo completo… }",
     "  ```",
-    `• Bloques requeridos, en este orden: ${contractFiles}.`,
-    paths.includes("prisma/schema.prisma")
-      ? "• Además, crea app/api/<entidad>/route.ts y app/<entidad>/page.tsx por cada entidad central del software."
+    `• Bloques requeridos, en este orden: ${requiredFiles}.`,
+    isFullStackApp
+      ? "• Para cada entidad de datos añade también app/api/<entidad>/route.ts, app/api/<entidad>/[id]/route.ts y app/<entidad>/page.tsx con CRUD real."
       : null,
     strictStart
       ? "• El PRIMER carácter de tu respuesta DEBE ser un backtick: empieza EXACTAMENTE con ```json package.json\n" +
