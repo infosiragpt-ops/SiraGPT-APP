@@ -942,7 +942,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
         try { onEvent({ type: 'honesty_check', severity: honesty.severity, unsupportedClaims: kinds, executedTools: executed }); } catch (_) { /* noop */ }
         console.warn(`[agentic-chat-stream] honesty_check severity=${honesty.severity} unsupported=${kinds.join(',')} executedTools=${executed.length}`);
       }
-    } catch (_) { /* honesty check must never break the response */ }
+    } catch (err) {
+      try { console.warn('[agentic-chat-stream] honesty check failed:', err && err.message); } catch (_) {}
+      /* honesty check must never break the response */
+    }
 
     // Emit the final sentinel + the answer body. Phase 5: when
     // SIRAGPT_AGENTIC_STREAM_FINAL is enabled, token-stream the answer

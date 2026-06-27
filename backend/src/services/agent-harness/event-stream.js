@@ -242,7 +242,10 @@ function createAgentEventStream(opts = {}) {
         if (!plannedQueue.has(key)) plannedQueue.set(key, []);
         plannedQueue.get(key).push(call.id);
       }
-    } catch (_) { /* observability must never break the loop */ }
+    } catch (err) {
+      try { console.warn('[agent-harness] onStepStart record failed:', err && err.message); } catch (_) {}
+      /* observability must never break the loop */
+    }
   }
 
   function claimPlanned(name, args) {
@@ -295,7 +298,10 @@ function createAgentEventStream(opts = {}) {
         const isError = Boolean(observation && observation.error);
         finishCall(call, { result: observation, isError });
       }
-    } catch (_) { /* observability must never break the loop */ }
+    } catch (err) {
+      try { console.warn('[agent-harness] onStepDone record failed:', err && err.message); } catch (_) {}
+      /* observability must never break the loop */
+    }
   }
 
   /**

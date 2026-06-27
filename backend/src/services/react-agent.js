@@ -915,7 +915,7 @@ async function run(openai, opts) {
     // total size — old state misleads more than it helps, and the duplicate
     // cache below restores any elided result the model genuinely re-needs.
     if (!OBS_ELIDE_DISABLED) {
-      try { elideStaleObservations(messages); } catch { /* aging must never break the loop */ }
+      try { elideStaleObservations(messages); } catch (err) { try { console.warn('[react-agent] observation aging failed:', err && err.message); } catch { /* noop */ } /* aging must never break the loop */ }
     }
 
     // Deferred tools activated on the previous step → refresh the schema
@@ -1154,7 +1154,10 @@ async function run(openai, opts) {
         if (prefetched.size > 1) {
           console.log(`[react-agent] parallel-dispatched ${prefetched.size} read-only tools (step ${step})`);
         }
-      } catch (_prefetchErr) { prefetched = new Map(); }
+      } catch (_prefetchErr) {
+        try { console.warn('[react-agent] parallel prefetch failed; running sequentially:', _prefetchErr && _prefetchErr.message); } catch { /* noop */ }
+        prefetched = new Map();
+      }
     }
 
     for (const call of toolCalls) {
@@ -1206,9 +1209,14 @@ async function run(openai, opts) {
       // asked for (so re-reading after observation aging still works) plus an
       // explicit do-not-repeat warning; persistent repeats trip the same
       // forced-finalize escape as exhausted-tool re-polling.
-      if (toolName !== 'finalize' && isParallelSafeTool(toolName)) {
-        const sig = toolCallSignature(toolName, call.function?.arguments);
-        const cached = dupCallCache.get(sig);
+      // Compute the duplicate-cache signature once per iteration (pure fn of
+      // name+args, which are never mutated below) and reuse it at the store site
+      // instead of recomputing the stableSchemaKey walk.
+      const dupSig = (toolName !== 'finalize' && isParallelSafeTool(toolName))
+        ? toolCallSignature(toolName, call.function?.arguments)
+        : null;
+      if (dupSig !== null) {
+        const cached = dupCallCache.get(dupSig);
         if (cached) {
           duplicateRepolls += 1;
           if (duplicateRepolls >= EXHAUSTED_REPOLL_LIMIT && !forceFinalize) {
@@ -1370,7 +1378,7 @@ async function run(openai, opts) {
         if (dupCallCache.size >= DUP_CALL_CACHE_MAX) {
           dupCallCache.delete(dupCallCache.keys().next().value);
         }
-        dupCallCache.set(toolCallSignature(toolName, call.function?.arguments), { step, content: obsContent });
+        dupCallCache.set(dupSig, { step, content: obsContent });
       }
 
       if (toolName === 'finalize' && !dispatch.error && !observation.error) {
