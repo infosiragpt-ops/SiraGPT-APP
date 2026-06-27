@@ -4001,7 +4001,7 @@ async function planOfficeOperationsSmart({ requestText = '', format = '', input,
           ].join('\n'),
         },
       ],
-    }, signal ? { signal } : undefined);
+    }, { ...(signal ? { signal } : {}), timeout: 20_000 });
     const content = completion?.choices?.[0]?.message?.content || '';
     const parsed = JSON.parse(content);
     const ops = sanitizeOfficeOperations(parsed?.operations, format);

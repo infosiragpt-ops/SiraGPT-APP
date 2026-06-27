@@ -1584,7 +1584,11 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           onEvent: (type, data) => {
             try {
               taskStore.appendTaskEvent({ taskId, userId: user.id }, { type, payload: data });
-            } catch { /* best-effort */ }
+            } catch (err) {
+              // Best-effort: keep the multi-agent run going, but surface a lost
+              // sub-task event (durable trace + SSE replay feed off this hook).
+              console.warn('[agent-task-runner] fork_join event append failed for', taskId, '-', err?.message || err);
+            }
           },
         },
       });
@@ -1642,7 +1646,12 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         });
       } catch (_evtErr) { /* swallow */ }
     }
-  } catch (_attrErr) { /* swallow */ }
+  } catch (_attrErr) {
+    // Non-fatal telemetry, but a broken/renamed attribution-executive-summary
+    // module would otherwise be invisible forever. (Matches the file's other
+    // '[agent-task-runner] … unavailable' warn convention.)
+    console.warn('[agent-task-runner] attribution summary unavailable:', _attrErr?.message || _attrErr);
+  }
   const universalTaskContract = buildUniversalTaskContract({
     rawUserRequest: goal,
     fileIds: files,
@@ -2170,6 +2179,10 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           fileIds: files,
           prompt: goal,
           displayPrompt: displayGoal,
+          // Thread the run's abort signal so the runtimeTimer (maxRuntimeMs+5s)
+          // can actually cancel this pre-loop deterministic edit; the function
+          // already accepts + propagates it to its LLM/sandbox calls.
+          signal: controller.signal,
         });
         if (preserved === null) {
           // No había archivo adjunto ni artefacto previo que conservar: la
@@ -2934,15 +2947,18 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
 
     let finalMarkdown = result.finalAnswer || '';
     let stoppedReason = result.stoppedReason;
-    const recoveryUploadedFileContext = [
-      uploadedFileContext,
-      buildToolObservationFallbackContext(result.steps),
-    ].filter(Boolean).join('\n');
     const attachmentFinalNeedsRecovery = Array.isArray(files) && files.length > 0 && (
       looksLikeEmptyOrWeakFinalAnswer(finalMarkdown) ||
       looksLikeMissingAttachmentAnswer(finalMarkdown)
     );
     if (attachmentFinalNeedsRecovery) {
+      // Built only on the recovery path: buildToolObservationFallbackContext is
+      // a pure full step×action walk (+ JSON.stringify per observation) that was
+      // previously computed on every finalization and discarded on the happy path.
+      const recoveryUploadedFileContext = [
+        uploadedFileContext,
+        buildToolObservationFallbackContext(result.steps),
+      ].filter(Boolean).join('\n');
       const llmRecoveredMarkdown = await buildLlmAttachmentRecoveryAnswer({
         goal: displayGoal || goal,
         uploadedFileContext: recoveryUploadedFileContext,
@@ -3032,6 +3048,9 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             fileIds: files,
             prompt: goal,
             displayPrompt: displayGoal,
+            // Thread the run's abort signal so the runtimeTimer can cancel this
+            // post-loop edit instead of letting it stall past maxRuntimeMs.
+            signal: controller.signal,
           });
           if (preserved?.artifact) {
             if (!preserved.validation?.passed) {

@@ -116,7 +116,11 @@ function writeTaskSnapshot(record) {
   if (!snapshot.userId) throw new Error('task-store: userId is required');
   snapshot.updatedAt = snapshot.updatedAt || nowIso();
   atomicWriteJson(snapshotPathFor(snapshot.taskId), snapshot);
-  try { updateIndexForSnapshot(snapshot); } catch { /* index is best-effort */ }
+  try { updateIndexForSnapshot(snapshot); } catch (err) {
+    // Snapshot is durable; a failed index update silently drops the task from
+    // every index-backed listing/jobId lookup until a rebuild — surface it.
+    console.warn('[task-store] index update failed for', snapshot.taskId, '-', err?.message || err);
+  }
   taskStorePrismaSync.schedulePrismaSync(snapshot);
   return snapshot;
 }
@@ -148,7 +152,11 @@ function updateTaskSnapshot(taskId, userId, patch = {}) {
     checkpoints: patch.checkpoints || existing.checkpoints,
   });
   atomicWriteJson(snapshotPathFor(taskId), next);
-  try { updateIndexForSnapshot(next); } catch { /* index is best-effort */ }
+  try { updateIndexForSnapshot(next); } catch (err) {
+    // A failed index update here leaves a stale index status (e.g. a task that
+    // just went terminal still shows as running) — surface it.
+    console.warn('[task-store] index update failed for', next.taskId, '-', err?.message || err);
+  }
   return next;
 }
 
@@ -232,7 +240,11 @@ function markTaskStatus(taskLike, status, patch = {}) {
     if (eventCount > AUTO_COMPACT_EVENT_THRESHOLD) {
       try {
         compactSnapshotEvents(result.taskId, result.userId, { keepRecent: AUTO_COMPACT_KEEP_RECENT });
-      } catch { /* best-effort compaction */ }
+      } catch (err) {
+        // Terminal status already persisted; a failed compaction just leaves the
+        // snapshot growing toward MAX_SNAPSHOT_BYTES — surface why it didn't shrink.
+        console.warn('[task-store] auto-compaction failed for', result.taskId, '-', err?.message || err);
+      }
     }
   }
   return result;
@@ -902,7 +914,7 @@ function cleanupOrphanedArtifacts({
  * { ok, taskId, problems[] } where problems is an array of stable
  * string codes ('missing_userId', 'invalid_status', ...).
  */
-function verifySnapshotIntegrity(taskId) {
+function verifySnapshotIntegrity(taskId, { index } = {}) {
   const problems = [];
   let snapshot = null;
   try {
@@ -922,7 +934,7 @@ function verifySnapshotIntegrity(taskId) {
   if (snapshot.artifacts && !Array.isArray(snapshot.artifacts)) problems.push('artifacts_not_array');
   // Cross-check the index agrees on userId/status, when an index entry exists.
   try {
-    const idx = readIndex();
+    const idx = index || readIndex();
     const idxEntry = idx[taskId];
     if (idxEntry) {
       if (String(idxEntry.userId) !== String(snapshot.userId)) problems.push('index_user_mismatch');
@@ -942,11 +954,15 @@ function verifyAllSnapshots() {
   const dir = ensureDir();
   const broken = [];
   let total = 0;
+  // Read the index once for the whole scan (it's stable for the duration) and
+  // pass it down, instead of re-reading + re-parsing _index.json per snapshot.
+  let index = {};
+  try { index = readIndex(); } catch { index = {}; }
   for (const entry of fs.readdirSync(dir)) {
     if (!entry.endsWith('.json') || entry === INDEX_FILE) continue;
     const taskId = entry.slice(0, -5);
     total++;
-    const result = verifySnapshotIntegrity(taskId);
+    const result = verifySnapshotIntegrity(taskId, { index });
     if (!result.ok) broken.push({ taskId, problems: result.problems });
   }
   return { total, healthy: total - broken.length, broken };
