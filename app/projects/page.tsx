@@ -200,14 +200,14 @@ export default function ProjectsPage() {
         <header className={styles.header}>
           <LayoutGrid className={styles.titleIcon} strokeWidth={2.25} />
           <h1 className={styles.title} data-testid="projects-page-title">
-            Projects
+            Empresas
           </h1>
         </header>
 
         <section className={styles.toolbar}>
           <div className={styles.filters}>
             <label className={styles.search} role="search">
-              <span className="sr-only">Buscar proyectos APPS</span>
+              <span className="sr-only">Buscar empresas APPS</span>
               <input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
@@ -239,13 +239,13 @@ export default function ProjectsPage() {
                   className={styles.scopeButton}
                 >
                   <Folder strokeWidth={1.8} />
-                  All projects
+                  Todas las empresas
                   <ChevronDown strokeWidth={2} />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-[220px]">
                 <DropdownMenuItem className="justify-between">
-                  All projects
+                  Todas las empresas
                   <Check className="h-4 w-4" />
                 </DropdownMenuItem>
               </DropdownMenuContent>
@@ -410,7 +410,7 @@ function AppProjectCard({
     <button
       type="button"
       aria-busy={opening}
-      aria-label={`Abrir proyecto ${project.name}`}
+      aria-label={`Abrir empresa ${project.name}`}
       data-testid={`project-card-${project.id}`}
       disabled={opening}
       onClick={onOpen}
@@ -530,7 +530,7 @@ function ProjectsSkeleton() {
 function NoResults() {
   return (
     <div className={styles.noResults}>
-      No matching APPS projects.
+      No hay empresas APPS que coincidan.
     </div>
   )
 }

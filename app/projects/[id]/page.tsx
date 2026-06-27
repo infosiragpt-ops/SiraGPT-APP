@@ -116,7 +116,7 @@ export default function ProjectDetailPage() {
     setChatsLoading(true)
     projectsService.listChats(project.id, { search: debouncedChatSearch, limit: 50 })
       .then((rows) => { if (!cancelled) setProjectChats(rows) })
-      .catch((err: any) => { if (!cancelled) toast.error(err?.message || "No se pudieron cargar las conversaciones del proyecto") })
+      .catch((err: any) => { if (!cancelled) toast.error(err?.message || "No se pudieron cargar las conversaciones de la empresa") })
       .finally(() => { if (!cancelled) setChatsLoading(false) })
     return () => { cancelled = true }
   }, [project, debouncedChatSearch])
@@ -432,7 +432,7 @@ function ProjectContextSection({
         <div>
           <h3 className="text-sm font-semibold flex items-center gap-2">
             <ShieldCheck className="h-4 w-4 text-emerald-600" />
-            Contexto del proyecto
+            Contexto de la empresa
           </h3>
           <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
             Este workspace mantiene archivos, instrucciones, memoria y conversaciones separados del chat general.
@@ -519,10 +519,10 @@ function ProjectChatsSection({
       <div className="flex items-end justify-between gap-3">
         <div>
           <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/60 px-1">
-            Conversaciones del proyecto
+            Conversaciones de la empresa
           </div>
           <p className="px-1 text-xs text-muted-foreground">
-            La búsqueda queda aislada a este proyecto.
+            La búsqueda queda aislada a esta empresa.
           </p>
         </div>
         {loading && <ThinkingIndicator size="sm" className="text-muted-foreground" />}
@@ -533,7 +533,7 @@ function ProjectChatsSection({
         <Input
           value={search}
           onChange={(e) => onSearchChange(e.target.value)}
-          placeholder="Buscar solo en este proyecto..."
+          placeholder="Buscar solo en esta empresa..."
           className="h-10 pl-9"
           data-testid="project-chat-search"
         />
@@ -541,7 +541,7 @@ function ProjectChatsSection({
 
       {chats.length === 0 ? (
         <div className="rounded-lg border border-dashed border-border/60 py-8 px-6 text-center text-sm text-muted-foreground">
-          {search.trim() ? "No hay conversaciones del proyecto que coincidan." : emptyText}
+          {search.trim() ? "No hay conversaciones de la empresa que coincidan." : emptyText}
         </div>
       ) : (
         <div className="space-y-2" data-testid="project-chat-results">
