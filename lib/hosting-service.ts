@@ -102,6 +102,7 @@ export interface DeployConfig {
   domain?: string
   domainKind?: "main" | "addon"
   configureNginx?: boolean
+  rootDir?: string
   appPort?: string
   ssl?: boolean
   sslEmail?: string

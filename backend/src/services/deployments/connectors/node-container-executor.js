@@ -60,6 +60,22 @@ function dbIdent(slug) {
   return `app_${slug.replace(/-/g, '_')}`;
 }
 
+/**
+ * Sanitize a monorepo subdirectory (e.g. "backend") used as the build context.
+ * Strips traversal + leading/trailing slashes; allows [a-z0-9_/-]. Empty = repo
+ * root. This is the only other user-influenced token that reaches a command, so
+ * it's hard-restricted.
+ */
+function sanitizeSubdir(s) {
+  const clean = String(s || '')
+    .replace(/\\/g, '/')
+    .replace(/\.\.+/g, '')
+    .replace(/[^a-zA-Z0-9_/-]/g, '')
+    .replace(/^\/+|\/+$/g, '')
+    .replace(/\/{2,}/g, '/');
+  return clean;
+}
+
 /** Idempotent provisioning SQL — re-running never rotates an existing password. */
 function buildProvisionSql(dbName, dbUser, dbPass) {
   return [
@@ -120,7 +136,7 @@ function buildEnvFile(envObj) {
  * Deploy `deployment` as a Docker container behind Caddy.
  * Caller (deployHostingerVps) provides the resolved deps + ssh conn + workspace.
  */
-async function deployNodeContainer({ d, conn, localPath, buildEnv, slug, hostname, deployment, env, push, logs }) {
+async function deployNodeContainer({ d, conn, localPath, buildEnv, slug, hostname, deployment, env, push, logs, subdir = '' }) {
   const fail = (failedPhase, failureMessage) => {
     push(`[error] ${failureMessage}`);
     return { promoted: false, logs, url: null, failedPhase, failureMessage };
@@ -132,6 +148,9 @@ async function deployNodeContainer({ d, conn, localPath, buildEnv, slug, hostnam
   const appsDir = cfg(env, 'PUBLISHED_APPS_DIR', '/opt/siragpt/apps');
   const snippetsDir = cfg(env, 'CADDY_SNIPPETS_DIR', '/etc/caddy/apps');
   const appDir = `${appsDir}/${slug}`;
+  // Build context — a monorepo subdirectory (e.g. "backend") or the repo root.
+  const cleanSubdir = sanitizeSubdir(subdir);
+  const buildDir = cleanSubdir ? `${appDir}/${cleanSubdir}` : appDir;
   const containerName = `app-${slug}`;
   const image = `siragpt-app-${slug}:latest`;
   const port = Number(deployment.externalPort) || 8080;
@@ -192,7 +211,7 @@ async function deployNodeContainer({ d, conn, localPath, buildEnv, slug, hostnam
   // ── 3. Build image (generate Dockerfile if the repo lacks one) ────
   const dockerfile = generateDockerfile(port);
   const buildCmd =
-    `cd ${appDir} && ([ -f Dockerfile ] || (printf %s ${shQuote(b64(dockerfile))} | base64 -d > Dockerfile)) && ` +
+    `cd ${buildDir} && ([ -f Dockerfile ] || (printf %s ${shQuote(b64(dockerfile))} | base64 -d > Dockerfile)) && ` +
     `docker build -t ${image} .`;
   push('[build] construyendo imagen Docker…');
   try {
@@ -206,7 +225,7 @@ async function deployNodeContainer({ d, conn, localPath, buildEnv, slug, hostnam
   const containerEnv = { NODE_ENV: 'production', ...buildEnv, DATABASE_URL: databaseUrl, PORT: String(port) };
   const envFileB64 = b64(buildEnvFile(containerEnv));
   const runCmd = [
-    `cd ${appDir} || exit 1`,
+    `cd ${buildDir} || exit 1`,
     `printf %s ${shQuote(envFileB64)} | base64 -d > .deploy.env && chmod 600 .deploy.env`,
     `docker rm -f ${containerName} >/dev/null 2>&1 || true`,
     `docker run -d --name ${containerName} --restart unless-stopped --network ${dockerNet} ` +
@@ -299,6 +318,7 @@ async function deployNodeContainer({ d, conn, localPath, buildEnv, slug, hostnam
 module.exports = {
   deployNodeContainer,
   safeSlug,
+  sanitizeSubdir,
   dbIdent,
   buildProvisionSql,
   buildCaddySnippet,

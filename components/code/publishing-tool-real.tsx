@@ -62,6 +62,7 @@ type Settings = {
   domain: string
   domainKind: "main" | "addon"
   configureNginx: boolean
+  rootDir: string
   appPort: string
   ssl: boolean
   sslEmail: string
@@ -79,6 +80,7 @@ const emptySettings: Settings = {
   domain: "",
   domainKind: "main",
   configureNginx: false,
+  rootDir: "",
   appPort: "3000",
   ssl: false,
   sslEmail: "",
@@ -242,6 +244,7 @@ export function RealPublishingPanel({ projectId }: { projectId: string | null })
         domain: settings.domain || undefined,
         domainKind: settings.domainKind,
         configureNginx: settings.configureNginx,
+        rootDir: settings.rootDir || undefined,
         appPort: settings.appPort || undefined,
         ssl: settings.ssl,
         sslEmail: settings.sslEmail || undefined,
@@ -679,6 +682,18 @@ function SettingsForm({
               <Input value={settings.appPort} onChange={(e) => persist({ ...settings, appPort: e.target.value })} placeholder="8080" className="h-8 text-sm" />
             </Field>
           </div>
+          <Field label="Carpeta raíz (monorepo) — opcional">
+            <Input
+              value={settings.rootDir}
+              onChange={(e) => persist({ ...settings, rootDir: e.target.value })}
+              placeholder="déjalo vacío para la raíz · ej: backend"
+              className="h-8 text-sm"
+            />
+          </Field>
+          <p className="-mt-1 text-xs text-muted-foreground">
+            Si tu app está en una subcarpeta (p.ej. <code className="rounded bg-muted px-1">backend</code>), ponla aquí. Frontend + backend
+            separados → publica <b>dos veces</b> (una con raíz vacía para el frontend, otra con <code className="rounded bg-muted px-1">backend</code>).
+          </p>
         </div>
       )}
       {/* VPS: auto-configure nginx so the site is served at the domain. */}

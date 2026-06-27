@@ -238,6 +238,7 @@ router.post('/connected/:id/deploy', authenticateToken, async (req, res) => {
         remoteCommand,
         domain: domHost || null,
         configureNginx,
+        rootDir: body.rootDir,
         appPort: body.appPort,
         ssl: Boolean(body.ssl),
         sslEmail: body.sslEmail,

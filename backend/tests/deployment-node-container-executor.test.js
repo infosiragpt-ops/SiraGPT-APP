@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const {
   deployNodeContainer,
   safeSlug,
+  sanitizeSubdir,
   dbIdent,
   buildProvisionSql,
   buildCaddySnippet,
@@ -68,6 +69,23 @@ test('dbIdent + buildProvisionSql are idempotent + injection-safe', () => {
 
 test('buildCaddySnippet emits an explicit reverse_proxy site block', () => {
   assert.equal(buildCaddySnippet('chatgpt66.com', 'app-my-app', 8080), 'chatgpt66.com {\n\treverse_proxy app-my-app:8080\n}\n');
+});
+
+test('sanitizeSubdir strips traversal/slashes, keeps a clean monorepo path', () => {
+  assert.equal(sanitizeSubdir('backend'), 'backend');
+  assert.equal(sanitizeSubdir('/backend/'), 'backend');
+  assert.equal(sanitizeSubdir('../../etc'), 'etc');
+  assert.equal(sanitizeSubdir('apps/web; rm -rf /'), 'apps/webrm-rf');
+  assert.equal(sanitizeSubdir(''), '');
+});
+
+test('container deploy: builds from a monorepo subdir (backend/)', async () => {
+  const { args, calls } = run({ deployment: {} });
+  args.subdir = 'backend';
+  await deployNodeContainer(args);
+  assert.ok(calls.ssh.some((c) => /cd \/opt\/siragpt\/apps\/my-app\/backend && .*docker build/.test(c)), 'builds in the subdir');
+  // source still uploads the WHOLE repo (so backend/ is present)
+  assert.equal(calls.sftp[0].remoteDir, '/opt/siragpt/apps/my-app');
 });
 
 test('generateDockerfile + buildEnvFile', () => {

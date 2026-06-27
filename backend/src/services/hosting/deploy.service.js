@@ -21,7 +21,7 @@ const sshExec = require('./ssh-exec');
 const nginx = require('./nginx.service');
 const { verifyUrl, normalizeDomain } = require('./domain');
 const { assertSafeRemoteHost, assertSafeRemotePath } = require('./safety');
-const { deployNodeContainer, safeSlug } = require('../deployments/connectors/node-container-executor');
+const { deployNodeContainer, safeSlug, sanitizeSubdir } = require('../deployments/connectors/node-container-executor');
 
 const LOG_MAX = 400;
 // Retain a terminal job briefly so late SSE subscribers / status polls still see
@@ -293,8 +293,13 @@ async function _runNodeContainer(job, { localPath, target, config, buildEnv }) {
     passphrase: target.passphrase,
   };
   const slug = safeSlug({ name: config.appName || config.domain || 'app' });
+  const subdir = sanitizeSubdir(config.rootDir || '');
+  // Detect a Prisma schema relative to the chosen build dir (monorepo subfolder).
   let hasPrismaSchema = false;
-  try { hasPrismaSchema = require('fs').existsSync(path.join(localPath, 'prisma', 'schema.prisma')); } catch { /* ignore */ }
+  try {
+    const base = subdir ? path.join(localPath, subdir) : localPath;
+    hasPrismaSchema = require('fs').existsSync(path.join(base, 'prisma', 'schema.prisma'));
+  } catch { /* ignore */ }
   const deployment = {
     id: job.id,
     name: config.appName || 'app',
@@ -308,6 +313,7 @@ async function _runNodeContainer(job, { localPath, target, config, buildEnv }) {
     localPath,
     buildEnv,
     slug,
+    subdir,
     hostname: config.domain || null,
     deployment,
     env: process.env,
