@@ -629,6 +629,17 @@ test('shouldUseDeterministicAttachmentAnswer: routes simple attachment summaries
   );
 });
 
+test('resolveAgentToolScopes: authenticated users receive safe document-read scopes', () => {
+  clearAgentModules();
+  const { resolveAgentToolScopes } = require('../src/services/agents/agent-task-runner');
+
+  assert.deepEqual(resolveAgentToolScopes({ id: null, scopes: [] }), []);
+  assert.deepEqual(
+    new Set(resolveAgentToolScopes({ id: 'user-doc', scopes: ['ai.generate'] })),
+    new Set(['ai.generate', 'files.read', 'rag.read']),
+  );
+});
+
 test('runAgentTaskJob: uploaded document receives local fallback answer without OPENAI_API_KEY', async () => {
   const restoreEnv = rememberEnv(['OPENAI_API_KEY', 'DEEPSEEK_API_KEY', 'OPENROUTER_API_KEY', 'AGENT_TASK_STORE_DIR', 'NODE_ENV']);
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'siragpt-doc-fallback-'));

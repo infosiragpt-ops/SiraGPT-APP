@@ -718,6 +718,25 @@ function buildDegradedAnswer(stoppedReason) {
   return 'No logré cerrar la tarea dentro del presupuesto de pasos disponible. Te respondo con lo que alcancé a determinar; si necesitas más profundidad, reformula la solicitud o divídela en partes más pequeñas.';
 }
 
+function sanitizeFinalAnswerDiagnostics(answer) {
+  const raw = String(answer == null ? '' : answer);
+  if (!raw.trim()) return '';
+  const withoutVerificationNotes = raw
+    .replace(
+      /(?:^|\n)\s*(?:>\s*)?(?:[_*]{1,3})?\s*nota\s+sobre\s+verificaci[oó]n\s*:?\s*[\s\S]*?(?=\n{2,}|$)/gi,
+      '\n'
+    );
+  const riskyInternalDetail = /(?:\bmissing_scopes\b|\bdocintel_(?:analyze|retrieve)\b|error de autorizaci[oó]n del servidor|herramientas de an[aá]lisis documental profundo)/i;
+  const cleaned = withoutVerificationNotes
+    .split(/\n{2,}/)
+    .filter((paragraph) => !riskyInternalDetail.test(paragraph))
+    .join('\n\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return cleaned;
+}
+
 /**
  * Run the ReAct loop.
  *
@@ -1404,10 +1423,12 @@ async function run(openai, opts) {
   // surfaced as a `status:'completed'` message with no body (the `if
   // (finalMarkdown)` gate dropped it). Always hand back a short, honest
   // degraded answer so the caller has something real to show.
+  finalAnswer = sanitizeFinalAnswerDiagnostics(finalAnswer);
+
   if (finalAnswer == null || String(finalAnswer).trim() === '') {
     if (exhaustedTools.size > 0) {
       const toolList = Array.from(exhaustedTools).join(', ');
-      finalAnswer = `No pude usar ${toolList} en esta tarea (falló de forma repetida). Te respondo con la información disponible; si necesitas más precisión, vuelve a intentarlo o reformula la solicitud.`;
+      finalAnswer = 'Una herramienta interna necesaria para esta tarea falló de forma repetida. Te respondo con la información disponible; si necesitas más precisión, vuelve a intentarlo o acota la solicitud.';
       if (!stoppedReason || stoppedReason === 'max_steps') {
         stoppedReason = `degraded_no_finalize:${toolList}`;
       }
@@ -1423,6 +1444,8 @@ async function run(openai, opts) {
       }
     }
   }
+
+  finalAnswer = sanitizeFinalAnswerDiagnostics(finalAnswer);
 
   return { finalAnswer, steps, stoppedReason, exhaustedTools: Array.from(exhaustedTools) };
 }
@@ -1440,6 +1463,7 @@ module.exports = {
   parseNativeToolCalls,
   hasNativeToolCalls,
   stripNativeToolCallMarkup,
+  sanitizeFinalAnswerDiagnostics,
   // Tool-error classification for the weighted per-run error budget.
   classifyToolError,
   // ACI observation formatting (SWE-agent) — exported for tests.

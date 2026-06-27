@@ -737,7 +737,16 @@ function looksLikeMissingAttachmentAnswer(text) {
     value.includes('falló de forma repetida') ||
     value.includes('fallo de forma repetida') ||
     value.includes('vuelve a intentarlo') ||
-    value.includes('reformula la solicitud')
+    value.includes('reformula la solicitud') ||
+    value.includes('missing_scopes') ||
+    value.includes('docintel_analyze') ||
+    value.includes('docintel_retrieve') ||
+    value.includes('nota sobre verificación') ||
+    value.includes('nota sobre verificacion') ||
+    value.includes('error de autorización del servidor') ||
+    value.includes('error de autorizacion del servidor') ||
+    value.includes('herramientas de análisis documental profundo') ||
+    value.includes('herramientas de analisis documental profundo')
   );
 }
 
@@ -1514,6 +1523,15 @@ async function persistAssistantMessage({
 // legitimate failure-retry path (a fresh run after the previous finished) is
 // unaffected.
 const inFlightAgentTasks = new Map(); // taskId → Promise
+
+function resolveAgentToolScopes(user = {}) {
+  const scopes = new Set(Array.isArray(user.scopes) ? user.scopes : []);
+  if (user && user.id) {
+    scopes.add('files.read');
+    scopes.add('rag.read');
+  }
+  return Array.from(scopes);
+}
 
 function runAgentTaskJob(payload = {}, job = null) {
   const taskId = payload && payload.taskId;
@@ -2780,7 +2798,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       toolAuthCtx: {
         userId: user.id,
         clearance: user.clearance || 'authenticated',
-        scopes: user.scopes || [],
+        scopes: resolveAgentToolScopes(user),
         taskId,
       },
       toolUsageMap,
@@ -3385,5 +3403,6 @@ module.exports = {
   parseSpreadsheetCitationRows,
   parseCitationAuthors,
   resolveAttachmentFallbackMarkdown,
+  resolveAgentToolScopes,
   shouldUseDeterministicAttachmentAnswer,
 };

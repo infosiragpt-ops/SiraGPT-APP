@@ -2562,7 +2562,16 @@ function looksLikeAttachmentRecoveryNeeded(text) {
     value.includes('vuelve a intentarlo') ||
     value.includes('reformula la solicitud') ||
     value.includes('no pude acceder al contenido') ||
-    value.includes('proporciona un archivo legible')
+    value.includes('proporciona un archivo legible') ||
+    value.includes('missing_scopes') ||
+    value.includes('docintel_analyze') ||
+    value.includes('docintel_retrieve') ||
+    value.includes('nota sobre verificación') ||
+    value.includes('nota sobre verificacion') ||
+    value.includes('error de autorización del servidor') ||
+    value.includes('error de autorizacion del servidor') ||
+    value.includes('herramientas de análisis documental profundo') ||
+    value.includes('herramientas de analisis documental profundo')
   );
 }
 

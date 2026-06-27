@@ -129,6 +129,10 @@ test('agent task route: detects weak attachment tool-unavailable final answers',
     true,
   );
   assert.equal(
+    INTERNAL.looksLikeAttachmentRecoveryNeeded('Nota sobre verificación: docintel_analyze no está disponible por missing_scopes. La respuesta usa rag_retrieve.'),
+    true,
+  );
+  assert.equal(
     INTERNAL.looksLikeAttachmentRecoveryNeeded('El total real combinado es 283000 USD y la fuente primaria es el DOCX.'),
     false,
   );

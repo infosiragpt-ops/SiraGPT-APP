@@ -86,6 +86,13 @@ test('authorizeToolCall succeeds when scopes are held', () => {
   assert.equal(result.ok, true);
 });
 
+test('docintel_analyze is authorized for authenticated document-read sessions', () => {
+  const result = authorizeToolCall('docintel_analyze', { scopes: ['files.read', 'rag.read'] });
+  assert.equal(result.ok, true);
+  assert.ok(findToolsByScope('rag.read').includes('docintel_analyze'));
+  assert.equal(findToolsByScope('rag.write').includes('docintel_analyze'), false);
+});
+
 test('authorizeToolCall blocks data classes outside clearance', () => {
   // docintel_compare touches internal+confidential
   const result = authorizeToolCall('docintel_compare', {

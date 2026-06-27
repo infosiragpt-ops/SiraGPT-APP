@@ -1770,7 +1770,7 @@ function getDocIntelManifests() {
       side_effect_level: "local-fs",
       sandbox_required: false,
       audit_policy: "every-call",
-      scopes: ["files.read", "rag.write"],
+      scopes: ["files.read", "rag.read"],
       data_classes: ["internal", "confidential"],
     },
     docintel_retrieve: {
