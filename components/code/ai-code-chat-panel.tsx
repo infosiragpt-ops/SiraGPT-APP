@@ -375,6 +375,39 @@ export function AICodeChatPanel() {
   // the live stream). Auto-selected from the catalog, persisted, user-overridable.
   const [codeModel, setCodeModel] = React.useState<{ name: string; provider?: string } | null>(null)
 
+  // FREE-plan / sparse catalogs return models:[] but the backend still ships a
+  // policy.fallbackModel it will route to. Surface it so the composer never gets
+  // stuck on "Cargando modelos…" and Ask can stream. (Agent's first build is
+  // LLM-free and works even with no model at all.)
+  const [fallbackModel, setFallbackModel] = React.useState<{
+    name: string
+    provider?: string
+    displayName?: string
+  } | null>(null)
+
+  React.useEffect(() => {
+    if ((availableModels && availableModels.length > 0) || fallbackModel) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const res = await apiClient.getAIModels("TEXT")
+        const fb = (
+          res as {
+            policy?: { fallbackModel?: { name?: string; provider?: string; displayName?: string } }
+          }
+        )?.policy?.fallbackModel
+        if (!cancelled && fb?.name) {
+          setFallbackModel({ name: fb.name, provider: fb.provider, displayName: fb.displayName })
+        }
+      } catch {
+        /* best-effort: deterministic Agent build still works without a model */
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [availableModels, fallbackModel])
+
   React.useEffect(() => {
     if (codeModel || !availableModels || availableModels.length === 0) return
     let restored: { name: string; provider?: string } | null = null
@@ -400,6 +433,16 @@ export function AICodeChatPanel() {
     }
   }, [])
 
+  // If a real catalog loads later (e.g. an admin activates models) and our
+  // persisted choice is the policy fallback — which isn't in the catalog — drop
+  // it so the picker reflects the real list instead of pinning "Gema4".
+  React.useEffect(() => {
+    if (!availableModels || availableModels.length === 0 || !codeModel) return
+    if (availableModels.some((m) => m.name === codeModel.name)) return
+    const next = recommendFastModel(availableModels) || availableModels[0]
+    if (next) chooseCodeModel({ name: next.name, provider: next.provider })
+  }, [availableModels, codeModel, chooseCodeModel])
+
   // Resolved model the code chat actually uses. Priority:
   //  1. an explicit code-chat choice (codeModel),
   //  2. a fast model derived inline from the catalog (so the FIRST request is
@@ -409,8 +452,25 @@ export function AICodeChatPanel() {
     () => recommendFastModel(availableModels || []),
     [availableModels],
   )
-  const activeModelName = codeModel?.name || autoFastModel?.name || selectedModel
-  const activeProvider = codeModel?.provider || autoFastModel?.provider || selectProvider
+  const activeModelName =
+    codeModel?.name || autoFastModel?.name || selectedModel || fallbackModel?.name || ""
+  const activeProvider =
+    codeModel?.provider || autoFastModel?.provider || selectProvider || fallbackModel?.provider
+  // What the model picker shows: the real catalog when present, else the single
+  // policy fallback so the user sees "Gema4" rather than an endless spinner.
+  const pickerModels = React.useMemo<ModelOption[]>(() => {
+    if (availableModels && availableModels.length > 0) return availableModels as ModelOption[]
+    if (fallbackModel) {
+      return [
+        {
+          name: fallbackModel.name,
+          displayName: fallbackModel.displayName,
+          provider: fallbackModel.provider,
+        } as ModelOption,
+      ]
+    }
+    return []
+  }, [availableModels, fallbackModel])
   // Fast = streaming-friendly (good for the live preview); slow = reasoning/heavy.
   const modelIsFast = !!activeModelName && !isSlowModel(activeModelName)
 
@@ -1633,7 +1693,7 @@ export function AICodeChatPanel() {
               onIncludeContextChange={setIncludeContext}
             />
             <ModelPickerInline
-              models={availableModels || []}
+              models={pickerModels}
               selectedModel={activeModelName || ""}
               fast={modelIsFast}
               onSelect={(m) => chooseCodeModel({ name: m.name, provider: m.provider })}
