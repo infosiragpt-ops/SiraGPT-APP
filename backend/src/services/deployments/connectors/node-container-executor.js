@@ -208,11 +208,22 @@ async function deployNodeContainer({ d, conn, localPath, buildEnv, slug, hostnam
     return fail('build', d.friendlyError(err));
   }
 
+  // Env used both at BUILD time (.env.production so Next.js bakes NEXT_PUBLIC_*)
+  // and at RUN time (.deploy.env, which overrides server-side vars).
+  const containerEnv = { NODE_ENV: 'production', ...buildEnv, DATABASE_URL: databaseUrl, PORT: String(port) };
+  const envFileB64 = b64(buildEnvFile(containerEnv));
+
   // ── 3. Build image (generate Dockerfile if the repo lacks one) ────
   const dockerfile = generateDockerfile(port);
-  const buildCmd =
-    `cd ${buildDir} && ([ -f Dockerfile ] || (printf %s ${shQuote(b64(dockerfile))} | base64 -d > Dockerfile)) && ` +
-    `docker build -t ${image} .`;
+  const buildCmd = [
+    `cd ${buildDir} || exit 1`,
+    // Build-time env so frameworks (Next.js NEXT_PUBLIC_*) bake values during build.
+    `printf %s ${shQuote(envFileB64)} | base64 -d > .env.production`,
+    `[ -f Dockerfile ] || (printf %s ${shQuote(b64(dockerfile))} | base64 -d > Dockerfile)`,
+    `docker build -t ${image} .; BC=$?`,
+    `rm -f .env.production`,
+    `exit $BC`,
+  ].join('\n');
   push('[build] construyendo imagen Docker…');
   try {
     const { code } = await d.sshExec.exec(conn, buildCmd, { onLog: push });
@@ -222,8 +233,6 @@ async function deployNodeContainer({ d, conn, localPath, buildEnv, slug, hostnam
   }
 
   // ── 4. Run container (replace-on-redeploy) ────────────────────────
-  const containerEnv = { NODE_ENV: 'production', ...buildEnv, DATABASE_URL: databaseUrl, PORT: String(port) };
-  const envFileB64 = b64(buildEnvFile(containerEnv));
   const runCmd = [
     `cd ${buildDir} || exit 1`,
     `printf %s ${shQuote(envFileB64)} | base64 -d > .deploy.env && chmod 600 .deploy.env`,

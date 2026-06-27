@@ -83,7 +83,8 @@ test('container deploy: builds from a monorepo subdir (backend/)', async () => {
   const { args, calls } = run({ deployment: {} });
   args.subdir = 'backend';
   await deployNodeContainer(args);
-  assert.ok(calls.ssh.some((c) => /cd \/opt\/siragpt\/apps\/my-app\/backend && .*docker build/.test(c)), 'builds in the subdir');
+  const buildCmd = calls.ssh.find((c) => /docker build -t siragpt-app-my-app/.test(c));
+  assert.match(buildCmd, /cd \/opt\/siragpt\/apps\/my-app\/backend/, 'builds in the subdir');
   // source still uploads the WHOLE repo (so backend/ is present)
   assert.equal(calls.sftp[0].remoteDir, '/opt/siragpt/apps/my-app');
 });
