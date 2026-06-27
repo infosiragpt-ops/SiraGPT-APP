@@ -112,11 +112,11 @@ const COMPOSER_MODE_LABEL: Record<ComposerMode, string> = {
 }
 
 const COMPOSER_PLACEHOLDER: Record<ComposerMode, string> = {
-  app: "Describe tu idea — propongo el plan, diseño y construyo…",
+  app: "Describe lo que quieres construir o cambiar — el agente lo hace…",
   build: "Pide un cambio, pega código o / para comandos",
   plan: "Objetivo o plan antes de editar archivos…",
   debug: "Error, stack trace o comportamiento esperado…",
-  ask: "Pregunta sobre el workspace o el archivo activo…",
+  ask: "Pregunta sobre tu app o tu código — respondo sin tocar archivos…",
   image: "Describe UI, asset o captura…",
 }
 
@@ -161,7 +161,7 @@ const COMPOSER_MODE_INSTRUCTION: Record<ComposerMode, string> = {
   debug:
     "Modo Debug: diagnostica el error con hipótesis verificables, pide el dato mínimo faltante si hace falta y entrega un parche concreto cuando sea posible.",
   ask:
-    "Modo Ask: responde de forma directa y técnica sobre el workspace, priorizando claridad y referencias a archivos.",
+    "Modo Ask (igual que el modo Ask de Replit): responde de forma clara y directa preguntas sobre la app, el código o cómo funciona, con referencias a archivos cuando ayude. NO modifiques ni generes archivos. Si el usuario pide construir, crear o cambiar algo, explícale brevemente cómo se haría y sugiérele cambiar al modo Agent para que lo construya por él.",
   image:
     "Modo Image: ayuda a razonar sobre assets, interfaces, capturas o diseño visual. Si se requiere implementación, tradúcelo a cambios de código.",
 }
@@ -1420,10 +1420,12 @@ export function AICodeChatPanel() {
           // Deterministic tier: enrich a bare context with the raw prompt so the
           // local scaffold still produces niche-coherent copy.
           const buildCtx = hasIntake ? action.context : { ...action.context, productType: text }
-          if (!opts?.forceDeterministic && engineAvailable) {
-            // Prefer the OpenCode agent (only truly available in Docker): it
-            // writes the project files into its /workspace via a funded model and
-            // runEngine reads them back — with a deterministic fallback inside.
+          if (!opts?.forceDeterministic && engineMode && engineAvailable) {
+            // OpenCode agent (only truly available in Docker AND opt-in via the
+            // "Motor" toggle): it writes the project files into its /workspace via
+            // a funded model and runEngine reads them back — deterministic
+            // fallback inside. Without an explicit Motor opt-in the deterministic
+            // builder below is the primary path (fast, no ~30s GCLB stream cut).
             await runEngine(text, sid, { buildContext: action.context })
             patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "llm" }))
           } else {
@@ -1459,7 +1461,14 @@ export function AICodeChatPanel() {
           return
         }
         default:
-          if (engineMode && engineAvailable) {
+          // Ask/Plan/Image are read-only: they must stream an answer via
+          // sendPrompt (autoApply stays false because composerMode !== "app")
+          // and must NEVER route into runEngine, which would apply files.
+          if (
+            (composerMode === "app" || composerMode === "build") &&
+            engineMode &&
+            engineAvailable
+          ) {
             await runEngine(text, sid)
           } else {
             await sendPrompt(text, { autoApply: composerMode === "app" })
@@ -1608,7 +1617,14 @@ export function AICodeChatPanel() {
             disabled={busy}
             className="max-h-[140px] min-h-[28px] resize-none border-0 bg-transparent px-1 py-0.5 text-[13px] leading-[1.45] shadow-none outline-none ring-0 placeholder:text-muted-foreground/55 focus-visible:ring-0"
           />
-          <div className="mt-1 flex items-center gap-0.5">
+          <div className="mt-1 flex items-center gap-1">
+            <PrimaryModeToggle
+              mode={composerMode === "ask" ? "ask" : "agent"}
+              onChange={(m) => {
+                setComposerMode(m === "ask" ? "ask" : "app")
+                inputRef.current?.focus()
+              }}
+            />
             <ComposerPlusMenu
               mode={composerMode}
               includeContext={includeContext}
@@ -2003,6 +2019,60 @@ function ChatBlockerPanel({ title, rawError, url }: { title: string; rawError: s
           Añadir créditos <ExternalLink className="h-3.5 w-3.5" />
         </a>
       )}
+    </div>
+  )
+}
+
+// Primary, Replit-style mode switch: two clear pills (Agent / Ask) shown up
+// front in the composer so the user always knows whether the AI will BUILD
+// (Agent → autonomous app/edit pipeline) or just ANSWER (Ask → conversational,
+// never touches files). Advanced sub-modes (build/plan/debug/image) stay in the
+// "+" menu. "agent" maps to the existing "app" composer mode.
+function PrimaryModeToggle({
+  mode,
+  onChange,
+}: {
+  mode: "agent" | "ask"
+  onChange: (mode: "agent" | "ask") => void
+}) {
+  const base =
+    "inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors"
+  return (
+    <div
+      role="group"
+      aria-label="Modo del agente: Agent o Ask"
+      className="inline-flex shrink-0 items-center gap-0.5 rounded-lg bg-muted/60 p-0.5"
+    >
+      <button
+        type="button"
+        aria-pressed={mode === "agent"}
+        onClick={() => onChange("agent")}
+        title="Agent — describe algo y el agente lo construye o lo cambia"
+        className={cn(
+          base,
+          mode === "agent"
+            ? "bg-background text-foreground shadow-sm"
+            : "text-muted-foreground hover:text-foreground",
+        )}
+      >
+        <Sparkles className="h-3.5 w-3.5" />
+        <span>Agent</span>
+      </button>
+      <button
+        type="button"
+        aria-pressed={mode === "ask"}
+        onClick={() => onChange("ask")}
+        title="Ask — pregunta sobre tu app o tu código; responde sin tocar archivos"
+        className={cn(
+          base,
+          mode === "ask"
+            ? "bg-background text-foreground shadow-sm"
+            : "text-muted-foreground hover:text-foreground",
+        )}
+      >
+        <CircleHelp className="h-3.5 w-3.5" />
+        <span>Ask</span>
+      </button>
     </div>
   )
 }
