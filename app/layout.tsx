@@ -288,6 +288,9 @@ export default async function RootLayout({
         <a href="#main-content" className="skip-to-content">
           Saltar al contenido
         </a>
+        <span aria-live="polite" className="sr-only" data-app-bootstrap-status>
+          Preparando Sira GPT
+        </span>
         {/*
           LayoutClientEffects is intentionally placed INSIDE NextIntlClientProvider
           rather than as a direct <body> child. When a Client Component (even ssr:false)
