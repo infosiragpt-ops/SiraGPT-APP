@@ -45,15 +45,16 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   const text = normalizeText(prompt);
   if (!text) return false;
   const verbHay = withCollapsedRepeats(text);
+  const editVerbHay = verbHay.replace(/\beditables?\b/g, '');
   const hasFiles = Array.isArray(files) ? files.length > 0 : Boolean(files);
 
-  const structuralEditVerb = /\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|inclu\w*|pon|poner|coloc\w*|modific\w*|edit\w*|corrig\w*|correg\w*|mejor\w*|actualiz\w*|reemplaz\w*|quit\w*|elimin\w*|borr\w*|complet\w*)\b/.test(verbHay);
+  const structuralEditVerb = /\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|inclu\w*|pon|poner|coloc\w*|modific\w*|edit\w*|corrig\w*|correg\w*|mejora\w*|mejorar\w*|actualiz\w*|reemplaz\w*|quit\w*|elimin\w*|borr\w*|complet\w*)\b/.test(editVerbHay);
   // STRONG mutation verbs (delete / remove / insert / add / replace): on an
   // attachment turn these unambiguously target the attached file even with no
   // document/region noun ("borra el jurado evaluador", "elimina los anexos",
   // "agrega una conclusión") — the only plausible target is the uploaded doc.
-  const strongStructuralVerb = /\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|quit\w*|elimin\w*|borr\w*|suprim\w*|remov\w*|reemplaz\w*|sustitu\w*|tach\w*)\b/.test(verbHay);
-  const implicitFileEditVerb = /\b(corrig\w*|correg\w*|mejor\w*|modific\w*|edit\w*|actualiz\w*|formaliz\w*|ajust\w*|optim\w*)\b/.test(verbHay);
+  const strongStructuralVerb = /\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|quit\w*|elimin\w*|borr\w*|suprim\w*|remov\w*|reemplaz\w*|sustitu\w*|tach\w*)\b/.test(editVerbHay);
+  const implicitFileEditVerb = /\b(corrig\w*|correg\w*|mejora\w*|mejorar\w*|modific\w*|edit\w*|actualiz\w*|formaliz\w*|ajust\w*|optim\w*)\b/.test(editVerbHay);
   // Whole-document transforms (traduce / cambia / resume / reformula…) act on the
   // entire file. They are recognized as edits, but require an explicit document
   // noun (not just a demonstrative pronoun) so phrases like "traduce esta frase"
@@ -67,7 +68,8 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   const transformVerb = /\b(?:traduc(?:e\w*|ir\w*|iendo|id[oa])|traduzca\w*|reescrib(?:e\w*|ir\w*|iendo)|reescrit[oa]|cambi(?:a\w*|e\w*)|resum(?:e|es|ir\w*|a|as|amos|elo|ela|elos|elas|eme|emelo|iendo|id[oa])|reformul(?:e\w*|a|as|ar\w*|alo|ala|ame|ando|ad[oa])|parafrase\w*|sintetiz(?:a\w*|e\w*|ando|ad[oa])|sintetice\w*|transcrib(?:e\w*|ir\w*|a\w*|iendo)|transcrit[oa])\b/.test(text);
   const primaryEditVerb = structuralEditVerb || transformVerb;
   const adjuntarAction = /\badjunt(?:a|ar|ame|arme|alo|ala|alos|alas|arlo|arla|arlos|arlas)\b/.test(text)
-    && !/\b(?:documentos?|archivos?|pdf|word|docx|excel|xlsx|pptx?)\s+adjunt[oa]s?\b/.test(text);
+    && !/\b(?:documentos?|archivos?|imagenes?|fotos?|capturas?|pdf|word|docx|excel|xlsx|pptx?)\s+adjunt[oa]s?\b/.test(text)
+    && !/\b(?:imagen|foto|captura|screenshot)\s+adjunt[oa]\b/.test(text);
   const editVerb = primaryEditVerb || adjuntarAction;
   const existingDocRef = /\b(mi|mismo|misma|este|esta|ese|esa|documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx|powerpoint|pdf|tesis)\b/.test(text);
   const documentNoun = /\b(documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx|powerpoint|pdf|tesis)\b/.test(text);
@@ -76,8 +78,8 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   const explicitFreshDeliverable = /\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|dame|prepara(?:r|me)?|redacta(?:r|me)?|elabora(?:r|me)?|devu[eé]lv(?:e|eme|elo)|entr[eé]ga(?:r|me)?)\b[^.?!]{0,160}\b(?:un\s+|una\s+|el\s+|la\s+)?(?:word|docx|documento|informe|reporte|tesis|monografia|ensayo)\b/.test(text)
     || /\b(?:quiero|necesito)\s+(?:un\s+|una\s+|el\s+|la\s+)(?:word|docx|documento|informe|reporte|tesis|monografia|ensayo)\b/.test(text);
   const explicitAttachedMutation = hasFiles && (
-    /\b(reemplaz\w*|sustitu\w*|quit\w*|elimin\w*|borr\w*|suprim\w*|remov\w*|tach\w*)\b/.test(verbHay)
-    || (documentNoun && /\b(corrig\w*|correg\w*|modific\w*|edit\w*|actualiz\w*|cambi(?:a\w*|e\w*))\b/.test(verbHay))
+    /\b(reemplaz\w*|sustitu\w*|quit\w*|elimin\w*|borr\w*|suprim\w*|remov\w*|tach\w*)\b/.test(editVerbHay)
+    || (documentNoun && /\b(corrig\w*|correg\w*|modific\w*|edit\w*|actualiz\w*|cambi(?:a\w*|e\w*))\b/.test(editVerbHay))
   );
   const instrument = /\b(instrumento|instrument|intuemtno|instumento|cuestionario|encuesta|escala|anexo)\b/.test(text);
   const documentRegion = /\b(portada|caratula|t[ií]tulo|encabezado|pie de pagina|indice|tabla|hoja|celda|fila|columna|diapositiva|pagina|seccion|capitulo)\b/.test(text);

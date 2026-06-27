@@ -588,6 +588,16 @@ describe('source-preserving document edit', () => {
     );
   });
 
+  it('does not treat "imagen adjunta" as a source-preserving document edit', () => {
+    assert.equal(
+      isSourcePreservingEditRequest(
+        'Crea esto en un Word editable. Reproduce la ficha visual de la imagen adjunta lo mejor posible.',
+        [{ id: 'img-1', originalName: 'captura.png', mimeType: 'image/png' }],
+      ),
+      false,
+    );
+  });
+
   it('does not mistake an instrument request for external reference integration because it mentions Word final', () => {
     const prompt = 'agrega al final un instrumento profesional de recolección de datos para esta investigación y valida el Word final';
 
