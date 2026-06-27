@@ -1110,6 +1110,34 @@ function targetSectionBounds(documentXml, target, precomputedParagraphs = null) 
   };
 }
 
+function docxBodyEnd(documentXml = '') {
+  const bodyEnd = String(documentXml || '').lastIndexOf('</w:body>');
+  return bodyEnd >= 0 ? bodyEnd : String(documentXml || '').length;
+}
+
+function docxBodyContentEndPreservingSectPr(documentXml = '') {
+  const bodyEnd = docxBodyEnd(documentXml);
+  const beforeBodyEnd = String(documentXml || '').slice(0, bodyEnd);
+  const finalDirectSectPr = beforeBodyEnd.match(/<w:sectPr\b(?:[\s\S]*?<\/w:sectPr>|\s*\/>)\s*$/);
+  if (finalDirectSectPr?.index != null) return finalDirectSectPr.index;
+  return bodyEnd;
+}
+
+function extractFinalSectionProperties(documentXml = '') {
+  const bodyEnd = docxBodyEnd(documentXml);
+  const tail = String(documentXml || '').slice(Math.max(0, bodyEnd - 8000), bodyEnd);
+  const matches = [...tail.matchAll(/<w:sectPr\b(?:[\s\S]*?<\/w:sectPr>|\s*\/>)/g)];
+  return matches.length ? matches[matches.length - 1][0] : '';
+}
+
+function appendSectPrParagraphIfMissing(documentXml = '', sectPr = '') {
+  if (!sectPr) return documentXml;
+  const bodyEnd = docxBodyEnd(documentXml);
+  const tail = String(documentXml || '').slice(Math.max(0, bodyEnd - 2000), bodyEnd);
+  if (/<w:sectPr\b/.test(tail)) return documentXml;
+  return `${documentXml.slice(0, bodyEnd)}<w:p><w:pPr>${sectPr}</w:pPr></w:p>${documentXml.slice(bodyEnd)}`;
+}
+
 function isAnexo3CronogramaTarget(target = {}) {
   return target?.kind === 'anexo' && Number(target.number) === 3;
 }
@@ -1706,6 +1734,39 @@ function deleteTextFromDocxBuffer(buffer, needle) {
   return {
     buffer: zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' }),
     removedCount,
+  };
+}
+
+function deleteDocxSectionRangeBuffer(buffer, target, { toEnd = false } = {}) {
+  if (!target) {
+    const err = new Error('No se especificó la sección que debo borrar del DOCX.');
+    err.code = 'DELETE_SECTION_UNSPECIFIED';
+    throw err;
+  }
+  const zip = new PizZip(buffer);
+  const documentFile = zip.file('word/document.xml');
+  if (!documentFile) throw new Error('DOCX inválido: falta word/document.xml.');
+  let documentXml = documentFile.asText();
+  const paragraphs = extractDocxParagraphs(documentXml);
+  const bounds = targetSectionBounds(documentXml, target, paragraphs);
+  const deleteStart = bounds.heading.start;
+  const deleteEnd = toEnd
+    ? docxBodyContentEndPreservingSectPr(documentXml)
+    : bounds.sectionEnd;
+  if (!(deleteEnd > deleteStart)) {
+    const err = new Error(`No pude calcular un rango seguro para borrar "${target.label}".`);
+    err.code = 'DELETE_SECTION_RANGE_EMPTY';
+    throw err;
+  }
+  const preservedSectPr = toEnd ? extractFinalSectionProperties(documentXml) : '';
+  documentXml = `${documentXml.slice(0, deleteStart)}${documentXml.slice(deleteEnd)}`;
+  if (toEnd) documentXml = appendSectPrParagraphIfMissing(documentXml, preservedSectPr);
+  zip.file('word/document.xml', documentXml);
+  return {
+    buffer: zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' }),
+    removedCount: 1,
+    toEnd: Boolean(toEnd),
+    target,
   };
 }
 
@@ -2917,6 +2978,18 @@ function validateDocxOperationCriteria(buffer, operations = []) {
       checks.push({ id: 'specific_text_deleted', label: 'Texto específico eliminado', passed, details: { needle: compact(op.needle, 120) } });
       continue;
     }
+    if ((op.kind === 'delete_section' || op.kind === 'delete_section_range') && op.target) {
+      const documentXml = readDocxDocumentXml(buffer);
+      const stillPresent = extractDocxParagraphs(documentXml)
+        .some((paragraph) => matchesTargetHeading(paragraph.normalized, op.target));
+      checks.push({
+        id: `section_${normalizeText(op.target.label).replace(/\s+/g, '_')}_deleted`,
+        label: `${op.target.label} eliminado`,
+        passed: !stillPresent,
+        details: { target: op.target.label, toEnd: Boolean(op.toEnd || op.kind === 'delete_section_range') },
+      });
+      continue;
+    }
     if (op.kind === 'replace_text') {
       const passed = !normalizedTextIncludes(text, op.needle) && normalizedTextIncludes(text, op.replacement);
       checks.push({
@@ -3194,6 +3267,11 @@ function clauseIsDelete(clauseNorm) {
   return /\b(quit\w*|elimin\w*|borr\w*)\b/.test(clauseNorm);
 }
 
+function clauseDeletesFromSectionToEnd(clauseNorm = '') {
+  const text = normalizeText(clauseNorm);
+  return /\b(?:desde|a\s+partir\s+de|de\s+ahi|de\s+alli|hacia\s+abajo|para\s+abajo|en\s+adelante|hasta\s+el\s+final|al\s+final|todo\s+lo\s+que\s+sigue|todo\s+hacia\s+abajo)\b/.test(text);
+}
+
 function clauseMentionsCover(clauseNorm) {
   return /\b(portada|caratula|carátula|cover)\b/.test(clauseNorm);
 }
@@ -3341,6 +3419,14 @@ function buildOperationFromClause(clauseNorm, documentXml) {
 
   if (replacement) {
     return { kind: 'replace_text', ...replacement };
+  }
+
+  if (remove && target) {
+    return {
+      kind: clauseDeletesFromSectionToEnd(clauseNorm) ? 'delete_section_range' : 'delete_section',
+      target,
+      toEnd: clauseDeletesFromSectionToEnd(clauseNorm),
+    };
   }
 
   if (remove) {
@@ -3794,6 +3880,21 @@ function runDeleteTextOperation({ buffer, op }) {
   };
 }
 
+function runDeleteSectionOperation({ buffer, op }) {
+  const result = deleteDocxSectionRangeBuffer(buffer, op.target, { toEnd: op.toEnd || op.kind === 'delete_section_range' });
+  return {
+    buffer: result.buffer,
+    validationBlocks: [],
+    step: {
+      kind: op.kind === 'delete_section_range' ? 'delete_section_range' : 'delete_section',
+      label: op.target?.label || 'Sección',
+      mode: result.toEnd ? 'section_to_end' : 'section_only',
+      removedCount: result.removedCount,
+      target: op.target,
+    },
+  };
+}
+
 function runReplaceTextOperation({ buffer, op }) {
   const result = replaceTextInDocxBuffer(buffer, op.needle, op.replacement);
   return {
@@ -3898,6 +3999,8 @@ async function executeDocxOperations({ input, ops, requestText, sourceText, allS
       result = runFillCoverOperation({ buffer, sourceText, sourceFile });
     } else if (op.kind === 'delete_text') {
       result = runDeleteTextOperation({ buffer, op });
+    } else if (op.kind === 'delete_section' || op.kind === 'delete_section_range') {
+      result = runDeleteSectionOperation({ buffer, op });
     } else if (op.kind === 'replace_text') {
       result = runReplaceTextOperation({ buffer, op });
     } else {
@@ -4161,6 +4264,8 @@ function describeStep(step) {
   if (step.kind === 'insert_table' && !step.mode) return `inserté una ${step.label || 'tabla'} en el documento`;
   if (step.kind === 'insert_table') return 'intenté insertar una tabla, pero no había datos suficientes';
   if (step.kind === 'fill_cover') return 'completé la portada con los datos disponibles del documento';
+  if (step.kind === 'delete_section_range') return `eliminé ${step.label || 'la sección'} y todo el contenido posterior`;
+  if (step.kind === 'delete_section') return `eliminé ${step.label || 'la sección'} sin alterar el resto del archivo`;
   if (step.kind === 'delete_text') return `eliminé el texto específico solicitado (${step.removedCount || 0} coincidencia(s))`;
   if (step.kind === 'replace_text') return `reemplacé el texto específico solicitado (${step.changedCount || 0} coincidencia(s))`;
   if (step.kind === 'set_cell') return `actualicé la celda ${step.label || 'solicitada'}`;

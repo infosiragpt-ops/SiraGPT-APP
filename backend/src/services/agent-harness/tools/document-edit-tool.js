@@ -87,7 +87,9 @@ function buildDocumentEditTool(deps = {}) {
         return { ok: false, error: 'context_unavailable' };
       }
 
-      // Ownership re-check + bytes.
+      // Ownership re-check. The source-preserving editor below loads the
+      // original file by id/path and can handle large DOCX structural edits
+      // without the sandbox blob cap, so do not read the full bytes yet.
       let rows;
       try {
         rows = await prisma.file.findMany({ where: { id: { in: ids }, userId: ctx.userId } });
@@ -95,20 +97,6 @@ function buildDocumentEditTool(deps = {}) {
         return { ok: false, error: 'file_lookup_failed', message: String(err && err.message || err).slice(0, 200) };
       }
       if (!rows.length) return { ok: false, error: 'file_not_found' };
-
-      const files = [];
-      for (const row of rows) {
-        let buffer;
-        try {
-          buffer = await fsImpl.readFile(row.path);
-        } catch (_) {
-          return { ok: false, error: 'file_blob_missing', fileId: row.id };
-        }
-        if (buffer.length > MAX_FILE_BYTES) {
-          return { ok: false, error: 'file_too_large', fileId: row.id, maxBytes: MAX_FILE_BYTES };
-        }
-        files.push({ name: row.originalName || row.filename, buffer });
-      }
 
       // FAST PATH — in-process source-preserving editor (no sandbox, pure Node:
       // PizZip / ExcelJS / pdf-lib). Handles the common "edit these specific
@@ -166,6 +154,20 @@ function buildDocumentEditTool(deps = {}) {
         // The in-process editor throws when it needs a different/compatible
         // source (e.g. a section edit on a non-DOCX). The sandbox doc-agent is
         // more capable for those cases — fall through to it rather than failing.
+      }
+
+      const files = [];
+      for (const row of rows) {
+        let buffer;
+        try {
+          buffer = await fsImpl.readFile(row.path);
+        } catch (_) {
+          return { ok: false, error: 'file_blob_missing', fileId: row.id };
+        }
+        if (buffer.length > MAX_FILE_BYTES) {
+          return { ok: false, error: 'file_too_large', fileId: row.id, maxBytes: MAX_FILE_BYTES };
+        }
+        files.push({ name: row.originalName || row.filename, buffer });
       }
 
       // Run the verified pipeline (remote sandbox in prod, auto-fallback).

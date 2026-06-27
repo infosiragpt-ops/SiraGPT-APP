@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const { describe, it } = require('node:test');
 const { execFileSync } = require('node:child_process');
+const { randomBytes } = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -85,6 +86,30 @@ async function makeDocxWithAnexo3Buffer() {
     }],
   });
   return Buffer.from(await Packer.toBuffer(doc));
+}
+
+async function makeDocxWithAnnexTailBuffer() {
+  const doc = new Document({
+    sections: [{
+      children: [
+        new Paragraph('Portada original UPN'),
+        new Paragraph('Capítulo 1. Introducción original'),
+        new Paragraph('REFERENCIAS'),
+        new Paragraph('Referencia bibliográfica que debe conservarse.'),
+        new Paragraph('ANEXO 01'),
+        new Paragraph('Fotograma 1 y evidencia visual que debe eliminarse.'),
+        new Paragraph('ANEXO 02'),
+        new Paragraph('Contenido posterior del anexo dos que debe eliminarse.'),
+      ],
+    }],
+  });
+  return Buffer.from(await Packer.toBuffer(doc));
+}
+
+function inflateDocxAboveSandboxLimit(buffer, extraBytes = 21 * 1024 * 1024) {
+  const zip = new PizZip(buffer);
+  zip.file('word/media/qa-large-unreferenced.bin', randomBytes(extraBytes), { binary: true });
+  return zip.generate({ type: 'nodebuffer', compression: 'STORE' });
 }
 
 async function makeDocxWithAnexo3CronogramaBuffer({
@@ -824,6 +849,53 @@ describe('source-preserving document edit', () => {
       assert.match(xml, /Criterios de cuantificación/);
       assert.match(xml, /Bienes registrables/);
       assert.doesNotMatch(xml, /ANEXOS/);
+    } finally {
+      if (originalOpenAIKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = originalOpenAIKey;
+    }
+  });
+
+  it('edits an oversized DOCX by deleting from Anexo 01 to the end and returning a DOCX artifact', async () => {
+    const originalOpenAIKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-large-anexo-delete-'));
+      const originalPath = path.join(tmp, '572_084_FINAL_gomez_mendizabal_tf_FORMATO-UPN.docx');
+      const oversized = inflateDocxAboveSandboxLimit(await makeDocxWithAnnexTailBuffer());
+      assert.ok(oversized.length > 20 * 1024 * 1024, 'fixture must exceed the sandbox document_edit byte cap');
+      fs.writeFileSync(originalPath, oversized);
+
+      const result = await generateSourcePreservingDocumentEdit({
+        sourceFile: {
+          id: 'file-large-docx',
+          path: originalPath,
+          originalName: '572_084_FINAL_gomez_mendizabal_tf_FORMATO-UPN.docx',
+          filename: '572_084_FINAL_gomez_mendizabal_tf_FORMATO-UPN.docx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          extractedText: 'Documento largo con referencias y anexos desde Anexo 01.',
+        },
+        prompt: 'borra desde el anexo 01 hacia abajo todo porfavor',
+        displayPrompt: 'borra desde el anexo 01 hacia abajo todo porfavor',
+        userId: 'user-1',
+        chatId: 'chat-1',
+      });
+
+      assert.equal(result.format, 'docx');
+      assert.equal(result.validation.passed, true);
+      assert.equal(result.validation.checks.operation_criteria, true);
+      assert.match(result.content, /eliminé Anexo 1 y todo el contenido posterior/i);
+      assert.match(result.file.filename, /anexo_1_completado\.docx$/);
+
+      const edited = fs.readFileSync(result.artifact.path);
+      const xml = new PizZip(edited).file('word/document.xml').asText();
+      assert.match(xml, /Portada original UPN/);
+      assert.match(xml, /Capítulo 1\. Introducción original/);
+      assert.match(xml, /REFERENCIAS/);
+      assert.match(xml, /Referencia bibliográfica que debe conservarse/);
+      assert.doesNotMatch(xml, /ANEXO 01/);
+      assert.doesNotMatch(xml, /Fotograma 1/);
+      assert.doesNotMatch(xml, /ANEXO 02/);
+      assert.doesNotMatch(xml, /Contenido posterior del anexo dos/);
     } finally {
       if (originalOpenAIKey === undefined) delete process.env.OPENAI_API_KEY;
       else process.env.OPENAI_API_KEY = originalOpenAIKey;
