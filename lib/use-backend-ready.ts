@@ -66,8 +66,8 @@ export function useBackendReady(pollMs = 2500): BackendReadyState {
         // could not answer this filesystem route in time) or a transient
         // network blip inside the preview iframe. Neither proves the backend is
         // down — it is a separate process and almost certainly reachable — so
-        // this must NOT raise the alarming "server is starting" banner.
-        gotResponse = false
+        // this must NOT raise the alarming "server is starting" banner, so we
+        // leave `ready`/`warmingSignal` at their pre-fetch defaults (both false).
       } finally {
         clearTimeout(abortTimer)
       }

@@ -31,7 +31,7 @@ import {
 import { cn } from "@/lib/utils"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { useCodeWorkspace } from "@/lib/code-workspace-context"
-import { buildPreviewDocument, type PreviewKind } from "@/lib/code-preview-build"
+import { buildPreviewDocument, projectNeedsDevServer, type PreviewKind } from "@/lib/code-preview-build"
 import { CODE_TEMPLATES } from "@/lib/code-templates"
 import { hostRunnerService } from "@/lib/code-runner/host-runner-service"
 
@@ -121,7 +121,8 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
     [clearPoll],
   )
 
-  const runApp = React.useCallback(async () => {
+  const runApp = React.useCallback(async (opts?: { auto?: boolean }) => {
+    const auto = opts?.auto ?? false
     setLiveRun({ phase: "starting", devUrl: "", note: "Instalando dependencias y arrancando el dev server…" })
     if (!runIdRef.current) {
       try {
@@ -136,7 +137,16 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
     // No-Docker host runner: install deps + boot a real vite dev server, then
     // iframe it through the same-origin reverse proxy (started.devUrl).
     const started = await hostRunnerService.start(fileMap, runIdRef.current)
+    // An AUTO run (the agent just finished building) must degrade SILENTLY when
+    // the runner can't even start — a disabled environment, or a user who isn't
+    // on the allowlist (403 → started.error). Falling back to the static preview
+    // is friendlier than slapping a red "no se pudo correr" over a preview the
+    // user never asked to run. A manual ▶ Ejecutar still surfaces the reason.
     if (started.disabled) {
+      if (auto) {
+        setLiveRun({ phase: "idle", devUrl: "", note: "" })
+        return
+      }
       setLiveRun({
         phase: "error",
         devUrl: "",
@@ -145,22 +155,81 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
       return
     }
     if (started.error) {
+      if (auto) {
+        setLiveRun({ phase: "idle", devUrl: "", note: "" })
+        return
+      }
       setLiveRun({ phase: "error", devUrl: "", note: started.error })
       return
     }
     pollUntilReady(() => hostRunnerService.status(runIdRef.current), started.devUrl || "")
   }, [files, pollUntilReady])
 
+  // Mirror the latest values into refs so the auto-run listener (registered
+  // once) and the post-commit auto-run effect always read FRESH state without
+  // having to re-subscribe on every keystroke.
+  const filesRef = React.useRef(files)
+  filesRef.current = files
+  const runAppRef = React.useRef(runApp)
+  runAppRef.current = runApp
+  const phaseRef = React.useRef(liveRun.phase)
+  phaseRef.current = liveRun.phase
+  // A build that finishes while a previous boot is still installing can't restart
+  // mid-install; we queue it here and fire once the in-flight run settles so the
+  // preview always lands on the newest code.
+  const pendingAutoRunRef = React.useRef(false)
+
+  // The chat panel dispatches "siragpt:code-run-app" in the SAME tick as the
+  // applyBlock() setState that writes the new files — so at event time the
+  // workspace has not committed yet and reading `files` here would be stale.
+  // For an AUTO run we therefore only bump a signal; the post-commit effect
+  // below evaluates the gate against the freshly-committed workspace. A manual
+  // trigger (▶ Ejecutar elsewhere / dev-server workflow) is not concurrent with
+  // a build, so its files are already stable and it can run immediately.
+  const [autoRunSignal, setAutoRunSignal] = React.useState(0)
   React.useEffect(() => {
     if (typeof window === "undefined") return
-    const onRun = () => {
-      if (Object.keys(files || {}).some((p) => /(^|\/)package\.json$/.test(p))) {
-        void runApp()
+    const onRun = (e: Event) => {
+      const auto = ((e as CustomEvent).detail as { auto?: boolean } | undefined)?.auto ?? false
+      if (auto) {
+        setAutoRunSignal((s) => s + 1)
+        return
+      }
+      if (Object.keys(filesRef.current || {}).some((p) => /(^|\/)package\.json$/.test(p))) {
+        void runAppRef.current()
       }
     }
     window.addEventListener("siragpt:code-run-app", onRun)
     return () => window.removeEventListener("siragpt:code-run-app", onRun)
-  }, [files, runApp])
+  }, [])
+
+  // Post-commit auto-run: runs once per build signal, AFTER React has committed
+  // the new files (the signal bump batches with the applyBlock setState). Boot
+  // the heavy dev server only for a real Vite/Next project the srcdoc preview
+  // can't render; the deterministic Builder's self-contained index.html is
+  // skipped so it never triggers an npm install.
+  React.useEffect(() => {
+    if (autoRunSignal === 0) return
+    if (!projectNeedsDevServer(filesRef.current)) return
+    // Don't interrupt an install already in flight — queue a retry instead so
+    // the newest code still shows once it settles.
+    if (phaseRef.current === "starting") {
+      pendingAutoRunRef.current = true
+      return
+    }
+    void runAppRef.current({ auto: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRunSignal])
+
+  // Drain a queued auto-run once the in-flight boot settles (ready/error/idle).
+  React.useEffect(() => {
+    if (liveRun.phase === "starting") return
+    if (!pendingAutoRunRef.current) return
+    pendingAutoRunRef.current = false
+    if (!projectNeedsDevServer(filesRef.current)) return
+    void runAppRef.current({ auto: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveRun.phase])
 
   React.useEffect(
     () => () => {
@@ -281,7 +350,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
               ) : (
                 <button
                   type="button"
-                  onClick={runApp}
+                  onClick={() => void runApp()}
                   title="Instalar dependencias y correr el app (npm)"
                   className="flex h-6 items-center gap-1 rounded-md bg-[hsl(var(--accent-violet)/0.16)] px-2 text-[11px] font-medium text-[hsl(var(--accent-violet))] transition-colors hover:bg-[hsl(var(--accent-violet)/0.28)]"
                 >
@@ -377,7 +446,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
             <p className="mx-auto max-w-md font-mono text-[11px] leading-relaxed text-muted-foreground">{liveRun.note}</p>
             <button
               type="button"
-              onClick={runApp}
+              onClick={() => void runApp()}
               className="rounded-md bg-[hsl(var(--accent-violet)/0.16)] px-3 py-1.5 text-[12px] font-medium text-[hsl(var(--accent-violet))] hover:bg-[hsl(var(--accent-violet)/0.28)]"
             >
               Reintentar

@@ -736,15 +736,22 @@ export function AICodeChatPanel() {
                   const hasHtml = blocks.some((b) => /\.html?$/i.test(b.path || ""))
                   toast.success(
                     hasPkg
-                      ? "Proyecto generado — pulsa ▶ Ejecutar para levantar el dev server"
+                      ? "Proyecto generado — levantando el dev server…"
                       : hasHtml
                         ? "App generada — revisa el preview en vivo →"
                         : `Generados ${blocks.length} archivo(s) — abriendo preview`,
                   )
                   // applyBlock already emits "siragpt:code-open-preview"; make
-                  // sure the preview pane is shown even if it was collapsed.
+                  // sure the preview pane is shown even if it was collapsed, and
+                  // auto-boot the dev server so the user sees the running result
+                  // without hunting for ▶ Ejecutar. The PreviewPane only acts on
+                  // this for real Vite/Next projects and degrades silently if the
+                  // environment/user can't run apps.
                   if (typeof window !== "undefined") {
                     window.dispatchEvent(new CustomEvent("siragpt:code-open-preview"))
+                    window.dispatchEvent(
+                      new CustomEvent("siragpt:code-run-app", { detail: { auto: true } }),
+                    )
                   }
                 }
               } catch {
@@ -954,6 +961,7 @@ export function AICodeChatPanel() {
         }
         if (typeof window !== "undefined") {
           window.dispatchEvent(new CustomEvent("siragpt:code-open-preview"))
+          window.dispatchEvent(new CustomEvent("siragpt:code-run-app", { detail: { auto: true } }))
         }
         const { actions, metrics } = buildWriteMetrics(appliedFiles, {
           startedAt,
@@ -1046,6 +1054,7 @@ export function AICodeChatPanel() {
       for (const f of ordered) applyBlock(f.path, f.content)
       if (files.length > 0 && typeof window !== "undefined") {
         window.dispatchEvent(new CustomEvent("siragpt:code-open-preview"))
+        window.dispatchEvent(new CustomEvent("siragpt:code-run-app", { detail: { auto: true } }))
       }
     },
     [applyBlock],

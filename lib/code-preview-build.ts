@@ -290,7 +290,7 @@ function looksLikeRenderableReact(code: string): boolean {
 /** True when the workspace is a real Node bundler project (Vite/Next): its
  * index.html loads /src/main.tsx through the dev server, so the sandboxed
  * iframe can't render it — the user must press ▶ Ejecutar. */
-function isNodeBundlerProject(files: CodeFiles): boolean {
+export function isNodeBundlerProject(files: CodeFiles): boolean {
   const pkgPath = Object.keys(files).find((p) => /(^|\/)package\.json$/.test(p))
   if (!pkgPath) return false
   try {
@@ -340,6 +340,20 @@ function findProjectEntry(files: CodeFiles): string | null {
     paths.find((p) => /(^|\/)(main|index)\.(t|j)sx$/i.test(p)) ??
     null
   )
+}
+
+/** True when auto-run should boot the real dev server: a Vite/Next project whose
+ * entry index.html is NOT self-contained, so the sandboxed srcdoc iframe can't
+ * render it. The deterministic Builder ships a Vite/Next package.json alongside a
+ * self-contained index.html — that returns false (its srcdoc preview renders
+ * instantly and must not trigger an npm install). Unlike buildPreviewDocument(),
+ * this is independent of the active file, so auto-run can't be fooled by the
+ * active tab landing on a README/SVG/self-contained doc inside a real project. */
+export function projectNeedsDevServer(files: CodeFiles): boolean {
+  if (!isNodeBundlerProject(files)) return false
+  const indexPath = Object.keys(files).find((p) => stripLead(p).toLowerCase() === "index.html")
+  if (indexPath && isSelfContainedHtml(files[indexPath]?.content ?? "")) return false
+  return true
 }
 
 /** Pick the best entry + kind given the active file and the whole project. */
