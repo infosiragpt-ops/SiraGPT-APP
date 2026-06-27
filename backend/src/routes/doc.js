@@ -91,6 +91,14 @@ async function loadReferenceFiles(fileIds, userId) {
   }));
 }
 
+function normalizeRequestedFileIds(body = {}) {
+  const files = Array.isArray(body.files) ? body.files : [];
+  const fileIds = Array.isArray(body.fileIds) ? body.fileIds : [];
+  return Array.from(new Set([...files, ...fileIds]
+    .filter((id) => typeof id === 'string' && id.trim())
+    .map((id) => id.trim()))).slice(0, MAX_SIMULTANEOUS_DOCUMENTS);
+}
+
 async function loadProjectContextForChat(chatId, userId) {
   if (!chatId || !userId) return null;
   const chat = await prisma.chat.findFirst({
@@ -180,6 +188,8 @@ router.post(
     body('complexity').optional().isIn(['simple', 'standard', 'high', 'stress']),
     body('files').optional().isArray({ max: MAX_SIMULTANEOUS_DOCUMENTS }),
     body('files.*').optional().isString().trim().isLength({ min: 1, max: 120 }),
+    body('fileIds').optional().isArray({ max: MAX_SIMULTANEOUS_DOCUMENTS }),
+    body('fileIds.*').optional().isString().trim().isLength({ min: 1, max: 120 }),
   ],
   async (req, res) => {
     const errors = validationResult(req);
@@ -212,8 +222,9 @@ router.post(
 
     try {
       const shouldUsePreviousAssistantContent = isPreviousContentExportRequest(prompt);
+      const requestedFileIds = normalizeRequestedFileIds(req.body);
       const [explicitReferenceFiles, projectContext, previousAssistantContent] = await Promise.all([
-        loadReferenceFiles(req.body.files, req.user.id),
+        loadReferenceFiles(requestedFileIds, req.user.id),
         loadProjectContextForChat(chatId, req.user.id),
         shouldUsePreviousAssistantContent
           ? loadPreviousAssistantContentForExport(chatId, req.user.id)
@@ -236,7 +247,7 @@ router.post(
         prisma,
         userId: req.user.id,
         chatId,
-        fileIds: req.body.files,
+        fileIds: requestedFileIds,
         prompt,
         displayPrompt,
         signal: controller.signal,
