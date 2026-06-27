@@ -123,4 +123,84 @@ describe('refresh token', () => {
     const [, retriedImageOptions] = mockFetch.mock.calls[3]
     expect(retriedImageOptions.headers.get('Authorization')).toBe(`Bearer ${refreshedToken}`)
   })
+
+  it('uses the in-memory token for document SSE when localStorage is empty', async () => {
+    api.setToken(testToken)
+    window.localStorage.removeItem('auth-token')
+
+    const events: any[] = []
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('data: {"type":"final","content":"ok"}\n\n'))
+        controller.close()
+      },
+    })
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      body,
+    })
+
+    await api.generateDocStream(
+      { prompt: 'crea esto en un word', chatId: 'chat_1', model: 'grok-4.3', format: 'docx' },
+      (event) => events.push(event),
+    )
+
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+    const [url, options] = mockFetch.mock.calls[0]
+    expect(String(url)).toContain('/doc/generate')
+    expect(options.headers.Authorization).toBe(`Bearer ${testToken}`)
+    expect(events).toEqual([{ type: 'final', content: 'ok' }])
+  })
+
+  it('refreshes once and retries document SSE after Access token required', async () => {
+    api.setToken(null)
+    window.localStorage.removeItem('auth-token')
+
+    const events: any[] = []
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('data: {"type":"final","content":"doc listo"}\n\n'))
+        controller.close()
+      },
+    })
+
+    mockFetch
+      // /doc/generate without a Bearer token is rejected by authenticateToken.
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        headers: new Headers(),
+        json: () => Promise.resolve({ error: 'Access token required' }),
+      })
+      // /auth/refresh can still mint a clean JWT from the httpOnly refresh cookie.
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        json: () => Promise.resolve({ token: refreshedToken }),
+      })
+      // Retried /doc/generate now carries Authorization and streams normally.
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        body,
+      })
+
+    await api.generateDocStream(
+      { prompt: 'crea esto en un word', chatId: 'chat_1', model: 'grok-4.3', format: 'docx' },
+      (event) => events.push(event),
+    )
+
+    expect(mockFetch).toHaveBeenCalledTimes(3)
+    expect(String(mockFetch.mock.calls[0][0])).toContain('/doc/generate')
+    expect(mockFetch.mock.calls[0][1].headers.Authorization).toBeUndefined()
+    expect(String(mockFetch.mock.calls[1][0])).toContain('/auth/refresh')
+    expect(String(mockFetch.mock.calls[2][0])).toContain('/doc/generate')
+    expect(mockFetch.mock.calls[2][1].headers.Authorization).toBe(`Bearer ${refreshedToken}`)
+    expect(events).toEqual([{ type: 'final', content: 'doc listo' }])
+  })
 })

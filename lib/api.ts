@@ -467,6 +467,17 @@ class ApiClient {
     }
   }
 
+  private _getAccessTokenSnapshot(): string | null {
+    if (this.token) return this.token;
+    if (typeof window === 'undefined') return null;
+    const stored = localStorage.getItem('auth-token');
+    if (stored) {
+      this.token = stored;
+      return stored;
+    }
+    return null;
+  }
+
   private _reportApiFailure(args: {
     endpoint: string
     method: string
@@ -542,8 +553,9 @@ class ApiClient {
 
     const method = String((options.method || "GET")).toUpperCase()
 
-    if (this.token && !isCredentialHandshake(endpoint, method)) {
-      headers.set("Authorization", `Bearer ${this.token}`)
+    const bearerToken = this._getAccessTokenSnapshot()
+    if (bearerToken && !isCredentialHandshake(endpoint, method)) {
+      headers.set("Authorization", `Bearer ${bearerToken}`)
     }
 
     // Only set Content-Type for non-FormData requests
@@ -2891,22 +2903,35 @@ class ApiClient {
     onEvent: (ev: any) => void,
     opts: { signal?: AbortSignal } = {},
   ): Promise<void> {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
-    const res = await fetch(`${this.baseURL}${path}`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify(data),
-      signal: opts.signal,
-    });
-    if (!res.ok) {
+    let retriedAfterRefresh = false;
+    let res: Response;
+
+    while (true) {
+      const token = this._getAccessTokenSnapshot();
+      res = await fetch(`${this.baseURL}${path}`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(data),
+        signal: opts.signal,
+      });
+
+      if (res.ok) break;
+
+      if (res.status === 401 && !retriedAfterRefresh && !isCredentialHandshake(path, 'POST')) {
+        retriedAfterRefresh = true;
+        const refreshed = await this._tryRefresh();
+        if (refreshed) continue;
+      }
+
       let msg = `HTTP ${res.status}`;
       try { const j = await res.json(); msg = j.error || msg; } catch {}
       throw new Error(msg);
     }
+
     if (!res.body) throw new Error('Stream body missing');
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
