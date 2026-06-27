@@ -79,7 +79,12 @@ import {
   togglePinnedRow,
   type CodexDisplayOptions,
 } from "@/lib/codex-conversation-prefs"
-import { canOpenLocalDirectory, importLocalFolderAsWorkspace } from "@/lib/local-folder-workspace"
+import {
+  canOpenLocalDirectory,
+  importLocalFolderAsWorkspace,
+  importLocalFolderViaInput,
+  type LocalFolderRegistration,
+} from "@/lib/local-folder-workspace"
 import { apiClient } from "@/lib/api"
 import {
   projectsService,
@@ -564,18 +569,10 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
     [handleOpenWorkspace],
   )
 
-  // "Nuevo proyecto" → pick a local code folder. Opens showDirectoryPicker
-  // directly in the click gesture (navigating first would drop user-activation
-  // and the browser would block the picker), then routes into /code.
-  const handleOpenLocalProject = React.useCallback(async () => {
-    if (!canOpenLocalDirectory()) {
-      // Safari/Firefox lack the File System Access API — fall back to the
-      // /code in-app flow.
-      handleOpenDesktopFolder()
-      return
-    }
-    try {
-      const reg = await importLocalFolderAsWorkspace()
+  // Shared post-import routing: select the new folder, navigate to /code, and
+  // surface a clear summary (including a hint when nothing was imported).
+  const finishLocalImport = React.useCallback(
+    (reg: LocalFolderRegistration) => {
       setActiveFolderId(reg.codexId)
       refreshCodexProjects()
       if (typeof window !== "undefined") {
@@ -583,15 +580,66 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
       }
       router.push(`/code?local=${encodeURIComponent(reg.codexId)}`)
       onMobileNavigate?.()
+      if (reg.fileCount === 0) {
+        toast.warning(
+          `Carpeta "${reg.name}" abierta, pero no se importó ningún archivo (revisa tipo/tamaño; solo se importan archivos de texto/código).`,
+        )
+        return
+      }
       toast.success(`Carpeta "${reg.name}" abierta · ${reg.fileCount} archivos`)
       if (reg.skippedCount > 0) {
-        toast.info(`${reg.skippedCount} archivo(s) omitidos por tamaño o formato`)
+        toast.info(`${reg.skippedCount} archivo(s) omitidos por tamaño, formato o seguridad (.env)`)
       }
+    },
+    [onMobileNavigate, refreshCodexProjects, router],
+  )
+
+  // "Nueva empresa (carpeta local)" → import a local code folder.
+  // showDirectoryPicker (File System Access API) is blocked inside cross-origin
+  // iframes (the Replit preview throws "Cross origin sub frames aren't allowed
+  // to show a file picker.") and is unsupported in Safari/Firefox. In those
+  // contexts fall back to a classic <input webkitdirectory> upload, which works
+  // everywhere (read-only import).
+  const handleOpenLocalProject = React.useCallback(async () => {
+    let inIframe = true
+    try {
+      inIframe = typeof window !== "undefined" && window.self !== window.top
+    } catch {
+      // Reading window.top can throw under strict cross-origin policies —
+      // assume we're framed and use the iframe-safe upload path.
+      inIframe = true
+    }
+
+    if (inIframe || !canOpenLocalDirectory()) {
+      try {
+        const reg = await importLocalFolderViaInput()
+        if (reg) finishLocalImport(reg)
+      } catch {
+        // Last resort if even the <input> upload is unavailable.
+        handleOpenDesktopFolder()
+      }
+      return
+    }
+
+    try {
+      const reg = await importLocalFolderAsWorkspace()
+      finishLocalImport(reg)
     } catch (err: any) {
       if (err?.name === "AbortError") return
+      // Safety net: a native picker blocked by cross-origin policy still lands
+      // here — retry with the iframe-safe <input> upload before giving up.
+      if (err?.name === "SecurityError" || /cross origin/i.test(String(err?.message || ""))) {
+        try {
+          const reg = await importLocalFolderViaInput()
+          if (reg) finishLocalImport(reg)
+        } catch (inner: any) {
+          toast.error(inner?.message || "No se pudo subir la carpeta local")
+        }
+        return
+      }
       toast.error(err?.message || "No se pudo abrir la carpeta local")
     }
-  }, [handleOpenDesktopFolder, onMobileNavigate, refreshCodexProjects, router])
+  }, [finishLocalImport, handleOpenDesktopFolder])
 
   // Secondary entry: a cloud-only project (no local files). Opens a
   // styled modal instead of the native window.prompt.

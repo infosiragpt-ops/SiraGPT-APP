@@ -200,8 +200,7 @@ function pickInitialTabs(paths: string[]): string[] {
  * browser allows showDirectoryPicker(). Navigating first and then opening the
  * picker asynchronously drops the user-activation and the picker is blocked.
  */
-export async function importLocalFolderAsWorkspace(): Promise<LocalFolderRegistration> {
-  const imported = await openLocalDirectoryWorkspace()
+function registerImportedWorkspace(imported: LocalWorkspaceImport): LocalFolderRegistration {
   const codexId = codexIdForLocalFolder(imported.rootName)
   const paths = Object.keys(imported.files)
   const openTabs = pickInitialTabs(paths)
@@ -240,6 +239,146 @@ export async function importLocalFolderAsWorkspace(): Promise<LocalFolderRegistr
     fileCount: imported.fileCount,
     skippedCount: imported.skippedCount,
   }
+}
+
+export async function importLocalFolderAsWorkspace(): Promise<LocalFolderRegistration> {
+  const imported = await openLocalDirectoryWorkspace()
+  return registerImportedWorkspace(imported)
+}
+
+/**
+ * Fallback folder import for contexts where the File System Access API is
+ * unavailable: cross-origin iframes (e.g. the Replit preview, which throws
+ * "Cross origin sub frames aren't allowed to show a file picker.") and
+ * Safari/Firefox. Uses a classic <input webkitdirectory>, which works inside
+ * iframes and across browsers. This is a read-only snapshot — the folder is
+ * NOT linked for write-back, so saving edits to disk is unavailable.
+ *
+ * Resolves null when the user cancels the picker.
+ */
+export async function importLocalFolderViaInput(): Promise<LocalFolderRegistration | null> {
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    throw new Error("La subida de carpetas solo está disponible en el navegador.")
+  }
+
+  const picked = await pickDirectoryViaInput()
+  if (!picked || picked.length === 0) return null
+
+  const files: CodeFiles = {}
+  const stats = { count: 0, bytes: 0, skipped: 0 }
+  // A webkitdirectory upload is a read-only snapshot — there is no directory
+  // handle to write back to, so drop any previously linked folder.
+  linkedRootHandle = null
+  linkedRootName = ""
+  linkedFileHandles.clear()
+
+  let rootName = ""
+  for (const file of Array.from(picked)) {
+    if (stats.count >= MAX_FILES || stats.bytes >= MAX_TOTAL_BYTES) {
+      stats.skipped++
+      continue
+    }
+    const rel = String((file as unknown as { webkitRelativePath?: string }).webkitRelativePath || file.name)
+    const segments = rel.split("/").filter(Boolean)
+    if (segments.length === 0) {
+      stats.skipped++
+      continue
+    }
+    if (!rootName) rootName = segments[0]
+    const leaf = segments[segments.length - 1]
+    // Skip anything living inside an ignored directory (node_modules, .git, …).
+    if (segments.slice(0, -1).some((s) => IGNORED_DIRS.has(s.toLowerCase()))) {
+      stats.skipped++
+      continue
+    }
+    if (!isTextLikeFile(leaf) || isSecretEnvFile(leaf)) {
+      stats.skipped++
+      continue
+    }
+    if (file.size > MAX_FILE_BYTES || stats.bytes + file.size > MAX_TOTAL_BYTES) {
+      stats.skipped++
+      continue
+    }
+    let content: string
+    try {
+      content = await file.text()
+    } catch {
+      stats.skipped++
+      continue
+    }
+    if (content.includes("\u0000")) {
+      stats.skipped++
+      continue
+    }
+    // Paths are stored relative to the picked root (drop the top-level folder
+    // name) so they match the File System Access API import shape.
+    const path = normalizePath(segments.slice(1).join("/") || leaf)
+    if (!path) {
+      stats.skipped++
+      continue
+    }
+    files[path] = {
+      path,
+      language: languageForPath(path),
+      content,
+      updatedAt: file.lastModified || Date.now(),
+    }
+    stats.count++
+    stats.bytes += file.size
+  }
+
+  const imported: LocalWorkspaceImport = {
+    rootName: rootName || "Carpeta local",
+    files,
+    fileCount: Object.keys(files).length,
+    skippedCount: stats.skipped,
+  }
+  return registerImportedWorkspace(imported)
+}
+
+function pickDirectoryViaInput(): Promise<FileList | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement("input")
+    input.type = "file"
+    input.multiple = true
+    // webkitdirectory turns the file picker into a folder picker. Set both the
+    // property and the attribute for the widest browser coverage.
+    ;(input as unknown as { webkitdirectory: boolean }).webkitdirectory = true
+    input.setAttribute("webkitdirectory", "")
+    input.style.position = "fixed"
+    input.style.left = "-9999px"
+    input.style.opacity = "0"
+
+    let settled = false
+    const finish = (value: FileList | null) => {
+      if (settled) return
+      settled = true
+      window.removeEventListener("focus", onFocus)
+      try {
+        input.remove()
+      } catch {
+        /* ignore */
+      }
+      resolve(value)
+    }
+
+    // When the picker closes the window regains focus. If no selection landed
+    // shortly after, treat it as a cancel — covers browsers that never emit the
+    // "cancel" event (avoids a pending promise + a leaked hidden input).
+    const onFocus = () => {
+      window.setTimeout(() => {
+        if (!settled && (!input.files || input.files.length === 0)) finish(null)
+      }, 500)
+    }
+
+    input.addEventListener("change", () => finish(input.files && input.files.length ? input.files : null))
+    // Modern browsers fire "cancel" when the picker is dismissed with nothing.
+    input.addEventListener("cancel", () => finish(null))
+    window.addEventListener("focus", onFocus)
+
+    document.body.appendChild(input)
+    input.click()
+  })
 }
 
 export async function saveLinkedWorkspaceFile(path: string, content: string): Promise<void> {
