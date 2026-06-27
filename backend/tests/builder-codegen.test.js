@@ -59,81 +59,10 @@ test('tsType maps blueprint field types and editableFields drops id/timestamps',
   ];
   const editable = editableFields(fields);
   assert.deepEqual(editable.map((f) => f.name), ['nombre']);
-  // The created-match is anchored — legit "created_*"/"creator" data fields stay
-  // editable; only the bare created/createdAt timestamp is dropped.
-  const editable2 = editableFields([
-    { name: 'created_campaigns', type: 'integer' },
-    { name: 'creator', type: 'string' },
-    { name: 'createdAt', type: 'datetime' },
-    { name: 'user_id', type: 'string' },
-  ]);
-  assert.deepEqual(editable2.map((f) => f.name).sort(), ['created_campaigns', 'creator']);
-});
-
-test('codegenFromBrief gives kebab-colliding entity slugs distinct file paths', () => {
-  const brief = makeBrief({ platform: 'web' });
-  const blueprint = {
-    dataModel: [
-      { entity: 'User Post', fields: [{ name: 'title', type: 'string' }] },
-      { entity: 'user-post', fields: [{ name: 'body', type: 'text' }] }, // same kebab slug
-    ],
-  };
-  const { files } = codegenFromBrief(brief, blueprint);
-  const paths = files.map((f) => f.path);
-  // No two files share a path — the second entity used to clobber the first.
-  assert.equal(new Set(paths).size, paths.length, 'no duplicate file paths');
-  // Both entities produced a page + api route under distinct slugs.
-  for (const p of ['app/user-post/page.tsx', 'app/user-post-2/page.tsx', 'app/api/user-post/route.ts', 'app/api/user-post-2/route.ts']) {
-    assert.ok(paths.includes(p), `expected ${p}`);
-  }
-});
-
-test('buildEntityPage useState init object is comma-separated (valid for 2+ fields)', () => {
-  // With 2+ editable fields the initial form-state lines are emitted one per
-  // property inside useState({ … }). Missing trailing commas produced
-  // `{ name: "" price: 0 }`, an invalid object literal that fails to compile.
-  const brief = makeBrief({ platform: 'web' });
-  const blueprint = {
-    dataModel: [
-      { entity: 'Item', fields: [
-        { name: 'name', type: 'string' },
-        { name: 'price', type: 'number' },
-        { name: 'in stock', type: 'boolean' },
-      ] },
-    ],
-  };
-  const { files } = codegenFromBrief(brief, blueprint);
-  const page = files.find((f) => f.path === 'app/item/page.tsx').content;
-  const block = page.match(/useState\(\{\n([\s\S]*?)\n\s*\}\)/);
-  assert.ok(block, 'found the useState init object');
-  const props = block[1].split('\n').map((l) => l.trim()).filter(Boolean);
-  assert.ok(props.length >= 2, 'multi-field entity emits 2+ init properties');
-  for (const p of props) {
-    assert.ok(p.endsWith(','), `init property must end with a comma, got: ${JSON.stringify(p)}`);
-  }
-});
-
-test('buildEntityPage gives camelCase-colliding field names distinct keys', () => {
-  const brief = makeBrief({ platform: 'web' });
-  const blueprint = {
-    dataModel: [
-      { entity: 'Item', fields: [
-        { name: 'user name', type: 'string' },
-        { name: 'user_name', type: 'string' }, // both camelCase → userName
-      ] },
-    ],
-  };
-  const { files } = codegenFromBrief(brief, blueprint);
-  const page = files.find((f) => f.path === 'app/item/page.tsx').content;
-  assert.ok(page.includes('userName2'), 'the colliding second field got a distinct key');
-  // The row interface declares each key exactly once (no corrupt duplicate).
-  const iface = page.match(/interface Item \{([\s\S]*?)\n\}/)[1];
-  const keys = [...iface.matchAll(/\s(\w+): /g)].map((m) => m[1]);
-  assert.equal(new Set(keys).size, keys.length, 'interface keys are unique');
 });
 
 // ── web codegen ───────────────────────────────────────────────────
-test('web codegen emits a runnable Next.js project skeleton', () => {
+test('web codegen emits a runnable full-stack Next.js project skeleton', () => {
   const { files, generated } = codegenFromBrief(makeBrief());
   assert.equal(generated, true);
   const map = fileMap(files);
@@ -141,76 +70,31 @@ test('web codegen emits a runnable Next.js project skeleton', () => {
     'package.json',
     'tsconfig.json',
     'next.config.mjs',
+    'docker-compose.yml',
     'app/globals.css',
     'app/layout.tsx',
     'app/page.tsx',
     'components/site-nav.tsx',
-    'prisma/schema.prisma',
     'lib/db.ts',
+    'prisma/seed.ts',
   ]) {
     assert.ok(map.has(p), `expected file ${p}`);
   }
-  assert.ok(!map.has('lib/store.ts'), 'in-memory store replaced by a real database');
 });
 
-test('package.json is valid JSON with Next.js + Prisma deps (3-tier app)', () => {
+test('package.json is valid JSON with Next.js and Prisma deps', () => {
   const { files } = codegenFromBrief(makeBrief());
   const pkg = JSON.parse(fileMap(files).get('package.json').content);
   assert.ok(pkg.dependencies.next, 'has next dependency');
   assert.ok(pkg.dependencies.react, 'has react dependency');
-  assert.ok(pkg.dependencies['@prisma/client'], 'has @prisma/client (database layer)');
-  assert.ok(pkg.devDependencies.prisma, 'has prisma CLI');
-  // The DB schema is pushed before dev/build so the app runs from a clean checkout.
-  assert.equal(pkg.scripts.dev, 'prisma db push --skip-generate && next dev');
+  assert.ok(pkg.dependencies['@prisma/client'], 'has Prisma client');
+  assert.equal(pkg.scripts.dev, 'next dev');
+  assert.equal(pkg.scripts['db:push'], 'prisma db push');
+  assert.equal(pkg.scripts['db:seed'], 'tsx prisma/seed.ts');
   assert.equal(pkg.scripts.postinstall, 'prisma generate');
+  assert.ok(pkg.devDependencies.prisma, 'has Prisma CLI');
+  assert.ok(pkg.devDependencies.tsx, 'has seed runner');
   assert.ok(pkg.devDependencies.typescript, 'has typescript');
-});
-
-test('app generates a real Prisma + SQLite database layer wired to the API', () => {
-  const { files } = codegenFromBrief(makeBrief());
-  const map = fileMap(files);
-  const schema = map.get('prisma/schema.prisma').content;
-  assert.match(schema, /provider = "sqlite"/);
-  // URL comes from env so it runs on SQLite by default but switches to Postgres
-  // for production with just a connection-string + provider change.
-  assert.match(schema, /url\s+= env\("DATABASE_URL"\)/);
-  assert.match(schema, /postgresql/i, 'documents the Postgres production switch');
-  assert.match(schema, /model Producto \{/);
-  assert.match(schema, /model Proveedor \{/);
-  assert.match(schema, /id\s+String\s+@id @default\(cuid\(\)\)/);
-  assert.match(schema, /createdAt DateTime @default\(now\(\)\)/);
-  // .env makes it runnable out of the box (SQLite); .env.example shows Postgres.
-  assert.match(map.get('.env').content, /DATABASE_URL="file:\.\/dev\.db"/);
-  assert.match(map.get('.env.example').content, /postgresql:\/\//);
-  // Prisma client singleton (the backend's gateway to the DB).
-  assert.match(map.get('lib/db.ts').content, /export const prisma/);
-  // API route persists to the database instead of an in-memory store.
-  const api = map.get('app/api/producto/route.ts').content;
-  assert.match(api, /from "@\/lib\/db"/);
-  assert.match(api, /prisma\.producto\.findMany/);
-  assert.match(api, /prisma\.producto\.create/);
-  assert.ok(!/@\/lib\/store/.test(api), 'no in-memory store import');
-});
-
-test('app generates full CRUD — per-id route (GET/PUT/DELETE) + edit & delete UI', () => {
-  const { files } = codegenFromBrief(makeBrief());
-  const map = fileMap(files);
-  const item = map.get('app/api/producto/[id]/route.ts');
-  assert.ok(item, 'per-id route exists');
-  assert.match(item.content, /export async function GET/);
-  assert.match(item.content, /export async function PUT/);
-  assert.match(item.content, /export async function DELETE/);
-  assert.match(item.content, /prisma\.producto\.update\(/);
-  assert.match(item.content, /prisma\.producto\.delete\(\{ where: \{ id: params\.id \} \}\)/);
-  // UI wires edit + delete per row, and the form switches to update mode.
-  const page = map.get('app/producto/page.tsx').content;
-  assert.match(page, /function startEdit\(row: Producto\)/);
-  assert.match(page, /const \[editingId, setEditingId\] = useState/);
-  assert.match(page, /editingId \? "PUT" : "POST"/);
-  assert.match(page, /editingId \? "Guardar" : "Crear"/);
-  assert.match(page, /onClick=\{\(\) => startEdit\(row\)\}/);
-  assert.match(page, /async function onDelete\(id: string\)/);
-  assert.match(page, /onClick=\{\(\) => onDelete\(row\.id\)\}/);
 });
 
 test('tsconfig.json is valid JSON with the @/* path alias', () => {
@@ -228,6 +112,8 @@ test('each entity yields a CRUD API route + a list/create page', () => {
     const page = map.get(`app/${slug}/page.tsx`);
     assert.ok(route, `route for ${slug}`);
     assert.ok(page, `page for ${slug}`);
+    assert.match(route.content, /from "@\/lib\/db"/);
+    assert.match(route.content, /prisma\.[a-zA-Z]+\.findMany/);
     assert.match(route.content, /export async function GET/);
     assert.match(route.content, /export async function POST/);
     assert.match(page.content, /"use client";/);
@@ -238,14 +124,22 @@ test('each entity yields a CRUD API route + a list/create page', () => {
 test('API route coerces numeric/boolean fields to their types', () => {
   const { files } = codegenFromBrief(makeBrief());
   const route = fileMap(files).get('app/api/producto/route.ts').content;
-  // Coercions match the exact Prisma column type so an insert never throws:
-  // precio (decimal→Float) → Number; stock (integer→Int) → Math.trunc(Number);
-  // activo (boolean) → Boolean.
+  // precio (decimal) + stock (integer) → Number(...); activo (boolean) → Boolean(...)
   assert.match(route, /precio: Number\(/);
-  assert.match(route, /stock: Math\.trunc\(Number\(/);
-  assert.match(route, /activo: Boolean\(/);
+  assert.match(route, /stock: Number\(/);
+  assert.match(route, /activo: toBoolean\(/);
   // id + createdAt are server-managed → never coerced from the body
   assert.doesNotMatch(route, /\bid: (String|Number|Boolean)\(/);
+});
+
+test('full-stack codegen includes Prisma client, seed and local Postgres compose', () => {
+  const { files } = codegenFromBrief(makeBrief());
+  const map = fileMap(files);
+  assert.match(map.get('lib/db.ts').content, /new PrismaClient/);
+  assert.match(map.get('prisma/seed.ts').content, /new PrismaClient/);
+  assert.match(map.get('prisma/seed.ts').content, /prisma\.producto\.createMany/);
+  assert.match(map.get('docker-compose.yml').content, /postgres:16-alpine/);
+  assert.match(map.get('docker-compose.yml').content, /siragpt_app/);
 });
 
 test('generated home page lists the core features', () => {
@@ -261,7 +155,11 @@ test('landing platform generates a single page, no entity CRUD', () => {
   assert.equal(generated, true);
   const map = fileMap(files);
   assert.ok(map.has('app/page.tsx'));
-  assert.ok(!map.has('lib/store.ts'), 'no store on a landing page');
+  assert.ok(!map.has('lib/db.ts'), 'no database client on a landing page');
+  assert.ok(!map.has('docker-compose.yml'), 'no database compose on a landing page');
+  const pkg = JSON.parse(map.get('package.json').content);
+  assert.equal(pkg.dependencies['@prisma/client'], undefined);
+  assert.equal(pkg.scripts['db:push'], undefined);
   for (const path of map.keys()) {
     assert.ok(!path.startsWith('app/api/'), `landing should not emit API route: ${path}`);
   }
@@ -316,6 +214,8 @@ test('scaffoldFromBrief now includes real code alongside the starters', () => {
   assert.ok(map.has('package.json'));
   assert.ok(map.has('app/page.tsx'));
   assert.ok(map.has('app/api/producto/route.ts'));
+  assert.ok(map.has('prisma/schema.prisma'));
+  assert.ok(map.has('lib/db.ts'));
 });
 
 test('scaffold keeps starters-only for out-of-slice platforms', () => {

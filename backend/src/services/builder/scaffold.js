@@ -89,6 +89,12 @@ function buildReadme(brief, blueprint) {
 
 > Audiencia: ${brief.audience || 'por definir'} · Plataforma: ${brief.platform} · Complejidad estimada: ${blueprint.estimate.complexity}
 
+## Capas de la aplicación
+- **Frontend:** páginas React/Next.js en \`app/**/page.tsx\`
+- **Backend:** Route Handlers en \`app/api/**/route.ts\`
+- **Base de datos:** Prisma + PostgreSQL en \`prisma/schema.prisma\`
+- **Ejecución local:** \`docker compose up -d db\`, \`npm install\`, \`cp .env.example .env\`, \`npm run db:push\`, \`npm run db:seed\`, \`npm run dev\`
+
 ## Stack
 - **Frontend:** ${blueprint.stack.frontend}
 - **Backend:** ${blueprint.stack.backend}
@@ -119,7 +125,7 @@ _Generado automáticamente por siraGPT Builder._
 function buildEnvExample(brief, blueprint) {
   const lines = [];
   if (blueprint.stack.database !== '—') {
-    lines.push('DATABASE_URL="postgresql://user:password@localhost:5432/app"');
+    lines.push('DATABASE_URL="postgresql://postgres:postgres@localhost:5432/siragpt_app?schema=public"');
   }
   for (const integration of brief.integrations) {
     const key = String(integration).toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');

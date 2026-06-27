@@ -143,7 +143,7 @@ describe("chat video auto-activation source contract", () => {
       "both initial and in-chat composers should keep the arrow send affordance for empty Video mode instead of showing Voice Studio"
     )
 
-    const disabledBlocks = source.match(/disabled=\{\(canSend && \(isCurrentChatLoading \|\| busy\)\) \|\| needsPrompt\}/g) || []
+    const disabledBlocks = source.match(/disabled=\{\(canSend && busy\) \|\| needsPrompt\}/g) || []
     assert.equal(disabledBlocks.length, 2, "empty prompt-driven video sends should be disabled in both composer variants")
   })
 })

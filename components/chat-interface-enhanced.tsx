@@ -10594,7 +10594,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               boxShadow: "none",
                             }}
                             rows={1}
-                            disabled={isCurrentChatLoading || isCurrentChatLocalJobBusy}
+                            disabled={isCurrentChatLocalJobBusy}
                           />
                         </div>
 
@@ -10634,7 +10634,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 <TooltipTrigger asChild>
                                   <Button
                                     onClick={action}
-                                    disabled={(canSend && (isCurrentChatLoading || busy)) || needsPrompt}
+                                    disabled={(canSend && busy) || needsPrompt}
                                     size="icon"
                                     aria-label={label}
                                     title={label}
@@ -10661,7 +10661,28 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             )
                           })()}
 
-                          {isStopButtonVisible && (
+                          {isStopButtonVisible && input.trim().length > 0 && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  onClick={handleSend}
+                                  size="icon"
+                                  aria-label="Enviar a la cola"
+                                  title="Enviar a la cola · se procesa en orden"
+                                  className={cn(
+                                      "h-9 w-9 rounded-full p-0 transition-all duration-200",
+                                      "bg-[hsl(var(--accent-violet))] text-white",
+                                      "shadow-[0_1px_2px_rgba(0,0,0,0.10),0_4px_10px_-3px_rgba(0,0,0,0.22)]",
+                                      "hover:opacity-90 active:scale-[0.96]",
+                                  )}
+                                >
+                                  <ArrowUp className="h-[16px] w-[16px]" strokeWidth={2.25} />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent side="top"><p>Enviar a la cola · se procesa en orden</p></TooltipContent>
+                            </Tooltip>
+                          )}
+                          {isStopButtonVisible && input.trim().length === 0 && (
                             <Button
                               onClick={stopActiveGeneration}
                               size="icon"
@@ -11147,7 +11168,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                   boxShadow: "none",
                                 }}
                                 rows={1}
-                                disabled={isCurrentChatLoading || isCurrentChatLocalJobBusy}
+                                disabled={isCurrentChatLocalJobBusy}
                               />
                             </div>
                             <div className="composer-toolbar-actions flex shrink-0 items-center gap-1.5">
@@ -11178,7 +11199,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                     <TooltipTrigger asChild>
                                       <Button
                                         onClick={action}
-                                        disabled={(canSend && (isCurrentChatLoading || busy)) || needsPrompt}
+                                        disabled={(canSend && busy) || needsPrompt}
                                         size="icon"
                                         aria-label={label}
                                         title={label}

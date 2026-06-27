@@ -11,12 +11,9 @@
 
 import * as React from "react"
 import {
-  Bot,
   Circle,
-  Code2,
   Eraser,
   ExternalLink,
-  FolderOpen,
   Monitor,
   Play,
   RefreshCw,
@@ -35,6 +32,8 @@ import { buildPreviewDocument, type PreviewKind } from "@/lib/code-preview-build
 import { CODE_TEMPLATES } from "@/lib/code-templates"
 import { opencodeService } from "@/lib/opencode/opencode-service"
 import { hostRunnerService } from "@/lib/code-runner/host-runner-service"
+import { githubService } from "@/lib/github-service"
+import { CODE_GIT_BINDING_CHANGED_EVENT, getGitBinding } from "@/lib/code-git-mirror"
 
 type LiveRun = { phase: "idle" | "starting" | "ready" | "error"; devUrl: string; note: string }
 type RunnerStatus = { ready?: boolean; error?: string | null; framework?: string | null; tail?: string[]; devUrl?: string }
@@ -52,7 +51,7 @@ const KIND_LABEL: Record<PreviewKind, string> = {
 }
 
 export function PreviewPane({ onClose }: { onClose?: () => void }) {
-  const { files, activePath, openLocalFolderWorkspace } = useCodeWorkspace()
+  const { files, activePath, activeFolder } = useCodeWorkspace()
 
   const [auto, setAuto] = React.useState(true)
   const [device, setDevice] = React.useState<Device>(() =>
@@ -78,12 +77,28 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
   const [liveRun, setLiveRun] = React.useState<LiveRun>({ phase: "idle", devUrl: "", note: "" })
   const pollRef = React.useRef<number | null>(null)
   const runIdRef = React.useRef<string>("")
-  const modeRef = React.useRef<"host" | "opencode">("host")
+  const modeRef = React.useRef<"host" | "opencode" | "github">("host")
+  const [gitBinding, setGitBinding] = React.useState<string | null>(() =>
+    typeof window === "undefined" ? null : getGitBinding(activeFolder?.id ?? null),
+  )
 
   const hasNodeProject = React.useMemo(
     () => Object.keys(files || {}).some((p) => /(^|\/)package\.json$/.test(p)),
     [files],
   )
+  const canRunProject = hasNodeProject || Boolean(gitBinding)
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const refreshBinding = () => setGitBinding(getGitBinding(activeFolder?.id ?? null))
+    refreshBinding()
+    window.addEventListener(CODE_GIT_BINDING_CHANGED_EVENT, refreshBinding)
+    window.addEventListener("storage", refreshBinding)
+    return () => {
+      window.removeEventListener(CODE_GIT_BINDING_CHANGED_EVENT, refreshBinding)
+      window.removeEventListener("storage", refreshBinding)
+    }
+  }, [activeFolder?.id])
 
   const clearPoll = React.useCallback(() => {
     if (pollRef.current) {
@@ -96,6 +111,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
     clearPoll()
     setLiveRun({ phase: "idle", devUrl: "", note: "" })
     if (modeRef.current === "opencode") void opencodeService.stopRun()
+    else if (modeRef.current === "github" && runIdRef.current) void githubService.stop(runIdRef.current)
     else if (runIdRef.current) void hostRunnerService.stop(runIdRef.current)
   }, [clearPoll])
 
@@ -132,6 +148,30 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
         runIdRef.current = `run-${Math.random().toString(36).slice(2)}`
       }
     }
+    const boundRepo = getGitBinding(activeFolder?.id ?? null)
+    if (boundRepo) {
+      modeRef.current = "github"
+      runIdRef.current = boundRepo
+      const started = await githubService.run(boundRepo).catch((err) => ({ error: err instanceof Error ? err.message : "runner unreachable" }))
+      if ("error" in started && started.error) {
+        setLiveRun({ phase: "error", devUrl: "", note: started.error })
+        return
+      }
+      pollUntilReady(
+        async () => {
+          const st = await githubService.runStatus(boundRepo)
+          return {
+            ready: Boolean(st.ready || st.status === "ready"),
+            error: st.error || null,
+            framework: st.framework || st.kind || null,
+            tail: st.tail,
+            devUrl: st.previewUrl,
+          }
+        },
+        "previewUrl" in started ? started.previewUrl || "" : "",
+      )
+      return
+    }
     // Workspace files are CodeFile objects; the runner wants path -> content.
     const fileMap: Record<string, string> = {}
     for (const [p, f] of Object.entries(files)) fileMap[p] = f?.content ?? ""
@@ -154,18 +194,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
       return
     }
     pollUntilReady(() => opencodeService.runStatus(), res.devUrl || "http://localhost:5173")
-  }, [files, pollUntilReady])
-
-  React.useEffect(() => {
-    if (typeof window === "undefined") return
-    const onRun = () => {
-      if (Object.keys(files || {}).some((p) => /(^|\/)package\.json$/.test(p))) {
-        void runApp()
-      }
-    }
-    window.addEventListener("siragpt:code-run-app", onRun)
-    return () => window.removeEventListener("siragpt:code-run-app", onRun)
-  }, [files, runApp])
+  }, [activeFolder?.id, files, pollUntilReady])
 
   React.useEffect(
     () => () => {
@@ -215,15 +244,11 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
 
   const openInNewTab = React.useCallback(() => {
     if (typeof window === "undefined") return
-    if (liveRun.phase === "ready" && liveRun.devUrl) {
-      window.open(liveRun.devUrl, "_blank", "noopener,noreferrer")
-      return
-    }
     const blob = new Blob([result.html], { type: "text/html" })
     const url = URL.createObjectURL(blob)
     window.open(url, "_blank", "noopener,noreferrer")
     setTimeout(() => URL.revokeObjectURL(url), 30_000)
-  }, [liveRun.devUrl, liveRun.phase, result.html])
+  }, [result.html])
 
   const errorCount = logs.filter((l) => l.level === "error").length
   const entryLabel = result.entry ? result.entry.split("/").pop() : "preview"
@@ -269,7 +294,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
           </GlassToggle>
 
           {/* Phase B — run a real Node/Vite/Next app (npm install + dev server). */}
-          {hasNodeProject ? (
+          {canRunProject ? (
             <>
               <span className="mx-0.5 h-4 w-px bg-border/50" />
               {liveRun.phase === "ready" || liveRun.phase === "starting" ? (
@@ -290,7 +315,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
                   className="flex h-6 items-center gap-1 rounded-md bg-[hsl(var(--accent-violet)/0.16)] px-2 text-[11px] font-medium text-[hsl(var(--accent-violet))] transition-colors hover:bg-[hsl(var(--accent-violet)/0.28)]"
                 >
                   <Play className="h-3 w-3" />
-                  <span>Ejecutar</span>
+                  <span>{gitBinding ? "Ejecutar repo" : "Ejecutar"}</span>
                 </button>
               )}
             </>
@@ -383,13 +408,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
             </button>
           </div>
         ) : result.kind === "empty" || result.kind === "unsupported" ? (
-          <PreviewLaunchpad
-            kind={result.kind}
-            note={result.note}
-            hasNodeProject={hasNodeProject}
-            onRunApp={runApp}
-            onOpenLocalFolder={() => void openLocalFolderWorkspace()}
-          />
+          <PreviewLaunchpad kind={result.kind} note={result.note} />
         ) : (
           <div
             className={cn(
@@ -465,83 +484,18 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
   )
 }
 
-function PreviewLaunchpad({
-  kind,
-  note,
-  hasNodeProject,
-  onRunApp,
-  onOpenLocalFolder,
-}: {
-  kind: PreviewKind
-  note?: string
-  hasNodeProject?: boolean
-  onRunApp?: () => void
-  onOpenLocalFolder?: () => void
-}) {
-  const openAgent = React.useCallback(() => {
-    window.dispatchEvent(
-      new CustomEvent("siragpt:code-agent-prompt", {
-        detail: {
-          mode: "app",
-          prompt: "Quiero construir una app web completa. Ayúdame como ingeniero: hazme las preguntas necesarias y luego genera el proyecto con preview.",
-        },
-      }),
-    )
-  }, [])
-
-  const openFiles = React.useCallback(() => {
-    window.dispatchEvent(new CustomEvent("siragpt:code-open-tool", { detail: { toolId: "files" } }))
-  }, [])
-
+function PreviewLaunchpad({ kind, note }: { kind: PreviewKind; note?: string }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-5 p-8 text-center">
       <div>
         <p className="text-sm font-medium text-foreground">
-          {kind === "empty" ? "Tu app aparecerá aquí" : "Este archivo no es una pantalla web"}
+          {kind === "empty" ? "Tu preview en vivo" : "Este archivo no se previsualiza"}
         </p>
         <p className="mx-auto mt-1 max-w-xs text-xs leading-relaxed text-muted-foreground">
           {note || "Empieza desde una plantilla o pídele algo al agente — lo verás aquí al instante."}
         </p>
       </div>
-      <div className="grid w-full max-w-sm gap-2">
-        <button
-          type="button"
-          onClick={openAgent}
-          className="flex items-center gap-3 rounded-xl border border-[hsl(var(--accent-violet)/0.28)] bg-[hsl(var(--accent-violet)/0.10)] px-4 py-3 text-left transition-colors hover:bg-[hsl(var(--accent-violet)/0.16)]"
-        >
-          <Bot className="h-4 w-4 shrink-0 text-[hsl(var(--accent-violet))]" />
-          <span className="min-w-0">
-            <span className="block text-[13px] font-medium text-foreground">Construir con Agent</span>
-            <span className="block text-[11px] text-muted-foreground">Describe una idea y el agente crea archivos, preview y siguientes pasos.</span>
-          </span>
-        </button>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-          <button
-            type="button"
-            onClick={onOpenLocalFolder}
-            className="flex min-h-16 flex-col items-center justify-center gap-1 rounded-xl border border-border/50 bg-background/60 px-3 py-2 text-[11px] text-muted-foreground backdrop-blur transition-colors hover:border-border hover:bg-muted/40 hover:text-foreground"
-          >
-            <FolderOpen className="h-4 w-4" />
-            Carpeta local
-          </button>
-          <button
-            type="button"
-            onClick={openFiles}
-            className="flex min-h-16 flex-col items-center justify-center gap-1 rounded-xl border border-border/50 bg-background/60 px-3 py-2 text-[11px] text-muted-foreground backdrop-blur transition-colors hover:border-border hover:bg-muted/40 hover:text-foreground"
-          >
-            <Code2 className="h-4 w-4" />
-            Archivos
-          </button>
-          <button
-            type="button"
-            onClick={onRunApp}
-            disabled={!hasNodeProject}
-            className="flex min-h-16 flex-col items-center justify-center gap-1 rounded-xl border border-border/50 bg-background/60 px-3 py-2 text-[11px] text-muted-foreground backdrop-blur transition-colors hover:border-border hover:bg-muted/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45"
-          >
-            <Play className="h-4 w-4" />
-            Ejecutar
-          </button>
-        </div>
+      <div className="grid w-full max-w-xs gap-2">
         {CODE_TEMPLATES.map((t) => (
           <button
             key={t.id}

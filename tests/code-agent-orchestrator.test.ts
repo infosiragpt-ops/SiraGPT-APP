@@ -169,6 +169,19 @@ test("promptFromContext builds a landing prompt", () => {
   assert.match(p, /Landing one-page de Farceque para ropa estilo oscuro/)
 })
 
+test("promptFromContext builds an app prompt with data entities", () => {
+  const p = promptFromContext({
+    goal: "app",
+    brand: "Inventario Pro",
+    productType: "gestión de inventario",
+    features: "auth, dashboard, reportes",
+    dataEntities: "Producto, Proveedor, Pedido",
+  })
+  assert.match(p, /App web de Inventario Pro para gestión de inventario/)
+  assert.match(p, /con funcionalidades auth, dashboard, reportes/)
+  assert.match(p, /que maneja Producto, Proveedor, Pedido/)
+})
+
 // ---- SRE tier-0 classifier ------------------------------------------------
 
 test("classifyBuildError detects a 404 tarball and proposes overrides", () => {

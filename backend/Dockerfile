@@ -1,15 +1,15 @@
 # ──────────────────────────────────────────────────────────────
 # siraGPT — Backend (Express + Prisma)
 # Multi-stage build: deps → build → production runner
-# Also installs Linux document tooling for Office/PDF/OCR routes.
+# Also installs pandoc for document-conversion routes.
 # ──────────────────────────────────────────────────────────────
 
 # ─── Stage 1: Install dependencies ───────────────────────────
 FROM node:22-alpine AS deps
 WORKDIR /app
 
-# Install OS deps needed for native modules and document processing.
-RUN apk add --no-cache pandoc py3-openpyxl python3 py3-pip
+# Install OS deps needed for native modules & pandoc (document gen)
+RUN apk add --no-cache pandoc
 
 # Install Node deps
 COPY package.json package-lock.json ./
@@ -19,7 +19,7 @@ RUN npm ci --omit=dev --prefer-offline --no-audit --no-fund
 FROM node:22-alpine AS build
 WORKDIR /app
 
-RUN apk add --no-cache pandoc py3-openpyxl python3 py3-pip
+RUN apk add --no-cache pandoc
 
 # Copy prod node_modules from deps stage (avoids re-download)
 COPY --from=deps /app/node_modules ./node_modules
@@ -35,21 +35,10 @@ RUN npx prisma generate
 FROM node:22-alpine AS runner
 WORKDIR /app
 
-# Install runtime document toolchain for DOCX/XLSX/PPTX/PDF/OCR workflows.
-RUN apk add --no-cache \
-    font-liberation \
-    font-noto \
-    ghostscript \
-    libreoffice \
-    pandoc \
-    py3-openpyxl \
-    poppler-utils \
-    py3-pip \
-    python3 \
-    tesseract-ocr \
-    tesseract-ocr-data-eng \
-    tesseract-ocr-data-spa \
-    ttf-dejavu
+# Runtime tools:
+# - pandoc: document conversion routes
+# - git/openssh-client: APPS/GitHub workspaces clone, pull, diff, push
+RUN apk add --no-cache pandoc git openssh-client
 
 # Create non-root user and group if they don't exist
 RUN addgroup -S appgroup 2>/dev/null || true; \

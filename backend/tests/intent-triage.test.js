@@ -14,6 +14,30 @@ function makeAnalysis({ score = 0, needs = false, questions = [] } = {}) {
   };
 }
 
+test('triage: final contract ambiguity wins over token gray-zone score', async () => {
+  let judgeCalled = false;
+  const judge = async () => { judgeCalled = true; return { action: 'ask', question: '¿qué formato?' }; };
+  const verdict = await triageIntent({
+    analysis: {
+      ...makeAnalysis({ score: 0.62 }),
+      contract: {
+        ambiguity_score: 0.12,
+        pipeline: 'CodePipeline',
+        primary_intent: 'code_generation',
+        required_extension: '.html',
+      },
+      routing: { domain_signals: { webdev: true } },
+    },
+    prompt: 'Landing one-page para creame una pagina web de eventos',
+    judge,
+  });
+
+  assert.equal(verdict.action, 'execute');
+  assert.equal(verdict.reason, 'ambiguity_score_low');
+  assert.equal(verdict.score, 0.12);
+  assert.equal(judgeCalled, false, 'judge must not be called after final contract resolved ambiguity');
+});
+
 test('triage: clear request below low threshold → execute, no judge call', async () => {
   let judgeCalled = false;
   const judge = async () => { judgeCalled = true; return { action: 'ask', question: '¿qué?' }; };

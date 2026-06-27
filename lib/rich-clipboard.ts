@@ -249,6 +249,52 @@ function normalizeHtmlForWord(fragmentHtml: string) {
   return root.innerHTML.trim()
 }
 
+function normalizePlainBlock(value: string) {
+  return value
+    .replace(/\u00a0/g, " ")
+    .replace(/[ \f\v]+/g, " ")
+    .replace(/[ \t]*\n[ \t]*/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+}
+
+function tableToPlainText(table: Element) {
+  return Array.from(table.querySelectorAll("tr"))
+    .map((row) =>
+      Array.from(row.querySelectorAll("th,td"))
+        .map((cell) => normalizePlainBlock(cell.textContent || ""))
+        .join("\t"),
+    )
+    .filter(Boolean)
+    .join("\n")
+}
+
+function inlineTextFromNode(node: Node): string {
+  if (node.nodeType === Node.TEXT_NODE) return node.textContent || ""
+  if (node.nodeType !== Node.ELEMENT_NODE) return ""
+
+  const el = node as Element
+  const tag = el.tagName.toUpperCase()
+
+  if (tag === "BR") return "\n"
+  if (tag === "TABLE") return tableToPlainText(el)
+  if (tag === "PRE") return el.textContent || ""
+  if (tag === "IMG") return el.getAttribute("alt") || ""
+
+  return Array.from(el.childNodes).map(inlineTextFromNode).join("")
+}
+
+function inlineTextWithoutNestedLists(el: Element) {
+  return Array.from(el.childNodes)
+    .filter((node) => {
+      if (node.nodeType !== Node.ELEMENT_NODE) return true
+      const tag = (node as Element).tagName.toUpperCase()
+      return tag !== "UL" && tag !== "OL"
+    })
+    .map(inlineTextFromNode)
+    .join("")
+}
+
 function htmlToPlainText(fragmentHtml: string, fallback = "") {
   if (typeof window === "undefined") return fallback.trim()
 
@@ -256,15 +302,11 @@ function htmlToPlainText(fragmentHtml: string, fallback = "") {
   const doc = parser.parseFromString(`<article>${fragmentHtml}</article>`, "text/html")
   const blocks: string[] = []
 
-  const walk = (node: Element) => {
+  const walk = (node: Element, listPrefix?: string) => {
     const tag = node.tagName.toUpperCase()
+
     if (tag === "TABLE") {
-      const rows = Array.from(node.querySelectorAll("tr")).map((row) =>
-        Array.from(row.querySelectorAll("th,td"))
-          .map((cell) => (cell.textContent || "").trim().replace(/\s+/g, " "))
-          .join("\t"),
-      )
-      blocks.push(rows.join("\n"))
+      blocks.push(tableToPlainText(node))
       return
     }
 
@@ -273,27 +315,49 @@ function htmlToPlainText(fragmentHtml: string, fallback = "") {
       return
     }
 
-    if (["H1", "H2", "H3", "H4", "P", "BLOCKQUOTE"].includes(tag)) {
-      blocks.push((node.textContent || "").trim())
+    if (tag === "UL" || tag === "OL") {
+      Array.from(node.children).forEach((child, index) => {
+        if (child.tagName.toUpperCase() !== "LI") return
+        walk(child, tag === "OL" ? `${index + 1}.` : "-")
+      })
       return
     }
 
     if (tag === "LI") {
-      blocks.push(`- ${(node.textContent || "").trim()}`)
+      const text = normalizePlainBlock(inlineTextWithoutNestedLists(node))
+      if (text) blocks.push(`${listPrefix || "-"} ${text}`)
+      Array.from(node.children)
+        .filter((child) => ["UL", "OL"].includes(child.tagName.toUpperCase()))
+        .forEach((child) => walk(child))
       return
     }
 
-    Array.from(node.children).forEach(walk)
+    if (["H1", "H2", "H3", "H4", "P", "BLOCKQUOTE"].includes(tag)) {
+      blocks.push(normalizePlainBlock(inlineTextFromNode(node)))
+      return
+    }
+
+    const blockChildren = Array.from(node.children).filter((child) =>
+      BLOCK_TAGS.has(child.tagName.toUpperCase()),
+    )
+
+    if (blockChildren.length > 0) {
+      blockChildren.forEach((child) => walk(child))
+      return
+    }
+
+    const text = normalizePlainBlock(inlineTextFromNode(node))
+    if (text) blocks.push(text)
   }
 
-  Array.from(doc.body.children).forEach(walk)
+  Array.from(doc.body.children).forEach((child) => walk(child))
 
   const text = blocks
-    .map((block) => block.replace(/[ \t]+\n/g, "\n").trim())
+    .map((block) => normalizePlainBlock(block))
     .filter(Boolean)
     .join("\n\n")
 
-  return (text || doc.body.textContent || fallback || "")
+  return (text || normalizePlainBlock(inlineTextFromNode(doc.body)) || fallback || "")
     .replace(/\n{3,}/g, "\n\n")
     .trim()
 }

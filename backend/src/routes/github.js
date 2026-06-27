@@ -18,6 +18,7 @@
 
 const express = require('express');
 const archiver = require('archiver');
+const { Readable } = require('stream');
 const { authenticateToken } = require('../middleware/auth');
 const githubConfig = require('../config/github');
 const oauth = require('../services/github/github-oauth.service');
@@ -524,6 +525,82 @@ router.get('/connected/:id/run/status', authenticateToken, async (req, res) => {
     return res.json(workspaceRunner.status(req.params.id));
   } catch (err) {
     return res.status(err.status || 500).json({ error: err.message, code: err.code || 'status_failed' });
+  }
+});
+
+const HOP_BY_HOP_HEADERS = new Set([
+  'connection',
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+]);
+
+function proxiedPreviewPath(req) {
+  const marker = `/api/github/connected/${encodeURIComponent(req.params.id)}/proxy`;
+  const raw = req.originalUrl || req.url || '/';
+  const idx = raw.indexOf(marker);
+  if (idx === -1) return '/';
+  const rest = raw.slice(idx + marker.length);
+  return rest ? rest : '/';
+}
+
+// Same-origin authenticated proxy for workspace dev servers. This keeps the
+// browser inside siragpt.com instead of trying to open the backend host's
+// localhost port from the user's machine.
+router.use('/connected/:id/proxy', authenticateToken, async (req, res) => {
+  try {
+    if (!['GET', 'HEAD'].includes(req.method)) {
+      return res.status(405).json({ error: 'method_not_allowed' });
+    }
+    const connection = await connectedRepos.findByIdForUser(req.params.id, req.user.id);
+    if (!connection) {
+      return res.status(404).json({ error: 'Connected repository not found', code: 'not_found' });
+    }
+    const target = workspaceRunner.getProxyTarget(req.params.id);
+    if (target.error === 'not_found') return res.status(404).json({ error: 'run_not_found' });
+    if (target.error === 'not_ready') {
+      return res.status(503).json({ error: 'run_not_ready', status: target.status, message: target.message });
+    }
+
+    const suffix = proxiedPreviewPath(req);
+    const upstreamUrl = `http://127.0.0.1:${target.port}${suffix.startsWith('/') ? suffix : `/${suffix}`}`;
+    const headers = {};
+    for (const [key, value] of Object.entries(req.headers || {})) {
+      const lower = key.toLowerCase();
+      if (HOP_BY_HOP_HEADERS.has(lower)) continue;
+      if (lower === 'host' || lower === 'content-length') continue;
+      headers[key] = value;
+    }
+    headers.host = `127.0.0.1:${target.port}`;
+
+    let upstream;
+    try {
+      upstream = await fetch(upstreamUrl, {
+        method: req.method,
+        headers,
+        redirect: 'manual',
+        signal: AbortSignal.timeout(Number(process.env.SIRAGPT_WORKSPACE_RUN_PROXY_TIMEOUT_MS) || 30_000),
+      });
+    } catch (err) {
+      return res.status(502).json({ error: 'preview_proxy_failed', message: err.message });
+    }
+
+    res.status(upstream.status);
+    upstream.headers.forEach((value, key) => {
+      const lower = key.toLowerCase();
+      if (HOP_BY_HOP_HEADERS.has(lower)) return;
+      if (lower === 'content-security-policy') return;
+      res.setHeader(key, value);
+    });
+    res.setHeader('Cache-Control', 'no-store');
+    if (req.method === 'HEAD' || !upstream.body) return res.end();
+    return Readable.fromWeb(upstream.body).pipe(res);
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || 'preview_proxy_failed' });
   }
 });
 

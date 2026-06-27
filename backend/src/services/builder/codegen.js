@@ -3,10 +3,10 @@
 /**
  * siraGPT Builder · E3+ — real codegen.
  *
- * Turns a ProjectBrief + Blueprint into a *runnable* Next.js 14 (App Router,
- * TypeScript) project — not just starter docs. Output compiles and runs with
- * `npm install && npm run dev`, with no database required: each data entity
- * gets an in-memory CRUD API route plus a list/create page that talks to it.
+ * Turns a ProjectBrief + Blueprint into a *runnable* full-stack Next.js 14
+ * (App Router, TypeScript) project — not just starter docs. Output compiles
+ * with `npm install && npm run dev`: each data entity gets a frontend CRUD
+ * page, a backend Route Handler, and a Prisma/PostgreSQL persistence layer.
  *
  * Scope (vertical slice): platforms whose frontend is Next.js — `web` and
  * `landing`. For `mobile`/`desktop` this returns `[]` and the caller keeps the
@@ -86,43 +86,48 @@ function tsType(fieldType) {
 /** Fields a user fills in a create form (skip id + server-managed timestamps). */
 function editableFields(fields) {
   return fields.filter(
-    // The created-timestamp match is ANCHORED — a bare `/created/` substring
-    // wrongly dropped legit data fields like "created_campaigns" / "creator".
-    (f) => f.type !== 'id' && !/(^|_)id$/i.test(f.name) && !/^created(_?at)?$/i.test(f.name),
+    (f) => f.type !== 'id' && !/(^|_)id$/i.test(f.name) && !/created/i.test(f.name),
   );
 }
 
 // ── individual file builders ──────────────────────────────────────
-function buildPackageJson(brief, entities = []) {
+function buildPackageJson(brief, hasDatabase = false) {
   const name = kebabCase(brief.purpose || 'siragpt-app');
-  const hasDb = entities.length > 0;
   const pkg = {
     name: name.slice(0, 60),
     version: '0.1.0',
     private: true,
     scripts: {
-      // With a database, push the schema to SQLite before `next dev`/`build` so
-      // the app is runnable from a clean checkout with a single `npm run dev`.
-      dev: hasDb ? 'prisma db push --skip-generate && next dev' : 'next dev',
-      build: hasDb ? 'prisma generate && prisma db push --skip-generate && next build' : 'next build',
+      dev: 'next dev',
+      build: 'next build',
       start: 'next start',
       lint: 'next lint',
-      ...(hasDb ? { postinstall: 'prisma generate', 'db:push': 'prisma db push' } : {}),
     },
     dependencies: {
       next: '14.2.5',
       react: '18.3.1',
       'react-dom': '18.3.1',
-      ...(hasDb ? { '@prisma/client': '5.18.0' } : {}),
     },
     devDependencies: {
-      typescript: '5.5.4',
       '@types/node': '20.14.0',
       '@types/react': '18.3.3',
       '@types/react-dom': '18.3.0',
-      ...(hasDb ? { prisma: '5.18.0' } : {}),
+      typescript: '5.5.4',
     },
   };
+  if (hasDatabase) {
+    Object.assign(pkg.scripts, {
+      'db:generate': 'prisma generate',
+      'db:migrate': 'prisma migrate dev',
+      'db:push': 'prisma db push',
+      'db:seed': 'tsx prisma/seed.ts',
+      postinstall: 'prisma generate',
+    });
+    pkg.prisma = { seed: 'tsx prisma/seed.ts' };
+    pkg.dependencies['@prisma/client'] = '5.19.1';
+    pkg.devDependencies.prisma = '5.19.1';
+    pkg.devDependencies.tsx = '4.19.1';
+  }
   return JSON.stringify(pkg, null, 2) + '\n';
 }
 
@@ -230,7 +235,7 @@ function buildGlobalsCss(brief) {
 function buildSiteNav(brief, entities) {
   const brand = jsxText((brief.purpose || 'App').slice(0, 32));
   const links = entities.map((e) => {
-    const slug = e.slug || kebabCase(e.entity);
+    const slug = kebabCase(e.entity);
     return '      <Link href="/' + slug + '">' + jsxText(e.entity) + '</Link>';
   });
   return [
@@ -244,6 +249,46 @@ function buildSiteNav(brief, entities) {
     '    </nav>',
     '  );',
     '}',
+    '',
+  ].join('\n');
+}
+
+function buildPrismaClientLib() {
+  return [
+    'import { PrismaClient } from "@prisma/client";',
+    '',
+    'const globalForPrisma = globalThis as unknown as {',
+    '  prisma?: PrismaClient;',
+    '};',
+    '',
+    'export const prisma =',
+    '  globalForPrisma.prisma ??',
+    '  new PrismaClient({',
+    '    log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"],',
+    '  });',
+    '',
+    'if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;',
+    '',
+  ].join('\n');
+}
+
+function buildDockerCompose() {
+  return [
+    'services:',
+    '  db:',
+    '    image: postgres:16-alpine',
+    '    restart: unless-stopped',
+    '    environment:',
+    '      POSTGRES_DB: siragpt_app',
+    '      POSTGRES_USER: postgres',
+    '      POSTGRES_PASSWORD: postgres',
+    '    ports:',
+    '      - "5432:5432"',
+    '    volumes:',
+    '      - postgres-data:/var/lib/postgresql/data',
+    '',
+    'volumes:',
+    '  postgres-data:',
     '',
   ].join('\n');
 }
@@ -286,7 +331,7 @@ function buildHomePage(brief, entities) {
     (f) => '          <div className="card">' + jsxText(f) + '</div>',
   );
   const entityLinks = entities.map((e) => {
-    const slug = e.slug || kebabCase(e.entity);
+    const slug = kebabCase(e.entity);
     return '          <a className="card" href="/' + slug + '">Gestionar ' + jsxText(e.entity) + ' →</a>';
   });
   const lines = [
@@ -317,145 +362,36 @@ function buildHomePage(brief, entities) {
   return lines.join('\n');
 }
 
-// ── Database layer (Prisma + SQLite) ──────────────────────────────
-// The generated app is a real 3-tier stack: React/Next pages (frontend) →
-// API routes (backend) → Prisma over SQLite (a persistent database that runs
-// locally with zero external setup). Swap the datasource for Postgres in prod.
-
-// Blueprint field type → Prisma scalar type.
-const PRISMA_TYPES = {
-  id: 'String',
-  string: 'String',
-  text: 'String',
-  email: 'String',
-  url: 'String',
-  phone: 'String',
-  // Editable date fields are stored as the raw string the form submits — a
-  // user-entered value that isn't a valid Date would otherwise make a Prisma
-  // DateTime insert throw. (The server-managed `createdAt` is a real DateTime.)
-  datetime: 'String',
-  decimal: 'Float',
-  integer: 'Int',
-  boolean: 'Boolean',
-};
-
-function prismaType(fieldType) {
-  return PRISMA_TYPES[fieldType] || 'String';
-}
-
-// A safe default so a create with partial form data never violates a NOT NULL.
-function prismaDefault(fieldType) {
-  const t = prismaType(fieldType);
-  if (t === 'Int' || t === 'Float') return ' @default(0)';
-  if (t === 'Boolean') return ' @default(false)';
-  if (t === 'DateTime') return ' @default(now())';
-  return ' @default("")';
-}
-
-// Prisma model accessor = model name with a lowercased first letter (Event → event).
-function prismaAccessor(entityName) {
-  const n = pascalCase(entityName);
-  return n.charAt(0).toLowerCase() + n.slice(1);
-}
-
-function buildPrismaSchema(entities) {
-  const lines = [
-    '// Data layer. Defaults to SQLite so the app runs locally with zero setup',
-    '// (DATABASE_URL in .env points at a file). FOR PRODUCTION switch to Postgres:',
-    '//   1) change `provider` below to "postgresql"',
-    '//   2) set DATABASE_URL to your Postgres connection string (see .env.example)',
-    '// Nothing else in the app changes — the API/queries are database-agnostic.',
-    'generator client {',
-    '  provider = "prisma-client-js"',
-    '}',
-    '',
-    'datasource db {',
-    '  provider = "sqlite"',
-    '  url      = env("DATABASE_URL")',
-    '}',
-    '',
-  ];
-  for (const model of entities) {
-    lines.push(`model ${pascalCase(model.entity)} {`);
-    lines.push('  id        String   @id @default(cuid())');
-    lines.push('  createdAt DateTime @default(now())');
-    for (const f of editableFields(model.fields)) {
-      const key = camelCase(f.name);
-      lines.push(`  ${key} ${prismaType(f.type)}${prismaDefault(f.type)}`);
-    }
-    lines.push('}');
-    lines.push('');
-  }
-  return lines.join('\n');
-}
-
-function buildDbLib() {
-  // Prisma client singleton — reused across hot reloads so dev doesn't exhaust
-  // database connections. This is the backend's single gateway to the database.
-  return [
-    'import { PrismaClient } from "@prisma/client";',
-    '',
-    'const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };',
-    '',
-    'export const prisma = globalForPrisma.prisma ?? new PrismaClient();',
-    '',
-    'if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;',
-    '',
-  ].join('\n');
-}
-
-function buildGitignore() {
-  return ['node_modules', '.next', '.env', 'dev.db', 'dev.db-journal', 'prisma/dev.db', 'prisma/dev.db-journal', ''].join('\n');
-}
-
-// Real .env so the app runs out of the box on SQLite (the file is a dev DB, not a
-// secret). Production sets DATABASE_URL to a Postgres connection string instead.
-function buildEnvFile() {
-  return 'DATABASE_URL="file:./dev.db"\n';
-}
-
-function buildEnvExample() {
-  return [
-    '# Local development (default): a zero-setup SQLite file.',
-    'DATABASE_URL="file:./dev.db"',
-    '',
-    '# Production: switch prisma/schema.prisma `provider` to "postgresql" and use',
-    '# a Postgres connection string, e.g.:',
-    '# DATABASE_URL="postgresql://user:password@host:5432/dbname?schema=public"',
-    '',
-  ].join('\n');
-}
-
-// Coerce each editable field from the request body to EXACTLY its Prisma column
-// type — shared by create (POST) and update (PUT) so neither throws on a type
-// mismatch (Int rejects a float; dates are stored as text). Indented for a
-// `data: { … }` block.
-function dataCoercions(model) {
-  return editableFields(model.fields).map((f) => {
-    const key = camelCase(f.name);
-    const pt = prismaType(f.type);
-    if (pt === 'Int') return '      ' + key + ': Math.trunc(Number((body as any)[' + jsStr(key) + '] ?? 0)) || 0,';
-    if (pt === 'Float') return '      ' + key + ': Number((body as any)[' + jsStr(key) + '] ?? 0) || 0,';
-    if (pt === 'Boolean') return '      ' + key + ': Boolean((body as any)[' + jsStr(key) + ']),';
-    return '      ' + key + ': String((body as any)[' + jsStr(key) + '] ?? ""),';
-  });
-}
-
 function buildApiRoute(model) {
-  const accessor = prismaAccessor(model.entity); // prisma.<accessor>
-  const coercions = dataCoercions(model);
+  const modelAccessor = camelCase(model.entity);
+  const editable = editableFields(model.fields);
+  // Coerce each editable field from the request body to its TS type.
+  const coercions = editable.map((f) => {
+    const key = camelCase(f.name);
+    const t = tsType(f.type);
+    if (t === 'number') return '    ' + key + ': Number((body as any)[' + jsStr(key) + '] ?? 0),';
+    if (t === 'boolean') return '    ' + key + ': toBoolean((body as any)[' + jsStr(key) + ']),';
+    if (f.type === 'datetime') {
+      return '    ' + key + ': new Date(String((body as any)[' + jsStr(key) + '] || new Date().toISOString())),';
+    }
+    return '    ' + key + ': String((body as any)[' + jsStr(key) + '] ?? ""),';
+  });
   return [
     'import { NextResponse } from "next/server";',
     'import { prisma } from "@/lib/db";',
     '',
+    'function toBoolean(value: unknown): boolean {',
+    '  return value === true || value === "true" || value === "1" || value === 1;',
+    '}',
+    '',
     'export async function GET() {',
-    '  const items = await prisma.' + accessor + '.findMany({ orderBy: { createdAt: "desc" } });',
+    '  const items = await prisma.' + modelAccessor + '.findMany({ orderBy: { createdAt: "desc" } });',
     '  return NextResponse.json({ items });',
     '}',
     '',
     'export async function POST(request: Request) {',
     '  const body = await request.json().catch(() => ({}));',
-    '  const item = await prisma.' + accessor + '.create({',
+    '  const item = await prisma.' + modelAccessor + '.create({',
     '    data: {',
     ...coercions,
     '    },',
@@ -466,79 +402,74 @@ function buildApiRoute(model) {
   ].join('\n');
 }
 
-// Per-record route: GET one + DELETE (completes the CRUD surface).
-function buildItemApiRoute(model) {
-  const accessor = prismaAccessor(model.entity);
+function seedValue(field, entity) {
+  const key = String(field.name || '').toLowerCase();
+  if (field.type === 'decimal') return '129.9';
+  if (field.type === 'integer') return key.includes('stock') ? '24' : '1';
+  if (field.type === 'boolean') return 'true';
+  if (field.type === 'datetime') return 'new Date()';
+  if (field.type === 'email') return jsStr(`${camelCase(entity)}@example.com`);
+  if (field.type === 'url') return jsStr('https://example.com');
+  if (field.type === 'phone') return jsStr('+51 999 999 999');
+  if (field.type === 'text') return jsStr(`Registro demo para ${entity}`);
+  return jsStr(`${entity} demo`);
+}
+
+function buildPrismaSeed(entities) {
+  const blocks = entities.map((model) => {
+    const accessor = camelCase(model.entity);
+    const fields = editableFields(model.fields);
+    const data = fields.length
+      ? fields.map((f) => '        ' + camelCase(f.name) + ': ' + seedValue(f, model.entity) + ',')
+      : ['        // solo campos generados por Prisma'];
+    return [
+      '  await prisma.' + accessor + '.createMany({',
+      '    data: [',
+      '      {',
+      ...data,
+      '      },',
+      '    ],',
+      '  });',
+    ].join('\n');
+  });
   return [
-    'import { NextResponse } from "next/server";',
-    'import { prisma } from "@/lib/db";',
+    'import { PrismaClient } from "@prisma/client";',
     '',
-    'export async function GET(_request: Request, { params }: { params: { id: string } }) {',
-    '  const item = await prisma.' + accessor + '.findUnique({ where: { id: params.id } });',
-    '  if (!item) return NextResponse.json({ error: "not found" }, { status: 404 });',
-    '  return NextResponse.json({ item });',
+    'const prisma = new PrismaClient();',
+    '',
+    'async function main() {',
+    ...blocks,
     '}',
     '',
-    'export async function PUT(request: Request, { params }: { params: { id: string } }) {',
-    '  const body = await request.json().catch(() => ({}));',
-    '  const item = await prisma.' + accessor + '.update({',
-    '    where: { id: params.id },',
-    '    data: {',
-    ...dataCoercions(model),
-    '    },',
-    '  }).catch(() => null);',
-    '  if (!item) return NextResponse.json({ error: "not found" }, { status: 404 });',
-    '  return NextResponse.json({ item });',
-    '}',
-    '',
-    'export async function DELETE(_request: Request, { params }: { params: { id: string } }) {',
-    '  await prisma.' + accessor + '.delete({ where: { id: params.id } }).catch(() => {});',
-    '  return NextResponse.json({ ok: true });',
-    '}',
+    'main()',
+    '  .then(async () => {',
+    '    await prisma.$disconnect();',
+    '  })',
+    '  .catch(async (error) => {',
+    '    console.error(error);',
+    '    await prisma.$disconnect();',
+    '    process.exit(1);',
+    '  });',
     '',
   ].join('\n');
 }
 
 function buildEntityPage(model) {
-  const slug = model.slug || kebabCase(model.entity);
+  const slug = kebabCase(model.entity);
   const typeName = pascalCase(model.entity);
   const editable = editableFields(model.fields);
-  // Assign each field a UNIQUE camelCase key. Two field names that camelCase-
-  // collapse (e.g. "user name" + "user_name" → "userName", or accented variants)
-  // would otherwise emit duplicate keys across the interface / initial state /
-  // inputs / table cells, corrupting the generated row type. editableFields keeps
-  // the same object references, so the editable subset reads the same keys.
-  const usedKeys = new Set();
-  const keyOf = new Map();
-  for (const f of model.fields) {
-    const base = camelCase(f.name) || 'field';
-    let key = base;
-    let n = 2;
-    while (usedKeys.has(key)) { key = `${base}${n}`; n += 1; }
-    usedKeys.add(key);
-    keyOf.set(f, key);
-  }
-  const colKey = (f) => keyOf.get(f) || camelCase(f.name);
-  const allCols = model.fields.map(colKey);
+  const allCols = model.fields.map((f) => camelCase(f.name));
 
   // TS interface for a row.
-  const ifaceFields = model.fields.map((f) => '  ' + colKey(f) + ': ' + tsType(f.type) + ';');
-  // Initial form state. NOTE the trailing comma — these lines are emitted one
-  // per property inside `useState({ … })`, so without it a 2+-field entity
-  // produces `{ name: "" price: 0 }`, an invalid object literal that fails to
-  // compile (`npm run build`) in the generated project.
+  const ifaceFields = model.fields.map((f) => '  ' + camelCase(f.name) + ': ' + tsType(f.type) + ';');
+  // Initial form state.
   const initialState = editable.map((f) => {
-    const key = colKey(f);
-    return '    ' + key + ': ' + (tsType(f.type) === 'number' ? '0' : tsType(f.type) === 'boolean' ? 'false' : '""') + ',';
-  });
-  // Loads the editable fields of a row into the form for editing.
-  const editLoaders = editable.map((f) => {
-    const key = colKey(f);
-    return '      ' + key + ': row.' + key + ' as any,';
+    const key = camelCase(f.name);
+    return '    ' + key + ': ' + (tsType(f.type) === 'number' ? '0' : tsType(f.type) === 'boolean' ? 'false' : '""');
   });
   // Form inputs.
   const inputs = editable.map((f) => {
-    const key = colKey(f);
+    const key = camelCase(f.name);
     const t = tsType(f.type);
     const inputType = t === 'number' ? 'number' : f.type === 'email' ? 'email' : 'text';
     const onChange =
@@ -577,21 +508,6 @@ function buildEntityPage(model) {
     ...initialState,
     '  });',
     '  const [loading, setLoading] = useState(true);',
-    '  const [editingId, setEditingId] = useState<string | null>(null);',
-    '',
-    '  function resetForm() {',
-    '    setEditingId(null);',
-    '    setForm({',
-    ...initialState,
-    '    });',
-    '  }',
-    '',
-    '  function startEdit(row: ' + typeName + ') {',
-    '    setEditingId(row.id);',
-    '    setForm({',
-    ...editLoaders,
-    '    });',
-    '  }',
     '',
     '  async function load() {',
     '    const res = await fetch(API);',
@@ -604,17 +520,11 @@ function buildEntityPage(model) {
     '',
     '  async function onSubmit(e: React.FormEvent) {',
     '    e.preventDefault();',
-    '    await fetch(editingId ? API + "/" + editingId : API, {',
-    '      method: editingId ? "PUT" : "POST",',
+    '    await fetch(API, {',
+    '      method: "POST",',
     '      headers: { "Content-Type": "application/json" },',
     '      body: JSON.stringify(form),',
     '    });',
-    '    resetForm();',
-    '    await load();',
-    '  }',
-    '',
-    '  async function onDelete(id: string) {',
-    '    await fetch(API + "/" + id, { method: "DELETE" });',
     '    await load();',
     '  }',
     '',
@@ -623,10 +533,7 @@ function buildEntityPage(model) {
     '      <h1>' + jsxText(model.entity) + '</h1>',
     '      <form className="stack" onSubmit={onSubmit}>',
     ...inputs,
-    '        <button className="btn" type="submit">{editingId ? "Guardar" : "Crear"}</button>',
-    '        {editingId && (',
-    '          <button className="btn" type="button" onClick={resetForm}>Cancelar</button>',
-    '        )}',
+    '        <button className="btn" type="submit">Crear</button>',
     '      </form>',
     '      {loading ? (',
     '        <p>Cargando…</p>',
@@ -635,17 +542,12 @@ function buildEntityPage(model) {
     '          <thead>',
     '            <tr>',
     ...headerCells,
-    '            <th>Acciones</th>',
     '            </tr>',
     '          </thead>',
     '          <tbody>',
     '            {items.map((row) => (',
     '              <tr key={row.id}>',
     ...rowCells,
-    '              <td>',
-    '                <button className="btn" onClick={() => startEdit(row)}>Editar</button>{" "}',
-    '                <button className="btn" onClick={() => onDelete(row.id)}>Borrar</button>',
-    '              </td>',
     '              </tr>',
     '            ))}',
     '          </tbody>',
@@ -681,23 +583,10 @@ function codegenFromBrief(rawBrief, blueprintArg) {
   }
 
   // Landing pages stay single-page (marketing); apps get entity CRUD.
-  const rawEntities = brief.platform === 'landing' ? [] : blueprint.dataModel;
-  // Assign each entity a UNIQUE url/file slug up front. Two entity names that
-  // kebab-collapse to the same slug (e.g. "User Post" and "user-post") would
-  // otherwise emit two files at the same path — the second clobbering the first
-  // — and desync the nav links from the pages. Every builder reads model.slug.
-  const usedSlugs = new Set();
-  const entities = rawEntities.map((m) => {
-    const base = kebabCase(m.entity) || 'item';
-    let slug = base;
-    let n = 2;
-    while (usedSlugs.has(slug)) { slug = `${base}-${n}`; n += 1; }
-    usedSlugs.add(slug);
-    return { ...m, slug };
-  });
+  const entities = brief.platform === 'landing' ? [] : blueprint.dataModel;
 
   const files = [
-    { path: 'package.json', language: 'json', content: buildPackageJson(brief, entities) },
+    { path: 'package.json', language: 'json', content: buildPackageJson(brief, entities.length > 0) },
     { path: 'tsconfig.json', language: 'json', content: buildTsConfig() },
     { path: 'next.config.mjs', language: 'javascript', content: buildNextConfig() },
     { path: 'app/globals.css', language: 'css', content: buildGlobalsCss(brief) },
@@ -707,23 +596,15 @@ function codegenFromBrief(rawBrief, blueprintArg) {
   ];
 
   if (entities.length > 0) {
-    // Database layer: Prisma schema (one model per entity) + a client singleton.
-    files.push({ path: 'prisma/schema.prisma', language: 'prisma', content: buildPrismaSchema(entities) });
-    files.push({ path: 'lib/db.ts', language: 'typescript', content: buildDbLib() });
-    files.push({ path: '.env', language: 'text', content: buildEnvFile() });
-    files.push({ path: '.env.example', language: 'text', content: buildEnvExample() });
-    files.push({ path: '.gitignore', language: 'text', content: buildGitignore() });
+    files.push({ path: 'docker-compose.yml', language: 'yaml', content: buildDockerCompose() });
+    files.push({ path: 'lib/db.ts', language: 'typescript', content: buildPrismaClientLib() });
+    files.push({ path: 'prisma/seed.ts', language: 'typescript', content: buildPrismaSeed(entities) });
     for (const model of entities) {
-      const slug = model.slug || kebabCase(model.entity);
+      const slug = kebabCase(model.entity);
       files.push({
         path: `app/api/${slug}/route.ts`,
         language: 'typescript',
         content: buildApiRoute(model),
-      });
-      files.push({
-        path: `app/api/${slug}/[id]/route.ts`,
-        language: 'typescript',
-        content: buildItemApiRoute(model),
       });
       files.push({
         path: `app/${slug}/page.tsx`,

@@ -16,23 +16,24 @@ function sliceBetween(startMarker: string, endMarker: string): string {
 
 describe("chat stream id source contract", () => {
   it("uses a LAN-safe UUID helper instead of raw crypto.randomUUID for chat stream ids", () => {
-    const helper = sliceBetween(
-      "function safeUUID(): string {",
-      "// Helper function to check if error is related to monthly API limit",
+    // safeUUID is imported from a dedicated module (lib/safe-uuid.ts) so
+    // the helper is reusable across components. Verify the import exists
+    // and that all generation paths call safeUUID() instead of raw
+    // crypto.randomUUID().
+    assert.match(
+      source,
+      /import \{ safeUUID \} from "\.\/safe-uuid"/,
+      "chat context must import safeUUID from the dedicated module",
     )
 
-    assert.match(helper, /crypto\.randomUUID/, "helper should use native randomUUID when it is available")
-    assert.match(helper, /crypto\.getRandomValues/, "helper must fall back to getRandomValues for insecure LAN HTTP contexts")
-    assert.match(helper, /Math\.random/, "helper must keep a last-resort fallback so sending never leaves an empty assistant placeholder")
-
-    const outsideHelper = source.replace(helper, "")
+    const outsideImport = source.replace(/import \{ safeUUID \} from "\.\/safe-uuid"/, "")
     assert.doesNotMatch(
-      outsideHelper,
+      outsideImport,
       /=\s*crypto\.randomUUID\(\)/,
       "message send/regenerate paths must call safeUUID(); raw crypto.randomUUID() is undefined on plain HTTP LAN previews",
     )
 
-    const streamIdCalls = outsideHelper.match(/const streamId = safeUUID\(\)/g) || []
+    const streamIdCalls = outsideImport.match(/const streamId = safeUUID\(\)/g) || []
     assert.ok(
       streamIdCalls.length >= 3,
       `expected all chat generation paths to create stream ids through safeUUID(), found ${streamIdCalls.length}`,
