@@ -93,6 +93,7 @@ test('generateDockerfile + buildEnvFile', () => {
   const df = generateDockerfile(8080);
   assert.match(df, /FROM node:20-alpine/);
   assert.match(df, /ENV PORT=8080/);
+  assert.match(df, /prisma generate/); // Prisma client generated at build time
   const envf = buildEnvFile({ DATABASE_URL: 'postgres://x', PORT: '8080', 'bad key': 'no', MULTI: 'a\nb' });
   assert.match(envf, /DATABASE_URL=postgres:\/\/x/);
   assert.doesNotMatch(envf, /bad key/); // invalid key dropped

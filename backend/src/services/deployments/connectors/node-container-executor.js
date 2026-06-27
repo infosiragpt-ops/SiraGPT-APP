@@ -116,6 +116,9 @@ function generateDockerfile(port) {
     'COPY package*.json ./',
     'RUN npm ci || npm install',
     'COPY . .',
+    // Generate the Prisma client at build time (a Prisma app crashes on boot
+    // with "@prisma/client did not initialize" otherwise). No DB needed here.
+    'RUN if [ -f prisma/schema.prisma ]; then npx prisma generate; fi',
     'RUN npm run build || true',
     `ENV PORT=${port}`,
     `EXPOSE ${port}`,
