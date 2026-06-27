@@ -25,6 +25,47 @@ const DOCUMENT_INQUIRY_RE = /\b(?:cu[aá]l(?:es)?|qu[eé]|c[oó]mo|de\s+qu[eé]|
 const EXPLICIT_DOCUMENT_OUTPUT_RE = /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|presentaci[oó]n|documento|archivo)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|dame|prepara(?:r|me)?|redacta(?:r|me)?|elabora(?:r|me)?|devu[eé]lv(?:e|eme|elo)|entr[eé]ga(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b|\b(?:quiero|necesito)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b/i;
 const SOURCE_MAP_CHAT_RE = /\b(?:mapa\s+de\s+fuentes|fuentes?\s+por\s+(?:archivo|documento)|enumera\s+cada\s+archivo|cita\s+(?:la\s+)?fuente\s+por\s+documento)\b/i;
 
+function normalizeIntentText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function withCollapsedRepeats(textNorm) {
+  return `${textNorm} ${String(textNorm).replace(/([a-z])\1+/g, '$1')}`;
+}
+
+function requestWantsMinimalProofreadingLight(prompt = '') {
+  const text = normalizeIntentText(prompt);
+  if (!text) return false;
+  const hay = withCollapsedRepeats(text);
+  const correctionNoun = /\b(correccion(?:es)?|correcci\w*|ortografia|gramatica|redaccion|erratas?|errores?)\b/.test(hay);
+  const correctionAction = /\b(aplic\w*|haz|hacer|realiz\w*|corrig\w*|correg\w*|revis\w*|arregl\w*|ajust\w*|mejora\w*)\b/.test(hay);
+  return correctionNoun && correctionAction;
+}
+
+function isSourcePreservingEditLight(requestText, files) {
+  const hasFiles = Array.isArray(files) ? files.length > 0 : Boolean(files);
+  if (!hasFiles) return false;
+  const text = normalizeIntentText(requestText);
+  if (!text) return false;
+  const hay = withCollapsedRepeats(text);
+  if (requestWantsMinimalProofreadingLight(text)) return true;
+
+  const editVerb = /\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|inclu\w*|pon|poner|coloc\w*|aplic\w*|modific\w*|edit\w*|corrig\w*|correg\w*|mejora\w*|mejorar\w*|arregl\w*|ajust\w*|actualiz\w*|reemplaz\w*|quit\w*|elimin\w*|borr\w*|complet\w*|formate\w*|optim\w*)\b/.test(hay);
+  if (!editVerb) return false;
+
+  const existingDocRef = /\b(mi|mismo|misma|este|esta|ese|esa|documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx|powerpoint|pdf|tesis)\b/.test(text);
+  const documentRegion = /\b(portada|caratula|titulo|encabezado|pie de pagina|indice|tabla|hoja|celda|fila|columna|diapositiva|pagina|seccion|capitulo|anexo|anexos|apendice)\b/.test(text);
+  const preservation = /\b(sin cambiar|no cambies|no modificar lo demas|mismo word|mismo documento|conservar|preservar|mantener)\b/.test(text);
+  const explicitFreshDeliverable = /\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|dame|prepara(?:r|me)?|redacta(?:r|me)?|elabora(?:r|me)?)\b[^.?!]{0,160}\b(?:un\s+|una\s+|el\s+|la\s+)?(?:word|docx|documento|informe|reporte|tesis)\b/.test(text);
+  if (explicitFreshDeliverable && !/\b(mi|mismo|misma|este|esta|ese|esa|adjunto|subido|cargado)\b/.test(text) && !documentRegion && !preservation) return false;
+  return existingDocRef || documentRegion || preservation;
+}
+
 let sourcePreservingEditMod = null;
 function isSourcePreservingEdit(requestText, files) {
   try {
@@ -33,7 +74,7 @@ function isSourcePreservingEdit(requestText, files) {
     }
     return sourcePreservingEditMod.isSourcePreservingEditRequest(requestText, Array.isArray(files) ? files : []);
   } catch {
-    return false;
+    return isSourcePreservingEditLight(requestText, files);
   }
 }
 

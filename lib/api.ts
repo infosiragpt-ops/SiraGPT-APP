@@ -2867,7 +2867,7 @@ class ApiClient {
       displayPrompt?: string;
       chatId?: string;
       model?: string;
-      format?: 'docx' | 'xlsx' | 'pptx' | 'pdf' | 'csv' | 'html' | 'md' | 'markdown';
+      format?: 'docx' | 'xlsx' | 'pptx' | 'pdf' | 'svg' | 'csv' | 'html' | 'md' | 'markdown';
       template?: string;
       complexity?: 'simple' | 'standard' | 'high' | 'stress';
       files?: string[];

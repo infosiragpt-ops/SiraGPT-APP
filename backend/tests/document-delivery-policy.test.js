@@ -72,6 +72,39 @@ test('DocumentDeliveryPolicy still creates a file when transcription asks for Wo
   assert.equal(policy.autoGenerate, true);
 });
 
+test('DocumentDeliveryPolicy requires an edited artifact for minimal corrections on an attached Word', () => {
+  const policy = buildDocumentDeliveryPolicy({
+    goal: 'aplica correcciones minimas al documento porfavor',
+    files: ['uploaded-docx-id'],
+  });
+
+  assert.equal(policy.mode, 'doc_required');
+  assert.equal(policy.format, 'docx');
+  assert.equal(policy.autoGenerate, true);
+});
+
+test('DocumentDeliveryPolicy treats professional improvement of an attachment as a source-preserving edit', () => {
+  const policy = buildDocumentDeliveryPolicy({
+    goal: 'mejora profesionalmente este documento y conserva lo demás',
+    files: ['uploaded-docx-id'],
+  });
+
+  assert.equal(policy.mode, 'doc_required');
+  assert.equal(policy.format, 'docx');
+  assert.equal(policy.autoGenerate, true);
+});
+
+test('DocumentDeliveryPolicy creates Word from scratch when requested without attachments', () => {
+  const policy = buildDocumentDeliveryPolicy({
+    goal: 'crea esto en un word',
+    files: [],
+  });
+
+  assert.equal(policy.mode, 'doc_required');
+  assert.equal(policy.format, 'docx');
+  assert.equal(policy.autoGenerate, true);
+});
+
 test('DocumentDeliveryPolicy answers attached-document conclusions in chat by default', () => {
   const policy = buildDocumentDeliveryPolicy({
     goal: 'dame 3 párrafos de conclusiones',

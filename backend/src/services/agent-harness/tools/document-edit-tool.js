@@ -55,9 +55,10 @@ function buildDocumentEditTool(deps = {}) {
     name: 'document_edit',
     description: [
       "Edit/transform the user's ATTACHED documents (docx, xlsx, pptx, csv, pdf, txt) inside an isolated sandbox and return the EDITED FILE(s) as download cards.",
-      'WHEN TO USE: the user asks to edit, modify, fix, update, fill, reformat, reorganize or convert an attached document and expects the file back ("edita mi documento…", "corrige el excel…", "cambia el título del informe…").',
+      'WHEN TO USE: the user asks to edit, modify, fix, update, fill, reformat, reorganize, improve professionally, apply corrections, add/remove content, complete sections, or convert an attached document and expects the file back ("edita mi documento…", "corrige el excel…", "cambia el título del informe…", "aplica correcciones mínimas…").',
       'WHEN NOT TO USE: questions or summaries about the document (answer from the provided text), creating a NEW document from scratch (use create_document), or text-only answers.',
       'Pass ONE complete instruction with every requested change — the editor runs in a separate sandbox and only sees your instruction plus the files.',
+      'ALWAYS RETURN A FILE for edit requests: do not finalize with only suggested edits, a checklist, or a summary when the user asked to apply changes to the attachment.',
     ].join(' '),
     inputSchema,
     permissionTier: 'auto',

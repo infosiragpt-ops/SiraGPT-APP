@@ -26,6 +26,7 @@ describe("document chat request · clean prompt contract", () => {
     assert.equal(detectDocumentChatFormat("genera un Excel con fórmulas y dashboard"), "xlsx")
     assert.equal(detectDocumentChatFormat("crea una presentación PPT de inteligencia artificial"), "pptx")
     assert.equal(detectDocumentChatFormat("exporta este contrato a PDF"), "pdf")
+    assert.equal(detectDocumentChatFormat("crea esto como SVG"), "svg")
     assert.equal(detectDocumentChatFormat("devuélvelo como Markdown"), "md")
     assert.equal(detectDocumentChatFormat("crea un CSV válido"), "csv")
   })
@@ -48,5 +49,19 @@ describe("document chat request · clean prompt contract", () => {
 
     assert.deepEqual(request.files, ["file_a", "file_b"])
     assert.equal(request.complexity, "high")
+  })
+
+  it("adds an execution policy that requires edited files, not prose suggestions", () => {
+    const request = buildDocumentChatRequest({
+      prompt: "aplica correcciones minimas y agrega el anexo 3",
+      chatId: "chat_1",
+      fileIds: ["file_docx"],
+    })
+
+    assert.equal(request.displayPrompt, "aplica correcciones minimas y agrega el anexo 3")
+    assert.deepEqual(request.files, ["file_docx"])
+    assert.match(request.prompt, /return the downloadable file/i)
+    assert.match(request.prompt, /do not stop at prose suggestions/i)
+    assert.match(request.prompt, /consolidate them into one edited output file/i)
   })
 })
