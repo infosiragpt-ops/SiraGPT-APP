@@ -13,7 +13,7 @@ import {
 const WORKSPACE_STORAGE_KEY = "code-workspace:v1"
 const ACTIVE_FOLDER_KEY = "code-workspace:active-folder"
 
-const MAX_FILES = 160
+const MAX_FILES = 400
 const MAX_FILE_BYTES = 768 * 1024
 const MAX_TOTAL_BYTES = 5 * 1024 * 1024
 
@@ -78,8 +78,10 @@ const TEXT_EXTENSIONS = new Set([
 ])
 
 const TEXT_FILENAMES = new Set([
-  ".env",
   ".env.example",
+  ".env.sample",
+  ".env.template",
+  ".env.dist",
   ".gitignore",
   ".prettierrc",
   "dockerfile",
@@ -283,6 +285,13 @@ async function walkDirectory(
       continue
     }
 
+    // Never import local secret files — credentials must stay on the user's
+    // machine and never get copied into the in-app workspace.
+    if (isSecretEnvFile(name)) {
+      stats.skipped++
+      continue
+    }
+
     try {
       const file = await handle.getFile()
       if (file.size > MAX_FILE_BYTES || stats.bytes + file.size > MAX_TOTAL_BYTES) {
@@ -315,6 +324,17 @@ function isTextLikeFile(name: string): boolean {
   if (TEXT_FILENAMES.has(lower)) return true
   const ext = lower.includes(".") ? lower.slice(lower.lastIndexOf(".") + 1) : ""
   return TEXT_EXTENSIONS.has(ext)
+}
+
+// Local secret files we must NEVER import — credentials stay on the user's
+// machine. Matches `.env` and variants like `.env.local` / `.env.production`,
+// but allows non-secret templates (`.env.example`, `.env.sample`, `.env.template`).
+const ENV_TEMPLATE_SUFFIXES = new Set(["example", "sample", "template", "dist"])
+function isSecretEnvFile(name: string): boolean {
+  const lower = String(name || "").toLowerCase()
+  if (lower !== ".env" && !lower.startsWith(".env.")) return false
+  const suffix = lower.startsWith(".env.") ? lower.slice(".env.".length) : ""
+  return !ENV_TEMPLATE_SUFFIXES.has(suffix)
 }
 
 async function createFileHandle(path: string): Promise<FileHandleLike> {
