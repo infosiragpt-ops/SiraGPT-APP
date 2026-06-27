@@ -4,13 +4,18 @@ import HomePage from "./home-page"
 export const metadata: Metadata = {
   title: "Sira GPT — Plataforma de IA Multimodal",
   description:
-    "ChatGPT, Claude, Gemini, Grok y más en una sola plataforma. Chatea, genera imágenes, analiza documentos, diseña prototipos e investiga con IA.",
+    "Sira GPT integra OpenAI, Gemini, Claude, DeepSeek, Stripe, Replit, ElevenLabs y OpenClaw en una experiencia de IA profesional.",
   keywords: [
     "IA",
     "chatbot",
-    "GPT-4",
+    "OpenAI",
     "Claude",
     "Gemini",
+    "DeepSeek",
+    "Stripe",
+    "Replit",
+    "ElevenLabs",
+    "OpenClaw",
     "generación de imágenes",
     "AI platform",
     "asistente de IA",
@@ -22,7 +27,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: "Sira GPT — Plataforma de IA Multimodal",
     description:
-      "Los mejores modelos de IA en una sola plataforma. Chatea, crea e investiga con IA de próxima generación.",
+      "OpenAI, Gemini, Claude, DeepSeek, Stripe, Replit, ElevenLabs y OpenClaw en una sola plataforma.",
     type: "website",
     locale: "es_ES",
   },
@@ -30,7 +35,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "Sira GPT — Plataforma de IA Multimodal",
     description:
-      "Los mejores modelos de IA en una sola plataforma. Chatea, crea e investiga con IA de próxima generación.",
+      "Una landing minimalista para la plataforma IA de Sira GPT.",
   },
 }
 
