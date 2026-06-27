@@ -18,15 +18,49 @@ function connectConfig(cfg) {
     username: cfg.username,
     ...(cfg.privateKey ? { privateKey: cfg.privateKey, passphrase: cfg.passphrase || undefined } : {}),
     ...(cfg.password ? { password: cfg.password } : {}),
-    readyTimeout: 20000,
+    // A heavy `docker build` on the VPS spikes CPU/IO, so the NEXT command's SSH
+    // handshake can be slow — a tight readyTimeout caused spurious "could not
+    // connect" failures mid-deploy. Generous default, env-tunable.
+    readyTimeout: Number(process.env.SIRAGPT_SSH_READY_TIMEOUT_MS) || 60000,
   };
 }
 
+/** A connection-phase failure worth retrying (NOT a command that ran + failed,
+ *  and NOT a user cancel or a command that legitimately ran past timeoutMs). */
+function isTransientConnError(err) {
+  const m = String((err && err.message) || err || '').toLowerCase();
+  if (/cancelled/.test(m)) return false;
+  if (m === 'ssh command timed out') return false;
+  return /handshake|econnreset|econnrefused|ehostunreach|enotfound|etimedout|timed out while|keepalive|socket hang up/.test(m);
+}
+
 /**
- * Run `command` on the remote host. Resolves { code } (0 = success); rejects on
- * connection error. Streams output through onLog.
+ * Run `command` on the remote host with bounded retries on TRANSIENT connection
+ * failures (a busy VPS just after a big build often refuses/slow-handshakes the
+ * next SSH connection). A command that runs and exits non-zero is NOT retried.
+ * Resolves { code } (0 = success). Env: SIRAGPT_SSH_RETRIES (default 3).
  */
-function exec(cfg, command, { onLog = () => {}, timeoutMs = 10 * 60 * 1000, signal } = {}) {
+async function exec(cfg, command, opts = {}) {
+  const max = Math.max(1, Number(process.env.SIRAGPT_SSH_RETRIES) || 3);
+  let lastErr;
+  for (let attempt = 1; attempt <= max; attempt++) {
+    try {
+      return await execOnce(cfg, command, opts);
+    } catch (err) {
+      lastErr = err;
+      if (attempt >= max || !isTransientConnError(err)) throw err;
+      try { (opts.onLog || (() => {}))(`[ssh] conexión falló (${(err && err.message) || err}); reintentando ${attempt}/${max - 1}…`); } catch { /* ignore */ }
+      await new Promise((r) => setTimeout(r, 1500 * attempt));
+    }
+  }
+  throw lastErr;
+}
+
+/**
+ * Single SSH attempt. Resolves { code } (0 = success); rejects on connection
+ * error. Streams output through onLog.
+ */
+function execOnce(cfg, command, { onLog = () => {}, timeoutMs = 10 * 60 * 1000, signal } = {}) {
   return new Promise((resolve, reject) => {
     const conn = getClient(cfg.__deps);
     let settled = false;
