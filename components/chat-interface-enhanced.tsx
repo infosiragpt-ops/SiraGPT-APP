@@ -8027,14 +8027,11 @@ REWRITTEN TEXT:`;
     // "derivada" → math, "imagen" → image), keep image-only turns out of the
     // agent loop entirely — the vision path reads the image and responds.
     const imageOnlyTurn = isImageOnlyAttachmentTurn(filesToSend);
-    // NOTE: document-EDIT turns (attachment + "borra/elimina/agrega/edita…")
-    // are deliberately NOT forced into the queued agent-task path here. The
-    // queued runner (agent-task-runner) has NO document_edit tool and stalls
-    // ("Sin actualizaciones recientes"). Document edits must run on the INLINE
-    // /api/ai/generate path, which carries the document_edit (Cowork sandbox)
-    // tool plus a reliable plain-stream fallback. The intent switch +
-    // shouldRouteTextPromptThroughAgenticRuntime (which returns false → inline
-    // for edit intents) route them there.
+    // Document-EDIT turns (attachment + "borra/elimina/agrega/edita…") must
+    // enter the durable agent-task path. That backend path owns the current
+    // source-preserving Office/PDF editor, artifact persistence and validation.
+    // Pure image-analysis turns are still kept out of the queued path because
+    // vision runs through /api/ai/generate.
     const shouldStartAgenticLoopImmediately = deterministicAgenticIntent
       && ['web_search', 'agent_task', 'math', 'viz', 'chart', 'ppt'].includes(deterministicAgenticIntent)
       && !imageOnlyTurn
@@ -8322,13 +8319,9 @@ REWRITTEN TEXT:`;
         case 'agent_task':
           // Same gate as 'text': no-file analytical turns ("ejecuta la
           // fórmula", "haz un gráfico de esto", quick web lookups) run on
-          // the RELIABLE inline /generate agentic loop — it owns web_search,
-          // chart/visual tools and math, streams live, and has per-step
-          // timeouts + a plain-stream fallback. The durable QUEUED agent
-          // path is for /goal and uploaded-document work; sending a pasted
-          // formula there used to trigger the doc-required pipeline (forced
-          // XLSX!), a 30+-step runaway on the failover model and a frozen
-          // "Analizando solicitud" card when the SSE relay dropped.
+          // the RELIABLE inline /generate agentic loop. Uploaded-document
+          // work, including source-preserving edits, runs on the durable
+          // agent-task path so file artifacts and validation are persisted.
           if (shouldRouteTextPromptThroughAgenticRuntime(msg, filesToSend)) {
             await runClassifiedAgentTask();
           } else {
