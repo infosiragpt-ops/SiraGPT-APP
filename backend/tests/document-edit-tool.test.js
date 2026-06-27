@@ -225,6 +225,7 @@ test('routing gate: edit requests with attachments enter the agentic loop; doc-Q
   assert.equal(isDocumentEditRequest('modifica el excel adjunto'), true);
   assert.equal(isDocumentEditRequest('actualiza el informe con los datos nuevos'), true);
   assert.equal(isDocumentEditRequest('corrige la ortografía del archivo'), true);
+  assert.equal(isDocumentEditRequest('aplica correcciones minimas al documento porfavor'), true);
   // negatives — plain Q&A / summaries stay fast
   assert.equal(isDocumentEditRequest('resume este documento'), false);
   assert.equal(isDocumentEditRequest('¿qué dice el documento?'), false);
@@ -237,11 +238,13 @@ test('routing gate: edit requests with attachments enter the agentic loop; doc-Q
   const docx = [{ name: 'x.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }];
   assert.equal(isSourcePreservingEditRequest('borra el jurado evaluador', docx), true);
   assert.equal(isSourcePreservingEditRequest('agrega una conclusión', docx), true);
+  assert.equal(isSourcePreservingEditRequest('aplica correcciones minimas al documento porfavor', docx), true);
   assert.equal(isSourcePreservingEditRequest('¿qué dice el documento?', docx), false);
   assert.equal(isSourcePreservingEditRequest('resume esto', docx), false);
 
   const { shouldUseAgenticChat } = require('../src/services/agentic-chat-stream');
   assert.equal(shouldUseAgenticChat({ prompt: 'edita mi documento: cambia el título', files: [{ id: 'f1' }] }), true);
+  assert.equal(shouldUseAgenticChat({ prompt: 'aplica correcciones minimas al documento porfavor', files: [{ id: 'f1' }] }), true);
   assert.equal(shouldUseAgenticChat({ prompt: '¿de qué trata el documento?', files: [{ id: 'f1' }] }), false);
 });
 

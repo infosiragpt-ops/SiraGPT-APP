@@ -283,6 +283,7 @@ describe('source-preserving document edit', () => {
     assert.equal(isSourcePreservingEditRequest('agrega al final una tabla de presupuesto', []), false);
     assert.equal(isSourcePreservingEditRequest('corrige la redacción', ['file-docx']), true);
     assert.equal(isSourcePreservingEditRequest('mejora el tono profesional', ['file-docx']), true);
+    assert.equal(isSourcePreservingEditRequest('aplica correcciones minimas al documento porfavor', ['file-docx']), true);
     assert.equal(isSourcePreservingEditRequest('corrige la redacción', []), false);
     assert.equal(isSourcePreservingEditRequest('dame un resumen en un solo párrafo', ['file-docx']), false);
     assert.equal(isSourcePreservingEditRequest('calcula la diferencia usando los documentos adjuntos', ['file-docx']), false);
@@ -348,6 +349,62 @@ describe('source-preserving document edit', () => {
     assert.equal(plan.executionMode, 'bounded_background_worker');
     assert.ok(plan.activeAgents >= 8);
     assert.ok(plan.activeAgents <= plan.parallelism);
+  });
+
+  it('returns the same DOCX with minimal corrections applied instead of a prose recommendation', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-minimal-corrections-'));
+    const originalPath = path.join(tmp, '910 250.docx');
+    const doc = new Document({
+      sections: [{
+        children: [
+          new Paragraph('Resumen'),
+          new Paragraph('Palabras claves: gestión empresarial; informe pericial.'),
+          new Paragraph('Contenido original que debe seguir intacto.'),
+        ],
+      }],
+    });
+    fs.writeFileSync(originalPath, Buffer.from(await Packer.toBuffer(doc)));
+
+    const prisma = {
+      file: {
+        async findMany() {
+          return [{
+            id: 'file-docx-minimal',
+            userId: 'user-1',
+            filename: '910 250.docx',
+            originalName: '910 250.docx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            size: fs.statSync(originalPath).size,
+            path: originalPath,
+          }];
+        },
+      },
+      generatedArtifact: { async findMany() { return []; } },
+      message: { async findMany() { return []; } },
+    };
+
+    const result = await tryGenerateSourcePreservingDocumentEdit({
+      prisma,
+      userId: 'user-1',
+      chatId: 'chat-1',
+      fileIds: ['file-docx-minimal'],
+      prompt: 'aplica correcciones minimas al documento porfavor',
+      displayPrompt: 'aplica correcciones minimas al documento porfavor',
+    });
+
+    assert.equal(result.format, 'docx');
+    assert.equal(result.validation.passed, true);
+    assert.match(result.file.filename, /910_250_correcciones_minimas_completado\.docx$/);
+    assert.match(result.content, /Conservé el DOCX original/i);
+    assert.doesNotMatch(result.content, /Estas son las correcciones/i);
+
+    const xml = new PizZip(fs.readFileSync(result.artifact.path)).file('word/document.xml').asText();
+    assert.match(xml, /Palabras clave:/);
+    assert.doesNotMatch(xml, /Palabras claves:/);
+    assert.match(xml, /Contenido original que debe seguir intacto/);
+    const criteria = result.validation.details.operationCriteria.find((check) => check.id === 'minimal_proofread_applied');
+    assert.equal(criteria?.passed, true);
+    assert.equal(criteria.details.changedCount >= 1, true);
   });
 
   it('falls back to the newest recent editable chat attachment when the follow-up omits file ids', async () => {

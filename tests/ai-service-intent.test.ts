@@ -186,6 +186,13 @@ describe("ai-service · deterministic intent routing", () => {
     assert.equal(graph.inferredIntent, "agent_task")
     assert.equal(await aiService.classifyIntent(prompt, history), "agent_task")
     assert.equal(shouldRouteTextPromptThroughAgenticRuntime(prompt, history[0].files), true)
+
+    const minimalPrompt = "aplica correcciones minimas al documento porfavor"
+    assert.equal(shouldAnswerFromExistingDocument(minimalPrompt, history), false)
+    assert.equal(shouldEditExistingDocument(minimalPrompt, history), true)
+    assert.equal(shouldUseExistingDocumentFileContext(minimalPrompt, history), true)
+    assert.equal(await aiService.classifyIntent(minimalPrompt, history), "agent_task")
+    assert.equal(shouldRouteTextPromptThroughAgenticRuntime(minimalPrompt, history[0].files), true)
   })
 
   it("routes consistency-matrix edits of an uploaded Word document through the durable agent task", async () => {

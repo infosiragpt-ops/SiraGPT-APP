@@ -269,6 +269,17 @@ const DOCUMENT_MUTATION_STRONG_RE =
 const DOCUMENT_ATTACHMENT_REVISION_RE =
   /\b(?:corrig\w*|correg\w*|mejor\w*|modific\w*|edit\w*|actualiz\w*|formaliz\w*|ajust\w*|optim\w*)\b/i
 
+const DOCUMENT_CORRECTION_NOUN_RE =
+  /\b(?:correcci[oó]n(?:es)?|ortograf[ií]a|gram[aá]tica|redacci[oó]n|erratas?|errores?)\b/i
+
+const DOCUMENT_CORRECTION_ACTION_RE =
+  /\b(?:aplic\w*|haz|hacer|realiz\w*|corrig\w*|correg\w*|revis\w*|arregl\w*|ajust\w*|mejora\w*)\b/i
+
+function isDocumentCorrectionEditRequest(normalizedPrompt: string): boolean {
+  return DOCUMENT_CORRECTION_NOUN_RE.test(normalizedPrompt)
+    && DOCUMENT_CORRECTION_ACTION_RE.test(normalizedPrompt)
+}
+
 // Whole-document transforms (translate / rewrite / summarize / rephrase)
 // operate on the entire uploaded file, so unlike EXISTING_DOCUMENT_EDIT_RE
 // they don't require a sub-region target keyword. When a document is
@@ -441,6 +452,7 @@ export function shouldEditExistingDocument(
     && (
       (DOCUMENT_MUTATION_STRONG_RE.test(normalized) && !WHOLE_DOCUMENT_TRANSFORM_RE.test(normalized))
       || DOCUMENT_ATTACHMENT_REVISION_RE.test(normalized)
+      || isDocumentCorrectionEditRequest(normalized)
     )
   ) {
     return true
@@ -700,6 +712,7 @@ export function buildIntentAttributionGraph(
       EXISTING_DOCUMENT_EDIT_RE.test(normalized)
       || (DOCUMENT_MUTATION_STRONG_RE.test(normalized) && !WHOLE_DOCUMENT_TRANSFORM_RE.test(normalized))
       || DOCUMENT_ATTACHMENT_REVISION_RE.test(normalized)
+      || isDocumentCorrectionEditRequest(normalized)
       || (WHOLE_DOCUMENT_TRANSFORM_RE.test(normalized) && EXISTING_DOCUMENT_REFERENCE_RE.test(normalized))
     )
   const isShortContextualFragment =
@@ -891,6 +904,7 @@ export function shouldRouteTextPromptThroughAgenticRuntime(prompt: string, files
     // word" is still an edit, not a fresh generation.
     if (
       DOCUMENT_MUTATION_STRONG_RE.test(normalized)
+      || isDocumentCorrectionEditRequest(normalized)
       || (
         !OUTPUT_FORMAT_REQUEST_RE.test(normalized)
         && (EXISTING_DOCUMENT_EDIT_RE.test(normalized) || WHOLE_DOCUMENT_TRANSFORM_RE.test(normalized))

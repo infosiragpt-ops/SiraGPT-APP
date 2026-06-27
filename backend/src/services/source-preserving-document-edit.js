@@ -41,6 +41,15 @@ function withCollapsedRepeats(textNorm) {
   return `${textNorm} ${String(textNorm).replace(/([a-z])\1+/g, '$1')}`;
 }
 
+function requestWantsMinimalProofreading(prompt = '') {
+  const text = normalizeText(prompt);
+  if (!text) return false;
+  const hay = withCollapsedRepeats(text);
+  const correctionNoun = /\b(correccion(?:es)?|ortografia|gramatica|redaccion|erratas?|errores?)\b/.test(hay);
+  const correctionAction = /\b(aplic\w*|haz|hacer|realiz\w*|corrig\w*|correg\w*|revis\w*|arregl\w*|ajust\w*|mejora\w*)\b/.test(hay);
+  return correctionNoun && correctionAction;
+}
+
 function isSourcePreservingEditRequest(prompt, files = []) {
   const text = normalizeText(prompt);
   if (!text) return false;
@@ -48,7 +57,8 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   const editVerbHay = verbHay.replace(/\beditables?\b/g, '');
   const hasFiles = Array.isArray(files) ? files.length > 0 : Boolean(files);
 
-  const structuralEditVerb = /\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|inclu\w*|pon|poner|coloc\w*|modific\w*|edit\w*|corrig\w*|correg\w*|mejora\w*|mejorar\w*|actualiz\w*|reemplaz\w*|quit\w*|elimin\w*|borr\w*|complet\w*)\b/.test(editVerbHay);
+  const editorialCorrectionIntent = requestWantsMinimalProofreading(text);
+  const structuralEditVerb = /\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|inclu\w*|pon|poner|coloc\w*|aplic\w*|modific\w*|edit\w*|corrig\w*|correg\w*|mejora\w*|mejorar\w*|arregl\w*|ajust\w*|actualiz\w*|reemplaz\w*|quit\w*|elimin\w*|borr\w*|complet\w*)\b/.test(editVerbHay);
   // STRONG mutation verbs (delete / remove / insert / add / replace): on an
   // attachment turn these unambiguously target the attached file even with no
   // document/region noun ("borra el jurado evaluador", "elimina los anexos",
@@ -70,7 +80,7 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   const adjuntarAction = /\badjunt(?:a|ar|ame|arme|alo|ala|alos|alas|arlo|arla|arlos|arlas)\b/.test(text)
     && !/\b(?:documentos?|archivos?|imagenes?|fotos?|capturas?|pdf|word|docx|excel|xlsx|pptx?)\s+adjunt[oa]s?\b/.test(text)
     && !/\b(?:imagen|foto|captura|screenshot)\s+adjunt[oa]\b/.test(text);
-  const editVerb = primaryEditVerb || adjuntarAction;
+  const editVerb = primaryEditVerb || adjuntarAction || editorialCorrectionIntent;
   const existingDocRef = /\b(mi|mismo|misma|este|esta|ese|esa|documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx|powerpoint|pdf|tesis)\b/.test(text);
   const documentNoun = /\b(documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx|powerpoint|pdf|tesis)\b/.test(text);
   const appendLocation = /\b(al final|final|anexo|anexos|apendice|ultima pagina|ultima hoja|nueva hoja|nueva pagina|nueva diapositiva)\b/.test(text);
@@ -100,6 +110,7 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   const concreteEditTarget = hasFiles && Boolean(parseTargetSectionRequest(text));
   if (explicitFreshDeliverable && !preservation && !concreteEditTarget && !explicitAttachedMutation) return false;
   if (hasFiles) {
+    if (editorialCorrectionIntent) return true;
     if (appendLocation || preservation || instrument || documentRegion) return true;
     if (documentNoun) return true;
     // A STRONG mutation verb alone is enough on an attachment turn — the
@@ -1697,6 +1708,113 @@ function replaceTextInDocxBuffer(buffer, needle, replacement) {
   };
 }
 
+function preserveCaseReplacement(match = '', lowerReplacement = '') {
+  const source = String(match || '');
+  const replacement = String(lowerReplacement || '');
+  if (!source) return replacement;
+  if (source === source.toUpperCase()) return replacement.toUpperCase();
+  if (/^[A-ZÁÉÍÓÚÑ]/.test(source)) {
+    return replacement.charAt(0).toUpperCase() + replacement.slice(1);
+  }
+  return replacement;
+}
+
+const MINIMAL_PROOFREAD_RULES = [
+  {
+    id: 'palabras_clave_plural',
+    label: 'Palabras claves -> Palabras clave',
+    pattern: /\bpalabras\s+claves\b/gi,
+    replacement: (match) => preserveCaseReplacement(match, 'palabras clave'),
+  },
+  {
+    id: 'por_favor_joined',
+    label: 'porfavor -> por favor',
+    pattern: /\bporfavor\b/gi,
+    replacement: (match) => preserveCaseReplacement(match, 'por favor'),
+  },
+];
+
+function applyMinimalProofreadingToText(text = '') {
+  let updated = String(text || '');
+  const applied = [];
+  for (const rule of MINIMAL_PROOFREAD_RULES) {
+    let count = 0;
+    const samples = [];
+    updated = updated.replace(rule.pattern, (match, ...args) => {
+      const replacement = typeof rule.replacement === 'function'
+        ? rule.replacement(match, ...args)
+        : String(rule.replacement || '');
+      if (replacement !== match) {
+        count += 1;
+        if (samples.length < 5) samples.push({ needle: match, replacement });
+      }
+      return replacement;
+    });
+    if (count > 0) {
+      applied.push({
+        id: rule.id,
+        label: rule.label,
+        count,
+        samples,
+      });
+    }
+  }
+  return {
+    text: updated,
+    changed: updated !== String(text || ''),
+    corrections: applied,
+  };
+}
+
+function proofreadMinimalDocxBuffer(buffer) {
+  const zip = new PizZip(buffer);
+  const documentFile = zip.file('word/document.xml');
+  if (!documentFile) throw new Error('DOCX inválido: falta word/document.xml.');
+  let documentXml = documentFile.asText();
+  const paragraphs = extractDocxParagraphs(documentXml)
+    .filter((paragraph) => String(paragraph.text || '').trim())
+    .sort((a, b) => b.start - a.start);
+
+  let changedParagraphs = 0;
+  let changedCount = 0;
+  const correctionMap = new Map();
+  const expectedReplacements = [];
+
+  for (const paragraph of paragraphs) {
+    const proofread = applyMinimalProofreadingToText(paragraph.text);
+    if (!proofread.changed) continue;
+    const template = buildFormattingTemplate({ bodyXml: paragraph.xml });
+    const updatedParagraph = paragraphXml({ kind: 'normal', text: proofread.text }, template);
+    documentXml = `${documentXml.slice(0, paragraph.start)}${updatedParagraph}${documentXml.slice(paragraph.end)}`;
+    changedParagraphs += 1;
+
+    for (const correction of proofread.corrections) {
+      const previous = correctionMap.get(correction.id) || {
+        id: correction.id,
+        label: correction.label,
+        count: 0,
+        samples: [],
+      };
+      previous.count += correction.count;
+      for (const sample of correction.samples || []) {
+        if (previous.samples.length < 5) previous.samples.push(sample);
+        expectedReplacements.push(sample);
+      }
+      correctionMap.set(correction.id, previous);
+      changedCount += correction.count;
+    }
+  }
+
+  zip.file('word/document.xml', documentXml);
+  return {
+    buffer: zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' }),
+    changedCount,
+    changedParagraphs,
+    corrections: [...correctionMap.values()],
+    expectedReplacements,
+  };
+}
+
 function deleteTextFromDocxBuffer(buffer, needle) {
   const normalizedNeedle = normalizeText(needle);
   if (!normalizedNeedle || normalizedNeedle.length < 3) {
@@ -2935,6 +3053,26 @@ function validateDocxOperationCriteria(buffer, operations = []) {
   const normalized = normalizeText(text);
   const checks = [];
   for (const op of operations || []) {
+    if (op.kind === 'proofread_minimal') {
+      const expected = Array.isArray(op.expectedReplacements) ? op.expectedReplacements : [];
+      const failed = expected.filter((pair) => {
+        const needleGone = !normalizedTextIncludes(text, pair.needle);
+        const replacementPresent = normalizedTextIncludes(text, pair.replacement);
+        return !(needleGone && replacementPresent);
+      });
+      checks.push({
+        id: 'minimal_proofread_applied',
+        label: expected.length ? 'Correcciones mínimas aplicadas al DOCX' : 'DOCX revisado con corrección mínima',
+        passed: failed.length === 0,
+        details: {
+          changedCount: op.changedCount || 0,
+          changedParagraphs: op.changedParagraphs || 0,
+          replacements: expected.slice(0, 10),
+          failed: failed.slice(0, 10),
+        },
+      });
+      continue;
+    }
     if (op.kind === 'fill_section' && isAnexo3CronogramaTarget(op.target)) {
       const result = validateCronogramaCompletion(buffer, op.target);
       if (result.ok || result.reason !== 'cronograma_table_not_found') {
@@ -3206,7 +3344,7 @@ async function validateEditedBuffer(buffer, format, blocks, context = {}) {
 // (4) execute every operation in order on the same evolving buffer.
 // ---------------------------------------------------------------------------
 
-const CLAUSE_ACTION_VERB = 'agreg\\w*|anad\\w*|incorpor\\w*|inclu\\w*|adjunt\\w*|complet\\w*|llen\\w*|rellen\\w*|desarroll\\w*|coloc\\w*|modific\\w*|edit\\w*|actualiz\\w*|reescrib\\w*|reemplaz\\w*|quit\\w*|elimin\\w*|borr\\w*';
+const CLAUSE_ACTION_VERB = 'agreg\\w*|anad\\w*|incorpor\\w*|inclu\\w*|adjunt\\w*|complet\\w*|llen\\w*|rellen\\w*|desarroll\\w*|coloc\\w*|aplic\\w*|corrig\\w*|correg\\w*|mejora\\w*|arregl\\w*|ajust\\w*|modific\\w*|edit\\w*|actualiz\\w*|reescrib\\w*|reemplaz\\w*|quit\\w*|elimin\\w*|borr\\w*';
 
 function splitRequestClauses(text) {
   const normalized = normalizeText(text);
@@ -3442,6 +3580,10 @@ function buildOperationFromClause(clauseNorm, documentXml) {
     return { kind: 'replace_text', ...replacement };
   }
 
+  if (requestWantsMinimalProofreading(clauseNorm)) {
+    return { kind: 'proofread_minimal' };
+  }
+
   if (remove && target) {
     return {
       kind: clauseDeletesFromSectionToEnd(clauseNorm) ? 'delete_section_range' : 'delete_section',
@@ -3529,7 +3671,11 @@ function planSourcePreservingOperations({ requestText = '', documentXml = '', re
   }
 
   if (ops.length === 0) {
-    ops.push({ kind: 'append_generic', wantsInstrument: clauseWantsInstrument(norm) });
+    if (requestWantsMinimalProofreading(norm)) {
+      ops.push({ kind: 'proofread_minimal' });
+    } else {
+      ops.push({ kind: 'append_generic', wantsInstrument: clauseWantsInstrument(norm) });
+    }
   }
   return ops;
 }
@@ -3932,6 +4078,25 @@ function runReplaceTextOperation({ buffer, op }) {
   };
 }
 
+function runProofreadMinimalOperation({ buffer, op }) {
+  const result = proofreadMinimalDocxBuffer(buffer);
+  op.changedCount = result.changedCount;
+  op.changedParagraphs = result.changedParagraphs;
+  op.expectedReplacements = result.expectedReplacements;
+  return {
+    buffer: result.buffer,
+    validationBlocks: [],
+    step: {
+      kind: 'proofread_minimal',
+      label: 'correcciones mínimas',
+      mode: 'safe_proofread',
+      changedCount: result.changedCount,
+      changedParagraphs: result.changedParagraphs,
+      corrections: result.corrections,
+    },
+  };
+}
+
 // Design layer: render a chart/diagram from the request + document context and
 // embed it. A visual failure must never break the document edit.
 async function runInsertVisualOperation({ buffer, requestText, sourceText, signal }) {
@@ -4024,6 +4189,8 @@ async function executeDocxOperations({ input, ops, requestText, sourceText, allS
       result = runDeleteSectionOperation({ buffer, op });
     } else if (op.kind === 'replace_text') {
       result = runReplaceTextOperation({ buffer, op });
+    } else if (op.kind === 'proofread_minimal') {
+      result = runProofreadMinimalOperation({ buffer, op });
     } else {
       result = runAppendGenericOperation({ buffer, op, requestText, sourceText, sourceFile });
     }
@@ -4291,6 +4458,12 @@ function describeStep(step) {
   if (step.kind === 'delete_section') return `eliminé ${step.label || 'la sección'} sin alterar el resto del archivo`;
   if (step.kind === 'delete_text') return `eliminé el texto específico solicitado (${step.removedCount || 0} coincidencia(s))`;
   if (step.kind === 'replace_text') return `reemplacé el texto específico solicitado (${step.changedCount || 0} coincidencia(s))`;
+  if (step.kind === 'proofread_minimal') {
+    const count = Number(step.changedCount || 0);
+    return count > 0
+      ? `apliqué correcciones mínimas de redacción y ortografía (${count} ajuste(s))`
+      : 'revisé el DOCX y lo devolví preservado; no encontré correcciones mínimas determinísticas que aplicar';
+  }
   if (step.kind === 'set_cell') return `actualicé la celda ${step.label || 'solicitada'}`;
   if (step.kind === 'append_generic' && step.mode === 'xlsx_new_sheet') return 'agregué una hoja nueva con el contenido solicitado';
   if (step.kind === 'append_generic' && step.mode === 'pptx_new_slide') return 'agregué una diapositiva nueva con el contenido solicitado';
@@ -4705,12 +4878,15 @@ module.exports = {
     clauseWantsBibliography,
     extractReferenceCount,
     formatReferenceApa,
+    applyMinimalProofreadingToText,
+    proofreadMinimalDocxBuffer,
     runAppendReferencesOperation,
     describeStep,
     replaceTextInDocxBuffer,
     replaceTextInPptxBuffer,
     replaceTextInXlsxBuffer,
     requestMentionsGeneralDocument,
+    requestWantsMinimalProofreading,
     requestWantsReferenceIntegration,
     resolveStoredFilePath,
     sanitizeCapturedParagraphProperties,
