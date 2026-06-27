@@ -1020,7 +1020,12 @@ async function enrichWithUnpaywall(papers, opts = {}) {
       } else if (json && typeof json.is_oa === 'boolean' && p.openAccess == null) {
         p.openAccess = json.is_oa;
       }
-    } catch { /* best-effort: leave the paper unchanged */ }
+    } catch (err) {
+      // Best-effort: leave the paper unchanged, but surface systemic enrichment
+      // failure (Unpaywall down / email rejected) so "no PDFs backfilled" isn't
+      // indistinguishable from "all looked up, no OA copy found".
+      console.warn('[scientific-search] unpaywall lookup failed for', p.doi, '-', err && err.message ? err.message : err);
+    }
   }));
   return papers;
 }
@@ -1078,10 +1083,19 @@ async function search(query, opts = {}) {
       .catch((reason) => collect({ p, reason }))
   );
 
-  await Promise.race([
-    Promise.allSettled(perProvider),
-    new Promise((resolve) => { const t = setTimeout(resolve, totalTimeoutMs); t.unref?.(); }),
-  ]);
+  let totalTimer = null;
+  try {
+    await Promise.race([
+      Promise.allSettled(perProvider),
+      new Promise((resolve) => { totalTimer = setTimeout(resolve, totalTimeoutMs); totalTimer.unref?.(); }),
+    ]);
+  } finally {
+    // On the healthy path allSettled wins but the timeout fires up to
+    // totalTimeoutMs later, leaving an orphaned timer (holding its closure) in
+    // Node's heap after every search. Clear it now. collect() already gathered
+    // each provider's results synchronously, so results/ranking are unchanged.
+    if (totalTimer) clearTimeout(totalTimer);
+  }
 
   const deduped = dedupeByDoi(papers);
   const ranked = rankPapers(deduped, cleanQuery);
