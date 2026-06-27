@@ -59,7 +59,7 @@ import { apiClient } from "@/lib/api"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { useChat } from "@/lib/chat-context-integrated"
-import { useCodeWorkspace } from "@/lib/code-workspace-context"
+import { CODE_OPEN_TOOL_EVENT, useCodeWorkspace } from "@/lib/code-workspace-context"
 import { intakeService } from "@/lib/builder/intake-service"
 import type { CodeAgentPhase, CodeChatTurn } from "@/lib/code-chat-sessions"
 import { computeLineDiff, parseCodeBlocks, type CodeBlock } from "@/lib/code-workspace-utils"
@@ -73,7 +73,8 @@ import {
   type CodeChatAction,
   type CodeChatMetrics,
 } from "@/lib/code-chat-metrics"
-import { defaultAgentState, type AgentBuildContext, type AgentPhase } from "@/lib/code-agent/types"
+import { defaultAgentState, type AgentBuildContext, type AgentPhase, type ComposerMode } from "@/lib/code-agent/types"
+import { getComposerQuickAction, type ComposerQuickActionId } from "@/lib/code-agent/composer-actions"
 import {
   classifyBuildError,
   isQuickGreeting,
@@ -100,8 +101,6 @@ import { DiffView } from "./diff-view"
 import { AgentSwarm } from "./agent-swarm"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
-
-type ComposerMode = "app" | "build" | "plan" | "debug" | "ask" | "image"
 
 const COMPOSER_MODE_LABEL: Record<ComposerMode, string> = {
   app: "App",
@@ -1509,6 +1508,26 @@ export function AICodeChatPanel() {
     }
   }
 
+  const runComposerQuickAction = React.useCallback((actionId: ComposerQuickActionId) => {
+    const action = getComposerQuickAction(actionId)
+    setComposerMode(action.mode)
+    if (action.includeContext) setIncludeContext(true)
+    setInput((current) => {
+      const text = current.trim()
+      if (text && !isQuickGreeting(text)) return current
+      return action.prompt
+    })
+    if (typeof window !== "undefined") {
+      if (action.toolId) {
+        window.dispatchEvent(
+          new CustomEvent(CODE_OPEN_TOOL_EVENT, { detail: { toolId: action.toolId } }),
+        )
+      }
+      window.requestAnimationFrame(() => inputRef.current?.focus())
+    }
+    toast.message(action.toast)
+  }, [])
+
   const activeFileLabel = activePath ? activePath.split("/").pop() || activePath : null
   const agentPhase = activeCodeChatSession?.agent?.phase ?? "idle"
   const agentsActive = busy || buildingApp || agentPhase === "generating" || agentPhase === "debugging"
@@ -1600,10 +1619,7 @@ export function AICodeChatPanel() {
               mode={composerMode}
               includeContext={includeContext}
               activeFileLabel={activeFileLabel}
-              onModeChange={(mode) => {
-                setComposerMode(mode)
-                inputRef.current?.focus()
-              }}
+              onQuickAction={runComposerQuickAction}
               onIncludeContextChange={setIncludeContext}
             />
             <ModelPickerInline
@@ -2001,13 +2017,13 @@ function ComposerPlusMenu({
   mode,
   includeContext,
   activeFileLabel,
-  onModeChange,
+  onQuickAction,
   onIncludeContextChange,
 }: {
   mode: ComposerMode
   includeContext: boolean
   activeFileLabel: string | null
-  onModeChange: (mode: ComposerMode) => void
+  onQuickAction: (actionId: ComposerQuickActionId) => void
   onIncludeContextChange: (value: boolean) => void
 }) {
   const itemClass = "h-9 gap-2.5 rounded-md px-2.5 text-sm"
@@ -2038,35 +2054,35 @@ function ComposerPlusMenu({
         </DropdownMenuLabel>
         <DropdownMenuItem
           className={cn(itemClass, mode === "app" && "bg-muted font-medium")}
-          onClick={() => onModeChange("app")}
+          onClick={() => onQuickAction("app-from-scratch")}
         >
           <Rocket className={iconClass} />
           <span>App · construir desde cero</span>
         </DropdownMenuItem>
         <DropdownMenuItem
           className={cn(itemClass, mode === "build" && "bg-muted font-medium")}
-          onClick={() => onModeChange("build")}
+          onClick={() => onQuickAction("build-change")}
         >
           <Sparkles className={iconClass} />
           <span>Build</span>
         </DropdownMenuItem>
         <DropdownMenuItem
           className={cn(itemClass, mode === "plan" && "bg-muted font-medium")}
-          onClick={() => onModeChange("plan")}
+          onClick={() => onQuickAction("plan-architecture")}
         >
           <ListChecks className={iconClass} />
           <span>Plan</span>
         </DropdownMenuItem>
         <DropdownMenuItem
           className={cn(itemClass, mode === "debug" && "bg-muted font-medium")}
-          onClick={() => onModeChange("debug")}
+          onClick={() => onQuickAction("debug-preview")}
         >
           <Bug className={iconClass} />
           <span>Debug</span>
         </DropdownMenuItem>
         <DropdownMenuItem
           className={cn(itemClass, mode === "ask" && "bg-muted font-medium")}
-          onClick={() => onModeChange("ask")}
+          onClick={() => onQuickAction("ask-workspace")}
         >
           <CircleHelp className={iconClass} />
           <span>Ask</span>
@@ -2074,7 +2090,7 @@ function ComposerPlusMenu({
         <DropdownMenuSeparator className="my-2" />
         <DropdownMenuItem
           className={cn(itemClass, mode === "image" && "bg-muted font-medium")}
-          onClick={() => onModeChange("image")}
+          onClick={() => onQuickAction("image-design")}
         >
           <ImageIcon className={iconClass} />
           <span>Image</span>
@@ -2085,14 +2101,14 @@ function ComposerPlusMenu({
             <span>Skills</span>
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="w-52 rounded-xl p-1.5">
-            <DropdownMenuItem className="rounded-lg text-sm" onClick={() => onModeChange("plan")}>
+            <DropdownMenuItem className="rounded-lg text-sm" onClick={() => onQuickAction("skills-implementation")}>
               Plan de implementación
             </DropdownMenuItem>
-            <DropdownMenuItem className="rounded-lg text-sm" onClick={() => onModeChange("debug")}>
+            <DropdownMenuItem className="rounded-lg text-sm" onClick={() => onQuickAction("skills-debugging")}>
               Diagnóstico de errores
             </DropdownMenuItem>
-            <DropdownMenuItem className="rounded-lg text-sm" onClick={() => onModeChange("build")}>
-              Edición de archivos
+            <DropdownMenuItem className="rounded-lg text-sm" onClick={() => onQuickAction("skills-review")}>
+              Revisión técnica
             </DropdownMenuItem>
           </DropdownMenuSubContent>
         </DropdownMenuSub>
@@ -2102,11 +2118,14 @@ function ComposerPlusMenu({
             <span>MCP Servers</span>
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="w-52 rounded-xl p-1.5">
-            <DropdownMenuItem className="rounded-lg text-sm" onClick={() => onModeChange("ask")}>
+            <DropdownMenuItem className="rounded-lg text-sm" onClick={() => onQuickAction("mcp-workspace")}>
               Workspace local
             </DropdownMenuItem>
-            <DropdownMenuItem className="rounded-lg text-sm" onClick={() => onModeChange("debug")}>
+            <DropdownMenuItem className="rounded-lg text-sm" onClick={() => onQuickAction("mcp-code-tools")}>
               Herramientas de código
+            </DropdownMenuItem>
+            <DropdownMenuItem className="rounded-lg text-sm" onClick={() => onQuickAction("mcp-integrations")}>
+              Conectores e integraciones
             </DropdownMenuItem>
           </DropdownMenuSubContent>
         </DropdownMenuSub>
