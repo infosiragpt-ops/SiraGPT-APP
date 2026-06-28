@@ -29,4 +29,11 @@ renders. Typecheck will NOT catch it.
   verify at completion (on `base` BEFORE the `applied.length>0 || usage` metrics
   gate so text-only turns still advance), generate-error on onError + catch.
 - `CodeAgentProgress` returns null when `phases` is undefined, so paths that
-  skip phases (runEngine/intake-ask) degrade gracefully — no crash, just no rail.
+  skip phases degrade gracefully — no crash, just no rail.
+- `runEngine` (Motor/OpenCode) drives the rail via a local `setEnginePhase()`
+  helper: plan→context (after session ensured)→generate (before prompt). Its
+  `finish()` helper defaults to verify-done phases and takes optional
+  `{ label, phases }` so the error exit passes generate-error; apply detail is
+  keyed on whether files were written.
+- The intake-`ask` dispatch case sets context-running on the question turn and
+  verify-done on BOTH the dynamic-question success and static-question catch.

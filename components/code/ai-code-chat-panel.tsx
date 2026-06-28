@@ -1077,6 +1077,10 @@ export function AICodeChatPanel() {
           role: "assistant",
           content: isBuild ? "⚙️ Motor OpenCode construyendo…" : "⚙️ Motor OpenCode trabajando…",
           streaming: true,
+          agentLabel: isBuild ? "Construyendo con Motor OpenCode" : "Motor OpenCode trabajando",
+          agentPhases: buildCodeAgentPhases("plan", {
+            plan: { status: "running", detail: isBuild ? "Preparando build" : "Preparando turno" },
+          }),
         },
       ])
       setInput("")
@@ -1084,21 +1088,52 @@ export function AICodeChatPanel() {
       const controller = new AbortController()
       abortRef.current = controller
 
+      // Live progress rail for the Motor (OpenCode) path — mirrors the
+      // deterministic buildApp/sendPrompt rail so Motor turns show the same
+      // Plan → Contexto → Generar → Aplicar → Verificar steps.
+      const setEnginePhase = (label: string, phases: CodeAgentPhase[]) =>
+        setTurns((prev) =>
+          prev.map((t) => (t.id === assistantId ? { ...t, agentLabel: label, agentPhases: phases } : t)),
+        )
+
       const startedAt = Date.now()
       const finish = (
         content: string,
-        meta?: { written?: Array<{ path: string; content: string }>; read?: Array<{ path: string; content: string }> },
+        meta?: {
+          written?: Array<{ path: string; content: string }>
+          read?: Array<{ path: string; content: string }>
+          label?: string
+          phases?: CodeAgentPhase[]
+        },
       ) =>
         setTurns((prev) =>
           prev.map((t) => {
             if (t.id !== assistantId) return t
-            const base = { ...t, content, streaming: false }
-            if (meta?.written && meta.written.length > 0) {
-              const { actions, metrics } = buildWriteMetrics(meta.written, {
+            const wrote = !!(meta?.written && meta.written.length > 0)
+            const base = {
+              ...t,
+              content,
+              streaming: false,
+              agentLabel: meta?.label ?? "Turno completado",
+              agentPhases:
+                meta?.phases ??
+                buildCodeAgentPhases("verify", {
+                  plan: { status: "done", detail: "Sesión del motor lista" },
+                  context: { status: "done", detail: isBuild ? "Contexto de build listo" : "Workspace leído" },
+                  generate: { status: "done", detail: "Motor OpenCode" },
+                  apply: {
+                    status: "done",
+                    detail: wrote ? `${meta!.written!.length} archivo(s) aplicados` : "Sin escritura de archivos",
+                  },
+                  verify: { status: "done", detail: wrote ? "Workspace actualizado" : "Respuesta entregada" },
+                }),
+            }
+            if (wrote) {
+              const { actions, metrics } = buildWriteMetrics(meta!.written!, {
                 startedAt,
                 now: Date.now(),
                 getPrevContent: (p) => files[p]?.content ?? "",
-                read: meta.read,
+                read: meta?.read,
               })
               return { ...base, actions, metrics }
             }
@@ -1114,6 +1149,14 @@ export function AICodeChatPanel() {
           if (!esid) throw new Error("El motor no devolvió un id de sesión.")
           engineSessionRef.current[sid] = esid
         }
+
+        setEnginePhase(
+          isBuild ? "Leyendo contexto del workspace" : "Preparando turno del motor",
+          buildCodeAgentPhases("context", {
+            plan: { status: "done", detail: "Sesión del motor lista" },
+            context: { status: "running", detail: isBuild ? "Preparando build" : "Leyendo workspace" },
+          }),
+        )
 
         const sendText = ctx
           ? `${landingSystemPrompt(ctx)}\n\n${engineTransportInstructions()}`
@@ -1152,6 +1195,15 @@ export function AICodeChatPanel() {
             }
           }, controller.signal)
           .catch(() => {})
+
+        setEnginePhase(
+          "Generando con Motor OpenCode",
+          buildCodeAgentPhases("generate", {
+            plan: { status: "done", detail: "Sesión del motor lista" },
+            context: { status: "done", detail: isBuild ? "Contexto de build listo" : "Workspace leído" },
+            generate: { status: "running", detail: "El motor está trabajando" },
+          }),
+        )
 
         // Kick off the turn (fire-and-forget; content comes via events) and wait
         // for idle, with a safety timeout so we never hang the UI.
@@ -1277,7 +1329,14 @@ export function AICodeChatPanel() {
             /* fall through to error */
           }
         }
-        finish(`_${err?.message || "El motor OpenCode no respondió"}_`)
+        finish(`_${err?.message || "El motor OpenCode no respondió"}_`, {
+          label: "Error en el turno",
+          phases: buildCodeAgentPhases("generate", {
+            plan: { status: "done", detail: "Sesión del motor lista" },
+            context: { status: "done", detail: isBuild ? "Contexto de build listo" : "Workspace leído" },
+            generate: { status: "error", detail: err?.message || "El motor OpenCode no respondió" },
+          }),
+        })
         toast.error(err?.message || "El motor OpenCode no respondió")
       } finally {
         try {
@@ -1340,7 +1399,17 @@ export function AICodeChatPanel() {
           setTurns((prev) => [
             ...prev,
             { id: qid, role: "user", content: text },
-            { id: assistantId, role: "assistant", content: staticQuestion, streaming: true },
+            {
+              id: assistantId,
+              role: "assistant",
+              content: staticQuestion,
+              streaming: true,
+              agentLabel: "Formulando la siguiente pregunta",
+              agentPhases: buildCodeAgentPhases("context", {
+                plan: { status: "done", detail: "Intake en curso" },
+                context: { status: "running", detail: "Reviso la conversación" },
+              }),
+            },
           ])
           setInput("")
           patchAgentState(sid, (s) => ({
@@ -1364,14 +1433,41 @@ export function AICodeChatPanel() {
             setTurns((prev) =>
               prev.map((t) =>
                 t.id === assistantId
-                  ? { ...t, content: dynamicQuestion, streaming: false, actions: askActions }
+                  ? {
+                      ...t,
+                      content: dynamicQuestion,
+                      streaming: false,
+                      actions: askActions,
+                      agentLabel: "Pregunta lista",
+                      agentPhases: buildCodeAgentPhases("verify", {
+                        plan: { status: "done", detail: "Intake en curso" },
+                        context: { status: "done", detail: "Contexto revisado" },
+                        generate: { status: "done", detail: "Pregunta formulada" },
+                        apply: { status: "done", detail: "Sin cambios de archivos" },
+                        verify: { status: "done", detail: "Pregunta entregada" },
+                      }),
+                    }
                   : t,
               ),
             )
           } catch {
             setTurns((prev) =>
               prev.map((t) =>
-                t.id === assistantId ? { ...t, content: staticQuestion, streaming: false } : t,
+                t.id === assistantId
+                  ? {
+                      ...t,
+                      content: staticQuestion,
+                      streaming: false,
+                      agentLabel: "Pregunta lista",
+                      agentPhases: buildCodeAgentPhases("verify", {
+                        plan: { status: "done", detail: "Intake en curso" },
+                        context: { status: "done", detail: "Contexto revisado" },
+                        generate: { status: "done", detail: "Pregunta formulada" },
+                        apply: { status: "done", detail: "Sin cambios de archivos" },
+                        verify: { status: "done", detail: "Pregunta entregada" },
+                      }),
+                    }
+                  : t,
               ),
             )
           } finally {
