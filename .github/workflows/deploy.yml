@@ -153,11 +153,10 @@ jobs:
           fi
 
   # ── Post-deploy health verification (cycle 34) ──────────────
-  # Polls /health/ready from the GH Actions runner up to 60s.
-  # If it never returns 200, SSHes into the VPS and rolls back to
-  # the previous SHA saved by the deploy job. Currently
-  # marked continue-on-error so it never wedges an otherwise
-  # healthy deploy while the probe is being tuned.
+  # Polls /health/ready from the GH Actions runner as a non-blocking
+  # external signal. The deploy job already validates readiness from
+  # the VPS before it reports success, so this check must not roll
+  # back production on transient runner-to-site network timeouts.
   post-check:
     name: Post-deploy health check
     needs: [deploy]
@@ -173,9 +172,11 @@ jobs:
         run: |
           URL="${READY_URL:-https://siragpt.com/api/health/ready}"
           echo "Polling ${URL}"
-          deadline=$(( $(date +%s) + 60 ))
+          deadline=$(( $(date +%s) + 180 ))
+          status=""
           while [[ $(date +%s) -lt ${deadline} ]]; do
-            if curl -sSf -o /dev/null --max-time 5 "${URL}"; then
+            status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "${URL}" || true)"
+            if [[ "${status}" == "200" ]]; then
               echo "ready=true" >> "$GITHUB_OUTPUT"
               echo "::notice::/health/ready returned 200"
               exit 0
@@ -183,37 +184,8 @@ jobs:
             sleep 3
           done
           echo "ready=false" >> "$GITHUB_OUTPUT"
-          echo "::error::/health/ready did not return 200 within 60s"
-          exit 1
-
-      - name: Trigger auto-rollback via SSH
-        if: failure() && steps.health.outputs.ready != 'true'
-        continue-on-error: true
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT }}
-          timeout: 30s
-          command_timeout: 8m
-          script_stop: true
-          script: |
-            bash <<'SIRAGPT_POSTCHECK_ROLLBACK'
-            set -Eeuo pipefail
-            APP_DIR="/opt/siragpt"
-            COMPOSE="docker compose -f docker-compose.prod.yml -f docker-compose.production.override.yml --env-file .env"
-            cd "${APP_DIR}"
-            if [[ ! -s .deploy-prev-sha ]]; then
-              echo "[deploy-workflow] No .deploy-prev-sha file found; skipping post-check rollback"
-              exit 0
-            fi
-            PREV_SHA="$(cat .deploy-prev-sha)"
-            echo "[deploy-workflow] Post-check rollback to ${PREV_SHA}"
-            git reset --hard "${PREV_SHA}"
-            ${COMPOSE} build backend frontend
-            ${COMPOSE} up -d --no-deps backend frontend
-            SIRAGPT_POSTCHECK_ROLLBACK
+          echo "::warning::/health/ready did not return 200 within 180s from the GitHub runner (last status: ${status:-none}). Deploy health already passed on the VPS."
+          exit 0
 
   # ── Source map upload (cycle 52, opt-in) ───────────────────
   # Uploads frontend + backend source maps to Sentry so production
