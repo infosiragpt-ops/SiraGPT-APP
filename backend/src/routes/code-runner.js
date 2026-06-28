@@ -67,6 +67,12 @@ const HOP_BY_HOP_HEADERS = new Set([
   'upgrade',
 ]);
 
+function applyPreviewFrameHeaders(_req, res, next) {
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");
+  next();
+}
+
 function proxiedPath(req) {
   const marker = `/api/code-runner/${encodeURIComponent(req.params.runId)}/proxy`;
   const raw = req.originalUrl || req.url || '/';
@@ -79,7 +85,7 @@ function proxiedPath(req) {
 // Authenticated preview proxy. In production the browser cannot iframe the
 // backend container's localhost port, so the runner exposes each dev server
 // through this same-origin path instead of opening dynamic public ports.
-router.use('/:runId/proxy', authenticateToken, async (req, res) => {
+router.use('/:runId/proxy', applyPreviewFrameHeaders, authenticateToken, async (req, res) => {
   if (!['GET', 'HEAD'].includes(req.method)) {
     return res.status(405).json({ error: 'method_not_allowed' });
   }
