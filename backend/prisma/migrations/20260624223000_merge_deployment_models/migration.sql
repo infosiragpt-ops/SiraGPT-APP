@@ -1,6 +1,7 @@
 -- Merge the Replit-style Publishing model and the Hostinger/SFTP deployment
 -- history into one additive `deployments` table. This is intentionally
 -- idempotent because older environments may have received either side first.
+-- migration-safety: allow-destructive reason="name backfilled before SET NOT NULL"
 
 ALTER TABLE "deployments" ADD COLUMN IF NOT EXISTS "projectId" TEXT;
 ALTER TABLE "deployments" ADD COLUMN IF NOT EXISTS "name" TEXT;
