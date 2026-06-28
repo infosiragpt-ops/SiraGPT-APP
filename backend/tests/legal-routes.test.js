@@ -46,6 +46,16 @@ describe('legal routes — internals', () => {
     assert.ok(fs.existsSync(path.join(LEGAL_DIR, 'terms-of-service.md')));
   });
 
+  test('backend Docker context includes synced legal documents', () => {
+    const packagedLegalDir = path.resolve(__dirname, '..', 'docs', 'legal');
+    assert.ok(fs.existsSync(packagedLegalDir), `Packaged LEGAL_DIR not found: ${packagedLegalDir}`);
+    for (const file of Object.values(DOC_MAP)) {
+      const canonical = fs.readFileSync(path.join(LEGAL_DIR, file), 'utf8');
+      const packaged = fs.readFileSync(path.join(packagedLegalDir, file), 'utf8');
+      assert.equal(packaged, canonical, `${file} must stay synced for backend Docker builds`);
+    }
+  });
+
   test('DOC_MAP contains both supported documents', () => {
     assert.deepEqual(Object.keys(DOC_MAP).sort(), ['privacy-policy', 'terms-of-service']);
   });

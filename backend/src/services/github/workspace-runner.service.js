@@ -29,6 +29,20 @@ const DEFAULT_READY_TIMEOUT_MS = 180_000; // 3 min — covers a cold `npm instal
 const READY_POLL_MS = 1500;
 const LOG_MAX_LINES = 200;
 const PORT_RANGE = [4300, 4999];
+const MAX_ENV_KEYS = 120;
+const MAX_ENV_VALUE_BYTES = 32 * 1024;
+const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const RUNTIME_ENV_FILE_RE = /(^|\/)\.env(?:\.(?!example$|sample$|template$|defaults$)[A-Za-z0-9_-]+)*$/i;
+const BLOCKED_ENV_KEYS = new Set([
+  'NODE_OPTIONS',
+  'PATH',
+  'HOME',
+  'PWD',
+  'SHELL',
+  'INIT_CWD',
+  'NPM_CONFIG_USERCONFIG',
+  'NPM_CONFIG_PREFIX',
+]);
 
 // connectionId → run state
 const runs = new Map();
@@ -55,8 +69,29 @@ function workspaceNodeOptions() {
   return [existing, configured].filter(Boolean).join(' ');
 }
 
-function useProxyUrls() {
+function normaliseRuntimeEnv(input) {
+  const out = {};
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return out;
+  for (const [rawKey, rawValue] of Object.entries(input).slice(0, MAX_ENV_KEYS)) {
+    const key = String(rawKey || '').trim().toUpperCase();
+    if (!ENV_KEY_RE.test(key) || BLOCKED_ENV_KEYS.has(key)) continue;
+    const value = rawValue == null ? '' : String(rawValue);
+    if (Buffer.byteLength(value) > MAX_ENV_VALUE_BYTES) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
+function isRuntimeEnvFile(p) {
+  return RUNTIME_ENV_FILE_RE.test(String(p || '').replace(/\\/g, '/'));
+}
+
+function shouldUseProxyUrls() {
   return flagEnabled(process.env.SIRAGPT_WORKSPACE_RUN_PROXY_URLS, process.env.NODE_ENV === 'production');
+}
+
+function proxyUrlsEnabled() {
+  return shouldUseProxyUrls();
 }
 
 function publicBasePath(connectionId) {
@@ -64,7 +99,7 @@ function publicBasePath(connectionId) {
 }
 
 function publicPreviewUrl(connectionId, port) {
-  if (useProxyUrls()) return publicBasePath(connectionId);
+  if (shouldUseProxyUrls()) return publicBasePath(connectionId);
   return `http://localhost:${port}`;
 }
 
@@ -113,7 +148,7 @@ function detectRunPlan(localPath, port, connectionId = null) {
       dev = `npm exec -- next dev -p ${port} -H 127.0.0.1`;
     } else if (deps.vite || /vite/.test(scripts.dev || '')) {
       framework = 'vite';
-      const base = useProxyUrls() && connectionId ? ` --base ${JSON.stringify(publicBasePath(connectionId))}` : '';
+      const base = proxyUrlsEnabled() && connectionId ? ` --base ${JSON.stringify(publicBasePath(connectionId))}` : '';
       dev = `npm exec -- vite --port ${port} --host 127.0.0.1 --strictPort${base}`;
     } else if (scripts.dev) {
       framework = 'custom-dev';
@@ -202,8 +237,18 @@ function pollReady(port, onReady, onTimeout) {
   setTimeout(tick, READY_POLL_MS);
 }
 
+function redactRuntimeEnv(text, runtimeEnv = {}) {
+  let out = String(text);
+  for (const value of Object.values(runtimeEnv || {})) {
+    const secret = String(value || '');
+    if (secret.length < 4) continue;
+    out = out.split(secret).join('[secret]');
+  }
+  return out;
+}
+
 function pushLog(state, line) {
-  for (const part of String(line).split('\n')) {
+  for (const part of redactRuntimeEnv(String(line), state && state.runtimeEnv).split('\n')) {
     const t = part.replace(/\s+$/, '');
     if (!t) continue;
     state.log.push(t.slice(0, 500));
@@ -239,8 +284,52 @@ function killTree(state) {
   state.proc = null;
 }
 
+function listRuntimeEnvFiles(root) {
+  const found = [];
+  const visit = (dir, depth = 0) => {
+    if (depth > 4 || found.length > 40) return;
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const ent of entries) {
+      if (ent.name === 'node_modules' || ent.name === '.git' || ent.name === '.next') continue;
+      const abs = path.join(dir, ent.name);
+      const rel = path.relative(root, abs).replace(/\\/g, '/');
+      if (ent.isDirectory()) visit(abs, depth + 1);
+      else if (ent.isFile() && isRuntimeEnvFile(rel)) found.push(abs);
+    }
+  };
+  visit(root);
+  return found;
+}
+
+function hideRuntimeEnvFilesForInstall(root) {
+  const moved = [];
+  for (const abs of listRuntimeEnvFiles(root)) {
+    const hidden = `${abs}.sira-hidden-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    try {
+      fs.renameSync(abs, hidden);
+      moved.push({ abs, hidden });
+    } catch {
+      /* best effort */
+    }
+  }
+  return () => {
+    for (const item of moved.reverse()) {
+      try {
+        if (fs.existsSync(item.hidden)) fs.renameSync(item.hidden, item.abs);
+      } catch {
+        /* best effort */
+      }
+    }
+  };
+}
+
 /** Start (or restart) the dev server for a workspace. */
-async function start(connectionId, localPath) {
+async function start(connectionId, localPath, opts = {}) {
   if (isDisabled()) {
     const e = new Error('Workspace run is disabled on this server');
     e.status = 503;
@@ -272,6 +361,7 @@ async function start(connectionId, localPath) {
     proc: null,
     server: null,
     log: [],
+    runtimeEnv: normaliseRuntimeEnv(opts.env),
     previewUrl: publicPreviewUrl(connectionId, port),
   };
   runs.set(connectionId, state);
@@ -283,55 +373,100 @@ async function start(connectionId, localPath) {
     return snapshot(state);
   }
 
-  pushLog(state, `[run] ${plan.command}`);
-  const proc = spawn(plan.command, {
-    cwd: localPath,
-    shell: true,
-    // SECURITY: untrusted repo code — never inherit SiraGPT secrets via
-    // ...process.env. Forward only an allowlisted toolchain env + our overrides.
-    env: buildUntrustedChildEnv({
-      PORT: String(port),
-      HOST: '127.0.0.1',
-      BROWSER: 'none',
-      FORCE_COLOR: '0',
-      CI: '1',
-      NODE_OPTIONS: workspaceNodeOptions(),
-    }),
-    detached: !IS_WIN, // POSIX: own process group so we can kill the tree
-    windowsHide: true,
-  });
-  state.proc = proc;
-
-  proc.stdout?.on('data', (d) => pushLog(state, d.toString()));
-  proc.stderr?.on('data', (d) => pushLog(state, d.toString()));
-  proc.on('error', (err) => {
-    state.status = 'error';
-    state.error = err.message;
-    pushLog(state, `[error] ${err.message}`);
-  });
-  proc.on('exit', (code) => {
-    pushLog(state, `[exit] code ${code}`);
-    if (state.status !== 'stopped') {
-      state.status = state.ready ? 'stopped' : 'error';
-      if (!state.ready && !state.error) state.error = `Process exited with code ${code}`;
-    }
-    state.ready = false;
-  });
-
-  pollReady(
-    port,
-    () => {
-      if (state.status === 'stopped') return;
-      state.status = 'ready';
-      state.ready = true;
-      pushLog(state, `[ready] preview at ${state.previewUrl}`);
-    },
-    () => {
-      if (state.status === 'stopped' || state.ready) return;
+  const attachDevProcess = (proc) => {
+    state.proc = proc;
+    proc.stdout?.on('data', (d) => pushLog(state, d.toString()));
+    proc.stderr?.on('data', (d) => pushLog(state, d.toString()));
+    proc.on('error', (err) => {
       state.status = 'error';
-      state.error = 'Timed out waiting for the dev server to respond';
-    },
-  );
+      state.error = err.message;
+      pushLog(state, `[error] ${err.message}`);
+    });
+    proc.on('exit', (code) => {
+      pushLog(state, `[exit] code ${code}`);
+      if (state.status !== 'stopped') {
+        state.status = state.ready ? 'stopped' : 'error';
+        if (!state.ready && !state.error) state.error = `Process exited with code ${code}`;
+      }
+      state.ready = false;
+    });
+
+    pollReady(
+      port,
+      () => {
+        if (state.status === 'stopped') return;
+        state.status = 'ready';
+        state.ready = true;
+        pushLog(state, `[ready] preview at ${state.previewUrl}`);
+      },
+      () => {
+        if (state.status === 'stopped' || state.ready) return;
+        state.status = 'error';
+        state.error = 'Timed out waiting for the dev server to respond';
+      },
+    );
+  };
+
+  const spawnDev = (command) => {
+    pushLog(state, `[run] ${command}`);
+    attachDevProcess(spawn(command, {
+      cwd: localPath,
+      shell: true,
+      // SECURITY: untrusted repo code must not inherit SiraGPT process.env.
+      env: buildUntrustedChildEnv({
+        ...state.runtimeEnv,
+        PORT: String(port),
+        HOST: '127.0.0.1',
+        BROWSER: 'none',
+        FORCE_COLOR: '0',
+        CI: '1',
+        NODE_OPTIONS: workspaceNodeOptions(),
+      }),
+      detached: !IS_WIN, // POSIX: own process group so we can kill the tree
+      windowsHide: true,
+    }));
+  };
+
+  if (plan.command.startsWith('npm install && ')) {
+    const devCommand = plan.command.slice('npm install && '.length);
+    const restoreEnvFiles = hideRuntimeEnvFilesForInstall(localPath);
+    pushLog(state, '[run] npm install');
+    const installProc = spawn('npm install', {
+      cwd: localPath,
+      shell: true,
+      env: buildUntrustedChildEnv({
+        BROWSER: 'none',
+        FORCE_COLOR: '0',
+        CI: '1',
+        NODE_OPTIONS: workspaceNodeOptions(),
+      }),
+      detached: !IS_WIN,
+      windowsHide: true,
+    });
+    state.proc = installProc;
+    installProc.stdout?.on('data', (d) => pushLog(state, d.toString()));
+    installProc.stderr?.on('data', (d) => pushLog(state, d.toString()));
+    installProc.on('error', (err) => {
+      restoreEnvFiles();
+      state.status = 'error';
+      state.error = err.message;
+      pushLog(state, `[error] ${err.message}`);
+    });
+    installProc.on('exit', (code) => {
+      restoreEnvFiles();
+      state.proc = null;
+      if (state.status === 'stopped') return;
+      if (code !== 0) {
+        state.status = 'error';
+        state.error = `npm install exited with code ${code}`;
+        pushLog(state, `[exit] code ${code}`);
+        return;
+      }
+      spawnDev(devCommand);
+    });
+  } else {
+    spawnDev(plan.command);
+  }
 
   return snapshot(state);
 }
@@ -396,10 +531,13 @@ module.exports = {
   getProxyTarget,
   publicBasePath,
   publicPreviewUrl,
-  useProxyUrls,
+  useProxyUrls: shouldUseProxyUrls,
+  proxyUrlsEnabled,
   stopAll,
   detectRunPlan,
   findFreePort,
   isDisabled,
+  normaliseRuntimeEnv,
+  isRuntimeEnvFile,
   _runs: runs,
 };

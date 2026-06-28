@@ -2,6 +2,7 @@
   "extends": ["next/core-web-vitals"],
   "ignorePatterns": [
     "**/upstream/**",
+    "vendor/**",
     ".next/**",
     "node_modules/**"
   ],

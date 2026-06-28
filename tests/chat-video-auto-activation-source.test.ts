@@ -104,21 +104,21 @@ describe("chat video auto-activation source contract", () => {
     )
   })
 
-  it("renders video controls inline next to the plus button instead of the bottom tool row", () => {
+  it("renders media controls inline next to the plus button instead of the bottom tool row", () => {
     assert.match(
       source,
-      /const shouldInlineActiveTools = isVideoGenerationActive/,
-      "video mode should opt into inline composer controls"
+      /const isMediaToolActive = isImageGenerationActive \|\| isVoiceGenerationActive \|\| isMusicGenerationActive \|\| isVideoGenerationActive;[\s\S]{0,80}const shouldInlineActiveTools = isMediaToolActive;/,
+      "active media modes should opt into inline composer controls"
     )
     assert.match(
       source,
       /composer-inline-active-tools[\s\S]{0,120}<ActiveToolsDisplay \{\.\.\.activeToolsProps\} \/>/,
-      "video controls should render next to the plus/action button"
+      "media controls should render next to the plus/action button"
     )
     assert.match(
       source,
       /hasActiveTools && !shouldInlineActiveTools/,
-      "the lower active-tools row should be suppressed while video controls are inline"
+      "the lower active-tools row should be suppressed while media controls are inline"
     )
   })
 
@@ -145,5 +145,28 @@ describe("chat video auto-activation source contract", () => {
 
     const disabledBlocks = source.match(/disabled=\{\(canSend && busy\) \|\| needsPrompt\}/g) || []
     assert.equal(disabledBlocks.length, 2, "empty prompt-driven video sends should be disabled in both composer variants")
+  })
+
+  it("routes active Voice mode to speech generation instead of normal chat", () => {
+    assert.match(
+      source,
+      /const VOICE_COMPOSER_PLACEHOLDER = "Escribe el texto que quieres convertir en voz"/,
+      "Voice mode should ask for narration text, not an unsupported voice-design prompt"
+    )
+    assert.doesNotMatch(
+      source,
+      /Describe la voz que quieres crear/,
+      "Voice mode should not promise voice-design when the working backend path is text-to-speech"
+    )
+    assert.match(
+      source,
+      /const requiresPromptBeforePrimarySend =[\s\S]{0,160}isVoiceGenerationActive/,
+      "Voice mode should keep the primary button as a disabled send affordance until text is provided"
+    )
+    assert.match(
+      source,
+      /if \(isVoiceGenerationActive\) \{[\s\S]{0,420}const voiceGoal = buildVoiceGenerationGoal[\s\S]{0,420}await handleAgentTask\(voiceGoal, filesToSend, \{[\s\S]{0,160}displayGoal: msg/,
+      "Voice mode sends should bypass normal chat classification and call the speech artifact path"
+    )
   })
 })

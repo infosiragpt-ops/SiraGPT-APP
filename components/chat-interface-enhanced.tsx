@@ -467,14 +467,14 @@ type MusicStyle = "Auto" | "Cinematic" | "Pop" | "Electronic" | "Ambient" | "Orc
 type MusicMood = "Balanced" | "Energetic" | "Emotional" | "Dark" | "Happy" | "Epic" | "Relaxed"
 type MusicEffect = "None" | "Studio Master" | "Spatial" | "Warm Tape" | "Radio Ready" | "Lo-Fi"
 
-const IMAGE_ASPECT_RATIO_OPTIONS: Array<{ value: ImageAspectRatio; label: string; ratio: string; className: string }> = [
-  { value: "1:1", label: "Square", ratio: "1:1", className: "h-7 w-7" },
-  { value: "2:3", label: "Portrait", ratio: "2:3", className: "h-8 w-[22px]" },
-  { value: "3:2", label: "Landscape", ratio: "3:2", className: "h-[22px] w-8" },
-  { value: "3:4", label: "Portrait", ratio: "3:4", className: "h-8 w-6" },
+const IMAGE_ASPECT_RATIO_OPTIONS: Array<{ value: ImageAspectRatio; label: string; ratio: string; className: string; visibleByDefault?: boolean }> = [
+  { value: "1:1", label: "Square", ratio: "1:1", className: "h-7 w-7", visibleByDefault: true },
+  { value: "2:3", label: "Portrait", ratio: "2:3", className: "h-8 w-[22px]", visibleByDefault: true },
+  { value: "3:2", label: "Landscape", ratio: "3:2", className: "h-[22px] w-8", visibleByDefault: true },
+  { value: "3:4", label: "Portrait", ratio: "3:4", className: "h-8 w-6", visibleByDefault: true },
   { value: "4:3", label: "Classic", ratio: "4:3", className: "h-6 w-8" },
   { value: "9:16", label: "Story", ratio: "9:16", className: "h-8 w-[18px]" },
-  { value: "16:9", label: "Wide", ratio: "16:9", className: "h-[18px] w-9" },
+  { value: "16:9", label: "Wide", ratio: "16:9", className: "h-[18px] w-9", visibleByDefault: true },
 ]
 
 const IMAGE_QUALITY_OPTIONS: ImageQuality[] = ["512px", "1K", "2K", "4K"]
@@ -498,6 +498,31 @@ const MUSIC_MODEL_OPTIONS: MusicModel[] = ["ElevenLabs", "Lyria 3 Pro", "Mimo Ma
 const MUSIC_STYLE_OPTIONS: MusicStyle[] = ["Auto", "Cinematic", "Pop", "Electronic", "Ambient", "Orchestral", "Latin", "Hip-Hop", "Jazz"]
 const MUSIC_MOOD_OPTIONS: MusicMood[] = ["Balanced", "Energetic", "Emotional", "Dark", "Happy", "Epic", "Relaxed"]
 const MUSIC_EFFECT_OPTIONS: MusicEffect[] = ["None", "Studio Master", "Spatial", "Warm Tape", "Radio Ready", "Lo-Fi"]
+const VOICE_COMPOSER_PLACEHOLDER = "Escribe el texto que quieres convertir en voz"
+
+const buildVoiceGenerationGoal = ({
+  text,
+  model,
+  language,
+  accent,
+  stability,
+  effect,
+}: {
+  text: string
+  model: VoiceModel
+  language: VoiceLanguage
+  accent: VoiceAccent
+  stability: number
+  effect: VoiceEffect
+}) => {
+  const normalizedText = text.trim()
+  return [
+    "Genera un archivo MP3 de texto a voz. Debes usar la herramienta generate_speech; no finalices solo con texto.",
+    `Texto exacto a narrar:\n${normalizedText}`,
+    `Preferencias visibles del usuario: proveedor/modelo=${model}; idioma=${language}; acento=${accent}; estabilidad=${stability}%; efecto=${effect}.`,
+    "Si una preferencia exacta no esta disponible en el proveedor, genera el mejor audio posible con la voz multilingue disponible y explica la limitacion brevemente junto al archivo.",
+  ].join("\n\n")
+}
 const DEFAULT_IMAGE_MODEL = ""
 const DEFAULT_IMAGE_PROVIDER = "OpenAI"
 const DEFAULT_VIDEO_MODEL = ""
@@ -2285,6 +2310,7 @@ const ActiveToolsDisplay = ({
   handleWordConnectorToggle: () => void;
   handleExcelConnectorToggle: () => void;
 }) => {
+  const [showAllImageRatios, setShowAllImageRatios] = React.useState(false);
   const [showAllVideoRatios, setShowAllVideoRatios] = React.useState(false);
   const [showAllVideoDurations, setShowAllVideoDurations] = React.useState(false);
   const activeComputerUseMode = computerUseAppMode || "computer";
@@ -2316,6 +2342,11 @@ const ActiveToolsDisplay = ({
   const hasConnectors = activeConnectors.length > 0;
   const hasOtherTools = isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive || isWebSearchActive;
   const hasThesis = chatType === 'thesis';
+  const visibleImageAspectRatioOptions = React.useMemo(
+    () => IMAGE_ASPECT_RATIO_OPTIONS.filter(option => showAllImageRatios || option.visibleByDefault || option.value === selectedImageAspectRatio),
+    [selectedImageAspectRatio, showAllImageRatios]
+  );
+  const hiddenImageAspectRatioCount = IMAGE_ASPECT_RATIO_OPTIONS.filter(option => !option.visibleByDefault).length;
 
   const handleCloseAllConnectors = () => {
     setIsGmailActive(false);
@@ -2681,22 +2712,25 @@ const ActiveToolsDisplay = ({
       )}
       {isImageGenerationActive && (
         <>
-          <div className="group/image-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-pink-300/70 bg-pink-100/88 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-pink-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_28px_-22px_rgba(219,39,119,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01] hover:border-pink-400/80 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_16px_36px_-22px_rgba(219,39,119,0.9)] dark:border-pink-500/40 dark:bg-pink-900/25 dark:text-pink-200">
-            <span className="pointer-events-none absolute -inset-8 -z-10 rounded-full bg-[conic-gradient(from_90deg,transparent_0deg,rgba(244,114,182,0.0)_70deg,rgba(244,114,182,0.55)_130deg,rgba(236,72,153,0.22)_190deg,transparent_280deg)] opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
-            <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/image-liquid:translate-x-[155%] dark:via-white/25" />
-            <span className="pointer-events-none absolute left-7 top-1 h-1.5 w-1.5 rounded-full bg-pink-400/75 shadow-[0_0_12px_rgba(236,72,153,0.75)] motion-safe:animate-pulse" />
-            <span className="pointer-events-none absolute bottom-1 right-9 h-1 w-1 rounded-full bg-white/90 shadow-[0_0_10px_rgba(255,255,255,0.9)] motion-safe:animate-bounce" />
-            <Palette className="relative z-10 h-4 w-4 drop-shadow-[0_0_8px_rgba(219,39,119,0.35)]" />
+          <div
+            className="image-liquid-chip group/image-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full border px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold backdrop-blur-xl transition-all duration-300 hover:scale-[1.01]"
+            style={{ "--image-liquid-red": "#FF0000" } as React.CSSProperties}
+          >
+            <span className="image-liquid-chip__wave" />
+            <span className="image-liquid-chip__gloss" />
+            <span className="image-liquid-chip__pulse" />
+            <span className="image-liquid-chip__spark" />
+            <Palette className="image-liquid-chip__icon relative z-10 h-4 w-4" />
             <span className="relative z-10 text-[12px] sm:text-[14px]">Imágenes</span>
-            {isGeneratingImage && <span className="relative z-10 h-1.5 w-1.5 rounded-full bg-pink-500 animate-pulse" />}
+            {isGeneratingImage && <span className="image-liquid-chip__status relative z-10 h-1.5 w-1.5 rounded-full animate-pulse" />}
             <Button
               variant="ghost"
               size="sm"
               className={cn(
-                "relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0",
+                "image-liquid-chip__close relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0",
                 isGeneratingImage
                   ? "opacity-45 cursor-not-allowed"
-                  : "hover:bg-white/50 dark:hover:bg-pink-800/30"
+                  : "hover:bg-[rgba(255,0,0,0.10)] dark:hover:bg-[rgba(255,0,0,0.16)]"
               )}
               onClick={handleImageGenerationClose}
               disabled={isGeneratingImage}
@@ -2732,16 +2766,16 @@ const ActiveToolsDisplay = ({
               align="start"
               sideOffset={9}
               collisionPadding={12}
-              className="w-[min(calc(100vw-1.25rem),24rem)] overflow-hidden rounded-[22px] border border-zinc-200/65 bg-white/86 p-0 text-zinc-950 shadow-[0_22px_70px_-36px_rgba(15,23,42,0.55),inset_0_1px_0_rgba(255,255,255,0.85)] backdrop-blur-2xl dark:border-white/14 dark:bg-zinc-950/72 dark:text-white dark:shadow-[0_24px_80px_-36px_rgba(0,0,0,0.95),inset_0_1px_0_rgba(255,255,255,0.16)]"
+              className="image-settings-menu w-[min(calc(100vw-1.25rem),26rem)]"
             >
-              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_24%_18%,rgba(255,255,255,0.92),transparent_30%),radial-gradient(circle_at_72%_45%,rgba(15,23,42,0.08),transparent_34%),linear-gradient(135deg,rgba(255,255,255,0.72),rgba(255,255,255,0.26)_44%,rgba(255,255,255,0.58))] dark:bg-[radial-gradient(circle_at_24%_18%,rgba(255,255,255,0.15),transparent_30%),radial-gradient(circle_at_72%_45%,rgba(255,255,255,0.08),transparent_34%),linear-gradient(135deg,rgba(255,255,255,0.10),rgba(255,255,255,0.02)_44%,rgba(255,255,255,0.06))]" />
-              <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-white/70 dark:bg-white/20" />
-              <div className="relative z-10">
-                <section className="px-4 pb-4 pt-4 sm:px-5 sm:pb-5 sm:pt-5">
-                  <h3 className="text-[17px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Aspect Ratio</h3>
-                  <div className="mt-4 grid grid-cols-5 gap-1.5 sm:gap-2" role="radiogroup" aria-label="Aspect ratio">
-                  {IMAGE_ASPECT_RATIO_OPTIONS.map(option => {
-                    if (option.value === "4:3" || option.value === "9:16") return null;
+              <div>
+                <section className="image-settings-section">
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="image-settings-label">Aspect Ratio</h3>
+                    <span className="image-settings-meta">{showAllImageRatios ? "7 formatos" : "Principales"}</span>
+                  </div>
+                  <div className="mt-3 grid grid-cols-4 gap-1.5 sm:grid-cols-5 sm:gap-2" role="radiogroup" aria-label="Aspect ratio">
+                  {visibleImageAspectRatioOptions.map(option => {
                     const selected = option.value === selectedImageAspectRatio;
                     return (
                       <button
@@ -2750,43 +2784,41 @@ const ActiveToolsDisplay = ({
                         role="radio"
                         aria-checked={selected}
                         className={cn(
-                          "group/ratio-option relative flex h-[58px] min-w-0 flex-col items-center justify-center gap-2 overflow-hidden rounded-xl text-center transition-all duration-200",
-                          selected
-                            ? "bg-zinc-950/[0.075] text-zinc-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.80),0_12px_26px_-22px_rgba(15,23,42,0.55)] dark:bg-white/12 dark:text-white dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.16),0_16px_34px_-24px_rgba(255,255,255,0.35)]"
-                            : "text-zinc-600 hover:bg-zinc-950/[0.045] hover:text-zinc-950 dark:text-white/68 dark:hover:bg-white/[0.07] dark:hover:text-white"
+                          "image-ratio-option group/image-ratio-option",
+                          selected && "is-selected"
                         )}
                         onClick={() => setSelectedImageAspectRatio(option.value)}
                         title={`${option.label} ${option.ratio}`}
                       >
-                        <span className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_28%_5%,rgba(255,255,255,0.65),transparent_48%)] opacity-0 transition-opacity duration-200 group-hover/ratio-option:opacity-100 dark:bg-[radial-gradient(circle_at_28%_5%,rgba(255,255,255,0.20),transparent_48%)]" />
-                        <span className="relative z-10 text-[13px] font-medium leading-none tabular-nums">{option.ratio}</span>
-                        <span className="relative z-10 flex h-6 items-center justify-center">
+                        <span className="relative z-10 text-[12px] font-semibold leading-none tabular-nums">{option.ratio}</span>
+                        <span className="relative z-10 flex h-7 items-center justify-center">
                           <span
                             className={cn(
-                              "rounded-[4px] border transition-all duration-200",
+                              "image-ratio-swatch",
                               option.className,
-                              selected
-                                ? "border-zinc-950 bg-white/45 shadow-[0_0_0_3px_rgba(24,24,27,0.06)] dark:border-white dark:bg-white/8 dark:shadow-[0_0_0_3px_rgba(255,255,255,0.10)]"
-                                : "border-zinc-500/65 bg-white/20 group-hover/ratio-option:border-zinc-800 dark:border-white/62 dark:bg-transparent dark:group-hover/ratio-option:border-white"
+                              selected && "is-selected"
                             )}
                           />
                         </span>
+                        <span className="relative z-10 text-[10px] font-medium leading-none">{option.label}</span>
                       </button>
                     )
                   })}
                   </div>
                   <button
                     type="button"
-                    className="mt-4 inline-flex items-center gap-1.5 rounded-full text-[13px] font-medium leading-none text-zinc-600 transition-colors hover:text-zinc-950 dark:text-white/66 dark:hover:text-white"
+                    onClick={() => setShowAllImageRatios(value => !value)}
+                    className="image-settings-more"
                     aria-label="Ver todos los aspect ratios"
+                    aria-expanded={showAllImageRatios}
                   >
-                    View All <ChevronDown className="h-3.5 w-3.5" />
+                    {showAllImageRatios ? "View Less" : `View All (+${hiddenImageAspectRatioCount})`} <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", showAllImageRatios && "rotate-180")} />
                   </button>
                 </section>
 
-                <section className="border-t border-zinc-950/8 px-4 py-4 dark:border-white/10 sm:px-5 sm:py-5">
-                  <h3 className="text-[17px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Quality</h3>
-                  <div className="mt-4 flex flex-wrap items-center gap-2" role="radiogroup" aria-label="Image quality">
+                <section className="image-settings-section">
+                  <h3 className="image-settings-label">Quality</h3>
+                  <div className="mt-3 flex flex-wrap items-center gap-2" role="radiogroup" aria-label="Image quality">
                     {IMAGE_QUALITY_OPTIONS.map(option => {
                       const selected = option === selectedImageQuality;
                       return (
@@ -2797,8 +2829,8 @@ const ActiveToolsDisplay = ({
                           aria-checked={selected}
                           onClick={() => setSelectedImageQuality(option)}
                           className={cn(
-                            "relative h-9 rounded-xl px-3 text-[14px] font-medium leading-none text-zinc-600 transition-all duration-200 hover:bg-zinc-950/[0.045] hover:text-zinc-950 dark:text-white/68 dark:hover:bg-white/[0.07] dark:hover:text-white",
-                            selected && "bg-zinc-950/[0.075] text-zinc-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_12px_24px_-22px_rgba(15,23,42,0.45)] dark:bg-white/13 dark:text-white dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.16),0_12px_30px_-24px_rgba(255,255,255,0.55)]"
+                            "image-setting-pill",
+                            selected && "is-selected"
                           )}
                         >
                           {option}
@@ -2808,9 +2840,9 @@ const ActiveToolsDisplay = ({
                   </div>
                 </section>
 
-                <section className="border-t border-zinc-950/8 px-4 py-4 dark:border-white/10 sm:px-5 sm:py-5">
-                  <h3 className="text-[17px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Number of Images</h3>
-                  <div className="mt-4 flex flex-wrap items-center gap-2" role="radiogroup" aria-label="Number of images">
+                <section className="image-settings-section">
+                  <h3 className="image-settings-label">Number of Images</h3>
+                  <div className="mt-3 flex flex-wrap items-center gap-2" role="radiogroup" aria-label="Number of images">
                     {IMAGE_COUNT_OPTIONS.map(option => {
                       const selected = option === selectedImageCount;
                       return (
@@ -2821,8 +2853,8 @@ const ActiveToolsDisplay = ({
                           aria-checked={selected}
                           onClick={() => setSelectedImageCount(option)}
                           className={cn(
-                            "h-9 min-w-9 rounded-xl px-3 text-[14px] font-medium leading-none text-zinc-600 transition-all duration-200 hover:bg-zinc-950/[0.045] hover:text-zinc-950 dark:text-white/68 dark:hover:bg-white/[0.07] dark:hover:text-white",
-                            selected && "bg-zinc-950/[0.075] text-zinc-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_12px_24px_-22px_rgba(15,23,42,0.45)] dark:bg-white/13 dark:text-white dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.16),0_12px_30px_-24px_rgba(255,255,255,0.55)]"
+                            "image-setting-pill min-w-9",
+                            selected && "is-selected"
                           )}
                         >
                           {option}
@@ -8034,6 +8066,26 @@ REWRITTEN TEXT:`;
       }
     }
 
+    if (isVoiceGenerationActive) {
+      const voiceGoal = buildVoiceGenerationGoal({
+        text: msg,
+        model: selectedVoiceModel,
+        language: selectedVoiceLanguage,
+        accent: selectedVoiceAccent,
+        stability: selectedVoiceStability,
+        effect: selectedVoiceEffect,
+      });
+      try {
+        await handleAgentTask(voiceGoal, filesToSend, {
+          userMessageAlreadyAdded: false,
+          displayGoal: msg,
+        });
+      } finally {
+        inFlightSendKeysRef.current.delete(sendKey);
+      }
+      return;
+    }
+
     const deterministicAgenticIntent = classifyIntentFastPath(msg);
     // Image-only turns ("resolver", "resuelve esta derivada", "¿qué dice esta
     // imagen?") need VISION, which lives only in the plain /api/ai/generate
@@ -9395,19 +9447,19 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     !isExcelConnectorActive &&
     !hasRenderableMessages
 
-  // Any active tool/connector/thesis mode? Used to conditionally render
-  // the "tool pills" row below the input — if nothing is active, we
-  // hide the entire bar so the composer stays a clean pill.
+  // Any active tool/connector/thesis mode? Used to conditionally render active
+  // controls only when needed so the composer stays a clean pill by default.
   const hasActiveTools = (
     isWebSearchActive || isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive || isComputerUseActive
     || isGmailActive || isGoogleCalendarActive || isGoogleDriveActive
     || isSpotifyActive || isWordConnectorActive || isExcelConnectorActive
     || chatType === 'thesis'
   );
-  const shouldInlineActiveTools = isVideoGenerationActive;
   const isMediaToolActive = isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive;
+  const shouldInlineActiveTools = isMediaToolActive;
   const requiresPromptBeforePrimarySend =
     isImageGenerationActive ||
+    isVoiceGenerationActive ||
     isVideoGenerationActive ||
     isMusicGenerationActive ||
     chatType === 'image' ||
@@ -9980,13 +10032,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   const handleAgentTask = async (
     goalText: string,
     filesToSend: any[] = [],
-    options: { userMessageAlreadyAdded?: boolean; assistantMessageId?: string } = {},
+    options: { userMessageAlreadyAdded?: boolean; assistantMessageId?: string; displayGoal?: string } = {},
   ) => {
     if (!goalText) {
       toast.error('Please enter a task');
       return;
     }
-    const { userMessageAlreadyAdded = false, assistantMessageId } = options;
+    const { userMessageAlreadyAdded = false, assistantMessageId, displayGoal = goalText } = options;
     const systemContract = PROFESSIONAL_CAPABILITY_CONTRACTS.agent_task || '';
     let activeChat = currentChat;
     const isNewChat = !activeChat;
@@ -9994,7 +10046,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     if (!activeChat) {
       try {
         const response = await apiClient.createChat({
-          title: `{} ${goalText.substring(0, 30)}`,
+          title: `{} ${displayGoal.substring(0, 30)}`,
           model: selectedModel,
         });
         activeChat = response.chat;
@@ -10018,7 +10070,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           id: `msg-user-${Date.now()}`,
           chatId: activeChat.id,
           role: 'USER' as const,
-          content: goalText,
+          content: displayGoal,
           timestamp: new Date().toISOString(),
           files: filesToSend,
         };
@@ -10101,7 +10153,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         const fileMetadata = buildAgentFileMetadata(filesToSend);
         for await (const evt of agentTaskService.runIterator({
           goal: goalText,
-          displayGoal: goalText,
+          displayGoal,
           systemContract,
           files: fileIds,
           fileMetadata,
@@ -10461,10 +10513,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       onFileProcessingStatusChange={handleFileProcessingStatusChange}
                     />
                     <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
-                    {/* Tool pills used to live ABOVE the input; moved to
-                        a secondary row BELOW the input (see after the
-                        TooltipProvider) so the top surface is dedicated
-                        to drag-and-drop of files / audio / images. */}
+                    {/* Media controls stay inline with the attach button; other
+                        active tools fall back to the secondary row below. */}
                     <TooltipProvider>
                       <div
                         className="composer-input-row flex items-end gap-2 pl-2 pr-2 py-1.5"
@@ -10557,7 +10607,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 : isVideoGenerationActive
                                   ? tComposer("placeholderVideo")
                                   : isVoiceGenerationActive
-                                    ? "Describe la voz que quieres crear"
+                                    ? VOICE_COMPOSER_PLACEHOLDER
                                     : isMusicGenerationActive
                                       ? "Describe la música que quieres crear"
                                         : isWebSearchActive
@@ -10616,7 +10666,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             const needsPrompt = requiresPromptBeforePrimarySend && !hasText
                             const canSend = requiresPromptBeforePrimarySend ? hasText : (hasText || hasAttachment)
                             const busy = isCurrentChatLocalJobBusy || isUploading
-                            // In prompt-driven media modes (Video/Image/Music), an empty
+                            // In prompt-driven media modes (Video/Image/Voice/Music), an empty
                             // composer should not open Voice Studio. Keep the primary CTA
                             // as the send/create affordance and disable it until the user
                             // writes the generation prompt.
@@ -11131,7 +11181,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                     : isVideoGenerationActive
                                       ? tComposer("placeholderVideo")
                                       : isVoiceGenerationActive
-                                        ? "Describe la voz que quieres crear"
+                                        ? VOICE_COMPOSER_PLACEHOLDER
                                         : isMusicGenerationActive
                                           ? "Describe la música que quieres crear"
                                             : isWebSearchActive

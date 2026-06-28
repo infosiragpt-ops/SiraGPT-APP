@@ -62,13 +62,13 @@ export function WorkspaceTopBar({
   const visible = PANELS.filter((p) => openPanels.has(p.id))
 
   return (
-    <header className="flex h-8 shrink-0 items-center gap-1 border-b border-border/40 bg-background/55 px-1.5 backdrop-blur-xl supports-[backdrop-filter]:bg-background/40">
+    <header className="flex h-9 shrink-0 items-center gap-1.5 border-b border-border/60 bg-background/85 px-2 shadow-[0_1px_0_rgba(15,23,42,0.03)] backdrop-blur-xl supports-[backdrop-filter]:bg-background/72">
       {/* Left — editable project identity (sits above the chat column). */}
       <ProjectChip onOpenCode={onOpenCode} />
       <span className="h-4 w-px shrink-0 bg-border/50" />
 
       {/* Center — panel tabs + tools + search (sits above the preview). */}
-      <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto px-0.5">
+      <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto px-0.5">
         {visible.map((panel) => {
           const Icon = panel.icon
           const active = activePanel === panel.id
@@ -76,9 +76,9 @@ export function WorkspaceTopBar({
             <div
               key={panel.id}
               className={cn(
-                "group flex h-7 shrink-0 items-center gap-1 rounded-md border border-transparent px-2 text-[11px] text-muted-foreground transition-colors",
-                active && "border-border/60 bg-background text-foreground shadow-sm",
-                !active && "hover:bg-muted/60 hover:text-foreground",
+                "group flex h-7 shrink-0 items-center gap-1 rounded-md border border-transparent px-2.5 text-[11px] text-muted-foreground transition-colors",
+                active && "border-[#FF0000]/25 bg-[#FF0000]/[0.06] text-foreground",
+                !active && "hover:bg-muted/55 hover:text-foreground",
               )}
             >
               <button
@@ -86,7 +86,7 @@ export function WorkspaceTopBar({
                 className="flex min-w-0 items-center gap-1"
                 onClick={() => onTogglePanel(panel.id)}
               >
-                <Icon className={cn("h-3.5 w-3.5 shrink-0", active && panel.id === "preview" && "text-emerald-600")} />
+                <Icon className={cn("h-3.5 w-3.5 shrink-0", active && "text-[#FF0000]")} />
                 <span className="truncate">{panel.label}</span>
               </button>
               <button
@@ -135,9 +135,9 @@ export function WorkspaceTopBar({
           aria-pressed={launcherOpen}
           onClick={onOpenLauncher}
           className={cn(
-            "h-7 rounded-md px-2 text-[11px] font-normal transition-colors",
+            "h-7 rounded-md px-2.5 text-[11px] font-medium transition-colors",
             launcherOpen
-              ? "bg-[hsl(var(--accent-violet)/0.16)] text-[hsl(var(--accent-violet))] shadow-[inset_0_0_0_1px_hsl(var(--accent-violet)/0.35)]"
+              ? "bg-[#FF0000]/[0.07] text-[#C80000] shadow-[inset_0_0_0_1px_rgba(255,0,0,0.22)] dark:text-[#FF6B6B]"
               : "text-muted-foreground hover:text-foreground",
           )}
         >
@@ -152,9 +152,9 @@ export function WorkspaceTopBar({
           aria-pressed={codeOpen}
           onClick={onOpenCode}
           className={cn(
-            "h-7 rounded-md px-2 text-[11px] font-normal transition-colors",
+            "h-7 rounded-md px-2.5 text-[11px] font-medium transition-colors",
             codeOpen
-              ? "bg-[hsl(var(--accent-violet)/0.16)] text-[hsl(var(--accent-violet))] shadow-[inset_0_0_0_1px_hsl(var(--accent-violet)/0.35)]"
+              ? "bg-[#FF0000]/[0.07] text-[#C80000] shadow-[inset_0_0_0_1px_rgba(255,0,0,0.22)] dark:text-[#FF6B6B]"
               : "text-muted-foreground hover:text-foreground",
           )}
         >

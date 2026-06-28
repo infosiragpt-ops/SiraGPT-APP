@@ -7,10 +7,30 @@ const assert = require('node:assert/strict');
 const alerting = require('../src/services/alerting');
 const realNotify = alerting.notifyFrontendError;
 
+const auditPath = require.resolve('../src/utils/audit-log');
+const realAuditModule = require.cache[auditPath];
+const auditCalls = [];
+require.cache[auditPath] = {
+  id: auditPath,
+  filename: auditPath,
+  loaded: true,
+  exports: {
+    writeAuditLog: async (_db, payload) => {
+      auditCalls.push(payload);
+    },
+  },
+};
+
 const telemetryRoute = require('../src/routes/telemetry');
 
 test.afterEach(() => {
   alerting.notifyFrontendError = realNotify;
+  auditCalls.length = 0;
+});
+
+test.after(() => {
+  if (realAuditModule) require.cache[auditPath] = realAuditModule;
+  else delete require.cache[auditPath];
 });
 
 function findRouteHandler(router, path, method = 'post') {
@@ -84,6 +104,53 @@ test('does not alert on expected auth API failures', async () => {
   await new Promise((r) => setImmediate(r));
   assert.equal(state.statusCode, 202);
   assert.equal(called, false);
+  assert.equal(auditCalls.length, 0);
+});
+
+test('does not alert or audit expected plan-quota API failures', async () => {
+  let called = false;
+  alerting.notifyFrontendError = async () => { called = true; };
+  const handler = findRouteHandler(telemetryRoute, '/error');
+  const { res, state } = makeRes();
+  await handler({
+    body: {
+      source: 'api',
+      page: '/chat',
+      action: 'api_request_failed',
+      method: 'POST',
+      endpoint: '/ai/generate-image',
+      status: 429,
+      message: 'Monthly API limit exceeded',
+      extra: { usage: { current: 100000, limit: 100000 } },
+    },
+    headers: {},
+  }, res);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(state.statusCode, 202);
+  assert.equal(called, false);
+  assert.equal(auditCalls.length, 0);
+});
+
+test('still audits unexpected API failures', async () => {
+  alerting.notifyFrontendError = async () => {};
+  const handler = findRouteHandler(telemetryRoute, '/error');
+  const { res, state } = makeRes();
+  await handler({
+    body: {
+      source: 'api',
+      page: '/chat',
+      action: 'api_request_failed',
+      method: 'POST',
+      endpoint: '/ai/generate-image',
+      status: 503,
+      message: 'upstream unavailable',
+    },
+    headers: {},
+  }, res);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(state.statusCode, 202);
+  assert.equal(auditCalls.length, 1);
+  assert.equal(auditCalls[0].action, 'api_error_reported');
 });
 
 test('falls back to body.url when page is missing', async () => {

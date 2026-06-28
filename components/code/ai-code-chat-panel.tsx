@@ -25,15 +25,18 @@ import {
   AlertTriangle,
   ArrowUp,
   BookOpen,
+  BrainCircuit,
   Bug,
   Check,
   ChevronDown,
+  Clock3,
   CircleHelp,
   ExternalLink,
   Image as ImageIcon,
   ListChecks,
   Plus,
   Rocket,
+  Search,
   Server,
   Sparkles,
   StopCircle,
@@ -41,6 +44,7 @@ import {
 import { CodeChatErrorBoundary } from "@/components/code/code-chat-error-boundary"
 import { toast } from "sonner"
 
+import { DictationButton } from "@/components/codex/dictation-button"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -54,6 +58,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import { apiClient } from "@/lib/api"
@@ -1598,6 +1603,7 @@ export function AICodeChatPanel() {
           }
       }
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       activeCodeChatSession,
       activePath,
@@ -1637,30 +1643,30 @@ export function AICodeChatPanel() {
   const activeFileLabel = activePath ? activePath.split("/").pop() || activePath : null
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
-      <div className="shrink-0 border-b border-border/50">
-        <div className="flex h-8 items-center justify-between gap-2 px-3">
-          <span className="text-[11px] font-medium text-muted-foreground">Chat</span>
+    <div className="flex h-full min-h-0 flex-col bg-zinc-50/70 text-foreground dark:bg-zinc-950">
+      <div className="shrink-0 border-b border-border/60 bg-background/85 backdrop-blur">
+        <div className="flex h-9 items-center justify-between gap-2 px-3">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Agente</span>
           {activeFileLabel ? (
             <span
-              className="min-w-0 truncate font-mono text-[10px] text-muted-foreground/80"
+              className="min-w-0 truncate rounded-md border border-border/50 bg-muted/30 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/85"
               title={activePath ?? undefined}
             >
               {activeFileLabel}
             </span>
           ) : null}
         </div>
-        <div className="flex items-center gap-1 overflow-x-auto px-2 pb-1.5">
+        <div className="flex items-center gap-1 overflow-x-auto px-2 pb-2">
           {codeChatSessions.map((session) => (
             <button
               key={session.id}
               type="button"
               onClick={() => setActiveCodeChatSession(session.id)}
               className={cn(
-                "h-6 shrink-0 rounded-md px-2 text-[11px] transition-colors",
+                "h-6 shrink-0 rounded-md border px-2 text-[11px] transition-colors",
                 session.id === activeCodeChatSessionId
-                  ? "bg-foreground text-background"
-                  : "bg-muted/50 text-muted-foreground hover:text-foreground",
+                  ? "border-[#FF0000]/30 bg-[#FF0000]/[0.07] text-foreground"
+                  : "border-transparent bg-muted/45 text-muted-foreground hover:border-border/60 hover:text-foreground",
               )}
             >
               {session.title}
@@ -1680,7 +1686,7 @@ export function AICodeChatPanel() {
         </div>
       </div>
 
-      <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto p-3">
+      <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto p-4">
         {turns.length === 0 ? (
           <EmptyChat active={agentsActive} />
         ) : (
@@ -1697,8 +1703,8 @@ export function AICodeChatPanel() {
         )}
       </div>
 
-      <form onSubmit={onSubmit} className="shrink-0 px-3 pb-3 pt-2">
-        <div className="group rounded-2xl border border-border/60 bg-muted/20 px-2.5 py-2 transition-colors focus-within:border-border focus-within:bg-background focus-within:shadow-sm">
+      <form onSubmit={onSubmit} className="shrink-0 border-t border-border/50 bg-background/80 px-3 pb-3 pt-2 backdrop-blur">
+        <div className="group rounded-lg border border-border/70 bg-background px-2.5 py-2 shadow-sm transition-[border-color,box-shadow] focus-within:border-[#FF0000]/35 focus-within:shadow-[0_0_0_3px_rgba(255,0,0,0.08)]">
           <Textarea
             aria-label="Mensaje para el chat de código"
             ref={inputRef}
@@ -1710,23 +1716,19 @@ export function AICodeChatPanel() {
             disabled={busy}
             className="max-h-[140px] min-h-[28px] resize-none border-0 bg-transparent px-1 py-0.5 text-[13px] leading-[1.45] shadow-none outline-none ring-0 placeholder:text-muted-foreground/55 focus-visible:ring-0"
           />
-          <div className="mt-1 flex items-center gap-1">
-            <PrimaryModeToggle
-              mode={composerMode === "ask" ? "ask" : "agent"}
-              onChange={(m) => {
-                setComposerMode(m === "ask" ? "ask" : "app")
-                inputRef.current?.focus()
-              }}
-            />
+          <div className="mt-1 flex items-center gap-1.5">
             <ComposerPlusMenu
               mode={composerMode}
               includeContext={includeContext}
               activeFileLabel={activeFileLabel}
+              engineAvailable={engineAvailable}
+              engineMode={engineMode}
               onModeChange={(mode) => {
                 setComposerMode(mode)
                 inputRef.current?.focus()
               }}
               onIncludeContextChange={setIncludeContext}
+              onEngineModeChange={setEngineMode}
             />
             <ModelPickerInline
               models={pickerModels}
@@ -1734,37 +1736,23 @@ export function AICodeChatPanel() {
               fast={modelIsFast}
               onSelect={(m) => chooseCodeModel({ name: m.name, provider: m.provider })}
             />
-            {engineAvailable ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className={cn(
-                  "h-7 shrink-0 gap-1 rounded-md px-2 text-[11px] font-medium",
-                  engineMode
-                    ? "bg-[hsl(var(--accent-violet)/0.16)] text-[hsl(var(--accent-violet))] hover:bg-[hsl(var(--accent-violet)/0.24)]"
-                    : "text-muted-foreground hover:bg-muted/80 hover:text-foreground",
-                )}
-                onClick={() => setEngineMode((v) => !v)}
-                aria-pressed={engineMode}
-                aria-label="Usar el motor OpenCode"
-                title={
-                  engineMode
-                    ? "Motor OpenCode activo — el chat usa el agente real"
-                    : "Activar el motor OpenCode (agente real) para este chat"
-                }
-              >
-                <Server className="h-3.5 w-3.5" />
-                <span>Motor{engineMode ? " ✓" : ""}</span>
-              </Button>
-            ) : null}
             <span className="min-w-0 flex-1" />
+            <DictationButton
+              variant="light"
+              locale={typeof navigator !== "undefined" ? navigator.language : "es-ES"}
+              onTranscript={(text) => {
+                const chunk = text.trim()
+                if (!chunk) return
+                setInput((prev) => normalizeChatInput(prev ? `${prev} ${chunk}` : chunk).value)
+                inputRef.current?.focus()
+              }}
+            />
             {busy ? (
               <Button
                 type="button"
                 size="icon"
                 variant="ghost"
-                className="h-7 w-7 shrink-0 rounded-lg text-foreground hover:bg-muted"
+                className="h-7 w-7 shrink-0 rounded-md text-foreground hover:bg-muted"
                 onClick={cancelStream}
                 aria-label="Detener"
               >
@@ -1775,9 +1763,9 @@ export function AICodeChatPanel() {
                 type="submit"
                 size="icon"
                 className={cn(
-                  "h-7 w-7 shrink-0 rounded-lg transition-colors",
+                  "h-7 w-7 shrink-0 rounded-md transition-colors",
                   input.trim()
-                    ? "bg-foreground text-background hover:bg-foreground/90"
+                    ? "bg-[#FF0000] text-white hover:bg-[#E00000]"
                     : "bg-transparent text-muted-foreground/40",
                 )}
                 disabled={!input.trim()}
@@ -1827,7 +1815,7 @@ function ChatBubble({
   if (isUser) {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl bg-blue-900 px-3.5 py-2 text-sm leading-relaxed text-zinc-50 shadow-sm">
+        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-lg border border-[#FF0000]/20 bg-[#FF0000]/[0.08] px-3.5 py-2 text-sm leading-relaxed text-foreground shadow-sm">
           {turn.content}
         </div>
       </div>
@@ -1837,7 +1825,7 @@ function ChatBubble({
   // ASSISTANT messages: left-aligned, plain background, clean typography (no
   // colored bubble) — direct text on the interface, with the code-block cards.
   const blocker = detectBlocker(turn.content)
-  // Pull the model's gerund-led planning line into the "🧠 …" badge (like the
+  // Pull the model's gerund-led planning line into the status badge (like the
   // agent dashboard) and narrate the rest. Falls back to a generic badge while
   // streaming before the planning line lands.
   const { label: planLabel, body } = extractPlanLabel(turn.content)
@@ -1847,8 +1835,8 @@ function ChatBubble({
       <div className="mb-1 flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-wide text-muted-foreground">
         Asistente
         {liveAgentLabel ? (
-          <span className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-violet-500/10 px-2 py-0.5 normal-case tracking-normal text-violet-300">
-            <span aria-hidden="true">🧠</span>
+          <span className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-[#FF0000]/15 bg-[#FF0000]/[0.07] px-2 py-0.5 normal-case tracking-normal text-[#C80000] dark:text-[#FF6B6B]">
+            <BrainCircuit className="h-3 w-3 shrink-0" aria-hidden="true" />
             <span className="truncate font-medium">{liveAgentLabel}</span>
             {!turn.streaming && typeof turn.planMs === "number" ? (
               <span className="opacity-60">({formatWorked(turn.planMs)})</span>
@@ -1994,7 +1982,10 @@ function ChatWorkedSummary({ metrics }: { metrics: CodeChatMetrics }) {
   const showStrike = typeof orig === "number" && typeof applied === "number" && applied < orig
   return (
     <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-border/60 bg-muted/20 px-2.5 py-1.5 text-[11px] text-muted-foreground">
-      <span className="font-medium text-foreground">⏱️ Trabajó {formatWorked(metrics.timeWorkedMs)}</span>
+      <span className="inline-flex items-center gap-1 font-medium text-foreground">
+        <Clock3 className="h-3.5 w-3.5 text-[#FF0000]" aria-hidden="true" />
+        Trabajó {formatWorked(metrics.timeWorkedMs)}
+      </span>
       {hasFiles ? (
         <>
           <span>· {metrics.actionsCount} {metrics.actionsCount === 1 ? "acción" : "acciones"}</span>
@@ -2026,8 +2017,8 @@ function ChatWorkedSummary({ metrics }: { metrics: CodeChatMetrics }) {
 function ChatBlockerPanel({ title, rawError, url }: { title: string; rawError: string; url?: string }) {
   const isInternal = url?.startsWith("/")
   return (
-    <div className="my-1 rounded-xl border border-red-500/30 bg-red-500/10 p-3">
-      <div className="flex items-center gap-1.5 text-sm font-semibold text-red-300">
+    <div className="my-1 rounded-lg border border-[#FF0000]/30 bg-[#FF0000]/[0.08] p-3">
+      <div className="flex items-center gap-1.5 text-sm font-semibold text-[#C80000] dark:text-[#FF6B6B]">
         <AlertTriangle className="h-4 w-4" /> Acción requerida de su parte
       </div>
       <div className="mt-1 text-sm text-foreground">{title}</div>
@@ -2039,7 +2030,7 @@ function ChatBlockerPanel({ title, rawError, url }: { title: string; rawError: s
           href={url}
           target={isInternal ? undefined : "_blank"}
           rel={isInternal ? undefined : "noopener noreferrer"}
-          className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-500"
+          className="mt-2.5 inline-flex items-center gap-1.5 rounded-md bg-[#FF0000] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#E00000]"
         >
           Añadir créditos <ExternalLink className="h-3.5 w-3.5" />
         </a>
@@ -2048,72 +2039,24 @@ function ChatBlockerPanel({ title, rawError, url }: { title: string; rawError: s
   )
 }
 
-// Primary, Replit-style mode switch: two clear pills (Agent / Ask) shown up
-// front in the composer so the user always knows whether the AI will BUILD
-// (Agent → autonomous app/edit pipeline) or just ANSWER (Ask → conversational,
-// never touches files). Advanced sub-modes (build/plan/debug/image) stay in the
-// "+" menu. "agent" maps to the existing "app" composer mode.
-function PrimaryModeToggle({
-  mode,
-  onChange,
-}: {
-  mode: "agent" | "ask"
-  onChange: (mode: "agent" | "ask") => void
-}) {
-  const base =
-    "inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors"
-  return (
-    <div
-      role="group"
-      aria-label="Modo del agente: Agent o Ask"
-      className="inline-flex shrink-0 items-center gap-0.5 rounded-lg bg-muted/60 p-0.5"
-    >
-      <button
-        type="button"
-        aria-pressed={mode === "agent"}
-        onClick={() => onChange("agent")}
-        title="Agent — describe algo y el agente lo construye o lo cambia"
-        className={cn(
-          base,
-          mode === "agent"
-            ? "bg-background text-foreground shadow-sm"
-            : "text-muted-foreground hover:text-foreground",
-        )}
-      >
-        <Sparkles className="h-3.5 w-3.5" />
-        <span>Agent</span>
-      </button>
-      <button
-        type="button"
-        aria-pressed={mode === "ask"}
-        onClick={() => onChange("ask")}
-        title="Ask — pregunta sobre tu app o tu código; responde sin tocar archivos"
-        className={cn(
-          base,
-          mode === "ask"
-            ? "bg-background text-foreground shadow-sm"
-            : "text-muted-foreground hover:text-foreground",
-        )}
-      >
-        <CircleHelp className="h-3.5 w-3.5" />
-        <span>Ask</span>
-      </button>
-    </div>
-  )
-}
-
 function ComposerPlusMenu({
   mode,
   includeContext,
   activeFileLabel,
+  engineAvailable,
+  engineMode,
   onModeChange,
   onIncludeContextChange,
+  onEngineModeChange,
 }: {
   mode: ComposerMode
   includeContext: boolean
   activeFileLabel: string | null
+  engineAvailable: boolean
+  engineMode: boolean
   onModeChange: (mode: ComposerMode) => void
   onIncludeContextChange: (value: boolean) => void
+  onEngineModeChange: React.Dispatch<React.SetStateAction<boolean>>
 }) {
   const itemClass = "h-9 gap-2.5 rounded-md px-2.5 text-sm"
   const iconClass = "h-[18px] w-[18px] text-muted-foreground"
@@ -2125,7 +2068,7 @@ function ComposerPlusMenu({
           type="button"
           variant="ghost"
           size="icon"
-          className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+          className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:bg-[#FF0000]/[0.07] hover:text-[#C80000] dark:hover:text-[#FF6B6B]"
           aria-label="Modo, contexto y herramientas"
         >
           <Plus className="h-4 w-4" />
@@ -2135,42 +2078,42 @@ function ComposerPlusMenu({
         align="start"
         side="top"
         sideOffset={10}
-        className="w-[292px] rounded-xl border-border/70 p-1.5 shadow-xl"
+        className="w-[292px] rounded-lg border-border/70 p-1.5 shadow-xl"
       >
         <DropdownMenuLabel className="px-2.5 py-1.5 text-[11px] font-normal text-muted-foreground">
           {COMPOSER_MODE_LABEL[mode]}
           {activeFileLabel && includeContext ? ` · ${activeFileLabel}` : ""}
         </DropdownMenuLabel>
         <DropdownMenuItem
-          className={cn(itemClass, mode === "app" && "bg-muted font-medium")}
+          className={cn(itemClass, mode === "app" && "bg-[#FF0000]/[0.07] font-medium text-foreground")}
           onClick={() => onModeChange("app")}
         >
           <Rocket className={iconClass} />
           <span>App · construir desde cero</span>
         </DropdownMenuItem>
         <DropdownMenuItem
-          className={cn(itemClass, mode === "build" && "bg-muted font-medium")}
+          className={cn(itemClass, mode === "build" && "bg-[#FF0000]/[0.07] font-medium text-foreground")}
           onClick={() => onModeChange("build")}
         >
           <Sparkles className={iconClass} />
           <span>Build</span>
         </DropdownMenuItem>
         <DropdownMenuItem
-          className={cn(itemClass, mode === "plan" && "bg-muted font-medium")}
+          className={cn(itemClass, mode === "plan" && "bg-[#FF0000]/[0.07] font-medium text-foreground")}
           onClick={() => onModeChange("plan")}
         >
           <ListChecks className={iconClass} />
           <span>Plan</span>
         </DropdownMenuItem>
         <DropdownMenuItem
-          className={cn(itemClass, mode === "debug" && "bg-muted font-medium")}
+          className={cn(itemClass, mode === "debug" && "bg-[#FF0000]/[0.07] font-medium text-foreground")}
           onClick={() => onModeChange("debug")}
         >
           <Bug className={iconClass} />
           <span>Debug</span>
         </DropdownMenuItem>
         <DropdownMenuItem
-          className={cn(itemClass, mode === "ask" && "bg-muted font-medium")}
+          className={cn(itemClass, mode === "ask" && "bg-[#FF0000]/[0.07] font-medium text-foreground")}
           onClick={() => onModeChange("ask")}
         >
           <CircleHelp className={iconClass} />
@@ -2178,18 +2121,27 @@ function ComposerPlusMenu({
         </DropdownMenuItem>
         <DropdownMenuSeparator className="my-2" />
         <DropdownMenuItem
-          className={cn(itemClass, mode === "image" && "bg-muted font-medium")}
+          className={cn(itemClass, mode === "image" && "bg-[#FF0000]/[0.07] font-medium text-foreground")}
           onClick={() => onModeChange("image")}
         >
           <ImageIcon className={iconClass} />
           <span>Image</span>
         </DropdownMenuItem>
+        {engineAvailable ? (
+          <DropdownMenuCheckboxItem
+            checked={engineMode}
+            onCheckedChange={(checked) => onEngineModeChange(checked === true)}
+            className="h-9 rounded-md text-sm"
+          >
+            Motor OpenCode
+          </DropdownMenuCheckboxItem>
+        ) : null}
         <DropdownMenuSub>
           <DropdownMenuSubTrigger className={itemClass}>
             <BookOpen className={iconClass} />
             <span>Skills</span>
           </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="w-52 rounded-xl p-1.5">
+          <DropdownMenuSubContent className="w-52 rounded-lg p-1.5">
             <DropdownMenuItem className="rounded-lg text-sm" onClick={() => onModeChange("plan")}>
               Plan de implementación
             </DropdownMenuItem>
@@ -2206,7 +2158,7 @@ function ComposerPlusMenu({
             <Server className={iconClass} />
             <span>MCP Servers</span>
           </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="w-52 rounded-xl p-1.5">
+          <DropdownMenuSubContent className="w-52 rounded-lg p-1.5">
             <DropdownMenuItem className="rounded-lg text-sm" onClick={() => onModeChange("ask")}>
               Workspace local
             </DropdownMenuItem>
@@ -2241,6 +2193,9 @@ function ModelPickerInline({
   fast?: boolean
   onSelect: (model: ModelOption) => void
 }) {
+  const [open, setOpen] = React.useState(false)
+  const [query, setQuery] = React.useState("")
+
   const grouped = React.useMemo(() => {
     const map = new Map<string, ModelOption[]>()
     for (const m of models) {
@@ -2251,71 +2206,114 @@ function ModelPickerInline({
     return Array.from(map.entries())
   }, [models])
 
+  const filtered = React.useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return grouped
+    return grouped
+      .map(([provider, list]) => [
+        provider,
+        list.filter((m) => {
+          const label = (m.displayName || m.name).toLowerCase()
+          return label.includes(q) || provider.toLowerCase().includes(q) || m.name.toLowerCase().includes(q)
+        }),
+      ] as const)
+      .filter(([, list]) => list.length > 0)
+  }, [grouped, query])
+
   const active = models.find((m) => m.name === selectedModel)
   const label = active?.displayName || active?.name || selectedModel || "Modelo"
 
+  React.useEffect(() => {
+    if (!open) setQuery("")
+  }, [open])
+
   return (
-    <DropdownMenu>
+    <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
-        <Button
+        <button
           type="button"
-          variant="ghost"
-          size="sm"
-          className="h-7 min-w-0 gap-1 rounded-md px-1.5 text-[11px] font-normal text-muted-foreground hover:bg-muted/80 hover:text-foreground data-[state=open]:bg-muted/80"
+          className={cn(
+            "inline-flex h-7 max-w-[min(168px,38vw)] shrink-0 items-center gap-1 rounded-md border px-2.5 text-[11px] font-medium transition-colors",
+            "border-border/45 bg-background/60 text-foreground/75 hover:border-border hover:bg-muted/40 hover:text-foreground",
+            "data-[state=open]:border-[#FF0000]/30 data-[state=open]:bg-[#FF0000]/[0.06] data-[state=open]:text-foreground",
+          )}
           aria-label="Seleccionar modelo"
           title={
             fast
-              ? "Modelo rápido (auto-seleccionado) — ideal para el preview en vivo"
-              : "Modelo lento (reasoning) — puede cortar el preview en vivo"
+              ? `${label} — recomendado para preview en vivo`
+              : `${label} — modelo de razonamiento; puede ser más lento en preview`
           }
         >
-          {fast ? (
-            <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-violet-500/15 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-violet-600 dark:text-violet-300">
-              ⚡ rápido
-            </span>
-          ) : (
-            <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-amber-500/15 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">
-              ⏳ lento
-            </span>
-          )}
-          <span className="max-w-[110px] truncate">{label}</span>
-          <ChevronDown className="h-3 w-3 opacity-50" />
-        </Button>
+          {!fast ? (
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500/80" aria-hidden />
+          ) : null}
+          <span className="truncate">{label}</span>
+          <ChevronDown className="h-3 w-3 shrink-0 opacity-45" />
+        </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
-        align="start"
+        align="end"
         side="top"
-        sideOffset={10}
+        sideOffset={8}
         collisionPadding={16}
-        className="z-[1000] max-h-[min(360px,calc(100vh-140px))] w-[284px] overflow-y-auto rounded-2xl border border-border/70 bg-background p-1.5 text-foreground shadow-[0_24px_70px_rgba(15,23,42,0.22)]"
+        className="z-[1000] w-[min(300px,calc(100vw-24px))] overflow-hidden rounded-lg border border-border/60 bg-popover p-0 text-popover-foreground shadow-[0_16px_48px_rgba(15,23,42,0.14)]"
       >
-        {models.length === 0 ? (
-          <div className="px-3 py-3 text-xs text-muted-foreground">
-            Cargando modelos…
+        <div className="border-b border-border/50 px-2.5 py-2">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/60" />
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Buscar modelo…"
+              className="h-8 border-0 bg-muted/40 pl-8 text-xs shadow-none focus-visible:ring-1"
+              onKeyDown={(e) => e.stopPropagation()}
+            />
           </div>
-        ) : (
-          grouped.map(([provider, list], i) => (
-            <React.Fragment key={provider}>
-              {i > 0 ? <DropdownMenuSeparator /> : null}
-              <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground/80">
-                {provider}
-              </DropdownMenuLabel>
-              {list.map((m) => (
-                <DropdownMenuItem
-                  key={m.name}
-                  onClick={() => onSelect(m)}
-                  className={cn(
-                    "cursor-pointer rounded-xl px-2.5 py-2 text-sm",
-                    m.name === selectedModel && "bg-muted font-semibold"
-                  )}
-                >
-                  <span className="truncate">{m.displayName || m.name}</span>
-                  {m.name === selectedModel ? <Check className="ml-auto h-3.5 w-3.5 text-sky-500" /> : null}
-                </DropdownMenuItem>
-              ))}
-            </React.Fragment>
-          ))
-        )}
+        </div>
+        <div className="max-h-[min(320px,calc(100vh-180px))] overflow-y-auto p-1">
+          {models.length === 0 ? (
+            <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+              Cargando modelos…
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+              Sin coincidencias
+            </div>
+          ) : (
+            filtered.map(([provider, list], i) => (
+              <React.Fragment key={provider}>
+                {i > 0 ? <DropdownMenuSeparator className="my-1" /> : null}
+                <DropdownMenuLabel className="px-2 py-1 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
+                  {provider}
+                </DropdownMenuLabel>
+                {list.map((m) => {
+                  const selected = m.name === selectedModel
+                  const itemLabel = m.displayName || m.name
+                  const itemFast = !isSlowModel(m.name)
+                  return (
+                    <DropdownMenuItem
+                      key={m.name}
+                      onClick={() => {
+                        onSelect(m)
+                        setOpen(false)
+                      }}
+                      className={cn(
+                        "cursor-pointer rounded-lg px-2 py-1.5 text-[13px] font-normal",
+                        selected && "bg-[#FF0000]/[0.07] text-foreground",
+                      )}
+                    >
+                      <span className="min-w-0 flex-1 truncate">{itemLabel}</span>
+                      {itemFast ? (
+                        <span className="ml-2 shrink-0 text-[10px] text-muted-foreground/70">Rápido</span>
+                      ) : null}
+                      {selected ? <Check className="ml-2 h-3.5 w-3.5 shrink-0 text-[#FF0000]" /> : null}
+                    </DropdownMenuItem>
+                  )
+                })}
+              </React.Fragment>
+            ))
+          )}
+        </div>
       </DropdownMenuContent>
     </DropdownMenu>
   )

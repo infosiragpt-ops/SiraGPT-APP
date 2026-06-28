@@ -258,8 +258,15 @@ test('syncConnectionModels rejects a connection with no URL', async () => {
 
 test('_fetchGenericEnvProviderModels only queries providers whose env key is set', async () => {
   const svc = new ModelSyncService();
-  const savedAnthropic = process.env.ANTHROPIC_API_KEY;
-  const savedGroq = process.env.GROQ_API_KEY;
+  const envKeys = [
+    'ANTHROPIC_API_KEY',
+    'GROQ_API_KEY',
+    'MISTRAL_API_KEY',
+    'XAI_API_KEY',
+    'TOGETHER_API_KEY',
+    'FIREWORKS_API_KEY',
+  ];
+  const savedEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
   try {
     process.env.ANTHROPIC_API_KEY = 'sk-ant-env';
     delete process.env.GROQ_API_KEY;
@@ -283,8 +290,9 @@ test('_fetchGenericEnvProviderModels only queries providers whose env key is set
     assert.equal(models[0].provider, 'Anthropic');
     assert.equal(models[0].isActive, false);
   } finally {
-    if (savedAnthropic === undefined) delete process.env.ANTHROPIC_API_KEY;
-    else process.env.ANTHROPIC_API_KEY = savedAnthropic;
-    if (savedGroq !== undefined) process.env.GROQ_API_KEY = savedGroq;
+    for (const key of envKeys) {
+      if (savedEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedEnv[key];
+    }
   }
 });

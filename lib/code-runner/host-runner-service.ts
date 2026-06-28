@@ -46,13 +46,14 @@ export const hostRunnerService = {
   async start(
     files: Record<string, string>,
     runId: string,
+    env?: Record<string, string>,
   ): Promise<{ runId?: string; phase?: string; devUrl?: string; error?: string; disabled?: boolean }> {
     try {
       const res = await fetch(`${baseUrl}/start`, {
         method: "POST",
         credentials: "include",
         headers: authHeaders(),
-        body: JSON.stringify({ runId, files }),
+        body: JSON.stringify({ runId, files, env }),
       })
       const body = (await res.json().catch(() => ({}))) as {
         runId?: string

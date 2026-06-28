@@ -1713,6 +1713,7 @@ router.post(
 
     body('chatId').optional().isString(),
     body('files').optional().isArray(),
+    body('idempotencyKey').optional().isString().isLength({ min: 1, max: 200 }),
     // Composer effort picker (Bajo/Medio/Extra/Max → low/medium/high/max).
     // Optional; when present it overrides the auto-decided reasoning depth.
     body('reasoningEffort').optional().isString().isLength({ max: 16 }),
@@ -6256,6 +6257,8 @@ router.post(
         const assistantMeta = {
           ...(codexMeta || {}),
           ...(normalizedRegenerationAttempt ? { regeneration: { attempt: normalizedRegenerationAttempt } } : {}),
+          ...(idempotencyKey ? { idempotencyKey } : {}),
+          ...(streamId ? { streamId } : {}),
           ...(webSearchSources ? { webSources: webSearchSources, webSearchMeta } : {}),
           ...(memoryItems ? { memory: memoryItems, memoryMeta } : {}),
           // Thinking duration for the collapsed trace header ("Pensó durante

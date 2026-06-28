@@ -53,8 +53,8 @@ router.post('/start', authenticateToken, async (req, res) => {
     if (!hostRunner.startAllowed(req.user)) {
       return res.status(403).json({ error: 'forbidden', message: 'Tu cuenta no puede ejecutar apps aquí.' });
     }
-    const { runId, files } = req.body || {};
-    const out = await hostRunner.startRun({ runId, userId: req.user.id, files });
+    const { runId, files, env } = req.body || {};
+    const out = await hostRunner.startRun({ runId, userId: req.user.id, files, env });
     // No cookie: the reverse-proxy gate uses a run-scoped token embedded in
     // out.devUrl's path (see host-runner). Every asset/module/dynamic-import the
     // sandboxed (opaque-origin) iframe requests carries it automatically, so it

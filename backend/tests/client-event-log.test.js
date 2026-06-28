@@ -7,6 +7,7 @@ const {
   sanitizeClientEvent,
   buildClientEventAuditEntry,
   isExpectedAuthClientEvent,
+  isExpectedQuotaClientEvent,
   redactText,
 } = require('../src/services/client-event-log');
 
@@ -91,5 +92,34 @@ describe('client-event-log', () => {
     assert.equal(isExpectedAuthClientEvent(invalidLogin), true);
     assert.equal(isExpectedAuthClientEvent(staleVideoToken), true);
     assert.equal(isExpectedAuthClientEvent(realForbidden), false);
+  });
+
+  test('classifies expected plan-quota API failures as non-alerting noise', () => {
+    const imageQuota = sanitizeClientEvent({
+      source: 'api',
+      status: 429,
+      method: 'POST',
+      endpoint: '/api/ai/generate-image',
+      message: 'Monthly API limit exceeded',
+      extra: { usage: { current: 100, limit: 100 } },
+    });
+    const videoQuota = sanitizeClientEvent({
+      source: 'api',
+      status: 429,
+      method: 'POST',
+      endpoint: '/ai/generate-video',
+      message: 'Monthly video generation limit exceeded',
+    });
+    const realServerError = sanitizeClientEvent({
+      source: 'api',
+      status: 503,
+      method: 'POST',
+      endpoint: '/ai/generate-image',
+      message: 'upstream unavailable',
+    });
+
+    assert.equal(isExpectedQuotaClientEvent(imageQuota), true);
+    assert.equal(isExpectedQuotaClientEvent(videoQuota), true);
+    assert.equal(isExpectedQuotaClientEvent(realServerError), false);
   });
 });

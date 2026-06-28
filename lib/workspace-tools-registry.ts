@@ -144,7 +144,7 @@ export const WORKSPACE_TOOLS: WorkspaceToolDef[] = [
     description: "Publica una versión compartible de la app",
     icon: Globe,
     keywords: "publish deploy share",
-    action: { type: "publishing" },
+    action: { type: "code-tool", toolId: "publishing" },
   },
   {
     id: "suggested-integrations",
@@ -261,7 +261,7 @@ export const WORKSPACE_TOOLS: WorkspaceToolDef[] = [
     description: "Comandos de prueba y resultados de CI",
     icon: CheckCircle2,
     keywords: "validation test ci",
-    action: { type: "panel", panel: "validation" },
+    action: { type: "code-tool", toolId: "validation" },
   },
   {
     id: "adv-preview",
@@ -288,7 +288,7 @@ export const WORKSPACE_TOOLS: WorkspaceToolDef[] = [
     description: "Buscar en el contenido de los archivos del workspace",
     icon: Search,
     keywords: "search find code grep",
-    action: { type: "palette", query: "open " },
+    action: { type: "code-tool", toolId: "code-search" },
   },
   {
     id: "adv-console",
@@ -315,7 +315,7 @@ export const WORKSPACE_TOOLS: WorkspaceToolDef[] = [
     description: "Control de versiones del proyecto",
     icon: GitBranch,
     keywords: "git version control",
-    action: { type: "panel", panel: "git" },
+    action: { type: "code-tool", toolId: "git" },
   },
   {
     id: "adv-vnc",

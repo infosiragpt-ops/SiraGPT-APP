@@ -39,6 +39,9 @@ const DEFAULT_VOICE_ID = process.env.ELEVENLABS_DEFAULT_VOICE_ID || '21m00Tcm4Tl
 const DEFAULT_TTS_MODEL = process.env.ELEVENLABS_TTS_MODEL || 'eleven_multilingual_v2';
 const DEFAULT_MUSIC_MODEL = process.env.ELEVENLABS_MUSIC_MODEL || 'music_v1';
 const MUSIC_OUTPUT_FORMAT = process.env.ELEVENLABS_MUSIC_FORMAT || 'mp3_44100_128';
+const OPENAI_TTS_API_BASE = process.env.OPENAI_TTS_API_BASE || 'https://api.openai.com/v1';
+const DEFAULT_OPENAI_TTS_MODEL = process.env.OPENAI_TTS_MODEL || 'tts-1';
+const DEFAULT_OPENAI_TTS_VOICE = process.env.OPENAI_TTS_VOICE || 'alloy';
 const TTS_MAX_CHARS = 5000;
 
 function clampInt(value, fallback, min, max) {
@@ -152,6 +155,61 @@ function emitFileArtifact(ctx, artifact, format, mime) {
   });
 }
 
+async function generateOpenAiSpeechBuffer(text) {
+  const key = process.env.OPENAI_API_KEY;
+  const doFetch = getFetch();
+  if (!key || !doFetch) return null;
+  const response = await doFetch(`${OPENAI_TTS_API_BASE.replace(/\/+$/, '')}/audio/speech`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${key}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: DEFAULT_OPENAI_TTS_MODEL,
+      voice: DEFAULT_OPENAI_TTS_VOICE,
+      input: text.slice(0, TTS_MAX_CHARS),
+      response_format: 'mp3',
+    }),
+  });
+  if (!response || !response.ok) {
+    const status = response && response.status ? `HTTP ${response.status}` : 'sin respuesta';
+    const detail = response && typeof response.text === 'function' ? await response.text().catch(() => '') : '';
+    throw new Error(`OpenAI TTS falló (${status})${detail ? `: ${detail.slice(0, 240)}` : ''}`);
+  }
+  return streamToBuffer(response);
+}
+
+async function saveSpeechResult({ buffer, ctx, clean, voiceId, provider }) {
+  if (!buffer || !buffer.length) {
+    const msg = 'El servicio de voz no devolvió audio. Reintenta con un texto más corto.';
+    emitEvent(ctx, 'tool_output', { tool: 'generate_speech', ok: false, preview: msg });
+    return { ok: false, error: msg };
+  }
+
+  const filename = `voz_${crypto.randomBytes(4).toString('hex')}.mp3`;
+  const artifact = saveAudioArtifact({ filename, buffer, mime: 'audio/mpeg', ctx, category: 'audio' });
+  emitFileArtifact(ctx, artifact, 'mp3', 'audio/mpeg');
+  emitEvent(ctx, 'tool_output', {
+    tool: 'generate_speech',
+    ok: true,
+    preview: `Audio listo: ${artifact.filename} (${Math.round(artifact.sizeBytes / 1024)} KB)`,
+  });
+
+  return {
+    ok: true,
+    id: artifact.id,
+    filename: artifact.filename,
+    sizeBytes: artifact.sizeBytes,
+    downloadUrl: artifact.downloadUrl,
+    mime: 'audio/mpeg',
+    kind: 'speech',
+    characters: clean.length,
+    voiceId,
+    provider,
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Tool: generate_speech (text-to-speech)
 // ─────────────────────────────────────────────────────────────────────────
@@ -175,46 +233,56 @@ const generateSpeech = {
     if (!clean) return { ok: false, error: 'El texto a narrar está vacío.' };
 
     const client = getElevenClient();
-    if (!client) {
-      const msg = 'La generación de voz no está disponible (falta configurar ELEVENLABS_API_KEY).';
+    if (!client && !process.env.OPENAI_API_KEY) {
+      const msg = 'La generación de voz no está disponible (falta configurar ELEVENLABS_API_KEY u OPENAI_API_KEY).';
       emitEvent(ctx, 'tool_output', { tool: 'generate_speech', ok: false, preview: msg });
       return { ok: false, error: msg };
     }
 
     try {
       emitEvent(ctx, 'tool_output', { tool: 'generate_speech', preview: 'Generando audio…', partial: true });
-      const stream = await client.textToSpeech.convert(voiceId || DEFAULT_VOICE_ID, {
-        text: clean.slice(0, TTS_MAX_CHARS),
-        model_id: modelId || DEFAULT_TTS_MODEL,
-        voice_settings: { stability: 0.5, similarity_boost: 0.75, style: 0.0, use_speaker_boost: true },
+      if (client) {
+        const stream = await client.textToSpeech.convert(voiceId || DEFAULT_VOICE_ID, {
+          text: clean.slice(0, TTS_MAX_CHARS),
+          model_id: modelId || DEFAULT_TTS_MODEL,
+          voice_settings: { stability: 0.5, similarity_boost: 0.75, style: 0.0, use_speaker_boost: true },
+        });
+        const buffer = await streamToBuffer(stream);
+        return saveSpeechResult({
+          buffer,
+          ctx,
+          clean,
+          voiceId: voiceId || DEFAULT_VOICE_ID,
+          provider: 'elevenlabs',
+        });
+      }
+    } catch (err) {
+      const msg = (err && err.message) || String(err);
+      if (!process.env.OPENAI_API_KEY) {
+        emitEvent(ctx, 'tool_output', { tool: 'generate_speech', ok: false, preview: `Error: ${msg}` });
+        return { ok: false, error: msg };
+      }
+      emitEvent(ctx, 'tool_output', {
+        tool: 'generate_speech',
+        preview: 'ElevenLabs no respondió correctamente; usando OpenAI TTS como respaldo…',
+        partial: true,
       });
-      const buffer = await streamToBuffer(stream);
-      if (!buffer || !buffer.length) {
-        const msg = 'El servicio de voz no devolvió audio. Reintenta con un texto más corto.';
+    }
+
+    try {
+      const buffer = await generateOpenAiSpeechBuffer(clean);
+      if (!buffer) {
+        const msg = 'La generación de voz no está disponible (falta configurar OPENAI_API_KEY).';
         emitEvent(ctx, 'tool_output', { tool: 'generate_speech', ok: false, preview: msg });
         return { ok: false, error: msg };
       }
-
-      const filename = `voz_${crypto.randomBytes(4).toString('hex')}.mp3`;
-      const artifact = saveAudioArtifact({ filename, buffer, mime: 'audio/mpeg', ctx, category: 'audio' });
-      emitFileArtifact(ctx, artifact, 'mp3', 'audio/mpeg');
-      emitEvent(ctx, 'tool_output', {
-        tool: 'generate_speech',
-        ok: true,
-        preview: `Audio listo: ${artifact.filename} (${Math.round(artifact.sizeBytes / 1024)} KB)`,
+      return saveSpeechResult({
+        buffer,
+        ctx,
+        clean,
+        voiceId: DEFAULT_OPENAI_TTS_VOICE,
+        provider: 'openai',
       });
-
-      return {
-        ok: true,
-        id: artifact.id,
-        filename: artifact.filename,
-        sizeBytes: artifact.sizeBytes,
-        downloadUrl: artifact.downloadUrl,
-        mime: 'audio/mpeg',
-        kind: 'speech',
-        characters: clean.length,
-        voiceId: voiceId || DEFAULT_VOICE_ID,
-      };
     } catch (err) {
       const msg = (err && err.message) || String(err);
       emitEvent(ctx, 'tool_output', { tool: 'generate_speech', ok: false, preview: `Error: ${msg}` });
@@ -336,6 +404,7 @@ module.exports = {
   // Internal helpers exposed for unit testing only.
   _internal: {
     streamToBuffer,
+    generateOpenAiSpeechBuffer,
     clampInt,
     getFetch,
     getElevenClient,
@@ -344,6 +413,8 @@ module.exports = {
     resetTestSeams: () => { _clientFactory = null; _fetchImpl = null; },
     DEFAULT_VOICE_ID,
     DEFAULT_TTS_MODEL,
+    DEFAULT_OPENAI_TTS_MODEL,
+    DEFAULT_OPENAI_TTS_VOICE,
     DEFAULT_MUSIC_MODEL,
     MUSIC_MIN_SECONDS,
     MUSIC_MAX_SECONDS,

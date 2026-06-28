@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 const { ES, EN } = require('../../../scripts/add-codex-locale-keys.js')
 
 const MESSAGES_DIR = path.resolve(__dirname, '../../../messages')
