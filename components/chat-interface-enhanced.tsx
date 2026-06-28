@@ -498,6 +498,31 @@ const MUSIC_MODEL_OPTIONS: MusicModel[] = ["ElevenLabs", "Lyria 3 Pro", "Mimo Ma
 const MUSIC_STYLE_OPTIONS: MusicStyle[] = ["Auto", "Cinematic", "Pop", "Electronic", "Ambient", "Orchestral", "Latin", "Hip-Hop", "Jazz"]
 const MUSIC_MOOD_OPTIONS: MusicMood[] = ["Balanced", "Energetic", "Emotional", "Dark", "Happy", "Epic", "Relaxed"]
 const MUSIC_EFFECT_OPTIONS: MusicEffect[] = ["None", "Studio Master", "Spatial", "Warm Tape", "Radio Ready", "Lo-Fi"]
+const VOICE_COMPOSER_PLACEHOLDER = "Escribe el texto que quieres convertir en voz"
+
+const buildVoiceGenerationGoal = ({
+  text,
+  model,
+  language,
+  accent,
+  stability,
+  effect,
+}: {
+  text: string
+  model: VoiceModel
+  language: VoiceLanguage
+  accent: VoiceAccent
+  stability: number
+  effect: VoiceEffect
+}) => {
+  const normalizedText = text.trim()
+  return [
+    "Genera un archivo MP3 de texto a voz. Debes usar la herramienta generate_speech; no finalices solo con texto.",
+    `Texto exacto a narrar:\n${normalizedText}`,
+    `Preferencias visibles del usuario: proveedor/modelo=${model}; idioma=${language}; acento=${accent}; estabilidad=${stability}%; efecto=${effect}.`,
+    "Si una preferencia exacta no esta disponible en el proveedor, genera el mejor audio posible con la voz multilingue disponible y explica la limitacion brevemente junto al archivo.",
+  ].join("\n\n")
+}
 const DEFAULT_IMAGE_MODEL = ""
 const DEFAULT_IMAGE_PROVIDER = "OpenAI"
 const DEFAULT_VIDEO_MODEL = ""
@@ -2681,22 +2706,25 @@ const ActiveToolsDisplay = ({
       )}
       {isImageGenerationActive && (
         <>
-          <div className="group/image-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-pink-300/70 bg-pink-100/88 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-pink-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_28px_-22px_rgba(219,39,119,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01] hover:border-pink-400/80 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_16px_36px_-22px_rgba(219,39,119,0.9)] dark:border-pink-500/40 dark:bg-pink-900/25 dark:text-pink-200">
-            <span className="pointer-events-none absolute -inset-8 -z-10 rounded-full bg-[conic-gradient(from_90deg,transparent_0deg,rgba(244,114,182,0.0)_70deg,rgba(244,114,182,0.55)_130deg,rgba(236,72,153,0.22)_190deg,transparent_280deg)] opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
-            <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/image-liquid:translate-x-[155%] dark:via-white/25" />
-            <span className="pointer-events-none absolute left-7 top-1 h-1.5 w-1.5 rounded-full bg-pink-400/75 shadow-[0_0_12px_rgba(236,72,153,0.75)] motion-safe:animate-pulse" />
-            <span className="pointer-events-none absolute bottom-1 right-9 h-1 w-1 rounded-full bg-white/90 shadow-[0_0_10px_rgba(255,255,255,0.9)] motion-safe:animate-bounce" />
-            <Palette className="relative z-10 h-4 w-4 drop-shadow-[0_0_8px_rgba(219,39,119,0.35)]" />
+          <div
+            className="image-liquid-chip group/image-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full border px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold backdrop-blur-xl transition-all duration-300 hover:scale-[1.01]"
+            style={{ "--image-liquid-red": "#FF0000" } as React.CSSProperties}
+          >
+            <span className="image-liquid-chip__wave" />
+            <span className="image-liquid-chip__gloss" />
+            <span className="image-liquid-chip__pulse" />
+            <span className="image-liquid-chip__spark" />
+            <Palette className="image-liquid-chip__icon relative z-10 h-4 w-4" />
             <span className="relative z-10 text-[12px] sm:text-[14px]">Imágenes</span>
-            {isGeneratingImage && <span className="relative z-10 h-1.5 w-1.5 rounded-full bg-pink-500 animate-pulse" />}
+            {isGeneratingImage && <span className="image-liquid-chip__status relative z-10 h-1.5 w-1.5 rounded-full animate-pulse" />}
             <Button
               variant="ghost"
               size="sm"
               className={cn(
-                "relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0",
+                "image-liquid-chip__close relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0",
                 isGeneratingImage
                   ? "opacity-45 cursor-not-allowed"
-                  : "hover:bg-white/50 dark:hover:bg-pink-800/30"
+                  : "hover:bg-[rgba(255,0,0,0.10)] dark:hover:bg-[rgba(255,0,0,0.16)]"
               )}
               onClick={handleImageGenerationClose}
               disabled={isGeneratingImage}
@@ -8034,6 +8062,26 @@ REWRITTEN TEXT:`;
       }
     }
 
+    if (isVoiceGenerationActive) {
+      const voiceGoal = buildVoiceGenerationGoal({
+        text: msg,
+        model: selectedVoiceModel,
+        language: selectedVoiceLanguage,
+        accent: selectedVoiceAccent,
+        stability: selectedVoiceStability,
+        effect: selectedVoiceEffect,
+      });
+      try {
+        await handleAgentTask(voiceGoal, filesToSend, {
+          userMessageAlreadyAdded: false,
+          displayGoal: msg,
+        });
+      } finally {
+        inFlightSendKeysRef.current.delete(sendKey);
+      }
+      return;
+    }
+
     const deterministicAgenticIntent = classifyIntentFastPath(msg);
     // Image-only turns ("resolver", "resuelve esta derivada", "¿qué dice esta
     // imagen?") need VISION, which lives only in the plain /api/ai/generate
@@ -9395,19 +9443,19 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     !isExcelConnectorActive &&
     !hasRenderableMessages
 
-  // Any active tool/connector/thesis mode? Used to conditionally render
-  // the "tool pills" row below the input — if nothing is active, we
-  // hide the entire bar so the composer stays a clean pill.
+  // Any active tool/connector/thesis mode? Used to conditionally render active
+  // controls only when needed so the composer stays a clean pill by default.
   const hasActiveTools = (
     isWebSearchActive || isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive || isComputerUseActive
     || isGmailActive || isGoogleCalendarActive || isGoogleDriveActive
     || isSpotifyActive || isWordConnectorActive || isExcelConnectorActive
     || chatType === 'thesis'
   );
-  const shouldInlineActiveTools = isVideoGenerationActive;
   const isMediaToolActive = isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive;
+  const shouldInlineActiveTools = isMediaToolActive;
   const requiresPromptBeforePrimarySend =
     isImageGenerationActive ||
+    isVoiceGenerationActive ||
     isVideoGenerationActive ||
     isMusicGenerationActive ||
     chatType === 'image' ||
@@ -9980,13 +10028,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   const handleAgentTask = async (
     goalText: string,
     filesToSend: any[] = [],
-    options: { userMessageAlreadyAdded?: boolean; assistantMessageId?: string } = {},
+    options: { userMessageAlreadyAdded?: boolean; assistantMessageId?: string; displayGoal?: string } = {},
   ) => {
     if (!goalText) {
       toast.error('Please enter a task');
       return;
     }
-    const { userMessageAlreadyAdded = false, assistantMessageId } = options;
+    const { userMessageAlreadyAdded = false, assistantMessageId, displayGoal = goalText } = options;
     const systemContract = PROFESSIONAL_CAPABILITY_CONTRACTS.agent_task || '';
     let activeChat = currentChat;
     const isNewChat = !activeChat;
@@ -9994,7 +10042,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     if (!activeChat) {
       try {
         const response = await apiClient.createChat({
-          title: `{} ${goalText.substring(0, 30)}`,
+          title: `{} ${displayGoal.substring(0, 30)}`,
           model: selectedModel,
         });
         activeChat = response.chat;
@@ -10018,7 +10066,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           id: `msg-user-${Date.now()}`,
           chatId: activeChat.id,
           role: 'USER' as const,
-          content: goalText,
+          content: displayGoal,
           timestamp: new Date().toISOString(),
           files: filesToSend,
         };
@@ -10101,7 +10149,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         const fileMetadata = buildAgentFileMetadata(filesToSend);
         for await (const evt of agentTaskService.runIterator({
           goal: goalText,
-          displayGoal: goalText,
+          displayGoal,
           systemContract,
           files: fileIds,
           fileMetadata,
@@ -10461,10 +10509,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       onFileProcessingStatusChange={handleFileProcessingStatusChange}
                     />
                     <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
-                    {/* Tool pills used to live ABOVE the input; moved to
-                        a secondary row BELOW the input (see after the
-                        TooltipProvider) so the top surface is dedicated
-                        to drag-and-drop of files / audio / images. */}
+                    {/* Media controls stay inline with the attach button; other
+                        active tools fall back to the secondary row below. */}
                     <TooltipProvider>
                       <div
                         className="composer-input-row flex items-end gap-2 pl-2 pr-2 py-1.5"
@@ -10557,7 +10603,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 : isVideoGenerationActive
                                   ? tComposer("placeholderVideo")
                                   : isVoiceGenerationActive
-                                    ? "Describe la voz que quieres crear"
+                                    ? VOICE_COMPOSER_PLACEHOLDER
                                     : isMusicGenerationActive
                                       ? "Describe la música que quieres crear"
                                         : isWebSearchActive
@@ -10616,7 +10662,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             const needsPrompt = requiresPromptBeforePrimarySend && !hasText
                             const canSend = requiresPromptBeforePrimarySend ? hasText : (hasText || hasAttachment)
                             const busy = isCurrentChatLocalJobBusy || isUploading
-                            // In prompt-driven media modes (Video/Image/Music), an empty
+                            // In prompt-driven media modes (Video/Image/Voice/Music), an empty
                             // composer should not open Voice Studio. Keep the primary CTA
                             // as the send/create affordance and disable it until the user
                             // writes the generation prompt.
@@ -11131,7 +11177,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                     : isVideoGenerationActive
                                       ? tComposer("placeholderVideo")
                                       : isVoiceGenerationActive
-                                        ? "Describe la voz que quieres crear"
+                                        ? VOICE_COMPOSER_PLACEHOLDER
                                         : isMusicGenerationActive
                                           ? "Describe la música que quieres crear"
                                             : isWebSearchActive

@@ -14,6 +14,7 @@ import { WORKSPACE_TOOLS, type WorkspaceToolId } from "@/lib/code-workspace-tool
 
 import { FileTreePanel } from "./file-tree-panel"
 import { PreviewPane } from "./preview-pane"
+import { SearchPanel } from "./search-panel"
 import { TerminalPanel } from "./terminal-panel"
 import { WorkspaceToolPanel } from "./workspace-tool-panels"
 
@@ -106,6 +107,8 @@ function ToolBody({
       return <TerminalPanel open onClose={onClose} />
     case "files":
       return <FileTreePanel />
+    case "code-search":
+      return <SearchPanel />
     default:
       return <WorkspaceToolPanel toolId={toolId} />
   }

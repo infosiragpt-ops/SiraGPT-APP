@@ -92,6 +92,30 @@ test('status of unknown workspace is idle', () => {
   assert.equal(s.status, 'idle');
 });
 
+test('normaliseRuntimeEnv keeps app env and rejects process overrides', () => {
+  const env = runner.normaliseRuntimeEnv({
+    openai_api_key: 'redacted',
+    NEXT_PUBLIC_SITE_NAME: 'Sira',
+    NODE_OPTIONS: '--require /tmp/evil.js',
+    PATH: '/tmp/bin',
+    'bad-key': 'x',
+  });
+  assert.equal(env.OPENAI_API_KEY, 'redacted');
+  assert.equal(env.NEXT_PUBLIC_SITE_NAME, 'Sira');
+  assert.equal(env.NODE_OPTIONS, undefined);
+  assert.equal(env.PATH, undefined);
+  assert.equal(env['BAD-KEY'], undefined);
+});
+
+test('isRuntimeEnvFile identifies runtime env files but not templates', () => {
+  assert.equal(runner.isRuntimeEnvFile('.env'), true);
+  assert.equal(runner.isRuntimeEnvFile('.env.development'), true);
+  assert.equal(runner.isRuntimeEnvFile('.env.development.local'), true);
+  assert.equal(runner.isRuntimeEnvFile('packages/app/.env.local'), true);
+  assert.equal(runner.isRuntimeEnvFile('.env.sample'), false);
+  assert.equal(runner.isRuntimeEnvFile('.env.production.example'), false);
+});
+
 test('static server starts, serves, and stops', async () => {
   const dir = await tmpDir();
   try {

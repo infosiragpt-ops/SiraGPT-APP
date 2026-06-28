@@ -154,9 +154,34 @@ function isExpectedAuthClientEvent(event = {}) {
   return true;
 }
 
+function isExpectedQuotaClientEvent(event = {}) {
+  if (!event || event.source !== 'api') return false;
+  const status = Number(event.status);
+  if (status !== 429) return false;
+
+  const endpoint = normalizeEndpoint(event.endpoint || '');
+  const details = `${event.message || ''} ${JSON.stringify(event.extra || {})}`.toLowerCase();
+  const expected =
+    /monthly api limit exceeded/.test(details) ||
+    /monthly video generation limit exceeded/.test(details) ||
+    /monthly (?:plan|quota|limit) exceeded/.test(details) ||
+    /plan quota exceeded/.test(details) ||
+    /quota exceeded/.test(details) ||
+    /rate limit exceeded/.test(details) ||
+    /too many requests/.test(details);
+
+  if (!expected) return false;
+  return endpoint === '/ai/generate'
+    || endpoint === '/ai/generate-image'
+    || endpoint === '/ai/generate-video'
+    || endpoint === '/ai/paraphrase'
+    || endpoint === '/generate-document';
+}
+
 module.exports = {
   sanitizeClientEvent,
   buildClientEventAuditEntry,
   isExpectedAuthClientEvent,
+  isExpectedQuotaClientEvent,
   redactText,
 };

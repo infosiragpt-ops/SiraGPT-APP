@@ -1566,7 +1566,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     fileMetadata = [],
     chatId = null,
     model = 'gpt-4o',
-    maxSteps = 60,
+    maxSteps = 100,
     maxRuntimeMs = 2 * 60 * 60 * 1000,
     folderCode = null,
     cycle = null,

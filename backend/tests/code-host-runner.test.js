@@ -79,3 +79,28 @@ test('getRunForProxy()/getPreviewToken(): unknown run → null', () => {
   assert.equal(runner.getRunForProxy('does-not-exist', 'whatever'), null);
   assert.equal(runner.getPreviewToken('does-not-exist'), null);
 });
+
+test('normaliseRuntimeEnv keeps app env and drops dangerous process overrides', () => {
+  const env = runner.normaliseRuntimeEnv({
+    stripe_secret_key: 'sk_test_redacted',
+    VITE_PUBLIC_NAME: 'Sira',
+    NODE_OPTIONS: '--require /tmp/evil.js',
+    PATH: '/tmp/bin',
+    'bad-key': 'x',
+  });
+
+  assert.equal(env.STRIPE_SECRET_KEY, 'sk_test_redacted');
+  assert.equal(env.VITE_PUBLIC_NAME, 'Sira');
+  assert.equal(env.NODE_OPTIONS, undefined);
+  assert.equal(env.PATH, undefined);
+  assert.equal(env['BAD-KEY'], undefined);
+});
+
+test('isRuntimeEnvFile identifies runtime .env files but not templates', () => {
+  assert.equal(runner.isRuntimeEnvFile('.env'), true);
+  assert.equal(runner.isRuntimeEnvFile('.env.local'), true);
+  assert.equal(runner.isRuntimeEnvFile('.env.production.local'), true);
+  assert.equal(runner.isRuntimeEnvFile('apps/web/.env.production'), true);
+  assert.equal(runner.isRuntimeEnvFile('.env.example'), false);
+  assert.equal(runner.isRuntimeEnvFile('.env.local.example'), false);
+});
