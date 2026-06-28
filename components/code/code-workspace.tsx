@@ -36,7 +36,6 @@ import { AICodeChatPanel } from "./ai-code-chat-panel"
 import { CodeHub } from "./code-hub"
 import { EditorPanel } from "./editor-panel"
 import { PublishingConsole } from "./publishing-console"
-import { StatusBar } from "./status-bar"
 import { PreviewPane } from "./preview-pane"
 import { TerminalPanel } from "./terminal-panel"
 import { ToolLauncher } from "./tool-launcher"
@@ -550,21 +549,6 @@ export function CodeWorkspace() {
           </div>
         </div>
       </div>
-
-      <StatusBar
-        terminalOpen={terminalOpen}
-        onToggleTerminal={toggleTerminal}
-        chatOpen={chatOpen}
-        onToggleChat={toggleChat}
-        previewActive={!activeTool && !codeHubOpen}
-        onShowPreview={() => {
-          setActiveTool(null)
-          setCodeHubOpen(false)
-          setPreviewOpen(true)
-          setActivePanel("preview")
-          setOpenPanels((prev) => new Set(prev).add("preview"))
-        }}
-      />
 
       <PublishingConsole open={publishingOpen} onOpenChange={setPublishingOpen} />
 
