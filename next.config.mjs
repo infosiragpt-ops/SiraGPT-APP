@@ -87,14 +87,16 @@ const nextConfig = {
   async headers() {
     return [
       {
-        source: '/(.*)',
+        source: '/api/code-runner/:runId/proxy/:path*',
         headers: [
-          ...(allowReplitPreview ? [] : [
-            {
-              key: 'X-Frame-Options',
-              value: 'DENY',
-            },
-          ]),
+          {
+            key: 'X-Frame-Options',
+            value: 'SAMEORIGIN',
+          },
+          {
+            key: 'Content-Security-Policy',
+            value: "frame-ancestors 'self'",
+          },
           {
             key: 'X-Content-Type-Options',
             value: 'nosniff',
@@ -106,16 +108,14 @@ const nextConfig = {
         ],
       },
       {
-        source: '/api/code-runner/:runId/proxy/:path*',
+        source: '/(.*)',
         headers: [
-          {
-            key: 'X-Frame-Options',
-            value: 'SAMEORIGIN',
-          },
-          {
-            key: 'Content-Security-Policy',
-            value: "frame-ancestors 'self'",
-          },
+          ...(allowReplitPreview ? [] : [
+            {
+              key: 'X-Frame-Options',
+              value: 'DENY',
+            },
+          ]),
           {
             key: 'X-Content-Type-Options',
             value: 'nosniff',
