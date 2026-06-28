@@ -133,9 +133,9 @@ jobs:
             echo "[deploy-workflow] Building backend image (includes latest migrations)"
             ${COMPOSE} build backend
             echo "[deploy-workflow] Applying database migrations"
-            ${COMPOSE} run --rm backend npx prisma migrate deploy --schema prisma/schema.prisma
+            ${COMPOSE} run -T --rm backend npx prisma migrate deploy --schema prisma/schema.prisma </dev/null
             echo "[deploy-workflow] Ensuring production admin account"
-            ${COMPOSE} run --rm backend node scripts/reset-prod-admin-password.js
+            ${COMPOSE} run -T --rm backend node scripts/reset-prod-admin-password.js </dev/null
             ${COMPOSE} build frontend
             ${COMPOSE} up -d --no-deps backend frontend
             wait_ready
