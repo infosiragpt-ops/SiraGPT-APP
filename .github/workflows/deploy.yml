@@ -75,6 +75,8 @@ jobs:
           script_stop: true
           script: |
             set -e
+            APP_DIR="/opt/siragpt"
+            export APP_DIR
             echo "[deploy-workflow] Remote disk before cleanup"
             df -h / /var/lib/docker 2>/dev/null || df -h / || true
             docker system df || true
@@ -84,8 +86,8 @@ jobs:
             echo "[deploy-workflow] Remote disk after cleanup"
             docker system df || true
             df -h / /var/lib/docker 2>/dev/null || df -h / || true
-            rm -f /root/siraNew/siraGPT/.git/index.lock
-            cd /root/siraNew/siraGPT
+            rm -f "${APP_DIR}/.git/index.lock"
+            cd "${APP_DIR}"
             TARGET_SHA="${{ inputs.target_sha || github.sha }}"
             echo "[deploy-workflow] Bootstrapping deploy scripts from ${TARGET_SHA}"
             git fetch origin "${TARGET_SHA}"
@@ -151,7 +153,9 @@ jobs:
           script_stop: true
           script: |
             set -e
-            cd /root/siraNew/siraGPT
+            APP_DIR="/opt/siragpt"
+            export APP_DIR
+            cd "${APP_DIR}"
             # Re-run deploy-with-rollback with TRIGGER_ROLLBACK to
             # short-circuit straight into the rollback path. The
             # script gracefully ignores the var if unsupported.

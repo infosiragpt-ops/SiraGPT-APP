@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-APP_DIR="${APP_DIR:-/root/siraNew/siraGPT}"
+APP_DIR="${APP_DIR:-/opt/siragpt}"
 BRANCH="${BRANCH:-main}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
 FRONTEND_SERVICE="${FRONTEND_SERVICE:-frontend}"
