@@ -53,8 +53,27 @@ function enabled() {
   return process.env.NODE_ENV !== 'production';
 }
 
-function proxyUrlsEnabled() {
+/**
+ * Optional per-user gate. When CODE_HOST_RUNNER_ALLOWED_USER_IDS is set (comma
+ * list), only those user ids may start a run; otherwise any authenticated user
+ * may (CODE_HOST_RUNNER is the primary gate). Lets a multi-user deploy restrict
+ * code execution to the owner without flipping the enable flag.
+ */
+function startAllowed(user) {
+  const ids = String(process.env.CODE_HOST_RUNNER_ALLOWED_USER_IDS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (ids.length === 0) return true;
+  return !!(user && ids.includes(String(user.id)));
+}
+
+function shouldUseProxyUrls() {
   return flagEnabled(process.env.CODE_RUNNER_PROXY_URLS, process.env.NODE_ENV === 'production');
+}
+
+function proxyUrlsEnabled() {
+  return shouldUseProxyUrls();
 }
 
 function publicBasePath(runId) {
@@ -62,7 +81,7 @@ function publicBasePath(runId) {
 }
 
 function publicDevUrl(runId, port) {
-  if (proxyUrlsEnabled()) return publicBasePath(runId);
+  if (shouldUseProxyUrls()) return publicBasePath(runId);
   return `http://localhost:${port}`;
 }
 
@@ -229,9 +248,10 @@ function startDev(dir, fw, port, run) {
   } else if (fw.name === 'vite') {
     cmd = 'npx';
     args = ['--no-install', 'vite', '--host', '127.0.0.1', '--port', String(port), '--strictPort'];
-    if (proxyUrlsEnabled()) {
-      args.push('--base', publicBasePath(run.runId));
-    }
+    // --base makes vite emit asset/module URLs under the public reverse-proxy
+    // prefix (which includes the run token) so they resolve when the preview
+    // iframes /api/code-runner/<id>/<token>/app/.
+    if (shouldUseProxyUrls()) args.push('--base', run.basePath);
   } else {
     cmd = 'npm';
     args = ['run', 'dev'];
@@ -255,11 +275,12 @@ function startDev(dir, fw, port, run) {
   });
 }
 
-async function probeReady(port, deadline, run) {
+async function probeReady(port, basePath, deadline, run) {
+  const probeUrl = `http://127.0.0.1:${port}${basePath || '/'}`;
   while (Date.now() < deadline && !run.stopped) {
     if (run.phase === 'error') throw new Error(run.error || 'error del dev server');
     try {
-      await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(3000) });
+      await fetch(probeUrl, { signal: AbortSignal.timeout(3000) });
       return; // any HTTP response means the server is listening
     } catch {
       /* not up yet */
@@ -284,10 +305,12 @@ async function pipeline(run) {
   const port = await findFreePort();
   run.port = port;
   run.internalUrl = `http://127.0.0.1:${port}`;
-  run.devUrl = publicDevUrl(run.runId, port);
+  // Public, same-origin URL the browser reaches through the Next.js → Express
+  // proxy. The real dev server stays private on 127.0.0.1:<port>.
+  run.devUrl = shouldUseProxyUrls() ? run.basePath : publicDevUrl(run.runId, port);
   pushLog(run, `dev server en ${run.devUrl}`);
   startDev(run.dir, fw, port, run);
-  await probeReady(port, Date.now() + READY_TIMEOUT_MS, run);
+  await probeReady(port, shouldUseProxyUrls() ? run.basePath : '/', Date.now() + READY_TIMEOUT_MS, run);
   if (run.stopped) return;
   run.phase = 'ready';
   pushLog(run, 'listo ✓');
@@ -319,10 +342,19 @@ async function startRun({ runId, userId, files }) {
   evictIfNeeded();
 
   const dir = path.join(ROOT, id);
+  // The preview token rides in the URL PATH (not a cookie). The preview iframe is
+  // sandboxed → opaque ("null") origin, and Vite's <script type="module"> fetches
+  // use a credentials mode that won't send a cross-origin cookie, so a cookie
+  // gate would 403 every asset. A path-embedded token is carried automatically by
+  // every asset/module/dynamic-import request regardless of credentials or CORS.
+  const previewToken = crypto.randomBytes(24).toString('hex');
+  const basePath = `/api/code-runner/${id}/${previewToken}/app/`;
   const run = {
     runId: id,
     userId: userId || null,
     dir,
+    basePath,
+    previewToken,
     phase: 'installing',
     framework: null,
     port: null,
@@ -383,6 +415,27 @@ function getStatus(runId, userId) {
   };
 }
 
+/**
+ * Resolve the private dev-server port for a run, gated by its run-scoped preview
+ * token (carried in the reverse-proxy URL path). Returns null when the run is
+ * unknown, not yet bound to a port, or the token doesn't match.
+ */
+function getRunForProxy(runId, previewToken) {
+  const id = safeId(runId);
+  const run = runs.get(id);
+  if (!run || !run.previewToken || !previewToken) return null;
+  if (run.previewToken !== previewToken) return null;
+  if (!run.port) return null;
+  run.lastTouch = Date.now();
+  return { port: run.port };
+}
+
+/** The run-scoped preview token (also embedded in devUrl; kept for tests). */
+function getPreviewToken(runId) {
+  const run = runs.get(safeId(runId));
+  return run ? run.previewToken : null;
+}
+
 function getProxyTarget(runId, userId) {
   const id = safeId(runId);
   const run = runs.get(id);
@@ -415,11 +468,15 @@ process.on('exit', () => {
 
 module.exports = {
   enabled,
+  startAllowed,
   startRun,
   stopRun,
   getStatus,
+  getRunForProxy,
+  getPreviewToken,
   getProxyTarget,
   publicBasePath,
   publicDevUrl,
+  useProxyUrls: shouldUseProxyUrls,
   proxyUrlsEnabled,
 };

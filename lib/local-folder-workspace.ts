@@ -13,7 +13,7 @@ import {
 const WORKSPACE_STORAGE_KEY = "code-workspace:v1"
 const ACTIVE_FOLDER_KEY = "code-workspace:active-folder"
 
-const MAX_FILES = 160
+const MAX_FILES = 400
 const MAX_FILE_BYTES = 768 * 1024
 const MAX_TOTAL_BYTES = 5 * 1024 * 1024
 
@@ -78,8 +78,10 @@ const TEXT_EXTENSIONS = new Set([
 ])
 
 const TEXT_FILENAMES = new Set([
-  ".env",
   ".env.example",
+  ".env.sample",
+  ".env.template",
+  ".env.dist",
   ".gitignore",
   ".prettierrc",
   "dockerfile",
@@ -198,8 +200,7 @@ function pickInitialTabs(paths: string[]): string[] {
  * browser allows showDirectoryPicker(). Navigating first and then opening the
  * picker asynchronously drops the user-activation and the picker is blocked.
  */
-export async function importLocalFolderAsWorkspace(): Promise<LocalFolderRegistration> {
-  const imported = await openLocalDirectoryWorkspace()
+function registerImportedWorkspace(imported: LocalWorkspaceImport): LocalFolderRegistration {
   const codexId = codexIdForLocalFolder(imported.rootName)
   const paths = Object.keys(imported.files)
   const openTabs = pickInitialTabs(paths)
@@ -238,6 +239,154 @@ export async function importLocalFolderAsWorkspace(): Promise<LocalFolderRegistr
     fileCount: imported.fileCount,
     skippedCount: imported.skippedCount,
   }
+}
+
+export async function importLocalFolderAsWorkspace(): Promise<LocalFolderRegistration> {
+  const imported = await openLocalDirectoryWorkspace()
+  return registerImportedWorkspace(imported)
+}
+
+/**
+ * Fallback folder import for contexts where the File System Access API is
+ * unavailable: cross-origin iframes (e.g. the Replit preview, which throws
+ * "Cross origin sub frames aren't allowed to show a file picker.") and
+ * Safari/Firefox. Uses a classic <input webkitdirectory>, which works inside
+ * iframes and across browsers. This is a read-only snapshot — the folder is
+ * NOT linked for write-back, so saving edits to disk is unavailable.
+ *
+ * Resolves null when the user cancels the picker.
+ */
+export async function importLocalFolderViaInput(): Promise<LocalFolderRegistration | null> {
+  const imported = await readLocalFolderViaInput()
+  if (!imported) return null
+  return registerImportedWorkspace(imported)
+}
+
+/**
+ * Reads a local folder via <input webkitdirectory> and returns the filtered
+ * snapshot WITHOUT registering it. Callers that manage their own workspace
+ * state (e.g. the /code editor) use this directly; `importLocalFolderViaInput`
+ * wraps it to also register the workspace in the sidebar. Resolves null when
+ * the user cancels the picker.
+ */
+export async function readLocalFolderViaInput(): Promise<LocalWorkspaceImport | null> {
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    throw new Error("La subida de carpetas solo está disponible en el navegador.")
+  }
+
+  const picked = await pickDirectoryViaInput()
+  if (!picked || picked.length === 0) return null
+
+  const files: CodeFiles = {}
+  const stats = { count: 0, bytes: 0, skipped: 0 }
+  // A webkitdirectory upload is a read-only snapshot — there is no directory
+  // handle to write back to, so drop any previously linked folder.
+  linkedRootHandle = null
+  linkedRootName = ""
+  linkedFileHandles.clear()
+
+  let rootName = ""
+  for (const file of Array.from(picked)) {
+    if (stats.count >= MAX_FILES || stats.bytes >= MAX_TOTAL_BYTES) {
+      stats.skipped++
+      continue
+    }
+    const rel = String((file as unknown as { webkitRelativePath?: string }).webkitRelativePath || file.name)
+    const segments = rel.split("/").filter(Boolean)
+    if (segments.length === 0) {
+      stats.skipped++
+      continue
+    }
+    if (!rootName) rootName = segments[0]
+    const leaf = segments[segments.length - 1]
+    // Skip anything living inside an ignored directory (node_modules, .git, …).
+    if (segments.slice(0, -1).some((s) => IGNORED_DIRS.has(s.toLowerCase()))) {
+      stats.skipped++
+      continue
+    }
+    if (!isTextLikeFile(leaf) || isSecretEnvFile(leaf)) {
+      stats.skipped++
+      continue
+    }
+    if (file.size > MAX_FILE_BYTES || stats.bytes + file.size > MAX_TOTAL_BYTES) {
+      stats.skipped++
+      continue
+    }
+    let content: string
+    try {
+      content = await file.text()
+    } catch {
+      stats.skipped++
+      continue
+    }
+    if (content.includes("\u0000")) {
+      stats.skipped++
+      continue
+    }
+    // Paths are stored relative to the picked root (drop the top-level folder
+    // name) so they match the File System Access API import shape.
+    const path = normalizePath(segments.slice(1).join("/") || leaf)
+    if (!path) {
+      stats.skipped++
+      continue
+    }
+    files[path] = {
+      path,
+      language: languageForPath(path),
+      content,
+      updatedAt: file.lastModified || Date.now(),
+    }
+    stats.count++
+    stats.bytes += file.size
+  }
+
+  const imported: LocalWorkspaceImport = {
+    rootName: rootName || "Carpeta local",
+    files,
+    fileCount: Object.keys(files).length,
+    skippedCount: stats.skipped,
+  }
+  return imported
+}
+
+function pickDirectoryViaInput(): Promise<FileList | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement("input")
+    input.type = "file"
+    input.multiple = true
+    // webkitdirectory turns the file picker into a folder picker. Set both the
+    // property and the attribute for the widest browser coverage.
+    ;(input as unknown as { webkitdirectory: boolean }).webkitdirectory = true
+    input.setAttribute("webkitdirectory", "")
+    input.style.position = "fixed"
+    input.style.left = "-9999px"
+    input.style.opacity = "0"
+
+    let settled = false
+    const finish = (value: FileList | null) => {
+      if (settled) return
+      settled = true
+      try {
+        input.remove()
+      } catch {
+        /* ignore */
+      }
+      resolve(value)
+    }
+
+    // Resolve only on real picker outcomes. We intentionally do NOT use a
+    // window "focus" timeout to detect cancel: a directory upload triggers a
+    // SECOND browser confirmation ("Upload N files to this site?") AFTER the OS
+    // dialog closes (which already restores focus). A focus-based timer fires
+    // before the user confirms that prompt, so it would discard a valid folder
+    // selection mid-flight. "change" (selection) and "cancel" (dismiss) cover
+    // every modern browser; worst case on a legacy browser is a pending promise.
+    input.addEventListener("change", () => finish(input.files && input.files.length ? input.files : null))
+    input.addEventListener("cancel", () => finish(null))
+
+    document.body.appendChild(input)
+    input.click()
+  })
 }
 
 export async function saveLinkedWorkspaceFile(path: string, content: string): Promise<void> {
@@ -283,6 +432,13 @@ async function walkDirectory(
       continue
     }
 
+    // Never import local secret files — credentials must stay on the user's
+    // machine and never get copied into the in-app workspace.
+    if (isSecretEnvFile(name)) {
+      stats.skipped++
+      continue
+    }
+
     try {
       const file = await handle.getFile()
       if (file.size > MAX_FILE_BYTES || stats.bytes + file.size > MAX_TOTAL_BYTES) {
@@ -315,6 +471,17 @@ function isTextLikeFile(name: string): boolean {
   if (TEXT_FILENAMES.has(lower)) return true
   const ext = lower.includes(".") ? lower.slice(lower.lastIndexOf(".") + 1) : ""
   return TEXT_EXTENSIONS.has(ext)
+}
+
+// Local secret files we must NEVER import — credentials stay on the user's
+// machine. Matches `.env` and variants like `.env.local` / `.env.production`,
+// but allows non-secret templates (`.env.example`, `.env.sample`, `.env.template`).
+const ENV_TEMPLATE_SUFFIXES = new Set(["example", "sample", "template", "dist"])
+function isSecretEnvFile(name: string): boolean {
+  const lower = String(name || "").toLowerCase()
+  if (lower !== ".env" && !lower.startsWith(".env.")) return false
+  const suffix = lower.startsWith(".env.") ? lower.slice(".env.".length) : ""
+  return !ENV_TEMPLATE_SUFFIXES.has(suffix)
 }
 
 async function createFileHandle(path: string): Promise<FileHandleLike> {

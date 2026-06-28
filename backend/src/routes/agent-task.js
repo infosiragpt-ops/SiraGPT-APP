@@ -399,8 +399,8 @@ Rules:
     · If you only need RAW CHUNKS to combine with other data (build a table, cross-check with web_search, etc.) → call rag_retrieve instead.
 - When the user asks to transcribe ("transcribir", "transcribe", "transcripción") and there is uploaded or pasted content, return the readable content verbatim, preserving line breaks and headings when useful. Do NOT explain what transcription is, do NOT summarize, and do NOT create a Word/PDF/PPT/Excel unless the user explicitly asks for that output format. If no readable text is available, say that clearly and ask for a readable file/audio/image.
 - META-DOCUMENT TASKS: requests that apply TO an attached document are valid even when the answer is not literally written inside it. "cita en Vancouver/APA/MLA/Harvard/IEEE/ISO 690", "referencia bibliográfica", "cítame este documento/artículo/PDF" mean: BUILD the bibliographic reference of the attached document in that citation style from its own bibliographic data (title, authors, year, journal/institution, volume/pages, DOI/URL) found via docintel_retrieve/rag_retrieve on the FIRST pages; mark any missing field as [no disponible]. With an academic document attached, "cita" ALWAYS means citation/reference — never a calendar appointment. NEVER answer that the material lacks information for these meta-tasks; produce the best reference the document's own data allows.
-- When the user asks for a file (Excel, Word, PPT, PDF), use create_document. The deliverable must be authored by executable code, not placeholder prose: write a complete Python script that builds the real content, visual hierarchy, tables/slides/sections and writes to os.environ["OUT_PATH"]. Prefer openpyxl / python-docx / python-pptx / reportlab.
-- When the user uploads a Word/Excel/PowerPoint/PDF and asks to modify, improve, correct, fill, translate, summarize into, or continue "in my own file", treat the upload as a read-only source. Never overwrite or mutate the original. Create a new artifact in the same format unless the user explicitly asks for another format. Preserve logos/images, tables, formulas, sheet names, headers, footers, slide layouts, styling, and document order as far as the available libraries allow; change only what the user requested.
+- When the user asks for a file (Excel, Word, PPT, PDF, SVG, CSV, Markdown), use create_document. The deliverable must be authored by executable code, not placeholder prose: write a complete Python script that builds the real content, visual hierarchy, tables/slides/sections and writes to os.environ["OUT_PATH"]. Prefer openpyxl / python-docx / python-pptx / reportlab. Do not finalize with only text when the user asked to create/download/export/convert a file.
+- When the user uploads a Word/Excel/PowerPoint/PDF and asks to modify, improve, correct, apply corrections, add/remove content, fill, translate, summarize into, complete, format, convert, or continue "in my own file", treat the upload as a read-only source. Never overwrite or mutate the original. Create a new artifact in the same format unless the user explicitly asks for another format. Preserve logos/images, tables, formulas, sheet names, headers, footers, slide layouts, styling, and document order as far as the available libraries allow; change only what the user requested. Consolidate multiple requested edits into one edited output file unless the user asks for multiple files, and never finalize with only suggested edits when the requested outcome is an edited attachment.
 - Use python_exec for data wrangling, verification, numeric work — ANY time you'd otherwise "estimate" a number.
 - For academic/scientific/market research, collect enough evidence first, keep DOI/URL/year/journal/source metadata, and separate verified findings from assumptions.
 - For strict academic deliverables (for example "40 articles", "only DOI", "only open access", "only Latin America", "2022-2026"), do not pad the file with weak or unverified sources. Refine web_search queries until the requested count is met; if verified sources are still fewer than requested, state the exact verified count and label the missing gap instead of inventing rows.
@@ -1840,9 +1840,21 @@ function runAgentJobInProcess(payload, userId) {
   });
 }
 
-function shouldRunAttachmentTaskLocally({ fileIds = [], goal = '', env = process.env } = {}) {
+function shouldRunAttachmentTaskLocally({ fileIds = [], goal = '', documentPolicy = null, env = process.env } = {}) {
   if (env.AGENT_TASK_QUEUE_ATTACHMENTS === '1') return false;
+  if (documentPolicy?.autoGenerate || documentPolicy?.mode === 'doc_required') return false;
   return (Array.isArray(fileIds) && fileIds.length > 0) || isTranscriptionRequest(goal);
+}
+
+function resolveQueuedStreamTimeoutMs({ taskId, userId, env = process.env } = {}) {
+  const configured = Number.parseInt(env.AGENT_RESPONSE_TIMEOUT_MS || '', 10);
+  if (Number.isFinite(configured) && configured > 0) return Math.max(30_000, configured);
+  const snapshot = getTaskForUser(taskId, userId) || taskStore.getTaskSnapshotForUser(taskId, userId);
+  const heavyDocumentRun = Boolean(
+    snapshot?.documentPolicy?.autoGenerate
+    || snapshot?.documentPolicy?.mode === 'doc_required'
+  );
+  return heavyDocumentRun ? 3 * 60 * 60 * 1000 : 300_000;
 }
 
 // Resolve the step/runtime budget for an agent task. Explicit caller values
@@ -1926,12 +1938,6 @@ async function handleQueuedTaskRequest(req, res) {
       providedFileIds: fileIds,
     });
   }
-  if (shouldRunAttachmentTaskLocally({ fileIds, goal: agentGoal })) {
-    return handleLocalTaskRequest(req, res, {
-      fallbackReason: 'attachment_local_runtime',
-      fallbackDetail: 'attached document/image analysis bypassed queued runtime',
-    });
-  }
   const clientFileMetadata = normalizeClientMetadata(req.body.fileMetadata, fileIds);
   const taskId = crypto.randomUUID();
   const traceId = crypto.randomUUID();
@@ -1942,6 +1948,12 @@ async function handleQueuedTaskRequest(req, res) {
     displayGoal,
     files: fileIds,
   });
+  if (shouldRunAttachmentTaskLocally({ fileIds, goal: agentGoal, documentPolicy })) {
+    return handleLocalTaskRequest(req, res, {
+      fallbackReason: 'attachment_local_runtime',
+      fallbackDetail: 'attached document/image chat analysis bypassed queued runtime',
+    });
+  }
   const { maxSteps, maxRuntimeMs } = resolveAgentTaskBudget({
     maxStepsRaw: req.body.maxSteps,
     maxRuntimeMsRaw: req.body.maxRuntimeMs,
@@ -2371,8 +2383,10 @@ function streamTaskEvents(req, res, taskId, userId) {
   res.on('drain', () => { /* no-op, reserved for backpressure tracking */ });
   req.on('aborted', () => { safeCloseQueuedConnection(); });
 
-  // Response timeout (5 min default, configurable via env)
-  const TIMEOUT = Math.max(30_000, Number.parseInt(process.env.AGENT_RESPONSE_TIMEOUT_MS || '300000', 10));
+  // Response timeout: short interactive queued runs stay bounded, but heavy
+  // document-edit/deliverable runs can legitimately take much longer while the
+  // worker keeps writing progress in the background.
+  const TIMEOUT = resolveQueuedStreamTimeoutMs({ taskId, userId });
   res.setTimeout(TIMEOUT, () => {
     safeCloseQueuedConnection('La tarea agéntica no respondió a tiempo (timeout). El runtime puede estar saturado; intenta de nuevo.');
     console.warn('[agent-task] queued SSE response timeout');
@@ -2548,7 +2562,16 @@ function looksLikeAttachmentRecoveryNeeded(text) {
     value.includes('vuelve a intentarlo') ||
     value.includes('reformula la solicitud') ||
     value.includes('no pude acceder al contenido') ||
-    value.includes('proporciona un archivo legible')
+    value.includes('proporciona un archivo legible') ||
+    value.includes('missing_scopes') ||
+    value.includes('docintel_analyze') ||
+    value.includes('docintel_retrieve') ||
+    value.includes('nota sobre verificación') ||
+    value.includes('nota sobre verificacion') ||
+    value.includes('error de autorización del servidor') ||
+    value.includes('error de autorizacion del servidor') ||
+    value.includes('herramientas de análisis documental profundo') ||
+    value.includes('herramientas de analisis documental profundo')
   );
 }
 
@@ -2670,7 +2693,7 @@ function buildAgentSystemPrompt(
     parts.push(buildExecutionProfilePrompt(executionProfile));
   }
   if (fileIds.length) {
-    parts.push(`Uploaded/reference file ids available to tools: ${fileIds.join(', ')}. If the user asks about their content, call rag_retrieve before answering. If the user asks to transcribe, produce the exact readable text from the uploaded/pasted content; do not create a document unless the prompt explicitly requests Word/PDF/PPT/Excel.`);
+    parts.push(`Uploaded/reference file ids available to tools: ${fileIds.join(', ')}. If the user asks about their content, call rag_retrieve before answering. If the user asks to edit/apply corrections/improve/add/remove/complete/format/convert the attachment, return a new edited artifact in the requested or original format instead of prose-only advice. If the user asks to transcribe, produce the exact readable text from the uploaded/pasted content; do not create a document unless the prompt explicitly requests Word/PDF/PPT/Excel.`);
   }
   const documentAnalysisQualityBlock = documentAnalysisQuality.buildPromptBlock({
     prompt: agentGoal,
@@ -3164,6 +3187,7 @@ router.INTERNAL = {
   normalizeSystemContract,
   reduceAgentState,
   safeJsonStringify,
+  resolveQueuedStreamTimeoutMs,
   shouldRunAttachmentTaskLocally,
   shortLabel,
   streamTaskEvents,

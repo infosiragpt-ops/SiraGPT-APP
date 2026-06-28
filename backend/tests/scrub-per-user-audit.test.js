@@ -51,7 +51,10 @@ test('each user gets its OWN scrubbed counts in the audit row, not the running s
   try {
     const result = await run({
       prisma: buildFakePrisma(),
-      piiMask: { mask: () => '[masked]' },
+      // The scrub job deep-masks metadata/files JSON via maskObject, not just
+      // free text via mask — the fake must expose BOTH or run() throws
+      // `maskObject is not a function` (regressed when deep-scrub was added).
+      piiMask: { mask: () => '[masked]', maskObject: (o) => o },
       dryRun: false,
       now: new Date('2030-01-01T00:00:00Z'),
       scrubAfterDays: 0,

@@ -57,20 +57,22 @@ function progressStream(req, res) {
     try {
       const records = await prisma.file.findMany({
         where: { id: { in: fileIds }, userId },
-        select: { id: true, processingStatus: true, extractedTextLength: true },
+        select: { id: true, processingStage: true, processingError: true, extractedText: true },
       });
 
       let allDone = true;
       for (const rec of records) {
-        const current = rec.processingStatus || 'unknown';
+        const current = rec.processingStage || 'uploaded';
         const previous = lastKnown.get(rec.id) || '';
+        const extractedChars = String(rec.extractedText || '').length;
 
         if (current !== previous) {
           lastKnown.set(rec.id, current);
           const event = JSON.stringify({
             fileId: rec.id,
             stage: current,
-            extractedChars: rec.extractedTextLength || 0,
+            error: rec.processingError || null,
+            extractedChars,
             timestamp: Date.now(),
           });
           res.write(`event: stage\ndata: ${event}\n\n`);
@@ -80,14 +82,14 @@ function progressStream(req, res) {
             const complete = JSON.stringify({
               fileId: rec.id,
               success: true,
-              extractedChars: rec.extractedTextLength || 0,
+              extractedChars,
             });
             res.write(`event: complete\ndata: ${complete}\n\n`);
-          } else if (current === 'error') {
+          } else if (current === 'failed') {
             handled.add(rec.id);
             const error = JSON.stringify({
               fileId: rec.id,
-              error: 'Processing failed',
+              error: rec.processingError || 'Processing failed',
             });
             res.write(`event: error\ndata: ${error}\n\n`);
           }

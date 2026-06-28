@@ -173,3 +173,22 @@ test('run(): LLM API error terminates loop gracefully', async () => {
   assert.equal(result.terminatedBy, 'error');
   assert.equal(result.final, null);
 });
+
+test('run(): a failed tool result is NOT cached, so an identical retry can recover', async () => {
+  let calls = 0;
+  const flaky = {
+    name: 'flaky', description: 'f', schema: {},
+    handler: async () => { calls += 1; if (calls === 1) throw new Error('transient'); return { text: 'recovered' }; },
+  };
+  // Same tool+args (same cache key) but different `thought` so the same-response
+  // loop detector doesn't abort before the retry.
+  const openai = scriptedLLM([
+    JSON.stringify({ thought: 'attempt 1', tool: 'flaky', args: { x: 1 } }),
+    JSON.stringify({ thought: 'attempt 2', tool: 'flaky', args: { x: 1 } }),
+    JSON.stringify({ final: 'done' }),
+  ]);
+  const result = await core.run({ openai, goal: 'g', tools: [flaky] });
+  assert.equal(calls, 2, 'the retry re-invoked the handler — the error was not cached');
+  const flakySteps = result.trace.filter((s) => s.tool === 'flaky');
+  assert.ok(flakySteps.some((s) => s.observation && s.observation.text === 'recovered'), 'second attempt recovered');
+});

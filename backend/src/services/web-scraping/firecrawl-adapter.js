@@ -10,18 +10,20 @@ function createFirecrawlScraper({ env = process.env, fetchImpl = globalThis.fetc
     const res = await fetchImpl(`${host}/v1/scrape`, {
       method: 'POST', headers: { 'content-type': 'application/json', Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({ url, formats: opts.formats || ['markdown'], onlyMainContent: opts.onlyMainContent !== false }),
+      signal: AbortSignal.timeout(opts.timeoutMs || 15000),
     });
     if (!res.ok) throw Object.assign(new Error(`Firecrawl failed: ${res.status}`), { status: res.status });
     const data = await res.json();
     return { configured: true, results: data.data };
   }
 
-  async function deepSearch(query, { maxResults = 3 } = {}) {
+  async function deepSearch(query, { maxResults = 3, timeoutMs = 10000 } = {}) {
     if (!configured) return { configured: false, results: [] };
     try {
       const res = await fetchImpl(`${host}/v1/search`, {
         method: 'POST', headers: { 'content-type': 'application/json', Authorization: `Bearer ${apiKey}` },
         body: JSON.stringify({ query, limit: maxResults, scrapeOptions: { formats: ['markdown'] } }),
+        signal: AbortSignal.timeout(timeoutMs),
       });
       if (!res.ok) throw new Error(`Firecrawl search failed: ${res.status}`);
       const data = await res.json();

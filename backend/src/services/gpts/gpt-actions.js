@@ -271,17 +271,23 @@ async function readCappedText(response) {
   const decoder = new TextDecoder('utf-8', { fatal: false });
   let out = '';
   let bytes = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    const remaining = ACTION_MAX_BODY_BYTES - bytes;
-    if (value.byteLength >= remaining) {
-      out += decoder.decode(value.subarray(0, remaining), { stream: false });
-      try { reader.cancel(); } catch (_) { /* ignore */ }
-      break;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const remaining = ACTION_MAX_BODY_BYTES - bytes;
+      if (value.byteLength >= remaining) {
+        out += decoder.decode(value.subarray(0, remaining), { stream: false });
+        break;
+      }
+      out += decoder.decode(value, { stream: true });
+      bytes += value.byteLength;
     }
-    out += decoder.decode(value, { stream: true });
-    bytes += value.byteLength;
+  } finally {
+    // Release the stream on every exit path (done, truncation, mid-read
+    // throw) — previously only truncation cancelled, leaking the socket
+    // on normal completion.
+    try { reader.cancel(); } catch (_) { /* ignore */ }
   }
   return out;
 }

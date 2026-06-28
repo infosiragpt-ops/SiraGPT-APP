@@ -126,7 +126,9 @@ async function listEvents(runId, { afterSeq = 0, limit = 5000, prisma = defaultP
   const rows = await db.codexEvent.findMany({
     where: { runId, seq: { gt: Number(afterSeq) || 0 } },
     orderBy: { seq: 'asc' },
-    take: Math.max(1, Math.min(20000, Number(limit) || 5000)),
+    // `Number(limit) || 5000` turned an explicit limit of 0 into 5000; use a
+    // NaN-only fallback then clamp to [1, 20000].
+    take: Math.max(1, Math.min(20000, Number.isFinite(Number(limit)) ? Number(limit) : 5000)),
   });
   return rows.map((r) =>
     buildEnvelope({

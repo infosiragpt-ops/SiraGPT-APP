@@ -131,22 +131,30 @@ async function readSnapshots({ userId, chatId, limit = 128, since = null } = {})
   const inMem = inMemoryMirror.get(keyFor(userId, chatId)) || [];
   let combined = [...inMem];
   if (ENABLED) {
-    const { file } = pathsFor(userId, chatId);
-    try {
-      const data = await fs.promises.readFile(file, 'utf8');
-      const fileSnaps = data.split('\n')
-        .filter(Boolean)
-        .map((line) => { try { return JSON.parse(line); } catch { return null; } })
-        .filter(Boolean);
-      // de-dup by turnId, prefer file order
-      const seen = new Set(combined.map((s) => s.turnId).filter(Boolean));
-      for (const s of fileSnaps) {
-        if (s.turnId && seen.has(s.turnId)) continue;
-        combined.push(s);
-        if (s.turnId) seen.add(s.turnId);
+    const { file, oldFile } = pathsFor(userId, chatId);
+    // Read the rolled-over archive (.old.jsonl) FIRST, then the live file. The
+    // rollover renames the full current file to .old.jsonl, so everything
+    // written before the most recent rollover lived there — reading only the
+    // live file made up to MAX_PER_CHAT older snapshots invisible to
+    // readSnapshots/tail/countSnapshots.
+    const fileSnaps = [];
+    for (const f of [oldFile, file]) {
+      try {
+        const data = await fs.promises.readFile(f, 'utf8');
+        for (const line of data.split('\n')) {
+          if (!line) continue;
+          try { fileSnaps.push(JSON.parse(line)); } catch { /* skip corrupt line */ }
+        }
+      } catch (err) {
+        if (err.code !== 'ENOENT') throw err;
       }
-    } catch (err) {
-      if (err.code !== 'ENOENT') throw err;
+    }
+    // de-dup by turnId, prefer in-memory/earlier order
+    const seen = new Set(combined.map((s) => s.turnId).filter(Boolean));
+    for (const s of fileSnaps) {
+      if (s.turnId && seen.has(s.turnId)) continue;
+      combined.push(s);
+      if (s.turnId) seen.add(s.turnId);
     }
   }
   if (since) combined = combined.filter((s) => Number(s.ts) >= Number(since));

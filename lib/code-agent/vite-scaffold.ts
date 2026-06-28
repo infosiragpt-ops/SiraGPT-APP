@@ -479,7 +479,7 @@ function buildIndexHtml(model: LandingModel): string {
   <body>
     <div id="root">
       <p style="font-family: system-ui, sans-serif; padding: 2rem; color: #888">
-        Proyecto Vite + React + TypeScript — pulsa ▶ Ejecutar para instalar dependencias y ver la página en vivo.
+        Proyecto Vite + React + TypeScript — el agente abre y arranca el preview en vivo automaticamente.
       </p>
     </div>
     <script type="module" src="/src/main.tsx"></script>

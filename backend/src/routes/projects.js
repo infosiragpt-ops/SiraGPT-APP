@@ -71,10 +71,12 @@ router.use(authenticateToken);
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
 function ownProject(userId, id) {
-  // Same-shape helper used across endpoints — a missing or foreign
-  // project resolves to null so the caller can 404 uniformly.
+  // Same-shape helper used across endpoints — a missing, foreign, OR
+  // soft-deleted project resolves to null so the caller can 404 uniformly.
+  // Without softDeleteWhere, every mutation route (rename, delete, file ops,
+  // hosting, …) would happily act on a project already in the trash.
   return prisma.project.findFirst({
-    where: { id, userId },
+    where: softDeleteWhere({ id, userId }),
     select: { id: true, userId: true, name: true },
   });
 }
@@ -125,7 +127,14 @@ router.get(
           id: true, name: true, description: true, instructions: true,
           type: true, hostingProvider: true,
           isStarred: true, shareId: true, createdAt: true, updatedAt: true,
-          _count: { select: { files: true, chats: true } },
+          // Count only live files/chats — soft-deleted ones must not inflate
+          // the per-project badges on the projects list.
+          _count: {
+            select: {
+              files: { where: { deletedAt: null } },
+              chats: { where: { deletedAt: null } },
+            },
+          },
         },
       });
 
@@ -194,9 +203,10 @@ router.get('/:id', param('id').isString(), async (req, res) => {
   try {
     if (validationFail(req, res)) return;
     const project = await prisma.project.findFirst({
-      where: { id: req.params.id, userId: req.user.id },
+      where: softDeleteWhere({ id: req.params.id, userId: req.user.id }),
       include: {
         files: {
+          where: { deletedAt: null },
           select: {
             id: true, filename: true, originalName: true,
             mimeType: true, size: true, createdAt: true,
@@ -204,6 +214,7 @@ router.get('/:id', param('id').isString(), async (req, res) => {
           orderBy: { createdAt: 'desc' },
         },
         chats: {
+          where: { deletedAt: null },
           select: { id: true, title: true, model: true, createdAt: true, updatedAt: true },
           orderBy: { updatedAt: 'desc' },
           take: 50, // cap payload size; project pages rarely need every chat
@@ -224,9 +235,10 @@ router.get('/:id/context', param('id').isString(), async (req, res) => {
   try {
     if (validationFail(req, res)) return;
     const project = await prisma.project.findFirst({
-      where: { id: req.params.id, userId: req.user.id },
+      where: softDeleteWhere({ id: req.params.id, userId: req.user.id }),
       include: {
         files: {
+          where: { deletedAt: null },
           select: {
             id: true,
             originalName: true,
@@ -246,7 +258,16 @@ router.get('/:id/context', param('id').isString(), async (req, res) => {
           orderBy: { updatedAt: 'desc' },
           take: 50,
         },
-        _count: { select: { files: true, chats: true, memories: true, documents: true } },
+        // File/Chat are soft-deletable → count only live rows. Document/Memory
+        // have no deletedAt column, so they're counted unfiltered.
+        _count: {
+          select: {
+            files: { where: { deletedAt: null } },
+            chats: { where: { deletedAt: null } },
+            memories: true,
+            documents: true,
+          },
+        },
       },
     });
     if (!project) return res.status(404).json({ error: 'Project not found' });

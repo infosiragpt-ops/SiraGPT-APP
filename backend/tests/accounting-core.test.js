@@ -167,3 +167,14 @@ test('seedPcge: idempotently upserts every account (fake prisma)', async () => {
   assert.ok(upserts.includes('70'));
   assert.ok(upserts.includes('1'));
 });
+
+test('sumCents sums money as integer cents — float-safe, sign-preserving, empty/non-array safe', () => {
+  assert.equal(money.sumCents([]), 0);
+  assert.equal(money.sumCents(null), 0); // non-array → treated as empty
+  assert.equal(money.sumCents(undefined), 0);
+  assert.equal(money.sumCents([100.01, 200.02, 300.03]), 60006);
+  assert.equal(money.sumCents([-10.05, -20.03]), -3008); // sign preserved
+  assert.equal(money.sumCents([0.1, 0.2]), 30); // 0.1+0.2 float trap → exactly 30 cents
+  // sum2 is the public 2-decimal wrapper over sumCents → must agree.
+  assert.equal(money.sum2([100.01, 200.02, 300.03]), 600.06);
+});

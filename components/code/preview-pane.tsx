@@ -28,9 +28,8 @@ import {
 import { cn } from "@/lib/utils"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { useCodeWorkspace } from "@/lib/code-workspace-context"
-import { buildPreviewDocument, type PreviewKind } from "@/lib/code-preview-build"
+import { buildPreviewDocument, projectNeedsDevServer, type PreviewKind } from "@/lib/code-preview-build"
 import { CODE_TEMPLATES } from "@/lib/code-templates"
-import { opencodeService } from "@/lib/opencode/opencode-service"
 import { hostRunnerService } from "@/lib/code-runner/host-runner-service"
 import { githubService } from "@/lib/github-service"
 import { CODE_GIT_BINDING_CHANGED_EVENT, getGitBinding } from "@/lib/code-git-mirror"
@@ -40,6 +39,8 @@ type RunnerStatus = { ready?: boolean; error?: string | null; framework?: string
 
 type LogEntry = { level: string; text: string; id: number }
 type Device = "responsive" | "phone"
+
+const CODE_RUN_PREVIEW_EVENT = "siragpt:code-run-preview"
 
 const KIND_LABEL: Record<PreviewKind, string> = {
   html: "web",
@@ -72,12 +73,13 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
   const [logs, setLogs] = React.useState<LogEntry[]>([])
   const logSeq = React.useRef(0)
 
-  // Phase B — run a real Node/Vite/Next app and iframe it live. Prefer the
-  // no-Docker host runner (local); fall back to the opencode/Docker runner (prod).
+  // Phase B — run a real Vite app and iframe it live via the no-Docker host
+  // runner. The dev server stays private on the server; the browser reaches it
+  // through the same-origin reverse proxy (/api/code-runner/<id>/app/).
   const [liveRun, setLiveRun] = React.useState<LiveRun>({ phase: "idle", devUrl: "", note: "" })
   const pollRef = React.useRef<number | null>(null)
   const runIdRef = React.useRef<string>("")
-  const modeRef = React.useRef<"host" | "opencode" | "github">("host")
+  const modeRef = React.useRef<"host" | "github">("host")
   const [gitBinding, setGitBinding] = React.useState<string | null>(() =>
     typeof window === "undefined" ? null : getGitBinding(activeFolder?.id ?? null),
   )
@@ -87,6 +89,22 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
     [files],
   )
   const canRunProject = hasNodeProject || Boolean(gitBinding)
+  const projectSignature = React.useMemo(() => {
+    if (!canRunProject) return ""
+    const names = Object.keys(files || {}).sort()
+    const keyFiles = [
+      "package.json",
+      "index.html",
+      "src/main.tsx",
+      "src/App.tsx",
+      "app/page.tsx",
+      "prisma/schema.prisma",
+    ]
+    const fingerprint = keyFiles
+      .map((path) => `${path}:${files[path]?.content?.length ?? 0}`)
+      .join("|")
+    return `${activeFolder?.id || "local"}:${gitBinding || "workspace"}:${names.join(",")}:${fingerprint}`
+  }, [activeFolder?.id, canRunProject, files, gitBinding])
 
   React.useEffect(() => {
     if (typeof window === "undefined") return
@@ -110,8 +128,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
   const stopApp = React.useCallback(() => {
     clearPoll()
     setLiveRun({ phase: "idle", devUrl: "", note: "" })
-    if (modeRef.current === "opencode") void opencodeService.stopRun()
-    else if (modeRef.current === "github" && runIdRef.current) void githubService.stop(runIdRef.current)
+    if (modeRef.current === "github" && runIdRef.current) void githubService.stop(runIdRef.current)
     else if (runIdRef.current) void hostRunnerService.stop(runIdRef.current)
   }, [clearPoll])
 
@@ -139,7 +156,8 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
     [clearPoll],
   )
 
-  const runApp = React.useCallback(async () => {
+  const runApp = React.useCallback(async (opts?: { auto?: boolean }) => {
+    const auto = opts?.auto ?? false
     setLiveRun({ phase: "starting", devUrl: "", note: "Instalando dependencias y arrancando el dev server…" })
     if (!runIdRef.current) {
       try {
@@ -175,26 +193,120 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
     // Workspace files are CodeFile objects; the runner wants path -> content.
     const fileMap: Record<string, string> = {}
     for (const [p, f] of Object.entries(files)) fileMap[p] = f?.content ?? ""
-    // 1) Local host runner (no Docker) — the default everywhere it's enabled.
+    modeRef.current = "host"
+    // No-Docker host runner: install deps + boot a real vite dev server, then
+    // iframe it through the same-origin reverse proxy (started.devUrl).
     const started = await hostRunnerService.start(fileMap, runIdRef.current)
-    if (!started.disabled) {
-      modeRef.current = "host"
-      if (started.error) {
-        setLiveRun({ phase: "error", devUrl: "", note: started.error })
+    // An AUTO run (the agent just finished building) must degrade SILENTLY when
+    // the runner can't even start — a disabled environment, or a user who isn't
+    // on the allowlist (403 → started.error). Falling back to the static preview
+    // is friendlier than slapping a red "no se pudo correr" over a preview the
+    // user never asked to run. A manual ▶ Ejecutar still surfaces the reason.
+    if (started.disabled) {
+      if (auto) {
+        setLiveRun({ phase: "idle", devUrl: "", note: "" })
         return
       }
-      pollUntilReady(() => hostRunnerService.status(runIdRef.current), started.devUrl || "")
+      setLiveRun({
+        phase: "error",
+        devUrl: "",
+        note: "El motor de ejecución está desactivado en este entorno. Para correr apps aquí hay que activar CODE_HOST_RUNNER.",
+      })
       return
     }
-    // 2) Fallback: opencode/Docker runner (production).
-    modeRef.current = "opencode"
-    const res = await opencodeService.runProject()
-    if (res.error) {
-      setLiveRun({ phase: "error", devUrl: "", note: res.error })
+    if (started.error) {
+      if (auto) {
+        setLiveRun({ phase: "idle", devUrl: "", note: "" })
+        return
+      }
+      setLiveRun({ phase: "error", devUrl: "", note: started.error })
       return
     }
-    pollUntilReady(() => opencodeService.runStatus(), res.devUrl || "http://localhost:5173")
+    pollUntilReady(() => hostRunnerService.status(runIdRef.current), started.devUrl || "")
   }, [activeFolder?.id, files, pollUntilReady])
+
+  // Mirror the latest values into refs so the auto-run listener (registered
+  // once) and the post-commit auto-run effect always read FRESH state without
+  // having to re-subscribe on every keystroke.
+  const filesRef = React.useRef(files)
+  filesRef.current = files
+  const runAppRef = React.useRef(runApp)
+  runAppRef.current = runApp
+  const phaseRef = React.useRef(liveRun.phase)
+  phaseRef.current = liveRun.phase
+  const activeFolderIdRef = React.useRef<string | null>(activeFolder?.id ?? null)
+  activeFolderIdRef.current = activeFolder?.id ?? null
+  // A build that finishes while a previous boot is still installing can't restart
+  // mid-install; we queue it here and fire once the in-flight run settles so the
+  // preview always lands on the newest code.
+  const pendingAutoRunRef = React.useRef(false)
+  const lastAutoRunSignatureRef = React.useRef("")
+
+  // The chat panel dispatches "siragpt:code-run-app" in the SAME tick as the
+  // applyBlock() setState that writes the new files — so at event time the
+  // workspace has not committed yet and reading `files` here would be stale.
+  // For an AUTO run we therefore only bump a signal; the post-commit effect
+  // below evaluates the gate against the freshly-committed workspace. A manual
+  // trigger (▶ Ejecutar elsewhere / dev-server workflow) is not concurrent with
+  // a build, so its files are already stable and it can run immediately.
+  const [autoRunSignal, setAutoRunSignal] = React.useState(0)
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const queueAutoRun = () => setAutoRunSignal((s) => s + 1)
+    const onRun = (e: Event) => {
+      const auto = ((e as CustomEvent).detail as { auto?: boolean } | undefined)?.auto ?? false
+      if (auto) {
+        queueAutoRun()
+        return
+      }
+      const hasRunnableProject =
+        Object.keys(filesRef.current || {}).some((p) => /(^|\/)package\.json$/.test(p)) ||
+        Boolean(getGitBinding(activeFolderIdRef.current))
+      if (hasRunnableProject) {
+        void runAppRef.current()
+      }
+    }
+    window.addEventListener("siragpt:code-run-app", onRun)
+    window.addEventListener(CODE_RUN_PREVIEW_EVENT, queueAutoRun)
+    return () => {
+      window.removeEventListener("siragpt:code-run-app", onRun)
+      window.removeEventListener(CODE_RUN_PREVIEW_EVENT, queueAutoRun)
+    }
+  }, [])
+
+  // Post-commit auto-run: runs once per build signal, AFTER React has committed
+  // the new files (the signal bump batches with the applyBlock setState). Boot
+  // the heavy dev server only for a real Vite/Next project the srcdoc preview
+  // can't render; the deterministic Builder's self-contained index.html is
+  // skipped so it never triggers an npm install.
+  React.useEffect(() => {
+    if (autoRunSignal === 0) return
+    const needsDevServer = projectNeedsDevServer(filesRef.current) || Boolean(getGitBinding(activeFolderIdRef.current))
+    if (!canRunProject || !projectSignature || !needsDevServer) return
+    if (lastAutoRunSignatureRef.current === projectSignature && phaseRef.current !== "error") return
+    // Don't interrupt an install already in flight — queue a retry instead so
+    // the newest code still shows once it settles.
+    if (phaseRef.current === "starting") {
+      pendingAutoRunRef.current = true
+      return
+    }
+    lastAutoRunSignatureRef.current = projectSignature
+    void runAppRef.current({ auto: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRunSignal, canRunProject, projectSignature])
+
+  // Drain a queued auto-run once the in-flight boot settles (ready/error/idle).
+  React.useEffect(() => {
+    if (liveRun.phase === "starting") return
+    if (!pendingAutoRunRef.current) return
+    pendingAutoRunRef.current = false
+    const needsDevServer = projectNeedsDevServer(filesRef.current) || Boolean(getGitBinding(activeFolderIdRef.current))
+    if (!canRunProject || !projectSignature || !needsDevServer) return
+    if (lastAutoRunSignatureRef.current === projectSignature && phaseRef.current !== "error") return
+    lastAutoRunSignatureRef.current = projectSignature
+    void runAppRef.current({ auto: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveRun.phase, canRunProject, projectSignature])
 
   React.useEffect(
     () => () => {
@@ -244,11 +356,16 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
 
   const openInNewTab = React.useCallback(() => {
     if (typeof window === "undefined") return
+    // NUNCA abrir el runner en vivo en una pestaña top-level: ahí no hay sandbox
+    // y el código generado NO confiable correría con el origen real de SiraGPT
+    // (acceso a localStorage/cookies/APIs). La app en vivo solo se ve dentro del
+    // iframe aislado. Para la preview estática (HTML) sí abrimos un blob.
+    if (liveRun.phase === "ready") return
     const blob = new Blob([result.html], { type: "text/html" })
     const url = URL.createObjectURL(blob)
     window.open(url, "_blank", "noopener,noreferrer")
     setTimeout(() => URL.revokeObjectURL(url), 30_000)
-  }, [result.html])
+  }, [liveRun.phase, result.html])
 
   const errorCount = logs.filter((l) => l.level === "error").length
   const entryLabel = result.entry ? result.entry.split("/").pop() : "preview"
@@ -310,7 +427,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
               ) : (
                 <button
                   type="button"
-                  onClick={runApp}
+                  onClick={() => void runApp()}
                   title="Instalar dependencias y correr el app (npm)"
                   className="flex h-6 items-center gap-1 rounded-md bg-[hsl(var(--accent-violet)/0.16)] px-2 text-[11px] font-medium text-[hsl(var(--accent-violet))] transition-colors hover:bg-[hsl(var(--accent-violet)/0.28)]"
                 >
@@ -347,9 +464,10 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
           <button
             type="button"
             onClick={openInNewTab}
-            className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+            disabled={liveRun.phase === "ready"}
+            className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
             aria-label="Abrir en pestaña nueva"
-            title="Abrir en pestaña nueva"
+            title={liveRun.phase === "ready" ? "La app en vivo solo se ve aquí (aislada por seguridad)" : "Abrir en pestaña nueva"}
           >
             <ExternalLink className="h-3.5 w-3.5" />
           </button>
@@ -380,9 +498,13 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
             <iframe
               src={liveRun.devUrl}
               title="App en vivo (dev server)"
-              // El dev server corre en otro puerto (cross-origin): sin este
-              // permiso, navigator.clipboard.writeText falla dentro del iframe
+              // El dev server se sirve same-origin (vía proxy /api/code-runner)
+              // pero ejecuta CÓDIGO GENERADO NO CONFIABLE: el sandbox SIN
+              // allow-same-origin lo aísla en un origen opaco para que no pueda
+              // leer el localStorage/cookies de SiraGPT ni llamar a sus APIs.
+              // allow="clipboard-write" mantiene navigator.clipboard.writeText
               // (p.ej. el botón Copiar del componente «Invitar al proyecto»).
+              sandbox="allow-scripts allow-forms allow-popups allow-modals allow-pointer-lock"
               allow="clipboard-write"
               className="h-full w-full border-0 bg-white dark:bg-zinc-900"
             />
@@ -401,7 +523,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
             <p className="mx-auto max-w-md font-mono text-[11px] leading-relaxed text-muted-foreground">{liveRun.note}</p>
             <button
               type="button"
-              onClick={runApp}
+              onClick={() => void runApp()}
               className="rounded-md bg-[hsl(var(--accent-violet)/0.16)] px-3 py-1.5 text-[12px] font-medium text-[hsl(var(--accent-violet))] hover:bg-[hsl(var(--accent-violet)/0.28)]"
             >
               Reintentar

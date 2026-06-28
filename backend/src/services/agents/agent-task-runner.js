@@ -563,10 +563,15 @@ function buildStructuredAttachmentAnalysisAnswer({ goal, uploadedFileContext }) 
 
   const paragraphs = [];
   if (wantsCalculation && Number.isFinite(facts.totalReal) && Number.isFinite(facts.totalContract)) {
-    const diff = Number.isFinite(facts.difference) ? facts.difference : facts.totalReal - facts.totalContract;
-    const diffLabel = diff >= 0 ? 'por encima' : 'por debajo';
+    // The SIGN must come from the totals, not from facts.difference: an explicit
+    // "Diferencia:" line in the document is parsed as a non-negative magnitude
+    // (the matcher captures only \d+...), so using it for the direction reported
+    // "por encima" even when real < contract (it should be "por debajo").
+    const signedDiff = facts.totalReal - facts.totalContract;
+    const diffMagnitude = Number.isFinite(facts.difference) ? Math.abs(facts.difference) : Math.abs(signedDiff);
+    const diffLabel = signedDiff >= 0 ? 'por encima' : 'por debajo';
     paragraphs.push(
-      `El total real combinado es **${formatAttachmentNumber(facts.totalReal)} USD** frente a **${formatAttachmentNumber(facts.totalContract)} USD** contratados; la diferencia es **${formatAttachmentNumber(Math.abs(diff))} USD** ${diffLabel} del contrato.`
+      `El total real combinado es **${formatAttachmentNumber(facts.totalReal)} USD** frente a **${formatAttachmentNumber(facts.totalContract)} USD** contratados; la diferencia es **${formatAttachmentNumber(diffMagnitude)} USD** ${diffLabel} del contrato.`
     );
   }
   if ((wantsCalculation || wantsRecommendation) && facts.worstGap) {
@@ -732,7 +737,16 @@ function looksLikeMissingAttachmentAnswer(text) {
     value.includes('falló de forma repetida') ||
     value.includes('fallo de forma repetida') ||
     value.includes('vuelve a intentarlo') ||
-    value.includes('reformula la solicitud')
+    value.includes('reformula la solicitud') ||
+    value.includes('missing_scopes') ||
+    value.includes('docintel_analyze') ||
+    value.includes('docintel_retrieve') ||
+    value.includes('nota sobre verificación') ||
+    value.includes('nota sobre verificacion') ||
+    value.includes('error de autorización del servidor') ||
+    value.includes('error de autorizacion del servidor') ||
+    value.includes('herramientas de análisis documental profundo') ||
+    value.includes('herramientas de analisis documental profundo')
   );
 }
 
@@ -1510,6 +1524,15 @@ async function persistAssistantMessage({
 // unaffected.
 const inFlightAgentTasks = new Map(); // taskId → Promise
 
+function resolveAgentToolScopes(user = {}) {
+  const scopes = new Set(Array.isArray(user.scopes) ? user.scopes : []);
+  if (user && user.id) {
+    scopes.add('files.read');
+    scopes.add('rag.read');
+  }
+  return Array.from(scopes);
+}
+
 function runAgentTaskJob(payload = {}, job = null) {
   const taskId = payload && payload.taskId;
   if (!taskId) return _runAgentTaskJobImpl(payload, job);
@@ -1579,7 +1602,11 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           onEvent: (type, data) => {
             try {
               taskStore.appendTaskEvent({ taskId, userId: user.id }, { type, payload: data });
-            } catch { /* best-effort */ }
+            } catch (err) {
+              // Best-effort: keep the multi-agent run going, but surface a lost
+              // sub-task event (durable trace + SSE replay feed off this hook).
+              console.warn('[agent-task-runner] fork_join event append failed for', taskId, '-', err?.message || err);
+            }
           },
         },
       });
@@ -1637,7 +1664,12 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         });
       } catch (_evtErr) { /* swallow */ }
     }
-  } catch (_attrErr) { /* swallow */ }
+  } catch (_attrErr) {
+    // Non-fatal telemetry, but a broken/renamed attribution-executive-summary
+    // module would otherwise be invisible forever. (Matches the file's other
+    // '[agent-task-runner] … unavailable' warn convention.)
+    console.warn('[agent-task-runner] attribution summary unavailable:', _attrErr?.message || _attrErr);
+  }
   const universalTaskContract = buildUniversalTaskContract({
     rawUserRequest: goal,
     fileIds: files,
@@ -2165,6 +2197,10 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           fileIds: files,
           prompt: goal,
           displayPrompt: displayGoal,
+          // Thread the run's abort signal so the runtimeTimer (maxRuntimeMs+5s)
+          // can actually cancel this pre-loop deterministic edit; the function
+          // already accepts + propagates it to its LLM/sandbox calls.
+          signal: controller.signal,
         });
         if (preserved === null) {
           // No había archivo adjunto ni artefacto previo que conservar: la
@@ -2762,7 +2798,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       toolAuthCtx: {
         userId: user.id,
         clearance: user.clearance || 'authenticated',
-        scopes: user.scopes || [],
+        scopes: resolveAgentToolScopes(user),
         taskId,
       },
       toolUsageMap,
@@ -2929,15 +2965,18 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
 
     let finalMarkdown = result.finalAnswer || '';
     let stoppedReason = result.stoppedReason;
-    const recoveryUploadedFileContext = [
-      uploadedFileContext,
-      buildToolObservationFallbackContext(result.steps),
-    ].filter(Boolean).join('\n');
     const attachmentFinalNeedsRecovery = Array.isArray(files) && files.length > 0 && (
       looksLikeEmptyOrWeakFinalAnswer(finalMarkdown) ||
       looksLikeMissingAttachmentAnswer(finalMarkdown)
     );
     if (attachmentFinalNeedsRecovery) {
+      // Built only on the recovery path: buildToolObservationFallbackContext is
+      // a pure full step×action walk (+ JSON.stringify per observation) that was
+      // previously computed on every finalization and discarded on the happy path.
+      const recoveryUploadedFileContext = [
+        uploadedFileContext,
+        buildToolObservationFallbackContext(result.steps),
+      ].filter(Boolean).join('\n');
       const llmRecoveredMarkdown = await buildLlmAttachmentRecoveryAnswer({
         goal: displayGoal || goal,
         uploadedFileContext: recoveryUploadedFileContext,
@@ -3027,6 +3066,9 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             fileIds: files,
             prompt: goal,
             displayPrompt: displayGoal,
+            // Thread the run's abort signal so the runtimeTimer can cancel this
+            // post-loop edit instead of letting it stall past maxRuntimeMs.
+            signal: controller.signal,
           });
           if (preserved?.artifact) {
             if (!preserved.validation?.passed) {
@@ -3361,5 +3403,6 @@ module.exports = {
   parseSpreadsheetCitationRows,
   parseCitationAuthors,
   resolveAttachmentFallbackMarkdown,
+  resolveAgentToolScopes,
   shouldUseDeterministicAttachmentAnswer,
 };

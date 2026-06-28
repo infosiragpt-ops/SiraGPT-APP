@@ -314,6 +314,30 @@ describe('forkVote', () => {
     assert.strictEqual(r.vote.winner, 0);
   });
 
+  it('scoreSubTasks maps the LLM winnerIndex from original to filtered position when a sub-task failed', async () => {
+    // Simulate sub-task 1 having failed: `successful` holds original indices [0,2,3].
+    const successful = [
+      { index: 0, goal: 'a', ok: true, result: { summary: 'A' } },
+      { index: 2, goal: 'c', ok: true, result: { summary: 'C' } },
+      { index: 3, goal: 'd', ok: true, result: { summary: 'D' } },
+    ];
+    // The judge (which sees "Candidate 0/2/3") picks Candidate 2 — original index 2.
+    const llm = mock.fn(() => ({
+      choices: [{ message: { content: JSON.stringify({
+        scores: [{ index: 2, total: 40 }, { index: 0, total: 30 }, { index: 3, total: 20 }],
+        winnerIndex: 2,
+        reason: 'best',
+      }) } }],
+    }));
+    const out = await collab._internals.scoreSubTasks(successful, { openai: { chat: { completions: { create: llm } } } });
+    assert.strictEqual(out.winnerIndex, 1, 'original index 2 → filtered position 1');
+    assert.strictEqual(successful[out.winnerIndex].index, 2, 'resolves to the candidate the judge chose');
+    // #20: returned scores keep their input order (not re-sorted in place).
+    assert.deepStrictEqual(out.scores.map((s) => s.index), [2, 0, 3]);
+    // rankings are filtered positions, highest-total first: index2→pos1, index0→pos0, index3→pos2.
+    assert.deepStrictEqual(out.rankings, [1, 0, 2]);
+  });
+
   it('falls back to heuristic when LLM fails', async () => {
     mock.method(runnerModule, 'runAgentTaskJob', () => makeResult());
     const r = await collab.forkVote({

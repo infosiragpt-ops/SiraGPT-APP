@@ -194,7 +194,9 @@ function compress({
     totalOriginal += body.length;
     const sents = splitSentences(body);
     if (sents.length === 0) {
-      compressed.push({ source: p.source, text: '', originalLen: 0, compressedLen: 0, ratio: 1 });
+      // totalOriginal already counted body.length above; report the same here so
+      // the per-record originalLen sum reconciles with the total.
+      compressed.push({ source: p.source, text: '', originalLen: body.length, compressedLen: 0, ratio: 1 });
       continue;
     }
     const scored = sents.map((s, i) => ({

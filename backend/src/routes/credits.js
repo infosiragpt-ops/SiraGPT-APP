@@ -157,33 +157,38 @@ async function atomicSpend({ userId, amount, feature, reason, metadata, idempote
     }
   }
 
-  // Atomic guarded UPDATE — only succeeds if balance is sufficient.
-  const updateResult = await prisma.$executeRawUnsafe(
+  // Atomic guarded UPDATE — only succeeds if balance is sufficient. Capture the
+  // post-debit balance in the SAME statement via RETURNING so the ledger's
+  // balanceAfter reflects exactly this transaction (a separate findUnique could
+  // observe a concurrent spend/grant and record a balance that never matched
+  // this debit). Mirrors middleware/charge-credits.js.
+  const rows = await prisma.$queryRawUnsafe(
     `UPDATE "credits"
        SET "balance" = "balance" - $1::BIGINT,
            "lifetimeSpent" = "lifetimeSpent" + $1::BIGINT,
            "updatedAt" = CURRENT_TIMESTAMP
      WHERE "userId" = $2
-       AND "balance" >= $1::BIGINT`,
+       AND "balance" >= $1::BIGINT
+     RETURNING "balance"`,
     amt.toString(),
     userId,
   );
-  if (updateResult === 0) {
+  if (!Array.isArray(rows) || rows.length === 0) {
     return { ok: false, code: 'INSUFFICIENT' };
   }
-  const after = await prisma.credit.findUnique({ where: { userId } });
+  const balanceAfter = BigInt(rows[0].balance);
   const txn = await prisma.creditTransaction.create({
     data: {
       userId,
       type: 'SPEND',
       amount: -amt, // ledger convention: negative for debits
-      balanceAfter: after.balance,
+      balanceAfter,
       reason: reason || `spend(${feature})`,
       metadata: { feature, ...(metadata || {}) },
       idempotencyKey: idempotencyKey || null,
     },
   });
-  return { ok: true, balanceAfter: after.balance, txn };
+  return { ok: true, balanceAfter, txn };
 }
 
 async function atomicGrant({ userId, amount, type, reason, metadata, idempotencyKey }) {
@@ -193,26 +198,28 @@ async function atomicGrant({ userId, amount, type, reason, metadata, idempotency
     if (existing) return { replay: true, txn: existing };
   }
   await ensureCreditRow(userId);
-  await prisma.credit.update({
+  // Use the row returned by the atomic increment as balanceAfter rather than a
+  // follow-up findUnique that a concurrent write could race.
+  const updated = await prisma.credit.update({
     where: { userId },
     data: {
       balance: { increment: amt },
       lifetimeGranted: { increment: amt },
     },
   });
-  const after = await prisma.credit.findUnique({ where: { userId } });
+  const balanceAfter = updated.balance;
   const txn = await prisma.creditTransaction.create({
     data: {
       userId,
       type,
       amount: amt,
-      balanceAfter: after.balance,
+      balanceAfter,
       reason,
       metadata: metadata || {},
       idempotencyKey: idempotencyKey || null,
     },
   });
-  return { balanceAfter: after.balance, txn };
+  return { balanceAfter, txn };
 }
 
 // ── User-facing routes ─────────────────────────────────────────────

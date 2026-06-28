@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Globe2, List, Loader2, Plus, Rocket, Settings } from "lucide-react"
+import { Globe2, List, Loader2, Rocket, Settings } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -59,7 +59,7 @@ export function EmptyDeploymentDetail({
                     ? "Choose a deployment to view status, logs, domains, and management settings."
                     : `Create a deployment for ${projectLabel} to get status, domains, logs, and version history.`
               }
-              actionLabel="New deployment"
+              actionLabel="Publish"
               onCreate={onCreate}
               disabled={disabled}
             />
@@ -69,7 +69,7 @@ export function EmptyDeploymentDetail({
               icon={<List className="h-5 w-5" />}
               title="No logs yet"
               detail="Create a deployment to stream build output, runtime logs, and recent deploy activity."
-              actionLabel="New deployment"
+              actionLabel="Publish"
               onCreate={onCreate}
               disabled={disabled}
             />
@@ -79,7 +79,7 @@ export function EmptyDeploymentDetail({
               icon={<Globe2 className="h-5 w-5" />}
               title="No domains yet"
               detail="Create a deployment before adding generated domains or connecting a custom domain."
-              actionLabel="New deployment"
+              actionLabel="Publish"
               onCreate={onCreate}
               disabled={disabled}
             />
@@ -89,7 +89,7 @@ export function EmptyDeploymentDetail({
               icon={<Settings className="h-5 w-5" />}
               title="No deployment settings yet"
               detail="Create a deployment to manage runtime type, visibility, lifecycle actions, and publish history."
-              actionLabel="New deployment"
+              actionLabel="Publish"
               onCreate={onCreate}
               disabled={disabled}
             />
@@ -128,7 +128,7 @@ function EmptyPanel({
       </div>
       {!disabled ? (
         <Button size="sm" className="h-9 gap-1.5" onClick={onCreate}>
-          <Plus className="h-3.5 w-3.5" />
+          <Rocket className="h-3.5 w-3.5" />
           {actionLabel}
         </Button>
       ) : null}

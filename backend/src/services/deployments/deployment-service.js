@@ -10,8 +10,11 @@
 
 const pipeline = require('./pipeline');
 const providers = require('./provider-connectors');
+const { deployHostingerVps } = require('./connectors/hostinger-vps-executor');
+const creds = require('../../services/hosting/credentials');
 const crypto = require('node:crypto');
 const { redactPayloadDeep } = require('../../utils/log-redaction');
+const { logger } = require('../../utils/logger');
 
 const defaultPrisma = (() => {
   try { return require('../../config/database'); } catch { return null; }
@@ -226,7 +229,7 @@ function normalizedTierFor(deploymentType, machineTier) {
   return deploymentType;
 }
 
-async function createDeployment({ userId, name, projectId = null, deploymentType = 'autoscale', visibility = 'public', geography = 'na', machineTier, db = defaultPrisma }) {
+async function createDeployment({ userId, name, projectId = null, connectedRepositoryId = null, deploymentType = 'autoscale', visibility = 'public', geography = 'na', machineTier, db = defaultPrisma }) {
   const prisma = requireDb(db);
   if (!pipeline.DEPLOYMENT_TYPES.includes(deploymentType)) throw new DeploymentError(400, 'invalid_type', 'invalid deployment type');
   if (!pipeline.VISIBILITIES.includes(visibility)) throw new DeploymentError(400, 'invalid_visibility', 'invalid visibility');
@@ -238,6 +241,7 @@ async function createDeployment({ userId, name, projectId = null, deploymentType
     data: {
       userId,
       projectId,
+      connectedRepositoryId: connectedRepositoryId || null,
       name: clampStr(String(name).trim(), 80),
       deploymentType,
       visibility,
@@ -283,11 +287,125 @@ async function getDeployment({ userId, id, db = defaultPrisma }) {
   };
 }
 
+/** Map a real-executor result onto the UI's 5-phase shape (done | failed). */
+function realDeployPhases(result) {
+  const order = pipeline.PUBLISH_PHASES;
+  if (result.promoted) return order.map((name) => ({ name, status: 'done', logs: [] }));
+  const failIdx = order.indexOf(result.failedPhase);
+  return order.map((name, i) => ({
+    name,
+    status: failIdx === -1 ? (i === 0 ? 'failed' : 'done') : i < failIdx ? 'done' : 'failed',
+    logs: [],
+  }));
+}
+
+/**
+ * Publish via the REAL Hostinger VPS executor (build + SFTP/ssh2 + nginx) and
+ * persist the resulting version + logs + status, mirroring the synthetic path's
+ * transactional version flip so the live version is never ambiguous.
+ */
+async function publishViaExecutor({ prisma, row, userId, env, executor }) {
+  const id = row.id;
+  let hostname = null;
+  try {
+    const domains = await prisma.deploymentDomain.findMany({ where: { deploymentId: id }, orderBy: { createdAt: 'asc' } });
+    const primary = domains.find((dm) => dm.isPrimary) || domains[0];
+    hostname = primary ? primary.hostname : null;
+  } catch { /* domains optional */ }
+
+  const result = await executor({ deployment: row, userId, env, hostname });
+  const buildLog = (result.logs || []).join('\n');
+  const seq = await prisma.deploymentVersion.count({ where: { deploymentId: id } });
+  const shortHash = pipeline.generateShortHash(id, seq);
+  const scan = { ...pipeline.securityScanReport(`${id}:scan:${seq}`), scannedAt: new Date().toISOString() };
+
+  const version = await runInTransaction(prisma, async (tx) => {
+    const created = await tx.deploymentVersion.create({
+      data: {
+        deploymentId: id,
+        shortHash,
+        status: result.promoted ? 'promoted' : 'failed',
+        isLive: result.promoted,
+        publishedById: userId,
+        buildLog,
+        securityScan: scan,
+      },
+    });
+    if (result.promoted) {
+      await tx.deploymentVersion.updateMany({
+        where: { deploymentId: id, isLive: true, id: { not: created.id } },
+        data: { isLive: false },
+      });
+    }
+    await seedVersionLogs(tx, created, buildLog);
+    return created;
+  });
+
+  // Persist a newly-provisioned DATABASE_URL into the connection's sealed
+  // DeployEnv so redeploys reuse it (idempotent — never overwrite a user's own).
+  // Uses the INJECTED prisma + guards on prisma.deployEnv so offline tests skip it.
+  if (result.promoted && result.databaseUrl && row.connectedRepositoryId && prisma.deployEnv) {
+    try {
+      const existing = await prisma.deployEnv.findFirst({ where: { connectedRepositoryId: row.connectedRepositoryId, userId } });
+      const envObj = existing ? creds.openJson(existing.encryptedEnv) : {};
+      if (!envObj.DATABASE_URL) {
+        envObj.DATABASE_URL = result.databaseUrl;
+        const sealed = creds.sealJson(envObj);
+        if (existing) await prisma.deployEnv.update({ where: { id: existing.id }, data: { encryptedEnv: sealed } });
+        else await prisma.deployEnv.create({ data: { userId, connectedRepositoryId: row.connectedRepositoryId, encryptedEnv: sealed } });
+      }
+    } catch { /* best-effort */ }
+  }
+
+  const spec = pipeline.machineSpec(row.deploymentType, row.machineTier);
+  const updated = await prisma.deployment.update({
+    where: { id },
+    data: {
+      status: result.promoted ? 'running' : 'failed',
+      suspendedReason: null,
+      currentVersionId: result.promoted ? version.id : row.currentVersionId,
+      subdomain: row.subdomain || pipeline.slugifySubdomain(row.name, id),
+      cpu: spec.cpu,
+      memoryMb: spec.memoryMb,
+      url: result.promoted ? (result.url || row.url) : row.url,
+      databaseConnected: result.promoted ? (result.databaseConnected ?? row.databaseConnected) : row.databaseConnected,
+      databaseProvider: result.promoted ? (result.databaseProvider ?? row.databaseProvider) : row.databaseProvider,
+    },
+  });
+
+  return {
+    deployment: publicDeployment(updated),
+    version: publicVersion(version),
+    phases: realDeployPhases(result),
+    failedPhase: result.failedPhase || null,
+    failureMessage: result.failureMessage || null,
+    url: result.url || null,
+  };
+}
+
 /** Publish a new immutable version, running the 5-phase pipeline. */
-async function publishDeployment({ userId, id, hasFiles = true, db = defaultPrisma, env = process.env }) {
+async function publishDeployment({ userId, id, hasFiles = true, db = defaultPrisma, env = process.env, executor = deployHostingerVps }) {
   const prisma = requireDb(db);
-  const row = await loadOwned(prisma, userId, id);
+  // Load INCLUDING soft-deleted rows: shutdown sets deletedAt, so loadOwned
+  // (which filters deletedAt:null) used to 404 here, making the shut_down 409
+  // below unreachable. Surface the clearer 409 for a shut-down deployment and a
+  // plain 404 for any other soft-deleted/absent row.
+  const row = await prisma.deployment.findFirst({ where: { id, userId } });
+  if (!row) throw new DeploymentError(404, 'deployment_not_found', 'deployment not found');
   if (row.status === 'shut_down') throw new DeploymentError(409, 'deployment_shut_down', 'deployment was shut down');
+  if (row.deletedAt) throw new DeploymentError(404, 'deployment_not_found', 'deployment not found');
+  // Publishing promotes the new version and flips status to 'running' — which
+  // would silently clear a 'suspended' (payment_failure) state. Block it so a
+  // suspended deployment can't be un-suspended by publishing (billing bypass).
+  if (row.status === 'suspended') throw new DeploymentError(409, 'deployment_suspended', 'resolve the suspension before publishing');
+
+  // Real path: a Hostinger VPS deployment with the provider configured runs the
+  // actual build + upload + nginx via the hosting engine. Otherwise (managed
+  // types, or VPS not configured) fall back to the deterministic synthetic
+  // pipeline so the UX stays consistent and offline tests stay green.
+  if (row.deploymentType === 'hostinger_vps' && providers.providerReadiness('hostinger_vps', env).configured) {
+    return publishViaExecutor({ prisma, row, userId, env, executor });
+  }
 
   const seq = await prisma.deploymentVersion.count({ where: { deploymentId: id } });
   const result = pipeline.runPublishPipeline({
@@ -351,6 +469,8 @@ async function publishDeployment({ userId, id, hasFiles = true, db = defaultPris
 async function rollbackDeployment({ userId, id, versionId, db = defaultPrisma }) {
   const prisma = requireDb(db);
   const row = await loadOwned(prisma, userId, id);
+  // Don't let a rollback silently un-suspend a payment-failure deployment.
+  if (row.status === 'suspended') throw new DeploymentError(409, 'deployment_suspended', 'resolve the suspension before rolling back');
   const target = await prisma.deploymentVersion.findFirst({ where: { id: versionId, deploymentId: id } });
   if (!target) throw new DeploymentError(404, 'version_not_found', 'version not found');
   if (target.status !== 'promoted') throw new DeploymentError(409, 'version_not_promotable', 'only successfully promoted builds can be rolled back to');
@@ -375,7 +495,10 @@ async function rollbackDeployment({ userId, id, versionId, db = defaultPrisma })
       where: { deploymentId: id, isLive: true, id: { not: created.id } },
       data: { isLive: false },
     });
-    await seedVersionLogs(tx, created, target.buildLog || '');
+    // Seed a SINGLE synthetic line, not the target version's whole build log —
+    // re-persisting the historical lines duplicated them in the Logs tab (getLogs
+    // aggregates rows across every version with no de-dup).
+    await seedVersionLogs(tx, created, `[promote] Rolled back to ${target.shortHash}`);
     return created;
   });
   const updated = await prisma.deployment.update({
@@ -395,7 +518,14 @@ async function updateDeployment({ userId, id, patch = {}, db = defaultPrisma }) 
     if (patch[key] === undefined) continue;
     if (key === 'visibility' && !pipeline.VISIBILITIES.includes(patch[key])) throw new DeploymentError(400, 'invalid_visibility', 'invalid visibility');
     if (key === 'deploymentType' && !pipeline.DEPLOYMENT_TYPES.includes(patch[key])) throw new DeploymentError(400, 'invalid_type', 'invalid deployment type');
-    if (key === 'externalPort') { data.externalPort = Number(patch[key]) || 80; continue; }
+    if (key === 'externalPort') {
+      const port = Number(patch[key]);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        throw new DeploymentError(400, 'invalid_port', 'externalPort must be an integer in 1-65535');
+      }
+      data.externalPort = port;
+      continue;
+    }
     data[key] = typeof patch[key] === 'string' ? clampStr(patch[key], 400) : patch[key];
   }
   // Geography is immutable after creation (Replit parity) — silently ignored.
@@ -429,7 +559,15 @@ async function runSecurityScan({ userId, id, db = defaultPrisma }) {
   const seq = await prisma.deploymentVersion.count({ where: { deploymentId: id } });
   const scan = { ...pipeline.securityScanReport(`${id}:scan:${seq}`), scannedAt: new Date().toISOString() };
   if (row.currentVersionId) {
-    await prisma.deploymentVersion.update({ where: { id: row.currentVersionId }, data: { securityScan: scan } }).catch(() => {});
+    // Persist best-effort, but surface a failure: silently dropping it loses
+    // the (expensive) scan result with zero signal on a DB/permission/conflict
+    // error. The scan is still returned to the caller either way.
+    await prisma.deploymentVersion
+      .update({ where: { id: row.currentVersionId }, data: { securityScan: scan } })
+      .catch((err) => logger.warn(
+        { deploymentId: id, versionId: row.currentVersionId, err: err && err.message },
+        'security-scan-persist-failed',
+      ));
   }
   return scan;
 }
@@ -438,7 +576,7 @@ function listProviders({ env = process.env } = {}) {
   return providers.listProviders(env);
 }
 
-async function connectProvider({ userId, id, providerId, db = defaultPrisma, env = process.env }) {
+async function connectProvider({ userId, id, providerId, connectedRepositoryId = null, db = defaultPrisma, env = process.env }) {
   const prisma = requireDb(db);
   const row = await loadOwned(prisma, userId, id);
   if (!['hostinger_vps', 'aws'].includes(providerId)) {
@@ -460,6 +598,8 @@ async function connectProvider({ userId, id, providerId, db = defaultPrisma, env
       buildCommand: row.buildCommand || 'npm run build',
       runCommand: row.runCommand || 'npm run start',
       externalPort: row.externalPort || 3000,
+      // Model A: bind the git repo whose workspace the executor will deploy.
+      ...(connectedRepositoryId ? { connectedRepositoryId } : {}),
     },
   });
   return {
@@ -469,11 +609,34 @@ async function connectProvider({ userId, id, providerId, db = defaultPrisma, env
   };
 }
 
+// RFC-1123-ish hostname validation: ≥2 dot-separated labels, each 1–63 chars
+// with alphanumeric start/end and only interior hyphens; the TLD is letters or
+// a punycode `xn--` label. Replaces a loose `[a-z0-9.-]+\.[a-z]{2,}` that
+// accepted malformed labels (-foo, foo-, a..b.com) and rejected valid IDN/
+// punycode TLDs (xn--p1ai for .рф).
+function isValidHostname(h) {
+  if (typeof h !== 'string' || h.length === 0 || h.length > 253) return false;
+  const labels = h.split('.');
+  if (labels.length < 2) return false;
+  const tld = labels[labels.length - 1];
+  if (!/^(?:[a-z]{2,}|xn--[a-z0-9]+)$/.test(tld)) return false;
+  return labels.every((l) => l.length >= 1 && l.length <= 63 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(l));
+}
+
 async function addDomain({ userId, id, hostname, providerId = null, db = defaultPrisma, env = process.env }) {
   const prisma = requireDb(db);
   await loadOwned(prisma, userId, id);
   const clean = String(hostname || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
-  if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(clean)) throw new DeploymentError(400, 'invalid_hostname', 'invalid hostname');
+  if (!isValidHostname(clean)) throw new DeploymentError(400, 'invalid_hostname', 'invalid hostname');
+  // A hostname may only be attached to one deployment — otherwise two
+  // deployments claim the same custom domain and DNS verification is ambiguous.
+  const existingDomain = await prisma.deploymentDomain.findFirst({ where: { hostname: clean } });
+  if (existingDomain) {
+    // Only block if the claiming deployment is still LIVE. A shut-down
+    // (soft-deleted) deployment must not permanently squat the hostname.
+    const owner = await prisma.deployment.findFirst({ where: { id: existingDomain.deploymentId, deletedAt: null } });
+    if (owner) throw new DeploymentError(409, 'domain_taken', 'hostname already attached to a deployment');
+  }
   const dnsRecords = pipeline.dnsRecordsFor(clean, id);
   let providerResult = null;
   if (providerId === 'godaddy_dns') {

@@ -2,6 +2,7 @@
 import { streamSseJson } from "./sse-client"
 import { sanitizeFetchHeaders } from "./fetch-sanitize"
 import { reportClientLog } from "./client-logs"
+import { safeUUID } from "./safe-uuid"
 export { getNormalizedApiBaseUrl } from "./api-base-url"
 import { getNormalizedApiBaseUrl } from "./api-base-url"
 // Codegen'd from backend/src/schemas/* — DO NOT edit by hand. Regenerate
@@ -467,6 +468,17 @@ class ApiClient {
     }
   }
 
+  private _getAccessTokenSnapshot(): string | null {
+    if (this.token) return this.token;
+    if (typeof window === 'undefined') return null;
+    const stored = localStorage.getItem('auth-token');
+    if (stored) {
+      this.token = stored;
+      return stored;
+    }
+    return null;
+  }
+
   private _reportApiFailure(args: {
     endpoint: string
     method: string
@@ -542,8 +554,9 @@ class ApiClient {
 
     const method = String((options.method || "GET")).toUpperCase()
 
-    if (this.token && !isCredentialHandshake(endpoint, method)) {
-      headers.set("Authorization", `Bearer ${this.token}`)
+    const bearerToken = this._getAccessTokenSnapshot()
+    if (bearerToken && !isCredentialHandshake(endpoint, method)) {
+      headers.set("Authorization", `Bearer ${bearerToken}`)
     }
 
     // Only set Content-Type for non-FormData requests
@@ -552,15 +565,11 @@ class ApiClient {
     }
 
     // Idempotency-Key auto-injection. Only for mutating verbs and
-    // only when the caller didn't supply one. crypto.randomUUID is
-    // baseline in Node 18+ / Chrome 92+ / Safari 15.4+; the
-    // existence check covers older environments without crashing.
+    // only when the caller didn't supply one. safeUUID covers LAN /
+    // plain-HTTP browser contexts where crypto.randomUUID is missing.
     const isMutating = method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE';
     if (isMutating && method !== 'DELETE' && !headers.has('Idempotency-Key') && !headers.has('idempotency-key')) {
-      const cryptoObj = (typeof globalThis !== 'undefined' ? (globalThis as any).crypto : null);
-      if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
-        headers.set('Idempotency-Key', cryptoObj.randomUUID());
-      }
+      headers.set('Idempotency-Key', safeUUID());
     }
 
     // CSRF double-submit token. Backend requires X-CSRF-Token on mutating
@@ -2855,7 +2864,7 @@ class ApiClient {
       displayPrompt?: string;
       chatId?: string;
       model?: string;
-      format?: 'docx' | 'xlsx' | 'pptx' | 'pdf' | 'csv' | 'html' | 'md' | 'markdown';
+      format?: 'docx' | 'xlsx' | 'pptx' | 'pdf' | 'svg' | 'csv' | 'html' | 'md' | 'markdown';
       template?: string;
       complexity?: 'simple' | 'standard' | 'high' | 'stress';
       files?: string[];
@@ -2891,22 +2900,35 @@ class ApiClient {
     onEvent: (ev: any) => void,
     opts: { signal?: AbortSignal } = {},
   ): Promise<void> {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
-    const res = await fetch(`${this.baseURL}${path}`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify(data),
-      signal: opts.signal,
-    });
-    if (!res.ok) {
+    let retriedAfterRefresh = false;
+    let res: Response;
+
+    while (true) {
+      const token = this._getAccessTokenSnapshot();
+      res = await fetch(`${this.baseURL}${path}`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(data),
+        signal: opts.signal,
+      });
+
+      if (res.ok) break;
+
+      if (res.status === 401 && !retriedAfterRefresh && !isCredentialHandshake(path, 'POST')) {
+        retriedAfterRefresh = true;
+        const refreshed = await this._tryRefresh();
+        if (refreshed) continue;
+      }
+
       let msg = `HTTP ${res.status}`;
       try { const j = await res.json(); msg = j.error || msg; } catch {}
       throw new Error(msg);
     }
+
     if (!res.body) throw new Error('Stream body missing');
     const reader = res.body.getReader();
     const decoder = new TextDecoder();

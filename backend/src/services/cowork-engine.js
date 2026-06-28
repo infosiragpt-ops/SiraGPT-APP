@@ -10,7 +10,13 @@ const contextIntelligence = require('./context-intelligence-engine');
 
 const MAX_COWORK_BLOCK_CHARS = Number.parseInt(process.env.SIRAGPT_COWORK_BLOCK_MAX_CHARS || '4000', 10);
 
-function buildCoworkSystemPrompt(userId, opts = {}) {
+// Static preamble: identical on every turn, never depends on userId/opts.
+// Built once at module load instead of re-pushing ~45 string literals and
+// re-joining on every chat turn. The exact push calls are preserved (cut from
+// the function body, not retyped) — including the trailing '' — so the joined
+// output, and the blank-line boundary before the first dynamic block, are
+// byte-identical to the previous per-turn assembly.
+const COWORK_STATIC_PREAMBLE = (() => {
   const parts = [];
 
   parts.push('## SiraGPT Cowork System');
@@ -60,8 +66,16 @@ function buildCoworkSystemPrompt(userId, opts = {}) {
   parts.push('- Contradictions between documents should be flagged, not silently resolved');
   parts.push('');
 
+  return parts.join('\n');
+})();
+
+function buildCoworkSystemPrompt(userId, opts = {}) {
+  const parts = [COWORK_STATIC_PREAMBLE];
+
   if (userId) {
-    const memoryContext = activeMemory.getMemoryContext(userId, { limit: 15 });
+    // Reuse a caller-supplied {limit:15} context when present (enrichAIRequest
+    // computes it once per turn) to avoid a redundant full store scan + sort.
+    const memoryContext = opts.memoryContext || activeMemory.getMemoryContext(userId, { limit: 15 });
     if (memoryContext.longTermFacts.length > 0 || memoryContext.shortTermFacts.length > 0) {
       parts.push('### Your Active Memory');
       if (memoryContext.longTermFacts.length > 0) {
@@ -155,12 +169,26 @@ function extractMemoryFacts(text) {
 async function enrichAIRequest(userId, content, opts = {}) {
   const enriched = processIncomingMessage(userId, content, opts);
 
+  // Materialize the user's active-memory context ONCE per turn. This used to be
+  // computed 3× (buildCoworkSystemPrompt {limit:15}, buildMemoryPrompt {limit:12},
+  // context-intelligence {limit:15}), each a full O(N) global-store scan + sort.
+  // processIncomingMessage above is the only writer and ran first, and every
+  // read uses bump:false (no mutation), so all reads observe identical state —
+  // sharing the {limit:15} result between the two {limit:15} callers is
+  // byte-identical. (buildMemoryPrompt keeps its own {limit:12} read.)
+  const memCtx15 = userId
+    ? activeMemory.getMemoryContext(userId, { limit: 15 })
+    : { longTermFacts: [], shortTermFacts: [] };
+
   let autoFileResult = null;
   if (enriched.autoFile.shouldAutoFile && userId) {
     try {
       autoFileResult = await autoFileBridge.ingestPastedContent(userId, content);
       enriched.autoFileResult = autoFileResult;
     } catch (_fileErr) {
+      // Degrade to null (unchanged), but surface so a prod regression in
+      // auto-file ingest isn't invisible on every cowork turn.
+      console.warn('[cowork] auto-file ingest failed:', _fileErr?.message || _fileErr);
       enriched.autoFileResult = null;
     }
   }
@@ -176,6 +204,7 @@ async function enrichAIRequest(userId, content, opts = {}) {
         { limit: 2 }
       );
     } catch (_skillErr) {
+      console.warn('[cowork] recommended-skills execution failed:', _skillErr?.message || _skillErr);
       skillRuns = [];
     }
   }
@@ -183,6 +212,7 @@ async function enrichAIRequest(userId, content, opts = {}) {
   const coworkPrompt = buildCoworkSystemPrompt(userId, {
     chatId: opts.chatId,
     model: opts.model,
+    memoryContext: memCtx15,
   });
 
   let deepAnalysisPrompt = '';
@@ -219,6 +249,7 @@ async function enrichAIRequest(userId, content, opts = {}) {
           deepAnalysisPrompt = parts.join('\n');
         }
       } catch (_e2) {
+        console.warn('[cowork] deep-document analysis failed:', _e2?.message || _e2);
         enriched.deepAnalysis = null;
       }
     }
@@ -232,9 +263,9 @@ async function enrichAIRequest(userId, content, opts = {}) {
   let contextIntelligenceReport = null;
   if (content) {
     try {
-      const memoryContext = userId
-        ? activeMemory.getMemoryContext(userId, { limit: 15 })
-        : { longTermFacts: [], shortTermFacts: [] };
+      // Reuse the once-per-turn {limit:15} context computed above (identical
+      // params, same un-mutated store) instead of a third full scan + sort.
+      const memoryContext = memCtx15;
       const memoryFacts = [
         ...(memoryContext.longTermFacts || []),
         ...(memoryContext.shortTermFacts || []),
@@ -254,6 +285,7 @@ async function enrichAIRequest(userId, content, opts = {}) {
       );
       enriched.contextIntelligence = contextIntelligence.summariseForLog(contextIntelligenceReport);
     } catch (_ciErr) {
+      console.warn('[cowork] context-intelligence analysis failed:', _ciErr?.message || _ciErr);
       enriched.contextIntelligence = null;
     }
   }

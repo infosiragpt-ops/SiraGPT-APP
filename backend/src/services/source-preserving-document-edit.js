@@ -1,6 +1,9 @@
 const fs = require('fs');
 const objectStorage = require('./object-storage');
+const os = require('os');
 const path = require('path');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
 const PizZip = require('pizzip');
 const ExcelJS = require('exceljs');
 const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
@@ -20,6 +23,7 @@ const {
 } = require('./document-pipeline/content/llm-client');
 
 const BACKEND_ROOT = path.resolve(__dirname, '..', '..');
+const execFileAsync = promisify(execFile);
 
 function normalizeText(value) {
   return String(value || '')
@@ -37,18 +41,30 @@ function withCollapsedRepeats(textNorm) {
   return `${textNorm} ${String(textNorm).replace(/([a-z])\1+/g, '$1')}`;
 }
 
+function requestWantsMinimalProofreading(prompt = '') {
+  const text = normalizeText(prompt);
+  if (!text) return false;
+  const hay = withCollapsedRepeats(text);
+  const correctionNoun = /\b(correccion(?:es)?|correcci\w*|ortografia|gramatica|redaccion|erratas?|errores?)\b/.test(hay);
+  const correctionAction = /\b(aplic\w*|haz|hacer|realiz\w*|corrig\w*|correg\w*|revis\w*|arregl\w*|ajust\w*|mejora\w*)\b/.test(hay);
+  return correctionNoun && correctionAction;
+}
+
 function isSourcePreservingEditRequest(prompt, files = []) {
   const text = normalizeText(prompt);
   if (!text) return false;
   const verbHay = withCollapsedRepeats(text);
+  const editVerbHay = verbHay.replace(/\beditables?\b/g, '');
   const hasFiles = Array.isArray(files) ? files.length > 0 : Boolean(files);
 
-  const structuralEditVerb = /\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|inclu\w*|pon|poner|coloc\w*|modific\w*|edit\w*|corrig\w*|correg\w*|mejor\w*|actualiz\w*|reemplaz\w*|quit\w*|elimin\w*|borr\w*|complet\w*)\b/.test(verbHay);
+  const editorialCorrectionIntent = requestWantsMinimalProofreading(text);
+  const structuralEditVerb = /\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|inclu\w*|pon|poner|coloc\w*|aplic\w*|modific\w*|edit\w*|corrig\w*|correg\w*|mejora\w*|mejorar\w*|arregl\w*|ajust\w*|actualiz\w*|reemplaz\w*|quit\w*|elimin\w*|borr\w*|complet\w*)\b/.test(editVerbHay);
   // STRONG mutation verbs (delete / remove / insert / add / replace): on an
   // attachment turn these unambiguously target the attached file even with no
   // document/region noun ("borra el jurado evaluador", "elimina los anexos",
   // "agrega una conclusión") — the only plausible target is the uploaded doc.
-  const strongStructuralVerb = /\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|quit\w*|elimin\w*|borr\w*|suprim\w*|remov\w*|reemplaz\w*|sustitu\w*|tach\w*)\b/.test(verbHay);
+  const strongStructuralVerb = /\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|quit\w*|elimin\w*|borr\w*|suprim\w*|remov\w*|reemplaz\w*|sustitu\w*|tach\w*)\b/.test(editVerbHay);
+  const implicitFileEditVerb = /\b(corrig\w*|correg\w*|mejora\w*|mejorar\w*|modific\w*|edit\w*|actualiz\w*|formaliz\w*|ajust\w*|optim\w*)\b/.test(editVerbHay);
   // Whole-document transforms (traduce / cambia / resume / reformula…) act on the
   // entire file. They are recognized as edits, but require an explicit document
   // noun (not just a demonstrative pronoun) so phrases like "traduce esta frase"
@@ -62,14 +78,19 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   const transformVerb = /\b(?:traduc(?:e\w*|ir\w*|iendo|id[oa])|traduzca\w*|reescrib(?:e\w*|ir\w*|iendo)|reescrit[oa]|cambi(?:a\w*|e\w*)|resum(?:e|es|ir\w*|a|as|amos|elo|ela|elos|elas|eme|emelo|iendo|id[oa])|reformul(?:e\w*|a|as|ar\w*|alo|ala|ame|ando|ad[oa])|parafrase\w*|sintetiz(?:a\w*|e\w*|ando|ad[oa])|sintetice\w*|transcrib(?:e\w*|ir\w*|a\w*|iendo)|transcrit[oa])\b/.test(text);
   const primaryEditVerb = structuralEditVerb || transformVerb;
   const adjuntarAction = /\badjunt(?:a|ar|ame|arme|alo|ala|alos|alas|arlo|arla|arlos|arlas)\b/.test(text)
-    && !/\b(?:documentos?|archivos?|pdf|word|docx|excel|xlsx|pptx?)\s+adjunt[oa]s?\b/.test(text);
-  const editVerb = primaryEditVerb || adjuntarAction;
+    && !/\b(?:documentos?|archivos?|imagenes?|fotos?|capturas?|pdf|word|docx|excel|xlsx|pptx?)\s+adjunt[oa]s?\b/.test(text)
+    && !/\b(?:imagen|foto|captura|screenshot)\s+adjunt[oa]\b/.test(text);
+  const editVerb = primaryEditVerb || adjuntarAction || editorialCorrectionIntent;
   const existingDocRef = /\b(mi|mismo|misma|este|esta|ese|esa|documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx|powerpoint|pdf|tesis)\b/.test(text);
   const documentNoun = /\b(documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx|powerpoint|pdf|tesis)\b/.test(text);
   const appendLocation = /\b(al final|final|anexo|anexos|apendice|ultima pagina|ultima hoja|nueva hoja|nueva pagina|nueva diapositiva)\b/.test(text);
   const preservation = /\b(sin cambiar|no cambies|no modificar lo demas|mismo word|mismo documento|conservar|preservar|mantener)\b/.test(text);
   const explicitFreshDeliverable = /\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|dame|prepara(?:r|me)?|redacta(?:r|me)?|elabora(?:r|me)?|devu[eé]lv(?:e|eme|elo)|entr[eé]ga(?:r|me)?)\b[^.?!]{0,160}\b(?:un\s+|una\s+|el\s+|la\s+)?(?:word|docx|documento|informe|reporte|tesis|monografia|ensayo)\b/.test(text)
     || /\b(?:quiero|necesito)\s+(?:un\s+|una\s+|el\s+|la\s+)(?:word|docx|documento|informe|reporte|tesis|monografia|ensayo)\b/.test(text);
+  const explicitAttachedMutation = hasFiles && (
+    /\b(reemplaz\w*|sustitu\w*|quit\w*|elimin\w*|borr\w*|suprim\w*|remov\w*|tach\w*)\b/.test(editVerbHay)
+    || (documentNoun && /\b(corrig\w*|correg\w*|modific\w*|edit\w*|actualiz\w*|cambi(?:a\w*|e\w*))\b/.test(editVerbHay))
+  );
   const instrument = /\b(instrumento|instrument|intuemtno|instumento|cuestionario|encuesta|escala|anexo)\b/.test(text);
   const documentRegion = /\b(portada|caratula|t[ií]tulo|encabezado|pie de pagina|indice|tabla|hoja|celda|fila|columna|diapositiva|pagina|seccion|capitulo)\b/.test(text);
   const strongImplicitFollowUp = appendLocation && (instrument || preservation || /\btesis\b/.test(text));
@@ -87,14 +108,19 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   // 2") levanta el veto — palabras sueltas como "tabla/índice" en una
   // enumeración de creación ("genera un word: incluye tabla, índice…") no.
   const concreteEditTarget = hasFiles && Boolean(parseTargetSectionRequest(text));
-  if (explicitFreshDeliverable && !preservation && !concreteEditTarget) return false;
+  if (explicitFreshDeliverable && !preservation && !concreteEditTarget && !explicitAttachedMutation) return false;
   if (hasFiles) {
+    if (editorialCorrectionIntent) return true;
     if (appendLocation || preservation || instrument || documentRegion) return true;
     if (documentNoun) return true;
     // A STRONG mutation verb alone is enough on an attachment turn — the
     // uploaded file is the only plausible target ("borra el jurado evaluador").
     if (strongStructuralVerb) return true;
-    // Weaker edit verbs (pon/mejora/modifica/edita…) still need an explicit
+    // Editorial instructions like "corrige la redacción" are also document
+    // edits when a Word/PDF/Office file is already attached; the attachment is
+    // the only durable text surface the user can mean.
+    if (implicitFileEditVerb) return true;
+    // Remaining weak verbs (for example "pon") still need an explicit
     // reference, and transform verbs require a document noun (handled above) so
     // "traduce esta frase" / "cambia de tema" stay normal chat answers.
     return structuralEditVerb && existingDocRef;
@@ -1097,8 +1123,70 @@ function targetSectionBounds(documentXml, target, precomputedParagraphs = null) 
   };
 }
 
+function docxBodyEnd(documentXml = '') {
+  const bodyEnd = String(documentXml || '').lastIndexOf('</w:body>');
+  return bodyEnd >= 0 ? bodyEnd : String(documentXml || '').length;
+}
+
+function docxBodyContentEndPreservingSectPr(documentXml = '') {
+  const bodyEnd = docxBodyEnd(documentXml);
+  const beforeBodyEnd = String(documentXml || '').slice(0, bodyEnd);
+  const finalDirectSectPr = beforeBodyEnd.match(/<w:sectPr\b(?:[\s\S]*?<\/w:sectPr>|\s*\/>)\s*$/);
+  if (finalDirectSectPr?.index != null) return finalDirectSectPr.index;
+  return bodyEnd;
+}
+
+function extractFinalSectionProperties(documentXml = '') {
+  const bodyEnd = docxBodyEnd(documentXml);
+  const tail = String(documentXml || '').slice(Math.max(0, bodyEnd - 8000), bodyEnd);
+  const matches = [...tail.matchAll(/<w:sectPr\b(?:[\s\S]*?<\/w:sectPr>|\s*\/>)/g)];
+  return matches.length ? matches[matches.length - 1][0] : '';
+}
+
+function appendSectPrParagraphIfMissing(documentXml = '', sectPr = '') {
+  if (!sectPr) return documentXml;
+  const bodyEnd = docxBodyEnd(documentXml);
+  const tail = String(documentXml || '').slice(Math.max(0, bodyEnd - 2000), bodyEnd);
+  if (/<w:sectPr\b/.test(tail)) return documentXml;
+  return `${documentXml.slice(0, bodyEnd)}<w:p><w:pPr>${sectPr}</w:pPr></w:p>${documentXml.slice(bodyEnd)}`;
+}
+
 function isAnexo3CronogramaTarget(target = {}) {
   return target?.kind === 'anexo' && Number(target.number) === 3;
+}
+
+function requestWantsCronogramaAnexo3(text = '', target = {}) {
+  const norm = normalizeText(text);
+  return isAnexo3CronogramaTarget(target)
+    && /\bcronograma\w*\b/.test(norm)
+    && /\b(?:tesis|desarrollo|culminacion)\b/.test(norm);
+}
+
+function requestWantsPlacementAfterOperationalMatrix(text = '') {
+  const norm = normalizeText(text);
+  return /\b(?:luego|despues|posterior)\b/.test(norm)
+    && /\b(?:matriz|matrix)\b/.test(norm)
+    && /\boperacional\w*\b/.test(norm);
+}
+
+function extractTargetHeadingFromRequest(requestText = '', target = {}) {
+  if (requestWantsCronogramaAnexo3(requestText, target)) {
+    return `${target.label}. Cronograma del Desarrollo y Culminación de la Tesis`;
+  }
+  const kindPattern = target.kind === 'anexo'
+    ? '(?:anexo|anexos|apendice|apendices)'
+    : escapeRegExp(normalizeText(target.kind || 'seccion'));
+  const raw = String(requestText || '');
+  const number = escapeRegExp(String(target.number || target.numeric || ''));
+  const re = new RegExp(`\\b${kindPattern}\\s*(?:n(?:ro|umero)?\\.?|num\\.?|no\\.?|#)?\\s*0*${number}\\s*(?:[.:\\-–—]\\s*)?([^\\n.!?]{4,140})`, 'iu');
+  const match = raw.match(re);
+  if (!match?.[1]) return target.label;
+  const tail = match[1]
+    .replace(/\s+(?:de\s+forma\s+profesional|profesionalmente|por\s*favor|en\s+su\s+mismo\s+formato)\b[\s\S]*$/iu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!tail || normalizeText(tail) === normalizeText(target.label)) return target.label;
+  return `${target.label}. ${tail.replace(/^[.:;\-–—\s]+/, '')}`.trim();
 }
 
 function locateCronogramaTable(documentXml, target, precomputedParagraphs = null) {
@@ -1223,6 +1311,18 @@ function buildCronogramaAnexo3Plan() {
       block('normal', row.estado),
     ]),
   };
+}
+
+function buildCronogramaAnexo3AppendixBlocks() {
+  const plan = buildCronogramaAnexo3Plan();
+  return [
+    block('normal', 'El presente cronograma organiza las actividades necesarias para el desarrollo y culminación de la tesis, considerando las etapas de planificación, elaboración, validación, ejecución, análisis, redacción final y entrega.'),
+    block('heading3', 'Cronograma de actividades'),
+    ...plan.rows.flatMap((row, index) => [
+      block('normal', `${index + 1}. ${row.avance}: ${row.acciones} Estado: ${row.estado}. Periodo: ${row.weeks.map((week) => plan.weekLabels[week]).filter(Boolean).join(', ')}.`),
+    ]),
+    block('normal', 'Este cronograma puede ajustarse según las observaciones del asesor, la disponibilidad de la población de estudio y los plazos administrativos de la universidad.'),
+  ];
 }
 
 function firstParagraphXml(xml = '') {
@@ -1654,6 +1754,113 @@ function replaceTextInDocxBuffer(buffer, needle, replacement) {
   };
 }
 
+function preserveCaseReplacement(match = '', lowerReplacement = '') {
+  const source = String(match || '');
+  const replacement = String(lowerReplacement || '');
+  if (!source) return replacement;
+  if (source === source.toUpperCase()) return replacement.toUpperCase();
+  if (/^[A-ZÁÉÍÓÚÑ]/.test(source)) {
+    return replacement.charAt(0).toUpperCase() + replacement.slice(1);
+  }
+  return replacement;
+}
+
+const MINIMAL_PROOFREAD_RULES = [
+  {
+    id: 'palabras_clave_plural',
+    label: 'Palabras claves -> Palabras clave',
+    pattern: /\bpalabras\s+claves\b/gi,
+    replacement: (match) => preserveCaseReplacement(match, 'palabras clave'),
+  },
+  {
+    id: 'por_favor_joined',
+    label: 'porfavor -> por favor',
+    pattern: /\bporfavor\b/gi,
+    replacement: (match) => preserveCaseReplacement(match, 'por favor'),
+  },
+];
+
+function applyMinimalProofreadingToText(text = '') {
+  let updated = String(text || '');
+  const applied = [];
+  for (const rule of MINIMAL_PROOFREAD_RULES) {
+    let count = 0;
+    const samples = [];
+    updated = updated.replace(rule.pattern, (match, ...args) => {
+      const replacement = typeof rule.replacement === 'function'
+        ? rule.replacement(match, ...args)
+        : String(rule.replacement || '');
+      if (replacement !== match) {
+        count += 1;
+        if (samples.length < 5) samples.push({ needle: match, replacement });
+      }
+      return replacement;
+    });
+    if (count > 0) {
+      applied.push({
+        id: rule.id,
+        label: rule.label,
+        count,
+        samples,
+      });
+    }
+  }
+  return {
+    text: updated,
+    changed: updated !== String(text || ''),
+    corrections: applied,
+  };
+}
+
+function proofreadMinimalDocxBuffer(buffer) {
+  const zip = new PizZip(buffer);
+  const documentFile = zip.file('word/document.xml');
+  if (!documentFile) throw new Error('DOCX inválido: falta word/document.xml.');
+  let documentXml = documentFile.asText();
+  const paragraphs = extractDocxParagraphs(documentXml)
+    .filter((paragraph) => String(paragraph.text || '').trim())
+    .sort((a, b) => b.start - a.start);
+
+  let changedParagraphs = 0;
+  let changedCount = 0;
+  const correctionMap = new Map();
+  const expectedReplacements = [];
+
+  for (const paragraph of paragraphs) {
+    const proofread = applyMinimalProofreadingToText(paragraph.text);
+    if (!proofread.changed) continue;
+    const template = buildFormattingTemplate({ bodyXml: paragraph.xml });
+    const updatedParagraph = paragraphXml({ kind: 'normal', text: proofread.text }, template);
+    documentXml = `${documentXml.slice(0, paragraph.start)}${updatedParagraph}${documentXml.slice(paragraph.end)}`;
+    changedParagraphs += 1;
+
+    for (const correction of proofread.corrections) {
+      const previous = correctionMap.get(correction.id) || {
+        id: correction.id,
+        label: correction.label,
+        count: 0,
+        samples: [],
+      };
+      previous.count += correction.count;
+      for (const sample of correction.samples || []) {
+        if (previous.samples.length < 5) previous.samples.push(sample);
+        expectedReplacements.push(sample);
+      }
+      correctionMap.set(correction.id, previous);
+      changedCount += correction.count;
+    }
+  }
+
+  zip.file('word/document.xml', documentXml);
+  return {
+    buffer: zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' }),
+    changedCount,
+    changedParagraphs,
+    corrections: [...correctionMap.values()],
+    expectedReplacements,
+  };
+}
+
 function deleteTextFromDocxBuffer(buffer, needle) {
   const normalizedNeedle = normalizeText(needle);
   if (!normalizedNeedle || normalizedNeedle.length < 3) {
@@ -1696,6 +1903,39 @@ function deleteTextFromDocxBuffer(buffer, needle) {
   };
 }
 
+function deleteDocxSectionRangeBuffer(buffer, target, { toEnd = false } = {}) {
+  if (!target) {
+    const err = new Error('No se especificó la sección que debo borrar del DOCX.');
+    err.code = 'DELETE_SECTION_UNSPECIFIED';
+    throw err;
+  }
+  const zip = new PizZip(buffer);
+  const documentFile = zip.file('word/document.xml');
+  if (!documentFile) throw new Error('DOCX inválido: falta word/document.xml.');
+  let documentXml = documentFile.asText();
+  const paragraphs = extractDocxParagraphs(documentXml);
+  const bounds = targetSectionBounds(documentXml, target, paragraphs);
+  const deleteStart = bounds.heading.start;
+  const deleteEnd = toEnd
+    ? docxBodyContentEndPreservingSectPr(documentXml)
+    : bounds.sectionEnd;
+  if (!(deleteEnd > deleteStart)) {
+    const err = new Error(`No pude calcular un rango seguro para borrar "${target.label}".`);
+    err.code = 'DELETE_SECTION_RANGE_EMPTY';
+    throw err;
+  }
+  const preservedSectPr = toEnd ? extractFinalSectionProperties(documentXml) : '';
+  documentXml = `${documentXml.slice(0, deleteStart)}${documentXml.slice(deleteEnd)}`;
+  if (toEnd) documentXml = appendSectPrParagraphIfMissing(documentXml, preservedSectPr);
+  zip.file('word/document.xml', documentXml);
+  return {
+    buffer: zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' }),
+    removedCount: 1,
+    toEnd: Boolean(toEnd),
+    target,
+  };
+}
+
 function appendBlocksToDocumentXml(documentXml, blocks, template = null) {
   const insertionXml = blocks.map((item) => paragraphXml(item, template)).join('');
   const bodyEnd = documentXml.lastIndexOf('</w:body>');
@@ -1710,13 +1950,37 @@ function appendBlocksToDocumentXml(documentXml, blocks, template = null) {
   return `${beforeBodyEnd}${insertionXml}${afterBodyEnd}`;
 }
 
-function appendToDocxBuffer(buffer, blocks) {
+function insertionIndexAfterOperationalMatrix(documentXml = '') {
+  const tables = extractDocxTables(documentXml);
+  let best = null;
+  for (const table of tables) {
+    const contextXml = documentXml.slice(Math.max(0, table.start - 1800), table.start);
+    const norm = normalizeText(`${paragraphText(contextXml)} ${table.text}`);
+    let score = 0;
+    if (/\btabla\s*0?1\b/.test(norm)) score += 4;
+    if (/\b(?:matriz|matrix)\b/.test(norm)) score += 3;
+    if (/\b(?:operacional\w*|operacionalizacion\w*|matrix\s+operacional)\b/.test(norm)) score += 6;
+    if (/\b(categor[ií]a\w*|subcategor[ií]a\w*|dimension\w*|indicador\w*|variable\w*)\b/.test(norm)) score += 3;
+    if (score >= 7 && (!best || score > best.score)) best = { index: table.end, score };
+  }
+  return best?.index || null;
+}
+
+function insertBlocksToDocumentXml(documentXml, blocks, template = null, { afterIndex = null } = {}) {
+  if (!Number.isFinite(afterIndex) || afterIndex <= 0 || afterIndex >= docxBodyEnd(documentXml)) {
+    return appendBlocksToDocumentXml(documentXml, blocks, template);
+  }
+  const insertionXml = blocks.map((item) => paragraphXml(item, template)).join('');
+  return `${documentXml.slice(0, afterIndex)}<w:p/>${insertionXml}${documentXml.slice(afterIndex)}`;
+}
+
+function appendToDocxBuffer(buffer, blocks, options = {}) {
   const zip = new PizZip(buffer);
   const documentFile = zip.file('word/document.xml');
   if (!documentFile) throw new Error('DOCX inválido: falta word/document.xml.');
   const documentXml = documentFile.asText();
   const template = buildDocumentFormattingTemplate(extractDocxParagraphs(documentXml));
-  zip.file('word/document.xml', appendBlocksToDocumentXml(documentXml, blocks, template));
+  zip.file('word/document.xml', insertBlocksToDocumentXml(documentXml, blocks, template, options));
   return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
@@ -2560,6 +2824,96 @@ async function appendToPdfBuffer(buffer, blocks) {
   return Buffer.from(await pdf.save());
 }
 
+async function buildPdfFromPlainText({ title = 'Documento editado', text = '' } = {}) {
+  const pdf = await PDFDocument.create();
+  let page = pdf.addPage([612, 792]);
+  let { width, height } = page.getSize();
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  const boldFont = await pdf.embedFont(StandardFonts.HelveticaBold);
+  const margin = 54;
+  let y = height - margin;
+  let maxWidth = width - (margin * 2);
+
+  const addPageIfNeeded = () => {
+    if (y >= margin) return;
+    page = pdf.addPage([612, 792]);
+    ({ width, height } = page.getSize());
+    maxWidth = width - (margin * 2);
+    y = height - margin;
+  };
+  const drawWrapped = (value, currentFont, fontSize, lineHeight) => {
+    const lines = wrapPdfText(value, currentFont, fontSize, maxWidth);
+    for (const line of lines) {
+      addPageIfNeeded();
+      page.drawText(line || ' ', { x: margin, y, size: fontSize, font: currentFont, color: rgb(0.08, 0.1, 0.14) });
+      y -= line ? lineHeight : Math.ceil(lineHeight / 2);
+    }
+  };
+
+  drawWrapped(String(title || 'Documento editado').slice(0, 180), boldFont, 15, 20);
+  y -= 8;
+  for (const paragraph of String(text || '').split(/\n{2,}/)) {
+    drawWrapped(paragraph, font, 10.5, 14);
+    y -= 6;
+  }
+  return Buffer.from(await pdf.save());
+}
+
+async function extractTextFromPdfBuffer(buffer) {
+  const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'siragpt-pdf-text-'));
+  const pdfPath = path.join(tmp, 'input.pdf');
+  const txtPath = path.join(tmp, 'output.txt');
+  try {
+    await fs.promises.writeFile(pdfPath, buffer);
+    await execFileAsync('pdftotext', [pdfPath, txtPath], { timeout: 20_000, maxBuffer: 20 * 1024 * 1024 });
+    return await fs.promises.readFile(txtPath, 'utf8');
+  } catch {
+    return '';
+  } finally {
+    fs.promises.rm(tmp, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function executePdfOperations({ input, requestText, sourceText, blocks, sourceFile } = {}) {
+  const ops = planGenericOfficeOperations({ requestText, format: 'pdf' });
+  const textEditOps = ops.filter((op) => op.kind === 'replace_text' || op.kind === 'delete_text');
+  if (textEditOps.length === 0) {
+    return {
+      buffer: await appendToPdfBuffer(input, blocks),
+      steps: [{ kind: 'append_generic', mode: 'pdf_append_page' }],
+      validationBlocks: blocks,
+      ops,
+    };
+  }
+
+  let text = String(sourceFile?.extractedText || sourceText || '').trim();
+  if (!text) text = (await extractTextFromPdfBuffer(input)).trim();
+  let edited = text;
+  const steps = [];
+  const validationBlocks = [];
+  for (const op of textEditOps) {
+    const changedCount = countNeedleMatches(edited, op.needle);
+    if (op.kind === 'replace_text') {
+      edited = replaceNeedleText(edited, op.needle, op.replacement);
+      validationBlocks.push(block('normal', op.replacement));
+      steps.push({ kind: 'replace_text', mode: 'pdf_text_rewrite', changedCount });
+    } else {
+      edited = replaceNeedleText(edited, op.needle, '');
+      steps.push({ kind: 'delete_text', mode: 'pdf_text_rewrite', removedCount: changedCount });
+    }
+  }
+
+  return {
+    buffer: await buildPdfFromPlainText({
+      title: `${sourceFile?.originalName || sourceFile?.filename || 'PDF'} editado`,
+      text: edited,
+    }),
+    steps,
+    validationBlocks: validationBlocks.length ? validationBlocks : blocks,
+    ops: textEditOps,
+  };
+}
+
 async function persistEditedArtifact({
   buffer,
   format,
@@ -2714,11 +3068,81 @@ function validateTargetSectionCompletion(buffer, target) {
   }
 }
 
+function validateConsistencyMatrixInsertion(buffer) {
+  try {
+    const documentXml = readDocxDocumentXml(buffer);
+    if (!documentXml) return { ok: false, reason: 'missing_document_xml' };
+    const paragraphs = extractDocxParagraphs(documentXml);
+    const tables = extractDocxTables(documentXml);
+    const visibleText = normalizeText([
+      ...paragraphs.map((paragraph) => paragraph.text),
+      ...tables.map((table) => table.text),
+    ].join(' '));
+    const matrixTable = tables.find((table) => {
+      const norm = normalizeText(table.text);
+      return norm.includes('problema')
+        && norm.includes('objetivo')
+        && (norm.includes('supuesto') || norm.includes('hipotesis'))
+        && (norm.includes('categoria') || norm.includes('variable'))
+        && norm.includes('indicador');
+    }) || null;
+    const matrixRowCount = matrixTable ? extractTableRows(matrixTable.xml).length : 0;
+    const sourcePreserved = /\btabla\s*0?1\b/.test(visibleText)
+      && /\bmatriz\b/.test(visibleText)
+      && /\b(operacional\w*|operacionalizacion\w*|categorizaci\w*|categoriza\w*)\b/.test(visibleText);
+    const matrixCaption = visibleText.includes('matriz de consistencia')
+      || visibleText.includes('matriz de cosistencia');
+    const ok = sourcePreserved
+      && matrixCaption
+      && tables.length >= 2
+      && Boolean(matrixTable)
+      && matrixRowCount >= 3;
+    return {
+      ok,
+      reason: !sourcePreserved
+        ? 'source_operational_matrix_not_preserved'
+        : !matrixCaption
+          ? 'missing_consistency_matrix_caption'
+          : tables.length < 2
+            ? 'new_table_not_inserted'
+            : !matrixTable
+              ? 'consistency_matrix_columns_missing'
+              : matrixRowCount < 3
+                ? 'consistency_matrix_too_short'
+                : null,
+      tableCount: tables.length,
+      matrixRowCount,
+    };
+  } catch (err) {
+    return { ok: false, reason: err?.message || 'consistency_matrix_validation_failed' };
+  }
+}
+
 function validateDocxOperationCriteria(buffer, operations = []) {
   const text = extractDocxTextFromBuffer(buffer);
   const normalized = normalizeText(text);
   const checks = [];
   for (const op of operations || []) {
+    if (op.kind === 'proofread_minimal') {
+      const expected = Array.isArray(op.expectedReplacements) ? op.expectedReplacements : [];
+      const failed = expected.filter((pair) => {
+        const needleGone = !normalizedTextIncludes(text, pair.needle);
+        const replacementPresent = normalizedTextIncludes(text, pair.replacement);
+        return !(needleGone && replacementPresent);
+      });
+      checks.push({
+        id: 'minimal_proofread_applied',
+        label: expected.length ? 'Correcciones mínimas aplicadas al DOCX' : 'DOCX revisado con corrección mínima',
+        passed: failed.length === 0,
+        details: {
+          changedCount: op.changedCount || 0,
+          changedParagraphs: op.changedParagraphs || 0,
+          replacements: expected.slice(0, 10),
+          failed: failed.slice(0, 10),
+        },
+      });
+      continue;
+    }
     if (op.kind === 'fill_section' && isAnexo3CronogramaTarget(op.target)) {
       const result = validateCronogramaCompletion(buffer, op.target);
       if (result.ok || result.reason !== 'cronograma_table_not_found') {
@@ -2729,6 +3153,25 @@ function validateDocxOperationCriteria(buffer, operations = []) {
     if (op.kind === 'fill_section' && op.target) {
       const result = validateTargetSectionCompletion(buffer, op.target);
       checks.push({ id: `section_${normalizeText(op.target.label).replace(/\s+/g, '_')}_completed`, label: `${op.target.label} completado`, passed: result.ok, details: result });
+      continue;
+    }
+    if (op.kind === 'append_labeled' && (op.contentKind === 'cronograma_anexo_3' || requestWantsCronogramaAnexo3(text, op.target))) {
+      const required = [
+        'anexo 3',
+        'cronograma del desarrollo y culminacion de la tesis',
+        'planificacion',
+        'capitulo i',
+        'matriz de consistencia',
+        'operacionalizacion',
+        'entrega',
+      ];
+      const missing = required.filter((needle) => !normalized.includes(needle));
+      checks.push({
+        id: 'cronograma_anexo_3_appended',
+        label: 'Anexo 3 Cronograma agregado al Word',
+        passed: missing.length === 0,
+        details: { missing },
+      });
       continue;
     }
     if ((op.kind === 'append_generic' || op.kind === 'append_labeled') && op.wantsInstrument) {
@@ -2744,6 +3187,16 @@ function validateDocxOperationCriteria(buffer, operations = []) {
       checks.push({ id: 'reference_documents_integrated', label: 'Documento de soporte integrado', passed });
       continue;
     }
+    if (op.kind === 'insert_table' && op.tableKind === 'consistency_matrix') {
+      const result = validateConsistencyMatrixInsertion(buffer);
+      checks.push({
+        id: 'consistency_matrix_inserted',
+        label: 'Matriz de consistencia agregada al Word',
+        passed: result.ok,
+        details: result,
+      });
+      continue;
+    }
     if (op.kind === 'fill_cover') {
       const passed = normalized.includes('portada completada') && normalized.includes('titulo de la investigacion');
       checks.push({ id: 'cover_completed', label: 'Portada completada', passed });
@@ -2752,6 +3205,18 @@ function validateDocxOperationCriteria(buffer, operations = []) {
     if (op.kind === 'delete_text') {
       const passed = !normalizedTextIncludes(text, op.needle);
       checks.push({ id: 'specific_text_deleted', label: 'Texto específico eliminado', passed, details: { needle: compact(op.needle, 120) } });
+      continue;
+    }
+    if ((op.kind === 'delete_section' || op.kind === 'delete_section_range') && op.target) {
+      const documentXml = readDocxDocumentXml(buffer);
+      const stillPresent = extractDocxParagraphs(documentXml)
+        .some((paragraph) => matchesTargetHeading(paragraph.normalized, op.target));
+      checks.push({
+        id: `section_${normalizeText(op.target.label).replace(/\s+/g, '_')}_deleted`,
+        label: `${op.target.label} eliminado`,
+        passed: !stillPresent,
+        details: { target: op.target.label, toEnd: Boolean(op.toEnd || op.kind === 'delete_section_range') },
+      });
       continue;
     }
     if (op.kind === 'replace_text') {
@@ -2775,6 +3240,7 @@ async function extractVisibleTextForFormat(buffer, format) {
     if (format === 'docx') return extractDocxTextFromBuffer(buffer);
     if (format === 'xlsx') return extractTextFromXlsxBuffer(buffer);
     if (format === 'pptx') return extractTextFromPptxBuffer(buffer);
+    if (format === 'pdf') return await extractTextFromPdfBuffer(buffer);
     if (TEXT_LIKE_EXTENSIONS.has(format)) return buffer.toString('utf8');
   } catch {
     return '';
@@ -2967,7 +3433,7 @@ async function validateEditedBuffer(buffer, format, blocks, context = {}) {
 // (4) execute every operation in order on the same evolving buffer.
 // ---------------------------------------------------------------------------
 
-const CLAUSE_ACTION_VERB = 'agreg\\w*|anad\\w*|incorpor\\w*|inclu\\w*|adjunt\\w*|complet\\w*|llen\\w*|rellen\\w*|desarroll\\w*|coloc\\w*|modific\\w*|edit\\w*|actualiz\\w*|reescrib\\w*|reemplaz\\w*|quit\\w*|elimin\\w*|borr\\w*';
+const CLAUSE_ACTION_VERB = 'agreg\\w*|anad\\w*|incorpor\\w*|inclu\\w*|adjunt\\w*|complet\\w*|llen\\w*|rellen\\w*|desarroll\\w*|coloc\\w*|aplic\\w*|corrig\\w*|correg\\w*|mejora\\w*|arregl\\w*|ajust\\w*|modific\\w*|edit\\w*|actualiz\\w*|reescrib\\w*|reemplaz\\w*|quit\\w*|elimin\\w*|borr\\w*';
 
 function splitRequestClauses(text) {
   const normalized = normalizeText(text);
@@ -3028,6 +3494,11 @@ function extractReferenceCount(clauseNorm) {
 
 function clauseIsDelete(clauseNorm) {
   return /\b(quit\w*|elimin\w*|borr\w*)\b/.test(clauseNorm);
+}
+
+function clauseDeletesFromSectionToEnd(clauseNorm = '') {
+  const text = normalizeText(clauseNorm);
+  return /\b(?:desde|a\s+partir\s+de|de\s+ahi|de\s+alli|hacia\s+abajo|para\s+abajo|en\s+adelante|hasta\s+el\s+final|al\s+final|todo\s+lo\s+que\s+sigue|todo\s+hacia\s+abajo)\b/.test(text);
 }
 
 function clauseMentionsCover(clauseNorm) {
@@ -3096,6 +3567,19 @@ function extractReplacementPair(text = '') {
   return { needle: needle.slice(0, 180), replacement: replacement.slice(0, 500) };
 }
 
+function cleanupXlsxCellWriteValue(value = '') {
+  return String(value || '')
+    .replace(/[.;!?]+$/g, '')
+    .replace(/\s+y\s+(?:devu[eé]lveme|devuelve|retorna|regresa|entr[eé]game|dame|manda|env[ií]a)\b.*$/iu, '')
+    .replace(/\s+(?:por favor|gracias)\s*$/iu, '')
+    .replace(/^["“”'`]+|["“”'`]+$/g, '')
+    .trim();
+}
+
+function replacementTargetsXlsxCell(pair = {}) {
+  return /\b(?:celda|cell)\s+[a-z]{1,3}[1-9][0-9]{0,6}\b/i.test(String(pair.needle || ''));
+}
+
 function extractXlsxCellWrite(text = '') {
   const raw = String(text || '');
   const cellMatch = raw.match(/\b(?:celda|cell)\s+([A-Z]{1,3}[1-9][0-9]{0,6})\b/i);
@@ -3105,8 +3589,14 @@ function extractXlsxCellWrite(text = '') {
   let value = extractQuotedValues(afterCell)[0] || '';
   if (!value) {
     const valueMatch = afterCell.match(/\b(?:escrib\w*|pon\w*|coloc\w*|con|a|=|valor)\s+(.{1,500})$/i);
-    value = valueMatch ? valueMatch[1].replace(/[.;!?]+$/g, '').trim() : '';
+    value = valueMatch ? valueMatch[1] : '';
   }
+  if (!value) {
+    const beforeCell = raw.slice(0, cellMatch.index);
+    const beforeMatch = beforeCell.match(/\b(?:escrib\w*|pon\w*|coloc\w*|cambi\w*|actualiz\w*)\s+(.{1,220}?)\s+(?:en|a)\s+(?:la\s+)?$/i);
+    value = beforeMatch ? beforeMatch[1] : '';
+  }
+  value = cleanupXlsxCellWriteValue(value);
   if (!value) return null;
   return {
     address: cellMatch[1].toUpperCase(),
@@ -3152,6 +3642,27 @@ function clauseWantsTable(clauseNorm) {
   return Boolean(mod && mod.detectTableRequest(clauseNorm).wantsTable);
 }
 
+function clauseWantsConsistencyMatrix(clauseNorm) {
+  const mod = docxTableInsertModule();
+  return Boolean(mod && mod.requestWantsConsistencyMatrix && mod.requestWantsConsistencyMatrix(clauseNorm));
+}
+
+function clauseHasStructuralEditIntent(clauseNorm) {
+  const target = parseTargetSectionRequest(clauseNorm);
+  return Boolean(
+    target
+    || clauseIsAppend(clauseNorm)
+    || clauseIsFill(clauseNorm)
+    || clauseIsDelete(clauseNorm)
+    || extractReplacementPair(clauseNorm)
+    || clauseMentionsCover(clauseNorm)
+    || clauseWantsBibliography(clauseNorm)
+    || clauseWantsIndex(clauseNorm)
+    || clauseWantsTable(clauseNorm)
+    || clauseWantsVisual(clauseNorm)
+  );
+}
+
 function clauseWantsIndex(clauseNorm) {
   const mod = docxTableInsertModule();
   return Boolean(mod && mod.detectIndexRequest && mod.detectIndexRequest(clauseNorm).wantsIndex);
@@ -3174,6 +3685,18 @@ function buildOperationFromClause(clauseNorm, documentXml) {
     return { kind: 'replace_text', ...replacement };
   }
 
+  if (requestWantsMinimalProofreading(clauseNorm) && !clauseHasStructuralEditIntent(clauseNorm)) {
+    return { kind: 'proofread_minimal' };
+  }
+
+  if (remove && target) {
+    return {
+      kind: clauseDeletesFromSectionToEnd(clauseNorm) ? 'delete_section_range' : 'delete_section',
+      target,
+      toEnd: clauseDeletesFromSectionToEnd(clauseNorm),
+    };
+  }
+
   if (remove) {
     const needle = extractDeletionNeedle(clauseNorm);
     if (needle) return { kind: 'delete_text', needle };
@@ -3191,16 +3714,21 @@ function buildOperationFromClause(clauseNorm, documentXml) {
 
   if (target) {
     const exists = sectionExistsInDoc(documentXml, target);
+    const contentKind = requestWantsCronogramaAnexo3(clauseNorm, target) ? 'cronograma_anexo_3' : undefined;
+    const base = { target, wantsInstrument };
+    if (contentKind) base.contentKind = contentKind;
     // "agrega … como anexo 4" when the anexo does not exist yet → create it.
-    if (append && !exists) return { kind: 'append_labeled', target, wantsInstrument };
-    if (exists) return { kind: 'fill_section', target, wantsInstrument };
-    if (fill) return { kind: 'fill_section', target, wantsInstrument };
-    return { kind: 'append_labeled', target, wantsInstrument };
+    if (append && !exists) return { kind: 'append_labeled', ...base };
+    if (exists) return { kind: 'fill_section', ...base };
+    if (fill) return { kind: 'fill_section', ...base };
+    return { kind: 'append_labeled', ...base };
   }
   // A chart/diagram request (no explicit section) → embed a visual instead of a
   // generic text appendix.
   if (clauseWantsIndex(clauseNorm)) return { kind: 'insert_index' };
-  if (clauseWantsTable(clauseNorm)) return { kind: 'insert_table' };
+  if (clauseWantsTable(clauseNorm)) {
+    return { kind: 'insert_table', tableKind: clauseWantsConsistencyMatrix(clauseNorm) ? 'consistency_matrix' : 'table' };
+  }
   if (clauseWantsVisual(clauseNorm)) return { kind: 'insert_visual' };
   if (append || wantsInstrument) return { kind: 'append_generic', wantsInstrument };
   if (fill) return null;
@@ -3208,7 +3736,7 @@ function buildOperationFromClause(clauseNorm, documentXml) {
 }
 
 function operationKey(op) {
-  return `${op.kind}:${op.target ? op.target.label : ''}:${op.wantsInstrument ? 'instr' : ''}:${normalizeText(op.needle || '')}:${normalizeText(op.replacement || '')}:${op.address || ''}`;
+  return `${op.kind}:${op.target ? op.target.label : ''}:${op.wantsInstrument ? 'instr' : ''}:${op.tableKind || ''}:${op.contentKind || ''}:${normalizeText(op.needle || '')}:${normalizeText(op.replacement || '')}:${op.address || ''}`;
 }
 
 const BULK_FILL_SCOPE_RE = /\b(tablas?|anexos?|secciones?|cuadros?|matrices?|matriz|vac[ií]as?|vac[ií]os?|faltantes?|pendientes?|todo|todos|todas|que\s+falt\w*)\b/;
@@ -3227,12 +3755,13 @@ function planSourcePreservingOperations({ requestText = '', documentXml = '', re
 
   const rawReplacement = extractReplacementPair(requestText);
   if (rawReplacement) add({ kind: 'replace_text', ...rawReplacement });
+  const norm = normalizeText(requestText);
+  if (requestWantsMinimalProofreading(norm)) add({ kind: 'proofread_minimal' });
   for (const clause of clauses) add(buildOperationFromClause(clause, documentXml));
 
   // Broader understanding: "completa / rellena las tablas vacías / los anexos /
   // todo lo que falte" with no explicit number → fill every empty-table or empty
   // section the document actually has.
-  const norm = normalizeText(requestText);
   const wantsBulkFill = clauseIsFill(norm) && BULK_FILL_SCOPE_RE.test(norm);
   const hasExplicitTarget = ops.some((op) => op.target);
   if (wantsBulkFill && !hasExplicitTarget) {
@@ -3251,7 +3780,11 @@ function planSourcePreservingOperations({ requestText = '', documentXml = '', re
   }
 
   if (ops.length === 0) {
-    ops.push({ kind: 'append_generic', wantsInstrument: clauseWantsInstrument(norm) });
+    if (requestWantsMinimalProofreading(norm)) {
+      ops.push({ kind: 'proofread_minimal' });
+    } else {
+      ops.push({ kind: 'append_generic', wantsInstrument: clauseWantsInstrument(norm) });
+    }
   }
   return ops;
 }
@@ -3406,6 +3939,7 @@ async function planOperationsWithLLM({ requestText = '', documentXml = '', signa
 async function planSourcePreservingOperationsSmart({ requestText = '', documentXml = '', referenceFiles = [], signal } = {}) {
   const heuristic = planSourcePreservingOperations({ requestText, documentXml, referenceFiles });
   if (heuristic.some((op) => op.kind === 'integrate_references')) return heuristic;
+  if (heuristic.some((op) => op.kind === 'insert_table' && op.tableKind === 'consistency_matrix')) return heuristic;
   if (heuristicPlanIsConfident(heuristic, requestText)) return heuristic;
   const llm = await planOperationsWithLLM({ requestText, documentXml, signal });
   return llm && llm.length ? llm : heuristic;
@@ -3490,27 +4024,41 @@ async function runFillSectionOperation({ buffer, op, requestText, sourceText, al
 
 async function runAppendLabeledOperation({ buffer, op, requestText, sourceText, allSourceFiles, sourceFile, signal }) {
   const originalName = sourceFile.originalName || sourceFile.filename;
-  const bodyBlocks = op.wantsInstrument
-    ? buildInstrumentAppendixBody({ prompt: requestText, sourceText, originalName })
-    : await generateTargetSectionBlocks({
+  let bodyBlocks;
+  if (op.wantsInstrument) {
+    bodyBlocks = buildInstrumentAppendixBody({ prompt: requestText, sourceText, originalName });
+  } else if (op.contentKind === 'cronograma_anexo_3' || requestWantsCronogramaAnexo3(requestText, op.target)) {
+    bodyBlocks = buildCronogramaAnexo3AppendixBlocks();
+  } else {
+    bodyBlocks = await generateTargetSectionBlocks({
       prompt: requestText,
       target: op.target,
       sourceFiles: allSourceFiles,
       sourceText,
       signal,
     });
+  }
   const heading = op.wantsInstrument
     ? `${op.target.label}. Instrumentos de recolección de datos`
-    : op.target.label;
+    : extractTargetHeadingFromRequest(requestText, op.target);
   const labeled = [
     block('pageBreak', ''),
     block('heading2', heading),
     ...bodyBlocks.filter((item) => item.kind !== 'pageBreak'),
   ];
+  let afterIndex = null;
+  if (requestWantsPlacementAfterOperationalMatrix(requestText)) {
+    afterIndex = insertionIndexAfterOperationalMatrix(readDocxDocumentXml(buffer));
+  }
   return {
-    buffer: appendToDocxBuffer(buffer, labeled),
+    buffer: appendToDocxBuffer(buffer, labeled, { afterIndex }),
     validationBlocks: labeled,
-    step: { kind: 'append_labeled', label: op.target.label, mode: op.wantsInstrument ? 'instrument' : 'generic' },
+    step: {
+      kind: 'append_labeled',
+      label: op.target.label,
+      mode: op.wantsInstrument ? 'instrument' : (op.contentKind === 'cronograma_anexo_3' ? 'cronograma_appendix' : 'generic'),
+      placement: afterIndex ? 'after_operational_matrix' : 'append',
+    },
   };
 }
 
@@ -3622,6 +4170,21 @@ function runDeleteTextOperation({ buffer, op }) {
   };
 }
 
+function runDeleteSectionOperation({ buffer, op }) {
+  const result = deleteDocxSectionRangeBuffer(buffer, op.target, { toEnd: op.toEnd || op.kind === 'delete_section_range' });
+  return {
+    buffer: result.buffer,
+    validationBlocks: [],
+    step: {
+      kind: op.kind === 'delete_section_range' ? 'delete_section_range' : 'delete_section',
+      label: op.target?.label || 'Sección',
+      mode: result.toEnd ? 'section_to_end' : 'section_only',
+      removedCount: result.removedCount,
+      target: op.target,
+    },
+  };
+}
+
 function runReplaceTextOperation({ buffer, op }) {
   const result = replaceTextInDocxBuffer(buffer, op.needle, op.replacement);
   return {
@@ -3634,6 +4197,25 @@ function runReplaceTextOperation({ buffer, op }) {
       changedCount: result.changedCount,
       needle: op.needle,
       replacement: op.replacement,
+    },
+  };
+}
+
+function runProofreadMinimalOperation({ buffer, op }) {
+  const result = proofreadMinimalDocxBuffer(buffer);
+  op.changedCount = result.changedCount;
+  op.changedParagraphs = result.changedParagraphs;
+  op.expectedReplacements = result.expectedReplacements;
+  return {
+    buffer: result.buffer,
+    validationBlocks: [],
+    step: {
+      kind: 'proofread_minimal',
+      label: 'correcciones mínimas',
+      mode: 'safe_proofread',
+      changedCount: result.changedCount,
+      changedParagraphs: result.changedParagraphs,
+      corrections: result.corrections,
     },
   };
 }
@@ -3661,17 +4243,23 @@ async function runInsertVisualOperation({ buffer, requestText, sourceText, signa
 
 // Design layer: insert a native, editable Word table from the request data.
 // A table failure must never break the document edit.
-async function runInsertTableOperation({ buffer, requestText, sourceText, signal }) {
+async function runInsertTableOperation({ buffer, op = {}, requestText, sourceText, signal }) {
   const mod = docxTableInsertModule();
   if (!mod) return { buffer, validationBlocks: [], step: { kind: 'insert_table', label: 'tabla', mode: 'unavailable' } };
   try {
     const result = await mod.addTableFromRequest(buffer, { requestText, sourceText, signal });
     if (result.added) {
       const caption = String(result.spec?.title || '').trim();
+      const tableKind = result.spec?.kind || op.tableKind || 'table';
       return {
         buffer: result.buffer,
         validationBlocks: caption ? [block('normal', caption)] : [],
-        step: { kind: 'insert_table', label: `tabla (${result.spec?.rowCount || 0} filas)` },
+        step: {
+          kind: 'insert_table',
+          label: tableKind === 'consistency_matrix' ? 'Matriz de consistencia' : `tabla (${result.spec?.rowCount || 0} filas)`,
+          tableKind,
+          rowCount: result.spec?.rowCount || 0,
+        },
       };
     }
     return { buffer, validationBlocks: [], step: { kind: 'insert_table', label: 'tabla', mode: result.reason || 'skipped' } };
@@ -3709,7 +4297,7 @@ async function executeDocxOperations({ input, ops, requestText, sourceText, allS
     } else if (op.kind === 'insert_visual') {
       result = await runInsertVisualOperation({ buffer, requestText, sourceText, signal });
     } else if (op.kind === 'insert_table') {
-      result = await runInsertTableOperation({ buffer, requestText, sourceText, signal });
+      result = await runInsertTableOperation({ buffer, op, requestText, sourceText, signal });
     } else if (op.kind === 'insert_index') {
       result = await runInsertIndexOperation({ buffer, requestText });
     } else if (op.kind === 'integrate_references') {
@@ -3720,8 +4308,12 @@ async function executeDocxOperations({ input, ops, requestText, sourceText, allS
       result = runFillCoverOperation({ buffer, sourceText, sourceFile });
     } else if (op.kind === 'delete_text') {
       result = runDeleteTextOperation({ buffer, op });
+    } else if (op.kind === 'delete_section' || op.kind === 'delete_section_range') {
+      result = runDeleteSectionOperation({ buffer, op });
     } else if (op.kind === 'replace_text') {
       result = runReplaceTextOperation({ buffer, op });
+    } else if (op.kind === 'proofread_minimal') {
+      result = runProofreadMinimalOperation({ buffer, op });
     } else {
       result = runAppendGenericOperation({ buffer, op, requestText, sourceText, sourceFile });
     }
@@ -3823,7 +4415,7 @@ async function planOfficeOperationsSmart({ requestText = '', format = '', input,
           ].join('\n'),
         },
       ],
-    }, signal ? { signal } : undefined);
+    }, { ...(signal ? { signal } : {}), timeout: 20_000 });
     const content = completion?.choices?.[0]?.message?.content || '';
     const parsed = JSON.parse(content);
     const ops = sanitizeOfficeOperations(parsed?.operations, format);
@@ -3848,24 +4440,26 @@ function planGenericOfficeOperations({ requestText = '', format = '' } = {}) {
     seen.add(key);
     ops.push(op);
   };
+  const rawCellWrite = format === 'xlsx' ? extractXlsxCellWrite(requestText) : null;
+  if (rawCellWrite) add({ kind: 'set_cell', ...rawCellWrite });
   const rawReplacement = extractReplacementPair(requestText);
-  if (rawReplacement) add({ kind: 'replace_text', ...rawReplacement });
-  if (format === 'xlsx') {
-    const rawCellWrite = extractXlsxCellWrite(requestText);
-    if (rawCellWrite) add({ kind: 'set_cell', ...rawCellWrite });
+  if (rawReplacement && !(format === 'xlsx' && replacementTargetsXlsxCell(rawReplacement))) {
+    add({ kind: 'replace_text', ...rawReplacement });
   }
   for (const clause of clauses) {
-    const replacement = extractReplacementPair(clause);
-    if (replacement) {
-      add({ kind: 'replace_text', ...replacement });
-      continue;
-    }
     if (format === 'xlsx') {
       const cellWrite = extractXlsxCellWrite(clause);
       if (cellWrite) {
         add({ kind: 'set_cell', ...cellWrite });
         continue;
       }
+    }
+    const replacement = extractReplacementPair(clause);
+    if (replacement) {
+      if (!(format === 'xlsx' && replacementTargetsXlsxCell(replacement))) {
+        add({ kind: 'replace_text', ...replacement });
+      }
+      continue;
     }
     if (clauseIsDelete(clause)) {
       const needle = extractDeletionNeedle(clause);
@@ -3977,11 +4571,22 @@ function describeStep(step) {
   if (step.kind === 'insert_visual') return 'intenté insertar un gráfico, pero no había datos suficientes';
   if (step.kind === 'insert_index' && !step.mode) return `generé el ${step.label || 'índice'} de figuras/tablas`;
   if (step.kind === 'insert_index') return 'intenté generar el índice, pero aún no hay figuras/tablas numeradas';
+  if (step.kind === 'insert_table' && step.tableKind === 'consistency_matrix' && !step.mode) {
+    return `agregué la matriz de consistencia derivada de la matriz operacional (${step.rowCount || 0} filas)`;
+  }
   if (step.kind === 'insert_table' && !step.mode) return `inserté una ${step.label || 'tabla'} en el documento`;
   if (step.kind === 'insert_table') return 'intenté insertar una tabla, pero no había datos suficientes';
   if (step.kind === 'fill_cover') return 'completé la portada con los datos disponibles del documento';
+  if (step.kind === 'delete_section_range') return `eliminé ${step.label || 'la sección'} y todo el contenido posterior`;
+  if (step.kind === 'delete_section') return `eliminé ${step.label || 'la sección'} sin alterar el resto del archivo`;
   if (step.kind === 'delete_text') return `eliminé el texto específico solicitado (${step.removedCount || 0} coincidencia(s))`;
   if (step.kind === 'replace_text') return `reemplacé el texto específico solicitado (${step.changedCount || 0} coincidencia(s))`;
+  if (step.kind === 'proofread_minimal') {
+    const count = Number(step.changedCount || 0);
+    return count > 0
+      ? `apliqué correcciones mínimas de redacción y ortografía (${count} ajuste(s))`
+      : 'revisé el DOCX y lo devolví preservado; no encontré correcciones mínimas determinísticas que aplicar';
+  }
   if (step.kind === 'set_cell') return `actualicé la celda ${step.label || 'solicitada'}`;
   if (step.kind === 'append_generic' && step.mode === 'xlsx_new_sheet') return 'agregué una hoja nueva con el contenido solicitado';
   if (step.kind === 'append_generic' && step.mode === 'pptx_new_slide') return 'agregué una diapositiva nueva con el contenido solicitado';
@@ -3999,6 +4604,12 @@ const DOCUMENT_AGENT_ROLES = [
   'quality_validator',
 ];
 
+function configuredDocumentVirtualAgentPool(env = process.env) {
+  const configured = Number.parseInt(env.SIRAGPT_DOCUMENT_VIRTUAL_AGENT_POOL || '', 10);
+  if (Number.isFinite(configured) && configured > 0) return Math.min(Math.max(configured, 1000), 5000);
+  return 1000;
+}
+
 function requestedAgentCount(prompt = '') {
   const text = normalizeText(prompt);
   if (/\bmil\s+agentes?\b/.test(text)) return 1000;
@@ -4008,15 +4619,18 @@ function requestedAgentCount(prompt = '') {
 
 function buildDocumentOrchestrationPlan({ requestText = '', sourceFile = {}, referenceFiles = [], operations = [], selectionReason = '' } = {}) {
   const requested = requestedAgentCount(requestText);
+  const virtualAgentPool = Math.max(configuredDocumentVirtualAgentPool(), requested || 0);
   const active = Math.max(
     DOCUMENT_AGENT_ROLES.length,
     Math.min(requested || DOCUMENT_AGENT_ROLES.length, Math.max(DOCUMENT_AGENT_ROLES.length, sourceDocumentParallelism())),
   );
   return {
     mode: 'source_preserving_document_swarm',
-    requestedAgents: requested,
+    virtualAgentPool,
+    requestedAgents: requested || virtualAgentPool,
     activeAgents: active,
     parallelism: sourceDocumentParallelism(),
+    executionMode: 'bounded_background_worker',
     roles: DOCUMENT_AGENT_ROLES,
     sourceSelection: selectionReason || 'direct',
     baseFile: sourceFile?.originalName || sourceFile?.filename || sourceFile?.id || null,
@@ -4025,6 +4639,7 @@ function buildDocumentOrchestrationPlan({ requestText = '', sourceFile = {}, ref
       kind: op.kind,
       target: op.target?.label || null,
       wantsInstrument: Boolean(op.wantsInstrument),
+      tableKind: op.kind === 'insert_table' ? (op.tableKind || 'table') : undefined,
       needle: (op.kind === 'delete_text' || op.kind === 'replace_text') ? compact(op.needle, 80) : undefined,
       replacement: op.kind === 'replace_text' ? compact(op.replacement, 80) : undefined,
       address: op.kind === 'set_cell' ? op.address : undefined,
@@ -4167,8 +4782,33 @@ async function generateSourcePreservingDocumentEdit({
         : 'Listo. Conservé el PPTX original y apliqué la edición solicitada sin reconstruir la presentación completa.';
     } else if (isPdfFile(sourceFile)) {
       format = 'pdf';
-      output = await appendToPdfBuffer(input, blocks);
-      content = 'Listo. Conservé el PDF original y agregué el contenido solicitado al final, sin reemplazar las páginas existentes.';
+      const execution = await executePdfOperations({
+        input,
+        requestText,
+        sourceText,
+        blocks,
+        sourceFile,
+      });
+      output = execution.buffer;
+      validationBlocks = execution.validationBlocks;
+      operations = execution.ops;
+      orchestration = buildDocumentOrchestrationPlan({
+        requestText,
+        sourceFile,
+        referenceFiles,
+        operations,
+        selectionReason,
+      });
+      const stepSummary = joinSpanishList(execution.steps.map(describeStep));
+      const onlyAppend = execution.steps.every((step) => step.kind === 'append_generic');
+      suffix = onlyAppend ? 'con_anexos' : 'editado';
+      titleSuffix = onlyAppend ? 'con anexos' : 'editado';
+      explanation = stepSummary
+        ? `Se conservó el contenido del PDF original; ${stepSummary}.`
+        : 'Se conservó el contenido del PDF original y se aplicó la edición solicitada.';
+      content = stepSummary
+        ? `Listo. Conservé el contenido completo del PDF original y ${stepSummary}.`
+        : 'Listo. Conservé el contenido completo del PDF original y apliqué la edición solicitada.';
     } else if (isTextLikeFile(sourceFile)) {
       format = textLikeFormatForFile(sourceFile) || 'txt';
       const execution = executeTextLikeOperations({ input, requestText, format, blocks });
@@ -4326,6 +4966,7 @@ module.exports = {
     buildCronogramaAnexo3Plan,
     buildDocumentFormattingTemplate,
     buildDocumentOrchestrationPlan,
+    configuredDocumentVirtualAgentPool,
     buildInstrumentAppendix,
     buildInstrumentAppendixBody,
     buildReferenceIntegrationFallbackBlocks,
@@ -4360,12 +5001,15 @@ module.exports = {
     clauseWantsBibliography,
     extractReferenceCount,
     formatReferenceApa,
+    applyMinimalProofreadingToText,
+    proofreadMinimalDocxBuffer,
     runAppendReferencesOperation,
     describeStep,
     replaceTextInDocxBuffer,
     replaceTextInPptxBuffer,
     replaceTextInXlsxBuffer,
     requestMentionsGeneralDocument,
+    requestWantsMinimalProofreading,
     requestWantsReferenceIntegration,
     resolveStoredFilePath,
     sanitizeCapturedParagraphProperties,

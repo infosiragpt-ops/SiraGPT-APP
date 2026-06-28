@@ -52,9 +52,9 @@ router.get('/images', authenticateToken, async (req, res) => {
             orderBy: {
                 timestamp: 'desc', // Las imágenes más recientes aparecen primero
             },
-            // You might want to add pagination here for large number of images
-            // take: 20,
-            // skip: (page - 1) * 20,
+            // Bound the scan so a heavy account can't load its entire assistant-
+            // message corpus into memory on one GET (mirrors /media-library).
+            take: MESSAGE_MEDIA_SCAN_LIMIT,
         });
 
         const images = userImageMessages
@@ -118,8 +118,9 @@ router.get('/videos', authenticateToken, async (req, res) => {
             orderBy: {
                 timestamp: 'desc',
             },
-            // take: 20,
-            // skip: (page - 1) * 20,
+            // Bound the scan so a heavy account can't load its entire assistant-
+            // message corpus into memory on one GET (mirrors /media-library).
+            take: MESSAGE_MEDIA_SCAN_LIMIT,
         });
 
         console.log(userVideoMessages.length);

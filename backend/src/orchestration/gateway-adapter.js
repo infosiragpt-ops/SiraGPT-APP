@@ -146,7 +146,11 @@ async function enrichWithWebSearch(prompt, opts = {}) {
         `\n${tallyLine}\n${trustGuidance}\n` +
         `[/Fresh Web Context]`,
     };
-  } catch (_) {
+  } catch (err) {
+    // Graceful degrade is unchanged (still returns null → the answer proceeds
+    // without web context), but log the outage so it's observable — a silent
+    // provider failure otherwise drops grounding on every turn with no trace.
+    try { console.warn('[web-search] enrichment failed (continuing without):', err && err.message ? err.message : err); } catch (_) { /* never let logging throw */ }
     return null;
   }
 }

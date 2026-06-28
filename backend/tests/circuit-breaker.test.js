@@ -234,6 +234,16 @@ describe('CircuitBreaker', () => {
       assert.equal(err.message, 'already-aborted');
       assert.equal(cb.failureCount, 0);
     });
+
+    it('does not count an external abort as a failure even when the error is falsy', async () => {
+      // Regression: the guard was `err && externalSignal && externalSignal.aborted`,
+      // so an abort that surfaced as a FALSY error (a bare throw / null reason) fell
+      // through and was mis-counted as a circuit failure. Gate on the signal only.
+      const cb = new CircuitBreaker({ threshold: 5 });
+      const ac = new AbortController();
+      await cb.call(async () => { ac.abort(); throw undefined; }, { signal: ac.signal }).catch(() => {});
+      assert.equal(cb.failureCount, 0, 'a falsy-error abort must not count as a circuit failure');
+    });
   });
 
   // ── reset() ───────────────────────────────────────────────────────────
@@ -416,6 +426,20 @@ describe('CircuitBreaker', () => {
   // ── Edge cases ────────────────────────────────────────────────────────
 
   describe('edge cases', () => {
+    it('lifetime success counter (windowMs=0) counts correctly across many calls without leaking', async () => {
+      // Regression: kSuccesses is a RollingCounter(0) whose _prune is a no-op, so
+      // it used to store one object per success forever (unbounded memory). It now
+      // aggregates into a single entry — count stays correct and memory is O(1).
+      const cb = new CircuitBreaker({ threshold: 1_000_000, windowMs: 0 });
+      for (let i = 0; i < 3000; i += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        await cb.call(async () => 'ok');
+      }
+      assert.equal(cb.successCount, 3000, 'aggregated lifetime count is exact');
+      cb.reset();
+      assert.equal(cb.successCount, 0, 'reset clears the aggregate');
+    });
+
     it('handles concurrent calls without corrupting state', async () => {
       const cb = new CircuitBreaker({ threshold: 3, cooldownMs: 1000 });
       const results = await Promise.allSettled([

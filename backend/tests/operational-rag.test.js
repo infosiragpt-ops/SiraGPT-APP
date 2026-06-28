@@ -65,6 +65,19 @@ test('normaliseDocs keeps text documents and skips images / tiny text', () => {
   assert.equal(docs[0].title, 'a.pdf');
 });
 
+test('normaliseDocs: a truncated doc reports the truncated char count, not the original', () => {
+  // > default MAX_DOC_CHARS (1,000,000) so it is truncated.
+  const big = 'a'.repeat(1_100_000);
+  const [doc] = runtime.normaliseDocs([
+    { id: 'big', originalName: 'big.txt', mimeType: 'text/plain', extractedText: big },
+  ]);
+  assert.ok(doc, 'doc produced');
+  assert.equal(doc.truncated, true);
+  // chars used to report the pre-truncation length (1,100,000) while text was cut.
+  assert.equal(doc.chars, doc.text.length, 'chars must match the returned text length');
+  assert.ok(doc.chars < big.length, 'truncated chars reflect the cut');
+});
+
 test('ensureIndexed skips sources already present in the collection', async () => {
   const rag = fakeRag({ existingSources: ['file:already'] });
   const out = await runtime.ensureIndexed({
@@ -318,14 +331,19 @@ test('runQualityAudit stores compact Self-RAG metadata on the assistant message'
       },
     },
   };
-  const updates = [];
+  // The audit now does an atomic JSONB merge ($executeRaw) instead of a
+  // read-modify-write, so the fake prisma simulates `metadata || {ragAudit}`
+  // (existing top-level keys preserved, ragAudit shallow-set).
+  const merges = [];
+  let storedMetadata = { existing: true };
   const prisma = {
-    message: {
-      findUnique: async () => ({ metadata: { existing: true } }),
-      update: async (args) => {
-        updates.push(args);
-        return { id: args.where.id, ...args.data };
-      },
+    $executeRaw: async (_strings, ...values) => {
+      // interpolation order: [ JSON.stringify(audit), messageId ]
+      const audit = JSON.parse(values[0]);
+      const messageId = values[1];
+      merges.push({ messageId, audit });
+      storedMetadata = { ...storedMetadata, ragAudit: audit };
+      return 1;
     },
   };
 
@@ -342,13 +360,19 @@ test('runQualityAudit stores compact Self-RAG metadata on the assistant message'
     });
 
     assert.equal(out.audited, true);
-    assert.equal(updates.length, 1);
-    assert.equal(updates[0].where.id, 'm1');
-    assert.equal(updates[0].data.metadata.existing, true);
-    assert.equal(updates[0].data.metadata.ragAudit.critic.overall.isUse, 5);
-    assert.equal(updates[0].data.metadata.ragAudit.critic.overall.fullySupported, 1);
+    assert.equal(merges.length, 1);
+    assert.equal(merges[0].messageId, 'm1');
+    assert.equal(storedMetadata.existing, true);
+    assert.equal(storedMetadata.ragAudit.critic.overall.isUse, 5);
+    assert.equal(storedMetadata.ragAudit.critic.overall.fullySupported, 1);
   } finally {
     if (oldRagas === undefined) delete process.env.SIRAGPT_RAGAS_AUTO_EVAL;
     else process.env.SIRAGPT_RAGAS_AUTO_EVAL = oldRagas;
   }
+});
+
+test('dedupeDocs does not throw on a doc lacking both source and text', () => {
+  const out = runtime.dedupeDocs([{ title: 'a' }, { source: 's' }, {}]);
+  assert.ok(Array.isArray(out));
+  assert.equal(out.length, 3);
 });

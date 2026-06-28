@@ -73,6 +73,17 @@ test('fluencyProxy: empty candidate → 0', () => {
   assert.equal(r.score, 0);
 });
 
+test('fluencyProxy: single-token candidate (no bigrams) → 0', () => {
+  // candBi.size === 0 → the per-ref guard skips every reference → all-zero.
+  const r = cm.fluencyProxy('token', 'token');
+  assert.deepEqual(r, { score: 0, bigramJaccard: 0, lengthPenalty: 0 });
+});
+
+test('fluencyProxy: empty references array → 0', () => {
+  const r = cm.fluencyProxy('a real multi word candidate', []);
+  assert.deepEqual(r, { score: 0, bigramJaccard: 0, lengthPenalty: 0 });
+});
+
 // ─── citationPrecision ───────────────────────────────────────────────────
 
 test('citationPrecision: mix of supported + unsupported citations', async () => {

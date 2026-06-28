@@ -17,8 +17,15 @@ const prisma = new PrismaClient();
 // Return a GPT object safe to send to the client: its Actions never expose the
 // encrypted auth secret (redactActionsForClient → auth.hasSecret boolean only).
 function withRedactedActions(gpt) {
-  if (!gpt || typeof gpt !== 'object' || gpt.actions == null) return gpt;
-  return { ...gpt, actions: gptActions.redactActionsForClient(gpt.actions) };
+  if (!gpt || typeof gpt !== 'object') return gpt;
+  const out = { ...gpt };
+  if (out.actions != null) out.actions = gptActions.redactActionsForClient(out.actions);
+  // Knowledge files must NEVER expose path/userId/openaiFileId/extractedText to
+  // a client — the detail/share/chat routes returned the raw relation, leaking a
+  // GPT's full knowledge-base contents (incl. extracted text) to non-owners.
+  // Project through the same client-safe view the owner list route uses.
+  if (Array.isArray(out.knowledgeFiles)) out.knowledgeFiles = out.knowledgeFiles.map(knowledgeFileView);
+  return out;
 }
 
 // ─── Live draft preview ────────────────────────────────────────────────────
@@ -127,6 +134,9 @@ router.get('/', authenticateToken, async (req, res) => {
       andClauses.push({ isFeatured: true });
     }
 
+    // Never surface soft-deleted GPTs (e.g. tombstoned by the GDPR account-delete
+    // cascade) — they must disappear from both public and owner listings.
+    andClauses.push({ deletedAt: null });
     const whereClause = andClauses.length > 1 ? { AND: andClauses } : andClauses[0] || {};
 
     if (process.env.NODE_ENV !== 'production' && process.env.SIRAGPT_DEBUG_GPTS === '1') {
@@ -181,7 +191,8 @@ router.get('/categories', async (req, res) => {
         category: {
           not: null
         },
-        visibility: 'PUBLIC'
+        visibility: 'PUBLIC',
+        deletedAt: null // exclude soft-deleted GPTs so dead rows can't ghost a category
       },
       select: {
         category: true
@@ -318,6 +329,14 @@ router.post('/', authenticateToken, upload.single('icon'), async (req, res) => {
     if (visibility != null && !['PRIVATE', 'UNLISTED', 'PUBLIC'].includes(String(visibility))) {
       return res.status(400).json({ error: 'invalid visibility' });
     }
+    // Numeric guards — temperature/maxTokens come from the untrusted blob and
+    // are written straight to the Float/Int columns; reject NaN / out-of-range.
+    if (temperature != null && (!Number.isFinite(temperature) || temperature < 0 || temperature > 2)) {
+      return res.status(400).json({ error: 'temperature must be a number between 0 and 2' });
+    }
+    if (maxTokens != null && (!Number.isInteger(maxTokens) || maxTokens < 1)) {
+      return res.status(400).json({ error: 'maxTokens must be a positive integer' });
+    }
 
     // Validation
     if (!name || !instructions) {
@@ -410,6 +429,13 @@ router.put('/:id', authenticateToken, upload.single('icon'), async (req, res) =>
     }
     if (visibility != null && !['PRIVATE', 'UNLISTED', 'PUBLIC'].includes(String(visibility))) {
       return res.status(400).json({ error: 'invalid visibility' });
+    }
+    // Numeric guards — reject NaN / out-of-range before the Prisma update.
+    if (temperature != null && (!Number.isFinite(temperature) || temperature < 0 || temperature > 2)) {
+      return res.status(400).json({ error: 'temperature must be a number between 0 and 2' });
+    }
+    if (maxTokens != null && (!Number.isInteger(maxTokens) || maxTokens < 1)) {
+      return res.status(400).json({ error: 'maxTokens must be a positive integer' });
     }
 
     // Check if GPT exists and user owns it

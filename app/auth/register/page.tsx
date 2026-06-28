@@ -107,7 +107,11 @@ export default function RegisterPage() {
   const handleRegister = (e: React.FormEvent) => {
     e.preventDefault()
     if (!validateForm()) return
-    if (backendState !== "ready") {
+    // Defer ONLY during a confirmed post-publish warmup (a real 503 from the
+    // readiness route). In "checking" the backend is reachable even while the
+    // Next.js dev server is busy compiling a heavy route, so gating on "ready"
+    // there would trap the user with a button that silently queues forever.
+    if (backendState === "warming") {
       setPendingAction("register")
       return
     }
@@ -116,11 +120,14 @@ export default function RegisterPage() {
 
   const handleGoogle = () => {
     setGoogleLoading(true)
-    if (backendState === "ready") {
-      goToGoogle()
+    // goToGoogle() is a full-page redirect we cannot catch, so during a
+    // confirmed warmup we queue it and let the effect fire it once ready.
+    // "checking"/"ready" proceed now — the backend stays reachable mid-compile.
+    if (backendState === "warming") {
+      setPendingAction("google")
       return
     }
-    setPendingAction("google")
+    goToGoogle()
   }
 
   // Flush a queued action once the backend reports ready.
@@ -135,7 +142,13 @@ export default function RegisterPage() {
     }
   }, [backendState, pendingAction, goToGoogle, runRegister])
 
-  const isWarming = backendState === "warming" || (backendState !== "ready" && pendingAction !== null)
+  // Only surface the amber "server is starting" banner when the readiness
+  // poller has *confirmed* the backend is warming (repeated probe failures).
+  // The previous `pendingAction` term also raised it during the sub-second
+  // "checking" window before the first probe resolves, so a quick click on a
+  // healthy backend flashed the alarming banner for no reason. A queued action
+  // is still reflected by the button spinner below.
+  const isWarming = backendState === "warming"
 
   const handleInputChange = (field: keyof typeof formData, value: string | boolean) => {
     setFormData((prev) => ({ ...prev, [field]: value }))

@@ -70,8 +70,13 @@ function detectAnaphors(prompt) {
   const found = [];
   const seen = new Set();
   for (const { name, re } of ANAPHOR_PATTERNS) {
-    const m = prompt.match(re);
-    if (m && m[0]) {
+    // Iterate ALL matches per pattern, not just the first — `prompt.match(re)`
+    // without a /g flag returns only the first occurrence, so a prompt with
+    // several distinct anaphors of the same kind only surfaced one (the
+    // per-(name,span) dedup below shows multiple were intended).
+    const globalRe = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
+    for (const m of prompt.matchAll(globalRe)) {
+      if (!m || !m[0]) continue;
       const span = m[0];
       const key = `${name}:${span.toLowerCase()}`;
       if (seen.has(key)) continue;

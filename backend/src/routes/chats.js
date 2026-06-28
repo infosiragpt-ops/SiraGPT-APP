@@ -787,49 +787,58 @@ router.post('/:id/messages', [
       return res.status(200).json({ message: duplicate, duplicate: true });
     }
 
-    const message = await prisma.message.create({
-      data: {
-        chatId: req.params.id,
-        role,
-        content,
-        tokens,
-        // tools: [{ "type": "image_generation" }],
+    // Commit the dependent writes all-or-nothing: a Message must not persist
+    // with a stale chat.updatedAt (wrong sort position), and the apiUsage
+    // ledger row must not diverge from the user.apiUsage counter if the
+    // process/DB connection drops between writes. None of these reads a prior
+    // write's result, so the array form is valid and each op is identical.
+    const writes = [
+      prisma.message.create({
+        data: {
+          chatId: req.params.id,
+          role,
+          content,
+          tokens,
+          // tools: [{ "type": "image_generation" }],
 
-        files: files || null,
-        metadata: {
-          ...metadata,
-          idempotencyKey: messageFingerprint,
+          files: files || null,
+          metadata: {
+            ...metadata,
+            idempotencyKey: messageFingerprint,
+          }
         }
-      }
-    });
-
-    // Update chat's updatedAt timestamp
-    await prisma.chat.update({
-      where: { id: req.params.id },
-      data: { updatedAt: new Date() }
-    });
+      }),
+      // Update chat's updatedAt timestamp
+      prisma.chat.update({
+        where: { id: req.params.id },
+        data: { updatedAt: new Date() }
+      }),
+    ];
 
     // Track API usage if it's an assistant message
     if (role === 'ASSISTANT' && tokens) {
-      await prisma.apiUsage.create({
-        data: {
-          userId: req.user.id,
-          model: chat.model,
-          tokens,
-          cost: tokens * 0.001
-        }
-      });
-
-      // Update user's API usage
-      await prisma.user.update({
-        where: { id: req.user.id },
-        data: {
-          apiUsage: {
-            increment: tokens
+      writes.push(
+        prisma.apiUsage.create({
+          data: {
+            userId: req.user.id,
+            model: chat.model,
+            tokens,
+            cost: tokens * 0.001
           }
-        }
-      });
+        }),
+        // Update user's API usage
+        prisma.user.update({
+          where: { id: req.user.id },
+          data: {
+            apiUsage: {
+              increment: tokens
+            }
+          }
+        })
+      );
     }
+
+    const [message] = await prisma.$transaction(writes);
 
     res.status(201).json({ message });
 
@@ -1177,7 +1186,11 @@ router.post('/messages/:messageId/feedback', [
               msSinceResponse,
               messageId: message.id,
             });
-          } catch (_) { /* fully swallowed */ }
+          } catch (e) {
+            // Mirror the sibling feedback-ledger catch above: detached via
+            // setImmediate and never awaited, so logging is purely additive.
+            console.warn('[chats] misunderstanding-signal record failed:', e?.message || e);
+          }
         });
       }
     }
@@ -1277,10 +1290,19 @@ router.post('/:chatId/messages/:messageId/share', authenticateToken, async (req,
     const { chatId, messageId } = req.params;
     console.log('messageId', messageId, chatId);
 
-    // Check if chat belongs to user
+    // Check if chat belongs to user. Load messages in conversation order
+    // (timestamp asc) and EXCLUDE soft-deleted ones: the adjacency lookup below
+    // pairs messages[index-1]/[index+1], so an unordered include could pair the
+    // wrong message, and a tombstoned (deletedAt) message must never resurface
+    // through a public share.
     const chat = await prisma.chat.findFirst({
       where: { id: chatId, userId: req.user.id },
-      include: { messages: true }
+      include: {
+        messages: {
+          where: { deletedAt: null },
+          orderBy: { timestamp: 'asc' },
+        },
+      },
     });
     if (!chat) {
       return res.status(404).json({ error: 'Chat not found' });
@@ -1519,13 +1541,15 @@ router.post('/save-shared', authenticateToken, async (req, res) => {
       result: result
     });
 
-    // Clean up old cache entries (keep only last 100 entries and remove entries older than 1 minute)
-    if (saveOperationCache.size > 100) {
-      const cutoffTime = now - 60000; // 1 minute ago
-      for (const [key, value] of saveOperationCache.entries()) {
-        if (value.timestamp < cutoffTime) {
-          saveOperationCache.delete(key);
-        }
+    // Evict stale entries unconditionally (time-based, not size-gated): under
+    // steady low traffic the map size can sit at/below 100 forever, so the old
+    // `size > 100` gate never fired and distinct-content entries (each holding a
+    // full cloned chat) leaked indefinitely. The 60s cutoff is well past the 10s
+    // dedup window, so no entry that could still be served is ever removed.
+    const cutoffTime = now - 60000; // 1 minute ago
+    for (const [key, value] of saveOperationCache.entries()) {
+      if (value.timestamp < cutoffTime) {
+        saveOperationCache.delete(key);
       }
     }
 

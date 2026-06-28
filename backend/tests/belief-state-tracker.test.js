@@ -32,6 +32,30 @@ describe('belief-state-tracker', () => {
     assert.equal(r.contradicted[0].status, 'done');
   });
 
+  test('re-asserting a contradicted belief clears its contradiction (active again)', () => {
+    // done → regressed (done now contradicted) → done re-asserted.
+    b.observe({ userId: 'u', chatId: 'c', turnIndex: 0, prompt: 'El bug del login ya está arreglado' });
+    b.observe({ userId: 'u', chatId: 'c', turnIndex: 1, prompt: 'El bug del login se rompió otra vez' });
+    const r = b.observe({ userId: 'u', chatId: 'c', turnIndex: 2, prompt: 'El bug del login ya está arreglado' });
+
+    const done = b.list({ userId: 'u', chatId: 'c' }).find((x) => x.status === 'done');
+    assert.ok(done, 'the done belief still exists');
+    assert.equal(done.contradictedAt, null, 're-assertion must clear contradictedAt');
+    assert.equal(done.contradictedBy, null, 're-assertion must clear contradictedBy');
+    assert.ok(
+      r.observed.find((o) => o.status === 'done' && o.isNew === false),
+      're-assertion is an observation of the existing belief, not a new one'
+    );
+
+    // The re-stated belief belongs in the ACTIVE section, never under the
+    // "do not assume still true" section (which used to tell the model the
+    // opposite of the user's latest message).
+    const block = b.buildBeliefBlock({ userId: 'u', chatId: 'c' });
+    assert.match(block, /Currently active beliefs[\s\S]*\*\*done\*\*/);
+    const contradictedSection = block.split('do not assume still true')[1] || '';
+    assert.doesNotMatch(contradictedSection, /→ done/);
+  });
+
   test('list returns beliefs sorted by current strength', () => {
     b.observe({ userId: 'u', chatId: 'c', turnIndex: 0, prompt: 'El reporte sigue pendiente' });
     b.observe({ userId: 'u', chatId: 'c', turnIndex: 1, prompt: 'El reporte sigue pendiente' });

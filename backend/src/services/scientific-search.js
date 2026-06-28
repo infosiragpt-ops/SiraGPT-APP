@@ -215,7 +215,11 @@ function dedupeByDoi(papers) {
     // dedupe pass and drop every other paper that came with it.
     if (!p || typeof p !== 'object') continue;
     const doi = normaliseDoi(p.doi);
-    const key = doi || `t:${normaliseTitle(p.title)}`;
+    const normTitle = normaliseTitle(p.title);
+    // A paper with neither a DOI nor a title can't be deduped meaningfully —
+    // give it a unique key so distinct title-less records don't all collapse
+    // onto the same `t:` key and get merged into one.
+    const key = doi || (normTitle ? `t:${normTitle}` : `u:${order.length}`);
     const prev = seen.get(key);
     if (!prev) {
       seen.set(key, p);
@@ -567,8 +571,14 @@ function invertedIndexToText(idx) {
     }
   }
   if (maxPos < 0) return null;
+  // Bound the reconstruction. Positions come from an external API
+  // (OpenAlex/Redalyc/bioRxiv abstract_inverted_index); a malformed or hostile
+  // position would size `out` to maxPos+1 and OOM the process. Real abstracts
+  // are a few hundred words, so 20k is generous headroom.
+  const MAX_ABSTRACT_WORDS = 20_000;
+  const limit = Math.min(maxPos, MAX_ABSTRACT_WORDS);
   const out = [];
-  for (let i = 0; i <= maxPos; i++) out.push(positionToWord.get(i) || '');
+  for (let i = 0; i <= limit; i++) out.push(positionToWord.get(i) || '');
   return out.join(' ').replace(/\s+/g, ' ').trim() || null;
 }
 
@@ -689,7 +699,7 @@ async function searchEuropePMC(query, opts = {}) {
     citations: typeof r.citedByCount === 'number' ? r.citedByCount : null,
     openAccess: r.isOpenAccess === 'Y',
     pdfUrl: (r.fullTextUrlList?.fullTextUrl || [])
-      .find((u) => u.documentStyle === 'pdf')?.url || null,
+      .find((u) => u && u.documentStyle === 'pdf')?.url || null,
     htmlUrl: r.doi ? `https://doi.org/${r.doi}` : (r.pmid ? `https://europepmc.org/article/MED/${r.pmid}` : null),
   }));
 }
@@ -800,12 +810,12 @@ async function searchDataCite(query, opts = {}) {
       source: 'datacite',
       id: d.id || null,
       doi,
-      title: Array.isArray(a.titles) && a.titles.length ? a.titles[0].title : '',
-      abstract: Array.isArray(a.descriptions) && a.descriptions.length ? a.descriptions[0].description : null,
-      authors: (a.creators || []).map((c) => ({
+      title: (Array.isArray(a.titles) && a.titles[0] && a.titles[0].title) || '',
+      abstract: (Array.isArray(a.descriptions) && a.descriptions[0] && a.descriptions[0].description) || null,
+      authors: (a.creators || []).filter(Boolean).map((c) => ({
         name: c.name || [c.givenName, c.familyName].filter(Boolean).join(' ') || null,
       })).filter((c) => c.name),
-      year: a.publicationYear || null,
+      year: a.publicationYear ? (parseInt(a.publicationYear, 10) || null) : null,
       venue: a.publisher || null,
       citations: typeof a.citationCount === 'number' ? a.citationCount : null,
       openAccess: null,
@@ -942,7 +952,13 @@ const searchCache = require('./scientific-search-cache');
 // A transient failure is worth retrying; a 4xx (bad query, auth, not-found) is
 // not. Keep this conservative so we never hammer an API over a permanent error.
 function isTransientError(err) {
-  const m = String(err?.message || err || '').toLowerCase();
+  const full = String(err?.message || err || '').toLowerCase();
+  // safeJson/safeText throw `HTTP <code> <text> — <url>`, and the URL embeds the
+  // (URL-encoded) user query. Testing the whole string let a query token like
+  // "404" mis-flag a genuine 5xx as a permanent 4xx, so the provider was dropped
+  // instead of retried. Judge only on the status/signature part — everything
+  // before the ' — <url>' tail (network errors have no tail, so m === full).
+  const m = full.split(' — ')[0];
   if (/\b4\d\d\b/.test(m) && !/\b429\b/.test(m)) return false; // 4xx except 429
   return /timed out|timeout|429|too many|\b5\d\d\b|econnreset|enotfound|eai_again|network|fetch failed|socket|abort/.test(m);
 }
@@ -1004,7 +1020,12 @@ async function enrichWithUnpaywall(papers, opts = {}) {
       } else if (json && typeof json.is_oa === 'boolean' && p.openAccess == null) {
         p.openAccess = json.is_oa;
       }
-    } catch { /* best-effort: leave the paper unchanged */ }
+    } catch (err) {
+      // Best-effort: leave the paper unchanged, but surface systemic enrichment
+      // failure (Unpaywall down / email rejected) so "no PDFs backfilled" isn't
+      // indistinguishable from "all looked up, no OA copy found".
+      console.warn('[scientific-search] unpaywall lookup failed for', p.doi, '-', err && err.message ? err.message : err);
+    }
   }));
   return papers;
 }
@@ -1062,10 +1083,19 @@ async function search(query, opts = {}) {
       .catch((reason) => collect({ p, reason }))
   );
 
-  await Promise.race([
-    Promise.allSettled(perProvider),
-    new Promise((resolve) => { const t = setTimeout(resolve, totalTimeoutMs); t.unref?.(); }),
-  ]);
+  let totalTimer = null;
+  try {
+    await Promise.race([
+      Promise.allSettled(perProvider),
+      new Promise((resolve) => { totalTimer = setTimeout(resolve, totalTimeoutMs); totalTimer.unref?.(); }),
+    ]);
+  } finally {
+    // On the healthy path allSettled wins but the timeout fires up to
+    // totalTimeoutMs later, leaving an orphaned timer (holding its closure) in
+    // Node's heap after every search. Clear it now. collect() already gathered
+    // each provider's results synchronously, so results/ranking are unchanged.
+    if (totalTimer) clearTimeout(totalTimer);
+  }
 
   const deduped = dedupeByDoi(papers);
   const ranked = rankPapers(deduped, cleanQuery);
@@ -1085,7 +1115,14 @@ async function search(query, opts = {}) {
     });
   }
   const result = { papers: papersOut, errors, providers: chosen };
-  searchCache.set(cleanQuery, opts, result);
+  // Only cache fully-successful searches. A result carrying provider errors
+  // (rejections, non-array bodies) is incomplete/degraded — caching it would
+  // serve those transient failures for the whole TTL, long after the providers
+  // recovered. A genuinely empty result with no errors IS cacheable. Let the
+  // next identical query retry when something failed this time.
+  if (!errors.length) {
+    searchCache.set(cleanQuery, opts, result);
+  }
   return result;
 }
 

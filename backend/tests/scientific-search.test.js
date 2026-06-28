@@ -87,10 +87,54 @@ test('dedupeByDoi falls back to normalised title when DOIs missing', () => {
   assert.equal(out.length, 1);
 });
 
+test('dedupeByDoi keeps DISTINCT title-less DOI-less papers separate (no collapse)', () => {
+  const { dedupeByDoi } = ss._internal;
+  // Both lack a DOI and a title — they must not all merge onto one 't:' key.
+  const out = dedupeByDoi([
+    { source: 'a', doi: null, title: '', year: 2020 },
+    { source: 'b', doi: null, title: null, year: 2021 },
+    { source: 'c', doi: null, title: '   ', year: 2022 },
+  ]);
+  assert.equal(out.length, 3);
+});
+
 test('invertedIndexToText reconstructs sentence from OpenAlex inverted index', () => {
   const { invertedIndexToText } = ss._internal;
   const idx = { 'Hello': [0], 'world': [1], '!': [2] };
   assert.equal(invertedIndexToText(idx), 'Hello world !');
+});
+
+test('invertedIndexToText bounds a hostile position (no unbounded allocation)', () => {
+  const { invertedIndexToText } = ss._internal;
+  // A malformed external index claims a word sits at position 50 million — the
+  // old code allocated a 50M-slot array. Must stay bounded and still return text.
+  const out = invertedIndexToText({ Early: [0], Far: [50_000_000] });
+  assert.ok(typeof out === 'string' && out.startsWith('Early'), 'still reconstructs the in-range words');
+  assert.ok(out.split(' ').length <= 20_001, 'reconstruction length is capped');
+});
+
+test('isTransientError judges on the HTTP status, not a 4xx-looking token in the URL', () => {
+  const { isTransientError } = ss._internal;
+  // A genuine 503 whose URL embeds the query "understanding 404 error semantics".
+  const e503 = new Error('HTTP 503 Service Unavailable — https://api.crossref.org/works?query=understanding+404+error+semantics&rows=10');
+  assert.equal(isTransientError(e503), true, 'a real 5xx must be retried despite a 404 in the URL');
+  // A genuine 404 is permanent even if the URL query mentions "500".
+  const e404 = new Error('HTTP 404 Not Found — https://api.example.org/works?query=http+500+errors');
+  assert.equal(isTransientError(e404), false, 'a real 4xx is not retried');
+  assert.equal(isTransientError(new Error('HTTP 429 Too Many Requests — https://x/y')), true, '429 is transient');
+  assert.equal(isTransientError(new Error('ECONNRESET')), true, 'network errors are transient');
+});
+
+test('cacheKey scopes diversify / unpaywall opt-in flags (no silent no-op on cache hit)', () => {
+  const cache = require('../src/services/scientific-search-cache');
+  const base = cache.cacheKey('q', {});
+  assert.notEqual(cache.cacheKey('q', { unpaywall: true }), base, 'unpaywall must scope the key');
+  assert.notEqual(cache.cacheKey('q', { diversify: false }), base, 'diversify:false must scope the key');
+  assert.notEqual(cache.cacheKey('q', { maxRun: 5 }), base, 'maxRun must scope the key');
+  assert.notEqual(cache.cacheKey('q', { maxEnrichUnpaywall: 20 }), base, 'maxEnrichUnpaywall must scope the key');
+  // Defaults / identical opts still collapse to one key (cache still works).
+  assert.equal(cache.cacheKey('q', { diversify: true }), base, 'diversify:true === default');
+  assert.equal(cache.cacheKey('q', { unpaywall: false }), base, 'unpaywall:false === default');
 });
 
 test('rankPapers orders open-access > more citations > newer > shorter title', () => {
@@ -1099,4 +1143,32 @@ test('search runs Unpaywall enrichment only when opts.unpaywall is set', async (
     if (orig === undefined) delete process.env.SIRAGPT_RESEARCH_EMAIL;
     else process.env.SIRAGPT_RESEARCH_EMAIL = orig;
   }
+});
+
+// ── cache poisoning guard (#10): never cache a result with provider errors ──
+test('search does NOT cache when a provider errored (transient failure)', async () => {
+  searchCache.clear();
+  setFetchHandler(async () => { throw new Error('network down'); });
+  const opts = { providers: ['arxiv'], retries: 0, timeoutMs: 2000 };
+  const res = await ss.search('cache poisoning regression query', opts);
+  assert.ok(res.errors.length >= 1, 'the failing provider is surfaced as an error');
+  // The degraded result must NOT have been cached — a later identical query
+  // (once the provider recovers) must be free to retry.
+  assert.equal(
+    searchCache.get('cache poisoning regression query', opts),
+    null,
+    'a search with provider errors must not be cached',
+  );
+});
+
+test('search DOES cache a clean, error-free result (even when empty)', async () => {
+  searchCache.clear();
+  // Valid (empty) arXiv Atom feed → mapper yields [] with no error.
+  setFetchHandler(async () => textResponse('<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom"></feed>'));
+  const opts = { providers: ['arxiv'], retries: 0, timeoutMs: 2000 };
+  const res = await ss.search('clean cacheable empty query', opts);
+  assert.equal(res.errors.length, 0, 'no provider errors');
+  const cached = searchCache.get('clean cacheable empty query', opts);
+  assert.ok(cached, 'an error-free result is cached');
+  assert.deepEqual(cached.errors, []);
 });

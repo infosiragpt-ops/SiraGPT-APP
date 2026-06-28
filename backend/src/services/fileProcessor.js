@@ -120,7 +120,7 @@ class FileProcessor {
           console.warn('[mem-safe] streaming PDF failed:', err && err.message);
           return null;
         });
-        if (streaming) {
+        if (streaming && streaming.totalChars > 0) {
           return {
             success: true,
             extractedText: streaming.text,
@@ -142,10 +142,13 @@ class FileProcessor {
             },
           };
         }
-
-        // If streaming fails outright, try memory-safe fallback
-        // but DO NOT sample — just warn and let the user know
-        console.warn('[mem-safe] streaming unavailable; falling back to standard extraction. Large PDF may be slow.');
+        if (streaming && streaming.totalChars === 0) {
+          console.warn('[mem-safe] large PDF has no embedded text layer; falling through to page OCR.');
+        } else {
+          // If streaming fails outright, try memory-safe fallback
+          // but DO NOT sample — just warn and let the user know.
+          console.warn('[mem-safe] streaming unavailable; falling back to standard extraction. Large PDF may be slow.');
+        }
         // Fall through to normal processing
       }
 
@@ -375,13 +378,8 @@ class FileProcessor {
     const streamingMod = getStreamingPdf();
     if (streamingMod) {
       try {
-        // Determine file size to decide if memory-safe path needed
-        let fileSize = 0;
-        try {
-          const stat = await require('fs').promises.stat(filePath);
-          fileSize = stat.size;
-        } catch {}
-
+        // (The memory-safe decision is made earlier in processFile() from the
+        // multer-provided size; no per-extraction fs.stat is needed here.)
         const streamingResult = await streamingMod.extractPdfStreaming(filePath, {
           maxRssMb: Number.parseInt(process.env.SIRAGPT_STREAM_MAX_RSS_MB || '1200', 10),
           collectText: true,
@@ -434,8 +432,15 @@ class FileProcessor {
     }
 
     // Legacy pdf-parse fallback — works for small PDFs or when streaming
-    // module is unavailable
+    // module is unavailable. For large scanned PDFs, skip it: pdf-parse reads
+    // the whole file into memory and can OOM before OCR even starts.
+    const stat = await fs.stat(filePath).catch(() => null);
+    const skipLegacyPdfParse = stat && stat.size > STREAMING_PDF_THRESHOLD;
+    if (skipLegacyPdfParse) {
+      console.warn(`[fileProcessor] skipping in-memory pdf-parse for large PDF (${(stat.size / 1024 / 1024).toFixed(1)} MB); using page OCR`);
+    }
     try {
+      if (skipLegacyPdfParse) throw new Error('skip_legacy_pdf_parse_large_pdf');
       const dataBuffer = await fs.readFile(filePath);
       const data = await pdf(dataBuffer);
 
@@ -456,8 +461,22 @@ class FileProcessor {
       }
 
       console.log(`Detected scanned PDF -> running hybrid OCR...`);
-      const result = await ocrEngine.extractFromPdfImages(filePath);
-      const extractedText = result.text || 'No text detected in image PDF';
+    } catch (error) {
+      if (error?.message !== 'skip_legacy_pdf_parse_large_pdf') {
+        console.warn(`PDF text-layer fallback unavailable, continuing with OCR for ${filePath}:`, error.message || error);
+      }
+    }
+
+    try {
+      const result = await ocrEngine.extractFromPdfImages(filePath, {
+        streaming: true,
+      });
+      const header = `PDF OCR document — ${result.ocr?.pages || 0} page(s) processed, ` +
+        `${result.ocr?.pagesWithText || 0} page(s) with readable text, ` +
+        `${String(result.text || '').length} characters` +
+        (result.ocr?.partial ? ` (partial — ${result.ocr.partialReason || 'limit reached'})` : '') +
+        `\n---\n`;
+      const extractedText = result.text ? header + result.text : 'No text detected in image PDF';
       console.log(`OCR complete: ${extractedText.length} chars extracted`);
       return options.detailed ? { extractedText, ocr: result.ocr } : extractedText;
     } catch (error) {
@@ -558,7 +577,11 @@ class FileProcessor {
       try {
         const fallback = await mammoth.extractRawText({ path: filePath });
         return fallback.value;
-      } catch {
+      } catch (fallbackErr) {
+        // Log the fallback's distinct failure reason (often a different jszip
+        // corruption signature) before rethrowing with the original message —
+        // the thrown error and control flow are unchanged.
+        console.warn(`[fileProcessor] Word raw-text fallback also failed for ${filePath}:`, fallbackErr && fallbackErr.message || fallbackErr);
         throw new Error(`Word document processing failed: ${conciseMessage}`);
       }
     }
@@ -607,8 +630,10 @@ class FileProcessor {
     md = md.replace(/<br\s*\/?>/gi, '\n');
     // Strip any remaining tags; we've handled the load-bearing ones.
     md = md.replace(/<[^>]+>/g, '');
-    // Decode the five HTML entities mammoth actually emits.
-    md = md.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&nbsp;/g, ' ');
+    // Decode the HTML entities mammoth actually emits. `&amp;` MUST be decoded
+    // LAST — decoding it first turns an escaped `&amp;lt;` (literal "&lt;") into
+    // `&lt;` and then into `<`, double-decoding the markup.
+    md = md.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&');
     // Collapse runs of blank lines to at most two — mammoth loves to
     // emit empty paragraphs around headings.
     md = md.replace(/\n{3,}/g, '\n\n').trim();
@@ -792,8 +817,13 @@ class FileProcessor {
     if (!options.openai && !process.env.OPENAI_API_KEY) return false;
     const text = String(result?.text || '');
     const confidence = typeof result?.ocr?.confidence === 'number' ? result.ocr.confidence : 1;
-    const minChars = Number.parseInt(process.env.SIRAGPT_VISION_FALLBACK_MIN_CHARS, 10) || 100;
-    const minConf = Number.parseFloat(process.env.SIRAGPT_VISION_FALLBACK_MIN_CONFIDENCE) || 0.5;
+    // NaN-only fallbacks: a configured 0 is meaningful (minChars=0 → never fall
+    // back on char count; minConf=0 → never on confidence). `|| default` skipped
+    // a legitimate 0.
+    const rawMinChars = Number.parseInt(process.env.SIRAGPT_VISION_FALLBACK_MIN_CHARS, 10);
+    const minChars = Number.isFinite(rawMinChars) ? rawMinChars : 100;
+    const rawMinConf = Number.parseFloat(process.env.SIRAGPT_VISION_FALLBACK_MIN_CONFIDENCE);
+    const minConf = Number.isFinite(rawMinConf) ? rawMinConf : 0.5;
     return text.length < minChars || confidence < minConf;
   }
 

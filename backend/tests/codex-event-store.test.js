@@ -108,6 +108,16 @@ test('listEvents returns events after a seq in ascending order', async () => {
   assert.equal(after[0].data.text, 't3'); // seq 4 = 4th append (i=3)
 });
 
+test('listEvents: an explicit limit of 0 clamps to 1, not the 5000 default', async () => {
+  const prisma = makeFakePrisma();
+  for (let i = 0; i < 3; i++) {
+    await appendEvent('r5', 'narrative_delta', { text: `t${i}` }, { prisma, publish: async () => {} });
+  }
+  // `Number(0) || 5000` used to balloon limit:0 into 5000 → all 3 returned.
+  const rows = await listEvents('r5', { afterSeq: 0, limit: 0, prisma });
+  assert.equal(rows.length, 1, 'limit 0 must not be treated as the 5000 default');
+});
+
 test('createSeqGate emits each seq exactly once; heartbeats always pass', () => {
   const gate = createSeqGate();
   assert.equal(gate.shouldEmit(1), true);

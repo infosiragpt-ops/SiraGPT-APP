@@ -11,12 +11,13 @@
  */
 
 import * as React from "react"
-import { Loader2, Plus, Rocket } from "lucide-react"
+import { Loader2, Rocket } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { useCodeWorkspace } from "@/lib/code-workspace-context"
+import { getGitBinding } from "@/lib/code-git-mirror"
 import {
   deploymentsApi,
   type Deployment,
@@ -26,7 +27,6 @@ import {
 import { REPLIT_DEPLOYMENTS_STYLE, statusPill, StatusPill } from "./shared"
 import { DeploymentDetail } from "./deployment-detail"
 import { EmptyDeploymentDetail } from "./empty-deployment-detail"
-import { CreateDeploymentDialog } from "./create-deployment-dialog"
 
 export function WorkspaceDeploymentsTool({ fallback }: { fallback?: React.ReactNode }) {
   const { activeFolder } = useCodeWorkspace()
@@ -38,7 +38,9 @@ export function WorkspaceDeploymentsTool({ fallback }: { fallback?: React.ReactN
   const [loading, setLoading] = React.useState(true)
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
   const [detail, setDetail] = React.useState<DeploymentDetailData | null>(null)
-  const [createOpen, setCreateOpen] = React.useState(false)
+  const [quickPublishing, setQuickPublishing] = React.useState(false)
+  const [pendingAutoPublishId, setPendingAutoPublishId] = React.useState<string | null>(null)
+  const [autoPublishSignal, setAutoPublishSignal] = React.useState(0)
 
   React.useEffect(() => {
     let alive = true
@@ -89,10 +91,50 @@ export function WorkspaceDeploymentsTool({ fallback }: { fallback?: React.ReactN
     else setDetail(null)
   }, [selectedId, loadDetail])
 
+  React.useEffect(() => {
+    if (!pendingAutoPublishId || detail?.deployment.id !== pendingAutoPublishId) return
+    setPendingAutoPublishId(null)
+    setAutoPublishSignal((value) => value + 1)
+  }, [detail?.deployment.id, pendingAutoPublishId])
+
   const refetch = React.useCallback(() => {
     void loadList()
     if (selectedId) void loadDetail(selectedId)
   }, [loadList, loadDetail, selectedId])
+
+  const publishNow = React.useCallback(async () => {
+    if (quickPublishing || loading) return
+    if (selectedId) {
+      setAutoPublishSignal((value) => value + 1)
+      return
+    }
+
+    setQuickPublishing(true)
+    try {
+      // Model A: bind the project's connected GitHub repo (if any) so a later
+      // Hostinger VPS deploy can build + upload its cloned workspace.
+      const connectedRepositoryId = projectId ? getGitBinding(projectId) : null
+      const deployment = await deploymentsApi.create({
+        name: projectName || "siraGPT",
+        deploymentType: "autoscale",
+        visibility: "public",
+        geography: "sa",
+        ...(projectId ? { projectId } : {}),
+        ...(connectedRepositoryId ? { connectedRepositoryId } : {}),
+      })
+      setPendingAutoPublishId(deployment.id)
+      await loadList(deployment.id)
+      toast.success("Deployment created. Publishing started.")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not start publishing.")
+    } finally {
+      setQuickPublishing(false)
+    }
+  }, [loadList, loading, projectId, projectName, quickPublishing, selectedId])
+
+  const consumeAutoPublish = React.useCallback(() => {
+    setAutoPublishSignal(0)
+  }, [])
 
   if (enabled === null) {
     return (
@@ -116,9 +158,9 @@ export function WorkspaceDeploymentsTool({ fallback }: { fallback?: React.ReactN
             Publishing{projectName ? ` · ${projectName}` : ""}
           </span>
         </div>
-        <Button size="sm" className="h-8 gap-1.5" onClick={() => setCreateOpen(true)}>
-          <Plus className="h-3.5 w-3.5" />
-          New
+        <Button size="sm" className="h-8 gap-1.5" onClick={() => void publishNow()} disabled={quickPublishing || loading}>
+          {quickPublishing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Rocket className="h-3.5 w-3.5" />}
+          Publish
         </Button>
       </div>
 
@@ -150,19 +192,16 @@ export function WorkspaceDeploymentsTool({ fallback }: { fallback?: React.ReactN
             <Loader2 className="h-5 w-5 animate-spin" />
           </div>
         ) : detail ? (
-          <DeploymentDetail detail={detail} onRefetch={refetch} />
+          <DeploymentDetail
+            detail={detail}
+            onRefetch={refetch}
+            autoPublishSignal={autoPublishSignal}
+            onAutoPublishConsumed={consumeAutoPublish}
+          />
         ) : (
-          <EmptyDeploymentDetail projectName={projectName} onCreate={() => setCreateOpen(true)} />
+          <EmptyDeploymentDetail projectName={projectName} onCreate={() => void publishNow()} />
         )}
       </div>
-
-      <CreateDeploymentDialog
-        open={createOpen}
-        onOpenChange={setCreateOpen}
-        projectId={projectId}
-        defaultName={projectName}
-        onCreated={(d) => void loadList(d.id)}
-      />
     </div>
   )
 }

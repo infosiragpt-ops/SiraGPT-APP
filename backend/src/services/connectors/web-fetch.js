@@ -138,6 +138,19 @@ function isPrivateOrReservedAddress(addr) {
     const ipv4 = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
     if (isPrivateOrReservedAddress(ipv4)) return true;
   }
+  // NAT64 (64:ff9b::/96) and 6to4 (2002::/16) embed an IPv4 in hextets that the
+  // `::`-anchored hex form above misses — e.g. 64:ff9b::7f00:1 or 2002:7f00:1::
+  // both encode 127.0.0.1. Decode every consecutive hextet pair and re-check.
+  // Gated on the two special prefixes so legit global-unicast IPv6 is unaffected.
+  if (lower.startsWith('64:ff9b:') || lower.startsWith('2002:')) {
+    const hextets = lower.split(':').filter((h) => /^[0-9a-f]{1,4}$/.test(h));
+    for (let k = 0; k + 1 < hextets.length; k++) {
+      const hi = Number.parseInt(hextets[k], 16);
+      const lo = Number.parseInt(hextets[k + 1], 16);
+      const ipv4 = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+      if (isPrivateOrReservedAddress(ipv4)) return true;
+    }
+  }
   return false;
 }
 
@@ -294,23 +307,30 @@ async function executeWebFetch(args = {}, env = process.env, options = {}) {
   let truncated = false;
   if (reader) {
     const decoder = new TextDecoder('utf-8', { fatal: false });
-    while (bytesRead < maxBytes) {
-      // eslint-disable-next-line no-await-in-loop
-      const { done, value } = await reader.read();
-      if (done) break;
-      const chunk = value;
-      const remaining = maxBytes - bytesRead;
-      if (chunk.byteLength > remaining) {
-        body += decoder.decode(chunk.subarray(0, remaining), { stream: false });
-        bytesRead += remaining;
-        truncated = true;
-        try { reader.cancel(); } catch (_) { /* ignore */ }
-        break;
+    try {
+      while (bytesRead < maxBytes) {
+        // eslint-disable-next-line no-await-in-loop
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = value;
+        const remaining = maxBytes - bytesRead;
+        if (chunk.byteLength > remaining) {
+          body += decoder.decode(chunk.subarray(0, remaining), { stream: false });
+          bytesRead += remaining;
+          truncated = true;
+          break;
+        }
+        body += decoder.decode(chunk, { stream: true });
+        bytesRead += chunk.byteLength;
       }
-      body += decoder.decode(chunk, { stream: true });
-      bytesRead += chunk.byteLength;
+      body += decoder.decode();
+    } finally {
+      // Always release the stream. The normal (done), exact-fill (loop
+      // condition turns false) and mid-read throw paths previously left the
+      // reader uncancelled, leaking the underlying socket per fetch. Only the
+      // truncation path cancelled. cancel() after done is a harmless no-op.
+      try { reader.cancel(); } catch (_) { /* ignore */ }
     }
-    body += decoder.decode();
   } else {
     // Older runtimes / mocks return a string body via `.text()`.
     const fullText = await response.text();

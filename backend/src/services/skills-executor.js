@@ -38,7 +38,13 @@ async function executeSkill(skillId, ctx = {}) {
 
   const prereq = skillsRegistry.verifyPrerequisites(skillId, ctx);
   if (prereq && prereq.ok === false) {
-    return { ok: false, error: prereq.reason || prereq.missing || 'prerequisites_failed' };
+    // verifyPrerequisites returns { ok:false, missing:[...] } (an array, no
+    // `reason`). Format it as a string so `error` honours the string contract
+    // callers expect — it used to return the raw array.
+    const reason = prereq.reason
+      || (Array.isArray(prereq.missing) ? `missing prerequisites: ${prereq.missing.join(', ')}` : prereq.missing)
+      || 'prerequisites_failed';
+    return { ok: false, error: reason, missing: prereq.missing };
   }
 
   const handler = HANDLERS[skill.id];
@@ -56,7 +62,15 @@ async function executeSkill(skillId, ctx = {}) {
 
 async function executeRecommendedSkills(intent, ctx = {}, opts = {}) {
   const limit = Math.max(1, Math.min(Number(opts.limit) || 2, 5));
-  const recommended = skillsRegistry.recommendSkills(intent, ctx) || [];
+  // Degrade to no-skills if recommendation throws (e.g. a malformed intent)
+  // instead of propagating the throw to the cowork pipeline — defense in depth
+  // alongside the intent normalization in recommendSkills.
+  let recommended = [];
+  try {
+    recommended = skillsRegistry.recommendSkills(intent, ctx) || [];
+  } catch (_err) {
+    recommended = [];
+  }
   const slice = Array.isArray(recommended) ? recommended.slice(0, limit) : [];
   const results = [];
   for (const entry of slice) {

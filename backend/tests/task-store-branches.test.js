@@ -78,10 +78,10 @@ test('sanitizeTaskRecord: truncates very long agentGoal/displayGoal/systemContra
   assert.equal(out.displayGoal.length, 4000);
 });
 
-test('sanitizeTaskRecord: caps fileIds to 300 entries and stringifies', () => {
-  const ids = Array.from({ length: 350 }, (_, i) => i);
+test('sanitizeTaskRecord: caps fileIds to 400 entries and stringifies', () => {
+  const ids = Array.from({ length: 450 }, (_, i) => i);
   const out = taskStore.sanitizeTaskRecord({ taskId: 't', userId: 'u', fileIds: ids });
-  assert.equal(out.fileIds.length, 300);
+  assert.equal(out.fileIds.length, 400);
   assert.equal(typeof out.fileIds[0], 'string');
 });
 
@@ -254,6 +254,20 @@ test('listTaskSnapshotsForUser: respects limit', () => {
   }
   const rows = taskStore.listTaskSnapshotsForUser('u', { limit: 3 });
   assert.equal(rows.length, 3);
+});
+
+test('listTaskSnapshotsForUser: fast path re-validates ownership against a corrupt index (no IDOR)', () => {
+  freshDir();
+  // Snapshot truly belongs to "other"; corrupt the index to claim it for "u".
+  taskStore.writeTaskSnapshot({ taskId: 't-x', userId: 'other', status: 'completed' });
+  const idx = taskStore.readIndex();
+  idx['t-x'].userId = 'u'; // index now lies about ownership
+  taskStore.writeIndex(idx);
+
+  // Fast path (useIndex=true) trusts the index to SELECT but must re-validate
+  // the loaded snapshot's real userId before returning it.
+  const rows = taskStore.listTaskSnapshotsForUser('u', { useIndex: true });
+  assert.equal(rows.length, 0, "a mislabelled index entry must not leak another user's task");
 });
 
 // ─── compressSnapshotBytes ────────────────────────────────────────────────

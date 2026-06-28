@@ -451,30 +451,46 @@ export async function writeWordClipboardPayload(payload: ClipboardPayload) {
     window.isSecureContext
 
   if (canWriteRich) {
-    const items: Record<string, Blob> = {
-      "text/plain": new Blob([payload.text], { type: "text/plain" }),
-    }
-
     const supports = typeof ClipboardItemCtor.supports === "function"
-      ? (type: string) => ClipboardItemCtor.supports(type)
-      : () => true
+      ? (type: string) => {
+          try {
+            return ClipboardItemCtor.supports(type)
+          } catch {
+            return false
+          }
+        }
+      : null
 
-    if (supports("text/html")) {
-      items["text/html"] = new Blob([payload.html], { type: "text/html" })
-    }
+    const plain = new Blob([payload.text], { type: "text/plain" })
+    const html = payload.html ? new Blob([payload.html], { type: "text/html" }) : null
+    // Safari does NOT accept `text/rtf` in a ClipboardItem, and when
+    // `ClipboardItem.supports` is unavailable, optimistically including it made
+    // Safari reject the ENTIRE write — so the user silently got plain text
+    // instead of the formatted HTML. Only include rtf when explicitly supported.
+    const rtf = payload.rtf && supports?.("text/rtf")
+      ? new Blob([payload.rtf], { type: "text/rtf" })
+      : null
 
-    if (supports("text/rtf")) {
-      items["text/rtf"] = new Blob([payload.rtf], { type: "text/rtf" })
-    }
+    // Try richest → safest. If a browser rejects an exotic MIME type, fall back
+    // to text/html (formatted Office paste) rather than dropping to plain text.
+    const attempts: Record<string, Blob>[] = []
+    if (html && rtf) attempts.push({ "text/plain": plain, "text/html": html, "text/rtf": rtf })
+    if (html) attempts.push({ "text/plain": plain, "text/html": html })
+    attempts.push({ "text/plain": plain })
 
-    try {
-      await navigator.clipboard.write([new ClipboardItemCtor(items)])
-      return
-    } catch (err) {
-      // Fall through to text-copy fallback below. The user still gets
-      // a usable clipboard even if the browser denies rich MIME writes.
-      if (!isClipboardPermissionDenied(err)) {
-        console.warn("[rich-clipboard] Falling back to text clipboard", getErrorMessage(err))
+    for (let i = 0; i < attempts.length; i++) {
+      try {
+        await navigator.clipboard.write([new ClipboardItemCtor(attempts[i])])
+        return
+      } catch (err) {
+        // A denied permission won't be fixed by writing fewer MIME types — stop
+        // retrying and fall through to the writeText/legacy paths below.
+        if (isClipboardPermissionDenied(err)) break
+        // Otherwise the browser likely rejected a MIME type (e.g. Safari + rtf);
+        // try the next, smaller set so the user still gets rich HTML.
+        if (i === attempts.length - 1) {
+          console.warn("[rich-clipboard] Falling back to text clipboard", getErrorMessage(err))
+        }
       }
     }
   }

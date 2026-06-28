@@ -14,7 +14,8 @@
  * The chunker is pure + deterministic (unit-tested). The streamer is a thin
  * async writer with a hard fallback to the original single-frame behavior on
  * any error, so it can never break the response. Gated by
- * SIRAGPT_AGENTIC_STREAM_FINAL (default off → unchanged behavior).
+ * SIRAGPT_AGENTIC_STREAM_FINAL (default ON → progressive token streaming;
+ * set it to 0/off/false to restore the single-frame behavior). See isEnabled().
  *
  * Public API:
  *   isEnabled()                                   → boolean
@@ -105,10 +106,19 @@ function chunkForStreaming(text, opts = {}) {
 function sleep(ms, signal) {
   if (!ms || ms <= 0) return Promise.resolve();
   return new Promise((resolve) => {
-    const t = setTimeout(resolve, ms);
-    if (signal && typeof signal.addEventListener === 'function') {
-      signal.addEventListener('abort', () => { clearTimeout(t); resolve(); }, { once: true });
+    if (!signal || typeof signal.addEventListener !== 'function') {
+      setTimeout(resolve, ms);
+      return;
     }
+    // Detach the abort listener when the timer fires normally — `{ once: true }`
+    // only auto-removes it if abort actually fires, so without this every
+    // per-chunk sleep() left a listener on the shared per-turn AbortSignal
+    // (dozens-to-160 per long answer → MaxListenersExceededWarning + retained
+    // closures). Timing/frames/abort behaviour are unchanged.
+    let t;
+    const onAbort = () => { clearTimeout(t); resolve(); };
+    t = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve(); }, ms);
+    signal.addEventListener('abort', onAbort, { once: true });
   });
 }
 

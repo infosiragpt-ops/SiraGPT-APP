@@ -2,6 +2,7 @@ const stripeService = require('./stripe');
 const prisma = require('../config/database');
 const { logger } = require('../middleware/logger');
 const { redactErrorMessage } = require('../utils/secret-redactor');
+const { monthlyLimitForStripePlan } = require('./plan-credits-catalog');
 
 function logProrationError(operation, error, context = {}) {
   if (error?.isStripeOperationalError || stripeService.isStripeLikeError?.(error)) return;
@@ -51,8 +52,17 @@ class ProrationService {
       
       const currentPeriodStart = new Date(subscription.current_period_start * 1000);
       const currentPeriodEnd = new Date(subscription.current_period_end * 1000);
-      const totalPeriodDays = Math.ceil((currentPeriodEnd - currentPeriodStart) / (1000 * 60 * 60 * 24));
-      const remainingDays = Math.ceil((currentPeriodEnd - changeDate) / (1000 * 60 * 60 * 24));
+      const DAY_MS = 1000 * 60 * 60 * 24;
+      // Guard against a degenerate billing period (start === end, or malformed
+      // Stripe timestamps): totalPeriodDays must be ≥ 1 or the proration ratios
+      // below divide by zero → Infinity/NaN net amounts. remainingDays is
+      // clamped to [0, total] so a change after period-end can't yield a
+      // negative ratio and a pre-start change can't exceed the full period.
+      const totalPeriodDays = Math.max(1, Math.ceil((currentPeriodEnd - currentPeriodStart) / DAY_MS));
+      const remainingDays = Math.min(
+        totalPeriodDays,
+        Math.max(0, Math.ceil((currentPeriodEnd - changeDate) / DAY_MS)),
+      );
 
       // Plan pricing (in cents)
       const planPricing = {
@@ -133,16 +143,19 @@ class ProrationService {
         stripeResult = await this.scheduleNextCyclePlanChange(user, newPlan, newPriceId);
       }
 
-      // Update database - SET monthlyLimit to plan baseline credits (no accumulation)
-      const planLimits = {
-        'PRO': { monthlyLimit: 500000 },
-        'PRO_MAX': { monthlyLimit: 1000000 },
-        'ENTERPRISE': { monthlyLimit: 10000000 }
-      };
-
-      // Get current user data to add to existing limits
+      // Update database — ADD the new plan's baseline grant to the existing
+      // monthlyLimit, mirroring the Stripe webhook's credit-grant semantics
+      // (routes/payments.js). The grant comes from the shared plan-credits
+      // catalog so proration and the webhook can never diverge — they
+      // previously granted 5× different amounts for PRO/PRO_MAX (500k vs 100k).
+      // `monthlyLimit` is BigInt in Prisma, so BOTH operands must be BigInt:
+      // `bigint + number` throws, which used to crash every immediate plan
+      // change *after* Stripe had already charged the customer.
       const currentUser = await prisma.user.findUnique({ where: { id: userId } });
-      const newTotalLimit = (currentUser.monthlyLimit || 0) + planLimits[newPlan].monthlyLimit;
+      const currentLimit = typeof currentUser?.monthlyLimit === 'bigint'
+        ? currentUser.monthlyLimit
+        : BigInt(currentUser?.monthlyLimit ?? 0);
+      const newTotalLimit = currentLimit + monthlyLimitForStripePlan(newPlan);
 
       const updatedUser = await prisma.user.update({
         where: { id: userId },

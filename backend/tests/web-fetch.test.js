@@ -87,6 +87,18 @@ describe("isPrivateOrReservedAddress", () => {
     }
   });
 
+  test("NAT64 / 6to4 embedding a private/metadata IPv4 blocked", () => {
+    // 64:ff9b::/96 (NAT64) and 2002::/16 (6to4) can smuggle a private/loopback/
+    // metadata IPv4 through hextets the ::-anchored hex form missed.
+    for (const ip of ["64:ff9b::7f00:1", "64:ff9b::c0a8:101", "64:ff9b::a9fe:a9fe", "2002:7f00:1::", "2002:a9fe:a9fe::"]) {
+      assert.equal(isPrivateOrReservedAddress(ip), true, `${ip} must be blocked`);
+    }
+    // …but public embeddings are not over-blocked.
+    for (const ip of ["2002:0808:0808::", "2607:f8b0:4005:80a::200e"]) {
+      assert.equal(isPrivateOrReservedAddress(ip), false, `${ip} should NOT be blocked`);
+    }
+  });
+
   test("non-IP strings return false (the URL-level check catches them earlier)", () => {
     assert.equal(isPrivateOrReservedAddress("example.com"), false);
   });

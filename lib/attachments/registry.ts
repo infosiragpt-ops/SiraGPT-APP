@@ -51,7 +51,7 @@ export type AttachmentDescriptorInput = z.input<typeof AttachmentDescriptorSchem
 
 /** Upload limits. `allowedMimes: null` means "use the registry whitelist". */
 export const AttachmentLimitsSchema = z.object({
-  maxFiles: z.number().int().positive().default(20),
+  maxFiles: z.number().int().positive().default(400),
   maxBytesPerFile: z
     .number()
     .int()

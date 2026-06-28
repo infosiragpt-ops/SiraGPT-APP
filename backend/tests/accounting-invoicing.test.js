@@ -122,3 +122,76 @@ test('issueInvoice: comprobante inexistente → NOT_FOUND', async () => {
   const prisma = fakeInvoicePrisma();
   await assert.rejects(() => invoicing.issueInvoice({ prisma, id: 'nope', adapter: createStubAdapter() }), (e) => e.code === 'NOT_FOUND');
 });
+
+// ── parseInvoiceInput (schema + superRefine) ──
+test('parseInvoiceInput rejects a FACTURA without a valid 11-digit RUC', () => {
+  assert.throws(
+    () => invoicing.parseInvoiceInput({ docType: 'FACTURA', series: 'F001', customerName: 'ACME', customerDoc: '123', lines: [{ description: 'Item' }] }),
+    (e) => e.code === 'VALIDATION_ERROR' && e.issues.some((i) => i.path === 'customerDoc'),
+  );
+});
+
+test('parseInvoiceInput rejects a non-PEN currency without an exchangeRate', () => {
+  assert.throws(
+    () => invoicing.parseInvoiceInput({ docType: 'BOLETA', series: 'B001', customerName: 'ACME', currency: 'USD', lines: [{ description: 'Item' }] }),
+    (e) => e.code === 'VALIDATION_ERROR' && e.issues.some((i) => i.path === 'exchangeRate'),
+  );
+});
+
+test('parseInvoiceInput rejects an empty lines array', () => {
+  assert.throws(
+    () => invoicing.parseInvoiceInput({ docType: 'BOLETA', series: 'B001', customerName: 'ACME', lines: [] }),
+    (e) => e.code === 'VALIDATION_ERROR' && e.issues.some((i) => /l[íi]nea/.test(i.message)),
+  );
+});
+
+test('parseInvoiceInput rejects PLE-breaking characters (pipe / newline) in exported fields', () => {
+  // customerName with a pipe would shift every downstream field in the
+  // pipe-delimited PLE register → SUNAT-invalid.
+  assert.throws(
+    () => invoicing.parseInvoiceInput({ docType: 'BOLETA', series: 'B001', customerName: 'ACME|Corp', lines: [{ description: 'Item' }] }),
+    (e) => e.code === 'VALIDATION_ERROR' && e.issues.some((i) => i.path === 'customerName'),
+  );
+  // A newline in the series breaks the CRLF line delimiter.
+  assert.throws(
+    () => invoicing.parseInvoiceInput({ docType: 'BOLETA', series: 'B0\n01', customerName: 'ACME', lines: [{ description: 'Item' }] }),
+    (e) => e.code === 'VALIDATION_ERROR' && e.issues.some((i) => i.path === 'series'),
+  );
+  // A clean name still parses.
+  const ok = invoicing.parseInvoiceInput({ docType: 'BOLETA', series: 'B001', customerName: 'ACME SAC', lines: [{ description: 'Item' }] });
+  assert.equal(ok.customerName, 'ACME SAC');
+});
+
+test('parseInvoiceInput accepts a valid BOLETA and defaults currency to PEN', () => {
+  const data = invoicing.parseInvoiceInput({ docType: 'BOLETA', series: 'B001', customerName: 'ACME', lines: [{ description: 'Item', quantity: 2, unitPrice: 10 }] });
+  assert.equal(data.currency, 'PEN');
+  assert.equal(data.docType, 'BOLETA');
+  assert.equal(data.lines.length, 1);
+  assert.equal(data.lines[0].quantity, 2);
+});
+
+test('parseInvoiceInput accepts a FACTURA with a valid RUC', () => {
+  const data = invoicing.parseInvoiceInput({ docType: 'FACTURA', series: 'F001', customerName: 'ACME SAC', customerDoc: '20123456789', lines: [{ description: 'Item' }] });
+  assert.equal(data.customerDoc, '20123456789');
+});
+
+// ── nextInvoiceNumber (correlative per series) ──
+test('nextInvoiceNumber returns 1 when the series has no invoices', async () => {
+  const prisma = { accountingInvoice: { findFirst: async () => null } };
+  assert.equal(await invoicing.nextInvoiceNumber(prisma, 'F001'), 1);
+});
+
+test('nextInvoiceNumber increments past the latest number in the series', async () => {
+  const prisma = { accountingInvoice: { findFirst: async () => ({ number: 7 }) } };
+  assert.equal(await invoicing.nextInvoiceNumber(prisma, 'F001'), 8);
+});
+
+test('nextInvoiceNumber isolates correlatives per series', async () => {
+  const byNumber = { F001: 10, B001: 0 };
+  const prisma = { accountingInvoice: { findFirst: async ({ where }) => {
+    const n = byNumber[where.series] || 0;
+    return n ? { number: n } : null;
+  } } };
+  assert.equal(await invoicing.nextInvoiceNumber(prisma, 'F001'), 11);
+  assert.equal(await invoicing.nextInvoiceNumber(prisma, 'B001'), 1);
+});

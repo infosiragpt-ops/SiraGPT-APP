@@ -39,6 +39,7 @@ function stripLead(p: string): string {
 }
 
 const JS_EXTS = new Set(["js", "jsx", "ts", "tsx", "mjs", "cjs"])
+const REACT_PREVIEW_EXTS = new Set(["jsx", "tsx"])
 
 // Forwarded into every previewed document — captures console + errors and
 // posts them to the parent window. Uses string concat (no backticks) so it
@@ -282,10 +283,14 @@ function placeholder(note: string): string {
 <body><div class="box"><div style="font-size:13px">${escapeHtml(note)}</div></div></body></html>`
 }
 
+function looksLikeRenderableReact(code: string): boolean {
+  return /<\s*[A-Za-z][\w.:/-]*(?:\s|>|\/>)/.test(code) || /\bReact\.createElement\s*\(/.test(code)
+}
+
 /** True when the workspace is a real Node bundler project (Vite/Next): its
  * index.html loads /src/main.tsx through the dev server, so the sandboxed
  * iframe can't render it — the user must press ▶ Ejecutar. */
-function isNodeBundlerProject(files: CodeFiles): boolean {
+export function isNodeBundlerProject(files: CodeFiles): boolean {
   const pkgPath = Object.keys(files).find((p) => /(^|\/)package\.json$/.test(p))
   if (!pkgPath) return false
   try {
@@ -297,22 +302,89 @@ function isNodeBundlerProject(files: CodeFiles): boolean {
   }
 }
 
+/** A standalone HTML document that runs in the sandboxed srcdoc iframe as-is:
+ * it inlines its logic or pulls deps from a CDN, rather than pointing at a
+ * bundler entry like `/src/main.tsx` that only resolves through a dev server.
+ * The deterministic Builder emits exactly this kind of self-contained
+ * index.html, so it must preview instantly even though the project also ships a
+ * Next/Vite package.json. A real bundler index.html (module script → /src/…)
+ * stays gated behind ▶ Ejecutar. */
+function isSelfContainedHtml(content: string): boolean {
+  if (!content) return false
+  const isLocal = (src: string) => !/^(?:https?:)?\/\//i.test(src) && !/^data:/i.test(src)
+  // 1) A <script src="…"> pointing at a LOCAL TS/JSX entry, or anything under a
+  //    src/ folder, only resolves through a Vite/Next dev server. (CDN scripts —
+  //    https:// or //… — and inline runtime, the builder's output, are fine.)
+  const scriptSrc = /<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi
+  for (let m = scriptSrc.exec(content); m; m = scriptSrc.exec(content)) {
+    const src = m[1]
+    if (!isLocal(src)) continue
+    if (/\.(?:tsx?|jsx|mts|cts)(?:$|[?#])/i.test(src)) return false
+    if (/(?:^|\/)src\//i.test(src)) return false
+  }
+  // 2) An inline ES-module script that imports a LOCAL module also needs bundling.
+  const moduleScript = /<script\b[^>]*\btype\s*=\s*["']module["'][^>]*>([\s\S]*?)<\/script>/gi
+  for (let m = moduleScript.exec(content); m; m = moduleScript.exec(content)) {
+    if (/\bimport\b[^;\n]*["'](?:\.{0,2}\/|src\/)/.test(m[1])) return false
+  }
+  return true
+}
+
+function findProjectEntry(files: CodeFiles): string | null {
+  const paths = Object.keys(files)
+  return (
+    paths.find((p) => stripLead(p).toLowerCase() === "index.html") ??
+    paths.find((p) => /(^|\/)app\.(t|j)sx$/i.test(p)) ??
+    paths.find((p) => /(^|\/)src\/app\.(t|j)sx$/i.test(p)) ??
+    paths.find((p) => /(^|\/)src\/(main|index)\.(t|j)sx$/i.test(p)) ??
+    paths.find((p) => /(^|\/)(main|index)\.(t|j)sx$/i.test(p)) ??
+    null
+  )
+}
+
+/** True when auto-run should boot the real dev server: a Vite/Next project whose
+ * entry index.html is NOT self-contained, so the sandboxed srcdoc iframe can't
+ * render it. The deterministic Builder ships a Vite/Next package.json alongside a
+ * self-contained index.html — that returns false (its srcdoc preview renders
+ * instantly and must not trigger an npm install). Unlike buildPreviewDocument(),
+ * this is independent of the active file, so auto-run can't be fooled by the
+ * active tab landing on a README/SVG/self-contained doc inside a real project. */
+export function projectNeedsDevServer(files: CodeFiles): boolean {
+  if (!isNodeBundlerProject(files)) return false
+  const indexPath = Object.keys(files).find((p) => stripLead(p).toLowerCase() === "index.html")
+  if (indexPath && isSelfContainedHtml(files[indexPath]?.content ?? "")) return false
+  return true
+}
+
 /** Pick the best entry + kind given the active file and the whole project. */
 export function buildPreviewDocument(files: CodeFiles, activePath: string | null): PreviewResult {
   const paths = Object.keys(files)
   if (paths.length === 0) return { html: placeholder("Aún no hay archivos. Empieza a programar y el preview aparecerá aquí."), kind: "empty", entry: null }
 
   const activeExt = activePath ? ext(activePath) : ""
+  const activeFile = activePath ? files[activePath] : null
+  const projectEntry = findProjectEntry(files)
 
   // 0) Real Vite/Next projects need the dev server — a srcdoc render would be a
-  //    misleading blank page. Markdown/SVG files still preview individually.
-  if (isNodeBundlerProject(files) && !(activePath && ["md", "mdx", "svg"].includes(activeExt))) {
+  //    misleading blank page. Markdown/SVG files still preview individually, and
+  //    a self-contained index.html (the deterministic Builder's live preview,
+  //    React via CDN + inline runtime) renders instantly even though the project
+  //    also ships a Next/Vite package.json.
+  const activeHtmlRenderable =
+    !!activePath &&
+    (activeExt === "html" || activeExt === "htm") &&
+    isSelfContainedHtml(activeFile?.content ?? "")
+  if (
+    isNodeBundlerProject(files) &&
+    !(activePath && ["md", "mdx", "svg"].includes(activeExt)) &&
+    !activeHtmlRenderable
+  ) {
     return {
       html: placeholder(
         "Este proyecto usa Vite con dependencias npm. Pulsa ▶ Ejecutar para instalar las dependencias y verlo en vivo en el dev server.",
       ),
       kind: "unsupported",
-      entry: activePath,
+      entry: projectEntry ?? activePath,
     }
   }
 
@@ -327,6 +399,12 @@ export function buildPreviewDocument(files: CodeFiles, activePath: string | null
     if (activeExt === "svg") {
       return { html: buildSvgDocument(files, activePath), kind: "svg", entry: activePath }
     }
+    if (REACT_PREVIEW_EXTS.has(activeExt)) {
+      return { html: buildReactDocument(files, activePath), kind: "react", entry: activePath }
+    }
+    if (JS_EXTS.has(activeExt) && activeFile && looksLikeRenderableReact(activeFile.content)) {
+      return { html: buildReactDocument(files, activePath), kind: "react", entry: activePath }
+    }
   }
 
   // 2) Project-level detection.
@@ -338,11 +416,12 @@ export function buildPreviewDocument(files: CodeFiles, activePath: string | null
   const jsPaths = paths.filter((p) => JS_EXTS.has(ext(p)))
   if (jsPaths.length > 0) {
     const reactEntry =
-      (activePath && JS_EXTS.has(activeExt) ? activePath : null) ??
+      projectEntry ??
+      (activePath && REACT_PREVIEW_EXTS.has(activeExt) ? activePath : null) ??
       paths.find((p) => /(^|\/)app\.(t|j)sx?$/i.test(p)) ??
       paths.find((p) => /(^|\/)(src\/)?(main|index)\.(t|j)sx?$/i.test(p)) ??
-      jsPaths[0]
-    return { html: buildReactDocument(files, reactEntry), kind: "react", entry: reactEntry }
+      null
+    if (reactEntry) return { html: buildReactDocument(files, reactEntry), kind: "react", entry: reactEntry }
   }
 
   if (activePath && (activeExt === "md" || activeExt === "mdx")) {
@@ -352,7 +431,7 @@ export function buildPreviewDocument(files: CodeFiles, activePath: string | null
   if (mdEntry) return { html: buildMarkdownDocument(files, mdEntry), kind: "markdown", entry: mdEntry }
 
   return {
-    html: placeholder("El preview en vivo ejecuta web (HTML/CSS/JS), React/JSX/TSX, Markdown y SVG. Vue, Angular, Flutter o apps con dependencias npm necesitan un entorno de build (WebContainers) — en camino; por ahora ejecútalas desde la Terminal/agente."),
+    html: placeholder("Este archivo no es una pantalla web renderizable. Abre index.html, App.tsx o pulsa App/Build para que el agente cree un proyecto completo con preview."),
     kind: "unsupported",
     entry: activePath,
   }

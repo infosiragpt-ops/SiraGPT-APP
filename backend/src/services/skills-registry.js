@@ -74,11 +74,17 @@ function unregisterSkill(id) {
   if (!skill) return false;
 
   const catSet = categoryIndex.get(skill.category);
-  if (catSet) catSet.delete(id);
+  if (catSet) {
+    catSet.delete(id);
+    if (catSet.size === 0) categoryIndex.delete(skill.category);
+  }
 
   for (const tag of skill.tags) {
     const tagSet = tagIndex.get(tag);
-    if (tagSet) tagSet.delete(id);
+    if (tagSet) {
+      tagSet.delete(id);
+      if (tagSet.size === 0) tagIndex.delete(tag);
+    }
   }
 
   registry.delete(id);
@@ -123,7 +129,9 @@ function listSkills(opts = {}) {
 
   skills.sort((a, b) => a.order - b.order);
 
-  if (opts.limit) {
+  // Honour an explicit limit of 0 ("return none"): `if (opts.limit)` treated 0
+  // as "no limit" and returned every skill.
+  if (typeof opts.limit === 'number' && opts.limit >= 0) {
     skills = skills.slice(0, opts.limit);
   }
 
@@ -131,10 +139,17 @@ function listSkills(opts = {}) {
 }
 
 function recommendSkills(intent, signals = {}) {
+  // Callers pass either a string or an object like { query, tags } (cowork-engine
+  // passes the latter). Normalize to a string so computeRelevanceScore can't
+  // throw on `.toLowerCase()` — that throw was swallowed upstream, leaving the
+  // ENTIRE cowork skills path silently dead on every turn.
+  const intentStr = typeof intent === 'string'
+    ? intent
+    : (intent && (intent.query || intent.text || intent.intent)) || '';
   const candidates = [];
 
   for (const skill of registry.values()) {
-    const score = computeRelevanceScore(skill, intent, signals);
+    const score = computeRelevanceScore(skill, intentStr, signals);
     if (score > 0) {
       candidates.push({ skill, score });
     }
@@ -148,15 +163,20 @@ function recommendSkills(intent, signals = {}) {
 function computeRelevanceScore(skill, intent, signals) {
   let score = 0;
 
-  const intentLower = (intent || '').toLowerCase();
+  const intentLower = (typeof intent === 'string' ? intent : '').toLowerCase();
   const terms = tokenizeIntent(intentLower);
   const categoryLower = skill.category.toLowerCase();
   const descLower = skill.description.toLowerCase();
   const labelLower = skill.label.toLowerCase();
 
-  if (categoryLower === intentLower) score += 0.4;
-  if (labelLower.includes(intentLower)) score += 0.3;
-  if (descLower.includes(intentLower)) score += 0.2;
+  // Only credit whole-intent matches when the intent is non-empty —
+  // String.includes('') is ALWAYS true, so a blank intent used to give every
+  // skill +0.5 and return the first 5 as bogus "recommendations".
+  if (intentLower) {
+    if (categoryLower === intentLower) score += 0.4;
+    if (labelLower.includes(intentLower)) score += 0.3;
+    if (descLower.includes(intentLower)) score += 0.2;
+  }
   for (const term of terms) {
     if (labelLower.includes(term)) score += 0.15;
     if (descLower.includes(term)) score += 0.1;

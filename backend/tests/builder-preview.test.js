@@ -69,3 +69,12 @@ test('scaffold now ships preview.html among the starter files', () => {
   assert.equal(preview.language, 'html');
   assert.match(preview.content, /^<!doctype html>/i);
 });
+
+test('appName truncates by code point — never splits a surrogate pair (emoji)', () => {
+  // 40 emoji, each a UTF-16 surrogate pair. Slicing at 38 code UNITS would cut
+  // the 19th emoji in half and emit a lone surrogate before the ellipsis.
+  const name = appName({ purpose: '😀'.repeat(40) });
+  const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+  assert.ok(!loneSurrogate.test(name), `no lone surrogate in ${JSON.stringify(name)}`);
+  assert.ok(name.endsWith('…'), 'long name is truncated with an ellipsis');
+});

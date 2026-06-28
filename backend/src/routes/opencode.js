@@ -26,6 +26,14 @@ const { createOpencodeClient } = require('../services/opencode/opencode-client')
 
 const router = express.Router();
 
+// Don't echo raw upstream error messages to the client — they enumerate the
+// internal OpenCode API surface (method + path + status). Log server-side,
+// return a generic message.
+function upstreamFail(res, err, code = 'opencode_upstream') {
+  console.error(`[opencode] ${code}:`, (err && err.message) || err);
+  return res.status(502).json({ error: code, message: 'Upstream service error' });
+}
+
 function requireConfigured(req, res, next) {
   if (!isOpencodeConfigured()) {
     return res.status(503).json({
@@ -49,7 +57,7 @@ router.post('/session', authenticateToken, requireConfigured, async (req, res) =
     const session = await createOpencodeClient().createSession(seed);
     return res.json({ session });
   } catch (err) {
-    return res.status(502).json({ error: 'opencode_upstream', message: err.message });
+    return upstreamFail(res, err);
   }
 });
 
@@ -70,7 +78,7 @@ router.post(
       });
       return res.json({ result });
     } catch (err) {
-      return res.status(502).json({ error: 'opencode_upstream', message: err.message });
+      return upstreamFail(res, err);
     }
   },
 );
@@ -85,7 +93,7 @@ router.get('/file', authenticateToken, requireConfigured, async (req, res) => {
     const content = out && typeof out.content === 'string' ? out.content : '';
     return res.json({ path, content });
   } catch (err) {
-    return res.status(502).json({ error: 'opencode_upstream', message: err.message });
+    return upstreamFail(res, err);
   }
 });
 
@@ -122,7 +130,7 @@ router.get('/files', authenticateToken, requireConfigured, async (req, res) => {
     await walk('.', 0);
     return res.json({ files });
   } catch (err) {
-    return res.status(502).json({ error: 'opencode_upstream', message: err.message });
+    return upstreamFail(res, err);
   }
 });
 
@@ -138,7 +146,7 @@ router.post('/run', authenticateToken, requireConfigured, async (req, res) => {
     const j = await r.json().catch(() => ({}));
     return res.json({ ...j, devUrl: RUNNER_DEV_URL });
   } catch (err) {
-    return res.status(502).json({ error: 'runner_unreachable', message: err.message });
+    return upstreamFail(res, err, 'runner_unreachable');
   }
 });
 
@@ -148,7 +156,7 @@ router.get('/run/status', authenticateToken, requireConfigured, async (req, res)
     const j = await r.json().catch(() => ({}));
     return res.json({ ...j, devUrl: RUNNER_DEV_URL });
   } catch (err) {
-    return res.status(502).json({ error: 'runner_unreachable', message: err.message });
+    return upstreamFail(res, err, 'runner_unreachable');
   }
 });
 
@@ -157,7 +165,7 @@ router.post('/run/stop', authenticateToken, requireConfigured, async (req, res) 
     await fetch(`${RUNNER_CTRL}/stop`, { method: 'POST', signal: AbortSignal.timeout(Number(process.env.RUNNER_CTRL_TIMEOUT_MS) || 10000) }).catch(() => {});
     return res.json({ ok: true });
   } catch (err) {
-    return res.status(502).json({ error: 'runner_unreachable', message: err.message });
+    return upstreamFail(res, err, 'runner_unreachable');
   }
 });
 
@@ -176,7 +184,8 @@ router.get('/events', authenticateToken, requireConfigured, async (req, res) => 
     if (auth) headers.Authorization = auth;
     upstream = await fetch(client.eventStreamUrl(), { headers });
   } catch (err) {
-    res.write(`event: error\ndata: ${JSON.stringify({ message: err.message })}\n\n`);
+    console.error('[opencode] event-stream connect failed:', (err && err.message) || err);
+    res.write(`event: error\ndata: ${JSON.stringify({ message: 'Upstream stream error' })}\n\n`);
     return res.end();
   }
   if (!upstream.ok || !upstream.body) {
@@ -198,3 +207,4 @@ router.get('/events', authenticateToken, requireConfigured, async (req, res) => 
 });
 
 module.exports = router;
+module.exports.upstreamFail = upstreamFail;

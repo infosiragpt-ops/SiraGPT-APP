@@ -213,19 +213,22 @@ function createProjectAdapter({ projectMemory, prisma } = {}) {
         return { tier: "project", scope, count: 0, oldest_ts: null, newest_ts: null };
       }
       const rows = await projectMemory.listMemory(prisma, { projectId: scope.projectId });
-      let oldest = Infinity;
-      let newest = 0;
+      // Use null as the "no data" sentinel, NOT 0: a legitimate timestamp of
+      // exactly epoch-0 would otherwise be reported as "no newest" (0 is a real
+      // value, unlike Infinity). Also skip NaN from an unparseable createdAt.
+      let oldest = null;
+      let newest = null;
       for (const r of rows || []) {
         const t = r.createdAt ? new Date(r.createdAt).getTime() : null;
-        if (t == null) continue;
-        if (t < oldest) oldest = t;
-        if (t > newest) newest = t;
+        if (t == null || Number.isNaN(t)) continue;
+        if (oldest === null || t < oldest) oldest = t;
+        if (newest === null || t > newest) newest = t;
       }
       return {
         tier: "project", scope,
         count: (rows || []).length,
-        oldest_ts: oldest === Infinity ? null : oldest,
-        newest_ts: newest === 0 ? null : newest,
+        oldest_ts: oldest,
+        newest_ts: newest,
       };
     }, "memory.project_stats_failed"),
   };

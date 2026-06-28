@@ -1,5 +1,7 @@
 const assert = require('node:assert/strict');
 const { describe, it } = require('node:test');
+const { execFileSync } = require('node:child_process');
+const { randomBytes } = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -7,6 +9,7 @@ const { Document, Packer, Paragraph, TextRun, AlignmentType, Table, TableRow, Ta
 const ExcelJS = require('exceljs');
 const PptxGenJS = require('pptxgenjs');
 const PizZip = require('pizzip');
+const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
 
 const {
   appendToDocxBuffer,
@@ -37,6 +40,37 @@ async function makeDocxBuffer() {
   return Buffer.from(await Packer.toBuffer(doc));
 }
 
+function hasPdfToText() {
+  try {
+    execFileSync('pdftotext', ['-v'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function makePdfBuffer() {
+  const pdf = await PDFDocument.create();
+  const page = pdf.addPage([612, 792]);
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  page.drawText('SiraGPT banco real PDF', { x: 72, y: 720, size: 16, font, color: rgb(0, 0, 0) });
+  page.drawText('Estado: BORRADOR', { x: 72, y: 690, size: 14, font, color: rgb(0, 0, 0) });
+  return Buffer.from(await pdf.save());
+}
+
+function extractPdfTextForTest(buffer) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-pdf-text-'));
+  const pdfPath = path.join(tmp, 'input.pdf');
+  const txtPath = path.join(tmp, 'output.txt');
+  try {
+    fs.writeFileSync(pdfPath, buffer);
+    execFileSync('pdftotext', [pdfPath, txtPath]);
+    return fs.readFileSync(txtPath, 'utf8');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 async function makeDocxWithAnexo3Buffer() {
   const doc = new Document({
     sections: [{
@@ -52,6 +86,30 @@ async function makeDocxWithAnexo3Buffer() {
     }],
   });
   return Buffer.from(await Packer.toBuffer(doc));
+}
+
+async function makeDocxWithAnnexTailBuffer() {
+  const doc = new Document({
+    sections: [{
+      children: [
+        new Paragraph('Portada original UPN'),
+        new Paragraph('Capítulo 1. Introducción original'),
+        new Paragraph('REFERENCIAS'),
+        new Paragraph('Referencia bibliográfica que debe conservarse.'),
+        new Paragraph('ANEXO 01'),
+        new Paragraph('Fotograma 1 y evidencia visual que debe eliminarse.'),
+        new Paragraph('ANEXO 02'),
+        new Paragraph('Contenido posterior del anexo dos que debe eliminarse.'),
+      ],
+    }],
+  });
+  return Buffer.from(await Packer.toBuffer(doc));
+}
+
+function inflateDocxAboveSandboxLimit(buffer, extraBytes = 21 * 1024 * 1024) {
+  const zip = new PizZip(buffer);
+  zip.file('word/media/qa-large-unreferenced.bin', randomBytes(extraBytes), { binary: true });
+  return zip.generate({ type: 'nodebuffer', compression: 'STORE' });
 }
 
 async function makeDocxWithAnexo3CronogramaBuffer({
@@ -80,6 +138,98 @@ async function makeDocxWithAnexo3CronogramaBuffer({
             ...Array.from({ length: 23 }, () => new TableRow({ children: blankCells(20) })),
           ],
         }),
+      ],
+    }],
+  });
+  return Buffer.from(await Packer.toBuffer(doc));
+}
+
+async function makeDocxWithOperationalMatrixBuffer() {
+  const cell = (text = '') => new TableCell({ children: [new Paragraph(text)] });
+  const doc = new Document({
+    sections: [{
+      children: [
+        new Paragraph('Matriz de categorización ACTUAL'),
+        new Paragraph('Tabla 01. Matriz operacional'),
+        new Table({
+          rows: [
+            new TableRow({
+              children: [
+                cell('Categoría'),
+                cell('Subcategoría'),
+                cell('Indicador'),
+                cell('Técnica'),
+                cell('Instrumento'),
+              ],
+            }),
+            new TableRow({
+              children: [
+                cell('Informe pericial'),
+                cell('Valoración económica'),
+                cell('Criterios de cuantificación'),
+                cell('Análisis documental'),
+                cell('Guía de análisis documental'),
+              ],
+            }),
+            new TableRow({
+              children: [
+                cell('Capacidad económica'),
+                cell('Ingresos declarados'),
+                cell('Nivel de ingresos'),
+                cell('Revisión documental'),
+                cell('Ficha de registro'),
+              ],
+            }),
+            new TableRow({
+              children: [
+                cell('Capacidad económica'),
+                cell('Patrimonio disponible'),
+                cell('Bienes registrables'),
+                cell('Revisión documental'),
+                cell('Ficha de registro'),
+              ],
+            }),
+          ],
+        }),
+        new Paragraph('Nota. Esta matriz operacional debe conservarse sin cambios.'),
+      ],
+    }],
+  });
+  return Buffer.from(await Packer.toBuffer(doc));
+}
+
+async function makeDocxWithOperationalMatrixAndProofreadBuffer() {
+  const cell = (text = '') => new TableCell({ children: [new Paragraph(text)] });
+  const doc = new Document({
+    sections: [{
+      children: [
+        new Paragraph('Resumen'),
+        new Paragraph('Palabras claves: informe pericial; capacidad económica.'),
+        new Paragraph('Matriz de categorización ACTUAL'),
+        new Paragraph('Tabla 01. Matriz operacional'),
+        new Table({
+          rows: [
+            new TableRow({
+              children: [
+                cell('Categoría'),
+                cell('Subcategoría'),
+                cell('Indicador'),
+                cell('Técnica'),
+                cell('Instrumento'),
+              ],
+            }),
+            new TableRow({
+              children: [
+                cell('Informe pericial'),
+                cell('Valoración económica'),
+                cell('Criterios de cuantificación'),
+                cell('Análisis documental'),
+                cell('Guía de análisis documental'),
+              ],
+            }),
+          ],
+        }),
+        new Paragraph('Contenido posterior que debe permanecer después del cronograma agregado.'),
       ],
     }],
   });
@@ -169,11 +319,16 @@ describe('source-preserving document edit', () => {
     assert.equal(isSourcePreservingEditRequest(prompt, []), true);
     assert.equal(isSourcePreservingEditRequest('agrega una tabla de presupuesto', []), false);
     assert.equal(isSourcePreservingEditRequest('agrega al final una tabla de presupuesto', []), false);
+    assert.equal(isSourcePreservingEditRequest('corrige la redacción', ['file-docx']), true);
+    assert.equal(isSourcePreservingEditRequest('mejora el tono profesional', ['file-docx']), true);
+    assert.equal(isSourcePreservingEditRequest('aplica correcciones minimas al documento porfavor', ['file-docx']), true);
+    assert.equal(isSourcePreservingEditRequest('corrige la redacción', []), false);
     assert.equal(isSourcePreservingEditRequest('dame un resumen en un solo párrafo', ['file-docx']), false);
     assert.equal(isSourcePreservingEditRequest('calcula la diferencia usando los documentos adjuntos', ['file-docx']), false);
     assert.equal(isSourcePreservingEditRequest('compara el PDF y el DOCX adjuntos e indica la cifra final', ['file-docx']), false);
     assert.equal(isSourcePreservingEditRequest('Genera un Word profesional: incluye tabla Excel, índice y conclusiones.', []), false);
     assert.equal(isSourcePreservingEditRequest('Genera un Word profesional sobre el documento adjunto: incluye tabla Excel, índice y conclusiones.', ['file-docx']), false);
+    assert.equal(isSourcePreservingEditRequest('reemplaza BORRADOR por APROBADO en los documentos adjuntos y devuelve un DOCX completo', ['file-docx', 'file-xlsx']), true);
     assert.equal(isSourcePreservingEditRequest('completa el anexo 3', ['file-docx']), true);
     assert.equal(isSourcePreservingEditRequest('modifica mi documento general con este nuevo contenido', []), true);
     assert.equal(isSourcePreservingEditRequest('analiza este documento adjunto y agrégalo a mi documento general', ['file-ref']), true);
@@ -216,6 +371,78 @@ describe('source-preserving document edit', () => {
       roman: 'III',
       label: 'Anexo 3',
     });
+  });
+
+  it('describes a 1000-agent virtual pool while bounding execution parallelism', () => {
+    const plan = sourcePreservingInternals.buildDocumentOrchestrationPlan({
+      requestText: 'corrige el documento y usa mil agentes en segundo plano',
+      sourceFile: { originalName: 'tesis.docx' },
+      operations: [{ kind: 'replace_text', needle: 'error', replacement: 'corrección' }],
+      selectionReason: 'current_supported_file',
+    });
+
+    assert.equal(plan.mode, 'source_preserving_document_swarm');
+    assert.equal(plan.virtualAgentPool, 1000);
+    assert.equal(plan.requestedAgents, 1000);
+    assert.equal(plan.executionMode, 'bounded_background_worker');
+    assert.ok(plan.activeAgents >= 8);
+    assert.ok(plan.activeAgents <= plan.parallelism);
+  });
+
+  it('returns the same DOCX with minimal corrections applied instead of a prose recommendation', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-minimal-corrections-'));
+    const originalPath = path.join(tmp, '910 250.docx');
+    const doc = new Document({
+      sections: [{
+        children: [
+          new Paragraph('Resumen'),
+          new Paragraph('Palabras claves: gestión empresarial; informe pericial.'),
+          new Paragraph('Contenido original que debe seguir intacto.'),
+        ],
+      }],
+    });
+    fs.writeFileSync(originalPath, Buffer.from(await Packer.toBuffer(doc)));
+
+    const prisma = {
+      file: {
+        async findMany() {
+          return [{
+            id: 'file-docx-minimal',
+            userId: 'user-1',
+            filename: '910 250.docx',
+            originalName: '910 250.docx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            size: fs.statSync(originalPath).size,
+            path: originalPath,
+          }];
+        },
+      },
+      generatedArtifact: { async findMany() { return []; } },
+      message: { async findMany() { return []; } },
+    };
+
+    const result = await tryGenerateSourcePreservingDocumentEdit({
+      prisma,
+      userId: 'user-1',
+      chatId: 'chat-1',
+      fileIds: ['file-docx-minimal'],
+      prompt: 'aplica correcciones minimas al documento porfavor',
+      displayPrompt: 'aplica correcciones minimas al documento porfavor',
+    });
+
+    assert.equal(result.format, 'docx');
+    assert.equal(result.validation.passed, true);
+    assert.match(result.file.filename, /910_250_correcciones_minimas_completado\.docx$/);
+    assert.match(result.content, /Conservé el DOCX original/i);
+    assert.doesNotMatch(result.content, /Estas son las correcciones/i);
+
+    const xml = new PizZip(fs.readFileSync(result.artifact.path)).file('word/document.xml').asText();
+    assert.match(xml, /Palabras clave:/);
+    assert.doesNotMatch(xml, /Palabras claves:/);
+    assert.match(xml, /Contenido original que debe seguir intacto/);
+    const criteria = result.validation.details.operationCriteria.find((check) => check.id === 'minimal_proofread_applied');
+    assert.equal(criteria?.passed, true);
+    assert.equal(criteria.details.changedCount >= 1, true);
   });
 
   it('falls back to the newest recent editable chat attachment when the follow-up omits file ids', async () => {
@@ -456,6 +683,16 @@ describe('source-preserving document edit', () => {
     );
   });
 
+  it('does not treat "imagen adjunta" as a source-preserving document edit', () => {
+    assert.equal(
+      isSourcePreservingEditRequest(
+        'Crea esto en un Word editable. Reproduce la ficha visual de la imagen adjunta lo mejor posible.',
+        [{ id: 'img-1', originalName: 'captura.png', mimeType: 'image/png' }],
+      ),
+      false,
+    );
+  });
+
   it('does not mistake an instrument request for external reference integration because it mentions Word final', () => {
     const prompt = 'agrega al final un instrumento profesional de recolección de datos para esta investigación y valida el Word final';
 
@@ -672,6 +909,155 @@ describe('source-preserving document edit', () => {
     assert.match(xml, /Portada original UPN/);
     assert.match(xml, /ANEXOS/);
     assert.match(xml, /Instrumento de recolección de datos/);
+  });
+
+  it('adds a real consistency matrix table derived from the DOCX operational matrix', async () => {
+    const originalOpenAIKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-consistency-matrix-'));
+      const originalPath = path.join(tmp, 'Matriz de categorización ACTUAL.docx');
+      fs.writeFileSync(originalPath, await makeDocxWithOperationalMatrixBuffer());
+
+      const result = await generateSourcePreservingDocumentEdit({
+        sourceFile: {
+          id: 'file-docx',
+          path: originalPath,
+          originalName: 'Matriz de categorización ACTUAL.docx',
+          filename: 'Matriz de categorización ACTUAL.docx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          extractedText: 'Tabla 01. Matriz operacional con categorías, subcategorías e indicadores.',
+        },
+        prompt: 'agrega en el word matriz de cosistencia en base a la matriz operacional',
+        displayPrompt: 'agrega en el word matriz de cosistencia en base a la matriz operacional',
+        userId: 'user-1',
+        chatId: 'chat-1',
+      });
+
+      assert.equal(result.format, 'docx');
+      assert.equal(result.validation.passed, true);
+      assert.equal(result.validation.checks.operation_criteria, true);
+      assert.match(result.file.filename, /matriz_de_consistencia_completado\.docx$/);
+      assert.match(result.content, /matriz de consistencia derivada de la matriz operacional/i);
+
+      const edited = fs.readFileSync(result.artifact.path);
+      const xml = new PizZip(edited).file('word/document.xml').asText();
+      assert.equal((xml.match(/<w:tbl\b/g) || []).length, 2);
+      assert.ok(xml.indexOf('Matriz de consistencia') > xml.indexOf('Tabla 01'));
+      assert.match(xml, /Tabla 01\. Matriz operacional/);
+      assert.match(xml, /Matriz de consistencia basada en la matriz operacional/);
+      assert.match(xml, /Problema/);
+      assert.match(xml, /Objetivo/);
+      assert.match(xml, /Supuesto\/Hipótesis/);
+      assert.match(xml, /Informe pericial/);
+      assert.match(xml, /Capacidad económica/);
+      assert.match(xml, /Criterios de cuantificación/);
+      assert.match(xml, /Bienes registrables/);
+      assert.doesNotMatch(xml, /ANEXOS/);
+    } finally {
+      if (originalOpenAIKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = originalOpenAIKey;
+    }
+  });
+
+  it('returns the same DOCX with minimal proofreading and Anexo 3 cronograma inserted after the operational matrix', async () => {
+    const originalOpenAIKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-proofread-cronograma-'));
+      const originalPath = path.join(tmp, '540_694_correccion_corregido.docx');
+      fs.writeFileSync(originalPath, await makeDocxWithOperationalMatrixAndProofreadBuffer());
+
+      const prompt = 'aplica correccioens minimas y agrega luego de la matrix operacional agrega Anexo 3. Cronograma del Desarrollo y Culminación de la Tesis de forma profesional';
+      const result = await generateSourcePreservingDocumentEdit({
+        sourceFile: {
+          id: 'file-docx',
+          path: originalPath,
+          originalName: '540_694_correccion_corregido.docx',
+          filename: '540_694_correccion_corregido.docx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          extractedText: 'Tabla 01. Matriz operacional con categorías, subcategorías e indicadores. Palabras claves: informe pericial.',
+        },
+        prompt,
+        displayPrompt: prompt,
+        userId: 'user-1',
+        chatId: 'chat-1',
+      });
+
+      assert.equal(result.format, 'docx');
+      assert.equal(result.validation.passed, true);
+      assert.equal(result.validation.checks.operation_criteria, true);
+      assert.match(result.file.filename, /\.docx$/);
+      assert.ok(result.file.url);
+
+      const edited = fs.readFileSync(result.artifact.path);
+      const xml = new PizZip(edited).file('word/document.xml').asText();
+      assert.match(xml, /Palabras clave:/);
+      assert.doesNotMatch(xml, /Palabras claves:/);
+      assert.match(xml, /Anexo 3\. Cronograma del Desarrollo y Culminación de la Tesis/);
+      assert.match(xml, /Planificaci[oó]n/);
+      assert.match(xml, /Matriz de consistencia/);
+      assert.match(xml, /Operacionalizaci[oó]n/);
+      assert.match(xml, /Entrega/);
+
+      const matrixIndex = xml.indexOf('Tabla 01. Matriz operacional');
+      const anexoIndex = xml.indexOf('Anexo 3. Cronograma');
+      const posteriorIndex = xml.indexOf('Contenido posterior que debe permanecer');
+      assert.ok(matrixIndex >= 0, 'source operational matrix should remain');
+      assert.ok(anexoIndex > matrixIndex, 'Anexo 3 should be inserted after the operational matrix');
+      assert.ok(posteriorIndex > anexoIndex, 'existing later content should remain after the inserted Anexo 3');
+      assert.doesNotMatch(result.content, /no pude|demasiado grande|opciones para/i);
+    } finally {
+      if (originalOpenAIKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = originalOpenAIKey;
+    }
+  });
+
+  it('edits an oversized DOCX by deleting from Anexo 01 to the end and returning a DOCX artifact', async () => {
+    const originalOpenAIKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-large-anexo-delete-'));
+      const originalPath = path.join(tmp, '572_084_FINAL_gomez_mendizabal_tf_FORMATO-UPN.docx');
+      const oversized = inflateDocxAboveSandboxLimit(await makeDocxWithAnnexTailBuffer());
+      assert.ok(oversized.length > 20 * 1024 * 1024, 'fixture must exceed the sandbox document_edit byte cap');
+      fs.writeFileSync(originalPath, oversized);
+
+      const result = await generateSourcePreservingDocumentEdit({
+        sourceFile: {
+          id: 'file-large-docx',
+          path: originalPath,
+          originalName: '572_084_FINAL_gomez_mendizabal_tf_FORMATO-UPN.docx',
+          filename: '572_084_FINAL_gomez_mendizabal_tf_FORMATO-UPN.docx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          extractedText: 'Documento largo con referencias y anexos desde Anexo 01.',
+        },
+        prompt: 'borra desde el anexo 01 hacia abajo todo porfavor',
+        displayPrompt: 'borra desde el anexo 01 hacia abajo todo porfavor',
+        userId: 'user-1',
+        chatId: 'chat-1',
+      });
+
+      assert.equal(result.format, 'docx');
+      assert.equal(result.validation.passed, true);
+      assert.equal(result.validation.checks.operation_criteria, true);
+      assert.match(result.content, /eliminé Anexo 1 y todo el contenido posterior/i);
+      assert.match(result.file.filename, /anexo_1_completado\.docx$/);
+
+      const edited = fs.readFileSync(result.artifact.path);
+      const xml = new PizZip(edited).file('word/document.xml').asText();
+      assert.match(xml, /Portada original UPN/);
+      assert.match(xml, /Capítulo 1\. Introducción original/);
+      assert.match(xml, /REFERENCIAS/);
+      assert.match(xml, /Referencia bibliográfica que debe conservarse/);
+      assert.doesNotMatch(xml, /ANEXO 01/);
+      assert.doesNotMatch(xml, /Fotograma 1/);
+      assert.doesNotMatch(xml, /ANEXO 02/);
+      assert.doesNotMatch(xml, /Contenido posterior del anexo dos/);
+    } finally {
+      if (originalOpenAIKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = originalOpenAIKey;
+    }
   });
 
   it('completes a targeted DOCX appendix using the combined uploaded document context', async () => {
@@ -1449,6 +1835,18 @@ describe('source-preserving Office edit — generic XLSX/PPTX operations', () =>
     assert.equal(cellOps[0].value, 'Validado por comité');
   });
 
+  it('plans natural Excel cell changes as cell writes, not text replacements', () => {
+    const ops = planGenericOfficeOperations({
+      requestText: 'Edita este Excel: cambia la celda B2 a 999 y devuelveme el Excel completo.',
+      format: 'xlsx',
+    });
+
+    assert.equal(ops[0].kind, 'set_cell');
+    assert.equal(ops[0].address, 'B2');
+    assert.equal(ops[0].value, '999');
+    assert.equal(ops.some((op) => op.kind === 'replace_text' && /celda\s+b2/i.test(op.needle)), false);
+  });
+
   it('replaces text and writes a specific cell in XLSX while preserving the workbook', async () => {
     const source = await makeXlsxBuffer();
     const replaced = await replaceTextInXlsxBuffer(source, 'Pendiente', 'Completado');
@@ -1491,6 +1889,35 @@ describe('source-preserving Office edit — generic XLSX/PPTX operations', () =>
     const edited = fs.readFileSync(result.artifact.path);
     assert.equal(await readXlsxCell(edited, 'A2'), 'Completado');
     assert.equal(await readXlsxCell(edited, 'B2'), 'Validado por comité');
+  });
+
+  it('edits a requested XLSX cell from a natural-language instruction', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-xlsx-cell-'));
+    const originalPath = path.join(tmp, 'matriz.xlsx');
+    fs.writeFileSync(originalPath, await makeXlsxBuffer());
+
+    const result = await generateSourcePreservingDocumentEdit({
+      sourceFile: {
+        id: 'file-xlsx-cell',
+        path: originalPath,
+        originalName: 'matriz.xlsx',
+        filename: 'matriz.xlsx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        extractedText: 'Estado Pendiente; Observación Revisar matriz.',
+      },
+      prompt: 'Edita este Excel: cambia la celda B2 a 999 y devuelveme el Excel completo.',
+      displayPrompt: 'Edita este Excel: cambia la celda B2 a 999 y devuelveme el Excel completo.',
+      userId: 'user-office',
+      chatId: 'chat-office',
+    });
+
+    assert.equal(result.format, 'xlsx');
+    assert.equal(result.validation.passed, true);
+    assert.equal(result.orchestration.operations.some((op) => op.kind === 'set_cell' && op.address === 'B2'), true);
+
+    const edited = fs.readFileSync(result.artifact.path);
+    assert.equal(await readXlsxCell(edited, 'A2'), 'Pendiente');
+    assert.equal(String(await readXlsxCell(edited, 'B2')), '999');
   });
 
   it('replaces and deletes text in DOCX through the generic text operation', async () => {
@@ -1553,6 +1980,36 @@ describe('source-preserving Office edit — generic XLSX/PPTX operations', () =>
     assert.match(text, /Título nuevo/);
     assert.doesNotMatch(text, /Título viejo/);
     assert.match(text, /matriz de riesgos/i);
+  });
+
+  it('rewrites PDF text for explicit replacement requests instead of only appending', { skip: hasPdfToText() ? false : 'pdftotext unavailable' }, async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-pdf-generic-'));
+    const originalPath = path.join(tmp, 'estado.pdf');
+    fs.writeFileSync(originalPath, await makePdfBuffer());
+
+    const result = await generateSourcePreservingDocumentEdit({
+      sourceFile: {
+        id: 'file-pdf',
+        path: originalPath,
+        originalName: 'estado.pdf',
+        filename: 'estado.pdf',
+        mimeType: 'application/pdf',
+        extractedText: 'SiraGPT banco real PDF\nEstado: BORRADOR',
+      },
+      prompt: 'reemplaza BORRADOR por APROBADO en este PDF y devuelve el PDF editado',
+      displayPrompt: 'reemplaza BORRADOR por APROBADO en este PDF y devuelve el PDF editado',
+      userId: 'user-office',
+      chatId: 'chat-office',
+    });
+
+    assert.equal(result.format, 'pdf');
+    assert.equal(result.validation.passed, true);
+    assert.equal(result.validation.checks.operation_criteria, true);
+    assert.equal(result.orchestration.operations.some((op) => op.kind === 'replace_text'), true);
+
+    const text = extractPdfTextForTest(fs.readFileSync(result.artifact.path));
+    assert.match(text, /APROBADO/);
+    assert.doesNotMatch(text, /BORRADOR/);
   });
 
   it('replaces and deletes PPTX slide text without rebuilding the deck', async () => {

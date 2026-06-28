@@ -168,10 +168,10 @@ describe("validateBatch · count cap", () => {
   })
 
   it("caps the accepted list at the default maxCount and routes the rest to rejected", () => {
-    // Default cap is 20 (universal ingest spec; backend accepts up to 50).
-    const files = Array.from({ length: 23 }, (_, i) => ok(`f${i}.png`))
+    // Default cap is 400 so one chat turn can carry large Office/PDF batches.
+    const files = Array.from({ length: 403 }, (_, i) => ok(`f${i}.png`))
     const result = validateBatch(files)
-    assert.equal(result.accepted.length, 20)
+    assert.equal(result.accepted.length, 400)
     assert.equal(result.rejected.length, 3)
     assert.equal(result.rejected[0].code, "count_exceeded")
   })

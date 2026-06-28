@@ -100,10 +100,11 @@ test('static server starts, serves, and stops', async () => {
     assert.equal(started.kind, 'static');
     assert.equal(started.ready, true);
 
+    const localUrl = new URL('/', `http://127.0.0.1:${started.port}`);
     const body = await new Promise((resolve, reject) => {
       const http = require('http');
       http
-        .get(started.previewUrl, (res) => {
+        .get(localUrl, (res) => {
           let data = '';
           res.on('data', (c) => (data += c));
           res.on('end', () => resolve(data));

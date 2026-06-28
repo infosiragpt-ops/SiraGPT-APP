@@ -144,16 +144,9 @@ export function GitPane({ id, repoFullName, repoUrl, onAfterCommit, fitContent }
   const switchBranch = (name: string) =>
     run(`switch:${name}`, () => githubService.switchBranch(id, name), `Cambiado a ${name}`)
 
-  const sync = () =>
-    run(
-      "sync",
-      async () => {
-        await githubService.fetch(id, current)
-        if (behind > 0 && !dirty) await githubService.pull(id, current)
-        if (ahead > 0) await githubService.push(id, { branch: current, setUpstream: !status?.tracking })
-      },
-      "Sincronizado con el remoto",
-    )
+  // One server-side op: fetch → (behind?) pull → (ahead?) push, with fresh
+  // git state at each step (no stale ahead/behind, no non-fast-forward push).
+  const sync = () => run("sync", () => githubService.sync(id), "Sincronizado con el remoto")
   const pull = () => run("pull", () => githubService.pull(id, current), "Pull completado")
   const push = () =>
     run("push", () => githubService.push(id, { branch: current, setUpstream: !status?.tracking }), "Push completado")

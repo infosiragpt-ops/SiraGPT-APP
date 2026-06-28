@@ -26,6 +26,7 @@ const ROUTER_PATH = path.join(ROUTES_DIR, 'gpts.js');
 let store; // { gpts: Map, files: Map }
 let currentUserId; // who the auth middleware authenticates as
 let extractionBehavior; // 'ok' | 'empty' | 'throw'
+let gptFindManyCalls = []; // captured customGpt.findMany args (for soft-delete checks)
 
 function resolveFrom(request_path) {
   // Resolve a dependency exactly as the router would (relative to its dir).
@@ -45,6 +46,8 @@ function injectFakeModule(requestPath, exportsValue) {
 // ── Fake Prisma client ──
 function buildFakePrisma() {
   let fileSeq = 0;
+  let gptSeq = 0;
+  const withCreator = (gpt) => ({ ...gpt, creator: { id: gpt.creatorId, name: 'Owner', avatar: null } });
   return {
     customGpt: {
       async findFirst({ where, include }) {
@@ -60,6 +63,32 @@ function buildFakePrisma() {
           return result;
         }
         return null;
+      },
+      async findMany(arg) {
+        gptFindManyCalls.push(arg);
+        return [];
+      },
+      async create({ data }) {
+        const id = `gpt_new_${++gptSeq}`;
+        const row = { id, ...data };
+        store.gpts.set(id, row);
+        return withCreator(row);
+      },
+      async findUnique({ where, include }) {
+        const g = store.gpts.get(where.id);
+        if (!g) return null;
+        const result = { ...g };
+        if (include && include.knowledgeFiles) {
+          result.knowledgeFiles = [...store.files.values()].filter((f) => f.customGptId === g.id);
+        }
+        return result;
+      },
+      async update({ where, data }) {
+        const existing = store.gpts.get(where.id);
+        if (!existing) throw new Error('not found');
+        const updated = { ...existing, ...data };
+        store.gpts.set(where.id, updated);
+        return withCreator(updated);
       },
     },
     file: {
@@ -175,6 +204,7 @@ function resetState() {
   store = { gpts: new Map(), files: new Map() };
   currentUserId = 'owner-1';
   extractionBehavior = 'ok';
+  gptFindManyCalls = [];
 }
 
 function seedGpt(id, creatorId) {
@@ -341,4 +371,95 @@ test('DELETE /:id/knowledge/:fileId 404s for a file belonging to a different GPT
   const res = await request(app).delete('/api/gpts/gpt-a/knowledge/f1').send();
   assert.equal(res.status, 404);
   assert.equal(store.files.has('f1'), true);
+});
+
+test('POST / rejects out-of-range temperature / invalid maxTokens (400 before create)', async () => {
+  resetState();
+  const app = buildApp();
+  const bad = [
+    [JSON.stringify({ name: 'A', instructions: 'do', temperature: 5 }), /temperature/],
+    [JSON.stringify({ name: 'A', instructions: 'do', temperature: -0.5 }), /temperature/],
+    [JSON.stringify({ name: 'A', instructions: 'do', temperature: 'hot' }), /temperature/],
+    [JSON.stringify({ name: 'A', instructions: 'do', maxTokens: 0 }), /maxTokens/],
+    [JSON.stringify({ name: 'A', instructions: 'do', maxTokens: -3 }), /maxTokens/],
+    [JSON.stringify({ name: 'A', instructions: 'do', maxTokens: 1.5 }), /maxTokens/],
+  ];
+  for (const [gpts, m] of bad) {
+    const res = await request(app).post('/api/gpts').send({ gpts });
+    assert.equal(res.status, 400, `expected 400 for ${gpts}`);
+    assert.match(res.body.error, m);
+  }
+  assert.equal(store.gpts.size, 0, 'no GPT row created for any rejected request');
+});
+
+test('POST / accepts boundary-valid temperature/maxTokens and creates the GPT', async () => {
+  resetState();
+  const app = buildApp();
+  const res = await request(app).post('/api/gpts').send({
+    gpts: JSON.stringify({ name: 'Good', instructions: 'be helpful', temperature: 2, maxTokens: 100 }),
+  });
+  assert.equal(res.status, 201);
+  assert.equal(res.body.gpt.name, 'Good');
+  assert.equal(store.gpts.size, 1);
+});
+
+test('PUT /:id rejects out-of-range temperature (400 before the ownership lookup)', async () => {
+  resetState();
+  seedGpt('gpt-a', 'owner-1');
+  const app = buildApp();
+  const res = await request(app).put('/api/gpts/gpt-a').send({ gpts: JSON.stringify({ temperature: 9 }) });
+  assert.equal(res.status, 400);
+  assert.match(res.body.error, /temperature/);
+});
+
+test('PUT /:id accepts a valid temperature/maxTokens update for an owned GPT', async () => {
+  resetState();
+  seedGpt('gpt-a', 'owner-1');
+  const app = buildApp();
+  const res = await request(app).put('/api/gpts/gpt-a').send({ gpts: JSON.stringify({ temperature: 1.2, maxTokens: 50 }) });
+  assert.equal(res.status, 200);
+  assert.equal(store.gpts.get('gpt-a').temperature, 1.2);
+  assert.equal(store.gpts.get('gpt-a').maxTokens, 50);
+});
+
+test('GET / excludes soft-deleted GPTs (deletedAt:null in the where)', async () => {
+  resetState();
+  const app = buildApp();
+  await request(app).get('/api/gpts').send();
+  assert.ok(gptFindManyCalls.length >= 1, 'list endpoint queried customGpt.findMany');
+  assert.ok(
+    JSON.stringify(gptFindManyCalls).includes('"deletedAt":null'),
+    'the list where-clause must constrain deletedAt:null so tombstoned GPTs never leak',
+  );
+});
+
+test('GET /categories excludes soft-deleted GPTs', async () => {
+  resetState();
+  const app = buildApp();
+  await request(app).get('/api/gpts/categories').send();
+  const catCall = gptFindManyCalls.find((c) => c && c.distinct);
+  assert.ok(catCall, 'categories endpoint queried customGpt.findMany with distinct');
+  assert.equal(catCall.where.deletedAt, null, 'categories where filters out soft-deleted rows');
+});
+
+test('GET /:id does not leak knowledge-file path/userId/openaiFileId/extractedText to the client', async () => {
+  resetState();
+  const app = buildApp();
+  seedGpt('gpt-x', 'owner-1'); // owner-1 is the default authed user
+  store.files.set('kf1', {
+    id: 'kf1', customGptId: 'gpt-x', userId: 'owner-1',
+    originalName: 'secret.txt', size: 10, mimeType: 'text/plain',
+    path: '/tmp/uploads/secret.txt', openaiFileId: 'file-abc123',
+    extractedText: 'TOP-SECRET-KNOWLEDGE-CONTENTS', createdAt: new Date(),
+  });
+  const res = await request(app).get('/api/gpts/gpt-x');
+  assert.equal(res.status, 200);
+  const kf = res.body.gpt.knowledgeFiles && res.body.gpt.knowledgeFiles[0];
+  assert.ok(kf, 'knowledge file is present in the response');
+  assert.equal(kf.path, undefined, 'path must not leak');
+  assert.equal(kf.userId, undefined, 'userId must not leak');
+  assert.equal(kf.openaiFileId, undefined, 'openaiFileId must not leak');
+  assert.equal(kf.extractedText, undefined, 'extractedText must not leak');
+  assert.equal(kf.extractedChars, 'TOP-SECRET-KNOWLEDGE-CONTENTS'.length, 'safe view exposes only a char count');
+  assert.ok(!JSON.stringify(res.body).includes('TOP-SECRET-KNOWLEDGE-CONTENTS'), 'extracted text not leaked anywhere');
 });

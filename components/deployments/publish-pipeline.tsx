@@ -31,12 +31,14 @@ export function PublishPipeline({
   phases,
   deployment,
   failureMessage,
+  resolved = true,
   onDone,
   onViewLogs,
 }: {
   phases: PublishPhase[]
   deployment?: { id: string; name: string; defaultDomain?: string | null }
   failureMessage?: string | null
+  resolved?: boolean
   onDone?: () => void
   onViewLogs?: () => void
 }) {
@@ -56,6 +58,7 @@ export function PublishPipeline({
 
   React.useEffect(() => {
     setActiveIndex(0)
+    if (!resolved) return
     let cancelled = false
     let index = 0
     let timer = 0
@@ -80,9 +83,10 @@ export function PublishPipeline({
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [phaseByName])
+  }, [phaseByName, resolved])
 
   const stateFor = (index: number): StepState => {
+    if (!resolved) return index === 0 ? "running" : "pending"
     const step = STEP_ORDER[index]
     if (index === activeIndex && phaseByName.get(step)?.status === "failed") return "failed"
     if (index < activeIndex) return phaseByName.get(step)?.status === "failed" ? "failed" : "done"

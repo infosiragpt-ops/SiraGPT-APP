@@ -45,6 +45,17 @@ function makeDb({ projects = [], runs = [] } = {}) {
         Object.assign(row, data);
         return row;
       },
+      async updateMany({ where, data }) {
+        let count = 0;
+        for (const r of runs) {
+          const match = Object.entries(where).every(([k, v]) => {
+            if (k === 'status' && v && v.in) return v.in.includes(r.status);
+            return r[k] === v;
+          });
+          if (match) { Object.assign(r, data); count += 1; }
+        }
+        return { count };
+      },
       async findMany({ where }) {
         return runs.filter((r) => r.projectId === where.projectId && r.userId === where.userId);
       },
@@ -180,4 +191,25 @@ test('getRun and listRuns are scoped by userId', async () => {
   assert.equal(await getRun({ userId: 'u1', runId: 'r2', db }), null); // foreign
   const list = await listRuns({ userId: 'u1', projectId: 'p1', db });
   assert.deepEqual(list.map((r) => r.id), ['r1']);
+});
+
+test('cancelRun does not overwrite a run that went terminal between the read and the flip', async () => {
+  const db = makeDb({ projects: [PROJECT], runs: [{ id: 'r1', projectId: 'p1', userId: 'u1', mode: 'build', status: 'running' }] });
+  const events = [];
+  // Simulate the processor stamping the run terminal right after cancelRun's
+  // ownership read but before the conditional flip.
+  const origFindFirst = db.codexRun.findFirst.bind(db.codexRun);
+  db.codexRun.findFirst = async (args) => {
+    const row = await origFindFirst(args);
+    if (!row) return row;
+    const snapshot = { ...row }; // cancelRun sees 'running'
+    const real = db._runs.find((r) => r.id === 'r1');
+    if (real) real.status = 'done'; // processor finishes concurrently
+    return snapshot;
+  };
+  const run = await cancelRun({ userId: 'u1', runId: 'r1', db, queue: fakeQueue(), eventStore: fakeEventStore(events) });
+  // The guarded updateMany found no active row → terminal status preserved…
+  assert.equal(run.status, 'done', 'terminal status must not be clobbered to cancelled');
+  // …and no duplicate terminal run_status event was emitted.
+  assert.equal(events.length, 0, 'no duplicate terminal event');
 });

@@ -129,23 +129,28 @@ export function nextAgentAction(state: AgentState, input: string, signal: AgentS
   const text = clean(input)
   const tier: "llm" | "deterministic" = signal.hasModel && !signal.forceDeterministic ? "llm" : "deterministic"
 
-  // 1) Debug takes priority: explicit error bridge, debug mode, or a pasted log.
+  // 1) Explicit error-fix bridge always wins (user pressed "Reparar error").
   if (signal.fixErrorText) return { type: "debug", log: signal.fixErrorText }
+
+  // 2) Non-constructive modes → plain chat, ALWAYS. Ask/Plan/Image must NEVER
+  //    write files — even after a build (phase "preview") or when the user pastes
+  //    an error log — otherwise Ask silently turns a question into a patch/debug.
+  //    This check stays ABOVE the preview-patch and pasted-log-debug rules below.
+  if (signal.mode === "ask" || signal.mode === "plan" || signal.mode === "image") {
+    return { type: "passthrough" }
+  }
+
+  // 3) Debug: explicit debug mode, or a pasted error log in a constructive mode.
   if (signal.mode === "debug" || isBuildLog(text)) return { type: "debug", log: text }
 
-  // 2) ⚡ Construir → generate immediately.
+  // 4) ⚡ Construir → generate immediately.
   if (signal.forceDeterministic) {
     return { type: "generate", context: seedGoal(state.context, text), tier: "deterministic" }
   }
 
-  // 3) Iterating on an already-built app.
+  // 5) Iterating on an already-built app.
   if (state.phase === "preview" && !isBuildRequest(text) && text.length > 0) {
     return { type: "patch", instruction: text }
-  }
-
-  // 4) Non-constructive modes → plain chat.
-  if (signal.mode === "ask" || signal.mode === "plan" || signal.mode === "image") {
-    return { type: "passthrough" }
   }
 
   const inIntake = state.phase === "intake"

@@ -462,7 +462,14 @@ function getRemainingBudget(toolName, usageMap = {}) {
 function checkOutputFormat(toolName, filename) {
   const manifest = getManifest(toolName);
   if (!manifest) return { ok: false, reason: 'unknown_tool' };
-  const ext = String(filename || '').toLowerCase().split('.').pop();
+  // Derive the extension as the substring after the LAST dot. `split('.').pop()`
+  // returns the whole name for an extensionless filename ('report' → 'report'),
+  // so the `if (!ext)` "no extension → allow" guard was unreachable and an
+  // extensionless file got rejected as format_not_allowed. lastIndexOf gives ''
+  // when there is no dot (or a leading-dot dotfile keeps its original handling).
+  const name = String(filename || '').toLowerCase();
+  const lastDot = name.lastIndexOf('.');
+  const ext = lastDot >= 0 ? name.slice(lastDot + 1) : '';
   if (!ext) return { ok: true };
   const forbidden = Array.isArray(manifest.forbidden_formats) ? manifest.forbidden_formats : [];
   if (forbidden.includes(ext)) return { ok: false, reason: 'forbidden_format', extension: ext };
@@ -1763,7 +1770,7 @@ function getDocIntelManifests() {
       side_effect_level: "local-fs",
       sandbox_required: false,
       audit_policy: "every-call",
-      scopes: ["files.read", "rag.write"],
+      scopes: ["files.read", "rag.read"],
       data_classes: ["internal", "confidential"],
     },
     docintel_retrieve: {

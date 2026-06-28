@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { TOOLS, toolRegistry, getTool, lineCount } = require('../src/services/codex/build-tools');
+const { TOOLS, toolRegistry, getTool, lineCount, parsePrismaSchema } = require('../src/services/codex/build-tools');
 
 function fakeRunner(overrides = {}) {
   return {
@@ -16,7 +16,7 @@ function fakeRunner(overrides = {}) {
 
 test('toolRegistry projects name/description/parameters for the 5 tools', () => {
   const reg = toolRegistry();
-  assert.deepEqual(reg.map((t) => t.name).sort(), ['edit_file', 'read_file', 'run_command', 'web_search', 'write_file']);
+  assert.deepEqual(reg.map((t) => t.name).sort(), ['edit_file', 'inspect_database', 'read_file', 'run_command', 'web_search', 'write_file']);
   for (const t of reg) { assert.ok(t.description); assert.ok(t.parameters); }
 });
 
@@ -77,4 +77,59 @@ test('getTool + lineCount helpers', () => {
   assert.equal(getTool('nope'), null);
   assert.equal(lineCount('a\nb'), 2);
   assert.equal(lineCount(''), 0);
+});
+
+const PRISMA_SCHEMA = `
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+enum Role { USER ADMIN }
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  role      Role     @default(USER)
+  posts     Post[]
+  createdAt DateTime @default(now())
+}
+model Post {
+  id       String @id @default(cuid())
+  title    String
+  authorId String
+}
+`;
+
+test('parsePrismaSchema extracts provider, models with fields, and enums', () => {
+  const s = parsePrismaSchema(PRISMA_SCHEMA);
+  assert.equal(s.provider, 'postgresql');
+  assert.deepEqual(s.models.map((m) => m.name), ['User', 'Post']);
+  assert.equal(s.models[0].fields.length, 5);
+  assert.equal(s.models[0].fields[1].name, 'email');
+  assert.match(s.models[0].fields[1].attrs, /@unique/);
+  assert.deepEqual(s.enums, [{ name: 'Role', values: ['USER ADMIN'] }]);
+});
+
+test('inspect_database summarises the Prisma schema (no live connection)', async () => {
+  const runner = fakeRunner({ readFile: async (_p, path) => { assert.equal(path, 'prisma/schema.prisma'); return { content: PRISMA_SCHEMA }; } });
+  const r = await TOOLS.inspect_database.execute({}, { runner, project: 'p1' });
+  assert.equal(r.isError, false);
+  assert.equal(r.models, 2);
+  assert.match(r.observation, /Provider: postgresql/);
+  assert.match(r.observation, /User \(5 campos\)/);
+  assert.equal(TOOLS.inspect_database.kind, 'database');
+  assert.equal(TOOLS.inspect_database.pathFor({}), 'prisma/schema.prisma');
+});
+
+test('inspect_database treats a missing schema as informational, not an error', async () => {
+  const runner = fakeRunner({ readFile: async () => { throw new Error('ENOENT'); } });
+  const r = await TOOLS.inspect_database.execute({}, { runner, project: 'p1' });
+  assert.equal(r.isError, false);
+  assert.match(r.observation, /no tiene base de datos|no se encontró/i);
+});
+
+test('inspect_database honours an explicit path', async () => {
+  let seen = null;
+  const runner = fakeRunner({ readFile: async (_p, path) => { seen = path; return { content: PRISMA_SCHEMA }; } });
+  await TOOLS.inspect_database.execute({ path: 'db/schema.prisma' }, { runner, project: 'p1' });
+  assert.equal(seen, 'db/schema.prisma');
 });

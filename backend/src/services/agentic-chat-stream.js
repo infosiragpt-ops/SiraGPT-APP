@@ -725,8 +725,8 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       'Usa `rag_retrieve`, `self_rag_answer` o `docintel_*` cuando el usuario mencione archivos, documentos, PDFs, tablas o conocimiento privado.',
       'Si la respuesta depende de hechos que pueden haber cambiado, datos en tiempo real, cifras, fechas, precios, noticias, o de cualquier cosa que no sepas con certeza absoluta, DEBES usar `web_search` (y luego `web_extract` o `read_url` sobre las mejores fuentes) ANTES de responder. Nunca respondas "no tengo información", "no tengo acceso a internet" o "mis datos llegan hasta cierta fecha" sin haber ejecutado primero `web_search`. Cita las fuentes con enlaces markdown.',
       'Para calculos, transformaciones de datos o verificacion deterministica, usa `python_exec`. Cuando generes codigo no trivial, usa `run_tests` antes de finalizar.',
-      'Cuando el usuario pida un archivo descargable, usa `create_document` y despues `verify_artifact`; no finalices si la verificacion muestra un archivo vacio o incorrecto.',
-      'Cuando el usuario pida editar su Word/Excel/PPT/PDF subido, trata el archivo original como solo lectura: crea una nueva copia en el mismo formato, conserva estructura/logos/tablas/formulas/hojas/encabezados/diseño tanto como sea posible, y modifica solo lo solicitado.',
+      'Cuando el usuario pida un archivo descargable, usa `create_document` y despues `verify_artifact`; no finalices si la verificacion muestra un archivo vacio o incorrecto. No finalices con solo texto si pidio crear, descargar, exportar o convertir un Word/Excel/PPT/PDF/SVG/CSV/Markdown.',
+      'Cuando el usuario pida editar su Word/Excel/PPT/PDF subido, usa `document_edit` cuando este disponible. Pasa una sola instruccion completa con TODOS los cambios pedidos (corregir, mejorar, agregar, borrar, reemplazar, completar, formatear o convertir), trata el archivo original como solo lectura, crea una nueva copia en el mismo formato salvo que pida otro, conserva estructura/logos/tablas/formulas/hojas/encabezados/diseno tanto como sea posible, y modifica solo lo solicitado. No finalices con recomendaciones o una lista de cambios sin entregar archivo.',
       'No afirmes que modificaste repositorios, GitHub o el filesystem local si ninguna herramienta disponible lo hizo realmente.',
       attachedDocuments
         ? `\n=== DOCUMENTOS ADJUNTOS POR EL USUARIO (texto ya extraído) ===\nAnaliza este contenido DIRECTAMENTE para responder. NUNCA digas que no tienes acceso al documento ni que el usuario debe reenviarlo: el texto está aquí. Si necesitas más detalle del que aparece (el contenido puede venir recortado), usa \`rag_retrieve\` o \`docintel_*\` sobre estos mismos archivos.\n${attachedDocuments}\n=== FIN DOCUMENTOS ADJUNTOS ===`
@@ -942,13 +942,16 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
         try { onEvent({ type: 'honesty_check', severity: honesty.severity, unsupportedClaims: kinds, executedTools: executed }); } catch (_) { /* noop */ }
         console.warn(`[agentic-chat-stream] honesty_check severity=${honesty.severity} unsupported=${kinds.join(',')} executedTools=${executed.length}`);
       }
-    } catch (_) { /* honesty check must never break the response */ }
+    } catch (err) {
+      try { console.warn('[agentic-chat-stream] honesty check failed:', err && err.message); } catch (_) {}
+      /* honesty check must never break the response */
+    }
 
     // Emit the final sentinel + the answer body. Phase 5: when
     // SIRAGPT_AGENTIC_STREAM_FINAL is enabled, token-stream the answer
     // progressively (the agentic path otherwise dumps the whole answer in one
-    // frame). Default off → original single-frame behavior. Hard fallback so
-    // streaming can never break the response.
+    // frame). Default ON → progressive streaming; set =0 to restore the
+    // single-frame behavior. Hard fallback so streaming can never break the response.
     try {
       // eslint-disable-next-line global-require
       const finalStreamer = require('./agentic-final-streamer');

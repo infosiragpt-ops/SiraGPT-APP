@@ -18,12 +18,10 @@ test("client upload policy accepts modern .xlsx uploads", () => {
   assert.equal(browserOctetStream.ok, true)
 })
 
-test("client upload policy rejects legacy binary .xls uploads", () => {
-  const rejected = validateFile(makeFile("legacy.xls", XLS_MIME))
+test("client upload policy accepts legacy binary .xls uploads", () => {
+  const accepted = validateFile(makeFile("legacy.xls", XLS_MIME))
 
-  assert.equal(rejected.ok, false)
-  assert.equal(rejected.code, "type_not_allowed")
-  assert.match(rejected.reason || "", /application\/vnd\.ms-excel|xls/i)
+  assert.equal(accepted.ok, true)
 })
 
 test("client upload policy keeps pasted image blobs uploadable with a generated filename", () => {

@@ -9,7 +9,7 @@ import React, { useState } from "react"
 import clsx from "clsx"
 import { useTranslations } from "next-intl"
 import { ChevronDown, ChevronRight, Terminal, FileText, FilePen, Globe, Sparkles, Check, X } from "lucide-react"
-import { DotmCircular15 } from "@/components/ui/dotm-circular-15"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { CustomCodeBlock } from "@/components/ui/custom-code-block"
 import type { ActionItem } from "@/lib/codex/timeline-reducer"
 
@@ -25,7 +25,7 @@ function iconForKind(kind: string) {
 }
 
 function StatusGlyph({ status }: { status: ActionItem["status"] }) {
-  if (status === "running") return <DotmCircular15 className="h-3.5 w-3.5 text-violet-400" />
+  if (status === "running") return <ThinkingIndicator size="xs" label="Ejecutando" />
   if (status === "error") return <X className="h-3.5 w-3.5 text-red-400" />
   return <Check className="h-3.5 w-3.5 text-emerald-400" />
 }
@@ -56,7 +56,7 @@ export function ActionChipsRow({ actions }: { actions: ActionItem[] }) {
           })}
         </span>
         <span className="tabular-nums">{t("timeline.actions", { count: n })}</span>
-        {running && <DotmCircular15 className="h-3 w-3 text-violet-400" />}
+        {running && <ThinkingIndicator size="xs" label="Ejecutando" />}
       </button>
 
       {expanded && (

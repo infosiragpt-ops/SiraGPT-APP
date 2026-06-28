@@ -267,6 +267,10 @@ function scoreFaithfulness({ response = '', context = [] } = {}) {
   return {
     score: Math.round(score * 100) / 100,
     grade,
+    // Whether any grounding evidence was supplied. When false the score is
+    // meaningless (every claim is "unsupported" simply because there was
+    // nothing to check against) — callers should not gate on it.
+    hasContext,
     supported,
     unsupported,
     numbers,

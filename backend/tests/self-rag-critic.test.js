@@ -197,3 +197,19 @@ test('critique: weights influence overallScore', async () => {
   });
   assert.ok(highUse.overall.overallScore > lowUse.overall.overallScore);
 });
+
+test('critique: all-zero weights yield a finite overallScore (no NaN divide-by-zero)', async () => {
+  const openai = scripted([
+    JSON.stringify({ isRel: 'relevant', reason: '' }),
+    JSON.stringify({ isSup: 'fully_supported', cited: 1, reason: '' }),
+    JSON.stringify({ isUse: 5, reason: '' }),
+  ]);
+  const r = await critic.critique({
+    openai,
+    question: 'q', answer: 'A claim.',
+    passages: [{ source: 'p', text: 'p' }],
+    weights: { wRel: 0, wSup: 0, wUse: 0 }, // denominator would be 0
+  });
+  assert.ok(Number.isFinite(r.overall.overallScore), `overallScore must be finite, got ${r.overall.overallScore}`);
+  assert.equal(r.overall.overallScore, 0);
+});

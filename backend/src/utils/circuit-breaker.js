@@ -131,6 +131,15 @@ class RollingCounter {
 
   increment() {
     this._prune();
+    if (!this[kWinMs]) {
+      // Lifetime mode (no window → _prune is a no-op): aggregate into a SINGLE
+      // entry so memory stays O(1). Pushing one object per increment leaked
+      // unboundedly (kSuccesses is always windowMs=0; kFailures is too when
+      // configured for lifetime counting).
+      if (this[kWindow].length === 0) this[kWindow].push({ t: Date.now(), v: 0 });
+      this[kWindow][0].v += 1;
+      return;
+    }
     this[kWindow].push({ t: Date.now(), v: 1 });
   }
 
@@ -221,8 +230,11 @@ class CircuitBreaker extends EventEmitter {
         this._onFailure(err);
         throw err;
       }
-      // External abort — don't count as a failure
-      if (err && externalSignal && externalSignal.aborted) {
+      // External abort — don't count as a failure. Gate on the SIGNAL, not the
+      // error value: an abort can surface as a falsy/empty error (e.g. a bare
+      // `throw` or a null reason), which the old `err && …` guard let fall
+      // through and be mis-counted as a circuit failure.
+      if (externalSignal && externalSignal.aborted) {
         throw err;
       }
       this._onFailure(err);

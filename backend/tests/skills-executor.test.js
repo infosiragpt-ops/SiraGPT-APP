@@ -66,6 +66,22 @@ test('executeSkill surfaces prerequisite failures', async () => {
   });
 });
 
+test('executeSkill formats a missing[] prerequisite as a string error (not the raw array)', async () => {
+  // The real verifyPrerequisites returns { ok:false, missing:[…] } with no
+  // `reason`; error used to be the raw array, violating the string contract.
+  await withRegistryStubs({
+    skills: { deep_document_analysis: { id: 'deep_document_analysis' } },
+    prereq: { ok: false, missing: ['attached_document', 'extracted_text'] },
+  }, async () => {
+    const out = await executeSkill('deep_document_analysis', {});
+    assert.equal(out.ok, false);
+    assert.equal(typeof out.error, 'string', 'error must be a string');
+    assert.match(out.error, /attached_document/);
+    assert.match(out.error, /extracted_text/);
+    assert.deepEqual(out.missing, ['attached_document', 'extracted_text']);
+  });
+});
+
 test('executeSkill returns no_handler when the skill has no matching HANDLERS entry', async () => {
   await withRegistryStubs({
     skills: { exotic_skill: { id: 'exotic_skill' } },
@@ -157,6 +173,17 @@ test('executeRecommendedSkills tolerates non-array recommendations', async () =>
     const out = await executeRecommendedSkills('intent', {});
     assert.deepEqual(out, []);
   });
+});
+
+test('executeRecommendedSkills degrades to no-skills when recommendSkills throws', async () => {
+  const orig = skillsRegistry.recommendSkills;
+  skillsRegistry.recommendSkills = () => { throw new TypeError('boom'); };
+  try {
+    const out = await executeRecommendedSkills({ query: 'x' }, {});
+    assert.deepEqual(out, [], 'a throwing recommendation must not propagate — degrade to []');
+  } finally {
+    skillsRegistry.recommendSkills = orig;
+  }
 });
 
 test('executeRecommendedSkills resolves skill ids from multiple shapes', async () => {

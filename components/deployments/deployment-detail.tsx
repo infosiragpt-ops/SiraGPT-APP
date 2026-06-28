@@ -32,9 +32,13 @@ const PENDING_PAYMENT_BANNER =
 export function DeploymentDetail({
   detail,
   onRefetch,
+  autoPublishSignal = 0,
+  onAutoPublishConsumed,
 }: {
   detail: DeploymentDetailData
   onRefetch: () => void
+  autoPublishSignal?: number
+  onAutoPublishConsumed?: () => void
 }) {
   const { deployment, versions, domains } = detail
   const [tab, setTab] = React.useState<DetailTab>("overview")
@@ -45,6 +49,10 @@ export function DeploymentDetail({
   const isSuspended = deployment.status === "suspended"
   const contentClassName =
     tab === "logs" ? "h-full w-full" : tab === "overview" ? "w-full px-7 py-3" : "w-full px-3 py-0"
+
+  React.useEffect(() => {
+    if (autoPublishSignal) setTab("overview")
+  }, [autoPublishSignal])
 
   const resume = async () => {
     setResuming(true)
@@ -145,6 +153,8 @@ export function DeploymentDetail({
                 domains={domains}
                 onRefetch={onRefetch}
                 onNavigate={setTab}
+                autoPublishSignal={autoPublishSignal}
+                onAutoPublishConsumed={onAutoPublishConsumed}
               />
             </TabsContent>
             <TabsContent value="logs" className="mt-0 h-full">

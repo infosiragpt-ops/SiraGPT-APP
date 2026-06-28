@@ -29,6 +29,10 @@ const { authenticateToken } = require('../middleware/auth');
 
 const router = express.Router({ mergeParams: true });
 
+// Cap the document-list scan so a project with many large docs can't load an
+// unbounded number of full bodies into memory on one GET (newest-first).
+const DOCUMENTS_LIST_LIMIT = Number(process.env.PROJECT_DOCUMENTS_LIST_LIMIT) || 200;
+
 router.use(authenticateToken);
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
@@ -71,28 +75,24 @@ router.get('/', param('projectId').isString(), async (req, res) => {
     if (!(await ownProject(req.user.id, projectId))) {
       return res.status(404).json({ error: 'Project not found' });
     }
+    // Single bounded query: fetch content alongside the metadata and slice the
+    // snippet in JS. The previous version ran an N+1 (one findUnique per doc,
+    // each pulling the full ~500KB content) AND had no take cap — a project with
+    // many large docs drove N round-trips and loaded every full body into memory.
     const documents = await prisma.projectDocument.findMany({
       where: { projectId },
       orderBy: { updatedAt: 'desc' },
-      // Don't ship the full content in the list — docs can be
-      // hundreds of KB. The first page of each is enough for a
-      // preview snippet; the full body comes via GET /:docId.
+      take: DOCUMENTS_LIST_LIMIT,
       select: {
         id: true, title: true, createdAt: true, updatedAt: true,
-        meta: true,
+        meta: true, content: true,
       },
     });
-    // Attach a short snippet by fetching only the first N chars.
-    // Separate query to avoid loading full content into memory for
-    // projects with many/large docs.
-    const withSnippets = await Promise.all(documents.map(async (d) => {
-      const full = await prisma.projectDocument.findUnique({
-        where: { id: d.id },
-        select: { content: true },
-      });
-      const snippet = (full?.content || '').replace(/\s+/g, ' ').trim().slice(0, 240);
-      return { ...d, snippet };
-    }));
+    const withSnippets = documents.map((d) => {
+      const snippet = (d.content || '').replace(/\s+/g, ' ').trim().slice(0, 240);
+      const { content, ...rest } = d;
+      return { ...rest, snippet };
+    });
     res.json({ documents: withSnippets });
   } catch (err) {
     console.error('[project-documents] list error:', err);

@@ -125,6 +125,9 @@ model User {
   apiUsages               ApiUsage[]
   sessions                Session[]
   files                   File[]
+  documentCollections     DocumentCollection[]
+  collectionDocuments     CollectionDocument[]
+  documentCollectionChunks DocumentCollectionChunk[]
   createdGpts             CustomGpt[]
   projects                Project[]
   designs                 DesignProject[]
@@ -183,6 +186,8 @@ model User {
   githubAccount         GithubAccount?
   connectedRepositories ConnectedRepository[]
   workspaces            Workspace[]
+  hostingTargets        HostingTarget[]
+  deployEnvs            DeployEnv[]
 
   @@index([deletedAt])
   @@map("users")
@@ -252,7 +257,9 @@ model ConnectedRepository {
   connectedAt DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  workspace Workspace?
+  workspace   Workspace?
+  deployments Deployment[]
+  deployEnv   DeployEnv?
 
   @@unique([userId, repoId])
   @@index([userId])
@@ -278,6 +285,53 @@ model Workspace {
 
   @@index([userId])
   @@map("workspaces")
+}
+
+// ──────────────────────────────────────────────────────────────
+// Publishing — deploy a connected repo's build to Hostinger (or any
+// SFTP/FTP host). Credentials are AES-256 sealed (services/TokenVault.js /
+// services/hosting/credentials.js) before they reach `encryptedCreds`.
+// ──────────────────────────────────────────────────────────────
+
+model HostingTarget {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  provider       String  @default("hostinger") // hostinger | generic
+  label          String // user-friendly name
+  protocol       String  @default("sftp") // sftp | ftp | ftps
+  host           String
+  port           Int     @default(22)
+  username       String
+  encryptedCreds String // sealed JSON: { password? , privateKey? , passphrase? }
+  remoteBaseDir  String  @default("/public_html") // remote target directory
+  siteUrl        String? // https://your-domain — shown as the live URL
+
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  deployments Deployment[]
+
+  @@index([userId])
+  @@map("hosting_targets")
+}
+
+// Build-time env vars / secrets for a project's deploys (Replit "deployment
+// secrets"). One sealed JSON blob per connected repo. AES-256 at rest.
+model DeployEnv {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  connectedRepositoryId String              @unique
+  connectedRepository   ConnectedRepository @relation(fields: [connectedRepositoryId], references: [id], onDelete: Cascade)
+
+  encryptedEnv String // sealed JSON: { KEY: value, ... }
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([userId])
+  @@map("deploy_envs")
 }
 
 model AiModel {
@@ -892,6 +946,8 @@ model File {
   user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   documentAnalysis DocumentAnalysis?
   documentChunks   DocumentChunk[]
+  collectionDocuments CollectionDocument[]
+  collectionChunks    DocumentCollectionChunk[]
   documentTables   DocumentTable[]
   documentNodes    DocumentNode[]
 
@@ -970,6 +1026,70 @@ model DocumentChunk {
   @@index([analysisId, ordinal])
   @@index([fileId, ordinal])
   @@map("document_chunks")
+}
+
+model DocumentCollection {
+  id          String   @id @default(cuid())
+  ownerId     String   @map("owner_id")
+  name        String
+  description String?  @db.Text
+  status      String   @default("ready")
+  docCount    Int      @default(0) @map("doc_count")
+  chunkCount  Int      @default(0) @map("chunk_count")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  owner     User                      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  documents CollectionDocument[]
+  chunks    DocumentCollectionChunk[]
+
+  @@index([ownerId, createdAt])
+  @@map("document_collections")
+}
+
+model CollectionDocument {
+  id           String   @id @default(cuid())
+  collectionId String   @map("collection_id")
+  documentId   String   @map("document_id")
+  ownerId      String   @map("owner_id")
+  status       String   @default("queued")
+  chunkCount   Int      @default(0) @map("chunk_count")
+  lastError    String?  @map("last_error") @db.Text
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  collection DocumentCollection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  document   File               @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  owner      User               @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@unique([collectionId, documentId])
+  @@index([ownerId, status])
+  @@index([documentId])
+  @@map("collection_documents")
+}
+
+model DocumentCollectionChunk {
+  id           String                 @id @default(cuid())
+  collectionId String                 @map("collection_id")
+  documentId   String                 @map("document_id")
+  ownerId      String                 @map("owner_id")
+  content      String                 @db.Text
+  page         Int?
+  offset       Int?
+  tokenCount   Int                    @default(0) @map("token_count")
+  contentHash  String                 @map("content_hash")
+  metadata     Json?
+  createdAt    DateTime               @default(now()) @map("created_at")
+
+  collection DocumentCollection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  document   File               @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  owner      User               @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@unique([collectionId, documentId, contentHash])
+  @@index([collectionId, contentHash])
+  @@index([ownerId, collectionId])
+  @@index([documentId])
+  @@map("document_collection_chunks")
 }
 
 model DocumentTable {
@@ -2126,7 +2246,19 @@ model Deployment {
   id        String  @id @default(cuid())
   userId    String
   projectId String? // optional link to a Project (webapp)
-  name      String
+  name      String  @default("Deployment")
+
+  // Optional real-hosting linkage used by the Hostinger/SFTP publisher.
+  connectedRepositoryId String?
+  hostingTargetId       String?
+  branch                String?
+  outputDir             String?
+  remotePath            String?
+  url                   String?
+  error                 String?
+  logTail               String? @db.Text
+  startedAt             DateTime?
+  finishedAt            DateTime?
 
   // autoscale | reserved_vm | static | scheduled
   deploymentType  String  @default("autoscale")
@@ -2161,13 +2293,17 @@ model Deployment {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  user     User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  versions DeploymentVersion[]
-  domains  DeploymentDomain[]
-  logs     DeploymentLog[]
+  user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  connectedRepository ConnectedRepository?  @relation(fields: [connectedRepositoryId], references: [id], onDelete: Cascade)
+  hostingTarget       HostingTarget?        @relation(fields: [hostingTargetId], references: [id], onDelete: Cascade)
+  versions            DeploymentVersion[]
+  domains             DeploymentDomain[]
+  logs                DeploymentLog[]
 
   @@index([userId, updatedAt])
   @@index([userId, deletedAt])
+  @@index([connectedRepositoryId])
+  @@index([hostingTargetId])
   @@map("deployments")
 }
 
@@ -2694,7 +2830,7 @@ model AccountingInvoice {
 model AccountingInvoiceLine {
   id          String  @id @default(cuid())
   invoiceId   String
-  productId   String?
+  productId    String?
   code        String?
   description String
   quantity    Decimal @default(1) @db.Decimal(18, 4)

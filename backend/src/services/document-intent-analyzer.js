@@ -114,7 +114,9 @@ async function analyzeSingleDocument(doc, opts = {}) {
     if (parsed && parsed.intent) {
       return {
         intent: parsed.intent,
-        confidence: Math.min(1, Math.max(0, parsed.confidence || 0.5)),
+        // Nullish guard — a valid LLM confidence of 0 ("no idea") must not be
+        // coerced to 0.5 by `|| 0.5`.
+        confidence: Math.min(1, Math.max(0, Number.isFinite(parsed.confidence) ? parsed.confidence : 0.5)),
         docType: parsed.docType || heuristics.docType,
         summary: parsed.summary || heuristics.summary,
         keywords: Array.isArray(parsed.keywords) ? parsed.keywords.slice(0, 8) : heuristics.keywords,
@@ -166,9 +168,12 @@ async function analyzeBatch(docs, opts = {}) {
     })))
   );
 
-  // Determine primary intent (most common)
+  // Determine primary intent (most common). UNKNOWN is excluded from the tally
+  // so a batch of mostly-unclassified docs doesn't let 'unknown' beat a real
+  // intent; fall back to UNKNOWN only when nothing real was detected.
   const intentCounts = {};
   for (const fa of fileAnalyses) {
+    if (fa.intent === INTENT_TYPES.UNKNOWN) continue;
     intentCounts[fa.intent] = (intentCounts[fa.intent] || 0) + 1;
   }
   const primaryIntent = Object.entries(intentCounts)
@@ -180,9 +185,11 @@ async function analyzeBatch(docs, opts = {}) {
   // Generate a batch id for storage
   const batchId = `batch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-  // Store the analysis
+  // Store the analysis. Stamp the owner so getUserAnalyses can scope by user
+  // (it previously returned every user's batches).
   const entry = {
     batchId,
+    userId: opts.userId || null,
     createdAt: new Date().toISOString(),
     primaryIntent,
     crossDocSummary,
@@ -229,7 +236,7 @@ async function analyzeFromPrisma(prisma, userId, fileIds, opts = {}) {
     size: r.size,
   }));
 
-  return analyzeBatch(docs, opts);
+  return analyzeBatch(docs, { ...opts, userId });
 }
 
 // ── Getters ───────────────────────────────────────────────────────────────
@@ -245,9 +252,12 @@ function getBatchAnalysis(batchId) {
  * Retrieve all stored batch analyses for a user (prefix match).
  */
 function getUserAnalyses(userId) {
+  if (!userId) return [];
   const results = [];
   for (const entry of intentStore.values()) {
-    if (entry.fileAnalyses?.length > 0 && entry.createdAt) {
+    // Scope to the requesting user — returning every user's batches was a
+    // cross-user data leak.
+    if (entry.userId === userId && entry.fileAnalyses?.length > 0 && entry.createdAt) {
       results.push(entry);
     }
   }
@@ -302,6 +312,10 @@ function analyzeHeuristics(text, name, mime) {
   for (const [type, keywords] of Object.entries(INTENT_KEYWORDS)) {
     let score = 0;
     for (const kw of keywords) {
+      // Substring match is intentional here: it catches inflected forms across
+      // ES/EN (documento→document, conclusiones→conclusion) the heuristic relies
+      // on (see the Spanish-summarize test). A word-boundary variant caused worse
+      // false-negatives than the rare substring false-positive.
       if (lower.includes(kw) || nameLower.includes(kw)) score += 2;
     }
     if (score > maxScore) {

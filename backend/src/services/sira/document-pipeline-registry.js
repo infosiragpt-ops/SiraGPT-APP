@@ -55,7 +55,7 @@ const PARSERS = Object.freeze([
   { id: "python-pptx",  formats: ["pptx"],           language: "python", runtime: "library",  ocr: false, layout: true,  tables: true,  formulas: false, reading_order: true,  preference: 90 },
 
   // ── HTML / Markdown ────────────────────────────────────────────
-  { id: "markitdown",   formats: ["html","htm","md","docx","pptx","xlsx","pdf"], language: "python", runtime: "library", ocr: false, layout: true, tables: true, formulas: false, reading_order: true, preference: 90 },
+  { id: "markitdown",   formats: ["html","htm","md","docx","doc","pptx","ppt","xlsx","pdf"], language: "python", runtime: "library", ocr: false, layout: true, tables: true, formulas: false, reading_order: true, preference: 90 },
   { id: "unified",      formats: ["md","html"],      language: "node",   runtime: "library",  ocr: false, layout: false, tables: true,  formulas: false, reading_order: true,  preference: 80 },
 
   // ── OCR ────────────────────────────────────────────────────────
@@ -428,9 +428,12 @@ function validateGeneratorPlan(format, plan) {
     return { ok: false, issues };
   }
 
-  // Tabular formats expect rows
+  // Tabular formats expect rows. The generator (text-writers `tabularize`)
+  // accepts `records` (array of objects) just as readily as `rows`, so the
+  // validator must too — otherwise a perfectly renderable
+  // `{ records: [{...}] }` CSV plan was rejected as tabular_plan_needs_rows.
   if (["csv", "tsv", "xlsx"].includes(fmt)) {
-    const rows = plan.rows || plan.data || (Array.isArray(plan) ? plan : null);
+    const rows = plan.rows || plan.records || plan.data || (Array.isArray(plan) ? plan : null);
     if (!Array.isArray(rows) || rows.length === 0) {
       issues.push("tabular_plan_needs_rows");
     }
@@ -645,8 +648,10 @@ function contentQualityScore(content, format, options = {}) {
  * Returns advisory hints about the chosen format for the given use-case.
  */
 function formatAdvice(format, useCase = '') {
-  const lower = format ? format.toLowerCase() : '';
-  const uc = useCase.toLowerCase();
+  // Coerce defensively — a non-string truthy `format`/`useCase` (number, object)
+  // used to throw `.toLowerCase is not a function`.
+  const lower = format ? String(format).toLowerCase() : '';
+  const uc = String(useCase || '').toLowerCase();
 
   const advice = {
     best: lower,

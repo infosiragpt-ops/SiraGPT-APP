@@ -50,7 +50,7 @@ async function persistAssetsToR2(userId, assets) {
     if (!objectStorage.enabled()) { urls.push(src); continue; }
     try {
       const resp = await fetch(src, { signal: AbortSignal.timeout(Number(process.env.ASSET_FETCH_TIMEOUT_MS) || 30000) });
-      if (!resp.ok) { urls.push(src); continue; }
+      if (!resp.ok) { try { await resp.body?.cancel?.(); } catch { /* noop */ } urls.push(src); continue; }
       const buf = Buffer.from(await resp.arrayBuffer());
       const ct = resp.headers.get('content-type') || 'image/png';
       const ext = ct.includes('jpeg') ? 'jpg' : ct.includes('webp') ? 'webp' : ct.includes('gif') ? 'gif' : 'png';
@@ -174,28 +174,37 @@ router.post(
     }
     const data = parse.data;
     const charge = req._chargedCredits;
-    const dbRow = await prisma.generatedImage.create({
-      data: {
-        userId: req.user.id,
-        chatId: data.chatId || null,
-        messageId: data.messageId || null,
-        prompt: data.prompt,
-        negativePrompt: data.negativePrompt || null,
-        provider: data.provider || imageProvider.DEFAULT_PROVIDER,
-        model: data.model || (data.provider === 'openai' ? 'dall-e-3' : 'mock-v1'),
-        size: data.size || '1024x1024',
-        n: data.n || 1,
-        seed: data.seed != null ? BigInt(data.seed) : null,
-        quality: data.quality || null,
-        style: data.style || null,
-        status: 'PENDING',
-        costCredits: charge ? BigInt(charge.amount) : BigInt(0),
-        kind: 'original',
-      },
-    });
-    // Drive the provider call inline. For real prod we'd push to BullMQ.
-    const { row } = await runGenerationAndPersist(req, dbRow, data);
-    res.status(201).json({ image: serializeImage(row), charge: charge ? { amount: String(charge.amount), transactionId: charge.txn?.id } : null });
+    // Refund the already-charged credits if persistence/generation throws before
+    // a row exists (DB error), then re-throw to preserve the existing 500. The
+    // happy path never throws, and runGenerationAndPersist only refunds on its
+    // normal-return paths, so this can't double-refund.
+    try {
+      const dbRow = await prisma.generatedImage.create({
+        data: {
+          userId: req.user.id,
+          chatId: data.chatId || null,
+          messageId: data.messageId || null,
+          prompt: data.prompt,
+          negativePrompt: data.negativePrompt || null,
+          provider: data.provider || imageProvider.DEFAULT_PROVIDER,
+          model: data.model || (data.provider === 'openai' ? 'dall-e-3' : 'mock-v1'),
+          size: data.size || '1024x1024',
+          n: data.n || 1,
+          seed: data.seed != null ? BigInt(data.seed) : null,
+          quality: data.quality || null,
+          style: data.style || null,
+          status: 'PENDING',
+          costCredits: charge ? BigInt(charge.amount) : BigInt(0),
+          kind: 'original',
+        },
+      });
+      // Drive the provider call inline. For real prod we'd push to BullMQ.
+      const { row } = await runGenerationAndPersist(req, dbRow, data);
+      res.status(201).json({ image: serializeImage(row), charge: charge ? { amount: String(charge.amount), transactionId: charge.txn?.id } : null });
+    } catch (err) {
+      await refundLastCharge(req, 'persist_error');
+      throw err;
+    }
   },
 );
 
@@ -215,7 +224,10 @@ router.get('/jobs/:id', authenticateToken, async (req, res, next) => {
 // ── GET /api/images/history ────────────────────────────────────────
 router.get('/history', authenticateToken, async (req, res, next) => {
   try {
-    const limit = Math.min(parseInt(req.query.limit, 10) || 24, 100);
+    // Clamp to [1,100]: `parseInt || 24` turned an explicit 0 into 24, and a
+    // negative ?limit slipped through to Prisma's `take` (negative take reverses
+    // pagination).
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit, 10) || 24, 100));
     const cursor = req.query.cursor ? { id: String(req.query.cursor) } : undefined;
     const rows = await prisma.generatedImage.findMany({
       where: { userId: req.user.id, deletedAt: null },
@@ -249,29 +261,35 @@ router.post(
       return res.status(404).json({ error: 'parent image not found' });
     }
     const charge = req._chargedCredits;
-    const dbRow = await prisma.generatedImage.create({
-      data: {
-        userId: req.user.id,
-        chatId: parent.chatId,
+    // Refund the already-charged credits if persistence/generation throws (see /jobs).
+    try {
+      const dbRow = await prisma.generatedImage.create({
+        data: {
+          userId: req.user.id,
+          chatId: parent.chatId,
+          prompt: parent.prompt,
+          provider: parent.provider,
+          model: parent.model,
+          size: parent.size,
+          n: parse.data.n,
+          status: 'PENDING',
+          costCredits: charge ? BigInt(charge.amount) : BigInt(0),
+          kind: 'variation',
+          parentImageId: parent.id,
+        },
+      });
+      const { row } = await runGenerationAndPersist(req, dbRow, {
         prompt: parent.prompt,
+        n: parse.data.n,
+        size: parent.size,
         provider: parent.provider,
         model: parent.model,
-        size: parent.size,
-        n: parse.data.n,
-        status: 'PENDING',
-        costCredits: charge ? BigInt(charge.amount) : BigInt(0),
-        kind: 'variation',
-        parentImageId: parent.id,
-      },
-    });
-    const { row } = await runGenerationAndPersist(req, dbRow, {
-      prompt: parent.prompt,
-      n: parse.data.n,
-      size: parent.size,
-      provider: parent.provider,
-      model: parent.model,
-    });
-    res.status(201).json({ image: serializeImage(row) });
+      });
+      res.status(201).json({ image: serializeImage(row) });
+    } catch (err) {
+      await refundLastCharge(req, 'persist_error');
+      throw err;
+    }
   },
 );
 
@@ -298,29 +316,35 @@ router.post(
       ? `${Number(sizeMatch[1]) * factor}x${Number(sizeMatch[2]) * factor}`
       : parent.size;
     const charge = req._chargedCredits;
-    const dbRow = await prisma.generatedImage.create({
-      data: {
-        userId: req.user.id,
-        chatId: parent.chatId,
+    // Refund the already-charged credits if persistence/generation throws (see /jobs).
+    try {
+      const dbRow = await prisma.generatedImage.create({
+        data: {
+          userId: req.user.id,
+          chatId: parent.chatId,
+          prompt: parent.prompt,
+          provider: parent.provider,
+          model: parent.model,
+          size: newSize,
+          n: 1,
+          status: 'PENDING',
+          costCredits: charge ? BigInt(charge.amount) : BigInt(0),
+          kind: 'upscale',
+          parentImageId: parent.id,
+        },
+      });
+      const { row } = await runGenerationAndPersist(req, dbRow, {
         prompt: parent.prompt,
+        n: 1,
+        size: newSize,
         provider: parent.provider,
         model: parent.model,
-        size: newSize,
-        n: 1,
-        status: 'PENDING',
-        costCredits: charge ? BigInt(charge.amount) : BigInt(0),
-        kind: 'upscale',
-        parentImageId: parent.id,
-      },
-    });
-    const { row } = await runGenerationAndPersist(req, dbRow, {
-      prompt: parent.prompt,
-      n: 1,
-      size: newSize,
-      provider: parent.provider,
-      model: parent.model,
-    });
-    res.status(201).json({ image: serializeImage(row) });
+      });
+      res.status(201).json({ image: serializeImage(row) });
+    } catch (err) {
+      await refundLastCharge(req, 'persist_error');
+      throw err;
+    }
   },
 );
 

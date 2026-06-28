@@ -109,7 +109,8 @@ const PREFETCH_PENDING = Symbol('prefetch_pending');
  * returning a Map<call.id, dispatchResult | {__pending: Promise}>. Mutating
  * calls are skipped here (they run inline, sequentially, in the main loop).
  * Bounded by TOOL_PARALLEL_MAX; each batch waits at most
- * PREFETCH_CALL_TIMEOUT_MS for stragglers (partial results, never a stall).
+ * prefetchCallTimeoutMs() (env SIRAGPT_TOOL_PREFETCH_TIMEOUT_MS, default 8000)
+ * for stragglers (partial results, never a stall).
  */
 async function prefetchParallelDispatch(registry, toolCalls, ctx, exhaustedTools) {
   const out = new Map();
@@ -590,7 +591,10 @@ function compactMessages(messages, opts = {}) {
     ? Math.floor(opts.tailRounds)
     : DEFAULT_COMPACT_TAIL_ROUNDS;
 
-  if (estimateMessagesChars(messages) <= maxChars) return messages;
+  // Stringifying the whole trace is expensive (JSON.stringify per message);
+  // compute it once and reuse for the post-compaction comparison below.
+  const originalChars = estimateMessagesChars(messages);
+  if (originalChars <= maxChars) return messages;
 
   // Head: leading non-assistant messages (system + first user query).
   let headEnd = 0;
@@ -631,7 +635,7 @@ function compactMessages(messages, opts = {}) {
 
   const compacted = head.concat([summaryMessage], ...tail);
   // Only adopt the compacted form if it genuinely shrinks the payload.
-  if (estimateMessagesChars(compacted) >= estimateMessagesChars(messages)) return messages;
+  if (estimateMessagesChars(compacted) >= originalChars) return messages;
   return compacted;
 }
 
@@ -712,6 +716,25 @@ function buildDegradedAnswer(stoppedReason) {
   }
   // max_steps, empty reason, guard-blocked, anything else.
   return 'No logré cerrar la tarea dentro del presupuesto de pasos disponible. Te respondo con lo que alcancé a determinar; si necesitas más profundidad, reformula la solicitud o divídela en partes más pequeñas.';
+}
+
+function sanitizeFinalAnswerDiagnostics(answer) {
+  const raw = String(answer == null ? '' : answer);
+  if (!raw.trim()) return '';
+  const withoutVerificationNotes = raw
+    .replace(
+      /(?:^|\n)\s*(?:>\s*)?(?:[_*]{1,3})?\s*nota\s+sobre\s+verificaci[oó]n\s*:?\s*[\s\S]*?(?=\n{2,}|$)/gi,
+      '\n'
+    );
+  const riskyInternalDetail = /(?:\bmissing_scopes\b|\bdocintel_(?:analyze|retrieve)\b|error de autorizaci[oó]n del servidor|herramientas de an[aá]lisis documental profundo)/i;
+  const cleaned = withoutVerificationNotes
+    .split(/\n{2,}/)
+    .filter((paragraph) => !riskyInternalDetail.test(paragraph))
+    .join('\n\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return cleaned;
 }
 
 /**
@@ -911,7 +934,7 @@ async function run(openai, opts) {
     // total size — old state misleads more than it helps, and the duplicate
     // cache below restores any elided result the model genuinely re-needs.
     if (!OBS_ELIDE_DISABLED) {
-      try { elideStaleObservations(messages); } catch { /* aging must never break the loop */ }
+      try { elideStaleObservations(messages); } catch (err) { try { console.warn('[react-agent] observation aging failed:', err && err.message); } catch { /* noop */ } /* aging must never break the loop */ }
     }
 
     // Deferred tools activated on the previous step → refresh the schema
@@ -1150,7 +1173,10 @@ async function run(openai, opts) {
         if (prefetched.size > 1) {
           console.log(`[react-agent] parallel-dispatched ${prefetched.size} read-only tools (step ${step})`);
         }
-      } catch (_prefetchErr) { prefetched = new Map(); }
+      } catch (_prefetchErr) {
+        try { console.warn('[react-agent] parallel prefetch failed; running sequentially:', _prefetchErr && _prefetchErr.message); } catch { /* noop */ }
+        prefetched = new Map();
+      }
     }
 
     for (const call of toolCalls) {
@@ -1202,9 +1228,14 @@ async function run(openai, opts) {
       // asked for (so re-reading after observation aging still works) plus an
       // explicit do-not-repeat warning; persistent repeats trip the same
       // forced-finalize escape as exhausted-tool re-polling.
-      if (toolName !== 'finalize' && isParallelSafeTool(toolName)) {
-        const sig = toolCallSignature(toolName, call.function?.arguments);
-        const cached = dupCallCache.get(sig);
+      // Compute the duplicate-cache signature once per iteration (pure fn of
+      // name+args, which are never mutated below) and reuse it at the store site
+      // instead of recomputing the stableSchemaKey walk.
+      const dupSig = (toolName !== 'finalize' && isParallelSafeTool(toolName))
+        ? toolCallSignature(toolName, call.function?.arguments)
+        : null;
+      if (dupSig !== null) {
+        const cached = dupCallCache.get(dupSig);
         if (cached) {
           duplicateRepolls += 1;
           if (duplicateRepolls >= EXHAUSTED_REPOLL_LIMIT && !forceFinalize) {
@@ -1366,7 +1397,7 @@ async function run(openai, opts) {
         if (dupCallCache.size >= DUP_CALL_CACHE_MAX) {
           dupCallCache.delete(dupCallCache.keys().next().value);
         }
-        dupCallCache.set(toolCallSignature(toolName, call.function?.arguments), { step, content: obsContent });
+        dupCallCache.set(dupSig, { step, content: obsContent });
       }
 
       if (toolName === 'finalize' && !dispatch.error && !observation.error) {
@@ -1392,20 +1423,29 @@ async function run(openai, opts) {
   // surfaced as a `status:'completed'` message with no body (the `if
   // (finalMarkdown)` gate dropped it). Always hand back a short, honest
   // degraded answer so the caller has something real to show.
+  finalAnswer = sanitizeFinalAnswerDiagnostics(finalAnswer);
+
   if (finalAnswer == null || String(finalAnswer).trim() === '') {
     if (exhaustedTools.size > 0) {
       const toolList = Array.from(exhaustedTools).join(', ');
-      finalAnswer = `No pude usar ${toolList} en esta tarea (falló de forma repetida). Te respondo con la información disponible; si necesitas más precisión, vuelve a intentarlo o reformula la solicitud.`;
+      finalAnswer = 'Una herramienta interna necesaria para esta tarea falló de forma repetida. Te respondo con la información disponible; si necesitas más precisión, vuelve a intentarlo o acota la solicitud.';
       if (!stoppedReason || stoppedReason === 'max_steps') {
         stoppedReason = `degraded_no_finalize:${toolList}`;
       }
     } else {
       finalAnswer = buildDegradedAnswer(stoppedReason);
       if (!stoppedReason || stoppedReason === 'max_steps') {
-        stoppedReason = stoppedReason || 'degraded_no_finalize';
+        // Unconditional: `stoppedReason || 'degraded_no_finalize'` kept
+        // 'max_steps' (truthy left operand), so a run that hit the step cap
+        // without ever finalising reported a plain 'max_steps' instead of the
+        // degraded-no-finalize signal (cf. the exhaustedTools branch above,
+        // which assigns degraded_no_finalize:… unconditionally).
+        stoppedReason = 'degraded_no_finalize';
       }
     }
   }
+
+  finalAnswer = sanitizeFinalAnswerDiagnostics(finalAnswer);
 
   return { finalAnswer, steps, stoppedReason, exhaustedTools: Array.from(exhaustedTools) };
 }
@@ -1423,6 +1463,7 @@ module.exports = {
   parseNativeToolCalls,
   hasNativeToolCalls,
   stripNativeToolCallMarkup,
+  sanitizeFinalAnswerDiagnostics,
   // Tool-error classification for the weighted per-run error budget.
   classifyToolError,
   // ACI observation formatting (SWE-agent) — exported for tests.

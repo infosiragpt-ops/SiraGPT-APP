@@ -175,6 +175,18 @@ describe('deep-document-analyzer', () => {
       assert.ok(entities.some(e => e.type === 'ip_address'));
     });
 
+    it('does not leak a critical card/IBAN in cleartext via an overlapping non-critical match', () => {
+      // Regression: the medium-sensitivity 'phone' pattern matched a 16-digit
+      // card's digits and was emitted UNREDACTED, defeating the credit_card
+      // redaction. Overlapping non-critical entities must be dropped.
+      const entities = deepDocumentAnalyzer.extractEntities('Card 4111-1111-1111-1111 IBAN DE89370400440532013000');
+      assert.ok(entities.some(e => e.type === 'credit_card' && e.sensitivity === 'critical'));
+      assert.ok(entities.some(e => e.type === 'iban' && e.sensitivity === 'critical'));
+      // No non-critical entity may carry 6+ consecutive digits of the sensitive values.
+      const leak = entities.filter(e => e.sensitivity !== 'critical' && /\d{6,}/.test(String(e.value).replace(/[-\s]/g, '')));
+      assert.equal(leak.length, 0, `non-critical entities leaked digits: ${JSON.stringify(leak)}`);
+    });
+
     it('identifies critical entities', () => {
       const entities = deepDocumentAnalyzer.extractEntities('SSN: 123-45-6789');
       const ssn = entities.find(e => e.type === 'ssn');
@@ -323,6 +335,18 @@ describe('active-memory', () => {
     assert.ok(e2.accessCount >= 2);
   });
 
+  it('stores the normalized-fact hash so the dedup fast-path is live', () => {
+    // Regression: entry.hash used to be a hash of the RAW fact while the dedup
+    // compared the normalized hash, so the hash branch was dead. They now agree.
+    const base = 'Normalized hash probe ' + Date.now();
+    const e1 = activeMemory.createMemoryEntry(testUserId, base);
+    // Same fact with different surrounding whitespace/case → normalizes the same.
+    const e2 = activeMemory.createMemoryEntry(testUserId, `  ${base.toUpperCase()}  `);
+    assert.equal(e1.id, e2.id, 'whitespace/case variants dedup to the same entry');
+    assert.equal(typeof e1.hash, 'string');
+    assert.equal(e1.hash.length, 16);
+  });
+
   it('recalls memories by query', () => {
     activeMemory.createMemoryEntry(testUserId, 'User works at Acme Corp', { category: 'work' });
     const results = activeMemory.recall(testUserId, 'work');
@@ -450,6 +474,32 @@ describe('session-manager', () => {
     assert.equal(history.length, 2);
   });
 
+  it('paginates forward from a cursor (next page, not the newest N)', () => {
+    // Regression: with `after` set, `slice(-limit)` returned the NEWEST N and
+    // skipped the messages right after the cursor. Forward pagination must walk.
+    const session = sessionManager.createSession(testUserId, { label: 'Paginate' });
+    const ids = [];
+    for (let i = 0; i < 6; i += 1) {
+      ids.push(sessionManager.addMessage(session.id, { role: 'user', content: `m${i}`, tokens: 1 }).id);
+    }
+    // After m0, the next 2 must be m1, m2 — NOT the tail m4, m5.
+    const page = sessionManager.getHistory(session.id, { after: ids[0], limit: 2 });
+    assert.deepEqual(page.map((m) => m.content), ['m1', 'm2']);
+  });
+
+  it('keeps tokenCount accurate when old messages are trimmed', () => {
+    const session = sessionManager.createSession(testUserId, { label: 'TokenDrift' });
+    // Push well past MAX_HISTORY_MESSAGES so trimming kicks in.
+    for (let i = 0; i < 600; i += 1) {
+      sessionManager.addMessage(session.id, { role: 'user', content: `t${i}`, tokens: 5 });
+    }
+    const live = sessionManager.getHistory(session.id);
+    const actualTokens = live.reduce((sum, m) => sum + (m.tokens || 0), 0);
+    const stored = sessionManager.getSession(session.id);
+    // tokenCount must match the kept messages, not keep growing past them.
+    assert.equal(stored.tokenCount, actualTokens, 'tokenCount tracks the kept messages');
+  });
+
   it('spawns a child session', () => {
     const parent = sessionManager.createSession(testUserId, { label: 'Parent' });
     sessionManager.addMessage(parent.id, { role: 'user', content: 'Parent msg', tokens: 2 });
@@ -513,6 +563,12 @@ describe('skills-registry', () => {
     assert.ok(skills.length >= 10);
   });
 
+  it('honours an explicit limit of 0 (returns none)', () => {
+    // `if (opts.limit)` treated 0 as "no limit" and returned every skill.
+    assert.equal(skillsRegistry.listSkills({ limit: 0 }).length, 0);
+    assert.equal(skillsRegistry.listSkills({ limit: 2 }).length, 2);
+  });
+
   it('gets a skill by id', () => {
     const skill = skillsRegistry.getSkill('deep_document_analysis');
     assert.ok(skill);
@@ -537,6 +593,27 @@ describe('skills-registry', () => {
   it('recommends skills by intent', () => {
     const skills = skillsRegistry.recommendSkills('document', { hasDocuments: true });
     assert.ok(skills.length >= 1);
+  });
+
+  it('does not throw on an object intent (cowork passes { query, tags })', () => {
+    // Regression: recommendSkills used to TypeError on `(object).toLowerCase()`,
+    // and the throw was swallowed upstream — the whole cowork skills path was
+    // silently dead on every turn.
+    const out = skillsRegistry.recommendSkills({ query: 'analyze this document', tags: ['cowork'] }, {});
+    assert.ok(Array.isArray(out) && out.length > 0, 'an object intent still yields recommendations');
+  });
+
+  it('returns no skills for a blank/null intent (no includes("") garbage)', () => {
+    // Regression: String.includes('') is always true, so a blank intent scored
+    // EVERY skill 0.5 and returned the first 5 as bogus recommendations.
+    assert.deepEqual(skillsRegistry.recommendSkills('', {}), []);
+    assert.deepEqual(skillsRegistry.recommendSkills(null, {}), []);
+    assert.deepEqual(skillsRegistry.recommendSkills(undefined, {}), []);
+  });
+
+  it('still recommends by signals when the intent is blank', () => {
+    const out = skillsRegistry.recommendSkills('', { hasDocuments: true });
+    assert.ok(out.length > 0 && out.every((s) => s && s.id), 'document signals still drive recommendations');
   });
 
   it('verifies prerequisites', () => {

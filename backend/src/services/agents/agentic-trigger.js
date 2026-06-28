@@ -151,6 +151,14 @@ const STRONG_EDIT_VERBS = new RegExp(
 // document/file noun is also present.
 const WEAK_EDIT_VERBS = /\b(cambia\w*|c[aá]mbia\w*|c[aá]mbi[aá]le|actualiz\w*|arregl\w*|p[oó]nle|ponle|mejora\w*|ajusta\w*|update\w*|change\w*|fix the|improve\w*|adjust\w*)\b/i;
 
+const DOCUMENT_CORRECTION_NOUNS = /\b(correcci[oó]n(?:es)?|ortograf[ií]a|gram[aá]tica|redacci[oó]n|erratas?|errores?)\b/i;
+const DOCUMENT_CORRECTION_ACTIONS = /\b(aplic\w*|haz|hacer|realiz\w*|corrig\w*|correg\w*|revis\w*|arregl\w*|ajust\w*|mejora\w*)\b/i;
+
+function isDocumentCorrectionEditRequest(text) {
+  const t = String(text == null ? '' : text);
+  return DOCUMENT_CORRECTION_NOUNS.test(t) && DOCUMENT_CORRECTION_ACTIONS.test(t);
+}
+
 // Nouns that, on an ATTACHMENT turn, unambiguously refer to the attached file
 // itself or a concrete document instance (complementing ARTIFACT_NOUNS, which
 // targets deliverable formats). Used to disambiguate WEAK edit verbs; STRONG
@@ -177,6 +185,7 @@ const EDIT_VERBS = new RegExp(`${STRONG_EDIT_VERBS.source}|${WEAK_EDIT_VERBS.sou
 function isDocumentEditRequest(text) {
   const t = String(text == null ? '' : text);
   if (!t.trim()) return false;
+  if (isDocumentCorrectionEditRequest(t)) return true;
   if (STRONG_EDIT_VERBS.test(t)) return true;
   return WEAK_EDIT_VERBS.test(t) && (ARTIFACT_NOUNS.test(t) || ATTACHED_FILE_NOUNS.test(t));
 }

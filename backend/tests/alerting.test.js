@@ -135,6 +135,33 @@ describe('alerting — getActiveAlerts', () => {
     const old = alerting.getActiveAlerts({ now: future, windowMs: 60_000 });
     assert.equal(old.count, 0);
   });
+
+  test('orders most-recent-first and stays stable on equal timestamps (sort contract)', async () => {
+    // Regression: the comparator returned -1 on ties instead of 0, violating the
+    // JS sort contract (non-antisymmetric) for alerts sharing a millisecond.
+    alerting.registerChannel(() => ({ ok: true }));
+    const realNow = Date.now;
+    try {
+      Date.now = () => 1000; // two distinct titles at the SAME ms → ISO tie
+      await alerting.sendAlert({ title: 'tie-a', severity: 'warn' });
+      await alerting.sendAlert({ title: 'tie-b', severity: 'warn' });
+      Date.now = () => 5000; // newest
+      await alerting.sendAlert({ title: 'newest', severity: 'error' });
+    } finally {
+      Date.now = realNow;
+    }
+    const snap = alerting.getActiveAlerts({ now: 5001, windowMs: 1_000_000 });
+    assert.equal(snap.items[0].title, 'newest', 'most-recent alert sorts first');
+    // Non-increasing by lastSentAt across the whole list — incl. the tie pair.
+    for (let i = 1; i < snap.items.length; i++) {
+      assert.ok(
+        snap.items[i - 1].lastSentAt >= snap.items[i].lastSentAt,
+        'items must be ordered newest-first with no contract violation',
+      );
+    }
+    // All three survive — the tie pair is neither dropped nor duplicated.
+    assert.deepEqual(snap.items.map((x) => x.title).sort(), ['newest', 'tie-a', 'tie-b']);
+  });
 });
 
 describe('alerting — attachCircuitBreaker', () => {

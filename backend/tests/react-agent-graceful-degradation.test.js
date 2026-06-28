@@ -145,6 +145,45 @@ test('react-agent: a healthy tool still works and finalizes normally', async () 
   assert.deepEqual(result.exhaustedTools, []);
 });
 
+test('react-agent: strips internal docintel authorization diagnostics from final answers', async () => {
+  const answer = [
+    'El título de esta investigación es:',
+    '',
+    '"Una mirada a los nuevos enfoques de la gestión pública"',
+    '',
+    '**Nota sobre verificación:** Las herramientas de análisis documental profundo (`docintel_analyze`, `docintel_retrieve`) no están disponibles en este momento por un error de autorización del servidor (`missing_scopes`). La respuesta se basa en RAG.',
+  ].join('\n');
+  const openai = makeScriptedOpenAI([{ finalize: answer }]);
+
+  const result = await reactAgent.run(openai, {
+    query: 'cual es el titulo',
+    tools: [],
+    maxSteps: 2,
+    model: 'test-model',
+  });
+
+  assert.equal(result.stoppedReason, 'finalized');
+  assert.match(result.finalAnswer, /Una mirada a los nuevos enfoques/);
+  assert.doesNotMatch(result.finalAnswer, /docintel_|missing_scopes|error de autorizaci[oó]n|Nota sobre verificaci[oó]n/i);
+});
+
+test('react-agent: exhausted-tool safety net does not expose internal tool names', async () => {
+  const script = Array.from({ length: 5 }, () => ({ tool: 'docintel_retrieve', args: { query: 'x' } }));
+  const openai = makeScriptedOpenAI(script);
+
+  const result = await reactAgent.run(openai, {
+    query: 'resume el documento',
+    tools: [alwaysFailingTool],
+    maxSteps: 7,
+    model: 'test-model',
+    finalizeGuard: () => ({ ok: false, message: 'blocked for safety-net test', missingTools: ['docintel_retrieve'] }),
+  });
+
+  assert.ok(String(result.finalAnswer || '').trim().length > 0);
+  assert.doesNotMatch(result.finalAnswer, /docintel_|missing_scopes/i);
+  assert.ok(result.exhaustedTools.includes('docintel_retrieve'));
+});
+
 const okTool = {
   name: 'web_search',
   description: 'Returns a canned result.',

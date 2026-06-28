@@ -86,7 +86,12 @@ function synonymVariant(text) {
   if (candidates.length === 0) return null;
   const pick = candidates[0];
   const newTokens = [...tokens];
-  newTokens[pick.idx] = pick.options[0];
+  // Preserve the original token's leading/trailing punctuation — the match key
+  // is computed on the letters-only form, so writing back the bare synonym
+  // dropped attached punctuation ("build?" → "create"), fusing clauses and
+  // breaking the "meaning-preserving" contract probeStability relies on.
+  const affix = String(pick.original).match(/^([^a-záéíóúñü]*)([\s\S]*?)([^a-záéíóúñü]*)$/i);
+  newTokens[pick.idx] = affix ? `${affix[1]}${pick.options[0]}${affix[3]}` : pick.options[0];
   return newTokens.join('');
 }
 
@@ -206,7 +211,11 @@ function probeStability({ prompt, scorerFn, opts = {} } = {}) {
   const baseline = reports[0];
   const baselineIntent = baseline?.primaryIntent || null;
   const baselineCentroid = baseline?.centroid || null;
-  const intentMatches = reports.filter((r) => r.primaryIntent && baselineIntent && r.primaryIntent === baselineIntent).length;
+  // Count agreement with the baseline intent, INCLUDING unanimous null: if the
+  // scorer recognises no intent for any variant, that's perfectly consistent
+  // (stability 1), not 0 — the old `&& baselineIntent` guard scored it as totally
+  // unstable.
+  const intentMatches = reports.filter((r) => r.primaryIntent === baselineIntent).length;
   const intentStability = reports.length === 0 ? 0 : intentMatches / reports.length;
 
   let centroidShifts = [];

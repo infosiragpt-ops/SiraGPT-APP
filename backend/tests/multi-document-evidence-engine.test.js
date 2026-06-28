@@ -36,9 +36,9 @@ test('jaccard handles partial overlap', () => {
 });
 
 test('buildEvidenceChain returns empty result for fewer than 2 documents', () => {
-  assert.deepEqual(buildEvidenceChain([], []), { chains: [], crossReferences: [] });
-  assert.deepEqual(buildEvidenceChain([{ id: 'a' }], [{}]), { chains: [], crossReferences: [] });
-  assert.deepEqual(buildEvidenceChain(null, []), { chains: [], crossReferences: [] });
+  assert.equal(buildEvidenceChain([], []).chains.length, 0);
+  assert.equal(buildEvidenceChain([{ id: 'a' }], [{}]).crossReferences.length, 0);
+  assert.equal(buildEvidenceChain(null, []).meta.documentCount, 0);
 });
 
 test('buildEvidenceChain computes pair-wise similarity for every pair of documents', () => {
@@ -54,6 +54,25 @@ test('buildEvidenceChain computes pair-wise similarity for every pair of documen
   const d12 = out.chains.find(c => c.docA.id === 'd1' && c.docB.id === 'd2');
   const d13 = out.chains.find(c => c.docA.id === 'd1' && c.docB.id === 'd3');
   assert.ok(d12.similarity > d13.similarity);
+  assert.equal(out.meta.totalPairs, 3);
+  assert.equal(out.meta.truncated, false);
+});
+
+test('buildEvidenceChain caps high-volume cross-document pair output', () => {
+  const docs = Array.from({ length: 80 }, (_, index) => ({
+    id: `d${index}`,
+    text: `shared quarterly revenue evidence acme document ${index}`,
+  }));
+  const analyses = docs.map((doc, index) => ({
+    domain: { primary: index % 2 === 0 ? 'financial' : 'legal' },
+    entities: [{ type: 'org', value: 'Acme' }, { type: 'money', value: String(100 + index) }],
+  }));
+  const out = buildEvidenceChain(docs, analyses, { maxEvidencePairs: 120, maxCrossReferences: 80 });
+  assert.equal(out.chains.length, 120);
+  assert.ok(out.crossReferences.length <= 80);
+  assert.equal(out.meta.totalPairs, 3160);
+  assert.equal(out.meta.analyzedPairs, 120);
+  assert.equal(out.meta.truncated, true);
 });
 
 test('buildEvidenceChain surfaces shared entities and capped at 15', () => {
@@ -150,6 +169,7 @@ test('buildCrossAnalysisReport surfaces synthesis with overall assessment', () =
   ];
   const report = buildCrossAnalysisReport(docs, analyses);
   assert.equal(report.synthesis.documentCount, 2);
+  assert.equal(report.evidenceMeta.totalPairs, 1);
   // money 100 vs 500 → numeric_conflict (high severity)
   assert.ok(report.synthesis.highRiskPairs >= 1);
   assert.equal(report.synthesis.overallAssessment, 'conflicts_detected');

@@ -287,3 +287,15 @@ describe('document-intent-analyzer', () => {
     });
   });
 });
+
+describe('document-intent-analyzer security + voting regressions', () => {
+  it('getUserAnalyses is scoped to the requesting user (no cross-user leak)', async () => {
+    await intentAnalyzer.analyzeBatch([{ text: 'invoice total amount due', originalName: 'a.pdf' }], { userId: 'alice' });
+    await intentAnalyzer.analyzeBatch([{ text: 'legal contract clause', originalName: 'b.pdf' }], { userId: 'bob' });
+    assert.equal(intentAnalyzer.getUserAnalyses('alice').length, 1);
+    assert.equal(intentAnalyzer.getUserAnalyses('bob').length, 1);
+    // A missing userId used to return EVERY user's batches.
+    assert.equal(intentAnalyzer.getUserAnalyses(null).length, 0);
+    assert.ok(intentAnalyzer.getUserAnalyses('alice').every((e) => e.userId === 'alice'));
+  });
+});

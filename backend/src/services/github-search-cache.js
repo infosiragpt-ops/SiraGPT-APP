@@ -49,9 +49,21 @@ function cacheKey(query, opts = {}) {
   const limit = Number(opts.limit) || 10;
   const lang = String(opts.language || '');
   const timeoutMs = Number(opts.timeoutMs) || 'default';
+  // Scope filters that change the underlying result set MUST be part of the key.
+  // The per-type searchers read these (searchIssues → repo/state/kind,
+  // searchCode → repo/filename, searchRepositories → minStars/topic). Omitting
+  // them let e.g. {state:'open'} and {state:'closed'} collide on the same key,
+  // so the second call returned the first call's wrong-scope results for the TTL.
+  const repo = String(opts.repo || '');
+  const state = String(opts.state || '');
+  const kind = String(opts.kind || '');
+  const minStars = Number(opts.minStars) || 0;
+  const topic = String(opts.topic || '');
+  const filename = String(opts.filename || '');
   const raw = [
     String(query || '').trim().toLowerCase(),
     type, sort, order, limit, lang, timeoutMs,
+    repo, state, kind, minStars, topic, filename,
   ].join('|');
   return crypto.createHash('sha256').update(raw).digest('hex').slice(0, 24);
 }

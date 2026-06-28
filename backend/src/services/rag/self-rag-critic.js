@@ -253,9 +253,13 @@ async function critique({
 
   // Utility term
   const utilityScoreNormalised = sre.ISUSE_SCORE[utility.isUse] ?? 0;
-  // Final overall: weighted mix of normalised segment-support + utility
-  const overallScore = ((wRel + wSup) * segmentTermNormalised + wUse * utilityScoreNormalised)
-                     / ((wRel + wSup) + wUse);
+  // Final overall: weighted mix of normalised segment-support + utility.
+  // Guard the denominator: if a caller zeroes all weights, the division would
+  // produce NaN/Infinity and poison every downstream score.
+  const overallDenom = (wRel + wSup) + wUse;
+  const overallScore = overallDenom === 0
+    ? 0
+    : ((wRel + wSup) * segmentTermNormalised + wUse * utilityScoreNormalised) / overallDenom;
 
   const citations = perSegment
     .filter(s => s.cited > 0)

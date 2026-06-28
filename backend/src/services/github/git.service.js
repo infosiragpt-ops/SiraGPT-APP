@@ -20,7 +20,6 @@
  */
 
 const path = require('path');
-
 let simpleGit;
 try {
   simpleGit = require('simple-git');
@@ -28,7 +27,7 @@ try {
   simpleGit = null;
 }
 
-const { ensureParentDir, isGitRepo } = require('./workspace-manager');
+const { ensureParentDir, isGitRepo, ensureLocalExcludes } = require('./workspace-manager');
 
 const CLONE_TIMEOUT_MS = 5 * 60 * 1000; // 5 min — large repos
 const SAFE_BRANCH_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$/;
@@ -115,6 +114,7 @@ async function cloneRepository({ localPath, cloneUrl, token, branch }) {
   }
 
   if (isGitRepo(localPath)) {
+    ensureLocalExcludes(localPath);
     let current = branchName || null;
     try {
       current = (await simpleGit(localPath).status()).current || current;
@@ -141,6 +141,9 @@ async function cloneRepository({ localPath, cloneUrl, token, branch }) {
   } catch {
     /* non-fatal: the clone itself succeeded */
   }
+
+  // Keep build artifacts (node_modules/, dist/, …) out of `git status`.
+  ensureLocalExcludes(localPath);
 
   let currentBranch = branchName || null;
   try {

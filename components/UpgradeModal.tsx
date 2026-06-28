@@ -41,12 +41,14 @@ interface UpgradeModalProps {
   isSubscribing?: boolean
 }
 
-// Brand palette — orange + white (curated-Tailwind safe: exotic effects inline).
-const ORANGE = "#FF6600"
+// Brand palette for the upgrade modal.
+const ACCENT = "#FF0000"
+const ACCENT_RGB = "255,0,0"
 const INK = "#0a0a0a"
 const BODY = "#525252"
 const MUTED = "#737373"
 const BORDER = "rgba(10,10,10,0.10)"
+const accentAlpha = (alpha: number) => `rgba(${ACCENT_RGB},${alpha})`
 
 const POSITIONING = {
   eyebrow: "Todos los modelos. Todas las capacidades. Una cuenta.",
@@ -118,9 +120,9 @@ function FeatureRow({ icon: Icon, title, desc, featured }: { icon: typeof Crown;
       <div
         className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full"
         style={{
-          border: `1px solid ${featured ? "rgba(255,102,0,0.35)" : BORDER}`,
-          background: featured ? "rgba(255,102,0,0.10)" : "rgba(10,10,10,0.03)",
-          color: featured ? ORANGE : MUTED,
+          border: `1px solid ${featured ? accentAlpha(0.35) : BORDER}`,
+          background: featured ? accentAlpha(0.10) : "rgba(10,10,10,0.03)",
+          color: featured ? ACCENT : MUTED,
         }}
       >
         <Icon className="h-3 w-3" />
@@ -198,9 +200,9 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
             <DialogHeader>
               <div
                 className="mb-2.5 inline-flex w-fit items-center gap-2 rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em]"
-                style={{ border: `1px solid ${BORDER}`, background: "rgba(255,102,0,0.06)", color: BODY }}
+                style={{ border: `1px solid ${BORDER}`, background: accentAlpha(0.06), color: BODY }}
               >
-                <Sparkles className="h-3.5 w-3.5" style={{ color: ORANGE }} />
+                <Sparkles className="h-3.5 w-3.5" style={{ color: ACCENT }} />
                 {POSITIONING.eyebrow}
               </div>
               <DialogTitle className="max-w-3xl text-balance text-xl font-semibold tracking-[-0.03em] sm:text-[26px] sm:leading-[1.12]" style={{ color: INK }}>
@@ -220,17 +222,17 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
             {/* Value-anchor banner */}
             <div
               className="mt-3.5 rounded-xl px-4 py-2.5 text-[13px] leading-5"
-              style={{ border: "1px solid rgba(255,102,0,0.25)", background: "rgba(255,102,0,0.05)", color: BODY }}
+              style={{ border: `1px solid ${accentAlpha(0.25)}`, background: accentAlpha(0.05), color: BODY }}
             >
               Una sola suscripción de ChatGPT, Claude o Gemini cuesta{" "}
-              <span style={{ color: ORANGE, fontWeight: 700 }}>$20/mes</span> — y trae un solo proveedor. SiraGPT te da{" "}
+              <span style={{ color: ACCENT, fontWeight: 700 }}>$20/mes</span> — y trae un solo proveedor. SiraGPT te da{" "}
               <span style={{ color: INK, fontWeight: 700 }}>todos los modelos líderes</span> más imagen, voz, video, documentos, código y agentes{" "}
-              <span style={{ color: ORANGE, fontWeight: 700 }}>desde $5/mes</span>.
+              <span style={{ color: ACCENT, fontWeight: 700 }}>desde $5/mes</span>.
             </div>
 
             {usageRatio >= 0.7 ? (
-              <div className="mt-3 flex items-center gap-2 rounded-xl px-3.5 py-2 text-[13px]" style={{ border: `1px solid ${BORDER}`, background: "rgba(255,102,0,0.04)", color: BODY }}>
-                <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: ORANGE }} />
+              <div className="mt-3 flex items-center gap-2 rounded-xl px-3.5 py-2 text-[13px]" style={{ border: `1px solid ${BORDER}`, background: accentAlpha(0.04), color: BODY }}>
+                <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: ACCENT }} />
                 Has usado <span style={{ color: INK, fontWeight: 700 }}>{usagePct}%</span> de tu actividad este mes. Mejora tu plan para seguir sin interrupciones.
               </div>
             ) : null}
@@ -252,16 +254,16 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
                     transition={{ duration: 0.22, delay: reduceMotion ? 0 : idx * 0.06, ease: [0.22, 1, 0.36, 1] }}
                     className="relative flex flex-col rounded-2xl p-4"
                     style={{
-                      border: featured ? `1.5px solid ${ORANGE}` : `1px solid ${BORDER}`,
-                      background: featured ? "rgba(255,102,0,0.04)" : "#ffffff",
-                      boxShadow: featured ? "0 18px 44px -22px rgba(255,102,0,0.55)" : "0 1px 2px rgba(10,10,10,0.04)",
+                      border: featured ? `1.5px solid ${ACCENT}` : `1px solid ${BORDER}`,
+                      background: featured ? accentAlpha(0.04) : "#ffffff",
+                      boxShadow: featured ? `0 18px 44px -22px ${accentAlpha(0.55)}` : "0 1px 2px rgba(10,10,10,0.04)",
                     }}
                   >
                     <div className="relative flex flex-1 flex-col">
                       <div className="flex items-center justify-between">
                         <div
                           className="flex h-9 w-9 items-center justify-center rounded-xl"
-                          style={{ border: `1px solid ${BORDER}`, background: "rgba(10,10,10,0.02)", color: featured ? ORANGE : INK }}
+                          style={{ border: `1px solid ${BORDER}`, background: "rgba(10,10,10,0.02)", color: featured ? ACCENT : INK }}
                         >
                           <Icon className="h-4 w-4" />
                         </div>
@@ -271,7 +273,7 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
                             animate={{ opacity: 1, scale: 1 }}
                             transition={{ duration: 0.3, delay: 0.12 }}
                             className="rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide"
-                            style={{ background: ORANGE, color: "#fff" }}
+                            style={{ background: ACCENT, color: "#fff" }}
                           >
                             {plan.badge}
                           </motion.div>
@@ -305,7 +307,7 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
                         className="mt-3 h-10 w-full rounded-full border-0 text-[13px] font-semibold"
                         style={
                           featured
-                            ? { background: ORANGE, color: "#fff" }
+                            ? { background: ACCENT, color: "#fff" }
                             : { background: "#fff", color: INK, border: `1px solid ${BORDER}` }
                         }
                       >
@@ -328,7 +330,7 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
               <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
                 {TRUST_ROW.map((t, i) => (
                   <span key={t} className="inline-flex items-center gap-1.5 text-[11px]" style={{ color: MUTED }}>
-                    {i === 0 ? <ShieldCheck className="h-3.5 w-3.5" style={{ color: ORANGE }} /> : <Check className="h-3 w-3" style={{ color: MUTED }} />}
+                    {i === 0 ? <ShieldCheck className="h-3.5 w-3.5" style={{ color: ACCENT }} /> : <Check className="h-3 w-3" style={{ color: MUTED }} />}
                     {t}
                   </span>
                 ))}

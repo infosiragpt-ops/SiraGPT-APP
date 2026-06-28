@@ -183,7 +183,13 @@ async function* streamDocxParagraphs(filePath, opts = {}) {
       }
     }
   } finally {
-    if (typeof stream.destroy === 'function' && aborted) {
+    // Always tear down the stream + its data/end/error listeners, not only on
+    // abort. On normal completion the listeners stayed attached, leaking a
+    // listener pair (and keeping the stream alive) per docx processed.
+    if (typeof stream.removeAllListeners === 'function') {
+      try { stream.removeAllListeners(); } catch { /* ignore */ }
+    }
+    if (typeof stream.destroy === 'function') {
       try { stream.destroy(); } catch { /* ignore */ }
     }
   }

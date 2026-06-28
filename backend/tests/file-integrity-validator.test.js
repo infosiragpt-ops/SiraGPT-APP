@@ -297,6 +297,15 @@ describe('fs-backed helpers (tmpdir only)', () => {
       assert.ok(r.issues.some((i) => i.code === 'too_small'));
     });
 
+    test('0-byte JSON → only too_small, NOT a spurious invalid_start', async () => {
+      const p = writeFile('empty.json', Buffer.alloc(0));
+      const r = await validateStructure(p, 'application/json', 0);
+      assert.ok(r.issues.some((i) => i.code === 'too_small'), 'empty file is too_small');
+      // The empty header used to read headerBytes[0]=undefined → NUL → a bogus
+      // invalid_start alongside too_small.
+      assert.ok(!r.issues.some((i) => i.code === 'invalid_start'), 'no spurious invalid_start on an empty file');
+    });
+
     test('image with valid magic and adequate size → no issues', async () => {
       const buf = Buffer.concat([
         Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),

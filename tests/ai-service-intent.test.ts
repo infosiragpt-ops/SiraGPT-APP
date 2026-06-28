@@ -160,6 +160,55 @@ describe("ai-service · deterministic intent routing", () => {
     assert.equal(shouldEditExistingDocument(prompt, history), true)
     assert.equal(shouldUseExistingDocumentFileContext(prompt, history), true)
     assert.equal(await aiService.classifyIntent(prompt, history), "agent_task")
+    assert.equal(shouldRouteTextPromptThroughAgenticRuntime(prompt, history[0].files), true)
+  })
+
+  it("routes freeform editorial changes of an uploaded Word document to the agentic document editor", async () => {
+    const history = [
+      {
+        role: "USER",
+        content: "propuesta.docx",
+        files: [
+          {
+            id: "file-docx-edit",
+            name: "propuesta.docx",
+            mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          },
+        ],
+      },
+    ]
+
+    const prompt = "corrige la redacción y mejora el tono profesional"
+    const graph = buildIntentAttributionGraph(prompt, history)
+    assert.equal(shouldAnswerFromExistingDocument(prompt, history), false)
+    assert.equal(shouldEditExistingDocument(prompt, history), true)
+    assert.equal(shouldUseExistingDocumentFileContext(prompt, history), true)
+    assert.equal(graph.inferredIntent, "agent_task")
+    assert.equal(await aiService.classifyIntent(prompt, history), "agent_task")
+    assert.equal(shouldRouteTextPromptThroughAgenticRuntime(prompt, history[0].files), true)
+
+    const minimalPrompt = "aplica correcciones minimas al documento porfavor"
+    assert.equal(shouldAnswerFromExistingDocument(minimalPrompt, history), false)
+    assert.equal(shouldEditExistingDocument(minimalPrompt, history), true)
+    assert.equal(shouldUseExistingDocumentFileContext(minimalPrompt, history), true)
+    assert.equal(await aiService.classifyIntent(minimalPrompt, history), "agent_task")
+    assert.equal(shouldRouteTextPromptThroughAgenticRuntime(minimalPrompt, history[0].files), true)
+  })
+
+  it("routes consistency-matrix edits of an uploaded Word document through the durable agent task", async () => {
+    const docFile = {
+      id: "file-docx-matrix",
+      name: "Matriz de categorizacion ACTUAL.docx",
+      mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }
+    const history = [{ role: "USER", content: "Matriz de categorizacion ACTUAL.docx", files: [docFile] }]
+
+    const prompt = "agrega en el word matriz de cosistencia en base a la matriz operacional"
+    assert.equal(shouldAnswerFromExistingDocument(prompt, history), false)
+    assert.equal(shouldEditExistingDocument(prompt, history), true)
+    assert.equal(shouldUseExistingDocumentFileContext(prompt, history), true)
+    assert.equal(await aiService.classifyIntent(prompt, history), "agent_task")
+    assert.equal(shouldRouteTextPromptThroughAgenticRuntime(prompt, [docFile]), true)
   })
 
   it("keeps spreadsheet data work on the agentic route when a spreadsheet is attached", () => {
@@ -193,11 +242,9 @@ describe("ai-service · deterministic intent routing", () => {
     const doc = { id: "f-doc", name: "x.pdf", mimeType: "application/pdf" }
     assert.equal(isImageOnlyAttachmentTurn([doc]), false)
     assert.equal(shouldRouteTextPromptThroughAgenticRuntime("¿cuál es la primera palabra del documento?", [doc]), true)
-    // Whole-document transforms ("resume este documento") deliberately run on
-    // the INLINE /api/ai/generate path instead — that is where the
-    // document_edit tool lives (doc-edit routing fix, commits 61c9bb8dc and
-    // 798c376d6) — so the gate must return false for them.
-    assert.equal(shouldRouteTextPromptThroughAgenticRuntime("resume este documento", [doc]), false)
+    // Whole-document transforms now run on the durable agent-task route, which
+    // owns source-preserving document edits and artifact validation.
+    assert.equal(shouldRouteTextPromptThroughAgenticRuntime("resume este documento", [doc]), true)
   })
 
   it("image ANALYSIS questions never classify as image GENERATION", () => {

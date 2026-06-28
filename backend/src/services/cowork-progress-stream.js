@@ -175,6 +175,11 @@ function writeSSE(res, stream) {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
+    // Disable proxy/load-balancer response buffering (Caddy/nginx) so progress
+    // frames flush to the client immediately instead of being held — otherwise
+    // a buffering reverse proxy can stall the stream and leave it looking
+    // zombie'd. Mirrors the SSE setup on the main chat path in routes/ai.js.
+    res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders();
   }
 

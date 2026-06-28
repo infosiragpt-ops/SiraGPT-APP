@@ -30,6 +30,24 @@ test('validate: saliency thresholds out of range → error', () => {
   assert.ok(r.failures.some((f) => f.id === 'saliency_thresholds_in_range'));
 });
 
+test('validate: dead-age (ms) below 2×half-life warns; the env is compared as ms', () => {
+  // DEAD_AGE_MS and HALFLIFE_MS are both milliseconds. 1,000,000 ms < 2×1,800,000.
+  // The old rule multiplied DEAD_AGE by 3.6M (as if hours) so the warning never
+  // fired for any ms value.
+  const warn = validator.validate({
+    SIRAGPT_SALIENCY_DEAD_AGE_MS: '1000000',
+    SIRAGPT_SALIENCY_HALFLIFE_MS: '1800000',
+  });
+  assert.ok(warn.warnings.some((w) => w.id === 'saliency_dead_age_gt_halflife'), 'should warn when dead-age < 2×half-life');
+
+  // A compliant ms config does NOT warn.
+  const ok = validator.validate({
+    SIRAGPT_SALIENCY_DEAD_AGE_MS: '5000000',
+    SIRAGPT_SALIENCY_HALFLIFE_MS: '1800000',
+  });
+  assert.ok(!ok.warnings.some((w) => w.id === 'saliency_dead_age_gt_halflife'));
+});
+
 test('validate: saliency half-life zero → error', () => {
   const r = validator.validate({ SIRAGPT_SALIENCY_HALFLIFE_MS: '0' });
   assert.ok(r.failures.some((f) => f.id === 'saliency_halflife_positive'));
@@ -155,4 +173,12 @@ test('hot path: 100 validations under 200ms', () => {
   const t0 = Date.now();
   for (let i = 0; i < 100; i += 1) validator.validate({ SIRAGPT_PROMPT_BUDGET_TOKENS: '12000' });
   assert.ok(Date.now() - t0 < 500);
+});
+
+test('explicit 0 / non-numeric values are flagged, not silently defaulted', () => {
+  // Regression: `Number(x) || default` made an explicit 0 (or "abc") fall back
+  // to the default for the check, so a catastrophic value passed validation.
+  assert.equal(validator.validate({}).ok, true, 'empty env uses defaults → ok');
+  assert.equal(validator.validate({ SIRAGPT_PROMPT_BUDGET_TOKENS: '0' }).ok, false, 'explicit 0 budget is flagged');
+  assert.equal(validator.validate({ SIRAGPT_PROMPT_BUDGET_TOKENS: 'abc' }).ok, false, 'non-numeric budget is flagged');
 });

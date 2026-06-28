@@ -305,6 +305,7 @@ const prisma = require('./src/config/database');
 const authRoutes = require('./src/routes/auth');
 const chatRoutes = require('./src/routes/chats');
 const fileRoutes = require('./src/routes/files');
+const documentCollectionRoutes = require('./src/routes/document-collections');
 const appshotsRoutes = require('./src/routes/appshots');
 const aiRoutes = require('./src/routes/ai');
 const aiFailoverHealthRoutes = require('./src/routes/ai-failover-health');
@@ -350,6 +351,7 @@ const answerRoutes = require('./src/routes/answer');
 const builderRoutes = require('./src/routes/builder');
 const githubSearchRoutes = require('./src/routes/github-search');
 const githubRoutes = require('./src/routes/github');
+const hostingRoutes = require('./src/routes/hosting');
 const xSearchRoutes = require('./src/routes/x-search');
 const accountingRoutes = require('./src/routes/accounting');
 const linkPreviewRoutes = require('./src/routes/link-preview');
@@ -418,6 +420,7 @@ const { startGoalCleanup, stopGoalCleanup } = require('./src/services/goal-clean
 // Codex Agent V2 run engine (feature 05). startCodexWorker self-gates on the
 // CODEX_AGENT_V2 flag (no-op when off), so it's always safe to call.
 const { startCodexWorker, closeCodexWorker, closeCodexQueue } = require('./src/services/codex/run-queue');
+const { startDocumentCollectionWorker, closeDocumentCollectionWorker, closeDocumentCollectionQueue } = require('./src/services/document-collection-queue');
 const { recoverCodexRunsAfterBoot } = require('./src/services/codex/boot-recovery');
 const { logCodexConfig } = require('./src/services/codex/config-validator');
 const { validate: validateAttributionConfig } = require('./src/services/attribution-config-validator');
@@ -744,6 +747,7 @@ app.use('/api/auth', requireCsrf);
 app.use('/api/users', requireCsrf);
 app.use('/api/chats', requireCsrf);
 app.use('/api/files', requireCsrf);
+app.use('/api/document-collections', requireCsrf);
 // Pairing is cookie-auth, so it needs CSRF; capture is bearer-only and is
 // mounted without CSRF below. Path-level matching keeps the protection tight.
 app.use('/api/appshots/pair', requireCsrf);
@@ -969,6 +973,7 @@ app.use('/api/version', versionRouter);
 app.use('/api/auth', authRoutes);
 app.use('/api/chats', chatRoutes);
 app.use('/api/files', fileRoutes);
+app.use('/api/document-collections', documentCollectionRoutes);
 // Appshots — Chrome extension capture endpoints. /pair uses cookie auth and
 // is protected by the global requireCsrf list (see ~/api/auth section above),
 // /capture uses bearer-only auth and is intentionally CSRF-exempt.
@@ -1026,6 +1031,7 @@ app.use('/api/answer', answerRoutes);
 app.use('/api/builder', builderRoutes);
 app.use('/api/github-search', githubSearchRoutes);
 app.use('/api/github', githubRoutes);
+app.use('/api/hosting', hostingRoutes);
 app.use('/api/x-search', xSearchRoutes);
 app.use('/api/accounting', accountingRoutes);
 app.use('/api/link-preview', linkPreviewRoutes);
@@ -1279,6 +1285,7 @@ async function startServer() {
     } catch { /* never blocks boot */ }
     recoverCodexRunsAfterBoot().catch((err) => logger.warn({ err: err.message }, 'codex_boot_recovery_failed'));
     startCodexWorker();
+    startDocumentCollectionWorker();
 
     // Apply any admin-curated provider keys (panel /admin/connections)
     // by overriding the corresponding process.env vars in this worker.
@@ -1396,6 +1403,8 @@ async function startServer() {
             closeGoalQueue(),
             closeCodexWorker(),
             closeCodexQueue(),
+            closeDocumentCollectionWorker(),
+            closeDocumentCollectionQueue(),
         ]);
     }, 5000);
 

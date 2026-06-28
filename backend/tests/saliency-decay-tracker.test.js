@@ -109,3 +109,25 @@ test('hot path stays under 100ms for 50 turns × 5 features', () => {
   tracker.classify({ userId: 'perf', chatId: 'c' });
   assert.ok(Date.now() - t0 < 100);
 });
+
+test('outer chat map is LRU-bounded; recent chats survive, the oldest is evicted', () => {
+  // Fresh instance at the floor cap (256) so the eviction path is exercised.
+  const prev = process.env.SIRAGPT_SALIENCY_MAX_CHATS;
+  process.env.SIRAGPT_SALIENCY_MAX_CHATS = '256';
+  const modPath = require.resolve('../src/services/saliency-decay-tracker');
+  delete require.cache[modPath];
+  const t = require('../src/services/saliency-decay-tracker');
+  try {
+    t.clear();
+    const feat = [{ kind: 'topic', label: 'auth', weight: 1 }];
+    for (let i = 0; i < 320; i += 1) t.observe({ userId: 'u', chatId: 'c' + i, features: feat });
+    assert.ok(t.stats().chats <= 256, 'outer map is hard-bounded (was unbounded)');
+    // The most-recently-observed chat survives; the oldest (c0) was evicted.
+    assert.ok(t.classify({ userId: 'u', chatId: 'c319' }).live.length > 0, 'recent chat preserved');
+    assert.equal(t.classify({ userId: 'u', chatId: 'c0' }).live.length, 0, 'oldest chat evicted → re-seeds empty');
+  } finally {
+    delete require.cache[modPath];
+    if (prev === undefined) delete process.env.SIRAGPT_SALIENCY_MAX_CHATS;
+    else process.env.SIRAGPT_SALIENCY_MAX_CHATS = prev;
+  }
+});

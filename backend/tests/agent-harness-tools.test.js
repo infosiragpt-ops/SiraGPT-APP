@@ -95,12 +95,13 @@ test('web_fetch: HTML is sanitized to readable text (scripts dropped) and capped
   assert.ok(result.text.length <= 600);
 });
 
-test('web_fetch: binary responses come back as a structured note, not bytes', async () => {
+test('web_fetch: binary responses come back as a structured note, not bytes (and the body is cancelled)', async () => {
+  let cancelled = false;
   const fetchMock = async () => ({
     status: 200,
     url: 'https://example.com/f.png',
     headers: { get: (h) => (h.toLowerCase() === 'content-type' ? 'image/png' : null) },
-    body: null,
+    body: { cancel: async () => { cancelled = true; } },
     text: async () => 'PNGRAWBYTES',
   });
   const result = await executeAgentWebFetch(
@@ -109,6 +110,8 @@ test('web_fetch: binary responses come back as a structured note, not bytes', as
   );
   assert.equal(result.text, '');
   assert.match(result.note, /binario/);
+  // The unread binary body must be cancelled — otherwise the socket leaks.
+  assert.equal(cancelled, true, 'binary response body was cancelled, not leaked');
 });
 
 test('web_fetch: capText cap is exactly the documented 50k default', () => {

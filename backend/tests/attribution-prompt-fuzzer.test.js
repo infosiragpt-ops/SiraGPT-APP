@@ -126,3 +126,18 @@ test('hot path: 100 variants generated under 200ms', () => {
   }
   assert.ok(Date.now() - t0 < 200);
 });
+
+test('synonymVariant preserves punctuation attached to the swapped word', () => {
+  // "build?" must become "create?", not "create" (which fused two clauses).
+  assert.equal(fuzzer.synonymVariant('Can you build? Yes'), 'Can you create? Yes');
+  assert.equal(fuzzer.synonymVariant('We will build, then test'), 'We will create, then test');
+});
+
+test('probeStability scores unanimous-null intent as STABLE, not 0', () => {
+  // A scorer that recognises no intent for any variant is perfectly consistent.
+  const r = fuzzer.probeStability({
+    prompt: 'Please build a chart of revenue.',
+    scorerFn: () => ({ primaryIntent: null, centroid: null }),
+  });
+  assert.equal(r.intentStability, 1, 'consistent null is stability 1, not 0');
+});

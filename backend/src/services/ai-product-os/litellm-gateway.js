@@ -633,7 +633,10 @@ function createLiteLLMGateway({ providers, telemetry } = {}) {
 
 function enforceBudget(plan) {
   const max = plan?.budget?.max_cost_usd;
-  if (typeof max !== "number" || max <= 0 || plan.projected_cost_usd == null) return;
+  // `max <= 0` skipped enforcement for a max_cost_usd of 0, letting any
+  // positive-cost call through a zero budget. Treat 0 as a valid, enforced
+  // limit (it blocks all paid calls); only a negative value means "unset".
+  if (typeof max !== "number" || max < 0 || plan.projected_cost_usd == null) return;
   if (plan.projected_cost_usd > max) {
     const err = gatewayError(
       "budget_exceeded",

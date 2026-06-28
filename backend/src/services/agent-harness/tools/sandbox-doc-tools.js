@@ -19,8 +19,8 @@
  */
 
 const { z }    = require('zod');
-const sandbox  = require('../sandbox/session-manager');
-const { executeCode } = require('../sandbox/router');
+const sandbox  = require('../../sandbox/session-manager');
+const { executeCode } = require('../../sandbox/router');
 
 const EXEC_TIMEOUT_MS   = parseInt(process.env.SANDBOX_EXEC_TIMEOUT_MS || '60000', 10);
 const MAX_OUTPUT_CHARS  = 8_000;

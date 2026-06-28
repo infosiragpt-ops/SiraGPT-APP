@@ -47,10 +47,18 @@ function pickIdempotencyKey(req) {
 }
 
 function resolveCost(spec, req) {
-  if (typeof spec === 'function') return spec(req);
-  if (typeof spec === 'number') return spec;
-  if (typeof spec === 'string' && /^\d+$/.test(spec)) return Number(spec);
-  return 0;
+  let value;
+  if (typeof spec === 'function') value = spec(req);
+  else if (typeof spec === 'number') value = spec;
+  else if (typeof spec === 'string' && /^\d+$/.test(spec)) value = Number(spec);
+  else return 0;
+  // Credit costs MUST be non-negative integers — the ledger stores BigInt and
+  // `BigInt(1.5)` throws RangeError, which would 500 EVERY charged request if a
+  // price env var (e.g. CREDITS_IMAGE_BASE, CREDITS_PARAPHRASE_PER_1K_CHARS) is
+  // set to a fractional value. Round UP so we never under-charge.
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.ceil(n);
 }
 
 /**
@@ -61,10 +69,23 @@ function resolveCost(spec, req) {
  *   { ok: false, code: 'INSUFFICIENT' | 'INVALID_AMOUNT' }
  */
 async function spendCredits({ userId, amount, feature, reason, metadata, idempotencyKey }) {
-  if (!userId || !amount || amount <= 0) {
+  // Coerce to a non-negative integer BigInt at the chokepoint. `BigInt()` throws
+  // RangeError on a fractional Number, so round UP first (never under-charge);
+  // a non-finite / non-positive amount is rejected cleanly as INVALID_AMOUNT
+  // instead of crashing the caller with a 500.
+  let amt;
+  if (typeof amount === 'bigint') {
+    amt = amount;
+  } else {
+    const n = Number(amount);
+    if (!Number.isFinite(n) || n <= 0) {
+      return { ok: false, code: 'INVALID_AMOUNT' };
+    }
+    amt = BigInt(Math.ceil(n));
+  }
+  if (!userId || amt <= 0n) {
     return { ok: false, code: 'INVALID_AMOUNT' };
   }
-  const amt = typeof amount === 'bigint' ? amount : BigInt(amount);
 
   if (idempotencyKey) {
     const existing = await prisma.creditTransaction.findUnique({

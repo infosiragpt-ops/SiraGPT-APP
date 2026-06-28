@@ -14,9 +14,6 @@ const MEMORY_TTL_MS = Number.parseInt(process.env.SIRAGPT_MEMORY_TTL_MS || `${30
 const store = new Map();
 const promotionLog = [];
 
-function contentHash(text) {
-  return crypto.createHash('sha256').update(String(text || '')).digest('hex').slice(0, 16);
-}
 
 function normalizeFactForDedup(fact) {
   return String(fact || '')
@@ -67,7 +64,10 @@ function createMemoryEntry(userId, fact, opts = {}) {
   }
 
   const id = `mem_${crypto.randomBytes(6).toString('hex')}`;
-  const hash = contentHash(fact);
+  // Store the NORMALIZED-fact hash so the dedup fast-path (entry.hash === nearHash
+  // above) actually fires — it previously stored a hash of the RAW fact while the
+  // comparison used the normalized hash, so that branch never matched (dead code).
+  const hash = nearHash;
 
   const entry = {
     id,
@@ -283,8 +283,16 @@ function listEntries(userId, opts = {}) {
 }
 
 function getMemoryContext(userId, opts = {}) {
-  const longTermCount = [...store.values()].filter(e => e.userId === userId && e.tier === 'long_term').length;
-  const shortTermCount = [...store.values()].filter(e => e.userId === userId && e.tier === 'short_term').length;
+  // Count both tiers in a single pass over the store instead of two full
+  // spread+filter materializations (this runs every chat turn). Same semantics
+  // as the original .filter()s: by userId, by tier, no expiry filter, no limit.
+  let longTermCount = 0;
+  let shortTermCount = 0;
+  for (const e of store.values()) {
+    if (e.userId !== userId) continue;
+    if (e.tier === 'long_term') longTermCount += 1;
+    else if (e.tier === 'short_term') shortTermCount += 1;
+  }
 
   // Read-only prompt assembly: do NOT bump accessCount (this runs every turn).
   const recentMemories = recall(userId, null, { limit: opts.limit || 20, bump: false });

@@ -111,3 +111,10 @@ test('hot path: 100 detections under 100ms', () => {
   for (let i = 0; i < 100; i += 1) cal.detectDomain('Audit the financial P&L revenue figures.');
   assert.ok(Date.now() - t0 < 200);
 });
+
+test('detectDomain finds a later standalone keyword past a decoy substring', () => {
+  // "syntax" contains "tax" at the first position (fails the boundary check);
+  // the real standalone "tax" + "invoice" later must still classify as financial.
+  const r = cal.detectDomain('Review the syntax, the tax and the invoice line.');
+  assert.equal(r.domain, 'financial');
+});

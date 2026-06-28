@@ -177,11 +177,12 @@ describe('POST /payments/stripe/webhook · checkout idempotency', () => {
 const USAGE_MONITOR_PATH = require.resolve('../src/services/usage-monitor');
 const TRIGGERS_PATH = require.resolve('../src/services/trigger-registry');
 const INVOICE_SYNC_PATH = require.resolve('../src/services/invoice-sync');
+const EMAIL_PATH = require.resolve('../src/services/email');
 
 describe('POST /payments/stripe/webhook · subscription/invoice critical-write retry', () => {
   let restores = [];
 
-  function setupSub({ event, user, failUserUpdate = false, subscriptionEvents = [] }) {
+  function setupSub({ event, user, failUserUpdate = false, subscriptionEvents = [], notifications = [], failNotification = false, failSubEvent = false }) {
     const userUpdates = [];
     const db = {
       _userUpdates: userUpdates,
@@ -195,7 +196,8 @@ describe('POST /payments/stripe/webhook · subscription/invoice critical-write r
           return { ...user };
         },
       },
-      subscriptionEvent: { create: async ({ data }) => { subscriptionEvents.push(data); return { id: 'evt1', ...data }; } },
+      subscriptionEvent: { create: async ({ data }) => { if (failSubEvent) throw new Error('simulated subscriptionEvent failure'); subscriptionEvents.push(data); return { id: 'evt1', ...data }; } },
+      notification: { create: async ({ data }) => { if (failNotification) throw new Error('simulated notification failure'); notifications.push(data); return { id: 'notif1', ...data }; } },
     };
     restores = [
       mockResolvedModule(DB_PATH, db),
@@ -208,6 +210,8 @@ describe('POST /payments/stripe/webhook · subscription/invoice critical-write r
       mockResolvedModule(USAGE_MONITOR_PATH, { resetMonthlyUsage: async () => {} }),
       mockResolvedModule(TRIGGERS_PATH, { publish: async () => {} }),
       mockResolvedModule(INVOICE_SYNC_PATH, { syncInvoiceFromStripe: async () => {} }),
+      // Keep the dunning path hermetic + fast — skip the real SMTP attempt.
+      mockResolvedModule(EMAIL_PATH, { isConfigured: () => false, sendPaymentFailureAlert: async () => {} }),
     ];
     delete require.cache[require.resolve('../src/routes/payments')];
     return { app: buildRouteTestApp('/payments', reloadModule('../src/routes/payments')), db, subscriptionEvents };
@@ -252,5 +256,73 @@ describe('POST /payments/stripe/webhook · subscription/invoice critical-write r
     const res = await deliver(app);
     assert.equal(res.status, 200);
     assert.equal(subscriptionEvents.length, 1, 'one payment_succeeded audit row');
+  });
+
+  // ── subscription.updated: idempotent state write must surface failures ──
+  const subUpdatedEvent = { type: 'customer.subscription.updated', data: { object: { customer: 'cus_1', status: 'past_due', current_period_end: 1700000000 } } };
+
+  test('subscription.updated: a failed status update returns 500 (Stripe retries)', async () => {
+    const user = { id: 'u1', stripeCustomerId: 'cus_1', plan: 'PRO' };
+    const { app } = setupSub({ event: subUpdatedEvent, user, failUserUpdate: true });
+    assert.equal((await deliver(app)).status, 500);
+  });
+
+  test('subscription.updated: success returns 200 and persists the new status', async () => {
+    const user = { id: 'u1', stripeCustomerId: 'cus_1', plan: 'PRO' };
+    const { app } = setupSub({ event: subUpdatedEvent, user });
+    assert.equal((await deliver(app)).status, 200);
+    assert.equal(user.subscriptionStatus, 'past_due');
+  });
+
+  // ── subscription.created: persisting stripeSubscriptionId is critical ──
+  const subCreatedEvent = { type: 'customer.subscription.created', data: { object: { id: 'sub_new', customer: 'cus_1', status: 'active', current_period_end: 1700000000, items: { data: [{ price: { nickname: 'Pro' } }] } } } };
+
+  test('subscription.created: a failed user update returns 500 (Stripe retries)', async () => {
+    const user = { id: 'u1', stripeCustomerId: 'cus_1', plan: 'PRO' };
+    const { app } = setupSub({ event: subCreatedEvent, user, failUserUpdate: true });
+    assert.equal((await deliver(app)).status, 500);
+  });
+
+  test('subscription.created: success returns 200, persists subId, records one audit event', async () => {
+    const user = { id: 'u1', stripeCustomerId: 'cus_1', plan: 'PRO' };
+    const subscriptionEvents = [];
+    const { app } = setupSub({ event: subCreatedEvent, user, subscriptionEvents });
+    assert.equal((await deliver(app)).status, 200);
+    assert.equal(user.stripeSubscriptionId, 'sub_new');
+    assert.equal(subscriptionEvents.length, 1, 'one created audit row');
+  });
+
+  test('subscription.created: a failed audit-row write is ISOLATED → still 200, subId persisted', async () => {
+    const user = { id: 'u1', stripeCustomerId: 'cus_1', plan: 'PRO' };
+    const { app } = setupSub({ event: subCreatedEvent, user, failSubEvent: true });
+    assert.equal((await deliver(app)).status, 200, 'non-idempotent audit failure must not 500/retry');
+    assert.equal(user.stripeSubscriptionId, 'sub_new', 'critical subId write still committed');
+  });
+
+  // ── invoice.payment_failed: past_due is revenue-critical; notification/audit isolated ──
+  const invoiceFailedEvent = { type: 'invoice.payment_failed', data: { object: { customer: 'cus_1', id: 'in_1', amount_due: 1500, currency: 'usd' } } };
+
+  test('invoice.payment_failed: a failed past_due update returns 500 (Stripe retries)', async () => {
+    const user = { id: 'u1', stripeCustomerId: 'cus_1', plan: 'PRO' };
+    const { app } = setupSub({ event: invoiceFailedEvent, user, failUserUpdate: true });
+    assert.equal((await deliver(app)).status, 500);
+  });
+
+  test('invoice.payment_failed: success returns 200, sets past_due, one notification + one event', async () => {
+    const user = { id: 'u1', stripeCustomerId: 'cus_1', plan: 'PRO' };
+    const subscriptionEvents = [];
+    const notifications = [];
+    const { app } = setupSub({ event: invoiceFailedEvent, user, subscriptionEvents, notifications });
+    assert.equal((await deliver(app)).status, 200);
+    assert.equal(user.subscriptionStatus, 'past_due');
+    assert.equal(notifications.length, 1, 'one in-app dunning notification');
+    assert.equal(subscriptionEvents.length, 1, 'one payment_failed audit row');
+  });
+
+  test('invoice.payment_failed: a failed notification write is ISOLATED → still 200, past_due set', async () => {
+    const user = { id: 'u1', stripeCustomerId: 'cus_1', plan: 'PRO' };
+    const { app } = setupSub({ event: invoiceFailedEvent, user, failNotification: true });
+    assert.equal((await deliver(app)).status, 200, 'non-idempotent notification failure must not 500/retry');
+    assert.equal(user.subscriptionStatus, 'past_due', 'critical past_due write still committed');
   });
 });

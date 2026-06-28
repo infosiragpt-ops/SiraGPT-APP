@@ -84,7 +84,10 @@ function clamp01(v) {
 function percentile(arr, p) {
   if (!arr.length) return 0;
   const sorted = [...arr].sort((a, b) => a - b);
-  return sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))];
+  // Nearest-rank: ceil(p·n)-1. The old floor(p·n) biased high — p50 of [10,20]
+  // returned 20, and p95 collapsed to the max for small samples.
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1));
+  return sorted[idx];
 }
 
 function mean(arr) {
@@ -96,7 +99,12 @@ function filterSamples({ scope, userId, sinceMs }) {
   const cutoff = sinceMs ? nowMs() - Number(sinceMs) : 0;
   return buffer.filter((s) => {
     if (cutoff && s.timestamp < cutoff) return false;
-    if (scope === 'user' && userId && s.userId !== userId) return false;
+    if (scope === 'user') {
+      // A per-user rollup MUST be scoped to that user. The old `userId && …`
+      // guard fell through when userId was missing and returned EVERY user's
+      // telemetry (cross-user data leak).
+      if (!userId || s.userId !== userId) return false;
+    }
     return true;
   });
 }

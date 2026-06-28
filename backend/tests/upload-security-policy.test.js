@@ -137,7 +137,7 @@ test('upload policy keeps text-ish extension fallbacks usable', () => {
   assert.equal(mimeMatchesExtension('text/plain', 'csv'), true);
 });
 
-test('upload policy rejects legacy binary .xls spreadsheets in the commercial core', () => {
+test('upload policy accepts legacy binary .xls spreadsheets for Office workflows', () => {
   const result = validateUploadPolicy({
     originalName: 'legacy.xls',
     declaredMime: 'application/vnd.ms-excel',
@@ -146,14 +146,14 @@ test('upload policy rejects legacy binary .xls spreadsheets in the commercial co
     size: 1024,
   });
 
-  assert.equal(result.ok, false);
-  assert.equal(result.code, 'declared_type_not_allowed');
+  assert.equal(result.ok, true);
+  assert.equal(result.mimeType, 'application/vnd.ms-excel');
 });
 
 test('upload limits default to a bounded commercial ceiling unless explicitly overridden', () => {
   const limits = resolveUploadLimits({});
   assert.equal(limits.fileSize, 100 * 1024 * 1024);
-  assert.equal(limits.files, 50);
+  assert.equal(limits.files, 400);
 
   const tooLarge = validateUploadPolicy({
     originalName: 'large.pdf',
@@ -172,4 +172,14 @@ test('upload limits honour deployment env caps', () => {
   const limits = resolveUploadLimits({ MAX_FILE_SIZE: '25', MAX_UPLOAD_FILES: '3' });
   assert.equal(limits.fileSize, 25 * 1024 * 1024);
   assert.equal(limits.files, 3);
+});
+
+test('an SVG reported as generic XML is accepted (still active-content sanitized)', () => {
+  // Some detectors report an SVG as application/xml; the ext→mime map only had
+  // image/svg+xml, so a legit .svg got an extension_mime_mismatch.
+  const r = validateUploadPolicy({ originalName: 'logo.svg', declaredMime: 'application/xml', detectedMime: 'application/xml', detectionSource: 'magic-bytes', size: 1000 });
+  assert.equal(r.ok, true, r.code);
+  // The native image/svg+xml form still works too.
+  const native = validateUploadPolicy({ originalName: 'logo.svg', declaredMime: 'image/svg+xml', size: 1000 });
+  assert.equal(native.ok, true, native.code);
 });

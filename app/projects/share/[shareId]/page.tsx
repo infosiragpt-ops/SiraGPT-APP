@@ -62,9 +62,9 @@ export default function PublicProjectSharePage() {
           <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-muted">
             <FolderKanban className="h-6 w-6 text-muted-foreground" />
           </div>
-          <h1 className="text-lg font-semibold tracking-tight mb-1">Project unavailable</h1>
+          <h1 className="text-lg font-semibold tracking-tight mb-1">Empresa no disponible</h1>
           <p className="text-sm text-muted-foreground">
-            This share link is invalid or has been revoked.
+            Este enlace compartido no es válido o fue revocado.
           </p>
         </div>
       </div>
@@ -82,7 +82,7 @@ export default function PublicProjectSharePage() {
         <header className="mb-8">
           <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.1em] text-muted-foreground mb-3">
             <FolderKanban className="h-3.5 w-3.5" />
-            Shared project
+            Empresa compartida
           </div>
           <h1 className="text-3xl font-serif tracking-tight mb-2">{project.name}</h1>
           {project.description && (
@@ -90,14 +90,14 @@ export default function PublicProjectSharePage() {
               {project.description}
             </p>
           )}
-          <p className="text-xs text-muted-foreground mt-4">Updated {rel}</p>
+          <p className="text-xs text-muted-foreground mt-4">Actualizada {rel}</p>
         </header>
 
         <section className="rounded-xl border border-border/60 bg-card">
-          <h2 className="px-5 pt-4 text-sm font-semibold">Files</h2>
+          <h2 className="px-5 pt-4 text-sm font-semibold">Archivos</h2>
           {project.files.length === 0 ? (
             <p className="px-5 py-6 text-sm text-muted-foreground">
-              No files attached to this project.
+              No hay archivos adjuntos a esta empresa.
             </p>
           ) : (
             <ul className="divide-y divide-border/40">

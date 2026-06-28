@@ -184,9 +184,9 @@ describe('Zod schemas', () => {
     ).toBe(true)
   })
 
-  it('applies limit defaults (maxFiles 20, 100 MB, allowedMimes null)', () => {
+  it('applies limit defaults (maxFiles 400, 100 MB, allowedMimes null)', () => {
     const limits = AttachmentLimitsSchema.parse({})
-    expect(limits.maxFiles).toBe(20)
+    expect(limits.maxFiles).toBe(400)
     expect(limits.maxBytesPerFile).toBe(100 * 1024 * 1024)
     expect(limits.allowedMimes).toBeNull()
   })

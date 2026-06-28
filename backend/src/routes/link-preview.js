@@ -139,14 +139,19 @@ async function readBodyCapped(response, capBytes) {
   const reader = body.getReader();
   const chunks = [];
   let total = 0;
-  while (total < capBytes) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    const chunk = Buffer.from(value);
-    chunks.push(chunk);
-    total += chunk.byteLength;
+  try {
+    while (total < capBytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = Buffer.from(value);
+      chunks.push(chunk);
+      total += chunk.byteLength;
+    }
+  } finally {
+    // Always cancel the reader. An exception inside the loop (read() rejecting,
+    // Buffer.from throwing) used to skip the cancel and leak the open stream.
+    try { await reader.cancel(); } catch { /* best effort */ }
   }
-  try { await reader.cancel(); } catch { /* best effort */ }
   return Buffer.concat(chunks).subarray(0, capBytes).toString('utf8');
 }
 

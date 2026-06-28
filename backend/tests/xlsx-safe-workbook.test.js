@@ -141,3 +141,14 @@ test('selectWorkbookWorksheets fails closed on invalid caps and empty workbook s
     maxSheets: 5,
   });
 });
+
+test('excelColLetter: two-letter columns beyond 26 (not capped at Z)', () => {
+  const { excelColLetter } = require('../src/services/xlsx-safe-workbook');
+  assert.equal(excelColLetter(1), 'A');
+  assert.equal(excelColLetter(26), 'Z');
+  assert.equal(excelColLetter(27), 'AA'); // used to wrongly return 'Z'
+  assert.equal(excelColLetter(52), 'AZ');
+  assert.equal(excelColLetter(53), 'BA');
+  assert.equal(excelColLetter(703), 'AAA');
+  assert.equal(excelColLetter(0), '');
+});

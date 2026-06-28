@@ -47,7 +47,15 @@ const EMBED_MODEL = 'text-embedding-3-small';   // 1536-dim, cheap, good
 const EMBED_DIM = 1536;
 const DEFAULT_CHUNK_SIZE = 1200;                 // approx tokens (~4 chars each)
 const DEFAULT_CHUNK_OVERLAP = 200;
-const MAX_COLLECTION_CHUNKS = Number.parseInt(process.env.SIRAGPT_RAG_MAX_CHUNKS || '10000', 10); // safety cap per (user, collection)
+// Parse a positive-integer env with a safe fallback. A bare
+// Number.parseInt('abc', 10) returns NaN, and `chunks.length > NaN` is always
+// false — which silently DISABLED the per-collection cap, letting a collection
+// grow unbounded. Guard with Number.isFinite + positivity.
+function positiveIntEnv(raw, fallback) {
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+const MAX_COLLECTION_CHUNKS = positiveIntEnv(process.env.SIRAGPT_RAG_MAX_CHUNKS, 10000); // safety cap per (user, collection)
 
 // When query expansion is enabled we run *two* embeddings (original + expanded)
 // and take the max-similarity across both as each chunk's relevance. The
@@ -407,9 +415,6 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
     };
   });
   scored.sort((a, b) => b.score - a.score);
-  scored.forEach((s, rank) => {
-    s.semanticRank = rank + 1;
-  });
 
   let pool;
 
@@ -478,6 +483,13 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
       // see a unified metric.
       .map(e => ({ ...e, score: e.fusedScore, fusionScore: e.fusedScore }));
   } else {
+    // semanticRank is only consumed in the non-hybrid path (surfaced via
+    // formatRetrievalHit diagnostics); the hybrid branch sets it on its own
+    // fused objects, so assigning it here avoids a redundant O(N) pass over
+    // all chunks in that path. `scored` is still sorted desc from above.
+    scored.forEach((s, rank) => {
+      s.semanticRank = rank + 1;
+    });
     pool = scored.slice(0, Math.max(1, cappedPool));
   }
 
@@ -1125,6 +1137,7 @@ module.exports = {
   clear,
   stats,
   cosine,        // exported for tests
+  positiveIntEnv, // exported for tests (env-cap parsing robustness)
   getOpenAI,     // exported so callers can pass the shared client to rerank
   _embedClientOptions, // exported for tests
   // exported for tests / advanced callers

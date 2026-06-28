@@ -203,7 +203,10 @@ function getActiveAlerts({ now = _now(), windowMs = _dedupWindowMs } = {}) {
       count: entry.count || 1,
     });
   }
-  items.sort((a, b) => (b.lastSentAt > a.lastSentAt ? 1 : -1));
+  // Most-recent first. 3-way result: returning -1 on ties (b === a) violated
+  // the sort contract (non-antisymmetric), giving engine-defined order for
+  // alerts sharing a millisecond timestamp. ISO strings compare chronologically.
+  items.sort((a, b) => (b.lastSentAt > a.lastSentAt ? 1 : b.lastSentAt < a.lastSentAt ? -1 : 0));
   return { count: items.length, windowMs, items };
 }
 

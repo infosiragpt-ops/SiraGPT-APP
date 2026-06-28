@@ -157,6 +157,9 @@ export interface CreateDeploymentInput {
   geography?: DeploymentGeography
   machineTier?: string
   projectId?: string | null
+  // Model A (git-backed real deploy): the connected GitHub repo whose cloned
+  // workspace the hostinger_vps executor builds + uploads.
+  connectedRepositoryId?: string | null
 }
 
 export type DeploymentPatch = Partial<Pick<Deployment, "buildCommand" | "runCommand" | "publicDir" | "visibility" | "deploymentType" | "machineTier" | "externalPort">>
@@ -180,8 +183,15 @@ export const deploymentsApi = {
 
   securityScan: (id: string) => req<{ scan: SecurityScan }>(`/${id}/security-scan`, { method: "POST" }).then((r) => r.scan),
 
-  connectProvider: (id: string, provider: Extract<DeploymentProviderId, "hostinger_vps" | "aws">) =>
-    req<ProviderConnectResult>(`/${id}/providers/connect`, { method: "POST", body: JSON.stringify({ provider }) }),
+  connectProvider: (
+    id: string,
+    provider: Extract<DeploymentProviderId, "hostinger_vps" | "aws">,
+    connectedRepositoryId?: string | null,
+  ) =>
+    req<ProviderConnectResult>(`/${id}/providers/connect`, {
+      method: "POST",
+      body: JSON.stringify({ provider, ...(connectedRepositoryId ? { connectedRepositoryId } : {}) }),
+    }),
 
   addDomain: (id: string, hostname: string) => req<{ domain: DeploymentDomain }>(`/${id}/domains`, { method: "POST", body: JSON.stringify({ hostname }) }).then((r) => r.domain),
   addGoDaddyDomain: (id: string, hostname: string) =>

@@ -30,23 +30,44 @@ export function useBackendReady(pollMs = 2500): BackendReadyState {
   React.useEffect(() => {
     let active = true
     let timer: ReturnType<typeof setTimeout> | null = null
+    let consecutiveFailures = 0
+    // A single slow/aborted probe (cold-start route compile, a GC pause, a
+    // transient network blip, the first probe of a fresh page load) must NOT
+    // flip the UI to the alarming "El servidor se está iniciando" banner —
+    // that produced a persistent false positive even though the backend was
+    // healthy. Only declare "warming" after this many *consecutive* failures,
+    // so the banner reflects a genuinely unreachable backend (the real
+    // post-publish warmup window, where probes fail repeatedly) instead of one
+    // unlucky request. We stay in "checking" (no banner) until then.
+    const FAILURES_BEFORE_WARMING = 2
 
     const check = async () => {
       let ready = false
+      let warmingSignal = false
       const controller = new AbortController()
       // Abort a stalled probe so a hung request can't pin the hook in
       // "checking"/"warming" forever; the next poll tick retries cleanly.
-      const abortTimer = setTimeout(() => controller.abort(), 4000)
+      const abortTimer = setTimeout(() => controller.abort(), 7000)
       try {
         const res = await fetch(`${getNormalizedApiBaseUrl()}/health/ready`, {
           method: "HEAD",
           cache: "no-store",
           signal: controller.signal,
         })
-        // 204 when the backend is live, 503 while it is still warming up.
+        // 204 when the backend is live, 503 while it is still warming up. Only
+        // an explicit 503 is the warmup signal — any other non-OK status would
+        // be a route bug, not a booting backend, so it should not raise the
+        // banner (we stay in "checking" and keep retrying instead).
         ready = res.ok
+        warmingSignal = res.status === 503
       } catch {
-        ready = false
+        // The fetch threw instead of returning a status: either the 7s abort
+        // fired (the Next.js dev server was busy compiling a heavy route and
+        // could not answer this filesystem route in time) or a transient
+        // network blip inside the preview iframe. Neither proves the backend is
+        // down — it is a separate process and almost certainly reachable — so
+        // this must NOT raise the alarming "server is starting" banner, so we
+        // leave `ready`/`warmingSignal` at their pre-fetch defaults (both false).
       } finally {
         clearTimeout(abortTimer)
       }
@@ -54,11 +75,23 @@ export function useBackendReady(pollMs = 2500): BackendReadyState {
       if (!active) return
 
       if (ready) {
+        consecutiveFailures = 0
         setState("ready")
         return
       }
 
-      setState("warming")
+      // Only a real 503 *response* from the readiness route counts toward the
+      // warming banner — that is the genuine post-publish signal (Next.js is up
+      // and answering, but its /health/live ping to the backend is refused
+      // because the backend has not finished booting). A thrown fetch (abort
+      // during heavy dev compilation, or an iframe network blip) is not that
+      // signal, so stay in the current state and just retry on the next tick.
+      if (warmingSignal) {
+        consecutiveFailures += 1
+        if (consecutiveFailures >= FAILURES_BEFORE_WARMING) {
+          setState("warming")
+        }
+      }
       timer = setTimeout(check, pollMs)
     }
 

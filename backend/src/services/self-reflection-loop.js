@@ -37,9 +37,19 @@
  *   }
  */
 
-const DEFAULT_ACCEPT_THRESHOLD = Number(process.env.SIRAGPT_REFLECTION_ACCEPT_THRESHOLD) || 0.65;
-const DEFAULT_SOFT_THRESHOLD = Number(process.env.SIRAGPT_REFLECTION_SOFT_THRESHOLD) || 0.45;
-const DEFAULT_MAX_RETRIES = Number(process.env.SIRAGPT_REFLECTION_MAX_RETRIES) || 2;
+// Coerce to a non-negative number, defaulting ONLY on unset/empty/NaN — NOT on
+// 0. `Number(x) || fallback` and `Number(x) > 0 ? … : fallback` both treated a
+// legitimate 0 (e.g. maxRetries=0 = "escalate without retrying", threshold=0 =
+// "accept everything") as "not set" and silently overrode it with the default.
+function numOr(raw, fallback) {
+  if (raw == null || raw === '') return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+const DEFAULT_ACCEPT_THRESHOLD = numOr(process.env.SIRAGPT_REFLECTION_ACCEPT_THRESHOLD, 0.65);
+const DEFAULT_SOFT_THRESHOLD = numOr(process.env.SIRAGPT_REFLECTION_SOFT_THRESHOLD, 0.45);
+const DEFAULT_MAX_RETRIES = numOr(process.env.SIRAGPT_REFLECTION_MAX_RETRIES, 2);
 
 function clamp01(v) {
   const n = Number(v);
@@ -107,9 +117,9 @@ function reflect({
   retryCount = 0,
   opts = {},
 } = {}) {
-  const acceptThreshold = Number(opts.acceptThreshold) > 0 ? Number(opts.acceptThreshold) : DEFAULT_ACCEPT_THRESHOLD;
-  const softThreshold = Number(opts.softThreshold) > 0 ? Number(opts.softThreshold) : DEFAULT_SOFT_THRESHOLD;
-  const maxRetries = Number(opts.maxRetries) > 0 ? Number(opts.maxRetries) : DEFAULT_MAX_RETRIES;
+  const acceptThreshold = numOr(opts.acceptThreshold, DEFAULT_ACCEPT_THRESHOLD);
+  const softThreshold = numOr(opts.softThreshold, DEFAULT_SOFT_THRESHOLD);
+  const maxRetries = numOr(opts.maxRetries, DEFAULT_MAX_RETRIES);
   // Attach the draft text to the score so collectGaps can scan it for
   // plan-step coverage without us having to plumb a second arg through.
   const scoreWithDraft = faithfulnessScore && typeof faithfulnessScore === 'object'

@@ -48,3 +48,18 @@ test('PRO user api percentage is consumed/limit', async () => {
   const res = await usageMonitor.checkUsageAndAlert('u2');
   assert.equal(res.apiUsage.percentage, 0.5);
 });
+
+test('currentMonthStartUtc is the 1st of the current UTC month at 00:00:00Z (TZ-independent)', () => {
+  // The buggy `new Date(y,m,1)` is local-time → e.g. 04:00:00Z on a UTC-4 host,
+  // dropping the month's first hours from usage/quota queries. The UTC boundary
+  // is exactly midnight on the 1st regardless of the runtime timezone.
+  const d = usageMonitor.currentMonthStartUtc();
+  assert.equal(d.getUTCDate(), 1);
+  assert.equal(d.getUTCHours(), 0);
+  assert.equal(d.getUTCMinutes(), 0);
+  assert.equal(d.getUTCSeconds(), 0);
+  assert.equal(d.getUTCMilliseconds(), 0);
+  const now = new Date();
+  assert.equal(d.getUTCFullYear(), now.getUTCFullYear());
+  assert.equal(d.getUTCMonth(), now.getUTCMonth());
+});

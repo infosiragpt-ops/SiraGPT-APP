@@ -61,7 +61,7 @@ import { useAuth } from "@/lib/auth-context-integrated"
 import { useChat } from "@/lib/chat-context-integrated"
 import { useCodeWorkspace } from "@/lib/code-workspace-context"
 import { intakeService } from "@/lib/builder/intake-service"
-import type { CodeChatTurn } from "@/lib/code-chat-sessions"
+import type { CodeAgentPhase, CodeChatTurn } from "@/lib/code-chat-sessions"
 import { computeLineDiff, parseCodeBlocks, type CodeBlock } from "@/lib/code-workspace-utils"
 import { detectBlocker } from "@/lib/code-chat-blocker"
 import { extractPlanLabel } from "@/lib/code-chat-plan-label"
@@ -96,11 +96,28 @@ import { opencodeService } from "@/lib/opencode/opencode-service"
 import { useOpencodeEngine } from "@/lib/opencode/use-opencode-engine"
 
 import { DiffView } from "./diff-view"
-import { AgentSwarm } from "./agent-swarm"
 
-import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import { DotmCircular15, THINKING_GLYPH_COLOR } from "@/components/ui/dotm-circular-15"
 
 type ComposerMode = "app" | "build" | "plan" | "debug" | "ask" | "image"
+
+const CODE_OPEN_PREVIEW_EVENT = "siragpt:code-open-preview"
+const CODE_RUN_PREVIEW_EVENT = "siragpt:code-run-preview"
+
+function filesContainNodeProject(files: Array<{ path: string; content: string }>): boolean {
+  return files.some((file) => /(^|\/)package\.json$/i.test(file.path))
+}
+
+function openPreviewAndMaybeRun(files: Array<{ path: string; content: string }>): void {
+  if (typeof window === "undefined") return
+  window.dispatchEvent(new CustomEvent(CODE_OPEN_PREVIEW_EVENT))
+  if (!filesContainNodeProject(files)) return
+  window.setTimeout(() => {
+    const detail = { source: "agent", auto: true }
+    window.dispatchEvent(new CustomEvent(CODE_RUN_PREVIEW_EVENT, { detail }))
+    window.dispatchEvent(new CustomEvent("siragpt:code-run-app", { detail }))
+  }, 350)
+}
 
 const COMPOSER_MODE_LABEL: Record<ComposerMode, string> = {
   app: "App",
@@ -112,11 +129,11 @@ const COMPOSER_MODE_LABEL: Record<ComposerMode, string> = {
 }
 
 const COMPOSER_PLACEHOLDER: Record<ComposerMode, string> = {
-  app: "Describe tu idea — propongo el plan, diseño y construyo…",
+  app: "Describe lo que quieres construir o cambiar — el agente lo hace…",
   build: "Pide un cambio, pega código o / para comandos",
   plan: "Objetivo o plan antes de editar archivos…",
   debug: "Error, stack trace o comportamiento esperado…",
-  ask: "Pregunta sobre el workspace o el archivo activo…",
+  ask: "Pregunta sobre tu app o tu código — respondo sin tocar archivos…",
   image: "Describe UI, asset o captura…",
 }
 
@@ -162,7 +179,7 @@ const COMPOSER_MODE_INSTRUCTION: Record<ComposerMode, string> = {
   debug:
     "Modo Debug: diagnostica el error con hipótesis verificables, pide el dato mínimo faltante si hace falta y entrega un parche concreto cuando sea posible.",
   ask:
-    "Modo Ask: responde de forma directa y técnica sobre el workspace, priorizando claridad y referencias a archivos.",
+    "Modo Ask (igual que el modo Ask de Replit): responde de forma clara y directa preguntas sobre la app, el código o cómo funciona, con referencias a archivos cuando ayude. NO modifiques ni generes archivos. Si el usuario pide construir, crear o cambiar algo, explícale brevemente cómo se haría y sugiérele cambiar al modo Agent para que lo construya por él.",
   image:
     "Modo Image: ayuda a razonar sobre assets, interfaces, capturas o diseño visual. Si se requiere implementación, tradúcelo a cambios de código.",
 }
@@ -204,6 +221,35 @@ const AGENT_STYLE_BLOCK = [
   "- NO inventes resultados ni métricas (tiempo, acciones, líneas, tokens y costo se miden y se muestran solos). Si algo falla por falta de créditos/cuota/clave (402), detente, no reintentes en bucle, y explica qué quedó bloqueado.",
 ].join("\n")
 
+const CODE_AGENT_PHASE_BLUEPRINT = [
+  { key: "plan", label: "Plan" },
+  { key: "context", label: "Contexto" },
+  { key: "generate", label: "Generar" },
+  { key: "apply", label: "Aplicar" },
+  { key: "verify", label: "Verificar" },
+] as const
+
+type CodeAgentPhaseKey = (typeof CODE_AGENT_PHASE_BLUEPRINT)[number]["key"]
+
+function buildCodeAgentPhases(
+  activeKey: CodeAgentPhaseKey,
+  overrides: Partial<Record<CodeAgentPhaseKey, Partial<CodeAgentPhase>>> = {},
+): CodeAgentPhase[] {
+  const activeIndex = Math.max(0, CODE_AGENT_PHASE_BLUEPRINT.findIndex((phase) => phase.key === activeKey))
+  return CODE_AGENT_PHASE_BLUEPRINT.map((phase, index) => {
+    const override = overrides[phase.key]
+    const status =
+      override?.status ??
+      (index < activeIndex ? "done" : index === activeIndex ? "running" : "pending")
+    return {
+      key: phase.key,
+      label: phase.label,
+      status,
+      ...(override?.detail ? { detail: override.detail } : {}),
+    }
+  })
+}
+
 function buildSystemContext(
   files: Record<string, { path: string; language: string; content: string }>,
   activePath: string | null,
@@ -236,7 +282,7 @@ function buildSystemContext(
         "El workspace alojará un SOFTWARE FULL-STACK real: Next.js 14 App Router",
         "+ TypeScript + Prisma + PostgreSQL. Usa package.json, app/**,",
         "app/api/**, lib/db.ts, prisma/schema.prisma, .env.example y",
-        "docker-compose.yml. El usuario lo ejecuta con ▶ Ejecutar (dev server)",
+        "docker-compose.yml. El preview se arranca automáticamente con el dev server",
         "y prepara la base de datos con db:push/db:seed. NO uses arrays globales",
         "ni almacenamiento en memoria como persistencia primaria.",
       ].join("\n")
@@ -246,7 +292,7 @@ function buildSystemContext(
           ? "El workspace contiene un PROYECTO Node REAL (hay package.json) — típicamente"
           : "El workspace alojará un PROYECTO Node REAL.",
         "Usa imports npm normales y extensiones .tsx/.ts; el usuario lo ejecuta",
-        "con ▶ Ejecutar (dev server). Respeta el stack ya presente en package.json",
+        "con dev server autoejecutado en preview. Respeta el stack ya presente en package.json",
         "si existe.",
       ].join("\n")
     : [
@@ -335,6 +381,39 @@ export function AICodeChatPanel() {
   // the live stream). Auto-selected from the catalog, persisted, user-overridable.
   const [codeModel, setCodeModel] = React.useState<{ name: string; provider?: string } | null>(null)
 
+  // FREE-plan / sparse catalogs return models:[] but the backend still ships a
+  // policy.fallbackModel it will route to. Surface it so the composer never gets
+  // stuck on "Cargando modelos…" and Ask can stream. (Agent's first build is
+  // LLM-free and works even with no model at all.)
+  const [fallbackModel, setFallbackModel] = React.useState<{
+    name: string
+    provider?: string
+    displayName?: string
+  } | null>(null)
+
+  React.useEffect(() => {
+    if ((availableModels && availableModels.length > 0) || fallbackModel) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const res = await apiClient.getAIModels("TEXT")
+        const fb = (
+          res as {
+            policy?: { fallbackModel?: { name?: string; provider?: string; displayName?: string } }
+          }
+        )?.policy?.fallbackModel
+        if (!cancelled && fb?.name) {
+          setFallbackModel({ name: fb.name, provider: fb.provider, displayName: fb.displayName })
+        }
+      } catch {
+        /* best-effort: deterministic Agent build still works without a model */
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [availableModels, fallbackModel])
+
   React.useEffect(() => {
     if (codeModel || !availableModels || availableModels.length === 0) return
     let restored: { name: string; provider?: string } | null = null
@@ -360,6 +439,16 @@ export function AICodeChatPanel() {
     }
   }, [])
 
+  // If a real catalog loads later (e.g. an admin activates models) and our
+  // persisted choice is the policy fallback — which isn't in the catalog — drop
+  // it so the picker reflects the real list instead of pinning "Gema4".
+  React.useEffect(() => {
+    if (!availableModels || availableModels.length === 0 || !codeModel) return
+    if (availableModels.some((m) => m.name === codeModel.name)) return
+    const next = recommendFastModel(availableModels) || availableModels[0]
+    if (next) chooseCodeModel({ name: next.name, provider: next.provider })
+  }, [availableModels, codeModel, chooseCodeModel])
+
   // Resolved model the code chat actually uses. Priority:
   //  1. an explicit code-chat choice (codeModel),
   //  2. a fast model derived inline from the catalog (so the FIRST request is
@@ -369,8 +458,25 @@ export function AICodeChatPanel() {
     () => recommendFastModel(availableModels || []),
     [availableModels],
   )
-  const activeModelName = codeModel?.name || autoFastModel?.name || selectedModel
-  const activeProvider = codeModel?.provider || autoFastModel?.provider || selectProvider
+  const activeModelName =
+    codeModel?.name || autoFastModel?.name || selectedModel || fallbackModel?.name || ""
+  const activeProvider =
+    codeModel?.provider || autoFastModel?.provider || selectProvider || fallbackModel?.provider
+  // What the model picker shows: the real catalog when present, else the single
+  // policy fallback so the user sees "Gema4" rather than an endless spinner.
+  const pickerModels = React.useMemo<ModelOption[]>(() => {
+    if (availableModels && availableModels.length > 0) return availableModels as ModelOption[]
+    if (fallbackModel) {
+      return [
+        {
+          name: fallbackModel.name,
+          displayName: fallbackModel.displayName,
+          provider: fallbackModel.provider,
+        } as ModelOption,
+      ]
+    }
+    return []
+  }, [availableModels, fallbackModel])
   // Fast = streaming-friendly (good for the live preview); slow = reasoning/heavy.
   const modelIsFast = !!activeModelName && !isSlowModel(activeModelName)
 
@@ -495,6 +601,12 @@ export function AICodeChatPanel() {
       const controller = new AbortController()
       abortRef.current = controller
 
+      const patchAssistant = (patch: Partial<CodeChatTurn>) => {
+        setTurns((prev) =>
+          prev.map((t) => (t.id === assistantId ? { ...t, ...patch } : t)),
+        )
+      }
+
       const modeInstruction = COMPOSER_MODE_INSTRUCTION[composerMode]
       // Include the recent conversation so the agent actually accumulates the
       // intake context across turns. Without this the chat was stateless per
@@ -552,13 +664,22 @@ export function AICodeChatPanel() {
             )
           },
           () => {
-            // App mode (or an explicit override) = Replit-style "presented
-            // output": auto-apply the generated files and open the live preview
-            // so the user sees the result immediately. Other modes keep the
-            // manual "Aplicar" button (review-before-write). `applied` is fed to
-            // the Worked-Summary/action-log metrics on the turn (real numbers).
+            // Agentic write modes (app/build, plus debug/patch via explicit
+            // override) = Replit-style "presented output": the agent applies the
+            // generated files itself and opens the live preview, with NO manual
+            // "Aplicar" button (the user asked the agentic system to do the
+            // writing). Read-only modes (ask/plan/image) pass autoApply:false and
+            // never apply. `applied` feeds the Worked-Summary/action-log metrics
+            // on the turn (real numbers).
             let applied: Array<{ path: string; content: string }> = []
-            if (override?.autoApply ?? composerMode === "app") {
+            patchAssistant({
+              agentLabel: "Aplicando cambios al workspace",
+              agentPhases: buildCodeAgentPhases("apply", {
+                context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
+                generate: { status: "done", detail: "Stream completado" },
+              }),
+            })
+            if (override?.autoApply ?? (composerMode === "app" || composerMode === "build")) {
               try {
                 const blocks = parseCodeBlocks(assistantText).filter((b) => b.path)
                 if (blocks.length > 0) {
@@ -570,19 +691,32 @@ export function AICodeChatPanel() {
                   const hasHtml = blocks.some((b) => /\.html?$/i.test(b.path || ""))
                   toast.success(
                     hasPkg
-                      ? "Proyecto generado — pulsa ▶ Ejecutar para levantar el dev server"
+                      ? "Proyecto generado — levantando el dev server…"
                       : hasHtml
                         ? "App generada — revisa el preview en vivo →"
                         : `Generados ${blocks.length} archivo(s) — abriendo preview`,
                   )
                   // applyBlock already emits "siragpt:code-open-preview"; make
-                  // sure the preview pane is shown even if it was collapsed.
-                  if (typeof window !== "undefined") {
-                    window.dispatchEvent(new CustomEvent("siragpt:code-open-preview"))
-                  }
+                  // sure the preview pane is shown even if it was collapsed, and
+                  // auto-boot the dev server so the user sees the running result
+                  // without hunting for ▶ Ejecutar. The PreviewPane only acts on
+                  // this for real Vite/Next projects and degrades silently if the
+                  // environment/user can't run apps.
+                  openPreviewAndMaybeRun(applied)
                 }
               } catch {
-                /* parsing/apply failure → user can still apply manually */
+                // Auto-apply failed (parse/write error). There is no manual
+                // "Aplicar" button anymore, so surface the failure explicitly and
+                // tell the user they can still copy the code as a fallback.
+                toast.error("No se pudieron aplicar los cambios automáticamente. Usa el botón Copiar de cada bloque.")
+                patchAssistant({
+                  agentLabel: "No se pudieron aplicar los cambios",
+                  agentPhases: buildCodeAgentPhases("apply", {
+                    context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
+                    generate: { status: "done", detail: "Stream completado" },
+                    apply: { status: "error", detail: "Fallo al aplicar — copia manual disponible" },
+                  }),
+                })
               }
             }
             setTurns((prev) =>
@@ -706,9 +840,9 @@ export function AICodeChatPanel() {
             `- **Stack:** Vite 7 + React 18 + TypeScript + Tailwind v4`,
             `- **Incluye:** animaciones de scroll (Framer Motion) y el componente «Invitar al proyecto»`,
             ``,
-            `Pulsa **▶ Ejecutar** para instalar dependencias y ver la landing en vivo. Itera pidiéndome cambios en el chat.`,
+            `Estoy arrancando el **preview en vivo** automáticamente. Itera pidiéndome cambios en el chat.`,
           ].join("\n")
-          toastMsg = "Landing generada — pulsa ▶ Ejecutar →"
+          toastMsg = "Landing generada — arrancando preview →"
         } else {
           const result = await intakeService.generate(text)
           appliedFiles = result.files || []
@@ -726,9 +860,9 @@ export function AICodeChatPanel() {
             `- **Base de datos:** ${result.blueprint.stack.database}`,
             `- **Incluye:** API routes, Prisma schema, seed, .env.example y Docker Compose para Postgres`,
             ``,
-            `Revisa el **preview en vivo** → y el código en el árbol de archivos. Para ejecutar la capa real: **▶ Ejecutar**, luego \`npm run db:push\` y \`npm run db:seed\` si el workspace no lo hizo automáticamente.`,
+            `Estoy arrancando el **preview en vivo** automáticamente. Si el runner devuelve logs, puedo repararlos desde este mismo chat.`,
           ].join("\n")
-          toastMsg = "Software full-stack generado — revisa el preview en vivo →"
+          toastMsg = "Software full-stack generado — arrancando preview →"
         }
         // Apply index.html LAST so it stays the active tab and the live preview
         // lands on the runnable app rather than a doc file.
@@ -738,9 +872,7 @@ export function AICodeChatPanel() {
         for (const file of ordered) {
           applyBlock(file.path, file.content)
         }
-        if (typeof window !== "undefined") {
-          window.dispatchEvent(new CustomEvent("siragpt:code-open-preview"))
-        }
+        openPreviewAndMaybeRun(appliedFiles)
         setTurns((prev) =>
           prev.map((t) => (t.id === `${id}-a` ? { ...t, content: summary, streaming: false } : t)),
         )
@@ -797,9 +929,7 @@ export function AICodeChatPanel() {
           (/(^|\/)index\.html?$/i.test(a.path) ? 1 : 0) - (/(^|\/)index\.html?$/i.test(b.path) ? 1 : 0),
       )
       for (const f of ordered) applyBlock(f.path, f.content)
-      if (files.length > 0 && typeof window !== "undefined") {
-        window.dispatchEvent(new CustomEvent("siragpt:code-open-preview"))
-      }
+      if (files.length > 0) openPreviewAndMaybeRun(files)
     },
     [applyBlock],
   )
@@ -1159,19 +1289,24 @@ export function AICodeChatPanel() {
           patchAgentState(sid, (s) => ({ ...s, phase: "generating", context: action.context }))
           const hasIntake = !!(action.context.productType || action.context.brand)
           const genPrompt = hasIntake ? promptFromContext(action.context) : text
-          if (!opts?.forceDeterministic && engineAvailable) {
-            // Prefer the OpenCode agent: it writes the Vite project files into
-            // its /workspace (via a funded model), and runEngine reads them back
-            // into the editor — falling back to the deterministic builder if the
-            // agent leaves no usable project. Rich AND reliable in Docker.
+          // Deterministic tier: enrich a bare context with the raw prompt so the
+          // local scaffold still produces niche-coherent copy.
+          const buildCtx = hasIntake ? action.context : { ...action.context, productType: text }
+          if (!opts?.forceDeterministic && engineMode && engineAvailable) {
+            // OpenCode agent (only truly available in Docker AND opt-in via the
+            // "Motor" toggle): it writes the project files into its /workspace via
+            // a funded model and runEngine reads them back — deterministic
+            // fallback inside. Without an explicit Motor opt-in the deterministic
+            // builder below is the primary path (fast, no ~30s GCLB stream cut).
             await runEngine(text, sid, { buildContext: action.context })
             patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "llm" }))
           } else {
-            // If the engine is unavailable, build locally instead of routing
-            // first-turn generation through the general chat backend. The
-            // general backend can ask generic "output format" clarification
-            // questions, which leaves /code without files or preview.
-            const buildCtx = hasIntake ? action.context : { ...action.context, productType: text }
+            // First build → the deterministic builder is the PRIMARY path. It is
+            // LLM-free, returns in seconds, and emits a self-contained index.html
+            // live preview, so it never hits the ~30s GCLB stream cut that left
+            // the chat-streaming generation "cargando" forever on the Reserved VM.
+            // (This branch previously streamed the whole project from the chat
+            // model — the source of the hang/errors the user reported.)
             await buildApp(genPrompt, buildCtx)
             patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "deterministic" }))
           }
@@ -1198,13 +1333,21 @@ export function AICodeChatPanel() {
           return
         }
         default:
-          if (engineMode && engineAvailable) {
+          // Ask/Plan/Image are read-only: they must stream an answer via
+          // sendPrompt (autoApply stays false because composerMode !== "app")
+          // and must NEVER route into runEngine, which would apply files.
+          if (
+            (composerMode === "app" || composerMode === "build") &&
+            engineMode &&
+            engineAvailable
+          ) {
             await runEngine(text, sid)
           } else {
-            await sendPrompt(text, { autoApply: composerMode === "app" })
+            await sendPrompt(text, { autoApply: composerMode === "app" || composerMode === "build" })
           }
       }
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       activeCodeChatSession,
       activePath,
@@ -1288,7 +1431,6 @@ export function AICodeChatPanel() {
       </div>
 
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto p-3">
-        <AgentSwarm active={agentsActive && turns.length > 0} />
         {turns.length === 0 ? (
           <EmptyChat active={agentsActive} phase={agentPhase} />
         ) : (
@@ -1297,14 +1439,6 @@ export function AICodeChatPanel() {
               <ChatBubble
                 key={turn.id}
                 turn={turn}
-                onApply={(block) => {
-                  if (!block.path) {
-                    toast.message("Este bloque no incluye una ruta de archivo. Usa el botón de copiar.")
-                    return
-                  }
-                  applyBlock(block.path, block.content)
-                  toast.success(`Aplicado a ${block.path}`)
-                }}
                 lookupContent={(path) => files[path]?.content ?? ""}
               />
             ))}
@@ -1325,7 +1459,14 @@ export function AICodeChatPanel() {
             disabled={busy}
             className="max-h-[140px] min-h-[28px] resize-none border-0 bg-transparent px-1 py-0.5 text-[13px] leading-[1.45] shadow-none outline-none ring-0 placeholder:text-muted-foreground/55 focus-visible:ring-0"
           />
-          <div className="mt-1 flex items-center gap-0.5">
+          <div className="mt-1 flex items-center gap-1">
+            <PrimaryModeToggle
+              mode={composerMode === "ask" ? "ask" : "agent"}
+              onChange={(m) => {
+                setComposerMode(m === "ask" ? "ask" : "app")
+                inputRef.current?.focus()
+              }}
+            />
             <ComposerPlusMenu
               mode={composerMode}
               includeContext={includeContext}
@@ -1337,7 +1478,7 @@ export function AICodeChatPanel() {
               onIncludeContextChange={setIncludeContext}
             />
             <ModelPickerInline
-              models={availableModels || []}
+              models={pickerModels}
               selectedModel={activeModelName || ""}
               fast={modelIsFast}
               onSelect={(m) => chooseCodeModel({ name: m.name, provider: m.provider })}
@@ -1419,8 +1560,8 @@ function EmptyChat({ active, phase }: { active: boolean; phase: AgentPhase }) {
               <Sparkles className={cn("h-4 w-4", active && "animate-pulse")} />
             </span>
             <div className="min-w-0">
-              <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">Agentes</h2>
-              <p className="truncate text-[11px] text-muted-foreground">1,044 en paralelo</p>
+              <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">Agente de código</h2>
+              <p className="truncate text-[11px] text-muted-foreground">Planifica, genera y verifica</p>
             </div>
           </div>
           <span
@@ -1485,11 +1626,9 @@ function EmptyChat({ active, phase }: { active: boolean; phase: AgentPhase }) {
 
 function ChatBubble({
   turn,
-  onApply,
   lookupContent,
 }: {
   turn: CodeChatTurn
-  onApply: (block: CodeBlock) => void
   lookupContent: (path: string) => string
 }) {
   const isUser = turn.role === "user"
@@ -1528,7 +1667,9 @@ function ChatBubble({
             {!turn.streaming && typeof turn.planMs === "number" ? (
               <span className="opacity-60">({formatWorked(turn.planMs)})</span>
             ) : null}
-            {turn.streaming ? <ThinkingIndicator size="xs" className="inline" /> : null}
+            {turn.streaming ? (
+              <DotmCircular15 size={16} dotSize={2} color={THINKING_GLYPH_COLOR} ariaLabel="Pensando" className="inline shrink-0" />
+            ) : null}
           </span>
         ) : null}
       </div>
@@ -1546,17 +1687,10 @@ function ChatBubble({
       {(() => {
         const applicable = blocks.filter((b) => b.path)
         return applicable.length >= 2 ? (
-          <div className="mt-2 flex items-center justify-between gap-2 rounded-md border border-border/50 bg-muted/20 px-2.5 py-1.5">
+          <div className="mt-2 flex items-center gap-2 rounded-md border border-border/50 bg-muted/20 px-2.5 py-1.5">
             <span className="text-[11px] text-muted-foreground">
               {applicable.length} archivos en esta respuesta
             </span>
-            <button
-              type="button"
-              onClick={() => applicable.forEach((b) => onApply(b))}
-              className="inline-flex items-center gap-1 rounded-md bg-foreground px-2.5 py-1 text-[11px] font-medium text-background transition-opacity hover:opacity-90"
-            >
-              Aplicar todo y ver
-            </button>
           </div>
         ) : null
       })()}
@@ -1564,7 +1698,6 @@ function ChatBubble({
         <CodeBlockCard
           key={block.index}
           block={block}
-          onApply={() => onApply(block)}
           existingContent={block.path ? lookupContent(block.path) : ""}
         />
       ))}
@@ -1578,6 +1711,49 @@ function ChatBubble({
 
 function stripFences(text: string): string {
   return text.replace(/```[^\n`]*\n[\s\S]*?```/g, "").trim()
+}
+
+function CodeAgentProgress({ phases }: { phases?: CodeAgentPhase[] }) {
+  if (!phases || phases.length === 0) return null
+
+  return (
+    <div className="mb-2 grid gap-1.5 sm:grid-cols-5">
+      {phases.map((phase) => {
+        const isDone = phase.status === "done"
+        const isRunning = phase.status === "running"
+        const isError = phase.status === "error"
+        return (
+          <div
+            key={phase.key}
+            className={cn(
+              "min-w-0 rounded-md border px-2 py-1.5 text-[11px] leading-tight transition-colors",
+              isDone && "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+              isRunning && "border-blue-500/35 bg-blue-500/10 text-blue-700 dark:text-blue-300",
+              isError && "border-red-500/35 bg-red-500/10 text-red-700 dark:text-red-300",
+              phase.status === "pending" && "border-border/60 bg-muted/20 text-muted-foreground",
+            )}
+          >
+            <div className="flex min-w-0 items-center gap-1.5">
+              <span
+                className={cn(
+                  "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border text-[9px]",
+                  isDone && "border-emerald-500/40 bg-emerald-500 text-white",
+                  isRunning && "border-blue-500/40 bg-blue-500 text-white",
+                  isError && "border-red-500/40 bg-red-500 text-white",
+                  phase.status === "pending" && "border-border bg-background text-muted-foreground",
+                )}
+                aria-hidden="true"
+              >
+                {isDone ? <Check className="h-3 w-3" /> : isError ? <AlertTriangle className="h-3 w-3" /> : isRunning ? <DotmCircular15 size={14} dotSize={2} color="#ffffff" ariaLabel="Trabajando" className="shrink-0" /> : null}
+              </span>
+              <span className="truncate font-medium">{phase.label}</span>
+            </div>
+            {phase.detail ? <div className="mt-1 truncate opacity-75">{phase.detail}</div> : null}
+          </div>
+        )
+      })}
+    </div>
+  )
 }
 
 // Compact action log: the FULL ordered glyph sequence (">_ 📖 ✎ …") + an
@@ -1678,6 +1854,60 @@ function ChatBlockerPanel({ title, rawError, url }: { title: string; rawError: s
           Añadir créditos <ExternalLink className="h-3.5 w-3.5" />
         </a>
       )}
+    </div>
+  )
+}
+
+// Primary, Replit-style mode switch: two clear pills (Agent / Ask) shown up
+// front in the composer so the user always knows whether the AI will BUILD
+// (Agent → autonomous app/edit pipeline) or just ANSWER (Ask → conversational,
+// never touches files). Advanced sub-modes (build/plan/debug/image) stay in the
+// "+" menu. "agent" maps to the existing "app" composer mode.
+function PrimaryModeToggle({
+  mode,
+  onChange,
+}: {
+  mode: "agent" | "ask"
+  onChange: (mode: "agent" | "ask") => void
+}) {
+  const base =
+    "inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors"
+  return (
+    <div
+      role="group"
+      aria-label="Modo del agente: Agent o Ask"
+      className="inline-flex shrink-0 items-center gap-0.5 rounded-lg bg-muted/60 p-0.5"
+    >
+      <button
+        type="button"
+        aria-pressed={mode === "agent"}
+        onClick={() => onChange("agent")}
+        title="Agent — describe algo y el agente lo construye o lo cambia"
+        className={cn(
+          base,
+          mode === "agent"
+            ? "bg-background text-foreground shadow-sm"
+            : "text-muted-foreground hover:text-foreground",
+        )}
+      >
+        <Sparkles className="h-3.5 w-3.5" />
+        <span>Agent</span>
+      </button>
+      <button
+        type="button"
+        aria-pressed={mode === "ask"}
+        onClick={() => onChange("ask")}
+        title="Ask — pregunta sobre tu app o tu código; responde sin tocar archivos"
+        className={cn(
+          base,
+          mode === "ask"
+            ? "bg-background text-foreground shadow-sm"
+            : "text-muted-foreground hover:text-foreground",
+        )}
+      >
+        <CircleHelp className="h-3.5 w-3.5" />
+        <span>Ask</span>
+      </button>
     </div>
   )
 }
@@ -1903,11 +2133,9 @@ function ModelPickerInline({
 
 function CodeBlockCard({
   block,
-  onApply,
   existingContent,
 }: {
   block: CodeBlock
-  onApply: () => void
   existingContent: string
 }) {
   const [open, setOpen] = React.useState(false)
@@ -1947,14 +2175,6 @@ function CodeBlockCard({
                 onClick={() => setOpen((v) => !v)}
               >
                 {open ? "Ocultar diff" : "Ver diff"}
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                className="h-6 px-2 text-[11px]"
-                onClick={onApply}
-              >
-                Aplicar
               </Button>
             </>
           ) : null}

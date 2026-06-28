@@ -159,13 +159,21 @@ function parsePromptedToolCalls(content, knownNames = null) {
   const toolCalls = [];
   let cleaned = text;
 
-  const accept = (rawJson) => {
+  // `requireKnown=false`: any syntactically-valid tool_call is consumed (its
+  // markup must be stripped from the visible answer — an explicit ```tool_call```
+  // fence is protocol, not prose) but only REGISTERED tools are added to
+  // toolCalls. `requireKnown=true` is the conservative mode for bare JSON, where
+  // a stray prose object with a "tool" key should be left alone unless it names
+  // a real tool. Fixes raw tool_call markup leaking into the user's answer when
+  // the model named an unknown/misspelled tool.
+  const handle = (rawJson, requireKnown) => {
     let obj;
     try { obj = JSON.parse(rawJson); } catch { return false; }
     const call = toToolCall(obj, toolCalls.length);
     if (!call) return false;
-    if (known && !known.has(call.function.name)) return false;
-    toolCalls.push(call);
+    const isKnown = !known || known.has(call.function.name);
+    if (requireKnown && !isKnown) return false;
+    if (isKnown) toolCalls.push(call);
     return true;
   };
 
@@ -173,14 +181,14 @@ function parsePromptedToolCalls(content, knownNames = null) {
   let m;
   const consumedFences = [];
   while ((m = FENCED_CALL_RE.exec(text)) !== null) {
-    if (accept((m[1] || '').trim())) consumedFences.push(m[0]);
+    if (handle((m[1] || '').trim(), false)) consumedFences.push(m[0]);
   }
   for (const fence of consumedFences) cleaned = cleaned.replace(fence, ' ');
 
   if (toolCalls.length === 0) {
     for (const candidate of extractBareJsonObjects(text)) {
       if (!/"(?:tool|name)"\s*:/.test(candidate)) continue;
-      if (accept(candidate)) cleaned = cleaned.replace(candidate, ' ');
+      if (handle(candidate, true)) cleaned = cleaned.replace(candidate, ' ');
     }
   }
 

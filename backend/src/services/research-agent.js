@@ -94,7 +94,10 @@ function createBrowserSession({ totalBudgetMs }) {
     try {
       browser = await pw.chromium.launch({ headless: true });
     } catch (err) {
-      // Browser exec missing or launch failed — degrade to text-only.
+      // Browser exec missing or launch failed — degrade to text-only. Surface
+      // the actionable Playwright message (e.g. "Executable doesn't exist")
+      // instead of silently degrading every browse step with no signal.
+      console.warn('[research-agent] chromium launch failed, degrading to text-only:', err && err.message ? err.message : err);
       browser = false;
       return { error: err.message };
     }
@@ -122,6 +125,12 @@ function createBrowserSession({ totalBudgetMs }) {
       javaScriptEnabled: true,
     });
     const page = await context.newPage();
+    // Bound the post-navigation ops (title/evaluate/screenshot) — goto +
+    // waitForLoadState pass explicit timeouts that override this default, but
+    // screenshot otherwise defaults to 0 (no timeout) and a wedged renderer
+    // could hang the run forever. Generous (= nav budget), never fires on
+    // healthy pages (these complete in ms).
+    page.setDefaultTimeout(perPageNavMs);
     try {
       const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: perPageNavMs });
       stub.statusCode = response?.status() || null;
@@ -129,25 +138,42 @@ function createBrowserSession({ totalBudgetMs }) {
       try { await page.waitForLoadState('networkidle', { timeout: perPageRenderMs }); } catch { /* ignore timeout */ }
       stub.title = await page.title();
       stub.text = (await page.evaluate(() => document.body?.innerText || '').catch(() => '')).slice(0, 8000);
-      const png = await page.screenshot({ fullPage: false, type: 'png' });
+      const png = await page.screenshot({ fullPage: false, type: 'png', timeout: perPageNavMs });
       // Cap screenshot size so the prompt + result payload stays sane.
       if (png && png.length <= screenshotMaxBytes) {
         stub.screenshotBase64 = png.toString('base64');
       } else if (png) {
-        stub.screenshotBase64 = png.slice(0, screenshotMaxBytes).toString('base64');
-        stub.error = 'screenshot_truncated';
+        // Do NOT slice raw PNG bytes: a PNG is a chunked binary format with CRCs
+        // and a trailing IEND, so a byte-truncated PNG is undecodable. Feeding
+        // that to the vision model wastes the call on garbage. Drop the
+        // screenshot instead so the vision step skips it gracefully.
+        stub.screenshotBase64 = null;
+        stub.error = 'screenshot_too_large';
       }
     } catch (err) {
       stub.error = err.message || String(err);
     } finally {
-      try { await context.close(); } catch { /* */ }
+      // Bound cleanup so a wedged/zombied renderer can't hang the run's finally.
+      try {
+        await Promise.race([
+          context.close(),
+          new Promise((r) => { const t = setTimeout(r, 5000); t.unref?.(); }),
+        ]);
+      } catch { /* */ }
     }
     return stub;
   }
 
   async function close() {
     if (browser && browser !== false) {
-      try { await browser.close(); } catch { /* */ }
+      // Bound the close so a wedged Chromium process can't pin run()'s finally
+      // (which would leave the SSE route's res.end() unreached). Best-effort.
+      try {
+        await Promise.race([
+          browser.close(),
+          new Promise((r) => { const t = setTimeout(r, 5000); t.unref?.(); }),
+        ]);
+      } catch { /* */ }
     }
     browser = null;
   }
@@ -229,7 +255,9 @@ return [].`,
       }
     }
   } catch (err) {
-    // Vision failure → fall back to abstract
+    // Vision failure → fall back to abstract. Log so a systemic vision outage
+    // isn't indistinguishable from a page that genuinely yielded no findings.
+    console.warn('[research-agent] vision analysis failed for', pageData.url, '-', err && err.message ? err.message : err);
     if (paper.abstract) {
       findings.push({
         text: paper.abstract.slice(0, 400),
@@ -363,7 +391,7 @@ async function run(opts = {}) {
   if (!aiClient) {
     const ai = getAiService();
     if (ai && typeof ai.getOpenAIClient === 'function') {
-      try { aiClient = ai.getOpenAIClient(); } catch { /* */ }
+      try { aiClient = ai.getOpenAIClient(); } catch (err) { console.warn('[research-agent] vision client init failed, using text-only mode:', err && err.message ? err.message : err); }
     }
   }
 
@@ -380,9 +408,12 @@ async function run(opts = {}) {
         limit: cfg.maxPapersPerSearch,
         timeoutMs: 8000,
       });
-      const newPapers = searchResult.papers.filter((p) =>
-        !allPapers.some((existing) => normaliseTitleKey(existing.title) === normaliseTitleKey(p.title))
-      );
+      // Dedup against the accumulated set with a Set built once per step (was
+      // O(newPapers × allPapers) re-normalizing every accumulated title per
+      // candidate). Snapshot semantics are identical: allPapers is extended only
+      // after the filter, so intra-batch duplicates still pass exactly as before.
+      const seenTitleKeys = new Set(allPapers.map((existing) => normaliseTitleKey(existing.title)));
+      const newPapers = searchResult.papers.filter((p) => !seenTitleKeys.has(normaliseTitleKey(p.title)));
       for (const p of newPapers) allPapers.push(p);
       newPapers.forEach((p) => emit(onEvent, { type: 'paper', paper: p }));
 

@@ -560,6 +560,22 @@ test('recommendUpgradeFromUsage: FREE user with PRO-sized usage → shouldUpgrad
   assert.equal(result.comparison.priceDeltaUsd, 5);
 });
 
+test('recommendUpgradeFromUsage: over-budget PRO user → shouldUpgrade=true even though ENTERPRISE is cheaper', () => {
+  const { recommendUpgradeFromUsage } = require('../src/services/feature-cost-estimator');
+  const result = recommendUpgradeFromUsage(
+    { paraphrase: { calls: 200_000, avgTextLength: 1000 } }, // exceeds the PRO_MAX budget → ENTERPRISE
+    'PRO',
+  );
+  assert.equal(result.recommendation.plan, 'ENTERPRISE');
+  // Regression: ENTERPRISE is priced $2 < PRO $5, so the price-based direction is
+  // 'downgrade' — yet the PRO user is well over their budget and MUST switch.
+  assert.equal(result.comparison.direction, 'downgrade');
+  assert.equal(
+    result.shouldUpgrade, true,
+    'capacity-based: the current plan cannot cover the projected usage',
+  );
+});
+
 test('recommendUpgradeFromUsage: user already on right plan → shouldUpgrade=false', () => {
   const { recommendUpgradeFromUsage } = require('../src/services/feature-cost-estimator');
   const result = recommendUpgradeFromUsage(

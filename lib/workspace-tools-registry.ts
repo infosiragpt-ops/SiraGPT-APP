@@ -39,6 +39,7 @@ export type WorkspaceToolAction =
   | { type: "palette"; query?: string }
   | { type: "new-file" }
   | { type: "open-app" }
+  | { type: "publishing" }
   | { type: "navigate"; href: string }
   | { type: "workflow-dialog" }
   | { type: "focus-chat" }
@@ -143,7 +144,7 @@ export const WORKSPACE_TOOLS: WorkspaceToolDef[] = [
     description: "Publica una versión compartible de la app",
     icon: Globe,
     keywords: "publish deploy share",
-    action: { type: "code-tool", toolId: "publishing" },
+    action: { type: "publishing" },
   },
   {
     id: "suggested-integrations",

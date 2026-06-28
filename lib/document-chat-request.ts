@@ -1,4 +1,4 @@
-export type DocumentChatFormat = 'docx' | 'xlsx' | 'pptx' | 'pdf' | 'csv' | 'html' | 'md'
+export type DocumentChatFormat = 'docx' | 'xlsx' | 'pptx' | 'pdf' | 'svg' | 'csv' | 'html' | 'md'
 export type DocumentChatComplexity = 'simple' | 'standard' | 'high' | 'stress'
 
 export interface DocumentChatRequestInput {
@@ -33,6 +33,9 @@ const DOCUMENT_EDITING_POLICY = [
   '- Never overwrite or mutate the original upload. Always generate a new downloadable file in the same format unless the user explicitly asks for a different format.',
   '- Preserve the original structure as much as the available renderer allows: logos/images, tables, sheet names, formulas, styles, section order, headers, footers, and slide layout.',
   '- Make only the requested edits; do not redesign unrelated parts of the file.',
+  '- If the user asks to apply corrections, improve, add, remove, replace, complete, format, or convert, perform the edit and return the downloadable file; do not stop at prose suggestions.',
+  '- If the user asks for several edits in one message, consolidate them into one edited output file unless they explicitly ask for multiple files.',
+  '- If no source file is present and the user asks to create a Word/Excel/PowerPoint/PDF/SVG/CSV/Markdown file, create a new downloadable file in the requested format.',
   '- When exact binary/layout preservation is not technically possible, state the limitation briefly and still return the best reconstructed editable document.',
 ].join('\n')
 
@@ -46,6 +49,7 @@ export function detectDocumentChatFormat(prompt: string): DocumentChatFormat {
   if (/\b(xlsx?|excel|hoja de calculo|spreadsheet|dashboard)\b/.test(text)) return 'xlsx'
   if (/\b(pptx?|ppt\b|power\s*point|powerpoint|presentacion|diapositivas|slides?)\b/.test(text)) return 'pptx'
   if (/\b(pdf)\b/.test(text)) return 'pdf'
+  if (/\b(svg|imagen vectorial|vector)\b/.test(text)) return 'svg'
   if (/\b(csv)\b/.test(text)) return 'csv'
   if (/\b(html|pagina html|documento web)\b/.test(text)) return 'html'
   if (/\b(markdown|md)\b/.test(text)) return 'md'

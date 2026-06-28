@@ -84,57 +84,7 @@ export function BottomGlowBar() {
         />
       </motion.div>
 
-      <style jsx global>{`
-        @keyframes glow-slide {
-          0% {
-            background-position: 0% 50%;
-          }
-          100% {
-            background-position: 300% 50%;
-          }
-        }
-        @keyframes glow-hue {
-          0%,
-          100% {
-            filter: blur(22px) hue-rotate(0deg);
-          }
-          50% {
-            filter: blur(22px) hue-rotate(45deg);
-          }
-        }
-        @keyframes comet-sweep {
-          0% {
-            left: -10%;
-            opacity: 0;
-          }
-          8% {
-            opacity: 1;
-          }
-          92% {
-            opacity: 1;
-          }
-          100% {
-            left: 105%;
-            opacity: 0;
-          }
-        }
-        @keyframes comet-sweep-rev {
-          0% {
-            right: -10%;
-            opacity: 0;
-          }
-          12% {
-            opacity: 1;
-          }
-          88% {
-            opacity: 1;
-          }
-          100% {
-            right: 105%;
-            opacity: 0;
-          }
-        }
-      `}</style>
+      {/* keyframes live in app/globals.css — no inline <style> to avoid hydration mismatch */}
     </>
   )
 }

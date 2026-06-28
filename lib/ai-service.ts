@@ -260,10 +260,25 @@ const EXISTING_DOCUMENT_EDIT_RE =
 // with NO structure keyword ("borra el jurado evaluador", "elimina los anexos",
 // "agrega una conclusión") — so unlike EXISTING_DOCUMENT_EDIT_RE they need no
 // target noun. They never appear in plain read-only Q&A ("¿qué dice?",
-// "resume", "explica"). Used to route document EDITS to the INLINE
-// /api/ai/generate path, where the document_edit (Cowork sandbox) tool lives.
+// "resume", "explica"). Used to route document EDITS to the durable
+// /api/agent/task path, where the source-preserving Office editor verifies the
+// downloaded artifact.
 const DOCUMENT_MUTATION_STRONG_RE =
   /\b(?:borra\w*|borre\w*|elimin\w*|quita\w*|quite\w*|suprim\w*|remov\w*|remueve\w*|tach(?:a|e|ar)\w*|descart\w*|s[aá]ca\w*|agrega\w*|agr[eé]ga\w*|a[ñn]ad\w*|inserta\w*|insert\w*|incorpora\w*|edita\w*|edit[aá]\w*|modific\w*|corrig\w*|correg\w*|reemplaz\w*|sustitu\w*|renombr\w*|reescrib\w*|reorganiz\w*|reordena\w*|reformate\w*|reenumera\w*|delete\w*|remove\w*|erase\w*|append\w*|modify\w*|replace\w*|rewrite\w*|rename\w*)\b/i
+
+const DOCUMENT_ATTACHMENT_REVISION_RE =
+  /\b(?:corrig\w*|correg\w*|mejor\w*|modific\w*|edit\w*|actualiz\w*|formaliz\w*|ajust\w*|optim\w*)\b/i
+
+const DOCUMENT_CORRECTION_NOUN_RE =
+  /\b(?:correcci[oó]n(?:es)?|ortograf[ií]a|gram[aá]tica|redacci[oó]n|erratas?|errores?)\b/i
+
+const DOCUMENT_CORRECTION_ACTION_RE =
+  /\b(?:aplic\w*|haz|hacer|realiz\w*|corrig\w*|correg\w*|revis\w*|arregl\w*|ajust\w*|mejora\w*)\b/i
+
+function isDocumentCorrectionEditRequest(normalizedPrompt: string): boolean {
+  return DOCUMENT_CORRECTION_NOUN_RE.test(normalizedPrompt)
+    && DOCUMENT_CORRECTION_ACTION_RE.test(normalizedPrompt)
+}
 
 // Whole-document transforms (translate / rewrite / summarize / rephrase)
 // operate on the entire uploaded file, so unlike EXISTING_DOCUMENT_EDIT_RE
@@ -430,8 +445,20 @@ export function shouldEditExistingDocument(
 ): boolean {
   const normalized = normalizePrompt(prompt)
   if (!normalized) return false
+  const hasDocumentContext = hasDocumentAttachmentContext(conversationHistory)
+  if (
+    hasDocumentContext
+    && !OUTPUT_FORMAT_REQUEST_RE.test(normalized)
+    && (
+      (DOCUMENT_MUTATION_STRONG_RE.test(normalized) && !WHOLE_DOCUMENT_TRANSFORM_RE.test(normalized))
+      || DOCUMENT_ATTACHMENT_REVISION_RE.test(normalized)
+      || isDocumentCorrectionEditRequest(normalized)
+    )
+  ) {
+    return true
+  }
   const referencesExistingDocument =
-    EXISTING_DOCUMENT_REFERENCE_RE.test(normalized) || hasDocumentAttachmentContext(conversationHistory)
+    EXISTING_DOCUMENT_REFERENCE_RE.test(normalized) || hasDocumentContext
   if (EXISTING_DOCUMENT_EDIT_RE.test(normalized)) return referencesExistingDocument
   // Whole-document transforms (traduce / resume / reescribe / reformula) count
   // as edits only when the prompt explicitly references a document AND a file is
@@ -442,7 +469,7 @@ export function shouldEditExistingDocument(
     && EXISTING_DOCUMENT_REFERENCE_RE.test(normalized)
     && !OUTPUT_FORMAT_REQUEST_RE.test(normalized)
   ) {
-    return hasDocumentAttachmentContext(conversationHistory)
+    return hasDocumentContext
   }
   return false
 }
@@ -683,6 +710,9 @@ export function buildIntentAttributionGraph(
     && !OUTPUT_FORMAT_REQUEST_RE.test(normalized)
     && (
       EXISTING_DOCUMENT_EDIT_RE.test(normalized)
+      || (DOCUMENT_MUTATION_STRONG_RE.test(normalized) && !WHOLE_DOCUMENT_TRANSFORM_RE.test(normalized))
+      || DOCUMENT_ATTACHMENT_REVISION_RE.test(normalized)
+      || isDocumentCorrectionEditRequest(normalized)
       || (WHOLE_DOCUMENT_TRANSFORM_RE.test(normalized) && EXISTING_DOCUMENT_REFERENCE_RE.test(normalized))
     )
   const isShortContextualFragment =
@@ -864,26 +894,23 @@ export function shouldRouteTextPromptThroughAgenticRuntime(prompt: string, files
     const everyFileIsImage = fileList.length > 0 && fileList.every(isImageLikeAttachment)
     if (everyFileIsImage) return false
     // Document EDIT requests ("borra el jurado evaluador", "elimina los anexos",
-    // "agrega una conclusión", "cambia el título del informe") must run on the
-    // INLINE /api/ai/generate path: that is where the document_edit (Cowork
-    // sandbox-editing) tool lives, and it is the RELIABLE path (per-step
-    // timeout + plain-stream fallback). The queued agent-task path has no
-    // document_edit tool and, when the worker can't relay events, leaves the
-    // chat stuck on "Sin actualizaciones recientes" — exactly the doc-edit
-    // failure users hit. Strong mutation verb alone, or an edit verb + region.
-    // A STRONG mutation verb (borra/elimina/agrega/edita/reemplaza…) is an edit
-    // of the attached file REGARDLESS of any format mention — "borra el jurado
-    // evaluador y dámelo en word" is still an edit, not a fresh generation.
-    // Only the weaker edit/transform verbs stay gated by OUTPUT_FORMAT (where
-    // "en un word" may mean "create a new word from scratch").
+    // "agrega una conclusión", "cambia el título del informe") must run through
+    // /api/agent/task. The backend source-preserving editor can load the actual
+    // uploaded Office/PDF bytes, create a same-format artifact, emit a
+    // downloadable file card, and run deterministic validation against the
+    // generated DOCX/XLSX/PPTX/PDF. A STRONG mutation verb
+    // (borra/elimina/agrega/edita/reemplaza…) is an edit of the attached file
+    // REGARDLESS of any format mention — "borra el jurado evaluador y dámelo en
+    // word" is still an edit, not a fresh generation.
     if (
       DOCUMENT_MUTATION_STRONG_RE.test(normalized)
+      || isDocumentCorrectionEditRequest(normalized)
       || (
         !OUTPUT_FORMAT_REQUEST_RE.test(normalized)
         && (EXISTING_DOCUMENT_EDIT_RE.test(normalized) || WHOLE_DOCUMENT_TRANSFORM_RE.test(normalized))
       )
     ) {
-      return false
+      return true
     }
     const hasDocumentForSynthesis = fileList.some((file) =>
       isDocumentLikeAttachment(file) && !isSpreadsheetLikeAttachment(file)

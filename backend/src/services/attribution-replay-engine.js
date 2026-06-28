@@ -111,7 +111,11 @@ function replay({ snapshot = null, runnerFn = null, opts = {} } = {}) {
     ? buildActualFromSummary(actual)
     : null;
   if (!actualNormalized) return { ok: false, error: 'runner produced no usable summary', durationMs, expected, actual };
-  const tolerance = Number(opts.numericTolerance) > 0 ? Number(opts.numericTolerance) : DEFAULT_NUMERIC_TOLERANCE;
+  // Accept an explicit tolerance of 0 ("require exact match"); `> 0` treated it
+  // as falsy and forced the default. Still reject NaN/negative.
+  const tolerance = opts.numericTolerance != null && Number.isFinite(Number(opts.numericTolerance)) && Number(opts.numericTolerance) >= 0
+    ? Number(opts.numericTolerance)
+    : DEFAULT_NUMERIC_TOLERANCE;
   const diffs = diffFields(expected, actualNormalized, tolerance);
   return {
     ok: true,

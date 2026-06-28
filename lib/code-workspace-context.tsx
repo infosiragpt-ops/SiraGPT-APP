@@ -41,9 +41,12 @@ import {
 import { projectsService } from "./projects-service"
 import { mirrorWrite, mirrorDelete, mirrorRename, setMirrorSuppressed } from "./code-git-mirror"
 import {
+  canOpenLocalDirectory,
   getLinkedLocalFolderName,
   hasLinkedLocalFolder,
+  type LocalWorkspaceImport,
   openLocalDirectoryWorkspace,
+  readLocalFolderViaInput,
   saveLinkedWorkspaceFile,
 } from "./local-folder-workspace"
 import {
@@ -490,7 +493,41 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
 
   const openLocalFolderWorkspace = React.useCallback(async () => {
     try {
-      const imported = await openLocalDirectoryWorkspace()
+      // showDirectoryPicker (File System Access API) is blocked inside
+      // cross-origin iframes (the Replit preview throws "Cross origin sub frames
+      // aren't allowed to show a file picker.") and is unsupported in
+      // Safari/Firefox. In those contexts read the folder via a classic
+      // <input webkitdirectory> upload instead (read-only, not write-linked).
+      let inIframe = true
+      try {
+        inIframe = typeof window !== "undefined" && window.self !== window.top
+      } catch {
+        inIframe = true
+      }
+
+      let imported: LocalWorkspaceImport | null
+      let linked = false
+      if (inIframe || !canOpenLocalDirectory()) {
+        imported = await readLocalFolderViaInput()
+        if (!imported) return // user cancelled the picker
+      } else {
+        try {
+          imported = await openLocalDirectoryWorkspace()
+          linked = true
+        } catch (err) {
+          const e = err as Error
+          if (e?.name === "AbortError") return
+          // A native picker blocked by cross-origin policy still lands here —
+          // retry with the iframe-safe <input> upload before giving up.
+          if (e?.name === "SecurityError" || /cross origin/i.test(String(e?.message || ""))) {
+            imported = await readLocalFolderViaInput()
+            if (!imported) return
+          } else {
+            throw e
+          }
+        }
+      }
+
       const paths = pickInitialOpenTabs(Object.keys(imported.files))
       const codexId = codexIdForLocalFolder(imported.rootName)
       const nextState = {
@@ -504,7 +541,7 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       setWorkspaceSource({
         kind: "local-folder",
         name: imported.rootName,
-        linked: true,
+        linked,
         fileCount: imported.fileCount,
         skippedCount: imported.skippedCount,
       })

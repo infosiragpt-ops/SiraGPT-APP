@@ -204,7 +204,6 @@ const NAV_ROW =
 const NAV_ROW_ACTIVE =
   "bg-foreground/[0.055] text-foreground ring-1 ring-border/45 dark:bg-white/[0.08] dark:ring-white/10"
 const NAV_ICON = "h-5 w-5 shrink-0 stroke-[1.85]"
-const RECENT_CHATS_COLLAPSE_STORAGE_KEY = "sira:sidebar:recent-collapsed"
 
 type SidebarNavItemProps = {
   href: string
@@ -501,7 +500,7 @@ export function AppSidebar() {
   }, [])
   React.useEffect(() => {
     try {
-      const raw = window.localStorage.getItem(RECENT_CHATS_COLLAPSE_STORAGE_KEY)
+      const raw = window.localStorage.getItem("sira:sidebar:recent-collapsed")
       if (raw === "1") setRecentChatsCollapsed(true)
     } catch { /* ignore */ }
   }, [])
@@ -515,7 +514,7 @@ export function AppSidebar() {
   const toggleRecentChatsCollapsed = React.useCallback(() => {
     setRecentChatsCollapsed((prev) => {
       const next = !prev
-      try { window.localStorage.setItem(RECENT_CHATS_COLLAPSE_STORAGE_KEY, next ? "1" : "0") } catch { /* ignore */ }
+      try { window.localStorage.setItem("sira:sidebar:recent-collapsed", next ? "1" : "0") } catch { /* ignore */ }
       return next
     })
   }, [])

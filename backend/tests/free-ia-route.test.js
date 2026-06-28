@@ -47,7 +47,7 @@ test('GET /api/free-ia/status reports disabled when CEREBRAS_API_KEY is unset', 
     assert.equal(body.enabled, false);
     assert.equal(body.reason, 'no_api_key');
     assert.equal(body.provider, 'Cerebras');
-    assert.equal(body.model, 'llama-3.1-8b');
+    assert.equal(body.model, 'gpt-oss-120b');
     assert.equal(body.displayName, 'Free IA');
     // baseURL is internal-only — must not leak in the response.
     assert.equal(body.baseURL, undefined);
@@ -68,7 +68,7 @@ test('GET /api/free-ia/status reports enabled when CEREBRAS_API_KEY is set', asy
     assert.equal(body.enabled, true);
     assert.equal(body.reason, 'ok');
     assert.equal(body.provider, 'Cerebras');
-    assert.equal(body.model, 'llama-3.1-8b');
+    assert.equal(body.model, 'gpt-oss-120b');
     assert.equal(body.displayName, 'Free IA');
     assert.equal(body.apiKey, undefined, 'API key must never be returned');
   } finally {
@@ -138,7 +138,7 @@ test('GET /api/free-ia/info returns a consolidated single-call view', async () =
     assert.equal(status, 200);
     assert.equal(body.enabled, true);
     assert.equal(body.reason, 'ok');
-    assert.equal(body.model, 'llama-3.1-8b');
+    assert.equal(body.model, 'gpt-oss-120b');
     assert.equal(body.displayName, 'Free IA');
     assert.equal(body.provider, 'Cerebras');
     assert.ok(body.descriptor);
@@ -169,9 +169,9 @@ test('GET /api/free-ia/brand returns the constants for frontend localisation', a
     const { status, body } = await fetchJSON(`${baseURL}/api/free-ia/brand`);
     assert.equal(status, 200);
     assert.equal(body.displayName, 'Free IA');
-    assert.equal(body.defaultModel, 'llama-3.1-8b');
+    assert.equal(body.defaultModel, 'gpt-oss-120b');
     assert.equal(body.provider, 'Cerebras');
-    assert.equal(body.family, 'llama-3.1', 'family should be derived for picker grouping');
+    assert.equal(body.family, 'gpt-oss', 'family should be derived for picker grouping');
     // Brand endpoint should NOT depend on the API key being set.
     assert.equal(body.apiKey, undefined);
   } finally {

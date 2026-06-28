@@ -51,4 +51,22 @@ describe('cross-language-entity-unifier', () => {
     const r = unifier.resolve({ userId: 'u', chatId: 'c', surface: 'xyzzy' });
     assert.equal(r, null);
   });
+
+  test('mentions counted once per cluster, not once per shared-fingerprint surface', () => {
+    const orig = tracker.listEntities;
+    // One entity whose canonical + aliases all collapse to "acme|corp".
+    tracker.listEntities = () => ([
+      { id: 'e1', canonicalSurface: 'Acme Corp', aliases: ['el cliente Acme Corp', 'the Acme Corp'], kind: 'client', mentions: 5 },
+    ]);
+    try {
+      const clusters = unifier.unify({ userId: 'u', chatId: 'c' });
+      const acme = clusters.find((c) => c.fingerprint.includes('acme'));
+      assert.ok(acme, 'expected an Acme cluster');
+      // The entity's 5 mentions must be counted ONCE — not once per surface (15).
+      assert.equal(acme.mentions, 5, 'mentions counted per entity per cluster, not per surface');
+      assert.equal(acme.cardinality, 1, 'a single entity is a single member');
+    } finally {
+      tracker.listEntities = orig;
+    }
+  });
 });

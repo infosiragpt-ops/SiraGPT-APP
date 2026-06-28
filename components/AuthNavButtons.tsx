@@ -159,13 +159,7 @@ export function LoginButton({ href = "/auth/login", navigate }: LoginButtonProps
         </span>
       </Link>
 
-      <style>{`
-        @keyframes login-beam {
-          to {
-            transform: rotate(360deg);
-          }
-        }
-      `}</style>
+      {/* @keyframes login-beam lives in app/globals.css — no inline <style> to avoid hydration mismatch */}
     </>
   )
 }

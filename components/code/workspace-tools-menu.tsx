@@ -39,6 +39,7 @@ export type WorkspaceToolsHandlers = {
   onTogglePanel: (id: WorkspacePanelId) => void
   onOpenPalette: (query?: string) => void
   onNewFile: () => void
+  onOpenPublishing: () => void
   onFocusChat: () => void
   onOpenComposer: () => void
   onOpenTool?: (id: WorkspaceToolId) => void
@@ -87,6 +88,9 @@ export function WorkspaceToolsMenu({ children, handlers }: Props) {
           if (typeof window !== "undefined") {
             window.open(window.location.origin, "_blank", "noopener,noreferrer")
           }
+          break
+        case "publishing":
+          window.setTimeout(() => handlers.onOpenPublishing(), 0)
           break
         case "navigate":
           if (typeof window !== "undefined") window.location.href = action.href

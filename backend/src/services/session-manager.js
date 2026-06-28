@@ -131,6 +131,12 @@ function addMessage(sessionId, message) {
 
   if (session.messages.length > MAX_HISTORY_MESSAGES) {
     const dropped = session.messages.length - MAX_HISTORY_MESSAGES;
+    // Subtract the trimmed messages' tokens — otherwise tokenCount only ever
+    // grows and drifts unbounded above the real total of the kept messages.
+    const droppedTokens = session.messages
+      .slice(0, dropped)
+      .reduce((sum, m) => sum + (m.tokens || 0), 0);
+    session.tokenCount = Math.max(0, session.tokenCount - droppedTokens);
     session.messages = session.messages.slice(dropped);
   }
 
@@ -155,7 +161,11 @@ function getHistory(sessionId, opts = {}) {
   }
 
   if (opts.limit) {
-    messages = messages.slice(-opts.limit);
+    // Forward pagination (a cursor was given): take the FIRST N after the cursor
+    // — the next page. `slice(-limit)` here took the NEWEST N, skipping every
+    // message between the cursor and the tail. Without a cursor, the tail N is
+    // the intended "most recent" window.
+    messages = opts.after ? messages.slice(0, opts.limit) : messages.slice(-opts.limit);
   }
 
   if (opts.role) {
@@ -233,11 +243,14 @@ async function compactSession(sessionId, opts = {}) {
       });
       if (result && Array.isArray(result.messages)) {
         const kept = result.messages;
-        const dropped = total - kept.length;
         session.messages = session.messages.filter((m, i) => {
           if (i < 2 || i >= total - 6) return true;
           return kept.some(km => (km.content || '').slice(0, 80) === (m.content || '').slice(0, 80));
         });
+        // Count drops from the ACTUAL surviving length — the filter also keeps
+        // the first 2 + last 6 unconditionally, so `total - kept.length` would
+        // overstate the drop (and make kept + dropped != total).
+        const dropped = total - session.messages.length;
         if (opts.summary) session.summary = opts.summary;
         return {
           compacted: true,

@@ -644,14 +644,28 @@ async function scoreSubTasks(successful, options) {
       const parsed = JSON.parse(raw);
 
       if (Array.isArray(parsed.scores) && typeof parsed.winnerIndex === 'number') {
+        // buildJudgePrompt labels candidates by their ORIGINAL sub-task index
+        // (succ.index), so parsed.winnerIndex / scores[].index are in original
+        // space. Map them back to positions in the filtered `successful` array
+        // so the caller (which does successful[winnerIndex]) picks the right
+        // candidate even when a failed sub-task shifted the indices. Sort a COPY
+        // so the returned scores keep their original order (no in-place mutation).
+        const posOf = (originalIndex) => {
+          const p = successful.findIndex((s) => s.index === originalIndex);
+          return p >= 0 ? p : null;
+        };
+        let winnerPos = posOf(parsed.winnerIndex);
+        if (winnerPos == null) winnerPos = Math.max(0, Math.min(parsed.winnerIndex, successful.length - 1));
+        const rankings = [...parsed.scores]
+          .sort((a, b) => (b.total || 0) - (a.total || 0))
+          .map((s) => posOf(s.index))
+          .filter((p) => p != null);
         return {
           method: 'llm_judge',
-          winnerIndex: Math.min(parsed.winnerIndex, successful.length - 1),
+          winnerIndex: winnerPos,
           scores: parsed.scores,
           reason: parsed.reason || '',
-          rankings: (parsed.scores || [])
-            .sort((a, b) => (b.total || 0) - (a.total || 0))
-            .map((s) => s.index),
+          rankings: rankings.length ? rankings : successful.map((_, i) => i),
         };
       }
     } catch (_) {

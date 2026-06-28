@@ -51,7 +51,10 @@ function recordAggregate(label, deltaMs) {
 function percentile(arr, p) {
   if (!arr.length) return 0;
   const sorted = [...arr].sort((a, b) => a - b);
-  const idx = Math.min(sorted.length - 1, Math.floor(p * sorted.length));
+  // Nearest-rank: index = ceil(p*N) - 1 (clamped). `floor(p*N)` over-shot by one
+  // rank at non-boundary percentiles (e.g. p50 of 10 → idx 5 instead of 4),
+  // mis-reporting p50/p95 latency.
+  const idx = Math.max(0, Math.min(sorted.length - 1, Math.ceil(p * sorted.length) - 1));
   return sorted[idx];
 }
 
@@ -186,6 +189,7 @@ function __resetForTests() {
 }
 
 module.exports = {
+  percentile,
   createSession,
   measure,
   wrap,

@@ -31,15 +31,24 @@ via `@prisma/client` `$queryRawUnsafe` (load env with `src/config/load-env`), re
 the `logs` column — it contains the real Postgres error code/message. Confirm the
 schema's actual state (e.g. `information_schema.columns`) BEFORE choosing a fix.
 
-**How to recover (schema already correct — the hotfix path):**
-1. Make the migration idempotent (`ADD COLUMN IF NOT EXISTS ...`) FIRST so its
-   checksum aligns with a version that can never re-fail on any DB.
-2. `npx prisma migrate resolve --applied "<name>"` (NOT `--rolled-back`, which would
-   re-run the DDL and fail again because the columns exist).
-3. `npx prisma migrate deploy` → "No pending migrations"; `migrate status` → up to date.
-4. Restart the workflow; confirm `server_started` on 5050 and `/api/health` 200.
-Because dev and prod share the DB, this fixes prod too — but the live prod CONTAINER
-stays down until it reboots, so the user must **republish** to recover the site.
+**How to recover (PREFERRED — let the boot wrapper self-heal):**
+`start-with-migrations.js` now auto-recovers any P3009 whose failed migration is
+"auto-rollback-safe": either on the explicit allowlist OR its SQL is *provably*
+idempotent-additive (`migrationSqlIsIdempotentAdditive` — every `ADD COLUMN` guarded
+with `IF NOT EXISTS`, no destructive tokens, no `$$` blocks). On P3009 it marks the
+failed row `rolled_back_at` (`rollbackSafeFailedMigrations`) and retries `migrate
+deploy`, which re-applies the now-no-op SQL and continues. So the whole hotfix is:
+1. Edit the failed migration's SQL to be idempotent (`ADD COLUMN IF NOT EXISTS ...`).
+2. Verify with `node -e "require('./scripts/start-with-migrations.js').isMigrationAutoRollbackSafe('<name>')"` → must print `true`.
+3. **Republish.** No manual `migrate resolve` needed — the wrapper does the rollback+retry.
+Gated by `PRISMA_AUTO_ROLLBACK_SAFE_MIGRATIONS` (default on; "0" disables).
+
+**Manual fallback (only if auto-recovery is disabled or another UNSAFE failed row exists):**
+1. Make the migration idempotent FIRST (same as above).
+2. `npx prisma migrate resolve --applied "<name>"` (NOT `--rolled-back`, which re-runs
+   the DDL and fails again because the columns exist).
+3. `npx prisma migrate deploy`; then **republish** (the live prod CONTAINER stays down
+   until it reboots even though dev+prod share the DB).
 
 **Prevention:** never rename an already-applied migration. If a rename is
 unavoidable, make the SQL idempotent and reconcile `_prisma_migrations` in lockstep.

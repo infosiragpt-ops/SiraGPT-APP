@@ -53,6 +53,25 @@ test("csv writer: header union across heterogeneous records (stable order)", () 
   assert.equal(out, "a,b,c\r\n1,,\r\n2,3,\r\n,,4\r\n");
 });
 
+test("csv writer: object rows are spread across headers (not JSON-dumped into one cell)", () => {
+  // `rows` given as objects keyed by column must map onto the declared headers,
+  // exactly like `records` does — previously each object was JSON.stringified
+  // into a single cell, mangling the whole table.
+  const withHeaders = asText(
+    W.generateCsv({ headers: ["name", "city"], rows: [{ name: "Ada", city: "London" }, { name: "Bo", city: "Paris" }] }),
+  );
+  assert.equal(withHeaders, "name,city\r\nAda,London\r\nBo,Paris\r\n");
+  assert.doesNotMatch(withHeaders, /\{/, "no JSON object dumped into a cell");
+
+  // Without explicit headers, derive the column union (first-seen order).
+  const derived = asText(W.generateCsv({ rows: [{ a: 1, b: 2 }, { a: 3, b: 4 }] }));
+  assert.equal(derived, "a,b\r\n1,2\r\n3,4\r\n");
+
+  // Array rows remain untouched (regression guard for the common path).
+  const arrays = asText(W.generateCsv({ headers: ["a", "b"], rows: [[1, 2]] }));
+  assert.equal(arrays, "a,b\r\n1,2\r\n");
+});
+
 // ── tsv ───────────────────────────────────────────────────────────────────
 test("tsv writer: tab-delimited and neutralises embedded tabs/newlines", () => {
   const out = asText(W.generateTsv({ headers: ["x", "y"], rows: [["a\tb", "c\nd"]] }));
@@ -92,6 +111,12 @@ test("ndjson writer: one JSON object per line, trailing newline", () => {
   assert.equal(asText(W.generateNdjson([{ x: 1 }])), '{"x":1}\n');
   // empty → no trailing newline
   assert.equal(asText(W.generateNdjson({ records: [] })), "");
+});
+
+test("ndjson writer: undefined values are omitted, never serialized as 'undefined'", () => {
+  const out = asText(W.generateNdjson({ records: [{ a: 1, b: undefined, c: 3 }] }));
+  assert.equal(out, '{"a":1,"c":3}\n'); // JSON.stringify drops the undefined key
+  assert.equal(out.includes("undefined"), false);
 });
 
 // ── ics ───────────────────────────────────────────────────────────────────

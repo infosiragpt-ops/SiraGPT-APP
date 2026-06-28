@@ -79,7 +79,12 @@ import {
   togglePinnedRow,
   type CodexDisplayOptions,
 } from "@/lib/codex-conversation-prefs"
-import { canOpenLocalDirectory, importLocalFolderAsWorkspace } from "@/lib/local-folder-workspace"
+import {
+  canOpenLocalDirectory,
+  importLocalFolderAsWorkspace,
+  importLocalFolderViaInput,
+  type LocalFolderRegistration,
+} from "@/lib/local-folder-workspace"
 import { apiClient } from "@/lib/api"
 import {
   projectsService,
@@ -387,8 +392,8 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
     async (node: WorkspaceTreeNode) => {
       const isCloud = node.kind === "project"
       const message = isCloud
-        ? `¿Eliminar el proyecto "${node.name}"? Se borrarán también sus archivos y chats. Esta acción no se puede deshacer.`
-        : `¿Quitar la carpeta "${node.name}" de tus proyectos? Se elimina del panel y se borra su contenido en el navegador (no se toca ningún archivo de tu disco).`
+        ? `¿Eliminar la empresa "${node.name}"? Se borrarán también sus archivos y chats. Esta acción no se puede deshacer.`
+        : `¿Quitar la carpeta "${node.name}" de tus empresas? Se elimina del panel y se borra su contenido en el navegador (no se toca ningún archivo de tu disco).`
       if (typeof window !== "undefined" && !window.confirm(message)) return
       try {
         if (isCloud) {
@@ -418,9 +423,9 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
         if (typeof window !== "undefined") {
           window.dispatchEvent(new CustomEvent(CODEX_UPDATED_EVENT))
         }
-        toast.success(isCloud ? `Proyecto "${node.name}" eliminado.` : `Carpeta "${node.name}" quitada.`)
+        toast.success(isCloud ? `Empresa "${node.name}" eliminada.` : `Carpeta "${node.name}" quitada.`)
       } catch (err: any) {
-        toast.error(err?.message || "No se pudo eliminar el proyecto")
+        toast.error(err?.message || "No se pudo eliminar la empresa")
       }
     },
     [refresh, refreshCodexProjects],
@@ -434,15 +439,6 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
     },
     [onMobileNavigate, router, selectChat],
   )
-
-  const handleOpenDesktopFolder = React.useCallback(() => {
-    if (typeof window === "undefined") return
-    handleOpenInCode({})
-    window.setTimeout(() => {
-      window.dispatchEvent(new CustomEvent("siragpt:open-local-folder"))
-    }, 120)
-    onMobileNavigate?.()
-  }, [handleOpenInCode, onMobileNavigate])
 
   const listCodeSessions = React.useCallback(
     (workspaceId: string) =>
@@ -564,18 +560,10 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
     [handleOpenWorkspace],
   )
 
-  // "Nuevo proyecto" → pick a local code folder. Opens showDirectoryPicker
-  // directly in the click gesture (navigating first would drop user-activation
-  // and the browser would block the picker), then routes into /code.
-  const handleOpenLocalProject = React.useCallback(async () => {
-    if (!canOpenLocalDirectory()) {
-      // Safari/Firefox lack the File System Access API — fall back to the
-      // /code in-app flow.
-      handleOpenDesktopFolder()
-      return
-    }
-    try {
-      const reg = await importLocalFolderAsWorkspace()
+  // Shared post-import routing: select the new folder, navigate to /code, and
+  // surface a clear summary (including a hint when nothing was imported).
+  const finishLocalImport = React.useCallback(
+    (reg: LocalFolderRegistration) => {
       setActiveFolderId(reg.codexId)
       refreshCodexProjects()
       if (typeof window !== "undefined") {
@@ -583,15 +571,68 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
       }
       router.push(`/code?local=${encodeURIComponent(reg.codexId)}`)
       onMobileNavigate?.()
+      if (reg.fileCount === 0) {
+        toast.warning(
+          `Carpeta "${reg.name}" abierta, pero no se importó ningún archivo (revisa tipo/tamaño; solo se importan archivos de texto/código).`,
+        )
+        return
+      }
       toast.success(`Carpeta "${reg.name}" abierta · ${reg.fileCount} archivos`)
       if (reg.skippedCount > 0) {
-        toast.info(`${reg.skippedCount} archivo(s) omitidos por tamaño o formato`)
+        toast.info(`${reg.skippedCount} archivo(s) omitidos por tamaño, formato o seguridad (.env)`)
       }
+    },
+    [onMobileNavigate, refreshCodexProjects, router],
+  )
+
+  // "Nueva empresa (carpeta local)" → import a local code folder.
+  // showDirectoryPicker (File System Access API) is blocked inside cross-origin
+  // iframes (the Replit preview throws "Cross origin sub frames aren't allowed
+  // to show a file picker.") and is unsupported in Safari/Firefox. In those
+  // contexts fall back to a classic <input webkitdirectory> upload, which works
+  // everywhere (read-only import).
+  const handleOpenLocalProject = React.useCallback(async () => {
+    let inIframe = true
+    try {
+      inIframe = typeof window !== "undefined" && window.self !== window.top
+    } catch {
+      // Reading window.top can throw under strict cross-origin policies —
+      // assume we're framed and use the iframe-safe upload path.
+      inIframe = true
+    }
+
+    if (inIframe || !canOpenLocalDirectory()) {
+      try {
+        const reg = await importLocalFolderViaInput()
+        // reg is null only when the user cancels the picker — stay put.
+        if (reg) finishLocalImport(reg)
+      } catch (err: any) {
+        // Surface a clear error instead of silently creating a cloud project
+        // or re-triggering the cross-origin-blocked native picker.
+        toast.error(err?.message || "No se pudo subir la carpeta local")
+      }
+      return
+    }
+
+    try {
+      const reg = await importLocalFolderAsWorkspace()
+      finishLocalImport(reg)
     } catch (err: any) {
       if (err?.name === "AbortError") return
+      // Safety net: a native picker blocked by cross-origin policy still lands
+      // here — retry with the iframe-safe <input> upload before giving up.
+      if (err?.name === "SecurityError" || /cross origin/i.test(String(err?.message || ""))) {
+        try {
+          const reg = await importLocalFolderViaInput()
+          if (reg) finishLocalImport(reg)
+        } catch (inner: any) {
+          toast.error(inner?.message || "No se pudo subir la carpeta local")
+        }
+        return
+      }
       toast.error(err?.message || "No se pudo abrir la carpeta local")
     }
-  }, [handleOpenDesktopFolder, onMobileNavigate, refreshCodexProjects, router])
+  }, [finishLocalImport])
 
   // Secondary entry: a cloud-only project (no local files). Opens a
   // styled modal instead of the native window.prompt.
@@ -641,11 +682,11 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
       toast.success(
         cloudType === "webapp"
           ? `App web "${project.name}" creada · disponible en Biblioteca → Apps web`
-          : `Proyecto "${project.name}" creado`,
+          : `Empresa "${project.name}" creada`,
       )
       setCloudDialogOpen(false)
     } catch (err: any) {
-      toast.error(err?.message || "No se pudo crear el proyecto")
+      toast.error(err?.message || "No se pudo crear la empresa")
       setCreatingCloud(false)
     }
   }, [cloudName, cloudType, cloudHosting, creatingCloud, handleOpenWorkspace, refresh])
@@ -768,7 +809,7 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
                   value={displayOptions.groupBy}
                   onValueChange={(v) => handleSetDisplay("groupBy", v as CodexDisplayOptions["groupBy"])}
                 >
-                  <DropdownMenuRadioItem value="project">Proyecto</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="project">Empresa</DropdownMenuRadioItem>
                   <DropdownMenuRadioItem value="status">Estado</DropdownMenuRadioItem>
                   <DropdownMenuRadioItem value="none">Ninguno</DropdownMenuRadioItem>
                 </DropdownMenuRadioGroup>
@@ -800,8 +841,8 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
                   variant="ghost"
                   size="icon"
                   className="h-6 w-6 text-muted-foreground hover:text-foreground"
-                  aria-label="Crear nuevo proyecto"
-                  title="Crear nuevo proyecto"
+                  aria-label="Crear nueva empresa"
+                  title="Crear nueva empresa"
                 >
                   <FolderPlus className="h-3.5 w-3.5" />
                 </Button>
@@ -814,7 +855,7 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
                   <div className="liquid-icon flex h-7 w-7 items-center justify-center rounded-lg bg-zinc-500/10 dark:bg-white/[0.06]">
                     <FolderOpen className="h-3.5 w-3.5 text-zinc-600 dark:text-zinc-300" />
                   </div>
-                  <span className="liquid-label text-sm">Nuevo proyecto (carpeta local)</span>
+                  <span className="liquid-label text-sm">Nueva empresa (carpeta local)</span>
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={handleNewCloudProject}
@@ -825,7 +866,7 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
                     <Cloud className="h-3.5 w-3.5 text-violet-700 dark:text-violet-200" />
                   </div>
                   <span className="liquid-label text-sm font-medium text-violet-900/90 dark:text-violet-100/90">
-                    Proyecto en la nube
+                    Empresa en la nube
                   </span>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
@@ -856,7 +897,7 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
             <div className="mb-1 flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-sky-500/15 to-indigo-500/15 ring-1 ring-sky-500/20">
               <Cloud className="h-5 w-5 text-sky-500" />
             </div>
-            <DialogTitle className="text-xl tracking-tight">Nuevo proyecto en la nube</DialogTitle>
+            <DialogTitle className="text-xl tracking-tight">Nueva empresa en la nube</DialogTitle>
             <DialogDescription>
               Crea un workspace sincronizado en la nube. Podrás organizar tus chats y código dentro de él.
             </DialogDescription>
@@ -871,7 +912,7 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
           >
             <div className="space-y-1.5">
               <Label htmlFor="cloud-project-name" className="text-sm">
-                Nombre del proyecto
+                Nombre de la empresa
               </Label>
               <Input
                 id="cloud-project-name"
@@ -899,9 +940,9 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
                 )}
               >
                 {creatingCloud
-                  ? "Creando proyecto…"
+                  ? "Creando empresa…"
                   : cloudNameDuplicate
-                    ? "Ya tienes un proyecto con ese nombre — puedes crearlo igualmente."
+                    ? "Ya tienes una empresa con ese nombre — puedes crearla igualmente."
                     : canSubmitCloud
                       ? "Pulsa ⏎ para crear · Esc para cancelar"
                       : "Escribe un nombre · Esc para cancelar"}
@@ -910,11 +951,11 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
 
             {/* Project kind — "App web" projects also surface in Library → Apps web. */}
             <div className="space-y-1.5">
-              <Label className="text-sm">Tipo de proyecto</Label>
+              <Label className="text-sm">Tipo de empresa</Label>
               <div className="grid grid-cols-2 gap-2">
                 {(
                   [
-                    { value: "general" as const, label: "Proyecto general", Icon: FolderOpen },
+                    { value: "general" as const, label: "Empresa general", Icon: FolderOpen },
                     { value: "webapp" as const, label: "App web", Icon: Globe },
                   ]
                 ).map(({ value, label, Icon }) => {
@@ -1009,7 +1050,7 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
                 ) : (
                   <>
                     <Cloud aria-hidden="true" className="mr-2 h-4 w-4" />
-                    Crear proyecto
+                    Crear empresa
                   </>
                 )}
               </Button>

@@ -201,6 +201,32 @@ describe("createProjectAdapter (faked project-memory + prisma)", () => {
     assert.equal(s.count, 2);
     assert.ok(s.oldest_ts < s.newest_ts);
   });
+
+  test("stats uses a null sentinel so an epoch-0 timestamp isn't dropped", async () => {
+    const projectMemory = fakeProjectMemory({
+      list: [{ id: "z", text: "ancient", createdAt: new Date(0).toISOString() }],
+    });
+    const adapter = createProjectAdapter({ projectMemory, prisma: {} });
+    const s = await adapter.stats({ tier: "project", scope: { projectId: "p1" } });
+    assert.equal(s.count, 1);
+    // newest used to start at 0 and be coerced to null for a legit epoch-0 row.
+    assert.equal(s.newest_ts, 0, "epoch-0 newest must be reported, not nulled");
+    assert.equal(s.oldest_ts, 0);
+  });
+
+  test("stats skips an unparseable createdAt without NaN-poisoning", async () => {
+    const projectMemory = fakeProjectMemory({
+      list: [
+        { id: "a", text: "x", createdAt: "not-a-date" },
+        { id: "b", text: "y", createdAt: "2026-04-15T00:00:00Z" },
+      ],
+    });
+    const adapter = createProjectAdapter({ projectMemory, prisma: {} });
+    const s = await adapter.stats({ tier: "project", scope: { projectId: "p1" } });
+    assert.equal(s.count, 2);
+    assert.ok(Number.isFinite(s.newest_ts), `newest_ts must be finite, got ${s.newest_ts}`);
+    assert.equal(s.newest_ts, new Date("2026-04-15T00:00:00Z").getTime());
+  });
 });
 
 // ── In-process tiers (conversation / user) ─────────────────────────

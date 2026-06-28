@@ -31,6 +31,20 @@ describe('context-attribution-graph', () => {
     assert.ok(graph.confidence > 0.4);
   });
 
+  it('falls back to EXPLAIN (not CONVERSE) when signals exist but no intent maps', () => {
+    // Substantive content (entities + quantities) with no action verb → respond
+    // to the content, not treat it as smalltalk. (The fallback ternary used to
+    // return CONVERSE in both branches.)
+    const graph = attributionGraph.buildGraph('Acme Corporation reported 42 widgets and 1500 dollars.', {});
+    assert.ok(graph.signals.length > 0, 'the turn carried surface signals');
+    assert.equal(graph.primaryIntent.kind, attributionGraph.INTENT_KINDS.EXPLAIN);
+  });
+
+  it('falls back to CONVERSE for a truly empty/trivial turn (no signals)', () => {
+    const graph = attributionGraph.buildGraph('', {});
+    assert.equal(graph.primaryIntent.kind, attributionGraph.INTENT_KINDS.CONVERSE);
+  });
+
   it('maps Spanish imperative "implementa" to CODE intent', () => {
     const graph = attributionGraph.buildGraph('Implementa una función que sume números', {});
     assert.equal(graph.primaryIntent.kind, attributionGraph.INTENT_KINDS.CODE);
@@ -163,6 +177,15 @@ describe('multi-hop-intent-reasoner', () => {
     const tooling = result.hops.find((h) => h.kind === multiHop.HOP_KINDS.TOOL_MAPPING);
     assert.ok(tooling);
     assert.ok(tooling.metadata.tools.includes('create_chart'));
+  });
+
+  it('does not detect an output kind from a hint token buried inside another word', () => {
+    // Regression: substring matching fired "chart" on "merchant", "map" on
+    // "example", etc. Word-boundary matching only.
+    assert.notEqual(multiHop.detectOutputKind('the merchant tracks orders')?.kind, 'visualization');
+    assert.equal(multiHop.detectOutputKind('the merchant tracks orders'), null);
+    // A real, whole-word mention still detects; and the EARLIEST one wins.
+    assert.equal(multiHop.detectOutputKind('first a table then a chart').kind, 'tabular');
   });
 
   it('flags missing prerequisites when "this document" referenced but no docs provided', () => {
@@ -462,6 +485,24 @@ describe('context-intelligence-engine (orchestrator)', () => {
     const report = engine.analyzeContext('u', 'Analyze ' + 'data '.repeat(2000), {});
     const block = engine.buildSystemPromptBlock(report);
     assert.ok(block.length <= engine.MAX_PROMPT_BLOCK_CHARS);
+  });
+
+  it('buildSystemPromptBlock truncation never splits a surrogate pair', () => {
+    // An emoji positioned right at the cut boundary used to be sliced in half,
+    // emitting a lone surrogate (invalid char). opts.maxChars exercises it
+    // deterministically.
+    const report = {
+      recommendations: [{
+        severity: 'high', category: 'x',
+        message: 'y'.repeat(200) + '😀😀😀😀😀' + 'z'.repeat(80),
+      }],
+    };
+    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    for (const maxChars of [60, 120, 240, 250, 252]) {
+      const block = engine.buildSystemPromptBlock(report, { maxChars });
+      assert.ok(block.length <= maxChars, `within cap at maxChars=${maxChars}`);
+      assert.ok(!loneSurrogate.test(block), `no lone surrogate at maxChars=${maxChars}`);
+    }
   });
 
   it('summariseForLog returns a compact telemetry shape', () => {

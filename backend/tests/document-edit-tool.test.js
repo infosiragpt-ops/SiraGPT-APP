@@ -20,7 +20,7 @@ const path = require('path');
 const ARTIFACT_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'doc-edit-artifacts-'));
 process.env.AGENT_ARTIFACT_DIR = ARTIFACT_DIR;
 
-const { buildDocumentEditTool, MAX_CALLS_PER_TURN } = require('../src/services/agent-harness/tools/document-edit-tool');
+const { buildDocumentEditTool, MAX_CALLS_PER_TURN, MAX_FILE_BYTES } = require('../src/services/agent-harness/tools/document-edit-tool');
 const { buildHarnessTools } = require('../src/services/agent-harness/run-agent-turn');
 
 // The tool now tries the in-process source-preserving editor BEFORE the
@@ -225,6 +225,7 @@ test('routing gate: edit requests with attachments enter the agentic loop; doc-Q
   assert.equal(isDocumentEditRequest('modifica el excel adjunto'), true);
   assert.equal(isDocumentEditRequest('actualiza el informe con los datos nuevos'), true);
   assert.equal(isDocumentEditRequest('corrige la ortografía del archivo'), true);
+  assert.equal(isDocumentEditRequest('aplica correcciones minimas al documento porfavor'), true);
   // negatives — plain Q&A / summaries stay fast
   assert.equal(isDocumentEditRequest('resume este documento'), false);
   assert.equal(isDocumentEditRequest('¿qué dice el documento?'), false);
@@ -237,11 +238,13 @@ test('routing gate: edit requests with attachments enter the agentic loop; doc-Q
   const docx = [{ name: 'x.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }];
   assert.equal(isSourcePreservingEditRequest('borra el jurado evaluador', docx), true);
   assert.equal(isSourcePreservingEditRequest('agrega una conclusión', docx), true);
+  assert.equal(isSourcePreservingEditRequest('aplica correcciones minimas al documento porfavor', docx), true);
   assert.equal(isSourcePreservingEditRequest('¿qué dice el documento?', docx), false);
   assert.equal(isSourcePreservingEditRequest('resume esto', docx), false);
 
   const { shouldUseAgenticChat } = require('../src/services/agentic-chat-stream');
   assert.equal(shouldUseAgenticChat({ prompt: 'edita mi documento: cambia el título', files: [{ id: 'f1' }] }), true);
+  assert.equal(shouldUseAgenticChat({ prompt: 'aplica correcciones minimas al documento porfavor', files: [{ id: 'f1' }] }), true);
   assert.equal(shouldUseAgenticChat({ prompt: '¿de qué trata el documento?', files: [{ id: 'f1' }] }), false);
 });
 
@@ -308,6 +311,53 @@ test('in-process fast path: source-preserving edit returns the card WITHOUT touc
   assert.equal(fa.artifact.id, 'art-inproc-1');
   assert.equal(fa.artifact.filename, 'informe-editado.docx');
   assert.equal(fa.artifact.previewHtml, '<p>preview</p>');
+  fs.rmSync(inputPath, { force: true });
+});
+
+test('in-process fast path runs before the sandbox 20MB blob cap', async () => {
+  const inputPath = tmpFileWith('oversized-placeholder');
+  const events = [];
+  let sandboxCalled = false;
+  let blobReadCalled = false;
+
+  const tool = buildDocumentEditTool({
+    fsImpl: {
+      readFile: async () => {
+        blobReadCalled = true;
+        return Buffer.alloc(MAX_FILE_BYTES + 1);
+      },
+    },
+    prisma: fakePrisma([{ id: 'f1', userId: 'u1', path: inputPath, originalName: 'tesis-grande.docx', filename: 'tesis-grande.docx' }]),
+    sourcePreservingEdit: {
+      tryGenerateSourcePreservingDocumentEdit: async () => ({
+        content: 'Eliminé Anexo 1 y todo el contenido posterior.',
+        format: 'docx',
+        previewHtml: null,
+        validation: { ok: true },
+        artifact: {
+          id: 'art-large-docx',
+          filename: 'tesis-grande_anexo_1_completado.docx',
+          mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          format: 'docx',
+          sizeBytes: MAX_FILE_BYTES + 2048,
+          downloadUrl: '/api/agent/artifact/art-large-docx',
+        },
+      }),
+    },
+    runDocumentAgent: async () => { sandboxCalled = true; return { outputs: [] }; },
+  });
+
+  const out = await tool.execute(
+    { instruction: 'borra desde el anexo 01 hacia abajo todo porfavor' },
+    baseCtx({ onEvent: (e) => events.push(e) }),
+  );
+
+  assert.equal(out.ok, true);
+  assert.equal(out.engine, 'in-process');
+  assert.equal(blobReadCalled, false, 'oversized blobs must not be loaded before the source-preserving editor');
+  assert.equal(sandboxCalled, false, 'sandbox doc-agent must not run when source-preserving edit succeeds');
+  assert.equal(out.edited[0].downloadUrl, '/api/agent/artifact/art-large-docx');
+  assert.ok(events.some((event) => event.type === 'file_artifact' && event.artifact.id === 'art-large-docx'));
   fs.rmSync(inputPath, { force: true });
 });
 

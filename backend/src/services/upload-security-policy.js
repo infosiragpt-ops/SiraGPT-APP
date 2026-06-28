@@ -1,9 +1,12 @@
 const path = require('path');
-const crypto = require('crypto');
+const {
+  DEFAULT_MAX_SIMULTANEOUS_DOCUMENTS,
+  MAX_SAFE_SIMULTANEOUS_DOCUMENTS,
+} = require('../config/document-batch-limits');
 
 const MB = 1024 * 1024;
 const DEFAULT_MAX_UPLOAD_MB = 100;
-const DEFAULT_MAX_UPLOAD_FILES = 50;
+const DEFAULT_MAX_UPLOAD_FILES = DEFAULT_MAX_SIMULTANEOUS_DOCUMENTS;
 
 const EXECUTABLE_EXTENSIONS = new Set([
   'exe', 'msi', 'bat', 'cmd', 'com', 'scr', 'pif',
@@ -30,6 +33,7 @@ const ALLOWED_MIMES = new Set([
   'application/pdf',
   'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   'application/vnd.ms-powerpoint',
   'application/vnd.openxmlformats-officedocument.presentationml.presentation',
@@ -62,7 +66,7 @@ const ALLOWED_EXTENSIONS = new Set([
   'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tif', 'tiff',
   'svg', 'heic', 'heif',
   // Office / OpenDocument
-  'pdf', 'doc', 'docx', 'xlsx', 'ppt', 'pptx',
+  'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
   'odt', 'ods', 'odp',
   // Text
   'txt', 'md', 'markdown', 'csv', 'tsv', 'rtf',
@@ -88,7 +92,7 @@ const EXTENSION_TO_MIMES = new Map([
   ['bmp', new Set(['image/bmp'])],
   ['tif', new Set(['image/tiff'])],
   ['tiff', new Set(['image/tiff'])],
-  ['svg', new Set(['image/svg+xml'])],
+  ['svg', new Set(['image/svg+xml', 'application/xml', 'text/xml'])], // some detectors report SVG as generic XML
   ['heic', new Set(['image/heic', 'image/heif'])],
   ['heif', new Set(['image/heif', 'image/heic'])],
   ['pdf', new Set(['application/pdf'])],
@@ -163,7 +167,10 @@ function resolveUploadLimits(env = process.env) {
   const fileSize = explicitMb
     ? explicitMb * MB
     : (env.ALLOW_UNBOUNDED_UPLOADS === 'true' ? Number.POSITIVE_INFINITY : DEFAULT_MAX_UPLOAD_MB * MB);
-  const files = Math.min(positiveInteger(env.MAX_UPLOAD_FILES) || DEFAULT_MAX_UPLOAD_FILES, 100);
+  const files = Math.min(
+    positiveInteger(env.MAX_UPLOAD_FILES) || DEFAULT_MAX_UPLOAD_FILES,
+    MAX_SAFE_SIMULTANEOUS_DOCUMENTS,
+  );
   return { fileSize, files };
 }
 

@@ -43,6 +43,17 @@ test('reflect: opts.maxRetries respected', () => {
   assert.strictEqual(v.verdict, 'escalate');
 });
 
+test('reflect: opts.maxRetries=0 escalates immediately (0 is not "unset")', () => {
+  // A retry-zone draft (between soft and accept) would normally retry; with
+  // maxRetries:0 it must escalate on the first pass. The old `> 0 ? … : default`
+  // guard treated 0 as falsy and silently used the default of 2 → retry_soft.
+  const v = loop.reflect({ draft: 'some draft text', faithfulnessScore: { score: 0.5 }, retryCount: 0, opts: { maxRetries: 0 } });
+  assert.strictEqual(v.verdict, 'escalate');
+  // Sanity: with the default budget the same draft retries.
+  const withBudget = loop.reflect({ draft: 'some draft text', faithfulnessScore: { score: 0.5 }, retryCount: 0, opts: { maxRetries: 2 } });
+  assert.strictEqual(withBudget.verdict, 'retry_soft');
+});
+
 test('reflect: opts.acceptThreshold overrides default', () => {
   const v = loop.reflect({ draft: 'x', faithfulnessScore: { score: 0.55 }, opts: { acceptThreshold: 0.5 } });
   assert.strictEqual(v.verdict, 'accept');

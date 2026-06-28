@@ -74,6 +74,15 @@ function tabularize(plan) {
       ? plan.columns.map(String)
       : null;
   if (Array.isArray(plan && plan.rows)) {
+    // Rows may be arrays (already tabular) OR objects keyed by column. When
+    // every row is a plain object, spread it across the headers instead of
+    // JSON-dumping the whole object into a single cell — the same handling
+    // `records` already gets. Mixed/array rows keep the prior behaviour.
+    const allObjectRows = plan.rows.length > 0
+      && plan.rows.every((r) => r && typeof r === "object" && !Array.isArray(r));
+    if (allObjectRows) {
+      return rowsFromValue(plan.rows, headers);
+    }
     return { headers, rows: plan.rows.map((r) => (Array.isArray(r) ? r.map(cell) : [cell(r)])) };
   }
   if (Array.isArray(plan && plan.records)) {

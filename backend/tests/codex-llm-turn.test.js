@@ -87,3 +87,11 @@ test('extractUsage tolerates missing usage and alt token field names', () => {
   assert.equal(u.tokensOut, 9);
   assert.equal(u.generationId, 'g');
 });
+
+test('extractUsage prefers a canonical 0 over the alternate field (no falsy-0)', () => {
+  // prompt_tokens=0 (e.g. cached) must win over input_tokens; the old `||`
+  // skipped the 0 and reported the alternate field.
+  const u = extractUsage({ usage: { prompt_tokens: 0, input_tokens: 50, completion_tokens: 0, output_tokens: 99 } }, 'm');
+  assert.equal(u.tokensIn, 0);
+  assert.equal(u.tokensOut, 0);
+});

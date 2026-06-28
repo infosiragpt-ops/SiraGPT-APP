@@ -46,6 +46,10 @@ const {
   contentDispositionHeader,
   safeDownloadFilename,
 } = require('../middleware/file-response-safety');
+const {
+  assertOutboundUrlSafe,
+  parseSafeOutboundUrl,
+} = require('../utils/url-ssrf-guard');
 
 const router = express.Router();
 
@@ -91,6 +95,51 @@ function sendStripeError(res, req, error, operation) {
     operation,
   });
   return res.status(response.statusCode).json(response.body);
+}
+
+// Stripe invoice assets (invoice_pdf / hosted_invoice_url) live on *.stripe.com.
+// Restricting outbound fetches + redirects to those hosts — on top of the shared
+// private-IP / DNS-rebinding guard — closes an SSRF + open-redirect vector where a
+// tampered invoice object could point invoice_pdf at an internal service such as
+// http://127.0.0.1:6379 or the cloud metadata endpoint. Env-extendable so an ops
+// change never requires a code change.
+const STRIPE_INVOICE_ALLOWED_HOSTS = (() => {
+  const base = ['stripe.com'];
+  const extra = String(process.env.STRIPE_INVOICE_ALLOWED_HOSTS || '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  return Array.from(new Set([...base, ...extra]));
+})();
+
+// Streams the invoice PDF (after validating the outbound URL) or, failing that,
+// redirects to the hosted invoice URL (after validating it too). Returns the
+// Express response. Shared by both invoice-download routes.
+async function streamInvoicePdfOrRedirect(req, res, invoice) {
+  if (invoice.invoice_pdf) {
+    try {
+      await assertOutboundUrlSafe(invoice.invoice_pdf, { allowHosts: STRIPE_INVOICE_ALLOWED_HOSTS });
+    } catch (err) {
+      logRouteError(req, 'payments.invoice.url_rejected', err, { field: 'invoice_pdf' });
+      return res.status(502).json({ error: 'Invoice URL failed safety validation', requestId: requestIdFor(req) });
+    }
+    const response = await axios.get(invoice.invoice_pdf, { responseType: 'stream', timeout: 15000 });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', contentDispositionHeader('attachment', invoicePdfFilename(invoice)));
+    return response.data.pipe(res);
+  }
+
+  if (invoice.hosted_invoice_url) {
+    try {
+      parseSafeOutboundUrl(invoice.hosted_invoice_url, { allowHosts: STRIPE_INVOICE_ALLOWED_HOSTS });
+    } catch (err) {
+      logRouteError(req, 'payments.invoice.redirect_rejected', err, { field: 'hosted_invoice_url' });
+      return res.status(502).json({ error: 'Invoice URL failed safety validation', requestId: requestIdFor(req) });
+    }
+    return res.redirect(invoice.hosted_invoice_url);
+  }
+
+  return res.status(404).json({ error: 'Invoice PDF not available' });
 }
 
 // Rate limiting for payment endpoints
@@ -478,47 +527,49 @@ router.get('/verify-session', authenticateToken, async (req, res) => {
       session = await stripeService.retrieveCheckoutSession(session_id);
       console.log(`Stripe session status: ${session.payment_status}`);
       
-      // If Stripe session is paid and our payment is still pending, update it
+      // If Stripe session is paid and our payment is still pending, claim the
+      // row and grant the plan ATOMICALLY — the same idempotency compare-and-set
+      // the webhook uses (handleCheckoutSessionCompleted). Without the atomic
+      // claim, two concurrent verify-session calls — or a verify racing the
+      // checkout.session.completed webhook — each read PENDING and granted
+      // credits, double-granting. Only the request that flips the row
+      // not-COMPLETED → COMPLETED grants; the loser short-circuits. monthlyLimit
+      // is BigInt in Prisma, so both operands are coerced to BigInt.
       if (session.payment_status === 'paid' && payment.status === 'PENDING') {
         console.log('Payment is successful in Stripe, updating user plan...');
-        
-        // Update payment status
-        await prisma.payment.update({
-          where: { id: payment.id },
-          data: { 
-            status: 'COMPLETED',
-            stripeSubscriptionId: session.subscription 
-          }
-        });
 
-        // Update user subscription - ADD new plan limits to existing monthlyLimit.
-        // `monthlyLimit` is BigInt in Prisma — coerce both operands to BigInt
-        // before adding. Mixing BigInt+Number throws and silently aborts the
-        // handler, leaving the user on FREE after a successful charge.
         const creditsForPlan = premiumCreditsForPlan(payment.plan);
+        const granted = await prisma.$transaction(async (tx) => {
+          const claim = await tx.payment.updateMany({
+            where: { id: payment.id, status: { not: 'COMPLETED' } },
+            data: { status: 'COMPLETED', stripeSubscriptionId: session.subscription },
+          });
+          if (claim.count === 0) return false; // already granted by a racer/webhook
 
-        // Get current user to add to existing limits
-        const currentUser = await prisma.user.findUnique({ where: { id: req.user.id } });
-        const currentLimit = typeof currentUser?.monthlyLimit === 'bigint'
-          ? currentUser.monthlyLimit
-          : BigInt(currentUser?.monthlyLimit ?? 0);
-        const newTotalLimit = currentLimit + creditsForPlan;
-        const currentGemaLimit = toBigIntSafe(currentUser?.gemaTokenLimit);
-        const newGemaLimit = currentGemaLimit + gemaLimitForPlan(payment.plan);
+          const currentUser = await tx.user.findUnique({ where: { id: req.user.id } });
+          const currentLimit = typeof currentUser?.monthlyLimit === 'bigint'
+            ? currentUser.monthlyLimit
+            : BigInt(currentUser?.monthlyLimit ?? 0);
+          const newTotalLimit = currentLimit + creditsForPlan;
+          const newGemaLimit = toBigIntSafe(currentUser?.gemaTokenLimit) + gemaLimitForPlan(payment.plan);
 
-        const updatedUser = await prisma.user.update({
-          where: { id: req.user.id },
-          data: {
-            plan: payment.plan,
-            monthlyLimit: newTotalLimit,
-            gemaTokenLimit: newGemaLimit,
-            stripeSubscriptionId: session.subscription,
-            subscriptionStatus: 'active'
-            // monthlyCallLimit: NOT UPDATED - preserve current usage
-          }
+          await tx.user.update({
+            where: { id: req.user.id },
+            data: {
+              plan: payment.plan,
+              monthlyLimit: newTotalLimit,
+              gemaTokenLimit: newGemaLimit,
+              stripeSubscriptionId: session.subscription,
+              subscriptionStatus: 'active',
+              // monthlyCallLimit: NOT UPDATED - preserve current usage
+            },
+          });
+          return true;
         });
 
-        console.log(`Successfully updated user ${req.user.id} to plan ${payment.plan}`);
+        console.log(granted
+          ? `Successfully updated user ${req.user.id} to plan ${payment.plan}`
+          : `Payment ${payment.id} already completed elsewhere; skipping duplicate grant`);
         paymentStatus = 'COMPLETED';
       }
     } catch (stripeError) {
@@ -529,35 +580,34 @@ router.get('/verify-session', authenticateToken, async (req, res) => {
       // In explicit local demo mode (without Stripe keys), simulate successful payment.
       if (payment.status === 'PENDING') {
         console.log('Demo mode: Updating payment and user plan...');
-        
-        // Update payment status
-        await prisma.payment.update({
-          where: { id: payment.id },
-          data: { status: 'COMPLETED' }
-        });
 
-        // Update user subscription - ADD new plan limits to existing monthlyLimit.
-        // BigInt-safe: see comment in the Stripe branch above for context.
+        // Same atomic claim-then-grant as the Stripe branch — a duplicate
+        // verify in demo mode must not double-grant either. BigInt-safe.
         const creditsForPlan = premiumCreditsForPlan(payment.plan);
+        await prisma.$transaction(async (tx) => {
+          const claim = await tx.payment.updateMany({
+            where: { id: payment.id, status: { not: 'COMPLETED' } },
+            data: { status: 'COMPLETED' },
+          });
+          if (claim.count === 0) return; // already granted by a racer
 
-        // Get current user to add to existing limits
-        const currentUser = await prisma.user.findUnique({ where: { id: req.user.id } });
-        const currentLimit = typeof currentUser?.monthlyLimit === 'bigint'
-          ? currentUser.monthlyLimit
-          : BigInt(currentUser?.monthlyLimit ?? 0);
-        const newTotalLimit = currentLimit + creditsForPlan;
-        const currentGemaLimit = toBigIntSafe(currentUser?.gemaTokenLimit);
-        const newGemaLimit = currentGemaLimit + gemaLimitForPlan(payment.plan);
+          const currentUser = await tx.user.findUnique({ where: { id: req.user.id } });
+          const currentLimit = typeof currentUser?.monthlyLimit === 'bigint'
+            ? currentUser.monthlyLimit
+            : BigInt(currentUser?.monthlyLimit ?? 0);
+          const newTotalLimit = currentLimit + creditsForPlan;
+          const newGemaLimit = toBigIntSafe(currentUser?.gemaTokenLimit) + gemaLimitForPlan(payment.plan);
 
-        const updatedUser = await prisma.user.update({
-          where: { id: req.user.id },
-          data: {
-            plan: payment.plan,
-            monthlyLimit: newTotalLimit,
-            gemaTokenLimit: newGemaLimit,
-            subscriptionStatus: 'active'
-            // monthlyCallLimit: NOT UPDATED - preserve current usage
-          }
+          await tx.user.update({
+            where: { id: req.user.id },
+            data: {
+              plan: payment.plan,
+              monthlyLimit: newTotalLimit,
+              gemaTokenLimit: newGemaLimit,
+              subscriptionStatus: 'active',
+              // monthlyCallLimit: NOT UPDATED - preserve current usage
+            },
+          });
         });
 
         console.log(`Demo mode: Successfully updated user ${req.user.id} to plan ${payment.plan}`);
@@ -675,20 +725,9 @@ router.get('/stripe/invoice/:invoiceId', authenticateToken, async (req, res) => 
       return res.status(403).json({ error: 'Forbidden' });
     }
 
-    // Prefer direct invoice PDF if available
-    if (invoice.invoice_pdf) {
-      const response = await axios.get(invoice.invoice_pdf, { responseType: 'stream', timeout: 15000 });
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', contentDispositionHeader('attachment', invoicePdfFilename(invoice)));
-      return response.data.pipe(res);
-    }
-
-    // Fallback: redirect to hosted invoice URL
-    if (invoice.hosted_invoice_url) {
-      return res.redirect(invoice.hosted_invoice_url);
-    }
-
-    return res.status(404).json({ error: 'Invoice PDF not available' });
+    // Prefer direct invoice PDF if available; otherwise redirect to the hosted
+    // URL. Both outbound URLs are SSRF/open-redirect validated in the helper.
+    return await streamInvoicePdfOrRedirect(req, res, invoice);
   } catch (error) {
     if (error?.isStripeOperationalError || stripeService.isStripeLikeError?.(error)) {
       return sendStripeError(res, req, error, 'downloadStripeInvoice');
@@ -743,19 +782,9 @@ router.get('/invoice/:paymentId', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'No related invoice found for this payment' });
     }
 
-    // Stream PDF if available, else redirect to hosted URL
-    if (invoice.invoice_pdf) {
-      const response = await axios.get(invoice.invoice_pdf, { responseType: 'stream', timeout: 15000 });
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', contentDispositionHeader('attachment', invoicePdfFilename(invoice)));
-      return response.data.pipe(res);
-    }
-
-    if (invoice.hosted_invoice_url) {
-      return res.redirect(invoice.hosted_invoice_url);
-    }
-
-    return res.status(404).json({ error: 'Invoice PDF not available' });
+    // Stream PDF if available, else redirect to hosted URL. Both outbound URLs
+    // are SSRF/open-redirect validated in the helper.
+    return await streamInvoicePdfOrRedirect(req, res, invoice);
   } catch (error) {
     if (error?.isStripeOperationalError || stripeService.isStripeLikeError?.(error)) {
       return sendStripeError(res, req, error, 'downloadStripeInvoiceByPayment');
@@ -1173,33 +1202,44 @@ async function handleInvoicePaymentFailed(invoice) {
       console.error('Payment failure email dispatch failed (non-fatal):', mailErr.message);
     }
 
-    // Create in-app notification
-    await prisma.notification.create({
-      data: {
-        userId: user.id,
-        type: 'payment_failed',
-        title: 'Payment Failed',
-        message: `Your payment of $${amountDue} could not be processed. We'll retry automatically.`,
-        severity: 'warning',
-        metadata: serializeBigIntFields({
-          invoiceId: invoice.id,
-          amount: amountDue
-        })
-      }
-    });
+    // Create in-app notification + record the audit event — both non-idempotent
+    // (no unique guard on invoice.id), so each is isolated in its own
+    // log-and-continue try/catch. Only the idempotent past_due update above
+    // gates the rethrow below, so a Stripe redelivery can't duplicate these.
+    try {
+      await prisma.notification.create({
+        data: {
+          userId: user.id,
+          type: 'payment_failed',
+          title: 'Payment Failed',
+          message: `Your payment of $${amountDue} could not be processed. We'll retry automatically.`,
+          severity: 'warning',
+          metadata: serializeBigIntFields({
+            invoiceId: invoice.id,
+            amount: amountDue
+          })
+        }
+      });
+    } catch (notifErr) {
+      console.warn('[payments] payment_failed notification persist failed:', notifErr?.message || notifErr);
+    }
 
     // Record subscription event
-    await prisma.subscriptionEvent.create({
-      data: {
-        userId: user.id,
-        eventType: 'payment_failed',
-        eventData: serializeBigIntFields({
-          invoiceId: invoice.id,
-          amount: amountDue,
-          reason: invoice.last_finalization_error?.message || 'Payment declined'
-        })
-      }
-    });
+    try {
+      await prisma.subscriptionEvent.create({
+        data: {
+          userId: user.id,
+          eventType: 'payment_failed',
+          eventData: serializeBigIntFields({
+            invoiceId: invoice.id,
+            amount: amountDue,
+            reason: invoice.last_finalization_error?.message || 'Payment declined'
+          })
+        }
+      });
+    } catch (evtErr) {
+      console.warn('[payments] subscriptionEvent payment_failed persist failed:', evtErr?.message || evtErr);
+    }
 
     console.log(`Invoice payment failed for user ${user.id}`);
 
@@ -1216,7 +1256,12 @@ async function handleInvoicePaymentFailed(invoice) {
     });
 
   } catch (error) {
+    // Re-throw so the webhook returns 500 and Stripe redelivers — the
+    // subscriptionStatus='past_due' write is revenue-critical (dunning state)
+    // and idempotent. The in-app notification + audit-event writes are isolated
+    // above so a retry can't duplicate them.
     console.error('Error handling invoice payment failed:', error);
+    throw error;
   }
 }
 
@@ -1247,24 +1292,36 @@ async function handleSubscriptionCreated(subscription) {
     // Send welcome email
     // await emailService.sendWelcomeEmail(updatedUser); // Commented out temporarily
     
-    // Record subscription event
-    await prisma.subscriptionEvent.create({
-      data: {
-        userId: user.id,
-        eventType: 'created',
-        newPlan: updatedUser.plan,
-        eventData: {
-          subscriptionId: subscription.id,
-          planName: subscription.items.data[0]?.price?.nickname || updatedUser.plan
-        },
-        stripeEventId: subscription.id
-      }
-    });
+    // Record subscription event — best-effort and LAST among the writes. Kept
+    // non-fatal (own try/catch) so a transient audit-row failure can't trigger a
+    // Stripe retry that would re-run it and duplicate the row; only the
+    // idempotent user.update above governs the retry/throw decision below.
+    try {
+      await prisma.subscriptionEvent.create({
+        data: {
+          userId: user.id,
+          eventType: 'created',
+          newPlan: updatedUser.plan,
+          eventData: {
+            subscriptionId: subscription.id,
+            planName: subscription.items.data[0]?.price?.nickname || updatedUser.plan
+          },
+          stripeEventId: subscription.id
+        }
+      });
+    } catch (evtErr) {
+      console.warn('[payments] subscriptionEvent created persist failed:', evtErr?.message || evtErr);
+    }
 
     console.log(`Subscription created for user ${user.id}`);
-    
+
   } catch (error) {
+    // Re-throw so the webhook returns 500 and Stripe redelivers — persisting
+    // stripeSubscriptionId is critical (cancel/reactivate/renewal all look the
+    // user up by it) and the user.update is idempotent. The audit-row write is
+    // isolated above so a retry can't duplicate it.
     console.error('Error handling subscription created:', error);
+    throw error;
   }
 }
 
@@ -1292,9 +1349,14 @@ async function handleSubscriptionUpdated(subscription) {
     });
 
     console.log(`Subscription updated for user ${user.id}, status: ${subscription.status}`);
-    
+
   } catch (error) {
+    // Re-throw so the webhook returns 500 and Stripe redelivers — the single
+    // write here (subscriptionStatus + period-end) is idempotent, and silently
+    // swallowing left subscription state permanently stale on a transient DB
+    // failure (mirrors handleSubscriptionDeleted/handleInvoicePaymentSucceeded).
     console.error('Error handling subscription updated:', error);
+    throw error;
   }
 }
 

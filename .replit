@@ -70,7 +70,7 @@ outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=http://localhost:5050 REPLIT_BACKEND_MODE=sidecar BACKEND_PORT=5050 FRONTEND_PORT=3000 NODE_ENV=development node -e \"const { spawn } = require('child_process'); const env = process.env; const backend = spawn('node', ['backend/scripts/start-with-migrations.js'], { cwd: '.', env: { ...env, PORT: '5050', HOST: '127.0.0.1', NODE_ENV: 'production' }, stdio: 'inherit' }); const frontend = spawn('npx', ['next', 'dev', '-p', '3000', '-H', '0.0.0.0'], { env: { ...env, PORT: '3000' }, stdio: 'inherit' });\""
+args = "NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=http://localhost:5050 REPLIT_BACKEND_MODE=sidecar BACKEND_PORT=5050 FRONTEND_PORT=3000 NODE_ENV=development node -e \"const { spawn } = require('child_process'); const env = process.env; const backend = spawn('node', ['backend/scripts/start-with-migrations.js'], { cwd: '.', env: { ...env, PORT: '5050', HOST: '127.0.0.1', NODE_ENV: 'production' }, stdio: 'inherit' }); const frontend = spawn('npx', ['next', 'dev', '-p', '3000', '-H', '0.0.0.0'], { env: { ...env, PORT: '3000' }, stdio: 'inherit' }); const prewarm = spawn('node', ['scripts/prewarm-chunks.js'], { cwd: '.', env: { ...env, FRONTEND_PORT: '3000' }, stdio: 'inherit' });\""
 waitForPort = 3000
 
 [[workflows.workflow]]
@@ -90,12 +90,17 @@ isValidation = true
 GOOGLE_ALLOW_FRONTEND_CALLBACK = "true"
 SEED_ADMIN_EMAIL = "admin@example.com"
 SEED_ADMIN_PASSWORD = "Pasword202212"
+CODE_HOST_RUNNER_ALLOWED_USER_IDS = "cmprr3bh4jpA2M7TAvTQV30js0mbC"
 
 [userenv.shared]
 GOOGLE_AUTH_BASE_URL = "https://siragpt.com"
 SIRAGPT_USER_MEMORY_STORE = "pgvector"
 SIRAGPT_MEMORY_EMBED_PROVIDER = "jina"
 R2_ENDPOINT = "https://c6a66a858f460a12b7b0d373637efc00.r2.cloudflarestorage.com"
+CODE_HOST_RUNNER = "1"
+
+[userenv.development]
+CODE_HOST_RUNNER_ALLOWED_USER_IDS = "cmprr3bh4jpA2M7TAvTQV30js0mbC,cmpm0ml410000d7iat3t2hvl3"
 
 [postMerge]
 path = "scripts/post-merge.sh"

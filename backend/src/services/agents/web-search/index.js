@@ -202,7 +202,7 @@ async function search(query, opts = {}) {
   // Fresh queries must not return a stale cache entry, so fold the
   // freshness hint into the cache bucket WITHOUT touching the cache's
   // (query, locale) signature or the real locale passed to providers.
-  const cacheBucket = [locale || '', freshness ? `f=${freshness}` : '', includeNews ? 'news' : '']
+  const cacheBucket = [locale || '', freshness ? `f=${freshness}` : '', includeNews ? 'news' : '', includeScientific ? 'sci' : '']
     .filter(Boolean).join('|') || null;
 
   const cached = cache.get(q, cacheBucket);
@@ -322,7 +322,11 @@ async function searchMany(query, opts = {}) {
     return { results: [], provider: null, providers: [], cached: false, attempts: [] };
   }
 
-  const cacheKey = `${includeScientific ? 'sci' : 'gen'}:${maxResults}:${q}`;
+  // Fold the result-shaping opts (fan-out width + relevance floor) into the key
+  // so a differently-configured call can't be served another bucket's payload.
+  // For all current callers these are constants (1 / 0.3), so the happy-path
+  // cache hit/miss and returned results are byte-identical.
+  const cacheKey = `${includeScientific ? 'sci' : 'gen'}:${maxResults}:${variantCount}:${minScore}:${q}`;
 
   // Stale-while-revalidate: serve a cached payload instantly; if it has aged
   // past the freshness window, kick off a non-blocking background refresh so

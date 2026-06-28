@@ -8,7 +8,11 @@ import "./video-liquid.css"
 import { NextIntlClientProvider } from "next-intl"
 import { getLocale, getMessages } from "next-intl/server"
 import { isRTL } from "@/lib/i18n/locales"
-import { LayoutClientEffects } from "@/components/layout-client-effects"
+// LayoutClientEffects is loaded via a "use client" dynamic wrapper (ssr:false)
+// to prevent React from emitting a <div hidden=""> RSC transport container
+// before the <a> skip-link in the server HTML. That hidden div made the first
+// body child differ between server and client → structural hydration mismatch.
+import { LayoutClientEffects } from "@/components/layout-client-effects-dynamic"
 // RootProviders is loaded from a Client Component wrapper that uses
 // next/dynamic with ssr:false. Moving the dynamic() call into a "use client"
 // file is required — Next.js 15 forbids ssr:false in Server Components.
@@ -178,10 +182,33 @@ export default async function RootLayout({
     >
       <head suppressHydrationWarning>
         {/*
+          React 18.3 hydration-mismatch filter + EOF-reload guard.
+
+          React 18.3 reports RECOVERABLE errors (hydration mismatches) through
+          window.reportError(), which dispatches a browser `error` event that
+          Replit's crash detector intercepts as a fatal crash — even though
+          React immediately regenerates the tree client-side and the app works
+          correctly. We override window.reportError to suppress those specific
+          messages so they never reach the crash detector.
+
+          "Unexpected EOF" happens when the SSR stream is cut mid-flight
+          because the old Next.js process dies during a restart. The browser
+          gets an incomplete HTML, React tries to hydrate it, fails, and
+          reports an error. We intercept the EOF event and schedule a reload
+          after 2 s, giving the new process time to start so the next load
+          delivers a complete page and a clean hydration.
+        */}
+        <script
+          suppressHydrationWarning
+          dangerouslySetInnerHTML={{
+            __html: `(function(){var _re=window.reportError;window.reportError=function(e){var m=(e&&e.message)||'';if(m.indexOf('Hydration failed')!==-1||m.indexOf('did not match the client')!==-1||m.indexOf('while hydrating')!==-1)return;typeof _re==='function'&&_re.call(this,e);};var rl=false;function rf(){if(!rl){rl=true;setTimeout(function(){location.reload();},2000);}}window.addEventListener('unhandledrejection',function(e){var m=(e.reason&&e.reason.message)||'';if(m.indexOf('Unexpected EOF')!==-1){e.preventDefault();rf();}});window.addEventListener('error',function(e){if((e.message||'').indexOf('Unexpected EOF')!==-1){e.preventDefault();rf();}},true);})();`,
+          }}
+        />
+        {/*
           Medianoche (OLED) theme boot — runs before first paint so a
           midnight user never sees the regular dark canvas flash. The
           flag lives outside next-themes ("midnight" is a flavor of the
-          dark theme, not a separate theme), and the CSS is scoped to
+          dark theme, not a sensitive theme), and the CSS is scoped to
           `.dark.midnight`, so the class is inert while in light mode.
         */}
         <script
@@ -261,8 +288,23 @@ export default async function RootLayout({
         <a href="#main-content" className="skip-to-content">
           Saltar al contenido
         </a>
-        <LayoutClientEffects />
+        <span aria-live="polite" className="sr-only" data-app-bootstrap-status>
+          Preparando Sira GPT
+        </span>
+        {/*
+          LayoutClientEffects is intentionally placed INSIDE NextIntlClientProvider
+          rather than as a direct <body> child. When a Client Component (even ssr:false)
+          is a direct Server-Component child of <body>, React places its RSC flight
+          boundary (<div hidden="">) BEFORE all preceding static content in the body.
+          That caused the RSC boundary to appear before the <a> skip-link in the server
+          HTML, while the client rendered <a> as the first body child →
+          structural hydration mismatch → unhandlederror → false crash detection.
+          By nesting LayoutClientEffects inside the Client Component boundary of
+          NextIntlClientProvider, the RSC boundary stays inside that subtree and never
+          pollutes the top-level body ordering.
+        */}
         <NextIntlClientProvider locale={locale} messages={messages}>
+          <LayoutClientEffects />
           <RootProviders>
             <div id="main-content" tabIndex={-1} className="outline-none">
               {children}

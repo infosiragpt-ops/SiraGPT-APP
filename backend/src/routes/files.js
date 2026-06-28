@@ -25,9 +25,12 @@ const OpenAI = require('openai');
 const documentIntentAnalyzer = require('../services/document-intent-analyzer');
 const fileIntegrityValidator = require('../services/file-integrity-validator');
 const objectStorage = require('../services/object-storage');
+const { pipeStreamToResponse } = require('../utils/pipe-stream-to-response');
 const { progressStream } = require('../services/upload-progress-sse');
 const {
+  DOCUMENT_FAMILY_LIMITS,
   MAX_SIMULTANEOUS_DOCUMENTS,
+  validateDocumentBatch,
 } = require('../config/document-batch-limits');
 // Never advertise a batch maxCount larger than multer actually accepts, else
 // over-limit uploads fail with LIMIT_FILE_COUNT instead of the route's contract.
@@ -66,7 +69,14 @@ function enforceOrgRateLimitSafe(req, res, next) {
 
 // Initialize OpenAI client
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
+  apiKey: process.env.OPENAI_API_KEY,
+  // Bound time-to-first-headers so a hung OpenAI upstream can't stall a
+  // summary/cite/decompose/deep-ask handler for the SDK's 10-minute default
+  // (×2 retries). 120s is far above any healthy latency for these calls, so it
+  // never fires on the happy path; per-call overrides (e.g. the Files-upload
+  // create) still win. Mirrors rag-service.js's _embedClientOptions pattern.
+  timeout: Number.parseInt(process.env.SIRAGPT_FILES_OPENAI_TIMEOUT_MS || '120000', 10),
+  maxRetries: Number.parseInt(process.env.SIRAGPT_FILES_OPENAI_MAX_RETRIES || '2', 10),
 });
 
 // `file-type` v22 is ESM-only; we use a dynamic import wrapped in a
@@ -90,7 +100,14 @@ function scheduleDefaultRagIndex(userId, fileRecord) {
   setImmediate(async () => {
     // Mark the entry into the async pipeline so the frontend can
     // distinguish "extraction done, still indexing" from "ready".
-    await fileProcessingStatus.setStage(prisma, fileRecord.id, 'chunking', { userId });
+    // Guarded: this is the one await outside the try blocks below, so a
+    // rejection here would escape the background callback as an
+    // unhandledRejection ([FATAL] in the global handler) — log and continue.
+    try {
+      await fileProcessingStatus.setStage(prisma, fileRecord.id, 'chunking', { userId });
+    } catch (stageErr) {
+      console.warn('[files] chunking-stage marker failed (non-fatal):', stageErr?.message || stageErr);
+    }
 
     // Retry helper: retries RAG indexing up to RAG_INDEX_MAX_RETRIES (default 3)
     // with exponential backoff. Recoverable failures (network, rate-limit,
@@ -266,9 +283,11 @@ function withTimeout(promise, ms, label) {
 // synchronous upload path always returns a JSON result, even when an
 // upstream is degraded. Overridable via env for ops tuning.
 const EXTRACT_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_EXTRACT_TIMEOUT_MS || '20000', 10);
+const ASYNC_EXTRACT_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_ASYNC_EXTRACT_TIMEOUT_MS || '900000', 10);
 const THUMBNAIL_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_THUMBNAIL_TIMEOUT_MS || '12000', 10);
 const OPENAI_FILE_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_OPENAI_FILE_TIMEOUT_MS || '15000', 10);
 const ANALYZE_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_ANALYZE_TIMEOUT_MS || '8000', 10);
+const ASYNC_ANALYZE_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_ASYNC_ANALYZE_TIMEOUT_MS || '120000', 10);
 
 const OPENAI_FILE_MIMES = new Set([
   'application/pdf',
@@ -307,6 +326,28 @@ async function uploadToOpenAiFiles(file) {
 // Processes files in chunks of MAX_CONCURRENT to avoid overwhelming the
 // event loop, DB connection pool, and upstream API rate limits.
 const MAX_CONCURRENT = Number.parseInt(process.env.SIRAGPT_UPLOAD_CONCURRENCY || '5', 10);
+const ASYNC_FILE_PROCESSING_CONCURRENCY = Math.max(1, Number.parseInt(process.env.SIRAGPT_ASYNC_FILE_PROCESSING_CONCURRENCY || '2', 10));
+const asyncFileProcessingQueue = [];
+let activeAsyncFileProcessors = 0;
+
+function drainAsyncFileProcessingQueue() {
+  while (activeAsyncFileProcessors < ASYNC_FILE_PROCESSING_CONCURRENCY && asyncFileProcessingQueue.length > 0) {
+    const task = asyncFileProcessingQueue.shift();
+    activeAsyncFileProcessors += 1;
+    Promise.resolve()
+      .then(task)
+      .catch(err => console.warn('[files] async post-upload processing failed:', err?.message || err))
+      .finally(() => {
+        activeAsyncFileProcessors = Math.max(0, activeAsyncFileProcessors - 1);
+        drainAsyncFileProcessingQueue();
+      });
+  }
+}
+
+function enqueueAsyncFileProcessing(task) {
+  asyncFileProcessingQueue.push(task);
+  setImmediate(drainAsyncFileProcessingQueue);
+}
 
 /**
  * Process files in parallel batches. Each batch goes through:
@@ -381,7 +422,11 @@ async function processFilesInParallel(files, userId, prismaClient) {
           if (integrity.issues.length > 0) {
             console.warn(`[files] integrity warnings for ${file.originalname}:`, integrity.issues.map(i => i.message).join('; '));
           }
-        } catch { /* integrity validation is best-effort */ }
+        } catch (integrityErr) {
+          // Best-effort: still continue to extraction, but surface that the
+          // integrity step (empty-file rejection + warnings) was skipped.
+          console.warn(`[files] integrity validation step failed (best-effort), continuing for ${file.originalname}:`, integrityErr && integrityErr.message || integrityErr);
+        }
 
         // ── Extract text (BEST-EFFORT) ──
         // A parser failure must NEVER fail the upload. The binary is already
@@ -530,7 +575,11 @@ async function processFileAfterFastUpload(file, userId, prismaClient, fileRecord
       if (integrity.issues.length > 0) {
         console.warn(`[files] integrity warnings for ${file.originalname}:`, integrity.issues.map(i => i.message).join('; '));
       }
-    } catch { /* integrity validation is best-effort */ }
+    } catch (integrityErr) {
+      // Best-effort (async/fast-upload path): continue to extraction, but
+      // surface that the integrity step was skipped.
+      console.warn(`[files] async integrity validation step failed (best-effort), continuing for ${file.originalname}:`, integrityErr && integrityErr.message || integrityErr);
+    }
 
     await fileProcessingStatus.setStage(prismaClient, fileRecord.id, 'extracting', { userId });
     // Best-effort extraction: a parser failure must not flip the file to
@@ -538,7 +587,7 @@ async function processFileAfterFastUpload(file, userId, prismaClient, fileRecord
     // just without locally-extracted text.
     let result;
     try {
-      result = await withTimeout(fileProcessor.processFile(file), EXTRACT_TIMEOUT_MS, `text extraction (${file.originalname})`);
+      result = await withTimeout(fileProcessor.processFile(file), ASYNC_EXTRACT_TIMEOUT_MS, `async text extraction (${file.originalname})`);
     } catch (extractErr) {
       console.warn(`[files] async text extraction failed for ${file.originalname} — file stays usable:`, extractErr?.message || extractErr);
       result = { success: false, extractedText: '', error: `extraction_degraded: ${extractErr?.message || extractErr}` };
@@ -559,7 +608,9 @@ async function processFileAfterFastUpload(file, userId, prismaClient, fileRecord
 
     scheduleDefaultRagIndex(userId, fileRecord);
     try {
-      await documentIntelligence.analyzeFile(prismaClient, { userId, fileRecord, extractionResult: result, force: true });
+      // Bound analyzeFile with the same budget the synchronous path uses, so a
+      // hung analysis can't leave the R2 offload + path update below unrun.
+      await withTimeout(documentIntelligence.analyzeFile(prismaClient, { userId, fileRecord, extractionResult: result, force: true }), ASYNC_ANALYZE_TIMEOUT_MS, `async document analysis (${file.originalname})`);
     } catch (analysisError) { console.warn('[files] document analysis failed:', analysisError.message || analysisError); }
 
     // Offload binary (+ thumbnail) to R2 after extraction + analysis.
@@ -583,10 +634,7 @@ async function processFileAfterFastUpload(file, userId, prismaClient, fileRecord
 }
 
 function scheduleFileAfterFastUpload(file, userId, prismaClient, fileRecord) {
-  setImmediate(() => {
-    processFileAfterFastUpload(file, userId, prismaClient, fileRecord)
-      .catch(err => console.warn('[files] async post-upload processing failed:', err?.message || err));
-  });
+  enqueueAsyncFileProcessing(() => processFileAfterFastUpload(file, userId, prismaClient, fileRecord));
 }
 
 async function processFilesForAsyncPreview(files, userId, prismaClient) {
@@ -706,6 +754,19 @@ router.post('/upload', authenticateToken, requireScope('files:write'), upload.ar
       return res.status(400).json({ error: 'No files uploaded' });
     }
 
+    const batchPolicy = validateDocumentBatch(req.files);
+    if (!batchPolicy.ok) {
+      await Promise.all((req.files || []).map(file => unlinkQuiet(file.path)));
+      return res.status(413).json({
+        error: batchPolicy.message,
+        code: batchPolicy.code,
+        total: batchPolicy.total,
+        maxDocuments: batchPolicy.maxDocuments,
+        counts: batchPolicy.counts,
+        familyLimits: batchPolicy.familyLimits,
+      });
+    }
+
     const asyncProcessing = isAsyncUploadRequest(req);
     const processedFiles = asyncProcessing
       ? await processFilesForAsyncPreview(req.files, req.user.id, prisma)
@@ -734,6 +795,13 @@ router.post('/upload', authenticateToken, requireScope('files:write'), upload.ar
         ? 'Files processed successfully'
         : `${ok} of ${req.files.length} files processed`,
       files: processedFiles,
+      batch: {
+        asyncProcessing,
+        total: req.files.length,
+        maxDocuments: MAX_SIMULTANEOUS_DOCUMENTS,
+        counts: batchPolicy.counts,
+        familyLimits: DOCUMENT_FAMILY_LIMITS,
+      },
     });
   } catch (error) {
     console.error('Upload error:', error);
@@ -980,7 +1048,10 @@ router.get('/:id/evidence', authenticateToken, async (req, res) => {
       userId: req.user.id,
       fileId: file.id,
       query: req.query.query || '',
-      limit: req.query.limit || 8,
+      // Validate + clamp the untrusted query param (same as the /files list
+      // endpoint). A raw string like ?limit=abc → NaN and ?limit=999999999 →
+      // an unbounded evidence scan.
+      limit: parsePositiveInt(req.query.limit, 8, { min: 1, max: 100 }),
     });
     res.json({
       analysis: result.analysis || analysis,
@@ -1099,7 +1170,11 @@ router.get('/:id/render', authenticateToken, async (req, res) => {
       res.setHeader('X-Render-Engine', 'native-pdf');
       res.setHeader('X-Render-From-Cache', 'true');
       const { stream } = await objectStorage.readStream(file.path);
-      return stream.pipe(res);
+      // Release the underlying fd/socket if the client aborts mid-download:
+      // stream.pipe does not destroy the source on destination close. On a
+      // normal finish, 'close' fires after writableEnded → destroy is skipped.
+      res.on('close', () => { if (!res.writableEnded) stream.destroy(); });
+      return pipeStreamToResponse(stream, res, 'native-pdf');
     }
 
     if (!documentRenderer.isConvertible(file.mimeType, file.originalName)) {
@@ -1141,7 +1216,11 @@ router.get('/:id/render', authenticateToken, async (req, res) => {
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', contentDispositionHeader('inline', renderPdfFilename(file.originalName)));
     res.setHeader('Cache-Control', 'private, max-age=86400');
-    fsSync.createReadStream(pdfPath).pipe(res);
+    const renderedStream = fsSync.createReadStream(pdfPath);
+    // Release the fd if the client aborts mid-download (pipe leaves the source
+    // open on destination close). No-op on a normal finish (writableEnded).
+    res.on('close', () => { if (!res.writableEnded) renderedStream.destroy(); });
+    pipeStreamToResponse(renderedStream, res, 'rendered-pdf');
   } catch (error) {
     console.error('Render route error:', error);
     res.status(500).json({ error: 'Failed to render document' });

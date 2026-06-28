@@ -629,6 +629,17 @@ test('shouldUseDeterministicAttachmentAnswer: routes simple attachment summaries
   );
 });
 
+test('resolveAgentToolScopes: authenticated users receive safe document-read scopes', () => {
+  clearAgentModules();
+  const { resolveAgentToolScopes } = require('../src/services/agents/agent-task-runner');
+
+  assert.deepEqual(resolveAgentToolScopes({ id: null, scopes: [] }), []);
+  assert.deepEqual(
+    new Set(resolveAgentToolScopes({ id: 'user-doc', scopes: ['ai.generate'] })),
+    new Set(['ai.generate', 'files.read', 'rag.read']),
+  );
+});
+
 test('runAgentTaskJob: uploaded document receives local fallback answer without OPENAI_API_KEY', async () => {
   const restoreEnv = rememberEnv(['OPENAI_API_KEY', 'DEEPSEEK_API_KEY', 'OPENROUTER_API_KEY', 'AGENT_TASK_STORE_DIR', 'NODE_ENV']);
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'siragpt-doc-fallback-'));
@@ -1102,4 +1113,30 @@ test('runAgentTaskJob: uploaded document recovers when model runtime completes w
     clearAgentModules();
     restoreEnv();
   }
+});
+
+test('structured calc answer takes the over/under direction from the totals, not the parsed magnitude', () => {
+  clearAgentModules();
+  const { buildAttachmentGroundedFallbackAnswer } = require('../src/services/agents/agent-task-runner');
+  const mk = (contract, real, diff) => [
+    `Total contrato\t${contract}`,
+    `Total real\t${real}`,
+    `Diferencia\t${diff}`,
+  ].join('\n');
+
+  // real < contract with an explicit (non-negative) "Diferencia:" line → must
+  // report "por debajo" (the magnitude alone used to force "por encima").
+  const below = buildAttachmentGroundedFallbackAnswer({
+    goal: 'calcula la diferencia entre el contrato y lo real',
+    uploadedFileContext: mk(100000, 80000, 20000),
+  });
+  assert.match(below, /por debajo/);
+  assert.doesNotMatch(below, /20000 USD\*\* por encima/);
+
+  // real > contract → still "por encima".
+  const above = buildAttachmentGroundedFallbackAnswer({
+    goal: 'calcula la diferencia entre el contrato y lo real',
+    uploadedFileContext: mk(270000, 283000, 13000),
+  });
+  assert.match(above, /por encima/);
 });

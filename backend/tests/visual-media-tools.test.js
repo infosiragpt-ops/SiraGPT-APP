@@ -190,6 +190,19 @@ test('create_chart: histogram renders as bars (rect), not a line', async () => {
   assert.ok(c.includes('<rect'), 'histogram should render rect bars');
 });
 
+test('create_chart: horizontal_bar with fewer labels than data uses a fallback, not "undefined"', async () => {
+  const r = await tool('create_chart').execute({
+    chartType: 'horizontal_bar', title: 'Sparse labels',
+    labels: ['First'], // only one label for three bars
+    datasets: [{ label: 'V', data: [10, 20, 30] }],
+    theme: 'professional',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const c = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(!c.includes('>undefined<'), 'missing labels must not render the literal "undefined"');
+  assert.ok(c.includes('Bar 2') && c.includes('Bar 3'), 'unlabelled bars get a positional fallback');
+});
+
 test('create_chart: pie chart', async () => {
   const r = await tool('create_chart').execute({
     chartType: 'pie', title: 'Pie', labels: ['A', 'B'], datasets: [{ label: 'V', data: [60, 40] }],
@@ -2411,6 +2424,22 @@ test('create_radar_chart: auto-detects max from values', async () => {
   assert.equal(r.max, 7);
 });
 
+test('create_radar_chart: legend average divides by finite values only', async () => {
+  const r = await tool('create_radar_chart').execute({
+    title: 'Mixed values',
+    axes: ['A', 'B', 'C'],
+    series: [{ name: 'S', values: [10, 20, 'x'] }], // 'x' → NaN, must be ignored
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  // avg = (10 + 20) / 2 = 15.0 — NOT (10 + 20) / 3 = 10.0 (raw length).
+  assert.ok(
+    svg.includes('avg 15.0'),
+    `expected 'avg 15.0', got ${(svg.match(/avg [0-9.]+/g) || []).join() || 'none'}`,
+  );
+  assert.ok(!svg.includes('avg 10.0'), 'must not divide the finite sum by the raw values length');
+});
+
 test('create_radar_chart: explicit max overrides auto-detect', async () => {
   const r = await tool('create_radar_chart').execute({
     title: 'Explicit',
@@ -4194,6 +4223,33 @@ test('create_swimlane_diagram: emits expected events', async () => {
   assert.ok(types.includes('tool_call'));
   assert.ok(types.includes('file_artifact'));
   assert.ok(types.includes('tool_output'));
+});
+
+// ── Truncation must not split an XML entity (regression) ─────────
+// A label/desc/persona is xmlEscaped, so an '&' becomes '&amp;'. Slicing the
+// ESCAPED string for display could cut '&amp;' in half → invalid SVG. The fixed
+// code slices the RAW string then escapes. An '&' placed just before each cut
+// boundary would have produced a partial entity under the old code.
+const PARTIAL_ENTITY = /&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[0-9a-f]+;)/i;
+
+test('create_process_flow (chevrons): truncated description does not split an XML entity', async () => {
+  const desc = `${'x'.repeat(33)}& tail text well beyond the 35-char chevron cut`;
+  const r = await tool('create_process_flow').execute(
+    { title: 'T', steps: [{ label: 'Step one', description: desc }], style: 'chevrons' },
+    fakeCtx(),
+  );
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(!PARTIAL_ENTITY.test(svg), 'no partial &entity in the chevron description');
+});
+
+test('create_empathy_map: truncated persona does not split an XML entity', async () => {
+  const persona = `${'x'.repeat(27)}& a long persona name beyond 56 chars total here yes`;
+  const r = await tool('create_empathy_map').execute(
+    { title: 'Map', persona, says: ['a'], thinks: ['b'], does: ['c'], feels: ['d'] },
+    fakeCtx(),
+  );
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(!PARTIAL_ENTITY.test(svg), 'no partial &entity in the persona text');
 });
 
 // ── Cleanup ──────────────────────────────────────────────────────

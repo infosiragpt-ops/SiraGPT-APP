@@ -97,6 +97,16 @@ test('compress: totals report combined ratio', () => {
   assert.ok(out.totals.ratio < 1);
 });
 
+test('compress: a whitespace-only passage reports its real originalLen (reconciles with totals)', () => {
+  const out = cc.compress({ query: 'capital', passages: [{ source: 'w', text: '     ' }], topSentences: 2 });
+  assert.equal(out.compressed.length, 1);
+  // The record's originalLen used to be hardcoded 0 while totals counted the
+  // 5-char body — making the per-record sum disagree with the total.
+  assert.equal(out.compressed[0].originalLen, 5);
+  assert.equal(out.totals.originalLen, 5);
+  assert.equal(out.compressed.reduce((s, r) => s + r.originalLen, 0), out.totals.originalLen);
+});
+
 test('compress: empty passages list → zero output', () => {
   const out = cc.compress({ query: 'x', passages: [] });
   assert.deepEqual(out.compressed, []);

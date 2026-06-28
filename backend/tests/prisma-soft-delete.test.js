@@ -32,6 +32,15 @@ describe('softDeleteWhere', () => {
     assert.deepEqual(out, { userId: 'u1', deletedAt: { not: null } });
   });
 
+  test('treats deletedAt:undefined as not-provided (applies the safe default)', () => {
+    // Prisma drops a `where` key set to undefined entirely, so passing
+    // deletedAt:undefined through would leak tombstoned rows. The helper must
+    // fall back to deletedAt:null instead.
+    const out = softDeleteWhere({ userId: 'u1', deletedAt: undefined });
+    assert.equal(out.deletedAt, null, 'undefined deletedAt must become null');
+    assert.equal(out.userId, 'u1');
+  });
+
   test('throws on non-object extras', () => {
     assert.throws(() => softDeleteWhere('nope'), /plain object/);
     assert.throws(() => softDeleteWhere([1, 2, 3]), /plain object/);

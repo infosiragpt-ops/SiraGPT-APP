@@ -54,8 +54,12 @@ function workspaceNodeOptions() {
   return [existing, configured].filter(Boolean).join(' ');
 }
 
-function proxyUrlsEnabled() {
+function shouldUseProxyUrls() {
   return flagEnabled(process.env.SIRAGPT_WORKSPACE_RUN_PROXY_URLS, process.env.NODE_ENV === 'production');
+}
+
+function proxyUrlsEnabled() {
+  return shouldUseProxyUrls();
 }
 
 function publicBasePath(connectionId) {
@@ -63,7 +67,7 @@ function publicBasePath(connectionId) {
 }
 
 function publicPreviewUrl(connectionId, port) {
-  if (proxyUrlsEnabled()) return publicBasePath(connectionId);
+  if (shouldUseProxyUrls()) return publicBasePath(connectionId);
   return `http://localhost:${port}`;
 }
 
@@ -394,6 +398,7 @@ module.exports = {
   getProxyTarget,
   publicBasePath,
   publicPreviewUrl,
+  useProxyUrls: shouldUseProxyUrls,
   proxyUrlsEnabled,
   stopAll,
   detectRunPlan,

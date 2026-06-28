@@ -55,6 +55,17 @@ function resolveXaiProvider(env = process.env) {
   };
 }
 
+// Per-request deadline so a stalled/half-open xAI Live Search connection can't
+// wedge the awaiting chat-tool call forever (the request had NO timeout before).
+// Generous default (30s) — well above any healthy live-search round-trip — so it
+// never fires on the happy path; env-tunable + clamped. Mirrors the
+// scientific-search fetchWithAbort pattern + the sibling xai-audio timeout.
+function resolveXSearchTimeoutMs(env = process.env) {
+  const raw = Number(env.X_SEARCH_TIMEOUT_MS);
+  if (Number.isFinite(raw) && raw >= 1000 && raw <= 120000) return Math.floor(raw);
+  return 30000;
+}
+
 function isConfigured(env = process.env) {
   return resolveXaiProvider(env).configured;
 }
@@ -213,13 +224,35 @@ async function search(query, opts = {}) {
     stream: false,
   };
 
+  const requestTimeoutMs = resolveXSearchTimeoutMs(opts.env || process.env);
   const postOnce = async () => {
-    const res = await fetcher(`${provider.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${provider.apiKey}` },
-      body: JSON.stringify(body),
-      signal: opts.signal,
-    });
+    // Bound the fetch with an internal AbortController + deadline, chaining any
+    // caller-supplied signal. On a stall this fails fast as a "timed out" error
+    // (which classifyXSearchError marks retryable) instead of hanging forever.
+    const ac = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; ac.abort(); }, requestTimeoutMs);
+    timer.unref?.();
+    let onExternalAbort = null;
+    if (opts.signal) {
+      if (opts.signal.aborted) ac.abort();
+      else { onExternalAbort = () => ac.abort(); opts.signal.addEventListener('abort', onExternalAbort, { once: true }); }
+    }
+    let res;
+    try {
+      res = await fetcher(`${provider.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${provider.apiKey}` },
+        body: JSON.stringify(body),
+        signal: ac.signal,
+      });
+    } catch (err) {
+      if (timedOut) throw new Error(`x-search request timed out after ${requestTimeoutMs}ms`);
+      throw err;
+    } finally {
+      clearTimeout(timer);
+      if (onExternalAbort && opts.signal) opts.signal.removeEventListener('abort', onExternalAbort);
+    }
     if (!res || !res.ok) {
       // Query-free error so the raw user query never lands in logs/retries.
       throw new XSearchHttpError(res ? res.status : 0, `x-search http ${res ? res.status : 'no_response'}`);

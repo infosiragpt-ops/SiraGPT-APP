@@ -1531,6 +1531,7 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
   const streamId = safeExtraMetadata.streamId || null;
   const turnFingerprint = buildGenerateTurnFingerprint({ userId, chatId, prompt, processedFiles });
   const lockKey = chatId ? `ai-generate:${userId || 'anon'}:${chatId}:${idempotencyKey || streamId || turnFingerprint}` : null;
+  let assistantMessage = null;
   const normalizedResponseContent = typeof fullResponseContent === 'string'
     ? fullResponseContent
     : (fullResponseContent == null ? '' : String(fullResponseContent));
@@ -1636,12 +1637,6 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
             tokens,
             files: assistantFiles.length > 0 ? JSON.stringify(assistantFiles) : null,
             metadata: metadataPayload,
-            reasoning: (reasoningPayload && typeof reasoningPayload.text === 'string' && reasoningPayload.text.trim())
-              ? reasoningPayload.text
-              : null,
-            reasoningDetails: (reasoningPayload && reasoningPayload.details != null)
-              ? reasoningPayload.details
-              : undefined,
           }
         });
 
@@ -1654,26 +1649,55 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
               : chat.title
           }
         });
+      }
+      assistantMessage = await prisma.message.create({
+        data: {
+          chatId,
+          role: 'ASSISTANT',
+          content: normalizedResponseContent,
+          // Store the REAL token count (tiktoken over the saved content), not
+          // the `tokens` param — callers pass a char-length approximation
+          // (fullResponseContent.length + prompt.length), which made
+          // Message.tokens disagree with ApiUsage.tokens (which already uses
+          // totalTokens) and corrupted per-message analytics/billing.
+          tokens: totalTokens,
+          files: assistantFiles.length > 0 ? JSON.stringify(assistantFiles) : null,
+          metadata: metadataPayload,
+          // Claude-style extended thinking: chain-of-thought text + the raw
+          // OpenRouter reasoning_details array (replayed verbatim on later
+          // Anthropic tool-call turns). Both null when the model didn't think.
+          reasoning: (reasoningPayload && typeof reasoningPayload.text === 'string' && reasoningPayload.text.trim())
+            ? reasoningPayload.text
+            : null,
+          reasoningDetails: (reasoningPayload && reasoningPayload.details != null)
+            ? reasoningPayload.details
+            : undefined,
+        }
+      });
 
-        if (agentRun && assistantMessage?.id) {
-          try {
-            const { persistAgentRun } = require('../services/agent-harness/agent-steps-store');
-            await persistAgentRun({ prisma, messageId: assistantMessage.id, run: agentRun, model });
-          } catch (agentPersistErr) {
-            console.warn('[ai/generate] agent run persist failed:', agentPersistErr && agentPersistErr.message);
-          }
+      await prisma.chat.update({
+        where: { id: chatId },
+        data: {
+          updatedAt: new Date(),
+          title: chat.title === 'New Chat'
+            ? prompt.slice(0, 50) + (prompt.length > 50 ? '...' : '')
+            : chat.title
+        }
+      });
+
+      // Agent harness: persist the run trace now that the assistant row
+      // exists — agent_steps rows (full fidelity) + messages.agent_metadata
+      // (compact projection for history hydration). Best-effort by design.
+      if (agentRun && assistantMessage?.id) {
+        try {
+          const { persistAgentRun } = require('../services/agent-harness/agent-steps-store');
+          await persistAgentRun({ prisma, messageId: assistantMessage.id, run: agentRun, model });
+        } catch (agentPersistErr) {
+          console.warn('[ai/generate] agent run persist failed:', agentPersistErr && agentPersistErr.message);
         }
       }
 
       // ✅ Track usage
-      // await prisma.apiUsage.create({
-      //   data: { userId, model, tokens, cost: tokens * 0.001 }
-      // });
-
-      // await prisma.user.update({
-      //   where: { id: userId },
-      //   data: { apiUsage: { increment: tokens } }
-      // });
       // FREE plan meters TEXT-only generations (3/day). When this turn
       // carried a document/image attachment we skip the counted usage
       // write so it doesn't consume the text budget — countFreeDailyCalls
@@ -1713,6 +1737,7 @@ router.post(
     // Composer effort picker (Bajo/Medio/Extra/Max → low/medium/high/max).
     // Optional; when present it overrides the auto-decided reasoning depth.
     body('reasoningEffort').optional().isString().isLength({ max: 16 }),
+    body('idempotencyKey').optional().isString().isLength({ min: 1, max: 200 }),
   ],
   authenticateToken,
   requireScope('ai:generate'),
@@ -1852,10 +1877,13 @@ router.post(
         const activeTurn = activeGenerateTurns.get(activeGenerateTurnKey);
         if (activeTurn) {
           try {
+            let dupTimer;
             const duplicateTurn = await Promise.race([
               activeTurn.promise,
-              new Promise((resolve) => setTimeout(() => resolve(null), 55_000)),
-            ]);
+              new Promise((resolve) => {
+                dupTimer = setTimeout(() => resolve(null), 55_000);
+              }),
+            ]).finally(() => clearTimeout(dupTimer));
             if (duplicateTurn && duplicateTurn.assistantMessage) {
               fullResponseContent = duplicateTurn.assistantMessage.content || '';
               console.warn('[ai/generate] active duplicate turn replayed', { chatId });
@@ -3970,7 +3998,11 @@ router.post(
             // survive any pressure. Default 80 KB cap (~20 K tokens
             // of enrichment, leaving plenty for chat history + raw
             // file text). Override via SIRAGPT_ENRICHMENT_MAX_CHARS.
-            const enrichmentSoftCap = Number.parseInt(process.env.SIRAGPT_ENRICHMENT_MAX_CHARS, 10) || 80_000;
+            // NaN-only fallback: an explicit 0 ("keep only always-on blocks")
+            // is a valid cap; `|| 80_000` silently dropped it.
+            const _rawEnrichmentCap = Number.parseInt(process.env.SIRAGPT_ENRICHMENT_MAX_CHARS, 10);
+            const enrichmentSoftCap = Number.isFinite(_rawEnrichmentCap) && _rawEnrichmentCap >= 0
+              ? _rawEnrichmentCap : 80_000;
             if (documentEnrichmentBlock.length > enrichmentSoftCap) {
               try {
                 const ENRICHMENT_BLOCK_ORDER = [
@@ -4392,10 +4424,10 @@ router.post(
           _webSearchAllowed
             ? enrichWithWebSearch(prompt, {
                 mode: webSearchMode === 'dedicated' ? 'dedicated' : 'auto',
-              }).catch(() => null)
+              }).catch((e) => { console.warn('[ai] web search unavailable (continuing without):', e && e.message ? e.message : e); return null; })
             : Promise.resolve(null),
           _memoryAdapter
-            ? _memoryAdapter.buildMemoryPrompt(userId, prompt).catch(() => null)
+            ? _memoryAdapter.buildMemoryPrompt(userId, prompt).catch((e) => { console.warn('[ai] orchestration memory unavailable (continuing without):', e && e.message ? e.message : e); return null; })
             : Promise.resolve(null),
         ]);
         if (_webCtx?.block) webSearchBlock = _webCtx.block;
@@ -4704,6 +4736,11 @@ router.post(
         { kind: 'enterprise-execution', text: enterpriseExecutionBlock, cacheable: false },
         { kind: 'memory', text: memoryBlock, cacheable: true },
         { kind: 'orchestration-memory', text: orchMemoryBlock, cacheable: true },
+        // active-memory was present in the flat system prompt but missing here,
+        // so recalled user memory was dropped for Anthropic/Claude and on any
+        // systemBlocks-based (kernel/budget) rebuild. cacheable:false — it's
+        // recalled per turn and must not be cached stale.
+        { kind: 'active-memory', text: activeMemoryBlock, cacheable: false },
         { kind: 'cross-chat', text: crossChatBlock, cacheable: false },
         { kind: 'attribution', text: attributionBlock, cacheable: false },
         { kind: 'circuit-attribution', text: circuitAttributionBlock, cacheable: false },
@@ -5235,7 +5272,11 @@ router.post(
               const raw = payload.slice(5).trim();
               if (raw && raw !== '[DONE]') {
                 const obj = JSON.parse(raw);
-                if (obj && typeof obj.content === 'string' && !obj._resumed) {
+                // Only mirror incremental content deltas. `replace:true` frames are
+                // full cumulative snapshots (agentic sentinel / final-answer); the
+                // resume buffer is append-only, so storing them makes a reconnect
+                // re-append every full snapshot, duplicating/garbling the answer.
+                if (obj && typeof obj.content === 'string' && !obj._resumed && !obj.replace) {
                   // fire-and-forget — never block the write path
                   streamResume.append(sid, obj.content).catch(() => {});
                 }
@@ -5482,7 +5523,11 @@ router.post(
                 try {
                   const agenticDocs = (processedFiles || [])
                     .filter((file) => file && !isImageMime(file.mimeType || file.type));
-                  const AGENTIC_DOC_INJECT_CHARS = Number(process.env.SIRAGPT_AGENTIC_DOC_INJECT_CHARS) || 120000;
+                  // NaN-only fallback: respect an explicit 0 (floors to the
+                  // 8 KB/file minimum below) instead of `|| 120000` eating it.
+                  const _rawDocInject = Number(process.env.SIRAGPT_AGENTIC_DOC_INJECT_CHARS);
+                  const AGENTIC_DOC_INJECT_CHARS = Number.isFinite(_rawDocInject) && _rawDocInject >= 0
+                    ? _rawDocInject : 120000;
                   const perFileCap = agenticDocs.length
                     ? Math.max(8000, Math.floor(AGENTIC_DOC_INJECT_CHARS / agenticDocs.length))
                     : AGENTIC_DOC_INJECT_CHARS;
@@ -6241,6 +6286,8 @@ router.post(
           ...(__reasoningSink && __reasoningSink.durationMs
             ? { reasoningDurationMs: __reasoningSink.durationMs }
             : {}),
+          ...(idempotencyKey ? { idempotencyKey } : {}),
+          ...(streamId ? { streamId } : {}),
         };
         const savedChat = await saveChatAndTrackUsage(
           userId,
@@ -6559,7 +6606,7 @@ router.post(
         try {
           // Add timeout to prevent hanging
           const timeoutPromise = new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('Image generation timeout')), 50000); // 30 second timeout
+            setTimeout(() => reject(new Error('Image generation timeout')), 50000); // 50 second timeout
           });
 
 
@@ -7347,8 +7394,9 @@ router.post(
       };
 
       let imageResults;
+      let imageTimeoutTimer;
       const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => {
+        imageTimeoutTimer = setTimeout(() => {
           // Deadline reached: the response below becomes an error either
           // way, so cancel the in-flight provider call too — otherwise the
           // SDK keeps generating (default timeout up to 600s) burning paid
@@ -7416,7 +7464,7 @@ router.post(
           ? Promise.all(Array.from({ length: imageCount }, () => generateSingleImage()))
           : generateSingleImage(),
         timeoutPromise,
-      ]);
+      ]).finally(() => { clearTimeout(imageTimeoutTimer); });
       imageResults = imageResults.flat().filter((item) => item && (item.b64 || typeof item === 'string'));
 
       if (!imageResults.length) {
@@ -8601,8 +8649,9 @@ router.post(
         }
       });
 
-      // Update chat title
-      const chat = await prisma.chat.findUnique({ where: { id: chatId } });
+      // Update chat title — scope the re-fetch to the owner (defense-in-depth:
+      // every other chat lookup in this file pairs the query with a userId check).
+      const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
       if (chat) {
         await prisma.chat.update({
           where: { id: chatId },

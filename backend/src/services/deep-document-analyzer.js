@@ -60,7 +60,7 @@ const ENTITY_PATTERNS = [
   { type: 'date', pattern: /\b\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}\b|\b\d{4}[\/-]\d{1,2}[\/-]\d{1,2}\b/g, sensitivity: 'low' },
   { type: 'money', pattern: /[\$€£¥]\s?[\d,]+(?:\.\d{1,2})?|\b\d+(?:,\d{3})*(?:\.\d{1,2})?\s?(?:USD|EUR|GBP|MXN|COP|ARS|CLP|PEN|BRL)\b/gi, sensitivity: 'medium' },
   { type: 'percentage', pattern: /\b\d+(?:\.\d+)?%/g, sensitivity: 'low' },
-  { type: 'ip_address', pattern: /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g, sensitivity: 'high' },
+  { type: 'ip_address', pattern: /\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b/g, sensitivity: 'high' },
   { type: 'ssn', pattern: /\b\d{3}-\d{2}-\d{4}\b/g, sensitivity: 'critical' },
   { type: 'credit_card', pattern: /\b(?:\d{4}[-\s]?){3}\d{4}\b/g, sensitivity: 'critical' },
   { type: 'doi', pattern: /\b10\.\d{4,9}\/[^\s]+\b/g, sensitivity: 'low' },
@@ -120,7 +120,22 @@ function extractEntities(text) {
     }
   }
 
-  return entities.sort((a, b) => a.index - b.index);
+  // Overlap resolution. A critical value (credit card, IBAN, SSN) is often ALSO
+  // matched by a lower-sensitivity pattern — e.g. the 'phone' regex grabs the
+  // digits of a 16-digit card — and only 'critical' entities get redacted, so the
+  // unredacted sub-match would leak the sensitive value in cleartext. Drop any
+  // non-critical entity whose character span overlaps a critical entity's span.
+  const criticalSpans = entities
+    .filter((e) => e.sensitivity === 'critical')
+    .map((e) => [e.index, e.index + String(e.value).length]);
+  const overlapsCritical = (e) => {
+    if (e.sensitivity === 'critical' || !criticalSpans.length) return false;
+    const start = e.index;
+    const end = e.index + String(e.value).length;
+    return criticalSpans.some(([cs, ce]) => start < ce && end > cs);
+  };
+
+  return entities.filter((e) => !overlapsCritical(e)).sort((a, b) => a.index - b.index);
 }
 
 function redactValue(value) {

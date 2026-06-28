@@ -2,8 +2,8 @@
 
 /**
  * ThinkingIndicator — single source of truth for "we're processing"
- * states across siraGPT. Three vertical bars that bounce in sequence,
- * inheriting the surrounding text color via `currentColor`.
+ * states across siraGPT. It renders the DotmCircular15 "pensando" SVG
+ * with the canonical neutral glyph color.
  *
  * Use this anywhere a long-running process needs to communicate "still
  * working" — chat thinking, agent task running, document generation,
@@ -11,14 +11,14 @@
  * Sizes are preset so every surface stays consistent; pass `className`
  * for positioning (margins, alignment) but avoid overriding h/w.
  *
- * The SVG itself lives in components/icons/thinking-bars-icon.tsx and
- * is shared with the chat ThinkingPlaceholder so the visual language
- * is identical everywhere.
+ * The SVG itself lives in components/ui/dotm-circular-15.tsx and is shared
+ * with the chat ThinkingPlaceholder so the visual language is identical
+ * everywhere.
  */
 
 import * as React from "react"
 
-import { DotmCircular15 } from "@/components/ui/dotm-circular-15"
+import { DotmCircular15, THINKING_GLYPH_COLOR } from "@/components/ui/dotm-circular-15"
 import { cn } from "@/lib/utils"
 
 // Pixel geometry per preset size. The dot size scales with the overall
@@ -57,8 +57,9 @@ export function ThinkingIndicator({
     <DotmCircular15
       size={px}
       dotSize={dotSize}
+      color={THINKING_GLYPH_COLOR}
       ariaLabel={label}
-      className={cn("inline-flex shrink-0 align-middle", className)}
+      className={cn("inline-flex shrink-0 align-middle opacity-75", className)}
     />
   )
 }

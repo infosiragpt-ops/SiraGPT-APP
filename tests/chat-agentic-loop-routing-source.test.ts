@@ -90,9 +90,9 @@ describe("chat agentic loop routing source contract", () => {
     assert.match(liveBlock, /live activity/)
     assert.match(agenticStepsSource, /aria-label="Agente trabajando"/)
     assert.match(agenticStepsSource, /Trabajando/)
-    // The AgentProgressBeam bar was replaced by the Claude-style shimmer
-    // line + circular spinner (feat: minimal thinking-stream indicator).
-    assert.match(agenticStepsSource, /DotmCircular15|AgentProgressBeam/)
+    // The AgentProgressBeam/direct SVG loader was replaced by the shared
+    // ThinkingIndicator source of truth for "pensando" states.
+    assert.match(agenticStepsSource, /ThinkingIndicator/)
     assert.match(agenticStepsSource, /thinking-shimmer-text/)
     assert.match(agenticStepsSource, /rounded-2xl border border-border\//)
   })

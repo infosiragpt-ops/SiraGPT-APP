@@ -60,16 +60,6 @@ export function BrandLogo() {
         </span>
       </motion.div>
 
-      <style jsx global>{`
-        @keyframes brand-wave {
-          0% {
-            background-position: 180% 0;
-          }
-          100% {
-            background-position: -40% 0;
-          }
-        }
-      `}</style>
     </>
   )
 }

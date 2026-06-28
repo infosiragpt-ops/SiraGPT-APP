@@ -58,7 +58,7 @@ const INITIAL: FileProcessingStatus = {
 
 const API_ROOT = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
 const POLL_INTERVAL_MS = 2_000
-const MAX_POLLS = 120 // 4 minutes ceiling — beyond this the worker is wedged.
+const MAX_POLLS = 900 // 30 minutes ceiling — OCR-heavy batches can legitimately take longer.
 
 function authHeader(): Record<string, string> {
   if (typeof window === "undefined") return {}

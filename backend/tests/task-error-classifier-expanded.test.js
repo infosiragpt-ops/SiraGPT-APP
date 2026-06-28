@@ -59,6 +59,13 @@ const CASES = [
   [{ message: 'overloaded_error', statusCode: 529 }, true, 'server-error'],
   [{ message: 'provider exploded', statusCode: 500 }, true, 'server-error'],
   [{ message: 'maintenance', statusCode: 503 }, true, 'server-error'],
+  // A hard 5xx outranks soft non-retryable keywords in the message body — a 503
+  // that happens to mention "invalid"/"unauthorized" is still a retryable 503.
+  [{ message: 'invalid token in response body', statusCode: 503 }, true, 'server-error'],
+  [{ message: 'unauthorized upstream', statusCode: 500 }, true, 'server-error'],
+  [{ message: 'missing field', statusCode: 502 }, true, 'server-error'],
+  // …but 501 (not implemented) stays the deliberate permanent exception.
+  [{ message: 'missing method', statusCode: 501 }, false, 'not-implemented'],
 
   // non-retryable cancellation/abort
   ['aborted by caller', false, 'aborted'],

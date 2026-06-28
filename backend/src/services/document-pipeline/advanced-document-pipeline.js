@@ -62,6 +62,9 @@ const MIME = {
   svg: 'image/svg+xml',
 };
 
+const REFERENCE_IMAGE_MIME_RE = /^image\/(?:png|jpe?g)$/i;
+const REFERENCE_IMAGE_EXT_RE = /\.(?:png|jpe?g)$/i;
+
 const TINY_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAApElEQVR4nO3QQQ3AIADAQMD+WbYg4hHhB1S0M7Nn93YKAAAAAAAAAAAAAAAAAABwP9s9QHeeYwB5A3IC5ATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICbAOXAB75zN7G3NFAAAAAAAAAAAAAAAAAADg4wG4WwMt5N48LAAAAABJRU5ErkJggg==',
   'base64',
@@ -299,6 +302,12 @@ function buildDocxMarkdown(plan, imagePath = 'siragpt-docx-marker.png') {
     for (const ref of plan.referenceBriefs || []) {
       lines.push(`**${markdownEscape(ref.name)}.** ${markdownEscape(ref.excerpt || 'Sin texto extraido disponible.')}`, '');
     }
+    if (plan.pandocReferenceImages?.length) {
+      lines.push('## Imagenes adjuntas de referencia', '');
+      for (const image of plan.pandocReferenceImages) {
+        lines.push(`![${markdownEscape(image.name || 'Imagen adjunta')}](${image.markdownPath}){width=6.2in}`, '');
+      }
+    }
   }
 
   for (const block of plan.formulaBlocks || []) {
@@ -480,15 +489,135 @@ function normalizeReferenceFiles(referenceFiles = []) {
     .slice(0, MAX_SIMULTANEOUS_DOCUMENTS)
     .map((file) => {
       const extractedText = String(file.extractedText || '').trim();
+      const name = String(file.originalName || file.name || 'archivo');
+      const mimeType = String(file.mimeType || file.type || 'application/octet-stream');
+      const isImage = REFERENCE_IMAGE_MIME_RE.test(mimeType) || REFERENCE_IMAGE_EXT_RE.test(name);
       return {
         id: String(file.id || ''),
-        name: String(file.originalName || file.name || 'archivo'),
-        mimeType: String(file.mimeType || file.type || 'application/octet-stream'),
+        name,
+        mimeType,
         size: Number(file.size || 0),
+        isImage,
+        filename: isImage ? String(file.filename || '') : '',
+        localPath: isImage ? String(file.path || '') : '',
         extractedChars: extractedText.length,
         excerpt: extractedText.slice(0, 600),
       };
     });
+}
+
+function uniqueStrings(values = []) {
+  return Array.from(new Set(values.filter((value) => typeof value === 'string' && value.trim()).map((value) => value.trim())));
+}
+
+function uploadRootCandidates() {
+  return uniqueStrings([
+    process.env.UPLOAD_DIR ? path.resolve(process.env.UPLOAD_DIR) : '',
+    path.resolve(process.cwd(), 'uploads'),
+    path.resolve(__dirname, '../../../uploads'),
+    '/app/uploads',
+  ]);
+}
+
+function referencePathCandidates(ref = {}) {
+  const candidates = [];
+  const localPath = String(ref.localPath || '');
+  if (localPath) {
+    candidates.push(localPath);
+    if (!path.isAbsolute(localPath)) {
+      candidates.push(path.resolve(process.cwd(), localPath));
+      candidates.push(path.resolve(__dirname, '../../../', localPath));
+    }
+  }
+  const filename = path.basename(String(ref.filename || ''));
+  if (filename && filename === String(ref.filename || '')) {
+    for (const root of uploadRootCandidates()) {
+      candidates.push(path.join(root, filename));
+    }
+  }
+  return uniqueStrings(candidates);
+}
+
+async function fileIsReadable(filePath) {
+  try {
+    await fsp.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function findUploadFileByName(filename) {
+  const safeName = path.basename(String(filename || ''));
+  if (!safeName || safeName !== String(filename || '')) return '';
+  for (const root of uploadRootCandidates()) {
+    try {
+      if (await fileIsReadable(path.join(root, safeName))) return path.join(root, safeName);
+      const entries = await fsp.readdir(root, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const candidate = path.join(root, entry.name, safeName);
+        if (await fileIsReadable(candidate)) return candidate;
+      }
+    } catch {
+      // Some deployments keep uploads in object storage or mount them lazily.
+    }
+  }
+  return '';
+}
+
+async function resolveReferenceImagePath(ref = {}) {
+  for (const candidate of referencePathCandidates(ref)) {
+    if (await fileIsReadable(candidate)) return candidate;
+  }
+  return findUploadFileByName(ref.filename);
+}
+
+function imageRunTypeFor(ref = {}) {
+  const text = `${ref.mimeType || ''} ${ref.name || ''}`.toLowerCase();
+  if (/jpe?g/.test(text)) return 'jpg';
+  return 'png';
+}
+
+function readPngDimensions(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 24) return null;
+  if (buffer.toString('ascii', 1, 4) !== 'PNG') return null;
+  const width = buffer.readUInt32BE(16);
+  const height = buffer.readUInt32BE(20);
+  return width > 0 && height > 0 ? { width, height } : null;
+}
+
+function fitImageDimensions(dimensions, maxWidth = 520, maxHeight = 620) {
+  const width = Number(dimensions?.width || maxWidth);
+  const height = Number(dimensions?.height || Math.round(maxWidth * 0.65));
+  if (!width || !height) return { width: maxWidth, height: Math.round(maxWidth * 0.65) };
+  const ratio = Math.min(maxWidth / width, maxHeight / height, 1);
+  return {
+    width: Math.max(96, Math.round(width * ratio)),
+    height: Math.max(96, Math.round(height * ratio)),
+  };
+}
+
+async function readReferenceImages(plan = {}) {
+  const images = [];
+  for (const ref of plan.referenceFiles || []) {
+    if (!ref?.isImage) continue;
+    try {
+      const imagePath = await resolveReferenceImagePath(ref);
+      if (!imagePath) continue;
+      const buffer = await fsp.readFile(imagePath);
+      if (!buffer.length) continue;
+      images.push({
+        name: ref.name || 'Imagen adjunta',
+        type: imageRunTypeFor(ref),
+        data: buffer,
+        dimensions: fitImageDimensions(readPngDimensions(buffer)),
+      });
+    } catch {
+      // Reference images are helpful context, not a hard dependency.
+    }
+  }
+  return images.slice(0, 6);
 }
 
 function addUniqueSection(sections, section) {
@@ -772,8 +901,11 @@ function buildPlan({ prompt, format, template, complexity = 'standard', referenc
     plannedSections = addUniqueSection(plannedSections, 'Material de referencia incorporado');
   }
   const referenceBriefs = normalizedReferenceFiles
-    .filter((file) => file.excerpt)
-    .map((file) => ({ name: file.name, excerpt: file.excerpt }));
+    .filter((file) => file.excerpt || file.isImage)
+    .map((file) => ({
+      name: file.name,
+      excerpt: file.excerpt || (file.isImage ? 'Imagen adjunta incorporada como referencia visual en el documento.' : ''),
+    }));
   return {
     title,
     userRequest,
@@ -1383,7 +1515,24 @@ async function buildDocxWithPandoc(plan, outputPath) {
     const markdownPath = path.join(runDir, 'source.md');
     const referenceDocPath = path.join(runDir, 'reference.docx');
     await fsp.writeFile(imagePath, TINY_PNG);
-    await fsp.writeFile(markdownPath, buildDocxMarkdown(plan, imageName), 'utf8');
+    const copiedReferenceImages = [];
+    for (const ref of plan.referenceFiles || []) {
+      if (!ref?.isImage) continue;
+      try {
+        const sourceImagePath = await resolveReferenceImagePath(ref);
+        if (!sourceImagePath) continue;
+        const ext = imageRunTypeFor(ref) === 'jpg' ? 'jpg' : 'png';
+        const imageFileName = `reference-image-${copiedReferenceImages.length + 1}.${ext}`;
+        await fsp.copyFile(sourceImagePath, path.join(runDir, imageFileName));
+        copiedReferenceImages.push({ name: ref.name, markdownPath: imageFileName });
+      } catch {
+        // Keep document generation going even when a reference image disappeared.
+      }
+    }
+    const markdownPlan = copiedReferenceImages.length
+      ? { ...plan, pandocReferenceImages: copiedReferenceImages }
+      : plan;
+    await fsp.writeFile(markdownPath, buildDocxMarkdown(markdownPlan, imageName), 'utf8');
     await createPandocReferenceDoc(referenceDocPath);
 
     const args = [
@@ -1423,6 +1572,7 @@ async function buildDocx(plan, outputPath) {
       console.warn('[document-pipeline] pandoc DOCX path failed; falling back to docx-js:', err?.message);
     }
   }
+  const referenceImages = await readReferenceImages(plan);
 
   const rows = [
     ['Criterio', 'Validación', 'Estado'],
@@ -1550,6 +1700,27 @@ async function buildDocx(plan, outputPath) {
           new TextRun(ref.excerpt),
         ],
       })),
+      ...(referenceImages.length ? [
+        new Paragraph({ text: 'Imágenes adjuntas de referencia', heading: HeadingLevel.HEADING_2 }),
+        ...referenceImages.flatMap((image) => [
+          new Paragraph({
+            children: [new TextRun({ text: image.name, bold: true })],
+          }),
+          new Paragraph({
+            children: [new ImageRun({
+              type: image.type,
+              data: image.data,
+              transformation: image.dimensions,
+              altText: {
+                title: image.name,
+                description: 'Imagen adjunta por el usuario incorporada como referencia visual',
+                name: image.name,
+              },
+            })],
+            alignment: AlignmentType.CENTER,
+          }),
+        ]),
+      ] : []),
     ] : []),
     ...formulaChildren,
     ...(sourceChildren || blueprintChildren || plan.sections.flatMap((section, index) => {
@@ -2449,9 +2620,17 @@ async function writeTelemetry(record, telemetryDir) {
   if (!telemetryDir) return null;
   await fsp.mkdir(telemetryDir, { recursive: true });
   const file = path.join(telemetryDir, `${record.taskId}.json`);
+  const scrubPlan = record.plan ? {
+    ...record.plan,
+    referenceBriefs: undefined,
+    pandocReferenceImages: undefined,
+    referenceFiles: Array.isArray(record.plan.referenceFiles)
+      ? record.plan.referenceFiles.map(({ localPath, ...ref }) => ref)
+      : record.plan.referenceFiles,
+  } : record.plan;
   const scrubbed = {
     ...record,
-    plan: record.plan ? { ...record.plan, referenceBriefs: undefined } : record.plan,
+    plan: scrubPlan,
     prompt: undefined,
     promptLength: String(record.prompt || '').length,
   };

@@ -146,3 +146,14 @@ test('cosine-only path still works (regression guard)', async () => {
   assert.equal(hits.length, 1);
   assert.ok(hits[0].text.includes('cats'));
 });
+
+test('positiveIntEnv keeps the per-collection cap enabled for bad env values', () => {
+  // Regression: a non-numeric SIRAGPT_RAG_MAX_CHUNKS parsed to NaN, and
+  // `length > NaN` is always false — silently disabling the eviction cap.
+  assert.equal(rag.positiveIntEnv('5000', 10000), 5000);
+  assert.equal(rag.positiveIntEnv('abc', 10000), 10000, 'non-numeric → fallback, not NaN');
+  assert.equal(rag.positiveIntEnv(undefined, 10000), 10000);
+  assert.equal(rag.positiveIntEnv('', 10000), 10000);
+  assert.equal(rag.positiveIntEnv('0', 10000), 10000, 'zero → fallback');
+  assert.equal(rag.positiveIntEnv('-5', 10000), 10000, 'negative → fallback');
+});
