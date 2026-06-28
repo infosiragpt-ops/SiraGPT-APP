@@ -38,6 +38,7 @@ import {
   Sparkles,
   StopCircle,
 } from "lucide-react"
+import { CodeChatErrorBoundary } from "@/components/code/code-chat-error-boundary"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -1687,11 +1688,12 @@ export function AICodeChatPanel() {
         ) : (
           <div className="space-y-3">
             {turns.map((turn) => (
-              <ChatBubble
-                key={turn.id}
-                turn={turn}
-                lookupContent={(path) => files[path]?.content ?? ""}
-              />
+              <CodeChatErrorBoundary key={turn.id} label="code-chat-turn">
+                <ChatBubble
+                  turn={turn}
+                  lookupContent={(path) => files[path]?.content ?? ""}
+                />
+              </CodeChatErrorBoundary>
             ))}
           </div>
         )}

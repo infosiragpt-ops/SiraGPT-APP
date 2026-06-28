@@ -97,6 +97,100 @@ function storage(): Storage | null {
   return null
 }
 
+const PHASE_STATUSES: ReadonlySet<string> = new Set([
+  "pending",
+  "running",
+  "done",
+  "error",
+])
+
+// Deep-sanitize a single persisted turn. localStorage is untrusted: a session
+// written by an OLDER build can carry malformed entries (e.g. a null action, an
+// action with no `kind`, a half-populated phase) that newer render code assumes
+// are well-formed — accessing a field off such an entry throws and crashes the
+// whole /code page. We rebuild a clean turn and drop anything that isn't valid.
+function sanitizeTurn(raw: unknown): CodeChatTurn | null {
+  if (!raw || typeof raw !== "object") return null
+  const t = raw as Record<string, unknown>
+  if (typeof t.id !== "string") return null
+  const role: "user" | "assistant" | null =
+    t.role === "user" ? "user" : t.role === "assistant" ? "assistant" : null
+  if (role === null) return null
+
+  const turn: CodeChatTurn = {
+    id: t.id,
+    role,
+    content: typeof t.content === "string" ? t.content : "",
+  }
+  if (typeof t.streaming === "boolean") turn.streaming = t.streaming
+  if (typeof t.agentLabel === "string") turn.agentLabel = t.agentLabel
+  if (typeof t.planMs === "number" && Number.isFinite(t.planMs)) {
+    turn.planMs = t.planMs
+  }
+
+  if (Array.isArray(t.agentPhases)) {
+    // Rebuild each phase from scratch so a legacy/corrupt entry can't smuggle
+    // a non-string `detail` (older builds occasionally stored an object) into
+    // the renderer, which would throw "Objects are not valid as a React child".
+    const phases: CodeAgentPhase[] = []
+    for (const raw of t.agentPhases) {
+      if (!raw || typeof raw !== "object") continue
+      const p = raw as Record<string, unknown>
+      if (typeof p.key !== "string" || typeof p.label !== "string") continue
+      if (typeof p.status !== "string" || !PHASE_STATUSES.has(p.status)) continue
+      const phase: CodeAgentPhase = {
+        key: p.key,
+        label: p.label,
+        status: p.status as CodeAgentPhaseStatus,
+      }
+      if (typeof p.detail === "string") phase.detail = p.detail
+      phases.push(phase)
+    }
+    if (phases.length > 0) turn.agentPhases = phases
+  }
+
+  if (Array.isArray(t.actions)) {
+    // Rebuild each action as a clean {kind,label} pair. glyphForAction tolerates
+    // any string kind (falls back to ">_"), so unknown kinds are kept, not dropped.
+    const actions: import("./code-chat-metrics").CodeChatAction[] = []
+    for (const raw of t.actions) {
+      if (!raw || typeof raw !== "object") continue
+      const a = raw as Record<string, unknown>
+      if (typeof a.kind !== "string" || typeof a.label !== "string") continue
+      actions.push({
+        kind: a.kind as import("./code-chat-metrics").CodeChatActionKind,
+        label: a.label,
+      })
+    }
+    if (actions.length > 0) turn.actions = actions
+  }
+
+  if (t.metrics && typeof t.metrics === "object" && !Array.isArray(t.metrics)) {
+    turn.metrics = t.metrics as import("./code-chat-metrics").CodeChatMetrics
+  }
+
+  return turn
+}
+
+// Sanitize a persisted session: validate the identity fields and rebuild its
+// turns array, dropping any turn that can't be made safe to render.
+function sanitizeSession(raw: unknown): CodeChatSession | null {
+  if (!raw || typeof raw !== "object") return null
+  const s = raw as Record<string, unknown>
+  if (
+    typeof s.id !== "string" ||
+    typeof s.workspaceId !== "string" ||
+    typeof s.title !== "string" ||
+    !Array.isArray(s.turns)
+  ) {
+    return null
+  }
+  const turns = s.turns
+    .map(sanitizeTurn)
+    .filter((t): t is CodeChatTurn => t !== null)
+  return { ...(s as unknown as CodeChatSession), turns }
+}
+
 function loadStore(): SessionStore {
   const store = storage()
   if (!store) return { sessions: [], activeByWorkspace: {} }
@@ -106,14 +200,9 @@ function loadStore(): SessionStore {
     const parsed = JSON.parse(raw) as SessionStore
     if (!Array.isArray(parsed.sessions)) return { sessions: [], activeByWorkspace: {} }
     const filtered: SessionStore = {
-      sessions: parsed.sessions.filter(
-        (s): s is CodeChatSession =>
-          Boolean(s)
-          && typeof s.id === "string"
-          && typeof s.workspaceId === "string"
-          && typeof s.title === "string"
-          && Array.isArray(s.turns),
-      ),
+      sessions: parsed.sessions
+        .map(sanitizeSession)
+        .filter((s): s is CodeChatSession => s !== null),
       activeByWorkspace:
         parsed.activeByWorkspace && typeof parsed.activeByWorkspace === "object"
           ? parsed.activeByWorkspace

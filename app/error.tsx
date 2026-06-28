@@ -23,6 +23,7 @@ import { AlertTriangle, Home, RefreshCw, Bug } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { track } from "@/lib/analytics"
+import { reportClientLog } from "@/lib/client-logs"
 
 export const dynamic = "force-static"
 export const revalidate = false
@@ -80,13 +81,26 @@ export default function Error({
     }
   }, [error])
 
-  // Track the error in analytics once on mount
+  // Track the error in analytics + report it to the server telemetry pipeline
+  // (audit log + alerting) once on mount. Without this, route-level render
+  // crashes were swallowed here and recorded nowhere. Recoverable stale-bundle
+  // errors are skipped — they auto-reload above, so reporting them is noise.
   useEffect(() => {
     track("error.route", {
       digest: error.digest,
       name: error.name,
       message: (error.message || "").slice(0, 500),
       url: typeof window !== "undefined" ? window.location.pathname : "",
+    })
+    if (isRecoverableClientBundleError(error)) return
+    reportClientLog({
+      source: "render",
+      severity: "error",
+      action: "error.route",
+      component: error.name || "RouteError",
+      message: error.message || "Render error",
+      stack: error.stack,
+      extra: error.digest ? { digest: error.digest } : null,
     })
   }, [error])
 
