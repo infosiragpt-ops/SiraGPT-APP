@@ -72,10 +72,6 @@ function useProxyUrls() {
   return flagEnabled(process.env.CODE_RUNNER_PROXY_URLS, process.env.NODE_ENV === 'production');
 }
 
-function proxyUrlsEnabled() {
-  return useProxyUrls();
-}
-
 function publicBasePath(runId) {
   return `/api/code-runner/${encodeURIComponent(safeId(runId))}/proxy/`;
 }
@@ -478,5 +474,4 @@ module.exports = {
   publicBasePath,
   publicDevUrl,
   useProxyUrls,
-  proxyUrlsEnabled,
 };

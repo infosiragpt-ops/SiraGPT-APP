@@ -58,10 +58,6 @@ function useProxyUrls() {
   return flagEnabled(process.env.SIRAGPT_WORKSPACE_RUN_PROXY_URLS, process.env.NODE_ENV === 'production');
 }
 
-function proxyUrlsEnabled() {
-  return useProxyUrls();
-}
-
 function publicBasePath(connectionId) {
   return `/api/github/connected/${encodeURIComponent(String(connectionId))}/proxy/`;
 }
@@ -116,7 +112,7 @@ function detectRunPlan(localPath, port, connectionId = null) {
       dev = `npm exec -- next dev -p ${port} -H 127.0.0.1`;
     } else if (deps.vite || /vite/.test(scripts.dev || '')) {
       framework = 'vite';
-      const base = proxyUrlsEnabled() && connectionId ? ` --base ${JSON.stringify(publicBasePath(connectionId))}` : '';
+      const base = useProxyUrls() && connectionId ? ` --base ${JSON.stringify(publicBasePath(connectionId))}` : '';
       dev = `npm exec -- vite --port ${port} --host 127.0.0.1 --strictPort${base}`;
     } else if (scripts.dev) {
       framework = 'custom-dev';
@@ -399,7 +395,6 @@ module.exports = {
   publicBasePath,
   publicPreviewUrl,
   useProxyUrls,
-  proxyUrlsEnabled,
   stopAll,
   detectRunPlan,
   findFreePort,
