@@ -172,6 +172,7 @@
 51588d271e097d343cd547fcf8b76fa78b016e4e5b51ce5b1e0602f20599679b  components/paste-preview-overlay.tsx
 51851b18771d25fa4b3afa010e112573315c04032b68985a99e5777851891e9a  app/projects/[id]/marco-teorico/page.tsx
 5219e250dc3fd52ea97e908d3ca149e9752649e0109706252c11963256c6e8dd  lib/markdown/remark-callouts.ts
+53411d9831eda203afc2bc13b1ff82529799fbc3af2c2ab74295e5e231ec3234  components/code/ai-code-chat-panel.tsx
 55951ff69fec995e3bff9272026ec35477d5c56bf097fa7fac0cc7815cb8ab5d  lib/publishing-console.ts
 56b05915f9a450cf65971a4bb0190b31db24fff5b65f3cd285ea0308a1550250  components/ui/dotm-circular-15.tsx
 56c4b99ee27e1a02aa135253906ef264ed1b085cfa70f43d7869f40845fd4fc5  components/Library/LibraryTabs.tsx
@@ -378,7 +379,6 @@ af23d4ea7528efccec76b930f062e5ff3e2127e93d30948b7c5b1c8c0f451725  components/fal
 b08a67310d087589d60d79b01e0bd785be9a315e87951dd46cbc364b4d6874af  hooks/use-mobile.tsx
 b14599031dce2aeb8b17a393b82cf498ffaa71597b328da6fcb5e4511c9009b9  app/openclaw/native/[[...path]]/route.ts
 b1be01365216d87d76e55040ee96b1233200e862ec3afbeed1cfcbd032e11909  app/offline/page.tsx
-b2322f1f756d687130369e4bad7e68e3d04203eff957a21ad0cb5c6c152528b1  components/code/ai-code-chat-panel.tsx
 b2a84685089552e4924d252810dece572a4a97fbecb4269c10acd9ed487ecac9  app/projects/[id]/docs/[docId]/page.tsx
 b2f0b84953f76500286fd7d9d719b71566a231cfea4e2bd71a262e28a600ec05  lib/code-preview-build.ts
 b35357d81cd21d95651ac811cd034e46918d127b8001fdfd2cf5be1b6dbf3151  components/SearchSourceSelector.tsx

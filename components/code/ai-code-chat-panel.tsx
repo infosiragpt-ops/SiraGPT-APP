@@ -127,7 +127,7 @@ const COMPOSER_MODE_LABEL: Record<ComposerMode, string> = {
   build: "Build",
   plan: "Plan",
   debug: "Debug",
-  ask: "Ask",
+  ask: "Preguntar",
   image: "Image",
 }
 
@@ -1462,55 +1462,27 @@ export function AICodeChatPanel() {
             disabled={busy}
             className="max-h-[140px] min-h-[28px] resize-none border-0 bg-transparent px-1 py-0.5 text-[13px] leading-[1.45] shadow-none outline-none ring-0 placeholder:text-muted-foreground/55 focus-visible:ring-0"
           />
-          <div className="mt-1 flex items-center gap-1">
-            <PrimaryModeToggle
-              mode={composerMode === "ask" ? "ask" : "agent"}
-              onChange={(m) => {
-                setComposerMode(m === "ask" ? "ask" : "app")
-                inputRef.current?.focus()
-              }}
-            />
+          <div className="mt-1 flex items-center gap-1.5">
             <ComposerPlusMenu
               mode={composerMode}
               includeContext={includeContext}
               activeFileLabel={activeFileLabel}
+              engineAvailable={engineAvailable}
+              engineMode={engineMode}
               onModeChange={(mode) => {
                 setComposerMode(mode)
                 inputRef.current?.focus()
               }}
               onIncludeContextChange={setIncludeContext}
+              onEngineModeChange={setEngineMode}
             />
-            {engineAvailable ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className={cn(
-                  "h-7 shrink-0 gap-1 rounded-md px-2 text-[11px] font-medium",
-                  engineMode
-                    ? "bg-[hsl(var(--accent-violet)/0.16)] text-[hsl(var(--accent-violet))] hover:bg-[hsl(var(--accent-violet)/0.24)]"
-                    : "text-muted-foreground hover:bg-muted/80 hover:text-foreground",
-                )}
-                onClick={() => setEngineMode((v) => !v)}
-                aria-pressed={engineMode}
-                aria-label="Usar el motor OpenCode"
-                title={
-                  engineMode
-                    ? "Motor OpenCode activo — el chat usa el agente real"
-                    : "Activar el motor OpenCode (agente real) para este chat"
-                }
-              >
-                <Server className="h-3.5 w-3.5" />
-                <span>Motor{engineMode ? " ✓" : ""}</span>
-              </Button>
-            ) : null}
-            <span className="min-w-0 flex-1" />
             <ModelPickerInline
               models={pickerModels}
               selectedModel={activeModelName || ""}
               fast={modelIsFast}
               onSelect={(m) => chooseCodeModel({ name: m.name, provider: m.provider })}
             />
+            <span className="min-w-0 flex-1" />
             <DictationButton
               variant="light"
               locale={typeof navigator !== "undefined" ? navigator.language : "es-ES"}
@@ -1871,72 +1843,24 @@ function ChatBlockerPanel({ title, rawError, url }: { title: string; rawError: s
   )
 }
 
-// Primary, Replit-style mode switch: two clear pills (Agent / Ask) shown up
-// front in the composer so the user always knows whether the AI will BUILD
-// (Agent → autonomous app/edit pipeline) or just ANSWER (Ask → conversational,
-// never touches files). Advanced sub-modes (build/plan/debug/image) stay in the
-// "+" menu. "agent" maps to the existing "app" composer mode.
-function PrimaryModeToggle({
-  mode,
-  onChange,
-}: {
-  mode: "agent" | "ask"
-  onChange: (mode: "agent" | "ask") => void
-}) {
-  const base =
-    "inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors"
-  return (
-    <div
-      role="group"
-      aria-label="Modo del agente: Agent o Ask"
-      className="inline-flex shrink-0 items-center gap-0.5 rounded-lg bg-muted/60 p-0.5"
-    >
-      <button
-        type="button"
-        aria-pressed={mode === "agent"}
-        onClick={() => onChange("agent")}
-        title="Agent — describe algo y el agente lo construye o lo cambia"
-        className={cn(
-          base,
-          mode === "agent"
-            ? "bg-background text-foreground shadow-sm"
-            : "text-muted-foreground hover:text-foreground",
-        )}
-      >
-        <Sparkles className="h-3.5 w-3.5" />
-        <span>Agent</span>
-      </button>
-      <button
-        type="button"
-        aria-pressed={mode === "ask"}
-        onClick={() => onChange("ask")}
-        title="Ask — pregunta sobre tu app o tu código; responde sin tocar archivos"
-        className={cn(
-          base,
-          mode === "ask"
-            ? "bg-background text-foreground shadow-sm"
-            : "text-muted-foreground hover:text-foreground",
-        )}
-      >
-        <CircleHelp className="h-3.5 w-3.5" />
-        <span>Ask</span>
-      </button>
-    </div>
-  )
-}
-
 function ComposerPlusMenu({
   mode,
   includeContext,
   activeFileLabel,
+  engineAvailable,
+  engineMode,
   onModeChange,
   onIncludeContextChange,
+  onEngineModeChange,
 }: {
   mode: ComposerMode
   includeContext: boolean
   activeFileLabel: string | null
+  engineAvailable: boolean
+  engineMode: boolean
   onModeChange: (mode: ComposerMode) => void
   onIncludeContextChange: (value: boolean) => void
+  onEngineModeChange: React.Dispatch<React.SetStateAction<boolean>>
 }) {
   const itemClass = "h-9 gap-2.5 rounded-md px-2.5 text-sm"
   const iconClass = "h-[18px] w-[18px] text-muted-foreground"
@@ -1997,7 +1921,7 @@ function ComposerPlusMenu({
           onClick={() => onModeChange("ask")}
         >
           <CircleHelp className={iconClass} />
-          <span>Ask</span>
+          <span>Preguntar</span>
         </DropdownMenuItem>
         <DropdownMenuSeparator className="my-2" />
         <DropdownMenuItem
@@ -2007,6 +1931,15 @@ function ComposerPlusMenu({
           <ImageIcon className={iconClass} />
           <span>Image</span>
         </DropdownMenuItem>
+        {engineAvailable ? (
+          <DropdownMenuCheckboxItem
+            checked={engineMode}
+            onCheckedChange={(checked) => onEngineModeChange(checked === true)}
+            className="h-9 rounded-md text-sm"
+          >
+            Motor OpenCode
+          </DropdownMenuCheckboxItem>
+        ) : null}
         <DropdownMenuSub>
           <DropdownMenuSubTrigger className={itemClass}>
             <BookOpen className={iconClass} />
