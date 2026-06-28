@@ -128,7 +128,13 @@ jobs:
             echo "[deploy-workflow] Deploying ${TARGET_SHA} from ${PREV_SHA}"
             git fetch origin main
             git fetch origin "${TARGET_SHA}"
-            git merge --ff-only "${TARGET_SHA}"
+            if git merge --ff-only "${TARGET_SHA}"; then
+              echo "[deploy-workflow] Fast-forwarded to ${TARGET_SHA}"
+            else
+              echo "[deploy-workflow] Remote checkout is not a direct ancestor of ${TARGET_SHA}; resetting to exact deploy SHA"
+              git status --short
+              git reset --hard "${TARGET_SHA}"
+            fi
             ${COMPOSE} config -q
             echo "[deploy-workflow] Building backend image (includes latest migrations)"
             ${COMPOSE} build backend
