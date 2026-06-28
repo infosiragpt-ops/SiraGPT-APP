@@ -104,21 +104,21 @@ describe("chat video auto-activation source contract", () => {
     )
   })
 
-  it("renders video controls inline next to the plus button instead of the bottom tool row", () => {
+  it("renders media controls inline next to the plus button instead of the bottom tool row", () => {
     assert.match(
       source,
-      /const shouldInlineActiveTools = isVideoGenerationActive/,
-      "video mode should opt into inline composer controls"
+      /const isMediaToolActive = isImageGenerationActive \|\| isVoiceGenerationActive \|\| isMusicGenerationActive \|\| isVideoGenerationActive;[\s\S]{0,80}const shouldInlineActiveTools = isMediaToolActive;/,
+      "active media modes should opt into inline composer controls"
     )
     assert.match(
       source,
       /composer-inline-active-tools[\s\S]{0,120}<ActiveToolsDisplay \{\.\.\.activeToolsProps\} \/>/,
-      "video controls should render next to the plus/action button"
+      "media controls should render next to the plus/action button"
     )
     assert.match(
       source,
       /hasActiveTools && !shouldInlineActiveTools/,
-      "the lower active-tools row should be suppressed while video controls are inline"
+      "the lower active-tools row should be suppressed while media controls are inline"
     )
   })
 

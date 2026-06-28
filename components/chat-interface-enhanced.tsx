@@ -9395,17 +9395,16 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     !isExcelConnectorActive &&
     !hasRenderableMessages
 
-  // Any active tool/connector/thesis mode? Used to conditionally render
-  // the "tool pills" row below the input — if nothing is active, we
-  // hide the entire bar so the composer stays a clean pill.
+  // Any active tool/connector/thesis mode? Used to conditionally render active
+  // controls only when needed so the composer stays a clean pill by default.
   const hasActiveTools = (
     isWebSearchActive || isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive || isComputerUseActive
     || isGmailActive || isGoogleCalendarActive || isGoogleDriveActive
     || isSpotifyActive || isWordConnectorActive || isExcelConnectorActive
     || chatType === 'thesis'
   );
-  const shouldInlineActiveTools = isVideoGenerationActive;
   const isMediaToolActive = isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive;
+  const shouldInlineActiveTools = isMediaToolActive;
   const requiresPromptBeforePrimarySend =
     isImageGenerationActive ||
     isVideoGenerationActive ||
@@ -10461,10 +10460,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       onFileProcessingStatusChange={handleFileProcessingStatusChange}
                     />
                     <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
-                    {/* Tool pills used to live ABOVE the input; moved to
-                        a secondary row BELOW the input (see after the
-                        TooltipProvider) so the top surface is dedicated
-                        to drag-and-drop of files / audio / images. */}
+                    {/* Media controls stay inline with the attach button; other
+                        active tools fall back to the secondary row below. */}
                     <TooltipProvider>
                       <div
                         className="composer-input-row flex items-end gap-2 pl-2 pr-2 py-1.5"
