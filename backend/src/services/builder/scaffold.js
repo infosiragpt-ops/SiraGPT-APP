@@ -122,6 +122,41 @@ _Generado automáticamente por siraGPT Builder._
 `;
 }
 
+function buildClientReadme(brief, blueprint) {
+  const title = brief.purpose ? brief.purpose : 'Proyecto siraGPT Builder';
+  const pageList = blueprint.pages.map((p) => `- **${p.name}** — ${p.purpose}`).join('\n');
+  const entityList = blueprint.dataModel.length
+    ? blueprint.dataModel.map((m) => `- **${m.entity}** (${m.fields.map((f) => f.name).join(', ')})`).join('\n')
+    : '- (sin entidades)';
+  const featureList = brief.coreFeatures.length ? brief.coreFeatures.map((f) => `- ${f}`).join('\n') : '- (sin funcionalidades declaradas)';
+
+  return `# ${title}
+
+> Audiencia: ${brief.audience || 'por definir'} · Plataforma: ${brief.platform}
+
+App autónoma de una sola página (\`index.html\`). Se ejecuta directamente en el
+navegador — **sin instalar nada, sin servidor y sin base de datos**. Los datos se
+guardan localmente en el navegador (localStorage), así que el preview funciona al
+instante.
+
+## Cómo usarla
+- Abre \`index.html\` (o pulsa **▶ Ejecutar** en el editor) para ver la app en vivo.
+- Cada pantalla guarda sus registros en tu navegador automáticamente.
+
+## Pantallas (${blueprint.pages.length})
+${pageList}
+
+## Datos que gestiona
+${entityList}
+
+## Funcionalidades clave
+${featureList}
+
+---
+_Generado automáticamente por siraGPT Builder._
+`;
+}
+
 function buildEnvExample(brief, blueprint) {
   const lines = [];
   if (blueprint.stack.database !== '—') {
@@ -137,10 +172,20 @@ function buildEnvExample(brief, blueprint) {
 
 /**
  * Generate starter files from a ProjectBrief.
+ *
  * @param {object} rawBrief — must satisfy ProjectBriefSchema.
+ * @param {object} [options]
+ * @param {'fullstack'|'client'} [options.mode='fullstack'] — 'fullstack' emits
+ *   the runnable Next.js + Prisma project alongside the self-contained preview.
+ *   'client' emits ONLY the self-contained single-file app (index.html +
+ *   preview.html + README.md) — no package.json/Prisma/.env/codegen — so the
+ *   live preview renders instantly on any active tab (a package.json with
+ *   next/vite would otherwise gate the preview behind ▶ Ejecutar) and never
+ *   500s at runtime for a missing DATABASE_URL.
  * @returns {{ blueprint: object, files: Array<{path:string, language:string, content:string}> }}
  */
-function scaffoldFromBrief(rawBrief) {
+function scaffoldFromBrief(rawBrief, options = {}) {
+  const mode = options.mode === 'client' ? 'client' : 'fullstack';
   const parsed = ProjectBriefSchema.safeParse(rawBrief);
   if (!parsed.success) {
     throw new Error(`scaffold: invalid ProjectBrief: ${parsed.error.message}`);
@@ -148,12 +193,27 @@ function scaffoldFromBrief(rawBrief) {
   const brief = parsed.data;
   const blueprint = planFromBrief(brief);
 
+  // index.html is a *runnable* single-file app (React via CDN + localStorage
+  // CRUD) so the workspace live preview renders a working app immediately —
+  // index.html is the preview engine's preferred entry.
+  const liveApp = { path: 'index.html', language: 'html', content: buildLiveApp(brief, blueprint) };
+  const preview = { path: 'preview.html', language: 'html', content: buildPreviewHtml(brief) };
+
+  // Client mode: ship only the self-contained app + docs. No package.json means
+  // isNodeBundlerProject() is false, so buildPreviewDocument() renders index.html
+  // regardless of which file is active in the editor.
+  if (mode === 'client') {
+    const files = [
+      liveApp,
+      preview,
+      { path: 'README.md', language: 'markdown', content: buildClientReadme(brief, blueprint) },
+    ];
+    return { blueprint, files };
+  }
+
   const files = [
-    // index.html is a *runnable* single-file app (React via CDN + localStorage
-    // CRUD) so the workspace live preview renders a working app immediately —
-    // index.html is the preview engine's preferred entry.
-    { path: 'index.html', language: 'html', content: buildLiveApp(brief, blueprint) },
-    { path: 'preview.html', language: 'html', content: buildPreviewHtml(brief) },
+    liveApp,
+    preview,
     { path: 'README.md', language: 'markdown', content: buildReadme(brief, blueprint) },
     { path: '.env.example', language: 'dotenv', content: buildEnvExample(brief, blueprint) },
   ];

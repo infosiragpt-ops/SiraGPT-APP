@@ -886,18 +886,16 @@ export function AICodeChatPanel() {
           }
           const entities = result.brief.dataEntities.map((e) => e.name).join(", ") || "—"
           summary = [
-            `✅ Software full-stack generado (determinista) — ${appliedFiles.length} archivo(s).`,
+            `✅ App generada (determinista) — ${appliedFiles.length} archivo(s).`,
             ``,
             `- **Plataforma:** ${result.brief.platform}`,
             `- **Entidades:** ${entities}`,
-            `- **Frontend:** ${result.blueprint.stack.frontend}`,
-            `- **Backend:** ${result.blueprint.stack.backend}`,
-            `- **Base de datos:** ${result.blueprint.stack.database}`,
-            `- **Incluye:** API routes, Prisma schema, seed, .env.example y Docker Compose para Postgres`,
+            `- **Tipo:** app autónoma de una página (\`index.html\`) que corre en el navegador, sin instalar nada`,
+            `- **Datos:** se guardan localmente en el navegador (localStorage)`,
             ``,
-            `Estoy arrancando el **preview en vivo** automáticamente. Si el runner devuelve logs, puedo repararlos desde este mismo chat.`,
+            `Estoy abriendo el **preview en vivo** automáticamente. Pídeme cualquier cambio y lo aplico desde este mismo chat.`,
           ].join("\n")
-          toastMsg = "Software full-stack generado — arrancando preview →"
+          toastMsg = "App generada — abriendo preview →"
         }
         // Apply index.html LAST so it stays the active tab and the live preview
         // lands on the runnable app rather than a doc file.
