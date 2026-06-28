@@ -27,11 +27,12 @@ const router = express.Router();
 
 // The Vite dev server runs UNTRUSTED generated code. Never hand it the user's
 // SiraGPT credentials, and never let it set cookies on the SiraGPT origin.
-const STRIP_REQUEST_HEADERS = new Set(['cookie', 'authorization', 'proxy-authorization']);
-const HOP_BY_HOP_HEADERS = new Set([
-  'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization',
-  'te', 'trailer', 'transfer-encoding', 'upgrade',
-]);
+const {
+  STRIP_REQUEST_HEADERS,
+  HOP_BY_HOP_HEADERS,
+  buildUpstreamRequestHeaders,
+  isForwardableResponseHeader,
+} = require('../utils/proxy-headers');
 
 function safeRunId(runId) {
   return String(runId || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
@@ -181,14 +182,7 @@ router.use('/:runId/proxy', applyPreviewFrameHeaders, authenticateToken, async (
 
   const suffix = proxiedPath(req);
   const upstreamUrl = `http://127.0.0.1:${target.port}${suffix.startsWith('/') ? suffix : `/${suffix}`}`;
-  const headers = {};
-  for (const [key, value] of Object.entries(req.headers || {})) {
-    const lower = key.toLowerCase();
-    if (HOP_BY_HOP_HEADERS.has(lower)) continue;
-    if (lower === 'host' || lower === 'content-length') continue;
-    headers[key] = value;
-  }
-  headers.host = `127.0.0.1:${target.port}`;
+  const headers = buildUpstreamRequestHeaders(req.headers, target.port);
 
   let upstream;
   try {
@@ -204,10 +198,7 @@ router.use('/:runId/proxy', applyPreviewFrameHeaders, authenticateToken, async (
 
   res.status(upstream.status);
   upstream.headers.forEach((value, key) => {
-    const lower = key.toLowerCase();
-    if (HOP_BY_HOP_HEADERS.has(lower)) return;
-    // Keep the iframe same-origin and avoid stale dev-server assets after edits.
-    if (lower === 'content-security-policy') return;
+    if (!isForwardableResponseHeader(key.toLowerCase())) return;
     res.setHeader(key, value);
   });
   res.setHeader('Cache-Control', 'no-store');

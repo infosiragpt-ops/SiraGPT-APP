@@ -30,6 +30,7 @@ const workspaceManager = require('../services/github/workspace-manager');
 const gitService = require('../services/github/git.service');
 const workspaceFiles = require('../services/github/workspace-files.service');
 const workspaceRunner = require('../services/github/workspace-runner.service');
+const { buildUpstreamRequestHeaders, isForwardableResponseHeader } = require('../utils/proxy-headers');
 
 const router = express.Router();
 
@@ -528,17 +529,6 @@ router.get('/connected/:id/run/status', authenticateToken, async (req, res) => {
   }
 });
 
-const HOP_BY_HOP_HEADERS = new Set([
-  'connection',
-  'keep-alive',
-  'proxy-authenticate',
-  'proxy-authorization',
-  'te',
-  'trailer',
-  'transfer-encoding',
-  'upgrade',
-]);
-
 function proxiedPreviewPath(req) {
   const marker = `/api/github/connected/${encodeURIComponent(req.params.id)}/proxy`;
   const raw = req.originalUrl || req.url || '/';
@@ -568,14 +558,7 @@ router.use('/connected/:id/proxy', authenticateToken, async (req, res) => {
 
     const suffix = proxiedPreviewPath(req);
     const upstreamUrl = `http://127.0.0.1:${target.port}${suffix.startsWith('/') ? suffix : `/${suffix}`}`;
-    const headers = {};
-    for (const [key, value] of Object.entries(req.headers || {})) {
-      const lower = key.toLowerCase();
-      if (HOP_BY_HOP_HEADERS.has(lower)) continue;
-      if (lower === 'host' || lower === 'content-length') continue;
-      headers[key] = value;
-    }
-    headers.host = `127.0.0.1:${target.port}`;
+    const headers = buildUpstreamRequestHeaders(req.headers, target.port);
 
     let upstream;
     try {
@@ -591,9 +574,7 @@ router.use('/connected/:id/proxy', authenticateToken, async (req, res) => {
 
     res.status(upstream.status);
     upstream.headers.forEach((value, key) => {
-      const lower = key.toLowerCase();
-      if (HOP_BY_HOP_HEADERS.has(lower)) return;
-      if (lower === 'content-security-policy') return;
+      if (!isForwardableResponseHeader(key.toLowerCase())) return;
       res.setHeader(key, value);
     });
     res.setHeader('Cache-Control', 'no-store');
