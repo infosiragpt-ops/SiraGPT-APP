@@ -8,8 +8,8 @@
 FROM node:22-alpine AS deps
 WORKDIR /app
 
-# Install OS deps needed for native modules & pandoc (document gen)
-RUN apk add --no-cache pandoc
+# Install OS deps needed for native modules (node-gyp → python3) and document gen.
+RUN apk add --no-cache pandoc py3-openpyxl python3 py3-pip
 
 # Install Node deps
 COPY package.json package-lock.json ./
@@ -19,7 +19,7 @@ RUN npm ci --omit=dev --prefer-offline --no-audit --no-fund
 FROM node:22-alpine AS build
 WORKDIR /app
 
-RUN apk add --no-cache pandoc
+RUN apk add --no-cache pandoc py3-openpyxl python3 py3-pip
 
 # Copy prod node_modules from deps stage (avoids re-download)
 COPY --from=deps /app/node_modules ./node_modules
@@ -35,10 +35,24 @@ RUN npx prisma generate
 FROM node:22-alpine AS runner
 WORKDIR /app
 
-# Runtime tools:
-# - pandoc: document conversion routes
-# - git/openssh-client: APPS/GitHub workspaces clone, pull, diff, push
-RUN apk add --no-cache pandoc git openssh-client
+# Runtime document toolchain for DOCX/XLSX/PPTX/PDF/OCR workflows, plus
+# git/openssh-client for APPS/GitHub workspace clone, pull, diff, push.
+RUN apk add --no-cache \
+    font-liberation \
+    font-noto \
+    ghostscript \
+    git \
+    libreoffice \
+    openssh-client \
+    pandoc \
+    poppler-utils \
+    py3-openpyxl \
+    py3-pip \
+    python3 \
+    tesseract-ocr \
+    tesseract-ocr-data-eng \
+    tesseract-ocr-data-spa \
+    ttf-dejavu
 
 # Create non-root user and group if they don't exist
 RUN addgroup -S appgroup 2>/dev/null || true; \
