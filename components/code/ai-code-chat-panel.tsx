@@ -593,7 +593,14 @@ export function AICodeChatPanel() {
       setTurns((prev) => [
         ...prev,
         { id, role: "user", content: text },
-        { id: assistantId, role: "assistant", content: "", streaming: true },
+        {
+          id: assistantId,
+          role: "assistant",
+          content: "",
+          streaming: true,
+          agentLabel: "Planificando el turno",
+          agentPhases: buildCodeAgentPhases("plan"),
+        },
       ])
       setInput("")
       setBusy(true)
@@ -625,6 +632,18 @@ export function AICodeChatPanel() {
           ? `${buildSystemContext(files, activePath, activeFolder, composerMode)}\n\n${modeInstruction}\n\n${convoBlock}Usuario: ${text}`
           : `${modeInstruction}\n\n${convoBlock}Usuario: ${text}`
 
+      patchAssistant({
+        agentLabel: includeContext ? "Leyendo contexto del workspace" : "Preparando generación",
+        agentPhases: buildCodeAgentPhases("context", {
+          context: {
+            status: "running",
+            detail: includeContext
+              ? `${Object.keys(files).length} archivo(s) disponibles`
+              : "Sin contexto del workspace",
+          },
+        }),
+      })
+
       // Accumulate the streamed answer locally so onDone can auto-apply the
       // generated files without reading it back out of a setState updater
       // (updaters must stay pure — applyBlock is a side effect).
@@ -635,6 +654,12 @@ export function AICodeChatPanel() {
       let usage: { tokensIn: number; tokensOut: number; costOriginalUsd?: number; costAppliedUsd?: number } | null = null
 
       try {
+        patchAssistant({
+          agentLabel: "Generando respuesta con el agente de código",
+          agentPhases: buildCodeAgentPhases("generate", {
+            context: { status: "done", detail: includeContext ? "Contexto inyectado" : "Omitido por usuario" },
+          }),
+        })
         await apiClient.generateAIStream(
           {
             provider: activeProvider,
@@ -719,10 +744,23 @@ export function AICodeChatPanel() {
                 })
               }
             }
+            const verifyDetail = applied.length > 0
+              ? `${applied.length} archivo(s) aplicado(s)`
+              : "Respuesta sin escritura de archivos"
             setTurns((prev) =>
               prev.map((t) => {
                 if (t.id !== assistantId) return t
-                const base = { ...t, streaming: false }
+                const base = {
+                  ...t,
+                  streaming: false,
+                  agentLabel: "Turno completado",
+                  agentPhases: buildCodeAgentPhases("verify", {
+                    context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
+                    generate: { status: "done", detail: "Respuesta generada" },
+                    apply: { status: "done", detail: applied.length > 0 ? "Cambios escritos" : "Nada que aplicar" },
+                    verify: { status: "done", detail: verifyDetail },
+                  }),
+                }
                 // Attach the Worked Summary when the turn did file work OR the
                 // stream reported real token usage (the Agent Usage figure).
                 if (applied.length > 0 || usage) {
@@ -764,6 +802,10 @@ export function AICodeChatPanel() {
                   ? {
                       ...t,
                       streaming: false,
+                      agentLabel: "Error en el turno",
+                      agentPhases: buildCodeAgentPhases("generate", {
+                        generate: { status: "error", detail: msg },
+                      }),
                       content: t.content ? `${t.content}\n\n_${msg}_` : `_${msg}_`,
                     }
                   : t,
@@ -777,6 +819,13 @@ export function AICodeChatPanel() {
         )
       } catch (err: any) {
         toast.error(err?.message || "Error en el chat de código")
+        patchAssistant({
+          streaming: false,
+          agentLabel: "Error en el turno",
+          agentPhases: buildCodeAgentPhases("generate", {
+            generate: { status: "error", detail: err?.message || "Error en el chat de código" },
+          }),
+        })
         setBusy(false)
         abortRef.current = null
       }
@@ -822,10 +871,22 @@ export function AICodeChatPanel() {
       setTurns((prev) => [
         ...prev,
         { id, role: "user", content: text },
-        { id: `${id}-a`, role: "assistant", content: "⚙️ Construyendo la app (modo determinista, sin LLM)…", streaming: true },
+        {
+          id: `${id}-a`,
+          role: "assistant",
+          content: "⚙️ Construyendo la app (modo determinista, sin LLM)…",
+          streaming: true,
+          agentLabel: "Construyendo app",
+          agentPhases: buildCodeAgentPhases("generate", {
+            plan: { status: "done", detail: "Brief recibido" },
+            context: { status: "done", detail: ctx ? "Contexto de intake listo" : "Prompt directo" },
+            generate: { status: "running", detail: "Generando archivos" },
+          }),
+        },
       ])
       setInput("")
       setBuildingApp(true)
+      const startedAt = Date.now()
 
       try {
         let appliedFiles: Array<{ path: string; content: string }>
@@ -873,15 +934,48 @@ export function AICodeChatPanel() {
           applyBlock(file.path, file.content)
         }
         openPreviewAndMaybeRun(appliedFiles)
+        const { actions, metrics } = buildWriteMetrics(appliedFiles, {
+          startedAt,
+          now: Date.now(),
+          getPrevContent: (p) => files[p]?.content ?? "",
+        })
         setTurns((prev) =>
-          prev.map((t) => (t.id === `${id}-a` ? { ...t, content: summary, streaming: false } : t)),
+          prev.map((t) =>
+            t.id === `${id}-a`
+              ? {
+                  ...t,
+                  content: summary,
+                  streaming: false,
+                  agentLabel: "App construida",
+                  agentPhases: buildCodeAgentPhases("verify", {
+                    plan: { status: "done", detail: "Brief validado" },
+                    context: { status: "done", detail: ctx ? "Intake usado" : "Prompt directo" },
+                    generate: { status: "done", detail: `${appliedFiles.length} archivo(s)` },
+                    apply: { status: "done", detail: "Workspace actualizado" },
+                    verify: { status: "done", detail: "Preview abierto" },
+                  }),
+                  actions,
+                  metrics,
+                }
+              : t,
+          ),
         )
         toast.success(toastMsg)
       } catch (err: any) {
         const msg = err?.message || "No se pudo generar la app"
         setTurns((prev) =>
           prev.map((t) =>
-            t.id === `${id}-a` ? { ...t, content: `_${msg}_`, streaming: false } : t,
+            t.id === `${id}-a`
+              ? {
+                  ...t,
+                  content: `_${msg}_`,
+                  streaming: false,
+                  agentLabel: "Error al construir",
+                  agentPhases: buildCodeAgentPhases("generate", {
+                    generate: { status: "error", detail: msg },
+                  }),
+                }
+              : t,
           ),
         )
         toast.error(msg)
@@ -889,7 +983,7 @@ export function AICodeChatPanel() {
         setBuildingApp(false)
       }
     },
-    [applyBlock, busy, buildingApp, sessionId, setTurns, token, user],
+    [applyBlock, busy, buildingApp, files, sessionId, setTurns, token, user],
   )
 
   // SRE tier-0: classify the build log locally (no LLM), render the strict
@@ -1655,14 +1749,15 @@ function ChatBubble({
   // agent dashboard) and narrate the rest. Falls back to a generic badge while
   // streaming before the planning line lands.
   const { label: planLabel, body } = extractPlanLabel(turn.content)
+  const liveAgentLabel = planLabel || turn.agentLabel || (turn.streaming ? "Pensando" : "")
   return (
     <div className="text-sm">
       <div className="mb-1 flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-wide text-muted-foreground">
         Asistente
-        {planLabel || turn.streaming ? (
+        {liveAgentLabel ? (
           <span className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-violet-500/10 px-2 py-0.5 normal-case tracking-normal text-violet-300">
             <span aria-hidden="true">🧠</span>
-            <span className="truncate font-medium">{planLabel || "Pensando"}</span>
+            <span className="truncate font-medium">{liveAgentLabel}</span>
             {!turn.streaming && typeof turn.planMs === "number" ? (
               <span className="opacity-60">({formatWorked(turn.planMs)})</span>
             ) : null}
@@ -1672,6 +1767,10 @@ function ChatBubble({
           </span>
         ) : null}
       </div>
+      {/* 5-step agent progress rail (Plan → Contexto → Generar → Aplicar →
+          Verificar). Populated from REAL turn state by the build/app/engine
+          paths; renders nothing for turns that never set agentPhases. */}
+      <CodeAgentProgress phases={turn.agentPhases} />
       {/* An out-of-credits / quota error surfaces as a high-visibility panel
           instead of plain prose; otherwise render the assistant text normally. */}
       {blocker ? (

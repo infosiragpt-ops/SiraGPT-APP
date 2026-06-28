@@ -70,3 +70,4 @@
 - [Agent task stale banner root cause](agent-task-stale-banner.md) — step_start only fires via onStepStart AFTER first LLM reply; emit a pre-loop step_start before reactAgent.run() and close it in onStepStart.
 - [user_memories confidence column](user-memory-confidence.md) — confidence column missing from schema/DB; raw SQL in upsert+recall silently failed; fix: ADD COLUMN IF NOT EXISTS migration + schema update.
 - [React 18.3 window.reportError false crash](react18-reporterror-crash.md) — React 18.3+ uses window.reportError() for recoverable hydration errors; Replit crash detector sees it; fix: override in layout head + EOF-reload guard.
+- [/code agent rail merge fragility](code-agent-rail-merge-fragility.md) — the 5-step rail + Worked Summary live in per-turn agentLabel/agentPhases set across sendPrompt/buildApp/runEngine in ai-code-chat-panel.tsx; merges taking the origin side silently drop them (compiles fine, rail never renders).
