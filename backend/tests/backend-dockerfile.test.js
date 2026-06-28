@@ -20,6 +20,7 @@ test('backend Dockerfile includes Linux Office/PDF/OCR tooling for document edit
     'poppler-utils',
     'tesseract-ocr',
     'tesseract-ocr-data-spa',
+    'tesseract-ocr-data-osd',
     'font-liberation',
     'font-noto',
     'pandoc',

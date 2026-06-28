@@ -51,6 +51,7 @@ RUN apk add --no-cache \
     python3 \
     tesseract-ocr \
     tesseract-ocr-data-eng \
+    tesseract-ocr-data-osd \
     tesseract-ocr-data-spa \
     ttf-dejavu
 
