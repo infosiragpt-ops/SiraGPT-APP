@@ -16,9 +16,10 @@ only thing to surface — never re-add a decorative replacement:
 - per-turn phase rail built from REAL pipeline data (the
   plan→context→generate→apply→verify phases set on each turn, rendered by
   CodeAgentProgress),
-- the measured Worked Summary (ChatWorkedSummary, real metrics),
-- the runtime steps rail shown in the empty state (AGENT_RUNTIME_STEPS).
-Any "working"/progress UI must reflect actual state, never invent numbers of
-agents or parallelism. ("Nuevo chat en paralelo" for multiple chat sessions is
-a real feature and is fine.) Frontend edits here require re-baselining the UI
-lock (`npm run ui-lock:update`).
+- the measured Worked Summary (ChatWorkedSummary, real metrics).
+The empty state (shown when a chat has no turns) is intentionally a minimal
+prompt only ("¿Qué quieres construir?") — it must NOT carry a fabricated
+status/steps rail. Any "working"/progress UI must reflect actual state, never
+invent numbers of agents or parallelism. ("Nuevo chat en paralelo" for multiple
+chat sessions is a real feature and is fine.) Frontend edits here require
+re-baselining the UI lock (`npm run ui-lock:update`).

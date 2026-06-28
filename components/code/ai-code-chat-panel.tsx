@@ -145,27 +145,6 @@ const COMPOSER_PLACEHOLDER: Record<ComposerMode, string> = {
   image: "Describe UI, asset o captura…",
 }
 
-type AgentRuntimeStep = {
-  phase: AgentPhase
-  label: string
-  icon: React.ComponentType<{ className?: string }>
-}
-
-const AGENT_RUNTIME_STEPS: AgentRuntimeStep[] = [
-  { phase: "intake", label: "Plan", icon: CircleHelp },
-  { phase: "generating", label: "Diseñar", icon: Rocket },
-  { phase: "preview", label: "Resultado", icon: Check },
-  { phase: "debugging", label: "Reparar", icon: Bug },
-]
-
-const AGENT_RUNTIME_STATUS: Record<AgentPhase, string> = {
-  idle: "Listo",
-  intake: "Planificando",
-  generating: "Diseñando",
-  preview: "Resultado listo",
-  debugging: "Diagnosticando",
-}
-
 const COMPOSER_MODE_INSTRUCTION: Record<ComposerMode, string> = {
   app:
     "Modo App (construir desde cero, estilo Replit/Codex): tu meta es entregar un SOFTWARE FULL-STACK profesional que el usuario pueda abrir en APPS, ejecutar y evolucionar desde el chat.\n" +
@@ -1704,7 +1683,7 @@ export function AICodeChatPanel() {
 
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto p-3">
         {turns.length === 0 ? (
-          <EmptyChat active={agentsActive} phase={agentPhase} />
+          <EmptyChat active={agentsActive} />
         ) : (
           <div className="space-y-3">
             {turns.map((turn) => (
@@ -1814,84 +1793,18 @@ export function AICodeChatPanel() {
   )
 }
 
-function EmptyChat({ active, phase }: { active: boolean; phase: AgentPhase }) {
-  const currentIndex = AGENT_RUNTIME_STEPS.findIndex((step) => step.phase === phase)
-
+function EmptyChat({ active }: { active: boolean }) {
   return (
-    <div className="flex min-h-full items-center justify-center px-2 py-4">
-      <section
-        aria-live="polite"
-        data-testid="code-agent-runtime"
-        data-agent-active={active ? "true" : "false"}
-        data-agent-phase={phase}
-        className="w-full max-w-[19rem] rounded-2xl border border-border/60 bg-background/80 p-3 text-left shadow-sm"
-      >
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-[hsl(var(--accent-violet)/0.28)] bg-[hsl(var(--accent-violet)/0.10)] text-[hsl(var(--accent-violet))]">
-              <Sparkles className={cn("h-4 w-4", active && "animate-pulse")} />
-            </span>
-            <div className="min-w-0">
-              <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">Agente de código</h2>
-              <p className="truncate text-[11px] text-muted-foreground">Planifica, genera y verifica</p>
-            </div>
-          </div>
-          <span
-            className={cn(
-              "shrink-0 rounded-full px-2 py-1 text-[10.5px] font-medium",
-              active
-                ? "bg-[hsl(var(--accent-violet)/0.12)] text-[hsl(var(--accent-violet))]"
-                : "bg-muted text-muted-foreground",
-            )}
-          >
-            {AGENT_RUNTIME_STATUS[phase]}
-          </span>
-        </div>
-
-        <ol className="mt-3 space-y-1.5">
-          {AGENT_RUNTIME_STEPS.map((step, index) => {
-            const Icon = step.icon
-            const isPreview = phase === "preview"
-            const state =
-              phase === "idle"
-                ? "pending"
-                : phase === step.phase
-                  ? isPreview
-                    ? "done"
-                    : "running"
-                  : currentIndex >= 0 && index < currentIndex
-                    ? "done"
-                    : "pending"
-
-            return (
-              <li key={step.phase} className="flex h-8 items-center gap-2">
-                <span
-                  className={cn(
-                    "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border",
-                    state === "done" && "border-emerald-500/35 bg-emerald-500/10 text-emerald-600",
-                    state === "running" &&
-                      "border-[hsl(var(--accent-violet)/0.45)] bg-[hsl(var(--accent-violet)/0.12)] text-[hsl(var(--accent-violet))]",
-                    state === "pending" && "border-border/50 bg-muted/30 text-muted-foreground/55",
-                  )}
-                >
-                  <Icon className={cn("h-3.5 w-3.5", state === "running" && "animate-pulse")} />
-                </span>
-                <span
-                  className={cn(
-                    "min-w-0 flex-1 truncate text-[12px] font-medium",
-                    state === "pending" ? "text-muted-foreground" : "text-foreground",
-                  )}
-                >
-                  {step.label}
-                </span>
-                <span className="w-11 shrink-0 text-right font-mono text-[10px] text-muted-foreground/75">
-                  {state === "done" ? "done" : state === "running" ? "run" : "wait"}
-                </span>
-              </li>
-            )
-          })}
-        </ol>
-      </section>
+    <div className="flex min-h-full flex-col items-center justify-center px-6 py-10 text-center">
+      <span className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[hsl(var(--accent-violet)/0.28)] bg-[hsl(var(--accent-violet)/0.10)] text-[hsl(var(--accent-violet))]">
+        <Sparkles className={cn("h-5 w-5", active && "animate-pulse")} />
+      </span>
+      <h2 className="mt-4 text-base font-semibold tracking-tight text-foreground">
+        ¿Qué quieres construir?
+      </h2>
+      <p className="mt-1.5 max-w-[18rem] text-[13px] leading-relaxed text-muted-foreground">
+        Describe tu idea y el agente la crea, la ejecuta y la corrige sola.
+      </p>
     </div>
   )
 }
