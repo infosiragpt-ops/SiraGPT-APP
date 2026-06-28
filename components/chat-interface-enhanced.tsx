@@ -498,6 +498,31 @@ const MUSIC_MODEL_OPTIONS: MusicModel[] = ["ElevenLabs", "Lyria 3 Pro", "Mimo Ma
 const MUSIC_STYLE_OPTIONS: MusicStyle[] = ["Auto", "Cinematic", "Pop", "Electronic", "Ambient", "Orchestral", "Latin", "Hip-Hop", "Jazz"]
 const MUSIC_MOOD_OPTIONS: MusicMood[] = ["Balanced", "Energetic", "Emotional", "Dark", "Happy", "Epic", "Relaxed"]
 const MUSIC_EFFECT_OPTIONS: MusicEffect[] = ["None", "Studio Master", "Spatial", "Warm Tape", "Radio Ready", "Lo-Fi"]
+const VOICE_COMPOSER_PLACEHOLDER = "Escribe el texto que quieres convertir en voz"
+
+const buildVoiceGenerationGoal = ({
+  text,
+  model,
+  language,
+  accent,
+  stability,
+  effect,
+}: {
+  text: string
+  model: VoiceModel
+  language: VoiceLanguage
+  accent: VoiceAccent
+  stability: number
+  effect: VoiceEffect
+}) => {
+  const normalizedText = text.trim()
+  return [
+    "Genera un archivo MP3 de texto a voz. Debes usar la herramienta generate_speech; no finalices solo con texto.",
+    `Texto exacto a narrar:\n${normalizedText}`,
+    `Preferencias visibles del usuario: proveedor/modelo=${model}; idioma=${language}; acento=${accent}; estabilidad=${stability}%; efecto=${effect}.`,
+    "Si una preferencia exacta no esta disponible en el proveedor, genera el mejor audio posible con la voz multilingue disponible y explica la limitacion brevemente junto al archivo.",
+  ].join("\n\n")
+}
 const DEFAULT_IMAGE_MODEL = ""
 const DEFAULT_IMAGE_PROVIDER = "OpenAI"
 const DEFAULT_VIDEO_MODEL = ""
@@ -8037,6 +8062,26 @@ REWRITTEN TEXT:`;
       }
     }
 
+    if (isVoiceGenerationActive) {
+      const voiceGoal = buildVoiceGenerationGoal({
+        text: msg,
+        model: selectedVoiceModel,
+        language: selectedVoiceLanguage,
+        accent: selectedVoiceAccent,
+        stability: selectedVoiceStability,
+        effect: selectedVoiceEffect,
+      });
+      try {
+        await handleAgentTask(voiceGoal, filesToSend, {
+          userMessageAlreadyAdded: false,
+          displayGoal: msg,
+        });
+      } finally {
+        inFlightSendKeysRef.current.delete(sendKey);
+      }
+      return;
+    }
+
     const deterministicAgenticIntent = classifyIntentFastPath(msg);
     // Image-only turns ("resolver", "resuelve esta derivada", "¿qué dice esta
     // imagen?") need VISION, which lives only in the plain /api/ai/generate
@@ -9410,6 +9455,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   const shouldInlineActiveTools = isMediaToolActive;
   const requiresPromptBeforePrimarySend =
     isImageGenerationActive ||
+    isVoiceGenerationActive ||
     isVideoGenerationActive ||
     isMusicGenerationActive ||
     chatType === 'image' ||
@@ -9982,13 +10028,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   const handleAgentTask = async (
     goalText: string,
     filesToSend: any[] = [],
-    options: { userMessageAlreadyAdded?: boolean; assistantMessageId?: string } = {},
+    options: { userMessageAlreadyAdded?: boolean; assistantMessageId?: string; displayGoal?: string } = {},
   ) => {
     if (!goalText) {
       toast.error('Please enter a task');
       return;
     }
-    const { userMessageAlreadyAdded = false, assistantMessageId } = options;
+    const { userMessageAlreadyAdded = false, assistantMessageId, displayGoal = goalText } = options;
     const systemContract = PROFESSIONAL_CAPABILITY_CONTRACTS.agent_task || '';
     let activeChat = currentChat;
     const isNewChat = !activeChat;
@@ -9996,7 +10042,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     if (!activeChat) {
       try {
         const response = await apiClient.createChat({
-          title: `{} ${goalText.substring(0, 30)}`,
+          title: `{} ${displayGoal.substring(0, 30)}`,
           model: selectedModel,
         });
         activeChat = response.chat;
@@ -10020,7 +10066,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           id: `msg-user-${Date.now()}`,
           chatId: activeChat.id,
           role: 'USER' as const,
-          content: goalText,
+          content: displayGoal,
           timestamp: new Date().toISOString(),
           files: filesToSend,
         };
@@ -10103,7 +10149,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         const fileMetadata = buildAgentFileMetadata(filesToSend);
         for await (const evt of agentTaskService.runIterator({
           goal: goalText,
-          displayGoal: goalText,
+          displayGoal,
           systemContract,
           files: fileIds,
           fileMetadata,
@@ -10557,7 +10603,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 : isVideoGenerationActive
                                   ? tComposer("placeholderVideo")
                                   : isVoiceGenerationActive
-                                    ? "Describe la voz que quieres crear"
+                                    ? VOICE_COMPOSER_PLACEHOLDER
                                     : isMusicGenerationActive
                                       ? "Describe la música que quieres crear"
                                         : isWebSearchActive
@@ -10616,7 +10662,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             const needsPrompt = requiresPromptBeforePrimarySend && !hasText
                             const canSend = requiresPromptBeforePrimarySend ? hasText : (hasText || hasAttachment)
                             const busy = isCurrentChatLocalJobBusy || isUploading
-                            // In prompt-driven media modes (Video/Image/Music), an empty
+                            // In prompt-driven media modes (Video/Image/Voice/Music), an empty
                             // composer should not open Voice Studio. Keep the primary CTA
                             // as the send/create affordance and disable it until the user
                             // writes the generation prompt.
@@ -11131,7 +11177,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                     : isVideoGenerationActive
                                       ? tComposer("placeholderVideo")
                                       : isVoiceGenerationActive
-                                        ? "Describe la voz que quieres crear"
+                                        ? VOICE_COMPOSER_PLACEHOLDER
                                         : isMusicGenerationActive
                                           ? "Describe la música que quieres crear"
                                             : isWebSearchActive
