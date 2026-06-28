@@ -24,6 +24,7 @@ const os = require('os');
 const path = require('path');
 const net = require('net');
 const crypto = require('crypto');
+const { buildUntrustedChildEnv } = require('../../utils/untrusted-child-env');
 
 const ROOT = path.join(os.tmpdir(), 'siragpt-coderun');
 
@@ -126,8 +127,10 @@ function pushLog(run, chunk) {
 }
 
 function envFor(extra = {}) {
-  return {
-    ...process.env,
+  // SECURITY: this spawns untrusted generated/user code — never inherit
+  // SiraGPT secrets via ...process.env. Forward only an allowlisted toolchain
+  // env plus our explicit, non-secret overrides.
+  return buildUntrustedChildEnv({
     NODE_ENV: 'development', // force: install must include devDeps (vite), dev servers must run dev
     FORCE_COLOR: '0',
     NO_COLOR: '1',
@@ -136,7 +139,7 @@ function envFor(extra = {}) {
     npm_config_fund: 'false',
     npm_config_audit: 'false',
     ...extra,
-  };
+  });
 }
 
 function killGroup(child) {

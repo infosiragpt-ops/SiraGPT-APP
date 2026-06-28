@@ -22,6 +22,7 @@ const http = require('http');
 const net = require('net');
 const fs = require('fs');
 const path = require('path');
+const { buildUntrustedChildEnv } = require('../../utils/untrusted-child-env');
 
 const IS_WIN = process.platform === 'win32';
 const DEFAULT_READY_TIMEOUT_MS = 180_000; // 3 min — covers a cold `npm install` + boot
@@ -286,15 +287,16 @@ async function start(connectionId, localPath) {
   const proc = spawn(plan.command, {
     cwd: localPath,
     shell: true,
-    env: {
-      ...process.env,
+    // SECURITY: untrusted repo code — never inherit SiraGPT secrets via
+    // ...process.env. Forward only an allowlisted toolchain env + our overrides.
+    env: buildUntrustedChildEnv({
       PORT: String(port),
       HOST: '127.0.0.1',
       BROWSER: 'none',
       FORCE_COLOR: '0',
       CI: '1',
       NODE_OPTIONS: workspaceNodeOptions(),
-    },
+    }),
     detached: !IS_WIN, // POSIX: own process group so we can kill the tree
     windowsHide: true,
   });
