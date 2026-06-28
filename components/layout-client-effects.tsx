@@ -18,6 +18,10 @@ const SyncfusionBannerRemover = nextDynamic(
   () => import("@/components/SyncfusionBannerRemover").then((m) => m.SyncfusionBannerRemover),
   { ssr: false }
 )
+const OfficeClipboardBridge = nextDynamic(
+  () => import("@/components/office-clipboard-bridge").then((m) => m.OfficeClipboardBridge),
+  { ssr: false }
+)
 
 export function LayoutClientEffects() {
   return (
@@ -26,6 +30,7 @@ export function LayoutClientEffects() {
       <PostHogClientInit />
       <WebVitalsReporter />
       <SyncfusionBannerRemover />
+      <OfficeClipboardBridge />
     </>
   )
 }

@@ -148,6 +148,7 @@ import { agenticSearchService, type AgenticEvent, type AgenticSource } from "@/l
 import { agentTaskService, normalizeAgentTaskErrorMessage, reduceEvent, initialAgentState, type AgentTaskState } from "@/lib/agent-task-service"
 import { devLog } from "@/lib/dev-log"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
+import { safeUUID } from "@/lib/safe-uuid"
 import VideoGenerationComponent from "./VideoGenerationComponent"
 import UpgradeModal from "./UpgradeModal"
 import KeyboardShortcutsModal from "./KeyboardShortcutsModal"
@@ -4546,12 +4547,13 @@ function ChatInterfaceContent() {
   // reading from state directly would capture stale values.
   const uploadedFilesRef = React.useRef<any[]>([]);
   React.useEffect(() => { uploadedFilesRef.current = uploadedFiles; }, [uploadedFiles]);
-  const inFlightSendKeysRef = React.useRef<Map<string, number>>(new Map());
+  const inFlightSendKeysRef = React.useRef<Map<string, { startedAt: number; idempotencyKey: string }>>(new Map());
   // Universal-ingest bookkeeping: chips cancelled mid-upload (their XHR
   // result must not resurrect them) + content-hash dedup of attachments.
   const cancelledTempIdsRef = React.useRef<Set<string>>(new Set());
   const attachmentHashesRef = React.useRef<Set<string>>(new Set());
   const attachmentHashByIdRef = React.useRef<Map<string, string>>(new Map());
+
   const updateUploadedFileById = React.useCallback((
     fileId: string,
     updater: (file: any) => any,
@@ -7538,6 +7540,11 @@ But first, you need to connect your Spotify account securely using the button be
     const rawMsg = normalized.value.trim();
     if (!rawMsg && composerFiles.length === 0) return;
 
+    // If a central send is already being processed, ignore accidental
+    // double-submit. The per-message idempotency key below handles retry
+    // safety once the send payload has been built.
+    if (sendInFlightRef.current) return;
+
     // ── Slash-command intercept ────────────────────────────────────────
     // When the message starts with /goal or /research (or any other known
     // slash command), bypass the normal chat flow and dispatch to the
@@ -7590,13 +7597,14 @@ But first, you need to connect your Spotify account securely using the button be
       .join(",");
     const sendKey = `${currentChat?.id || "new"}:${selectedModel || "model"}:${msg}:${fileKey}`;
     const nowForSendKey = Date.now();
-    inFlightSendKeysRef.current.forEach((startedAt, key) => {
-      if (nowForSendKey - startedAt > 120_000) inFlightSendKeysRef.current.delete(key);
+    inFlightSendKeysRef.current.forEach((entry, key) => {
+      if (nowForSendKey - entry.startedAt > 120_000) inFlightSendKeysRef.current.delete(key);
     });
     if (inFlightSendKeysRef.current.has(sendKey)) {
       return;
     }
-    inFlightSendKeysRef.current.set(sendKey, nowForSendKey);
+    const idempotencyKey = `chat-send-${safeUUID()}`;
+    inFlightSendKeysRef.current.set(sendKey, { startedAt: nowForSendKey, idempotencyKey });
 
     const activeFreePreviewTool = isFreePlan
       ? (isImageGenerationActive || chatType === 'image')
@@ -7715,44 +7723,51 @@ INSTRUCTIONS:
 
 REWRITTEN TEXT:`;
 
-      let accumulatedContent = '';
-      const streamId = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      try {
+        let accumulatedContent = '';
+        const streamId = safeUUID();
 
-      await apiClient.generateWordStream(
-        {
-          provider: selectProvider,
-          model: selectedModel,
-          prompt: msg,
-          chatId: currentChat?.id,
-          streamId,
-          mode: 'rewrite',
-          selectedText: selectedWordText,
-        },
-        (chunk) => {
-          accumulatedContent += chunk;
-        },
-        () => {
-          // Stream is complete, clean up the response and replace the text
-          if (wordConnectorRef.current) {
-            // Remove surrounding quotes if AI added them
-            let cleanedContent = accumulatedContent.trim();
-            if ((cleanedContent.startsWith('"') && cleanedContent.endsWith('"')) ||
-              (cleanedContent.startsWith("'") && cleanedContent.endsWith("'"))) {
-              cleanedContent = cleanedContent.slice(1, -1);
+        await apiClient.generateWordStream(
+          {
+            provider: selectProvider,
+            model: selectedModel,
+            prompt: msg,
+            chatId: currentChat?.id,
+            streamId,
+            mode: 'rewrite',
+            selectedText: selectedWordText,
+          },
+          (chunk) => {
+            accumulatedContent += chunk;
+          },
+          () => {
+            // Stream is complete, clean up the response and replace the text
+            if (wordConnectorRef.current) {
+              // Remove surrounding quotes if AI added them
+              let cleanedContent = accumulatedContent.trim();
+              if ((cleanedContent.startsWith('"') && cleanedContent.endsWith('"')) ||
+                (cleanedContent.startsWith("'") && cleanedContent.endsWith("'"))) {
+                cleanedContent = cleanedContent.slice(1, -1);
+              }
+              wordConnectorRef.current.replaceSelection(cleanedContent);
             }
-            wordConnectorRef.current.replaceSelection(cleanedContent);
+            setIsRewriting(false);
+            setSelectedWordText(null); // Clear the selection display
+            toast.success('Text has been rewritten.');
+          },
+          (error) => {
+            console.error('Rewrite error:', error);
+            toast.error(error.message || 'Failed to rewrite text.');
+            setIsRewriting(false);
           }
-          setIsRewriting(false);
-          setSelectedWordText(null); // Clear the selection display
-          toast.success('Text has been rewritten.');
-        },
-        (error) => {
-          console.error('Rewrite error:', error);
-          toast.error(error.message || 'Failed to rewrite text.');
-          setIsRewriting(false);
-        }
-      );
-      inFlightSendKeysRef.current.delete(sendKey);
+        );
+      } catch (error: any) {
+        console.error('Rewrite error:', error);
+        toast.error(error?.message || 'Failed to rewrite text.');
+        setIsRewriting(false);
+      } finally {
+        inFlightSendKeysRef.current.delete(sendKey);
+      }
       return; // Stop further execution
     }
     const filesToSend = [...composerFiles];
@@ -7815,7 +7830,7 @@ REWRITTEN TEXT:`;
           return prevChat;
         });
 
-        const streamId = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const streamId = safeUUID();
         let accumulatedContent = '';
 
         // Stream AI response for Word document using dedicated endpoint
@@ -7999,7 +8014,7 @@ REWRITTEN TEXT:`;
         if (topics.length >= 1) {
           // For new thesis chats, create directly without optimistic messages
           // createNewChat will handle chat creation and message setup properly
-          const newChat = await createNewChat('thesis', msg);
+          const newChat = await createNewChat('thesis', msg, undefined, { idempotencyKey });
           if (newChat?.id) {
             // Select the newly created chat to show messages properly
             setTimeout(async () => {
@@ -8272,9 +8287,9 @@ REWRITTEN TEXT:`;
 
       const runContextPipeline = async (pipelineIntent: ChatIntent) => {
         if (isNewChat) {
-          await createNewChat('text', msg, filesToSend, { initialIntent: pipelineIntent });
+          await createNewChat('text', msg, filesToSend, { initialIntent: pipelineIntent, idempotencyKey });
         } else {
-          await addMessage(msg, filesToSend, chatToUpdate, true, pipelineIntent);
+          await addMessage(msg, filesToSend, chatToUpdate, true, pipelineIntent, { idempotencyKey });
         }
       };
 
@@ -9092,7 +9107,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       }
 
       // Call dedicated webdev streaming endpoint
-      const streamId = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const streamId = safeUUID();
       const payload = {
         prompt: professionalPrompt,
         displayPrompt: prompt,
@@ -10579,7 +10594,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               boxShadow: "none",
                             }}
                             rows={1}
-                            disabled={isCurrentChatLoading || isCurrentChatLocalJobBusy}
+                            disabled={isCurrentChatLocalJobBusy}
                           />
                         </div>
 
@@ -10619,7 +10634,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 <TooltipTrigger asChild>
                                   <Button
                                     onClick={action}
-                                    disabled={(canSend && (isCurrentChatLoading || busy)) || needsPrompt}
+                                    disabled={(canSend && busy) || needsPrompt}
                                     size="icon"
                                     aria-label={label}
                                     title={label}
@@ -10646,7 +10661,28 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             )
                           })()}
 
-                          {isStopButtonVisible && (
+                          {isStopButtonVisible && input.trim().length > 0 && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  onClick={handleSend}
+                                  size="icon"
+                                  aria-label="Enviar a la cola"
+                                  title="Enviar a la cola · se procesa en orden"
+                                  className={cn(
+                                      "h-9 w-9 rounded-full p-0 transition-all duration-200",
+                                      "bg-[hsl(var(--accent-violet))] text-white",
+                                      "shadow-[0_1px_2px_rgba(0,0,0,0.10),0_4px_10px_-3px_rgba(0,0,0,0.22)]",
+                                      "hover:opacity-90 active:scale-[0.96]",
+                                  )}
+                                >
+                                  <ArrowUp className="h-[16px] w-[16px]" strokeWidth={2.25} />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent side="top"><p>Enviar a la cola · se procesa en orden</p></TooltipContent>
+                            </Tooltip>
+                          )}
+                          {isStopButtonVisible && input.trim().length === 0 && (
                             <Button
                               onClick={stopActiveGeneration}
                               size="icon"
@@ -11132,7 +11168,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                   boxShadow: "none",
                                 }}
                                 rows={1}
-                                disabled={isCurrentChatLoading || isCurrentChatLocalJobBusy}
+                                disabled={isCurrentChatLocalJobBusy}
                               />
                             </div>
                             <div className="composer-toolbar-actions flex shrink-0 items-center gap-1.5">
@@ -11163,7 +11199,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                     <TooltipTrigger asChild>
                                       <Button
                                         onClick={action}
-                                        disabled={(canSend && (isCurrentChatLoading || busy)) || needsPrompt}
+                                        disabled={(canSend && busy) || needsPrompt}
                                         size="icon"
                                         aria-label={label}
                                         title={label}

@@ -11,12 +11,9 @@
 
 import * as React from "react"
 import {
-  Bot,
   Circle,
-  Code2,
   Eraser,
   ExternalLink,
-  FolderOpen,
   Monitor,
   Play,
   RefreshCw,
@@ -34,12 +31,16 @@ import { useCodeWorkspace } from "@/lib/code-workspace-context"
 import { buildPreviewDocument, projectNeedsDevServer, type PreviewKind } from "@/lib/code-preview-build"
 import { CODE_TEMPLATES } from "@/lib/code-templates"
 import { hostRunnerService } from "@/lib/code-runner/host-runner-service"
+import { githubService } from "@/lib/github-service"
+import { CODE_GIT_BINDING_CHANGED_EVENT, getGitBinding } from "@/lib/code-git-mirror"
 
 type LiveRun = { phase: "idle" | "starting" | "ready" | "error"; devUrl: string; note: string }
 type RunnerStatus = { ready?: boolean; error?: string | null; framework?: string | null; tail?: string[]; devUrl?: string }
 
 type LogEntry = { level: string; text: string; id: number }
 type Device = "responsive" | "phone"
+
+const CODE_RUN_PREVIEW_EVENT = "siragpt:code-run-preview"
 
 const KIND_LABEL: Record<PreviewKind, string> = {
   html: "web",
@@ -51,7 +52,7 @@ const KIND_LABEL: Record<PreviewKind, string> = {
 }
 
 export function PreviewPane({ onClose }: { onClose?: () => void }) {
-  const { files, activePath, openLocalFolderWorkspace } = useCodeWorkspace()
+  const { files, activePath, activeFolder } = useCodeWorkspace()
 
   const [auto, setAuto] = React.useState(true)
   const [device, setDevice] = React.useState<Device>(() =>
@@ -78,11 +79,44 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
   const [liveRun, setLiveRun] = React.useState<LiveRun>({ phase: "idle", devUrl: "", note: "" })
   const pollRef = React.useRef<number | null>(null)
   const runIdRef = React.useRef<string>("")
+  const modeRef = React.useRef<"host" | "github">("host")
+  const [gitBinding, setGitBinding] = React.useState<string | null>(() =>
+    typeof window === "undefined" ? null : getGitBinding(activeFolder?.id ?? null),
+  )
 
   const hasNodeProject = React.useMemo(
     () => Object.keys(files || {}).some((p) => /(^|\/)package\.json$/.test(p)),
     [files],
   )
+  const canRunProject = hasNodeProject || Boolean(gitBinding)
+  const projectSignature = React.useMemo(() => {
+    if (!canRunProject) return ""
+    const names = Object.keys(files || {}).sort()
+    const keyFiles = [
+      "package.json",
+      "index.html",
+      "src/main.tsx",
+      "src/App.tsx",
+      "app/page.tsx",
+      "prisma/schema.prisma",
+    ]
+    const fingerprint = keyFiles
+      .map((path) => `${path}:${files[path]?.content?.length ?? 0}`)
+      .join("|")
+    return `${activeFolder?.id || "local"}:${gitBinding || "workspace"}:${names.join(",")}:${fingerprint}`
+  }, [activeFolder?.id, canRunProject, files, gitBinding])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const refreshBinding = () => setGitBinding(getGitBinding(activeFolder?.id ?? null))
+    refreshBinding()
+    window.addEventListener(CODE_GIT_BINDING_CHANGED_EVENT, refreshBinding)
+    window.addEventListener("storage", refreshBinding)
+    return () => {
+      window.removeEventListener(CODE_GIT_BINDING_CHANGED_EVENT, refreshBinding)
+      window.removeEventListener("storage", refreshBinding)
+    }
+  }, [activeFolder?.id])
 
   const clearPoll = React.useCallback(() => {
     if (pollRef.current) {
@@ -94,7 +128,8 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
   const stopApp = React.useCallback(() => {
     clearPoll()
     setLiveRun({ phase: "idle", devUrl: "", note: "" })
-    if (runIdRef.current) void hostRunnerService.stop(runIdRef.current)
+    if (modeRef.current === "github" && runIdRef.current) void githubService.stop(runIdRef.current)
+    else if (runIdRef.current) void hostRunnerService.stop(runIdRef.current)
   }, [clearPoll])
 
   // Poll a runner's status until the dev server is ready (or fails / times out).
@@ -131,9 +166,34 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
         runIdRef.current = `run-${Math.random().toString(36).slice(2)}`
       }
     }
+    const boundRepo = getGitBinding(activeFolder?.id ?? null)
+    if (boundRepo) {
+      modeRef.current = "github"
+      runIdRef.current = boundRepo
+      const started = await githubService.run(boundRepo).catch((err) => ({ error: err instanceof Error ? err.message : "runner unreachable" }))
+      if ("error" in started && started.error) {
+        setLiveRun({ phase: "error", devUrl: "", note: started.error })
+        return
+      }
+      pollUntilReady(
+        async () => {
+          const st = await githubService.runStatus(boundRepo)
+          return {
+            ready: Boolean(st.ready || st.status === "ready"),
+            error: st.error || null,
+            framework: st.framework || st.kind || null,
+            tail: st.tail,
+            devUrl: st.previewUrl,
+          }
+        },
+        "previewUrl" in started ? started.previewUrl || "" : "",
+      )
+      return
+    }
     // Workspace files are CodeFile objects; the runner wants path -> content.
     const fileMap: Record<string, string> = {}
     for (const [p, f] of Object.entries(files)) fileMap[p] = f?.content ?? ""
+    modeRef.current = "host"
     // No-Docker host runner: install deps + boot a real vite dev server, then
     // iframe it through the same-origin reverse proxy (started.devUrl).
     const started = await hostRunnerService.start(fileMap, runIdRef.current)
@@ -163,7 +223,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
       return
     }
     pollUntilReady(() => hostRunnerService.status(runIdRef.current), started.devUrl || "")
-  }, [files, pollUntilReady])
+  }, [activeFolder?.id, files, pollUntilReady])
 
   // Mirror the latest values into refs so the auto-run listener (registered
   // once) and the post-commit auto-run effect always read FRESH state without
@@ -174,10 +234,13 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
   runAppRef.current = runApp
   const phaseRef = React.useRef(liveRun.phase)
   phaseRef.current = liveRun.phase
+  const activeFolderIdRef = React.useRef<string | null>(activeFolder?.id ?? null)
+  activeFolderIdRef.current = activeFolder?.id ?? null
   // A build that finishes while a previous boot is still installing can't restart
   // mid-install; we queue it here and fire once the in-flight run settles so the
   // preview always lands on the newest code.
   const pendingAutoRunRef = React.useRef(false)
+  const lastAutoRunSignatureRef = React.useRef("")
 
   // The chat panel dispatches "siragpt:code-run-app" in the SAME tick as the
   // applyBlock() setState that writes the new files — so at event time the
@@ -189,18 +252,26 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
   const [autoRunSignal, setAutoRunSignal] = React.useState(0)
   React.useEffect(() => {
     if (typeof window === "undefined") return
+    const queueAutoRun = () => setAutoRunSignal((s) => s + 1)
     const onRun = (e: Event) => {
       const auto = ((e as CustomEvent).detail as { auto?: boolean } | undefined)?.auto ?? false
       if (auto) {
-        setAutoRunSignal((s) => s + 1)
+        queueAutoRun()
         return
       }
-      if (Object.keys(filesRef.current || {}).some((p) => /(^|\/)package\.json$/.test(p))) {
+      const hasRunnableProject =
+        Object.keys(filesRef.current || {}).some((p) => /(^|\/)package\.json$/.test(p)) ||
+        Boolean(getGitBinding(activeFolderIdRef.current))
+      if (hasRunnableProject) {
         void runAppRef.current()
       }
     }
     window.addEventListener("siragpt:code-run-app", onRun)
-    return () => window.removeEventListener("siragpt:code-run-app", onRun)
+    window.addEventListener(CODE_RUN_PREVIEW_EVENT, queueAutoRun)
+    return () => {
+      window.removeEventListener("siragpt:code-run-app", onRun)
+      window.removeEventListener(CODE_RUN_PREVIEW_EVENT, queueAutoRun)
+    }
   }, [])
 
   // Post-commit auto-run: runs once per build signal, AFTER React has committed
@@ -210,26 +281,32 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
   // skipped so it never triggers an npm install.
   React.useEffect(() => {
     if (autoRunSignal === 0) return
-    if (!projectNeedsDevServer(filesRef.current)) return
+    const needsDevServer = projectNeedsDevServer(filesRef.current) || Boolean(getGitBinding(activeFolderIdRef.current))
+    if (!canRunProject || !projectSignature || !needsDevServer) return
+    if (lastAutoRunSignatureRef.current === projectSignature && phaseRef.current !== "error") return
     // Don't interrupt an install already in flight — queue a retry instead so
     // the newest code still shows once it settles.
     if (phaseRef.current === "starting") {
       pendingAutoRunRef.current = true
       return
     }
+    lastAutoRunSignatureRef.current = projectSignature
     void runAppRef.current({ auto: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoRunSignal])
+  }, [autoRunSignal, canRunProject, projectSignature])
 
   // Drain a queued auto-run once the in-flight boot settles (ready/error/idle).
   React.useEffect(() => {
     if (liveRun.phase === "starting") return
     if (!pendingAutoRunRef.current) return
     pendingAutoRunRef.current = false
-    if (!projectNeedsDevServer(filesRef.current)) return
+    const needsDevServer = projectNeedsDevServer(filesRef.current) || Boolean(getGitBinding(activeFolderIdRef.current))
+    if (!canRunProject || !projectSignature || !needsDevServer) return
+    if (lastAutoRunSignatureRef.current === projectSignature && phaseRef.current !== "error") return
+    lastAutoRunSignatureRef.current = projectSignature
     void runAppRef.current({ auto: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveRun.phase])
+  }, [liveRun.phase, canRunProject, projectSignature])
 
   React.useEffect(
     () => () => {
@@ -334,7 +411,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
           </GlassToggle>
 
           {/* Phase B — run a real Node/Vite/Next app (npm install + dev server). */}
-          {hasNodeProject ? (
+          {canRunProject ? (
             <>
               <span className="mx-0.5 h-4 w-px bg-border/50" />
               {liveRun.phase === "ready" || liveRun.phase === "starting" ? (
@@ -355,7 +432,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
                   className="flex h-6 items-center gap-1 rounded-md bg-[hsl(var(--accent-violet)/0.16)] px-2 text-[11px] font-medium text-[hsl(var(--accent-violet))] transition-colors hover:bg-[hsl(var(--accent-violet)/0.28)]"
                 >
                   <Play className="h-3 w-3" />
-                  <span>Ejecutar</span>
+                  <span>{gitBinding ? "Ejecutar repo" : "Ejecutar"}</span>
                 </button>
               )}
             </>
@@ -453,13 +530,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
             </button>
           </div>
         ) : result.kind === "empty" || result.kind === "unsupported" ? (
-          <PreviewLaunchpad
-            kind={result.kind}
-            note={result.note}
-            hasNodeProject={hasNodeProject}
-            onRunApp={runApp}
-            onOpenLocalFolder={() => void openLocalFolderWorkspace()}
-          />
+          <PreviewLaunchpad kind={result.kind} note={result.note} />
         ) : (
           <div
             className={cn(
@@ -535,83 +606,18 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
   )
 }
 
-function PreviewLaunchpad({
-  kind,
-  note,
-  hasNodeProject,
-  onRunApp,
-  onOpenLocalFolder,
-}: {
-  kind: PreviewKind
-  note?: string
-  hasNodeProject?: boolean
-  onRunApp?: () => void
-  onOpenLocalFolder?: () => void
-}) {
-  const openAgent = React.useCallback(() => {
-    window.dispatchEvent(
-      new CustomEvent("siragpt:code-agent-prompt", {
-        detail: {
-          mode: "app",
-          prompt: "Quiero construir una app web completa. Ayúdame como ingeniero: hazme las preguntas necesarias y luego genera el proyecto con preview.",
-        },
-      }),
-    )
-  }, [])
-
-  const openFiles = React.useCallback(() => {
-    window.dispatchEvent(new CustomEvent("siragpt:code-open-tool", { detail: { toolId: "files" } }))
-  }, [])
-
+function PreviewLaunchpad({ kind, note }: { kind: PreviewKind; note?: string }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-5 p-8 text-center">
       <div>
         <p className="text-sm font-medium text-foreground">
-          {kind === "empty" ? "Tu app aparecerá aquí" : "Este archivo no es una pantalla web"}
+          {kind === "empty" ? "Tu preview en vivo" : "Este archivo no se previsualiza"}
         </p>
         <p className="mx-auto mt-1 max-w-xs text-xs leading-relaxed text-muted-foreground">
           {note || "Empieza desde una plantilla o pídele algo al agente — lo verás aquí al instante."}
         </p>
       </div>
-      <div className="grid w-full max-w-sm gap-2">
-        <button
-          type="button"
-          onClick={openAgent}
-          className="flex items-center gap-3 rounded-xl border border-[hsl(var(--accent-violet)/0.28)] bg-[hsl(var(--accent-violet)/0.10)] px-4 py-3 text-left transition-colors hover:bg-[hsl(var(--accent-violet)/0.16)]"
-        >
-          <Bot className="h-4 w-4 shrink-0 text-[hsl(var(--accent-violet))]" />
-          <span className="min-w-0">
-            <span className="block text-[13px] font-medium text-foreground">Construir con Agent</span>
-            <span className="block text-[11px] text-muted-foreground">Describe una idea y el agente crea archivos, preview y siguientes pasos.</span>
-          </span>
-        </button>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-          <button
-            type="button"
-            onClick={onOpenLocalFolder}
-            className="flex min-h-16 flex-col items-center justify-center gap-1 rounded-xl border border-border/50 bg-background/60 px-3 py-2 text-[11px] text-muted-foreground backdrop-blur transition-colors hover:border-border hover:bg-muted/40 hover:text-foreground"
-          >
-            <FolderOpen className="h-4 w-4" />
-            Carpeta local
-          </button>
-          <button
-            type="button"
-            onClick={openFiles}
-            className="flex min-h-16 flex-col items-center justify-center gap-1 rounded-xl border border-border/50 bg-background/60 px-3 py-2 text-[11px] text-muted-foreground backdrop-blur transition-colors hover:border-border hover:bg-muted/40 hover:text-foreground"
-          >
-            <Code2 className="h-4 w-4" />
-            Archivos
-          </button>
-          <button
-            type="button"
-            onClick={onRunApp}
-            disabled={!hasNodeProject}
-            className="flex min-h-16 flex-col items-center justify-center gap-1 rounded-xl border border-border/50 bg-background/60 px-3 py-2 text-[11px] text-muted-foreground backdrop-blur transition-colors hover:border-border hover:bg-muted/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45"
-          >
-            <Play className="h-4 w-4" />
-            Ejecutar
-          </button>
-        </div>
+      <div className="grid w-full max-w-xs gap-2">
         {CODE_TEMPLATES.map((t) => (
           <button
             key={t.id}

@@ -216,6 +216,19 @@ test('web product requests compile to the code pipeline before UI routing', () =
   assert.ok(contract.required_tools.includes('run_tests'));
 });
 
+test('one-page landing requests are executable web code, not clarification prompts', () => {
+  const contract = buildUniversalTaskContract({
+    rawUserRequest: 'Landing one-page para creame una pagina web de eventos',
+  });
+
+  assert.equal(contract.pipeline, 'CodePipeline');
+  assert.equal(contract.primary_intent, 'code_generation');
+  assert.equal(contract.artifact_required, true);
+  assert.equal(contract.required_extension, '.html');
+  assert.ok(contract.ambiguity_score < 0.5);
+  assert.ok(contract.required_tools.includes('run_tests'));
+});
+
 test('legacy TaskContract adapter cannot override UniversalTaskContract format sovereignty', () => {
   const universal = buildUniversalTaskContract({ rawUserRequest: 'Créame un SVG de una casa' });
   const wrongLegacy = {

@@ -10,19 +10,7 @@
 import * as React from "react"
 import { useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
-import {
-  ChevronDown,
-  Check,
-  Database,
-  Folder,
-  Globe2,
-  Grid3X3,
-  LayoutGrid,
-  List,
-  Plus,
-  Search,
-  Server,
-} from "lucide-react"
+import { ChevronDown, Check, Database, Folder, Globe2, Grid3X3, LayoutGrid, List, Plus, Search, Server } from "lucide-react"
 import { toast } from "sonner"
 import { formatDistanceToNow } from "date-fns"
 import { es as dfEs, enUS as dfEn } from "date-fns/locale"
@@ -55,15 +43,15 @@ interface AppProject {
 }
 
 const STATUS_OPTIONS: Array<{ value: StatusFilter; label: string }> = [
-  { value: "any", label: "Cualquier estado" },
-  { value: "active", label: "Activo" },
-  { value: "draft", label: "Borrador" },
+  { value: "any", label: "Any status" },
+  { value: "active", label: "Active" },
+  { value: "draft", label: "Draft" },
 ]
 
 const ARTIFACT_OPTIONS: Array<{ value: ArtifactFilter; label: string }> = [
-  { value: "any", label: "Cualquier tipo" },
+  { value: "any", label: "Any artifact type" },
   { value: "webapp", label: "Web app" },
-  { value: "mobileapp", label: "App móvil" },
+  { value: "mobileapp", label: "Mobile app" },
   { value: "dashboard", label: "Dashboard" },
 ]
 
@@ -71,7 +59,7 @@ const SEEDED_APP_PROJECT: AppProject = {
   id: "siragpt-app",
   name: "SIRAGPT",
   description: "Plataforma multi-LLM con chat, imagen, documentos y APPS.",
-  timeLabel: "hace 8 segundos",
+  timeLabel: "8 seconds ago",
   status: "active",
   artifactType: "webapp",
   href: "/code",
@@ -89,7 +77,6 @@ export default function ProjectsPage() {
   const [artifactFilter, setArtifactFilter] = React.useState<ArtifactFilter>("any")
   const [viewMode, setViewMode] = React.useState<ViewMode>("grid")
   const [openingProjectId, setOpeningProjectId] = React.useState<string | null>(null)
-  const [creatingFullStackProject, setCreatingFullStackProject] = React.useState(false)
 
   const dateLocale = React.useMemo(() => {
     if (typeof document !== "undefined" && document.documentElement.lang?.startsWith("es")) return dfEs
@@ -170,25 +157,23 @@ export default function ProjectsPage() {
   )
 
   const createFullStackProject = React.useCallback(async () => {
-    if (creatingFullStackProject) return
-    setCreatingFullStackProject(true)
+    if (openingProjectId) return
+    setOpeningProjectId("new-fullstack")
     try {
-      const project = await projectsService.create({
+      const target = await projectsService.create({
         name: "Nueva app full-stack",
-        description: "Software profesional con frontend, backend y base de datos desde una sola instrucción.",
+        description: "Frontend, backend y base de datos creados desde una sola instrucción.",
         type: "webapp",
         hostingProvider: "sira-cloud",
-        instructions:
-          "Modo APPS full-stack: construir con Next.js, API routes, Prisma y base de datos. Mantener frontend, backend y datos como capas explícitas.",
       })
-      setProjects((prev) => [project, ...prev.filter((row) => row.id !== project.id)])
-      router.push(codeWorkspaceHref(project.id))
+      setProjects((prev) => [target, ...prev.filter((row) => row.id !== target.id)])
+      router.push(codeWorkspaceHref(target.id))
     } catch (err: any) {
-      toast.error(err?.message || "No se pudo crear el software en APPS")
+      toast.error(err?.message || "No se pudo crear la app full-stack")
     } finally {
-      setCreatingFullStackProject(false)
+      setOpeningProjectId(null)
     }
-  }, [creatingFullStackProject, router])
+  }, [openingProjectId, router])
 
   return (
     <div className={styles.page}>
@@ -200,14 +185,14 @@ export default function ProjectsPage() {
         <header className={styles.header}>
           <LayoutGrid className={styles.titleIcon} strokeWidth={2.25} />
           <h1 className={styles.title} data-testid="projects-page-title">
-            Empresas
+            Projects
           </h1>
         </header>
 
         <section className={styles.toolbar}>
           <div className={styles.filters}>
             <label className={styles.search} role="search">
-              <span className="sr-only">Buscar empresas APPS</span>
+              <span className="sr-only">Buscar proyectos APPS</span>
               <input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
@@ -239,13 +224,13 @@ export default function ProjectsPage() {
                   className={styles.scopeButton}
                 >
                   <Folder strokeWidth={1.8} />
-                  Todas las empresas
+                  All projects
                   <ChevronDown strokeWidth={2} />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-[220px]">
                 <DropdownMenuItem className="justify-between">
-                  Todas las empresas
+                  All projects
                   <Check className="h-4 w-4" />
                 </DropdownMenuItem>
               </DropdownMenuContent>
@@ -268,37 +253,28 @@ export default function ProjectsPage() {
           </div>
         </section>
 
-        <section className={styles.builderStrip} aria-label="Crear software profesional">
+        <section className={styles.builderStrip} aria-label="Constructor full-stack de APPS">
           <div className={styles.builderCopy}>
-            <div className={styles.builderIcon}>
-              <LayoutGrid strokeWidth={2} />
+            <div className={styles.builderIcon} aria-hidden="true">
+              <Server strokeWidth={2} />
             </div>
             <div>
               <h2 className={styles.builderTitle}>Crear software profesional</h2>
-              <div className={styles.builderLayers}>
-                <span>
-                  <Globe2 strokeWidth={1.9} />
-                  Frontend
-                </span>
-                <span>
-                  <Server strokeWidth={1.9} />
-                  Backend
-                </span>
-                <span>
-                  <Database strokeWidth={1.9} />
-                  Base de datos
-                </span>
-              </div>
             </div>
+          </div>
+          <div className={styles.builderLayers} aria-label="Capas incluidas">
+            <span>Frontend</span>
+            <span>Backend</span>
+            <span><Database strokeWidth={1.8} /> Base de datos</span>
           </div>
           <Button
             type="button"
             className={styles.builderButton}
+            disabled={openingProjectId === "new-fullstack"}
             onClick={() => void createFullStackProject()}
-            disabled={creatingFullStackProject}
           >
-            <Plus strokeWidth={2} />
-            {creatingFullStackProject ? "Creando..." : "Nuevo software"}
+            <Plus className="h-4 w-4" strokeWidth={2} />
+            {openingProjectId === "new-fullstack" ? "Creando..." : "Nuevo software"}
           </Button>
         </section>
 
@@ -410,7 +386,7 @@ function AppProjectCard({
     <button
       type="button"
       aria-busy={opening}
-      aria-label={`Abrir empresa ${project.name}`}
+      aria-label={`Abrir proyecto ${project.name}`}
       data-testid={`project-card-${project.id}`}
       disabled={opening}
       onClick={onOpen}
@@ -530,7 +506,7 @@ function ProjectsSkeleton() {
 function NoResults() {
   return (
     <div className={styles.noResults}>
-      No hay empresas APPS que coincidan.
+      No matching APPS projects.
     </div>
   )
 }

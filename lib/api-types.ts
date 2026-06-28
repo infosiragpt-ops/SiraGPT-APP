@@ -70,6 +70,7 @@ export type CreateChatRequest = {
   isWordConnectorChat?: boolean;
   isExcelConnectorChat?: boolean;
   projectId?: string | number;
+  idempotencyKey?: string;
 };
 
 export type CreatePaymentRequest = {

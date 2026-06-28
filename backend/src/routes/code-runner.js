@@ -19,6 +19,7 @@
 
 const http = require('http');
 const express = require('express');
+const { Readable } = require('stream');
 const { authenticateToken } = require('../middleware/auth');
 const hostRunner = require('../services/code/host-runner');
 
@@ -83,18 +84,25 @@ router.post('/:runId/stop', authenticateToken, (req, res) => {
   return res.json({ ok: true });
 });
 
+function applyPreviewFrameHeaders(_req, res, next) {
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");
+  next();
+}
+
+function proxiedPath(req) {
+  const marker = `/api/code-runner/${encodeURIComponent(req.params.runId)}/proxy`;
+  const raw = req.originalUrl || req.url || '/';
+  const idx = raw.indexOf(marker);
+  if (idx === -1) return '/';
+  const rest = raw.slice(idx + marker.length);
+  return rest ? rest : '/';
+}
+
 /**
  * Reverse-proxy every request under /:runId/:token/app to the run's private dev
- * server. Auth is the run-scoped token in the URL path — NOT a session lookup,
- * so we don't hit the DB on every asset fetch, and NOT a cookie, so module/asset
- * fetches from the sandboxed opaque-origin iframe authenticate regardless of the
- * browser's credentials mode. The dev server only ever listens on 127.0.0.1, so
- * this proxy is the only path the browser can take to reach it (vite is launched
- * with --base matching this prefix, incl. the token, so assets resolve).
- *
- * Mounted with router.use (prefix match) so it works on Express 4 and 5 and
- * matches every nested asset path. We forward the FULL req.originalUrl (not
- * stripped) because vite's base includes this prefix.
+ * server. Auth is the run-scoped token in the URL path, not a cookie, so Vite
+ * module/asset fetches from the sandboxed opaque-origin iframe keep working.
  */
 function proxyApp(req, res) {
   const sid = safeRunId(req.params.runId);
@@ -102,12 +110,11 @@ function proxyApp(req, res) {
   const target = hostRunner.getRunForProxy(sid, token);
   if (!target) return res.status(403).json({ error: 'forbidden' });
 
-  // Forward only safe request headers. Strip the user's cookie/authorization so
-  // the untrusted dev server never sees SiraGPT credentials, and drop hop-by-hop.
   const fwdHeaders = {};
   for (const [k, v] of Object.entries(req.headers)) {
     const lk = k.toLowerCase();
     if (STRIP_REQUEST_HEADERS.has(lk) || HOP_BY_HOP_HEADERS.has(lk)) continue;
+    if (lk === 'host' || lk === 'content-length') continue;
     fwdHeaders[k] = v;
   }
   fwdHeaders.host = `127.0.0.1:${target.port}`;
@@ -121,28 +128,25 @@ function proxyApp(req, res) {
       headers: fwdHeaders,
     },
     (up) => {
-      // Strip Set-Cookie (untrusted server must not set cookies on our origin),
-      // hop-by-hop headers, and any upstream CORS headers before relaying.
       const headers = {};
       for (const [k, v] of Object.entries(up.headers)) {
         const lk = k.toLowerCase();
         if (lk === 'set-cookie' || HOP_BY_HOP_HEADERS.has(lk)) continue;
-        if (lk.startsWith('access-control-')) continue; // we set our own below
+        if (lk === 'content-security-policy' || lk === 'x-frame-options') continue;
+        if (lk.startsWith('access-control-')) continue;
         headers[k] = v;
       }
       headers['cache-control'] = 'no-store';
-      // The preview runs in a sandboxed iframe with an opaque ("null") origin, so
-      // its ES-module/asset fetches are cross-origin and need CORS. Access is
-      // gated by the unguessable run token in the URL path (not a cookie), so we
-      // allow the read WITHOUT credentials — echo the origin (covers "null").
+      headers['x-frame-options'] = 'SAMEORIGIN';
+      headers['content-security-policy'] = "frame-ancestors 'self'";
+
       const reqOrigin = req.headers.origin;
       if (reqOrigin) {
         headers['access-control-allow-origin'] = reqOrigin;
-        headers['vary'] = headers['vary'] ? `${headers['vary']}, Origin` : 'Origin';
+        headers.vary = headers.vary ? `${headers.vary}, Origin` : 'Origin';
       } else {
         headers['access-control-allow-origin'] = '*';
       }
-      // The token lives in the URL; stop it leaking to third parties via Referer.
       headers['referrer-policy'] = 'no-referrer';
       res.writeHead(up.statusCode || 502, headers);
       up.pipe(res);
@@ -155,12 +159,61 @@ function proxyApp(req, res) {
       try { res.end(); } catch (_) { /* already closed */ }
     }
   });
-  // GET/HEAD carry no body; for other methods the global json parser may have
-  // already drained the stream (preview is GET-heavy, so this is acceptable).
   if (req.method === 'GET' || req.method === 'HEAD') upstream.end();
   else req.pipe(upstream);
 }
 
-router.use('/:runId/:token/app', proxyApp);
+router.use('/:runId/:token/app', applyPreviewFrameHeaders, proxyApp);
+
+// Authenticated preview proxy. In production the browser cannot iframe the
+// backend container's localhost port, so the runner exposes each dev server
+// through this same-origin path instead of opening dynamic public ports.
+router.use('/:runId/proxy', applyPreviewFrameHeaders, authenticateToken, async (req, res) => {
+  if (!['GET', 'HEAD'].includes(req.method)) {
+    return res.status(405).json({ error: 'method_not_allowed' });
+  }
+  const target = hostRunner.getProxyTarget(req.params.runId, req.user.id);
+  if (target.error === 'forbidden') return res.status(403).json({ error: 'forbidden' });
+  if (target.error === 'not_found') return res.status(404).json({ error: 'run_not_found' });
+  if (target.error === 'not_ready') {
+    return res.status(503).json({ error: 'run_not_ready', phase: target.phase, message: target.message });
+  }
+
+  const suffix = proxiedPath(req);
+  const upstreamUrl = `http://127.0.0.1:${target.port}${suffix.startsWith('/') ? suffix : `/${suffix}`}`;
+  const headers = {};
+  for (const [key, value] of Object.entries(req.headers || {})) {
+    const lower = key.toLowerCase();
+    if (HOP_BY_HOP_HEADERS.has(lower)) continue;
+    if (lower === 'host' || lower === 'content-length') continue;
+    headers[key] = value;
+  }
+  headers.host = `127.0.0.1:${target.port}`;
+
+  let upstream;
+  try {
+    upstream = await fetch(upstreamUrl, {
+      method: req.method,
+      headers,
+      redirect: 'manual',
+      signal: AbortSignal.timeout(Number(process.env.CODE_RUNNER_PROXY_TIMEOUT_MS) || 30_000),
+    });
+  } catch (err) {
+    return res.status(502).json({ error: 'preview_proxy_failed', message: err.message });
+  }
+
+  res.status(upstream.status);
+  upstream.headers.forEach((value, key) => {
+    const lower = key.toLowerCase();
+    if (HOP_BY_HOP_HEADERS.has(lower)) return;
+    // Keep the iframe same-origin and avoid stale dev-server assets after edits.
+    if (lower === 'content-security-policy') return;
+    res.setHeader(key, value);
+  });
+  res.setHeader('Cache-Control', 'no-store');
+
+  if (req.method === 'HEAD' || !upstream.body) return res.end();
+  return Readable.fromWeb(upstream.body).pipe(res);
+});
 
 module.exports = router;

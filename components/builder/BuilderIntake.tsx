@@ -2,7 +2,6 @@
 
 import { Check, Sparkles, TriangleAlert, Wand2 } from "lucide-react"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
-import { DotmCircular15 } from "@/components/ui/dotm-circular-15"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -79,7 +78,7 @@ export function BuilderIntake() {
 
         {phase === "generating" && (
           <div className="rounded-xl border border-border bg-card p-8 text-center">
-            <DotmCircular15 size={24} dotSize={3} color={accent} className="mx-auto mb-3" />
+            <ThinkingIndicator size="md" label="Generando proyecto" className="mx-auto mb-3" />
             <p className="text-sm font-medium text-foreground">Generando tu proyecto…</p>
             <p className="mt-1 text-xs text-muted-foreground">Brief → blueprint → archivos starter</p>
           </div>

@@ -34,6 +34,9 @@ import { CODE_TEMPLATES } from "@/lib/code-templates"
 
 import { AICodeChatPanel } from "./ai-code-chat-panel"
 import { CodeHub } from "./code-hub"
+import { EditorPanel } from "./editor-panel"
+import { PublishingConsole } from "./publishing-console"
+import { StatusBar } from "./status-bar"
 import { PreviewPane } from "./preview-pane"
 import { TerminalPanel } from "./terminal-panel"
 import { ToolLauncher } from "./tool-launcher"
@@ -82,6 +85,7 @@ export function CodeWorkspace() {
   }, [previewOpen])
   const [paletteOpen, setPaletteOpen] = React.useState(false)
   const [paletteQuery, setPaletteQuery] = React.useState("")
+  const [publishingOpen, setPublishingOpen] = React.useState(false)
   const [openPanels, setOpenPanels] = React.useState<Set<WorkspacePanelId>>(
     () => new Set<WorkspacePanelId>(["preview", "terminal"]),
   )
@@ -240,6 +244,32 @@ export function CodeWorkspace() {
     },
     [applyBlock, files, openFile],
   )
+
+  const handleNewFileFromTools = React.useCallback(() => {
+    if (typeof window === "undefined") return
+    const path = window.prompt("Nombre del archivo (incluye ruta)")
+    if (path) createFile(path, "")
+  }, [createFile])
+
+  const toolsHandlers = React.useMemo(
+    () => ({
+      onTogglePanel: handleTogglePanel,
+      onOpenPalette: (query?: string) => {
+        setPaletteQuery(query ?? "")
+        setPaletteOpen(true)
+      },
+      onNewFile: handleNewFileFromTools,
+      onOpenPublishing: () => setPublishingOpen(true),
+      onFocusChat: () => {
+        setChatOpen(true)
+        chatRef.current?.expand()
+        focusChat()
+      },
+      onOpenComposer: openComposer,
+    }),
+    [focusChat, handleNewFileFromTools, handleTogglePanel, openComposer],
+  )
+
 
   React.useEffect(() => {
     return registerCommandPaletteHandler(() => setPaletteOpen(true))
@@ -520,6 +550,16 @@ export function CodeWorkspace() {
           </div>
         </div>
       </div>
+
+      <StatusBar
+        terminalOpen={terminalOpen}
+        onToggleTerminal={toggleTerminal}
+        chatOpen={chatOpen}
+        onToggleChat={toggleChat}
+      />
+
+      <PublishingConsole open={publishingOpen} onOpenChange={setPublishingOpen} />
+
 
       <Dialog
         open={paletteOpen}

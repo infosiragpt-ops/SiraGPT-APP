@@ -45,3 +45,18 @@ test('agent tool policy: explicit external research keeps web search available',
   assert.equal(isPrivateDocumentOnlyRequest(options), false);
   assert.equal(buildForbiddenToolNames(options).has('web_search'), false);
 });
+
+test('agent tool policy: attached document edits keep artifact tools available', () => {
+  const options = {
+    goal: 'aplica correcciones mínimas al documento porfavor',
+    fileIds: ['file-docx'],
+    documentPolicy: { mode: 'doc_required', autoGenerate: true },
+    executionProfile: { capabilities: { needsPrivateContext: true } },
+    universalTaskContract: { grounding_required: true },
+  };
+
+  assert.equal(isPrivateDocumentOnlyRequest(options), false);
+  const forbidden = buildForbiddenToolNames(options);
+  assert.equal(forbidden.has('create_document'), false);
+  assert.equal(forbidden.has('verify_artifact'), false);
+});

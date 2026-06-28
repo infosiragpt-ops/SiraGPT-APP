@@ -9,7 +9,7 @@
  * (rotating copy in passive mode, or explicit SSE stage labels in
  * progress mode) stays on screen as a dimmed chain above the current
  * one, connected by a vertical rail. The current label carries the
- * DotmCircular15 "pensando" SVG — the single thinking glyph used
+ * DotmCircular15 "pensando" SVG — the single neutral thinking glyph used
  * across the whole product.
  *
  * Two modes — chosen automatically based on props:

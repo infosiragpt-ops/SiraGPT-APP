@@ -38,6 +38,13 @@ const LOG_TAIL = 200;
 /** runId -> run state */
 const runs = new Map();
 
+function flagEnabled(value, fallback = false) {
+  const raw = String(value == null ? '' : value).trim().toLowerCase();
+  if (['1', 'true', 'on', 'yes'].includes(raw)) return true;
+  if (['0', 'false', 'off', 'no'].includes(raw)) return false;
+  return fallback;
+}
+
 function enabled() {
   const flag = String(process.env.CODE_HOST_RUNNER || '').toLowerCase();
   if (flag === '1' || flag === 'true' || flag === 'on') return true;
@@ -59,6 +66,23 @@ function startAllowed(user) {
     .filter(Boolean);
   if (ids.length === 0) return true;
   return !!(user && ids.includes(String(user.id)));
+}
+
+function useProxyUrls() {
+  return flagEnabled(process.env.CODE_RUNNER_PROXY_URLS, process.env.NODE_ENV === 'production');
+}
+
+function proxyUrlsEnabled() {
+  return useProxyUrls();
+}
+
+function publicBasePath(runId) {
+  return `/api/code-runner/${encodeURIComponent(safeId(runId))}/proxy/`;
+}
+
+function publicDevUrl(runId, port) {
+  if (useProxyUrls()) return publicBasePath(runId);
+  return `http://localhost:${port}`;
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -223,10 +247,11 @@ function startDev(dir, fw, port, run) {
     args = ['--no-install', 'next', 'dev', '-p', String(port), '-H', '127.0.0.1'];
   } else if (fw.name === 'vite') {
     cmd = 'npx';
+    args = ['--no-install', 'vite', '--host', '127.0.0.1', '--port', String(port), '--strictPort'];
     // --base makes vite emit asset/module URLs under the public reverse-proxy
     // prefix (which includes the run token) so they resolve when the preview
     // iframes /api/code-runner/<id>/<token>/app/.
-    args = ['--no-install', 'vite', '--host', '127.0.0.1', '--port', String(port), '--strictPort', '--base', run.basePath];
+    if (useProxyUrls()) args.push('--base', run.basePath);
   } else {
     cmd = 'npm';
     args = ['run', 'dev'];
@@ -279,12 +304,13 @@ async function pipeline(run) {
   run.phase = 'starting';
   const port = await findFreePort();
   run.port = port;
+  run.internalUrl = `http://127.0.0.1:${port}`;
   // Public, same-origin URL the browser reaches through the Next.js → Express
   // proxy. The real dev server stays private on 127.0.0.1:<port>.
-  run.devUrl = run.basePath;
-  pushLog(run, `dev server en 127.0.0.1:${port} (público: ${run.basePath})`);
+  run.devUrl = useProxyUrls() ? run.basePath : publicDevUrl(run.runId, port);
+  pushLog(run, `dev server en ${run.devUrl}`);
   startDev(run.dir, fw, port, run);
-  await probeReady(port, run.basePath, Date.now() + READY_TIMEOUT_MS, run);
+  await probeReady(port, useProxyUrls() ? run.basePath : '/', Date.now() + READY_TIMEOUT_MS, run);
   if (run.stopped) return;
   run.phase = 'ready';
   pushLog(run, 'listo ✓');
@@ -333,6 +359,7 @@ async function startRun({ runId, userId, files }) {
     framework: null,
     port: null,
     devUrl: '',
+    internalUrl: '',
     logs: [],
     error: null,
     child: null,
@@ -409,6 +436,18 @@ function getPreviewToken(runId) {
   return run ? run.previewToken : null;
 }
 
+function getProxyTarget(runId, userId) {
+  const id = safeId(runId);
+  const run = runs.get(id);
+  if (!run) return { error: 'not_found' };
+  if (userId && run.userId && run.userId !== userId) return { error: 'forbidden' };
+  run.lastTouch = Date.now();
+  if (!run.port || !['starting', 'ready'].includes(run.phase)) {
+    return { error: 'not_ready', phase: run.phase, message: run.error || 'dev server not ready' };
+  }
+  return { port: run.port, phase: run.phase, framework: run.framework };
+}
+
 // Idle reaper — stop dev servers nobody is watching.
 const reaper = setInterval(() => {
   const now = Date.now();
@@ -427,4 +466,17 @@ process.on('exit', () => {
   }
 });
 
-module.exports = { enabled, startAllowed, startRun, stopRun, getStatus, getRunForProxy, getPreviewToken };
+module.exports = {
+  enabled,
+  startAllowed,
+  startRun,
+  stopRun,
+  getStatus,
+  getRunForProxy,
+  getPreviewToken,
+  getProxyTarget,
+  publicBasePath,
+  publicDevUrl,
+  useProxyUrls,
+  proxyUrlsEnabled,
+};

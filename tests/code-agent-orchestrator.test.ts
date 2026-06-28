@@ -37,6 +37,18 @@ test("app build request generates immediately with an autonomous brief", () => {
   }
 })
 
+test("event landing request from /code generates directly without format clarification", () => {
+  const a = nextAgentAction(state(), "Landing one-page para creame una pagina web de eventos", {
+    mode: "app",
+    hasModel: true,
+  })
+  assert.equal(a.type, "generate")
+  if (a.type === "generate") {
+    assert.equal(a.context.goal, "landing")
+    assert.match(a.context.productType || "", /eventos/i)
+  }
+})
+
 test("legacy intake answer now generates instead of asking another question", () => {
   // step 1 already asked productType; user answers it
   const a1 = nextAgentAction(state({ phase: "intake", intakeStep: 1 }), "ropa streetwear", {
@@ -167,6 +179,19 @@ test('"realiza un landing" generates directly (not an intake question)', () => {
 test("promptFromContext builds a landing prompt", () => {
   const p = promptFromContext({ goal: "landing", brand: "Farceque", productType: "ropa", styleAudience: "oscuro" })
   assert.match(p, /Landing one-page de Farceque para ropa estilo oscuro/)
+})
+
+test("promptFromContext builds an app prompt with data entities", () => {
+  const p = promptFromContext({
+    goal: "app",
+    brand: "Inventario Pro",
+    productType: "gestión de inventario",
+    features: "auth, dashboard, reportes",
+    dataEntities: "Producto, Proveedor, Pedido",
+  })
+  assert.match(p, /App web de Inventario Pro para gestión de inventario/)
+  assert.match(p, /con funcionalidades auth, dashboard, reportes/)
+  assert.match(p, /que maneja Producto, Proveedor, Pedido/)
 })
 
 // ---- SRE tier-0 classifier ------------------------------------------------

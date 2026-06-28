@@ -1272,6 +1272,20 @@ async function recoverRecentChatDocumentFiles({ chatId, userId, maxFiles = 4, lo
 const normalizeDuplicateTurnContent = (value) =>
   String(value || '').trim().replace(/\s+/g, ' ');
 
+function stableStringify(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
+}
+
+function parseMessageMetadata(metadata) {
+  if (!metadata) return {};
+  if (typeof metadata === 'string') {
+    try { return JSON.parse(metadata); } catch (_) { return {}; }
+  }
+  return typeof metadata === 'object' ? metadata : {};
+}
+
 function parseMessageFilesValue(files) {
   if (!files) return [];
   if (Array.isArray(files)) return files;
@@ -1413,7 +1427,7 @@ function streamDuplicateTurnReplay(res, duplicateTurn, actualModel = '') {
 // (no assistant row after it) within a short window — i.e. a genuine
 // double-write of the same turn. A message the user legitimately repeats is
 // always preceded by the assistant's reply, so it is never collapsed.
-async function persistUserMessageOnce(chatId, content, filesJson = null, windowMs = 30_000) {
+async function persistUserMessageOnce(chatId, content, filesJson = null, windowMs = 30_000, metadata = null) {
   try {
     const last = await prisma.message.findFirst({
       where: { chatId, deletedAt: null },
@@ -1431,79 +1445,210 @@ async function persistUserMessageOnce(chatId, content, filesJson = null, windowM
   } catch (guardErr) {
     console.warn('[ai/persistUserMessageOnce] guard check failed, creating anyway:', guardErr && guardErr.message);
   }
-  return prisma.message.create({
-    data: { chatId, role: 'USER', content, files: filesJson },
+  const data = { chatId, role: 'USER', content, files: filesJson };
+  if (metadata && typeof metadata === 'object') {
+    data.metadata = metadata;
+  }
+  return prisma.message.create({ data });
+}
+
+function buildGenerateTurnFingerprint({ userId, chatId, prompt, processedFiles }) {
+  return crypto
+    .createHash('sha256')
+    .update(stableStringify({
+      userId: userId || null,
+      chatId: chatId || null,
+      prompt: prompt || '',
+      files: Array.isArray(processedFiles) && processedFiles.length > 0 ? processedFiles : null,
+    }))
+    .digest('hex');
+}
+
+const generateTurnSaveLocks = new Map();
+
+async function withGenerateTurnSaveLock(lockKey, fn) {
+  if (!lockKey) return fn();
+
+  const previous = generateTurnSaveLocks.get(lockKey) || Promise.resolve();
+  let release;
+  const current = new Promise((resolve) => { release = resolve; });
+  generateTurnSaveLocks.set(lockKey, current);
+
+  await previous.catch(() => null);
+  try {
+    return await fn();
+  } finally {
+    release();
+    if (generateTurnSaveLocks.get(lockKey) === current) {
+      generateTurnSaveLocks.delete(lockKey);
+    }
+  }
+}
+
+async function findExistingGenerateTurn({ chatId, idempotencyKey, streamId, fingerprint }) {
+  if (!chatId) return null;
+  const hasExplicitDedupeSignal = Boolean(idempotencyKey || streamId);
+  if (!hasExplicitDedupeSignal) return null;
+
+  const recentMessages = await prisma.message.findMany({
+    where: {
+      chatId,
+      timestamp: { gte: new Date(Date.now() - 10 * 60 * 1000) },
+      deletedAt: null,
+    },
+    orderBy: { timestamp: 'asc' },
+    take: 80,
   });
+
+  const matchingUser = recentMessages.find((message) => {
+    if (message.role !== 'USER') return false;
+    const metadata = parseMessageMetadata(message.metadata);
+    if (idempotencyKey && metadata.idempotencyKey === idempotencyKey) return true;
+    if (streamId && metadata.streamId === streamId) return true;
+    if (fingerprint && metadata.turnFingerprint === fingerprint && (metadata.idempotencyKey || metadata.streamId)) return true;
+    return false;
+  });
+
+  if (!matchingUser) return null;
+
+  const matchingAssistant = recentMessages.find((message) => {
+    if (message.role !== 'ASSISTANT') return false;
+    if (message.timestamp < matchingUser.timestamp) return false;
+    if (!hasPersistedAssistantPayload(message)) return false;
+    const metadata = parseMessageMetadata(message.metadata);
+    if (idempotencyKey && metadata.idempotencyKey === idempotencyKey) return true;
+    if (streamId && metadata.streamId === streamId) return true;
+    if (fingerprint && metadata.turnFingerprint === fingerprint && (metadata.idempotencyKey || metadata.streamId)) return true;
+    return false;
+  });
+
+  return { userMessage: matchingUser, assistantMessage: matchingAssistant || null };
 }
 
 async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false, extraMetadata = null, userPlan = null, reasoningPayload = null, agentRun = null) {
+  const safeExtraMetadata = extraMetadata && typeof extraMetadata === 'object' ? extraMetadata : {};
+  const idempotencyKey = safeExtraMetadata.idempotencyKey || null;
+  const streamId = safeExtraMetadata.streamId || null;
+  const turnFingerprint = buildGenerateTurnFingerprint({ userId, chatId, prompt, processedFiles });
+  const lockKey = chatId ? `ai-generate:${userId || 'anon'}:${chatId}:${idempotencyKey || streamId || turnFingerprint}` : null;
   let assistantMessage = null;
   const normalizedResponseContent = typeof fullResponseContent === 'string'
     ? fullResponseContent
     : (fullResponseContent == null ? '' : String(fullResponseContent));
   const hasAssistantFiles = Array.isArray(assistantFiles) && assistantFiles.length > 0;
-  try {
-    console.log("Background task: Saving to database...", { assistantFiles });
 
-    // Post-response fidelity audit — fires only when files were attached
-    // AND we have a non-empty assistant content. Pure deterministic check
-    // (numbers / dates / entities anchors vs source signals); never
-    // modifies the response and never throws. Logged for observability
-    // so the team can spot fidelity drift over time. Wrapped in its own
-    // try/catch so a fidelity bug can't break the save path.
-    if (Array.isArray(processedFiles) && processedFiles.length > 0 && normalizedResponseContent.trim().length > 0) {
-      try {
-        const audit = documentResponseFidelity.auditChatResponse(normalizedResponseContent, processedFiles);
-        if (audit.total > 0 && (audit.unsupported > 0 || audit.contradicted > 0)) {
-          console.log(`[ai/fidelity] ${audit.summary} chatId=${chatId || 'none'} files=${processedFiles.length}`);
+  return withGenerateTurnSaveLock(lockKey, async () => {
+    let assistantMessage = null;
+    try {
+      console.log("Background task: Saving to database...", { assistantFiles });
+
+      // Post-response fidelity audit — fires only when files were attached
+      // AND we have a non-empty assistant content. Pure deterministic check
+      // (numbers / dates / entities anchors vs source signals); never
+      // modifies the response and never throws. Logged for observability
+      // so the team can spot fidelity drift over time. Wrapped in its own
+      // try/catch so a fidelity bug can't break the save path.
+      if (Array.isArray(processedFiles) && processedFiles.length > 0 && normalizedResponseContent.trim().length > 0) {
+        try {
+          const audit = documentResponseFidelity.auditChatResponse(normalizedResponseContent, processedFiles);
+          if (audit.total > 0 && (audit.unsupported > 0 || audit.contradicted > 0)) {
+            console.log(`[ai/fidelity] ${audit.summary} chatId=${chatId || 'none'} files=${processedFiles.length}`);
+          }
+        } catch (fidelityErr) {
+          console.warn('[ai/fidelity] audit failed (continuing):', fidelityErr?.message || fidelityErr);
         }
-      } catch (fidelityErr) {
-        console.warn('[ai/fidelity] audit failed (continuing):', fidelityErr?.message || fidelityErr);
-      }
-    }
-
-    // ✅ Token calculation with tiktoken
-    const promptTokens = usageService.calculateTextTokens(prompt, model);
-    const responseTokens = usageService.calculateTextTokens(normalizedResponseContent, model);
-    const totalTokens = promptTokens + responseTokens;
-
-    // ✅ Save messages if chatId provided
-    if (chatId) {
-      const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
-      if (!chat) {
-        console.error("Chat not found for background save, skipping.");
-        return { assistantMessage: null };
       }
 
-      if (!regenerate) {
-        if (!Array.isArray(processedFiles) || processedFiles.length === 0) {
-          const duplicateTurn = await findRecentCompletedDuplicateTurn(chatId, prompt, 120_000);
-          if (duplicateTurn) {
-            console.warn('[ai/generate] duplicate completed turn skipped during save', {
-              chatId,
-              userMessageId: duplicateTurn.userMessage.id,
-              assistantMessageId: duplicateTurn.assistantMessage.id,
-            });
-            return { assistantMessage: duplicateTurn.assistantMessage, duplicate: true };
+      // ✅ Token calculation with tiktoken
+      const promptTokens = usageService.calculateTextTokens(prompt, model);
+      const responseTokens = usageService.calculateTextTokens(normalizedResponseContent, model);
+      const totalTokens = promptTokens + responseTokens;
+
+      // ✅ Save messages if chatId provided
+      if (chatId) {
+        const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
+        if (!chat) {
+          console.error("Chat not found for background save, skipping.");
+          return { assistantMessage: null };
+        }
+
+        if (!regenerate) {
+          if (!Array.isArray(processedFiles) || processedFiles.length === 0) {
+            const duplicateTurn = await findRecentCompletedDuplicateTurn(chatId, prompt, 120_000);
+            if (duplicateTurn) {
+              console.warn('[ai/generate] duplicate completed turn skipped during save', {
+                chatId,
+                userMessageId: duplicateTurn.userMessage.id,
+                assistantMessageId: duplicateTurn.assistantMessage.id,
+              });
+              return { assistantMessage: duplicateTurn.assistantMessage, duplicate: true };
+            }
           }
         }
-        await persistUserMessageOnce(
-          chatId,
-          prompt,
-          processedFiles.length > 0 ? JSON.stringify(processedFiles) : null,
-        );
-      }
 
-      const metadataPayload = extraMetadata && typeof extraMetadata === 'object' && Object.keys(extraMetadata).length > 0
-        ? JSON.stringify(extraMetadata)
-        : null;
-      if (!normalizedResponseContent.trim() && !hasAssistantFiles) {
-        console.warn('[ai/generate] skipped empty assistant message save', {
+        const existingTurn = await findExistingGenerateTurn({
           chatId,
-          streamId: extraMetadata?.streamId || null,
-          idempotencyKey: extraMetadata?.idempotencyKey || null,
+          idempotencyKey,
+          streamId,
+          fingerprint: turnFingerprint,
         });
-        return { assistantMessage: null, skippedEmptyAssistant: true };
+        if (existingTurn?.assistantMessage) {
+          console.info('[ai/generate] duplicate turn save skipped', {
+            chatId,
+            idempotencyKey: idempotencyKey || null,
+            streamId: streamId || null,
+          });
+          return { assistantMessage: existingTurn.assistantMessage, duplicate: true };
+        }
+
+        const turnMetadata = {
+          ...safeExtraMetadata,
+          idempotencyKey: idempotencyKey || streamId || turnFingerprint,
+          streamId: streamId || null,
+          turnFingerprint,
+        };
+
+        if (!regenerate && !existingTurn?.userMessage) {
+          await persistUserMessageOnce(
+            chatId,
+            prompt,
+            processedFiles.length > 0 ? JSON.stringify(processedFiles) : null,
+            30_000,
+            turnMetadata,
+          );
+        }
+
+        const metadataPayload = Object.keys(turnMetadata).length > 0
+          ? JSON.stringify(turnMetadata)
+          : null;
+        if (!normalizedResponseContent.trim() && !hasAssistantFiles) {
+          console.warn('[ai/generate] skipped empty assistant message save', {
+            chatId,
+            idempotencyKey: idempotencyKey || null,
+            streamId: streamId || null,
+          });
+          return { assistantMessage: null, skippedEmptyAssistant: true };
+        }
+        assistantMessage = await prisma.message.create({
+          data: {
+            chatId,
+            role: 'ASSISTANT',
+            content: normalizedResponseContent,
+            tokens,
+            files: assistantFiles.length > 0 ? JSON.stringify(assistantFiles) : null,
+            metadata: metadataPayload,
+          }
+        });
+
+        await prisma.chat.update({
+          where: { id: chatId },
+          data: {
+            updatedAt: new Date(),
+            title: chat.title === 'New Chat'
+              ? prompt.slice(0, 50) + (prompt.length > 50 ? '...' : '')
+              : chat.title
+          }
+        });
       }
       assistantMessage = await prisma.message.create({
         data: {
@@ -1551,39 +1696,31 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
           console.warn('[ai/generate] agent run persist failed:', agentPersistErr && agentPersistErr.message);
         }
       }
+
+      // ✅ Track usage
+      // FREE plan meters TEXT-only generations (3/day). When this turn
+      // carried a document/image attachment we skip the counted usage
+      // write so it doesn't consume the text budget — countFreeDailyCalls
+      // counts ApiUsage rows, so not writing one keeps the attachment turn
+      // exempt. The Message rows above still persist the turn; FREE billing
+      // uses the daily gate, not the apiUsage token counter, so skipping
+      // the increment here is harmless. Paid plans always record (they meter
+      // by tokens), and so do anonymous-but-tracked turns.
+      const isFreeAttachmentTurn = userPlan === 'FREE'
+        && Array.isArray(processedFiles)
+        && processedFiles.length > 0;
+      if (isFreeAttachmentTurn) {
+        console.log('[ai/quota] FREE attachment turn — exempt from the daily text cap (usage not counted)');
+      } else {
+        await usageService.recordUsage(userId, model, totalTokens, totalTokens * 0.001);
+      }
+
+      console.log("Background task: Database save complete.");
+    } catch (dbError) {
+      console.error("Error in background database save:", dbError);
     }
-
-    // ✅ Track usage
-    // await prisma.apiUsage.create({
-    //   data: { userId, model, tokens, cost: tokens * 0.001 }
-    // });
-
-    // await prisma.user.update({
-    //   where: { id: userId },
-    //   data: { apiUsage: { increment: tokens } }
-    // });
-    // FREE plan meters TEXT-only generations (3/day). When this turn
-    // carried a document/image attachment we skip the counted usage
-    // write so it doesn't consume the text budget — countFreeDailyCalls
-    // counts ApiUsage rows, so not writing one keeps the attachment turn
-    // exempt. The Message rows above still persist the turn; FREE billing
-    // uses the daily gate, not the apiUsage token counter, so skipping
-    // the increment here is harmless. Paid plans always record (they meter
-    // by tokens), and so do anonymous-but-tracked turns.
-    const isFreeAttachmentTurn = userPlan === 'FREE'
-      && Array.isArray(processedFiles)
-      && processedFiles.length > 0;
-    if (isFreeAttachmentTurn) {
-      console.log('[ai/quota] FREE attachment turn — exempt from the daily text cap (usage not counted)');
-    } else {
-      await usageService.recordUsage(userId, model, totalTokens, totalTokens * 0.001);
-    }
-
-    console.log("Background task: Database save complete.");
-  } catch (dbError) {
-    console.error("Error in background database save:", dbError);
-  }
-  return { assistantMessage };
+    return { assistantMessage };
+  });
 }
 
 const streamControllers = new Map();
@@ -1599,6 +1736,7 @@ router.post(
     // Composer effort picker (Bajo/Medio/Extra/Max → low/medium/high/max).
     // Optional; when present it overrides the auto-decided reasoning depth.
     body('reasoningEffort').optional().isString().isLength({ max: 16 }),
+    body('idempotencyKey').optional().isString().isLength({ min: 1, max: 200 }),
   ],
   authenticateToken,
   requireScope('ai:generate'),
@@ -1657,7 +1795,7 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      let { model, prompt, chatId, files, provider, regenerate, webSearchMode, regenerationAttempt } = req.body;
+      let { model, prompt, chatId, files, provider, regenerate, webSearchMode, regenerationAttempt, idempotencyKey } = req.body;
       const isAuth = !!req.user;
       const userId = isAuth ? req.user.id : null;
       const canPersist = isAuth && !!chatId;
@@ -6145,6 +6283,8 @@ router.post(
           ...(__reasoningSink && __reasoningSink.durationMs
             ? { reasoningDurationMs: __reasoningSink.durationMs }
             : {}),
+          ...(idempotencyKey ? { idempotencyKey } : {}),
+          ...(streamId ? { streamId } : {}),
         };
         const savedChat = await saveChatAndTrackUsage(
           userId,
