@@ -137,7 +137,7 @@ export const WORKSPACE_TOOLS: Record<WorkspaceToolId, WorkspaceTool> = {
     keywords: "code search buscar codigo archivos contenido grep",
     icon: Search,
     status: "ready",
-    behavior: "action",
+    behavior: "screen",
   },
   publishing: {
     id: "publishing",

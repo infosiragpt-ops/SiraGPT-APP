@@ -60,7 +60,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import { useCodeWorkspace } from "@/lib/code-workspace-context"
-import type { WorkspaceToolId } from "@/lib/code-workspace-tools"
+import { ALL_TOOLS, type WorkspaceToolId } from "@/lib/code-workspace-tools"
 import {
   detectDotenvSecrets,
   detectEnvKeyHints,
@@ -180,6 +180,33 @@ const SKILL_ROWS = [
   { id: "debugger", label: "Debugger", detail: "Lee consola, errores y propone fixes" },
   { id: "reviewer", label: "Reviewer", detail: "Revisa seguridad, UX y regresiones" },
 ]
+
+const TOOL_RUNTIME_NOTES: Record<WorkspaceToolId, string> = {
+  agent: "Enfoca el chat del agente y conserva el contexto del workspace.",
+  preview: "Renderiza la app actual y puede arrancar proyectos con dev server.",
+  shell: "Terminal integrada con comandos sobre los archivos del workspace.",
+  console: "Historial de ejecuciones, logs y envio de errores al agente.",
+  files: "Explorador de archivos con busqueda, apertura y eliminacion.",
+  "new-file": "Crea archivos nuevos desde el launcher o el menu.",
+  "code-search": "Busca texto y rutas dentro del contenido del workspace.",
+  publishing: "Abre Deployments reales del proyecto, con fallback local.",
+  integrations: "Gestiona conectores nativos, APIs y servicios del agente.",
+  database: "Tablas locales, SQL basico y preview de datos estructurados.",
+  storage: "Carga assets, enlaza carpeta local y mantiene lista de objetos.",
+  auth: "Configura proveedores y reglas basicas de sesion.",
+  security: "Escanea secretos, APIs peligrosas y permite pedir fix al agente.",
+  secrets: "Gestiona variables de entorno, .env y envio seguro a deploy.",
+  skills: "Activa habilidades del agente por workspace.",
+  analytics: "Resume archivos, despliegues y actividad local.",
+  automations: "Activa reglas recurrentes para revision y despliegue.",
+  canvas: "Lienzo textual persistente para flujos y pantallas.",
+  settings: "Preferencias de editor, preview y densidad.",
+  validation: "Checks locales sobre entrada, package.json, tamano y archivos.",
+  developer: "Diagnostico tecnico y eventos internos del workspace.",
+  git: "Panel GitHub real para cargar, comparar y versionar archivos.",
+  vnc: "Viewer remoto por URL segura o noVNC.",
+  workflows: "Comandos reutilizables conectados a Console y Preview.",
+}
 
 function makeId(prefix: string) {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return `${prefix}-${crypto.randomUUID()}`
@@ -2171,6 +2198,27 @@ function DeveloperTool() {
           <div className="flex flex-wrap gap-2">
             <Button size="sm" variant="outline" className="h-8" onClick={() => window.dispatchEvent(new CustomEvent("siragpt:code-open-preview"))}>Abrir preview</Button>
             <Button size="sm" variant="outline" className="h-8" onClick={() => window.dispatchEvent(new CustomEvent("siragpt:code-composer-mode"))}>Composer</Button>
+          </div>
+        </PanelCard>
+        <PanelCard title="Tool coverage" detail={`${ALL_TOOLS.length} herramientas listas`} icon={<ListChecks className="h-4 w-4" />}>
+          <div className="max-h-80 overflow-auto rounded-md border border-border/60">
+            {ALL_TOOLS.map((tool) => {
+              const Icon = tool.icon
+              return (
+                <div key={tool.id} className="flex items-center gap-3 border-b border-border/50 px-3 py-2 last:border-b-0">
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted/45 text-muted-foreground">
+                    <Icon className="h-3.5 w-3.5" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-[12px] font-medium text-foreground">{tool.label}</p>
+                    <p className="truncate text-[11px] text-muted-foreground">{TOOL_RUNTIME_NOTES[tool.id]}</p>
+                  </div>
+                  <span className="rounded-md border border-border/60 bg-muted/30 px-2 py-1 text-[10px] text-muted-foreground">
+                    {tool.behavior === "screen" ? "Panel" : "Accion"}
+                  </span>
+                </div>
+              )
+            })}
           </div>
         </PanelCard>
       </PanelGrid>
