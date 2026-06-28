@@ -11,6 +11,7 @@
 - [SiraGPT deployment architecture](siragpt-deployment.md) — executeSql hits local DB not backend DB; use node -e with backend Prisma client for real data
 - [Dev workflow package setup](dev-workflow-packages.md) — root node_modules is empty by default; run `pnpm install` (5s with cache) before restarting workflow
 - [OAuth callback URL policy](oauth-callback-fix.md) — GOOGLE_AUTH_BASE_URL=siragpt.com in shared env; per-flow secrets aligned to siragpt.com; cross-host guard removed so stale URIs rejected unconditionally
+- [Privileged /api via rewrite not Next route](next-api-route-vs-rewrite.md) — afterFiles /api rewrite is OVERRIDDEN by any local app/api/*/route.ts; privileged endpoints must fall through to Express, or auth bypass + fingerprint-mismatch admin lockout.
 - [Console.log printf override](console-log-override.md) — backend/index.js overrides console.log joining args with space; always use template literals not %s format strings
 - [Next.js dynamic ssr:false in Server Components](nextjs-dynamic-ssr-crash.md) — ssr:false is forbidden inside Server Components; move the dynamic() call into a "use client" wrapper file.
 - [Per-model token caps](per-model-token-caps.md) — resolveMaxTokens() replaces blanket 4096 default; MODEL_TOKEN_CAPS registry in llm-gateway.js; SIRAGPT_LLM_MAX_TOKENS env var still works as override.
