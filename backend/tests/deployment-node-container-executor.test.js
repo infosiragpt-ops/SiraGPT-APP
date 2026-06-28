@@ -127,6 +127,15 @@ test('container deploy: own DATABASE_URL skips provisioning (external)', async (
   assert.equal(sshHas(calls, /psql/), false, 'no psql provisioning');
 });
 
+test('container deploy: a localhost DATABASE_URL is ignored → auto-provisions', async () => {
+  for (const url of ['postgres://u:p@localhost:5432/db', 'postgres://u:p@127.0.0.1:5432/db']) {
+    const { args, calls } = run({ buildEnv: { DATABASE_URL: url } });
+    const res = await deployNodeContainer(args);
+    assert.equal(res.databaseProvider, 'sira-postgres', `${url} should auto-provision`);
+    assert.ok(sshHas(calls, /docker exec -i -e PGPASSWORD siragpt-db psql/), 'provisions instead of using localhost');
+  }
+});
+
 test('container deploy: secrets never leak into the log buffer', async () => {
   const { args, logs } = run({ buildEnv: { API_KEY: 'sk-supersecret' } });
   const res = await deployNodeContainer(args);

@@ -957,11 +957,31 @@ function DomainsTab({
   )
 }
 
+/** Parse pasted .env text into key/value pairs (handles `export`, #comments, quotes). */
+function parseDotenv(text: string): Array<{ k: string; v: string }> {
+  const out: Array<{ k: string; v: string }> = []
+  for (const raw of String(text).split(/\r?\n/)) {
+    let line = raw.trim()
+    if (!line || line.startsWith("#")) continue
+    if (line.startsWith("export ")) line = line.slice(7).trim()
+    const eq = line.indexOf("=")
+    if (eq < 1) continue
+    const k = line.slice(0, eq).trim()
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) continue
+    let v = line.slice(eq + 1).trim()
+    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1)
+    out.push({ k, v })
+  }
+  return out
+}
+
 function SecretsSection({ connectionId }: { connectionId: string }) {
   const [keys, setKeys] = React.useState<string[]>([])
   const [pairs, setPairs] = React.useState<Array<{ k: string; v: string }>>([])
   const [saving, setSaving] = React.useState(false)
   const [open, setOpen] = React.useState(false)
+  const [bulk, setBulk] = React.useState("")
+  const [showBulk, setShowBulk] = React.useState(false)
 
   React.useEffect(() => {
     hostingService
@@ -969,6 +989,21 @@ function SecretsSection({ connectionId }: { connectionId: string }) {
       .then(({ keys: k }) => setKeys(k))
       .catch(() => {})
   }, [connectionId])
+
+  const importEnv = () => {
+    const parsed = parseDotenv(bulk)
+    if (parsed.length === 0) return toast.error("No se encontró ningún KEY=VALUE")
+    // Merge into pairs, parsed wins on duplicate keys.
+    setPairs((prev) => {
+      const map = new Map<string, string>()
+      for (const { k, v } of prev) if (k.trim()) map.set(k.trim(), v)
+      for (const { k, v } of parsed) map.set(k, v)
+      return Array.from(map, ([k, v]) => ({ k, v }))
+    })
+    setBulk("")
+    setShowBulk(false)
+    toast.success(`${parsed.length} variable(s) importadas — revisa y pulsa Guardar`)
+  }
 
   const addPair = () => setPairs((p) => [...p, { k: "", v: "" }])
   const save = async () => {
@@ -1001,8 +1036,45 @@ function SecretsSection({ connectionId }: { connectionId: string }) {
               <span className="ml-1">(los valores no se muestran)</span>
             </div>
           )}
+
+          {/* Bulk .env paste — paste a whole .env and auto-split into secrets */}
+          <div className="rounded-md border border-dashed border-border p-2">
+            <button
+              className="flex w-full items-center justify-between text-xs font-medium text-violet-600 hover:text-violet-700"
+              onClick={() => setShowBulk((s) => !s)}
+            >
+              <span className="inline-flex items-center gap-1.5">
+                <Sparkles className="h-3.5 w-3.5" /> Pegar .env (importar en bloque)
+              </span>
+              <span className="text-muted-foreground">{showBulk ? "ocultar" : "abrir"}</span>
+            </button>
+            {showBulk && (
+              <div className="mt-2 space-y-2">
+                <textarea
+                  value={bulk}
+                  onChange={(e) => setBulk(e.target.value)}
+                  rows={6}
+                  spellCheck={false}
+                  placeholder={"# Pega aquí el contenido de tu .env\nDATABASE_URL=postgres://...\nGOOGLE_CLIENT_ID=...\nGOOGLE_CLIENT_SECRET=...\nENCRYPTION_KEY=..."}
+                  className="w-full rounded-md border border-input bg-background px-2 py-1.5 font-mono text-xs"
+                />
+                <div className="flex items-center gap-2">
+                  <Button size="sm" onClick={importEnv} disabled={!bulk.trim()}>
+                    Importar variables
+                  </Button>
+                  <span className="text-xs text-muted-foreground">
+                    Lee cada <code className="rounded bg-muted px-1">KEY=VALUE</code> (ignora comentarios). Revisa abajo y pulsa Guardar.
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {pairs.length > 0 && (
+            <div className="text-xs text-muted-foreground">{pairs.length} variable(s) a guardar:</div>
+          )}
           {pairs.map((p, i) => (
-            <div key={i} className="flex gap-2">
+            <div key={i} className="flex items-center gap-2">
               <Input
                 value={p.k}
                 onChange={(e) => setPairs((arr) => arr.map((x, j) => (j === i ? { ...x, k: e.target.value } : x)))}
@@ -1016,6 +1088,13 @@ function SecretsSection({ connectionId }: { connectionId: string }) {
                 className="h-8 text-sm"
                 type="password"
               />
+              <button
+                className="shrink-0 text-muted-foreground hover:text-red-500"
+                onClick={() => setPairs((arr) => arr.filter((_, j) => j !== i))}
+                title="Quitar"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
             </div>
           ))}
           <div className="flex gap-2">

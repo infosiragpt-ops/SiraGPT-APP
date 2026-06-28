@@ -164,6 +164,12 @@ async function deployNodeContainer({ d, conn, localPath, buildEnv, slug, hostnam
   let databaseUrl = String(buildEnv.DATABASE_URL || '').trim();
   let databaseProvider = 'external';
   let provisioned = false;
+  // A localhost/127.0.0.1 DATABASE_URL (commonly pasted from a local .env) can
+  // NEVER work inside the container — ignore it and auto-provision instead.
+  if (databaseUrl && /@(localhost|127\.0\.0\.1)([:/]|$)/i.test(databaseUrl)) {
+    push('[db] DATABASE_URL apunta a localhost — no sirve dentro del contenedor; se ignora y se provisiona una dedicada');
+    databaseUrl = '';
+  }
   if (databaseUrl) {
     push('[db] usando DATABASE_URL provisto en los secretos (sin provisión)');
   } else {
@@ -213,7 +219,13 @@ async function deployNodeContainer({ d, conn, localPath, buildEnv, slug, hostnam
 
   // Env used both at BUILD time (.env.production so Next.js bakes NEXT_PUBLIC_*)
   // and at RUN time (.deploy.env, which overrides server-side vars).
-  const containerEnv = { NODE_ENV: 'production', ...buildEnv, DATABASE_URL: databaseUrl, PORT: String(port) };
+  // Our resolved DB URL wins over anything pasted in secrets (incl. a stale
+  // localhost PRISMA_DATABASE_URL the app might also read).
+  const containerEnv = { NODE_ENV: 'production', ...buildEnv, PORT: String(port) };
+  if (databaseUrl) {
+    containerEnv.DATABASE_URL = databaseUrl;
+    containerEnv.PRISMA_DATABASE_URL = databaseUrl;
+  }
   const envFileB64 = b64(buildEnvFile(containerEnv));
 
   // ── 3. Build image (generate Dockerfile if the repo lacks one) ────

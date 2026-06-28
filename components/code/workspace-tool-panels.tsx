@@ -59,6 +59,26 @@ import type { WorkspaceToolId } from "@/lib/code-workspace-tools"
 import { RealGitPanel } from "@/components/code/git-tool-real"
 import { WorkspaceDeploymentsTool } from "@/components/deployments/workspace-deployments-tool"
 import { RealPublishingPanel } from "@/components/code/publishing-tool-real"
+import { hostingService } from "@/lib/hosting-service"
+import { getGitBinding } from "@/lib/code-git-mirror"
+
+/** Parse pasted .env text into {key,value} (handles `export`, #comments, quotes). */
+function parseDotenvText(text: string): Array<{ key: string; value: string }> {
+  const out: Array<{ key: string; value: string }> = []
+  for (const raw of String(text).split(/\r?\n/)) {
+    let line = raw.trim()
+    if (!line || line.startsWith("#")) continue
+    if (line.startsWith("export ")) line = line.slice(7).trim()
+    const eq = line.indexOf("=")
+    if (eq < 1) continue
+    const key = line.slice(0, eq).trim()
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue
+    let value = line.slice(eq + 1).trim()
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1)
+    out.push({ key, value })
+  }
+  return out
+}
 
 type Deployment = {
   id: string
@@ -690,6 +710,8 @@ function ResourceMeter({
 }
 
 function SecretsTool() {
+  const { activeFolder } = useCodeWorkspace()
+  const connectionId = activeFolder?.id ? getGitBinding(activeFolder.id) : null
   const [secrets, setSecrets] = useWorkspacePersistedState<SecretEntry[]>("secrets", [])
   const [keyName, setKeyName] = React.useState("")
   const [value, setValue] = React.useState("")
@@ -698,6 +720,32 @@ function SecretsTool() {
   const [editingId, setEditingId] = React.useState<string | null>(null)
   const [editingValue, setEditingValue] = React.useState("")
   const [revealed, setRevealed] = React.useState<Set<string>>(new Set())
+  const [bulk, setBulk] = React.useState("")
+  const [deployKeys, setDeployKeys] = React.useState<string[]>([])
+  const [savingDeploy, setSavingDeploy] = React.useState(false)
+
+  // Show which secrets already reach the deploy (deploy_envs — keys only).
+  React.useEffect(() => {
+    if (!connectionId) return setDeployKeys([])
+    hostingService.getEnv(connectionId).then(({ keys }) => setDeployKeys(keys)).catch(() => setDeployKeys([]))
+  }, [connectionId])
+
+  const importEnv = () => {
+    const parsed = parseDotenvText(bulk)
+    if (parsed.length === 0) return toast.error("No se encontró ningún KEY=VALUE")
+    setSecrets((prev) => {
+      const next = [...prev]
+      for (const { key, value: v } of parsed) {
+        const k = key.toUpperCase()
+        const idx = next.findIndex((row) => row.key === k && row.scope === "app")
+        if (idx >= 0) next[idx] = { ...next[idx], value: v, updatedAt: Date.now() }
+        else next.unshift({ id: makeId("secret"), key: k, value: v, scope: "app", linked: false, updatedAt: Date.now() })
+      }
+      return next
+    })
+    setBulk("")
+    toast.success(`${parsed.length} variable(s) importadas`)
+  }
 
   const addSecret = () => {
     const key = keyName.trim().replace(/\s+/g, "_").toUpperCase()
@@ -726,6 +774,25 @@ function SecretsTool() {
   ]
   const envText = envRows.map((row) => `${row.key}=${JSON.stringify(row.value)}`).join("\n")
   const jsonText = JSON.stringify(Object.fromEntries(envRows.map((row) => [row.key, row.value])), null, 2)
+
+  // Only the user's real secrets (NOT the predefined REPLIT_*/mock DATABASE_URL)
+  // are pushed to the deploy, so the auto-provisioned DATABASE_URL isn't clobbered.
+  const deployRows = [...appSecrets, ...accountSecrets.filter((row) => row.linked !== false)]
+  const saveToDeploy = async () => {
+    if (!connectionId) return toast.error("Conecta un repo en la pestaña Git primero — los secrets se guardan por proyecto")
+    const env: Record<string, string> = {}
+    for (const row of deployRows) env[row.key] = row.value
+    setSavingDeploy(true)
+    try {
+      const { keys } = await hostingService.setEnv(connectionId, env)
+      setDeployKeys(keys)
+      toast.success(`${keys.length} secret(s) guardados para el deploy`)
+    } catch (e) {
+      toast.error((e as Error).message || "No se pudieron guardar para el deploy")
+    } finally {
+      setSavingDeploy(false)
+    }
+  }
 
   return (
     <ToolShell
@@ -810,8 +877,34 @@ function SecretsTool() {
             />
           </PanelCard>
         ) : (
-          <PanelCard title="Export" detail="Variables efectivas: predefinidas, app secrets y account secrets enlazados" icon={<FileJson className="h-4 w-4" />}>
+          <PanelCard title="Export · Deploy" detail="Pega tu .env, importa todo, y guárdalo para que el deploy lo inyecte en el contenedor" icon={<FileJson className="h-4 w-4" />}>
             <div className="grid gap-3">
+              {/* Pegar .env → importar en bloque */}
+              <div className="rounded-md border border-dashed border-border p-2.5">
+                <p className="mb-2 text-[12px] font-medium">Pegar .env (importar en bloque)</p>
+                <textarea
+                  value={bulk}
+                  onChange={(e) => setBulk(e.target.value)}
+                  rows={5}
+                  spellCheck={false}
+                  placeholder={"# Pega tu .env aquí\nGOOGLE_CLIENT_ID=...\nGOOGLE_CLIENT_SECRET=...\nENCRYPTION_KEY=...\nJWT_SECRET=..."}
+                  className="w-full rounded-md border border-input bg-background px-2 py-1.5 font-mono text-[11px]"
+                />
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <Button size="sm" className="h-7" onClick={importEnv} disabled={!bulk.trim()}>
+                    Importar a App Secrets
+                  </Button>
+                  <Button size="sm" variant="outline" className="h-7 gap-1.5" onClick={saveToDeploy} disabled={savingDeploy || deployRows.length === 0}>
+                    <Lock className="h-3 w-3" />
+                    {savingDeploy ? "Guardando…" : "Guardar para el deploy"}
+                  </Button>
+                </div>
+                <p className="mt-1.5 text-[11px] text-muted-foreground">
+                  {connectionId
+                    ? <>Deploy actual: <b>{deployKeys.length}</b> secret(s) guardados. (Se inyectan en el contenedor al publicar.)</>
+                    : <>Conecta un repo en <b>Git</b> para guardar secrets del deploy.</>}
+                </p>
+              </div>
               <div>
                 <div className="mb-2 flex items-center justify-between">
                   <p className="text-[12px] font-medium">.env</p>
