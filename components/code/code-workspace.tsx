@@ -556,6 +556,14 @@ export function CodeWorkspace() {
         onToggleTerminal={toggleTerminal}
         chatOpen={chatOpen}
         onToggleChat={toggleChat}
+        previewActive={!activeTool && !codeHubOpen}
+        onShowPreview={() => {
+          setActiveTool(null)
+          setCodeHubOpen(false)
+          setPreviewOpen(true)
+          setActivePanel("preview")
+          setOpenPanels((prev) => new Set(prev).add("preview"))
+        }}
       />
 
       <PublishingConsole open={publishingOpen} onOpenChange={setPublishingOpen} />
