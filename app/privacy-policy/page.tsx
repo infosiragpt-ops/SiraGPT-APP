@@ -1,6 +1,6 @@
 "use client"
 
-import React from "react";
+import React, { useEffect } from "react";
 import { motion } from "framer-motion";
 import Link from "next/link";
 import {
@@ -430,6 +430,29 @@ function BulletList({ items }: { items: React.ReactNode[] }) {
 }
 
 const PrivacyPolicyPage = () => {
+  useEffect(() => {
+    const htmlEl = document.documentElement;
+    const bodyEl = document.body;
+
+    htmlEl.style.overflow = "auto";
+    htmlEl.style.height = "auto";
+    htmlEl.style.overscrollBehavior = "auto";
+
+    bodyEl.style.overflow = "auto";
+    bodyEl.style.height = "auto";
+    bodyEl.style.overscrollBehavior = "auto";
+
+    return () => {
+      htmlEl.style.overflow = "";
+      htmlEl.style.height = "";
+      htmlEl.style.overscrollBehavior = "";
+
+      bodyEl.style.overflow = "";
+      bodyEl.style.height = "";
+      bodyEl.style.overscrollBehavior = "";
+    };
+  }, []);
+
   return (
     <div className="min-h-screen bg-[#070707] text-white">
       <div aria-hidden className="h-1 w-full bg-[#FF0000]" />
