@@ -92,6 +92,7 @@ export function DotmCircular15({
       {...rest}
       size={rest.size ?? 36}
       dotSize={rest.dotSize ?? 5}
+      color={rest.color ?? THINKING_GLYPH_COLOR}
       speed={speed}
       pattern="full"
       animated={animated}
