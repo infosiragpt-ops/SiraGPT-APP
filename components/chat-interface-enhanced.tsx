@@ -467,14 +467,14 @@ type MusicStyle = "Auto" | "Cinematic" | "Pop" | "Electronic" | "Ambient" | "Orc
 type MusicMood = "Balanced" | "Energetic" | "Emotional" | "Dark" | "Happy" | "Epic" | "Relaxed"
 type MusicEffect = "None" | "Studio Master" | "Spatial" | "Warm Tape" | "Radio Ready" | "Lo-Fi"
 
-const IMAGE_ASPECT_RATIO_OPTIONS: Array<{ value: ImageAspectRatio; label: string; ratio: string; className: string }> = [
-  { value: "1:1", label: "Square", ratio: "1:1", className: "h-7 w-7" },
-  { value: "2:3", label: "Portrait", ratio: "2:3", className: "h-8 w-[22px]" },
-  { value: "3:2", label: "Landscape", ratio: "3:2", className: "h-[22px] w-8" },
-  { value: "3:4", label: "Portrait", ratio: "3:4", className: "h-8 w-6" },
+const IMAGE_ASPECT_RATIO_OPTIONS: Array<{ value: ImageAspectRatio; label: string; ratio: string; className: string; visibleByDefault?: boolean }> = [
+  { value: "1:1", label: "Square", ratio: "1:1", className: "h-7 w-7", visibleByDefault: true },
+  { value: "2:3", label: "Portrait", ratio: "2:3", className: "h-8 w-[22px]", visibleByDefault: true },
+  { value: "3:2", label: "Landscape", ratio: "3:2", className: "h-[22px] w-8", visibleByDefault: true },
+  { value: "3:4", label: "Portrait", ratio: "3:4", className: "h-8 w-6", visibleByDefault: true },
   { value: "4:3", label: "Classic", ratio: "4:3", className: "h-6 w-8" },
   { value: "9:16", label: "Story", ratio: "9:16", className: "h-8 w-[18px]" },
-  { value: "16:9", label: "Wide", ratio: "16:9", className: "h-[18px] w-9" },
+  { value: "16:9", label: "Wide", ratio: "16:9", className: "h-[18px] w-9", visibleByDefault: true },
 ]
 
 const IMAGE_QUALITY_OPTIONS: ImageQuality[] = ["512px", "1K", "2K", "4K"]
@@ -2310,6 +2310,7 @@ const ActiveToolsDisplay = ({
   handleWordConnectorToggle: () => void;
   handleExcelConnectorToggle: () => void;
 }) => {
+  const [showAllImageRatios, setShowAllImageRatios] = React.useState(false);
   const [showAllVideoRatios, setShowAllVideoRatios] = React.useState(false);
   const [showAllVideoDurations, setShowAllVideoDurations] = React.useState(false);
   const activeComputerUseMode = computerUseAppMode || "computer";
@@ -2341,6 +2342,11 @@ const ActiveToolsDisplay = ({
   const hasConnectors = activeConnectors.length > 0;
   const hasOtherTools = isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive || isWebSearchActive;
   const hasThesis = chatType === 'thesis';
+  const visibleImageAspectRatioOptions = React.useMemo(
+    () => IMAGE_ASPECT_RATIO_OPTIONS.filter(option => showAllImageRatios || option.visibleByDefault || option.value === selectedImageAspectRatio),
+    [selectedImageAspectRatio, showAllImageRatios]
+  );
+  const hiddenImageAspectRatioCount = IMAGE_ASPECT_RATIO_OPTIONS.filter(option => !option.visibleByDefault).length;
 
   const handleCloseAllConnectors = () => {
     setIsGmailActive(false);
@@ -2760,16 +2766,16 @@ const ActiveToolsDisplay = ({
               align="start"
               sideOffset={9}
               collisionPadding={12}
-              className="w-[min(calc(100vw-1.25rem),24rem)] overflow-hidden rounded-[22px] border border-zinc-200/65 bg-white/86 p-0 text-zinc-950 shadow-[0_22px_70px_-36px_rgba(15,23,42,0.55),inset_0_1px_0_rgba(255,255,255,0.85)] backdrop-blur-2xl dark:border-white/14 dark:bg-zinc-950/72 dark:text-white dark:shadow-[0_24px_80px_-36px_rgba(0,0,0,0.95),inset_0_1px_0_rgba(255,255,255,0.16)]"
+              className="image-settings-menu w-[min(calc(100vw-1.25rem),26rem)]"
             >
-              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_24%_18%,rgba(255,255,255,0.92),transparent_30%),radial-gradient(circle_at_72%_45%,rgba(15,23,42,0.08),transparent_34%),linear-gradient(135deg,rgba(255,255,255,0.72),rgba(255,255,255,0.26)_44%,rgba(255,255,255,0.58))] dark:bg-[radial-gradient(circle_at_24%_18%,rgba(255,255,255,0.15),transparent_30%),radial-gradient(circle_at_72%_45%,rgba(255,255,255,0.08),transparent_34%),linear-gradient(135deg,rgba(255,255,255,0.10),rgba(255,255,255,0.02)_44%,rgba(255,255,255,0.06))]" />
-              <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-white/70 dark:bg-white/20" />
-              <div className="relative z-10">
-                <section className="px-4 pb-4 pt-4 sm:px-5 sm:pb-5 sm:pt-5">
-                  <h3 className="text-[17px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Aspect Ratio</h3>
-                  <div className="mt-4 grid grid-cols-5 gap-1.5 sm:gap-2" role="radiogroup" aria-label="Aspect ratio">
-                  {IMAGE_ASPECT_RATIO_OPTIONS.map(option => {
-                    if (option.value === "4:3" || option.value === "9:16") return null;
+              <div>
+                <section className="image-settings-section">
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="image-settings-label">Aspect Ratio</h3>
+                    <span className="image-settings-meta">{showAllImageRatios ? "7 formatos" : "Principales"}</span>
+                  </div>
+                  <div className="mt-3 grid grid-cols-4 gap-1.5 sm:grid-cols-5 sm:gap-2" role="radiogroup" aria-label="Aspect ratio">
+                  {visibleImageAspectRatioOptions.map(option => {
                     const selected = option.value === selectedImageAspectRatio;
                     return (
                       <button
@@ -2778,43 +2784,41 @@ const ActiveToolsDisplay = ({
                         role="radio"
                         aria-checked={selected}
                         className={cn(
-                          "group/ratio-option relative flex h-[58px] min-w-0 flex-col items-center justify-center gap-2 overflow-hidden rounded-xl text-center transition-all duration-200",
-                          selected
-                            ? "bg-zinc-950/[0.075] text-zinc-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.80),0_12px_26px_-22px_rgba(15,23,42,0.55)] dark:bg-white/12 dark:text-white dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.16),0_16px_34px_-24px_rgba(255,255,255,0.35)]"
-                            : "text-zinc-600 hover:bg-zinc-950/[0.045] hover:text-zinc-950 dark:text-white/68 dark:hover:bg-white/[0.07] dark:hover:text-white"
+                          "image-ratio-option group/image-ratio-option",
+                          selected && "is-selected"
                         )}
                         onClick={() => setSelectedImageAspectRatio(option.value)}
                         title={`${option.label} ${option.ratio}`}
                       >
-                        <span className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_28%_5%,rgba(255,255,255,0.65),transparent_48%)] opacity-0 transition-opacity duration-200 group-hover/ratio-option:opacity-100 dark:bg-[radial-gradient(circle_at_28%_5%,rgba(255,255,255,0.20),transparent_48%)]" />
-                        <span className="relative z-10 text-[13px] font-medium leading-none tabular-nums">{option.ratio}</span>
-                        <span className="relative z-10 flex h-6 items-center justify-center">
+                        <span className="relative z-10 text-[12px] font-semibold leading-none tabular-nums">{option.ratio}</span>
+                        <span className="relative z-10 flex h-7 items-center justify-center">
                           <span
                             className={cn(
-                              "rounded-[4px] border transition-all duration-200",
+                              "image-ratio-swatch",
                               option.className,
-                              selected
-                                ? "border-zinc-950 bg-white/45 shadow-[0_0_0_3px_rgba(24,24,27,0.06)] dark:border-white dark:bg-white/8 dark:shadow-[0_0_0_3px_rgba(255,255,255,0.10)]"
-                                : "border-zinc-500/65 bg-white/20 group-hover/ratio-option:border-zinc-800 dark:border-white/62 dark:bg-transparent dark:group-hover/ratio-option:border-white"
+                              selected && "is-selected"
                             )}
                           />
                         </span>
+                        <span className="relative z-10 text-[10px] font-medium leading-none">{option.label}</span>
                       </button>
                     )
                   })}
                   </div>
                   <button
                     type="button"
-                    className="mt-4 inline-flex items-center gap-1.5 rounded-full text-[13px] font-medium leading-none text-zinc-600 transition-colors hover:text-zinc-950 dark:text-white/66 dark:hover:text-white"
+                    onClick={() => setShowAllImageRatios(value => !value)}
+                    className="image-settings-more"
                     aria-label="Ver todos los aspect ratios"
+                    aria-expanded={showAllImageRatios}
                   >
-                    View All <ChevronDown className="h-3.5 w-3.5" />
+                    {showAllImageRatios ? "View Less" : `View All (+${hiddenImageAspectRatioCount})`} <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", showAllImageRatios && "rotate-180")} />
                   </button>
                 </section>
 
-                <section className="border-t border-zinc-950/8 px-4 py-4 dark:border-white/10 sm:px-5 sm:py-5">
-                  <h3 className="text-[17px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Quality</h3>
-                  <div className="mt-4 flex flex-wrap items-center gap-2" role="radiogroup" aria-label="Image quality">
+                <section className="image-settings-section">
+                  <h3 className="image-settings-label">Quality</h3>
+                  <div className="mt-3 flex flex-wrap items-center gap-2" role="radiogroup" aria-label="Image quality">
                     {IMAGE_QUALITY_OPTIONS.map(option => {
                       const selected = option === selectedImageQuality;
                       return (
@@ -2825,8 +2829,8 @@ const ActiveToolsDisplay = ({
                           aria-checked={selected}
                           onClick={() => setSelectedImageQuality(option)}
                           className={cn(
-                            "relative h-9 rounded-xl px-3 text-[14px] font-medium leading-none text-zinc-600 transition-all duration-200 hover:bg-zinc-950/[0.045] hover:text-zinc-950 dark:text-white/68 dark:hover:bg-white/[0.07] dark:hover:text-white",
-                            selected && "bg-zinc-950/[0.075] text-zinc-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_12px_24px_-22px_rgba(15,23,42,0.45)] dark:bg-white/13 dark:text-white dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.16),0_12px_30px_-24px_rgba(255,255,255,0.55)]"
+                            "image-setting-pill",
+                            selected && "is-selected"
                           )}
                         >
                           {option}
@@ -2836,9 +2840,9 @@ const ActiveToolsDisplay = ({
                   </div>
                 </section>
 
-                <section className="border-t border-zinc-950/8 px-4 py-4 dark:border-white/10 sm:px-5 sm:py-5">
-                  <h3 className="text-[17px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Number of Images</h3>
-                  <div className="mt-4 flex flex-wrap items-center gap-2" role="radiogroup" aria-label="Number of images">
+                <section className="image-settings-section">
+                  <h3 className="image-settings-label">Number of Images</h3>
+                  <div className="mt-3 flex flex-wrap items-center gap-2" role="radiogroup" aria-label="Number of images">
                     {IMAGE_COUNT_OPTIONS.map(option => {
                       const selected = option === selectedImageCount;
                       return (
@@ -2849,8 +2853,8 @@ const ActiveToolsDisplay = ({
                           aria-checked={selected}
                           onClick={() => setSelectedImageCount(option)}
                           className={cn(
-                            "h-9 min-w-9 rounded-xl px-3 text-[14px] font-medium leading-none text-zinc-600 transition-all duration-200 hover:bg-zinc-950/[0.045] hover:text-zinc-950 dark:text-white/68 dark:hover:bg-white/[0.07] dark:hover:text-white",
-                            selected && "bg-zinc-950/[0.075] text-zinc-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_12px_24px_-22px_rgba(15,23,42,0.45)] dark:bg-white/13 dark:text-white dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.16),0_12px_30px_-24px_rgba(255,255,255,0.55)]"
+                            "image-setting-pill min-w-9",
+                            selected && "is-selected"
                           )}
                         >
                           {option}
