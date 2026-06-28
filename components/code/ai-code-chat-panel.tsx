@@ -519,20 +519,6 @@ export function AICodeChatPanel() {
     return () => window.removeEventListener("siragpt:code-composer-mode", handler)
   }, [])
 
-  // "Arreglar con IA" from the preview console pre-loads the composer with the
-  // captured error so the user can send a fix in one tap.
-  React.useEffect(() => {
-    if (typeof window === "undefined") return
-    const handler = (e: Event) => {
-      const text = (e as CustomEvent<{ text?: string }>).detail?.text?.trim()
-      if (!text) return
-      setInput(`Arregla este error que aparece en el preview en vivo:\n\n${text}`)
-      window.requestAnimationFrame(() => inputRef.current?.focus())
-    }
-    window.addEventListener("siragpt:code-fix-error", handler)
-    return () => window.removeEventListener("siragpt:code-fix-error", handler)
-  }, [])
-
   // Auto-scroll on new content while the user is at the bottom — if
   // they scrolled up to read history, leave them alone.
   React.useEffect(() => {
@@ -1021,6 +1007,95 @@ export function AICodeChatPanel() {
     },
     [applyBlock, files, patchAgentState, setTurns],
   )
+
+  // Auto-repair: a failed run (or the preview console "Arreglar con IA" button)
+  // emits `siragpt:code-fix-error` with the captured logs. We hand those logs to
+  // the agent and let it FIX the code automatically — NO manual submit. With a
+  // model available it edits the code (SRE system prompt + autoApply); offline it
+  // runs the deterministic SRE (classifies the build log and auto-patches
+  // package.json overrides when the fix is deterministic).
+  const busyRef = React.useRef(false)
+  busyRef.current = busy
+  const buildingAppRef = React.useRef(false)
+  buildingAppRef.current = buildingApp
+  // Synchronous latch so two same-tick events (e.g. an auto error + a manual
+  // "Arreglar con IA" tap) can't start two repairs before React re-renders the
+  // busy refs. Reset when the repair turn settles.
+  const repairInFlightRef = React.useRef(false)
+
+  const repairFromLog = React.useCallback(
+    async (log: string) => {
+      const text = log.trim()
+      if (!text || !user || !token || !sessionId) return
+      const sid = sessionId
+      patchAgentState(sid, (s) => ({ ...s, phase: "debugging", lastError: text }))
+      if (activeModelName) {
+        await sendPrompt(
+          "Detecté un error en el preview en vivo. Arréglalo en el código y déjalo funcionando.",
+          {
+            systemPrompt: sreSystemPrompt(text, collectConfigFiles(files)),
+            autoApply: true,
+          },
+        )
+      } else {
+        await runDeterministicSRE(text, "Detecté un error en el build — diagnóstico automático.", sid)
+      }
+    },
+    [activeModelName, files, patchAgentState, runDeterministicSRE, sendPrompt, sessionId, token, user],
+  )
+  const repairFromLogRef = React.useRef(repairFromLog)
+  repairFromLogRef.current = repairFromLog
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    let cancelled = false
+    let waitTimer: number | null = null
+    const clearWait = () => {
+      if (waitTimer !== null) {
+        window.clearInterval(waitTimer)
+        waitTimer = null
+      }
+    }
+    const handler = (e: Event) => {
+      const text = (e as CustomEvent<{ text?: string }>).detail?.text?.trim()
+      if (!text) return
+      const fire = () => {
+        if (cancelled || repairInFlightRef.current) return
+        repairInFlightRef.current = true
+        void repairFromLogRef.current(text).finally(() => {
+          repairInFlightRef.current = false
+        })
+      }
+      // Idle → repair immediately. Busy (a turn is still streaming) → wait for
+      // it to settle, then auto-repair once. Latest error wins; cap the wait so
+      // a wedged turn never leaves a timer running.
+      if (!busyRef.current && !buildingAppRef.current) {
+        fire()
+        return
+      }
+      clearWait()
+      let waited = 0
+      waitTimer = window.setInterval(() => {
+        if (cancelled) {
+          clearWait()
+          return
+        }
+        if (!busyRef.current && !buildingAppRef.current) {
+          clearWait()
+          fire()
+          return
+        }
+        waited += 1
+        if (waited > 240) clearWait() // ~120s ceiling (500ms × 240)
+      }, 500)
+    }
+    window.addEventListener("siragpt:code-fix-error", handler)
+    return () => {
+      cancelled = true
+      clearWait()
+      window.removeEventListener("siragpt:code-fix-error", handler)
+    }
+  }, [])
 
   // Apply a set of {path,content} files to the workspace (index.html last so the
   // live preview lands on the runnable app) and open the preview.

@@ -7,8 +7,8 @@ The /code builder must NOT show fabricated "agent swarm" theater — invented
 parallel-agent counters like "702+ en paralelo", "N ag.", or "1,044 en
 paralelo", nor timer-animated phases unrelated to the real pipeline.
 
-**Why:** The owner (Jorge) explicitly pointed at the decorative "Enjambre de
-agentes" panel and said it should not exist; he wants a genuine agentic coding
+**Why:** The owner explicitly pointed at the decorative "Enjambre de
+agentes" panel and said it should not exist; they want a genuine agentic coding
 system, not marketing theater. Fabricated counts are dishonest.
 
 **How to apply:** The real, honest agentic progress already exists and is the

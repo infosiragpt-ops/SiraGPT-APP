@@ -15,7 +15,6 @@ import {
   Eraser,
   ExternalLink,
   Monitor,
-  Play,
   RefreshCw,
   Smartphone,
   Square,
@@ -36,6 +35,10 @@ import { CODE_GIT_BINDING_CHANGED_EVENT, getGitBinding } from "@/lib/code-git-mi
 
 type LiveRun = { phase: "idle" | "starting" | "ready" | "error"; devUrl: string; note: string }
 type RunnerStatus = { ready?: boolean; error?: string | null; framework?: string | null; tail?: string[]; devUrl?: string }
+
+// Cap how many times a single failing run can auto-hand its logs to the chat
+// agent for repair, so a fix that keeps failing can't spin an infinite loop.
+const AUTO_FIX_MAX = 3
 
 type LogEntry = { level: string; text: string; id: number }
 type Device = "responsive" | "phone"
@@ -143,7 +146,11 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
           // ~3.3 min budget: a cold npm install of vite + tailwind v4 +
           // framer-motion + lucide plus dev-server boot can be slow.
           clearPoll()
-          setLiveRun({ phase: "error", devUrl: "", note: st.error || "El dev server no arrancó a tiempo." })
+          const note = st.error || "El dev server no arrancó a tiempo."
+          // Keep the full tail so the auto-repair effect hands the agent real
+          // build/runtime output, not just the one-line summary.
+          lastErrorLogRef.current = [st.error, ...(st.tail || [])].filter(Boolean).join("\n") || note
+          setLiveRun({ phase: "error", devUrl: "", note })
         } else {
           setLiveRun((p) => ({ ...p, note: (st.tail && st.tail[st.tail.length - 1]) || p.note }))
         }
@@ -168,6 +175,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
       runIdRef.current = boundRepo
       const started = await githubService.run(boundRepo).catch((err) => ({ error: err instanceof Error ? err.message : "runner unreachable" }))
       if ("error" in started && started.error) {
+        lastErrorLogRef.current = started.error
         setLiveRun({ phase: "error", devUrl: "", note: started.error })
         return
       }
@@ -215,6 +223,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
         setLiveRun({ phase: "idle", devUrl: "", note: "" })
         return
       }
+      lastErrorLogRef.current = started.error
       setLiveRun({ phase: "error", devUrl: "", note: started.error })
       return
     }
@@ -241,6 +250,12 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
   // length-based signature didn't change (e.g. a same-length edit). Set by the
   // run-app listener, consumed (and cleared) by the auto-run effects below.
   const forceAutoRunRef = React.useRef(false)
+  // Auto-repair bookkeeping: hand a failing run's logs to the chat agent so it
+  // fixes the code itself. lastErrorLogRef holds the richest error text we have;
+  // lastAutoFixedNoteRef de-dupes per distinct error; autoFixCountRef caps it.
+  const autoFixCountRef = React.useRef(0)
+  const lastAutoFixedNoteRef = React.useRef("")
+  const lastErrorLogRef = React.useRef("")
 
   // The chat panel dispatches "siragpt:code-run-app" in the SAME tick as the
   // applyBlock() setState that writes the new files — so at event time the
@@ -282,7 +297,9 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
   // can't render; the deterministic Builder's self-contained index.html is
   // skipped so it never triggers an npm install.
   React.useEffect(() => {
-    if (autoRunSignal === 0) return
+    // Run on initial mount too (autoRunSignal === 0): a freshly cloned/opened
+    // runnable project must auto-start its dev server WITHOUT a manual click.
+    // The signature dedupe and the "starting" queue below prevent duplicate runs.
     const needsDevServer = projectNeedsDevServer(filesRef.current) || Boolean(getGitBinding(activeFolderIdRef.current))
     if (!canRunProject || !projectSignature || !needsDevServer) {
       // Workspace isn't runnable (e.g. static-only index.html) — drop any stale
@@ -324,6 +341,26 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
     void runAppRef.current({ auto: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveRun.phase, canRunProject, projectSignature])
+
+  // Auto-repair: when a run fails, hand the logs to the chat agent so it fixes
+  // the code on its own (no manual "Reparar" click). Capped + de-duped so a fix
+  // that keeps producing the same error can't spin an infinite agent loop. A
+  // fresh successful run refills the budget for a later, unrelated failure.
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    if (liveRun.phase === "ready") {
+      autoFixCountRef.current = 0
+      lastAutoFixedNoteRef.current = ""
+      return
+    }
+    if (liveRun.phase !== "error") return
+    const log = (lastErrorLogRef.current || liveRun.note || "").trim()
+    if (!log || log === lastAutoFixedNoteRef.current) return
+    if (autoFixCountRef.current >= AUTO_FIX_MAX) return
+    lastAutoFixedNoteRef.current = log
+    autoFixCountRef.current += 1
+    window.dispatchEvent(new CustomEvent("siragpt:code-fix-error", { detail: { text: log } }))
+  }, [liveRun.phase, liveRun.note])
 
   React.useEffect(
     () => () => {
@@ -427,31 +464,21 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
             <Smartphone className="h-3.5 w-3.5" />
           </GlassToggle>
 
-          {/* Phase B — run a real Node/Vite/Next app (npm install + dev server). */}
-          {canRunProject ? (
+          {/* Phase B — a real Node/Vite/Next app runs AUTOMATICALLY (auto-run on
+              load + after every agent change). No manual Run button: we only
+              surface a Stop control while the dev server is up. */}
+          {canRunProject && (liveRun.phase === "ready" || liveRun.phase === "starting") ? (
             <>
               <span className="mx-0.5 h-4 w-px bg-border/50" />
-              {liveRun.phase === "ready" || liveRun.phase === "starting" ? (
-                <button
-                  type="button"
-                  onClick={stopApp}
-                  title="Detener el dev server"
-                  className="flex h-6 items-center gap-1 rounded-md bg-rose-500/15 px-2 text-[11px] font-medium text-rose-500 transition-colors hover:bg-rose-500/25"
-                >
-                  {liveRun.phase === "starting" ? <ThinkingIndicator size="xs" /> : <Square className="h-3 w-3" />}
-                  <span>{liveRun.phase === "starting" ? "Arrancando…" : "Detener"}</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => void runApp()}
-                  title="Instalar dependencias y correr el app (npm)"
-                  className="flex h-6 items-center gap-1 rounded-md bg-[hsl(var(--accent-violet)/0.16)] px-2 text-[11px] font-medium text-[hsl(var(--accent-violet))] transition-colors hover:bg-[hsl(var(--accent-violet)/0.28)]"
-                >
-                  <Play className="h-3 w-3" />
-                  <span>{gitBinding ? "Ejecutar repo" : "Ejecutar"}</span>
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={stopApp}
+                title="Detener el dev server"
+                className="flex h-6 items-center gap-1 rounded-md bg-rose-500/15 px-2 text-[11px] font-medium text-rose-500 transition-colors hover:bg-rose-500/25"
+              >
+                {liveRun.phase === "starting" ? <ThinkingIndicator size="xs" /> : <Square className="h-3 w-3" />}
+                <span>{liveRun.phase === "starting" ? "Arrancando…" : "Detener"}</span>
+              </button>
             </>
           ) : null}
 
@@ -536,14 +563,14 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
           </div>
         ) : liveRun.phase === "error" ? (
           <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
-            <p className="text-sm font-medium text-rose-500">No se pudo correr el app</p>
+            <p className="text-sm font-medium text-rose-500">Detecté un error — el asistente lo está revisando</p>
             <p className="mx-auto max-w-md font-mono text-[11px] leading-relaxed text-muted-foreground">{liveRun.note}</p>
             <button
               type="button"
               onClick={() => void runApp()}
               className="rounded-md bg-[hsl(var(--accent-violet)/0.16)] px-3 py-1.5 text-[12px] font-medium text-[hsl(var(--accent-violet))] hover:bg-[hsl(var(--accent-violet)/0.28)]"
             >
-              Reintentar
+              Reintentar manualmente
             </button>
           </div>
         ) : result.kind === "empty" || result.kind === "unsupported" ? (

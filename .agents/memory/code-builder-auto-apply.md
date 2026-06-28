@@ -12,7 +12,7 @@ Write modes that auto-apply: app, build, debug, patch. Read-only modes
 hard contract; auto-apply is gated on composerMode and ask/plan/image also
 short-circuit before the engine/patch routing.
 
-**Why:** Jorge asked the agentic system to do the writing instead of clicking
+**Why:** the owner asked the agentic system to do the writing instead of clicking
 "Aplicar" per block. But ask/plan are explainer/read-only surfaces and must
 never silently mutate the workspace.
 
