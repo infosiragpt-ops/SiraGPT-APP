@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   Box,
   ChevronDown,
+  Check,
   CheckCircle2,
   Cloud,
   Copy,
@@ -22,12 +23,14 @@ import {
   GitCommit,
   Globe2,
   HardDrive,
+  HelpCircle,
   History,
   KeyRound,
   LineChart,
   Link2,
   ListChecks,
   Lock,
+  MoreVertical,
   Play,
   PlugZap,
   Plus,
@@ -35,6 +38,7 @@ import {
   RefreshCw,
   RotateCcw,
   Rocket,
+  Search,
   Server,
   Settings,
   Shield,
@@ -47,6 +51,7 @@ import {
   UploadCloud,
   Workflow,
   Wrench,
+  X,
   Zap,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -709,306 +714,805 @@ function ResourceMeter({
   )
 }
 
+const DEFAULT_SECRETS: SecretEntry[] = [
+  { id: "s1", key: "OTEL_EXPORTER_OTLP_ENDPOINT", value: "", scope: "app", updatedAt: Date.now() },
+  { id: "s2", key: "SLACK_ENCRYPTION_KEY", value: "", scope: "app", updatedAt: Date.now() },
+  { id: "s3", key: "ANON_TOKEN_SECRET", value: "some-secret-token", scope: "app", updatedAt: Date.now() },
+  { id: "s4", key: "ANTHROPIC_API_KEY", value: "sk-ant-...", scope: "app", updatedAt: Date.now() },
+  { id: "s5", key: "BACKEND_BASE_URL", value: "http://localhost:3001", scope: "app", updatedAt: Date.now() },
+  { id: "s6", key: "BASE_URL", value: "http://localhost:3000", scope: "app", updatedAt: Date.now() },
+  { id: "s7", key: "CEREBRAS_API_KEY", value: "cr-...", scope: "app", updatedAt: Date.now() },
+  { id: "s8", key: "CORS_ORIGINS", value: "*", scope: "app", updatedAt: Date.now() },
+  { id: "s9", key: "DEEPSEEK_API_KEY", value: "ds-...", scope: "app", updatedAt: Date.now() },
+  { id: "s10", key: "DEFAULT_OBJECT_STORAGE_BUCKET_ID", value: "sira-bucket", scope: "app", updatedAt: Date.now() },
+  { id: "s11", key: "ENCRYPTION_KEY", value: "some-enc-key", scope: "app", updatedAt: Date.now() },
+  { id: "s12", key: "FAL_API_KEY", value: "fal-...", scope: "app", updatedAt: Date.now() },
+  { id: "s13", key: "FIGMA_CLIENT_ID", value: "figma-client", scope: "app", updatedAt: Date.now() },
+  { id: "s14", key: "FROM_EMAIL", value: "no-reply@siragpt.com", scope: "app", updatedAt: Date.now() },
+  { id: "s15", key: "FRONTEND_URL", value: "http://localhost:3000", scope: "app", updatedAt: Date.now() },
+  { id: "s16", key: "GEMINI_API_KEY", value: "ai-...", scope: "app", updatedAt: Date.now() },
+  { id: "s17", key: "STRIPE_SECRET_KEY", value: "sk_test_...", scope: "app", updatedAt: Date.now() },
+  { id: "s18", key: "STRIPE_SECRET_KEY_ALT", value: "", scope: "app", updatedAt: Date.now() },
+  { id: "s19", key: "STRIPE_WEBHOOK_SECRET", value: "whsec_...", scope: "app", updatedAt: Date.now() },
+  { id: "s20", key: "UPLOAD_DIR", value: "/tmp/uploads", scope: "app", updatedAt: Date.now() },
+  { id: "s21", key: "VOYAGE_API_KEY", value: "vy-...", scope: "app", updatedAt: Date.now() },
+  { id: "s22", key: "WOS_API_KEY", value: "wos-...", scope: "app", updatedAt: Date.now() },
+  { id: "s23", key: "xAI_API_KEY", value: "xai-...", scope: "app", updatedAt: Date.now() },
+]
+
+type ConfigurationEntry = {
+  id: string
+  key: string
+  value: string
+  testingValue?: string
+  type: "link" | "sync" | "globe"
+  updatedAt: number
+}
+
+const DEFAULT_CONFIGURATIONS: ConfigurationEntry[] = [
+  { id: "c1", key: "CODE_HOST_RUNNER", value: "1", type: "link", updatedAt: Date.now() },
+  { id: "c2", key: "CODE_HOST_RUNNER_ALLOWED_USER_IDS", value: "cmprr3bh4jpA2M7TAvTQV30js0mbC", testingValue: "cmprr3bh4jpA2M7TAvTQV30js0mbC,cmpm0ml410000d7iat3t2hvl3", type: "sync", updatedAt: Date.now() },
+  { id: "c3", key: "GOOGLE_AUTH_BASE_URL", value: "https://siragpt.com", type: "link", updatedAt: Date.now() },
+  { id: "c4", key: "R2_ENDPOINT", value: "https://c6a66a858f460a12b7b0d373637efc00.r2.cloudflarestorage.com", type: "link", updatedAt: Date.now() },
+  { id: "c5", key: "SIRAGPT_MEMORY_EMBED_PROVIDER", value: "jina", type: "link", updatedAt: Date.now() },
+  { id: "c6", key: "SIRAGPT_USER_MEMORY_STORE", value: "pgvector", type: "link", updatedAt: Date.now() },
+  { id: "c7", key: "GOOGLE_ALLOW_FRONTEND_CALLBACK", value: "true", type: "globe", updatedAt: Date.now() },
+  { id: "c8", key: "SEED_ADMIN_EMAIL", value: "admin@example.com", type: "globe", updatedAt: Date.now() },
+  { id: "c9", key: "SEED_ADMIN_PASSWORD", value: "Pasword202212", type: "globe", updatedAt: Date.now() },
+]
+
 function SecretsTool() {
   const { activeFolder } = useCodeWorkspace()
   const connectionId = activeFolder?.id ? getGitBinding(activeFolder.id) : null
-  const [secrets, setSecrets] = useWorkspacePersistedState<SecretEntry[]>("secrets", [])
-  const [keyName, setKeyName] = React.useState("")
-  const [value, setValue] = React.useState("")
-  const [scope, setScope] = React.useState<"app" | "account">("app")
-  const [activeTab, setActiveTab] = React.useState<"app" | "account" | "env">("app")
-  const [editingId, setEditingId] = React.useState<string | null>(null)
-  const [editingValue, setEditingValue] = React.useState("")
+  const [secrets, setSecrets] = useWorkspacePersistedState<SecretEntry[]>("secrets", DEFAULT_SECRETS)
+  const [configurations, setConfigurations] = useWorkspacePersistedState<ConfigurationEntry[]>("configurations", DEFAULT_CONFIGURATIONS)
+  
+  const [filterText, setFilterText] = React.useState("")
   const [revealed, setRevealed] = React.useState<Set<string>>(new Set())
-  const [bulk, setBulk] = React.useState("")
   const [deployKeys, setDeployKeys] = React.useState<string[]>([])
   const [savingDeploy, setSavingDeploy] = React.useState(false)
 
-  // Show which secrets already reach the deploy (deploy_envs — keys only).
+  // Modals state
+  const [showAddSecret, setShowAddSecret] = React.useState(false)
+  const [showAddConfig, setShowAddConfig] = React.useState(false)
+  const [showBulkImport, setShowBulkImport] = React.useState(false)
+  const [showBulkImportConfig, setShowBulkImportConfig] = React.useState(false)
+
+  // New Secret form state
+  const [newSecretKey, setNewSecretKey] = React.useState("")
+  const [newSecretValue, setNewSecretValue] = React.useState("")
+  const [newSecretScope, setNewSecretScope] = React.useState<"app" | "account">("app")
+
+  // New Config form state
+  const [newConfigKey, setNewConfigKey] = React.useState("")
+  const [newConfigValue, setNewConfigValue] = React.useState("")
+  const [newConfigTestingValue, setNewConfigTestingValue] = React.useState("")
+  const [newConfigType, setNewConfigType] = React.useState<"link" | "sync" | "globe">("link")
+
+  // Bulk import state
+  const [bulkText, setBulkText] = React.useState("")
+
+  // Dropdown menu state
+  const [showSecretsMore, setShowSecretsMore] = React.useState(false)
+  const [showConfigsMore, setShowConfigsMore] = React.useState(false)
+  const [activeMenu, setActiveMenu] = React.useState<{ type: "secret" | "config"; id: string } | null>(null)
+
   React.useEffect(() => {
     if (!connectionId) return setDeployKeys([])
     hostingService.getEnv(connectionId).then(({ keys }) => setDeployKeys(keys)).catch(() => setDeployKeys([]))
   }, [connectionId])
 
-  const importEnv = () => {
-    const parsed = parseDotenvText(bulk)
-    if (parsed.length === 0) return toast.error("No se encontró ningún KEY=VALUE")
+  const copyToClipboard = (text: string, msg: string) => {
+    void navigator.clipboard?.writeText(text).then(
+      () => toast.success(msg),
+      () => toast.error("No se pudo copiar al portapapeles.")
+    )
+  }
+
+  const handleAddSecret = () => {
+    const keyName = newSecretKey.trim().toUpperCase()
+    if (!keyName) return
+    setSecrets((prev) => [
+      { id: makeId("secret"), key: keyName, value: newSecretValue, scope: newSecretScope, updatedAt: Date.now() },
+      ...prev.filter((r) => !(r.key === keyName && r.scope === newSecretScope)),
+    ])
+    setNewSecretKey("")
+    setNewSecretValue("")
+    setShowAddSecret(false)
+    toast.success("Secret guardado")
+  }
+
+  const handleAddConfig = () => {
+    const keyName = newConfigKey.trim().toUpperCase()
+    if (!keyName) return
+    setConfigurations((prev) => [
+      {
+        id: makeId("config"),
+        key: keyName,
+        value: newConfigValue,
+        testingValue: newConfigTestingValue || undefined,
+        type: newConfigType,
+        updatedAt: Date.now(),
+      },
+      ...prev.filter((r) => r.key !== keyName),
+    ])
+    setNewConfigKey("")
+    setNewConfigValue("")
+    setNewConfigTestingValue("")
+    setShowAddConfig(false)
+    toast.success("Configuración guardada")
+  }
+
+  const handleBulkImportSecrets = () => {
+    const parsed = parseDotenvText(bulkText)
+    if (parsed.length === 0) return toast.error("No se encontraron claves válidas.")
     setSecrets((prev) => {
       const next = [...prev]
       for (const { key, value: v } of parsed) {
         const k = key.toUpperCase()
-        const idx = next.findIndex((row) => row.key === k && row.scope === "app")
-        if (idx >= 0) next[idx] = { ...next[idx], value: v, updatedAt: Date.now() }
-        else next.unshift({ id: makeId("secret"), key: k, value: v, scope: "app", linked: false, updatedAt: Date.now() })
+        const idx = next.findIndex((r) => r.key === k)
+        if (idx >= 0) {
+          next[idx] = { ...next[idx], value: v, updatedAt: Date.now() }
+        } else {
+          next.unshift({ id: makeId("secret"), key: k, value: v, scope: "app", updatedAt: Date.now() })
+        }
       }
       return next
     })
-    setBulk("")
-    toast.success(`${parsed.length} variable(s) importadas`)
+    setBulkText("")
+    setShowBulkImport(false)
+    toast.success(`${parsed.length} secret(s) importados`)
   }
 
-  const addSecret = () => {
-    const key = keyName.trim().replace(/\s+/g, "_").toUpperCase()
-    if (!key || !value) return
-    setSecrets((prev) => [
-      { id: makeId("secret"), key, value, scope, linked: scope === "account", updatedAt: Date.now() },
-      ...prev.filter((row) => !(row.key === key && row.scope === scope)),
-    ])
-    setKeyName("")
-    setValue("")
+  const handleBulkImportConfigs = () => {
+    try {
+      const parsed = JSON.parse(bulkText)
+      if (typeof parsed !== "object" || parsed === null) throw new Error()
+      setConfigurations((prev) => {
+        const next = [...prev]
+        for (const [key, value] of Object.entries(parsed)) {
+          const k = key.toUpperCase()
+          const valStr = String(value)
+          const idx = next.findIndex((r) => r.key === k)
+          if (idx >= 0) {
+            next[idx] = { ...next[idx], value: valStr, updatedAt: Date.now() }
+          } else {
+            next.unshift({ id: makeId("config"), key: k, value: valStr, type: "link", updatedAt: Date.now() })
+          }
+        }
+        return next
+      })
+      setBulkText("")
+      setShowBulkImportConfig(false)
+      toast.success("Configuraciones importadas")
+    } catch {
+      toast.error("Formato JSON inválido.")
+    }
   }
 
-  const predefined = [
-    { key: "REPLIT_DOMAINS", value: "siragpt-app.local" },
-    { key: "REPLIT_DEV_DOMAIN", value: "127.0.0.1:3000" },
-    { key: "REPLIT_USER", value: "Admin User" },
-    { key: "REPLIT_DEPLOYMENT", value: "workspace" },
-    { key: "DATABASE_URL", value: "postgres://workspace:local@siragpt/db" },
-  ]
-  const appSecrets = secrets.filter((row) => row.scope === "app")
-  const accountSecrets = secrets.filter((row) => row.scope === "account")
-  const envRows = [
-    ...predefined,
-    ...appSecrets,
-    ...accountSecrets.filter((row) => row.linked !== false),
-  ]
-  const envText = envRows.map((row) => `${row.key}=${JSON.stringify(row.value)}`).join("\n")
-  const jsonText = JSON.stringify(Object.fromEntries(envRows.map((row) => [row.key, row.value])), null, 2)
-
-  // Only the user's real secrets (NOT the predefined REPLIT_*/mock DATABASE_URL)
-  // are pushed to the deploy, so the auto-provisioned DATABASE_URL isn't clobbered.
-  const deployRows = [...appSecrets, ...accountSecrets.filter((row) => row.linked !== false)]
   const saveToDeploy = async () => {
-    if (!connectionId) return toast.error("Conecta un repo en la pestaña Git primero — los secrets se guardan por proyecto")
-    const env: Record<string, string> = {}
-    for (const row of deployRows) env[row.key] = row.value
+    if (!connectionId) return toast.error("Conecta un repo en Git primero.")
     setSavingDeploy(true)
+    const env: Record<string, string> = {}
+    for (const s of secrets) {
+      if (s.value) env[s.key] = s.value
+    }
     try {
       const { keys } = await hostingService.setEnv(connectionId, env)
       setDeployKeys(keys)
-      toast.success(`${keys.length} secret(s) guardados para el deploy`)
+      toast.success(`${keys.length} secrets guardados para el deploy`)
     } catch (e) {
-      toast.error((e as Error).message || "No se pudieron guardar para el deploy")
+      toast.error((e as Error).message || "Error al sincronizar deploy")
     } finally {
       setSavingDeploy(false)
     }
   }
 
+  const toggleRevealSecret = (id: string) => {
+    setRevealed((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const updateSecretValue = (id: string, val: string) => {
+    setSecrets((prev) => prev.map((s) => (s.id === id ? { ...s, value: val, updatedAt: Date.now() } : s)))
+  }
+
+  const updateConfigValue = (id: string, val: string) => {
+    setConfigurations((prev) => prev.map((c) => (c.id === id ? { ...c, value: val, updatedAt: Date.now() } : c)))
+  }
+
+  const updateConfigTestingValue = (id: string, val: string) => {
+    setConfigurations((prev) => prev.map((c) => (c.id === id ? { ...c, testingValue: val, updatedAt: Date.now() } : c)))
+  }
+
+  const deleteSecret = (id: string) => {
+    setSecrets((prev) => prev.filter((s) => s.id !== id))
+    toast.success("Secret eliminado")
+  }
+
+  const deleteConfig = (id: string) => {
+    setConfigurations((prev) => prev.filter((c) => c.id !== id))
+    toast.success("Configuración eliminada")
+  }
+
+  const toggleSecretScope = (id: string) => {
+    setSecrets((prev) =>
+      prev.map((s) => (s.id === id ? { ...s, scope: s.scope === "app" ? "account" : "app", updatedAt: Date.now() } : s))
+    )
+    toast.success("Ámbito de secret actualizado")
+  }
+
+  const envText = secrets.map((s) => `${s.key}=${s.value}`).join("\n")
+  const jsonText = JSON.stringify(
+    Object.fromEntries(secrets.map((s) => [s.key, s.value])),
+    null,
+    2
+  )
+
+  const filteredSecrets = secrets.filter((s) => s.key.toLowerCase().includes(filterText.toLowerCase()))
+  const filteredConfigs = configurations.filter((c) => c.key.toLowerCase().includes(filterText.toLowerCase()))
+
+  const missingSecrets = filteredSecrets.filter((s) => !s.value)
+  const existingSecrets = filteredSecrets.filter((s) => s.value)
+
   return (
-    <ToolShell
-      eyebrow="Environment"
-      title="Secrets"
-      detail="Gestiona variables sensibles por workspace. Los valores se muestran enmascarados y se guardan solo en este navegador local."
-      action={
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-8 gap-1.5"
-          onClick={() => copyToClipboard(envText, ".env copiado")}
-          disabled={!envRows.length}
-        >
-          <Copy className="h-3.5 w-3.5" />
-          Copiar .env
-        </Button>
-      }
-    >
-      <div className="mb-4">
-        <ToolTabs
-          value={activeTab}
-          onChange={setActiveTab}
-          items={[
-            { id: "app", label: "App Secrets" },
-            { id: "account", label: "Account Secrets" },
-            { id: "env", label: ".env / JSON" },
-          ]}
-        />
+    <div className="flex h-full min-h-0 flex-col bg-[#f5f5f7] dark:bg-zinc-950">
+      {/* Header */}
+      <div className="shrink-0 border-b border-border/40 bg-background/95 backdrop-blur px-6 py-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-[20px] font-bold tracking-tight text-foreground">Secrets</h2>
+          <div className="flex items-center gap-2">
+            <div className="relative">
+              <Button size="sm" variant="outline" className="h-8 text-[12px]" onClick={() => setShowSecretsMore(!showSecretsMore)}>
+                More
+              </Button>
+              {showSecretsMore && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowSecretsMore(false)} />
+                  <div className="absolute right-0 mt-2 w-48 rounded-lg border border-border bg-popover p-1 shadow-md z-50 text-[12px]">
+                    <button
+                      onClick={() => {
+                        setShowSecretsMore(false)
+                        setBulkText("")
+                        setShowBulkImport(true)
+                      }}
+                      className="flex w-full items-center px-2.5 py-2 hover:bg-muted rounded-md text-left"
+                    >
+                      Import .env
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowSecretsMore(false)
+                        copyToClipboard(envText, ".env copiado")
+                      }}
+                      className="flex w-full items-center px-2.5 py-2 hover:bg-muted rounded-md text-left"
+                    >
+                      Copy .env Text
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowSecretsMore(false)
+                        copyToClipboard(jsonText, "JSON copiado")
+                      }}
+                      className="flex w-full items-center px-2.5 py-2 hover:bg-muted rounded-md text-left"
+                    >
+                      Copy as JSON
+                    </button>
+                    {connectionId && (
+                      <button
+                        onClick={() => {
+                          setShowSecretsMore(false)
+                          void saveToDeploy()
+                        }}
+                        disabled={savingDeploy}
+                        className="flex w-full items-center px-2.5 py-2 hover:bg-muted rounded-md text-left font-medium text-blue-600 dark:text-blue-400"
+                      >
+                        {savingDeploy ? "Syncing..." : "Save to Deploy"}
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+            <Button size="sm" variant="outline" className="h-8 gap-1.5 text-[12px]" onClick={() => copyToClipboard(envText, "Secrets linkeados")}>
+              <Link2 className="h-3.5 w-3.5" />
+              Link Account Secrets
+            </Button>
+            <Button size="sm" className="h-8 gap-1 bg-blue-600 hover:bg-blue-500 text-white text-[12px] font-medium" onClick={() => setShowAddSecret(true)}>
+              <Plus className="h-3.5 w-3.5" />
+              New Secret
+            </Button>
+          </div>
+        </div>
       </div>
-      <PanelGrid>
-        <PanelCard title="Nuevo secret" detail="Equivalente local al panel de App Secrets" icon={<KeyRound className="h-4 w-4" />}>
+
+      {/* Main Content Area */}
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5 space-y-6">
+        {/* Search */}
+        <div className="relative">
+          <Input
+            value={filterText}
+            onChange={(e) => setFilterText(e.target.value)}
+            placeholder="Filter Secrets by name"
+            className="h-10 pl-3 pr-10 text-[13px] bg-background border border-border/50 rounded-lg shadow-sm"
+          />
+          <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        </div>
+
+        {/* Missing Secrets */}
+        {missingSecrets.length > 0 && (
+          <div className="space-y-3">
+            <div>
+              <h3 className="text-[14px] font-bold text-foreground">Configure missing Secret values</h3>
+              <p className="text-[12px] text-muted-foreground">
+                This App contains Secrets that might be required. Add values to ensure the code runs as expected.
+              </p>
+            </div>
+            <div className="space-y-2">
+              {missingSecrets.map((secret) => (
+                <SecretRow
+                  key={secret.id}
+                  secret={secret}
+                  revealed={revealed.has(secret.id)}
+                  onToggleReveal={() => toggleRevealSecret(secret.id)}
+                  onValueChange={(val) => updateSecretValue(secret.id, val)}
+                  onCopyKey={() => copyToClipboard(secret.key, "Key copiado")}
+                  onCopyVal={() => copyToClipboard(secret.value, "Valor copiado")}
+                  onDelete={() => deleteSecret(secret.id)}
+                  onToggleScope={() => toggleSecretScope(secret.id)}
+                  activeMenu={activeMenu}
+                  setActiveMenu={setActiveMenu}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Existing Secrets */}
+        {existingSecrets.length > 0 && (
           <div className="space-y-2">
-            <Input value={keyName} onChange={(e) => setKeyName(e.target.value)} placeholder="OPENAI_API_KEY" className="h-8 text-[12px]" />
-            <Input value={value} onChange={(e) => setValue(e.target.value)} placeholder="Valor" type="password" className="h-8 text-[12px]" />
-            <div className="flex items-center justify-between gap-2">
-              <select
-                value={scope}
-                onChange={(e) => setScope(e.target.value as "app" | "account")}
-                className="h-8 rounded-md border border-input bg-background px-2 text-[12px]"
-              >
-                <option value="app">App Secret</option>
-                <option value="account">Account Secret</option>
-              </select>
-              <Button size="sm" className="h-8 gap-1.5" onClick={addSecret} disabled={!keyName.trim() || !value}>
+            {missingSecrets.length > 0 && <div className="border-t border-border/40 my-4" />}
+            {existingSecrets.map((secret) => (
+              <SecretRow
+                key={secret.id}
+                secret={secret}
+                revealed={revealed.has(secret.id)}
+                onToggleReveal={() => toggleRevealSecret(secret.id)}
+                onValueChange={(val) => updateSecretValue(secret.id, val)}
+                onCopyKey={() => copyToClipboard(secret.key, "Key copiado")}
+                onCopyVal={() => copyToClipboard(secret.value, "Valor copiado")}
+                onDelete={() => deleteSecret(secret.id)}
+                onToggleScope={() => toggleSecretScope(secret.id)}
+                activeMenu={activeMenu}
+                setActiveMenu={setActiveMenu}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Configurations Section */}
+        <div className="border-t border-border/40 pt-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-[16px] font-bold text-foreground">Configurations</h3>
+              <p className="text-[12px] text-muted-foreground mt-0.5 max-w-2xl leading-relaxed">
+                Configurations are similar to secrets, but should only be used for non-sensitive information. They're useful for having a variable that's different between your published app and when testing on Replit.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <div className="relative">
+                <Button size="sm" variant="outline" className="h-8 text-[12px]" onClick={() => setShowConfigsMore(!showConfigsMore)}>
+                  More
+                </Button>
+                {showConfigsMore && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setShowConfigsMore(false)} />
+                    <div className="absolute right-0 mt-2 w-48 rounded-lg border border-border bg-popover p-1 shadow-md z-50 text-[12px]">
+                      <button
+                        onClick={() => {
+                          setShowConfigsMore(false)
+                          copyToClipboard(JSON.stringify(configurations, null, 2), "Configuraciones copiadas")
+                        }}
+                        className="flex w-full items-center px-2.5 py-2 hover:bg-muted rounded-md text-left"
+                      >
+                        Export JSON
+                      </button>
+                      <button
+                        onClick={() => {
+                          setShowConfigsMore(false)
+                          setBulkText("")
+                          setShowBulkImportConfig(true)
+                        }}
+                        className="flex w-full items-center px-2.5 py-2 hover:bg-muted rounded-md text-left"
+                      >
+                        Import JSON
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+              <Button size="sm" className="h-8 gap-1 bg-blue-600 hover:bg-blue-500 text-white text-[12px] font-medium" onClick={() => setShowAddConfig(true)}>
                 <Plus className="h-3.5 w-3.5" />
-                Agregar
+                New configuration
               </Button>
             </div>
           </div>
-        </PanelCard>
-        {activeTab !== "env" ? (
-          <PanelCard
-            title={activeTab === "app" ? "Variables de la app" : "Secrets de cuenta"}
-            detail={activeTab === "app" ? `${appSecrets.length} secrets del workspace` : `${accountSecrets.length} secrets disponibles para enlazar`}
-            icon={<Lock className="h-4 w-4" />}
-          >
-            <SecretList
-              rows={activeTab === "app" ? appSecrets : accountSecrets}
-              revealed={revealed}
-              editingId={editingId}
-              editingValue={editingValue}
-              accountMode={activeTab === "account"}
-              onReveal={(id) => setRevealed((prev) => {
-                const next = new Set(prev)
-                if (next.has(id)) next.delete(id)
-                else next.add(id)
-                return next
-              })}
-              onEdit={(row) => {
-                setEditingId(row.id)
-                setEditingValue(row.value)
-              }}
-              onChangeEdit={setEditingValue}
-              onSaveEdit={(row) => {
-                setSecrets((prev) => prev.map((item) => item.id === row.id ? { ...item, value: editingValue, updatedAt: Date.now() } : item))
-                setEditingId(null)
-                setEditingValue("")
-              }}
-              onToggleLink={(row) => setSecrets((prev) => prev.map((item) => item.id === row.id ? { ...item, linked: item.linked === false } : item))}
-              onDelete={(id) => setSecrets((prev) => prev.filter((item) => item.id !== id))}
-            />
-          </PanelCard>
-        ) : (
-          <PanelCard title="Export · Deploy" detail="Pega tu .env, importa todo, y guárdalo para que el deploy lo inyecte en el contenedor" icon={<FileJson className="h-4 w-4" />}>
-            <div className="grid gap-3">
-              {/* Pegar .env → importar en bloque */}
-              <div className="rounded-md border border-dashed border-border p-2.5">
-                <p className="mb-2 text-[12px] font-medium">Pegar .env (importar en bloque)</p>
-                <textarea
-                  value={bulk}
-                  onChange={(e) => setBulk(e.target.value)}
-                  rows={5}
-                  spellCheck={false}
-                  placeholder={"# Pega tu .env aquí\nGOOGLE_CLIENT_ID=...\nGOOGLE_CLIENT_SECRET=...\nENCRYPTION_KEY=...\nJWT_SECRET=..."}
-                  className="w-full rounded-md border border-input bg-background px-2 py-1.5 font-mono text-[11px]"
-                />
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <Button size="sm" className="h-7" onClick={importEnv} disabled={!bulk.trim()}>
-                    Importar a App Secrets
-                  </Button>
-                  <Button size="sm" variant="outline" className="h-7 gap-1.5" onClick={saveToDeploy} disabled={savingDeploy || deployRows.length === 0}>
-                    <Lock className="h-3 w-3" />
-                    {savingDeploy ? "Guardando…" : "Guardar para el deploy"}
-                  </Button>
-                </div>
-                <p className="mt-1.5 text-[11px] text-muted-foreground">
-                  {connectionId
-                    ? <>Deploy actual: <b>{deployKeys.length}</b> secret(s) guardados. (Se inyectan en el contenedor al publicar.)</>
-                    : <>Conecta un repo en <b>Git</b> para guardar secrets del deploy.</>}
-                </p>
+
+          <div className="space-y-2.5">
+            {filteredConfigs.map((config) => (
+              <ConfigRow
+                key={config.id}
+                config={config}
+                onValueChange={(val) => updateConfigValue(config.id, val)}
+                onTestingValueChange={(val) => updateConfigTestingValue(config.id, val)}
+                onCopyKey={() => copyToClipboard(config.key, "Key copiado")}
+                onCopyVal={() => copyToClipboard(config.value, "Valor copiado")}
+                onDelete={() => deleteConfig(config.id)}
+                activeMenu={activeMenu}
+                setActiveMenu={setActiveMenu}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Add Secret Modal */}
+      {showAddSecret && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="relative w-full max-w-md rounded-xl border border-border bg-background p-6 shadow-2xl space-y-4">
+            <button onClick={() => setShowAddSecret(false)} className="absolute right-4 top-4 rounded-sm opacity-70 hover:opacity-100 transition-opacity">
+              <X className="h-4 w-4" />
+            </button>
+            <h3 className="text-[16px] font-bold text-foreground">Create New Secret</h3>
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <label className="text-[12px] font-medium text-foreground">Secret Name</label>
+                <Input value={newSecretKey} onChange={(e) => setNewSecretKey(e.target.value)} placeholder="e.g. STRIPE_API_KEY" className="h-9 text-[12px]" />
               </div>
-              <div>
-                <div className="mb-2 flex items-center justify-between">
-                  <p className="text-[12px] font-medium">.env</p>
-                  <Button size="sm" variant="outline" className="h-7 gap-1.5" onClick={() => copyToClipboard(envText, ".env copiado")}>
-                    <Copy className="h-3 w-3" />
-                    Copiar
-                  </Button>
-                </div>
-                <pre className="max-h-44 overflow-auto rounded-md bg-muted/40 p-3 font-mono text-[11px] leading-5">{envText}</pre>
+              <div className="space-y-1">
+                <label className="text-[12px] font-medium text-foreground">Secret Value</label>
+                <Input value={newSecretValue} onChange={(e) => setNewSecretValue(e.target.value)} placeholder="Value" type="password" className="h-9 text-[12px]" />
               </div>
-              <div>
-                <div className="mb-2 flex items-center justify-between">
-                  <p className="text-[12px] font-medium">JSON</p>
-                  <Button size="sm" variant="outline" className="h-7 gap-1.5" onClick={() => copyToClipboard(jsonText, "JSON copiado")}>
-                    <Copy className="h-3 w-3" />
-                    Copiar
-                  </Button>
-                </div>
-                <pre className="max-h-44 overflow-auto rounded-md bg-muted/40 p-3 font-mono text-[11px] leading-5">{jsonText}</pre>
+              <div className="space-y-1">
+                <label className="text-[12px] font-medium text-foreground">Scope</label>
+                <select
+                  value={newSecretScope}
+                  onChange={(e) => setNewSecretScope(e.target.value as "app" | "account")}
+                  className="h-9 w-full rounded-md border border-input bg-background px-3 text-[12px]"
+                >
+                  <option value="app">App Secret</option>
+                  <option value="account">Account Secret</option>
+                </select>
               </div>
             </div>
-          </PanelCard>
-        )}
-      </PanelGrid>
-    </ToolShell>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <Button variant="outline" size="sm" className="h-9 px-4 text-[12px]" onClick={() => setShowAddSecret(false)}>
+                Cancel
+              </Button>
+              <Button size="sm" className="h-9 px-4 bg-blue-600 hover:bg-blue-500 text-white text-[12px] font-medium" onClick={handleAddSecret} disabled={!newSecretKey.trim()}>
+                Create Secret
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Config Modal */}
+      {showAddConfig && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="relative w-full max-w-md rounded-xl border border-border bg-background p-6 shadow-2xl space-y-4">
+            <button onClick={() => setShowAddConfig(false)} className="absolute right-4 top-4 rounded-sm opacity-70 hover:opacity-100 transition-opacity">
+              <X className="h-4 w-4" />
+            </button>
+            <h3 className="text-[16px] font-bold text-foreground">Create New Configuration</h3>
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <label className="text-[12px] font-medium text-foreground">Config Name</label>
+                <Input value={newConfigKey} onChange={(e) => setNewConfigKey(e.target.value)} placeholder="e.g. APP_COLOR" className="h-9 text-[12px]" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[12px] font-medium text-foreground">Value</label>
+                <Input value={newConfigValue} onChange={(e) => setNewConfigValue(e.target.value)} placeholder="e.g. blue" className="h-9 text-[12px]" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[12px] font-medium text-foreground">Testing Value (Optional)</label>
+                <Input value={newConfigTestingValue} onChange={(e) => setNewConfigTestingValue(e.target.value)} placeholder="Testing override" className="h-9 text-[12px]" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[12px] font-medium text-foreground">Type</label>
+                <select
+                  value={newConfigType}
+                  onChange={(e) => setNewConfigType(e.target.value as "link" | "sync" | "globe")}
+                  className="h-9 w-full rounded-md border border-input bg-background px-3 text-[12px]"
+                >
+                  <option value="link">Link</option>
+                  <option value="sync">Sync / Testing</option>
+                  <option value="globe">Globe / Public</option>
+                </select>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <Button variant="outline" size="sm" className="h-9 px-4 text-[12px]" onClick={() => setShowAddConfig(false)}>
+                Cancel
+              </Button>
+              <Button size="sm" className="h-9 px-4 bg-blue-600 hover:bg-blue-500 text-white text-[12px] font-medium" onClick={handleAddConfig} disabled={!newConfigKey.trim()}>
+                Create Configuration
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Import Secrets Modal */}
+      {showBulkImport && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="relative w-full max-w-md rounded-xl border border-border bg-background p-6 shadow-2xl space-y-4">
+            <button onClick={() => setShowBulkImport(false)} className="absolute right-4 top-4 rounded-sm opacity-70 hover:opacity-100 transition-opacity">
+              <X className="h-4 w-4" />
+            </button>
+            <h3 className="text-[16px] font-bold text-foreground">Import .env File Content</h3>
+            <p className="text-[12px] text-muted-foreground">
+              Paste raw env declarations in key=value lines. Existing keys will be overwritten.
+            </p>
+            <textarea
+              value={bulkText}
+              onChange={(e) => setBulkText(e.target.value)}
+              rows={6}
+              spellCheck={false}
+              placeholder="API_KEY=my_val&#10;PORT=3000"
+              className="w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-[11px] outline-none focus:ring-1 focus:ring-ring"
+            />
+            <div className="flex items-center justify-end gap-2">
+              <Button variant="outline" size="sm" className="h-9 px-4 text-[12px]" onClick={() => setShowBulkImport(false)}>
+                Cancel
+              </Button>
+              <Button size="sm" className="h-9 px-4 bg-blue-600 hover:bg-blue-500 text-white text-[12px] font-medium" onClick={handleBulkImportSecrets} disabled={!bulkText.trim()}>
+                Import Secrets
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Import Configs Modal */}
+      {showBulkImportConfig && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="relative w-full max-w-md rounded-xl border border-border bg-background p-6 shadow-2xl space-y-4">
+            <button onClick={() => setShowBulkImportConfig(false)} className="absolute right-4 top-4 rounded-sm opacity-70 hover:opacity-100 transition-opacity">
+              <X className="h-4 w-4" />
+            </button>
+            <h3 className="text-[16px] font-bold text-foreground">Import Configurations JSON</h3>
+            <p className="text-[12px] text-muted-foreground">
+              Paste a flat JSON object key-value mapping to import configurations.
+            </p>
+            <textarea
+              value={bulkText}
+              onChange={(e) => setBulkText(e.target.value)}
+              rows={6}
+              spellCheck={false}
+              placeholder='{ "CODE_HOST_RUNNER": "1" }'
+              className="w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-[11px] outline-none focus:ring-1 focus:ring-ring"
+            />
+            <div className="flex items-center justify-end gap-2">
+              <Button variant="outline" size="sm" className="h-9 px-4 text-[12px]" onClick={() => setShowBulkImportConfig(false)}>
+                Cancel
+              </Button>
+              <Button size="sm" className="h-9 px-4 bg-blue-600 hover:bg-blue-500 text-white text-[12px] font-medium" onClick={handleBulkImportConfigs} disabled={!bulkText.trim()}>
+                Import JSON
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 
-function SecretList({
-  rows,
+function SecretRow({
+  secret,
   revealed,
-  editingId,
-  editingValue,
-  accountMode,
-  onReveal,
-  onEdit,
-  onChangeEdit,
-  onSaveEdit,
-  onToggleLink,
+  onToggleReveal,
+  onValueChange,
+  onCopyKey,
+  onCopyVal,
   onDelete,
+  onToggleScope,
+  activeMenu,
+  setActiveMenu,
 }: {
-  rows: SecretEntry[]
-  revealed: Set<string>
-  editingId: string | null
-  editingValue: string
-  accountMode: boolean
-  onReveal: (id: string) => void
-  onEdit: (row: SecretEntry) => void
-  onChangeEdit: (value: string) => void
-  onSaveEdit: (row: SecretEntry) => void
-  onToggleLink: (row: SecretEntry) => void
-  onDelete: (id: string) => void
+  secret: SecretEntry
+  revealed: boolean
+  onToggleReveal: () => void
+  onValueChange: (val: string) => void
+  onCopyKey: () => void
+  onCopyVal: () => void
+  onDelete: () => void
+  onToggleScope: () => void
+  activeMenu: { type: "secret" | "config"; id: string } | null
+  setActiveMenu: (val: { type: "secret" | "config"; id: string } | null) => void
 }) {
-  if (rows.length === 0) {
-    return <p className="rounded-md bg-muted/35 px-3 py-3 text-[12px] text-muted-foreground">Sin secrets todavia.</p>
-  }
+  const isMenuOpen = activeMenu?.type === "secret" && activeMenu.id === secret.id
+
   return (
-    <div className="space-y-2">
-      {rows.map((row) => {
-        const open = revealed.has(row.id)
-        const editing = editingId === row.id
-        return (
-          <div key={row.id} className="rounded-md border border-border/50 px-2.5 py-2">
-            <div className="flex items-center gap-2">
-              <div className="min-w-0 flex-1">
-                <p className="truncate font-mono text-[12px] font-medium">{row.key}</p>
-                {editing ? (
-                  <Input
-                    value={editingValue}
-                    onChange={(event) => onChangeEdit(event.target.value)}
-                    className="mt-1 h-8 font-mono text-[12px]"
-                    autoFocus
-                  />
-                ) : (
-                  <p className="truncate font-mono text-[11px] text-muted-foreground">
-                    {open ? row.value : "••••••••••••••••"} · {row.scope}
-                    {accountMode ? ` · ${row.linked === false ? "unlinked" : "linked"}` : ""}
-                  </p>
-                )}
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-center">
+      {/* Left Key Card */}
+      <div className="flex h-10 items-center gap-2.5 rounded-lg border border-border/40 bg-zinc-200/50 dark:bg-zinc-800/40 px-3 py-2 text-[12px] font-mono font-semibold text-zinc-800 dark:text-zinc-200 shadow-sm">
+        <button onClick={onCopyKey} className="text-muted-foreground hover:text-foreground transition-colors" title="Copy name">
+          <Copy className="h-3.5 w-3.5" />
+        </button>
+        <span className="truncate flex-1">{secret.key}</span>
+      </div>
+
+      {/* Right Value Card */}
+      <div className="flex h-10 items-center gap-2 rounded-lg border border-border/40 bg-zinc-200/50 dark:bg-zinc-800/40 px-3 py-2 shadow-sm relative">
+        <button onClick={onCopyVal} className="text-muted-foreground hover:text-foreground transition-colors" title="Copy value">
+          <Copy className="h-3.5 w-3.5" />
+        </button>
+        <input
+          type={revealed ? "text" : "password"}
+          value={secret.value}
+          onChange={(e) => onValueChange(e.target.value)}
+          placeholder="Enter your secret value"
+          className="flex-1 bg-transparent border-none outline-none font-mono text-[12px] text-zinc-900 dark:text-zinc-100 placeholder:text-muted-foreground/75"
+        />
+        <button onClick={onToggleReveal} className="text-muted-foreground hover:text-foreground transition-colors" title={revealed ? "Hide" : "Show"}>
+          {revealed ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+        </button>
+
+        {/* Options Ellipsis */}
+        <div className="relative">
+          <button onClick={() => setActiveMenu(isMenuOpen ? null : { type: "secret", id: secret.id })} className="text-muted-foreground hover:text-foreground transition-colors">
+            <MoreVertical className="h-4 w-4" />
+          </button>
+          {isMenuOpen && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setActiveMenu(null)} />
+              <div className="absolute right-0 mt-2 w-36 rounded-md border border-border bg-popover p-1 shadow-md z-50 text-[11px]">
+                <button
+                  onClick={() => {
+                    setActiveMenu(null)
+                    onToggleScope()
+                  }}
+                  className="flex w-full items-center px-2 py-1.5 hover:bg-muted rounded text-left"
+                >
+                  Scope: {secret.scope === "app" ? "Account" : "App"}
+                </button>
+                <button
+                  onClick={() => {
+                    setActiveMenu(null)
+                    onDelete()
+                  }}
+                  className="flex w-full items-center px-2 py-1.5 hover:bg-muted rounded text-left text-rose-600"
+                >
+                  Delete
+                </button>
               </div>
-              {editing ? (
-                <Button size="sm" className="h-7" onClick={() => onSaveEdit(row)}>Guardar</Button>
-              ) : (
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ConfigRow({
+  config,
+  onValueChange,
+  onTestingValueChange,
+  onCopyKey,
+  onCopyVal,
+  onDelete,
+  activeMenu,
+  setActiveMenu,
+}: {
+  config: ConfigurationEntry
+  onValueChange: (val: string) => void
+  onTestingValueChange: (val: string) => void
+  onCopyKey: () => void
+  onCopyVal: () => void
+  onDelete: () => void
+  activeMenu: { type: "secret" | "config"; id: string } | null
+  setActiveMenu: (val: { type: "secret" | "config"; id: string } | null) => void
+}) {
+  const isMenuOpen = activeMenu?.type === "config" && activeMenu.id === config.id
+
+  const getIcon = () => {
+    switch (config.type) {
+      case "sync":
+        return <RefreshCw className="h-4 w-4 text-blue-500 shrink-0" />
+      case "globe":
+        return <Globe2 className="h-4 w-4 text-green-500 shrink-0" />
+      default:
+        return <Link2 className="h-4 w-4 text-amber-500 shrink-0" />
+    }
+  }
+
+  const hasTestingOverride = typeof config.testingValue !== "undefined"
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-3">
+        {/* Leftmost Type Icon */}
+        <div className="w-6 flex justify-center">{getIcon()}</div>
+
+        <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-3 items-center">
+          {/* Left Key Card */}
+          <div className="flex h-10 items-center gap-2.5 rounded-lg border border-border/40 bg-zinc-200/50 dark:bg-zinc-800/40 px-3 py-2 text-[12px] font-mono font-semibold text-zinc-800 dark:text-zinc-200 shadow-sm">
+            <button onClick={onCopyKey} className="text-muted-foreground hover:text-foreground transition-colors">
+              <Copy className="h-3.5 w-3.5" />
+            </button>
+            <span className="truncate flex-1">{config.key}</span>
+          </div>
+
+          {/* Right Value Card */}
+          <div className="flex h-10 items-center gap-2 rounded-lg border border-border/40 bg-zinc-200/50 dark:bg-zinc-800/40 px-3 py-2 shadow-sm relative">
+            <button onClick={onCopyVal} className="text-muted-foreground hover:text-foreground transition-colors">
+              <Copy className="h-3.5 w-3.5" />
+            </button>
+            <input
+              type="text"
+              value={config.value}
+              onChange={(e) => onValueChange(e.target.value)}
+              className="flex-1 bg-transparent border-none outline-none font-mono text-[12px] text-zinc-900 dark:text-zinc-100"
+            />
+
+            {/* Options Ellipsis */}
+            <div className="relative">
+              <button onClick={() => setActiveMenu(isMenuOpen ? null : { type: "config", id: config.id })} className="text-muted-foreground hover:text-foreground transition-colors">
+                <MoreVertical className="h-4 w-4" />
+              </button>
+              {isMenuOpen && (
                 <>
-                  {accountMode ? (
-                    <Button variant="ghost" size="sm" className="h-7 px-2 text-[11px]" onClick={() => onToggleLink(row)}>
-                      {row.linked === false ? "Link" : "Unlink"}
-                    </Button>
-                  ) : null}
-                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onEdit(row)} aria-label={`Editar ${row.key}`}>
-                    <Settings className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onReveal(row.id)} aria-label={open ? "Ocultar secret" : "Mostrar secret"}>
-                    {open ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                  </Button>
-                  <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-rose-600" onClick={() => onDelete(row.id)} aria-label={`Eliminar ${row.key}`}>
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
+                  <div className="fixed inset-0 z-40" onClick={() => setActiveMenu(null)} />
+                  <div className="absolute right-0 mt-2 w-32 rounded-md border border-border bg-popover p-1 shadow-md z-50 text-[11px]">
+                    <button
+                      onClick={() => {
+                        setActiveMenu(null)
+                        onDelete()
+                      }}
+                      className="flex w-full items-center px-2 py-1.5 hover:bg-muted rounded text-left text-rose-600"
+                    >
+                      Delete
+                    </button>
+                  </div>
                 </>
               )}
             </div>
           </div>
-        )
-      })}
+        </div>
+      </div>
+
+      {/* Sub-row for testing override if config has one */}
+      {hasTestingOverride && (
+        <div className="flex items-center gap-3 pl-9">
+          <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-3 items-center">
+            {/* Testing override label */}
+            <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground pl-1">
+              <span>Testing value</span>
+              <span title="This override is applied during Replit workspace tests.">
+                <HelpCircle className="h-3.5 w-3.5 cursor-help" />
+              </span>
+            </div>
+
+            {/* Testing override value input */}
+            <div className="flex h-10 items-center gap-2 rounded-lg border border-border/40 bg-zinc-200/50 dark:bg-zinc-800/40 px-3 py-2 shadow-sm">
+              <button onClick={() => copyToClipboard(config.testingValue || "", "Testing value copiado")} className="text-muted-foreground hover:text-foreground transition-colors">
+                <Copy className="h-3.5 w-3.5" />
+              </button>
+              <input
+                type="text"
+                value={config.testingValue}
+                onChange={(e) => onTestingValueChange(e.target.value)}
+                className="flex-1 bg-transparent border-none outline-none font-mono text-[12px] text-zinc-900 dark:text-zinc-100"
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

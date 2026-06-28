@@ -5,7 +5,7 @@ const test = require('node:test');
 
 const { resolveAgentTaskBudget } = require('../src/routes/agent-task');
 
-const HEAVY_STEPS = 60;
+const HEAVY_STEPS = 100;
 const HEAVY_RUNTIME_MS = 2 * 60 * 60 * 1000;
 const INTERACTIVE_STEPS = 28;
 const INTERACTIVE_RUNTIME_MS = 8 * 60 * 1000;
