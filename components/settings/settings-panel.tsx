@@ -967,7 +967,7 @@ function NotificationsSection() {
           ]}
         />
         <SelectRow
-          title="Proyectos" desc="Actualizaciones de proyectos en los que colaboras"
+          title="Empresas" desc="Actualizaciones de empresas en las que colaboras"
           value={N.channels.projects}
           onChange={(v) => update({ notifications: { ...N, channels: { ...N.channels, projects: v as any } } })}
           options={[{ value: "off", label: "Desactivado" }, { value: "email", label: "Email" }]}

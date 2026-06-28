@@ -37,7 +37,7 @@ const ROUTE_META: Record<string, RouteMeta> = {
     icon: Sparkles,
   },
   "/projects": {
-    title: "Proyectos",
+    title: "Empresas",
     subtitle: "Organizando espacios e instrucciones",
     icon: FolderKanban,
   },
