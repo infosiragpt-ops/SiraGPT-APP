@@ -21,13 +21,10 @@ opts into client mode.
    a DB to render.
 
 **How to apply:**
-- The preview's "active file" is the LAST one applied; the chat apply loop sorts `index.html`
-  last on purpose so it stays the active tab and the live app (not the README) is what renders.
-  If you change file ordering or the apply loop, preserve "index.html applied last".
-- Spanish domain extraction for entities is fallback-layered: explicit `"con X y Y"` extraction
-  always wins; domain presets (comercio/POS, restaurante, reservas) only fire when extraction is
-  empty AND platform !== 'landing', before the generic "Registro" fallback. A bare "negocio"
-  must still yield a single "Registro".
-- `buildLiveApp()` returns a full HTML document (inline React via Babel), NOT raw JS — do not
-  `new Function()` the whole return value when smoke-testing; extract the inline script block.
-- Entity `fields` in a ProjectBrief are `string[]`, not objects.
+- The preview's "active file" is the LAST one applied; the chat apply loop intentionally sorts
+  `index.html` last so it stays active and the live app (not the README) renders. Preserve that
+  ordering if you touch the apply loop.
+- Entity extraction is fallback-layered and the order is load-bearing: explicit `"con X y Y"`
+  extraction always wins; domain presets only fire when extraction is empty AND
+  platform !== 'landing', before the generic "Registro" fallback. A bare "negocio" must still
+  yield a single "Registro". Never let a preset hijack an explicit list or the bare fallback.
