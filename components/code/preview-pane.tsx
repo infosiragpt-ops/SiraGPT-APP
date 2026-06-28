@@ -91,19 +91,15 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
   const canRunProject = hasNodeProject || Boolean(gitBinding)
   const projectSignature = React.useMemo(() => {
     if (!canRunProject) return ""
+    // Fingerprint EVERY file by path + content length (not a fixed list of key
+    // files), so an edit to any source file changes the signature. This is only
+    // the dedupe fallback for non-forced auto triggers; agent results carry an
+    // explicit force flag and bypass it entirely.
     const names = Object.keys(files || {}).sort()
-    const keyFiles = [
-      "package.json",
-      "index.html",
-      "src/main.tsx",
-      "src/App.tsx",
-      "app/page.tsx",
-      "prisma/schema.prisma",
-    ]
-    const fingerprint = keyFiles
+    const fingerprint = names
       .map((path) => `${path}:${files[path]?.content?.length ?? 0}`)
       .join("|")
-    return `${activeFolder?.id || "local"}:${gitBinding || "workspace"}:${names.join(",")}:${fingerprint}`
+    return `${activeFolder?.id || "local"}:${gitBinding || "workspace"}:${fingerprint}`
   }, [activeFolder?.id, canRunProject, files, gitBinding])
 
   React.useEffect(() => {
@@ -241,6 +237,10 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
   // preview always lands on the newest code.
   const pendingAutoRunRef = React.useRef(false)
   const lastAutoRunSignatureRef = React.useRef("")
+  // An agent result carries force:true so the rerun fires even when the cheap
+  // length-based signature didn't change (e.g. a same-length edit). Set by the
+  // run-app listener, consumed (and cleared) by the auto-run effects below.
+  const forceAutoRunRef = React.useRef(false)
 
   // The chat panel dispatches "siragpt:code-run-app" in the SAME tick as the
   // applyBlock() setState that writes the new files — so at event time the
@@ -254,8 +254,10 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
     if (typeof window === "undefined") return
     const queueAutoRun = () => setAutoRunSignal((s) => s + 1)
     const onRun = (e: Event) => {
-      const auto = ((e as CustomEvent).detail as { auto?: boolean } | undefined)?.auto ?? false
+      const detail = (e as CustomEvent).detail as { auto?: boolean; force?: boolean } | undefined
+      const auto = detail?.auto ?? false
       if (auto) {
+        if (detail?.force) forceAutoRunRef.current = true
         queueAutoRun()
         return
       }
@@ -282,14 +284,22 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
   React.useEffect(() => {
     if (autoRunSignal === 0) return
     const needsDevServer = projectNeedsDevServer(filesRef.current) || Boolean(getGitBinding(activeFolderIdRef.current))
-    if (!canRunProject || !projectSignature || !needsDevServer) return
-    if (lastAutoRunSignatureRef.current === projectSignature && phaseRef.current !== "error") return
+    if (!canRunProject || !projectSignature || !needsDevServer) {
+      // Workspace isn't runnable (e.g. static-only index.html) — drop any stale
+      // force flag so it can't surprise a later run once it becomes runnable.
+      forceAutoRunRef.current = false
+      return
+    }
+    const forced = forceAutoRunRef.current
+    if (!forced && lastAutoRunSignatureRef.current === projectSignature && phaseRef.current !== "error") return
     // Don't interrupt an install already in flight — queue a retry instead so
-    // the newest code still shows once it settles.
+    // the newest code still shows once it settles (the force flag is preserved
+    // and drained by the effect below).
     if (phaseRef.current === "starting") {
       pendingAutoRunRef.current = true
       return
     }
+    forceAutoRunRef.current = false
     lastAutoRunSignatureRef.current = projectSignature
     void runAppRef.current({ auto: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -301,8 +311,15 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
     if (!pendingAutoRunRef.current) return
     pendingAutoRunRef.current = false
     const needsDevServer = projectNeedsDevServer(filesRef.current) || Boolean(getGitBinding(activeFolderIdRef.current))
-    if (!canRunProject || !projectSignature || !needsDevServer) return
-    if (lastAutoRunSignatureRef.current === projectSignature && phaseRef.current !== "error") return
+    if (!canRunProject || !projectSignature || !needsDevServer) {
+      // Workspace isn't runnable (e.g. static-only index.html) — drop any stale
+      // force flag so it can't surprise a later run once it becomes runnable.
+      forceAutoRunRef.current = false
+      return
+    }
+    const forced = forceAutoRunRef.current
+    if (!forced && lastAutoRunSignatureRef.current === projectSignature && phaseRef.current !== "error") return
+    forceAutoRunRef.current = false
     lastAutoRunSignatureRef.current = projectSignature
     void runAppRef.current({ auto: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -58,6 +58,7 @@
 - [Agent runtime model slugs](agent-runtime-model-slugs.md) — any `provider/model` slug must route to OpenRouter in agent-task-runner (like chat's inferProviderFromModelId), else openai/gpt-5.5 force-remaps to gpt-4o-mini.
 - [OCR image variant early-exit](ocr-variant-early-exit.md) — local image OCR must lazily generate sharp variants + break on first accepted result, or 5 variants × Tesseract blows past the 20s extraction timeout (screenshots silently lose text).
 - [Finalize-guard runaway loop](finalize-guard-runaway.md) — guard rejections were uncapped → react-agent spun to maxSteps/2h; add total+consecutive breaker; gate interactive vs heavy-doc budgets.
+- [/code auto-preview gating](code-auto-preview-gating.md) — auto-rerun silently skipped by pkg.json-only dispatch + key-file-length signature; force flag bypasses dedupe, not the projectNeedsDevServer gate.
 - [/code is chat-only by design](code-route-chat-only.md) — /code is intentionally pure agentic chat + live preview, NO IDE chrome; dead IDE component files left on purpose, don't "restore" them; thinking glyph red via component default.
 - [Untrusted child-process env scrub](untrusted-child-env-allowlist.md) — /code host-runner + GitHub workspace-runner must spawn repo code with buildUntrustedChildEnv allowlist, NEVER {...process.env} (leaks every secret).
 - [Main agent git sandbox](main-agent-git-sandbox.md) — main agent is HARD-blocked from ALL git mutations (merge/fetch/even rm of .git/*.lock); delegate merges to a background task agent.

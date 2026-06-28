@@ -104,19 +104,27 @@ type ComposerMode = "app" | "build" | "plan" | "debug" | "ask" | "image"
 const CODE_OPEN_PREVIEW_EVENT = "siragpt:code-open-preview"
 const CODE_RUN_PREVIEW_EVENT = "siragpt:code-run-preview"
 
-function filesContainNodeProject(files: Array<{ path: string; content: string }>): boolean {
-  return files.some((file) => /(^|\/)package\.json$/i.test(file.path))
-}
+// Coalesce the (possibly many) file-apply batches an agent emits within a
+// single turn into ONE forced preview restart. We deliberately do NOT gate on
+// whether THIS batch contains a package.json: editing a file inside an
+// already-open Vite/Next project or a cloned GitHub repo must still refresh the
+// preview. PreviewPane owns the decision of whether a dev server is actually
+// needed (real node project / bound repo) vs a static srcdoc preview, so the
+// owner never has to press ▶ Ejecutar.
+let autoRunDebounceTimer: ReturnType<typeof setTimeout> | null = null
+let autoRunKeySeq = 0
 
-function openPreviewAndMaybeRun(files: Array<{ path: string; content: string }>): void {
+function openPreviewAndMaybeRun(_files: Array<{ path: string; content: string }>): void {
   if (typeof window === "undefined") return
   window.dispatchEvent(new CustomEvent(CODE_OPEN_PREVIEW_EVENT))
-  if (!filesContainNodeProject(files)) return
-  window.setTimeout(() => {
-    const detail = { source: "agent", auto: true }
+  if (autoRunDebounceTimer) clearTimeout(autoRunDebounceTimer)
+  autoRunDebounceTimer = setTimeout(() => {
+    autoRunDebounceTimer = null
+    autoRunKeySeq += 1
+    const detail = { source: "agent", auto: true, force: true, runKey: autoRunKeySeq }
     window.dispatchEvent(new CustomEvent(CODE_RUN_PREVIEW_EVENT, { detail }))
     window.dispatchEvent(new CustomEvent("siragpt:code-run-app", { detail }))
-  }, 350)
+  }, 600)
 }
 
 const COMPOSER_MODE_LABEL: Record<ComposerMode, string> = {
