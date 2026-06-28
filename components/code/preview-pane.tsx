@@ -375,8 +375,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-zinc-50 dark:bg-zinc-950">
-      {/* URL / control bar — liquid glass */}
-      <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border/40 bg-background/55 px-2 backdrop-blur-xl supports-[backdrop-filter]:bg-background/40">
+      <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border/60 bg-background/85 px-2 shadow-[0_1px_0_rgba(15,23,42,0.03)] backdrop-blur-xl supports-[backdrop-filter]:bg-background/72">
         <div className="flex items-center gap-1 pl-0.5">
           <span className="h-2.5 w-2.5 rounded-full bg-rose-400/80" />
           <span className="h-2.5 w-2.5 rounded-full bg-amber-400/80" />
@@ -393,8 +392,8 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
           {building ? <ThinkingIndicator size="xs" /> : <RefreshCw className="h-3.5 w-3.5" />}
         </button>
 
-        <div className="flex min-w-0 flex-1 items-center gap-2 rounded-full border border-border/40 bg-muted/30 px-3 py-1 text-[11px] text-muted-foreground shadow-inner backdrop-blur">
-          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500/80" />
+        <div className="flex min-w-0 flex-1 items-center gap-2 rounded-md border border-border/50 bg-muted/25 px-3 py-1 text-[11px] text-muted-foreground shadow-inner">
+          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#FF0000]" />
           <span className="truncate font-mono">localhost / {entryLabel}</span>
           <span className="ml-auto shrink-0 rounded bg-background/70 px-1.5 py-px text-[9px] uppercase tracking-wide text-muted-foreground/80">
             {KIND_LABEL[result.kind]}
@@ -422,7 +421,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
                   type="button"
                   onClick={stopApp}
                   title="Detener el dev server"
-                  className="flex h-6 items-center gap-1 rounded-md bg-rose-500/15 px-2 text-[11px] font-medium text-rose-500 transition-colors hover:bg-rose-500/25"
+                  className="flex h-6 items-center gap-1 rounded-md bg-[#FF0000]/[0.08] px-2 text-[11px] font-medium text-[#C80000] transition-colors hover:bg-[#FF0000]/[0.14] dark:text-[#FF6B6B]"
                 >
                   {liveRun.phase === "starting" ? <ThinkingIndicator size="xs" /> : <Square className="h-3 w-3" />}
                   <span>{liveRun.phase === "starting" ? "Arrancando…" : "Detener"}</span>
@@ -432,7 +431,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
                   type="button"
                   onClick={() => void runApp()}
                   title="Instalar dependencias y correr el app (npm)"
-                  className="flex h-6 items-center gap-1 rounded-md bg-[hsl(var(--accent-violet)/0.16)] px-2 text-[11px] font-medium text-[hsl(var(--accent-violet))] transition-colors hover:bg-[hsl(var(--accent-violet)/0.28)]"
+                  className="flex h-6 items-center gap-1 rounded-md bg-[#FF0000]/[0.08] px-2 text-[11px] font-medium text-[#C80000] transition-colors hover:bg-[#FF0000]/[0.14] dark:text-[#FF6B6B]"
                 >
                   <Play className="h-3 w-3" />
                   <span>{gitBinding ? "Ejecutar repo" : "Ejecutar"}</span>
@@ -489,7 +488,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
       </div>
 
       {/* Viewport */}
-      <div className="min-h-0 flex-1 overflow-auto bg-zinc-100/60 p-0 dark:bg-zinc-900/40">
+      <div className="min-h-0 flex-1 overflow-auto bg-zinc-100 p-0 dark:bg-zinc-900/55">
         {liveRun.phase === "ready" ? (
           // Real running app from the cloud runner (npm dev server).
           <div
@@ -527,7 +526,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
             <button
               type="button"
               onClick={() => void runApp()}
-              className="rounded-md bg-[hsl(var(--accent-violet)/0.16)] px-3 py-1.5 text-[12px] font-medium text-[hsl(var(--accent-violet))] hover:bg-[hsl(var(--accent-violet)/0.28)]"
+              className="rounded-md bg-[#FF0000]/[0.08] px-3 py-1.5 text-[12px] font-medium text-[#C80000] hover:bg-[#FF0000]/[0.14] dark:text-[#FF6B6B]"
             >
               Reintentar
             </button>
@@ -628,7 +627,7 @@ function PreviewLaunchpad({ kind, note }: { kind: PreviewKind; note?: string }) 
             onClick={() =>
               window.dispatchEvent(new CustomEvent("siragpt:code-load-template", { detail: { id: t.id } }))
             }
-            className="flex flex-col items-start rounded-xl border border-border/50 bg-background/60 px-4 py-3 text-left backdrop-blur transition-colors hover:border-border hover:bg-muted/40"
+            className="flex flex-col items-start rounded-lg border border-border/60 bg-background px-4 py-3 text-left shadow-sm transition-colors hover:border-[#FF0000]/25 hover:bg-[#FF0000]/[0.04]"
           >
             <span className="text-[13px] font-medium text-foreground">{t.name}</span>
             <span className="text-[11px] text-muted-foreground">{t.description}</span>
@@ -659,7 +658,7 @@ function GlassToggle({
       aria-pressed={active}
       className={cn(
         "flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground",
-        active && "bg-foreground/[0.07] text-foreground ring-1 ring-border/40",
+        active && "bg-[#FF0000]/[0.07] text-[#C80000] ring-1 ring-[#FF0000]/20 dark:text-[#FF6B6B]",
       )}
     >
       {children}

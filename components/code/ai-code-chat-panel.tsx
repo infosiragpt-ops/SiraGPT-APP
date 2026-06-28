@@ -25,9 +25,11 @@ import {
   AlertTriangle,
   ArrowUp,
   BookOpen,
+  BrainCircuit,
   Bug,
   Check,
   ChevronDown,
+  Clock3,
   CircleHelp,
   ExternalLink,
   Image as ImageIcon,
@@ -127,7 +129,7 @@ const COMPOSER_MODE_LABEL: Record<ComposerMode, string> = {
   build: "Build",
   plan: "Plan",
   debug: "Debug",
-  ask: "Preguntar",
+  ask: "Ask",
   image: "Image",
 }
 
@@ -1390,30 +1392,30 @@ export function AICodeChatPanel() {
   const activeFileLabel = activePath ? activePath.split("/").pop() || activePath : null
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
-      <div className="shrink-0 border-b border-border/50">
-        <div className="flex h-8 items-center justify-between gap-2 px-3">
-          <span className="text-[11px] font-medium text-muted-foreground">Chat</span>
+    <div className="flex h-full min-h-0 flex-col bg-zinc-50/70 text-foreground dark:bg-zinc-950">
+      <div className="shrink-0 border-b border-border/60 bg-background/85 backdrop-blur">
+        <div className="flex h-9 items-center justify-between gap-2 px-3">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Agente</span>
           {activeFileLabel ? (
             <span
-              className="min-w-0 truncate font-mono text-[10px] text-muted-foreground/80"
+              className="min-w-0 truncate rounded-md border border-border/50 bg-muted/30 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/85"
               title={activePath ?? undefined}
             >
               {activeFileLabel}
             </span>
           ) : null}
         </div>
-        <div className="flex items-center gap-1 overflow-x-auto px-2 pb-1.5">
+        <div className="flex items-center gap-1 overflow-x-auto px-2 pb-2">
           {codeChatSessions.map((session) => (
             <button
               key={session.id}
               type="button"
               onClick={() => setActiveCodeChatSession(session.id)}
               className={cn(
-                "h-6 shrink-0 rounded-md px-2 text-[11px] transition-colors",
+                "h-6 shrink-0 rounded-md border px-2 text-[11px] transition-colors",
                 session.id === activeCodeChatSessionId
-                  ? "bg-foreground text-background"
-                  : "bg-muted/50 text-muted-foreground hover:text-foreground",
+                  ? "border-[#FF0000]/30 bg-[#FF0000]/[0.07] text-foreground"
+                  : "border-transparent bg-muted/45 text-muted-foreground hover:border-border/60 hover:text-foreground",
               )}
             >
               {session.title}
@@ -1433,7 +1435,7 @@ export function AICodeChatPanel() {
         </div>
       </div>
 
-      <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto p-3">
+      <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto p-4">
         {turns.length === 0 ? (
           <EmptyChat active={agentsActive} phase={agentPhase} />
         ) : (
@@ -1449,8 +1451,8 @@ export function AICodeChatPanel() {
         )}
       </div>
 
-      <form onSubmit={onSubmit} className="shrink-0 px-3 pb-3 pt-2">
-        <div className="group rounded-2xl border border-border/60 bg-muted/20 px-2.5 py-2 transition-colors focus-within:border-border focus-within:bg-background focus-within:shadow-sm">
+      <form onSubmit={onSubmit} className="shrink-0 border-t border-border/50 bg-background/80 px-3 pb-3 pt-2 backdrop-blur">
+        <div className="group rounded-lg border border-border/70 bg-background px-2.5 py-2 shadow-sm transition-[border-color,box-shadow] focus-within:border-[#FF0000]/35 focus-within:shadow-[0_0_0_3px_rgba(255,0,0,0.08)]">
           <Textarea
             aria-label="Mensaje para el chat de código"
             ref={inputRef}
@@ -1498,7 +1500,7 @@ export function AICodeChatPanel() {
                 type="button"
                 size="icon"
                 variant="ghost"
-                className="h-7 w-7 shrink-0 rounded-lg text-foreground hover:bg-muted"
+                className="h-7 w-7 shrink-0 rounded-md text-foreground hover:bg-muted"
                 onClick={cancelStream}
                 aria-label="Detener"
               >
@@ -1509,9 +1511,9 @@ export function AICodeChatPanel() {
                 type="submit"
                 size="icon"
                 className={cn(
-                  "h-7 w-7 shrink-0 rounded-lg transition-colors",
+                  "h-7 w-7 shrink-0 rounded-md transition-colors",
                   input.trim()
-                    ? "bg-foreground text-background hover:bg-foreground/90"
+                    ? "bg-[#FF0000] text-white hover:bg-[#E00000]"
                     : "bg-transparent text-muted-foreground/40",
                 )}
                 disabled={!input.trim()}
@@ -1537,11 +1539,11 @@ function EmptyChat({ active, phase }: { active: boolean; phase: AgentPhase }) {
         data-testid="code-agent-runtime"
         data-agent-active={active ? "true" : "false"}
         data-agent-phase={phase}
-        className="w-full max-w-[19rem] rounded-2xl border border-border/60 bg-background/80 p-3 text-left shadow-sm"
+        className="w-full max-w-[19rem] rounded-lg border border-border/70 bg-background p-3 text-left shadow-sm"
       >
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-[hsl(var(--accent-violet)/0.28)] bg-[hsl(var(--accent-violet)/0.10)] text-[hsl(var(--accent-violet))]">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[#FF0000]/25 bg-[#FF0000]/[0.07] text-[#FF0000]">
               <Sparkles className={cn("h-4 w-4", active && "animate-pulse")} />
             </span>
             <div className="min-w-0">
@@ -1553,7 +1555,7 @@ function EmptyChat({ active, phase }: { active: boolean; phase: AgentPhase }) {
             className={cn(
               "shrink-0 rounded-full px-2 py-1 text-[10.5px] font-medium",
               active
-                ? "bg-[hsl(var(--accent-violet)/0.12)] text-[hsl(var(--accent-violet))]"
+                ? "bg-[#FF0000]/[0.08] text-[#C80000] dark:text-[#FF6B6B]"
                 : "bg-muted text-muted-foreground",
             )}
           >
@@ -1583,7 +1585,7 @@ function EmptyChat({ active, phase }: { active: boolean; phase: AgentPhase }) {
                     "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border",
                     state === "done" && "border-emerald-500/35 bg-emerald-500/10 text-emerald-600",
                     state === "running" &&
-                      "border-[hsl(var(--accent-violet)/0.45)] bg-[hsl(var(--accent-violet)/0.12)] text-[hsl(var(--accent-violet))]",
+                      "border-[#FF0000]/35 bg-[#FF0000]/[0.08] text-[#FF0000]",
                     state === "pending" && "border-border/50 bg-muted/30 text-muted-foreground/55",
                   )}
                 >
@@ -1627,7 +1629,7 @@ function ChatBubble({
   if (isUser) {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl bg-blue-900 px-3.5 py-2 text-sm leading-relaxed text-zinc-50 shadow-sm">
+        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-lg border border-[#FF0000]/20 bg-[#FF0000]/[0.08] px-3.5 py-2 text-sm leading-relaxed text-foreground shadow-sm">
           {turn.content}
         </div>
       </div>
@@ -1637,7 +1639,7 @@ function ChatBubble({
   // ASSISTANT messages: left-aligned, plain background, clean typography (no
   // colored bubble) — direct text on the interface, with the code-block cards.
   const blocker = detectBlocker(turn.content)
-  // Pull the model's gerund-led planning line into the "🧠 …" badge (like the
+  // Pull the model's gerund-led planning line into the status badge (like the
   // agent dashboard) and narrate the rest. Falls back to a generic badge while
   // streaming before the planning line lands.
   const { label: planLabel, body } = extractPlanLabel(turn.content)
@@ -1646,8 +1648,8 @@ function ChatBubble({
       <div className="mb-1 flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-wide text-muted-foreground">
         Asistente
         {planLabel || turn.streaming ? (
-          <span className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-violet-500/10 px-2 py-0.5 normal-case tracking-normal text-violet-300">
-            <span aria-hidden="true">🧠</span>
+          <span className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-[#FF0000]/15 bg-[#FF0000]/[0.07] px-2 py-0.5 normal-case tracking-normal text-[#C80000] dark:text-[#FF6B6B]">
+            <BrainCircuit className="h-3 w-3 shrink-0" aria-hidden="true" />
             <span className="truncate font-medium">{planLabel || "Pensando"}</span>
             {!turn.streaming && typeof turn.planMs === "number" ? (
               <span className="opacity-60">({formatWorked(turn.planMs)})</span>
@@ -1789,7 +1791,10 @@ function ChatWorkedSummary({ metrics }: { metrics: CodeChatMetrics }) {
   const showStrike = typeof orig === "number" && typeof applied === "number" && applied < orig
   return (
     <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-border/60 bg-muted/20 px-2.5 py-1.5 text-[11px] text-muted-foreground">
-      <span className="font-medium text-foreground">⏱️ Trabajó {formatWorked(metrics.timeWorkedMs)}</span>
+      <span className="inline-flex items-center gap-1 font-medium text-foreground">
+        <Clock3 className="h-3.5 w-3.5 text-[#FF0000]" aria-hidden="true" />
+        Trabajó {formatWorked(metrics.timeWorkedMs)}
+      </span>
       {hasFiles ? (
         <>
           <span>· {metrics.actionsCount} {metrics.actionsCount === 1 ? "acción" : "acciones"}</span>
@@ -1821,8 +1826,8 @@ function ChatWorkedSummary({ metrics }: { metrics: CodeChatMetrics }) {
 function ChatBlockerPanel({ title, rawError, url }: { title: string; rawError: string; url?: string }) {
   const isInternal = url?.startsWith("/")
   return (
-    <div className="my-1 rounded-xl border border-red-500/30 bg-red-500/10 p-3">
-      <div className="flex items-center gap-1.5 text-sm font-semibold text-red-300">
+    <div className="my-1 rounded-lg border border-[#FF0000]/30 bg-[#FF0000]/[0.08] p-3">
+      <div className="flex items-center gap-1.5 text-sm font-semibold text-[#C80000] dark:text-[#FF6B6B]">
         <AlertTriangle className="h-4 w-4" /> Acción requerida de su parte
       </div>
       <div className="mt-1 text-sm text-foreground">{title}</div>
@@ -1834,7 +1839,7 @@ function ChatBlockerPanel({ title, rawError, url }: { title: string; rawError: s
           href={url}
           target={isInternal ? undefined : "_blank"}
           rel={isInternal ? undefined : "noopener noreferrer"}
-          className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-500"
+          className="mt-2.5 inline-flex items-center gap-1.5 rounded-md bg-[#FF0000] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#E00000]"
         >
           Añadir créditos <ExternalLink className="h-3.5 w-3.5" />
         </a>
@@ -1872,7 +1877,7 @@ function ComposerPlusMenu({
           type="button"
           variant="ghost"
           size="icon"
-          className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+          className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:bg-[#FF0000]/[0.07] hover:text-[#C80000] dark:hover:text-[#FF6B6B]"
           aria-label="Modo, contexto y herramientas"
         >
           <Plus className="h-4 w-4" />
@@ -1882,50 +1887,50 @@ function ComposerPlusMenu({
         align="start"
         side="top"
         sideOffset={10}
-        className="w-[292px] rounded-xl border-border/70 p-1.5 shadow-xl"
+        className="w-[292px] rounded-lg border-border/70 p-1.5 shadow-xl"
       >
         <DropdownMenuLabel className="px-2.5 py-1.5 text-[11px] font-normal text-muted-foreground">
           {COMPOSER_MODE_LABEL[mode]}
           {activeFileLabel && includeContext ? ` · ${activeFileLabel}` : ""}
         </DropdownMenuLabel>
         <DropdownMenuItem
-          className={cn(itemClass, mode === "app" && "bg-muted font-medium")}
+          className={cn(itemClass, mode === "app" && "bg-[#FF0000]/[0.07] font-medium text-foreground")}
           onClick={() => onModeChange("app")}
         >
           <Rocket className={iconClass} />
           <span>App · construir desde cero</span>
         </DropdownMenuItem>
         <DropdownMenuItem
-          className={cn(itemClass, mode === "build" && "bg-muted font-medium")}
+          className={cn(itemClass, mode === "build" && "bg-[#FF0000]/[0.07] font-medium text-foreground")}
           onClick={() => onModeChange("build")}
         >
           <Sparkles className={iconClass} />
           <span>Build</span>
         </DropdownMenuItem>
         <DropdownMenuItem
-          className={cn(itemClass, mode === "plan" && "bg-muted font-medium")}
+          className={cn(itemClass, mode === "plan" && "bg-[#FF0000]/[0.07] font-medium text-foreground")}
           onClick={() => onModeChange("plan")}
         >
           <ListChecks className={iconClass} />
           <span>Plan</span>
         </DropdownMenuItem>
         <DropdownMenuItem
-          className={cn(itemClass, mode === "debug" && "bg-muted font-medium")}
+          className={cn(itemClass, mode === "debug" && "bg-[#FF0000]/[0.07] font-medium text-foreground")}
           onClick={() => onModeChange("debug")}
         >
           <Bug className={iconClass} />
           <span>Debug</span>
         </DropdownMenuItem>
         <DropdownMenuItem
-          className={cn(itemClass, mode === "ask" && "bg-muted font-medium")}
+          className={cn(itemClass, mode === "ask" && "bg-[#FF0000]/[0.07] font-medium text-foreground")}
           onClick={() => onModeChange("ask")}
         >
           <CircleHelp className={iconClass} />
-          <span>Preguntar</span>
+          <span>Ask</span>
         </DropdownMenuItem>
         <DropdownMenuSeparator className="my-2" />
         <DropdownMenuItem
-          className={cn(itemClass, mode === "image" && "bg-muted font-medium")}
+          className={cn(itemClass, mode === "image" && "bg-[#FF0000]/[0.07] font-medium text-foreground")}
           onClick={() => onModeChange("image")}
         >
           <ImageIcon className={iconClass} />
@@ -1945,7 +1950,7 @@ function ComposerPlusMenu({
             <BookOpen className={iconClass} />
             <span>Skills</span>
           </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="w-52 rounded-xl p-1.5">
+          <DropdownMenuSubContent className="w-52 rounded-lg p-1.5">
             <DropdownMenuItem className="rounded-lg text-sm" onClick={() => onModeChange("plan")}>
               Plan de implementación
             </DropdownMenuItem>
@@ -1962,7 +1967,7 @@ function ComposerPlusMenu({
             <Server className={iconClass} />
             <span>MCP Servers</span>
           </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="w-52 rounded-xl p-1.5">
+          <DropdownMenuSubContent className="w-52 rounded-lg p-1.5">
             <DropdownMenuItem className="rounded-lg text-sm" onClick={() => onModeChange("ask")}>
               Workspace local
             </DropdownMenuItem>
@@ -2037,9 +2042,9 @@ function ModelPickerInline({
         <button
           type="button"
           className={cn(
-            "inline-flex h-7 max-w-[min(168px,38vw)] shrink-0 items-center gap-1 rounded-full border px-2.5 text-[11px] font-medium transition-colors",
+            "inline-flex h-7 max-w-[min(168px,38vw)] shrink-0 items-center gap-1 rounded-md border px-2.5 text-[11px] font-medium transition-colors",
             "border-border/45 bg-background/60 text-foreground/75 hover:border-border hover:bg-muted/40 hover:text-foreground",
-            "data-[state=open]:border-border data-[state=open]:bg-muted/50 data-[state=open]:text-foreground",
+            "data-[state=open]:border-[#FF0000]/30 data-[state=open]:bg-[#FF0000]/[0.06] data-[state=open]:text-foreground",
           )}
           aria-label="Seleccionar modelo"
           title={
@@ -2060,7 +2065,7 @@ function ModelPickerInline({
         side="top"
         sideOffset={8}
         collisionPadding={16}
-        className="z-[1000] w-[min(300px,calc(100vw-24px))] overflow-hidden rounded-xl border border-border/60 bg-popover p-0 text-popover-foreground shadow-[0_16px_48px_rgba(15,23,42,0.14)]"
+        className="z-[1000] w-[min(300px,calc(100vw-24px))] overflow-hidden rounded-lg border border-border/60 bg-popover p-0 text-popover-foreground shadow-[0_16px_48px_rgba(15,23,42,0.14)]"
       >
         <div className="border-b border-border/50 px-2.5 py-2">
           <div className="relative">
@@ -2103,14 +2108,14 @@ function ModelPickerInline({
                       }}
                       className={cn(
                         "cursor-pointer rounded-lg px-2 py-1.5 text-[13px] font-normal",
-                        selected && "bg-accent/60",
+                        selected && "bg-[#FF0000]/[0.07] text-foreground",
                       )}
                     >
                       <span className="min-w-0 flex-1 truncate">{itemLabel}</span>
                       {itemFast ? (
                         <span className="ml-2 shrink-0 text-[10px] text-muted-foreground/70">Rápido</span>
                       ) : null}
-                      {selected ? <Check className="ml-2 h-3.5 w-3.5 shrink-0 text-foreground/70" /> : null}
+                      {selected ? <Check className="ml-2 h-3.5 w-3.5 shrink-0 text-[#FF0000]" /> : null}
                     </DropdownMenuItem>
                   )
                 })}
