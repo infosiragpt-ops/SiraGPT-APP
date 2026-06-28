@@ -11,10 +11,11 @@ import type { DotAnimationResolver, DotMatrixCommonProps } from "@/lib/dotmatrix
 
 export type DotmCircular15Props = DotMatrixCommonProps;
 
-// Canonical "thinking" glyph color. Keep it neutral and token-driven so every
-// processing surface reads as the same SVG activity state instead of a separate
-// pink/purple status badge.
-export const THINKING_GLYPH_COLOR = "hsl(var(--foreground))";
+// Canonical "thinking" glyph color. Owner-requested SiraGPT red (#FF0000) so the
+// DotmCircular15 "PENSANDO" SVG reads as the same red activity state on every
+// processing surface (chat, agent trace, thinking trace, code workspace) — the
+// single thinking glyph used "para todo".
+export const THINKING_GLYPH_COLOR = "#FF0000";
 
 const STEP_COUNT = 24;
 const BASE_OPACITY = 0.07;
