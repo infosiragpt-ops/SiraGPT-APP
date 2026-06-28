@@ -61,29 +61,19 @@ import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import { useCodeWorkspace } from "@/lib/code-workspace-context"
 import type { WorkspaceToolId } from "@/lib/code-workspace-tools"
+import {
+  detectDotenvSecrets,
+  detectEnvKeyHints,
+  mergeSecretEntries,
+  normalizeEnvKey,
+  parseDotenvText,
+  type CodeSecretEntry,
+} from "@/lib/code-secrets"
 import { RealGitPanel } from "@/components/code/git-tool-real"
 import { WorkspaceDeploymentsTool } from "@/components/deployments/workspace-deployments-tool"
 import { RealPublishingPanel } from "@/components/code/publishing-tool-real"
 import { hostingService } from "@/lib/hosting-service"
 import { getGitBinding } from "@/lib/code-git-mirror"
-
-/** Parse pasted .env text into {key,value} (handles `export`, #comments, quotes). */
-function parseDotenvText(text: string): Array<{ key: string; value: string }> {
-  const out: Array<{ key: string; value: string }> = []
-  for (const raw of String(text).split(/\r?\n/)) {
-    let line = raw.trim()
-    if (!line || line.startsWith("#")) continue
-    if (line.startsWith("export ")) line = line.slice(7).trim()
-    const eq = line.indexOf("=")
-    if (eq < 1) continue
-    const key = line.slice(0, eq).trim()
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue
-    let value = line.slice(eq + 1).trim()
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1)
-    out.push({ key, value })
-  }
-  return out
-}
 
 type Deployment = {
   id: string
@@ -102,14 +92,7 @@ type Deployment = {
   requests?: number
 }
 
-type SecretEntry = {
-  id: string
-  key: string
-  value: string
-  scope: "app" | "account"
-  updatedAt: number
-  linked?: boolean
-}
+type SecretEntry = CodeSecretEntry
 
 type DbTable = {
   name: string
@@ -714,31 +697,54 @@ function ResourceMeter({
   )
 }
 
-const DEFAULT_SECRETS: SecretEntry[] = [
-  { id: "s1", key: "OTEL_EXPORTER_OTLP_ENDPOINT", value: "", scope: "app", updatedAt: Date.now() },
-  { id: "s2", key: "SLACK_ENCRYPTION_KEY", value: "", scope: "app", updatedAt: Date.now() },
-  { id: "s3", key: "ANON_TOKEN_SECRET", value: "some-secret-token", scope: "app", updatedAt: Date.now() },
-  { id: "s4", key: "ANTHROPIC_API_KEY", value: "sk-ant-...", scope: "app", updatedAt: Date.now() },
-  { id: "s5", key: "BACKEND_BASE_URL", value: "http://localhost:3001", scope: "app", updatedAt: Date.now() },
-  { id: "s6", key: "BASE_URL", value: "http://localhost:3000", scope: "app", updatedAt: Date.now() },
-  { id: "s7", key: "CEREBRAS_API_KEY", value: "cr-...", scope: "app", updatedAt: Date.now() },
-  { id: "s8", key: "CORS_ORIGINS", value: "*", scope: "app", updatedAt: Date.now() },
-  { id: "s9", key: "DEEPSEEK_API_KEY", value: "ds-...", scope: "app", updatedAt: Date.now() },
-  { id: "s10", key: "DEFAULT_OBJECT_STORAGE_BUCKET_ID", value: "sira-bucket", scope: "app", updatedAt: Date.now() },
-  { id: "s11", key: "ENCRYPTION_KEY", value: "some-enc-key", scope: "app", updatedAt: Date.now() },
-  { id: "s12", key: "FAL_API_KEY", value: "fal-...", scope: "app", updatedAt: Date.now() },
-  { id: "s13", key: "FIGMA_CLIENT_ID", value: "figma-client", scope: "app", updatedAt: Date.now() },
-  { id: "s14", key: "FROM_EMAIL", value: "no-reply@siragpt.com", scope: "app", updatedAt: Date.now() },
-  { id: "s15", key: "FRONTEND_URL", value: "http://localhost:3000", scope: "app", updatedAt: Date.now() },
-  { id: "s16", key: "GEMINI_API_KEY", value: "ai-...", scope: "app", updatedAt: Date.now() },
-  { id: "s17", key: "STRIPE_SECRET_KEY", value: "sk_test_...", scope: "app", updatedAt: Date.now() },
-  { id: "s18", key: "STRIPE_SECRET_KEY_ALT", value: "", scope: "app", updatedAt: Date.now() },
-  { id: "s19", key: "STRIPE_WEBHOOK_SECRET", value: "whsec_...", scope: "app", updatedAt: Date.now() },
-  { id: "s20", key: "UPLOAD_DIR", value: "/tmp/uploads", scope: "app", updatedAt: Date.now() },
-  { id: "s21", key: "VOYAGE_API_KEY", value: "vy-...", scope: "app", updatedAt: Date.now() },
-  { id: "s22", key: "WOS_API_KEY", value: "wos-...", scope: "app", updatedAt: Date.now() },
-  { id: "s23", key: "xAI_API_KEY", value: "xai-...", scope: "app", updatedAt: Date.now() },
-]
+const DEFAULT_SECRETS: SecretEntry[] = []
+const LEGACY_DEMO_SECRET_KEYS = new Set([
+  "OTEL_EXPORTER_OTLP_ENDPOINT",
+  "SLACK_ENCRYPTION_KEY",
+  "ANON_TOKEN_SECRET",
+  "ANTHROPIC_API_KEY",
+  "BACKEND_BASE_URL",
+  "BASE_URL",
+  "CEREBRAS_API_KEY",
+  "CORS_ORIGINS",
+  "DEEPSEEK_API_KEY",
+  "DEFAULT_OBJECT_STORAGE_BUCKET_ID",
+  "ENCRYPTION_KEY",
+  "FAL_API_KEY",
+  "FIGMA_CLIENT_ID",
+  "FROM_EMAIL",
+  "FRONTEND_URL",
+  "GEMINI_API_KEY",
+  "STRIPE_SECRET_KEY",
+  "STRIPE_SECRET_KEY_ALT",
+  "STRIPE_WEBHOOK_SECRET",
+  "UPLOAD_DIR",
+  "VOYAGE_API_KEY",
+  "WOS_API_KEY",
+  "XAI_API_KEY",
+])
+const LEGACY_DEMO_SECRET_VALUES = new Set([
+  "",
+  "some-secret-token",
+  "sk-ant-...",
+  "http://localhost:3001",
+  "http://localhost:3000",
+  "cr-...",
+  "*",
+  "ds-...",
+  "sira-bucket",
+  "some-enc-key",
+  "fal-...",
+  "figma-client",
+  "no-reply@siragpt.com",
+  "ai-...",
+  "sk_test_...",
+  "whsec_...",
+  "/tmp/uploads",
+  "vy-...",
+  "wos-...",
+  "xai-...",
+])
 
 type ConfigurationEntry = {
   id: string
@@ -749,20 +755,21 @@ type ConfigurationEntry = {
   updatedAt: number
 }
 
-const DEFAULT_CONFIGURATIONS: ConfigurationEntry[] = [
-  { id: "c1", key: "CODE_HOST_RUNNER", value: "1", type: "link", updatedAt: Date.now() },
-  { id: "c2", key: "CODE_HOST_RUNNER_ALLOWED_USER_IDS", value: "cmprr3bh4jpA2M7TAvTQV30js0mbC", testingValue: "cmprr3bh4jpA2M7TAvTQV30js0mbC,cmpm0ml410000d7iat3t2hvl3", type: "sync", updatedAt: Date.now() },
-  { id: "c3", key: "GOOGLE_AUTH_BASE_URL", value: "https://siragpt.com", type: "link", updatedAt: Date.now() },
-  { id: "c4", key: "R2_ENDPOINT", value: "https://c6a66a858f460a12b7b0d373637efc00.r2.cloudflarestorage.com", type: "link", updatedAt: Date.now() },
-  { id: "c5", key: "SIRAGPT_MEMORY_EMBED_PROVIDER", value: "jina", type: "link", updatedAt: Date.now() },
-  { id: "c6", key: "SIRAGPT_USER_MEMORY_STORE", value: "pgvector", type: "link", updatedAt: Date.now() },
-  { id: "c7", key: "GOOGLE_ALLOW_FRONTEND_CALLBACK", value: "true", type: "globe", updatedAt: Date.now() },
-  { id: "c8", key: "SEED_ADMIN_EMAIL", value: "admin@example.com", type: "globe", updatedAt: Date.now() },
-  { id: "c9", key: "SEED_ADMIN_PASSWORD", value: "Pasword202212", type: "globe", updatedAt: Date.now() },
-]
+const DEFAULT_CONFIGURATIONS: ConfigurationEntry[] = []
+const LEGACY_DEMO_CONFIG_KEYS = new Set([
+  "CODE_HOST_RUNNER",
+  "CODE_HOST_RUNNER_ALLOWED_USER_IDS",
+  "GOOGLE_AUTH_BASE_URL",
+  "R2_ENDPOINT",
+  "SIRAGPT_MEMORY_EMBED_PROVIDER",
+  "SIRAGPT_USER_MEMORY_STORE",
+  "GOOGLE_ALLOW_FRONTEND_CALLBACK",
+  "SEED_ADMIN_EMAIL",
+  "SEED_ADMIN_PASSWORD",
+])
 
 function SecretsTool() {
-  const { activeFolder } = useCodeWorkspace()
+  const { activeFolder, files } = useCodeWorkspace()
   const connectionId = activeFolder?.id ? getGitBinding(activeFolder.id) : null
   const [secrets, setSecrets] = useWorkspacePersistedState<SecretEntry[]>("secrets", DEFAULT_SECRETS)
   const [configurations, setConfigurations] = useWorkspacePersistedState<ConfigurationEntry[]>("configurations", DEFAULT_CONFIGURATIONS)
@@ -802,6 +809,45 @@ function SecretsTool() {
     hostingService.getEnv(connectionId).then(({ keys }) => setDeployKeys(keys)).catch(() => setDeployKeys([]))
   }, [connectionId])
 
+  React.useEffect(() => {
+    setSecrets((prev) => {
+      const next = prev.filter((s) => {
+        const key = normalizeEnvKey(s.key)
+        return !(LEGACY_DEMO_SECRET_KEYS.has(key) && LEGACY_DEMO_SECRET_VALUES.has(String(s.value || "")))
+      })
+      return next.length === prev.length ? prev : next
+    })
+    setConfigurations((prev) => {
+      const next = prev.filter((c) => !LEGACY_DEMO_CONFIG_KEYS.has(normalizeEnvKey(c.key)))
+      return next.length === prev.length ? prev : next
+    })
+  }, [setConfigurations, setSecrets])
+
+  const envHints = React.useMemo(() => detectEnvKeyHints(files), [files])
+  const envFileSecrets = React.useMemo(() => detectDotenvSecrets(files), [files])
+  const envDetectionSignature = React.useMemo(
+    () => [
+      activeFolder?.id || "default",
+      envHints.map((h) => `${h.key}:${h.source}:${h.hasValue ? "1" : "0"}`).join("|"),
+      envFileSecrets.map((s) => `${s.key}:${s.value.length}:${s.path}`).join("|"),
+    ].join("::"),
+    [activeFolder?.id, envFileSecrets, envHints],
+  )
+
+  React.useEffect(() => {
+    const detected = [
+      ...envHints.map((h) => ({ key: h.key, source: h.source === "env-file" ? "env-file" as const : "detected" as const })),
+      ...envFileSecrets.map((s) => ({ key: s.key, value: s.value, source: "env-file" as const })),
+    ]
+    if (!detected.length) return
+    setSecrets((prev) => {
+      const next = mergeSecretEntries(prev, detected)
+      const before = prev.map((s) => `${s.key}:${s.value}:${s.source || ""}`).sort().join("|")
+      const after = next.map((s) => `${s.key}:${s.value}:${s.source || ""}`).sort().join("|")
+      return before === after ? prev : next
+    })
+  }, [envDetectionSignature, envFileSecrets, envHints, setSecrets])
+
   const copyToClipboard = (text: string, msg: string) => {
     void navigator.clipboard?.writeText(text).then(
       () => toast.success(msg),
@@ -810,7 +856,7 @@ function SecretsTool() {
   }
 
   const handleAddSecret = () => {
-    const keyName = newSecretKey.trim().toUpperCase()
+    const keyName = normalizeEnvKey(newSecretKey)
     if (!keyName) return
     setSecrets((prev) => [
       { id: makeId("secret"), key: keyName, value: newSecretValue, scope: newSecretScope, updatedAt: Date.now() },
@@ -846,22 +892,22 @@ function SecretsTool() {
   const handleBulkImportSecrets = () => {
     const parsed = parseDotenvText(bulkText)
     if (parsed.length === 0) return toast.error("No se encontraron claves válidas.")
-    setSecrets((prev) => {
-      const next = [...prev]
-      for (const { key, value: v } of parsed) {
-        const k = key.toUpperCase()
-        const idx = next.findIndex((r) => r.key === k)
-        if (idx >= 0) {
-          next[idx] = { ...next[idx], value: v, updatedAt: Date.now() }
-        } else {
-          next.unshift({ id: makeId("secret"), key: k, value: v, scope: "app", updatedAt: Date.now() })
-        }
-      }
-      return next
-    })
+    setSecrets((prev) => mergeSecretEntries(prev, parsed.map((p) => ({ ...p, source: "env-file" })), { overwrite: true }))
     setBulkText("")
     setShowBulkImport(false)
     toast.success(`${parsed.length} secret(s) importados`)
+  }
+
+  const handleImportWorkspaceEnv = () => {
+    const detected = [
+      ...envHints.map((h) => ({ key: h.key, source: h.source === "env-file" ? "env-file" as const : "detected" as const })),
+      ...envFileSecrets.map((s) => ({ key: s.key, value: s.value, source: "env-file" as const })),
+    ]
+    if (!detected.length) return toast.info("No encontré .env, .env.example ni referencias process.env/import.meta.env en este workspace.")
+    setSecrets((prev) => mergeSecretEntries(prev, detected, { overwrite: true }))
+    const withValues = envFileSecrets.length
+    const missing = envHints.filter((h) => !envFileSecrets.some((s) => s.key === h.key)).length
+    toast.success(`Entorno detectado: ${withValues} valor(es) importados, ${missing} clave(s) pendiente(s).`)
   }
 
   const handleBulkImportConfigs = () => {
@@ -1022,6 +1068,10 @@ function SecretsTool() {
               <Link2 className="h-3.5 w-3.5" />
               Link Account Secrets
             </Button>
+            <Button size="sm" variant="outline" className="h-8 gap-1.5 text-[12px]" onClick={handleImportWorkspaceEnv}>
+              <Search className="h-3.5 w-3.5" />
+              Detect .env
+            </Button>
             <Button size="sm" className="h-8 gap-1 bg-blue-600 hover:bg-blue-500 text-white text-[12px] font-medium" onClick={() => setShowAddSecret(true)}>
               <Plus className="h-3.5 w-3.5" />
               New Secret
@@ -1041,6 +1091,29 @@ function SecretsTool() {
             className="h-10 pl-3 pr-10 text-[13px] bg-background border border-border/50 rounded-lg shadow-sm"
           />
           <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        </div>
+
+        <div className="rounded-xl border border-blue-500/15 bg-blue-500/5 p-4 text-[12px] text-muted-foreground">
+          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div>
+              <p className="font-semibold text-foreground">Entorno del proyecto</p>
+              <p className="mt-1 leading-relaxed">
+                SiraGPT detecta variables desde `.env`, `.env.example` y referencias de código. Si el proyecto fue clonado,
+                los valores existentes se importan al panel; las claves sin valor quedan pendientes para que el usuario las complete.
+              </p>
+              {envHints.length > 0 ? (
+                <p className="mt-2">
+                  Detectadas: <span className="font-mono text-foreground">{envHints.length}</span> clave(s)
+                  {envFileSecrets.length > 0 ? <> · <span className="font-mono text-foreground">{envFileSecrets.length}</span> con valor desde `.env`</> : null}
+                </p>
+              ) : (
+                <p className="mt-2">Este workspace no declara variables todavía. Un proyecto nuevo desde cero empieza vacío.</p>
+              )}
+            </div>
+            <Button size="sm" variant="outline" className="h-8 shrink-0 text-[12px]" onClick={handleImportWorkspaceEnv}>
+              Detectar ahora
+            </Button>
+          </div>
         </div>
 
         {/* Missing Secrets */}
@@ -1091,6 +1164,25 @@ function SecretsTool() {
                 setActiveMenu={setActiveMenu}
               />
             ))}
+          </div>
+        )}
+
+        {filteredSecrets.length === 0 && (
+          <div className="rounded-xl border border-dashed border-border/70 bg-background/70 p-8 text-center">
+            <KeyRound className="mx-auto h-8 w-8 text-muted-foreground/60" />
+            <h3 className="mt-3 text-[14px] font-semibold text-foreground">Sin secrets todavía</h3>
+            <p className="mx-auto mt-1 max-w-md text-[12px] leading-relaxed text-muted-foreground">
+              Cuando el agente clone o genere un proyecto, aparecerán aquí las variables necesarias. También puedes importar un `.env`
+              o crear una clave manualmente.
+            </p>
+            <div className="mt-4 flex justify-center gap-2">
+              <Button size="sm" variant="outline" className="h-8 text-[12px]" onClick={handleImportWorkspaceEnv}>
+                Detectar entorno
+              </Button>
+              <Button size="sm" className="h-8 bg-blue-600 text-[12px] text-white hover:bg-blue-500" onClick={() => setShowAddSecret(true)}>
+                New Secret
+              </Button>
+            </div>
           </div>
         )}
 

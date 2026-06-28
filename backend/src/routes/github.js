@@ -496,7 +496,7 @@ router.get('/connected/:id/download', authenticateToken, async (req, res) => {
 router.post('/connected/:id/run', authenticateToken, async (req, res) => {
   try {
     const { localPath } = await loadClonedWorkspace(req);
-    const result = await workspaceRunner.start(req.params.id, localPath);
+    const result = await workspaceRunner.start(req.params.id, localPath, { env: req.body?.env });
     return res.json({ ok: true, ...result });
   } catch (err) {
     return res.status(err.status || 500).json({ error: err.message, code: err.code || 'run_failed' });

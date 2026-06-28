@@ -33,6 +33,7 @@ import { CODE_TEMPLATES } from "@/lib/code-templates"
 import { hostRunnerService } from "@/lib/code-runner/host-runner-service"
 import { githubService } from "@/lib/github-service"
 import { CODE_GIT_BINDING_CHANGED_EVENT, getGitBinding } from "@/lib/code-git-mirror"
+import { buildRuntimeEnv } from "@/lib/code-secrets"
 
 type LiveRun = { phase: "idle" | "starting" | "ready" | "error"; devUrl: string; note: string }
 type RunnerStatus = { ready?: boolean; error?: string | null; framework?: string | null; tail?: string[]; devUrl?: string }
@@ -170,7 +171,8 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
     if (boundRepo) {
       modeRef.current = "github"
       runIdRef.current = boundRepo
-      const started = await githubService.run(boundRepo).catch((err) => ({ error: err instanceof Error ? err.message : "runner unreachable" }))
+      const runtimeEnv = buildRuntimeEnv(activeFolder?.id ?? null, files)
+      const started = await githubService.run(boundRepo, runtimeEnv).catch((err) => ({ error: err instanceof Error ? err.message : "runner unreachable" }))
       if ("error" in started && started.error) {
         setLiveRun({ phase: "error", devUrl: "", note: started.error })
         return
@@ -196,7 +198,8 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
     modeRef.current = "host"
     // No-Docker host runner: install deps + boot a real vite dev server, then
     // iframe it through the same-origin reverse proxy (started.devUrl).
-    const started = await hostRunnerService.start(fileMap, runIdRef.current)
+    const runtimeEnv = buildRuntimeEnv(activeFolder?.id ?? null, files)
+    const started = await hostRunnerService.start(fileMap, runIdRef.current, runtimeEnv)
     // An AUTO run (the agent just finished building) must degrade SILENTLY when
     // the runner can't even start — a disabled environment, or a user who isn't
     // on the allowlist (403 → started.error). Falling back to the static preview

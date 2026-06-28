@@ -1,13 +1,13 @@
 'use strict';
 
 /**
- * host-runner ‚Äî a no-Docker, in-process dev-server runner for the /code module.
+ * host-runner ù a no-Docker, in-process dev-server runner for the /code module.
  *
  * Runs a generated project (Vite/Next/Node) as a REAL dev server on a free
  * localhost port by spawning `npm install` + `vite`/`next dev` as child
  * processes on the host. The /code preview then iframes `http://localhost:<port>`
  * directly, so HMR works natively (the dev server's websocket is same-origin
- * with the iframe ‚Äî no proxy needed). This is the "Replit-like" path for
+ * with the iframe ù no proxy needed). This is the "Replit-like" path for
  * environments WITHOUT Docker (e.g. local dev).
  *
  * Safety: disabled in production by default (set CODE_HOST_RUNNER=1 to force on)
@@ -34,9 +34,27 @@ const READY_TIMEOUT_MS = Number(process.env.CODE_RUNNER_READY_TIMEOUT_MS) || 120
 const MAX_CONCURRENT = Number(process.env.CODE_RUNNER_MAX_CONCURRENT) || 2;
 const IDLE_TTL_MS = Number(process.env.CODE_RUNNER_IDLE_TTL_MS) || 30 * 60_000;
 const LOG_TAIL = 200;
+const MAX_ENV_KEYS = 120;
+const MAX_ENV_VALUE_BYTES = 32 * 1024;
+const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const RUNTIME_ENV_FILE_RE = /(^|\/)\.env(?:\.(?!example$|sample$|template$|defaults$)[A-Za-z0-9_-]+)*$/i;
+const BLOCKED_ENV_KEYS = new Set([
+  'NODE_OPTIONS',
+  'PATH',
+  'HOME',
+  'PWD',
+  'SHELL',
+  'INIT_CWD',
+  'NPM_CONFIG_USERCONFIG',
+  'NPM_CONFIG_PREFIX',
+]);
 
 /** runId -> run state */
 const runs = new Map();
+
+function isRuntimeEnvFile(p) {
+  return RUNTIME_ENV_FILE_RE.test(String(p || '').replace(/\\/g, '/'));
+}
 
 function flagEnabled(value, fallback = false) {
   const raw = String(value == null ? '' : value).trim().toLowerCase();
@@ -119,8 +137,18 @@ function normaliseFiles(input) {
   return out.slice(0, MAX_FILES);
 }
 
+function redactRuntimeEnv(text, runtimeEnv = {}) {
+  let out = String(text);
+  for (const value of Object.values(runtimeEnv || {})) {
+    const secret = String(value || '');
+    if (secret.length < 4) continue;
+    out = out.split(secret).join('[secret]');
+  }
+  return out;
+}
+
 function pushLog(run, chunk) {
-  const text = String(chunk).replace(/\[[0-9;]*m/g, ''); // strip ANSI
+  const text = redactRuntimeEnv(String(chunk).replace(/\[[0-9;]*m/g, ''), run && run.runtimeEnv); // strip ANSI
   for (const line of text.split(/\r?\n/)) {
     const t = line.trimEnd();
     if (!t) continue;
@@ -143,10 +171,23 @@ function envFor(extra = {}) {
   };
 }
 
+function normaliseRuntimeEnv(input) {
+  const out = {};
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return out;
+  for (const [rawKey, rawValue] of Object.entries(input).slice(0, MAX_ENV_KEYS)) {
+    const key = String(rawKey || '').trim().toUpperCase();
+    if (!ENV_KEY_RE.test(key) || BLOCKED_ENV_KEYS.has(key)) continue;
+    const value = rawValue == null ? '' : String(rawValue);
+    if (Buffer.byteLength(value) > MAX_ENV_VALUE_BYTES) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
 function killGroup(child) {
   if (!child || child.killed) return;
   try {
-    process.kill(-child.pid, 'SIGTERM'); // detached ‚Üí kill the whole group
+    process.kill(-child.pid, 'SIGTERM'); // detached ? kill the whole group
   } catch {
     try { child.kill('SIGTERM'); } catch { /* already gone */ }
   }
@@ -202,6 +243,9 @@ function needInstall(dir) {
 async function writeFiles(dir, files) {
   await fsp.mkdir(dir, { recursive: true });
   for (const f of files) {
+    // Secrets are injected into the dev server env. Do not write raw .env
+    // files into the runner directory where install scripts could read them.
+    if (isRuntimeEnvFile(f.path)) continue;
     const full = path.join(dir, f.path);
     if (!full.startsWith(dir + path.sep)) continue; // defence in depth
     await fsp.mkdir(path.dirname(full), { recursive: true });
@@ -220,7 +264,7 @@ function installDeps(dir, run) {
     run.installChild = child;
     const to = setTimeout(() => {
       killGroup(child);
-      reject(new Error('npm install excedi√≥ el tiempo l√≠mite'));
+      reject(new Error('npm install excediù el tiempo lùmite'));
     }, INSTALL_TIMEOUT_MS);
     child.stdout.on('data', (d) => pushLog(run, d));
     child.stderr.on('data', (d) => pushLog(run, d));
@@ -233,7 +277,7 @@ function installDeps(dir, run) {
         try { fs.writeFileSync(path.join(dir, '.sira-pkg-hash'), pkgHash(dir)); } catch { /* best effort */ }
         resolve();
       } else {
-        reject(new Error(`npm install fall√≥ (c√≥digo ${code})`));
+        reject(new Error(`npm install fallù (cùdigo ${code})`));
       }
     });
   });
@@ -260,7 +304,7 @@ function startDev(dir, fw, port, run) {
   const child = spawn(cmd, args, {
     cwd: dir,
     detached: true,
-    env: envFor({ PORT: String(port), HOST: '127.0.0.1' }),
+    env: envFor({ ...run.runtimeEnv, PORT: String(port), HOST: '127.0.0.1' }),
   });
   run.child = child;
   child.stdout.on('data', (d) => pushLog(run, d));
@@ -270,7 +314,7 @@ function startDev(dir, fw, port, run) {
     run.child = null;
     if (run.phase !== 'ready' && !run.stopped) {
       run.phase = 'error';
-      run.error = run.error || `el dev server termin√≥ (c√≥digo ${code})`;
+      run.error = run.error || `el dev server terminù (cùdigo ${code})`;
     }
   });
 }
@@ -288,7 +332,7 @@ async function probeReady(port, basePath, deadline, run) {
     await sleep(1000);
   }
   if (run.stopped) return;
-  throw new Error('el dev server no respondi√≥ a tiempo');
+  throw new Error('el dev server no respondiù a tiempo');
 }
 
 async function pipeline(run) {
@@ -298,14 +342,14 @@ async function pipeline(run) {
     run.phase = 'installing';
     await installDeps(run.dir, run);
   } else {
-    pushLog(run, 'dependencias en cach√© ‚Äî omito npm install');
+    pushLog(run, 'dependencias en cachù ù omito npm install');
   }
   if (run.stopped) return;
   run.phase = 'starting';
   const port = await findFreePort();
   run.port = port;
   run.internalUrl = `http://127.0.0.1:${port}`;
-  // Public, same-origin URL the browser reaches through the Next.js ‚Üí Express
+  // Public, same-origin URL the browser reaches through the Next.js ? Express
   // proxy. The real dev server stays private on 127.0.0.1:<port>.
   run.devUrl = shouldUseProxyUrls() ? run.basePath : publicDevUrl(run.runId, port);
   pushLog(run, `dev server en ${run.devUrl}`);
@@ -313,7 +357,7 @@ async function pipeline(run) {
   await probeReady(port, shouldUseProxyUrls() ? run.basePath : '/', Date.now() + READY_TIMEOUT_MS, run);
   if (run.stopped) return;
   run.phase = 'ready';
-  pushLog(run, 'listo ‚úì');
+  pushLog(run, 'listo ?');
 }
 
 function evictIfNeeded() {
@@ -325,7 +369,7 @@ function evictIfNeeded() {
 }
 
 /** Start (or restart) a run. Returns immediately; the install/boot runs async. */
-async function startRun({ runId, userId, files }) {
+async function startRun({ runId, userId, files, env }) {
   if (!enabled()) {
     const e = new Error('host_runner_disabled');
     e.code = 'disabled';
@@ -334,7 +378,7 @@ async function startRun({ runId, userId, files }) {
   const id = safeId(runId);
   const norm = normaliseFiles(files);
   if (!norm.some((f) => f.path === 'package.json')) {
-    const e = new Error('el proyecto no tiene package.json ‚Äî no es ejecutable');
+    const e = new Error('el proyecto no tiene package.json ù no es ejecutable');
     e.code = 'no_package';
     throw e;
   }
@@ -343,7 +387,7 @@ async function startRun({ runId, userId, files }) {
 
   const dir = path.join(ROOT, id);
   // The preview token rides in the URL PATH (not a cookie). The preview iframe is
-  // sandboxed ‚Üí opaque ("null") origin, and Vite's <script type="module"> fetches
+  // sandboxed ? opaque ("null") origin, and Vite's <script type="module"> fetches
   // use a credentials mode that won't send a cross-origin cookie, so a cookie
   // gate would 403 every asset. A path-embedded token is carried automatically by
   // every asset/module/dynamic-import request regardless of credentials or CORS.
@@ -361,6 +405,7 @@ async function startRun({ runId, userId, files }) {
     devUrl: '',
     internalUrl: '',
     logs: [],
+    runtimeEnv: normaliseRuntimeEnv(env),
     error: null,
     child: null,
     installChild: null,
@@ -448,7 +493,7 @@ function getProxyTarget(runId, userId) {
   return { port: run.port, phase: run.phase, framework: run.framework };
 }
 
-// Idle reaper ‚Äî stop dev servers nobody is watching.
+// Idle reaper ù stop dev servers nobody is watching.
 const reaper = setInterval(() => {
   const now = Date.now();
   for (const [id, run] of runs) {
@@ -477,6 +522,8 @@ module.exports = {
   getProxyTarget,
   publicBasePath,
   publicDevUrl,
+  normaliseRuntimeEnv,
+  isRuntimeEnvFile,
   useProxyUrls: shouldUseProxyUrls,
   proxyUrlsEnabled,
 };
