@@ -1634,9 +1634,23 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
             chatId,
             role: 'ASSISTANT',
             content: normalizedResponseContent,
-            tokens,
+            // Store the REAL token count (tiktoken over the saved content), not
+            // the `tokens` param — callers pass a char-length approximation
+            // (fullResponseContent.length + prompt.length), which made
+            // Message.tokens disagree with ApiUsage.tokens (which already uses
+            // totalTokens) and corrupted per-message analytics/billing.
+            tokens: totalTokens,
             files: assistantFiles.length > 0 ? JSON.stringify(assistantFiles) : null,
             metadata: metadataPayload,
+            // Claude-style extended thinking: chain-of-thought text + the raw
+            // OpenRouter reasoning_details array (replayed verbatim on later
+            // Anthropic tool-call turns). Both null when the model didn't think.
+            reasoning: (reasoningPayload && typeof reasoningPayload.text === 'string' && reasoningPayload.text.trim())
+              ? reasoningPayload.text
+              : null,
+            reasoningDetails: (reasoningPayload && reasoningPayload.details != null)
+              ? reasoningPayload.details
+              : undefined,
           }
         });
 
@@ -1650,40 +1664,6 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
           }
         });
       }
-      assistantMessage = await prisma.message.create({
-        data: {
-          chatId,
-          role: 'ASSISTANT',
-          content: normalizedResponseContent,
-          // Store the REAL token count (tiktoken over the saved content), not
-          // the `tokens` param — callers pass a char-length approximation
-          // (fullResponseContent.length + prompt.length), which made
-          // Message.tokens disagree with ApiUsage.tokens (which already uses
-          // totalTokens) and corrupted per-message analytics/billing.
-          tokens: totalTokens,
-          files: assistantFiles.length > 0 ? JSON.stringify(assistantFiles) : null,
-          metadata: metadataPayload,
-          // Claude-style extended thinking: chain-of-thought text + the raw
-          // OpenRouter reasoning_details array (replayed verbatim on later
-          // Anthropic tool-call turns). Both null when the model didn't think.
-          reasoning: (reasoningPayload && typeof reasoningPayload.text === 'string' && reasoningPayload.text.trim())
-            ? reasoningPayload.text
-            : null,
-          reasoningDetails: (reasoningPayload && reasoningPayload.details != null)
-            ? reasoningPayload.details
-            : undefined,
-        }
-      });
-
-      await prisma.chat.update({
-        where: { id: chatId },
-        data: {
-          updatedAt: new Date(),
-          title: chat.title === 'New Chat'
-            ? prompt.slice(0, 50) + (prompt.length > 50 ? '...' : '')
-            : chat.title
-        }
-      });
 
       // Agent harness: persist the run trace now that the assistant row
       // exists — agent_steps rows (full fidelity) + messages.agent_metadata

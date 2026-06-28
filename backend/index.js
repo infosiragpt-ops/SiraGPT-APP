@@ -1005,7 +1005,10 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/legal', legalRoutes);
 app.use('/api/public', publicRoutes);
-app.use('/api/publishing', publishingRoutes);
+// Deployment control plane: authn + admin only. The POST actions can dispatch
+// GitHub workflows (republish) with server-side tokens, so this must never be
+// reachable by unauthenticated or non-admin callers.
+app.use('/api/publishing', authenticateToken, requireAdmin, publishingRoutes);
 app.use('/api/download', downloadRoutes);
 app.use('/api/elevenlabs', elevenlabsRoutes);
 app.use('/api/video', videoRoutes);
