@@ -102,6 +102,22 @@ import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 
 type ComposerMode = "app" | "build" | "plan" | "debug" | "ask" | "image"
 
+const CODE_OPEN_PREVIEW_EVENT = "siragpt:code-open-preview"
+const CODE_RUN_PREVIEW_EVENT = "siragpt:code-run-preview"
+
+function filesContainNodeProject(files: Array<{ path: string; content: string }>): boolean {
+  return files.some((file) => /(^|\/)package\.json$/i.test(file.path))
+}
+
+function openPreviewAndMaybeRun(files: Array<{ path: string; content: string }>): void {
+  if (typeof window === "undefined") return
+  window.dispatchEvent(new CustomEvent(CODE_OPEN_PREVIEW_EVENT))
+  if (!filesContainNodeProject(files)) return
+  window.setTimeout(() => {
+    window.dispatchEvent(new CustomEvent(CODE_RUN_PREVIEW_EVENT, { detail: { source: "agent" } }))
+  }, 350)
+}
+
 const COMPOSER_MODE_LABEL: Record<ComposerMode, string> = {
   app: "App",
   build: "Build",
@@ -236,7 +252,7 @@ function buildSystemContext(
         "El workspace alojará un SOFTWARE FULL-STACK real: Next.js 14 App Router",
         "+ TypeScript + Prisma + PostgreSQL. Usa package.json, app/**,",
         "app/api/**, lib/db.ts, prisma/schema.prisma, .env.example y",
-        "docker-compose.yml. El usuario lo ejecuta con ▶ Ejecutar (dev server)",
+        "docker-compose.yml. El preview se arranca automáticamente con el dev server",
         "y prepara la base de datos con db:push/db:seed. NO uses arrays globales",
         "ni almacenamiento en memoria como persistencia primaria.",
       ].join("\n")
@@ -246,7 +262,7 @@ function buildSystemContext(
           ? "El workspace contiene un PROYECTO Node REAL (hay package.json) — típicamente"
           : "El workspace alojará un PROYECTO Node REAL.",
         "Usa imports npm normales y extensiones .tsx/.ts; el usuario lo ejecuta",
-        "con ▶ Ejecutar (dev server). Respeta el stack ya presente en package.json",
+        "con dev server autoejecutado en preview. Respeta el stack ya presente en package.json",
         "si existe.",
       ].join("\n")
     : [
@@ -570,16 +586,14 @@ export function AICodeChatPanel() {
                   const hasHtml = blocks.some((b) => /\.html?$/i.test(b.path || ""))
                   toast.success(
                     hasPkg
-                      ? "Proyecto generado — pulsa ▶ Ejecutar para levantar el dev server"
+                      ? "Proyecto generado — arrancando preview automático…"
                       : hasHtml
                         ? "App generada — revisa el preview en vivo →"
                         : `Generados ${blocks.length} archivo(s) — abriendo preview`,
                   )
                   // applyBlock already emits "siragpt:code-open-preview"; make
                   // sure the preview pane is shown even if it was collapsed.
-                  if (typeof window !== "undefined") {
-                    window.dispatchEvent(new CustomEvent("siragpt:code-open-preview"))
-                  }
+                  openPreviewAndMaybeRun(applied)
                 }
               } catch {
                 /* parsing/apply failure → user can still apply manually */
@@ -706,9 +720,9 @@ export function AICodeChatPanel() {
             `- **Stack:** Vite 7 + React 18 + TypeScript + Tailwind v4`,
             `- **Incluye:** animaciones de scroll (Framer Motion) y el componente «Invitar al proyecto»`,
             ``,
-            `Pulsa **▶ Ejecutar** para instalar dependencias y ver la landing en vivo. Itera pidiéndome cambios en el chat.`,
+            `Estoy arrancando el **preview en vivo** automáticamente. Itera pidiéndome cambios en el chat.`,
           ].join("\n")
-          toastMsg = "Landing generada — pulsa ▶ Ejecutar →"
+          toastMsg = "Landing generada — arrancando preview →"
         } else {
           const result = await intakeService.generate(text)
           appliedFiles = result.files || []
@@ -726,9 +740,9 @@ export function AICodeChatPanel() {
             `- **Base de datos:** ${result.blueprint.stack.database}`,
             `- **Incluye:** API routes, Prisma schema, seed, .env.example y Docker Compose para Postgres`,
             ``,
-            `Revisa el **preview en vivo** → y el código en el árbol de archivos. Para ejecutar la capa real: **▶ Ejecutar**, luego \`npm run db:push\` y \`npm run db:seed\` si el workspace no lo hizo automáticamente.`,
+            `Estoy arrancando el **preview en vivo** automáticamente. Si el runner devuelve logs, puedo repararlos desde este mismo chat.`,
           ].join("\n")
-          toastMsg = "Software full-stack generado — revisa el preview en vivo →"
+          toastMsg = "Software full-stack generado — arrancando preview →"
         }
         // Apply index.html LAST so it stays the active tab and the live preview
         // lands on the runnable app rather than a doc file.
@@ -738,9 +752,7 @@ export function AICodeChatPanel() {
         for (const file of ordered) {
           applyBlock(file.path, file.content)
         }
-        if (typeof window !== "undefined") {
-          window.dispatchEvent(new CustomEvent("siragpt:code-open-preview"))
-        }
+        openPreviewAndMaybeRun(appliedFiles)
         setTurns((prev) =>
           prev.map((t) => (t.id === `${id}-a` ? { ...t, content: summary, streaming: false } : t)),
         )
@@ -797,9 +809,7 @@ export function AICodeChatPanel() {
           (/(^|\/)index\.html?$/i.test(a.path) ? 1 : 0) - (/(^|\/)index\.html?$/i.test(b.path) ? 1 : 0),
       )
       for (const f of ordered) applyBlock(f.path, f.content)
-      if (files.length > 0 && typeof window !== "undefined") {
-        window.dispatchEvent(new CustomEvent("siragpt:code-open-preview"))
-      }
+      if (files.length > 0) openPreviewAndMaybeRun(files)
     },
     [applyBlock],
   )

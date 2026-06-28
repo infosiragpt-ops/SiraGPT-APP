@@ -41,6 +41,8 @@ type RunnerStatus = { ready?: boolean; error?: string | null; framework?: string
 type LogEntry = { level: string; text: string; id: number }
 type Device = "responsive" | "phone"
 
+const CODE_RUN_PREVIEW_EVENT = "siragpt:code-run-preview"
+
 const KIND_LABEL: Record<PreviewKind, string> = {
   html: "web",
   react: "react",
@@ -87,6 +89,22 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
     [files],
   )
   const canRunProject = hasNodeProject || Boolean(gitBinding)
+  const projectSignature = React.useMemo(() => {
+    if (!canRunProject) return ""
+    const names = Object.keys(files || {}).sort()
+    const keyFiles = [
+      "package.json",
+      "index.html",
+      "src/main.tsx",
+      "src/App.tsx",
+      "app/page.tsx",
+      "prisma/schema.prisma",
+    ]
+    const fingerprint = keyFiles
+      .map((path) => `${path}:${files[path]?.content?.length ?? 0}`)
+      .join("|")
+    return `${activeFolder?.id || "local"}:${gitBinding || "workspace"}:${names.join(",")}:${fingerprint}`
+  }, [activeFolder?.id, canRunProject, files, gitBinding])
 
   React.useEffect(() => {
     if (typeof window === "undefined") return
@@ -195,6 +213,41 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
     }
     pollUntilReady(() => opencodeService.runStatus(), res.devUrl || "http://localhost:5173")
   }, [activeFolder?.id, files, pollUntilReady])
+
+  const pendingAutoRunRef = React.useRef(false)
+  const lastAutoRunSignatureRef = React.useRef("")
+  const tryAutoRun = React.useCallback(() => {
+    if (!pendingAutoRunRef.current) return
+    if (!canRunProject || !projectSignature) return
+    if (lastAutoRunSignatureRef.current === projectSignature && liveRun.phase !== "error") {
+      pendingAutoRunRef.current = false
+      return
+    }
+
+    pendingAutoRunRef.current = false
+    const shouldRestart = liveRun.phase === "starting" || liveRun.phase === "ready"
+    lastAutoRunSignatureRef.current = projectSignature
+    if (shouldRestart) {
+      stopApp()
+      window.setTimeout(() => void runApp(), 200)
+      return
+    }
+    void runApp()
+  }, [canRunProject, liveRun.phase, projectSignature, runApp, stopApp])
+
+  React.useEffect(() => {
+    tryAutoRun()
+  }, [tryAutoRun])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const onAutoRun = () => {
+      pendingAutoRunRef.current = true
+      window.setTimeout(() => tryAutoRun(), 250)
+    }
+    window.addEventListener(CODE_RUN_PREVIEW_EVENT, onAutoRun)
+    return () => window.removeEventListener(CODE_RUN_PREVIEW_EVENT, onAutoRun)
+  }, [tryAutoRun])
 
   React.useEffect(
     () => () => {
