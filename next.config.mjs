@@ -6,9 +6,6 @@ import { fileURLToPath } from 'node:url'
 // and merges the per-locale message bundle with the English fallback).
 const withNextIntl = createNextIntlPlugin('./lib/i18n/request.ts')
 
-// Replit Preview renders the dev server inside a cross-origin iframe.
-// Keep frame blocking everywhere else, but allow that explicit dev mode.
-const allowReplitPreview = process.env.ALLOW_REPLIT_PREVIEW === '1'
 const isReplitDeployment = process.env.REPLIT_DEPLOYMENT === '1'
 const replitBackendBase = 'http://127.0.0.1:5050'
 const projectRoot = dirname(fileURLToPath(import.meta.url))
@@ -110,12 +107,6 @@ const nextConfig = {
       {
         source: '/(.*)',
         headers: [
-          ...(allowReplitPreview ? [] : [
-            {
-              key: 'X-Frame-Options',
-              value: 'DENY',
-            },
-          ]),
           {
             key: 'X-Content-Type-Options',
             value: 'nosniff',

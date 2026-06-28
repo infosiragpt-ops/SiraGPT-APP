@@ -13,6 +13,8 @@ import { applyNextApiCorsHeaders, buildNextApiPreflightResponse } from './lib/ne
 
 const LOCALE_COOKIE = 'NEXT_LOCALE'
 const ONE_YEAR = 60 * 60 * 24 * 365
+const CODE_RUNNER_PROXY_RE = /^\/api\/code-runner\/[^/]+\/proxy(?:\/|$)/
+const ALLOW_FRAME_PREVIEW = process.env.ALLOW_REPLIT_PREVIEW === '1'
 
 // Server Action IDs in Next.js are 40-char lowercase hex SHA-1 digests.
 // Anything else hitting the `Next-Action` header is either a stale client
@@ -30,20 +32,20 @@ export async function middleware(request: NextRequest) {
   const nextActionHeader = request.headers.get('next-action')
   if (nextActionHeader !== null) {
     if (!SERVER_ACTION_ID_RE.test(nextActionHeader)) {
-      return new NextResponse(null, { status: 410 })
+      return applyFrameHeaders(pathname, new NextResponse(null, { status: 410 }))
     }
     // Even if it matches the hash shape, this app doesn't ship any
     // server actions, so the action will never resolve. Treat as gone.
-    return new NextResponse(null, { status: 410 })
+    return applyFrameHeaders(pathname, new NextResponse(null, { status: 410 }))
   }
 
   // API + Next internals skip locale handling but keep CORS for /api.
   if (pathname.startsWith('/api/')) {
     if (request.method === 'OPTIONS') {
-      return buildNextApiPreflightResponse(request)
+      return applyFrameHeaders(pathname, buildNextApiPreflightResponse(request))
     }
     const res = NextResponse.next()
-    return applyNextApiCorsHeaders(request, res)
+    return applyFrameHeaders(pathname, applyNextApiCorsHeaders(request, res))
   }
 
   // Expose the current pathname to RSC via a request header. The root
@@ -57,7 +59,7 @@ export async function middleware(request: NextRequest) {
   // (besides forwarding the new header).
   const existing = request.cookies.get(LOCALE_COOKIE)?.value
   if (isSupportedLocale(existing)) {
-    return NextResponse.next({ request: { headers: reqHeaders } })
+    return applyFrameHeaders(pathname, NextResponse.next({ request: { headers: reqHeaders } }))
   }
 
   // 2) Negotiate from Accept-Language using IETF precedence.
@@ -111,7 +113,21 @@ export async function middleware(request: NextRequest) {
   const locale = isSupportedLocale(resolved) ? (resolved as string) : DEFAULT_LOCALE
   const res = NextResponse.next({ request: { headers: reqHeaders } })
   res.cookies.set(LOCALE_COOKIE, locale, { path: '/', maxAge: ONE_YEAR, sameSite: 'lax' })
-  return res
+  return applyFrameHeaders(pathname, res)
+}
+
+function applyFrameHeaders(pathname: string, response: NextResponse): NextResponse {
+  if (CODE_RUNNER_PROXY_RE.test(pathname)) {
+    response.headers.set('X-Frame-Options', 'SAMEORIGIN')
+    response.headers.set('Content-Security-Policy', "frame-ancestors 'self'")
+    return response
+  }
+
+  if (!ALLOW_FRAME_PREVIEW) {
+    response.headers.set('X-Frame-Options', 'DENY')
+  }
+
+  return response
 }
 
 /** Skip geoloc for RFC1918 + loopback + link-local addresses. */
