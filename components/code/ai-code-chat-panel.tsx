@@ -34,12 +34,14 @@ import {
   ListChecks,
   Plus,
   Rocket,
+  Search,
   Server,
   Sparkles,
   StopCircle,
 } from "lucide-react"
 import { toast } from "sonner"
 
+import { DictationButton } from "@/components/codex/dictation-button"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -53,6 +55,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import { apiClient } from "@/lib/api"
@@ -1477,12 +1480,6 @@ export function AICodeChatPanel() {
               }}
               onIncludeContextChange={setIncludeContext}
             />
-            <ModelPickerInline
-              models={pickerModels}
-              selectedModel={activeModelName || ""}
-              fast={modelIsFast}
-              onSelect={(m) => chooseCodeModel({ name: m.name, provider: m.provider })}
-            />
             {engineAvailable ? (
               <Button
                 type="button"
@@ -1508,6 +1505,22 @@ export function AICodeChatPanel() {
               </Button>
             ) : null}
             <span className="min-w-0 flex-1" />
+            <ModelPickerInline
+              models={pickerModels}
+              selectedModel={activeModelName || ""}
+              fast={modelIsFast}
+              onSelect={(m) => chooseCodeModel({ name: m.name, provider: m.provider })}
+            />
+            <DictationButton
+              variant="light"
+              locale={typeof navigator !== "undefined" ? navigator.language : "es-ES"}
+              onTranscript={(text) => {
+                const chunk = text.trim()
+                if (!chunk) return
+                setInput((prev) => normalizeChatInput(prev ? `${prev} ${chunk}` : chunk).value)
+                inputRef.current?.focus()
+              }}
+            />
             {busy ? (
               <Button
                 type="button"
@@ -2051,6 +2064,9 @@ function ModelPickerInline({
   fast?: boolean
   onSelect: (model: ModelOption) => void
 }) {
+  const [open, setOpen] = React.useState(false)
+  const [query, setQuery] = React.useState("")
+
   const grouped = React.useMemo(() => {
     const map = new Map<string, ModelOption[]>()
     for (const m of models) {
@@ -2061,71 +2077,114 @@ function ModelPickerInline({
     return Array.from(map.entries())
   }, [models])
 
+  const filtered = React.useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return grouped
+    return grouped
+      .map(([provider, list]) => [
+        provider,
+        list.filter((m) => {
+          const label = (m.displayName || m.name).toLowerCase()
+          return label.includes(q) || provider.toLowerCase().includes(q) || m.name.toLowerCase().includes(q)
+        }),
+      ] as const)
+      .filter(([, list]) => list.length > 0)
+  }, [grouped, query])
+
   const active = models.find((m) => m.name === selectedModel)
   const label = active?.displayName || active?.name || selectedModel || "Modelo"
 
+  React.useEffect(() => {
+    if (!open) setQuery("")
+  }, [open])
+
   return (
-    <DropdownMenu>
+    <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
-        <Button
+        <button
           type="button"
-          variant="ghost"
-          size="sm"
-          className="h-7 min-w-0 gap-1 rounded-md px-1.5 text-[11px] font-normal text-muted-foreground hover:bg-muted/80 hover:text-foreground data-[state=open]:bg-muted/80"
+          className={cn(
+            "inline-flex h-7 max-w-[min(168px,38vw)] shrink-0 items-center gap-1 rounded-full border px-2.5 text-[11px] font-medium transition-colors",
+            "border-border/45 bg-background/60 text-foreground/75 hover:border-border hover:bg-muted/40 hover:text-foreground",
+            "data-[state=open]:border-border data-[state=open]:bg-muted/50 data-[state=open]:text-foreground",
+          )}
           aria-label="Seleccionar modelo"
           title={
             fast
-              ? "Modelo rápido (auto-seleccionado) — ideal para el preview en vivo"
-              : "Modelo lento (reasoning) — puede cortar el preview en vivo"
+              ? `${label} — recomendado para preview en vivo`
+              : `${label} — modelo de razonamiento; puede ser más lento en preview`
           }
         >
-          {fast ? (
-            <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-violet-500/15 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-violet-600 dark:text-violet-300">
-              ⚡ rápido
-            </span>
-          ) : (
-            <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-amber-500/15 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">
-              ⏳ lento
-            </span>
-          )}
-          <span className="max-w-[110px] truncate">{label}</span>
-          <ChevronDown className="h-3 w-3 opacity-50" />
-        </Button>
+          {!fast ? (
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500/80" aria-hidden />
+          ) : null}
+          <span className="truncate">{label}</span>
+          <ChevronDown className="h-3 w-3 shrink-0 opacity-45" />
+        </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
-        align="start"
+        align="end"
         side="top"
-        sideOffset={10}
+        sideOffset={8}
         collisionPadding={16}
-        className="z-[1000] max-h-[min(360px,calc(100vh-140px))] w-[284px] overflow-y-auto rounded-2xl border border-border/70 bg-background p-1.5 text-foreground shadow-[0_24px_70px_rgba(15,23,42,0.22)]"
+        className="z-[1000] w-[min(300px,calc(100vw-24px))] overflow-hidden rounded-xl border border-border/60 bg-popover p-0 text-popover-foreground shadow-[0_16px_48px_rgba(15,23,42,0.14)]"
       >
-        {models.length === 0 ? (
-          <div className="px-3 py-3 text-xs text-muted-foreground">
-            Cargando modelos…
+        <div className="border-b border-border/50 px-2.5 py-2">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/60" />
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Buscar modelo…"
+              className="h-8 border-0 bg-muted/40 pl-8 text-xs shadow-none focus-visible:ring-1"
+              onKeyDown={(e) => e.stopPropagation()}
+            />
           </div>
-        ) : (
-          grouped.map(([provider, list], i) => (
-            <React.Fragment key={provider}>
-              {i > 0 ? <DropdownMenuSeparator /> : null}
-              <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground/80">
-                {provider}
-              </DropdownMenuLabel>
-              {list.map((m) => (
-                <DropdownMenuItem
-                  key={m.name}
-                  onClick={() => onSelect(m)}
-                  className={cn(
-                    "cursor-pointer rounded-xl px-2.5 py-2 text-sm",
-                    m.name === selectedModel && "bg-muted font-semibold"
-                  )}
-                >
-                  <span className="truncate">{m.displayName || m.name}</span>
-                  {m.name === selectedModel ? <Check className="ml-auto h-3.5 w-3.5 text-sky-500" /> : null}
-                </DropdownMenuItem>
-              ))}
-            </React.Fragment>
-          ))
-        )}
+        </div>
+        <div className="max-h-[min(320px,calc(100vh-180px))] overflow-y-auto p-1">
+          {models.length === 0 ? (
+            <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+              Cargando modelos…
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+              Sin coincidencias
+            </div>
+          ) : (
+            filtered.map(([provider, list], i) => (
+              <React.Fragment key={provider}>
+                {i > 0 ? <DropdownMenuSeparator className="my-1" /> : null}
+                <DropdownMenuLabel className="px-2 py-1 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
+                  {provider}
+                </DropdownMenuLabel>
+                {list.map((m) => {
+                  const selected = m.name === selectedModel
+                  const itemLabel = m.displayName || m.name
+                  const itemFast = !isSlowModel(m.name)
+                  return (
+                    <DropdownMenuItem
+                      key={m.name}
+                      onClick={() => {
+                        onSelect(m)
+                        setOpen(false)
+                      }}
+                      className={cn(
+                        "cursor-pointer rounded-lg px-2 py-1.5 text-[13px] font-normal",
+                        selected && "bg-accent/60",
+                      )}
+                    >
+                      <span className="min-w-0 flex-1 truncate">{itemLabel}</span>
+                      {itemFast ? (
+                        <span className="ml-2 shrink-0 text-[10px] text-muted-foreground/70">Rápido</span>
+                      ) : null}
+                      {selected ? <Check className="ml-2 h-3.5 w-3.5 shrink-0 text-foreground/70" /> : null}
+                    </DropdownMenuItem>
+                  )
+                })}
+              </React.Fragment>
+            ))
+          )}
+        </div>
       </DropdownMenuContent>
     </DropdownMenu>
   )
