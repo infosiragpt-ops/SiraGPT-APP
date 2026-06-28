@@ -130,6 +130,8 @@ jobs:
             git fetch origin "${TARGET_SHA}"
             git merge --ff-only "${TARGET_SHA}"
             ${COMPOSE} config -q
+            echo "[deploy-workflow] Applying database migrations"
+            ${COMPOSE} run --rm backend npx prisma migrate deploy --schema prisma/schema.prisma
             ${COMPOSE} build backend frontend
             ${COMPOSE} up -d --no-deps backend frontend
             wait_ready
