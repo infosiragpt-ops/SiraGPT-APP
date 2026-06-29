@@ -145,6 +145,33 @@ function presetEntities(prompt) {
   return [];
 }
 
+function isCafePrompt(text) {
+  return /\b(cafeter[ií]a|cafe|coffee shop|caf[eé]|barista|espresso|latte|capuccino|cappuccino|brunch|panader[ií]a)\b/i.test(text);
+}
+
+function isPublicWebsitePrompt(text) {
+  const hasWebsiteCue = /\b(web|p[aá]gina|pagina|sitio|landing|one[- ]?page|home|website)\b/i.test(text);
+  const hasOperationalCue = /\b(software|sistema|app|aplicaci[oó]n|gesti[oó]n|gestionar|administra(?:r|ci[oó]n)|manejar|registrar|crud|dashboard|panel|backend|base de datos|inventario|punto de venta|pos|pedidos?|ordenes?|[oó]rdenes?)\b/i.test(text);
+  return hasWebsiteCue && !hasOperationalCue;
+}
+
+function showcaseBriefOverride(text) {
+  if (isCafePrompt(text) && isPublicWebsitePrompt(text)) {
+    return {
+      purpose: 'Cafetería de especialidad con menú artesanal, reservas y ubicación',
+      platform: 'landing',
+      audience: 'clientes locales, visitantes y amantes del café',
+      coreFeatures: ['Menú destacado', 'Reservas y contacto', 'Ubicación y horarios'],
+      dataEntities: [],
+      style: { theme: 'cafeteria minimalista', refs: [] },
+      integrations: [],
+      constraints: 'Landing responsive con estética profesional de cafetería, menú visible, CTA de reserva y sección de ubicación.',
+      openQuestions: [],
+    };
+  }
+  return null;
+}
+
 // coreFeature keyword → human label. Mirrors blueprint's FEATURE_PAGES so the
 // derived features actually drive the plan (auth → Login/Registro, etc.).
 const FEATURE_RULES = [
@@ -298,6 +325,15 @@ function briefFromPrompt(prompt) {
   const text = clean(prompt);
   if (!text) {
     throw new Error('brief-from-prompt: prompt is empty');
+  }
+
+  const showcase = showcaseBriefOverride(text);
+  if (showcase) {
+    const parsedShowcase = ProjectBriefSchema.safeParse(showcase);
+    if (!parsedShowcase.success) {
+      throw new Error(`brief-from-prompt: showcase brief failed validation: ${parsedShowcase.error.message}`);
+    }
+    return parsedShowcase.data;
   }
 
   const platform = normalisePlatform(text) || 'web';

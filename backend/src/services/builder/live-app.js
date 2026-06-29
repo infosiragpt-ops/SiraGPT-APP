@@ -25,6 +25,58 @@ const { ProjectBriefSchema } = require('./contracts');
 const { planFromBrief } = require('./blueprint');
 const { paletteFor, appName } = require('./preview');
 
+function isCafeShowcase(brief, entities) {
+  if (entities.length > 0) return false;
+  return /\b(cafeter[ií]a|cafe|coffee|barista|espresso|latte|brunch|panader[ií]a)\b/i.test(
+    `${brief.purpose || ''} ${brief.style && brief.style.theme ? brief.style.theme : ''}`,
+  );
+}
+
+function buildCafeShowcase(brief) {
+  const name = 'Cafetería Aurora';
+  const title = brief.purpose || 'Cafetería de especialidad con menú artesanal, reservas y ubicación';
+  return [
+    '<!doctype html>',
+    '<html lang="es">',
+    '<head>',
+    '<meta charset="utf-8" />',
+    '<meta name="viewport" content="width=device-width, initial-scale=1" />',
+    '<title>' + name + '</title>',
+    '<style>',
+    '*{box-sizing:border-box}',
+    'html{scroll-behavior:smooth}',
+    'body{margin:0;background:#0f1110;color:#f7f3ea;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}',
+    'a{color:inherit;text-decoration:none}',
+    '.nav{position:sticky;top:0;z-index:10;display:flex;align-items:center;justify-content:space-between;gap:18px;padding:16px clamp(18px,5vw,64px);border-bottom:1px solid rgba(255,255,255,.08);background:rgba(15,17,16,.84);backdrop-filter:blur(18px)}',
+    '.brand{display:flex;align-items:center;gap:10px;font-weight:760;letter-spacing:.01em}.mark{width:12px;height:24px;border-radius:999px;background:#2dd4bf;box-shadow:0 0 32px rgba(45,212,191,.45)}',
+    '.links{display:flex;gap:18px;color:#b7afa3;font-size:14px}.links a:hover{color:#f7f3ea}',
+    '.btn{border:0;border-radius:999px;background:#2dd4bf;color:#07110f;padding:11px 17px;font-weight:750;cursor:pointer}',
+    '.ghost{border:1px solid rgba(255,255,255,.14);background:transparent;color:#f7f3ea}',
+    '.hero{display:grid;grid-template-columns:minmax(0,1.02fr) minmax(320px,.98fr);gap:clamp(26px,5vw,64px);align-items:center;min-height:calc(100vh - 68px);padding:clamp(42px,7vw,88px) clamp(18px,5vw,64px) 56px}',
+    '.eyebrow{color:#2dd4bf;font-size:12px;font-weight:800;letter-spacing:.22em;text-transform:uppercase}',
+    'h1{font-size:clamp(44px,7.2vw,92px);line-height:.94;letter-spacing:-.04em;margin:16px 0 18px;max-width:10.2ch}',
+    '.lead{max-width:55ch;color:#c8c0b4;font-size:clamp(17px,2vw,20px);line-height:1.6;margin:0 0 28px}',
+    '.actions{display:flex;flex-wrap:wrap;gap:12px}.stats{display:flex;flex-wrap:wrap;gap:10px;margin-top:32px}.stat{border:1px solid rgba(255,255,255,.1);border-radius:16px;padding:13px 15px;background:#171a17}.stat strong{display:block;font-size:18px}.stat span{color:#b7afa3;font-size:12px}',
+    '.photo{position:relative;min-height:560px;border-radius:28px;overflow:hidden;border:1px solid rgba(255,255,255,.1);background:#171a17}.photo img{width:100%;height:100%;position:absolute;inset:0;object-fit:cover;filter:saturate(.95) contrast(1.02)}.photo:after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,transparent 34%,rgba(15,17,16,.72))}.photo-card{position:absolute;left:22px;right:22px;bottom:22px;z-index:1;border:1px solid rgba(255,255,255,.12);border-radius:22px;background:rgba(15,17,16,.76);backdrop-filter:blur(14px);padding:20px}.photo-card h2{margin:0 0 8px;font-size:22px}.photo-card p{margin:0;color:#c8c0b4;line-height:1.5}',
+    '.section{padding:68px clamp(18px,5vw,64px);border-top:1px solid rgba(255,255,255,.08)}.section-head{display:flex;align-items:end;justify-content:space-between;gap:20px;margin-bottom:22px}.section h2{font-size:clamp(30px,4vw,48px);letter-spacing:-.03em;margin:0}.section p{color:#b7afa3}',
+    '.menu{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.item{border:1px solid rgba(255,255,255,.1);background:#171a17;border-radius:22px;padding:20px}.item img{width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:16px;margin-bottom:16px}.item h3{display:flex;justify-content:space-between;gap:16px;margin:0 0 8px;font-size:20px}.item p{margin:0;line-height:1.5}',
+    '.split{display:grid;grid-template-columns:1fr 1fr;gap:16px}.panel{border:1px solid rgba(255,255,255,.1);background:#171a17;border-radius:24px;padding:26px}.panel h3{margin:0 0 10px;font-size:24px}.panel p{line-height:1.6}.hours{display:grid;gap:10px;margin-top:18px}.hours div{display:flex;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,.08);padding-bottom:10px;color:#c8c0b4}',
+    'footer{padding:26px clamp(18px,5vw,64px);display:flex;justify-content:space-between;gap:16px;color:#b7afa3;border-top:1px solid rgba(255,255,255,.08)}',
+    '@media(max-width:900px){.hero,.split{grid-template-columns:1fr}.photo{min-height:420px}.menu{grid-template-columns:1fr}.links{display:none}footer{flex-direction:column}h1{max-width:11ch}}',
+    '</style>',
+    '</head>',
+    '<body>',
+    '<header class="nav"><a class="brand" href="#inicio"><span class="mark"></span>' + name + '</a><nav class="links"><a href="#menu">Menu</a><a href="#experiencia">Experiencia</a><a href="#visitanos">Ubicación</a></nav><a class="btn" href="#visitanos">Reservar mesa</a></header>',
+    '<main id="inicio" class="hero"><section><span class="eyebrow">Cafe de especialidad</span><h1>' + title + '</h1><p class="lead">Un espacio cálido para desayunos, brunch y café filtrado con granos seleccionados. Diseño listo para presentar menú, horarios, reservas y ubicación desde el primer preview.</p><div class="actions"><a class="btn" href="#menu">Ver menú</a><a class="btn ghost" href="#visitanos">Cómo llegar</a></div><div class="stats"><div class="stat"><strong>07:30</strong><span>abre todos los días</span></div><div class="stat"><strong>18+</strong><span>bebidas y postres</span></div><div class="stat"><strong>4.9</strong><span>experiencia promedio</span></div></div></section><aside class="photo"><img alt="Café servido en barra de cafetería" src="https://images.unsplash.com/photo-1509042239860-f550ce710b93?auto=format&fit=crop&w=1400&q=80"><div class="photo-card"><h2>Brunch, espresso y panadería fresca</h2><p>Hero visual, CTA claro y secciones listas para editar desde el agente.</p></div></aside></main>',
+    '<section id="menu" class="section"><div class="section-head"><div><span class="eyebrow">Menu</span><h2>Favoritos de la casa</h2></div><p>Precios, descripciones y fotos listos para reemplazar.</p></div><div class="menu"><article class="item"><img alt="Latte artesanal" src="https://images.unsplash.com/photo-1461023058943-07fcbe16d735?auto=format&fit=crop&w=900&q=80"><h3>Latte Aurora <span>$4.90</span></h3><p>Espresso doble, leche texturizada y notas de cacao.</p></article><article class="item"><img alt="Croissant y café" src="https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=900&q=80"><h3>Croissant brunch <span>$7.50</span></h3><p>Horneado del día con mantequilla, queso y mermelada.</p></article><article class="item"><img alt="Cold brew" src="https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?auto=format&fit=crop&w=900&q=80"><h3>Cold brew <span>$5.20</span></h3><p>Extracción lenta, cítricos suaves y final limpio.</p></article></div></section>',
+    '<section id="experiencia" class="section"><div class="split"><article class="panel"><span class="eyebrow">Ambiente</span><h3>Minimalista, cómodo y profesional</h3><p>La web vende la experiencia: buena tipografía, fotos reales, tarjetas de menú, CTA de reserva y contenido escaneable en desktop y celular.</p></article><article class="panel"><span class="eyebrow">Servicios</span><h3>Para llevar, mesas y eventos pequeños</h3><p>Incluye bloques para desayuno, reuniones, café para llevar y contacto directo. El agente puede seguir editando colores, menú o secciones.</p></article></div></section>',
+    '<section id="visitanos" class="section"><div class="split"><article class="panel"><span class="eyebrow">Ubicación</span><h3>Av. Central 248, Centro</h3><p>Reserva por WhatsApp o visítanos sin cita. Esta sección queda lista para mapa, teléfono y redes.</p><div class="actions"><a class="btn" href="tel:+100000000">Llamar</a><a class="btn ghost" href="mailto:hola@cafeteria.test">Escribir</a></div></article><article class="panel"><span class="eyebrow">Horarios</span><h3>Abierto todos los días</h3><div class="hours"><div><span>Lunes a viernes</span><strong>07:30 - 20:00</strong></div><div><span>Sábado</span><strong>08:00 - 21:00</strong></div><div><span>Domingo</span><strong>08:30 - 18:00</strong></div></div></article></div></section>',
+    '</main><footer><span>' + name + '</span><span>Web responsive generada por siraGPT Builder</span></footer>',
+    '</body>',
+    '</html>',
+  ].join('\n');
+}
+
 /** The static runtime — reads window.__APP__ and renders the SPA. */
 const APP_RUNTIME = [
   'var APP = window.__APP__ || { name: "App", entities: [], purpose: "", audience: "", platform: "web", pos: { enabled: false } };',
@@ -277,6 +329,10 @@ function buildLiveApp(rawBrief, blueprint) {
     name: m.entity,
     fields: m.fields.map((f) => ({ name: f.name, type: f.type })),
   }));
+
+  if (isCafeShowcase(brief, entities)) {
+    return buildCafeShowcase(brief);
+  }
 
   const data = {
     name: appName(brief),

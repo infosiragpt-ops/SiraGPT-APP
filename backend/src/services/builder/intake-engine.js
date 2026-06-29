@@ -122,7 +122,7 @@ function normalisePlatform(value) {
     /\b(web|sitio|portal|saas|dashboard|frontend|backend|base de datos|responsive|responsivo|adaptable|pwa|software|sistema|plataforma|full[- ]?stack)\b/.test(raw);
   const hasLandingCue = /landing|aterrizaje|one[- ]?page/.test(raw);
   const hasOperationalCue =
-    /\b(software|sistema|plataforma|dashboard|panel|crud|gesti[oó]n|gestionar|administra(?:r|ci[oó]n)|manejar|registrar|operaci[oó]n|operativo|punto de venta|pos|inventario|reservas?|pedidos?|ordenes?|[oó]rdenes?|clientes?|productos?|restaurante|restaurant|cafeter[ií]a|men[uú])\b/.test(raw);
+    /\b(software|sistema|plataforma|dashboard|panel|crud|gesti[oó]n|gestionar|administra(?:r|ci[oó]n)|manejar|registrar|operaci[oó]n|operativo|punto de venta|pos|inventario|reservas?|pedidos?|ordenes?|[oó]rdenes?|clientes?|productos?)\b/.test(raw);
   // "Landing one-page para crear software..." is a common APPS prompt because
   // template labels get prepended to the user's actual request. If the prompt
   // asks for an operational system, the builder must emit the full-stack web

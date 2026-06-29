@@ -4,6 +4,7 @@ import path from "node:path"
 
 type ProjectBrief = {
   platform: "web" | "mobile" | "landing" | "desktop"
+  purpose: string
   dataEntities: Array<{ name: string; fields: string[] }>
 }
 
@@ -90,4 +91,24 @@ test("restaurant prompt with web and mobile wording stays full-stack web respons
   assert.ok(paths.includes("app/api/pedido/route.ts"), "emits Pedido API")
   assert.ok(paths.includes("app/api/mesa/route.ts"), "emits Mesa API")
   assert.ok(paths.includes("app/manifest.ts"), "emits PWA/mobile manifest")
+})
+
+test("cafeteria website prompt generates a public cafe landing, not a management CRUD", () => {
+  const brief = briefFromPrompt("crea una web de cafeteria")
+
+  assert.equal(brief.platform, "landing")
+  assert.deepEqual(brief.dataEntities, [])
+  assert.match(brief.purpose, /Cafetería de especialidad/)
+
+  const { files } = scaffoldFromBrief(brief)
+  const paths = files.map((file) => file.path)
+  assert.ok(paths.includes("index.html"), "emits an instant preview")
+  assert.ok(paths.includes("app/page.tsx"), "emits a publishable Next landing")
+  assert.ok(!paths.some((path) => path.startsWith("app/api/")), "does not emit CRUD API routes")
+  assert.ok(!paths.includes("prisma/schema.prisma"), "does not emit a database schema")
+
+  const html = fileContent(files, "index.html")
+  assert.match(html, /Cafetería Aurora/)
+  assert.match(html, /Favoritos de la casa/)
+  assert.match(html, /Reservar mesa/)
 })

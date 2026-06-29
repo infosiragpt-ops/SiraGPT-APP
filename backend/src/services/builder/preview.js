@@ -24,6 +24,7 @@ const THEMES = {
   corporativo: { bg: '#f4f7fb', surface: '#ffffff', text: '#0f1b2d', sub: '#5b6b80', primary: '#1d4ed8', border: '#dde5ef' },
   colorido: { bg: '#fff7fb', surface: '#ffffff', text: '#1f1235', sub: '#6b5b80', primary: '#e0218a', border: '#f3d9e8' },
   moderno: { bg: '#0e1116', surface: '#171b22', text: '#f3f5f7', sub: '#9aa3ad', primary: '#22d3ee', border: '#252b34' },
+  cafeteria: { bg: '#0f1110', surface: '#171a17', text: '#f7f3ea', sub: '#b7afa3', primary: '#2dd4bf', border: '#2a302a' },
 };
 const DEFAULT_THEME = { bg: '#0e1116', surface: '#171b22', text: '#f3f5f7', sub: '#9aa3ad', primary: '#7c5cff', border: '#252b34' };
 
