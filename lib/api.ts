@@ -2687,6 +2687,7 @@ class ApiClient {
     chatId?: string | null;
     voiceId?: string;
     modelId?: string;
+    regenerate?: boolean;
     voiceSettings?: {
       stability?: number;
       similarity_boost?: number;

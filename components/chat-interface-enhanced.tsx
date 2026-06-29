@@ -10202,6 +10202,117 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }
   };
 
+  // Edit-and-resend while Voice mode is active: regenerate the audio in place
+  // with the modified text instead of falling through to normal chat. Reuses
+  // editUserMessage (updates the user message + deletes the stale audio in the
+  // DB), then calls the deterministic speech endpoint with regenerate:true so
+  // only the new assistant audio is persisted (no duplicate user message).
+  const handleVoiceEditResend = async (messageId: string, newContent: string) => {
+    const narration = (newContent || '').trim();
+    if (!currentChat) return;
+    if (!narration) {
+      toast.error('Escribe el texto que quieres convertir en voz');
+      return;
+    }
+    const chatId = currentChat.id;
+    const idx = currentChat.messages.findIndex(m => m.id === messageId);
+    if (idx === -1) {
+      // The edited message vanished — fall back to a fresh voice turn.
+      await handleVoiceGeneration(narration, []);
+      return;
+    }
+    const messagesUpToEdit = currentChat.messages.slice(0, idx);
+    const updatedUserMessage = { ...currentChat.messages[idx], content: narration };
+    const runningState = {
+      meta: { goal: narration.slice(0, 200), model: 'ElevenLabs', tools: ['generate_speech'] },
+      steps: [{
+        id: 'speech-bootstrap',
+        label: 'Regenerando audio',
+        icon: 'thought',
+        reasoning: 'Convirtiendo el texto editado a voz con ElevenLabs.',
+        status: 'running',
+        toolCalls: [],
+      }],
+      artifacts: [],
+      approvals: [],
+      checkpoints: [],
+      qualityGates: [],
+      repairs: [],
+      finalText: '',
+      done: false,
+    };
+    const aiMessage = {
+      id: `msg-ai-voice-regen-${Date.now()}`,
+      chatId,
+      role: 'ASSISTANT' as const,
+      content: '```agent-task-state\n' + JSON.stringify(runningState) + '\n```',
+      timestamp: new Date().toISOString(),
+    };
+    setCurrentChat(prev => {
+      if (!prev || prev.id !== chatId) return prev;
+      return { ...prev, messages: [...messagesUpToEdit, updatedUserMessage, aiMessage] };
+    });
+    const setBubble = (content: string) => {
+      setCurrentChat(prev => {
+        if (!prev || prev.id !== chatId) return prev;
+        return { ...prev, messages: prev.messages.map(m => m.id === aiMessage.id ? { ...m, content } : m) };
+      });
+    };
+
+    markLocalJobBusy(chatId);
+    isGeneratingVoiceRef.current = true;
+    setIsGeneratingVoice(true);
+    try {
+      // Persist the edit + delete the stale subsequent messages server-side.
+      await apiClient.editUserMessage(messageId, { content: narration });
+      const resp = await apiClient.generateSpeechMessage({
+        text: narration,
+        chatId,
+        regenerate: true,
+        voiceId: selectedVoiceId || undefined,
+        voiceSettings: { stability: Math.min(1, Math.max(0, selectedVoiceStability / 100)) },
+      });
+      if (resp?.content) {
+        setBubble(resp.content);
+      } else {
+        throw new Error('El servicio de voz no devolvió audio.');
+      }
+      toast.success('Audio regenerado');
+      if (chatId) selectChat(chatId);
+    } catch (err: any) {
+      const friendly = err?.message || 'No se pudo regenerar el audio. Intenta de nuevo.';
+      const errorState = {
+        ...runningState,
+        done: true,
+        error: friendly,
+        steps: runningState.steps.map(s => ({ ...s, status: 'error' })),
+      };
+      setBubble('```agent-task-state\n' + JSON.stringify(errorState) + '\n```');
+      toast.error(friendly);
+    } finally {
+      isGeneratingVoiceRef.current = false;
+      setIsGeneratingVoice(false);
+      markLocalJobIdle(chatId);
+    }
+  };
+
+  // Stable wrapper passed to the memoized MessageComponent. A ref keeps the
+  // latest closure (isVoiceGenerationActive can toggle after the message
+  // rendered) while the callback identity stays constant so memo isn't broken.
+  const editRegenRef = React.useRef<(messageId: string, newContent: string, files?: any[]) => void>(() => {});
+  React.useEffect(() => {
+    editRegenRef.current = (messageId: string, newContent: string, files?: any[]) => {
+      if (isVoiceGenerationActive) {
+        void handleVoiceEditResend(messageId, newContent);
+        return;
+      }
+      editAndRegenerate(messageId, newContent, files);
+    };
+  });
+  const editAndRegenerateRouter = React.useCallback((messageId: string, newContent: string, files?: any[]) => {
+    editRegenRef.current(messageId, newContent, files);
+  }, []);
+
   const handleMusicGeneration = async (msg: string, filesToSend: any[] = []) => {
     const description = (msg || '').trim();
     if (!description) {
@@ -11230,7 +11341,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                       user={user}
                                       onRegenerate={regenerateMessage}
                                       onBranch={branchMessage}
-                                      updateMessageInChat={editAndRegenerate}
+                                      updateMessageInChat={editAndRegenerateRouter}
                                       isStreaming={false}
                                       onToggleSplitView={handleToggleSplitView}
                                       onDocumentPreview={handleDocumentPreview}
@@ -11251,7 +11362,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                     user={user}
                                     onRegenerate={regenerateMessage}
                                     onBranch={branchMessage}
-                                    updateMessageInChat={editAndRegenerate}
+                                    updateMessageInChat={editAndRegenerateRouter}
                                     isStreaming={false}
                                     onToggleSplitView={handleToggleSplitView}
                                     onDocumentPreview={handleDocumentPreview}
@@ -11279,7 +11390,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                     message={streamingMessage}
                                     user={user}
                                     onRegenerate={regenerateMessage}
-                                    updateMessageInChat={editAndRegenerate}
+                                    updateMessageInChat={editAndRegenerateRouter}
                                     isStreaming={true}
                                     onToggleSplitView={handleToggleSplitView}
                                     onDocumentPreview={handleDocumentPreview}

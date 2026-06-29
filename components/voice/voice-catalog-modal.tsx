@@ -60,26 +60,104 @@ interface VoiceItem {
   labels?: Record<string, string>
 }
 
-const AVATAR_GRADIENTS = [
-  "from-violet-500 to-fuchsia-500",
-  "from-sky-500 to-indigo-500",
-  "from-amber-500 to-rose-500",
-  "from-emerald-500 to-teal-500",
-  "from-rose-500 to-purple-500",
-  "from-cyan-500 to-blue-600",
-  "from-orange-500 to-pink-500",
-  "from-lime-500 to-emerald-600",
+// Per-voice multi-colour palettes for the animated liquid orbs (ElevenLabs-style).
+const ORB_PALETTES: [string, string, string][] = [
+  ["#a78bfa", "#f0abfc", "#fb923c"],
+  ["#fb7185", "#fda4af", "#93c5fd"],
+  ["#86efac", "#5eead4", "#fcd34d"],
+  ["#f9a8d4", "#c4b5fd", "#fbcfe8"],
+  ["#7dd3fc", "#818cf8", "#f0abfc"],
+  ["#fdba74", "#f472b6", "#a78bfa"],
+  ["#67e8f9", "#60a5fa", "#f472b6"],
+  ["#bef264", "#34d399", "#fbbf24"],
 ]
 
-function avatarGradient(name: string): string {
+function orbPalette(seed: string): [string, string, string] {
   let hash = 0
-  for (let i = 0; i < name.length; i += 1) hash = (hash * 31 + name.charCodeAt(i)) >>> 0
-  return AVATAR_GRADIENTS[hash % AVATAR_GRADIENTS.length]
+  for (let i = 0; i < seed.length; i += 1) hash = (hash * 31 + seed.charCodeAt(i)) >>> 0
+  return ORB_PALETTES[hash % ORB_PALETTES.length]
 }
 
-function initials(name: string): string {
-  const parts = String(name || "?").trim().split(/\s+/).slice(0, 2)
-  return parts.map((p) => p.charAt(0).toUpperCase()).join("") || "?"
+// Inline grain texture (feTurbulence) for the frosted/liquid finish.
+const ORB_NOISE =
+  "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E\")"
+
+// Keyframes injected once per modal (global names, shared by every orb).
+// prefers-reduced-motion disables the motion entirely.
+const ORB_KEYFRAMES = `
+@keyframes sira-orb-rotate { to { transform: rotate(360deg); } }
+@keyframes sira-orb-a { 0%,100% { transform: translate(-8%,-6%) scale(1.10); } 50% { transform: translate(10%,8%) scale(1.32); } }
+@keyframes sira-orb-b { 0%,100% { transform: translate(8%,7%) scale(1.22); } 50% { transform: translate(-10%,-8%) scale(1.04); } }
+.sira-orb-rot { animation: sira-orb-rotate 12s linear infinite; }
+.sira-orb-blob-a { animation: sira-orb-a 9s ease-in-out infinite; }
+.sira-orb-blob-b { animation: sira-orb-b 11s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .sira-orb-rot, .sira-orb-blob-a, .sira-orb-blob-b { animation: none !important; }
+}
+`
+
+function LiquidOrb({
+  seed,
+  size = 44,
+  hasPreview,
+  isPlaying,
+  onTogglePreview,
+}: {
+  seed: string
+  size?: number
+  hasPreview: boolean
+  isPlaying: boolean
+  onTogglePreview: (e: React.SyntheticEvent) => void
+}) {
+  const [c1, c2, c3] = orbPalette(seed)
+  return (
+    <span
+      className="group/orb relative shrink-0 overflow-hidden rounded-2xl shadow-[inset_0_-6px_12px_rgba(0,0,0,0.18),inset_0_2px_5px_rgba(255,255,255,0.35),0_4px_10px_-4px_rgba(0,0,0,0.25)]"
+      style={{ width: size, height: size }}
+    >
+      {/* spinning conic base, blurred for the liquid blend */}
+      <span
+        className="sira-orb-rot absolute"
+        style={{ inset: "-55%", background: `conic-gradient(from 0deg, ${c1}, ${c2}, ${c3}, ${c1})`, filter: "blur(6px)" }}
+      />
+      {/* drifting colour blobs */}
+      <span
+        className="sira-orb-blob-a absolute inset-0"
+        style={{ background: `radial-gradient(60% 60% at 32% 30%, ${c2}, transparent 70%)`, mixBlendMode: "screen" }}
+      />
+      <span
+        className="sira-orb-blob-b absolute inset-0"
+        style={{ background: `radial-gradient(55% 55% at 70% 72%, ${c3}, transparent 70%)`, mixBlendMode: "screen" }}
+      />
+      {/* grain */}
+      <span className="absolute inset-0 opacity-[0.22] mix-blend-overlay" style={{ backgroundImage: ORB_NOISE, backgroundSize: "90px 90px" }} />
+      {/* top-left sphere sheen */}
+      <span className="absolute inset-0" style={{ background: "radial-gradient(42% 38% at 30% 26%, rgba(255,255,255,0.6), transparent 60%)" }} />
+      {/* preview play/pause overlay */}
+      {hasPreview && (
+        <span
+          role="button"
+          tabIndex={0}
+          onClick={onTogglePreview}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault()
+              onTogglePreview(e)
+            }
+          }}
+          aria-label={isPlaying ? "Pausar muestra" : "Escuchar muestra"}
+          className={cn(
+            "absolute inset-0 flex items-center justify-center transition-opacity focus:opacity-100 focus:outline-none",
+            isPlaying ? "bg-black/15 opacity-100" : "bg-black/0 opacity-0 group-hover/orb:bg-black/20 group-hover/orb:opacity-100"
+          )}
+        >
+          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-white/92 text-zinc-900 shadow">
+            {isPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5 translate-x-px" />}
+          </span>
+        </span>
+      )}
+    </span>
+  )
 }
 
 function titleCase(value: string): string {
@@ -241,6 +319,7 @@ export default function VoiceCatalogModal({
           onEnded={() => setPlayingId(null)}
           className="hidden"
         />
+        <style dangerouslySetInnerHTML={{ __html: ORB_KEYFRAMES }} />
         {/* Header */}
         <DialogHeader className="space-y-0 border-b border-zinc-100 px-6 py-5">
           <div className="flex flex-wrap items-center gap-3">
@@ -312,39 +391,17 @@ export default function VoiceCatalogModal({
                           : "border-transparent hover:border-zinc-200 hover:bg-zinc-50"
                       )}
                     >
-                      {/* Avatar + preview */}
-                      <span
-                        className={cn(
-                          "relative flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br text-sm font-semibold text-white",
-                          avatarGradient(voice.name)
-                        )}
-                      >
-                        {voice.previewUrl ? (
-                          <span
-                            role="button"
-                            tabIndex={0}
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              const item: VoiceItem = { ...voice, previewUrl: previewBaseUrl(voice.previewUrl) }
-                              togglePreview(item)
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" || e.key === " ") {
-                                e.preventDefault()
-                                e.stopPropagation()
-                                const item: VoiceItem = { ...voice, previewUrl: previewBaseUrl(voice.previewUrl) }
-                                togglePreview(item)
-                              }
-                            }}
-                            className="absolute inset-0 flex items-center justify-center rounded-xl bg-black/0 opacity-0 transition-opacity group-hover:bg-black/25 group-hover:opacity-100"
-                            aria-label={isPlaying ? "Pausar muestra" : "Escuchar muestra"}
-                          >
-                            {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-                          </span>
-                        ) : null}
-                        {!isPlaying && initials(voice.name)}
-                        {isPlaying && <Pause className="h-4 w-4" />}
-                      </span>
+                      {/* Animated liquid-gradient orb (ElevenLabs-style) */}
+                      <LiquidOrb
+                        seed={voice.name}
+                        isPlaying={isPlaying}
+                        hasPreview={Boolean(voice.previewUrl)}
+                        onTogglePreview={(e) => {
+                          e.stopPropagation()
+                          const item: VoiceItem = { ...voice, previewUrl: previewBaseUrl(voice.previewUrl) }
+                          togglePreview(item)
+                        }}
+                      />
 
                       {/* Name + description */}
                       <span className="min-w-0 flex-1">

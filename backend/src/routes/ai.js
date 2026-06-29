@@ -6591,6 +6591,7 @@ router.post(
     body('modelId').optional().isString().trim().isLength({ max: 80 }),
     body('chatId').optional({ nullable: true }).isString(),
     body('voiceSettings').optional().isObject(),
+    body('regenerate').optional().isBoolean(),
   ],
   authenticateToken,
   requirePaidPlan({ feature: 'voice_generation' }),
@@ -6604,6 +6605,10 @@ router.post(
 
     const text = String(req.body.text || '').trim();
     const chatId = typeof req.body.chatId === 'string' && req.body.chatId.trim() ? req.body.chatId.trim() : null;
+    // Edit-and-resend regeneration: the user message was already updated (and
+    // subsequent messages deleted) via PUT /chats/messages/:id, so we must NOT
+    // persist a duplicate user message — only the new assistant audio.
+    const regenerate = req.body.regenerate === true;
     const voiceId = String(req.body.voiceId || '').trim();
     const modelId = String(req.body.modelId || '').trim();
     const voiceSettings = req.body.voiceSettings && typeof req.body.voiceSettings === 'object'
@@ -6641,6 +6646,8 @@ router.post(
             text.length,
             'elevenlabs-tts',
             [],
+            [],
+            regenerate,
           );
           assistantMessageId = saved?.assistantMessage?.id || null;
         } catch (saveErr) {
