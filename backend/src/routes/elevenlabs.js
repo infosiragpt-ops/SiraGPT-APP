@@ -126,9 +126,9 @@ router.get('/models', authenticateToken, async (req, res) => {
 
 // Text-to-Speech
 router.post('/text-to-speech', [
-  body('text').trim().notEmpty().withMessage('Text is required'),
-  body('voice_id').optional().isString(),
-  body('model_id').optional().isString(),
+  body('text').trim().notEmpty().isLength({ max: 5000 }).withMessage('Text is required (max 5000 chars)'),
+  body('voice_id').optional().isString().trim().isLength({ max: 120 }),
+  body('model_id').optional().isString().trim().isLength({ max: 80 }),
   body('voice_settings').optional().isObject()
 ], authenticateToken, requirePaidPlan({ feature: 'voice_generation' }), async (req, res) => {
   try {
@@ -487,9 +487,10 @@ router.get('/user/subscription', authenticateToken, async (req, res) => {
 
 // Music Generation using ElevenLabs
 router.post('/generate-music', [
-  body('text').trim().notEmpty().withMessage('Text prompt is required'),
-  body('duration').optional().isNumeric().withMessage('Duration must be a number'),
-  // body('prompt_influence').optional().isNumeric().withMessage('Prompt influence must be a number')
+  body('text').trim().notEmpty().isLength({ max: 2000 }).withMessage('Text prompt is required (max 2000 chars)'),
+  body('duration').optional().isInt({ min: 1, max: 300 }).toInt().withMessage('Duration must be an integer between 1 and 300 seconds'),
+  body('model_id').optional().isString().trim().isLength({ max: 80 }),
+  body('output_format').optional().isString().trim().isLength({ max: 40 }),
 ], authenticateToken, requirePaidPlan({ feature: 'music_generation' }), async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -503,12 +504,16 @@ router.post('/generate-music', [
 
     const {
       text,
-      duration = 10, // Default 10 seconds
+      duration: rawDuration = 10, // Default 10 seconds
       // prompt_influence = 0.3, // Default prompt influence
       // normalize_output = true
       output_format = 'mp3_44100_128',
       model_id = 'music_v1'
     } = req.body;
+    // Defense-in-depth: clamp the duration (1–300s) even if validation is
+    // bypassed, so a bad value can never inflate the ElevenLabs request length
+    // or the billed cost row below.
+    const duration = Math.min(300, Math.max(1, Math.round(Number(rawDuration) || 10)));
 
     console.log('Music generation request received:', {
       text: text.substring(0, 50) + '...',
