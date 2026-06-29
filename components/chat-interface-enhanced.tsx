@@ -3120,7 +3120,7 @@ const ActiveToolsDisplay = ({
                     value={[selectedMusicDuration]}
                     onValueChange={([value]) => setSelectedMusicDuration(value)}
                     min={5}
-                    max={180}
+                    max={240}
                     step={5}
                     className="mt-2"
                   />

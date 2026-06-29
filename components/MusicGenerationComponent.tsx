@@ -318,7 +318,7 @@ const downloadMusic = async () => {
             <Slider
               value={duration}
               onValueChange={setDuration}
-              max={180}
+              max={240}
               min={5}
               step={5}
               className="mt-2"
@@ -326,7 +326,7 @@ const downloadMusic = async () => {
             />
             <div className="flex justify-between text-xs text-muted-foreground mt-1">
               <span>5s</span>
-              <span>3:00</span>
+              <span>4:00</span>
             </div>
           </div>
         </CardContent>

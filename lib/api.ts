@@ -2727,6 +2727,11 @@ class ApiClient {
     return this.request('/ai/generate-music', {
       method: 'POST',
       body: JSON.stringify(data),
+      // Music generation runs synchronously inside the request and can take a
+      // while for long (3–4 min) tracks. Give it a generous ceiling and never
+      // retry — a retry would double-bill ElevenLabs credits.
+      timeoutMs: 300000,
+      maxRetries: 0,
     });
   }
 

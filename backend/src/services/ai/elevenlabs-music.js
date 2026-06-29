@@ -133,8 +133,15 @@ async function generateMusicFile({ prompt, durationSeconds, modelId, outputForma
   if (!resp.ok) {
     let detail = '';
     try { detail = await resp.text(); } catch { /* ignore */ }
+    // ElevenLabs signals "out of credits / over the key's quota" as a 402 OR a
+    // 401 with code `quota_exceeded` ("This request exceeds your API key …").
+    // Long tracks cost the most, so this is the common failure for 3–4 min
+    // requests — surface it as a clear, actionable INSUFFICIENT_CREDITS.
+    const lowerDetail = String(detail).toLowerCase();
+    const isQuota = resp.status === 402
+      || /quota_exceeded|exceeds your api key|insufficient|out of credit|not enough credit/.test(lowerDetail);
     const err = new Error(`ElevenLabs Music API error ${resp.status}: ${String(detail).slice(0, 300)}`);
-    err.code = resp.status === 402 ? 'INSUFFICIENT_CREDITS'
+    err.code = isQuota ? 'INSUFFICIENT_CREDITS'
       : resp.status === 400 ? 'INVALID_PARAMS'
         : 'API_ERROR';
     err.status = resp.status;

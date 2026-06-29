@@ -70,6 +70,14 @@ test('generateMusicFile: surfaces 402 as INSUFFICIENT_CREDITS', async () => {
   );
 });
 
+test('generateMusicFile: maps ElevenLabs 401 quota_exceeded to INSUFFICIENT_CREDITS', async () => {
+  const quotaBody = '{"detail":{"type":"invalid_request","code":"quota_exceeded","message":"This request exceeds your API key allowance"}}';
+  await assert.rejects(
+    () => music.generateMusicFile({ prompt: 'x', fetchImpl: makeFakeFetch({}, { ok: false, status: 401, errText: quotaBody }) }),
+    (err) => err.code === 'INSUFFICIENT_CREDITS'
+  );
+});
+
 test('generateMusicFile: rejects when the key is missing', async () => {
   const saved = process.env.ELEVENLABS_API_KEY;
   delete process.env.ELEVENLABS_API_KEY;

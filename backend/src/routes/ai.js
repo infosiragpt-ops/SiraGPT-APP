@@ -6769,8 +6769,10 @@ router.post(
       return res.status(status).json({
         ok: false,
         error: status === 402
-          ? 'Créditos insuficientes para generar música.'
-          : 'No se pudo generar la música. Intenta de nuevo en unos segundos.',
+          ? 'Sin créditos suficientes de ElevenLabs para una pista de esta duración. Prueba con una duración menor o recarga créditos en tu cuenta de ElevenLabs.'
+          : status === 503
+            ? 'El servicio de música no está configurado.'
+            : 'No se pudo generar la música. Intenta de nuevo en unos segundos.',
       });
     }
   }
