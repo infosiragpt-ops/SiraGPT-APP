@@ -3046,7 +3046,7 @@ const ActiveToolsDisplay = ({
                 <span className="pointer-events-none absolute inset-y-[-55%] left-[-65%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-0 blur-sm transition-all duration-700 group-hover/music-trigger:left-[92%] group-hover/music-trigger:opacity-100 dark:via-white/20" />
                 <Settings className="h-3.5 sm:h-4 w-3.5 sm:w-4" />
                 <span>{selectedMusicStyle}</span>
-                <span>{selectedMusicDuration}s</span>
+                <span>{selectedMusicDuration < 60 ? `${selectedMusicDuration}s` : `${Math.floor(selectedMusicDuration / 60)}:${String(selectedMusicDuration % 60).padStart(2, "0")}`}</span>
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent
@@ -3114,14 +3114,14 @@ const ActiveToolsDisplay = ({
                       <span className="text-[12px] font-medium leading-none text-zinc-800 dark:text-white/90">Duration</span>
                       <Info className="h-3 w-3 text-zinc-500 dark:text-white/62" />
                     </div>
-                    <span className="text-[10.5px] font-medium text-zinc-500 dark:text-white/72">{selectedMusicDuration}s</span>
+                    <span className="text-[10.5px] font-medium text-zinc-500 dark:text-white/72">{selectedMusicDuration < 60 ? `${selectedMusicDuration}s` : `${Math.floor(selectedMusicDuration / 60)}:${String(selectedMusicDuration % 60).padStart(2, "0")}`}</span>
                   </div>
                   <Slider
                     value={[selectedMusicDuration]}
                     onValueChange={([value]) => setSelectedMusicDuration(value)}
                     min={5}
-                    max={30}
-                    step={1}
+                    max={180}
+                    step={5}
                     className="mt-2"
                   />
                 </div>

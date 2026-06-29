@@ -180,6 +180,13 @@ function authHeaders(): Record<string, string> {
 const AUDIO_FORMATS = new Set(["aac", "aif", "aiff", "flac", "m4a", "mp3", "oga", "ogg", "opus", "wav", "webm"])
 const AUDIO_WAVEFORM_BARS = [9, 18, 24, 14, 31, 38, 22, 13, 36, 27, 16, 42, 20, 31, 12, 24, 34, 15, 28, 19, 11, 8, 6, 5]
 
+function formatMediaTime(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) seconds = 0
+  const m = Math.floor(seconds / 60)
+  const s = Math.floor(seconds % 60)
+  return `${m}:${String(s).padStart(2, "0")}`
+}
+
 function artifactHref(artifact: AgentArtifact): string {
   const apiRoot = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
   return artifact.downloadUrl.startsWith("http")
@@ -359,6 +366,10 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
   const [audioSrc, setAudioSrc] = React.useState<string | null>(null)
   const [isDownloading, setIsDownloading] = React.useState(false)
   const [copied, setCopied] = React.useState(false)
+  const [currentTime, setCurrentTime] = React.useState(0)
+  const [duration, setDuration] = React.useState(0)
+  const [isSeeking, setIsSeeking] = React.useState(false)
+  const seekContainerRef = React.useRef<HTMLDivElement | null>(null)
   const format = artifactFormat(artifact)
   const isMusic = isMusicArtifact(artifact)
   const fallbackBaseName = isMusic ? "musica" : "voz"
@@ -369,6 +380,8 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
   React.useEffect(() => {
     setAudioSrc(null)
     setIsPlaying(false)
+    setCurrentTime(0)
+    setDuration(0)
     return () => {
       if (objectUrlRef.current) {
         window.URL.revokeObjectURL(objectUrlRef.current)
@@ -395,6 +408,24 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
       setIsLoadingAudio(false)
     }
   }, [href])
+
+  // Preload the blob on mount so the first Play is instant and the seekbar /
+  // duration are populated immediately (no click-then-wait latency).
+  React.useEffect(() => {
+    void loadAudioSource().catch(() => {})
+  }, [loadAudioSource])
+
+  const seekFromClientX = React.useCallback((clientX: number) => {
+    const el = seekContainerRef.current
+    const audio = audioRef.current
+    if (!el || !audio) return
+    const total = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : duration
+    if (!total) return
+    const rect = el.getBoundingClientRect()
+    const fraction = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width))
+    audio.currentTime = fraction * total
+    setCurrentTime(audio.currentTime)
+  }, [duration])
 
   const togglePlayback = React.useCallback(async () => {
     if (isLoadingAudio) return
@@ -447,6 +478,8 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
     }
   }, [generationLabel, href])
 
+  const progress = duration > 0 ? Math.min(1, currentTime / duration) : 0
+
   return (
     <div className="my-2 w-full max-w-[430px]">
       <div className="relative flex min-h-[74px] w-full items-center gap-3 rounded-2xl border border-border/70 bg-background px-3.5 py-3 shadow-sm">
@@ -457,7 +490,7 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
           type="button"
           onClick={togglePlayback}
           disabled={isLoadingAudio}
-          className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-foreground text-background shadow-sm transition-transform hover:scale-[1.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:scale-100 disabled:opacity-75"
+          className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-foreground text-background shadow-sm transition-transform hover:scale-[1.06] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:scale-100 disabled:opacity-75"
           aria-label={isLoadingAudio ? `Cargando ${generatedMediaLabel}` : isPlaying ? `Pausar ${generatedMediaLabel}` : `Reproducir ${generatedMediaLabel}`}
           title={isLoadingAudio ? "Cargando" : isPlaying ? "Pausar" : "Reproducir"}
         >
@@ -469,20 +502,59 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
             <Play className="ml-0.5 h-5 w-5 fill-current" />
           )}
         </button>
-        <div className="flex h-11 min-w-0 flex-1 items-center gap-[3px]" aria-hidden="true">
-          {AUDIO_WAVEFORM_BARS.map((height, index) => (
-            <span
-              key={`${height}-${index}`}
-              className={cn(
-                "w-1 rounded-full bg-foreground/90 transition-opacity",
-                isPlaying ? "opacity-100" : "opacity-80",
-              )}
-              style={{ height }}
-            />
-          ))}
-          <span className="ml-0.5 h-1.5 w-1.5 rounded-full bg-foreground/80" />
-          <span className="h-1.5 w-1.5 rounded-full bg-foreground/75" />
-          <span className="h-1.5 w-1.5 rounded-full bg-foreground/65" />
+        <div className="flex min-w-0 flex-1 flex-col justify-center gap-1.5">
+          <div
+            ref={seekContainerRef}
+            role="slider"
+            aria-label={`Buscar en ${generatedMediaLabel}`}
+            aria-valuemin={0}
+            aria-valuemax={Math.round(duration) || 0}
+            aria-valuenow={Math.round(currentTime)}
+            tabIndex={0}
+            onPointerDown={(event) => {
+              try { event.currentTarget.setPointerCapture(event.pointerId) } catch { /* ignore */ }
+              setIsSeeking(true)
+              seekFromClientX(event.clientX)
+            }}
+            onPointerMove={(event) => { if (isSeeking) seekFromClientX(event.clientX) }}
+            onPointerUp={(event) => {
+              setIsSeeking(false)
+              try { event.currentTarget.releasePointerCapture(event.pointerId) } catch { /* ignore */ }
+            }}
+            onKeyDown={(event) => {
+              const audio = audioRef.current
+              if (!audio) return
+              const total = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : duration
+              if (event.key === "ArrowRight") {
+                event.preventDefault()
+                audio.currentTime = Math.min(total || audio.currentTime + 5, audio.currentTime + 5)
+                setCurrentTime(audio.currentTime)
+              } else if (event.key === "ArrowLeft") {
+                event.preventDefault()
+                audio.currentTime = Math.max(0, audio.currentTime - 5)
+                setCurrentTime(audio.currentTime)
+              }
+            }}
+            className="group relative flex h-9 cursor-pointer touch-none select-none items-center gap-[3px] focus-visible:outline-none"
+          >
+            {AUDIO_WAVEFORM_BARS.map((height, index) => {
+              const played = (index + 0.5) / AUDIO_WAVEFORM_BARS.length <= progress
+              return (
+                <span
+                  key={`${height}-${index}`}
+                  className={cn(
+                    "w-1 shrink-0 rounded-full transition-colors duration-150",
+                    played ? "bg-foreground" : "bg-foreground/25 group-hover:bg-foreground/40",
+                  )}
+                  style={{ height }}
+                />
+              )
+            })}
+          </div>
+          <div className="flex items-center justify-between text-[11px] font-medium leading-none text-muted-foreground tabular-nums">
+            <span>{formatMediaTime(currentTime)}</span>
+            <span>{formatMediaTime(duration)}</span>
+          </div>
         </div>
         <button
           type="button"
@@ -510,7 +582,16 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
           preload="metadata"
           onPlay={() => setIsPlaying(true)}
           onPause={() => setIsPlaying(false)}
-          onEnded={() => setIsPlaying(false)}
+          onEnded={() => { setIsPlaying(false); setCurrentTime(0) }}
+          onLoadedMetadata={(event) => {
+            const d = event.currentTarget.duration
+            if (Number.isFinite(d) && d > 0) setDuration(d)
+          }}
+          onDurationChange={(event) => {
+            const d = event.currentTarget.duration
+            if (Number.isFinite(d) && d > 0) setDuration(d)
+          }}
+          onTimeUpdate={(event) => { if (!isSeeking) setCurrentTime(event.currentTarget.currentTime) }}
           className="hidden"
         >
           <a href={href} download={filename}>Descargar {generatedMediaLabel}</a>
