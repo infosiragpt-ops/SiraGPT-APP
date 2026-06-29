@@ -93,6 +93,8 @@ function buildReadme(brief, blueprint) {
 - **Frontend:** páginas React/Next.js en \`app/**/page.tsx\`
 - **Backend:** Route Handlers en \`app/api/**/route.ts\`
 - **Base de datos:** Prisma + PostgreSQL en \`prisma/schema.prisma\`
+- **Web:** \`npm run build:web\` y \`npm run preview:web\`
+- **Celular:** responsive mobile-first + manifest PWA; \`npm run build:mobile\` valida el mismo bundle instalable en móvil.
 - **Ejecución local:** \`docker compose up -d db\`, \`npm install\`, \`cp .env.example .env\`, \`npm run db:push\`, \`npm run db:seed\`, \`npm run dev\`
 
 ## Stack

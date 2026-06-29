@@ -116,9 +116,17 @@ function normalisePlatform(value) {
   // users usually say "app" to mean a web/full-stack app; only explicit
   // mobile cues should map to mobile.
   if (/desktop|escritorio|electron|tauri|\bdesk\b|win32|windows|macos/.test(raw)) return 'desktop';
-  if (/landing|aterrizaje|one[- ]?page/.test(raw)) return 'landing';
   if (/m[oó]vil|mobile|android|ios|iphone|ipad|celular|smartphone|react native|expo/.test(raw)) return 'mobile';
+  const hasLandingCue = /landing|aterrizaje|one[- ]?page/.test(raw);
+  const hasOperationalCue =
+    /\b(software|sistema|plataforma|dashboard|panel|crud|gesti[oó]n|gestionar|administra(?:r|ci[oó]n)|manejar|registrar|operaci[oó]n|operativo|punto de venta|pos|inventario|reservas?|pedidos?|ordenes?|[oó]rdenes?|clientes?|productos?|restaurante|restaurant|cafeter[ií]a|men[uú])\b/.test(raw);
+  // "Landing one-page para crear software..." is a common APPS prompt because
+  // template labels get prepended to the user's actual request. If the prompt
+  // asks for an operational system, the builder must emit the full-stack web
+  // app, not downgrade it to a static landing.
+  if (hasLandingCue && !hasOperationalCue) return 'landing';
   if (/web|sitio|portal|saas|dashboard|software|sistema|plataforma|app|aplicaci[oó]n/.test(raw)) return 'web';
+  if (hasOperationalCue) return 'web';
   return null;
 }
 

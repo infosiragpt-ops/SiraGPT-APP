@@ -56,9 +56,11 @@ function clean(text: string): string {
 }
 
 const BUILD_NOUN =
-  /\b(landing|app|aplicaci[oó]n|web|p[aá]gina|pagina|sitio|website|portfolio|portafolio|tienda|ecommerce|e-commerce|dashboard|panel|blog|crud|sistema|plataforma)\b/
+  /\b(landing|app|aplicaci[oó]n|web|p[aá]gina|pagina|sitio|website|portfolio|portafolio|tienda|ecommerce|e-commerce|dashboard|panel|blog|crud|software|sistema|plataforma)\b/
 const BUILD_VERB =
   /\b(cre[ae]|cr[eé]a|cr[eé]ame|crear|crearme|cr[eé]ar|h[aá]z|hazme|haceme|hac[ée]me|construye|constr[uú]ye?me|construir|genera|gen[eé]rame|generar|real[ií]z(?:a|ar|[aá]me)|desarroll(?:a|ar|e)|desarr[oó]llame|programa|programar|impl[ée]menta|implementar|monta|m[oó]ntame|prepara|prepar[aá]me|prep[aá]rame|levanta|dame|ponme|quiero|necesito|dise[ñn]a|dise[ñn]ar|armar?|arma|build|make|create)\b/
+const APP_GOAL_CUE =
+  /\b(app|aplicaci[oó]n|dashboard|panel|crud|software|sistema|plataforma|gesti[oó]n|gestionar|administrar|manejar|registrar|punto de venta|pos|inventario|reservas?|pedidos?|ordenes?|[oó]rdenes?|clientes?|productos?|restaurante|restaurant|cafeter[ií]a|men[uú])\b/i
 
 /** A "build something from scratch" request (recognised noun + verb). Strict. */
 export function isBuildRequest(text: string): boolean {
@@ -107,7 +109,7 @@ export function isBuildLog(text: string): boolean {
 }
 
 function seedGoal(ctx: AgentBuildContext, text: string): AgentBuildContext {
-  const goal = /\b(app|aplicaci[oó]n|dashboard|sistema|crud)\b/i.test(text) ? "app" : "landing"
+  const goal = APP_GOAL_CUE.test(text) ? "app" : "landing"
   return { ...ctx, goal }
 }
 

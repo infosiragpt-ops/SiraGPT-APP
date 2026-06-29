@@ -48,6 +48,19 @@ test("event landing request from /code generates directly without format clarifi
     assert.match(a.context.productType || "", /eventos/i)
   }
 })
+
+test("restaurant management software overrides landing prefix and routes to app goal", () => {
+  const a = nextAgentAction(state(), "Landing one-page para crea una software para gestionar un restaurante", {
+    mode: "app",
+    hasModel: true,
+  })
+  assert.equal(a.type, "generate")
+  if (a.type === "generate") {
+    assert.equal(a.context.goal, "app")
+    assert.match(a.context.productType || "", /restaurante/i)
+  }
+})
+
 test("legacy intake answer now generates instead of asking another question", () => {
   // step 1 already asked productType; user answers it
   const a1 = nextAgentAction(state({ phase: "intake", intakeStep: 1 }), "ropa streetwear", {

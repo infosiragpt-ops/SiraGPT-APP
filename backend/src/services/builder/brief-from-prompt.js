@@ -87,6 +87,48 @@ const DOMAIN_PRESETS = [
   },
 ];
 
+const DOMAIN_CONTAINER_ENTITIES = new Set([
+  'tienda',
+  'boutique',
+  'comercio',
+  'ecommerce',
+  'retail',
+  'minimarket',
+  'abarrote',
+  'bazar',
+  'almacen',
+  'almacén',
+  'ferreteria',
+  'ferretería',
+  'farmacia',
+  'kiosco',
+  'libreria',
+  'librería',
+  'restaurante',
+  'restaurant',
+  'cafeteria',
+  'cafetería',
+  'cafe',
+  'comida',
+  'cocina',
+  'pizzeria',
+  'pizzería',
+  'panaderia',
+  'panadería',
+  'peluqueria',
+  'peluquería',
+  'barberia',
+  'barbería',
+  'salon',
+  'salón',
+  'clinica',
+  'clínica',
+  'consultorio',
+  'spa',
+  'gimnasio',
+  'gym',
+]);
+
 /**
  * Match the prompt against the deterministic domain presets. Returns a curated
  * entity list for the first matching domain, or [] when none match.
@@ -134,11 +176,24 @@ function clean(text) {
   return String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
 }
 
+function removeDiacritics(text) {
+  return String(text || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
 /** Naive but deterministic Spanish/English singulariser (drop a trailing s). */
 function singularize(word) {
   const w = word.toLowerCase();
   if (w.length > 3 && w.endsWith('s') && !w.endsWith('ss')) return w.slice(0, -1);
   return w;
+}
+
+function entityKey(name) {
+  return singularize(removeDiacritics(name).toLowerCase()).replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function isDomainContainerEntityList(entities) {
+  if (!Array.isArray(entities) || entities.length !== 1) return false;
+  return DOMAIN_CONTAINER_ENTITIES.has(entityKey(entities[0].name));
 }
 
 function capitalize(word) {
@@ -245,14 +300,14 @@ function briefFromPrompt(prompt) {
 
   const platform = normalisePlatform(text) || 'web';
   let dataEntities = extractEntities(text);
+  const preset = presetEntities(text);
 
   // A runnable app needs at least one entity to manage. If explicit extraction
   // found nothing, first try a deterministic domain preset (punto de venta,
   // restaurante, reservas…) so a common business ask gets a real multi-entity
   // model; only then fall back to a single generic record (e.g. "una app para
   // mi negocio") so the live preview still renders a working CRUD.
-  if (dataEntities.length === 0 && platform !== 'landing') {
-    const preset = presetEntities(text);
+  if ((dataEntities.length === 0 || isDomainContainerEntityList(dataEntities)) && platform !== 'landing') {
     dataEntities = preset.length ? preset : [{ name: 'Registro', fields: [...DEFAULT_FIELDS] }];
   }
 

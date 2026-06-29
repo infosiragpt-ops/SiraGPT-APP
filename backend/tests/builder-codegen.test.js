@@ -107,7 +107,10 @@ test('package.json is valid JSON with Next.js and Prisma deps', () => {
   assert.ok(pkg.dependencies.next, 'has next dependency');
   assert.ok(pkg.dependencies.react, 'has react dependency');
   assert.ok(pkg.dependencies['@prisma/client'], 'has Prisma client');
-  assert.equal(pkg.scripts.dev, 'next dev');
+  assert.equal(pkg.scripts.dev, 'prisma generate && next dev');
+  assert.equal(pkg.scripts.build, 'prisma generate && next build');
+  assert.equal(pkg.scripts['build:web'], 'prisma generate && next build');
+  assert.equal(pkg.scripts['build:mobile'], 'prisma generate && next build');
   assert.equal(pkg.scripts['db:push'], 'prisma db push');
   assert.equal(pkg.scripts['db:seed'], 'tsx prisma/seed.ts');
   assert.equal(pkg.scripts.postinstall, 'prisma generate');
