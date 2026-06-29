@@ -320,6 +320,16 @@ test('getLogs returns the live version log lines', async () => {
   assert.match(versionHash, /^[0-9a-f]{8}$/);
 });
 
+test('resolveLogLimit defaults to 2000, honours a valid limit, and clamps 1..5000', () => {
+  assert.equal(service.resolveLogLimit(undefined, {}), 2000);
+  assert.equal(service.resolveLogLimit('100', {}), 100);
+  assert.equal(service.resolveLogLimit(99999, {}), 5000); // clamped up-bound
+  assert.equal(service.resolveLogLimit(0, {}), 2000); // non-positive → fallback
+  assert.equal(service.resolveLogLimit('abc', {}), 2000); // non-numeric → fallback
+  assert.equal(service.resolveLogLimit(-5, {}), 2000); // negative → fallback
+  assert.equal(service.resolveLogLimit(undefined, { SIRAGPT_DEPLOY_LOG_LIMIT: '500' }), 500); // env override
+});
+
 test('recordRuntimeLog appends a redacted runtime error to deployment logs', async () => {
   const db = makeFakeDb();
   const d = await service.createDeployment({ userId: USER, name: 'App', db });

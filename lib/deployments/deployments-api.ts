@@ -198,7 +198,8 @@ export const deploymentsApi = {
     req<{ domain: DeploymentDomain; providerResult: DomainProviderResult }>(`/${id}/domains/godaddy`, { method: "POST", body: JSON.stringify({ hostname }) }),
   removeDomain: (id: string, domainId: string) => req<{ ok: boolean }>(`/${id}/domains/${domainId}`, { method: "DELETE" }),
 
-  logs: (id: string) => req<{ lines: string[]; entries: LogEntry[]; versionHash: string | null }>(`/${id}/logs`),
+  logs: (id: string, limit = 2000) =>
+    req<{ lines: string[]; entries: LogEntry[]; versionHash: string | null }>(`/${id}/logs?limit=${encodeURIComponent(String(limit))}`),
 
   // SSE log tail. Returns an EventSource-like URL with the JWT in the query
   // (EventSource can't set headers; the route accepts ?token= as a fallback).

@@ -1,22 +1,16 @@
 "use client"
 
 /**
- * DeploymentDetail — Replit "Overview" surface for a single deployment.
- * Suspended amber banner + action row (Resume / Adjust settings /
- * Security scan) + top tabs (Overview / Logs / Domains / Manage).
+ * DeploymentDetail - Replit-style tab shell for one deployment.
+ * The child tabs keep the existing deployment actions and data flow.
  */
 
 import * as React from "react"
-import { ExternalLink, Globe2, List, Loader2, Play, Settings, SlidersHorizontal } from "lucide-react"
-import { toast } from "sonner"
+import { Globe2, List, Settings } from "lucide-react"
 
-import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { cn } from "@/lib/utils"
-import {
-  deploymentsApi,
-  type DeploymentDetail as DeploymentDetailData,
-} from "@/lib/deployments/deployments-api"
+import { type DeploymentDetail as DeploymentDetailData } from "@/lib/deployments/deployments-api"
 
 import { WarningBanner } from "./shared"
 import { OverviewTab } from "./overview-tab"
@@ -42,111 +36,42 @@ export function DeploymentDetail({
 }) {
   const { deployment, versions, domains } = detail
   const [tab, setTab] = React.useState<DetailTab>("overview")
-  const [resuming, setResuming] = React.useState(false)
-  const [scanning, setScanning] = React.useState(false)
-
-  const isPausedOrSuspended = deployment.status === "paused" || deployment.status === "suspended"
   const isSuspended = deployment.status === "suspended"
-  const contentClassName =
-    tab === "logs" ? "h-full w-full" : tab === "overview" ? "w-full px-7 py-3" : "w-full px-3 py-0"
+  const contentClassName = tab === "logs" || tab === "overview" ? "h-full w-full" : "w-full px-3 py-0"
 
   React.useEffect(() => {
     if (autoPublishSignal) setTab("overview")
   }, [autoPublishSignal])
 
-  const resume = async () => {
-    setResuming(true)
-    try {
-      await deploymentsApi.resume(deployment.id)
-      toast.success("Deployment resumed.")
-      onRefetch()
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not resume.")
-    } finally {
-      setResuming(false)
-    }
-  }
-
-  const runSecurityScan = async () => {
-    setScanning(true)
-    try {
-      const scan = await deploymentsApi.securityScan(deployment.id)
-      if (scan.status === "passed") {
-        toast.success(scan.summary || `Security scan passed · ${scan.findings.length} finding(s).`)
-      } else {
-        const critical = scan.findings.filter((f) => f.severity === "critical" || f.severity === "high")
-        toast.error(
-          scan.summary ||
-            `Scan found ${scan.findings.length} finding(s)${critical.length ? `, ${critical.length} critical` : ""}.`,
-        )
-      }
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not run security scan.")
-    } finally {
-      setScanning(false)
-    }
-  }
-
   return (
     <Tabs value={tab} onValueChange={(v) => setTab(v as DetailTab)}>
-      <div className="flex h-full min-h-0 flex-col bg-background text-foreground">
-        <div className="shrink-0 border-b border-border bg-background">
-          <TabsList className="h-10 justify-start rounded-none bg-transparent p-0 px-3 text-foreground">
-            <DeploymentTab value="overview" active={tab === "overview"} icon={<Globe2 className="h-3.5 w-3.5" />}>
+      <div className="flex h-full min-h-0 flex-col bg-[#1f1f1f] text-white">
+        <div className="shrink-0 border-b border-[#353535] bg-[#1f1f1f]">
+          <TabsList className="h-[46px] justify-start rounded-none bg-transparent p-0 px-0 text-white">
+            <DeploymentTab value="overview" active={tab === "overview"} icon={<Globe2 className="h-4 w-4" />}>
               Overview
             </DeploymentTab>
-            <DeploymentTab value="logs" active={tab === "logs"} icon={<List className="h-3.5 w-3.5" />}>
+            <DeploymentTab value="logs" active={tab === "logs"} icon={<List className="h-4 w-4" />}>
               Logs
             </DeploymentTab>
-            <DeploymentTab value="domains" active={tab === "domains"} icon={<Globe2 className="h-3.5 w-3.5" />}>
+            <DeploymentTab value="domains" active={tab === "domains"} icon={<Globe2 className="h-4 w-4" />}>
               Domains
             </DeploymentTab>
-            <DeploymentTab value="manage" active={tab === "manage"} icon={<Settings className="h-3.5 w-3.5" />}>
+            <DeploymentTab value="manage" active={tab === "manage"} icon={<Settings className="h-4 w-4" />}>
               Manage
             </DeploymentTab>
           </TabsList>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="min-h-0 flex-1 overflow-y-auto bg-[#1f1f1f]">
           <div className={contentClassName}>
-            {tab === "overview" ? (
-              <>
-                {isSuspended ? <WarningBanner className="mb-3">{PENDING_PAYMENT_BANNER}</WarningBanner> : null}
-
-                <div className="mb-4 flex flex-wrap items-center gap-2">
-                  <Button
-                    size="sm"
-                    className="h-8 rounded-md border-0 bg-[#6aa7ff] px-3 text-[13px] font-medium text-white shadow-none hover:bg-[#5f9bf0] disabled:bg-[#d9d4c8] disabled:text-[#8d867b]"
-                    onClick={() => void resume()}
-                    disabled={!isPausedOrSuspended || resuming}
-                  >
-                    {resuming ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
-                    Resume
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-8 gap-1.5 rounded-md border-0 bg-[#e5e2da] px-3 text-[13px] font-medium text-muted-foreground shadow-none hover:bg-[#dad6cb] hover:text-foreground"
-                    onClick={() => setTab("manage")}
-                  >
-                    <SlidersHorizontal className="h-3.5 w-3.5" />
-                    Adjust settings
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-8 gap-1.5 rounded-md border-0 bg-[#e5e2da] px-3 text-[13px] font-medium text-foreground shadow-none hover:bg-[#dad6cb]"
-                    onClick={() => void runSecurityScan()}
-                    disabled={scanning}
-                  >
-                    {scanning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ExternalLink className="h-3.5 w-3.5" />}
-                    Run security scan
-                  </Button>
-                </div>
-              </>
+            {tab === "overview" && isSuspended ? (
+              <div className="px-4 pt-2">
+                <WarningBanner className="border-[#6c5619] bg-[#332c12] text-[#f4e7a8]">{PENDING_PAYMENT_BANNER}</WarningBanner>
+              </div>
             ) : null}
 
-            <TabsContent value="overview" className="mt-0">
+            <TabsContent value="overview" className="mt-0 h-full">
               <OverviewTab
                 deployment={deployment}
                 versions={versions}
@@ -194,9 +119,9 @@ function DeploymentTab({
     <TabsTrigger
       value={value}
       className={cn(
-        "relative h-10 rounded-none border-b-2 border-transparent bg-transparent px-3 text-[13px] font-medium shadow-none",
-        "gap-1.5 hover:bg-muted/40 data-[state=active]:shadow-none",
-        active ? "border-foreground bg-transparent text-foreground" : "text-muted-foreground",
+        "relative h-[46px] rounded-none border-b-2 border-transparent bg-transparent px-4 text-[14px] font-medium shadow-none",
+        "gap-2 text-white hover:bg-[#262626] data-[state=active]:shadow-none",
+        active ? "border-[#0f7bea] bg-[#17345a] text-white" : "text-[#dcdcdc]",
       )}
     >
       {icon}

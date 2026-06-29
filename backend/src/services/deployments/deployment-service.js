@@ -711,13 +711,20 @@ async function recordRuntimeLogByToken({ id, token, payload = {}, db = defaultPr
 /** Recent build/runtime logs as both raw lines and structured entries for the
  * Logs table. New deployments store rows in deployment_logs; older versions
  * still fall back to parsing DeploymentVersion.buildLog. */
-async function getLogs({ userId, id, db = defaultPrisma }) {
+function resolveLogLimit(limit, env = process.env) {
+  const fallback = Number(env.SIRAGPT_DEPLOY_LOG_LIMIT) || 2000;
+  const n = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : fallback;
+  return Math.min(Math.max(n, 1), 5000); // clamp 1..5000 so a huge ?limit can't OOM the query
+}
+
+async function getLogs({ userId, id, db = defaultPrisma, limit, env = process.env }) {
   const prisma = requireDb(db);
   const row = await loadOwned(prisma, userId, id);
   const version = await liveOrLatestVersion(prisma, row, id);
+  const take = resolveLogLimit(limit, env);
   if (prisma.deploymentLog) {
     const [logs, hashes] = await Promise.all([
-      prisma.deploymentLog.findMany({ where: { deploymentId: id }, orderBy: { createdAt: 'desc' }, take: 1000 }),
+      prisma.deploymentLog.findMany({ where: { deploymentId: id }, orderBy: { createdAt: 'desc' }, take }),
       versionHashMap(prisma, id),
     ]);
     if (logs.length > 0) {
@@ -755,4 +762,5 @@ module.exports = {
   recordRuntimeLog,
   recordRuntimeLogByToken,
   getLogs,
+  resolveLogLimit,
 };

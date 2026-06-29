@@ -379,7 +379,7 @@ router.post(
 
 router.get('/:id/logs', authenticateToken, async (req, res) => {
   try {
-    return res.json(await service.getLogs({ userId: req.user.id, id: req.params.id }));
+    return res.json(await service.getLogs({ userId: req.user.id, id: req.params.id, limit: req.query.limit }));
   } catch (err) { return sendError(res, err); }
 });
 
@@ -388,7 +388,7 @@ router.get('/:id/logs', authenticateToken, async (req, res) => {
 router.get('/:id/logs/stream', bearerFromQueryFallback, authenticateToken, async (req, res) => {
   let payload;
   try {
-    payload = await service.getLogs({ userId: req.user.id, id: req.params.id });
+    payload = await service.getLogs({ userId: req.user.id, id: req.params.id, limit: req.query.limit });
   } catch (err) { return sendError(res, err); }
 
   res.writeHead(200, {

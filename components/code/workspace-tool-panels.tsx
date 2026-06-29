@@ -309,16 +309,22 @@ function ToolShell({
   detail,
   action,
   children,
+  className,
+  headerClassName,
+  bodyClassName,
 }: {
   eyebrow: string
   title: string
   detail: string
   action?: React.ReactNode
   children: React.ReactNode
+  className?: string
+  headerClassName?: string
+  bodyClassName?: string
 }) {
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
-      <div className="shrink-0 border-b border-border/50 px-5 py-4">
+    <div className={cn("flex h-full min-h-0 flex-col bg-background", className)}>
+      <div className={cn("shrink-0 border-b border-border/50 px-5 py-4", headerClassName)}>
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{eyebrow}</p>
@@ -328,7 +334,7 @@ function ToolShell({
           {action ? <div className="shrink-0">{action}</div> : null}
         </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
+      <div className={cn("min-h-0 flex-1 overflow-y-auto px-5 py-4", bodyClassName)}>{children}</div>
     </div>
   )
 }
@@ -444,6 +450,9 @@ function PublishingTool() {
       eyebrow="Deployments"
       title="Publishing"
       detail="Publica tu proyecto en Hostinger: build + subida (SFTP/FTP), URL en vivo e historial."
+      className="bg-[#1f1f1f] text-white"
+      headerClassName="border-[#353535] bg-[#1f1f1f] [&_p]:text-[#a8b0bf] [&_h2]:text-white"
+      bodyClassName="bg-[#1f1f1f] px-0 py-0"
     >
       <RealPublishingPanel projectId={activeFolder?.id || null} />
     </ToolShell>
