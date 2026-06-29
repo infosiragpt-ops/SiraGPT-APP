@@ -142,7 +142,7 @@ function saveAudioArtifact({ filename, buffer, mime, ctx, category }) {
   });
 }
 
-function emitFileArtifact(ctx, artifact, format, mime) {
+function emitFileArtifact(ctx, artifact, format, mime, extra = {}) {
   emitEvent(ctx, 'file_artifact', {
     artifact: {
       id: artifact.id,
@@ -151,6 +151,9 @@ function emitFileArtifact(ctx, artifact, format, mime) {
       mime,
       sizeBytes: artifact.sizeBytes,
       downloadUrl: artifact.downloadUrl,
+      category: artifact.category || null,
+      kind: artifact.category || null,
+      ...extra,
     },
   });
 }
@@ -369,7 +372,12 @@ const generateMusic = {
 
       const filename = `cancion_${crypto.randomBytes(4).toString('hex')}.mp3`;
       const artifact = saveAudioArtifact({ filename, buffer, mime: 'audio/mpeg', ctx, category: 'music' });
-      emitFileArtifact(ctx, artifact, 'mp3', 'audio/mpeg');
+      emitFileArtifact(ctx, artifact, 'mp3', 'audio/mpeg', {
+        category: 'music',
+        kind: 'music',
+        durationSeconds: seconds,
+        prompt: finalPrompt,
+      });
       emitEvent(ctx, 'tool_output', {
         tool: 'generate_music',
         ok: true,

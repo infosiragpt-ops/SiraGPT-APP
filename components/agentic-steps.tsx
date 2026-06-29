@@ -334,6 +334,18 @@ function isAudioArtifact(artifact: AgentArtifact): boolean {
   return mime.startsWith("audio/") || AUDIO_FORMATS.has(artifactFormat(artifact))
 }
 
+function isMusicArtifact(artifact: AgentArtifact): boolean {
+  const marker = [
+    artifact.kind,
+    artifact.category,
+    artifact.format,
+    artifact.mime,
+    artifact.filename,
+  ].map((value) => String(value || "").toLowerCase()).join(" ")
+
+  return /\bmusic\b|\bm[uú]sica\b|\bcancion\b|\bcanci[oó]n\b|\bsong\b|\btrack\b/.test(marker)
+}
+
 function artifactFilename(artifact: AgentArtifact, fallback: string): string {
   return artifact.filename?.trim() || fallback
 }
@@ -348,7 +360,10 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
   const [isDownloading, setIsDownloading] = React.useState(false)
   const [copied, setCopied] = React.useState(false)
   const format = artifactFormat(artifact)
-  const filename = artifactFilename(artifact, `voz-${generationIndex + 1}.${format === "bin" ? "mp3" : format}`)
+  const isMusic = isMusicArtifact(artifact)
+  const fallbackBaseName = isMusic ? "musica" : "voz"
+  const generatedMediaLabel = isMusic ? "música generada" : "audio generado"
+  const filename = artifactFilename(artifact, `${fallbackBaseName}-${generationIndex + 1}.${format === "bin" ? "mp3" : format}`)
   const generationLabel = `Generation ${generationIndex + 1}`
 
   React.useEffect(() => {
@@ -443,7 +458,7 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
           onClick={togglePlayback}
           disabled={isLoadingAudio}
           className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-foreground text-background shadow-sm transition-transform hover:scale-[1.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:scale-100 disabled:opacity-75"
-          aria-label={isLoadingAudio ? "Cargando audio generado" : isPlaying ? "Pausar audio generado" : "Reproducir audio generado"}
+          aria-label={isLoadingAudio ? `Cargando ${generatedMediaLabel}` : isPlaying ? `Pausar ${generatedMediaLabel}` : `Reproducir ${generatedMediaLabel}`}
           title={isLoadingAudio ? "Cargando" : isPlaying ? "Pausar" : "Reproducir"}
         >
           {isLoadingAudio ? (
@@ -473,7 +488,7 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
           type="button"
           onClick={share}
           className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-          aria-label={copied ? "Enlace copiado" : "Compartir audio"}
+          aria-label={copied ? "Enlace copiado" : `Compartir ${generatedMediaLabel}`}
           title={copied ? "Enlace copiado" : "Compartir"}
         >
           <Share2 className="h-5 w-5 stroke-[2.1]" />
@@ -483,7 +498,7 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
           onClick={download}
           disabled={isDownloading}
           className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-60"
-          aria-label="Descargar audio generado"
+          aria-label={`Descargar ${generatedMediaLabel}`}
           title="Descargar"
         >
           {isDownloading ? <ThinkingIndicator size="sm" /> : <Download className="h-5 w-5 stroke-[2.1]" />}
@@ -498,7 +513,7 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
           onEnded={() => setIsPlaying(false)}
           className="hidden"
         >
-          <a href={href} download={filename}>Descargar audio generado</a>
+          <a href={href} download={filename}>Descargar {generatedMediaLabel}</a>
         </audio>
       </div>
     </div>

@@ -174,7 +174,12 @@ test('generate_music posts the right body and saves an mp3 artifact', async () =
     assert.equal(captured.body.music_length_ms, 180000);
     assert.equal(captured.headers['xi-api-key'], 'test-key');
     assert.match(captured.body.prompt, /lofi/i);
-    assert.ok(events.some((e) => e.type === 'file_artifact'));
+    const artifactEvt = events.find((e) => e.type === 'file_artifact');
+    assert.ok(artifactEvt, 'should emit a file_artifact event');
+    assert.equal(artifactEvt.artifact.category, 'music');
+    assert.equal(artifactEvt.artifact.kind, 'music');
+    assert.equal(artifactEvt.artifact.durationSeconds, 180);
+    assert.match(artifactEvt.artifact.prompt, /lofi/i);
   } finally {
     if (prev !== undefined) process.env.ELEVENLABS_API_KEY = prev; else delete process.env.ELEVENLABS_API_KEY;
     _internal.resetTestSeams();

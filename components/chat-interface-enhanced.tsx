@@ -3044,7 +3044,7 @@ const ActiveToolsDisplay = ({
               >
                 <span className="pointer-events-none absolute inset-y-[-55%] left-[-65%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-0 blur-sm transition-all duration-700 group-hover/music-trigger:left-[92%] group-hover/music-trigger:opacity-100 dark:via-white/20" />
                 <Settings className="h-3.5 sm:h-4 w-3.5 sm:w-4" />
-                <span className="hidden sm:inline">{selectedMusicStyle}</span>
+                <span>{selectedMusicStyle}</span>
                 <span>{selectedMusicDuration}s</span>
               </Button>
             </DropdownMenuTrigger>
@@ -4503,7 +4503,7 @@ function ChatInterfaceContent() {
   const [selectedMusicModel, setSelectedMusicModel] = React.useState<MusicModel>("ElevenLabs")
   const [selectedMusicStyle, setSelectedMusicStyle] = React.useState<MusicStyle>("Auto")
   const [selectedMusicMood, setSelectedMusicMood] = React.useState<MusicMood>("Balanced")
-  const [selectedMusicDuration, setSelectedMusicDuration] = React.useState(10)
+  const [selectedMusicDuration, setSelectedMusicDuration] = React.useState(30)
   const [selectedMusicInfluence, setSelectedMusicInfluence] = React.useState(0.3)
   const [selectedMusicEffect, setSelectedMusicEffect] = React.useState<MusicEffect>("Studio Master")
   const [selectedVideoResolution, setSelectedVideoResolution] = React.useState<VideoResolution>("720p")
