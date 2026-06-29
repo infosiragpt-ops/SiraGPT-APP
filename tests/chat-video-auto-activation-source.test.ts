@@ -186,6 +186,11 @@ describe("chat video auto-activation source contract", () => {
       /await apiClient\.generateMusicMessage\(\{[\s\S]{0,200}chatId: activeChat\.id/,
       "handleMusicGeneration must call the deterministic /ai/generate-music endpoint"
     )
+    assert.match(
+      source,
+      /toast\.success\(resp\?\.model \? `Música generada con \$\{resp\.model\}`/,
+      "the success toast should surface which engine generated the track (ElevenLabs / Lyria) so an auto-fallback is visible"
+    )
   })
 
   it("keeps Music mode visible and surviving chat creation while generation runs", () => {

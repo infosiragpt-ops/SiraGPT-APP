@@ -10406,7 +10406,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       } else {
         throw new Error('El servicio de música no devolvió audio.');
       }
-      toast.success('Música generada');
+      toast.success(resp?.model ? `Música generada con ${resp.model}` : 'Música generada');
       if (activeChat?.id) selectChat(activeChat.id);
     } catch (err: any) {
       const friendly = err?.message || 'No se pudo generar la música. Intenta de nuevo.';

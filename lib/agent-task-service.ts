@@ -24,6 +24,7 @@ export interface AgentArtifact {
   format?: string | null
   category?: string | null
   kind?: string | null
+  model?: string | null
   durationSeconds?: number | null
   prompt?: string | null
   sizeBytes: number

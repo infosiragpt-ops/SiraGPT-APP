@@ -6775,6 +6775,7 @@ router.post(
       format: 'mp3',
       kind: 'music',
       category: 'audio',
+      model: modelLabel,
       sizeBytes: result.sizeBytes,
       downloadUrl: result.audioUrl,
       prompt: text.slice(0, 280),

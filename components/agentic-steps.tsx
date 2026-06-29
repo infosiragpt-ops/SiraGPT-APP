@@ -387,12 +387,14 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
   const generatedMediaLabel = isMusic ? "música generada" : "audio generado"
   const filename = artifactFilename(artifact, `${fallbackBaseName}-${generationIndex + 1}.${format === "bin" ? "mp3" : format}`)
   const generationLabel = `Generation ${generationIndex + 1}`
+  const engineLabel = typeof artifact.model === "string" ? artifact.model.trim() : ""
 
   React.useEffect(() => {
     setAudioSrc(null)
     setIsPlaying(false)
     setCurrentTime(0)
     setDuration(0)
+    setIsLooping(false)
     return () => {
       if (objectUrlRef.current) {
         window.URL.revokeObjectURL(objectUrlRef.current)
@@ -518,12 +520,17 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
   return (
     <div className="my-2 w-full max-w-[460px]">
       <div className="relative flex flex-col gap-2 rounded-2xl border border-border/70 bg-background px-4 pb-3 pt-3 shadow-sm">
-        {/* Header: label + share / download */}
+        {/* Header: label (+ engine) + share / download */}
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[12.5px] font-medium leading-5 text-muted-foreground">
-            {generationLabel}
+          <span className="flex min-w-0 items-center gap-1.5 text-[12.5px] font-medium leading-5 text-muted-foreground">
+            <span className="shrink-0">{generationLabel}</span>
+            {engineLabel ? (
+              <span className="truncate rounded-full bg-red-500/10 px-2 py-0.5 text-[10.5px] font-semibold leading-none text-red-500" title={`Generado con ${engineLabel}`}>
+                {engineLabel}
+              </span>
+            ) : null}
           </span>
-          <div className="flex items-center gap-0.5">
+          <div className="flex shrink-0 items-center gap-0.5">
             <button
               type="button"
               onClick={share}

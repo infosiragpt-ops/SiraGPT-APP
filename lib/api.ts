@@ -2719,7 +2719,9 @@ class ApiClient {
     model?: string;
   }): Promise<{
     ok: boolean;
-    artifact: { id: string; filename: string; mime: string; downloadUrl: string; sizeBytes: number; kind?: string };
+    provider?: string;
+    model?: string;
+    artifact: { id: string; filename: string; mime: string; downloadUrl: string; sizeBytes: number; kind?: string; model?: string };
     content: string;
     state: any;
     assistantMessageId: string | null;
