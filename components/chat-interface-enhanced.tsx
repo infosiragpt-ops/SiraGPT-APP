@@ -3989,6 +3989,8 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     const customGptIcon = customGpt?.iconUrl;
     const activeModelLabel = selectedGptModel?.displayName || currentChat?.model || customGpt?.modelName || selectedModel || "Modelo";
     const activeModelName = currentChat?.model || customGpt?.modelName || selectedModel;
+    const gptMenuItemClass = "h-11 rounded-xl px-2.5 text-[13px] font-medium";
+    const gptMenuIconClass = "mr-2.5 h-4 w-4 shrink-0 text-muted-foreground";
 
     const GptIcon = () => customGptIcon ? (
       customGptIcon.startsWith('http') || customGptIcon.startsWith('https') || customGptIcon.startsWith('data:') ? (
@@ -4027,19 +4029,19 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
             <ChevronDown className="h-4 w-4 shrink-0 opacity-55 transition-transform duration-200 group-data-[state=open]/gpt:rotate-180" />
           </DropdownMenuTrigger>
 
-          <DropdownMenuContent align="start" sideOffset={8} collisionPadding={12} className="w-[calc(100vw-1.5rem)] overflow-hidden rounded-3xl border-border/70 p-2 shadow-2xl sm:w-[328px]">
-            <div className="mb-1 flex items-center gap-3 rounded-2xl px-2 py-2">
+          <DropdownMenuContent align="start" sideOffset={8} collisionPadding={12} className="w-[292px] max-w-[calc(100vw-1rem)] overflow-hidden rounded-2xl border-border/70 bg-background/95 p-1.5 shadow-xl backdrop-blur">
+            <div className="mb-1 flex items-center gap-2.5 rounded-xl px-2.5 py-2">
               <GptIcon />
               <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-semibold">{customGptName}</div>
-                <div className="truncate text-xs text-muted-foreground">{activeModelLabel}</div>
+                <div className="truncate text-[13px] font-semibold leading-5">{customGptName}</div>
+                <div className="truncate text-[11px] font-medium leading-4 text-muted-foreground">{activeModelLabel}</div>
               </div>
             </div>
 
             <DropdownMenuSub>
-              <DropdownMenuSubTrigger className="h-12 rounded-2xl px-3 text-[15px]">
-                <div className="flex items-center gap-3">
-                  <Settings className="h-4 w-4" />
+              <DropdownMenuSubTrigger className={cn(gptMenuItemClass, "justify-between")}>
+                <div className="flex min-w-0 items-center">
+                  <Settings className={gptMenuIconClass} />
                   <span>Modelo</span>
                 </div>
               </DropdownMenuSubTrigger>
@@ -4108,12 +4110,14 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
               </DropdownMenuPortal>
             </DropdownMenuSub>
 
-            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); startNewGptChat(); }} className="h-12 rounded-2xl px-3 text-[15px]">
-              <PenSquare className="mr-3 h-5 w-5" />
+            <DropdownMenuSeparator className="my-1" />
+
+            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); startNewGptChat(); }} className={gptMenuItemClass}>
+              <PenSquare className={gptMenuIconClass} />
               Nuevo chat
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); setGptDialog("about"); }} className="h-12 rounded-2xl px-3 text-[15px]">
-              <Info className="mr-3 h-5 w-5" />
+            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); setGptDialog("about"); }} className={gptMenuItemClass}>
+              <Info className={gptMenuIconClass} />
               Acerca de
             </DropdownMenuItem>
             <DropdownMenuItem
@@ -4121,30 +4125,31 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
                 event.preventDefault();
                 if (customGpt?.id) window.location.href = `/gpts/create?edit=${customGpt.id}`;
               }}
-              className="h-12 rounded-2xl px-3 text-[15px]"
+              className={gptMenuItemClass}
             >
-              <Lock className="mr-3 h-5 w-5" />
-              Configuración de privacidad
+              <Lock className={gptMenuIconClass} />
+              Privacidad
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); togglePinGpt(); }} className="h-12 rounded-2xl px-3 text-[15px]">
-              <Pin className="mr-3 h-5 w-5" />
-              {isGptPinned ? "Quitar de la barra lateral" : "Mantener en la barra lateral"}
+            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); togglePinGpt(); }} className={gptMenuItemClass}>
+              <Pin className={gptMenuIconClass} />
+              {isGptPinned ? "Quitar de barra" : "Fijar en barra"}
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); copyGptLink(); }} className="h-12 rounded-2xl px-3 text-[15px]">
-              <Link2 className="mr-3 h-5 w-5" />
+            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); copyGptLink(); }} className={gptMenuItemClass}>
+              <Link2 className={gptMenuIconClass} />
               Copiar enlace
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); setGptDialog("feedback"); }} className="h-12 rounded-2xl px-3 text-[15px]">
-              <MessageCircle className="mr-3 h-5 w-5" />
-              Enviar comentarios
+            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); setGptDialog("feedback"); }} className={gptMenuItemClass}>
+              <MessageCircle className={gptMenuIconClass} />
+              Comentarios
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); setGptDialog("rate"); }} className="h-12 rounded-2xl px-3 text-[15px]">
-              <MessageSquare className="mr-3 h-5 w-5" />
-              Valorar GPT
+            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); setGptDialog("rate"); }} className={gptMenuItemClass}>
+              <MessageSquare className={gptMenuIconClass} />
+              Valorar
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); setGptDialog("report"); }} className="h-12 rounded-2xl px-3 text-[15px]">
-              <Flag className="mr-3 h-5 w-5" />
-              Denunciar GPT
+            <DropdownMenuSeparator className="my-1" />
+            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); setGptDialog("report"); }} className={cn(gptMenuItemClass, "text-destructive focus:text-destructive")}>
+              <Flag className="mr-2.5 h-4 w-4 shrink-0" />
+              Denunciar
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
