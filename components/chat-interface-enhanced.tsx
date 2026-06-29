@@ -10399,6 +10399,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         mood: selectedMusicMood,
         effect: selectedMusicEffect,
         influence: selectedMusicInfluence,
+        model: selectedMusicModel,
       });
       if (resp?.content) {
         setBubble(resp.content);

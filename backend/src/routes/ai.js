@@ -67,6 +67,7 @@ const aiService = require('../services/ai-service');
 const imageEngine = require('../services/media/image-engine');
 const elevenLabsTts = require('../services/ai/elevenlabs-tts');
 const elevenLabsMusic = require('../services/ai/elevenlabs-music');
+const lyriaMusic = require('../services/ai/lyria-music');
 const { classifyImageGenError } = require('../services/image-error-classifier');
 const agentFilters = require('../services/agents/filters');
 const OpenAI = require('openai');
@@ -6557,10 +6558,10 @@ function buildSpeechAgentState({ displayText, artifact }) {
   };
 }
 
-function buildMusicAgentState({ displayText, artifact }) {
+function buildMusicAgentState({ displayText, artifact, model }) {
   const safeText = String(displayText || '').slice(0, 200);
   return {
-    meta: { goal: safeText, model: 'ElevenLabs Music', tools: ['generate_music'] },
+    meta: { goal: safeText, model: model || 'ElevenLabs Music', tools: ['generate_music'] },
     steps: [
       {
         id: 'music-1',
@@ -6690,6 +6691,7 @@ router.post(
     body('mood').optional().isString().trim().isLength({ max: 60 }),
     body('effect').optional().isString().trim().isLength({ max: 60 }),
     body('influence').optional().isFloat({ min: 0, max: 1 }),
+    body('model').optional().isString().trim().isLength({ max: 60 }),
   ],
   authenticateToken,
   requirePaidPlan({ feature: 'music_generation' }),
@@ -6697,84 +6699,120 @@ router.post(
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-    if (!elevenLabsMusic.isElevenLabsConfigured()) {
+    const elevenReady = elevenLabsMusic.isElevenLabsConfigured();
+    const lyriaReady = lyriaMusic.isLyriaConfigured();
+    if (!elevenReady && !lyriaReady) {
       return res.status(503).json({ ok: false, error: 'El servicio de música no está configurado.' });
     }
 
     const text = String(req.body.text || '').trim();
     const chatId = typeof req.body.chatId === 'string' && req.body.chatId.trim() ? req.body.chatId.trim() : null;
     const durationSeconds = Number.isFinite(Number(req.body.durationSeconds)) ? Number(req.body.durationSeconds) : 30;
+    const selectedModel = String(req.body.model || '').trim();
+    const wantsLyria = /lyria/i.test(selectedModel);
+
     // Fold the composer's visible settings into the prompt so Style / Mood /
-    // Effect / Prompt-influence actually shape the generated track (the user's
-    // displayed prompt stays `text`).
+    // Effect / Prompt-influence actually shape the track (displayed prompt = text).
     const composedPrompt = elevenLabsMusic.composeMusicPrompt(text, {
       style: req.body.style,
       mood: req.body.mood,
       effect: req.body.effect,
       influence: req.body.influence,
     });
+    const finalPrompt = composedPrompt || text;
 
-    try {
-      const result = await elevenLabsMusic.generateMusicFile({ prompt: composedPrompt || text, durationSeconds });
+    // Provider order: explicit Lyria first; otherwise ElevenLabs then auto-fall
+    // back to Lyria when ElevenLabs is out of credits (the common long-track fail).
+    const order = [];
+    if (wantsLyria && lyriaReady) {
+      order.push('lyria');
+      if (elevenReady) order.push('elevenlabs');
+    } else {
+      if (elevenReady) order.push('elevenlabs');
+      if (lyriaReady) order.push('lyria');
+    }
 
-      const artifact = {
-        id: `music-${result.filename}`,
-        filename: `musica-${Date.now()}.mp3`,
-        mime: result.mime,
-        format: 'mp3',
-        kind: 'music',
-        category: 'audio',
-        sizeBytes: result.sizeBytes,
-        downloadUrl: result.audioUrl,
-        prompt: text.slice(0, 280),
-      };
-
-      const state = buildMusicAgentState({ displayText: text, artifact });
-      const content = '```agent-task-state\n' + JSON.stringify(state) + '\n```';
-
-      // Persist the turn so it survives a reload (mirrors generate-speech).
-      let assistantMessageId = null;
-      if (chatId) {
-        try {
-          const saved = await saveChatAndTrackUsage(
-            req.user.id,
-            chatId,
-            text,
-            content,
-            text.length,
-            'elevenlabs-music',
-            [],
-          );
-          assistantMessageId = saved?.assistantMessage?.id || null;
-        } catch (saveErr) {
-          console.warn('[ai/generate-music] persistence failed (continuing):', saveErr?.message || saveErr);
-        }
+    let result = null;
+    let usedProvider = null;
+    let lastErr = null;
+    for (const provider of order) {
+      try {
+        result = provider === 'lyria'
+          ? await lyriaMusic.generateLyriaMusicFile({ prompt: finalPrompt, durationSeconds })
+          : await elevenLabsMusic.generateMusicFile({ prompt: finalPrompt, durationSeconds });
+        usedProvider = provider;
+        break;
+      } catch (err) {
+        lastErr = err;
+        console.warn(`[ai/generate-music] ${provider} failed (${err?.code || 'ERR'}): ${err?.message || err}`);
+        // Only fall through on credit/quota/rate exhaustion; hard errors stop here.
+        if (err?.code !== 'INSUFFICIENT_CREDITS' && err?.code !== 'RATE_LIMITED') break;
       }
+    }
 
-      return res.json({
-        ok: true,
-        artifact,
-        content,
-        state,
-        assistantMessageId,
-        chatId,
-        durationSeconds: result.durationSeconds,
-      });
-    } catch (error) {
-      console.error('[ai/generate-music] error:', error?.message || error);
-      const status = error?.code === 'PROMPT_REQUIRED' ? 400
-        : error?.code === 'ELEVENLABS_NOT_CONFIGURED' ? 503
-          : error?.code === 'INSUFFICIENT_CREDITS' ? 402
+    if (!result) {
+      const code = lastErr?.code;
+      const status = code === 'PROMPT_REQUIRED' ? 400
+        : (code === 'ELEVENLABS_NOT_CONFIGURED' || code === 'OPENROUTER_NOT_CONFIGURED') ? 503
+          : (code === 'INSUFFICIENT_CREDITS' || code === 'RATE_LIMITED') ? 402
             : 502;
+      console.error('[ai/generate-music] all providers failed:', lastErr?.message || lastErr);
       return res.status(status).json({
         ok: false,
         error: status === 402
-          ? 'Sin créditos suficientes de ElevenLabs para una pista de esta duración. Prueba con una duración menor o recarga créditos en tu cuenta de ElevenLabs.'
+          ? 'Sin créditos suficientes para generar una pista de esta duración. Prueba con una duración menor o recarga créditos (ElevenLabs / OpenRouter).'
           : status === 503
             ? 'El servicio de música no está configurado.'
             : 'No se pudo generar la música. Intenta de nuevo en unos segundos.',
       });
     }
+
+    const modelLabel = usedProvider === 'lyria' ? 'Lyria 3 Pro' : 'ElevenLabs Music';
+    const artifact = {
+      id: `music-${result.filename}`,
+      filename: `musica-${Date.now()}.mp3`,
+      mime: result.mime,
+      format: 'mp3',
+      kind: 'music',
+      category: 'audio',
+      sizeBytes: result.sizeBytes,
+      downloadUrl: result.audioUrl,
+      prompt: text.slice(0, 280),
+    };
+
+    const state = buildMusicAgentState({ displayText: text, artifact, model: modelLabel });
+    const content = '```agent-task-state\n' + JSON.stringify(state) + '\n```';
+
+    // Persist the turn so it survives a reload (mirrors generate-speech).
+    let assistantMessageId = null;
+    if (chatId) {
+      try {
+        const saved = await saveChatAndTrackUsage(
+          req.user.id,
+          chatId,
+          text,
+          content,
+          text.length,
+          usedProvider === 'lyria' ? 'lyria-music' : 'elevenlabs-music',
+          [],
+        );
+        assistantMessageId = saved?.assistantMessage?.id || null;
+      } catch (saveErr) {
+        console.warn('[ai/generate-music] persistence failed (continuing):', saveErr?.message || saveErr);
+      }
+    }
+
+    return res.json({
+      ok: true,
+      provider: usedProvider,
+      model: modelLabel,
+      artifact,
+      content,
+      state,
+      assistantMessageId,
+      chatId,
+      durationSeconds: result.durationSeconds,
+    });
   }
 );
 

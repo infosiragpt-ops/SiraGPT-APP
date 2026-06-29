@@ -2716,6 +2716,7 @@ class ApiClient {
     mood?: string;
     effect?: string;
     influence?: number;
+    model?: string;
   }): Promise<{
     ok: boolean;
     artifact: { id: string; filename: string; mime: string; downloadUrl: string; sizeBytes: number; kind?: string };
