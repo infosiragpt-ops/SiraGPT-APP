@@ -31,14 +31,6 @@ import {
 import { listCodexProjects } from "@/lib/codex-projects"
 import { projectsService } from "@/lib/projects-service"
 import { useAuth } from "@/lib/auth-context-integrated"
-import { useCodexHealth } from "@/lib/codex/use-codex-health"
-
-// Codex Agent V2 panel — only mounted when CODEX_AGENT_V2 is on (health probe).
-// Lazy so its chunk never ships when the flag is off.
-const CodexAgentPanel = dynamic(
-  () => import("@/components/codex/codex-agent-panel").then((mod) => mod.CodexAgentPanel),
-  { ssr: false, loading: () => <CodeWorkspaceSkeleton /> },
-)
 
 const CodeWorkspace = dynamic(
   () => import("@/components/code/code-workspace").then((mod) => mod.CodeWorkspace),
@@ -49,20 +41,6 @@ const CodeWorkspace = dynamic(
 )
 
 export default function CodeWorkspacePage() {
-  const { enabled } = useCodexHealth()
-
-  // Flag on (health.enabled) ⇒ the V2 agent experience. Flag off or still
-  // probing ⇒ /code renders exactly as before (no regression).
-  if (enabled) {
-    return (
-      <CodeWorkspaceGate>
-        <div className="h-screen min-h-0 overflow-hidden">
-          <CodexAgentPanel />
-        </div>
-      </CodeWorkspaceGate>
-    )
-  }
-
   return (
     <CodeWorkspaceGate>
       <CodeWorkspaceProvider>
