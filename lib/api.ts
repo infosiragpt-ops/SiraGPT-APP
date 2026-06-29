@@ -2707,6 +2707,24 @@ class ApiClient {
     });
   }
 
+  async generateMusicMessage(data: {
+    text: string;
+    chatId?: string | null;
+    durationSeconds?: number;
+  }): Promise<{
+    ok: boolean;
+    artifact: { id: string; filename: string; mime: string; downloadUrl: string; sizeBytes: number; kind?: string };
+    content: string;
+    state: any;
+    assistantMessageId: string | null;
+    chatId: string | null;
+  }> {
+    return this.request('/ai/generate-music', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
   async speechToText(audioFile: File, model_id?: string) {
     const formData = new FormData();
     formData.append('audio', audioFile);

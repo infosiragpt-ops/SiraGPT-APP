@@ -501,31 +501,6 @@ const MUSIC_MOOD_OPTIONS: MusicMood[] = ["Balanced", "Energetic", "Emotional", "
 const MUSIC_EFFECT_OPTIONS: MusicEffect[] = ["None", "Studio Master", "Spatial", "Warm Tape", "Radio Ready", "Lo-Fi"]
 const VOICE_COMPOSER_PLACEHOLDER = "Escribe el texto que quieres convertir en voz"
 
-const buildMusicGenerationGoal = ({
-  text,
-  model,
-  style,
-  mood,
-  durationSeconds,
-  influence,
-  effect,
-}: {
-  text: string
-  model: MusicModel
-  style: MusicStyle
-  mood: MusicMood
-  durationSeconds: number
-  influence: number
-  effect: MusicEffect
-}) => {
-  const normalizedText = text.trim()
-  return [
-    "Genera una pista de musica en formato MP3. Debes usar la herramienta generate_music; no finalices solo con texto.",
-    `Descripcion de la musica a componer:\n${normalizedText}`,
-    `Preferencias visibles del usuario: proveedor/modelo=${model}; estilo=${style}; mood=${mood}; duracion=${durationSeconds} segundos; influencia=${Math.round(influence * 100)}%; efecto=${effect}.`,
-    "Si una preferencia exacta no esta disponible en el proveedor, genera la mejor pista posible con el motor de musica disponible y explica la limitacion brevemente junto al archivo.",
-  ].join("\n\n")
-}
 const DEFAULT_IMAGE_MODEL = ""
 const DEFAULT_IMAGE_PROVIDER = "OpenAI"
 const DEFAULT_VIDEO_MODEL = ""
@@ -4548,6 +4523,7 @@ function ChatInterfaceContent() {
     } catch { /* localStorage unavailable */ }
   }, [])
   const [isMusicGenerationActive, setIsMusicGenerationActive] = React.useState(false)
+  const [isGeneratingMusic, setIsGeneratingMusic] = React.useState(false)
   const [selectedMusicModel, setSelectedMusicModel] = React.useState<MusicModel>("ElevenLabs")
   const [selectedMusicStyle, setSelectedMusicStyle] = React.useState<MusicStyle>("Auto")
   const [selectedMusicMood, setSelectedMusicMood] = React.useState<MusicMood>("Balanced")
@@ -4566,6 +4542,7 @@ function ChatInterfaceContent() {
   const currentVideoOperationIdRef = React.useRef<string | null>(null)
   const isGeneratingImageRef = React.useRef(false)
   const isGeneratingVoiceRef = React.useRef(false)
+  const isGeneratingMusicRef = React.useRef(false)
   const [isGeneratingVideo, setIsGeneratingVideo] = React.useState(false)
   const [isGeneratingPPT, setIsGeneratingPPT] = React.useState(false)
   const [isGeneratingWebDev, setIsGeneratingWebDev] = React.useState(false)
@@ -5136,6 +5113,11 @@ function ChatInterfaceContent() {
       isGeneratingVoiceRef.current = false;
       setIsGeneratingVoice(false);
       setIsVoiceGenerationActive(true);
+    }
+    if (isGeneratingMusicRef.current) {
+      isGeneratingMusicRef.current = false;
+      setIsGeneratingMusic(false);
+      setIsMusicGenerationActive(true);
     }
     // Video now cancels through the same dedicated-AbortController mechanism as
     // image: abort the kickoff request, then clear the long-running media
@@ -6436,6 +6418,9 @@ But first, you need to connect your Spotify account securely using the button be
       } else if (isGeneratingVoiceRef.current) {
         setIsVoiceGenerationActive(true);
         setChatType('text');
+      } else if (isGeneratingMusicRef.current) {
+        setIsMusicGenerationActive(true);
+        setChatType('text');
       } else {
         closeAllToolsAndConnectors();
         setChatType('text'); // Always default to text when switching chats
@@ -6461,6 +6446,9 @@ But first, you need to connect your Spotify account securely using the button be
       setChatType('image');
     } else if (isGeneratingVoiceRef.current) {
       setIsVoiceGenerationActive(true);
+      setChatType('text');
+    } else if (isGeneratingMusicRef.current) {
+      setIsMusicGenerationActive(true);
       setChatType('text');
     } else {
       closeAllToolsAndConnectors();
@@ -8147,22 +8135,14 @@ REWRITTEN TEXT:`;
     }
 
     if (isMusicGenerationActive) {
-      const musicGoal = buildMusicGenerationGoal({
-        text: msg,
-        model: selectedMusicModel,
-        style: selectedMusicStyle,
-        mood: selectedMusicMood,
-        durationSeconds: selectedMusicDuration,
-        influence: selectedMusicInfluence,
-        effect: selectedMusicEffect,
-      });
+      isGeneratingMusicRef.current = true;
+      setIsGeneratingMusic(true);
       setIsMusicGenerationActive(true);
       try {
-        await handleAgentTask(musicGoal, filesToSend, {
-          userMessageAlreadyAdded: false,
-          displayGoal: msg,
-        });
+        await handleMusicGeneration(msg, filesToSend);
       } finally {
+        isGeneratingMusicRef.current = false;
+        setIsGeneratingMusic(false);
         setIsMusicGenerationActive(true);
         inFlightSendKeysRef.current.delete(sendKey);
       }
@@ -9548,8 +9528,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     chatType === 'image' ||
     chatType === 'video';
   const isSendingForCurrentChat = isSending && sendingChatId === currentChatId;
-  const isStopButtonVisible = isCurrentChatLoading || isCurrentChatStreaming || (pendingStop && isCurrentChatStreaming) || isSendingForCurrentChat || isCurrentChatLocalJobBusy || isGeneratingImage || isGeneratingVoice || isGeneratingVideo || isGeneratingPPT;
-  const shouldPrioritizeStopButton = isGeneratingVoice || isGeneratingImage || isGeneratingVideo || isGeneratingPPT;
+  const isStopButtonVisible = isCurrentChatLoading || isCurrentChatStreaming || (pendingStop && isCurrentChatStreaming) || isSendingForCurrentChat || isCurrentChatLocalJobBusy || isGeneratingImage || isGeneratingVoice || isGeneratingVideo || isGeneratingPPT || isGeneratingMusic;
+  const shouldPrioritizeStopButton = isGeneratingVoice || isGeneratingImage || isGeneratingVideo || isGeneratingPPT || isGeneratingMusic;
   const composerHasInlineContext = uploadedFiles.length > 0 || Boolean(selectedWordText) || hasDetectedLinks;
   const composerIsExpanded =
     composerHasInlineContext ||
@@ -10209,6 +10189,111 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       if (activeChat?.id) selectChat(activeChat.id);
     } catch (err: any) {
       const friendly = err?.message || 'No se pudo generar el audio. Intenta de nuevo.';
+      const errorState = {
+        ...runningState,
+        done: true,
+        error: friendly,
+        steps: runningState.steps.map(s => ({ ...s, status: 'error' })),
+      };
+      setBubble('```agent-task-state\n' + JSON.stringify(errorState) + '\n```');
+      toast.error(friendly);
+    } finally {
+      markLocalJobIdle(activeChat.id);
+    }
+  };
+
+  const handleMusicGeneration = async (msg: string, filesToSend: any[] = []) => {
+    const description = (msg || '').trim();
+    if (!description) {
+      toast.error('Describe la música que quieres crear');
+      return;
+    }
+
+    let activeChat = currentChat;
+    if (!activeChat) {
+      try {
+        const response = await apiClient.createChat({
+          title: description.substring(0, 30),
+          model: selectedModel,
+        });
+        activeChat = response.chat;
+        await selectChat(activeChat?.id ?? "");
+        if (!activeChat?.id) {
+          toast.error('No se pudo crear el chat para la música');
+          return;
+        }
+      } catch {
+        toast.error('No se pudo crear el chat para la música');
+        return;
+      }
+    }
+
+    markLocalJobBusy(activeChat.id);
+
+    const userMessage = {
+      id: `msg-user-${Date.now()}`,
+      chatId: activeChat.id,
+      role: 'USER' as const,
+      content: description,
+      timestamp: new Date().toISOString(),
+      files: filesToSend,
+    };
+    setCurrentChat(prev => {
+      if (!prev || prev.id !== activeChat!.id) return prev;
+      return { ...prev, messages: [...(prev.messages || []), userMessage] };
+    });
+
+    const runningState = {
+      meta: { goal: description.slice(0, 200), model: 'ElevenLabs Music', tools: ['generate_music'] },
+      steps: [{
+        id: 'music-bootstrap',
+        label: 'Componiendo música',
+        icon: 'thought',
+        reasoning: 'Generando una pista original con ElevenLabs Music.',
+        status: 'running',
+        toolCalls: [],
+      }],
+      artifacts: [],
+      approvals: [],
+      checkpoints: [],
+      qualityGates: [],
+      repairs: [],
+      finalText: '',
+      done: false,
+    };
+    const aiMessage = {
+      id: `msg-ai-${Date.now() + 1}`,
+      chatId: activeChat.id,
+      role: 'ASSISTANT' as const,
+      content: '```agent-task-state\n' + JSON.stringify(runningState) + '\n```',
+      timestamp: new Date().toISOString(),
+    };
+    setCurrentChat(prev => {
+      if (!prev || prev.id !== activeChat!.id) return prev;
+      return { ...prev, messages: [...(prev.messages || []), aiMessage] };
+    });
+    const setBubble = (content: string) => {
+      setCurrentChat(prev => {
+        if (!prev || prev.id !== activeChat!.id) return prev;
+        return { ...prev, messages: prev.messages.map(m => m.id === aiMessage.id ? { ...m, content } : m) };
+      });
+    };
+
+    try {
+      const resp = await apiClient.generateMusicMessage({
+        text: description,
+        chatId: activeChat.id,
+        durationSeconds: selectedMusicDuration,
+      });
+      if (resp?.content) {
+        setBubble(resp.content);
+      } else {
+        throw new Error('El servicio de música no devolvió audio.');
+      }
+      toast.success('Música generada');
+      if (activeChat?.id) selectChat(activeChat.id);
+    } catch (err: any) {
+      const friendly = err?.message || 'No se pudo generar la música. Intenta de nuevo.';
       const errorState = {
         ...runningState,
         done: true,

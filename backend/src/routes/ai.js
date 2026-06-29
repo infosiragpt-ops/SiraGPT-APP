@@ -66,6 +66,7 @@ const { tryConsumePlanQuota, checkPaidTokenCap, recordApiUsage } = require('../s
 const aiService = require('../services/ai-service');
 const imageEngine = require('../services/media/image-engine');
 const elevenLabsTts = require('../services/ai/elevenlabs-tts');
+const elevenLabsMusic = require('../services/ai/elevenlabs-music');
 const { classifyImageGenError } = require('../services/image-error-classifier');
 const agentFilters = require('../services/agents/filters');
 const OpenAI = require('openai');
@@ -6556,6 +6557,32 @@ function buildSpeechAgentState({ displayText, artifact }) {
   };
 }
 
+function buildMusicAgentState({ displayText, artifact }) {
+  const safeText = String(displayText || '').slice(0, 200);
+  return {
+    meta: { goal: safeText, model: 'ElevenLabs Music', tools: ['generate_music'] },
+    steps: [
+      {
+        id: 'music-1',
+        label: 'Música generada',
+        icon: 'check',
+        status: 'done',
+        reasoning: '',
+        toolCalls: [
+          { tool: 'generate_music', output: { ok: true, preview: artifact.filename } },
+        ],
+      },
+    ],
+    artifacts: [artifact],
+    approvals: [],
+    checkpoints: [],
+    qualityGates: [],
+    repairs: [],
+    finalText: '',
+    done: true,
+  };
+}
+
 router.post(
   '/generate-speech',
   [
@@ -6641,6 +6668,89 @@ router.post(
       return res.status(status).json({
         ok: false,
         error: 'No se pudo generar el audio. Intenta de nuevo en unos segundos.',
+      });
+    }
+  }
+);
+
+router.post(
+  '/generate-music',
+  [
+    body('text').isString().trim().isLength({ min: 1, max: 2000 }),
+    body('durationSeconds').optional().isInt({ min: 1, max: 300 }),
+    body('chatId').optional({ nullable: true }).isString(),
+  ],
+  authenticateToken,
+  requirePaidPlan({ feature: 'music_generation' }),
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    if (!elevenLabsMusic.isElevenLabsConfigured()) {
+      return res.status(503).json({ ok: false, error: 'El servicio de música no está configurado.' });
+    }
+
+    const text = String(req.body.text || '').trim();
+    const chatId = typeof req.body.chatId === 'string' && req.body.chatId.trim() ? req.body.chatId.trim() : null;
+    const durationSeconds = Number.isFinite(Number(req.body.durationSeconds)) ? Number(req.body.durationSeconds) : 30;
+
+    try {
+      const result = await elevenLabsMusic.generateMusicFile({ prompt: text, durationSeconds });
+
+      const artifact = {
+        id: `music-${result.filename}`,
+        filename: `musica-${Date.now()}.mp3`,
+        mime: result.mime,
+        format: 'mp3',
+        kind: 'music',
+        category: 'audio',
+        sizeBytes: result.sizeBytes,
+        downloadUrl: result.audioUrl,
+        prompt: text.slice(0, 280),
+      };
+
+      const state = buildMusicAgentState({ displayText: text, artifact });
+      const content = '```agent-task-state\n' + JSON.stringify(state) + '\n```';
+
+      // Persist the turn so it survives a reload (mirrors generate-speech).
+      let assistantMessageId = null;
+      if (chatId) {
+        try {
+          const saved = await saveChatAndTrackUsage(
+            req.user.id,
+            chatId,
+            text,
+            content,
+            text.length,
+            'elevenlabs-music',
+            [],
+          );
+          assistantMessageId = saved?.assistantMessage?.id || null;
+        } catch (saveErr) {
+          console.warn('[ai/generate-music] persistence failed (continuing):', saveErr?.message || saveErr);
+        }
+      }
+
+      return res.json({
+        ok: true,
+        artifact,
+        content,
+        state,
+        assistantMessageId,
+        chatId,
+        durationSeconds: result.durationSeconds,
+      });
+    } catch (error) {
+      console.error('[ai/generate-music] error:', error?.message || error);
+      const status = error?.code === 'PROMPT_REQUIRED' ? 400
+        : error?.code === 'ELEVENLABS_NOT_CONFIGURED' ? 503
+          : error?.code === 'INSUFFICIENT_CREDITS' ? 402
+            : 502;
+      return res.status(status).json({
+        ok: false,
+        error: status === 402
+          ? 'Créditos insuficientes para generar música.'
+          : 'No se pudo generar la música. Intenta de nuevo en unos segundos.',
       });
     }
   }

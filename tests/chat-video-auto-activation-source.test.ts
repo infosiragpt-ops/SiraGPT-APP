@@ -170,21 +170,49 @@ describe("chat video auto-activation source contract", () => {
     )
   })
 
-  it("routes active Music mode to music generation and keeps the tool active", () => {
+  it("routes active Music mode to the deterministic music generation path", () => {
     assert.match(
       source,
-      /const buildMusicGenerationGoal = \(\{[\s\S]{0,700}generate_music/,
-      "Music goal builder must force the generate_music tool"
+      /if \(isMusicGenerationActive\) \{[\s\S]{0,420}await handleMusicGeneration\(msg, filesToSend\)/,
+      "Music mode sends should bypass normal chat classification and call the deterministic music artifact path"
+    )
+    assert.doesNotMatch(
+      source,
+      /await handleAgentTask\(musicGoal/,
+      "Music must NOT route through the unreliable agentic loop (the durable path lacks generate_music)"
     )
     assert.match(
       source,
-      /if \(isMusicGenerationActive\) \{[\s\S]{0,500}const musicGoal = buildMusicGenerationGoal[\s\S]{0,500}await handleAgentTask\(musicGoal, filesToSend, \{[\s\S]{0,200}displayGoal: msg/,
-      "Music mode sends should bypass normal chat classification and call the music artifact path"
+      /await apiClient\.generateMusicMessage\(\{[\s\S]{0,200}chatId: activeChat\.id/,
+      "handleMusicGeneration must call the deterministic /ai/generate-music endpoint"
+    )
+  })
+
+  it("keeps Music mode visible and surviving chat creation while generation runs", () => {
+    assert.match(
+      source,
+      /const \[isGeneratingMusic, setIsGeneratingMusic\] = React\.useState\(false\)/,
+      "Music generation needs its own visible lifecycle state"
     )
     assert.match(
       source,
-      /if \(isMusicGenerationActive\) \{[\s\S]{0,900}finally \{[\s\S]{0,160}setIsMusicGenerationActive\(true\);/,
+      /const isGeneratingMusicRef = React\.useRef\(false\)/,
+      "Music generation should survive chat creation and selection effects"
+    )
+    assert.match(
+      source,
+      /isGeneratingMusicRef\.current = true;[\s\S]{0,140}setIsGeneratingMusic\(true\);[\s\S]{0,140}setIsMusicGenerationActive\(true\);[\s\S]{0,200}await handleMusicGeneration\(msg, filesToSend\)/,
+      "Music sends should mark the chip as generating before the deterministic music task creates or selects a chat"
+    )
+    assert.match(
+      source,
+      /finally \{[\s\S]{0,140}isGeneratingMusicRef\.current = false;[\s\S]{0,140}setIsGeneratingMusic\(false\);[\s\S]{0,140}setIsMusicGenerationActive\(true\);/,
       "Music mode should remain selected after the music task settles"
+    )
+    assert.match(
+      source,
+      /isGeneratingMusicRef\.current[\s\S]{0,140}setIsMusicGenerationActive\(true\);[\s\S]{0,80}setChatType\('text'\);/,
+      "Chat switching during music generation must preserve the visible Music tool"
     )
   })
 
