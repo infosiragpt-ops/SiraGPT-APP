@@ -389,6 +389,13 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
     () => buildPreviewDocument(snapshot.files, snapshot.activePath),
     [snapshot],
   )
+  const staticPreviewKey = React.useMemo(() => {
+    let hash = 0
+    for (let i = 0; i < result.html.length; i += 1) {
+      hash = (hash * 31 + result.html.charCodeAt(i)) | 0
+    }
+    return `${tick}:${result.kind}:${result.entry ?? "none"}:${result.html.length}:${hash}`
+  }, [result.entry, result.html, result.kind, tick])
 
   // Fresh document → clear the captured console.
   React.useEffect(() => {
@@ -596,7 +603,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
             )}
           >
             <iframe
-              key={tick}
+              key={staticPreviewKey}
               srcDoc={result.html}
               title="Preview en vivo"
               className="h-full w-full border-0 bg-white dark:bg-zinc-900"
