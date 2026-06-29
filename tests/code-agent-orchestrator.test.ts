@@ -166,6 +166,17 @@ test("isBuildRequest / isBuildLog heuristics", () => {
   assert.equal(isQuickGreeting("hola"), true)
   assert.equal(isQuickGreeting("hola, ¿cómo estás?"), true)
   assert.equal(isQuickGreeting("hola hazme una app"), false)
+  // Standalone social openers must also stay instant greetings (the screenshot
+  // bug: "como estas?" wrongly streamed a whole tsconfig.json project).
+  assert.equal(isQuickGreeting("como estas?"), true)
+  assert.equal(isQuickGreeting("¿cómo estás?"), true)
+  assert.equal(isQuickGreeting("qué tal"), true)
+  assert.equal(isQuickGreeting("todo bien?"), true)
+  assert.equal(isQuickGreeting("qué onda"), true)
+  assert.equal(isQuickGreeting("how are you"), true)
+  // …but a real build request that happens to be short is NOT a greeting.
+  assert.equal(isQuickGreeting("hazme una app"), false)
+  assert.equal(isQuickGreeting("crea un landing"), false)
   assert.equal(isBuildLog("npm ERR! code ERESOLVE"), true)
   assert.equal(isBuildLog("buenas tardes"), false)
 })

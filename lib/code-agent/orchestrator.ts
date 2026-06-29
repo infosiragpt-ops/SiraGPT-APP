@@ -87,9 +87,16 @@ export function isQuickGreeting(text: string): boolean {
     .replace(/[¡!¿?.,;:]+/g, " ")
     .replace(/\s+/g, " ")
     .trim()
-  return /^(hola|holi|buenas|buenos dias|buenas tardes|buenas noches|saludos|hey|hi|hello)( (que tal|como estas|como va|todo bien))?$/.test(
-    t,
-  )
+  // A greeting word ("hola", "buenas", "hey"…) and/or a short social opener
+  // ("¿cómo estás?", "qué tal", "todo bien"…) — standalone OR combined. A bare
+  // "como estas?" must stay an instant chat reply and never open the build/app
+  // intake (the build-verb/noun guard above already rejects anything that is a
+  // real request, so this is safe to widen).
+  const GREET =
+    "hola+|holi|holis|holas|ola|buenas|buenos dias|buen dia|buenas tardes|buenas noches|saludos|hey+|ey|hi|hello|hellow|yo|sup"
+  const OPENER =
+    "que tal|que onda|que hubo|que pasa|que mas|que haces|como estas|como esta|como vas|como va|como andas|como te va|todo bien|how are you|whats up|what s up"
+  return new RegExp(`^(?:(?:${GREET})(?: (?:${OPENER}))?|(?:${OPENER}))$`).test(t)
 }
 
 /** Heuristic: the text looks like a build/install/deploy error log. */

@@ -775,19 +775,38 @@ export function AICodeChatPanel() {
             abortRef.current = null
           },
           (err) => {
+            // A cancelled/aborted stream (user started a new turn, navigated
+            // away, or the SSE socket was cut) is NOT a failure — surface it as
+            // a soft "stopped" state that keeps whatever partial content arrived,
+            // instead of a scary red "Fetch is aborted" error turn.
+            const aborted =
+              err?.name === "AbortError" ||
+              /\babort|cancel|operation was aborted/i.test(err?.message || "")
             const msg = err?.message || "Error en el chat de código"
             setTurns((prev) =>
               prev.map((t) =>
                 t.id === assistantId
-                  ? {
-                      ...t,
-                      streaming: false,
-                      agentLabel: "Error en el turno",
-                      agentPhases: buildCodeAgentPhases("generate", {
-                        generate: { status: "error", detail: msg },
-                      }),
-                      content: t.content ? `${t.content}\n\n_${msg}_` : `_${msg}_`,
-                    }
+                  ? aborted
+                    ? {
+                        ...t,
+                        streaming: false,
+                        agentLabel: "Generación detenida",
+                        agentPhases: buildCodeAgentPhases("generate", {
+                          generate: { status: "done", detail: "Detenida" },
+                        }),
+                        content: t.content
+                          ? `${t.content}\n\n_Generación detenida._`
+                          : "_Generación detenida — vuelve a enviar para reintentar._",
+                      }
+                    : {
+                        ...t,
+                        streaming: false,
+                        agentLabel: "Error en el turno",
+                        agentPhases: buildCodeAgentPhases("generate", {
+                          generate: { status: "error", detail: msg },
+                        }),
+                        content: t.content ? `${t.content}\n\n_${msg}_` : `_${msg}_`,
+                      }
                   : t,
               ),
             )
@@ -798,14 +817,27 @@ export function AICodeChatPanel() {
           { onUsage: (u) => { usage = u } },
         )
       } catch (err: any) {
-        toast.error(err?.message || "Error en el chat de código")
-        patchAssistant({
-          streaming: false,
-          agentLabel: "Error en el turno",
-          agentPhases: buildCodeAgentPhases("generate", {
-            generate: { status: "error", detail: err?.message || "Error en el chat de código" },
-          }),
-        })
+        const aborted =
+          err?.name === "AbortError" ||
+          /\babort|cancel|operation was aborted/i.test(err?.message || "")
+        if (aborted) {
+          patchAssistant({
+            streaming: false,
+            agentLabel: "Generación detenida",
+            agentPhases: buildCodeAgentPhases("generate", {
+              generate: { status: "done", detail: "Detenida" },
+            }),
+          })
+        } else {
+          toast.error(err?.message || "Error en el chat de código")
+          patchAssistant({
+            streaming: false,
+            agentLabel: "Error en el turno",
+            agentPhases: buildCodeAgentPhases("generate", {
+              generate: { status: "error", detail: err?.message || "Error en el chat de código" },
+            }),
+          })
+        }
         setBusy(false)
         abortRef.current = null
       }
