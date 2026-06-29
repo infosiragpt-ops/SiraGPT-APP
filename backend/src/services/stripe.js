@@ -151,7 +151,7 @@ class StripeService {
       },
       PRO_MAX: {
         name: 'Plus Plan',
-        price: 2000,
+        price: 1000,
         credits: 1000000,
         features: ['1,000,000 tokens per month', 'All AI models', 'Priority support', 'Advanced features', 'Enhanced rate limits']
       },

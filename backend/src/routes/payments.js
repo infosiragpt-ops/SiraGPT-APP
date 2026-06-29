@@ -361,7 +361,7 @@ router.post('/stripe', paymentLimiter, [
     // Calculate amount for payment record
     const planAmounts = {
       PRO: 5.00,
-      PRO_MAX: 20.00,
+      PRO_MAX: 10.00,
       ENTERPRISE: 200.00
     };
 
