@@ -1241,6 +1241,10 @@ export function AICodeChatPanel() {
   // "Arreglar con IA" tap) can't start two repairs before React re-renders the
   // busy refs. Reset when the repair turn settles.
   const repairInFlightRef = React.useRef(false)
+  // A user message submitted while the panel is busy (very often a BACKGROUND
+  // auto-repair the live dev server triggered) is NEVER dropped: it is parked
+  // here and auto-dispatched the instant the panel goes idle.
+  const pendingInputRef = React.useRef<string | null>(null)
 
   const repairFromLog = React.useCallback(
     async (log: string) => {
@@ -1654,7 +1658,19 @@ export function AICodeChatPanel() {
       const text = rawInput.trim()
       if (!text) return
       if (busy || buildingApp) {
-        toast("Espera — sigo procesando el mensaje anterior…")
+        // The live dev server can fire a BACKGROUND auto-repair turn (it failed
+        // to boot, e.g. a cold install over the 90s timeout) that holds the busy
+        // latch. The user's explicit message must NEVER be lost to it: cancel a
+        // background repair, then park the message so the idle-drain effect runs
+        // it the moment the panel settles.
+        if (repairInFlightRef.current) {
+          abortRef.current?.abort()
+          abortRef.current = null
+          repairInFlightRef.current = false
+        }
+        pendingInputRef.current = rawInput
+        setInput("")
+        toast("Recibido — lo proceso en cuanto termine la tarea en curso…")
         return
       }
       if (!user || !token) {
@@ -1860,6 +1876,36 @@ export function AICodeChatPanel() {
       user,
     ],
   )
+
+  // Stable ref to the latest dispatch so the idle-drain effect can run a parked
+  // message without re-subscribing every time dispatch's identity changes.
+  const dispatchRef = React.useRef(dispatch)
+  dispatchRef.current = dispatch
+
+  // Idle-drain: the instant the panel stops being busy, run any message the user
+  // submitted while it was busy (parked in pendingInputRef). Guarantees an
+  // explicit message is never silently lost behind a background turn.
+  React.useEffect(() => {
+    if (busy || buildingApp) return
+    const parked = pendingInputRef.current
+    if (!parked) return
+    pendingInputRef.current = null
+    void dispatchRef.current?.(parked)
+  }, [busy, buildingApp])
+
+  // Stale-busy watchdog: a streaming turn keeps abortRef set; if busy stays true
+  // with NO stream in flight (abortRef cleared) past a grace period, the latch is
+  // wedged — recover the composer so it (and any parked message) is never stuck.
+  React.useEffect(() => {
+    if (!busy) return
+    const t = window.setTimeout(() => {
+      if (!abortRef.current) {
+        setBusy(false)
+        repairInFlightRef.current = false
+      }
+    }, 30_000)
+    return () => window.clearTimeout(t)
+  }, [busy])
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault()
