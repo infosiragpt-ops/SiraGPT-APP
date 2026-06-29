@@ -83,6 +83,7 @@ import {
 import { defaultAgentState, type AgentBuildContext, type AgentPhase } from "@/lib/code-agent/types"
 import {
   classifyBuildError,
+  isBuildRequest,
   isQuickGreeting,
   mergeOverridesIntoPackageJson,
   nextAgentAction,
@@ -1698,6 +1699,20 @@ export function AICodeChatPanel() {
         patchAgentState(sid, (s) => ({ ...s, phase: "idle" }))
         return
       }
+
+      if ((composerMode === "app" || composerMode === "build") && isBuildRequest(text)) {
+        const direct = nextAgentAction(defaultAgentState(), text, {
+          mode: composerMode,
+          hasModel: false,
+        })
+        if (direct.type === "generate") {
+          patchAgentState(sid, (s) => ({ ...s, phase: "generating", context: direct.context }))
+          await buildApp(promptFromContext(direct.context), { ...direct.context, productType: text })
+          patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "deterministic" }))
+          return
+        }
+      }
+
       const agent = activeCodeChatSession?.agent ?? defaultAgentState()
       const action = nextAgentAction(agent, text, {
         mode: composerMode,
@@ -1892,6 +1907,53 @@ export function AICodeChatPanel() {
     pendingInputRef.current = null
     void dispatchRef.current?.(parked)
   }, [busy, buildingApp])
+
+  // Orphan-turn recovery: if the browser persisted a user message but the
+  // assistant turn was never created/completed (tab reload, stale busy latch,
+  // or a previous build that swallowed the submit), retry it automatically.
+  const recoveredOrphanTurnRef = React.useRef<Set<string>>(new Set())
+  React.useEffect(() => {
+    if (busy || buildingApp) return
+    const last = turns[turns.length - 1]
+    if (!last || last.role !== "user") return
+    const text = last.content.trim()
+    if (!text || recoveredOrphanTurnRef.current.has(last.id)) return
+
+    recoveredOrphanTurnRef.current.add(last.id)
+    setTurns((prev) => (prev[prev.length - 1]?.id === last.id ? prev.slice(0, -1) : prev))
+    const timer = window.setTimeout(() => {
+      void dispatchRef.current?.(text)
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [busy, buildingApp, setTurns, turns])
+
+  // Targeted stale-preview recovery: older builds could route "cre auna web de
+  // cafeteria" through the generic model while leaving the restaurant preview
+  // active. If the latest matching user request is clearly a cafe website and
+  // index.html still is not the cafe showcase, regenerate it deterministically.
+  const recoveredCafePreviewRef = React.useRef<Set<string>>(new Set())
+  React.useEffect(() => {
+    if (busy || buildingApp || !sessionId) return
+    const indexHtml = files["index.html"]?.content ?? ""
+    if (/Cafeter[ií]a Aurora/i.test(indexHtml)) return
+    const latestCafeWebsite = [...turns].reverse().find((turn) => {
+      const text = turn.content.trim()
+      return (
+        turn.role === "user" &&
+        isBuildRequest(text) &&
+        /\b(cafeter[ií]a|cafe|caf[eé]|coffee shop)\b/i.test(text) &&
+        /\b(web|p[aá]gina|pagina|sitio|website|landing|one[- ]?page)\b/i.test(text)
+      )
+    })
+    if (!latestCafeWebsite) return
+    const key = `${sessionId}:${latestCafeWebsite.id}`
+    if (recoveredCafePreviewRef.current.has(key)) return
+    recoveredCafePreviewRef.current.add(key)
+    const timer = window.setTimeout(() => {
+      void dispatchRef.current?.(latestCafeWebsite.content)
+    }, 50)
+    return () => window.clearTimeout(timer)
+  }, [busy, buildingApp, files, sessionId, turns])
 
   // Stale-busy watchdog: a streaming turn keeps abortRef set; if busy stays true
   // with NO stream in flight (abortRef cleared) past a grace period, the latch is
