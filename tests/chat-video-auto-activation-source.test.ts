@@ -169,4 +169,57 @@ describe("chat video auto-activation source contract", () => {
       "Voice mode sends should bypass normal chat classification and call the speech artifact path"
     )
   })
+
+  it("keeps Voice mode visible and cancellable while speech generation is running", () => {
+    assert.match(
+      source,
+      /const \[isGeneratingVoice, setIsGeneratingVoice\] = React\.useState\(false\)/,
+      "Voice generation needs its own visible lifecycle state"
+    )
+    assert.match(
+      source,
+      /const isGeneratingVoiceRef = React\.useRef\(false\)/,
+      "Voice generation should survive chat creation and selection effects"
+    )
+    assert.match(
+      source,
+      /isGeneratingVoiceRef\.current = true;[\s\S]{0,140}setIsGeneratingVoice\(true\);[\s\S]{0,140}setIsVoiceGenerationActive\(true\);[\s\S]{0,520}await handleAgentTask\(voiceGoal, filesToSend, \{/,
+      "Voice sends should mark the chip as generating before the agent task creates or selects a chat"
+    )
+    assert.match(
+      source,
+      /finally \{[\s\S]{0,140}isGeneratingVoiceRef\.current = false;[\s\S]{0,140}setIsGeneratingVoice\(false\);[\s\S]{0,140}setIsVoiceGenerationActive\(true\);/,
+      "Voice mode should remain selected after the audio task settles"
+    )
+    assert.match(
+      source,
+      /isGeneratingVoiceRef\.current[\s\S]{0,140}setIsVoiceGenerationActive\(true\);[\s\S]{0,80}setChatType\('text'\);/,
+      "Chat switching during voice generation must preserve the visible Voice tool"
+    )
+    assert.match(
+      source,
+      /if \(isGeneratingVoice\) return;[\s\S]{0,120}setIsVoiceGenerationActive\(false\);/,
+      "The Voice chip close button must not deactivate the tool mid-generation"
+    )
+    assert.match(
+      source,
+      /const isStopButtonVisible =[\s\S]{0,220}isGeneratingVoice/,
+      "Voice generation should force the stop button visible"
+    )
+    assert.match(
+      source,
+      /const shouldPrioritizeStopButton = isGeneratingVoice \|\| isGeneratingImage \|\| isGeneratingVideo \|\| isGeneratingPPT/,
+      "Voice generation should prioritize cancel over queue-send"
+    )
+    assert.match(
+      source,
+      /isStopButtonVisible && input\.trim\(\)\.length > 0 && !shouldPrioritizeStopButton/,
+      "Queue send should be suppressed while Voice generation needs the stop button"
+    )
+    assert.match(
+      source,
+      /isStopButtonVisible && \(input\.trim\(\)\.length === 0 \|\| shouldPrioritizeStopButton\)/,
+      "The stop button should remain available even if the composer has text during Voice generation"
+    )
+  })
 })

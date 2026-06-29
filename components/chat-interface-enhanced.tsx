@@ -2153,6 +2153,7 @@ const ActiveToolsDisplay = ({
   setSelectedImageModel,
   isVoiceGenerationActive,
   setIsVoiceGenerationActive,
+  isGeneratingVoice = false,
   selectedVoiceModel,
   setSelectedVoiceModel,
   selectedVoiceLanguage,
@@ -2239,6 +2240,7 @@ const ActiveToolsDisplay = ({
   setSelectedImageModel: (model: string) => void;
   isVoiceGenerationActive: boolean;
   setIsVoiceGenerationActive: (value: boolean) => void;
+  isGeneratingVoice?: boolean;
   selectedVoiceModel: VoiceModel;
   setSelectedVoiceModel: (model: VoiceModel) => void;
   selectedVoiceLanguage: VoiceLanguage;
@@ -2409,6 +2411,7 @@ const ActiveToolsDisplay = ({
   };
 
   const handleVoiceGenerationClose = () => {
+    if (isGeneratingVoice) return;
     setIsVoiceGenerationActive(false);
     setChatType('text');
   };
@@ -2876,12 +2879,14 @@ const ActiveToolsDisplay = ({
             <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/voice-liquid:translate-x-[155%] dark:via-white/25" />
             <AudioLines className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 drop-shadow-[0_0_8px_rgba(8,145,178,0.35)]" />
             <span className="relative z-10 text-[12px] sm:text-[14px]">Voz</span>
+            {isGeneratingVoice && <span className="relative z-10 h-1.5 w-1.5 rounded-full bg-cyan-500 motion-safe:animate-pulse" />}
             <Button
               variant="ghost"
               size="sm"
               className="relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0 hover:bg-white/50 dark:hover:bg-cyan-800/30"
               onClick={handleVoiceGenerationClose}
-              title="Cerrar voz"
+              disabled={isGeneratingVoice}
+              title={isGeneratingVoice ? "La herramienta sigue activa durante la generación" : "Cerrar voz"}
             >
               <X className="h-4 w-4" />
             </Button>
@@ -4494,6 +4499,7 @@ function ChatInterfaceContent() {
   const [selectedImageCount, setSelectedImageCount] = React.useState<ImageGenerationCount>(1)
   const [selectedImageModel, setSelectedImageModel] = React.useState(DEFAULT_IMAGE_MODEL)
   const [isVoiceGenerationActive, setIsVoiceGenerationActive] = React.useState(false)
+  const [isGeneratingVoice, setIsGeneratingVoice] = React.useState(false)
   const [selectedVoiceModel, setSelectedVoiceModel] = React.useState<VoiceModel>("ElevenLabs")
   const [selectedVoiceLanguage, setSelectedVoiceLanguage] = React.useState<VoiceLanguage>("Spanish")
   const [selectedVoiceAccent, setSelectedVoiceAccent] = React.useState<VoiceAccent>("Latino")
@@ -4517,6 +4523,7 @@ function ChatInterfaceContent() {
   const videoAbortControllerRef = React.useRef<AbortController | null>(null)
   const currentVideoOperationIdRef = React.useRef<string | null>(null)
   const isGeneratingImageRef = React.useRef(false)
+  const isGeneratingVoiceRef = React.useRef(false)
   const [isGeneratingVideo, setIsGeneratingVideo] = React.useState(false)
   const [isGeneratingPPT, setIsGeneratingPPT] = React.useState(false)
   const [isGeneratingWebDev, setIsGeneratingWebDev] = React.useState(false)
@@ -5082,6 +5089,11 @@ function ChatInterfaceContent() {
       }
       markImageGenerationStopped();
       toast.info('Generación de imagen detenida');
+    }
+    if (isGeneratingVoiceRef.current) {
+      isGeneratingVoiceRef.current = false;
+      setIsGeneratingVoice(false);
+      setIsVoiceGenerationActive(true);
     }
     // Video now cancels through the same dedicated-AbortController mechanism as
     // image: abort the kickoff request, then clear the long-running media
@@ -6379,6 +6391,9 @@ But first, you need to connect your Spotify account securely using the button be
       if (isGeneratingImageRef.current) {
         setIsImageGenerationActive(true);
         setChatType('image');
+      } else if (isGeneratingVoiceRef.current) {
+        setIsVoiceGenerationActive(true);
+        setChatType('text');
       } else {
         closeAllToolsAndConnectors();
         setChatType('text'); // Always default to text when switching chats
@@ -6402,6 +6417,9 @@ But first, you need to connect your Spotify account securely using the button be
     if (isGeneratingImageRef.current) {
       setIsImageGenerationActive(true);
       setChatType('image');
+    } else if (isGeneratingVoiceRef.current) {
+      setIsVoiceGenerationActive(true);
+      setChatType('text');
     } else {
       closeAllToolsAndConnectors();
     }
@@ -8080,12 +8098,18 @@ REWRITTEN TEXT:`;
         stability: selectedVoiceStability,
         effect: selectedVoiceEffect,
       });
+      isGeneratingVoiceRef.current = true;
+      setIsGeneratingVoice(true);
+      setIsVoiceGenerationActive(true);
       try {
         await handleAgentTask(voiceGoal, filesToSend, {
           userMessageAlreadyAdded: false,
           displayGoal: msg,
         });
       } finally {
+        isGeneratingVoiceRef.current = false;
+        setIsGeneratingVoice(false);
+        setIsVoiceGenerationActive(true);
         inFlightSendKeysRef.current.delete(sendKey);
       }
       return;
@@ -9470,7 +9494,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     chatType === 'image' ||
     chatType === 'video';
   const isSendingForCurrentChat = isSending && sendingChatId === currentChatId;
-  const isStopButtonVisible = isCurrentChatLoading || isCurrentChatStreaming || (pendingStop && isCurrentChatStreaming) || isSendingForCurrentChat || isCurrentChatLocalJobBusy || isGeneratingImage || isGeneratingVideo || isGeneratingPPT;
+  const isStopButtonVisible = isCurrentChatLoading || isCurrentChatStreaming || (pendingStop && isCurrentChatStreaming) || isSendingForCurrentChat || isCurrentChatLocalJobBusy || isGeneratingImage || isGeneratingVoice || isGeneratingVideo || isGeneratingPPT;
+  const shouldPrioritizeStopButton = isGeneratingVoice || isGeneratingImage || isGeneratingVideo || isGeneratingPPT;
   const composerHasInlineContext = uploadedFiles.length > 0 || Boolean(selectedWordText) || hasDetectedLinks;
   const composerIsExpanded =
     composerHasInlineContext ||
@@ -9490,6 +9515,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     selectedImageCount, setSelectedImageCount,
     selectedImageModel, setSelectedImageModel,
     isVoiceGenerationActive, setIsVoiceGenerationActive,
+    isGeneratingVoice,
     selectedVoiceModel, setSelectedVoiceModel,
     selectedVoiceLanguage, setSelectedVoiceLanguage,
     selectedVoiceAccent, setSelectedVoiceAccent,
@@ -10716,7 +10742,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             )
                           })()}
 
-                          {isStopButtonVisible && input.trim().length > 0 && (
+                          {isStopButtonVisible && input.trim().length > 0 && !shouldPrioritizeStopButton && (
                             <Tooltip>
                               <TooltipTrigger asChild>
                                 <Button
@@ -10737,7 +10763,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               <TooltipContent side="top"><p>Enviar a la cola · se procesa en orden</p></TooltipContent>
                             </Tooltip>
                           )}
-                          {isStopButtonVisible && input.trim().length === 0 && (
+                          {isStopButtonVisible && (input.trim().length === 0 || shouldPrioritizeStopButton) && (
                             <Button
                               onClick={stopActiveGeneration}
                               size="icon"
@@ -11287,7 +11313,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                   is what makes "send more while it thinks"
                                   work on mobile, where Enter isn't available.
                                   Empty composer → STOP button. */}
-                              {isStopButtonVisible && input.trim().length > 0 && (
+                              {isStopButtonVisible && input.trim().length > 0 && !shouldPrioritizeStopButton && (
                                 <Tooltip>
                                   <TooltipTrigger asChild>
                                     <Button
@@ -11308,7 +11334,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                   <TooltipContent side="top"><p>Enviar a la cola · se procesa en orden</p></TooltipContent>
                                 </Tooltip>
                               )}
-                              {isStopButtonVisible && input.trim().length === 0 && (
+                              {isStopButtonVisible && (input.trim().length === 0 || shouldPrioritizeStopButton) && (
                                 <Button
                                   onClick={stopActiveGeneration}
                                   size="icon"
