@@ -112,12 +112,13 @@ function toText(value) {
 function normalisePlatform(value) {
   const raw = toText(value).toLowerCase();
   if (PLATFORMS.includes(raw)) return raw;
-  // Desktop is checked before mobile so cues like "Electron app" / "app de
-  // escritorio" resolve to desktop instead of being caught by the "app" rule.
+  // Specific targets win before broad "app" wording. In the APPS workspace,
+  // users usually say "app" to mean a web/full-stack app; only explicit
+  // mobile cues should map to mobile.
   if (/desktop|escritorio|electron|tauri|\bdesk\b|win32|windows|macos/.test(raw)) return 'desktop';
-  if (/m[oó]vil|mobile|app|android|ios/.test(raw)) return 'mobile';
   if (/landing|aterrizaje|one[- ]?page/.test(raw)) return 'landing';
-  if (/web|sitio|portal|saas|dashboard/.test(raw)) return 'web';
+  if (/m[oó]vil|mobile|android|ios|iphone|ipad|celular|smartphone|react native|expo/.test(raw)) return 'mobile';
+  if (/web|sitio|portal|saas|dashboard|software|sistema|plataforma|app|aplicaci[oó]n/.test(raw)) return 'web';
   return null;
 }
 

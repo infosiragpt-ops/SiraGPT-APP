@@ -41,7 +41,7 @@ const BlueprintSchema = z.object({
 });
 
 const STACK_BY_PLATFORM = {
-  web: { frontend: 'Next.js (React)', backend: 'Express.js', database: 'PostgreSQL', hosting: 'Docker / Vercel' },
+  web: { frontend: 'Next.js (React)', backend: 'Next.js Route Handlers', database: 'PostgreSQL', hosting: 'Docker / Vercel' },
   mobile: { frontend: 'React Native (Expo)', backend: 'Express.js', database: 'PostgreSQL', hosting: 'EAS / Docker' },
   landing: { frontend: 'Next.js (static export)', backend: '—', database: '—', hosting: 'Vercel / CDN' },
   desktop: { frontend: 'Electron + React', backend: 'Node.js (proceso main) / Express.js', database: 'SQLite / PostgreSQL', hosting: 'GitHub Releases (auto-update)' },

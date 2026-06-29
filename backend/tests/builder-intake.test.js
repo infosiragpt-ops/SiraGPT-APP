@@ -102,6 +102,7 @@ test('buildBrief assembles a valid ProjectBrief', () => {
 test('normalisePlatform maps synonyms and rejects nonsense', () => {
   assert.strictEqual(normalisePlatform('Móvil'), 'mobile');
   assert.strictEqual(normalisePlatform('una app para android'), 'mobile');
+  assert.strictEqual(normalisePlatform('una app para mi negocio'), 'web');
   assert.strictEqual(normalisePlatform('landing page'), 'landing');
   assert.strictEqual(normalisePlatform('sitio web'), 'web');
   assert.strictEqual(normalisePlatform('cohete espacial'), null);

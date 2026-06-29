@@ -67,7 +67,7 @@ import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { useChat } from "@/lib/chat-context-integrated"
 import { CODE_OPEN_TOOL_LAUNCHER_EVENT, useCodeWorkspace } from "@/lib/code-workspace-context"
-import { intakeService } from "@/lib/builder/intake-service"
+import { intakeService, type GenerateResult, type ScaffoldFile } from "@/lib/builder/intake-service"
 import type { CodeAgentPhase, CodeChatTurn } from "@/lib/code-chat-sessions"
 import { computeLineDiff, parseCodeBlocks, type CodeBlock } from "@/lib/code-workspace-utils"
 import { detectBlocker } from "@/lib/code-chat-blocker"
@@ -305,6 +305,46 @@ Abre \`index.html\` en el preview. No requiere instalar dependencias ni levantar
     { path: "README.md", content: readme },
     { path: "index.html", content: html },
   ]
+}
+
+function hasGeneratedPath(files: Array<Pick<ScaffoldFile, "path">>, matcher: RegExp): boolean {
+  return files.some((file) => matcher.test(file.path))
+}
+
+function countGeneratedPaths(files: Array<Pick<ScaffoldFile, "path">>, matcher: RegExp): number {
+  return files.filter((file) => matcher.test(file.path)).length
+}
+
+function generatedFileSummary(result: GenerateResult, files: Array<Pick<ScaffoldFile, "path">>): string {
+  const entities = result.brief.dataEntities.map((e) => e.name).join(", ") || "sin entidades"
+  const hasPackage = hasGeneratedPath(files, /^package\.json$/i)
+  const hasDb = hasGeneratedPath(files, /^prisma\/schema\.prisma$/i)
+  const apiCount = countGeneratedPaths(files, /^app\/api\/[^/]+\/route\.tsx?$/i)
+  const pageCount = countGeneratedPaths(files, /^app\/.*page\.tsx$/i)
+  const projectLine = hasPackage
+    ? "proyecto Next.js 14 + TypeScript listo para ejecutar"
+    : "preview HTML autocontenido"
+  const dbLine = hasDb
+    ? "Prisma + PostgreSQL con schema.prisma, .env.example y docker-compose.yml"
+    : result.brief.platform === "landing"
+      ? "sin base de datos porque el brief es landing"
+      : "sin base de datos generada para este brief"
+  const backendLine = apiCount > 0
+    ? `${apiCount} route handler(s) en app/api`
+    : "sin rutas API porque no hay entidades persistentes"
+
+  return [
+    `✅ Software generado — ${files.length} archivo(s).`,
+    ``,
+    `- **Plataforma:** ${result.brief.platform}`,
+    `- **Arquitectura:** ${projectLine}`,
+    `- **Frontend:** ${pageCount || 1} pantalla(s) React/Next.js más preview inmediato en \`index.html\``,
+    `- **Backend:** ${backendLine}`,
+    `- **Base de datos:** ${dbLine}`,
+    `- **Entidades:** ${entities}`,
+    ``,
+    `Estoy abriendo **localhost / index.html** automáticamente para validar la interfaz al instante. Para correr la app completa con base de datos, usa los comandos del \`README.md\`: \`docker compose up -d db\`, \`npm install\`, \`cp .env.example .env\`, \`npm run db:push\`, \`npm run db:seed\`, \`npm run dev\`.`,
+  ].join("\n")
 }
 
 const COMPOSER_MODE_LABEL: Record<ComposerMode, string> = {
@@ -1033,11 +1073,12 @@ export function AICodeChatPanel() {
     ],
   )
 
-  // Deterministic "Construir app" path: bypasses the LLM entirely and sends the
-  // prompt to /api/builder/generate (pure heuristics -> self-contained
-  // index.html + docs). This is the reliable APPS flow: prompt in the chat,
-  // files written into the workspace, preview on localhost / index.html, with
-  // a local index.html fallback if the backend is temporarily unreachable.
+  // Deterministic "Construir app" path: sends the prompt to
+  // /api/builder/generate (pure heuristics -> real project files plus a
+  // self-contained index.html preview). This is the reliable APPS flow: prompt
+  // in the chat, files written into the workspace, preview on localhost /
+  // index.html, with a local index.html fallback if the backend is temporarily
+  // unreachable.
   const buildApp = React.useCallback(
     async (prompt: string, ctx?: AgentBuildContext) => {
       const text = prompt.trim()
@@ -1058,13 +1099,13 @@ export function AICodeChatPanel() {
         {
           id: `${id}-a`,
           role: "assistant",
-          content: "⚙️ Construyendo la app (modo determinista, sin LLM)…",
+          content: "⚙️ Analizando el brief y activando herramientas de construcción…",
           streaming: true,
-          agentLabel: "Construyendo app",
+          agentLabel: "Construyendo software",
           agentPhases: buildCodeAgentPhases("generate", {
-            plan: { status: "done", detail: "Brief recibido" },
-            context: { status: "done", detail: ctx ? "Contexto de intake listo" : "Prompt directo" },
-            generate: { status: "running", detail: "Generando archivos" },
+            plan: { status: "done", detail: "Arquitectura definida" },
+            context: { status: "done", detail: ctx ? "Contexto de intake listo" : "Brief inferido" },
+            generate: { status: "running", detail: "Frontend, backend y datos" },
           }),
         },
       ])
@@ -1082,18 +1123,8 @@ export function AICodeChatPanel() {
           if (appliedFiles.length === 0) {
             throw new Error("La generación no devolvió archivos.")
           }
-          const entities = result.brief.dataEntities.map((e) => e.name).join(", ") || "—"
-          summary = [
-            `✅ App generada (determinista) — ${appliedFiles.length} archivo(s).`,
-            ``,
-            `- **Plataforma:** ${result.brief.platform}`,
-            `- **Entidades:** ${entities}`,
-            `- **Tipo:** app autónoma de una página (\`index.html\`) que corre en el navegador, sin instalar nada`,
-            `- **Datos:** se guardan localmente en el navegador (localStorage)`,
-            ``,
-            `Estoy abriendo **localhost / index.html** automáticamente. Pídeme cualquier cambio y lo aplico desde este mismo chat.`,
-          ].join("\n")
-          toastMsg = "App generada — abriendo preview →"
+          summary = generatedFileSummary(result, appliedFiles)
+          toastMsg = "Software generado — abriendo preview →"
         } catch {
           appliedFiles = buildLocalIndexFallbackFiles(text, ctx)
           summary = [
@@ -1128,11 +1159,11 @@ export function AICodeChatPanel() {
                   ...t,
                   content: summary,
                   streaming: false,
-                  agentLabel: "App construida",
+                  agentLabel: "Software construido",
                   agentPhases: buildCodeAgentPhases("verify", {
-                    plan: { status: "done", detail: "Brief validado" },
+                    plan: { status: "done", detail: "Arquitectura validada" },
                     context: { status: "done", detail: ctx ? "Intake usado" : "Prompt directo" },
-                    generate: { status: "done", detail: `${appliedFiles.length} archivo(s)` },
+                    generate: { status: "done", detail: `${appliedFiles.length} archivo(s) generados` },
                     apply: { status: "done", detail: "Workspace actualizado" },
                     verify: { status: "done", detail: "Preview abierto" },
                   }),
@@ -1301,8 +1332,8 @@ export function AICodeChatPanel() {
 
   // Run the deterministic builder for a context and apply its files. Returns the
   // file count. Used as the reliable fallback when the engine yields no code.
-  // It always targets a self-contained index.html so APPS lands on
-  // localhost / index.html instead of waiting on a dev-server runner.
+  // It emits real project files and a self-contained index.html so APPS lands on
+  // localhost / index.html immediately while the full stack remains editable.
   const runDeterministicInto = React.useCallback(
     async (ctx: AgentBuildContext): Promise<number> => {
       const prompt = promptFromContext(ctx)
@@ -1759,9 +1790,10 @@ export function AICodeChatPanel() {
             patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "llm" }))
           } else {
             // First build → the deterministic builder is the PRIMARY path. It is
-            // LLM-free, returns in seconds, and emits a self-contained index.html
-            // live preview, so it never hits the ~30s GCLB stream cut that left
-            // the chat-streaming generation "cargando" forever on the Reserved VM.
+            // LLM-free, returns in seconds, and emits full project files plus a
+            // self-contained index.html live preview, so it never hits the ~30s
+            // GCLB stream cut that left the chat-streaming generation "cargando"
+            // forever on the Reserved VM.
             // (This branch previously streamed the whole project from the chat
             // model — the source of the hang/errors the user reported.)
             await buildApp(genPrompt, buildCtx)

@@ -177,7 +177,7 @@ function extractEntities(prompt) {
 
   // Stop the list at the first clause boundary so we don't swallow the rest of
   // the sentence ("con clientes y turnos para mi barbería" → "clientes y turnos").
-  listPart = listPart.split(/[.;\n]|\b(?:para|porque|usando|con un dise|en estilo|tipo)\b/i)[0];
+  listPart = listPart.split(/[.;\n]|#|\b(?:para|porque|usando|con un dise|en estilo|tipo|color|colores)\b/i)[0];
 
   const raw = listPart
     .split(/,|\/|\by\b|\be\b|\band\b|\bor\b|\+/i)

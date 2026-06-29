@@ -90,14 +90,14 @@ describe("code-agent progress rail — buildApp inline wiring", () => {
       "buildApp must compute real actions + metrics via buildWriteMetrics",
     )
     const successWiring = sliceBetween(
-      'agentLabel: "App construida"',
+      'agentLabel: "Software construido"',
       "} catch (err: any) {",
     )
     assert.match(successWiring, /\bactions,/, "the completed buildApp turn must carry the actions log")
     assert.match(successWiring, /\bmetrics,/, "the completed buildApp turn must carry the metrics (Worked Summary)")
   })
 
-  it("the deterministic APPS build path writes a self-contained index.html preview", () => {
+  it("the deterministic APPS build path writes project files plus a self-contained index.html preview", () => {
     const fn = buildApp()
     assert.match(
       fn,
@@ -113,6 +113,11 @@ describe("code-agent progress rail — buildApp inline wiring", () => {
       fn,
       /localhost \/ index\.html/,
       "the user-facing completion must make the preview target explicit",
+    )
+    assert.match(
+      fn,
+      /generatedFileSummary\(result, appliedFiles\)/,
+      "buildApp must summarize the generated full-stack architecture instead of describing only localStorage",
     )
     assert.doesNotMatch(
       fn,

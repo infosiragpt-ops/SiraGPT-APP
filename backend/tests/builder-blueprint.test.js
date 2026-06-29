@@ -116,10 +116,10 @@ describe('STACK_BY_PLATFORM', () => {
     }
   });
 
-  test('web maps to Next.js / Express / PostgreSQL', () => {
+  test('web maps to Next.js / Route Handlers / PostgreSQL', () => {
     assert.deepEqual(STACK_BY_PLATFORM.web, {
       frontend: 'Next.js (React)',
-      backend: 'Express.js',
+      backend: 'Next.js Route Handlers',
       database: 'PostgreSQL',
       hosting: 'Docker / Vercel',
     });

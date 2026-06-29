@@ -244,10 +244,12 @@ router.post(
     }
     try {
       const brief = briefFromPrompt(req.body.prompt);
-      // Client mode: emit only the self-contained single-file app (no
-      // package.json/Prisma) so the /code preview renders instantly on any
-      // active tab and never 500s at runtime for a missing DATABASE_URL.
-      const { blueprint, files } = scaffoldFromBrief(brief, { mode: 'client' });
+      // Full-stack mode: emit the real Next.js/Prisma/PostgreSQL project
+      // alongside the self-contained index.html preview. The /code preview
+      // still opens localhost / index.html immediately, while the workspace
+      // also receives package.json, app/api routes, prisma/schema.prisma and
+      // docker-compose.yml when the brief has data.
+      const { blueprint, files } = scaffoldFromBrief(brief);
       return res.json({ brief, blueprint, files });
     } catch (err) {
       return res.status(400).json({ error: 'generate_failed', message: err.message });

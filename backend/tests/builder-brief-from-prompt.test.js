@@ -40,6 +40,13 @@ test('extracted entities get sensible default fields (real form inputs)', () => 
   assert.ok(pedido.fields.includes('total'));
 });
 
+test('entity extraction stops before color/style instructions', () => {
+  const brief = briefFromPrompt('Software para bodas con clientes, eventos, invitados y pagos color #FF0000');
+  const names = brief.dataEntities.map((e) => e.name);
+  assert.deepEqual(names, ['Cliente', 'Evento', 'Invitado', 'Pago']);
+  assert.equal(brief.style.theme, 'moderno #FF0000');
+});
+
 test('no extractable entities → a generic Registro entity (never an empty app)', () => {
   const brief = briefFromPrompt('Quiero una app para mi negocio');
   assert.equal(brief.dataEntities.length, 1);
@@ -51,6 +58,7 @@ test('platform is inferred, defaulting to web', () => {
   assert.equal(briefFromPrompt('Una app de escritorio con tareas').platform, 'desktop');
   assert.equal(briefFromPrompt('Landing one-page para mi marca').platform, 'landing');
   assert.equal(briefFromPrompt('Gestor de inventario con productos').platform, 'web');
+  assert.equal(briefFromPrompt('Quiero una app para mi negocio').platform, 'web');
 });
 
 test('theme is derived from style cues', () => {
@@ -111,6 +119,13 @@ test('POST /generate returns brief + blueprint + runnable files', async () => {
   const index = res.body.files.find((f) => f.path === 'index.html');
   assert.ok(index, 'index.html must be present');
   assert.match(index.content, /<!doctype html>/i);
+  const paths = res.body.files.map((f) => f.path);
+  assert.ok(paths.includes('package.json'), 'full-stack project must include package.json');
+  assert.ok(paths.includes('prisma/schema.prisma'), 'data apps must include Prisma schema');
+  assert.ok(paths.includes('docker-compose.yml'), 'data apps must include local Postgres compose file');
+  assert.ok(paths.includes('.env.example'), 'data apps must include env template');
+  assert.ok(paths.includes('app/api/cliente/route.ts'), 'Cliente API route must be generated');
+  assert.ok(paths.includes('app/cliente/page.tsx'), 'Cliente CRUD page must be generated');
 });
 
 test('POST /generate rejects an empty prompt with 400', async () => {
