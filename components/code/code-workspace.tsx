@@ -1,87 +1,542 @@
 "use client"
 
 /**
- * CodeWorkspace — Replit-style agentic build surface for /code.
+ * CodeWorkspace — agent-first build surface for /code.
  *
- * Owner-requested layout ("solo un chat agéntico … tipo Replit"): a pure
- * agentic chat — the owner gives orders and it builds the software — beside a
- * live preview of the running app. No code editor, file tree, terminal,
- * command palette, or other IDE chrome is shown; every interaction happens
- * through the chat. The "pensando" activity is the red DotmCircular15 glyph
- * rendered inside the chat panel.
+ * The chat remains the primary control surface, while the advanced workspace
+ * tools stay available from the top bar: Herramientas, Codigo, Preview, Shell,
+ * Git, Validation, command palette, launcher, and publishing surfaces.
  */
 
 import * as React from "react"
-import { Rocket } from "lucide-react"
+import { Command as CommandIcon, Plus } from "lucide-react"
+import { type ImperativePanelHandle } from "react-resizable-panels"
 
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
 import {
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable"
-import { useCodeWorkspace } from "@/lib/code-workspace-context"
+import {
+  CODE_OPEN_TOOL_EVENT,
+  useCodeWorkspace,
+} from "@/lib/code-workspace-context"
+import { CODE_TEMPLATES } from "@/lib/code-templates"
+import { WORKSPACE_TOOLS, type WorkspaceToolId } from "@/lib/code-workspace-tools"
 
 import { AICodeChatPanel } from "./ai-code-chat-panel"
+import { CodeHub } from "./code-hub"
 import { PreviewPane } from "./preview-pane"
-import { ProjectChip } from "./project-chip"
 import { PublishingConsole } from "./publishing-console"
+import { TerminalPanel } from "./terminal-panel"
+import { ToolLauncher } from "./tool-launcher"
+import { ToolScreen } from "./tool-screen"
+import { WorkspaceTopBar, type WorkspacePanelId } from "./workspace-top-bar"
 
-const CHAT_DEFAULT_SIZE = 42
-const CHAT_MIN_SIZE = 30
-const PREVIEW_MIN_SIZE = 30
+const CHAT_DEFAULT_SIZE = 30
+const CHAT_MIN_SIZE = 22
+const TERMINAL_DEFAULT_SIZE = 32
+const TERMINAL_MIN_SIZE = 14
+const PENDING_CODE_TOOL_KEY = "code-workspace:pending-tool"
+
+type PaletteCommand = {
+  id: string
+  label: string
+  keywords?: string
+  hint?: string
+  run: () => void
+}
 
 export function CodeWorkspace() {
-  const { focusChat } = useCodeWorkspace()
-  const [publishingOpen, setPublishingOpen] = React.useState(false)
+  const {
+    files,
+    openFile,
+    createFile,
+    applyBlock,
+    resetWorkspace,
+    focusChat,
+    registerCommandPaletteHandler,
+  } = useCodeWorkspace()
 
-  // Land the cursor in the chat composer on entry — the chat is the only way
-  // the owner drives the build.
+  const [chatOpen, setChatOpen] = React.useState(true)
+  const [terminalOpen, setTerminalOpen] = React.useState(false)
+  const [previewOpen, setPreviewOpen] = React.useState<boolean>(() => {
+    if (typeof window === "undefined") return true
+    return window.localStorage.getItem("code-workspace:preview-open") !== "0"
+  })
+  const [paletteOpen, setPaletteOpen] = React.useState(false)
+  const [paletteQuery, setPaletteQuery] = React.useState("")
+  const [publishingOpen, setPublishingOpen] = React.useState(false)
+  const [openPanels, setOpenPanels] = React.useState<Set<WorkspacePanelId>>(
+    () => new Set<WorkspacePanelId>(["preview", "terminal"]),
+  )
+  const [activePanel, setActivePanel] = React.useState<WorkspacePanelId | null>("preview")
+  const [launcherOpen, setLauncherOpen] = React.useState(false)
+  const [activeTool, setActiveTool] = React.useState<WorkspaceToolId | null>(null)
+  const [codeHubOpen, setCodeHubOpen] = React.useState(false)
+
+  const chatRef = React.useRef<ImperativePanelHandle>(null)
+
   React.useEffect(() => {
+    try {
+      window.localStorage.setItem("code-workspace:preview-open", previewOpen ? "1" : "0")
+    } catch {
+      /* storage disabled - fail soft */
+    }
+  }, [previewOpen])
+
+  const toggleTerminal = React.useCallback(() => {
+    setTerminalOpen((value) => {
+      const next = !value
+      if (next) {
+        setOpenPanels((prev) => new Set(prev).add("terminal"))
+        setActivePanel("terminal")
+      } else {
+        setOpenPanels((prev) => {
+          const panels = new Set(prev)
+          panels.delete("terminal")
+          return panels
+        })
+      }
+      return next
+    })
+  }, [])
+
+  const handleTogglePanel = React.useCallback((id: WorkspacePanelId) => {
+    setActivePanel(id)
+    setOpenPanels((prev) => new Set(prev).add(id))
+    if (id === "terminal") {
+      setTerminalOpen(true)
+      return
+    }
+    if (id === "preview") {
+      setPreviewOpen(true)
+      return
+    }
+    if (id === "git" || id === "validation") {
+      setCodeHubOpen(false)
+      setActiveTool(id)
+    }
+  }, [])
+
+  const handleClosePanel = React.useCallback((id: WorkspacePanelId) => {
+    setOpenPanels((prev) => {
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+    setActivePanel((current) => (current === id ? null : current))
+    if (id === "terminal") setTerminalOpen(false)
+    if (id === "preview") setPreviewOpen(false)
+  }, [])
+
+  const openComposer = React.useCallback(() => {
+    setChatOpen(true)
+    chatRef.current?.expand()
     focusChat()
+    window.dispatchEvent(new CustomEvent("siragpt:code-composer-mode"))
   }, [focusChat])
+
+  const openToolIds = React.useMemo<WorkspaceToolId[]>(() => {
+    const ids = new Set<WorkspaceToolId>()
+    if (chatOpen) ids.add("agent")
+    if (previewOpen || openPanels.has("preview")) ids.add("preview")
+    if (terminalOpen || openPanels.has("terminal")) ids.add("shell")
+    if (activeTool) ids.add(activeTool)
+    return Array.from(ids)
+  }, [activeTool, chatOpen, openPanels, previewOpen, terminalOpen])
+
+  const handleSelectTool = React.useCallback(
+    (id: WorkspaceToolId) => {
+      setLauncherOpen(false)
+      const tool = WORKSPACE_TOOLS[id]
+      if (!tool) return
+      if (tool.behavior === "action") {
+        if (id === "agent") {
+          openComposer()
+          return
+        }
+        if (id === "new-file") {
+          const path = window.prompt("Nombre del archivo (incluye ruta)")
+          if (path) createFile(path, "")
+        }
+        return
+      }
+      setCodeHubOpen(false)
+      setActiveTool(id)
+    },
+    [createFile, openComposer],
+  )
+
+  React.useEffect(() => {
+    const openTool = (id: unknown) => {
+      if (typeof id !== "string" || !(id in WORKSPACE_TOOLS)) return
+      handleSelectTool(id as WorkspaceToolId)
+    }
+
+    try {
+      const pending = window.localStorage.getItem(PENDING_CODE_TOOL_KEY)
+      if (pending) {
+        window.localStorage.removeItem(PENDING_CODE_TOOL_KEY)
+        window.setTimeout(() => openTool(pending), 0)
+      }
+    } catch {
+      /* fail soft */
+    }
+
+    const onOpenTool = (event: Event) => {
+      openTool((event as CustomEvent<{ toolId?: string }>).detail?.toolId)
+    }
+    window.addEventListener(CODE_OPEN_TOOL_EVENT, onOpenTool)
+    return () => window.removeEventListener(CODE_OPEN_TOOL_EVENT, onOpenTool)
+  }, [handleSelectTool])
+
+  const loadTemplate = React.useCallback(
+    (templateId: string) => {
+      const template = CODE_TEMPLATES.find((item) => item.id === templateId)
+      if (!template) return
+      if (Object.keys(files).length > 0) {
+        const confirmed = window.confirm(
+          `Cargar la plantilla "${template.name}"? Se crearán o sobrescribirán sus archivos.`,
+        )
+        if (!confirmed) return
+      }
+      for (const file of template.files) applyBlock(file.path, file.content)
+      openFile(template.entry)
+    },
+    [applyBlock, files, openFile],
+  )
+
+  React.useEffect(() => {
+    return registerCommandPaletteHandler(() => setPaletteOpen(true))
+  }, [registerCommandPaletteHandler])
+
+  React.useEffect(() => {
+    const openPreview = () => {
+      setPreviewOpen(true)
+      setOpenPanels((prev) => new Set(prev).add("preview"))
+      setActivePanel("preview")
+    }
+    window.addEventListener("siragpt:code-open-preview", openPreview)
+    return () => window.removeEventListener("siragpt:code-open-preview", openPreview)
+  }, [])
+
+  React.useEffect(() => {
+    const onLoadTemplate = (event: Event) => {
+      const id = (event as CustomEvent<{ id?: string }>).detail?.id
+      if (id) loadTemplate(id)
+    }
+    window.addEventListener("siragpt:code-load-template", onLoadTemplate)
+    return () => window.removeEventListener("siragpt:code-load-template", onLoadTemplate)
+  }, [loadTemplate])
+
+  React.useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      const isMod = event.metaKey || event.ctrlKey
+      if (!isMod) return
+
+      const key = event.key.toLowerCase()
+      if (event.shiftKey && key === "p") {
+        event.preventDefault()
+        setPaletteQuery("")
+        setPaletteOpen(true)
+        return
+      }
+      if (key === "p" && !event.shiftKey) {
+        event.preventDefault()
+        setPaletteQuery("open ")
+        setPaletteOpen(true)
+        return
+      }
+      if (key === "k" && !event.shiftKey) {
+        event.preventDefault()
+        setPaletteQuery("edit")
+        setPaletteOpen(true)
+        return
+      }
+      if (key === "e") {
+        event.preventDefault()
+        setPreviewOpen((value) => !value)
+        return
+      }
+      if (key === "b") {
+        event.preventDefault()
+        setLauncherOpen((value) => !value)
+        return
+      }
+      if (key === "l") {
+        event.preventDefault()
+        setChatOpen(true)
+        chatRef.current?.expand()
+        focusChat()
+        return
+      }
+      if (key === "i") {
+        event.preventDefault()
+        openComposer()
+        return
+      }
+      if (key === "j" || key === "`") {
+        event.preventDefault()
+        toggleTerminal()
+      }
+    }
+    window.addEventListener("keydown", handler)
+    return () => window.removeEventListener("keydown", handler)
+  }, [focusChat, openComposer, toggleTerminal])
+
+  const commands = React.useMemo<PaletteCommand[]>(() => {
+    const fileItems: PaletteCommand[] = Object.keys(files).map((path) => ({
+      id: `open:${path}`,
+      label: `Abrir ${path}`,
+      keywords: `open file ${path}`,
+      run: () => openFile(path),
+    }))
+    return [
+      ...fileItems,
+      ...CODE_TEMPLATES.map((template) => ({
+        id: `template:${template.id}`,
+        label: `Plantilla: ${template.name}`,
+        keywords: `template plantilla scaffold nueva app ${template.id} ${template.name}`,
+        hint: "Nuevo",
+        run: () => loadTemplate(template.id),
+      })),
+      {
+        id: "new-file",
+        label: "Nuevo archivo...",
+        keywords: "new file create",
+        run: () => {
+          const path = window.prompt("Nombre del archivo (incluye ruta)")
+          if (path) createFile(path, "")
+        },
+      },
+      {
+        id: "edit-active",
+        label: "Editar archivo activo con IA",
+        keywords: "edit ai cmd k inline",
+        hint: "Cmd K",
+        run: () => {
+          setChatOpen(true)
+          chatRef.current?.expand()
+          focusChat()
+        },
+      },
+      {
+        id: "focus-chat",
+        label: "Abrir chat del agente",
+        keywords: "focus chat l",
+        hint: "Cmd L",
+        run: () => {
+          setChatOpen(true)
+          chatRef.current?.expand()
+          focusChat()
+        },
+      },
+      {
+        id: "composer",
+        label: "Composer multi-archivo",
+        keywords: "composer multi file plan agent",
+        hint: "Cmd I",
+        run: openComposer,
+      },
+      {
+        id: "toggle-terminal",
+        label: terminalOpen ? "Ocultar Shell" : "Mostrar Shell",
+        keywords: "terminal shell repl",
+        hint: "Cmd J",
+        run: toggleTerminal,
+      },
+      {
+        id: "reset",
+        label: "Restaurar ejemplo",
+        keywords: "reset starter",
+        run: () => {
+          const confirmed = window.confirm("Esto restaurará los archivos de ejemplo y descartará el workspace actual.")
+          if (confirmed) resetWorkspace()
+        },
+      },
+    ]
+  }, [
+    createFile,
+    files,
+    focusChat,
+    loadTemplate,
+    openComposer,
+    openFile,
+    resetWorkspace,
+    terminalOpen,
+    toggleTerminal,
+  ])
+
+  const filteredCommands = React.useMemo(() => {
+    const query = paletteQuery.trim().toLowerCase()
+    if (!query) return commands
+    return commands.filter((command) =>
+      `${command.label} ${command.keywords ?? ""}`.toLowerCase().includes(query),
+    )
+  }, [commands, paletteQuery])
 
   return (
     <div className="flex h-screen min-w-0 flex-col overflow-hidden bg-background text-foreground">
-      <header className="flex h-10 shrink-0 items-center justify-between gap-2 border-b border-border/40 bg-background/55 px-3 backdrop-blur-xl supports-[backdrop-filter]:bg-background/40">
-        <ProjectChip />
-        <Button
-          type="button"
-          size="sm"
-          onClick={() => setPublishingOpen(true)}
-          className="h-7 gap-1.5 rounded-md px-3 text-[12px] font-medium"
-        >
-          <Rocket className="h-3.5 w-3.5" />
-          Publicar
-        </Button>
-      </header>
+      <WorkspaceTopBar
+        openPanels={openPanels}
+        activePanel={activePanel}
+        onTogglePanel={handleTogglePanel}
+        onClosePanel={handleClosePanel}
+        onOpenPalette={(query) => {
+          setPaletteQuery(query ?? "")
+          setPaletteOpen(true)
+        }}
+        onOpenSearch={() => {
+          setPaletteQuery("open ")
+          setPaletteOpen(true)
+        }}
+        onOpenLauncher={() => setLauncherOpen(true)}
+        launcherOpen={launcherOpen}
+        onOpenCode={() => {
+          setActiveTool(null)
+          setCodeHubOpen(true)
+        }}
+        codeOpen={codeHubOpen}
+        toolsMenu={
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
+            aria-label="Abrir herramientas"
+            onClick={() => setLauncherOpen(true)}
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </Button>
+        }
+      />
 
       <div className="relative min-h-0 flex-1">
         <ResizablePanelGroup direction="horizontal" className="h-full">
-          {/* Agentic chat — the owner gives orders here and it builds. */}
           <ResizablePanel
+            ref={chatRef}
+            collapsible
+            collapsedSize={0}
             defaultSize={CHAT_DEFAULT_SIZE}
             minSize={CHAT_MIN_SIZE}
-            maxSize={65}
+            maxSize={50}
+            onCollapse={() => setChatOpen(false)}
+            onExpand={() => setChatOpen(true)}
             className="min-w-0"
           >
             <AICodeChatPanel />
           </ResizablePanel>
           <ResizableHandle withHandle />
-          {/* Live preview of the running software — the result, never the code. */}
-          <ResizablePanel
-            defaultSize={100 - CHAT_DEFAULT_SIZE}
-            minSize={PREVIEW_MIN_SIZE}
-            className="relative min-w-0"
-          >
+
+          <ResizablePanel defaultSize={70} minSize={32} className="relative min-w-0">
             <div className="absolute inset-0">
-              <PreviewPane />
+              <ResizablePanelGroup direction="vertical">
+                <ResizablePanel defaultSize={terminalOpen ? 100 - TERMINAL_DEFAULT_SIZE : 100} minSize={30}>
+                  <PreviewPane onClose={() => handleClosePanel("preview")} />
+                </ResizablePanel>
+                {terminalOpen ? (
+                  <>
+                    <ResizableHandle withHandle />
+                    <ResizablePanel defaultSize={TERMINAL_DEFAULT_SIZE} minSize={TERMINAL_MIN_SIZE} maxSize={70}>
+                      <TerminalPanel open={terminalOpen} onClose={() => setTerminalOpen(false)} />
+                    </ResizablePanel>
+                  </>
+                ) : null}
+              </ResizablePanelGroup>
             </div>
+
+            {codeHubOpen ? (
+              <CodeHub open onClose={() => setCodeHubOpen(false)} />
+            ) : activeTool ? (
+              <ToolScreen
+                toolId={activeTool}
+                onClose={() => setActiveTool(null)}
+                onBackToLauncher={() => {
+                  setActiveTool(null)
+                  setLauncherOpen(true)
+                }}
+              />
+            ) : null}
+
+            <ToolLauncher
+              open={launcherOpen}
+              onClose={() => setLauncherOpen(false)}
+              onSelect={handleSelectTool}
+              openToolIds={openToolIds}
+            />
           </ResizablePanel>
         </ResizablePanelGroup>
       </div>
 
       <PublishingConsole open={publishingOpen} onOpenChange={setPublishingOpen} />
+
+      <Dialog
+        open={paletteOpen}
+        onOpenChange={(open) => {
+          setPaletteOpen(open)
+          if (!open) setPaletteQuery("")
+        }}
+      >
+        <DialogContent className="p-0 sm:max-w-[560px]">
+          <DialogHeader className="px-4 pb-2 pt-4">
+            <DialogTitle className="flex items-center gap-2 text-sm">
+              <CommandIcon className="h-4 w-4" />
+              Paleta de comandos
+            </DialogTitle>
+            <DialogDescription className="sr-only">
+              Acciones del workspace de codigo.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="px-4 pb-4">
+            <Input
+              autoFocus
+              value={paletteQuery}
+              onChange={(event) => setPaletteQuery(event.target.value)}
+              placeholder="Escribe una accion o un archivo..."
+              className="h-9"
+            />
+            <div className="mt-2 max-h-72 overflow-y-auto rounded-md border border-border/60">
+              {filteredCommands.length === 0 ? (
+                <div className="px-3 py-6 text-center text-xs text-muted-foreground">
+                  Sin resultados
+                </div>
+              ) : (
+                filteredCommands.map((command) => (
+                  <button
+                    key={command.id}
+                    type="button"
+                    className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-muted/50"
+                    onClick={() => {
+                      command.run()
+                      setPaletteOpen(false)
+                      setPaletteQuery("")
+                    }}
+                  >
+                    <span className="truncate">{command.label}</span>
+                    <span className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-muted-foreground">
+                      {command.hint ? <kbd className="rounded bg-muted px-1.5 py-px">{command.hint}</kbd> : null}
+                      <span>{command.id.split(":")[0]}</span>
+                    </span>
+                  </button>
+                ))
+              )}
+            </div>
+            <p className="mt-3 text-[11px] text-muted-foreground">
+              Atajos: Cmd P abre archivos, Cmd Shift P paleta, Cmd K editar con IA, Cmd L chat, Cmd I composer, Cmd J shell.
+            </p>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
