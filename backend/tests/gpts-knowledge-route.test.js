@@ -403,6 +403,40 @@ test('POST / accepts boundary-valid temperature/maxTokens and creates the GPT', 
   assert.equal(store.gpts.size, 1);
 });
 
+test('POST / creates GPTs for every share level and persists capability toggles', async () => {
+  resetState();
+  const app = buildApp();
+  const levels = ['PRIVATE', 'UNLISTED', 'PUBLIC'];
+
+  for (const visibility of levels) {
+    const res = await request(app).post('/api/gpts').send({
+      gpts: JSON.stringify({
+        name: `Store ${visibility}`,
+        description: 'Visible share-level save contract',
+        instructions: 'Answer professionally.',
+        visibility,
+        capabilities: {
+          webBrowsing: true,
+          dataAnalysis: true,
+          imageGeneration: false,
+          codeInterpreter: true,
+        },
+      }),
+    });
+
+    assert.equal(res.status, 201, `expected create success for ${visibility}: ${res.body.error || ''}`);
+    assert.equal(res.body.gpt.visibility, visibility);
+    assert.deepEqual(res.body.gpt.capabilities, {
+      webBrowsing: true,
+      dataAnalysis: true,
+      imageGeneration: false,
+      codeInterpreter: true,
+    });
+  }
+
+  assert.equal(store.gpts.size, levels.length);
+});
+
 test('PUT /:id rejects out-of-range temperature (400 before the ownership lookup)', async () => {
   resetState();
   seedGpt('gpt-a', 'owner-1');
