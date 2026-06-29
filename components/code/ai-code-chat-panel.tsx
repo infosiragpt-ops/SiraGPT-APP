@@ -1218,7 +1218,8 @@ export function AICodeChatPanel() {
         const patched = mergeOverridesIntoPackageJson(pkg.content, verdict.suggestedOverrides)
         if (patched) {
           applyBlock("package.json", patched)
-          body += "\n\n_`package.json` actualizado con `overrides` — pulsa **⚡ Construir** para reinstalar._"
+          openPreviewAndMaybeRun([{ path: "package.json", content: patched }])
+          body += "\n\n_`package.json` actualizado con `overrides` — reintentando la instalación automáticamente._"
         }
       }
       setTurns((prev) => prev.map((t) => (t.id === `${id}-a` ? { ...t, content: body, streaming: false } : t)))
@@ -1992,7 +1993,6 @@ export function AICodeChatPanel() {
             onKeyDown={onKeyDown}
             placeholder={COMPOSER_PLACEHOLDER[composerMode]}
             rows={1}
-            disabled={busy}
             className="max-h-[140px] min-h-[28px] resize-none border-0 bg-transparent px-1 py-0.5 text-[13px] leading-[1.45] shadow-none outline-none ring-0 placeholder:text-muted-foreground/55 focus-visible:ring-0"
           />
           <div className="mt-1 flex items-center gap-1.5">
@@ -2027,16 +2027,29 @@ export function AICodeChatPanel() {
               }}
             />
             {busy ? (
-              <Button
-                type="button"
-                size="icon"
-                variant="ghost"
-                className="h-7 w-7 shrink-0 rounded-md text-foreground hover:bg-muted"
-                onClick={cancelStream}
-                aria-label="Detener"
-              >
-                <StopCircle className="h-4 w-4" />
-              </Button>
+              <>
+                {input.trim() ? (
+                  <Button
+                    type="submit"
+                    size="icon"
+                    className="h-7 w-7 shrink-0 rounded-md bg-[#FF0000] text-white transition-colors hover:bg-[#E00000]"
+                    aria-label="Enviar al terminar"
+                    title="Enviar al terminar"
+                  >
+                    <ArrowUp className="h-4 w-4" strokeWidth={2.25} />
+                  </Button>
+                ) : null}
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className="h-7 w-7 shrink-0 rounded-md text-foreground hover:bg-muted"
+                  onClick={cancelStream}
+                  aria-label="Detener"
+                >
+                  <StopCircle className="h-4 w-4" />
+                </Button>
+              </>
             ) : (
               <Button
                 type="submit"
