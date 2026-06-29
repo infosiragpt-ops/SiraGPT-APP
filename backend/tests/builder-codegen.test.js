@@ -2,6 +2,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const ts = require('typescript');
 
 const {
   codegenFromBrief,
@@ -34,6 +35,28 @@ function makeBrief(overrides = {}) {
 
 function fileMap(files) {
   return new Map(files.map((f) => [f.path, f]));
+}
+
+function assertGeneratedTsParses(files) {
+  const compilerOptions = {
+    jsx: ts.JsxEmit.Preserve,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    target: ts.ScriptTarget.ES2020,
+  };
+  for (const file of files) {
+    if (!/\.(tsx?|mts|cts)$/.test(file.path)) continue;
+    const result = ts.transpileModule(file.content, {
+      compilerOptions,
+      fileName: file.path,
+      reportDiagnostics: true,
+    });
+    const diagnostics = (result.diagnostics || []).filter((d) => d.category === ts.DiagnosticCategory.Error);
+    assert.deepEqual(
+      diagnostics.map((d) => `${file.path}: ${ts.flattenDiagnosticMessageText(d.messageText, ' ')}`),
+      [],
+    );
+  }
 }
 
 // ── naming helpers ────────────────────────────────────────────────
@@ -119,6 +142,11 @@ test('each entity yields a CRUD API route + a list/create page', () => {
     assert.match(page.content, /"use client";/);
     assert.match(page.content, /export default function/);
   }
+});
+
+test('generated TypeScript and TSX files are syntactically valid', () => {
+  const { files } = codegenFromBrief(makeBrief());
+  assertGeneratedTsParses(files);
 });
 
 test('API route coerces numeric/boolean fields to their types', () => {

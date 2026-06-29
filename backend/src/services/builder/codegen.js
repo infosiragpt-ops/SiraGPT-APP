@@ -465,7 +465,7 @@ function buildEntityPage(model) {
   // Initial form state.
   const initialState = editable.map((f) => {
     const key = camelCase(f.name);
-    return '    ' + key + ': ' + (tsType(f.type) === 'number' ? '0' : tsType(f.type) === 'boolean' ? 'false' : '""');
+    return '    ' + key + ': ' + (tsType(f.type) === 'number' ? '0' : tsType(f.type) === 'boolean' ? 'false' : '""') + ',';
   });
   // Form inputs.
   const inputs = editable.map((f) => {
