@@ -30,6 +30,16 @@ const UNICODE_TAG_RE = /[\u{E0000}-\u{E007F}]/gu;
 const PROMPT_TAG_RE = /(?:<\|im_(?:start|end)\|>|<\/?\s*(?:prompt|system|assistant|instructions?|sys|im_start|im_end)\s*>)/gi;
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+const CODE_PAYLOAD_BODY_BYPASS_PATHS = new Set([
+  '/api/code-runner/start',
+]);
+
+function shouldBypassBodySanitization(req) {
+  if (!req || SAFE_METHODS.has(req.method)) return true;
+  const path = req.originalUrl || req.path || req.url || '';
+  const cleanPath = String(path).split('?')[0];
+  return CODE_PAYLOAD_BODY_BYPASS_PATHS.has(cleanPath);
+}
 
 /**
  * Recursively sanitizes a value.
@@ -92,7 +102,7 @@ function xssSanitizeMiddleware(req, res, next) {
 
   // Body sanitization: skip safe methods (no body expected) and
   // skip raw/buffer bodies (Stripe webhook, file uploads).
-  if (!SAFE_METHODS.has(req.method) && req.body) {
+  if (!shouldBypassBodySanitization(req) && req.body) {
     if (Buffer.isBuffer(req.body)) return next();
     req.body = sanitizeValue(req.body);
   }
@@ -102,3 +112,4 @@ function xssSanitizeMiddleware(req, res, next) {
 
 module.exports = xssSanitizeMiddleware;
 module.exports.sanitizeValue = sanitizeValue;
+module.exports.shouldBypassBodySanitization = shouldBypassBodySanitization;

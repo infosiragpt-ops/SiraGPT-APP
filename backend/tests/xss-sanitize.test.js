@@ -60,6 +60,21 @@ describe('xss-sanitize middleware', () => {
 
     assert.equal(req.body, buf);
   });
+
+  test('keeps code runner file payloads untouched', () => {
+    const req = makeReq({
+      originalUrl: '/api/code-runner/start',
+      body: {
+        files: [
+          { path: 'index.html', content: '<div id="root"></div><script type="module" src="/src/main.jsx"></script>' },
+        ],
+      },
+    });
+
+    xssSanitizeMiddleware(req, {}, () => {});
+
+    assert.equal(req.body.files[0].content, '<div id="root"></div><script type="module" src="/src/main.jsx"></script>');
+  });
 });
 
 describe('sanitizeValue', () => {
