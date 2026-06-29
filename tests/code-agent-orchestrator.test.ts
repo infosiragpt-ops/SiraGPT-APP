@@ -61,6 +61,18 @@ test("cafeteria website request stays a public landing goal", () => {
   }
 })
 
+test("cafeteria website request with split create typo still regenerates a landing", () => {
+  const a = nextAgentAction(state({ phase: "preview" }), "cre auna web de cafeteria", {
+    mode: "app",
+    hasModel: true,
+  })
+  assert.equal(a.type, "generate")
+  if (a.type === "generate") {
+    assert.equal(a.context.goal, "landing")
+    assert.match(promptFromContext(a.context), /web de cafeteria/)
+  }
+})
+
 test("restaurant management software overrides landing prefix and routes to app goal", () => {
   const a = nextAgentAction(state(), "Landing one-page para crea una software para gestionar un restaurante", {
     mode: "app",
