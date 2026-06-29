@@ -5,11 +5,11 @@ import {
   CheckCircle2,
   FolderGit2,
   GitBranch,
-  LayoutGrid,
   Monitor,
   Plus,
   Search,
   Terminal,
+  UserPlus,
   X,
 } from "lucide-react"
 
@@ -39,8 +39,8 @@ export type WorkspaceTopBarProps = {
   onClosePanel: (id: WorkspacePanelId) => void
   onOpenPalette: (query?: string) => void
   onOpenSearch: () => void
-  onOpenLauncher: () => void
-  launcherOpen?: boolean
+  onOpenInvite: () => void
+  inviteOpen?: boolean
   onOpenCode: () => void
   codeOpen?: boolean
   toolsMenu?: React.ReactNode
@@ -53,8 +53,8 @@ export function WorkspaceTopBar({
   onClosePanel,
   onOpenPalette,
   onOpenSearch,
-  onOpenLauncher,
-  launcherOpen,
+  onOpenInvite,
+  inviteOpen,
   onOpenCode,
   codeOpen,
   toolsMenu,
@@ -131,18 +131,18 @@ export function WorkspaceTopBar({
           type="button"
           variant="ghost"
           size="sm"
-          aria-label="Herramientas del workspace"
-          aria-pressed={launcherOpen}
-          onClick={onOpenLauncher}
+          aria-label="Invitar miembro al workspace"
+          aria-pressed={inviteOpen}
+          onClick={onOpenInvite}
           className={cn(
             "h-7 rounded-md px-2.5 text-[11px] font-medium transition-colors",
-            launcherOpen
+            inviteOpen
               ? "bg-[#FF0000]/[0.07] text-[#C80000] shadow-[inset_0_0_0_1px_rgba(255,0,0,0.22)] dark:text-[#FF6B6B]"
               : "text-muted-foreground hover:text-foreground",
           )}
         >
-          <LayoutGrid className="mr-1 h-3 w-3" />
-          Herramientas
+          <UserPlus className="mr-1 h-3 w-3" />
+          Invitar
         </Button>
         <Button
           type="button"

@@ -4,7 +4,7 @@
  * CodeWorkspace — agent-first build surface for /code.
  *
  * The chat remains the primary control surface, while the advanced workspace
- * tools stay available from the top bar: Herramientas, Codigo, Preview, Shell,
+ * tools stay available from the top bar: +, Codigo, Preview, Shell,
  * Git, Validation, command palette, launcher, and publishing surfaces.
  */
 
@@ -27,6 +27,7 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/resizable"
 import {
+  CODE_OPEN_TOOL_LAUNCHER_EVENT,
   CODE_OPEN_TOOL_EVENT,
   useCodeWorkspace,
 } from "@/lib/code-workspace-context"
@@ -36,6 +37,7 @@ import { WORKSPACE_TOOLS, type WorkspaceToolId } from "@/lib/code-workspace-tool
 import { AICodeChatPanel } from "./ai-code-chat-panel"
 import { CodeHub } from "./code-hub"
 import { PreviewPane } from "./preview-pane"
+import { ProjectInviteDialog } from "./project-invite-dialog"
 import { PublishingConsole } from "./publishing-console"
 import { TerminalPanel } from "./terminal-panel"
 import { ToolLauncher } from "./tool-launcher"
@@ -81,6 +83,7 @@ export function CodeWorkspace() {
   )
   const [activePanel, setActivePanel] = React.useState<WorkspacePanelId | null>("preview")
   const [launcherOpen, setLauncherOpen] = React.useState(false)
+  const [inviteOpen, setInviteOpen] = React.useState(false)
   const [activeTool, setActiveTool] = React.useState<WorkspaceToolId | null>(null)
   const [codeHubOpen, setCodeHubOpen] = React.useState(false)
 
@@ -196,8 +199,13 @@ export function CodeWorkspace() {
     const onOpenTool = (event: Event) => {
       openTool((event as CustomEvent<{ toolId?: string }>).detail?.toolId)
     }
+    const onOpenLauncher = () => setLauncherOpen(true)
     window.addEventListener(CODE_OPEN_TOOL_EVENT, onOpenTool)
-    return () => window.removeEventListener(CODE_OPEN_TOOL_EVENT, onOpenTool)
+    window.addEventListener(CODE_OPEN_TOOL_LAUNCHER_EVENT, onOpenLauncher)
+    return () => {
+      window.removeEventListener(CODE_OPEN_TOOL_EVENT, onOpenTool)
+      window.removeEventListener(CODE_OPEN_TOOL_LAUNCHER_EVENT, onOpenLauncher)
+    }
   }, [handleSelectTool])
 
   const loadTemplate = React.useCallback(
@@ -400,8 +408,8 @@ export function CodeWorkspace() {
           setPaletteQuery("open ")
           setPaletteOpen(true)
         }}
-        onOpenLauncher={() => setLauncherOpen(true)}
-        launcherOpen={launcherOpen}
+        onOpenInvite={() => setInviteOpen(true)}
+        inviteOpen={inviteOpen}
         onOpenCode={() => {
           setActiveTool(null)
           setCodeHubOpen(true)
@@ -479,6 +487,7 @@ export function CodeWorkspace() {
       </div>
 
       <PublishingConsole open={publishingOpen} onOpenChange={setPublishingOpen} />
+      <ProjectInviteDialog open={inviteOpen} onOpenChange={setInviteOpen} />
 
       <Dialog
         open={paletteOpen}

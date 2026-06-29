@@ -33,6 +33,7 @@ import {
   CircleHelp,
   ExternalLink,
   Image as ImageIcon,
+  LayoutGrid,
   ListChecks,
   Plus,
   Rocket,
@@ -65,7 +66,7 @@ import { apiClient } from "@/lib/api"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { useChat } from "@/lib/chat-context-integrated"
-import { useCodeWorkspace } from "@/lib/code-workspace-context"
+import { CODE_OPEN_TOOL_LAUNCHER_EVENT, useCodeWorkspace } from "@/lib/code-workspace-context"
 import { intakeService } from "@/lib/builder/intake-service"
 import type { CodeAgentPhase, CodeChatTurn } from "@/lib/code-chat-sessions"
 import { computeLineDiff, parseCodeBlocks, type CodeBlock } from "@/lib/code-workspace-utils"
@@ -2084,6 +2085,14 @@ function ComposerPlusMenu({
           {COMPOSER_MODE_LABEL[mode]}
           {activeFileLabel && includeContext ? ` · ${activeFileLabel}` : ""}
         </DropdownMenuLabel>
+        <DropdownMenuItem
+          className={itemClass}
+          onClick={() => window.dispatchEvent(new CustomEvent(CODE_OPEN_TOOL_LAUNCHER_EVENT))}
+        >
+          <LayoutGrid className={iconClass} />
+          <span>Todas las herramientas</span>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator className="my-2" />
         <DropdownMenuItem
           className={cn(itemClass, mode === "app" && "bg-[#FF0000]/[0.07] font-medium text-foreground")}
           onClick={() => onModeChange("app")}

@@ -182,6 +182,26 @@ function serializeOrg(org) {
   };
 }
 
+function appBaseUrl() {
+  return (process.env.APP_BASE_URL || process.env.FRONTEND_URL || '').replace(/\/$/, '');
+}
+
+function normalizeWorkspaceUrl(value, base) {
+  const raw = typeof value === 'string' ? value.trim().slice(0, 1000) : '';
+  if (!raw) return '';
+  try {
+    const url = base ? new URL(raw, base) : new URL(raw);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return '';
+    if (base) {
+      const baseUrl = new URL(base);
+      if (url.origin !== baseUrl.origin) return '';
+    }
+    return url.toString();
+  } catch (_err) {
+    return '';
+  }
+}
+
 // ─── POST /api/orgs ─────────────────────────────────────────────────
 router.post('/', authenticateToken, async (req, res) => {
   const userId = req.user.id;
@@ -467,6 +487,7 @@ router.post('/:id/invite', authenticateToken, async (req, res) => {
   const orgId = req.params.id;
   const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
   const role = typeof req.body?.role === 'string' ? req.body.role.toUpperCase() : 'MEMBER';
+  const projectName = typeof req.body?.projectName === 'string' ? req.body.projectName.trim().slice(0, 120) : '';
   if (!email || !email.includes('@')) {
     return res.status(400).json({ error: 'valid email required' });
   }
@@ -521,13 +542,18 @@ router.post('/:id/invite', authenticateToken, async (req, res) => {
         expiresAt,
       },
     });
+    const appBase = appBaseUrl();
+    const magicLink = appBase
+      ? `${appBase}/orgs/invitation/${token}`
+      : `/orgs/invitation/${token}`;
+    const workspaceUrl = normalizeWorkspaceUrl(req.body?.workspaceUrl, appBase);
 
     void writeAuditLog(prisma, {
       action: 'org_invite_create',
       userId,
       resource: 'organization',
       resourceId: orgId,
-      metadata: { orgId, invitationId: invite.id, email, role },
+      metadata: { orgId, invitationId: invite.id, email, role, projectName: projectName || null },
       req,
     });
 
@@ -538,16 +564,38 @@ router.post('/:id/invite', authenticateToken, async (req, res) => {
       role,
       invitedByUserId: userId,
       expiresAt: invite.expiresAt.toISOString(),
+      projectName: projectName || null,
+      workspaceUrl: workspaceUrl || null,
     }, userId).catch(() => {});
 
     // Build the magic link. The frontend "Accept invite" page will
     // POST to /api/orgs/invitation/:token/accept once the user is
-    // signed in. We deliberately do NOT send an actual email here —
-    // a separate mailer service consumes the audit-log/event stream.
-    const appBase = process.env.APP_BASE_URL || process.env.FRONTEND_URL || '';
-    const magicLink = appBase
-      ? `${appBase.replace(/\/$/, '')}/orgs/invitation/${token}`
-      : `/orgs/invitation/${token}`;
+    // signed in. Email delivery is best-effort: SMTP failures must not
+    // block the admin from getting the shareable magic link.
+    try {
+      const emailService = require('../services/email');
+      if (
+        emailService
+        && typeof emailService.isConfigured === 'function'
+        && emailService.isConfigured()
+        && typeof emailService.sendOrgInvitation === 'function'
+      ) {
+        emailService.sendOrgInvitation(
+          { email },
+          membership.organization,
+          {
+            role,
+            magicLink,
+            invitedBy: { name: req.user?.name || '', email: req.user?.email || '' },
+            projectName,
+            workspaceUrl,
+            expiresAt: invite.expiresAt,
+          },
+        ).catch(() => {});
+      }
+    } catch (_err) {
+      // no-op: the response still carries the magic link.
+    }
 
     res.status(201).json({
       id: invite.id,

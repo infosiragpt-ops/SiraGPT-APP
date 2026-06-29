@@ -430,6 +430,34 @@ export type GrokVoiceTurnEnvelope = {
   assistant?: GrokVoiceAssistantReply
 }
 
+export type OrganizationRole = "VIEWER" | "MEMBER" | "ADMIN" | "OWNER"
+
+export type OrganizationSummary = {
+  id: string
+  name: string
+  slug?: string | null
+  billingPlan?: string | null
+  ownerId?: string | null
+  monthlyQuota?: string | number | null
+  usedThisMonth?: string | number | null
+  createdAt?: string | null
+  role?: OrganizationRole
+  joinedAt?: string | null
+}
+
+export type MyOrganizationsEnvelope = {
+  items: OrganizationSummary[]
+}
+
+export type OrganizationInvitation = {
+  id: string
+  email: string
+  role: Exclude<OrganizationRole, "OWNER">
+  token: string
+  magicLink: string
+  expiresAt: string
+}
+
 class ApiClient {
   private baseURL: string;
   private token: string | null = null;
@@ -2103,6 +2131,33 @@ class ApiClient {
   async getPayments(params?: { page?: number; limit?: number }) {
     const query = new URLSearchParams(params as any).toString();
     return this.request(`/payments${query ? `?${query}` : ''}`);
+  }
+
+  // Organization / team endpoints
+  async listMyOrganizations(): Promise<MyOrganizationsEnvelope> {
+    return (await this.request('/orgs/me')) as MyOrganizationsEnvelope;
+  }
+
+  async createOrganization(data: { name: string; slug?: string }): Promise<OrganizationSummary> {
+    return (await this.request('/orgs', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })) as OrganizationSummary;
+  }
+
+  async inviteOrganizationMember(
+    orgId: string,
+    data: {
+      email: string
+      role?: Exclude<OrganizationRole, "OWNER">
+      projectName?: string
+      workspaceUrl?: string
+    },
+  ): Promise<OrganizationInvitation> {
+    return (await this.request(`/orgs/${encodeURIComponent(orgId)}/invite`, {
+      method: 'POST',
+      body: JSON.stringify({ role: 'MEMBER', ...data }),
+    })) as OrganizationInvitation;
   }
 
   // User endpoints
