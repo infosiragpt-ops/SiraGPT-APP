@@ -6686,6 +6686,10 @@ router.post(
     body('text').isString().trim().isLength({ min: 1, max: 2000 }),
     body('durationSeconds').optional().isInt({ min: 1, max: 300 }),
     body('chatId').optional({ nullable: true }).isString(),
+    body('style').optional().isString().trim().isLength({ max: 60 }),
+    body('mood').optional().isString().trim().isLength({ max: 60 }),
+    body('effect').optional().isString().trim().isLength({ max: 60 }),
+    body('influence').optional().isFloat({ min: 0, max: 1 }),
   ],
   authenticateToken,
   requirePaidPlan({ feature: 'music_generation' }),
@@ -6700,9 +6704,18 @@ router.post(
     const text = String(req.body.text || '').trim();
     const chatId = typeof req.body.chatId === 'string' && req.body.chatId.trim() ? req.body.chatId.trim() : null;
     const durationSeconds = Number.isFinite(Number(req.body.durationSeconds)) ? Number(req.body.durationSeconds) : 30;
+    // Fold the composer's visible settings into the prompt so Style / Mood /
+    // Effect / Prompt-influence actually shape the generated track (the user's
+    // displayed prompt stays `text`).
+    const composedPrompt = elevenLabsMusic.composeMusicPrompt(text, {
+      style: req.body.style,
+      mood: req.body.mood,
+      effect: req.body.effect,
+      influence: req.body.influence,
+    });
 
     try {
-      const result = await elevenLabsMusic.generateMusicFile({ prompt: text, durationSeconds });
+      const result = await elevenLabsMusic.generateMusicFile({ prompt: composedPrompt || text, durationSeconds });
 
       const artifact = {
         id: `music-${result.filename}`,

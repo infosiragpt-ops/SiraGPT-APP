@@ -91,6 +91,28 @@ test('clampSeconds bounds the value', () => {
   assert.equal(music.clampSeconds('nope', 30), 30);
 });
 
+test('composeMusicPrompt: folds style/mood/effect + high influence into the prompt', () => {
+  const p = music.composeMusicPrompt('lofi beat', { style: 'Cinematic', mood: 'Epic', effect: 'Studio Master', influence: 0.8 });
+  assert.match(p, /lofi beat/);
+  assert.match(p, /Cinematic/);
+  assert.match(p, /Epic/);
+  assert.match(p, /Studio Master/);
+  assert.match(p, /fiel/); // high influence => literal adherence hint
+});
+
+test('composeMusicPrompt: skips neutral defaults (Auto / Balanced / None)', () => {
+  const p = music.composeMusicPrompt('jazz tune', { style: 'Auto', mood: 'Balanced', effect: 'None', influence: 0.3 });
+  assert.equal(/Estilo musical/.test(p), false);
+  assert.equal(/Mood:/.test(p), false);
+  assert.equal(/Producción/.test(p), false);
+  assert.match(p, /inspiración/); // low influence => free-inspiration hint
+});
+
+test('composeMusicPrompt: returns the base text when no settings are given', () => {
+  assert.equal(music.composeMusicPrompt('hello world', {}), 'hello world');
+  assert.equal(music.composeMusicPrompt('hello world'), 'hello world');
+});
+
 test.after(() => {
   try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* ignore */ }
 });

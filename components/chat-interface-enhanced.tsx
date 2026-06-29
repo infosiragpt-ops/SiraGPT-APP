@@ -10395,6 +10395,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         text: description,
         chatId: activeChat.id,
         durationSeconds: selectedMusicDuration,
+        style: selectedMusicStyle,
+        mood: selectedMusicMood,
+        effect: selectedMusicEffect,
+        influence: selectedMusicInfluence,
       });
       if (resp?.content) {
         setBubble(resp.content);

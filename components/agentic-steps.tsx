@@ -16,8 +16,12 @@ import {
   Pause,
   Play,
   RefreshCcw,
+  Repeat,
+  RotateCcw,
+  RotateCw,
   Share2,
   ShieldCheck,
+  SkipBack,
 } from "lucide-react"
 import { cn, copyToClipboard, downloadHref, downloadUrlAsFile } from "@/lib/utils"
 import { AgentStatusIcon, type AgentStatusIconKind } from "@/components/icons/agent-status-icons"
@@ -369,6 +373,7 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
   const [currentTime, setCurrentTime] = React.useState(0)
   const [duration, setDuration] = React.useState(0)
   const [isSeeking, setIsSeeking] = React.useState(false)
+  const [isLooping, setIsLooping] = React.useState(false)
   const seekContainerRef = React.useRef<HTMLDivElement | null>(null)
   const format = artifactFormat(artifact)
   const isMusic = isMusicArtifact(artifact)
@@ -415,8 +420,7 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
     void loadAudioSource().catch(() => {})
   }, [loadAudioSource])
 
-  const seekFromClientX = React.useCallback((clientX: number) => {
-    const el = seekContainerRef.current
+  const seekFromClientX = React.useCallback((clientX: number, el: HTMLElement | null) => {
     const audio = audioRef.current
     if (!el || !audio) return
     const total = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : duration
@@ -426,6 +430,31 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
     audio.currentTime = fraction * total
     setCurrentTime(audio.currentTime)
   }, [duration])
+
+  const skipBy = React.useCallback((delta: number) => {
+    const audio = audioRef.current
+    if (!audio) return
+    const total = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : duration
+    const upper = total > 0 ? total : audio.currentTime + Math.max(0, delta)
+    const target = Math.max(0, Math.min(upper, audio.currentTime + delta))
+    audio.currentTime = target
+    setCurrentTime(target)
+  }, [duration])
+
+  const restart = React.useCallback(() => {
+    const audio = audioRef.current
+    if (!audio) return
+    audio.currentTime = 0
+    setCurrentTime(0)
+  }, [])
+
+  const toggleLoop = React.useCallback(() => {
+    const audio = audioRef.current
+    if (!audio) return
+    const next = !audio.loop
+    audio.loop = next
+    setIsLooping(next)
+  }, [])
 
   const togglePlayback = React.useCallback(async () => {
     if (isLoadingAudio) return
@@ -481,108 +510,167 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
   const progress = duration > 0 ? Math.min(1, currentTime / duration) : 0
 
   return (
-    <div className="my-2 w-full max-w-[430px]">
-      <div className="relative flex min-h-[74px] w-full items-center gap-3 rounded-2xl border border-border/70 bg-background px-3.5 py-3 shadow-sm">
-        <span className="absolute -top-3 left-5 bg-background px-1.5 text-[12.5px] font-medium leading-5 text-muted-foreground">
-          {generationLabel}
-        </span>
-        <button
-          type="button"
-          onClick={togglePlayback}
-          disabled={isLoadingAudio}
-          className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-foreground text-background shadow-sm transition-transform hover:scale-[1.06] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:scale-100 disabled:opacity-75"
-          aria-label={isLoadingAudio ? `Cargando ${generatedMediaLabel}` : isPlaying ? `Pausar ${generatedMediaLabel}` : `Reproducir ${generatedMediaLabel}`}
-          title={isLoadingAudio ? "Cargando" : isPlaying ? "Pausar" : "Reproducir"}
-        >
-          {isLoadingAudio ? (
-            <ThinkingIndicator size="sm" />
-          ) : isPlaying ? (
-            <Pause className="h-5 w-5 fill-current" />
-          ) : (
-            <Play className="ml-0.5 h-5 w-5 fill-current" />
-          )}
-        </button>
-        <div className="flex min-w-0 flex-1 flex-col justify-center gap-1.5">
-          <div
-            ref={seekContainerRef}
-            role="slider"
-            aria-label={`Buscar en ${generatedMediaLabel}`}
-            aria-valuemin={0}
-            aria-valuemax={Math.round(duration) || 0}
-            aria-valuenow={Math.round(currentTime)}
-            tabIndex={0}
-            onPointerDown={(event) => {
-              try { event.currentTarget.setPointerCapture(event.pointerId) } catch { /* ignore */ }
-              setIsSeeking(true)
-              seekFromClientX(event.clientX)
-            }}
-            onPointerMove={(event) => { if (isSeeking) seekFromClientX(event.clientX) }}
-            onPointerUp={(event) => {
-              setIsSeeking(false)
-              try { event.currentTarget.releasePointerCapture(event.pointerId) } catch { /* ignore */ }
-            }}
-            onKeyDown={(event) => {
-              const audio = audioRef.current
-              if (!audio) return
-              const total = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : duration
-              if (event.key === "ArrowRight") {
-                event.preventDefault()
-                audio.currentTime = Math.min(total || audio.currentTime + 5, audio.currentTime + 5)
-                setCurrentTime(audio.currentTime)
-              } else if (event.key === "ArrowLeft") {
-                event.preventDefault()
-                audio.currentTime = Math.max(0, audio.currentTime - 5)
-                setCurrentTime(audio.currentTime)
-              }
-            }}
-            className="group relative flex h-9 cursor-pointer touch-none select-none items-center gap-[3px] focus-visible:outline-none"
-          >
-            {AUDIO_WAVEFORM_BARS.map((height, index) => {
-              const played = (index + 0.5) / AUDIO_WAVEFORM_BARS.length <= progress
-              return (
-                <span
-                  key={`${height}-${index}`}
-                  className={cn(
-                    "w-1 shrink-0 rounded-full transition-colors duration-150",
-                    played ? "bg-foreground" : "bg-foreground/25 group-hover:bg-foreground/40",
-                  )}
-                  style={{ height }}
-                />
-              )
-            })}
-          </div>
-          <div className="flex items-center justify-between text-[11px] font-medium leading-none text-muted-foreground tabular-nums">
-            <span>{formatMediaTime(currentTime)}</span>
-            <span>{formatMediaTime(duration)}</span>
+    <div className="my-2 w-full max-w-[460px]">
+      <div className="relative flex flex-col gap-2 rounded-2xl border border-border/70 bg-background px-4 pb-3 pt-3 shadow-sm">
+        {/* Header: label + share / download */}
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[12.5px] font-medium leading-5 text-muted-foreground">
+            {generationLabel}
+          </span>
+          <div className="flex items-center gap-0.5">
+            <button
+              type="button"
+              onClick={share}
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-red-500 transition-colors hover:bg-red-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label={copied ? "Enlace copiado" : `Compartir ${generatedMediaLabel}`}
+              title={copied ? "Enlace copiado" : "Compartir"}
+            >
+              <Share2 className="h-[18px] w-[18px] stroke-[2.1]" />
+            </button>
+            <button
+              type="button"
+              onClick={download}
+              disabled={isDownloading}
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-red-500 transition-colors hover:bg-red-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+              aria-label={`Descargar ${generatedMediaLabel}`}
+              title="Descargar"
+            >
+              {isDownloading ? <ThinkingIndicator size="sm" /> : <Download className="h-[18px] w-[18px] stroke-[2.1]" />}
+            </button>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={share}
-          className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-          aria-label={copied ? "Enlace copiado" : `Compartir ${generatedMediaLabel}`}
-          title={copied ? "Enlace copiado" : "Compartir"}
+
+        {/* Thin progress seekbar — precise draggable scrubber */}
+        <div
+          ref={seekContainerRef}
+          role="slider"
+          aria-label={`Buscar en ${generatedMediaLabel}`}
+          aria-valuemin={0}
+          aria-valuemax={Math.round(duration) || 0}
+          aria-valuenow={Math.round(currentTime)}
+          tabIndex={0}
+          onPointerDown={(event) => {
+            try { event.currentTarget.setPointerCapture(event.pointerId) } catch { /* ignore */ }
+            setIsSeeking(true)
+            seekFromClientX(event.clientX, event.currentTarget)
+          }}
+          onPointerMove={(event) => { if (isSeeking) seekFromClientX(event.clientX, event.currentTarget) }}
+          onPointerUp={(event) => {
+            setIsSeeking(false)
+            try { event.currentTarget.releasePointerCapture(event.pointerId) } catch { /* ignore */ }
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowRight") { event.preventDefault(); skipBy(5) }
+            else if (event.key === "ArrowLeft") { event.preventDefault(); skipBy(-5) }
+          }}
+          className="group relative flex h-4 cursor-pointer touch-none select-none items-center focus-visible:outline-none"
         >
-          <Share2 className="h-5 w-5 stroke-[2.1]" />
-        </button>
-        <button
-          type="button"
-          onClick={download}
-          disabled={isDownloading}
-          className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-60"
-          aria-label={`Descargar ${generatedMediaLabel}`}
-          title="Descargar"
+          <div className="relative h-1.5 w-full rounded-full bg-red-500/15">
+            <div className="absolute inset-y-0 left-0 rounded-full bg-red-500" style={{ width: `${progress * 100}%` }} />
+            <div
+              className="absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-red-500 shadow ring-2 ring-background transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100"
+              style={{ left: `${progress * 100}%`, opacity: isSeeking ? 1 : undefined }}
+            />
+          </div>
+        </div>
+
+        {/* Elapsed / total time */}
+        <div className="flex items-center justify-between text-[11px] font-medium leading-none text-muted-foreground tabular-nums">
+          <span>{formatMediaTime(currentTime)}</span>
+          <span>{formatMediaTime(duration)}</span>
+        </div>
+
+        {/* Waveform — visual progress, also click-to-seek */}
+        <div
+          aria-hidden="true"
+          onClick={(event) => seekFromClientX(event.clientX, event.currentTarget)}
+          className="flex h-9 cursor-pointer items-center justify-center gap-[2.5px]"
         >
-          {isDownloading ? <ThinkingIndicator size="sm" /> : <Download className="h-5 w-5 stroke-[2.1]" />}
-        </button>
-        {/* Blob-backed audio keeps owner-scoped playback real while the visual control stays compact. */}
+          {AUDIO_WAVEFORM_BARS.map((height, index) => {
+            const played = (index + 0.5) / AUDIO_WAVEFORM_BARS.length <= progress
+            return (
+              <span
+                key={`${height}-${index}`}
+                className={cn(
+                  "w-1 shrink-0 rounded-full transition-colors duration-150",
+                  played ? "bg-red-500" : "bg-foreground/25",
+                )}
+                style={{ height }}
+              />
+            )
+          })}
+        </div>
+
+        {/* Transport controls */}
+        <div className="flex items-center justify-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => skipBy(-10)}
+            className="relative inline-flex h-9 w-9 items-center justify-center rounded-full text-red-500 transition-colors hover:bg-red-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label="Retroceder 10 segundos"
+            title="Retroceder 10s"
+          >
+            <RotateCcw className="h-[22px] w-[22px] stroke-[1.9]" />
+            <span className="pointer-events-none absolute text-[8px] font-bold leading-none">10</span>
+          </button>
+          <button
+            type="button"
+            onClick={restart}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-full text-red-500 transition-colors hover:bg-red-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label="Reiniciar"
+            title="Reiniciar"
+          >
+            <SkipBack className="h-5 w-5 fill-current" />
+          </button>
+          <button
+            type="button"
+            onClick={togglePlayback}
+            disabled={isLoadingAudio}
+            className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-red-500 transition-transform hover:scale-[1.06] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:scale-100 disabled:opacity-75"
+            aria-label={isLoadingAudio ? `Cargando ${generatedMediaLabel}` : isPlaying ? `Pausar ${generatedMediaLabel}` : `Reproducir ${generatedMediaLabel}`}
+            title={isLoadingAudio ? "Cargando" : isPlaying ? "Pausar" : "Reproducir"}
+          >
+            {isLoadingAudio ? (
+              <ThinkingIndicator size="sm" />
+            ) : isPlaying ? (
+              <Pause className="h-8 w-8 fill-current" />
+            ) : (
+              <Play className="ml-0.5 h-8 w-8 fill-current" />
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => skipBy(10)}
+            className="relative inline-flex h-9 w-9 items-center justify-center rounded-full text-red-500 transition-colors hover:bg-red-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label="Adelantar 10 segundos"
+            title="Adelantar 10s"
+          >
+            <RotateCw className="h-[22px] w-[22px] stroke-[1.9]" />
+            <span className="pointer-events-none absolute text-[8px] font-bold leading-none">10</span>
+          </button>
+          <button
+            type="button"
+            onClick={toggleLoop}
+            aria-pressed={isLooping}
+            className={cn(
+              "inline-flex h-9 w-9 items-center justify-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              isLooping ? "bg-red-500 text-white" : "text-red-500 hover:bg-red-500/10",
+            )}
+            aria-label={isLooping ? "Desactivar repetición" : "Repetir"}
+            title={isLooping ? "Repetición activada" : "Repetir"}
+          >
+            <Repeat className="h-5 w-5 stroke-[2.1]" />
+          </button>
+        </div>
+
+        {/* Blob-backed audio keeps owner-scoped playback real. */}
         <audio
           ref={audioRef}
           src={audioSrc || undefined}
           preload="metadata"
           onPlay={() => setIsPlaying(true)}
           onPause={() => setIsPlaying(false)}
-          onEnded={() => { setIsPlaying(false); setCurrentTime(0) }}
+          onEnded={() => { if (!isLooping) { setIsPlaying(false); setCurrentTime(0) } }}
           onLoadedMetadata={(event) => {
             const d = event.currentTarget.duration
             if (Number.isFinite(d) && d > 0) setDuration(d)

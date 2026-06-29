@@ -50,6 +50,35 @@ function clampSeconds(value, fallback = 30) {
   return Math.min(MAX_SECONDS, Math.max(MIN_SECONDS, n));
 }
 
+// Values that mean "no preference" — excluded from the composed prompt so they
+// don't bias ElevenLabs toward a literal "auto/none/balanced" reading.
+const NEUTRAL_STYLE = new Set(['', 'auto']);
+const NEUTRAL_MOOD = new Set(['', 'balanced']);
+const NEUTRAL_EFFECT = new Set(['', 'none']);
+
+/**
+ * Fold the composer's visible music settings (style/mood/effect/influence)
+ * into the ElevenLabs prompt so each control actually shapes the output.
+ * Neutral/default values are skipped. `influence` is the prompt-adherence
+ * slider (0..1): high → follow the description literally, low → free inspiration.
+ */
+function composeMusicPrompt(text, { style, mood, effect, influence } = {}) {
+  const base = String(text || '').trim();
+  const parts = base ? [base] : [];
+  const s = String(style || '').trim();
+  const m = String(mood || '').trim();
+  const e = String(effect || '').trim();
+  if (s && !NEUTRAL_STYLE.has(s.toLowerCase())) parts.push(`Estilo musical: ${s}.`);
+  if (m && !NEUTRAL_MOOD.has(m.toLowerCase())) parts.push(`Mood: ${m}.`);
+  if (e && !NEUTRAL_EFFECT.has(e.toLowerCase())) parts.push(`Producción / efecto: ${e}.`);
+  const inf = Number(influence);
+  if (Number.isFinite(inf)) {
+    if (inf >= 0.66) parts.push('Sigue la descripción de forma fiel y literal.');
+    else if (inf <= 0.33) parts.push('Usa la descripción como inspiración general, con libertad creativa.');
+  }
+  return parts.join(' ').trim();
+}
+
 /**
  * Generate a music track via ElevenLabs Music and persist it to the served
  * audio directory.
@@ -139,6 +168,7 @@ async function generateMusicFile({ prompt, durationSeconds, modelId, outputForma
 
 module.exports = {
   generateMusicFile,
+  composeMusicPrompt,
   isElevenLabsConfigured,
   clampSeconds,
   DEFAULT_MUSIC_MODEL,

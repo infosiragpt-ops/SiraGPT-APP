@@ -2712,6 +2712,10 @@ class ApiClient {
     text: string;
     chatId?: string | null;
     durationSeconds?: number;
+    style?: string;
+    mood?: string;
+    effect?: string;
+    influence?: number;
   }): Promise<{
     ok: boolean;
     artifact: { id: string; filename: string; mime: string; downloadUrl: string; sizeBytes: number; kind?: string };
