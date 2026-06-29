@@ -108,7 +108,7 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
-// import NotificationCenter from "./notification-center" // Commented out to stop repeated API calls
+import NotificationCenter from "./notification-center"
 
 // Shared liquid-glass styles for the user menu dropdown. Keeping them
 // as module constants avoids allocating a new string on every render
@@ -1069,13 +1069,16 @@ export function AppSidebar() {
               SiraGPT
             </span>
           </div>
-          <SidebarTrigger
-            aria-label="Ocultar barra lateral"
-            title="Ocultar barra lateral"
-            className="h-7 w-7 shrink-0 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-          >
-            <SidebarOvalIcon className="h-4 w-4" />
-          </SidebarTrigger>
+          <div className="flex shrink-0 items-center gap-1">
+            <NotificationCenter />
+            <SidebarTrigger
+              aria-label="Ocultar barra lateral"
+              title="Ocultar barra lateral"
+              className="h-7 w-7 shrink-0 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+            >
+              <SidebarOvalIcon className="h-4 w-4" />
+            </SidebarTrigger>
+          </div>
         </div>
         {/* Collapsed state keeps a single, predictable affordance. */}
         <div className={cn("relative", state === "open" && "hidden")}>

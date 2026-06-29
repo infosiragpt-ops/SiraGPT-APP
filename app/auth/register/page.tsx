@@ -3,7 +3,7 @@
 import * as React from "react"
 import Image from "next/image"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { ArrowLeft, Check, Eye, EyeOff } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -27,7 +27,19 @@ type FieldErrors = {
   agreeToTerms?: string
 }
 
-export default function RegisterPage() {
+function safeAuthRedirect(raw: string | null) {
+  const value = String(raw || "").trim()
+  if (!value || !value.startsWith("/") || value.startsWith("//")) return "/chat"
+  try {
+    const url = new URL(value, "https://siragpt.local")
+    if (url.pathname.startsWith("/api") || url.pathname.startsWith("/auth")) return "/chat"
+    return `${url.pathname}${url.search}${url.hash}` || "/chat"
+  } catch (_error) {
+    return "/chat"
+  }
+}
+
+function RegisterPageContent() {
   const t = useTranslations("auth")
   const [showPassword, setShowPassword] = React.useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = React.useState(false)
@@ -44,11 +56,19 @@ export default function RegisterPage() {
 
   const { register, user } = useAuth()
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const postRegisterRedirect = React.useMemo(
+    () => safeAuthRedirect(searchParams.get("next")),
+    [searchParams],
+  )
+  const loginHref = postRegisterRedirect === "/chat"
+    ? "/auth/login"
+    : `/auth/login?next=${encodeURIComponent(postRegisterRedirect)}`
 
-  // Prefetch the post-signup destination so the jump to /chat is instant.
+  // Prefetch the post-signup destination so the jump is instant.
   React.useEffect(() => {
-    try { router.prefetch("/chat") } catch { /* prefetch is best-effort */ }
-  }, [router])
+    try { router.prefetch(postRegisterRedirect) } catch { /* prefetch is best-effort */ }
+  }, [postRegisterRedirect, router])
 
   // Backend may still be booting right after a publish — queue the action and
   // run it once it answers instead of showing a misleading 500 error.
@@ -62,9 +82,9 @@ export default function RegisterPage() {
   // Redirect if already logged in
   React.useEffect(() => {
     if (user) {
-      router.push("/chat")
+      router.push(postRegisterRedirect)
     }
-  }, [user, router])
+  }, [postRegisterRedirect, user, router])
 
   const handleBack = () => {
     if (window.history.length > 1) {
@@ -80,7 +100,7 @@ export default function RegisterPage() {
       const success = await register(formData.name.trim(), formData.email.trim(), formData.password)
       if (success) {
         toast.success("Cuenta creada con éxito")
-        router.push("/chat")
+        router.push(postRegisterRedirect)
       } else {
         toast.error("No se pudo crear la cuenta. Inténtalo de nuevo.")
       }
@@ -89,7 +109,7 @@ export default function RegisterPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [formData.name, formData.email, formData.password, register, router])
+  }, [formData.name, formData.email, formData.password, postRegisterRedirect, register, router])
 
   // Inline, field-level validation (mirrors the login page) so users get
   // immediate feedback instead of a sequence of toasts.
@@ -462,7 +482,7 @@ export default function RegisterPage() {
           <p className="text-sm text-neutral-600">
             {t("haveAccount")}{" "}
             <Link
-              href="/auth/login"
+              href={loginHref}
               className="font-semibold text-neutral-900 underline decoration-neutral-900/30 underline-offset-4 transition-colors hover:decoration-neutral-900"
             >
               {t("signIn")}
@@ -472,5 +492,13 @@ export default function RegisterPage() {
       </Card>
       </main>
     </div>
+  )
+}
+
+export default function RegisterPage() {
+  return (
+    <React.Suspense fallback={null}>
+      <RegisterPageContent />
+    </React.Suspense>
   )
 }

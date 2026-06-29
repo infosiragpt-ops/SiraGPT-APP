@@ -148,16 +148,34 @@ async function handleTriggerEvent(prisma, event, payload, userId) {
         select: { id: true },
       }).catch(() => null);
       if (!target?.id) return []; // invite to a non-registered email → no inbox row
+      const orgName = clampStr(p.orgName || p.orgSlug || 'SiraGPT', 160) || 'SiraGPT';
+      const inviter = clampStr(p.inviterName || p.inviterEmail || 'Un administrador', 160)
+        || 'Un administrador';
+      const projectName = clampStr(p.projectName || '', 160);
+      const message = projectName
+        ? `${inviter} te invitó a colaborar en ${projectName} dentro de ${orgName}.`
+        : `${inviter} te invitó a unirte al equipo ${orgName} en SiraGPT.`;
       const row = await createNotification(prisma, {
         userId: target.id,
         type: 'org_invitation',
-        title: 'New organization invitation',
-        message: `You have been invited to join an organization as ${String(p.role || 'MEMBER')}.`,
+        orgId: typeof p.orgId === 'string' ? p.orgId : undefined,
+        title: `Invitación a ${orgName}`,
+        message,
         severity: 'info',
         metadata: {
           orgId: p.orgId || null,
+          orgName,
+          orgSlug: p.orgSlug || null,
           invitationId: p.invitationId || null,
           role: p.role || null,
+          projectName: projectName || null,
+          workspaceUrl: p.workspaceUrl || null,
+          magicLink: p.magicLink || null,
+          actionUrl: p.magicLink || null,
+          invitedByUserId: p.invitedByUserId || null,
+          inviterName: p.inviterName || null,
+          inviterEmail: p.inviterEmail || null,
+          expiresAt: p.expiresAt || null,
         },
       });
       return row ? [row] : [];

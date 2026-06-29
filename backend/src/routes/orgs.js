@@ -547,25 +547,40 @@ router.post('/:id/invite', authenticateToken, async (req, res) => {
       ? `${appBase}/orgs/invitation/${token}`
       : `/orgs/invitation/${token}`;
     const workspaceUrl = normalizeWorkspaceUrl(req.body?.workspaceUrl, appBase);
+    const invitationLink = workspaceUrl
+      ? `${magicLink}${magicLink.includes('?') ? '&' : '?'}next=${encodeURIComponent(workspaceUrl)}`
+      : magicLink;
 
     void writeAuditLog(prisma, {
       action: 'org_invite_create',
       userId,
       resource: 'organization',
       resourceId: orgId,
-      metadata: { orgId, invitationId: invite.id, email, role, projectName: projectName || null },
+      metadata: {
+        orgId,
+        invitationId: invite.id,
+        email,
+        role,
+        projectName: projectName || null,
+        workspaceUrl: workspaceUrl || null,
+      },
       req,
     });
 
     triggers.publish('org.invitation.created', {
       orgId,
+      orgName: membership.organization?.name || null,
+      orgSlug: membership.organization?.slug || null,
       invitationId: invite.id,
       email,
       role,
       invitedByUserId: userId,
+      inviterName: req.user?.name || null,
+      inviterEmail: req.user?.email || null,
       expiresAt: invite.expiresAt.toISOString(),
       projectName: projectName || null,
       workspaceUrl: workspaceUrl || null,
+      magicLink: invitationLink,
     }, userId).catch(() => {});
 
     // Build the magic link. The frontend "Accept invite" page will
@@ -585,7 +600,7 @@ router.post('/:id/invite', authenticateToken, async (req, res) => {
           membership.organization,
           {
             role,
-            magicLink,
+            magicLink: invitationLink,
             invitedBy: { name: req.user?.name || '', email: req.user?.email || '' },
             projectName,
             workspaceUrl,
@@ -602,7 +617,7 @@ router.post('/:id/invite', authenticateToken, async (req, res) => {
       email: invite.email,
       role: invite.role,
       token,
-      magicLink,
+      magicLink: invitationLink,
       expiresAt: invite.expiresAt.toISOString(),
     });
   } catch (err) {

@@ -3,7 +3,7 @@
 import * as React from "react"
 import Image from "next/image"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { ArrowLeft, Check, Eye, EyeOff} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -17,7 +17,20 @@ import { toast } from "sonner"
 import { useTranslations } from "next-intl"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
-export default function LoginPage() {
+
+function safeAuthRedirect(raw: string | null) {
+  const value = String(raw || "").trim()
+  if (!value || !value.startsWith("/") || value.startsWith("//")) return "/chat"
+  try {
+    const url = new URL(value, "https://siragpt.local")
+    if (url.pathname.startsWith("/api") || url.pathname.startsWith("/auth")) return "/chat"
+    return `${url.pathname}${url.search}${url.hash}` || "/chat"
+  } catch (_error) {
+    return "/chat"
+  }
+}
+
+function LoginPageContent() {
   const t = useTranslations("auth")
   const [showPassword, setShowPassword] = React.useState(false)
   const [email, setEmail] = React.useState("")
@@ -29,13 +42,21 @@ export default function LoginPage() {
 
   const { login, user } = useAuth()
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const postLoginRedirect = React.useMemo(
+    () => safeAuthRedirect(searchParams.get("next")),
+    [searchParams],
+  )
+  const registerHref = postLoginRedirect === "/chat"
+    ? "/auth/register"
+    : `/auth/register?next=${encodeURIComponent(postLoginRedirect)}`
 
-  // Prefetch the post-login destination so the jump to /chat after a
+  // Prefetch the post-login destination so the jump after a
   // successful sign-in is instant instead of waiting on the (large) chat
   // bundle to download at navigation time.
   React.useEffect(() => {
-    try { router.prefetch("/chat") } catch { /* prefetch is best-effort */ }
-  }, [router])
+    try { router.prefetch(postLoginRedirect) } catch { /* prefetch is best-effort */ }
+  }, [postLoginRedirect, router])
 
   // Right after a publish the backend is still booting (~90s) while the
   // frontend is already live, so any /api/* call (including the Google OAuth
@@ -88,9 +109,9 @@ export default function LoginPage() {
   // Redirect if already logged in
   React.useEffect(() => {
     if (user) {
-      router.push("/chat")
+      router.push(postLoginRedirect)
     }
-  }, [user, router])
+  }, [postLoginRedirect, user, router])
 
   const runLogin = React.useCallback(async () => {
     setIsLoading(true)
@@ -105,7 +126,7 @@ export default function LoginPage() {
         // screen even though the auth context has the user. A direct
         // push guarantees navigation immediately after a successful
         // login, regardless of when the AuthContext re-renders.
-        router.push("/chat")
+        router.push(postLoginRedirect)
       } else {
         toast.error(t("invalidCreds"))
       }
@@ -114,7 +135,7 @@ export default function LoginPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [email, password, login, router, t])
+  }, [email, password, login, postLoginRedirect, router, t])
 
   // Lightweight client-side validation so users get immediate, field-level
   // feedback instead of a round-trip that returns a generic "invalid
@@ -425,7 +446,7 @@ export default function LoginPage() {
           <p className="text-sm text-neutral-600">
             {t("noAccount")}{" "}
             <Link
-              href="/auth/register"
+              href={registerHref}
               className="auth-red-link font-semibold text-neutral-900 underline decoration-neutral-900/30 underline-offset-4 transition-colors"
             >
               {t("signUp")}
@@ -491,5 +512,13 @@ export default function LoginPage() {
         }
       `}</style>
     </div>
+  )
+}
+
+export default function LoginPage() {
+  return (
+    <React.Suspense fallback={null}>
+      <LoginPageContent />
+    </React.Suspense>
   )
 }

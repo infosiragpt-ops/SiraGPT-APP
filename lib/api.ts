@@ -458,6 +458,35 @@ export type OrganizationInvitation = {
   expiresAt: string
 }
 
+export type UserNotification = {
+  id: string
+  type: string
+  title: string
+  message: string
+  severity?: "info" | "warning" | "critical"
+  read: boolean
+  readAt?: string | null
+  createdAt: string
+  orgId?: string | null
+  metadata?: Record<string, any> | null
+}
+
+export type UserNotificationsEnvelope = {
+  items: UserNotification[]
+  total: number
+  unreadCount: number
+  nextCursor?: string | null
+}
+
+export type OrganizationInvitationAcceptResult = {
+  ok: boolean
+  needs_verification?: boolean
+  expiresAt?: string
+  message?: string
+  organization?: OrganizationSummary
+  role?: OrganizationRole
+}
+
 class ApiClient {
   private baseURL: string;
   private token: string | null = null;
@@ -2104,13 +2133,19 @@ class ApiClient {
     return this.request(`/payments/analytics?period=${period}`);
   }
 
-  async getNotifications(limit = 50) {
-    return this.request(`/payments/notifications?limit=${limit}`);
+  async getNotifications(limit = 50): Promise<UserNotificationsEnvelope> {
+    return (await this.request(`/users/me/notifications?filter=all&limit=${limit}`)) as UserNotificationsEnvelope;
   }
 
   async markNotificationRead(notificationId: string) {
-    return this.request(`/payments/notifications/${notificationId}/read`, {
-      method: 'PUT',
+    return this.request(`/users/me/notifications/${encodeURIComponent(notificationId)}/read`, {
+      method: 'POST',
+    });
+  }
+
+  async markAllNotificationsRead() {
+    return this.request('/users/me/notifications/read-all', {
+      method: 'POST',
     });
   }
 
@@ -2158,6 +2193,12 @@ class ApiClient {
       method: 'POST',
       body: JSON.stringify({ role: 'MEMBER', ...data }),
     })) as OrganizationInvitation;
+  }
+
+  async acceptOrganizationInvitation(token: string): Promise<OrganizationInvitationAcceptResult> {
+    return (await this.request(`/orgs/invitation/${encodeURIComponent(token)}/accept`, {
+      method: 'POST',
+    })) as OrganizationInvitationAcceptResult;
   }
 
   // User endpoints
