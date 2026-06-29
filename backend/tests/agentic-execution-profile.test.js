@@ -110,6 +110,36 @@ test('agentic execution profile: video ideation does not require generate_video'
   assert.ok(!profile.requiredTools.includes('generate_video'));
 });
 
+test('agentic execution profile: voice (text-to-speech) goal is not gated on document tools', () => {
+  // This is the exact prompt the composer's buildVoiceGenerationGoal sends.
+  // It used to trip the document detector ("Genera un archivo MP3…") and
+  // require create_document + verify_artifact alongside generate_speech, so a
+  // weak model that only managed generate_speech (or nothing) could never
+  // satisfy the finalize gate — the breaker tripped and the user got a
+  // degraded "service unavailable" answer instead of audio.
+  const goal = [
+    'Genera un archivo MP3 de texto a voz. Debes usar la herramienta generate_speech; no finalices solo con texto.',
+    'Texto exacto a narrar:\nHola',
+    'Preferencias visibles del usuario: proveedor/modelo=ElevenLabs; idioma=Spanish; acento=Neutro; estabilidad=50%; efecto=None.',
+    'Si una preferencia exacta no esta disponible en el proveedor, genera el mejor audio posible con la voz multilingue disponible y explica la limitacion brevemente junto al archivo.',
+  ].join('\n\n');
+  const profile = buildExecutionProfile({ goal });
+
+  assert.equal(profile.capabilities.needsMedia, true);
+  assert.equal(profile.capabilities.mediaKind, 'audio');
+  assert.equal(profile.capabilities.needsDocument, false);
+  assert.ok(profile.requiredTools.includes('generate_speech'));
+  assert.ok(!profile.requiredTools.includes('create_document'));
+  assert.ok(!profile.requiredTools.includes('verify_artifact'));
+
+  // A single successful generate_speech call satisfies the gate — no
+  // verify_artifact required.
+  const allowed = validateFinalize(profile, [
+    { actions: [{ tool: 'generate_speech', observation: { ok: true, downloadUrl: '/audio.mp3' } }] },
+  ]);
+  assert.equal(allowed.ok, true);
+});
+
 test('agentic execution profile: blocks finalize until required tools have succeeded', () => {
   const profile = buildExecutionProfile({
     goal: 'Investiga fuentes y crea un Word validado',

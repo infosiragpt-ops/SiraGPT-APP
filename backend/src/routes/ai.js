@@ -65,6 +65,7 @@ const prisma = require('../config/database');
 const { tryConsumePlanQuota, checkPaidTokenCap, recordApiUsage } = require('../services/plan-quota');
 const aiService = require('../services/ai-service');
 const imageEngine = require('../services/media/image-engine');
+const elevenLabsTts = require('../services/ai/elevenlabs-tts');
 const { classifyImageGenError } = require('../services/image-error-classifier');
 const agentFilters = require('../services/agents/filters');
 const OpenAI = require('openai');
@@ -6520,6 +6521,131 @@ router.post(
     }
   }
 );
+// ─── Deterministic text-to-speech for the chat composer's Voice mode ──────
+// The composer's Voice mode used to route through the agentic loop with a
+// prompt that *asked* the model to call generate_speech. Weak fallback models
+// (e.g. gpt-oss-120b) frequently never emit the tool call, so the finalize
+// gate blocked, the breaker tripped, and the user got a degraded
+// "service unavailable" answer instead of audio. Voice is an explicit,
+// unambiguous request — like image/video/music it gets a dedicated,
+// deterministic path that ALWAYS produces the MP3 and persists it as a
+// chat artifact that the existing AgenticStepsRenderer shows as "Generation N".
+function buildSpeechAgentState({ displayText, artifact }) {
+  const safeText = String(displayText || '').slice(0, 200);
+  return {
+    meta: { goal: safeText, model: 'ElevenLabs', tools: ['generate_speech'] },
+    steps: [
+      {
+        id: 'speech-1',
+        label: 'Audio generado',
+        icon: 'check',
+        status: 'done',
+        reasoning: '',
+        toolCalls: [
+          { tool: 'generate_speech', output: { ok: true, preview: artifact.filename } },
+        ],
+      },
+    ],
+    artifacts: [artifact],
+    approvals: [],
+    checkpoints: [],
+    qualityGates: [],
+    repairs: [],
+    finalText: '',
+    done: true,
+  };
+}
+
+router.post(
+  '/generate-speech',
+  [
+    body('text').isString().trim().isLength({ min: 1, max: 5000 }),
+    body('voiceId').optional().isString().trim().isLength({ max: 120 }),
+    body('modelId').optional().isString().trim().isLength({ max: 80 }),
+    body('chatId').optional({ nullable: true }).isString(),
+    body('voiceSettings').optional().isObject(),
+  ],
+  authenticateToken,
+  requirePaidPlan({ feature: 'voice_generation' }),
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    if (!elevenLabsTts.isElevenLabsConfigured()) {
+      return res.status(503).json({ ok: false, error: 'El servicio de voz no está configurado.' });
+    }
+
+    const text = String(req.body.text || '').trim();
+    const chatId = typeof req.body.chatId === 'string' && req.body.chatId.trim() ? req.body.chatId.trim() : null;
+    const voiceId = String(req.body.voiceId || '').trim();
+    const modelId = String(req.body.modelId || '').trim();
+    const voiceSettings = req.body.voiceSettings && typeof req.body.voiceSettings === 'object'
+      ? req.body.voiceSettings
+      : undefined;
+
+    try {
+      const result = await elevenLabsTts.generateSpeechFile({ text, voiceId, modelId, voiceSettings });
+
+      const artifact = {
+        id: `speech-${result.filename}`,
+        filename: `voz-${Date.now()}.mp3`,
+        mime: result.mime,
+        format: 'mp3',
+        kind: 'speech',
+        category: 'audio',
+        sizeBytes: result.sizeBytes,
+        downloadUrl: result.audioUrl,
+        prompt: text.slice(0, 280),
+      };
+
+      const state = buildSpeechAgentState({ displayText: text, artifact });
+      const content = '```agent-task-state\n' + JSON.stringify(state) + '\n```';
+
+      // Persist the turn so it survives a reload (mirrors how the agentic
+      // task runner stores its sentinel-fenced message server-side).
+      let assistantMessageId = null;
+      if (chatId) {
+        try {
+          const saved = await saveChatAndTrackUsage(
+            req.user.id,
+            chatId,
+            text,
+            content,
+            text.length,
+            'elevenlabs-tts',
+            [],
+          );
+          assistantMessageId = saved?.assistantMessage?.id || null;
+        } catch (saveErr) {
+          // Never fail the user's audio just because persistence hiccuped —
+          // the client still renders the returned state for this session.
+          console.warn('[ai/generate-speech] persistence failed (continuing):', saveErr?.message || saveErr);
+        }
+      }
+
+      return res.json({
+        ok: true,
+        artifact,
+        content,
+        state,
+        assistantMessageId,
+        chatId,
+        voiceId: result.voiceId,
+        modelId: result.modelId,
+      });
+    } catch (error) {
+      console.error('[ai/generate-speech] error:', error?.message || error);
+      const status = error?.code === 'TEXT_REQUIRED' ? 400
+        : error?.code === 'ELEVENLABS_NOT_CONFIGURED' ? 503
+          : 502;
+      return res.status(status).json({
+        ok: false,
+        error: 'No se pudo generar el audio. Intenta de nuevo en unos segundos.',
+      });
+    }
+  }
+);
+
 router.post('/stop-stream', authenticateToken, (req, res) => {
   const { streamId } = req.body;
   if (!streamId) {

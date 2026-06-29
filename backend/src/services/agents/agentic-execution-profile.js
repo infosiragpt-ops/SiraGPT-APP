@@ -112,7 +112,15 @@ function buildExecutionProfile({ goal, fileIds = [], fileMetadata = [] } = {}) {
   const needsPrivateContext = (hasFiles && !onlyImageAttachments) || mentionsPrivateFiles;
   const capabilities = {
     needsResearch: rawNeedsResearch && !(needsPrivateContext && !explicitExternalResearch),
-    needsDocument: documentRequested && !plainTranscription,
+    // High-confidence media generation (audio/image/video/music) IS the
+    // deliverable for the turn. The media-generation prompt the composer
+    // sends ("Genera un archivo MP3 de texto a voz…") incidentally trips the
+    // document detector ("archivo"/"genera"), which would otherwise require
+    // create_document + verify_artifact — neither of which a speech/image turn
+    // can ever satisfy. That made the finalize gate block forever, the breaker
+    // trip, and the user get a degraded "service unavailable" answer instead of
+    // their audio. Media turns must not be gated on document tooling.
+    needsDocument: documentRequested && !plainTranscription && !needsMedia,
     // Image-only attachments are answered by the multimodal model directly
     // (vision); they must NOT trigger the document-intelligence gate, which
     // fails on images and dead-ends the agent. Explicit private-file wording

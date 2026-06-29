@@ -45,7 +45,7 @@ import {
   Settings,
   PenSquare,
   GraduationCap,
-  MessageSquare, Menu as MenuIcon} from "lucide-react"
+  MessageSquare, Disc3, Menu as MenuIcon} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
@@ -144,6 +144,7 @@ import { Virtuoso } from "react-virtuoso"
 import SpeechToTextComponent from "./speech-to-text-component"
 import TextToSpeechComponent from "./text-to-speech-component"
 import MusicGenerationComponent from "./MusicGenerationComponent"
+import VoiceCatalogModal from "./voice/voice-catalog-modal"
 import { agenticSearchService, type AgenticEvent, type AgenticSource } from "@/lib/agentic-search-service"
 import { agentTaskService, normalizeAgentTaskErrorMessage, reduceEvent, initialAgentState, type AgentTaskState } from "@/lib/agent-task-service"
 import { devLog } from "@/lib/dev-log"
@@ -500,29 +501,6 @@ const MUSIC_MOOD_OPTIONS: MusicMood[] = ["Balanced", "Energetic", "Emotional", "
 const MUSIC_EFFECT_OPTIONS: MusicEffect[] = ["None", "Studio Master", "Spatial", "Warm Tape", "Radio Ready", "Lo-Fi"]
 const VOICE_COMPOSER_PLACEHOLDER = "Escribe el texto que quieres convertir en voz"
 
-const buildVoiceGenerationGoal = ({
-  text,
-  model,
-  language,
-  accent,
-  stability,
-  effect,
-}: {
-  text: string
-  model: VoiceModel
-  language: VoiceLanguage
-  accent: VoiceAccent
-  stability: number
-  effect: VoiceEffect
-}) => {
-  const normalizedText = text.trim()
-  return [
-    "Genera un archivo MP3 de texto a voz. Debes usar la herramienta generate_speech; no finalices solo con texto.",
-    `Texto exacto a narrar:\n${normalizedText}`,
-    `Preferencias visibles del usuario: proveedor/modelo=${model}; idioma=${language}; acento=${accent}; estabilidad=${stability}%; efecto=${effect}.`,
-    "Si una preferencia exacta no esta disponible en el proveedor, genera el mejor audio posible con la voz multilingue disponible y explica la limitacion brevemente junto al archivo.",
-  ].join("\n\n")
-}
 const buildMusicGenerationGoal = ({
   text,
   model,
@@ -2189,6 +2167,8 @@ const ActiveToolsDisplay = ({
   setSelectedVoiceStability,
   selectedVoiceEffect,
   setSelectedVoiceEffect,
+  onOpenVoiceCatalog,
+  selectedVoiceName,
   isMusicGenerationActive,
   setIsMusicGenerationActive,
   selectedMusicModel,
@@ -2276,6 +2256,8 @@ const ActiveToolsDisplay = ({
   setSelectedVoiceStability: (stability: number) => void;
   selectedVoiceEffect: VoiceEffect;
   setSelectedVoiceEffect: (effect: VoiceEffect) => void;
+  onOpenVoiceCatalog: () => void;
+  selectedVoiceName?: string | null;
   isMusicGenerationActive: boolean;
   setIsMusicGenerationActive: (value: boolean) => void;
   selectedMusicModel: MusicModel;
@@ -2921,6 +2903,20 @@ const ActiveToolsDisplay = ({
             setSelectedVoiceModel(name as VoiceModel);
             track("model.selected", { model: name, provider: name === "ElevenLabs" ? "ElevenLabs" : "Mimo", surface: "voice-tool-picker" });
           })}
+
+          {/* Spinning "Voice" disc — opens the Voice Catalog (voice picker +
+              configurations). Sits right after the provider selector per the
+              requested order: provider → Voice → configurations. */}
+          <button
+            type="button"
+            onClick={() => onOpenVoiceCatalog()}
+            title="Abrir catálogo de voces"
+            aria-label="Abrir catálogo de voces"
+            className="group/voice-disc relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border border-violet-200/80 bg-white/86 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-violet-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(124,58,237,0.5)] backdrop-blur-xl transition-all duration-200 hover:border-violet-300 hover:bg-white dark:border-violet-400/30 dark:bg-zinc-900/82 dark:text-violet-200 dark:hover:bg-zinc-800/92"
+          >
+            <Disc3 className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 motion-safe:animate-spin" style={{ animationDuration: "3.5s" }} />
+            <span className="relative z-10 max-w-[96px] truncate">{selectedVoiceName || "Voice"}</span>
+          </button>
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -4530,6 +4526,27 @@ function ChatInterfaceContent() {
   const [selectedVoiceAccent, setSelectedVoiceAccent] = React.useState<VoiceAccent>("Latino")
   const [selectedVoiceStability, setSelectedVoiceStability] = React.useState(100)
   const [selectedVoiceEffect, setSelectedVoiceEffect] = React.useState<VoiceEffect>("Studio Clean")
+  // Specific ElevenLabs voice chosen from the Voice Catalog. Persisted so the
+  // selection survives reloads. Empty → backend uses the multilingual default.
+  const [selectedVoiceId, setSelectedVoiceId] = React.useState<string>("")
+  const [selectedVoiceName, setSelectedVoiceName] = React.useState<string>("")
+  const [voiceCatalogOpen, setVoiceCatalogOpen] = React.useState(false)
+  React.useEffect(() => {
+    try {
+      const id = localStorage.getItem("siragpt:selectedVoiceId") || ""
+      const name = localStorage.getItem("siragpt:selectedVoiceName") || ""
+      if (id) setSelectedVoiceId(id)
+      if (name) setSelectedVoiceName(name)
+    } catch { /* localStorage unavailable */ }
+  }, [])
+  const handleSelectVoice = React.useCallback((voiceId: string, voiceName: string) => {
+    setSelectedVoiceId(voiceId)
+    setSelectedVoiceName(voiceName)
+    try {
+      localStorage.setItem("siragpt:selectedVoiceId", voiceId)
+      localStorage.setItem("siragpt:selectedVoiceName", voiceName)
+    } catch { /* localStorage unavailable */ }
+  }, [])
   const [isMusicGenerationActive, setIsMusicGenerationActive] = React.useState(false)
   const [selectedMusicModel, setSelectedMusicModel] = React.useState<MusicModel>("ElevenLabs")
   const [selectedMusicStyle, setSelectedMusicStyle] = React.useState<MusicStyle>("Auto")
@@ -8115,22 +8132,11 @@ REWRITTEN TEXT:`;
     }
 
     if (isVoiceGenerationActive) {
-      const voiceGoal = buildVoiceGenerationGoal({
-        text: msg,
-        model: selectedVoiceModel,
-        language: selectedVoiceLanguage,
-        accent: selectedVoiceAccent,
-        stability: selectedVoiceStability,
-        effect: selectedVoiceEffect,
-      });
       isGeneratingVoiceRef.current = true;
       setIsGeneratingVoice(true);
       setIsVoiceGenerationActive(true);
       try {
-        await handleAgentTask(voiceGoal, filesToSend, {
-          userMessageAlreadyAdded: false,
-          displayGoal: msg,
-        });
+        await handleVoiceGeneration(msg, filesToSend);
       } finally {
         isGeneratingVoiceRef.current = false;
         setIsGeneratingVoice(false);
@@ -9569,6 +9575,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     selectedVoiceAccent, setSelectedVoiceAccent,
     selectedVoiceStability, setSelectedVoiceStability,
     selectedVoiceEffect, setSelectedVoiceEffect,
+    onOpenVoiceCatalog: () => setVoiceCatalogOpen(true),
+    selectedVoiceName,
     isMusicGenerationActive, setIsMusicGenerationActive,
     selectedMusicModel, setSelectedMusicModel,
     selectedMusicStyle, setSelectedMusicStyle,
@@ -10101,6 +10109,119 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }
   };
 
+  // ─── Voice generation (deterministic text-to-speech) ─────────────────
+  // Voice mode used to route through the agentic loop with a prompt that
+  // *asked* a model to call generate_speech; weak fallback models often never
+  // did, the finalize gate blocked, and the user got a degraded
+  // "service unavailable" answer. Like image/video/music, Voice now uses a
+  // dedicated, deterministic backend path that ALWAYS produces the MP3 and
+  // persists it as a "Generation N" chat artifact via the same renderer.
+  const handleVoiceGeneration = async (msg: string, filesToSend: any[] = []) => {
+    const narration = (msg || '').trim();
+    if (!narration) {
+      toast.error('Escribe el texto que quieres convertir en voz');
+      return;
+    }
+
+    let activeChat = currentChat;
+    if (!activeChat) {
+      try {
+        const response = await apiClient.createChat({
+          title: narration.substring(0, 30),
+          model: selectedModel,
+        });
+        activeChat = response.chat;
+        await selectChat(activeChat?.id ?? "");
+        if (!activeChat?.id) {
+          toast.error('No se pudo crear el chat para la voz');
+          return;
+        }
+      } catch {
+        toast.error('No se pudo crear el chat para la voz');
+        return;
+      }
+    }
+
+    markLocalJobBusy(activeChat.id);
+
+    const userMessage = {
+      id: `msg-user-${Date.now()}`,
+      chatId: activeChat.id,
+      role: 'USER' as const,
+      content: narration,
+      timestamp: new Date().toISOString(),
+      files: filesToSend,
+    };
+    setCurrentChat(prev => {
+      if (!prev || prev.id !== activeChat!.id) return prev;
+      return { ...prev, messages: [...(prev.messages || []), userMessage] };
+    });
+
+    const runningState = {
+      meta: { goal: narration.slice(0, 200), model: 'ElevenLabs', tools: ['generate_speech'] },
+      steps: [{
+        id: 'speech-bootstrap',
+        label: 'Generando audio',
+        icon: 'thought',
+        reasoning: 'Convirtiendo el texto a voz con ElevenLabs.',
+        status: 'running',
+        toolCalls: [],
+      }],
+      artifacts: [],
+      approvals: [],
+      checkpoints: [],
+      qualityGates: [],
+      repairs: [],
+      finalText: '',
+      done: false,
+    };
+    const aiMessage = {
+      id: `msg-ai-${Date.now() + 1}`,
+      chatId: activeChat.id,
+      role: 'ASSISTANT' as const,
+      content: '```agent-task-state\n' + JSON.stringify(runningState) + '\n```',
+      timestamp: new Date().toISOString(),
+    };
+    setCurrentChat(prev => {
+      if (!prev || prev.id !== activeChat!.id) return prev;
+      return { ...prev, messages: [...(prev.messages || []), aiMessage] };
+    });
+    const setBubble = (content: string) => {
+      setCurrentChat(prev => {
+        if (!prev || prev.id !== activeChat!.id) return prev;
+        return { ...prev, messages: prev.messages.map(m => m.id === aiMessage.id ? { ...m, content } : m) };
+      });
+    };
+
+    try {
+      const resp = await apiClient.generateSpeechMessage({
+        text: narration,
+        chatId: activeChat.id,
+        voiceId: selectedVoiceId || undefined,
+        voiceSettings: { stability: Math.min(1, Math.max(0, selectedVoiceStability / 100)) },
+      });
+      if (resp?.content) {
+        setBubble(resp.content);
+      } else {
+        throw new Error('El servicio de voz no devolvió audio.');
+      }
+      toast.success('Audio generado');
+      if (activeChat?.id) selectChat(activeChat.id);
+    } catch (err: any) {
+      const friendly = err?.message || 'No se pudo generar el audio. Intenta de nuevo.';
+      const errorState = {
+        ...runningState,
+        done: true,
+        error: friendly,
+        steps: runningState.steps.map(s => ({ ...s, status: 'error' })),
+      };
+      setBubble('```agent-task-state\n' + JSON.stringify(errorState) + '\n```');
+      toast.error(friendly);
+    } finally {
+      markLocalJobIdle(activeChat.id);
+    }
+  };
+
   // ─── Agent task (Claude-style step cards) ────────────────────────────
   // The chat bubble's `content` becomes a JSON-encoded payload wrapped
   // in a sentinel fence (```agent-task-state ... ```). MessageComponent
@@ -10452,6 +10573,24 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   open={subscribeOpen}
                   onOpenChange={setSubscribeOpen}
                   user={currentUserInfo || user}
+                />
+                <VoiceCatalogModal
+                  open={voiceCatalogOpen}
+                  onOpenChange={setVoiceCatalogOpen}
+                  selectedVoiceId={selectedVoiceId || null}
+                  onSelectVoice={handleSelectVoice}
+                  modelLabel={selectedVoiceModel}
+                  language={selectedVoiceLanguage}
+                  onLanguageChange={(v) => setSelectedVoiceLanguage(v as VoiceLanguage)}
+                  languageOptions={VOICE_LANGUAGE_OPTIONS}
+                  accent={selectedVoiceAccent}
+                  onAccentChange={(v) => setSelectedVoiceAccent(v as VoiceAccent)}
+                  accentOptions={VOICE_ACCENT_OPTIONS}
+                  effect={selectedVoiceEffect}
+                  onEffectChange={(v) => setSelectedVoiceEffect(v as VoiceEffect)}
+                  effectOptions={VOICE_EFFECT_OPTIONS}
+                  stability={selectedVoiceStability}
+                  onStabilityChange={setSelectedVoiceStability}
                 />
                 <KeyboardShortcutsModal
                   open={shortcutsOpen}

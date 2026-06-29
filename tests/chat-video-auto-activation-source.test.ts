@@ -165,8 +165,8 @@ describe("chat video auto-activation source contract", () => {
     )
     assert.match(
       source,
-      /if \(isVoiceGenerationActive\) \{[\s\S]{0,420}const voiceGoal = buildVoiceGenerationGoal[\s\S]{0,420}await handleAgentTask\(voiceGoal, filesToSend, \{[\s\S]{0,160}displayGoal: msg/,
-      "Voice mode sends should bypass normal chat classification and call the speech artifact path"
+      /if \(isVoiceGenerationActive\) \{[\s\S]{0,420}await handleVoiceGeneration\(msg, filesToSend\)/,
+      "Voice mode sends should bypass normal chat classification and call the deterministic speech artifact path"
     )
   })
 
@@ -201,8 +201,8 @@ describe("chat video auto-activation source contract", () => {
     )
     assert.match(
       source,
-      /isGeneratingVoiceRef\.current = true;[\s\S]{0,140}setIsGeneratingVoice\(true\);[\s\S]{0,140}setIsVoiceGenerationActive\(true\);[\s\S]{0,520}await handleAgentTask\(voiceGoal, filesToSend, \{/,
-      "Voice sends should mark the chip as generating before the agent task creates or selects a chat"
+      /isGeneratingVoiceRef\.current = true;[\s\S]{0,140}setIsGeneratingVoice\(true\);[\s\S]{0,140}setIsVoiceGenerationActive\(true\);[\s\S]{0,520}await handleVoiceGeneration\(msg, filesToSend\)/,
+      "Voice sends should mark the chip as generating before the deterministic speech task creates or selects a chat"
     )
     assert.match(
       source,

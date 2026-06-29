@@ -2679,6 +2679,34 @@ class ApiClient {
     });
   }
 
+  // Deterministic text-to-speech for the chat composer's Voice mode. Unlike the
+  // agentic path (which depended on a weak model choosing to call a tool), this
+  // always produces the MP3 and persists it as a "Generation N" chat artifact.
+  async generateSpeechMessage(data: {
+    text: string;
+    chatId?: string | null;
+    voiceId?: string;
+    modelId?: string;
+    voiceSettings?: {
+      stability?: number;
+      similarity_boost?: number;
+      style?: number;
+      use_speaker_boost?: boolean;
+    };
+  }): Promise<{
+    ok: boolean;
+    artifact: { id: string; filename: string; mime: string; downloadUrl: string; sizeBytes: number; kind?: string };
+    content: string;
+    state: any;
+    assistantMessageId: string | null;
+    chatId: string | null;
+  }> {
+    return this.request('/ai/generate-speech', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
   async speechToText(audioFile: File, model_id?: string) {
     const formData = new FormData();
     formData.append('audio', audioFile);
