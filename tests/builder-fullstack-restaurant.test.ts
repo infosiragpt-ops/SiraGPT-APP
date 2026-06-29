@@ -71,3 +71,23 @@ test("restaurant management prompt with landing prefix generates a real full-sta
   assert.match(readme, /Celular:\*\* responsive mobile-first/)
   assert.doesNotMatch(readme, /sin servidor y sin base de datos/)
 })
+
+test("restaurant prompt with web and mobile wording stays full-stack web responsive", () => {
+  const prompt = "Crea un software para gestionar un restaurante con base de datos, backend, frontend y formato responsive para web y celular."
+  const brief = briefFromPrompt(prompt)
+
+  assert.equal(brief.platform, "web")
+  assert.deepEqual(
+    brief.dataEntities.map((entity) => entity.name),
+    ["Plato", "Pedido", "Mesa"],
+  )
+
+  const { files } = scaffoldFromBrief(brief)
+  const paths = files.map((file) => file.path)
+  assert.ok(paths.includes("package.json"), "emits a runnable Next.js project")
+  assert.ok(paths.includes("docker-compose.yml"), "emits PostgreSQL service")
+  assert.ok(paths.includes("app/api/plato/route.ts"), "emits Plato API")
+  assert.ok(paths.includes("app/api/pedido/route.ts"), "emits Pedido API")
+  assert.ok(paths.includes("app/api/mesa/route.ts"), "emits Mesa API")
+  assert.ok(paths.includes("app/manifest.ts"), "emits PWA/mobile manifest")
+})

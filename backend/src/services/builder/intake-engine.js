@@ -116,7 +116,10 @@ function normalisePlatform(value) {
   // users usually say "app" to mean a web/full-stack app; only explicit
   // mobile cues should map to mobile.
   if (/desktop|escritorio|electron|tauri|\bdesk\b|win32|windows|macos/.test(raw)) return 'desktop';
-  if (/m[oó]vil|mobile|android|ios|iphone|ipad|celular|smartphone|react native|expo/.test(raw)) return 'mobile';
+  const hasNativeMobileCue = /\b(android|ios|iphone|ipad|react native|expo)\b/.test(raw);
+  const hasMobileCue = /m[oó]vil|mobile|celular|smartphone/.test(raw) || hasNativeMobileCue;
+  const hasWebCue =
+    /\b(web|sitio|portal|saas|dashboard|frontend|backend|base de datos|responsive|responsivo|adaptable|pwa|software|sistema|plataforma|full[- ]?stack)\b/.test(raw);
   const hasLandingCue = /landing|aterrizaje|one[- ]?page/.test(raw);
   const hasOperationalCue =
     /\b(software|sistema|plataforma|dashboard|panel|crud|gesti[oó]n|gestionar|administra(?:r|ci[oó]n)|manejar|registrar|operaci[oó]n|operativo|punto de venta|pos|inventario|reservas?|pedidos?|ordenes?|[oó]rdenes?|clientes?|productos?|restaurante|restaurant|cafeter[ií]a|men[uú])\b/.test(raw);
@@ -125,8 +128,12 @@ function normalisePlatform(value) {
   // asks for an operational system, the builder must emit the full-stack web
   // app, not downgrade it to a static landing.
   if (hasLandingCue && !hasOperationalCue) return 'landing';
+  // "web y celular", "responsive" or "PWA" means a web app that adapts to
+  // mobile viewports. Only classify as mobile when the prompt is mobile-only.
+  if (hasMobileCue && !hasWebCue) return 'mobile';
   if (/web|sitio|portal|saas|dashboard|software|sistema|plataforma|app|aplicaci[oó]n/.test(raw)) return 'web';
   if (hasOperationalCue) return 'web';
+  if (hasNativeMobileCue) return 'mobile';
   return null;
 }
 

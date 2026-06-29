@@ -167,9 +167,11 @@ const STYLE_RULES = [
 // Words that look like entities in the grammar but never are.
 const ENTITY_STOPWORDS = new Set([
   'la', 'el', 'los', 'las', 'un', 'una', 'unos', 'unas', 'de', 'del', 'y', 'e', 'o',
-  'the', 'a', 'an', 'and', 'or', 'with', 'for', 'su', 'sus', 'mi', 'mis', 'que',
+  'the', 'a', 'an', 'and', 'or', 'with', 'for', 'su', 'sus', 'mi', 'mis', 'que', 'con',
   'sistema', 'app', 'aplicacion', 'aplicación', 'web', 'pagina', 'página', 'sitio',
   'plataforma', 'gestion', 'gestión', 'administracion', 'administración',
+  'base', 'datos', 'backend', 'frontend', 'formato', 'responsive', 'responsivo',
+  'adaptable', 'celular', 'movil', 'móvil', 'mobile', 'fullstack', 'stack',
 ]);
 
 function clean(text) {
@@ -232,7 +234,7 @@ function extractEntities(prompt) {
 
   // Stop the list at the first clause boundary so we don't swallow the rest of
   // the sentence ("con clientes y turnos para mi barbería" → "clientes y turnos").
-  listPart = listPart.split(/[.;\n]|#|\b(?:para|porque|usando|con un dise|en estilo|tipo|color|colores)\b/i)[0];
+  listPart = listPart.split(/[.;\n]|#|\b(?:para|porque|usando|con base|base de datos|con backend|con frontend|backend|frontend|formato|responsive|responsivo|adaptable|web y celular|celular|m[oó]vil|mobile|pwa|full[- ]?stack|con un dise|en estilo|tipo|color|colores)\b/i)[0];
 
   const raw = listPart
     .split(/,|\/|\by\b|\be\b|\band\b|\bor\b|\+/i)
