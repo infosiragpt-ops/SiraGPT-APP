@@ -191,6 +191,18 @@ const STYLE_RULES = [
   { match: /\b(moderno|modern)\b/i, theme: 'moderno' },
 ];
 
+const BUILD_INTENT_PREFIXES = [
+  /^\s*(?:landing|landing\s+page|one[- ]?page|p[aá]gina\s+web|pagina\s+web|sitio\s+web|website|web)\s+(?:one[- ]?page\s+)?(?:para|de)\s+/i,
+  /^\s*(?:quiero|necesito|ocupo)\s+que\s+(?:me\s+)?(?:construyas|construya|crees|cree|hagas|haga|diseñes|disenes|diseñen|desarrolles|desarrolle|generes|genere)\s+/i,
+  /^\s*(?:quiero|necesito|ocupo)\s+(?:crear|construir|hacer|diseñar|disenar|desarrollar|generar)\s+/i,
+  /^\s*(?:crea|crear|cr[eé]ame|haz|hazme|genera|generar|construye|construir|desarrolla|diseña|disena|programa|implementa)\s+/i,
+  /^\s*(?:una|un|la|el)\s+/i,
+  /^\s*(?:landing|landing\s+page|one[- ]?page|p[aá]gina\s+web|pagina\s+web|sitio\s+web|website|web|software|sistema|app|aplicaci[oó]n)\s+(?:para|de)\s+/i,
+  /^\s*(?:para\s+)?(?:gestionar|administrar|manejar|registrar)\s+/i,
+];
+
+const PURPOSE_TECH_BOUNDARY = /\b(?:color|colores|usando|con base|base de datos|con backend|con frontend|backend|frontend|formato|responsive|responsivo|adaptable|web y celular|celular|m[oó]vil|mobile|pwa|full[- ]?stack|con un dise|en estilo|tipo)\b/i;
+
 // Words that look like entities in the grammar but never are.
 const ENTITY_STOPWORDS = new Set([
   'la', 'el', 'los', 'las', 'un', 'una', 'unos', 'unas', 'de', 'del', 'y', 'e', 'o',
@@ -228,6 +240,44 @@ function isDomainContainerEntityList(entities) {
 function capitalize(word) {
   if (!word) return word;
   return word.charAt(0).toUpperCase() + word.slice(1);
+}
+
+function normalisePurposeText(prompt) {
+  const original = clean(prompt);
+  let text = original;
+
+  for (let i = 0; i < 10; i += 1) {
+    const before = text;
+    for (const re of BUILD_INTENT_PREFIXES) {
+      text = text.replace(re, '');
+    }
+    text = clean(text);
+    if (text === before) break;
+  }
+
+  text = text.split(/[.;\n]/)[0];
+  text = text.split(PURPOSE_TECH_BOUNDARY)[0];
+  text = clean(text)
+    .replace(/^de\s+/i, '')
+    .replace(/\s+(?:por favor|please)$/i, '')
+    .replace(/[!?]+$/g, '');
+
+  if (!text || text.length < 3) text = original;
+  return capitalize(text.length > 90 ? `${text.slice(0, 87)}…` : text);
+}
+
+function landingFeaturesFor(text, purpose) {
+  const source = `${text} ${purpose}`;
+  if (/\b(auto|autos|veh[ií]culo|vehiculos|carro|carros|coche|coches|concesionar|automotriz)\b/i.test(source)) {
+    return ['Inventario destacado', 'Cotización rápida', 'Financiamiento y contacto'];
+  }
+  if (isCafePrompt(source)) {
+    return ['Menú destacado', 'Reservas y contacto', 'Ubicación y horarios'];
+  }
+  if (/\b(inmobiliaria|propiedad|propiedades|casas?|departamentos?|terrenos?)\b/i.test(source)) {
+    return ['Propiedades destacadas', 'Agenda de visitas', 'Contacto directo'];
+  }
+  return ['Hero comercial', 'Oferta destacada', 'Contacto directo'];
 }
 
 function fieldsForEntity(name) {
@@ -304,12 +354,24 @@ function extractTheme(prompt) {
   return hex ? `${theme} ${hex[0].toUpperCase()}` : theme;
 }
 
+function themeForPrompt(prompt, platform) {
+  const theme = extractTheme(prompt);
+  if (
+    platform === 'landing'
+    && !/#[0-9a-f]{3}(?:[0-9a-f]{3})?\b/i.test(theme)
+    && /\b(auto|autos|veh[ií]culo|vehiculos|carro|carros|coche|coches|concesionar|automotriz)\b/i.test(prompt)
+  ) {
+    return `${theme} #FF0000`;
+  }
+  return theme;
+}
+
 function extractAudience(prompt) {
   const m = clean(prompt).match(/\bpara\s+(?:mi\s+|un\s+|una\s+|el\s+|la\s+)?([a-zA-ZÀ-ÿ ]{3,40}?)(?:[.,;]|\b(?:con|que|usando|en)\b|$)/i);
   if (!m) return '';
   const audience = clean(m[1]);
   // "para gestionar X" is a feature/entity marker, not an audience.
-  if (/^(gestionar|administrar|manejar|registrar|crear|construir|hacer)\b/i.test(audience)) return '';
+  if (/^(gestionar|administrar|manejar|registrar|crear|construir|hacer|quiero|necesito|ocupo|web|p[aá]gina|pagina|sitio|landing)\b/i.test(audience)) return '';
   return audience.length <= 40 ? audience : '';
 }
 
@@ -337,6 +399,7 @@ function briefFromPrompt(prompt) {
   }
 
   const platform = normalisePlatform(text) || 'web';
+  const purpose = normalisePurposeText(text);
   let dataEntities = extractEntities(text);
   const preset = presetEntities(text);
 
@@ -350,12 +413,12 @@ function briefFromPrompt(prompt) {
   }
 
   const brief = {
-    purpose: text.length > 280 ? `${text.slice(0, 277)}…` : text,
+    purpose,
     platform,
     audience: extractAudience(text),
-    coreFeatures: extractFeatures(text),
+    coreFeatures: platform === 'landing' ? landingFeaturesFor(text, purpose) : extractFeatures(text),
     dataEntities,
-    style: { theme: extractTheme(text), refs: [] },
+    style: { theme: themeForPrompt(text, platform), refs: [] },
     integrations: [],
     constraints: '',
     openQuestions: [],
@@ -375,7 +438,9 @@ module.exports = {
   extractEntities,
   extractFeatures,
   extractTheme,
+  themeForPrompt,
   extractAudience,
+  normalisePurposeText,
   singularize,
   fieldsForEntity,
 };

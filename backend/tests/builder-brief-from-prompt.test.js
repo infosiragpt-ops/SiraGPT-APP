@@ -18,8 +18,10 @@ const {
   extractEntities,
   extractFeatures,
   extractTheme,
+  normalisePurposeText,
   singularize,
 } = require('../src/services/builder/brief-from-prompt');
+const { scaffoldFromBrief } = require('../src/services/builder/scaffold');
 
 test('briefFromPrompt produces a valid ProjectBrief', () => {
   const brief = briefFromPrompt('Sistema de barbería con clientes y turnos');
@@ -59,6 +61,29 @@ test('platform is inferred, defaulting to web', () => {
   assert.equal(briefFromPrompt('Landing one-page para mi marca').platform, 'landing');
   assert.equal(briefFromPrompt('Gestor de inventario con productos').platform, 'web');
   assert.equal(briefFromPrompt('Quiero una app para mi negocio').platform, 'web');
+});
+
+test('landing prompts strip builder intent from purpose and audience', () => {
+  const prompt = 'Landing one-page para quiero que construyas una web de venta de autos';
+  const brief = briefFromPrompt(prompt);
+  assert.equal(brief.platform, 'landing');
+  assert.equal(brief.purpose, 'Venta de autos');
+  assert.equal(brief.audience, '');
+  assert.deepEqual(brief.coreFeatures, ['Inventario destacado', 'Cotización rápida', 'Financiamiento y contacto']);
+  assert.equal(brief.style.theme, 'moderno #FF0000');
+  assert.equal(normalisePurposeText(prompt), 'Venta de autos');
+});
+
+test('landing scaffold renders a real automotive sales page, not the raw prompt', () => {
+  const brief = briefFromPrompt('Landing one-page para quiero que construyas una web de venta de autos');
+  const { files } = scaffoldFromBrief(brief);
+  const index = files.find((f) => f.path === 'index.html');
+  assert.ok(index, 'index.html must be present');
+  assert.match(index.content, /AutoPrime/);
+  assert.match(index.content, /Solicitar cotización/);
+  assert.match(index.content, /Inventario/);
+  assert.doesNotMatch(index.content, /quiero que construyas/i);
+  assert.doesNotMatch(index.content, /Landing one-page para quiero/i);
 });
 
 test('theme is derived from style cues', () => {

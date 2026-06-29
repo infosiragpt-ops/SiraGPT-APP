@@ -25,11 +25,166 @@ const { ProjectBriefSchema } = require('./contracts');
 const { planFromBrief } = require('./blueprint');
 const { paletteFor, appName } = require('./preview');
 
+function escapeHtml(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function isCafeShowcase(brief, entities) {
   if (entities.length > 0) return false;
   return /\b(cafeter[ií]a|cafe|coffee|barista|espresso|latte|brunch|panader[ií]a)\b/i.test(
     `${brief.purpose || ''} ${brief.style && brief.style.theme ? brief.style.theme : ''}`,
   );
+}
+
+function landingProfile(brief) {
+  const source = `${brief.purpose || ''} ${brief.audience || ''} ${brief.style && brief.style.theme ? brief.style.theme : ''}`;
+  const accent = paletteFor(brief.style && brief.style.theme).primary;
+
+  if (/\b(auto|autos|veh[ií]culo|vehiculos|carro|carros|coche|coches|concesionar|automotriz)\b/i.test(source)) {
+    return {
+      brand: 'AutoPrime',
+      eyebrow: 'Venta de autos',
+      title: 'Autos seleccionados para comprar con confianza',
+      lead: 'Una landing profesional para mostrar inventario, destacar beneficios y convertir visitas en cotizaciones reales desde el primer contacto.',
+      primaryCta: 'Solicitar cotización',
+      secondaryCta: 'Ver inventario',
+      accent,
+      image: 'https://images.unsplash.com/photo-1492144534655-ae79c964c9d7?auto=format&fit=crop&w=1500&q=82',
+      stats: [
+        ['48 h', 'respuesta comercial'],
+        ['35+', 'autos disponibles'],
+        ['100%', 'inspección previa'],
+      ],
+      cards: [
+        ['SUV familiar', 'Espacio, seguridad y garantía para viajes diarios.', '$24,900'],
+        ['Sedán ejecutivo', 'Consumo eficiente, interior premium y mantenimiento al día.', '$18,500'],
+        ['Pickup trabajo', 'Potencia, carga y financiamiento flexible.', '$31,200'],
+      ],
+      sections: [
+        ['Inventario claro', 'Tarjetas con precio, tipo de vehículo y beneficios para que el comprador compare rápido.'],
+        ['Cotización directa', 'CTA visible para WhatsApp, llamada o formulario sin distraer al usuario.'],
+        ['Confianza primero', 'Bloques de inspección, financiamiento y garantía listos para personalizar.'],
+      ],
+      contactTitle: 'Agenda una prueba de manejo',
+      contactBody: 'Recibe opciones disponibles, financiamiento estimado y detalles del vehículo por WhatsApp o correo.',
+    };
+  }
+
+  if (/\b(inmobiliaria|propiedad|propiedades|casas?|departamentos?|terrenos?)\b/i.test(source)) {
+    return {
+      brand: 'Propia',
+      eyebrow: 'Bienes raíces',
+      title: 'Propiedades listas para visitar',
+      lead: 'Landing responsive para presentar inmuebles, captar prospectos y agendar visitas con una estructura clara y elegante.',
+      primaryCta: 'Agendar visita',
+      secondaryCta: 'Ver propiedades',
+      accent,
+      image: 'https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?auto=format&fit=crop&w=1500&q=82',
+      stats: [['24 h', 'respuesta'], ['12+', 'propiedades'], ['3', 'zonas clave']],
+      cards: [
+        ['Departamento urbano', 'Cerca de servicios, con acabados modernos.', '$145,000'],
+        ['Casa familiar', 'Jardín, cochera y ambientes amplios.', '$220,000'],
+        ['Terreno premium', 'Ubicación estratégica para inversión.', '$89,000'],
+      ],
+      sections: [
+        ['Galería destacada', 'Fotos grandes y fichas simples para inspeccionar cada opción.'],
+        ['Agenda de visitas', 'CTA directo para coordinar disponibilidad sin fricción.'],
+        ['Datos de decisión', 'Precio, zona y atributos visibles para comparar rápido.'],
+      ],
+      contactTitle: 'Conversemos sobre tu próxima propiedad',
+      contactBody: 'Comparte presupuesto, zona y fecha ideal para recibir opciones filtradas.',
+    };
+  }
+
+  return {
+    brand: appName(brief),
+    eyebrow: 'Landing profesional',
+    title: brief.purpose || 'Sitio listo para vender tu oferta',
+    lead: 'Una landing minimalista, responsive y enfocada en conversión para explicar la oferta, mostrar beneficios y abrir contacto directo.',
+    primaryCta: 'Empezar ahora',
+    secondaryCta: 'Ver detalles',
+    accent,
+    image: 'https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=1500&q=82',
+    stats: [['1', 'mensaje claro'], ['3', 'bloques clave'], ['100%', 'responsive']],
+    cards: [
+      ['Propuesta clara', 'Titular, subtítulo y CTA visibles desde el primer viewport.', 'Hero'],
+      ['Prueba visual', 'Imagen principal y tarjetas para explicar la oferta.', 'Diseño'],
+      ['Contacto directo', 'Sección final preparada para WhatsApp, email o formulario.', 'CTA'],
+    ],
+    sections: [
+      ['Estructura simple', 'Inicio, beneficios, prueba visual y contacto en una sola página.'],
+      ['Diseño editable', 'Colores, textos y secciones se pueden ajustar desde el chat.'],
+      ['Listo para móvil', 'La composición se adapta a pantallas pequeñas sin perder jerarquía.'],
+    ],
+    contactTitle: 'Convierte visitantes en conversaciones',
+    contactBody: 'Usa esta sección para teléfono, WhatsApp, correo o formulario de contacto.',
+  };
+}
+
+function buildShowcaseLanding(brief) {
+  const cfg = landingProfile(brief);
+  const brand = escapeHtml(cfg.brand);
+  const title = escapeHtml(cfg.title);
+  const lead = escapeHtml(cfg.lead);
+  const accent = escapeHtml(cfg.accent || '#FF0000');
+  const stats = cfg.stats
+    .map((s) => '<div class="stat"><strong>' + escapeHtml(s[0]) + '</strong><span>' + escapeHtml(s[1]) + '</span></div>')
+    .join('');
+  const cards = cfg.cards
+    .map((c) => '<article class="vehicle-card"><span>' + escapeHtml(c[2]) + '</span><h3>' + escapeHtml(c[0]) + '</h3><p>' + escapeHtml(c[1]) + '</p></article>')
+    .join('');
+  const sections = cfg.sections
+    .map((s) => '<article class="feature"><div class="feature-dot"></div><h3>' + escapeHtml(s[0]) + '</h3><p>' + escapeHtml(s[1]) + '</p></article>')
+    .join('');
+
+  return [
+    '<!doctype html>',
+    '<html lang="es">',
+    '<head>',
+    '<meta charset="utf-8" />',
+    '<meta name="viewport" content="width=device-width, initial-scale=1" />',
+    '<title>' + brand + '</title>',
+    '<style>',
+    ':root{--accent:' + accent + ';--ink:#0b0d10;--muted:#5d6470;--line:#e8eaf0;--soft:#f6f7f9;--panel:#ffffff}',
+    '*{box-sizing:border-box}',
+    'html{scroll-behavior:smooth}',
+    'body{margin:0;background:#fff;color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}',
+    'a{color:inherit;text-decoration:none}',
+    '.nav{position:sticky;top:0;z-index:20;display:flex;align-items:center;justify-content:space-between;gap:18px;padding:14px clamp(18px,5vw,64px);border-bottom:1px solid var(--line);background:rgba(255,255,255,.9);backdrop-filter:blur(18px)}',
+    '.brand{display:flex;align-items:center;gap:10px;font-weight:800}.brand-mark{width:14px;height:14px;border-radius:5px;background:var(--accent);box-shadow:0 0 0 6px color-mix(in srgb,var(--accent) 12%,transparent)}',
+    '.links{display:flex;align-items:center;gap:18px;color:var(--muted);font-size:14px}.links a:hover{color:var(--ink)}',
+    '.btn{display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:999px;background:var(--accent);color:#fff;padding:12px 18px;font-weight:800;cursor:pointer;box-shadow:0 16px 30px color-mix(in srgb,var(--accent) 22%,transparent)}',
+    '.btn.secondary{background:#fff;color:var(--ink);border:1px solid var(--line);box-shadow:none}',
+    '.hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,.9fr);gap:clamp(26px,5vw,66px);align-items:center;min-height:calc(100vh - 64px);padding:clamp(42px,7vw,92px) clamp(18px,5vw,64px) 48px}',
+    '.eyebrow{display:inline-flex;color:var(--accent);font-size:12px;font-weight:900;letter-spacing:.16em;text-transform:uppercase;margin-bottom:14px}',
+    'h1{font-size:clamp(42px,7vw,84px);line-height:1;margin:0 0 18px;max-width:11ch}',
+    '.lead{max-width:58ch;color:var(--muted);font-size:clamp(17px,2vw,20px);line-height:1.62;margin:0 0 28px}',
+    '.actions{display:flex;flex-wrap:wrap;gap:12px}.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:34px;max-width:620px}.stat{border:1px solid var(--line);border-radius:18px;padding:14px;background:var(--panel)}.stat strong{display:block;font-size:20px}.stat span{color:var(--muted);font-size:12px}',
+    '.media{position:relative;min-height:560px;border-radius:28px;overflow:hidden;background:var(--soft);border:1px solid var(--line);box-shadow:0 28px 70px rgba(15,23,42,.14)}',
+    '.media img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}.media-card{position:absolute;left:20px;right:20px;bottom:20px;border-radius:22px;background:rgba(255,255,255,.9);backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,.7);padding:18px}.media-card h2{font-size:21px;margin:0 0 6px}.media-card p{margin:0;color:var(--muted);line-height:1.5}',
+    '.section{padding:66px clamp(18px,5vw,64px);border-top:1px solid var(--line)}.section-head{display:flex;align-items:end;justify-content:space-between;gap:18px;margin-bottom:22px}.section-head h2{font-size:clamp(30px,4vw,48px);line-height:1.05;margin:0}.section-head p{max-width:44ch;color:var(--muted);margin:0;line-height:1.55}',
+    '.vehicle-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.vehicle-card{border:1px solid var(--line);border-radius:22px;padding:22px;background:var(--panel);min-height:190px}.vehicle-card span{display:inline-flex;color:var(--accent);font-weight:900;margin-bottom:26px}.vehicle-card h3{font-size:22px;margin:0 0 8px}.vehicle-card p{color:var(--muted);line-height:1.55;margin:0}',
+    '.features{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.feature{background:var(--soft);border:1px solid var(--line);border-radius:22px;padding:22px}.feature-dot{width:34px;height:34px;border-radius:12px;background:var(--accent);margin-bottom:18px}.feature h3{margin:0 0 8px;font-size:21px}.feature p{margin:0;color:var(--muted);line-height:1.58}',
+    '.contact{display:grid;grid-template-columns:1fr auto;gap:20px;align-items:center;border-radius:28px;background:#0b0d10;color:#fff;padding:30px}.contact p{color:#c9ced8;line-height:1.6;margin:8px 0 0;max-width:62ch}.contact h2{margin:0;font-size:clamp(28px,4vw,44px)}',
+    'footer{padding:24px clamp(18px,5vw,64px);color:var(--muted);border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:14px}',
+    '@media(max-width:900px){.hero{grid-template-columns:1fr;min-height:auto}.media{min-height:360px}.vehicle-grid,.features{grid-template-columns:1fr}.stats{grid-template-columns:1fr}.section-head{display:block}.section-head p{margin-top:10px}.links{display:none}.contact{grid-template-columns:1fr}footer{flex-direction:column}h1{max-width:12ch}}',
+    '</style>',
+    '</head>',
+    '<body>',
+    '<header class="nav"><a class="brand" href="#inicio"><span class="brand-mark"></span>' + brand + '</a><nav class="links"><a href="#inventario">Inventario</a><a href="#beneficios">Beneficios</a><a href="#contacto">Contacto</a></nav><a class="btn" href="#contacto">' + escapeHtml(cfg.primaryCta) + '</a></header>',
+    '<main id="inicio" class="hero"><section><span class="eyebrow">' + escapeHtml(cfg.eyebrow) + '</span><h1>' + title + '</h1><p class="lead">' + lead + '</p><div class="actions"><a class="btn" href="#contacto">' + escapeHtml(cfg.primaryCta) + '</a><a class="btn secondary" href="#inventario">' + escapeHtml(cfg.secondaryCta) + '</a></div><div class="stats">' + stats + '</div></section><aside class="media"><img alt="' + title + '" src="' + escapeHtml(cfg.image) + '"><div class="media-card"><h2>' + escapeHtml(brief.purpose || cfg.eyebrow) + '</h2><p>Diseño responsive, visual y listo para seguir editando desde el chat.</p></div></aside></main>',
+    '<section id="inventario" class="section"><div class="section-head"><div><span class="eyebrow">Destacados</span><h2>Oferta lista para vender</h2></div><p>Bloques comerciales con jerarquía clara para que el visitante compare, entienda y deje sus datos.</p></div><div class="vehicle-grid">' + cards + '</div></section>',
+    '<section id="beneficios" class="section"><div class="section-head"><div><span class="eyebrow">Experiencia</span><h2>Todo lo importante en una página</h2></div><p>Contenido pensado para convertir: beneficios, prueba visual y CTA persistente sin saturar la interfaz.</p></div><div class="features">' + sections + '</div></section>',
+    '<section id="contacto" class="section"><div class="contact"><div><span class="eyebrow">Contacto</span><h2>' + escapeHtml(cfg.contactTitle) + '</h2><p>' + escapeHtml(cfg.contactBody) + '</p></div><a class="btn" href="mailto:ventas@example.com">' + escapeHtml(cfg.primaryCta) + '</a></div></section>',
+    '</main><footer><span>' + brand + '</span><span>Landing responsive generada por siraGPT Builder</span></footer>',
+    '</body>',
+    '</html>',
+  ].join('\n');
 }
 
 function buildCafeShowcase(brief) {
@@ -332,6 +487,10 @@ function buildLiveApp(rawBrief, blueprint) {
 
   if (isCafeShowcase(brief, entities)) {
     return buildCafeShowcase(brief);
+  }
+
+  if (brief.platform === 'landing' && entities.length === 0) {
+    return buildShowcaseLanding(brief);
   }
 
   const data = {
