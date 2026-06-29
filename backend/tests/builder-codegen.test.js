@@ -2,7 +2,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const ts = require('typescript');
+const esbuild = require('esbuild');
 
 const {
   codegenFromBrief,
@@ -38,23 +38,19 @@ function fileMap(files) {
 }
 
 function assertGeneratedTsParses(files) {
-  const compilerOptions = {
-    jsx: ts.JsxEmit.Preserve,
-    module: ts.ModuleKind.ESNext,
-    moduleResolution: ts.ModuleResolutionKind.Bundler,
-    target: ts.ScriptTarget.ES2020,
-  };
   for (const file of files) {
     if (!/\.(tsx?|mts|cts)$/.test(file.path)) continue;
-    const result = ts.transpileModule(file.content, {
-      compilerOptions,
-      fileName: file.path,
-      reportDiagnostics: true,
-    });
-    const diagnostics = (result.diagnostics || []).filter((d) => d.category === ts.DiagnosticCategory.Error);
-    assert.deepEqual(
-      diagnostics.map((d) => `${file.path}: ${ts.flattenDiagnosticMessageText(d.messageText, ' ')}`),
-      [],
+    const loader = file.path.endsWith('.tsx') ? 'tsx' : 'ts';
+    assert.doesNotThrow(
+      () =>
+        esbuild.transformSync(file.content, {
+          format: 'esm',
+          jsx: 'preserve',
+          loader,
+          sourcefile: file.path,
+          target: 'es2020',
+        }),
+      `${file.path} should parse as ${loader}`,
     );
   }
 }
