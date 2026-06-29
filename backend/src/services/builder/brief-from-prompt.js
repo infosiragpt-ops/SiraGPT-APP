@@ -37,6 +37,72 @@ const ENTITY_FIELD_DICTIONARY = [
 
 const DEFAULT_FIELDS = ['nombre', 'descripcion'];
 
+// Deterministic domain presets. These only fire as a *fallback* — when the
+// free-text prompt carries no explicit "con X y Y" entity list — so common
+// business asks ("punto de venta", "restaurante", "reservas") yield a real,
+// multi-entity data model instead of a single generic "Registro". Order
+// matters: the first preset whose `match` hits wins.
+const DOMAIN_PRESETS = [
+  {
+    name: 'comercio',
+    // Point-of-sale / retail / commerce. NB: bare "negocio" is intentionally
+    // excluded so "una app para mi negocio" still falls through to "Registro".
+    match: /\b(punto de venta|caja registradora|tienda|boutique|comercio|e-?commerce|retail|minimarket|abarrotes|bazar|almac[eé]n|inventario|ferreter[ií]a|farmacia|kiosco|librer[ií]a|venta de|ventas de|vender|carrito de compra)\b/i,
+    entities() {
+      return [
+        { name: 'Producto', fields: ['nombre', 'precio', 'stock', 'categoria'] },
+        { name: 'Venta', fields: ['cliente', 'fecha', 'total'] },
+        { name: 'Cliente', fields: ['nombre', 'telefono', 'email'] },
+      ];
+    },
+    refine(text, entities) {
+      // Clothing/fashion stores need size + colour on the product.
+      if (/\b(ropa|moda|prenda|prendas|vestimenta|clothing|apparel|fashion|textil|boutique|calzado|zapat)\b/i.test(text)) {
+        entities[0].fields = ['nombre', 'precio', 'stock', 'talla', 'color'];
+      }
+      return entities;
+    },
+  },
+  {
+    name: 'restaurante',
+    match: /\b(restaurante|restaurant|cafeter[ií]a|cafe|comida|men[uú]|cocina|food truck|pizzer[ií]a|panader[ií]a)\b/i,
+    entities() {
+      return [
+        { name: 'Plato', fields: ['nombre', 'precio', 'categoria'] },
+        { name: 'Pedido', fields: ['cliente', 'fecha', 'total'] },
+        { name: 'Mesa', fields: ['numero', 'capacidad', 'estado'] },
+      ];
+    },
+  },
+  {
+    name: 'reservas',
+    match: /\b(reservas?|citas?|agenda|appointment|booking|peluquer[ií]a|barber[ií]a|sal[oó]n|cl[ií]nica|consultorio|spa|gimnasio|\bgym\b)\b/i,
+    entities() {
+      return [
+        { name: 'Cliente', fields: ['nombre', 'telefono', 'email'] },
+        { name: 'Cita', fields: ['cliente', 'fecha', 'hora', 'servicio'] },
+        { name: 'Servicio', fields: ['nombre', 'precio', 'duracion'] },
+      ];
+    },
+  },
+];
+
+/**
+ * Match the prompt against the deterministic domain presets. Returns a curated
+ * entity list for the first matching domain, or [] when none match.
+ * @returns {Array<{ name: string, fields: string[] }>}
+ */
+function presetEntities(prompt) {
+  const text = clean(prompt);
+  for (const preset of DOMAIN_PRESETS) {
+    if (preset.match.test(text)) {
+      const ents = preset.entities();
+      return preset.refine ? preset.refine(text, ents) : ents;
+    }
+  }
+  return [];
+}
+
 // coreFeature keyword → human label. Mirrors blueprint's FEATURE_PAGES so the
 // derived features actually drive the plan (auth → Login/Registro, etc.).
 const FEATURE_RULES = [
@@ -175,11 +241,14 @@ function briefFromPrompt(prompt) {
   const platform = normalisePlatform(text) || 'web';
   let dataEntities = extractEntities(text);
 
-  // A runnable app needs at least one entity to manage. If extraction found
-  // nothing (e.g. "una app para mi negocio"), seed a generic record so the
-  // live preview still renders a working CRUD instead of an empty shell.
+  // A runnable app needs at least one entity to manage. If explicit extraction
+  // found nothing, first try a deterministic domain preset (punto de venta,
+  // restaurante, reservas…) so a common business ask gets a real multi-entity
+  // model; only then fall back to a single generic record (e.g. "una app para
+  // mi negocio") so the live preview still renders a working CRUD.
   if (dataEntities.length === 0 && platform !== 'landing') {
-    dataEntities = [{ name: 'Registro', fields: [...DEFAULT_FIELDS] }];
+    const preset = presetEntities(text);
+    dataEntities = preset.length ? preset : [{ name: 'Registro', fields: [...DEFAULT_FIELDS] }];
   }
 
   const brief = {
@@ -204,6 +273,7 @@ function briefFromPrompt(prompt) {
 module.exports = {
   briefFromPrompt,
   // exported for unit tests / reuse
+  presetEntities,
   extractEntities,
   extractFeatures,
   extractTheme,

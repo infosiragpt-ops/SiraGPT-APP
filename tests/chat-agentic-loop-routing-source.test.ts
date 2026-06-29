@@ -106,4 +106,29 @@ describe("chat agentic loop routing source contract", () => {
     assert.match(projection, /label: "Analizando solicitud"/)
     assert.match(projection, /reasoning: "Preparando el plan, las fuentes y las herramientas antes de ejecutar la tarea\."/)
   })
+
+  it("renders generated speech artifacts as playable downloadable audio cards", () => {
+    assert.match(agenticStepsSource, /function isAudioArtifact\(artifact: AgentArtifact\)/)
+    assert.match(agenticStepsSource, /mime\.startsWith\("audio\/"\)/)
+    assert.match(agenticStepsSource, /function AudioArtifactPlayer/)
+    assert.match(agenticStepsSource, /const audioRef = React\.useRef<HTMLAudioElement \| null>\(null\)/)
+    assert.match(agenticStepsSource, /const generationLabel = `Generation \$\{generationIndex \+ 1\}`/)
+    assert.match(agenticStepsSource, /<audio[\s\S]{0,160}ref=\{audioRef\}[\s\S]{0,160}src=\{audioSrc \|\| undefined\}/)
+    assert.match(agenticStepsSource, /const objectUrl = window\.URL\.createObjectURL\(blob\)/)
+    assert.match(
+      agenticStepsSource,
+      /fetch\(href, \{[\s\S]{0,120}credentials: "include"[\s\S]{0,120}headers: authHeaders\(\)/,
+      "audio playback must load owner-scoped artifacts through an authenticated blob fetch",
+    )
+    assert.match(
+      agenticStepsSource,
+      /downloadUrlAsFile\(href, filename, \{[\s\S]{0,120}credentials: "include"/,
+      "audio downloads must fetch the protected artifact as a real file",
+    )
+    assert.match(
+      agenticStepsSource,
+      /if \(isAudioArtifact\(artifact\)\) \{[\s\S]{0,180}<AudioArtifactPlayer/,
+      "audio artifacts should bypass the generic document card",
+    )
+  })
 })

@@ -72,8 +72,10 @@ function shortDeploymentId(env = process.env, salt = 'current') {
 }
 
 function derivePublishingConfig(env = process.env) {
+  // NOTE: do NOT derive the app identity from env.REPL_SLUG — on Replit the repl
+  // slug is the generic workspace name ("workspace"), not the published app name.
+  // Prefer an explicit app-name override, otherwise fall back to the canonical name.
   const appName = firstNonEmpty(
-    env.REPL_SLUG,
     env.NEXT_PUBLIC_APP_NAME,
     env.REPLIT_APP_NAME,
     FALLBACK_APP_NAME,

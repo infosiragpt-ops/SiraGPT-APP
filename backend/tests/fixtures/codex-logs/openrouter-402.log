@@ -1,7 +1,3 @@
-[codex-runner] model=openrouter/anthropic/claude-3.5-sonnet attempt=1
-POST https://openrouter.ai/api/v1/chat/completions
-< HTTP/1.1 402 Payment Required
-< content-type: application/json
-{"error":{"code":402,"message":"Insufficient credits. Your account balance is too low to make this request.","metadata":{"provider_name":"openrouter"}}}
-OpenRouter error 402: Insufficient credits — add more at https://openrouter.ai/credits
-[codex-runner] generation aborted: provider returned 402 (insufficient credits)
+OpenRouter API error 402: Insufficient credits.
+Request failed while calling the OpenRouter chat completion endpoint.
+Add credits at https://openrouter.ai/credits before retrying this provider.

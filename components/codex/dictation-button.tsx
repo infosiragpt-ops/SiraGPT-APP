@@ -21,9 +21,16 @@ export interface DictationButtonProps {
   locale?: string
   /** Injectable for tests; defaults to the global detector. */
   recognitionCtor?: SpeechRecognitionCtor | null
+  /** Visual theme — `light` matches /code composer; `dark` matches Codex panel. */
+  variant?: "dark" | "light"
 }
 
-export function DictationButton({ onTranscript, locale = "es-ES", recognitionCtor }: DictationButtonProps) {
+export function DictationButton({
+  onTranscript,
+  locale = "es-ES",
+  recognitionCtor,
+  variant = "dark",
+}: DictationButtonProps) {
   const t = useTranslations("codex")
   const Ctor = recognitionCtor !== undefined ? recognitionCtor : getSpeechRecognition()
   const [recording, setRecording] = useState(false)
@@ -63,9 +70,19 @@ export function DictationButton({ onTranscript, locale = "es-ES", recognitionCto
       onClick={toggle}
       aria-pressed={recording}
       aria-label={recording ? t("composer.stopDictation") : t("composer.dictate")}
-      className={`flex h-8 min-h-[44px] w-8 min-w-[44px] items-center justify-center rounded-lg border border-white/10 transition-colors sm:min-h-0 sm:min-w-0 ${recording ? "bg-red-500/20 text-red-300" : "text-zinc-400 hover:bg-white/5"}`}
+      className={
+        variant === "light"
+          ? `flex h-7 w-7 shrink-0 items-center justify-center rounded-full border transition-colors ${
+              recording
+                ? "border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400"
+                : "border-border/50 bg-transparent text-muted-foreground hover:border-border hover:bg-muted/50 hover:text-foreground"
+            }`
+          : `flex h-8 min-h-[44px] w-8 min-w-[44px] items-center justify-center rounded-lg border border-white/10 transition-colors sm:min-h-0 sm:min-w-0 ${
+              recording ? "bg-red-500/20 text-red-300" : "text-zinc-400 hover:bg-white/5"
+            }`
+      }
     >
-      {recording ? <MicOff className="h-4 w-4 animate-pulse" /> : <Mic className="h-4 w-4" />}
+      {recording ? <MicOff className={variant === "light" ? "h-3.5 w-3.5 animate-pulse" : "h-4 w-4 animate-pulse"} /> : <Mic className={variant === "light" ? "h-3.5 w-3.5" : "h-4 w-4"} />}
     </button>
   )
 }

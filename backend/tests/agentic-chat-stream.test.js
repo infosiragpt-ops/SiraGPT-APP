@@ -477,6 +477,7 @@ test('runAgenticChat surfaces tool file_artifact events into state.artifacts', a
             artifact: {
               id: 'art1', filename: 'gato.png', format: 'png', mime: 'image/png',
               sizeBytes: 2048, downloadUrl: '/api/agent/artifact/art1?name=gato.png',
+              category: 'music', kind: 'music', durationSeconds: 30, prompt: 'lofi test',
             },
           });
         }
@@ -495,6 +496,10 @@ test('runAgenticChat surfaces tool file_artifact events into state.artifacts', a
   assert.equal(state.artifacts[0].filename, 'gato.png');
   assert.equal(state.artifacts[0].downloadUrl, '/api/agent/artifact/art1?name=gato.png');
   assert.equal(state.artifacts[0].mime, 'image/png');
+  assert.equal(state.artifacts[0].category, 'music');
+  assert.equal(state.artifacts[0].kind, 'music');
+  assert.equal(state.artifacts[0].durationSeconds, 30);
+  assert.equal(state.artifacts[0].prompt, 'lofi test');
 });
 
 test('buildThreadWorkContext preserves standing user goals from prior turns', () => {

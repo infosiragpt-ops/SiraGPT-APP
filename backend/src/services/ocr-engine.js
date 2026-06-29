@@ -15,6 +15,11 @@ function positiveIntFromEnv(name, fallback) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+function boundedIntFromEnv(name, fallback, min, max) {
+  const value = positiveIntFromEnv(name, fallback);
+  return Math.max(min, Math.min(value, max));
+}
+
 function normalizeOcrText(text) {
   return String(text || '')
     .replace(/\u0000/g, '')
@@ -49,6 +54,9 @@ class OcrEngine {
       pdfMaxChars: positiveIntFromEnv('OCR_PDF_MAX_CHARS', 6_000_000),
       pdfScale: numberFromEnv('OCR_PDF_RENDER_SCALE', 2.4),
       pdfMaxSide: positiveIntFromEnv('OCR_PDF_MAX_SIDE', 2600),
+      pdfMaxVariants: boundedIntFromEnv('OCR_PDF_MAX_VARIANTS', 4, 1, 5),
+      pdfDeepVariantPages: boundedIntFromEnv('OCR_PDF_DEEP_VARIANT_PAGES', 60, 1, 1000),
+      pdfPageMetaLimit: boundedIntFromEnv('OCR_PDF_PAGE_META_LIMIT', 200, 1, 2000),
     };
   }
 
@@ -227,24 +235,35 @@ class OcrEngine {
    * Order matters: variant 1 (normalize+sharpen) handles the common
    * well-lit / screenshot case, so it runs first.
    */
-  createImageVariants(filePath) {
-    const makeBase = () => sharp(filePath)
+  createImageVariantFactories(input, options = {}) {
+    const maxSide = options.maxSide || 3000;
+    const makeBase = () => sharp(input)
       .rotate()
-      .resize(3000, 3000, { fit: 'inside', withoutEnlargement: false })
+      .resize(maxSide, maxSide, { fit: 'inside', withoutEnlargement: false })
       .greyscale();
 
     return [
       // 1. Normalize + sharpen (best for well-lit documents / screenshots)
-      () => makeBase().normalize().sharpen().png().toBuffer(),
+      { name: 'normalize_sharpen', make: () => makeBase().normalize().sharpen().png().toBuffer() },
       // 2. High contrast — linear stretch (best for faded text)
-      () => makeBase().linear(1.25, -8).normalize().sharpen().png().toBuffer(),
+      { name: 'contrast_sharpen', make: () => makeBase().linear(1.25, -8).normalize().sharpen().png().toBuffer() },
       // 3. Hard threshold binarization (best for clean scans)
-      () => makeBase().normalize().threshold(165).png().toBuffer(),
+      { name: 'threshold_165', make: () => makeBase().normalize().threshold(165).png().toBuffer() },
       // 4. Adaptive threshold via local contrast (best for uneven lighting)
-      () => this._adaptiveThreshold(makeBase()),
+      { name: 'adaptive_threshold', make: () => this._adaptiveThreshold(makeBase()) },
       // 5. Inverted — white text on black (important for some diagrams)
-      () => makeBase().negate({ alpha: false }).normalize().sharpen().png().toBuffer(),
+      { name: 'inverted_normalized', make: () => makeBase().negate({ alpha: false }).normalize().sharpen().png().toBuffer() },
     ];
+  }
+
+  createImageVariants(filePath) {
+    return this.createImageVariantFactories(filePath, { maxSide: 3000 });
+  }
+
+  createPdfPageVariants(pageBuffer, config = this.config) {
+    return this.createImageVariantFactories(pageBuffer, {
+      maxSide: config.pdfMaxSide || 2600,
+    });
   }
 
   /**
@@ -265,31 +284,62 @@ class OcrEngine {
     return result;
   }
 
-  async runLocalImageOcr(filePath, options = {}) {
-    const variantFactories = this.createImageVariants(filePath);
-    const worker = await createWorker(options.language || this.defaultLanguage);
-    let best = this.evaluateQuality({ text: '', confidence: 0 });
-    let variantsProcessed = 0;
+  scoreQuality(quality = {}) {
+    const usefulChars = Number(quality.usefulChars || 0);
+    const confidence = Number(quality.confidence || 0);
+    const lineCount = Number(quality.lineCount || 0);
+    const acceptedBoost = quality.accepted ? 500 : 0;
+    return usefulChars * 2 + confidence + Math.min(lineCount, 80) + acceptedBoost;
+  }
 
-    try {
-      for (const makeVariant of variantFactories) {
+  async recognizeBestVariant(worker, variantFactories, config = this.config, options = {}) {
+    let best = this.evaluateQuality({ text: '', confidence: 0 });
+    let bestVariant = null;
+    let variantsProcessed = 0;
+    const maxVariants = Math.max(1, Math.min(
+      Number.parseInt(options.maxVariants || variantFactories.length, 10) || variantFactories.length,
+      variantFactories.length,
+    ));
+    let lastError = null;
+
+    for (let idx = 0; idx < maxVariants; idx += 1) {
+      const entry = variantFactories[idx];
+      const makeVariant = typeof entry === 'function' ? entry : entry.make;
+      const variantName = typeof entry === 'function' ? `variant_${idx + 1}` : entry.name;
+      try {
         const variant = await makeVariant();
         const { data: { text, confidence } } = await worker.recognize(variant);
         variantsProcessed += 1;
-        const quality = this.evaluateQuality({ text, confidence });
-        const bestScore = best.usefulChars * 2 + best.confidence;
-        const qualityScore = quality.usefulChars * 2 + quality.confidence;
-        if (qualityScore > bestScore) best = quality;
-        // Early-exit: a clean screenshot / well-lit document is usually
-        // accepted on the first variant. Stop here instead of running all
-        // five variants (which can exceed the upstream extraction timeout).
-        if (best.accepted) break;
+        const quality = this.evaluateQuality({ text, confidence }, config);
+        if (this.scoreQuality(quality) > this.scoreQuality(best)) {
+          best = quality;
+          bestVariant = variantName;
+        }
+      } catch (err) {
+        lastError = err;
+        continue;
       }
+      // Early-exit: a clean screenshot / page is usually accepted on the first
+      // normalized pass. Low-quality pages continue through contrast/threshold
+      // variants, which is the path that recovers scans and photocopies.
+      if (best.accepted) break;
+    }
+
+    if (variantsProcessed === 0 && lastError) throw lastError;
+    return { quality: best, variants: variantsProcessed, variant: bestVariant };
+  }
+
+  async runLocalImageOcr(filePath, options = {}) {
+    const variantFactories = this.createImageVariants(filePath);
+    const worker = await createWorker(options.language || this.defaultLanguage);
+
+    try {
+      return await this.recognizeBestVariant(worker, variantFactories, this.config, {
+        maxVariants: variantFactories.length,
+      });
     } finally {
       await worker.terminate();
     }
-
-    return { quality: best, variants: variantsProcessed };
   }
 
   async recognizePageBuffers(pageBuffers, options = {}) {
@@ -366,11 +416,20 @@ class OcrEngine {
     let processedPages = 0;
     let totalUsefulChars = 0;
     let totalConfidence = 0;
+    let acceptedConfidence = 0;
+    let acceptedConfidenceSamples = 0;
+    let maxVariantsSeen = 0;
     let outputChars = 0;
     let partial = false;
     let partialReason = null;
 
     try {
+      if (typeof worker.setParameters === 'function') {
+        await worker.setParameters({
+          preserve_interword_spaces: '1',
+          tessedit_pageseg_mode: '1',
+        }).catch(() => null);
+      }
       for await (const page of pages) {
         pageNumber += 1;
         if (maxPages > 0 && pageNumber > maxPages) {
@@ -379,23 +438,35 @@ class OcrEngine {
           break;
         }
 
-        const buffer = await this.preprocessPdfPage(page, config);
-        const { data: { text, confidence } } = await worker.recognize(buffer);
-        const normalized = normalizeOcrText(text);
-        const quality = this.evaluateQuality({ text: normalized, confidence }, config);
+        const variantFactories = this.createPdfPageVariants(page, config);
+        const pageVariantLimit = pageNumber <= config.pdfDeepVariantPages
+          ? config.pdfMaxVariants
+          : 1;
+        const localResult = await this.recognizeBestVariant(worker, variantFactories, config, {
+          maxVariants: pageVariantLimit,
+        });
+        const quality = localResult.quality;
+        maxVariantsSeen = Math.max(maxVariantsSeen, localResult.variants || 0);
         const pageResult = {
           page: pageNumber,
           text: quality.text,
-          confidence: Number(confidence || 0),
+          confidence: Number(quality.confidence || 0),
           usefulChars: quality.usefulChars,
           lineCount: quality.lineCount,
           accepted: quality.accepted || quality.enoughText || quality.legibleShort,
           reason: quality.reason,
+          variant: localResult.variant,
+          variants: localResult.variants,
+          deep: pageVariantLimit > 1,
         };
         pageResults.push(pageResult);
         processedPages += 1;
         totalUsefulChars += quality.usefulChars;
-        totalConfidence += Number(confidence || 0);
+        totalConfidence += Number(quality.confidence || 0);
+        if (pageResult.accepted && pageResult.text) {
+          acceptedConfidence += Number(quality.confidence || 0);
+          acceptedConfidenceSamples += 1;
+        }
 
         if (pageResult.accepted && pageResult.text) {
           const pageBlock = `[page ${pageNumber}]\n${pageResult.text}`;
@@ -414,8 +485,10 @@ class OcrEngine {
             page: pageNumber,
             processedPages,
             usefulChars: quality.usefulChars,
-            confidence: Number(confidence || 0),
+            confidence: Number(quality.confidence || 0),
             accepted: pageResult.accepted,
+            variant: pageResult.variant,
+            variants: pageResult.variants,
           });
         }
       }
@@ -425,8 +498,24 @@ class OcrEngine {
 
     const joinedText = normalizeOcrText(textParts.join('\n\n'));
     const avgConfidence = processedPages ? totalConfidence / processedPages : 0;
-    const quality = this.evaluateQuality({ text: joinedText, confidence: avgConfidence }, config);
+    const textConfidence = acceptedConfidenceSamples ? acceptedConfidence / acceptedConfidenceSamples : avgConfidence;
+    const quality = this.evaluateQuality({ text: joinedText, confidence: textConfidence }, config);
     const acceptedPages = pageResults.filter(page => page.accepted && page.text).length;
+    const blankPages = pageResults.filter(page => page.usefulChars === 0).length;
+    const weakPages = pageResults.filter(page => page.usefulChars > 0 && !page.accepted).length;
+    const pageMeta = pageResults
+      .slice(0, config.pdfPageMetaLimit)
+      .map(page => ({
+        page: page.page,
+        confidence: Math.round(Number(page.confidence || 0)),
+        usefulChars: page.usefulChars,
+        lineCount: page.lineCount,
+        accepted: Boolean(page.accepted),
+        reason: page.reason,
+        variant: page.variant,
+        variants: page.variants,
+      }));
+    const omittedPageMeta = Math.max(0, pageResults.length - pageMeta.length);
 
     if (quality.enoughText || quality.legibleShort) {
       return {
@@ -440,12 +529,20 @@ class OcrEngine {
           lineCount: quality.lineCount,
           pages: processedPages,
           pagesWithText: acceptedPages,
+          blankPages,
+          weakPages,
           streaming: true,
           partial,
           partialReason,
           elapsedMs: Date.now() - startedAt,
           language,
           maxPages: maxPages || null,
+          mode: 'local_multipass',
+          maxVariants: config.pdfMaxVariants,
+          maxVariantsSeen,
+          deepVariantPages: config.pdfDeepVariantPages,
+          pageQuality: pageMeta,
+          omittedPageQuality: omittedPageMeta,
         },
       };
     }
@@ -453,10 +550,18 @@ class OcrEngine {
     return this.asFailedResult(quality, 'local_pdf_ocr_empty', {
       pages: processedPages,
       pagesWithText: acceptedPages,
+      blankPages,
+      weakPages,
       streaming: true,
       partial,
       partialReason,
       elapsedMs: Date.now() - startedAt,
+      mode: 'local_multipass',
+      maxVariants: config.pdfMaxVariants,
+      maxVariantsSeen,
+      deepVariantPages: config.pdfDeepVariantPages,
+      pageQuality: pageMeta,
+      omittedPageQuality: omittedPageMeta,
     });
   }
 

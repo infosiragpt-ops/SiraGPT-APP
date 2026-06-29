@@ -25,21 +25,27 @@ import {
   AlertTriangle,
   ArrowUp,
   BookOpen,
+  BrainCircuit,
   Bug,
   Check,
   ChevronDown,
+  Clock3,
   CircleHelp,
   ExternalLink,
   Image as ImageIcon,
+  LayoutGrid,
   ListChecks,
   Plus,
   Rocket,
+  Search,
   Server,
   Sparkles,
   StopCircle,
 } from "lucide-react"
+import { CodeChatErrorBoundary } from "@/components/code/code-chat-error-boundary"
 import { toast } from "sonner"
 
+import { DictationButton } from "@/components/codex/dictation-button"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -53,13 +59,14 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import { apiClient } from "@/lib/api"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { useChat } from "@/lib/chat-context-integrated"
-import { useCodeWorkspace } from "@/lib/code-workspace-context"
+import { CODE_OPEN_TOOL_LAUNCHER_EVENT, useCodeWorkspace } from "@/lib/code-workspace-context"
 import { intakeService } from "@/lib/builder/intake-service"
 import type { CodeAgentPhase, CodeChatTurn } from "@/lib/code-chat-sessions"
 import { computeLineDiff, parseCodeBlocks, type CodeBlock } from "@/lib/code-workspace-utils"
@@ -104,19 +111,27 @@ type ComposerMode = "app" | "build" | "plan" | "debug" | "ask" | "image"
 const CODE_OPEN_PREVIEW_EVENT = "siragpt:code-open-preview"
 const CODE_RUN_PREVIEW_EVENT = "siragpt:code-run-preview"
 
-function filesContainNodeProject(files: Array<{ path: string; content: string }>): boolean {
-  return files.some((file) => /(^|\/)package\.json$/i.test(file.path))
-}
+// Coalesce the (possibly many) file-apply batches an agent emits within a
+// single turn into ONE forced preview restart. We deliberately do NOT gate on
+// whether THIS batch contains a package.json: editing a file inside an
+// already-open Vite/Next project or a cloned GitHub repo must still refresh the
+// preview. PreviewPane owns the decision of whether a dev server is actually
+// needed (real node project / bound repo) vs a static srcdoc preview, so the
+// owner never has to press ▶ Ejecutar.
+let autoRunDebounceTimer: ReturnType<typeof setTimeout> | null = null
+let autoRunKeySeq = 0
 
-function openPreviewAndMaybeRun(files: Array<{ path: string; content: string }>): void {
+function openPreviewAndMaybeRun(_files: Array<{ path: string; content: string }>): void {
   if (typeof window === "undefined") return
   window.dispatchEvent(new CustomEvent(CODE_OPEN_PREVIEW_EVENT))
-  if (!filesContainNodeProject(files)) return
-  window.setTimeout(() => {
-    const detail = { source: "agent", auto: true }
+  if (autoRunDebounceTimer) clearTimeout(autoRunDebounceTimer)
+  autoRunDebounceTimer = setTimeout(() => {
+    autoRunDebounceTimer = null
+    autoRunKeySeq += 1
+    const detail = { source: "agent", auto: true, force: true, runKey: autoRunKeySeq }
     window.dispatchEvent(new CustomEvent(CODE_RUN_PREVIEW_EVENT, { detail }))
     window.dispatchEvent(new CustomEvent("siragpt:code-run-app", { detail }))
-  }, 350)
+  }, 600)
 }
 
 const COMPOSER_MODE_LABEL: Record<ComposerMode, string> = {
@@ -135,27 +150,6 @@ const COMPOSER_PLACEHOLDER: Record<ComposerMode, string> = {
   debug: "Error, stack trace o comportamiento esperado…",
   ask: "Pregunta sobre tu app o tu código — respondo sin tocar archivos…",
   image: "Describe UI, asset o captura…",
-}
-
-type AgentRuntimeStep = {
-  phase: AgentPhase
-  label: string
-  icon: React.ComponentType<{ className?: string }>
-}
-
-const AGENT_RUNTIME_STEPS: AgentRuntimeStep[] = [
-  { phase: "intake", label: "Plan", icon: CircleHelp },
-  { phase: "generating", label: "Diseñar", icon: Rocket },
-  { phase: "preview", label: "Resultado", icon: Check },
-  { phase: "debugging", label: "Reparar", icon: Bug },
-]
-
-const AGENT_RUNTIME_STATUS: Record<AgentPhase, string> = {
-  idle: "Listo",
-  intake: "Planificando",
-  generating: "Diseñando",
-  preview: "Resultado listo",
-  debugging: "Diagnosticando",
 }
 
 const COMPOSER_MODE_INSTRUCTION: Record<ComposerMode, string> = {
@@ -511,20 +505,6 @@ export function AICodeChatPanel() {
     return () => window.removeEventListener("siragpt:code-composer-mode", handler)
   }, [])
 
-  // "Arreglar con IA" from the preview console pre-loads the composer with the
-  // captured error so the user can send a fix in one tap.
-  React.useEffect(() => {
-    if (typeof window === "undefined") return
-    const handler = (e: Event) => {
-      const text = (e as CustomEvent<{ text?: string }>).detail?.text?.trim()
-      if (!text) return
-      setInput(`Arregla este error que aparece en el preview en vivo:\n\n${text}`)
-      window.requestAnimationFrame(() => inputRef.current?.focus())
-    }
-    window.addEventListener("siragpt:code-fix-error", handler)
-    return () => window.removeEventListener("siragpt:code-fix-error", handler)
-  }, [])
-
   // Auto-scroll on new content while the user is at the bottom — if
   // they scrolled up to read history, leave them alone.
   React.useEffect(() => {
@@ -593,7 +573,14 @@ export function AICodeChatPanel() {
       setTurns((prev) => [
         ...prev,
         { id, role: "user", content: text },
-        { id: assistantId, role: "assistant", content: "", streaming: true },
+        {
+          id: assistantId,
+          role: "assistant",
+          content: "",
+          streaming: true,
+          agentLabel: "Planificando el turno",
+          agentPhases: buildCodeAgentPhases("plan"),
+        },
       ])
       setInput("")
       setBusy(true)
@@ -625,6 +612,18 @@ export function AICodeChatPanel() {
           ? `${buildSystemContext(files, activePath, activeFolder, composerMode)}\n\n${modeInstruction}\n\n${convoBlock}Usuario: ${text}`
           : `${modeInstruction}\n\n${convoBlock}Usuario: ${text}`
 
+      patchAssistant({
+        agentLabel: includeContext ? "Leyendo contexto del workspace" : "Preparando generación",
+        agentPhases: buildCodeAgentPhases("context", {
+          context: {
+            status: "running",
+            detail: includeContext
+              ? `${Object.keys(files).length} archivo(s) disponibles`
+              : "Sin contexto del workspace",
+          },
+        }),
+      })
+
       // Accumulate the streamed answer locally so onDone can auto-apply the
       // generated files without reading it back out of a setState updater
       // (updaters must stay pure — applyBlock is a side effect).
@@ -635,6 +634,12 @@ export function AICodeChatPanel() {
       let usage: { tokensIn: number; tokensOut: number; costOriginalUsd?: number; costAppliedUsd?: number } | null = null
 
       try {
+        patchAssistant({
+          agentLabel: "Generando respuesta con el agente de código",
+          agentPhases: buildCodeAgentPhases("generate", {
+            context: { status: "done", detail: includeContext ? "Contexto inyectado" : "Omitido por usuario" },
+          }),
+        })
         await apiClient.generateAIStream(
           {
             provider: activeProvider,
@@ -719,10 +724,23 @@ export function AICodeChatPanel() {
                 })
               }
             }
+            const verifyDetail = applied.length > 0
+              ? `${applied.length} archivo(s) aplicado(s)`
+              : "Respuesta sin escritura de archivos"
             setTurns((prev) =>
               prev.map((t) => {
                 if (t.id !== assistantId) return t
-                const base = { ...t, streaming: false }
+                const base = {
+                  ...t,
+                  streaming: false,
+                  agentLabel: "Turno completado",
+                  agentPhases: buildCodeAgentPhases("verify", {
+                    context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
+                    generate: { status: "done", detail: "Respuesta generada" },
+                    apply: { status: "done", detail: applied.length > 0 ? "Cambios escritos" : "Nada que aplicar" },
+                    verify: { status: "done", detail: verifyDetail },
+                  }),
+                }
                 // Attach the Worked Summary when the turn did file work OR the
                 // stream reported real token usage (the Agent Usage figure).
                 if (applied.length > 0 || usage) {
@@ -764,6 +782,10 @@ export function AICodeChatPanel() {
                   ? {
                       ...t,
                       streaming: false,
+                      agentLabel: "Error en el turno",
+                      agentPhases: buildCodeAgentPhases("generate", {
+                        generate: { status: "error", detail: msg },
+                      }),
                       content: t.content ? `${t.content}\n\n_${msg}_` : `_${msg}_`,
                     }
                   : t,
@@ -777,6 +799,13 @@ export function AICodeChatPanel() {
         )
       } catch (err: any) {
         toast.error(err?.message || "Error en el chat de código")
+        patchAssistant({
+          streaming: false,
+          agentLabel: "Error en el turno",
+          agentPhases: buildCodeAgentPhases("generate", {
+            generate: { status: "error", detail: err?.message || "Error en el chat de código" },
+          }),
+        })
         setBusy(false)
         abortRef.current = null
       }
@@ -822,10 +851,22 @@ export function AICodeChatPanel() {
       setTurns((prev) => [
         ...prev,
         { id, role: "user", content: text },
-        { id: `${id}-a`, role: "assistant", content: "⚙️ Construyendo la app (modo determinista, sin LLM)…", streaming: true },
+        {
+          id: `${id}-a`,
+          role: "assistant",
+          content: "⚙️ Construyendo la app (modo determinista, sin LLM)…",
+          streaming: true,
+          agentLabel: "Construyendo app",
+          agentPhases: buildCodeAgentPhases("generate", {
+            plan: { status: "done", detail: "Brief recibido" },
+            context: { status: "done", detail: ctx ? "Contexto de intake listo" : "Prompt directo" },
+            generate: { status: "running", detail: "Generando archivos" },
+          }),
+        },
       ])
       setInput("")
       setBuildingApp(true)
+      const startedAt = Date.now()
 
       try {
         let appliedFiles: Array<{ path: string; content: string }>
@@ -851,18 +892,16 @@ export function AICodeChatPanel() {
           }
           const entities = result.brief.dataEntities.map((e) => e.name).join(", ") || "—"
           summary = [
-            `✅ Software full-stack generado (determinista) — ${appliedFiles.length} archivo(s).`,
+            `✅ App generada (determinista) — ${appliedFiles.length} archivo(s).`,
             ``,
             `- **Plataforma:** ${result.brief.platform}`,
             `- **Entidades:** ${entities}`,
-            `- **Frontend:** ${result.blueprint.stack.frontend}`,
-            `- **Backend:** ${result.blueprint.stack.backend}`,
-            `- **Base de datos:** ${result.blueprint.stack.database}`,
-            `- **Incluye:** API routes, Prisma schema, seed, .env.example y Docker Compose para Postgres`,
+            `- **Tipo:** app autónoma de una página (\`index.html\`) que corre en el navegador, sin instalar nada`,
+            `- **Datos:** se guardan localmente en el navegador (localStorage)`,
             ``,
-            `Estoy arrancando el **preview en vivo** automáticamente. Si el runner devuelve logs, puedo repararlos desde este mismo chat.`,
+            `Estoy abriendo el **preview en vivo** automáticamente. Pídeme cualquier cambio y lo aplico desde este mismo chat.`,
           ].join("\n")
-          toastMsg = "Software full-stack generado — arrancando preview →"
+          toastMsg = "App generada — abriendo preview →"
         }
         // Apply index.html LAST so it stays the active tab and the live preview
         // lands on the runnable app rather than a doc file.
@@ -873,15 +912,48 @@ export function AICodeChatPanel() {
           applyBlock(file.path, file.content)
         }
         openPreviewAndMaybeRun(appliedFiles)
+        const { actions, metrics } = buildWriteMetrics(appliedFiles, {
+          startedAt,
+          now: Date.now(),
+          getPrevContent: (p) => files[p]?.content ?? "",
+        })
         setTurns((prev) =>
-          prev.map((t) => (t.id === `${id}-a` ? { ...t, content: summary, streaming: false } : t)),
+          prev.map((t) =>
+            t.id === `${id}-a`
+              ? {
+                  ...t,
+                  content: summary,
+                  streaming: false,
+                  agentLabel: "App construida",
+                  agentPhases: buildCodeAgentPhases("verify", {
+                    plan: { status: "done", detail: "Brief validado" },
+                    context: { status: "done", detail: ctx ? "Intake usado" : "Prompt directo" },
+                    generate: { status: "done", detail: `${appliedFiles.length} archivo(s)` },
+                    apply: { status: "done", detail: "Workspace actualizado" },
+                    verify: { status: "done", detail: "Preview abierto" },
+                  }),
+                  actions,
+                  metrics,
+                }
+              : t,
+          ),
         )
         toast.success(toastMsg)
       } catch (err: any) {
         const msg = err?.message || "No se pudo generar la app"
         setTurns((prev) =>
           prev.map((t) =>
-            t.id === `${id}-a` ? { ...t, content: `_${msg}_`, streaming: false } : t,
+            t.id === `${id}-a`
+              ? {
+                  ...t,
+                  content: `_${msg}_`,
+                  streaming: false,
+                  agentLabel: "Error al construir",
+                  agentPhases: buildCodeAgentPhases("generate", {
+                    generate: { status: "error", detail: msg },
+                  }),
+                }
+              : t,
           ),
         )
         toast.error(msg)
@@ -889,7 +961,7 @@ export function AICodeChatPanel() {
         setBuildingApp(false)
       }
     },
-    [applyBlock, busy, buildingApp, sessionId, setTurns, token, user],
+    [applyBlock, busy, buildingApp, files, sessionId, setTurns, token, user],
   )
 
   // SRE tier-0: classify the build log locally (no LLM), render the strict
@@ -919,6 +991,95 @@ export function AICodeChatPanel() {
     },
     [applyBlock, files, patchAgentState, setTurns],
   )
+
+  // Auto-repair: a failed run (or the preview console "Arreglar con IA" button)
+  // emits `siragpt:code-fix-error` with the captured logs. We hand those logs to
+  // the agent and let it FIX the code automatically — NO manual submit. With a
+  // model available it edits the code (SRE system prompt + autoApply); offline it
+  // runs the deterministic SRE (classifies the build log and auto-patches
+  // package.json overrides when the fix is deterministic).
+  const busyRef = React.useRef(false)
+  busyRef.current = busy
+  const buildingAppRef = React.useRef(false)
+  buildingAppRef.current = buildingApp
+  // Synchronous latch so two same-tick events (e.g. an auto error + a manual
+  // "Arreglar con IA" tap) can't start two repairs before React re-renders the
+  // busy refs. Reset when the repair turn settles.
+  const repairInFlightRef = React.useRef(false)
+
+  const repairFromLog = React.useCallback(
+    async (log: string) => {
+      const text = log.trim()
+      if (!text || !user || !token || !sessionId) return
+      const sid = sessionId
+      patchAgentState(sid, (s) => ({ ...s, phase: "debugging", lastError: text }))
+      if (activeModelName) {
+        await sendPrompt(
+          "Detecté un error en el preview en vivo. Arréglalo en el código y déjalo funcionando.",
+          {
+            systemPrompt: sreSystemPrompt(text, collectConfigFiles(files)),
+            autoApply: true,
+          },
+        )
+      } else {
+        await runDeterministicSRE(text, "Detecté un error en el build — diagnóstico automático.", sid)
+      }
+    },
+    [activeModelName, files, patchAgentState, runDeterministicSRE, sendPrompt, sessionId, token, user],
+  )
+  const repairFromLogRef = React.useRef(repairFromLog)
+  repairFromLogRef.current = repairFromLog
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    let cancelled = false
+    let waitTimer: number | null = null
+    const clearWait = () => {
+      if (waitTimer !== null) {
+        window.clearInterval(waitTimer)
+        waitTimer = null
+      }
+    }
+    const handler = (e: Event) => {
+      const text = (e as CustomEvent<{ text?: string }>).detail?.text?.trim()
+      if (!text) return
+      const fire = () => {
+        if (cancelled || repairInFlightRef.current) return
+        repairInFlightRef.current = true
+        void repairFromLogRef.current(text).finally(() => {
+          repairInFlightRef.current = false
+        })
+      }
+      // Idle → repair immediately. Busy (a turn is still streaming) → wait for
+      // it to settle, then auto-repair once. Latest error wins; cap the wait so
+      // a wedged turn never leaves a timer running.
+      if (!busyRef.current && !buildingAppRef.current) {
+        fire()
+        return
+      }
+      clearWait()
+      let waited = 0
+      waitTimer = window.setInterval(() => {
+        if (cancelled) {
+          clearWait()
+          return
+        }
+        if (!busyRef.current && !buildingAppRef.current) {
+          clearWait()
+          fire()
+          return
+        }
+        waited += 1
+        if (waited > 240) clearWait() // ~120s ceiling (500ms × 240)
+      }, 500)
+    }
+    window.addEventListener("siragpt:code-fix-error", handler)
+    return () => {
+      cancelled = true
+      clearWait()
+      window.removeEventListener("siragpt:code-fix-error", handler)
+    }
+  }, [])
 
   // Apply a set of {path,content} files to the workspace (index.html last so the
   // live preview lands on the runnable app) and open the preview.
@@ -983,6 +1144,10 @@ export function AICodeChatPanel() {
           role: "assistant",
           content: isBuild ? "⚙️ Motor OpenCode construyendo…" : "⚙️ Motor OpenCode trabajando…",
           streaming: true,
+          agentLabel: isBuild ? "Construyendo con Motor OpenCode" : "Motor OpenCode trabajando",
+          agentPhases: buildCodeAgentPhases("plan", {
+            plan: { status: "running", detail: isBuild ? "Preparando build" : "Preparando turno" },
+          }),
         },
       ])
       setInput("")
@@ -990,21 +1155,52 @@ export function AICodeChatPanel() {
       const controller = new AbortController()
       abortRef.current = controller
 
+      // Live progress rail for the Motor (OpenCode) path — mirrors the
+      // deterministic buildApp/sendPrompt rail so Motor turns show the same
+      // Plan → Contexto → Generar → Aplicar → Verificar steps.
+      const setEnginePhase = (label: string, phases: CodeAgentPhase[]) =>
+        setTurns((prev) =>
+          prev.map((t) => (t.id === assistantId ? { ...t, agentLabel: label, agentPhases: phases } : t)),
+        )
+
       const startedAt = Date.now()
       const finish = (
         content: string,
-        meta?: { written?: Array<{ path: string; content: string }>; read?: Array<{ path: string; content: string }> },
+        meta?: {
+          written?: Array<{ path: string; content: string }>
+          read?: Array<{ path: string; content: string }>
+          label?: string
+          phases?: CodeAgentPhase[]
+        },
       ) =>
         setTurns((prev) =>
           prev.map((t) => {
             if (t.id !== assistantId) return t
-            const base = { ...t, content, streaming: false }
-            if (meta?.written && meta.written.length > 0) {
-              const { actions, metrics } = buildWriteMetrics(meta.written, {
+            const wrote = !!(meta?.written && meta.written.length > 0)
+            const base = {
+              ...t,
+              content,
+              streaming: false,
+              agentLabel: meta?.label ?? "Turno completado",
+              agentPhases:
+                meta?.phases ??
+                buildCodeAgentPhases("verify", {
+                  plan: { status: "done", detail: "Sesión del motor lista" },
+                  context: { status: "done", detail: isBuild ? "Contexto de build listo" : "Workspace leído" },
+                  generate: { status: "done", detail: "Motor OpenCode" },
+                  apply: {
+                    status: "done",
+                    detail: wrote ? `${meta!.written!.length} archivo(s) aplicados` : "Sin escritura de archivos",
+                  },
+                  verify: { status: "done", detail: wrote ? "Workspace actualizado" : "Respuesta entregada" },
+                }),
+            }
+            if (wrote) {
+              const { actions, metrics } = buildWriteMetrics(meta!.written!, {
                 startedAt,
                 now: Date.now(),
                 getPrevContent: (p) => files[p]?.content ?? "",
-                read: meta.read,
+                read: meta?.read,
               })
               return { ...base, actions, metrics }
             }
@@ -1020,6 +1216,14 @@ export function AICodeChatPanel() {
           if (!esid) throw new Error("El motor no devolvió un id de sesión.")
           engineSessionRef.current[sid] = esid
         }
+
+        setEnginePhase(
+          isBuild ? "Leyendo contexto del workspace" : "Preparando turno del motor",
+          buildCodeAgentPhases("context", {
+            plan: { status: "done", detail: "Sesión del motor lista" },
+            context: { status: "running", detail: isBuild ? "Preparando build" : "Leyendo workspace" },
+          }),
+        )
 
         const sendText = ctx
           ? `${landingSystemPrompt(ctx)}\n\n${engineTransportInstructions()}`
@@ -1058,6 +1262,15 @@ export function AICodeChatPanel() {
             }
           }, controller.signal)
           .catch(() => {})
+
+        setEnginePhase(
+          "Generando con Motor OpenCode",
+          buildCodeAgentPhases("generate", {
+            plan: { status: "done", detail: "Sesión del motor lista" },
+            context: { status: "done", detail: isBuild ? "Contexto de build listo" : "Workspace leído" },
+            generate: { status: "running", detail: "El motor está trabajando" },
+          }),
+        )
 
         // Kick off the turn (fire-and-forget; content comes via events) and wait
         // for idle, with a safety timeout so we never hang the UI.
@@ -1183,7 +1396,14 @@ export function AICodeChatPanel() {
             /* fall through to error */
           }
         }
-        finish(`_${err?.message || "El motor OpenCode no respondió"}_`)
+        finish(`_${err?.message || "El motor OpenCode no respondió"}_`, {
+          label: "Error en el turno",
+          phases: buildCodeAgentPhases("generate", {
+            plan: { status: "done", detail: "Sesión del motor lista" },
+            context: { status: "done", detail: isBuild ? "Contexto de build listo" : "Workspace leído" },
+            generate: { status: "error", detail: err?.message || "El motor OpenCode no respondió" },
+          }),
+        })
         toast.error(err?.message || "El motor OpenCode no respondió")
       } finally {
         try {
@@ -1246,7 +1466,17 @@ export function AICodeChatPanel() {
           setTurns((prev) => [
             ...prev,
             { id: qid, role: "user", content: text },
-            { id: assistantId, role: "assistant", content: staticQuestion, streaming: true },
+            {
+              id: assistantId,
+              role: "assistant",
+              content: staticQuestion,
+              streaming: true,
+              agentLabel: "Formulando la siguiente pregunta",
+              agentPhases: buildCodeAgentPhases("context", {
+                plan: { status: "done", detail: "Intake en curso" },
+                context: { status: "running", detail: "Reviso la conversación" },
+              }),
+            },
           ])
           setInput("")
           patchAgentState(sid, (s) => ({
@@ -1270,14 +1500,41 @@ export function AICodeChatPanel() {
             setTurns((prev) =>
               prev.map((t) =>
                 t.id === assistantId
-                  ? { ...t, content: dynamicQuestion, streaming: false, actions: askActions }
+                  ? {
+                      ...t,
+                      content: dynamicQuestion,
+                      streaming: false,
+                      actions: askActions,
+                      agentLabel: "Pregunta lista",
+                      agentPhases: buildCodeAgentPhases("verify", {
+                        plan: { status: "done", detail: "Intake en curso" },
+                        context: { status: "done", detail: "Contexto revisado" },
+                        generate: { status: "done", detail: "Pregunta formulada" },
+                        apply: { status: "done", detail: "Sin cambios de archivos" },
+                        verify: { status: "done", detail: "Pregunta entregada" },
+                      }),
+                    }
                   : t,
               ),
             )
           } catch {
             setTurns((prev) =>
               prev.map((t) =>
-                t.id === assistantId ? { ...t, content: staticQuestion, streaming: false } : t,
+                t.id === assistantId
+                  ? {
+                      ...t,
+                      content: staticQuestion,
+                      streaming: false,
+                      agentLabel: "Pregunta lista",
+                      agentPhases: buildCodeAgentPhases("verify", {
+                        plan: { status: "done", detail: "Intake en curso" },
+                        context: { status: "done", detail: "Contexto revisado" },
+                        generate: { status: "done", detail: "Pregunta formulada" },
+                        apply: { status: "done", detail: "Sin cambios de archivos" },
+                        verify: { status: "done", detail: "Pregunta entregada" },
+                      }),
+                    }
+                  : t,
               ),
             )
           } finally {
@@ -1347,6 +1604,7 @@ export function AICodeChatPanel() {
           }
       }
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       activeCodeChatSession,
       activePath,
@@ -1386,30 +1644,30 @@ export function AICodeChatPanel() {
   const activeFileLabel = activePath ? activePath.split("/").pop() || activePath : null
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
-      <div className="shrink-0 border-b border-border/50">
-        <div className="flex h-8 items-center justify-between gap-2 px-3">
-          <span className="text-[11px] font-medium text-muted-foreground">Chat</span>
+    <div className="flex h-full min-h-0 flex-col bg-zinc-50/70 text-foreground dark:bg-zinc-950">
+      <div className="shrink-0 border-b border-border/60 bg-background/85 backdrop-blur">
+        <div className="flex h-9 items-center justify-between gap-2 px-3">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Agente</span>
           {activeFileLabel ? (
             <span
-              className="min-w-0 truncate font-mono text-[10px] text-muted-foreground/80"
+              className="min-w-0 truncate rounded-md border border-border/50 bg-muted/30 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/85"
               title={activePath ?? undefined}
             >
               {activeFileLabel}
             </span>
           ) : null}
         </div>
-        <div className="flex items-center gap-1 overflow-x-auto px-2 pb-1.5">
+        <div className="flex items-center gap-1 overflow-x-auto px-2 pb-2">
           {codeChatSessions.map((session) => (
             <button
               key={session.id}
               type="button"
               onClick={() => setActiveCodeChatSession(session.id)}
               className={cn(
-                "h-6 shrink-0 rounded-md px-2 text-[11px] transition-colors",
+                "h-6 shrink-0 rounded-md border px-2 text-[11px] transition-colors",
                 session.id === activeCodeChatSessionId
-                  ? "bg-foreground text-background"
-                  : "bg-muted/50 text-muted-foreground hover:text-foreground",
+                  ? "border-[#FF0000]/30 bg-[#FF0000]/[0.07] text-foreground"
+                  : "border-transparent bg-muted/45 text-muted-foreground hover:border-border/60 hover:text-foreground",
               )}
             >
               {session.title}
@@ -1429,24 +1687,25 @@ export function AICodeChatPanel() {
         </div>
       </div>
 
-      <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto p-3">
+      <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto p-4">
         {turns.length === 0 ? (
-          <EmptyChat active={agentsActive} phase={agentPhase} />
+          <EmptyChat active={agentsActive} />
         ) : (
           <div className="space-y-3">
             {turns.map((turn) => (
-              <ChatBubble
-                key={turn.id}
-                turn={turn}
-                lookupContent={(path) => files[path]?.content ?? ""}
-              />
+              <CodeChatErrorBoundary key={turn.id} label="code-chat-turn">
+                <ChatBubble
+                  turn={turn}
+                  lookupContent={(path) => files[path]?.content ?? ""}
+                />
+              </CodeChatErrorBoundary>
             ))}
           </div>
         )}
       </div>
 
-      <form onSubmit={onSubmit} className="shrink-0 px-3 pb-3 pt-2">
-        <div className="group rounded-2xl border border-border/60 bg-muted/20 px-2.5 py-2 transition-colors focus-within:border-border focus-within:bg-background focus-within:shadow-sm">
+      <form onSubmit={onSubmit} className="shrink-0 border-t border-border/50 bg-background/80 px-3 pb-3 pt-2 backdrop-blur">
+        <div className="group rounded-lg border border-border/70 bg-background px-2.5 py-2 shadow-sm transition-[border-color,box-shadow] focus-within:border-[#FF0000]/35 focus-within:shadow-[0_0_0_3px_rgba(255,0,0,0.08)]">
           <Textarea
             aria-label="Mensaje para el chat de código"
             ref={inputRef}
@@ -1458,23 +1717,19 @@ export function AICodeChatPanel() {
             disabled={busy}
             className="max-h-[140px] min-h-[28px] resize-none border-0 bg-transparent px-1 py-0.5 text-[13px] leading-[1.45] shadow-none outline-none ring-0 placeholder:text-muted-foreground/55 focus-visible:ring-0"
           />
-          <div className="mt-1 flex items-center gap-1">
-            <PrimaryModeToggle
-              mode={composerMode === "ask" ? "ask" : "agent"}
-              onChange={(m) => {
-                setComposerMode(m === "ask" ? "ask" : "app")
-                inputRef.current?.focus()
-              }}
-            />
+          <div className="mt-1 flex items-center gap-1.5">
             <ComposerPlusMenu
               mode={composerMode}
               includeContext={includeContext}
               activeFileLabel={activeFileLabel}
+              engineAvailable={engineAvailable}
+              engineMode={engineMode}
               onModeChange={(mode) => {
                 setComposerMode(mode)
                 inputRef.current?.focus()
               }}
               onIncludeContextChange={setIncludeContext}
+              onEngineModeChange={setEngineMode}
             />
             <ModelPickerInline
               models={pickerModels}
@@ -1482,37 +1737,23 @@ export function AICodeChatPanel() {
               fast={modelIsFast}
               onSelect={(m) => chooseCodeModel({ name: m.name, provider: m.provider })}
             />
-            {engineAvailable ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className={cn(
-                  "h-7 shrink-0 gap-1 rounded-md px-2 text-[11px] font-medium",
-                  engineMode
-                    ? "bg-[hsl(var(--accent-violet)/0.16)] text-[hsl(var(--accent-violet))] hover:bg-[hsl(var(--accent-violet)/0.24)]"
-                    : "text-muted-foreground hover:bg-muted/80 hover:text-foreground",
-                )}
-                onClick={() => setEngineMode((v) => !v)}
-                aria-pressed={engineMode}
-                aria-label="Usar el motor OpenCode"
-                title={
-                  engineMode
-                    ? "Motor OpenCode activo — el chat usa el agente real"
-                    : "Activar el motor OpenCode (agente real) para este chat"
-                }
-              >
-                <Server className="h-3.5 w-3.5" />
-                <span>Motor{engineMode ? " ✓" : ""}</span>
-              </Button>
-            ) : null}
             <span className="min-w-0 flex-1" />
+            <DictationButton
+              variant="light"
+              locale={typeof navigator !== "undefined" ? navigator.language : "es-ES"}
+              onTranscript={(text) => {
+                const chunk = text.trim()
+                if (!chunk) return
+                setInput((prev) => normalizeChatInput(prev ? `${prev} ${chunk}` : chunk).value)
+                inputRef.current?.focus()
+              }}
+            />
             {busy ? (
               <Button
                 type="button"
                 size="icon"
                 variant="ghost"
-                className="h-7 w-7 shrink-0 rounded-lg text-foreground hover:bg-muted"
+                className="h-7 w-7 shrink-0 rounded-md text-foreground hover:bg-muted"
                 onClick={cancelStream}
                 aria-label="Detener"
               >
@@ -1523,9 +1764,9 @@ export function AICodeChatPanel() {
                 type="submit"
                 size="icon"
                 className={cn(
-                  "h-7 w-7 shrink-0 rounded-lg transition-colors",
+                  "h-7 w-7 shrink-0 rounded-md transition-colors",
                   input.trim()
-                    ? "bg-foreground text-background hover:bg-foreground/90"
+                    ? "bg-[#FF0000] text-white hover:bg-[#E00000]"
                     : "bg-transparent text-muted-foreground/40",
                 )}
                 disabled={!input.trim()}
@@ -1541,84 +1782,18 @@ export function AICodeChatPanel() {
   )
 }
 
-function EmptyChat({ active, phase }: { active: boolean; phase: AgentPhase }) {
-  const currentIndex = AGENT_RUNTIME_STEPS.findIndex((step) => step.phase === phase)
-
+function EmptyChat({ active }: { active: boolean }) {
   return (
-    <div className="flex min-h-full items-center justify-center px-2 py-4">
-      <section
-        aria-live="polite"
-        data-testid="code-agent-runtime"
-        data-agent-active={active ? "true" : "false"}
-        data-agent-phase={phase}
-        className="w-full max-w-[19rem] rounded-2xl border border-border/60 bg-background/80 p-3 text-left shadow-sm"
-      >
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-[hsl(var(--accent-violet)/0.28)] bg-[hsl(var(--accent-violet)/0.10)] text-[hsl(var(--accent-violet))]">
-              <Sparkles className={cn("h-4 w-4", active && "animate-pulse")} />
-            </span>
-            <div className="min-w-0">
-              <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">Agente de código</h2>
-              <p className="truncate text-[11px] text-muted-foreground">Planifica, genera y verifica</p>
-            </div>
-          </div>
-          <span
-            className={cn(
-              "shrink-0 rounded-full px-2 py-1 text-[10.5px] font-medium",
-              active
-                ? "bg-[hsl(var(--accent-violet)/0.12)] text-[hsl(var(--accent-violet))]"
-                : "bg-muted text-muted-foreground",
-            )}
-          >
-            {AGENT_RUNTIME_STATUS[phase]}
-          </span>
-        </div>
-
-        <ol className="mt-3 space-y-1.5">
-          {AGENT_RUNTIME_STEPS.map((step, index) => {
-            const Icon = step.icon
-            const isPreview = phase === "preview"
-            const state =
-              phase === "idle"
-                ? "pending"
-                : phase === step.phase
-                  ? isPreview
-                    ? "done"
-                    : "running"
-                  : currentIndex >= 0 && index < currentIndex
-                    ? "done"
-                    : "pending"
-
-            return (
-              <li key={step.phase} className="flex h-8 items-center gap-2">
-                <span
-                  className={cn(
-                    "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border",
-                    state === "done" && "border-emerald-500/35 bg-emerald-500/10 text-emerald-600",
-                    state === "running" &&
-                      "border-[hsl(var(--accent-violet)/0.45)] bg-[hsl(var(--accent-violet)/0.12)] text-[hsl(var(--accent-violet))]",
-                    state === "pending" && "border-border/50 bg-muted/30 text-muted-foreground/55",
-                  )}
-                >
-                  <Icon className={cn("h-3.5 w-3.5", state === "running" && "animate-pulse")} />
-                </span>
-                <span
-                  className={cn(
-                    "min-w-0 flex-1 truncate text-[12px] font-medium",
-                    state === "pending" ? "text-muted-foreground" : "text-foreground",
-                  )}
-                >
-                  {step.label}
-                </span>
-                <span className="w-11 shrink-0 text-right font-mono text-[10px] text-muted-foreground/75">
-                  {state === "done" ? "done" : state === "running" ? "run" : "wait"}
-                </span>
-              </li>
-            )
-          })}
-        </ol>
-      </section>
+    <div className="flex min-h-full flex-col items-center justify-center px-6 py-10 text-center">
+      <span className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[hsl(var(--accent-violet)/0.28)] bg-[hsl(var(--accent-violet)/0.10)] text-[hsl(var(--accent-violet))]">
+        <Sparkles className={cn("h-5 w-5", active && "animate-pulse")} />
+      </span>
+      <h2 className="mt-4 text-base font-semibold tracking-tight text-foreground">
+        ¿Qué quieres construir?
+      </h2>
+      <p className="mt-1.5 max-w-[18rem] text-[13px] leading-relaxed text-muted-foreground">
+        Describe tu idea y el agente la crea, la ejecuta y la corrige sola.
+      </p>
     </div>
   )
 }
@@ -1641,7 +1816,7 @@ function ChatBubble({
   if (isUser) {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl bg-blue-900 px-3.5 py-2 text-sm leading-relaxed text-zinc-50 shadow-sm">
+        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-lg border border-[#FF0000]/20 bg-[#FF0000]/[0.08] px-3.5 py-2 text-sm leading-relaxed text-foreground shadow-sm">
           {turn.content}
         </div>
       </div>
@@ -1651,18 +1826,19 @@ function ChatBubble({
   // ASSISTANT messages: left-aligned, plain background, clean typography (no
   // colored bubble) — direct text on the interface, with the code-block cards.
   const blocker = detectBlocker(turn.content)
-  // Pull the model's gerund-led planning line into the "🧠 …" badge (like the
+  // Pull the model's gerund-led planning line into the status badge (like the
   // agent dashboard) and narrate the rest. Falls back to a generic badge while
   // streaming before the planning line lands.
   const { label: planLabel, body } = extractPlanLabel(turn.content)
+  const liveAgentLabel = planLabel || turn.agentLabel || (turn.streaming ? "Pensando" : "")
   return (
     <div className="text-sm">
       <div className="mb-1 flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-wide text-muted-foreground">
         Asistente
-        {planLabel || turn.streaming ? (
-          <span className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-violet-500/10 px-2 py-0.5 normal-case tracking-normal text-violet-300">
-            <span aria-hidden="true">🧠</span>
-            <span className="truncate font-medium">{planLabel || "Pensando"}</span>
+        {liveAgentLabel ? (
+          <span className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-[#FF0000]/15 bg-[#FF0000]/[0.07] px-2 py-0.5 normal-case tracking-normal text-[#C80000] dark:text-[#FF6B6B]">
+            <BrainCircuit className="h-3 w-3 shrink-0" aria-hidden="true" />
+            <span className="truncate font-medium">{liveAgentLabel}</span>
             {!turn.streaming && typeof turn.planMs === "number" ? (
               <span className="opacity-60">({formatWorked(turn.planMs)})</span>
             ) : null}
@@ -1672,6 +1848,10 @@ function ChatBubble({
           </span>
         ) : null}
       </div>
+      {/* 5-step agent progress rail (Plan → Contexto → Generar → Aplicar →
+          Verificar). Populated from REAL turn state by the build/app/engine
+          paths; renders nothing for turns that never set agentPhases. */}
+      <CodeAgentProgress phases={turn.agentPhases} />
       {/* An out-of-credits / quota error surfaces as a high-visibility panel
           instead of plain prose; otherwise render the assistant text normally. */}
       {blocker ? (
@@ -1803,7 +1983,10 @@ function ChatWorkedSummary({ metrics }: { metrics: CodeChatMetrics }) {
   const showStrike = typeof orig === "number" && typeof applied === "number" && applied < orig
   return (
     <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-border/60 bg-muted/20 px-2.5 py-1.5 text-[11px] text-muted-foreground">
-      <span className="font-medium text-foreground">⏱️ Trabajó {formatWorked(metrics.timeWorkedMs)}</span>
+      <span className="inline-flex items-center gap-1 font-medium text-foreground">
+        <Clock3 className="h-3.5 w-3.5 text-[#FF0000]" aria-hidden="true" />
+        Trabajó {formatWorked(metrics.timeWorkedMs)}
+      </span>
       {hasFiles ? (
         <>
           <span>· {metrics.actionsCount} {metrics.actionsCount === 1 ? "acción" : "acciones"}</span>
@@ -1835,8 +2018,8 @@ function ChatWorkedSummary({ metrics }: { metrics: CodeChatMetrics }) {
 function ChatBlockerPanel({ title, rawError, url }: { title: string; rawError: string; url?: string }) {
   const isInternal = url?.startsWith("/")
   return (
-    <div className="my-1 rounded-xl border border-red-500/30 bg-red-500/10 p-3">
-      <div className="flex items-center gap-1.5 text-sm font-semibold text-red-300">
+    <div className="my-1 rounded-lg border border-[#FF0000]/30 bg-[#FF0000]/[0.08] p-3">
+      <div className="flex items-center gap-1.5 text-sm font-semibold text-[#C80000] dark:text-[#FF6B6B]">
         <AlertTriangle className="h-4 w-4" /> Acción requerida de su parte
       </div>
       <div className="mt-1 text-sm text-foreground">{title}</div>
@@ -1848,7 +2031,7 @@ function ChatBlockerPanel({ title, rawError, url }: { title: string; rawError: s
           href={url}
           target={isInternal ? undefined : "_blank"}
           rel={isInternal ? undefined : "noopener noreferrer"}
-          className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-500"
+          className="mt-2.5 inline-flex items-center gap-1.5 rounded-md bg-[#FF0000] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#E00000]"
         >
           Añadir créditos <ExternalLink className="h-3.5 w-3.5" />
         </a>
@@ -1857,72 +2040,24 @@ function ChatBlockerPanel({ title, rawError, url }: { title: string; rawError: s
   )
 }
 
-// Primary, Replit-style mode switch: two clear pills (Agent / Ask) shown up
-// front in the composer so the user always knows whether the AI will BUILD
-// (Agent → autonomous app/edit pipeline) or just ANSWER (Ask → conversational,
-// never touches files). Advanced sub-modes (build/plan/debug/image) stay in the
-// "+" menu. "agent" maps to the existing "app" composer mode.
-function PrimaryModeToggle({
-  mode,
-  onChange,
-}: {
-  mode: "agent" | "ask"
-  onChange: (mode: "agent" | "ask") => void
-}) {
-  const base =
-    "inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors"
-  return (
-    <div
-      role="group"
-      aria-label="Modo del agente: Agent o Ask"
-      className="inline-flex shrink-0 items-center gap-0.5 rounded-lg bg-muted/60 p-0.5"
-    >
-      <button
-        type="button"
-        aria-pressed={mode === "agent"}
-        onClick={() => onChange("agent")}
-        title="Agent — describe algo y el agente lo construye o lo cambia"
-        className={cn(
-          base,
-          mode === "agent"
-            ? "bg-background text-foreground shadow-sm"
-            : "text-muted-foreground hover:text-foreground",
-        )}
-      >
-        <Sparkles className="h-3.5 w-3.5" />
-        <span>Agent</span>
-      </button>
-      <button
-        type="button"
-        aria-pressed={mode === "ask"}
-        onClick={() => onChange("ask")}
-        title="Ask — pregunta sobre tu app o tu código; responde sin tocar archivos"
-        className={cn(
-          base,
-          mode === "ask"
-            ? "bg-background text-foreground shadow-sm"
-            : "text-muted-foreground hover:text-foreground",
-        )}
-      >
-        <CircleHelp className="h-3.5 w-3.5" />
-        <span>Ask</span>
-      </button>
-    </div>
-  )
-}
-
 function ComposerPlusMenu({
   mode,
   includeContext,
   activeFileLabel,
+  engineAvailable,
+  engineMode,
   onModeChange,
   onIncludeContextChange,
+  onEngineModeChange,
 }: {
   mode: ComposerMode
   includeContext: boolean
   activeFileLabel: string | null
+  engineAvailable: boolean
+  engineMode: boolean
   onModeChange: (mode: ComposerMode) => void
   onIncludeContextChange: (value: boolean) => void
+  onEngineModeChange: React.Dispatch<React.SetStateAction<boolean>>
 }) {
   const itemClass = "h-9 gap-2.5 rounded-md px-2.5 text-sm"
   const iconClass = "h-[18px] w-[18px] text-muted-foreground"
@@ -1934,7 +2069,7 @@ function ComposerPlusMenu({
           type="button"
           variant="ghost"
           size="icon"
-          className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+          className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:bg-[#FF0000]/[0.07] hover:text-[#C80000] dark:hover:text-[#FF6B6B]"
           aria-label="Modo, contexto y herramientas"
         >
           <Plus className="h-4 w-4" />
@@ -1944,42 +2079,50 @@ function ComposerPlusMenu({
         align="start"
         side="top"
         sideOffset={10}
-        className="w-[292px] rounded-xl border-border/70 p-1.5 shadow-xl"
+        className="w-[292px] rounded-lg border-border/70 p-1.5 shadow-xl"
       >
         <DropdownMenuLabel className="px-2.5 py-1.5 text-[11px] font-normal text-muted-foreground">
           {COMPOSER_MODE_LABEL[mode]}
           {activeFileLabel && includeContext ? ` · ${activeFileLabel}` : ""}
         </DropdownMenuLabel>
         <DropdownMenuItem
-          className={cn(itemClass, mode === "app" && "bg-muted font-medium")}
+          className={itemClass}
+          onClick={() => window.dispatchEvent(new CustomEvent(CODE_OPEN_TOOL_LAUNCHER_EVENT))}
+        >
+          <LayoutGrid className={iconClass} />
+          <span>Todas las herramientas</span>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator className="my-2" />
+        <DropdownMenuItem
+          className={cn(itemClass, mode === "app" && "bg-[#FF0000]/[0.07] font-medium text-foreground")}
           onClick={() => onModeChange("app")}
         >
           <Rocket className={iconClass} />
           <span>App · construir desde cero</span>
         </DropdownMenuItem>
         <DropdownMenuItem
-          className={cn(itemClass, mode === "build" && "bg-muted font-medium")}
+          className={cn(itemClass, mode === "build" && "bg-[#FF0000]/[0.07] font-medium text-foreground")}
           onClick={() => onModeChange("build")}
         >
           <Sparkles className={iconClass} />
           <span>Build</span>
         </DropdownMenuItem>
         <DropdownMenuItem
-          className={cn(itemClass, mode === "plan" && "bg-muted font-medium")}
+          className={cn(itemClass, mode === "plan" && "bg-[#FF0000]/[0.07] font-medium text-foreground")}
           onClick={() => onModeChange("plan")}
         >
           <ListChecks className={iconClass} />
           <span>Plan</span>
         </DropdownMenuItem>
         <DropdownMenuItem
-          className={cn(itemClass, mode === "debug" && "bg-muted font-medium")}
+          className={cn(itemClass, mode === "debug" && "bg-[#FF0000]/[0.07] font-medium text-foreground")}
           onClick={() => onModeChange("debug")}
         >
           <Bug className={iconClass} />
           <span>Debug</span>
         </DropdownMenuItem>
         <DropdownMenuItem
-          className={cn(itemClass, mode === "ask" && "bg-muted font-medium")}
+          className={cn(itemClass, mode === "ask" && "bg-[#FF0000]/[0.07] font-medium text-foreground")}
           onClick={() => onModeChange("ask")}
         >
           <CircleHelp className={iconClass} />
@@ -1987,18 +2130,27 @@ function ComposerPlusMenu({
         </DropdownMenuItem>
         <DropdownMenuSeparator className="my-2" />
         <DropdownMenuItem
-          className={cn(itemClass, mode === "image" && "bg-muted font-medium")}
+          className={cn(itemClass, mode === "image" && "bg-[#FF0000]/[0.07] font-medium text-foreground")}
           onClick={() => onModeChange("image")}
         >
           <ImageIcon className={iconClass} />
           <span>Image</span>
         </DropdownMenuItem>
+        {engineAvailable ? (
+          <DropdownMenuCheckboxItem
+            checked={engineMode}
+            onCheckedChange={(checked) => onEngineModeChange(checked === true)}
+            className="h-9 rounded-md text-sm"
+          >
+            Motor OpenCode
+          </DropdownMenuCheckboxItem>
+        ) : null}
         <DropdownMenuSub>
           <DropdownMenuSubTrigger className={itemClass}>
             <BookOpen className={iconClass} />
             <span>Skills</span>
           </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="w-52 rounded-xl p-1.5">
+          <DropdownMenuSubContent className="w-52 rounded-lg p-1.5">
             <DropdownMenuItem className="rounded-lg text-sm" onClick={() => onModeChange("plan")}>
               Plan de implementación
             </DropdownMenuItem>
@@ -2015,7 +2167,7 @@ function ComposerPlusMenu({
             <Server className={iconClass} />
             <span>MCP Servers</span>
           </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="w-52 rounded-xl p-1.5">
+          <DropdownMenuSubContent className="w-52 rounded-lg p-1.5">
             <DropdownMenuItem className="rounded-lg text-sm" onClick={() => onModeChange("ask")}>
               Workspace local
             </DropdownMenuItem>
@@ -2050,6 +2202,9 @@ function ModelPickerInline({
   fast?: boolean
   onSelect: (model: ModelOption) => void
 }) {
+  const [open, setOpen] = React.useState(false)
+  const [query, setQuery] = React.useState("")
+
   const grouped = React.useMemo(() => {
     const map = new Map<string, ModelOption[]>()
     for (const m of models) {
@@ -2060,71 +2215,114 @@ function ModelPickerInline({
     return Array.from(map.entries())
   }, [models])
 
+  const filtered = React.useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return grouped
+    return grouped
+      .map(([provider, list]) => [
+        provider,
+        list.filter((m) => {
+          const label = (m.displayName || m.name).toLowerCase()
+          return label.includes(q) || provider.toLowerCase().includes(q) || m.name.toLowerCase().includes(q)
+        }),
+      ] as const)
+      .filter(([, list]) => list.length > 0)
+  }, [grouped, query])
+
   const active = models.find((m) => m.name === selectedModel)
   const label = active?.displayName || active?.name || selectedModel || "Modelo"
 
+  React.useEffect(() => {
+    if (!open) setQuery("")
+  }, [open])
+
   return (
-    <DropdownMenu>
+    <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
-        <Button
+        <button
           type="button"
-          variant="ghost"
-          size="sm"
-          className="h-7 min-w-0 gap-1 rounded-md px-1.5 text-[11px] font-normal text-muted-foreground hover:bg-muted/80 hover:text-foreground data-[state=open]:bg-muted/80"
+          className={cn(
+            "inline-flex h-7 max-w-[min(168px,38vw)] shrink-0 items-center gap-1 rounded-md border px-2.5 text-[11px] font-medium transition-colors",
+            "border-border/45 bg-background/60 text-foreground/75 hover:border-border hover:bg-muted/40 hover:text-foreground",
+            "data-[state=open]:border-[#FF0000]/30 data-[state=open]:bg-[#FF0000]/[0.06] data-[state=open]:text-foreground",
+          )}
           aria-label="Seleccionar modelo"
           title={
             fast
-              ? "Modelo rápido (auto-seleccionado) — ideal para el preview en vivo"
-              : "Modelo lento (reasoning) — puede cortar el preview en vivo"
+              ? `${label} — recomendado para preview en vivo`
+              : `${label} — modelo de razonamiento; puede ser más lento en preview`
           }
         >
-          {fast ? (
-            <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-violet-500/15 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-violet-600 dark:text-violet-300">
-              ⚡ rápido
-            </span>
-          ) : (
-            <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-amber-500/15 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">
-              ⏳ lento
-            </span>
-          )}
-          <span className="max-w-[110px] truncate">{label}</span>
-          <ChevronDown className="h-3 w-3 opacity-50" />
-        </Button>
+          {!fast ? (
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500/80" aria-hidden />
+          ) : null}
+          <span className="truncate">{label}</span>
+          <ChevronDown className="h-3 w-3 shrink-0 opacity-45" />
+        </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
-        align="start"
+        align="end"
         side="top"
-        sideOffset={10}
+        sideOffset={8}
         collisionPadding={16}
-        className="z-[1000] max-h-[min(360px,calc(100vh-140px))] w-[284px] overflow-y-auto rounded-2xl border border-border/70 bg-background p-1.5 text-foreground shadow-[0_24px_70px_rgba(15,23,42,0.22)]"
+        className="z-[1000] w-[min(300px,calc(100vw-24px))] overflow-hidden rounded-lg border border-border/60 bg-popover p-0 text-popover-foreground shadow-[0_16px_48px_rgba(15,23,42,0.14)]"
       >
-        {models.length === 0 ? (
-          <div className="px-3 py-3 text-xs text-muted-foreground">
-            Cargando modelos…
+        <div className="border-b border-border/50 px-2.5 py-2">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/60" />
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Buscar modelo…"
+              className="h-8 border-0 bg-muted/40 pl-8 text-xs shadow-none focus-visible:ring-1"
+              onKeyDown={(e) => e.stopPropagation()}
+            />
           </div>
-        ) : (
-          grouped.map(([provider, list], i) => (
-            <React.Fragment key={provider}>
-              {i > 0 ? <DropdownMenuSeparator /> : null}
-              <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground/80">
-                {provider}
-              </DropdownMenuLabel>
-              {list.map((m) => (
-                <DropdownMenuItem
-                  key={m.name}
-                  onClick={() => onSelect(m)}
-                  className={cn(
-                    "cursor-pointer rounded-xl px-2.5 py-2 text-sm",
-                    m.name === selectedModel && "bg-muted font-semibold"
-                  )}
-                >
-                  <span className="truncate">{m.displayName || m.name}</span>
-                  {m.name === selectedModel ? <Check className="ml-auto h-3.5 w-3.5 text-sky-500" /> : null}
-                </DropdownMenuItem>
-              ))}
-            </React.Fragment>
-          ))
-        )}
+        </div>
+        <div className="max-h-[min(320px,calc(100vh-180px))] overflow-y-auto p-1">
+          {models.length === 0 ? (
+            <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+              Cargando modelos…
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+              Sin coincidencias
+            </div>
+          ) : (
+            filtered.map(([provider, list], i) => (
+              <React.Fragment key={provider}>
+                {i > 0 ? <DropdownMenuSeparator className="my-1" /> : null}
+                <DropdownMenuLabel className="px-2 py-1 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
+                  {provider}
+                </DropdownMenuLabel>
+                {list.map((m) => {
+                  const selected = m.name === selectedModel
+                  const itemLabel = m.displayName || m.name
+                  const itemFast = !isSlowModel(m.name)
+                  return (
+                    <DropdownMenuItem
+                      key={m.name}
+                      onClick={() => {
+                        onSelect(m)
+                        setOpen(false)
+                      }}
+                      className={cn(
+                        "cursor-pointer rounded-lg px-2 py-1.5 text-[13px] font-normal",
+                        selected && "bg-[#FF0000]/[0.07] text-foreground",
+                      )}
+                    >
+                      <span className="min-w-0 flex-1 truncate">{itemLabel}</span>
+                      {itemFast ? (
+                        <span className="ml-2 shrink-0 text-[10px] text-muted-foreground/70">Rápido</span>
+                      ) : null}
+                      {selected ? <Check className="ml-2 h-3.5 w-3.5 shrink-0 text-[#FF0000]" /> : null}
+                    </DropdownMenuItem>
+                  )
+                })}
+              </React.Fragment>
+            ))
+          )}
+        </div>
       </DropdownMenuContent>
     </DropdownMenu>
   )

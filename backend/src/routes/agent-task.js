@@ -1873,7 +1873,7 @@ function resolveAgentTaskBudget({ maxStepsRaw, maxRuntimeMsRaw, documentPolicy =
   const hasRuntime = Number.isFinite(parsedRuntime);
   const heavy = Boolean(documentPolicy && documentPolicy.autoGenerate)
     || (hasSteps && parsedSteps > 40);
-  const defaultSteps = heavy ? 60 : 28;
+  const defaultSteps = heavy ? 100 : 28;
   const defaultRuntimeMs = heavy ? 2 * 60 * 60 * 1000 : 8 * 60 * 1000;
   return {
     maxSteps: hasSteps ? parsedSteps : defaultSteps,

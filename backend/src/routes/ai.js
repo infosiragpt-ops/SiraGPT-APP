@@ -65,6 +65,8 @@ const prisma = require('../config/database');
 const { tryConsumePlanQuota, checkPaidTokenCap, recordApiUsage } = require('../services/plan-quota');
 const aiService = require('../services/ai-service');
 const imageEngine = require('../services/media/image-engine');
+const elevenLabsTts = require('../services/ai/elevenlabs-tts');
+const elevenLabsMusic = require('../services/ai/elevenlabs-music');
 const { classifyImageGenError } = require('../services/image-error-classifier');
 const agentFilters = require('../services/agents/filters');
 const OpenAI = require('openai');
@@ -1634,9 +1636,23 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
             chatId,
             role: 'ASSISTANT',
             content: normalizedResponseContent,
-            tokens,
+            // Store the REAL token count (tiktoken over the saved content), not
+            // the `tokens` param — callers pass a char-length approximation
+            // (fullResponseContent.length + prompt.length), which made
+            // Message.tokens disagree with ApiUsage.tokens (which already uses
+            // totalTokens) and corrupted per-message analytics/billing.
+            tokens: totalTokens,
             files: assistantFiles.length > 0 ? JSON.stringify(assistantFiles) : null,
             metadata: metadataPayload,
+            // Claude-style extended thinking: chain-of-thought text + the raw
+            // OpenRouter reasoning_details array (replayed verbatim on later
+            // Anthropic tool-call turns). Both null when the model didn't think.
+            reasoning: (reasoningPayload && typeof reasoningPayload.text === 'string' && reasoningPayload.text.trim())
+              ? reasoningPayload.text
+              : null,
+            reasoningDetails: (reasoningPayload && reasoningPayload.details != null)
+              ? reasoningPayload.details
+              : undefined,
           }
         });
 
@@ -1650,40 +1666,6 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
           }
         });
       }
-      assistantMessage = await prisma.message.create({
-        data: {
-          chatId,
-          role: 'ASSISTANT',
-          content: normalizedResponseContent,
-          // Store the REAL token count (tiktoken over the saved content), not
-          // the `tokens` param — callers pass a char-length approximation
-          // (fullResponseContent.length + prompt.length), which made
-          // Message.tokens disagree with ApiUsage.tokens (which already uses
-          // totalTokens) and corrupted per-message analytics/billing.
-          tokens: totalTokens,
-          files: assistantFiles.length > 0 ? JSON.stringify(assistantFiles) : null,
-          metadata: metadataPayload,
-          // Claude-style extended thinking: chain-of-thought text + the raw
-          // OpenRouter reasoning_details array (replayed verbatim on later
-          // Anthropic tool-call turns). Both null when the model didn't think.
-          reasoning: (reasoningPayload && typeof reasoningPayload.text === 'string' && reasoningPayload.text.trim())
-            ? reasoningPayload.text
-            : null,
-          reasoningDetails: (reasoningPayload && reasoningPayload.details != null)
-            ? reasoningPayload.details
-            : undefined,
-        }
-      });
-
-      await prisma.chat.update({
-        where: { id: chatId },
-        data: {
-          updatedAt: new Date(),
-          title: chat.title === 'New Chat'
-            ? prompt.slice(0, 50) + (prompt.length > 50 ? '...' : '')
-            : chat.title
-        }
-      });
 
       // Agent harness: persist the run trace now that the assistant row
       // exists — agent_steps rows (full fidelity) + messages.agent_metadata
@@ -1733,6 +1715,7 @@ router.post(
 
     body('chatId').optional().isString(),
     body('files').optional().isArray(),
+    body('idempotencyKey').optional().isString().isLength({ min: 1, max: 200 }),
     // Composer effort picker (Bajo/Medio/Extra/Max → low/medium/high/max).
     // Optional; when present it overrides the auto-decided reasoning depth.
     body('reasoningEffort').optional().isString().isLength({ max: 16 }),
@@ -6276,6 +6259,8 @@ router.post(
         const assistantMeta = {
           ...(codexMeta || {}),
           ...(normalizedRegenerationAttempt ? { regeneration: { attempt: normalizedRegenerationAttempt } } : {}),
+          ...(idempotencyKey ? { idempotencyKey } : {}),
+          ...(streamId ? { streamId } : {}),
           ...(webSearchSources ? { webSources: webSearchSources, webSearchMeta } : {}),
           ...(memoryItems ? { memory: memoryItems, memoryMeta } : {}),
           // Thinking duration for the collapsed trace header ("Pensó durante
@@ -6537,6 +6522,260 @@ router.post(
     }
   }
 );
+// ─── Deterministic text-to-speech for the chat composer's Voice mode ──────
+// The composer's Voice mode used to route through the agentic loop with a
+// prompt that *asked* the model to call generate_speech. Weak fallback models
+// (e.g. gpt-oss-120b) frequently never emit the tool call, so the finalize
+// gate blocked, the breaker tripped, and the user got a degraded
+// "service unavailable" answer instead of audio. Voice is an explicit,
+// unambiguous request — like image/video/music it gets a dedicated,
+// deterministic path that ALWAYS produces the MP3 and persists it as a
+// chat artifact that the existing AgenticStepsRenderer shows as "Generation N".
+function buildSpeechAgentState({ displayText, artifact }) {
+  const safeText = String(displayText || '').slice(0, 200);
+  return {
+    meta: { goal: safeText, model: 'ElevenLabs', tools: ['generate_speech'] },
+    steps: [
+      {
+        id: 'speech-1',
+        label: 'Audio generado',
+        icon: 'check',
+        status: 'done',
+        reasoning: '',
+        toolCalls: [
+          { tool: 'generate_speech', output: { ok: true, preview: artifact.filename } },
+        ],
+      },
+    ],
+    artifacts: [artifact],
+    approvals: [],
+    checkpoints: [],
+    qualityGates: [],
+    repairs: [],
+    finalText: '',
+    done: true,
+  };
+}
+
+function buildMusicAgentState({ displayText, artifact }) {
+  const safeText = String(displayText || '').slice(0, 200);
+  return {
+    meta: { goal: safeText, model: 'ElevenLabs Music', tools: ['generate_music'] },
+    steps: [
+      {
+        id: 'music-1',
+        label: 'Música generada',
+        icon: 'check',
+        status: 'done',
+        reasoning: '',
+        toolCalls: [
+          { tool: 'generate_music', output: { ok: true, preview: artifact.filename } },
+        ],
+      },
+    ],
+    artifacts: [artifact],
+    approvals: [],
+    checkpoints: [],
+    qualityGates: [],
+    repairs: [],
+    finalText: '',
+    done: true,
+  };
+}
+
+router.post(
+  '/generate-speech',
+  [
+    body('text').isString().trim().isLength({ min: 1, max: 5000 }),
+    body('voiceId').optional().isString().trim().isLength({ max: 120 }),
+    body('modelId').optional().isString().trim().isLength({ max: 80 }),
+    body('chatId').optional({ nullable: true }).isString(),
+    body('voiceSettings').optional().isObject(),
+    body('regenerate').optional().isBoolean(),
+  ],
+  authenticateToken,
+  requirePaidPlan({ feature: 'voice_generation' }),
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    if (!elevenLabsTts.isElevenLabsConfigured()) {
+      return res.status(503).json({ ok: false, error: 'El servicio de voz no está configurado.' });
+    }
+
+    const text = String(req.body.text || '').trim();
+    const chatId = typeof req.body.chatId === 'string' && req.body.chatId.trim() ? req.body.chatId.trim() : null;
+    // Edit-and-resend regeneration: the user message was already updated (and
+    // subsequent messages deleted) via PUT /chats/messages/:id, so we must NOT
+    // persist a duplicate user message — only the new assistant audio.
+    const regenerate = req.body.regenerate === true;
+    const voiceId = String(req.body.voiceId || '').trim();
+    const modelId = String(req.body.modelId || '').trim();
+    const voiceSettings = req.body.voiceSettings && typeof req.body.voiceSettings === 'object'
+      ? req.body.voiceSettings
+      : undefined;
+
+    try {
+      const result = await elevenLabsTts.generateSpeechFile({ text, voiceId, modelId, voiceSettings });
+
+      const artifact = {
+        id: `speech-${result.filename}`,
+        filename: `voz-${Date.now()}.mp3`,
+        mime: result.mime,
+        format: 'mp3',
+        kind: 'speech',
+        category: 'audio',
+        sizeBytes: result.sizeBytes,
+        downloadUrl: result.audioUrl,
+        prompt: text.slice(0, 280),
+      };
+
+      const state = buildSpeechAgentState({ displayText: text, artifact });
+      const content = '```agent-task-state\n' + JSON.stringify(state) + '\n```';
+
+      // Persist the turn so it survives a reload (mirrors how the agentic
+      // task runner stores its sentinel-fenced message server-side).
+      let assistantMessageId = null;
+      if (chatId) {
+        try {
+          const saved = await saveChatAndTrackUsage(
+            req.user.id,
+            chatId,
+            text,
+            content,
+            text.length,
+            'elevenlabs-tts',
+            [],
+            [],
+            regenerate,
+          );
+          assistantMessageId = saved?.assistantMessage?.id || null;
+        } catch (saveErr) {
+          // Never fail the user's audio just because persistence hiccuped —
+          // the client still renders the returned state for this session.
+          console.warn('[ai/generate-speech] persistence failed (continuing):', saveErr?.message || saveErr);
+        }
+      }
+
+      return res.json({
+        ok: true,
+        artifact,
+        content,
+        state,
+        assistantMessageId,
+        chatId,
+        voiceId: result.voiceId,
+        modelId: result.modelId,
+      });
+    } catch (error) {
+      console.error('[ai/generate-speech] error:', error?.message || error);
+      const status = error?.code === 'TEXT_REQUIRED' ? 400
+        : error?.code === 'ELEVENLABS_NOT_CONFIGURED' ? 503
+          : 502;
+      return res.status(status).json({
+        ok: false,
+        error: 'No se pudo generar el audio. Intenta de nuevo en unos segundos.',
+      });
+    }
+  }
+);
+
+router.post(
+  '/generate-music',
+  [
+    body('text').isString().trim().isLength({ min: 1, max: 2000 }),
+    body('durationSeconds').optional().isInt({ min: 1, max: 300 }),
+    body('chatId').optional({ nullable: true }).isString(),
+    body('style').optional().isString().trim().isLength({ max: 60 }),
+    body('mood').optional().isString().trim().isLength({ max: 60 }),
+    body('effect').optional().isString().trim().isLength({ max: 60 }),
+    body('influence').optional().isFloat({ min: 0, max: 1 }),
+  ],
+  authenticateToken,
+  requirePaidPlan({ feature: 'music_generation' }),
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    if (!elevenLabsMusic.isElevenLabsConfigured()) {
+      return res.status(503).json({ ok: false, error: 'El servicio de música no está configurado.' });
+    }
+
+    const text = String(req.body.text || '').trim();
+    const chatId = typeof req.body.chatId === 'string' && req.body.chatId.trim() ? req.body.chatId.trim() : null;
+    const durationSeconds = Number.isFinite(Number(req.body.durationSeconds)) ? Number(req.body.durationSeconds) : 30;
+    // Fold the composer's visible settings into the prompt so Style / Mood /
+    // Effect / Prompt-influence actually shape the generated track (the user's
+    // displayed prompt stays `text`).
+    const composedPrompt = elevenLabsMusic.composeMusicPrompt(text, {
+      style: req.body.style,
+      mood: req.body.mood,
+      effect: req.body.effect,
+      influence: req.body.influence,
+    });
+
+    try {
+      const result = await elevenLabsMusic.generateMusicFile({ prompt: composedPrompt || text, durationSeconds });
+
+      const artifact = {
+        id: `music-${result.filename}`,
+        filename: `musica-${Date.now()}.mp3`,
+        mime: result.mime,
+        format: 'mp3',
+        kind: 'music',
+        category: 'audio',
+        sizeBytes: result.sizeBytes,
+        downloadUrl: result.audioUrl,
+        prompt: text.slice(0, 280),
+      };
+
+      const state = buildMusicAgentState({ displayText: text, artifact });
+      const content = '```agent-task-state\n' + JSON.stringify(state) + '\n```';
+
+      // Persist the turn so it survives a reload (mirrors generate-speech).
+      let assistantMessageId = null;
+      if (chatId) {
+        try {
+          const saved = await saveChatAndTrackUsage(
+            req.user.id,
+            chatId,
+            text,
+            content,
+            text.length,
+            'elevenlabs-music',
+            [],
+          );
+          assistantMessageId = saved?.assistantMessage?.id || null;
+        } catch (saveErr) {
+          console.warn('[ai/generate-music] persistence failed (continuing):', saveErr?.message || saveErr);
+        }
+      }
+
+      return res.json({
+        ok: true,
+        artifact,
+        content,
+        state,
+        assistantMessageId,
+        chatId,
+        durationSeconds: result.durationSeconds,
+      });
+    } catch (error) {
+      console.error('[ai/generate-music] error:', error?.message || error);
+      const status = error?.code === 'PROMPT_REQUIRED' ? 400
+        : error?.code === 'ELEVENLABS_NOT_CONFIGURED' ? 503
+          : error?.code === 'INSUFFICIENT_CREDITS' ? 402
+            : 502;
+      return res.status(status).json({
+        ok: false,
+        error: status === 402
+          ? 'Créditos insuficientes para generar música.'
+          : 'No se pudo generar la música. Intenta de nuevo en unos segundos.',
+      });
+    }
+  }
+);
+
 router.post('/stop-stream', authenticateToken, (req, res) => {
   const { streamId } = req.body;
   if (!streamId) {

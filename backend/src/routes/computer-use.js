@@ -2139,46 +2139,6 @@ function generateFallbackHtml(extractedData, originalQuery) {
 </html>`;
 }
 
-// Fallback HTML generation if AI fails
-function generateFallbackHtml(extractedData, originalQuery) {
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Computer Use Report - ${originalQuery}</title>
-    <style>
-        body { font-family: system-ui, -apple-system, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background: #f5f7fa; }
-        .container { background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        .header { text-align: center; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 2px solid #007bff; }
-        h1 { color: #007bff; margin: 0; }
-        .content { margin: 20px 0; }
-        .item { background: #f8f9fa; padding: 15px; margin: 10px 0; border-radius: 5px; border-left: 4px solid #007bff; }
-        .btn { display: inline-block; background: #007bff; color: white; padding: 8px 16px; text-decoration: none; border-radius: 4px; margin: 5px 0; }
-        .btn:hover { background: #0056b3; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>Computer Use Report</h1>
-            <p>Task: ${originalQuery}</p>
-            <p>Completed: ${new Date(extractedData.timestamp).toLocaleString()}</p>
-        </div>
-        <div class="content">
-            <div class="item">
-                <strong>Source:</strong> <a href="${extractedData.url}" target="_blank">${extractedData.title}</a>
-            </div>
-            <div class="item">
-                <strong>Results:</strong><br>
-                ${extractedData.extractedInfo || extractedData.rawContent || 'No content extracted'}
-            </div>
-        </div>
-    </div>
-</body>
-</html>`;
-}
-
 
 // Execute custom actions
 // async function executeCustomAction(page, action) {

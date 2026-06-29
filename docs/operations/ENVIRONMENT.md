@@ -121,6 +121,11 @@ APP_DIR=/root/siraNew/siraGPT scripts/deploy-production.sh
 | `OCR_MODE` | OCR processing mode | `hybrid` |
 | `OCR_MIN_CONFIDENCE` | Minimum OCR confidence | `70` |
 | `OCR_VISION_MODEL` | Vision model for OCR fallback | (auto) |
+| `OCR_PDF_MAX_VARIANTS` | Local OCR variants per PDF page: normalize, contrast, threshold, adaptive, inverted | `4` |
+| `OCR_PDF_DEEP_VARIANT_PAGES` | PDF pages that receive multi-variant OCR before falling back to the fastest pass | `60` |
+| `OCR_PDF_PAGE_META_LIMIT` | Page-level OCR quality rows retained in analysis metadata | `200` |
+| `OCR_PDF_MAX_CHARS` | Maximum OCR text characters retained from one PDF | `6000000` |
+| `OCR_PDF_MAX_PAGES` | Maximum PDF pages to OCR; `0` means unlimited until runtime/resource limits | `0` |
 
 ## 🧪 Agent Runtime
 

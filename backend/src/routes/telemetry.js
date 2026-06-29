@@ -23,12 +23,14 @@ const {
   sanitizeClientEvent,
   buildClientEventAuditEntry,
   isExpectedAuthClientEvent,
+  isExpectedQuotaClientEvent,
 } = require('../services/client-event-log');
 
 router.post('/error', express.json({ limit: '32kb' }), optionalAuth, async (req, res) => {
   const body = (req && req.body && typeof req.body === 'object') ? req.body : {};
   const event = sanitizeClientEvent(body, req);
-  if (!isExpectedAuthClientEvent(event)) {
+  const expectedClientNoise = isExpectedAuthClientEvent(event) || isExpectedQuotaClientEvent(event);
+  if (!expectedClientNoise) {
     // Fire-and-forget — never block the client on alerting I/O.
     Promise.resolve().then(() => alerting.notifyFrontendError({
       page: event.page,
@@ -37,11 +39,11 @@ router.post('/error', express.json({ limit: '32kb' }), optionalAuth, async (req,
       userAgent: event.browser || '',
       userId: (req.user && req.user.id) || null,
     })).catch(() => {});
-  }
 
-  Promise.resolve()
-    .then(() => writeAuditLog(prisma, buildClientEventAuditEntry(event, req)))
-    .catch(() => {});
+    Promise.resolve()
+      .then(() => writeAuditLog(prisma, buildClientEventAuditEntry(event, req)))
+      .catch(() => {});
+  }
 
   const responseBody = { accepted: true };
   const requestId = req.requestId || req.headers?.['x-request-id'] || null;

@@ -84,6 +84,8 @@ Thumbs.db
 /logs
 backend/logs
 *.log
+!backend/tests/fixtures/codex-logs/
+!backend/tests/fixtures/codex-logs/*.log
 
 # Runtime data
 pids

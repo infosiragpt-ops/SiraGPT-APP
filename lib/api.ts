@@ -430,6 +430,63 @@ export type GrokVoiceTurnEnvelope = {
   assistant?: GrokVoiceAssistantReply
 }
 
+export type OrganizationRole = "VIEWER" | "MEMBER" | "ADMIN" | "OWNER"
+
+export type OrganizationSummary = {
+  id: string
+  name: string
+  slug?: string | null
+  billingPlan?: string | null
+  ownerId?: string | null
+  monthlyQuota?: string | number | null
+  usedThisMonth?: string | number | null
+  createdAt?: string | null
+  role?: OrganizationRole
+  joinedAt?: string | null
+}
+
+export type MyOrganizationsEnvelope = {
+  items: OrganizationSummary[]
+}
+
+export type OrganizationInvitation = {
+  id: string
+  email: string
+  role: Exclude<OrganizationRole, "OWNER">
+  token: string
+  magicLink: string
+  expiresAt: string
+}
+
+export type UserNotification = {
+  id: string
+  type: string
+  title: string
+  message: string
+  severity?: "info" | "warning" | "critical"
+  read: boolean
+  readAt?: string | null
+  createdAt: string
+  orgId?: string | null
+  metadata?: Record<string, any> | null
+}
+
+export type UserNotificationsEnvelope = {
+  items: UserNotification[]
+  total: number
+  unreadCount: number
+  nextCursor?: string | null
+}
+
+export type OrganizationInvitationAcceptResult = {
+  ok: boolean
+  needs_verification?: boolean
+  expiresAt?: string
+  message?: string
+  organization?: OrganizationSummary
+  role?: OrganizationRole
+}
+
 class ApiClient {
   private baseURL: string;
   private token: string | null = null;
@@ -2076,13 +2133,19 @@ class ApiClient {
     return this.request(`/payments/analytics?period=${period}`);
   }
 
-  async getNotifications(limit = 50) {
-    return this.request(`/payments/notifications?limit=${limit}`);
+  async getNotifications(limit = 50): Promise<UserNotificationsEnvelope> {
+    return (await this.request(`/users/me/notifications?filter=all&limit=${limit}`)) as UserNotificationsEnvelope;
   }
 
   async markNotificationRead(notificationId: string) {
-    return this.request(`/payments/notifications/${notificationId}/read`, {
-      method: 'PUT',
+    return this.request(`/users/me/notifications/${encodeURIComponent(notificationId)}/read`, {
+      method: 'POST',
+    });
+  }
+
+  async markAllNotificationsRead() {
+    return this.request('/users/me/notifications/read-all', {
+      method: 'POST',
     });
   }
 
@@ -2103,6 +2166,39 @@ class ApiClient {
   async getPayments(params?: { page?: number; limit?: number }) {
     const query = new URLSearchParams(params as any).toString();
     return this.request(`/payments${query ? `?${query}` : ''}`);
+  }
+
+  // Organization / team endpoints
+  async listMyOrganizations(): Promise<MyOrganizationsEnvelope> {
+    return (await this.request('/orgs/me')) as MyOrganizationsEnvelope;
+  }
+
+  async createOrganization(data: { name: string; slug?: string }): Promise<OrganizationSummary> {
+    return (await this.request('/orgs', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })) as OrganizationSummary;
+  }
+
+  async inviteOrganizationMember(
+    orgId: string,
+    data: {
+      email: string
+      role?: Exclude<OrganizationRole, "OWNER">
+      projectName?: string
+      workspaceUrl?: string
+    },
+  ): Promise<OrganizationInvitation> {
+    return (await this.request(`/orgs/${encodeURIComponent(orgId)}/invite`, {
+      method: 'POST',
+      body: JSON.stringify({ role: 'MEMBER', ...data }),
+    })) as OrganizationInvitation;
+  }
+
+  async acceptOrganizationInvitation(token: string): Promise<OrganizationInvitationAcceptResult> {
+    return (await this.request(`/orgs/invitation/${encodeURIComponent(token)}/accept`, {
+      method: 'POST',
+    })) as OrganizationInvitationAcceptResult;
   }
 
   // User endpoints
@@ -2578,6 +2674,57 @@ class ApiClient {
     };
   }) {
     return this.request('/elevenlabs/text-to-speech', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  // Deterministic text-to-speech for the chat composer's Voice mode. Unlike the
+  // agentic path (which depended on a weak model choosing to call a tool), this
+  // always produces the MP3 and persists it as a "Generation N" chat artifact.
+  async generateSpeechMessage(data: {
+    text: string;
+    chatId?: string | null;
+    voiceId?: string;
+    modelId?: string;
+    regenerate?: boolean;
+    voiceSettings?: {
+      stability?: number;
+      similarity_boost?: number;
+      style?: number;
+      use_speaker_boost?: boolean;
+    };
+  }): Promise<{
+    ok: boolean;
+    artifact: { id: string; filename: string; mime: string; downloadUrl: string; sizeBytes: number; kind?: string };
+    content: string;
+    state: any;
+    assistantMessageId: string | null;
+    chatId: string | null;
+  }> {
+    return this.request('/ai/generate-speech', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async generateMusicMessage(data: {
+    text: string;
+    chatId?: string | null;
+    durationSeconds?: number;
+    style?: string;
+    mood?: string;
+    effect?: string;
+    influence?: number;
+  }): Promise<{
+    ok: boolean;
+    artifact: { id: string; filename: string; mime: string; downloadUrl: string; sizeBytes: number; kind?: string };
+    content: string;
+    state: any;
+    assistantMessageId: string | null;
+    chatId: string | null;
+  }> {
+    return this.request('/ai/generate-music', {
       method: 'POST',
       body: JSON.stringify(data),
     });

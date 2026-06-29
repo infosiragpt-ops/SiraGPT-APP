@@ -1,5 +1,5 @@
 {
-  "*.{js,jsx,ts,tsx}": [
+  "!(vendor)/**/*.{js,jsx,ts,tsx}": [
     "bash scripts/check-secrets.sh",
     "next lint --fix --max-warnings 97 --file"
   ],

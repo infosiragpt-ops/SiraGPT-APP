@@ -45,7 +45,7 @@ import {
   Settings,
   PenSquare,
   GraduationCap,
-  MessageSquare, Menu as MenuIcon} from "lucide-react"
+  MessageSquare, Disc3, Menu as MenuIcon} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
@@ -144,6 +144,7 @@ import { Virtuoso } from "react-virtuoso"
 import SpeechToTextComponent from "./speech-to-text-component"
 import TextToSpeechComponent from "./text-to-speech-component"
 import MusicGenerationComponent from "./MusicGenerationComponent"
+import VoiceCatalogModal from "./voice/voice-catalog-modal"
 import { agenticSearchService, type AgenticEvent, type AgenticSource } from "@/lib/agentic-search-service"
 import { agentTaskService, normalizeAgentTaskErrorMessage, reduceEvent, initialAgentState, type AgentTaskState } from "@/lib/agent-task-service"
 import { devLog } from "@/lib/dev-log"
@@ -467,14 +468,14 @@ type MusicStyle = "Auto" | "Cinematic" | "Pop" | "Electronic" | "Ambient" | "Orc
 type MusicMood = "Balanced" | "Energetic" | "Emotional" | "Dark" | "Happy" | "Epic" | "Relaxed"
 type MusicEffect = "None" | "Studio Master" | "Spatial" | "Warm Tape" | "Radio Ready" | "Lo-Fi"
 
-const IMAGE_ASPECT_RATIO_OPTIONS: Array<{ value: ImageAspectRatio; label: string; ratio: string; className: string }> = [
-  { value: "1:1", label: "Square", ratio: "1:1", className: "h-7 w-7" },
-  { value: "2:3", label: "Portrait", ratio: "2:3", className: "h-8 w-[22px]" },
-  { value: "3:2", label: "Landscape", ratio: "3:2", className: "h-[22px] w-8" },
-  { value: "3:4", label: "Portrait", ratio: "3:4", className: "h-8 w-6" },
+const IMAGE_ASPECT_RATIO_OPTIONS: Array<{ value: ImageAspectRatio; label: string; ratio: string; className: string; visibleByDefault?: boolean }> = [
+  { value: "1:1", label: "Square", ratio: "1:1", className: "h-7 w-7", visibleByDefault: true },
+  { value: "2:3", label: "Portrait", ratio: "2:3", className: "h-8 w-[22px]", visibleByDefault: true },
+  { value: "3:2", label: "Landscape", ratio: "3:2", className: "h-[22px] w-8", visibleByDefault: true },
+  { value: "3:4", label: "Portrait", ratio: "3:4", className: "h-8 w-6", visibleByDefault: true },
   { value: "4:3", label: "Classic", ratio: "4:3", className: "h-6 w-8" },
   { value: "9:16", label: "Story", ratio: "9:16", className: "h-8 w-[18px]" },
-  { value: "16:9", label: "Wide", ratio: "16:9", className: "h-[18px] w-9" },
+  { value: "16:9", label: "Wide", ratio: "16:9", className: "h-[18px] w-9", visibleByDefault: true },
 ]
 
 const IMAGE_QUALITY_OPTIONS: ImageQuality[] = ["512px", "1K", "2K", "4K"]
@@ -498,6 +499,8 @@ const MUSIC_MODEL_OPTIONS: MusicModel[] = ["ElevenLabs", "Lyria 3 Pro", "Mimo Ma
 const MUSIC_STYLE_OPTIONS: MusicStyle[] = ["Auto", "Cinematic", "Pop", "Electronic", "Ambient", "Orchestral", "Latin", "Hip-Hop", "Jazz"]
 const MUSIC_MOOD_OPTIONS: MusicMood[] = ["Balanced", "Energetic", "Emotional", "Dark", "Happy", "Epic", "Relaxed"]
 const MUSIC_EFFECT_OPTIONS: MusicEffect[] = ["None", "Studio Master", "Spatial", "Warm Tape", "Radio Ready", "Lo-Fi"]
+const VOICE_COMPOSER_PLACEHOLDER = "Escribe el texto que quieres convertir en voz"
+
 const DEFAULT_IMAGE_MODEL = ""
 const DEFAULT_IMAGE_PROVIDER = "OpenAI"
 const DEFAULT_VIDEO_MODEL = ""
@@ -2128,6 +2131,7 @@ const ActiveToolsDisplay = ({
   setSelectedImageModel,
   isVoiceGenerationActive,
   setIsVoiceGenerationActive,
+  isGeneratingVoice = false,
   selectedVoiceModel,
   setSelectedVoiceModel,
   selectedVoiceLanguage,
@@ -2138,6 +2142,8 @@ const ActiveToolsDisplay = ({
   setSelectedVoiceStability,
   selectedVoiceEffect,
   setSelectedVoiceEffect,
+  onOpenVoiceCatalog,
+  selectedVoiceName,
   isMusicGenerationActive,
   setIsMusicGenerationActive,
   selectedMusicModel,
@@ -2214,6 +2220,7 @@ const ActiveToolsDisplay = ({
   setSelectedImageModel: (model: string) => void;
   isVoiceGenerationActive: boolean;
   setIsVoiceGenerationActive: (value: boolean) => void;
+  isGeneratingVoice?: boolean;
   selectedVoiceModel: VoiceModel;
   setSelectedVoiceModel: (model: VoiceModel) => void;
   selectedVoiceLanguage: VoiceLanguage;
@@ -2224,6 +2231,8 @@ const ActiveToolsDisplay = ({
   setSelectedVoiceStability: (stability: number) => void;
   selectedVoiceEffect: VoiceEffect;
   setSelectedVoiceEffect: (effect: VoiceEffect) => void;
+  onOpenVoiceCatalog: () => void;
+  selectedVoiceName?: string | null;
   isMusicGenerationActive: boolean;
   setIsMusicGenerationActive: (value: boolean) => void;
   selectedMusicModel: MusicModel;
@@ -2285,6 +2294,7 @@ const ActiveToolsDisplay = ({
   handleWordConnectorToggle: () => void;
   handleExcelConnectorToggle: () => void;
 }) => {
+  const [showAllImageRatios, setShowAllImageRatios] = React.useState(false);
   const [showAllVideoRatios, setShowAllVideoRatios] = React.useState(false);
   const [showAllVideoDurations, setShowAllVideoDurations] = React.useState(false);
   const activeComputerUseMode = computerUseAppMode || "computer";
@@ -2316,6 +2326,11 @@ const ActiveToolsDisplay = ({
   const hasConnectors = activeConnectors.length > 0;
   const hasOtherTools = isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive || isWebSearchActive;
   const hasThesis = chatType === 'thesis';
+  const visibleImageAspectRatioOptions = React.useMemo(
+    () => IMAGE_ASPECT_RATIO_OPTIONS.filter(option => showAllImageRatios || option.visibleByDefault || option.value === selectedImageAspectRatio),
+    [selectedImageAspectRatio, showAllImageRatios]
+  );
+  const hiddenImageAspectRatioCount = IMAGE_ASPECT_RATIO_OPTIONS.filter(option => !option.visibleByDefault).length;
 
   const handleCloseAllConnectors = () => {
     setIsGmailActive(false);
@@ -2378,6 +2393,7 @@ const ActiveToolsDisplay = ({
   };
 
   const handleVoiceGenerationClose = () => {
+    if (isGeneratingVoice) return;
     setIsVoiceGenerationActive(false);
     setChatType('text');
   };
@@ -2681,22 +2697,25 @@ const ActiveToolsDisplay = ({
       )}
       {isImageGenerationActive && (
         <>
-          <div className="group/image-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-pink-300/70 bg-pink-100/88 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-pink-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_28px_-22px_rgba(219,39,119,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01] hover:border-pink-400/80 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_16px_36px_-22px_rgba(219,39,119,0.9)] dark:border-pink-500/40 dark:bg-pink-900/25 dark:text-pink-200">
-            <span className="pointer-events-none absolute -inset-8 -z-10 rounded-full bg-[conic-gradient(from_90deg,transparent_0deg,rgba(244,114,182,0.0)_70deg,rgba(244,114,182,0.55)_130deg,rgba(236,72,153,0.22)_190deg,transparent_280deg)] opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
-            <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/image-liquid:translate-x-[155%] dark:via-white/25" />
-            <span className="pointer-events-none absolute left-7 top-1 h-1.5 w-1.5 rounded-full bg-pink-400/75 shadow-[0_0_12px_rgba(236,72,153,0.75)] motion-safe:animate-pulse" />
-            <span className="pointer-events-none absolute bottom-1 right-9 h-1 w-1 rounded-full bg-white/90 shadow-[0_0_10px_rgba(255,255,255,0.9)] motion-safe:animate-bounce" />
-            <Palette className="relative z-10 h-4 w-4 drop-shadow-[0_0_8px_rgba(219,39,119,0.35)]" />
+          <div
+            className="image-liquid-chip group/image-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full border px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold backdrop-blur-xl transition-all duration-300 hover:scale-[1.01]"
+            style={{ "--image-liquid-red": "#FF0000" } as React.CSSProperties}
+          >
+            <span className="image-liquid-chip__wave" />
+            <span className="image-liquid-chip__gloss" />
+            <span className="image-liquid-chip__pulse" />
+            <span className="image-liquid-chip__spark" />
+            <Palette className="image-liquid-chip__icon relative z-10 h-4 w-4" />
             <span className="relative z-10 text-[12px] sm:text-[14px]">Imágenes</span>
-            {isGeneratingImage && <span className="relative z-10 h-1.5 w-1.5 rounded-full bg-pink-500 animate-pulse" />}
+            {isGeneratingImage && <span className="image-liquid-chip__status relative z-10 h-1.5 w-1.5 rounded-full animate-pulse" />}
             <Button
               variant="ghost"
               size="sm"
               className={cn(
-                "relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0",
+                "image-liquid-chip__close relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0",
                 isGeneratingImage
                   ? "opacity-45 cursor-not-allowed"
-                  : "hover:bg-white/50 dark:hover:bg-pink-800/30"
+                  : "hover:bg-[rgba(255,0,0,0.10)] dark:hover:bg-[rgba(255,0,0,0.16)]"
               )}
               onClick={handleImageGenerationClose}
               disabled={isGeneratingImage}
@@ -2732,16 +2751,16 @@ const ActiveToolsDisplay = ({
               align="start"
               sideOffset={9}
               collisionPadding={12}
-              className="w-[min(calc(100vw-1.25rem),24rem)] overflow-hidden rounded-[22px] border border-zinc-200/65 bg-white/86 p-0 text-zinc-950 shadow-[0_22px_70px_-36px_rgba(15,23,42,0.55),inset_0_1px_0_rgba(255,255,255,0.85)] backdrop-blur-2xl dark:border-white/14 dark:bg-zinc-950/72 dark:text-white dark:shadow-[0_24px_80px_-36px_rgba(0,0,0,0.95),inset_0_1px_0_rgba(255,255,255,0.16)]"
+              className="image-settings-menu w-[min(calc(100vw-1.25rem),26rem)]"
             >
-              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_24%_18%,rgba(255,255,255,0.92),transparent_30%),radial-gradient(circle_at_72%_45%,rgba(15,23,42,0.08),transparent_34%),linear-gradient(135deg,rgba(255,255,255,0.72),rgba(255,255,255,0.26)_44%,rgba(255,255,255,0.58))] dark:bg-[radial-gradient(circle_at_24%_18%,rgba(255,255,255,0.15),transparent_30%),radial-gradient(circle_at_72%_45%,rgba(255,255,255,0.08),transparent_34%),linear-gradient(135deg,rgba(255,255,255,0.10),rgba(255,255,255,0.02)_44%,rgba(255,255,255,0.06))]" />
-              <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-white/70 dark:bg-white/20" />
-              <div className="relative z-10">
-                <section className="px-4 pb-4 pt-4 sm:px-5 sm:pb-5 sm:pt-5">
-                  <h3 className="text-[17px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Aspect Ratio</h3>
-                  <div className="mt-4 grid grid-cols-5 gap-1.5 sm:gap-2" role="radiogroup" aria-label="Aspect ratio">
-                  {IMAGE_ASPECT_RATIO_OPTIONS.map(option => {
-                    if (option.value === "4:3" || option.value === "9:16") return null;
+              <div>
+                <section className="image-settings-section">
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="image-settings-label">Aspect Ratio</h3>
+                    <span className="image-settings-meta">{showAllImageRatios ? "7 formatos" : "Principales"}</span>
+                  </div>
+                  <div className="mt-3 grid grid-cols-4 gap-1.5 sm:grid-cols-5 sm:gap-2" role="radiogroup" aria-label="Aspect ratio">
+                  {visibleImageAspectRatioOptions.map(option => {
                     const selected = option.value === selectedImageAspectRatio;
                     return (
                       <button
@@ -2750,43 +2769,41 @@ const ActiveToolsDisplay = ({
                         role="radio"
                         aria-checked={selected}
                         className={cn(
-                          "group/ratio-option relative flex h-[58px] min-w-0 flex-col items-center justify-center gap-2 overflow-hidden rounded-xl text-center transition-all duration-200",
-                          selected
-                            ? "bg-zinc-950/[0.075] text-zinc-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.80),0_12px_26px_-22px_rgba(15,23,42,0.55)] dark:bg-white/12 dark:text-white dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.16),0_16px_34px_-24px_rgba(255,255,255,0.35)]"
-                            : "text-zinc-600 hover:bg-zinc-950/[0.045] hover:text-zinc-950 dark:text-white/68 dark:hover:bg-white/[0.07] dark:hover:text-white"
+                          "image-ratio-option group/image-ratio-option",
+                          selected && "is-selected"
                         )}
                         onClick={() => setSelectedImageAspectRatio(option.value)}
                         title={`${option.label} ${option.ratio}`}
                       >
-                        <span className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_28%_5%,rgba(255,255,255,0.65),transparent_48%)] opacity-0 transition-opacity duration-200 group-hover/ratio-option:opacity-100 dark:bg-[radial-gradient(circle_at_28%_5%,rgba(255,255,255,0.20),transparent_48%)]" />
-                        <span className="relative z-10 text-[13px] font-medium leading-none tabular-nums">{option.ratio}</span>
-                        <span className="relative z-10 flex h-6 items-center justify-center">
+                        <span className="relative z-10 text-[12px] font-semibold leading-none tabular-nums">{option.ratio}</span>
+                        <span className="relative z-10 flex h-7 items-center justify-center">
                           <span
                             className={cn(
-                              "rounded-[4px] border transition-all duration-200",
+                              "image-ratio-swatch",
                               option.className,
-                              selected
-                                ? "border-zinc-950 bg-white/45 shadow-[0_0_0_3px_rgba(24,24,27,0.06)] dark:border-white dark:bg-white/8 dark:shadow-[0_0_0_3px_rgba(255,255,255,0.10)]"
-                                : "border-zinc-500/65 bg-white/20 group-hover/ratio-option:border-zinc-800 dark:border-white/62 dark:bg-transparent dark:group-hover/ratio-option:border-white"
+                              selected && "is-selected"
                             )}
                           />
                         </span>
+                        <span className="relative z-10 text-[10px] font-medium leading-none">{option.label}</span>
                       </button>
                     )
                   })}
                   </div>
                   <button
                     type="button"
-                    className="mt-4 inline-flex items-center gap-1.5 rounded-full text-[13px] font-medium leading-none text-zinc-600 transition-colors hover:text-zinc-950 dark:text-white/66 dark:hover:text-white"
+                    onClick={() => setShowAllImageRatios(value => !value)}
+                    className="image-settings-more"
                     aria-label="Ver todos los aspect ratios"
+                    aria-expanded={showAllImageRatios}
                   >
-                    View All <ChevronDown className="h-3.5 w-3.5" />
+                    {showAllImageRatios ? "View Less" : `View All (+${hiddenImageAspectRatioCount})`} <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", showAllImageRatios && "rotate-180")} />
                   </button>
                 </section>
 
-                <section className="border-t border-zinc-950/8 px-4 py-4 dark:border-white/10 sm:px-5 sm:py-5">
-                  <h3 className="text-[17px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Quality</h3>
-                  <div className="mt-4 flex flex-wrap items-center gap-2" role="radiogroup" aria-label="Image quality">
+                <section className="image-settings-section">
+                  <h3 className="image-settings-label">Quality</h3>
+                  <div className="mt-3 flex flex-wrap items-center gap-2" role="radiogroup" aria-label="Image quality">
                     {IMAGE_QUALITY_OPTIONS.map(option => {
                       const selected = option === selectedImageQuality;
                       return (
@@ -2797,8 +2814,8 @@ const ActiveToolsDisplay = ({
                           aria-checked={selected}
                           onClick={() => setSelectedImageQuality(option)}
                           className={cn(
-                            "relative h-9 rounded-xl px-3 text-[14px] font-medium leading-none text-zinc-600 transition-all duration-200 hover:bg-zinc-950/[0.045] hover:text-zinc-950 dark:text-white/68 dark:hover:bg-white/[0.07] dark:hover:text-white",
-                            selected && "bg-zinc-950/[0.075] text-zinc-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_12px_24px_-22px_rgba(15,23,42,0.45)] dark:bg-white/13 dark:text-white dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.16),0_12px_30px_-24px_rgba(255,255,255,0.55)]"
+                            "image-setting-pill",
+                            selected && "is-selected"
                           )}
                         >
                           {option}
@@ -2808,9 +2825,9 @@ const ActiveToolsDisplay = ({
                   </div>
                 </section>
 
-                <section className="border-t border-zinc-950/8 px-4 py-4 dark:border-white/10 sm:px-5 sm:py-5">
-                  <h3 className="text-[17px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Number of Images</h3>
-                  <div className="mt-4 flex flex-wrap items-center gap-2" role="radiogroup" aria-label="Number of images">
+                <section className="image-settings-section">
+                  <h3 className="image-settings-label">Number of Images</h3>
+                  <div className="mt-3 flex flex-wrap items-center gap-2" role="radiogroup" aria-label="Number of images">
                     {IMAGE_COUNT_OPTIONS.map(option => {
                       const selected = option === selectedImageCount;
                       return (
@@ -2821,8 +2838,8 @@ const ActiveToolsDisplay = ({
                           aria-checked={selected}
                           onClick={() => setSelectedImageCount(option)}
                           className={cn(
-                            "h-9 min-w-9 rounded-xl px-3 text-[14px] font-medium leading-none text-zinc-600 transition-all duration-200 hover:bg-zinc-950/[0.045] hover:text-zinc-950 dark:text-white/68 dark:hover:bg-white/[0.07] dark:hover:text-white",
-                            selected && "bg-zinc-950/[0.075] text-zinc-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_12px_24px_-22px_rgba(15,23,42,0.45)] dark:bg-white/13 dark:text-white dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.16),0_12px_30px_-24px_rgba(255,255,255,0.55)]"
+                            "image-setting-pill min-w-9",
+                            selected && "is-selected"
                           )}
                         >
                           {option}
@@ -2844,12 +2861,14 @@ const ActiveToolsDisplay = ({
             <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/voice-liquid:translate-x-[155%] dark:via-white/25" />
             <AudioLines className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 drop-shadow-[0_0_8px_rgba(8,145,178,0.35)]" />
             <span className="relative z-10 text-[12px] sm:text-[14px]">Voz</span>
+            {isGeneratingVoice && <span className="relative z-10 h-1.5 w-1.5 rounded-full bg-cyan-500 motion-safe:animate-pulse" />}
             <Button
               variant="ghost"
               size="sm"
               className="relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0 hover:bg-white/50 dark:hover:bg-cyan-800/30"
               onClick={handleVoiceGenerationClose}
-              title="Cerrar voz"
+              disabled={isGeneratingVoice}
+              title={isGeneratingVoice ? "La herramienta sigue activa durante la generación" : "Cerrar voz"}
             >
               <X className="h-4 w-4" />
             </Button>
@@ -2859,6 +2878,20 @@ const ActiveToolsDisplay = ({
             setSelectedVoiceModel(name as VoiceModel);
             track("model.selected", { model: name, provider: name === "ElevenLabs" ? "ElevenLabs" : "Mimo", surface: "voice-tool-picker" });
           })}
+
+          {/* Spinning "Voice" disc — opens the Voice Catalog (voice picker +
+              configurations). Sits right after the provider selector per the
+              requested order: provider → Voice → configurations. */}
+          <button
+            type="button"
+            onClick={() => onOpenVoiceCatalog()}
+            title="Abrir catálogo de voces"
+            aria-label="Abrir catálogo de voces"
+            className="group/voice-disc relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border border-violet-200/80 bg-white/86 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-violet-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(124,58,237,0.5)] backdrop-blur-xl transition-all duration-200 hover:border-violet-300 hover:bg-white dark:border-violet-400/30 dark:bg-zinc-900/82 dark:text-violet-200 dark:hover:bg-zinc-800/92"
+          >
+            <Disc3 className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 motion-safe:animate-spin" style={{ animationDuration: "3.5s" }} />
+            <span className="relative z-10 max-w-[96px] truncate">{selectedVoiceName || "Voice"}</span>
+          </button>
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -3012,8 +3045,8 @@ const ActiveToolsDisplay = ({
               >
                 <span className="pointer-events-none absolute inset-y-[-55%] left-[-65%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-0 blur-sm transition-all duration-700 group-hover/music-trigger:left-[92%] group-hover/music-trigger:opacity-100 dark:via-white/20" />
                 <Settings className="h-3.5 sm:h-4 w-3.5 sm:w-4" />
-                <span className="hidden sm:inline">{selectedMusicStyle}</span>
-                <span>{selectedMusicDuration}s</span>
+                <span>{selectedMusicStyle}</span>
+                <span>{selectedMusicDuration < 60 ? `${selectedMusicDuration}s` : `${Math.floor(selectedMusicDuration / 60)}:${String(selectedMusicDuration % 60).padStart(2, "0")}`}</span>
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent
@@ -3081,14 +3114,14 @@ const ActiveToolsDisplay = ({
                       <span className="text-[12px] font-medium leading-none text-zinc-800 dark:text-white/90">Duration</span>
                       <Info className="h-3 w-3 text-zinc-500 dark:text-white/62" />
                     </div>
-                    <span className="text-[10.5px] font-medium text-zinc-500 dark:text-white/72">{selectedMusicDuration}s</span>
+                    <span className="text-[10.5px] font-medium text-zinc-500 dark:text-white/72">{selectedMusicDuration < 60 ? `${selectedMusicDuration}s` : `${Math.floor(selectedMusicDuration / 60)}:${String(selectedMusicDuration % 60).padStart(2, "0")}`}</span>
                   </div>
                   <Slider
                     value={[selectedMusicDuration]}
                     onValueChange={([value]) => setSelectedMusicDuration(value)}
                     min={5}
-                    max={30}
-                    step={1}
+                    max={180}
+                    step={5}
                     className="mt-2"
                   />
                 </div>
@@ -3957,6 +3990,8 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     const customGptIcon = customGpt?.iconUrl;
     const activeModelLabel = selectedGptModel?.displayName || currentChat?.model || customGpt?.modelName || selectedModel || "Modelo";
     const activeModelName = currentChat?.model || customGpt?.modelName || selectedModel;
+    const gptMenuItemClass = "h-11 rounded-xl px-2.5 text-[13px] font-medium";
+    const gptMenuIconClass = "mr-2.5 h-4 w-4 shrink-0 text-muted-foreground";
 
     const GptIcon = () => customGptIcon ? (
       customGptIcon.startsWith('http') || customGptIcon.startsWith('https') || customGptIcon.startsWith('data:') ? (
@@ -3995,19 +4030,19 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
             <ChevronDown className="h-4 w-4 shrink-0 opacity-55 transition-transform duration-200 group-data-[state=open]/gpt:rotate-180" />
           </DropdownMenuTrigger>
 
-          <DropdownMenuContent align="start" sideOffset={8} collisionPadding={12} className="w-[calc(100vw-1.5rem)] overflow-hidden rounded-3xl border-border/70 p-2 shadow-2xl sm:w-[328px]">
-            <div className="mb-1 flex items-center gap-3 rounded-2xl px-2 py-2">
+          <DropdownMenuContent align="start" sideOffset={8} collisionPadding={12} className="w-[292px] max-w-[calc(100vw-1rem)] overflow-hidden rounded-2xl border-border/70 bg-background/95 p-1.5 shadow-xl backdrop-blur">
+            <div className="mb-1 flex items-center gap-2.5 rounded-xl px-2.5 py-2">
               <GptIcon />
               <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-semibold">{customGptName}</div>
-                <div className="truncate text-xs text-muted-foreground">{activeModelLabel}</div>
+                <div className="truncate text-[13px] font-semibold leading-5">{customGptName}</div>
+                <div className="truncate text-[11px] font-medium leading-4 text-muted-foreground">{activeModelLabel}</div>
               </div>
             </div>
 
             <DropdownMenuSub>
-              <DropdownMenuSubTrigger className="h-12 rounded-2xl px-3 text-[15px]">
-                <div className="flex items-center gap-3">
-                  <Settings className="h-4 w-4" />
+              <DropdownMenuSubTrigger className={cn(gptMenuItemClass, "justify-between")}>
+                <div className="flex min-w-0 items-center">
+                  <Settings className={gptMenuIconClass} />
                   <span>Modelo</span>
                 </div>
               </DropdownMenuSubTrigger>
@@ -4076,12 +4111,14 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
               </DropdownMenuPortal>
             </DropdownMenuSub>
 
-            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); startNewGptChat(); }} className="h-12 rounded-2xl px-3 text-[15px]">
-              <PenSquare className="mr-3 h-5 w-5" />
+            <DropdownMenuSeparator className="my-1" />
+
+            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); startNewGptChat(); }} className={gptMenuItemClass}>
+              <PenSquare className={gptMenuIconClass} />
               Nuevo chat
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); setGptDialog("about"); }} className="h-12 rounded-2xl px-3 text-[15px]">
-              <Info className="mr-3 h-5 w-5" />
+            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); setGptDialog("about"); }} className={gptMenuItemClass}>
+              <Info className={gptMenuIconClass} />
               Acerca de
             </DropdownMenuItem>
             <DropdownMenuItem
@@ -4089,30 +4126,31 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
                 event.preventDefault();
                 if (customGpt?.id) window.location.href = `/gpts/create?edit=${customGpt.id}`;
               }}
-              className="h-12 rounded-2xl px-3 text-[15px]"
+              className={gptMenuItemClass}
             >
-              <Lock className="mr-3 h-5 w-5" />
-              Configuración de privacidad
+              <Lock className={gptMenuIconClass} />
+              Privacidad
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); togglePinGpt(); }} className="h-12 rounded-2xl px-3 text-[15px]">
-              <Pin className="mr-3 h-5 w-5" />
-              {isGptPinned ? "Quitar de la barra lateral" : "Mantener en la barra lateral"}
+            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); togglePinGpt(); }} className={gptMenuItemClass}>
+              <Pin className={gptMenuIconClass} />
+              {isGptPinned ? "Quitar de barra" : "Fijar en barra"}
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); copyGptLink(); }} className="h-12 rounded-2xl px-3 text-[15px]">
-              <Link2 className="mr-3 h-5 w-5" />
+            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); copyGptLink(); }} className={gptMenuItemClass}>
+              <Link2 className={gptMenuIconClass} />
               Copiar enlace
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); setGptDialog("feedback"); }} className="h-12 rounded-2xl px-3 text-[15px]">
-              <MessageCircle className="mr-3 h-5 w-5" />
-              Enviar comentarios
+            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); setGptDialog("feedback"); }} className={gptMenuItemClass}>
+              <MessageCircle className={gptMenuIconClass} />
+              Comentarios
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); setGptDialog("rate"); }} className="h-12 rounded-2xl px-3 text-[15px]">
-              <MessageSquare className="mr-3 h-5 w-5" />
-              Valorar GPT
+            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); setGptDialog("rate"); }} className={gptMenuItemClass}>
+              <MessageSquare className={gptMenuIconClass} />
+              Valorar
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); setGptDialog("report"); }} className="h-12 rounded-2xl px-3 text-[15px]">
-              <Flag className="mr-3 h-5 w-5" />
-              Denunciar GPT
+            <DropdownMenuSeparator className="my-1" />
+            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); setGptDialog("report"); }} className={cn(gptMenuItemClass, "text-destructive focus:text-destructive")}>
+              <Flag className="mr-2.5 h-4 w-4 shrink-0" />
+              Denunciar
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -4457,16 +4495,39 @@ function ChatInterfaceContent() {
   const [selectedImageCount, setSelectedImageCount] = React.useState<ImageGenerationCount>(1)
   const [selectedImageModel, setSelectedImageModel] = React.useState(DEFAULT_IMAGE_MODEL)
   const [isVoiceGenerationActive, setIsVoiceGenerationActive] = React.useState(false)
+  const [isGeneratingVoice, setIsGeneratingVoice] = React.useState(false)
   const [selectedVoiceModel, setSelectedVoiceModel] = React.useState<VoiceModel>("ElevenLabs")
   const [selectedVoiceLanguage, setSelectedVoiceLanguage] = React.useState<VoiceLanguage>("Spanish")
   const [selectedVoiceAccent, setSelectedVoiceAccent] = React.useState<VoiceAccent>("Latino")
   const [selectedVoiceStability, setSelectedVoiceStability] = React.useState(100)
   const [selectedVoiceEffect, setSelectedVoiceEffect] = React.useState<VoiceEffect>("Studio Clean")
+  // Specific ElevenLabs voice chosen from the Voice Catalog. Persisted so the
+  // selection survives reloads. Empty → backend uses the multilingual default.
+  const [selectedVoiceId, setSelectedVoiceId] = React.useState<string>("")
+  const [selectedVoiceName, setSelectedVoiceName] = React.useState<string>("")
+  const [voiceCatalogOpen, setVoiceCatalogOpen] = React.useState(false)
+  React.useEffect(() => {
+    try {
+      const id = localStorage.getItem("siragpt:selectedVoiceId") || ""
+      const name = localStorage.getItem("siragpt:selectedVoiceName") || ""
+      if (id) setSelectedVoiceId(id)
+      if (name) setSelectedVoiceName(name)
+    } catch { /* localStorage unavailable */ }
+  }, [])
+  const handleSelectVoice = React.useCallback((voiceId: string, voiceName: string) => {
+    setSelectedVoiceId(voiceId)
+    setSelectedVoiceName(voiceName)
+    try {
+      localStorage.setItem("siragpt:selectedVoiceId", voiceId)
+      localStorage.setItem("siragpt:selectedVoiceName", voiceName)
+    } catch { /* localStorage unavailable */ }
+  }, [])
   const [isMusicGenerationActive, setIsMusicGenerationActive] = React.useState(false)
+  const [isGeneratingMusic, setIsGeneratingMusic] = React.useState(false)
   const [selectedMusicModel, setSelectedMusicModel] = React.useState<MusicModel>("ElevenLabs")
   const [selectedMusicStyle, setSelectedMusicStyle] = React.useState<MusicStyle>("Auto")
   const [selectedMusicMood, setSelectedMusicMood] = React.useState<MusicMood>("Balanced")
-  const [selectedMusicDuration, setSelectedMusicDuration] = React.useState(10)
+  const [selectedMusicDuration, setSelectedMusicDuration] = React.useState(30)
   const [selectedMusicInfluence, setSelectedMusicInfluence] = React.useState(0.3)
   const [selectedMusicEffect, setSelectedMusicEffect] = React.useState<MusicEffect>("Studio Master")
   const [selectedVideoResolution, setSelectedVideoResolution] = React.useState<VideoResolution>("720p")
@@ -4480,6 +4541,8 @@ function ChatInterfaceContent() {
   const videoAbortControllerRef = React.useRef<AbortController | null>(null)
   const currentVideoOperationIdRef = React.useRef<string | null>(null)
   const isGeneratingImageRef = React.useRef(false)
+  const isGeneratingVoiceRef = React.useRef(false)
+  const isGeneratingMusicRef = React.useRef(false)
   const [isGeneratingVideo, setIsGeneratingVideo] = React.useState(false)
   const [isGeneratingPPT, setIsGeneratingPPT] = React.useState(false)
   const [isGeneratingWebDev, setIsGeneratingWebDev] = React.useState(false)
@@ -5045,6 +5108,16 @@ function ChatInterfaceContent() {
       }
       markImageGenerationStopped();
       toast.info('Generación de imagen detenida');
+    }
+    if (isGeneratingVoiceRef.current) {
+      isGeneratingVoiceRef.current = false;
+      setIsGeneratingVoice(false);
+      setIsVoiceGenerationActive(true);
+    }
+    if (isGeneratingMusicRef.current) {
+      isGeneratingMusicRef.current = false;
+      setIsGeneratingMusic(false);
+      setIsMusicGenerationActive(true);
     }
     // Video now cancels through the same dedicated-AbortController mechanism as
     // image: abort the kickoff request, then clear the long-running media
@@ -6342,6 +6415,12 @@ But first, you need to connect your Spotify account securely using the button be
       if (isGeneratingImageRef.current) {
         setIsImageGenerationActive(true);
         setChatType('image');
+      } else if (isGeneratingVoiceRef.current) {
+        setIsVoiceGenerationActive(true);
+        setChatType('text');
+      } else if (isGeneratingMusicRef.current) {
+        setIsMusicGenerationActive(true);
+        setChatType('text');
       } else {
         closeAllToolsAndConnectors();
         setChatType('text'); // Always default to text when switching chats
@@ -6365,6 +6444,12 @@ But first, you need to connect your Spotify account securely using the button be
     if (isGeneratingImageRef.current) {
       setIsImageGenerationActive(true);
       setChatType('image');
+    } else if (isGeneratingVoiceRef.current) {
+      setIsVoiceGenerationActive(true);
+      setChatType('text');
+    } else if (isGeneratingMusicRef.current) {
+      setIsMusicGenerationActive(true);
+      setChatType('text');
     } else {
       closeAllToolsAndConnectors();
     }
@@ -8034,6 +8119,36 @@ REWRITTEN TEXT:`;
       }
     }
 
+    if (isVoiceGenerationActive) {
+      isGeneratingVoiceRef.current = true;
+      setIsGeneratingVoice(true);
+      setIsVoiceGenerationActive(true);
+      try {
+        await handleVoiceGeneration(msg, filesToSend);
+      } finally {
+        isGeneratingVoiceRef.current = false;
+        setIsGeneratingVoice(false);
+        setIsVoiceGenerationActive(true);
+        inFlightSendKeysRef.current.delete(sendKey);
+      }
+      return;
+    }
+
+    if (isMusicGenerationActive) {
+      isGeneratingMusicRef.current = true;
+      setIsGeneratingMusic(true);
+      setIsMusicGenerationActive(true);
+      try {
+        await handleMusicGeneration(msg, filesToSend);
+      } finally {
+        isGeneratingMusicRef.current = false;
+        setIsGeneratingMusic(false);
+        setIsMusicGenerationActive(true);
+        inFlightSendKeysRef.current.delete(sendKey);
+      }
+      return;
+    }
+
     const deterministicAgenticIntent = classifyIntentFastPath(msg);
     // Image-only turns ("resolver", "resuelve esta derivada", "¿qué dice esta
     // imagen?") need VISION, which lives only in the plain /api/ai/generate
@@ -9395,25 +9510,26 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     !isExcelConnectorActive &&
     !hasRenderableMessages
 
-  // Any active tool/connector/thesis mode? Used to conditionally render
-  // the "tool pills" row below the input — if nothing is active, we
-  // hide the entire bar so the composer stays a clean pill.
+  // Any active tool/connector/thesis mode? Used to conditionally render active
+  // controls only when needed so the composer stays a clean pill by default.
   const hasActiveTools = (
     isWebSearchActive || isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive || isComputerUseActive
     || isGmailActive || isGoogleCalendarActive || isGoogleDriveActive
     || isSpotifyActive || isWordConnectorActive || isExcelConnectorActive
     || chatType === 'thesis'
   );
-  const shouldInlineActiveTools = isVideoGenerationActive;
   const isMediaToolActive = isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive;
+  const shouldInlineActiveTools = isMediaToolActive;
   const requiresPromptBeforePrimarySend =
     isImageGenerationActive ||
+    isVoiceGenerationActive ||
     isVideoGenerationActive ||
     isMusicGenerationActive ||
     chatType === 'image' ||
     chatType === 'video';
   const isSendingForCurrentChat = isSending && sendingChatId === currentChatId;
-  const isStopButtonVisible = isCurrentChatLoading || isCurrentChatStreaming || (pendingStop && isCurrentChatStreaming) || isSendingForCurrentChat || isCurrentChatLocalJobBusy || isGeneratingImage || isGeneratingVideo || isGeneratingPPT;
+  const isStopButtonVisible = isCurrentChatLoading || isCurrentChatStreaming || (pendingStop && isCurrentChatStreaming) || isSendingForCurrentChat || isCurrentChatLocalJobBusy || isGeneratingImage || isGeneratingVoice || isGeneratingVideo || isGeneratingPPT || isGeneratingMusic;
+  const shouldPrioritizeStopButton = isGeneratingVoice || isGeneratingImage || isGeneratingVideo || isGeneratingPPT || isGeneratingMusic;
   const composerHasInlineContext = uploadedFiles.length > 0 || Boolean(selectedWordText) || hasDetectedLinks;
   const composerIsExpanded =
     composerHasInlineContext ||
@@ -9433,11 +9549,14 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     selectedImageCount, setSelectedImageCount,
     selectedImageModel, setSelectedImageModel,
     isVoiceGenerationActive, setIsVoiceGenerationActive,
+    isGeneratingVoice,
     selectedVoiceModel, setSelectedVoiceModel,
     selectedVoiceLanguage, setSelectedVoiceLanguage,
     selectedVoiceAccent, setSelectedVoiceAccent,
     selectedVoiceStability, setSelectedVoiceStability,
     selectedVoiceEffect, setSelectedVoiceEffect,
+    onOpenVoiceCatalog: () => setVoiceCatalogOpen(true),
+    selectedVoiceName,
     isMusicGenerationActive, setIsMusicGenerationActive,
     selectedMusicModel, setSelectedMusicModel,
     selectedMusicStyle, setSelectedMusicStyle,
@@ -9970,6 +10089,339 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }
   };
 
+  // ─── Voice generation (deterministic text-to-speech) ─────────────────
+  // Voice mode used to route through the agentic loop with a prompt that
+  // *asked* a model to call generate_speech; weak fallback models often never
+  // did, the finalize gate blocked, and the user got a degraded
+  // "service unavailable" answer. Like image/video/music, Voice now uses a
+  // dedicated, deterministic backend path that ALWAYS produces the MP3 and
+  // persists it as a "Generation N" chat artifact via the same renderer.
+  const handleVoiceGeneration = async (msg: string, filesToSend: any[] = []) => {
+    const narration = (msg || '').trim();
+    if (!narration) {
+      toast.error('Escribe el texto que quieres convertir en voz');
+      return;
+    }
+
+    let activeChat = currentChat;
+    if (!activeChat) {
+      try {
+        const response = await apiClient.createChat({
+          title: narration.substring(0, 30),
+          model: selectedModel,
+        });
+        activeChat = response.chat;
+        await selectChat(activeChat?.id ?? "");
+        if (!activeChat?.id) {
+          toast.error('No se pudo crear el chat para la voz');
+          return;
+        }
+      } catch {
+        toast.error('No se pudo crear el chat para la voz');
+        return;
+      }
+    }
+
+    markLocalJobBusy(activeChat.id);
+
+    const userMessage = {
+      id: `msg-user-${Date.now()}`,
+      chatId: activeChat.id,
+      role: 'USER' as const,
+      content: narration,
+      timestamp: new Date().toISOString(),
+      files: filesToSend,
+    };
+    setCurrentChat(prev => {
+      if (!prev || prev.id !== activeChat!.id) return prev;
+      return { ...prev, messages: [...(prev.messages || []), userMessage] };
+    });
+
+    const runningState = {
+      meta: { goal: narration.slice(0, 200), model: 'ElevenLabs', tools: ['generate_speech'] },
+      steps: [{
+        id: 'speech-bootstrap',
+        label: 'Generando audio',
+        icon: 'thought',
+        reasoning: 'Convirtiendo el texto a voz con ElevenLabs.',
+        status: 'running',
+        toolCalls: [],
+      }],
+      artifacts: [],
+      approvals: [],
+      checkpoints: [],
+      qualityGates: [],
+      repairs: [],
+      finalText: '',
+      done: false,
+    };
+    const aiMessage = {
+      id: `msg-ai-${Date.now() + 1}`,
+      chatId: activeChat.id,
+      role: 'ASSISTANT' as const,
+      content: '```agent-task-state\n' + JSON.stringify(runningState) + '\n```',
+      timestamp: new Date().toISOString(),
+    };
+    setCurrentChat(prev => {
+      if (!prev || prev.id !== activeChat!.id) return prev;
+      return { ...prev, messages: [...(prev.messages || []), aiMessage] };
+    });
+    const setBubble = (content: string) => {
+      setCurrentChat(prev => {
+        if (!prev || prev.id !== activeChat!.id) return prev;
+        return { ...prev, messages: prev.messages.map(m => m.id === aiMessage.id ? { ...m, content } : m) };
+      });
+    };
+
+    try {
+      const resp = await apiClient.generateSpeechMessage({
+        text: narration,
+        chatId: activeChat.id,
+        voiceId: selectedVoiceId || undefined,
+        voiceSettings: { stability: Math.min(1, Math.max(0, selectedVoiceStability / 100)) },
+      });
+      if (resp?.content) {
+        setBubble(resp.content);
+      } else {
+        throw new Error('El servicio de voz no devolvió audio.');
+      }
+      toast.success('Audio generado');
+      if (activeChat?.id) selectChat(activeChat.id);
+    } catch (err: any) {
+      const friendly = err?.message || 'No se pudo generar el audio. Intenta de nuevo.';
+      const errorState = {
+        ...runningState,
+        done: true,
+        error: friendly,
+        steps: runningState.steps.map(s => ({ ...s, status: 'error' })),
+      };
+      setBubble('```agent-task-state\n' + JSON.stringify(errorState) + '\n```');
+      toast.error(friendly);
+    } finally {
+      markLocalJobIdle(activeChat.id);
+    }
+  };
+
+  // Edit-and-resend while Voice mode is active: regenerate the audio in place
+  // with the modified text instead of falling through to normal chat. Reuses
+  // editUserMessage (updates the user message + deletes the stale audio in the
+  // DB), then calls the deterministic speech endpoint with regenerate:true so
+  // only the new assistant audio is persisted (no duplicate user message).
+  const handleVoiceEditResend = async (messageId: string, newContent: string) => {
+    const narration = (newContent || '').trim();
+    if (!currentChat) return;
+    if (!narration) {
+      toast.error('Escribe el texto que quieres convertir en voz');
+      return;
+    }
+    const chatId = currentChat.id;
+    const idx = currentChat.messages.findIndex(m => m.id === messageId);
+    if (idx === -1) {
+      // The edited message vanished — fall back to a fresh voice turn.
+      await handleVoiceGeneration(narration, []);
+      return;
+    }
+    const messagesUpToEdit = currentChat.messages.slice(0, idx);
+    const updatedUserMessage = { ...currentChat.messages[idx], content: narration };
+    const runningState = {
+      meta: { goal: narration.slice(0, 200), model: 'ElevenLabs', tools: ['generate_speech'] },
+      steps: [{
+        id: 'speech-bootstrap',
+        label: 'Regenerando audio',
+        icon: 'thought',
+        reasoning: 'Convirtiendo el texto editado a voz con ElevenLabs.',
+        status: 'running',
+        toolCalls: [],
+      }],
+      artifacts: [],
+      approvals: [],
+      checkpoints: [],
+      qualityGates: [],
+      repairs: [],
+      finalText: '',
+      done: false,
+    };
+    const aiMessage = {
+      id: `msg-ai-voice-regen-${Date.now()}`,
+      chatId,
+      role: 'ASSISTANT' as const,
+      content: '```agent-task-state\n' + JSON.stringify(runningState) + '\n```',
+      timestamp: new Date().toISOString(),
+    };
+    setCurrentChat(prev => {
+      if (!prev || prev.id !== chatId) return prev;
+      return { ...prev, messages: [...messagesUpToEdit, updatedUserMessage, aiMessage] };
+    });
+    const setBubble = (content: string) => {
+      setCurrentChat(prev => {
+        if (!prev || prev.id !== chatId) return prev;
+        return { ...prev, messages: prev.messages.map(m => m.id === aiMessage.id ? { ...m, content } : m) };
+      });
+    };
+
+    markLocalJobBusy(chatId);
+    isGeneratingVoiceRef.current = true;
+    setIsGeneratingVoice(true);
+    try {
+      // Persist the edit + delete the stale subsequent messages server-side.
+      await apiClient.editUserMessage(messageId, { content: narration });
+      const resp = await apiClient.generateSpeechMessage({
+        text: narration,
+        chatId,
+        regenerate: true,
+        voiceId: selectedVoiceId || undefined,
+        voiceSettings: { stability: Math.min(1, Math.max(0, selectedVoiceStability / 100)) },
+      });
+      if (resp?.content) {
+        setBubble(resp.content);
+      } else {
+        throw new Error('El servicio de voz no devolvió audio.');
+      }
+      toast.success('Audio regenerado');
+      if (chatId) selectChat(chatId);
+    } catch (err: any) {
+      const friendly = err?.message || 'No se pudo regenerar el audio. Intenta de nuevo.';
+      const errorState = {
+        ...runningState,
+        done: true,
+        error: friendly,
+        steps: runningState.steps.map(s => ({ ...s, status: 'error' })),
+      };
+      setBubble('```agent-task-state\n' + JSON.stringify(errorState) + '\n```');
+      toast.error(friendly);
+    } finally {
+      isGeneratingVoiceRef.current = false;
+      setIsGeneratingVoice(false);
+      markLocalJobIdle(chatId);
+    }
+  };
+
+  // Stable wrapper passed to the memoized MessageComponent. A ref keeps the
+  // latest closure (isVoiceGenerationActive can toggle after the message
+  // rendered) while the callback identity stays constant so memo isn't broken.
+  const editRegenRef = React.useRef<(messageId: string, newContent: string, files?: any[]) => void>(() => {});
+  React.useEffect(() => {
+    editRegenRef.current = (messageId: string, newContent: string, files?: any[]) => {
+      if (isVoiceGenerationActive) {
+        void handleVoiceEditResend(messageId, newContent);
+        return;
+      }
+      editAndRegenerate(messageId, newContent, files);
+    };
+  });
+  const editAndRegenerateRouter = React.useCallback((messageId: string, newContent: string, files?: any[]) => {
+    editRegenRef.current(messageId, newContent, files);
+  }, []);
+
+  const handleMusicGeneration = async (msg: string, filesToSend: any[] = []) => {
+    const description = (msg || '').trim();
+    if (!description) {
+      toast.error('Describe la música que quieres crear');
+      return;
+    }
+
+    let activeChat = currentChat;
+    if (!activeChat) {
+      try {
+        const response = await apiClient.createChat({
+          title: description.substring(0, 30),
+          model: selectedModel,
+        });
+        activeChat = response.chat;
+        await selectChat(activeChat?.id ?? "");
+        if (!activeChat?.id) {
+          toast.error('No se pudo crear el chat para la música');
+          return;
+        }
+      } catch {
+        toast.error('No se pudo crear el chat para la música');
+        return;
+      }
+    }
+
+    markLocalJobBusy(activeChat.id);
+
+    const userMessage = {
+      id: `msg-user-${Date.now()}`,
+      chatId: activeChat.id,
+      role: 'USER' as const,
+      content: description,
+      timestamp: new Date().toISOString(),
+      files: filesToSend,
+    };
+    setCurrentChat(prev => {
+      if (!prev || prev.id !== activeChat!.id) return prev;
+      return { ...prev, messages: [...(prev.messages || []), userMessage] };
+    });
+
+    const runningState = {
+      meta: { goal: description.slice(0, 200), model: 'ElevenLabs Music', tools: ['generate_music'] },
+      steps: [{
+        id: 'music-bootstrap',
+        label: 'Componiendo música',
+        icon: 'thought',
+        reasoning: 'Generando una pista original con ElevenLabs Music.',
+        status: 'running',
+        toolCalls: [],
+      }],
+      artifacts: [],
+      approvals: [],
+      checkpoints: [],
+      qualityGates: [],
+      repairs: [],
+      finalText: '',
+      done: false,
+    };
+    const aiMessage = {
+      id: `msg-ai-${Date.now() + 1}`,
+      chatId: activeChat.id,
+      role: 'ASSISTANT' as const,
+      content: '```agent-task-state\n' + JSON.stringify(runningState) + '\n```',
+      timestamp: new Date().toISOString(),
+    };
+    setCurrentChat(prev => {
+      if (!prev || prev.id !== activeChat!.id) return prev;
+      return { ...prev, messages: [...(prev.messages || []), aiMessage] };
+    });
+    const setBubble = (content: string) => {
+      setCurrentChat(prev => {
+        if (!prev || prev.id !== activeChat!.id) return prev;
+        return { ...prev, messages: prev.messages.map(m => m.id === aiMessage.id ? { ...m, content } : m) };
+      });
+    };
+
+    try {
+      const resp = await apiClient.generateMusicMessage({
+        text: description,
+        chatId: activeChat.id,
+        durationSeconds: selectedMusicDuration,
+        style: selectedMusicStyle,
+        mood: selectedMusicMood,
+        effect: selectedMusicEffect,
+        influence: selectedMusicInfluence,
+      });
+      if (resp?.content) {
+        setBubble(resp.content);
+      } else {
+        throw new Error('El servicio de música no devolvió audio.');
+      }
+      toast.success('Música generada');
+      if (activeChat?.id) selectChat(activeChat.id);
+    } catch (err: any) {
+      const friendly = err?.message || 'No se pudo generar la música. Intenta de nuevo.';
+      const errorState = {
+        ...runningState,
+        done: true,
+        error: friendly,
+        steps: runningState.steps.map(s => ({ ...s, status: 'error' })),
+      };
+      setBubble('```agent-task-state\n' + JSON.stringify(errorState) + '\n```');
+      toast.error(friendly);
+    } finally {
+      markLocalJobIdle(activeChat.id);
+    }
+  };
+
   // ─── Agent task (Claude-style step cards) ────────────────────────────
   // The chat bubble's `content` becomes a JSON-encoded payload wrapped
   // in a sentinel fence (```agent-task-state ... ```). MessageComponent
@@ -9980,13 +10432,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   const handleAgentTask = async (
     goalText: string,
     filesToSend: any[] = [],
-    options: { userMessageAlreadyAdded?: boolean; assistantMessageId?: string } = {},
+    options: { userMessageAlreadyAdded?: boolean; assistantMessageId?: string; displayGoal?: string } = {},
   ) => {
     if (!goalText) {
       toast.error('Please enter a task');
       return;
     }
-    const { userMessageAlreadyAdded = false, assistantMessageId } = options;
+    const { userMessageAlreadyAdded = false, assistantMessageId, displayGoal = goalText } = options;
     const systemContract = PROFESSIONAL_CAPABILITY_CONTRACTS.agent_task || '';
     let activeChat = currentChat;
     const isNewChat = !activeChat;
@@ -9994,7 +10446,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     if (!activeChat) {
       try {
         const response = await apiClient.createChat({
-          title: `{} ${goalText.substring(0, 30)}`,
+          title: `{} ${displayGoal.substring(0, 30)}`,
           model: selectedModel,
         });
         activeChat = response.chat;
@@ -10018,7 +10470,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           id: `msg-user-${Date.now()}`,
           chatId: activeChat.id,
           role: 'USER' as const,
-          content: goalText,
+          content: displayGoal,
           timestamp: new Date().toISOString(),
           files: filesToSend,
         };
@@ -10101,7 +10553,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         const fileMetadata = buildAgentFileMetadata(filesToSend);
         for await (const evt of agentTaskService.runIterator({
           goal: goalText,
-          displayGoal: goalText,
+          displayGoal,
           systemContract,
           files: fileIds,
           fileMetadata,
@@ -10322,6 +10774,24 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   onOpenChange={setSubscribeOpen}
                   user={currentUserInfo || user}
                 />
+                <VoiceCatalogModal
+                  open={voiceCatalogOpen}
+                  onOpenChange={setVoiceCatalogOpen}
+                  selectedVoiceId={selectedVoiceId || null}
+                  onSelectVoice={handleSelectVoice}
+                  modelLabel={selectedVoiceModel}
+                  language={selectedVoiceLanguage}
+                  onLanguageChange={(v) => setSelectedVoiceLanguage(v as VoiceLanguage)}
+                  languageOptions={VOICE_LANGUAGE_OPTIONS}
+                  accent={selectedVoiceAccent}
+                  onAccentChange={(v) => setSelectedVoiceAccent(v as VoiceAccent)}
+                  accentOptions={VOICE_ACCENT_OPTIONS}
+                  effect={selectedVoiceEffect}
+                  onEffectChange={(v) => setSelectedVoiceEffect(v as VoiceEffect)}
+                  effectOptions={VOICE_EFFECT_OPTIONS}
+                  stability={selectedVoiceStability}
+                  onStabilityChange={setSelectedVoiceStability}
+                />
                 <KeyboardShortcutsModal
                   open={shortcutsOpen}
                   onOpenChange={setShortcutsOpen}
@@ -10461,10 +10931,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       onFileProcessingStatusChange={handleFileProcessingStatusChange}
                     />
                     <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
-                    {/* Tool pills used to live ABOVE the input; moved to
-                        a secondary row BELOW the input (see after the
-                        TooltipProvider) so the top surface is dedicated
-                        to drag-and-drop of files / audio / images. */}
+                    {/* Media controls stay inline with the attach button; other
+                        active tools fall back to the secondary row below. */}
                     <TooltipProvider>
                       <div
                         className="composer-input-row flex items-end gap-2 pl-2 pr-2 py-1.5"
@@ -10557,7 +11025,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 : isVideoGenerationActive
                                   ? tComposer("placeholderVideo")
                                   : isVoiceGenerationActive
-                                    ? "Describe la voz que quieres crear"
+                                    ? VOICE_COMPOSER_PLACEHOLDER
                                     : isMusicGenerationActive
                                       ? "Describe la música que quieres crear"
                                         : isWebSearchActive
@@ -10616,7 +11084,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             const needsPrompt = requiresPromptBeforePrimarySend && !hasText
                             const canSend = requiresPromptBeforePrimarySend ? hasText : (hasText || hasAttachment)
                             const busy = isCurrentChatLocalJobBusy || isUploading
-                            // In prompt-driven media modes (Video/Image/Music), an empty
+                            // In prompt-driven media modes (Video/Image/Voice/Music), an empty
                             // composer should not open Voice Studio. Keep the primary CTA
                             // as the send/create affordance and disable it until the user
                             // writes the generation prompt.
@@ -10661,7 +11129,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             )
                           })()}
 
-                          {isStopButtonVisible && input.trim().length > 0 && (
+                          {isStopButtonVisible && input.trim().length > 0 && !shouldPrioritizeStopButton && (
                             <Tooltip>
                               <TooltipTrigger asChild>
                                 <Button
@@ -10682,7 +11150,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               <TooltipContent side="top"><p>Enviar a la cola · se procesa en orden</p></TooltipContent>
                             </Tooltip>
                           )}
-                          {isStopButtonVisible && input.trim().length === 0 && (
+                          {isStopButtonVisible && (input.trim().length === 0 || shouldPrioritizeStopButton) && (
                             <Button
                               onClick={stopActiveGeneration}
                               size="icon"
@@ -10877,7 +11345,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                       user={user}
                                       onRegenerate={regenerateMessage}
                                       onBranch={branchMessage}
-                                      updateMessageInChat={editAndRegenerate}
+                                      updateMessageInChat={editAndRegenerateRouter}
                                       isStreaming={false}
                                       onToggleSplitView={handleToggleSplitView}
                                       onDocumentPreview={handleDocumentPreview}
@@ -10898,7 +11366,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                     user={user}
                                     onRegenerate={regenerateMessage}
                                     onBranch={branchMessage}
-                                    updateMessageInChat={editAndRegenerate}
+                                    updateMessageInChat={editAndRegenerateRouter}
                                     isStreaming={false}
                                     onToggleSplitView={handleToggleSplitView}
                                     onDocumentPreview={handleDocumentPreview}
@@ -10926,7 +11394,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                     message={streamingMessage}
                                     user={user}
                                     onRegenerate={regenerateMessage}
-                                    updateMessageInChat={editAndRegenerate}
+                                    updateMessageInChat={editAndRegenerateRouter}
                                     isStreaming={true}
                                     onToggleSplitView={handleToggleSplitView}
                                     onDocumentPreview={handleDocumentPreview}
@@ -11131,7 +11599,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                     : isVideoGenerationActive
                                       ? tComposer("placeholderVideo")
                                       : isVoiceGenerationActive
-                                        ? "Describe la voz que quieres crear"
+                                        ? VOICE_COMPOSER_PLACEHOLDER
                                         : isMusicGenerationActive
                                           ? "Describe la música que quieres crear"
                                             : isWebSearchActive
@@ -11232,7 +11700,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                   is what makes "send more while it thinks"
                                   work on mobile, where Enter isn't available.
                                   Empty composer → STOP button. */}
-                              {isStopButtonVisible && input.trim().length > 0 && (
+                              {isStopButtonVisible && input.trim().length > 0 && !shouldPrioritizeStopButton && (
                                 <Tooltip>
                                   <TooltipTrigger asChild>
                                     <Button
@@ -11253,7 +11721,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                   <TooltipContent side="top"><p>Enviar a la cola · se procesa en orden</p></TooltipContent>
                                 </Tooltip>
                               )}
-                              {isStopButtonVisible && input.trim().length === 0 && (
+                              {isStopButtonVisible && (input.trim().length === 0 || shouldPrioritizeStopButton) && (
                                 <Button
                                   onClick={stopActiveGeneration}
                                   size="icon"

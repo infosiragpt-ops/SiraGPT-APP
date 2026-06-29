@@ -104,21 +104,21 @@ describe("chat video auto-activation source contract", () => {
     )
   })
 
-  it("renders video controls inline next to the plus button instead of the bottom tool row", () => {
+  it("renders media controls inline next to the plus button instead of the bottom tool row", () => {
     assert.match(
       source,
-      /const shouldInlineActiveTools = isVideoGenerationActive/,
-      "video mode should opt into inline composer controls"
+      /const isMediaToolActive = isImageGenerationActive \|\| isVoiceGenerationActive \|\| isMusicGenerationActive \|\| isVideoGenerationActive;[\s\S]{0,80}const shouldInlineActiveTools = isMediaToolActive;/,
+      "active media modes should opt into inline composer controls"
     )
     assert.match(
       source,
       /composer-inline-active-tools[\s\S]{0,120}<ActiveToolsDisplay \{\.\.\.activeToolsProps\} \/>/,
-      "video controls should render next to the plus/action button"
+      "media controls should render next to the plus/action button"
     )
     assert.match(
       source,
       /hasActiveTools && !shouldInlineActiveTools/,
-      "the lower active-tools row should be suppressed while video controls are inline"
+      "the lower active-tools row should be suppressed while media controls are inline"
     )
   })
 
@@ -145,5 +145,127 @@ describe("chat video auto-activation source contract", () => {
 
     const disabledBlocks = source.match(/disabled=\{\(canSend && busy\) \|\| needsPrompt\}/g) || []
     assert.equal(disabledBlocks.length, 2, "empty prompt-driven video sends should be disabled in both composer variants")
+  })
+
+  it("routes active Voice mode to speech generation instead of normal chat", () => {
+    assert.match(
+      source,
+      /const VOICE_COMPOSER_PLACEHOLDER = "Escribe el texto que quieres convertir en voz"/,
+      "Voice mode should ask for narration text, not an unsupported voice-design prompt"
+    )
+    assert.doesNotMatch(
+      source,
+      /Describe la voz que quieres crear/,
+      "Voice mode should not promise voice-design when the working backend path is text-to-speech"
+    )
+    assert.match(
+      source,
+      /const requiresPromptBeforePrimarySend =[\s\S]{0,160}isVoiceGenerationActive/,
+      "Voice mode should keep the primary button as a disabled send affordance until text is provided"
+    )
+    assert.match(
+      source,
+      /if \(isVoiceGenerationActive\) \{[\s\S]{0,420}await handleVoiceGeneration\(msg, filesToSend\)/,
+      "Voice mode sends should bypass normal chat classification and call the deterministic speech artifact path"
+    )
+  })
+
+  it("routes active Music mode to the deterministic music generation path", () => {
+    assert.match(
+      source,
+      /if \(isMusicGenerationActive\) \{[\s\S]{0,420}await handleMusicGeneration\(msg, filesToSend\)/,
+      "Music mode sends should bypass normal chat classification and call the deterministic music artifact path"
+    )
+    assert.doesNotMatch(
+      source,
+      /await handleAgentTask\(musicGoal/,
+      "Music must NOT route through the unreliable agentic loop (the durable path lacks generate_music)"
+    )
+    assert.match(
+      source,
+      /await apiClient\.generateMusicMessage\(\{[\s\S]{0,200}chatId: activeChat\.id/,
+      "handleMusicGeneration must call the deterministic /ai/generate-music endpoint"
+    )
+  })
+
+  it("keeps Music mode visible and surviving chat creation while generation runs", () => {
+    assert.match(
+      source,
+      /const \[isGeneratingMusic, setIsGeneratingMusic\] = React\.useState\(false\)/,
+      "Music generation needs its own visible lifecycle state"
+    )
+    assert.match(
+      source,
+      /const isGeneratingMusicRef = React\.useRef\(false\)/,
+      "Music generation should survive chat creation and selection effects"
+    )
+    assert.match(
+      source,
+      /isGeneratingMusicRef\.current = true;[\s\S]{0,140}setIsGeneratingMusic\(true\);[\s\S]{0,140}setIsMusicGenerationActive\(true\);[\s\S]{0,200}await handleMusicGeneration\(msg, filesToSend\)/,
+      "Music sends should mark the chip as generating before the deterministic music task creates or selects a chat"
+    )
+    assert.match(
+      source,
+      /finally \{[\s\S]{0,140}isGeneratingMusicRef\.current = false;[\s\S]{0,140}setIsGeneratingMusic\(false\);[\s\S]{0,140}setIsMusicGenerationActive\(true\);/,
+      "Music mode should remain selected after the music task settles"
+    )
+    assert.match(
+      source,
+      /isGeneratingMusicRef\.current[\s\S]{0,140}setIsMusicGenerationActive\(true\);[\s\S]{0,80}setChatType\('text'\);/,
+      "Chat switching during music generation must preserve the visible Music tool"
+    )
+  })
+
+  it("keeps Voice mode visible and cancellable while speech generation is running", () => {
+    assert.match(
+      source,
+      /const \[isGeneratingVoice, setIsGeneratingVoice\] = React\.useState\(false\)/,
+      "Voice generation needs its own visible lifecycle state"
+    )
+    assert.match(
+      source,
+      /const isGeneratingVoiceRef = React\.useRef\(false\)/,
+      "Voice generation should survive chat creation and selection effects"
+    )
+    assert.match(
+      source,
+      /isGeneratingVoiceRef\.current = true;[\s\S]{0,140}setIsGeneratingVoice\(true\);[\s\S]{0,140}setIsVoiceGenerationActive\(true\);[\s\S]{0,520}await handleVoiceGeneration\(msg, filesToSend\)/,
+      "Voice sends should mark the chip as generating before the deterministic speech task creates or selects a chat"
+    )
+    assert.match(
+      source,
+      /finally \{[\s\S]{0,140}isGeneratingVoiceRef\.current = false;[\s\S]{0,140}setIsGeneratingVoice\(false\);[\s\S]{0,140}setIsVoiceGenerationActive\(true\);/,
+      "Voice mode should remain selected after the audio task settles"
+    )
+    assert.match(
+      source,
+      /isGeneratingVoiceRef\.current[\s\S]{0,140}setIsVoiceGenerationActive\(true\);[\s\S]{0,80}setChatType\('text'\);/,
+      "Chat switching during voice generation must preserve the visible Voice tool"
+    )
+    assert.match(
+      source,
+      /if \(isGeneratingVoice\) return;[\s\S]{0,120}setIsVoiceGenerationActive\(false\);/,
+      "The Voice chip close button must not deactivate the tool mid-generation"
+    )
+    assert.match(
+      source,
+      /const isStopButtonVisible =[\s\S]{0,220}isGeneratingVoice/,
+      "Voice generation should force the stop button visible"
+    )
+    assert.match(
+      source,
+      /const shouldPrioritizeStopButton = isGeneratingVoice \|\| isGeneratingImage \|\| isGeneratingVideo \|\| isGeneratingPPT/,
+      "Voice generation should prioritize cancel over queue-send"
+    )
+    assert.match(
+      source,
+      /isStopButtonVisible && input\.trim\(\)\.length > 0 && !shouldPrioritizeStopButton/,
+      "Queue send should be suppressed while Voice generation needs the stop button"
+    )
+    assert.match(
+      source,
+      /isStopButtonVisible && \(input\.trim\(\)\.length === 0 \|\| shouldPrioritizeStopButton\)/,
+      "The stop button should remain available even if the composer has text during Voice generation"
+    )
   })
 })

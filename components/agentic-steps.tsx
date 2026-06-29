@@ -13,10 +13,17 @@ import {
   Globe,
   Eye,
   FileCheck2,
+  Pause,
+  Play,
   RefreshCcw,
+  Repeat,
+  RotateCcw,
+  RotateCw,
+  Share2,
   ShieldCheck,
+  SkipBack,
 } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { cn, copyToClipboard, downloadHref, downloadUrlAsFile } from "@/lib/utils"
 import { AgentStatusIcon, type AgentStatusIconKind } from "@/components/icons/agent-status-icons"
 import { agentTaskService, type AgentArtifact, type AgentTaskState } from "@/lib/agent-task-service"
 import {
@@ -174,6 +181,29 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
+const AUDIO_FORMATS = new Set(["aac", "aif", "aiff", "flac", "m4a", "mp3", "oga", "ogg", "opus", "wav", "webm"])
+// Deterministic, natural-looking waveform (no Math.random → SSR-safe). A dense
+// bar field with a gentle centre envelope reads like a real audio waveform.
+const AUDIO_WAVEFORM_BARS = Array.from({ length: 52 }, (_, i) => {
+  const detail = Math.abs(Math.sin(i * 0.55) * Math.cos(i * 0.19) + Math.sin(i * 1.3) * 0.35)
+  const envelope = 0.5 + 0.5 * Math.sin((i / 51) * Math.PI)
+  return 5 + Math.round(detail * envelope * 29)
+})
+
+function formatMediaTime(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) seconds = 0
+  const m = Math.floor(seconds / 60)
+  const s = Math.floor(seconds % 60)
+  return `${m}:${String(s).padStart(2, "0")}`
+}
+
+function artifactHref(artifact: AgentArtifact): string {
+  const apiRoot = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
+  return artifact.downloadUrl.startsWith("http")
+    ? artifact.downloadUrl
+    : `${apiRoot.replace(/\/api$/, "")}${artifact.downloadUrl}`
+}
+
 /**
  * Claude-style research trace under a step: each search shows the query
  * line ("query…  ·  N resultados") followed by a quiet result list
@@ -289,6 +319,7 @@ function DownloadButton({ artifact, href }: { artifact: AgentArtifact; href: str
 
 function artifactDisplayName(artifact: AgentArtifact): string {
   const format = artifactFormat(artifact)
+  if (isAudioArtifact(artifact)) return "Audio generado"
   if (format === "docx" || format === "doc") return "Documento Word"
   if (format === "xlsx" || format === "xls" || format === "csv") return "Hoja de calculo"
   if (format === "pptx" || format === "ppt") return "Presentacion"
@@ -306,7 +337,384 @@ function artifactFormat(artifact: AgentArtifact): string {
   if (mime.includes("spreadsheetml") || mime.includes("excel")) return "xlsx"
   if (mime.includes("presentationml") || mime.includes("powerpoint")) return "pptx"
   if (mime.includes("pdf")) return "pdf"
+  if (mime === "audio/mpeg" || mime === "audio/mp3") return "mp3"
+  if (mime === "audio/mp4" || mime === "audio/x-m4a") return "m4a"
+  if (mime.includes("wav")) return "wav"
+  if (mime.includes("ogg")) return "ogg"
+  if (mime.includes("webm")) return "webm"
+  if (mime.startsWith("audio/")) return mime.split("/")[1] || "audio"
   return "bin"
+}
+
+function isAudioArtifact(artifact: AgentArtifact): boolean {
+  const mime = String(artifact.mime || "").toLowerCase()
+  return mime.startsWith("audio/") || AUDIO_FORMATS.has(artifactFormat(artifact))
+}
+
+function isMusicArtifact(artifact: AgentArtifact): boolean {
+  const marker = [
+    artifact.kind,
+    artifact.category,
+    artifact.format,
+    artifact.mime,
+    artifact.filename,
+  ].map((value) => String(value || "").toLowerCase()).join(" ")
+
+  return /\bmusic\b|\bm[uú]sica\b|\bcancion\b|\bcanci[oó]n\b|\bsong\b|\btrack\b/.test(marker)
+}
+
+function artifactFilename(artifact: AgentArtifact, fallback: string): string {
+  return artifact.filename?.trim() || fallback
+}
+
+function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArtifact; generationIndex: number }) {
+  const href = artifactHref(artifact)
+  const audioRef = React.useRef<HTMLAudioElement | null>(null)
+  const objectUrlRef = React.useRef<string | null>(null)
+  const [isPlaying, setIsPlaying] = React.useState(false)
+  const [isLoadingAudio, setIsLoadingAudio] = React.useState(false)
+  const [audioSrc, setAudioSrc] = React.useState<string | null>(null)
+  const [isDownloading, setIsDownloading] = React.useState(false)
+  const [copied, setCopied] = React.useState(false)
+  const [currentTime, setCurrentTime] = React.useState(0)
+  const [duration, setDuration] = React.useState(0)
+  const [isSeeking, setIsSeeking] = React.useState(false)
+  const [isLooping, setIsLooping] = React.useState(false)
+  const seekContainerRef = React.useRef<HTMLDivElement | null>(null)
+  const format = artifactFormat(artifact)
+  const isMusic = isMusicArtifact(artifact)
+  const fallbackBaseName = isMusic ? "musica" : "voz"
+  const generatedMediaLabel = isMusic ? "música generada" : "audio generado"
+  const filename = artifactFilename(artifact, `${fallbackBaseName}-${generationIndex + 1}.${format === "bin" ? "mp3" : format}`)
+  const generationLabel = `Generation ${generationIndex + 1}`
+
+  React.useEffect(() => {
+    setAudioSrc(null)
+    setIsPlaying(false)
+    setCurrentTime(0)
+    setDuration(0)
+    return () => {
+      if (objectUrlRef.current) {
+        window.URL.revokeObjectURL(objectUrlRef.current)
+        objectUrlRef.current = null
+      }
+    }
+  }, [href])
+
+  const loadAudioSource = React.useCallback(async () => {
+    if (objectUrlRef.current) return objectUrlRef.current
+    setIsLoadingAudio(true)
+    try {
+      const response = await fetch(href, {
+        credentials: "include",
+        headers: authHeaders(),
+      })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const blob = await response.blob()
+      const objectUrl = window.URL.createObjectURL(blob)
+      objectUrlRef.current = objectUrl
+      setAudioSrc(objectUrl)
+      return objectUrl
+    } finally {
+      setIsLoadingAudio(false)
+    }
+  }, [href])
+
+  // Preload the blob on mount so the first Play is instant and the seekbar /
+  // duration are populated immediately (no click-then-wait latency).
+  React.useEffect(() => {
+    void loadAudioSource().catch(() => {})
+  }, [loadAudioSource])
+
+  const seekFromClientX = React.useCallback((clientX: number, el: HTMLElement | null) => {
+    const audio = audioRef.current
+    if (!el || !audio) return
+    const total = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : duration
+    if (!total) return
+    const rect = el.getBoundingClientRect()
+    const fraction = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width))
+    audio.currentTime = fraction * total
+    setCurrentTime(audio.currentTime)
+  }, [duration])
+
+  const skipBy = React.useCallback((delta: number) => {
+    const audio = audioRef.current
+    if (!audio) return
+    const total = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : duration
+    const upper = total > 0 ? total : audio.currentTime + Math.max(0, delta)
+    const target = Math.max(0, Math.min(upper, audio.currentTime + delta))
+    audio.currentTime = target
+    setCurrentTime(target)
+  }, [duration])
+
+  const restart = React.useCallback(() => {
+    const audio = audioRef.current
+    if (!audio) return
+    audio.currentTime = 0
+    setCurrentTime(0)
+  }, [])
+
+  const toggleLoop = React.useCallback(() => {
+    const audio = audioRef.current
+    if (!audio) return
+    const next = !audio.loop
+    audio.loop = next
+    setIsLooping(next)
+  }, [])
+
+  const togglePlayback = React.useCallback(async () => {
+    if (isLoadingAudio) return
+    const audio = audioRef.current
+    if (!audio) return
+    if (!audio.paused) {
+      audio.pause()
+      return
+    }
+    try {
+      const playableUrl = await loadAudioSource()
+      if (audio.src !== playableUrl) audio.src = playableUrl
+      await audio.play()
+    } catch {
+      window.open(href, "_blank", "noopener,noreferrer")
+    }
+  }, [href, isLoadingAudio, loadAudioSource])
+
+  const download = React.useCallback(async () => {
+    if (isDownloading) return
+    setIsDownloading(true)
+    try {
+      await downloadUrlAsFile(href, filename, {
+        credentials: "include",
+        headers: authHeaders(),
+      })
+    } catch {
+      downloadHref(href, filename)
+    } finally {
+      setIsDownloading(false)
+    }
+  }, [filename, href, isDownloading])
+
+  const share = React.useCallback(async () => {
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: generationLabel, url: href })
+      } else {
+        const ok = await copyToClipboard(href)
+        if (!ok) throw new Error("copy_failed")
+        setCopied(true)
+        window.setTimeout(() => setCopied(false), 1800)
+      }
+    } catch {
+      const ok = await copyToClipboard(href)
+      if (ok) {
+        setCopied(true)
+        window.setTimeout(() => setCopied(false), 1800)
+      }
+    }
+  }, [generationLabel, href])
+
+  const progress = duration > 0 ? Math.min(1, currentTime / duration) : 0
+
+  return (
+    <div className="my-2 w-full max-w-[460px]">
+      <div className="relative flex flex-col gap-2 rounded-2xl border border-border/70 bg-background px-4 pb-3 pt-3 shadow-sm">
+        {/* Header: label + share / download */}
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[12.5px] font-medium leading-5 text-muted-foreground">
+            {generationLabel}
+          </span>
+          <div className="flex items-center gap-0.5">
+            <button
+              type="button"
+              onClick={share}
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-blue-500 transition-colors hover:bg-blue-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label={copied ? "Enlace copiado" : `Compartir ${generatedMediaLabel}`}
+              title={copied ? "Enlace copiado" : "Compartir"}
+            >
+              <Share2 className="h-[18px] w-[18px] stroke-[2.1]" />
+            </button>
+            <button
+              type="button"
+              onClick={download}
+              disabled={isDownloading}
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-blue-500 transition-colors hover:bg-blue-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+              aria-label={`Descargar ${generatedMediaLabel}`}
+              title="Descargar"
+            >
+              {isDownloading ? <ThinkingIndicator size="sm" /> : <Download className="h-[18px] w-[18px] stroke-[2.1]" />}
+            </button>
+          </div>
+        </div>
+
+        {/* Thin progress seekbar — precise draggable scrubber */}
+        <div
+          ref={seekContainerRef}
+          role="slider"
+          aria-label={`Buscar en ${generatedMediaLabel}`}
+          aria-valuemin={0}
+          aria-valuemax={Math.round(duration) || 0}
+          aria-valuenow={Math.round(currentTime)}
+          tabIndex={0}
+          onPointerDown={(event) => {
+            try { event.currentTarget.setPointerCapture(event.pointerId) } catch { /* ignore */ }
+            setIsSeeking(true)
+            seekFromClientX(event.clientX, event.currentTarget)
+          }}
+          onPointerMove={(event) => { if (isSeeking) seekFromClientX(event.clientX, event.currentTarget) }}
+          onPointerUp={(event) => {
+            setIsSeeking(false)
+            try { event.currentTarget.releasePointerCapture(event.pointerId) } catch { /* ignore */ }
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowRight") { event.preventDefault(); skipBy(5) }
+            else if (event.key === "ArrowLeft") { event.preventDefault(); skipBy(-5) }
+          }}
+          className="group relative flex h-4 cursor-pointer touch-none select-none items-center focus-visible:outline-none"
+        >
+          <div className="relative h-1.5 w-full rounded-full bg-blue-500/15">
+            <div className="absolute inset-y-0 left-0 rounded-full bg-blue-500" style={{ width: `${progress * 100}%` }} />
+            <div
+              className="absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-blue-500 shadow ring-2 ring-background transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100"
+              style={{ left: `${progress * 100}%`, opacity: isSeeking ? 1 : undefined }}
+            />
+          </div>
+        </div>
+
+        {/* Elapsed / total time */}
+        <div className="flex items-center justify-between text-[11px] font-medium leading-none text-muted-foreground tabular-nums">
+          <span>{formatMediaTime(currentTime)}</span>
+          <span>{formatMediaTime(duration)}</span>
+        </div>
+
+        {/* Waveform — visual progress, also click-to-seek */}
+        <div
+          aria-hidden="true"
+          onClick={(event) => seekFromClientX(event.clientX, event.currentTarget)}
+          className="group/wave flex h-10 cursor-pointer items-center justify-between"
+        >
+          {AUDIO_WAVEFORM_BARS.map((height, index) => {
+            const played = (index + 0.5) / AUDIO_WAVEFORM_BARS.length <= progress
+            return (
+              <span
+                key={`${height}-${index}`}
+                className={cn(
+                  "w-[3px] shrink-0 rounded-full transition-colors duration-200",
+                  played ? "bg-blue-500" : "bg-foreground/20 group-hover/wave:bg-foreground/30",
+                )}
+                style={{ height }}
+              />
+            )
+          })}
+        </div>
+
+        {/* Transport controls */}
+        <div className="flex items-center justify-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => skipBy(-10)}
+            className="relative inline-flex h-9 w-9 items-center justify-center rounded-full text-blue-500 transition-colors hover:bg-blue-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label="Retroceder 10 segundos"
+            title="Retroceder 10s"
+          >
+            <RotateCcw className="h-[22px] w-[22px] stroke-[1.9]" />
+            <span className="pointer-events-none absolute text-[8px] font-bold leading-none">10</span>
+          </button>
+          <button
+            type="button"
+            onClick={restart}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-full text-blue-500 transition-colors hover:bg-blue-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label="Reiniciar"
+            title="Reiniciar"
+          >
+            <SkipBack className="h-5 w-5 fill-current" />
+          </button>
+          <button
+            type="button"
+            onClick={togglePlayback}
+            disabled={isLoadingAudio}
+            className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-blue-500 transition-transform hover:scale-[1.06] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:scale-100 disabled:opacity-75"
+            aria-label={isLoadingAudio ? `Cargando ${generatedMediaLabel}` : isPlaying ? `Pausar ${generatedMediaLabel}` : `Reproducir ${generatedMediaLabel}`}
+            title={isLoadingAudio ? "Cargando" : isPlaying ? "Pausar" : "Reproducir"}
+          >
+            {isLoadingAudio ? (
+              <ThinkingIndicator size="sm" />
+            ) : isPlaying ? (
+              <Pause className="h-8 w-8 fill-current" />
+            ) : (
+              <Play className="ml-0.5 h-8 w-8 fill-current" />
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => skipBy(10)}
+            className="relative inline-flex h-9 w-9 items-center justify-center rounded-full text-blue-500 transition-colors hover:bg-blue-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label="Adelantar 10 segundos"
+            title="Adelantar 10s"
+          >
+            <RotateCw className="h-[22px] w-[22px] stroke-[1.9]" />
+            <span className="pointer-events-none absolute text-[8px] font-bold leading-none">10</span>
+          </button>
+          <button
+            type="button"
+            onClick={toggleLoop}
+            aria-pressed={isLooping}
+            className={cn(
+              "inline-flex h-9 w-9 items-center justify-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              isLooping ? "bg-blue-500 text-white" : "text-blue-500 hover:bg-blue-500/10",
+            )}
+            aria-label={isLooping ? "Desactivar repetición" : "Repetir"}
+            title={isLooping ? "Repetición activada" : "Repetir"}
+          >
+            <Repeat className="h-5 w-5 stroke-[2.1]" />
+          </button>
+        </div>
+
+        {/* Blob-backed audio keeps owner-scoped playback real. */}
+        <audio
+          ref={audioRef}
+          src={audioSrc || undefined}
+          preload="metadata"
+          onPlay={() => setIsPlaying(true)}
+          onPause={() => setIsPlaying(false)}
+          onEnded={() => { if (!isLooping) { setIsPlaying(false); setCurrentTime(0) } }}
+          onLoadedMetadata={(event) => {
+            const d = event.currentTarget.duration
+            if (Number.isFinite(d) && d > 0) setDuration(d)
+          }}
+          onDurationChange={(event) => {
+            const d = event.currentTarget.duration
+            if (Number.isFinite(d) && d > 0) setDuration(d)
+          }}
+          onTimeUpdate={(event) => { if (!isSeeking) setCurrentTime(event.currentTarget.currentTime) }}
+          className="hidden"
+        >
+          <a href={href} download={filename}>Descargar {generatedMediaLabel}</a>
+        </audio>
+      </div>
+    </div>
+  )
+}
+
+function ArtifactDeliveryList({
+  artifacts,
+  onDocumentPreview,
+}: {
+  artifacts: AgentArtifact[]
+  onDocumentPreview?: (target: DocumentPreviewTarget) => void
+}) {
+  let audioGenerationIndex = 0
+  return (
+    <>
+      {artifacts.map((artifact) => {
+        if (isAudioArtifact(artifact)) {
+          const generationIndex = audioGenerationIndex
+          audioGenerationIndex += 1
+          return <AudioArtifactPlayer key={artifact.id} artifact={artifact} generationIndex={generationIndex} />
+        }
+        return <ArtifactCard key={artifact.id} artifact={artifact} onDocumentPreview={onDocumentPreview} />
+      })}
+    </>
+  )
 }
 
 function ArtifactFormatIcon({ artifact }: { artifact: AgentArtifact }) {
@@ -333,10 +741,7 @@ function ArtifactCard({
   artifact: AgentArtifact
   onDocumentPreview?: (target: DocumentPreviewTarget) => void
 }) {
-  const apiRoot = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
-  const href = artifact.downloadUrl.startsWith("http")
-    ? artifact.downloadUrl
-    : `${apiRoot.replace(/\/api$/, "")}${artifact.downloadUrl}`
+  const href = artifactHref(artifact)
   const sizeKb = Math.max(1, Math.round((artifact.sizeBytes || 0) / 1024))
   const displayName = artifactDisplayName(artifact)
   const format = artifactFormat(artifact)
@@ -567,9 +972,7 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
     if (!hasDeliverable) return null
     return (
       <div className={cn("my-2 max-w-2xl space-y-1", className)}>
-        {state.artifacts.map((artifact) => (
-          <ArtifactCard key={artifact.id} artifact={artifact} onDocumentPreview={onDocumentPreview} />
-        ))}
+        <ArtifactDeliveryList artifacts={state.artifacts} onDocumentPreview={onDocumentPreview} />
       </div>
     )
   }
@@ -769,9 +1172,7 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
 
       {state.artifacts?.length > 0 && (
         <div className="mt-3 space-y-2">
-          {state.artifacts.map((artifact) => (
-            <ArtifactCard key={artifact.id} artifact={artifact} onDocumentPreview={onDocumentPreview} />
-          ))}
+          <ArtifactDeliveryList artifacts={state.artifacts} onDocumentPreview={onDocumentPreview} />
         </div>
       )}
 

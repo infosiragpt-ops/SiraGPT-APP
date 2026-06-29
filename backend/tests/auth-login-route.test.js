@@ -17,6 +17,7 @@ const request = require('supertest');
 const { buildRouteTestApp, mockResolvedModule, reloadModule } = require('./http-test-utils');
 
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'auth-login-route-test-secret-at-least-32-chars!!';
+process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'a'.repeat(64);
 process.env.RATE_LIMIT_STORE = 'memory';
 
 const rateLimitStore = require('../src/middleware/rate-limit-store');
@@ -47,14 +48,23 @@ class FakeLoginService {
 }
 
 let restoreLoginServiceModule = null;
+let restoreAuditLogModule = null;
+const auditCalls = [];
 
 before(() => {
   const resolved = require.resolve('../src/services/LoginService');
   restoreLoginServiceModule = mockResolvedModule(resolved, { LoginService: FakeLoginService });
+  const auditResolved = require.resolve('../src/utils/audit-log');
+  restoreAuditLogModule = mockResolvedModule(auditResolved, {
+    writeAuditLog: async (_db, payload) => {
+      auditCalls.push(payload);
+    },
+  });
 });
 
 after(() => {
   if (restoreLoginServiceModule) restoreLoginServiceModule();
+  if (restoreAuditLogModule) restoreAuditLogModule();
 });
 
 // ── App builder ─────────────────────────────────────────────────
@@ -74,6 +84,7 @@ describe('POST /api/auth/login — response shape per LoginService kind', () => 
     rateLimitStore._resetForTests();
     nextLoginResult = null;
     lastLoginArgs = null;
+    auditCalls.length = 0;
   });
 
   afterEach(() => {
@@ -132,6 +143,7 @@ describe('POST /api/auth/login — response shape per LoginService kind', () => 
     const app = buildApp();
     const res = await request(app).post('/api/auth/login').send(VALID_BODY).expect(401);
     assert.deepEqual(res.body, { error: 'Invalid credentials' });
+    assert.deepEqual(auditCalls, [], 'route must not duplicate LoginService login_failed audits');
   });
 
   it('org_2fa_required → 403 with code: "org_requires_2fa" and orgId', async () => {

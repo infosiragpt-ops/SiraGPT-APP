@@ -36,6 +36,7 @@ const NON_CANONICAL_PREFIXES = [
   "/library",
   "/voice",
   "/codex",
+  "/orgs",
   "/gpts/create",
   "/auth/callback",
   "/api",

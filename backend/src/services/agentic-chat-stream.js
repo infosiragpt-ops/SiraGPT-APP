@@ -758,6 +758,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
           downloadUrl: a.downloadUrl,
           previewHtml: a.previewHtml || null,
           validation: a.validation || null,
+          category: a.category || null,
+          kind: a.kind || a.category || null,
+          durationSeconds: Number(a.durationSeconds) || null,
+          prompt: a.prompt || null,
         });
         writeSse(res, { replace: true, content: serializeSentinel(state) });
       } catch (_) { /* never let UI plumbing crash a tool */ }

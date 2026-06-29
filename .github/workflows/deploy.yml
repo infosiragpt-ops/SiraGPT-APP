@@ -55,7 +55,7 @@ jobs:
             "${SLACK_WEBHOOK_URL}" || true
 
   deploy:
-    name: SSH to VPS · deploy-with-rollback
+    name: SSH to VPS · Docker Compose deploy
     needs: [pre-check]
     runs-on: ubuntu-latest
     timeout-minutes: 50
@@ -74,24 +74,79 @@ jobs:
           command_timeout: 45m
           script_stop: true
           script: |
-            set -e
-            echo "[deploy-workflow] Remote disk before cleanup"
+            bash <<'SIRAGPT_DEPLOY'
+            set -Eeuo pipefail
+            APP_DIR="/opt/siragpt"
+            COMPOSE="docker compose -f docker-compose.prod.yml -f docker-compose.production.override.yml --env-file .env"
+            READY_URL="${READY_URL:-https://siragpt.com/api/health/ready}"
+
+            wait_ready() {
+              local deadline status
+              deadline=$(( $(date +%s) + 60 ))
+              while [[ $(date +%s) -lt "${deadline}" ]]; do
+                status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "${READY_URL}" || true)"
+                if [[ "${status}" == "200" ]]; then
+                  return 0
+                fi
+                sleep 3
+              done
+              echo "[deploy-workflow] Health check failed: ${READY_URL} (last status: ${status:-none})"
+              return 1
+            }
+
+            cd "${APP_DIR}"
+            PREV_SHA="$(git rev-parse HEAD)"
+            printf '%s\n' "${PREV_SHA}" > .deploy-prev-sha
+
+            rollback() {
+              local status="$?"
+              if [[ "${status}" -eq 0 ]]; then
+                return 0
+              fi
+
+              echo "[deploy-workflow] Deploy failed; rolling back to ${PREV_SHA}"
+              set +e
+              git reset --hard "${PREV_SHA}"
+              ${COMPOSE} build backend frontend
+              ${COMPOSE} up -d --no-deps backend frontend
+              wait_ready
+              local rollback_status="$?"
+              if [[ "${rollback_status}" -ne 0 ]]; then
+                echo "[deploy-workflow] Rollback attempted but health check still failed"
+              else
+                echo "[deploy-workflow] Rollback health check passed"
+              fi
+              exit "${status}"
+            }
+            trap rollback EXIT
+
+            echo "[deploy-workflow] Remote disk before deploy"
             df -h / /var/lib/docker 2>/dev/null || df -h / || true
             docker system df || true
-            docker builder prune -af || true
-            docker image prune -af || true
-            docker container prune -f || true
-            echo "[deploy-workflow] Remote disk after cleanup"
-            docker system df || true
-            df -h / /var/lib/docker 2>/dev/null || df -h / || true
-            rm -f /root/siraNew/siraGPT/.git/index.lock
-            cd /root/siraNew/siraGPT
+            rm -f "${APP_DIR}/.git/index.lock"
             TARGET_SHA="${{ inputs.target_sha || github.sha }}"
-            echo "[deploy-workflow] Bootstrapping deploy scripts from ${TARGET_SHA}"
+            echo "[deploy-workflow] Deploying ${TARGET_SHA} from ${PREV_SHA}"
+            git fetch origin main
             git fetch origin "${TARGET_SHA}"
-            git checkout "${TARGET_SHA}" -- scripts/deploy-with-rollback.sh scripts/deploy-production.sh
-            chmod +x scripts/deploy-with-rollback.sh
-            ./scripts/deploy-with-rollback.sh
+            if git merge --ff-only "${TARGET_SHA}"; then
+              echo "[deploy-workflow] Fast-forwarded to ${TARGET_SHA}"
+            else
+              echo "[deploy-workflow] Remote checkout is not a direct ancestor of ${TARGET_SHA}; resetting to exact deploy SHA"
+              git status --short
+              git reset --hard "${TARGET_SHA}"
+            fi
+            ${COMPOSE} config -q
+            echo "[deploy-workflow] Building backend image (includes latest migrations)"
+            ${COMPOSE} build backend
+            echo "[deploy-workflow] Applying database migrations"
+            ${COMPOSE} run -T --rm backend npx prisma migrate deploy --schema prisma/schema.prisma </dev/null
+            echo "[deploy-workflow] Ensuring production admin account"
+            ${COMPOSE} run -T --rm backend node scripts/reset-prod-admin-password.js </dev/null
+            ${COMPOSE} build frontend
+            ${COMPOSE} up -d --no-deps backend frontend
+            wait_ready
+            echo "[deploy-workflow] Deploy health check passed: ${READY_URL}"
+            SIRAGPT_DEPLOY
 
       - name: Surface deploy result
         if: always()
@@ -100,15 +155,14 @@ jobs:
             echo "::notice::Production deploy succeeded — siragpt.com is on the new commit"
           else
             echo "::error::Production deploy failed. Check the SSH step output above for whether rollback succeeded."
-            echo "::error::Exit 1 from deploy-with-rollback.sh means rollback OK; exit 2 means manual intervention needed."
+            echo "::error::The SSH step attempts Docker Compose rollback to the previous SHA before failing."
           fi
 
   # ── Post-deploy health verification (cycle 34) ──────────────
-  # Polls /health/ready from the GH Actions runner up to 60s.
-  # If it never returns 200, fires a webhook to the VPS that
-  # invokes deploy-with-rollback.sh's rollback path. Currently
-  # marked continue-on-error so it never wedges an otherwise
-  # healthy deploy while the probe is being tuned.
+  # Polls /health/ready from the GH Actions runner as a non-blocking
+  # external signal. The deploy job already validates readiness from
+  # the VPS before it reports success, so this check must not roll
+  # back production on transient runner-to-site network timeouts.
   post-check:
     name: Post-deploy health check
     needs: [deploy]
@@ -122,11 +176,13 @@ jobs:
         env:
           READY_URL: ${{ secrets.READY_URL }}
         run: |
-          URL="${READY_URL:-https://api.siragpt.com/health/ready}"
+          URL="${READY_URL:-https://siragpt.com/api/health/ready}"
           echo "Polling ${URL}"
-          deadline=$(( $(date +%s) + 60 ))
+          deadline=$(( $(date +%s) + 180 ))
+          status=""
           while [[ $(date +%s) -lt ${deadline} ]]; do
-            if curl -sSf -o /dev/null --max-time 5 "${URL}"; then
+            status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "${URL}" || true)"
+            if [[ "${status}" == "200" ]]; then
               echo "ready=true" >> "$GITHUB_OUTPUT"
               echo "::notice::/health/ready returned 200"
               exit 0
@@ -134,30 +190,8 @@ jobs:
             sleep 3
           done
           echo "ready=false" >> "$GITHUB_OUTPUT"
-          echo "::error::/health/ready did not return 200 within 60s"
-          exit 1
-
-      - name: Trigger auto-rollback via SSH
-        if: failure() && steps.health.outputs.ready != 'true'
-        continue-on-error: true
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT }}
-          timeout: 30s
-          command_timeout: 8m
-          script_stop: true
-          script: |
-            set -e
-            cd /root/siraNew/siraGPT
-            # Re-run deploy-with-rollback with TRIGGER_ROLLBACK to
-            # short-circuit straight into the rollback path. The
-            # script gracefully ignores the var if unsupported.
-            export TRIGGER_ROLLBACK=1
-            chmod +x scripts/deploy-with-rollback.sh
-            ./scripts/deploy-with-rollback.sh || true
+          echo "::warning::/health/ready did not return 200 within 180s from the GitHub runner (last status: ${status:-none}). Deploy health already passed on the VPS."
+          exit 0
 
   # ── Source map upload (cycle 52, opt-in) ───────────────────
   # Uploads frontend + backend source maps to Sentry so production

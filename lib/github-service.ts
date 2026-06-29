@@ -240,7 +240,7 @@ export const githubService = {
   },
 
   // Run / live preview
-  run: (id: string) => send<RunStatus & { ok: boolean }>("POST", `/connected/${id}/run`),
+  run: (id: string, env?: Record<string, string>) => send<RunStatus & { ok: boolean }>("POST", `/connected/${id}/run`, env ? { env } : undefined),
   stop: (id: string) => send<{ ok: boolean; stopped: boolean }>("POST", `/connected/${id}/stop`),
   runStatus: (id: string) => get<RunStatus>(`/connected/${id}/run/status`),
 

@@ -39,9 +39,18 @@ const DOC_MAP = Object.freeze({
   'terms-of-service': 'terms-of-service.md',
 });
 
-// docs/legal lives at <repo>/docs/legal — backend/src/routes is three
-// levels deep, so resolve relative to __dirname.
-const LEGAL_DIR = path.resolve(__dirname, '..', '..', '..', 'docs', 'legal');
+// docs/legal lives at <repo>/docs/legal in source checkouts, while the Docker
+// backend image is built from ./backend and packages the synced copy at
+// /app/docs/legal. Prefer the source-tree canonical path when it exists.
+function _resolveLegalDir() {
+  const candidates = [
+    path.resolve(__dirname, '..', '..', '..', 'docs', 'legal'),
+    path.resolve(__dirname, '..', '..', 'docs', 'legal'),
+  ];
+  return candidates.find((dir) => fs.existsSync(dir)) || candidates[0];
+}
+
+const LEGAL_DIR = _resolveLegalDir();
 
 function _parseFrontMatter(markdown) {
   const m = markdown.match(/<!--([\s\S]*?)-->/);

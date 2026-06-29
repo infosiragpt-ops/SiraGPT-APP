@@ -42,16 +42,19 @@ test('exports two tools with the react-agent tool shape', () => {
   assert.deepEqual(AUDIO_MEDIA_TOOLS.map((t) => t.name), ['generate_speech', 'generate_music']);
 });
 
-test('generate_speech without an ElevenLabs client returns a graceful error', async () => {
+test('generate_speech without a TTS provider returns a graceful error', async () => {
   _internal.resetTestSeams();
-  const prev = process.env.ELEVENLABS_API_KEY;
+  const prevEleven = process.env.ELEVENLABS_API_KEY;
+  const prevOpenai = process.env.OPENAI_API_KEY;
   delete process.env.ELEVENLABS_API_KEY;
+  delete process.env.OPENAI_API_KEY;
   try {
     const r = await generateSpeech.execute({ text: 'hola mundo' }, {});
     assert.equal(r.ok, false);
-    assert.match(r.error, /ELEVENLABS_API_KEY|no está disponible/i);
+    assert.match(r.error, /ELEVENLABS_API_KEY|OPENAI_API_KEY|no está disponible/i);
   } finally {
-    if (prev !== undefined) process.env.ELEVENLABS_API_KEY = prev;
+    if (prevEleven !== undefined) process.env.ELEVENLABS_API_KEY = prevEleven;
+    if (prevOpenai !== undefined) process.env.OPENAI_API_KEY = prevOpenai;
     _internal.resetTestSeams();
   }
 });
@@ -101,6 +104,42 @@ test('generate_speech honours a custom voiceId', async () => {
   }
 });
 
+test('generate_speech falls back to OpenAI TTS when ElevenLabs fails', async () => {
+  const prevEleven = process.env.ELEVENLABS_API_KEY;
+  const prevOpenai = process.env.OPENAI_API_KEY;
+  process.env.ELEVENLABS_API_KEY = 'test-eleven-key';
+  process.env.OPENAI_API_KEY = 'test-openai-key';
+  let captured = null;
+  _internal.setElevenLabsClientFactory(() => ({
+    textToSpeech: {
+      convert: async () => {
+        throw new Error('Unauthorized: 401');
+      },
+    },
+  }));
+  _internal.setFetchImpl(async (url, opts) => {
+    captured = { url, body: JSON.parse(opts.body), headers: opts.headers };
+    const data = new TextEncoder().encode('OPENAI_MP3');
+    return { ok: true, status: 200, arrayBuffer: async () => data.buffer.slice(0) };
+  });
+  try {
+    const { ctx, events } = collectorCtx();
+    const r = await generateSpeech.execute({ text: 'Hola con fallback.' }, ctx);
+    assert.equal(r.ok, true);
+    assert.equal(r.provider, 'openai');
+    assert.equal(r.mime, 'audio/mpeg');
+    assert.match(captured.url, /\/audio\/speech$/);
+    assert.equal(captured.body.input, 'Hola con fallback.');
+    assert.equal(captured.headers.authorization, 'Bearer test-openai-key');
+    assert.ok(events.some((e) => e.type === 'tool_output' && /OpenAI TTS/i.test(e.preview || '')));
+    assert.ok(events.some((e) => e.type === 'file_artifact'));
+  } finally {
+    if (prevEleven !== undefined) process.env.ELEVENLABS_API_KEY = prevEleven; else delete process.env.ELEVENLABS_API_KEY;
+    if (prevOpenai !== undefined) process.env.OPENAI_API_KEY = prevOpenai; else delete process.env.OPENAI_API_KEY;
+    _internal.resetTestSeams();
+  }
+});
+
 test('generate_music without ELEVENLABS_API_KEY returns a graceful error', async () => {
   _internal.resetTestSeams();
   const prev = process.env.ELEVENLABS_API_KEY;
@@ -135,7 +174,12 @@ test('generate_music posts the right body and saves an mp3 artifact', async () =
     assert.equal(captured.body.music_length_ms, 180000);
     assert.equal(captured.headers['xi-api-key'], 'test-key');
     assert.match(captured.body.prompt, /lofi/i);
-    assert.ok(events.some((e) => e.type === 'file_artifact'));
+    const artifactEvt = events.find((e) => e.type === 'file_artifact');
+    assert.ok(artifactEvt, 'should emit a file_artifact event');
+    assert.equal(artifactEvt.artifact.category, 'music');
+    assert.equal(artifactEvt.artifact.kind, 'music');
+    assert.equal(artifactEvt.artifact.durationSeconds, 180);
+    assert.match(artifactEvt.artifact.prompt, /lofi/i);
   } finally {
     if (prev !== undefined) process.env.ELEVENLABS_API_KEY = prev; else delete process.env.ELEVENLABS_API_KEY;
     _internal.resetTestSeams();
