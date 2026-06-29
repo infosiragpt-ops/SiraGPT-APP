@@ -523,6 +523,31 @@ const buildVoiceGenerationGoal = ({
     "Si una preferencia exacta no esta disponible en el proveedor, genera el mejor audio posible con la voz multilingue disponible y explica la limitacion brevemente junto al archivo.",
   ].join("\n\n")
 }
+const buildMusicGenerationGoal = ({
+  text,
+  model,
+  style,
+  mood,
+  durationSeconds,
+  influence,
+  effect,
+}: {
+  text: string
+  model: MusicModel
+  style: MusicStyle
+  mood: MusicMood
+  durationSeconds: number
+  influence: number
+  effect: MusicEffect
+}) => {
+  const normalizedText = text.trim()
+  return [
+    "Genera una pista de musica en formato MP3. Debes usar la herramienta generate_music; no finalices solo con texto.",
+    `Descripcion de la musica a componer:\n${normalizedText}`,
+    `Preferencias visibles del usuario: proveedor/modelo=${model}; estilo=${style}; mood=${mood}; duracion=${durationSeconds} segundos; influencia=${Math.round(influence * 100)}%; efecto=${effect}.`,
+    "Si una preferencia exacta no esta disponible en el proveedor, genera la mejor pista posible con el motor de musica disponible y explica la limitacion brevemente junto al archivo.",
+  ].join("\n\n")
+}
 const DEFAULT_IMAGE_MODEL = ""
 const DEFAULT_IMAGE_PROVIDER = "OpenAI"
 const DEFAULT_VIDEO_MODEL = ""
@@ -8110,6 +8135,29 @@ REWRITTEN TEXT:`;
         isGeneratingVoiceRef.current = false;
         setIsGeneratingVoice(false);
         setIsVoiceGenerationActive(true);
+        inFlightSendKeysRef.current.delete(sendKey);
+      }
+      return;
+    }
+
+    if (isMusicGenerationActive) {
+      const musicGoal = buildMusicGenerationGoal({
+        text: msg,
+        model: selectedMusicModel,
+        style: selectedMusicStyle,
+        mood: selectedMusicMood,
+        durationSeconds: selectedMusicDuration,
+        influence: selectedMusicInfluence,
+        effect: selectedMusicEffect,
+      });
+      setIsMusicGenerationActive(true);
+      try {
+        await handleAgentTask(musicGoal, filesToSend, {
+          userMessageAlreadyAdded: false,
+          displayGoal: msg,
+        });
+      } finally {
+        setIsMusicGenerationActive(true);
         inFlightSendKeysRef.current.delete(sendKey);
       }
       return;

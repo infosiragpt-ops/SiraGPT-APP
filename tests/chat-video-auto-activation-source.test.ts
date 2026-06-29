@@ -170,6 +170,24 @@ describe("chat video auto-activation source contract", () => {
     )
   })
 
+  it("routes active Music mode to music generation and keeps the tool active", () => {
+    assert.match(
+      source,
+      /const buildMusicGenerationGoal = \(\{[\s\S]{0,700}generate_music/,
+      "Music goal builder must force the generate_music tool"
+    )
+    assert.match(
+      source,
+      /if \(isMusicGenerationActive\) \{[\s\S]{0,500}const musicGoal = buildMusicGenerationGoal[\s\S]{0,500}await handleAgentTask\(musicGoal, filesToSend, \{[\s\S]{0,200}displayGoal: msg/,
+      "Music mode sends should bypass normal chat classification and call the music artifact path"
+    )
+    assert.match(
+      source,
+      /if \(isMusicGenerationActive\) \{[\s\S]{0,900}finally \{[\s\S]{0,160}setIsMusicGenerationActive\(true\);/,
+      "Music mode should remain selected after the music task settles"
+    )
+  })
+
   it("keeps Voice mode visible and cancellable while speech generation is running", () => {
     assert.match(
       source,
