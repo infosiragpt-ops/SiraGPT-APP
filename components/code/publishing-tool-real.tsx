@@ -31,6 +31,13 @@ import {
   SlidersHorizontal,
   AlertTriangle,
   Sparkles,
+  Eye,
+  EyeOff,
+  KeyRound,
+  Lock,
+  Plus,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -561,7 +568,7 @@ export function RealPublishingPanel({ projectId }: { projectId: string | null })
           />
 
           {/* Build secrets */}
-          <SecretsSection connectionId={connectionId} />
+          <SecretsSection connectionId={connectionId} projectId={projectId} />
 
           {/* Targets list */}
           <div className="rounded-lg border border-border">
@@ -975,139 +982,329 @@ function parseDotenv(text: string): Array<{ k: string; v: string }> {
   return out
 }
 
-function SecretsSection({ connectionId }: { connectionId: string }) {
-  const [keys, setKeys] = React.useState<string[]>([])
-  const [pairs, setPairs] = React.useState<Array<{ k: string; v: string }>>([])
-  const [saving, setSaving] = React.useState(false)
-  const [open, setOpen] = React.useState(false)
-  const [bulk, setBulk] = React.useState("")
-  const [showBulk, setShowBulk] = React.useState(false)
+// Shared type — mirrors SecretEntry in workspace-tool-panels.tsx
+type SharedSecret = { id: string; key: string; value: string; scope: "app" | "account"; updatedAt: number; linked?: boolean }
+const SECRETS_CHANGED_EVENT = "siragpt:secrets-changed"
 
+function SecretsSection({ connectionId, projectId }: { connectionId: string; projectId: string | null }) {
+  const storageKey = `siragpt:code-tool:${projectId || "default"}:secrets`
+  const isOwnEventRef = React.useRef(false)
+
+  const [panelOpen, setPanelOpen] = React.useState(false)
+  const [secrets, setSecretsLocal] = React.useState<SharedSecret[]>([])
+
+  // Load from localStorage (same store as SecretsTool) and subscribe to cross-component changes
   React.useEffect(() => {
-    hostingService
-      .getEnv(connectionId)
-      .then(({ keys: k }) => setKeys(k))
-      .catch(() => {})
-  }, [connectionId])
+    const load = () => {
+      if (isOwnEventRef.current) return
+      try {
+        const raw = window.localStorage.getItem(storageKey)
+        setSecretsLocal(raw ? (JSON.parse(raw) as SharedSecret[]) : [])
+      } catch { setSecretsLocal([]) }
+    }
+    load()
+    window.addEventListener(SECRETS_CHANGED_EVENT, load)
+    return () => window.removeEventListener(SECRETS_CHANGED_EVENT, load)
+  }, [storageKey])
+
+  // Write to localStorage + notify SecretsTool
+  const persist = React.useCallback((next: SharedSecret[]) => {
+    setSecretsLocal(next)
+    try {
+      window.localStorage.setItem(storageKey, JSON.stringify(next))
+      isOwnEventRef.current = true
+      window.dispatchEvent(new CustomEvent(SECRETS_CHANGED_EVENT))
+      Promise.resolve().then(() => { isOwnEventRef.current = false })
+    } catch { /* ignore */ }
+  }, [storageKey])
+
+  // ── Add form ──
+  const [showAdd, setShowAdd] = React.useState(false)
+  const [addKey, setAddKey] = React.useState("")
+  const [addVal, setAddVal] = React.useState("")
+  const [addReveal, setAddReveal] = React.useState(false)
+  const addInputRef = React.useRef<HTMLInputElement>(null)
+  React.useEffect(() => { if (showAdd) setTimeout(() => addInputRef.current?.focus(), 40) }, [showAdd])
+
+  const makeSecretId = () => `sec-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+
+  const commitAdd = () => {
+    const key = addKey.trim().replace(/\s+/g, "_").toUpperCase()
+    if (!key || !addVal) return
+    persist([
+      { id: makeSecretId(), key, value: addVal, scope: "app", updatedAt: Date.now() },
+      ...secrets.filter((r) => !(r.key === key && r.scope === "app")),
+    ])
+    setAddKey(""); setAddVal(""); setAddReveal(false); setShowAdd(false)
+    toast.success(`${key} guardado`)
+  }
+
+  // ── Inline edit ──
+  const [editId, setEditId] = React.useState<string | null>(null)
+  const [editKey, setEditKey] = React.useState("")
+  const [editVal, setEditVal] = React.useState("")
+
+  const commitEdit = () => {
+    if (!editId) return
+    const nextKey = editKey.trim().replace(/\s+/g, "_").toUpperCase()
+    persist(secrets.map((r) => r.id === editId ? { ...r, key: nextKey || r.key, value: editVal, updatedAt: Date.now() } : r))
+    setEditId(null)
+    toast.success("Secret actualizado")
+  }
+
+  // ── Reveal per row ──
+  const [revealedSet, setRevealedSet] = React.useState<Set<string>>(new Set())
+  const toggleReveal = (id: string) => setRevealedSet((prev) => {
+    const next = new Set(prev)
+    if (next.has(id)) next.delete(id); else next.add(id)
+    return next
+  })
+
+  // ── .env paste ──
+  const [showBulk, setShowBulk] = React.useState(false)
+  const [bulk, setBulk] = React.useState("")
 
   const importEnv = () => {
     const parsed = parseDotenv(bulk)
-    if (parsed.length === 0) return toast.error("No se encontró ningún KEY=VALUE")
-    // Merge into pairs, parsed wins on duplicate keys.
-    setPairs((prev) => {
-      const map = new Map<string, string>()
-      for (const { k, v } of prev) if (k.trim()) map.set(k.trim(), v)
-      for (const { k, v } of parsed) map.set(k, v)
-      return Array.from(map, ([k, v]) => ({ k, v }))
-    })
-    setBulk("")
-    setShowBulk(false)
-    toast.success(`${parsed.length} variable(s) importadas — revisa y pulsa Guardar`)
+    if (!parsed.length) return toast.error("No se encontró ningún KEY=VALUE")
+    const map = new Map(secrets.map((r) => [r.key, r]))
+    for (const { k, v } of parsed) {
+      const ex = map.get(k)
+      if (ex) map.set(k, { ...ex, value: v, updatedAt: Date.now() })
+      else map.set(k, { id: makeSecretId(), key: k, value: v, scope: "app", updatedAt: Date.now() })
+    }
+    persist(Array.from(map.values()))
+    setBulk(""); setShowBulk(false)
+    toast.success(`${parsed.length} variable(s) importadas`)
   }
 
-  const addPair = () => setPairs((p) => [...p, { k: "", v: "" }])
-  const save = async () => {
+  // ── Deploy sync ──
+  const [syncing, setSyncing] = React.useState(false)
+  const [deployCount, setDeployCount] = React.useState(0)
+
+  React.useEffect(() => {
+    hostingService.getEnv(connectionId).then(({ keys }) => setDeployCount(keys.length)).catch(() => {})
+  }, [connectionId])
+
+  const syncToDeploy = async () => {
     const env: Record<string, string> = {}
-    for (const { k, v } of pairs) if (k.trim()) env[k.trim()] = v
-    setSaving(true)
+    for (const r of secrets) if (r.key) env[r.key] = r.value
+    setSyncing(true)
     try {
-      const { keys: saved } = await hostingService.setEnv(connectionId, env)
-      setKeys(saved)
-      setPairs([])
-      toast.success("Secrets guardados")
+      const { keys } = await hostingService.setEnv(connectionId, env)
+      setDeployCount(keys.length)
+      toast.success(`${keys.length} secret(s) inyectados en el deploy`)
     } catch (e) {
-      toast.error((e as Error).message || "No se pudieron guardar")
-    } finally {
-      setSaving(false)
-    }
+      toast.error((e as Error).message || "Error al sincronizar")
+    } finally { setSyncing(false) }
   }
 
   return (
-    <div className="rounded-lg border border-border">
-      <button className="flex w-full items-center justify-between px-3 py-2 text-sm font-medium" onClick={() => setOpen((o) => !o)}>
-        <span>Build secrets / variables (VITE_*…)</span>
-        <span className="text-xs text-muted-foreground">{keys.length} definidas</span>
+    <div className="overflow-hidden rounded-lg border border-border">
+      {/* ── Header / toggle ── */}
+      <button
+        type="button"
+        className="flex w-full items-center justify-between px-4 py-3 text-sm font-medium hover:bg-muted/40 transition-colors"
+        onClick={() => setPanelOpen((s) => !s)}
+      >
+        <span className="inline-flex items-center gap-2">
+          {panelOpen ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />}
+          <KeyRound className="h-3.5 w-3.5 text-muted-foreground" />
+          Secrets / variables de entorno
+        </span>
+        <span className={cn(
+          "rounded-full px-2 py-0.5 text-xs font-medium",
+          secrets.length > 0 ? "bg-emerald-500/10 text-emerald-600" : "bg-muted text-muted-foreground",
+        )}>
+          {secrets.length} {secrets.length === 1 ? "secret" : "secrets"}
+        </span>
       </button>
-      {open && (
-        <div className="space-y-2 border-t border-border p-3">
-          {keys.length > 0 && (
-            <div className="text-xs text-muted-foreground">
-              Actuales: {keys.map((k) => <code key={k} className="mr-1 rounded bg-muted px-1">{k}</code>)}
-              <span className="ml-1">(los valores no se muestran)</span>
-            </div>
-          )}
 
-          {/* Bulk .env paste — paste a whole .env and auto-split into secrets */}
-          <div className="rounded-md border border-dashed border-border p-2">
-            <button
-              className="flex w-full items-center justify-between text-xs font-medium text-violet-600 hover:text-violet-700"
-              onClick={() => setShowBulk((s) => !s)}
-            >
-              <span className="inline-flex items-center gap-1.5">
-                <Sparkles className="h-3.5 w-3.5" /> Pegar .env (importar en bloque)
-              </span>
-              <span className="text-muted-foreground">{showBulk ? "ocultar" : "abrir"}</span>
-            </button>
-            {showBulk && (
-              <div className="mt-2 space-y-2">
-                <textarea
-                  value={bulk}
-                  onChange={(e) => setBulk(e.target.value)}
-                  rows={6}
+      {panelOpen && (
+        <div className="space-y-3 border-t border-border p-4">
+          {/* ── Inline add form ── */}
+          {showAdd && (
+            <div className="rounded-md border border-border bg-muted/20 p-3 space-y-2">
+              <p className="text-xs font-semibold text-foreground">Agregar secret</p>
+              <div className="flex gap-2">
+                <Input
+                  ref={addInputRef}
+                  value={addKey}
+                  onChange={(e) => setAddKey(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && commitAdd()}
+                  placeholder="NOMBRE_CLAVE"
+                  className="h-8 w-2/5 font-mono text-xs uppercase"
                   spellCheck={false}
-                  placeholder={"# Pega aquí el contenido de tu .env\nDATABASE_URL=postgres://...\nGOOGLE_CLIENT_ID=...\nGOOGLE_CLIENT_SECRET=...\nENCRYPTION_KEY=..."}
-                  className="w-full rounded-md border border-input bg-background px-2 py-1.5 font-mono text-xs"
                 />
-                <div className="flex items-center gap-2">
-                  <Button size="sm" onClick={importEnv} disabled={!bulk.trim()}>
-                    Importar variables
-                  </Button>
-                  <span className="text-xs text-muted-foreground">
-                    Lee cada <code className="rounded bg-muted px-1">KEY=VALUE</code> (ignora comentarios). Revisa abajo y pulsa Guardar.
-                  </span>
+                <div className="relative flex-1">
+                  <Input
+                    value={addVal}
+                    onChange={(e) => setAddVal(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && commitAdd()}
+                    placeholder="valor del secret"
+                    type={addReveal ? "text" : "password"}
+                    className="h-8 pr-8 font-mono text-xs"
+                    spellCheck={false}
+                  />
+                  <button type="button" tabIndex={-1} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" onClick={() => setAddReveal((s) => !s)}>
+                    {addReveal ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  </button>
                 </div>
+                <Button size="sm" className="h-8 shrink-0" onClick={commitAdd} disabled={!addKey.trim() || !addVal}>Guardar</Button>
+                <Button size="sm" variant="ghost" className="h-8 shrink-0 text-muted-foreground" onClick={() => { setShowAdd(false); setAddKey(""); setAddVal("") }}>✕</Button>
               </div>
-            )}
+            </div>
+          )}
+
+          {/* ── Secrets table ── */}
+          {secrets.length === 0 ? (
+            <div className="rounded-md border border-dashed border-border px-3 py-6 text-center">
+              <p className="text-xs font-medium text-foreground">Sin secrets todavía</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Agrégalos aquí o en la pestaña <strong>Secrets</strong> — ambos paneles comparten el mismo almacén.
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-hidden rounded-md border border-border/60">
+              {/* Table header */}
+              <div className="grid grid-cols-[1fr_1fr_auto] gap-2 border-b border-border/60 bg-muted/30 px-3 py-1.5">
+                <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Clave</span>
+                <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Valor</span>
+                <span className="w-[100px]" />
+              </div>
+              {secrets.map((row, idx) => {
+                const isRevealed = revealedSet.has(row.id)
+                const isEditing = editId === row.id
+                return (
+                  <div
+                    key={row.id}
+                    className={cn(
+                      "grid grid-cols-[1fr_1fr_auto] items-center gap-2 px-3 py-2",
+                      idx !== secrets.length - 1 && "border-b border-border/40",
+                      isEditing && "bg-muted/30",
+                    )}
+                  >
+                    {isEditing ? (
+                      <>
+                        <Input
+                          value={editKey}
+                          onChange={(e) => setEditKey(e.target.value)}
+                          onKeyDown={(e) => e.key === "Enter" && commitEdit()}
+                          className="h-7 font-mono text-xs uppercase"
+                          spellCheck={false}
+                          autoFocus
+                        />
+                        <Input
+                          value={editVal}
+                          onChange={(e) => setEditVal(e.target.value)}
+                          onKeyDown={(e) => e.key === "Enter" && commitEdit()}
+                          className="h-7 font-mono text-xs"
+                          spellCheck={false}
+                        />
+                        <div className="flex items-center gap-1">
+                          <Button size="sm" className="h-7 px-2 text-xs" onClick={commitEdit}>OK</Button>
+                          <Button size="sm" variant="ghost" className="h-7 px-2 text-muted-foreground" onClick={() => setEditId(null)}>✕</Button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <span className="flex min-w-0 items-center gap-1.5">
+                          <span className="h-4 w-4 shrink-0 rounded bg-emerald-500/10 p-0.5 text-emerald-600">
+                            <Lock className="h-full w-full" />
+                          </span>
+                          <span className="truncate font-mono text-xs font-semibold text-foreground">{row.key}</span>
+                        </span>
+                        <span className="truncate font-mono text-xs text-muted-foreground">
+                          {isRevealed ? row.value : "•".repeat(Math.min(row.value.length || 16, 20))}
+                        </span>
+                        <div className="flex items-center gap-0.5">
+                          <button
+                            type="button"
+                            title="Copiar"
+                            className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                            onClick={() => navigator.clipboard?.writeText(row.value).then(() => toast.success(`${row.key} copiado`))}
+                          >
+                            <Copy className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            title={isRevealed ? "Ocultar" : "Mostrar"}
+                            className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                            onClick={() => toggleReveal(row.id)}
+                          >
+                            {isRevealed ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                          </button>
+                          <button
+                            type="button"
+                            title="Editar"
+                            className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                            onClick={() => { setEditId(row.id); setEditKey(row.key); setEditVal(row.value) }}
+                          >
+                            <Settings2 className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            title="Eliminar"
+                            className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-red-500"
+                            onClick={() => { persist(secrets.filter((r) => r.id !== row.id)); toast.success(`${row.key} eliminado`) }}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {/* ── Action bar ── */}
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" variant="outline" onClick={() => setShowAdd((s) => !s)}>
+              <Plus className="mr-1 h-3.5 w-3.5" /> Agregar
+            </Button>
+            <Button size="sm" variant="outline" className="text-violet-600 hover:text-violet-700" onClick={() => setShowBulk((s) => !s)}>
+              <Sparkles className="mr-1 h-3.5 w-3.5" /> Pegar .env
+            </Button>
+            <Button
+              size="sm"
+              className="ml-auto gap-1.5"
+              disabled={syncing || secrets.length === 0}
+              onClick={syncToDeploy}
+            >
+              {syncing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Lock className="h-3.5 w-3.5" />}
+              Sincronizar con deploy
+            </Button>
           </div>
 
-          {pairs.length > 0 && (
-            <div className="text-xs text-muted-foreground">{pairs.length} variable(s) a guardar:</div>
-          )}
-          {pairs.map((p, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <Input
-                value={p.k}
-                onChange={(e) => setPairs((arr) => arr.map((x, j) => (j === i ? { ...x, k: e.target.value } : x)))}
-                placeholder="VITE_API_KEY"
-                className="h-8 text-sm"
+          {/* ── .env paste area ── */}
+          {showBulk && (
+            <div className="space-y-2 rounded-md border border-dashed border-border p-2.5">
+              <p className="text-xs font-medium text-foreground">Pegar .env</p>
+              <textarea
+                value={bulk}
+                onChange={(e) => setBulk(e.target.value)}
+                rows={6}
+                spellCheck={false}
+                placeholder={"# Pega tu .env completo\nDATABASE_URL=postgres://...\nOPENAI_API_KEY=sk-...\nJWT_SECRET=..."}
+                className="w-full resize-none rounded-md border border-input bg-background px-2 py-1.5 font-mono text-xs"
               />
-              <Input
-                value={p.v}
-                onChange={(e) => setPairs((arr) => arr.map((x, j) => (j === i ? { ...x, v: e.target.value } : x)))}
-                placeholder="valor"
-                className="h-8 text-sm"
-                type="password"
-              />
-              <button
-                className="shrink-0 text-muted-foreground hover:text-red-500"
-                onClick={() => setPairs((arr) => arr.filter((_, j) => j !== i))}
-                title="Quitar"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
+              <div className="flex items-center gap-2">
+                <Button size="sm" onClick={importEnv} disabled={!bulk.trim()}>Importar</Button>
+                <span className="text-xs text-muted-foreground">
+                  Lee cada <code className="rounded bg-muted px-1">KEY=VALUE</code> e ignora comentarios. Sincroniza con el deploy después.
+                </span>
+              </div>
             </div>
-          ))}
-          <div className="flex gap-2">
-            <Button size="sm" variant="outline" onClick={addPair}>
-              + Variable
-            </Button>
-            <Button size="sm" disabled={saving || pairs.length === 0} onClick={save}>
-              {saving ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}
-              Guardar (reemplaza todas)
-            </Button>
-          </div>
+          )}
+
+          {/* ── Footer note ── */}
           <p className="text-xs text-muted-foreground">
-            Se cifran en el servidor y se inyectan en el build (p. ej. <code>VITE_*</code> para Vite).
+            {deployCount > 0
+              ? <><strong>{deployCount}</strong> secret(s) sincronizados en el contenedor del deploy.</>
+              : <>Pulsa «Sincronizar con deploy» para inyectarlos en el build y runtime.</>}
+            {" "}Los cambios aquí también se reflejan en la pestaña <strong>Secrets</strong>.
           </p>
         </div>
       )}

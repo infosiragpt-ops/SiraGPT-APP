@@ -709,79 +709,136 @@ function ResourceMeter({
   )
 }
 
+const SECRETS_CHANGED_EVENT = "siragpt:secrets-changed"
+
 function SecretsTool() {
   const { activeFolder } = useCodeWorkspace()
   const connectionId = activeFolder?.id ? getGitBinding(activeFolder.id) : null
-  const [secrets, setSecrets] = useWorkspacePersistedState<SecretEntry[]>("secrets", [])
-  const [keyName, setKeyName] = React.useState("")
-  const [value, setValue] = React.useState("")
-  const [scope, setScope] = React.useState<"app" | "account">("app")
-  const [activeTab, setActiveTab] = React.useState<"app" | "account" | "env">("app")
-  const [editingId, setEditingId] = React.useState<string | null>(null)
-  const [editingValue, setEditingValue] = React.useState("")
-  const [revealed, setRevealed] = React.useState<Set<string>>(new Set())
-  const [bulk, setBulk] = React.useState("")
-  const [deployKeys, setDeployKeys] = React.useState<string[]>([])
-  const [savingDeploy, setSavingDeploy] = React.useState(false)
+  const storageKey = `siragpt:code-tool:${activeFolder?.id || "default"}:secrets`
 
-  // Show which secrets already reach the deploy (deploy_envs — keys only).
+  const [secrets, setSecretsRaw] = useWorkspacePersistedState<SecretEntry[]>("secrets", [])
+  const isOwnEventRef = React.useRef(false)
+
+  // Wrapped setter — writes to localStorage immediately + fires sync event so SecretsSection refreshes
+  const setSecrets = React.useCallback((updater: React.SetStateAction<SecretEntry[]>) => {
+    setSecretsRaw((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater
+      try {
+        window.localStorage.setItem(storageKey, JSON.stringify(next))
+        isOwnEventRef.current = true
+        window.dispatchEvent(new CustomEvent(SECRETS_CHANGED_EVENT))
+        Promise.resolve().then(() => { isOwnEventRef.current = false })
+      } catch { /* ignore */ }
+      return next
+    })
+  }, [setSecretsRaw, storageKey])
+
+  // Pick up changes made from the Publishing → Manage → SecretsSection panel
+  React.useEffect(() => {
+    const handler = () => {
+      if (isOwnEventRef.current) return
+      try {
+        const raw = window.localStorage.getItem(storageKey)
+        setSecretsRaw(raw ? JSON.parse(raw) as SecretEntry[] : [])
+      } catch { /* ignore */ }
+    }
+    window.addEventListener(SECRETS_CHANGED_EVENT, handler)
+    return () => window.removeEventListener(SECRETS_CHANGED_EVENT, handler)
+  }, [storageKey, setSecretsRaw])
+
+  const [activeTab, setActiveTab] = React.useState<"app" | "account" | "env">("app")
+
+  // Add-form state
+  const [showAdd, setShowAdd] = React.useState(false)
+  const [addKey, setAddKey] = React.useState("")
+  const [addValue, setAddValue] = React.useState("")
+  const [addReveal, setAddReveal] = React.useState(false)
+  const addKeyRef = React.useRef<HTMLInputElement>(null)
+
+  // Inline edit state
+  const [editingId, setEditingId] = React.useState<string | null>(null)
+  const [editingKey, setEditingKey] = React.useState("")
+  const [editingValue, setEditingValue] = React.useState("")
+
+  // Reveal state
+  const [revealed, setRevealed] = React.useState<Set<string>>(new Set())
+
+  // Search
+  const [search, setSearch] = React.useState("")
+
+  // .env editor
+  const [envDraft, setEnvDraft] = React.useState("")
+  const [savingDeploy, setSavingDeploy] = React.useState(false)
+  const [deployKeys, setDeployKeys] = React.useState<string[]>([])
+  const envLoadedRef = React.useRef(false)
+
   React.useEffect(() => {
     if (!connectionId) return setDeployKeys([])
     hostingService.getEnv(connectionId).then(({ keys }) => setDeployKeys(keys)).catch(() => setDeployKeys([]))
   }, [connectionId])
 
-  const importEnv = () => {
-    const parsed = parseDotenvText(bulk)
-    if (parsed.length === 0) return toast.error("No se encontró ningún KEY=VALUE")
-    setSecrets((prev) => {
-      const next = [...prev]
-      for (const { key, value: v } of parsed) {
-        const k = key.toUpperCase()
-        const idx = next.findIndex((row) => row.key === k && row.scope === "app")
-        if (idx >= 0) next[idx] = { ...next[idx], value: v, updatedAt: Date.now() }
-        else next.unshift({ id: makeId("secret"), key: k, value: v, scope: "app", linked: false, updatedAt: Date.now() })
-      }
-      return next
-    })
-    setBulk("")
-    toast.success(`${parsed.length} variable(s) importadas`)
-  }
+  React.useEffect(() => {
+    if (showAdd) setTimeout(() => addKeyRef.current?.focus(), 50)
+  }, [showAdd])
 
-  const addSecret = () => {
-    const key = keyName.trim().replace(/\s+/g, "_").toUpperCase()
-    if (!key || !value) return
-    setSecrets((prev) => [
-      { id: makeId("secret"), key, value, scope, linked: scope === "account", updatedAt: Date.now() },
-      ...prev.filter((row) => !(row.key === key && row.scope === scope)),
-    ])
-    setKeyName("")
-    setValue("")
-  }
+  const appSecrets = secrets.filter((r) => r.scope === "app")
+  const accountSecrets = secrets.filter((r) => r.scope === "account")
+
+  const currentRows = activeTab === "app" ? appSecrets : accountSecrets
+  const filteredRows = search.trim()
+    ? currentRows.filter((r) => r.key.toLowerCase().includes(search.toLowerCase()))
+    : currentRows
+
+  const dbUrlSecret = appSecrets.find((r) => r.key === "DATABASE_URL") || accountSecrets.find((r) => r.key === "DATABASE_URL")
+  const dbUrl = dbUrlSecret?.value || "postgres://workspace:local@siragpt/db"
 
   const predefined = [
     { key: "REPLIT_DOMAINS", value: "siragpt-app.local" },
     { key: "REPLIT_DEV_DOMAIN", value: "127.0.0.1:3000" },
     { key: "REPLIT_USER", value: "Admin User" },
     { key: "REPLIT_DEPLOYMENT", value: "workspace" },
-    { key: "DATABASE_URL", value: "postgres://workspace:local@siragpt/db" },
+    { key: "DATABASE_URL", value: dbUrl },
   ]
-  const appSecrets = secrets.filter((row) => row.scope === "app")
-  const accountSecrets = secrets.filter((row) => row.scope === "account")
-  const envRows = [
-    ...predefined,
-    ...appSecrets,
-    ...accountSecrets.filter((row) => row.linked !== false),
-  ]
-  const envText = envRows.map((row) => `${row.key}=${JSON.stringify(row.value)}`).join("\n")
-  const jsonText = JSON.stringify(Object.fromEntries(envRows.map((row) => [row.key, row.value])), null, 2)
+  const envRows = [...predefined, ...appSecrets, ...accountSecrets.filter((r) => r.linked !== false)]
+  const envText = envRows.map((r) => `${r.key}=${JSON.stringify(r.value)}`).join("\n")
+  const jsonText = JSON.stringify(Object.fromEntries(envRows.map((r) => [r.key, r.value])), null, 2)
 
-  // Only the user's real secrets (NOT the predefined REPLIT_*/mock DATABASE_URL)
-  // are pushed to the deploy, so the auto-provisioned DATABASE_URL isn't clobbered.
-  const deployRows = [...appSecrets, ...accountSecrets.filter((row) => row.linked !== false)]
-  const saveToDeploy = async () => {
-    if (!connectionId) return toast.error("Conecta un repo en la pestaña Git primero — los secrets se guardan por proyecto")
+  const deployRows = [...appSecrets, ...accountSecrets.filter((r) => r.linked !== false)]
+  const envFromDeployRows = () => deployRows.map((r) => `${r.key}=${r.value}`).join("\n")
+
+  const commitAdd = () => {
+    const key = addKey.trim().replace(/\s+/g, "_").toUpperCase()
+    if (!key || !addValue) return
+    const scope = activeTab === "account" ? "account" : "app"
+    setSecrets((prev) => [
+      { id: makeId("secret"), key, value: addValue, scope, linked: scope === "account", updatedAt: Date.now() },
+      ...prev.filter((r) => !(r.key === key && r.scope === scope)),
+    ])
+    setAddKey("")
+    setAddValue("")
+    setAddReveal(false)
+    setShowAdd(false)
+    toast.success(`Secret ${key} guardado`)
+  }
+
+  const applyEnvDraft = (parsed = parseDotenvText(envDraft)) => {
+    setSecrets((prev) => {
+      const kept = prev.filter((r) => r.scope !== "app")
+      const appRows: SecretEntry[] = parsed.map(({ key, value }) => ({
+        id: makeId("secret"), key: key.toUpperCase(), value, scope: "app", linked: false, updatedAt: Date.now(),
+      }))
+      return [...appRows, ...kept]
+    })
+    return parsed
+  }
+
+  const saveEnvToDeploy = async () => {
+    if (!connectionId) return toast.error("Conecta un repo en la pestaña Git primero")
+    const parsed = parseDotenvText(envDraft)
+    if (parsed.length === 0) return toast.error("No se encontró ningún KEY=VALUE en el editor")
+    applyEnvDraft(parsed)
     const env: Record<string, string> = {}
-    for (const row of deployRows) env[row.key] = row.value
+    for (const { key, value } of parsed) env[key.toUpperCase()] = value
     setSavingDeploy(true)
     try {
       const { keys } = await hostingService.setEnv(connectionId, env)
@@ -794,222 +851,411 @@ function SecretsTool() {
     }
   }
 
+  React.useEffect(() => {
+    if (activeTab === "env" && !envLoadedRef.current) {
+      envLoadedRef.current = true
+      setEnvDraft((cur) => cur || envFromDeployRows())
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab])
+
+  const TAB_LABELS = {
+    app: `App Secrets${appSecrets.length ? ` (${appSecrets.length})` : ""}`,
+    account: `Account Secrets${accountSecrets.length ? ` (${accountSecrets.length})` : ""}`,
+    env: ".env / JSON",
+  }
+
   return (
     <ToolShell
       eyebrow="Environment"
       title="Secrets"
-      detail="Gestiona variables sensibles por workspace. Los valores se muestran enmascarados y se guardan solo en este navegador local."
+      detail="API keys y credenciales de forma segura"
       action={
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-8 gap-1.5"
-          onClick={() => copyToClipboard(envText, ".env copiado")}
-          disabled={!envRows.length}
-        >
+        <Button size="sm" variant="outline" className="h-8 gap-1.5" onClick={() => copyToClipboard(envText, ".env copiado")} disabled={!envRows.length}>
           <Copy className="h-3.5 w-3.5" />
           Copiar .env
         </Button>
       }
     >
-      <div className="mb-4">
-        <ToolTabs
-          value={activeTab}
-          onChange={setActiveTab}
-          items={[
-            { id: "app", label: "App Secrets" },
-            { id: "account", label: "Account Secrets" },
-            { id: "env", label: ".env / JSON" },
-          ]}
-        />
-      </div>
-      <PanelGrid>
-        <PanelCard title="Nuevo secret" detail="Equivalente local al panel de App Secrets" icon={<KeyRound className="h-4 w-4" />}>
-          <div className="space-y-2">
-            <Input value={keyName} onChange={(e) => setKeyName(e.target.value)} placeholder="OPENAI_API_KEY" className="h-8 text-[12px]" />
-            <Input value={value} onChange={(e) => setValue(e.target.value)} placeholder="Valor" type="password" className="h-8 text-[12px]" />
-            <div className="flex items-center justify-between gap-2">
-              <select
-                value={scope}
-                onChange={(e) => setScope(e.target.value as "app" | "account")}
-                className="h-8 rounded-md border border-input bg-background px-2 text-[12px]"
-              >
-                <option value="app">App Secret</option>
-                <option value="account">Account Secret</option>
-              </select>
-              <Button size="sm" className="h-8 gap-1.5" onClick={addSecret} disabled={!keyName.trim() || !value}>
-                <Plus className="h-3.5 w-3.5" />
-                Agregar
-              </Button>
-            </div>
-          </div>
-        </PanelCard>
-        {activeTab !== "env" ? (
-          <PanelCard
-            title={activeTab === "app" ? "Variables de la app" : "Secrets de cuenta"}
-            detail={activeTab === "app" ? `${appSecrets.length} secrets del workspace` : `${accountSecrets.length} secrets disponibles para enlazar`}
-            icon={<Lock className="h-4 w-4" />}
+      {/* Tab bar */}
+      <div className="mb-5 flex items-center justify-between gap-3 border-b border-border/50 pb-0">
+        <div className="flex">
+          {(["app", "account", "env"] as const).map((tab) => (
+            <button
+              key={tab}
+              type="button"
+              onClick={() => setActiveTab(tab)}
+              className={cn(
+                "-mb-px border-b-2 px-4 py-2.5 text-[13px] font-medium transition-colors",
+                activeTab === tab
+                  ? "border-foreground text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {TAB_LABELS[tab]}
+            </button>
+          ))}
+        </div>
+        {activeTab !== "env" && (
+          <Button
+            size="sm"
+            className="mb-1 h-8 gap-1.5"
+            onClick={() => { setShowAdd((s) => !s); setSearch("") }}
           >
-            <SecretList
-              rows={activeTab === "app" ? appSecrets : accountSecrets}
-              revealed={revealed}
-              editingId={editingId}
-              editingValue={editingValue}
-              accountMode={activeTab === "account"}
-              onReveal={(id) => setRevealed((prev) => {
-                const next = new Set(prev)
-                if (next.has(id)) next.delete(id)
-                else next.add(id)
-                return next
-              })}
-              onEdit={(row) => {
-                setEditingId(row.id)
-                setEditingValue(row.value)
-              }}
-              onChangeEdit={setEditingValue}
-              onSaveEdit={(row) => {
-                setSecrets((prev) => prev.map((item) => item.id === row.id ? { ...item, value: editingValue, updatedAt: Date.now() } : item))
-                setEditingId(null)
-                setEditingValue("")
-              }}
-              onToggleLink={(row) => setSecrets((prev) => prev.map((item) => item.id === row.id ? { ...item, linked: item.linked === false } : item))}
-              onDelete={(id) => setSecrets((prev) => prev.filter((item) => item.id !== id))}
-            />
-          </PanelCard>
-        ) : (
-          <PanelCard title="Export · Deploy" detail="Pega tu .env, importa todo, y guárdalo para que el deploy lo inyecte en el contenedor" icon={<FileJson className="h-4 w-4" />}>
-            <div className="grid gap-3">
-              {/* Pegar .env → importar en bloque */}
-              <div className="rounded-md border border-dashed border-border p-2.5">
-                <p className="mb-2 text-[12px] font-medium">Pegar .env (importar en bloque)</p>
-                <textarea
-                  value={bulk}
-                  onChange={(e) => setBulk(e.target.value)}
-                  rows={5}
-                  spellCheck={false}
-                  placeholder={"# Pega tu .env aquí\nGOOGLE_CLIENT_ID=...\nGOOGLE_CLIENT_SECRET=...\nENCRYPTION_KEY=...\nJWT_SECRET=..."}
-                  className="w-full rounded-md border border-input bg-background px-2 py-1.5 font-mono text-[11px]"
-                />
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <Button size="sm" className="h-7" onClick={importEnv} disabled={!bulk.trim()}>
-                    Importar a App Secrets
-                  </Button>
-                  <Button size="sm" variant="outline" className="h-7 gap-1.5" onClick={saveToDeploy} disabled={savingDeploy || deployRows.length === 0}>
-                    <Lock className="h-3 w-3" />
-                    {savingDeploy ? "Guardando…" : "Guardar para el deploy"}
-                  </Button>
-                </div>
-                <p className="mt-1.5 text-[11px] text-muted-foreground">
-                  {connectionId
-                    ? <>Deploy actual: <b>{deployKeys.length}</b> secret(s) guardados. (Se inyectan en el contenedor al publicar.)</>
-                    : <>Conecta un repo en <b>Git</b> para guardar secrets del deploy.</>}
-                </p>
-              </div>
-              <div>
-                <div className="mb-2 flex items-center justify-between">
-                  <p className="text-[12px] font-medium">.env</p>
-                  <Button size="sm" variant="outline" className="h-7 gap-1.5" onClick={() => copyToClipboard(envText, ".env copiado")}>
-                    <Copy className="h-3 w-3" />
-                    Copiar
-                  </Button>
-                </div>
-                <pre className="max-h-44 overflow-auto rounded-md bg-muted/40 p-3 font-mono text-[11px] leading-5">{envText}</pre>
-              </div>
-              <div>
-                <div className="mb-2 flex items-center justify-between">
-                  <p className="text-[12px] font-medium">JSON</p>
-                  <Button size="sm" variant="outline" className="h-7 gap-1.5" onClick={() => copyToClipboard(jsonText, "JSON copiado")}>
-                    <Copy className="h-3 w-3" />
-                    Copiar
-                  </Button>
-                </div>
-                <pre className="max-h-44 overflow-auto rounded-md bg-muted/40 p-3 font-mono text-[11px] leading-5">{jsonText}</pre>
-              </div>
-            </div>
-          </PanelCard>
+            <Plus className="h-3.5 w-3.5" />
+            Nuevo secret
+          </Button>
         )}
-      </PanelGrid>
-    </ToolShell>
-  )
-}
+      </div>
 
-function SecretList({
-  rows,
-  revealed,
-  editingId,
-  editingValue,
-  accountMode,
-  onReveal,
-  onEdit,
-  onChangeEdit,
-  onSaveEdit,
-  onToggleLink,
-  onDelete,
-}: {
-  rows: SecretEntry[]
-  revealed: Set<string>
-  editingId: string | null
-  editingValue: string
-  accountMode: boolean
-  onReveal: (id: string) => void
-  onEdit: (row: SecretEntry) => void
-  onChangeEdit: (value: string) => void
-  onSaveEdit: (row: SecretEntry) => void
-  onToggleLink: (row: SecretEntry) => void
-  onDelete: (id: string) => void
-}) {
-  if (rows.length === 0) {
-    return <p className="rounded-md bg-muted/35 px-3 py-3 text-[12px] text-muted-foreground">Sin secrets todavia.</p>
-  }
-  return (
-    <div className="space-y-2">
-      {rows.map((row) => {
-        const open = revealed.has(row.id)
-        const editing = editingId === row.id
-        return (
-          <div key={row.id} className="rounded-md border border-border/50 px-2.5 py-2">
-            <div className="flex items-center gap-2">
-              <div className="min-w-0 flex-1">
-                <p className="truncate font-mono text-[12px] font-medium">{row.key}</p>
-                {editing ? (
+      {/* ── APP / ACCOUNT SECRETS ── */}
+      {activeTab !== "env" && (
+        <div className="space-y-3">
+          {/* Inline add form */}
+          {showAdd && (
+            <div className="rounded-lg border border-border bg-card/80 p-3 shadow-sm">
+              <p className="mb-2.5 text-[12px] font-semibold text-foreground">Agregar secret</p>
+              <div className="flex gap-2">
+                <Input
+                  ref={addKeyRef}
+                  value={addKey}
+                  onChange={(e) => setAddKey(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && commitAdd()}
+                  placeholder="NOMBRE_CLAVE"
+                  className="h-8 w-2/5 font-mono text-[12px] uppercase"
+                  spellCheck={false}
+                />
+                <div className="relative flex-1">
                   <Input
-                    value={editingValue}
-                    onChange={(event) => onChangeEdit(event.target.value)}
-                    className="mt-1 h-8 font-mono text-[12px]"
-                    autoFocus
+                    value={addValue}
+                    onChange={(e) => setAddValue(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && commitAdd()}
+                    placeholder="valor del secret"
+                    type={addReveal ? "text" : "password"}
+                    className="h-8 pr-8 font-mono text-[12px]"
+                    spellCheck={false}
                   />
-                ) : (
-                  <p className="truncate font-mono text-[11px] text-muted-foreground">
-                    {open ? row.value : "••••••••••••••••"} · {row.scope}
-                    {accountMode ? ` · ${row.linked === false ? "unlinked" : "linked"}` : ""}
-                  </p>
-                )}
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    onClick={() => setAddReveal((s) => !s)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    {addReveal ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  </button>
+                </div>
+                <Button size="sm" className="h-8 shrink-0" onClick={commitAdd} disabled={!addKey.trim() || !addValue}>
+                  Guardar
+                </Button>
+                <Button size="sm" variant="ghost" className="h-8 shrink-0 text-muted-foreground" onClick={() => { setShowAdd(false); setAddKey(""); setAddValue("") }}>
+                  Cancelar
+                </Button>
               </div>
-              {editing ? (
-                <Button size="sm" className="h-7" onClick={() => onSaveEdit(row)}>Guardar</Button>
-              ) : (
-                <>
-                  {accountMode ? (
-                    <Button variant="ghost" size="sm" className="h-7 px-2 text-[11px]" onClick={() => onToggleLink(row)}>
-                      {row.linked === false ? "Link" : "Unlink"}
-                    </Button>
-                  ) : null}
-                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onEdit(row)} aria-label={`Editar ${row.key}`}>
-                    <Settings className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onReveal(row.id)} aria-label={open ? "Ocultar secret" : "Mostrar secret"}>
-                    {open ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                  </Button>
-                  <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-rose-600" onClick={() => onDelete(row.id)} aria-label={`Eliminar ${row.key}`}>
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                </>
+              <p className="mt-1.5 text-[11px] text-muted-foreground">
+                Se guarda como <strong>{activeTab === "app" ? "App Secret" : "Account Secret"}</strong> en este workspace. Pulsa Enter o «Guardar».
+              </p>
+            </div>
+          )}
+
+          {/* Search bar — show only when there are secrets */}
+          {currentRows.length > 2 && (
+            <div className="relative">
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Buscar por nombre de clave…"
+                className="h-8 pl-3 text-[12px]"
+              />
+            </div>
+          )}
+
+          {/* Secrets list */}
+          {filteredRows.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border py-10 text-center">
+              <KeyRound className="mx-auto mb-3 h-7 w-7 text-muted-foreground/40" />
+              <p className="text-[13px] font-medium text-foreground">
+                {search ? "Sin resultados" : activeTab === "app" ? "No hay App Secrets" : "No hay Account Secrets"}
+              </p>
+              <p className="mt-1 text-[12px] text-muted-foreground">
+                {search ? `No hay claves que coincidan con «${search}»` : "Haz clic en «Nuevo secret» para agregar tu primera variable."}
+              </p>
+              {!showAdd && !search && (
+                <Button size="sm" variant="outline" className="mt-4 gap-1.5" onClick={() => setShowAdd(true)}>
+                  <Plus className="h-3.5 w-3.5" /> Agregar
+                </Button>
               )}
             </div>
+          ) : (
+            <div className="overflow-hidden rounded-xl border border-border/60 bg-card/50">
+              {/* Table header */}
+              <div className="grid grid-cols-[1fr_1fr_auto] gap-3 border-b border-border/60 bg-muted/30 px-4 py-2">
+                <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Clave</span>
+                <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Valor</span>
+                <span className="w-24" />
+              </div>
+              {filteredRows.map((row, idx) => {
+                const open = revealed.has(row.id)
+                const editing = editingId === row.id
+                return (
+                  <div
+                    key={row.id}
+                    className={cn(
+                      "grid grid-cols-[1fr_1fr_auto] items-center gap-3 px-4 py-2.5",
+                      idx !== filteredRows.length - 1 && "border-b border-border/40",
+                      editing && "bg-muted/30",
+                    )}
+                  >
+                    {editing ? (
+                      <>
+                        <Input
+                          value={editingKey}
+                          onChange={(e) => setEditingKey(e.target.value)}
+                          className="h-8 font-mono text-[12px] uppercase"
+                          placeholder="CLAVE"
+                          autoFocus
+                          spellCheck={false}
+                        />
+                        <div className="relative">
+                          <Input
+                            value={editingValue}
+                            onChange={(e) => setEditingValue(e.target.value)}
+                            className="h-8 pr-8 font-mono text-[12px]"
+                            placeholder="valor"
+                            spellCheck={false}
+                          />
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <Button
+                            size="sm"
+                            className="h-7"
+                            onClick={() => {
+                              const nextKey = editingKey.trim().replace(/\s+/g, "_").toUpperCase() || row.key
+                              setSecrets((prev) => prev.map((item) => item.id === row.id ? { ...item, key: nextKey, value: editingValue, updatedAt: Date.now() } : item))
+                              setEditingId(null)
+                              toast.success("Secret actualizado")
+                            }}
+                          >
+                            Guardar
+                          </Button>
+                          <Button size="sm" variant="ghost" className="h-7 text-muted-foreground" onClick={() => setEditingId(null)}>
+                            Cancelar
+                          </Button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="h-5 w-5 shrink-0 rounded bg-emerald-500/10 p-0.5 text-emerald-600">
+                            <Lock className="h-full w-full" />
+                          </span>
+                          <span className="truncate font-mono text-[12px] font-semibold text-foreground">{row.key}</span>
+                          {activeTab === "account" && (
+                            <span className={cn(
+                              "shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium",
+                              row.linked === false ? "bg-muted text-muted-foreground" : "bg-sky-500/10 text-sky-600",
+                            )}>
+                              {row.linked === false ? "unlinked" : "linked"}
+                            </span>
+                          )}
+                        </div>
+                        <span className="truncate font-mono text-[12px] text-muted-foreground">
+                          {open ? row.value : "•".repeat(Math.min(row.value.length || 16, 24))}
+                        </span>
+                        <div className="flex items-center gap-0.5">
+                          {activeTab === "account" && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+                              onClick={() => setSecrets((prev) => prev.map((item) => item.id === row.id ? { ...item, linked: item.linked === false } : item))}
+                            >
+                              {row.linked === false ? "Link" : "Unlink"}
+                            </Button>
+                          )}
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                            title="Copiar valor"
+                            onClick={() => copyToClipboard(row.value, `${row.key} copiado`)}
+                          >
+                            <Copy className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                            title={open ? "Ocultar" : "Mostrar"}
+                            onClick={() => setRevealed((prev) => {
+                              const next = new Set(prev)
+                              if (next.has(row.id)) next.delete(row.id)
+                              else next.add(row.id)
+                              return next
+                            })}
+                          >
+                            {open ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                            title="Editar"
+                            onClick={() => { setEditingId(row.id); setEditingKey(row.key); setEditingValue(row.value) }}
+                          >
+                            <Settings className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 text-muted-foreground hover:text-rose-600"
+                            title="Eliminar"
+                            onClick={() => { setSecrets((prev) => prev.filter((item) => item.id !== row.id)); toast.success(`${row.key} eliminado`) }}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {/* Database access card */}
+          <div className="mt-2 overflow-hidden rounded-xl border border-border/60 bg-card/50">
+            <div className="flex items-center gap-2.5 border-b border-border/60 bg-muted/30 px-4 py-2.5">
+              <Database className="h-4 w-4 text-muted-foreground" />
+              <span className="text-[13px] font-semibold text-foreground">Acceso a base de datos</span>
+            </div>
+            <div className="px-4 py-3 space-y-2.5">
+              <div>
+                <p className="mb-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">DATABASE_URL</p>
+                <div className="flex items-center gap-2 rounded-md border border-border/60 bg-muted/30 px-3 py-2">
+                  <code className="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground">
+                    {dbUrlSecret ? (revealed.has("__db__") ? dbUrl : dbUrl.replace(/\/\/[^@]+@/, "//***:***@")) : "postgres://workspace:local@siragpt/db"}
+                  </code>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
+                    title={revealed.has("__db__") ? "Ocultar" : "Mostrar"}
+                    onClick={() => setRevealed((prev) => {
+                      const next = new Set(prev)
+                      if (next.has("__db__")) next.delete("__db__")
+                      else next.add("__db__")
+                      return next
+                    })}
+                  >
+                    {revealed.has("__db__") ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  </Button>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
+                    title="Copiar DATABASE_URL"
+                    onClick={() => copyToClipboard(dbUrl, "DATABASE_URL copiado")}
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 gap-1.5"
+                  onClick={() => window.dispatchEvent(new CustomEvent("siragpt:code-open-tool", { detail: { toolId: "database" } }))}
+                >
+                  <Database className="h-3.5 w-3.5" />
+                  Abrir Database
+                </Button>
+                {!dbUrlSecret && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-8 gap-1.5 text-muted-foreground"
+                    onClick={() => {
+                      setAddKey("DATABASE_URL")
+                      setShowAdd(true)
+                      setActiveTab("app")
+                    }}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Agregar DATABASE_URL
+                  </Button>
+                )}
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Puedes gestionar tablas y ejecutar SQL en la pestaña <strong>Database</strong>.
+              </p>
+            </div>
           </div>
-        )
-      })}
-    </div>
+        </div>
+      )}
+
+      {/* ── .env / JSON EDITOR ── */}
+      {activeTab === "env" && (
+        <div className="space-y-4">
+          <div className="overflow-hidden rounded-xl border border-border/60 bg-card/50">
+            <div className="flex items-center justify-between border-b border-border/60 bg-muted/30 px-4 py-2.5">
+              <div className="flex items-center gap-2">
+                <FileJson className="h-4 w-4 text-muted-foreground" />
+                <span className="text-[13px] font-semibold">Tu .env (editable)</span>
+              </div>
+              <Button size="sm" variant="ghost" className="h-7 gap-1.5 text-muted-foreground hover:text-foreground" onClick={() => { setEnvDraft(envFromDeployRows()); toast.success("Secrets cargados") }}>
+                <RotateCcw className="h-3 w-3" /> Cargar actuales
+              </Button>
+            </div>
+            <div className="p-3">
+              <textarea
+                value={envDraft}
+                onChange={(e) => setEnvDraft(e.target.value)}
+                rows={12}
+                spellCheck={false}
+                placeholder={"# Una variable por línea\nNEXT_PUBLIC_API_URL=https://api.tudominio.com\nJWT_SECRET=...\nDATABASE_URL=postgres://...\nOPENAI_API_KEY=sk-..."}
+                className="w-full resize-none rounded-md border border-input bg-background px-3 py-2 font-mono text-[12px] leading-5 outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+              />
+              <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8"
+                  onClick={() => { const p = applyEnvDraft(); toast.success(`${p.length} variable(s) aplicadas a App Secrets`) }}
+                  disabled={!envDraft.trim()}
+                >
+                  Aplicar a App Secrets
+                </Button>
+                <Button
+                  size="sm"
+                  className="h-8 gap-1.5"
+                  onClick={saveEnvToDeploy}
+                  disabled={savingDeploy || !envDraft.trim()}
+                >
+                  <Lock className="h-3.5 w-3.5" />
+                  {savingDeploy ? "Guardando…" : "Guardar para el deploy"}
+                </Button>
+                <p className="ml-auto text-[11px] text-muted-foreground">
+                  {connectionId
+                    ? <><strong>{deployKeys.length}</strong> secret(s) en el deploy</>
+                    : <>Conecta un repo en <strong>Git</strong> para el deploy</>}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="overflow-hidden rounded-xl border border-border/60 bg-card/50">
+            <div className="flex items-center justify-between border-b border-border/60 bg-muted/30 px-4 py-2.5">
+              <span className="text-[13px] font-semibold">JSON (solo lectura)</span>
+              <Button size="sm" variant="ghost" className="h-7 gap-1.5 text-muted-foreground hover:text-foreground" onClick={() => copyToClipboard(jsonText, "JSON copiado")}>
+                <Copy className="h-3 w-3" /> Copiar
+              </Button>
+            </div>
+            <pre className="max-h-52 overflow-auto p-3 font-mono text-[11px] leading-5 text-muted-foreground">{jsonText}</pre>
+          </div>
+        </div>
+      )}
+    </ToolShell>
   )
 }
 

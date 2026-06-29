@@ -150,6 +150,7 @@ export const hostingService = {
 
   // Build secrets (env)
   getEnv: (connectionId: string) => get<{ keys: string[] }>(`/connected/${connectionId}/env`),
+  getEnvValues: (connectionId: string) => get<{ env: Record<string, string> }>(`/connected/${connectionId}/env/values`),
   setEnv: (connectionId: string, env: Record<string, string>) =>
     send<{ ok: boolean; keys: string[] }>("PUT", `/connected/${connectionId}/env`, { env }),
 

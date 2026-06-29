@@ -290,6 +290,23 @@ router.get('/connected/:id/env', authenticateToken, async (req, res) => {
   }
 });
 
+// GET /api/hosting/connected/:id/env/values → full secret map for editing.
+// Owner-scoped: only the connection's owner can read THEIR OWN secret values
+// (same model as Replit/Vercel "reveal"). Used by the secrets editor UI so
+// add/edit/delete never clobbers the other secrets.
+router.get('/connected/:id/env/values', authenticateToken, async (req, res) => {
+  try {
+    const connection = await connectedRepos.findByIdForUser(req.params.id, req.user.id);
+    if (!connection) return res.status(404).json({ error: 'Connected repository not found', code: 'not_found' });
+    const row = await deployEnvs.findForConnection(connection.id, req.user.id);
+    const env = row ? creds.openJson(row.encryptedEnv) : {};
+    res.set('Cache-Control', 'no-store');
+    return res.json({ env });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to read env values' });
+  }
+});
+
 // PUT /api/hosting/connected/:id/env { env: { KEY: value } } → replace all secrets
 router.put('/connected/:id/env', authenticateToken, async (req, res) => {
   try {
