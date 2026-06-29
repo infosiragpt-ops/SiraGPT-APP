@@ -599,11 +599,22 @@ const apiLimiter = rateLimit({
 // auth-specific middleware can short-circuit the response.
 const { resolveAllowedOrigins, makeOriginCallback } = require('./src/middleware/cors-policy');
 const ALLOWED_ORIGINS = resolveAllowedOrigins(process.env);
-app.use(cors({
+const globalCors = cors({
     origin: makeOriginCallback(ALLOWED_ORIGINS),
     credentials: true,
     optionsSuccessStatus: 200,
-}));
+});
+const CODE_RUNNER_TOKEN_APP_PATH_RE = /^\/api\/code-runner\/[a-zA-Z0-9_-]+\/[a-fA-F0-9]+\/app(?:\/|$)/;
+app.use((req, res, next) => {
+    // Sandboxed /code preview iframes have an opaque origin, so browser module
+    // requests for Vite assets arrive with `Origin: null`. The runner route is
+    // already protected by a run-scoped path token and sets its own narrowly
+    // scoped CORS headers. Let those requests reach the proxy instead of being
+    // rejected by the global credentialed app CORS policy.
+    const path = req.path || req.originalUrl || '';
+    if (CODE_RUNNER_TOKEN_APP_PATH_RE.test(path)) return next();
+    return globalCors(req, res, next);
+});
 
 app.use('/api/auth', authLimiter);
 app.use('/api/agent', expensiveLimiter);

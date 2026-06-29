@@ -100,6 +100,15 @@ function proxiedPath(req) {
   return rest ? rest : '/';
 }
 
+function tokenAppPath(req) {
+  const marker = `/api/code-runner/${encodeURIComponent(req.params.runId)}/${encodeURIComponent(req.params.token)}/app`;
+  const raw = req.originalUrl || req.url || '/';
+  const idx = raw.indexOf(marker);
+  if (idx === -1) return '/';
+  const rest = raw.slice(idx + marker.length);
+  return rest ? rest : '/';
+}
+
 /**
  * Reverse-proxy every request under /:runId/:token/app to the run's private dev
  * server. Auth is the run-scoped token in the URL path, not a cookie, so Vite
@@ -125,7 +134,7 @@ function proxyApp(req, res) {
       hostname: '127.0.0.1',
       port: target.port,
       method: req.method,
-      path: req.originalUrl,
+      path: tokenAppPath(req),
       headers: fwdHeaders,
     },
     (up) => {

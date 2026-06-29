@@ -233,7 +233,7 @@ export function classifyBuildError(log: string): BuildErrorVerdict {
       arreglo: name
         ? `Fijar \`${name}\` vía \`overrides\` a una versión presente en el registro${version ? ` (\`${version}\`)` : ""}, o marcarla opcional. *(package.json actualizado).*`
         : "Añadir un `overrides` que fije la dependencia rota a una versión presente, o configurar un `.npmrc` con un registro accesible.",
-      siguientePaso: "Pulsa **⚡ Construir / Re-publicar** para reintentar la instalación.",
+      siguientePaso: "Reintento la instalación automáticamente en el preview.",
       suggestedOverrides: overrides,
     }
   }
@@ -252,7 +252,7 @@ export function classifyBuildError(log: string): BuildErrorVerdict {
       arreglo: name
         ? `Fijar \`${name}\`${version ? ` a \`${version}\`` : ""} en \`overrides\` para romper el conflicto. *(package.json actualizado).*`
         : "Fijar la versión del peer en conflicto en `overrides`, o instalar con `--legacy-peer-deps`.",
-      siguientePaso: "Pulsa **⚡ Construir / Re-publicar** para reinstalar.",
+      siguientePaso: "Reinstalo automáticamente en el preview.",
       suggestedOverrides: overrides,
     }
   }
@@ -268,7 +268,7 @@ export function classifyBuildError(log: string): BuildErrorVerdict {
       causaRaiz: "No es tu código: el espejo de npm sirvió un artefacto distinto al fijado en el lockfile.",
       arreglo:
         "Regenerar la entrada del lockfile o fijar el paquete afectado a una versión estable en `overrides`. *(revisa package-lock).* ",
-      siguientePaso: "Pulsa **⚡ Construir / Re-publicar** tras regenerar el lockfile.",
+      siguientePaso: "Reintento automáticamente tras ajustar el lockfile.",
     }
   }
 
@@ -284,8 +284,8 @@ export function classifyBuildError(log: string): BuildErrorVerdict {
       causaRaiz:
         "Si el workspace tiene `package.json` (proyecto Vite/Node), la dependencia falta en `dependencies` o no se instaló. Si es un preview estático sin build, los paquetes deben venir por CDN, no por `import` de npm.",
       arreglo:
-        "Proyecto Vite/Node: añade el paquete a `dependencies` en `package.json` y pulsa **▶ Ejecutar** para reinstalar. Preview estático: quita el `import` y cárgalo por CDN (`<script src=…>`), o usa una alternativa ya disponible (React/Tailwind están globales).",
-      siguientePaso: "Aplica el cambio y pulsa **▶ Ejecutar** (proyecto Node) o revisa el **preview en vivo** (estático).",
+        "Proyecto Vite/Node: añade el paquete a `dependencies` en `package.json`; el preview reintentará la instalación automáticamente. Preview estático: quita el `import` y cárgalo por CDN (`<script src=…>`), o usa una alternativa ya disponible (React/Tailwind están globales).",
+      siguientePaso: "Aplica el cambio; el preview reintentará automáticamente si es un proyecto Node, o se actualizará en vivo si es estático.",
     }
   }
 
@@ -299,7 +299,7 @@ export function classifyBuildError(log: string): BuildErrorVerdict {
       "Puede ser del entorno (red/registry/firewall) o de una configuración. Revisa la primera línea de error del log.",
     arreglo:
       "Comparte la línea exacta del primer error (npm ERR! / exit code) o el nombre del paquete que falla para fijar un `overrides`.",
-    siguientePaso: "Tras ajustar, pulsa **⚡ Construir / Re-publicar**.",
+    siguientePaso: "Tras ajustar, reintento el build/preview automáticamente.",
   }
 }
 
