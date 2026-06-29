@@ -101,12 +101,14 @@ function proxiedPath(req) {
 }
 
 function tokenAppPath(req) {
-  const marker = `/api/code-runner/${encodeURIComponent(req.params.runId)}/${encodeURIComponent(req.params.token)}/app`;
+  // Vite is started with --base equal to the public tokenized app prefix.
+  // Forward that full browser path upstream; stripping it to / would make Vite
+  // redirect back to the base URL, which traps the iframe in a 302 loop.
   const raw = req.originalUrl || req.url || '/';
-  const idx = raw.indexOf(marker);
-  if (idx === -1) return '/';
-  const rest = raw.slice(idx + marker.length);
-  return rest ? rest : '/';
+  if (raw.startsWith('/api/code-runner/')) return raw;
+  const base = req.baseUrl || '/api/code-runner';
+  const url = req.url || '/';
+  return `${base}${url.startsWith('/') ? url : `/${url}`}`;
 }
 
 /**
