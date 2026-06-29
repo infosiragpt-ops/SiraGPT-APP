@@ -96,6 +96,30 @@ describe("code-agent progress rail — buildApp inline wiring", () => {
     assert.match(successWiring, /\bactions,/, "the completed buildApp turn must carry the actions log")
     assert.match(successWiring, /\bmetrics,/, "the completed buildApp turn must carry the metrics (Worked Summary)")
   })
+
+  it("the deterministic APPS build path writes a self-contained index.html preview", () => {
+    const fn = buildApp()
+    assert.match(
+      fn,
+      /await intakeService\.generate\(text\)/,
+      "buildApp must use the backend builder that returns index.html for APPS",
+    )
+    assert.match(
+      fn,
+      /buildLocalIndexFallbackFiles\(text, ctx\)/,
+      "buildApp must fall back to a local index.html when the backend builder is unavailable",
+    )
+    assert.match(
+      fn,
+      /localhost \/ index\.html/,
+      "the user-facing completion must make the preview target explicit",
+    )
+    assert.doesNotMatch(
+      fn,
+      /buildViteLandingFiles/,
+      "the primary APPS path must not switch landing prompts to a runner-gated Vite project",
+    )
+  })
 })
 
 describe("code-agent progress rail — sendPrompt inline wiring", () => {

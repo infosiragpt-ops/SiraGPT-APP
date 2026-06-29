@@ -27,12 +27,22 @@ const THEMES = {
 };
 const DEFAULT_THEME = { bg: '#0e1116', surface: '#171b22', text: '#f3f5f7', sub: '#9aa3ad', primary: '#7c5cff', border: '#252b34' };
 
+function extractHexColor(theme) {
+  const match = String(theme || '').match(/#[0-9a-f]{3}(?:[0-9a-f]{3})?\b/i);
+  return match ? match[0].toUpperCase() : null;
+}
+
 function paletteFor(theme) {
   const raw = String(theme || '').toLowerCase();
+  let palette = DEFAULT_THEME;
   for (const key of Object.keys(THEMES)) {
-    if (raw.includes(key)) return THEMES[key];
+    if (raw.includes(key)) {
+      palette = THEMES[key];
+      break;
+    }
   }
-  return DEFAULT_THEME;
+  const hex = extractHexColor(theme);
+  return hex ? { ...palette, primary: hex } : palette;
 }
 
 function escapeHtml(value) {

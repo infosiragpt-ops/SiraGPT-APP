@@ -209,10 +209,15 @@ function extractFeatures(prompt) {
 }
 
 function extractTheme(prompt) {
+  const hex = clean(prompt).match(/#[0-9a-f]{3}(?:[0-9a-f]{3})?\b/i);
+  let theme = 'moderno';
   for (const rule of STYLE_RULES) {
-    if (rule.match.test(prompt)) return rule.theme;
+    if (rule.match.test(prompt)) {
+      theme = rule.theme;
+      break;
+    }
   }
-  return 'moderno';
+  return hex ? `${theme} ${hex[0].toUpperCase()}` : theme;
 }
 
 function extractAudience(prompt) {

@@ -40,6 +40,7 @@ test('paletteFor maps theme keywords and falls back to a default', () => {
   assert.equal(paletteFor('oscuro').primary, '#7c5cff');
   assert.equal(paletteFor('minimalista').bg, '#ffffff');
   assert.equal(paletteFor('corporativo').primary, '#1d4ed8');
+  assert.equal(paletteFor('minimalista #FF0000').primary, '#FF0000');
   // unknown theme → default palette (still a valid hex primary)
   assert.match(paletteFor('lo-que-sea').primary, /^#[0-9a-f]{6}$/i);
 });

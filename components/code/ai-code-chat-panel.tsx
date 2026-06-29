@@ -96,7 +96,6 @@ import {
   sreSystemPrompt,
   streamOutputFormat,
 } from "@/lib/code-agent/prompts"
-import { buildViteLandingFiles } from "@/lib/code-agent/vite-scaffold"
 import { isSlowModel, recommendFastModel } from "@/lib/code-agent/model-policy"
 import { fetchCodeIntakeQuestion } from "@/lib/code/intake-question"
 import { opencodeService } from "@/lib/opencode/opencode-service"
@@ -132,6 +131,180 @@ function openPreviewAndMaybeRun(_files: Array<{ path: string; content: string }>
     window.dispatchEvent(new CustomEvent(CODE_RUN_PREVIEW_EVENT, { detail }))
     window.dispatchEvent(new CustomEvent("siragpt:code-run-app", { detail }))
   }, 600)
+}
+
+function escapeGeneratedHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;")
+}
+
+function safeJsonForScript(value: unknown): string {
+  return JSON.stringify(value).replace(/</g, "\\u003c")
+}
+
+function compactGeneratedTitle(prompt: string, ctx?: AgentBuildContext): string {
+  const raw = ctx?.brand || ctx?.productType || prompt || "Nueva app"
+  const cleaned = raw
+    .replace(/\b(crea|crear|creame|crearme|hazme|hacer|construye|construir|genera|generar|quiero|necesito|dame|una|un|app|landing|pagina|página|web)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+  const title = cleaned || raw || "Nueva app"
+  return title.length > 64 ? `${title.slice(0, 61)}...` : title
+}
+
+function buildLocalIndexFallbackFiles(prompt: string, ctx?: AgentBuildContext): Array<{ path: string; content: string }> {
+  const title = compactGeneratedTitle(prompt, ctx)
+  const description = prompt.trim() || "App creada desde el chat de APPS."
+  const featureText = ctx?.features || "Landing, captura de datos, estados claros y lista para iterar desde el chat"
+  const entityText = ctx?.dataEntities || "Registros"
+  const seedItems = [
+    { title: "Ajustar contenido principal", status: "En progreso" },
+    { title: "Agregar datos reales", status: "Pendiente" },
+    { title: "Publicar cuando este listo", status: "Pendiente" },
+  ]
+  const storageKey = `siragpt-apps-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "index"}`
+  const html = `<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${escapeGeneratedHtml(title)}</title>
+  <style>
+    :root { --accent: #FF0000; --ink: #111113; --muted: #6f7178; --line: #e9e9ec; --soft: #fff5f5; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--ink); background: #fafafa; }
+    .shell { min-height: 100vh; display: grid; grid-template-rows: auto 1fr; }
+    header { height: 64px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 28px; border-bottom: 1px solid var(--line); background: rgba(255,255,255,.86); backdrop-filter: blur(16px); }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; letter-spacing: -.01em; }
+    .mark { width: 28px; height: 28px; border-radius: 8px; background: var(--accent); box-shadow: 0 12px 30px rgba(255,0,0,.2); }
+    .pill { border: 1px solid rgba(255,0,0,.18); background: var(--soft); color: #c40000; border-radius: 999px; padding: 7px 11px; font-size: 12px; font-weight: 700; }
+    main { width: min(1120px, calc(100vw - 40px)); margin: 0 auto; padding: 56px 0; }
+    .hero { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(320px, .85fr); gap: 28px; align-items: stretch; }
+    .hero-copy { padding: 34px 0; }
+    .eyebrow { display: inline-flex; align-items: center; gap: 8px; margin-bottom: 18px; color: #c40000; font-size: 12px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+    h1 { max-width: 720px; margin: 0; font-size: clamp(42px, 7vw, 78px); line-height: .94; letter-spacing: -.055em; }
+    .lead { max-width: 620px; margin: 22px 0 0; color: var(--muted); font-size: 18px; line-height: 1.65; }
+    .actions { margin-top: 30px; display: flex; flex-wrap: wrap; gap: 12px; }
+    .btn { border: 0; border-radius: 8px; background: var(--accent); color: white; padding: 13px 18px; font-weight: 800; box-shadow: 0 18px 34px rgba(255,0,0,.22); cursor: pointer; }
+    .btn.secondary { background: white; color: var(--ink); border: 1px solid var(--line); box-shadow: none; }
+    .panel { border: 1px solid var(--line); border-radius: 12px; background: white; box-shadow: 0 24px 70px rgba(17,17,19,.08); overflow: hidden; }
+    .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px; border-bottom: 1px solid var(--line); }
+    .panel-head strong { font-size: 14px; }
+    .status { display: inline-flex; align-items: center; gap: 7px; color: #0f9f5f; font-size: 12px; font-weight: 800; }
+    .dot { width: 7px; height: 7px; border-radius: 999px; background: currentColor; }
+    form { display: grid; grid-template-columns: 1fr auto; gap: 10px; padding: 16px; }
+    input { min-width: 0; height: 42px; border: 1px solid var(--line); border-radius: 8px; padding: 0 12px; font: inherit; outline: none; }
+    input:focus { border-color: rgba(255,0,0,.45); box-shadow: 0 0 0 3px rgba(255,0,0,.08); }
+    .list { display: grid; gap: 8px; padding: 0 16px 16px; }
+    .item { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: #fff; }
+    .item span:first-child { font-weight: 700; }
+    .tag { border-radius: 999px; background: #f4f4f5; color: var(--muted); padding: 5px 9px; font-size: 12px; font-weight: 700; }
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 28px; }
+    .metric { border: 1px solid var(--line); border-radius: 10px; background: white; padding: 16px; }
+    .metric b { display: block; font-size: 28px; letter-spacing: -.04em; }
+    .metric span { color: var(--muted); font-size: 13px; }
+    @media (max-width: 820px) { header { padding: 0 18px; } main { width: min(100vw - 28px, 1120px); padding: 34px 0; } .hero { grid-template-columns: 1fr; } .hero-copy { padding: 10px 0; } .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div class="brand"><span class="mark"></span><span>${escapeGeneratedHtml(title)}</span></div>
+      <span class="pill">Generado por chat · index.html</span>
+    </header>
+    <main>
+      <section class="hero">
+        <div class="hero-copy">
+          <div class="eyebrow">APPS · localhost / index.html</div>
+          <h1>${escapeGeneratedHtml(title)}</h1>
+          <p class="lead">${escapeGeneratedHtml(description)}</p>
+          <div class="actions">
+            <button class="btn" type="button" onclick="document.getElementById('quick-title').focus()">Agregar registro</button>
+            <button class="btn secondary" type="button" onclick="resetDemo()">Restablecer demo</button>
+          </div>
+          <div class="grid" aria-label="Resumen">
+            <div class="metric"><b id="metric-count">3</b><span>${escapeGeneratedHtml(entityText)}</span></div>
+            <div class="metric"><b>1</b><span>Archivo renderizado</span></div>
+            <div class="metric"><b>#FF0000</b><span>Color de marca</span></div>
+          </div>
+        </div>
+        <aside class="panel" aria-label="Panel funcional">
+          <div class="panel-head">
+            <strong>Panel operativo</strong>
+            <span class="status"><span class="dot"></span>Activo</span>
+          </div>
+          <form id="quick-form">
+            <input id="quick-title" autocomplete="off" placeholder="Nuevo item para ${escapeGeneratedHtml(title)}" />
+            <button class="btn" type="submit">Agregar</button>
+          </form>
+          <div class="list" id="items"></div>
+        </aside>
+      </section>
+      <p class="lead" style="font-size:14px;margin-top:28px">Funciones base: ${escapeGeneratedHtml(featureText)}. Pide otro cambio en el chat y el agente editará este workspace.</p>
+    </main>
+  </div>
+  <script>
+    const storageKey = ${safeJsonForScript(storageKey)};
+    const seedItems = ${safeJsonForScript(seedItems)};
+    let items = JSON.parse(localStorage.getItem(storageKey) || "null") || seedItems;
+    const list = document.getElementById("items");
+    const metric = document.getElementById("metric-count");
+    function htmlEscape(value){
+      return String(value).replace(/[&<>"']/g, function(char){
+        if (char === "&") return "&amp;";
+        if (char === "<") return "&lt;";
+        if (char === ">") return "&gt;";
+        if (char === '"') return "&quot;";
+        return "&#39;";
+      });
+    }
+    function persist(){ localStorage.setItem(storageKey, JSON.stringify(items)); }
+    function render(){
+      list.innerHTML = items.map((item, index) => '<div class="item"><span>' + htmlEscape(item.title) + '</span><button class="tag" onclick="toggleItem(' + index + ')">' + htmlEscape(item.status) + '</button></div>').join("");
+      metric.textContent = String(items.length);
+    }
+    function toggleItem(index){
+      items[index].status = items[index].status === "Listo" ? "Pendiente" : "Listo";
+      persist();
+      render();
+    }
+    function resetDemo(){
+      items = seedItems.slice();
+      persist();
+      render();
+    }
+    document.getElementById("quick-form").addEventListener("submit", function(event){
+      event.preventDefault();
+      const input = document.getElementById("quick-title");
+      const title = input.value.trim();
+      if (!title) return;
+      items.unshift({ title, status: "Pendiente" });
+      input.value = "";
+      persist();
+      render();
+    });
+    render();
+  </script>
+</body>
+</html>`
+  const readme = `# ${title}
+
+Generado desde el chat de APPS como \`index.html\` autocontenido.
+
+## Prompt
+${description}
+
+## Como verlo
+Abre \`index.html\` en el preview. No requiere instalar dependencias ni levantar un runner.
+`
+  return [
+    { path: "README.md", content: readme },
+    { path: "index.html", content: html },
+  ]
 }
 
 const COMPOSER_MODE_LABEL: Record<ComposerMode, string> = {
@@ -860,12 +1033,11 @@ export function AICodeChatPanel() {
     ],
   )
 
-  // Deterministic "Construir app" path: bypasses the LLM entirely. For a
-  // LANDING goal it builds the Vite 7 + React 18 + TS project locally
-  // (lib/code-agent/vite-scaffold — zero network); for APP goals it sends the
-  // prompt to /api/builder/generate (pure heuristics → runnable Next.js CRUD).
-  // This is the reliable build flow that works even when the chat model / API
-  // keys are down.
+  // Deterministic "Construir app" path: bypasses the LLM entirely and sends the
+  // prompt to /api/builder/generate (pure heuristics -> self-contained
+  // index.html + docs). This is the reliable APPS flow: prompt in the chat,
+  // files written into the workspace, preview on localhost / index.html, with
+  // a local index.html fallback if the backend is temporarily unreachable.
   const buildApp = React.useCallback(
     async (prompt: string, ctx?: AgentBuildContext) => {
       const text = prompt.trim()
@@ -904,19 +1076,7 @@ export function AICodeChatPanel() {
         let appliedFiles: Array<{ path: string; content: string }>
         let summary: string
         let toastMsg: string
-        if (ctx && ctx.goal === "landing") {
-          // Landing → local Vite scaffold (no network, full landing + Invitar).
-          appliedFiles = buildViteLandingFiles(ctx)
-          summary = [
-            `✅ Landing generada (determinista) — ${appliedFiles.length} archivo(s).`,
-            ``,
-            `- **Stack:** Vite 7 + React 18 + TypeScript + Tailwind v4`,
-            `- **Incluye:** animaciones de scroll (Framer Motion) y el componente «Invitar al proyecto»`,
-            ``,
-            `Estoy arrancando el **preview en vivo** automáticamente. Itera pidiéndome cambios en el chat.`,
-          ].join("\n")
-          toastMsg = "Landing generada — arrancando preview →"
-        } else {
+        try {
           const result = await intakeService.generate(text)
           appliedFiles = result.files || []
           if (appliedFiles.length === 0) {
@@ -931,9 +1091,21 @@ export function AICodeChatPanel() {
             `- **Tipo:** app autónoma de una página (\`index.html\`) que corre en el navegador, sin instalar nada`,
             `- **Datos:** se guardan localmente en el navegador (localStorage)`,
             ``,
-            `Estoy abriendo el **preview en vivo** automáticamente. Pídeme cualquier cambio y lo aplico desde este mismo chat.`,
+            `Estoy abriendo **localhost / index.html** automáticamente. Pídeme cualquier cambio y lo aplico desde este mismo chat.`,
           ].join("\n")
           toastMsg = "App generada — abriendo preview →"
+        } catch {
+          appliedFiles = buildLocalIndexFallbackFiles(text, ctx)
+          summary = [
+            `✅ App generada localmente — ${appliedFiles.length} archivo(s).`,
+            ``,
+            `- **Archivo activo:** \`index.html\``,
+            `- **Tipo:** HTML autocontenido listo para preview`,
+            `- **Motivo:** el builder backend no respondió, así que usé el fallback local para no dejar el workspace vacío`,
+            ``,
+            `Estoy abriendo **localhost / index.html** automáticamente. Pídeme cualquier cambio y lo aplico desde este mismo chat.`,
+          ].join("\n")
+          toastMsg = "App generada localmente — abriendo index.html →"
         }
         // Apply index.html LAST so it stays the active tab and the live preview
         // lands on the runnable app rather than a doc file.
@@ -1129,26 +1301,22 @@ export function AICodeChatPanel() {
 
   // Run the deterministic builder for a context and apply its files. Returns the
   // file count. Used as the reliable fallback when the engine yields no code.
-  // Landings build locally (vite-scaffold, zero network); app goals use the
-  // backend builder and degrade to a local landing shell if it's unreachable.
+  // It always targets a self-contained index.html so APPS lands on
+  // localhost / index.html instead of waiting on a dev-server runner.
   const runDeterministicInto = React.useCallback(
     async (ctx: AgentBuildContext): Promise<number> => {
-      if (ctx.goal === "landing") {
-        const scaffold = buildViteLandingFiles(ctx)
-        applyFilesToWorkspace(scaffold)
-        return scaffold.length
-      }
+      const prompt = promptFromContext(ctx)
       try {
-        const result = await intakeService.generate(promptFromContext(ctx))
+        const result = await intakeService.generate(prompt)
         const files = result.files || []
         if (files.length > 0) {
           applyFilesToWorkspace(files)
           return files.length
         }
       } catch {
-        /* backend unreachable → offline landing shell below */
+        /* backend unreachable -> offline index.html shell below */
       }
-      const fallback = buildViteLandingFiles({ ...ctx, goal: "landing" })
+      const fallback = buildLocalIndexFallbackFiles(prompt, ctx)
       applyFilesToWorkspace(fallback)
       return fallback.length
     },

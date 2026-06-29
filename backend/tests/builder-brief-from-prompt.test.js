@@ -57,6 +57,7 @@ test('theme is derived from style cues', () => {
   assert.equal(extractTheme('un dashboard oscuro y editorial'), 'oscuro');
   assert.equal(extractTheme('algo minimalista'), 'minimalista');
   assert.equal(extractTheme('sin pistas de estilo'), 'moderno');
+  assert.equal(extractTheme('landing minimalista color #FF0000'), 'minimalista #FF0000');
 });
 
 test('features map auth/payments keywords', () => {
