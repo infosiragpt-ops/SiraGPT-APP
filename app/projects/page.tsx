@@ -185,14 +185,14 @@ export default function ProjectsPage() {
         <header className={styles.header}>
           <LayoutGrid className={styles.titleIcon} strokeWidth={2.25} />
           <h1 className={styles.title} data-testid="projects-page-title">
-            Projects
+            {t("title")}
           </h1>
         </header>
 
         <section className={styles.toolbar}>
           <div className={styles.filters}>
             <label className={styles.search} role="search">
-              <span className="sr-only">Buscar proyectos APPS</span>
+              <span className="sr-only">{t("searchPlaceholder")}</span>
               <input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
@@ -224,13 +224,13 @@ export default function ProjectsPage() {
                   className={styles.scopeButton}
                 >
                   <Folder strokeWidth={1.8} />
-                  All projects
+                  {t("allProjects")}
                   <ChevronDown strokeWidth={2} />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-[220px]">
                 <DropdownMenuItem className="justify-between">
-                  All projects
+                  {t("allProjects")}
                   <Check className="h-4 w-4" />
                 </DropdownMenuItem>
               </DropdownMenuContent>
@@ -281,7 +281,7 @@ export default function ProjectsPage() {
         {loading ? (
           <ProjectsSkeleton />
         ) : visibleProjects.length === 0 ? (
-          <NoResults />
+          <NoResults label={t("noMatchTitle")} />
         ) : viewMode === "grid" ? (
           <div className={styles.grid} data-testid="projects-grid">
             {visibleProjects.map((project) => (
@@ -503,10 +503,10 @@ function ProjectsSkeleton() {
   )
 }
 
-function NoResults() {
+function NoResults({ label }: { label: string }) {
   return (
     <div className={styles.noResults}>
-      No matching APPS projects.
+      {label}
     </div>
   )
 }
