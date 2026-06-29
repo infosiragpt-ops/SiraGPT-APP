@@ -13,10 +13,13 @@ import {
   Globe,
   Eye,
   FileCheck2,
+  Pause,
+  Play,
   RefreshCcw,
+  Share2,
   ShieldCheck,
 } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { cn, copyToClipboard, downloadHref, downloadUrlAsFile } from "@/lib/utils"
 import { AgentStatusIcon, type AgentStatusIconKind } from "@/components/icons/agent-status-icons"
 import { agentTaskService, type AgentArtifact, type AgentTaskState } from "@/lib/agent-task-service"
 import {
@@ -174,6 +177,16 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
+const AUDIO_FORMATS = new Set(["aac", "aif", "aiff", "flac", "m4a", "mp3", "oga", "ogg", "opus", "wav", "webm"])
+const AUDIO_WAVEFORM_BARS = [9, 18, 24, 14, 31, 38, 22, 13, 36, 27, 16, 42, 20, 31, 12, 24, 34, 15, 28, 19, 11, 8, 6, 5]
+
+function artifactHref(artifact: AgentArtifact): string {
+  const apiRoot = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
+  return artifact.downloadUrl.startsWith("http")
+    ? artifact.downloadUrl
+    : `${apiRoot.replace(/\/api$/, "")}${artifact.downloadUrl}`
+}
+
 /**
  * Claude-style research trace under a step: each search shows the query
  * line ("query…  ·  N resultados") followed by a quiet result list
@@ -289,6 +302,7 @@ function DownloadButton({ artifact, href }: { artifact: AgentArtifact; href: str
 
 function artifactDisplayName(artifact: AgentArtifact): string {
   const format = artifactFormat(artifact)
+  if (isAudioArtifact(artifact)) return "Audio generado"
   if (format === "docx" || format === "doc") return "Documento Word"
   if (format === "xlsx" || format === "xls" || format === "csv") return "Hoja de calculo"
   if (format === "pptx" || format === "ppt") return "Presentacion"
@@ -306,7 +320,211 @@ function artifactFormat(artifact: AgentArtifact): string {
   if (mime.includes("spreadsheetml") || mime.includes("excel")) return "xlsx"
   if (mime.includes("presentationml") || mime.includes("powerpoint")) return "pptx"
   if (mime.includes("pdf")) return "pdf"
+  if (mime === "audio/mpeg" || mime === "audio/mp3") return "mp3"
+  if (mime === "audio/mp4" || mime === "audio/x-m4a") return "m4a"
+  if (mime.includes("wav")) return "wav"
+  if (mime.includes("ogg")) return "ogg"
+  if (mime.includes("webm")) return "webm"
+  if (mime.startsWith("audio/")) return mime.split("/")[1] || "audio"
   return "bin"
+}
+
+function isAudioArtifact(artifact: AgentArtifact): boolean {
+  const mime = String(artifact.mime || "").toLowerCase()
+  return mime.startsWith("audio/") || AUDIO_FORMATS.has(artifactFormat(artifact))
+}
+
+function artifactFilename(artifact: AgentArtifact, fallback: string): string {
+  return artifact.filename?.trim() || fallback
+}
+
+function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArtifact; generationIndex: number }) {
+  const href = artifactHref(artifact)
+  const audioRef = React.useRef<HTMLAudioElement | null>(null)
+  const objectUrlRef = React.useRef<string | null>(null)
+  const [isPlaying, setIsPlaying] = React.useState(false)
+  const [isLoadingAudio, setIsLoadingAudio] = React.useState(false)
+  const [audioSrc, setAudioSrc] = React.useState<string | null>(null)
+  const [isDownloading, setIsDownloading] = React.useState(false)
+  const [copied, setCopied] = React.useState(false)
+  const format = artifactFormat(artifact)
+  const filename = artifactFilename(artifact, `voz-${generationIndex + 1}.${format === "bin" ? "mp3" : format}`)
+  const generationLabel = `Generation ${generationIndex + 1}`
+
+  React.useEffect(() => {
+    setAudioSrc(null)
+    setIsPlaying(false)
+    return () => {
+      if (objectUrlRef.current) {
+        window.URL.revokeObjectURL(objectUrlRef.current)
+        objectUrlRef.current = null
+      }
+    }
+  }, [href])
+
+  const loadAudioSource = React.useCallback(async () => {
+    if (objectUrlRef.current) return objectUrlRef.current
+    setIsLoadingAudio(true)
+    try {
+      const response = await fetch(href, {
+        credentials: "include",
+        headers: authHeaders(),
+      })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const blob = await response.blob()
+      const objectUrl = window.URL.createObjectURL(blob)
+      objectUrlRef.current = objectUrl
+      setAudioSrc(objectUrl)
+      return objectUrl
+    } finally {
+      setIsLoadingAudio(false)
+    }
+  }, [href])
+
+  const togglePlayback = React.useCallback(async () => {
+    if (isLoadingAudio) return
+    const audio = audioRef.current
+    if (!audio) return
+    if (!audio.paused) {
+      audio.pause()
+      return
+    }
+    try {
+      const playableUrl = await loadAudioSource()
+      if (audio.src !== playableUrl) audio.src = playableUrl
+      await audio.play()
+    } catch {
+      window.open(href, "_blank", "noopener,noreferrer")
+    }
+  }, [href, isLoadingAudio, loadAudioSource])
+
+  const download = React.useCallback(async () => {
+    if (isDownloading) return
+    setIsDownloading(true)
+    try {
+      await downloadUrlAsFile(href, filename, {
+        credentials: "include",
+        headers: authHeaders(),
+      })
+    } catch {
+      downloadHref(href, filename)
+    } finally {
+      setIsDownloading(false)
+    }
+  }, [filename, href, isDownloading])
+
+  const share = React.useCallback(async () => {
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: generationLabel, url: href })
+      } else {
+        const ok = await copyToClipboard(href)
+        if (!ok) throw new Error("copy_failed")
+        setCopied(true)
+        window.setTimeout(() => setCopied(false), 1800)
+      }
+    } catch {
+      const ok = await copyToClipboard(href)
+      if (ok) {
+        setCopied(true)
+        window.setTimeout(() => setCopied(false), 1800)
+      }
+    }
+  }, [generationLabel, href])
+
+  return (
+    <div className="my-2 w-full max-w-[430px]">
+      <div className="relative flex min-h-[74px] w-full items-center gap-3 rounded-2xl border border-border/70 bg-background px-3.5 py-3 shadow-sm">
+        <span className="absolute -top-3 left-5 bg-background px-1.5 text-[12.5px] font-medium leading-5 text-muted-foreground">
+          {generationLabel}
+        </span>
+        <button
+          type="button"
+          onClick={togglePlayback}
+          disabled={isLoadingAudio}
+          className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-foreground text-background shadow-sm transition-transform hover:scale-[1.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:scale-100 disabled:opacity-75"
+          aria-label={isLoadingAudio ? "Cargando audio generado" : isPlaying ? "Pausar audio generado" : "Reproducir audio generado"}
+          title={isLoadingAudio ? "Cargando" : isPlaying ? "Pausar" : "Reproducir"}
+        >
+          {isLoadingAudio ? (
+            <ThinkingIndicator size="sm" />
+          ) : isPlaying ? (
+            <Pause className="h-5 w-5 fill-current" />
+          ) : (
+            <Play className="ml-0.5 h-5 w-5 fill-current" />
+          )}
+        </button>
+        <div className="flex h-11 min-w-0 flex-1 items-center gap-[3px]" aria-hidden="true">
+          {AUDIO_WAVEFORM_BARS.map((height, index) => (
+            <span
+              key={`${height}-${index}`}
+              className={cn(
+                "w-1 rounded-full bg-foreground/90 transition-opacity",
+                isPlaying ? "opacity-100" : "opacity-80",
+              )}
+              style={{ height }}
+            />
+          ))}
+          <span className="ml-0.5 h-1.5 w-1.5 rounded-full bg-foreground/80" />
+          <span className="h-1.5 w-1.5 rounded-full bg-foreground/75" />
+          <span className="h-1.5 w-1.5 rounded-full bg-foreground/65" />
+        </div>
+        <button
+          type="button"
+          onClick={share}
+          className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          aria-label={copied ? "Enlace copiado" : "Compartir audio"}
+          title={copied ? "Enlace copiado" : "Compartir"}
+        >
+          <Share2 className="h-5 w-5 stroke-[2.1]" />
+        </button>
+        <button
+          type="button"
+          onClick={download}
+          disabled={isDownloading}
+          className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-60"
+          aria-label="Descargar audio generado"
+          title="Descargar"
+        >
+          {isDownloading ? <ThinkingIndicator size="sm" /> : <Download className="h-5 w-5 stroke-[2.1]" />}
+        </button>
+        {/* Blob-backed audio keeps owner-scoped playback real while the visual control stays compact. */}
+        <audio
+          ref={audioRef}
+          src={audioSrc || undefined}
+          preload="metadata"
+          onPlay={() => setIsPlaying(true)}
+          onPause={() => setIsPlaying(false)}
+          onEnded={() => setIsPlaying(false)}
+          className="hidden"
+        >
+          <a href={href} download={filename}>Descargar audio generado</a>
+        </audio>
+      </div>
+    </div>
+  )
+}
+
+function ArtifactDeliveryList({
+  artifacts,
+  onDocumentPreview,
+}: {
+  artifacts: AgentArtifact[]
+  onDocumentPreview?: (target: DocumentPreviewTarget) => void
+}) {
+  let audioGenerationIndex = 0
+  return (
+    <>
+      {artifacts.map((artifact) => {
+        if (isAudioArtifact(artifact)) {
+          const generationIndex = audioGenerationIndex
+          audioGenerationIndex += 1
+          return <AudioArtifactPlayer key={artifact.id} artifact={artifact} generationIndex={generationIndex} />
+        }
+        return <ArtifactCard key={artifact.id} artifact={artifact} onDocumentPreview={onDocumentPreview} />
+      })}
+    </>
+  )
 }
 
 function ArtifactFormatIcon({ artifact }: { artifact: AgentArtifact }) {
@@ -333,10 +551,7 @@ function ArtifactCard({
   artifact: AgentArtifact
   onDocumentPreview?: (target: DocumentPreviewTarget) => void
 }) {
-  const apiRoot = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
-  const href = artifact.downloadUrl.startsWith("http")
-    ? artifact.downloadUrl
-    : `${apiRoot.replace(/\/api$/, "")}${artifact.downloadUrl}`
+  const href = artifactHref(artifact)
   const sizeKb = Math.max(1, Math.round((artifact.sizeBytes || 0) / 1024))
   const displayName = artifactDisplayName(artifact)
   const format = artifactFormat(artifact)
@@ -567,9 +782,7 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
     if (!hasDeliverable) return null
     return (
       <div className={cn("my-2 max-w-2xl space-y-1", className)}>
-        {state.artifacts.map((artifact) => (
-          <ArtifactCard key={artifact.id} artifact={artifact} onDocumentPreview={onDocumentPreview} />
-        ))}
+        <ArtifactDeliveryList artifacts={state.artifacts} onDocumentPreview={onDocumentPreview} />
       </div>
     )
   }
@@ -769,9 +982,7 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
 
       {state.artifacts?.length > 0 && (
         <div className="mt-3 space-y-2">
-          {state.artifacts.map((artifact) => (
-            <ArtifactCard key={artifact.id} artifact={artifact} onDocumentPreview={onDocumentPreview} />
-          ))}
+          <ArtifactDeliveryList artifacts={state.artifacts} onDocumentPreview={onDocumentPreview} />
         </div>
       )}
 
