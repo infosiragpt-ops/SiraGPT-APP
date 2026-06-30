@@ -110,6 +110,29 @@ function applyPreviewFrameHeaders(_req, res, next) {
   next();
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForRunnerPreviewReady(runner, projectId, env = process.env) {
+  const timeoutMs = Math.max(1000, Number(env.CODEX_PREVIEW_START_TIMEOUT_MS) || 90_000);
+  const intervalMs = Math.max(250, Number(env.CODEX_PREVIEW_START_POLL_MS) || 1000);
+  const deadline = Date.now() + timeoutMs;
+  let lastStatus = null;
+
+  while (Date.now() < deadline) {
+    lastStatus = await runner.devStatus();
+    const sameProject = !lastStatus.project || lastStatus.project === projectId;
+    if (lastStatus.ready && sameProject) return lastStatus;
+    if (lastStatus.error && lastStatus.running === false) throw new Error(lastStatus.error);
+    await sleep(intervalMs);
+  }
+
+  const tail = Array.isArray(lastStatus?.tail) ? lastStatus.tail.slice(-3).join(' | ') : '';
+  const detail = lastStatus?.error || tail || 'El preview no quedo listo a tiempo.';
+  throw new Error(detail);
+}
+
 // EventSource can't set headers, so allow a ?token= fallback for the SSE route
 // (header still wins). Same shape as the goals SSE route.
 function bearerFromQueryFallback(req, _res, next) {
@@ -206,8 +229,10 @@ router.post('/projects/:id/preview/start', authenticateToken, async (req, res) =
     if (!project) return undefined;
     const token = previewTokenFor({ projectId: project.id, userId: req.user.id });
     const basePath = codexPreviewBasePath(project.id, token);
-    const out = await createRunnerClient().startDev(project.id, { basePath });
-    return res.json({ ...out, devUrl: basePath, previewUrl: basePath, basePath });
+    const runner = createRunnerClient();
+    const out = await runner.startDev(project.id, { basePath });
+    const previewStatus = await waitForRunnerPreviewReady(runner, project.id);
+    return res.json({ ...out, previewStatus, devUrl: basePath, previewUrl: basePath, basePath });
   } catch (err) {
     return res.status(502).json({ error: 'runner_unreachable', message: err.message });
   }

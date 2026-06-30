@@ -40,7 +40,11 @@ const runnerPath = require.resolve('../src/services/codex/runner-client');
 const restoreRunner = mockResolvedModule(runnerPath, {
   createRunnerClient: () => ({
     startDev: async (project, opts) => { runnerCalls.push(['startDev', project, opts]); return { ok: true, port: 5173, project }; },
-    devStatus: async () => ({ running: true, ready: true, project: 'p1' }),
+    devStatus: async () => {
+      runnerStatusCalls++;
+      if (runnerStatusQueue && runnerStatusQueue.length > 0) return runnerStatusQueue.shift();
+      return { running: true, ready: true, project: 'p1' };
+    },
     stopDev: async () => ({ ok: true }),
     exportWorkspace: async (project) => { runnerCalls.push(['exportWorkspace', project]); return { ok: true, project, files: 5 }; },
     exec: async (project, cmd) => { runnerCalls.push(['exec', project, cmd]); return { ok: true, exitCode: 0, stdout: 'src/main.tsx\nindex.html\npackage.json\n', stderr: '' }; },
@@ -53,12 +57,27 @@ const restoreRunner = mockResolvedModule(runnerPath, {
 
 const codexRoutes = require('../src/routes/codex');
 
-after(() => { restoreAuth(); restoreService(); restoreRunner(); delete process.env.CODEX_AGENT_V2; delete process.env.CODEX_AGENT_ALLOWED_USER_IDS; });
+let runnerStatusQueue = null;
+let runnerStatusCalls = 0;
+
+after(() => {
+  restoreAuth();
+  restoreService();
+  restoreRunner();
+  delete process.env.CODEX_AGENT_V2;
+  delete process.env.CODEX_AGENT_ALLOWED_USER_IDS;
+  delete process.env.CODEX_PREVIEW_START_POLL_MS;
+  delete process.env.CODEX_PREVIEW_START_TIMEOUT_MS;
+});
 beforeEach(() => {
   process.env.CODEX_AGENT_V2 = '1';
   delete process.env.CODEX_AGENT_ALLOWED_USER_IDS;
+  delete process.env.CODEX_PREVIEW_START_POLL_MS;
+  delete process.env.CODEX_PREVIEW_START_TIMEOUT_MS;
   serviceCalls.length = 0;
   runnerCalls.length = 0;
+  runnerStatusQueue = null;
+  runnerStatusCalls = 0;
 });
 
 function buildApp() {
@@ -118,9 +137,23 @@ test('POST /projects/:id/preview/start proxies the runner and adds devUrl', asyn
   const res = await request(buildApp()).post('/api/codex/projects/p1/preview/start');
   assert.equal(res.status, 200);
   assert.match(res.body.devUrl, /^\/api\/codex\/projects\/p1\/preview\/.+\/app\/$/);
+  assert.equal(res.body.previewStatus.ready, true);
   assert.equal(runnerCalls.at(-1)[0], 'startDev');
   assert.equal(runnerCalls.at(-1)[1], 'p1');
   assert.match(runnerCalls.at(-1)[2].basePath, /^\/api\/codex\/projects\/p1\/preview\/.+\/app\/$/);
+});
+
+test('POST /projects/:id/preview/start waits for runner readiness', async () => {
+  process.env.CODEX_PREVIEW_START_POLL_MS = '1';
+  process.env.CODEX_PREVIEW_START_TIMEOUT_MS = '1000';
+  runnerStatusQueue = [
+    { running: true, ready: false, project: 'p1' },
+    { running: true, ready: true, project: 'p1' },
+  ];
+  const res = await request(buildApp()).post('/api/codex/projects/p1/preview/start');
+  assert.equal(res.status, 200);
+  assert.equal(res.body.previewStatus.ready, true);
+  assert.equal(runnerStatusCalls, 2);
 });
 
 test('tokenized preview proxy strips credentials and forces frame headers', async () => {
