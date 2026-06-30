@@ -80,6 +80,41 @@ test('getRunForProxy()/getPreviewToken(): unknown run → null', () => {
   assert.equal(runner.getPreviewToken('does-not-exist'), null);
 });
 
+test('stopRun(): ownership — a user cannot stop another user\'s run; the owner can', () => {
+  runner._resetRunsForTest();
+  runner._seedRunForTest({ runId: 'own1', userId: 'alice', port: 5200, phase: 'ready', previewToken: 'tok' });
+  // Wrong owner → refused (no-op, run survives).
+  assert.equal(runner.stopRun('own1', 'mallory'), false);
+  assert.deepEqual(runner.getRunForProxy('own1', 'tok'), { port: 5200 });
+  // Correct owner → stopped.
+  assert.equal(runner.stopRun('own1', 'alice'), true);
+  assert.equal(runner.getRunForProxy('own1', 'tok'), null);
+  // Unknown run → false, not a throw.
+  assert.equal(runner.stopRun('nope', 'alice'), false);
+  runner._resetRunsForTest();
+});
+
+test('stopRun(): internal callers (no userId) bypass the ownership gate', () => {
+  runner._resetRunsForTest();
+  runner._seedRunForTest({ runId: 'own2', userId: 'alice', port: 5201, phase: 'ready', previewToken: 't2' });
+  assert.equal(runner.stopRun('own2'), true); // evict/restart/reaper path
+  assert.equal(runner.getPreviewToken('own2'), null);
+  runner._resetRunsForTest();
+});
+
+test('getRunForProxy(): a crashed/stopped run no longer exposes its (recyclable) port', () => {
+  runner._resetRunsForTest();
+  runner._seedRunForTest({ runId: 'p1', userId: 'alice', port: 5300, phase: 'ready', previewToken: 'pt' });
+  assert.deepEqual(runner.getRunForProxy('p1', 'pt'), { port: 5300 });
+  // Simulate a boot failure: phase error keeps the row but the port is dead.
+  runner._seedRunForTest({ runId: 'p1', userId: 'alice', port: 5300, phase: 'error', previewToken: 'pt' });
+  assert.equal(runner.getRunForProxy('p1', 'pt'), null);
+  // Wrong token never resolves regardless of phase.
+  runner._seedRunForTest({ runId: 'p1', userId: 'alice', port: 5300, phase: 'ready', previewToken: 'pt' });
+  assert.equal(runner.getRunForProxy('p1', 'WRONG'), null);
+  runner._resetRunsForTest();
+});
+
 test('normaliseRuntimeEnv keeps app env and drops dangerous process overrides', () => {
   const env = runner.normaliseRuntimeEnv({
     stripe_secret_key: 'sk_test_redacted',

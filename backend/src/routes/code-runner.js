@@ -67,6 +67,12 @@ router.post('/start', authenticateToken, async (req, res) => {
     if (err && err.code === 'no_package') {
       return res.status(400).json({ error: 'no_package', message: err.message });
     }
+    if (err && err.code === 'forbidden') {
+      return res.status(403).json({ error: 'forbidden', message: 'No puedes reiniciar la ejecución de otro usuario.' });
+    }
+    if (err && err.code === 'capacity_full') {
+      return res.status(503).json({ error: 'capacity_full', message: err.message });
+    }
     // Don't echo err.message — fs failures (ENOENT/ENOTDIR/EACCES) embed the
     // absolute server tmp path (CWE-209). Log server-side, return generic.
     console.error('[code-runner] start failed:', (err && err.message) || err);
@@ -81,8 +87,9 @@ router.get('/:runId/status', authenticateToken, (req, res) => {
 });
 
 router.post('/:runId/stop', authenticateToken, (req, res) => {
-  hostRunner.stopRun(req.params.runId);
-  return res.json({ ok: true });
+  // Ownership-checked: a user can only stop their OWN run (no-op otherwise).
+  const stopped = hostRunner.stopRun(req.params.runId, req.user.id);
+  return res.json({ ok: stopped });
 });
 
 function applyPreviewFrameHeaders(_req, res, next) {

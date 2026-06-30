@@ -408,12 +408,23 @@ async function pipeline(run) {
   pushLog(run, 'listo ?');
 }
 
-function evictIfNeeded() {
+function evictIfNeeded(userId) {
   const active = [...runs.values()];
   if (active.length < MAX_CONCURRENT) return;
-  // stop the least-recently-touched run to make room
-  active.sort((a, b) => a.lastTouch - b.lastTouch);
-  stopRun(active[0].runId);
+  // Only ever evict the CALLER's OWN least-recently-touched run — never kill
+  // another user's live dev server to make room (cross-user eviction DoS).
+  const mine = active
+    .filter((r) => (r.userId || null) === (userId || null))
+    .sort((a, b) => a.lastTouch - b.lastTouch);
+  if (mine.length) {
+    stopRun(mine[0].runId);
+    return;
+  }
+  // At the global cap and the caller owns none of the active runs → refuse
+  // rather than evicting someone else's run.
+  const e = new Error('capacidad de ejecución llena — vuelve a intentar en un momento');
+  e.code = 'capacity_full';
+  throw e;
 }
 
 /** Start (or restart) a run. Returns immediately; the install/boot runs async. */
@@ -430,8 +441,16 @@ async function startRun({ runId, userId, files, env }) {
     e.code = 'no_package';
     throw e;
   }
-  if (runs.has(id)) stopRun(id); // restart cleanly, but keep the dir (node_modules cache)
-  evictIfNeeded();
+  // Restart cleanly, but reject if the same runId is already owned by ANOTHER
+  // user (client-supplied runId collision / cross-user takeover).
+  const existing = runs.get(id);
+  if (existing && existing.userId && userId && existing.userId !== userId) {
+    const e = new Error('forbidden');
+    e.code = 'forbidden';
+    throw e;
+  }
+  if (existing) stopRun(id); // same owner / unowned → restart, keep the dir (node_modules cache)
+  evictIfNeeded(userId);
 
   const dir = path.join(ROOT, id);
   // The preview token rides in the URL PATH (not a cookie). The preview iframe is
@@ -466,6 +485,7 @@ async function startRun({ runId, userId, files, env }) {
   pipeline(run).catch((err) => {
     if (run.stopped) return;
     run.phase = 'error';
+    run.port = null; // a failed run's port is dead — never let the proxy reach it
     run.error = String((err && err.message) || err);
     killGroup(run.child);
     killGroup(run.installChild);
@@ -473,12 +493,17 @@ async function startRun({ runId, userId, files, env }) {
   return { runId: id, phase: run.phase, devUrl: run.devUrl, framework: run.framework };
 }
 
-function stopRun(runId) {
+function stopRun(runId, userId) {
   const id = safeId(runId);
   const run = runs.get(id);
-  if (!run) return;
+  if (!run) return false;
+  // Ownership gate: an authenticated caller (userId given) may only stop their
+  // OWN run. Internal callers (evict, restart, idle reaper) pass no userId and
+  // bypass the check by design.
+  if (userId && run.userId && run.userId !== userId) return false;
   run.stopped = true;
   run.phase = 'stopped';
+  run.port = null; // never proxy to a (possibly OS-recycled) port after stop
   killGroup(run.installChild);
   killGroup(run.child);
   run.installChild = null;
@@ -486,6 +511,7 @@ function stopRun(runId) {
   runs.delete(id);
   // The dir (incl. node_modules) is intentionally kept for fast re-runs; the
   // idle reaper / OS tmp cleanup handles disk over time.
+  return true;
 }
 
 function getStatus(runId, userId) {
@@ -518,7 +544,9 @@ function getRunForProxy(runId, previewToken) {
   const run = runs.get(id);
   if (!run || !run.previewToken || !previewToken) return null;
   if (run.previewToken !== previewToken) return null;
-  if (!run.port) return null;
+  // Gate on phase like getProxyTarget: a crashed/errored/stopped run can still
+  // hold a stale port whose number the OS may have recycled to another process.
+  if (!run.port || !['starting', 'ready'].includes(run.phase)) return null;
   run.lastTouch = Date.now();
   return { port: run.port };
 }
@@ -574,4 +602,9 @@ module.exports = {
   isRuntimeEnvFile,
   useProxyUrls: shouldUseProxyUrls,
   proxyUrlsEnabled,
+  // Test-only hooks: seed/clear the in-memory run registry WITHOUT spawning a
+  // child process, so the ownership / phase-gate logic can be unit-tested.
+  // No behavioural impact on the production paths.
+  _seedRunForTest: (run) => { runs.set(safeId(run.runId), { port: null, phase: 'ready', previewToken: null, ...run, runId: safeId(run.runId) }); },
+  _resetRunsForTest: () => { runs.clear(); },
 };
