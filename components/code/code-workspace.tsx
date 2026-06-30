@@ -21,6 +21,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { useIsMobile } from "@/hooks/use-mobile"
+import { cn } from "@/lib/utils"
 import {
   ResizableHandle,
   ResizablePanel,
@@ -86,6 +88,11 @@ export function CodeWorkspace() {
   const [inviteOpen, setInviteOpen] = React.useState(false)
   const [activeTool, setActiveTool] = React.useState<WorkspaceToolId | null>(null)
   const [codeHubOpen, setCodeHubOpen] = React.useState(false)
+  // Mobile: the desktop side-by-side resizable split crams the chat and the
+  // preview into two unusable columns on a phone. Instead, show ONE panel at a
+  // time with a bottom toggle (Agente ↔ Preview) — the Replit/bolt mobile pattern.
+  const isMobile = useIsMobile()
+  const [mobileView, setMobileView] = React.useState<"chat" | "preview">("chat")
 
   const chatRef = React.useRef<ImperativePanelHandle>(null)
 
@@ -144,6 +151,7 @@ export function CodeWorkspace() {
 
   const openComposer = React.useCallback(() => {
     setChatOpen(true)
+    setMobileView("chat")
     chatRef.current?.expand()
     focusChat()
     window.dispatchEvent(new CustomEvent("siragpt:code-composer-mode"))
@@ -430,60 +438,114 @@ export function CodeWorkspace() {
       />
 
       <div className="relative min-h-0 flex-1">
-        <ResizablePanelGroup direction="horizontal" className="h-full">
-          <ResizablePanel
-            ref={chatRef}
-            collapsible
-            collapsedSize={0}
-            defaultSize={CHAT_DEFAULT_SIZE}
-            minSize={CHAT_MIN_SIZE}
-            maxSize={50}
-            onCollapse={() => setChatOpen(false)}
-            onExpand={() => setChatOpen(true)}
-            className="min-w-0"
-          >
-            <AICodeChatPanel />
-          </ResizablePanel>
-          <ResizableHandle withHandle />
+        {(() => {
+          // Shared right-hand area (preview + optional terminal, plus the
+          // code-hub / tool / launcher overlays). Rendered inside a relative,
+          // full-size parent in BOTH layouts.
+          const mainArea = (
+            <>
+              <div className="absolute inset-0">
+                <ResizablePanelGroup direction="vertical">
+                  <ResizablePanel defaultSize={terminalOpen ? 100 - TERMINAL_DEFAULT_SIZE : 100} minSize={30}>
+                    <PreviewPane onClose={() => handleClosePanel("preview")} />
+                  </ResizablePanel>
+                  {terminalOpen ? (
+                    <>
+                      <ResizableHandle withHandle />
+                      <ResizablePanel defaultSize={TERMINAL_DEFAULT_SIZE} minSize={TERMINAL_MIN_SIZE} maxSize={70}>
+                        <TerminalPanel open={terminalOpen} onClose={() => setTerminalOpen(false)} />
+                      </ResizablePanel>
+                    </>
+                  ) : null}
+                </ResizablePanelGroup>
+              </div>
 
-          <ResizablePanel defaultSize={70} minSize={32} className="relative min-w-0">
-            <div className="absolute inset-0">
-              <ResizablePanelGroup direction="vertical">
-                <ResizablePanel defaultSize={terminalOpen ? 100 - TERMINAL_DEFAULT_SIZE : 100} minSize={30}>
-                  <PreviewPane onClose={() => handleClosePanel("preview")} />
-                </ResizablePanel>
-                {terminalOpen ? (
-                  <>
-                    <ResizableHandle withHandle />
-                    <ResizablePanel defaultSize={TERMINAL_DEFAULT_SIZE} minSize={TERMINAL_MIN_SIZE} maxSize={70}>
-                      <TerminalPanel open={terminalOpen} onClose={() => setTerminalOpen(false)} />
-                    </ResizablePanel>
-                  </>
-                ) : null}
-              </ResizablePanelGroup>
-            </div>
+              {codeHubOpen ? (
+                <CodeHub open onClose={() => setCodeHubOpen(false)} />
+              ) : activeTool ? (
+                <ToolScreen
+                  toolId={activeTool}
+                  onClose={() => setActiveTool(null)}
+                  onBackToLauncher={() => {
+                    setActiveTool(null)
+                    setLauncherOpen(true)
+                  }}
+                />
+              ) : null}
 
-            {codeHubOpen ? (
-              <CodeHub open onClose={() => setCodeHubOpen(false)} />
-            ) : activeTool ? (
-              <ToolScreen
-                toolId={activeTool}
-                onClose={() => setActiveTool(null)}
-                onBackToLauncher={() => {
-                  setActiveTool(null)
-                  setLauncherOpen(true)
-                }}
+              <ToolLauncher
+                open={launcherOpen}
+                onClose={() => setLauncherOpen(false)}
+                onSelect={handleSelectTool}
+                openToolIds={openToolIds}
               />
-            ) : null}
+            </>
+          )
 
-            <ToolLauncher
-              open={launcherOpen}
-              onClose={() => setLauncherOpen(false)}
-              onSelect={handleSelectTool}
-              openToolIds={openToolIds}
-            />
-          </ResizablePanel>
-        </ResizablePanelGroup>
+          // ── Mobile: one panel at a time + a bottom Agente/Preview toggle ──
+          // The desktop horizontal resizable split is unusable on a phone
+          // (two crammed columns). Both panels stay MOUNTED (toggled with
+          // hidden) so chat state and the live preview survive switching.
+          if (isMobile) {
+            return (
+              <div className="flex h-full min-h-0 flex-col">
+                <div className="relative min-h-0 flex-1 overflow-hidden">
+                  <div className={cn("absolute inset-0", mobileView === "chat" ? "block" : "hidden")}>
+                    <AICodeChatPanel />
+                  </div>
+                  <div className={cn("absolute inset-0", mobileView === "preview" ? "block" : "hidden")}>
+                    {mainArea}
+                  </div>
+                </div>
+                <div className="flex shrink-0 border-t border-border/60 bg-background">
+                  {([
+                    { id: "chat", label: "Agente" },
+                    { id: "preview", label: "Preview" },
+                  ] as const).map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setMobileView(tab.id)}
+                      aria-pressed={mobileView === tab.id}
+                      className={cn(
+                        "flex-1 px-3 py-2.5 text-xs font-medium transition-colors",
+                        mobileView === tab.id
+                          ? "border-t-2 border-primary text-foreground"
+                          : "border-t-2 border-transparent text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )
+          }
+
+          // ── Desktop: the original side-by-side resizable split ──
+          return (
+            <ResizablePanelGroup direction="horizontal" className="h-full">
+              <ResizablePanel
+                ref={chatRef}
+                collapsible
+                collapsedSize={0}
+                defaultSize={CHAT_DEFAULT_SIZE}
+                minSize={CHAT_MIN_SIZE}
+                maxSize={50}
+                onCollapse={() => setChatOpen(false)}
+                onExpand={() => setChatOpen(true)}
+                className="min-w-0"
+              >
+                <AICodeChatPanel />
+              </ResizablePanel>
+              <ResizableHandle withHandle />
+
+              <ResizablePanel defaultSize={70} minSize={32} className="relative min-w-0">
+                {mainArea}
+              </ResizablePanel>
+            </ResizablePanelGroup>
+          )
+        })()}
       </div>
 
       <PublishingConsole open={publishingOpen} onOpenChange={setPublishingOpen} />
