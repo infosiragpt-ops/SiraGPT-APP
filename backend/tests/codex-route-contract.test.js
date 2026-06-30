@@ -155,6 +155,29 @@ test('tokenized preview proxy strips credentials and forces frame headers', asyn
   }
 });
 
+test('tokenized preview proxy can override Host header for Vite allowedHosts', async () => {
+  const upstreamHits = [];
+  const server = http.createServer((req, res) => {
+    upstreamHits.push({ host: req.headers.host });
+    res.end('ok');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  process.env.CODE_RUNNER_DEV_INTERNAL_URL = `http://127.0.0.1:${port}`;
+  process.env.CODE_RUNNER_DEV_PROXY_HOST_HEADER = `localhost:${port}`;
+  try {
+    const start = await request(buildApp()).post('/api/codex/projects/p1/preview/start');
+    assert.equal(start.status, 200);
+    const res = await request(buildApp()).get(start.body.previewUrl);
+    assert.equal(res.status, 200);
+    assert.equal(upstreamHits[0].host, `localhost:${port}`);
+  } finally {
+    delete process.env.CODE_RUNNER_DEV_INTERNAL_URL;
+    delete process.env.CODE_RUNNER_DEV_PROXY_HOST_HEADER;
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('preview routes 404 on foreign project ids (ownership gate)', async () => {
   const res = await request(buildApp()).post('/api/codex/projects/nope/preview/start');
   assert.equal(res.status, 404);

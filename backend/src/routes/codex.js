@@ -88,6 +88,17 @@ function codexPreviewInternalUrl(env = process.env) {
   return String(env.CODE_RUNNER_DEV_INTERNAL_URL || env.CODE_RUNNER_DEV_URL || runnerDevUrl(env)).replace(/\/+$/, '');
 }
 
+function previewProxyHostHeader(upstreamBase, env = process.env) {
+  const configured = String(env.CODE_RUNNER_DEV_PROXY_HOST_HEADER || '').trim();
+  if (configured) return configured;
+  const port = upstreamBase.port || (upstreamBase.protocol === 'https:' ? '443' : '80');
+  // Vite 7 rejects service-discovery hosts such as "runner" by default. The
+  // TCP target can still be runner:5173, but the HTTP Host header must be a
+  // loopback host Vite allows.
+  if (/^(runner|code-runner)$/i.test(upstreamBase.hostname)) return `localhost:${port}`;
+  return upstreamBase.host;
+}
+
 function requireCodexAgentAccess(req, res, next) {
   if (canUseCodexAgent(req.user, process.env)) return next();
   return res.status(403).json({ error: 'codex_forbidden', message: 'Tu cuenta no puede ejecutar APPS en producción.' });
@@ -257,7 +268,7 @@ router.use('/projects/:id/preview/:token/app', applyPreviewFrameHeaders, (req, r
     if (lk === 'host' || lk === 'content-length') continue;
     fwdHeaders[k] = v;
   }
-  fwdHeaders.host = upstreamBase.host;
+  fwdHeaders.host = previewProxyHostHeader(upstreamBase);
 
   const transport = upstreamBase.protocol === 'https:' ? https : http;
   const upstream = transport.request(
