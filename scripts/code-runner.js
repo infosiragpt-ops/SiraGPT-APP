@@ -26,7 +26,7 @@
 
 const { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, statSync, copyFileSync, rmSync } = require("node:fs");
 const { dirname } = require("node:path");
-const { sanitizeProjectId, resolveProjectRelPath, isAllowedCommand, shouldIgnoreExportPath } = require("./code-runner-utils.js");
+const { sanitizeProjectId, resolveProjectRelPath, commandRejectionReason, shouldIgnoreExportPath } = require("./code-runner-utils.js");
 
 const WORKDIR = process.env.RUNNER_WORKDIR || "/workspace";
 const DEV_PORT = Number(process.env.DEV_PORT || 5173);
@@ -283,8 +283,9 @@ Bun.serve({
       const body = await req.json().catch(() => ({}));
       const id = sanitizeProjectId(body.project);
       const cmd = body.cmd;
-      if (!id || !isAllowedCommand(cmd)) {
-        return Response.json({ ok: false, error: "invalid_command" }, { status: 400 });
+      const rejection = commandRejectionReason(cmd);
+      if (!id || rejection) {
+        return Response.json({ ok: false, error: rejection || "invalid_command" }, { status: 400 });
       }
       const dir = projectDirOf(id);
       if (!existsSync(dir)) return Response.json({ ok: false, error: "project_not_found" }, { status: 404 });

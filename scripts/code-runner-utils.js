@@ -10,6 +10,19 @@ const PROJECT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 // Sandbox-internal allowlist: the agent's terminal goes through the runner,
 // but only via these binaries (extended deliberately, per phase).
 const ALLOWED_BINS = new Set(['git', 'bun', 'bunx', 'node', 'ls', 'cat', 'wc']);
+const INTERACTIVE_SCAFFOLD_RE = /^(?:create-next-app|create-vite|create-react-app|create-remix)(?:@.*)?$/i;
+
+function commandRejectionReason(cmd) {
+  if (!Array.isArray(cmd) || cmd.length === 0 || !cmd.every((c) => typeof c === 'string')) return 'invalid_command';
+  if (!ALLOWED_BINS.has(cmd[0])) return 'invalid_command';
+  if (cmd[0] === 'bunx' && INTERACTIVE_SCAFFOLD_RE.test(cmd[1] || '')) {
+    return 'interactive_scaffold_disallowed: usa write_file/edit_file sobre el starter existente en lugar de create-next-app/create-vite.';
+  }
+  if (cmd[0] === 'bun' && cmd[1] === 'create') {
+    return 'interactive_scaffold_disallowed: usa write_file/edit_file sobre el starter existente en lugar de bun create.';
+  }
+  return null;
+}
 
 function sanitizeProjectId(raw) {
   const id = String(raw || '').trim();
@@ -29,12 +42,7 @@ function resolveProjectRelPath(relPath) {
 }
 
 function isAllowedCommand(cmd) {
-  return (
-    Array.isArray(cmd) &&
-    cmd.length > 0 &&
-    cmd.every((c) => typeof c === 'string') &&
-    ALLOWED_BINS.has(cmd[0])
-  );
+  return commandRejectionReason(cmd) === null;
 }
 
 // Dirs never mirrored to the user's disk on export: generated/heavy trees the
@@ -60,6 +68,7 @@ module.exports = {
   sanitizeProjectId,
   resolveProjectRelPath,
   isAllowedCommand,
+  commandRejectionReason,
   ALLOWED_BINS,
   IGNORED_EXPORT_DIRS,
   shouldIgnoreExportPath,

@@ -48,6 +48,10 @@ function buildSystemPrompt({ project, plan, fileTree }) {
     'Narras en PRIMERA PERSONA y en ESPAÑOL lo que vas haciendo, de forma breve y concreta.',
     'Construyes el proyecto usando las herramientas disponibles (no inventes resultados).',
     'Trabajas paso a paso: piensa, usa una herramienta, lee el resultado, continúa.',
+    'El workspace ya viene provisionado con un starter Vite mínimo: package.json, index.html y src/main.js.',
+    'Para landings, demos o apps simples, NO inicialices frameworks ni ejecutes scaffolds interactivos como create-next-app/create-vite; sobrescribe los archivos existentes con write_file/edit_file.',
+    'Si necesitas estructura adicional, crea archivos concretos tú mismo. Usa run_command solo para verificar, instalar dependencias declaradas o revisar git.',
+    'Nunca dependas de prompts interactivos de terminal; los comandos deben terminar solos.',
     `Proyecto: ${project?.name || 'Codex'}.`,
   ];
   if (plan) {

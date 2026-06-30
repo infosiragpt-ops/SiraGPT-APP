@@ -6,6 +6,7 @@ const {
   sanitizeProjectId,
   resolveProjectRelPath,
   isAllowedCommand,
+  commandRejectionReason,
   shouldIgnoreExportPath,
 } = require('../../scripts/code-runner-utils');
 
@@ -38,6 +39,14 @@ test('isAllowedCommand allows git/bun/bunx/node and blocks the rest', () => {
   assert.equal(isAllowedCommand([]), false);
   assert.equal(isAllowedCommand('git init'), false);
   assert.equal(isAllowedCommand(['git', 42]), false);
+});
+
+test('isAllowedCommand blocks interactive scaffolds that should be written by tools', () => {
+  assert.equal(isAllowedCommand(['bunx', 'create-next-app@latest', '.']), false);
+  assert.equal(isAllowedCommand(['bunx', 'create-vite', '.']), false);
+  assert.equal(isAllowedCommand(['bun', 'create', 'vite', '.']), false);
+  assert.match(commandRejectionReason(['bunx', 'create-next-app@latest', '.']), /interactive_scaffold_disallowed/);
+  assert.equal(commandRejectionReason(['bun', 'install']), null);
 });
 
 test('shouldIgnoreExportPath keeps source but skips generated/heavy dirs', () => {

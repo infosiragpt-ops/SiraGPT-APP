@@ -64,6 +64,22 @@ test('build loop runs grouped tool calls with one groupId, narrative, then done'
   assert.equal(f.actions.length, 2); // both persisted as CodexAction
 });
 
+test('build prompt tells the model to edit the starter instead of scaffolding', async () => {
+  let systemPrompt = '';
+  const f = fakeDeps({
+    llmTurn: async ({ messages }) => {
+      systemPrompt = messages.find((m) => m.role === 'system')?.content || '';
+      return { text: 'Listo.', toolCalls: [] };
+    },
+  });
+  const res = await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt: 'crea una landing' }, project: { id: 'p1', name: 'X' }, deps: f.deps });
+  assert.equal(res.status, 'done');
+  assert.match(systemPrompt, /starter Vite mínimo/i);
+  assert.match(systemPrompt, /NO inicialices frameworks/i);
+  assert.match(systemPrompt, /write_file\/edit_file/i);
+  assert.match(systemPrompt, /Nunca dependas de prompts interactivos/i);
+});
+
 test('a tool error does NOT abort the loop; the error is fed back to the model', async () => {
   const f = fakeDeps({
     runner: {

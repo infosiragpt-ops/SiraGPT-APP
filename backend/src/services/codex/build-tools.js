@@ -78,7 +78,7 @@ function formatSchema(schema) {
 const TOOLS = {
   run_command: {
     kind: 'terminal',
-    description: 'Ejecuta un comando en el workspace (allowlist: git, bun, bunx, node, ls, cat, wc). cmd es un array de strings.',
+    description: 'Ejecuta un comando no interactivo en el workspace (allowlist: git, bun, bunx, node, ls, cat, wc). No uses scaffolds interactivos como create-next-app/create-vite; para landings/apps simples escribe archivos con write_file/edit_file.',
     parameters: { type: 'object', properties: { cmd: { type: 'array', items: { type: 'string' } }, timeoutMs: { type: 'number' } }, required: ['cmd'] },
     commandFor: (args) => (Array.isArray(args?.cmd) ? args.cmd.join(' ') : String(args?.cmd || '')),
     pathFor: () => null,
