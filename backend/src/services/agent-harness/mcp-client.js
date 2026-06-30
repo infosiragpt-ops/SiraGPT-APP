@@ -65,10 +65,42 @@ function withTimeout(promise, ms, label) {
   ]).finally(() => clearTimeout(timer));
 }
 
+function mcpAllowPrivate() {
+  return ['1', 'true', 'yes', 'on'].includes(String(process.env.SIRAGPT_MCP_ALLOW_PRIVATE || '').toLowerCase());
+}
+
+function mcpSsrfGuardEnabled() {
+  // Connect-time SSRF guard is ON by default; explicit kill-switch
+  // (SIRAGPT_MCP_SSRF_GUARD=0) only for emergencies.
+  return !['0', 'false', 'no', 'off'].includes(String(process.env.SIRAGPT_MCP_SSRF_GUARD || '').toLowerCase());
+}
+
+/**
+ * Re-resolve an MCP server host at CONNECT time and reject private /
+ * reserved IPs. The registration check (validateServerInput) only sees
+ * the hostname string, so a domain that rebinds to a private IP after
+ * registration would slip through; this closes that DNS-rebinding hole
+ * by reusing web-fetch's DNS-resolving guard. Operators who legitimately
+ * point at LAN servers opt out with SIRAGPT_MCP_ALLOW_PRIVATE (the same
+ * flag as registration). A sub-TTL rebind between this check and the SDK
+ * transport's own fetch is a residual TOCTOU window, but the bar is
+ * raised substantially. `lookup` is injectable for tests.
+ */
+async function assertMcpHostSafe(host, { lookup } = {}) {
+  if (!mcpSsrfGuardEnabled() || mcpAllowPrivate()) return;
+  // eslint-disable-next-line global-require
+  const { resolveAndAssertSafe } = require('../connectors/web-fetch');
+  await resolveAndAssertSafe(String(host || ''), lookup);
+}
+
 async function connectClient(server) {
   const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
   const headers = decryptHeaders(server.headersEncrypted);
   const url = new URL(server.url);
+  // SSRF hardening: block hosts that resolve to private/reserved IPs at
+  // connect time (defends against DNS-rebinding the registration-time
+  // hostname check cannot see). Throws → the connection attempt fails.
+  await assertMcpHostSafe(url.hostname);
 
   async function attempt(transportKind) {
     const client = new Client(
@@ -322,7 +354,7 @@ function validateServerInput(body) {
     if (host === 'localhost' || host.endsWith('.localhost') || isPrivateOrReservedAddress(host)) {
       // Self-hosted deployments may legitimately point at LAN servers —
       // operators opt in explicitly.
-      if (!['1', 'true', 'yes', 'on'].includes(String(process.env.SIRAGPT_MCP_ALLOW_PRIVATE || '').toLowerCase())) {
+      if (!mcpAllowPrivate()) {
         return { ok: false, error: 'private/localhost MCP servers are disabled (set SIRAGPT_MCP_ALLOW_PRIVATE=1 to allow)' };
       }
     }
@@ -355,6 +387,8 @@ module.exports = {
   encryptHeaders,
   decryptHeaders,
   resetForTests,
+  assertMcpHostSafe,
+  mcpAllowPrivate,
   DISCOVERY_TIMEOUT_MS,
   CALL_TIMEOUT_MS,
 };
