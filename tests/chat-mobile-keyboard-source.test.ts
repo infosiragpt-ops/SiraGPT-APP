@@ -138,4 +138,29 @@ describe("mobile keyboard composer source contract", () => {
       "keyboard-open clearance override should also apply outside the iOS-only gate"
     )
   })
+
+  it("keeps the empty mobile chat composer low and pinned while typing", () => {
+    const initialStageIndex = globals.lastIndexOf("\n  .chat-initial-stage {")
+    assert.notEqual(initialStageIndex, -1, "missing mobile empty-chat stage rule")
+    const initialStageBlock = cssBlockAt(globals, initialStageIndex)
+
+    assert.match(
+      initialStageBlock,
+      /\.chat-initial-stage\s*\{[^}]*align-items:\s*flex-end\s*!important[^}]*padding-bottom:\s*calc\(0\.625rem\s*\+\s*var\(--chat-mobile-bottom-clearance/,
+      "empty mobile chat should place the composer near the bottom, not centered vertically"
+    )
+
+    const initialStagePinnedIndex = globals.indexOf(
+      '.chat-viewport[data-chat-input-focused="true"] .chat-initial-stage',
+      initialStageIndex
+    )
+    assert.notEqual(initialStagePinnedIndex, -1, "missing focused empty-chat stage rule")
+    const initialStagePinnedBlock = cssBlockAt(globals, initialStagePinnedIndex)
+
+    assert.match(
+      initialStagePinnedBlock,
+      /\.chat-viewport\[data-chat-input-focused="true"\]\s+\.chat-initial-stage,\s*\.chat-viewport\[data-chat-keyboard="open"\]\s+\.chat-initial-stage\s*\{[^}]*position:\s*fixed[^}]*height:\s*var\(--chat-viewport-height,\s*100dvh\)[^}]*padding-bottom:\s*calc\(0\.375rem\s*\+\s*var\(--chat-mobile-bottom-clearance/,
+      "empty mobile chat should pin the composer to the visual viewport while typing"
+    )
+  })
 })
