@@ -792,6 +792,30 @@ test('runAgenticChat does not hang when a tool errors', async () => {
   const last = fs.filter(f => f.replace).pop();
   assert.ok(last, 'expected at least one replace frame');
   assert.match(last.content, /Lo intenté/);
+
+  // The failed step must surface WHY it failed (not just a red badge): the
+  // sentinel that carries the step trace should name the broken tool and the
+  // error reason on the errored step.
+  const errFrame = fs.filter(f => f.replace && /"status":"error"/.test(f.content || '')).pop();
+  assert.ok(errFrame, 'expected a sentinel frame with an errored step');
+  assert.match(errFrame.content, /Error en broken/);
+  assert.match(errFrame.content, /boom/);
+});
+
+test('extractObservationError normalises tool error shapes', () => {
+  const { extractObservationError } = agenticStream._internal;
+  assert.equal(extractObservationError({ error: 'timeout' }), 'timeout');
+  assert.equal(extractObservationError({ error: new Error('boom') }), 'boom');
+  assert.equal(extractObservationError({ error: { message: 'denied' } }), 'denied');
+  assert.equal(extractObservationError({ error: { detail: 'bad args' } }), 'bad args');
+  assert.equal(extractObservationError({ message: 'fallback' }), 'fallback');
+  // No error → empty (the step stays clean / "done").
+  assert.equal(extractObservationError({ ok: true }), '');
+  assert.equal(extractObservationError(null), '');
+  // Collapses whitespace and caps very long messages.
+  const long = extractObservationError({ error: 'x'.repeat(400) });
+  assert.ok(long.length <= 200, `expected cap, got ${long.length}`);
+  assert.equal(extractObservationError({ error: '  multi   line\n  msg ' }), 'multi line msg');
 });
 
 test('runAgenticChat caps iterations at maxSteps', async () => {

@@ -165,6 +165,26 @@ function sanitizeReasoning(raw) {
   return s;
 }
 
+// Normalise a failed tool observation's error into a short, single-line,
+// user-facing message. A tool failure (web_fetch timeout, python_exec raise,
+// bad args, permission denied…) should tell the user WHY it failed instead of
+// rendering a bare red badge with no detail — Claude-style transparency.
+// Handles string | Error | { error|message|detail|reason } observation shapes.
+function extractObservationError(obs) {
+  if (!obs || typeof obs !== 'object') return '';
+  let raw = obs.error != null ? obs.error : obs.message;
+  if (raw == null) return '';
+  if (raw instanceof Error) {
+    raw = raw.message || String(raw);
+  } else if (typeof raw === 'object') {
+    raw = raw.message || raw.error || raw.detail || raw.reason
+      || (() => { try { return JSON.stringify(raw); } catch { return ''; } })();
+  }
+  const s = String(raw).replace(/\s+/g, ' ').trim();
+  if (!s || s === '[object Object]') return '';
+  return truncate(s, 200);
+}
+
 function textFromMessageContent(content) {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
@@ -911,7 +931,22 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
             const obs = a?.observation || {};
             const ok = !obs?.error;
             s.status = ok ? 'done' : 'error';
-            s.toolCalls[0].output = { ok };
+            if (ok) {
+              s.toolCalls[0].output = { ok };
+            } else {
+              // Surface WHY the tool failed: attach the real message to the
+              // tool output (structured, persisted) AND to the step's
+              // reasoning line, which the chat timeline already renders as the
+              // step detail — so a failed step shows the cause, not just a
+              // red badge.
+              const errText = extractObservationError(obs);
+              const toolName = (s.toolCalls[0] && s.toolCalls[0].tool) || a?.tool || 'la herramienta';
+              s.toolCalls[0].output = { ok, error: errText || 'falló la ejecución' };
+              const prefix = `Error en ${toolName}: ${errText || 'falló la ejecución'}`;
+              s.reasoning = s.reasoning
+                ? truncate(`${prefix} — ${s.reasoning}`, REASONING_MAX_CHARS)
+                : truncate(prefix, REASONING_MAX_CHARS);
+            }
             break;
           }
         }
@@ -1397,6 +1432,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
     _internal: {
       freshState,
       serializeSentinel,
+      extractObservationError,
       stageLabelFor,
       buildThreadWorkContext,
       adaptAgentTool,
