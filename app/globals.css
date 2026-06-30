@@ -412,6 +412,171 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   min-width: max-content;
 }
 
+.chat-mobile-menu-liquid-button {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  border: 1px solid hsl(220 18% 92% / 0.86) !important;
+  background:
+    radial-gradient(circle at 34% 18%, hsl(0 0% 100% / 0.96), transparent 36%),
+    radial-gradient(circle at 74% 76%, hsl(var(--accent-violet) / 0.12), transparent 42%),
+    linear-gradient(145deg, hsl(0 0% 100% / 0.82), hsl(220 14% 96% / 0.58)) !important;
+  color: hsl(220 18% 9% / 0.92) !important;
+  box-shadow:
+    inset 0 1px 0 hsl(0 0% 100% / 0.92),
+    inset 0 -14px 24px -24px hsl(220 30% 20% / 0.5),
+    0 18px 34px -28px hsl(220 30% 18% / 0.55),
+    0 3px 12px -10px hsl(220 30% 18% / 0.42);
+  backdrop-filter: blur(18px) saturate(1.45);
+  -webkit-backdrop-filter: blur(18px) saturate(1.45);
+  touch-action: manipulation;
+  transform: translateZ(0);
+  transition:
+    transform 220ms var(--ease-out-soft, cubic-bezier(0.16, 1, 0.3, 1)),
+    color 180ms ease-out,
+    border-color 180ms ease-out,
+    box-shadow 220ms var(--ease-out-soft, cubic-bezier(0.16, 1, 0.3, 1)),
+    background 220ms var(--ease-out-soft, cubic-bezier(0.16, 1, 0.3, 1));
+}
+
+.chat-mobile-menu-liquid-button::before,
+.chat-mobile-menu-liquid-button::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  border-radius: inherit;
+}
+
+.chat-mobile-menu-liquid-button::before {
+  inset: -46%;
+  z-index: -1;
+  background:
+    radial-gradient(circle at 25% 48%, hsl(var(--accent-violet) / 0.18), transparent 32%),
+    radial-gradient(circle at 74% 54%, hsl(198 96% 62% / 0.16), transparent 31%),
+    conic-gradient(from 112deg, transparent, hsl(0 0% 100% / 0.64), transparent 38%);
+  filter: blur(10px);
+  opacity: 0.68;
+  transform: scale(0.78) rotate(-12deg);
+  transition:
+    opacity 220ms ease-out,
+    transform 520ms var(--ease-out-soft, cubic-bezier(0.16, 1, 0.3, 1));
+}
+
+.chat-mobile-menu-liquid-button::after {
+  inset: 1px;
+  z-index: 0;
+  background:
+    linear-gradient(116deg, transparent 12%, hsl(0 0% 100% / 0.74) 42%, transparent 64%),
+    radial-gradient(ellipse 52% 36% at 26% 0%, hsl(0 0% 100% / 0.44), transparent 72%);
+  opacity: 0.58;
+  transform: translateX(-58%) skewX(-12deg);
+  transition:
+    opacity 200ms ease-out,
+    transform 560ms var(--ease-out-soft, cubic-bezier(0.16, 1, 0.3, 1));
+}
+
+.chat-mobile-menu-liquid-button > :not(.sr-only) {
+  position: relative;
+  z-index: 1;
+}
+
+.chat-mobile-menu-liquid-button__icon {
+  stroke-width: 2.15;
+  filter: drop-shadow(0 1px 0 hsl(0 0% 100% / 0.72));
+}
+
+.chat-mobile-menu-liquid-button:hover,
+.chat-mobile-menu-liquid-button:focus-visible {
+  border-color: hsl(var(--accent-violet) / 0.24) !important;
+  color: hsl(220 22% 6% / 0.98) !important;
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 hsl(0 0% 100% / 0.96),
+    inset 0 -16px 26px -24px hsl(var(--accent-violet) / 0.44),
+    0 22px 42px -30px hsl(var(--accent-violet) / 0.38),
+    0 8px 18px -16px hsl(220 30% 18% / 0.45);
+}
+
+.chat-mobile-menu-liquid-button:hover::before,
+.chat-mobile-menu-liquid-button:focus-visible::before {
+  opacity: 1;
+  transform: scale(1) rotate(18deg);
+}
+
+.chat-mobile-menu-liquid-button:hover::after,
+.chat-mobile-menu-liquid-button:focus-visible::after {
+  opacity: 0.92;
+  transform: translateX(68%) skewX(-12deg);
+}
+
+.chat-mobile-menu-liquid-button:active {
+  transform: translateY(0) scale(0.96);
+  transition-duration: 90ms;
+}
+
+.chat-mobile-menu-liquid-button:focus-visible {
+  outline: 2px solid hsl(var(--accent-violet) / 0.42);
+  outline-offset: 3px;
+}
+
+.dark .chat-mobile-menu-liquid-button {
+  border-color: hsl(220 18% 100% / 0.12) !important;
+  background:
+    radial-gradient(circle at 32% 18%, hsl(0 0% 100% / 0.18), transparent 36%),
+    radial-gradient(circle at 74% 76%, hsl(var(--accent-violet) / 0.18), transparent 42%),
+    linear-gradient(145deg, hsl(220 24% 18% / 0.72), hsl(220 24% 8% / 0.62)) !important;
+  color: hsl(216 29% 97% / 0.92) !important;
+  box-shadow:
+    inset 0 1px 0 hsl(0 0% 100% / 0.14),
+    inset 0 -14px 24px -24px hsl(0 0% 100% / 0.32),
+    0 18px 34px -28px hsl(0 0% 0% / 0.72),
+    0 0 0 1px hsl(0 0% 100% / 0.04);
+}
+
+.dark .chat-mobile-menu-liquid-button::before {
+  background:
+    radial-gradient(circle at 25% 48%, hsl(var(--accent-violet) / 0.28), transparent 32%),
+    radial-gradient(circle at 74% 54%, hsl(198 96% 62% / 0.18), transparent 31%),
+    conic-gradient(from 112deg, transparent, hsl(0 0% 100% / 0.2), transparent 38%);
+}
+
+.dark .chat-mobile-menu-liquid-button::after {
+  background:
+    linear-gradient(116deg, transparent 12%, hsl(0 0% 100% / 0.2) 42%, transparent 64%),
+    radial-gradient(ellipse 52% 36% at 26% 0%, hsl(0 0% 100% / 0.16), transparent 72%);
+}
+
+.dark .chat-mobile-menu-liquid-button:hover,
+.dark .chat-mobile-menu-liquid-button:focus-visible {
+  border-color: hsl(var(--accent-violet) / 0.32) !important;
+  color: hsl(216 29% 99% / 0.98) !important;
+  box-shadow:
+    inset 0 1px 0 hsl(0 0% 100% / 0.18),
+    inset 0 -16px 26px -24px hsl(var(--accent-violet) / 0.48),
+    0 22px 42px -30px hsl(var(--accent-violet) / 0.58),
+    0 0 0 1px hsl(var(--accent-violet) / 0.08);
+}
+
+.dark .chat-mobile-menu-liquid-button__icon {
+  filter: drop-shadow(0 1px 0 hsl(0 0% 0% / 0.36));
+}
+
+.reduce-motion .chat-mobile-menu-liquid-button,
+.reduce-motion .chat-mobile-menu-liquid-button::before,
+.reduce-motion .chat-mobile-menu-liquid-button::after {
+  transition: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-mobile-menu-liquid-button,
+  .chat-mobile-menu-liquid-button::before,
+  .chat-mobile-menu-liquid-button::after {
+    transition: none !important;
+  }
+}
+
 .chat-initial-stage {
   padding: calc(var(--chat-header-height, 64px) + 1rem) var(--chat-mobile-gutter)
     calc(1rem + env(safe-area-inset-bottom, 0px));

@@ -10700,13 +10700,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 <div className="shrink-0 md:hidden">
                   <SidebarTrigger
                     className={cn(
-                      "h-8 w-8 rounded-none border-0 bg-transparent p-0 text-foreground shadow-none",
-                      "hover:bg-transparent focus-visible:bg-transparent active:scale-[0.97]"
+                      "chat-mobile-menu-liquid-button h-11 w-11 rounded-full p-0 text-foreground",
+                      "hover:bg-transparent focus-visible:bg-transparent"
                     )}
                     aria-label="Abrir el menú lateral"
                     title="Abrir el menú lateral"
                   >
-                    <MenuIcon className="h-5 w-5" />
+                    <MenuIcon className="chat-mobile-menu-liquid-button__icon h-5 w-5" />
                   </SidebarTrigger>
                 </div>
                 {/* Model selector moved to the composer (next to the mic),
