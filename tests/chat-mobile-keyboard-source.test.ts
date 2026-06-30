@@ -102,6 +102,11 @@ describe("mobile keyboard composer source contract", () => {
       /\.chat-viewport\s*\{[^}]*--chat-mobile-bottom-clearance:/,
       "iOS block should reserve Safari toolbar clearance while the keyboard is closed"
     )
+    assert.doesNotMatch(
+      iosBlock,
+      /5\.25rem/,
+      "closed iOS Safari clearance should not float the composer far above the bottom bar"
+    )
 
     // Keyboard open on iOS: the composer dock flips to position:fixed so it
     // pins to the visual viewport instead of flying to the top (Safari's
@@ -116,12 +121,12 @@ describe("mobile keyboard composer source contract", () => {
     )
 
     const clearanceOverride =
-      /\.chat-viewport\[data-chat-keyboard="open"\]\s*\{[^}]*--chat-mobile-bottom-clearance:\s*max\(env\(safe-area-inset-bottom,\s*0px\),\s*0\.25rem\)/
+      /\.chat-viewport\[data-chat-input-focused="true"\],\s*\.chat-viewport\[data-chat-keyboard="open"\]\s*\{[^}]*--chat-mobile-bottom-clearance:\s*max\(env\(safe-area-inset-bottom,\s*0px\),\s*0\.25rem\)/
 
     assert.match(
       iosBlock,
       clearanceOverride,
-      "keyboard-open composer should stay close to the visual viewport bottom on iOS"
+      "focused or keyboard-open composer should stay close to the visual viewport bottom on iOS"
     )
 
     // The same keyboard-open override also lives outside the iOS-only gate so

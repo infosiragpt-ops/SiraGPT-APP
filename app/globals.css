@@ -2124,7 +2124,7 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 @supports (-webkit-touch-callout: none) {
   @media (max-width: 767px) {
     .chat-viewport {
-      --chat-mobile-bottom-clearance: max(env(safe-area-inset-bottom, 0px), 5.25rem);
+      --chat-mobile-bottom-clearance: max(env(safe-area-inset-bottom, 0px), 1.25rem);
     }
 
     /*
@@ -2158,8 +2158,10 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
       z-index: 40;
     }
 
-    /* Reduce bottom clearance once keyboard is open (keyboard
-       already takes care of safe-area padding). */
+    /* Reduce bottom clearance as soon as typing starts. The focused state
+       covers Safari's short delay before visualViewport reports the keyboard;
+       the keyboard-open state keeps the same tight placement once detected. */
+    .chat-viewport[data-chat-input-focused="true"],
     .chat-viewport[data-chat-keyboard="open"] {
       --chat-mobile-bottom-clearance: max(env(safe-area-inset-bottom, 0px), 0.25rem);
     }
@@ -2167,6 +2169,7 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 }
 
 @media (max-width: 767px) {
+  .chat-viewport[data-chat-input-focused="true"],
   .chat-viewport[data-chat-keyboard="open"] {
     --chat-mobile-bottom-clearance: max(env(safe-area-inset-bottom, 0px), 0.25rem);
   }
