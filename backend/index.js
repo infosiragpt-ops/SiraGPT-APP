@@ -1206,6 +1206,13 @@ async function startServer() {
     // that window; healthy boots are unaffected (connect resolves on attempt 1,
     // and connectDatabase still process.exit(1)s if all retries are exhausted).
     await prisma.connectDatabase();
+
+    // Forensic trail: now that the DB is up, audit every agent-tool
+    // permission decision (allow / deny / always-allow / timeout). Non-fatal.
+    try {
+      require('./src/services/agent-harness/permission-manager').enablePermissionAudit();
+    } catch (_) { /* permission audit is best-effort */ }
+
     const server = app.listen(PORT, HOST, () => {
         // --- HTTP timeouts ---------------------------------------------------
         // The Next.js front-end proxies every /api/* call to this Express

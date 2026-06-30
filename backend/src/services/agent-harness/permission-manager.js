@@ -37,6 +37,53 @@ const pending = new Map();
 /** chatId → Set<toolName> ("always allow in this chat") */
 const chatAllowlists = new Map();
 
+// ── Permission decision audit (forensic trail) ──────────────────────
+// Injectable sink, default OFF so unit tests stay DB-free. The app
+// enables the durable audit at boot via enablePermissionAudit(); every
+// decision (allow / deny / always-allow / timeout / abort) then lands in
+// the audit log, so "who approved which tool, when" is answerable after
+// an incident. Fail-open: a sink error never affects the permission flow.
+let auditor = null;
+
+function setPermissionAuditor(fn) {
+  auditor = typeof fn === 'function' ? fn : null;
+}
+
+function defaultPermissionAuditor(entry, outcome) {
+  try {
+    // eslint-disable-next-line global-require
+    const prisma = require('../../config/database');
+    // eslint-disable-next-line global-require
+    const { writeAuditLog } = require('../../utils/audit-log');
+    const userDriven = outcome && outcome.decision === 'allow' && !outcome.reason;
+    Promise.resolve(
+      writeAuditLog(prisma, {
+        action: 'agent.permission_decision',
+        actorType: userDriven ? 'user' : 'system',
+        userId: entry.userId || null,
+        resource: 'agent_tool',
+        resourceId: entry.toolName,
+        tags: ['permission', outcome.decision, outcome.scope || outcome.reason || 'once'],
+        metadata: {
+          chatId: entry.chatId || null,
+          tool: entry.toolName,
+          decision: outcome.decision,
+          scope: outcome.scope || null,
+          reason: outcome.reason || null,
+          humanDescription: entry.humanDescription || null,
+          elapsedMs: entry.createdAt ? Date.now() - entry.createdAt : null,
+        },
+      }),
+    ).catch(() => {});
+  } catch (_) {
+    // never throw from the audit path
+  }
+}
+
+function enablePermissionAudit() {
+  setPermissionAuditor(defaultPermissionAuditor);
+}
+
 function isAlwaysAllowed(chatId, toolName) {
   if (!chatId) return false;
   const set = chatAllowlists.get(String(chatId));
@@ -66,6 +113,9 @@ function settle(permissionId, outcome) {
   clearTimeout(entry.timer);
   if (entry.signal && entry.onAbort) {
     try { entry.signal.removeEventListener('abort', entry.onAbort); } catch (_) { /* noop */ }
+  }
+  if (auditor) {
+    try { auditor(entry, outcome); } catch (_) { /* audit must never break the flow */ }
   }
   try { entry.resolve(outcome); } catch (_) { /* resolver must never throw */ }
   return true;
@@ -204,4 +254,6 @@ module.exports = {
   isAlwaysAllowed,
   allowAlwaysInChat,
   resetForTests,
+  setPermissionAuditor,
+  enablePermissionAudit,
 };
