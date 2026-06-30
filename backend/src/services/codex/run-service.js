@@ -69,7 +69,7 @@ async function insertRunGuarded(prisma, { projectId, activeWhere, data }) {
   if (!canLock) return enforce(prisma);
   return prisma.$transaction(async (tx) => {
     await tx.$queryRawUnsafe(
-      'SELECT pg_advisory_xact_lock($1::int, $2::int)',
+      'WITH _lock AS (SELECT pg_advisory_xact_lock($1::int, $2::int)) SELECT 1::int AS locked FROM _lock',
       CODEX_RUN_LOCK_CLASS,
       hashInt32(String(projectId)),
     );

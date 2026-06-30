@@ -148,6 +148,7 @@ test('createRun takes the advisory-lock path when the client supports transactio
   assert.equal(run.status, 'queued');
   assert.equal(db._locks.length, 1, 'a per-project advisory lock was taken');
   assert.match(db._locks[0].sql, /pg_advisory_xact_lock/);
+  assert.match(db._locks[0].sql, /SELECT 1::int AS locked/, 'Prisma must not deserialize PostgreSQL void columns');
   assert.equal(typeof db._locks[0].objId, 'number');
 });
 
