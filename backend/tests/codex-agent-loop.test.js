@@ -131,6 +131,7 @@ test('apps build close repairs an incomplete Next.js workspace into a Vite previ
       { text: 'Ya esta listo.', toolCalls: [] },
     ]),
     prisma: {
+      codexRun: { findUnique: async ({ where }) => (where.id === 'plan1' ? { prompt } : null) },
       user: { findUnique: async () => ({ plan: 'PRO' }) },
       codexCheckpoint: { create: async () => ({ id: 'cp1', commitSha: 'abcdef1234567890', createdAt: new Date() }) },
       codexRunMetric: { upsert: async () => ({}) },
@@ -143,7 +144,11 @@ test('apps build close repairs an incomplete Next.js workspace into a Vite previ
     'SOLICITUD DEL USUARIO:',
     'crea una web de venta de autos',
   ].join('\n');
-  const res = await runAgentLoop({ run: { id: 'r1', userId: 'u1', mode: 'build', prompt }, project: { id: 'p1', name: 'Autos' }, deps: f.deps });
+  const res = await runAgentLoop({
+    run: { id: 'r1', userId: 'u1', mode: 'build', prompt: null, planRunId: 'plan1' },
+    project: { id: 'p1', name: 'Autos' },
+    deps: f.deps,
+  });
   assert.equal(res.status, 'done');
   const packageWrite = writes.find((w) => w.path === 'package.json');
   assert.ok(packageWrite);

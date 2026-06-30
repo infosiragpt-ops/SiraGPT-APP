@@ -225,6 +225,20 @@ async function loadApprovedPlan({ run, eventStore, prisma }) {
   }
 }
 
+async function resolveRunSourcePrompt({ run, prisma }) {
+  if (run?.prompt) return run.prompt;
+  if (!run?.planRunId || !prisma?.codexRun?.findUnique) return '';
+  try {
+    const planRun = await prisma.codexRun.findUnique({
+      where: { id: run.planRunId },
+      select: { prompt: true },
+    });
+    return planRun?.prompt || '';
+  } catch {
+    return '';
+  }
+}
+
 async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   const { eventStore, prisma, env = process.env, clock = () => new Date() } = deps;
   // The metrics accumulator (feature 08) is fed during the loop and finalized at
@@ -241,10 +255,11 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   const registry = buildTools.toolRegistry();
 
   const plan = deps.plan || (await loadApprovedPlan({ run, eventStore, prisma }));
+  const sourcePrompt = deps.sourcePrompt != null ? deps.sourcePrompt : await resolveRunSourcePrompt({ run, prisma });
   const fileTree = deps.fileTree != null ? deps.fileTree : await safeFileTree(runner, projectId);
   const messages = [
-    { role: 'system', content: buildSystemPrompt({ project, plan, fileTree, sourcePrompt: run.prompt }) },
-    { role: 'user', content: run.prompt || 'Construye el proyecto según el plan aprobado.' },
+    { role: 'system', content: buildSystemPrompt({ project, plan, fileTree, sourcePrompt }) },
+    { role: 'user', content: sourcePrompt || 'Construye el proyecto según el plan aprobado.' },
   ];
 
   let actionCounter = 0;
@@ -397,7 +412,8 @@ function isStarterIndex(indexText, mainText) {
 }
 
 async function ensureAppsVitePreviewable({ run, project, runner, eventStore, prisma }) {
-  if (!isAppsPrompt(run?.prompt) || explicitlyRequestsNext(run?.prompt)) return { repaired: false };
+  const sourcePrompt = await resolveRunSourcePrompt({ run, prisma });
+  if (!isAppsPrompt(sourcePrompt) || explicitlyRequestsNext(sourcePrompt)) return { repaired: false };
   const projectId = project?.id || run.projectId;
   const [pkgText, indexText, mainText] = await Promise.all([
     readRunnerFile(runner, projectId, 'package.json'),
@@ -411,7 +427,7 @@ async function ensureAppsVitePreviewable({ run, project, runner, eventStore, pri
     isStarterIndex(indexText, mainText);
   if (!needsRepair) return { repaired: false };
 
-  const files = appsFallbackFiles({ prompt: run.prompt, projectName: project?.name || 'App generada' });
+  const files = appsFallbackFiles({ prompt: sourcePrompt, projectName: project?.name || 'App generada' });
   await runner.writeFiles(projectId, files);
   await eventStore.appendEvent(
     run.id,
