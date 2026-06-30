@@ -374,3 +374,37 @@ test('ensure ctx validation: missing userId fails loud', async () => {
     /ctx\.userId/,
   );
 });
+
+test('web_search adds a directive note when no provider yields results', async () => {
+  const webSearch = require('../src/services/agents/web-search');
+  const orig = webSearch.searchMany;
+  try {
+    webSearch.searchMany = async () => ({
+      results: [], provider: null, providers: ['ddg', 'wikipedia'], cached: false,
+      attempts: [{ id: 'ddg', ok: true, ms: 12, count: 0 }],
+    });
+    const out = await tools.web_search.handler({ query: 'qwerzxcv nonexistent 12345' });
+    assert.equal(out.count, 0);
+    assert.equal(out.results.length, 0);
+    assert.ok(typeof out.note === 'string' && out.note.length > 0, 'expected a guidance note on empty results');
+    assert.match(out.note, /repeat the same query|rephrase/i);
+  } finally {
+    webSearch.searchMany = orig;
+  }
+});
+
+test('web_search omits the note when results are present', async () => {
+  const webSearch = require('../src/services/agents/web-search');
+  const orig = webSearch.searchMany;
+  try {
+    webSearch.searchMany = async () => ({
+      results: [{ title: 'X', url: 'https://x.test', snippet: 's' }],
+      provider: 'ddg', providers: ['ddg'], cached: false, attempts: [],
+    });
+    const out = await tools.web_search.handler({ query: 'real query' });
+    assert.equal(out.count, 1);
+    assert.equal(out.note, undefined);
+  } finally {
+    webSearch.searchMany = orig;
+  }
+});

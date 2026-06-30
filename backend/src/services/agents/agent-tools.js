@@ -1200,6 +1200,13 @@ const web_search = {
     // first-non-empty search() path can be fooled by a broad academic provider
     // returning unrelated papers before the general-web providers answer.
     const { results, provider, providers, cached, attempts } = await webSearch.searchMany(query, { maxResults, locale, freshness });
+    // Zero results is NOT an error, but weaker models (the free default
+    // llama-3.1-8b) tend to hallucinate sources, stall, or re-run the same
+    // query when they get an empty list with no guidance. A directive note
+    // steers them to pivot or answer honestly instead of looping.
+    const note = results.length === 0
+      ? 'No results from any provider. Do NOT repeat the same query — rephrase it (fewer or different keywords, drop quotes, try synonyms or a broader angle), or answer from prior knowledge while clearly stating you could not find live web sources.'
+      : undefined;
     // Return structured JSON (not a concatenated string) so the model can
     // cite individual URLs rather than treat the whole response as prose.
     return {
@@ -1208,6 +1215,7 @@ const web_search = {
       cached,
       count: results.length,
       results,
+      ...(note ? { note } : {}),
       // Slim attempt trace — useful when the model needs to explain why
       // a query returned nothing ("DDG timed out, Wikipedia 0 hits").
       attempts: Array.isArray(attempts)
