@@ -5509,6 +5509,66 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
   overscroll-behavior: contain;
 }
 
+.project-settings-menu.liquid-menu-surface {
+  width: min(16rem, calc(100vw - 1.5rem)) !important;
+  padding: 0.32rem !important;
+  border-radius: 20px !important;
+}
+
+.project-settings-menu .liquid-menu-item {
+  min-height: 2.35rem;
+  padding-inline: 0.48rem !important;
+  color: hsl(222 22% 17% / 0.9);
+}
+
+.project-settings-menu .liquid-menu-item[data-highlighted],
+.project-settings-menu .liquid-menu-item:hover {
+  color: hsl(222 28% 10%);
+}
+
+.project-settings-menu__icon {
+  transition:
+    transform 180ms cubic-bezier(0.25, 0.1, 0.25, 1),
+    background-color 180ms ease-out,
+    color 180ms ease-out;
+}
+
+.project-settings-menu .liquid-menu-item[data-highlighted] .project-settings-menu__icon,
+.project-settings-menu .liquid-menu-item:hover .project-settings-menu__icon {
+  background: hsl(0 0% 100% / 0.88);
+  color: hsl(222 28% 12% / 0.86);
+}
+
+.project-settings-menu__separator {
+  margin: 0.28rem 0.32rem !important;
+  background: linear-gradient(90deg, transparent, hsl(220 14% 70% / 0.32), transparent) !important;
+}
+
+.project-settings-menu__item--danger::before {
+  background: linear-gradient(135deg, hsl(0 84% 60% / 0.09), hsl(0 0% 100% / 0.36)) !important;
+}
+
+.project-settings-menu__item--danger[data-highlighted] .project-settings-menu__icon,
+.project-settings-menu__item--danger:hover .project-settings-menu__icon {
+  background: hsl(0 84% 60% / 0.1);
+  color: hsl(0 72% 48%);
+}
+
+.dark .project-settings-menu .liquid-menu-item {
+  color: hsl(220 16% 92% / 0.86);
+}
+
+.dark .project-settings-menu .liquid-menu-item[data-highlighted],
+.dark .project-settings-menu .liquid-menu-item:hover {
+  color: hsl(0 0% 100% / 0.96);
+}
+
+.dark .project-settings-menu .liquid-menu-item[data-highlighted] .project-settings-menu__icon,
+.dark .project-settings-menu .liquid-menu-item:hover .project-settings-menu__icon {
+  background: hsl(0 0% 100% / 0.14);
+  color: hsl(0 0% 100% / 0.9);
+}
+
 /* ────────────────────────────────────────────────────────────
  * Liquid hover effect for the composer tool menu (DropdownMenu
  * items). Organic blob behind the row with morphing border-

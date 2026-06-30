@@ -247,6 +247,7 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
       name: folder.name,
       kind: "project",
       chatListId: folder.id,
+      isPinned: folder.isStarred,
     }))
     return [...locals, ...cloud]
   }, [folders, localProjects])
@@ -560,6 +561,83 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
     [handleOpenWorkspace],
   )
 
+  const handleRenameWorkspace = React.useCallback(
+    async (node: WorkspaceTreeNode, name: string) => {
+      const clean = name.trim()
+      if (!clean) return
+      try {
+        if (node.kind === "project") {
+          const updated = await projectsService.update(node.chatListId, { name: clean })
+          setFolders((prev) => prev.map((folder) => (folder.id === updated.id ? { ...folder, ...updated } : folder)))
+          upsertCodexProject({ id: node.id, name: updated.name, kind: "project" })
+          refreshCodexProjects()
+          toast.success("Proyecto renombrado.")
+          return
+        }
+
+        const entry = listCodexProjects().find((row) => row.id === node.id)
+        if (entry) {
+          upsertCodexProject({ ...entry, name: clean })
+          refreshCodexProjects()
+          window.dispatchEvent(new CustomEvent(CODEX_UPDATED_EVENT))
+          toast.success("Carpeta renombrada en APPS.")
+        }
+      } catch (err: any) {
+        toast.error(err?.message || "No se pudo cambiar el nombre del proyecto")
+      }
+    },
+    [refreshCodexProjects],
+  )
+
+  const handleToggleWorkspacePin = React.useCallback(
+    async (node: WorkspaceTreeNode) => {
+      if (node.kind !== "project") {
+        toast.info("Las carpetas locales se ordenan por uso reciente; los proyectos cloud sí se pueden anclar.")
+        return
+      }
+
+      const current = folders.find((folder) => folder.id === node.chatListId)
+      const nextPinned = !current?.isStarred
+      setFolders((prev) =>
+        prev.map((folder) =>
+          folder.id === node.chatListId ? { ...folder, isStarred: nextPinned } : folder,
+        ),
+      )
+      try {
+        await projectsService.update(node.chatListId, { isStarred: nextPinned })
+        toast.success(nextPinned ? "Proyecto anclado." : "Proyecto desanclado.")
+      } catch (err: any) {
+        setFolders((prev) =>
+          prev.map((folder) =>
+            folder.id === node.chatListId ? { ...folder, isStarred: !nextPinned } : folder,
+          ),
+        )
+        toast.error(err?.message || "No se pudo actualizar el anclado")
+      }
+    },
+    [folders],
+  )
+
+  const handleRevealWorkspace = React.useCallback(
+    (node: WorkspaceTreeNode) => {
+      handleOpenWorkspace(node)
+      toast.info(
+        node.kind === "local-folder"
+          ? "Carpeta abierta en APPS. Mostrarla en Finder requiere permisos nativos del navegador."
+          : "Proyecto abierto. Para verlo en Finder primero crea o enlaza un worktree local.",
+      )
+    },
+    [handleOpenWorkspace],
+  )
+
+  const handleCreatePermanentWorktree = React.useCallback(
+    (node: WorkspaceTreeNode) => {
+      handleOpenWorkspace(node)
+      toast.info("Worktree permanente preparado para enlazarse cuando la integración nativa esté disponible.")
+    },
+    [handleOpenWorkspace],
+  )
+
   // Shared post-import routing: select the new folder, navigate to /code, and
   // surface a clear summary (including a hint when nothing was imported).
   const finishLocalImport = React.useCallback(
@@ -783,6 +861,10 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
         activeCodeSessionId={activeCodeSessionId}
         listCodeSessions={listCodeSessions}
         onOpenSettings={handleOpenSettings}
+        onRenameWorkspace={handleRenameWorkspace}
+        onToggleWorkspacePin={handleToggleWorkspacePin}
+        onRevealWorkspace={handleRevealWorkspace}
+        onCreatePermanentWorktree={handleCreatePermanentWorktree}
         onRenameRow={handleRenameRow}
         onDeleteRow={handleDeleteRow}
         onMarkRead={handleMarkRead}
