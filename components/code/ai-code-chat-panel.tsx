@@ -80,9 +80,10 @@ import {
   type CodeChatAction,
   type CodeChatMetrics,
 } from "@/lib/code-chat-metrics"
-import { defaultAgentState, type AgentBuildContext, type AgentPhase } from "@/lib/code-agent/types"
+import { defaultAgentState, type AgentBuildContext, type AgentPhase, type BuildErrorVerdict } from "@/lib/code-agent/types"
 import {
   classifyBuildError,
+  buildDeterministicPreviewPatches,
   isBuildRequest,
   isQuickGreeting,
   mergeOverridesIntoPackageJson,
@@ -339,13 +340,30 @@ function generatedFileSummary(result: GenerateResult, files: Array<Pick<Scaffold
     ``,
     `- **Plataforma:** ${result.brief.platform}`,
     `- **Arquitectura:** ${projectLine}`,
-    `- **Frontend:** ${pageCount || 1} pantalla(s) React/Next.js más preview inmediato en \`index.html\``,
+    `- **Frontend:** ${pageCount || 1} pantalla(s) React/Next.js con preview automático del dev server`,
     `- **Backend:** ${backendLine}`,
     `- **Base de datos:** ${dbLine}`,
     `- **Entidades:** ${entities}`,
     ``,
-    `Estoy abriendo **localhost / index.html** automáticamente para validar la interfaz al instante. Para correr la app completa con base de datos, usa los comandos del \`README.md\`: \`docker compose up -d db\`, \`npm install\`, \`cp .env.example .env\`, \`npm run db:push\`, \`npm run db:seed\`, \`npm run dev\`.`,
+    hasPackage
+      ? `Estoy levantando el preview automático del proyecto Next.js. Para correr la app completa con base de datos, usa los comandos del \`README.md\`: \`docker compose up -d db\`, \`npm install\`, \`cp .env.example .env\`, \`npm run db:push\`, \`npm run db:seed\`, \`npm run dev\`.`
+      : `Estoy abriendo **localhost / index.html** automáticamente para validar la interfaz al instante.`,
   ].join("\n")
+}
+
+function orderFilesForWorkspaceApply<T extends { path: string; content?: string }>(files: T[]): T[] {
+  const hasNextApp =
+    files.some((file) => /^app\/page\.tsx$/i.test(file.path)) ||
+    files.some((file) => /^package\.json$/i.test(file.path) && /"next"\s*:/.test(file.content || ""))
+  const priority = (path: string) => {
+    if (hasNextApp) {
+      if (/^index\.html?$/i.test(path)) return 10
+      if (/^app\/page\.tsx$/i.test(path)) return 100
+      return 50
+    }
+    return /^index\.html?$/i.test(path) ? 100 : 50
+  }
+  return [...files].sort((a, b) => priority(a.path) - priority(b.path))
 }
 
 const COMPOSER_MODE_LABEL: Record<ComposerMode, string> = {
@@ -411,6 +429,63 @@ function collectConfigFiles(
     .filter((f) => wanted.has(f.path.split("/").pop() || ""))
     .map((f) => `// ${f.path}\n${f.content}`)
     .join("\n\n")
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+function lowerFirst(value: string): string {
+  return value ? value.charAt(0).toLowerCase() + value.slice(1) : value
+}
+
+function removePrismaPostinstall(pkgText: string): string | null {
+  try {
+    const pkg = JSON.parse(pkgText)
+    const postinstall = String(pkg?.scripts?.postinstall || "")
+    if (!/prisma\s+generate/i.test(postinstall)) return null
+    delete pkg.scripts.postinstall
+    return JSON.stringify(pkg, null, 2) + "\n"
+  } catch {
+    return null
+  }
+}
+
+function buildDeterministicSrePatches(
+  files: Record<string, { path: string; language: string; content: string }>,
+  verdict: BuildErrorVerdict,
+  log: string,
+): Array<{ path: string; content: string }> {
+  const patches: Array<{ path: string; content: string }> = []
+  const renames = Object.entries(verdict.suggestedPrismaModelRenames || {})
+
+  if (renames.length > 0) {
+    for (const file of Object.values(files)) {
+      if (!/\.(prisma|tsx?|jsx?)$/i.test(file.path)) continue
+      let next = file.content
+      for (const [fromModel, toModel] of renames) {
+        next = next.replace(
+          new RegExp(`\\bmodel\\s+${escapeRegExp(fromModel)}\\b`, "g"),
+          `model ${toModel}`,
+        )
+        next = next.replace(
+          new RegExp(`\\bprisma\\.${escapeRegExp(lowerFirst(fromModel))}\\b`, "g"),
+          `prisma.${lowerFirst(toModel)}`,
+        )
+      }
+      if (next !== file.content) patches.push({ path: file.path, content: next })
+    }
+  }
+
+  const pkg = files["package.json"]
+  if (pkg && /prisma\s+generate|postinstall|schema\.prisma/i.test(log)) {
+    const withoutPostinstall = removePrismaPostinstall(pkg.content)
+    if (withoutPostinstall && withoutPostinstall !== pkg.content) {
+      patches.push({ path: "package.json", content: withoutPostinstall })
+    }
+  }
+
+  return patches
 }
 
 // Agent-style narration block (docs/code/code-chat-agent-style-prompt.md): makes
@@ -493,6 +568,9 @@ function buildSystemContext(
         "docker-compose.yml. El preview se arranca automáticamente con el dev server",
         "y prepara la base de datos con db:push/db:seed. NO uses arrays globales",
         "ni almacenamiento en memoria como persistencia primaria.",
+        "Si existe app/page.tsx, los cambios visuales del home/dashboard se hacen",
+        "en app/page.tsx y app/globals.css. NO edites index.html ni README.md",
+        "para cambios que deban verse en el preview vivo de Next.",
       ].join("\n")
     : expectNodeProject
     ? [
@@ -1139,11 +1217,9 @@ export function AICodeChatPanel() {
           ].join("\n")
           toastMsg = "App generada localmente — abriendo index.html →"
         }
-        // Apply index.html LAST so it stays the active tab and the live preview
-        // lands on the runnable app rather than a doc file.
-        const ordered = [...appliedFiles].sort((a, b) =>
-          (/(^|\/)index\.html?$/i.test(a.path) ? 1 : 0) - (/(^|\/)index\.html?$/i.test(b.path) ? 1 : 0),
-        )
+        // Keep the active editor aligned with the runnable entry: app/page.tsx
+        // for generated Next apps, index.html for static fallbacks.
+        const ordered = orderFilesForWorkspaceApply(appliedFiles)
         for (const file of ordered) {
           applyBlock(file.path, file.content)
         }
@@ -1214,14 +1290,20 @@ export function AICodeChatPanel() {
       setInput("")
       const verdict = classifyBuildError(log)
       let body = renderFiveSections(verdict)
+      const patches = buildDeterministicSrePatches(files, verdict, log)
       const pkg = files["package.json"]
       if (verdict.suggestedOverrides && pkg) {
         const patched = mergeOverridesIntoPackageJson(pkg.content, verdict.suggestedOverrides)
         if (patched) {
-          applyBlock("package.json", patched)
-          openPreviewAndMaybeRun([{ path: "package.json", content: patched }])
-          body += "\n\n_`package.json` actualizado con `overrides` — reintentando la instalación automáticamente._"
+          const existing = patches.find((patch) => patch.path === "package.json")
+          if (existing) existing.content = patched
+          else patches.push({ path: "package.json", content: patched })
         }
+      }
+      if (patches.length > 0) {
+        for (const patch of patches) applyBlock(patch.path, patch.content)
+        openPreviewAndMaybeRun(patches)
+        body += `\n\n_${patches.map((p) => `\`${p.path}\``).join(", ")} actualizado(s) — reintentando el preview automáticamente._`
       }
       setTurns((prev) => prev.map((t) => (t.id === `${id}-a` ? { ...t, content: body, streaming: false } : t)))
       patchAgentState(sid, (s) => ({ ...s, phase: "idle" }))
@@ -1254,6 +1336,11 @@ export function AICodeChatPanel() {
       if (!text || !user || !token || !sessionId) return
       const sid = sessionId
       patchAgentState(sid, (s) => ({ ...s, phase: "debugging", lastError: text }))
+      const verdict = classifyBuildError(text)
+      if (verdict.suggestedOverrides || verdict.suggestedPrismaModelRenames) {
+        await runDeterministicSRE(text, "Detecté un error en el build — reparación automática.", sid)
+        return
+      }
       if (activeModelName) {
         await sendPrompt(
           "Detecté un error en el preview en vivo. Arréglalo en el código y déjalo funcionando.",
@@ -1322,14 +1409,11 @@ export function AICodeChatPanel() {
     }
   }, [])
 
-  // Apply a set of {path,content} files to the workspace (index.html last so the
-  // live preview lands on the runnable app) and open the preview.
+  // Apply a set of {path,content} files to the workspace and keep the active
+  // editor aligned with the runnable preview entry.
   const applyFilesToWorkspace = React.useCallback(
     (files: Array<{ path: string; content: string }>) => {
-      const ordered = [...files].sort(
-        (a, b) =>
-          (/(^|\/)index\.html?$/i.test(a.path) ? 1 : 0) - (/(^|\/)index\.html?$/i.test(b.path) ? 1 : 0),
-      )
+      const ordered = orderFilesForWorkspaceApply(files)
       for (const f of ordered) applyBlock(f.path, f.content)
       if (files.length > 0) openPreviewAndMaybeRun(files)
     },
@@ -1358,6 +1442,54 @@ export function AICodeChatPanel() {
       return fallback.length
     },
     [applyFilesToWorkspace],
+  )
+
+  const runDeterministicPatch = React.useCallback(
+    (instruction: string, sid: string): boolean => {
+      const patches = buildDeterministicPreviewPatches(files, instruction)
+      if (patches.length === 0) return false
+
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const assistantId = `${id}-a`
+      const startedAt = Date.now()
+      const { actions, metrics } = buildWriteMetrics(patches, {
+        startedAt,
+        now: Date.now(),
+        getPrevContent: (p) => files[p]?.content ?? "",
+      })
+
+      setInput("")
+      applyFilesToWorkspace(patches)
+      patchAgentState(sid, (s) => ({ ...s, phase: "preview" }))
+      setTurns((prev) => [
+        ...prev,
+        { id, role: "user", content: instruction },
+        {
+          id: assistantId,
+          role: "assistant",
+          content: [
+            `✅ Cambio aplicado — ${patches.length} archivo(s).`,
+            ``,
+            `- Actualicé \`${patches.map((p) => p.path).join("`, `")}\`.`,
+            `- Reabrí el preview automático para validar el resultado vivo.`,
+          ].join("\n"),
+          streaming: false,
+          agentLabel: "Cambio aplicado",
+          agentPhases: buildCodeAgentPhases("verify", {
+            plan: { status: "done", detail: "Cambio interpretado" },
+            context: { status: "done", detail: "Proyecto Next detectado" },
+            generate: { status: "done", detail: "Parche determinista" },
+            apply: { status: "done", detail: `${patches.length} archivo(s) aplicado(s)` },
+            verify: { status: "done", detail: "Preview reabierto" },
+          }),
+          actions,
+          metrics,
+        },
+      ])
+      toast.success(`Cambio aplicado — ${patches.length} archivo(s) →`)
+      return true
+    },
+    [applyFilesToWorkspace, files, patchAgentState, setTurns],
   )
 
   // OpenCode engine path. For a normal chat turn it sends the text; for a BUILD
@@ -1834,6 +1966,9 @@ export function AICodeChatPanel() {
           return
         }
         case "patch": {
+          if (runDeterministicPatch(action.instruction, sid)) {
+            return
+          }
           if (engineMode && engineAvailable) {
             await runEngine(action.instruction, sid, { iterate: true })
           } else {
@@ -1884,6 +2019,7 @@ export function AICodeChatPanel() {
       includeContext,
       patchAgentState,
       runDeterministicSRE,
+      runDeterministicPatch,
       runEngine,
       sendPrompt,
       sessionId,

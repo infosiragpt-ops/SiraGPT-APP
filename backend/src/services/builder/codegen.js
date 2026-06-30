@@ -21,8 +21,28 @@ const { ProjectBriefSchema } = require('./contracts');
 const { planFromBrief } = require('./blueprint');
 
 // ── naming helpers ────────────────────────────────────────────────
+const PRISMA_RESERVED_MODEL_NAMES = new Set([
+  'Prisma',
+  'String',
+  'Boolean',
+  'Int',
+  'BigInt',
+  'Float',
+  'Decimal',
+  'DateTime',
+  'Json',
+  'Bytes',
+  'Unsupported',
+  'Null',
+  'True',
+  'False',
+  'Datasource',
+  'Generator',
+  'Enum',
+]);
+
 function pascalCase(name) {
-  return (
+  const candidate = (
     String(name)
       .replace(/[^A-Za-z0-9]+/g, ' ')
       .trim()
@@ -31,6 +51,7 @@ function pascalCase(name) {
       .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
       .join('') || 'Model'
   );
+  return PRISMA_RESERVED_MODEL_NAMES.has(candidate) ? `${candidate}Record` : candidate;
 }
 
 function camelCase(name) {
@@ -129,7 +150,6 @@ function buildPackageJson(brief, hasDatabase = false) {
       'db:migrate': 'prisma migrate dev',
       'db:push': 'prisma db push',
       'db:seed': 'tsx prisma/seed.ts',
-      postinstall: 'prisma generate',
     });
     pkg.prisma = { seed: 'tsx prisma/seed.ts' };
     pkg.dependencies['@prisma/client'] = '5.19.1';
@@ -167,8 +187,14 @@ function buildTsConfig() {
 function buildNextConfig() {
   return [
     '/** @type {import("next").NextConfig} */',
+    "const previewBasePath = process.env.SIRA_PREVIEW_BASE_PATH || '';",
+    '',
     'const nextConfig = {',
     '  reactStrictMode: true,',
+    '  ...(previewBasePath ? {',
+    '    basePath: previewBasePath,',
+    '    assetPrefix: previewBasePath,',
+    '  } : {}),',
     '};',
     '',
     'export default nextConfig;',
@@ -384,6 +410,11 @@ function buildIconSvg(brief) {
   ].join('\n');
 }
 
+function exactDisplayTextFromBrief(brief) {
+  const match = String((brief && brief.constraints) || '').match(/Texto exacto en pantalla principal:\s*([^\n]+)/i);
+  return match ? String(match[1] || '').trim().slice(0, 120) : '';
+}
+
 function buildHomePage(brief, entities) {
   const heading = jsxText((brief.purpose || 'Tu nueva app').slice(0, 90));
   const sub = jsxText(
@@ -391,14 +422,16 @@ function buildHomePage(brief, entities) {
       ? 'Para ' + brief.audience + '.'
       : 'Generado con siraGPT Builder.',
   );
+  const exactDisplayText = exactDisplayTextFromBrief(brief);
   const features = (brief.coreFeatures || []).slice(0, 8).map(
     (f) => '          <div className="card">' + jsxText(f) + '</div>',
   );
   const entityLinks = entities.map((e) => {
     const slug = kebabCase(e.entity);
-    return '          <a className="card" href="/' + slug + '">Gestionar ' + jsxText(e.entity) + ' →</a>';
+    return '          <Link className="card" href="/' + slug + '">Gestionar ' + jsxText(e.entity) + ' →</Link>';
   });
   const lines = [
+    ...(entityLinks.length ? ['import Link from "next/link";', ''] : []),
     'export default function HomePage() {',
     '  return (',
     '    <section>',
@@ -407,6 +440,9 @@ function buildHomePage(brief, entities) {
     '        <p>' + sub + '</p>',
     '      </div>',
   ];
+  if (exactDisplayText) {
+    lines.push('      <p className="card" data-testid="required-output">' + jsxText(exactDisplayText) + '</p>');
+  }
   if (features.length) {
     lines.push('      <h2>Funcionalidades</h2>');
     lines.push('      <div className="grid">');
@@ -440,6 +476,20 @@ function buildApiRoute(model) {
     }
     return '    ' + key + ': String((body as any)[' + jsStr(key) + '] ?? ""),';
   });
+  const fallbackFields = model.fields.map((f) => {
+    const key = camelCase(f.name);
+    const t = tsType(f.type);
+    if (f.type === 'id' || key === 'id') return '    ' + key + ': String(body.' + key + ' ?? `preview-${Date.now()}`),';
+    if (f.type === 'datetime' || /created|updated/i.test(key)) {
+      return '    ' + key + ': String(body.' + key + ' ?? new Date().toISOString()),';
+    }
+    if (t === 'number') return '    ' + key + ': Number(body.' + key + ' ?? 0),';
+    if (t === 'boolean') return '    ' + key + ': toBoolean(body.' + key + '),';
+    if (f.type === 'email') return '    ' + key + ': String(body.' + key + ' ?? ' + jsStr(`${camelCase(model.entity)}@example.com`) + '),';
+    if (f.type === 'phone') return '    ' + key + ': String(body.' + key + ' ?? "+51 999 999 999"),';
+    if (f.type === 'url') return '    ' + key + ': String(body.' + key + ' ?? "https://example.com"),';
+    return '    ' + key + ': String(body.' + key + ' ?? ' + jsStr(`${model.entity} demo`) + '),';
+  });
   return [
     'import { NextResponse } from "next/server";',
     'import { prisma } from "@/lib/db";',
@@ -448,19 +498,41 @@ function buildApiRoute(model) {
     '  return value === true || value === "true" || value === "1" || value === 1;',
     '}',
     '',
+    'function previewFallbackItem(body: Record<string, unknown> = {}) {',
+    '  return {',
+    ...fallbackFields,
+    '  };',
+    '}',
+    '',
     'export async function GET() {',
-    '  const items = await prisma.' + modelAccessor + '.findMany({ orderBy: { createdAt: "desc" } });',
-    '  return NextResponse.json({ items });',
+    '  try {',
+    '    const items = await prisma.' + modelAccessor + '.findMany({ orderBy: { createdAt: "desc" } });',
+    '    return NextResponse.json({ items });',
+    '  } catch {',
+    '    return NextResponse.json({',
+    '      items: [previewFallbackItem()],',
+    '      preview: true,',
+    '      warning: "Base de datos no disponible en preview; conecta DATABASE_URL para persistencia real.",',
+    '    });',
+    '  }',
     '}',
     '',
     'export async function POST(request: Request) {',
     '  const body = await request.json().catch(() => ({}));',
-    '  const item = await prisma.' + modelAccessor + '.create({',
-    '    data: {',
+    '  try {',
+    '    const item = await prisma.' + modelAccessor + '.create({',
+    '      data: {',
     ...coercions,
-    '    },',
-    '  });',
-    '  return NextResponse.json({ item }, { status: 201 });',
+    '      },',
+    '    });',
+    '    return NextResponse.json({ item }, { status: 201 });',
+    '  } catch {',
+    '    return NextResponse.json({',
+    '      item: previewFallbackItem(body as Record<string, unknown>),',
+    '      preview: true,',
+    '      warning: "Base de datos no disponible en preview; conecta DATABASE_URL para persistencia real.",',
+    '    }, { status: 202 });',
+    '  }',
     '}',
     '',
   ].join('\n');
@@ -564,7 +636,7 @@ function buildEntityPage(model) {
     ...ifaceFields,
     '}',
     '',
-    'const API = "/api/' + slug + '";',
+    'const API = "../api/' + slug + '";',
     '',
     'export default function ' + typeName + 'Page() {',
     '  const [items, setItems] = useState<' + typeName + '[]>([]);',
@@ -574,10 +646,13 @@ function buildEntityPage(model) {
     '  const [loading, setLoading] = useState(true);',
     '',
     '  async function load() {',
-    '    const res = await fetch(API);',
-    '    const data = await res.json();',
-    '    setItems(data.items ?? []);',
-    '    setLoading(false);',
+    '    try {',
+    '      const res = await fetch(API);',
+    '      const data = await res.json().catch(() => ({ items: [] }));',
+    '      setItems(Array.isArray(data.items) ? data.items : []);',
+    '    } finally {',
+    '      setLoading(false);',
+    '    }',
     '  }',
     '',
     '  useEffect(() => { void load(); }, []);',

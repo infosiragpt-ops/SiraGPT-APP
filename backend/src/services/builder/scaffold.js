@@ -29,13 +29,34 @@ const PRISMA_TYPES = {
   boolean: 'Boolean',
 };
 
+const PRISMA_RESERVED_MODEL_NAMES = new Set([
+  'Prisma',
+  'String',
+  'Boolean',
+  'Int',
+  'BigInt',
+  'Float',
+  'Decimal',
+  'DateTime',
+  'Json',
+  'Bytes',
+  'Unsupported',
+  'Null',
+  'True',
+  'False',
+  'Datasource',
+  'Generator',
+  'Enum',
+]);
+
 function pascalCase(name) {
-  return String(name)
+  const candidate = String(name)
     .replace(/[^A-Za-z0-9]+/g, ' ')
     .trim()
     .split(/\s+/)
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join('') || 'Model';
+  return PRISMA_RESERVED_MODEL_NAMES.has(candidate) ? `${candidate}Record` : candidate;
 }
 
 function camelCase(name) {

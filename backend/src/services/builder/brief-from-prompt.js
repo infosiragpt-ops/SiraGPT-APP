@@ -211,7 +211,15 @@ const ENTITY_STOPWORDS = new Set([
   'plataforma', 'gestion', 'gestión', 'administracion', 'administración',
   'base', 'datos', 'backend', 'frontend', 'formato', 'responsive', 'responsivo',
   'adaptable', 'celular', 'movil', 'móvil', 'mobile', 'fullstack', 'stack',
+  'full', 'software', 'profesional', 'professional', 'dashboard', 'panel',
+  'formulario', 'form', 'crear', 'creacion', 'creación', 'alta', 'nuevo', 'nueva',
+  'backend', 'frontend', 'api', 'apis', 'ruta', 'rutas', 'route', 'routes',
+  'next', 'nextjs', 'react', 'vite', 'typescript', 'javascript', 'prisma',
+  'postgres', 'postgresql', 'postgre', 'database', 'db', 'readme', 'docker',
+  'compose', 'schema', 'env', 'crud', 'tabla', 'tablas', 'modelo', 'modelos',
 ]);
+
+const ENTITY_CLAUSE_BOUNDARY = /[.;\n]|#|\b(?:para|porque|usando|con base|base de datos|con backend|con frontend|backend|frontend|formato|responsive|responsivo|adaptable|web y celular|celular|m[oó]vil|mobile|pwa|full[- ]?stack|con un dise|en estilo|tipo|color|colores|readme|docker|compose|prisma|postgres|postgresql|next(?:\.js)?|api)\b/i;
 
 function clean(text) {
   return String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
@@ -230,6 +238,35 @@ function singularize(word) {
 
 function entityKey(name) {
   return singularize(removeDiacritics(name).toLowerCase()).replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function isEntityStopword(word) {
+  const key = entityKey(word);
+  return !key || ENTITY_STOPWORDS.has(key);
+}
+
+function entitiesFromListPart(listPart) {
+  const bounded = clean(listPart).split(ENTITY_CLAUSE_BOUNDARY)[0];
+  const raw = bounded
+    .split(/,|\/|\by\b|\be\b|\band\b|\bor\b|\+/i)
+    .map((s) => clean(s).replace(/[^A-Za-zÀ-ÿ0-9 ]/g, ''))
+    .map((s) => s.split(' ').filter((w) => w && !isEntityStopword(w)).slice(-2).join(' '))
+    .map((s) => clean(s))
+    .filter(Boolean)
+    .filter((s) => s.length >= 3 && s.length <= 28)
+    .filter((s) => !isEntityStopword(s));
+
+  const seen = new Set();
+  const entities = [];
+  for (const candidate of raw) {
+    const name = capitalize(singularize(candidate));
+    const dedupeKey = entityKey(name);
+    if (!dedupeKey || seen.has(dedupeKey) || ENTITY_STOPWORDS.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    entities.push({ name, fields: fieldsForEntity(name) });
+    if (entities.length >= 6) break; // keep the app focused
+  }
+  return entities;
 }
 
 function isDomainContainerEntityList(entities) {
@@ -297,41 +334,18 @@ function fieldsForEntity(name) {
 function extractEntities(prompt) {
   const text = clean(prompt);
   const markers = [
-    /\b(?:con|para gestionar|para administrar|para manejar|que gestione|que maneje|que registre|gestionar|administrar|registrar|entidades?(?:\s*:)?)\b/i,
+    /\b(?:operaciones?|m[oó]dulos?|modulos?|pantallas?|secciones?|datos|entidades?)\s*:/i,
+    /\b(?:para gestionar|para administrar|para manejar|que gestione|que maneje|que registre|gestionar|administrar|registrar)\b/i,
+    /\bcon\b/i,
   ];
-  let listPart = '';
   for (const re of markers) {
     const m = text.match(re);
     if (m && typeof m.index === 'number') {
-      listPart = text.slice(m.index + m[0].length);
-      break;
+      const entities = entitiesFromListPart(text.slice(m.index + m[0].length));
+      if (entities.length > 0) return entities;
     }
   }
-  if (!listPart) return [];
-
-  // Stop the list at the first clause boundary so we don't swallow the rest of
-  // the sentence ("con clientes y turnos para mi barbería" → "clientes y turnos").
-  listPart = listPart.split(/[.;\n]|#|\b(?:para|porque|usando|con base|base de datos|con backend|con frontend|backend|frontend|formato|responsive|responsivo|adaptable|web y celular|celular|m[oó]vil|mobile|pwa|full[- ]?stack|con un dise|en estilo|tipo|color|colores)\b/i)[0];
-
-  const raw = listPart
-    .split(/,|\/|\by\b|\be\b|\band\b|\bor\b|\+/i)
-    .map((s) => clean(s).replace(/[^A-Za-zÀ-ÿ0-9 ]/g, ''))
-    .map((s) => s.split(' ').filter((w) => w && !ENTITY_STOPWORDS.has(w.toLowerCase())).slice(0, 2).join(' '))
-    .map((s) => clean(s))
-    .filter(Boolean)
-    .filter((s) => s.length >= 3 && s.length <= 28);
-
-  const seen = new Set();
-  const entities = [];
-  for (const candidate of raw) {
-    const name = capitalize(singularize(candidate));
-    const dedupeKey = name.toLowerCase();
-    if (seen.has(dedupeKey)) continue;
-    seen.add(dedupeKey);
-    entities.push({ name, fields: fieldsForEntity(name) });
-    if (entities.length >= 6) break; // keep the app focused
-  }
-  return entities;
+  return [];
 }
 
 function extractFeatures(prompt) {
@@ -352,6 +366,18 @@ function extractTheme(prompt) {
     }
   }
   return hex ? `${theme} ${hex[0].toUpperCase()}` : theme;
+}
+
+function extractExactDisplayText(prompt) {
+  const text = clean(prompt);
+  const match = text.match(/\btexto\s+exact[oa]\s+["'`“”]?([^"'`“”.,;]+?)(?=\s+(?:cuando|al|en|que|para|donde|si)\b|[.,;]|$)/i);
+  if (!match) return '';
+  return clean(match[1]).replace(/^[:\-]\s*/, '').slice(0, 120);
+}
+
+function constraintsForPrompt(prompt) {
+  const exactText = extractExactDisplayText(prompt);
+  return exactText ? `Texto exacto en pantalla principal: ${exactText}` : '';
 }
 
 function themeForPrompt(prompt, platform) {
@@ -420,7 +446,7 @@ function briefFromPrompt(prompt) {
     dataEntities,
     style: { theme: themeForPrompt(text, platform), refs: [] },
     integrations: [],
-    constraints: '',
+    constraints: constraintsForPrompt(text),
     openQuestions: [],
   };
 
@@ -438,6 +464,7 @@ module.exports = {
   extractEntities,
   extractFeatures,
   extractTheme,
+  extractExactDisplayText,
   themeForPrompt,
   extractAudience,
   normalisePurposeText,

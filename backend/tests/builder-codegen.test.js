@@ -62,6 +62,7 @@ test('naming helpers normalise messy names', () => {
   assert.equal(kebabCase('Order Items'), 'order-items');
   assert.equal(kebabCase('Producto'), 'producto');
   assert.equal(pascalCase(''), 'Model');
+  assert.equal(pascalCase('Prisma'), 'PrismaRecord');
   assert.equal(kebabCase('!!!'), 'item');
 });
 
@@ -101,6 +102,23 @@ test('web codegen emits a runnable full-stack Next.js project skeleton', () => {
   }
 });
 
+test('next config supports tokenized preview base paths', () => {
+  const { files } = codegenFromBrief(makeBrief());
+  const config = fileMap(files).get('next.config.mjs').content;
+  assert.match(config, /SIRA_PREVIEW_BASE_PATH/);
+  assert.match(config, /basePath:\s*previewBasePath/);
+  assert.match(config, /assetPrefix:\s*previewBasePath/);
+});
+
+test('home entity links use Next Link so preview basePath is preserved', () => {
+  const { files } = codegenFromBrief(makeBrief());
+  const page = fileMap(files).get('app/page.tsx').content;
+  assert.match(page, /import Link from "next\/link";/);
+  assert.match(page, /<Link className="card" href="\/producto">Gestionar Producto →<\/Link>/);
+  assert.match(page, /<Link className="card" href="\/proveedor">Gestionar Proveedor →<\/Link>/);
+  assert.doesNotMatch(page, /<a className="card" href="\/producto">/);
+});
+
 test('package.json is valid JSON with Next.js and Prisma deps', () => {
   const { files } = codegenFromBrief(makeBrief());
   const pkg = JSON.parse(fileMap(files).get('package.json').content);
@@ -113,10 +131,21 @@ test('package.json is valid JSON with Next.js and Prisma deps', () => {
   assert.equal(pkg.scripts['build:mobile'], 'prisma generate && next build');
   assert.equal(pkg.scripts['db:push'], 'prisma db push');
   assert.equal(pkg.scripts['db:seed'], 'tsx prisma/seed.ts');
-  assert.equal(pkg.scripts.postinstall, 'prisma generate');
+  assert.equal(pkg.scripts.postinstall, undefined);
   assert.ok(pkg.devDependencies.prisma, 'has Prisma CLI');
   assert.ok(pkg.devDependencies.tsx, 'has seed runner');
   assert.ok(pkg.devDependencies.typescript, 'has typescript');
+});
+
+test('reserved Prisma model names are made safe across generated code', () => {
+  const { files } = scaffoldFromBrief(makeBrief({
+    dataEntities: [{ name: 'Prisma', fields: ['nombre'] }],
+  }));
+  const map = fileMap(files);
+  assert.match(map.get('prisma/schema.prisma').content, /model PrismaRecord \{/);
+  assert.doesNotMatch(map.get('prisma/schema.prisma').content, /model Prisma \{/);
+  assert.match(map.get('app/api/prisma/route.ts').content, /prisma\.prismaRecord\.findMany/);
+  assert.match(map.get('prisma/seed.ts').content, /prisma\.prismaRecord\.createMany/);
 });
 
 test('tsconfig.json is valid JSON with the @/* path alias', () => {
@@ -139,6 +168,8 @@ test('each entity yields a CRUD API route + a list/create page', () => {
     assert.match(route.content, /export async function GET/);
     assert.match(route.content, /export async function POST/);
     assert.match(page.content, /"use client";/);
+    assert.match(page.content, new RegExp(`const API = "\\.\\./api/${slug}";`));
+    assert.doesNotMatch(page.content, new RegExp(`const API = "/api/${slug}";`));
     assert.match(page.content, /export default function/);
   }
 });
@@ -155,8 +186,13 @@ test('API route coerces numeric/boolean fields to their types', () => {
   assert.match(route, /precio: Number\(/);
   assert.match(route, /stock: Number\(/);
   assert.match(route, /activo: toBoolean\(/);
+  assert.match(route, /function previewFallbackItem/);
+  assert.match(route, /Base de datos no disponible en preview/);
   // id + createdAt are server-managed → never coerced from the body
-  assert.doesNotMatch(route, /\bid: (String|Number|Boolean)\(/);
+  const createData = route.match(/data: \{([\s\S]*?)\n      \},/);
+  assert.ok(createData, 'has Prisma create data block');
+  assert.doesNotMatch(createData[1], /\bid:/);
+  assert.doesNotMatch(createData[1], /\bcreatedAt:/);
 });
 
 test('full-stack codegen includes Prisma client, seed and local Postgres compose', () => {
@@ -174,6 +210,15 @@ test('generated home page lists the core features', () => {
   const home = fileMap(files).get('app/page.tsx').content;
   assert.match(home, /Registro de productos/);
   assert.match(home, /Funcionalidades/);
+});
+
+test('generated home page renders required exact display text', () => {
+  const { files } = codegenFromBrief(makeBrief({
+    constraints: 'Texto exacto en pantalla principal: AGENTIC_COMPILE_V3_READY',
+  }));
+  const home = fileMap(files).get('app/page.tsx').content;
+  assert.match(home, /data-testid="required-output"/);
+  assert.match(home, /AGENTIC_COMPILE_V3_READY/);
 });
 
 // ── landing platform ──────────────────────────────────────────────

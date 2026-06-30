@@ -302,6 +302,18 @@ export function isNodeBundlerProject(files: CodeFiles): boolean {
   }
 }
 
+function hasBundlerRuntimeFiles(files: CodeFiles): boolean {
+  return Object.keys(files).some((path) => {
+    const p = stripLead(path).toLowerCase()
+    return (
+      /^(app|pages|src)\//.test(p) ||
+      /^prisma\/schema\.prisma$/.test(p) ||
+      /^(next|vite)\.config\.(?:js|mjs|ts)$/.test(p) ||
+      /^tsconfig\.json$/.test(p)
+    )
+  })
+}
+
 /** A standalone HTML document that runs in the sandboxed srcdoc iframe as-is:
  * it inlines its logic or pulls deps from a CDN, rather than pointing at a
  * bundler entry like `/src/main.tsx` that only resolves through a dev server.
@@ -351,6 +363,7 @@ function findProjectEntry(files: CodeFiles): string | null {
  * active tab landing on a README/SVG/self-contained doc inside a real project. */
 export function projectNeedsDevServer(files: CodeFiles): boolean {
   if (!isNodeBundlerProject(files)) return false
+  if (hasBundlerRuntimeFiles(files)) return true
   const indexPath = Object.keys(files).find((p) => stripLead(p).toLowerCase() === "index.html")
   if (indexPath && isSelfContainedHtml(files[indexPath]?.content ?? "")) return false
   return true

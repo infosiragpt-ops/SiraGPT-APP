@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import { buildPreviewDocument } from "../lib/code-preview-build"
+import { buildPreviewDocument, projectNeedsDevServer } from "../lib/code-preview-build"
 
 type F = Record<string, { path: string; language: string; content: string; updatedAt: number }>
 
@@ -193,5 +193,35 @@ describe("buildPreviewDocument", () => {
     assert.equal(r.kind, "html")
     assert.equal(r.entry, "index.html")
     assert.match(r.html, /Hola/)
+  })
+
+  it("auto-runs a real generated Next app even when it includes an instant index.html preview", () => {
+    const builderApp = files({
+      "package.json": '{"scripts":{"dev":"next dev"},"dependencies":{"next":"^14.0.0","react":"^18.0.0"}}',
+      "app/page.tsx": "export default function Page(){ return <div>app</div> }",
+      "app/api/customers/route.ts": "export async function GET(){ return Response.json([]) }",
+      "prisma/schema.prisma": "model Customer { id String @id }",
+      "index.html":
+        '<!doctype html><html lang="es"><head>' +
+        '<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>' +
+        '<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>' +
+        "</head><body><div id=\"root\"></div>" +
+        '<script>ReactDOM.createRoot(document.getElementById("root")).render(React.createElement("h1", null, "Hola"));</script>' +
+        "</body></html>",
+    })
+
+    assert.equal(projectNeedsDevServer(builderApp), true)
+  })
+
+  it("does not auto-run a bundler package that only has a self-contained HTML document", () => {
+    const staticOnly = files({
+      "package.json": '{"dependencies":{"vite":"^7.1.0","react":"^18.0.0"}}',
+      "index.html":
+        '<!doctype html><html lang="es"><body><div id="root"></div>' +
+        '<script>document.getElementById("root").textContent = "Hola"</script>' +
+        "</body></html>",
+    })
+
+    assert.equal(projectNeedsDevServer(staticOnly), false)
   })
 })

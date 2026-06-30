@@ -73,4 +73,6 @@ export interface BuildErrorVerdict {
   siguientePaso: string
   /** package.json overrides to apply, when the fix is deterministic. */
   suggestedOverrides?: Record<string, string>
+  /** Prisma model renames to apply across schema/code, when deterministic. */
+  suggestedPrismaModelRenames?: Record<string, string>
 }

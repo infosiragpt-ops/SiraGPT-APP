@@ -94,7 +94,7 @@ export function landingSystemPrompt(ctx: AgentBuildContext): string {
       ? "  devDependencies: typescript 5.5.4, prisma 5.19.1, tsx 4.19.1, @types/node 20.14.0, @types/react 18.3.3, @types/react-dom 18.3.0"
       : `  devDependencies: ${DEV_DEPS_LINE}`,
     isApp
-      ? '  scripts: { "dev": "next dev", "build": "next build", "start": "next start", "db:generate": "prisma generate", "db:migrate": "prisma migrate dev", "db:push": "prisma db push", "db:seed": "tsx prisma/seed.ts", "postinstall": "prisma generate" }'
+      ? '  scripts: { "dev": "prisma generate && next dev", "build": "prisma generate && next build", "start": "next start", "db:generate": "prisma generate", "db:migrate": "prisma migrate dev", "db:push": "prisma db push", "db:seed": "tsx prisma/seed.ts" }. NO uses `postinstall`; `npm install` debe poder terminar antes de validar Prisma.'
       : '  scripts: { "dev": "vite", "build": "vite build", "preview": "vite preview" } y "type": "module".',
     isApp ? "BASE DE DATOS [CRÍTICO]:" : null,
     isApp ? "• prisma/schema.prisma usa datasource PostgreSQL con `DATABASE_URL` y un modelo por entidad principal." : null,
@@ -204,18 +204,19 @@ export function engineTransportInstructions(): string {
 export function sreSystemPrompt(log: string, configFiles: string): string {
   return [
     "[ROL: SRE / DOCTOR DE BUILDS]",
-    "Recibes un LOG de error de empaquetado/instalación/despliegue. Diagnostica y ARREGLA.",
-    "NO reescribas la app. Tu objetivo es desbloquear el build tocando SOLO configuración.",
+    "Recibes un LOG de error de empaquetado/instalación/despliegue/preview. Diagnostica y ARREGLA.",
+    "NO reescribas la app completa. Tu objetivo es desbloquear el build tocando el mínimo conjunto de archivos.",
     "",
     "Responde EXACTAMENTE con estas 5 secciones (Markdown, en este orden):",
     "**Diagnóstico:** Una frase: qué falló (compilación/instalación/despliegue).",
     "**Qué pasaba:** Mecanismo técnico (ej. `npm --prefix` falló al bajar un tarball roto del registro/espejo;",
     "   dependencia transitiva inalcanzable por el firewall del entorno).",
-    "**Causa raíz:** Por qué NO es culpa del código del usuario, sino del entorno/red/registry.",
-    "**Arreglo:** La solución exacta como bloque(s) aplicables. Prefiere, en orden: (a) `overrides`/`resolutions`",
-    "   en package.json para fijar/sustituir la dependencia rota; (b) fijar versiones estables; (c) marcar opcional.",
-    "   Entrega el package.json COMPLETO en un bloque cuyo encabezado de fence sea ```json package.json",
-    "   (la ruta va SOLO en el encabezado — NUNCA como comentario `// path:` dentro del JSON: lo rompería).",
+    "**Causa raíz:** Por qué falló: entorno/red/registry O código/config generado inválido.",
+    "**Arreglo:** La solución exacta como bloque(s) aplicables. Si es dependencia/registry, prefiere `overrides`",
+    "   en package.json. Si es Prisma/TypeScript/Next inválido, parchea el archivo real que falla",
+    "   (`prisma/schema.prisma`, `package.json`, `app/**`, `lib/**`, etc.). Entrega SIEMPRE archivos COMPLETOS.",
+    "   El encabezado de cada fence debe incluir lenguaje y ruta, por ejemplo ```prisma prisma/schema.prisma",
+    "   o ```json package.json. La ruta va SOLO en el encabezado — NUNCA como comentario dentro del archivo.",
     "**Siguiente paso:** Una línea que confirme que el agente ya reintentará el build/preview automáticamente.",
     "   No pidas al usuario pulsar botones ni copiar comandos; el sistema aplica el patch y reintenta solo.",
     "",

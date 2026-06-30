@@ -16,6 +16,7 @@ const { ProjectBriefSchema } = require('../src/services/builder/contracts');
 const {
   briefFromPrompt,
   extractEntities,
+  extractExactDisplayText,
   extractFeatures,
   extractTheme,
   normalisePurposeText,
@@ -47,6 +48,25 @@ test('entity extraction stops before color/style instructions', () => {
   const names = brief.dataEntities.map((e) => e.name);
   assert.deepEqual(names, ['Cliente', 'Evento', 'Invitado', 'Pago']);
   assert.equal(brief.style.theme, 'moderno #FF0000');
+});
+
+test('entity extraction ignores stack words and reads operation lists', () => {
+  const brief = briefFromPrompt(
+    'Crea una app full-stack profesional llamada Agentic Compile V2 para operaciones: dashboard, clientes, tickets, formulario para crear cliente, backend API con rutas Next, Prisma/Postgres y README',
+  );
+  const names = brief.dataEntities.map((e) => e.name);
+  assert.deepEqual(names, ['Cliente', 'Ticket']);
+  assert.ok(!names.includes('Prisma'));
+  assert.ok(!names.includes('Postgre'));
+  assert.ok(!names.includes('Readme'));
+  assert.ok(!names.includes('Next'));
+});
+
+test('exact display text instructions are preserved as constraints', () => {
+  const prompt = 'La pantalla principal debe mostrar el texto exacto AGENTIC_COMPILE_V3_READY cuando compile.';
+  const brief = briefFromPrompt(prompt);
+  assert.equal(extractExactDisplayText(prompt), 'AGENTIC_COMPILE_V3_READY');
+  assert.equal(brief.constraints, 'Texto exacto en pantalla principal: AGENTIC_COMPILE_V3_READY');
 });
 
 test('no extractable entities → a generic Registro entity (never an empty app)', () => {

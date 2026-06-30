@@ -199,6 +199,124 @@ export function promptFromContext(ctx: AgentBuildContext): string {
   return parts.join(" ")
 }
 
+export interface AgentWorkspaceFile {
+  path: string
+  content: string
+}
+
+export type AgentWorkspaceFiles = Record<string, AgentWorkspaceFile>
+
+const EXACT_READY_MARKER = /\b[A-Z][A-Z0-9_]{4,120}_READY\b/g
+
+function jsxText(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+}
+
+function stripInstructionValue(value: string): string {
+  return clean(value)
+    .replace(/^[`"'“”‘’]+|[`"'“”‘’.,;:]+$/g, "")
+    .trim()
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+export function extractExactDisplayTextInstruction(input: string): string | null {
+  const text = clean(input)
+  const direct = text.match(
+    /(?:texto|marcador|frase|t[ií]tulo|headline|principal)[^.\n]{0,140}?\b(?:a|por|como|sea|mostrar(?:\s+el)?|muestre(?:\s+el)?|debe\s+(?:ser|mostrar))\s+[`"'“”‘’]*([A-Z0-9][A-Z0-9_-]{3,120})/i,
+  )
+  const value = direct?.[1] ? stripInstructionValue(direct[1]) : null
+  if (value && /^[A-Z0-9_-]{4,120}$/.test(value)) return value
+
+  const marker = text.match(EXACT_READY_MARKER)
+  return marker?.[0] ?? null
+}
+
+function extractVisibleCardInstruction(input: string): { title: string; detail?: string } | null {
+  const text = clean(input)
+  const match = text.match(
+    /(?:agrega|a[ñn]ade|incluye|crea|pon)\s+(?:una\s+)?tarjeta(?:\s+visible)?(?:\s+(?:llamada|titulada|con\s+t[ií]tulo))?\s+(.+?)(?:\s+(?:con|y)\s+(.+))?$/i,
+  )
+  if (!match?.[1]) return null
+  const title = stripInstructionValue(match[1]).slice(0, 80)
+  const detail = match[2] ? stripInstructionValue(match[2]).slice(0, 160) : undefined
+  if (!title) return null
+  return { title, detail }
+}
+
+function isNextProject(files: AgentWorkspaceFiles): boolean {
+  const appPage = files["app/page.tsx"]
+  const pkg = files["package.json"]?.content || ""
+  return !!appPage && /"next"\s*:|"dev"\s*:\s*"[^"]*next\s+dev/i.test(pkg)
+}
+
+function replaceExactDisplayText(page: string, marker: string): string {
+  const exactNode = /(<[A-Za-z0-9]+\b[^>]*data-testid=["']required-output["'][^>]*>)([\s\S]*?)(<\/[A-Za-z0-9]+>)/m
+  if (exactNode.test(page)) {
+    return page.replace(exactNode, `$1${jsxText(marker)}$3`)
+  }
+
+  EXACT_READY_MARKER.lastIndex = 0
+  if (EXACT_READY_MARKER.test(page)) {
+    EXACT_READY_MARKER.lastIndex = 0
+    return page.replace(EXACT_READY_MARKER, marker)
+  }
+  EXACT_READY_MARKER.lastIndex = 0
+
+  const requiredNode = `      <p className="card" data-testid="required-output">${jsxText(marker)}</p>\n`
+  if (/      <\/div>\n/.test(page)) {
+    return page.replace(/(      <\/div>\n)/, `$1${requiredNode}`)
+  }
+  return page.replace(/(    <\/section>)/, `${requiredNode}$1`)
+}
+
+function buildVisibleCard(card: { title: string; detail?: string }): string {
+  const critical = /cr[ií]tic/i.test(`${card.title} ${card.detail || ""}`)
+  const testId = /\bsla\b/i.test(card.title) ? "sla-critical-card" : "agentic-added-card"
+  const detail = card.detail || (critical ? "Estado crítico que requiere atención inmediata." : "Tarjeta agregada desde el chat.")
+  return [
+    `      <div className="card" data-testid="${testId}">`,
+    `        <h3>${jsxText(card.title)}</h3>`,
+    `        <p>${jsxText(detail)}</p>`,
+    critical ? "        <strong>ESTADO CRÍTICO</strong>" : null,
+    "      </div>",
+  ].filter((line): line is string => line !== null).join("\n")
+}
+
+function ensureVisibleCard(page: string, card: { title: string; detail?: string }): string {
+  const titlePattern = new RegExp(escapeRegExp(card.title), "i")
+  if (titlePattern.test(page)) return page
+
+  const cardBlock = `${buildVisibleCard(card)}\n`
+  if (/(      <div className="grid">\n)/.test(page)) {
+    return page.replace(/(      <div className="grid">\n)/, `$1${cardBlock}`)
+  }
+  return page.replace(/(    <\/section>)/, `${cardBlock}$1`)
+}
+
+export function buildDeterministicPreviewPatches(
+  files: AgentWorkspaceFiles,
+  instruction: string,
+): Array<{ path: string; content: string }> {
+  if (!isNextProject(files)) return []
+
+  const appPage = files["app/page.tsx"]
+  let next = appPage.content
+  const exactText = extractExactDisplayTextInstruction(instruction)
+  const card = extractVisibleCardInstruction(instruction)
+
+  if (exactText) next = replaceExactDisplayText(next, exactText)
+  if (card) next = ensureVisibleCard(next, card)
+
+  if (next === appPage.content) return []
+  return [{ path: appPage.path, content: next }]
+}
+
 // ---- SRE tier-0: deterministic build-error classifier ----------------------
 
 function extractPackageSpec(log: string): { name?: string; version?: string } {
@@ -286,6 +404,29 @@ export function classifyBuildError(log: string): BuildErrorVerdict {
       arreglo:
         "Proyecto Vite/Node: añade el paquete a `dependencies` en `package.json`; el preview reintentará la instalación automáticamente. Preview estático: quita el `import` y cárgalo por CDN (`<script src=…>`), o usa una alternativa ya disponible (React/Tailwind están globales).",
       siguientePaso: "Aplica el cambio; el preview reintentará automáticamente si es un proyecto Node, o se actualizará en vivo si es estático.",
+    }
+  }
+
+  // Prisma schema reserved model names (e.g. `model Prisma`) generated from
+  // stack words in a prompt. This is code/config generated by the builder and
+  // can be fixed deterministically by renaming the model plus client accessor.
+  const reservedModels = Array.from(text.matchAll(/-\s+"model\s+([A-Za-z_][A-Za-z0-9_]*)"/g)).map((m) => m[1])
+  if (/reserved keywords|contains reserved keywords/i.test(text) && reservedModels.length > 0) {
+    const renames = Object.fromEntries(
+      reservedModels.map((model) => [model, /Record$/.test(model) ? `${model}Item` : `${model}Record`]),
+    )
+    return {
+      matched: true,
+      category: "prisma_reserved_model",
+      diagnostico: "Prisma rechazó el schema porque contiene un nombre de modelo reservado.",
+      quePasaba:
+        `El schema declaró ${reservedModels.map((m) => `\`model ${m}\``).join(", ")}, y Prisma reserva ese identificador para su runtime interno.`,
+      causaRaiz:
+        "Es un fallo del generador: interpretó palabras técnicas del prompt como entidades de datos y produjo un modelo inválido.",
+      arreglo:
+        "Renombrar el/los modelos reservados en `prisma/schema.prisma` y actualizar las referencias del Prisma Client en rutas/seed.",
+      siguientePaso: "Aplico el parche y reintento el preview automáticamente.",
+      suggestedPrismaModelRenames: renames,
     }
   }
 

@@ -1,13 +1,13 @@
 'use strict';
 
 /**
- * host-runner ù a no-Docker, in-process dev-server runner for the /code module.
+ * host-runner ‚Äî a no-Docker, in-process dev-server runner for the /code module.
  *
  * Runs a generated project (Vite/Next/Node) as a REAL dev server on a free
  * localhost port by spawning `npm install` + `vite`/`next dev` as child
  * processes on the host. The /code preview then iframes `http://localhost:<port>`
  * directly, so HMR works natively (the dev server's websocket is same-origin
- * with the iframe ù no proxy needed). This is the "Replit-like" path for
+ * with the iframe ‚Äî no proxy needed). This is the "Replit-like" path for
  * environments WITHOUT Docker (e.g. local dev).
  *
  * Safety: disabled in production by default (set CODE_HOST_RUNNER=1 to force on)
@@ -243,6 +243,36 @@ function needInstall(dir) {
   }
 }
 
+function previewBasePath(run) {
+  return String((run && run.basePath) || '').replace(/\/+$/, '');
+}
+
+function ensureNextPreviewConfig(dir, run) {
+  if (!shouldUseProxyUrls()) return;
+  const basePath = previewBasePath(run);
+  if (!basePath) return;
+
+  const configPath = path.join(dir, 'next.config.mjs');
+  const config = [
+    '/** @type {import("next").NextConfig} */',
+    "const previewBasePath = process.env.SIRA_PREVIEW_BASE_PATH || '';",
+    '',
+    'const nextConfig = {',
+    '  reactStrictMode: true,',
+    '  ...(previewBasePath ? {',
+    '    basePath: previewBasePath,',
+    '    assetPrefix: previewBasePath,',
+    '  } : {}),',
+    '};',
+    '',
+    'export default nextConfig;',
+    '',
+  ].join('\n');
+
+  fs.writeFileSync(configPath, config, 'utf8');
+  pushLog(run, `Next preview basePath: ${basePath}`);
+}
+
 async function writeFiles(dir, files) {
   await fsp.mkdir(dir, { recursive: true });
   for (const f of files) {
@@ -267,7 +297,7 @@ function installDeps(dir, run) {
     run.installChild = child;
     const to = setTimeout(() => {
       killGroup(child);
-      reject(new Error('npm install excediù el tiempo lùmite'));
+      reject(new Error('npm install excedi√≥ el tiempo l√≠mite'));
     }, INSTALL_TIMEOUT_MS);
     child.stdout.on('data', (d) => pushLog(run, d));
     child.stderr.on('data', (d) => pushLog(run, d));
@@ -280,7 +310,7 @@ function installDeps(dir, run) {
         try { fs.writeFileSync(path.join(dir, '.sira-pkg-hash'), pkgHash(dir)); } catch { /* best effort */ }
         resolve();
       } else {
-        reject(new Error(`npm install fallù (cùdigo ${code})`));
+        reject(new Error(`npm install fall√≥ (c√≥digo ${code})`));
       }
     });
   });
@@ -290,8 +320,13 @@ function startDev(dir, fw, port, run) {
   let cmd;
   let args;
   if (fw.name === 'next') {
-    cmd = 'npx';
-    args = ['--no-install', 'next', 'dev', '-p', String(port), '-H', '127.0.0.1'];
+    if (fw.hasDevScript) {
+      cmd = 'npm';
+      args = ['run', 'dev', '--', '-p', String(port), '-H', '127.0.0.1'];
+    } else {
+      cmd = 'npx';
+      args = ['--no-install', 'next', 'dev', '-p', String(port), '-H', '127.0.0.1'];
+    }
   } else if (fw.name === 'vite') {
     cmd = 'npx';
     args = ['--no-install', 'vite', '--host', '127.0.0.1', '--port', String(port), '--strictPort'];
@@ -304,10 +339,19 @@ function startDev(dir, fw, port, run) {
     args = ['run', 'dev'];
   }
   pushLog(run, `$ ${cmd} ${args.join(' ')}`);
+  const nextPreviewBasePath = fw.name === 'next' && shouldUseProxyUrls() ? previewBasePath(run) : '';
   const child = spawn(cmd, args, {
     cwd: dir,
     detached: true,
-    env: envFor({ ...run.runtimeEnv, PORT: String(port), HOST: '127.0.0.1' }),
+    env: envFor({
+      ...run.runtimeEnv,
+      PORT: String(port),
+      HOST: '127.0.0.1',
+      ...(nextPreviewBasePath ? {
+        SIRA_PREVIEW_BASE_PATH: nextPreviewBasePath,
+        NEXT_PUBLIC_SIRA_PREVIEW_BASE_PATH: nextPreviewBasePath,
+      } : {}),
+    }),
   });
   run.child = child;
   child.stdout.on('data', (d) => pushLog(run, d));
@@ -317,7 +361,7 @@ function startDev(dir, fw, port, run) {
     run.child = null;
     if (run.phase !== 'ready' && !run.stopped) {
       run.phase = 'error';
-      run.error = run.error || `el dev server terminù (cùdigo ${code})`;
+      run.error = run.error || `el dev server termin√≥ (c√≥digo ${code})`;
     }
   });
 }
@@ -335,17 +379,18 @@ async function probeReady(port, basePath, deadline, run) {
     await sleep(1000);
   }
   if (run.stopped) return;
-  throw new Error('el dev server no respondiù a tiempo');
+  throw new Error('el dev server no respondi√≥ a tiempo');
 }
 
 async function pipeline(run) {
   const fw = detectFramework(run.dir);
   run.framework = fw.name;
+  if (fw.name === 'next') ensureNextPreviewConfig(run.dir, run);
   if (needInstall(run.dir)) {
     run.phase = 'installing';
     await installDeps(run.dir, run);
   } else {
-    pushLog(run, 'dependencias en cachù ù omito npm install');
+    pushLog(run, 'dependencias en cach√© ‚Äî omito npm install');
   }
   if (run.stopped) return;
   run.phase = 'starting';
@@ -381,7 +426,7 @@ async function startRun({ runId, userId, files, env }) {
   const id = safeId(runId);
   const norm = normaliseFiles(files);
   if (!norm.some((f) => f.path === 'package.json')) {
-    const e = new Error('el proyecto no tiene package.json ù no es ejecutable');
+    const e = new Error('el proyecto no tiene package.json ‚Äî no es ejecutable');
     e.code = 'no_package';
     throw e;
   }
@@ -496,7 +541,7 @@ function getProxyTarget(runId, userId) {
   return { port: run.port, phase: run.phase, framework: run.framework };
 }
 
-// Idle reaper ù stop dev servers nobody is watching.
+// Idle reaper ‚Äî stop dev servers nobody is watching.
 const reaper = setInterval(() => {
   const now = Date.now();
   for (const [id, run] of runs) {
