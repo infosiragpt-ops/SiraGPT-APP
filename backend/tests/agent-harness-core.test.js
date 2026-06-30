@@ -199,6 +199,8 @@ test('event-stream: calls that never reach execute() settle from onStepDone obse
 
   const result = frames.find((f) => f.type === 'tool_result');
   assert.equal(result.isError, true);
+  // The error preview is the clean reason, not the raw {"error":...} JSON.
+  assert.equal(result.preview, 'duplicate_tool_call');
   assert.equal(run.steps.find((s) => s.type === 'tool_call').isError, true);
 });
 
@@ -299,6 +301,9 @@ test('permission gate: deny feeds an is_error result and unknown ids 404', async
 
   const result = frames.find((f) => f.type === 'tool_result');
   assert.equal(result.isError, true);
+  // Clean reason in the preview, not raw {"error":...} JSON.
+  assert.match(result.preview, /^permission_denied/);
+  assert.ok(!result.preview.trimStart().startsWith('{'), 'error preview must not be raw JSON');
   assert.equal(events.run.steps[0].status, 'denied');
 
   const missing = permissionManager.resolvePermission({ permissionId: 'nope-nope-nope', decision: 'allow' });

@@ -52,6 +52,26 @@ function previewOf(value, max = RESULT_PREVIEW_MAX_CHARS) {
   return json;
 }
 
+// A failed tool result is an observation like { error: "<reason>" } (or a
+// thrown Error). Surface the reason as a clean, human, single-line preview in
+// the trace instead of the raw JSON blob ({"error":"connect ETIMEDOUT …"})
+// previewOf would emit — so the AgentTrace error row reads like a message, not
+// a debug dump. Falls back to the JSON preview when no message can be derived.
+function errorPreviewOf(result, max = RESULT_PREVIEW_MAX_CHARS) {
+  let raw = result;
+  if (raw instanceof Error) raw = raw.message || String(raw);
+  if (raw && typeof raw === 'object') {
+    raw = raw.error != null ? raw.error : raw.message;
+    if (raw instanceof Error) raw = raw.message || String(raw);
+    if (raw && typeof raw === 'object') {
+      raw = raw.message || raw.error || raw.detail || raw.reason || null;
+    }
+  }
+  const s = raw == null ? '' : String(raw).replace(/\s+/g, ' ').trim();
+  if (!s || s === '[object Object]') return previewOf(result, max);
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
 function parseArgs(raw) {
   if (raw == null) return {};
   if (typeof raw === 'object') return raw;
@@ -218,7 +238,7 @@ function createAgentEventStream(opts = {}) {
       blockIndex: call.blockIndex,
       id: call.id,
       name: call.name,
-      preview: previewOf(result),
+      preview: isError ? errorPreviewOf(result) : previewOf(result),
       isError: Boolean(isError),
       durationMs,
       ...(status && status !== 'completed' && status !== 'error' ? { status } : {}),
