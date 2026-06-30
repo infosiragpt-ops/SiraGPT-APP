@@ -2275,9 +2275,17 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   .chat-viewport[data-chat-input-focused="true"] .chat-initial-stage,
   .chat-viewport[data-chat-keyboard="open"] .chat-initial-stage {
     position: fixed;
-    inset: 0;
+    /* Track the VISUAL viewport, not the layout viewport. When iOS opens the
+       keyboard it scrolls the page, so the visual viewport gains an offsetTop.
+       The old `inset: 0` anchored the overlay to top:0 and ignored that scroll,
+       which let the empty-state composer fly to the top of the screen. Pin the
+       top to the measured offset and the height to the visual height so the
+       overlay sits exactly over what the user can see and the flex-end composer
+       lands right above the keyboard. */
+    left: 0;
+    right: 0;
+    top: var(--chat-viewport-offset-top, 0px);
     z-index: 35;
-    min-height: var(--chat-viewport-height, 100dvh);
     height: var(--chat-viewport-height, 100dvh);
     padding-top: 0;
     padding-bottom: calc(0.375rem + var(--chat-mobile-bottom-clearance, env(safe-area-inset-bottom, 0px)));
