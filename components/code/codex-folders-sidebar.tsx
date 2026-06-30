@@ -98,6 +98,7 @@ export function CodexFoldersSidebar({ onClose, variant = "rail" }: Props) {
       name: project.name,
       kind: "project",
       chatListId: project.id,
+      isPinned: project.isStarred,
     }))
     return [...locals, ...cloud]
   }, [localEntries, projects])
@@ -214,6 +215,82 @@ export function CodexFoldersSidebar({ onClose, variant = "rail" }: Props) {
     [forgetWorkspace, refresh],
   )
 
+  const handleRenameWorkspace = React.useCallback(
+    async (node: WorkspaceTreeNode, name: string) => {
+      const clean = name.trim()
+      if (!clean) return
+      try {
+        if (node.kind === "project") {
+          const updated = await projectsService.update(node.chatListId, { name: clean })
+          setProjects((prev) => prev.map((project) => (project.id === updated.id ? { ...project, ...updated } : project)))
+          upsertCodexProject({ id: node.id, name: updated.name, kind: "project" })
+          toast.success("Proyecto renombrado.")
+          return
+        }
+
+        const entry = listCodexProjects().find((row) => row.id === node.id)
+        if (entry) {
+          upsertCodexProject({ ...entry, name: clean })
+          setLocalEntries(listCodexProjects().filter((row) => row.kind === "local-folder"))
+          window.dispatchEvent(new CustomEvent(CODEX_UPDATED_EVENT))
+          toast.success("Carpeta renombrada en APPS.")
+        }
+      } catch (err: any) {
+        toast.error(err?.message || "No se pudo cambiar el nombre del proyecto")
+      }
+    },
+    [],
+  )
+
+  const handleToggleWorkspacePin = React.useCallback(
+    async (node: WorkspaceTreeNode) => {
+      if (node.kind !== "project") {
+        toast.info("Las carpetas locales se ordenan por uso reciente; los proyectos cloud sí se pueden anclar.")
+        return
+      }
+
+      const current = projects.find((project) => project.id === node.chatListId)
+      const nextPinned = !current?.isStarred
+      setProjects((prev) =>
+        prev.map((project) =>
+          project.id === node.chatListId ? { ...project, isStarred: nextPinned } : project,
+        ),
+      )
+      try {
+        await projectsService.update(node.chatListId, { isStarred: nextPinned })
+        toast.success(nextPinned ? "Proyecto anclado." : "Proyecto desanclado.")
+      } catch (err: any) {
+        setProjects((prev) =>
+          prev.map((project) =>
+            project.id === node.chatListId ? { ...project, isStarred: !nextPinned } : project,
+          ),
+        )
+        toast.error(err?.message || "No se pudo actualizar el anclado")
+      }
+    },
+    [projects],
+  )
+
+  const handleRevealWorkspace = React.useCallback(
+    (node: WorkspaceTreeNode) => {
+      handleOpenWorkspace(node)
+      toast.info(
+        node.kind === "local-folder"
+          ? "Carpeta abierta en APPS. Mostrarla en Finder requiere permisos nativos del navegador."
+          : "Proyecto abierto. Para verlo en Finder primero crea o enlaza un worktree local.",
+      )
+    },
+    [handleOpenWorkspace],
+  )
+
+  const handleCreatePermanentWorktree = React.useCallback(
+    (node: WorkspaceTreeNode) => {
+      handleOpenWorkspace(node)
+      toast.info("Worktree permanente preparado para enlazarse cuando la integración nativa esté disponible.")
+    },
+    [handleOpenWorkspace],
+  )
+
   const handleOpenChat = React.useCallback((chatId: string) => {
     if (typeof window === "undefined") return
     window.open(`/chat?id=${encodeURIComponent(chatId)}`, "_blank", "noopener,noreferrer")
@@ -317,6 +394,10 @@ export function CodexFoldersSidebar({ onClose, variant = "rail" }: Props) {
           onSelectCodeSession={handleSelectCodeSession}
           activeCodeSessionId={activeCodeChatSessionId}
           listCodeSessions={listCodeSessions}
+          onRenameWorkspace={handleRenameWorkspace}
+          onToggleWorkspacePin={handleToggleWorkspacePin}
+          onRevealWorkspace={handleRevealWorkspace}
+          onCreatePermanentWorktree={handleCreatePermanentWorktree}
           headerRight={
             <>
               <CodexFolderPicker {...pickerProps} triggerVariant="folder-plus" />

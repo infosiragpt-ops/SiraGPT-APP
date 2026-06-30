@@ -4,8 +4,11 @@ import * as React from "react"
 import {
   Archive,
   Check,
+  CheckCheck,
   Circle,
   FolderClosed,
+  FolderOpen,
+  GitBranch,
   MailOpen,
   MessageSquarePlus,
   MoreVertical,
@@ -16,6 +19,7 @@ import {
   Trash2,
   X,
 } from "lucide-react"
+import { toast } from "sonner"
 
 import { cn } from "@/lib/utils"
 import type { ProjectChatSummary } from "@/lib/projects-service"
@@ -45,6 +49,7 @@ export type WorkspaceTreeNode = {
   kind: "local-folder" | "project"
   /** Key for chatsByWorkspace (project UUID for cloud, codex id for local). */
   chatListId: string
+  isPinned?: boolean
 }
 
 type ChatState = {
@@ -85,6 +90,10 @@ export type CodexWorkspaceTreeProps = {
   listCodeSessions?: (workspaceId: string) => { id: string; title: string; updatedAt?: number; createdAt?: number }[]
   headerRight?: React.ReactNode
   onOpenSettings?: (node: WorkspaceTreeNode) => void
+  onRenameWorkspace?: (node: WorkspaceTreeNode, name: string) => void
+  onToggleWorkspacePin?: (node: WorkspaceTreeNode) => void
+  onRevealWorkspace?: (node: WorkspaceTreeNode) => void
+  onCreatePermanentWorktree?: (node: WorkspaceTreeNode) => void
   onDeleteWorkspace?: (node: WorkspaceTreeNode) => void
   onRenameRow?: (row: ChatRow, title: string) => void
   onDeleteRow?: (row: ChatRow) => void
@@ -124,7 +133,11 @@ export function CodexWorkspaceTree(props: CodexWorkspaceTreeProps) {
     activeCodeSessionId = null,
     listCodeSessions,
     headerRight,
-    onOpenSettings,
+    onRenameWorkspace,
+    onToggleWorkspacePin,
+    onRevealWorkspace,
+    onCreatePermanentWorktree,
+    onDeleteWorkspace,
   } = props
 
   const pinned = pinnedRows ?? EMPTY_SET
@@ -134,6 +147,8 @@ export function CodexWorkspaceTree(props: CodexWorkspaceTreeProps) {
   // Inline rename state lives at tree level so only one row edits at a time.
   const [editingKey, setEditingKey] = React.useState<string | null>(null)
   const [editValue, setEditValue] = React.useState("")
+  const [editingWorkspaceId, setEditingWorkspaceId] = React.useState<string | null>(null)
+  const [workspaceEditValue, setWorkspaceEditValue] = React.useState("")
 
   const beginRename = React.useCallback((row: ChatRow) => {
     setEditingKey(row.key)
@@ -150,6 +165,25 @@ export function CodexWorkspaceTree(props: CodexWorkspaceTreeProps) {
       cancelRename()
     },
     [cancelRename, editValue, props],
+  )
+
+  const beginWorkspaceRename = React.useCallback((node: WorkspaceTreeNode) => {
+    setEditingWorkspaceId(node.id)
+    setWorkspaceEditValue(node.name)
+  }, [])
+
+  const cancelWorkspaceRename = React.useCallback(() => {
+    setEditingWorkspaceId(null)
+    setWorkspaceEditValue("")
+  }, [])
+
+  const commitWorkspaceRename = React.useCallback(
+    (node: WorkspaceTreeNode) => {
+      const next = workspaceEditValue.trim()
+      if (next && next !== node.name) onRenameWorkspace?.(node, next)
+      cancelWorkspaceRename()
+    },
+    [cancelWorkspaceRename, onRenameWorkspace, workspaceEditValue],
   )
 
   const expandedOnceRef = React.useRef<Set<string>>(new Set())
@@ -247,6 +281,18 @@ export function CodexWorkspaceTree(props: CodexWorkspaceTreeProps) {
     [displayOptions.sort, pinned],
   )
 
+  const sortedWorkspaces = React.useMemo(
+    () =>
+      workspaces
+        .map((workspace, index) => ({ workspace, index }))
+        .sort((a, b) => {
+          const pinnedDelta = Number(Boolean(b.workspace.isPinned)) - Number(Boolean(a.workspace.isPinned))
+          return pinnedDelta || a.index - b.index
+        })
+        .map(({ workspace }) => workspace),
+    [workspaces],
+  )
+
   const sharedRowProps = {
     actions: rowActions,
     pinned,
@@ -261,7 +307,7 @@ export function CodexWorkspaceTree(props: CodexWorkspaceTreeProps) {
     isRowUnread,
     openRow,
     subtitles: displayOptions.subtitles,
-    workspaces,
+    workspaces: sortedWorkspaces,
   }
 
   const header = (
@@ -280,7 +326,7 @@ export function CodexWorkspaceTree(props: CodexWorkspaceTreeProps) {
 
   // ── group-by: status / none flatten every workspace into one stream ──
   if (workspaces.length > 0 && displayOptions.groupBy !== "project") {
-    const allRows = sortRows(workspaces.flatMap((ws) => buildRows(ws)))
+    const allRows = sortRows(sortedWorkspaces.flatMap((ws) => buildRows(ws)))
     return (
       <div className="flex min-h-0 flex-1 flex-col">
         {header}
@@ -307,7 +353,7 @@ export function CodexWorkspaceTree(props: CodexWorkspaceTreeProps) {
         {renderEmpty()}
         {workspaces.length > 0 ? (
           <ul className="space-y-3">
-            {workspaces.map((ws) => (
+            {sortedWorkspaces.map((ws) => (
               <WorkspaceFolderBlock
                 key={ws.id}
                 node={ws}
@@ -316,7 +362,16 @@ export function CodexWorkspaceTree(props: CodexWorkspaceTreeProps) {
                 rows={sortRows(buildRows(ws))}
                 onOpenWorkspace={() => onOpenWorkspace(ws)}
                 onNewCodeChat={onNewCodeChat}
-                onOpenSettings={onOpenSettings}
+                onRenameWorkspace={onRenameWorkspace ? () => beginWorkspaceRename(ws) : undefined}
+                onToggleWorkspacePin={onToggleWorkspacePin ? () => onToggleWorkspacePin(ws) : undefined}
+                onRevealWorkspace={onRevealWorkspace ? () => onRevealWorkspace(ws) : undefined}
+                onCreatePermanentWorktree={onCreatePermanentWorktree ? () => onCreatePermanentWorktree(ws) : undefined}
+                onDeleteWorkspace={onDeleteWorkspace ? () => onDeleteWorkspace(ws) : undefined}
+                editingWorkspaceId={editingWorkspaceId}
+                workspaceEditValue={workspaceEditValue}
+                setWorkspaceEditValue={setWorkspaceEditValue}
+                cancelWorkspaceRename={cancelWorkspaceRename}
+                commitWorkspaceRename={() => commitWorkspaceRename(ws)}
                 sharedRowProps={sharedRowProps}
               />
             ))}
@@ -395,7 +450,16 @@ function WorkspaceFolderBlock({
   rows,
   onOpenWorkspace,
   onNewCodeChat,
-  onOpenSettings,
+  onRenameWorkspace,
+  onToggleWorkspacePin,
+  onRevealWorkspace,
+  onCreatePermanentWorktree,
+  onDeleteWorkspace,
+  editingWorkspaceId,
+  workspaceEditValue,
+  setWorkspaceEditValue,
+  cancelWorkspaceRename,
+  commitWorkspaceRename,
   sharedRowProps,
 }: {
   node: WorkspaceTreeNode
@@ -404,33 +468,103 @@ function WorkspaceFolderBlock({
   rows: ChatRow[]
   onOpenWorkspace: () => void
   onNewCodeChat?: (node: WorkspaceTreeNode) => void
-  onOpenSettings?: (node: WorkspaceTreeNode) => void
+  onRenameWorkspace?: () => void
+  onToggleWorkspacePin?: () => void
+  onRevealWorkspace?: () => void
+  onCreatePermanentWorktree?: () => void
+  onDeleteWorkspace?: () => void
+  editingWorkspaceId: string | null
+  workspaceEditValue: string
+  setWorkspaceEditValue: (value: string) => void
+  cancelWorkspaceRename: () => void
+  commitWorkspaceRename: () => void
   sharedRowProps: SharedRowProps
 }) {
+  const editing = editingWorkspaceId === node.id
+
+  const markWorkspaceRead = React.useCallback(() => {
+    if (rows.length === 0) {
+      toast.info("Este proyecto no tiene chats para marcar.")
+      return
+    }
+    rows.forEach((row) => sharedRowProps.actions.onMarkRead?.(row))
+    toast.success("Chats marcados como leídos.")
+  }, [rows, sharedRowProps.actions])
+
+  const archiveWorkspaceChats = React.useCallback(() => {
+    if (rows.length === 0) {
+      toast.info("Este proyecto no tiene chats para archivar.")
+      return
+    }
+    rows.forEach((row) => sharedRowProps.actions.onToggleArchive?.(row))
+    toast.success("Chats archivados.")
+  }, [rows, sharedRowProps.actions])
+
   return (
     <li>
       <div className="group/folder relative flex items-center">
-        <button
-          type="button"
-          onClick={onOpenWorkspace}
-          className={cn(
-            "flex min-w-0 flex-1 items-center gap-2 rounded-md py-0.5 text-left transition-colors",
-            isActiveWorkspace ? "text-foreground" : "text-foreground/90 hover:text-foreground",
-          )}
-          title={node.name}
-        >
-          <FolderClosed className="h-4 w-4 shrink-0 text-muted-foreground/75" />
-          <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{node.name}</span>
-        </button>
-        <div className="flex shrink-0 items-center opacity-0 transition-opacity group-hover/folder:opacity-100">
-          {onOpenSettings ? (
-            <FolderIconButton
-              label="Ajustes del proyecto"
-              onClick={() => onOpenSettings(node)}
+        {editing ? (
+          <div className="flex min-w-0 flex-1 items-center gap-1 rounded-md bg-muted/50 px-1 py-0.5">
+            <FolderClosed className="h-4 w-4 shrink-0 text-muted-foreground/65" />
+            <input
+              value={workspaceEditValue}
+              autoFocus
+              onChange={(e) => setWorkspaceEditValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitWorkspaceRename()
+                if (e.key === "Escape") cancelWorkspaceRename()
+              }}
+              onBlur={commitWorkspaceRename}
+              className="h-6 min-w-0 flex-1 rounded border-0 bg-transparent px-1 text-[13px] font-medium outline-none focus:ring-1 focus:ring-border"
+            />
+            <button
+              type="button"
+              className="flex h-5 w-5 items-center justify-center rounded text-emerald-600 hover:bg-emerald-500/10"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={commitWorkspaceRename}
+              aria-label="Guardar nombre"
             >
-              <Settings className="h-3.5 w-3.5" />
-            </FolderIconButton>
-          ) : null}
+              <Check className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              className="flex h-5 w-5 items-center justify-center rounded text-rose-500 hover:bg-rose-500/10"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={cancelWorkspaceRename}
+              aria-label="Cancelar cambio de nombre"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={onOpenWorkspace}
+            className={cn(
+              "flex min-w-0 flex-1 items-center gap-2 rounded-md py-0.5 text-left transition-colors",
+              isActiveWorkspace ? "text-foreground" : "text-foreground/90 hover:text-foreground",
+            )}
+            title={node.name}
+          >
+            <FolderClosed className="h-4 w-4 shrink-0 text-muted-foreground/75" />
+            <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{node.name}</span>
+            {node.isPinned ? (
+              <Pin className="h-3 w-3 shrink-0 text-muted-foreground/55" aria-label="Proyecto anclado" />
+            ) : null}
+          </button>
+        )}
+        <div className="flex shrink-0 items-center opacity-0 transition-opacity group-hover/folder:opacity-100">
+          <WorkspaceSettingsMenu
+            node={node}
+            isPinned={Boolean(node.isPinned)}
+            onTogglePin={onToggleWorkspacePin}
+            onRevealWorkspace={onRevealWorkspace}
+            onCreatePermanentWorktree={onCreatePermanentWorktree}
+            onRenameWorkspace={onRenameWorkspace}
+            onMarkWorkspaceRead={markWorkspaceRead}
+            onArchiveWorkspaceChats={archiveWorkspaceChats}
+            onDeleteWorkspace={onDeleteWorkspace}
+          />
           {onNewCodeChat ? (
             <FolderIconButton label="Nuevo chat" onClick={() => onNewCodeChat(node)}>
               <MessageSquarePlus className="h-3.5 w-3.5" />
@@ -457,6 +591,132 @@ function WorkspaceFolderBlock({
         ) : null}
       </ul>
     </li>
+  )
+}
+
+function WorkspaceSettingsMenu({
+  node,
+  isPinned,
+  onTogglePin,
+  onRevealWorkspace,
+  onCreatePermanentWorktree,
+  onRenameWorkspace,
+  onMarkWorkspaceRead,
+  onArchiveWorkspaceChats,
+  onDeleteWorkspace,
+}: {
+  node: WorkspaceTreeNode
+  isPinned: boolean
+  onTogglePin?: () => void
+  onRevealWorkspace?: () => void
+  onCreatePermanentWorktree?: () => void
+  onRenameWorkspace?: () => void
+  onMarkWorkspaceRead: () => void
+  onArchiveWorkspaceChats: () => void
+  onDeleteWorkspace?: () => void
+}) {
+  const revealWorkspace = React.useCallback(() => {
+    if (onRevealWorkspace) {
+      onRevealWorkspace()
+      return
+    }
+    toast.info(
+      node.kind === "local-folder"
+        ? "La carpeta ya está enlazada en APPS. Finder requiere permisos nativos del navegador."
+        : "Este proyecto vive en SiraGPT Cloud. Crea un worktree permanente para enlazarlo al disco.",
+    )
+  }, [node.kind, onRevealWorkspace])
+
+  const createPermanentWorktree = React.useCallback(() => {
+    if (onCreatePermanentWorktree) {
+      onCreatePermanentWorktree()
+      return
+    }
+    toast.info("El worktree permanente estará disponible cuando el proyecto tenga una carpeta local enlazada.")
+  }, [onCreatePermanentWorktree])
+
+  return (
+    <DropdownMenu>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/60 hover:text-foreground data-[state=open]:bg-muted/70 data-[state=open]:text-foreground"
+              aria-label="Ajustes del proyecto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <Settings className="h-3.5 w-3.5" />
+            </button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="top">Ajustes del proyecto</TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent
+        align="start"
+        side="right"
+        sideOffset={8}
+        className="project-settings-menu liquid-menu-surface w-64"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <ProjectSettingsMenuItem
+          icon={isPinned ? PinOff : Pin}
+          label={isPinned ? "Desanclar proyecto" : "Anclar proyecto"}
+          onSelect={onTogglePin}
+        />
+        <ProjectSettingsMenuItem icon={FolderOpen} label="Mostrar en Finder" onSelect={revealWorkspace} />
+        <ProjectSettingsMenuItem
+          icon={GitBranch}
+          label="Crear un worktree permanente"
+          onSelect={createPermanentWorktree}
+        />
+        <ProjectSettingsMenuItem icon={Pencil} label="Cambiar el nombre del proyecto" onSelect={onRenameWorkspace} />
+        <ProjectSettingsMenuItem icon={CheckCheck} label="Marcar todo como leído" onSelect={onMarkWorkspaceRead} />
+        <ProjectSettingsMenuItem icon={Archive} label="Archivar chats" onSelect={onArchiveWorkspaceChats} />
+        <DropdownMenuSeparator className="project-settings-menu__separator" />
+        <ProjectSettingsMenuItem
+          icon={Trash2}
+          label="Eliminar"
+          onSelect={onDeleteWorkspace}
+          destructive
+        />
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+function ProjectSettingsMenuItem({
+  icon: Icon,
+  label,
+  onSelect,
+  destructive,
+}: {
+  icon: React.ComponentType<{ className?: string }>
+  label: string
+  onSelect?: () => void
+  destructive?: boolean
+}) {
+  return (
+    <DropdownMenuItem
+      className={cn(
+        "group liquid-menu-item project-settings-menu__item cursor-pointer gap-2 text-[13px] font-medium",
+        destructive && "project-settings-menu__item--danger text-rose-600 focus:text-rose-700 dark:text-rose-400 dark:focus:text-rose-300",
+      )}
+      onClick={(e) => {
+        e.stopPropagation()
+        onSelect?.()
+      }}
+    >
+      <span
+        className={cn(
+          "liquid-icon project-settings-menu__icon flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/72 text-muted-foreground ring-1 ring-black/5 dark:bg-white/10 dark:ring-white/10",
+          destructive && "text-rose-500",
+        )}
+      >
+        <Icon className="h-3.5 w-3.5" />
+      </span>
+      <span className="liquid-label min-w-0 flex-1 truncate">{label}</span>
+    </DropdownMenuItem>
   )
 }
 
