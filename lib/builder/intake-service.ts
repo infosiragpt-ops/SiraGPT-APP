@@ -181,12 +181,21 @@ export const intakeService = {
    * (incl. a live index.html). Powers the /code "Construir app" button so the
    * build + preview flow works even when the chat model is unavailable.
    */
-  async generate(prompt: string): Promise<GenerateResult> {
+  async generate(prompt: string, signal?: AbortSignal): Promise<GenerateResult> {
+    // Bound the build: an unresponsive backend must NOT leave the caller's
+    // `buildingApp` latch wedged forever (the chat composer would then silently
+    // park every later message). A hard timeout aborts the fetch so buildApp's
+    // catch fires and releases the latch; a caller signal (e.g. a session
+    // switch) can also cancel an in-flight build.
+    const timeout = AbortSignal.timeout(120_000)
+    const anyOf = (AbortSignal as unknown as { any?: (s: AbortSignal[]) => AbortSignal }).any
+    const composite = signal && typeof anyOf === "function" ? anyOf([signal, timeout]) : timeout
     const res = await fetch(`${baseUrl}/generate`, {
       method: "POST",
       credentials: "include",
       headers: authHeaders(),
       body: JSON.stringify({ prompt }),
+      signal: composite,
     })
     return handle<GenerateResult>(res)
   },

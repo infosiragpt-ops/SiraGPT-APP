@@ -814,6 +814,13 @@ export function AICodeChatPanel() {
     setBusy(false)
     abortRef.current?.abort()
     abortRef.current = null
+    // Also clear the BUILD latch and any parked/repair state on a session
+    // switch — otherwise an in-flight build (buildingApp) from the previous
+    // session keeps the composer wedged and would drain a parked message into
+    // the wrong chat.
+    setBuildingApp(false)
+    pendingInputRef.current = null
+    repairInFlightRef.current = false
   }, [sessionId])
 
   React.useEffect(() => {
@@ -2105,6 +2112,17 @@ export function AICodeChatPanel() {
     }, 30_000)
     return () => window.clearTimeout(t)
   }, [busy])
+
+  // Stale-build watchdog: buildApp awaits a builder fetch that is now time-bound
+  // (intakeService.generate aborts at 120s), but a wedged buildingApp would still
+  // block the composer. As a backstop, recover the latch if it stays set past a
+  // generous ceiling — a real build (local scaffold or bounded fetch) always
+  // settles well within it.
+  React.useEffect(() => {
+    if (!buildingApp) return
+    const t = window.setTimeout(() => setBuildingApp(false), 150_000)
+    return () => window.clearTimeout(t)
+  }, [buildingApp])
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault()
