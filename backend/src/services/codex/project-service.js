@@ -9,7 +9,7 @@
 const defaultPrisma = (() => {
   try { return require('../../config/database'); } catch { return null; }
 })();
-const { createRunnerClient, runnerDevUrl } = require('./runner-client');
+const { createRunnerClient } = require('./runner-client');
 const { provisionWorkspace } = require('./workspace');
 const { classifyText } = require('./error-patterns');
 
@@ -52,7 +52,10 @@ async function createProject({ userId, name, brief = null, runner, db = defaultP
     const { workspacePath } = await provisionWorkspace({ project: row.id, projectName: name, runner: runnerClient });
     const ready = await prisma.codexProject.update({
       where: { id: row.id },
-      data: { status: 'ready', workspacePath, previewUrl: runnerDevUrl(env) },
+      // The browser must never receive the runner's private localhost URL in
+      // production. Preview URLs are minted per session by /preview/start via
+      // the same-origin tokenized proxy.
+      data: { status: 'ready', workspacePath, previewUrl: null },
     });
     return publicProject(ready);
   } catch (err) {

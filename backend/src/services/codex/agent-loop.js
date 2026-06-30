@@ -32,6 +32,138 @@ function readPosInt(raw, fallback) {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+function isAppsPrompt(text) {
+  return /MODO APPS TIPO CODEX/i.test(String(text || ''));
+}
+
+function explicitlyRequestsNext(text) {
+  const source = String(text || '').split(/SOLICITUD DEL USUARIO:/i).pop() || '';
+  return /\bnext(?:\.js|js)?\b/i.test(source);
+}
+
+function userRequestFromPrompt(text) {
+  const source = String(text || '');
+  const parts = source.split(/SOLICITUD DEL USUARIO:/i);
+  return (parts.length > 1 ? parts.pop() : source).trim();
+}
+
+function titleFromRequest(text, fallback = 'App generada') {
+  const raw = userRequestFromPrompt(text)
+    .replace(/\s+/g, ' ')
+    .replace(/^(crea|crear|construye|construir|haz|hacer|genera|generar)\s+(una?|el|la)?\s*/i, '')
+    .replace(/^(web|landing|pagina|página|app)\s+(de|para)?\s*/i, '')
+    .trim();
+  if (!raw) return fallback;
+  const short = raw.slice(0, 54).replace(/[.,;:!?]+$/g, '').trim();
+  return short.charAt(0).toUpperCase() + short.slice(1);
+}
+
+function appsFallbackFiles({ prompt, projectName }) {
+  const title = titleFromRequest(prompt, projectName || 'App generada');
+  const escapedTitle = title
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;');
+  const pkg = {
+    name: 'siragpt-apps-vite-preview',
+    private: true,
+    version: '0.0.1',
+    type: 'module',
+    scripts: { dev: 'vite', build: 'vite build', preview: 'vite preview' },
+    dependencies: {},
+    devDependencies: { vite: '^7.0.0' },
+  };
+  const indexHtml = `<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${escapedTitle} · SiraGPT Apps</title>
+    <style>
+      :root { color-scheme: light; --accent: #ff0000; --ink: #111113; --muted: #666a73; --line: #e9e9ec; }
+      * { box-sizing: border-box; }
+      body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--ink); background: #f7f7f8; }
+      .shell { min-height: 100vh; background: radial-gradient(circle at top left, rgba(255,0,0,.08), transparent 30%), #fff; }
+      header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 18px clamp(20px, 5vw, 72px); border-bottom: 1px solid var(--line); background: rgba(255,255,255,.86); backdrop-filter: blur(12px); position: sticky; top: 0; z-index: 3; }
+      .brand { display: inline-flex; align-items: center; gap: .7rem; font-weight: 800; letter-spacing: 0; }
+      .mark { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 8px; background: var(--accent); color: white; font-weight: 900; }
+      nav { display: flex; gap: 1rem; color: var(--muted); font-size: .92rem; }
+      main { padding: clamp(38px, 7vw, 88px) clamp(20px, 5vw, 72px); }
+      .hero { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(280px, .95fr); gap: clamp(28px, 5vw, 72px); align-items: center; max-width: 1180px; margin: 0 auto; }
+      .eyebrow { display: inline-flex; align-items: center; gap: .45rem; border: 1px solid rgba(255,0,0,.22); color: var(--accent); border-radius: 999px; padding: 7px 11px; font-size: .78rem; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; background: rgba(255,0,0,.04); }
+      h1 { margin: 18px 0 14px; font-size: clamp(2.4rem, 6vw, 5.4rem); line-height: .94; letter-spacing: 0; max-width: 760px; }
+      p { color: var(--muted); font-size: clamp(1rem, 2vw, 1.22rem); line-height: 1.65; margin: 0; max-width: 650px; }
+      .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 30px; }
+      .btn { appearance: none; border: 1px solid var(--line); border-radius: 8px; padding: 13px 18px; font-weight: 800; background: white; color: var(--ink); text-decoration: none; }
+      .btn.primary { border-color: var(--accent); background: var(--accent); color: #fff; box-shadow: 0 16px 38px rgba(255,0,0,.22); }
+      .panel { border: 1px solid var(--line); border-radius: 8px; background: #111113; color: white; padding: 22px; box-shadow: 0 22px 80px rgba(17,17,19,.18); }
+      .panel-top { display: flex; align-items: center; justify-content: space-between; color: #b7bac2; font-size: .85rem; margin-bottom: 18px; }
+      .metric { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 18px; }
+      .metric div { border: 1px solid rgba(255,255,255,.12); border-radius: 8px; padding: 14px; }
+      .metric strong { display: block; font-size: 1.35rem; color: white; }
+      .cars { max-width: 1180px; margin: clamp(46px, 8vw, 88px) auto 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+      .card { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: white; }
+      .photo { height: 170px; background: linear-gradient(135deg, #1d1d22, #4c4d55); position: relative; }
+      .photo:after { content: ""; position: absolute; left: 11%; right: 11%; bottom: 26%; height: 34%; border-radius: 999px 999px 12px 12px; background: var(--accent); box-shadow: 0 18px 32px rgba(0,0,0,.22); }
+      .card-body { padding: 18px; }
+      .card h2 { margin: 0 0 8px; font-size: 1.08rem; }
+      .price { color: var(--accent); font-weight: 900; margin-top: 12px; }
+      footer { max-width: 1180px; margin: 56px auto 0; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: .9rem; }
+      @media (max-width: 820px) {
+        nav { display: none; }
+        .hero, .cars { grid-template-columns: 1fr; }
+        .metric { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <header>
+        <div class="brand"><span class="mark">S</span><span>${escapedTitle}</span></div>
+        <nav><a>Inicio</a><a>Catalogo</a><a>Contacto</a></nav>
+      </header>
+      <main>
+        <section class="hero">
+          <div>
+            <span class="eyebrow">SiraGPT Apps · Preview listo</span>
+            <h1>${escapedTitle}</h1>
+            <p>Una experiencia web minimalista, rapida y enfocada en conversion. Catalogo claro, propuesta directa y contacto visible desde el primer vistazo.</p>
+            <div class="actions">
+              <a class="btn primary" href="#contacto">Contactar ahora</a>
+              <a class="btn" href="#catalogo">Ver catalogo</a>
+            </div>
+          </div>
+          <aside class="panel" aria-label="Resumen">
+            <div class="panel-top"><span>Preview en vivo</span><span>Vite</span></div>
+            <p style="color:#d7d9de">Este proyecto fue generado desde el chat de APPS y esta listo para iterar con nuevas instrucciones.</p>
+            <div class="metric">
+              <div><strong>3</strong><span>Opciones destacadas</span></div>
+              <div><strong>24h</strong><span>Respuesta comercial</span></div>
+              <div><strong>#FF0000</strong><span>Acento visual</span></div>
+            </div>
+          </aside>
+        </section>
+        <section id="catalogo" class="cars">
+          <article class="card"><div class="photo"></div><div class="card-body"><h2>Sedan Ejecutivo</h2><p>Confort, seguridad y eficiencia para uso diario.</p><div class="price">Desde $18,900</div></div></article>
+          <article class="card"><div class="photo"></div><div class="card-body"><h2>SUV Familiar</h2><p>Espacio, tecnologia y potencia para cada ruta.</p><div class="price">Desde $27,500</div></div></article>
+          <article class="card"><div class="photo"></div><div class="card-body"><h2>Deportivo Premium</h2><p>Diseno agresivo y respuesta inmediata al volante.</p><div class="price">Desde $42,000</div></div></article>
+        </section>
+        <footer id="contacto">Contacto comercial: ventas@siragpt.com · Respuesta rapida por WhatsApp.</footer>
+      </main>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
+`;
+  return [
+    { path: 'package.json', content: `${JSON.stringify(pkg, null, 2)}\n` },
+    { path: 'index.html', content: indexHtml },
+    { path: 'src/main.js', content: 'document.querySelectorAll("a[href^=\\"#\\"]").forEach((link) => link.addEventListener("click", (event) => { const target = document.querySelector(link.getAttribute("href")); if (target) { event.preventDefault(); target.scrollIntoView({ behavior: "smooth", block: "start" }); } }));\n' },
+    { path: '.gitignore', content: 'node_modules\ndist\n' },
+  ];
+}
+
 /** Default web_search adapter — lazy require so tests never pull it in. */
 async function defaultWebSearch(query) {
   try {
@@ -42,7 +174,9 @@ async function defaultWebSearch(query) {
   }
 }
 
-function buildSystemPrompt({ project, plan, fileTree }) {
+function buildSystemPrompt({ project, plan, fileTree, sourcePrompt }) {
+  const appsMode = isAppsPrompt(sourcePrompt);
+  const forceViteApps = appsMode && !explicitlyRequestsNext(sourcePrompt);
   const lines = [
     'Eres un agente de software senior trabajando dentro de un workspace aislado.',
     'Narras en PRIMERA PERSONA y en ESPAÑOL lo que vas haciendo, de forma breve y concreta.',
@@ -54,6 +188,10 @@ function buildSystemPrompt({ project, plan, fileTree }) {
     'Nunca dependas de prompts interactivos de terminal; los comandos deben terminar solos.',
     `Proyecto: ${project?.name || 'Codex'}.`,
   ];
+  if (forceViteApps) {
+    lines.push('Este run viene de /apps. Stack obligatorio para esta solicitud: Vite SPA usando index.html + src/main.js. Ignora cualquier plan que mencione Next.js, TypeScript o Tailwind si el usuario no lo pidió explícitamente.');
+    lines.push('No cambies package.json a Next.js. El resultado debe abrir en el preview como /index.html y verse de inmediato.');
+  }
   if (plan) {
     lines.push('Plan aprobado por el usuario (síguelo):');
     lines.push(JSON.stringify(plan));
@@ -105,7 +243,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   const plan = deps.plan || (await loadApprovedPlan({ run, eventStore, prisma }));
   const fileTree = deps.fileTree != null ? deps.fileTree : await safeFileTree(runner, projectId);
   const messages = [
-    { role: 'system', content: buildSystemPrompt({ project, plan, fileTree }) },
+    { role: 'system', content: buildSystemPrompt({ project, plan, fileTree, sourcePrompt: run.prompt }) },
     { role: 'user', content: run.prompt || 'Construye el proyecto según el plan aprobado.' },
   ];
 
@@ -225,6 +363,65 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   return { status: 'done' };
 }
 
+async function readRunnerFile(runner, projectId, path) {
+  try {
+    const out = await runner.readFile(projectId, path);
+    return String(out?.content || '');
+  } catch {
+    return '';
+  }
+}
+
+function packageLooksLikeNext(pkgText) {
+  try {
+    const pkg = JSON.parse(pkgText || '{}');
+    const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+    return Boolean(deps.next || /next\s+dev/i.test(String(pkg.scripts?.dev || '')));
+  } catch {
+    return false;
+  }
+}
+
+function packageLooksLikeVite(pkgText) {
+  try {
+    const pkg = JSON.parse(pkgText || '{}');
+    const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+    return Boolean(deps.vite || /vite/i.test(String(pkg.scripts?.dev || '')));
+  } catch {
+    return false;
+  }
+}
+
+function isStarterIndex(indexText, mainText) {
+  return /Workspace listo|codex workspace ready/i.test(`${indexText}\n${mainText}`);
+}
+
+async function ensureAppsVitePreviewable({ run, project, runner, eventStore, prisma }) {
+  if (!isAppsPrompt(run?.prompt) || explicitlyRequestsNext(run?.prompt)) return { repaired: false };
+  const projectId = project?.id || run.projectId;
+  const [pkgText, indexText, mainText] = await Promise.all([
+    readRunnerFile(runner, projectId, 'package.json'),
+    readRunnerFile(runner, projectId, 'index.html'),
+    readRunnerFile(runner, projectId, 'src/main.js'),
+  ]);
+  const needsRepair =
+    packageLooksLikeNext(pkgText) ||
+    !packageLooksLikeVite(pkgText) ||
+    !/<script[^>]+type=["']module["'][^>]+src=["']\/src\/main\.js["']/i.test(indexText) ||
+    isStarterIndex(indexText, mainText);
+  if (!needsRepair) return { repaired: false };
+
+  const files = appsFallbackFiles({ prompt: run.prompt, projectName: project?.name || 'App generada' });
+  await runner.writeFiles(projectId, files);
+  await eventStore.appendEvent(
+    run.id,
+    'narrative_delta',
+    { text: 'Normalicé el workspace de APPS a Vite para que el preview abra en /index.html sin depender de scaffolds incompletos.' },
+    { prisma },
+  ).catch(() => {});
+  return { repaired: true };
+}
+
 /**
  * Build close (feature 07 + 08): create the git checkpoint for the changes this
  * run produced (no checkpoint when the tree is clean), then finalize metrics +
@@ -232,6 +429,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
  * failure must not turn a successful build into an error.
  */
 async function closeBuild({ run, project, runner, eventStore, prisma, llmTurn, clock, env, metrics }) {
+  await ensureAppsVitePreviewable({ run, project, runner, eventStore, prisma });
   let checkpoint = null;
   try {
     checkpoint = await checkpointService.createCheckpoint({ run, project, deps: { runner, eventStore, prisma, llmTurn, clock, env } });

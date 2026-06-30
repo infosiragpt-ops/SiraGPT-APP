@@ -4,6 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const { runAgentLoop } = require('../src/services/codex/agent-loop');
+const { buildPlanMessages } = require('../src/services/codex/plan-mode');
 
 // Scripted llmTurn: shift the next response off a queue.
 function scriptedLlm(turns) {
@@ -78,6 +79,93 @@ test('build prompt tells the model to edit the starter instead of scaffolding', 
   assert.match(systemPrompt, /NO inicialices frameworks/i);
   assert.match(systemPrompt, /write_file\/edit_file/i);
   assert.match(systemPrompt, /Nunca dependas de prompts interactivos/i);
+});
+
+test('apps build prompt overrides a non-explicit Next.js plan back to Vite', async () => {
+  let systemPrompt = '';
+  const f = fakeDeps({
+    plan: { architecture: 'Next.js 14 + TypeScript', pages: ['/'], components: ['Hero'], tasks: [] },
+    llmTurn: async ({ messages }) => {
+      systemPrompt = messages.find((m) => m.role === 'system')?.content || '';
+      return { text: 'Listo.', toolCalls: [] };
+    },
+  });
+  const prompt = [
+    'MODO APPS TIPO CODEX:',
+    '- Construye y entrega preview.',
+    '',
+    'SOLICITUD DEL USUARIO:',
+    'crea una web de venta de autos',
+  ].join('\n');
+  const res = await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt }, project: { id: 'p1', name: 'Autos' }, deps: f.deps });
+  assert.equal(res.status, 'done');
+  assert.match(systemPrompt, /Stack obligatorio.*Vite SPA/i);
+  assert.match(systemPrompt, /Ignora cualquier plan que mencione Next\.js/i);
+});
+
+test('apps build close repairs an incomplete Next.js workspace into a Vite preview', async () => {
+  const writes = [];
+  const files = new Map([
+    ['package.json', JSON.stringify({ scripts: { dev: 'next dev' }, dependencies: { next: '^16.0.0' } })],
+    ['index.html', '<h1><span class="dot"></span>Workspace listo</h1><script type="module" src="/src/main.js"></script>'],
+    ['src/main.js', 'console.log("codex workspace ready");\n'],
+  ]);
+  const f = fakeDeps({
+    runner: {
+      exec: async (_p, cmd) => {
+        if (cmd[0] === 'git' && cmd[1] === 'status') return { exitCode: 0, stdout: ' M package.json\n M index.html\n M src/main.js\n', stderr: '' };
+        if (cmd[0] === 'git' && cmd[1] === 'add') return { exitCode: 0, stdout: '', stderr: '' };
+        if (cmd[0] === 'git' && cmd.includes('commit')) return { exitCode: 0, stdout: '[main abc] ok\n', stderr: '' };
+        if (cmd[0] === 'git' && cmd[1] === 'rev-parse') return { exitCode: 0, stdout: 'abcdef1234567890\n', stderr: '' };
+        if (cmd[0] === 'git' && cmd[1] === 'diff') return { exitCode: 0, stdout: '', stderr: '' };
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+      readFile: async (_p, path) => ({ content: files.get(path) || '' }),
+      writeFiles: async (_p, nextFiles) => {
+        writes.push(...nextFiles);
+        for (const file of nextFiles) files.set(file.path, file.content);
+        return { ok: true };
+      },
+    },
+    llmTurn: scriptedLlm([
+      { text: 'Ya esta listo.', toolCalls: [] },
+    ]),
+    prisma: {
+      user: { findUnique: async () => ({ plan: 'PRO' }) },
+      codexCheckpoint: { create: async () => ({ id: 'cp1', commitSha: 'abcdef1234567890', createdAt: new Date() }) },
+      codexRunMetric: { upsert: async () => ({}) },
+    },
+  });
+  const prompt = [
+    'MODO APPS TIPO CODEX:',
+    '- Construye y entrega preview.',
+    '',
+    'SOLICITUD DEL USUARIO:',
+    'crea una web de venta de autos',
+  ].join('\n');
+  const res = await runAgentLoop({ run: { id: 'r1', userId: 'u1', mode: 'build', prompt }, project: { id: 'p1', name: 'Autos' }, deps: f.deps });
+  assert.equal(res.status, 'done');
+  const packageWrite = writes.find((w) => w.path === 'package.json');
+  assert.ok(packageWrite);
+  assert.match(packageWrite.content, /"vite"/);
+  assert.doesNotMatch(packageWrite.content, /"next"/);
+  const indexWrite = writes.find((w) => w.path === 'index.html');
+  assert.match(indexWrite.content, /venta de autos/i);
+  assert.ok(f.events.some((e) => e.type === 'narrative_delta' && /Normalicé el workspace de APPS/.test(e.data.text)));
+});
+
+test('apps planning prompt defaults simple apps to Vite index.html', () => {
+  const prompt = [
+    'MODO APPS TIPO CODEX:',
+    '- Construye y entrega preview.',
+    '',
+    'SOLICITUD DEL USUARIO:',
+    'crea una web de venta de autos',
+  ].join('\n');
+  const { system } = buildPlanMessages({ project: { name: 'Autos' }, prompt });
+  assert.match(system, /Vite SPA/i);
+  assert.match(system, /index\.html \+ src\/main\.js/i);
+  assert.match(system, /No propongas Next\.js/i);
 });
 
 test('a tool error does NOT abort the loop; the error is fed back to the model', async () => {

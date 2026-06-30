@@ -45,7 +45,7 @@ test('createProject provisions and returns a ready public projection', async () 
   const project = await createProject({ userId: 'u1', name: 'Tienda', runner: okRunner(), db, env: {} });
   assert.equal(project.status, 'ready');
   assert.equal(project.workspacePath, 'projects/p1');
-  assert.equal(project.previewUrl, 'http://localhost:5173');
+  assert.equal(project.previewUrl, null);
   assert.equal(project.userId, undefined); // proyección pública: sin userId
 });
 

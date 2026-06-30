@@ -15,9 +15,13 @@
 const { extractJson } = require('../builder/llm');
 
 function buildPlanMessages({ project, prompt, fileTree, priorPlan, feedback } = {}) {
+  const appsMode = /MODO APPS TIPO CODEX/i.test(String(prompt || ''));
   const system = [
     'Eres un agente de software senior que planifica proyectos web en español.',
     'Tu tarea es producir un PLAN APROBABLE, no escribir código todavía.',
+    appsMode
+      ? 'Este plan viene de /apps: para landings, páginas de venta, demos y apps simples usa SIEMPRE Vite SPA sobre el starter existente (index.html + src/main.js). No propongas Next.js, TypeScript, Tailwind ni scaffolds salvo que el usuario los pida explícitamente.'
+      : null,
     'Responde ÚNICAMENTE con un objeto JSON válido (sin prosa, sin fences) con esta forma exacta:',
     '{',
     '  "architecture": "string — descripción breve de la arquitectura y stack",',
@@ -25,8 +29,11 @@ function buildPlanMessages({ project, prompt, fileTree, priorPlan, feedback } = 
     '  "components": ["string — componentes reutilizables clave"],',
     '  "tasks": [{ "id": "string", "title": "string", "status": "pending" }]',
     '}',
+    appsMode
+      ? 'En /apps la arquitectura debe ser algo como "Vite SPA en index.html y src/main.js con CSS propio", para que el preview renderice de inmediato en /index.html.'
+      : null,
     'Sé concreto y conciso. 3–8 tareas accionables ordenadas.',
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 
   const parts = [`Proyecto: ${project?.name || 'Sin nombre'}`];
   if (fileTree) parts.push(`Árbol de archivos actual:\n${fileTree}`);
