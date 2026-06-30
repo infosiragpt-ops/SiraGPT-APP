@@ -84,6 +84,7 @@ const state = {
   framework: null,
   project: null,
   port: DEV_PORT,
+  basePath: null,
   error: null,
   log: [],
 };
@@ -135,7 +136,14 @@ function pipe(stream, prefix) {
   })();
 }
 
-async function startDev(projectId = null) {
+function safeBasePath(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  if (!raw.startsWith("/") || raw.includes("\0") || raw.includes("..")) return null;
+  return raw.endsWith("/") ? raw : `${raw}/`;
+}
+
+async function startDev(projectId = null, basePath = null) {
   if (devProc) {
     try { devProc.kill(); } catch { /* already gone */ }
     devProc = null;
@@ -147,6 +155,7 @@ async function startDev(projectId = null) {
 
   const cwd = projectId ? projectDirOf(projectId) : WORKDIR;
   state.project = projectId;
+  state.basePath = safeBasePath(basePath);
 
   const pkg = await readJson(`${cwd}/package.json`);
   if (!pkg) {
@@ -178,10 +187,12 @@ async function startDev(projectId = null) {
     cmd = ["bunx", "next", "dev", "-H", "0.0.0.0", "-p", String(DEV_PORT)];
   } else if (deps.vite || (hasDevScript && /vite/.test(pkg.scripts.dev || ""))) {
     cmd = ["bunx", "vite", "--host", "0.0.0.0", "--port", String(DEV_PORT)];
+    if (state.basePath) cmd.push("--base", state.basePath);
   } else if (hasDevScript) {
     cmd = ["bun", "run", "dev"];
   } else {
     cmd = ["bunx", "vite", "--host", "0.0.0.0", "--port", String(DEV_PORT)];
+    if (state.basePath) cmd.push("--base", state.basePath);
   }
   pushLog(`$ ${cmd.join(" ")}`);
   devProc = Bun.spawn(cmd, {
@@ -313,7 +324,7 @@ Bun.serve({
       if (body && body.project && !id) {
         return Response.json({ ok: false, error: "invalid_project" }, { status: 400 });
       }
-      startDev(id).catch((e) => {
+      startDev(id, body && body.basePath).catch((e) => {
         state.error = String(e && e.message ? e.message : e);
         state.running = false;
       });

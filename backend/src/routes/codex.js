@@ -22,9 +22,13 @@
  */
 
 const express = require('express');
+const http = require('http');
+const https = require('https');
+const crypto = require('crypto');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const { isCodexV2Enabled } = require('../services/codex/flags');
+const { canUseCodexAgent, publicAccess } = require('../services/codex/access-control');
 const projectService = require('../services/codex/project-service');
 const { createRunnerClient, runnerDevUrl, codexExportHostPath } = require('../services/codex/runner-client');
 const eventStore = require('../services/codex/event-store');
@@ -32,8 +36,68 @@ const runAccess = require('../services/codex/run-access');
 const pubsub = require('../services/codex/redis-pubsub');
 const runService = require('../services/codex/run-service');
 const checkpointService = require('../services/codex/checkpoint-service');
+const {
+  STRIP_REQUEST_HEADERS,
+  HOP_BY_HOP_HEADERS,
+} = require('../utils/proxy-headers');
 
 const router = express.Router();
+
+function base64urlJson(value) {
+  return Buffer.from(JSON.stringify(value)).toString('base64url');
+}
+
+function signPreviewPayload(payload, env = process.env) {
+  const secret = env.CODEX_PREVIEW_TOKEN_SECRET || env.JWT_SECRET || env.SESSION_SECRET || 'codex-preview-dev-secret';
+  const body = base64urlJson(payload);
+  const sig = crypto.createHmac('sha256', secret).update(body).digest('base64url');
+  return `${body}.${sig}`;
+}
+
+function verifyPreviewToken(token, env = process.env) {
+  const [body, sig] = String(token || '').split('.');
+  if (!body || !sig) return null;
+  const secret = env.CODEX_PREVIEW_TOKEN_SECRET || env.JWT_SECRET || env.SESSION_SECRET || 'codex-preview-dev-secret';
+  const expected = crypto.createHmac('sha256', secret).update(body).digest('base64url');
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    if (!payload || typeof payload !== 'object') return null;
+    if (payload.exp && Date.now() > Number(payload.exp)) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+function previewTokenFor({ projectId, userId }, env = process.env) {
+  return signPreviewPayload({
+    projectId,
+    userId,
+    exp: Date.now() + (Number(env.CODEX_PREVIEW_TOKEN_TTL_MS) || 6 * 60 * 60 * 1000),
+  }, env);
+}
+
+function codexPreviewBasePath(projectId, token) {
+  return `/api/codex/projects/${encodeURIComponent(projectId)}/preview/${encodeURIComponent(token)}/app/`;
+}
+
+function codexPreviewInternalUrl(env = process.env) {
+  return String(env.CODE_RUNNER_DEV_INTERNAL_URL || env.CODE_RUNNER_DEV_URL || runnerDevUrl(env)).replace(/\/+$/, '');
+}
+
+function requireCodexAgentAccess(req, res, next) {
+  if (canUseCodexAgent(req.user, process.env)) return next();
+  return res.status(403).json({ error: 'codex_forbidden', message: 'Tu cuenta no puede ejecutar APPS en producción.' });
+}
+
+function applyPreviewFrameHeaders(_req, res, next) {
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");
+  next();
+}
 
 // EventSource can't set headers, so allow a ?token= fallback for the SSE route
 // (header still wins). Same shape as the goals SSE route.
@@ -63,6 +127,11 @@ router.get('/health', (_req, res) => {
   res.end(body);
 });
 
+router.get('/access', authenticateToken, (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ ok: true, enabled: isCodexV2Enabled(), ...publicAccess(req.user, process.env) });
+});
+
 router.use((req, res, next) => {
   if (!isCodexV2Enabled()) return res.status(404).json({ error: 'not_found' });
   next();
@@ -71,6 +140,7 @@ router.use((req, res, next) => {
 router.post(
   '/projects',
   authenticateToken,
+  requireCodexAgentAccess,
   [body('name').isString().withMessage('name must be a string').bail().trim().isLength({ min: 1, max: 80 })],
   async (req, res) => {
     const errors = validationResult(req);
@@ -118,16 +188,21 @@ async function loadOwnedProject(req, res) {
 
 router.post('/projects/:id/preview/start', authenticateToken, async (req, res) => {
   try {
+    if (!canUseCodexAgent(req.user, process.env)) {
+      return res.status(403).json({ error: 'codex_forbidden', message: 'Tu cuenta no puede ejecutar APPS en producción.' });
+    }
     const project = await loadOwnedProject(req, res);
     if (!project) return undefined;
-    const out = await createRunnerClient().startDev(project.id);
-    return res.json({ ...out, devUrl: runnerDevUrl() });
+    const token = previewTokenFor({ projectId: project.id, userId: req.user.id });
+    const basePath = codexPreviewBasePath(project.id, token);
+    const out = await createRunnerClient().startDev(project.id, { basePath });
+    return res.json({ ...out, devUrl: basePath, previewUrl: basePath, basePath });
   } catch (err) {
     return res.status(502).json({ error: 'runner_unreachable', message: err.message });
   }
 });
 
-router.get('/projects/:id/preview/status', authenticateToken, async (req, res) => {
+router.get('/projects/:id/preview/status', authenticateToken, requireCodexAgentAccess, async (req, res) => {
   try {
     const project = await loadOwnedProject(req, res);
     if (!project) return undefined;
@@ -138,7 +213,7 @@ router.get('/projects/:id/preview/status', authenticateToken, async (req, res) =
   }
 });
 
-router.post('/projects/:id/preview/stop', authenticateToken, async (req, res) => {
+router.post('/projects/:id/preview/stop', authenticateToken, requireCodexAgentAccess, async (req, res) => {
   try {
     const project = await loadOwnedProject(req, res);
     if (!project) return undefined;
@@ -153,7 +228,7 @@ router.post('/projects/:id/preview/stop', authenticateToken, async (req, res) =>
 // host-bind-mounted EXPORT_DIR so it shows up in a real folder on the user's
 // machine. Also fired best-effort after each checkpoint; this route lets the
 // user force a fresh mirror and learn the host path.
-router.post('/projects/:id/export', authenticateToken, async (req, res) => {
+router.post('/projects/:id/export', authenticateToken, requireCodexAgentAccess, async (req, res) => {
   try {
     const project = await loadOwnedProject(req, res);
     if (!project) return undefined;
@@ -162,6 +237,63 @@ router.post('/projects/:id/export', authenticateToken, async (req, res) => {
   } catch (err) {
     return res.status(502).json({ error: 'runner_unreachable', message: err.message });
   }
+});
+
+router.use('/projects/:id/preview/:token/app', applyPreviewFrameHeaders, (req, res) => {
+  const payload = verifyPreviewToken(req.params.token);
+  if (!payload || payload.projectId !== req.params.id) return res.status(403).json({ error: 'forbidden' });
+
+  let upstreamBase;
+  try {
+    upstreamBase = new URL(codexPreviewInternalUrl());
+  } catch {
+    return res.status(502).json({ error: 'runner_unreachable', message: 'Preview interno no configurado.' });
+  }
+
+  const fwdHeaders = {};
+  for (const [k, v] of Object.entries(req.headers)) {
+    const lk = k.toLowerCase();
+    if (STRIP_REQUEST_HEADERS.has(lk) || HOP_BY_HOP_HEADERS.has(lk)) continue;
+    if (lk === 'host' || lk === 'content-length') continue;
+    fwdHeaders[k] = v;
+  }
+  fwdHeaders.host = upstreamBase.host;
+
+  const transport = upstreamBase.protocol === 'https:' ? https : http;
+  const upstream = transport.request(
+    {
+      protocol: upstreamBase.protocol,
+      hostname: upstreamBase.hostname,
+      port: upstreamBase.port || (upstreamBase.protocol === 'https:' ? 443 : 80),
+      method: req.method,
+      path: req.originalUrl || req.url || '/',
+      headers: fwdHeaders,
+    },
+    (up) => {
+      const headers = {};
+      for (const [k, v] of Object.entries(up.headers)) {
+        const lk = k.toLowerCase();
+        if (lk === 'set-cookie' || HOP_BY_HOP_HEADERS.has(lk)) continue;
+        if (lk === 'content-security-policy' || lk === 'x-frame-options') continue;
+        if (lk.startsWith('access-control-')) continue;
+        headers[k] = v;
+      }
+      headers['cache-control'] = 'no-store';
+      headers['x-frame-options'] = 'SAMEORIGIN';
+      headers['content-security-policy'] = "frame-ancestors 'self'";
+      headers['referrer-policy'] = 'no-referrer';
+      res.writeHead(up.statusCode || 502, headers);
+      up.pipe(res);
+    },
+  );
+  upstream.on('error', () => {
+    if (!res.headersSent) res.status(502).json({ error: 'runner_unreachable', message: 'El preview no respondió.' });
+    else {
+      try { res.end(); } catch (_) { /* already closed */ }
+    }
+  });
+  if (req.method === 'GET' || req.method === 'HEAD') upstream.end();
+  else req.pipe(upstream);
 });
 
 // ── Workspace files (desktop "Código" pane) ─────────────────────────────────
@@ -212,6 +344,7 @@ function mapRunError(err, res) {
 router.post(
   '/projects/:projectId/runs',
   authenticateToken,
+  requireCodexAgentAccess,
   [
     body('mode').isString().bail().isIn(['plan', 'build']).withMessage('mode must be plan or build'),
     body('prompt').optional({ nullable: true }).isString().isLength({ max: 20000 }),
@@ -258,7 +391,7 @@ router.get('/projects/:projectId/runs/:runId', authenticateToken, async (req, re
   }
 });
 
-router.post('/runs/:id/cancel', authenticateToken, async (req, res) => {
+router.post('/runs/:id/cancel', authenticateToken, requireCodexAgentAccess, async (req, res) => {
   try {
     const run = await runService.cancelRun({ userId: req.user.id, runId: req.params.id });
     return res.json({ run });

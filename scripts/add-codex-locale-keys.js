@@ -142,7 +142,14 @@ const ES = {
     "webUnavailable": "El preview aún no está disponible. Arráncalo desde un checkpoint o el botón Ejecutar.",
     "openInTab": "Abrir en pestaña nueva",
     "checklistEmpty": "Aún no hay un plan aprobado con tareas.",
-    "defaultProjectName": "Proyecto {n}"
+    "defaultProjectName": "Proyecto {n}",
+    "defaultAppName": "Nueva app {n}",
+    "appsTitle": "APPS",
+    "newApp": "Nueva app",
+    "disabledTitle": "APPS aún no está activo",
+    "disabledBody": "El motor Codex V2 está apagado en este entorno. Activa CODEX_AGENT_V2 para construir apps con chat, runs y preview real.",
+    "forbiddenTitle": "Acceso restringido",
+    "forbiddenBody": "Tu cuenta no está autorizada para ejecutar APPS en producción. Pide acceso de admin o agrega tu usuario al allowlist."
   }
 };
 
@@ -267,7 +274,14 @@ const EN = {
     "webUnavailable": "The preview is not available yet. Start it from a checkpoint or the Run button.",
     "openInTab": "Open in new tab",
     "checklistEmpty": "No approved plan with tasks yet.",
-    "defaultProjectName": "Project {n}"
+    "defaultProjectName": "Project {n}",
+    "defaultAppName": "New app {n}",
+    "appsTitle": "APPS",
+    "newApp": "New app",
+    "disabledTitle": "APPS is not active yet",
+    "disabledBody": "The Codex V2 engine is off in this environment. Enable CODEX_AGENT_V2 to build apps with chat, runs, and real preview.",
+    "forbiddenTitle": "Restricted access",
+    "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist."
   }
 };
 

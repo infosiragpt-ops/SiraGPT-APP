@@ -25,6 +25,15 @@ describe('Composer', () => {
     expect(onSend.mock.calls[0][0].planOnly).toBe(false)
   })
 
+  it('renders the Plan toggle when enabled and sends planOnly true', () => {
+    const onSend = vi.fn()
+    render(<Composer onSend={onSend} showPlanToggle />)
+    type('solo planifica')
+    fireEvent.click(screen.getByText('Plan'))
+    fireEvent.click(screen.getByLabelText('Enviar'))
+    expect(onSend.mock.calls[0][0]).toMatchObject({ prompt: 'solo planifica', planOnly: true })
+  })
+
   it('the selected Power tier travels in the payload', () => {
     const onSend = vi.fn()
     render(<Composer onSend={onSend} />)

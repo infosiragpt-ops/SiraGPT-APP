@@ -67,7 +67,7 @@ function createRunnerClient({ fetchImpl = fetch, baseUrl = runnerBaseUrl(), time
     readFile: (project, path) =>
       call('GET', `/workspace/file?project=${encodeURIComponent(project)}&path=${encodeURIComponent(path)}`),
     exec: (project, cmd, opts = {}) => call('POST', '/workspace/exec', { project, cmd, timeoutMs: opts.timeoutMs }),
-    startDev: (project) => call('POST', '/run', { project }),
+    startDev: (project, opts = {}) => call('POST', '/run', { project, basePath: opts.basePath || null }),
     devStatus: () => call('GET', '/status'),
     stopDev: () => call('POST', '/stop'),
     exportWorkspace: (project) => call('POST', '/workspace/export', { project }),

@@ -6,13 +6,15 @@
 // summary/action-required cards, feature 12 the replica composer, feature 13
 // the mobile tab bar. Minimal here so the timeline is exercisable end-to-end.
 
-import React, { useEffect, useMemo, useReducer, useState } from "react"
+import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react"
 import clsx from "clsx"
 import { toast } from "sonner"
 import { useTranslations } from "next-intl"
 import { Loader2, Plus, Eye, FileCode2, ListChecks, Plug, Play } from "lucide-react"
-import { codexApi, type CodexProject, type CodexRunMetric } from "@/lib/codex/codex-api"
+import { codexApi, type CodexAccess, type CodexProject, type CodexRunMetric } from "@/lib/codex/codex-api"
 import { useCodexRun } from "@/lib/codex/use-codex-run"
+import { useOptionalCodeWorkspace } from "@/lib/code-workspace-context"
+import { codexIdForProject, upsertCodexProject } from "@/lib/codex-projects"
 import { CodexRunTimeline } from "./run-timeline"
 import { PlanCard } from "./plan-card"
 import { CheckpointCard } from "./checkpoint-card"
@@ -49,12 +51,20 @@ function useIsMobile(): boolean {
   return mobile
 }
 
-export function CodexAgentPanel() {
+export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps" } = {}) {
   const t = useTranslations("codex")
+  const workspace = useOptionalCodeWorkspace()
+  const [access, setAccess] = useState<CodexAccess | null>(null)
   const [projects, setProjects] = useState<CodexProject[] | null>(null)
   const [project, setProject] = useState<CodexProject | null>(null)
   const [activeRunId, setActiveRunId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [filesRefreshNonce, setFilesRefreshNonce] = useState(0)
+  const [pendingAutoBuild, setPendingAutoBuild] = useState<{ planRunId: string; tier?: string } | null>(null)
+  const [activePlanOnly, setActivePlanOnly] = useState(false)
+  const autoApprovingRef = useRef<Set<string>>(new Set())
+  const completedRunRef = useRef<Set<string>>(new Set())
 
   const { state, status, active, markApproved } = useCodexRun(activeRunId)
 
@@ -106,34 +116,81 @@ export function CodexAgentPanel() {
   // (re)starts THIS project's dev server, then the iframe is remounted to reload.
   const [previewStarting, setPreviewStarting] = useState(false)
   const [previewReloadKey, setPreviewReloadKey] = useState(0)
-  async function startPreviewPane() {
+  const syncWorkspaceFiles = useCallback(async () => {
+    if (!project) return
+    try {
+      const paths = await codexApi.listFiles(project.id)
+      const sourcePaths = paths
+        .filter((p) => !/(^|\/)(node_modules|\.git|dist|build|\.next)\//.test(p))
+        .slice(0, 80)
+      const files = await Promise.all(
+        sourcePaths.map(async (path) => {
+          try {
+            const file = await codexApi.readFileContent(project.id, path)
+            return { path, content: file.content }
+          } catch {
+            return null
+          }
+        }),
+      )
+      const clean = files.filter((f): f is { path: string; content: string } => Boolean(f))
+      if (clean.length > 0) workspace?.hydrateFiles(clean)
+      setFilesRefreshNonce((n) => n + 1)
+    } catch {
+      /* file sync is best-effort; the Files tab can still refresh manually */
+    }
+  }, [project, workspace])
+
+  const startPreviewPane = useCallback(async () => {
     if (!project) return
     setPreviewStarting(true)
     try {
-      await codexApi.startPreview(project.id)
+      const out = await codexApi.startPreview(project.id)
+      setPreviewUrl(out.previewUrl || out.devUrl || out.basePath || null)
       setPreviewReloadKey((k) => k + 1)
+      await syncWorkspaceFiles()
     } catch (e: any) {
       toast.error(e?.message || t("errors.openPreview"))
     } finally {
       setPreviewStarting(false)
     }
-  }
+  }, [project, syncWorkspaceFiles, t])
 
   // Approve the plan → create the build run and switch the timeline to it.
   // The plan card is only marked approved AFTER the build run is created, so a
   // failed request never leaves the card collapsed-approved with no build run
   // (req 5: no inconsistent UI state on error). The PlanCard's own busy spinner
   // covers the in-flight state while we await.
-  async function approvePlan() {
-    if (!project || !activeRunId) return
+  const approvePlan = useCallback(async (planRunId = activeRunId, tier?: string) => {
+    if (!project || !planRunId) return
     try {
-      const build = await codexApi.approvePlan(project.id, activeRunId)
+      const build = await codexApi.approvePlan(project.id, planRunId, tier)
       markApproved()
       setActiveRunId(build.id)
     } catch (e: any) {
       toast.error(e?.message || t("errors.approvePlan"))
     }
-  }
+  }, [activeRunId, markApproved, project, t])
+
+  useEffect(() => {
+    if (!pendingAutoBuild || !activeRunId) return
+    if (activeRunId !== pendingAutoBuild.planRunId) return
+    if (status !== "waiting_approval") return
+    if (autoApprovingRef.current.has(activeRunId)) return
+    autoApprovingRef.current.add(activeRunId)
+    void approvePlan(activeRunId, pendingAutoBuild.tier)
+    setPendingAutoBuild(null)
+  }, [activeRunId, approvePlan, pendingAutoBuild, status])
+
+  useEffect(() => {
+    if (!activeRunId || status !== "done") return
+    if (completedRunRef.current.has(activeRunId)) return
+    completedRunRef.current.add(activeRunId)
+    void (async () => {
+      await syncWorkspaceFiles()
+      await startPreviewPane()
+    })()
+  }, [activeRunId, startPreviewPane, status, syncWorkspaceFiles])
 
   // Map plan/checkpoint/summary/action_required items to their rich cards.
   function renderCard(item: TimelineItem): React.ReactNode | null {
@@ -147,7 +204,8 @@ export function CodexAgentPanel() {
             tasks={item.tasks}
             approved={item.approved}
             waiting={status === "waiting_approval"}
-            onApprove={approvePlan}
+            planOnly={activePlanOnly}
+            onApprove={() => approvePlan()}
             onAdjust={() => document.querySelector<HTMLTextAreaElement>("[data-codex-composer]")?.focus()}
           />
         )
@@ -159,7 +217,7 @@ export function CodexAgentPanel() {
             title={item.title}
             createdAt={item.createdAt}
             projectId={project?.id}
-            previewUrl={project?.previewUrl}
+            previewUrl={previewUrl || project?.previewUrl}
           />
         )
       case "summary":
@@ -172,21 +230,37 @@ export function CodexAgentPanel() {
   }
 
   useEffect(() => {
-    codexApi.listProjects().then(setProjects).catch(() => setProjects([]))
+    codexApi.access()
+      .then((a) => {
+        setAccess(a)
+        if (!a.enabled || !a.canRun) {
+          setProjects([])
+          return
+        }
+        codexApi.listProjects().then(setProjects).catch(() => setProjects([]))
+      })
+      .catch(() => {
+        setAccess({ ok: false, enabled: false, canRun: false, allowlistConfigured: false })
+        setProjects([])
+      })
   }, [])
 
   // Pick the most recent active/last run for the selected project.
   useEffect(() => {
     if (!project) return
+    setPreviewUrl(project.previewUrl ?? null)
+    upsertCodexProject({ id: codexIdForProject(project.id), name: project.name, kind: "project" })
+    workspace?.switchCodexWorkspace({ id: codexIdForProject(project.id), name: project.name, kind: "project", projectId: project.id }).catch(() => {})
     codexApi.listRuns(project.id).then((runs) => {
       if (runs.length) setActiveRunId(runs[0].id)
     }).catch(() => {})
-  }, [project])
+    void syncWorkspaceFiles()
+  }, [project?.id])
 
   async function createProject() {
     setBusy(true)
     try {
-      const p = await codexApi.createProject(t("panel.defaultProjectName", { n: (projects?.length || 0) + 1 }))
+      const p = await codexApi.createProject(t(surface === "apps" ? "panel.defaultAppName" : "panel.defaultProjectName", { n: (projects?.length || 0) + 1 }))
       setProjects((cur) => [p, ...(cur || [])])
       setProject(p)
     } catch (e: any) {
@@ -196,19 +270,18 @@ export function CodexAgentPanel() {
     }
   }
 
-  // A composer send starts a direct build run. The prompt includes the
-  // autonomous contract so the agent plans internally, executes, and only asks
-  // the user when an external blocker requires it.
+  // A composer send starts with a real plan run. In APPS default mode the plan
+  // auto-approves into build when ready; Plan mode stops at the plan card.
   async function send(payload: ComposerSendPayload) {
     if (!project) return
     const attachText = payload.attachments.map((a) => `--- ${a.name} ---\n${a.content}`).join("\n\n")
     const fullPrompt = [attachText, payload.prompt].filter(Boolean).join("\n\n").trim()
     if (!fullPrompt) return
     const autonomousPrompt = [
-      "MODO AUTONOMO OBLIGATORIO:",
+      "MODO APPS TIPO CODEX:",
       "- No hagas preguntas de intake ni esperes confirmacion del usuario.",
       "- Si falta contexto, propone internamente un brief completo con defaults razonables.",
-      "- Disena un plan extendido, ejecutalo, prueba/itera y entrega el resultado en el preview/codigo.",
+      "- Primero genera un plan tecnico concreto; si la ejecucion continua, construye, prueba/itera y entrega el resultado en preview/codigo.",
       "- Solo pide accion del usuario si hay un bloqueo externo real: creditos, secreto, permisos o servicio caido.",
       "",
       "SOLICITUD DEL USUARIO:",
@@ -216,7 +289,10 @@ export function CodexAgentPanel() {
     ].join("\n")
     setBusy(true)
     try {
-      const run = await codexApi.createRun(project.id, { mode: "build", prompt: autonomousPrompt, tier: payload.tier })
+      const run = await codexApi.createRun(project.id, { mode: "plan", prompt: autonomousPrompt, tier: payload.tier })
+      setActivePlanOnly(payload.planOnly)
+      if (!payload.planOnly) setPendingAutoBuild({ planRunId: run.id, tier: payload.tier })
+      else setPendingAutoBuild(null)
       setActiveRunId(run.id)
     } catch (e: any) {
       toast.error(e?.message || t("errors.startRun"))
@@ -230,8 +306,30 @@ export function CodexAgentPanel() {
     try { await codexApi.cancelRun(activeRunId) } catch (e: any) { toast.error(e?.message || t("errors.stopRun")) }
   }
 
-  if (projects === null) {
+  if (access === null || projects === null) {
     return <div className="flex h-full items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" /> {t("panel.loading")}</div>
+  }
+
+  if (!access.enabled) {
+    return (
+      <div className="flex h-full items-center justify-center bg-zinc-950 p-6 text-center text-zinc-100">
+        <div className="max-w-md rounded-xl border border-white/10 bg-white/5 p-5">
+          <div className="text-sm font-semibold">{t("panel.disabledTitle")}</div>
+          <p className="mt-2 text-sm text-zinc-400">{t("panel.disabledBody")}</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (!access.canRun) {
+    return (
+      <div className="flex h-full items-center justify-center bg-zinc-950 p-6 text-center text-zinc-100">
+        <div className="max-w-md rounded-xl border border-red-500/20 bg-red-500/10 p-5">
+          <div className="text-sm font-semibold text-red-200">{t("panel.forbiddenTitle")}</div>
+          <p className="mt-2 text-sm text-red-100/70">{t("panel.forbiddenBody")}</p>
+        </div>
+      </div>
+    )
   }
 
   const agentView = (
@@ -245,7 +343,7 @@ export function CodexAgentPanel() {
           </div>
         )}
       </div>
-      <Composer disabled={!project} busy={busy} active={active} onSend={send} onStop={stop} />
+      <Composer disabled={!project} busy={busy} active={active} showPlanToggle onSend={send} onStop={stop} />
     </div>
   )
 
@@ -257,7 +355,7 @@ export function CodexAgentPanel() {
         </button>
         <span className="truncate text-[11px] text-zinc-500">{t("preview.hint")}</span>
       </div>
-      <div className="min-h-0 flex-1"><WebTab key={previewReloadKey} url={project?.previewUrl ?? null} /></div>
+      <div className="min-h-0 flex-1"><WebTab key={previewReloadKey} url={previewUrl || project?.previewUrl || null} /></div>
     </div>
   )
 
@@ -267,7 +365,7 @@ export function CodexAgentPanel() {
       case "web":
         return previewPane
       case "files":
-        return <FilesTab projectId={project?.id ?? null} />
+        return <FilesTab key={`${project?.id || "none"}:${filesRefreshNonce}`} projectId={project?.id ?? null} />
       case "connections":
         return <div className="h-full overflow-y-auto p-3"><McpServersCard /></div>
       case "checklist":
@@ -281,7 +379,7 @@ export function CodexAgentPanel() {
   return (
     <div className="flex h-full min-h-0 flex-col bg-zinc-950 text-zinc-100">
       <header className="flex h-11 shrink-0 items-center gap-2 border-b border-white/10 px-3">
-        <span className="text-sm font-semibold">⚡ Codex</span>
+        <span className="text-sm font-semibold">{surface === "apps" ? t("panel.appsTitle") : "Codex"}</span>
         <select
           className="ml-2 rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs"
           value={project?.id || ""}
@@ -291,7 +389,7 @@ export function CodexAgentPanel() {
           {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
         <button type="button" onClick={createProject} disabled={busy} className="ml-auto flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs hover:bg-white/10">
-          <Plus className="h-3.5 w-3.5" /> {t("panel.newProject")}
+          <Plus className="h-3.5 w-3.5" /> {t(surface === "apps" ? "panel.newApp" : "panel.newProject")}
         </button>
         {status && <span className="rounded-full bg-white/5 px-2 py-0.5 text-[10px] uppercase tracking-wide text-zinc-400">{status}</span>}
       </header>

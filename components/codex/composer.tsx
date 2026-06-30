@@ -13,6 +13,7 @@ import { useTranslations } from "next-intl"
 import { Plus, Send, Square, Loader2, Paperclip, X } from "lucide-react"
 import { PowerSelector } from "./power-selector"
 import { DictationButton } from "./dictation-button"
+import { PlanToggle } from "./plan-toggle"
 import { DEFAULT_TIER, type CodexTier } from "@/lib/codex/model-tiers"
 
 export interface ComposerAttachment { name: string; content: string }
@@ -24,16 +25,18 @@ export interface ComposerProps {
   /** A run is streaming → show Stop instead of Send. */
   active?: boolean
   locale?: string
+  showPlanToggle?: boolean
   onSend: (payload: ComposerSendPayload) => void | Promise<void>
   onStop?: () => void | Promise<void>
 }
 
 const MAX_ATTACH_CHARS = 20_000
 
-export function Composer({ disabled, busy, active, locale, onSend, onStop }: ComposerProps) {
+export function Composer({ disabled, busy, active, locale, showPlanToggle = false, onSend, onStop }: ComposerProps) {
   const t = useTranslations("codex")
   const [prompt, setPrompt] = useState("")
   const [tier, setTier] = useState<CodexTier>(DEFAULT_TIER)
+  const [planOnly, setPlanOnly] = useState(false)
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([])
   const taRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -62,7 +65,7 @@ export function Composer({ disabled, busy, active, locale, onSend, onStop }: Com
     if (active) { onStop?.(); return }
     if (busy || disabled) return
     if (!prompt.trim() && attachments.length === 0) return
-    void onSend({ prompt: prompt.trim(), planOnly: false, tier, attachments })
+    void onSend({ prompt: prompt.trim(), planOnly, tier, attachments })
     setPrompt("")
     setAttachments([])
     if (taRef.current) taRef.current.style.height = "auto"
@@ -100,6 +103,7 @@ export function Composer({ disabled, busy, active, locale, onSend, onStop }: Com
           <button type="button" onClick={() => fileRef.current?.click()} aria-label={t("composer.attach")} className="flex h-9 min-h-[44px] w-9 min-w-[44px] items-center justify-center rounded-lg text-zinc-400 hover:bg-white/5 sm:min-h-0 sm:min-w-0">
             <Plus className="h-5 w-5" />
           </button>
+          {showPlanToggle && <PlanToggle active={planOnly} onToggle={setPlanOnly} />}
           <PowerSelector value={tier} onChange={setTier} />
           <div className="ml-auto flex items-center gap-1.5">
             <DictationButton locale={locale} onTranscript={(t) => { setPrompt((p) => (p ? `${p} ${t}` : t)); autoResize() }} />

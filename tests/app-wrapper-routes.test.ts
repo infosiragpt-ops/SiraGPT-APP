@@ -41,7 +41,7 @@ describe("needsChatContext", () => {
   it("enables chat context on every documented prefix", () => {
     for (const path of [
       "/chat", "/gpts", "/parafraseo", "/projects", "/design",
-      "/codex", "/code", "/plan", "/profile", "/library",
+      "/codex", "/code", "/apps", "/plan", "/profile", "/library",
       "/billing", "/settings", "/thesis", "/documents",
     ]) {
       assert.equal(needsChatContext(path), true, `expected ${path} -> true`)
@@ -61,6 +61,11 @@ describe("needsSidebar", () => {
   it("keeps Codex full-screen while preserving chat context", () => {
     assert.equal(needsSidebar("/codex"), false)
     assert.equal(needsChatContext("/codex"), true)
+  })
+
+  it("keeps APPS full-screen while preserving chat context", () => {
+    assert.equal(needsSidebar("/apps"), false)
+    assert.equal(needsChatContext("/apps"), true)
   })
 
   it("enables the sidebar on profile pages", () => {

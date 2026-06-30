@@ -957,6 +957,10 @@ export function useCodeWorkspace(): CodeWorkspaceContextValue {
   return ctx
 }
 
+export function useOptionalCodeWorkspace(): CodeWorkspaceContextValue | null {
+  return React.useContext(CodeWorkspaceContext)
+}
+
 function isLowSignalWorkspacePath(path: string): boolean {
   const p = path.toLowerCase()
   if (p.includes(".orchestration/")) return true

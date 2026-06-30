@@ -18,6 +18,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export interface CodexHealth { ok: boolean; enabled: boolean }
+export interface CodexAccess { ok: boolean; enabled: boolean; canRun: boolean; allowlistConfigured: boolean }
 export interface CodexProject { id: string; name: string; status: string; workspacePath: string | null; previewUrl: string | null; error: string | null }
 export interface CodexRun { id: string; projectId: string; mode: string; status: string; tier: string | null; model: string | null; planRunId: string | null; prompt: string | null; error: string | null; metric?: CodexRunMetric }
 export interface CodexRunMetric { timeWorkedMs: number; actionsCount: number; itemsReadLines: number; additions: number; deletions: number; tokensIn: number; tokensOut: number; model: string | null; costUsd: number; costSource: string; costOriginalUsd: number; costAppliedUsd: number; costInputUsd: number; costOutputUsd: number }
@@ -27,11 +28,12 @@ export const codexApi = {
   // no-store: the flag can change; a cached 304 (enabled:false) would strand
   // the UI on the old /code flow even after the flag is turned on.
   health: () => req<CodexHealth>("/health", { cache: "no-store" }),
+  access: () => req<CodexAccess>("/access", { cache: "no-store" }),
 
   listProjects: () => req<{ projects: CodexProject[] }>("/projects").then((r) => r.projects),
   createProject: (name: string, brief?: unknown) => req<{ project: CodexProject }>("/projects", { method: "POST", body: JSON.stringify({ name, brief }) }).then((r) => r.project),
   getProject: (id: string) => req<{ project: CodexProject }>(`/projects/${id}`).then((r) => r.project),
-  startPreview: (id: string) => req<{ devUrl: string }>(`/projects/${id}/preview/start`, { method: "POST" }),
+  startPreview: (id: string) => req<{ devUrl: string; previewUrl?: string; basePath?: string }>(`/projects/${id}/preview/start`, { method: "POST" }),
   previewStatus: (id: string) => req<any>(`/projects/${id}/preview/status`),
   exportProject: (id: string) => req<{ ok: boolean; project: string; files: number; hostPath: string }>(`/projects/${id}/export`, { method: "POST" }),
   listFiles: (id: string) => req<{ files: string[] }>(`/projects/${id}/files`).then((r) => r.files),

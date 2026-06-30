@@ -506,9 +506,9 @@
       "remediate": "Fix it"
     },
     "composer": {
-      "placeholder": "Make, test, iterate...",
+      "placeholder": "Describe the idea — AI plans and builds…",
       "plan": "Plan",
-      "planTooltip": "Plan: restricts the run to planning only, executing nothing.",
+      "planTooltip": "The agent plans internally and builds automatically.",
       "send": "Envoyer",
       "stop": "Arrêter",
       "dictate": "Dictate",
@@ -560,7 +560,14 @@
       "webUnavailable": "The preview is not available yet. Start it from a checkpoint or the Run button.",
       "openInTab": "Open in new tab",
       "checklistEmpty": "No approved plan with tasks yet.",
-      "defaultProjectName": "Project {n}"
+      "defaultProjectName": "Project {n}",
+      "defaultAppName": "New app {n}",
+      "appsTitle": "APPS",
+      "newApp": "New app",
+      "disabledTitle": "APPS is not active yet",
+      "disabledBody": "The Codex V2 engine is off in this environment. Enable CODEX_AGENT_V2 to build apps with chat, runs, and real preview.",
+      "forbiddenTitle": "Restricted access",
+      "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist."
     }
   }
 }

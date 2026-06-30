@@ -65,12 +65,14 @@ test('network failures throw RunnerError with status 0', async () => {
   });
 });
 
-test('startDev posts { project } to /run; runnerDevUrl honours env override', async () => {
+test('startDev posts { project, basePath } to /run; runnerDevUrl honours env override', async () => {
   const { impl, calls } = fakeFetch(() => jsonResponse({ ok: true, port: 5173, project: 'p1' }));
   const client = createRunnerClient({ fetchImpl: impl, baseUrl: 'http://runner:4097' });
   await client.startDev('p1');
   assert.equal(calls[0].url, 'http://runner:4097/run');
-  assert.deepEqual(calls[0].body, { project: 'p1' });
+  assert.deepEqual(calls[0].body, { project: 'p1', basePath: null });
+  await client.startDev('p1', { basePath: '/api/codex/projects/p1/preview/t/app/' });
+  assert.deepEqual(calls[1].body, { project: 'p1', basePath: '/api/codex/projects/p1/preview/t/app/' });
   assert.equal(runnerDevUrl({ CODE_RUNNER_DEV_URL: 'https://preview.example' }), 'https://preview.example');
   assert.equal(runnerDevUrl({}), 'http://localhost:5173');
 });

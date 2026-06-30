@@ -573,7 +573,7 @@
     },
     "preview": {
       "start": "▶ Iniciar / Recargar",
-      "hint": "Levanta el dev server de esta empresa y carga la vista previa."
+      "hint": "Levanta el dev server de este proyecto y carga la vista previa."
     },
     "files": {
       "title": "Código",
@@ -583,7 +583,7 @@
       "none": "Selecciona un archivo para ver su contenido."
     },
     "errors": {
-      "createProject": "No se pudo crear la empresa",
+      "createProject": "No se pudo crear el proyecto",
       "startRun": "No se pudo iniciar la corrida",
       "approvePlan": "No se pudo aprobar el plan",
       "stopRun": "No se pudo detener la corrida",
@@ -593,15 +593,22 @@
     },
     "panel": {
       "newProject": "Nuevo",
-      "selectProject": "Selecciona una empresa…",
+      "selectProject": "Selecciona un proyecto…",
       "loading": "Cargando…",
       "emptyDescribe": "Describe qué quieres construir para proponer un plan.",
-      "emptySelect": "Crea o selecciona una empresa para empezar.",
+      "emptySelect": "Crea o selecciona un proyecto para empezar.",
       "filesHint": "El árbol de archivos del workspace se abre desde el editor de /code.",
       "webUnavailable": "El preview aún no está disponible. Arráncalo desde un checkpoint o el botón Ejecutar.",
       "openInTab": "Abrir en pestaña nueva",
       "checklistEmpty": "Aún no hay un plan aprobado con tareas.",
-      "defaultProjectName": "Empresa {n}"
+      "defaultProjectName": "Proyecto {n}",
+      "defaultAppName": "Nueva app {n}",
+      "appsTitle": "APPS",
+      "newApp": "Nueva app",
+      "disabledTitle": "APPS aún no está activo",
+      "disabledBody": "El motor Codex V2 está apagado en este entorno. Activa CODEX_AGENT_V2 para construir apps con chat, runs y preview real.",
+      "forbiddenTitle": "Acceso restringido",
+      "forbiddenBody": "Tu cuenta no está autorizada para ejecutar APPS en producción. Pide acceso de admin o agrega tu usuario al allowlist."
     }
   }
 }

@@ -8,7 +8,7 @@ const request = require('supertest');
 const { mockResolvedModule } = require('./http-test-utils');
 
 const restoreAuth = mockResolvedModule(require.resolve('../src/middleware/auth'), {
-  authenticateToken(req, _res, next) { req.user = { id: 'u-1' }; next(); },
+  authenticateToken(req, _res, next) { req.user = { id: 'u-1', isAdmin: true, isSuperAdmin: false }; next(); },
 });
 
 class RunServiceError extends Error {

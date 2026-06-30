@@ -9,9 +9,9 @@ exports[`LongOperationIndicator (snapshot) > renders at ~5s elapsed (not slow) 1
   <div
     aria-label="Procesando"
     aria-live="polite"
-    class="dmx-root dmx-dot-shape-circle inline-flex shrink-0 align-middle text-primary"
+    class="dmx-root dmx-dot-shape-circle inline-flex shrink-0 align-middle opacity-75 text-primary"
     role="status"
-    style="width: 16px; height: 16px; --dmx-speed: 0.6060606060606061; --dmx-dot-size: 2px; --dmx-halo-level: 0; --dmx-dot-fill: currentColor; color: currentcolor;"
+    style="width: 16px; height: 16px; --dmx-speed: 0.6060606060606061; --dmx-dot-size: 2px; --dmx-halo-level: 0; --dmx-dot-fill: #FF0000; color: rgb(255, 0, 0);"
   >
     <div
       class="dmx-grid"
@@ -171,9 +171,9 @@ exports[`LongOperationIndicator (snapshot) > renders at ~35s elapsed (slow state
   <div
     aria-label="Procesando"
     aria-live="polite"
-    class="dmx-root dmx-dot-shape-circle inline-flex shrink-0 align-middle text-primary"
+    class="dmx-root dmx-dot-shape-circle inline-flex shrink-0 align-middle opacity-75 text-primary"
     role="status"
-    style="width: 16px; height: 16px; --dmx-speed: 0.6060606060606061; --dmx-dot-size: 2px; --dmx-halo-level: 0; --dmx-dot-fill: currentColor; color: currentcolor;"
+    style="width: 16px; height: 16px; --dmx-speed: 0.6060606060606061; --dmx-dot-size: 2px; --dmx-halo-level: 0; --dmx-dot-fill: #FF0000; color: rgb(255, 0, 0);"
   >
     <div
       class="dmx-grid"

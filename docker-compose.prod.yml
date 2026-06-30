@@ -78,6 +78,49 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # ── Codex/APPS Runner ─────────────────────────────────────
+  # Isolated workspace runner for APPS/Codex V2. The backend talks to the
+  # control API on 4097 and proxies the dev server on 5173 through same-origin
+  # tokenized URLs; no dynamic public ports are exposed.
+  runner:
+    build:
+      context: ./scripts
+      dockerfile: runner.Dockerfile
+    restart: unless-stopped
+    working_dir: /workspace
+    command: ["bun", "/scripts/code-runner.js"]
+    environment:
+      DEV_PORT: "5173"
+      CTRL_PORT: "4097"
+      RUNNER_WORKDIR: "/workspace"
+      EXPORT_DIR: "/export"
+    volumes:
+      - opencode_workspace:/workspace
+      - ./scripts/code-runner.js:/scripts/code-runner.js:ro
+      - ./scripts/code-runner-utils.js:/scripts/code-runner-utils.js:ro
+      - runner_bun_cache:/root/.bun/install/cache
+      - ${CODEX_EXPORT_BIND:-./.codex-workspaces}:/export
+    expose:
+      - "4097"
+      - "5173"
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r=await fetch('http://127.0.0.1:4097/status'); if(!r.ok) process.exit(1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   # ── Optional Docker Backend ───────────────────────────────
   # Production serves the backend with PM2 on the host. This service is
   # intentionally profile-gated so normal frontend deploys never try to
@@ -96,6 +139,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      runner:
+        condition: service_healthy
     environment:
       NODE_ENV: production
       PORT: "5000"
@@ -109,6 +154,8 @@ services:
       XAI_API_KEY: ${XAI_API_KEY:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      CEREBRAS_API_KEY: ${CEREBRAS_API_KEY:-}
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
       FRONTEND_URL: ${FRONTEND_URL:-https://siragpt.com}
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
@@ -129,6 +176,13 @@ services:
       CODE_RUNNER_MAX_CONCURRENT: ${CODE_RUNNER_MAX_CONCURRENT:-2}
       CODE_RUNNER_INSTALL_TIMEOUT_MS: ${CODE_RUNNER_INSTALL_TIMEOUT_MS:-180000}
       CODE_RUNNER_READY_TIMEOUT_MS: ${CODE_RUNNER_READY_TIMEOUT_MS:-120000}
+      CODEX_AGENT_V2: ${CODEX_AGENT_V2:-true}
+      CODEX_AGENT_ALLOWED_USER_IDS: ${CODEX_AGENT_ALLOWED_USER_IDS:-}
+      CODE_RUNNER_URL: ${CODE_RUNNER_URL:-http://runner:4097}
+      CODE_RUNNER_DEV_INTERNAL_URL: ${CODE_RUNNER_DEV_INTERNAL_URL:-http://runner:5173}
+      CODEX_EXPORT_HOST_DIR: ${CODEX_EXPORT_HOST_DIR:-/opt/siragpt/.codex-workspaces}
+      CODEX_RUN_TIMEOUT_MS: ${CODEX_RUN_TIMEOUT_MS:-900000}
+      CODEX_MAX_STEPS: ${CODEX_MAX_STEPS:-24}
       SIRAGPT_WORKSPACE_RUN_PROXY_URLS: ${SIRAGPT_WORKSPACE_RUN_PROXY_URLS:-true}
       SIRAGPT_WORKSPACE_RUN_READY_TIMEOUT_MS: ${SIRAGPT_WORKSPACE_RUN_READY_TIMEOUT_MS:-600000}
       SIRAGPT_WORKSPACE_RUN_NODE_OPTIONS: ${SIRAGPT_WORKSPACE_RUN_NODE_OPTIONS:---max-old-space-size=4096}
@@ -223,4 +277,8 @@ volumes:
   uploads_data:
     driver: local
   projects_data:
+    driver: local
+  opencode_workspace:
+    driver: local
+  runner_bun_cache:
     driver: local

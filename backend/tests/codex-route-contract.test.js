@@ -2,6 +2,7 @@
 
 const { test, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
+const http = require('node:http');
 const express = require('express');
 const request = require('supertest');
 
@@ -11,7 +12,7 @@ const { mockResolvedModule } = require('./http-test-utils');
 const authPath = require.resolve('../src/middleware/auth');
 const restoreAuth = mockResolvedModule(authPath, {
   authenticateToken(req, _res, next) {
-    req.user = { id: 'u-1' };
+    req.user = { id: 'u-1', isAdmin: true, isSuperAdmin: false };
     next();
   },
 });
@@ -38,7 +39,7 @@ const runnerCalls = [];
 const runnerPath = require.resolve('../src/services/codex/runner-client');
 const restoreRunner = mockResolvedModule(runnerPath, {
   createRunnerClient: () => ({
-    startDev: async (project) => { runnerCalls.push(['startDev', project]); return { ok: true, port: 5173, project }; },
+    startDev: async (project, opts) => { runnerCalls.push(['startDev', project, opts]); return { ok: true, port: 5173, project }; },
     devStatus: async () => ({ running: true, ready: true, project: 'p1' }),
     stopDev: async () => ({ ok: true }),
     exportWorkspace: async (project) => { runnerCalls.push(['exportWorkspace', project]); return { ok: true, project, files: 5 }; },
@@ -52,8 +53,13 @@ const restoreRunner = mockResolvedModule(runnerPath, {
 
 const codexRoutes = require('../src/routes/codex');
 
-after(() => { restoreAuth(); restoreService(); restoreRunner(); delete process.env.CODEX_AGENT_V2; });
-beforeEach(() => { process.env.CODEX_AGENT_V2 = '1'; });
+after(() => { restoreAuth(); restoreService(); restoreRunner(); delete process.env.CODEX_AGENT_V2; delete process.env.CODEX_AGENT_ALLOWED_USER_IDS; });
+beforeEach(() => {
+  process.env.CODEX_AGENT_V2 = '1';
+  delete process.env.CODEX_AGENT_ALLOWED_USER_IDS;
+  serviceCalls.length = 0;
+  runnerCalls.length = 0;
+});
 
 function buildApp() {
   const app = express();
@@ -67,6 +73,13 @@ test('GET /health responds 200 with enabled=false when the flag is off', async (
   const res = await request(buildApp()).get('/api/codex/health');
   assert.equal(res.status, 200);
   assert.deepEqual(res.body, { ok: true, enabled: false });
+});
+
+test('GET /access reports flag and user execution access', async () => {
+  const res = await request(buildApp()).get('/api/codex/access');
+  assert.equal(res.status, 200);
+  assert.equal(res.body.enabled, true);
+  assert.equal(res.body.canRun, true);
 });
 
 test('flag off ⇒ every other route is 404 not_found', async () => {
@@ -104,8 +117,42 @@ test('GET /projects lists own projects; GET /projects/:id 404s for foreign ids',
 test('POST /projects/:id/preview/start proxies the runner and adds devUrl', async () => {
   const res = await request(buildApp()).post('/api/codex/projects/p1/preview/start');
   assert.equal(res.status, 200);
-  assert.equal(res.body.devUrl, 'http://localhost:5173');
-  assert.deepEqual(runnerCalls.at(-1), ['startDev', 'p1']);
+  assert.match(res.body.devUrl, /^\/api\/codex\/projects\/p1\/preview\/.+\/app\/$/);
+  assert.equal(runnerCalls.at(-1)[0], 'startDev');
+  assert.equal(runnerCalls.at(-1)[1], 'p1');
+  assert.match(runnerCalls.at(-1)[2].basePath, /^\/api\/codex\/projects\/p1\/preview\/.+\/app\/$/);
+});
+
+test('tokenized preview proxy strips credentials and forces frame headers', async () => {
+  const upstreamHits = [];
+  const server = http.createServer((req, res) => {
+    upstreamHits.push({ url: req.url, cookie: req.headers.cookie, authorization: req.headers.authorization });
+    res.setHeader('Set-Cookie', 'preview=unsafe');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Content-Security-Policy', "default-src 'none'");
+    res.end(`ok:${req.url}`);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  process.env.CODE_RUNNER_DEV_INTERNAL_URL = `http://127.0.0.1:${port}`;
+  try {
+    const start = await request(buildApp()).post('/api/codex/projects/p1/preview/start');
+    assert.equal(start.status, 200);
+    const res = await request(buildApp())
+      .get(start.body.previewUrl)
+      .set('Cookie', 'sid=secret')
+      .set('Authorization', 'Bearer secret');
+    assert.equal(res.status, 200);
+    assert.match(res.text, /^ok:\/api\/codex\/projects\/p1\/preview\/.+\/app\/$/);
+    assert.equal(upstreamHits[0].cookie, undefined);
+    assert.equal(upstreamHits[0].authorization, undefined);
+    assert.equal(res.headers['set-cookie'], undefined);
+    assert.equal(res.headers['x-frame-options'], 'SAMEORIGIN');
+    assert.equal(res.headers['content-security-policy'], "frame-ancestors 'self'");
+  } finally {
+    delete process.env.CODE_RUNNER_DEV_INTERNAL_URL;
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
 
 test('preview routes 404 on foreign project ids (ownership gate)', async () => {
