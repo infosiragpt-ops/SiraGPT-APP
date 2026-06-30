@@ -65,6 +65,19 @@ try {
   // otel-spans not loadable — leave $transaction untouched.
 }
 
+// ── Database Guard: audit/block destructive raw SQL ─────────────────
+// Wraps the raw-SQL methods to catch DROP/TRUNCATE/DELETE-without-WHERE/
+// lossy-ALTER. Default mode is 'monitor' (audit-only, non-blocking) and
+// the whole thing is fail-open — a guard error never blocks a query.
+// Flip SIRAGPT_DB_GUARD=enforce to actually block; =off to disable.
+try {
+  // eslint-disable-next-line global-require
+  const { attachDatabaseGuard } = require('../services/db/database-guard');
+  attachDatabaseGuard(prisma);
+} catch (_e) {
+  console.warn('[db-guard] not attached:', _e?.message || _e);
+}
+
 /**
  * Attempts to connect to PostgreSQL with exponential backoff retry.
  *
