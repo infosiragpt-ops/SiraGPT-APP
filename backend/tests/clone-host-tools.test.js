@@ -393,7 +393,8 @@ describe('workspace-roots protection policy', () => {
   });
 
   it('selfRepoRoot resolves to the running repo checkout', () => {
-    assert.ok(roots.selfRepoRoot().endsWith('siraGPT'), `got ${roots.selfRepoRoot()}`);
+    const expectedRoot = path.resolve(__dirname, '..', '..');
+    assert.strictEqual(roots.selfRepoRoot(), expectedRoot);
   });
 });
 
