@@ -366,20 +366,55 @@ function startDev(dir, fw, port, run) {
   });
 }
 
+// A dev server can be "listening" yet serving a compile/runtime error page,
+// so a bare fetch is not proof of readiness. These markers identify Next.js
+// and Vite dev error overlays / build-error responses.
+const ERROR_OVERLAY_RE =
+  /nextjs__container_errors|__NEXT_ERROR|nextjs-portal|Failed to compile|Unhandled Runtime Error|Module not found|vite-error-overlay|<vite-error-overlay|plugin:vite/i;
+
+function hasErrorOverlay(body) {
+  if (!body) return false;
+  return ERROR_OVERLAY_RE.test(String(body));
+}
+
+function strictReadyEnabled() {
+  // Strict readiness (reject 5xx / error overlays) is ON by default; the kill
+  // switch CODE_RUNNER_STRICT_READY=0 restores "any response = ready".
+  return !['0', 'false', 'no', 'off'].includes(
+    String(process.env.CODE_RUNNER_STRICT_READY || '').toLowerCase(),
+  );
+}
+
 async function probeReady(port, basePath, deadline, run) {
   const probeUrl = `http://127.0.0.1:${port}${basePath || '/'}`;
+  const strict = strictReadyEnabled();
+  let lastBad = null;
   while (Date.now() < deadline && !run.stopped) {
     if (run.phase === 'error') throw new Error(run.error || 'error del dev server');
     try {
-      await fetch(probeUrl, { signal: AbortSignal.timeout(3000) });
-      return; // any HTTP response means the server is listening
+      const res = await fetch(probeUrl, { signal: AbortSignal.timeout(3000) });
+      if (!strict) return; // legacy: any HTTP response means it's listening
+      // Read a bounded prefix to spot a compile/runtime error overlay.
+      let body = '';
+      try { body = (await res.text()).slice(0, 8000); } catch { body = ''; }
+      if (res.status >= 500) {
+        lastBad = `HTTP ${res.status}`; // up but erroring — keep waiting
+      } else if (hasErrorOverlay(body)) {
+        lastBad = 'error de compilación en la app'; // overlay may clear on recompile
+      } else {
+        return; // 2xx/3xx/4xx without an error overlay → serving for real
+      }
     } catch {
       /* not up yet */
     }
     await sleep(1000);
   }
   if (run.stopped) return;
-  throw new Error('el dev server no respondió a tiempo');
+  throw new Error(
+    lastBad
+      ? `el dev server arrancó pero con errores (${lastBad})`
+      : 'el dev server no respondió a tiempo',
+  );
 }
 
 async function pipeline(run) {
@@ -602,6 +637,9 @@ module.exports = {
   isRuntimeEnvFile,
   useProxyUrls: shouldUseProxyUrls,
   proxyUrlsEnabled,
+  hasErrorOverlay,
+  strictReadyEnabled,
+  probeReady,
   // Test-only hooks: seed/clear the in-memory run registry WITHOUT spawning a
   // child process, so the ownership / phase-gate logic can be unit-tested.
   // No behavioural impact on the production paths.
