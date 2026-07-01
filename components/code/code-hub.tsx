@@ -22,7 +22,11 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable"
-import { useCodeWorkspace } from "@/lib/code-workspace-context"
+import {
+  CODE_OPEN_TOOL_EVENT,
+  useCodeWorkspace,
+} from "@/lib/code-workspace-context"
+import type { WorkspaceToolId } from "@/lib/code-workspace-tools"
 
 import { EditorPanel } from "./editor-panel"
 import { FileTreePanel } from "./file-tree-panel"
@@ -47,6 +51,14 @@ export function CodeHub({ open, onClose }: Props) {
   }, [open, onClose])
 
   const fileCount = Object.keys(files).length
+
+  // Route to the real Git / Publishing tool surfaces. The workspace listens
+  // for CODE_OPEN_TOOL_EVENT, opens the tool panel and closes this hub.
+  const openTool = React.useCallback((toolId: WorkspaceToolId) => {
+    window.dispatchEvent(
+      new CustomEvent(CODE_OPEN_TOOL_EVENT, { detail: { toolId } }),
+    )
+  }, [])
 
   const exportZip = React.useCallback(async () => {
     const entries = Object.values(files)
@@ -128,29 +140,23 @@ export function CodeHub({ open, onClose }: Props) {
             type="button"
             variant="ghost"
             size="sm"
-            className="h-7 cursor-not-allowed rounded-md px-2.5 text-[11px] font-normal text-muted-foreground/70"
-            onClick={() => toast.message("GitHub: conexión disponible próximamente.")}
-            aria-label="Subir a GitHub (próximamente)"
+            className="h-7 rounded-md px-2.5 text-[11px] font-normal text-muted-foreground hover:text-foreground"
+            onClick={() => openTool("git")}
+            aria-label="Abrir Git"
           >
             <Github className="mr-1.5 h-3.5 w-3.5" />
             GitHub
-            <span className="ml-1.5 rounded bg-muted px-1 py-px text-[9px] font-medium uppercase tracking-wide">
-              Pronto
-            </span>
           </Button>
           <Button
             type="button"
             variant="ghost"
             size="sm"
-            className="h-7 cursor-not-allowed rounded-md px-2.5 text-[11px] font-normal text-muted-foreground/70"
-            onClick={() => toast.message("Compartir: enlace de solo lectura del código disponible próximamente.")}
-            aria-label="Compartir código (próximamente)"
+            className="h-7 rounded-md px-2.5 text-[11px] font-normal text-muted-foreground hover:text-foreground"
+            onClick={() => openTool("publishing")}
+            aria-label="Compartir / publicar"
           >
             <Share2 className="mr-1.5 h-3.5 w-3.5" />
             Compartir
-            <span className="ml-1.5 rounded bg-muted px-1 py-px text-[9px] font-medium uppercase tracking-wide">
-              Pronto
-            </span>
           </Button>
           <Button
             type="button"

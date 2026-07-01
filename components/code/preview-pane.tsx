@@ -17,8 +17,10 @@ import {
   Monitor,
   Play,
   RefreshCw,
+  RotateCw,
   Smartphone,
   Square,
+  Tablet,
   TerminalSquare,
   X,
   Zap,
@@ -35,15 +37,42 @@ import { githubService } from "@/lib/github-service"
 import { CODE_GIT_BINDING_CHANGED_EVENT, getGitBinding } from "@/lib/code-git-mirror"
 import { buildRuntimeEnv } from "@/lib/code-secrets"
 
-type LiveRun = { phase: "idle" | "starting" | "ready" | "error"; devUrl: string; note: string }
+type LiveRun = { phase: "idle" | "starting" | "ready" | "error" | "stuck"; devUrl: string; note: string }
 type RunnerStatus = { ready?: boolean; error?: string | null; framework?: string | null; tail?: string[]; devUrl?: string }
 
 // Cap how many times a single failing run can auto-hand its logs to the chat
 // agent for repair, so a fix that keeps failing can't spin an infinite loop.
 const AUTO_FIX_MAX = 3
 
+// Bump the runner's lastTouch (and catch a post-ready crash) while the app is
+// live so the idle reaper never kills an app the user is actively viewing.
+const READY_HEARTBEAT_MS = 60_000
+
 type LogEntry = { level: string; text: string; id: number }
-type Device = "responsive" | "phone"
+type Device = "responsive" | "tablet" | "phone"
+type Orientation = "portrait" | "landscape"
+
+// Nominal device viewports (portrait); the rotate toggle swaps w/h. "responsive"
+// stretches to the pane so it has no fixed readout dimensions.
+const DEVICE_VIEWPORTS: Record<Exclude<Device, "responsive">, { w: number; h: number; label: string }> = {
+  tablet: { w: 820, h: 1180, label: "Tablet" },
+  phone: { w: 390, h: 844, label: "Móvil" },
+}
+
+// Collapse a noisy runner error to a stable signature so repeated failures that
+// only differ by line numbers / paths / hashes de-dupe against each other and
+// don't burn the auto-fix budget on what is really the same error.
+function normalizeErrorSignature(text: string): string {
+  return (text || "")
+    .toLowerCase()
+    .replace(/[a-z]:[\\/][^\s:]+|[./][^\s:]+/g, "<path>") // file paths
+    .replace(/:\d+(:\d+)?/g, ":<n>") // :line:col
+    .replace(/\b0x[0-9a-f]+\b/g, "<hex>") // hex addresses
+    .replace(/\b[0-9a-f]{7,40}\b/g, "<hash>") // sha-ish hashes
+    .replace(/\b\d+\b/g, "<n>") // bare numbers
+    .replace(/\s+/g, " ")
+    .trim()
+}
 
 const CODE_RUN_PREVIEW_EVENT = "siragpt:code-run-preview"
 
@@ -60,11 +89,17 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
   const { files, activePath, activeFolder } = useCodeWorkspace()
 
   const [auto, setAuto] = React.useState(true)
-  const [device, setDevice] = React.useState<Device>(() =>
-    typeof window !== "undefined" && window.localStorage.getItem("code-workspace:preview-device") === "phone"
-      ? "phone"
-      : "responsive",
-  )
+  const [device, setDevice] = React.useState<Device>(() => {
+    if (typeof window === "undefined") return "responsive"
+    const saved = window.localStorage.getItem("code-workspace:preview-device")
+    return saved === "phone" || saved === "tablet" ? saved : "responsive"
+  })
+  const [orientation, setOrientation] = React.useState<Orientation>("portrait")
+  const [deviceMenuOpen, setDeviceMenuOpen] = React.useState(false)
+  // Editable address bar: a sub-route ("/", "/about"…) appended to the live dev
+  // server URL. Enter re-points the iframe. Only meaningful while an app is live.
+  const [navPath, setNavPath] = React.useState("/")
+  const [pathDraft, setPathDraft] = React.useState("/")
   React.useEffect(() => {
     try {
       window.localStorage.setItem("code-workspace:preview-device", device)
@@ -133,6 +168,28 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
     else if (runIdRef.current) void hostRunnerService.stop(runIdRef.current)
   }, [clearPoll])
 
+  // While the app is live, keep polling status at a slow cadence (a) so the
+  // runner's lastTouch keeps getting bumped and the idle reaper never kills an
+  // app the user is actively viewing, and (b) so a crash that happens AFTER the
+  // dev server first went ready surfaces as an error instead of a frozen iframe.
+  const startReadyHeartbeat = React.useCallback(
+    (statusFn: () => Promise<RunnerStatus>) => {
+      clearPoll()
+      pollRef.current = window.setInterval(async () => {
+        const st = await statusFn()
+        if (st.error) {
+          clearPoll()
+          const note = st.error || "El dev server se cayó."
+          lastErrorLogRef.current = [st.error, ...(st.tail || [])].filter(Boolean).join("\n") || note
+          setLiveRun({ phase: "error", devUrl: "", note })
+        }
+        // A benign not-ready blip (HMR reload) is ignored — we only react to a
+        // hard error; the mere status read already bumped lastTouch.
+      }, READY_HEARTBEAT_MS)
+    },
+    [clearPoll],
+  )
+
   // Poll a runner's status until the dev server is ready (or fails / times out).
   const pollUntilReady = React.useCallback(
     (statusFn: () => Promise<RunnerStatus>, fallbackUrl: string) => {
@@ -142,8 +199,8 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
         tries += 1
         const st = await statusFn()
         if (st.ready) {
-          clearPoll()
           setLiveRun({ phase: "ready", devUrl: st.devUrl || fallbackUrl, note: st.framework || "app" })
+          startReadyHeartbeat(statusFn)
         } else if (st.error || tries > 80) {
           // ~3.3 min budget: a cold npm install of vite + tailwind v4 +
           // framer-motion + lucide plus dev-server boot can be slow.
@@ -158,7 +215,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
         }
       }, 2500)
     },
-    [clearPoll],
+    [clearPoll, startReadyHeartbeat],
   )
 
   const runApp = React.useCallback(async (opts?: { auto?: boolean }) => {
@@ -357,6 +414,8 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
   // the code on its own (no manual "Reparar" click). Capped + de-duped so a fix
   // that keeps producing the same error can't spin an infinite agent loop. A
   // fresh successful run refills the budget for a later, unrelated failure.
+  // Once the budget is exhausted we stop pretending the agent is still working
+  // and flip to a terminal "stuck" state with an honest message + the log tail.
   React.useEffect(() => {
     if (typeof window === "undefined") return
     if (liveRun.phase === "ready") {
@@ -391,19 +450,62 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
     setTypeCheck(null)
     if (liveRun.phase !== "error") return
     const log = (lastErrorLogRef.current || liveRun.note || "").trim()
-    if (!log || log === lastAutoFixedNoteRef.current) return
-    if (autoFixCountRef.current >= AUTO_FIX_MAX) return
-    lastAutoFixedNoteRef.current = log
+    if (!log) return
+    // De-dupe on a NORMALIZED signature (line numbers / paths / hashes stripped)
+    // so a fix that keeps producing "the same" error — even if a line moved —
+    // doesn't re-arm the agent, and correctly counts toward the budget.
+    const signature = normalizeErrorSignature(log)
+    if (autoFixCountRef.current >= AUTO_FIX_MAX) {
+      // Budget spent: go terminal-honest instead of a misleading "revisando".
+      setLiveRun((p) => (p.phase === "stuck" ? p : { ...p, phase: "stuck" }))
+      return
+    }
+    if (signature === lastAutoFixedNoteRef.current) return
+    lastAutoFixedNoteRef.current = signature
     autoFixCountRef.current += 1
     window.dispatchEvent(new CustomEvent("siragpt:code-fix-error", { detail: { text: log } }))
   }, [liveRun.phase, liveRun.note])
 
-  React.useEffect(
-    () => () => {
+  // Manual "Reintentar" from the stuck state: refill the auto-fix budget and
+  // re-run so the user can try again after editing the code themselves.
+  const retryFromStuck = React.useCallback(() => {
+    autoFixCountRef.current = 0
+    lastAutoFixedNoteRef.current = ""
+    void runApp()
+  }, [runApp])
+
+  // Lifecycle cleanup: stop the dev server when the pane unmounts AND on
+  // "pagehide" (tab close / navigation). Without this the runner is orphaned
+  // until the 30-min idle reaper — enough leaked dev servers can hit
+  // capacity_full. On pagehide a normal fetch would be cancelled, so we fire a
+  // keepalive navigator.sendBeacon straight at the host runner's /stop.
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const beaconStop = () => {
       if (pollRef.current) window.clearInterval(pollRef.current)
-    },
-    [],
-  )
+      // GitHub-backed runs are shut down by githubService.stop on unmount; the
+      // keepalive beacon only targets the same-origin host runner.
+      if (modeRef.current !== "host" || !runIdRef.current) return
+      try {
+        const base = `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}/code-runner`
+        const url = `${base}/${encodeURIComponent(runIdRef.current)}/stop`
+        if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
+          navigator.sendBeacon(url)
+        }
+      } catch {
+        /* best-effort — the idle reaper is the safety net */
+      }
+    }
+    window.addEventListener("pagehide", beaconStop)
+    return () => {
+      window.removeEventListener("pagehide", beaconStop)
+      if (pollRef.current) window.clearInterval(pollRef.current)
+      // Component teardown (e.g. switching away from the preview): actively stop
+      // the dev server instead of leaking it to the reaper.
+      if (modeRef.current === "github" && runIdRef.current) void githubService.stop(runIdRef.current)
+      else if (runIdRef.current) void hostRunnerService.stop(runIdRef.current)
+    }
+  }, [])
 
   // Debounce rebuilds so typing stays smooth; manual refresh bypasses it.
   const [snapshot, setSnapshot] = React.useState({ files, activePath })
@@ -466,6 +568,31 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
 
   const errorCount = logs.filter((l) => l.level === "error").length
   const entryLabel = result.entry ? result.entry.split("/").pop() : "preview"
+  const isLive = liveRun.phase === "ready"
+
+  // Live iframe src = dev-server URL + the sub-route from the address bar. The
+  // path is normalised to always start with a single leading slash.
+  const liveSrc = React.useMemo(() => {
+    if (!liveRun.devUrl) return liveRun.devUrl
+    const clean = `/${(navPath || "/").replace(/^\/+/, "")}`
+    return liveRun.devUrl.replace(/\/+$/, "") + clean
+  }, [liveRun.devUrl, navPath])
+
+  // Device framing: "responsive" fills the pane; tablet/phone render a fixed
+  // viewport (swapped when rotated) with a live width×height readout.
+  const framed = device !== "responsive"
+  const nominal = framed ? DEVICE_VIEWPORTS[device] : null
+  const frameW = nominal ? (orientation === "landscape" ? nominal.h : nominal.w) : null
+  const frameH = nominal ? (orientation === "landscape" ? nominal.w : nominal.h) : null
+  const commitPath = React.useCallback(() => {
+    const clean = `/${pathDraft.trim().replace(/^\/+/, "")}`
+    setPathDraft(clean)
+    setNavPath(clean)
+  }, [pathDraft])
+  // Keep the draft in sync when navPath is reset externally (e.g. a new run).
+  React.useEffect(() => {
+    setPathDraft(navPath)
+  }, [navPath])
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-zinc-50 dark:bg-zinc-950">
@@ -488,23 +615,47 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
 
         <div className="flex min-w-0 flex-1 items-center gap-2 rounded-md border border-border/50 bg-muted/25 px-3 py-1 text-[11px] text-muted-foreground shadow-inner">
           <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#FF0000]" />
-          <span className="truncate font-mono">localhost / {entryLabel}</span>
+          {isLive ? (
+            // Editable address bar → re-points the live iframe to a sub-route.
+            <form
+              className="flex min-w-0 flex-1 items-center gap-1"
+              onSubmit={(e) => {
+                e.preventDefault()
+                commitPath()
+              }}
+            >
+              <span className="shrink-0 font-mono text-muted-foreground/60">localhost</span>
+              <input
+                type="text"
+                value={pathDraft}
+                onChange={(e) => setPathDraft(e.target.value)}
+                onBlur={commitPath}
+                spellCheck={false}
+                aria-label="Ruta de la app"
+                title="Escribe una ruta y pulsa Enter para navegar"
+                className="min-w-0 flex-1 bg-transparent font-mono text-foreground outline-none placeholder:text-muted-foreground/50"
+                placeholder="/"
+              />
+            </form>
+          ) : (
+            <span className="truncate font-mono">localhost / {entryLabel}</span>
+          )}
           <span className="ml-auto shrink-0 rounded bg-background/70 px-1.5 py-px text-[9px] uppercase tracking-wide text-muted-foreground/80">
             {KIND_LABEL[result.kind]}
           </span>
         </div>
 
         <div className="flex shrink-0 items-center gap-0.5">
-          <GlassToggle
-            active={device === "responsive"}
-            onClick={() => setDevice("responsive")}
-            label="Escritorio"
-          >
-            <Monitor className="h-3.5 w-3.5" />
-          </GlassToggle>
-          <GlassToggle active={device === "phone"} onClick={() => setDevice("phone")} label="Móvil">
-            <Smartphone className="h-3.5 w-3.5" />
-          </GlassToggle>
+          <DeviceMenu
+            device={device}
+            orientation={orientation}
+            open={deviceMenuOpen}
+            widthReadout={frameW}
+            heightReadout={frameH}
+            onOpenChange={setDeviceMenuOpen}
+            onDevice={setDevice}
+            onRotate={() => setOrientation((o) => (o === "portrait" ? "landscape" : "portrait"))}
+          />
 
           {/* Phase B — auto-run stays primary; manual run is available when idle/error. */}
           {canRunProject ? (
@@ -607,14 +758,9 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
       <div className="min-h-0 flex-1 overflow-auto bg-zinc-100 p-0 dark:bg-zinc-900/55">
         {liveRun.phase === "ready" ? (
           // Real running app from the cloud runner (npm dev server).
-          <div
-            className={cn(
-              "mx-auto h-full bg-white transition-all dark:bg-zinc-900",
-              device === "phone" && "my-3 h-[calc(100%-1.5rem)] max-w-[390px] overflow-hidden rounded-[28px] border-[6px] border-zinc-800 shadow-2xl",
-            )}
-          >
+          <DeviceFrame device={device} width={frameW} height={frameH}>
             <iframe
-              src={liveRun.devUrl}
+              src={liveSrc}
               title="App en vivo (dev server)"
               // El dev server se sirve same-origin (vía proxy /api/code-runner)
               // pero ejecuta CÓDIGO GENERADO NO CONFIABLE: el sandbox SIN
@@ -626,7 +772,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
               allow="clipboard-write"
               className="h-full w-full border-0 bg-white dark:bg-zinc-900"
             />
-          </div>
+          </DeviceFrame>
         ) : liveRun.phase === "starting" ? (
           <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
             <ThinkingIndicator size="sm" />
@@ -647,15 +793,30 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
               Reintentar manualmente
             </button>
           </div>
+        ) : liveRun.phase === "stuck" ? (
+          // Terminal-honest state: the auto-fix budget is spent, nothing is
+          // actively "revisando" anymore. Show the truth + the log tail + a
+          // manual retry that refills the budget.
+          <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
+            <p className="text-sm font-medium text-rose-500">Lo intenté {AUTO_FIX_MAX} veces y no pude arreglarlo</p>
+            <p className="mx-auto max-w-md text-[12px] leading-relaxed text-muted-foreground">
+              Revisa el error de abajo y edita el código, o vuelve a intentarlo.
+            </p>
+            <pre className="mx-auto max-h-40 w-full max-w-md overflow-auto rounded-md border border-border/50 bg-muted/25 p-2 text-left font-mono text-[10px] leading-relaxed text-muted-foreground">
+              {(lastErrorLogRef.current || liveRun.note || "").trim() || "Sin salida de error."}
+            </pre>
+            <button
+              type="button"
+              onClick={retryFromStuck}
+              className="rounded-md bg-[#FF0000]/[0.08] px-3 py-1.5 text-[12px] font-medium text-[#C80000] hover:bg-[#FF0000]/[0.14] dark:text-[#FF6B6B]"
+            >
+              Reintentar
+            </button>
+          </div>
         ) : result.kind === "empty" || result.kind === "unsupported" ? (
           <PreviewLaunchpad kind={result.kind} note={result.note} />
         ) : (
-          <div
-            className={cn(
-              "mx-auto h-full bg-white transition-all dark:bg-zinc-900",
-              device === "phone" && "my-3 h-[calc(100%-1.5rem)] max-w-[390px] overflow-hidden rounded-[28px] border-[6px] border-zinc-800 shadow-2xl",
-            )}
-          >
+          <DeviceFrame device={device} width={frameW} height={frameH}>
             <iframe
               key={staticPreviewKey}
               srcDoc={result.html}
@@ -663,7 +824,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
               className="h-full w-full border-0 bg-white dark:bg-zinc-900"
               sandbox="allow-scripts allow-forms allow-popups allow-modals allow-pointer-lock"
             />
-          </div>
+          </DeviceFrame>
         )}
       </div>
 
@@ -779,5 +940,123 @@ function GlassToggle({
     >
       {children}
     </button>
+  )
+}
+
+const DEVICE_ICON: Record<Device, React.ReactNode> = {
+  responsive: <Monitor className="h-3.5 w-3.5" />,
+  tablet: <Tablet className="h-3.5 w-3.5" />,
+  phone: <Smartphone className="h-3.5 w-3.5" />,
+}
+const DEVICE_ROWS: { id: Device; label: string; icon: React.ReactNode }[] = [
+  { id: "responsive", label: "Escritorio", icon: <Monitor className="h-3.5 w-3.5" /> },
+  { id: "tablet", label: "Tablet", icon: <Tablet className="h-3.5 w-3.5" /> },
+  { id: "phone", label: "Móvil", icon: <Smartphone className="h-3.5 w-3.5" /> },
+]
+
+// Device selector dropdown: responsive / tablet / phone + a rotate toggle and a
+// live width×height readout. Mirrors the pane's glass styling.
+function DeviceMenu({
+  device,
+  orientation,
+  open,
+  widthReadout,
+  heightReadout,
+  onOpenChange,
+  onDevice,
+  onRotate,
+}: {
+  device: Device
+  orientation: Orientation
+  open: boolean
+  widthReadout: number | null
+  heightReadout: number | null
+  onOpenChange: (open: boolean) => void
+  onDevice: (device: Device) => void
+  onRotate: () => void
+}) {
+  const ref = React.useRef<HTMLDivElement>(null)
+  React.useEffect(() => {
+    if (!open) return
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onOpenChange(false)
+    }
+    document.addEventListener("mousedown", onDoc)
+    return () => document.removeEventListener("mousedown", onDoc)
+  }, [open, onOpenChange])
+  const framed = device !== "responsive"
+  return (
+    <div ref={ref} className="relative flex items-center gap-0.5">
+      <GlassToggle active={framed} onClick={() => onOpenChange(!open)} label="Tamaño de pantalla">
+        {DEVICE_ICON[device]}
+      </GlassToggle>
+      {framed && widthReadout && heightReadout ? (
+        <span className="shrink-0 rounded bg-background/70 px-1 py-px font-mono text-[9px] tabular-nums text-muted-foreground/80">
+          {widthReadout}×{heightReadout}
+        </span>
+      ) : null}
+      {framed ? (
+        <GlassToggle
+          active={orientation === "landscape"}
+          onClick={onRotate}
+          label={orientation === "portrait" ? "Rotar a horizontal" : "Rotar a vertical"}
+        >
+          <RotateCw className="h-3.5 w-3.5" />
+        </GlassToggle>
+      ) : null}
+      {open ? (
+        <div className="absolute right-0 top-8 z-20 w-40 overflow-hidden rounded-md border border-border/60 bg-background/95 py-1 shadow-lg backdrop-blur-xl">
+          {DEVICE_ROWS.map((row) => (
+            <button
+              key={row.id}
+              type="button"
+              onClick={() => {
+                onDevice(row.id)
+                onOpenChange(false)
+              }}
+              className={cn(
+                "flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-foreground transition-colors hover:bg-muted/60",
+                device === row.id && "text-[#C80000] dark:text-[#FF6B6B]",
+              )}
+            >
+              {row.icon}
+              <span className="flex-1">{row.label}</span>
+              {device === row.id ? <Circle className="h-1.5 w-1.5 fill-current" /> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+// Renders children in a fixed device viewport (tablet/phone, swapped on rotate)
+// or stretched to the pane ("responsive"). The phone keeps its rounded bezel.
+function DeviceFrame({
+  device,
+  width,
+  height,
+  children,
+}: {
+  device: Device
+  width: number | null
+  height: number | null
+  children: React.ReactNode
+}) {
+  if (device === "responsive" || !width || !height) {
+    return <div className="mx-auto h-full bg-white transition-all dark:bg-zinc-900">{children}</div>
+  }
+  return (
+    <div className="flex h-full w-full items-center justify-center p-3">
+      <div
+        className={cn(
+          "overflow-hidden bg-white shadow-2xl transition-all dark:bg-zinc-900",
+          device === "phone" ? "rounded-[28px] border-[6px] border-zinc-800" : "rounded-xl border-2 border-zinc-800",
+        )}
+        style={{ width, height, maxWidth: "100%", maxHeight: "100%" }}
+      >
+        {children}
+      </div>
+    </div>
   )
 }

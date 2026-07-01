@@ -40,7 +40,6 @@ import { AICodeChatPanel } from "./ai-code-chat-panel"
 import { CodeHub } from "./code-hub"
 import { PreviewPane } from "./preview-pane"
 import { ProjectInviteDialog } from "./project-invite-dialog"
-import { PublishingConsole } from "./publishing-console"
 import { TerminalPanel } from "./terminal-panel"
 import { ToolLauncher } from "./tool-launcher"
 import { ToolScreen } from "./tool-screen"
@@ -79,7 +78,6 @@ export function CodeWorkspace() {
   })
   const [paletteOpen, setPaletteOpen] = React.useState(false)
   const [paletteQuery, setPaletteQuery] = React.useState("")
-  const [publishingOpen, setPublishingOpen] = React.useState(false)
   const [openPanels, setOpenPanels] = React.useState<Set<WorkspacePanelId>>(
     () => new Set<WorkspacePanelId>(["preview", "terminal"]),
   )
@@ -548,7 +546,6 @@ export function CodeWorkspace() {
         })()}
       </div>
 
-      <PublishingConsole open={publishingOpen} onOpenChange={setPublishingOpen} />
       <ProjectInviteDialog open={inviteOpen} onOpenChange={setInviteOpen} />
 
       <Dialog
