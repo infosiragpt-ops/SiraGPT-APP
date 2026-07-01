@@ -112,12 +112,24 @@ const PREFETCH_PENDING = Symbol('prefetch_pending');
  * prefetchCallTimeoutMs() (env SIRAGPT_TOOL_PREFETCH_TIMEOUT_MS, default 8000)
  * for stragglers (partial results, never a stall).
  */
-async function prefetchParallelDispatch(registry, toolCalls, ctx, exhaustedTools) {
+async function prefetchParallelDispatch(registry, toolCalls, ctx, exhaustedTools, dupCallCache) {
   const out = new Map();
   if (TOOL_PARALLEL_DISABLED || !Array.isArray(toolCalls)) return out;
+  // Skip calls whose (name+args) signature is already duplicate-cached — the
+  // main loop short-circuits those to the cached result, so prefetching would
+  // burn a real dispatch + a tool-budget slot for nothing. Also dedupe repeated
+  // signatures WITHIN this batch: dispatch the first occurrence only; the
+  // repeats resolve to the cached result in the main loop once the first is
+  // stored (dupCallCache.set at the store site).
+  const seenSig = new Set();
   const safe = toolCalls.filter((c) => {
     const n = c && c.function && c.function.name;
-    return isParallelSafeTool(n) && !(exhaustedTools && exhaustedTools.has(n)) && c.id != null;
+    if (!isParallelSafeTool(n) || (exhaustedTools && exhaustedTools.has(n)) || c.id == null) return false;
+    const sig = toolCallSignature(n, c.function?.arguments);
+    if (dupCallCache && dupCallCache.has(sig)) return false; // cached from a prior step
+    if (seenSig.has(sig)) return false; // duplicate within this batch — dispatch once
+    seenSig.add(sig);
+    return true;
   });
   if (safe.length < 2) return out; // nothing to gain from parallelism
   for (let i = 0; i < safe.length; i += TOOL_PARALLEL_MAX) {
@@ -1196,7 +1208,7 @@ async function run(openai, opts) {
     let prefetched = new Map();
     if (!ctx?.signal?.aborted) {
       try {
-        prefetched = await prefetchParallelDispatch(registry, toolCalls, ctx, exhaustedTools);
+        prefetched = await prefetchParallelDispatch(registry, toolCalls, ctx, exhaustedTools, dupCallCache);
         if (prefetched.size > 1) {
           console.log(`[react-agent] parallel-dispatched ${prefetched.size} read-only tools (step ${step})`);
         }

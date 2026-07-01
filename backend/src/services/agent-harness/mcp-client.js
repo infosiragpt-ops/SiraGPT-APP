@@ -55,6 +55,46 @@ function decryptHeaders(headersEncrypted) {
   }
 }
 
+function mcpAllowPrivate() {
+  return ['1', 'true', 'yes', 'on'].includes(String(process.env.SIRAGPT_MCP_ALLOW_PRIVATE || '').toLowerCase());
+}
+
+/**
+ * Second SSRF defense layer for MCP transports (mirrors web-fetch's
+ * resolveAndAssertSafe). validateServerInput() only inspects the hostname
+ * STRING at registration time, and isPrivateOrReservedAddress returns false
+ * for any non-IP-literal hostname — so a public hostname whose DNS resolves
+ * to a private / loopback / cloud-metadata address (169.254.169.254 etc.)
+ * slips through registration and is then reached at connect time with the
+ * user's stored auth headers (anti-rebinding hole). Resolve the host and
+ * reject private/reserved records before opening any socket. Gated by
+ * SIRAGPT_MCP_ALLOW_PRIVATE for self-hosted LAN deployments. Never leaks the
+ * raw WebFetchError type; on any failure the connect is refused.
+ *
+ * `server._lookup` may be injected in tests to stub DNS.
+ */
+async function assertServerHostSafe(server) {
+  if (mcpAllowPrivate()) return;
+  let host;
+  try {
+    host = new URL(server.url).hostname.replace(/^\[|\]$/g, '');
+  } catch (_) {
+    throw new Error('mcp server has an invalid URL');
+  }
+  if (host === 'localhost' || host.endsWith('.localhost')) {
+    throw new Error('mcp server host resolves to a private / loopback / metadata address');
+  }
+  try {
+    const { resolveAndAssertSafe } = require('../connectors/web-fetch');
+    await resolveAndAssertSafe(host, server._lookup);
+  } catch (err) {
+    if (err && err.code === 'web_fetch_resolved_blocked') {
+      throw new Error('mcp server host resolves to a private / loopback / metadata address');
+    }
+    throw new Error(`mcp server host DNS check failed: ${(err && err.message) || String(err)}`);
+  }
+}
+
 function withTimeout(promise, ms, label) {
   let timer;
   return Promise.race([
@@ -227,6 +267,9 @@ function namespaceToolNames(slug, rawNames) {
  * `mcp: true` so the registry assigns the 'confirm' tier by default).
  */
 async function discoverServerTools(server) {
+  // SSRF re-validation: refuse before connecting if the host DNS-resolves to a
+  // private / loopback / metadata address (a public hostname that rebinds).
+  await assertServerHostSafe(server);
   const client = await getClient(server);
   const listed = await withTimeout(client.listTools(), DISCOVERY_TIMEOUT_MS, 'mcp listTools');
   const slug = slugifyServerName(server.name);

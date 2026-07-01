@@ -71,6 +71,20 @@ describe("buildPreviewDocument", () => {
     assert.match(r.html, /marked/)
   })
 
+  it("escapes a literal </script> inside markdown so the inline script is not terminated early", () => {
+    const md = "# Doc\n\n```html\n</script>\n```\n"
+    const r = buildPreviewDocument(files({ "README.md": md }), "README.md")
+    assert.equal(r.kind, "markdown")
+    // Isolate the marked.parse(...) inline payload that embeds the raw markdown.
+    const m = r.html.match(/marked\.parse\((".*?")\)/)
+    assert.ok(m, "expected a marked.parse(...) call with a JSON string payload")
+    const payload = m![1]
+    // The doc's literal </script> must be escaped inside the payload, never raw —
+    // a raw </script would terminate the inline <script> element early.
+    assert.doesNotMatch(payload, /<\/script/i)
+    assert.match(payload, /<\\\/script/)
+  })
+
   it("renders svg directly", () => {
     const r = buildPreviewDocument(files({ "logo.svg": "<svg><rect/></svg>" }), "logo.svg")
     assert.equal(r.kind, "svg")

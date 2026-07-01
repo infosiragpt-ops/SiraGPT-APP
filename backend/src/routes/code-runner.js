@@ -171,6 +171,7 @@ function proxyApp(req, res) {
       up.pipe(res);
     },
   );
+  res.on('close', () => upstream.destroy());
   upstream.on('error', () => {
     if (!res.headersSent) {
       res.status(502).json({ error: 'runner_unreachable', message: 'El dev server no respondió.' });

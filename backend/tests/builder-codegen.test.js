@@ -66,6 +66,46 @@ test('naming helpers normalise messy names', () => {
   assert.equal(kebabCase('!!!'), 'item');
 });
 
+test('pascalCase never emits a digit-leading identifier', () => {
+  // Prisma model names + TS interface names must start with a letter.
+  assert.match(pascalCase('4x4'), /^[A-Za-z]/);
+  assert.equal(pascalCase('4x4'), 'X4x4');
+  assert.equal(pascalCase('3d'), 'X3d');
+  assert.equal(pascalCase('2fa'), 'X2fa');
+  assert.match(camelCase('4x4'), /^[A-Za-z]/);
+  assert.equal(camelCase('4x4'), 'x4x4');
+});
+
+test('digit-leading entity names produce valid Prisma schema + TS accessors', () => {
+  const brief = makeBrief({
+    dataEntities: [{ name: '4x4', fields: ['nombre'] }],
+  });
+  const { files } = scaffoldFromBrief(brief);
+  const map = fileMap(files);
+
+  const schema = map.get('prisma/schema.prisma');
+  assert.ok(schema, 'prisma/schema.prisma exists');
+  // No `model <digit>` — Prisma rejects digit-leading model names.
+  assert.doesNotMatch(schema.content, /model\s+[0-9]/);
+  assert.match(schema.content, /model X4x4 \{/);
+
+  // URL slug stays kebabCase ("4x4" is a valid path segment).
+  const page = map.get('app/4x4/page.tsx');
+  assert.ok(page, 'app/4x4/page.tsx exists');
+  // interface name starts with a letter.
+  assert.match(page.content, /interface X4x4 \{/);
+  assert.doesNotMatch(page.content, /interface\s+[0-9]/);
+
+  const route = map.get('app/api/4x4/route.ts');
+  assert.ok(route, 'app/api/4x4/route.ts exists');
+  // camelCased accessor matches the schema model name.
+  assert.match(route.content, /prisma\.x4x4\./);
+  assert.doesNotMatch(route.content, /prisma\.[0-9]/);
+
+  // Generated TS/TSX must still parse.
+  assertGeneratedTsParses(files);
+});
+
 test('tsType maps blueprint field types and editableFields drops id/timestamps', () => {
   assert.equal(tsType('integer'), 'number');
   assert.equal(tsType('decimal'), 'number');
@@ -168,8 +208,14 @@ test('each entity yields a CRUD API route + a list/create page', () => {
     assert.match(route.content, /export async function GET/);
     assert.match(route.content, /export async function POST/);
     assert.match(page.content, /"use client";/);
-    assert.match(page.content, new RegExp(`const API = "\\.\\./api/${slug}";`));
-    assert.doesNotMatch(page.content, new RegExp(`const API = "/api/${slug}";`));
+    assert.match(
+      page.content,
+      new RegExp(
+        `const API = \\(process\\.env\\.NEXT_PUBLIC_SIRA_PREVIEW_BASE_PATH \\|\\| ""\\) \\+ "/api/${slug}";`,
+      ),
+    );
+    // Never a bare relative path (breaks under the tokenized preview proxy).
+    assert.doesNotMatch(page.content, new RegExp(`const API = "\\.\\./api/${slug}";`));
     assert.match(page.content, /export default function/);
   }
 });
