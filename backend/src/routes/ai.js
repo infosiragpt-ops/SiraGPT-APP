@@ -1754,7 +1754,7 @@ router.post(
     let resumeSession = null;
 
     if (streamId) {
-      streamControllers.set(streamId, controller);
+      streamControllers.set(`${req.user.id}:${streamId}`, controller);
       console.log(`Stream registered with ID: ${streamId}`);
     }
 
@@ -5594,10 +5594,17 @@ router.post(
                 const __agenticAnswer = (agenticResult && typeof agenticResult.finalAnswer === 'string')
                   ? agenticResult.finalAnswer.trim()
                   : '';
-                const __SUCCESS_REASONS = new Set(['finalized', 'plain_text_finalize']);
+                // 'finalized_last_step_guard_override' (last-step guard reject
+                // rescued the model's real answer) and 'finalized_guard_breaker*'
+                // (breaker tripped on an unsatisfiable guard, accepted the
+                // degraded-but-real answer) both carry a genuine answer — treat
+                // them as success so the route delivers it instead of discarding
+                // it and re-generating via the plain stream.
+                const __SUCCESS_REASONS = new Set(['finalized', 'plain_text_finalize', 'finalized_last_step_guard_override']);
+                const __agenticReason = String((agenticResult && agenticResult.stoppedReason) || '');
                 const __agenticOk =
                   agenticResult
-                  && __SUCCESS_REASONS.has(agenticResult.stoppedReason)
+                  && (__SUCCESS_REASONS.has(agenticResult.stoppedReason) || __agenticReason.startsWith('finalized_guard_breaker'))
                   && __agenticAnswer.length > 0
                   && __agenticAnswer !== '(agent returned empty message)';
                 if (__agenticOk) {
@@ -6501,7 +6508,7 @@ router.post(
       }
   
       if (streamId) {
-        streamControllers.delete(streamId);
+        streamControllers.delete(`${req.user.id}:${streamId}`);
         console.log(`Stream unregistered for ID: ${streamId}`);
       }
 
@@ -6823,13 +6830,15 @@ router.post('/stop-stream', authenticateToken, (req, res) => {
     return res.status(400).json({ error: 'streamId is required' });
   }
 
-  // Map se us ID ka controller dhoondein
-  const controller = streamControllers.get(streamId);
+  // Look up the controller under the caller's own namespaced key so a user
+  // can only stop their OWN in-flight stream (no cross-tenant abort, and no
+  // shared-key overwrite between two users reusing the same client streamId).
+  const controller = streamControllers.get(`${req.user.id}:${streamId}`);
 
   if (controller) {
     console.log(`>>> Aborting stream with ID: ${streamId}`);
     controller.abort(); // <-- YEH LINE STREAM KO FORAN ROK DEGI
-    streamControllers.delete(streamId); // Usko foran map se hata dein
+    streamControllers.delete(`${req.user.id}:${streamId}`); // Usko foran map se hata dein
     return res.status(200).json({ message: 'Stop signal sent.', stopped: true });
   } else {
     // The client aborts its local fetch immediately before notifying the
@@ -8642,87 +8651,12 @@ router.get('/anon-quota', optionalAuth, async (req, res) => {
   }
 });
 
-router.post("/createVisualizeChart", async (req, res) => {
-  try {
-    const { prompt } = req.body;
-
-    if (!prompt) {
-      return res.status(400).json({ error: "Missing 'prompt' in request body." });
-    }
-    const client = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-    });
-    console.log('client', client);
-
-    // 1. Create an assistant with code interpreter
-    const assistant = await client.beta.assistants.create({
-      name: "Chart Creator",
-      instructions: "You create and render data visualizations using matplotlib or seaborn.",
-      model: "gpt-4o-mini",
-      tools: [{ type: "code_interpreter" }],
-    });
-
-    // 2. Create a thread
-    const thread = await client.beta.threads.create();
-    console.log('thread', thread);
-
-    // 3. Add the user's message
-    await client.beta.threads.messages.create(thread.id, {
-      role: "user",
-      content: prompt,
-    });
-
-    // 4. Run the assistant
-    const run = await client.beta.threads.runs.create(thread.id, {
-      assistant_id: assistant.id,
-    });
-    console.log('run', run);
-
-    // 5. Poll until the run is complete (max 120s / 120 iterations)
-    const TERMINAL_STATES = new Set(['completed', 'failed', 'cancelled', 'expired', 'incomplete']);
-    const MAX_POLL_ITERATIONS = 120;
-    let status;
-    let pollCount = 0;
-    do {
-      const runData = await client.beta.threads.runs.retrieve(thread.id, run.id);
-      status = runData.status;
-      pollCount++;
-      if (!TERMINAL_STATES.has(status)) await new Promise(r => setTimeout(r, 1000));
-    } while (!TERMINAL_STATES.has(status) && pollCount < MAX_POLL_ITERATIONS);
-    if (status !== 'completed') {
-      return res.status(500).json({ error: `Assistant run ended with status: ${status}` });
-    }
-    console.log('status', status);
-
-    // 6. Retrieve messages (chart image)
-    const messages = await client.beta.threads.messages.list(thread.id);
-    console.log('messages', messages);
-
-    for (const msg of messages.data) {
-      for (const content of msg.content) {
-        if (content.type === "image_file") {
-          const fileId = content.image_file.file_id;
-          const imageData = await client.files.content(fileId);
-
-          // Convert to buffer
-          const buffer = Buffer.from(await imageData.arrayBuffer());
-
-          // Return image as base64 directly
-          return res.json({
-            success: true,
-            prompt,
-            image_base64: buffer.toString("base64"),
-          });
-        }
-      }
-    }
-
-    res.status(404).json({ error: "No image generated by the assistant." });
-  } catch (error) {
-    console.error("Error:", error);
-    res.status(500).json({ error: error.message });
-  }
-});
+// NOTE: `POST /createVisualizeChart` was removed. It was dead code (zero
+// frontend/test callers) that (a) ran with NO auth/rate/credit middleware and
+// (b) spun up an OpenAI Assistant + thread + run per anonymous request using
+// the deprecated Assistants API — an unauthenticated token-spend / DoS vector
+// that also leaked a fresh Assistant object it never deleted. Chart rendering
+// is handled by the authenticated visual-media tools (see agents/visual-media-tools.js).
 
 
 // ✅ Generate Vector PowerPoint Presentation (Gamma-style)
@@ -9465,7 +9399,7 @@ router.post(
     const { streamId } = req.body;
 
     if (streamId) {
-      streamControllers.set(streamId, controller);
+      streamControllers.set(`${req.user.id}:${streamId}`, controller);
       console.log(`Web Dev Stream registered with ID: ${streamId}`);
     }
 
@@ -9756,7 +9690,7 @@ Every element should feel intentionally designed, polished, and premium. The use
       }
     } finally {
       if (streamId) {
-        streamControllers.delete(streamId);
+        streamControllers.delete(`${req.user.id}:${streamId}`);
         console.log(`Web Dev Stream unregistered for ID: ${streamId}`);
       }
 

@@ -1107,6 +1107,9 @@ app.use('/api/telegram', telegramRoutes);
 try {
     const tgControl = require('./src/services/telegram/telegram-control');
     const tgCfg = tgControl.getTelegramConfig();
+    if (tgCfg.enabled && !tgCfg.webhookSecret) {
+        console.warn('[telegram] TELEGRAM_BOT_TOKEN is set without TELEGRAM_WEBHOOK_SECRET — the /api/telegram/webhook endpoint will reject all requests (fail closed). Set TELEGRAM_WEBHOOK_SECRET to enable it.');
+    }
     if (tgCfg.enabled && tgCfg.webhookUrl) {
         tgControl
             .setTelegramWebhook(tgCfg)

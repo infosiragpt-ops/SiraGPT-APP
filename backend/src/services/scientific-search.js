@@ -970,6 +970,14 @@ async function callProviderWithRetry(fn, query, opts, retries) {
       return await fn(query, opts);
     } catch (err) {
       lastErr = err;
+      // A caller cancel (opts.signal) surfaces as an 'aborted' fetch rejection,
+      // which the transient regex would otherwise retry — re-issuing requests
+      // the user already cancelled (each retry re-aborts instantly at
+      // fetchWithAbort, so it's pure wasted loops + delayed rejection). Stop the
+      // retry ladder immediately on a caller cancel. Internal deadline timeouts
+      // are unaffected: they reject with the distinct 'timed out after Xms'
+      // message (not the signal) and remain retryable.
+      if (opts?.signal?.aborted) break;
       if (attempt >= retries || !isTransientError(err)) break;
       const delay = 150 * (attempt + 1) + Math.floor(Math.random() * 100); // backoff + jitter
       await new Promise((resolve) => { const t = setTimeout(resolve, delay); t.unref?.(); });
@@ -1084,9 +1092,18 @@ async function search(query, opts = {}) {
   );
 
   let totalTimer = null;
+  // Track whether the fan-out actually finished. If the total-timeout timer
+  // wins the race below, some providers may still be pending — those contribute
+  // neither papers nor an `errors` entry (collect() only runs on settle), so the
+  // result is silently truncated (whole providers missing). We must NOT cache
+  // such a wall-clock-truncated partial result as if it were complete (see the
+  // cache gate below). Late arrivals mutate nothing already cached because
+  // cloneValue snapshots at set().
+  let allDone = false;
+  const allSettledP = Promise.allSettled(perProvider).then(() => { allDone = true; });
   try {
     await Promise.race([
-      Promise.allSettled(perProvider),
+      allSettledP,
       new Promise((resolve) => { totalTimer = setTimeout(resolve, totalTimeoutMs); totalTimer.unref?.(); }),
     ]);
   } finally {
@@ -1119,8 +1136,10 @@ async function search(query, opts = {}) {
   // (rejections, non-array bodies) is incomplete/degraded — caching it would
   // serve those transient failures for the whole TTL, long after the providers
   // recovered. A genuinely empty result with no errors IS cacheable. Let the
-  // next identical query retry when something failed this time.
-  if (!errors.length) {
+  // next identical query retry when something failed this time. `allDone` also
+  // guards against caching a fan-out truncated by the total-timeout deadline
+  // (providers still pending appear in neither `papers` nor `errors`).
+  if (allDone && !errors.length) {
     searchCache.set(cleanQuery, opts, result);
   }
   return result;

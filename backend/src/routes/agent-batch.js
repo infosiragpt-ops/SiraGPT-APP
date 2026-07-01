@@ -31,6 +31,7 @@ const crypto = require('crypto');
 const { body, validationResult } = require('express-validator');
 
 const { authenticateToken } = require('../middleware/auth');
+const { enforcePlanQuota } = require('../middleware/enforce-plan-quota');
 const {
   MAX_SIMULTANEOUS_DOCUMENTS,
 } = require('../config/document-batch-limits');
@@ -206,7 +207,7 @@ function clampTimeout(value) {
 }
 
 // ── Route ─────────────────────────────────────────────────────────
-router.post('/batch', authenticateToken, validators, async (req, res) => {
+router.post('/batch', authenticateToken, enforcePlanQuota({ surface: 'agent.batch' }), validators, async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     return res.status(400).json({ ok: false, errors: errors.array() });

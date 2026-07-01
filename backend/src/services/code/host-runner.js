@@ -409,7 +409,10 @@ async function pipeline(run) {
 }
 
 function evictIfNeeded(userId) {
-  const active = [...runs.values()];
+  // Only LIVE runs (a real dev server installing/booting/serving) count toward
+  // the global cap. Errored/dead runs linger in the map with no live child and
+  // must not deny capacity to other users.
+  const active = [...runs.values()].filter((r) => ['installing', 'starting', 'ready'].includes(r.phase));
   if (active.length < MAX_CONCURRENT) return;
   // Only ever evict the CALLER's OWN least-recently-touched run — never kill
   // another user's live dev server to make room (cross-user eviction DoS).
@@ -521,7 +524,9 @@ function getStatus(runId, userId) {
     return { running: false, ready: false, phase: 'idle', framework: null, error: null, tail: [], devUrl: '' };
   }
   if (userId && run.userId && run.userId !== userId) return null; // ownership mismatch
-  run.lastTouch = Date.now();
+  // Only refresh liveness for non-terminal runs. A client polling a FAILED run
+  // must not keep it alive past the idle reaper (dead runs should be collectable).
+  if (run.phase !== 'error') run.lastTouch = Date.now();
   return {
     running: ['installing', 'starting', 'ready'].includes(run.phase),
     ready: run.phase === 'ready',
@@ -606,5 +611,6 @@ module.exports = {
   // child process, so the ownership / phase-gate logic can be unit-tested.
   // No behavioural impact on the production paths.
   _seedRunForTest: (run) => { runs.set(safeId(run.runId), { port: null, phase: 'ready', previewToken: null, ...run, runId: safeId(run.runId) }); },
+  _peekRunForTest: (runId) => runs.get(safeId(runId)) || null,
   _resetRunsForTest: () => { runs.clear(); },
 };

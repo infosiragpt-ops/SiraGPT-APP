@@ -139,3 +139,39 @@ test('isRuntimeEnvFile identifies runtime .env files but not templates', () => {
   assert.equal(runner.isRuntimeEnvFile('.env.example'), false);
   assert.equal(runner.isRuntimeEnvFile('.env.local.example'), false);
 });
+
+test('errored/dead runs do not hold the global concurrency slots (cross-user DoS)', async () => {
+  runner._resetRunsForTest();
+  // Two errored runs owned by user A fill the map but have NO live dev server.
+  // MAX_CONCURRENT defaults to 2 → these two would trip capacity_full under the
+  // old "count every run" logic.
+  runner._seedRunForTest({ runId: 'dead-1', userId: 'alice', port: null, phase: 'error', previewToken: null });
+  runner._seedRunForTest({ runId: 'dead-2', userId: 'alice', port: null, phase: 'error', previewToken: null });
+
+  await withEnv({ CODE_HOST_RUNNER: '1' }, async () => {
+    // User B (owns none of the errored runs) must NOT be denied capacity.
+    const res = await runner.startRun({
+      runId: 'bob-run',
+      userId: 'bob',
+      files: { 'package.json': '{"name":"x","private":true}' },
+    });
+    assert.equal(res.runId, 'bob-run');
+    // Kill the freshly-started run immediately so the async npm install/dev
+    // pipeline doesn't run for real during the test.
+    runner.stopRun('bob-run');
+  });
+  runner._resetRunsForTest();
+});
+
+test('getStatus() does not bump lastTouch on a terminal (error) run', () => {
+  runner._resetRunsForTest();
+  const past = Date.now() - 60 * 60 * 1000; // 1h ago
+  runner._seedRunForTest({ runId: 'err-run', userId: 'alice', port: null, phase: 'error', previewToken: null, lastTouch: past, logs: [] });
+
+  const status = runner.getStatus('err-run', 'alice');
+  assert.equal(status.phase, 'error');
+  // Polling a dead run must not refresh its liveness (so the idle reaper can
+  // eventually collect it even while a client keeps polling).
+  assert.equal(runner._peekRunForTest('err-run').lastTouch, past);
+  runner._resetRunsForTest();
+});

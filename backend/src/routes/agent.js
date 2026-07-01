@@ -154,11 +154,27 @@ router.post(
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders();
-    const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+    const send = (obj) => {
+      if (res.writableEnded || res.destroyed) return;
+      try {
+        res.write(`data: ${JSON.stringify(obj)}\n\n`);
+      } catch {
+        /* socket gone */
+      }
+    };
+
+    // Abort the ReAct/executor loop when the client disconnects so we
+    // don't keep burning model tokens into a dead socket. Mirrors the
+    // sibling batch route (agent-batch.js). The writableEnded guard is
+    // required because 'close' also fires after a normal res.end().
+    const ac = new AbortController();
+    req.on('close', () => {
+      if (!res.writableEnded) ac.abort();
+    });
 
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const collection = req.body.collection || 'default';
-    const ctx = { openai, userId: req.user.id, collection };
+    const ctx = { openai, userId: req.user.id, collection, signal: ac.signal };
 
     // Skills path (new) vs inline tools (legacy). The inline path stays
     // so existing clients that don't know about the registry keep

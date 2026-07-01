@@ -8,6 +8,7 @@ const {
   installAuthSessionMock,
   reloadModule,
 } = require('./http-test-utils');
+const prisma = require('../src/config/database');
 
 // ── Tiny SSE client ──────────────────────────────────────────────
 // Drives a real HTTP request against an ephemeral server and parses
@@ -272,5 +273,44 @@ describe('POST /api/agent/batch', () => {
     assert.equal(summary.cancelled, 0);
     const errEvt = res.events.find((e) => e.type === 'error');
     assert.equal(errEvt.error.message, 'nope');
+  });
+
+  test('enforces plan quota: FREE user over daily cap is 429ed before any runner runs', async () => {
+    // FREE plan is metered at FREE_CALL_LIMIT (3) daily calls. Mock the
+    // apiUsage count high so the plan-quota snapshot reports `exceeded`.
+    const freeAuth = installAuthSessionMock({ plan: 'FREE', id: 'free-user-1' });
+    const prevEnforced = process.env.PLAN_QUOTAS_ENFORCED;
+    process.env.PLAN_QUOTAS_ENFORCED = 'true';
+    const originalCount = prisma.apiUsage && prisma.apiUsage.count;
+    if (!prisma.apiUsage) prisma.apiUsage = {};
+    prisma.apiUsage.count = async () => 99;
+
+    const freeRoute = reloadModule('../src/routes/agent-batch');
+    let runnerCalls = 0;
+    freeRoute.INTERNAL.setRunner(async () => {
+      runnerCalls++;
+      return { ok: true };
+    });
+    const freeApp = buildRouteTestApp('/api/agent', freeRoute);
+    const freeServer = await listen(freeApp);
+
+    try {
+      const res = await postJson(freeServer, '/api/agent/batch', {
+        tasks: [{ goal: 'expensive batch task' }],
+      }, { Authorization: freeAuth.authHeader });
+
+      assert.equal(res.status, 429);
+      assert.equal(res.body.plan, 'FREE');
+      assert.equal(res.body.surface, 'agent.batch');
+      assert.equal(runnerCalls, 0, 'runner must not be invoked when quota is exceeded');
+    } finally {
+      await new Promise((r) => freeServer.close(r));
+      freeRoute.INTERNAL.setRunner(freeRoute.INTERNAL.defaultRunner);
+      freeAuth.restore();
+      if (originalCount) prisma.apiUsage.count = originalCount;
+      else delete prisma.apiUsage.count;
+      if (prevEnforced === undefined) delete process.env.PLAN_QUOTAS_ENFORCED;
+      else process.env.PLAN_QUOTAS_ENFORCED = prevEnforced;
+    }
   });
 });

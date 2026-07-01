@@ -26,10 +26,16 @@ test('isChatAllowed — open when no allow-list, restricted otherwise', () => {
   assert.equal(tg.isChatAllowed({ allowedChatIds: ['10'] }, 11), false);
 });
 
-test('verifyWebhookSecret', () => {
-  assert.equal(tg.verifyWebhookSecret('anything', { webhookSecret: '' }), true);
+test('verifyWebhookSecret — fails closed with no secret, constant-time match otherwise', () => {
+  // No secret configured → reject (fail closed; endpoint would otherwise be open).
+  assert.equal(tg.verifyWebhookSecret('anything', { webhookSecret: '' }), false);
+  assert.equal(tg.verifyWebhookSecret('anything', {}), false);
+  assert.equal(tg.verifyWebhookSecret('anything', null), false);
+  // Matching secret → accept; mismatch (incl. length differences) → reject.
   assert.equal(tg.verifyWebhookSecret('s3cr3t', { webhookSecret: 's3cr3t' }), true);
   assert.equal(tg.verifyWebhookSecret('nope', { webhookSecret: 's3cr3t' }), false);
+  assert.equal(tg.verifyWebhookSecret('', { webhookSecret: 's3cr3t' }), false);
+  assert.equal(tg.verifyWebhookSecret('s3cr3t-longer', { webhookSecret: 's3cr3t' }), false);
 });
 
 test('parseCommand', () => {

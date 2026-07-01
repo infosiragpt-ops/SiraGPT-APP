@@ -1,5 +1,7 @@
 'use strict';
 
+const crypto = require('crypto');
+
 /**
  * telegram-control — control siraGPT code/dev agents from Telegram.
  *
@@ -61,10 +63,19 @@ function isChatAllowed(config, chatId) {
   return config.allowedChatIds.includes(String(chatId));
 }
 
-/** Verify Telegram's secret-token header (set via setWebhook). */
+/**
+ * Verify Telegram's secret-token header (set via setWebhook).
+ * Fails CLOSED: with no secret configured the webhook is unauthenticated and
+ * MUST NOT accept anonymous callers (they could reach enqueueRun → host-side
+ * agent/code runs). The route surfaces a clearer 403 in that case. When a
+ * secret IS configured, compare in constant time over SHA-256 digests
+ * (timingSafeEqual throws on unequal-length buffers, so hash both sides first).
+ */
 function verifyWebhookSecret(headerValue, config) {
-  if (!config || !config.webhookSecret) return true; // no secret configured → accept
-  return String(headerValue || '') === config.webhookSecret;
+  if (!config || !config.webhookSecret) return false; // no secret configured → reject
+  const provided = crypto.createHash('sha256').update(String(headerValue || '')).digest();
+  const expected = crypto.createHash('sha256').update(String(config.webhookSecret)).digest();
+  return crypto.timingSafeEqual(provided, expected);
 }
 
 function parseCommand(text) {

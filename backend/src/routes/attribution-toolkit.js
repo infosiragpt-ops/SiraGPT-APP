@@ -34,7 +34,9 @@
  *
  *   GET  /health                  — module load + sample counts snapshot
  *
- * Auth: optional. Per-user operations require a userId in the body / query.
+ * Auth: optional. Per-user operations require an authenticated user; the
+ * identity is taken from the auth token only — never from a caller-supplied
+ * userId — to prevent cross-user reads/writes of attribution telemetry.
  */
 
 const express = require('express');
@@ -55,7 +57,7 @@ const MAX_PROMPT = 8_000;
 const MAX_RESPONSE = 60_000;
 
 function userIdFrom(req) {
-  return req.user?.id || req.body?.userId || req.query?.userId || null;
+  return req.user?.id || null;
 }
 
 function safeText(v, max) {
@@ -102,7 +104,10 @@ router.get('/anomaly/baseline', optionalAuth, (req, res) => {
 router.post('/rollup/record', optionalAuth, (req, res) => {
   try {
     if (!req.body || typeof req.body !== 'object') return res.status(400).json({ error: 'sample object required' });
-    rollup.record(req.body);
+    // Never trust a caller-supplied userId — attribute the sample to the
+    // authenticated user only (undefined when anonymous, so record() treats
+    // it as an unattributed sample rather than poisoning another user's rollup).
+    rollup.record({ ...req.body, userId: userIdFrom(req) || undefined });
     return res.json({ ok: true, stats: rollup.stats() });
   } catch (err) {
     return res.status(500).json({ error: err?.message || 'rollup record failed' });

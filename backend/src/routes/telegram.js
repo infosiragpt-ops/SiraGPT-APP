@@ -66,6 +66,12 @@ router.post('/webhook', async (req, res) => {
   const cfg = tg.getTelegramConfig();
   if (!cfg.enabled) return res.status(503).json({ ok: false, error: 'telegram_not_configured' });
 
+  // Fail closed: an enabled bot with no webhook secret is an unauthenticated
+  // path to host-side agent/code runs. Refuse with a clear operator signal.
+  if (!cfg.webhookSecret) {
+    return res.status(403).json({ ok: false, error: 'webhook_secret_required' });
+  }
+
   const secretHeader = req.get('X-Telegram-Bot-Api-Secret-Token') || '';
   if (!tg.verifyWebhookSecret(secretHeader, cfg)) {
     return res.status(403).json({ ok: false, error: 'forbidden' });

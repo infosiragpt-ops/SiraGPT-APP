@@ -315,6 +315,14 @@ async function searchMany(query, opts = {}) {
   const searchQueries = variantCount > 1
     ? queryIntelligence.queryVariants(q, { max: variantCount })
     : [q];
+  // Recency window + news toggle threaded to the providers (honoured by Brave;
+  // all other providers destructure and ignore the extras). Hoisted like the
+  // legacy single-provider search() path so the chat tool's advertised
+  // `freshness` param is no longer silently dropped by the fan-out.
+  const freshness = typeof opts.freshness === 'string' && opts.freshness.trim()
+    ? opts.freshness.trim()
+    : null;
+  const includeNews = opts.includeNews === true;
 
   // A query with no discriminating content tokens (e.g. "¿qué día es hoy?")
   // can't be matched against any source — skip the network entirely.
@@ -325,8 +333,11 @@ async function searchMany(query, opts = {}) {
   // Fold the result-shaping opts (fan-out width + relevance floor) into the key
   // so a differently-configured call can't be served another bucket's payload.
   // For all current callers these are constants (1 / 0.3), so the happy-path
-  // cache hit/miss and returned results are byte-identical.
-  const cacheKey = `${includeScientific ? 'sci' : 'gen'}:${maxResults}:${variantCount}:${minScore}:${q}`;
+  // cache hit/miss and returned results are byte-identical. The freshness/news
+  // suffix is CONDITIONAL — the no-freshness key stays byte-identical to before,
+  // and a fresh/news call gets its own bucket (placed before `:q` so a query
+  // literally containing ':f=' can't collide with a real freshness bucket).
+  const cacheKey = `${includeScientific ? 'sci' : 'gen'}:${maxResults}:${variantCount}:${minScore}${freshness ? `:f=${freshness}` : ''}${includeNews ? ':news' : ''}:${q}`;
 
   // Stale-while-revalidate: serve a cached payload instantly; if it has aged
   // past the freshness window, kick off a non-blocking background refresh so
@@ -370,7 +381,7 @@ async function searchMany(query, opts = {}) {
       const start = Date.now();
       try {
         const results = await withTimeout(
-          (signal) => p.search(sq, { maxResults: perProvider, locale, signal }),
+          (signal) => p.search(sq, { maxResults: perProvider, locale, signal, freshness, includeNews }),
           timeoutMs,
         );
         const list = Array.isArray(results) ? results : [];

@@ -608,4 +608,96 @@ describe('CircuitBreaker', () => {
       assert.equal(getEventListeners(ac.signal, 'abort').length, 0);
     });
   });
+
+  // ── HALF_OPEN in-flight probe cap ─────────────────────────────────────
+  describe('HALF_OPEN probe concurrency cap', () => {
+    it('admits at most probeCount concurrent probes; the rest fast-fail as OPEN', async () => {
+      // cooldownMs: 0 so the OPEN → HALF_OPEN auto-transition fires immediately
+      // on the next call. probeCount defaults to 1.
+      const cb = new CircuitBreaker({ name: 'herd', cooldownMs: 0 });
+      cb.forceState(STATE.OPEN);
+      assert.equal(cb.probeCount, 1);
+
+      let invocations = 0;
+      // fn returns a promise that never settles → probes stay in-flight.
+      const fn = () => { invocations++; return never(); };
+
+      const results = [];
+      // Fire 5 concurrent calls. First (probeCount) admitted; rest reject.
+      for (let i = 0; i < 5; i++) {
+        results.push(
+          cb.call(fn).then(
+            () => ({ ok: true }),
+            (err) => ({ ok: false, err })
+          )
+        );
+      }
+
+      // Let the rejections settle (admitted probes hang forever on never()).
+      // Give the microtask/event loop a tick to resolve the fast-fail paths.
+      await delay(20);
+
+      // Only probeCount fns actually ran.
+      assert.equal(invocations, cb.probeCount);
+
+      // The 4 non-admitted callers must have rejected with CircuitOpenError.
+      let rejected = 0;
+      let stillPending = 0;
+      for (const p of results) {
+        const settled = await Promise.race([p, delay(0, '__pending__')]);
+        if (settled === '__pending__') {
+          stillPending++;
+        } else if (!settled.ok) {
+          assert.ok(settled.err instanceof CircuitOpenError,
+            `expected CircuitOpenError, got ${settled.err}`);
+          rejected++;
+        }
+      }
+      assert.equal(rejected, 5 - cb.probeCount, 'non-admitted callers reject');
+      assert.equal(stillPending, cb.probeCount, 'admitted probes stay in-flight');
+    });
+
+    it('releasing a probe slot (probe resolves) admits the next caller', async () => {
+      const cb = new CircuitBreaker({ name: 'slot-release', cooldownMs: 0 });
+      cb.forceState(STATE.OPEN);
+
+      let invocations = 0;
+      // First probe: controllable resolution. Later calls resolve instantly.
+      let resolveFirst;
+      const firstProbe = new Promise((res) => { resolveFirst = res; });
+
+      const fn = () => {
+        invocations++;
+        return invocations === 1 ? firstProbe : Promise.resolve('ok');
+      };
+
+      // Admitted probe (in-flight, not yet resolved).
+      const p1 = cb.call(fn);
+      // Second concurrent caller: no free slot → fast-fail.
+      await assert.rejects(cb.call(fn), CircuitOpenError);
+      assert.equal(invocations, 1, 'second caller never executed fn');
+
+      // Resolve the first probe → it succeeds and closes the breaker (probeCount=1).
+      resolveFirst('done');
+      assert.equal(await p1, 'done');
+
+      // Slot released: the breaker is now CLOSED and admits normal calls again.
+      assert.equal(cb.state, STATE.CLOSED);
+      assert.equal(await cb.call(fn), 'ok');
+      assert.equal(invocations, 2);
+    });
+
+    it('a probe that rejects releases its slot (does not permanently wedge HALF_OPEN)', async () => {
+      // probeCount 2 so a failing probe does not immediately re-open; verify the
+      // slot is freed for a subsequent probe rather than leaked.
+      const cb = new CircuitBreaker({ name: 'reject-release', cooldownMs: 0, probeCount: 2, threshold: 10 });
+      cb.forceState(STATE.OPEN);
+
+      // First probe rejects (counts as a failure but slot must free).
+      await assert.rejects(cb.call(async () => { throw new Error('boom'); }), /boom/);
+      // Breaker re-opened on HALF_OPEN failure, but cooldownMs:0 → next call
+      // re-enters HALF_OPEN. A fresh probe must be admitted (slot not leaked).
+      assert.equal(await cb.call(async () => 'ok'), 'ok');
+    });
+  });
 });

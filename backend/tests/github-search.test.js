@@ -458,3 +458,73 @@ test('searchAll: a thrown corpus is captured while siblings still return', async
   assert.equal(out.repositories.length, 1, 'repositories still returned');
   assert.ok(out.errors.some((e) => e.source === 'github:issues' && e.status === 500), 'failing corpus captured per-provider');
 });
+
+// ── Deadline / abort behaviour ─────────────────────────────────────────
+
+test('timeout aborts the in-flight fetch and never fires a post-deadline retry', async () => {
+  clearToken();
+  let fetchCalls = 0;
+  let signalFired = false;
+  // Fetch hangs until its AbortController fires, then rejects like the platform
+  // fetch does. If withRetry ran again after the deadline it would bump the
+  // counter — which the module documents as burning GitHub's 10 req/min quota.
+  setFetchHandler((url, opts) => {
+    fetchCalls += 1;
+    const signal = opts && opts.signal;
+    return new Promise((_resolve, reject) => {
+      if (!signal) return; // hang forever if no signal was threaded through
+      const onAbort = () => {
+        signalFired = true;
+        const err = new Error('The operation was aborted');
+        err.name = 'AbortError';
+        reject(err);
+      };
+      if (signal.aborted) onAbort();
+      else signal.addEventListener('abort', onAbort, { once: true });
+    });
+  });
+
+  // Retries enabled (default 1) so a broken deadline would let a 2nd fetch fire.
+  // Injected sleep resolves instantly so any post-deadline retry is not itself
+  // gated on real time.
+  await assert.rejects(
+    () => gh.searchRepositories('anything', {
+      timeoutMs: 30,
+      sleep: async () => {},
+    }),
+    /timed out after 30ms/,
+    'rejected with the timeout error',
+  );
+  // Give any (buggy) post-deadline retry a chance to fire before asserting.
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(fetchCalls, 1, 'fetch invoked exactly once — no post-deadline retry');
+  assert.equal(signalFired, true, 'the deadline aborted the in-flight request signal');
+});
+
+test('an external opts.signal abort propagates to the in-flight fetch', async () => {
+  clearToken();
+  let signalFired = false;
+  setFetchHandler((url, opts) => {
+    const signal = opts && opts.signal;
+    return new Promise((_resolve, reject) => {
+      if (!signal) return;
+      const onAbort = () => {
+        signalFired = true;
+        const e = new Error('The operation was aborted');
+        e.name = 'AbortError';
+        reject(e);
+      };
+      if (signal.aborted) onAbort();
+      else signal.addEventListener('abort', onAbort, { once: true });
+    });
+  });
+  const ac = new AbortController();
+  const p = gh.searchRepositories('anything', {
+    signal: ac.signal,
+    timeoutMs: 5000,
+    sleep: async () => {},
+  });
+  ac.abort();
+  await assert.rejects(() => p);
+  assert.equal(signalFired, true, 'external abort reached the underlying fetch');
+});
