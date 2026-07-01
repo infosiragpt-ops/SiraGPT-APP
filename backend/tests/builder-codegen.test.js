@@ -168,7 +168,7 @@ test('each entity yields a CRUD API route + a list/create page', () => {
     assert.match(route.content, /export async function GET/);
     assert.match(route.content, /export async function POST/);
     assert.match(page.content, /"use client";/);
-    assert.match(page.content, new RegExp(`const API = "\\.\\./api/${slug}";`));
+    assert.match(page.content, new RegExp(`NEXT_PUBLIC_SIRA_PREVIEW_BASE_PATH \\|\\| ""\\) \\+ "/api/${slug}"`));
     assert.doesNotMatch(page.content, new RegExp(`const API = "/api/${slug}";`));
     assert.match(page.content, /export default function/);
   }

@@ -27,7 +27,7 @@ test('isChatAllowed — open when no allow-list, restricted otherwise', () => {
 });
 
 test('verifyWebhookSecret', () => {
-  assert.equal(tg.verifyWebhookSecret('anything', { webhookSecret: '' }), true);
+  assert.equal(tg.verifyWebhookSecret('anything', { webhookSecret: '' }), false);
   assert.equal(tg.verifyWebhookSecret('s3cr3t', { webhookSecret: 's3cr3t' }), true);
   assert.equal(tg.verifyWebhookSecret('nope', { webhookSecret: 's3cr3t' }), false);
 });
