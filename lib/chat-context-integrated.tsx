@@ -25,6 +25,7 @@ import {
 import { devLog } from "./dev-log"
 import { createStreamBuffer, type StreamBuffer } from "./stream-buffer"
 import { safeUUID } from "./safe-uuid"
+import { hydrateTrailingAssistant } from "./hydrate-streaming-chat"
 
 // Helper function to check if error is related to monthly API limit
 const isMonthlyLimitError = (errorMessage: string) => {
@@ -1097,6 +1098,17 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           messages: [...prevChat.messages, aiMessagePlaceholder]
         };
       });
+      // Mirror the assistant placeholder into the `chats` cache too. When the
+      // user switches away and back mid-stream, selectChat restores the chat
+      // from this cache; without the placeholder present there was no target
+      // for the mid-stream token flush to hydrate (fix for lost in-progress
+      // answers). Separate from the user-message setChats above because this
+      // block also runs when skipUserMessage=true.
+      setChats(prev => prev.filter(c => c && c.id).map(c =>
+        c.id === activeChat.id
+          ? { ...c, messages: [...(c.messages || []), aiMessagePlaceholder] }
+          : c
+      ));
 
       setUploadedFiles([]); // Uploaded files clear kar dein
       const streamId = safeUUID();
@@ -1589,9 +1601,20 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               setCurrentChat((prevChat) => {
                 if (!prevChat) return prevChat;
                 if (prevChat.id !== activeChat.id) return prevChat;
+                // Use the background-streams partialContent as the authoritative
+                // running text when available. bg.appendChunk (above) always runs
+                // before fgBuffer.append, so partialContent is a superset of what
+                // has been flushed — this both avoids the double-append race that
+                // naive selectChat hydration would introduce and lets the answer
+                // survive a switch-away/switch-back. Falls back to the local
+                // append when the bg entry was already garbage-collected.
+                const authoritative = bg.get(activeChat.id)?.partialContent;
                 const newMessages = prevChat.messages.map((msg) => {
                   if (msg.id === aiMessagePlaceholder.id) {
-                    return { ...msg, content: msg.content + joined };
+                    return {
+                      ...msg,
+                      content: authoritative ?? (msg.content + joined),
+                    };
                   }
                   return msg;
                 });
@@ -2167,7 +2190,20 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       if (cachedChat) {
         setCurrentChat(prev => {
           if (prev?.id === chatId && (prev.messages?.length || 0) > 0) return prev
-          return { ...cachedChat, messages: cachedChat.messages || [] }
+          const restored = { ...cachedChat, messages: cachedChat.messages || [] }
+          // Switching back to a chat that is still streaming: the cached copy
+          // may hold a stale (or empty) trailing assistant message because the
+          // mid-stream token flush targets the *current* chat only. Hydrate the
+          // trailing assistant bubble from the background-streams partialContent
+          // so the in-progress answer is visible and keeps growing. The helper
+          // length-guards against regressing already-longer content.
+          if (targetIsStreaming) {
+            restored.messages = hydrateTrailingAssistant(
+              restored.messages,
+              bg.get(chatId)?.partialContent,
+            )
+          }
+          return restored
         })
         localStorage.setItem('currentChatId', chatId)
         setUploadedFiles([])
@@ -2234,7 +2270,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         }
       }
     },
-    [],
+    // bg is read to hydrate a mid-stream chat's partial answer on switch-back.
+    // Safe to include: exported consumers call through selectChatRef, so the
+    // callback identity churn does not cause extra renders.
+    [bg],
   )
 
   const clearCurrentChat = useCallback(async () => {
@@ -2428,6 +2467,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           regenerationAttempt: nextRegenerationAttempt,
         },
         (chunk) => {
+          // Keep the background-streams partialContent truthful so the
+          // sidebar spinner / "chats en progreso" pill reflect reality.
+          bg.appendChunk(currentChat.id, chunk);
           // Check if we should stop processing chunks
           if (controller.signal.aborted || pendingStopsRef.current.has(currentChat.id)) {
             return;
@@ -2439,6 +2481,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           regenBuffer.flush();
           regenBuffer.dispose();
           streamBuffersRef.current.delete(currentChat.id);
+          // Mark the background stream as done so the sidebar spinner
+          // clears (GC'd ~12s later in background-streams-context).
+          bg.complete(currentChat.id);
           if (!controller.signal.aborted && !pendingStopsRef.current.has(currentChat.id)) {
             devLog('Regeneration completed successfully');
             markChatIdle(currentChat.id, streamId);
@@ -2480,6 +2525,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           regenBuffer.flush();
           regenBuffer.dispose();
           streamBuffersRef.current.delete(currentChat.id);
+          // Mirror the failure into BackgroundStreams so the sidebar
+          // pill leaves the "streaming" state instead of spinning forever.
+          bg.fail(currentChat.id, error?.message || 'stream failed');
           if (!controller.signal.aborted && !pendingStopsRef.current.has(currentChat.id)) {
             console.error("Streaming failed during regeneration:", error);
 
@@ -2571,6 +2619,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       // buffer would otherwise stay alive and flush into a stale tree.
       streamBuffersRef.current.get(currentChat.id)?.dispose();
       streamBuffersRef.current.delete(currentChat.id);
+      // Ensure the background stream leaves the "streaming" state even
+      // when the failure bypasses the onError callback.
+      bg.fail(currentChat.id, (error as any)?.message || 'stream failed');
       markChatIdle(currentChat.id, streamId);
       pendingStopsRef.current.delete(currentChat.id);
       setIsLoading(false);
@@ -2721,6 +2772,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           });
         }
         markChatIdle(currentChat.id, streamId);
+        // Release the background-streams entry — the doc-edit branch is a
+        // terminal exit that also registered a streaming entry at line ~2633.
+        bg.complete(currentChat.id);
         setIsLoading(false);
         setIsStreaming(false);
         setCurrentStreamId(null);
@@ -2761,6 +2815,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           regenerate: true,
         },
         (chunk) => {
+          // Keep the background-streams partialContent truthful so the
+          // sidebar spinner / "chats en progreso" pill reflect reality.
+          bg.appendChunk(currentChat.id, chunk);
           // Check if we should stop processing chunks
           if (controller.signal.aborted || pendingStopsRef.current.has(currentChat.id)) {
             return;
@@ -2772,6 +2829,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           editBuffer.flush();
           editBuffer.dispose();
           streamBuffersRef.current.delete(currentChat.id);
+          // Mark the background stream as done so the sidebar spinner
+          // clears (GC'd ~12s later in background-streams-context).
+          bg.complete(currentChat.id);
           if (!controller.signal.aborted && !pendingStopsRef.current.has(currentChat.id)) {
             markChatIdle(currentChat.id, streamId);
             pendingStopsRef.current.delete(currentChat.id);
@@ -2809,6 +2869,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           editBuffer.flush();
           editBuffer.dispose();
           streamBuffersRef.current.delete(currentChat.id);
+          // Mirror the failure into BackgroundStreams so the sidebar
+          // pill leaves the "streaming" state instead of spinning forever.
+          bg.fail(currentChat.id, error?.message || 'stream failed');
           if (!controller.signal.aborted && !pendingStopsRef.current.has(currentChat.id)) {
             console.error("Streaming failed during regeneration:", error);
 
@@ -2899,6 +2962,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       console.error("Failed to edit and regenerate:", error);
       streamBuffersRef.current.get(currentChat.id)?.dispose();
       streamBuffersRef.current.delete(currentChat.id);
+      // Ensure the background stream leaves the "streaming" state even
+      // when the failure bypasses the onError callback.
+      bg.fail(currentChat.id, (error as any)?.message || 'stream failed');
       markChatIdle(currentChat.id, streamId);
       pendingStopsRef.current.delete(currentChat.id);
       setIsLoading(false);

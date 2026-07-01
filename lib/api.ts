@@ -1936,6 +1936,10 @@ class ApiClient {
 
       const decoder = new TextDecoder('utf-8');
       let batchBuffer = '';
+      // Accumulate across reads: a `data: {...}\n\n` frame can straddle two
+      // reader.read() calls; splitting each chunk in isolation dropped the
+      // partial frame. Mirror generateAIStream's frameBuffer parser.
+      let frameBuffer = '';
       let lastProcessTime = Date.now();
       const batchProcessingDelay = 20;
 
@@ -1955,8 +1959,12 @@ class ApiClient {
           break;
         }
 
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split('\n\n');
+        frameBuffer += decoder.decode(value, { stream: true });
+        const lastBoundary = frameBuffer.lastIndexOf('\n\n');
+        if (lastBoundary === -1) continue;
+        const consumable = frameBuffer.slice(0, lastBoundary);
+        frameBuffer = frameBuffer.slice(lastBoundary + 2);
+        const lines = consumable.split('\n\n');
 
         for (const line of lines) {
           if (line.startsWith('data: ')) {

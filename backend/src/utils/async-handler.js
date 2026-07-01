@@ -84,9 +84,17 @@ function asyncHandler(fn, opts = {}) {
         timeoutMs,
       };
       defaultGuard.run(result, guardOpts).catch((err) => {
-        // Only forward GuardError (timeout).  Regular errors are
-        // already forwarded by the microtask path above.
-        if (err instanceof GuardError && !res.headersSent && !res.writableEnded) {
+        // Only forward GuardError from an actual timeout.  Regular
+        // errors — and abort-shaped rejections that async-guard wraps
+        // in a GuardError with reason 'aborted' — are already forwarded
+        // by the microtask path above; forwarding them here too would
+        // run the Express error chain twice for one failure.
+        if (
+          err instanceof GuardError &&
+          err.reason === 'timeout' &&
+          !res.headersSent &&
+          !res.writableEnded
+        ) {
           next(err);
         }
       });

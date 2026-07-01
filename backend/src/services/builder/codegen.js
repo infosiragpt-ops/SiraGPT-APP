@@ -51,7 +51,8 @@ function pascalCase(name) {
       .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
       .join('') || 'Model'
   );
-  return PRISMA_RESERVED_MODEL_NAMES.has(candidate) ? `${candidate}Record` : candidate;
+  const safe = /^[0-9]/.test(candidate) ? `X${candidate}` : candidate;
+  return PRISMA_RESERVED_MODEL_NAMES.has(safe) ? `${safe}Record` : safe;
 }
 
 function camelCase(name) {
@@ -636,7 +637,7 @@ function buildEntityPage(model) {
     ...ifaceFields,
     '}',
     '',
-    'const API = "../api/' + slug + '";',
+    'const API = (process.env.NEXT_PUBLIC_SIRA_PREVIEW_BASE_PATH || "") + "/api/' + slug + '";',
     '',
     'export default function ' + typeName + 'Page() {',
     '  const [items, setItems] = useState<' + typeName + '[]>([]);',

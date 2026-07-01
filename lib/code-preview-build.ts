@@ -239,7 +239,7 @@ ${footer}
 
 function buildMarkdownDocument(files: CodeFiles, entry: string): string {
   const raw = files[entry]?.content ?? ""
-  const json = JSON.stringify(raw)
+  const json = JSON.stringify(raw).replace(/<\/script/gi, "<\\/script")
   return `<!DOCTYPE html>
 <html lang="es">
 <head>
