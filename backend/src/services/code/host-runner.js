@@ -569,6 +569,71 @@ function getStatus(runId, userId) {
   };
 }
 
+// ── Type verification (tsc --noEmit) ────────────────────────────────
+// The readiness probe proves the dev server responds; it cannot prove the
+// TypeScript in the project compiles. verifyRun runs `npx tsc --noEmit`
+// inside the run's workspace (typescript is a devDependency of generated
+// projects and npm install runs --include=dev) and parses the diagnostics
+// into [{file, line, col, code, message}] the auto-repair loop can consume.
+
+const VERIFY_TIMEOUT_MS = Math.max(30_000, Number(process.env.CODE_RUNNER_VERIFY_TIMEOUT_MS) || 90_000);
+// tsc --pretty false diagnostics: "path/file.ts(12,5): error TS2322: message"
+const TSC_DIAG_RE = /^(.+?)\((\d+),(\d+)\):\s+error\s+(TS\d+):\s+(.*)$/;
+
+function parseTscOutput(stdout) {
+  const errors = [];
+  for (const line of String(stdout || '').split(/\r?\n/)) {
+    const m = TSC_DIAG_RE.exec(line.trim());
+    if (!m) continue;
+    errors.push({ file: m[1], line: Number(m[2]), col: Number(m[3]), code: m[4], message: m[5] });
+    if (errors.length >= 50) break; // bounded payload
+  }
+  return errors;
+}
+
+async function verifyRun(runId, userId) {
+  const id = safeId(runId);
+  const run = runs.get(id);
+  if (!run) return { ok: false, status: 404, error: 'run desconocido' };
+  if (userId && run.userId && run.userId !== userId) return { ok: false, status: 403, error: 'forbidden' };
+  run.lastTouch = Date.now();
+  // Only meaningful for TypeScript projects; a JS-only project passes trivially.
+  if (!fs.existsSync(path.join(run.dir, 'tsconfig.json'))) {
+    return { ok: true, skipped: true, reason: 'no_tsconfig', errors: [] };
+  }
+  if (run.verifyPromise) return run.verifyPromise; // dedupe concurrent verifies
+
+  run.verifyPromise = new Promise((resolve) => {
+    pushLog(run, '$ npx tsc --noEmit (verificación de tipos)');
+    let out = '';
+    const child = spawn('npx', ['tsc', '--noEmit', '--pretty', 'false'], {
+      cwd: run.dir,
+      detached: true,
+      env: envFor(),
+    });
+    const to = setTimeout(() => {
+      killGroup(child);
+      resolve({ ok: false, timedOut: true, errors: [], error: 'tsc excedió el tiempo límite' });
+    }, VERIFY_TIMEOUT_MS);
+    const collect = (d) => { if (out.length < 400_000) out += String(d); };
+    child.stdout.on('data', collect);
+    child.stderr.on('data', collect);
+    child.on('error', (e) => {
+      clearTimeout(to);
+      // Fail-open: a broken verifier must not block the preview flow.
+      resolve({ ok: true, skipped: true, reason: `tsc no disponible: ${e.message}`, errors: [] });
+    });
+    child.on('close', (code) => {
+      clearTimeout(to);
+      const errors = parseTscOutput(out);
+      const ok = code === 0;
+      pushLog(run, ok ? 'tipos OK (tsc --noEmit limpio)' : `tsc encontró ${errors.length} error(es) de tipos`);
+      resolve({ ok, exitCode: code, errors, errorCount: errors.length });
+    });
+  }).finally(() => { run.verifyPromise = null; });
+  return run.verifyPromise;
+}
+
 /**
  * Resolve the private dev-server port for a run, gated by its run-scoped preview
  * token (carried in the reverse-proxy URL path). Returns null when the run is
@@ -640,6 +705,8 @@ module.exports = {
   hasErrorOverlay,
   strictReadyEnabled,
   probeReady,
+  verifyRun,
+  parseTscOutput,
   // Test-only hooks: seed/clear the in-memory run registry WITHOUT spawning a
   // child process, so the ownership / phase-gate logic can be unit-tested.
   // No behavioural impact on the production paths.

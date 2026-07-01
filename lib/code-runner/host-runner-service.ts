@@ -99,4 +99,41 @@ export const hostRunnerService = {
       /* ignore */
     }
   },
+
+  /**
+   * Type verification: run `tsc --noEmit` in the run's workspace. Fail-open —
+   * network/permission problems come back as skipped so the preview flow never
+   * blocks on the verifier.
+   */
+  async verify(runId: string): Promise<HostRunVerify> {
+    try {
+      const res = await fetch(`${baseUrl}/${encodeURIComponent(runId)}/verify`, {
+        method: "POST",
+        credentials: "include",
+        headers: authHeaders(),
+      })
+      if (!res.ok) return { ok: true, skipped: true, reason: `HTTP ${res.status}`, errors: [] }
+      return (await res.json().catch(() => ({ ok: true, skipped: true, errors: [] }))) as HostRunVerify
+    } catch {
+      return { ok: true, skipped: true, reason: "runner unreachable", errors: [] }
+    }
+  },
+}
+
+export interface HostRunVerifyError {
+  file: string
+  line: number
+  col: number
+  code: string
+  message: string
+}
+
+export interface HostRunVerify {
+  ok: boolean
+  skipped?: boolean
+  reason?: string
+  timedOut?: boolean
+  exitCode?: number
+  errors: HostRunVerifyError[]
+  errorCount?: number
 }

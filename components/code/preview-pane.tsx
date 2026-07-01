@@ -346,6 +346,13 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveRun.phase, canRunProject, projectSignature])
 
+  // Post-ready type verification: the readiness probe proves the dev server
+  // answers; tsc --noEmit proves the TypeScript actually compiles. One verify
+  // per ready transition (host runner only); failures feed the SAME capped +
+  // de-duped auto-repair channel below, so the agent fixes type errors too.
+  const verifiedReadyRef = React.useRef(false)
+  const [typeCheck, setTypeCheck] = React.useState<null | "checking" | "clean" | { errors: number }>(null)
+
   // Auto-repair: when a run fails, hand the logs to the chat agent so it fixes
   // the code on its own (no manual "Reparar" click). Capped + de-duped so a fix
   // that keeps producing the same error can't spin an infinite agent loop. A
@@ -355,8 +362,33 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
     if (liveRun.phase === "ready") {
       autoFixCountRef.current = 0
       lastAutoFixedNoteRef.current = ""
+      if (modeRef.current === "host" && !verifiedReadyRef.current) {
+        verifiedReadyRef.current = true
+        const runId = runIdRef.current
+        let cancelled = false
+        setTypeCheck("checking")
+        hostRunnerService.verify(runId).then((v) => {
+          if (cancelled || phaseRef.current !== "ready" || runIdRef.current !== runId) return
+          const errs = Array.isArray(v?.errors) ? v.errors : []
+          if (v?.skipped) { setTypeCheck(null); return }
+          if (v?.ok && errs.length === 0) { setTypeCheck("clean"); return }
+          setTypeCheck({ errors: errs.length })
+          const text = [
+            `La app arrancó pero la verificación de tipos (tsc --noEmit) encontró ${errs.length} error(es):`,
+            ...errs.slice(0, 12).map((e) => `${e.file}(${e.line},${e.col}): ${e.code} ${e.message}`),
+          ].join("\n")
+          if (text !== lastAutoFixedNoteRef.current && autoFixCountRef.current < AUTO_FIX_MAX) {
+            lastAutoFixedNoteRef.current = text
+            autoFixCountRef.current += 1
+            window.dispatchEvent(new CustomEvent("siragpt:code-fix-error", { detail: { text } }))
+          }
+        })
+        return () => { cancelled = true }
+      }
       return
     }
+    verifiedReadyRef.current = false
+    setTypeCheck(null)
     if (liveRun.phase !== "error") return
     const log = (lastErrorLogRef.current || liveRun.note || "").trim()
     if (!log || log === lastAutoFixedNoteRef.current) return
@@ -500,6 +532,28 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
                 </button>
               )}
             </>
+          ) : null}
+
+          {/* Type-check verdict for the live run: verifying → clean → or the
+              error count while the agent auto-repairs. Host runner only. */}
+          {liveRun.phase === "ready" && typeCheck ? (
+            <span
+              className="flex h-6 items-center gap-1 rounded-md px-2 text-[11px] font-medium text-muted-foreground"
+              title="Verificación tsc --noEmit del proyecto en vivo"
+            >
+              {typeCheck === "checking" ? (
+                <>
+                  <ThinkingIndicator size="xs" />
+                  <span>Verificando tipos…</span>
+                </>
+              ) : typeCheck === "clean" ? (
+                <span className="text-emerald-600 dark:text-emerald-400">Tipos OK</span>
+              ) : (
+                <span className="text-[#C80000] dark:text-[#FF6B6B]">
+                  {typeCheck.errors} error{typeCheck.errors === 1 ? "" : "es"} de tipos → reparando…
+                </span>
+              )}
+            </span>
           ) : null}
 
           <span className="mx-0.5 h-4 w-px bg-border/50" />

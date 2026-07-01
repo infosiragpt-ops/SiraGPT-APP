@@ -92,6 +92,19 @@ router.post('/:runId/stop', authenticateToken, (req, res) => {
   return res.json({ ok: stopped });
 });
 
+// Type verification: run `npx tsc --noEmit` in the run's workspace and return
+// parsed diagnostics the auto-repair loop can act on. Ownership-checked.
+router.post('/:runId/verify', authenticateToken, async (req, res) => {
+  try {
+    const result = await hostRunner.verifyRun(req.params.runId, req.user.id);
+    if (result && result.status === 403) return res.status(403).json({ error: 'forbidden' });
+    if (result && result.status === 404) return res.status(404).json({ error: result.error });
+    return res.json(result);
+  } catch (err) {
+    return res.status(500).json({ error: String((err && err.message) || err) });
+  }
+});
+
 function applyPreviewFrameHeaders(_req, res, next) {
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");
