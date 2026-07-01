@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, production-main]
   pull_request:
-    branches: [main]
+    branches: [main, production-main]
   workflow_dispatch:
 
 # Keep runs on the same branch from cancelling each other. Main deploy
