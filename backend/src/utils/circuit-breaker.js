@@ -39,6 +39,7 @@ const kCallCount   = Symbol('callCount');
 const kNextAttempt = Symbol('nextAttempt');
 const kWindow      = Symbol('window');
 const kWinMs       = Symbol('winMs');
+const kInFlightProbes = Symbol('inFlightProbes');
 
 // ── State constants ───────────────────────────────────────────────────────
 const STATE = Object.freeze({
@@ -180,6 +181,7 @@ class CircuitBreaker extends EventEmitter {
     this[kSuccesses] = new RollingCounter(0);
     this[kCallCount] = 0;
     this[kNextAttempt] = 0;
+    this[kInFlightProbes] = 0;
 
     // Optional metrics hook — soft-require so circuit-breaker.js stays
     // free of utility-tier dependencies in tests / cold-start. If the
@@ -216,8 +218,24 @@ class CircuitBreaker extends EventEmitter {
       throw new CircuitOpenError(this[kOpts].name);
     }
 
+    // HALF_OPEN probe cap: after cooldown expires, _resolveState() flips the
+    // breaker OPEN → HALF_OPEN and every queued caller sees HALF_OPEN. Without
+    // this gate, N concurrent callers all execute at once against the still-
+    // recovering dependency (thundering herd). Admit at most probeCount probes;
+    // the rest fast-fail as if the breaker were still OPEN. Slots are released
+    // in the finally block (below) on any settle — success, failure, timeout,
+    // or abort — so a resolved probe frees the slot for the next caller.
+    if (state === STATE.HALF_OPEN && this[kInFlightProbes] >= this[kOpts].probeCount) {
+      throw new CircuitOpenError(this[kOpts].name);
+    }
+
     const timeoutMs = opts.timeoutMs != null ? opts.timeoutMs : this[kOpts].timeoutMs;
     const externalSignal = opts.signal || null;
+
+    // Capture whether THIS call is an admitted probe so the finally block only
+    // decrements a slot it actually reserved.
+    const isProbe = state === STATE.HALF_OPEN;
+    if (isProbe) this[kInFlightProbes]++;
 
     let timerId;
     try {
@@ -240,6 +258,7 @@ class CircuitBreaker extends EventEmitter {
       this._onFailure(err);
       throw err;
     } finally {
+      if (isProbe && this[kInFlightProbes] > 0) this[kInFlightProbes]--;
       if (timerId) clearTimeout(timerId);
     }
   }

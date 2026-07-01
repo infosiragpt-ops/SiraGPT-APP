@@ -167,7 +167,7 @@ router.get('/cache-stats', async (_req, res) => {
 router.get('/saliency/:chatId', optionalAuth, async (req, res) => {
   try {
     if (!saliencyTracker) return res.status(503).json({ error: 'saliency tracker not available' });
-    const userId = req.user?.id || req.query?.userId;
+    const userId = req.user?.id;
     if (!userId) return res.status(400).json({ error: 'userId required (auth or ?userId=)' });
     const chatId = String(req.params.chatId || '').slice(0, 64);
     if (!chatId) return res.status(400).json({ error: 'chatId required' });

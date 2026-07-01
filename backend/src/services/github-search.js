@@ -93,19 +93,6 @@ function baseHeaders(extra = {}) {
   };
 }
 
-function withTimeout(promise, ms, label) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error(`${label || 'request'} timed out after ${ms}ms`));
-    }, ms);
-    timer.unref?.();
-    promise.then(
-      (v) => { clearTimeout(timer); resolve(v); },
-      (e) => { clearTimeout(timer); reject(e); },
-    );
-  });
-}
-
 class GitHubHttpError extends Error {
   constructor(status, message, retryAfter) {
     super(message);
@@ -181,6 +168,44 @@ function ghJson(path, opts = {}) {
   });
 }
 
+// Deadline wrapper with REAL cancellation. The old `withTimeout` only rejected
+// the wrapper promise on a deadline — it drove no AbortController, so the
+// underlying request lived on and, worse, the whole `ghJson` withRetry chain
+// could still sleep and fire another request after the deadline rejected,
+// burning GitHub's aggressively-limited search quota (10 req/min unauth). We now
+// drive an AbortController: the deadline aborts it (propagating through ghJson →
+// ghJsonOnce's fetch, killing in-flight requests AND stopping withRetry from
+// firing further attempts) and rejects with the exact same timeout message
+// (classifyGitHubError's /timed out|timeout/ match depends on it). An external
+// opts.signal is chained in for cooperative cancellation from the caller.
+function ghJsonWithDeadline(path, opts = {}, timeoutMs, label) {
+  const ms = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS;
+  const ac = new AbortController();
+  const external = opts.signal;
+  const onExternalAbort = () => { try { ac.abort(); } catch { /* noop */ } };
+  if (external) {
+    if (external.aborted) onExternalAbort();
+    else external.addEventListener('abort', onExternalAbort, { once: true });
+  }
+  let timer = null;
+  const timeout = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => {
+      try { ac.abort(); } catch { /* noop */ }
+      reject(new Error(`${label || 'request'} timed out after ${ms}ms`));
+    }, ms);
+    timer.unref?.();
+  });
+  return Promise.race([
+    ghJson(path, { ...opts, signal: ac.signal }),
+    timeout,
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+    if (external) {
+      try { external.removeEventListener('abort', onExternalAbort); } catch { /* noop */ }
+    }
+  });
+}
+
 function clampLimit(n) {
   const parsed = Number.parseInt(n, 10);
   if (!Number.isFinite(parsed) || parsed < 1) return DEFAULT_LIMIT;
@@ -249,11 +274,9 @@ async function searchRepositories(query, opts = {}) {
     // topic search needs the mercy preview media type for `topics` to be populated
     opts._extraHeaders = { Accept: 'application/vnd.github.mercy-preview+json' };
   }
-  const json = await withTimeout(
-    ghJson(`/search/repositories?${params.toString()}`, {
-      signal: opts.signal,
-      headers: opts._extraHeaders,
-    }),
+  const json = await ghJsonWithDeadline(
+    `/search/repositories?${params.toString()}`,
+    { signal: opts.signal, headers: opts._extraHeaders },
     opts.timeoutMs || DEFAULT_TIMEOUT_MS,
     'github:repositories',
   );
@@ -276,11 +299,9 @@ async function searchCode(query, opts = {}) {
   if (opts.repo) q += ` repo:${String(opts.repo).trim()}`;
   if (opts.filename) q += ` filename:${String(opts.filename).trim()}`;
   const params = new URLSearchParams({ q: q.trim(), per_page: String(limit) });
-  const json = await withTimeout(
-    ghJson(`/search/code?${params.toString()}`, {
-      signal: opts.signal,
-      headers: { Accept: 'application/vnd.github.text-match+json' },
-    }),
+  const json = await ghJsonWithDeadline(
+    `/search/code?${params.toString()}`,
+    { signal: opts.signal, headers: { Accept: 'application/vnd.github.text-match+json' } },
     opts.timeoutMs || DEFAULT_TIMEOUT_MS,
     'github:code',
   );
@@ -312,8 +333,9 @@ async function searchIssues(query, opts = {}) {
   });
   const sort = pickSort(opts.sort, VALID_ISSUE_SORTS);
   if (sort) params.set('sort', sort);
-  const json = await withTimeout(
-    ghJson(`/search/issues?${params.toString()}`, { signal: opts.signal }),
+  const json = await ghJsonWithDeadline(
+    `/search/issues?${params.toString()}`,
+    { signal: opts.signal },
     opts.timeoutMs || DEFAULT_TIMEOUT_MS,
     'github:issues',
   );
@@ -351,8 +373,9 @@ async function searchUsers(query, opts = {}) {
   });
   const sort = pickSort(opts.sort, VALID_USER_SORTS);
   if (sort) params.set('sort', sort);
-  const json = await withTimeout(
-    ghJson(`/search/users?${params.toString()}`, { signal: opts.signal }),
+  const json = await ghJsonWithDeadline(
+    `/search/users?${params.toString()}`,
+    { signal: opts.signal },
     opts.timeoutMs || DEFAULT_TIMEOUT_MS,
     'github:users',
   );
@@ -372,11 +395,9 @@ async function searchUsers(query, opts = {}) {
 async function searchTopics(query, opts = {}) {
   const limit = clampLimit(opts.limit);
   const params = new URLSearchParams({ q: String(query || '').trim(), per_page: String(limit) });
-  const json = await withTimeout(
-    ghJson(`/search/topics?${params.toString()}`, {
-      signal: opts.signal,
-      headers: { Accept: 'application/vnd.github.mercy-preview+json' },
-    }),
+  const json = await ghJsonWithDeadline(
+    `/search/topics?${params.toString()}`,
+    { signal: opts.signal, headers: { Accept: 'application/vnd.github.mercy-preview+json' } },
     opts.timeoutMs || DEFAULT_TIMEOUT_MS,
     'github:topics',
   );
@@ -395,8 +416,9 @@ async function searchTopics(query, opts = {}) {
 // ── Single-repo helpers ─────────────────────────────────────────────────
 async function getRepo(owner, repo, opts = {}) {
   if (!owner || !repo) throw new Error('getRepo requires owner and repo');
-  const json = await withTimeout(
-    ghJson(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, { signal: opts.signal }),
+  const json = await ghJsonWithDeadline(
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+    { signal: opts.signal },
     opts.timeoutMs || DEFAULT_TIMEOUT_MS,
     'github:repo',
   );
@@ -405,8 +427,9 @@ async function getRepo(owner, repo, opts = {}) {
 
 async function getReadme(owner, repo, opts = {}) {
   if (!owner || !repo) throw new Error('getReadme requires owner and repo');
-  const json = await withTimeout(
-    ghJson(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/readme`, { signal: opts.signal }),
+  const json = await ghJsonWithDeadline(
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/readme`,
+    { signal: opts.signal },
     opts.timeoutMs || DEFAULT_TIMEOUT_MS,
     'github:readme',
   );
@@ -429,8 +452,9 @@ async function getReadme(owner, repo, opts = {}) {
 }
 
 async function rateLimit(opts = {}) {
-  const json = await withTimeout(
-    ghJson('/rate_limit', { signal: opts.signal }),
+  const json = await ghJsonWithDeadline(
+    '/rate_limit',
+    { signal: opts.signal },
     opts.timeoutMs || DEFAULT_TIMEOUT_MS,
     'github:rate_limit',
   );
@@ -558,6 +582,7 @@ module.exports = {
     baseHeaders,
     classifyGitHubError,
     retryConfig,
+    ghJsonWithDeadline,
     VALID_REPO_SORTS,
     VALID_ISSUE_SORTS,
     VALID_USER_SORTS,

@@ -901,6 +901,13 @@ async function run(openai, opts) {
   // Finalize-guard rejection tracking (see MAX_FINALIZE_REJECTIONS above).
   let finalizeRejectionsTotal = 0;
   let finalizeRejectionsConsecutive = 0;
+  // Last real answer the model produced that a finalize guard rejected below
+  // the breaker thresholds. On the last step (and under a forceFinalize latch)
+  // the loop narrows tool_choice to finalize; if the guard rejects that final
+  // attempt the for-loop ends without a terminator firing and the safety net
+  // below would discard the model's real answer for generic degraded text.
+  // Rescuing it here keeps the weak-model draft instead of throwing it away.
+  let lastGuardRejectedAnswer = null;
   // Escape hatch for exhausted-tool re-polling: some models keep calling a
   // tool we already declared unavailable, re-reading the same observation
   // forever. After EXHAUSTED_REPOLL_LIMIT consecutive such calls we force
@@ -1130,6 +1137,26 @@ async function run(openai, opts) {
           steps.push(plainStepRecord);
           onStep(plainStepRecord);
           onStepDone(plainStepRecord);
+          // Count plain-text rejections against the same circuit breaker as the
+          // finalize-tool path. A weak prompted model that keeps ignoring the
+          // tool_call protocol and answering in prose would otherwise spin to
+          // the full step budget (2 LLM calls/step) and have its answer
+          // discarded for generic degraded text. Trip the breaker and accept
+          // the prose answer once the guard is clearly unsatisfiable.
+          finalizeRejectionsTotal += 1;
+          finalizeRejectionsConsecutive += 1;
+          if (
+            finalizeRejectionsConsecutive >= MAX_CONSEC_FINALIZE_REJECTIONS ||
+            finalizeRejectionsTotal >= MAX_FINALIZE_REJECTIONS
+          ) {
+            // `thought || ''` — if the prose was empty, the post-loop fallback
+            // honestly degrades via buildDegradedAnswer instead of shipping an
+            // empty answer.
+            finalAnswer = thought || '';
+            stoppedReason = `finalized_guard_breaker:plain_text:${finalizeRejectionsConsecutive}/${finalizeRejectionsTotal}`;
+            try { console.warn(`[react-agent] plain-text finalize guard rejected ${finalizeRejectionsConsecutive} consecutive (${finalizeRejectionsTotal} total) — tripping breaker and accepting prose answer`); } catch { /* noop */ }
+            break;
+          }
           messages.push({
             role: 'user',
             content: JSON.stringify({
@@ -1363,6 +1390,11 @@ async function run(openai, opts) {
               );
             } catch { /* logging must never crash the run */ }
           } else {
+            // Remember the real answer the model produced. If this is the last
+            // finalize attempt the run can afford (last step / forced finalize),
+            // the safety net below rescues it instead of discarding it.
+            const rej = String(dispatch.result?.answer || '').trim();
+            if (rej) lastGuardRejectedAnswer = rej;
             observation = {
               error: 'finalize_guard_failed',
               message: guard?.message || 'Finalization blocked by execution policy.',
@@ -1402,7 +1434,11 @@ async function run(openai, opts) {
 
       if (toolName === 'finalize' && !dispatch.error && !observation.error) {
         finalAnswer = dispatch.result?.answer || '';
-        stoppedReason = 'finalized';
+        // Preserve the breaker's degraded-run signal (set just above when the
+        // circuit tripped) instead of clobbering it to a clean 'finalized' —
+        // otherwise breaker-degraded answers look indistinguishable from clean
+        // finalizes downstream (agent_done / agent_metadata telemetry).
+        stoppedReason = String(stoppedReason).startsWith('finalized_guard_breaker') ? stoppedReason : 'finalized';
         finalized = true;
         break;
       }
@@ -1426,7 +1462,13 @@ async function run(openai, opts) {
   finalAnswer = sanitizeFinalAnswerDiagnostics(finalAnswer);
 
   if (finalAnswer == null || String(finalAnswer).trim() === '') {
-    if (exhaustedTools.size > 0) {
+    if (lastGuardRejectedAnswer) {
+      // The model produced a real answer on its final finalize attempt but the
+      // guard rejected it below the breaker thresholds (last step / forced
+      // finalize). Ship that answer instead of the generic degraded text.
+      finalAnswer = lastGuardRejectedAnswer;
+      stoppedReason = 'finalized_last_step_guard_override';
+    } else if (exhaustedTools.size > 0) {
       const toolList = Array.from(exhaustedTools).join(', ');
       finalAnswer = 'Una herramienta interna necesaria para esta tarea falló de forma repetida. Te respondo con la información disponible; si necesitas más precisión, vuelve a intentarlo o acota la solicitud.';
       if (!stoppedReason || stoppedReason === 'max_steps') {
