@@ -1385,7 +1385,7 @@ const ActionsDropdown = ({
             </DropdownMenuTrigger>
           </TooltipTrigger>
           <TooltipContent side="top">
-            <p>Attach files & tools</p>
+            <p>Adjuntar archivos y herramientas</p>
           </TooltipContent>
         </Tooltip>
         <DropdownMenuContent
@@ -1434,7 +1434,7 @@ const ActionsDropdown = ({
               </div>
               <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">
-                  {isWebSearchActive ? 'Web Search activo' : 'Web Search'}
+                  {isWebSearchActive ? 'Búsqueda web activa' : 'Búsqueda web'}
                 </div>
                 <div className="truncate text-xs text-muted-foreground">
                   Busca en internet en tiempo real
@@ -1457,7 +1457,7 @@ const ActionsDropdown = ({
                 <Network className="h-4 w-4 text-gray-600 dark:text-gray-300" />
               </div>
               <div className="min-w-0 flex-1">
-                <div className="liquid-label font-medium text-sm">APPs</div>
+                <div className="liquid-label font-medium text-sm">Apps</div>
                 <div className="truncate text-xs text-muted-foreground">
                   {activeAppsCount > 0 ? `${activeAppsCount} activa${activeAppsCount > 1 ? "s" : ""}` : "Gmail, Drive, Navegador, Chrome"}
                 </div>
@@ -1485,7 +1485,7 @@ const ActionsDropdown = ({
                   <Network className="h-4 w-4 text-gray-600 dark:text-gray-300" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="liquid-label font-medium text-sm">APPs</div>
+                  <div className="liquid-label font-medium text-sm">Apps</div>
                   <div className="truncate text-xs text-muted-foreground">
                     {activeAppsCount > 0 ? `${activeAppsCount} activa${activeAppsCount > 1 ? "s" : ""}` : "Gmail, Drive, Navegador, Chrome"}
                   </div>
@@ -1524,7 +1524,7 @@ const ActionsDropdown = ({
                   {isImageGenerationActive ? 'Imágenes activas' : 'Imágenes'}
                 </div>
                 <div className="truncate text-xs text-muted-foreground">
-                  {isFreePlan ? 'Vista previa de generación con IA' : isGeneratingImage ? 'Generando ahora' : 'Genera imágenes con IA'}
+                  {isGeneratingImage ? 'Generando ahora' : 'Genera imágenes con IA'}
                 </div>
               </div>
               {(isImageGenerationActive || isGeneratingImage) && (
@@ -1547,9 +1547,9 @@ const ActionsDropdown = ({
                 <AudioLines className="h-4 w-4 text-cyan-600 dark:text-cyan-400" />
               </div>
               <div className="min-w-0 flex-1">
-                <div className="liquid-label font-medium text-sm">Voz</div>
+                <div className="liquid-label font-medium text-sm">{isVoiceGenerationActive ? 'Voz activa' : 'Voz'}</div>
                 <div className="truncate text-xs text-muted-foreground">
-                  {isFreePlan ? 'Vista previa ElevenLabs / Mimo HD' : 'ElevenLabs / Mimo HD · TTS'}
+                  Texto a voz · ElevenLabs
                 </div>
               </div>
               {isVoiceGenerationActive && (
@@ -1576,7 +1576,7 @@ const ActionsDropdown = ({
                   {isVideoGenerationActive ? 'Video activo' : 'Video'}
                 </div>
                 <div className="truncate text-xs text-muted-foreground">
-                  {isFreePlan ? 'Vista previa de video con IA' : 'Crea videos con fal.ai'}
+                  Crea videos con IA
                 </div>
               </div>
               {isVideoGenerationActive && (
@@ -1603,7 +1603,7 @@ const ActionsDropdown = ({
                   {isMusicGenerationActive ? 'Música activa' : 'Música'}
                 </div>
                 <div className="truncate text-xs text-muted-foreground">
-                  {isFreePlan ? 'Vista previa de música con IA' : 'Lyria 3 Pro · genera canciones con IA'}
+                  Genera canciones con IA
                 </div>
               </div>
               {isMusicGenerationActive && (
@@ -2677,19 +2677,19 @@ const ActiveToolsDisplay = ({
       {isWebSearchActive && (
         <div
           className="group/web-search-tool flex h-7 w-7 items-center justify-center overflow-hidden rounded-full border border-green-200 bg-green-100 px-0 text-xs text-green-700 transition-[width,padding,box-shadow] duration-300 ease-out hover:w-[120px] hover:justify-start hover:px-2 hover:shadow-sm focus-within:w-[120px] focus-within:justify-start focus-within:px-2 focus-within:shadow-sm dark:border-green-800 dark:bg-green-900/20 dark:text-green-300"
-          aria-label="Web Search activo. Pasa el cursor para cerrar."
+          aria-label="Búsqueda web activa. Pasa el cursor para cerrar."
         >
           <Globe className="h-3.5 w-3.5 shrink-0 motion-safe:animate-spin" />
-          <span className="ml-0 max-w-0 overflow-hidden whitespace-nowrap font-medium opacity-0 transition-all duration-250 ease-out group-hover/web-search-tool:ml-1.5 group-hover/web-search-tool:max-w-[72px] group-hover/web-search-tool:opacity-100 group-focus-within/web-search-tool:ml-1.5 group-focus-within/web-search-tool:max-w-[72px] group-focus-within/web-search-tool:opacity-100">
-            Web Search
+          <span className="ml-0 max-w-0 overflow-hidden whitespace-nowrap font-medium opacity-0 transition-all duration-250 ease-out group-hover/web-search-tool:ml-1.5 group-hover/web-search-tool:max-w-[86px] group-hover/web-search-tool:opacity-100 group-focus-within/web-search-tool:ml-1.5 group-focus-within/web-search-tool:max-w-[86px] group-focus-within/web-search-tool:opacity-100">
+            Búsqueda web
           </span>
           <Button
             variant="ghost"
             size="sm"
             className="ml-0 h-4 w-0 shrink-0 overflow-hidden rounded-full p-0 opacity-0 transition-all duration-250 ease-out hover:bg-green-200 group-hover/web-search-tool:ml-1 group-hover/web-search-tool:w-4 group-hover/web-search-tool:opacity-100 group-focus-within/web-search-tool:ml-1 group-focus-within/web-search-tool:w-4 group-focus-within/web-search-tool:opacity-100 dark:hover:bg-green-800/30"
             onClick={handleWebSearchClose}
-            aria-label="Cerrar Web Search"
-            title="Cerrar Web Search"
+            aria-label="Cerrar búsqueda web"
+            title="Cerrar búsqueda web"
           >
             <X className="h-3 w-3" />
           </Button>
