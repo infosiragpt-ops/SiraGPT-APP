@@ -187,13 +187,6 @@ const INTEGRATION_GROUPS = [
   },
 ]
 
-const SKILL_ROWS = [
-  { id: "planner", label: "Planner", detail: "Descompone una idea en tareas ejecutables" },
-  { id: "builder", label: "Builder", detail: "Genera archivos y aplica cambios al workspace" },
-  { id: "debugger", label: "Debugger", detail: "Lee consola, errores y propone fixes" },
-  { id: "reviewer", label: "Reviewer", detail: "Revisa seguridad, UX y regresiones" },
-]
-
 const TOOL_RUNTIME_NOTES: Record<WorkspaceToolId, string> = {
   agent: "Enfoca el chat del agente y conserva el contexto del workspace.",
   preview: "Renderiza la app actual y puede arrancar proyectos con dev server.",
@@ -2193,22 +2186,80 @@ function AutomationsTool() {
   )
 }
 
+type AgentSkill = {
+  id: string
+  label: string
+  category: string
+  description: string
+  tools?: string[]
+  tags?: string[]
+  outputKind?: string
+}
+
 function SkillsTool() {
-  const [enabled, setEnabled] = useWorkspacePersistedState<Record<string, boolean>>("skills", {
-    planner: true,
-    builder: true,
-    debugger: true,
-    reviewer: false,
-  })
+  const [skills, setSkills] = React.useState<AgentSkill[] | null>(null)
+  const [error, setError] = React.useState<string | null>(null)
+  React.useEffect(() => {
+    let alive = true
+    const base = `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}`
+    const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null
+    fetch(`${base}/cowork/skills`, {
+      credentials: "include",
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((data) => { if (alive) setSkills(Array.isArray(data?.skills) ? data.skills : []) })
+      .catch((e) => { if (alive) setError(e?.message || "No se pudo cargar el catálogo") })
+    return () => { alive = false }
+  }, [])
+
+  // Group the REAL catalog by category.
+  const groups = React.useMemo(() => {
+    const map = new Map<string, AgentSkill[]>()
+    for (const s of skills || []) {
+      const k = s.category || "otras"
+      if (!map.has(k)) map.set(k, [])
+      map.get(k)!.push(s)
+    }
+    return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+  }, [skills])
+
   return (
-    <ToolShell eyebrow="Agent" title="Agent Skills" detail="Habilidades activas del agente para construir, depurar y revisar el workspace.">
-      <div className="grid gap-3 md:grid-cols-2">
-        {SKILL_ROWS.map((skill) => (
-          <PanelCard key={skill.id} title={skill.label} detail={skill.detail} icon={<Wrench className="h-4 w-4" />}>
-            <ToggleRow label="Habilitado" checked={Boolean(enabled[skill.id])} onChange={() => setEnabled((prev) => ({ ...prev, [skill.id]: !prev[skill.id] }))} />
-          </PanelCard>
-        ))}
-      </div>
+    <ToolShell
+      eyebrow="Agent"
+      title="Agent Skills"
+      detail={skills ? `Catálogo real de ${skills.length} habilidades del agente (GET /api/cowork/skills).` : "Habilidades que el agente puede usar en este workspace."}
+    >
+      {error ? (
+        <p className="rounded-md border border-amber-500/25 bg-amber-500/10 px-3 py-3 text-[12px] text-amber-700">No se pudo cargar el catálogo de habilidades: {error}</p>
+      ) : !skills ? (
+        <p className="rounded-md bg-muted/35 px-3 py-3 text-[12px] text-muted-foreground">Cargando catálogo…</p>
+      ) : skills.length === 0 ? (
+        <p className="rounded-md bg-muted/35 px-3 py-3 text-[12px] text-muted-foreground">No hay habilidades disponibles para tu plan.</p>
+      ) : (
+        <div className="space-y-4">
+          {groups.map(([category, rows]) => (
+            <section key={category}>
+              <h3 className="mb-2 text-[13px] font-semibold capitalize text-foreground">{category}</h3>
+              <div className="grid gap-2 md:grid-cols-2">
+                {rows.map((skill) => (
+                  <PanelCard key={skill.id} title={skill.label} detail={skill.description} icon={<Wrench className="h-4 w-4" />}>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <StatusPill status="success" />
+                      {(skill.tags || []).slice(0, 4).map((tag) => (
+                        <span key={tag} className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{tag}</span>
+                      ))}
+                      {typeof skill.outputKind === "string" && skill.outputKind ? (
+                        <span className="ml-auto text-[10px] text-muted-foreground">→ {skill.outputKind}</span>
+                      ) : null}
+                    </div>
+                  </PanelCard>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      )}
     </ToolShell>
   )
 }
