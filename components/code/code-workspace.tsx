@@ -38,10 +38,10 @@ import { WORKSPACE_TOOLS, type WorkspaceToolId } from "@/lib/code-workspace-tool
 
 import { AICodeChatPanel } from "./ai-code-chat-panel"
 import { CodeHub } from "./code-hub"
+import { NewTabPane } from "./new-tab-pane"
 import { PreviewPane } from "./preview-pane"
 import { ProjectInviteDialog } from "./project-invite-dialog"
 import { TerminalPanel } from "./terminal-panel"
-import { ToolLauncher } from "./tool-launcher"
 import { ToolScreen } from "./tool-screen"
 import { WorkspaceTopBar, type WorkspacePanelId } from "./workspace-top-bar"
 
@@ -82,7 +82,7 @@ export function CodeWorkspace() {
     () => new Set<WorkspacePanelId>(["preview", "terminal"]),
   )
   const [activePanel, setActivePanel] = React.useState<WorkspacePanelId | null>("preview")
-  const [launcherOpen, setLauncherOpen] = React.useState(false)
+  const [newTabOpen, setNewTabOpen] = React.useState(false)
   const [inviteOpen, setInviteOpen] = React.useState(false)
   const [activeTool, setActiveTool] = React.useState<WorkspaceToolId | null>(null)
   const [codeHubOpen, setCodeHubOpen] = React.useState(false)
@@ -145,6 +145,11 @@ export function CodeWorkspace() {
     setActivePanel((current) => (current === id ? null : current))
     if (id === "terminal") setTerminalOpen(false)
     if (id === "preview") setPreviewOpen(false)
+    // Git/Validation render through the single-tool screen — closing their
+    // tab must also dismiss that screen.
+    if (id === "git" || id === "validation") {
+      setActiveTool((current) => (current === id ? null : current))
+    }
   }, [])
 
   const openComposer = React.useCallback(() => {
@@ -181,7 +186,7 @@ export function CodeWorkspace() {
 
   const handleSelectTool = React.useCallback(
     (id: WorkspaceToolId) => {
-      setLauncherOpen(false)
+      setNewTabOpen(false)
       const tool = WORKSPACE_TOOLS[id]
       if (!tool) return
       if (tool.behavior === "action") {
@@ -195,13 +200,45 @@ export function CodeWorkspace() {
         }
         return
       }
+      // Preview, Shell, Git and Validation already live as first-class panel
+      // tabs — picking them from the "Nueva pestaña" pane goes through the
+      // panel toggle so their tab shows up in the strip (Replit behavior).
+      if (id === "preview" || id === "shell" || id === "git" || id === "validation") {
+        setMobileView("preview")
+        handleTogglePanel(id === "shell" ? "terminal" : id)
+        if (id === "preview" || id === "shell") setActiveTool(null)
+        return
+      }
       setCodeHubOpen(false)
       // The full-screen ToolScreen also lives in the preview pane — on mobile
       // switch to it so the opened tool is actually visible.
       setMobileView("preview")
       setActiveTool(id)
     },
-    [createFile, openComposer],
+    [createFile, handleTogglePanel, openComposer],
+  )
+
+  // "Ir a pestaña existente": focus something that is already open.
+  const handleJumpToOpen = React.useCallback(
+    (id: WorkspaceToolId) => {
+      setNewTabOpen(false)
+      if (id === "agent") {
+        setChatOpen(true)
+        setMobileView("chat")
+        chatRef.current?.expand()
+        focusChat()
+        return
+      }
+      if (id === "preview" || id === "shell") {
+        setMobileView("preview")
+        handleTogglePanel(id === "shell" ? "terminal" : "preview")
+        return
+      }
+      // An already-open tool screen sits right under the picker.
+      setMobileView("preview")
+      setActiveTool(id)
+    },
+    [focusChat, handleTogglePanel],
   )
 
   React.useEffect(() => {
@@ -223,7 +260,7 @@ export function CodeWorkspace() {
     const onOpenTool = (event: Event) => {
       openTool((event as CustomEvent<{ toolId?: string }>).detail?.toolId)
     }
-    const onOpenLauncher = () => setLauncherOpen(true)
+    const onOpenLauncher = () => setNewTabOpen(true)
     window.addEventListener(CODE_OPEN_TOOL_EVENT, onOpenTool)
     window.addEventListener(CODE_OPEN_TOOL_LAUNCHER_EVENT, onOpenLauncher)
     return () => {
@@ -302,7 +339,7 @@ export function CodeWorkspace() {
       }
       if (key === "b") {
         event.preventDefault()
-        setLauncherOpen((value) => !value)
+        setNewTabOpen((value) => !value)
         return
       }
       if (key === "l") {
@@ -424,6 +461,19 @@ export function CodeWorkspace() {
         activePanel={activePanel}
         onTogglePanel={handleTogglePanel}
         onClosePanel={handleClosePanel}
+        toolTab={
+          activeTool && activeTool !== "git" && activeTool !== "validation"
+            ? WORKSPACE_TOOLS[activeTool]
+            : null
+        }
+        toolTabActive={!newTabOpen}
+        onFocusToolTab={() => {
+          setMobileView("preview")
+          setNewTabOpen(false)
+        }}
+        onCloseToolTab={() => setActiveTool(null)}
+        newTabOpen={newTabOpen}
+        onCloseNewTab={() => setNewTabOpen(false)}
         toolsMenu={
           <Button
             type="button"
@@ -432,10 +482,10 @@ export function CodeWorkspace() {
             className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
             aria-label="Abrir herramientas"
             onClick={() => {
-              // On mobile the launcher lives in the preview pane, which is
+              // On mobile the picker lives in the preview pane, which is
               // hidden behind the Agente view — surface it before opening.
               setMobileView("preview")
-              setLauncherOpen(true)
+              setNewTabOpen(true)
             }}
           >
             <Plus className="h-3.5 w-3.5" />
@@ -493,15 +543,16 @@ export function CodeWorkspace() {
                   onClose={() => setActiveTool(null)}
                   onBackToLauncher={() => {
                     setActiveTool(null)
-                    setLauncherOpen(true)
+                    setNewTabOpen(true)
                   }}
                 />
               ) : null}
 
-              <ToolLauncher
-                open={launcherOpen}
-                onClose={() => setLauncherOpen(false)}
-                onSelect={handleSelectTool}
+              <NewTabPane
+                open={newTabOpen}
+                onClose={() => setNewTabOpen(false)}
+                onSelectTool={handleSelectTool}
+                onJumpToOpen={handleJumpToOpen}
                 openToolIds={openToolIds}
               />
             </>

@@ -40,6 +40,17 @@ export type WorkspaceTopBarProps = {
   activePanel: WorkspacePanelId | null
   onTogglePanel: (id: WorkspacePanelId) => void
   onClosePanel: (id: WorkspacePanelId) => void
+  /** Tool opened from the picker (Database, Secrets…) shown as its own tab. */
+  toolTab?: {
+    label: string
+    icon: React.ComponentType<{ className?: string }>
+  } | null
+  toolTabActive?: boolean
+  onFocusToolTab?: () => void
+  onCloseToolTab?: () => void
+  /** Replit-style "Nueva pestaña" picker tab (open while the picker shows). */
+  newTabOpen?: boolean
+  onCloseNewTab?: () => void
   toolsMenu?: React.ReactNode
   onOpenSearch: () => void
   onOpenInvite: () => void
@@ -62,6 +73,12 @@ export function WorkspaceTopBar({
   activePanel,
   onTogglePanel,
   onClosePanel,
+  toolTab,
+  toolTabActive,
+  onFocusToolTab,
+  onCloseToolTab,
+  newTabOpen,
+  onCloseNewTab,
   toolsMenu,
   onOpenSearch,
   onOpenInvite,
@@ -73,6 +90,7 @@ export function WorkspaceTopBar({
   onToggleChat,
 }: WorkspaceTopBarProps) {
   const visible = PANELS.filter((p) => openPanels.has(p.id))
+  const ToolTabIcon = toolTab?.icon
 
   return (
     <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border/60 bg-background px-2.5">
@@ -127,6 +145,53 @@ export function WorkspaceTopBar({
             </div>
           )
         })}
+        {toolTab && ToolTabIcon ? (
+          <div
+            className={cn(
+              "group flex h-7 shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-[12px] transition-colors",
+              toolTabActive
+                ? "border-border/70 bg-background text-foreground shadow-sm"
+                : "border-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+            )}
+          >
+            <button
+              type="button"
+              className="flex min-w-0 items-center gap-1.5"
+              onClick={onFocusToolTab}
+            >
+              <ToolTabIcon className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">{toolTab.label}</span>
+            </button>
+            <button
+              type="button"
+              className={cn(
+                "rounded p-0.5 transition-opacity hover:bg-muted",
+                toolTabActive ? "opacity-60 hover:opacity-100" : "opacity-0 group-hover:opacity-60",
+              )}
+              aria-label={`Cerrar ${toolTab.label}`}
+              onClick={(e) => {
+                e.stopPropagation()
+                onCloseToolTab?.()
+              }}
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        ) : null}
+        {newTabOpen ? (
+          <div className="flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-border/70 bg-background px-2.5 text-[12px] text-foreground shadow-sm">
+            <Plus className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">Nueva pestaña</span>
+            <button
+              type="button"
+              className="rounded p-0.5 opacity-60 transition-opacity hover:bg-muted hover:opacity-100"
+              aria-label="Cerrar nueva pestaña"
+              onClick={onCloseNewTab}
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        ) : null}
         {toolsMenu ?? null}
       </div>
 

@@ -3,7 +3,8 @@
 /**
  * ToolScreen — the single active workspace tool surface ("una pantalla a la
  * vez"). Overlays the editor/preview region; shows exactly one tool chosen
- * from the ToolLauncher. Ready tools render their real component and actions.
+ * from the NewTabPane picker. Ready tools render their real component and
+ * actions.
  */
 
 import * as React from "react"
