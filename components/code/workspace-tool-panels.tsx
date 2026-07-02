@@ -1683,9 +1683,9 @@ function DatabaseTool() {
 
   return (
     <ToolShell
-      eyebrow="Database"
+      eyebrow="Database · local"
       title="Postgres workspace"
-      detail="Explora tablas, ejecuta consultas simples y prueba datos locales antes de conectar una base real."
+      detail="Prototipo LOCAL en el navegador (no persiste en el servidor): modela tablas y prueba consultas simples. La base Postgres por-proyecto real aún no está disponible."
       action={<Button size="sm" className="h-8 gap-1.5" onClick={addRow}><Plus className="h-3.5 w-3.5" />Fila demo</Button>}
     >
       <div className="grid min-h-[520px] gap-3 lg:grid-cols-[220px_1fr]">
@@ -1824,9 +1824,9 @@ function StorageTool() {
   const [assets, setAssets] = useWorkspacePersistedState<{ id: string; name: string; size: number; type: string; createdAt: number }[]>("storage", [])
   return (
     <ToolShell
-      eyebrow="Storage"
+      eyebrow="Storage · local"
       title="App Storage"
-      detail="Guarda metadatos de archivos del workspace, assets y vinculos a carpetas locales para que el agente pueda construir con tus documentos."
+      detail="Registro LOCAL de assets del workspace (los archivos no salen del navegador). El almacenamiento de objetos servido a la app aún no está disponible."
     >
       <PanelGrid>
         <PanelCard
@@ -2004,7 +2004,7 @@ function AuthTool() {
     sessionDays: 30,
   })
   return (
-    <ToolShell eyebrow="Authentication" title="Auth" detail="Configura proveedores de login y reglas basicas de sesion para la app.">
+    <ToolShell eyebrow="Authentication · local" title="Auth" detail="Preferencias LOCALES de login para el código generado (aún no gestiona usuarios ni sesiones reales en el servidor).">
       <PanelGrid>
         <PanelCard title="Proveedores" detail="Activa login por email, Google o GitHub" icon={<ShieldCheck className="h-4 w-4" />}>
           {(["email", "google", "github"] as const).map((key) => (
@@ -2198,7 +2198,7 @@ function AutomationsTool() {
     { id: "deploy-check", label: "Validar antes de publicar", enabled: true },
   ])
   return (
-    <ToolShell eyebrow="Automation" title="Automations" detail="Tareas recurrentes del workspace que el agente puede ejecutar o vigilar.">
+    <ToolShell eyebrow="Automation · experimental" title="Automations" detail="Reglas LOCALES de referencia (experimental): el agente aún no las ejecuta ni programa automáticamente en el servidor.">
       <PanelCard title="Reglas" detail="Automatizaciones locales" icon={<Zap className="h-4 w-4" />}>
         {items.map((item) => (
           <ToggleRow
