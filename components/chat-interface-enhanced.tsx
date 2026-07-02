@@ -55,7 +55,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { CredentialWarning } from "@/components/credential-warning"
 import { ComposerCharCounter } from "@/components/composer-char-counter"
 import { Input } from "@/components/ui/input"
-import { useChat } from "@/lib/chat-context-integrated"
+import { useChat, useModelsAndFiles } from "@/lib/chat-context-integrated"
 import { useAuth } from "@/lib/auth-context-integrated"
 import WhatsAppButton from "@/components/WhatsAppButton"
 import { PremiumCardIcon } from "@/components/icons/premium-card-icon"
@@ -3450,7 +3450,11 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
   const [searchQuery, setSearchQuery] = React.useState("");
   // Re-fetch the model list when the picker opens so a model an admin just
   // activated shows up without a page reload (live admin → frontend sync).
-  const { refreshModels } = useChat();
+  // Use the fine-grained models/files context (NOT useChat) — useChat also
+  // subscribes to the streaming/current-chat contexts, which change once per
+  // frame while a response streams, defeating this component's React.memo and
+  // re-rendering the model-logo chip ~60×/s (the visible logo flicker).
+  const { refreshModels } = useModelsAndFiles();
 
   // Keep the call sites intact for model changes, but the picker no
   // longer surfaces a separate "recent models" section.

@@ -132,6 +132,10 @@ export const IconProvider = ({ name, size = 24, className, style, ...props }: Ic
                     alt={name}
                     width={size}
                     height={size}
+                    // Decode eagerly: these tiny brand logos are cached, and
+                    // lazy/async decode paints a blank frame on (re)mount, which
+                    // reads as a flicker in the streaming composer chip.
+                    loading="eager"
                     style={{
                         width: size,
                         height: size,

@@ -45,9 +45,16 @@ class OcrEngine {
   get config() {
     return {
       mode: String(process.env.OCR_MODE || 'hybrid').toLowerCase(),
-      minConfidence: numberFromEnv('OCR_MIN_CONFIDENCE', 70),
+      // Raised from 70 → 85: a Tesseract read at 70-85% confidence is the
+      // "mediocre but confident" zone that used to be accepted verbatim (a
+      // garbled phone-photo read became the stored transcription and the vision
+      // model never saw the image). 85 lets those fall through to the stronger
+      // vision OCR. Tunable down via OCR_MIN_CONFIDENCE if cost matters.
+      minConfidence: numberFromEnv('OCR_MIN_CONFIDENCE', 85),
       minUsefulChars: numberFromEnv('OCR_MIN_USEFUL_CHARS', 20),
-      visionModel: process.env.OCR_VISION_MODEL || process.env.VISION_MODEL || 'gpt-4o-mini',
+      // Default to gpt-4o (far better OCR on dense/printed/photographed docs
+      // than gpt-4o-mini). Override with OCR_VISION_MODEL / VISION_MODEL.
+      visionModel: process.env.OCR_VISION_MODEL || process.env.VISION_MODEL || 'gpt-4o',
       visionPdfMaxPages: numberFromEnv('OCR_VISION_PDF_MAX_PAGES', 20),
       visionPdfStrategy: process.env.OCR_VISION_PDF_STRATEGY || 'first', // first | first-last-middle | first
       pdfMaxPages: numberFromEnv('OCR_PDF_MAX_PAGES', 0),
@@ -655,18 +662,21 @@ class OcrEngine {
       const response = await openai.chat.completions.create({
         model: config.visionModel,
         temperature: 0,
-        max_tokens: 4096,
+        // Raised from 4096: a dense A4 page in Spanish easily exceeds 4k tokens,
+        // silently truncating the stored transcription. Tunable via env.
+        max_tokens: numberFromEnv('OCR_VISION_MAX_TOKENS', 8192),
         messages: [
           {
             role: 'system',
-            content: 'You are a professional OCR engine. Return ONLY the visible text from the image. Preserve useful line breaks. Do NOT invent or hallucinate content. Do NOT translate — output text in the original language. If you cannot read any text, respond with exactly: OCR_EMPTY',
+            content:
+              'You are a professional OCR / document-transcription engine. Transcribe the COMPLETE, VERBATIM text of the image — every line, do NOT summarize, shorten, or omit anything. Preserve the document STRUCTURE using Markdown: headings as #/##, bullet/numbered lists, and tables as Markdown tables; keep the natural reading order (top-to-bottom, and for multi-column layouts finish the left column before the right). The document is most likely in SPANISH — preserve accents (á é í ó ú ñ ü) and ¿ ¡ punctuation exactly, and keep any other original language as-is (do NOT translate). Reproduce numbers, dates, and proper nouns exactly. Do NOT invent or hallucinate content. Output ONLY the transcription (no preamble, no commentary). If there is no legible text, respond with exactly: OCR_EMPTY',
           },
           {
             role: 'user',
             content: [
               {
                 type: 'text',
-                text: `${promptPrefix} Transcribe todo el texto visible de esta imagen. Si no hay texto legible, responde exactamente: OCR_EMPTY`,
+                text: `${promptPrefix} Transcribe COMPLETO y textual todo el contenido de esta imagen, conservando su estructura (títulos, listas, tablas) en Markdown y sin resumir. Si no hay texto legible, responde exactamente: OCR_EMPTY`,
               },
               {
                 type: 'image_url',
