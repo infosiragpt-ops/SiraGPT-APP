@@ -2,8 +2,13 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const ts = require('typescript');
 const { starterFiles, escapeHtml } = require('../src/services/codex/starter-files');
+
+// typescript is a frontend dev-dep; it may be absent in the backend test env.
+// Load it best-effort so the parse-cleanliness check can skip instead of
+// crashing the whole file on require().
+let ts = null;
+try { ts = require('typescript'); } catch { /* skip the TSX parse test */ }
 
 test('same input produces byte-identical output (deterministic)', () => {
   const a = starterFiles({ projectName: 'Mi tienda' });
@@ -31,7 +36,7 @@ test('emits a runnable React 18 + Vite 7 + TS project', () => {
   assert.match(files.find((f) => f.path === '.gitignore').content, /node_modules/);
 });
 
-test('the generated .tsx/.ts files parse cleanly (valid TypeScript/JSX)', () => {
+test('the generated .tsx/.ts files parse cleanly (valid TypeScript/JSX)', { skip: !ts }, () => {
   for (const f of starterFiles({ projectName: 'Mi <b>App</b>' })) {
     if (!/\.(tsx?|ts)$/.test(f.path)) continue;
     const kind = f.path.endsWith('tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
