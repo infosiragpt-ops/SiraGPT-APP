@@ -171,6 +171,21 @@ router.use((req, res, next) => {
   next();
 });
 
+// Agent SDK catalogue: the specialists the APPS agent can delegate to via
+// run_subagent, plus the LLM currently serving the loop (for observability).
+router.get('/agents', authenticateToken, (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    // eslint-disable-next-line global-require
+    const sdk = require('../services/codex/agent-sdk');
+    // eslint-disable-next-line global-require
+    const llmProvider = require('../services/codex/llm-provider');
+    return res.json({ ok: true, agents: sdk.listSubagents(), llm: llmProvider.describeActiveProvider() });
+  } catch (err) {
+    return res.status(500).json({ error: 'codex_agents_failed', message: err.message });
+  }
+});
+
 router.post(
   '/projects',
   authenticateToken,

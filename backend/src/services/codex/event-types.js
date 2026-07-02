@@ -11,7 +11,7 @@
  */
 
 const RUN_STATUSES = ['queued', 'running', 'waiting_approval', 'done', 'error', 'cancelled'];
-const ACTION_KINDS = ['terminal', 'file_read', 'file_write', 'reasoning', 'web'];
+const ACTION_KINDS = ['terminal', 'file_read', 'file_write', 'reasoning', 'web', 'database', 'agent'];
 const ACTION_END_STATUSES = ['done', 'error'];
 const COST_SOURCES = ['provider_exact', 'openrouter_generation', 'estimated'];
 

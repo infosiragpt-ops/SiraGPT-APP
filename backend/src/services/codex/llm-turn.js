@@ -13,7 +13,8 @@
  * can therefore drive the loop.
  */
 
-const { getCerebrasConfig, createCerebrasClient } = require('../ai/cerebras-client');
+const { getCerebrasConfig } = require('../ai/cerebras-client');
+const llmProvider = require('./llm-provider');
 const { buildPromptedToolsBlock, parsePromptedToolCalls } = require('../agents/prompted-tool-calling');
 
 // Protocol scaffolding the prompted block tells the model to emit (e.g. a
@@ -57,23 +58,38 @@ function extractUsage(resp, model) {
  * the loop encodes tool results as user [TOOL_RESULT] messages). `tools` is the
  * registry projection [{ name, description, parameters }].
  */
-async function defaultLlmTurn({ messages, tools = [], signal, env = process.env, createClient = createCerebrasClient, temperature = 0.3, maxTokens = 2048 } = {}) {
-  const cfg = getCerebrasConfig({ env });
-  if (!cfg.enabled) throw new Error('codex llm-turn: no LLM provider configured (CEREBRAS_API_KEY)');
-  const client = createClient({ env });
-  if (!client?.chat?.completions) throw new Error('codex llm-turn: invalid LLM client');
-
+async function defaultLlmTurn({ messages, tools = [], signal, env = process.env, createClient, temperature = 0.3, maxTokens } = {}) {
   const effective = appendToolsToSystem(messages, tools);
-  const resp = await client.chat.completions.create(
-    { model: cfg.model, messages: effective, temperature, max_tokens: maxTokens },
-    signal ? { signal } : undefined,
-  );
 
-  const choice = resp?.choices?.[0]?.message || {};
-  const content = typeof choice.content === 'string' ? choice.content : '';
-  const reasoningText = typeof choice.reasoning === 'string'
-    ? choice.reasoning
-    : (typeof choice.reasoning_content === 'string' ? choice.reasoning_content : '');
+  let content = '';
+  let reasoningText = '';
+  let usage = null;
+
+  if (createClient) {
+    // Legacy injectable path (tests + explicit Cerebras): OpenAI-style client.
+    const cfg = getCerebrasConfig({ env });
+    if (!cfg.enabled) throw new Error('codex llm-turn: no LLM provider configured (CEREBRAS_API_KEY)');
+    const client = createClient({ env });
+    if (!client?.chat?.completions) throw new Error('codex llm-turn: invalid LLM client');
+    const resp = await client.chat.completions.create(
+      { model: cfg.model, messages: effective, temperature, max_tokens: maxTokens || 2048 },
+      signal ? { signal } : undefined,
+    );
+    const choice = resp?.choices?.[0]?.message || {};
+    content = typeof choice.content === 'string' ? choice.content : '';
+    reasoningText = typeof choice.reasoning === 'string'
+      ? choice.reasoning
+      : (typeof choice.reasoning_content === 'string' ? choice.reasoning_content : '');
+    usage = extractUsage(resp, cfg.model);
+  } else {
+    // Provider ladder: Anthropic (Claude) → OpenRouter → Cerebras, with
+    // quarantine-based failover. The prompted tool protocol is model-agnostic,
+    // so upgrading the model here upgrades the whole agent.
+    const out = await llmProvider.chatComplete({ messages: effective, temperature, maxTokens, signal, env });
+    content = out.content;
+    reasoningText = out.reasoning || '';
+    usage = out.usage;
+  }
 
   const names = new Set((tools || []).map((t) => t.name));
   let toolCalls = [];
@@ -92,7 +108,7 @@ async function defaultLlmTurn({ messages, tools = [], signal, env = process.env,
     text,
     reasoning: reasoningText ? { label: 'Razonando', text: reasoningText, durationMs: 0 } : null,
     toolCalls,
-    usage: extractUsage(resp, cfg.model),
+    usage,
   };
 }
 

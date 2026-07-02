@@ -1059,6 +1059,62 @@ E2E con git real en tmpdir: `codex-e2e-flow.test.js`. Golden replay: `tests/lib/
   que mantiene vivo el proceso (cuelga node --test).
 - git-real tests: `git config core.autocrlf false` en el repo temporal (Windows CRLF rompe la comparación byte-a-byte).
 
+## Codex Agent — Claude Code parity + Agent SDK (added 2026-07-02)
+
+El loop de APPS (/code) ahora se comporta como Claude Code: modelo fuerte con
+failover, verificación real y subagentes especializados. Todo backend (cero
+cambios de UI — el timeline ya tolera los kinds nuevos).
+
+### `codex/llm-provider.js` — escalera multi-proveedor
+`chatComplete()` provider-agnóstico: **Anthropic (Claude) → OpenRouter →
+Cerebras**, primero configurado gana; override con `CODEX_LLM_PROVIDER`.
+Modelos: `CODEX_ANTHROPIC_MODEL` (default `claude-sonnet-4-6`),
+`CODEX_OPENROUTER_MODEL` (default `anthropic/claude-sonnet-4.6`). Un proveedor
+que lanza se pone en cuarentena 5 min y se intenta el siguiente peldaño (la
+cuarentena solo re-ordena, nunca descarta). El protocolo prompted de tools es
+model-agnóstico, así que subir el modelo sube todo el agente. Claude recibe
+maxTokens 8192 (Cerebras conserva 2048). `llm-turn.js` usa la escalera cuando
+NO se inyecta `createClient` (los tests conservan el camino legacy Cerebras).
+
+### Tools nuevas en `build-tools.js` (10 total)
+- `list_files` — `git ls-files --cached --others --exclude-standard`.
+- `type_check` — `bunx tsc --noEmit` vía runner; devuelve los diagnósticos
+  REALES al modelo (runner caído = informacional, no error).
+- `dev_server_check` — arranca/consulta el dev server y devuelve ready/error +
+  tail de logs en vivo (module not found, overlay de Vite…).
+- `run_subagent` — delegación al Agent SDK (kind `agent`; `database` y `agent`
+  añadidos a `ACTION_KINDS` en event-types.js — `database` faltaba).
+
+### `codex/agent-sdk/` — subagentes especializados
+Registro declarativo + mini-loop propio (presupuesto `CODEX_SUBAGENT_MAX_STEPS`,
+default 8; sin delegación recursiva; solo su set de tools): `planner`,
+`frontend_builder`, `backend_engineer`, `db_architect`, `qa_reviewer` y
+`enterprise_analyst` (pedido de negocio → módulos, entidades, roles, flujos,
+KPIs — CRM/ERP/inventario/facturación/RRHH/POS). El system prompt del loop
+instruye delegar PRIMERO en enterprise_analyst para software de empresa.
+Catálogo por HTTP: `GET /api/codex/agents` (auth, flag-gated) → agents + LLM
+activo (`describeActiveProvider`).
+
+### `codex/verify-loop.js` — auto-verificación al cierre del build
+En `closeBuild`, ANTES del checkpoint (los fixes quedan dentro): `tsc --noEmit`
+→ si hay errores, mini-loop reparador (tools read/write/edit/list, prompt de
+fixer, `CODEX_VERIFY_FIX_STEPS`=4) → re-check (`CODEX_VERIFY_ROUNDS`=2).
+Best-effort por contrato: nunca convierte un build exitoso en error. Se salta
+workspaces sin package.json/tsconfig.json. Off con `CODEX_AUTO_VERIFY=0`.
+
+### Tests
+`codex-llm-provider.test.js` (13) · `codex-agent-sdk.test.js` (12) ·
+`codex-verify-loop.test.js` (8) · `codex-build-tools-v3.test.js` (12) —
+registrados en backend/package.json. Los tests del agent-loop fijan
+`CODEX_AUTO_VERIFY:'0'` en su env fake para seguir enfocados al loop.
+
+### Envs nuevos (todos opcionales)
+`ANTHROPIC_API_KEY` (activa Claude en el loop) · `CODEX_LLM_PROVIDER` ·
+`CODEX_ANTHROPIC_MODEL` · `CODEX_OPENROUTER_MODEL` · `CODEX_AUTO_VERIFY` ·
+`CODEX_VERIFY_ROUNDS` · `CODEX_VERIFY_FIX_STEPS` · `CODEX_SUBAGENT_MAX_STEPS`.
+En prod: pasar `ANTHROPIC_API_KEY`/`OPENROUTER_API_KEY` al contenedor backend
+vía el override (allowlist `environment:`).
+
 ## Deployments / Publishing — clon del tab de Replit (flag DEPLOYMENTS_V2, added 2026-06-18)
 
 Clon **de gestión** (no provisiona VMs reales) del tab "Deployments/Publishing" de

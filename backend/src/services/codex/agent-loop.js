@@ -181,6 +181,9 @@ function buildSystemPrompt({ project, plan, fileTree, sourcePrompt }) {
     'NO inicialices frameworks ni ejecutes scaffolds interactivos (create-next-app/create-vite); construye componentes React (.tsx) editando/creando archivos en src/ con write_file/edit_file.',
     'Si necesitas estructura adicional, crea archivos concretos tú mismo. Usa run_command solo para verificar, instalar dependencias declaradas o revisar git.',
     'Nunca dependas de prompts interactivos de terminal; los comandos deben terminar solos.',
+    'VERIFICA tu trabajo como lo haría un ingeniero: después de crear o editar código usa type_check para ver los errores reales de compilación y dev_server_check para confirmar que la app corre; corrige lo que salga antes de dar el trabajo por terminado.',
+    'Para tareas grandes o especializadas delega con run_subagent: planner (plan de construcción), frontend_builder (UI React/TS), backend_engineer (APIs y capa de datos), db_architect (modelo de datos), qa_reviewer (revisión final), enterprise_analyst (especificación de negocio).',
+    'Si el usuario pide software de EMPRESA (CRM, ERP, inventario, facturación, RRHH, punto de venta, gestión de clientes/proveedores/proyectos), delega PRIMERO en enterprise_analyst para convertir el pedido en módulos, entidades, roles y flujos; luego construye una app multi-módulo con navegación lateral, dashboard con KPIs y datos de ejemplo realistas del dominio.',
     `Proyecto: ${project?.name || 'Codex'}.`,
   ];
   if (forceViteApps) {
@@ -322,7 +325,15 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
       await eventStore.appendEvent(run.id, 'action_start', { actionId, kind: tool.kind, command: command || undefined, path: path || undefined, groupId }, { prisma });
 
       const t0 = clock().getTime();
-      const result = await tool.execute(call.args, { runner, project: projectId, webSearch });
+      const result = await tool.execute(call.args, {
+        runner,
+        project: projectId,
+        webSearch,
+        env,
+        signal,
+        llmTurn,
+        onUsage: (u) => { if (u && metrics?.recordLlmUsage) metrics.recordLlmUsage(u); },
+      });
       const durationMs = Math.max(0, clock().getTime() - t0);
       const status = result.isError ? 'error' : 'done';
 
@@ -457,6 +468,15 @@ async function ensureAppsVitePreviewable({ run, project, runner, eventStore, pri
  */
 async function closeBuild({ run, project, runner, eventStore, prisma, llmTurn, clock, env, metrics }) {
   await ensureAppsVitePreviewable({ run, project, runner, eventStore, prisma });
+  // Claude Code-style close: verify the workspace actually compiles and run a
+  // bounded self-heal pass BEFORE the checkpoint so the fixes land in it.
+  // Best-effort by contract (verify-loop never throws).
+  try {
+    const verifyLoop = require('./verify-loop');
+    await verifyLoop.autoVerifyAndHeal({ run, projectId: project?.id || run.projectId, runner, eventStore, prisma, llmTurn, env, metrics, clock });
+  } catch (err) {
+    if (env?.NODE_ENV !== 'test') console.warn('[codex agent-loop] auto-verify failed:', err?.message || err);
+  }
   let checkpoint = null;
   try {
     checkpoint = await checkpointService.createCheckpoint({ run, project, deps: { runner, eventStore, prisma, llmTurn, clock, env } });

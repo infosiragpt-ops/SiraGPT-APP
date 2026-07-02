@@ -30,7 +30,9 @@ function fakeDeps(overrides = {}) {
   const clock = () => new Date(1_000_000 + (t += 10));
   const eventStore = { appendEvent: async (runId, type, data) => { events.push({ type, data }); }, listEvents: async () => [] };
   const actionStore = { recordAction: async (a) => { actions.push(a); } };
-  return { events, actions, writes, deps: { eventStore, actionStore, runner, clock, fileTree: '', plan: { architecture: 'x', pages: [], components: [], tasks: [] }, ...overrides } };
+  // CODEX_AUTO_VERIFY off by default: the verify-loop has its own suite
+  // (codex-verify-loop.test.js); these tests stay focused on the loop itself.
+  return { events, actions, writes, deps: { eventStore, actionStore, runner, clock, fileTree: '', env: { NODE_ENV: 'test', CODEX_AUTO_VERIFY: '0' }, plan: { architecture: 'x', pages: [], components: [], tasks: [] }, ...overrides } };
 }
 
 test('plan mode delegates and ends waiting_approval with plan_proposed', async () => {
@@ -203,7 +205,7 @@ test('step budget exhaustion closes as done with an honest closing narrative', a
   // Always returns a tool call → never naturally stops → hits CODEX_MAX_STEPS.
   const f = fakeDeps({
     llmTurn: async () => ({ text: 'sigo', toolCalls: [{ name: 'run_command', args: { cmd: ['ls'] } }] }),
-    env: { CODEX_MAX_STEPS: '3' },
+    env: { NODE_ENV: 'test', CODEX_MAX_STEPS: '3', CODEX_AUTO_VERIFY: '0' },
   });
   const res = await runAgentLoop({ run: { id: 'r1', mode: 'build' }, project: { id: 'p1' }, deps: f.deps });
   assert.equal(res.status, 'done');

@@ -186,6 +186,124 @@ const TOOLS = {
     },
   },
 
+  list_files: {
+    kind: 'file_read',
+    description: 'Lista los archivos del workspace (tracked + nuevos, sin node_modules). Úsalo para orientarte antes de leer o editar.',
+    parameters: { type: 'object', properties: {}, required: [] },
+    commandFor: () => 'list files',
+    pathFor: () => null,
+    async execute(_args, ctx) {
+      try {
+        const out = await ctx.runner.exec(ctx.project, ['git', 'ls-files', '--cached', '--others', '--exclude-standard']);
+        if (out.exitCode !== 0) {
+          return { isError: true, summary: `exit ${out.exitCode}`, observation: `No pude listar archivos: ${summarise(out.stderr || out.stdout, 500)}` };
+        }
+        const text = summarise(out.stdout, 4000);
+        return { isError: false, summary: text, observation: text || '(workspace vacío)' };
+      } catch (err) {
+        return { isError: true, summary: `runner error: ${err.message}`, observation: `Error listando archivos: ${err.message}` };
+      }
+    },
+  },
+
+  type_check: {
+    kind: 'terminal',
+    description: 'Compila el proyecto con TypeScript (tsc --noEmit) y devuelve los errores REALES de tipos/imports. Úsalo SIEMPRE después de crear o editar código, y corrige lo que salga antes de terminar.',
+    parameters: { type: 'object', properties: { timeoutMs: { type: 'number' } }, required: [] },
+    commandFor: () => 'bunx tsc --noEmit',
+    pathFor: () => null,
+    async execute(args, ctx) {
+      try {
+        const out = await ctx.runner.exec(ctx.project, ['bunx', 'tsc', '--noEmit', '--pretty', 'false'], { timeoutMs: args?.timeoutMs || 120000 });
+        if (out.exitCode === 0) {
+          return { isError: false, summary: 'type check limpio', observation: 'OK: el proyecto compila sin errores de TypeScript.' };
+        }
+        const diagnostics = summarise([out.stdout, out.stderr].filter(Boolean).join('\n'), 6000);
+        return {
+          isError: true,
+          summary: `errores de tipos (exit ${out.exitCode})`,
+          observation: `El proyecto NO compila. Errores de TypeScript:\n${diagnostics}\nCorrige estos errores editando los archivos afectados.`,
+        };
+      } catch (err) {
+        // A missing tsconfig / offline bunx is informational, not a build failure.
+        return { isError: false, summary: `type check no disponible: ${err.message}`, observation: `No pude ejecutar el type check (${err.message}). Continúa con cuidado.` };
+      }
+    },
+  },
+
+  dev_server_check: {
+    kind: 'terminal',
+    description: 'Arranca (o consulta) el dev server del workspace y devuelve su estado real: si está listo, y las últimas líneas de log con los errores en vivo (module not found, syntax error, overlay de Vite…). Úsalo para verificar que la app realmente corre y para leer errores de runtime.',
+    parameters: { type: 'object', properties: { waitMs: { type: 'number', description: 'Tiempo máximo de espera a que esté listo (default 20000).' } }, required: [] },
+    commandFor: () => 'dev server check',
+    pathFor: () => null,
+    async execute(args, ctx) {
+      const sleep = (ms) => new Promise((r) => { setTimeout(r, ms); });
+      try {
+        let status = await ctx.runner.devStatus();
+        // Not running (or running another project) → (re)start it for this one.
+        if (!status?.running || (status.project && status.project !== ctx.project)) {
+          await ctx.runner.startDev(ctx.project);
+        }
+        const deadline = Date.now() + Math.min(Math.max(Number(args?.waitMs) || 20000, 2000), 60000);
+        do {
+          await sleep(1500);
+          status = await ctx.runner.devStatus();
+          if (status?.ready || status?.error) break;
+        } while (Date.now() < deadline);
+
+        const tail = Array.isArray(status?.tail) ? status.tail.join('\n') : '';
+        const errLines = tail.split('\n').filter((l) => /error|failed|cannot|not found|exception/i.test(l)).join('\n');
+        if (status?.ready && !errLines) {
+          return { isError: false, summary: 'dev server listo', observation: `OK: el dev server está corriendo y responde.\nÚltimos logs:\n${summarise(tail, 1500)}` };
+        }
+        if (status?.ready && errLines) {
+          return { isError: false, summary: 'dev server listo con avisos', observation: `El dev server responde pero los logs muestran posibles problemas:\n${summarise(errLines, 2000)}\nLogs completos:\n${summarise(tail, 1500)}` };
+        }
+        return {
+          isError: true,
+          summary: `dev server no listo${status?.error ? `: ${status.error}` : ''}`,
+          observation: `El dev server NO está listo${status?.error ? ` (error: ${status.error})` : ''}.\nLogs:\n${summarise(tail, 2500)}\nDiagnostica y corrige el problema (revisa imports, package.json y sintaxis).`,
+        };
+      } catch (err) {
+        return { isError: true, summary: `runner error: ${err.message}`, observation: `No pude consultar el dev server: ${err.message}` };
+      }
+    },
+  },
+
+  run_subagent: {
+    kind: 'agent',
+    description: 'Delega una tarea grande o especializada en un subagente experto con contexto fresco: planner (plan de construcción), frontend_builder (UI React/TS), backend_engineer (APIs y datos), db_architect (modelo de datos), qa_reviewer (revisión y verificación), enterprise_analyst (especificación de software empresarial: CRM/ERP/inventario/facturación/RRHH). Recibes solo su informe final.',
+    parameters: {
+      type: 'object',
+      properties: {
+        agent: { type: 'string', description: 'Nombre del subagente.' },
+        task: { type: 'string', description: 'Tarea concreta y autocontenida para el subagente.' },
+        context: { type: 'string', description: 'Contexto extra del proyecto que el subagente necesita.' },
+      },
+      required: ['agent', 'task'],
+    },
+    commandFor: (args) => `subagent ${args?.agent || '?'}: ${String(args?.task || '').slice(0, 80)}`,
+    pathFor: () => null,
+    async execute(args, ctx) {
+      // Lazy require to avoid a module cycle (agent-sdk requires build-tools).
+      // eslint-disable-next-line global-require
+      const sdk = require('./agent-sdk');
+      try {
+        const outcome = await sdk.runSubagent({
+          name: String(args?.agent || ''),
+          task: String(args?.task || ''),
+          context: String(args?.context || ''),
+          deps: { runner: ctx.runner, project: ctx.project, webSearch: ctx.webSearch, env: ctx.env, llmTurn: ctx.llmTurn, signal: ctx.signal, onUsage: ctx.onUsage },
+        });
+        const report = sdk.formatSubagentReport(outcome);
+        return { isError: !outcome.ok, summary: `${outcome.agent}: ${outcome.ok ? 'completado' : 'falló'} (${outcome.toolCallsCount} herramientas)`, observation: report };
+      } catch (err) {
+        return { isError: true, summary: `subagente falló: ${err.message}`, observation: `Error ejecutando el subagente: ${err.message}` };
+      }
+    },
+  },
+
   inspect_database: {
     kind: 'database',
     description: 'Inspecciona el esquema de base de datos del proyecto (Prisma). Devuelve el provider, los modelos/tablas con sus campos y los enums, para rastrear y razonar sobre la base de datos antes de generar o modificar código que la use. No requiere conexión viva.',
