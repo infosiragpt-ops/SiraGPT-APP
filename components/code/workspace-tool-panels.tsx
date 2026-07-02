@@ -59,8 +59,9 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
-import { CODE_RUNNER_ACTIVE_EVENT, getActiveHostRunId, useCodeWorkspace } from "@/lib/code-workspace-context"
+import { CODE_OPEN_TOOL_EVENT, CODE_RUNNER_ACTIVE_EVENT, getActiveHostRunId, useCodeWorkspace } from "@/lib/code-workspace-context"
 import { hostRunnerService } from "@/lib/code-runner/host-runner-service"
+import { githubService, type GithubStatus } from "@/lib/github-service"
 import { ALL_TOOLS, type WorkspaceToolId } from "@/lib/code-workspace-tools"
 import {
   detectDotenvSecrets,
@@ -1887,10 +1888,93 @@ function StorageTool() {
   )
 }
 
+// Open a workspace tool panel by id (managed services route to their real tool).
+function openWorkspaceTool(toolId: string) {
+  if (typeof window === "undefined") return
+  window.dispatchEvent(new CustomEvent(CODE_OPEN_TOOL_EVENT, { detail: toolId }))
+}
+
+// Which real tool a managed/external card routes to.
+const INTEGRATION_ROUTE: Record<string, string> = {
+  "managed-database": "database",
+  "managed-storage": "storage",
+  "managed-auth": "auth",
+  "managed-domains": "publishing",
+  stripe: "secrets",
+  supabase: "secrets",
+  openai: "secrets",
+}
+
 function IntegrationsTool() {
-  const [connected, setConnected] = useWorkspacePersistedState<Record<string, boolean>>("integrations", {})
+  const [gh, setGh] = React.useState<GithubStatus | null>(null)
+  const [ghLoading, setGhLoading] = React.useState(true)
+  React.useEffect(() => {
+    let alive = true
+    githubService
+      .status()
+      .then((s) => { if (alive) setGh(s) })
+      .catch(() => { if (alive) setGh(null) })
+      .finally(() => { if (alive) setGhLoading(false) })
+    return () => { alive = false }
+  }, [])
+
+  const renderCard = (group: { id: string }, connector: { id: string; label: string; detail: string }) => {
+    // GitHub: REAL OAuth connection status (same backend the Git tool uses).
+    if (connector.id === "github") {
+      const connected = !!gh?.connected
+      const configured = gh?.configured !== false
+      return (
+        <div className="flex items-center justify-between">
+          <StatusPill status={ghLoading ? "idle" : connected ? "success" : configured ? "idle" : "warn"} />
+          <Button
+            size="sm"
+            variant={connected ? "outline" : "default"}
+            className="h-8"
+            disabled={ghLoading}
+            onClick={() => {
+              if (connected) { openWorkspaceTool("git"); return }
+              githubService.connectUrl().then(({ url }) => { if (url) window.open(url, "_blank", "noopener") }).catch(() => {})
+            }}
+          >
+            {ghLoading ? "…" : connected ? `Conectado${gh?.login ? `: ${gh.login}` : ""}` : configured ? "Conectar" : "No configurado"}
+          </Button>
+        </div>
+      )
+    }
+    // Managed services + external APIs → route to their real tool (Database/
+    // Storage/Auth/Publishing/Secrets) instead of a fake on/off toggle.
+    const route = INTEGRATION_ROUTE[connector.id]
+    if (route) {
+      return (
+        <div className="flex items-center justify-between">
+          <StatusPill status={group.id === "managed" ? "ready" : "idle"} />
+          <Button size="sm" variant="outline" className="h-8" onClick={() => openWorkspaceTool(route)}>
+            {group.id === "external" ? "Configurar en Secrets" : "Abrir"}
+          </Button>
+        </div>
+      )
+    }
+    // Agent services (web search / image gen / long-running) are ALWAYS
+    // available to the chat agent — mark them so, honestly, no toggle.
+    if (group.id === "agent-services") {
+      return (
+        <div className="flex items-center justify-between">
+          <StatusPill status="success" />
+          <span className="text-[11px] text-muted-foreground">Disponible para el agente</span>
+        </div>
+      )
+    }
+    // Connectors without a per-workspace backend yet (Slack/Google): honest.
+    return (
+      <div className="flex items-center justify-between">
+        <StatusPill status="idle" />
+        <span className="text-[11px] text-muted-foreground">Próximamente</span>
+      </div>
+    )
+  }
+
   return (
-    <ToolShell eyebrow="Connectors" title="Integraciones" detail="Servicios administrados, conectores, APIs externas y servicios internos del agente.">
+    <ToolShell eyebrow="Connectors" title="Integraciones" detail="GitHub conecta por OAuth real; los servicios administrados abren su herramienta; las APIs externas se configuran en Secrets.">
       <div className="space-y-4">
         {INTEGRATION_GROUPS.map((group) => (
           <section key={group.id}>
@@ -1906,19 +1990,7 @@ function IntegrationsTool() {
                   detail={connector.detail}
                   icon={group.id === "managed" ? <PlugZap className="h-4 w-4" /> : <Link2 className="h-4 w-4" />}
                 >
-                  <div className="flex items-center justify-between">
-                    <StatusPill status={connected[connector.id] ? "success" : group.id === "managed" ? "ready" : "idle"} />
-                    <Button
-                      size="sm"
-                      variant={connected[connector.id] || group.id === "managed" ? "outline" : "default"}
-                      className="h-8"
-                      onClick={() => setConnected((prev) => ({ ...prev, [connector.id]: !prev[connector.id] }))}
-                    >
-                      {group.id === "managed"
-                        ? connected[connector.id] ? "Configurar" : "Activar"
-                        : connected[connector.id] ? "Desconectar" : "Conectar"}
-                    </Button>
-                  </div>
+                  {renderCard(group, connector)}
                 </PanelCard>
               ))}
             </div>
