@@ -5,6 +5,7 @@ import {
   codexLiveContent,
   initialCodexEngineFold,
   isCodexTerminalStatus,
+  sanitizeCodexNarrative,
   type CodexEngineFoldState,
 } from '@/lib/code-agent/codex-engine-mapping'
 
@@ -177,5 +178,56 @@ describe('codex-engine-mapping — post-terminal file pull', () => {
     const fold = reduceFold([{ seq: 1, type: 'run_status', data: { status: 'done' } }])
     const written = await pullWrittenFiles('p1', fold, api)
     expect(written.map((f) => f.path)).toEqual(['index.html'])
+  })
+})
+
+describe('sanitizeCodexNarrative (protocol-fence leak → prose)', () => {
+  it('replaces a fenced finalize block with its answer markdown (the real-run leak)', () => {
+    const raw = 'We will edit index.html. ```finalize\n{"answer":"## Resumen del trabajo realizado\\n\\n- `index.html` actualizado"}\n```\nAlcancé el límite de pasos.'
+    const out = sanitizeCodexNarrative(raw)
+    expect(out).toContain('## Resumen del trabajo realizado')
+    expect(out).toContain('`index.html` actualizado')
+    expect(out).toContain('Alcancé el límite de pasos.')
+    expect(out).not.toContain('```finalize')
+    expect(out).not.toContain('{"answer"')
+  })
+
+  it('drops tool_call fences entirely (chips already narrate the work)', () => {
+    const out = sanitizeCodexNarrative('Escribo el archivo.\n```tool_call\n{"tool":"write_file","path":"a.ts"}\n```\nListo.')
+    expect(out).not.toContain('tool_call')
+    expect(out).not.toContain('write_file')
+    expect(out).toContain('Escribo el archivo.')
+    expect(out).toContain('Listo.')
+  })
+
+  it('recovers the answer from an unterminated finalize fence (stream cut mid-block)', () => {
+    const out = sanitizeCodexNarrative('Cierro.\n```finalize\n{"answer":"Todo aplicado y verificado."}')
+    expect(out).toContain('Todo aplicado y verificado.')
+    expect(out).not.toContain('finalize')
+  })
+
+  it('trims an unterminated fence whose body is not yet parseable', () => {
+    const out = sanitizeCodexNarrative('Trabajando…\n```finalize\n{"answer":"a medio esc')
+    expect(out.trim()).toBe('Trabajando…')
+  })
+
+  it('replaces a bare {"answer": …} JSON tail with its answer', () => {
+    const out = sanitizeCodexNarrative('Hecho. {"answer":"### Resumen\\nTodo listo."}')
+    expect(out).toContain('### Resumen')
+    expect(out).not.toContain('{"answer"')
+  })
+
+  it('leaves normal code fences and prose untouched', () => {
+    const raw = 'Mira:\n```ts\nconst x = 1\n```\nfin'
+    expect(sanitizeCodexNarrative(raw)).toBe(raw)
+  })
+
+  it('codexLiveContent applies the sanitizer to the folded narrative', () => {
+    const fold = reduceFold([
+      { seq: 1, type: 'narrative_delta', data: { text: 'Edito. ```finalize\n{"answer":"Resumen final."}\n```' } },
+    ])
+    const live = codexLiveContent(fold)
+    expect(live).toContain('Resumen final.')
+    expect(live).not.toContain('finalize')
   })
 })

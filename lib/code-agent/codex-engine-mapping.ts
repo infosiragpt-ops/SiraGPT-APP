@@ -145,13 +145,68 @@ export function foldCodexEvent(
   return s
 }
 
+// The agent's prompted tool-calling protocol sometimes leaks into the
+// narrative stream as fenced blocks (```finalize {"answer": …} / ```tool_call
+// {...}). Raw JSON in the chat reads as a bug ("SIN RUTA" code card), and the
+// finalize `answer` is precisely the Claude Code-style completion summary the
+// user should read — so extract it as prose and drop the protocol plumbing.
+const TOOL_FENCE_RE = /```(finalize|tool_call)[^\n]*\n([\s\S]*?)```/g
+const OPEN_TOOL_FENCE_RE = /```(finalize|tool_call)[^\n]*\n/
+
+function extractFinalizeAnswer(body: string): string | null {
+  try {
+    const parsed = JSON.parse(body.trim())
+    if (parsed && typeof parsed.answer === "string" && parsed.answer.trim()) {
+      return parsed.answer.trim()
+    }
+  } catch {
+    /* not valid JSON — caller drops the block */
+  }
+  return null
+}
+
+export function sanitizeCodexNarrative(text: string): string {
+  if (!text || !text.includes("```")) return sanitizeBareAnswer(text)
+  // Closed protocol fences: finalize → its answer as prose; tool_call → drop
+  // (the action chips already narrate the work).
+  let out = text.replace(TOOL_FENCE_RE, (_m, lang: string, body: string) => {
+    if (lang === "finalize") {
+      const answer = extractFinalizeAnswer(body)
+      if (answer) return `\n${answer}\n`
+    }
+    return "\n"
+  })
+  // Unterminated protocol fence at the tail (the stream can cut mid-block):
+  // recover the answer if the partial body already parses, else trim it away
+  // so half-typed JSON never renders.
+  const open = out.match(OPEN_TOOL_FENCE_RE)
+  if (open && typeof open.index === "number") {
+    const head = out.slice(0, open.index)
+    const body = out.slice(open.index + open[0].length)
+    const answer = open[1] === "finalize" ? extractFinalizeAnswer(body) : null
+    out = answer ? `${head}\n${answer}\n` : head
+  }
+  return sanitizeBareAnswer(out)
+}
+
+// Defensive: some runs emit the finalize payload as a bare {"answer": …} JSON
+// object directly in the narrative (no fence). Replace it with the answer.
+function sanitizeBareAnswer(text: string): string {
+  const idx = text.indexOf('{"answer"')
+  if (idx < 0) return text
+  const answer = extractFinalizeAnswer(text.slice(idx))
+  if (!answer) return text
+  return `${text.slice(0, idx)}\n${answer}\n`
+}
+
 /**
  * The best "assistant content" string to show while streaming: narrative first
  * (the agent's live prose), else the concatenated reasoning blocks. Bounded so a
  * runaway trace can't blow up the turn size (mirrors runEngine's 12k slice).
+ * Protocol fences (finalize/tool_call) are folded into prose — see above.
  */
 export function codexLiveContent(state: CodexEngineFoldState, cap = 12000): string {
   const reasoningText = Object.values(state.reasoning).join("\n").trim()
-  const text = state.narrative.trim() || reasoningText
+  const text = sanitizeCodexNarrative(state.narrative.trim() || reasoningText).trim()
   return text.slice(0, cap)
 }
