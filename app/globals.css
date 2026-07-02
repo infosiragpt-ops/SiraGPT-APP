@@ -4958,10 +4958,26 @@ footer {
 }
 
 .composer-surface {
-  border: 1px solid hsl(220 13% 90% / 0.9);
+  border: 1px solid hsl(220 13% 89% / 0.9);
   border-radius: 1.75rem;
   background-color: hsl(0 0% 100%);
-  box-shadow: 0 2px 10px -4px hsl(220 30% 18% / 0.1);
+  /* Layered elevation (tight contact + soft ambient) instead of one flat
+     blob — mirrors the dark-mode composer's design language. */
+  box-shadow:
+    0 1px 2px hsl(220 30% 18% / 0.05),
+    0 10px 28px -14px hsl(220 30% 18% / 0.14);
+  transition: border-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+              box-shadow   180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* Focus is the only place accent appears (design spec): typing gently lifts
+   the card with a whisper of violet — same behavior dark mode already has. */
+.composer-surface:focus-within {
+  border-color: hsl(var(--accent-violet) / 0.35);
+  box-shadow:
+    0 0 0 1px hsl(var(--accent-violet) / 0.22),
+    0 1px 2px hsl(220 30% 18% / 0.05),
+    0 14px 34px -14px hsl(220 30% 18% / 0.2);
 }
 
 .composer-input-row {
@@ -5024,18 +5040,17 @@ footer {
   position: relative;
   isolation: isolate;
   overflow: hidden;
-  border: 0 !important;
-  color: hsl(220 20% 8% / 0.94);
-  background:
-    radial-gradient(circle at 42% 18%, hsl(0 0% 100% / 0.9), transparent 38%),
-    linear-gradient(145deg, hsl(0 0% 100% / 0.72), hsl(220 12% 94% / 0.46));
-  box-shadow:
-    inset 0 1px 0 hsl(0 0% 100% / 0.76),
-    inset 0 -12px 22px -22px hsl(220 28% 20% / 0.46),
-    0 8px 20px -18px hsl(220 32% 18% / 0.48);
+  /* Calm resting state: hairline border + near-flat surface + one soft
+     contact shadow. The embossed-sphere insets read dated next to the
+     otherwise flat composer; the liquid shimmer stays on hover (below). */
+  border: 1px solid hsl(220 13% 88% / 0.9) !important;
+  color: hsl(220 15% 26%);
+  background: linear-gradient(180deg, hsl(0 0% 100%), hsl(220 14% 97.5%));
+  box-shadow: 0 1px 2px hsl(220 30% 18% / 0.06);
   transition:
     transform 210ms var(--ease-out-soft, cubic-bezier(0.16, 1, 0.3, 1)),
     color 180ms ease-out,
+    border-color 180ms ease-out,
     background-color 180ms ease-out,
     box-shadow 210ms var(--ease-out-soft, cubic-bezier(0.16, 1, 0.3, 1));
 }
@@ -5325,6 +5340,7 @@ button.anti-bribery-context-chip:not(:disabled):active {
   background: radial-gradient(circle, hsl(var(--accent-violet) / 0.12), transparent 70%);
 }
 .dark .composer-plus-liquid-button {
+  border: 1px solid hsl(0 0% 100% / 0.1) !important;
   color: hsl(216 29% 97% / 0.9);
   background:
     radial-gradient(circle at 42% 18%, hsl(0 0% 100% / 0.16), transparent 38%),
