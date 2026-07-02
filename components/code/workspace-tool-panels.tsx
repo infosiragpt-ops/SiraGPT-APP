@@ -2284,7 +2284,7 @@ function WorkflowsTool() {
   const [draftName, setDraftName] = React.useState("")
   const [draftCommand, setDraftCommand] = React.useState("")
 
-  const run = (row: WorkflowRun) => {
+  const run = async (row: WorkflowRun) => {
     const consoleId = makeId("console")
     const startedAt = Date.now()
     const isDevServer = /\b(npm|pnpm|yarn|bun)\s+run\s+dev\b|\bvite\b|\bnext\s+dev\b/i.test(row.command)
@@ -2300,30 +2300,61 @@ function WorkflowsTool() {
     }
     setRuns((prev) => prev.map((item) => item.id === row.id ? { ...item, status: "running", lastRun: startedAt } : item))
     setConsoleRuns((prev) => [pendingRun, ...prev].slice(0, 20))
+
+    // A dev-server command isn't a one-shot exec — boot the preview (host runner
+    // installs + starts it) and point the user at the live Console tail.
     if (isDevServer) {
       window.dispatchEvent(new CustomEvent("siragpt:code-run-app"))
+      finishConsole(consoleId, row.id, "success", [
+        { stream: "stdout", text: "Dev server solicitado en Preview — mira la salida en vivo en Console." },
+      ])
+      return
     }
-    window.setTimeout(() => {
-      setRuns((prev) => prev.map((item) => item.id === row.id ? { ...item, status: "success", lastRun: Date.now() } : item))
-      setConsoleRuns((prev) => prev.map((item) => item.id === consoleId
-        ? {
-          ...item,
-          status: "success",
-          endedAt: Date.now(),
-          lines: [
-            ...item.lines,
-            {
-              stream: "stdout",
-              text: isDevServer
-                ? "Dev server requested in Preview. Watch the Preview panel for install/boot output."
-                : "Workspace command completed",
-            },
-            { stream: "system", text: "Exit code 0" },
-          ],
-        }
-        : item,
-      ))
-    }, 900)
+
+    // One-shot command: run it FOR REAL against the live workspace if a dev
+    // server is up (the exec backend needs a run). Otherwise be honest.
+    const runId = getActiveHostRunId()
+    if (!runId) {
+      finishConsole(consoleId, row.id, "failed", [
+        { stream: "stderr", text: "No hay un servidor activo. Pulsa ▶ Ejecutar para arrancar la app y poder correr comandos reales." },
+      ])
+      return
+    }
+    try {
+      const res = await hostRunnerService.exec(runId, row.command)
+      if (res.unavailable) {
+        finishConsole(consoleId, row.id, "failed", [
+          { stream: "stderr", text: "El servidor de desarrollo ya no está activo. Reinícialo con ▶ Ejecutar." },
+        ])
+        return
+      }
+      const outLines = (res.output || "").split(/\r?\n/).filter(Boolean).map((text) => ({
+        stream: (res.ok ? "stdout" : "stderr") as "stdout" | "stderr",
+        text,
+      }))
+      finishConsole(consoleId, row.id, res.ok ? "success" : "failed", [
+        ...outLines,
+        { stream: "system", text: res.timedOut ? "El comando excedió el tiempo límite" : `Exit code ${res.exitCode ?? (res.ok ? 0 : 1)}` },
+      ])
+    } catch {
+      finishConsole(consoleId, row.id, "failed", [
+        { stream: "stderr", text: "No se pudo ejecutar el comando." },
+      ])
+    }
+  }
+
+  // Close out a workflow run + its Console entry with real result lines.
+  const finishConsole = (
+    consoleId: string,
+    rowId: string,
+    status: "success" | "failed",
+    extraLines: Array<{ stream: "stdout" | "stderr" | "system"; text: string }>,
+  ) => {
+    setRuns((prev) => prev.map((item) => item.id === rowId ? { ...item, status, lastRun: Date.now() } : item))
+    setConsoleRuns((prev) => prev.map((item) => item.id === consoleId
+      ? { ...item, status, endedAt: Date.now(), lines: [...item.lines, ...extraLines] }
+      : item,
+    ))
   }
 
   const stop = (id: string) => {
@@ -2355,7 +2386,7 @@ function WorkflowsTool() {
               className="h-8 gap-1.5"
               onClick={() => {
                 const row = runs.find((item) => item.id === defaultId)
-                if (row) run(row)
+                if (row) void run(row)
               }}
               disabled={!runs.length}
             >
@@ -2388,7 +2419,7 @@ function WorkflowsTool() {
               <p className="text-[10px] text-muted-foreground">Last run: {formatDateTime(row.lastRun)}</p>
             </div>
             <StatusPill status={row.status} />
-            <Button size="sm" variant={row.status === "running" ? "outline" : "default"} className="h-8 w-20 gap-1.5" onClick={() => row.status === "running" ? stop(row.id) : run(row)}>
+            <Button size="sm" variant={row.status === "running" ? "outline" : "default"} className="h-8 w-20 gap-1.5" onClick={() => row.status === "running" ? stop(row.id) : void run(row)}>
               {row.status === "running" ? <Square className="h-3 w-3" /> : <Play className="h-3 w-3" />}
               {row.status === "running" ? "Stop" : "Run"}
             </Button>
