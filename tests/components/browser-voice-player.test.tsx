@@ -48,12 +48,33 @@ describe('BrowserVoicePlayer (no-API, browser speechSynthesis)', () => {
     expect(screen.getByTestId('browser-voice-player')).toBeTruthy()
   })
 
+  it('autoPlay=false renders the player but stays silent until the user presses play', () => {
+    render(<BrowserVoicePlayer text="Resumen antiguo" autoPlay={false} />)
+    expect(speakFn).not.toHaveBeenCalled()
+    const btn = screen.getByLabelText('Reproducir voz')
+    fireEvent.click(btn)
+    expect(speakFn).toHaveBeenCalledTimes(1)
+    expect(spoken[0].text).toBe('Resumen antiguo')
+  })
+
   it('shows a stop control while speaking and cancels the utterance on click', () => {
     render(<BrowserVoicePlayer text="Hola" />)
     const btn = screen.getByLabelText('Detener voz')
     cancelFn.mockClear()
     fireEvent.click(btn)
     expect(cancelFn).toHaveBeenCalled()
+  })
+
+  it('parent re-renders (new onAutoPlayed identity, flipped autoPlay) do NOT cancel ongoing speech', () => {
+    const { rerender } = render(<BrowserVoicePlayer text="Hola" autoPlay onAutoPlayed={() => {}} />)
+    expect(speakFn).toHaveBeenCalledTimes(1)
+    cancelFn.mockClear()
+    // Simulate the real churn: the owner consumes the fresh flag (autoPlay
+    // becomes false) and passes a brand-new callback identity every render.
+    rerender(<BrowserVoicePlayer text="Hola" autoPlay={false} onAutoPlayed={() => {}} />)
+    rerender(<BrowserVoicePlayer text="Hola" autoPlay={false} onAutoPlayed={() => {}} />)
+    expect(cancelFn).not.toHaveBeenCalled()
+    expect(speakFn).toHaveBeenCalledTimes(1)
   })
 
   it('cancels speech on unmount (no dangling utterance)', () => {

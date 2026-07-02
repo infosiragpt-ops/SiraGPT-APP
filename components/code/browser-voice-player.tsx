@@ -16,7 +16,20 @@
 import * as React from "react"
 import { Play, StopCircle } from "lucide-react"
 
-export function BrowserVoicePlayer({ text }: { text: string }) {
+export function BrowserVoicePlayer({
+  text,
+  autoPlay = true,
+  onAutoPlayed,
+}: {
+  text: string
+  /** Speak automatically on mount. Pass false for turns rehydrated from
+   *  storage so reloading a session doesn't re-voice old messages — the
+   *  player still renders and the user can replay manually. */
+  autoPlay?: boolean
+  /** Fired once when the mount-time auto-play actually starts — lets the
+   *  owner consume a "fresh turn" flag so remounts don't re-speak. */
+  onAutoPlayed?: () => void
+}) {
   const [supported, setSupported] = React.useState(true)
   const [speaking, setSpeaking] = React.useState(false)
   const [progress, setProgress] = React.useState(0)
@@ -24,6 +37,15 @@ export function BrowserVoicePlayer({ text }: { text: string }) {
   const startedAtRef = React.useRef<number | null>(null)
   const rafRef = React.useRef<number | null>(null)
   const autoTriedRef = React.useRef(false)
+  // Volatile props read through refs so the mount effect NEVER re-runs on
+  // parent re-renders: its cleanup calls the GLOBAL speechSynthesis.cancel(),
+  // so an effect churn (autoPlay flipping after consumption, or a new
+  // onAutoPlayed closure identity each render) would cut speech mid-sentence.
+  const autoPlayRef = React.useRef(autoPlay)
+  const onAutoPlayedRef = React.useRef(onAutoPlayed)
+  React.useEffect(() => {
+    onAutoPlayedRef.current = onAutoPlayed
+  })
 
   const estMs = React.useMemo(() => {
     const words = (text.trim().match(/\S+/g) || []).length
@@ -95,9 +117,17 @@ export function BrowserVoicePlayer({ text }: { text: string }) {
   React.useEffect(() => {
     if (autoTriedRef.current) return
     autoTriedRef.current = true
-    play()
+    if (autoPlayRef.current) {
+      onAutoPlayedRef.current?.()
+      play()
+    } else if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      // Still probe support so an unsupported browser renders nothing.
+      setSupported(false)
+    }
     return () => cancel()
-  }, [play, cancel])
+    // Mount-only on purpose (see refs above): re-running would cancel speech.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   if (!supported) return null
 

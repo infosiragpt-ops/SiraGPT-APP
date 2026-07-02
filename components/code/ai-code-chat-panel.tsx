@@ -44,6 +44,7 @@ import {
   StopCircle,
 } from "lucide-react"
 import { BrowserVoicePlayer } from "@/components/code/browser-voice-player"
+import { buildSpokenSummary } from "@/lib/code-agent/spoken-summary"
 import { CodeChatErrorBoundary } from "@/components/code/code-chat-error-boundary"
 import { toast } from "sonner"
 
@@ -779,6 +780,13 @@ export function AICodeChatPanel() {
   const engineSessionRef = React.useRef<Record<string, string>>({})
 
   const abortRef = React.useRef<AbortController | null>(null)
+  // Turn ids whose `voice` was created in THIS panel instance. Only these
+  // auto-speak; turns rehydrated from localStorage render the player silent
+  // (otherwise every page reload would re-voice the whole history).
+  const freshVoiceIdsRef = React.useRef<Set<string>>(new Set())
+  const markVoiced = React.useCallback((turnId: string) => {
+    freshVoiceIdsRef.current.add(turnId)
+  }, [])
   const inputRef = React.useRef<HTMLTextAreaElement | null>(null)
   const scrollerRef = React.useRef<HTMLDivElement | null>(null)
   // Allow Cmd/Ctrl+L from anywhere in the workspace to focus the
@@ -845,7 +853,16 @@ export function AICodeChatPanel() {
   }, [setTurns])
 
   const sendPrompt = React.useCallback(
-    async (prompt: string, override?: { systemPrompt?: string; autoApply?: boolean }) => {
+    async (
+      prompt: string,
+      override?: {
+        systemPrompt?: string
+        autoApply?: boolean
+        /** Phrasing for the spoken completion digest (default "patch");
+         *  the SRE/auto-repair callers pass "debug" ("Arreglado…"). */
+        spokenKind?: "patch" | "debug"
+      },
+    ) => {
       const normalized = normalizeChatInput(prompt)
       if (shouldWarnUser(normalized)) {
         toast.error(
@@ -1031,6 +1048,7 @@ export function AICodeChatPanel() {
             const verifyDetail = applied.length > 0
               ? `${applied.length} archivo(s) aplicado(s)`
               : "Respuesta sin escritura de archivos"
+            if (applied.length > 0) markVoiced(assistantId)
             setTurns((prev) =>
               prev.map((t) => {
                 if (t.id !== assistantId) return t
@@ -1070,6 +1088,17 @@ export function AICodeChatPanel() {
                     ...base,
                     actions: effectiveActions,
                     metrics: withUsage,
+                    // Claude Code-style spoken completion digest — only when the
+                    // turn did real multi-step file work (never for plain answers).
+                    ...(applied.length > 0
+                      ? {
+                          voice: buildSpokenSummary({
+                            kind: override?.spokenKind ?? "patch",
+                            filesChanged: withUsage.filesChanged,
+                            durationMs: withUsage.timeWorkedMs,
+                          }),
+                        }
+                      : {}),
                   }
                 }
                 return base
@@ -1156,6 +1185,7 @@ export function AICodeChatPanel() {
       composerMode,
       files,
       includeContext,
+      markVoiced,
       sessionId,
       setTurns,
       token,
@@ -1241,6 +1271,14 @@ export function AICodeChatPanel() {
           now: Date.now(),
           getPrevContent: (p) => files[p]?.content ?? "",
         })
+        // Claude Code-style spoken completion digest for the finished build.
+        const spoken = buildSpokenSummary({
+          kind: "build",
+          filesChanged: metrics.filesChanged,
+          durationMs: metrics.timeWorkedMs,
+          appName: ctx?.brand || ctx?.productType || "",
+        })
+        markVoiced(`${id}-a`)
         setTurns((prev) =>
           prev.map((t) =>
             t.id === `${id}-a`
@@ -1258,6 +1296,7 @@ export function AICodeChatPanel() {
                   }),
                   actions,
                   metrics,
+                  voice: spoken,
                 }
               : t,
           ),
@@ -1285,7 +1324,7 @@ export function AICodeChatPanel() {
         setBuildingApp(false)
       }
     },
-    [applyBlock, busy, buildingApp, files, sessionId, setTurns, token, user],
+    [applyBlock, busy, buildingApp, files, markVoiced, sessionId, setTurns, token, user],
   )
 
   // SRE tier-0: classify the build log locally (no LLM), render the strict
@@ -1359,6 +1398,7 @@ export function AICodeChatPanel() {
           {
             systemPrompt: sreSystemPrompt(text, collectConfigFiles(files)),
             autoApply: true,
+            spokenKind: "debug",
           },
         )
       } else {
@@ -1437,21 +1477,24 @@ export function AICodeChatPanel() {
   // It emits real project files and a self-contained index.html so APPS lands on
   // localhost / index.html immediately while the full stack remains editable.
   const runDeterministicInto = React.useCallback(
-    async (ctx: AgentBuildContext): Promise<number> => {
+    // Returns the applied files so engine-fallback callers can hand them to
+    // finish({written}) — that attaches the same actions/metrics/voice a
+    // direct build gets (a fallback delivery still IS a completed build).
+    async (ctx: AgentBuildContext): Promise<Array<{ path: string; content: string }>> => {
       const prompt = promptFromContext(ctx)
       try {
         const result = await intakeService.generate(prompt)
         const files = result.files || []
         if (files.length > 0) {
           applyFilesToWorkspace(files)
-          return files.length
+          return files
         }
       } catch {
         /* backend unreachable -> offline index.html shell below */
       }
       const fallback = buildLocalIndexFallbackFiles(prompt, ctx)
       applyFilesToWorkspace(fallback)
-      return fallback.length
+      return fallback
     },
     [applyFilesToWorkspace],
   )
@@ -1473,6 +1516,7 @@ export function AICodeChatPanel() {
       setInput("")
       applyFilesToWorkspace(patches)
       patchAgentState(sid, (s) => ({ ...s, phase: "preview" }))
+      markVoiced(assistantId)
       setTurns((prev) => [
         ...prev,
         { id, role: "user", content: instruction },
@@ -1496,12 +1540,13 @@ export function AICodeChatPanel() {
           }),
           actions,
           metrics,
+          voice: buildSpokenSummary({ kind: "patch", filesChanged: metrics.filesChanged, durationMs: metrics.timeWorkedMs }),
         },
       ])
       toast.success(`Cambio aplicado — ${patches.length} archivo(s) →`)
       return true
     },
-    [applyFilesToWorkspace, files, patchAgentState, setTurns],
+    [applyFilesToWorkspace, files, markVoiced, patchAgentState, setTurns],
   )
 
   // OpenCode engine path. For a normal chat turn it sends the text; for a BUILD
@@ -1553,7 +1598,10 @@ export function AICodeChatPanel() {
           label?: string
           phases?: CodeAgentPhase[]
         },
-      ) =>
+      ) => {
+        // Claude Code-style spoken digest when the engine turn wrote files
+        // (mark BEFORE setTurns so the fresh-voice flag exists at render).
+        if (meta?.written && meta.written.length > 0) markVoiced(assistantId)
         setTurns((prev) =>
           prev.map((t) => {
             if (t.id !== assistantId) return t
@@ -1583,11 +1631,22 @@ export function AICodeChatPanel() {
                 getPrevContent: (p) => files[p]?.content ?? "",
                 read: meta?.read,
               })
-              return { ...base, actions, metrics }
+              return {
+                ...base,
+                actions,
+                metrics,
+                voice: buildSpokenSummary({
+                  kind: isBuild ? "engine" : "patch",
+                  filesChanged: metrics.filesChanged,
+                  durationMs: metrics.timeWorkedMs,
+                  appName: isBuild ? ctx?.brand || ctx?.productType || "" : "",
+                }),
+              }
             }
             return base
           }),
         )
+      }
 
       try {
         let esid = engineSessionRef.current[sid]
@@ -1720,11 +1779,12 @@ export function AICodeChatPanel() {
             return
           }
           // Engine produced nothing usable → reliable deterministic fallback.
-          const n = await runDeterministicInto(ctx)
+          const fallbackFiles = await runDeterministicInto(ctx)
           finish(
             reply
-              ? `${reply}\n\n_(El motor no dejó archivos; usé el builder determinista: ${n} archivos.)_`
-              : `✅ App generada (builder determinista, ${n} archivos).`,
+              ? `${reply}\n\n_(El motor no dejó archivos; usé el builder determinista: ${fallbackFiles.length} archivos.)_`
+              : `✅ App generada (builder determinista, ${fallbackFiles.length} archivos).`,
+            { written: fallbackFiles },
           )
           toast.success("App generada (builder determinista) →")
           return
@@ -1769,8 +1829,10 @@ export function AICodeChatPanel() {
         if (ctx) {
           // Engine unreachable/error during a build → still deliver via the builder.
           try {
-            const n = await runDeterministicInto(ctx)
-            finish(`✅ App generada (builder determinista, ${n} archivos). El motor no respondió.`)
+            const fallbackFiles = await runDeterministicInto(ctx)
+            finish(`✅ App generada (builder determinista, ${fallbackFiles.length} archivos). El motor no respondió.`, {
+              written: fallbackFiles,
+            })
             toast.success("App generada (builder determinista) →")
             return
           } catch {
@@ -1796,7 +1858,7 @@ export function AICodeChatPanel() {
         setBusy(false)
       }
     },
-    [applyFilesToWorkspace, files, runDeterministicInto, setTurns],
+    [applyFilesToWorkspace, files, markVoiced, runDeterministicInto, setTurns],
   )
 
   const dispatch = React.useCallback(
@@ -1832,6 +1894,7 @@ export function AICodeChatPanel() {
         const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
         const greeting =
           "¡Hola! 👋 Soy tu agente de apps. Dime qué quieres construir o cambiar y me pongo manos a la obra — escribo el código, lo ejecuto y lo corrijo."
+        markVoiced(`${id}-a`)
         setTurns((prev) => [
           ...prev,
           { id, role: "user", content: text },
@@ -2007,6 +2070,7 @@ export function AICodeChatPanel() {
             await sendPrompt(text, {
               systemPrompt: sreSystemPrompt(action.log, collectConfigFiles(files)),
               autoApply: true,
+              spokenKind: "debug",
             })
           } else {
             await runDeterministicSRE(action.log, text, sid)
@@ -2248,6 +2312,8 @@ export function AICodeChatPanel() {
                 <ChatBubble
                   turn={turn}
                   lookupContent={(path) => files[path]?.content ?? ""}
+                  autoPlayVoice={freshVoiceIdsRef.current.has(turn.id)}
+                  onVoiceAutoPlayed={() => freshVoiceIdsRef.current.delete(turn.id)}
                 />
               </CodeChatErrorBoundary>
             ))}
@@ -2391,9 +2457,17 @@ function EmptyChat({ active }: { active: boolean }) {
 function ChatBubble({
   turn,
   lookupContent,
+  autoPlayVoice = false,
+  onVoiceAutoPlayed,
 }: {
   turn: CodeChatTurn
   lookupContent: (path: string) => string
+  /** True only for voiced turns created in this panel instance — rehydrated
+   *  history renders the player but must not speak on page load. */
+  autoPlayVoice?: boolean
+  /** Consumes the fresh flag once spoken, so re-mounts (session switches)
+   *  don't re-voice the turn. */
+  onVoiceAutoPlayed?: () => void
 }) {
   const isUser = turn.role === "user"
   const blocks = React.useMemo(
@@ -2449,7 +2523,7 @@ function ChatBubble({
       {turn.voice ? (
         <div className="mb-2 space-y-2">
           {turn.actions && turn.actions.length > 0 ? <ChatActionLog actions={turn.actions} /> : null}
-          <BrowserVoicePlayer text={turn.voice} />
+          <BrowserVoicePlayer text={turn.voice} autoPlay={autoPlayVoice} onAutoPlayed={onVoiceAutoPlayed} />
         </div>
       ) : null}
       {/* An out-of-credits / quota error surfaces as a high-visibility panel
