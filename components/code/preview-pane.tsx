@@ -33,7 +33,7 @@ import {
 
 import { cn } from "@/lib/utils"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
-import { CODE_OPEN_TOOL_EVENT, useCodeWorkspace } from "@/lib/code-workspace-context"
+import { CODE_OPEN_TOOL_EVENT, CODE_RUNNER_ACTIVE_EVENT, useCodeWorkspace } from "@/lib/code-workspace-context"
 import { buildPreviewDocument, projectNeedsDevServer, type PreviewKind } from "@/lib/code-preview-build"
 import { CODE_TEMPLATES } from "@/lib/code-templates"
 import { hostRunnerService } from "@/lib/code-runner/host-runner-service"
@@ -172,6 +172,10 @@ export function PreviewPane() {
     setLiveRun({ phase: "idle", devUrl: "", note: "" })
     if (modeRef.current === "github" && runIdRef.current) void githubService.stop(runIdRef.current)
     else if (runIdRef.current) void hostRunnerService.stop(runIdRef.current)
+    // The Shell tool loses its exec target when the run stops.
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent(CODE_RUNNER_ACTIVE_EVENT, { detail: { runId: null } }))
+    }
   }, [clearPoll])
 
   // While the app is live, keep polling status at a slow cadence (a) so the
@@ -293,6 +297,10 @@ export function PreviewPane() {
       lastErrorLogRef.current = started.error
       setLiveRun({ phase: "error", devUrl: "", note: started.error })
       return
+    }
+    // Host run is live → the Shell tool can now exec real commands against it.
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent(CODE_RUNNER_ACTIVE_EVENT, { detail: { runId: runIdRef.current } }))
     }
     pollUntilReady(() => hostRunnerService.status(runIdRef.current), started.devUrl || "")
   }, [activeFolder?.id, files, pollUntilReady])

@@ -153,6 +153,42 @@ export const hostRunnerService = {
       return { ok: true, skipped: true, reason: "runner unreachable", errors: [] }
     }
   },
+
+  /**
+   * Run ONE terminal command in the run's live workspace dir (the real Shell).
+   * Returns the combined stdout/stderr + exit code. Owner-gated + bounded
+   * server-side. `unavailable:true` means there is no running dev server to
+   * exec against (the caller should fall back to the client-side pseudo-shell).
+   */
+  async exec(runId: string, command: string): Promise<HostRunExec> {
+    try {
+      const res = await fetch(`${baseUrl}/${encodeURIComponent(runId)}/exec`, {
+        method: "POST",
+        credentials: "include",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ command }),
+      })
+      if (res.status === 404) return { ok: false, unavailable: true, output: "", error: "no hay un servidor activo" }
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        return { ok: false, output: "", error: body.error || body.message || `HTTP ${res.status}` }
+      }
+      return (await res.json().catch(() => ({ ok: false, output: "", error: "respuesta inválida" }))) as HostRunExec
+    } catch {
+      return { ok: false, unavailable: true, output: "", error: "runner unreachable" }
+    }
+  },
+}
+
+export interface HostRunExec {
+  ok: boolean
+  /** No running dev server to exec against → caller falls back to the pseudo-shell. */
+  unavailable?: boolean
+  exitCode?: number
+  output: string
+  error?: string
+  timedOut?: boolean
+  truncated?: boolean
 }
 
 export interface HostRunVerifyError {

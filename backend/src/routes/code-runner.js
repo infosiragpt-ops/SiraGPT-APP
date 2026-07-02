@@ -127,6 +127,28 @@ router.post('/:runId/verify-runtime', authenticateToken, async (req, res) => {
   }
 });
 
+// Real one-shot terminal command in the run's workspace dir (the Replit-style
+// Shell). Ownership-checked + host-runner-gated inside execInRun; bounded
+// (non-interactive, hard timeout, output capped) and never inherits secrets.
+router.post('/:runId/exec', authenticateToken, async (req, res) => {
+  try {
+    // Same authoritative fence as /start: CODE_HOST_RUNNER_ALLOWED_USER_IDS must
+    // gate exec too (arbitrary shell), not just run creation — otherwise a user
+    // dropped from the allowlist could still exec against a run they started.
+    if (!hostRunner.startAllowed(req.user)) return res.status(403).json({ error: 'forbidden' });
+    const command = typeof req.body?.command === 'string' ? req.body.command : '';
+    const timeoutMs = Number(req.body?.timeoutMs) || undefined;
+    const result = await hostRunner.execInRun(req.params.runId, req.user.id, command, { timeoutMs });
+    if (result && result.status === 403) return res.status(403).json({ error: 'forbidden' });
+    if (result && result.status === 404) return res.status(404).json({ error: result.error });
+    if (result && result.status === 400) return res.status(400).json({ error: result.error });
+    return res.json(result);
+  } catch (err) {
+    console.error('[code-runner] exec failed:', (err && err.message) || err);
+    return res.status(500).json({ error: 'exec_failed', message: 'No se pudo ejecutar el comando.' });
+  }
+});
+
 function applyPreviewFrameHeaders(_req, res, next) {
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");

@@ -641,6 +641,80 @@ async function verifyRun(runId, userId) {
   return run.verifyPromise;
 }
 
+const EXEC_TIMEOUT_MS = Math.max(1000, Number(process.env.CODE_RUNNER_EXEC_TIMEOUT_MS) || 30_000);
+const EXEC_MAX_OUTPUT = Math.max(1024, Number(process.env.CODE_RUNNER_EXEC_MAX_OUTPUT) || 200_000);
+const EXEC_MAX_CMD_LEN = 4000;
+// A real, one-shot terminal command in the run's own workspace dir. This is
+// NOT a new trust boundary: the run already installs + executes untrusted
+// generated code in this dir, and it is owner-gated + host-runner-gated. It is
+// bounded — non-interactive, single shell invocation, hard timeout, output
+// capped — so it can't be used for a long-lived reverse shell or to exhaust
+// memory. Secrets are never inherited (envFor → buildUntrustedChildEnv).
+//
+// OPERATIONAL NOTE: `cwd = run.dir` is a starting directory, NOT a filesystem
+// sandbox — the command runs as the server's OS user and absolute paths reach
+// anything that user can read (including other runs' dirs). The per-user 403
+// gate does NOT imply per-user file isolation. Like the runner in general, this
+// is safe only on a SINGLE-TENANT / owner-gated deploy (CODE_HOST_RUNNER +
+// CODE_HOST_RUNNER_ALLOWED_USER_IDS). Do NOT enable on a shared multi-tenant host.
+async function execInRun(runId, userId, command, opts = {}) {
+  const id = safeId(runId);
+  const run = runs.get(id);
+  if (!run) return { ok: false, status: 404, error: 'run desconocido' };
+  if (userId && run.userId && run.userId !== userId) return { ok: false, status: 403, error: 'forbidden' };
+  const cmd = String(command || '').trim();
+  if (!cmd) return { ok: false, status: 400, error: 'comando vacío' };
+  if (cmd.length > EXEC_MAX_CMD_LEN) return { ok: false, status: 400, error: 'comando demasiado largo' };
+  if (cmd.includes('\0')) return { ok: false, status: 400, error: 'comando inválido' };
+  run.lastTouch = Date.now();
+
+  const timeoutMs = Math.min(EXEC_TIMEOUT_MS, Math.max(1000, Number(opts.timeoutMs) || EXEC_TIMEOUT_MS));
+  return new Promise((resolve) => {
+    let out = '';
+    let truncated = false;
+    let settled = false;
+    // Non-login, non-interactive shell in the run dir. `sh -c` so full command
+    // lines (pipes, args, &&) work like a normal terminal.
+    const child = spawn('/bin/sh', ['-c', cmd], {
+      cwd: run.dir,
+      detached: true,
+      env: envFor(),
+    });
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(to);
+      resolve(result);
+    };
+    const cleanOutput = (raw) => redactRuntimeEnv(String(raw).replace(/\x1b\[[0-9;]*m/g, ''), run.runtimeEnv);
+    const to = setTimeout(() => {
+      killGroup(child);
+      finish({ ok: false, timedOut: true, output: cleanOutput(out), error: `el comando excedió ${Math.round(timeoutMs / 1000)}s`, truncated });
+    }, timeoutMs);
+    const collect = (d) => {
+      if (truncated) return;
+      const s = String(d);
+      if (out.length + s.length > EXEC_MAX_OUTPUT) {
+        out += s.slice(0, Math.max(0, EXEC_MAX_OUTPUT - out.length));
+        out += '\n… (salida truncada)';
+        truncated = true;
+        // Stop the command once its output is useless — an unbounded emitter
+        // (e.g. `yes`) would otherwise pin a core until the timeout fires.
+        killGroup(child);
+        return;
+      }
+      out += s;
+    };
+    child.stdout.on('data', collect);
+    child.stderr.on('data', collect);
+    child.on('error', (e) => finish({ ok: false, status: 500, output: cleanOutput(out), error: e.message, truncated }));
+    child.on('close', (code) => {
+      // Strip ANSI + redact any runtime-env secret values that leaked to stdout.
+      finish({ ok: code === 0, exitCode: code, output: cleanOutput(out), truncated });
+    });
+  });
+}
+
 /**
  * Resolve the private dev-server port for a run, gated by its run-scoped preview
  * token (carried in the reverse-proxy URL path). Returns null when the run is
@@ -802,6 +876,7 @@ module.exports = {
   strictReadyEnabled,
   probeReady,
   verifyRun,
+  execInRun,
   parseTscOutput,
   // Test-only hooks: seed/clear the in-memory run registry WITHOUT spawning a
   // child process, so the ownership / phase-gate logic can be unit-tested.
