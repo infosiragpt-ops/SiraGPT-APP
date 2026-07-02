@@ -160,6 +160,25 @@ function safeJsonForScript(value: unknown): string {
   return JSON.stringify(value).replace(/</g, "\\u003c")
 }
 
+// Wrap a /code build order in the Codex "APPS mode" envelope. The backend
+// agent-loop keys `appsMode` off the literal "MODO APPS TIPO CODEX" marker —
+// without it, the run neither forces the Vite SPA stack nor runs the
+// ensureAppsVitePreviewable auto-repair, so the agent drifts into broken
+// React/Next+Vite hybrids that render an error overlay. Same envelope the
+// /apps composer uses (components/codex/codex-agent-panel.tsx).
+function buildAppsModePrompt(userText: string): string {
+  return [
+    "MODO APPS TIPO CODEX:",
+    "- No hagas preguntas de intake ni esperes confirmacion del usuario.",
+    "- Si falta contexto, propone internamente un brief completo con defaults razonables.",
+    "- Primero genera un plan tecnico concreto; si la ejecucion continua, construye, prueba/itera y entrega el resultado en preview/codigo.",
+    "- Solo pide accion del usuario si hay un bloqueo externo real: creditos, secreto, permisos o servicio caido.",
+    "",
+    "SOLICITUD DEL USUARIO:",
+    userText,
+  ].join("\n")
+}
+
 function compactGeneratedTitle(prompt: string, ctx?: AgentBuildContext): string {
   const raw = ctx?.brand || ctx?.productType || prompt || "Nueva app"
   const cleaned = raw
@@ -2065,7 +2084,10 @@ export function AICodeChatPanel() {
         //    before a build; the plan auto-approves into build below.
         const planRun = await codexApi.createRun(projectId, {
           mode: "plan",
-          prompt: text,
+          // APPS-mode envelope → backend forces the Vite SPA stack + runs the
+          // ensureAppsVitePreviewable auto-repair, so the generated app opens in
+          // the preview instead of an error overlay (root cause of the overlays).
+          prompt: buildAppsModePrompt(text),
           model: activeModelName || undefined,
           tier: activeProvider,
         })
