@@ -36,6 +36,11 @@ const PANELS: PanelDef[] = [
 ]
 
 export type WorkspaceTopBarProps = {
+  openPanels: Set<WorkspacePanelId>
+  activePanel: WorkspacePanelId | null
+  onTogglePanel: (id: WorkspacePanelId) => void
+  onClosePanel: (id: WorkspacePanelId) => void
+  toolsMenu?: React.ReactNode
   onOpenSearch: () => void
   onOpenInvite: () => void
   inviteOpen?: boolean
@@ -47,11 +52,17 @@ export type WorkspaceTopBarProps = {
 }
 
 /**
- * Replit-style global header: project identity + Upgrade on the left; the
- * search / Código / Invitar / Publicar cluster + chat toggle on the right.
- * The panel tabs live in WorkspaceTabStrip at the top of the main pane.
+ * Replit-style global header, single row: project identity + Upgrade on the
+ * left, the workspace panel tabs (+ tool opener) at Publicar's height in the
+ * middle, and the search / Código / Invitar / Publicar cluster + chat toggle
+ * on the right. No second tab row — the main pane starts right below.
  */
 export function WorkspaceTopBar({
+  openPanels,
+  activePanel,
+  onTogglePanel,
+  onClosePanel,
+  toolsMenu,
   onOpenSearch,
   onOpenInvite,
   inviteOpen,
@@ -61,6 +72,8 @@ export function WorkspaceTopBar({
   publishingOpen,
   onToggleChat,
 }: WorkspaceTopBarProps) {
+  const visible = PANELS.filter((p) => openPanels.has(p.id))
+
   return (
     <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border/60 bg-background px-2.5">
       <ProjectChip onOpenCode={onOpenCode} />
@@ -72,6 +85,50 @@ export function WorkspaceTopBar({
         <Plus className="h-3 w-3" strokeWidth={2.5} />
         Upgrade
       </Link>
+
+      {/* Panel tabs — sit in the header itself (Publicar height), roughly
+          above where the main pane begins. */}
+      <div className="ml-[6%] flex min-w-0 items-center gap-1 overflow-x-auto">
+        {visible.map((panel) => {
+          const Icon = panel.icon
+          const active = activePanel === panel.id
+          return (
+            <div
+              key={panel.id}
+              className={cn(
+                "group flex h-7 shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-[12px] transition-colors",
+                active
+                  ? "border-border/70 bg-background text-foreground shadow-sm"
+                  : "border-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+              )}
+            >
+              <button
+                type="button"
+                className="flex min-w-0 items-center gap-1.5"
+                onClick={() => onTogglePanel(panel.id)}
+              >
+                <Icon className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">{panel.label}</span>
+              </button>
+              <button
+                type="button"
+                className={cn(
+                  "rounded p-0.5 transition-opacity hover:bg-muted",
+                  active ? "opacity-60 hover:opacity-100" : "opacity-0 group-hover:opacity-60",
+                )}
+                aria-label={`Cerrar ${panel.label}`}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onClosePanel(panel.id)
+                }}
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+          )
+        })}
+        {toolsMenu ?? null}
+      </div>
 
       <span className="min-w-0 flex-1" />
 
@@ -142,71 +199,5 @@ export function WorkspaceTopBar({
         <PanelLeft className="h-3.5 w-3.5" />
       </Button>
     </header>
-  )
-}
-
-export type WorkspaceTabStripProps = {
-  openPanels: Set<WorkspacePanelId>
-  activePanel: WorkspacePanelId | null
-  onTogglePanel: (id: WorkspacePanelId) => void
-  onClosePanel: (id: WorkspacePanelId) => void
-  toolsMenu?: React.ReactNode
-}
-
-/**
- * Replit-style workspace tab strip: one closable tab per open panel plus the
- * "+" tool opener, sitting at the top of the main pane (right of the chat).
- */
-export function WorkspaceTabStrip({
-  openPanels,
-  activePanel,
-  onTogglePanel,
-  onClosePanel,
-  toolsMenu,
-}: WorkspaceTabStripProps) {
-  const visible = PANELS.filter((p) => openPanels.has(p.id))
-
-  return (
-    <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border/60 bg-muted/25 px-1.5">
-      {visible.map((panel) => {
-        const Icon = panel.icon
-        const active = activePanel === panel.id
-        return (
-          <div
-            key={panel.id}
-            className={cn(
-              "group flex h-7 shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-[12px] transition-colors",
-              active
-                ? "border-border/70 bg-background text-foreground shadow-sm"
-                : "border-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-            )}
-          >
-            <button
-              type="button"
-              className="flex min-w-0 items-center gap-1.5"
-              onClick={() => onTogglePanel(panel.id)}
-            >
-              <Icon className="h-3.5 w-3.5 shrink-0" />
-              <span className="truncate">{panel.label}</span>
-            </button>
-            <button
-              type="button"
-              className={cn(
-                "rounded p-0.5 transition-opacity hover:bg-muted",
-                active ? "opacity-60 hover:opacity-100" : "opacity-0 group-hover:opacity-60",
-              )}
-              aria-label={`Cerrar ${panel.label}`}
-              onClick={(e) => {
-                e.stopPropagation()
-                onClosePanel(panel.id)
-              }}
-            >
-              <X className="h-3 w-3" />
-            </button>
-          </div>
-        )
-      })}
-      {toolsMenu ?? null}
-    </div>
   )
 }

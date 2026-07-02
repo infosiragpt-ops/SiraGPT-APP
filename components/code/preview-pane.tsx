@@ -19,6 +19,7 @@ import {
   LayoutGrid,
   Lock,
   Monitor,
+  MonitorSmartphone,
   Play,
   RefreshCw,
   RotateCw,
@@ -32,7 +33,7 @@ import {
 
 import { cn } from "@/lib/utils"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
-import { useCodeWorkspace } from "@/lib/code-workspace-context"
+import { CODE_OPEN_TOOL_EVENT, useCodeWorkspace } from "@/lib/code-workspace-context"
 import { buildPreviewDocument, projectNeedsDevServer, type PreviewKind } from "@/lib/code-preview-build"
 import { CODE_TEMPLATES } from "@/lib/code-templates"
 import { hostRunnerService } from "@/lib/code-runner/host-runner-service"
@@ -676,17 +677,21 @@ export function PreviewPane() {
   return (
     <div className="flex h-full min-h-0 flex-col bg-zinc-50 dark:bg-zinc-950">
       <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border/60 bg-background px-2">
-        {/* Canvas — Replit-position viewport menu (device sizes + rotation). */}
-        <DeviceMenu
-          device={device}
-          orientation={orientation}
-          open={deviceMenuOpen}
-          widthReadout={frameW}
-          heightReadout={frameH}
-          onOpenChange={setDeviceMenuOpen}
-          onDevice={setDevice}
-          onRotate={() => setOrientation((o) => (o === "portrait" ? "landscape" : "portrait"))}
-        />
+        {/* Canvas — opens the agent-driven mockup canvas tool. The device
+            switcher lives beside the address bar, not here. */}
+        <button
+          type="button"
+          onClick={() =>
+            window.dispatchEvent(
+              new CustomEvent(CODE_OPEN_TOOL_EVENT, { detail: { toolId: "canvas" } }),
+            )
+          }
+          title="Abrir el lienzo de mockups"
+          className="flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-border/60 bg-background px-2.5 text-[12px] font-medium text-foreground transition-colors hover:bg-muted/60"
+        >
+          <LayoutGrid className="h-3.5 w-3.5 text-muted-foreground" />
+          <span>Canvas</span>
+        </button>
 
         <span className="mx-0.5 h-4 w-px shrink-0 bg-border/60" />
 
@@ -753,6 +758,19 @@ export function PreviewPane() {
         </div>
 
         <div className="flex shrink-0 items-center gap-0.5">
+          {/* Device switcher — beside the address bar: click to preview the
+              app on desktop / tablet / phone viewports. */}
+          <DeviceMenu
+            device={device}
+            orientation={orientation}
+            open={deviceMenuOpen}
+            widthReadout={frameW}
+            heightReadout={frameH}
+            onOpenChange={setDeviceMenuOpen}
+            onDevice={setDevice}
+            onRotate={() => setOrientation((o) => (o === "portrait" ? "landscape" : "portrait"))}
+          />
+          <span className="mx-0.5 h-4 w-px bg-border/50" />
           {/* Phase B — auto-run stays primary; manual run is available when idle/error. */}
           {canRunProject ? (
             <>
@@ -1072,31 +1090,30 @@ function DeviceMenu({
   }, [open, onOpenChange])
   const framed = device !== "responsive"
   return (
-    <div ref={ref} className="relative flex shrink-0 items-center">
-      {/* "Canvas" opener — Replit's preview-toolbar button in the same spot;
-          here it drives the viewport (device size + rotation) menu. */}
+    <div ref={ref} className="relative flex shrink-0 items-center gap-0.5">
+      {/* Phone+laptop trigger beside the address bar: click to preview the
+          app on different device viewports. */}
       <button
         type="button"
         onClick={() => onOpenChange(!open)}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label="Tamaño de pantalla"
-        title="Tamaño de pantalla del preview"
+        aria-label="Ver en distintos dispositivos"
+        title="Ver en distintos dispositivos"
         className={cn(
-          "flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-border/60 bg-background px-2.5 text-[12px] font-medium text-foreground transition-colors hover:bg-muted/60",
-          open && "bg-muted/60",
+          "flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground",
+          (open || framed) && "bg-muted text-foreground ring-1 ring-border/70",
         )}
       >
-        <LayoutGrid className="h-3.5 w-3.5 text-muted-foreground" />
-        <span>Canvas</span>
-        {framed && widthReadout && heightReadout ? (
-          <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
-            {widthReadout}×{heightReadout}
-          </span>
-        ) : null}
+        <MonitorSmartphone className="h-4 w-4" />
       </button>
+      {framed && widthReadout && heightReadout ? (
+        <span className="shrink-0 rounded bg-background/70 px-1 py-px font-mono text-[9px] tabular-nums text-muted-foreground/80">
+          {widthReadout}×{heightReadout}
+        </span>
+      ) : null}
       {open ? (
-        <div className="absolute left-0 top-9 z-20 w-44 overflow-hidden rounded-md border border-border/60 bg-background/95 py-1 shadow-lg backdrop-blur-xl">
+        <div className="absolute right-0 top-8 z-20 w-44 overflow-hidden rounded-md border border-border/60 bg-background/95 py-1 shadow-lg backdrop-blur-xl">
           {DEVICE_ROWS.map((row) => (
             <button
               key={row.id}

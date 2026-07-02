@@ -43,7 +43,7 @@ import { ProjectInviteDialog } from "./project-invite-dialog"
 import { TerminalPanel } from "./terminal-panel"
 import { ToolLauncher } from "./tool-launcher"
 import { ToolScreen } from "./tool-screen"
-import { WorkspaceTabStrip, WorkspaceTopBar, type WorkspacePanelId } from "./workspace-top-bar"
+import { WorkspaceTopBar, type WorkspacePanelId } from "./workspace-top-bar"
 
 const CHAT_DEFAULT_SIZE = 30
 const CHAT_MIN_SIZE = 22
@@ -417,6 +417,22 @@ export function CodeWorkspace() {
   return (
     <div className="flex h-screen min-w-0 flex-col overflow-hidden bg-background text-foreground">
       <WorkspaceTopBar
+        openPanels={openPanels}
+        activePanel={activePanel}
+        onTogglePanel={handleTogglePanel}
+        onClosePanel={handleClosePanel}
+        toolsMenu={
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
+            aria-label="Abrir herramientas"
+            onClick={() => setLauncherOpen(true)}
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </Button>
+        }
         onOpenSearch={() => {
           setPaletteQuery("")
           setPaletteOpen(true)
@@ -440,67 +456,47 @@ export function CodeWorkspace() {
 
       <div className="relative min-h-0 flex-1">
         {(() => {
-          // Shared right-hand area: the Replit-style workspace tab strip on
-          // top, then the preview + optional terminal (plus the code-hub /
-          // tool / launcher overlays) filling the rest.
+          // Shared right-hand area: the preview + optional terminal (plus the
+          // code-hub / tool / launcher overlays). The panel tabs live in the
+          // global header, so the pane starts directly with the preview.
           const mainArea = (
-            <div className="flex h-full min-h-0 flex-col">
-              <WorkspaceTabStrip
-                openPanels={openPanels}
-                activePanel={activePanel}
-                onTogglePanel={handleTogglePanel}
-                onClosePanel={handleClosePanel}
-                toolsMenu={
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
-                    aria-label="Abrir herramientas"
-                    onClick={() => setLauncherOpen(true)}
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                  </Button>
-                }
-              />
-              <div className="relative min-h-0 flex-1">
-                <div className="absolute inset-0">
-                  <ResizablePanelGroup direction="vertical">
-                    <ResizablePanel defaultSize={terminalOpen ? 100 - TERMINAL_DEFAULT_SIZE : 100} minSize={30}>
-                      <PreviewPane />
-                    </ResizablePanel>
-                    {terminalOpen ? (
-                      <>
-                        <ResizableHandle withHandle />
-                        <ResizablePanel defaultSize={TERMINAL_DEFAULT_SIZE} minSize={TERMINAL_MIN_SIZE} maxSize={70}>
-                          <TerminalPanel open={terminalOpen} onClose={() => setTerminalOpen(false)} />
-                        </ResizablePanel>
-                      </>
-                    ) : null}
-                  </ResizablePanelGroup>
-                </div>
-
-                {codeHubOpen ? (
-                  <CodeHub open onClose={() => setCodeHubOpen(false)} />
-                ) : activeTool ? (
-                  <ToolScreen
-                    toolId={activeTool}
-                    onClose={() => setActiveTool(null)}
-                    onBackToLauncher={() => {
-                      setActiveTool(null)
-                      setLauncherOpen(true)
-                    }}
-                  />
-                ) : null}
-
-                <ToolLauncher
-                  open={launcherOpen}
-                  onClose={() => setLauncherOpen(false)}
-                  onSelect={handleSelectTool}
-                  openToolIds={openToolIds}
-                />
+            <>
+              <div className="absolute inset-0">
+                <ResizablePanelGroup direction="vertical">
+                  <ResizablePanel defaultSize={terminalOpen ? 100 - TERMINAL_DEFAULT_SIZE : 100} minSize={30}>
+                    <PreviewPane />
+                  </ResizablePanel>
+                  {terminalOpen ? (
+                    <>
+                      <ResizableHandle withHandle />
+                      <ResizablePanel defaultSize={TERMINAL_DEFAULT_SIZE} minSize={TERMINAL_MIN_SIZE} maxSize={70}>
+                        <TerminalPanel open={terminalOpen} onClose={() => setTerminalOpen(false)} />
+                      </ResizablePanel>
+                    </>
+                  ) : null}
+                </ResizablePanelGroup>
               </div>
-            </div>
+
+              {codeHubOpen ? (
+                <CodeHub open onClose={() => setCodeHubOpen(false)} />
+              ) : activeTool ? (
+                <ToolScreen
+                  toolId={activeTool}
+                  onClose={() => setActiveTool(null)}
+                  onBackToLauncher={() => {
+                    setActiveTool(null)
+                    setLauncherOpen(true)
+                  }}
+                />
+              ) : null}
+
+              <ToolLauncher
+                open={launcherOpen}
+                onClose={() => setLauncherOpen(false)}
+                onSelect={handleSelectTool}
+                openToolIds={openToolIds}
+              />
+            </>
           )
 
           // ── Mobile: one panel at a time + a bottom Agente/Preview toggle ──
