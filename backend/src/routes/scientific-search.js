@@ -25,9 +25,17 @@ const { buildLiteratureReview } = require('../services/research/literature-revie
 const router = express.Router();
 
 // Provider list rarely changes — cache for 5 min to avoid recomputing env probes.
+const { DATABASE_CATALOG, catalogSummary } = require('../services/scientific-databases-catalog');
+
 router.get('/providers', responseCache({ ttlMs: 5 * 60_000, namespace: 'sci-providers' }), (req, res) => {
   res.json({
+    // The 16 directly-queried provider APIs (real, separate live calls).
     providers: scientificSearch.PROVIDERS,
+    // The full honest catalog of scientific databases SiraGPT reaches (60+),
+    // each labelled `access: direct|federated`. Federated ones are reached
+    // through the aggregators we already query (OpenAlex/Crossref/CORE/DataCite).
+    databases: DATABASE_CATALOG,
+    coverage: catalogSummary(),
     keysConfigured: {
       core: !!process.env.CORE_API_KEY,
       ncbi: !!process.env.NCBI_API_KEY,
