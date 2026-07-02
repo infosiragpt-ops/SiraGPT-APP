@@ -75,9 +75,16 @@ const SNAPSHOT_SCRIPT = `(function(args){
   var lower = bodyText.toLowerCase();
   var hasViteOverlay = !!document.querySelector('vite-error-overlay') ||
     !!document.querySelector('[data-vite-dev-id][style*="z-index"]');
-  var hasNextOverlay = !!document.querySelector('nextjs-portal') ||
-    !!document.querySelector('#__next-build-watcher') ||
-    !!document.querySelector('[data-nextjs-dialog], [data-nextjs-error-overlay]');
+  // Next.js 13-15 dev mode ALWAYS injects a <nextjs-portal> + build-activity
+  // indicator as its dev-tools mount point — present even when the app renders
+  // perfectly. Detecting the mere presence of the portal is a FALSE POSITIVE
+  // that flags every healthy Next app. Only count it as an error overlay when
+  // the portal actually contains the error DIALOG or real error text.
+  var nextErrText = '';
+  var nextPortal = document.querySelector('nextjs-portal');
+  try { if (nextPortal && nextPortal.shadowRoot) nextErrText = nextPortal.shadowRoot.textContent || ''; } catch (e) { nextErrText = ''; }
+  var hasNextOverlay = !!document.querySelector('[data-nextjs-dialog], [data-nextjs-error-overlay], [data-nextjs-error], .nextjs-container-errors-header') ||
+    /nextjs__container_errors|unhandled runtime error|build error|failed to compile|call stack|__next_error__/i.test(nextErrText);
   var crashPhrases = [
     'application error', 'internal server error', 'cannot get /',
     'unhandled runtime error', 'failed to compile', 'this page isn',
