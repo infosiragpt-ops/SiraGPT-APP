@@ -88,6 +88,7 @@ import {
   classifyBuildError,
   buildDeterministicPreviewPatches,
   isBuildRequest,
+  isConversationalMessage,
   isQuickGreeting,
   mergeOverridesIntoPackageJson,
   nextAgentAction,
@@ -538,6 +539,18 @@ const AGENT_STYLE_BLOCK = [
   "- NO inventes resultados ni métricas (tiempo, acciones, líneas, tokens y costo se miden y se muestran solos). Si algo falla por falta de créditos/cuota/clave (402), detente, no reintentes en bucle, y explica qué quedó bloqueado.",
 ].join("\n")
 
+// System prompt for the CONVERSATION tier: the user is talking to the agent
+// (question / doubt / meta), not asking it to build. The UI adds the real
+// action rows; the model must answer, not fabricate work.
+const CONVERSATION_SYSTEM_PROMPT = [
+  "[MODO CONVERSACIÓN]",
+  "Eres el agente de apps de SiraGPT dentro del workspace /code. El usuario NO pidió construir ni cambiar código: te está hablando (una pregunta, una duda o un comentario).",
+  "Responde útil, cercano y BREVE (2-6 frases), en el idioma del usuario.",
+  "Si pregunta qué sabes hacer: creas apps, landings y juegos desde una descripción; editas el proyecto actual con cambios puntuales; lo ejecutas en vivo en el preview; y lo publicas.",
+  "PROHIBIDO generar código, bloques de archivos, o afirmar que hiciste cambios — en este turno solo conversas.",
+  "Cierra invitando a pedir la construcción o el cambio cuando quiera.",
+].join("\n")
+
 const CODE_AGENT_PHASE_BLUEPRINT = [
   { key: "plan", label: "Plan" },
   { key: "context", label: "Contexto" },
@@ -893,6 +906,8 @@ export function AICodeChatPanel() {
       override?: {
         systemPrompt?: string
         autoApply?: boolean
+        /** Skip AGENT_STYLE_BLOCK (dashboard narration) — plain chat answers. */
+        plainStyle?: boolean
         /** Phrasing for the spoken completion digest (default "patch");
          *  the SRE/auto-repair callers pass "debug" ("Arreglado…"). */
         spokenKind?: "patch" | "debug"
@@ -963,7 +978,7 @@ export function AICodeChatPanel() {
         .join("\n\n")
       const convoBlock = transcript ? `Conversación hasta ahora:\n${transcript}\n\n---\n\n` : ""
       const finalPrompt = override?.systemPrompt
-        ? `${AGENT_STYLE_BLOCK}\n\n${override.systemPrompt}\n\n${convoBlock}Usuario: ${text}`
+        ? `${override.plainStyle ? "" : `${AGENT_STYLE_BLOCK}\n\n`}${override.systemPrompt}\n\n${convoBlock}Usuario: ${text}`
         : includeContext
           ? `${buildSystemContext(files, activePath, activeFolder, composerMode)}\n\n${modeInstruction}\n\n${convoBlock}Usuario: ${text}`
           : `${modeInstruction}\n\n${convoBlock}Usuario: ${text}`
@@ -2275,6 +2290,41 @@ export function AICodeChatPanel() {
         ])
         setInput("")
         patchAgentState(sid, (s) => ({ ...s, phase: "idle" }))
+        return
+      }
+
+      // CONVERSATION tier: questions / doubts / meta get a chat answer — never
+      // the intake or the generator ("quiero preguntarte algo" used to build an
+      // app because "quiero" counts as a build verb). Skipped mid-intake so the
+      // slot answers keep flowing into the FSM.
+      const gateAgent = activeCodeChatSession?.agent ?? defaultAgentState()
+      if (gateAgent.phase !== "intake" && isConversationalMessage(text)) {
+        if (activeModelName) {
+          await sendPrompt(text, {
+            systemPrompt: CONVERSATION_SYSTEM_PROMPT,
+            autoApply: false,
+            plainStyle: true,
+          })
+        } else {
+          const cid = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+          const reply =
+            "¡Claro! Dime tu pregunta — soy tu agente de apps: creo y edito proyectos, los ejecuto en el preview y los publico. Cuando quieras que construya o cambie algo, pídemelo."
+          markVoiced(`${cid}-a`)
+          setTurns((prev) => [
+            ...prev,
+            { id: cid, role: "user", content: text },
+            {
+              id: `${cid}-a`,
+              role: "assistant",
+              content: reply,
+              streaming: false,
+              actions: [{ kind: "reasoning", label: "Entendí tu mensaje" }],
+              voice: reply,
+            },
+          ])
+          setInput("")
+          patchAgentState(sid, (s) => ({ ...s, phase: "idle" }))
+        }
         return
       }
 

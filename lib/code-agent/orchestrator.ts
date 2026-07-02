@@ -101,6 +101,52 @@ export function isQuickGreeting(text: string): boolean {
   return new RegExp(`^(?:(?:${GREET})(?: (?:${OPENER}))?|(?:${OPENER}))$`).test(t)
 }
 
+/**
+ * Conversational message: a question, doubt, meta-question or short social
+ * phrase that must get a CHAT reply — never open the intake or generate
+ * files. The build tiers treat "quiero/necesito" as build verbs (so "quiero
+ * una tienda online" generates), which made "quiero preguntarte algo" build
+ * an app; here a desire verb whose OBJECT is conversational (preguntar,
+ * saber, hablar…) wins over that, and everything else defers to the build
+ * markers: real build intent (verb + noun) always stays a build.
+ */
+export function isConversationalMessage(text: string): boolean {
+  const raw = clean(text)
+  if (!raw) return false
+  if (raw.length > 400) return false // long specs are briefs, not questions
+  if (isBuildLog(raw)) return false // error logs → SRE tier
+  const t = raw
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+
+  // 1) Desire verb + conversational object beats the "quiero/necesito" build
+  //    verb: "quiero preguntarte algo", "necesito saber si…", "quisiera
+  //    entender cómo funciona".
+  const DESIRE_CONVO =
+    /\b(quiero|quisiera|necesito|me gustaria|deseo)\s+(?:hacerte\s+|hacerle\s+)?(preguntar(?:te|le)?|saber|entender|consultar(?:te)?|hablar|charlar|platicar|conversar|comentar(?:te)?|contar(?:te)?|decir(?:te)?|una\s+(?:pregunta|duda|consulta|explicacion)|algo)\b/
+  if (DESIRE_CONVO.test(t)) return true
+
+  // 2) From here on, real build intent wins ("crea una app", "quiero una
+  //    tienda online", "¿puedes crear una landing?" — all build).
+  const buildish = BUILD_NOUN.test(t) || APP_GOAL_CUE.test(t)
+  if (buildish && hasBuildVerb(raw)) return false
+
+  // 3) Questions: a leading interrogative or any remaining "?" (build
+  //    verb+noun combos were already claimed by the build tier above).
+  const QUESTION_START =
+    /^(?:¿\s*)?(que|como|cual(?:es)?|cuando|donde|por ?que|quien(?:es)?|cuant[oa]s?|puedes|podrias|sabes|hay|es posible|eres|tienes|para que|seria(?:s)? capaz|what|how|why|can you|could you|do you|are you)\b/
+  if (QUESTION_START.test(t)) return true
+  if (raw.includes("?")) return true
+
+  // 4) Meta / acknowledgements / doubts without any build verb.
+  const CONVO_MARKER =
+    /\b(una pregunta|tengo una (?:duda|consulta|pregunta)|preguntarte|explicame|explicarme|explica(?:me)?|dime|cuentame|no entiendo|ayudame a entender|gracias|muchas gracias|ok(?:ey)?|vale|perfecto|entendido|genial|buen trabajo|excelente|de acuerdo)\b/
+  if (CONVO_MARKER.test(t) && !hasBuildVerb(raw)) return true
+
+  return false
+}
+
 /** Heuristic: the text looks like a build/install/deploy error log. */
 export function isBuildLog(text: string): boolean {
   return /(npm ERR!|npm error|ERESOLVE|EINTEGRITY|ETARGET|ENOENT|ECONNREFUSED|exit code|\bnpm\b.*\b404\b|tarball|Module not found|Cannot find module|firewall|gyp ERR!|peer dep)/i.test(

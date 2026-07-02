@@ -10,6 +10,7 @@ import { defaultAgentState, type AgentState } from "../lib/code-agent/types"
 import {
   classifyBuildError,
   isBuildLog,
+  isConversationalMessage,
   isBuildRequest,
   isQuickGreeting,
   mergeOverridesIntoPackageJson,
@@ -280,4 +281,42 @@ test("mergeOverridesIntoPackageJson merges and stays valid JSON", () => {
 
 test("mergeOverridesIntoPackageJson returns null on invalid JSON", () => {
   assert.equal(mergeOverridesIntoPackageJson("not json", { a: "1" }), null)
+})
+
+// ── Conversation tier: chat stays chat, builds stay builds ────────────────
+
+test("isConversationalMessage: desire verb + conversational object → chat", () => {
+  assert.equal(isConversationalMessage("quiero preguntarte algo"), true)
+  assert.equal(isConversationalMessage("Quiero preguntarte algo"), true)
+  assert.equal(isConversationalMessage("necesito saber si puedes hacer juegos"), true)
+  assert.equal(isConversationalMessage("quisiera entender como funciona esto"), true)
+  assert.equal(isConversationalMessage("quiero hacerte una pregunta"), true)
+})
+
+test("isConversationalMessage: questions and meta → chat", () => {
+  assert.equal(isConversationalMessage("¿qué puedes hacer?"), true)
+  assert.equal(isConversationalMessage("que sabes hacer"), true)
+  assert.equal(isConversationalMessage("cómo funciona el preview?"), true)
+  assert.equal(isConversationalMessage("tengo una duda"), true)
+  assert.equal(isConversationalMessage("gracias"), true)
+  assert.equal(isConversationalMessage("una pregunta: guardas mis datos?"), true)
+})
+
+test("isConversationalMessage: real build intent stays build", () => {
+  assert.equal(isConversationalMessage("crea una app de tareas"), false)
+  assert.equal(isConversationalMessage("quiero una tienda online"), false)
+  assert.equal(isConversationalMessage("hazme una landing para mi panadería"), false)
+  assert.equal(isConversationalMessage("¿puedes crear una app de inventario?"), false)
+  assert.equal(isConversationalMessage("necesito un dashboard con gráficas"), false)
+})
+
+test("isConversationalMessage: briefs, logs and long specs stay build/SRE", () => {
+  assert.equal(isConversationalMessage("una panadería en Lima"), false)
+  assert.equal(isConversationalMessage("npm ERR! ERESOLVE unable to resolve"), false)
+  assert.equal(
+    isConversationalMessage(
+      "Plataforma de reservas con login, pagos con Stripe, panel admin, notificaciones por email y catálogo de servicios. ".repeat(5),
+    ),
+    false,
+  )
 })
