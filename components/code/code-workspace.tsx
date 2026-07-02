@@ -196,6 +196,9 @@ export function CodeWorkspace() {
         return
       }
       setCodeHubOpen(false)
+      // The full-screen ToolScreen also lives in the preview pane — on mobile
+      // switch to it so the opened tool is actually visible.
+      setMobileView("preview")
       setActiveTool(id)
     },
     [createFile, openComposer],
@@ -428,7 +431,12 @@ export function CodeWorkspace() {
             size="icon"
             className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
             aria-label="Abrir herramientas"
-            onClick={() => setLauncherOpen(true)}
+            onClick={() => {
+              // On mobile the launcher lives in the preview pane, which is
+              // hidden behind the Agente view — surface it before opening.
+              setMobileView("preview")
+              setLauncherOpen(true)
+            }}
           >
             <Plus className="h-3.5 w-3.5" />
           </Button>

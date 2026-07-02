@@ -59,7 +59,8 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
-import { useCodeWorkspace } from "@/lib/code-workspace-context"
+import { CODE_RUNNER_ACTIVE_EVENT, useCodeWorkspace } from "@/lib/code-workspace-context"
+import { hostRunnerService } from "@/lib/code-runner/host-runner-service"
 import { ALL_TOOLS, type WorkspaceToolId } from "@/lib/code-workspace-tools"
 import {
   detectDotenvSecrets,
@@ -2401,8 +2402,46 @@ function WorkflowsTool() {
   )
 }
 
+// Live dev-server output: subscribes to the active host run (broadcast by
+// preview-pane) and polls its real log tail. Returns [] when no run is live.
+function useLiveRunnerTail() {
+  const [runId, setRunId] = React.useState<string | null>(null)
+  const [tail, setTail] = React.useState<string[]>([])
+  const [phase, setPhase] = React.useState<string>("")
+  React.useEffect(() => {
+    const onActive = (e: Event) => {
+      const id = (e as CustomEvent<{ runId: string | null }>).detail?.runId ?? null
+      setRunId(id)
+      if (!id) {
+        setTail([])
+        setPhase("")
+      }
+    }
+    window.addEventListener(CODE_RUNNER_ACTIVE_EVENT, onActive as EventListener)
+    return () => window.removeEventListener(CODE_RUNNER_ACTIVE_EVENT, onActive as EventListener)
+  }, [])
+  React.useEffect(() => {
+    if (!runId) return
+    let alive = true
+    const poll = async () => {
+      const st = await hostRunnerService.status(runId)
+      if (!alive) return
+      if (Array.isArray(st.tail)) setTail(st.tail)
+      if (st.phase) setPhase(st.phase)
+    }
+    void poll()
+    const t = window.setInterval(poll, 2500)
+    return () => {
+      alive = false
+      window.clearInterval(t)
+    }
+  }, [runId])
+  return { runId, tail, phase }
+}
+
 function ConsoleTool() {
   const [runs, setRuns] = useWorkspacePersistedState<ConsoleRun[]>("console-runs", [])
+  const live = useLiveRunnerTail()
   const [latestOnly, setLatestOnly] = React.useState(true)
   const visibleRuns = latestOnly ? runs.slice(0, 1) : runs
   const latestError = React.useMemo(() => {
@@ -2435,7 +2474,9 @@ function ConsoleTool() {
     <ToolShell
       eyebrow="Runtime output"
       title="Console"
-      detail="Logs del app en ejecucion y salidas generadas por Workflows o Publishing."
+      detail={live.runId
+        ? "Salida en vivo del dev server + historial de ejecuciones."
+        : "Arranca la app (▶ Ejecutar) para ver la salida en vivo. Historial de runs abajo."}
       action={
         <div className="flex gap-2">
           <Button size="sm" variant="outline" className="h-8 gap-1.5" onClick={() => setLatestOnly((prev) => !prev)}>
@@ -2449,6 +2490,20 @@ function ConsoleTool() {
         </div>
       }
     >
+      {live.runId ? (
+        <div className="mb-3 rounded-lg border border-emerald-500/25 bg-[#0d1117]">
+          <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
+            <span className="flex items-center gap-2 font-mono text-[12px] text-emerald-300">
+              <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
+              Salida en vivo · dev server{live.phase ? ` (${live.phase})` : ""}
+            </span>
+            <span className="font-mono text-[11px] text-white/40">{live.tail.length} líneas</span>
+          </div>
+          <pre className="max-h-56 overflow-auto px-3 py-2 font-mono text-[11px] leading-relaxed text-[#d1d5db]">
+            {live.tail.length ? live.tail.join("\n") : "esperando salida del servidor…"}
+          </pre>
+        </div>
+      ) : null}
       <PanelGrid>
         <PanelCard title="Run history" detail={`${runs.length} ejecuciones guardadas`} icon={<History className="h-4 w-4" />}>
           <div className="space-y-2">
