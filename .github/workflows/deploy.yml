@@ -63,6 +63,12 @@ jobs:
     steps:
       - name: Deploy via SSH (with auto-rollback)
         uses: appleboy/ssh-action@v1.2.0
+        env:
+          # Ephemeral job token for the VPS-side git fetch. The VPS checkout
+          # keeps NO stored GitHub credentials (its old origin URL may even
+          # point at a dead repo); every fetch below goes through this token
+          # on the command line only, so nothing persists after the run.
+          DEPLOY_GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
@@ -73,6 +79,7 @@ jobs:
           timeout: 60s
           command_timeout: 45m
           script_stop: true
+          envs: DEPLOY_GH_TOKEN
           script: |
             bash <<'SIRAGPT_DEPLOY'
             set -Eeuo pipefail
@@ -126,8 +133,12 @@ jobs:
             rm -f "${APP_DIR}/.git/index.lock"
             TARGET_SHA="${{ inputs.target_sha || github.sha }}"
             echo "[deploy-workflow] Deploying ${TARGET_SHA} from ${PREV_SHA}"
-            git fetch origin main
-            git fetch origin "${TARGET_SHA}"
+            REPO_URL="https://x-access-token:${DEPLOY_GH_TOKEN}@github.com/${{ github.repository }}.git"
+            # Keep the persisted origin URL credential-free and pointing at
+            # the repo this workflow actually deploys from.
+            git remote set-url origin "https://github.com/${{ github.repository }}.git"
+            git fetch "${REPO_URL}" main
+            git fetch "${REPO_URL}" "${TARGET_SHA}"
             if git merge --ff-only "${TARGET_SHA}"; then
               echo "[deploy-workflow] Fast-forwarded to ${TARGET_SHA}"
             else
