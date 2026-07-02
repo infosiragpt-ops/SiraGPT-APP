@@ -146,7 +146,7 @@ const SNAPSHOT_SCRIPT = `(function(args){
     formCount: formCount,
     presentMarkers: presentMarkers
   };
-})(arguments[0])`;
+})`;
 
 // A neutral snapshot used whenever the real probe can't run (never crashes the verdict).
 function emptySnapshot() {
@@ -308,8 +308,13 @@ async function verifyRenderedApp({ url, requiredMarkers = [], timeoutMs = DEFAUL
     // ── In-page snapshot (fixed safe script; never eval LLM code) ─────────
     let snapshot = emptySnapshot();
     try {
+      // Playwright's string-form page.evaluate does NOT bind a second arg, so we
+      // bake the args into the script as a self-invoking IIFE literal (markers
+      // come from project source → JSON.stringify escapes them safely). This
+      // avoids the "arguments is not defined" trap of `})(arguments[0])`.
+      const snapshotCall = `${SNAPSHOT_SCRIPT}(${JSON.stringify({ markers, minText: DEFAULTS.minTextLength })})`;
       const raw = await withTimeout(
-        Promise.resolve(page.evaluate(SNAPSHOT_SCRIPT, { markers, minText: DEFAULTS.minTextLength })),
+        Promise.resolve(page.evaluate(snapshotCall)),
         Math.min(4_000, remaining()),
         'evaluate',
       );
