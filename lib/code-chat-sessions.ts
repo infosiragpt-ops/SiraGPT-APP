@@ -20,6 +20,10 @@ export type CodeChatTurn = {
   /** Real time (ms) from turn start to the first narrated line — the planning
    *  duration shown on the "🧠 …" badge. Measured, never fabricated. */
   planMs?: number
+  /** Text voiced with the browser's built-in speech synthesis (Web Speech API,
+   *  100% local — no API key, no server call). ChatBubble renders an inline
+   *  voice player for turns that carry it (e.g. the greeting). */
+  voice?: string
 }
 
 export type CodeAgentPhaseStatus = "pending" | "running" | "done" | "error"
@@ -124,6 +128,7 @@ function sanitizeTurn(raw: unknown): CodeChatTurn | null {
   }
   if (typeof t.streaming === "boolean") turn.streaming = t.streaming
   if (typeof t.agentLabel === "string") turn.agentLabel = t.agentLabel
+  if (typeof t.voice === "string" && t.voice) turn.voice = t.voice
   if (typeof t.planMs === "number" && Number.isFinite(t.planMs)) {
     turn.planMs = t.planMs
   }

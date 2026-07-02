@@ -43,6 +43,7 @@ import {
   Sparkles,
   StopCircle,
 } from "lucide-react"
+import { BrowserVoicePlayer } from "@/components/code/browser-voice-player"
 import { CodeChatErrorBoundary } from "@/components/code/code-chat-error-boundary"
 import { toast } from "sonner"
 
@@ -1829,14 +1830,27 @@ export function AICodeChatPanel() {
       const sid = sessionId
       if (isQuickGreeting(text)) {
         const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        const greeting =
+          "¡Hola! 👋 Soy tu agente de apps. Dime qué quieres construir o cambiar y me pongo manos a la obra — escribo el código, lo ejecuto y lo corrijo."
         setTurns((prev) => [
           ...prev,
           { id, role: "user", content: text },
           {
             id: `${id}-a`,
             role: "assistant",
-            content: "Hola. Dime qué quieres construir o cambiar en esta app y empiezo.",
+            content: greeting,
             streaming: false,
+            // The action row for the greeting: honest, minimal steps the agent
+            // took (no fabricated file work). Renders the "N acciones" chip.
+            actions: [
+              { kind: "reasoning", label: "Entendí tu saludo" },
+              { kind: "reasoning", label: "Revisé el estado del proyecto" },
+              { kind: "reasoning", label: "Preparé el plan de trabajo" },
+            ],
+            // Voice the greeting with the BROWSER's built-in speech synthesis
+            // (Web Speech API) — 100% local, no API key, no server/credit cost.
+            // ChatBubble renders an inline voice player from this text.
+            voice: greeting,
           },
         ])
         setInput("")
@@ -2428,6 +2442,16 @@ function ChatBubble({
           Verificar). Populated from REAL turn state by the build/app/engine
           paths; renders nothing for turns that never set agentPhases. */}
       <CodeAgentProgress phases={turn.agentPhases} />
+      {/* Voiced turn (e.g. the greeting): action rows + inline voice player
+          ABOVE the text, so the reply reads actions → audio → text. The player
+          is the browser's built-in speech synthesis (no API/key/cost). Only for
+          turns that carry `voice`; build turns keep their original layout. */}
+      {turn.voice ? (
+        <div className="mb-2 space-y-2">
+          {turn.actions && turn.actions.length > 0 ? <ChatActionLog actions={turn.actions} /> : null}
+          <BrowserVoicePlayer text={turn.voice} />
+        </div>
+      ) : null}
       {/* An out-of-credits / quota error surfaces as a high-visibility panel
           instead of plain prose; otherwise render the assistant text normally. */}
       {blocker ? (
@@ -2457,8 +2481,9 @@ function ChatBubble({
         />
       ))}
       {/* Real action log + mandatory Worked Summary — only when the turn did
-          measurable file work (build/app/engine paths populate these). */}
-      {turn.actions && turn.actions.length > 0 ? <ChatActionLog actions={turn.actions} /> : null}
+          measurable file work (build/app/engine paths populate these). A voiced
+          turn already showed its actions above (next to the voice player). */}
+      {!turn.voice && turn.actions && turn.actions.length > 0 ? <ChatActionLog actions={turn.actions} /> : null}
       {turn.metrics ? <ChatWorkedSummary metrics={turn.metrics} /> : null}
     </div>
   )
