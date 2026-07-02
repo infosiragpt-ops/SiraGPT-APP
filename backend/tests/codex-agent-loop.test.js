@@ -75,7 +75,7 @@ test('build prompt tells the model to edit the starter instead of scaffolding', 
   });
   const res = await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt: 'crea una landing' }, project: { id: 'p1', name: 'X' }, deps: f.deps });
   assert.equal(res.status, 'done');
-  assert.match(systemPrompt, /starter Vite mínimo/i);
+  assert.match(systemPrompt, /starter REACT 18 \+ VITE 7/i);
   assert.match(systemPrompt, /NO inicialices frameworks/i);
   assert.match(systemPrompt, /write_file\/edit_file/i);
   assert.match(systemPrompt, /Nunca dependas de prompts interactivos/i);
@@ -99,8 +99,8 @@ test('apps build prompt overrides a non-explicit Next.js plan back to Vite', asy
   ].join('\n');
   const res = await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt }, project: { id: 'p1', name: 'Autos' }, deps: f.deps });
   assert.equal(res.status, 'done');
-  assert.match(systemPrompt, /Stack obligatorio.*Vite SPA/i);
-  assert.match(systemPrompt, /Ignora cualquier plan que mencione Next\.js/i);
+  assert.match(systemPrompt, /Stack OBLIGATORIO: React 18 \+ Vite 7/i);
+  assert.match(systemPrompt, /PROHIBIDO Next\.js/i);
 });
 
 test('apps build close repairs an incomplete Next.js workspace into a Vite preview', async () => {
@@ -168,9 +168,9 @@ test('apps planning prompt defaults simple apps to Vite index.html', () => {
     'crea una web de venta de autos',
   ].join('\n');
   const { system } = buildPlanMessages({ project: { name: 'Autos' }, prompt });
-  assert.match(system, /Vite SPA/i);
-  assert.match(system, /index\.html \+ src\/main\.js/i);
-  assert.match(system, /No propongas Next\.js/i);
+  assert.match(system, /React 18 \+ Vite 7/i);
+  assert.match(system, /src\/main\.tsx/i);
+  assert.match(system, /PROHIBIDO Next\.js/i);
 });
 
 test('a tool error does NOT abort the loop; the error is fed back to the model', async () => {

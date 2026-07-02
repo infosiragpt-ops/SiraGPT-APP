@@ -45,11 +45,11 @@ test('Next hybrid → repairs: writes Vite fallback AND purges the Next scaffold
   assert.match(rm, /next\.config\.mjs/);
 });
 
-test('already-clean Vite → no repair, no purge', async () => {
+test('already-clean React+Vite+TS → no repair, no purge', async () => {
   const runner = fakeRunner({
-    'package.json': JSON.stringify({ scripts: { dev: 'vite' }, devDependencies: { vite: '^7.0.0' } }),
-    'index.html': '<!doctype html><script type="module" src="/src/main.js"></script>',
-    'src/main.js': 'export const app = 1; document.body.append("real app");',
+    'package.json': JSON.stringify({ scripts: { dev: 'vite' }, dependencies: { react: '^18' }, devDependencies: { vite: '^7.0.0', '@vitejs/plugin-react': '^4' } }),
+    'index.html': '<!doctype html><div id="root"></div><script type="module" src="/src/main.tsx"></script>',
+    'src/App.tsx': 'export default function App(){ return <main>Cafetería real generada</main> }',
   });
   const res = await ensureAppsVitePreviewable({
     run: { id: 'r2', projectId: 'p2', prompt: APPS_PROMPT },

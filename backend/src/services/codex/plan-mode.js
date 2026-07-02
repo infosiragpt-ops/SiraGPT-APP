@@ -20,7 +20,7 @@ function buildPlanMessages({ project, prompt, fileTree, priorPlan, feedback } = 
     'Eres un agente de software senior que planifica proyectos web en español.',
     'Tu tarea es producir un PLAN APROBABLE, no escribir código todavía.',
     appsMode
-      ? 'Este plan viene de /apps: para landings, páginas de venta, demos y apps simples usa SIEMPRE Vite SPA sobre el starter existente (index.html + src/main.js). No propongas Next.js, TypeScript, Tailwind ni scaffolds salvo que el usuario los pida explícitamente.'
+      ? 'Este plan viene de /apps: usa SIEMPRE el stack React 18 + Vite 7 + TypeScript del starter ya provisto (index.html carga /src/main.tsx que monta <App/>). Planifica componentes React (.tsx) en src/. PROHIBIDO Next.js: no propongas next.config.mjs, app/ ni pages/ salvo que el usuario pida Next explícitamente.'
       : null,
     'Responde ÚNICAMENTE con un objeto JSON válido (sin prosa, sin fences) con esta forma exacta:',
     '{',
@@ -30,7 +30,7 @@ function buildPlanMessages({ project, prompt, fileTree, priorPlan, feedback } = 
     '  "tasks": [{ "id": "string", "title": "string", "status": "pending" }]',
     '}',
     appsMode
-      ? 'En /apps la arquitectura debe ser algo como "Vite SPA en index.html y src/main.js con CSS propio", para que el preview renderice de inmediato en /index.html.'
+      ? 'En /apps la arquitectura debe ser "React 18 + Vite 7 + TypeScript (SPA)" con componentes .tsx en src/, para que el preview renderice de inmediato en /index.html.'
       : null,
     'Sé concreto y conciso. 3–8 tareas accionables ordenadas.',
   ].filter(Boolean).join('\n');
