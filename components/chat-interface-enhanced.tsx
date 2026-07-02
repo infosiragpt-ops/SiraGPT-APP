@@ -9428,11 +9428,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
   // Prevent Enter key from adding new line when not holding Shift
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // El textarea queda libre durante el streaming (paridad Claude); Enter
+    // no dispara un segundo turno mientras el actual sigue en curso.
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
-      // Con el textarea habilitado durante el streaming (paridad Claude),
-      // Enter no debe disparar un segundo turno: el texto queda escrito y
-      // listo para enviarse cuando termine el turno en curso.
       if (isCurrentChatLocalJobBusy) return
       handleSend()
     } else if (e.key === "Escape") {
