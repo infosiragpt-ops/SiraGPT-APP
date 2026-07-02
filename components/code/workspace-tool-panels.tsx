@@ -75,6 +75,7 @@ import { RealGitPanel } from "@/components/code/git-tool-real"
 import { WorkspaceDeploymentsTool } from "@/components/deployments/workspace-deployments-tool"
 import { RealPublishingPanel } from "@/components/code/publishing-tool-real"
 import { hostingService } from "@/lib/hosting-service"
+import { deploymentsApi, type Deployment as RealDeployment } from "@/lib/deployments/deployments-api"
 import { getGitBinding } from "@/lib/code-git-mirror"
 
 type Deployment = {
@@ -2125,22 +2126,48 @@ function SecurityTool() {
 
 function AnalyticsTool() {
   const { files, activeFolder } = useCodeWorkspace()
-  const [deployments] = useWorkspacePersistedState<Deployment[]>("deployments", [])
+  // REAL deployments for this user from /api/deployments (DEPLOYMENTS_V2).
+  const [deploys, setDeploys] = React.useState<RealDeployment[] | null>(null)
+  React.useEffect(() => {
+    let alive = true
+    deploymentsApi
+      .list()
+      .then((rows) => { if (alive) setDeploys(Array.isArray(rows) ? rows : []) })
+      .catch(() => { if (alive) setDeploys([]) }) // flag off / unauth → honest 0
+    return () => { alive = false }
+  }, [])
   const fileCount = Object.keys(files).length
   const jsCount = Object.keys(files).filter((path) => /\.(tsx?|jsx?)$/.test(path)).length
+  const running = (deploys || []).filter((d) => d.status === "running").length
+  const last = (deploys || [])[0]
+  const fmtStatus: Record<string, string> = {
+    running: "activo", suspended: "suspendido", building: "construyendo",
+    paused: "pausado", failed: "fallido", shut_down: "apagado",
+  }
   return (
-    <ToolShell eyebrow="Insights" title="Analytics" detail="Resumen operativo local del proyecto y de su actividad de publicacion.">
+    <ToolShell eyebrow="Insights" title="Analytics" detail="Métricas reales del workspace y del historial de despliegues de tu cuenta.">
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <Metric title="Workspace" value={activeFolder?.name || "Default"} />
         <Metric title="Archivos" value={String(fileCount)} />
         <Metric title="JS/TS" value={String(jsCount)} />
-        <Metric title="Deploys" value={String(deployments.length)} />
+        <Metric title="Deploys" value={deploys === null ? "…" : `${deploys.length}${running ? ` · ${running} activo(s)` : ""}`} />
       </div>
-      <PanelCard className="mt-3" title="Actividad" detail="Eventos sintetizados a partir del estado local" icon={<Activity className="h-4 w-4" />}>
+      <PanelCard className="mt-3" title="Despliegues" detail={deploys === null ? "Cargando…" : `${deploys.length} despliegue(s) en tu cuenta`} icon={<Activity className="h-4 w-4" />}>
         <div className="space-y-2 text-[12px]">
+          {deploys === null ? (
+            <p className="text-muted-foreground">Consultando /api/deployments…</p>
+          ) : deploys.length === 0 ? (
+            <ActivityRow label="Publicación" value="Sin despliegues todavía — publica desde Publishing" />
+          ) : (
+            <>
+              {last ? <ActivityRow label={last.name} value={`${fmtStatus[last.status] || last.status} · ${new Date(last.createdAt).toLocaleDateString()}`} /> : null}
+              {deploys.slice(1, 4).map((d) => (
+                <ActivityRow key={d.id} label={d.name} value={`${fmtStatus[d.status] || d.status} · ${d.defaultDomain || d.subdomain}`} />
+              ))}
+            </>
+          )}
           <ActivityRow label="Preview" value={fileCount ? "Listo para ejecutar" : "Esperando archivos"} />
-          <ActivityRow label="Publicacion" value={deployments[0] ? `Ultimo deploy: ${new Date(deployments[0].createdAt).toLocaleString()}` : "Sin historial"} />
-          <ActivityRow label="Codigo" value={`${jsCount} archivos de aplicacion detectados`} />
+          <ActivityRow label="Código" value={`${jsCount} archivos de aplicación`} />
         </div>
       </PanelCard>
     </ToolShell>
