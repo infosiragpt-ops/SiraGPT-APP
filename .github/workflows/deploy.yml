@@ -139,13 +139,14 @@ jobs:
             git remote set-url origin "https://github.com/${{ github.repository }}.git"
             git fetch "${REPO_URL}" main
             git fetch "${REPO_URL}" "${TARGET_SHA}"
-            if git merge --ff-only "${TARGET_SHA}"; then
-              echo "[deploy-workflow] Fast-forwarded to ${TARGET_SHA}"
-            else
-              echo "[deploy-workflow] Remote checkout is not a direct ancestor of ${TARGET_SHA}; resetting to exact deploy SHA"
-              git status --short
-              git reset --hard "${TARGET_SHA}"
-            fi
+            # A deploy checkout needs no merge semantics: the exact SHA is
+            # already fetched, so hard-reset to it. `merge --ff-only` dies
+            # with a session-aborting fatal when the VPS sits on an
+            # unrelated history (e.g. after the repo migration), and the
+            # drone-ssh runner tears the script down before any else-branch
+            # or trap can recover.
+            git reset --hard "${TARGET_SHA}"
+            echo "[deploy-workflow] Checked out ${TARGET_SHA}"
             ${COMPOSE} config -q
             echo "[deploy-workflow] Building backend image (includes latest migrations)"
             ${COMPOSE} build backend
