@@ -64,11 +64,20 @@ describe('openRunStream', () => {
   })
 
   it('custom terminalStatuses: waiting_approval resolves done (auto-approve engine); default reconnects', async () => {
-    // With the option: a plan run parking at waiting_approval ends the stream.
+    // Mirror the REAL server: after the waiting_approval frame the connection
+    // STAYS OPEN (the server only closes on its own hard-terminal set) — the
+    // client must break out of read() itself, not wait for socket close.
     let calls = 0
+    const openBody = () =>
+      ({ ok: true, status: 200, body: new ReadableStream<Uint8Array>({
+        start(ctrl) {
+          ctrl.enqueue(new TextEncoder().encode('data: {"seq":1,"type":"run_status","data":{"status":"waiting_approval"}}\n\n'))
+          // never close — heartbeats would keep trickling in production
+        },
+      }) }) as unknown as Response
     const fetchImpl = (async () => {
       calls += 1
-      return streamResponse(['data: {"seq":1,"type":"run_status","data":{"status":"waiting_approval"}}\n\n'])
+      return openBody()
     }) as unknown as typeof fetch
     let status = ''
     const handle = openRunStream({

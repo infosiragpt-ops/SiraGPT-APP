@@ -126,8 +126,16 @@ export function openRunStream(opts: RunStreamOptions): RunStreamHandle {
             if (e.type !== 'heartbeat') onEvent(e)
             if (e.type === 'run_status' && terminalSet.has(e.data?.status)) terminal = true
           }
+          // Exit as soon as a terminal status is SEEN — the server only closes
+          // the socket on its own hard-terminal set, so a custom status like
+          // waiting_approval would otherwise park this read() on heartbeats
+          // forever (the connection stays open server-side).
+          if (terminal) break
         }
-        if (terminal || closed) return
+        if (terminal || closed) {
+          try { controller?.abort() } catch { /* already closed */ }
+          return
+        }
       } catch (err) {
         if (closed) return
         onError?.(err)
