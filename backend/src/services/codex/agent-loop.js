@@ -429,10 +429,21 @@ async function ensureAppsVitePreviewable({ run, project, runner, eventStore, pri
 
   const files = appsFallbackFiles({ prompt: sourcePrompt, projectName: project?.name || 'App generada' });
   await runner.writeFiles(projectId, files);
+  // Writing the Vite fallback isn't enough: the agent's Next scaffold (app/,
+  // next.config.mjs, next-env.d.ts, .next, pages/) lingers alongside it, so the
+  // workspace stays a broken Next+Vite hybrid the host-runner boots into an
+  // error overlay. Purge the Next-only files so the workspace is PURE Vite.
+  if (typeof runner.exec === 'function') {
+    await runner.exec(
+      projectId,
+      'rm -rf app pages src/app next.config.mjs next.config.js next-env.d.ts .next .next-env.d.ts',
+      { timeoutMs: 15000 },
+    ).catch(() => {});
+  }
   await eventStore.appendEvent(
     run.id,
     'narrative_delta',
-    { text: 'Normalicé el workspace de APPS a Vite para que el preview abra en /index.html sin depender de scaffolds incompletos.' },
+    { text: 'Normalicé el workspace de APPS a Vite (limpié el scaffold Next) para que el preview abra en /index.html.' },
     { prisma },
   ).catch(() => {});
   return { repaired: true };
@@ -496,4 +507,15 @@ async function runAgentLoop({ run, project, signal, isCancelled, deps = {} } = {
   return runBuildLoop({ run, project, signal, isCancelled, deps: { ...deps, llmTurn } });
 }
 
-module.exports = { runAgentLoop, runBuildLoop, buildSystemPrompt, safeFileTree, loadApprovedPlan };
+module.exports = {
+  runAgentLoop,
+  runBuildLoop,
+  buildSystemPrompt,
+  safeFileTree,
+  loadApprovedPlan,
+  // Exported for white-box tests / reuse.
+  ensureAppsVitePreviewable,
+  appsFallbackFiles,
+  packageLooksLikeNext,
+  isAppsPrompt,
+};
