@@ -89,6 +89,24 @@ const SNAPSHOT_SCRIPT = `(function(args){
   var isBare500 = textLength < 40 && /(^|\\s)5\\d\\d(\\s|$)/.test(bodyText);
   var hasErrorOverlay = hasViteOverlay || hasNextOverlay || hasCrashText || isBare500;
 
+  // Extract the ACTUAL error text from the overlay so the finding is
+  // actionable (the auto-repair loop can act on the real message, not just
+  // "there is an overlay"). Vite renders inside a shadow DOM; Next in a portal.
+  var overlayText = '';
+  try {
+    var vo = document.querySelector('vite-error-overlay');
+    if (vo && vo.shadowRoot) {
+      var mb = vo.shadowRoot.querySelector('.message-body, .message, pre');
+      overlayText = (mb ? mb.textContent : vo.shadowRoot.textContent) || '';
+    } else if (hasNextOverlay) {
+      var nd = document.querySelector('[data-nextjs-dialog], [data-nextjs-error-overlay], nextjs-portal');
+      overlayText = nd ? (nd.textContent || '') : '';
+    } else if (hasCrashText || isBare500) {
+      overlayText = bodyText;
+    }
+    overlayText = String(overlayText).replace(/\\s+/g, ' ').trim().slice(0, 600);
+  } catch (e) { overlayText = ''; }
+
   // Buttons + "Potemkin" heuristic: a button/[role=button] with no click affordance
   // (no onclick attr, not inside a <form>, no data-* handler hint) is best-effort
   // evidence of a decorative, non-functional control.
@@ -139,6 +157,7 @@ const SNAPSHOT_SCRIPT = `(function(args){
     rootHasContent: rootHasContent,
     textLength: textLength,
     hasErrorOverlay: hasErrorOverlay,
+    overlayText: overlayText,
     buttonCount: buttonCount,
     buttonsWithoutHandler: buttonsWithoutHandler,
     linkCount: linkCount,
@@ -154,6 +173,7 @@ function emptySnapshot() {
     rootHasContent: false,
     textLength: 0,
     hasErrorOverlay: false,
+    overlayText: '',
     buttonCount: 0,
     buttonsWithoutHandler: 0,
     linkCount: 0,
@@ -375,7 +395,11 @@ function buildVerdict({ navStatus, snapshot, markers, consoleErrors, pageErrors,
   }
 
   if (snapshot.hasErrorOverlay) {
-    const f = { severity: 'error', kind: 'error_overlay', message: 'Se detectó un overlay de error en pantalla (Vite/Next/error boundary).' };
+    // Include the REAL overlay error text so the auto-repair loop can act on it.
+    const detail = typeof snapshot.overlayText === 'string' && snapshot.overlayText.trim()
+      ? ` Error: ${snapshot.overlayText.trim()}`
+      : '';
+    const f = { severity: 'error', kind: 'error_overlay', message: `Se detectó un overlay de error en pantalla (Vite/Next/error boundary).${detail}` };
     findings.push(f); errors.push(f.message);
   }
 
