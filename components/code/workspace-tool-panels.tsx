@@ -2175,20 +2175,63 @@ function SettingsToolPanel() {
 function ValidationTool() {
   const { files } = useCodeWorkspace()
   const [results, setResults] = React.useState<ValidationResult[]>([])
-  const run = () => {
+  const [running, setRunning] = React.useState(false)
+
+  // Fast, always-available static checks over the in-memory workspace.
+  const staticChecks = React.useCallback((): ValidationResult[] => {
     const paths = Object.keys(files)
     const hasPackage = paths.some((path) => path.endsWith("package.json"))
     const hasEntry = paths.some((path) => /(^|\/)(index|app|main)\.(tsx?|jsx?|html)$/.test(path))
     const hasLargeFile = Object.values(files).some((file) => file.content.length > 120_000)
-    setResults([
+    return [
       { id: "files", label: "Workspace files", detail: `${paths.length} archivos detectados`, status: paths.length ? "pass" : "fail" },
       { id: "entry", label: "Entry point", detail: hasEntry ? "Entrada detectada" : "No se encontro index/app/main", status: hasEntry ? "pass" : "warn" },
       { id: "package", label: "Node project", detail: hasPackage ? "package.json presente" : "Proyecto estatico o sin package.json", status: hasPackage ? "pass" : "warn" },
       { id: "size", label: "Large files", detail: hasLargeFile ? "Hay archivos muy grandes" : "Tamano razonable", status: hasLargeFile ? "warn" : "pass" },
-    ])
-  }
+    ]
+  }, [files])
+
+  const run = React.useCallback(async () => {
+    setRunning(true)
+    const rows = staticChecks()
+    setResults(rows)
+    const runId = getActiveHostRunId()
+    // REAL server-side checks when a dev server is live: tsc --noEmit (type
+    // check) + headless-chromium render verdict. Both endpoints already exist.
+    if (runId) {
+      try {
+        const [types, runtime] = await Promise.all([
+          hostRunnerService.verify(runId),
+          hostRunnerService.verifyRuntime(runId),
+        ])
+        const typeRow: ValidationResult = types.skipped
+          ? { id: "types", label: "TypeScript (tsc --noEmit)", detail: types.reason || "sin tsconfig — omitido", status: "warn" }
+          : types.ok
+            ? { id: "types", label: "TypeScript (tsc --noEmit)", detail: "sin errores de tipos", status: "pass" }
+            : { id: "types", label: "TypeScript (tsc --noEmit)", detail: `${types.errorCount ?? types.errors?.length ?? 0} error(es) de tipos`, status: "fail" }
+        const renderRow: ValidationResult = runtime.skipped
+          ? { id: "render", label: "Render real (chromium)", detail: runtime.reason || "verificación no disponible", status: "warn" }
+          : runtime.ok
+            ? { id: "render", label: "Render real (chromium)", detail: runtime.summary || "la app renderiza correctamente", status: "pass" }
+            : { id: "render", label: "Render real (chromium)", detail: runtime.summary || (runtime.findings?.[0]?.message) || "la app no renderiza bien", status: "fail" }
+        setResults([renderRow, typeRow, ...rows])
+      } catch {
+        setResults([{ id: "server", label: "Verificación en servidor", detail: "no se pudo contactar al runner", status: "warn" }, ...rows])
+      }
+    }
+    setRunning(false)
+  }, [staticChecks])
+
+  const hasRun = typeof window !== "undefined" && !!getActiveHostRunId()
   return (
-    <ToolShell eyebrow="Checks" title="Validation" detail="Ejecuta una validacion local del workspace antes de publicar." action={<Button size="sm" className="h-8 gap-1.5" onClick={run}><Play className="h-3.5 w-3.5" />Ejecutar</Button>}>
+    <ToolShell
+      eyebrow="Checks"
+      title="Validation"
+      detail={hasRun
+        ? "Verificación REAL: tipos (tsc) + render (chromium) del dev server, más checks estáticos."
+        : "Checks estáticos del workspace. Arranca la app (▶ Ejecutar) para verificar tipos + render reales."}
+      action={<Button size="sm" className="h-8 gap-1.5" onClick={() => void run()} disabled={running}><Play className="h-3.5 w-3.5" />{running ? "Verificando…" : "Ejecutar"}</Button>}
+    >
       <PanelCard title="Resultados" detail={results.length ? "Ultima ejecucion" : "Sin ejecutar"} icon={<CheckCircle2 className="h-4 w-4" />}>
         <div className="space-y-2">
           {results.length === 0 ? <p className="rounded-md bg-muted/35 px-3 py-3 text-[12px] text-muted-foreground">Pulsa Ejecutar para validar el workspace.</p> : results.map((row) => (
