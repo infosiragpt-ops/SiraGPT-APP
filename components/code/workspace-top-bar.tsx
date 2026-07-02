@@ -106,7 +106,7 @@ export function WorkspaceTopBar({
 
       {/* Panel tabs — sit in the header itself (Publicar height), roughly
           above where the main pane begins. */}
-      <div className="ml-[6%] flex min-w-0 items-center gap-1 overflow-x-auto">
+      <div className="workspace-tab-strip ml-[6%] flex min-w-0 items-center gap-1 overflow-x-auto">
         {visible.map((panel) => {
           const Icon = panel.icon
           const active = activePanel === panel.id

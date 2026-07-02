@@ -40,6 +40,14 @@ import { AICodeChatPanel } from "./ai-code-chat-panel"
 import { CodeHub } from "./code-hub"
 import { NewTabPane } from "./new-tab-pane"
 import { PreviewPane } from "./preview-pane"
+
+// The chat panel and preview are the two heaviest subtrees in the workspace
+// (the chat alone is a ~3k-line component). Workspace-level state changes —
+// opening the "+" picker, palettes, tab toggles — re-rendered BOTH on every
+// click, which read as input lag. They take no props (context-driven), so a
+// module-level memo makes those interactions skip them entirely.
+const MemoAICodeChatPanel = React.memo(AICodeChatPanel)
+const MemoPreviewPane = React.memo(PreviewPane)
 import { ProjectInviteDialog } from "./project-invite-dialog"
 import { TerminalPanel } from "./terminal-panel"
 import { ToolScreen } from "./tool-screen"
@@ -527,7 +535,7 @@ export function CodeWorkspace() {
               <div className="absolute inset-0">
                 <ResizablePanelGroup direction="vertical">
                   <ResizablePanel defaultSize={terminalOpen ? 100 - TERMINAL_DEFAULT_SIZE : 100} minSize={30}>
-                    <PreviewPane />
+                    <MemoPreviewPane />
                   </ResizablePanel>
                   {terminalOpen ? (
                     <>
@@ -572,7 +580,7 @@ export function CodeWorkspace() {
               <div className="flex h-full min-h-0 flex-col">
                 <div className="relative min-h-0 flex-1 overflow-hidden">
                   <div className={cn("absolute inset-0", mobileView === "chat" ? "block" : "hidden")}>
-                    <AICodeChatPanel />
+                    <MemoAICodeChatPanel />
                   </div>
                   <div className={cn("absolute inset-0", mobileView === "preview" ? "block" : "hidden")}>
                     {mainArea}
@@ -617,7 +625,7 @@ export function CodeWorkspace() {
                 onExpand={() => setChatOpen(true)}
                 className="min-w-0"
               >
-                <AICodeChatPanel />
+                <MemoAICodeChatPanel />
               </ResizablePanel>
               <ResizableHandle withHandle />
 

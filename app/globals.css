@@ -686,6 +686,18 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   margin: 0;
 }
 
+/* /code tab strip — the tab row scrolls horizontally when crowded, but a
+   native scrollbar painted INSIDE the 28px-tall strip overlaps the tabs
+   (macOS "always show scrollbars"). Scroll stays; the bar is hidden. */
+.workspace-tab-strip {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.workspace-tab-strip::-webkit-scrollbar {
+  display: none;
+}
+
 .chat-tools-menu [role="menuitem"] {
   min-width: 0;
 }
