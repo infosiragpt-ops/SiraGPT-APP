@@ -19,6 +19,7 @@ const {
   decryptHeaders,
   loadUserMcpTools,
   namespaceToolNames,
+  discoverServerTools,
 } = require('../src/services/agent-harness/mcp-client');
 
 test('mcp: server names slugify into stable namespaces', () => {
@@ -114,6 +115,77 @@ test('mcp: unreachable servers are skipped with an error entry, chat keeps its t
   assert.equal(out.tools.length, 0);
   assert.equal(out.errors.length, 1);
   assert.equal(out.errors[0].server, 'down server');
+});
+
+test('mcp: a public hostname that DNS-resolves to metadata is rejected before connect (SSRF re-validation)', async (t) => {
+  const prev = process.env.SIRAGPT_MCP_ALLOW_PRIVATE;
+  delete process.env.SIRAGPT_MCP_ALLOW_PRIVATE;
+  t.after(() => { if (prev === undefined) delete process.env.SIRAGPT_MCP_ALLOW_PRIVATE; else process.env.SIRAGPT_MCP_ALLOW_PRIVATE = prev; });
+
+  const prisma = {
+    mcpServer: {
+      findMany: async () => [{
+        id: 'rebind',
+        name: 'rebinding server',
+        url: 'https://mcp.evil.example.com/mcp', // public hostname...
+        transport: 'streamable-http',
+        headersEncrypted: null,
+        updatedAt: new Date(),
+        // ...whose DNS resolves to the cloud-metadata IP.
+        _lookup: async () => [{ address: '169.254.169.254', family: 4 }],
+      }],
+    },
+  };
+  const out = await loadUserMcpTools({ userId: 'u1', prisma });
+  assert.equal(out.tools.length, 0, 'no tools discovered from a rebinding host');
+  assert.equal(out.errors.length, 1);
+  assert.equal(out.errors[0].server, 'rebinding server');
+  assert.match(out.errors[0].error, /private|loopback|metadata/i);
+});
+
+test('mcp: a public hostname resolving to a public IP passes the DNS gate (then connects)', async (t) => {
+  const prev = process.env.SIRAGPT_MCP_ALLOW_PRIVATE;
+  delete process.env.SIRAGPT_MCP_ALLOW_PRIVATE;
+  t.after(() => { if (prev === undefined) delete process.env.SIRAGPT_MCP_ALLOW_PRIVATE; else process.env.SIRAGPT_MCP_ALLOW_PRIVATE = prev; });
+
+  const server = {
+    id: 'ok',
+    name: 'legit server',
+    url: 'https://mcp.example.com/mcp',
+    transport: 'streamable-http',
+    headersEncrypted: null,
+    updatedAt: new Date(),
+    _lookup: async () => [{ address: '93.184.216.34', family: 4 }], // public IP
+  };
+  // The DNS gate must pass; discovery still fails at the transport layer
+  // (no real server), but NOT with the SSRF-block message.
+  await assert.rejects(
+    () => discoverServerTools(server),
+    (err) => !/private|loopback|metadata/i.test(String(err && err.message)),
+  );
+});
+
+test('mcp: SIRAGPT_MCP_ALLOW_PRIVATE=1 skips the DNS gate so LAN hosts are permitted', async (t) => {
+  const prev = process.env.SIRAGPT_MCP_ALLOW_PRIVATE;
+  process.env.SIRAGPT_MCP_ALLOW_PRIVATE = '1';
+  t.after(() => { if (prev === undefined) delete process.env.SIRAGPT_MCP_ALLOW_PRIVATE; else process.env.SIRAGPT_MCP_ALLOW_PRIVATE = prev; });
+
+  let lookupCalled = false;
+  const server = {
+    id: 'lan',
+    name: 'lan server',
+    url: 'http://mcp.lan.internal/mcp',
+    transport: 'streamable-http',
+    headersEncrypted: null,
+    updatedAt: new Date(),
+    _lookup: async () => { lookupCalled = true; return [{ address: '10.0.0.5', family: 4 }]; },
+  };
+  // Gate is skipped: DNS is never consulted and we fail only at the transport.
+  await assert.rejects(
+    () => discoverServerTools(server),
+    (err) => !/private|loopback|metadata/i.test(String(err && err.message)),
+  );
+  assert.equal(lookupCalled, false, 'DNS gate skipped when SIRAGPT_MCP_ALLOW_PRIVATE=1');
 });
 
 test('mcp: namespaceToolNames caps at 64 chars and de-dupes collisions per server', () => {

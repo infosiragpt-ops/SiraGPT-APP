@@ -6,6 +6,7 @@ const express = require('express');
 const http = require('node:http');
 
 const router = require('../src/routes/attribution-toolkit');
+const rollup = require('../src/services/attribution-rollup-aggregator');
 
 function requestJson(server, { method = 'GET', path, body }) {
   return new Promise((resolve, reject) => {
@@ -33,9 +34,13 @@ function requestJson(server, { method = 'GET', path, body }) {
   });
 }
 
-async function withServer(handler) {
+async function withServer(handler, { user = null } = {}) {
   const app = express();
   app.use(express.json({ limit: '2mb' }));
+  if (user) {
+    // Simulate an authenticated request the way optionalAuth would populate it.
+    app.use((req, _res, next) => { req.user = user; next(); });
+  }
   app.use('/api/attribution-toolkit', router);
   const server = app.listen(0);
   try { await handler(server); }
@@ -59,18 +64,18 @@ test('POST /anomaly/observe + /anomaly/score round-trip', async () => {
     const observe = await requestJson(server, {
       method: 'POST',
       path: '/api/attribution-toolkit/anomaly/observe',
-      body: { userId: 'route-test', profile },
+      body: { profile },
     });
     assert.strictEqual(observe.status, 200);
     assert.strictEqual(observe.body.ok, true);
     const score = await requestJson(server, {
       method: 'POST',
       path: '/api/attribution-toolkit/anomaly/score',
-      body: { userId: 'route-test', profile },
+      body: { profile },
     });
     assert.strictEqual(score.status, 200);
     assert.ok(score.body.score >= 0);
-  });
+  }, { user: { id: 'route-test' } });
 });
 
 test('POST /anomaly/observe rejects missing userId', async () => {
@@ -84,17 +89,54 @@ test('POST /anomaly/observe rejects missing userId', async () => {
   });
 });
 
+test('IDOR: anonymous caller-supplied userId does not read/poison another user’s telemetry', async () => {
+  await withServer(async (server) => {
+    // Anonymous observe with ?userId=victim in query + body must be rejected (400),
+    // never attributing to the victim's anomaly baseline.
+    const observe = await requestJson(server, {
+      method: 'POST',
+      path: '/api/attribution-toolkit/anomaly/observe?userId=victim',
+      body: { userId: 'victim', profile: { centroid: { feature: 0.9 } } },
+    });
+    assert.strictEqual(observe.status, 400);
+
+    // Anonymous baseline read with ?userId=victim must be rejected too.
+    const baseline = await requestJson(server, {
+      method: 'GET',
+      path: '/api/attribution-toolkit/anomaly/baseline?userId=victim',
+    });
+    assert.strictEqual(baseline.status, 400);
+
+    // Anonymous rollup/record with a spoofed userId must not attribute the
+    // sample to the victim — it is recorded unattributed (userId null).
+    rollup.__resetForTests();
+    const rec = await requestJson(server, {
+      method: 'POST',
+      path: '/api/attribution-toolkit/rollup/record?userId=victim',
+      body: { userId: 'victim', domain: 'legal', turnId: 'spoof' },
+    });
+    assert.strictEqual(rec.status, 200);
+    // The sample exists but is NOT scoped to the victim.
+    const victimRollup = rollup.rollup({ scope: 'user', userId: 'victim' });
+    assert.strictEqual(victimRollup.samples, 0);
+    rollup.__resetForTests();
+  });
+  // no injected user → anonymous
+});
+
 test('POST /rollup/record + GET /rollup round-trip', async () => {
   await withServer(async (server) => {
-    await requestJson(server, {
+    const rec = await requestJson(server, {
       method: 'POST',
       path: '/api/attribution-toolkit/rollup/record',
-      body: { userId: 'u', faithfulness: 0.8, primaryIntent: 'build' },
+      body: { faithfulness: 0.8, primaryIntent: 'build' },
     });
-    const r = await requestJson(server, { method: 'GET', path: '/api/attribution-toolkit/rollup' });
+    assert.strictEqual(rec.status, 200);
+    const r = await requestJson(server, { method: 'GET', path: '/api/attribution-toolkit/rollup?scope=user' });
     assert.strictEqual(r.status, 200);
     assert.ok(r.body.samples >= 1);
-  });
+    assert.strictEqual(r.body.userId, 'u');
+  }, { user: { id: 'u' } });
 });
 
 test('GET /rollup/recent returns recent samples', async () => {
@@ -103,13 +145,13 @@ test('GET /rollup/recent returns recent samples', async () => {
       await requestJson(server, {
         method: 'POST',
         path: '/api/attribution-toolkit/rollup/record',
-        body: { userId: 'u', turnId: `t${i}` },
+        body: { turnId: `t${i}` },
       });
     }
     const r = await requestJson(server, { method: 'GET', path: '/api/attribution-toolkit/rollup/recent?limit=3' });
     assert.ok(Array.isArray(r.body.samples));
     assert.ok(r.body.samples.length <= 3);
-  });
+  }, { user: { id: 'u' } });
 });
 
 test('POST /fuzzer/variants returns variants', async () => {

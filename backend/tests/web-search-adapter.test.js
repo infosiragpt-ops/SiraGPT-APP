@@ -215,6 +215,69 @@ test('caches by (query, locale) and the second call returns cached=true', async 
   assert.equal(calls, 2);
 });
 
+test('searchMany threads freshness + includeNews through to providers', async () => {
+  let received = null;
+  webSearch.setProviders([
+    {
+      id: 'recorder',
+      name: 'recorder',
+      priority: 10,
+      async search(query, opts) {
+        received = { ...opts };
+        return [{
+          title: 'quantum computing breakthrough 2026',
+          url: 'https://r.test',
+          snippet: 'quantum computing breakthrough coverage',
+          source: 'recorder',
+        }];
+      },
+    },
+  ]);
+  await webSearch.searchMany('quantum computing breakthrough', {
+    freshness: 'pw',
+    includeNews: true,
+  });
+  assert.ok(received, 'provider.search should have been invoked');
+  assert.equal(received.freshness, 'pw');
+  assert.equal(received.includeNews, true);
+});
+
+test('searchMany freshness/news calls use distinct cache buckets from plain calls', async () => {
+  let calls = 0;
+  webSearch.setProviders([
+    {
+      id: 'count',
+      name: 'count',
+      priority: 10,
+      async search() {
+        calls++;
+        return [{
+          title: 'recent ai news roundup 2026',
+          url: 'https://x.test',
+          snippet: 'recent ai news roundup coverage',
+          source: 'count',
+        }];
+      },
+    },
+  ]);
+  // Fresh call primes one bucket.
+  const fresh = await webSearch.searchMany('recent ai news roundup', { freshness: 'pw' });
+  assert.equal(fresh.cached, false);
+  assert.equal(calls, 1);
+  // Plain call (no freshness) must be a cache MISS — different key.
+  const plain = await webSearch.searchMany('recent ai news roundup', {});
+  assert.equal(plain.cached, false);
+  assert.equal(calls, 2);
+  // A second plain call is a HIT (no-freshness key is stable / byte-identical).
+  const plainAgain = await webSearch.searchMany('recent ai news roundup', {});
+  assert.equal(plainAgain.cached, true);
+  assert.equal(calls, 2);
+  // A second fresh call is also a HIT on its own bucket.
+  const freshAgain = await webSearch.searchMany('recent ai news roundup', { freshness: 'pw' });
+  assert.equal(freshAgain.cached, true);
+  assert.equal(calls, 2);
+});
+
 test('normalises results to {title,url,snippet,source} and caps maxResults', async () => {
   webSearch.setProviders([
     makeProvider({

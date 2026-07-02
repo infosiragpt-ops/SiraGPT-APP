@@ -38,11 +38,15 @@ WORKDIR /app
 # Runtime document toolchain for DOCX/XLSX/PPTX/PDF/OCR workflows, plus
 # git/openssh-client for APPS/GitHub workspace clone, pull, diff, push.
 RUN apk add --no-cache \
+    chromium \
     font-liberation \
     font-noto \
+    freetype \
     ghostscript \
     git \
+    harfbuzz \
     libreoffice \
+    nss \
     openssh-client \
     pandoc \
     poppler-utils \
@@ -53,7 +57,8 @@ RUN apk add --no-cache \
     tesseract-ocr-data-eng \
     tesseract-ocr-data-osd \
     tesseract-ocr-data-spa \
-    ttf-dejavu
+    ttf-dejavu \
+    ttf-freefont
 
 # Create non-root user and group if they don't exist
 RUN addgroup -S appgroup 2>/dev/null || true; \
@@ -78,6 +83,11 @@ USER appuser
 # Environment
 ENV NODE_ENV=production
 ENV PORT=5000
+# The /code verify-agent drives the system chromium (Alpine apk) via Playwright;
+# Playwright's own bundled browser doesn't run on musl, so point it at the apk
+# binary and skip the browser download.
+ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium-browser
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
 EXPOSE 5000
 

@@ -192,3 +192,89 @@ describe('prefetch straggler cap (partial batch results)', () => {
     assert.deepEqual(map.get('2').result, { ok: 2 });
   });
 });
+
+describe('prefetch respects the duplicate-cache (no double-dispatch, no wasted budget)', () => {
+  test('a signature cached in a prior step is NOT re-dispatched by the batch', async () => {
+    let called = 0;
+    const registry = [
+      makeTool('web_search', async () => { called += 1; return { ok: true }; }),
+      makeTool('rag_retrieve', async () => ({ ok: true })),
+    ];
+    const argsA = JSON.stringify({ q: 'x' });
+    const calls = [
+      { id: '1', function: { name: 'web_search', arguments: argsA } },
+      { id: '2', function: { name: 'rag_retrieve', arguments: '{}' } },
+    ];
+    // Pre-seed the dup cache with web_search(x)'s signature (as a prior step would).
+    const dupCache = new Map();
+    dupCache.set(reactAgent.toolCallSignature('web_search', argsA), { step: 1, content: 'cached' });
+
+    const map = await reactAgent.prefetchParallelDispatch(registry, calls, {}, new Set(), dupCache);
+    assert.ok(!map.has('1'), 'cached signature is skipped by the prefetch');
+    assert.equal(called, 0, 'the cached call is never dispatched for real');
+  });
+
+  test('two identical signatures in ONE batch dispatch only once', async () => {
+    let called = 0;
+    const registry = [
+      makeTool('web_search', async () => { called += 1; return { ok: true }; }),
+      makeTool('rag_retrieve', async () => ({ ok: true })),
+    ];
+    const argsA = JSON.stringify({ q: 'x' });
+    const calls = [
+      { id: '1', function: { name: 'web_search', arguments: argsA } },
+      { id: '2', function: { name: 'web_search', arguments: argsA } },
+      { id: '3', function: { name: 'rag_retrieve', arguments: '{}' } },
+    ];
+    const map = await reactAgent.prefetchParallelDispatch(registry, calls, {}, new Set(), new Map());
+    assert.equal(called, 1, 'the repeated signature is dispatched exactly once within the batch');
+    // Only the first occurrence + the distinct peer are prefetched; the repeat
+    // (id 2) falls through to the main loop where the dup cache short-circuits it.
+    assert.ok(map.has('1'), 'first occurrence prefetched');
+    assert.ok(!map.has('2'), 'in-batch repeat NOT prefetched');
+    assert.ok(map.has('3'), 'distinct peer prefetched');
+  });
+});
+
+describe('duplicate-cached parallel call: no re-execution, warning surfaced', () => {
+  test('step 2 repeats step 1 A(x): A runs exactly once, repeat carries duplicate_tool_call', async () => {
+    let aCount = 0;
+    const A = makeTool('web_search', async () => { aCount += 1; return { ok: true, tool: 'A' }; });
+    const B = makeTool('rag_retrieve', async () => ({ ok: true, tool: 'B' }));
+    const C = makeTool('scientific_search', async () => ({ ok: true, tool: 'C' }));
+
+    // Scripted model: step 1 emits [A(x), B(y)] in one assistant turn; step 2
+    // emits [A(x), C(z)]; then finalize.
+    let i = 0;
+    let callId = 0;
+    const next = (toolCalls) => {
+      const msgs = toolCalls.map((tc) => {
+        callId += 1;
+        return { id: `call_${callId}`, type: 'function', function: { name: tc.name, arguments: JSON.stringify(tc.args) } };
+      });
+      return { choices: [{ message: { role: 'assistant', content: 'thinking', tool_calls: msgs } }] };
+    };
+    const openai = {
+      chat: { completions: { create: async (params) => {
+        const forcedFinalize = params.tool_choice && typeof params.tool_choice === 'object'
+          && params.tool_choice.function?.name === 'finalize';
+        if (forcedFinalize) {
+          callId += 1;
+          return { choices: [{ message: { role: 'assistant', content: '', tool_calls: [{ id: `call_${callId}`, type: 'function', function: { name: 'finalize', arguments: JSON.stringify({ answer: 'done' }) } }] } }] };
+        }
+        i += 1;
+        if (i === 1) return next([{ name: 'web_search', args: { q: 'x' } }, { name: 'rag_retrieve', args: { q: 'y' } }]);
+        if (i === 2) return next([{ name: 'web_search', args: { q: 'x' } }, { name: 'scientific_search', args: { q: 'z' } }]);
+        callId += 1;
+        return { choices: [{ message: { role: 'assistant', content: '', tool_calls: [{ id: `call_${callId}`, type: 'function', function: { name: 'finalize', arguments: JSON.stringify({ answer: 'done' }) } }] } }] };
+      } } },
+    };
+
+    const result = await reactAgent.run(openai, { query: 'test', tools: [A, B, C], model: 'gpt-4o', maxSteps: 6 });
+    assert.equal(aCount, 1, 'A executed exactly once despite being called in two steps');
+    // The repeat in step 2 must carry the duplicate warning.
+    const allActions = result.steps.flatMap((s) => s.actions);
+    const dupAction = allActions.find((a) => a.tool === 'web_search' && a.observation && a.observation.warning === 'duplicate_tool_call');
+    assert.ok(dupAction, 'the repeated A(x) call surfaced a duplicate_tool_call warning');
+  });
+});

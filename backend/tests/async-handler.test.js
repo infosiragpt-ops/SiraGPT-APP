@@ -156,6 +156,30 @@ describe('asyncHandler (enhanced)', () => {
       // Should NOT time out — no guard is active
       assert.equal(calls.length, 0);
     });
+
+    it('forwards an abort-shaped rejection to next exactly once (no double-forward)', async () => {
+      // Regression: async-guard wraps an abort-like rejection in a GuardError
+      // (reason 'aborted'). Previously the guard-path filter matched ANY
+      // GuardError, so the same failure was forwarded twice — once by the
+      // microtask path (raw error) and once by the guard path (wrapped).
+      const abortErr = Object.assign(new Error('aborted'), { name: 'AbortError' });
+      const wrapped = asyncHandler(async () => { throw abortErr; }, { timeoutMs: 5000 });
+
+      const calls = [];
+      // Error middleware that defers sending (async) so res.headersSent stays
+      // false across both potential forward attempts.
+      const spyNext = (e) => { calls.push(e); };
+
+      const req = {};
+      const res = { headersSent: false, writableEnded: false };
+      wrapped(req, res, spyNext);
+
+      // Let both the microtask path and the guard-path .catch settle.
+      await delay(30);
+
+      assert.equal(calls.length, 1, 'next should be called exactly once');
+      assert.equal(calls[0], abortErr, 'the raw abort error is forwarded, not a wrapped GuardError');
+    });
   });
 
   // ── Non-async handler edge cases ───────────────────────────────────

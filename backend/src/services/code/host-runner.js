@@ -25,6 +25,7 @@ const path = require('path');
 const net = require('net');
 const crypto = require('crypto');
 const { buildUntrustedChildEnv } = require('../../utils/untrusted-child-env');
+const { verifyRenderedApp } = require('./verify-agent');
 
 const ROOT = path.join(os.tmpdir(), 'siragpt-coderun');
 
@@ -34,6 +35,7 @@ const INSTALL_TIMEOUT_MS = Number(process.env.CODE_RUNNER_INSTALL_TIMEOUT_MS) ||
 const READY_TIMEOUT_MS = Number(process.env.CODE_RUNNER_READY_TIMEOUT_MS) || 120_000;
 const MAX_CONCURRENT = Number(process.env.CODE_RUNNER_MAX_CONCURRENT) || 2;
 const IDLE_TTL_MS = Number(process.env.CODE_RUNNER_IDLE_TTL_MS) || 30 * 60_000;
+const RUNTIME_VERIFY_TIMEOUT_MS = Number(process.env.CODE_RUNNER_VERIFY_TIMEOUT_MS) || 20_000;
 const LOG_TAIL = 200;
 const MAX_ENV_KEYS = 120;
 const MAX_ENV_VALUE_BYTES = 32 * 1024;
@@ -674,6 +676,94 @@ function getProxyTarget(runId, userId) {
   return { port: run.port, phase: run.phase, framework: run.framework };
 }
 
+/**
+ * Best-effort derivation of the required render markers for a run by scanning a
+ * few of its source files on disk. Today it looks for the mandatory landing
+ * component «Invitar al proyecto» — if that copy is present in the project we
+ * assert it must actually render. Kept generic + optional: a project without the
+ * marker simply yields an empty list (verify still checks blank/overlay/errors).
+ */
+function deriveRequiredMarkers(run) {
+  const markers = [];
+  try {
+    const dir = run && run.dir;
+    if (!dir) return markers;
+    // Only the small, likely-source files — never a recursive node_modules walk.
+    const candidates = ['src/App.tsx', 'src/App.jsx', 'src/App.js', 'index.html'];
+    for (const rel of candidates) {
+      const full = path.join(dir, rel);
+      let text = '';
+      try { text = fs.readFileSync(full, 'utf8'); } catch { continue; }
+      if (text.includes('Invitar al proyecto') && !markers.includes('Invitar al proyecto')) {
+        markers.push('Invitar al proyecto');
+      }
+    }
+  } catch { /* best effort — never block verify on marker derivation */ }
+  return markers;
+}
+
+/**
+ * verifyRuntime — the "does the app actually render?" functional check. Runs the
+ * generated project's live dev server through headless chromium (via
+ * verify-agent) and reports a verdict. Companion to verifyRun (tsc --noEmit):
+ * type-checking proves the code compiles; this proves it actually boots to a
+ * working screen (not blank, no error overlay, no JS crash).
+ *
+ * Ownership-checked + phase-gated like getProxyTarget: only the run's owner may
+ * verify it, and only once the dev server is `ready`. NOT auto-run inside
+ * pipeline() — the frontend triggers it after `ready`, same as verifyRun.
+ *
+ * Degrades gracefully: when chromium is unavailable the verdict is
+ * { skipped:true, ok:true } — a missing browser never blocks the app.
+ */
+async function verifyRuntime(runId, userId) {
+  const id = safeId(runId);
+  const run = runs.get(id);
+  if (!run) return { ok: false, skipped: false, error: 'not_found', findings: [] };
+  if (userId && run.userId && run.userId !== userId) {
+    return { ok: false, skipped: false, error: 'forbidden', findings: [] };
+  }
+  run.lastTouch = Date.now();
+  if (run.phase !== 'ready' || !run.port) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: 'not_ready',
+      phase: run.phase,
+      findings: [],
+      summary: 'La app aún no está lista para verificar (el dev server no está en «ready»).',
+    };
+  }
+
+  // Verify against the PRIVATE dev server directly (127.0.0.1:port + basePath),
+  // never through the public reverse-proxy — the check runs server-side.
+  const url = `http://127.0.0.1:${run.port}${run.basePath || '/'}`;
+  const requiredMarkers = deriveRequiredMarkers(run);
+
+  let verdict;
+  try {
+    verdict = await verifyRenderedApp({ url, requiredMarkers, timeoutMs: RUNTIME_VERIFY_TIMEOUT_MS });
+  } catch (err) {
+    // verify-agent is defensive and shouldn't throw, but never let a verify crash
+    // the run — degrade to a skipped verdict.
+    verdict = {
+      ok: true, skipped: true, reason: 'verify_error',
+      findings: [], summary: `Verificación omitida: ${(err && err.message) || err}`,
+    };
+  }
+
+  // Concise log line of the verdict (redacted like every other pushLog line).
+  if (verdict.skipped) {
+    pushLog(run, `Verificación de runtime omitida (${verdict.reason || 'chromium_unavailable'}).`);
+  } else if (verdict.ok) {
+    pushLog(run, `Verificación de runtime OK — ${verdict.summary || 'la app renderiza correctamente.'}`);
+  } else {
+    pushLog(run, `Verificación de runtime FALLÓ — ${verdict.summary || `${(verdict.errors || []).length} problema(s).`}`);
+  }
+
+  return verdict;
+}
+
 // Idle reaper — stop dev servers nobody is watching.
 const reaper = setInterval(() => {
   const now = Date.now();
@@ -701,6 +791,7 @@ module.exports = {
   getRunForProxy,
   getPreviewToken,
   getProxyTarget,
+  verifyRuntime,
   publicBasePath,
   publicDevUrl,
   normaliseRuntimeEnv,

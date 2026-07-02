@@ -287,6 +287,110 @@ test('react-agent: invalid tool args do NOT consume the per-tool call budget', a
   assert.equal(ctx.toolUsageMap.docintel_retrieve, 1);
 });
 
+// A fake client that ALWAYS calls finalize with the same real answer, even
+// when tool_choice is narrowed to finalize. Used to probe the finalize-guard
+// interaction on the last step / under the breaker.
+function makeAlwaysFinalizeOpenAI(answer) {
+  let callId = 0;
+  return {
+    chat: {
+      completions: {
+        create: async () => {
+          callId += 1;
+          return {
+            choices: [{
+              message: {
+                role: 'assistant',
+                content: 'thinking',
+                tool_calls: [{
+                  id: `call_${callId}`,
+                  type: 'function',
+                  function: { name: 'finalize', arguments: JSON.stringify({ answer }) },
+                }],
+              },
+            }],
+          };
+        },
+      },
+    },
+  };
+}
+
+// A fake client that ALWAYS answers in prose (no tool_calls) — the weak
+// prompted-model failure that keeps ignoring the finalize protocol.
+function makePlainTextOpenAI(prose) {
+  return {
+    chat: {
+      completions: {
+        create: async () => ({
+          choices: [{ message: { role: 'assistant', content: prose, tool_calls: [] } }],
+        }),
+      },
+    },
+  };
+}
+
+test('react-agent: last-step finalize-guard rejection keeps the model answer instead of generic degraded text', async () => {
+  // The model produces a real answer on every finalize; the guard always
+  // rejects it. With maxSteps=2 (below MAX_CONSEC_FINALIZE_REJECTIONS=3) the
+  // breaker never trips, so the run ends on the forced last-step finalize with
+  // no terminator firing. The rescue must ship the model's real answer.
+  const REAL = 'La respuesta real que el modelo produjo.';
+  const openai = makeAlwaysFinalizeOpenAI(REAL);
+
+  const result = await reactAgent.run(openai, {
+    query: 'contesta',
+    tools: [],
+    maxSteps: 2,
+    model: 'test-model',
+    finalizeGuard: () => ({ ok: false, message: 'blocked by policy' }),
+  });
+
+  assert.match(String(result.finalAnswer || ''), /La respuesta real que el modelo produjo/);
+  assert.doesNotMatch(String(result.finalAnswer || ''), /No logr[eé] cerrar/i);
+  assert.equal(result.stoppedReason, 'finalized_last_step_guard_override');
+});
+
+test('react-agent: plain-text finalize-guard rejections trip the breaker and accept the prose answer', async () => {
+  // A weak model keeps answering in prose; the guard always rejects. Without
+  // the breaker this spins to the full step budget. It must stop after
+  // MAX_CONSEC_FINALIZE_REJECTIONS (3) with the model's prose as the answer.
+  const PROSE = 'Aquí está mi respuesta en prosa.';
+  const openai = makePlainTextOpenAI(PROSE);
+
+  const result = await reactAgent.run(openai, {
+    query: 'contesta',
+    tools: [],
+    maxSteps: 8,
+    model: 'test-model',
+    finalizeGuard: () => ({ ok: false, message: 'blocked by policy' }),
+  });
+
+  assert.equal(result.steps.length, 3, 'breaker stops the run after 3 plain-text rejections');
+  assert.match(String(result.stoppedReason), /finalized_guard_breaker/);
+  assert.equal(result.finalAnswer, PROSE);
+});
+
+test('react-agent: finalize breaker preserves the finalized_guard_breaker stoppedReason (not clobbered to finalized)', async () => {
+  // The model calls finalize with a real answer every step; the guard rejects
+  // 3 consecutive finalizes → the breaker trips, leaves the observation
+  // error-free so the terminator fires, and the reason must survive as
+  // finalized_guard_breaker (not overwritten to a clean 'finalized').
+  const REAL = 'Respuesta aceptada por el breaker.';
+  const openai = makeAlwaysFinalizeOpenAI(REAL);
+
+  const result = await reactAgent.run(openai, {
+    query: 'contesta',
+    tools: [],
+    maxSteps: 8,
+    model: 'test-model',
+    finalizeGuard: () => ({ ok: false, message: 'blocked by policy' }),
+  });
+
+  assert.match(String(result.stoppedReason), /^finalized_guard_breaker:/);
+  assert.equal(result.finalAnswer, REAL);
+});
+
 test('react-agent: slow provider trend forces finalize before the runtime budget blows mid-step', async () => {
   // Each completion takes ~30ms against a 1.5s budget with a 2s headroom
   // buffer — after the first measured step the loop must conclude there is no

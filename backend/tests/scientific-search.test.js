@@ -123,6 +123,10 @@ test('isTransientError judges on the HTTP status, not a 4xx-looking token in the
   assert.equal(isTransientError(e404), false, 'a real 4xx is not retried');
   assert.equal(isTransientError(new Error('HTTP 429 Too Many Requests — https://x/y')), true, '429 is transient');
   assert.equal(isTransientError(new Error('ECONNRESET')), true, 'network errors are transient');
+  // Internal deadline timeouts stay retryable (distinct 'timed out after Xms'
+  // message). Caller aborts are handled by the signal short-circuit in
+  // callProviderWithRetry, not by this regex — see the caller-abort probe test.
+  assert.equal(isTransientError(new Error('arxiv timed out after 8000ms')), true, 'internal deadline timeouts are transient');
 });
 
 test('cacheKey scopes diversify / unpaywall opt-in flags (no silent no-op on cache hit)', () => {
@@ -1171,4 +1175,77 @@ test('search DOES cache a clean, error-free result (even when empty)', async () 
   const cached = searchCache.get('clean cacheable empty query', opts);
   assert.ok(cached, 'an error-free result is cached');
   assert.deepEqual(cached.errors, []);
+});
+
+// ── total-timeout truncation must NOT be cached as complete ──────────────
+test('search does NOT cache a wall-clock-truncated partial fan-out', async () => {
+  searchCache.clear();
+  // arXiv resolves fast (valid empty feed); openalex never resolves so the
+  // total-timeout timer wins the race with openalex still pending. openalex
+  // contributes neither papers nor an `errors` entry — the result is silently
+  // truncated. Such a partial fan-out must NOT be cached as complete.
+  setFetchHandler(async (url) => {
+    if (url.includes('arxiv.org')) {
+      return textResponse('<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom"></feed>');
+    }
+    return new Promise(() => { /* openalex never resolves */ });
+  });
+  const opts = { providers: ['arxiv', 'openalex'], totalTimeoutMs: 50, timeoutMs: 5000, retries: 0 };
+  const res = await ss.search('total-timeout truncation query', opts);
+  // The partial result is still returned to the caller (best-effort).
+  assert.ok(res, 'a truncated result is still returned');
+  assert.equal(res.errors.length, 0, 'the still-pending provider is not an error entry (proves truncation)');
+  // …but it must NOT have been cached, so an identical query can retry.
+  assert.equal(
+    searchCache.get('total-timeout truncation query', opts),
+    null,
+    'a wall-clock-truncated partial fan-out must not be cached',
+  );
+});
+
+test('search: identical query re-invokes fetch after a truncated fan-out (cache miss)', async () => {
+  searchCache.clear();
+  let arxivHits = 0;
+  setFetchHandler(async (url) => {
+    if (url.includes('arxiv.org')) {
+      arxivHits += 1;
+      return textResponse('<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom"></feed>');
+    }
+    return new Promise(() => { /* openalex never resolves */ });
+  });
+  const opts = { providers: ['arxiv', 'openalex'], totalTimeoutMs: 50, timeoutMs: 5000, retries: 0 };
+  await ss.search('re-invoke after truncation query', opts);
+  const firstHits = arxivHits;
+  await ss.search('re-invoke after truncation query', opts);
+  assert.ok(
+    arxivHits > firstHits,
+    'the second identical search must re-fetch (cache miss), not serve a cached truncated result',
+  );
+});
+
+// ── caller aborts are NOT retried (finding #2) ───────────────────────────
+test('search: a pre-aborted caller signal is not retried across attempts', async () => {
+  searchCache.clear();
+  const controller = new AbortController();
+  controller.abort(); // caller cancelled before the search even started.
+  let arxivInvocations = 0;
+  setFetchHandler(async (url, fetchOpts) => {
+    if (url.includes('arxiv.org')) {
+      arxivInvocations += 1;
+      // Mirror real fetch: an aborted signal rejects with an abort error
+      // (which the transient regex would otherwise retry).
+      if (fetchOpts.signal && fetchOpts.signal.aborted) {
+        const err = new Error('This operation was aborted');
+        err.name = 'AbortError';
+        throw err;
+      }
+      return textResponse('<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom"></feed>');
+    }
+    return textResponse('<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom"></feed>');
+  });
+  // retries: 2 → without the signal short-circuit the aborted provider would be
+  // re-issued 3× (initial + 2 retries). With it, exactly 1 invocation.
+  const res = await ss.search('caller-abort probe', { providers: ['arxiv'], retries: 2, timeoutMs: 5000, signal: controller.signal });
+  assert.equal(arxivInvocations, 1, 'a caller cancel must not be retried');
+  assert.ok(res.errors.length >= 1, 'the aborted provider surfaces as an error');
 });
