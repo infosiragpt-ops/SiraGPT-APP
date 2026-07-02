@@ -2,6 +2,7 @@
 
 import { BrandLogo } from "@/components/BrandLogo"
 import { LoginButton } from "@/components/AuthNavButtons"
+import { StarSparkles } from "@/components/StarSparkles"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { useEffect, type ComponentType } from "react"
 import { motion } from "framer-motion"
@@ -50,6 +51,7 @@ export default function HomePage() {
 
   return (
     <div className="relative min-h-screen overflow-x-hidden bg-white text-neutral-950 dark:bg-neutral-950 dark:text-white">
+      <StarSparkles />
       <header className="fixed top-0 z-50 w-full border-b border-neutral-200/80 bg-white/90 backdrop-blur-xl dark:border-white/10 dark:bg-neutral-950/90">
         <div className="mx-auto flex w-full max-w-7xl items-center justify-between px-4 py-3 md:px-6 md:py-4">
           <BrandLogo />
