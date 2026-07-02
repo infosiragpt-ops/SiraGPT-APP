@@ -71,6 +71,7 @@ import {
   parseDotenvText,
   type CodeSecretEntry,
 } from "@/lib/code-secrets"
+import { detectWorkspaceSchema, fieldLabel } from "@/lib/code-agent/workspace-schema"
 import { RealGitPanel } from "@/components/code/git-tool-real"
 import { WorkspaceDeploymentsTool } from "@/components/deployments/workspace-deployments-tool"
 import { RealPublishingPanel } from "@/components/code/publishing-tool-real"
@@ -1654,6 +1655,7 @@ function ConfigRow({
 }
 
 function DatabaseTool() {
+  const { files } = useCodeWorkspace()
   const fallback: DbTable[] = [
     {
       name: "users",
@@ -1671,6 +1673,10 @@ function DatabaseTool() {
   const table = tables.find((row) => row.name === selected) || tables[0]
   const result = React.useMemo(() => runSql(query, tables), [query, tables])
 
+  // Real data model of the app being built, parsed from the workspace itself
+  // (prisma/schema.prisma or the in-memory CRUD API routes emitted by codegen).
+  const workspaceSchema = React.useMemo(() => detectWorkspaceSchema(files), [files])
+
   const addRow = () => {
     if (!table) return
     setTables((prev) => prev.map((item) => {
@@ -1681,13 +1687,95 @@ function DatabaseTool() {
     }))
   }
 
+  // Seed/refresh the local playground tables from the real workspace model so
+  // the SQL runner operates over the app's actual shape (rows are preserved
+  // for tables that already exist).
+  const importWorkspaceModel = () => {
+    if (!workspaceSchema) return
+    setTables((prev) => {
+      const prevByName = new Map(prev.map((item) => [item.name.toLowerCase(), item]))
+      const imported = workspaceSchema.models.map((model) => {
+        const name = model.name.toLowerCase()
+        const columns = model.fields.length > 0 ? model.fields.map((field) => field.name) : ["id"]
+        const existing = prevByName.get(name)
+        return {
+          name,
+          columns,
+          rows: existing ? existing.rows : [],
+        }
+      })
+      const importedNames = new Set(imported.map((item) => item.name))
+      return [...imported, ...prev.filter((item) => !importedNames.has(item.name))]
+    })
+    const first = workspaceSchema.models[0]
+    if (first) {
+      setSelected(first.name.toLowerCase())
+      setQuery(`select * from ${first.name.toLowerCase()}`)
+    }
+    toast.success(`Modelo importado: ${workspaceSchema.models.length} tabla(s) del workspace`)
+  }
+
   return (
     <ToolShell
-      eyebrow="Database · local"
+      eyebrow={workspaceSchema ? "Database · workspace" : "Database · local"}
       title="Postgres workspace"
-      detail="Prototipo LOCAL en el navegador (no persiste en el servidor): modela tablas y prueba consultas simples. La base Postgres por-proyecto real aún no está disponible."
+      detail={
+        workspaceSchema
+          ? `Modelo real detectado en ${workspaceSchema.path} (${workspaceSchema.models.length} modelo(s)). El playground de abajo es local al navegador; la base Postgres por-proyecto real aún no está disponible.`
+          : "Prototipo LOCAL en el navegador (no persiste en el servidor): modela tablas y prueba consultas simples. La base Postgres por-proyecto real aún no está disponible."
+      }
       action={<Button size="sm" className="h-8 gap-1.5" onClick={addRow}><Plus className="h-3.5 w-3.5" />Fila demo</Button>}
     >
+      {workspaceSchema ? (
+        <PanelCard
+          title="Modelo del workspace"
+          detail={
+            workspaceSchema.source === "prisma"
+              ? `Parseado de ${workspaceSchema.path}`
+              : "Detectado de las rutas API del proyecto"
+          }
+          icon={<Database className="h-4 w-4" />}
+          className="mb-3"
+        >
+          <div className="grid gap-2 sm:grid-cols-2">
+            {workspaceSchema.models.map((model) => (
+              <div key={model.name} className="rounded-md border border-border/60 bg-muted/20 p-2.5">
+                <p className="text-[12.5px] font-semibold">{model.name}</p>
+                {model.fields.length > 0 ? (
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {model.fields.map((field) => (
+                      <code
+                        key={field.name}
+                        className={cn(
+                          "rounded border border-border/50 bg-background px-1.5 py-0.5 text-[10.5px]",
+                          field.isId && "border-foreground/30 font-semibold",
+                          field.relation && "text-muted-foreground",
+                        )}
+                        title={[
+                          field.isId ? "primary key" : null,
+                          field.isUnique ? "unique" : null,
+                          field.relation ? `relación → ${field.relation}` : null,
+                          field.hasDefault ? "con default" : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ") || undefined}
+                      >
+                        {fieldLabel(field)}
+                      </code>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-1 text-[11px] text-muted-foreground">Campos no inferibles desde las rutas.</p>
+                )}
+              </div>
+            ))}
+          </div>
+          <Button size="sm" variant="outline" className="mt-3 h-8 gap-1.5" onClick={importWorkspaceModel}>
+            <Database className="h-3.5 w-3.5" />
+            Usar este modelo en el playground
+          </Button>
+        </PanelCard>
+      ) : null}
       <div className="grid min-h-[520px] gap-3 lg:grid-cols-[220px_1fr]">
         <PanelCard title="Tablas" detail="Modelo local" icon={<Database className="h-4 w-4" />} className="h-fit">
           <div className="space-y-1">
