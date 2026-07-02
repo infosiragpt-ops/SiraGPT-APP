@@ -32,6 +32,7 @@ import {
   Clock3,
   CircleHelp,
   ExternalLink,
+  History,
   Image as ImageIcon,
   LayoutGrid,
   ListChecks,
@@ -376,7 +377,7 @@ const COMPOSER_MODE_LABEL: Record<ComposerMode, string> = {
 }
 
 const COMPOSER_PLACEHOLDER: Record<ComposerMode, string> = {
-  app: "Describe lo que quieres construir o cambiar — el agente lo hace…",
+  app: "Crea, prueba, itera…",
   build: "Pide un cambio, pega código o / para comandos",
   plan: "Objetivo o plan antes de editar archivos…",
   debug: "Error, stack trace o comportamiento esperado…",
@@ -2140,49 +2141,87 @@ export function AICodeChatPanel() {
   }
 
   const activeFileLabel = activePath ? activePath.split("/").pop() || activePath : null
+  const activeSessionTitle =
+    codeChatSessions.find((session) => session.id === activeCodeChatSessionId)?.title?.trim() ||
+    "Nuevo chat"
+
+  // Replit-style "Plan" pill: flips the composer into plan mode and back to
+  // whatever mode was active before (defaults to "app").
+  const planReturnModeRef = React.useRef<ComposerMode>("app")
+  const togglePlanMode = React.useCallback(() => {
+    if (composerMode === "plan") {
+      setComposerMode(planReturnModeRef.current)
+    } else {
+      planReturnModeRef.current = composerMode
+      setComposerMode("plan")
+    }
+    inputRef.current?.focus()
+  }, [composerMode])
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-zinc-50/70 text-foreground dark:bg-zinc-950">
-      <div className="shrink-0 border-b border-border/60 bg-background/85 backdrop-blur">
-        <div className="flex h-9 items-center justify-between gap-2 px-3">
-          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Agente</span>
-          {activeFileLabel ? (
-            <span
-              className="min-w-0 truncate rounded-md border border-border/50 bg-muted/30 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/85"
-              title={activePath ?? undefined}
-            >
-              {activeFileLabel}
-            </span>
-          ) : null}
-        </div>
-        <div className="flex items-center gap-1 overflow-x-auto px-2 pb-2">
-          {codeChatSessions.map((session) => (
-            <button
-              key={session.id}
-              type="button"
-              onClick={() => setActiveCodeChatSession(session.id)}
-              className={cn(
-                "h-6 shrink-0 rounded-md border px-2 text-[11px] transition-colors",
-                session.id === activeCodeChatSessionId
-                  ? "border-[#FF0000]/30 bg-[#FF0000]/[0.07] text-foreground"
-                  : "border-transparent bg-muted/45 text-muted-foreground hover:border-border/60 hover:text-foreground",
-              )}
-            >
-              {session.title}
-            </button>
-          ))}
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6 shrink-0 rounded-md text-muted-foreground"
-            aria-label="Nuevo agente"
-            title="Nuevo chat en paralelo"
-            onClick={() => createCodeChatSession()}
+      {/* Replit-style panel header: current thread title + history / new-chat
+          actions (the session tabs collapsed into the history dropdown). */}
+      <div className="flex h-11 shrink-0 items-center gap-1.5 border-b border-border/60 bg-background px-3">
+        <span
+          className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground"
+          title={activeSessionTitle}
+        >
+          {activeSessionTitle}
+        </span>
+        {activeFileLabel ? (
+          <span
+            className="min-w-0 shrink truncate rounded-md border border-border/50 bg-muted/30 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/85"
+            title={activePath ?? undefined}
           >
-            <Plus className="h-3 w-3" />
-          </Button>
-        </div>
+            {activeFileLabel}
+          </span>
+        ) : null}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
+              aria-label="Historial de chats"
+              title="Historial de chats"
+            >
+              <History className="h-3.5 w-3.5" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-60 rounded-lg border-border/70 p-1.5">
+            <DropdownMenuLabel className="px-2 py-1 text-[11px] font-normal text-muted-foreground">
+              Chats del proyecto
+            </DropdownMenuLabel>
+            {codeChatSessions.map((session) => (
+              <DropdownMenuItem
+                key={session.id}
+                className={cn(
+                  "gap-2 rounded-md text-[13px]",
+                  session.id === activeCodeChatSessionId && "bg-muted/70 font-medium",
+                )}
+                onClick={() => setActiveCodeChatSession(session.id)}
+              >
+                <span className="min-w-0 flex-1 truncate">{session.title}</span>
+                {session.id === activeCodeChatSessionId ? (
+                  <Check className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                ) : null}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
+          aria-label="Nuevo agente"
+          title="Nuevo chat en paralelo"
+          onClick={() => createCodeChatSession()}
+        >
+          <Plus className="h-3.5 w-3.5" />
+        </Button>
       </div>
 
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto p-4">
@@ -2202,8 +2241,10 @@ export function AICodeChatPanel() {
         )}
       </div>
 
-      <form onSubmit={onSubmit} className="shrink-0 border-t border-border/50 bg-background/80 px-3 pb-3 pt-2 backdrop-blur">
-        <div className="group rounded-lg border border-border/70 bg-background px-2.5 py-2 shadow-sm transition-[border-color,box-shadow] focus-within:border-[#FF0000]/35 focus-within:shadow-[0_0_0_3px_rgba(255,0,0,0.08)]">
+      <form onSubmit={onSubmit} className="shrink-0 px-3 pb-3 pt-2">
+        {/* Replit-style composer card: the text field on top, then a footer
+            row with + on the left and model / Plan / mic / send on the right. */}
+        <div className="group rounded-xl border border-border/70 bg-background px-3 py-2.5 shadow-sm transition-[border-color,box-shadow] focus-within:border-[#0f87ff]/50 focus-within:shadow-[0_0_0_3px_rgba(15,135,255,0.10)]">
           <Textarea
             aria-label="Mensaje para el chat de código"
             ref={inputRef}
@@ -2214,7 +2255,7 @@ export function AICodeChatPanel() {
             rows={1}
             className="max-h-[140px] min-h-[28px] resize-none border-0 bg-transparent px-1 py-0.5 text-[13px] leading-[1.45] shadow-none outline-none ring-0 placeholder:text-muted-foreground/55 focus-visible:ring-0"
           />
-          <div className="mt-1 flex items-center gap-1.5">
+          <div className="mt-1.5 flex items-center gap-1">
             <ComposerPlusMenu
               mode={composerMode}
               includeContext={includeContext}
@@ -2228,13 +2269,38 @@ export function AICodeChatPanel() {
               onIncludeContextChange={setIncludeContext}
               onEngineModeChange={setEngineMode}
             />
+            <span className="min-w-0 flex-1" />
             <ModelPickerInline
               models={pickerModels}
               selectedModel={activeModelName || ""}
               fast={modelIsFast}
               onSelect={(m) => chooseCodeModel({ name: m.name, provider: m.provider })}
             />
-            <span className="min-w-0 flex-1" />
+            <button
+              type="button"
+              onClick={togglePlanMode}
+              aria-pressed={composerMode === "plan"}
+              title="Planear antes de editar archivos"
+              className={cn(
+                "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border px-2 text-[11px] font-medium transition-colors",
+                composerMode === "plan"
+                  ? "border-[#0f87ff]/40 bg-[#0f87ff]/10 text-[#0b6ccc] dark:text-[#5ab3ff]"
+                  : "border-border/45 text-muted-foreground hover:bg-muted/40 hover:text-foreground",
+              )}
+            >
+              <span
+                className={cn(
+                  "flex h-3.5 w-3.5 items-center justify-center rounded-[4px] border transition-colors",
+                  composerMode === "plan"
+                    ? "border-[#0f87ff] bg-[#0f87ff] text-white"
+                    : "border-border",
+                )}
+                aria-hidden="true"
+              >
+                {composerMode === "plan" ? <Check className="h-2.5 w-2.5" strokeWidth={3} /> : null}
+              </span>
+              Plan
+            </button>
             <DictationButton
               variant="light"
               locale={typeof navigator !== "undefined" ? navigator.language : "es-ES"}
@@ -2251,7 +2317,7 @@ export function AICodeChatPanel() {
                   <Button
                     type="submit"
                     size="icon"
-                    className="h-7 w-7 shrink-0 rounded-md bg-[#FF0000] text-white transition-colors hover:bg-[#E00000]"
+                    className="h-8 w-8 shrink-0 rounded-full bg-[#0f87ff] text-white transition-colors hover:bg-[#0c74dd]"
                     aria-label="Enviar al terminar"
                     title="Enviar al terminar"
                   >
@@ -2262,7 +2328,7 @@ export function AICodeChatPanel() {
                   type="button"
                   size="icon"
                   variant="ghost"
-                  className="h-7 w-7 shrink-0 rounded-md text-foreground hover:bg-muted"
+                  className="h-8 w-8 shrink-0 rounded-full text-foreground hover:bg-muted"
                   onClick={cancelStream}
                   aria-label="Detener"
                 >
@@ -2274,10 +2340,10 @@ export function AICodeChatPanel() {
                 type="submit"
                 size="icon"
                 className={cn(
-                  "h-7 w-7 shrink-0 rounded-md transition-colors",
+                  "h-8 w-8 shrink-0 rounded-full transition-colors",
                   input.trim()
-                    ? "bg-[#FF0000] text-white hover:bg-[#E00000]"
-                    : "bg-transparent text-muted-foreground/40",
+                    ? "bg-[#0f87ff] text-white hover:bg-[#0c74dd]"
+                    : "bg-muted text-muted-foreground/50",
                 )}
                 disabled={!input.trim()}
                 aria-label="Enviar"
@@ -2326,7 +2392,7 @@ function ChatBubble({
   if (isUser) {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-lg border border-[#FF0000]/20 bg-[#FF0000]/[0.08] px-3.5 py-2 text-sm leading-relaxed text-foreground shadow-sm">
+        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-xl border border-border/60 bg-muted/55 px-3.5 py-2 text-sm leading-relaxed text-foreground shadow-sm">
           {turn.content}
         </div>
       </div>
@@ -2346,7 +2412,7 @@ function ChatBubble({
       <div className="mb-1 flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-wide text-muted-foreground">
         Asistente
         {liveAgentLabel ? (
-          <span className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-[#FF0000]/15 bg-[#FF0000]/[0.07] px-2 py-0.5 normal-case tracking-normal text-[#C80000] dark:text-[#FF6B6B]">
+          <span className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-border/60 bg-muted/40 px-2 py-0.5 normal-case tracking-normal text-foreground/80">
             <BrainCircuit className="h-3 w-3 shrink-0" aria-hidden="true" />
             <span className="truncate font-medium">{liveAgentLabel}</span>
             {!turn.streaming && typeof turn.planMs === "number" ? (
@@ -2405,39 +2471,42 @@ function stripFences(text: string): string {
 function CodeAgentProgress({ phases }: { phases?: CodeAgentPhase[] }) {
   if (!phases || phases.length === 0) return null
 
+  // Replit-style task checklist: one compact row per phase with a status
+  // glyph, instead of a boxed grid — same real per-turn state underneath.
   return (
-    <div className="mb-2 grid gap-1.5 sm:grid-cols-5">
+    <div className="mb-2 space-y-1">
       {phases.map((phase) => {
         const isDone = phase.status === "done"
         const isRunning = phase.status === "running"
         const isError = phase.status === "error"
         return (
-          <div
-            key={phase.key}
-            className={cn(
-              "min-w-0 rounded-md border px-2 py-1.5 text-[11px] leading-tight transition-colors",
-              isDone && "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
-              isRunning && "border-blue-500/35 bg-blue-500/10 text-blue-700 dark:text-blue-300",
-              isError && "border-red-500/35 bg-red-500/10 text-red-700 dark:text-red-300",
-              phase.status === "pending" && "border-border/60 bg-muted/20 text-muted-foreground",
-            )}
-          >
-            <div className="flex min-w-0 items-center gap-1.5">
-              <span
-                className={cn(
-                  "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border text-[9px]",
-                  isDone && "border-emerald-500/40 bg-emerald-500 text-white",
-                  isRunning && "border-blue-500/40 bg-blue-500 text-white",
-                  isError && "border-red-500/40 bg-red-500 text-white",
-                  phase.status === "pending" && "border-border bg-background text-muted-foreground",
-                )}
-                aria-hidden="true"
-              >
-                {isDone ? <Check className="h-3 w-3" /> : isError ? <AlertTriangle className="h-3 w-3" /> : isRunning ? <DotmCircular15 size={14} dotSize={2} color="#ffffff" ariaLabel="Trabajando" className="shrink-0" /> : null}
-              </span>
-              <span className="truncate font-medium">{phase.label}</span>
-            </div>
-            {phase.detail ? <div className="mt-1 truncate opacity-75">{phase.detail}</div> : null}
+          <div key={phase.key} className="flex min-w-0 items-center gap-2 text-[12px] leading-tight">
+            <span
+              className={cn(
+                "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border",
+                isDone && "border-emerald-500/40 bg-emerald-500 text-white",
+                isRunning && "border-blue-500/40 bg-blue-500 text-white",
+                isError && "border-red-500/40 bg-red-500 text-white",
+                phase.status === "pending" && "border-border bg-background text-muted-foreground",
+              )}
+              aria-hidden="true"
+            >
+              {isDone ? <Check className="h-3 w-3" /> : isError ? <AlertTriangle className="h-3 w-3" /> : isRunning ? <DotmCircular15 size={14} dotSize={2} color="#ffffff" ariaLabel="Trabajando" className="shrink-0" /> : null}
+            </span>
+            <span
+              className={cn(
+                "truncate font-medium",
+                isDone && "text-foreground/85",
+                isRunning && "text-foreground",
+                isError && "text-red-600 dark:text-red-400",
+                phase.status === "pending" && "text-muted-foreground",
+              )}
+            >
+              {phase.label}
+            </span>
+            {phase.detail ? (
+              <span className="min-w-0 truncate text-muted-foreground/70">— {phase.detail}</span>
+            ) : null}
           </div>
         )
       })}
@@ -2492,9 +2561,11 @@ function ChatWorkedSummary({ metrics }: { metrics: CodeChatMetrics }) {
   const hasCost = typeof orig === "number" || typeof applied === "number"
   const showStrike = typeof orig === "number" && typeof applied === "number" && applied < orig
   return (
-    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-border/60 bg-muted/20 px-2.5 py-1.5 text-[11px] text-muted-foreground">
-      <span className="inline-flex items-center gap-1 font-medium text-foreground">
-        <Clock3 className="h-3.5 w-3.5 text-[#FF0000]" aria-hidden="true" />
+    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 py-1 text-[11px] text-muted-foreground">
+      <span className="inline-flex items-center gap-1.5 font-medium text-foreground/85">
+        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-border/70">
+          <Clock3 className="h-3 w-3 text-muted-foreground" aria-hidden="true" />
+        </span>
         Trabajó {formatWorked(metrics.timeWorkedMs)}
       </span>
       {hasFiles ? (
@@ -2579,7 +2650,7 @@ function ComposerPlusMenu({
           type="button"
           variant="ghost"
           size="icon"
-          className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:bg-[#FF0000]/[0.07] hover:text-[#C80000] dark:hover:text-[#FF6B6B]"
+          className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:bg-muted/60 hover:text-foreground"
           aria-label="Modo, contexto y herramientas"
         >
           <Plus className="h-4 w-4" />
@@ -2604,35 +2675,35 @@ function ComposerPlusMenu({
         </DropdownMenuItem>
         <DropdownMenuSeparator className="my-2" />
         <DropdownMenuItem
-          className={cn(itemClass, mode === "app" && "bg-[#FF0000]/[0.07] font-medium text-foreground")}
+          className={cn(itemClass, mode === "app" && "bg-muted/70 font-medium text-foreground")}
           onClick={() => onModeChange("app")}
         >
           <Rocket className={iconClass} />
           <span>App · construir desde cero</span>
         </DropdownMenuItem>
         <DropdownMenuItem
-          className={cn(itemClass, mode === "build" && "bg-[#FF0000]/[0.07] font-medium text-foreground")}
+          className={cn(itemClass, mode === "build" && "bg-muted/70 font-medium text-foreground")}
           onClick={() => onModeChange("build")}
         >
           <Sparkles className={iconClass} />
           <span>Build</span>
         </DropdownMenuItem>
         <DropdownMenuItem
-          className={cn(itemClass, mode === "plan" && "bg-[#FF0000]/[0.07] font-medium text-foreground")}
+          className={cn(itemClass, mode === "plan" && "bg-muted/70 font-medium text-foreground")}
           onClick={() => onModeChange("plan")}
         >
           <ListChecks className={iconClass} />
           <span>Plan</span>
         </DropdownMenuItem>
         <DropdownMenuItem
-          className={cn(itemClass, mode === "debug" && "bg-[#FF0000]/[0.07] font-medium text-foreground")}
+          className={cn(itemClass, mode === "debug" && "bg-muted/70 font-medium text-foreground")}
           onClick={() => onModeChange("debug")}
         >
           <Bug className={iconClass} />
           <span>Debug</span>
         </DropdownMenuItem>
         <DropdownMenuItem
-          className={cn(itemClass, mode === "ask" && "bg-[#FF0000]/[0.07] font-medium text-foreground")}
+          className={cn(itemClass, mode === "ask" && "bg-muted/70 font-medium text-foreground")}
           onClick={() => onModeChange("ask")}
         >
           <CircleHelp className={iconClass} />
@@ -2640,7 +2711,7 @@ function ComposerPlusMenu({
         </DropdownMenuItem>
         <DropdownMenuSeparator className="my-2" />
         <DropdownMenuItem
-          className={cn(itemClass, mode === "image" && "bg-[#FF0000]/[0.07] font-medium text-foreground")}
+          className={cn(itemClass, mode === "image" && "bg-muted/70 font-medium text-foreground")}
           onClick={() => onModeChange("image")}
         >
           <ImageIcon className={iconClass} />
@@ -2754,7 +2825,7 @@ function ModelPickerInline({
           className={cn(
             "inline-flex h-7 max-w-[min(168px,38vw)] shrink-0 items-center gap-1 rounded-md border px-2.5 text-[11px] font-medium transition-colors",
             "border-border/45 bg-background/60 text-foreground/75 hover:border-border hover:bg-muted/40 hover:text-foreground",
-            "data-[state=open]:border-[#FF0000]/30 data-[state=open]:bg-[#FF0000]/[0.06] data-[state=open]:text-foreground",
+            "data-[state=open]:border-border data-[state=open]:bg-muted/60 data-[state=open]:text-foreground",
           )}
           aria-label="Seleccionar modelo"
           title={
@@ -2818,14 +2889,14 @@ function ModelPickerInline({
                       }}
                       className={cn(
                         "cursor-pointer rounded-lg px-2 py-1.5 text-[13px] font-normal",
-                        selected && "bg-[#FF0000]/[0.07] text-foreground",
+                        selected && "bg-muted/70 text-foreground",
                       )}
                     >
                       <span className="min-w-0 flex-1 truncate">{itemLabel}</span>
                       {itemFast ? (
                         <span className="ml-2 shrink-0 text-[10px] text-muted-foreground/70">Rápido</span>
                       ) : null}
-                      {selected ? <Check className="ml-2 h-3.5 w-3.5 shrink-0 text-[#FF0000]" /> : null}
+                      {selected ? <Check className="ml-2 h-3.5 w-3.5 shrink-0 text-muted-foreground" /> : null}
                     </DropdownMenuItem>
                   )
                 })}

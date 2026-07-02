@@ -102,7 +102,7 @@ function ToolBody({
 }) {
   switch (toolId) {
     case "preview":
-      return <PreviewPane onClose={onClose} />
+      return <PreviewPane />
     case "shell":
       return <TerminalPanel open onClose={onClose} />
     case "files":

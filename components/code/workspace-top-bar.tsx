@@ -1,11 +1,14 @@
 "use client"
 
 import * as React from "react"
+import Link from "next/link"
 import {
   CheckCircle2,
   FolderGit2,
   GitBranch,
+  Globe,
   Monitor,
+  PanelLeft,
   Plus,
   Search,
   Terminal,
@@ -33,135 +36,177 @@ const PANELS: PanelDef[] = [
 ]
 
 export type WorkspaceTopBarProps = {
-  openPanels: Set<WorkspacePanelId>
-  activePanel: WorkspacePanelId | null
-  onTogglePanel: (id: WorkspacePanelId) => void
-  onClosePanel: (id: WorkspacePanelId) => void
-  onOpenPalette: (query?: string) => void
   onOpenSearch: () => void
   onOpenInvite: () => void
   inviteOpen?: boolean
   onOpenCode: () => void
   codeOpen?: boolean
-  toolsMenu?: React.ReactNode
+  onOpenPublishing: () => void
+  publishingOpen?: boolean
+  onToggleChat: () => void
 }
 
+/**
+ * Replit-style global header: project identity + Upgrade on the left; the
+ * search / Código / Invitar / Publicar cluster + chat toggle on the right.
+ * The panel tabs live in WorkspaceTabStrip at the top of the main pane.
+ */
 export function WorkspaceTopBar({
-  openPanels,
-  activePanel,
-  onTogglePanel,
-  onClosePanel,
-  onOpenPalette,
   onOpenSearch,
   onOpenInvite,
   inviteOpen,
   onOpenCode,
   codeOpen,
-  toolsMenu,
+  onOpenPublishing,
+  publishingOpen,
+  onToggleChat,
 }: WorkspaceTopBarProps) {
+  return (
+    <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border/60 bg-background px-2.5">
+      <ProjectChip onOpenCode={onOpenCode} />
+      <Link
+        href="/plan"
+        className="flex h-6 shrink-0 items-center gap-0.5 rounded-md bg-[#0f87ff] px-2 text-[11px] font-semibold text-white transition-colors hover:bg-[#0c74dd]"
+        title="Mejorar plan"
+      >
+        <Plus className="h-3 w-3" strokeWidth={2.5} />
+        Upgrade
+      </Link>
+
+      <span className="min-w-0 flex-1" />
+
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
+        aria-label="Buscar"
+        onClick={onOpenSearch}
+      >
+        <Search className="h-3.5 w-3.5" />
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        aria-label="Código del proyecto"
+        title="Código del proyecto"
+        aria-pressed={codeOpen}
+        onClick={onOpenCode}
+        className={cn(
+          "h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground",
+          codeOpen && "bg-muted/70 text-foreground",
+        )}
+      >
+        <FolderGit2 className="h-3.5 w-3.5" />
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        aria-label="Invitar miembro al workspace"
+        aria-pressed={inviteOpen}
+        onClick={onOpenInvite}
+        className={cn(
+          "h-7 shrink-0 rounded-md px-2.5 text-[11px] font-medium transition-colors",
+          inviteOpen
+            ? "bg-muted/70 text-foreground"
+            : "text-muted-foreground hover:text-foreground",
+        )}
+      >
+        <UserPlus className="mr-1 h-3 w-3" />
+        Invitar
+      </Button>
+      <button
+        type="button"
+        aria-label="Publicar el proyecto"
+        aria-pressed={publishingOpen}
+        onClick={onOpenPublishing}
+        className={cn(
+          "flex h-7 shrink-0 items-center gap-1.5 rounded-md px-3 text-[11px] font-semibold transition-colors",
+          "bg-zinc-900 text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white",
+        )}
+      >
+        <Globe className="h-3 w-3" />
+        Publicar
+      </button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
+        aria-label="Mostrar u ocultar el chat del agente"
+        title="Mostrar u ocultar el chat"
+        onClick={onToggleChat}
+      >
+        <PanelLeft className="h-3.5 w-3.5" />
+      </Button>
+    </header>
+  )
+}
+
+export type WorkspaceTabStripProps = {
+  openPanels: Set<WorkspacePanelId>
+  activePanel: WorkspacePanelId | null
+  onTogglePanel: (id: WorkspacePanelId) => void
+  onClosePanel: (id: WorkspacePanelId) => void
+  toolsMenu?: React.ReactNode
+}
+
+/**
+ * Replit-style workspace tab strip: one closable tab per open panel plus the
+ * "+" tool opener, sitting at the top of the main pane (right of the chat).
+ */
+export function WorkspaceTabStrip({
+  openPanels,
+  activePanel,
+  onTogglePanel,
+  onClosePanel,
+  toolsMenu,
+}: WorkspaceTabStripProps) {
   const visible = PANELS.filter((p) => openPanels.has(p.id))
 
   return (
-    <header className="flex h-9 shrink-0 items-center gap-1.5 border-b border-border/60 bg-background/85 px-2 shadow-[0_1px_0_rgba(15,23,42,0.03)] backdrop-blur-xl supports-[backdrop-filter]:bg-background/72">
-      {/* Left — editable project identity (sits above the chat column). */}
-      <ProjectChip onOpenCode={onOpenCode} />
-      <span className="h-4 w-px shrink-0 bg-border/50" />
-
-      {/* Center — panel tabs + tools + search (sits above the preview). */}
-      <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto px-0.5">
-        {visible.map((panel) => {
-          const Icon = panel.icon
-          const active = activePanel === panel.id
-          return (
-            <div
-              key={panel.id}
-              className={cn(
-                "group flex h-7 shrink-0 items-center gap-1 rounded-md border border-transparent px-2.5 text-[11px] text-muted-foreground transition-colors",
-                active && "border-[#FF0000]/25 bg-[#FF0000]/[0.06] text-foreground",
-                !active && "hover:bg-muted/55 hover:text-foreground",
-              )}
-            >
-              <button
-                type="button"
-                className="flex min-w-0 items-center gap-1"
-                onClick={() => onTogglePanel(panel.id)}
-              >
-                <Icon className={cn("h-3.5 w-3.5 shrink-0", active && "text-[#FF0000]")} />
-                <span className="truncate">{panel.label}</span>
-              </button>
-              <button
-                type="button"
-                className="ml-0.5 rounded p-0.5 opacity-0 transition-opacity hover:bg-muted group-hover:opacity-100"
-                aria-label={`Cerrar ${panel.label}`}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onClosePanel(panel.id)
-                }}
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </div>
-          )
-        })}
-        {toolsMenu ?? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 shrink-0 rounded-md text-muted-foreground"
-            aria-label="Herramientas y archivos"
-            onClick={() => onOpenPalette()}
+    <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border/60 bg-muted/25 px-1.5">
+      {visible.map((panel) => {
+        const Icon = panel.icon
+        const active = activePanel === panel.id
+        return (
+          <div
+            key={panel.id}
+            className={cn(
+              "group flex h-7 shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-[12px] transition-colors",
+              active
+                ? "border-border/70 bg-background text-foreground shadow-sm"
+                : "border-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+            )}
           >
-            <Plus className="h-3.5 w-3.5" />
-          </Button>
-        )}
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7 shrink-0 rounded-md text-muted-foreground"
-          aria-label="Buscar"
-          onClick={onOpenSearch}
-        >
-          <Search className="h-3.5 w-3.5" />
-        </Button>
-      </div>
-      <div className="flex shrink-0 items-center gap-1 pl-1">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          aria-label="Invitar miembro al workspace"
-          aria-pressed={inviteOpen}
-          onClick={onOpenInvite}
-          className={cn(
-            "h-7 rounded-md px-2.5 text-[11px] font-medium transition-colors",
-            inviteOpen
-              ? "bg-[#FF0000]/[0.07] text-[#C80000] shadow-[inset_0_0_0_1px_rgba(255,0,0,0.22)] dark:text-[#FF6B6B]"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          <UserPlus className="mr-1 h-3 w-3" />
-          Invitar
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          aria-label="Código del proyecto"
-          aria-pressed={codeOpen}
-          onClick={onOpenCode}
-          className={cn(
-            "h-7 rounded-md px-2.5 text-[11px] font-medium transition-colors",
-            codeOpen
-              ? "bg-[#FF0000]/[0.07] text-[#C80000] shadow-[inset_0_0_0_1px_rgba(255,0,0,0.22)] dark:text-[#FF6B6B]"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          <FolderGit2 className="mr-1 h-3 w-3" />
-          Código
-        </Button>
-      </div>
-    </header>
+            <button
+              type="button"
+              className="flex min-w-0 items-center gap-1.5"
+              onClick={() => onTogglePanel(panel.id)}
+            >
+              <Icon className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">{panel.label}</span>
+            </button>
+            <button
+              type="button"
+              className={cn(
+                "rounded p-0.5 transition-opacity hover:bg-muted",
+                active ? "opacity-60 hover:opacity-100" : "opacity-0 group-hover:opacity-60",
+              )}
+              aria-label={`Cerrar ${panel.label}`}
+              onClick={(e) => {
+                e.stopPropagation()
+                onClosePanel(panel.id)
+              }}
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        )
+      })}
+      {toolsMenu ?? null}
+    </div>
   )
 }

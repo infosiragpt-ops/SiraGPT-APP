@@ -11,9 +11,13 @@
 
 import * as React from "react"
 import {
+  ChevronLeft,
+  ChevronRight,
   Circle,
   Eraser,
   ExternalLink,
+  LayoutGrid,
+  Lock,
   Monitor,
   Play,
   RefreshCw,
@@ -22,7 +26,6 @@ import {
   Square,
   Tablet,
   TerminalSquare,
-  X,
   Zap,
   ZapOff,
 } from "lucide-react"
@@ -85,13 +88,15 @@ const KIND_LABEL: Record<PreviewKind, string> = {
   empty: "—",
 }
 
-export function PreviewPane({ onClose }: { onClose?: () => void }) {
+export function PreviewPane() {
   const { files, activePath, activeFolder } = useCodeWorkspace()
 
   const [auto, setAuto] = React.useState(true)
+  // v2 key: the Replit-style layout defaults everyone back to the full-width
+  // responsive viewport; the old key could pin stale phone/tablet choices.
   const [device, setDevice] = React.useState<Device>(() => {
     if (typeof window === "undefined") return "responsive"
-    const saved = window.localStorage.getItem("code-workspace:preview-device")
+    const saved = window.localStorage.getItem("code-workspace:preview-device.v2")
     return saved === "phone" || saved === "tablet" ? saved : "responsive"
   })
   const [orientation, setOrientation] = React.useState<Orientation>("portrait")
@@ -102,7 +107,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
   const [pathDraft, setPathDraft] = React.useState("/")
   React.useEffect(() => {
     try {
-      window.localStorage.setItem("code-workspace:preview-device", device)
+      window.localStorage.setItem("code-workspace:preview-device.v2", device)
     } catch {
       /* storage disabled — fail soft */
     }
@@ -630,11 +635,39 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
   const nominal = framed ? DEVICE_VIEWPORTS[device] : null
   const frameW = nominal ? (orientation === "landscape" ? nominal.h : nominal.w) : null
   const frameH = nominal ? (orientation === "landscape" ? nominal.w : nominal.h) : null
+  // Lightweight back/forward history over the address-bar sub-routes so the
+  // Replit-style nav arrows work without reaching into the sandboxed iframe
+  // (its opaque origin blocks contentWindow.history access by design).
+  const [navStack, setNavStack] = React.useState<string[]>(["/"])
+  const [navPos, setNavPos] = React.useState(0)
+  const navigateTo = React.useCallback(
+    (clean: string) => {
+      if (clean === navPath) return
+      const next = navStack.slice(0, navPos + 1)
+      next.push(clean)
+      setNavStack(next)
+      setNavPos(next.length - 1)
+      setNavPath(clean)
+    },
+    [navPath, navPos, navStack],
+  )
+  const goBack = React.useCallback(() => {
+    if (navPos <= 0) return
+    const target = navStack[navPos - 1] ?? "/"
+    setNavPos(navPos - 1)
+    setNavPath(target)
+  }, [navPos, navStack])
+  const goForward = React.useCallback(() => {
+    if (navPos + 1 >= navStack.length) return
+    const target = navStack[navPos + 1] ?? "/"
+    setNavPos(navPos + 1)
+    setNavPath(target)
+  }, [navPos, navStack])
   const commitPath = React.useCallback(() => {
     const clean = `/${pathDraft.trim().replace(/^\/+/, "")}`
     setPathDraft(clean)
-    setNavPath(clean)
-  }, [pathDraft])
+    navigateTo(clean)
+  }, [navigateTo, pathDraft])
   // Keep the draft in sync when navPath is reset externally (e.g. a new run).
   React.useEffect(() => {
     setPathDraft(navPath)
@@ -642,25 +675,53 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-zinc-50 dark:bg-zinc-950">
-      <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border/60 bg-background/85 px-2 shadow-[0_1px_0_rgba(15,23,42,0.03)] backdrop-blur-xl supports-[backdrop-filter]:bg-background/72">
-        <div className="flex items-center gap-1 pl-0.5">
-          <span className="h-2.5 w-2.5 rounded-full bg-rose-400/80" />
-          <span className="h-2.5 w-2.5 rounded-full bg-amber-400/80" />
-          <span className="h-2.5 w-2.5 rounded-full bg-emerald-400/80" />
-        </div>
+      <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border/60 bg-background px-2">
+        {/* Canvas — Replit-position viewport menu (device sizes + rotation). */}
+        <DeviceMenu
+          device={device}
+          orientation={orientation}
+          open={deviceMenuOpen}
+          widthReadout={frameW}
+          heightReadout={frameH}
+          onOpenChange={setDeviceMenuOpen}
+          onDevice={setDevice}
+          onRotate={() => setOrientation((o) => (o === "portrait" ? "landscape" : "portrait"))}
+        />
+
+        <span className="mx-0.5 h-4 w-px shrink-0 bg-border/60" />
 
         <button
           type="button"
+          onClick={goBack}
+          disabled={!isLive || navPos <= 0}
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35"
+          aria-label="Atrás"
+          title="Atrás"
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          onClick={goForward}
+          disabled={!isLive || navPos + 1 >= navStack.length}
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35"
+          aria-label="Adelante"
+          title="Adelante"
+        >
+          <ChevronRight className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
           onClick={refresh}
-          className="ml-1 flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
           aria-label="Recargar preview"
           title="Recargar"
         >
           {building ? <ThinkingIndicator size="xs" /> : <RefreshCw className="h-3.5 w-3.5" />}
         </button>
 
-        <div className="flex min-w-0 flex-1 items-center gap-2 rounded-md border border-border/50 bg-muted/25 px-3 py-1 text-[11px] text-muted-foreground shadow-inner">
-          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#FF0000]" />
+        <div className="flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-full border border-border/50 bg-muted/40 px-3 text-[11px] text-muted-foreground">
+          <Lock className="h-3 w-3 shrink-0 opacity-50" />
           {isLive ? (
             // Editable address bar → re-points the live iframe to a sub-route.
             <form
@@ -692,27 +753,15 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
         </div>
 
         <div className="flex shrink-0 items-center gap-0.5">
-          <DeviceMenu
-            device={device}
-            orientation={orientation}
-            open={deviceMenuOpen}
-            widthReadout={frameW}
-            heightReadout={frameH}
-            onOpenChange={setDeviceMenuOpen}
-            onDevice={setDevice}
-            onRotate={() => setOrientation((o) => (o === "portrait" ? "landscape" : "portrait"))}
-          />
-
           {/* Phase B — auto-run stays primary; manual run is available when idle/error. */}
           {canRunProject ? (
             <>
-              <span className="mx-0.5 h-4 w-px bg-border/50" />
               {liveRun.phase === "ready" || liveRun.phase === "starting" ? (
                 <button
                   type="button"
                   onClick={stopApp}
                   title="Detener el dev server"
-                  className="flex h-6 items-center gap-1 rounded-md bg-[#FF0000]/[0.08] px-2 text-[11px] font-medium text-[#C80000] transition-colors hover:bg-[#FF0000]/[0.14] dark:text-[#FF6B6B]"
+                  className="flex h-6 items-center gap-1 rounded-md bg-red-600/90 px-2 text-[11px] font-medium text-white transition-colors hover:bg-red-600"
                 >
                   {liveRun.phase === "starting" ? <ThinkingIndicator size="xs" /> : <Square className="h-3 w-3" />}
                   <span>{liveRun.phase === "starting" ? "Arrancando…" : "Detener"}</span>
@@ -722,12 +771,13 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
                   type="button"
                   onClick={() => void runApp()}
                   title="Instalar dependencias y correr el app (npm)"
-                  className="flex h-6 items-center gap-1 rounded-md bg-[#FF0000]/[0.08] px-2 text-[11px] font-medium text-[#C80000] transition-colors hover:bg-[#FF0000]/[0.14] dark:text-[#FF6B6B]"
+                  className="flex h-6 items-center gap-1 rounded-md bg-emerald-600 px-2 text-[11px] font-medium text-white transition-colors hover:bg-emerald-500"
                 >
                   <Play className="h-3 w-3" />
                   <span>{gitBinding ? "Ejecutar repo" : "Ejecutar"}</span>
                 </button>
               )}
+              <span className="mx-0.5 h-4 w-px bg-border/50" />
             </>
           ) : null}
 
@@ -786,22 +836,17 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
           >
             <ExternalLink className="h-3.5 w-3.5" />
           </button>
-          {onClose ? (
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
-              aria-label="Cerrar preview"
-              title="Cerrar preview"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          ) : null}
         </div>
       </div>
 
-      {/* Viewport */}
-      <div className="min-h-0 flex-1 overflow-auto bg-zinc-100 p-0 dark:bg-zinc-900/55">
+      {/* Viewport — full-bleed white when responsive (Replit-style); the gray
+          canvas only shows behind the framed tablet/phone mockups. */}
+      <div
+        className={cn(
+          "min-h-0 flex-1 overflow-auto p-0",
+          framed ? "bg-zinc-100 dark:bg-zinc-900/55" : "bg-white dark:bg-zinc-900",
+        )}
+      >
         {liveRun.phase === "ready" ? (
           // Real running app from the cloud runner (npm dev server).
           <DeviceFrame device={device} width={frameW} height={frameH}>
@@ -834,7 +879,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
             <button
               type="button"
               onClick={() => void runApp()}
-              className="rounded-md bg-[#FF0000]/[0.08] px-3 py-1.5 text-[12px] font-medium text-[#C80000] hover:bg-[#FF0000]/[0.14] dark:text-[#FF6B6B]"
+              className="rounded-md bg-red-500/10 px-3 py-1.5 text-[12px] font-medium text-red-600 hover:bg-red-500/15 dark:text-red-400"
             >
               Reintentar manualmente
             </button>
@@ -854,7 +899,7 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
             <button
               type="button"
               onClick={retryFromStuck}
-              className="rounded-md bg-[#FF0000]/[0.08] px-3 py-1.5 text-[12px] font-medium text-[#C80000] hover:bg-[#FF0000]/[0.14] dark:text-[#FF6B6B]"
+              className="rounded-md bg-red-500/10 px-3 py-1.5 text-[12px] font-medium text-red-600 hover:bg-red-500/15 dark:text-red-400"
             >
               Reintentar
             </button>
@@ -950,7 +995,7 @@ function PreviewLaunchpad({ kind, note }: { kind: PreviewKind; note?: string }) 
             onClick={() =>
               window.dispatchEvent(new CustomEvent("siragpt:code-load-template", { detail: { id: t.id } }))
             }
-            className="flex flex-col items-start rounded-lg border border-border/60 bg-background px-4 py-3 text-left shadow-sm transition-colors hover:border-[#FF0000]/25 hover:bg-[#FF0000]/[0.04]"
+            className="flex flex-col items-start rounded-lg border border-border/60 bg-background px-4 py-3 text-left shadow-sm transition-colors hover:border-border hover:bg-muted/40"
           >
             <span className="text-[13px] font-medium text-foreground">{t.name}</span>
             <span className="text-[11px] text-muted-foreground">{t.description}</span>
@@ -981,7 +1026,7 @@ function GlassToggle({
       aria-pressed={active}
       className={cn(
         "flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground",
-        active && "bg-[#FF0000]/[0.07] text-[#C80000] ring-1 ring-[#FF0000]/20 dark:text-[#FF6B6B]",
+        active && "bg-muted text-foreground ring-1 ring-border/70",
       )}
     >
       {children}
@@ -989,11 +1034,6 @@ function GlassToggle({
   )
 }
 
-const DEVICE_ICON: Record<Device, React.ReactNode> = {
-  responsive: <Monitor className="h-3.5 w-3.5" />,
-  tablet: <Tablet className="h-3.5 w-3.5" />,
-  phone: <Smartphone className="h-3.5 w-3.5" />,
-}
 const DEVICE_ROWS: { id: Device; label: string; icon: React.ReactNode }[] = [
   { id: "responsive", label: "Escritorio", icon: <Monitor className="h-3.5 w-3.5" /> },
   { id: "tablet", label: "Tablet", icon: <Tablet className="h-3.5 w-3.5" /> },
@@ -1032,26 +1072,31 @@ function DeviceMenu({
   }, [open, onOpenChange])
   const framed = device !== "responsive"
   return (
-    <div ref={ref} className="relative flex items-center gap-0.5">
-      <GlassToggle active={framed} onClick={() => onOpenChange(!open)} label="Tamaño de pantalla">
-        {DEVICE_ICON[device]}
-      </GlassToggle>
-      {framed && widthReadout && heightReadout ? (
-        <span className="shrink-0 rounded bg-background/70 px-1 py-px font-mono text-[9px] tabular-nums text-muted-foreground/80">
-          {widthReadout}×{heightReadout}
-        </span>
-      ) : null}
-      {framed ? (
-        <GlassToggle
-          active={orientation === "landscape"}
-          onClick={onRotate}
-          label={orientation === "portrait" ? "Rotar a horizontal" : "Rotar a vertical"}
-        >
-          <RotateCw className="h-3.5 w-3.5" />
-        </GlassToggle>
-      ) : null}
+    <div ref={ref} className="relative flex shrink-0 items-center">
+      {/* "Canvas" opener — Replit's preview-toolbar button in the same spot;
+          here it drives the viewport (device size + rotation) menu. */}
+      <button
+        type="button"
+        onClick={() => onOpenChange(!open)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="Tamaño de pantalla"
+        title="Tamaño de pantalla del preview"
+        className={cn(
+          "flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-border/60 bg-background px-2.5 text-[12px] font-medium text-foreground transition-colors hover:bg-muted/60",
+          open && "bg-muted/60",
+        )}
+      >
+        <LayoutGrid className="h-3.5 w-3.5 text-muted-foreground" />
+        <span>Canvas</span>
+        {framed && widthReadout && heightReadout ? (
+          <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
+            {widthReadout}×{heightReadout}
+          </span>
+        ) : null}
+      </button>
       {open ? (
-        <div className="absolute right-0 top-8 z-20 w-40 overflow-hidden rounded-md border border-border/60 bg-background/95 py-1 shadow-lg backdrop-blur-xl">
+        <div className="absolute left-0 top-9 z-20 w-44 overflow-hidden rounded-md border border-border/60 bg-background/95 py-1 shadow-lg backdrop-blur-xl">
           {DEVICE_ROWS.map((row) => (
             <button
               key={row.id}
@@ -1062,7 +1107,7 @@ function DeviceMenu({
               }}
               className={cn(
                 "flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-foreground transition-colors hover:bg-muted/60",
-                device === row.id && "text-[#C80000] dark:text-[#FF6B6B]",
+                device === row.id && "font-medium",
               )}
             >
               {row.icon}
@@ -1070,6 +1115,21 @@ function DeviceMenu({
               {device === row.id ? <Circle className="h-1.5 w-1.5 fill-current" /> : null}
             </button>
           ))}
+          <div className="my-1 h-px bg-border/60" />
+          <button
+            type="button"
+            disabled={!framed}
+            onClick={() => {
+              onRotate()
+              onOpenChange(false)
+            }}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-foreground transition-colors hover:bg-muted/60 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <RotateCw className="h-3.5 w-3.5" />
+            <span className="flex-1">
+              {orientation === "portrait" ? "Rotar a horizontal" : "Rotar a vertical"}
+            </span>
+          </button>
         </div>
       ) : null}
     </div>
