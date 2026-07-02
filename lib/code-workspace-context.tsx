@@ -82,6 +82,21 @@ export const CODE_OPEN_TOOL_LAUNCHER_EVENT = "siragpt:code-open-tool-launcher"
 // client-side pseudo-shell).
 export const CODE_RUNNER_ACTIVE_EVENT = "siragpt:code-runner-active"
 
+// The event is fire-and-forget, so a tool that mounts AFTER the run started
+// (e.g. opening the Shell once the preview is already live) would miss it. Keep
+// the last value in a module singleton + a setter that both stores and
+// broadcasts, so late consumers can read the current run on mount.
+let _activeHostRunId: string | null = null
+export function setActiveHostRunId(runId: string | null) {
+  _activeHostRunId = runId
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(CODE_RUNNER_ACTIVE_EVENT, { detail: { runId } }))
+  }
+}
+export function getActiveHostRunId(): string | null {
+  return _activeHostRunId
+}
+
 export type CodeNewChatDetail = {
   workspaceId: string
   name: string

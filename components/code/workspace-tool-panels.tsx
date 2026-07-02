@@ -59,7 +59,7 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
-import { CODE_RUNNER_ACTIVE_EVENT, useCodeWorkspace } from "@/lib/code-workspace-context"
+import { CODE_RUNNER_ACTIVE_EVENT, getActiveHostRunId, useCodeWorkspace } from "@/lib/code-workspace-context"
 import { hostRunnerService } from "@/lib/code-runner/host-runner-service"
 import { ALL_TOOLS, type WorkspaceToolId } from "@/lib/code-workspace-tools"
 import {
@@ -2405,7 +2405,7 @@ function WorkflowsTool() {
 // Live dev-server output: subscribes to the active host run (broadcast by
 // preview-pane) and polls its real log tail. Returns [] when no run is live.
 function useLiveRunnerTail() {
-  const [runId, setRunId] = React.useState<string | null>(null)
+  const [runId, setRunId] = React.useState<string | null>(() => getActiveHostRunId())
   const [tail, setTail] = React.useState<string[]>([])
   const [phase, setPhase] = React.useState<string>("")
   React.useEffect(() => {

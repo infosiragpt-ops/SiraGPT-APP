@@ -20,7 +20,7 @@ import * as React from "react"
 import { ChevronDown, Search, Trash2, X } from "lucide-react"
 
 import { cn } from "@/lib/utils"
-import { CODE_RUNNER_ACTIVE_EVENT, useCodeWorkspace } from "@/lib/code-workspace-context"
+import { CODE_RUNNER_ACTIVE_EVENT, getActiveHostRunId, useCodeWorkspace } from "@/lib/code-workspace-context"
 import { hostRunnerService } from "@/lib/code-runner/host-runner-service"
 
 export type TerminalPanelProps = {
@@ -52,8 +52,10 @@ export function TerminalPanel({ open, onClose }: TerminalPanelProps) {
   // Run id of the live host dev server, if any (broadcast by preview-pane). When
   // set, commands run for REAL in that run's workspace dir; otherwise the panel
   // falls back to the client-side pseudo-shell.
-  const [activeRunId, setActiveRunId] = React.useState<string | null>(null)
-  const activeRunIdRef = React.useRef<string | null>(null)
+  // Seed from the module singleton so opening the Shell AFTER a run started
+  // still picks it up (the CODE_RUNNER_ACTIVE_EVENT already fired by then).
+  const [activeRunId, setActiveRunId] = React.useState<string | null>(() => getActiveHostRunId())
+  const activeRunIdRef = React.useRef<string | null>(getActiveHostRunId())
   const [busy, setBusy] = React.useState(false)
   const busyRef = React.useRef(false)
   const inputRef = React.useRef<HTMLInputElement>(null)
