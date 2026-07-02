@@ -54,6 +54,11 @@ export interface RunStreamOptions {
   token?: string | null
   baseUrl?: string
   maxBackoffMs?: number
+  /** Statuses that end the stream (resolve `done`). Defaults to the run's hard
+   *  terminal states. A PLAN run parks forever at `waiting_approval` (approval
+   *  spawns a NEW build run), so auto-approving consumers like the /code chat
+   *  engine add it here; the human-gated Codex panel keeps the default. */
+  terminalStatuses?: readonly string[]
 }
 
 export interface RunStreamHandle {
@@ -83,6 +88,7 @@ export function openRunStream(opts: RunStreamOptions): RunStreamHandle {
   let lastSeq = opts.afterSeq ?? 0
   let attempt = 0
   let controller: AbortController | null = null
+  const terminalSet = opts.terminalStatuses ? new Set(opts.terminalStatuses) : TERMINAL
 
   const done = (async () => {
     if (!fetchImpl) { onError?.(new Error('fetch unavailable')); return }
@@ -118,7 +124,7 @@ export function openRunStream(opts: RunStreamOptions): RunStreamHandle {
             if (typeof e.seq === 'number' && e.seq > lastSeq) lastSeq = e.seq
             if (e.type === 'run_status' && onStatus) onStatus(e.data?.status)
             if (e.type !== 'heartbeat') onEvent(e)
-            if (e.type === 'run_status' && TERMINAL.has(e.data?.status)) terminal = true
+            if (e.type === 'run_status' && terminalSet.has(e.data?.status)) terminal = true
           }
         }
         if (terminal || closed) return

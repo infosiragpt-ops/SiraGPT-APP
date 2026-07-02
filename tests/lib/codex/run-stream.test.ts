@@ -63,6 +63,40 @@ describe('openRunStream', () => {
     expect(finalStatus).toBe('done')
   })
 
+  it('custom terminalStatuses: waiting_approval resolves done (auto-approve engine); default reconnects', async () => {
+    // With the option: a plan run parking at waiting_approval ends the stream.
+    let calls = 0
+    const fetchImpl = (async () => {
+      calls += 1
+      return streamResponse(['data: {"seq":1,"type":"run_status","data":{"status":"waiting_approval"}}\n\n'])
+    }) as unknown as typeof fetch
+    let status = ''
+    const handle = openRunStream({
+      runId: 'plan-1',
+      onEvent: () => {},
+      onStatus: (s) => { status = s },
+      fetchImpl,
+      token: 't',
+      terminalStatuses: ['done', 'error', 'cancelled', 'waiting_approval'],
+    })
+    await handle.done
+    expect(status).toBe('waiting_approval')
+    expect(calls).toBe(1) // resolved on the parked status — no reconnect loop
+
+    // Default behavior unchanged: waiting_approval is NOT terminal → it
+    // reconnects (human-gated panel keeps streaming); close() ends it.
+    let calls2 = 0
+    const fetch2 = (async () => {
+      calls2 += 1
+      return streamResponse(['data: {"seq":1,"type":"run_status","data":{"status":"waiting_approval"}}\n\n'])
+    }) as unknown as typeof fetch
+    const h2 = openRunStream({ runId: 'plan-2', onEvent: () => {}, fetchImpl: fetch2, token: 't' })
+    await new Promise((r) => setTimeout(r, 600))
+    h2.close()
+    await h2.done
+    expect(calls2).toBeGreaterThan(1)
+  })
+
   it('stops (no reconnect storm) on a permanent client error like 404', async () => {
     let calls = 0
     let errored: unknown = null

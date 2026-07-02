@@ -2028,6 +2028,10 @@ export function AICodeChatPanel() {
               state = { ...state, status }
             },
             token,
+            // A plan run PARKS at waiting_approval (approval spawns a new build
+            // run) — this engine auto-approves, so that status must resolve the
+            // stream instead of reconnecting forever (found in live E2E).
+            terminalStatuses: ["done", "error", "cancelled", "waiting_approval"],
           })
           // The stream resolves its `done` promise on a terminal run_status or
           // close(); if the user cancels the turn we abort it via the controller.
