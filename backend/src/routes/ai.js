@@ -1528,7 +1528,25 @@ async function findExistingGenerateTurn({ chatId, idempotencyKey, streamId, fing
   return { userMessage: matchingUser, assistantMessage: matchingAssistant || null };
 }
 
-async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false, extraMetadata = null, userPlan = null, reasoningPayload = null, agentRun = null) {
+// Título estilo Claude a partir del primer mensaje: primera línea con
+// contenido, sin URLs ni ruido de markdown, cortado en límite de palabra.
+function deriveChatTitleFromPrompt(prompt) {
+  const raw = String(prompt || '').trim();
+  if (!raw) return 'New Chat';
+  const firstLine = raw.split(/\r?\n/).find((l) => l.trim().length > 0) || raw;
+  const cleaned = firstLine
+    .replace(/https?:\/\/\S+/g, '')
+    .replace(/[#*`>_~]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned) return raw.slice(0, 50);
+  if (cleaned.length <= 60) return cleaned;
+  const cut = cleaned.slice(0, 60);
+  const lastSpace = cut.lastIndexOf(' ');
+  return (lastSpace > 30 ? cut.slice(0, lastSpace) : cut).trimEnd() + '…';
+}
+
+async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false, extraMetadata = null, userPlan = null, reasoningPayload = null, agentRun = null, _attempt = 0) {
   const safeExtraMetadata = extraMetadata && typeof extraMetadata === 'object' ? extraMetadata : {};
   const idempotencyKey = safeExtraMetadata.idempotencyKey || null;
   const streamId = safeExtraMetadata.streamId || null;
@@ -1662,7 +1680,7 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
           data: {
             updatedAt: new Date(),
             title: chat.title === 'New Chat'
-              ? prompt.slice(0, 50) + (prompt.length > 50 ? '...' : '')
+              ? deriveChatTitleFromPrompt(prompt)
               : chat.title
           }
         });
@@ -1701,6 +1719,28 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
       console.log("Background task: Database save complete.");
     } catch (dbError) {
       console.error("Error in background database save:", dbError);
+      // Un blip transitorio de DB no debe perder el turno. Reintenta la
+      // persistencia completa FUERA del lock (setTimeout corre cuando el
+      // callback ya soltó withGenerateTurnSaveLock, así no hay deadlock) y
+      // los checks de idempotencia/duplicado hacen el replay seguro. Solo
+      // reintenta si el mensaje del asistente no llegó a crearse; tras
+      // agotar intentos deja un registro inconfundible de pérdida de turno.
+      if (_attempt < 2 && !assistantMessage) {
+        const delayMs = 500 * (_attempt + 1);
+        console.warn(`[ai/persist] background save failed — retrying in ${delayMs}ms (attempt ${_attempt + 2}/3)`, { chatId, userId });
+        setTimeout(() => {
+          saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles, regenerate, extraMetadata, userPlan, reasoningPayload, agentRun, _attempt + 1)
+            .catch((retryErr) => console.error('[ai/persist] retry attempt crashed:', retryErr));
+        }, delayMs);
+      } else if (!assistantMessage) {
+        console.error('[ai/persist] TURN LOST: database save failed after 3 attempts', {
+          chatId,
+          userId,
+          model,
+          promptPreview: String(prompt || '').slice(0, 80),
+        });
+      }
+      return { assistantMessage, persistError: true };
     }
     return { assistantMessage };
   });

@@ -35,18 +35,18 @@ function BillingContent() {
             <Link href="/chat">
               <Button variant="ghost" size="sm">
                 <ArrowLeft className="h-4 w-4 mr-2" />
-                Back to Chat
+                Volver al chat
               </Button>
             </Link>
             <div>
-              <h1 className="text-2xl font-bold">Billing & Subscription</h1>
-              <p className="text-muted-foreground">Manage your subscription, payment methods, and billing history</p>
+              <h1 className="text-2xl font-bold">Facturación y suscripción</h1>
+              <p className="text-muted-foreground">Gestiona tu suscripción, métodos de pago e historial de facturación</p>
             </div>
           </div>
           <Link href="/billing/invoices">
             <Button variant="outline" size="sm" className="gap-2">
               <FileText className="h-4 w-4" />
-              View Invoices
+              Ver facturas
             </Button>
           </Link>
         </div>
@@ -55,7 +55,7 @@ function BillingContent() {
           <TabsList className="grid w-full grid-cols-2">
             <TabsTrigger value="subscription" className="flex items-center gap-2">
               <CreditCard className="h-4 w-4" />
-              Subscription
+              Suscripción
             </TabsTrigger>
             {/* <TabsTrigger value="payment-methods" className="flex items-center gap-2">
               <CreditCard className="h-4 w-4" />
@@ -63,7 +63,7 @@ function BillingContent() {
             </TabsTrigger> */}
               <TabsTrigger value="billing-history" className="flex items-center gap-2">
                 <Receipt className="h-4 w-4" />
-                Billing History
+                Historial de facturación
               </TabsTrigger>
           </TabsList>
 

@@ -11,18 +11,18 @@ import { motion } from "framer-motion"
  * Landing minimalista: fondo blanco, el encabezado de siempre y solo los
  * cuatro botones de descarga (iPhone · Android · Mac · Windows).
  *
- * Los `href` son placeholders hasta que existan los binarios / fichas de
- * store reales — actualizarlos aquí cuando estén publicados.
+ * Cada botón lleva a /descargas con la guía de instalación (PWA) de su
+ * plataforma; cuando existan binarios / fichas de store, apuntarlos ahí.
  */
 const DOWNLOADS: {
   platform: string
   href: string
   icon: ComponentType<{ className?: string }>
 }[] = [
-  { platform: "iPhone", href: "#", icon: AppleIcon },
-  { platform: "Android", href: "#", icon: AndroidIcon },
-  { platform: "Mac", href: "#", icon: AppleIcon },
-  { platform: "Windows", href: "#", icon: WindowsIcon },
+  { platform: "iPhone", href: "/descargas#iphone", icon: AppleIcon },
+  { platform: "Android", href: "/descargas#android", icon: AndroidIcon },
+  { platform: "Mac", href: "/descargas#mac", icon: AppleIcon },
+  { platform: "Windows", href: "/descargas#windows", icon: WindowsIcon },
 ]
 
 export default function HomePage() {

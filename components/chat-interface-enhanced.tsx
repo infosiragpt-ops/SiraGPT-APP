@@ -9430,6 +9430,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
+      // Con el textarea habilitado durante el streaming (paridad Claude),
+      // Enter no debe disparar un segundo turno: el texto queda escrito y
+      // listo para enviarse cuando termine el turno en curso.
+      if (isCurrentChatLocalJobBusy) return
       handleSend()
     } else if (e.key === "Escape") {
       // Esc cascade — peel one layer of context per press so the user
@@ -10987,7 +10991,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           setAudioTab={setAudioTab}
                           handleAndUploadFiles={handleAndUploadFiles}
                           isUploading={isUploading}
-                          isWebSearching={isCurrentChatLocalJobBusy}
+                          isWebSearching={isCurrentChatLocalJobBusy && isWebSearching}
                           isLoading={isCurrentChatLoading}
                           isGeneratingImage={isCurrentChatLocalJobBusy && isGeneratingImage}
                           isGeneratingVideo={isCurrentChatLocalJobBusy && isGeneratingVideo}
@@ -11067,7 +11071,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               boxShadow: "none",
                             }}
                             rows={1}
-                            disabled={isCurrentChatLocalJobBusy}
                           />
                         </div>
 
@@ -11564,7 +11567,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               setAudioTab={setAudioTab}
                               handleAndUploadFiles={handleAndUploadFiles}
                               isUploading={isUploading}
-                              isWebSearching={isCurrentChatLocalJobBusy}
+                              isWebSearching={isCurrentChatLocalJobBusy && isWebSearching}
                               isLoading={isCurrentChatLoading}
                               isGeneratingImage={isCurrentChatLocalJobBusy && isGeneratingImage}
                               isGeneratingVideo={isCurrentChatLocalJobBusy && isGeneratingVideo}
@@ -11641,7 +11644,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                   boxShadow: "none",
                                 }}
                                 rows={1}
-                                disabled={isCurrentChatLocalJobBusy}
                               />
                             </div>
                             <div className="composer-toolbar-actions flex shrink-0 items-center gap-1.5">
