@@ -31,6 +31,7 @@ import {
 import { listCodexProjects } from "@/lib/codex-projects"
 import { projectsService } from "@/lib/projects-service"
 import { useAuth } from "@/lib/auth-context-integrated"
+import { useCodexHealth } from "@/lib/codex/use-codex-health"
 
 const CodeWorkspace = dynamic(
   () => import("@/components/code/code-workspace").then((mod) => mod.CodeWorkspace),
@@ -40,6 +41,26 @@ const CodeWorkspace = dynamic(
   },
 )
 
+// The real agent surface (Codex V2): a plan → build → run → observe → auto-fix
+// loop with a run timeline, plan cards, checkpoints/rollback and a live preview
+// — an agent you give orders to, not a one-shot template generator.
+const CodexAgentPanel = dynamic(
+  () => import("@/components/codex/codex-agent-panel").then((mod) => mod.CodexAgentPanel),
+  {
+    ssr: false,
+    loading: () => <CodeWorkspaceSkeleton />,
+  },
+)
+
+// WorkspaceSurface — mount the real Codex agent when the V2 flag is on
+// (useCodexHealth probes GET /api/codex/health, public + sticky), otherwise
+// fall back to the legacy deterministic CodeWorkspace so /code is never broken.
+function WorkspaceSurface() {
+  const { enabled, loading } = useCodexHealth()
+  if (loading) return <CodeWorkspaceSkeleton />
+  return enabled ? <CodexAgentPanel surface="code" /> : <CodeWorkspace />
+}
+
 export default function CodeWorkspacePage() {
   return (
     <CodeWorkspaceGate>
@@ -47,7 +68,7 @@ export default function CodeWorkspacePage() {
         <React.Suspense fallback={null}>
           <ActiveFolderHydrator />
         </React.Suspense>
-        <CodeWorkspace />
+        <WorkspaceSurface />
       </CodeWorkspaceProvider>
     </CodeWorkspaceGate>
   )
