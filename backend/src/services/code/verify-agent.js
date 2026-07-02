@@ -94,35 +94,56 @@ const SNAPSHOT_SCRIPT = `(function(args){
   // "there is an overlay"). Vite renders inside a shadow DOM; Next in a portal.
   var overlayText = '';
   try {
-    // Read an element's text INCLUDING its shadow root (Vite + Next render the
-    // overlay in a shadow DOM, so plain textContent on the host is empty).
-    function deepText(el){
-      if (!el) return '';
-      var t = '';
-      try { if (el.shadowRoot) t = el.shadowRoot.textContent || ''; } catch (e) {}
-      if (!t) { try { t = el.textContent || ''; } catch (e) {} }
-      return t;
+    // Read the MESSAGE text out of a (possibly shadow-DOM) overlay root. The
+    // overlay injects its own <style> (Bootstrap reset etc.), so a naive
+    // textContent leads with CSS and buries the error — prefer known message
+    // nodes, else concatenate leaf text while skipping style/script.
+    function messageText(root){
+      if (!root) return '';
+      try {
+        var pick = root.querySelector(
+          '.nextjs-container-errors-header, [data-nextjs-dialog-header], ' +
+          '.nextjs__container_errors__error, .error-overlay-message, ' +
+          '.message-body, .message, pre, h1, h2'
+        );
+        if (pick && (pick.textContent || '').trim()) return pick.textContent;
+        var out = [];
+        var all = root.querySelectorAll('*');
+        for (var j = 0; j < all.length && out.length < 60; j++) {
+          var n = all[j];
+          if (n.tagName === 'STYLE' || n.tagName === 'SCRIPT') continue;
+          if (n.children.length === 0) {
+            var tt = (n.textContent || '').trim();
+            if (tt) out.push(tt);
+          }
+        }
+        return out.join(' ');
+      } catch (e) { return ''; }
+    }
+    function overlayRoot(el){
+      if (!el) return null;
+      try { if (el.shadowRoot) return el.shadowRoot; } catch (e) {}
+      return el;
     }
     var vo = document.querySelector('vite-error-overlay');
-    if (vo && vo.shadowRoot) {
-      var mb = vo.shadowRoot.querySelector('.message-body, .message, pre');
-      overlayText = (mb ? mb.textContent : vo.shadowRoot.textContent) || '';
+    if (vo) {
+      overlayText = messageText(overlayRoot(vo));
     } else if (hasNextOverlay) {
       var nd = document.querySelector('nextjs-portal') ||
         document.querySelector('[data-nextjs-dialog], [data-nextjs-error-overlay]');
-      overlayText = deepText(nd);
+      overlayText = messageText(overlayRoot(nd));
     } else if (hasCrashText || isBare500) {
       overlayText = bodyText;
     }
-    // Last-resort generic scan: any custom element carrying overlay text in a
-    // shadow root (covers framework variants our selectors miss).
+    // Last-resort generic scan: any custom element whose shadow root carries
+    // error text (covers framework variants our selectors miss).
     if (!overlayText) {
       var hosts = document.querySelectorAll('*');
       for (var i = 0; i < hosts.length && i < 400; i++) {
         var sr = hosts[i].shadowRoot;
         if (!sr) continue;
-        var st = sr.textContent || '';
-        if (/error|exception|failed|is not defined|cannot|unexpected/i.test(st)) { overlayText = st; break; }
+        var cand = messageText(sr);
+        if (/error|exception|failed|is not defined|cannot|unexpected/i.test(cand)) { overlayText = cand; break; }
       }
     }
     overlayText = String(overlayText).replace(/\\s+/g, ' ').trim().slice(0, 600);
