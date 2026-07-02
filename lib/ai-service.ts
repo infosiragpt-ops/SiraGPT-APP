@@ -251,6 +251,17 @@ const EXISTING_DOCUMENT_REFERENCE_RE =
 const DOCUMENT_UNDERSTANDING_RE =
   /\b(?:cual|cu[aá]l|que|qu[eé]|quien|qui[eé]n|cuando|cu[aá]ndo|donde|d[oó]nde|primera\s+palabra|primer\s+parrafo|primer\s+p[aá]rrafo|resume|resumen|resumir|analiza|analisis|an[aá]lisis|lee|leer|extrae|extraer|identifica|identificar|dime|segun|seg[uú]n|explica|explicar|contenido|menciona|dice)\b/i
 
+// Clearly NON-document questions (date/time, weather, self/meta) that the
+// assistant answers from world/self knowledge, never from an uploaded file.
+// Distinguishing "¿cuál es el título de la investigación?" (a real document
+// question) from "¿qué día es hoy?" via a positive doc-cue list is unreliable —
+// both are bare question words — so instead we EXCLUDE this small, high-precision
+// set. Used only for IMPLICIT reattachment (no explicit "del documento"
+// reference): such a question must not drag a previously-uploaded file into an
+// unrelated turn.
+const NON_DOCUMENT_QUESTION_RE =
+  /\b(?:qu[eé]\s+d[ií]a\b|qu[eé]\s+hora|qu[eé]\s+fecha|d[ií]a\s+es\s+hoy|hora\s+es|fecha\s+de\s+hoy|clima|temperatura|pron[oó]stico|weather|forecast|qui[eé]n\s+eres|c[oó]mo\s+te\s+llamas|qu[eé]\s+(?:puedes|sabes)\s+hacer)\b/i
+
 const EXISTING_DOCUMENT_EDIT_RE =
   /\b(?:agrega(?:r|me|s)?|a[ñn]ad(?:e|ir|eme|as)?|inserta(?:r|me|s)?|incorpora(?:r|me|s)?|inclu(?:ye|ir|yeme|yas)?|completa(?:r|me|s)?|llen(?:a|ar|ame|as)?|rellena(?:r|me|s)?|desarrolla(?:r|me|s)?|modifica(?:r|me|s)?|edita(?:r|me|s)?|corrige(?:r|me|s)?|actualiza(?:r|me|s)?|reemplaza(?:r|me|s)?|cambia(?:r|me|s)?|pon(?:er|me)?|coloca(?:r|me|s)?)\b[^.?!]{0,180}\b(?:al\s+final|anexos?|ap[eé]ndice|secci[oó]n|apartado|cap[ií]tulo|portada|car[aá]tula|t[ií]tulo|encabezado|pie\s+de\s+p[aá]gina|tabla|hoja|celda|fila|columna|diapositiva|instrumento|cuestionario|encuesta|escala|tesis|mismo\s+word|mismo\s+documento|sin\s+cambiar|conserva(?:r)?|preserva(?:r)?)\b/i
 
@@ -482,15 +493,22 @@ export function shouldAnswerFromExistingDocument(
   if (!normalized) return false
   if (OUTPUT_FORMAT_REQUEST_RE.test(normalized)) return false
   if (shouldEditExistingDocument(prompt, conversationHistory)) return false
-  const referencesExistingDocument =
-    EXISTING_DOCUMENT_REFERENCE_RE.test(normalized)
-    || hasDocumentAttachmentContext(conversationHistory)
-  if (!referencesExistingDocument) return false
+  const explicitReference = EXISTING_DOCUMENT_REFERENCE_RE.test(normalized)
+  const historyHasDocument = hasDocumentAttachmentContext(conversationHistory)
+  if (!explicitReference && !historyHasDocument) return false
   if (!DOCUMENT_UNDERSTANDING_RE.test(normalized)) return false
 
-  // Even without loaded history, this is a question about an existing
-  // document ("del Word"), not a request to create a new Word file.
-  // History presence is used separately to reattach the previous file.
+  // Implicit-reattachment guard: when the prompt does NOT explicitly name a
+  // document ("del Word", "ese archivo"…) and we're only inferring intent from a
+  // PRIOR attachment in the history, a clearly non-document question — "¿qué día
+  // es hoy?", "¿qué clima hace?", "¿quién eres?" — must NOT drag the previously
+  // uploaded file into an unrelated turn. (DOCUMENT_UNDERSTANDING_RE matches any
+  // "qué/cuál/quién…", so it can't tell these apart on its own.)
+  if (!explicitReference && NON_DOCUMENT_QUESTION_RE.test(normalized)) return false
+
+  // Otherwise this is a question about an existing document ("del Word") or a
+  // genuine follow-up over a prior attachment, not a request to create a new
+  // file. History presence is used separately to reattach the previous file.
   return true
 }
 

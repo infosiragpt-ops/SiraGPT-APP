@@ -116,6 +116,36 @@ describe("ai-service · deterministic intent routing", () => {
     assert.equal(shouldRouteTextPromptThroughAgenticRuntime(prompt, history[0].files), true)
   })
 
+  it("does NOT re-attach a prior document to an unrelated question (que dia es hoy)", () => {
+    const history = [
+      {
+        role: "USER",
+        content: "transcribir",
+        files: [
+          {
+            id: "file-img-prev",
+            name: "captura.png",
+            mimeType: "image/png",
+          },
+          {
+            id: "file-docx-prev",
+            name: "informe.docx",
+            mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          },
+        ],
+      },
+    ]
+    // Unrelated questions must NOT drag the previously uploaded file in.
+    for (const prompt of ["¿qué día es hoy?", "que dia es hoy?", "¿qué hora es?", "¿qué clima hace hoy?", "¿quién eres?"]) {
+      assert.equal(shouldAnswerFromExistingDocument(prompt, history), false, prompt)
+      assert.equal(shouldUseExistingDocumentFileContext(prompt, history), false, prompt)
+    }
+    // …but genuine document follow-ups over the same history still carry it.
+    for (const prompt of ["¿de qué trata?", "dame un análisis", "cuál es el título de la investigación?"]) {
+      assert.equal(shouldUseExistingDocumentFileContext(prompt, history), true, prompt)
+    }
+  })
+
   it("treats an attached document plus an implicit analysis prompt as agentic document chat", async () => {
     const history = [
       {
