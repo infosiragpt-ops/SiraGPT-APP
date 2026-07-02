@@ -3,37 +3,25 @@
 import { BrandLogo } from "@/components/BrandLogo"
 import { LoginButton } from "@/components/AuthNavButtons"
 import { ThemeToggle } from "@/components/theme-toggle"
-import { useEffect } from "react"
+import { useEffect, type ComponentType } from "react"
 import { motion } from "framer-motion"
-import {
-  ArrowRight,
-  Bot,
-  BrainCircuit,
-  CheckCircle2,
-  Code2,
-  CreditCard,
-  Headphones,
-  Layers3,
-  Search,
-  Sparkles,
-} from "lucide-react"
-import Link from "next/link"
 
-const providers = [
-  { name: "OpenAI", detail: "Modelos GPT", icon: Bot },
-  { name: "Gemini", detail: "Google AI", icon: Sparkles },
-  { name: "Claude", detail: "Anthropic", icon: BrainCircuit },
-  { name: "DeepSeek", detail: "Razonamiento", icon: Search },
-  { name: "Stripe", detail: "Pagos", icon: CreditCard },
-  { name: "Replit", detail: "Apps", icon: Code2 },
-  { name: "ElevenLabs", detail: "Voz", icon: Headphones },
-  { name: "OpenClaw", detail: "Agentes", icon: Layers3 },
-]
-
-const highlights = [
-  "Una cuenta para modelos, voz, agentes y pagos",
-  "Interfaz limpia para trabajar desde móvil o escritorio",
-  "Acento visual listo en #FF0000 para producción",
+/**
+ * Landing minimalista: fondo blanco, el encabezado de siempre y solo los
+ * cuatro botones de descarga (iPhone · Android · Mac · Windows).
+ *
+ * Los `href` son placeholders hasta que existan los binarios / fichas de
+ * store reales — actualizarlos aquí cuando estén publicados.
+ */
+const DOWNLOADS: {
+  platform: string
+  href: string
+  icon: ComponentType<{ className?: string }>
+}[] = [
+  { platform: "iPhone", href: "#", icon: AppleIcon },
+  { platform: "Android", href: "#", icon: AndroidIcon },
+  { platform: "Mac", href: "#", icon: AppleIcon },
+  { platform: "Windows", href: "#", icon: WindowsIcon },
 ]
 
 export default function HomePage() {
@@ -78,188 +66,69 @@ export default function HomePage() {
         </div>
       </header>
 
-      <main className="sira-home-main relative min-h-screen">
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-0"
-          style={{
-            background:
-              "linear-gradient(180deg, rgba(255,0,0,0.08) 0%, rgba(255,255,255,0) 34%), linear-gradient(rgba(15,23,42,0.045) 1px, transparent 1px), linear-gradient(90deg, rgba(15,23,42,0.045) 1px, transparent 1px)",
-            backgroundSize: "auto, 88px 88px, 88px 88px",
-          }}
-        />
+      <main className="sira-home-main flex min-h-screen items-center justify-center px-5">
+        <h1 className="sr-only">Sira GPT — Descargas</h1>
 
-        <section className="sira-hero-section relative mx-auto flex min-h-screen w-full max-w-7xl px-5 py-12 md:px-8 md:py-16">
-          <div className="grid w-full items-center gap-10 lg:grid-cols-2 lg:gap-12">
-            <motion.div
-              initial={{ opacity: 0, y: 18 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.5 }}
-              className="mx-auto max-w-2xl text-center lg:mx-0 lg:text-left"
+        <motion.div
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.45 }}
+          className="grid w-full max-w-xs grid-cols-1 gap-3 sm:max-w-lg sm:grid-cols-2 lg:max-w-4xl lg:grid-cols-4"
+        >
+          {DOWNLOADS.map(({ platform, href, icon: Icon }) => (
+            <a
+              key={platform}
+              href={href}
+              className="group flex min-h-14 items-center justify-center gap-3 rounded-xl bg-neutral-950 px-5 py-3 text-white transition duration-200 hover:bg-neutral-800 active:scale-[0.98] dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-200"
+              aria-label={`Descargar Sira GPT para ${platform}`}
             >
-              <div className="sira-badge inline-flex min-h-11 items-center gap-2 rounded-full px-4 text-sm font-semibold">
-                <Sparkles className="h-4 w-4" aria-hidden="true" />
-                <span>Impulsado por IA de frontera</span>
-              </div>
-
-              <h1 className="mt-7 text-5xl font-black leading-none sm:text-6xl md:text-7xl lg:text-8xl">
-                Sira GPT
-              </h1>
-
-              <p className="mt-6 text-lg leading-8 text-neutral-700 dark:text-neutral-300 md:text-xl">
-                Una landing simple, profesional y minimalista para mostrar que la plataforma trabaja con los modelos y servicios clave de IA en una sola experiencia.
-              </p>
-
-              <div className="mt-8 flex flex-col items-center gap-3 sm:flex-row lg:items-start">
-                <Link
-                  href="/auth/register"
-                  className="sira-primary-cta inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-full px-6 text-sm font-bold text-white transition duration-200 active:scale-95 sm:w-auto"
-                >
-                  Empezar ahora
-                  <ArrowRight className="h-4 w-4" aria-hidden="true" />
-                </Link>
-                <Link
-                  href="/auth/login"
-                  className="sira-secondary-cta inline-flex min-h-12 w-full items-center justify-center rounded-full border border-neutral-300 bg-white px-6 text-sm font-bold text-neutral-950 transition duration-200 dark:border-white/20 dark:bg-white/5 dark:text-white sm:w-auto"
-                >
-                  Entrar
-                </Link>
-              </div>
-
-              <div className="mt-8 grid gap-3 text-left">
-                {highlights.map((item) => (
-                  <div key={item} className="flex items-start gap-3 text-sm leading-6 text-neutral-700 dark:text-neutral-300">
-                    <CheckCircle2 className="sira-red mt-1 h-4 w-4 shrink-0" aria-hidden="true" />
-                    <span>{item}</span>
-                  </div>
-                ))}
-              </div>
-            </motion.div>
-
-            <motion.div
-              initial={{ opacity: 0, y: 22 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.55, delay: 0.08 }}
-              className="relative mx-auto w-full max-w-3xl"
-            >
-              <div className="mb-5 text-center lg:text-left">
-                <p className="sira-red text-xs font-black uppercase">Impulsado por</p>
-                <h2 className="mt-3 text-2xl font-black leading-tight text-neutral-950 dark:text-white md:text-4xl">
-                  OpenAI, Gemini, Claude, DeepSeek, Stripe, Replit, ElevenLabs y OpenClaw.
-                </h2>
-              </div>
-
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                {providers.map(({ name, detail, icon: Icon }) => (
-                  <div
-                    key={name}
-                    className="provider-card group flex min-h-24 items-center gap-4 rounded-lg border border-neutral-200 p-4 transition duration-200 dark:border-white/10"
-                  >
-                    <span className="provider-icon flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border transition duration-200">
-                      <Icon className="h-5 w-5" aria-hidden="true" />
-                    </span>
-                    <span className="min-w-0">
-                      <span className="block text-lg font-black leading-tight text-neutral-950 dark:text-white">
-                        {name}
-                      </span>
-                      <span className="mt-1 block text-sm leading-5 text-neutral-500 dark:text-neutral-400">
-                        {detail}
-                      </span>
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </motion.div>
-          </div>
-        </section>
-
-        <div aria-hidden className="sira-bottom-line h-1 w-full" />
+              <Icon className="h-6 w-6 shrink-0" />
+              <span className="text-left leading-tight">
+                <span className="block text-[10px] font-medium uppercase tracking-wide opacity-70">
+                  Descargar para
+                </span>
+                <span className="block text-base font-bold">{platform}</span>
+              </span>
+            </a>
+          ))}
+        </motion.div>
       </main>
 
       <style jsx global>{`
-        .sira-red {
-          color: #ff0000;
-        }
-
         .sira-home-main {
           padding-top: 88px !important;
-        }
-
-        .sira-hero-section {
-          align-items: flex-start;
-        }
-
-        .sira-badge {
-          color: #ff0000;
-          border: 1px solid rgba(255, 0, 0, 0.2);
-          background: rgba(255, 0, 0, 0.08);
-          box-shadow: 0 14px 42px rgba(255, 0, 0, 0.12);
-        }
-
-        .sira-primary-cta {
-          background: #ff0000;
-          box-shadow: 0 18px 40px rgba(255, 0, 0, 0.24);
-        }
-
-        .sira-primary-cta:hover {
-          background: #e60000;
-        }
-
-        .sira-primary-cta:focus-visible,
-        .sira-secondary-cta:focus-visible {
-          outline: 2px solid #ff0000;
-          outline-offset: 4px;
-        }
-
-        .sira-secondary-cta:hover {
-          color: #ff0000;
-          border-color: rgba(255, 0, 0, 0.45);
-        }
-
-        .provider-card {
-          background: rgba(255, 255, 255, 0.86);
-          box-shadow: 0 12px 35px rgba(15, 23, 42, 0.06);
-        }
-
-        .provider-card:hover {
-          border-color: rgba(255, 0, 0, 0.35);
-          box-shadow: 0 18px 46px rgba(255, 0, 0, 0.1);
-        }
-
-        .provider-icon {
-          color: #ff0000;
-          border-color: rgba(255, 0, 0, 0.18);
-          background: rgba(255, 0, 0, 0.08);
-        }
-
-        .provider-card:hover .provider-icon {
-          color: #ffffff;
-          background: #ff0000;
-        }
-
-        .sira-bottom-line {
-          background: #ff0000;
-        }
-
-        :global(.dark) .provider-card {
-          background: rgba(255, 255, 255, 0.045);
-          box-shadow: none;
-        }
-
-        :global(.dark) .provider-card:hover {
-          border-color: rgba(255, 0, 0, 0.5);
         }
 
         @media (min-width: 1024px) {
           .sira-home-main {
             padding-top: 80px !important;
           }
-
-          .sira-hero-section {
-            align-items: center;
-          }
         }
       `}</style>
     </div>
+  )
+}
+
+function AppleIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" className={className}>
+      <path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.03 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.56-1.702" />
+    </svg>
+  )
+}
+
+function AndroidIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" className={className}>
+      <path d="M17.523 15.341c-.551 0-.999-.448-.999-1s.448-.999.999-.999c.551 0 .999.448.999.999s-.448 1-.999 1m-11.046 0c-.551 0-.999-.448-.999-1s.448-.999.999-.999c.551 0 .999.448.999.999s-.448 1-.999 1m11.405-6.02 1.997-3.46a.416.416 0 0 0-.152-.567.416.416 0 0 0-.568.152l-2.022 3.503C15.59 8.244 13.853 7.851 12 7.851s-3.59.393-5.137 1.099L4.841 5.447a.416.416 0 0 0-.568-.152.416.416 0 0 0-.152.567l1.997 3.46C2.689 11.187.343 14.659 0 18.761h24c-.344-4.102-2.689-7.574-6.118-9.44" />
+    </svg>
+  )
+}
+
+function WindowsIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" className={className}>
+      <path d="M0 3.449 9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-13.051-1.851" />
+    </svg>
   )
 }
