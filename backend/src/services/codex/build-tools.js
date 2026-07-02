@@ -102,19 +102,87 @@ const TOOLS = {
 
   read_file: {
     kind: 'file_read',
-    description: 'Lee el contenido de un archivo del workspace. Devuelve el texto y cuenta las líneas leídas.',
-    parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+    description: 'Lee el contenido de un archivo del workspace. Acepta offset (línea inicial, 1-based) y limit (número de líneas) para leer archivos grandes por partes. Devuelve el texto y cuenta las líneas leídas.',
+    parameters: { type: 'object', properties: { path: { type: 'string' }, offset: { type: 'number', description: 'Línea inicial 1-based (opcional).' }, limit: { type: 'number', description: 'Máximo de líneas a devolver (opcional).' } }, required: ['path'] },
     commandFor: () => null,
     pathFor: (args) => args?.path || null,
     async execute(args, ctx) {
       if (!args?.path) return { isError: true, summary: 'path requerido', observation: 'Error: path requerido.' };
       try {
         const out = await ctx.runner.readFile(ctx.project, args.path);
-        const content = out?.content ?? '';
-        const linesRead = lineCount(content);
-        return { isError: false, summary: summarise(content), linesRead, observation: summarise(content, 8000) };
+        let content = out?.content ?? '';
+        const totalLines = lineCount(content);
+        const offset = Number.isFinite(Number(args.offset)) && Number(args.offset) > 1 ? Math.floor(Number(args.offset)) : 1;
+        const limit = Number.isFinite(Number(args.limit)) && Number(args.limit) > 0 ? Math.floor(Number(args.limit)) : 0;
+        if (offset > 1 || limit) {
+          const lines = content.split('\n');
+          const slice = lines.slice(offset - 1, limit ? offset - 1 + limit : undefined);
+          content = slice.join('\n');
+          const header = `[líneas ${offset}-${offset - 1 + slice.length} de ${totalLines}]`;
+          const linesRead = slice.length;
+          return { isError: false, summary: summarise(`${header}\n${content}`), linesRead, observation: `${header}\n${summarise(content, 8000)}` };
+        }
+        return { isError: false, summary: summarise(content), linesRead: totalLines, observation: summarise(content, 8000) };
       } catch (err) {
         return { isError: true, summary: `no se pudo leer: ${err.message}`, observation: `Error leyendo ${args.path}: ${err.message}` };
+      }
+    },
+  },
+
+  list_files: {
+    kind: 'file_read',
+    description: 'Lista los archivos del workspace (tracked + nuevos, sin node_modules). Úsalo para orientarte antes de leer o editar.',
+    parameters: { type: 'object', properties: { pattern: { type: 'string', description: 'Substring o glob simple para filtrar rutas (opcional).' } }, required: [] },
+    commandFor: (args) => (args?.pattern ? `list: ${args.pattern}` : 'list files'),
+    pathFor: () => null,
+    async execute(args, ctx) {
+      try {
+        const out = await ctx.runner.exec(ctx.project, ['git', 'ls-files', '--cached', '--others', '--exclude-standard'], { timeoutMs: 15000 });
+        if (out.exitCode !== 0) {
+          return { isError: true, summary: `git ls-files exit ${out.exitCode}`, observation: `Error listando archivos: ${summarise(out.stderr || out.stdout, 1000)}` };
+        }
+        let files = String(out.stdout || '').split('\n').map((l) => l.trim()).filter(Boolean);
+        const pattern = String(args?.pattern || '').trim();
+        if (pattern) {
+          // Glob "*"→cualquier tramo; sin comodines se trata como substring.
+          const rx = pattern.includes('*')
+            ? new RegExp(pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*'), 'i')
+            : null;
+          files = files.filter((f) => (rx ? rx.test(f) : f.toLowerCase().includes(pattern.toLowerCase())));
+        }
+        const text = files.slice(0, 400).join('\n') + (files.length > 400 ? `\n…[+${files.length - 400} más]` : '');
+        return { isError: false, summary: `${files.length} archivos`, observation: text || 'Sin archivos que coincidan.' };
+      } catch (err) {
+        return { isError: true, summary: `no se pudo listar: ${err.message}`, observation: `Error listando archivos: ${err.message}` };
+      }
+    },
+  },
+
+  grep_search: {
+    kind: 'file_read',
+    description: 'Busca un texto o regex en los archivos del workspace (como grep). Devuelve archivo:línea:contenido. Úsalo para localizar código antes de editar.',
+    parameters: { type: 'object', properties: { pattern: { type: 'string', description: 'Texto o regex POSIX a buscar.' }, path: { type: 'string', description: 'Limitar a un archivo o directorio (opcional).' }, ignoreCase: { type: 'boolean' } }, required: ['pattern'] },
+    commandFor: (args) => (args?.pattern ? `grep: ${args.pattern}` : null),
+    pathFor: (args) => args?.path || null,
+    async execute(args, ctx) {
+      const pattern = String(args?.pattern || '');
+      if (!pattern) return { isError: true, summary: 'pattern requerido', observation: 'Error: pattern requerido.' };
+      const cmd = ['git', 'grep', '-In', '--untracked'];
+      if (args?.ignoreCase) cmd.push('-i');
+      cmd.push('-e', pattern);
+      if (args?.path) cmd.push('--', String(args.path));
+      try {
+        const out = await ctx.runner.exec(ctx.project, cmd, { timeoutMs: 15000 });
+        // git grep exit 1 = sin coincidencias (no es un error del tool).
+        if (out.exitCode === 1) return { isError: false, summary: 'sin coincidencias', observation: `Sin coincidencias para: ${pattern}` };
+        if (out.exitCode !== 0) {
+          return { isError: true, summary: `grep exit ${out.exitCode}`, observation: `Error buscando: ${summarise(out.stderr || out.stdout, 1000)}` };
+        }
+        const lines = String(out.stdout || '').split('\n').filter(Boolean);
+        const text = lines.slice(0, 120).join('\n') + (lines.length > 120 ? `\n…[+${lines.length - 120} coincidencias más]` : '');
+        return { isError: false, summary: `${lines.length} coincidencias`, observation: summarise(text, 8000) };
+      } catch (err) {
+        return { isError: true, summary: `búsqueda falló: ${err.message}`, observation: `Error buscando: ${err.message}` };
       }
     },
   },
@@ -141,8 +209,8 @@ const TOOLS = {
 
   edit_file: {
     kind: 'file_write',
-    description: 'Edita un archivo: reemplaza la primera aparición EXACTA de `find` por `replace`. Falla si `find` no existe.',
-    parameters: { type: 'object', properties: { path: { type: 'string' }, find: { type: 'string' }, replace: { type: 'string' } }, required: ['path', 'find', 'replace'] },
+    description: 'Edita un archivo: reemplaza la aparición EXACTA de `find` por `replace`. Si `find` aparece más de una vez, falla salvo que pases replaceAll:true — amplía `find` con más contexto para hacerlo único. Falla si `find` no existe.',
+    parameters: { type: 'object', properties: { path: { type: 'string' }, find: { type: 'string' }, replace: { type: 'string' }, replaceAll: { type: 'boolean', description: 'Reemplazar TODAS las apariciones (opcional).' } }, required: ['path', 'find', 'replace'] },
     commandFor: () => null,
     pathFor: (args) => args?.path || null,
     async execute(args, ctx) {
@@ -152,12 +220,17 @@ const TOOLS = {
       try {
         const cur = await ctx.runner.readFile(ctx.project, args.path);
         const content = cur?.content ?? '';
-        if (!content.includes(args.find)) {
-          return { isError: true, summary: `texto a reemplazar no encontrado en ${args.path}`, observation: `Error: el texto a reemplazar no existe en ${args.path}.` };
+        const occurrences = args.find.length ? content.split(args.find).length - 1 : 0;
+        if (occurrences === 0) {
+          return { isError: true, summary: `texto a reemplazar no encontrado en ${args.path}`, observation: `Error: el texto a reemplazar no existe en ${args.path}. Lee el archivo con read_file y copia el fragmento EXACTO (espacios e indentación incluidos).` };
         }
-        const next = content.replace(args.find, args.replace);
+        if (occurrences > 1 && !args.replaceAll) {
+          return { isError: true, summary: `find ambiguo (${occurrences} apariciones) en ${args.path}`, observation: `Error: \`find\` aparece ${occurrences} veces en ${args.path}. Amplía \`find\` con líneas de contexto para hacerlo único, o pasa replaceAll:true para reemplazar todas.` };
+        }
+        const next = args.replaceAll ? content.split(args.find).join(args.replace) : content.replace(args.find, args.replace);
         await ctx.runner.writeFiles(ctx.project, [{ path: args.path, content: next }]);
-        return { isError: false, summary: `editado ${args.path}`, observation: `OK: editado ${args.path}.` };
+        const n = args.replaceAll ? occurrences : 1;
+        return { isError: false, summary: `editado ${args.path} (${n} reemplazo${n === 1 ? '' : 's'})`, observation: `OK: editado ${args.path} (${n} reemplazo${n === 1 ? '' : 's'}).` };
       } catch (err) {
         return { isError: true, summary: `no se pudo editar: ${err.message}`, observation: `Error editando ${args.path}: ${err.message}` };
       }
@@ -182,26 +255,6 @@ const TOOLS = {
         return { isError: false, summary: summarise(text), observation: text || 'Sin resultados.' };
       } catch (err) {
         return { isError: true, summary: `búsqueda falló: ${err.message}`, observation: `Error en la búsqueda: ${err.message}` };
-      }
-    },
-  },
-
-  list_files: {
-    kind: 'file_read',
-    description: 'Lista los archivos del workspace (tracked + nuevos, sin node_modules). Úsalo para orientarte antes de leer o editar.',
-    parameters: { type: 'object', properties: {}, required: [] },
-    commandFor: () => 'list files',
-    pathFor: () => null,
-    async execute(_args, ctx) {
-      try {
-        const out = await ctx.runner.exec(ctx.project, ['git', 'ls-files', '--cached', '--others', '--exclude-standard']);
-        if (out.exitCode !== 0) {
-          return { isError: true, summary: `exit ${out.exitCode}`, observation: `No pude listar archivos: ${summarise(out.stderr || out.stdout, 500)}` };
-        }
-        const text = summarise(out.stdout, 4000);
-        return { isError: false, summary: text, observation: text || '(workspace vacío)' };
-      } catch (err) {
-        return { isError: true, summary: `runner error: ${err.message}`, observation: `Error listando archivos: ${err.message}` };
       }
     },
   },

@@ -26,6 +26,12 @@ const { classifyText, toActionRequired, benignAnnotation } = require('./error-pa
 
 const DEFAULT_MAX_STEPS = 24;
 const DEFAULT_MAX_TOOLS_PER_TURN = 4;
+const DEFAULT_CONTEXT_MAX_CHARS = 60_000;
+const DEFAULT_MAX_VERIFY_ROUNDS = 2;
+// Keep this many tail messages verbatim when compacting (the model needs the
+// recent working set intact; older tool dumps compress well).
+const COMPACT_KEEP_TAIL = 10;
+const COMPACT_TOOL_RESULT_CAP = 300;
 
 function readPosInt(raw, fallback) {
   const n = Number.parseInt(raw, 10);
@@ -180,6 +186,8 @@ function buildSystemPrompt({ project, plan, fileTree, sourcePrompt }) {
     'El workspace ya viene provisionado con un starter REACT 18 + VITE 7 + TypeScript ejecutable: package.json (react, react-dom, @vitejs/plugin-react, typescript, vite), vite.config.ts, tsconfig.json, index.html (carga /src/main.tsx), src/main.tsx y src/App.tsx.',
     'NO inicialices frameworks ni ejecutes scaffolds interactivos (create-next-app/create-vite); construye componentes React (.tsx) editando/creando archivos en src/ con write_file/edit_file.',
     'Si necesitas estructura adicional, crea archivos concretos tú mismo. Usa run_command solo para verificar, instalar dependencias declaradas o revisar git.',
+    'Antes de editar un archivo existente, léelo (read_file) y usa edit_file con el fragmento EXACTO; usa list_files/grep_search para orientarte en el workspace en vez de adivinar rutas.',
+    'Antes de dar por terminado, asegúrate de que el proyecto compila (el sistema ejecutará una verificación de tipos al final y te devolverá los errores si los hay).',
     'Nunca dependas de prompts interactivos de terminal; los comandos deben terminar solos.',
     'VERIFICA tu trabajo como lo haría un ingeniero: después de crear o editar código usa type_check para ver los errores reales de compilación y dev_server_check para confirmar que la app corre; corrige lo que salga antes de dar el trabajo por terminado.',
     'Para tareas grandes o especializadas delega con run_subagent: planner (plan de construcción), frontend_builder (UI React/TS), backend_engineer (APIs y capa de datos), db_architect (modelo de datos), qa_reviewer (revisión final), enterprise_analyst (especificación de negocio).',
@@ -200,6 +208,77 @@ function buildSystemPrompt({ project, plan, fileTree, sourcePrompt }) {
   }
   lines.push('Cuando el proyecto esté listo, deja de llamar herramientas y resume lo construido.');
   return lines.join('\n');
+}
+
+/**
+ * In-place transcript compaction (Claude Code-style "microcompact"): when the
+ * transcript exceeds the char budget, old `[TOOL_RESULT]` bodies — the bulk of
+ * the growth — are truncated. System prompt, the task prompt and the last
+ * COMPACT_KEEP_TAIL messages stay verbatim. Returns how many were compacted.
+ */
+function compactMessages(messages, { maxChars = DEFAULT_CONTEXT_MAX_CHARS } = {}) {
+  const total = messages.reduce((n, m) => n + (typeof m?.content === 'string' ? m.content.length : 0), 0);
+  if (total <= maxChars) return 0;
+  let compacted = 0;
+  const lastKeep = Math.max(2, messages.length - COMPACT_KEEP_TAIL);
+  for (let i = 2; i < lastKeep; i += 1) {
+    const m = messages[i];
+    const content = typeof m?.content === 'string' ? m.content : '';
+    if (m?.role === 'user' && content.startsWith('[TOOL_RESULT') && content.length > COMPACT_TOOL_RESULT_CAP + 60) {
+      messages[i] = { ...m, content: `${content.slice(0, COMPACT_TOOL_RESULT_CAP)}\n…[resultado antiguo recortado; vuelve a leer el archivo si lo necesitas]` };
+      compacted += 1;
+    }
+  }
+  return compacted;
+}
+
+/**
+ * Post-build verification (the missing "fifth leg" vs Claude Code): install
+ * deps and typecheck the workspace, feeding failures back to the model for a
+ * bounded number of repair rounds. Only runs when the workspace has a real
+ * tsconfig.json — deterministic no-op otherwise (keeps scripted tests inert).
+ * Emits action events so the timeline shows the verification like any tool.
+ */
+async function verifyWorkspace({ runner, projectId, run, eventStore, prisma, metrics, clock, env = process.env, actionId, groupId }) {
+  if (String(env.CODEX_VERIFY_DISABLED || '') === '1') return { ran: false, ok: true };
+  if (typeof runner?.exec !== 'function' || typeof runner?.readFile !== 'function') return { ran: false, ok: true };
+
+  let tsconfig = '';
+  try {
+    const out = await runner.readFile(projectId, 'tsconfig.json');
+    tsconfig = String(out?.content || '');
+  } catch { /* no tsconfig → nothing to verify */ }
+  if (!tsconfig.trim()) return { ran: false, ok: true };
+  // Only verify REAL TypeScript projects: the tsconfig must parse (JSONC
+  // comments tolerated). Garbage/placeholder content → deterministic no-op.
+  try {
+    JSON.parse(tsconfig.replace(/^\s*\/\/.*$/gm, ''));
+  } catch {
+    return { ran: false, ok: true };
+  }
+
+  await eventStore.appendEvent(run.id, 'action_start', { actionId, kind: 'terminal', command: 'verificación: bun install + tsc --noEmit', groupId }, { prisma }).catch(() => {});
+  const t0 = clock().getTime();
+  let ok = false;
+  let errors = '';
+  try {
+    const install = await runner.exec(projectId, ['bun', 'install'], { timeoutMs: 120_000 });
+    if (install.exitCode !== 0) {
+      errors = `bun install exit ${install.exitCode}\n${String(install.stderr || install.stdout || '').slice(0, 4000)}`;
+    } else {
+      const tsc = await runner.exec(projectId, ['bunx', 'tsc', '--noEmit', '--pretty', 'false'], { timeoutMs: 120_000 });
+      if (tsc.exitCode === 0) ok = true;
+      else errors = String([tsc.stdout, tsc.stderr].filter(Boolean).join('\n')).slice(0, 4000) || `tsc exit ${tsc.exitCode}`;
+    }
+  } catch (err) {
+    // Runner/env failure (not a code failure) → skip verification honestly.
+    await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'error', outputSummary: `verificación no disponible: ${err.message}`, durationMs: Math.max(0, clock().getTime() - t0) }, { prisma }).catch(() => {});
+    return { ran: false, ok: true };
+  }
+  const durationMs = Math.max(0, clock().getTime() - t0);
+  await eventStore.appendEvent(run.id, 'action_end', { actionId, status: ok ? 'done' : 'error', outputSummary: ok ? 'compila sin errores de tipos' : errors, durationMs }, { prisma }).catch(() => {});
+  if (metrics?.recordAction) metrics.recordAction('terminal', durationMs);
+  return { ran: true, ok, errors };
 }
 
 /** Best-effort tracked-file listing for context. Never throws. */
@@ -250,6 +329,8 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
 
   const maxSteps = readPosInt(env.CODEX_MAX_STEPS, DEFAULT_MAX_STEPS);
   const maxToolsPerTurn = readPosInt(env.CODEX_MAX_TOOLS_PER_TURN, DEFAULT_MAX_TOOLS_PER_TURN);
+  const contextMaxChars = readPosInt(env.CODEX_CONTEXT_MAX_CHARS, DEFAULT_CONTEXT_MAX_CHARS);
+  const maxVerifyRounds = readPosInt(env.CODEX_MAX_VERIFY_ROUNDS, DEFAULT_MAX_VERIFY_ROUNDS);
   const registry = buildTools.toolRegistry();
 
   const plan = deps.plan || (await loadApprovedPlan({ run, eventStore, prisma }));
@@ -263,14 +344,17 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   let actionCounter = 0;
   let groupCounter = 0;
   let aborted = false;
+  let verifyRounds = 0;
 
   for (let step = 0; step < maxSteps; step += 1) {
     if (signal?.aborted) { aborted = true; break; }
     if (typeof isCancelled === 'function' && (await isCancelled())) return { status: 'cancelled' };
 
+    compactMessages(messages, { maxChars: contextMaxChars });
+
     let turn;
     try {
-      turn = await llmTurn({ messages, tools: registry, signal, env });
+      turn = await llmTurn({ messages, tools: registry, signal, env, tier: run?.tier || null });
     } catch (err) {
       // Transport error → run error. Feature 09: a blocking pattern (402, missing
       // key, quota) surfaces an action_required card before the run ends.
@@ -298,11 +382,31 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
       messages.push({ role: 'assistant', content: turn.text.trim() });
     }
 
-    const calls = Array.isArray(turn?.toolCalls) ? turn.toolCalls.slice(0, maxToolsPerTurn) : [];
+    const allCalls = Array.isArray(turn?.toolCalls) ? turn.toolCalls : [];
+    const calls = allCalls.slice(0, maxToolsPerTurn);
     if (calls.length === 0) {
-      // Model produced no tool call → it's done.
+      // Model produced no tool call → it thinks it's done. Verify before
+      // closing: typecheck the workspace and feed failures back for a bounded
+      // number of repair rounds (the Claude Code-style verification loop).
+      if (verifyRounds < maxVerifyRounds && step < maxSteps - 1) {
+        const v = await verifyWorkspace({
+          runner, projectId, run, eventStore, prisma, metrics, clock, env,
+          actionId: `a${++actionCounter}`, groupId: `g${++groupCounter}`,
+        });
+        if (v.ran && !v.ok) {
+          verifyRounds += 1;
+          messages.push({ role: 'user', content: `[VERIFICACIÓN] El proyecto NO compila. Errores de tsc:\n${v.errors}\nCorrige estos errores (read_file + edit_file) y cuando termines deja de llamar herramientas.` });
+          continue;
+        }
+      }
       await closeBuild({ run, project, runner, eventStore, prisma, llmTurn, clock, env, metrics });
       return { status: 'done' };
+    }
+    if (allCalls.length > calls.length) {
+      // Honest budget: tell the model what was dropped instead of letting it
+      // believe those actions ran (they never did).
+      const dropped = allCalls.slice(calls.length).map((c) => c.name).join(', ');
+      messages.push({ role: 'user', content: `[BUDGET] Se omitieron ${allCalls.length - calls.length} tool calls de este turno por el límite de ${maxToolsPerTurn} por turno (${dropped}). Reintenta esas acciones en el siguiente turno.` });
     }
 
     const groupId = `g${++groupCounter}`;
@@ -445,11 +549,12 @@ async function ensureAppsVitePreviewable({ run, project, runner, eventStore, pri
   // workspace stays a broken Next+Vite hybrid the host-runner boots into an
   // error overlay. Purge the Next-only files so the workspace is PURE Vite.
   if (typeof runner.exec === 'function') {
-    await runner.exec(
-      projectId,
-      'rm -rf app pages src/app next.config.mjs next.config.js next-env.d.ts .next .next-env.d.ts vite.config.js src/main.js',
-      { timeoutMs: 15000 },
-    ).catch(() => {});
+    // The runner exec API only accepts argv arrays of allowlisted binaries
+    // (no shell, no `rm`) — a plain `rm -rf …` string is rejected upstream and
+    // the Next leftovers survive. `node -e` with fs.rmSync is allowlisted.
+    const purgePaths = ['app', 'pages', 'src/app', 'next.config.mjs', 'next.config.js', 'next-env.d.ts', '.next', '.next-env.d.ts', 'vite.config.js', 'src/main.js'];
+    const purgeScript = `const fs=require('fs');for(const p of ${JSON.stringify(purgePaths)}){try{fs.rmSync(p,{recursive:true,force:true})}catch{}}`;
+    await runner.exec(projectId, ['node', '-e', purgeScript], { timeoutMs: 15000 }).catch(() => {});
   }
   await eventStore.appendEvent(
     run.id,
@@ -517,7 +622,10 @@ async function resolveUserPlan(userId, prisma) {
 async function runAgentLoop({ run, project, signal, isCancelled, deps = {} } = {}) {
   const { eventStore } = deps;
   if (!eventStore) throw new Error('agent-loop: eventStore dep required');
-  const llmTurn = deps.llmTurn || ((a) => require('./llm-turn').defaultLlmTurn(a));
+  const baseLlmTurn = deps.llmTurn || ((a) => require('./llm-turn').defaultLlmTurn(a));
+  // The run tier (composer Power selector) rides along on every model step so
+  // llm-turn can pick the engine (Claude for paid tiers, Cerebras for Eco).
+  const llmTurn = (a) => baseLlmTurn({ tier: run?.tier || null, ...a });
 
   if (typeof isCancelled === 'function' && (await isCancelled())) return { status: 'cancelled' };
 
@@ -538,4 +646,6 @@ module.exports = {
   appsFallbackFiles,
   packageLooksLikeNext,
   isAppsPrompt,
+  compactMessages,
+  verifyWorkspace,
 };

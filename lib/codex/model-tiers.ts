@@ -37,3 +37,20 @@ export function resolveTier(value: unknown): TierDescriptor {
 export function costLabel(tier: CodexTier): string {
   return TIERS[tier]?.cost ?? '$'
 }
+
+const FREE_MODEL_RE = /cerebras|flashgpt|free\s*ia|gema|llama|gpt-oss|glm/i
+const POWER_MODEL_RE = /anthropic|claude|opus|sonnet|gpt-5|openai/i
+
+/**
+ * Map the chat's model-picker choice (catalog provider + model id) to a Codex
+ * tier — the runs API speaks eco|standard|power, never provider names. Free
+ * catalog entries stay Eco; Claude/OpenAI-class choices get Power (the backend
+ * resolves Power → its strongest engine); anything else paid is Estándar.
+ */
+export function tierForModelChoice(provider?: string | null, modelName?: string | null): CodexTier {
+  const haystack = `${provider || ''} ${modelName || ''}`.trim()
+  if (!haystack) return DEFAULT_TIER
+  if (FREE_MODEL_RE.test(haystack)) return 'eco'
+  if (POWER_MODEL_RE.test(haystack)) return 'power'
+  return 'standard'
+}

@@ -16,6 +16,7 @@
 const { getCerebrasConfig } = require('../ai/cerebras-client');
 const llmProvider = require('./llm-provider');
 const { buildPromptedToolsBlock, parsePromptedToolCalls } = require('../agents/prompted-tool-calling');
+const { anthropicTurn, getAnthropicTurnConfig } = require('./anthropic-turn');
 
 // Protocol scaffolding the prompted block tells the model to emit (e.g. a
 // `finalize` block — codex has no such tool, so parsePromptedToolCalls rejects
@@ -54,11 +55,39 @@ function extractUsage(resp, model) {
 }
 
 /**
+ * Which engine drives this step. The composer's Power selector tier travels on
+ * the run row → the loop passes it here. Paid tiers (standard/power by default,
+ * env CODEX_ANTHROPIC_TIERS) go to Claude with native tool use when the key is
+ * configured; Eco — and any run when Anthropic is unavailable — stays on the
+ * free Cerebras prompted path.
+ */
+function resolveTurnEngine({ tier = null, env = process.env } = {}) {
+  const cfg = getAnthropicTurnConfig({ env, tier });
+  return cfg.enabled && cfg.tierEligible ? 'anthropic' : 'cerebras';
+}
+
+/**
  * One model step. `messages` are provider-safe (system/user/assistant only —
  * the loop encodes tool results as user [TOOL_RESULT] messages). `tools` is the
  * registry projection [{ name, description, parameters }].
  */
-async function defaultLlmTurn({ messages, tools = [], signal, env = process.env, createClient, temperature = 0.3, maxTokens } = {}) {
+async function defaultLlmTurn({ messages, tools = [], signal, env = process.env, tier = null, createClient, createAnthropicClient, temperature = 0.3, maxTokens } = {}) {
+  // Native Claude engine for eligible tiers (composer Power selector): best
+  // tool-calling fidelity. On failure it degrades to the prompted ladder
+  // below (which itself may reach Anthropic in prompted mode, or OpenRouter/
+  // Cerebras) instead of failing the run.
+  if (resolveTurnEngine({ tier, env }) === 'anthropic') {
+    try {
+      const opts = { messages, tools, signal, env, tier };
+      if (createAnthropicClient) opts.createClient = createAnthropicClient;
+      return await anthropicTurn(opts);
+    } catch (err) {
+      // An aborted run must stay aborted — don't burn another call on it.
+      if (signal?.aborted) throw err;
+      if (env?.NODE_ENV !== 'test') console.warn('[codex llm-turn] claude nativo falló, degradando al ladder prompted:', err?.message || err);
+    }
+  }
+
   const effective = appendToolsToSystem(messages, tools);
 
   let content = '';
@@ -112,4 +141,4 @@ async function defaultLlmTurn({ messages, tools = [], signal, env = process.env,
   };
 }
 
-module.exports = { defaultLlmTurn, appendToolsToSystem, extractUsage, stripResidualFences };
+module.exports = { defaultLlmTurn, resolveTurnEngine, appendToolsToSystem, extractUsage, stripResidualFences };

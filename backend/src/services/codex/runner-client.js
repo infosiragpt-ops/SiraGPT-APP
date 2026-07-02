@@ -38,9 +38,9 @@ function codexExportHostPath(projectId, env = process.env) {
 }
 
 function createRunnerClient({ fetchImpl = fetch, baseUrl = runnerBaseUrl(), timeoutMs = 30_000 } = {}) {
-  async function call(method, path, body) {
+  async function call(method, path, body, { callTimeoutMs } = {}) {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    const timer = setTimeout(() => ctrl.abort(), callTimeoutMs || timeoutMs);
     let res;
     try {
       res = await fetchImpl(`${baseUrl}${path}`, {
@@ -66,7 +66,12 @@ function createRunnerClient({ fetchImpl = fetch, baseUrl = runnerBaseUrl(), time
     writeFiles: (project, files) => call('POST', '/workspace/write', { project, files }),
     readFile: (project, path) =>
       call('GET', `/workspace/file?project=${encodeURIComponent(project)}&path=${encodeURIComponent(path)}`),
-    exec: (project, cmd, opts = {}) => call('POST', '/workspace/exec', { project, cmd, timeoutMs: opts.timeoutMs }),
+    exec: (project, cmd, opts = {}) =>
+      // The HTTP abort must outlive the command's own budget — otherwise a
+      // 120s `bun install` gets chopped at the client's 30s default.
+      call('POST', '/workspace/exec', { project, cmd, timeoutMs: opts.timeoutMs }, {
+        callTimeoutMs: opts.timeoutMs ? Math.max(timeoutMs, opts.timeoutMs + 10_000) : undefined,
+      }),
     startDev: (project, opts = {}) => call('POST', '/run', { project, basePath: opts.basePath || null }),
     devStatus: () => call('GET', '/status'),
     stopDev: () => call('POST', '/stop'),

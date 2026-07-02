@@ -40,9 +40,14 @@ test('Next hybrid → repairs: writes Vite fallback AND purges the Next scaffold
   assert.equal(runner.calls.writeFiles.length, 1, 'should write the Vite fallback');
   assert.equal(runner.calls.exec.length, 1, 'should purge the Next scaffold');
   const rm = runner.calls.exec[0];
-  assert.match(rm, /rm -rf/);
-  assert.match(rm, /\bapp\b/);
-  assert.match(rm, /next\.config\.mjs/);
+  // The purge must be an argv array of an allowlisted binary (the runner
+  // rejects shell strings) — node -e with fs.rmSync over the Next leftovers.
+  assert.ok(Array.isArray(rm), 'purge must be an argv array, not a shell string');
+  assert.equal(rm[0], 'node');
+  assert.equal(rm[1], '-e');
+  assert.match(rm[2], /rmSync/);
+  assert.match(rm[2], /"app"/);
+  assert.match(rm[2], /next\.config\.mjs/);
 });
 
 test('already-clean React+Vite+TS → no repair, no purge', async () => {

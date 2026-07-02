@@ -44,6 +44,7 @@ import {
   StopCircle,
 } from "lucide-react"
 import { BrowserVoicePlayer } from "@/components/code/browser-voice-player"
+import { tierForModelChoice } from "@/lib/codex/model-tiers"
 import { buildSpokenSummary } from "@/lib/code-agent/spoken-summary"
 import { CodeChatErrorBoundary } from "@/components/code/code-chat-error-boundary"
 import { toast } from "sonner"
@@ -2104,7 +2105,9 @@ export function AICodeChatPanel() {
           // the preview instead of an error overlay (root cause of the overlays).
           prompt: buildAppsModePrompt(text),
           model: activeModelName || undefined,
-          tier: activeProvider,
+          // The runs API speaks eco|standard|power — a provider name here used
+          // to reach the backend as an unknown tier and always fell to Eco.
+          tier: tierForModelChoice(activeProvider, activeModelName),
         })
 
         setEnginePhase(
@@ -2120,7 +2123,7 @@ export function AICodeChatPanel() {
         //    approve it → build run, and stream that to a terminal status.
         let fold = await streamRun(planRun.id, initialCodexEngineFold())
         if (fold.status === "waiting_approval") {
-          const buildRun = await codexApi.approvePlan(projectId, planRun.id, activeProvider)
+          const buildRun = await codexApi.approvePlan(projectId, planRun.id, tierForModelChoice(activeProvider, activeModelName))
           // Reset the fold for the build run's own event/seq stream.
           fold = await streamRun(buildRun.id, initialCodexEngineFold())
         }
@@ -2328,7 +2331,10 @@ export function AICodeChatPanel() {
         return
       }
 
-      if ((composerMode === "app" || composerMode === "build") && isBuildRequest(text)) {
+            // Deterministic build shortcut — ONLY when the real agent is unavailable.
+      // With Codex up, classic build requests ("créame una app de X") must flow
+      // to the agent below; this shortcut used to swallow them into a template.
+      if ((composerMode === "app" || composerMode === "build") && !codexAvailable && isBuildRequest(text)) {
         const direct = nextAgentAction(defaultAgentState(), text, {
           mode: composerMode,
           hasModel: false,
