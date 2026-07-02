@@ -75,25 +75,15 @@ const SNAPSHOT_SCRIPT = `(function(args){
   var lower = bodyText.toLowerCase();
   var hasViteOverlay = !!document.querySelector('vite-error-overlay') ||
     !!document.querySelector('[data-vite-dev-id][style*="z-index"]');
-  // Next.js 13-15 dev mode ALWAYS injects a <nextjs-portal> + build-activity
-  // indicator as its dev-tools mount point — present even when the app renders
-  // perfectly. Detecting the mere presence of the portal is a FALSE POSITIVE
-  // that flags every healthy Next app. Only count it as an error overlay when
-  // the portal actually contains the error DIALOG or real error text.
-  // Next pre-mounts the overlay dialog scaffold (hidden) even with no error, so
-  // matching the selector's mere existence is a false positive. Require REAL
-  // error TEXT: read the portal's rendered text (host + shadow) + any dialog,
-  // and only fire on actual Next error phrases.
-  var nextErrText = '';
-  try {
-    var nextEls = document.querySelectorAll('nextjs-portal, [data-nextjs-dialog], [data-nextjs-error-overlay], [data-nextjs-error], .nextjs-container-errors-header, .nextjs-container-errors-body');
-    for (var ni = 0; ni < nextEls.length; ni++) {
-      var el = nextEls[ni];
-      if (el.shadowRoot) nextErrText += ' ' + (el.shadowRoot.textContent || '');
-      nextErrText += ' ' + (el.textContent || '');
-    }
-  } catch (e) { nextErrText = ''; }
-  var hasNextOverlay = /nextjs__container_errors|unhandled runtime error|build error|failed to compile|call stack|module not found|syntaxerror|referenceerror|typeerror:|__next_error__/i.test(nextErrText);
+  // NOTE: we deliberately do NOT infer a Next.js error from the presence of the
+  // <nextjs-portal>/build-activity dev scaffold — Next 13-15 always mount it
+  // (with static error-UI labels like "Call Stack"/"Build Error" in a hidden
+  // shadow root), which false-flagged every healthy Next app. A REAL Next
+  // runtime/compile error is caught reliably elsewhere: it fires an uncaught
+  // pageerror/console error (→ js_runtime_error finding) and/or prints a crash
+  // phrase into the visible body (hasCrashText below). So Next needs no
+  // dedicated overlay probe here.
+  var hasNextOverlay = false;
   var crashPhrases = [
     'application error', 'internal server error', 'cannot get /',
     'unhandled runtime error', 'failed to compile', 'this page isn',
