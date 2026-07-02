@@ -92,6 +92,28 @@ router.post('/:runId/stop', authenticateToken, (req, res) => {
   return res.json({ ok: stopped });
 });
 
+// Functional "does the app actually render?" check — drives the run's live dev
+// server through headless chromium and reports a verdict. Companion to the
+// tsc-based /verify (which only proves the code type-checks). Ownership-checked
+// + phase-gated inside verifyRuntime; degrades to { skipped:true, ok:true } when
+// no browser is available, so it never blocks the app.
+router.post('/:runId/verify-runtime', authenticateToken, async (req, res) => {
+  try {
+    const verdict = await hostRunner.verifyRuntime(req.params.runId, req.user.id);
+    if (verdict && verdict.error === 'forbidden') {
+      return res.status(403).json({ error: 'forbidden', message: 'No puedes verificar la ejecución de otro usuario.' });
+    }
+    if (verdict && verdict.error === 'not_found') {
+      return res.status(404).json({ error: 'not_found', message: 'La ejecución no existe.' });
+    }
+    return res.json(verdict);
+  } catch (err) {
+    // Don't echo err.message — it may embed absolute server tmp paths (CWE-209).
+    console.error('[code-runner] verify-runtime failed:', (err && err.message) || err);
+    return res.status(500).json({ error: 'verify_failed', message: 'No se pudo verificar la ejecución.' });
+  }
+});
+
 function applyPreviewFrameHeaders(_req, res, next) {
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");
