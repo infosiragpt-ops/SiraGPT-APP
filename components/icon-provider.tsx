@@ -24,7 +24,6 @@ import {
     Share2              // OpenRouter (General/Fallback)
 } from "lucide-react";
 import * as React from "react";
-import Image from "next/image";
 
 import { useTheme } from "next-themes";
 
@@ -106,20 +105,41 @@ interface IconProviderProps extends Omit<LucideProps, 'name'> {
     size?: number;
 }
 
-export const IconProvider = ({ name, size = 24, className, style, ...props }: IconProviderProps) => {
+// Warm the browser's in-memory image cache once per icon path. A (re)mounted
+// <img> whose bytes are already decoded paints on the SAME frame — no blank
+// flash. This is the hardening for the "logo flickers while streaming" bug:
+// the composer chip re-mounts during streaming, and next/image (wrapper +
+// async decode) painted a transparent frame each time.
+const warmedIcons = new Set<string>();
+function warmIcon(src: string) {
+    if (typeof window === "undefined" || warmedIcons.has(src)) return;
+    warmedIcons.add(src);
+    const img = new window.Image();
+    img.decoding = "sync";
+    img.src = src;
+}
 
-    const { theme } = useTheme();
+const IconProviderInner = ({ name, size = 24, className, style, ...props }: IconProviderProps) => {
 
-    if (!name || !iconMap[name]) {
+    const { resolvedTheme } = useTheme();
+
+    const iconConfig = name ? iconMap[name] : undefined;
+    const imagePath = iconConfig?.type === 'png' ? iconConfig.imagePath : undefined;
+
+    // Warm the cache during render on the client (idempotent) so even the very
+    // first paint of a remounted chip has decoded bytes ready.
+    if (imagePath) warmIcon(imagePath);
+
+    if (!name || !iconConfig) {
         return <Bot size={size} {...props} />; // Default Bot icon if not found
     }
 
-    const iconConfig = iconMap[name];
-
     if (iconConfig.type === 'png') {
+        // resolvedTheme (not theme): `theme` can be "system"/undefined during
+        // hydration, which briefly swapped the filter and read as a flash.
         const filter =
             iconConfig.filter ||
-            (theme === "dark" ? iconConfig.darkFilter : iconConfig.lightFilter) ||
+            (resolvedTheme === "dark" ? iconConfig.darkFilter : iconConfig.lightFilter) ||
             "none";
 
         return (
@@ -127,15 +147,19 @@ export const IconProvider = ({ name, size = 24, className, style, ...props }: Ic
                 className={className}
                 style={{ width: size, height: size, position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', ...style }}
             >
-                <Image
+                {/* Plain <img> on purpose: these are tiny local static assets.
+                    next/image's wrapper + async decode repainted a blank frame on
+                    every remount (the streaming flicker). decoding="sync" +
+                    warmed memory cache paints instantly. */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
                     src={iconConfig.imagePath!}
                     alt={name}
                     width={size}
                     height={size}
-                    // Decode eagerly: these tiny brand logos are cached, and
-                    // lazy/async decode paints a blank frame on (re)mount, which
-                    // reads as a flicker in the streaming composer chip.
                     loading="eager"
+                    decoding="sync"
+                    draggable={false}
                     style={{
                         width: size,
                         height: size,
@@ -150,3 +174,8 @@ export const IconProvider = ({ name, size = 24, className, style, ...props }: Ic
     const IconComponent = iconConfig.component!;
     return <IconComponent size={size} className={className} style={style} {...props} />;
 };
+
+// Memoized: the chat composer chip re-renders per streamed token; without memo
+// each render re-evaluated the tree and, combined with remounts, flickered.
+export const IconProvider = React.memo(IconProviderInner);
+IconProvider.displayName = "IconProvider";
