@@ -20,6 +20,20 @@ export interface HostRunStatus {
   port?: number
 }
 
+/** Verdict from the headless-chromium post-boot functional check. */
+export interface RuntimeVerdict {
+  ok?: boolean
+  skipped?: boolean
+  reason?: string
+  rendered?: boolean
+  navStatus?: number
+  errors?: string[]
+  warnings?: string[]
+  findings?: Array<{ severity: string; kind: string; message: string }>
+  summary?: string
+  error?: string
+}
+
 const baseUrl = `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}/code-runner`
 
 function authHeaders(): HeadersInit {
@@ -84,6 +98,27 @@ export const hostRunnerService = {
       return (await res.json().catch(() => ({}))) as HostRunStatus
     } catch (e) {
       return { error: e instanceof Error ? e.message : "runner unreachable" }
+    }
+  },
+
+  /**
+   * Post-boot functional check: does the app actually RENDER (not blank / 500 /
+   * JS-crashed), Replit-style? Runs headless chromium server-side against the
+   * live dev server. Never throws and never blocks the app: any hiccup (or a
+   * missing browser) returns { ok:true, skipped:true } so a working preview is
+   * never held back by a verify problem.
+   */
+  async verifyRuntime(runId: string): Promise<RuntimeVerdict> {
+    try {
+      const res = await fetch(`${baseUrl}/${encodeURIComponent(runId)}/verify-runtime`, {
+        method: "POST",
+        credentials: "include",
+        headers: authHeaders(),
+      })
+      if (!res.ok) return { ok: true, skipped: true, reason: `HTTP ${res.status}`, findings: [] }
+      return (await res.json().catch(() => ({}))) as RuntimeVerdict
+    } catch {
+      return { ok: true, skipped: true, reason: "unreachable", findings: [] }
     }
   },
 

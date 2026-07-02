@@ -260,6 +260,13 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
   const autoFixCountRef = React.useRef(0)
   const lastAutoFixedNoteRef = React.useRef("")
   const lastErrorLogRef = React.useRef("")
+  // Post-boot functional verification (Replit-style "does it actually work?").
+  // Separate budget/dedup from the build-error auto-repair above so a blank /
+  // crashed-but-compiling app also gets auto-fixed, without the two loops
+  // fighting over one counter. verifiedRuntimeRef gates one check per ready.
+  const verifiedRuntimeRef = React.useRef(false)
+  const verifyFixCountRef = React.useRef(0)
+  const lastVerifyNoteRef = React.useRef("")
 
   // The chat panel dispatches "siragpt:code-run-app" in the SAME tick as the
   // applyBlock() setState that writes the new files — so at event time the
@@ -365,6 +372,45 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
     autoFixCountRef.current += 1
     window.dispatchEvent(new CustomEvent("siragpt:code-fix-error", { detail: { text: log } }))
   }, [liveRun.phase, liveRun.note])
+
+  // Replit-style functional verification: once the dev server is `ready`, drive
+  // it through headless chromium (server-side) and, if the app booted but does
+  // NOT actually render (blank / error-overlay / JS crash / missing required
+  // element), hand those findings to the chat agent so it self-repairs — WITHOUT
+  // hiding the (broken) preview. One check per ready session; own capped +
+  // de-duped budget so it never fights the build-error loop above or spins.
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    if (liveRun.phase !== "ready" || modeRef.current !== "host") {
+      verifiedRuntimeRef.current = false
+      return
+    }
+    if (verifiedRuntimeRef.current) return
+    verifiedRuntimeRef.current = true
+    const runId = runIdRef.current
+    if (!runId) return
+    let cancelled = false
+    void hostRunnerService.verifyRuntime(runId).then((v) => {
+      if (cancelled || phaseRef.current !== "ready" || runIdRef.current !== runId) return
+      if (!v || v.skipped || v.ok) return
+      const problems =
+        v.errors && v.errors.length
+          ? v.errors
+          : (v.findings || []).filter((f) => f.severity === "error").map((f) => f.message)
+      if (!problems.length) return
+      const text = [
+        "La app arrancó pero la verificación en vivo encontró problemas que hay que arreglar:",
+        ...problems.slice(0, 8).map((p) => `- ${p}`),
+      ].join("\n")
+      if (text === lastVerifyNoteRef.current || verifyFixCountRef.current >= AUTO_FIX_MAX) return
+      lastVerifyNoteRef.current = text
+      verifyFixCountRef.current += 1
+      window.dispatchEvent(new CustomEvent("siragpt:code-fix-error", { detail: { text } }))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [liveRun.phase])
 
   React.useEffect(
     () => () => {
