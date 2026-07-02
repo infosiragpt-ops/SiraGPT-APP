@@ -120,6 +120,9 @@ export function CodeWorkspace() {
   }, [])
 
   const handleTogglePanel = React.useCallback((id: WorkspacePanelId) => {
+    // Focusing a real tab dismisses the "Nueva pestaña" picker (it overlays
+    // the main area, so the switch would otherwise be invisible).
+    setNewTabOpen(false)
     setActivePanel(id)
     setOpenPanels((prev) => new Set(prev).add(id))
     if (id === "terminal") {
@@ -499,12 +502,14 @@ export function CodeWorkspace() {
         inviteOpen={inviteOpen}
         onOpenCode={() => {
           setActiveTool(null)
+          setNewTabOpen(false)
           setCodeHubOpen(true)
           setMobileView("preview")
         }}
         codeOpen={codeHubOpen}
         onOpenPublishing={() => {
           setCodeHubOpen(false)
+          setNewTabOpen(false)
           setActiveTool("publishing")
           setMobileView("preview")
         }}
