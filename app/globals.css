@@ -594,11 +594,10 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 
 .chat-composer-dock {
   padding: 1rem 1rem calc(1rem + var(--chat-mobile-bottom-clearance, env(safe-area-inset-bottom, 0px)));
-  background: linear-gradient(
-    to top,
-    hsl(var(--background)) 76%,
-    hsl(var(--background) / 0)
-  );
+  /* Floating composer: no fading "band" above the input pill. The pill carries
+     its own solid background, so messages scroll cleanly up to the composer line
+     instead of dissolving into a white gradient strip. */
+  background: transparent;
 }
 
 .chat-user-bubble {

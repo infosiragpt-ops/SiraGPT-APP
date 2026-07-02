@@ -10694,7 +10694,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           className={`relative flex flex-col h-full min-w-0 overflow-hidden ${rightPanelActive ? '' : 'w-full'}`}
         >
           {/* Header */}
-          <div ref={chatHeaderRef} className="chat-mobile-header absolute top-0 left-0 right-0 z-10 backdrop-blur-sm">
+          <div ref={chatHeaderRef} className="chat-mobile-header absolute top-0 left-0 right-0 z-10">
             <div className="chat-header-row flex items-center justify-between">
               <div className="chat-header-left flex min-w-0 items-center gap-2">
                 <div className="shrink-0 md:hidden">
