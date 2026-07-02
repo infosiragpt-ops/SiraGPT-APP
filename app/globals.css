@@ -647,6 +647,46 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   border-radius: 999px;
 }
 
+/* UnifiedDocumentViewer — professional finish for the document preview.
+   1) Thin, unobtrusive scrollbars on every scroll region (pages, text,
+      sheets, zip lists), matching the chat menus instead of the chunky
+      platform default.
+   2) The page-number input in the floating pager hides the native
+      number-spinner arrows — the pill reads as "1 / 45", not a form field. */
+.unified-doc-viewer * {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--foreground) / 0.18) transparent;
+}
+
+.unified-doc-viewer *::-webkit-scrollbar {
+  width: 0.375rem;
+  height: 0.375rem;
+}
+
+.unified-doc-viewer *::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.unified-doc-viewer *::-webkit-scrollbar-thumb {
+  background: hsl(var(--foreground) / 0.18);
+  border-radius: 999px;
+}
+
+.unified-doc-viewer *::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--foreground) / 0.3);
+}
+
+.unified-doc-viewer input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.unified-doc-viewer input[type="number"]::-webkit-inner-spin-button,
+.unified-doc-viewer input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
 .chat-tools-menu [role="menuitem"] {
   min-width: 0;
 }

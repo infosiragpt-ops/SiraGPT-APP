@@ -416,7 +416,7 @@ export default function UnifiedDocumentViewer({
         aria-labelledby="unified-document-viewer-title"
         data-testid="unified-document-viewer-dialog"
         className={cn(
-          "flex flex-col overflow-hidden border border-border bg-background p-0",
+          "unified-doc-viewer flex flex-col overflow-hidden border border-border bg-background p-0",
           variant === "panel"
             ? "h-full w-full rounded-none border-y-0 border-r-0 shadow-none"
             : "fixed left-1/2 top-1/2 z-[10001] h-[85vh] w-[min(96vw,64rem)] -translate-x-1/2 -translate-y-1/2 rounded-lg shadow-lg",
