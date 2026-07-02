@@ -978,12 +978,19 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       setIsLoading(false);
     }
 
-    // Abort local fetch request immediately
+    // Abort local fetch request immediately.
     if (targetStream?.controller) {
       devLog("Aborting chat-scoped fetch request");
       targetStream.controller.abort();
-    } else if (abortControllerRef.current) {
-      devLog("Aborting local fetch request");
+    } else if (
+      abortControllerRef.current &&
+      // The shared abortControllerRef is a process-global slot that non-default
+      // intents (doc/viz/math/plan) still write to. Only fall back to it when
+      // NO OTHER chat is streaming — otherwise Stop on chat A could abort a
+      // background chat B whose controller happens to sit in the shared slot.
+      activeStreamingChatIdsRef.current.size <= 1
+    ) {
+      devLog("Aborting local fetch request (shared slot, single active stream)");
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
@@ -1080,9 +1087,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setChats((prev) => prev.filter(c => c && c.id).map((c) => (c.id === activeChat.id ? updatedChat : c)));
       }
 
-      // STEP 2: AI ke jawab ke liye placeholder
+      // STEP 2: AI ke jawab ke liye placeholder.
+      // Collision-proof + chat-scoped id: `Date.now()` alone collides when two
+      // chats start in the same millisecond (e.g. a queue-drain burst), and the
+      // reasoning/agent-trace SSE handlers patch by message id — a collision
+      // rendered chat A's thinking trace + tool timeline inside chat B.
       const aiMessagePlaceholder: Message = {
-        id: `msg-ai-${Date.now()}`,
+        id: `msg-ai-${activeChat.id}-${safeUUID()}`,
         chatId: activeChat.id,
         role: 'ASSISTANT',
         content: '',

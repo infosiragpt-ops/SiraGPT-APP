@@ -1758,19 +1758,39 @@ router.post(
       console.log(`Stream registered with ID: ${streamId}`);
     }
 
-    // Abort only when the response stream is actually closed by the
-    // client. `req.close` can fire after the request body is consumed,
-    // which aborts healthy SSE generations before the model emits.
+    // Background-chat semantics: a dropped socket (tab close, reload, network
+    // blip, browser aborting a fetch on navigation) NO LONGER aborts the run.
+    // The generation keeps executing server-side, keeps feeding the
+    // stream-resume buffer, and is persisted by saveChatAndTrackUsage on
+    // completion — so a chat left "working" finishes even if nobody watches.
+    // The ONLY path that truly aborts is the explicit Stop button
+    // (POST /api/ai/stop-stream → per-user stream registry → controller.abort()).
+    let clientGone = false;
     res.on('close', () => {
       if (!res.writableEnded) {
-        console.log(`Client response closed for chat: ${req.body.chatId}. Aborting AI generation.`);
-        controller.abort();
+        clientGone = true;
+        console.log(`Client response closed for chat: ${req.body.chatId}. Run continues in background (detached).`);
       }
     });
     req.on('aborted', () => {
-      console.log(`Client request aborted for chat: ${req.body.chatId}. Aborting AI generation.`);
-      controller.abort();
+      clientGone = true;
+      console.log(`Client request aborted for chat: ${req.body.chatId}. Run continues in background (detached).`);
     });
+    // Centralized mirror guard: once the client is gone, every res.write in
+    // this handler becomes a silent no-op (writing to a destroyed socket would
+    // emit stream errors), without touching each of the many call sites.
+    {
+      const rawWrite = res.write.bind(res);
+      res.write = (...args) => {
+        if (clientGone || res.destroyed || res.writableEnded) return true;
+        try { return rawWrite(...args); } catch { return true; }
+      };
+      const rawEnd = res.end.bind(res);
+      res.end = (...args) => {
+        if (clientGone || res.destroyed || res.writableEnded) return res;
+        try { return rawEnd(...args); } catch { return res; }
+      };
+    }
 
     try {
       const errors = validationResult(req);
@@ -6023,7 +6043,7 @@ router.post(
       } catch (apiError) {
         if (cacheHandle) cacheHandle.fail(apiError && apiError.message ? apiError.message : 'stream failed');
         if (apiError && typeof apiError === 'object' && 'name' in apiError && apiError.name === 'AbortError') {
-          console.warn('AI Service stream aborted by client in route, no further content will be sent.');
+          console.warn('AI Service stream aborted (explicit stop), no further content will be sent.');
           // PR-2: record abandoned_stream signal (fire-and-forget).
           try {
             const __misSignals = require('../services/agents/misunderstanding-signals');
@@ -6037,6 +6057,37 @@ router.post(
               } catch (_) {}
             });
           } catch (_) { /* fully swallowed */ }
+          // Persist-on-abort: don't throw away real work. If the model already
+          // produced meaningful content when the run was stopped, save it as
+          // the assistant message (save path is owner-scoped, save-locked and
+          // duplicate-guarded; needs no live socket) so the partial answer is
+          // still there after a reload — instead of silently vanishing.
+          try {
+            const abortedContent = (fullResponseContent || '').trim();
+            if (abortedContent.length >= 40 && canPersist) {
+              const savedChat = await saveChatAndTrackUsage(
+                userId,
+                chatId,
+                prompt,
+                abortedContent,
+                abortedContent.length + prompt.length,
+                actualModel,
+                processedFiles,
+                [],
+                regenerate,
+                { stoppedByUser: true },
+                req.user?.plan || null,
+                null,
+                req._agentRun || null,
+              );
+              if (req._activeGenerateTurn && !req._activeGenerateTurn.settled) {
+                req._activeGenerateTurn.resolve(savedChat);
+              }
+              console.log(`[ai] persist-on-abort saved ${abortedContent.length} chars for chat ${chatId}`);
+            }
+          } catch (saveErr) {
+            console.warn('[ai] persist-on-abort failed:', saveErr && saveErr.message);
+          }
           // Don't rethrow, just return, as client has already aborted and doesn't expect more data/error
           return;
         }
