@@ -94,15 +94,36 @@ const SNAPSHOT_SCRIPT = `(function(args){
   // "there is an overlay"). Vite renders inside a shadow DOM; Next in a portal.
   var overlayText = '';
   try {
+    // Read an element's text INCLUDING its shadow root (Vite + Next render the
+    // overlay in a shadow DOM, so plain textContent on the host is empty).
+    function deepText(el){
+      if (!el) return '';
+      var t = '';
+      try { if (el.shadowRoot) t = el.shadowRoot.textContent || ''; } catch (e) {}
+      if (!t) { try { t = el.textContent || ''; } catch (e) {} }
+      return t;
+    }
     var vo = document.querySelector('vite-error-overlay');
     if (vo && vo.shadowRoot) {
       var mb = vo.shadowRoot.querySelector('.message-body, .message, pre');
       overlayText = (mb ? mb.textContent : vo.shadowRoot.textContent) || '';
     } else if (hasNextOverlay) {
-      var nd = document.querySelector('[data-nextjs-dialog], [data-nextjs-error-overlay], nextjs-portal');
-      overlayText = nd ? (nd.textContent || '') : '';
+      var nd = document.querySelector('nextjs-portal') ||
+        document.querySelector('[data-nextjs-dialog], [data-nextjs-error-overlay]');
+      overlayText = deepText(nd);
     } else if (hasCrashText || isBare500) {
       overlayText = bodyText;
+    }
+    // Last-resort generic scan: any custom element carrying overlay text in a
+    // shadow root (covers framework variants our selectors miss).
+    if (!overlayText) {
+      var hosts = document.querySelectorAll('*');
+      for (var i = 0; i < hosts.length && i < 400; i++) {
+        var sr = hosts[i].shadowRoot;
+        if (!sr) continue;
+        var st = sr.textContent || '';
+        if (/error|exception|failed|is not defined|cannot|unexpected/i.test(st)) { overlayText = st; break; }
+      }
     }
     overlayText = String(overlayText).replace(/\\s+/g, ' ').trim().slice(0, 600);
   } catch (e) { overlayText = ''; }
