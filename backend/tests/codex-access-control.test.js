@@ -18,6 +18,17 @@ test('codex access allows explicit user ids from env allowlist', () => {
   assert.equal(canUseCodexAgent({ id: 'other' }, env), false);
 });
 
+test('CODEX_AGENT_OPEN_TO_ALL lets any authenticated user through (but not anonymous)', () => {
+  const env = { CODEX_AGENT_OPEN_TO_ALL: '1' };
+  assert.equal(canUseCodexAgent({ id: 'anyone' }, env), true);
+  assert.equal(canUseCodexAgent(null, env), false); // still needs a user
+  assert.equal(canUseCodexAgent({ id: 'x' }, { CODEX_AGENT_OPEN_TO_ALL: 'true' }), true);
+  assert.equal(canUseCodexAgent({ id: 'x' }, { CODEX_AGENT_OPEN_TO_ALL: 'off' }), false);
+  assert.equal(canUseCodexAgent({ id: 'x' }, {}), false); // default off
+  assert.equal(publicAccess({ id: 'u' }, env).canRun, true);
+  assert.equal(publicAccess({ id: 'u' }, env).allowlistConfigured, true);
+});
+
 test('publicAccess exposes only coarse gate state', () => {
   assert.deepEqual(publicAccess({ id: 'u-1' }, { CODEX_AGENT_ALLOWED_USER_IDS: '' }), {
     canRun: false,

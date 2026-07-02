@@ -105,6 +105,15 @@ import { isSlowModel, recommendFastModel } from "@/lib/code-agent/model-policy"
 import { fetchCodeIntakeQuestion } from "@/lib/code/intake-question"
 import { opencodeService } from "@/lib/opencode/opencode-service"
 import { useOpencodeEngine } from "@/lib/opencode/use-opencode-engine"
+import { codexApi } from "@/lib/codex/codex-api"
+import { openRunStream } from "@/lib/codex/run-stream"
+import { useCodexHealth } from "@/lib/codex/use-codex-health"
+import {
+  codexLiveContent,
+  foldCodexEvent,
+  initialCodexEngineFold,
+  type CodexEngineFoldState,
+} from "@/lib/code-agent/codex-engine-mapping"
 
 import { DiffView } from "./diff-view"
 
@@ -778,6 +787,13 @@ export function AICodeChatPanel() {
   const [engineMode, setEngineMode] = React.useState(false)
   // Map<chatSessionId, engineSessionId> so each code chat reuses one engine session.
   const engineSessionRef = React.useRef<Record<string, string>>({})
+  // Codex Agent V2 — the REAL server-driven agent (plan→build runs, durable
+  // SSE). Health-gated: when the backend flag is off everything below falls
+  // back to the OpenCode/deterministic tiers exactly as before.
+  const codexHealth = useCodexHealth()
+  const codexAvailable = codexHealth.enabled === true
+  // Map<chatSessionId, codexProjectId> so each code chat reuses ONE project.
+  const codexProjectRef = React.useRef<Record<string, string>>({})
 
   const abortRef = React.useRef<AbortController | null>(null)
   // Turn ids whose `voice` was created in THIS panel instance. Only these
@@ -1861,6 +1877,321 @@ export function AICodeChatPanel() {
     [applyFilesToWorkspace, files, markVoiced, runDeterministicInto, setTurns],
   )
 
+  // Codex Agent V2 path — the REAL agent behind the SAME chat UI. Creates one
+  // Codex project per chat session, drives a plan run → auto-approves → build
+  // run, folds the durable SSE events onto the assistant turn (narrative,
+  // phases, file/command counts), then pulls the files the run wrote back into
+  // the workspace. Deterministic buildApp fallback inside, so a build ALWAYS
+  // lands even if the agent errors — mirroring runEngine's guarantees.
+  const runCodexEngine = React.useCallback(
+    async (text: string, sid: string, opts?: { iterate?: boolean }) => {
+      const iterate = !!opts?.iterate
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const assistantId = `${id}-a`
+      setTurns((prev) => [
+        ...prev,
+        { id, role: "user", content: text },
+        {
+          id: assistantId,
+          role: "assistant",
+          content: iterate ? "⚙️ Agente Codex trabajando…" : "⚙️ Agente Codex construyendo…",
+          streaming: true,
+          agentLabel: iterate ? "Agente Codex trabajando" : "Construyendo con Agente Codex",
+          agentPhases: buildCodeAgentPhases("plan", {
+            plan: { status: "running", detail: iterate ? "Preparando turno" : "Preparando build" },
+          }),
+        },
+      ])
+      setInput("")
+      setBusy(true)
+      const controller = new AbortController()
+      abortRef.current = controller
+
+      const setEnginePhase = (label: string, phases: CodeAgentPhase[]) =>
+        setTurns((prev) =>
+          prev.map((t) => (t.id === assistantId ? { ...t, agentLabel: label, agentPhases: phases } : t)),
+        )
+
+      const startedAt = Date.now()
+      // finish() mirrors runEngine.finish: on a write it attaches the
+      // Worked-Summary actions/metrics from REAL data + the spoken digest.
+      const finish = (
+        content: string,
+        meta?: {
+          written?: Array<{ path: string; content: string }>
+          read?: Array<{ path: string; content: string }>
+          label?: string
+          phases?: CodeAgentPhase[]
+        },
+      ) => {
+        if (meta?.written && meta.written.length > 0) markVoiced(assistantId)
+        setTurns((prev) =>
+          prev.map((t) => {
+            if (t.id !== assistantId) return t
+            const wrote = !!(meta?.written && meta.written.length > 0)
+            const base = {
+              ...t,
+              content,
+              streaming: false,
+              agentLabel: meta?.label ?? "Turno completado",
+              agentPhases:
+                meta?.phases ??
+                buildCodeAgentPhases("verify", {
+                  plan: { status: "done", detail: "Plan listo" },
+                  context: { status: "done", detail: iterate ? "Workspace leído" : "Contexto de build listo" },
+                  generate: { status: "done", detail: "Agente Codex" },
+                  apply: {
+                    status: "done",
+                    detail: wrote ? `${meta!.written!.length} archivo(s) aplicados` : "Sin escritura de archivos",
+                  },
+                  verify: { status: "done", detail: wrote ? "Workspace actualizado" : "Respuesta entregada" },
+                }),
+            }
+            if (wrote) {
+              const { actions, metrics } = buildWriteMetrics(meta!.written!, {
+                startedAt,
+                now: Date.now(),
+                getPrevContent: (p) => files[p]?.content ?? "",
+                read: meta?.read,
+              })
+              return {
+                ...base,
+                actions,
+                metrics,
+                voice: buildSpokenSummary({
+                  kind: iterate ? "patch" : "engine",
+                  filesChanged: metrics.filesChanged,
+                  durationMs: metrics.timeWorkedMs,
+                }),
+              }
+            }
+            return base
+          }),
+        )
+      }
+
+      // Stream a single Codex run to a terminal status, folding its events onto
+      // the assistant turn. Returns the final fold state (status + collected
+      // written/read paths + narrative). Reject only for a hard transport error.
+      const streamRun = (runId: string, fold: CodexEngineFoldState) =>
+        new Promise<CodexEngineFoldState>((resolve, reject) => {
+          let state = fold
+          let lastPhase = state.phase
+          const applyRender = () => {
+            const live = codexLiveContent(state)
+            const phaseDetail =
+              state.status === "waiting_approval"
+                ? "Plan propuesto"
+                : state.writtenPaths.length > 0
+                  ? `${state.writtenPaths.length} archivo(s)`
+                  : state.commandCount > 0
+                    ? `${state.commandCount} comando(s)`
+                    : "El agente está trabajando"
+            const phaseKey = state.phase
+            const label =
+              phaseKey === "apply"
+                ? "Aplicando cambios al workspace"
+                : phaseKey === "verify"
+                  ? "Verificando el resultado"
+                  : "Generando con Agente Codex"
+            const phases = buildCodeAgentPhases(phaseKey, {
+              plan: { status: "done", detail: "Plan listo" },
+              context: { status: "done", detail: iterate ? "Workspace leído" : "Contexto de build listo" },
+              ...(phaseKey === "generate"
+                ? { generate: { status: "running", detail: phaseDetail } }
+                : {}),
+              ...(phaseKey === "apply"
+                ? { generate: { status: "done", detail: "Trabajo del agente" }, apply: { status: "running", detail: phaseDetail } }
+                : {}),
+            })
+            setTurns((prev) =>
+              prev.map((t) =>
+                t.id === assistantId
+                  ? { ...t, ...(live ? { content: live } : {}), agentLabel: label, agentPhases: phases }
+                  : t,
+              ),
+            )
+          }
+          const handle = openRunStream({
+            runId,
+            onEvent: (ev) => {
+              const nextState = foldCodexEvent(state, ev)
+              if (nextState !== state) {
+                state = nextState
+                if (state.phase !== lastPhase || ev.type === "narrative_delta" || ev.type === "reasoning_delta" || ev.type === "action_start") {
+                  lastPhase = state.phase
+                  applyRender()
+                }
+              }
+            },
+            onStatus: (status) => {
+              state = { ...state, status }
+            },
+            token,
+          })
+          // The stream resolves its `done` promise on a terminal run_status or
+          // close(); if the user cancels the turn we abort it via the controller.
+          const onAbort = () => handle.close()
+          controller.signal.addEventListener("abort", onAbort)
+          handle.done
+            .then(() => resolve(state))
+            .catch(reject)
+            .finally(() => controller.signal.removeEventListener("abort", onAbort))
+        })
+
+      try {
+        // 1) Ensure ONE Codex project per chat session (cached by sid).
+        let projectId = codexProjectRef.current[sid]
+        if (!projectId) {
+          const title = compactGeneratedTitle(text)
+          const project = await codexApi.createProject(title)
+          projectId = project.id
+          codexProjectRef.current[sid] = projectId
+        }
+
+        setEnginePhase(
+          iterate ? "Preparando turno del agente" : "Planificando la construcción",
+          buildCodeAgentPhases("context", {
+            plan: { status: "done", detail: "Proyecto Codex listo" },
+            context: { status: "running", detail: iterate ? "Leyendo workspace" : "Preparando build" },
+          }),
+        )
+
+        // 2) Start a `plan` run for the user's order. Codex requires a plan run
+        //    before a build; the plan auto-approves into build below.
+        const planRun = await codexApi.createRun(projectId, {
+          mode: "plan",
+          prompt: text,
+          model: activeModelName || undefined,
+          tier: activeProvider,
+        })
+
+        setEnginePhase(
+          "Generando con Agente Codex",
+          buildCodeAgentPhases("generate", {
+            plan: { status: "done", detail: "Proyecto Codex listo" },
+            context: { status: "done", detail: iterate ? "Workspace leído" : "Contexto de build listo" },
+            generate: { status: "running", detail: "El agente está trabajando" },
+          }),
+        )
+
+        // 3) Stream the plan run to its terminal / waiting_approval status, then
+        //    approve it → build run, and stream that to a terminal status.
+        let fold = await streamRun(planRun.id, initialCodexEngineFold())
+        if (fold.status === "waiting_approval") {
+          const buildRun = await codexApi.approvePlan(projectId, planRun.id, activeProvider)
+          // Reset the fold for the build run's own event/seq stream.
+          fold = await streamRun(buildRun.id, initialCodexEngineFold())
+        }
+
+        const narrative = codexLiveContent(fold)
+        const succeeded = fold.status === "done"
+
+        if (succeeded) {
+          // 4) Pull the files the run wrote. Prefer the bounded set of
+          //    file_write paths seen in the stream; else list the whole tree.
+          let paths = fold.writtenPaths.filter(Boolean)
+          if (paths.length === 0) {
+            try {
+              paths = await codexApi.listFiles(projectId)
+            } catch {
+              paths = []
+            }
+          }
+          const sourcePaths = paths
+            .filter((p) => !/(^|\/)(node_modules|\.git|dist|build|\.next)\//.test(p))
+            .slice(0, 80)
+          const pulled = await Promise.all(
+            sourcePaths.map(async (path) => {
+              try {
+                const file = await codexApi.readFileContent(projectId!, path)
+                return file?.content ? { path, content: file.content } : null
+              } catch {
+                return null
+              }
+            }),
+          )
+          const written = pulled.filter((f): f is { path: string; content: string } => Boolean(f))
+          if (written.length > 0) {
+            applyFilesToWorkspace(written)
+            finish(
+              narrative
+                ? `${narrative}\n\n_(Agente Codex: ${written.length} archivo(s) →)_`
+                : `✅ Agente Codex — ${written.length} archivo(s) →`,
+              { written },
+            )
+            toast.success(`Agente Codex — ${written.length} archivo(s) →`)
+            return
+          }
+          // Run finished OK but produced no files (e.g. a pure Q&A/plan turn):
+          // render the narrative if any, else fall through to the fallback.
+          if (narrative && iterate) {
+            finish(narrative)
+            return
+          }
+        }
+
+        // 5) FALLBACK: the run failed / produced nothing usable → deterministic
+        //    builder so the user is NEVER left empty (mirrors runEngine).
+        if (!iterate) {
+          await buildApp(text)
+          finish(
+            narrative
+              ? `${narrative}\n\n_(El agente no dejó archivos; usé el builder determinista.)_`
+              : "✅ App generada (builder determinista).",
+          )
+          return
+        }
+        finish(narrative || "_(el agente no devolvió cambios)_")
+      } catch (err: any) {
+        const aborted =
+          err?.name === "AbortError" ||
+          /\babort|cancel|operation was aborted/i.test(err?.message || "")
+        if (aborted) {
+          finish("_Generación detenida._", {
+            label: "Generación detenida",
+            phases: buildCodeAgentPhases("generate", {
+              generate: { status: "done", detail: "Detenida" },
+            }),
+          })
+        } else if (!opts?.iterate) {
+          // Project provisioning / plan-run error during a BUILD → still deliver
+          // via the deterministic builder in the same turn.
+          try {
+            await buildApp(text)
+            finish("✅ App generada (builder determinista). El Agente Codex no respondió.")
+            toast.success("App generada (builder determinista) →")
+          } catch {
+            finish(`_${err?.message || "El Agente Codex no respondió"}_`, {
+              label: "Error en el turno",
+              phases: buildCodeAgentPhases("generate", {
+                generate: { status: "error", detail: err?.message || "El Agente Codex no respondió" },
+              }),
+            })
+            toast.error(err?.message || "El Agente Codex no respondió")
+          }
+        } else {
+          finish(`_${err?.message || "El Agente Codex no respondió"}_`, {
+            label: "Error en el turno",
+            phases: buildCodeAgentPhases("generate", {
+              generate: { status: "error", detail: err?.message || "El Agente Codex no respondió" },
+            }),
+          })
+          toast.error(err?.message || "El Agente Codex no respondió")
+        }
+      } finally {
+        try {
+          controller.abort()
+        } catch {
+          /* already closed */
+        }
+        abortRef.current = null
+        setBusy(false)
+      }
+    },
+    [activeModelName, activeProvider, applyFilesToWorkspace, buildApp, files, markVoiced, setTurns, token],
+  )
+
   const dispatch = React.useCallback(
     async (rawInput: string, opts?: { forceDeterministic?: boolean }) => {
       const text = rawInput.trim()
@@ -2032,7 +2363,13 @@ export function AICodeChatPanel() {
           // Deterministic tier: enrich a bare context with the raw prompt so the
           // local scaffold still produces niche-coherent copy.
           const buildCtx = hasIntake ? action.context : { ...action.context, productType: text }
-          if (!opts?.forceDeterministic && engineMode && engineAvailable) {
+          if (!opts?.forceDeterministic && codexAvailable) {
+            // Codex Agent V2 (the REAL server-driven agent): drives a plan→build
+            // run whose file writes are read back into the workspace, with a
+            // deterministic buildApp fallback inside so a build always lands.
+            await runCodexEngine(text, sid)
+            patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "llm" }))
+          } else if (!opts?.forceDeterministic && engineMode && engineAvailable) {
             // OpenCode agent (only truly available in Docker AND opt-in via the
             // "Motor" toggle): it writes the project files into its /workspace via
             // a funded model and runEngine reads them back — deterministic
@@ -2057,7 +2394,11 @@ export function AICodeChatPanel() {
           if (runDeterministicPatch(action.instruction, sid)) {
             return
           }
-          if (engineMode && engineAvailable) {
+          if (codexAvailable) {
+            // Codex build mode iterates on follow-ups (it edits the project it
+            // already created for this session and reads the tree back).
+            await runCodexEngine(action.instruction, sid, { iterate: true })
+          } else if (engineMode && engineAvailable) {
             await runEngine(action.instruction, sid, { iterate: true })
           } else {
             await sendPrompt(action.instruction, { autoApply: true })
@@ -2080,8 +2421,11 @@ export function AICodeChatPanel() {
         default:
           // Ask/Plan/Image are read-only: they must stream an answer via
           // sendPrompt (autoApply stays false because composerMode !== "app")
-          // and must NEVER route into runEngine, which would apply files.
-          if (
+          // and must NEVER route into runCodexEngine/runEngine, which apply files.
+          if ((composerMode === "app" || composerMode === "build") && codexAvailable) {
+            // Codex build mode iterates on the session's existing project.
+            await runCodexEngine(text, sid, { iterate: true })
+          } else if (
             (composerMode === "app" || composerMode === "build") &&
             engineMode &&
             engineAvailable
@@ -2101,12 +2445,14 @@ export function AICodeChatPanel() {
       buildApp,
       busy,
       buildingApp,
+      codexAvailable,
       composerMode,
       engineAvailable,
       engineMode,
       files,
       includeContext,
       patchAgentState,
+      runCodexEngine,
       runDeterministicSRE,
       runDeterministicPatch,
       runEngine,
