@@ -3,10 +3,12 @@
 // so internal reorganisation stays a non-event.
 const { generateSectionContent, fallbackBlock } = require('./generate-section-content');
 const { createContentClient, DEFAULT_MODEL } = require('./llm-client');
+const { generateSpreadsheetContent } = require('./generate-spreadsheet-content');
 
 module.exports = {
   generateSectionContent,
   fallbackBlock,
   createContentClient,
   DEFAULT_MODEL,
+  generateSpreadsheetContent,
 };
