@@ -112,6 +112,7 @@ import { codexApi } from "@/lib/codex/codex-api"
 import { openRunStream } from "@/lib/codex/run-stream"
 import { useCodexHealth } from "@/lib/codex/use-codex-health"
 import {
+  codexLiveActionsMarkdown,
   codexLiveContent,
   foldCodexEvent,
   initialCodexEngineFold,
@@ -2148,7 +2149,9 @@ export function AICodeChatPanel() {
           let state = fold
           let lastPhase = state.phase
           const applyRender = () => {
-            const live = codexLiveContent(state)
+            // Narrative + the Claude Code-style live action feed (⏺ Escribiendo
+            // `src/App.tsx`… → ✓) so the user watches the agent work in vivo.
+            const live = `${codexLiveContent(state)}${codexLiveActionsMarkdown(state)}`.trim()
             const phaseDetail =
               state.status === "waiting_approval"
                 ? "Plan propuesto"
@@ -2188,7 +2191,7 @@ export function AICodeChatPanel() {
               const nextState = foldCodexEvent(state, ev)
               if (nextState !== state) {
                 state = nextState
-                if (state.phase !== lastPhase || ev.type === "narrative_delta" || ev.type === "reasoning_delta" || ev.type === "action_start") {
+                if (state.phase !== lastPhase || ev.type === "narrative_delta" || ev.type === "reasoning_delta" || ev.type === "action_start" || ev.type === "action_end") {
                   lastPhase = state.phase
                   applyRender()
                 }

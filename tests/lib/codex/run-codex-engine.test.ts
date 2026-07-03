@@ -3,6 +3,7 @@ import type { CodexEventEnvelope } from '@/lib/codex/timeline-reducer'
 import {
   foldCodexEvent,
   codexLiveContent,
+  codexLiveActionsMarkdown,
   initialCodexEngineFold,
   isCodexTerminalStatus,
   sanitizeCodexNarrative,
@@ -229,5 +230,66 @@ describe('sanitizeCodexNarrative (protocol-fence leak → prose)', () => {
     const live = codexLiveContent(fold)
     expect(live).toContain('Resumen final.')
     expect(live).not.toContain('finalize')
+  })
+})
+
+describe('codexLiveActionsMarkdown (live action feed)', () => {
+  it('shows running actions with ⏺ and flips to ✓ on action_end', () => {
+    const s1 = reduceFold([
+      { seq: 1, type: 'run_status', data: { status: 'running' } },
+      { seq: 2, type: 'action_start', data: { actionId: 'a1', kind: 'file_write', groupId: 'g1', path: 'src/App.tsx' } },
+    ])
+    const live1 = codexLiveActionsMarkdown(s1)
+    expect(live1).toContain('⏺ Escribiendo `src/App.tsx`…')
+
+    const s2 = foldCodexEvent(s1, { seq: 3, type: 'action_end', data: { actionId: 'a1', status: 'done', durationMs: 4 } })
+    const live2 = codexLiveActionsMarkdown(s2)
+    expect(live2).toContain('✓ Escribiendo `src/App.tsx`')
+    expect(live2).not.toContain('⏺')
+  })
+
+  it('marks failed actions with ✗ and re-renders on action_end (new state ref)', () => {
+    const s1 = reduceFold([
+      { seq: 1, type: 'action_start', data: { actionId: 'c1', kind: 'terminal', groupId: 'g1', command: 'bun run build' } },
+    ])
+    const s2 = foldCodexEvent(s1, { seq: 2, type: 'action_end', data: { actionId: 'c1', status: 'error', durationMs: 9 } })
+    expect(s2).not.toBe(s1)
+    expect(codexLiveActionsMarkdown(s2)).toContain('✗ Ejecutando `bun run build`')
+  })
+
+  it('unmatched action_end keeps the same reference (no re-render)', () => {
+    const s1 = reduceFold([
+      { seq: 1, type: 'action_start', data: { actionId: 'a1', kind: 'file_read', groupId: 'g1', path: 'x.ts' } },
+    ])
+    const s2 = foldCodexEvent(s1, { seq: 99, type: 'action_end', data: { actionId: 'nope', status: 'done' } })
+    expect(s2).toBe(s1)
+  })
+
+  it('bounds the feed to the last N with a hidden-count note', () => {
+    const events = [] as CodexEventEnvelope[]
+    for (let i = 0; i < 12; i++) {
+      events.push({ seq: i + 1, type: 'action_start', data: { actionId: `a${i}`, kind: 'file_write', groupId: 'g1', path: `f${i}.ts` } })
+    }
+    const s = reduceFold(events)
+    const md = codexLiveActionsMarkdown(s, 8)
+    expect(md).toContain('_+4 acciones previas_')
+    expect(md).toContain('f11.ts')
+    expect(md).not.toContain('f0.ts')
+  })
+
+  it('goes quiet once the run is terminal (Worked Summary takes over)', () => {
+    const s = reduceFold([
+      { seq: 1, type: 'action_start', data: { actionId: 'a1', kind: 'file_write', groupId: 'g1', path: 'a.ts' } },
+      { seq: 2, type: 'run_status', data: { status: 'done' } },
+    ])
+    expect(codexLiveActionsMarkdown(s)).toBe('')
+  })
+
+  it('dedupes replayed action_start by actionId', () => {
+    const ev: CodexEventEnvelope = { seq: 1, type: 'action_start', data: { actionId: 'a1', kind: 'file_write', groupId: 'g1', path: 'a.ts' } }
+    const s1 = reduceFold([ev])
+    // Replay with a NEW seq (reconnect gets fresh seqs on some paths).
+    const s2 = foldCodexEvent(s1, { ...ev, seq: 2 })
+    expect(s2.liveActions.length).toBe(1)
   })
 })

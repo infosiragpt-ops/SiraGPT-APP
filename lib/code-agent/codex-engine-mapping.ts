@@ -32,6 +32,20 @@ export interface CodexEngineFoldState {
   seen: Set<number>
   /** Per-reasoning-block accumulators, keyed by blockId. */
   reasoning: Record<string, string>
+  /**
+   * Claude Code-style live action feed: every action_start appends a running
+   * entry; its action_end flips it to ok/error. Keyed by actionId (fallback:
+   * kind+label) so replay/reconnect can't duplicate entries.
+   */
+  liveActions: CodexLiveAction[]
+}
+
+export interface CodexLiveAction {
+  key: string
+  kind: string
+  /** Human line: the file path, the command, or the action title. */
+  label: string
+  status: "running" | "ok" | "error"
 }
 
 export function initialCodexEngineFold(): CodexEngineFoldState {
@@ -45,6 +59,7 @@ export function initialCodexEngineFold(): CodexEngineFoldState {
     phase: "plan",
     seen: new Set<number>(),
     reasoning: {},
+    liveActions: [],
   }
 }
 
@@ -75,7 +90,6 @@ export function foldCodexEvent(
   const NOOP_TYPES = new Set([
     "heartbeat",
     "reasoning_end",
-    "action_end",
     "plan_proposed",
     "checkpoint_created",
     "action_required",
@@ -90,6 +104,7 @@ export function foldCodexEvent(
     readPaths: state.readPaths.slice(),
     seen: new Set(state.seen),
     reasoning: { ...state.reasoning },
+    liveActions: state.liveActions.slice(),
   }
 
   switch (event.type) {
@@ -127,6 +142,24 @@ export function foldCodexEvent(
       } else if (data.kind === "terminal") {
         s.commandCount += 1
         if (s.phase === "plan" || s.phase === "context") s.phase = "generate"
+      }
+      // Live feed entry (Claude Code-style): running until its action_end.
+      const key = String(data.actionId || `${data.kind}:${data.path || data.command || seq || ""}`)
+      const label = String(data.path || data.command || data.kind || "acción")
+      if (!s.liveActions.some((a) => a.key === key)) {
+        s.liveActions.push({ key, kind: String(data.kind || "action"), label, status: "running" })
+        if (s.liveActions.length > 30) s.liveActions.splice(0, s.liveActions.length - 30)
+      }
+      break
+    }
+
+    case "action_end": {
+      const key = String(data.actionId || "")
+      const idx = key ? s.liveActions.findIndex((a) => a.key === key) : -1
+      if (idx === -1) return state // unmatched end (replay tail) → no re-render
+      s.liveActions[idx] = {
+        ...s.liveActions[idx],
+        status: data.status === "error" ? "error" : "ok",
       }
       break
     }
@@ -209,4 +242,34 @@ export function codexLiveContent(state: CodexEngineFoldState, cap = 12000): stri
   const reasoningText = Object.values(state.reasoning).join("\n").trim()
   const text = sanitizeCodexNarrative(state.narrative.trim() || reasoningText).trim()
   return text.slice(0, cap)
+}
+
+const ACTION_VERB: Record<string, string> = {
+  file_write: "Escribiendo",
+  file_read: "Leyendo",
+  terminal: "Ejecutando",
+  web_search: "Buscando",
+  subagent: "Subagente",
+  dev_server: "Dev server",
+}
+
+/**
+ * Claude Code-style live action feed as markdown, appended under the streaming
+ * narrative while the run works: "⏺ Escribiendo `src/App.tsx`…" flips to ✓/✗
+ * when its action_end arrives. Bounded to the LAST `max` entries so long runs
+ * stay readable. Empty string when the run has no actions yet — or when the
+ * run already finished (the Worked Summary takes over).
+ */
+export function codexLiveActionsMarkdown(state: CodexEngineFoldState, max = 8): string {
+  if (!state.liveActions.length) return ""
+  if (isCodexTerminalStatus(state.status)) return ""
+  const recent = state.liveActions.slice(-max)
+  const lines = recent.map((a) => {
+    const verb = ACTION_VERB[a.kind] || "Acción"
+    const mark = a.status === "running" ? "⏺" : a.status === "error" ? "✗" : "✓"
+    const tail = a.status === "running" ? "…" : ""
+    return `${mark} ${verb} \`${a.label}\`${tail}`
+  })
+  const hidden = state.liveActions.length - recent.length
+  return `\n\n${hidden > 0 ? `_+${hidden} acciones previas_\n` : ""}${lines.join("\n")}`
 }
