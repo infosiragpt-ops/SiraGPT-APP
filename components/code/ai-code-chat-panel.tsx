@@ -2562,6 +2562,25 @@ export function AICodeChatPanel() {
     void dispatchRef.current?.(parked)
   }, [busy, buildingApp])
 
+  // Tool-initiated agent requests: workspace tools (Auth, Automations, …) emit
+  // `siragpt:code-agent-request` with a plain instruction. It flows through the
+  // SAME dispatch as a typed message — busy panels park it in pendingInputRef
+  // and the idle-drain above runs it as soon as the current turn settles.
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const handler = (e: Event) => {
+      const text = (e as CustomEvent<{ text?: string }>).detail?.text?.trim()
+      if (!text) return
+      if (busyRef.current || buildingAppRef.current) {
+        pendingInputRef.current = text
+        return
+      }
+      void dispatchRef.current?.(text)
+    }
+    window.addEventListener("siragpt:code-agent-request", handler)
+    return () => window.removeEventListener("siragpt:code-agent-request", handler)
+  }, [])
+
   // Orphan-turn recovery: if the browser persisted a user message but the
   // assistant turn was never created/completed (tab reload, stale busy latch,
   // or a previous build that swallowed the submit), retry it automatically.

@@ -79,6 +79,11 @@ import {
   planUpload,
   totalAssetBytes,
 } from "@/lib/code-agent/workspace-assets"
+import {
+  buildAuthAgentPrompt,
+  buildAutomationAgentPrompt,
+  detectWorkspaceAuth,
+} from "@/lib/code-agent/workspace-auth"
 import { RealGitPanel } from "@/components/code/git-tool-real"
 import { WorkspaceDeploymentsTool } from "@/components/deployments/workspace-deployments-tool"
 import { RealPublishingPanel } from "@/components/code/publishing-tool-real"
@@ -2170,6 +2175,7 @@ function IntegrationsTool() {
 }
 
 function AuthTool() {
+  const { files, openFile } = useCodeWorkspace()
   const [auth, setAuth] = useWorkspacePersistedState("auth", {
     email: true,
     google: false,
@@ -2177,8 +2183,52 @@ function AuthTool() {
     requireVerifiedEmail: true,
     sessionDays: 30,
   })
+  // Real detection: does the app in this workspace actually have login code?
+  const authState = React.useMemo(() => detectWorkspaceAuth(files), [files])
+  const requestImplementation = () => {
+    window.dispatchEvent(
+      new CustomEvent("siragpt:code-agent-request", { detail: { text: buildAuthAgentPrompt(auth) } }),
+    )
+    toast.success("Instrucción enviada al agente — mira el chat")
+  }
   return (
-    <ToolShell eyebrow="Authentication · local" title="Auth" detail="Preferencias LOCALES de login para el código generado (aún no gestiona usuarios ni sesiones reales en el servidor).">
+    <ToolShell
+      eyebrow="Authentication · workspace"
+      title="Auth"
+      detail="Estado real de autenticación detectado en el código, y preferencias que el agente usa al implementar el login. La gestión de usuarios servida aún no está disponible."
+      action={
+        <Button size="sm" className="h-8 gap-1.5" onClick={requestImplementation}>
+          <ShieldCheck className="h-3.5 w-3.5" />
+          {authState.hasAuth ? "Ajustar con el agente" : "Implementar con el agente"}
+        </Button>
+      }
+    >
+      <PanelCard
+        title="Estado de la app"
+        detail={authState.hasAuth ? "La app tiene código de autenticación" : "La app NO tiene login todavía"}
+        icon={<Lock className="h-4 w-4" />}
+        className="mb-3"
+      >
+        {authState.evidence.length === 0 ? (
+          <p className="rounded-md bg-muted/35 px-3 py-3 text-[12px] text-muted-foreground">
+            No se detectó código de login en el proyecto. Configura las preferencias y pídeselo al agente con el botón de arriba.
+          </p>
+        ) : (
+          <div className="space-y-1">
+            {authState.evidence.slice(0, 8).map((row) => (
+              <button
+                key={`${row.path}:${row.hint}`}
+                type="button"
+                className="flex w-full items-center justify-between gap-2 rounded px-1.5 py-1 text-left text-[11.5px] hover:bg-muted/40"
+                onClick={() => openFile(row.path)}
+              >
+                <span className="min-w-0 truncate font-mono">{row.path}</span>
+                <span className="shrink-0 text-muted-foreground">{row.hint}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </PanelCard>
       <PanelGrid>
         <PanelCard title="Proveedores" detail="Activa login por email, Google o GitHub" icon={<ShieldCheck className="h-4 w-4" />}>
           {(["email", "google", "github"] as const).map((key) => (
@@ -2371,17 +2421,62 @@ function AutomationsTool() {
     { id: "daily-check", label: "Revisar errores cada dia", enabled: false },
     { id: "deploy-check", label: "Validar antes de publicar", enabled: true },
   ])
+  const [newRule, setNewRule] = React.useState("")
+  const runNow = (label: string) => {
+    window.dispatchEvent(
+      new CustomEvent("siragpt:code-agent-request", { detail: { text: buildAutomationAgentPrompt(label) } }),
+    )
+    toast.success("El agente está ejecutando la automatización — mira el chat")
+  }
+  const addRule = () => {
+    const label = newRule.trim()
+    if (!label) return
+    setItems((prev) => [...prev, { id: makeId("rule"), label, enabled: true }])
+    setNewRule("")
+  }
   return (
-    <ToolShell eyebrow="Automation · experimental" title="Automations" detail="Reglas LOCALES de referencia (experimental): el agente aún no las ejecuta ni programa automáticamente en el servidor.">
-      <PanelCard title="Reglas" detail="Automatizaciones locales" icon={<Zap className="h-4 w-4" />}>
-        {items.map((item) => (
-          <ToggleRow
-            key={item.id}
-            label={item.label}
-            checked={item.enabled}
-            onChange={() => setItems((prev) => prev.map((row) => row.id === item.id ? { ...row, enabled: !row.enabled } : row))}
+    <ToolShell
+      eyebrow="Automation · agente"
+      title="Automations"
+      detail="Cada regla se ejecuta AHORA con el agente del chat (real). La programación automática en el servidor aún no está disponible."
+    >
+      <PanelCard title="Reglas" detail="Ejecútalas al instante con el agente" icon={<Zap className="h-4 w-4" />}>
+        <div className="space-y-1">
+          {items.map((item) => (
+            <div key={item.id} className="flex items-center gap-2">
+              <div className="min-w-0 flex-1">
+                <ToggleRow
+                  label={item.label}
+                  checked={item.enabled}
+                  onChange={() => setItems((prev) => prev.map((row) => row.id === item.id ? { ...row, enabled: !row.enabled } : row))}
+                />
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 shrink-0 gap-1.5"
+                disabled={!item.enabled}
+                onClick={() => runNow(item.label)}
+              >
+                <Play className="h-3 w-3" />
+                Ejecutar
+              </Button>
+            </div>
+          ))}
+        </div>
+        <div className="mt-3 flex items-center gap-2">
+          <Input
+            value={newRule}
+            onChange={(e) => setNewRule(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") addRule() }}
+            placeholder="Nueva regla, p. ej. “revisa accesibilidad y corrige”"
+            className="h-8 text-[12px]"
           />
-        ))}
+          <Button size="sm" className="h-8 shrink-0 gap-1.5" onClick={addRule}>
+            <Plus className="h-3.5 w-3.5" />
+            Añadir
+          </Button>
+        </div>
       </PanelCard>
     </ToolShell>
   )
