@@ -42,14 +42,39 @@ test('enabled() default: on in dev, off in production', async () => {
   await withEnv({ CODE_HOST_RUNNER: undefined, NODE_ENV: 'production' }, () => assert.equal(runner.enabled(), false));
 });
 
-test('startAllowed(): no allowlist → any authenticated user may start', async () => {
-  await withEnv({ CODE_HOST_RUNNER_ALLOWED_USER_IDS: undefined }, () => {
+test('startAllowed(): implicit dev default (flag unset) + no allowlist → any authenticated user may start', async () => {
+  await withEnv({ CODE_HOST_RUNNER: undefined, CODE_HOST_RUNNER_ALLOWED_USER_IDS: undefined }, () => {
     assert.equal(runner.startAllowed({ id: 'u1' }), true);
   });
 });
 
-test('startAllowed(): allowlist restricts to listed ids', async () => {
-  await withEnv({ CODE_HOST_RUNNER_ALLOWED_USER_IDS: 'owner-1, owner-2' }, () => {
+test('startAllowed(): FAIL-CLOSED — flag explicitly on + EMPTY allowlist → denied for everyone', async () => {
+  // /exec runs `/bin/sh -c` on the host: forcing the runner on without an
+  // allowlist must never fail open to "any authenticated user".
+  await withEnv({ CODE_HOST_RUNNER: '1', CODE_HOST_RUNNER_ALLOWED_USER_IDS: undefined }, () => {
+    assert.equal(runner.startAllowed({ id: 'u1' }), false);
+    assert.equal(runner.startAllowed(null), false);
+  });
+  // Blank / whitespace-only spellings of "empty" behave the same.
+  await withEnv({ CODE_HOST_RUNNER: 'true', CODE_HOST_RUNNER_ALLOWED_USER_IDS: '' }, () => {
+    assert.equal(runner.startAllowed({ id: 'u1' }), false);
+  });
+  await withEnv({ CODE_HOST_RUNNER: 'on', CODE_HOST_RUNNER_ALLOWED_USER_IDS: ' , ' }, () => {
+    assert.equal(runner.startAllowed({ id: 'u1' }), false);
+  });
+});
+
+test('startAllowed(): flag on + allowlist configured → listed ids allowed, others denied (prod shape)', async () => {
+  await withEnv({ CODE_HOST_RUNNER: '1', CODE_HOST_RUNNER_ALLOWED_USER_IDS: 'owner-1, owner-2' }, () => {
+    assert.equal(runner.startAllowed({ id: 'owner-1' }), true);
+    assert.equal(runner.startAllowed({ id: 'owner-2' }), true);
+    assert.equal(runner.startAllowed({ id: 'intruder' }), false);
+    assert.equal(runner.startAllowed(null), false);
+  });
+});
+
+test('startAllowed(): allowlist restricts to listed ids (flag unset)', async () => {
+  await withEnv({ CODE_HOST_RUNNER: undefined, CODE_HOST_RUNNER_ALLOWED_USER_IDS: 'owner-1, owner-2' }, () => {
     assert.equal(runner.startAllowed({ id: 'owner-1' }), true);
     assert.equal(runner.startAllowed({ id: 'owner-2' }), true);
     assert.equal(runner.startAllowed({ id: 'intruder' }), false);

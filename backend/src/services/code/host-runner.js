@@ -75,17 +75,41 @@ function enabled() {
 }
 
 /**
- * Optional per-user gate. When CODE_HOST_RUNNER_ALLOWED_USER_IDS is set (comma
- * list), only those user ids may start a run; otherwise any authenticated user
- * may (CODE_HOST_RUNNER is the primary gate). Lets a multi-user deploy restrict
- * code execution to the owner without flipping the enable flag.
+ * Per-user gate. When CODE_HOST_RUNNER_ALLOWED_USER_IDS is set (comma list),
+ * only those user ids may start a run.
+ *
+ * FAIL-CLOSED: when the runner is EXPLICITLY forced on (CODE_HOST_RUNNER=1)
+ * and the allowlist is empty, every start is DENIED — /exec is a real
+ * `/bin/sh -c` on the host, so "flag on + no allowlist" would hand arbitrary
+ * shell execution to ANY authenticated user. The historical open behaviour is
+ * kept only for the implicit dev default (flag unset, NODE_ENV!==production),
+ * where the runner serves a single local developer.
  */
+let warnedEmptyAllowlist = false;
+function explicitlyEnabled() {
+  return ['1', 'true', 'on', 'yes'].includes(String(process.env.CODE_HOST_RUNNER || '').trim().toLowerCase());
+}
 function startAllowed(user) {
   const ids = String(process.env.CODE_HOST_RUNNER_ALLOWED_USER_IDS || '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
-  if (ids.length === 0) return true;
+  if (ids.length === 0) {
+    if (explicitlyEnabled()) {
+      if (!warnedEmptyAllowlist) {
+        warnedEmptyAllowlist = true;
+        console.warn(
+          '[host-runner] CODE_HOST_RUNNER está activado pero CODE_HOST_RUNNER_ALLOWED_USER_IDS está vacío. ' +
+          'Denegando TODOS los arranques (fail-closed): sin allowlist, cualquier usuario autenticado podría ' +
+          'ejecutar comandos de shell en el host. Configura CODE_HOST_RUNNER_ALLOWED_USER_IDS con la lista ' +
+          'de ids de usuario permitidos (separados por comas).',
+        );
+      }
+      return false;
+    }
+    // Implicit dev default (flag unset): single-developer local machine.
+    return true;
+  }
   return !!(user && ids.includes(String(user.id)));
 }
 

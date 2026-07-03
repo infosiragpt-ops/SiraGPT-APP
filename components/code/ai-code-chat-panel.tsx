@@ -1254,7 +1254,13 @@ export function AICodeChatPanel() {
   // index.html, with a local index.html fallback if the backend is temporarily
   // unreachable.
   const buildApp = React.useCallback(
-    async (prompt: string, ctx?: AgentBuildContext) => {
+    async (
+      prompt: string,
+      ctx?: AgentBuildContext,
+      // omitUserTurn: engine fallbacks (runCodexEngine/runEngine) already
+      // rendered the user's message in their own turn — don't duplicate it.
+      opts?: { omitUserTurn?: boolean },
+    ) => {
       const text = prompt.trim()
       if (!text || busy || buildingApp) return
       if (!user || !token) {
@@ -1269,7 +1275,7 @@ export function AICodeChatPanel() {
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
       setTurns((prev) => [
         ...prev,
-        { id, role: "user", content: text },
+        ...(opts?.omitUserTurn ? [] : [{ id, role: "user", content: text } as CodeChatTurn]),
         {
           id: `${id}-a`,
           role: "assistant",
@@ -1633,6 +1639,12 @@ export function AICodeChatPanel() {
       setBusy(true)
       const controller = new AbortController()
       abortRef.current = controller
+      // "Detener" (cancelStream) and the session-switch cleanup both abort AND
+      // clear abortRef; a new turn replaces it. Internal aborts (closing the
+      // events stream below) do NOT touch the ref — so `abortRef !== controller`
+      // unambiguously means THIS turn was cancelled/superseded and must neither
+      // apply files nor run fallbacks nor touch the shared busy latch.
+      const cancelledTurn = () => abortRef.current !== controller
 
       // Live progress rail for the Motor (OpenCode) path — mirrors the
       // deterministic buildApp/sendPrompt rail so Motor turns show the same
@@ -1701,6 +1713,16 @@ export function AICodeChatPanel() {
         )
       }
 
+      // Terminal turn state when the user pressed Detener: no files applied,
+      // no deterministic fallback — the cancelled work must stay cancelled.
+      const finishStopped = () =>
+        finish("_Generación detenida._", {
+          label: "Generación detenida",
+          phases: buildCodeAgentPhases("generate", {
+            generate: { status: "done", detail: "Detenida por el usuario" },
+          }),
+        })
+
       try {
         let esid = engineSessionRef.current[sid]
         if (!esid) {
@@ -1734,6 +1756,10 @@ export function AICodeChatPanel() {
         const idle = new Promise<void>((r) => {
           resolveIdle = r
         })
+        // "Detener" aborts the controller: resolve `idle` right away so the
+        // race below exits immediately instead of zombie-waiting the full
+        // engine timeout (up to 150s) and then applying files post-cancel.
+        controller.signal.addEventListener("abort", () => resolveIdle(), { once: true })
         const assistantText = () =>
           order
             .map((pid) => byId.get(pid) || "")
@@ -1775,8 +1801,16 @@ export function AICodeChatPanel() {
         // fall back to the deterministic builder so a result is always produced.
         const engineTimeoutMs = isBuild ? 150_000 : 60_000
         await Promise.race([idle, new Promise<void>((r) => setTimeout(r, engineTimeoutMs))])
+        // Captured BEFORE our own internal abort below: at this point an
+        // aborted turn can only mean the user pressed Detener (or switched
+        // sessions / started a new turn) — bail out without applying anything.
+        const stoppedByUser = cancelledTurn()
         controller.abort() // close the events stream
         await streamP.catch(() => {})
+        if (stoppedByUser) {
+          finishStopped()
+          return
+        }
 
         const reply = assistantText()
         const blocks = parseCodeBlocks(reply).filter((b) => b.path)
@@ -1820,6 +1854,11 @@ export function AICodeChatPanel() {
               merged.push(f)
             }
           }
+          // Cancelled while reading the tree back → never apply post-cancel.
+          if (cancelledTurn()) {
+            finishStopped()
+            return
+          }
           // Accept a real project: a runnable/known entry, or simply ≥2 files.
           const hasEntry = merged.some((f) => /(^|\/)(index\.html?|package\.json)$/i.test(f.path))
           if (merged.length > 0 && (hasEntry || merged.length >= 2)) {
@@ -1856,6 +1895,10 @@ export function AICodeChatPanel() {
               synced.push(f)
             }
           }
+          if (cancelledTurn()) {
+            finishStopped()
+            return
+          }
           if (synced.length > 0) {
             applyFilesToWorkspace(synced)
             finish(
@@ -1879,6 +1922,12 @@ export function AICodeChatPanel() {
 
         finish(reply || "_(el motor no devolvió texto)_")
       } catch (err: any) {
+        // A cancelled turn must not run the deterministic fallback (it would
+        // build the app the user just stopped) nor render a fake error.
+        if (cancelledTurn()) {
+          finishStopped()
+          return
+        }
         if (ctx) {
           // Engine unreachable/error during a build → still deliver via the builder.
           try {
@@ -1907,8 +1956,13 @@ export function AICodeChatPanel() {
         } catch {
           /* already closed */
         }
-        abortRef.current = null
-        setBusy(false)
+        // Only release the shared latch if THIS turn is still the active one —
+        // a zombie turn settling after Detener (or after a newer turn started)
+        // must not knock down the new turn's busy/abort state.
+        if (abortRef.current === controller) {
+          abortRef.current = null
+          setBusy(false)
+        }
       }
     },
     [applyFilesToWorkspace, files, markVoiced, runDeterministicInto, setTurns],
@@ -1943,6 +1997,11 @@ export function AICodeChatPanel() {
       setBusy(true)
       const controller = new AbortController()
       abortRef.current = controller
+      // "Detener" (cancelStream) aborts the controller and clears abortRef; the
+      // only internal abort lives in `finally`. So during the turn body either
+      // signal.aborted or a replaced/cleared abortRef means the user stopped
+      // (or superseded) THIS turn — never apply files or fall back afterwards.
+      const cancelledTurn = () => controller.signal.aborted || abortRef.current !== controller
 
       const setEnginePhase = (label: string, phases: CodeAgentPhase[]) =>
         setTurns((prev) =>
@@ -2080,6 +2139,17 @@ export function AICodeChatPanel() {
             .finally(() => controller.signal.removeEventListener("abort", onAbort))
         })
 
+      // Terminal turn state for Detener: streamRun RESOLVES on close() (it does
+      // not reject), so without an explicit cancelled check the flow would fall
+      // into the deterministic fallback and build the app the user just stopped.
+      const finishStopped = () =>
+        finish("_Generación detenida._", {
+          label: "Generación detenida",
+          phases: buildCodeAgentPhases("generate", {
+            generate: { status: "done", detail: "Detenida por el usuario" },
+          }),
+        })
+
       try {
         // 1) Ensure ONE Codex project per chat session (cached by sid).
         let projectId = codexProjectRef.current[sid]
@@ -2124,10 +2194,21 @@ export function AICodeChatPanel() {
         // 3) Stream the plan run to its terminal / waiting_approval status, then
         //    approve it → build run, and stream that to a terminal status.
         let fold = await streamRun(planRun.id, initialCodexEngineFold())
+        // Detener during the plan stream: the stream resolves (close(), not a
+        // reject) — bail out before approving a plan the user just cancelled.
+        if (cancelledTurn()) {
+          finishStopped()
+          return
+        }
         if (fold.status === "waiting_approval") {
           const buildRun = await codexApi.approvePlan(projectId, planRun.id, tierForModelChoice(activeProvider, activeModelName))
           // Reset the fold for the build run's own event/seq stream.
           fold = await streamRun(buildRun.id, initialCodexEngineFold())
+        }
+        // Detener during the build stream: same shape — no files, no fallback.
+        if (cancelledTurn()) {
+          finishStopped()
+          return
         }
 
         const narrative = codexLiveContent(fold)
@@ -2158,6 +2239,11 @@ export function AICodeChatPanel() {
             }),
           )
           const written = pulled.filter((f): f is { path: string; content: string } => Boolean(f))
+          // Cancelled while pulling the files back → never apply post-cancel.
+          if (cancelledTurn()) {
+            finishStopped()
+            return
+          }
           if (written.length > 0) {
             applyFilesToWorkspace(written)
             finish(
@@ -2178,9 +2264,12 @@ export function AICodeChatPanel() {
         }
 
         // 5) FALLBACK: the run failed / produced nothing usable → deterministic
-        //    builder so the user is NEVER left empty (mirrors runEngine).
+        //    builder so the user is NEVER left empty (mirrors runEngine). A
+        //    cancelled turn NEVER reaches here (early returns above) — Detener
+        //    must not trigger a build of the very app the user just stopped.
         if (!iterate) {
-          await buildApp(text)
+          // omitUserTurn: this codex turn already rendered the user's message.
+          await buildApp(text, undefined, { omitUserTurn: true })
           finish(
             narrative
               ? `${narrative}\n\n_(El agente no dejó archivos; usé el builder determinista.)_`
@@ -2191,6 +2280,7 @@ export function AICodeChatPanel() {
         finish(narrative || "_(el agente no devolvió cambios)_")
       } catch (err: any) {
         const aborted =
+          cancelledTurn() ||
           err?.name === "AbortError" ||
           /\babort|cancel|operation was aborted/i.test(err?.message || "")
         if (aborted) {
@@ -2202,9 +2292,10 @@ export function AICodeChatPanel() {
           })
         } else if (!opts?.iterate) {
           // Project provisioning / plan-run error during a BUILD → still deliver
-          // via the deterministic builder in the same turn.
+          // via the deterministic builder in the same turn (omitUserTurn: this
+          // codex turn already rendered the user's message).
           try {
-            await buildApp(text)
+            await buildApp(text, undefined, { omitUserTurn: true })
             finish("✅ App generada (builder determinista). El Agente Codex no respondió.")
             toast.success("App generada (builder determinista) →")
           } catch {
@@ -2231,8 +2322,13 @@ export function AICodeChatPanel() {
         } catch {
           /* already closed */
         }
-        abortRef.current = null
-        setBusy(false)
+        // Only release the shared latch if THIS turn is still the active one —
+        // a zombie turn settling after Detener (or after a newer turn started)
+        // must not knock down the new turn's busy/abort state.
+        if (abortRef.current === controller) {
+          abortRef.current = null
+          setBusy(false)
+        }
       }
     },
     [activeModelName, activeProvider, applyFilesToWorkspace, buildApp, files, markVoiced, setTurns, token],
