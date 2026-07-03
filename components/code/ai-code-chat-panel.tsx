@@ -106,7 +106,6 @@ import {
   streamOutputFormat,
 } from "@/lib/code-agent/prompts"
 import { isSlowModel, recommendFastModel } from "@/lib/code-agent/model-policy"
-import { fetchCodeIntakeQuestion } from "@/lib/code/intake-question"
 import { opencodeService } from "@/lib/opencode/opencode-service"
 import { useOpencodeEngine } from "@/lib/opencode/use-opencode-engine"
 import { codexApi } from "@/lib/codex/codex-api"
@@ -950,7 +949,7 @@ export function AICodeChatPanel() {
     // session keeps the composer wedged and would drain a parked message into
     // the wrong chat.
     setBuildingApp(false)
-    pendingInputRef.current = null
+    pendingInputRef.current = []
     repairInFlightRef.current = false
   }, [sessionId])
 
@@ -1458,32 +1457,39 @@ export function AICodeChatPanel() {
   // the fix is deterministic. Works even with the model down.
   const runDeterministicSRE = React.useCallback(
     async (log: string, userText: string, sid: string) => {
-      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-      setTurns((prev) => [
-        ...prev,
-        { id, role: "user", content: userText },
-        { id: `${id}-a`, role: "assistant", content: "🔧 Diagnosticando el build (modo determinista)…", streaming: true },
-      ])
-      setInput("")
-      const verdict = classifyBuildError(log)
-      let body = renderFiveSections(verdict)
-      const patches = buildDeterministicSrePatches(files, verdict, log)
-      const pkg = files["package.json"]
-      if (verdict.suggestedOverrides && pkg) {
-        const patched = mergeOverridesIntoPackageJson(pkg.content, verdict.suggestedOverrides)
-        if (patched) {
-          const existing = patches.find((patch) => patch.path === "package.json")
-          if (existing) existing.content = patched
-          else patches.push({ path: "package.json", content: patched })
+      // Hold the busy latch for the whole turn (same pattern as the other
+      // dispatch paths) so nothing else can be dispatched in parallel.
+      setBusy(true)
+      try {
+        const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        setTurns((prev) => [
+          ...prev,
+          { id, role: "user", content: userText },
+          { id: `${id}-a`, role: "assistant", content: "🔧 Diagnosticando el build (modo determinista)…", streaming: true },
+        ])
+        setInput("")
+        const verdict = classifyBuildError(log)
+        let body = renderFiveSections(verdict)
+        const patches = buildDeterministicSrePatches(files, verdict, log)
+        const pkg = files["package.json"]
+        if (verdict.suggestedOverrides && pkg) {
+          const patched = mergeOverridesIntoPackageJson(pkg.content, verdict.suggestedOverrides)
+          if (patched) {
+            const existing = patches.find((patch) => patch.path === "package.json")
+            if (existing) existing.content = patched
+            else patches.push({ path: "package.json", content: patched })
+          }
         }
+        if (patches.length > 0) {
+          for (const patch of patches) applyBlock(patch.path, patch.content)
+          openPreviewAndMaybeRun(patches)
+          body += `\n\n_${patches.map((p) => `\`${p.path}\``).join(", ")} actualizado(s) — reintentando el preview automáticamente._`
+        }
+        setTurns((prev) => prev.map((t) => (t.id === `${id}-a` ? { ...t, content: body, streaming: false } : t)))
+        patchAgentState(sid, (s) => ({ ...s, phase: "idle" }))
+      } finally {
+        setBusy(false)
       }
-      if (patches.length > 0) {
-        for (const patch of patches) applyBlock(patch.path, patch.content)
-        openPreviewAndMaybeRun(patches)
-        body += `\n\n_${patches.map((p) => `\`${p.path}\``).join(", ")} actualizado(s) — reintentando el preview automáticamente._`
-      }
-      setTurns((prev) => prev.map((t) => (t.id === `${id}-a` ? { ...t, content: body, streaming: false } : t)))
-      patchAgentState(sid, (s) => ({ ...s, phase: "idle" }))
     },
     [applyBlock, files, patchAgentState, setTurns],
   )
@@ -1502,10 +1508,11 @@ export function AICodeChatPanel() {
   // "Arreglar con IA" tap) can't start two repairs before React re-renders the
   // busy refs. Reset when the repair turn settles.
   const repairInFlightRef = React.useRef(false)
-  // A user message submitted while the panel is busy (very often a BACKGROUND
-  // auto-repair the live dev server triggered) is NEVER dropped: it is parked
-  // here and auto-dispatched the instant the panel goes idle.
-  const pendingInputRef = React.useRef<string | null>(null)
+  // User messages submitted while the panel is busy (very often a BACKGROUND
+  // auto-repair the live dev server triggered) are NEVER dropped: they are
+  // queued here (FIFO) and auto-dispatched in arrival order, one at a time,
+  // as the panel goes idle.
+  const pendingInputRef = React.useRef<string[]>([])
 
   const repairFromLog = React.useCallback(
     async (log: string) => {
@@ -2470,7 +2477,7 @@ export function AICodeChatPanel() {
           abortRef.current = null
           repairInFlightRef.current = false
         }
-        pendingInputRef.current = rawInput
+        pendingInputRef.current.push(rawInput)
         setInput("")
         toast("Recibido — lo proceso en cuanto termine la tarea en curso…")
         return
@@ -2583,89 +2590,6 @@ export function AICodeChatPanel() {
       })
 
       switch (action.type) {
-        case "ask": {
-          const qid = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-          const assistantId = `${qid}-a`
-          const staticQuestion = action.question
-          setTurns((prev) => [
-            ...prev,
-            { id: qid, role: "user", content: text },
-            {
-              id: assistantId,
-              role: "assistant",
-              content: staticQuestion,
-              streaming: true,
-              agentLabel: "Formulando la siguiente pregunta",
-              agentPhases: buildCodeAgentPhases("context", {
-                plan: { status: "done", detail: "Intake en curso" },
-                context: { status: "running", detail: "Reviso la conversación" },
-              }),
-            },
-          ])
-          setInput("")
-          patchAgentState(sid, (s) => ({
-            ...s,
-            phase: "intake",
-            intakeStep: action.nextStep,
-            context: action.context,
-          }))
-          setBusy(true)
-          try {
-            // Upgrade the hardcoded question to a context-aware, LLM-phrased one
-            // (adapts to what the user already said). Static stays as the fallback.
-            const convo = [...turns, { role: "user", content: text }]
-            const dynamicQuestion = await fetchCodeIntakeQuestion(action.slot, convo, staticQuestion)
-            // Real steps this turn took, so even an intake question shows an action
-            // row (the agent reviewed the conversation + formulated the question).
-            const askActions: CodeChatAction[] = [
-              { kind: "file_read", label: "Reviso el contexto de la conversación" },
-              { kind: "reasoning", label: "Formulo la siguiente pregunta" },
-            ]
-            setTurns((prev) =>
-              prev.map((t) =>
-                t.id === assistantId
-                  ? {
-                      ...t,
-                      content: dynamicQuestion,
-                      streaming: false,
-                      actions: askActions,
-                      agentLabel: "Pregunta lista",
-                      agentPhases: buildCodeAgentPhases("verify", {
-                        plan: { status: "done", detail: "Intake en curso" },
-                        context: { status: "done", detail: "Contexto revisado" },
-                        generate: { status: "done", detail: "Pregunta formulada" },
-                        apply: { status: "done", detail: "Sin cambios de archivos" },
-                        verify: { status: "done", detail: "Pregunta entregada" },
-                      }),
-                    }
-                  : t,
-              ),
-            )
-          } catch {
-            setTurns((prev) =>
-              prev.map((t) =>
-                t.id === assistantId
-                  ? {
-                      ...t,
-                      content: staticQuestion,
-                      streaming: false,
-                      agentLabel: "Pregunta lista",
-                      agentPhases: buildCodeAgentPhases("verify", {
-                        plan: { status: "done", detail: "Intake en curso" },
-                        context: { status: "done", detail: "Contexto revisado" },
-                        generate: { status: "done", detail: "Pregunta formulada" },
-                        apply: { status: "done", detail: "Sin cambios de archivos" },
-                        verify: { status: "done", detail: "Pregunta entregada" },
-                      }),
-                    }
-                  : t,
-              ),
-            )
-          } finally {
-            setBusy(false)
-          }
-          return
-        }
         case "generate": {
           patchAgentState(sid, (s) => ({ ...s, phase: "generating", context: action.context }))
           const hasIntake = !!(action.context.productType || action.context.brand)
@@ -2787,15 +2711,26 @@ export function AICodeChatPanel() {
   const dispatchRef = React.useRef(dispatch)
   dispatchRef.current = dispatch
 
-  // Idle-drain: the instant the panel stops being busy, run any message the user
-  // submitted while it was busy (parked in pendingInputRef). Guarantees an
-  // explicit message is never silently lost behind a background turn.
+  // Idle-drain: the instant the panel stops being busy, run the messages the
+  // user submitted while it was busy (queued FIFO in pendingInputRef), in
+  // arrival order and one at a time. If a dispatched message settles without
+  // ever taking the busy latch (e.g. a canned greeting), busy never toggles and
+  // this effect would not re-run — so the drain loops until the queue is empty
+  // or the panel goes busy again (that turn's settle resumes the drain).
   React.useEffect(() => {
     if (busy || buildingApp) return
-    const parked = pendingInputRef.current
-    if (!parked) return
-    pendingInputRef.current = null
-    void dispatchRef.current?.(parked)
+    if (pendingInputRef.current.length === 0) return
+    let cancelled = false
+    void (async () => {
+      while (!cancelled && !busyRef.current && !buildingAppRef.current) {
+        const parked = pendingInputRef.current.shift()
+        if (!parked) return
+        await dispatchRef.current?.(parked)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
   }, [busy, buildingApp])
 
   // Tool-initiated agent requests: workspace tools (Auth, Automations, …) emit
@@ -2808,7 +2743,7 @@ export function AICodeChatPanel() {
       const text = (e as CustomEvent<{ text?: string }>).detail?.text?.trim()
       if (!text) return
       if (busyRef.current || buildingAppRef.current) {
-        pendingInputRef.current = text
+        pendingInputRef.current.push(text)
         return
       }
       void dispatchRef.current?.(text)
@@ -2835,34 +2770,6 @@ export function AICodeChatPanel() {
     }, 0)
     return () => window.clearTimeout(timer)
   }, [busy, buildingApp, setTurns, turns])
-
-  // Targeted stale-preview recovery: older builds could route "cre auna web de
-  // cafeteria" through the generic model while leaving the restaurant preview
-  // active. If the latest matching user request is clearly a cafe website and
-  // index.html still is not the cafe showcase, regenerate it deterministically.
-  const recoveredCafePreviewRef = React.useRef<Set<string>>(new Set())
-  React.useEffect(() => {
-    if (busy || buildingApp || !sessionId) return
-    const indexHtml = files["index.html"]?.content ?? ""
-    if (/Cafeter[ií]a Aurora/i.test(indexHtml)) return
-    const latestCafeWebsite = [...turns].reverse().find((turn) => {
-      const text = turn.content.trim()
-      return (
-        turn.role === "user" &&
-        isBuildRequest(text) &&
-        /\b(cafeter[ií]a|cafe|caf[eé]|coffee shop)\b/i.test(text) &&
-        /\b(web|p[aá]gina|pagina|sitio|website|landing|one[- ]?page)\b/i.test(text)
-      )
-    })
-    if (!latestCafeWebsite) return
-    const key = `${sessionId}:${latestCafeWebsite.id}`
-    if (recoveredCafePreviewRef.current.has(key)) return
-    recoveredCafePreviewRef.current.add(key)
-    const timer = window.setTimeout(() => {
-      void dispatchRef.current?.(latestCafeWebsite.content)
-    }, 50)
-    return () => window.clearTimeout(timer)
-  }, [busy, buildingApp, files, sessionId, turns])
 
   // Stale-busy watchdog: a streaming turn keeps abortRef set; if busy stays true
   // with NO stream in flight (abortRef cleared) past a grace period, the latch is
