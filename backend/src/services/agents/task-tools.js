@@ -594,7 +594,12 @@ const webSearch = {
 
 const createDocument = {
   name: 'create_document',
-  description: 'Execute a Python script that writes a downloadable file (.xlsx / .docx / .pptx / .pdf / .csv / .svg / .md / .txt) to the path in the env var OUT_PATH. The framework will pick up the file and register it as a user-downloadable artifact. Use python-docx, openpyxl, python-pptx, reportlab — all pre-installed. The script MUST write to os.environ["OUT_PATH"].',
+  description: 'Execute a Python script that writes a downloadable file (.xlsx / .docx / .pptx / .pdf / .csv / .svg / .md / .txt) to the path in the env var OUT_PATH. The framework will pick up the file and register it as a user-downloadable artifact. Use python-docx, openpyxl, python-pptx, reportlab — all pre-installed. The script MUST write to os.environ["OUT_PATH"]. '
+    + 'PROFESSIONAL-DESIGN REQUIREMENTS (the user receives this file as a finished deliverable — style it like a person would by hand): '
+    + 'XLSX (openpyxl): dark header fill (PatternFill solid 0F172A) with white bold font, ws.freeze_panes="A2", ws.auto_filter.ref over the data range, real column widths (ws.column_dimensions), number_format per column ("#,##0.00" money, "#,##0" counts, "dd/mm/yyyy" dates), zebra striping optional; KPIs/totals as REAL formulas (=SUM/AVERAGE), never hardcoded results. '
+    + 'DOCX (python-docx): a real title (Heading 0/Title) — NEVER echo the user instruction as title —, body 11-12pt, headings per section, tables with header shading; no filler or meta text ("generado por", placeholders). '
+    + 'PPTX (python-pptx): fill the canvas — no half-empty slides; titles ≤8 words; one idea per slide. '
+    + 'ALL: content must be topic-specific and realistic; never lorem/sample filler; Spanish accents intact.',
   parameters: {
     type: 'object',
     properties: {

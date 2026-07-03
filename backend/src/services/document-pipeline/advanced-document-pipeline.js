@@ -21,6 +21,7 @@ const PDFDocument = require('pdfkit');
 const ExcelJS = require('exceljs');
 const { renderPreview } = require('../doc-preview');
 const { generateSectionContent, fallbackBlock, generateSpreadsheetContent } = require('./content');
+const { runRenderCritique } = require('./render-critique-loop');
 const { buildPptxContentPlan, hasGenericPlaceholderText } = require('./pptx-content-planner');
 const {
   MAX_SIMULTANEOUS_DOCUMENTS,
@@ -2947,6 +2948,33 @@ async function runAdvancedDocumentPipeline({
     plan = repairPlan(plan, validation);
     emit(events, 'refactor', 'complete', 'Plan documental reforzado para regeneración', { sections: plan.sections.length });
   }
+
+  // Render → vision-critique (Claude-skills style visual QA): render the
+  // artifact with soffice, have a vision model adversarially inspect the
+  // pages and attach the findings to validation.details. Best-effort and
+  // budgeted — it can only ADD observability, never fail a delivery.
+  try {
+    const critique = await runRenderCritique({
+      filePath: artifact.outputPath,
+      format: plan.format,
+      expectation: `${plan.title} (${plan.template}, ${plan.format}) — solicitud: ${String(plan.userRequest || '').slice(0, 300)}`,
+    });
+    if (!critique.skipped) {
+      validation.details = { ...(validation.details || {}), visualCritique: critique.report };
+      const defectCount = critique.report.defects.length;
+      emit(
+        events,
+        'document_design',
+        critique.report.overall === 'pass' ? 'complete' : 'warning',
+        critique.report.overall === 'pass'
+          ? `Revisión visual aprobada (${critique.pagesRendered} página(s) inspeccionadas)`
+          : `Revisión visual: ${defectCount} observación(es) — ${critique.report.summary}`,
+        { pagesRendered: critique.pagesRendered, defects: critique.report.defects, durationMs: critique.durationMs },
+      );
+    } else {
+      emit(events, 'document_design', 'complete', 'Revisión visual omitida', { reason: critique.reason });
+    }
+  } catch { /* never blocks delivery */ }
 
   if (!events.some((event) => event.role === 'qa')) {
     emit(events, 'qa', validation.passed ? 'complete' : 'warning', validation.passed ? 'QA sin fallos bloqueantes' : 'QA detectó advertencias persistentes', { passed: validation.passed });
