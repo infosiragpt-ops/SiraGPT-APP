@@ -184,6 +184,7 @@ ${toolsBlock}
 ${finalBlock}
 
 Rules:
+- INTERPRET the goal before acting: separate the CORE TOPIC from DELIVERY CONDITIONS (counts of slides/láminas/words/pages, courtesy like "porfavor", quality adjectives like "profesional", format words). Conditions are constraints to honour — never content, titles or filenames. Repair obvious typos in condition words ("Landin" next to a number = "láminas").
 - Output JSON only. No markdown, no prose outside the JSON.
 - Prefer calling a tool when you need data. Prefer finalising when you have enough.
 - If a tool errors, read the observation and try a different approach.
