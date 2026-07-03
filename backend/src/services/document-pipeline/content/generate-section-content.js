@@ -31,6 +31,7 @@ async function generateSectionContent({
   language,
   provider,
   model,
+  targetWordsPerSection = null,
 } = {}) {
   if (!plan || !Array.isArray(plan.sections) || plan.sections.length === 0) {
     return [];
@@ -65,6 +66,7 @@ async function generateSectionContent({
               documentTitle: plan.title,
               sectionName: section,
               language,
+              targetWords: targetWordsPerSection,
             }),
           },
         ],
