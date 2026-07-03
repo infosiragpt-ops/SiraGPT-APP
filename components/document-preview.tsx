@@ -49,8 +49,9 @@ interface DocumentPreviewProps {
 type PreviewFormat = "pdf" | "docx" | "doc" | "xlsx" | "csv" | "svg" | "pptx" | "html" | "unknown"
 
 type State =
-  | { kind: "loading" }
+  | { kind: "loading"; message?: string }
   | { kind: "pdf" }
+  | { kind: "pdfBlob"; url: string }
   | { kind: "svg" }
   | { kind: "docxNative"; buffer: ArrayBuffer }
   | { kind: "html"; html: string; warnings: string[] }
@@ -353,6 +354,16 @@ async function renderPptx(buffer: ArrayBuffer) {
   `)
 }
 
+// High-fidelity preview endpoint for agent artifacts: the backend converts
+// office files to PDF with LibreOffice headless (cached) and this viewer
+// renders the PDF — real pages, real layout, zoom — instead of hand-rolled
+// HTML tables. Returns null for URLs without a server-side preview.
+function derivePreviewPdfUrl(assetUrl: string): string | null {
+  const match = /^(.*\/api\/agent\/artifact\/[a-f0-9]{6,40})(\?.*)?$/i.exec(assetUrl || "")
+  if (!match) return null
+  return `${match[1]}/preview.pdf${match[2] || ""}`
+}
+
 export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
   const [state, setState] = React.useState<State>({ kind: "loading" })
   const [isDownloading, setIsDownloading] = React.useState(false)
@@ -395,7 +406,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
     return inferFilename(downloadUrl, format)
   }, [downloadUrl, format, url])
   const formatLabel = (FORMAT_EXTENSION[format] || "documento").toUpperCase()
-  const canUsePreviewControls = ["pdf", "svg", "docxNative", "html", "iframeHtml"].includes(state.kind)
+  const canUsePreviewControls = ["pdf", "pdfBlob", "svg", "docxNative", "html", "iframeHtml"].includes(state.kind)
   const previewZoomStyle = React.useMemo(
     () => ({ zoom }) as React.CSSProperties & { zoom: number },
     [zoom],
@@ -673,6 +684,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
     }
 
     let cancelled = false
+    let blobUrl: string | null = null
     setState({ kind: "loading" })
 
     ;(async () => {
@@ -684,6 +696,29 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
           (format === "docx" || format === "doc") && previewUrl.startsWith("data:")
             ? downloadUrl
             : previewUrl
+
+        // High-fidelity path FIRST: server-side soffice→PDF for office files.
+        // Any failure (409 offloaded, soffice down, network) falls through to
+        // the legacy client-side renderers below — never a dead end.
+        const pdfEndpoint = derivePreviewPdfUrl(downloadUrl) || derivePreviewPdfUrl(assetUrl)
+        if (pdfEndpoint) {
+          setState({ kind: "loading", message: "Generando vista previa…" })
+          try {
+            const pdfResp = await fetch(pdfEndpoint, buildAssetFetchInit())
+            if (pdfResp.ok && (pdfResp.headers.get("content-type") || "").includes("pdf")) {
+              const blob = await pdfResp.blob()
+              if (cancelled) return
+              blobUrl = URL.createObjectURL(blob)
+              setState({ kind: "pdfBlob", url: blobUrl })
+              return
+            }
+          } catch {
+            // fall through to the legacy renderer
+          }
+          if (cancelled) return
+          setState({ kind: "loading" })
+        }
+
         const resp = await fetch(assetUrl, buildAssetFetchInit())
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
 
@@ -747,6 +782,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
 
     return () => {
       cancelled = true
+      if (blobUrl) URL.revokeObjectURL(blobUrl)
     }
   }, [filename, format, previewUrl, downloadUrl])
 
@@ -806,8 +842,17 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
         {state.kind === "loading" && (
           <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
             <ThinkingIndicator size="sm" />
-            Cargando vista previa…
+            {state.message || "Cargando vista previa…"}
           </div>
+        )}
+
+        {state.kind === "pdfBlob" && (
+          <iframe
+            src={state.url}
+            className="h-full w-full bg-white dark:bg-zinc-900"
+            style={previewZoomStyle}
+            title={`Vista previa ${filename}`}
+          />
         )}
 
         {state.kind === "pdf" && (

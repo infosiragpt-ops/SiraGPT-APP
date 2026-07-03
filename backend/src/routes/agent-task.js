@@ -462,6 +462,54 @@ router.get('/artifacts', authenticateToken, async (req, res) => {
 
 // ─── GET /api/agent/artifact/:id ────────────────────────────────────────
 
+// ─── GET /api/agent/artifact/:id/preview.pdf ───────────────────────────────
+// High-fidelity preview: convert the office artifact to PDF with LibreOffice
+// headless (cached by id+mtime) and stream it inline. The frontend renders
+// it in a real PDF viewer instead of hand-rolled HTML tables. Same auth +
+// ownership contract as the download route. 409 → caller falls back to the
+// legacy client-side renderer (e.g. artifact offloaded to R2 or soffice
+// missing) — this endpoint must never break the download path.
+router.get('/artifact/:id/preview.pdf', authenticateToken, async (req, res) => {
+  const id = String(req.params.id || '').replace(/[^a-f0-9]/gi, '');
+  if (!id || id.length > 40) return res.status(400).json({ error: 'bad id' });
+  if (!fs.existsSync(ARTIFACT_DIR)) return res.status(404).json({ error: 'no artifacts yet' });
+
+  const metadata = readArtifactMetadata(id);
+  let full = null;
+  if (metadata?.storedRelPath) {
+    const root = path.resolve(ARTIFACT_DIR);
+    const candidate = path.resolve(ARTIFACT_DIR, metadata.storedRelPath);
+    if ((candidate === root || candidate.startsWith(root + path.sep)) && fs.existsSync(candidate)) {
+      full = candidate;
+    }
+  }
+  if (!full) {
+    let entry = null;
+    try {
+      entry = fs.readdirSync(ARTIFACT_DIR).find(f => f.startsWith(`${id}-`));
+    } catch { entry = null; }
+    if (entry) full = path.join(ARTIFACT_DIR, entry);
+  }
+  if (!full || !fs.existsSync(full)) {
+    // Offloaded-to-R2 or missing binary: no local bytes to convert.
+    return res.status(409).json({ error: 'preview unavailable' });
+  }
+  if (!metadata?.ownerUserId) return res.status(403).json({ error: 'artifact ownership metadata missing' });
+  if (String(metadata.ownerUserId) !== String(req.user?.id)) return res.status(403).json({ error: 'artifact not found' });
+
+  try {
+    const { getOrCreatePdfPreview } = require('../services/document-pipeline/preview-pdf-service');
+    const pdfPath = await getOrCreatePdfPreview({ sourcePath: full, cacheKey: id });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline; filename="preview.pdf"');
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    return fs.createReadStream(pdfPath).pipe(res);
+  } catch (err) {
+    // Not previewable / too large / soffice down → the client falls back.
+    return res.status(409).json({ error: 'preview unavailable', reason: String(err?.message || '').slice(0, 120) });
+  }
+});
+
 router.get('/artifact/:id', authenticateToken, async (req, res) => {
   const id = String(req.params.id || '').replace(/[^a-f0-9]/gi, '');
   if (!id || id.length > 40) return res.status(400).json({ error: 'bad id' });
