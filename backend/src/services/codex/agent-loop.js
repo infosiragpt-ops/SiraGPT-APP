@@ -37,6 +37,10 @@ const DEFAULT_VERIFY_DEV_TIMEOUT_MS = 60_000;
 // Anti-thrash: how many consecutive writes to the SAME file before the loop
 // nudges the model to stop rewriting it and advance to the next plan step.
 const DEFAULT_MAX_SAME_FILE_WRITES = 3;
+// How many times the loop will nudge a truncated (cut-off mid-tool-call) turn
+// to retry with a smaller write before giving up and closing honestly. Bounds
+// a pathological model that keeps overrunning its output budget.
+const MAX_TRUNCATION_RETRIES = 3;
 // Keep this many tail messages verbatim when compacting (the model needs the
 // recent working set intact; older tool dumps compress well).
 const COMPACT_KEEP_TAIL = 10;
@@ -463,6 +467,12 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   let sameWriteRun = 0;
   const writeTotals = new Map();
   const nudgedPaths = new Set();
+  // Truncation state: an eco-tier (Cerebras/prompted) model can overrun its
+  // output budget mid-write, cutting off the tool_call fence. That yields zero
+  // parsed calls — indistinguishable from "done" — so without this the build
+  // would close with the file never written. Count retries so a chronically
+  // overrunning model still terminates.
+  let truncationRetries = 0;
 
   for (let step = 0; step < maxSteps; step += 1) {
     if (signal?.aborted) { aborted = true; break; }
@@ -502,6 +512,18 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
 
     const allCalls = Array.isArray(turn?.toolCalls) ? turn.toolCalls : [];
     const calls = allCalls.slice(0, maxToolsPerTurn);
+    // A truncated turn (cut off mid-tool-call, e.g. a large write overrunning
+    // the eco tier's token budget) parses to ZERO calls — but the model is NOT
+    // done. Nudge it to split the write instead of closing the build with the
+    // file unwritten. Only when no complete call also came back this turn.
+    if (calls.length === 0 && turn?.truncated && truncationRetries < MAX_TRUNCATION_RETRIES && step < maxSteps - 1) {
+      truncationRetries += 1;
+      messages.push({
+        role: 'user',
+        content: '[TRUNCADO] Tu último mensaje se cortó a mitad de un tool_call (probablemente un write_file demasiado grande superó el límite de salida). NO se ejecutó ninguna acción. Divide el trabajo: escribe el archivo en partes más pequeñas (crea el archivo con la primera mitad usando write_file, luego usa edit_file para añadir el resto), o crea archivos más pequeños. Reintenta ahora.',
+      });
+      continue;
+    }
     if (calls.length === 0) {
       // Model produced no tool call → it thinks it's done. Verify before
       // closing: typecheck the workspace and feed failures back for a bounded

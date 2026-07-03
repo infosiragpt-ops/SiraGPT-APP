@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { defaultLlmTurn, stripResidualFences, extractUsage } = require('../src/services/codex/llm-turn');
+const { defaultLlmTurn, stripResidualFences, extractUsage, detectTruncatedToolCall } = require('../src/services/codex/llm-turn');
 
 const ENV = { CEREBRAS_API_KEY: 'k', FREE_IA_MODEL_ID: 'test-model' };
 
@@ -30,6 +30,46 @@ test('stripResidualFences removes leaked tool_call/json fences but keeps code fe
   // A legit code fence (not tool_call/json) is preserved for the narrative.
   const code = 'Corre:\n```bash\nls -la\n```';
   assert.equal(stripResidualFences(code), code);
+});
+
+test('detectTruncatedToolCall flags an unclosed tool_call fence and strips the residual markup', () => {
+  const cut = 'Escribo el componente.\n```tool_call\n{"tool":"write_file","args":{"path":"src/App.tsx","content":"export default function App() { return <div>hola';
+  const r = detectTruncatedToolCall(cut);
+  assert.equal(r.truncated, true);
+  assert.equal(r.cleaned, 'Escribo el componente.');
+  assert.ok(!r.cleaned.includes('tool_call'));
+});
+
+test('detectTruncatedToolCall does NOT flag a complete tool_call fence', () => {
+  const complete = 'Leo el archivo.\n```tool_call\n{"tool":"read_file","args":{"path":"a.js"}}\n```';
+  const r = detectTruncatedToolCall(complete);
+  assert.equal(r.truncated, false);
+});
+
+test('detectTruncatedToolCall ignores plain prose and code fences', () => {
+  assert.equal(detectTruncatedToolCall('solo texto sin fences').truncated, false);
+  // A bash code fence is not a tool_call opener.
+  assert.equal(detectTruncatedToolCall('Corre:\n```bash\nls -la\n```').truncated, false);
+  // An unclosed bash fence is also not a tool_call → not our concern.
+  assert.equal(detectTruncatedToolCall('Corre:\n```bash\nls -la').truncated, false);
+});
+
+test('defaultLlmTurn surfaces truncated=true when a large write overran (unclosed fence, zero calls)', async () => {
+  const cut = 'Escribo el archivo.\n```tool_call\n{"tool":"write_file","args":{"path":"src/App.tsx","content":"muy largo y cortado a la mitad';
+  const client = fakeClient({ content: cut }, {});
+  const turn = await defaultLlmTurn({ messages: [{ role: 'user', content: 'x' }], tools: REGISTRY, env: ENV, createClient: () => client });
+  assert.deepEqual(turn.toolCalls, []);
+  assert.equal(turn.truncated, true);
+  assert.ok(!turn.text.includes('tool_call')); // no raw protocol leaks into the narrative
+  assert.equal(turn.text, 'Escribo el archivo.');
+});
+
+test('defaultLlmTurn does NOT mark truncated when a complete call was parsed', async () => {
+  const content = 'Leo.\n```tool_call\n{"tool":"read_file","args":{"path":"a.js"}}\n```';
+  const client = fakeClient({ content }, {});
+  const turn = await defaultLlmTurn({ messages: [{ role: 'user', content: 'x' }], tools: REGISTRY, env: ENV, createClient: () => client });
+  assert.equal(turn.toolCalls.length, 1);
+  assert.equal(turn.truncated, false);
 });
 
 test('defaultLlmTurn throws cleanly when no provider is configured', async () => {
