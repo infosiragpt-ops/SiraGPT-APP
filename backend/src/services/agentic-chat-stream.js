@@ -382,7 +382,13 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
   // "cuál es el título de la investigación?" answers directly, fast.
   if (Array.isArray(files) && files.length > 0) {
     // Edit requests ("edita mi documento", "corrige el excel") also need the
-    // loop: that's where document_edit (Cowork editing) lives.
+    // loop: that's where document_edit (Cowork editing) lives. Merge requests
+    // ("combina estos 2 words en 1") equally — the deterministic docx merge
+    // fast-path lives inside document_edit.
+    try {
+      const { isDocumentMergeRequest } = require('./agents/document-merge');
+      if (isDocumentMergeRequest(text, { fileCount: files.length })) return true;
+    } catch (_) { /* detector is best-effort */ }
     return isArtifactDeliverableRequest(text) || isDocumentEditRequest(text);
   }
   if (AGENTIC_PROMPT_HINT.test(text)) return true;
@@ -628,6 +634,20 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
     let initialToolChoice = mediaIntent?.tool && mediaIntent.confidence === 'high' && availableToolNames.has(mediaIntent.tool)
       ? mediaIntent.tool
       : null;
+    // Document merge ("combina estos 2 words en 1"): force document_edit as
+    // the FIRST tool call — its deterministic merge fast-path produces the
+    // fused .docx without depending on the model choosing the right tool.
+    let documentMergeIntent = false;
+    const attachedFileCount = Array.isArray(toolContext.fileIds) ? toolContext.fileIds.filter(Boolean).length : 0;
+    if (!initialToolChoice && attachedFileCount >= 2 && availableToolNames.has('document_edit')) {
+      try {
+        const { isDocumentMergeRequest } = require('./agents/document-merge');
+        if (isDocumentMergeRequest(userQuery, { fileCount: attachedFileCount })) {
+          documentMergeIntent = true;
+          initialToolChoice = 'document_edit';
+        }
+      } catch (_) { /* best-effort */ }
+    }
     // Aggressive auto-search: when the question clearly needs fresh/live/factual
     // web data and no media tool was force-selected, force the FIRST step to be
     // a web_search so the model cannot answer "no tengo información" from stale
@@ -727,6 +747,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       'Responde SIEMPRE en español, con tono profesional y cercano. No uses emojis.',
       'En tareas con 2 o más pasos llama `update_plan` PRIMERO con el plan completo (3-7 pasos cortos) y vuelve a llamarlo al completar cada paso o si el plan cambia — el usuario lo ve actualizarse en vivo. Para tareas de una sola acción no hace falta plan.',
       initialToolChoice ? buildMediaIntentsHint(mediaIntents) : '',
+      documentMergeIntent
+        ? 'El usuario quiere FUSIONAR sus documentos adjuntos en UN solo archivo. Llama `document_edit` UNA vez con una instrucción completa tipo "fusiona todos los documentos adjuntos en un solo .docx, en el orden adjuntado, conservando el contenido y formato de cada uno" (más cualquier ajuste que pidió el usuario). La herramienta devuelve el archivo fusionado como tarjeta de descarga: menciónalo brevemente y finaliza. NO pegues el contenido de los documentos en tu respuesta.'
+        : '',
       openclawRuntimeBlock,
       buildExecutionProfilePrompt(executionProfile),
       buildThreadWorkContext(history, userQuery),

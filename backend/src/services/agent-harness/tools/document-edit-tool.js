@@ -99,6 +99,79 @@ function buildDocumentEditTool(deps = {}) {
       }
       if (!rows.length) return { ok: false, error: 'file_not_found' };
 
+      // MERGE FAST PATH — deterministic Cowork-style "N docx → 1 docx". When
+      // the instruction is a merge ("combina / fusiona / une … en un solo
+      // word") and 2+ files are attached, merge them in-process (real OOXML
+      // body merge preserving formatting; extracted-text rebuild as fallback)
+      // instead of relying on the doc-agent's inner LLM to figure it out.
+      // Falls through to the normal editors on any error.
+      try {
+        const merge = deps.documentMerge || require('../../agents/document-merge');
+        if (rows.length >= 2 && merge.isDocumentMergeRequest(args.instruction, { fileCount: rows.length })) {
+          // Keep the user's attachment order (ids array), not DB row order.
+          const ordered = ids.map((id) => rows.find((r) => r.id === id)).filter(Boolean);
+          const isDocx = (row) => /\.docx$/i.test(String(row.originalName || row.filename || '')) ||
+            String(row.mimeType || '') === merge.DOCX_MIME;
+          let buffer = null;
+          if (ordered.every(isDocx)) {
+            try {
+              const loaded = [];
+              for (const row of ordered) {
+                const blob = await fsImpl.readFile(row.path);
+                if (blob.length > MAX_FILE_BYTES) throw new Error('file_too_large');
+                loaded.push({ name: row.originalName || row.filename, buffer: blob });
+              }
+              buffer = merge.mergeDocxBuffers(loaded);
+            } catch (mergeErr) {
+              buffer = null; // structural merge failed → text rebuild below
+            }
+          }
+          if (!buffer && ordered.every((row) => String(row.extractedText || '').trim())) {
+            buffer = await merge.mergeFromExtractedText(
+              ordered.map((row) => ({ name: row.originalName || row.filename, text: row.extractedText })),
+            );
+          }
+          if (buffer) {
+            const saveArtifact = deps.saveArtifact || require('../../agents/task-tools').saveArtifact;
+            const saved = saveArtifact({
+              filename: merge.mergedFilename(ordered.map((row) => ({ name: row.originalName || row.filename }))),
+              base64: buffer.toString('base64'),
+              mime: merge.DOCX_MIME,
+              ownerUserId: ctx.userId || null,
+              chatId: ctx.chatId || null,
+              category: 'agent_artifact',
+            });
+            if (ctx && typeof ctx.onEvent === 'function') {
+              try {
+                ctx.onEvent({
+                  type: 'file_artifact',
+                  artifact: {
+                    id: saved.id,
+                    filename: saved.filename,
+                    mime: saved.mime,
+                    format: saved.format,
+                    sizeBytes: saved.sizeBytes,
+                    downloadUrl: saved.downloadUrl,
+                    previewHtml: null,
+                    validation: null,
+                  },
+                });
+              } catch (_) { /* UI plumbing must never fail the tool */ }
+            }
+            return {
+              ok: true,
+              engine: 'merge-deterministic',
+              edited: [{ filename: saved.filename, sizeBytes: saved.sizeBytes, downloadUrl: saved.downloadUrl, valid: true }],
+              format: 'docx',
+              summary: `Documentos fusionados en un solo Word (${ordered.length} archivos, en el orden adjuntado).`,
+              note: 'El documento fusionado ya aparece como tarjeta de descarga en el chat. Menciónalo brevemente; NO pegues su contenido.',
+            };
+          }
+        }
+      } catch (_) {
+        // Merge fast-path is best-effort — fall through to the normal editors.
+      }
+
       // FAST PATH — in-process source-preserving editor (no sandbox, pure Node:
       // PizZip / ExcelJS / pdf-lib). Handles the common "edit these specific
       // parts" request on docx/xlsx/pptx/txt/md/html/csv in-process and
