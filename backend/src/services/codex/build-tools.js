@@ -348,7 +348,7 @@ const TOOLS = {
           name: String(args?.agent || ''),
           task: String(args?.task || ''),
           context: String(args?.context || ''),
-          deps: { runner: ctx.runner, project: ctx.project, webSearch: ctx.webSearch, env: ctx.env, llmTurn: ctx.llmTurn, signal: ctx.signal, onUsage: ctx.onUsage, emitAction: ctx.emitAction, customAgents },
+          deps: { runner: ctx.runner, project: ctx.project, webSearch: ctx.webSearch, env: ctx.env, llmTurn: ctx.llmTurn, tier: ctx.tier || null, signal: ctx.signal, onUsage: ctx.onUsage, emitAction: ctx.emitAction, customAgents },
         });
         const report = sdk.formatSubagentReport(outcome);
         return { isError: !outcome.ok, summary: `${outcome.agent}: ${outcome.ok ? 'completado' : 'falló'} (${outcome.toolCallsCount} herramientas)`, observation: report };

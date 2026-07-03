@@ -231,6 +231,11 @@ async function runSubagent({ name, task, context = '', deps = {} }) {
   const env = deps.env || process.env;
   const llmTurn = deps.llmTurn || ((a) => require('../llm-turn').defaultLlmTurn(a));
   const now = deps.now || Date.now;
+  // The run tier (composer Power selector) rides in from the main loop so the
+  // specialist resolves the SAME engine (Claude for paid tiers) instead of
+  // silently dropping to the free Cerebras path — the cause of subagents
+  // running on the weak model and emitting 0 valid tool calls.
+  const tier = deps.tier || null;
   const { runner, project, webSearch, signal } = deps;
 
   // Lazy require: build-tools' run_subagent requires this module at call time,
@@ -266,7 +271,7 @@ async function runSubagent({ name, task, context = '', deps = {} }) {
     if (signal?.aborted) break;
     let turn;
     try {
-      turn = await llmTurn({ messages, tools: registry, signal, env });
+      turn = await llmTurn({ messages, tools: registry, signal, env, tier });
     } catch (err) {
       return done(false, `El subagente falló: ${String(err?.message || err)}`, step);
     }
