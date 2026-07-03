@@ -2346,7 +2346,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
 
   const regenerateMessageImpl = async (messageId?: string) => {
-    if (!currentChat || isLoading) return;
+    // Per-chat guard (NOT the global isLoading aggregate): regenerating in an
+    // idle chat must work even while another chat streams in the background.
+    if (!currentChat || activeStreamingChatIdsRef.current.has(currentChat.id)) return;
 
     let targetAiMessageIndex = -1;
 
@@ -2653,7 +2655,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const regenerateLastMessage = useCallback(() => regenerateMessageRef.current(), [])
 
   const editAndRegenerate = useCallback(async (messageId: string, newContent: string, files?: any[]) => {
-    if (!currentChat || isLoading) return;
+    // Per-chat guard (NOT the global isLoading aggregate): editing in an idle
+    // chat must work even while another chat streams in the background.
+    if (!currentChat || activeStreamingChatIdsRef.current.has(currentChat.id)) return;
 
     const messageIndex = currentChat.messages.findIndex(m => m.id === messageId);
     if (messageIndex === -1) return;

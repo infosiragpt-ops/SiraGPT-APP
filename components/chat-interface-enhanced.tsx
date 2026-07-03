@@ -4885,7 +4885,11 @@ function ChatInterfaceContent() {
   // Synchronous gate for duplicate submit events. React state updates land
   // after the current event turn, so rapid Enter keydown/keypress pairs or
   // double taps can otherwise run handleSend twice with the same composer text.
-  const sendInFlightRef = React.useRef(false);
+  // PER-CHAT (a Set of chat ids), NOT a single boolean: handleSend awaits the
+  // whole stream to [DONE], so a global latch stayed held for the entire time
+  // chat A was responding and silently no-op'ed every send in chat B / a fresh
+  // "Nuevo chat" — the "can't use another chat while one is answering" bug.
+  const sendInFlightChatsRef = React.useRef<Set<string>>(new Set());
   const intentAbortControllerRef = React.useRef<AbortController | null>(null);
   // Separate controller for the agentic search so Stop can cancel the
   // SSE stream without clobbering other in-flight requests (intent
@@ -7629,10 +7633,12 @@ But first, you need to connect your Spotify account securely using the button be
     const rawMsg = normalized.value.trim();
     if (!rawMsg && composerFiles.length === 0) return;
 
-    // If a central send is already being processed, ignore accidental
-    // double-submit. The per-message idempotency key below handles retry
+    // If a send is already being processed FOR THIS CHAT, ignore accidental
+    // double-submit. Keyed per chat so a stream running in another chat never
+    // blocks sending here. The per-message idempotency key below handles retry
     // safety once the send payload has been built.
-    if (sendInFlightRef.current) return;
+    const sendLatchKey = currentChat?.id ?? '__new__';
+    if (sendInFlightChatsRef.current.has(sendLatchKey)) return;
 
     // ── Slash-command intercept ────────────────────────────────────────
     // When the message starts with /goal or /research (or any other known
@@ -8186,8 +8192,8 @@ REWRITTEN TEXT:`;
       return;
     }
 
-    if (sendInFlightRef.current) return;
-    sendInFlightRef.current = true;
+    if (sendInFlightChatsRef.current.has(sendLatchKey)) return;
+    sendInFlightChatsRef.current.add(sendLatchKey);
 
     // Optimistically add the user message to the UI immediately.
     const userMessage = {
@@ -8570,7 +8576,7 @@ REWRITTEN TEXT:`;
       setIsSending(false);
       setSendingChatId(null);
       intentAbortControllerRef.current = null;
-      sendInFlightRef.current = false;
+      sendInFlightChatsRef.current.delete(sendLatchKey);
       inFlightSendKeysRef.current.delete(sendKey);
     }
   }
@@ -9535,8 +9541,16 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     chatType === 'image' ||
     chatType === 'video';
   const isSendingForCurrentChat = isSending && sendingChatId === currentChatId;
-  const isStopButtonVisible = isCurrentChatLoading || isCurrentChatStreaming || (pendingStop && isCurrentChatStreaming) || isSendingForCurrentChat || isCurrentChatLocalJobBusy || isGeneratingImage || isGeneratingVoice || isGeneratingVideo || isGeneratingPPT || isGeneratingMusic;
-  const shouldPrioritizeStopButton = isGeneratingVoice || isGeneratingImage || isGeneratingVideo || isGeneratingPPT || isGeneratingMusic;
+  // Media flags (image/voice/video/PPT/music) are GLOBAL booleans, but the
+  // Stop button must only take over the composer in the chat that OWNS the
+  // job (media handlers call markLocalJobBusy(chatId)). Otherwise, while chat
+  // A generates media, every other chat loses its send button and a Stop
+  // clicked from chat B aborts chat A's job.
+  const isCurrentChatMediaBusy =
+    isCurrentChatLocalJobBusy &&
+    (isGeneratingImage || isGeneratingVoice || isGeneratingVideo || isGeneratingPPT || isGeneratingMusic);
+  const isStopButtonVisible = isCurrentChatLoading || isCurrentChatStreaming || (pendingStop && isCurrentChatStreaming) || isSendingForCurrentChat || isCurrentChatLocalJobBusy || isCurrentChatMediaBusy;
+  const shouldPrioritizeStopButton = isCurrentChatMediaBusy;
   const composerHasInlineContext = uploadedFiles.length > 0 || Boolean(selectedWordText) || hasDetectedLinks;
   const composerIsExpanded =
     composerHasInlineContext ||
