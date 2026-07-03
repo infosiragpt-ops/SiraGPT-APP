@@ -11,7 +11,16 @@ function authHeaders(): Record<string, string> {
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, { credentials: "include", headers: authHeaders(), ...init })
+  // A hung backend must never freeze the composer's busy latch: every JSON
+  // call gets a hard timeout (SSE streaming goes through run-stream.ts, not
+  // req(), so this is safe globally). Placed AFTER the init spread so a
+  // caller-provided signal still wins; absent one, 20s is the ceiling.
+  const res = await fetch(`${BASE}${path}`, {
+    credentials: "include",
+    headers: authHeaders(),
+    ...init,
+    signal: init?.signal ?? AbortSignal.timeout(20_000),
+  })
   const body = await res.json().catch(() => ({}))
   if (!res.ok) throw Object.assign(new Error((body as any)?.error || `codex http ${res.status}`), { status: res.status, body })
   return body as T
