@@ -20,7 +20,7 @@ const PptxGenJS = require('pptxgenjs');
 const PDFDocument = require('pdfkit');
 const ExcelJS = require('exceljs');
 const { renderPreview } = require('../doc-preview');
-const { generateSectionContent, fallbackBlock } = require('./content');
+const { generateSectionContent, fallbackBlock, generateSpreadsheetContent } = require('./content');
 const { buildPptxContentPlan, hasGenericPlaceholderText } = require('./pptx-content-planner');
 const {
   MAX_SIMULTANEOUS_DOCUMENTS,
@@ -1883,68 +1883,135 @@ async function buildDocx(plan, outputPath) {
 }
 
 async function buildXlsx(plan, outputPath) {
+  // Topic-specific data via the content ladder (Cerebras → OpenRouter →
+  // OpenAI). The previous shape shipped the SAME hardcoded Mes/Ventas/Costos
+  // workbook with synthetic numbers no matter what the user asked for — a
+  // pharmacy-inventory request got a generic sales sheet. Fail-open: when no
+  // provider is configured (or the call fails) DATA is null and the python
+  // template falls back to the legacy deterministic dataset.
+  let generated = null;
+  try {
+    generated = await generateSpreadsheetContent({
+      prompt: plan.userRequest || plan.title,
+      title: plan.title,
+      language: /^[a-z]{2}$/i.test(plan.language || '') ? plan.language : 'es',
+    });
+  } catch { /* fall back below */ }
+
   const py = `
-import base64, os, random
+import base64, json, os
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.chart import BarChart, Reference, LineChart
 from openpyxl.formatting.rule import ColorScaleRule
-from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.table import Table, TableStyleInfo
+from openpyxl.utils import get_column_letter
 
 OUT_PATH = ${JSON.stringify(outputPath)}
 REFS = ${JSON.stringify((plan.referenceBriefs || []).map((ref) => ({ name: ref.name, excerpt: ref.excerpt })))}
+DATA = json.loads(${JSON.stringify(JSON.stringify(generated))})
+TITLE = ${JSON.stringify(plan.title)}
+
+if not DATA:
+    DATA = {
+        "sheetName": "Datos",
+        "headers": ["Mes", "Ventas", "Costos", "Satisfaccion"],
+        "rows": [[mes, 12000 + i * 850, 7000 + i * 430, (i % 5) + 1] for i, mes in enumerate(["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"], start=2)],
+        "numericColumns": [1, 2, 3],
+        "currencyColumns": [1, 2],
+        "insights": [
+            {"finding": "Crecimiento", "interpretation": "La tendencia muestra expansión sostenida con margen positivo."},
+            {"finding": "Riesgo", "interpretation": "Monitorear costos variables y dependencia de satisfacción."},
+        ],
+    }
+
+headers = DATA["headers"]
+rows = DATA["rows"]
+numeric_cols = [c for c in DATA.get("numericColumns", []) if 0 <= c < len(headers)]
+currency_cols = [c for c in DATA.get("currencyColumns", []) if c in numeric_cols]
+
 wb = Workbook()
 ws = wb.active
-ws.title = "Datos"
-headers = ["Mes", "Ventas", "Costos", "Margen", "Satisfaccion"]
+ws.title = DATA.get("sheetName") or "Datos"
 ws.append(headers)
-for i, mes in enumerate(["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"], start=2):
-    ventas = 12000 + i * 850
-    costos = 7000 + i * 430
-    ws.append([mes, ventas, costos, f"=B{i}-C{i}", (i % 5) + 1])
+for row in rows:
+    ws.append(row[:len(headers)])
+last_row = len(rows) + 1
+last_col = get_column_letter(len(headers))
+
 for cell in ws[1]:
     cell.fill = PatternFill("solid", fgColor="0F172A")
     cell.font = Font(color="FFFFFF", bold=True)
     cell.alignment = Alignment(horizontal="center")
 ws.freeze_panes = "A2"
-tab = Table(displayName="TablaDatos", ref="A1:E13")
+
+# Column widths + number formats per column type
+for idx, header in enumerate(headers):
+    letter = get_column_letter(idx + 1)
+    width = max(len(str(header)), *(len(str(r[idx])) if idx < len(r) else 0 for r in rows)) if rows else len(str(header))
+    ws.column_dimensions[letter].width = min(max(width + 3, 12), 42)
+    if idx in currency_cols:
+        fmt = '#,##0.00'
+    elif idx in numeric_cols:
+        fmt = '#,##0.##'
+    else:
+        fmt = None
+    if fmt:
+        for r in range(2, last_row + 1):
+            ws.cell(row=r, column=idx + 1).number_format = fmt
+
+tab = Table(displayName="TablaDatos", ref=f"A1:{last_col}{last_row}")
 tab.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showRowStripes=True, showColumnStripes=False)
 ws.add_table(tab)
-ws.conditional_formatting.add("B2:D13", ColorScaleRule(start_type="min", start_color="F87171", mid_type="percentile", mid_value=50, mid_color="FBBF24", end_type="max", end_color="34D399"))
-dv = DataValidation(type="list", formula1='"1,2,3,4,5"', allow_blank=False)
-ws.add_data_validation(dv)
-dv.add("E2:E13")
-chart = BarChart()
-chart.title = "Ventas vs costos"
-chart.y_axis.title = "Monto"
-chart.x_axis.title = "Mes"
-chart.add_data(Reference(ws, min_col=2, max_col=3, min_row=1, max_row=13), titles_from_data=True)
-chart.set_categories(Reference(ws, min_col=1, min_row=2, max_row=13))
-ws.add_chart(chart, "G2")
 
+if numeric_cols:
+    first_num = get_column_letter(min(numeric_cols) + 1)
+    last_num = get_column_letter(max(numeric_cols) + 1)
+    ws.conditional_formatting.add(
+        f"{first_num}2:{last_num}{last_row}",
+        ColorScaleRule(start_type="min", start_color="F87171", mid_type="percentile", mid_value=50, mid_color="FBBF24", end_type="max", end_color="34D399"),
+    )
+    chart = BarChart()
+    chart.title = TITLE[:60]
+    chart.y_axis.title = headers[numeric_cols[0]]
+    chart.x_axis.title = headers[0]
+    chart.add_data(Reference(ws, min_col=numeric_cols[0] + 1, max_col=min(numeric_cols[0] + 2, len(headers)), min_row=1, max_row=last_row), titles_from_data=True)
+    chart.set_categories(Reference(ws, min_col=1, min_row=2, max_row=last_row))
+    ws.add_chart(chart, f"{get_column_letter(len(headers) + 2)}2")
+
+# Dashboard: real formulas per numeric column (never hardcoded values)
 dash = wb.create_sheet("Dashboard")
-dash["A1"] = ${JSON.stringify(plan.title)}
+dash["A1"] = TITLE
 dash["A1"].font = Font(size=18, bold=True, color="0F172A")
-dash["A3"] = "Total ventas"; dash["B3"] = "=SUM(Datos!B2:B13)"
-dash["A4"] = "Margen promedio"; dash["B4"] = "=AVERAGE(Datos!D2:D13)"
-dash["A5"] = "Satisfaccion promedio"; dash["B5"] = "=AVERAGE(Datos!E2:E13)"
-line = LineChart()
-line.title = "Margen mensual"
-line.add_data(Reference(ws, min_col=4, min_row=1, max_row=13), titles_from_data=True)
-line.set_categories(Reference(ws, min_col=1, min_row=2, max_row=13))
-dash.add_chart(line, "D3")
+row_cursor = 3
+data_name = ws.title
+for col in numeric_cols[:4]:
+    letter = get_column_letter(col + 1)
+    dash.cell(row=row_cursor, column=1, value=f"Total {headers[col]}")
+    dash.cell(row=row_cursor, column=2, value=f"=SUM('{data_name}'!{letter}2:{letter}{last_row})")
+    dash.cell(row=row_cursor + 1, column=1, value=f"Promedio {headers[col]}")
+    dash.cell(row=row_cursor + 1, column=2, value=f"=AVERAGE('{data_name}'!{letter}2:{letter}{last_row})")
+    row_cursor += 2
+dash.column_dimensions["A"].width = 34
+dash.column_dimensions["B"].width = 18
+if numeric_cols:
+    line = LineChart()
+    line.title = f"Tendencia: {headers[numeric_cols[0]]}"[:60]
+    line.add_data(Reference(ws, min_col=numeric_cols[0] + 1, min_row=1, max_row=last_row), titles_from_data=True)
+    line.set_categories(Reference(ws, min_col=1, min_row=2, max_row=last_row))
+    dash.add_chart(line, "D3")
 
 interp = wb.create_sheet("Interpretacion")
 interp.append(["Hallazgo", "Interpretacion"])
-interp.append(["Crecimiento", "La tendencia muestra expansión sostenida con margen positivo."])
-interp.append(["Riesgo", "Monitorear costos variables y dependencia de satisfacción."])
+for item in DATA.get("insights", []):
+    interp.append([item.get("finding", ""), item.get("interpretation", "")])
+for cell in interp[1]:
+    cell.fill = PatternFill("solid", fgColor="0F172A")
+    cell.font = Font(color="FFFFFF", bold=True)
+interp.column_dimensions["A"].width = 28
+interp.column_dimensions["B"].width = 70
+interp.freeze_panes = "A2"
 
-meta = wb.create_sheet("Métricas")
-meta.append(["Campo", "Valor"])
-meta.append(["Pipeline", "multiagente"])
-meta.append(["Plantilla", ${JSON.stringify(plan.template)}])
-meta.append(["Formato", "xlsx"])
 if REFS:
     refs = wb.create_sheet("Referencias")
     refs.append(["Archivo", "Extracto usado"])
