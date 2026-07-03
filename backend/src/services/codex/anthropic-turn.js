@@ -72,6 +72,13 @@ function toAnthropicTools(tools) {
   }));
 }
 
+/** Prompt caching on/off. Default ON — cache_control is GA in @anthropic-ai/sdk
+ * >=0.20 (no beta header needed). Env kill-switch for any deploy on a very old
+ * SDK: CODEX_ANTHROPIC_CACHE=0 degrades to the plain (uncached) request shape. */
+function cacheEnabled(env = process.env) {
+  return String(env.CODEX_ANTHROPIC_CACHE ?? '1') !== '0';
+}
+
 function defaultCreateClient({ env = process.env } = {}) {
   // Lazy require so offline tests (which always inject createClient) never load the SDK.
   const Anthropic = require('@anthropic-ai/sdk');
@@ -118,14 +125,30 @@ async function anthropicTurn({ messages, tools = [], signal, env = process.env, 
   if (!client?.messages?.create) throw new Error('codex anthropic-turn: cliente inválido');
 
   const { system, turns } = toAnthropicMessages(messages);
+  const useCache = cacheEnabled(env);
   const req = {
     model: cfg.model,
     max_tokens: maxTokens,
-    system: system || undefined,
     messages: turns,
   };
+  // Prompt caching: mark the stable prefix (system + tools) so Anthropic caches
+  // it (~10× cheaper on cache-read, 5 min TTL). With up to 24 steps per run the
+  // system + tools prefix is otherwise re-billed as full input on every step.
+  if (system) {
+    req.system = useCache
+      ? [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }]
+      : system;
+  }
   const anthropicTools = toAnthropicTools(tools);
-  if (anthropicTools.length) req.tools = anthropicTools;
+  if (anthropicTools.length) {
+    if (useCache) {
+      // Mark the LAST tool: a cache breakpoint caches everything up to and
+      // including it — the whole (large, stable) tool definition block.
+      const last = anthropicTools.length - 1;
+      anthropicTools[last] = { ...anthropicTools[last], cache_control: { type: 'ephemeral' } };
+    }
+    req.tools = anthropicTools;
+  }
 
   const resp = await client.messages.create(req, signal ? { signal } : undefined);
   return parseResponse(resp, cfg.model);
@@ -136,6 +159,7 @@ module.exports = {
   getAnthropicTurnConfig,
   toAnthropicMessages,
   toAnthropicTools,
+  cacheEnabled,
   parseResponse,
   DEFAULT_MODEL_POWER,
   DEFAULT_MODEL_STANDARD,

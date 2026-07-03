@@ -105,7 +105,71 @@ test('anthropicTurn: tool_use nativo → toolCalls; usage con provider Anthropic
   assert.equal(captured.tools[0].name, 'write_file');
   assert.ok(captured.tools[0].input_schema);
   assert.equal(captured.model, DEFAULT_MODEL_POWER);
-  assert.equal(captured.system, 'agente');
+  // Con caching ON (default), system viaja como array de bloques con cache_control.
+  assert.ok(Array.isArray(captured.system));
+  assert.equal(captured.system[0].text, 'agente');
+});
+
+test('anthropicTurn: prompt caching marca system (array) y el ÚLTIMO tool con cache_control', async () => {
+  let captured = null;
+  const createClient = () => ({
+    messages: {
+      create: async (req) => { captured = req; return { id: 'm', content: [{ type: 'text', text: 'ok' }], usage: {} }; },
+    },
+  });
+  await anthropicTurn({
+    messages: [{ role: 'system', content: 'agente estable' }, { role: 'user', content: 'x' }],
+    tools: [
+      { name: 'a', description: 'da', parameters: { type: 'object', properties: {} } },
+      { name: 'b', description: 'db', parameters: { type: 'object', properties: {} } },
+    ],
+    env: { ANTHROPIC_API_KEY: 'sk-test' },
+    tier: 'power',
+    createClient,
+  });
+  // system → array de bloques de texto con cache_control ephemeral en el último bloque.
+  assert.ok(Array.isArray(captured.system));
+  assert.equal(captured.system.length, 1);
+  assert.equal(captured.system[0].type, 'text');
+  assert.equal(captured.system[0].text, 'agente estable');
+  assert.deepEqual(captured.system[0].cache_control, { type: 'ephemeral' });
+  // El ÚLTIMO tool lleva cache_control; los previos NO.
+  assert.equal(captured.tools.length, 2);
+  assert.equal(captured.tools[0].cache_control, undefined);
+  assert.deepEqual(captured.tools[1].cache_control, { type: 'ephemeral' });
+});
+
+test('anthropicTurn: CODEX_ANTHROPIC_CACHE=0 degrada a system string y tools sin cache_control', async () => {
+  let captured = null;
+  const createClient = () => ({
+    messages: { create: async (req) => { captured = req; return { id: 'm', content: [{ type: 'text', text: 'ok' }], usage: {} }; } },
+  });
+  await anthropicTurn({
+    messages: [{ role: 'system', content: 'agente' }, { role: 'user', content: 'x' }],
+    tools: [{ name: 'a', description: 'da', parameters: { type: 'object', properties: {} } }],
+    env: { ANTHROPIC_API_KEY: 'sk-test', CODEX_ANTHROPIC_CACHE: '0' },
+    tier: 'power',
+    createClient,
+  });
+  assert.equal(captured.system, 'agente', 'sin caching, system es string plano (compat SDK viejo)');
+  assert.equal(captured.tools[0].cache_control, undefined);
+});
+
+test('anthropicTurn: sin tools no rompe (system cacheado, req.tools ausente)', async () => {
+  let captured = null;
+  const createClient = () => ({
+    messages: { create: async (req) => { captured = req; return { id: 'm', content: [{ type: 'text', text: 'ok' }], usage: {} }; } },
+  });
+  const out = await anthropicTurn({
+    messages: [{ role: 'system', content: 'agente' }, { role: 'user', content: 'x' }],
+    tools: [],
+    env: { ANTHROPIC_API_KEY: 'sk-test' },
+    tier: 'power',
+    createClient,
+  });
+  assert.equal(out.text, 'ok');
+  assert.equal(captured.tools, undefined, 'sin tools no se envía req.tools');
+  assert.ok(Array.isArray(captured.system));
 });
 
 test('toAnthropicTools: parameters → input_schema con fallback', () => {
