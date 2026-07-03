@@ -10998,25 +10998,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           isProcessingGmail={isCurrentChatLocalJobBusy && isProcessingGmail}
                         />
 
-                        {/* Búsqueda web — toggle inline, justo al lado del + */}
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          aria-label={isWebSearchActive ? 'Búsqueda web activa' : 'Activar búsqueda web'}
-                          aria-pressed={isWebSearchActive}
-                          title={isWebSearchActive ? 'Búsqueda web activa' : 'Buscar en la web'}
-                          onClick={() => setIsWebSearchActive(!isWebSearchActive)}
-                          disabled={isGeneratingImage}
-                          className={cn(
-                            "composer-plus-liquid-button flex h-10 w-10 shrink-0 items-center justify-center rounded-full p-0 transition-colors",
-                            isWebSearchActive &&
-                              "bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400",
-                          )}
-                        >
-                          <Globe className="relative z-10 h-5 w-5" strokeWidth={2.1} />
-                        </Button>
-
                         {shouldInlineActiveTools && (
                           <div className="composer-inline-active-tools">
                             <ActiveToolsDisplay {...activeToolsProps} />
@@ -11592,26 +11573,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               isGeneratingPPT={isGeneratingPPT}
                               isProcessingGmail={isCurrentChatLocalJobBusy && isProcessingGmail}
                             />
-
-                            {/* Búsqueda web — toggle inline, justo al lado del + */}
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              aria-label={isWebSearchActive ? 'Búsqueda web activa' : 'Activar búsqueda web'}
-                              aria-pressed={isWebSearchActive}
-                              title={isWebSearchActive ? 'Búsqueda web activa' : 'Buscar en la web'}
-                              onClick={() => setIsWebSearchActive(!isWebSearchActive)}
-                              disabled={isGeneratingImage}
-                              className={cn(
-                                "composer-plus-liquid-button flex h-10 w-10 shrink-0 items-center justify-center rounded-full p-0 transition-colors",
-                                isWebSearchActive &&
-                                  "bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400",
-                              )}
-                            >
-                              <Globe className="relative z-10 h-5 w-5" strokeWidth={2.1} />
-                            </Button>
-
                             {shouldInlineActiveTools && (
                               <div className="composer-inline-active-tools">
                                 <ActiveToolsDisplay {...activeToolsProps} />
