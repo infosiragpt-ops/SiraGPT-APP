@@ -72,6 +72,13 @@ import {
   type CodeSecretEntry,
 } from "@/lib/code-secrets"
 import { detectWorkspaceSchema, fieldLabel } from "@/lib/code-agent/workspace-schema"
+import {
+  formatBytes,
+  groupWorkspaceAssets,
+  imageWrapperSvg,
+  planUpload,
+  totalAssetBytes,
+} from "@/lib/code-agent/workspace-assets"
 import { RealGitPanel } from "@/components/code/git-tool-real"
 import { WorkspaceDeploymentsTool } from "@/components/deployments/workspace-deployments-tool"
 import { RealPublishingPanel } from "@/components/code/publishing-tool-real"
@@ -1908,15 +1915,97 @@ function DataTable({ columns, rows }: { columns: string[]; rows: Record<string, 
 }
 
 function StorageTool() {
-  const { openLocalFolderWorkspace, workspaceSource } = useCodeWorkspace()
+  const { openLocalFolderWorkspace, workspaceSource, files, createFile, openFile } = useCodeWorkspace()
   const [assets, setAssets] = useWorkspacePersistedState<{ id: string; name: string; size: number; type: string; createdAt: number }[]>("storage", [])
+
+  // Real inventory: the project's actual files grouped by asset kind.
+  const assetGroups = React.useMemo(() => groupWorkspaceAssets(files), [files])
+  const projectBytes = React.useMemo(() => totalAssetBytes(assetGroups), [assetGroups])
+  const [expandedKind, setExpandedKind] = React.useState<string | null>(null)
+
+  // Real upload: text assets join the project under public/; small raster
+  // images get a portable SVG wrapper (workspace files are utf-8 text);
+  // anything else keeps the honest local-only registry.
+  const handleUpload = React.useCallback(
+    async (list: File[]) => {
+      let written = 0
+      for (const file of list) {
+        const plan = planUpload(file, Object.keys(files))
+        if (plan.action === "write-text") {
+          const text = await file.text()
+          createFile(plan.path, text)
+          written += 1
+        } else if (plan.action === "wrap-image") {
+          const dataUrl = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader()
+            reader.onload = () => resolve(String(reader.result))
+            reader.onerror = () => reject(reader.error)
+            reader.readAsDataURL(file)
+          })
+          createFile(plan.path, imageWrapperSvg(dataUrl))
+          written += 1
+        } else {
+          setAssets((prev) => [
+            { id: makeId("asset"), name: file.name, size: file.size, type: file.type || "file", createdAt: Date.now() },
+            ...prev,
+          ])
+          toast.info(`${file.name}: ${plan.reason}`)
+        }
+      }
+      if (written > 0) toast.success(`${written} archivo(s) añadidos al proyecto en public/`)
+    },
+    [createFile, files, setAssets],
+  )
+
   return (
     <ToolShell
-      eyebrow="Storage · local"
+      eyebrow="Storage · workspace"
       title="App Storage"
-      detail="Registro LOCAL de assets del workspace (los archivos no salen del navegador). El almacenamiento de objetos servido a la app aún no está disponible."
+      detail={`Archivos reales del proyecto (${formatBytes(projectBytes)} en ${assetGroups.reduce((sum, group) => sum + group.files.length, 0)} archivos). Texto/SVG e imágenes pequeñas se suben al proyecto; el object storage servido aún no está disponible.`}
     >
       <PanelGrid>
+        <PanelCard
+          title="Archivos del proyecto"
+          detail="Inventario real del workspace por tipo"
+          icon={<HardDrive className="h-4 w-4" />}
+        >
+          {assetGroups.length === 0 ? (
+            <p className="rounded-md bg-muted/35 px-3 py-3 text-[12px] text-muted-foreground">El workspace no tiene archivos todavía.</p>
+          ) : (
+            <div className="space-y-1.5">
+              {assetGroups.map((group) => (
+                <div key={group.kind} className="rounded-md border border-border/50">
+                  <button
+                    type="button"
+                    className="flex w-full items-center justify-between px-3 py-2 text-left text-[12px] hover:bg-muted/40"
+                    onClick={() => setExpandedKind((prev) => (prev === group.kind ? null : group.kind))}
+                  >
+                    <span className="font-medium">{group.label}</span>
+                    <span className="text-muted-foreground">{group.files.length} · {formatBytes(group.bytes)}</span>
+                  </button>
+                  {expandedKind === group.kind ? (
+                    <div className="border-t border-border/40 px-1.5 py-1">
+                      {group.files.slice(0, 12).map((file) => (
+                        <button
+                          key={file.path}
+                          type="button"
+                          className="flex w-full items-center justify-between gap-2 rounded px-1.5 py-1 text-left text-[11.5px] hover:bg-muted/40"
+                          onClick={() => openFile(file.path)}
+                        >
+                          <span className="min-w-0 truncate font-mono">{file.path}</span>
+                          <span className="shrink-0 text-muted-foreground">{formatBytes(file.bytes)}</span>
+                        </button>
+                      ))}
+                      {group.files.length > 12 ? (
+                        <p className="px-1.5 py-1 text-[11px] text-muted-foreground">… y {group.files.length - 12} más</p>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          )}
+        </PanelCard>
         <PanelCard
           title="Carpeta local"
           detail={workspaceSource.linked ? `Vinculada: ${workspaceSource.name}` : "Vincula una carpeta de tu computadora al workspace"}
@@ -1934,22 +2023,19 @@ function StorageTool() {
             El agente lee archivos compatibles de esa carpeta en el workspace y puedes guardar cambios de vuelta al disco.
           </p>
         </PanelCard>
-        <PanelCard title="Subir archivo" detail="El archivo no sale de tu navegador; se registra como asset local." icon={<Upload className="h-4 w-4" />}>
+        <PanelCard title="Subir archivo" detail="Texto/SVG entra al proyecto en public/; imágenes ≤200 KB se envuelven como SVG portable." icon={<Upload className="h-4 w-4" />}>
           <input
             type="file"
             multiple
             className="block w-full text-[12px] file:mr-3 file:h-8 file:rounded-md file:border-0 file:bg-foreground file:px-3 file:text-background"
             onChange={(e) => {
-              const files = Array.from(e.target.files || [])
-              setAssets((prev) => [
-                ...files.map((file) => ({ id: makeId("asset"), name: file.name, size: file.size, type: file.type || "file", createdAt: Date.now() })),
-                ...prev,
-              ])
+              const list = Array.from(e.target.files || [])
               e.currentTarget.value = ""
+              if (list.length > 0) void handleUpload(list)
             }}
           />
         </PanelCard>
-        <PanelCard title="Assets" detail={`${assets.length} archivos registrados`} icon={<HardDrive className="h-4 w-4" />}>
+        <PanelCard title="Registro local" detail={`${assets.length} archivo(s) no incorporables al proyecto (solo metadatos en el navegador)`} icon={<HardDrive className="h-4 w-4" />}>
           <div className="space-y-2">
             {assets.length === 0 ? <p className="rounded-md bg-muted/35 px-3 py-3 text-[12px] text-muted-foreground">Sin assets.</p> : assets.map((asset) => (
               <div key={asset.id} className="flex items-center gap-2 rounded-md border border-border/50 px-3 py-2">
