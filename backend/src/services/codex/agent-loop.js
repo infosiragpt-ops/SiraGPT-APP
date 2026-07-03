@@ -351,11 +351,15 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   let groupCounter = 0;
   let aborted = false;
   let verifyRounds = 0;
-  // Anti-thrash state: consecutive writes to the same path. A weak model can
-  // loop rewriting one file "all at once" and burn the whole budget without
-  // progress (observed in the F15 smoke: src/index.css written 5× in a row).
+  // Anti-thrash state. A model can loop rewriting one file and burn the budget
+  // without progress. Two detectors, because the prod smoke showed BOTH shapes:
+  //  - consecutive: src/index.css written 5× in a row (`sameWriteRun`).
+  //  - interleaved: cliente.ts written 7× total but spread across other writes,
+  //    which the consecutive counter never caught (`writeTotals`).
   let lastWritePath = null;
   let sameWriteRun = 0;
+  const writeTotals = new Map();
+  const nudgedPaths = new Set();
 
   for (let step = 0; step < maxSteps; step += 1) {
     if (signal?.aborted) { aborted = true; break; }
@@ -506,11 +510,20 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
       if (!result.isError && (call.name === 'write_file' || call.name === 'edit_file') && path) {
         if (path === lastWritePath) sameWriteRun += 1;
         else { lastWritePath = path; sameWriteRun = 1; }
-        if (sameWriteRun >= maxSameFileWrites) {
-          thrashNudge = `\n[LOOP] Ya escribiste ${path} ${sameWriteRun} veces seguidas. DEJA de reescribir este archivo: si ya está bien, avanza al siguiente paso del plan; corrígelo solo si type_check/dev_server_check reportó un error concreto en él.`;
+        const total = (writeTotals.get(path) || 0) + 1;
+        writeTotals.set(path, total);
+        // Nudge on a consecutive run OR an interleaved total (2× the threshold),
+        // but only ONCE per file so the message doesn't spam every later write.
+        const consecutiveHit = sameWriteRun >= maxSameFileWrites;
+        const totalHit = total >= maxSameFileWrites * 2;
+        if ((consecutiveHit || totalHit) && !nudgedPaths.has(path)) {
+          nudgedPaths.add(path);
+          const howMany = consecutiveHit ? `${sameWriteRun} veces seguidas` : `${total} veces en esta corrida`;
+          thrashNudge = `\n[LOOP] Ya escribiste ${path} ${howMany}. DEJA de reescribir este archivo: si ya está bien, avanza al siguiente paso del plan; corrígelo solo si type_check/dev_server_check reportó un error concreto en él.`;
         }
       } else if (!result.isError && tool.kind !== 'file_read') {
-        // A non-write, non-read action (e.g. a command) breaks the run.
+        // A non-write, non-read action (e.g. a command) breaks the consecutive
+        // run but NOT the per-file totals (interleaved rewrites still count).
         lastWritePath = null;
         sameWriteRun = 0;
       }

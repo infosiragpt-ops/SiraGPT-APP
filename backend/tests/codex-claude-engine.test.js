@@ -385,6 +385,41 @@ test('build loop: reescribir el mismo archivo N veces inyecta el aviso anti-bucl
   assert.match(nudge, /3 veces seguidas/);
 });
 
+test('build loop: reescrituras INTERCALADAS del mismo archivo también disparan el aviso', async () => {
+  // El smoke en prod mostró cliente.ts escrito 7× intercalado con otros writes,
+  // que el contador consecutivo nunca cazaba. El total por archivo sí.
+  let turnCount = 0;
+  const allMsgs = [];
+  const llmTurn = async ({ messages }) => {
+    turnCount += 1;
+    allMsgs.push(...messages.map((m) => String(m.content || '')));
+    if (turnCount <= 11) {
+      // Alterna A/B para que NUNCA haya 2 seguidas del mismo path; A (turnos
+      // impares) llega a 6 escrituras totales (= 2×umbral) sin ser consecutivas.
+      const path = turnCount % 2 === 1 ? 'src/A.tsx' : 'src/B.tsx';
+      return { text: `w${turnCount}`, toolCalls: [{ name: 'write_file', args: { path, content: `x${turnCount}` } }] };
+    }
+    return { text: 'listo', toolCalls: [] };
+  };
+  const f = {
+    llmTurn,
+    runner: { readFile: async () => { throw new Error('no'); }, writeFiles: async () => ({ ok: true }), exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }) },
+    fileTree: '', plan: null,
+    eventStore: { appendEvent: async () => {}, listEvents: async () => [] },
+    actionStore: { recordAction: async () => {} },
+    clock: () => new Date(0),
+    env: { CODEX_MAX_SAME_FILE_WRITES: '3', NODE_ENV: 'test' },
+  };
+  const res = await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt: 'x', tier: 'eco' }, project: { id: 'p1' }, deps: f });
+  assert.equal(res.status, 'done');
+  const nudge = allMsgs.find((c) => c.includes('[LOOP]') && c.includes('src/A.tsx'));
+  assert.ok(nudge, 'un archivo reescrito 6× intercalado (2× umbral) recibe el aviso');
+  assert.match(nudge, /veces en esta corrida/);
+  // Solo una vez por archivo: no debe haber un segundo [LOOP] para A.tsx.
+  const nudgesForA = allMsgs.filter((c) => c.includes('[LOOP]') && c.includes('src/A.tsx'));
+  assert.equal(nudgesForA.length, 1, 'el aviso se emite una sola vez por archivo');
+});
+
 test('run_subagent propaga el tier del run al llmTurn del especialista', async () => {
   const sdk = require('../src/services/codex/agent-sdk');
   const captured = [];
