@@ -18,8 +18,8 @@ const {
   MAX_SIMULTANEOUS_DOCUMENTS,
 } = require('../config/document-batch-limits');
 const {
-  createContentClient,
-  DEFAULT_MODEL,
+  resolveContentClient,
+  hasAnyContentKey,
 } = require('./document-pipeline/content/llm-client');
 
 const BACKEND_ROOT = path.resolve(__dirname, '..', '..');
@@ -1542,11 +1542,11 @@ function detectSectionTablePlan(buffer, target) {
 // Ask the model to produce rows that fit the table's own column headers and the
 // document's real topic. Degrades to [] (caller falls back) when no key/result.
 async function generateTableRowsContent({ labels = [], maxRows = 0, sectionLabel = '', sourceText = '', prompt = '', signal } = {}) {
-  if (!process.env.OPENAI_API_KEY || !labels.length || maxRows <= 0) return [];
+  if (!hasAnyContentKey() || !labels.length || maxRows <= 0) return [];
   try {
-    const client = createContentClient('OpenAI');
+    const { client, model: contentModel } = resolveContentClient();
     const completion = await client.chat.completions.create({
-      model: DEFAULT_MODEL,
+      model: contentModel,
       messages: [
         {
           role: 'system',
@@ -2621,12 +2621,12 @@ async function generateReferenceIntegrationBlocks({
     sourceText,
   });
   if (!referenceFiles.length) return fallback();
-  if (!process.env.OPENAI_API_KEY) return fallback();
+  if (!hasAnyContentKey()) return fallback();
 
   try {
-    const client = createContentClient('OpenAI');
+    const { client, model: contentModel } = resolveContentClient();
     const completion = await client.chat.completions.create({
-      model: DEFAULT_MODEL,
+      model: contentModel,
       messages: [
         {
           role: 'system',
@@ -2714,12 +2714,12 @@ async function generateTargetSectionBlocks({
   signal,
 } = {}) {
   const fallback = () => sectionFallbackBlocks({ prompt, target, sourceText, sourceFiles });
-  if (!process.env.OPENAI_API_KEY) return fallback();
+  if (!hasAnyContentKey()) return fallback();
 
   try {
-    const client = createContentClient('OpenAI');
+    const { client, model: contentModel } = resolveContentClient();
     const completion = await client.chat.completions.create({
-      model: DEFAULT_MODEL,
+      model: contentModel,
       messages: [
         {
           role: 'system',
@@ -3873,12 +3873,12 @@ function summarizeStructureForPrompt(structure = { sections: [] }) {
 // returns a normalized operation plan. Returns null when unavailable/invalid so
 // the caller keeps the deterministic heuristic plan.
 async function planOperationsWithLLM({ requestText = '', documentXml = '', signal } = {}) {
-  if (!process.env.OPENAI_API_KEY) return null;
+  if (!hasAnyContentKey()) return null;
   try {
     const structure = analyzeDocumentStructure(documentXml);
-    const client = createContentClient('OpenAI');
+    const { client, model: contentModel } = resolveContentClient();
     const completion = await client.chat.completions.create({
-      model: DEFAULT_MODEL,
+      model: contentModel,
       messages: [
         {
           role: 'system',
@@ -4369,7 +4369,7 @@ function sanitizeOfficeOperations(rawOps, format) {
 }
 
 async function planOfficeOperationsSmart({ requestText = '', format = '', input, signal } = {}) {
-  if (!officeSmartPlanEnabled() || !process.env.OPENAI_API_KEY) return null;
+  if (!officeSmartPlanEnabled() || !hasAnyContentKey()) return null;
   try {
     let summary = '';
     if (format === 'xlsx') summary = await buildXlsxSummaryForPrompt(input);
@@ -4387,9 +4387,9 @@ async function planOfficeOperationsSmart({ requestText = '', format = '', input,
         '{"kind":"delete_text","needle":"texto exacto"}',
         '{"kind":"add_slide","title":"Riesgos del proyecto","bullets":["Riesgo 1...","Riesgo 2..."]}  // diapositiva NUEVA al final',
       ];
-    const client = createContentClient('OpenAI');
+    const { client, model: contentModel } = resolveContentClient();
     const completion = await client.chat.completions.create({
-      model: DEFAULT_MODEL,
+      model: contentModel,
       response_format: { type: 'json_object' },
       messages: [
         {

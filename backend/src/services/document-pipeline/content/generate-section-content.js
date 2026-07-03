@@ -1,4 +1,4 @@
-const { createContentClient, DEFAULT_MODEL } = require('./llm-client');
+const { DEFAULT_MODEL, resolveContentClient } = require('./llm-client');
 const { SECTION_CONTENT_SCHEMA, buildSystemPrompt, buildUserPrompt } = require('./prompts');
 
 const REQUEST_TIMEOUT_MS = 25_000;
@@ -29,33 +29,33 @@ async function generateSectionContent({
   plan,
   signal,
   language,
-  provider = 'OpenAI',
-  model = DEFAULT_MODEL,
+  provider,
+  model,
 } = {}) {
   if (!plan || !Array.isArray(plan.sections) || plan.sections.length === 0) {
     return [];
   }
 
-  // Skip the LLM round-trip entirely when no key is configured. The
-  // pipeline still produces a well-formed file; the fallback content
-  // makes the degradation visible instead of pretending success.
-  const hasKey =
-    provider === 'OpenAI' ? !!process.env.OPENAI_API_KEY :
-    provider === 'Gemini' ? !!process.env.GEMINI_API_KEY :
-    provider === 'DeepSeek' ? !!process.env.DEEPSEEK_API_KEY :
-    provider === 'OpenRouter' ? !!process.env.OPENROUTER_API_KEY :
-    false;
-  if (!hasKey) {
+  // Resolve the first CONFIGURED provider on the ladder (Cerebras →
+  // OpenRouter → OpenAI). A caller-supplied provider is honoured when its
+  // key exists; otherwise the ladder falls through. This is the fix for the
+  // filler-document bug: the writer was hardwired to OpenAI, whose prod key
+  // was dead, so every section silently degraded to template filler.
+  const resolved = resolveContentClient({ preferred: provider });
+  if (!resolved) {
     return plan.sections.map((section) => fallbackBlock(section));
   }
-
-  const client = createContentClient(provider);
+  const client = resolved.client;
+  // A caller-supplied model only makes sense on the provider it was chosen
+  // for; when the ladder fell through to a different provider, use that
+  // provider's own default model (e.g. 'gpt-4o-mini' would 404 on Cerebras).
+  const effectiveModel = model && provider === resolved.provider ? model : resolved.model;
   const systemPrompt = buildSystemPrompt({ language, template: plan.template });
 
   const tasks = plan.sections.map(async (section) => {
     try {
       const completion = await client.chat.completions.create({
-        model,
+        model: effectiveModel,
         messages: [
           { role: 'system', content: systemPrompt },
           {

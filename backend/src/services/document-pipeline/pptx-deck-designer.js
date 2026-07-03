@@ -24,7 +24,7 @@
  * HTML y cualquier consumidor existente siguen funcionando sin cambios.
  */
 
-const { createContentClient, DEFAULT_MODEL } = require('./content/llm-client');
+const { resolveContentClient } = require('./content/llm-client');
 
 const MAX_SLIDES = 10;
 const VALID_LAYOUTS = new Set(['section', 'bullets', 'two_column', 'stat', 'quote', 'chart']);
@@ -141,17 +141,17 @@ function sanitizeDeck(raw, { title }) {
 async function planPptxDeckWithLLM({ title = '', prompt = '', blocks = [], referenceBriefs = [], signal } = {}) {
   if (String(process.env.NODE_ENV) === 'test' && process.env.SIRAGPT_PPTX_DESIGNER_NETWORK !== '1') return null;
   if (String(process.env.SIRAGPT_PPTX_DECK_DESIGNER || '').trim() === '0') return null;
-  if (!process.env.OPENAI_API_KEY && !process.env.DEEPSEEK_API_KEY && !process.env.GEMINI_API_KEY) return null;
+  const _resolved = resolveContentClient();
+  if (!_resolved) return null;
   try {
-    const provider = process.env.OPENAI_API_KEY ? 'OpenAI' : (process.env.GEMINI_API_KEY ? 'Gemini' : 'DeepSeek');
-    const client = createContentClient(provider);
+    const client = _resolved.client;
     const material = [
       ...(Array.isArray(blocks) ? blocks : []).slice(0, 8).map((block) => `## ${block.section || 'Sección'}\n${clean(block.paragraph || '', 500)}\n${(block.bullets || []).slice(0, 5).map((b) => `- ${clean(typeof b === 'string' ? b : b?.text || '', 160)}`).join('\n')}`),
       ...(Array.isArray(referenceBriefs) ? referenceBriefs : []).slice(0, 4).map((ref) => `## Referencia: ${ref.name}\n${clean(ref.excerpt || '', 400)}`),
     ].join('\n\n').slice(0, 9000);
 
     const completion = await client.chat.completions.create({
-      model: DEFAULT_MODEL,
+      model: _resolved.model,
       response_format: { type: 'json_object' },
       temperature: 0.4,
       messages: [
