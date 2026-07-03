@@ -131,6 +131,7 @@ export async function generateMetadata(): Promise<Metadata> {
   // actually uses; the other sizes flow through the manifest.
   icons: {
     icon: [
+      { url: "/favicon.ico", sizes: "any" },
       { url: "/sira-gpt-192.png", sizes: "192x192", type: "image/png" },
       { url: "/sira-gpt-512.png", sizes: "512x512", type: "image/png" },
     ],
@@ -290,9 +291,7 @@ export default async function RootLayout({
         <a href="#main-content" className="skip-to-content">
           Saltar al contenido
         </a>
-        <span aria-live="polite" className="sr-only" data-app-bootstrap-status>
-          Preparando Sira GPT
-        </span>
+        <span aria-live="polite" className="sr-only" data-app-bootstrap-status />
         {/*
           LayoutClientEffects is intentionally placed INSIDE NextIntlClientProvider
           rather than as a direct <body> child. When a Client Component (even ssr:false)
