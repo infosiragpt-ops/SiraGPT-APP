@@ -28,6 +28,9 @@ const DEFAULT_MAX_STEPS = 24;
 const DEFAULT_MAX_TOOLS_PER_TURN = 4;
 const DEFAULT_CONTEXT_MAX_CHARS = 60_000;
 const DEFAULT_MAX_VERIFY_ROUNDS = 2;
+// Anti-thrash: how many consecutive writes to the SAME file before the loop
+// nudges the model to stop rewriting it and advance to the next plan step.
+const DEFAULT_MAX_SAME_FILE_WRITES = 3;
 // Keep this many tail messages verbatim when compacting (the model needs the
 // recent working set intact; older tool dumps compress well).
 const COMPACT_KEEP_TAIL = 10;
@@ -187,6 +190,7 @@ function buildSystemPrompt({ project, plan, fileTree, sourcePrompt }) {
     'NO inicialices frameworks ni ejecutes scaffolds interactivos (create-next-app/create-vite); construye componentes React (.tsx) editando/creando archivos en src/ con write_file/edit_file.',
     'Si necesitas estructura adicional, crea archivos concretos tú mismo. Usa run_command solo para verificar, instalar dependencias declaradas o revisar git.',
     'Antes de editar un archivo existente, léelo (read_file) y usa edit_file con el fragmento EXACTO; usa list_files/grep_search para orientarte en el workspace en vez de adivinar rutas.',
+    'NO reescribas un archivo que ya escribiste salvo para corregir un error concreto (uno que viste en type_check o dev_server_check). Construye archivo por archivo siguiendo el plan; NO intentes hacerlo "todo de una vez" reescribiendo el mismo archivo una y otra vez. Cuando un archivo esté listo, avanza al siguiente paso del plan.',
     'Antes de dar por terminado, asegúrate de que el proyecto compila (el sistema ejecutará una verificación de tipos al final y te devolverá los errores si los hay).',
     'Nunca dependas de prompts interactivos de terminal; los comandos deben terminar solos.',
     'VERIFICA tu trabajo como lo haría un ingeniero: después de crear o editar código usa type_check para ver los errores reales de compilación y dev_server_check para confirmar que la app corre; corrige lo que salga antes de dar el trabajo por terminado.',
@@ -332,6 +336,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   const maxToolsPerTurn = readPosInt(env.CODEX_MAX_TOOLS_PER_TURN, DEFAULT_MAX_TOOLS_PER_TURN);
   const contextMaxChars = readPosInt(env.CODEX_CONTEXT_MAX_CHARS, DEFAULT_CONTEXT_MAX_CHARS);
   const maxVerifyRounds = readPosInt(env.CODEX_MAX_VERIFY_ROUNDS, DEFAULT_MAX_VERIFY_ROUNDS);
+  const maxSameFileWrites = readPosInt(env.CODEX_MAX_SAME_FILE_WRITES, DEFAULT_MAX_SAME_FILE_WRITES);
   const registry = buildTools.toolRegistry();
 
   const plan = deps.plan || (await loadApprovedPlan({ run, eventStore, prisma }));
@@ -346,6 +351,11 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   let groupCounter = 0;
   let aborted = false;
   let verifyRounds = 0;
+  // Anti-thrash state: consecutive writes to the same path. A weak model can
+  // loop rewriting one file "all at once" and burn the whole budget without
+  // progress (observed in the F15 smoke: src/index.css written 5× in a row).
+  let lastWritePath = null;
+  let sameWriteRun = 0;
 
   for (let step = 0; step < maxSteps; step += 1) {
     if (signal?.aborted) { aborted = true; break; }
@@ -437,6 +447,10 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         env,
         signal,
         llmTurn,
+        // The run tier (composer Power selector) must reach subagents too, so a
+        // delegation runs on the SAME engine as the main loop (Claude for paid
+        // tiers) instead of silently dropping to the free Cerebras path.
+        tier: run?.tier || null,
         onUsage: (u) => { if (u && metrics?.recordLlmUsage) metrics.recordLlmUsage(u); },
         // Live visibility for delegations: the SDK surfaces every specialist
         // tool call as a nested action in the same group. The event store's
@@ -484,8 +498,25 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
       if (metrics?.recordAction) metrics.recordAction(tool.kind, durationMs);
       if (Number.isFinite(result.linesRead) && metrics?.recordLinesRead) metrics.recordLinesRead(result.linesRead);
 
+      // Anti-thrash nudge: on a run of consecutive successful writes to the
+      // SAME path, tell the model to stop rewriting it and advance the plan.
+      // Writes are always on the sequential (non-delegation) path, so mutating
+      // this state here is race-free.
+      let thrashNudge = '';
+      if (!result.isError && (call.name === 'write_file' || call.name === 'edit_file') && path) {
+        if (path === lastWritePath) sameWriteRun += 1;
+        else { lastWritePath = path; sameWriteRun = 1; }
+        if (sameWriteRun >= maxSameFileWrites) {
+          thrashNudge = `\n[LOOP] Ya escribiste ${path} ${sameWriteRun} veces seguidas. DEJA de reescribir este archivo: si ya está bien, avanza al siguiente paso del plan; corrígelo solo si type_check/dev_server_check reportó un error concreto en él.`;
+        }
+      } else if (!result.isError && tool.kind !== 'file_read') {
+        // A non-write, non-read action (e.g. a command) breaks the run.
+        lastWritePath = null;
+        sameWriteRun = 0;
+      }
+
       return {
-        message: `[TOOL_RESULT ${call.name}] ${result.observation || outputSummary || ''}`,
+        message: `[TOOL_RESULT ${call.name}] ${result.observation || outputSummary || ''}${thrashNudge}`,
         blocking: blockingPattern ? { pattern: blockingPattern, detail: result.observation || outputSummary } : null,
       };
     };

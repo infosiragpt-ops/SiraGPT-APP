@@ -349,3 +349,62 @@ test('build loop: tool calls por encima del budget se reportan al modelo', async
   assert.ok(budgetMsg, 'el modelo recibe el aviso de tool calls omitidas');
   assert.match(budgetMsg, /2 tool calls/);
 });
+
+test('build loop: reescribir el mismo archivo N veces inyecta el aviso anti-bucle', async () => {
+  let turnCount = 0;
+  let lastTranscript = [];
+  const llmTurn = async ({ messages }) => {
+    turnCount += 1;
+    lastTranscript = messages.map((m) => String(m.content || ''));
+    // 3 escrituras consecutivas al mismo path (una por turno) → al 3er result
+    // debe aparecer el aviso [LOOP]; luego termina.
+    if (turnCount <= 3) {
+      return { text: `escribo (${turnCount})`, toolCalls: [{ name: 'write_file', args: { path: 'src/index.css', content: `body{}\n/* ${turnCount} */` } }] };
+    }
+    return { text: 'listo', toolCalls: [] };
+  };
+  const nudges = [];
+  const f = {
+    llmTurn,
+    runner: {
+      readFile: async () => { throw new Error('no'); },
+      writeFiles: async () => ({ ok: true }),
+      exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    },
+    fileTree: '',
+    plan: null,
+    eventStore: { appendEvent: async () => {}, listEvents: async () => [] },
+    actionStore: { recordAction: async () => {} },
+    clock: () => new Date(0),
+    env: { CODEX_MAX_SAME_FILE_WRITES: '3', NODE_ENV: 'test' },
+  };
+  const res = await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt: 'x', tier: 'eco' }, project: { id: 'p1' }, deps: f });
+  assert.equal(res.status, 'done');
+  const nudge = lastTranscript.find((c) => c.includes('[LOOP]') && c.includes('src/index.css'));
+  assert.ok(nudge, 'tras 3 escrituras al mismo archivo, el modelo recibe el aviso anti-bucle');
+  assert.match(nudge, /3 veces seguidas/);
+});
+
+test('run_subagent propaga el tier del run al llmTurn del especialista', async () => {
+  const sdk = require('../src/services/codex/agent-sdk');
+  const captured = [];
+  const llmTurn = async ({ tier }) => {
+    captured.push(tier);
+    // El especialista no llama herramientas → termina en un paso.
+    return { text: 'informe del subagente', toolCalls: [], usage: { tokensIn: 1, tokensOut: 1 } };
+  };
+  const out = await sdk.runSubagent({
+    name: 'frontend_builder',
+    task: 'construye la UI',
+    deps: {
+      llmTurn,
+      tier: 'power',
+      runner: { readFile: async () => ({ content: '' }), exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }) },
+      project: 'p1',
+      env: { NODE_ENV: 'test' },
+    },
+  });
+  assert.equal(out.ok, true);
+  assert.ok(captured.length >= 1, 'el subagente llamó al llmTurn');
+  assert.equal(captured[0], 'power', 'el tier del run llega al especialista (Claude para tiers de pago)');
+});
