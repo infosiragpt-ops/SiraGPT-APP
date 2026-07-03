@@ -37,6 +37,15 @@ test('no length constraint keeps the full template skeleton', () => {
   assert.ok(plan.sections.length >= 5);
 });
 
+test('title comes from the goal, not the delivery envelope or length directive', () => {
+  const wrapped = 'Solicitud del usuario: crea un word sobre la nutrición infantil en 200 palabras\nFormato requerido: docx\nPlantilla/paleta: business\n\nContenido base validado por el agente:\ncuerpo';
+  const plan = buildPlan({ prompt: wrapped, format: 'docx', template: 'business', complexity: 'standard' });
+  assert.equal(plan.title, 'Nutrición infantil');
+  assert.equal(plan.wordTarget, 200, 'length directive still parsed from the envelope');
+  const bare = buildPlan({ prompt: 'crea una ppt sobre estrategias de marketing digital para pymes', format: 'pptx', template: 'business', complexity: 'standard' });
+  assert.equal(bare.title, 'Estrategias de marketing digital para pymes');
+});
+
 test('academic template no longer plans meta sections (Portada/Anexos)', () => {
   const plan = buildPlan({ prompt: 'ensayo académico word sobre economía circular', format: 'docx', template: 'academic', complexity: 'standard' });
   assert.ok(!plan.sections.includes('Portada'));

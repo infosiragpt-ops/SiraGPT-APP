@@ -440,7 +440,17 @@ function detectTemplate(prompt = '', explicit) {
 }
 
 function titleFromPrompt(prompt, fallback = 'Documento profesional') {
-  const clean = String(prompt || '')
+  let source = String(prompt || '');
+  // agents/auto-document-delivery wraps the goal in a delivery envelope
+  // ("Solicitud del usuario: <goal>\nFormato requerido: …"). Titles must come
+  // from the goal line only — the metadata used to leak into titles and
+  // filenames ("Solicitud_del_usuario_…_Formato_requerido.docx").
+  const envelope = source.match(/^Solicitud del usuario:\s*(.+)$/im);
+  if (envelope && envelope[1].trim()) source = envelope[1].trim();
+  const clean = source
+    // Length directives describe the ASK, not the topic ("en 200 palabras").
+    .replace(/\b(?:en|de)\s+\d{1,5}\s*(?:palabras|words|p[áa]ginas?|pages?)\b/gi, ' ')
+    .replace(/\b(?:sobre|about)\s*$/gi, ' ')
     .replace(/\b(crea|crear|genera|generar|haz|hacer|dame|prepara|elabora|en un|una|un|word|excel|powerpoint|power\s*point|ppt|pptx|xlsx|docx|pdf|documento)\b/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();
