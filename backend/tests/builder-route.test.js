@@ -118,3 +118,52 @@ test('hydrateSession ignores unknown keys and resists prototype pollution', () =
   assert.deepEqual(Object.keys(session.answers), ['purpose']);
   assert.equal({}.polluted, undefined);
 });
+
+test('POST /generate rejects a prompt over 10000 characters', async () => {
+  const res = await request(buildApp())
+    .post('/api/builder/generate')
+    .send({ prompt: 'a'.repeat(10001) });
+  assert.equal(res.status, 400);
+  assert.equal(res.body.error, 'validation_failed');
+});
+
+test('POST /generate accepts a prompt at the 10000-character cap', async () => {
+  const prompt = ('una app web para gestionar tareas y usuarios ').repeat(10).padEnd(10000, 'a');
+  const res = await request(buildApp()).post('/api/builder/generate').send({ prompt });
+  assert.equal(res.status, 200);
+  assert.ok(res.body.brief);
+  assert.ok(res.body.files);
+});
+
+test('POST /code-question rejects oversize slot/fallback/history payloads', async () => {
+  const app = buildApp();
+  const tooLongFallback = await request(app)
+    .post('/api/builder/code-question')
+    .send({ slot: 'purpose', fallback: 'x'.repeat(2001) });
+  assert.equal(tooLongFallback.status, 400);
+  assert.equal(tooLongFallback.body.error, 'validation_failed');
+
+  const tooLongSlot = await request(app)
+    .post('/api/builder/code-question')
+    .send({ slot: 's'.repeat(201) });
+  assert.equal(tooLongSlot.status, 400);
+
+  const tooManyTurns = await request(app)
+    .post('/api/builder/code-question')
+    .send({ slot: 'purpose', history: Array.from({ length: 41 }, () => ({ role: 'user', content: 'hola' })) });
+  assert.equal(tooManyTurns.status, 400);
+
+  const tooLongTurn = await request(app)
+    .post('/api/builder/code-question')
+    .send({ slot: 'purpose', history: [{ role: 'user', content: 'y'.repeat(4001) }] });
+  assert.equal(tooLongTurn.status, 400);
+});
+
+test('POST /code-question still answers with the fallback for a valid body', async () => {
+  const res = await request(buildApp())
+    .post('/api/builder/code-question')
+    .send({ slot: 'purpose', fallback: '¿Qué quieres construir?', history: [] });
+  assert.equal(res.status, 200);
+  assert.equal(typeof res.body.question, 'string');
+  assert.ok(res.body.question.length > 0);
+});

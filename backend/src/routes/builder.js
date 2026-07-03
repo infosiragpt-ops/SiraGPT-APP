@@ -92,20 +92,38 @@ router.get('/intake/questions', authenticateToken, (req, res) => {
 // Context-aware intake question for the /code agent. Given the slot being asked
 // and the conversation so far, the LLM phrases a personalised question; falls
 // back to the caller's static question on any failure (key/LLM/output).
-router.post('/code-question', authenticateToken, async (req, res) => {
-  const { slot, history, fallback } = req.body || {};
-  try {
-    const question = await generateCodeIntakeQuestion({
-      slot: typeof slot === 'string' ? slot : '',
-      history: Array.isArray(history) ? history : [],
-      fallback: typeof fallback === 'string' ? fallback : '',
-      env: process.env,
-    });
-    res.json({ question });
-  } catch {
-    res.json({ question: typeof fallback === 'string' ? fallback : '' });
+router.post(
+  '/code-question',
+  authenticateToken,
+  [
+    body('slot').optional().isString().isLength({ max: 200 })
+      .withMessage('slot must be a string of at most 200 characters'),
+    body('fallback').optional().isString().isLength({ max: 2000 })
+      .withMessage('fallback must be a string of at most 2000 characters'),
+    body('history').optional().isArray({ max: 40 })
+      .withMessage('history must be an array of at most 40 turns'),
+    body('history.*.content').optional().isString().isLength({ max: 4000 })
+      .withMessage('history entries must be at most 4000 characters'),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+    }
+    const { slot, history, fallback } = req.body || {};
+    try {
+      const question = await generateCodeIntakeQuestion({
+        slot: typeof slot === 'string' ? slot : '',
+        history: Array.isArray(history) ? history : [],
+        fallback: typeof fallback === 'string' ? fallback : '',
+        env: process.env,
+      });
+      res.json({ question });
+    } catch {
+      res.json({ question: typeof fallback === 'string' ? fallback : '' });
+    }
   }
-});
+);
 
 router.post(
   '/intake/step',
@@ -236,7 +254,15 @@ router.post(
 router.post(
   '/generate',
   authenticateToken,
-  [body('prompt').isString().trim().notEmpty().withMessage('prompt is required')],
+  [
+    body('prompt')
+      .isString()
+      .trim()
+      .notEmpty()
+      .withMessage('prompt is required')
+      .isLength({ max: 10000 })
+      .withMessage('prompt must be at most 10000 characters'),
+  ],
   (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {

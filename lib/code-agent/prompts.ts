@@ -183,6 +183,8 @@ export function streamOutputFormat(opts?: { strictStart?: boolean; paths?: reado
         "  ni explicaciones antes. Planifica internamente y ejecuta; NO hagas preguntas previas.",
     "• La ruta va SOLO en el encabezado del fence. PROHIBIDO añadir líneas `// path:` dentro del contenido",
     "  (package.json es JSON puro: un comentario lo rompe).",
+    "• Para archivos Markdown (README.md, *.md) usa fences de CUATRO backticks: ````md README.md … ````",
+    "  — así los bloques ``` internos del markdown no rompen el parseo del archivo.",
     "• Cada bloque contiene el archivo COMPLETO (nunca fragmentos ni «…»).",
     "• Tras el último bloque: como MÁXIMO una sola línea con 1-3 siguientes pasos.",
   ].filter((line): line is string => line !== null).join("\n")

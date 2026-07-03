@@ -137,15 +137,48 @@ function normalisePlatform(value) {
   return null;
 }
 
+/**
+ * Case/diacritics/plural-insensitive dedupe key for an entity name. Mirrors
+ * brief-from-prompt.js entityKey: "user", "User", "users", "user-profile" and
+ * "UserProfile" all collapse to the same key, matching how codegen.js
+ * pascalCase/kebabCase collapse names — two colliding entities would otherwise
+ * emit duplicate Prisma models (invalid schema).
+ */
+function entityDedupeKey(name) {
+  const base = String(name || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
+  // Naive singulariser (same rule as brief-from-prompt.js singularize).
+  if (base.length > 3 && base.endsWith('s') && !base.endsWith('ss')) return base.slice(0, -1);
+  return base;
+}
+
+/** Keep the first occurrence of each entity, dropping pascal/kebab/case collisions. */
+function dedupeEntities(entities) {
+  const seen = new Set();
+  const out = [];
+  for (const entity of entities) {
+    const key = entityDedupeKey(entity.name);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(entity);
+  }
+  return out;
+}
+
 function normaliseEntities(value) {
   // Accept already-structured [{name, fields}], or free text "Usuario, Pedido".
   if (Array.isArray(value) && value.every((v) => v && typeof v === 'object' && 'name' in v)) {
-    return value.map((v) => ({
-      name: String(v.name).trim(),
-      fields: toList(v.fields),
-    }));
+    return dedupeEntities(
+      value.map((v) => ({
+        name: String(v.name).trim(),
+        fields: toList(v.fields),
+      }))
+    );
   }
-  return toList(value).map((name) => ({ name, fields: [] }));
+  return dedupeEntities(toList(value).map((name) => ({ name, fields: [] })));
 }
 
 function normaliseStyle(value) {

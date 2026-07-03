@@ -97,7 +97,8 @@ export type CodeBlock = {
   index: number
 }
 
-const FENCE_RE = /```([^\n`]*)\n([\s\S]*?)```/g
+/** A fence line: up to 3 spaces of indent, 3+ backticks, optional info string. */
+const FENCE_LINE_RE = /^ {0,3}(`{3,})([^`]*)$/
 
 /**
  * Extract fenced code blocks from a markdown-ish string and best-effort
@@ -112,16 +113,63 @@ const FENCE_RE = /```([^\n`]*)\n([\s\S]*?)```/g
  *
  * Anything else falls back to language-only and `path: null`, which the
  * UI renders as "no apply target".
+ *
+ * Nesting-aware: a generated README.md often embeds ```bash blocks. The old
+ * regex closed the outer block at the FIRST ``` it found, truncating the file
+ * and turning the leftover text into phantom blocks. This line-based parser:
+ *
+ *   - Supports 4+ backtick outer fences (CommonMark): only a bare fence at
+ *     least as long as the opener closes the block; inner ``` are content.
+ *   - For 3-backtick fences, tracks inner open fences: a fence line WITH an
+ *     info string opens an inner block (content), and a bare ``` first closes
+ *     any open inner block before it can close the outer one.
+ *
+ * A block left unclosed at EOF is dropped, matching the previous regex
+ * behaviour (streaming callers rely on incomplete trailing blocks not
+ * producing partial files).
  */
 export function parseCodeBlocks(text: string): CodeBlock[] {
   if (!text) return []
   const blocks: CodeBlock[] = []
-  let match: RegExpExecArray | null
+  const lines = text.split("\n")
+  let lineNo = 0
   let i = 0
-  FENCE_RE.lastIndex = 0
-  while ((match = FENCE_RE.exec(text)) !== null) {
-    const info = (match[1] || "").trim()
-    let body = match[2] || ""
+  while (lineNo < lines.length) {
+    const open = lines[lineNo].match(FENCE_LINE_RE)
+    lineNo++
+    if (!open) continue
+
+    const fenceLen = open[1].length
+    const info = (open[2] || "").trim()
+
+    const bodyLines: string[] = []
+    let innerOpen = 0
+    let closed = false
+    while (lineNo < lines.length) {
+      const line = lines[lineNo]
+      const fence = line.match(FENCE_LINE_RE)
+      if (fence) {
+        const len = fence[1].length
+        const innerInfo = (fence[2] || "").trim()
+        if (!innerInfo && len >= fenceLen && innerOpen === 0) {
+          // Bare fence, long enough, no inner block pending → closes the block.
+          closed = true
+          lineNo++
+          break
+        }
+        if (fenceLen === 3) {
+          // Track 3-backtick nesting so a README with ```bash blocks doesn't
+          // close at the first inner ```.
+          if (innerInfo) innerOpen++
+          else if (innerOpen > 0) innerOpen--
+        }
+      }
+      bodyLines.push(line)
+      lineNo++
+    }
+    if (!closed) break
+
+    let body = bodyLines.join("\n")
 
     let language = "plaintext"
     let path: string | null = null
@@ -148,7 +196,7 @@ export function parseCodeBlocks(text: string): CodeBlock[] {
         firstLine.match(/^\s*#\s*path:\s*(.+)\s*$/i)
       if (m) {
         path = normalizePath(m[1])
-        body = body.replace(/^.*\n/, "")
+        body = body.split("\n").slice(1).join("\n")
         if (language === "plaintext") language = languageForPath(path)
       }
     }

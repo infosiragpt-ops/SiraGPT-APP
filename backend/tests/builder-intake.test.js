@@ -150,3 +150,35 @@ test('questionForDimension returns a frozen-copy valid card for every dimension'
     assert.ok(!questionForDimension(dim).options.includes('x'));
   }
 });
+
+test('normaliseEntities dedupes case/plural/casing-style collisions', () => {
+  // "user"/"User"/"users" would emit duplicate Prisma `model User` blocks.
+  assert.deepStrictEqual(normaliseEntities('user, User, users'), [
+    { name: 'user', fields: [] },
+  ]);
+  // kebab-case vs PascalCase collide once codegen normalises the name.
+  assert.deepStrictEqual(normaliseEntities('user-profile, UserProfile'), [
+    { name: 'user-profile', fields: [] },
+  ]);
+  // Diacritics-insensitive: Camión ≡ camion.
+  assert.deepStrictEqual(normaliseEntities('Camión, camion'), [
+    { name: 'Camión', fields: [] },
+  ]);
+  // Structured input keeps the FIRST occurrence (fields included).
+  assert.deepStrictEqual(
+    normaliseEntities([
+      { name: 'User', fields: ['email'] },
+      { name: 'user', fields: ['name'] },
+      { name: 'Pedido', fields: [] },
+    ]),
+    [
+      { name: 'User', fields: ['email'] },
+      { name: 'Pedido', fields: [] },
+    ],
+  );
+  // Non-colliding entities are untouched.
+  assert.deepStrictEqual(normaliseEntities('Usuario, Pedido'), [
+    { name: 'Usuario', fields: [] },
+    { name: 'Pedido', fields: [] },
+  ]);
+});

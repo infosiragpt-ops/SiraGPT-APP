@@ -133,6 +133,93 @@ describe("parseCodeBlocks", () => {
     const out = parseCodeBlocks("```\nhello\n\n\n```")
     assert.equal(out[0].content, "hello")
   })
+
+  it("keeps nested ``` blocks inside a file block (README with bash examples)", () => {
+    // Regression: the old regex closed the README at the FIRST ```
+    // (the inner bash closer), truncating the file and turning the
+    // leftover into phantom blocks.
+    const text = [
+      "```md README.md",
+      "# Mi proyecto",
+      "",
+      "Instalación:",
+      "",
+      "```bash",
+      "npm install",
+      "```",
+      "",
+      "Y luego arranca el dev server.",
+      "```",
+      "",
+      "```json package.json",
+      '{ "name": "demo" }',
+      "```",
+    ].join("\n")
+    const out = parseCodeBlocks(text)
+    assert.equal(out.length, 2)
+    assert.equal(out[0].path, "README.md")
+    assert.ok(out[0].content.includes("```bash"))
+    assert.ok(out[0].content.includes("npm install"))
+    assert.ok(out[0].content.includes("Y luego arranca el dev server."))
+    assert.equal(out[1].path, "package.json")
+    assert.equal(out[1].content, '{ "name": "demo" }')
+  })
+
+  it("handles multiple nested blocks inside one markdown file", () => {
+    const text = [
+      "```md docs/guide.md",
+      "```sh",
+      "echo uno",
+      "```",
+      "middle",
+      "```ts",
+      "const dos = 2",
+      "```",
+      "```",
+    ].join("\n")
+    const out = parseCodeBlocks(text)
+    assert.equal(out.length, 1)
+    assert.equal(out[0].path, "docs/guide.md")
+    assert.ok(out[0].content.includes("echo uno"))
+    assert.ok(out[0].content.includes("const dos = 2"))
+    assert.ok(out[0].content.includes("middle"))
+  })
+
+  it("supports 4-backtick outer fences: inner ``` never close the file", () => {
+    const text = [
+      "````md README.md",
+      "# Hola",
+      "```bash",
+      "npm run dev",
+      "```",
+      "````",
+      "```ts app.ts",
+      "export {}",
+      "```",
+    ].join("\n")
+    const out = parseCodeBlocks(text)
+    assert.equal(out.length, 2)
+    assert.equal(out[0].path, "README.md")
+    assert.ok(out[0].content.includes("```bash"))
+    assert.equal(out[1].path, "app.ts")
+    assert.equal(out[1].content, "export {}")
+  })
+
+  it("drops an unclosed trailing block (streaming-partial safety)", () => {
+    // Matches the previous regex behaviour: a fence still streaming in
+    // must not produce a partial file.
+    assert.deepEqual(parseCodeBlocks("```ts app.ts\nconst partial = 1"), [])
+    const mixed = parseCodeBlocks("```ts a.ts\nok\n```\n```json b.json\n{ \"trunc")
+    assert.equal(mixed.length, 1)
+    assert.equal(mixed[0].path, "a.ts")
+  })
+
+  it("still closes plain language-only blocks at the first bare ```", () => {
+    const out = parseCodeBlocks("```ts\nconst x = 1\n```\ntexto suelto\n```css\nb {}\n```")
+    assert.equal(out.length, 2)
+    assert.equal(out[0].content, "const x = 1")
+    assert.equal(out[1].language, "css")
+  })
 })
 
 describe("computeLineDiff", () => {
