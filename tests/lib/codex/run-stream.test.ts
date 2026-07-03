@@ -130,13 +130,15 @@ describe('openRunStream', () => {
     expect(events).toContain('run_status')
   })
 
-  it('passes afterSeq and the token in the request URL', async () => {
+  it('passes afterSeq in the URL and the token only in the Authorization header', async () => {
     let calledUrl = ''
-    const fetchImpl = (async (url: string) => { calledUrl = url; return streamResponse(['data: {"seq":6,"type":"run_status","data":{"status":"done"}}\n\n']) }) as unknown as typeof fetch
+    let calledInit: RequestInit | undefined
+    const fetchImpl = (async (url: string, init?: RequestInit) => { calledUrl = url; calledInit = init; return streamResponse(['data: {"seq":6,"type":"run_status","data":{"status":"done"}}\n\n']) }) as unknown as typeof fetch
     const handle = openRunStream({ runId: 'run-1', afterSeq: 5, onEvent: () => {}, fetchImpl, token: 'tok' })
     await handle.done
     expect(calledUrl).toContain('afterSeq=5')
-    expect(calledUrl).toContain('token=tok')
+    expect(calledUrl).not.toContain('token=tok')
     expect(calledUrl).toContain('/codex/runs/run-1/stream')
+    expect((calledInit?.headers as Record<string, string>)?.Authorization).toBe('Bearer tok')
   })
 })

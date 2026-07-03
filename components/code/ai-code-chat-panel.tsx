@@ -1225,8 +1225,13 @@ export function AICodeChatPanel() {
                 return base
               }),
             )
-            setBusy(false)
-            abortRef.current = null
+            // Only release the latch if this turn is still the active one — a
+            // newer turn may have replaced abortRef, and clearing it here would
+            // cancel that turn's busy state (mirrors runEngine/runCodexEngine).
+            if (abortRef.current === controller) {
+              abortRef.current = null
+              setBusy(false)
+            }
           },
           (err) => {
             // A cancelled/aborted stream (user started a new turn, navigated
@@ -1264,8 +1269,10 @@ export function AICodeChatPanel() {
                   : t,
               ),
             )
-            setBusy(false)
-            abortRef.current = null
+            if (abortRef.current === controller) {
+              abortRef.current = null
+              setBusy(false)
+            }
           },
           controller.signal,
           { onUsage: (u) => { usage = u } },
@@ -1292,8 +1299,10 @@ export function AICodeChatPanel() {
             }),
           })
         }
-        setBusy(false)
-        abortRef.current = null
+        if (abortRef.current === controller) {
+          abortRef.current = null
+          setBusy(false)
+        }
       }
     },
     [
