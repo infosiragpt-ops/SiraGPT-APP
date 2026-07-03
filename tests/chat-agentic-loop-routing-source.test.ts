@@ -24,9 +24,12 @@ describe("chat agentic loop routing source contract", () => {
       "the composer must use the shared deterministic intent helper instead of a local keyword fork",
     )
 
+    // End marker: the global sendInFlightRef lock became the per-chat latch
+    // (sendInFlightChatsRef) when parallel chats landed (6af6361b7); the
+    // deterministic branch still sits right before it.
     const deterministicBranch = sliceBetween(
       "const deterministicAgenticIntent = classifyIntentFastPath(msg);",
-      "if (sendInFlightRef.current) return;",
+      "if (sendInFlightChatsRef.current.has(sendLatchKey)) return;",
     )
 
     assert.match(
