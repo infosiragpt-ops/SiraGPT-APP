@@ -89,6 +89,8 @@ import {
   classifyBuildError,
   buildDeterministicPreviewPatches,
   isBuildRequest,
+  briefFromConversation,
+  isBareBuildCommand,
   isConversationalMessage,
   isQuickGreeting,
   mergeOverridesIntoPackageJson,
@@ -1607,7 +1609,7 @@ export function AICodeChatPanel() {
   // yields no usable code (or errors), it falls back to the deterministic
   // builder in the SAME turn — so a build always produces a result.
   const runEngine = React.useCallback(
-    async (text: string, sid: string, opts?: { buildContext?: AgentBuildContext; iterate?: boolean }) => {
+    async (text: string, sid: string, opts?: { buildContext?: AgentBuildContext; iterate?: boolean; displayText?: string }) => {
       const ctx = opts?.buildContext
       const isBuild = !!ctx
       const iterate = !!opts?.iterate
@@ -1615,7 +1617,7 @@ export function AICodeChatPanel() {
       const assistantId = `${id}-a`
       setTurns((prev) => [
         ...prev,
-        { id, role: "user", content: text },
+        { id, role: "user", content: opts?.displayText ?? text },
         {
           id: assistantId,
           role: "assistant",
@@ -1919,13 +1921,13 @@ export function AICodeChatPanel() {
   // the workspace. Deterministic buildApp fallback inside, so a build ALWAYS
   // lands even if the agent errors — mirroring runEngine's guarantees.
   const runCodexEngine = React.useCallback(
-    async (text: string, sid: string, opts?: { iterate?: boolean }) => {
+    async (text: string, sid: string, opts?: { iterate?: boolean; displayText?: string }) => {
       const iterate = !!opts?.iterate
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
       const assistantId = `${id}-a`
       setTurns((prev) => [
         ...prev,
-        { id, role: "user", content: text },
+        { id, role: "user", content: opts?.displayText ?? text },
         {
           id: assistantId,
           role: "assistant",
@@ -2334,21 +2336,30 @@ export function AICodeChatPanel() {
             // Deterministic build shortcut — ONLY when the real agent is unavailable.
       // With Codex up, classic build requests ("créame una app de X") must flow
       // to the agent below; this shortcut used to swallow them into a template.
-      if ((composerMode === "app" || composerMode === "build") && !codexAvailable && isBuildRequest(text)) {
-        const direct = nextAgentAction(defaultAgentState(), text, {
+      // "ok, créala" carries no substance of its own — recover the brief from
+      // the recent conversation so EVERY build tier (codex / engine /
+      // deterministic) receives what was actually discussed. The user bubble
+      // keeps the literal words via displayText.
+      const derivedBrief = isBareBuildCommand(text)
+        ? briefFromConversation(turns.map((t) => ({ role: t.role, content: t.content })))
+        : null
+      const buildText = derivedBrief ?? text
+
+      if ((composerMode === "app" || composerMode === "build") && !codexAvailable && isBuildRequest(buildText)) {
+        const direct = nextAgentAction(defaultAgentState(), buildText, {
           mode: composerMode,
           hasModel: false,
         })
         if (direct.type === "generate") {
           patchAgentState(sid, (s) => ({ ...s, phase: "generating", context: direct.context }))
-          await buildApp(promptFromContext(direct.context), { ...direct.context, productType: text })
+          await buildApp(promptFromContext(direct.context), { ...direct.context, productType: buildText })
           patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "deterministic" }))
           return
         }
       }
 
       const agent = activeCodeChatSession?.agent ?? defaultAgentState()
-      const action = nextAgentAction(agent, text, {
+      const action = nextAgentAction(agent, buildText, {
         mode: composerMode,
         forceDeterministic: opts?.forceDeterministic,
         hasModel: !!activeModelName,
@@ -2441,15 +2452,15 @@ export function AICodeChatPanel() {
         case "generate": {
           patchAgentState(sid, (s) => ({ ...s, phase: "generating", context: action.context }))
           const hasIntake = !!(action.context.productType || action.context.brand)
-          const genPrompt = hasIntake ? promptFromContext(action.context) : text
+          const genPrompt = hasIntake ? promptFromContext(action.context) : buildText
           // Deterministic tier: enrich a bare context with the raw prompt so the
           // local scaffold still produces niche-coherent copy.
-          const buildCtx = hasIntake ? action.context : { ...action.context, productType: text }
+          const buildCtx = hasIntake ? action.context : { ...action.context, productType: buildText }
           if (!opts?.forceDeterministic && codexAvailable) {
             // Codex Agent V2 (the REAL server-driven agent): drives a plan→build
             // run whose file writes are read back into the workspace, with a
             // deterministic buildApp fallback inside so a build always lands.
-            await runCodexEngine(text, sid)
+            await runCodexEngine(buildText, sid, { displayText: text })
             patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "llm" }))
           } else if (!opts?.forceDeterministic && engineMode && engineAvailable) {
             // OpenCode agent (only truly available in Docker AND opt-in via the
@@ -2457,7 +2468,7 @@ export function AICodeChatPanel() {
             // a funded model and runEngine reads them back — deterministic
             // fallback inside. Without an explicit Motor opt-in the deterministic
             // builder below is the primary path (fast, no ~30s GCLB stream cut).
-            await runEngine(text, sid, { buildContext: action.context })
+            await runEngine(buildText, sid, { buildContext: action.context, displayText: text })
             patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "llm" }))
           } else {
             // First build → the deterministic builder is the PRIMARY path. It is
@@ -2506,13 +2517,13 @@ export function AICodeChatPanel() {
           // and must NEVER route into runCodexEngine/runEngine, which apply files.
           if ((composerMode === "app" || composerMode === "build") && codexAvailable) {
             // Codex build mode iterates on the session's existing project.
-            await runCodexEngine(text, sid, { iterate: true })
+            await runCodexEngine(buildText, sid, { iterate: true, displayText: text })
           } else if (
             (composerMode === "app" || composerMode === "build") &&
             engineMode &&
             engineAvailable
           ) {
-            await runEngine(text, sid)
+            await runEngine(buildText, sid, { displayText: text })
           } else {
             await sendPrompt(text, { autoApply: composerMode === "app" || composerMode === "build" })
           }

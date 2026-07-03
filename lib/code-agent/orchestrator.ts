@@ -147,6 +147,56 @@ export function isConversationalMessage(text: string): boolean {
   return false
 }
 
+/**
+ * A build ORDER with no content of its own: "ok, créala", "hazlo",
+ * "constrúyela ya", "procede", "adelante". The substance lives in the
+ * previous conversation — briefFromConversation() recovers it so the build
+ * tiers never receive a contentless prompt.
+ */
+export function isBareBuildCommand(text: string): boolean {
+  const raw = clean(text)
+  if (!raw || raw.length > 60) return false
+  const t = raw
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[¡!¿?.,;:]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+  if (BUILD_NOUN.test(t) || APP_GOAL_CUE.test(t)) return false // has substance
+  const ACK = "(?:ok(?:ey)?|dale|si|listo|va|vale|perfecto|de acuerdo|entonces)"
+  const GO =
+    "(?:crea(?:la|lo)?|hazla|hazlo|haz|construye(?:la|lo)?|construir|genera(?:la|lo)?|arma(?:la|lo)?|monta(?:la|lo)?|empieza|comienza|procede|adelante|manos a la obra|build it|do it|go ahead|make it)"
+  const re = new RegExp(`^(?:${ACK}[ ]*)*${GO}(?:[ ]+(?:ya|ahora|con eso|con todo|porfa(?:vor)?|por favor|nomas|entonces|pues))*$`)
+  return re.test(t)
+}
+
+/**
+ * Recover the real brief from the recent conversation: the last (up to 3)
+ * substantive USER messages — skipping greetings, bare build commands, chat
+ * fillers and error logs; conversational turns are kept only when they carry
+ * the idea (a build noun / app cue, e.g. "¿puedes hacer una app de pedidos
+ * para mi cafetería?"). Returns null when nothing substantive exists.
+ */
+export function briefFromConversation(
+  turns: ReadonlyArray<{ role: string; content: string }>,
+): string | null {
+  const parts: string[] = []
+  for (let i = turns.length - 1; i >= 0 && parts.length < 3; i--) {
+    const turn = turns[i]
+    if (!turn || turn.role !== "user") continue
+    const raw = clean(turn.content)
+    if (!raw) continue
+    if (isQuickGreeting(raw) || isBareBuildCommand(raw) || isBuildLog(raw)) continue
+    const low = raw.toLowerCase()
+    const carriesIdea = BUILD_NOUN.test(low) || APP_GOAL_CUE.test(raw)
+    if (raw.length < 12 && !carriesIdea) continue
+    if (isConversationalMessage(raw) && !carriesIdea) continue
+    parts.unshift(raw)
+  }
+  return parts.length ? parts.join(". ") : null
+}
+
 /** Heuristic: the text looks like a build/install/deploy error log. */
 export function isBuildLog(text: string): boolean {
   return /(npm ERR!|npm error|ERESOLVE|EINTEGRITY|ETARGET|ENOENT|ECONNREFUSED|exit code|\bnpm\b.*\b404\b|tarball|Module not found|Cannot find module|firewall|gyp ERR!|peer dep)/i.test(

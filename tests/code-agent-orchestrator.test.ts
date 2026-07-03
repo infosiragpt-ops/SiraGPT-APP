@@ -10,6 +10,8 @@ import { defaultAgentState, type AgentState } from "../lib/code-agent/types"
 import {
   classifyBuildError,
   isBuildLog,
+  briefFromConversation,
+  isBareBuildCommand,
   isConversationalMessage,
   isBuildRequest,
   isQuickGreeting,
@@ -319,4 +321,31 @@ test("isConversationalMessage: briefs, logs and long specs stay build/SRE", () =
     ),
     false,
   )
+})
+
+// ── Conversation → brief: "ok, créala" builds what was discussed ──────────
+
+test("isBareBuildCommand: contentless build orders", () => {
+  assert.equal(isBareBuildCommand("ok, créala"), true)
+  assert.equal(isBareBuildCommand("hazlo ya"), true)
+  assert.equal(isBareBuildCommand("procede"), true)
+  assert.equal(isBareBuildCommand("constrúyela por favor"), true)
+  assert.equal(isBareBuildCommand("dale"), false) // pure ack stays chat
+  assert.equal(isBareBuildCommand("crea una app de tareas"), false) // has substance
+})
+
+test("briefFromConversation: recovers the discussed idea", () => {
+  const turns = [
+    { role: "user", content: "hola" },
+    { role: "assistant", content: "¡Hola! soy tu agente" },
+    { role: "user", content: "quiero preguntarte algo" },
+    { role: "assistant", content: "claro, dime" },
+    { role: "user", content: "¿puedes hacer una app para gestionar los pedidos de mi cafetería?" },
+    { role: "assistant", content: "sí puedo…" },
+  ]
+  assert.equal(
+    briefFromConversation(turns),
+    "¿puedes hacer una app para gestionar los pedidos de mi cafetería?",
+  )
+  assert.equal(briefFromConversation([{ role: "user", content: "hola" }]), null)
 })
