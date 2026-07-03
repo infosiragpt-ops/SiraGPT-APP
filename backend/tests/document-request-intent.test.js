@@ -1,0 +1,49 @@
+'use strict';
+
+// Request-intent "brain" — regression tests for topic-vs-conditions
+// separation. Live failure: "crea una ppt de la gestión administrativa en 10
+// Landin porfavor de forma muy profeiosnal" became the literal deck title and
+// the thesis hallucinated "las diez sucursales de Landin".
+
+const test = require('node:test');
+const assert = require('node:assert');
+
+process.env.SIRAGPT_PPTX_DECK_DESIGNER = '0';
+
+const pipeline = require('../src/services/document-pipeline/advanced-document-pipeline');
+const { normalizeIntent } = require('../src/services/document-pipeline/content/parse-document-request');
+
+const { buildPlan } = pipeline;
+
+test('deterministic: slide count + courtesy + quality phrases never reach the title', () => {
+  const plan = buildPlan({ prompt: 'crea una ppt de la gestión administrativa en 10 láminas por favor de forma muy profesional', format: 'pptx', template: 'business', complexity: 'standard' });
+  assert.equal(plan.title, 'Gestión administrativa');
+  assert.equal(plan.slideTarget, 10);
+});
+
+test('deterministic: diapositivas/slides variants parse as slideTarget', () => {
+  assert.equal(buildPlan({ prompt: 'presentación de ventas en 8 diapositivas', format: 'pptx', template: 'business', complexity: 'standard' }).slideTarget, 8);
+  assert.equal(buildPlan({ prompt: 'deck about churn in 12 slides', format: 'pptx', template: 'business', complexity: 'standard' }).slideTarget, 12);
+  assert.equal(buildPlan({ prompt: 'ppt sobre logística', format: 'pptx', template: 'business', complexity: 'standard' }).slideTarget, null);
+});
+
+test('deterministic: courtesy stripped even when constraint word is typo\'d', () => {
+  const plan = buildPlan({ prompt: 'crea una ppt de la gestión administrativa en 10 Landin porfavor de forma muy profeiosnal', format: 'pptx', template: 'business', complexity: 'standard' });
+  assert.ok(!/porfavor|profeiosnal|de forma/.test(plan.title), `courtesy/quality gone: ${plan.title}`);
+});
+
+test('normalizeIntent clamps counts and rejects empty topics', () => {
+  const good = normalizeIntent({ topic: 'gestión administrativa', title: 'Gestión Administrativa', slideCount: 10, wordCount: null, pageCount: null, conditions: ['muy profesional'] });
+  assert.equal(good.slideCount, 10);
+  assert.deepEqual(good.conditions, ['muy profesional']);
+  assert.equal(normalizeIntent({ topic: '', title: 'x', slideCount: 5 }), null);
+  assert.equal(normalizeIntent({ topic: 't', title: 'Valid Title', slideCount: 999, wordCount: 5, pageCount: 0, conditions: [] }).slideCount, null, 'out-of-range slideCount clamped to null');
+});
+
+test('parseDocumentRequest fails open without provider keys', async (t) => {
+  const saved = {};
+  for (const key of ['CEREBRAS_API_KEY', 'OPENROUTER_API_KEY', 'OPENAI_API_KEY']) { saved[key] = process.env[key]; delete process.env[key]; }
+  t.after(() => { for (const [k, v] of Object.entries(saved)) if (v !== undefined) process.env[k] = v; });
+  const { parseDocumentRequest } = require('../src/services/document-pipeline/content/parse-document-request');
+  assert.equal(await parseDocumentRequest({ prompt: 'ppt de ventas en 10 láminas' }), null);
+});

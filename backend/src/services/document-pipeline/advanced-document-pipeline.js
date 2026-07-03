@@ -22,6 +22,7 @@ const ExcelJS = require('exceljs');
 const { renderPreview } = require('../doc-preview');
 const { generateSectionContent, fallbackBlock, generateSpreadsheetContent } = require('./content');
 const { runRenderCritique } = require('./render-critique-loop');
+const { parseDocumentRequest } = require('./content/parse-document-request');
 const { buildPptxContentPlan, hasGenericPlaceholderText } = require('./pptx-content-planner');
 const {
   MAX_SIMULTANEOUS_DOCUMENTS,
@@ -451,6 +452,11 @@ function titleFromPrompt(prompt, fallback = 'Documento profesional') {
   const clean = source
     // Length directives describe the ASK, not the topic ("en 200 palabras").
     .replace(/\b(?:en|de)\s+\d{1,5}\s*(?:palabras|words|p[áa]ginas?|pages?)\b/gi, ' ')
+    .replace(/\b(?:en|de)\s+\d{1,2}\s*(?:l[áa]minas?|diapositivas?|slides?|transparencias?)\b/gi, ' ')
+    // Courtesy and quality phrasing are conditions, not topic.
+    .replace(/\b(?:por\s*favor|porfa(?:vor)?|gracias|please)\b/gi, ' ')
+    .replace(/\bde\s+(?:forma|manera)\s+(?:muy\s+)?\w+\b/gi, ' ')
+    .replace(/\b(?:muy\s+)?(?:profesionali?(?:smo)?|profe\w*|bonito|bien\s+(?:elaborad[oa]|hech[oa])|executive)\b/gi, ' ')
     .replace(/\b(?:sobre|about)\s*$/gi, ' ')
     .replace(/\b(crea|crear|genera|generar|haz|hacer|dame|prepara|elabora|en un|una|un|word|excel|powerpoint|power\s*point|ppt|pptx|xlsx|docx|pdf|documento)\b/gi, ' ')
     .replace(/\s+/g, ' ')
@@ -895,6 +901,15 @@ function parseRequestedLength(userRequest = '') {
 // How many content sections a word budget honestly supports. Each section
 // carries ~120-160 words of prose plus bullets; planning 8 template sections
 // for a "200 palabras" request is how a 2-page ask became a 6-page document.
+// Deterministic slide-count parse ("en 10 láminas/diapositivas/slides").
+// The LLM intent layer handles typos (e.g. "Landin"); this is the offline base.
+function parseRequestedSlides(userRequest = '') {
+  const match = String(userRequest).match(/(\d{1,2})\s*(?:l[áa]minas?|diapositivas?|slides?|transparencias?)\b/i);
+  if (!match) return null;
+  const n = Number(match[1]);
+  return n >= 2 && n <= 40 ? n : null;
+}
+
 function sectionBudgetForWords(wordTarget) {
   if (!wordTarget) return null;
   if (wordTarget <= 260) return 1;
@@ -935,6 +950,7 @@ function buildPlan({ prompt, format, template, complexity = 'standard', referenc
   // "en 200 palabras" must not fan out into an 8-section template skeleton.
   // Prompt-inferred sections (the user's own outline) survive the cut first.
   const wordTarget = sourceContent ? null : parseRequestedLength(userRequest);
+  const slideTarget = sourceContent ? null : parseRequestedSlides(userRequest);
   const sectionBudget = sectionBudgetForWords(wordTarget);
   if (sectionBudget && plannedSections.length > sectionBudget) {
     const userSections = inferPromptSections(userRequest);
@@ -965,6 +981,7 @@ function buildPlan({ prompt, format, template, complexity = 'standard', referenc
     complexity,
     sourceContent,
     wordTarget,
+    slideTarget,
     formulaBlocks: sourceContent ? [] : inferFormulaBlocks(userRequest),
     sections: plannedSections,
     referenceFiles: normalizedReferenceFiles.map(({ excerpt, ...file }) => file),
@@ -2198,7 +2215,12 @@ async function buildPptx(plan, outputPath) {
     target.addText(text, { x: 8.62, y: 2.62, w: 3.66, h: 1.2, fontSize: 13.5, bold: true, color: palette.dark, fit: 'shrink', margin: 0 });
   };
 
-  for (const [i, slideSpec] of contentPlan.slides.slice(0, 10).entries()) {
+  // Honour an explicit total-slide request: cover + agenda + closing are
+  // fixed, so content slides = target - 3 (min 1). Default cap stays 10.
+  const contentSlideCap = plan.slideTarget
+    ? Math.max(1, Math.min(24, plan.slideTarget - 3))
+    : 10;
+  for (const [i, slideSpec] of contentPlan.slides.slice(0, contentSlideCap).entries()) {
     const layout = slideSpec.layout || 'bullets';
     slide = pptx.addSlide();
     const pageIndex = i + 3;
@@ -2848,6 +2870,40 @@ async function runAdvancedDocumentPipeline({
   emit(events, 'orchestrator', 'complete', `Formato detectado: ${detectedFormat}`, { format: detectedFormat });
   emit(events, 'research', 'complete', 'Investigación contextual evaluada', { requiresResearch: /\b(real|doi|actual|fuentes|investiga)\b/i.test(userPromptText) });
   let plan = buildPlan({ prompt: promptText, format: detectedFormat, template: detectedTemplate, complexity, referenceFiles });
+  // Intent refinement (the "brain" layer): an LLM pass separates the CORE
+  // TOPIC from delivery CONDITIONS and repairs constraint typos. Without it,
+  // "crea una ppt de la gestión administrativa en 10 Landin porfavor de
+  // forma muy profeiosnal" became the literal deck title AND the thesis
+  // hallucinated "las diez sucursales de Landin" — the misspelled
+  // "10 láminas" was read as content. Fail-open: on any failure the
+  // deterministic buildPlan parse stands.
+  if (!plan.sourceContent) {
+    try {
+      const intent = await parseDocumentRequest({
+        prompt: plan.userRequest,
+        format: plan.format,
+        language: /^[a-z]{2}$/i.test(plan.language || '') ? plan.language : 'es',
+        signal,
+      });
+      if (intent) {
+        plan.requestIntent = intent;
+        if (intent.title) plan.title = intent.title;
+        if (intent.slideCount) plan.slideTarget = intent.slideCount;
+        const refinedWords = intent.wordCount || (intent.pageCount ? intent.pageCount * 350 : null);
+        if (refinedWords && !plan.wordTarget) {
+          plan.wordTarget = refinedWords;
+          const budget = sectionBudgetForWords(refinedWords);
+          if (budget && plan.sections.length > budget) plan.sections = plan.sections.slice(0, budget);
+        }
+        emit(events, 'orchestrator', 'complete', 'Intención interpretada: tema y condiciones separados', {
+          title: plan.title,
+          slideTarget: plan.slideTarget || null,
+          wordTarget: plan.wordTarget || null,
+          conditions: intent.conditions,
+        });
+      }
+    } catch { /* deterministic parse stands */ }
+  }
   const contentPromptText = plan.sourceContent
     ? `${plan.userRequest}\n\nContenido fuente a preservar:\n${plan.sourceContent}`
     : stripSourceContent(userPromptText);
@@ -2892,6 +2948,7 @@ async function runAdvancedDocumentPipeline({
     try {
       const { planPptxDeckWithLLM } = require('./pptx-deck-designer');
       llmDeck = await planPptxDeckWithLLM({
+        slideTarget: plan.slideTarget || null,
         title: plan.title,
         prompt: contentPromptText,
         blocks: plan.blocks,
