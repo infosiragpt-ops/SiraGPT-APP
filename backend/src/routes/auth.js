@@ -530,6 +530,30 @@ router.post('/register', registerRateLimit, validateBody(RegisterRequestSchema, 
     const { user, token } = result;
     const { password: _, ...userWithoutPassword } = user;
 
+    // The register form requires the legal checkbox, so record a VERSIONED
+    // PolicyAcceptance for both documents (same table the consent banner
+    // uses). Best-effort and async: a missing policy_acceptance table or a
+    // doc-parse hiccup must never break sign-up.
+    void (async () => {
+      try {
+        // eslint-disable-next-line global-require
+        const { _loadDocument } = require('./legal')._internals;
+        const ip = req.ip || null;
+        const ua = req.headers['user-agent'] ? String(req.headers['user-agent']).slice(0, 512) : null;
+        for (const document of ['terms-of-service', 'privacy-policy']) {
+          let version = 'unversioned';
+          try { version = _loadDocument(document, 'latest')?.version || 'unversioned'; } catch { /* keep unversioned */ }
+          await prisma.policyAcceptance.upsert({
+            where: { userId_document_version: { userId: user.id, document, version } },
+            create: { userId: user.id, document, version, ip, ua },
+            update: { acceptedAt: new Date(), ip, ua },
+          });
+        }
+      } catch (err) {
+        console.warn('[auth/register] policy acceptance record failed:', err?.message || err);
+      }
+    })();
+
     setSessionCookie(res, token);
 
     // Mint a fresh CSRF token alongside the session cookie so SPAs

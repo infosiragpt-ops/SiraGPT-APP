@@ -4476,6 +4476,23 @@ function ChatInterfaceContent() {
     }
   }, [])
 
+  // Public-demo prefill (growth handoff): /demo stashes the tried prompt
+  // under "demo-prefill" before sending the visitor through sign-up, so
+  // their first chat opens with the demo prompt ready to send. One-shot,
+  // never auto-sent — same contract as the prefills above.
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    try {
+      const draft = sessionStorage.getItem("demo-prefill")
+      if (draft) {
+        setInput(prev => prev.trim() ? prev : draft)
+        sessionStorage.removeItem("demo-prefill")
+      }
+    } catch {
+      /* private-mode / blocked storage — harmless */
+    }
+  }, [])
+
   // Restore a previously saved composer draft when entering a chat.
   // Runs AFTER the project-prefill effect so an explicit project draft
   // still wins. Each chat id is restored at most once per mount; further

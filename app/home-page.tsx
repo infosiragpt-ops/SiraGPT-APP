@@ -68,13 +68,80 @@ export default function HomePage() {
         </div>
       </header>
 
-      <main className="sira-home-main flex min-h-screen items-center justify-center px-5">
-        <h1 className="sr-only">Sira GPT — Descargas</h1>
+      <main className="sira-home-main flex min-h-screen flex-col items-center justify-center px-5">
+        {/* Hero (growth handoff 2026-07-02): value proposition + demo-first
+            CTA. Inline styles/clamp on the new typography because the curated
+            Tailwind build may not include unused size utilities. */}
+        <motion.section
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.45 }}
+          className="w-full text-center"
+          style={{ maxWidth: 760, margin: "0 auto", paddingBottom: 40 }}
+        >
+          <span
+            className="border-neutral-200 text-neutral-600 dark:border-white/10 dark:text-neutral-300"
+            style={{
+              display: "inline-block",
+              border: "1px solid",
+              borderRadius: 999,
+              padding: "6px 14px",
+              fontSize: "0.78rem",
+              fontWeight: 600,
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+            }}
+          >
+            Impulsado por IA de frontera
+          </span>
+          <h1
+            style={{
+              margin: "18px 0 14px",
+              fontSize: "clamp(2.1rem, 5.5vw, 3.6rem)",
+              lineHeight: 1.04,
+              fontWeight: 800,
+              letterSpacing: "-0.02em",
+            }}
+          >
+            Todo tu stack de IA en una sola cuenta
+          </h1>
+          <p
+            className="text-neutral-600 dark:text-neutral-300"
+            style={{
+              margin: "0 auto",
+              maxWidth: 560,
+              fontSize: "clamp(1rem, 2vw, 1.15rem)",
+              lineHeight: 1.6,
+            }}
+          >
+            Chatea con modelos líderes, genera imágenes, analiza documentos,
+            crea contenido, automatiza tareas y comparte resultados desde SiraGPT.
+          </p>
+          <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap", marginTop: 26 }}>
+            <a
+              href="/demo"
+              className="bg-neutral-950 text-white hover:bg-neutral-800 dark:bg-white dark:text-neutral-950 dark:hover:bg-neutral-200"
+              style={{ borderRadius: 12, padding: "13px 22px", fontWeight: 700, textDecoration: "none" }}
+            >
+              Probar demo gratis
+            </a>
+            <a
+              href="/auth/register"
+              className="border-neutral-300 text-neutral-900 hover:bg-neutral-100 dark:border-white/20 dark:text-white dark:hover:bg-white/10"
+              style={{ border: "1px solid", borderRadius: 12, padding: "13px 22px", fontWeight: 700, textDecoration: "none" }}
+            >
+              Crear cuenta
+            </a>
+          </div>
+          <p className="text-neutral-500 dark:text-neutral-400" style={{ marginTop: 14, fontSize: "0.85rem" }}>
+            Sin tarjeta. Prueba una vista previa antes de registrarte.
+          </p>
+        </motion.section>
 
         <motion.div
           initial={{ opacity: 0, y: 14 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.45 }}
+          transition={{ duration: 0.45, delay: 0.08 }}
           className="grid w-full max-w-xs grid-cols-1 gap-3 sm:max-w-lg sm:grid-cols-2 lg:max-w-4xl lg:grid-cols-4"
         >
           {DOWNLOADS.map(({ platform, href, icon: Icon }) => (
