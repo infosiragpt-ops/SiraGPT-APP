@@ -14,7 +14,7 @@ const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
-const { Document, Packer, Paragraph, HeadingLevel, TextRun, Table, TableRow, TableCell, Header, Footer, ImageRun, AlignmentType, BorderStyle, WidthType, ShadingType, PageNumber, TableOfContents, PageBreak } = require('docx');
+const { Document, Packer, Paragraph, HeadingLevel, TextRun, Table, TableRow, TableCell, Header, Footer, ImageRun, AlignmentType, BorderStyle, WidthType, ShadingType, PageNumber, PageBreak } = require('docx');
 const PizZip = require('pizzip');
 const PptxGenJS = require('pptxgenjs');
 const PDFDocument = require('pdfkit');
@@ -280,21 +280,38 @@ function markdownTable(headers, rows) {
   ].join('\n');
 }
 
-function buildDocxMarkdown(plan, imagePath = 'siragpt-docx-marker.png') {
+// Raw OOXML page break — pandoc passes it through verbatim (requires the
+// raw_attribute extension in the -f string). `\newpage` does NOT work for
+// docx output, and a field-based TOC renders EMPTY outside Word (LibreOffice
+// and web viewers show a bare "Table of Contents" heading), so we emit a
+// static index + explicit break instead.
+const OPENXML_PAGE_BREAK = '```{=openxml}\n<w:p><w:r><w:br w:type="page"/></w:r></w:p>\n```';
+
+function buildDocxMarkdown(plan) {
+  // Professional shell: title block (Title style from the reference doc) +
+  // date, straight into content. The previous shape shipped system
+  // meta-noise as user-visible content: a "Portada" heading with pipeline
+  // marketing copy, a broken validation-marker image (rendered as a black
+  // box), an empty English "Table of Contents", a "Control de calidad" QC
+  // table and a placeholder APA reference — all removed. Documents should
+  // read like a human wrote them, not like the pipeline is grading itself.
   const lines = [
     `% ${plan.title}`,
-    `% siraGPT Document Pipeline`,
+    '%',
     `% ${new Date().toISOString().slice(0, 10)}`,
     '',
-    '# Portada',
-    '',
-    `**${plan.title}**`,
-    '',
-    'Documento generado con estructura profesional, validacion tecnica y salida compatible con Word.',
-    '',
-    `![Marca de validacion siraGPT](${imagePath}){width=0.75in}`,
-    '',
   ];
+
+  // Static, viewer-safe index for long-form documents only. Short documents
+  // (a "200 palabras" request plans 1-2 sections) skip straight to content.
+  const contentSections = (plan.sections || []).filter((s) => s && !/^material de referencia/i.test(s));
+  if (!plan.sourceContent && contentSections.length >= 5) {
+    lines.push('# Índice', '');
+    contentSections.forEach((section, index) => {
+      lines.push(`${index + 1}. ${markdownEscape(section)}`);
+    });
+    lines.push('', OPENXML_PAGE_BREAK, '');
+  }
 
   if (plan.referenceFiles?.length) {
     lines.push('# Material de referencia incorporado', '');
@@ -357,28 +374,6 @@ function buildDocxMarkdown(plan, imagePath = 'siragpt-docx-marker.png') {
         lines.push(`Se desarrolla ${section.toLowerCase()} con estructura profesional, evidencia verificable y enfoque ${plan.template}. El contenido mantiene jerarquía visual, legibilidad y consistencia documental.`, '');
       }
     });
-  }
-
-  lines.push(
-    '# Control de calidad',
-    '',
-    markdownTable(
-      ['Criterio', 'Validación', 'Estado'],
-      [
-        ['Integridad', 'Archivo DOCX inspeccionable', 'OK'],
-        ['Diseño', 'Jerarquía, portada, tabla e imagen', 'OK'],
-        ['Entrega', 'Descarga y preview soportadas', 'OK'],
-      ],
-    ),
-    '',
-  );
-  if (!plan.sourceContent) {
-    lines.push(
-      '# Referencias APA 7',
-      '',
-      'American Psychological Association. (2020). *Publication manual of the American Psychological Association* (7th ed.).',
-      '',
-    );
   }
 
   return lines.join('\n');
@@ -874,6 +869,31 @@ function appendProfessionalBlueprintMarkdown(lines, blueprint) {
   }
 }
 
+// Parse an explicit length request ("en 200 palabras", "300 words",
+// "2 páginas", "5 pages") into a word target. Returns null when the user
+// didn't constrain length. Pages ≈ 350 words of body prose.
+function parseRequestedLength(userRequest = '') {
+  const text = String(userRequest);
+  const words = text.match(/(\d{2,5})\s*(?:palabras|words)\b/i);
+  if (words) return Math.min(20000, Math.max(50, Number(words[1])));
+  const pages = text.match(/(\d{1,3})\s*(?:p[áa]ginas?|pages?)\b/i);
+  if (pages) return Math.min(20000, Math.max(200, Number(pages[1]) * 350));
+  return null;
+}
+
+// How many content sections a word budget honestly supports. Each section
+// carries ~120-160 words of prose plus bullets; planning 8 template sections
+// for a "200 palabras" request is how a 2-page ask became a 6-page document.
+function sectionBudgetForWords(wordTarget) {
+  if (!wordTarget) return null;
+  if (wordTarget <= 260) return 1;
+  if (wordTarget <= 520) return 2;
+  if (wordTarget <= 900) return 3;
+  if (wordTarget <= 1400) return 4;
+  if (wordTarget <= 2200) return 6;
+  return null; // large asks keep the full template skeleton
+}
+
 function buildPlan({ prompt, format, template, complexity = 'standard', referenceFiles = [] }) {
   const rawUserRequest = extractUserDocumentRequest(prompt);
   const sourceContent = extractSourceContent(rawUserRequest);
@@ -883,19 +903,39 @@ function buildPlan({ prompt, format, template, complexity = 'standard', referenc
     : titleFromPrompt(userRequest, template === 'academic' ? 'Informe académico profesional' : 'Documento profesional');
   const normalizedReferenceFiles = normalizeReferenceFiles(referenceFiles);
   const baseSections = {
-    academic: ['Portada', 'Resumen ejecutivo', 'Marco conceptual', 'Metodología', 'Resultados', 'Discusión', 'Conclusiones', 'Referencias APA 7', 'Anexos'],
+    // 'Portada' / 'Anexos' removed: they shipped as empty meta-sections the
+    // LLM had nothing real to write for (the "Portada" heading + pipeline
+    // marketing copy the user flagged). A real academic doc keeps Referencias.
+    academic: ['Resumen ejecutivo', 'Marco conceptual', 'Metodología', 'Resultados', 'Discusión', 'Conclusiones', 'Referencias'],
     legal: ['Identificación de partes', 'Objeto', 'Obligaciones', 'Confidencialidad', 'Vigencia', 'Resolución de controversias', 'Firmas'],
     business: ['Resumen ejecutivo', 'Contexto', 'KPIs', 'Análisis', 'Riesgos', 'Plan de acción', 'Conclusiones'],
     education: ['Objetivos', 'Competencias', 'Contenido', 'Actividades', 'Evaluación', 'Recursos', 'Cierre'],
-    premium: ['Resumen', 'Contexto', 'Desarrollo', 'Hallazgos', 'Recomendaciones', 'Anexos'],
+    premium: ['Resumen', 'Contexto', 'Desarrollo', 'Hallazgos', 'Recomendaciones'],
   };
   const sections = baseSections[template] || baseSections.premium;
-  let plannedSections = sourceContent ? ['Contenido convertido', 'Control de calidad'] : [...sections];
+  let plannedSections = sourceContent ? ['Contenido convertido'] : [...sections];
   for (const section of inferPromptSections(userRequest)) {
     plannedSections = addUniqueSection(plannedSections, section);
   }
   for (const section of inferProfessionalSections(userRequest, complexity)) {
     plannedSections = addUniqueSection(plannedSections, section);
+  }
+  // Honour an explicit length request BEFORE padding with reference material:
+  // "en 200 palabras" must not fan out into an 8-section template skeleton.
+  // Prompt-inferred sections (the user's own outline) survive the cut first.
+  const wordTarget = sourceContent ? null : parseRequestedLength(userRequest);
+  const sectionBudget = sectionBudgetForWords(wordTarget);
+  if (sectionBudget && plannedSections.length > sectionBudget) {
+    const userSections = inferPromptSections(userRequest);
+    const keep = [];
+    for (const section of userSections) {
+      if (keep.length < sectionBudget) keep.push(section);
+    }
+    for (const section of plannedSections) {
+      if (keep.length >= sectionBudget) break;
+      if (!keep.includes(section)) keep.push(section);
+    }
+    plannedSections = keep.length > 0 ? keep : plannedSections.slice(0, sectionBudget);
   }
   if (normalizedReferenceFiles.length > 0) {
     plannedSections = addUniqueSection(plannedSections, 'Material de referencia incorporado');
@@ -913,6 +953,7 @@ function buildPlan({ prompt, format, template, complexity = 'standard', referenc
     template,
     complexity,
     sourceContent,
+    wordTarget,
     formulaBlocks: sourceContent ? [] : inferFormulaBlocks(userRequest),
     sections: plannedSections,
     referenceFiles: normalizedReferenceFiles.map(({ excerpt, ...file }) => file),
@@ -1026,7 +1067,7 @@ function validateDocx(buffer, expected = {}) {
     contentTypes: entries.includes('[Content_Types].xml'),
     documentXml: documentXml.includes('<w:document'),
     headings: (documentXml.match(/Heading[1-6]/g) || []).length >= (expected.minHeadings || 2),
-    table: tableCount >= (expected.minTables || 1),
+    table: tableCount >= (expected.minTables ?? 1),
     paragraphs: paragraphCount >= (expected.minParagraphs || 6),
     media: !expected.requiresImage || entries.some((e) => e.startsWith('word/media/')),
     headerFooter: !expected.requiresHeaderFooter || headerFooter,
@@ -1043,8 +1084,11 @@ function validateDocx(buffer, expected = {}) {
     technicalScore: scoreFromChecks(checks),
     qualityScore: scoreFromChecks({
       styled: /Heading|w:jc|w:tbl/.test(documentXml),
-      hierarchy: (documentXml.match(/Heading[1-6]/g) || []).length >= 2,
-      structured: documentXml.includes('<w:tbl') && documentXml.includes('<w:p'),
+      // Quality follows the plan: a "200 palabras" doc honestly has one
+      // heading and zero tables — grading it against the long-form template
+      // shape forced a spurious repair loop.
+      hierarchy: (documentXml.match(/Heading[1-6]/g) || []).length >= Math.min(2, expected.minHeadings ?? 2),
+      structured: ((expected.minTables ?? 1) === 0 || documentXml.includes('<w:tbl')) && documentXml.includes('<w:p'),
       mediaReady: entries.some((e) => e.startsWith('word/media/')) || !expected.requiresImage,
       formulaReady: !expected.requiresFormula || hasFormulaContent,
       professional: headerFooter || !expected.requiresHeaderFooter,
@@ -1282,28 +1326,37 @@ function expectedFor(format, template, complexity, plan = {}) {
   if (format === 'docx') {
     if (plan.sourceContent) {
       return {
-        requiresImage: true,
+        requiresImage: false,
         requiresHeaderFooter: true,
         requiresToc: false,
         requiresReferences: false,
         requiresFormula: false,
-        minHeadings: 2,
-        minParagraphs: 6,
-        minTables: 1,
+        minHeadings: 1,
+        minParagraphs: 4,
+        minTables: 0,
         requiredSections: [],
         requiredTerms: [],
       };
     }
+    // Expectations follow the plan, not the old boilerplate: the guaranteed
+    // marker image / QC table / TOC field were removed as user-visible
+    // meta-noise, so images are only required when the user actually attached
+    // them, tables only when the blueprint plans them, and a short explicit
+    // word budget ("en 200 palabras") relaxes the structural minimums.
+    const shortDoc = Boolean(plan.wordTarget && plan.wordTarget <= 520);
+    const sectionsCount = Array.isArray(plan.sections) ? plan.sections.length : 0;
+    const hasReferenceImages = Array.isArray(plan.referenceFiles)
+      && plan.referenceFiles.some((file) => file && file.isImage);
     return {
-      requiresImage: true,
+      requiresImage: hasReferenceImages,
       requiresHeaderFooter: true,
-      requiresToc: template === 'academic' || high,
-      acceptsManualToc: Boolean(plan.qualityTargets?.professionalBlueprint),
-      requiresReferences: template === 'academic',
+      requiresToc: (template === 'academic' || high) && sectionsCount >= 5,
+      acceptsManualToc: true,
+      requiresReferences: template === 'academic' && sectionsCount >= 5,
       requiresFormula: Array.isArray(plan.formulaBlocks) && plan.formulaBlocks.length > 0,
-      minHeadings: high ? 5 : 2,
-      minParagraphs: high ? 18 : 8,
-      minTables: plan.qualityTargets?.professionalBlueprint ? 4 : 1,
+      minHeadings: shortDoc ? 1 : (high ? 5 : 2),
+      minParagraphs: shortDoc ? 4 : (high ? 18 : 8),
+      minTables: plan.qualityTargets?.professionalBlueprint ? 4 : 0,
       requiredSections: plan.qualityTargets?.requiredSections || [],
       requiredTerms: plan.qualityTargets?.requiredTerms || [],
     };
@@ -1491,10 +1544,19 @@ function postProcessWordDocx(buffer, plan) {
   }
 
   documentXml = documentXml.replace(/<w:tblPr>([\s\S]*?)<\/w:tblPr>/g, (_match, inner) => {
-    const cleaned = inner
+    let cleaned = inner
       .replace(/<w:tblW\b[^>]*\/>/g, '')
       .replace(/<w:tblBorders>[\s\S]*?<\/w:tblBorders>/g, '')
       .replace(/<w:tblCellMar>[\s\S]*?<\/w:tblCellMar>/g, '');
+    // OOXML enforces a strict child order inside tblPr: …tblW → tblBorders →
+    // tblCellMar → tblLook. Pandoc emits tblStyle+tblLook, so appending our
+    // block AFTER tblLook produced an out-of-order tblPr — Word tolerates it
+    // but LibreOffice (and the soffice-based preview) mis-parses the table
+    // into an empty grid with the cell text spilled below it. Extract tblLook
+    // and re-append it after our injected block.
+    const lookMatch = cleaned.match(/<w:tblLook\b[^>]*\/>/);
+    const look = lookMatch ? lookMatch[0] : '';
+    if (look) cleaned = cleaned.replace(look, '');
     return `<w:tblPr>${cleaned}
       <w:tblW w:w="9360" w:type="dxa"/>
       <w:tblBorders>
@@ -1511,7 +1573,7 @@ function postProcessWordDocx(buffer, plan) {
         <w:bottom w:w="80" w:type="dxa"/>
         <w:right w:w="120" w:type="dxa"/>
       </w:tblCellMar>
-    </w:tblPr>`;
+    ${look}</w:tblPr>`;
   });
 
   zip.file('word/document.xml', documentXml);
@@ -1523,11 +1585,8 @@ function postProcessWordDocx(buffer, plan) {
 async function buildDocxWithPandoc(plan, outputPath) {
   const runDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'siragpt-pandoc-docx-'));
   try {
-    const imageName = 'siragpt-docx-marker.png';
-    const imagePath = path.join(runDir, imageName);
     const markdownPath = path.join(runDir, 'source.md');
     const referenceDocPath = path.join(runDir, 'reference.docx');
-    await fsp.writeFile(imagePath, TINY_PNG);
     const copiedReferenceImages = [];
     for (const ref of plan.referenceFiles || []) {
       if (!ref?.isImage) continue;
@@ -1545,18 +1604,21 @@ async function buildDocxWithPandoc(plan, outputPath) {
     const markdownPlan = copiedReferenceImages.length
       ? { ...plan, pandocReferenceImages: copiedReferenceImages }
       : plan;
-    await fsp.writeFile(markdownPath, buildDocxMarkdown(markdownPlan, imageName), 'utf8');
+    await fsp.writeFile(markdownPath, buildDocxMarkdown(markdownPlan), 'utf8');
     await createPandocReferenceDoc(referenceDocPath);
 
     const args = [
       markdownPath,
       '-f',
-      'markdown+pipe_tables+grid_tables+tex_math_dollars+tex_math_single_backslash+implicit_figures+link_attributes',
+      // raw_attribute enables the ```{=openxml} page-break blocks emitted by
+      // buildDocxMarkdown. --toc was removed on purpose: pandoc's docx TOC is
+      // a Word FIELD that renders as an empty English "Table of Contents"
+      // heading in LibreOffice and every web viewer; the markdown builder now
+      // writes a static "Índice" section instead.
+      'markdown+pipe_tables+grid_tables+tex_math_dollars+tex_math_single_backslash+implicit_figures+link_attributes+raw_attribute',
       '-t',
       'docx',
       '--standalone',
-      '--toc',
-      '--toc-depth=3',
       // Without this Pandoc injects ~31 stray syntax-highlight styles
       // (AlertTok, CommentTok, SourceCode…) into every document, even ones
       // with zero code blocks. Verified: 31 → 0 with highlighting disabled.
@@ -1591,12 +1653,6 @@ async function buildDocx(plan, outputPath) {
   }
   const referenceImages = await readReferenceImages(plan);
 
-  const rows = [
-    ['Criterio', 'Validación', 'Estado'],
-    ['Integridad', 'Archivo DOCX inspeccionable', 'OK'],
-    ['Diseño', 'Jerarquía, portada, tabla e imagen', 'OK'],
-    ['Entrega', 'Descarga y preview soportadas', 'OK'],
-  ];
   const border = { style: BorderStyle.SINGLE, size: 6, color: 'CBD5E1' };
   const borders = { top: border, bottom: border, left: border, right: border };
   const makeTable = (headers, bodyRows, columnWidths) => new Table({
@@ -1660,7 +1716,6 @@ async function buildDocx(plan, outputPath) {
         return out;
       })
     : null;
-  const table = makeTable(rows[0], rows.slice(1), [3120, 4680, 1560]);
   const formulaChildren = (plan.formulaBlocks || []).flatMap((block) => [
     new Paragraph({ text: block.heading, heading: HeadingLevel.HEADING_1 }),
     new Paragraph(block.intro),
@@ -1672,39 +1727,35 @@ async function buildDocx(plan, outputPath) {
       ? [makeTable(block.table.headers, block.table.rows, [1800, 2520, 5040])]
       : []),
   ]);
-  const openingChildren = blueprint ? [
-    new Paragraph({ text: plan.title, heading: HeadingLevel.TITLE, alignment: AlignmentType.CENTER }),
-    new Paragraph({ text: 'Documento generado por el pipeline documental multiagente de siraGPT.', alignment: AlignmentType.CENTER }),
-    new Paragraph({
-      children: [new ImageRun({
-        type: 'png',
-        data: TINY_PNG,
-        transformation: { width: 48, height: 48 },
-        altText: { title: 'siraGPT validation mark', description: 'Document validation marker', name: 'siragpt-docx-marker' },
-      })],
-      alignment: AlignmentType.CENTER,
-    }),
+  // Opening: title + date, then (for long-form docs) a static index. The
+  // previous shape opened with an empty TableOfContents FIELD followed by a
+  // PageBreak — outside Word the field renders as nothing, so page 1 of every
+  // document was blank (the bug the user screenshotted). It also shipped a
+  // "Documento generado por el pipeline…" meta line and a broken marker image
+  // (black box). Static index renders identically in Word, LibreOffice and
+  // web viewers; short documents skip it entirely.
+  const dateLine = new Paragraph({
+    children: [new TextRun({ text: new Date().toISOString().slice(0, 10), color: '6B7280' })],
+    alignment: AlignmentType.CENTER,
+    spacing: { after: 360 },
+  });
+  const indexSections = blueprint
+    ? blueprint.sections.map((section) => section.heading)
+    : plan.sections.filter((s) => s && !/^material de referencia/i.test(s));
+  const staticIndex = indexSections.length >= 5 ? [
     new Paragraph({ text: 'Índice', heading: HeadingLevel.HEADING_1 }),
-    ...blueprint.sections.map((section, index) => new Paragraph({
+    ...indexSections.map((heading, index) => new Paragraph({
       children: [
         new TextRun({ text: `${index + 1}. `, bold: true }),
-        new TextRun(section.heading),
+        new TextRun(String(heading)),
       ],
     })),
-  ] : [
-    new TableOfContents('Índice automático', { hyperlink: true, headingStyleRange: '1-3' }),
     new Paragraph({ children: [new PageBreak()] }),
+  ] : [];
+  const openingChildren = [
     new Paragraph({ text: plan.title, heading: HeadingLevel.TITLE, alignment: AlignmentType.CENTER }),
-    new Paragraph({ text: 'Documento generado por el pipeline documental multiagente de siraGPT.', alignment: AlignmentType.CENTER }),
-    new Paragraph({
-      children: [new ImageRun({
-        type: 'png',
-        data: TINY_PNG,
-        transformation: { width: 96, height: 96 },
-        altText: { title: 'siraGPT validation mark', description: 'Document validation marker', name: 'siragpt-docx-marker' },
-      })],
-      alignment: AlignmentType.CENTER,
-    }),
+    dateLine,
+    ...staticIndex,
   ];
   const children = [
     ...openingChildren,
@@ -1781,11 +1832,6 @@ async function buildDocx(plan, outputPath) {
         }
         return out;
       })),
-    table,
-    ...(plan.sourceContent ? [] : [
-      new Paragraph({ text: 'Referencias APA 7', heading: HeadingLevel.HEADING_1 }),
-      new Paragraph('American Psychological Association. (2020). Publication manual of the American Psychological Association (7th ed.).'),
-    ]),
   ];
   const doc = new Document({
     creator: 'siraGPT Document Pipeline',
@@ -2492,7 +2538,7 @@ async function buildText(plan, outputPath, format) {
     text = `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${plan.title}</title><style>:root{--bg:#f8fafc;--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;--card:#fff;--accent:#2563eb;--cyan:#06b6d4}*{box-sizing:border-box}body{font-family:Inter,Aptos,system-ui,sans-serif;margin:0;background:radial-gradient(circle at 20% 10%,#dbeafe 0,#f8fafc 34%,#ecfeff 100%);color:var(--ink)}.wrap{max-width:1080px;margin:auto;padding:clamp(24px,5vw,64px)}header.hero{display:grid;grid-template-columns:1.25fr .75fr;gap:24px;align-items:end;margin-bottom:28px}.kpi-panel,.card{background:rgba(255,255,255,.88);border:1px solid var(--line);border-radius:24px;padding:24px;box-shadow:0 24px 70px rgba(15,23,42,.10);backdrop-filter:blur(14px)}h1{font-size:clamp(36px,6vw,64px);line-height:.95;margin:0 0 16px}h2{font-size:24px;margin:8px 0 10px}.lead{font-size:18px;color:#475569;max-width:720px;line-height:1.65}.eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:800}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin:22px 0}.toolbar{display:flex;gap:10px;flex-wrap:wrap;margin:20px 0}.chip,.inspect{border:1px solid var(--line);background:#fff;border-radius:999px;padding:10px 14px;font-weight:700;cursor:pointer}.chip[aria-pressed=true],.inspect:hover{background:linear-gradient(135deg,var(--accent),var(--cyan));color:#fff;border-color:transparent}.metric{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);padding:12px 0}.metric strong{font-size:28px}.notice{margin:20px 0;padding:18px;border-radius:18px;background:#0f172a;color:white}table{width:100%;border-collapse:collapse;background:#fff;border-radius:18px;overflow:hidden}td,th{border-bottom:1px solid var(--line);padding:12px;text-align:left}canvas{width:100%;height:120px;border-radius:18px;background:linear-gradient(135deg,#eff6ff,#ecfeff)}@media(max-width:760px){header.hero,.grid{grid-template-columns:1fr}.wrap{padding:22px}}</style></head><body><main class="wrap"><header class="hero"><div><span class="eyebrow">siraGPT artifact engine</span><h1>${plan.title}</h1><p class="lead">Documento HTML semántico con diseño premium, tabla, enlaces verificables, controles reales y una ruta de validación auditable para entregas profesionales.</p><a href="https://siragpt.com" aria-label="Referencia de producto siraGPT">Referencia de producto</a></div><aside class="kpi-panel" aria-label="Panel de métricas"><div class="metric"><span>Integridad</span><strong>OK</strong></div><div class="metric"><span>Diseño</span><strong>92</strong></div><div class="metric"><span>Entrega</span><strong>Lista</strong></div><canvas id="spark" role="img" aria-label="Tendencia de calidad"></canvas></aside></header><nav class="toolbar" aria-label="Filtros de vista"><button class="chip" type="button" data-filter="all" aria-pressed="true">Todo</button><button class="chip" type="button" data-filter="quality" aria-pressed="false">Calidad</button><button class="chip" type="button" data-filter="delivery" aria-pressed="false">Entrega</button></nav><p id="status" class="notice" role="status">Mostrando todos los bloques validados del documento.</p>${refs}${sourceHtml}<div class="grid">${plan.sourceContent ? '' : sectionCards}</div><section class="card"><h2>Tabla de control</h2><table><tr><th>Métrica</th><th>Estado</th><th>Evidencia</th></tr><tr><td>Integridad</td><td>OK</td><td>Archivo generado y validado</td></tr><tr><td>Diseño</td><td>OK</td><td>Viewport, estructura, interacción y accesibilidad</td></tr><tr><td>Descarga</td><td>OK</td><td>Artefacto persistido en almacenamiento local</td></tr></table></section></main><script>const statusEl=document.getElementById('status');document.querySelectorAll('.chip').forEach(btn=>btn.addEventListener('click',()=>{document.querySelectorAll('.chip').forEach(x=>x.setAttribute('aria-pressed','false'));btn.setAttribute('aria-pressed','true');statusEl.textContent=btn.dataset.filter==='all'?'Mostrando todos los bloques validados del documento.':'Filtro activo: '+btn.textContent+'. Los criterios siguen auditables.';}));document.querySelectorAll('.inspect').forEach(btn=>btn.addEventListener('click',()=>{statusEl.textContent='Criterio del bloque '+btn.dataset.target+': contenido completo, estructura semántica y revisión de entrega aprobada.';}));const c=document.getElementById('spark'),ctx=c.getContext('2d');c.width=640;c.height=180;ctx.lineWidth=8;ctx.strokeStyle='#2563eb';ctx.beginPath();[35,82,64,118,92,136,126].forEach((v,i)=>{const x=40+i*92,y=160-v;i?ctx.lineTo(x,y):ctx.moveTo(x,y)});ctx.stroke();ctx.fillStyle='#06b6d4';ctx.beginPath();ctx.arc(592,34,12,0,Math.PI*2);ctx.fill();</script></body></html>`;
   } else {
     if (plan.sourceContent) {
-      text = [`# ${plan.title}`, '', String(plan.sourceContent).trim(), '', '## Control de calidad', '', '| Métrica | Estado |', '|---|---|', '| Integridad | OK |', '| Diseño | OK |'].join('\n');
+      text = [`# ${plan.title}`, '', String(plan.sourceContent).trim()].join('\n');
       await fsp.writeFile(outputPath, text, 'utf8');
       return Buffer.from(text, 'utf8');
     }
@@ -2615,7 +2661,7 @@ async function buildDocumentFile({ plan, outputDir }) {
 }
 
 function repairPlan(plan, validation) {
-  const sections = Array.from(new Set([...plan.sections, 'Anexos técnicos', 'Control de calidad', 'Registro de evidencias']));
+  const sections = Array.from(new Set(plan.sections));
   const repaired = {
     ...plan,
     complexity: plan.complexity === 'standard' ? 'high' : plan.complexity,
@@ -2699,6 +2745,12 @@ async function runAdvancedDocumentPipeline({
       plan,
       signal,
       language: /^[a-z]{2}$/i.test(plan.language || '') ? plan.language : 'es',
+      // Explicit "en N palabras" requests: split the budget across sections
+      // so the writer honours the asked length instead of the schema's
+      // default 80-160 words per section.
+      targetWordsPerSection: plan.wordTarget
+        ? Math.max(40, Math.round(plan.wordTarget / Math.max(1, plan.sections.length)))
+        : null,
     });
     const failed = plan.blocks.filter((b) => b._error).length;
     emit(
