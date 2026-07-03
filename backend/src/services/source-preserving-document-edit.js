@@ -3425,6 +3425,23 @@ async function validateOfficeOperationCriteria(buffer, format, operations = [], 
         passed: normalizedTextIncludes(cellValue, op.value),
         details: { address: op.address, sheetName: op.sheetName || null, value: compact(cellValue, 120) },
       });
+    } else if (op.kind === 'format_range') {
+      // Surgical formatting op (Stage 2): the format code must be present in
+      // xl/styles.xml and at least one target cell must have been restyled.
+      let stylesHasCode = false;
+      try {
+        const zip = new PizZip(buffer);
+        const styles = zip.file('xl/styles.xml')?.asText() || '';
+        // styles.xml stores the format code XML-escaped ("€" → &quot;€&quot;),
+        // so compare against the escaped form.
+        stylesHasCode = op.formatCode ? styles.includes(xmlEscape(op.formatCode)) : /<numFmt\b/.test(styles);
+      } catch { stylesHasCode = false; }
+      checks.push({
+        id: 'xlsx_range_formatted',
+        label: 'Formato aplicado al rango',
+        passed: stylesHasCode && Number(op.cellsChanged || 0) > 0,
+        details: { formatCode: op.formatCode || null, cellsChanged: op.cellsChanged || 0, sheetName: op.sheetName || null },
+      });
     } else if (op.kind === 'append_generic' && format === 'pptx') {
       const hasAnyAddedText = nonPageBreakBlocks(blocks)
         .map((item) => item.text)
@@ -4439,6 +4456,19 @@ function docxImageAdapterModule() {
   return _docxImageAdapterModule;
 }
 
+let _xlsxAdapterModule;
+function xlsxAdapterModule() {
+  if (_xlsxAdapterModule === undefined) {
+    try {
+      // eslint-disable-next-line global-require
+      _xlsxAdapterModule = require('./document-editing/xlsx-adapter');
+    } catch {
+      _xlsxAdapterModule = null;
+    }
+  }
+  return _xlsxAdapterModule;
+}
+
 // Keys are normalizeText() output (lowercased, accents stripped).
 const IMAGE_EDIT_COLOR_WORDS = {
   azul: '#2563EB', blue: '#2563EB',
@@ -4695,6 +4725,148 @@ function buildImageEditClarificationResult({ message, format = 'docx' }) {
     format,
     orchestration: null,
   };
+}
+
+// ── XLSX surgical-edit intent (format range / set cell) ─────────────────────
+// Parsed BEFORE the generic xlsx text/append planner because "cambia la
+// columna D a formato moneda" is a formatting op, not a text replacement —
+// the old planner produced a generic appendix instead of touching styles.
+const SHEET_FORMAT_CURRENCY_RE = /\b(moneda|monetario|currency|euros?|d[oó]lares?|dollars?|precios?)\b/;
+const SHEET_FORMAT_PERCENT_RE = /\b(porcentajes?|percent(?:age)?|%)\b/;
+const SHEET_FORMAT_DATE_RE = /\b(fecha(?:s)?|date(?:s)?)\b/;
+const SHEET_FORMAT_VERB_RE = /\b(formatea\w*|formato|format\w*|cambi\w*|pon(?:er|ga|gan|la)?|aplica\w*|convierte\w*|convert\w*|dale?\b)\b/;
+const SHEET_COLUMN_RE = /\bcolumna\s+([a-z]{1,2})\b|\bcolumn\s+([a-z]{1,2})\b/;
+const SHEET_RANGE_RE = /\b([a-z]{1,2}\d{1,7})\s*:\s*([a-z]{1,2}\d{1,7})\b/;
+const SHEET_CELL_RE = /\b(?:celda|cell|casilla)\s+([a-z]{1,2}\d{1,7})\b/;
+const SHEET_SETVAL_VERB_RE = /\b(pon(?:er|ga|gan|le)?|cambi\w*|establece\w*|set|escrib\w*|actualiza\w*|coloca\w*)\b/;
+
+function detectCurrencyCode(text) {
+  if (/\bd[oó]lares?\b|\bdollars?\b|\busd\b|\$/.test(text)) return 'USD';
+  if (/\blibras?\b|\bgbp\b|£/.test(text)) return 'GBP';
+  if (/\bsoles?\b|\bpen\b|s\/\./.test(text)) return 'PEN';
+  return 'EUR';
+}
+
+// Returns { kind:'format_range'|'set_cell', column?, range?, cellRef?, sheetCue?,
+// numberFormat?, currency?, value? } or null.
+function parseSpreadsheetEditRequest(requestText = '') {
+  const text = normalizeText(requestText);
+  if (!text) return null;
+  const rawSheet = /\b(?:hoja|sheet|pesta[nñ]a)\s+["“']?([a-z0-9 _-]{1,40}?)["”']?(?:\s|$|,|\.)/.exec(text);
+  const sheetCue = rawSheet ? rawSheet[1].trim() : null;
+
+  // set_cell: "pon la celda B3 en 500" / "cambia la celda B3 a Hola"
+  const cellMatch = SHEET_CELL_RE.exec(text);
+  if (cellMatch && SHEET_SETVAL_VERB_RE.test(text)) {
+    // Capture the value after "en/a/=/:" from the ORIGINAL text (preserve
+    // casing), stopping at the first clause boundary so trailing chatter like
+    // "…a 999 y devuélveme el Excel completo." doesn't leak into the value.
+    const valMatch = /\b(?:celda|cell|casilla)\s+[a-z]{1,2}\d{1,7}\s*(?:en|a|=|:|con(?:\s+el\s+valor)?)\s+(.+?)(?:\s+y\s+|\s+and\s+|[,;]|\.\s|\.$|$)/i.exec(requestText);
+    const value = valMatch ? valMatch[1].trim().replace(/^["“']|["”']$/g, '') : null;
+    if (value) {
+      return { kind: 'set_cell', cellRef: cellMatch[1].toUpperCase(), value, sheetCue };
+    }
+  }
+
+  // format_range: needs a format verb + a target (column or range) + a format kind
+  let numberFormat = null;
+  if (SHEET_FORMAT_CURRENCY_RE.test(text)) numberFormat = 'currency';
+  else if (SHEET_FORMAT_PERCENT_RE.test(text)) numberFormat = 'percent';
+  else if (SHEET_FORMAT_DATE_RE.test(text)) numberFormat = 'date';
+  if (numberFormat && SHEET_FORMAT_VERB_RE.test(text)) {
+    const rangeM = SHEET_RANGE_RE.exec(text);
+    const colM = SHEET_COLUMN_RE.exec(text);
+    if (rangeM) {
+      return { kind: 'format_range', range: `${rangeM[1].toUpperCase()}:${rangeM[2].toUpperCase()}`, numberFormat, currency: detectCurrencyCode(text), sheetCue };
+    }
+    if (colM) {
+      return { kind: 'format_range', column: (colM[1] || colM[2]).toUpperCase(), numberFormat, currency: detectCurrencyCode(text), sheetCue };
+    }
+    const singleCell = SHEET_CELL_RE.exec(text);
+    if (singleCell) {
+      return { kind: 'format_range', range: singleCell[1].toUpperCase(), numberFormat, currency: detectCurrencyCode(text), sheetCue };
+    }
+  }
+  return null;
+}
+
+// Runs an XLSX surgical op via the pizzip adapter (never ExcelJS → safe on
+// chart/table workbooks). Returns { buffer, steps, suffix, titleSuffix } or a
+// { clarification, message } payload when the target is ambiguous.
+async function runXlsxSurgicalEditFlow({ input, sheetEdit, sourceFile }) {
+  const adapter = xlsxAdapterModule();
+  const docName = sourceFile?.originalName || sourceFile?.filename || 'la hoja de cálculo';
+  if (!adapter) {
+    return { clarification: true, message: 'La edición de hojas de cálculo no está disponible en este despliegue.' };
+  }
+  let sheets;
+  try {
+    sheets = adapter.listXlsxSheets(input);
+  } catch (err) {
+    return { clarification: true, message: `No pude leer «${docName}»: ${err?.message || 'archivo dañado'}.` };
+  }
+  if (!sheets.length) {
+    return { clarification: true, message: `«${docName}» no tiene hojas legibles.` };
+  }
+  // Ambiguity: 2+ sheets and no explicit sheet cue → ask which one.
+  let targetSheet = null;
+  if (sheetEdit.sheetCue) {
+    const norm = (s) => String(s || '').trim().toLowerCase();
+    targetSheet = sheets.find((s) => norm(s.name) === norm(sheetEdit.sheetCue))
+      || sheets.find((s) => norm(s.name).includes(norm(sheetEdit.sheetCue)));
+    if (!targetSheet) {
+      return { clarification: true, message: `No encontré una hoja llamada «${sheetEdit.sheetCue}» en «${docName}». Las hojas disponibles son: ${sheets.map((s) => `«${s.name}»`).join(', ')}. ¿Cuál deseas editar?` };
+    }
+  } else if (sheets.length > 1) {
+    return { clarification: true, message: `«${docName}» tiene ${sheets.length} hojas: ${sheets.map((s) => `«${s.name}»`).join(', ')}. ¿En cuál aplico el cambio?` };
+  } else {
+    targetSheet = sheets[0];
+  }
+
+  try {
+    if (sheetEdit.kind === 'format_range') {
+      const result = adapter.formatRange({
+        buffer: input,
+        sheet: targetSheet.name,
+        range: sheetEdit.range || null,
+        column: sheetEdit.column || null,
+        numberFormat: sheetEdit.numberFormat,
+        currency: sheetEdit.currency,
+      });
+      const where = sheetEdit.range || (sheetEdit.column ? `columna ${sheetEdit.column}` : 'el rango indicado');
+      const fmtLabel = sheetEdit.numberFormat === 'currency'
+        ? `moneda (${sheetEdit.currency})`
+        : sheetEdit.numberFormat === 'percent' ? 'porcentaje'
+          : sheetEdit.numberFormat === 'date' ? 'fecha' : sheetEdit.numberFormat;
+      return {
+        buffer: result.buffer,
+        steps: [{ kind: 'format_range', label: `${result.sheetName}!${where}`, count: result.cellsChanged }],
+        operation: { kind: 'format_range', formatCode: result.formatCode, cellsChanged: result.cellsChanged, sheetName: result.sheetName },
+        suffix: 'formato_actualizado',
+        titleSuffix: 'formato actualizado',
+        summary: `apliqué formato de ${fmtLabel} a ${result.cellsChanged} celda(s) de ${where} en la hoja «${result.sheetName}»`,
+      };
+    }
+    if (sheetEdit.kind === 'set_cell') {
+      const result = adapter.setCellValue({
+        buffer: input,
+        sheet: targetSheet.name,
+        cellRef: sheetEdit.cellRef,
+        value: sheetEdit.value,
+      });
+      return {
+        buffer: result.buffer,
+        steps: [{ kind: 'set_cell', label: `${result.sheetName}!${result.address}` }],
+        operation: { kind: 'set_cell', address: result.address, sheetName: result.sheetName, value: sheetEdit.value },
+        suffix: 'celda_actualizada',
+        titleSuffix: 'celda actualizada',
+        summary: `escribí «${sheetEdit.value}» en ${result.sheetName}!${result.address}`,
+      };
+    }
+  } catch (err) {
+    return { clarification: true, message: `No pude aplicar el cambio en «${docName}»: ${err?.message || 'error desconocido'}.` };
+  }
+  return { clarification: true, message: 'No entendí qué cambio aplicar a la hoja de cálculo.' };
 }
 
 async function executeDocxOperations({ input, ops, requestText, sourceText, allSourceFiles, sourceFile, referenceFiles = [], signal }) {
@@ -5184,6 +5356,30 @@ async function generateSourcePreservingDocumentEdit({
     validationBlocks = blocks;
     if (isXlsxFile(sourceFile)) {
       format = 'xlsx';
+      // Surgical formatting/cell fast path — resolved BEFORE the generic
+      // planner because "columna D a formato moneda" is a styles.xml op the
+      // text planner can't express (it produced a generic appendix). Uses the
+      // pizzip adapter, never ExcelJS, so chart/table workbooks don't crash.
+      const sheetEdit = parseSpreadsheetEditRequest(requestText);
+      if (sheetEdit) {
+        const xlsxResult = await runXlsxSurgicalEditFlow({ input, sheetEdit, sourceFile });
+        if (xlsxResult.clarification) {
+          return buildImageEditClarificationResult({ message: xlsxResult.message, format });
+        }
+        output = xlsxResult.buffer;
+        // Use the detailed operation (formatCode/address/value) so the
+        // post-edit validator can assert the surgical effect landed.
+        operations = xlsxResult.operation ? [xlsxResult.operation] : xlsxResult.steps.map((s) => ({ kind: s.kind }));
+        validationBlocks = [];
+        orchestration = buildDocumentOrchestrationPlan({
+          requestText, sourceFile, referenceFiles, operations, selectionReason,
+        });
+        suffix = xlsxResult.suffix;
+        titleSuffix = xlsxResult.titleSuffix;
+        explanation = `Se conservó el XLSX original; ${xlsxResult.summary}.`;
+        content = `Listo. Conservé el XLSX original: ${xlsxResult.summary}, sin tocar el resto de las hojas, gráficos ni fórmulas.`;
+        // fall through to persistence below (skip the ExcelJS text flow)
+      } else {
       operations = planGenericOfficeOperations({ requestText, format });
       // When the regexes only produced the generic-appendix fallback, let the
       // LLM planner read the real workbook and build a concrete plan
@@ -5212,6 +5408,7 @@ async function generateSourcePreservingDocumentEdit({
       content = stepSummary
         ? `Listo. Conservé el XLSX original y ${stepSummary}, sin reemplazar las hojas existentes.`
         : 'Listo. Conservé el XLSX original y apliqué la edición solicitada sin reemplazar las hojas existentes.';
+      }
     } else if (isPptxFile(sourceFile)) {
       format = 'pptx';
       operations = planGenericOfficeOperations({ requestText, format });
@@ -5423,6 +5620,7 @@ module.exports = {
   isSourcePreservingEditRequest,
   loadEditableSourceFiles,
   parseImageEditRequest,
+  parseSpreadsheetEditRequest,
   parseTargetSectionRequest,
   tryGenerateSourcePreservingDocumentEdit,
   INTERNAL: {
