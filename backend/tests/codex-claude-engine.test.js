@@ -20,7 +20,7 @@ const {
 } = require('../src/services/codex/anthropic-turn');
 const { defaultLlmTurn, resolveTurnEngine } = require('../src/services/codex/llm-turn');
 const buildTools = require('../src/services/codex/build-tools');
-const { runAgentLoop, compactMessages, verifyWorkspace } = require('../src/services/codex/agent-loop');
+const { runAgentLoop, compactMessages, verifyWorkspace, verifyDevServer } = require('../src/services/codex/agent-loop');
 
 // ---------------------------------------------------------------------------
 // anthropic-turn config + message conversion
@@ -314,6 +314,181 @@ test('build loop: verificación falla → ronda de reparación → done', async 
   assert.equal(tscRuns, 2, 'reverifica tras la reparación');
   const verifyActions = events.filter((e) => e.type === 'action_start' && /verificación/.test(e.data.command || ''));
   assert.equal(verifyActions.length, 2, 'la verificación aparece en la timeline');
+});
+
+// ---------------------------------------------------------------------------
+// Runtime dev-server verification (flag-gated CODEX_VERIFY_DEV_SERVER, off by default)
+
+// A fake runner whose dev-server methods are tracked so a test can assert they
+// were (or were NOT) invoked. `devStatusSeq` scripts successive devStatus() answers.
+function devRunner({ devStatusSeq = [], startDevImpl, files = new Map([['tsconfig.json', JSON.stringify({ compilerOptions: {} })]]) } = {}) {
+  const calls = { startDev: 0, stopDev: 0, devStatus: 0 };
+  const seq = devStatusSeq.slice();
+  let last = { running: false };
+  return {
+    calls,
+    readFile: async (_p, path) => { if (!files.has(path)) throw new Error(`no existe ${path}`); return { content: files.get(path) }; },
+    writeFiles: async (_p, w) => { for (const f of w) files.set(f.path, f.content); return { ok: true }; },
+    exec: async (_p, cmd) => {
+      if (cmd[0] === 'bunx' && cmd[1] === 'tsc') return { exitCode: 0, stdout: '', stderr: '' };
+      if (cmd[0] === 'bun' && cmd[1] === 'install') return { exitCode: 0, stdout: '', stderr: '' };
+      if (cmd[0] === 'git' && cmd[1] === 'status') return { exitCode: 0, stdout: '', stderr: '' };
+      return { exitCode: 0, stdout: '', stderr: '' };
+    },
+    devStatus: async () => { calls.devStatus += 1; if (seq.length) last = seq.shift(); return last; },
+    startDev: async (p) => { calls.startDev += 1; if (startDevImpl) return startDevImpl(p); return { port: 5173 }; },
+    stopDev: async () => { calls.stopDev += 1; return { ok: true }; },
+  };
+}
+
+const RT_BASE = { run: { id: 'r' }, prisma: null, actionId: 'a1', groupId: 'g1', projectId: 'p1' };
+
+test('verifyDevServer: flag off (unset) → no-op, no arranca dev server', async () => {
+  const runner = devRunner();
+  const noop = { appendEvent: async () => {} };
+  const out = await verifyDevServer({ ...RT_BASE, runner, eventStore: noop, clock: () => new Date(0), env: {} });
+  assert.deepEqual({ ran: out.ran, ok: out.ok }, { ran: false, ok: true });
+  assert.equal(runner.calls.startDev, 0, 'no toca el dev server con el flag apagado');
+  assert.equal(runner.calls.devStatus, 0);
+});
+
+test('verifyDevServer: flag on + dev server ready → verificación OK', async () => {
+  const runner = devRunner({ devStatusSeq: [{ running: false }, { running: true, ready: true, project: 'p1', tail: ['VITE ready in 300ms'] }] });
+  const events = [];
+  const out = await verifyDevServer({
+    ...RT_BASE, runner, eventStore: { appendEvent: async (_r, t, d) => { events.push({ t, d }); } }, clock: () => new Date(0), env: { CODEX_VERIFY_DEV_SERVER: '1', CODEX_VERIFY_DEV_TIMEOUT_MS: '4000' },
+  });
+  assert.equal(out.ran, true);
+  assert.equal(out.ok, true);
+  assert.equal(runner.calls.startDev, 1, 'arrancó el dev server para verificar');
+  assert.ok(events.some((e) => e.t === 'action_start' && /verificación runtime: dev server/.test(e.d.command || '')));
+  assert.ok(events.some((e) => e.t === 'action_end' && e.d.status === 'done'));
+});
+
+test('verifyDevServer: flag on + dev server error → ok:false con errores realimentados', async () => {
+  const runner = devRunner({ devStatusSeq: [{ running: false }, { running: true, ready: false, project: 'p1', error: 'Failed to resolve import "./missing"', tail: ['[vite] Internal server error', 'Cannot find module ./missing'] }] });
+  const events = [];
+  const out = await verifyDevServer({
+    ...RT_BASE, runner, eventStore: { appendEvent: async (_r, t, d) => { events.push({ t, d }); } }, clock: () => new Date(0), env: { CODEX_VERIFY_DEV_SERVER: '1', CODEX_VERIFY_DEV_TIMEOUT_MS: '4000' },
+  });
+  assert.equal(out.ran, true);
+  assert.equal(out.ok, false, 'un error real de runtime falla la verificación');
+  assert.match(out.errors, /Failed to resolve import|Cannot find module/);
+  assert.ok(events.some((e) => e.t === 'action_end' && e.d.status === 'error'));
+});
+
+test('verifyDevServer: flag on + runner que lanza (infra caída) → degrada a no verificado sin error', async () => {
+  const runner = devRunner();
+  runner.startDev = async () => { runner.calls.startDev += 1; throw new Error('runner unreachable'); };
+  const out = await verifyDevServer({
+    ...RT_BASE, runner, eventStore: { appendEvent: async () => {} }, clock: () => new Date(0), env: { CODEX_VERIFY_DEV_SERVER: '1' },
+  });
+  assert.deepEqual({ ran: out.ran, ok: out.ok }, { ran: false, ok: true }, 'infra caída NO convierte un build bueno en error');
+  assert.equal(runner.calls.stopDev, 0, 'no había servidor propio que parar (start falló)');
+});
+
+test('verifyDevServer: dev server que nunca responde (sin error) → no verificado + para el que arrancó', async () => {
+  // Primer devStatus: no corriendo (lo arrancamos); luego siempre "no ready y
+  // sin error/tail" → timeout → infra symptom, y paramos el que arrancamos.
+  const runner = devRunner({ devStatusSeq: [] });
+  let n = 0;
+  runner.devStatus = async () => { runner.calls.devStatus += 1; n += 1; return n === 1 ? { running: false } : { running: false, ready: false, project: 'p1' }; };
+  const out = await verifyDevServer({
+    ...RT_BASE, runner, eventStore: { appendEvent: async () => {} }, clock: () => new Date(0), env: { CODEX_VERIFY_DEV_SERVER: '1', CODEX_VERIFY_DEV_TIMEOUT_MS: '3000' },
+  });
+  assert.deepEqual({ ran: out.ran, ok: out.ok }, { ran: false, ok: true }, 'timeout sin error → no verificado, no fallo');
+  assert.equal(runner.calls.stopDev, 1, 'para el dev server que arrancó para verificar');
+});
+
+test('build loop: flag on + dev server error → inyecta [VERIFICACIÓN RUNTIME] y repara, luego done', async () => {
+  // tsc limpio siempre; dev server: primer arranque falla, segundo (tras el fix) ok.
+  let devStarts = 0;
+  const files = new Map([['tsconfig.json', JSON.stringify({ compilerOptions: {} })], ['package.json', '{}']]);
+  const events = [];
+  const runner = {
+    readFile: async (_p, path) => { if (!files.has(path)) throw new Error(`no existe ${path}`); return { content: files.get(path) }; },
+    writeFiles: async (_p, w) => { for (const f of w) files.set(f.path, f.content); return { ok: true }; },
+    exec: async (_p, cmd) => {
+      if (cmd[0] === 'bunx' && cmd[1] === 'tsc') return { exitCode: 0, stdout: '', stderr: '' };
+      if (cmd[0] === 'bun' && cmd[1] === 'install') return { exitCode: 0, stdout: '', stderr: '' };
+      if (cmd[0] === 'git' && cmd[1] === 'status') return { exitCode: 0, stdout: '', stderr: '' };
+      return { exitCode: 0, stdout: '', stderr: '' };
+    },
+    devStatus: async () => (devStarts === 0
+      ? { running: false }
+      : (devStarts === 1
+        ? { running: true, ready: false, project: 'p1', error: 'Failed to resolve import "./x"', tail: ['[vite] error'] }
+        : { running: true, ready: true, project: 'p1', tail: ['VITE ready'] })),
+    startDev: async () => { devStarts += 1; return { port: 5173 }; },
+    stopDev: async () => ({ ok: true }),
+  };
+  let sawRuntimePrompt = false;
+  const llmTurn = async ({ messages }) => {
+    const last = messages[messages.length - 1];
+    if (typeof last?.content === 'string' && last.content.startsWith('[VERIFICACIÓN RUNTIME]')) {
+      sawRuntimePrompt = true;
+      assert.match(last.content, /Failed to resolve import|dev server/i);
+      // "Fix": advance devStatus so the next dev check is ready, then stop calling tools.
+      devStarts += 1;
+      return { text: 'Corrijo el import.', toolCalls: [{ name: 'edit_file', args: { path: 'package.json', find: '{}', replace: '{}' } }] };
+    }
+    return { text: 'Listo.', toolCalls: [] };
+  };
+  const res = await runAgentLoop({
+    run: { id: 'r1', mode: 'build', prompt: 'haz una app', tier: 'eco' },
+    project: { id: 'p1', name: 'X' },
+    deps: {
+      llmTurn,
+      runner,
+      fileTree: '',
+      plan: null,
+      eventStore: { appendEvent: async (_r, type, data) => { events.push({ type, data }); }, listEvents: async () => [] },
+      actionStore: { recordAction: async () => {} },
+      clock: (() => { let t = 0; return () => new Date(1_000_000 + (t += 10)); })(),
+      env: { NODE_ENV: 'test', CODEX_AUTO_VERIFY: '0', CODEX_VERIFY_DEV_SERVER: '1', CODEX_VERIFY_DEV_TIMEOUT_MS: '3000' },
+    },
+  });
+  assert.equal(res.status, 'done');
+  assert.equal(sawRuntimePrompt, true, 'el error de runtime vuelve al modelo como [VERIFICACIÓN RUNTIME]');
+  const rtActions = events.filter((e) => e.type === 'action_start' && /verificación runtime: dev server/.test(e.data.command || ''));
+  assert.ok(rtActions.length >= 1, 'la verificación runtime aparece en la timeline');
+});
+
+test('build loop: flag OFF → NO arranca el dev server (startDev nunca se llama)', async () => {
+  let startDevCalled = 0;
+  const files = new Map([['tsconfig.json', JSON.stringify({ compilerOptions: {} })]]);
+  const events = [];
+  const runner = {
+    readFile: async (_p, path) => { if (!files.has(path)) throw new Error(`no existe ${path}`); return { content: files.get(path) }; },
+    writeFiles: async (_p, w) => { for (const f of w) files.set(f.path, f.content); return { ok: true }; },
+    exec: async (_p, cmd) => {
+      if (cmd[0] === 'bunx' && cmd[1] === 'tsc') return { exitCode: 0, stdout: '', stderr: '' };
+      if (cmd[0] === 'bun' && cmd[1] === 'install') return { exitCode: 0, stdout: '', stderr: '' };
+      if (cmd[0] === 'git' && cmd[1] === 'status') return { exitCode: 0, stdout: '', stderr: '' };
+      return { exitCode: 0, stdout: '', stderr: '' };
+    },
+    devStatus: async () => ({ running: false }),
+    startDev: async () => { startDevCalled += 1; return { port: 5173 }; },
+    stopDev: async () => ({ ok: true }),
+  };
+  const res = await runAgentLoop({
+    run: { id: 'r1', mode: 'build', prompt: 'haz una app', tier: 'eco' },
+    project: { id: 'p1', name: 'X' },
+    deps: {
+      llmTurn: async () => ({ text: 'Listo.', toolCalls: [] }),
+      runner,
+      fileTree: '',
+      plan: null,
+      eventStore: { appendEvent: async (_r, type, data) => { events.push({ type, data }); }, listEvents: async () => [] },
+      actionStore: { recordAction: async () => {} },
+      clock: (() => { let t = 0; return () => new Date(1_000_000 + (t += 10)); })(),
+      // CODEX_VERIFY_DEV_SERVER unset → runtime check must not fire.
+      env: { NODE_ENV: 'test', CODEX_AUTO_VERIFY: '0' },
+    },
+  });
+  assert.equal(res.status, 'done');
+  assert.equal(startDevCalled, 0, 'con el flag apagado el dev server NO se arranca en la verificación');
+  assert.ok(!events.some((e) => e.type === 'action_start' && /verificación runtime/.test(e.data.command || '')), 'sin acción de verificación runtime en la timeline');
 });
 
 test('build loop: tool calls por encima del budget se reportan al modelo', async () => {
