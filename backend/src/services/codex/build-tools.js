@@ -292,11 +292,17 @@ const TOOLS = {
     pathFor: () => null,
     async execute(args, ctx) {
       const sleep = (ms) => new Promise((r) => { setTimeout(r, ms); });
+      // Track whether WE started the server: if the user's preview was already
+      // running for this project we must NOT stop it (that would kill the live
+      // preview). If we started it only for the check, stop it at the end so we
+      // don't leak a runner pool slot (mirrors agent-loop.verifyDevServer).
+      let startedByUs = false;
       try {
         let status = await ctx.runner.devStatus(ctx.project);
         // Not running (or running another project) → (re)start it for this one.
         if (!status?.running || (status.project && status.project !== ctx.project)) {
           await ctx.runner.startDev(ctx.project);
+          startedByUs = true;
         }
         const deadline = Date.now() + Math.min(Math.max(Number(args?.waitMs) || 20000, 2000), 60000);
         do {
@@ -305,8 +311,15 @@ const TOOLS = {
           if (status?.ready || status?.error) break;
         } while (Date.now() < deadline);
 
+        // Capture the tail/status the agent needs BEFORE releasing the slot.
         const tail = Array.isArray(status?.tail) ? status.tail.join('\n') : '';
         const errLines = tail.split('\n').filter((l) => /error|failed|cannot|not found|exception/i.test(l)).join('\n');
+        // We only started a throwaway server for the check → release it now that
+        // we've read the status. A pre-existing server (the user's preview) is
+        // left running.
+        if (startedByUs && typeof ctx.runner.stopDev === 'function') {
+          await ctx.runner.stopDev(ctx.project).catch(() => {});
+        }
         if (status?.ready && !errLines) {
           return { isError: false, summary: 'dev server listo', observation: `OK: el dev server está corriendo y responde.\nÚltimos logs:\n${summarise(tail, 1500)}` };
         }
@@ -319,6 +332,10 @@ const TOOLS = {
           observation: `El dev server NO está listo${status?.error ? ` (error: ${status.error})` : ''}.\nLogs:\n${summarise(tail, 2500)}\nDiagnostica y corrige el problema (revisa imports, package.json y sintaxis).`,
         };
       } catch (err) {
+        // On a failure after we started it, still release the slot we grabbed.
+        if (startedByUs && typeof ctx.runner.stopDev === 'function') {
+          await ctx.runner.stopDev(ctx.project).catch(() => {});
+        }
         return { isError: true, summary: `runner error: ${err.message}`, observation: `No pude consultar el dev server: ${err.message}` };
       }
     },

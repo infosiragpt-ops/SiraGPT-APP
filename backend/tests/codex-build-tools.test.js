@@ -136,3 +136,38 @@ test('inspect_database honours an explicit path', async () => {
   await TOOLS.inspect_database.execute({ path: 'db/schema.prisma' }, { runner, project: 'p1' });
   assert.equal(seen, 'db/schema.prisma');
 });
+
+// ---------------------------------------------------------------------------
+// dev_server_check: slot hygiene (audit G5) — the tool must stop a dev server
+// it started only for the check, but must NOT stop a pre-existing one (the
+// user's live preview).
+
+test('dev_server_check stops the dev server it started (no pre-existing preview)', async () => {
+  const calls = { start: 0, stop: 0, stoppedProject: null };
+  const runner = fakeRunner({
+    devStatus: async () => ({ running: false }),
+    startDev: async () => { calls.start += 1; return { ok: true }; },
+    stopDev: async (p) => { calls.stop += 1; calls.stoppedProject = p; return { ok: true }; },
+  });
+  // Second devStatus (after start) reports ready so the wait loop breaks fast.
+  let n = 0;
+  runner.devStatus = async () => { n += 1; return n === 1 ? { running: false } : { running: true, project: 'p1', ready: true, tail: ['ready'] }; };
+  const r = await TOOLS.dev_server_check.execute({ waitMs: 2000 }, { runner, project: 'p1' });
+  assert.equal(r.isError, false);
+  assert.equal(calls.start, 1, 'arrancó el server');
+  assert.equal(calls.stop, 1, 'lo paró al terminar (sin fuga de slot)');
+  assert.equal(calls.stoppedProject, 'p1');
+});
+
+test('dev_server_check does NOT stop a pre-existing dev server (user preview)', async () => {
+  const calls = { start: 0, stop: 0 };
+  const runner = fakeRunner({
+    devStatus: async () => ({ running: true, project: 'p1', ready: true, tail: ['ready'] }),
+    startDev: async () => { calls.start += 1; return { ok: true }; },
+    stopDev: async () => { calls.stop += 1; return { ok: true }; },
+  });
+  const r = await TOOLS.dev_server_check.execute({ waitMs: 2000 }, { runner, project: 'p1' });
+  assert.equal(r.isError, false);
+  assert.equal(calls.start, 0, 'no rearranca el preview del usuario');
+  assert.equal(calls.stop, 0, 'NO para el preview del usuario');
+});
