@@ -1,9 +1,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-library/react'
+
+// El player llama a ElevenLabs vía apiClient al hacer clic; se mockea entero.
+const ttsMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/api', () => ({
+  apiClient: {
+    textToSpeech: ttsMock,
+    apiBaseURL: 'http://api.test/api',
+  },
+}))
+
 import { BrowserVoicePlayer } from '@/components/code/browser-voice-player'
 
-// jsdom ships no Web Speech API; install a controllable fake so we can assert the
-// component voices text 100% LOCALLY (browser speechSynthesis) with NO API call.
+// jsdom no implementa reproducción real: fakes controlables para Audio (ruta
+// ElevenLabs) y speechSynthesis (fallback local).
 let spoken: Array<{ text: string; lang: string }>
 let speakFn: ReturnType<typeof vi.fn>
 let cancelFn: ReturnType<typeof vi.fn>
@@ -20,8 +30,30 @@ class FakeUtterance {
   }
 }
 
+class FakeAudio {
+  static instances: FakeAudio[] = []
+  src: string
+  preload = ''
+  currentTime = 0
+  duration = Number.NaN
+  ontimeupdate: (() => void) | null = null
+  onloadedmetadata: (() => void) | null = null
+  onended: (() => void) | null = null
+  onerror: (() => void) | null = null
+  play = vi.fn(() => Promise.resolve())
+  pause = vi.fn()
+  constructor(src: string) {
+    this.src = src
+    FakeAudio.instances.push(this)
+  }
+}
+
+const RealAudio = globalThis.Audio
+
 beforeEach(() => {
   spoken = []
+  ttsMock.mockReset()
+  FakeAudio.instances = []
   speakFn = vi.fn((u: { text: string; lang: string }) => {
     spoken.push(u)
   })
@@ -32,62 +64,87 @@ beforeEach(() => {
     cancel: cancelFn,
     getVoices: () => [],
   }
+  ;(globalThis as unknown as { Audio: unknown }).Audio = FakeAudio
 })
 
 afterEach(() => {
   cleanup()
   delete (window as unknown as { speechSynthesis?: unknown }).speechSynthesis
+  ;(globalThis as unknown as { Audio: unknown }).Audio = RealAudio
 })
 
-describe('BrowserVoicePlayer (no-API, browser speechSynthesis)', () => {
-  it('auto-speaks the text locally on mount — never calls any network/API', () => {
-    render(<BrowserVoicePlayer text="Hola prueba de voz" />)
-    expect(speakFn).toHaveBeenCalledTimes(1)
-    expect(spoken[0].text).toBe('Hola prueba de voz')
-    expect(spoken[0].lang).toBe('es-ES')
-    expect(screen.getByTestId('browser-voice-player')).toBeTruthy()
-  })
-
-  it('autoPlay=false renders the player but stays silent until the user presses play', () => {
-    render(<BrowserVoicePlayer text="Resumen antiguo" autoPlay={false} />)
+describe('BrowserVoicePlayer (click-to-play, ElevenLabs first + local fallback)', () => {
+  it('NEVER auto-plays on mount — no speech, no API call, player idle', () => {
+    render(<BrowserVoicePlayer text="Hola prueba de voz" autoPlay />)
     expect(speakFn).not.toHaveBeenCalled()
-    const btn = screen.getByLabelText('Reproducir voz')
-    fireEvent.click(btn)
-    expect(speakFn).toHaveBeenCalledTimes(1)
-    expect(spoken[0].text).toBe('Resumen antiguo')
+    expect(ttsMock).not.toHaveBeenCalled()
+    expect(FakeAudio.instances.length).toBe(0)
+    expect(screen.getByTestId('browser-voice-player')).toBeTruthy()
+    expect(screen.getByLabelText('Reproducir voz')).toBeTruthy()
   })
 
-  it('shows a stop control while speaking and cancels the utterance on click', () => {
+  it('click play generates ElevenLabs audio with the female multilingual voice and plays it', async () => {
+    ttsMock.mockResolvedValue({ success: true, audio_url: '/elevenlabs/audio/tts_1.mp3' })
     render(<BrowserVoicePlayer text="Hola" />)
-    const btn = screen.getByLabelText('Detener voz')
-    cancelFn.mockClear()
-    fireEvent.click(btn)
-    expect(cancelFn).toHaveBeenCalled()
+    fireEvent.click(screen.getByLabelText('Reproducir voz'))
+    await waitFor(() => expect(ttsMock).toHaveBeenCalledTimes(1))
+    const payload = ttsMock.mock.calls[0][0]
+    expect(payload.voice_id).toBe('21m00Tcm4TlvDq8ikWAM')
+    expect(payload.model_id).toBe('eleven_multilingual_v2')
+    await waitFor(() => expect(FakeAudio.instances.length).toBe(1))
+    expect(FakeAudio.instances[0].src).toBe('http://api.test/api/elevenlabs/audio/tts_1.mp3')
+    await waitFor(() => expect(FakeAudio.instances[0].play).toHaveBeenCalledTimes(1))
+    expect(speakFn).not.toHaveBeenCalled()
   })
 
-  it('parent re-renders (new onAutoPlayed identity, flipped autoPlay) do NOT cancel ongoing speech', () => {
-    const { rerender } = render(<BrowserVoicePlayer text="Hola" autoPlay onAutoPlayed={() => {}} />)
-    expect(speakFn).toHaveBeenCalledTimes(1)
-    cancelFn.mockClear()
-    // Simulate the real churn: the owner consumes the fresh flag (autoPlay
-    // becomes false) and passes a brand-new callback identity every render.
-    rerender(<BrowserVoicePlayer text="Hola" autoPlay={false} onAutoPlayed={() => {}} />)
-    rerender(<BrowserVoicePlayer text="Hola" autoPlay={false} onAutoPlayed={() => {}} />)
-    expect(cancelFn).not.toHaveBeenCalled()
-    expect(speakFn).toHaveBeenCalledTimes(1)
+  it('replays from the cached MP3 without calling the API again', async () => {
+    ttsMock.mockResolvedValue({ success: true, audio_url: '/elevenlabs/audio/tts_2.mp3' })
+    render(<BrowserVoicePlayer text="Hola" />)
+    fireEvent.click(screen.getByLabelText('Reproducir voz'))
+    await waitFor(() => expect(FakeAudio.instances.length).toBe(1))
+    const audio = FakeAudio.instances[0]
+    await waitFor(() => expect(audio.play).toHaveBeenCalledTimes(1))
+    act(() => audio.onended?.())
+    fireEvent.click(screen.getByLabelText('Reproducir voz'))
+    await waitFor(() => expect(audio.play).toHaveBeenCalledTimes(2))
+    expect(ttsMock).toHaveBeenCalledTimes(1)
   })
 
-  it('cancels speech on unmount (no dangling utterance)', () => {
+  it('pauses ElevenLabs playback on second click', async () => {
+    ttsMock.mockResolvedValue({ success: true, audio_url: '/elevenlabs/audio/tts_3.mp3' })
+    render(<BrowserVoicePlayer text="Hola" />)
+    fireEvent.click(screen.getByLabelText('Reproducir voz'))
+    const pauseBtn = await screen.findByLabelText('Pausar voz')
+    fireEvent.click(pauseBtn)
+    expect(FakeAudio.instances[0].pause).toHaveBeenCalled()
+  })
+
+  it('falls back to local speechSynthesis (es) when the API rejects — FREE plan / missing key', async () => {
+    ttsMock.mockRejectedValue(new Error('payment required'))
+    render(<BrowserVoicePlayer text="Resumen hablado" />)
+    fireEvent.click(screen.getByLabelText('Reproducir voz'))
+    await waitFor(() => expect(speakFn).toHaveBeenCalledTimes(1))
+    expect(spoken[0].text).toBe('Resumen hablado')
+    expect(spoken[0].lang).toBe('es-ES')
+    expect(FakeAudio.instances.length).toBe(0)
+  })
+
+  it('stops any playback on unmount (no dangling utterance)', async () => {
+    ttsMock.mockRejectedValue(new Error('nope'))
     const { unmount } = render(<BrowserVoicePlayer text="Hola" />)
+    fireEvent.click(screen.getByLabelText('Reproducir voz'))
+    await waitFor(() => expect(speakFn).toHaveBeenCalledTimes(1))
     cancelFn.mockClear()
     unmount()
     expect(cancelFn).toHaveBeenCalled()
   })
 
-  it('degrades to nothing when speechSynthesis is unavailable (text stays the source of truth)', () => {
+  it('degrades to nothing when no voice engine exists at all', () => {
     delete (window as unknown as { speechSynthesis?: unknown }).speechSynthesis
+    ;(globalThis as unknown as { Audio: unknown }).Audio = undefined
     const { container } = render(<BrowserVoicePlayer text="Hola" />)
     expect(container.querySelector('[data-testid="browser-voice-player"]')).toBeNull()
     expect(speakFn).not.toHaveBeenCalled()
+    expect(ttsMock).not.toHaveBeenCalled()
   })
 })

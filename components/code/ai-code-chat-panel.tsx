@@ -829,9 +829,9 @@ export function AICodeChatPanel() {
   const codexProjectRef = React.useRef<Record<string, string>>({})
 
   const abortRef = React.useRef<AbortController | null>(null)
-  // Turn ids whose `voice` was created in THIS panel instance. Only these
-  // auto-speak; turns rehydrated from localStorage render the player silent
-  // (otherwise every page reload would re-voice the whole history).
+  // Turn ids whose `voice` was created in THIS panel instance. La voz ya no
+  // se auto-reproduce nunca (solo al clic del usuario), pero el marcador se
+  // conserva por si hace falta distinguir turnos frescos de rehidratados.
   const freshVoiceIdsRef = React.useRef<Set<string>>(new Set())
   const markVoiced = React.useCallback((turnId: string) => {
     freshVoiceIdsRef.current.add(turnId)
@@ -2759,8 +2759,6 @@ export function AICodeChatPanel() {
                 <ChatBubble
                   turn={turn}
                   lookupContent={(path) => files[path]?.content ?? ""}
-                  autoPlayVoice={freshVoiceIdsRef.current.has(turn.id)}
-                  onVoiceAutoPlayed={() => freshVoiceIdsRef.current.delete(turn.id)}
                 />
               </CodeChatErrorBoundary>
             ))}
@@ -2904,17 +2902,9 @@ function EmptyChat({ active }: { active: boolean }) {
 function ChatBubble({
   turn,
   lookupContent,
-  autoPlayVoice = false,
-  onVoiceAutoPlayed,
 }: {
   turn: CodeChatTurn
   lookupContent: (path: string) => string
-  /** True only for voiced turns created in this panel instance — rehydrated
-   *  history renders the player but must not speak on page load. */
-  autoPlayVoice?: boolean
-  /** Consumes the fresh flag once spoken, so re-mounts (session switches)
-   *  don't re-voice the turn. */
-  onVoiceAutoPlayed?: () => void
 }) {
   const isUser = turn.role === "user"
   const blocks = React.useMemo(
@@ -2965,12 +2955,13 @@ function ChatBubble({
       <CodeAgentProgress phases={turn.agentPhases} />
       {/* Voiced turn (e.g. the greeting): action rows + inline voice player
           ABOVE the text, so the reply reads actions → audio → text. The player
-          is the browser's built-in speech synthesis (no API/key/cost). Only for
-          turns that carry `voice`; build turns keep their original layout. */}
+          generates ElevenLabs audio (voz femenina multilingüe) SOLO cuando el
+          usuario pulsa play — nunca automático — con fallback local gratuito.
+          Only for turns that carry `voice`; build turns keep their layout. */}
       {turn.voice ? (
         <div className="mb-2 space-y-2">
           {turn.actions && turn.actions.length > 0 ? <ChatActionLog actions={turn.actions} /> : null}
-          <BrowserVoicePlayer text={turn.voice} autoPlay={autoPlayVoice} onAutoPlayed={onVoiceAutoPlayed} />
+          <BrowserVoicePlayer text={turn.voice} />
         </div>
       ) : null}
       {/* An out-of-credits / quota error surfaces as a high-visibility panel
