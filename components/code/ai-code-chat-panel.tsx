@@ -45,6 +45,7 @@ import {
 } from "lucide-react"
 import { BrowserVoicePlayer } from "@/components/code/browser-voice-player"
 import { tierForModelChoice } from "@/lib/codex/model-tiers"
+import { pullProjectFiles } from "@/lib/code-agent/codex-file-pull"
 import { buildSpokenSummary } from "@/lib/code-agent/spoken-summary"
 import { CodeChatErrorBoundary } from "@/components/code/code-chat-error-boundary"
 import { toast } from "sonner"
@@ -2359,31 +2360,42 @@ export function AICodeChatPanel() {
           const sourcePaths = paths
             .filter((p) => !/(^|\/)(node_modules|\.git|dist|build|\.next)\//.test(p))
             .slice(0, 80)
-          const pulled = await Promise.all(
-            sourcePaths.map(async (path) => {
-              try {
-                const file = await codexApi.readFileContent(projectId!, path)
-                return file?.content ? { path, content: file.content } : null
-              } catch {
-                return null
-              }
-            }),
+          const { files: written, failed: pullFailed } = await pullProjectFiles(
+            codexApi,
+            projectId!,
+            sourcePaths,
           )
-          const written = pulled.filter((f): f is { path: string; content: string } => Boolean(f))
           // Cancelled while pulling the files back → never apply post-cancel.
           if (cancelledTurn()) {
             finishStopped()
             return
           }
+          // Iterate edits an EXISTING project: applying a partial tree mixes
+          // stale local files with the remote edit — worse than not touching
+          // anything. Refuse when >20% stayed unreadable after the retry.
+          if (iterate && pullFailed.length > 0 && pullFailed.length * 5 > sourcePaths.length) {
+            finish(
+              `⚠️ No apliqué los cambios: ${pullFailed.length} de ${sourcePaths.length} archivo(s) no se pudieron leer del workspace remoto — aplicar un árbol parcial dejaría el proyecto mezclado. Reintenta la iteración.`,
+            )
+            toast.error(
+              `Agente Codex — lectura incompleta (${pullFailed.length}/${sourcePaths.length}); no se aplicó nada`,
+            )
+            return
+          }
           if (written.length > 0) {
             applyFilesToWorkspace(written)
+            const tally =
+              pullFailed.length > 0
+                ? `${written.length} de ${sourcePaths.length} archivo(s) (${pullFailed.length} no se pudieron leer)`
+                : `${written.length} archivo(s)`
             finish(
               narrative
-                ? `${narrative}\n\n_(Agente Codex: ${written.length} archivo(s) →)_`
-                : `✅ Agente Codex — ${written.length} archivo(s) →`,
+                ? `${narrative}\n\n_(Agente Codex: ${tally} →)_`
+                : `✅ Agente Codex — ${tally} →`,
               { written },
             )
-            toast.success(`Agente Codex — ${written.length} archivo(s) →`)
+            if (pullFailed.length > 0) toast.warning(`Agente Codex — ${tally}`)
+            else toast.success(`Agente Codex — ${written.length} archivo(s) →`)
             return
           }
           // Run finished OK but produced no files (e.g. a pure Q&A/plan turn):
