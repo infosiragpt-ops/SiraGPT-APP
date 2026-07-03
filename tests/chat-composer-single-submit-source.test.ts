@@ -47,30 +47,41 @@ describe("chat composer single-submit source contract", () => {
   })
 
   it("guards the normal chat send path with a synchronous in-flight ref", () => {
+    // The global boolean lock (sendInFlightRef) became a PER-SEND keyed map so
+    // one chat's streaming turn no longer blocks sending in other chats
+    // (6af6361b7). The double-submit guarantee is unchanged: a synchronous ref
+    // (state updates are too late for double tap/key events) checked BEFORE the
+    // optimistic user message, released when the pipeline settles.
     assert.match(
       source,
-      /const sendInFlightRef = React\.useRef\(false\)/,
-      "handleSend needs a synchronous ref lock; React state updates are too late for double tap/key events"
+      /const inFlightSendKeysRef = React\.useRef<Map<string/,
+      "handleSend needs a synchronous keyed ref lock; React state updates are too late for double tap/key events"
     )
 
-    const normalSendStart = source.indexOf("// Optimistically add the user message to the UI immediately.")
-    assert.notEqual(normalSendStart, -1, "missing normal chat optimistic-send marker")
-    const normalSendPreamble = source.slice(Math.max(0, normalSendStart - 240), normalSendStart)
     assert.match(
-      normalSendPreamble,
-      /if \(sendInFlightRef\.current\) return;[\s\S]{0,120}sendInFlightRef\.current = true;/,
-      "the normal chat route must acquire the lock before adding the optimistic user message"
+      source,
+      /const sendKey = `\$\{currentChat\?\.id \|\| "new"\}[\s\S]{0,160}\$\{fileKey\}`;/,
+      "the send key must identify the send (chat + model + message + files) so duplicates dedupe but other chats stay unblocked"
     )
 
-    const finallyStart = source.indexOf("    } finally {", normalSendStart)
-    assert.notEqual(finallyStart, -1, "missing handleSend finally block")
-    const finallyEnd = source.indexOf("  }\n  const handleGmailCommand", finallyStart)
-    assert.notEqual(finallyEnd, -1, "missing handleSend end marker")
-    const sendFinally = source.slice(finallyStart, finallyEnd)
     assert.match(
-      sendFinally,
-      /sendInFlightRef\.current = false;/,
-      "the in-flight lock must release when the send pipeline finishes or errors"
+      source,
+      /if \(inFlightSendKeysRef\.current\.has\(sendKey\)\) \{\s*return;/,
+      "a duplicate in-flight send (same key) must return synchronously before any state or network work"
+    )
+
+    const guardIndex = source.indexOf("if (inFlightSendKeysRef.current.has(sendKey))")
+    const optimisticIndex = source.indexOf("// Optimistically add the user message to the UI immediately.")
+    assert.notEqual(optimisticIndex, -1, "missing normal chat optimistic-send marker")
+    assert.ok(
+      guardIndex !== -1 && guardIndex < optimisticIndex,
+      "the keyed lock must be acquired before adding the optimistic user message"
+    )
+
+    assert.match(
+      source,
+      /inFlightSendKeysRef\.current\.delete\(sendKey\);/,
+      "the in-flight key must release when the send pipeline finishes or errors"
     )
   })
 })

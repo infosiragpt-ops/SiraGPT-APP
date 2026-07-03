@@ -252,14 +252,23 @@ describe("chat video auto-activation source contract", () => {
       /if \(isGeneratingVoice\) return;[\s\S]{0,120}setIsVoiceGenerationActive\(false\);/,
       "The Voice chip close button must not deactivate the tool mid-generation"
     )
+    // With parallel chats the stop button became per-chat: voice now flows
+    // through isCurrentChatMediaBusy (which must keep listing isGeneratingVoice)
+    // into isStopButtonVisible/shouldPrioritizeStopButton. Same guarantee,
+    // per-chat scoped.
     assert.match(
       source,
-      /const isStopButtonVisible =[\s\S]{0,220}isGeneratingVoice/,
+      /const isCurrentChatMediaBusy =[\s\S]{0,220}isGeneratingVoice/,
+      "Voice generation must count as current-chat media busy"
+    )
+    assert.match(
+      source,
+      /const isStopButtonVisible =[\s\S]{0,260}isCurrentChatMediaBusy/,
       "Voice generation should force the stop button visible"
     )
     assert.match(
       source,
-      /const shouldPrioritizeStopButton = isGeneratingVoice \|\| isGeneratingImage \|\| isGeneratingVideo \|\| isGeneratingPPT/,
+      /const shouldPrioritizeStopButton = isCurrentChatMediaBusy/,
       "Voice generation should prioritize cancel over queue-send"
     )
     assert.match(
