@@ -762,19 +762,19 @@ function parseInlineSeries(text) {
 }
 
 async function extractVisualSpecWithLLM({ requestText, sourceText, fallbackType, signal }) {
-  if (!process.env.OPENAI_API_KEY) return null;
-  let createContentClient;
-  let DEFAULT_MODEL;
+  let resolveContentClient;
   try {
     // eslint-disable-next-line global-require
-    ({ createContentClient, DEFAULT_MODEL } = require('./document-pipeline/content/llm-client'));
+    ({ resolveContentClient } = require('./document-pipeline/content/llm-client'));
   } catch {
     return null;
   }
+  const resolved = resolveContentClient();
+  if (!resolved) return null;
   try {
-    const client = createContentClient('OpenAI');
+    const client = resolved.client;
     const completion = await client.chat.completions.create({
-      model: DEFAULT_MODEL,
+      model: resolved.model,
       messages: [
         {
           role: 'system',

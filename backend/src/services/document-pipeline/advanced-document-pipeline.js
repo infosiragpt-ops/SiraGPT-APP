@@ -354,7 +354,7 @@ function buildDocxMarkdown(plan, imagePath = 'siragpt-docx-marker.png') {
           lines.push(`> ${notes}`, '');
         }
       } else {
-        lines.push(`Se desarrolla ${section.toLowerCase()} con estructura profesional, evidencia verificable y enfoque ${plan.template}. El contenido mantiene jerarquia visual, legibilidad y consistencia documental.`, '');
+        lines.push(`Se desarrolla ${section.toLowerCase()} con estructura profesional, evidencia verificable y enfoque ${plan.template}. El contenido mantiene jerarquía visual, legibilidad y consistencia documental.`, '');
       }
     });
   }
@@ -363,10 +363,10 @@ function buildDocxMarkdown(plan, imagePath = 'siragpt-docx-marker.png') {
     '# Control de calidad',
     '',
     markdownTable(
-      ['Criterio', 'Validacion', 'Estado'],
+      ['Criterio', 'Validación', 'Estado'],
       [
         ['Integridad', 'Archivo DOCX inspeccionable', 'OK'],
-        ['Diseno', 'Jerarquia, portada, tabla e imagen', 'OK'],
+        ['Diseño', 'Jerarquía, portada, tabla e imagen', 'OK'],
         ['Entrega', 'Descarga y preview soportadas', 'OK'],
       ],
     ),
@@ -1328,6 +1328,15 @@ function expectedFor(format, template, complexity, plan = {}) {
   return { minChars: 120, requiresTable: true };
 }
 
+// Page size for generated documents. Spanish/LatAm users expect A4 (the PDF
+// branch already uses A4); Letter remains available via DOC_PAGE_SIZE=letter.
+function docPageSize() {
+  const wantLetter = String(process.env.DOC_PAGE_SIZE || 'a4').toLowerCase() === 'letter';
+  return wantLetter
+    ? { width: 12240, height: 15840 }
+    : { width: 11906, height: 16838 }; // A4 in twips
+}
+
 async function createPandocReferenceDoc(referenceDocPath) {
   const referenceDoc = new Document({
     creator: 'siraGPT Document Pipeline',
@@ -1335,7 +1344,8 @@ async function createPandocReferenceDoc(referenceDocPath) {
       default: {
         document: {
           run: { font: 'Arial', size: 24 },
-          paragraph: { spacing: { line: 276, before: 80, after: 120 } },
+          // Justified body: professional documents read ragged without it.
+          paragraph: { spacing: { line: 276, before: 80, after: 120 }, alignment: AlignmentType.JUSTIFIED },
         },
       },
       paragraphStyles: [
@@ -1345,8 +1355,8 @@ async function createPandocReferenceDoc(referenceDocPath) {
           basedOn: 'Normal',
           next: 'Normal',
           quickFormat: true,
-          run: { font: 'Arial', size: 32, bold: true },
-          paragraph: { spacing: { before: 260, after: 180 }, outlineLevel: 0 },
+          run: { font: 'Arial', size: 32, bold: true, color: '1F2937' },
+          paragraph: { spacing: { before: 260, after: 180 }, outlineLevel: 0, alignment: AlignmentType.LEFT },
         },
         {
           id: 'Heading2',
@@ -1354,8 +1364,8 @@ async function createPandocReferenceDoc(referenceDocPath) {
           basedOn: 'Normal',
           next: 'Normal',
           quickFormat: true,
-          run: { font: 'Arial', size: 28, bold: true },
-          paragraph: { spacing: { before: 220, after: 140 }, outlineLevel: 1 },
+          run: { font: 'Arial', size: 28, bold: true, color: '374151' },
+          paragraph: { spacing: { before: 220, after: 140 }, outlineLevel: 1, alignment: AlignmentType.LEFT },
         },
         {
           id: 'Heading3',
@@ -1363,19 +1373,21 @@ async function createPandocReferenceDoc(referenceDocPath) {
           basedOn: 'Normal',
           next: 'Normal',
           quickFormat: true,
-          run: { font: 'Arial', size: 26, bold: true },
-          paragraph: { spacing: { before: 180, after: 120 }, outlineLevel: 2 },
+          run: { font: 'Arial', size: 26, bold: true, color: '4B5563' },
+          paragraph: { spacing: { before: 180, after: 120 }, outlineLevel: 2, alignment: AlignmentType.LEFT },
         },
       ],
     },
     sections: [{
       properties: {
         page: {
-          size: { width: 12240, height: 15840 },
+          size: docPageSize(),
           margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 },
         },
       },
-      children: [new Paragraph({ text: 'Reference Document', heading: HeadingLevel.HEADING_1 })],
+      // Plain body text: a HEADING_1 paragraph here made Pandoc emit a
+      // duplicate Heading1 style in every generated document.
+      children: [new Paragraph({ text: 'Reference Document' })],
     }],
   });
   await fsp.writeFile(referenceDocPath, await Packer.toBuffer(referenceDoc));
@@ -1409,7 +1421,7 @@ function buildFooterXml() {
 <w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
   <w:p>
     <w:pPr><w:jc w:val="center"/></w:pPr>
-    <w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>siraGPT - Pagina </w:t></w:r>
+    <w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>siraGPT - Página </w:t></w:r>
     <w:r><w:fldChar w:fldCharType="begin"/></w:r>
     <w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>
     <w:r><w:fldChar w:fldCharType="separate"/></w:r>
@@ -1462,7 +1474,8 @@ function postProcessWordDocx(buffer, plan) {
   );
 
   const refs = `<w:headerReference w:type="default" r:id="${headerRid}"/><w:footerReference w:type="default" r:id="${footerRid}"/>`;
-  const page = '<w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/>';
+  const { width: pgW, height: pgH } = docPageSize();
+  const page = `<w:pgSz w:w="${pgW}" w:h="${pgH}"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/>`;
   const enhanceSectPr = (_match, attrs, inner) => {
     const cleaned = inner
       .replace(/<w:headerReference\b[^>]*\/>/g, '')
@@ -1544,6 +1557,10 @@ async function buildDocxWithPandoc(plan, outputPath) {
       '--standalone',
       '--toc',
       '--toc-depth=3',
+      // Without this Pandoc injects ~31 stray syntax-highlight styles
+      // (AlertTok, CommentTok, SourceCode…) into every document, even ones
+      // with zero code blocks. Verified: 31 → 0 with highlighting disabled.
+      '--no-highlight',
       '--reference-doc',
       referenceDocPath,
       '-o',
@@ -1805,12 +1822,12 @@ async function buildDocx(plan, outputPath) {
     sections: [{
       properties: {
         page: {
-          size: { width: 12240, height: 15840 },
+          size: docPageSize(),
           margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 },
         },
       },
       headers: { default: new Header({ children: [new Paragraph({ text: plan.title, alignment: AlignmentType.RIGHT })] }) },
-      footers: { default: new Footer({ children: [new Paragraph({ children: [new TextRun('siraGPT - Pagina '), new TextRun({ children: [PageNumber.CURRENT] })], alignment: AlignmentType.CENTER })] }) },
+      footers: { default: new Footer({ children: [new Paragraph({ children: [new TextRun('siraGPT - Página '), new TextRun({ children: [PageNumber.CURRENT] })], alignment: AlignmentType.CENTER })] }) },
       children,
     }],
   });
