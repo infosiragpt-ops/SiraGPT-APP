@@ -39,11 +39,13 @@ const runnerCalls = [];
 const runnerPath = require.resolve('../src/services/codex/runner-client');
 const restoreRunner = mockResolvedModule(runnerPath, {
   createRunnerClient: () => ({
-    startDev: async (project, opts) => { runnerCalls.push(['startDev', project, opts]); return { ok: true, port: 5173, project }; },
+    // Multi-project runner: /run reports the project's assigned pool port and
+    // the proxy targets it, so the mock port must be settable per test.
+    startDev: async (project, opts) => { runnerCalls.push(['startDev', project, opts]); return { ok: true, port: runnerMockPort, project }; },
     devStatus: async () => {
       runnerStatusCalls++;
       if (runnerStatusQueue && runnerStatusQueue.length > 0) return runnerStatusQueue.shift();
-      return { running: true, ready: true, project: 'p1' };
+      return { running: true, ready: true, project: 'p1', port: runnerMockPort };
     },
     stopDev: async () => ({ ok: true }),
     exportWorkspace: async (project) => { runnerCalls.push(['exportWorkspace', project]); return { ok: true, project, files: 5 }; },
@@ -59,6 +61,7 @@ const codexRoutes = require('../src/routes/codex');
 
 let runnerStatusQueue = null;
 let runnerStatusCalls = 0;
+let runnerMockPort = 5173;
 
 after(() => {
   restoreAuth();
@@ -78,6 +81,7 @@ beforeEach(() => {
   runnerCalls.length = 0;
   runnerStatusQueue = null;
   runnerStatusCalls = 0;
+  runnerMockPort = 5173;
 });
 
 function buildApp() {
@@ -168,6 +172,7 @@ test('tokenized preview proxy strips credentials and forces frame headers', asyn
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address();
   process.env.CODE_RUNNER_DEV_INTERNAL_URL = `http://127.0.0.1:${port}`;
+  runnerMockPort = port; // proxy targets the project's runner-assigned port
   try {
     const start = await request(buildApp()).post('/api/codex/projects/p1/preview/start');
     assert.equal(start.status, 200);
@@ -198,6 +203,7 @@ test('tokenized preview proxy can override Host header for Vite allowedHosts', a
   const { port } = server.address();
   process.env.CODE_RUNNER_DEV_INTERNAL_URL = `http://127.0.0.1:${port}`;
   process.env.CODE_RUNNER_DEV_PROXY_HOST_HEADER = `localhost:${port}`;
+  runnerMockPort = port; // proxy targets the project's runner-assigned port
   try {
     const start = await request(buildApp()).post('/api/codex/projects/p1/preview/start');
     assert.equal(start.status, 200);

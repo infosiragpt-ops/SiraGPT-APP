@@ -75,6 +75,31 @@ function formatSchema(schema) {
   return lines.join('\n');
 }
 
+const PLAN_TASK_STATUSES = ['pending', 'in_progress', 'completed'];
+
+/**
+ * Validate + normalise an update_plan `tasks` argument into the plan_updated
+ * payload shape `[{ id, title, status }]`. Returns null when the shape is
+ * unrecoverable (not an array, or an entry without a usable id/status). Tolerant
+ * of a missing/blank title (derived from id) but strict on id + a known status
+ * so a bogus call surfaces as a tool error instead of a malformed event.
+ */
+function normalisePlanTasks(raw) {
+  if (!Array.isArray(raw)) return null;
+  const out = [];
+  for (let i = 0; i < raw.length; i += 1) {
+    const t = raw[i];
+    if (!t || typeof t !== 'object' || Array.isArray(t)) return null;
+    const id = typeof t.id === 'string' && t.id.trim() ? t.id.trim() : '';
+    if (!id) return null;
+    const status = typeof t.status === 'string' ? t.status.trim() : '';
+    if (!PLAN_TASK_STATUSES.includes(status)) return null;
+    const title = typeof t.title === 'string' && t.title.trim() ? t.title.trim() : id;
+    out.push({ id, title, status });
+  }
+  return out;
+}
+
 const TOOLS = {
   run_command: {
     kind: 'terminal',
@@ -292,21 +317,34 @@ const TOOLS = {
     pathFor: () => null,
     async execute(args, ctx) {
       const sleep = (ms) => new Promise((r) => { setTimeout(r, ms); });
+      // Track whether WE started the server: if the user's preview was already
+      // running for this project we must NOT stop it (that would kill the live
+      // preview). If we started it only for the check, stop it at the end so we
+      // don't leak a runner pool slot (mirrors agent-loop.verifyDevServer).
+      let startedByUs = false;
       try {
-        let status = await ctx.runner.devStatus();
+        let status = await ctx.runner.devStatus(ctx.project);
         // Not running (or running another project) → (re)start it for this one.
         if (!status?.running || (status.project && status.project !== ctx.project)) {
           await ctx.runner.startDev(ctx.project);
+          startedByUs = true;
         }
         const deadline = Date.now() + Math.min(Math.max(Number(args?.waitMs) || 20000, 2000), 60000);
         do {
           await sleep(1500);
-          status = await ctx.runner.devStatus();
+          status = await ctx.runner.devStatus(ctx.project);
           if (status?.ready || status?.error) break;
         } while (Date.now() < deadline);
 
+        // Capture the tail/status the agent needs BEFORE releasing the slot.
         const tail = Array.isArray(status?.tail) ? status.tail.join('\n') : '';
         const errLines = tail.split('\n').filter((l) => /error|failed|cannot|not found|exception/i.test(l)).join('\n');
+        // We only started a throwaway server for the check → release it now that
+        // we've read the status. A pre-existing server (the user's preview) is
+        // left running.
+        if (startedByUs && typeof ctx.runner.stopDev === 'function') {
+          await ctx.runner.stopDev(ctx.project).catch(() => {});
+        }
         if (status?.ready && !errLines) {
           return { isError: false, summary: 'dev server listo', observation: `OK: el dev server está corriendo y responde.\nÚltimos logs:\n${summarise(tail, 1500)}` };
         }
@@ -319,6 +357,10 @@ const TOOLS = {
           observation: `El dev server NO está listo${status?.error ? ` (error: ${status.error})` : ''}.\nLogs:\n${summarise(tail, 2500)}\nDiagnostica y corrige el problema (revisa imports, package.json y sintaxis).`,
         };
       } catch (err) {
+        // On a failure after we started it, still release the slot we grabbed.
+        if (startedByUs && typeof ctx.runner.stopDev === 'function') {
+          await ctx.runner.stopDev(ctx.project).catch(() => {});
+        }
         return { isError: true, summary: `runner error: ${err.message}`, observation: `No pude consultar el dev server: ${err.message}` };
       }
     },
@@ -348,13 +390,58 @@ const TOOLS = {
           name: String(args?.agent || ''),
           task: String(args?.task || ''),
           context: String(args?.context || ''),
-          deps: { runner: ctx.runner, project: ctx.project, webSearch: ctx.webSearch, env: ctx.env, llmTurn: ctx.llmTurn, signal: ctx.signal, onUsage: ctx.onUsage, emitAction: ctx.emitAction, customAgents },
+          deps: { runner: ctx.runner, project: ctx.project, webSearch: ctx.webSearch, env: ctx.env, llmTurn: ctx.llmTurn, tier: ctx.tier || null, signal: ctx.signal, onUsage: ctx.onUsage, emitAction: ctx.emitAction, customAgents },
         });
         const report = sdk.formatSubagentReport(outcome);
         return { isError: !outcome.ok, summary: `${outcome.agent}: ${outcome.ok ? 'completado' : 'falló'} (${outcome.toolCallsCount} herramientas)`, observation: report };
       } catch (err) {
         return { isError: true, summary: `subagente falló: ${err.message}`, observation: `Error ejecutando el subagente: ${err.message}` };
       }
+    },
+  },
+
+  update_plan: {
+    kind: 'terminal',
+    description: 'Actualiza el estado del plan aprobado (como TodoWrite): marca cada tarea del plan como pending, in_progress o completed a medida que avanzas. Llama a esta herramienta para poner una tarea en in_progress ANTES de empezarla y en completed al terminarla, ANTES de pasar a la siguiente. Pasa la lista COMPLETA de tareas del plan (id + title + status) en cada llamada. No toca archivos: solo refleja tu progreso en el checklist de la UI.',
+    parameters: {
+      type: 'object',
+      properties: {
+        tasks: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', description: 'Id de la tarea (el mismo del plan).' },
+              title: { type: 'string', description: 'Título de la tarea.' },
+              status: { type: 'string', enum: ['pending', 'in_progress', 'completed'], description: 'Estado actual de la tarea.' },
+            },
+            required: ['id', 'status'],
+          },
+          description: 'Lista completa de tareas del plan con su estado actual.',
+        },
+      },
+      required: ['tasks'],
+    },
+    commandFor: () => 'update plan',
+    pathFor: () => null,
+    async execute(args) {
+      const tasks = normalisePlanTasks(args?.tasks);
+      if (!tasks) {
+        return { isError: true, summary: 'tasks inválido', observation: 'Error: `tasks` debe ser un array de { id, title?, status } donde status ∈ pending|in_progress|completed.' };
+      }
+      if (!tasks.length) {
+        return { isError: true, summary: 'tasks vacío', observation: 'Error: `tasks` no puede estar vacío. Pasa la lista completa de tareas del plan con su estado.' };
+      }
+      const inProgress = tasks.filter((t) => t.status === 'in_progress').length;
+      const completed = tasks.filter((t) => t.status === 'completed').length;
+      // planTasks is the signal the build loop reads to emit a plan_updated event
+      // instead of a generic action_end (the tool touches no filesystem).
+      return {
+        isError: false,
+        planTasks: tasks,
+        summary: `plan: ${completed}/${tasks.length} completadas${inProgress ? `, ${inProgress} en curso` : ''}`,
+        observation: `OK: plan actualizado (${completed}/${tasks.length} completadas${inProgress ? `, ${inProgress} en curso` : ''}). Sigue con la siguiente tarea pendiente.`,
+      };
     },
   },
 
@@ -397,4 +484,4 @@ function getTool(name) {
   return TOOLS[name] || null;
 }
 
-module.exports = { TOOLS, toolRegistry, getTool, lineCount, summarise, parsePrismaSchema, formatSchema };
+module.exports = { TOOLS, toolRegistry, getTool, lineCount, summarise, parsePrismaSchema, formatSchema, normalisePlanTasks, PLAN_TASK_STATUSES };

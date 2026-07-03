@@ -73,21 +73,32 @@ function buildSystemPrompt({ language = 'es', template = 'premium' } = {}) {
   ].join(' ');
 }
 
-function buildUserPrompt({ userRequest, documentTitle, sectionName, language = 'es' }) {
+function buildUserPrompt({ userRequest, documentTitle, sectionName, language = 'es', targetWords = null }) {
+  // Explicit user length constraints override the schema's default
+  // 80-160-word guidance — "en 200 palabras" must produce ~200 words total,
+  // not 160 words times eight sections.
+  const lengthLineEn = targetWords
+    ? `Length constraint: the paragraph must be about ${targetWords} words (hard requirement from the user). ${targetWords < 80 ? 'Skip optional detail; 2-3 tight sentences. Keep bullets to 3 short items.' : ''}`
+    : null;
+  const lengthLineEs = targetWords
+    ? `Restricción de extensión: el párrafo debe rondar las ${targetWords} palabras (requisito explícito del usuario). ${targetWords < 80 ? 'Omite detalle opcional; 2-3 frases precisas. Máximo 3 bullets cortos.' : ''}`
+    : null;
   if (language === 'en') {
     return [
       `User request: ${userRequest}`,
       `Document title: ${documentTitle}`,
       `Section to write: ${sectionName}`,
+      lengthLineEn,
       'Write the JSON now. Treat the section name literally — if it is "Risks", write actual risks specific to the user request, not generic risk-management theory. If it is "Methodology", describe the actual steps that would apply to this request, not a textbook list of methods.',
-    ].join('\n');
+    ].filter(Boolean).join('\n');
   }
   return [
     `Solicitud del usuario: ${userRequest}`,
     `Título del documento: ${documentTitle}`,
     `Sección a redactar: ${sectionName}`,
+    lengthLineEs,
     'Redacta el JSON ahora. Trata el nombre de la sección de forma literal — si es "Riesgos", escribe riesgos reales específicos a la solicitud del usuario, no teoría genérica de gestión de riesgos. Si es "Metodología", describe los pasos reales aplicables a esta solicitud, no una lista de manual.',
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 module.exports = { SECTION_CONTENT_SCHEMA, buildSystemPrompt, buildUserPrompt };

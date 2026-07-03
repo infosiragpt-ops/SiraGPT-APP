@@ -28,6 +28,15 @@ const DEFAULT_MAX_STEPS = 24;
 const DEFAULT_MAX_TOOLS_PER_TURN = 4;
 const DEFAULT_CONTEXT_MAX_CHARS = 60_000;
 const DEFAULT_MAX_VERIFY_ROUNDS = 2;
+// Optional runtime verification (flag-gated OFF by default): after a clean tsc
+// (or when there is nothing to typecheck) the loop can additionally boot the
+// project's dev server via the runner and feed real boot/runtime errors
+// (module-not-found, Vite overlay, a server that never becomes ready) back to
+// the model for a repair round — errors tsc alone can't catch.
+const DEFAULT_VERIFY_DEV_TIMEOUT_MS = 60_000;
+// Anti-thrash: how many consecutive writes to the SAME file before the loop
+// nudges the model to stop rewriting it and advance to the next plan step.
+const DEFAULT_MAX_SAME_FILE_WRITES = 3;
 // Keep this many tail messages verbatim when compacting (the model needs the
 // recent working set intact; older tool dumps compress well).
 const COMPACT_KEEP_TAIL = 10;
@@ -187,6 +196,7 @@ function buildSystemPrompt({ project, plan, fileTree, sourcePrompt }) {
     'NO inicialices frameworks ni ejecutes scaffolds interactivos (create-next-app/create-vite); construye componentes React (.tsx) editando/creando archivos en src/ con write_file/edit_file.',
     'Si necesitas estructura adicional, crea archivos concretos tú mismo. Usa run_command solo para verificar, instalar dependencias declaradas o revisar git.',
     'Antes de editar un archivo existente, léelo (read_file) y usa edit_file con el fragmento EXACTO; usa list_files/grep_search para orientarte en el workspace en vez de adivinar rutas.',
+    'NO reescribas un archivo que ya escribiste salvo para corregir un error concreto (uno que viste en type_check o dev_server_check). Construye archivo por archivo siguiendo el plan; NO intentes hacerlo "todo de una vez" reescribiendo el mismo archivo una y otra vez. Cuando un archivo esté listo, avanza al siguiente paso del plan.',
     'Antes de dar por terminado, asegúrate de que el proyecto compila (el sistema ejecutará una verificación de tipos al final y te devolverá los errores si los hay).',
     'Nunca dependas de prompts interactivos de terminal; los comandos deben terminar solos.',
     'VERIFICA tu trabajo como lo haría un ingeniero: después de crear o editar código usa type_check para ver los errores reales de compilación y dev_server_check para confirmar que la app corre; corrige lo que salga antes de dar el trabajo por terminado.',
@@ -202,6 +212,7 @@ function buildSystemPrompt({ project, plan, fileTree, sourcePrompt }) {
   if (plan) {
     lines.push('Plan aprobado por el usuario (síguelo):');
     lines.push(JSON.stringify(plan));
+    lines.push('Mantén el checklist del plan al día con update_plan (como TodoWrite): ANTES de empezar una tarea, llama update_plan marcándola in_progress; al terminarla, llama update_plan marcándola completed, ANTES de avanzar a la siguiente. Pasa SIEMPRE la lista COMPLETA de tareas del plan (id + title + status) en cada llamada, no solo la que cambió. Usa exactamente los mismos id y title del plan.');
   }
   if (fileTree) {
     lines.push('Archivos actuales del workspace:');
@@ -234,11 +245,89 @@ function compactMessages(messages, { maxChars = DEFAULT_CONTEXT_MAX_CHARS } = {}
 }
 
 /**
+ * Optional runtime verification (flag-gated by CODEX_VERIFY_DEV_SERVER, OFF by
+ * default). Boots the project's dev server through the runner and waits — with a
+ * bounded timeout — for it to become ready. Reuses the `dev_server_check`
+ * runner contract (devStatus/startDev). Returns:
+ *   - { ran:true, ok:true }                     → dev server ready, no errors.
+ *   - { ran:true, ok:false, errors }            → real runtime/boot error to feed back.
+ *   - { ran:false, ok:true }                    → infra unavailable / cannot boot for
+ *                                                 non-code reasons → degrade to "not
+ *                                                 verified" (NEVER fails a good build).
+ * Best-effort by contract: any runner/env failure is treated as "not verified",
+ * exactly like the tsc path. When it started the server itself it stops it so the
+ * verification never leaves a dev server hanging.
+ */
+async function verifyDevServer({ runner, projectId, run, eventStore, prisma, metrics, clock, env = process.env, actionId, groupId }) {
+  if (String(env.CODEX_VERIFY_DEV_SERVER ?? '0') !== '1') return { ran: false, ok: true };
+  if (typeof runner?.devStatus !== 'function' || typeof runner?.startDev !== 'function') return { ran: false, ok: true };
+
+  const timeoutMs = readPosInt(env.CODEX_VERIFY_DEV_TIMEOUT_MS, DEFAULT_VERIFY_DEV_TIMEOUT_MS);
+  const sleep = (ms) => new Promise((r) => { setTimeout(r, ms); });
+
+  await eventStore.appendEvent(run.id, 'action_start', { actionId, kind: 'terminal', command: 'verificación runtime: dev server', groupId }, { prisma }).catch(() => {});
+  const t0 = clock().getTime();
+  let startedByUs = false;
+  let status = null;
+  try {
+    status = await runner.devStatus(projectId);
+    // Not running (or running a DIFFERENT project) → (re)start it for this one.
+    if (!status?.running || (status.project && status.project !== projectId)) {
+      await runner.startDev(projectId);
+      startedByUs = true;
+    }
+    const deadline = Date.now() + timeoutMs;
+    do {
+      await sleep(1500);
+      status = await runner.devStatus(projectId);
+      if (status?.ready || status?.error) break;
+    } while (Date.now() < deadline);
+  } catch (err) {
+    // Runner/infra failure (not a code failure) → skip runtime verification
+    // honestly, and stop a server we started so nothing hangs.
+    if (startedByUs && typeof runner.stopDev === 'function') await runner.stopDev(projectId).catch(() => {});
+    await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'error', outputSummary: `verificación runtime no disponible: ${err.message}`, durationMs: Math.max(0, clock().getTime() - t0) }, { prisma }).catch(() => {});
+    return { ran: false, ok: true };
+  }
+
+  const durationMs = Math.max(0, clock().getTime() - t0);
+  const tail = Array.isArray(status?.tail) ? status.tail.join('\n') : '';
+  const errLines = tail.split('\n').filter((l) => /error|failed|cannot|not found|exception/i.test(l)).join('\n');
+  const ok = Boolean(status?.ready) && !status?.error && !errLines;
+
+  if (ok) {
+    await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'done', outputSummary: 'dev server arranca y responde', durationMs }, { prisma }).catch(() => {});
+    if (metrics?.recordAction) metrics.recordAction('terminal', durationMs);
+    return { ran: true, ok: true };
+  }
+
+  // A dev server that never became ready and reported NO error/log tail is an
+  // infra symptom (runner slot never answered), not a code defect: don't turn a
+  // good build into a runtime failure — degrade to "not verified".
+  if (!status?.ready && !status?.error && !errLines) {
+    if (startedByUs && typeof runner.stopDev === 'function') await runner.stopDev(projectId).catch(() => {});
+    await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'error', outputSummary: 'verificación runtime no disponible: el dev server no respondió a tiempo', durationMs }, { prisma }).catch(() => {});
+    return { ran: false, ok: true };
+  }
+
+  const errors = (status?.error ? `${status.error}\n` : '') + (errLines || tail);
+  await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'error', outputSummary: `el dev server no arranca:\n${String(errors).slice(0, 2000)}`, durationMs }, { prisma }).catch(() => {});
+  if (metrics?.recordAction) metrics.recordAction('terminal', durationMs);
+  return { ran: true, ok: false, errors: String(errors).slice(0, 4000) };
+}
+
+/**
  * Post-build verification (the missing "fifth leg" vs Claude Code): install
  * deps and typecheck the workspace, feeding failures back to the model for a
  * bounded number of repair rounds. Only runs when the workspace has a real
  * tsconfig.json — deterministic no-op otherwise (keeps scripted tests inert).
  * Emits action events so the timeline shows the verification like any tool.
+ *
+ * When CODEX_VERIFY_DEV_SERVER=1 (OFF by default), a CLEAN tsc (or a project
+ * with nothing to typecheck) is followed by a runtime dev-server boot check; a
+ * real runtime error is returned as `{ ok:false, kind:'runtime', errors }` so
+ * the caller's existing repair-round loop feeds it back to the model. With the
+ * flag unset/0 this is a no-op and behaviour is byte-identical to before.
  */
 async function verifyWorkspace({ runner, projectId, run, eventStore, prisma, metrics, clock, env = process.env, actionId, groupId }) {
   if (String(env.CODEX_VERIFY_DISABLED || '') === '1') return { ran: false, ok: true };
@@ -249,37 +338,55 @@ async function verifyWorkspace({ runner, projectId, run, eventStore, prisma, met
     const out = await runner.readFile(projectId, 'tsconfig.json');
     tsconfig = String(out?.content || '');
   } catch { /* no tsconfig → nothing to verify */ }
-  if (!tsconfig.trim()) return { ran: false, ok: true };
-  // Only verify REAL TypeScript projects: the tsconfig must parse (JSONC
-  // comments tolerated). Garbage/placeholder content → deterministic no-op.
-  try {
-    JSON.parse(tsconfig.replace(/^\s*\/\/.*$/gm, ''));
-  } catch {
-    return { ran: false, ok: true };
+  let tsValid = false;
+  if (tsconfig.trim()) {
+    // Only verify REAL TypeScript projects: the tsconfig must parse (JSONC
+    // comments tolerated). Garbage/placeholder content → not a TS project.
+    try {
+      JSON.parse(tsconfig.replace(/^\s*\/\/.*$/gm, ''));
+      tsValid = true;
+    } catch { /* not a real tsconfig */ }
   }
 
-  await eventStore.appendEvent(run.id, 'action_start', { actionId, kind: 'terminal', command: 'verificación: bun install + tsc --noEmit', groupId }, { prisma }).catch(() => {});
-  const t0 = clock().getTime();
-  let ok = false;
-  let errors = '';
-  try {
-    const install = await runner.exec(projectId, ['bun', 'install'], { timeoutMs: 120_000 });
-    if (install.exitCode !== 0) {
-      errors = `bun install exit ${install.exitCode}\n${String(install.stderr || install.stdout || '').slice(0, 4000)}`;
-    } else {
-      const tsc = await runner.exec(projectId, ['bunx', 'tsc', '--noEmit', '--pretty', 'false'], { timeoutMs: 120_000 });
-      if (tsc.exitCode === 0) ok = true;
-      else errors = String([tsc.stdout, tsc.stderr].filter(Boolean).join('\n')).slice(0, 4000) || `tsc exit ${tsc.exitCode}`;
+  let tscOk = true;
+  if (tsValid) {
+    await eventStore.appendEvent(run.id, 'action_start', { actionId, kind: 'terminal', command: 'verificación: bun install + tsc --noEmit', groupId }, { prisma }).catch(() => {});
+    const t0 = clock().getTime();
+    let ok = false;
+    let errors = '';
+    try {
+      const install = await runner.exec(projectId, ['bun', 'install'], { timeoutMs: 120_000 });
+      if (install.exitCode !== 0) {
+        errors = `bun install exit ${install.exitCode}\n${String(install.stderr || install.stdout || '').slice(0, 4000)}`;
+      } else {
+        const tsc = await runner.exec(projectId, ['bunx', 'tsc', '--noEmit', '--pretty', 'false'], { timeoutMs: 120_000 });
+        if (tsc.exitCode === 0) ok = true;
+        else errors = String([tsc.stdout, tsc.stderr].filter(Boolean).join('\n')).slice(0, 4000) || `tsc exit ${tsc.exitCode}`;
+      }
+    } catch (err) {
+      // Runner/env failure (not a code failure) → skip verification honestly.
+      await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'error', outputSummary: `verificación no disponible: ${err.message}`, durationMs: Math.max(0, clock().getTime() - t0) }, { prisma }).catch(() => {});
+      return { ran: false, ok: true };
     }
-  } catch (err) {
-    // Runner/env failure (not a code failure) → skip verification honestly.
-    await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'error', outputSummary: `verificación no disponible: ${err.message}`, durationMs: Math.max(0, clock().getTime() - t0) }, { prisma }).catch(() => {});
-    return { ran: false, ok: true };
+    const durationMs = Math.max(0, clock().getTime() - t0);
+    await eventStore.appendEvent(run.id, 'action_end', { actionId, status: ok ? 'done' : 'error', outputSummary: ok ? 'compila sin errores de tipos' : errors, durationMs }, { prisma }).catch(() => {});
+    if (metrics?.recordAction) metrics.recordAction('terminal', durationMs);
+    if (!ok) return { ran: true, ok: false, kind: 'tsc', errors };
+    tscOk = true;
   }
-  const durationMs = Math.max(0, clock().getTime() - t0);
-  await eventStore.appendEvent(run.id, 'action_end', { actionId, status: ok ? 'done' : 'error', outputSummary: ok ? 'compila sin errores de tipos' : errors, durationMs }, { prisma }).catch(() => {});
-  if (metrics?.recordAction) metrics.recordAction('terminal', durationMs);
-  return { ran: true, ok, errors };
+
+  // Optional runtime check (flag-gated OFF by default). Runs after a clean tsc,
+  // or on its own for a project with no tsconfig to typecheck. Reuses the same
+  // repair-round mechanism through the caller (kind:'runtime').
+  if (tscOk) {
+    const rt = await verifyDevServer({ runner, projectId, run, eventStore, prisma, metrics, clock, env, actionId, groupId });
+    if (rt.ran && !rt.ok) return { ran: true, ok: false, kind: 'runtime', errors: rt.errors };
+    if (rt.ran) return { ran: true, ok: true, kind: 'runtime' };
+  }
+
+  // Nothing verified at all (no valid tsconfig + flag off) → deterministic no-op.
+  if (!tsValid) return { ran: false, ok: true };
+  return { ran: true, ok: true, kind: 'tsc' };
 }
 
 /** Best-effort tracked-file listing for context. Never throws. */
@@ -332,6 +439,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   const maxToolsPerTurn = readPosInt(env.CODEX_MAX_TOOLS_PER_TURN, DEFAULT_MAX_TOOLS_PER_TURN);
   const contextMaxChars = readPosInt(env.CODEX_CONTEXT_MAX_CHARS, DEFAULT_CONTEXT_MAX_CHARS);
   const maxVerifyRounds = readPosInt(env.CODEX_MAX_VERIFY_ROUNDS, DEFAULT_MAX_VERIFY_ROUNDS);
+  const maxSameFileWrites = readPosInt(env.CODEX_MAX_SAME_FILE_WRITES, DEFAULT_MAX_SAME_FILE_WRITES);
   const registry = buildTools.toolRegistry();
 
   const plan = deps.plan || (await loadApprovedPlan({ run, eventStore, prisma }));
@@ -346,6 +454,15 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   let groupCounter = 0;
   let aborted = false;
   let verifyRounds = 0;
+  // Anti-thrash state. A model can loop rewriting one file and burn the budget
+  // without progress. Two detectors, because the prod smoke showed BOTH shapes:
+  //  - consecutive: src/index.css written 5× in a row (`sameWriteRun`).
+  //  - interleaved: cliente.ts written 7× total but spread across other writes,
+  //    which the consecutive counter never caught (`writeTotals`).
+  let lastWritePath = null;
+  let sameWriteRun = 0;
+  const writeTotals = new Map();
+  const nudgedPaths = new Set();
 
   for (let step = 0; step < maxSteps; step += 1) {
     if (signal?.aborted) { aborted = true; break; }
@@ -396,7 +513,10 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         });
         if (v.ran && !v.ok) {
           verifyRounds += 1;
-          messages.push({ role: 'user', content: `[VERIFICACIÓN] El proyecto NO compila. Errores de tsc:\n${v.errors}\nCorrige estos errores (read_file + edit_file) y cuando termines deja de llamar herramientas.` });
+          const repairPrompt = v.kind === 'runtime'
+            ? `[VERIFICACIÓN RUNTIME] El proyecto compila pero NO arranca en el dev server. Errores de runtime/boot:\n${v.errors}\nDiagnostica la causa (imports rotos, module not found, dependencia sin declarar en package.json, error de sintaxis, overlay de Vite) con read_file/grep_search, corrígela (read_file + edit_file) y cuando termines deja de llamar herramientas.`
+            : `[VERIFICACIÓN] El proyecto NO compila. Errores de tsc:\n${v.errors}\nCorrige estos errores (read_file + edit_file) y cuando termines deja de llamar herramientas.`;
+          messages.push({ role: 'user', content: repairPrompt });
           continue;
         }
       }
@@ -415,6 +535,19 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
     const executeCall = async (call) => {
       const tool = buildTools.getTool(call.name);
       const actionId = `a${++actionCounter}`;
+
+      // update_plan is a plan-progress signal, not a workspace action: it emits a
+      // `plan_updated` event (TodoWrite parity) instead of action_start/end, so it
+      // never pollutes the action timeline. Best-effort — a failed emit never
+      // aborts the loop; the observation is still fed back to the model.
+      if (tool && call.name === 'update_plan') {
+        const result = await tool.execute(call.args, { env });
+        if (!result.isError && Array.isArray(result.planTasks)) {
+          await eventStore.appendEvent(run.id, 'plan_updated', { tasks: result.planTasks }, { prisma }).catch(() => {});
+        }
+        return { message: `[TOOL_RESULT ${call.name}] ${result.observation || result.summary || ''}`, blocking: null };
+      }
+
       if (!tool) {
         await eventStore.appendEvent(run.id, 'action_start', { actionId, kind: 'terminal', command: String(call.name), groupId }, { prisma });
         await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'error', outputSummary: `herramienta desconocida: ${call.name}`, durationMs: 0 }, { prisma });
@@ -437,6 +570,10 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         env,
         signal,
         llmTurn,
+        // The run tier (composer Power selector) must reach subagents too, so a
+        // delegation runs on the SAME engine as the main loop (Claude for paid
+        // tiers) instead of silently dropping to the free Cerebras path.
+        tier: run?.tier || null,
         onUsage: (u) => { if (u && metrics?.recordLlmUsage) metrics.recordLlmUsage(u); },
         // Live visibility for delegations: the SDK surfaces every specialist
         // tool call as a nested action in the same group. The event store's
@@ -484,8 +621,34 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
       if (metrics?.recordAction) metrics.recordAction(tool.kind, durationMs);
       if (Number.isFinite(result.linesRead) && metrics?.recordLinesRead) metrics.recordLinesRead(result.linesRead);
 
+      // Anti-thrash nudge: on a run of consecutive successful writes to the
+      // SAME path, tell the model to stop rewriting it and advance the plan.
+      // Writes are always on the sequential (non-delegation) path, so mutating
+      // this state here is race-free.
+      let thrashNudge = '';
+      if (!result.isError && (call.name === 'write_file' || call.name === 'edit_file') && path) {
+        if (path === lastWritePath) sameWriteRun += 1;
+        else { lastWritePath = path; sameWriteRun = 1; }
+        const total = (writeTotals.get(path) || 0) + 1;
+        writeTotals.set(path, total);
+        // Nudge on a consecutive run OR an interleaved total (2× the threshold),
+        // but only ONCE per file so the message doesn't spam every later write.
+        const consecutiveHit = sameWriteRun >= maxSameFileWrites;
+        const totalHit = total >= maxSameFileWrites * 2;
+        if ((consecutiveHit || totalHit) && !nudgedPaths.has(path)) {
+          nudgedPaths.add(path);
+          const howMany = consecutiveHit ? `${sameWriteRun} veces seguidas` : `${total} veces en esta corrida`;
+          thrashNudge = `\n[LOOP] Ya escribiste ${path} ${howMany}. DEJA de reescribir este archivo: si ya está bien, avanza al siguiente paso del plan; corrígelo solo si type_check/dev_server_check reportó un error concreto en él.`;
+        }
+      } else if (!result.isError && tool.kind !== 'file_read') {
+        // A non-write, non-read action (e.g. a command) breaks the consecutive
+        // run but NOT the per-file totals (interleaved rewrites still count).
+        lastWritePath = null;
+        sameWriteRun = 0;
+      }
+
       return {
-        message: `[TOOL_RESULT ${call.name}] ${result.observation || outputSummary || ''}`,
+        message: `[TOOL_RESULT ${call.name}] ${result.observation || outputSummary || ''}${thrashNudge}`,
         blocking: blockingPattern ? { pattern: blockingPattern, detail: result.observation || outputSummary } : null,
       };
     };
@@ -682,4 +845,5 @@ module.exports = {
   isAppsPrompt,
   compactMessages,
   verifyWorkspace,
+  verifyDevServer,
 };

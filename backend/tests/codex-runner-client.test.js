@@ -77,6 +77,25 @@ test('startDev posts { project, basePath } to /run; runnerDevUrl honours env ove
   assert.equal(runnerDevUrl({}), 'http://localhost:5173');
 });
 
+test('devStatus/stopDev propagate the project (multi-project runner) and keep the legacy no-arg shape', async () => {
+  const { impl, calls } = fakeFetch(() => jsonResponse({ ok: true, running: false }));
+  const client = createRunnerClient({ fetchImpl: impl, baseUrl: 'http://runner:4097' });
+  await client.devStatus('p 1');
+  assert.equal(calls[0].url, 'http://runner:4097/status?project=p%201');
+  await client.devStatus();
+  assert.equal(calls[1].url, 'http://runner:4097/status');
+  await client.stopDev('p1');
+  assert.deepEqual(calls[2].body, { project: 'p1' });
+  await client.stopDev();
+  assert.deepEqual(calls[3].body, {}); // legacy: stop ALL servers
+});
+
+test('runnerDevUrl swaps in a per-project pool port when given one', () => {
+  assert.equal(runnerDevUrl({ CODE_RUNNER_DEV_URL: 'http://runner:5173' }, 5177), 'http://runner:5177');
+  assert.equal(runnerDevUrl({}, 5180), 'http://localhost:5180');
+  assert.equal(runnerDevUrl({ CODE_RUNNER_DEV_URL: 'http://runner:5173' }), 'http://runner:5173');
+});
+
 test('exportWorkspace POSTs { project } to /workspace/export', async () => {
   const { impl, calls } = fakeFetch(() => jsonResponse({ ok: true, project: 'p1', files: 7 }));
   const client = createRunnerClient({ fetchImpl: impl, baseUrl: 'http://runner:4097' });

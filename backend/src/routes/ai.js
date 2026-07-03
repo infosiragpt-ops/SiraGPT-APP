@@ -6177,12 +6177,65 @@ router.post(
       let newFiles = [];
 
       if (isAuth) {
-        const docRegex = /\[CREATE_DOCUMENT:(?<filename>[^\]]+)\](?<content>[\s\S]*?)\[\/CREATE_DOCUMENT\]/;
-        const docMatch = fullResponseContent.match(docRegex);
+        // Tolerant CREATE_DOCUMENT matcher. The canonical contract is the
+        // colon form ([CREATE_DOCUMENT:file.ext]…[/CREATE_DOCUMENT]) taught
+        // by master-prompt, but weaker models improvise an attribute form
+        // ([CREATE_DOCUMENT format="pptx" filename="X.pptx"] {json}) —
+        // observed live with Deepseek: the old regex didn't match it, so the
+        // whole directive leaked into the chat as raw JSON and no file was
+        // ever generated. Both variants are accepted; JSON payloads (slide
+        // decks) are converted to markdown so the document builder always
+        // receives renderable text.
+        const matchCreateDocumentDirective = (text) => {
+          const colon = text.match(/\[CREATE_DOCUMENT:(?<filename>[^\]]+)\](?<content>[\s\S]*?)\[\/CREATE_DOCUMENT\]/i);
+          if (colon?.groups) {
+            return { raw: colon[0], filename: colon.groups.filename.trim(), content: colon.groups.content };
+          }
+          const attr = text.match(/\[CREATE_DOCUMENT\s+(?<attrs>[^\]]*)\](?<content>[\s\S]*?)\[\/CREATE_DOCUMENT\]/i);
+          if (!attr?.groups) return null;
+          const fileAttr = attr.groups.attrs.match(/filename\s*=\s*["']([^"']+)["']/i);
+          const formatAttr = attr.groups.attrs.match(/format\s*=\s*["']?([a-z0-9]+)["']?/i);
+          const filename = (fileAttr?.[1] || `documento.${formatAttr?.[1] || 'docx'}`).trim();
+          return { raw: attr[0], filename, content: attr.groups.content };
+        };
+        const slidesJsonToMarkdown = (payload) => {
+          const slides = Array.isArray(payload?.slides) ? payload.slides : null;
+          if (!slides || slides.length === 0) return null;
+          const lines = [];
+          const deckTitle = payload.title || payload.deckTitle || slides[0]?.title;
+          if (deckTitle) lines.push(`# ${deckTitle}`, '');
+          for (const slide of slides) {
+            if (!slide || typeof slide !== 'object') continue;
+            if (slide.title && slide.title !== deckTitle) lines.push(`## ${slide.title}`, '');
+            if (slide.subtitle) lines.push(`*${slide.subtitle}*`, '');
+            const body = slide.content ?? slide.body ?? slide.bullets;
+            if (Array.isArray(body)) {
+              for (const item of body) lines.push(`- ${typeof item === 'string' ? item : JSON.stringify(item)}`);
+              lines.push('');
+            } else if (typeof body === 'string' && body.trim()) {
+              lines.push(body.trim(), '');
+            }
+            if (slide.highlight) lines.push(`**${slide.highlight}**`, '');
+            if (slide.footer) lines.push(`_${slide.footer}_`, '');
+          }
+          return lines.join('\n').trim() || null;
+        };
+        const coerceDirectiveContent = (rawContent) => {
+          const trimmed = String(rawContent || '').trim();
+          if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return trimmed;
+          try {
+            const parsed = JSON.parse(trimmed);
+            return slidesJsonToMarkdown(parsed) || trimmed;
+          } catch {
+            return trimmed;
+          }
+        };
 
-        if (docMatch && docMatch.groups) {
-          const { filename, content } = docMatch.groups;
-          let chatContent = content.trim();
+        const directive = matchCreateDocumentDirective(fullResponseContent);
+
+        if (directive) {
+          const { filename } = directive;
+          let chatContent = coerceDirectiveContent(directive.content);
 
           // If content is minimal/empty, extract from previous conversation
           if (chatContent.length < 100) {
@@ -6260,7 +6313,7 @@ router.post(
           // output in the bubble, with the file attachment below as
           // the downloadable extra. A single-line confirmation on its
           // own is NOT enough — that's what made the reply feel blank.
-          const stripped = fullResponseContent.replace(docRegex, '').trim();
+          const stripped = fullResponseContent.split(directive.raw).join('').trim();
           if (stripped.length >= MIN_VISIBLE_CHARS) {
             finalContent = stripped;
           } else {
@@ -6338,6 +6391,15 @@ router.post(
           }
         }
 
+
+        // Defense in depth: a truncated or malformed CREATE_DOCUMENT block
+        // (opening tag without a closing one, or a shape neither matcher
+        // recognises) must never reach the user as raw directive syntax.
+        // Strip just the tag markers and keep the inner text visible.
+        if (/\[\/?CREATE_DOCUMENT[^\]]*\]/i.test(finalContent)) {
+          const scrubbed = finalContent.replace(/\[\/?CREATE_DOCUMENT[^\]]*\]/gi, '').trim();
+          if (scrubbed.length >= MIN_VISIBLE_CHARS) finalContent = scrubbed;
+        }
 
         // ─── HARD INVARIANT (final guard) ──────────────────────────
         // No matter what any document-creation / tag-stripping /

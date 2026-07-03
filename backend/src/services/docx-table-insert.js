@@ -346,19 +346,19 @@ function buildConsistencyMatrixSpec(buffer, { requestText = '' } = {}) {
 }
 
 async function extractTableSpecWithLLM({ requestText, sourceText, signal }) {
-  if (!process.env.OPENAI_API_KEY) return null;
-  let createContentClient;
-  let DEFAULT_MODEL;
+  let resolveContentClient;
   try {
     // eslint-disable-next-line global-require
-    ({ createContentClient, DEFAULT_MODEL } = require('./document-pipeline/content/llm-client'));
+    ({ resolveContentClient } = require('./document-pipeline/content/llm-client'));
   } catch {
     return null;
   }
+  const resolved = resolveContentClient();
+  if (!resolved) return null;
   try {
-    const client = createContentClient('OpenAI');
+    const client = resolved.client;
     const completion = await client.chat.completions.create({
-      model: DEFAULT_MODEL,
+      model: resolved.model,
       messages: [
         { role: 'system', content: 'Extraes una tabla a partir de la petición y el contexto del documento. No inventes cifras; usa solo datos presentes o claramente inferibles. Si no hay datos, devuelve filas vacías.' },
         { role: 'user', content: [

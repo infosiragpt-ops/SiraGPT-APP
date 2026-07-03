@@ -16,6 +16,7 @@ const {
 const VALID = {
   run_status: { status: 'running' },
   plan_proposed: { architecture: 'Vite SPA', pages: ['/'], components: ['Nav'], tasks: [{ id: 't1' }] },
+  plan_updated: { tasks: [{ id: 't1', title: 'Estructura', status: 'in_progress' }, { id: 't2', title: 'Estilos', status: 'pending' }] },
   reasoning_start: { blockId: 'b1', label: 'Planning' },
   reasoning_delta: { blockId: 'b1', text: 'thinking…' },
   reasoning_end: { blockId: 'b1', durationMs: 47000 },
@@ -62,6 +63,15 @@ test('plan_proposed requires architecture + the three arrays', () => {
   assert.equal(isValidEvent('plan_proposed', { architecture: 'x', pages: [], components: [], tasks: [] }), true);
   assert.equal(isValidEvent('plan_proposed', { architecture: 'x', pages: 'no', components: [], tasks: [] }), false);
   assert.equal(isValidEvent('plan_proposed', { pages: [], components: [], tasks: [] }), false);
+});
+
+test('plan_updated requires a tasks array of {id,title,status∈pending|in_progress|completed}', () => {
+  assert.equal(isValidEvent('plan_updated', { tasks: [{ id: 't1', title: 'X', status: 'completed' }] }), true);
+  assert.equal(isValidEvent('plan_updated', { tasks: [] }), true); // empty list is a valid (if unusual) payload
+  assert.equal(isValidEvent('plan_updated', {}), false); // no tasks
+  assert.equal(isValidEvent('plan_updated', { tasks: [{ id: 't1', title: 'X', status: 'doing' }] }), false); // bad status
+  assert.equal(isValidEvent('plan_updated', { tasks: [{ title: 'X', status: 'pending' }] }), false); // no id
+  assert.equal(isValidEvent('plan_updated', { tasks: 'nope' }), false);
 });
 
 test('reasoning_end requires a numeric durationMs', () => {

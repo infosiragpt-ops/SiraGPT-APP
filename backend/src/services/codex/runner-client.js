@@ -20,8 +20,21 @@ function runnerBaseUrl(env = process.env) {
   return String(env.CODE_RUNNER_URL || 'http://runner:4097').replace(/\/+$/, '');
 }
 
-function runnerDevUrl(env = process.env) {
-  return env.CODE_RUNNER_DEV_URL || 'http://localhost:5173';
+/**
+ * Base URL of the runner's dev server. With `port` (multi-project pool, audit
+ * B1) the configured URL's port is swapped for the project's assigned one;
+ * without it, the legacy single-port URL is returned unchanged.
+ */
+function runnerDevUrl(env = process.env, port = null) {
+  const base = env.CODE_RUNNER_DEV_URL || 'http://localhost:5173';
+  if (port == null) return base;
+  try {
+    const u = new URL(base);
+    u.port = String(port);
+    return u.toString().replace(/\/+$/, '');
+  } catch {
+    return base;
+  }
 }
 
 // Host-visible base dir the runner's /export bind-mount maps to (display only —
@@ -72,9 +85,13 @@ function createRunnerClient({ fetchImpl = fetch, baseUrl = runnerBaseUrl(), time
       call('POST', '/workspace/exec', { project, cmd, timeoutMs: opts.timeoutMs }, {
         callTimeoutMs: opts.timeoutMs ? Math.max(timeoutMs, opts.timeoutMs + 10_000) : undefined,
       }),
+    // Multi-project (audit B1): /run answers { port } of the project's slot;
+    // /status and /stop accept an optional project. Without one they keep the
+    // legacy semantics (status of the last started server / stop ALL servers).
     startDev: (project, opts = {}) => call('POST', '/run', { project, basePath: opts.basePath || null }),
-    devStatus: () => call('GET', '/status'),
-    stopDev: () => call('POST', '/stop'),
+    devStatus: (project) =>
+      call('GET', project ? `/status?project=${encodeURIComponent(project)}` : '/status'),
+    stopDev: (project) => call('POST', '/stop', project ? { project } : {}),
     exportWorkspace: (project) => call('POST', '/workspace/export', { project }),
   };
 }

@@ -96,8 +96,11 @@ export function openRunStream(opts: RunStreamOptions): RunStreamHandle {
       controller = new AbortController()
       let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
       try {
+        // Auth travels ONLY in the Authorization header — we always stream via
+        // fetch (never native EventSource), so the JWT must not leak into the
+        // query string (proxy/server logs). The backend keeps a `?token=`
+        // fallback for clients that can't set headers; we don't use it.
         const qs = new URLSearchParams({ afterSeq: String(lastSeq) })
-        if (token) qs.set('token', token)
         const res = await fetchImpl(`${baseUrl}/codex/runs/${encodeURIComponent(runId)}/stream?${qs.toString()}`, {
           signal: controller.signal,
           headers: token ? { Authorization: `Bearer ${token}` } : undefined,

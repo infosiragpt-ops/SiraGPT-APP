@@ -35,15 +35,28 @@ export type TimelineItem =
   | { kind: 'summary'; id: string; metrics: any }
   | { kind: 'action_required'; id: string; patternId: string; title: string; rawError: string; blockedCapabilities: string[]; remediationUrl?: string }
 
+// Per-task plan status carried by the plan_updated event (TodoWrite parity).
+export type PlanTaskStatus = 'pending' | 'in_progress' | 'completed'
+export interface PlanTaskProgress {
+  id: string
+  title: string
+  status: PlanTaskStatus
+}
+
 export interface TimelineState {
   items: TimelineItem[]
   status: string | null
   lastSeq: number
   seen: Set<number>
+  // Latest dynamic plan progress from update_plan / plan_updated (last write
+  // wins). null until the agent emits its first plan_updated — the checklist
+  // then degrades to its coarse run-status fallback (older runs, agents that
+  // never call update_plan).
+  planProgress: PlanTaskProgress[] | null
 }
 
 export function initialTimelineState(): TimelineState {
-  return { items: [], status: null, lastSeq: -1, seen: new Set() }
+  return { items: [], status: null, lastSeq: -1, seen: new Set(), planProgress: null }
 }
 
 // Synthetic item IDs are derived from the event's seq so a replay of the same
@@ -72,6 +85,7 @@ export function timelineReducer(state: TimelineState, event: CodexEventEnvelope)
   const data = event.data || {}
   let items = state.items
   let status = state.status
+  let planProgress = state.planProgress
 
   switch (event.type) {
     case 'heartbeat':
@@ -157,6 +171,20 @@ export function timelineReducer(state: TimelineState, event: CodexEventEnvelope)
       items = [...items, { kind: 'plan', id: synthId('plan', seq), architecture: data.architecture, pages: data.pages || [], components: data.components || [], tasks: data.tasks || [], approved: false }]
       break
 
+    case 'plan_updated': {
+      // Dynamic plan progress (TodoWrite parity): last write wins. Not a
+      // timeline item — the checklist tab reads state.planProgress directly.
+      const tasks = Array.isArray(data.tasks) ? data.tasks : null
+      if (tasks) {
+        planProgress = tasks.map((t: any) => ({
+          id: String(t?.id ?? ''),
+          title: typeof t?.title === 'string' ? t.title : String(t?.id ?? ''),
+          status: (t?.status === 'in_progress' || t?.status === 'completed') ? t.status : 'pending',
+        }))
+      }
+      break
+    }
+
     case 'checkpoint_created':
       items = [...items, { kind: 'checkpoint', id: data.checkpointId || synthId('cp', seq), checkpointId: data.checkpointId, commitSha: data.commitSha, title: data.title, createdAt: data.createdAt }]
       break
@@ -175,7 +203,7 @@ export function timelineReducer(state: TimelineState, event: CodexEventEnvelope)
 
   const seen = seq !== undefined ? new Set(state.seen).add(seq) : state.seen
   const lastSeq = seq !== undefined && seq > state.lastSeq ? seq : state.lastSeq
-  return { items, status, lastSeq, seen }
+  return { items, status, lastSeq, seen, planProgress }
 }
 
 /** Mark the plan item approved (after the user clicks "Aprobar y construir"). */

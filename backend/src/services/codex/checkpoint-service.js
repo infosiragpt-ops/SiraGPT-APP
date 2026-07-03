@@ -125,11 +125,16 @@ async function rollbackCheckpoint({ checkpointId, userId, deps = {} }) {
   const projectId = cp.projectId;
 
   let wasRunning = false;
+  let devBasePath = null;
   try {
-    const st = await runner.devStatus();
+    // Multi-project runner: ask for THIS project's dev server (legacy runners
+    // without ?project support answer with the last-started server; the
+    // project check below keeps that path correct too).
+    const st = await runner.devStatus(projectId);
     wasRunning = Boolean(st && (st.running || st.ready) && (st.project === projectId || st.project == null));
+    devBasePath = st && st.basePath ? st.basePath : null;
   } catch { /* runner status best-effort */ }
-  if (wasRunning) { try { await runner.stopDev(); } catch { /* ignore */ } }
+  if (wasRunning) { try { await runner.stopDev(projectId); } catch { /* ignore */ } }
 
   const reset = await runner.exec(projectId, ['git', 'reset', '--hard', cp.commitSha]);
   if (reset?.exitCode !== 0) {
@@ -137,7 +142,11 @@ async function rollbackCheckpoint({ checkpointId, userId, deps = {} }) {
   }
 
   let restarted = false;
-  if (wasRunning) { try { await runner.startDev(projectId); restarted = true; } catch { /* ignore */ } }
+  if (wasRunning) {
+    // Preserve the tokenized preview base path across the restart, otherwise
+    // vite re-serves at / and the same-origin proxy iframe 404s.
+    try { await runner.startDev(projectId, { basePath: devBasePath }); restarted = true; } catch { /* ignore */ }
+  }
   return { ok: true, commitSha: cp.commitSha, restarted };
 }
 

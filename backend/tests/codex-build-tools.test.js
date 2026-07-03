@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { TOOLS, toolRegistry, getTool, lineCount, parsePrismaSchema } = require('../src/services/codex/build-tools');
+const { TOOLS, toolRegistry, getTool, lineCount, parsePrismaSchema, normalisePlanTasks } = require('../src/services/codex/build-tools');
 
 function fakeRunner(overrides = {}) {
   return {
@@ -18,7 +18,7 @@ test('toolRegistry projects name/description/parameters for every tool', () => {
   const reg = toolRegistry();
   assert.deepEqual(
     reg.map((t) => t.name).sort(),
-    ['dev_server_check', 'edit_file', 'grep_search', 'inspect_database', 'list_files', 'read_file', 'run_command', 'run_subagent', 'type_check', 'web_search', 'write_file'],
+    ['dev_server_check', 'edit_file', 'grep_search', 'inspect_database', 'list_files', 'read_file', 'run_command', 'run_subagent', 'type_check', 'update_plan', 'web_search', 'write_file'],
   );
   for (const t of reg) { assert.ok(t.description); assert.ok(t.parameters); }
 });
@@ -82,6 +82,55 @@ test('getTool + lineCount helpers', () => {
   assert.equal(lineCount(''), 0);
 });
 
+// ---------------------------------------------------------------------------
+// update_plan (G1): TodoWrite parity — validates the shape and returns the
+// normalised plan tasks the loop turns into a plan_updated event. Touches no
+// filesystem.
+
+test('update_plan validates the shape and returns normalised planTasks', async () => {
+  const r = await TOOLS.update_plan.execute({
+    tasks: [
+      { id: 't1', title: 'Estructura', status: 'completed' },
+      { id: 't2', title: 'Estilos', status: 'in_progress' },
+      { id: 't3', title: 'Deploy', status: 'pending' },
+    ],
+  }, {});
+  assert.equal(r.isError, false);
+  assert.deepEqual(r.planTasks, [
+    { id: 't1', title: 'Estructura', status: 'completed' },
+    { id: 't2', title: 'Estilos', status: 'in_progress' },
+    { id: 't3', title: 'Deploy', status: 'pending' },
+  ]);
+  assert.match(r.summary, /1\/3 completadas/);
+  assert.equal(TOOLS.update_plan.kind, 'terminal');
+  assert.equal(TOOLS.update_plan.commandFor(), 'update plan');
+});
+
+test('update_plan derives a missing title from the id but requires id + a known status', async () => {
+  const ok = await TOOLS.update_plan.execute({ tasks: [{ id: 't1', status: 'pending' }] }, {});
+  assert.equal(ok.isError, false);
+  assert.equal(ok.planTasks[0].title, 't1');
+
+  const badStatus = await TOOLS.update_plan.execute({ tasks: [{ id: 't1', title: 'x', status: 'doing' }] }, {});
+  assert.equal(badStatus.isError, true);
+
+  const noId = await TOOLS.update_plan.execute({ tasks: [{ title: 'x', status: 'pending' }] }, {});
+  assert.equal(noId.isError, true);
+
+  const notArray = await TOOLS.update_plan.execute({ tasks: 'nope' }, {});
+  assert.equal(notArray.isError, true);
+
+  const empty = await TOOLS.update_plan.execute({ tasks: [] }, {});
+  assert.equal(empty.isError, true);
+});
+
+test('normalisePlanTasks returns null on unrecoverable shapes', () => {
+  assert.equal(normalisePlanTasks(null), null);
+  assert.equal(normalisePlanTasks([{ id: '', status: 'pending' }]), null);
+  assert.equal(normalisePlanTasks([{ id: 't1', status: 'nope' }]), null);
+  assert.deepEqual(normalisePlanTasks([{ id: 't1', status: 'completed' }]), [{ id: 't1', title: 't1', status: 'completed' }]);
+});
+
 const PRISMA_SCHEMA = `
 datasource db {
   provider = "postgresql"
@@ -135,4 +184,39 @@ test('inspect_database honours an explicit path', async () => {
   const runner = fakeRunner({ readFile: async (_p, path) => { seen = path; return { content: PRISMA_SCHEMA }; } });
   await TOOLS.inspect_database.execute({ path: 'db/schema.prisma' }, { runner, project: 'p1' });
   assert.equal(seen, 'db/schema.prisma');
+});
+
+// ---------------------------------------------------------------------------
+// dev_server_check: slot hygiene (audit G5) — the tool must stop a dev server
+// it started only for the check, but must NOT stop a pre-existing one (the
+// user's live preview).
+
+test('dev_server_check stops the dev server it started (no pre-existing preview)', async () => {
+  const calls = { start: 0, stop: 0, stoppedProject: null };
+  const runner = fakeRunner({
+    devStatus: async () => ({ running: false }),
+    startDev: async () => { calls.start += 1; return { ok: true }; },
+    stopDev: async (p) => { calls.stop += 1; calls.stoppedProject = p; return { ok: true }; },
+  });
+  // Second devStatus (after start) reports ready so the wait loop breaks fast.
+  let n = 0;
+  runner.devStatus = async () => { n += 1; return n === 1 ? { running: false } : { running: true, project: 'p1', ready: true, tail: ['ready'] }; };
+  const r = await TOOLS.dev_server_check.execute({ waitMs: 2000 }, { runner, project: 'p1' });
+  assert.equal(r.isError, false);
+  assert.equal(calls.start, 1, 'arrancó el server');
+  assert.equal(calls.stop, 1, 'lo paró al terminar (sin fuga de slot)');
+  assert.equal(calls.stoppedProject, 'p1');
+});
+
+test('dev_server_check does NOT stop a pre-existing dev server (user preview)', async () => {
+  const calls = { start: 0, stop: 0 };
+  const runner = fakeRunner({
+    devStatus: async () => ({ running: true, project: 'p1', ready: true, tail: ['ready'] }),
+    startDev: async () => { calls.start += 1; return { ok: true }; },
+    stopDev: async () => { calls.stop += 1; return { ok: true }; },
+  });
+  const r = await TOOLS.dev_server_check.execute({ waitMs: 2000 }, { runner, project: 'p1' });
+  assert.equal(r.isError, false);
+  assert.equal(calls.start, 0, 'no rearranca el preview del usuario');
+  assert.equal(calls.stop, 0, 'NO para el preview del usuario');
 });

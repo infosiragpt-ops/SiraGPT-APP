@@ -14,13 +14,14 @@ const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
-const { Document, Packer, Paragraph, HeadingLevel, TextRun, Table, TableRow, TableCell, Header, Footer, ImageRun, AlignmentType, BorderStyle, WidthType, ShadingType, PageNumber, TableOfContents, PageBreak } = require('docx');
+const { Document, Packer, Paragraph, HeadingLevel, TextRun, Table, TableRow, TableCell, Header, Footer, ImageRun, AlignmentType, BorderStyle, WidthType, ShadingType, PageNumber, PageBreak } = require('docx');
 const PizZip = require('pizzip');
 const PptxGenJS = require('pptxgenjs');
 const PDFDocument = require('pdfkit');
 const ExcelJS = require('exceljs');
 const { renderPreview } = require('../doc-preview');
-const { generateSectionContent, fallbackBlock } = require('./content');
+const { generateSectionContent, fallbackBlock, generateSpreadsheetContent } = require('./content');
+const { runRenderCritique } = require('./render-critique-loop');
 const { buildPptxContentPlan, hasGenericPlaceholderText } = require('./pptx-content-planner');
 const { pickPptxTheme, pickChartType } = require('./pptx-design-system');
 const {
@@ -281,15 +282,38 @@ function markdownTable(headers, rows) {
   ].join('\n');
 }
 
+// Raw OOXML page break — pandoc passes it through verbatim (requires the
+// raw_attribute extension in the -f string). `\newpage` does NOT work for
+// docx output, and a field-based TOC renders EMPTY outside Word (LibreOffice
+// and web viewers show a bare "Table of Contents" heading), so we emit a
+// static index + explicit break instead.
+const OPENXML_PAGE_BREAK = '```{=openxml}\n<w:p><w:r><w:br w:type="page"/></w:r></w:p>\n```';
+
 function buildDocxMarkdown(plan) {
-  // Professionalism: the cover carries the title only — no pipeline branding
-  // sentences and no synthetic "validation mark" images inside the deliverable.
+  // Professional shell: title block (Title style from the reference doc) +
+  // date, straight into content. The previous shape shipped system
+  // meta-noise as user-visible content: a "Portada" heading with pipeline
+  // marketing copy, a broken validation-marker image (rendered as a black
+  // box), an empty English "Table of Contents", a "Control de calidad" QC
+  // table and a placeholder APA reference — all removed. Documents should
+  // read like a human wrote them, not like the pipeline is grading itself.
   const lines = [
     `% ${plan.title}`,
     '%',
     `% ${new Date().toISOString().slice(0, 10)}`,
     '',
   ];
+
+  // Static, viewer-safe index for long-form documents only. Short documents
+  // (a "200 palabras" request plans 1-2 sections) skip straight to content.
+  const contentSections = (plan.sections || []).filter((s) => s && !/^material de referencia/i.test(s));
+  if (!plan.sourceContent && contentSections.length >= 5) {
+    lines.push('# Índice', '');
+    contentSections.forEach((section, index) => {
+      lines.push(`${index + 1}. ${markdownEscape(section)}`);
+    });
+    lines.push('', OPENXML_PAGE_BREAK, '');
+  }
 
   if (plan.referenceFiles?.length) {
     lines.push('# Material de referencia incorporado', '');
@@ -349,7 +373,7 @@ function buildDocxMarkdown(plan) {
           lines.push(`> ${notes}`, '');
         }
       } else {
-        lines.push(`Se desarrolla ${section.toLowerCase()} con estructura profesional, evidencia verificable y enfoque ${plan.template}. El contenido mantiene jerarquia visual, legibilidad y consistencia documental.`, '');
+        lines.push(`Se desarrolla ${section.toLowerCase()} con estructura profesional, evidencia verificable y enfoque ${plan.template}. El contenido mantiene jerarquía visual, legibilidad y consistencia documental.`, '');
       }
     });
   }
@@ -364,6 +388,7 @@ function buildDocxMarkdown(plan) {
     }
     lines.push('');
   }
+
 
   return lines.join('\n');
 }
@@ -429,7 +454,17 @@ function detectTemplate(prompt = '', explicit) {
 }
 
 function titleFromPrompt(prompt, fallback = 'Documento profesional') {
-  const clean = String(prompt || '')
+  let source = String(prompt || '');
+  // agents/auto-document-delivery wraps the goal in a delivery envelope
+  // ("Solicitud del usuario: <goal>\nFormato requerido: …"). Titles must come
+  // from the goal line only — the metadata used to leak into titles and
+  // filenames ("Solicitud_del_usuario_…_Formato_requerido.docx").
+  const envelope = source.match(/^Solicitud del usuario:\s*(.+)$/im);
+  if (envelope && envelope[1].trim()) source = envelope[1].trim();
+  const clean = source
+    // Length directives describe the ASK, not the topic ("en 200 palabras").
+    .replace(/\b(?:en|de)\s+\d{1,5}\s*(?:palabras|words|p[áa]ginas?|pages?)\b/gi, ' ')
+    .replace(/\b(?:sobre|about)\s*$/gi, ' ')
     .replace(/\b(crea|crear|genera|generar|haz|hacer|dame|prepara|elabora|en un|una|un|word|excel|powerpoint|power\s*point|ppt|pptx|xlsx|docx|pdf|documento)\b/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -858,6 +893,31 @@ function appendProfessionalBlueprintMarkdown(lines, blueprint) {
   }
 }
 
+// Parse an explicit length request ("en 200 palabras", "300 words",
+// "2 páginas", "5 pages") into a word target. Returns null when the user
+// didn't constrain length. Pages ≈ 350 words of body prose.
+function parseRequestedLength(userRequest = '') {
+  const text = String(userRequest);
+  const words = text.match(/(\d{2,5})\s*(?:palabras|words)\b/i);
+  if (words) return Math.min(20000, Math.max(50, Number(words[1])));
+  const pages = text.match(/(\d{1,3})\s*(?:p[áa]ginas?|pages?)\b/i);
+  if (pages) return Math.min(20000, Math.max(200, Number(pages[1]) * 350));
+  return null;
+}
+
+// How many content sections a word budget honestly supports. Each section
+// carries ~120-160 words of prose plus bullets; planning 8 template sections
+// for a "200 palabras" request is how a 2-page ask became a 6-page document.
+function sectionBudgetForWords(wordTarget) {
+  if (!wordTarget) return null;
+  if (wordTarget <= 260) return 1;
+  if (wordTarget <= 520) return 2;
+  if (wordTarget <= 900) return 3;
+  if (wordTarget <= 1400) return 4;
+  if (wordTarget <= 2200) return 6;
+  return null; // large asks keep the full template skeleton
+}
+
 function buildPlan({ prompt, format, template, complexity = 'standard', referenceFiles = [] }) {
   const rawUserRequest = extractUserDocumentRequest(prompt);
   const sourceContent = extractSourceContent(rawUserRequest);
@@ -867,19 +927,39 @@ function buildPlan({ prompt, format, template, complexity = 'standard', referenc
     : titleFromPrompt(userRequest, template === 'academic' ? 'Informe académico profesional' : 'Documento profesional');
   const normalizedReferenceFiles = normalizeReferenceFiles(referenceFiles);
   const baseSections = {
-    academic: ['Portada', 'Resumen ejecutivo', 'Marco conceptual', 'Metodología', 'Resultados', 'Discusión', 'Conclusiones', 'Referencias APA 7', 'Anexos'],
+    // 'Portada' / 'Anexos' removed: they shipped as empty meta-sections the
+    // LLM had nothing real to write for (the "Portada" heading + pipeline
+    // marketing copy the user flagged). A real academic doc keeps Referencias.
+    academic: ['Resumen ejecutivo', 'Marco conceptual', 'Metodología', 'Resultados', 'Discusión', 'Conclusiones', 'Referencias'],
     legal: ['Identificación de partes', 'Objeto', 'Obligaciones', 'Confidencialidad', 'Vigencia', 'Resolución de controversias', 'Firmas'],
     business: ['Resumen ejecutivo', 'Contexto', 'KPIs', 'Análisis', 'Riesgos', 'Plan de acción', 'Conclusiones'],
     education: ['Objetivos', 'Competencias', 'Contenido', 'Actividades', 'Evaluación', 'Recursos', 'Cierre'],
-    premium: ['Resumen', 'Contexto', 'Desarrollo', 'Hallazgos', 'Recomendaciones', 'Anexos'],
+    premium: ['Resumen', 'Contexto', 'Desarrollo', 'Hallazgos', 'Recomendaciones'],
   };
   const sections = baseSections[template] || baseSections.premium;
-  let plannedSections = sourceContent ? ['Contenido convertido', 'Control de calidad'] : [...sections];
+  let plannedSections = sourceContent ? ['Contenido convertido'] : [...sections];
   for (const section of inferPromptSections(userRequest)) {
     plannedSections = addUniqueSection(plannedSections, section);
   }
   for (const section of inferProfessionalSections(userRequest, complexity)) {
     plannedSections = addUniqueSection(plannedSections, section);
+  }
+  // Honour an explicit length request BEFORE padding with reference material:
+  // "en 200 palabras" must not fan out into an 8-section template skeleton.
+  // Prompt-inferred sections (the user's own outline) survive the cut first.
+  const wordTarget = sourceContent ? null : parseRequestedLength(userRequest);
+  const sectionBudget = sectionBudgetForWords(wordTarget);
+  if (sectionBudget && plannedSections.length > sectionBudget) {
+    const userSections = inferPromptSections(userRequest);
+    const keep = [];
+    for (const section of userSections) {
+      if (keep.length < sectionBudget) keep.push(section);
+    }
+    for (const section of plannedSections) {
+      if (keep.length >= sectionBudget) break;
+      if (!keep.includes(section)) keep.push(section);
+    }
+    plannedSections = keep.length > 0 ? keep : plannedSections.slice(0, sectionBudget);
   }
   if (normalizedReferenceFiles.length > 0) {
     plannedSections = addUniqueSection(plannedSections, 'Material de referencia incorporado');
@@ -897,6 +977,7 @@ function buildPlan({ prompt, format, template, complexity = 'standard', referenc
     template,
     complexity,
     sourceContent,
+    wordTarget,
     formulaBlocks: sourceContent ? [] : inferFormulaBlocks(userRequest),
     sections: plannedSections,
     referenceFiles: normalizedReferenceFiles.map(({ excerpt, ...file }) => file),
@@ -1010,7 +1091,7 @@ function validateDocx(buffer, expected = {}) {
     contentTypes: entries.includes('[Content_Types].xml'),
     documentXml: documentXml.includes('<w:document'),
     headings: (documentXml.match(/Heading[1-6]/g) || []).length >= (expected.minHeadings || 2),
-    table: tableCount >= (Number.isFinite(expected.minTables) ? expected.minTables : 1),
+    table: tableCount >= (expected.minTables ?? 1),
     paragraphs: paragraphCount >= (expected.minParagraphs || 6),
     media: !expected.requiresImage || entries.some((e) => e.startsWith('word/media/')),
     headerFooter: !expected.requiresHeaderFooter || headerFooter,
@@ -1027,10 +1108,11 @@ function validateDocx(buffer, expected = {}) {
     technicalScore: scoreFromChecks(checks),
     qualityScore: scoreFromChecks({
       styled: /Heading|w:jc|w:tbl/.test(documentXml),
-      hierarchy: (documentXml.match(/Heading[1-6]/g) || []).length >= 2,
-      // Structure = paragraphs + headings; tables are content-driven, not a
-      // quality requirement (a clean report without tables is professional).
-      structured: documentXml.includes('<w:p') && /Heading[1-6]/.test(documentXml),
+      // Quality follows the plan: a "200 palabras" doc honestly has one
+      // heading and zero tables — grading it against the long-form template
+      // shape forced a spurious repair loop.
+      hierarchy: (documentXml.match(/Heading[1-6]/g) || []).length >= Math.min(2, expected.minHeadings ?? 2),
+      structured: ((expected.minTables ?? 1) === 0 || documentXml.includes('<w:tbl')) && documentXml.includes('<w:p'),
       mediaReady: entries.some((e) => e.startsWith('word/media/')) || !expected.requiresImage,
       formulaReady: !expected.requiresFormula || hasFormulaContent,
       professional: headerFooter || !expected.requiresHeaderFooter,
@@ -1266,33 +1348,38 @@ function validateDocument({ format, buffer, expected = {} }) {
 function expectedFor(format, template, complexity, plan = {}) {
   const high = complexity === 'high' || complexity === 'stress';
   if (format === 'docx') {
-    // Images/tables are only REQUIRED when the plan actually carries them
-    // (attached reference images, professional blueprint tables). A clean
-    // text document without filler artifacts is the professional default.
-    const hasReferenceImages = Array.isArray(plan.referenceFiles) && plan.referenceFiles.some((file) => file?.isImage);
     if (plan.sourceContent) {
       return {
-        requiresImage: hasReferenceImages,
+        requiresImage: false,
         requiresHeaderFooter: true,
         requiresToc: false,
         requiresReferences: false,
         requiresFormula: false,
-        minHeadings: 2,
-        minParagraphs: 6,
+        minHeadings: 1,
+        minParagraphs: 4,
         minTables: 0,
         requiredSections: [],
         requiredTerms: [],
       };
     }
+    // Expectations follow the plan, not the old boilerplate: the guaranteed
+    // marker image / QC table / TOC field were removed as user-visible
+    // meta-noise, so images are only required when the user actually attached
+    // them, tables only when the blueprint plans them, and a short explicit
+    // word budget ("en 200 palabras") relaxes the structural minimums.
+    const shortDoc = Boolean(plan.wordTarget && plan.wordTarget <= 520);
+    const sectionsCount = Array.isArray(plan.sections) ? plan.sections.length : 0;
+    const hasReferenceImages = Array.isArray(plan.referenceFiles)
+      && plan.referenceFiles.some((file) => file && file.isImage);
     return {
       requiresImage: hasReferenceImages,
       requiresHeaderFooter: true,
-      requiresToc: template === 'academic' || high,
-      acceptsManualToc: Boolean(plan.qualityTargets?.professionalBlueprint),
-      requiresReferences: template === 'academic',
+      requiresToc: (template === 'academic' || high) && sectionsCount >= 5,
+      acceptsManualToc: true,
+      requiresReferences: template === 'academic' && sectionsCount >= 5,
       requiresFormula: Array.isArray(plan.formulaBlocks) && plan.formulaBlocks.length > 0,
-      minHeadings: high ? 5 : 2,
-      minParagraphs: high ? 18 : 8,
+      minHeadings: shortDoc ? 1 : (high ? 5 : 2),
+      minParagraphs: shortDoc ? 4 : (high ? 18 : 8),
       minTables: plan.qualityTargets?.professionalBlueprint ? 4 : 0,
       requiredSections: plan.qualityTargets?.requiredSections || [],
       requiredTerms: plan.qualityTargets?.requiredTerms || [],
@@ -1318,6 +1405,15 @@ function expectedFor(format, template, complexity, plan = {}) {
   return { minChars: 120, requiresTable: true };
 }
 
+// Page size for generated documents. Spanish/LatAm users expect A4 (the PDF
+// branch already uses A4); Letter remains available via DOC_PAGE_SIZE=letter.
+function docPageSize() {
+  const wantLetter = String(process.env.DOC_PAGE_SIZE || 'a4').toLowerCase() === 'letter';
+  return wantLetter
+    ? { width: 12240, height: 15840 }
+    : { width: 11906, height: 16838 }; // A4 in twips
+}
+
 async function createPandocReferenceDoc(referenceDocPath) {
   const referenceDoc = new Document({
     creator: 'siraGPT Document Pipeline',
@@ -1325,7 +1421,8 @@ async function createPandocReferenceDoc(referenceDocPath) {
       default: {
         document: {
           run: { font: 'Arial', size: 24 },
-          paragraph: { spacing: { line: 276, before: 80, after: 120 } },
+          // Justified body: professional documents read ragged without it.
+          paragraph: { spacing: { line: 276, before: 80, after: 120 }, alignment: AlignmentType.JUSTIFIED },
         },
       },
       paragraphStyles: [
@@ -1335,8 +1432,8 @@ async function createPandocReferenceDoc(referenceDocPath) {
           basedOn: 'Normal',
           next: 'Normal',
           quickFormat: true,
-          run: { font: 'Arial', size: 32, bold: true },
-          paragraph: { spacing: { before: 260, after: 180 }, outlineLevel: 0 },
+          run: { font: 'Arial', size: 32, bold: true, color: '1F2937' },
+          paragraph: { spacing: { before: 260, after: 180 }, outlineLevel: 0, alignment: AlignmentType.LEFT },
         },
         {
           id: 'Heading2',
@@ -1344,8 +1441,8 @@ async function createPandocReferenceDoc(referenceDocPath) {
           basedOn: 'Normal',
           next: 'Normal',
           quickFormat: true,
-          run: { font: 'Arial', size: 28, bold: true },
-          paragraph: { spacing: { before: 220, after: 140 }, outlineLevel: 1 },
+          run: { font: 'Arial', size: 28, bold: true, color: '374151' },
+          paragraph: { spacing: { before: 220, after: 140 }, outlineLevel: 1, alignment: AlignmentType.LEFT },
         },
         {
           id: 'Heading3',
@@ -1353,19 +1450,21 @@ async function createPandocReferenceDoc(referenceDocPath) {
           basedOn: 'Normal',
           next: 'Normal',
           quickFormat: true,
-          run: { font: 'Arial', size: 26, bold: true },
-          paragraph: { spacing: { before: 180, after: 120 }, outlineLevel: 2 },
+          run: { font: 'Arial', size: 26, bold: true, color: '4B5563' },
+          paragraph: { spacing: { before: 180, after: 120 }, outlineLevel: 2, alignment: AlignmentType.LEFT },
         },
       ],
     },
     sections: [{
       properties: {
         page: {
-          size: { width: 12240, height: 15840 },
+          size: docPageSize(),
           margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 },
         },
       },
-      children: [new Paragraph({ text: 'Reference Document', heading: HeadingLevel.HEADING_1 })],
+      // Plain body text: a HEADING_1 paragraph here made Pandoc emit a
+      // duplicate Heading1 style in every generated document.
+      children: [new Paragraph({ text: 'Reference Document' })],
     }],
   });
   await fsp.writeFile(referenceDocPath, await Packer.toBuffer(referenceDoc));
@@ -1399,7 +1498,7 @@ function buildFooterXml() {
 <w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
   <w:p>
     <w:pPr><w:jc w:val="center"/></w:pPr>
-    <w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>siraGPT - Pagina </w:t></w:r>
+    <w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>siraGPT - Página </w:t></w:r>
     <w:r><w:fldChar w:fldCharType="begin"/></w:r>
     <w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>
     <w:r><w:fldChar w:fldCharType="separate"/></w:r>
@@ -1452,7 +1551,8 @@ function postProcessWordDocx(buffer, plan) {
   );
 
   const refs = `<w:headerReference w:type="default" r:id="${headerRid}"/><w:footerReference w:type="default" r:id="${footerRid}"/>`;
-  const page = '<w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/>';
+  const { width: pgW, height: pgH } = docPageSize();
+  const page = `<w:pgSz w:w="${pgW}" w:h="${pgH}"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/>`;
   const enhanceSectPr = (_match, attrs, inner) => {
     const cleaned = inner
       .replace(/<w:headerReference\b[^>]*\/>/g, '')
@@ -1468,10 +1568,19 @@ function postProcessWordDocx(buffer, plan) {
   }
 
   documentXml = documentXml.replace(/<w:tblPr>([\s\S]*?)<\/w:tblPr>/g, (_match, inner) => {
-    const cleaned = inner
+    let cleaned = inner
       .replace(/<w:tblW\b[^>]*\/>/g, '')
       .replace(/<w:tblBorders>[\s\S]*?<\/w:tblBorders>/g, '')
       .replace(/<w:tblCellMar>[\s\S]*?<\/w:tblCellMar>/g, '');
+    // OOXML enforces a strict child order inside tblPr: …tblW → tblBorders →
+    // tblCellMar → tblLook. Pandoc emits tblStyle+tblLook, so appending our
+    // block AFTER tblLook produced an out-of-order tblPr — Word tolerates it
+    // but LibreOffice (and the soffice-based preview) mis-parses the table
+    // into an empty grid with the cell text spilled below it. Extract tblLook
+    // and re-append it after our injected block.
+    const lookMatch = cleaned.match(/<w:tblLook\b[^>]*\/>/);
+    const look = lookMatch ? lookMatch[0] : '';
+    if (look) cleaned = cleaned.replace(look, '');
     return `<w:tblPr>${cleaned}
       <w:tblW w:w="9360" w:type="dxa"/>
       <w:tblBorders>
@@ -1488,7 +1597,7 @@ function postProcessWordDocx(buffer, plan) {
         <w:bottom w:w="80" w:type="dxa"/>
         <w:right w:w="120" w:type="dxa"/>
       </w:tblCellMar>
-    </w:tblPr>`;
+    ${look}</w:tblPr>`;
   });
 
   zip.file('word/document.xml', documentXml);
@@ -1525,12 +1634,19 @@ async function buildDocxWithPandoc(plan, outputPath) {
     const args = [
       markdownPath,
       '-f',
-      'markdown+pipe_tables+grid_tables+tex_math_dollars+tex_math_single_backslash+implicit_figures+link_attributes',
+      // raw_attribute enables the ```{=openxml} page-break blocks emitted by
+      // buildDocxMarkdown. --toc was removed on purpose: pandoc's docx TOC is
+      // a Word FIELD that renders as an empty English "Table of Contents"
+      // heading in LibreOffice and every web viewer; the markdown builder now
+      // writes a static "Índice" section instead.
+      'markdown+pipe_tables+grid_tables+tex_math_dollars+tex_math_single_backslash+implicit_figures+link_attributes+raw_attribute',
       '-t',
       'docx',
       '--standalone',
-      '--toc',
-      '--toc-depth=3',
+      // Without this Pandoc injects ~31 stray syntax-highlight styles
+      // (AlertTok, CommentTok, SourceCode…) into every document, even ones
+      // with zero code blocks. Verified: 31 → 0 with highlighting disabled.
+      '--no-highlight',
       '--reference-doc',
       referenceDocPath,
       '-o',
@@ -1635,21 +1751,35 @@ async function buildDocx(plan, outputPath) {
       ? [makeTable(block.table.headers, block.table.rows, [1800, 2520, 5040])]
       : []),
   ]);
-  // Professionalism: the deliverable opens with the title and content only —
-  // no internal branding lines and no synthetic "validation marker" images.
-  const openingChildren = blueprint ? [
-    new Paragraph({ text: plan.title, heading: HeadingLevel.TITLE, alignment: AlignmentType.CENTER }),
+  // Opening: title + date, then (for long-form docs) a static index. The
+  // previous shape opened with an empty TableOfContents FIELD followed by a
+  // PageBreak — outside Word the field renders as nothing, so page 1 of every
+  // document was blank (the bug the user screenshotted). It also shipped a
+  // "Documento generado por el pipeline…" meta line and a broken marker image
+  // (black box). Static index renders identically in Word, LibreOffice and
+  // web viewers; short documents skip it entirely.
+  const dateLine = new Paragraph({
+    children: [new TextRun({ text: new Date().toISOString().slice(0, 10), color: '6B7280' })],
+    alignment: AlignmentType.CENTER,
+    spacing: { after: 360 },
+  });
+  const indexSections = blueprint
+    ? blueprint.sections.map((section) => section.heading)
+    : plan.sections.filter((s) => s && !/^material de referencia/i.test(s));
+  const staticIndex = indexSections.length >= 5 ? [
     new Paragraph({ text: 'Índice', heading: HeadingLevel.HEADING_1 }),
-    ...blueprint.sections.map((section, index) => new Paragraph({
+    ...indexSections.map((heading, index) => new Paragraph({
       children: [
         new TextRun({ text: `${index + 1}. `, bold: true }),
-        new TextRun(section.heading),
+        new TextRun(String(heading)),
       ],
     })),
-  ] : [
-    new TableOfContents('Índice automático', { hyperlink: true, headingStyleRange: '1-3' }),
     new Paragraph({ children: [new PageBreak()] }),
+  ] : [];
+  const openingChildren = [
     new Paragraph({ text: plan.title, heading: HeadingLevel.TITLE, alignment: AlignmentType.CENTER }),
+    dateLine,
+    ...staticIndex,
   ];
   const children = [
     ...openingChildren,
@@ -1773,12 +1903,12 @@ async function buildDocx(plan, outputPath) {
     sections: [{
       properties: {
         page: {
-          size: { width: 12240, height: 15840 },
+          size: docPageSize(),
           margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 },
         },
       },
       headers: { default: new Header({ children: [new Paragraph({ text: plan.title, alignment: AlignmentType.RIGHT })] }) },
-      footers: { default: new Footer({ children: [new Paragraph({ children: [new TextRun('siraGPT - Pagina '), new TextRun({ children: [PageNumber.CURRENT] })], alignment: AlignmentType.CENTER })] }) },
+      footers: { default: new Footer({ children: [new Paragraph({ children: [new TextRun('siraGPT - Página '), new TextRun({ children: [PageNumber.CURRENT] })], alignment: AlignmentType.CENTER })] }) },
       children,
     }],
   });
@@ -1788,68 +1918,135 @@ async function buildDocx(plan, outputPath) {
 }
 
 async function buildXlsx(plan, outputPath) {
+  // Topic-specific data via the content ladder (Cerebras → OpenRouter →
+  // OpenAI). The previous shape shipped the SAME hardcoded Mes/Ventas/Costos
+  // workbook with synthetic numbers no matter what the user asked for — a
+  // pharmacy-inventory request got a generic sales sheet. Fail-open: when no
+  // provider is configured (or the call fails) DATA is null and the python
+  // template falls back to the legacy deterministic dataset.
+  let generated = null;
+  try {
+    generated = await generateSpreadsheetContent({
+      prompt: plan.userRequest || plan.title,
+      title: plan.title,
+      language: /^[a-z]{2}$/i.test(plan.language || '') ? plan.language : 'es',
+    });
+  } catch { /* fall back below */ }
+
   const py = `
-import base64, os, random
+import base64, json, os
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.chart import BarChart, Reference, LineChart
 from openpyxl.formatting.rule import ColorScaleRule
-from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.table import Table, TableStyleInfo
+from openpyxl.utils import get_column_letter
 
 OUT_PATH = ${JSON.stringify(outputPath)}
 REFS = ${JSON.stringify((plan.referenceBriefs || []).map((ref) => ({ name: ref.name, excerpt: ref.excerpt })))}
+DATA = json.loads(${JSON.stringify(JSON.stringify(generated))})
+TITLE = ${JSON.stringify(plan.title)}
+
+if not DATA:
+    DATA = {
+        "sheetName": "Datos",
+        "headers": ["Mes", "Ventas", "Costos", "Satisfaccion"],
+        "rows": [[mes, 12000 + i * 850, 7000 + i * 430, (i % 5) + 1] for i, mes in enumerate(["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"], start=2)],
+        "numericColumns": [1, 2, 3],
+        "currencyColumns": [1, 2],
+        "insights": [
+            {"finding": "Crecimiento", "interpretation": "La tendencia muestra expansión sostenida con margen positivo."},
+            {"finding": "Riesgo", "interpretation": "Monitorear costos variables y dependencia de satisfacción."},
+        ],
+    }
+
+headers = DATA["headers"]
+rows = DATA["rows"]
+numeric_cols = [c for c in DATA.get("numericColumns", []) if 0 <= c < len(headers)]
+currency_cols = [c for c in DATA.get("currencyColumns", []) if c in numeric_cols]
+
 wb = Workbook()
 ws = wb.active
-ws.title = "Datos"
-headers = ["Mes", "Ventas", "Costos", "Margen", "Satisfaccion"]
+ws.title = DATA.get("sheetName") or "Datos"
 ws.append(headers)
-for i, mes in enumerate(["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"], start=2):
-    ventas = 12000 + i * 850
-    costos = 7000 + i * 430
-    ws.append([mes, ventas, costos, f"=B{i}-C{i}", (i % 5) + 1])
+for row in rows:
+    ws.append(row[:len(headers)])
+last_row = len(rows) + 1
+last_col = get_column_letter(len(headers))
+
 for cell in ws[1]:
     cell.fill = PatternFill("solid", fgColor="0F172A")
     cell.font = Font(color="FFFFFF", bold=True)
     cell.alignment = Alignment(horizontal="center")
 ws.freeze_panes = "A2"
-tab = Table(displayName="TablaDatos", ref="A1:E13")
+
+# Column widths + number formats per column type
+for idx, header in enumerate(headers):
+    letter = get_column_letter(idx + 1)
+    width = max(len(str(header)), *(len(str(r[idx])) if idx < len(r) else 0 for r in rows)) if rows else len(str(header))
+    ws.column_dimensions[letter].width = min(max(width + 3, 12), 42)
+    if idx in currency_cols:
+        fmt = '#,##0.00'
+    elif idx in numeric_cols:
+        fmt = '#,##0.##'
+    else:
+        fmt = None
+    if fmt:
+        for r in range(2, last_row + 1):
+            ws.cell(row=r, column=idx + 1).number_format = fmt
+
+tab = Table(displayName="TablaDatos", ref=f"A1:{last_col}{last_row}")
 tab.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showRowStripes=True, showColumnStripes=False)
 ws.add_table(tab)
-ws.conditional_formatting.add("B2:D13", ColorScaleRule(start_type="min", start_color="F87171", mid_type="percentile", mid_value=50, mid_color="FBBF24", end_type="max", end_color="34D399"))
-dv = DataValidation(type="list", formula1='"1,2,3,4,5"', allow_blank=False)
-ws.add_data_validation(dv)
-dv.add("E2:E13")
-chart = BarChart()
-chart.title = "Ventas vs costos"
-chart.y_axis.title = "Monto"
-chart.x_axis.title = "Mes"
-chart.add_data(Reference(ws, min_col=2, max_col=3, min_row=1, max_row=13), titles_from_data=True)
-chart.set_categories(Reference(ws, min_col=1, min_row=2, max_row=13))
-ws.add_chart(chart, "G2")
 
+if numeric_cols:
+    first_num = get_column_letter(min(numeric_cols) + 1)
+    last_num = get_column_letter(max(numeric_cols) + 1)
+    ws.conditional_formatting.add(
+        f"{first_num}2:{last_num}{last_row}",
+        ColorScaleRule(start_type="min", start_color="F87171", mid_type="percentile", mid_value=50, mid_color="FBBF24", end_type="max", end_color="34D399"),
+    )
+    chart = BarChart()
+    chart.title = TITLE[:60]
+    chart.y_axis.title = headers[numeric_cols[0]]
+    chart.x_axis.title = headers[0]
+    chart.add_data(Reference(ws, min_col=numeric_cols[0] + 1, max_col=min(numeric_cols[0] + 2, len(headers)), min_row=1, max_row=last_row), titles_from_data=True)
+    chart.set_categories(Reference(ws, min_col=1, min_row=2, max_row=last_row))
+    ws.add_chart(chart, f"{get_column_letter(len(headers) + 2)}2")
+
+# Dashboard: real formulas per numeric column (never hardcoded values)
 dash = wb.create_sheet("Dashboard")
-dash["A1"] = ${JSON.stringify(plan.title)}
+dash["A1"] = TITLE
 dash["A1"].font = Font(size=18, bold=True, color="0F172A")
-dash["A3"] = "Total ventas"; dash["B3"] = "=SUM(Datos!B2:B13)"
-dash["A4"] = "Margen promedio"; dash["B4"] = "=AVERAGE(Datos!D2:D13)"
-dash["A5"] = "Satisfaccion promedio"; dash["B5"] = "=AVERAGE(Datos!E2:E13)"
-line = LineChart()
-line.title = "Margen mensual"
-line.add_data(Reference(ws, min_col=4, min_row=1, max_row=13), titles_from_data=True)
-line.set_categories(Reference(ws, min_col=1, min_row=2, max_row=13))
-dash.add_chart(line, "D3")
+row_cursor = 3
+data_name = ws.title
+for col in numeric_cols[:4]:
+    letter = get_column_letter(col + 1)
+    dash.cell(row=row_cursor, column=1, value=f"Total {headers[col]}")
+    dash.cell(row=row_cursor, column=2, value=f"=SUM('{data_name}'!{letter}2:{letter}{last_row})")
+    dash.cell(row=row_cursor + 1, column=1, value=f"Promedio {headers[col]}")
+    dash.cell(row=row_cursor + 1, column=2, value=f"=AVERAGE('{data_name}'!{letter}2:{letter}{last_row})")
+    row_cursor += 2
+dash.column_dimensions["A"].width = 34
+dash.column_dimensions["B"].width = 18
+if numeric_cols:
+    line = LineChart()
+    line.title = f"Tendencia: {headers[numeric_cols[0]]}"[:60]
+    line.add_data(Reference(ws, min_col=numeric_cols[0] + 1, min_row=1, max_row=last_row), titles_from_data=True)
+    line.set_categories(Reference(ws, min_col=1, min_row=2, max_row=last_row))
+    dash.add_chart(line, "D3")
 
 interp = wb.create_sheet("Interpretacion")
 interp.append(["Hallazgo", "Interpretacion"])
-interp.append(["Crecimiento", "La tendencia muestra expansión sostenida con margen positivo."])
-interp.append(["Riesgo", "Monitorear costos variables y dependencia de satisfacción."])
+for item in DATA.get("insights", []):
+    interp.append([item.get("finding", ""), item.get("interpretation", "")])
+for cell in interp[1]:
+    cell.fill = PatternFill("solid", fgColor="0F172A")
+    cell.font = Font(color="FFFFFF", bold=True)
+interp.column_dimensions["A"].width = 28
+interp.column_dimensions["B"].width = 70
+interp.freeze_panes = "A2"
 
-meta = wb.create_sheet("Métricas")
-meta.append(["Campo", "Valor"])
-meta.append(["Pipeline", "multiagente"])
-meta.append(["Plantilla", ${JSON.stringify(plan.template)}])
-meta.append(["Formato", "xlsx"])
 if REFS:
     refs = wb.create_sheet("Referencias")
     refs.append(["Archivo", "Extracto usado"])
@@ -2014,11 +2211,29 @@ async function buildPptx(plan, outputPath) {
 
   slide = pptx.addSlide();
   addTitle(slide, 'Agenda', 'Ruta de la presentación');
-  contentPlan.agenda.slice(0, 7).forEach((s, i) => {
-    slide.addText(String(i + 1).padStart(2, '0'), { x: 0.9, y: 1.98 + i * 0.56, w: 0.42, h: 0.3, fontSize: 11, bold: true, color: P.accent, margin: 0 });
-    slide.addText(s, { x: 1.48, y: 1.92 + i * 0.56, w: 7.1, h: 0.36, fontSize: 17, color: P.ink, bold: i === 0, fit: 'shrink' });
-    slide.addShape(pptx.ShapeType.rect, { x: 0.92, y: 2.36 + i * 0.56, w: 7.5, h: 0.01, fill: { color: P.line, transparency: 15 }, line: { color: P.line, transparency: 100 } });
+  // Fill the canvas: ≥5 items flow into two balanced columns (the previous
+  // single half-width column left the right 50% of the slide empty — the
+  // "half-empty deck" the user flagged). ≤4 items keep one column plus a
+  // thesis panel on the right so the slide still reads full.
+  const agendaItems = contentPlan.agenda.slice(0, 8);
+  const twoColAgenda = agendaItems.length >= 5;
+  const perCol = twoColAgenda ? Math.ceil(agendaItems.length / 2) : agendaItems.length;
+  agendaItems.forEach((s, i) => {
+    const col = twoColAgenda ? Math.floor(i / perCol) : 0;
+    const row = twoColAgenda ? i % perCol : i;
+    const x = 0.9 + col * 6.15;
+    const rowH = twoColAgenda ? 0.72 : 0.62;
+    const y = 2.05 + row * rowH;
+    slide.addText(String(i + 1).padStart(2, '0'), { x, y: y + 0.06, w: 0.42, h: 0.3, fontSize: 11, bold: true, color: P.accent, margin: 0 });
+    slide.addText(s, { x: x + 0.58, y, w: twoColAgenda ? 5.15 : 7.1, h: 0.36, fontSize: 16, color: P.ink, bold: i === 0, fit: 'shrink' });
+    slide.addShape(pptx.ShapeType.rect, { x: x + 0.02, y: y + 0.44, w: twoColAgenda ? 5.6 : 7.5, h: 0.01, fill: { color: P.line, transparency: 15 }, line: { color: P.line, transparency: 100 } });
   });
+  if (!twoColAgenda && contentPlan.thesis) {
+    slide.addShape(pptx.ShapeType.roundRect, { x: 8.55, y: 2.05, w: 4.0, h: 3.2, rectRadius: 0.1, fill: { color: P.surfaceAlt }, line: { color: P.chipLine } });
+    slide.addShape(pptx.ShapeType.rect, { x: 8.55, y: 2.05, w: 0.09, h: 3.2, fill: { color: P.accent }, line: { color: P.accent } });
+    slide.addText('TESIS DE LA PRESENTACIÓN', { x: 8.82, y: 2.3, w: 3.5, h: 0.22, fontSize: 9.5, bold: true, color: P.accent, charSpace: 1.5, margin: 0 });
+    slide.addText(contentPlan.thesis, { x: 8.82, y: 2.66, w: 3.5, h: 2.35, fontSize: 13.5, bold: true, color: P.ink, fit: 'shrink', margin: 0 });
+  }
   slide.addNotes('Explicar la ruta de navegación y anticipar que cada lámina aterriza una decisión o aprendizaje.');
 
   if (contentPlan.references?.length) {
@@ -2049,18 +2264,33 @@ async function buildPptx(plan, outputPath) {
     target.addText(text, { x: 8.62, y: 2.62, w: 3.66, h: 1.2, fontSize: 13.5, bold: true, color: P.ink, fit: 'shrink', margin: 0 });
   };
 
+  const totalSlides = contentPlan.slides.length;
   for (const [i, slideSpec] of contentPlan.slides.slice(0, 10).entries()) {
     const layout = slideSpec.layout || 'bullets';
     slide = pptx.addSlide();
     const pageIndex = i + 3;
 
     if (layout === 'section') {
+      // Divider with presence: giant translucent section number, kicker,
+      // title, summary and a progress rail. The previous shape was a lone
+      // title floating on a dark canvas — read as unfinished.
+      const sectionNumber = String((contentPlan.slides.slice(0, i).filter((s) => (s.layout || '') === 'section').length + 1)).padStart(2, '0');
       slide.background = { color: P.sectionBg };
       slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 7.5, fill: { color: P.sectionBg }, line: { color: P.sectionBg } });
+      slide.addText(sectionNumber, { x: 8.7, y: 0.9, w: 4.3, h: 3.4, fontFace: DISPLAY, fontSize: 200, bold: true, color: P.sectionMuted, transparency: 80, align: 'right', margin: 0 });
       slide.addShape(pptx.ShapeType.rect, { x: 0.65, y: 3.0, w: 0.85, h: 0.07, fill: { color: P.accent2 }, line: { color: P.accent2 } });
       if (slideSpec.kicker) slide.addText(slideSpec.kicker.toUpperCase(), { x: 0.67, y: 2.5, w: 9.5, h: 0.3, fontSize: 12, bold: true, color: P.accent2, charSpace: 2, margin: 0 });
       slide.addText(slideSpec.title, { x: 0.65, y: 3.25, w: 11.6, h: 1.3, fontFace: DISPLAY, fontSize: 40, bold: true, color: P.sectionInk, fit: 'shrink', margin: 0 });
-      if (slideSpec.summary) slide.addText(slideSpec.summary, { x: 0.67, y: 4.7, w: 9.4, h: 0.7, fontSize: 15, color: P.sectionMuted, fit: 'shrink', margin: 0 });
+      slide.addText(slideSpec.summary || `Sección ${sectionNumber} de la presentación: ${contentPlan.topic || plan.title}.`, { x: 0.67, y: 4.7, w: 9.4, h: 0.7, fontSize: 15, color: P.sectionMuted, fit: 'shrink', margin: 0 });
+      // Progress rail: one dot per content slide, current position accented.
+      const totalDots = Math.min(10, totalSlides);
+      for (let dot = 0; dot < totalDots; dot += 1) {
+        slide.addShape(pptx.ShapeType.ellipse, {
+          x: 0.68 + dot * 0.34, y: 6.75, w: 0.14, h: 0.14,
+          fill: { color: dot === Math.min(i, totalDots - 1) ? P.accent2 : P.sectionMuted },
+          line: { color: dot === Math.min(i, totalDots - 1) ? P.accent2 : P.sectionMuted },
+        });
+      }
       slide.addNotes(slideSpec.notes || slideSpec.title);
       continue;
     }
@@ -2083,11 +2313,21 @@ async function buildPptx(plan, outputPath) {
     }
 
     if (layout === 'stat' && slideSpec.stat) {
-      slide.addText(slideSpec.stat.value, { x: 0.7, y: 2.3, w: 5.9, h: 2.0, fontFace: DISPLAY, fontSize: 88, bold: true, color: P.accent, fit: 'shrink', margin: 0 });
-      slide.addText(slideSpec.stat.caption, { x: 0.78, y: 4.45, w: 5.6, h: 0.95, fontSize: 17, color: P.ink, fit: 'shrink', margin: 0 });
-      (slideSpec.support || []).slice(0, 3).forEach((item, itemIndex) => {
-        slide.addShape(pptx.ShapeType.roundRect, { x: 7.3, y: 2.15 + itemIndex * 1.45, w: 5.2, h: 1.2, rectRadius: 0.1, fill: { color: P.surfaceAlt }, line: { color: P.line } });
-        slide.addText(item, { x: 7.58, y: 2.45 + itemIndex * 1.45, w: 4.7, h: 0.66, fontSize: 13, color: P.body, fit: 'shrink', margin: 0 });
+      // The right rail must never render empty (the "60% blank stat slide"
+      // the user flagged): when the designer sent no support items, fall
+      // back to summary/takeaway/notes-derived cards so the canvas is full.
+      slide.addShape(pptx.ShapeType.roundRect, { x: 0.7, y: 2.0, w: 6.1, h: 4.55, rectRadius: 0.12, fill: { color: P.surfaceAlt }, line: { color: P.chipLine } });
+      slide.addText(slideSpec.stat.value, { x: 0.95, y: 2.45, w: 5.6, h: 2.0, fontFace: DISPLAY, fontSize: 84, bold: true, color: P.accent, fit: 'shrink', margin: 0 });
+      slide.addText(slideSpec.stat.caption, { x: 1.0, y: 4.6, w: 5.5, h: 1.6, fontSize: 16, color: P.ink, fit: 'shrink', margin: 0 });
+      const supportItems = (Array.isArray(slideSpec.support) && slideSpec.support.length > 0
+        ? slideSpec.support
+        : [slideSpec.summary, slideSpec.takeaway || slideSpec.insight, slideSpec.notes]
+      ).filter(Boolean).slice(0, 3);
+      supportItems.forEach((item, itemIndex) => {
+        const y = 2.0 + itemIndex * 1.55;
+        slide.addShape(pptx.ShapeType.roundRect, { x: 7.3, y, w: 5.2, h: 1.32, rectRadius: 0.1, fill: { color: P.surface }, line: { color: P.line } });
+        slide.addShape(pptx.ShapeType.rect, { x: 7.3, y, w: 0.08, h: 1.32, fill: { color: P.accent2 }, line: { color: P.accent2 } });
+        slide.addText(item, { x: 7.56, y: y + 0.22, w: 4.75, h: 0.9, fontSize: 13, color: P.body, fit: 'shrink', margin: 0 });
       });
       slide.addNotes(slideSpec.notes);
       continue;
@@ -2482,7 +2722,7 @@ async function buildText(plan, outputPath, format) {
     text = `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${plan.title}</title><style>:root{--bg:#f8fafc;--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;--card:#fff;--accent:#2563eb;--cyan:#06b6d4}*{box-sizing:border-box}body{font-family:Inter,Aptos,system-ui,sans-serif;margin:0;background:radial-gradient(circle at 20% 10%,#dbeafe 0,#f8fafc 34%,#ecfeff 100%);color:var(--ink)}.wrap{max-width:1080px;margin:auto;padding:clamp(24px,5vw,64px)}header.hero{display:grid;grid-template-columns:1.25fr .75fr;gap:24px;align-items:end;margin-bottom:28px}.kpi-panel,.card{background:rgba(255,255,255,.88);border:1px solid var(--line);border-radius:24px;padding:24px;box-shadow:0 24px 70px rgba(15,23,42,.10);backdrop-filter:blur(14px)}h1{font-size:clamp(36px,6vw,64px);line-height:.95;margin:0 0 16px}h2{font-size:24px;margin:8px 0 10px}.lead{font-size:18px;color:#475569;max-width:720px;line-height:1.65}.eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:800}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin:22px 0}.toolbar{display:flex;gap:10px;flex-wrap:wrap;margin:20px 0}.chip,.inspect{border:1px solid var(--line);background:#fff;border-radius:999px;padding:10px 14px;font-weight:700;cursor:pointer}.chip[aria-pressed=true],.inspect:hover{background:linear-gradient(135deg,var(--accent),var(--cyan));color:#fff;border-color:transparent}.metric{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);padding:12px 0}.metric strong{font-size:28px}.notice{margin:20px 0;padding:18px;border-radius:18px;background:#0f172a;color:white}table{width:100%;border-collapse:collapse;background:#fff;border-radius:18px;overflow:hidden}td,th{border-bottom:1px solid var(--line);padding:12px;text-align:left}canvas{width:100%;height:120px;border-radius:18px;background:linear-gradient(135deg,#eff6ff,#ecfeff)}@media(max-width:760px){header.hero,.grid{grid-template-columns:1fr}.wrap{padding:22px}}</style></head><body><main class="wrap"><header class="hero"><div><span class="eyebrow">siraGPT artifact engine</span><h1>${plan.title}</h1><p class="lead">Documento HTML semántico con diseño premium, tabla, enlaces verificables, controles reales y una ruta de validación auditable para entregas profesionales.</p><a href="https://siragpt.com" aria-label="Referencia de producto siraGPT">Referencia de producto</a></div><aside class="kpi-panel" aria-label="Panel de métricas"><div class="metric"><span>Integridad</span><strong>OK</strong></div><div class="metric"><span>Diseño</span><strong>92</strong></div><div class="metric"><span>Entrega</span><strong>Lista</strong></div><canvas id="spark" role="img" aria-label="Tendencia de calidad"></canvas></aside></header><nav class="toolbar" aria-label="Filtros de vista"><button class="chip" type="button" data-filter="all" aria-pressed="true">Todo</button><button class="chip" type="button" data-filter="quality" aria-pressed="false">Calidad</button><button class="chip" type="button" data-filter="delivery" aria-pressed="false">Entrega</button></nav><p id="status" class="notice" role="status">Mostrando todos los bloques validados del documento.</p>${refs}${sourceHtml}<div class="grid">${plan.sourceContent ? '' : sectionCards}</div><section class="card"><h2>Tabla de control</h2><table><tr><th>Métrica</th><th>Estado</th><th>Evidencia</th></tr><tr><td>Integridad</td><td>OK</td><td>Archivo generado y validado</td></tr><tr><td>Diseño</td><td>OK</td><td>Viewport, estructura, interacción y accesibilidad</td></tr><tr><td>Descarga</td><td>OK</td><td>Artefacto persistido en almacenamiento local</td></tr></table></section></main><script>const statusEl=document.getElementById('status');document.querySelectorAll('.chip').forEach(btn=>btn.addEventListener('click',()=>{document.querySelectorAll('.chip').forEach(x=>x.setAttribute('aria-pressed','false'));btn.setAttribute('aria-pressed','true');statusEl.textContent=btn.dataset.filter==='all'?'Mostrando todos los bloques validados del documento.':'Filtro activo: '+btn.textContent+'. Los criterios siguen auditables.';}));document.querySelectorAll('.inspect').forEach(btn=>btn.addEventListener('click',()=>{statusEl.textContent='Criterio del bloque '+btn.dataset.target+': contenido completo, estructura semántica y revisión de entrega aprobada.';}));const c=document.getElementById('spark'),ctx=c.getContext('2d');c.width=640;c.height=180;ctx.lineWidth=8;ctx.strokeStyle='#2563eb';ctx.beginPath();[35,82,64,118,92,136,126].forEach((v,i)=>{const x=40+i*92,y=160-v;i?ctx.lineTo(x,y):ctx.moveTo(x,y)});ctx.stroke();ctx.fillStyle='#06b6d4';ctx.beginPath();ctx.arc(592,34,12,0,Math.PI*2);ctx.fill();</script></body></html>`;
   } else {
     if (plan.sourceContent) {
-      text = [`# ${plan.title}`, '', String(plan.sourceContent).trim(), '', '## Control de calidad', '', '| Métrica | Estado |', '|---|---|', '| Integridad | OK |', '| Diseño | OK |'].join('\n');
+      text = [`# ${plan.title}`, '', String(plan.sourceContent).trim()].join('\n');
       await fsp.writeFile(outputPath, text, 'utf8');
       return Buffer.from(text, 'utf8');
     }
@@ -2605,7 +2845,7 @@ async function buildDocumentFile({ plan, outputDir }) {
 }
 
 function repairPlan(plan, validation) {
-  const sections = Array.from(new Set([...plan.sections, 'Anexos técnicos', 'Control de calidad', 'Registro de evidencias']));
+  const sections = Array.from(new Set(plan.sections));
   const repaired = {
     ...plan,
     complexity: plan.complexity === 'standard' ? 'high' : plan.complexity,
@@ -2689,6 +2929,12 @@ async function runAdvancedDocumentPipeline({
       plan,
       signal,
       language: /^[a-z]{2}$/i.test(plan.language || '') ? plan.language : 'es',
+      // Explicit "en N palabras" requests: split the budget across sections
+      // so the writer honours the asked length instead of the schema's
+      // default 80-160 words per section.
+      targetWordsPerSection: plan.wordTarget
+        ? Math.max(40, Math.round(plan.wordTarget / Math.max(1, plan.sections.length)))
+        : null,
     });
     const failed = plan.blocks.filter((b) => b._error).length;
     emit(
@@ -2766,6 +3012,33 @@ async function runAdvancedDocumentPipeline({
     plan = repairPlan(plan, validation);
     emit(events, 'refactor', 'complete', 'Plan documental reforzado para regeneración', { sections: plan.sections.length });
   }
+
+  // Render → vision-critique (Claude-skills style visual QA): render the
+  // artifact with soffice, have a vision model adversarially inspect the
+  // pages and attach the findings to validation.details. Best-effort and
+  // budgeted — it can only ADD observability, never fail a delivery.
+  try {
+    const critique = await runRenderCritique({
+      filePath: artifact.outputPath,
+      format: plan.format,
+      expectation: `${plan.title} (${plan.template}, ${plan.format}) — solicitud: ${String(plan.userRequest || '').slice(0, 300)}`,
+    });
+    if (!critique.skipped) {
+      validation.details = { ...(validation.details || {}), visualCritique: critique.report };
+      const defectCount = critique.report.defects.length;
+      emit(
+        events,
+        'document_design',
+        critique.report.overall === 'pass' ? 'complete' : 'warning',
+        critique.report.overall === 'pass'
+          ? `Revisión visual aprobada (${critique.pagesRendered} página(s) inspeccionadas)`
+          : `Revisión visual: ${defectCount} observación(es) — ${critique.report.summary}`,
+        { pagesRendered: critique.pagesRendered, defects: critique.report.defects, durationMs: critique.durationMs },
+      );
+    } else {
+      emit(events, 'document_design', 'complete', 'Revisión visual omitida', { reason: critique.reason });
+    }
+  } catch { /* never blocks delivery */ }
 
   if (!events.some((event) => event.role === 'qa')) {
     emit(events, 'qa', validation.passed ? 'complete' : 'warning', validation.passed ? 'QA sin fallos bloqueantes' : 'QA detectó advertencias persistentes', { passed: validation.passed });

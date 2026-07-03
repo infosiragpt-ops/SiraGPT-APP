@@ -94,6 +94,11 @@ services:
       CTRL_PORT: "4097"
       RUNNER_WORKDIR: "/workspace"
       EXPORT_DIR: "/export"
+      # Multi-project dev-server pool (audit B1): one dev server per project.
+      # Traffic reaches these ports through the backend's same-origin preview
+      # proxy over the internal docker network — nothing is published to the
+      # host, so widening the pool needs no `ports:` entries.
+      CODE_RUNNER_DEV_PORT_POOL: ${CODE_RUNNER_DEV_PORT_POOL:-5173-5182}
     volumes:
       - opencode_workspace:/workspace
       - ./scripts/code-runner.js:/scripts/code-runner.js:ro
@@ -102,7 +107,9 @@ services:
       - ${CODEX_EXPORT_BIND:-./.codex-workspaces}:/export
     expose:
       - "4097"
-      - "5173"
+      # Dev-server port pool (expose is documentational on the internal
+      # network; kept in sync with CODE_RUNNER_DEV_PORT_POOL above).
+      - "5173-5182"
     healthcheck:
       test: ["CMD", "bun", "-e", "const r=await fetch('http://127.0.0.1:4097/status'); if(!r.ok) process.exit(1)"]
       interval: 15s
@@ -184,6 +191,8 @@ services:
       CODEX_EXPORT_HOST_DIR: ${CODEX_EXPORT_HOST_DIR:-/opt/siragpt/.codex-workspaces}
       CODEX_RUN_TIMEOUT_MS: ${CODEX_RUN_TIMEOUT_MS:-900000}
       CODEX_MAX_STEPS: ${CODEX_MAX_STEPS:-24}
+      CODEX_VERIFY_DEV_SERVER: ${CODEX_VERIFY_DEV_SERVER:-0}
+      CODEX_VERIFY_DEV_TIMEOUT_MS: ${CODEX_VERIFY_DEV_TIMEOUT_MS:-60000}
       SIRAGPT_WORKSPACE_RUN_PROXY_URLS: ${SIRAGPT_WORKSPACE_RUN_PROXY_URLS:-true}
       SIRAGPT_WORKSPACE_RUN_READY_TIMEOUT_MS: ${SIRAGPT_WORKSPACE_RUN_READY_TIMEOUT_MS:-600000}
       SIRAGPT_WORKSPACE_RUN_NODE_OPTIONS: ${SIRAGPT_WORKSPACE_RUN_NODE_OPTIONS:---max-old-space-size=4096}

@@ -35,6 +35,9 @@ export type AnalyticsEvent =
   | "error.route"
   | "error.global"
   | "page.not_found"
+  | "demo.started"
+  | "demo.generation_completed"
+  | "demo.signup_cta_clicked"
 
 type AnalyticsProperties = Record<string, string | number | boolean | null | undefined>
 
