@@ -526,7 +526,9 @@
       "adjust": "Ajustar",
       "pages": "Páginas",
       "components": "Componentes",
-      "tasks": "Tareas"
+      "tasks": "Tareas",
+      "replan": "Re-planificar",
+      "replanPlaceholder": "¿Qué debería cambiar de este plan?"
     },
     "checkpoint": {
       "rollback": "Rollback here",

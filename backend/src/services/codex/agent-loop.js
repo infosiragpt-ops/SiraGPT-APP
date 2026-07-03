@@ -402,16 +402,21 @@ async function safeFileTree(runner, projectId) {
   return '';
 }
 
-/** Load the approved plan from the plan run's plan_proposed event. */
-async function loadApprovedPlan({ run, eventStore, prisma }) {
-  if (!run.planRunId || !eventStore?.listEvents) return null;
+/** Load the most recent plan_proposed payload from a given plan run's events. */
+async function loadProposedPlan({ planRunId, eventStore, prisma }) {
+  if (!planRunId || !eventStore?.listEvents) return null;
   try {
-    const events = await eventStore.listEvents(run.planRunId, { afterSeq: 0, prisma });
+    const events = await eventStore.listEvents(planRunId, { afterSeq: 0, prisma });
     const proposed = [...events].reverse().find((e) => e.type === 'plan_proposed');
     return proposed ? proposed.data : null;
   } catch {
     return null;
   }
+}
+
+/** Load the approved plan from the plan run's plan_proposed event. */
+async function loadApprovedPlan({ run, eventStore, prisma }) {
+  return loadProposedPlan({ planRunId: run.planRunId, eventStore, prisma });
 }
 
 async function resolveRunSourcePrompt({ run, prisma }) {
@@ -849,7 +854,18 @@ async function runAgentLoop({ run, project, signal, isCancelled, deps = {} } = {
   if (typeof isCancelled === 'function' && (await isCancelled())) return { status: 'cancelled' };
 
   if (run.mode === 'plan') {
-    return planMode.runPlanMode({ run, project, deps: { ...deps, llmTurn } });
+    // Re-planning (G4): when the run carries a priorPlanRunId + feedback, load
+    // the prior plan and hand both to plan-mode so the model re-works it instead
+    // of starting from scratch. Degradation: if the prior plan can't be loaded
+    // (missing event, unavailable store) priorPlan is null and plan-mode plans
+    // fresh — plus feedback if present. deps.priorPlan (if the caller injected
+    // one, e.g. tests) always wins.
+    let priorPlan = deps.priorPlan ?? null;
+    if (priorPlan == null && run.priorPlanRunId) {
+      priorPlan = await loadProposedPlan({ planRunId: run.priorPlanRunId, eventStore, prisma: deps.prisma });
+    }
+    const feedback = deps.feedback ?? run.feedback ?? null;
+    return planMode.runPlanMode({ run, project, deps: { ...deps, llmTurn, priorPlan, feedback } });
   }
   return runBuildLoop({ run, project, signal, isCancelled, deps: { ...deps, llmTurn } });
 }
@@ -860,6 +876,7 @@ module.exports = {
   buildSystemPrompt,
   safeFileTree,
   loadApprovedPlan,
+  loadProposedPlan,
   // Exported for white-box tests / reuse.
   ensureAppsVitePreviewable,
   appsFallbackFiles,

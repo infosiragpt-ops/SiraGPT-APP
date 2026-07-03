@@ -63,6 +63,9 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
   const [filesRefreshNonce, setFilesRefreshNonce] = useState(0)
   const [pendingAutoBuild, setPendingAutoBuild] = useState<{ planRunId: string; tier?: string } | null>(null)
   const [activePlanOnly, setActivePlanOnly] = useState(false)
+  // Tier of the active plan run, so a re-plan (G4) runs on the same engine/cost
+  // tier the user picked for the original plan.
+  const [activePlanTier, setActivePlanTier] = useState<string | undefined>(undefined)
   const autoApprovingRef = useRef<Set<string>>(new Set())
   const completedRunRef = useRef<Set<string>>(new Set())
 
@@ -172,6 +175,23 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
     }
   }, [activeRunId, markApproved, project, t])
 
+  // Re-plan (G4): create a NEW plan run re-working the current one given the
+  // user's feedback, then switch the timeline to it (the fresh plan replaces the
+  // shown one). Keeps planOnly/tier so the loop stays planning-only on the same
+  // engine. A failed request surfaces a toast and leaves the current plan intact.
+  const replanPlan = useCallback(async (feedback: string) => {
+    if (!project || !activeRunId) return
+    try {
+      const run = await codexApi.replanFromFeedback(project.id, activeRunId, feedback, { tier: activePlanTier })
+      // A re-plan is planning-only until the user approves the new plan.
+      setActivePlanOnly(true)
+      setPendingAutoBuild(null)
+      setActiveRunId(run.id)
+    } catch (e: any) {
+      toast.error(e?.message || t("errors.startRun"))
+    }
+  }, [activeRunId, activePlanTier, project, t])
+
   useEffect(() => {
     if (!pendingAutoBuild || !activeRunId) return
     if (activeRunId !== pendingAutoBuild.planRunId) return
@@ -207,6 +227,7 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
             planOnly={activePlanOnly}
             onApprove={() => approvePlan()}
             onAdjust={() => document.querySelector<HTMLTextAreaElement>("[data-codex-composer]")?.focus()}
+            onReplan={replanPlan}
           />
         )
       case "checkpoint":
@@ -291,6 +312,7 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
     try {
       const run = await codexApi.createRun(project.id, { mode: "plan", prompt: autonomousPrompt, tier: payload.tier })
       setActivePlanOnly(payload.planOnly)
+      setActivePlanTier(payload.tier)
       if (!payload.planOnly) setPendingAutoBuild({ planRunId: run.id, tier: payload.tier })
       else setPendingAutoBuild(null)
       setActiveRunId(run.id)

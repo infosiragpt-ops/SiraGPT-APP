@@ -20,6 +20,32 @@ describe('PlanCard', () => {
     expect(screen.getByText(/aprobado/)).toBeTruthy()
     expect(screen.queryByText(/Aprobar y construir/)).toBeNull()
   })
+
+  it('re-plans from feedback: "Ajustar" reveals the field, "Re-planificar" fires onReplan (G4)', async () => {
+    const onReplan = vi.fn().mockResolvedValue(undefined)
+    render(<PlanCard architecture="Vite SPA" pages={['/']} components={['Nav']} tasks={[{ title: 'init' }]} approved={false} waiting onReplan={onReplan} />)
+    // The feedback field is hidden until "Ajustar" is clicked.
+    expect(screen.queryByPlaceholderText(/Qué debería cambiar/)).toBeNull()
+    fireEvent.click(screen.getByText(/Ajustar/))
+    const field = screen.getByPlaceholderText(/Qué debería cambiar/) as HTMLTextAreaElement
+    expect(field).toBeTruthy()
+    // Re-plan is disabled while the feedback is empty.
+    const replanBtn = screen.getByText(/Re-planificar/).closest('button') as HTMLButtonElement
+    expect(replanBtn.disabled).toBe(true)
+    fireEvent.change(field, { target: { value: 'agrega un carrito' } })
+    expect(replanBtn.disabled).toBe(false)
+    fireEvent.click(replanBtn)
+    expect(onReplan).toHaveBeenCalledWith('agrega un carrito')
+  })
+
+  it('falls back to onAdjust (focus composer) when no onReplan handler is given', () => {
+    const onAdjust = vi.fn()
+    render(<PlanCard architecture="X" pages={[]} components={[]} tasks={[]} approved={false} waiting onApprove={vi.fn()} onAdjust={onAdjust} />)
+    fireEvent.click(screen.getByText(/Ajustar/))
+    expect(onAdjust).toHaveBeenCalled()
+    // No inline feedback field without a re-plan handler.
+    expect(screen.queryByPlaceholderText(/Qué debería cambiar/)).toBeNull()
+  })
 })
 
 describe('RunSummaryCard', () => {

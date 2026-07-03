@@ -2,13 +2,14 @@
 
 // codex/plan-card — the approvable plan (feature 11). Renders architecture,
 // pages, components and tasks from a plan_proposed item. "Aprobar y construir"
-// creates the build run; "Ajustar" focuses the composer for feedback. Collapses
-// with a check once approved.
+// creates the build run; "Ajustar" reveals a feedback field + "Re-planificar"
+// that spins a NEW plan run re-working this one (G4). Collapses with a check
+// once approved.
 
 import React, { useState } from "react"
 import clsx from "clsx"
 import { useTranslations } from "next-intl"
-import { Check, ChevronDown, ChevronRight, Hammer, Pencil, Loader2 } from "lucide-react"
+import { Check, ChevronDown, ChevronRight, Hammer, Pencil, Loader2, RefreshCw } from "lucide-react"
 
 export interface PlanCardProps {
   architecture: string
@@ -21,6 +22,9 @@ export interface PlanCardProps {
   planOnly?: boolean
   onApprove?: () => Promise<void> | void
   onAdjust?: () => void
+  /** Re-plan (G4): re-work this plan given the user's feedback. When absent the
+   *  card degrades to the legacy "Ajustar" behaviour (focus the composer). */
+  onReplan?: (feedback: string) => Promise<void> | void
 }
 
 function label(x: any): string {
@@ -28,15 +32,38 @@ function label(x: any): string {
   return x?.title || x?.name || x?.label || JSON.stringify(x)
 }
 
-export function PlanCard({ architecture, pages, components, tasks, approved, waiting, planOnly, onApprove, onAdjust }: PlanCardProps) {
+export function PlanCard({ architecture, pages, components, tasks, approved, waiting, planOnly, onApprove, onAdjust, onReplan }: PlanCardProps) {
   const t = useTranslations("codex")
   const [open, setOpen] = useState(!approved)
   const [busy, setBusy] = useState(false)
+  const [adjusting, setAdjusting] = useState(false)
+  const [feedback, setFeedback] = useState("")
+  const [replanning, setReplanning] = useState(false)
 
   async function approve() {
     if (!onApprove) return
     setBusy(true)
     try { await onApprove() } finally { setBusy(false) }
+  }
+
+  function adjust() {
+    // With a re-plan handler, "Ajustar" reveals the inline feedback field.
+    // Without one, fall back to the legacy behaviour (focus the composer).
+    if (onReplan) setAdjusting((v) => !v)
+    else onAdjust?.()
+  }
+
+  async function replan() {
+    const text = feedback.trim()
+    if (!onReplan || !text) return
+    setReplanning(true)
+    try {
+      await onReplan(text)
+      setFeedback("")
+      setAdjusting(false)
+    } finally {
+      setReplanning(false)
+    }
   }
 
   return (
@@ -63,18 +90,42 @@ export function PlanCard({ architecture, pages, components, tasks, approved, wai
           )}
 
           {!approved && (
-            <div className="mt-3 flex items-center gap-2">
-              {/* Plan toggle on → planning-only run: never offer the build path. */}
-              {!planOnly && (
-                <button type="button" onClick={approve} disabled={busy} className="flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-500 disabled:opacity-50">
-                  {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Hammer className="h-3.5 w-3.5" />} {t("plan.approve")}
+            <>
+              <div className="mt-3 flex items-center gap-2">
+                {/* Plan toggle on → planning-only run: never offer the build path. */}
+                {!planOnly && (
+                  <button type="button" onClick={approve} disabled={busy || replanning} className="flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-500 disabled:opacity-50">
+                    {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Hammer className="h-3.5 w-3.5" />} {t("plan.approve")}
+                  </button>
+                )}
+                <button type="button" onClick={adjust} disabled={busy || replanning} aria-expanded={onReplan ? adjusting : undefined} className="flex items-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-xs text-zinc-300 hover:bg-white/5 disabled:opacity-50">
+                  <Pencil className="h-3.5 w-3.5" /> {t("plan.adjust")}
                 </button>
+                {planOnly && <span className="text-[10px] text-zinc-500">{t("composer.planTooltip")}</span>}
+              </div>
+
+              {/* Re-plan (G4): inline feedback → a new plan run re-working this one. */}
+              {onReplan && adjusting && (
+                <div className="mt-2 space-y-2 rounded-lg border border-violet-500/20 bg-violet-500/[0.03] p-2">
+                  <textarea
+                    data-codex-replan-feedback
+                    value={feedback}
+                    onChange={(e) => setFeedback(e.target.value)}
+                    disabled={replanning}
+                    rows={2}
+                    maxLength={4000}
+                    placeholder={t("plan.replanPlaceholder")}
+                    className="w-full resize-y rounded-md border border-white/10 bg-black/20 px-2 py-1.5 text-xs text-zinc-100 placeholder:text-zinc-500 focus:border-violet-500/40 focus:outline-none disabled:opacity-50"
+                  />
+                  <div className="flex items-center gap-2">
+                    <button type="button" onClick={replan} disabled={replanning || !feedback.trim()} className="flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-500 disabled:opacity-50">
+                      {replanning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} {t("plan.replan")}
+                    </button>
+                    <span className="text-[10px] text-zinc-500">{feedback.length}/4000</span>
+                  </div>
+                </div>
               )}
-              <button type="button" onClick={onAdjust} className="flex items-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-xs text-zinc-300 hover:bg-white/5">
-                <Pencil className="h-3.5 w-3.5" /> {t("plan.adjust")}
-              </button>
-              {planOnly && <span className="text-[10px] text-zinc-500">{t("composer.planTooltip")}</span>}
-            </div>
+            </>
           )}
         </div>
       )}

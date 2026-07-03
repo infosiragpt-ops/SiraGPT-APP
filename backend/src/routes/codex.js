@@ -538,6 +538,10 @@ router.post(
     body('model').optional({ nullable: true }).isString().isLength({ max: 200 }),
     body('tier').optional({ nullable: true }).isString().isLength({ max: 40 }),
     body('planRunId').optional({ nullable: true }).isString().isLength({ max: 64 }),
+    // Re-planning (G4): re-work an earlier plan given the user's feedback.
+    body('priorPlanRunId').optional({ nullable: true }).isString().isLength({ max: 64 }),
+    body('feedback').optional({ nullable: true }).isString().isLength({ max: 4000 })
+      .withMessage('feedback must be a string of at most 4000 chars'),
   ],
   async (req, res) => {
     const errors = validationResult(req);
@@ -551,6 +555,8 @@ router.post(
         model: req.body.model ?? null,
         tier: req.body.tier ?? null,
         planRunId: req.body.planRunId ?? null,
+        priorPlanRunId: req.body.priorPlanRunId ?? null,
+        feedback: req.body.feedback ?? null,
       });
       return res.status(201).json({ run });
     } catch (err) {

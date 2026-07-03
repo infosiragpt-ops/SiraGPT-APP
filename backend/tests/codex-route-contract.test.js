@@ -257,3 +257,25 @@ test('files/file routes 404 on foreign project ids (ownership gate)', async () =
   assert.equal((await request(buildApp()).get('/api/codex/projects/nope/files')).status, 404);
   assert.equal((await request(buildApp()).get('/api/codex/projects/nope/file?path=x')).status, 404);
 });
+
+// Re-planning (G4): the run-create endpoint bounds feedback at 4000 chars. This
+// validation short-circuits (express-validator) BEFORE run-service is called, so
+// it needs no DB — a too-long feedback is a 400 validation_failed.
+test('POST /projects/:id/runs rejects feedback longer than 4000 chars (validation)', async () => {
+  const res = await request(buildApp())
+    .post('/api/codex/projects/p1/runs')
+    .send({ mode: 'plan', feedback: 'a'.repeat(4001) });
+  assert.equal(res.status, 400);
+  assert.equal(res.body.error, 'validation_failed');
+});
+
+test('POST /projects/:id/runs accepts feedback at the 4000-char boundary (validation passes)', async () => {
+  // Exactly 4000 chars passes express-validator; the request then reaches
+  // run-service (real Prisma here). We only assert it is NOT a validation_failed
+  // 400 — anything else (e.g. a downstream 500 with no DB) is fine for this
+  // boundary check.
+  const res = await request(buildApp())
+    .post('/api/codex/projects/p1/runs')
+    .send({ mode: 'plan', feedback: 'a'.repeat(4000) });
+  assert.notEqual(res.body?.error, 'validation_failed');
+});

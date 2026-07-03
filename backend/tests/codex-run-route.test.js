@@ -73,6 +73,39 @@ test('createRun service errors are mapped to their HTTP status', async () => {
   assert.equal(res.body.error, 'run_in_progress');
 });
 
+// Re-planning (G4): the endpoint forwards feedback + priorPlanRunId to the
+// service. A too-long feedback is rejected by validation before the service;
+// a foreign priorPlanRunId is rejected by the service and mapped to its status.
+test('POST /projects/:id/runs forwards feedback + priorPlanRunId to the service', async () => {
+  const res = await request(app())
+    .post('/api/codex/projects/p1/runs')
+    .send({ mode: 'plan', priorPlanRunId: 'plan-prev', feedback: 'agrega carrito' });
+  assert.equal(res.status, 201);
+  const call = calls.find((c) => c[0] === 'createRun')[1];
+  assert.equal(call.priorPlanRunId, 'plan-prev');
+  assert.equal(call.feedback, 'agrega carrito');
+  assert.equal(call.mode, 'plan');
+});
+
+test('POST /projects/:id/runs rejects feedback > 4000 chars with validation_failed', async () => {
+  const res = await request(app())
+    .post('/api/codex/projects/p1/runs')
+    .send({ mode: 'plan', feedback: 'x'.repeat(4001) });
+  assert.equal(res.status, 400);
+  assert.equal(res.body.error, 'validation_failed');
+  // Validation short-circuits before the service is ever called.
+  assert.equal(calls.find((c) => c[0] === 'createRun'), undefined);
+});
+
+test('POST /projects/:id/runs maps a foreign priorPlanRunId service error to 400', async () => {
+  createImpl = async () => { throw new RunServiceError('invalid_prior_plan_run', 'not yours', 400); };
+  const res = await request(app())
+    .post('/api/codex/projects/p1/runs')
+    .send({ mode: 'plan', priorPlanRunId: 'someone-elses', feedback: 'x' });
+  assert.equal(res.status, 400);
+  assert.equal(res.body.error, 'invalid_prior_plan_run');
+});
+
 test('POST /runs/:id/cancel calls the service', async () => {
   const res = await request(app()).post('/api/codex/runs/run-1/cancel');
   assert.equal(res.status, 200);

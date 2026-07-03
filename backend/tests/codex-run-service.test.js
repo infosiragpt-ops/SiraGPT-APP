@@ -122,6 +122,83 @@ test('createRun (build) succeeds with an approvable plan run', async () => {
   assert.equal(run.planRunId, 'plan-ok');
 });
 
+test('createRun (re-plan) accepts feedback + a prior plan run of the same project', async () => {
+  const db = makeDb({ projects: [PROJECT], runs: [{ id: 'plan-prev', projectId: 'p1', userId: 'u1', mode: 'plan', status: 'waiting_approval' }] });
+  const run = await createRun({
+    userId: 'u1', projectId: 'p1', mode: 'plan',
+    priorPlanRunId: 'plan-prev', feedback: 'agrega un carrito',
+    db, queue: fakeQueue(),
+  });
+  assert.equal(run.mode, 'plan');
+  assert.equal(run.priorPlanRunId, 'plan-prev');
+  assert.equal(run.feedback, 'agrega un carrito');
+  // The persisted row carries them too (agent-loop reads them off the row).
+  const row = db._runs.find((r) => r.id === run.id);
+  assert.equal(row.priorPlanRunId, 'plan-prev');
+  assert.equal(row.feedback, 'agrega un carrito');
+});
+
+test('createRun (re-plan) rejects a foreign / non-plan / missing prior plan run', async () => {
+  const db = makeDb({ projects: [PROJECT], runs: [
+    { id: 'plan-foreign', projectId: 'p1', userId: 'other', mode: 'plan', status: 'waiting_approval' },
+    { id: 'build-run', projectId: 'p1', userId: 'u1', mode: 'build', status: 'done' },
+  ] });
+  // Foreign owner.
+  await assert.rejects(
+    () => createRun({ userId: 'u1', projectId: 'p1', mode: 'plan', priorPlanRunId: 'plan-foreign', feedback: 'x', db, queue: fakeQueue() }),
+    (e) => e.code === 'invalid_prior_plan_run' && e.status === 400,
+  );
+  // Not a plan run.
+  await assert.rejects(
+    () => createRun({ userId: 'u1', projectId: 'p1', mode: 'plan', priorPlanRunId: 'build-run', feedback: 'x', db, queue: fakeQueue() }),
+    (e) => e.code === 'invalid_prior_plan_run',
+  );
+  // Unknown id.
+  await assert.rejects(
+    () => createRun({ userId: 'u1', projectId: 'p1', mode: 'plan', priorPlanRunId: 'nope', feedback: 'x', db, queue: fakeQueue() }),
+    (e) => e.code === 'invalid_prior_plan_run',
+  );
+});
+
+test('createRun rejects a priorPlanRunId on a build run', async () => {
+  const db = makeDb({ projects: [PROJECT], runs: [
+    { id: 'plan-ok', projectId: 'p1', userId: 'u1', mode: 'plan', status: 'waiting_approval' },
+    { id: 'plan-prev', projectId: 'p1', userId: 'u1', mode: 'plan', status: 'done' },
+  ] });
+  await assert.rejects(
+    () => createRun({ userId: 'u1', projectId: 'p1', mode: 'build', planRunId: 'plan-ok', priorPlanRunId: 'plan-prev', db, queue: fakeQueue() }),
+    (e) => e.code === 'invalid_prior_plan_run' && e.status === 400,
+  );
+});
+
+test('createRun rejects feedback longer than the cap', async () => {
+  const db = makeDb({ projects: [PROJECT], runs: [{ id: 'plan-prev', projectId: 'p1', userId: 'u1', mode: 'plan', status: 'waiting_approval' }] });
+  const tooLong = 'a'.repeat(runService.MAX_FEEDBACK_CHARS + 1);
+  await assert.rejects(
+    () => createRun({ userId: 'u1', projectId: 'p1', mode: 'plan', priorPlanRunId: 'plan-prev', feedback: tooLong, db, queue: fakeQueue() }),
+    (e) => e.code === 'feedback_too_long' && e.status === 400,
+  );
+});
+
+test('createRun (re-plan) excludes the prior plan run from the single-active check', async () => {
+  // The prior plan is still waiting_approval (an "active" status) when the user
+  // asks to re-plan — the new plan supersedes it, so this must NOT 409.
+  const db = makeDb({ projects: [PROJECT], runs: [{ id: 'plan-prev', projectId: 'p1', userId: 'u1', mode: 'plan', status: 'waiting_approval' }] });
+  const run = await createRun({
+    userId: 'u1', projectId: 'p1', mode: 'plan',
+    priorPlanRunId: 'plan-prev', feedback: 'ajusta esto',
+    db, queue: fakeQueue(),
+  });
+  assert.equal(run.status, 'queued');
+});
+
+test('createRun (fresh plan) still works with no feedback/priorPlanRunId (degradation)', async () => {
+  const db = makeDb({ projects: [PROJECT] });
+  const run = await createRun({ userId: 'u1', projectId: 'p1', mode: 'plan', prompt: 'landing', db, queue: fakeQueue() });
+  assert.equal(run.priorPlanRunId, null);
+  assert.equal(run.feedback, null);
+});
+
 test('createRun 409s when a run is already active for the project', async () => {
   const db = makeDb({ projects: [PROJECT], runs: [{ id: 'r-active', projectId: 'p1', userId: 'u1', mode: 'plan', status: 'running' }] });
   await assert.rejects(

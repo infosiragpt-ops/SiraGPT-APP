@@ -40,7 +40,9 @@ const ES = {
     "adjust": "Ajustar",
     "pages": "Páginas",
     "components": "Componentes",
-    "tasks": "Tareas"
+    "tasks": "Tareas",
+    "replan": "Re-planificar",
+    "replanPlaceholder": "¿Qué debería cambiar de este plan?"
   },
   "checkpoint": {
     "rollback": "Rollback here",
@@ -172,7 +174,9 @@ const EN = {
     "adjust": "Adjust",
     "pages": "Pages",
     "components": "Components",
-    "tasks": "Tasks"
+    "tasks": "Tasks",
+    "replan": "Re-plan",
+    "replanPlaceholder": "What should change about this plan?"
   },
   "checkpoint": {
     "rollback": "Rollback here",

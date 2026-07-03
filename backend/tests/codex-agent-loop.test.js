@@ -43,6 +43,45 @@ test('plan mode delegates and ends waiting_approval with plan_proposed', async (
   assert.equal(f.writes.length, 0); // plan mode never mutates
 });
 
+test('plan mode (re-plan) loads the prior plan from priorPlanRunId and passes it + feedback to the model', async () => {
+  const PRIOR = { architecture: 'Vite SPA', pages: ['/'], components: ['Nav'], tasks: [{ id: 't1', title: 'init', status: 'pending' }] };
+  let seenUser = '';
+  const f = fakeDeps({
+    llmTurn: async ({ messages }) => {
+      seenUser = messages.find((m) => m.role === 'user')?.content || '';
+      return { text: JSON.stringify({ ...PRIOR, architecture: 'Vite SPA + carrito' }) };
+    },
+  });
+  // The prior plan run's events include a plan_proposed the loop must load.
+  f.deps.eventStore.listEvents = async (planRunId) => (
+    planRunId === 'plan-prev' ? [{ type: 'plan_proposed', data: PRIOR }] : []
+  );
+  const res = await runAgentLoop({
+    run: { id: 'r2', mode: 'plan', prompt: 'vende zapatos', priorPlanRunId: 'plan-prev', feedback: 'agrega un carrito' },
+    project: { id: 'p1', name: 'Tienda' },
+    deps: f.deps,
+  });
+  assert.equal(res.status, 'waiting_approval');
+  assert.match(seenUser, /agrega un carrito/); // feedback threaded through
+  assert.match(seenUser, /Vite SPA/); // the prior plan JSON was embedded
+  assert.equal(f.events[0].type, 'plan_proposed');
+  assert.equal(f.events[0].data.architecture, 'Vite SPA + carrito');
+});
+
+test('plan mode without priorPlanRunId does not embed a prior plan (degradation)', async () => {
+  let seenUser = '';
+  const f = fakeDeps({
+    llmTurn: async ({ messages }) => {
+      seenUser = messages.find((m) => m.role === 'user')?.content || '';
+      return { text: JSON.stringify({ architecture: 'X', pages: ['/'], components: ['A'], tasks: [{ id: 't1', title: 'x' }] }) };
+    },
+  });
+  const res = await runAgentLoop({ run: { id: 'r1', mode: 'plan', prompt: 'una landing' }, project: { id: 'p1', name: 'X' }, deps: f.deps });
+  assert.equal(res.status, 'waiting_approval');
+  assert.doesNotMatch(seenUser, /Plan anterior/i);
+  assert.doesNotMatch(seenUser, /Ajuste solicitado/i);
+});
+
 test('build loop runs grouped tool calls with one groupId, narrative, then done', async () => {
   const f = fakeDeps({
     llmTurn: scriptedLlm([

@@ -71,3 +71,32 @@ test('buildPlanMessages includes the prompt and prior plan/feedback when given',
   assert.match(user, /vende zapatos/);
   assert.match(user, /agrega carrito/);
 });
+
+test('buildPlanMessages omits prior plan/feedback sections on a fresh plan (degradation)', () => {
+  const { user } = buildPlanMessages({ project: { name: 'X' }, prompt: 'una landing' });
+  assert.doesNotMatch(user, /Plan anterior/i);
+  assert.doesNotMatch(user, /Ajuste solicitado/i);
+});
+
+test('runPlanMode (re-plan) feeds the prior plan + feedback to the model and re-emits plan_proposed', async () => {
+  const events = [];
+  let seenUser = '';
+  const REWORKED = { ...VALID, architecture: 'Vite SPA + carrito' };
+  const llmTurn = async ({ messages }) => {
+    seenUser = messages.find((m) => m.role === 'user')?.content || '';
+    return { text: JSON.stringify(REWORKED) };
+  };
+  const eventStore = { appendEvent: async (runId, type, data) => events.push({ runId, type, data }) };
+  const res = await runPlanMode({
+    run: { id: 'r2', mode: 'plan', prompt: 'vende zapatos' },
+    project: { name: 'Tienda' },
+    deps: { llmTurn, eventStore, priorPlan: VALID, feedback: 'agrega un carrito de compras' },
+  });
+  assert.equal(res.status, 'waiting_approval');
+  // The model prompt carried BOTH the prior plan and the feedback.
+  assert.match(seenUser, /agrega un carrito de compras/);
+  assert.match(seenUser, /Vite SPA/); // the prior plan JSON is embedded
+  // A fresh plan_proposed reflecting the rework is emitted.
+  assert.equal(events[0].type, 'plan_proposed');
+  assert.equal(events[0].data.architecture, 'Vite SPA + carrito');
+});

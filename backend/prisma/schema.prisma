@@ -2146,6 +2146,12 @@ model CodexRun {
   model      String?
   tier       String?
   planRunId  String?
+  // Re-planning (G4): a plan run may re-work an earlier plan given the user's
+  // feedback. priorPlanRunId points at the plan run whose plan_proposed is the
+  // starting point; feedback is the user's requested adjustment. Both null on a
+  // fresh plan → behaviour identical to before.
+  priorPlanRunId String?
+  feedback       String?   @db.Text
   error      String?   @db.Text
   createdAt  DateTime  @default(now())
   startedAt  DateTime?

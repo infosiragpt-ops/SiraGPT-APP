@@ -21,6 +21,11 @@ const MODES = ['plan', 'build'];
 const ACTIVE_STATUSES = ['queued', 'running', 'waiting_approval'];
 const TERMINAL_STATUSES = ['done', 'error', 'cancelled'];
 const APPROVABLE_PLAN_STATUSES = ['waiting_approval', 'done'];
+// Re-planning (G4): a plan run can re-work a PRIOR plan run's plan given user
+// feedback. The prior plan run must already have produced a plan_proposed, so
+// it must be in one of these states.
+const REPLAN_SOURCE_STATUSES = ['waiting_approval', 'done', 'error'];
+const MAX_FEEDBACK_CHARS = 4000;
 
 class RunServiceError extends Error {
   constructor(code, message, status = 400) {
@@ -88,6 +93,8 @@ function publicRun(row) {
     model: row.model ?? null,
     tier: row.tier ?? null,
     planRunId: row.planRunId ?? null,
+    priorPlanRunId: row.priorPlanRunId ?? null,
+    feedback: row.feedback ?? null,
     prompt: row.prompt ?? null,
     error: row.error ?? null,
     createdAt: row.createdAt,
@@ -119,6 +126,8 @@ function publicMetric(m) {
  *  - mode ∈ {plan, build}
  *  - project owned by userId (else 404)
  *  - build requires a valid planRunId (plan run of this project, approvable)
+ *  - re-plan (mode plan + priorPlanRunId): the prior run must be a plan run of
+ *    this project/user that already produced a plan; feedback ≤ 4000 chars
  *  - at most one active run per project (else 409 run_in_progress)
  */
 async function createRun({
@@ -129,6 +138,8 @@ async function createRun({
   model = null,
   tier = null,
   planRunId = null,
+  priorPlanRunId = null,
+  feedback = null,
   db = defaultPrisma,
   queue = runQueue,
 }) {
@@ -148,16 +159,47 @@ async function createRun({
     }
   }
 
+  // Re-planning (G4): only meaningful on a plan run. Validate ownership + shape
+  // of the prior plan run; feedback length is bounded. Degradation: without
+  // priorPlanRunId this whole block is skipped and the run is a fresh plan.
+  let normalisedFeedback = null;
+  let normalisedPriorPlanRunId = null;
+  if (feedback != null && feedback !== '') {
+    const fb = String(feedback);
+    if (fb.length > MAX_FEEDBACK_CHARS) {
+      throw new RunServiceError('feedback_too_long', `feedback must be <= ${MAX_FEEDBACK_CHARS} chars`, 400);
+    }
+    normalisedFeedback = fb;
+  }
+  if (priorPlanRunId != null && priorPlanRunId !== '') {
+    if (mode !== 'plan') {
+      throw new RunServiceError('invalid_prior_plan_run', 'priorPlanRunId is only valid on a plan run', 400);
+    }
+    const priorRun = await prisma.codexRun.findFirst({
+      where: { id: String(priorPlanRunId), projectId, userId, mode: 'plan' },
+    });
+    if (!priorRun || !REPLAN_SOURCE_STATUSES.includes(priorRun.status)) {
+      throw new RunServiceError('invalid_prior_plan_run', 'priorPlanRunId must reference a plan run of this project that already produced a plan', 400);
+    }
+    normalisedPriorPlanRunId = String(priorPlanRunId);
+  }
+
   // At most one active run per project — EXCEPT a build approving its own
   // waiting_approval plan run (that plan is "active" but the build is its
-  // continuation, not a conflict), so exclude the plan being approved.
+  // continuation, not a conflict), so exclude the plan being approved. A
+  // re-plan supersedes its prior plan run the same way (the prior plan may
+  // still be waiting_approval), so exclude it too.
   const activeWhere = { projectId, status: { in: ACTIVE_STATUSES } };
   if (mode === 'build' && planRunId) activeWhere.id = { not: planRunId };
+  else if (mode === 'plan' && normalisedPriorPlanRunId) activeWhere.id = { not: normalisedPriorPlanRunId };
 
   const row = await insertRunGuarded(prisma, {
     projectId,
     activeWhere,
-    data: { projectId, userId, mode, status: 'queued', prompt, model, tier, planRunId },
+    data: {
+      projectId, userId, mode, status: 'queued', prompt, model, tier, planRunId,
+      priorPlanRunId: normalisedPriorPlanRunId, feedback: normalisedFeedback,
+    },
   });
 
   try {
@@ -242,4 +284,5 @@ module.exports = {
   MODES,
   ACTIVE_STATUSES,
   TERMINAL_STATUSES,
+  MAX_FEEDBACK_CHARS,
 };

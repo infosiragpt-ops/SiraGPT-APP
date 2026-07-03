@@ -29,7 +29,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 export interface CodexHealth { ok: boolean; enabled: boolean }
 export interface CodexAccess { ok: boolean; enabled: boolean; canRun: boolean; allowlistConfigured: boolean }
 export interface CodexProject { id: string; name: string; status: string; workspacePath: string | null; previewUrl: string | null; error: string | null }
-export interface CodexRun { id: string; projectId: string; mode: string; status: string; tier: string | null; model: string | null; planRunId: string | null; prompt: string | null; error: string | null; metric?: CodexRunMetric }
+export interface CodexRun { id: string; projectId: string; mode: string; status: string; tier: string | null; model: string | null; planRunId: string | null; priorPlanRunId?: string | null; feedback?: string | null; prompt: string | null; error: string | null; metric?: CodexRunMetric }
 export interface CodexRunMetric { timeWorkedMs: number; actionsCount: number; itemsReadLines: number; additions: number; deletions: number; tokensIn: number; tokensOut: number; model: string | null; costUsd: number; costSource: string; costOriginalUsd: number; costAppliedUsd: number; costInputUsd: number; costOutputUsd: number }
 export interface CodexCheckpointDiff { ok: boolean; commitSha: string; diff: string; truncated: boolean; additions: number; deletions: number; filesChanged: number }
 
@@ -52,7 +52,7 @@ export const codexApi = {
     req<{ ok: boolean; written: number }>(`/projects/${id}/files`, { method: "POST", body: JSON.stringify({ files }) }),
   readFileContent: (id: string, path: string) => req<{ ok: boolean; path: string; content: string }>(`/projects/${id}/file?path=${encodeURIComponent(path)}`),
 
-  createRun: (projectId: string, body: { mode: "plan" | "build"; prompt?: string; model?: string; tier?: string; planRunId?: string }) =>
+  createRun: (projectId: string, body: { mode: "plan" | "build"; prompt?: string; model?: string; tier?: string; planRunId?: string; priorPlanRunId?: string; feedback?: string }) =>
     req<{ run: CodexRun }>(`/projects/${projectId}/runs`, { method: "POST", body: JSON.stringify(body) }).then((r) => r.run),
   listRuns: (projectId: string) => req<{ runs: CodexRun[] }>(`/projects/${projectId}/runs`).then((r) => r.runs),
   getRun: (projectId: string, runId: string) => req<{ run: CodexRun }>(`/projects/${projectId}/runs/${runId}`).then((r) => r.run),
@@ -60,6 +60,14 @@ export const codexApi = {
 
   approvePlan: (projectId: string, planRunId: string, tier?: string) =>
     req<{ run: CodexRun }>(`/projects/${projectId}/runs`, { method: "POST", body: JSON.stringify({ mode: "build", planRunId, tier }) }).then((r) => r.run),
+
+  // Re-planning (G4): create a NEW plan run that re-works the prior plan given
+  // the user's feedback, instead of approving-as-is or starting from scratch.
+  replanFromFeedback: (projectId: string, priorPlanRunId: string, feedback: string, opts?: { model?: string; tier?: string }) =>
+    req<{ run: CodexRun }>(`/projects/${projectId}/runs`, {
+      method: "POST",
+      body: JSON.stringify({ mode: "plan", priorPlanRunId, feedback, model: opts?.model, tier: opts?.tier }),
+    }).then((r) => r.run),
   rollbackCheckpoint: (checkpointId: string) => req<{ ok: boolean; commitSha: string; restarted: boolean }>(`/checkpoints/${checkpointId}/rollback`, { method: "POST" }),
   getCheckpointDiff: (checkpointId: string) => req<CodexCheckpointDiff>(`/checkpoints/${checkpointId}/diff`),
   listCheckpoints: (projectId: string) => req<{ checkpoints: any[] }>(`/projects/${projectId}/checkpoints`).then((r) => r.checkpoints),

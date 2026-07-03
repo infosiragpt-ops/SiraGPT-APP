@@ -459,7 +459,9 @@
       "adjust": "Ajustar",
       "pages": "Pages",
       "components": "Components",
-      "tasks": "Tasks"
+      "tasks": "Tasks",
+      "replan": "Re-plan",
+      "replanPlaceholder": "What should change about this plan?"
     },
     "checkpoint": {
       "rollback": "Rollback here",
