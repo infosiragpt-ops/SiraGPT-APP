@@ -451,7 +451,14 @@ function RegisterPageContent() {
                   className="border-neutral-900 data-[state=checked]:bg-neutral-900 data-[state=checked]:text-white"
                 />
                 <Label htmlFor="terms" className="text-sm text-neutral-700">
-                  {t("agreeTerms")}
+                  <span>{t("agreeTermsPrefix")} </span>
+                  <Link href="/terms" className="font-medium text-neutral-900 underline decoration-neutral-900/30 underline-offset-4 hover:decoration-neutral-900" target="_blank" rel="noopener noreferrer">
+                    {t("agreeTermsLink")}
+                  </Link>
+                  <span> {t("agreeTermsAnd")} </span>
+                  <Link href="/privacy-policy" className="font-medium text-neutral-900 underline decoration-neutral-900/30 underline-offset-4 hover:decoration-neutral-900" target="_blank" rel="noopener noreferrer">
+                    {t("agreePrivacyLink")}
+                  </Link>
                 </Label>
               </div>
               {errors.agreeToTerms && (

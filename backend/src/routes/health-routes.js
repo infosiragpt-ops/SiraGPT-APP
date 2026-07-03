@@ -164,7 +164,7 @@ function createHealthRoutes(deps = {}) {
       sendHealthReport(res, report);
     });
 
-    app.get(['/health/ready', '/api/health/ready', '/readyz', '/api/readyz'], async (_req, res) => {
+    app.get(['/health/ready', '/api/health/ready', '/api/ready', '/readyz', '/api/readyz'], async (_req, res) => {
       const report = await getCachedOrFresh('ready', () => runReadinessCheck({
         prisma,
         redis: getHealthRedisClient(),
