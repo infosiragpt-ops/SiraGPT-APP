@@ -65,7 +65,9 @@ function cleanAssistantContentForDocument(messageOrContent) {
   const raw = typeof messageOrContent === 'string'
     ? messageOrContent
     : String(messageOrContent?.content || '');
-  const withoutDocumentTags = raw.replace(/\[CREATE_DOCUMENT:[^\]]+\][\s\S]*?\[\/CREATE_DOCUMENT\]/gi, '').trim();
+  // Both directive variants: canonical colon form and the attribute form
+  // some models improvise ([CREATE_DOCUMENT format="pptx" filename="…"]).
+  const withoutDocumentTags = raw.replace(/\[CREATE_DOCUMENT[:\s][^\]]*\][\s\S]*?\[\/CREATE_DOCUMENT\]/gi, '').trim();
   const cleaned = withoutDocumentTags
     .replace(/\bdata:[a-z0-9/+.-]+;base64,[a-z0-9+/=]+/gi, '[archivo adjunto omitido]')
     .replace(/\n{3,}/g, '\n\n')
