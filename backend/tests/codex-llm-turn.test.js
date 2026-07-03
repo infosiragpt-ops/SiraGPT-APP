@@ -128,6 +128,84 @@ test('extractUsage tolerates missing usage and alt token field names', () => {
   assert.equal(u.generationId, 'g');
 });
 
+test('defaultLlmTurn: tier eco genuino va a Cerebras DIRECTO (no al ladder que cobra Claude)', async () => {
+  // Prod repro: ANTHROPIC_API_KEY seteada, pero tier eco NO es elegible para
+  // Anthropic (CODEX_ANTHROPIC_TIERS default standard,power). Sin createClient
+  // inyectado, el turno DEBE usar el cliente Cerebras real por defecto — nunca
+  // el ladder llm-provider (que prioriza Anthropic → cobraría Claude).
+  const env = {
+    ANTHROPIC_API_KEY: 'sk-should-not-be-used',
+    CEREBRAS_API_KEY: 'csk-eco',
+    FREE_IA_MODEL_ID: 'gpt-oss-120b',
+    NODE_ENV: 'test',
+  };
+  const cerebras = require('../src/services/ai/cerebras-client');
+  const llmProvider = require('../src/services/codex/llm-provider');
+
+  // Fail the ladder loudly so a regression (eco → ladder) is unmistakable.
+  const origChatComplete = llmProvider.chatComplete;
+  const origCreate = cerebras.createCerebrasClient;
+  let ladderCalled = false;
+  let cerebrasModelUsed = null;
+  llmProvider.chatComplete = async () => { ladderCalled = true; throw new Error('LADDER MUST NOT BE CALLED FOR ECO'); };
+  cerebras.createCerebrasClient = ({ env: e } = {}) => ({
+    chat: {
+      completions: {
+        create: async (req) => {
+          cerebrasModelUsed = req.model;
+          return { id: 'gen_eco', choices: [{ message: { content: 'desde cerebras eco' } }], usage: { prompt_tokens: 3, completion_tokens: 4 } };
+        },
+      },
+    },
+  });
+  try {
+    const turn = await defaultLlmTurn({
+      messages: [{ role: 'user', content: 'construye algo' }],
+      tools: [],
+      env,
+      tier: 'eco',
+    });
+    assert.equal(ladderCalled, false, 'eco NO debe tocar el ladder');
+    assert.equal(turn.text, 'desde cerebras eco');
+    assert.equal(turn.usage.provider, 'Cerebras');
+    assert.equal(turn.usage.model, 'gpt-oss-120b', 'usa el modelo de getCerebrasConfig (FREE_IA_MODEL_ID), no llama');
+    assert.equal(cerebrasModelUsed, 'gpt-oss-120b');
+  } finally {
+    llmProvider.chatComplete = origChatComplete;
+    cerebras.createCerebrasClient = origCreate;
+  }
+});
+
+test('defaultLlmTurn: tier de pago cuyo anthropicTurn falla SÍ usa el ladder (failover legítimo)', async () => {
+  // Con tier power, engine es 'anthropic'; si anthropicTurn revienta y NO hay
+  // createClient inyectado, la degradación correcta es el ladder llm-provider
+  // (failover a openrouter/cerebras) — NO Cerebras directo.
+  const env = { ANTHROPIC_API_KEY: 'sk-test', CEREBRAS_API_KEY: 'csk', NODE_ENV: 'test' };
+  const llmProvider = require('../src/services/codex/llm-provider');
+  const origChatComplete = llmProvider.chatComplete;
+  let ladderCalled = false;
+  llmProvider.chatComplete = async () => {
+    ladderCalled = true;
+    return { content: 'desde ladder', reasoning: '', usage: { provider: 'OpenRouter', model: 'x', tokensIn: 1, tokensOut: 1 } };
+  };
+  try {
+    const turn = await defaultLlmTurn({
+      messages: [{ role: 'user', content: 'hola' }],
+      tools: [],
+      env,
+      tier: 'power',
+      // anthropicTurn real correrá con esta key falsa y lanzará (SDK no mockeado);
+      // forzamos el fallo con un createAnthropicClient que revienta.
+      createAnthropicClient: () => ({ messages: { create: async () => { throw new Error('boom anthropic'); } } }),
+    });
+    assert.equal(ladderCalled, true, 'la degradación de un tier de pago DEBE usar el ladder');
+    assert.equal(turn.text, 'desde ladder');
+    assert.equal(turn.usage.provider, 'OpenRouter');
+  } finally {
+    llmProvider.chatComplete = origChatComplete;
+  }
+});
+
 test('extractUsage prefers a canonical 0 over the alternate field (no falsy-0)', () => {
   // prompt_tokens=0 (e.g. cached) must win over input_tokens; the old `||`
   // skipped the 0 and reported the alternate field.

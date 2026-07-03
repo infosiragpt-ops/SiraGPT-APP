@@ -13,7 +13,8 @@
  * can therefore drive the loop.
  */
 
-const { getCerebrasConfig } = require('../ai/cerebras-client');
+const cerebrasClientModule = require('../ai/cerebras-client');
+const { getCerebrasConfig } = cerebrasClientModule;
 const llmProvider = require('./llm-provider');
 const { buildPromptedToolsBlock, parsePromptedToolCalls } = require('../agents/prompted-tool-calling');
 const { anthropicTurn, getAnthropicTurnConfig } = require('./anthropic-turn');
@@ -101,11 +102,24 @@ function resolveTurnEngine({ tier = null, env = process.env } = {}) {
  * the loop encodes tool results as user [TOOL_RESULT] messages). `tools` is the
  * registry projection [{ name, description, parameters }].
  */
+let _warnedEcoLadderFallback = false;
+
 async function defaultLlmTurn({ messages, tools = [], signal, env = process.env, tier = null, createClient, createAnthropicClient, temperature = 0.3, maxTokens } = {}) {
   // Native Claude engine for eligible tiers (composer Power selector): best
   // tool-calling fidelity. On failure it degrades to the prompted ladder
   // below (which itself may reach Anthropic in prompted mode, or OpenRouter/
   // Cerebras) instead of failing the run.
+  //
+  // `claudeDegraded` disambiguates WHY we reach the prompted path below:
+  //   - true  → a PAID tier (standard/power) whose native anthropicTurn threw;
+  //             the provider ladder (with Anthropic failover) is the correct,
+  //             legitimate degradation.
+  //   - false → a GENUINE eco run (resolveTurnEngine returned 'cerebras' because
+  //             the tier isn't Anthropic-eligible). Eco MUST be free, so it goes
+  //             to Cerebras DIRECT — NOT the ladder, which prioritizes Anthropic
+  //             ("first configured wins") and would silently bill Claude for the
+  //             free tier.
+  let claudeDegraded = false;
   if (resolveTurnEngine({ tier, env }) === 'anthropic') {
     try {
       const opts = { messages, tools, signal, env, tier };
@@ -114,6 +128,7 @@ async function defaultLlmTurn({ messages, tools = [], signal, env = process.env,
     } catch (err) {
       // An aborted run must stay aborted — don't burn another call on it.
       if (signal?.aborted) throw err;
+      claudeDegraded = true;
       if (env?.NODE_ENV !== 'test') console.warn('[codex llm-turn] claude nativo falló, degradando al ladder prompted:', err?.message || err);
     }
   }
@@ -124,11 +139,16 @@ async function defaultLlmTurn({ messages, tools = [], signal, env = process.env,
   let reasoningText = '';
   let usage = null;
 
-  if (createClient) {
-    // Legacy injectable path (tests + explicit Cerebras): OpenAI-style client.
+  // Genuine eco (not a paid degradation) goes to Cerebras DIRECT when configured,
+  // never the Anthropic-first ladder. An injected `createClient` always wins
+  // (tests + explicit Cerebras callers) and behaves identically.
+  const ecoDirectCerebras = !claudeDegraded && getCerebrasConfig({ env }).enabled;
+
+  if (createClient || ecoDirectCerebras) {
+    // Direct Cerebras (free tier) path: OpenAI-style client, max_tokens 2048.
     const cfg = getCerebrasConfig({ env });
     if (!cfg.enabled) throw new Error('codex llm-turn: no LLM provider configured (CEREBRAS_API_KEY)');
-    const client = createClient({ env });
+    const client = createClient ? createClient({ env }) : cerebrasClientModule.createCerebrasClient({ env });
     if (!client?.chat?.completions) throw new Error('codex llm-turn: invalid LLM client');
     const resp = await client.chat.completions.create(
       { model: cfg.model, messages: effective, temperature, max_tokens: maxTokens || 2048 },
@@ -142,8 +162,14 @@ async function defaultLlmTurn({ messages, tools = [], signal, env = process.env,
     usage = extractUsage(resp, cfg.model);
   } else {
     // Provider ladder: Anthropic (Claude) → OpenRouter → Cerebras, with
-    // quarantine-based failover. The prompted tool protocol is model-agnostic,
-    // so upgrading the model here upgrades the whole agent.
+    // quarantine-based failover. Reached when (a) a paid tier degraded from
+    // native Claude, or (b) it's an eco run but Cerebras isn't configured — in
+    // which case "something over nothing" wins, warned once so ops can see the
+    // eco tier is not actually running free.
+    if (!claudeDegraded && !_warnedEcoLadderFallback && env?.NODE_ENV !== 'test') {
+      _warnedEcoLadderFallback = true;
+      console.warn('[codex llm-turn] tier eco sin Cerebras configurado — usando el ladder (puede cobrar un proveedor de pago)');
+    }
     const out = await llmProvider.chatComplete({ messages: effective, temperature, maxTokens, signal, env });
     content = out.content;
     reasoningText = out.reasoning || '';
