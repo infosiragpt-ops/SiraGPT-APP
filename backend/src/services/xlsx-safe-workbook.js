@@ -122,7 +122,41 @@ async function writeWorkbookBuffer(workbook) {
   return Buffer.isBuffer(output) ? output : Buffer.from(output);
 }
 
-function addRowsWorksheet(workbook, name, rows) {
+// Detect numeric-looking columns from the data rows so professional number
+// formats can be applied without the caller declaring types. A column counts
+// as numeric when ≥70% of its non-empty body cells are finite numbers (or
+// numeric strings); currency when the header mentions money terms.
+function inferNumericColumns(rows) {
+  if (!Array.isArray(rows) || rows.length < 2) return { numeric: new Set(), currency: new Set() };
+  const [headerRow, ...body] = rows;
+  const numeric = new Set();
+  const currency = new Set();
+  const currencyHeader = /precio|costo|coste|importe|monto|total|price|cost|amount|revenue|ingreso|venta|salario|sueldo|usd|eur|\$|€/i;
+  const width = Math.max(...rows.map((r) => (Array.isArray(r) ? r.length : 0)));
+  for (let col = 0; col < width; col += 1) {
+    let filled = 0;
+    let numbers = 0;
+    for (const row of body) {
+      const cell = Array.isArray(row) ? row[col] : undefined;
+      if (cell == null || cell === '') continue;
+      filled += 1;
+      if (typeof cell === 'number' && Number.isFinite(cell)) numbers += 1;
+      else if (typeof cell === 'string' && /^-?\$?\s?\d[\d,.]*%?$/.test(cell.trim())) numbers += 1;
+    }
+    if (filled >= 2 && numbers / filled >= 0.7) {
+      numeric.add(col);
+      if (currencyHeader.test(String(headerRow?.[col] ?? ''))) currency.add(col);
+    }
+  }
+  return { numeric, currency };
+}
+
+// Professional worksheet writer shared by the agent artifact engine and the
+// download route. The old shape emitted a bare grid with a bold header — the
+// "raw dump" Excels the owner flagged. Defaults now match what a person
+// would set up by hand: styled header, frozen row, autofilter, banded rows,
+// number formats on numeric columns. Pass { plain: true } for the legacy grid.
+function addRowsWorksheet(workbook, name, rows, opts = {}) {
   const worksheet = workbook.addWorksheet(name);
   worksheet.addRows(rows);
   const widths = [];
@@ -134,6 +168,37 @@ function addRowsWorksheet(workbook, name, rows) {
   worksheet.columns = widths.map((width) => ({ width: Math.min(Math.max(width + 2, 10), 50) }));
   const header = worksheet.getRow(1);
   header.font = { bold: true };
+  if (opts.plain || rows.length === 0) return worksheet;
+
+  const columnCount = widths.length;
+  header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  header.alignment = { vertical: 'middle' };
+  header.height = 20;
+  for (let col = 1; col <= columnCount; col += 1) {
+    header.getCell(col).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+  }
+  worksheet.views = [{ state: 'frozen', ySplit: 1 }];
+  if (rows.length > 1 && columnCount > 0) {
+    worksheet.autoFilter = {
+      from: { row: 1, column: 1 },
+      to: { row: rows.length, column: columnCount },
+    };
+    // Banded body rows for scanability (soft slate tint on even rows).
+    for (let r = 2; r <= rows.length; r += 1) {
+      if (r % 2 === 0) {
+        for (let col = 1; col <= columnCount; col += 1) {
+          worksheet.getRow(r).getCell(col).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1F5F9' } };
+        }
+      }
+    }
+    const { numeric, currency } = inferNumericColumns(rows);
+    for (const col of numeric) {
+      const numFmt = currency.has(col) ? '#,##0.00' : '#,##0.##';
+      for (let r = 2; r <= rows.length; r += 1) {
+        worksheet.getRow(r).getCell(col + 1).numFmt = numFmt;
+      }
+    }
+  }
   return worksheet;
 }
 
@@ -206,6 +271,7 @@ module.exports = {
   DEFAULT_MAX_SHEETS,
   excelColLetter,
   addRowsWorksheet,
+  inferNumericColumns,
   cellToText,
   createWorkbook,
   defangCellText,
