@@ -67,7 +67,19 @@ first. Use ONE of two workflows:
           python3 -c "from docx import Document; Document('/workspace/outputs/FILE-editado.docx'); print('valid docx')"
       If that errors, your packing is wrong — re-pack with the cd+"." form.
 Never edit the binary .docx directly with str_replace — always one of the two
-workflows above. Mind that a sentence may be split across multiple <w:t> runs.`,
+workflows above. Mind that a sentence may be split across multiple <w:t> runs.
+
+FORMAT-PRESERVATION CONTRACT (surgical edits):
+- MINIMAL DIFF: touch only the paragraphs/cells the user asked about; never
+  rebuild the document from extracted text (styles/images/headers are lost).
+- ANALYZE FIRST: list paragraph styles + tables, locate the exact targets of
+  the request, then edit those locations only.
+- INSERTIONS clone the formatting of an ADJACENT paragraph of the same role
+  (body copies body; a new list item anchors on an existing list item so its
+  numbering/bullet — numPr — is inherited and Word renders the real marker).
+- NEVER touch the final <w:sectPr> (page size/margins); appends go BEFORE it.
+- Run-level text edits: replace text INSIDE runs; if the needle spans several
+  runs, join the text, replace, write into the first run and blank the rest.`,
 
   xlsx: `XLSX SKILL
 An .xlsx is a BINARY ZIP — NEVER edit it with str_replace or hand-written XML
@@ -99,7 +111,21 @@ Use python-pptx END TO END; preserve layouts, masters and images:
   prs.save('/workspace/outputs/FILE-editado.pptx')
   PY
 ✅ THEN VERIFY before finishing (mandatory):
-  python3 -c "from pptx import Presentation; Presentation('/workspace/outputs/FILE-editado.pptx'); print('valid pptx')"`,
+  python3 -c "from pptx import Presentation; Presentation('/workspace/outputs/FILE-editado.pptx'); print('valid pptx')"
+
+FORMAT-PRESERVATION CONTRACT (surgical edits):
+- Text edits at RUN level (run.text = …) so font/size/color survive; NEVER
+  shape.text = … (it nukes run formatting).
+- NEW SLIDES use the deck's OWN layouts: pick from prs.slide_layouts by name
+  so the master's fonts/colors are inherited — never a generic hardcoded look.
+- Keep slide order, notes, media and theme untouched unless asked.
+
+PROFESSIONAL DESIGN RULES (when creating slides):
+- One idea per slide; title ≤ 8 words; ≤ 4 bullets of ≤ 12 words.
+- One accent color for emphasis only; consistent margins ≥ 0.65in.
+- Charts: time series → line; parts-of-whole → doughnut; comparison → bar;
+  label the source under every chart; NEVER invent statistics.
+- Speaker notes on every slide (what to SAY, not what is written).`,
 
   pdf: `PDF SKILL
 Use pypdf for page-level operations (merge/split/rotate/extract/metadata):

@@ -447,12 +447,86 @@ to gate CI on > 5 % regression vs a baseline snapshot.
 - Reflection: `SIRAGPT_REFLECTION_ACCEPT_THRESHOLD`, `_SOFT_THRESHOLD`, `_MAX_RETRIES`
 - Run `attribution-config-validator.validate()` on boot to catch incoherent combinations.
 
+## Document professionalism + Claude-style skills — added 2026-07-03
+
+Calidad profesional de documentos generados y edición quirúrgica que preserva
+formato, inspirado en la arquitectura de Agent Skills de Anthropic (docx/pptx
+skills con contrato de preservación OOXML).
+
+### PPTX design system (`backend/src/services/document-pipeline/pptx-design-system.js`)
+- **5 temas profesionales** con tokens completos (palette 17 claves, fonts
+  display/body, chartColors ramp, coverStyle, eyebrow): `aurora` (default
+  slate/blue), `boardroom` (ejecutivo oscuro navy+ámbar), `minimal` (blanco,
+  tinta casi negra, un acento vivo), `editorial` (crema+verde/terracota,
+  Georgia display), `consulting` (blanco+navy estructurado).
+- `pickPptxTheme({template, prompt, themeId})` — keywords del prompt del
+  usuario ("oscuro/elegante"→boardroom, "minimalista"→minimal, "cálido/
+  educativo"→editorial, "estrategia/corporativo"→consulting) ganan sobre el
+  mapping por template (business→consulting, legal/premium→boardroom,
+  education→editorial, academic→minimal).
+- `pickChartType({labels, values})` — series temporales (meses/años/Q1-4)→
+  line, partes-de-un-todo (≤6 categorías, suma≈100)→doughnut, default→bar.
+- `buildPptx` consume el tema completo (portada, agenda, section dividers,
+  bullets, stat, quote, charts con `addDataChart`, footer, takeaway) y
+  `buildCoverAccentPng(theme)` cachea el PNG de acento por tema.
+
+### DOCX professional cleanup (`advanced-document-pipeline.js`)
+- **Eliminados de TODOS los entregables**: tabla QA "Criterio/Validación/
+  Estado", imagen marcador TINY_PNG ("validation mark"), línea de branding
+  "Documento generado por el pipeline documental multiagente", y el stub APA
+  ("American Psychological Association (2020)…"). Ambos caminos: pandoc
+  (`buildDocxMarkdown`) y docx-js (`buildDocx`).
+- Referencias reales: sección "Referencias" solo cuando template académico Y
+  hay `referenceBriefs` (adjuntos con excerpt) — lista los adjuntos reales.
+- `expectedFor` docx: `requiresImage` solo si hay imágenes adjuntas
+  (`referenceFiles.some(isImage)`), `minTables: 0` default (blueprint sigue
+  en 4 — sus 6 tablas son contenido real). `validateDocx`: check `table`
+  honra `minTables: 0` (`Number.isFinite`, no `|| 1`), quality `structured`
+  ya no exige `<w:tbl>`.
+
+### Surgical list preservation (`source-preserving-document-edit.js`)
+- `sanitizeCapturedParagraphProperties(pPr, {keepNumbering})` — modo lista
+  conserva `<w:numPr>` (sectPr siempre se elimina).
+- `pickRepresentativeListParagraph(paragraphs)` — captura el primer item real
+  de lista del documento; `buildFormattingTemplate` gana `listPPr`/`listRPr`.
+- `paragraphXml` soporta `kind: 'bullet'`: con lista fuente clona su numPr
+  (marcador real de Word, misma numeración/indentación); sin lista fuente cae
+  a párrafo con sangría francesa + "• " visible heredando el rPr del cuerpo.
+  Prefijos markdown (`- `, `• `) se deduplican del texto.
+- `generateTargetSectionBlocks` emite `block('bullet', …)` en vez de texto
+  plano "• …".
+
+### Claude-style skills
+- **NUEVO** `backend/src/services/sandbox/skills/pptx.md` (servida vía
+  `GET /api/sandbox/skills/pptx`): contrato quirúrgico pptx (runs, layouts
+  del propio deck, minimal diff) + reglas de diseño profesional.
+- `sandbox/skills/docx.md` reforzada: contrato de preservación (nunca
+  rebuild, minimal diff, analizar antes de editar, clonar formato vecino,
+  numPr para list items, no tocar sectPr, needle split entre runs).
+- `doc-agent/skills.js` (bloques inline del sandbox agent): mismos contratos
+  añadidos a los skills docx y pptx + reglas de diseño para decks nuevos.
+
+### Tests (registrados en backend/package.json)
+- `backend/tests/pptx-design-system.test.js` — 9 tests (tokens completos por
+  tema, pickTheme keywords/template/default, pickChartType, contraste).
+- `backend/tests/document-pipeline-docx-professional.test.js` — 3 tests (sin
+  artefactos internos + validación pasa; referencias reales solo con
+  adjuntos; blueprint conserva minTables 4).
+- `backend/tests/docx-list-preserving-edit.test.js` — 6 tests (numPr
+  keep/strip, captura de lista, clonado con fuente del doc, fallback "• "
+  con sangría, dedupe de marcadores, cuerpo nunca hereda numeración).
+- Nota: `document-pipeline-100.test.js` NO está registrado en la suite y está
+  roto desde antes (hace `fs.access(artifact.path)` pero el pipeline borra el
+  working copy tras persistir en el artifact store — cleanup deliberado).
+
 ## Next Improvement Areas
 1. **Document pipeline** — add more generator formats (EPUB, RTF, ODT)
 2. **Service health probes** — endpoint health monitoring
 3. **Rate limiting** — Redis-backed rate limiter for API endpoints
 4. **Intent attribution learning** — feed back actual response-success signals into the lexicon/rule weights to self-improve over time.
 5. **Front-end attribution panel** — UI that consumes /api/attribution-toolkit/visualize + /attribution-explainer/explain to render an explainability sidebar (UI work is out of scope for this branch per CLAUDE.md rules).
+6. **PPTX theme gallery UI** — exponer `listPptxThemes()` para que el usuario elija tema; branding por usuario (logo/colores corporativos) en `pptx-design-system`.
+7. **OMML math** — fórmulas Word nativas (hoy texto Cambria Math en el camino docx-js).
 
 ## Billing helpers — added 2026-05-26 (feature-cost-estimator.js)
 

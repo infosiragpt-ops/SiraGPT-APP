@@ -820,6 +820,14 @@ const PARAGRAPH_STYLE_DEFAULTS = {
     pPr: '<w:pPr><w:spacing w:before="80" w:after="120" w:line="360" w:lineRule="auto"/><w:jc w:val="both"/></w:pPr>',
     rPr: '<w:rPr><w:sz w:val="24"/></w:rPr>',
   },
+  // Fallback bullet look for documents without their own lists: hanging
+  // indent so wrapped lines align under the text. The visible "• " marker is
+  // added by paragraphXml only in this fallback mode — when the source
+  // document HAS a list style, the captured numPr renders the real marker.
+  bullet: {
+    pPr: '<w:pPr><w:spacing w:before="40" w:after="60"/><w:ind w:left="720" w:hanging="360"/></w:pPr>',
+    rPr: '<w:rPr><w:sz w:val="24"/></w:rPr>',
+  },
 };
 
 // Pull the first <w:pPr>…</w:pPr> block (paragraph-level formatting: alignment,
@@ -843,10 +851,16 @@ function extractRunProperties(paragraphXmlValue = '') {
 // Captured paragraph properties may carry section breaks or list-numbering refs
 // that would corrupt inserted body text (spurious page sections / auto-numbered
 // lists). Drop those while keeping fonts, alignment, spacing and style refs.
-function sanitizeCapturedParagraphProperties(paragraphProps = '') {
-  return String(paragraphProps || '')
-    .replace(/<w:sectPr\b(?:[\s\S]*?<\/w:sectPr>|\s*\/>)/g, '')
-    .replace(/<w:numPr\b(?:[\s\S]*?<\/w:numPr>|\s*\/>)/g, '');
+// `keepNumbering` preserves <w:numPr> — used ONLY for the list template so
+// inserted bullet items join the document's own list (same marker, same
+// indentation) instead of degrading to plain text.
+function sanitizeCapturedParagraphProperties(paragraphProps = '', { keepNumbering = false } = {}) {
+  let out = String(paragraphProps || '')
+    .replace(/<w:sectPr\b(?:[\s\S]*?<\/w:sectPr>|\s*\/>)/g, '');
+  if (!keepNumbering) {
+    out = out.replace(/<w:numPr\b(?:[\s\S]*?<\/w:numPr>|\s*\/>)/g, '');
+  }
+  return out;
 }
 
 function looksLikeDocxHeadingParagraph(paragraph = {}) {
@@ -880,12 +894,32 @@ function pickRepresentativeBodyParagraph(paragraphs = [], excludeIndexes = new S
   return bestXml;
 }
 
-function buildFormattingTemplate({ bodyXml = '', headingXml = '' } = {}) {
+// Pick a representative LIST paragraph (one that carries <w:numPr>) so
+// inserted bullets clone the document's own list style — marker glyph,
+// numbering definition and indentation all come from numbering.xml via the
+// captured numId. Returns '' when the document has no lists.
+function pickRepresentativeListParagraph(paragraphs = []) {
+  for (const paragraph of paragraphs) {
+    const xml = String(paragraph.xml || '');
+    if (!/<w:numPr\b/.test(xml)) continue;
+    const text = String(paragraph.text || '').trim();
+    if (text.length < 3) continue;
+    if (isPlaceholderParagraph(paragraph.text)) continue;
+    return xml;
+  }
+  return '';
+}
+
+function buildFormattingTemplate({ bodyXml = '', headingXml = '', listXml = '' } = {}) {
   return {
     bodyPPr: sanitizeCapturedParagraphProperties(extractParagraphProperties(bodyXml)),
     bodyRPr: extractRunProperties(bodyXml),
     headingPPr: sanitizeCapturedParagraphProperties(extractParagraphProperties(headingXml)),
     headingRPr: extractRunProperties(headingXml),
+    // List formatting keeps numPr on purpose: inserted bullets join the
+    // document's own list definition (real Word list, not a "• " string).
+    listPPr: sanitizeCapturedParagraphProperties(extractParagraphProperties(listXml), { keepNumbering: true }),
+    listRPr: extractRunProperties(listXml),
   };
 }
 
@@ -896,6 +930,7 @@ function buildSectionFormattingTemplate(paragraphs = [], headingIndex = -1) {
   return buildFormattingTemplate({
     bodyXml: pickRepresentativeBodyParagraph(paragraphs, new Set(headingIndex >= 0 ? [headingIndex] : [])),
     headingXml: heading ? heading.xml : '',
+    listXml: pickRepresentativeListParagraph(paragraphs),
   });
 }
 
@@ -905,6 +940,7 @@ function buildDocumentFormattingTemplate(paragraphs = []) {
   return buildFormattingTemplate({
     bodyXml: pickRepresentativeBodyParagraph(paragraphs),
     headingXml: '',
+    listXml: pickRepresentativeListParagraph(paragraphs),
   });
 }
 
@@ -913,15 +949,38 @@ function paragraphXml(item = {}, template = null) {
     return '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
   }
 
-  const text = xmlEscape(item.text || '');
   const kind = PARAGRAPH_STYLE_DEFAULTS[item.kind] ? item.kind : 'normal';
   const isHeading = kind.startsWith('heading');
+  const isBullet = kind === 'bullet';
   let pPr = PARAGRAPH_STYLE_DEFAULTS[kind].pPr;
   let rPr = PARAGRAPH_STYLE_DEFAULTS[kind].rPr;
+  // Fallback bullet mode renders a literal "• " marker. When the source
+  // document has its own list style (captured listPPr with numPr), Word
+  // renders the real list marker, so the text stays clean.
+  let usesDocumentList = false;
 
   if (template) {
-    const inheritedPPr = isHeading ? template.headingPPr : template.bodyPPr;
-    const inheritedRPr = isHeading ? template.headingRPr : template.bodyRPr;
+    let inheritedPPr;
+    let inheritedRPr;
+    if (isHeading) {
+      inheritedPPr = template.headingPPr;
+      inheritedRPr = template.headingRPr;
+    } else if (isBullet && template.listPPr) {
+      inheritedPPr = template.listPPr;
+      inheritedRPr = template.listRPr || template.bodyRPr;
+      usesDocumentList = true;
+    } else if (isBullet) {
+      // Fallback bullet: keep the hanging-indent default (bodyPPr has no list
+      // indentation) but inherit the document's run formatting so the font
+      // matches the surrounding text.
+      inheritedPPr = '';
+      inheritedRPr = template.bodyRPr;
+      if (inheritedRPr) rPr = inheritedRPr;
+      return `<w:p>${pPr}<w:r>${rPr}<w:t xml:space="preserve">${xmlEscape(`• ${String(item.text || '').replace(/^\s*[•·◦▪-]\s+/, '')}`)}</w:t></w:r></w:p>`;
+    } else {
+      inheritedPPr = template.bodyPPr;
+      inheritedRPr = template.bodyRPr;
+    }
     if (inheritedPPr || inheritedRPr) {
       // Adopt the source document's own formatting. Run properties are deferred
       // to whatever the document declares (captured rPr, or the paragraph style
@@ -932,6 +991,8 @@ function paragraphXml(item = {}, template = null) {
     }
   }
 
+  const rawText = String(item.text || '').replace(/^\s*[•·◦▪-]\s+/, '');
+  const text = xmlEscape(isBullet && !usesDocumentList ? `• ${rawText}` : (isBullet ? rawText : item.text || ''));
   return `<w:p>${pPr}<w:r>${rPr}<w:t xml:space="preserve">${text}</w:t></w:r></w:p>`;
 }
 
@@ -2757,7 +2818,9 @@ async function generateTargetSectionBlocks({
     }
     for (const bullet of Array.isArray(parsed.bullets) ? parsed.bullets : []) {
       const text = String(bullet || '').trim();
-      if (text) blocks.push(block('normal', `• ${text}`));
+      // kind 'bullet' joins the document's own list style when it has one
+      // (real numPr), or falls back to a hanging-indent "• " paragraph.
+      if (text) blocks.push(block('bullet', text));
     }
     if (parsed.closing) blocks.push(block('normal', String(parsed.closing).trim()));
     return blocks.length ? blocks.slice(0, 12) : fallback();
@@ -4987,6 +5050,9 @@ module.exports = {
     extractParagraphProperties,
     extractRunProperties,
     extractTextFromPptxBuffer,
+    paragraphXml,
+    pickRepresentativeListParagraph,
+    buildFormattingTemplate,
     fillCronogramaTableXml,
     fillGenericSectionTableBuffer,
     fillGenericSectionTableXml,
