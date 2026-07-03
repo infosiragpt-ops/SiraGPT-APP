@@ -30,6 +30,36 @@ function stripResidualFences(text) {
   return s.replace(RESIDUAL_FENCE_RE, ' ').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
 }
 
+// An UNCLOSED ```tool_call / ```json fence is the signature of an output that
+// was cut off mid-call — almost always a large write_file whose JSON overran
+// the model's max_tokens (the free Cerebras/eco tier caps at 2048). The closed-
+// fence regexes above never match it, so parsePromptedToolCalls yields ZERO
+// tool calls and the loop mistakes the truncation for "the model is done",
+// closing the build with the file never written AND leaking raw protocol JSON
+// into the narrative. Detect that shape so the loop can nudge a retry instead.
+const OPEN_FENCE_RE = /```(?:tool_call|json)\b/gi;
+
+function detectTruncatedToolCall(text) {
+  const s = String(text == null ? '' : text);
+  if (!s.includes('```')) return { truncated: false, cleaned: s };
+  // Count fence delimiters after the last tool_call/json opener: a call is
+  // complete only if a closing ``` follows the opener. An odd count of ```
+  // markers from the last opener onward means the block never closed.
+  OPEN_FENCE_RE.lastIndex = 0;
+  let lastOpen = -1;
+  let m;
+  while ((m = OPEN_FENCE_RE.exec(s)) !== null) lastOpen = m.index;
+  if (lastOpen < 0) return { truncated: false, cleaned: s };
+  const tail = s.slice(lastOpen);
+  // The opener itself is a ``` — a closed block has at least one MORE ```.
+  const fenceCount = (tail.match(/```/g) || []).length;
+  if (fenceCount >= 2) return { truncated: false, cleaned: s };
+  // Truncated: strip everything from the dangling opener so the raw protocol
+  // JSON never reaches the user-facing narrative.
+  const cleaned = s.slice(0, lastOpen).replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+  return { truncated: true, cleaned };
+}
+
 function appendToolsToSystem(messages, tools) {
   if (!tools || tools.length === 0) return messages.slice();
   const block = buildPromptedToolsBlock(tools);
@@ -123,6 +153,7 @@ async function defaultLlmTurn({ messages, tools = [], signal, env = process.env,
   const names = new Set((tools || []).map((t) => t.name));
   let toolCalls = [];
   let text = content;
+  let truncated = false;
   if (tools.length) {
     const parsed = parsePromptedToolCalls(content, names);
     text = stripResidualFences(parsed.cleanedContent);
@@ -131,14 +162,26 @@ async function defaultLlmTurn({ messages, tools = [], signal, env = process.env,
       try { args = JSON.parse(tc.function.arguments || '{}'); } catch { args = {}; }
       return { id: tc.id, name: tc.function.name, args };
     });
+    // Only meaningful when NO complete call was parsed: a dangling opener next
+    // to a parsed call is just the model's next (partial) thought and the loop
+    // will get the completed call on the following turn. When zero calls came
+    // back but a fence was left open, the step was cut off mid-tool-call.
+    if (toolCalls.length === 0) {
+      const trunc = detectTruncatedToolCall(text);
+      if (trunc.truncated) {
+        truncated = true;
+        text = trunc.cleaned;
+      }
+    }
   }
 
   return {
     text,
     reasoning: reasoningText ? { label: 'Razonando', text: reasoningText, durationMs: 0 } : null,
     toolCalls,
+    truncated,
     usage,
   };
 }
 
-module.exports = { defaultLlmTurn, resolveTurnEngine, appendToolsToSystem, extractUsage, stripResidualFences };
+module.exports = { defaultLlmTurn, resolveTurnEngine, appendToolsToSystem, extractUsage, stripResidualFences, detectTruncatedToolCall };

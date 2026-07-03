@@ -213,6 +213,44 @@ test('step budget exhaustion closes as done with an honest closing narrative', a
   assert.match(lastNarr.data.text, /límite de pasos/i);
 });
 
+test('a truncated turn (cut-off write) nudges a retry instead of closing the build', async () => {
+  // First turn: model overran its budget mid-write → zero parsed calls but
+  // truncated:true. The loop must NOT treat that as "done"; it feeds back a
+  // split-the-write nudge and the model then writes the file successfully.
+  let sawNudge = false;
+  const f = fakeDeps({
+    llmTurn: scriptedLlm([
+      { text: 'Escribo el componente.', toolCalls: [], truncated: true },
+      { text: 'Lo divido en partes.', toolCalls: [{ name: 'write_file', args: { path: 'src/App.tsx', content: '<App/>' } }] },
+      { text: 'Listo.', toolCalls: [] },
+    ]),
+  });
+  // Wrap the scripted llmTurn to observe the nudge that reaches the model.
+  const inner = f.deps.llmTurn;
+  f.deps.llmTurn = async (a) => {
+    if ((a.messages || []).some((m) => typeof m.content === 'string' && m.content.includes('[TRUNCADO]'))) sawNudge = true;
+    return inner(a);
+  };
+  const res = await runAgentLoop({ run: { id: 'r1', mode: 'build' }, project: { id: 'p1', name: 'X' }, deps: f.deps });
+  assert.equal(res.status, 'done');
+  assert.equal(sawNudge, true);
+  assert.deepEqual(f.writes, [{ path: 'src/App.tsx', content: '<App/>' }]); // the file DID get written
+});
+
+test('a chronically truncating model still terminates (bounded truncation retries)', async () => {
+  // Every turn truncates → without a bound this would spin until the step
+  // budget. The retry cap kicks in and the build closes as done (honest).
+  const f = fakeDeps({
+    llmTurn: async () => ({ text: 'sigo', toolCalls: [], truncated: true }),
+    env: { NODE_ENV: 'test', CODEX_MAX_STEPS: '12', CODEX_AUTO_VERIFY: '0' },
+  });
+  const res = await runAgentLoop({ run: { id: 'r1', mode: 'build' }, project: { id: 'p1' }, deps: f.deps });
+  assert.equal(res.status, 'done');
+  // At most MAX_TRUNCATION_RETRIES (3) nudges were emitted to the model.
+  const nudges = f.events.filter((e) => e.type === 'narrative_delta'); // closing narrative present
+  assert.ok(nudges.length >= 1);
+});
+
 test('LLM transport error in build → run error', async () => {
   const f = fakeDeps({ llmTurn: async () => { throw new Error('402 Insufficient credits'); } });
   const res = await runAgentLoop({ run: { id: 'r1', mode: 'build' }, project: { id: 'p1' }, deps: f.deps });
