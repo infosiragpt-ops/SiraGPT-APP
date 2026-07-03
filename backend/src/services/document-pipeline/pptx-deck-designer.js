@@ -138,7 +138,7 @@ function sanitizeDeck(raw, { title }) {
   };
 }
 
-async function planPptxDeckWithLLM({ title = '', prompt = '', blocks = [], referenceBriefs = [], signal } = {}) {
+async function planPptxDeckWithLLM({ title = '', prompt = '', blocks = [], referenceBriefs = [], slideTarget = null, signal } = {}) {
   if (String(process.env.NODE_ENV) === 'test' && process.env.SIRAGPT_PPTX_DESIGNER_NETWORK !== '1') return null;
   if (String(process.env.SIRAGPT_PPTX_DECK_DESIGNER || '').trim() === '0') return null;
   const _resolved = resolveContentClient();
@@ -161,7 +161,9 @@ async function planPptxDeckWithLLM({ title = '', prompt = '', blocks = [], refer
             'Eres un diseñador senior de presentaciones ejecutivas (nivel consultora top).',
             'Devuelve SOLO JSON válido con el guion de un deck profesional en español.',
             'Reglas de oro:',
-            '- 8 a 10 láminas. UNA idea por lámina. Títulos de máximo 8 palabras.',
+            slideTarget
+              ? `- EXACTAMENTE ${Math.max(2, Math.min(40, slideTarget))} láminas EN TOTAL (el usuario lo pidió explícitamente; la portada, la agenda y el cierre cuentan). UNA idea por lámina. Títulos de máximo 8 palabras.`
+              : '- 8 a 10 láminas. UNA idea por lámina. Títulos de máximo 8 palabras.',
             '- Bullets de máximo 12 palabras, concretos y accionables. Nada de párrafos.',
             '- Varía los layouts: "section" (divisor), "bullets", "two_column", "stat" (una cifra protagonista), "quote", "chart".',
             '- PROHIBIDO inventar estadísticas. Usa cifras SOLO si están en el material o son conocimiento general atribuible; si no hay datos, usa layouts sin números.',

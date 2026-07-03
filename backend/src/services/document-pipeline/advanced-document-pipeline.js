@@ -22,8 +22,8 @@ const ExcelJS = require('exceljs');
 const { renderPreview } = require('../doc-preview');
 const { generateSectionContent, fallbackBlock, generateSpreadsheetContent } = require('./content');
 const { runRenderCritique } = require('./render-critique-loop');
+const { parseDocumentRequest } = require('./content/parse-document-request');
 const { buildPptxContentPlan, hasGenericPlaceholderText } = require('./pptx-content-planner');
-const { pickPptxTheme, pickChartType } = require('./pptx-design-system');
 const {
   MAX_SIMULTANEOUS_DOCUMENTS,
 } = require('../../config/document-batch-limits');
@@ -378,18 +378,6 @@ function buildDocxMarkdown(plan) {
     });
   }
 
-  // Professionalism: no internal QA tables, validation markers or citation
-  // stubs inside the user's deliverable. References are only rendered when
-  // the plan carries REAL reference material (attached files with excerpts).
-  if (!plan.sourceContent && plan.template === 'academic' && Array.isArray(plan.referenceBriefs) && plan.referenceBriefs.length > 0) {
-    lines.push('# Referencias', '');
-    for (const ref of plan.referenceBriefs) {
-      lines.push(`- ${markdownEscape(ref.name)}. ${markdownEscape(ref.excerpt || '')}`.trim());
-    }
-    lines.push('');
-  }
-
-
   return lines.join('\n');
 }
 
@@ -464,6 +452,11 @@ function titleFromPrompt(prompt, fallback = 'Documento profesional') {
   const clean = source
     // Length directives describe the ASK, not the topic ("en 200 palabras").
     .replace(/\b(?:en|de)\s+\d{1,5}\s*(?:palabras|words|p[áa]ginas?|pages?)\b/gi, ' ')
+    .replace(/\b(?:en|de)\s+\d{1,2}\s*(?:l[áa]minas?|diapositivas?|slides?|transparencias?)\b/gi, ' ')
+    // Courtesy and quality phrasing are conditions, not topic.
+    .replace(/\b(?:por\s*favor|porfa(?:vor)?|gracias|please)\b/gi, ' ')
+    .replace(/\bde\s+(?:forma|manera)\s+(?:muy\s+)?\w+\b/gi, ' ')
+    .replace(/\b(?:muy\s+)?(?:profesionali?(?:smo)?|profe\w*|bonito|bien\s+(?:elaborad[oa]|hech[oa])|executive)\b/gi, ' ')
     .replace(/\b(?:sobre|about)\s*$/gi, ' ')
     .replace(/\b(crea|crear|genera|generar|haz|hacer|dame|prepara|elabora|en un|una|un|word|excel|powerpoint|power\s*point|ppt|pptx|xlsx|docx|pdf|documento)\b/gi, ' ')
     .replace(/\s+/g, ' ')
@@ -908,6 +901,15 @@ function parseRequestedLength(userRequest = '') {
 // How many content sections a word budget honestly supports. Each section
 // carries ~120-160 words of prose plus bullets; planning 8 template sections
 // for a "200 palabras" request is how a 2-page ask became a 6-page document.
+// Deterministic slide-count parse ("en 10 láminas/diapositivas/slides").
+// The LLM intent layer handles typos (e.g. "Landin"); this is the offline base.
+function parseRequestedSlides(userRequest = '') {
+  const match = String(userRequest).match(/(\d{1,2})\s*(?:l[áa]minas?|diapositivas?|slides?|transparencias?)\b/i);
+  if (!match) return null;
+  const n = Number(match[1]);
+  return n >= 2 && n <= 40 ? n : null;
+}
+
 function sectionBudgetForWords(wordTarget) {
   if (!wordTarget) return null;
   if (wordTarget <= 260) return 1;
@@ -948,6 +950,7 @@ function buildPlan({ prompt, format, template, complexity = 'standard', referenc
   // "en 200 palabras" must not fan out into an 8-section template skeleton.
   // Prompt-inferred sections (the user's own outline) survive the cut first.
   const wordTarget = sourceContent ? null : parseRequestedLength(userRequest);
+  const slideTarget = sourceContent ? null : parseRequestedSlides(userRequest);
   const sectionBudget = sectionBudgetForWords(wordTarget);
   if (sectionBudget && plannedSections.length > sectionBudget) {
     const userSections = inferPromptSections(userRequest);
@@ -978,6 +981,7 @@ function buildPlan({ prompt, format, template, complexity = 'standard', referenc
     complexity,
     sourceContent,
     wordTarget,
+    slideTarget,
     formulaBlocks: sourceContent ? [] : inferFormulaBlocks(userRequest),
     sections: plannedSections,
     referenceFiles: normalizedReferenceFiles.map(({ excerpt, ...file }) => file),
@@ -1856,17 +1860,6 @@ async function buildDocx(plan, outputPath) {
         }
         return out;
       })),
-    // References only when the plan carries REAL reference material — no
-    // citation-manual stubs padding the user's document.
-    ...(!plan.sourceContent && plan.template === 'academic' && Array.isArray(plan.referenceBriefs) && plan.referenceBriefs.length > 0 ? [
-      new Paragraph({ text: 'Referencias', heading: HeadingLevel.HEADING_1 }),
-      ...plan.referenceBriefs.map((ref) => new Paragraph({
-        children: [
-          new TextRun({ text: `${ref.name}. `, bold: true }),
-          new TextRun(String(ref.excerpt || '').trim()),
-        ],
-      })),
-    ] : []),
   ];
   const doc = new Document({
     creator: 'siraGPT Document Pipeline',
@@ -2083,32 +2076,26 @@ with open(OUT_PATH, "rb") as f:
   return buffer;
 }
 
-const _coverAccentPngCache = new Map();
-async function buildCoverAccentPng(theme = null) {
-  const accent = theme?.palette?.accent || '2563EB';
-  const accent2 = theme?.palette?.accent2 || '06B6D4';
-  const ringInk = theme?.coverStyle === 'dark' ? 'FFFFFF' : '0F172A';
-  const cacheKey = `${accent}-${accent2}-${ringInk}`;
-  if (_coverAccentPngCache.has(cacheKey)) return _coverAccentPngCache.get(cacheKey);
-  let png;
+let _coverAccentPng = null;
+async function buildCoverAccentPng() {
+  if (_coverAccentPng) return _coverAccentPng;
   try {
     const sharp = require('sharp');
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="480">
       <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0" stop-color="#${accent}"/><stop offset="1" stop-color="#${accent2}"/>
+        <stop offset="0" stop-color="#2563EB"/><stop offset="1" stop-color="#06B6D4"/>
       </linearGradient></defs>
       <circle cx="240" cy="240" r="200" fill="url(#g)" opacity="0.92"/>
-      <circle cx="240" cy="240" r="200" fill="none" stroke="#${ringInk}" stroke-opacity="0.08" stroke-width="2"/>
+      <circle cx="240" cy="240" r="200" fill="none" stroke="#0F172A" stroke-opacity="0.08" stroke-width="2"/>
       <g fill="#FFFFFF" opacity="0.85">
         ${Array.from({ length: 5 }, (_, r) => Array.from({ length: 5 }, (_, c) => `<circle cx="${168 + c * 36}" cy="${168 + r * 36}" r="4"/>`).join('')).join('')}
       </g>
     </svg>`;
-    png = await sharp(Buffer.from(svg)).png().toBuffer();
+    _coverAccentPng = await sharp(Buffer.from(svg)).png().toBuffer();
   } catch {
-    png = TINY_PNG;
+    _coverAccentPng = TINY_PNG;
   }
-  _coverAccentPngCache.set(cacheKey, png);
-  return png;
+  return _coverAccentPng;
 }
 
 async function buildPptx(plan, outputPath) {
@@ -2122,29 +2109,28 @@ async function buildPptx(plan, outputPath) {
       blocks: plan.blocks,
       referenceBriefs: plan.referenceBriefs,
     });
-  // Theme gallery: picked from the user's own words (estilo "oscuro",
-  // "minimalista"…) with the detected template as fallback. Every color and
-  // font below comes from the theme so the whole deck restyles coherently.
-  const theme = pickPptxTheme({ template: plan.template, prompt: plan.userRequest || plan.title });
-  const P = theme.palette;
-  const DISPLAY = theme.fonts.display;
-  const BODY = theme.fonts.body;
   const pptx = new PptxGenJS();
   pptx.layout = 'LAYOUT_WIDE';
   pptx.author = 'siraGPT Document Pipeline';
   pptx.subject = plan.template;
   pptx.company = 'siraGPT';
   pptx.theme = {
-    headFontFace: DISPLAY,
-    bodyFontFace: BODY,
+    headFontFace: 'Aptos Display',
+    bodyFontFace: 'Aptos',
     lang: 'es-ES',
   };
+  const palette = { bg: 'F8FAFC', dark: '0F172A', accent: '2563EB', cyan: '06B6D4', muted: '64748B', white: 'FFFFFF' };
   const addTitle = (slide, title, subtitle) => {
-    slide.background = { color: P.bg };
-    slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 7.5, fill: { color: P.bg }, line: { color: P.bg } });
-    slide.addShape(pptx.ShapeType.arc, { x: 10.8, y: -0.7, w: 3, h: 3, line: { color: P.accent2, transparency: 30 }, fill: { color: P.surfaceAlt, transparency: 10 } });
-    slide.addText(title, { x: 0.65, y: 0.65, w: 9.3, h: 0.78, fontFace: DISPLAY, fontSize: 30, bold: true, color: P.ink, margin: 0, fit: 'shrink' });
-    if (subtitle) slide.addText(subtitle, { x: 0.67, y: 1.42, w: 8.4, h: 0.35, fontSize: 12, color: P.muted, margin: 0 });
+    slide.background = { color: palette.bg };
+    slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 7.5, fill: { color: palette.bg }, line: { color: palette.bg } });
+    slide.addShape(pptx.ShapeType.arc, { x: 10.8, y: -0.7, w: 3, h: 3, line: { color: palette.cyan, transparency: 30 }, fill: { color: 'DBEAFE', transparency: 10 } });
+    slide.addText(title, { x: 0.65, y: 0.65, w: 9.3, h: 0.78, fontFace: 'Aptos Display', fontSize: 30, bold: true, color: palette.dark, margin: 0, fit: 'shrink' });
+    if (subtitle) slide.addText(subtitle, { x: 0.67, y: 1.42, w: 8.4, h: 0.35, fontSize: 12, color: palette.muted, margin: 0 });
+  };
+  const formatBullet = (bullet) => {
+    if (!bullet) return '';
+    const label = bullet.label ? `${bullet.label}: ` : '';
+    return `• ${label}${bullet.text || ''}`;
   };
   const chartMetrics = (slideSpec, index) => {
     const metrics = Array.isArray(slideSpec.metrics) && slideSpec.metrics.length > 0
@@ -2158,54 +2144,18 @@ async function buildPptx(plan, outputPath) {
       .map((metric) => ({ label: String(metric.label || 'Indicador').slice(0, 18), value: Math.max(0, Math.min(100, Number(metric.value) || 75)) }))
       .slice(0, 4);
   };
-  // Chart type variety: temporal series → line, parts-of-whole → doughnut,
-  // categories → bar. Colors always from the theme's chart ramp.
-  const addDataChart = (slide, { title, labels, values }, frame, opts = {}) => {
-    const type = pickChartType({ labels, values });
-    const common = {
-      ...frame,
-      catAxisLabelFontFace: BODY,
-      valAxisLabelFontFace: BODY,
-      dataLabelFontFace: BODY,
-      showLegend: type === 'doughnut',
-      legendPos: 'b',
-      legendFontFace: BODY,
-      legendFontSize: 10,
-      chartColors: type === 'doughnut' ? theme.chartColors : [P.accent],
-      ...opts,
-    };
-    if (type === 'line') {
-      slide.addChart(pptx.ChartType.line, [{ name: title, labels, values }], {
-        ...common,
-        lineSize: 2.5,
-        lineSmooth: true,
-        chartColors: [P.accent],
-        showValue: false,
-      });
-    } else if (type === 'doughnut') {
-      slide.addChart(pptx.ChartType.doughnut, [{ name: title, labels, values }], {
-        ...common,
-        holeSize: 62,
-        showValue: false,
-        dataLabelFontSize: 10,
-      });
-    } else {
-      slide.addChart(pptx.ChartType.bar, [{ name: title, labels, values }], common);
-    }
-    return type;
-  };
 
   let slide = pptx.addSlide();
-  slide.background = { color: P.coverBg };
-  slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 7.5, fill: { color: P.coverBg }, line: { color: P.coverBg } });
-  slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 0.22, h: 7.5, fill: { color: P.accent }, line: { color: P.accent } });
-  slide.addText(theme.eyebrow, { x: 0.8, y: 0.75, w: 5.6, h: 0.28, fontSize: 10, color: P.accent, bold: true, charSpace: 2 });
-  slide.addText(plan.title, { x: 0.78, y: 1.32, w: 8.8, h: 1.28, fontFace: DISPLAY, fontSize: 38, bold: true, color: P.coverInk, margin: 0, fit: 'shrink' });
-  slide.addText(contentPlan.thesis, { x: 0.82, y: 2.85, w: 7.4, h: 0.92, fontSize: 16, color: P.coverMuted, fit: 'shrink' });
-  slide.addShape(pptx.ShapeType.roundRect, { x: 0.82, y: 4.2, w: 3.1, h: 0.48, rectRadius: 0.09, fill: { color: P.surface }, line: { color: P.line } });
-  slide.addText('Enfoque ejecutivo y editable', { x: 1.05, y: 4.33, w: 2.7, h: 0.18, fontSize: 10.5, bold: true, color: P.ink, margin: 0 });
-  slide.addShape(pptx.ShapeType.arc, { x: 9.2, y: 0.85, w: 3.1, h: 3.1, line: { color: P.accent2, transparency: 25 }, fill: { color: P.surfaceAlt, transparency: 8 } });
-  const coverAccent = await buildCoverAccentPng(theme);
+  slide.background = { color: 'EEF6FF' };
+  slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 7.5, fill: { color: 'EEF6FF' }, line: { color: 'EEF6FF' } });
+  slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 0.22, h: 7.5, fill: { color: palette.accent }, line: { color: palette.accent } });
+  slide.addText('PRESENTACIÓN PROFESIONAL', { x: 0.8, y: 0.75, w: 5.6, h: 0.28, fontSize: 10, color: palette.accent, bold: true, charSpace: 2 });
+  slide.addText(plan.title, { x: 0.78, y: 1.32, w: 8.8, h: 1.28, fontFace: 'Aptos Display', fontSize: 38, bold: true, color: palette.dark, margin: 0, fit: 'shrink' });
+  slide.addText(contentPlan.thesis, { x: 0.82, y: 2.85, w: 7.4, h: 0.92, fontSize: 16, color: '334155', fit: 'shrink' });
+  slide.addShape(pptx.ShapeType.roundRect, { x: 0.82, y: 4.2, w: 3.1, h: 0.48, rectRadius: 0.09, fill: { color: palette.white }, line: { color: 'CBD5E1' } });
+  slide.addText('Enfoque ejecutivo y editable', { x: 1.05, y: 4.33, w: 2.7, h: 0.18, fontSize: 10.5, bold: true, color: palette.dark, margin: 0 });
+  slide.addShape(pptx.ShapeType.arc, { x: 9.2, y: 0.85, w: 3.1, h: 3.1, line: { color: palette.cyan, transparency: 25 }, fill: { color: 'DBEAFE', transparency: 8 } });
+  const coverAccent = await buildCoverAccentPng();
   slide.addImage({ data: `data:image/png;base64,${coverAccent.toString('base64')}`, x: 10.35, y: 4.45, w: 1.7, h: 1.7 });
   slide.addNotes(`Portada. Presentar el propósito central: ${contentPlan.thesis}`);
 
@@ -2224,15 +2174,15 @@ async function buildPptx(plan, outputPath) {
     const x = 0.9 + col * 6.15;
     const rowH = twoColAgenda ? 0.72 : 0.62;
     const y = 2.05 + row * rowH;
-    slide.addText(String(i + 1).padStart(2, '0'), { x, y: y + 0.06, w: 0.42, h: 0.3, fontSize: 11, bold: true, color: P.accent, margin: 0 });
-    slide.addText(s, { x: x + 0.58, y, w: twoColAgenda ? 5.15 : 7.1, h: 0.36, fontSize: 16, color: P.ink, bold: i === 0, fit: 'shrink' });
-    slide.addShape(pptx.ShapeType.rect, { x: x + 0.02, y: y + 0.44, w: twoColAgenda ? 5.6 : 7.5, h: 0.01, fill: { color: P.line, transparency: 15 }, line: { color: P.line, transparency: 100 } });
+    slide.addText(String(i + 1).padStart(2, '0'), { x, y: y + 0.06, w: 0.42, h: 0.3, fontSize: 11, bold: true, color: palette.accent, margin: 0 });
+    slide.addText(s, { x: x + 0.58, y, w: twoColAgenda ? 5.15 : 7.1, h: 0.36, fontSize: 16, color: palette.dark, bold: i === 0, fit: 'shrink' });
+    slide.addShape(pptx.ShapeType.rect, { x: x + 0.02, y: y + 0.44, w: twoColAgenda ? 5.6 : 7.5, h: 0.01, fill: { color: 'E2E8F0', transparency: 15 }, line: { color: 'E2E8F0', transparency: 100 } });
   });
   if (!twoColAgenda && contentPlan.thesis) {
-    slide.addShape(pptx.ShapeType.roundRect, { x: 8.55, y: 2.05, w: 4.0, h: 3.2, rectRadius: 0.1, fill: { color: P.surfaceAlt }, line: { color: P.chipLine } });
-    slide.addShape(pptx.ShapeType.rect, { x: 8.55, y: 2.05, w: 0.09, h: 3.2, fill: { color: P.accent }, line: { color: P.accent } });
-    slide.addText('TESIS DE LA PRESENTACIÓN', { x: 8.82, y: 2.3, w: 3.5, h: 0.22, fontSize: 9.5, bold: true, color: P.accent, charSpace: 1.5, margin: 0 });
-    slide.addText(contentPlan.thesis, { x: 8.82, y: 2.66, w: 3.5, h: 2.35, fontSize: 13.5, bold: true, color: P.ink, fit: 'shrink', margin: 0 });
+    slide.addShape(pptx.ShapeType.roundRect, { x: 8.55, y: 2.05, w: 4.0, h: 3.2, rectRadius: 0.1, fill: { color: 'EFF6FF' }, line: { color: 'BFDBFE' } });
+    slide.addShape(pptx.ShapeType.rect, { x: 8.55, y: 2.05, w: 0.09, h: 3.2, fill: { color: palette.accent }, line: { color: palette.accent } });
+    slide.addText('TESIS DE LA PRESENTACIÓN', { x: 8.82, y: 2.3, w: 3.5, h: 0.22, fontSize: 9.5, bold: true, color: palette.accent, charSpace: 1.5, margin: 0 });
+    slide.addText(contentPlan.thesis, { x: 8.82, y: 2.66, w: 3.5, h: 2.35, fontSize: 13.5, bold: true, color: palette.dark, fit: 'shrink', margin: 0 });
   }
   slide.addNotes('Explicar la ruta de navegación y anticipar que cada lámina aterriza una decisión o aprendizaje.');
 
@@ -2240,8 +2190,8 @@ async function buildPptx(plan, outputPath) {
     slide = pptx.addSlide();
     addTitle(slide, 'Material de referencia', 'Archivos adjuntos considerados en la planificación');
     contentPlan.references.slice(0, 5).forEach((ref, i) => {
-      slide.addText(`${i + 1}. ${ref.name}`, { x: 0.9, y: 2.0 + i * 0.72, w: 4.1, h: 0.28, fontSize: 14, bold: true, color: P.ink });
-      slide.addText(ref.excerpt || 'Sin texto extraído disponible.', { x: 4.95, y: 1.95 + i * 0.72, w: 6.8, h: 0.42, fontSize: 10, color: P.muted, fit: 'shrink' });
+      slide.addText(`${i + 1}. ${ref.name}`, { x: 0.9, y: 2.0 + i * 0.72, w: 4.1, h: 0.28, fontSize: 14, bold: true, color: palette.dark });
+      slide.addText(ref.excerpt || 'Sin texto extraído disponible.', { x: 4.95, y: 1.95 + i * 0.72, w: 6.8, h: 0.42, fontSize: 10, color: palette.muted, fit: 'shrink' });
     });
     slide.addNotes('Confirmar qué archivos adjuntos fueron usados como referencia.');
   }
@@ -2250,22 +2200,27 @@ async function buildPptx(plan, outputPath) {
   // El diseñador LLM marca cada slide con un layout; el plan heurístico
   // legado (sin layout) renderiza como 'bullets' y solo muestra gráfico si
   // trae métricas propias — nunca datos decorativos inventados.
+  const totalSlides = contentPlan.slides.length;
   let chartsAdded = 0;
   const addFooter = (target, pageIndex) => {
-    target.addShape(pptx.ShapeType.rect, { x: 0, y: 7.18, w: 13.333, h: 0.02, fill: { color: P.line }, line: { color: P.line, transparency: 100 } });
-    target.addText(contentPlan.topic || plan.title, { x: 0.65, y: 7.24, w: 6.4, h: 0.2, fontSize: 9, color: P.muted, margin: 0 });
-    target.addText(`${pageIndex}`, { x: 12.45, y: 7.24, w: 0.5, h: 0.2, fontSize: 9, color: P.muted, align: 'right', margin: 0 });
+    target.addShape(pptx.ShapeType.rect, { x: 0, y: 7.18, w: 13.333, h: 0.02, fill: { color: 'E2E8F0' }, line: { color: 'E2E8F0', transparency: 100 } });
+    target.addText(contentPlan.topic || plan.title, { x: 0.65, y: 7.24, w: 6.4, h: 0.2, fontSize: 9, color: palette.muted, margin: 0 });
+    target.addText(`${pageIndex}`, { x: 12.45, y: 7.24, w: 0.5, h: 0.2, fontSize: 9, color: palette.muted, align: 'right', margin: 0 });
   };
   const addTakeaway = (target, text) => {
     if (!text) return;
-    target.addShape(pptx.ShapeType.roundRect, { x: 8.35, y: 2.05, w: 4.15, h: 1.9, rectRadius: 0.1, fill: { color: P.surfaceAlt }, line: { color: P.chipLine } });
-    target.addShape(pptx.ShapeType.rect, { x: 8.35, y: 2.05, w: 0.09, h: 1.9, fill: { color: P.accent }, line: { color: P.accent } });
-    target.addText('IDEA CLAVE', { x: 8.62, y: 2.28, w: 3.6, h: 0.22, fontSize: 9.5, bold: true, color: P.accent, charSpace: 1.5, margin: 0 });
-    target.addText(text, { x: 8.62, y: 2.62, w: 3.66, h: 1.2, fontSize: 13.5, bold: true, color: P.ink, fit: 'shrink', margin: 0 });
+    target.addShape(pptx.ShapeType.roundRect, { x: 8.35, y: 2.05, w: 4.15, h: 1.9, rectRadius: 0.1, fill: { color: 'EFF6FF' }, line: { color: 'BFDBFE' } });
+    target.addShape(pptx.ShapeType.rect, { x: 8.35, y: 2.05, w: 0.09, h: 1.9, fill: { color: palette.accent }, line: { color: palette.accent } });
+    target.addText('IDEA CLAVE', { x: 8.62, y: 2.28, w: 3.6, h: 0.22, fontSize: 9.5, bold: true, color: palette.accent, charSpace: 1.5, margin: 0 });
+    target.addText(text, { x: 8.62, y: 2.62, w: 3.66, h: 1.2, fontSize: 13.5, bold: true, color: palette.dark, fit: 'shrink', margin: 0 });
   };
 
-  const totalSlides = contentPlan.slides.length;
-  for (const [i, slideSpec] of contentPlan.slides.slice(0, 10).entries()) {
+  // Honour an explicit total-slide request: cover + agenda + closing are
+  // fixed, so content slides = target - 3 (min 1). Default cap stays 10.
+  const contentSlideCap = plan.slideTarget
+    ? Math.max(1, Math.min(24, plan.slideTarget - 3))
+    : 10;
+  for (const [i, slideSpec] of contentPlan.slides.slice(0, contentSlideCap).entries()) {
     const layout = slideSpec.layout || 'bullets';
     slide = pptx.addSlide();
     const pageIndex = i + 3;
@@ -2275,20 +2230,20 @@ async function buildPptx(plan, outputPath) {
       // title, summary and a progress rail. The previous shape was a lone
       // title floating on a dark canvas — read as unfinished.
       const sectionNumber = String((contentPlan.slides.slice(0, i).filter((s) => (s.layout || '') === 'section').length + 1)).padStart(2, '0');
-      slide.background = { color: P.sectionBg };
-      slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 7.5, fill: { color: P.sectionBg }, line: { color: P.sectionBg } });
-      slide.addText(sectionNumber, { x: 8.7, y: 0.9, w: 4.3, h: 3.4, fontFace: DISPLAY, fontSize: 200, bold: true, color: P.sectionMuted, transparency: 80, align: 'right', margin: 0 });
-      slide.addShape(pptx.ShapeType.rect, { x: 0.65, y: 3.0, w: 0.85, h: 0.07, fill: { color: P.accent2 }, line: { color: P.accent2 } });
-      if (slideSpec.kicker) slide.addText(slideSpec.kicker.toUpperCase(), { x: 0.67, y: 2.5, w: 9.5, h: 0.3, fontSize: 12, bold: true, color: P.accent2, charSpace: 2, margin: 0 });
-      slide.addText(slideSpec.title, { x: 0.65, y: 3.25, w: 11.6, h: 1.3, fontFace: DISPLAY, fontSize: 40, bold: true, color: P.sectionInk, fit: 'shrink', margin: 0 });
-      slide.addText(slideSpec.summary || `Sección ${sectionNumber} de la presentación: ${contentPlan.topic || plan.title}.`, { x: 0.67, y: 4.7, w: 9.4, h: 0.7, fontSize: 15, color: P.sectionMuted, fit: 'shrink', margin: 0 });
+      slide.background = { color: palette.dark };
+      slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 7.5, fill: { color: palette.dark }, line: { color: palette.dark } });
+      slide.addText(sectionNumber, { x: 8.7, y: 0.9, w: 4.3, h: 3.4, fontFace: 'Aptos Display', fontSize: 200, bold: true, color: '1E293B', align: 'right', margin: 0 });
+      slide.addShape(pptx.ShapeType.rect, { x: 0.65, y: 3.0, w: 0.85, h: 0.07, fill: { color: palette.cyan }, line: { color: palette.cyan } });
+      if (slideSpec.kicker) slide.addText(slideSpec.kicker.toUpperCase(), { x: 0.67, y: 2.5, w: 9.5, h: 0.3, fontSize: 12, bold: true, color: palette.cyan, charSpace: 2, margin: 0 });
+      slide.addText(slideSpec.title, { x: 0.65, y: 3.25, w: 11.6, h: 1.3, fontFace: 'Aptos Display', fontSize: 40, bold: true, color: palette.white, fit: 'shrink', margin: 0 });
+      slide.addText(slideSpec.summary || `Sección ${sectionNumber} de la presentación: ${contentPlan.topic || plan.title}.`, { x: 0.67, y: 4.7, w: 9.4, h: 0.7, fontSize: 15, color: 'CBD5E1', fit: 'shrink', margin: 0 });
       // Progress rail: one dot per content slide, current position accented.
       const totalDots = Math.min(10, totalSlides);
       for (let dot = 0; dot < totalDots; dot += 1) {
         slide.addShape(pptx.ShapeType.ellipse, {
           x: 0.68 + dot * 0.34, y: 6.75, w: 0.14, h: 0.14,
-          fill: { color: dot === Math.min(i, totalDots - 1) ? P.accent2 : P.sectionMuted },
-          line: { color: dot === Math.min(i, totalDots - 1) ? P.accent2 : P.sectionMuted },
+          fill: { color: dot === Math.min(i, totalDots - 1) ? palette.cyan : '334155' },
+          line: { color: dot === Math.min(i, totalDots - 1) ? palette.cyan : '334155' },
         });
       }
       slide.addNotes(slideSpec.notes || slideSpec.title);
@@ -2301,11 +2256,11 @@ async function buildPptx(plan, outputPath) {
     if (layout === 'two_column' && Array.isArray(slideSpec.columns) && slideSpec.columns.length >= 2) {
       slideSpec.columns.slice(0, 2).forEach((column, columnIndex) => {
         const x = 0.8 + columnIndex * 6.1;
-        slide.addShape(pptx.ShapeType.roundRect, { x, y: 2.05, w: 5.7, h: 4.5, rectRadius: 0.1, fill: { color: columnIndex === 0 ? P.surfaceAlt : P.surface }, line: { color: P.line } });
-        slide.addText(column.heading || `Columna ${columnIndex + 1}`, { x: x + 0.3, y: 2.35, w: 5.1, h: 0.34, fontSize: 16, bold: true, color: columnIndex === 0 ? P.ink : P.accent, margin: 0 });
+        slide.addShape(pptx.ShapeType.roundRect, { x, y: 2.05, w: 5.7, h: 4.5, rectRadius: 0.1, fill: { color: columnIndex === 0 ? 'F1F5F9' : 'EFF6FF' }, line: { color: 'E2E8F0' } });
+        slide.addText(column.heading || `Columna ${columnIndex + 1}`, { x: x + 0.3, y: 2.35, w: 5.1, h: 0.34, fontSize: 16, bold: true, color: columnIndex === 0 ? palette.dark : palette.accent, margin: 0 });
         column.items.slice(0, 4).forEach((item, itemIndex) => {
-          slide.addText('•', { x: x + 0.32, y: 2.95 + itemIndex * 0.78, w: 0.25, h: 0.3, fontSize: 14, color: P.accent, margin: 0 });
-          slide.addText(item, { x: x + 0.62, y: 2.92 + itemIndex * 0.78, w: 4.75, h: 0.66, fontSize: 13.5, color: P.body, fit: 'shrink', margin: 0 });
+          slide.addText('•', { x: x + 0.32, y: 2.95 + itemIndex * 0.78, w: 0.25, h: 0.3, fontSize: 14, color: palette.accent, margin: 0 });
+          slide.addText(item, { x: x + 0.62, y: 2.92 + itemIndex * 0.78, w: 4.75, h: 0.66, fontSize: 13.5, color: '334155', fit: 'shrink', margin: 0 });
         });
       });
       slide.addNotes(slideSpec.notes);
@@ -2316,39 +2271,42 @@ async function buildPptx(plan, outputPath) {
       // The right rail must never render empty (the "60% blank stat slide"
       // the user flagged): when the designer sent no support items, fall
       // back to summary/takeaway/notes-derived cards so the canvas is full.
-      slide.addShape(pptx.ShapeType.roundRect, { x: 0.7, y: 2.0, w: 6.1, h: 4.55, rectRadius: 0.12, fill: { color: P.surfaceAlt }, line: { color: P.chipLine } });
-      slide.addText(slideSpec.stat.value, { x: 0.95, y: 2.45, w: 5.6, h: 2.0, fontFace: DISPLAY, fontSize: 84, bold: true, color: P.accent, fit: 'shrink', margin: 0 });
-      slide.addText(slideSpec.stat.caption, { x: 1.0, y: 4.6, w: 5.5, h: 1.6, fontSize: 16, color: P.ink, fit: 'shrink', margin: 0 });
+      slide.addShape(pptx.ShapeType.roundRect, { x: 0.7, y: 2.0, w: 6.1, h: 4.55, rectRadius: 0.12, fill: { color: 'EFF6FF' }, line: { color: 'BFDBFE' } });
+      slide.addText(slideSpec.stat.value, { x: 0.95, y: 2.45, w: 5.6, h: 2.0, fontFace: 'Aptos Display', fontSize: 84, bold: true, color: palette.accent, fit: 'shrink', margin: 0 });
+      slide.addText(slideSpec.stat.caption, { x: 1.0, y: 4.6, w: 5.5, h: 1.6, fontSize: 16, color: palette.dark, fit: 'shrink', margin: 0 });
       const supportItems = (Array.isArray(slideSpec.support) && slideSpec.support.length > 0
         ? slideSpec.support
         : [slideSpec.summary, slideSpec.takeaway || slideSpec.insight, slideSpec.notes]
       ).filter(Boolean).slice(0, 3);
       supportItems.forEach((item, itemIndex) => {
         const y = 2.0 + itemIndex * 1.55;
-        slide.addShape(pptx.ShapeType.roundRect, { x: 7.3, y, w: 5.2, h: 1.32, rectRadius: 0.1, fill: { color: P.surface }, line: { color: P.line } });
-        slide.addShape(pptx.ShapeType.rect, { x: 7.3, y, w: 0.08, h: 1.32, fill: { color: P.accent2 }, line: { color: P.accent2 } });
-        slide.addText(item, { x: 7.56, y: y + 0.22, w: 4.75, h: 0.9, fontSize: 13, color: P.body, fit: 'shrink', margin: 0 });
+        slide.addShape(pptx.ShapeType.roundRect, { x: 7.3, y, w: 5.2, h: 1.32, rectRadius: 0.1, fill: { color: 'F8FAFC' }, line: { color: 'E2E8F0' } });
+        slide.addShape(pptx.ShapeType.rect, { x: 7.3, y, w: 0.08, h: 1.32, fill: { color: palette.cyan }, line: { color: palette.cyan } });
+        slide.addText(item, { x: 7.56, y: y + 0.22, w: 4.75, h: 0.9, fontSize: 13, color: '334155', fit: 'shrink', margin: 0 });
       });
       slide.addNotes(slideSpec.notes);
       continue;
     }
 
     if (layout === 'quote' && slideSpec.quote) {
-      slide.addText('“', { x: 0.7, y: 1.7, w: 1.2, h: 1.2, fontFace: DISPLAY, fontSize: 96, bold: true, color: P.accent2, margin: 0 });
-      slide.addText(slideSpec.quote, { x: 1.6, y: 2.6, w: 10.2, h: 1.8, fontFace: DISPLAY, fontSize: 26, italic: true, color: P.ink, fit: 'shrink', margin: 0 });
-      if (slideSpec.attribution) slide.addText(`— ${slideSpec.attribution}`, { x: 1.65, y: 4.7, w: 8.5, h: 0.4, fontSize: 14, bold: true, color: P.muted, margin: 0 });
+      slide.addText('“', { x: 0.7, y: 1.7, w: 1.2, h: 1.2, fontFace: 'Aptos Display', fontSize: 96, bold: true, color: palette.cyan, margin: 0 });
+      slide.addText(slideSpec.quote, { x: 1.6, y: 2.6, w: 10.2, h: 1.8, fontFace: 'Aptos Display', fontSize: 26, italic: true, color: palette.dark, fit: 'shrink', margin: 0 });
+      if (slideSpec.attribution) slide.addText(`— ${slideSpec.attribution}`, { x: 1.65, y: 4.7, w: 8.5, h: 0.4, fontSize: 14, bold: true, color: palette.muted, margin: 0 });
       slide.addNotes(slideSpec.notes || slideSpec.quote);
       continue;
     }
 
     if (layout === 'chart' && slideSpec.chart) {
       chartsAdded += 1;
-      addDataChart(slide, {
-        title: slideSpec.chart.title,
-        labels: slideSpec.chart.labels,
-        values: slideSpec.chart.values,
-      }, { x: 0.75, y: 2.05, w: 7.0, h: 4.4 }, { showValue: true, dataLabelFontSize: 10 });
-      if (slideSpec.chart.source) slide.addText(`Fuente: ${slideSpec.chart.source}`, { x: 0.78, y: 6.55, w: 6.8, h: 0.24, fontSize: 9.5, italic: true, color: P.muted, margin: 0 });
+      slide.addChart(pptx.ChartType.bar, [
+        { name: slideSpec.chart.title, labels: slideSpec.chart.labels, values: slideSpec.chart.values },
+      ], {
+        x: 0.75, y: 2.05, w: 7.0, h: 4.4,
+        catAxisLabelFontFace: 'Aptos', valAxisLabelFontFace: 'Aptos',
+        showLegend: false, showValue: true, dataLabelFontSize: 10,
+        chartColors: [palette.accent],
+      });
+      if (slideSpec.chart.source) slide.addText(`Fuente: ${slideSpec.chart.source}`, { x: 0.78, y: 6.55, w: 6.8, h: 0.24, fontSize: 9.5, italic: true, color: palette.muted, margin: 0 });
       addTakeaway(slide, slideSpec.insight || slideSpec.takeaway);
       slide.addNotes(slideSpec.notes);
       continue;
@@ -2356,17 +2314,17 @@ async function buildPptx(plan, outputPath) {
 
     // layout 'bullets' (y forma legada sin layout)
     if (slideSpec.summary) {
-      slide.addText(slideSpec.summary, { x: 0.8, y: 1.95, w: 7.25, h: 0.85, fontSize: 15, color: P.ink, breakLine: true, fit: 'shrink' });
+      slide.addText(slideSpec.summary, { x: 0.8, y: 1.95, w: 7.25, h: 0.85, fontSize: 15, color: palette.dark, breakLine: true, fit: 'shrink' });
     }
     (slideSpec.bullets || []).slice(0, 4).forEach((bullet, bulletIndex) => {
       const y = (slideSpec.summary ? 3.0 : 2.2) + bulletIndex * 0.92;
-      slide.addShape(pptx.ShapeType.roundRect, { x: 0.82, y, w: 0.34, h: 0.34, rectRadius: 0.08, fill: { color: P.surfaceAlt }, line: { color: P.chipLine } });
-      slide.addText(String(bulletIndex + 1), { x: 0.82, y: y + 0.045, w: 0.34, h: 0.25, fontSize: 11, bold: true, color: P.accent, align: 'center', margin: 0 });
+      slide.addShape(pptx.ShapeType.roundRect, { x: 0.82, y, w: 0.34, h: 0.34, rectRadius: 0.08, fill: { color: 'EFF6FF' }, line: { color: 'BFDBFE' } });
+      slide.addText(String(bulletIndex + 1), { x: 0.82, y: y + 0.045, w: 0.34, h: 0.25, fontSize: 11, bold: true, color: palette.accent, align: 'center', margin: 0 });
       if (bullet.label) {
-        slide.addText(bullet.label, { x: 1.34, y: y - 0.02, w: 6.6, h: 0.28, fontSize: 13.5, bold: true, color: P.ink, margin: 0 });
-        slide.addText(bullet.text, { x: 1.34, y: y + 0.27, w: 6.6, h: 0.5, fontSize: 12.5, color: P.body, fit: 'shrink', margin: 0 });
+        slide.addText(bullet.label, { x: 1.34, y: y - 0.02, w: 6.6, h: 0.28, fontSize: 13.5, bold: true, color: palette.dark, margin: 0 });
+        slide.addText(bullet.text, { x: 1.34, y: y + 0.27, w: 6.6, h: 0.5, fontSize: 12.5, color: '475569', fit: 'shrink', margin: 0 });
       } else {
-        slide.addText(bullet.text, { x: 1.34, y: y + 0.02, w: 6.6, h: 0.62, fontSize: 14, color: P.body, fit: 'shrink', margin: 0 });
+        slide.addText(bullet.text, { x: 1.34, y: y + 0.02, w: 6.6, h: 0.62, fontSize: 14, color: '334155', fit: 'shrink', margin: 0 });
       }
     });
     const hasOwnMetrics = Array.isArray(slideSpec.metrics) && slideSpec.metrics.length > 0;
@@ -2377,9 +2335,9 @@ async function buildPptx(plan, outputPath) {
         { name: 'Nivel', labels: metrics.map((metric) => metric.label), values: metrics.map((metric) => metric.value) },
       ], {
         x: 8.3, y: 2.05, w: 4.15, h: 3.4,
-        catAxisLabelFontFace: BODY, valAxisLabelFontFace: BODY,
+        catAxisLabelFontFace: 'Aptos', valAxisLabelFontFace: 'Aptos',
         showLegend: false, valAxisMinVal: 0, valAxisMaxVal: 100, showValue: false,
-        chartColors: [P.accent],
+        chartColors: [palette.accent],
       });
     } else {
       addTakeaway(slide, slideSpec.takeaway || (slideSpec.bullets?.[0] ? `${slideSpec.bullets[0].label ? `${slideSpec.bullets[0].label}: ` : ''}${slideSpec.bullets[0].text}` : ''));
@@ -2399,10 +2357,10 @@ async function buildPptx(plan, outputPath) {
       { name: 'Énfasis', labels: agendaLabels.map((label) => String(label).slice(0, 22)), values: weights },
     ], {
       x: 0.75, y: 2.05, w: 8.2, h: 4.4,
-      catAxisLabelFontFace: BODY, valAxisLabelFontFace: BODY,
-      showLegend: false, showValue: false, chartColors: [P.accent],
+      catAxisLabelFontFace: 'Aptos', valAxisLabelFontFace: 'Aptos',
+      showLegend: false, showValue: false, chartColors: [palette.accent],
     });
-    slide.addText('Fuente: estructura del propio deck (énfasis sugerido por sección).', { x: 0.78, y: 6.55, w: 7.6, h: 0.24, fontSize: 9.5, italic: true, color: P.muted, margin: 0 });
+    slide.addText('Fuente: estructura del propio deck (énfasis sugerido por sección).', { x: 0.78, y: 6.55, w: 7.6, h: 0.24, fontSize: 9.5, italic: true, color: palette.muted, margin: 0 });
     slide.addNotes('Lámina de apoyo: explica cuánto tiempo dedicar a cada bloque de la presentación.');
     addFooter(slide, contentPlan.slides.length + 3);
   }
@@ -2410,13 +2368,13 @@ async function buildPptx(plan, outputPath) {
   slide = pptx.addSlide();
   addTitle(slide, 'Cierre y próximos pasos', 'De la comprensión a la ejecución');
   slide.addText('Convertir la presentación en acción requiere priorizar, asignar responsables y medir avances con una cadencia simple.', {
-    x: 0.85, y: 2.05, w: 7.5, h: 0.8, fontSize: 20, bold: true, color: P.ink, fit: 'shrink',
+    x: 0.85, y: 2.05, w: 7.5, h: 0.8, fontSize: 20, bold: true, color: palette.dark, fit: 'shrink',
   });
   slide.addText('1. Elegir tres prioridades críticas\n2. Definir dueño, fecha y evidencia esperada\n3. Revisar indicadores y ajustar decisiones cada semana', {
-    x: 0.9, y: 3.25, w: 7.2, h: 1.3, fontSize: 17, color: P.body, fit: 'shrink',
+    x: 0.9, y: 3.25, w: 7.2, h: 1.3, fontSize: 17, color: '334155', fit: 'shrink',
   });
   slide.addText('Resultado esperado: una gestión más coordinada, medible y orientada a valor.', {
-    x: 8.4, y: 2.35, w: 3.55, h: 1.0, fontSize: 18, bold: true, color: P.accent, fit: 'shrink',
+    x: 8.4, y: 2.35, w: 3.55, h: 1.0, fontSize: 18, bold: true, color: palette.accent, fit: 'shrink',
   });
   slide.addNotes('Cierre: resumir la tesis, seleccionar responsables y convertir recomendaciones en una agenda de ejecución.');
   await pptx.writeFile({ fileName: outputPath });
@@ -2912,6 +2870,40 @@ async function runAdvancedDocumentPipeline({
   emit(events, 'orchestrator', 'complete', `Formato detectado: ${detectedFormat}`, { format: detectedFormat });
   emit(events, 'research', 'complete', 'Investigación contextual evaluada', { requiresResearch: /\b(real|doi|actual|fuentes|investiga)\b/i.test(userPromptText) });
   let plan = buildPlan({ prompt: promptText, format: detectedFormat, template: detectedTemplate, complexity, referenceFiles });
+  // Intent refinement (the "brain" layer): an LLM pass separates the CORE
+  // TOPIC from delivery CONDITIONS and repairs constraint typos. Without it,
+  // "crea una ppt de la gestión administrativa en 10 Landin porfavor de
+  // forma muy profeiosnal" became the literal deck title AND the thesis
+  // hallucinated "las diez sucursales de Landin" — the misspelled
+  // "10 láminas" was read as content. Fail-open: on any failure the
+  // deterministic buildPlan parse stands.
+  if (!plan.sourceContent) {
+    try {
+      const intent = await parseDocumentRequest({
+        prompt: plan.userRequest,
+        format: plan.format,
+        language: /^[a-z]{2}$/i.test(plan.language || '') ? plan.language : 'es',
+        signal,
+      });
+      if (intent) {
+        plan.requestIntent = intent;
+        if (intent.title) plan.title = intent.title;
+        if (intent.slideCount) plan.slideTarget = intent.slideCount;
+        const refinedWords = intent.wordCount || (intent.pageCount ? intent.pageCount * 350 : null);
+        if (refinedWords && !plan.wordTarget) {
+          plan.wordTarget = refinedWords;
+          const budget = sectionBudgetForWords(refinedWords);
+          if (budget && plan.sections.length > budget) plan.sections = plan.sections.slice(0, budget);
+        }
+        emit(events, 'orchestrator', 'complete', 'Intención interpretada: tema y condiciones separados', {
+          title: plan.title,
+          slideTarget: plan.slideTarget || null,
+          wordTarget: plan.wordTarget || null,
+          conditions: intent.conditions,
+        });
+      }
+    } catch { /* deterministic parse stands */ }
+  }
   const contentPromptText = plan.sourceContent
     ? `${plan.userRequest}\n\nContenido fuente a preservar:\n${plan.sourceContent}`
     : stripSourceContent(userPromptText);
@@ -2956,6 +2948,7 @@ async function runAdvancedDocumentPipeline({
     try {
       const { planPptxDeckWithLLM } = require('./pptx-deck-designer');
       llmDeck = await planPptxDeckWithLLM({
+        slideTarget: plan.slideTarget || null,
         title: plan.title,
         prompt: contentPromptText,
         blocks: plan.blocks,
