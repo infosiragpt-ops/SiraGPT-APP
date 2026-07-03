@@ -2,6 +2,7 @@ const fs = require('fs');
 const objectStorage = require('./object-storage');
 const os = require('os');
 const path = require('path');
+const { createHash } = require('crypto');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const PizZip = require('pizzip');
@@ -80,7 +81,18 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   const adjuntarAction = /\badjunt(?:a|ar|ame|arme|alo|ala|alos|alas|arlo|arla|arlos|arlas)\b/.test(text)
     && !/\b(?:documentos?|archivos?|imagenes?|fotos?|capturas?|pdf|word|docx|excel|xlsx|pptx?)\s+adjunt[oa]s?\b/.test(text)
     && !/\b(?:imagen|foto|captura|screenshot)\s+adjunt[oa]\b/.test(text);
-  const editVerb = primaryEditVerb || adjuntarAction || editorialCorrectionIntent;
+  // Image-edit intent — "cambia el logo a rojo", "recolorea la foto",
+  // "reemplaza la imagen por la adjunta". The generic verb lists miss
+  // recolor/pinta and the weak transform verb "cambia" demands a document
+  // noun, so these edit requests used to fall through to plain chat, where the
+  // model dumped the extracted document text (the live thesis-photo bug).
+  const imageNoun = /\b(foto\w*|imagen(?:es)?|figura\w*|logo\w*|logotipo\w*|picture|image)\b/.test(text);
+  // reempla[zc]: el subjuntivo es "reemplaces/reemplace" (z→c ante e) y los
+  // patrones reemplaz\w* del resto del módulo NO lo cubren — exactamente la
+  // conjugación del prompt del bug ("deseo que lo reemplaces por color azul").
+  const imageEditVerb = /\b(reempla[zc]\w*|cambi\w*|recolor\w*|pinta\w*|sustitu\w*|pon(?:er|ga|gan|la|lo|le|me)?)\b/.test(editVerbHay);
+  const imageEditIntent = imageNoun && imageEditVerb;
+  const editVerb = primaryEditVerb || adjuntarAction || editorialCorrectionIntent || imageEditIntent;
   const existingDocRef = /\b(mi|mismo|misma|este|esta|ese|esa|documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx|powerpoint|pdf|tesis)\b/.test(text);
   const documentNoun = /\b(documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx|powerpoint|pdf|tesis)\b/.test(text);
   const appendLocation = /\b(al final|final|anexo|anexos|apendice|ultima pagina|ultima hoja|nueva hoja|nueva pagina|nueva diapositiva)\b/.test(text);
@@ -111,6 +123,9 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   if (explicitFreshDeliverable && !preservation && !concreteEditTarget && !explicitAttachedMutation) return false;
   if (hasFiles) {
     if (editorialCorrectionIntent) return true;
+    // Image noun + image-edit verb on an attachment turn is unambiguous: the
+    // only editable image surface the user can mean is inside the attachment.
+    if (imageEditIntent) return true;
     if (appendLocation || preservation || instrument || documentRegion) return true;
     if (documentNoun) return true;
     // A STRONG mutation verb alone is enough on an attachment turn — the
@@ -278,6 +293,12 @@ async function resolveRecentEditableFileIds(prisma, { chatId, prompt } = {}) {
   return ids;
 }
 
+function isImageAttachmentRow(row = {}) {
+  const mime = normalizeText(row.mimeType || row.type || row.contentType);
+  const name = normalizeText(row.originalName || row.filename || row.name || '');
+  return mime.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp|tiff?)$/.test(name);
+}
+
 async function loadEditableSourceFiles(prisma, { userId, fileIds = [], chatId = null, prompt = '' } = {}) {
   let ids = normalizeFileIdList(fileIds);
   const explicitFileIds = ids.length > 0;
@@ -298,7 +319,7 @@ async function loadEditableSourceFiles(prisma, { userId, fileIds = [], chatId = 
     },
   }).catch(() => []);
   const byId = new Map(rows.map((row) => [String(row.id), row]));
-  return ids
+  const resolved = ids
     .map((id) => byId.get(id))
     .filter(Boolean)
     .map((row) => ({
@@ -307,6 +328,23 @@ async function loadEditableSourceFiles(prisma, { userId, fileIds = [], chatId = 
       source: explicitFileIds ? 'current_upload' : 'recent_attachment',
     }))
     .filter((row) => row.path);
+  // Attached images are NOT editable bases (there is nothing to
+  // "source-preserve" in a bare PNG), but they ARE valid edit payloads:
+  // "reemplaza la foto por la imagen adjunta" needs the attached image's
+  // bytes. isPotentialEditableAttachmentRef() used to drop them silently, so
+  // the replacement image never reached the pipeline (the garbled-text bug).
+  // They travel as a side-channel property so every existing caller of this
+  // array keeps working unchanged.
+  const editable = resolved.filter((row) => !isImageAttachmentRow(row));
+  editable.assetFiles = resolved
+    .filter((row) => isImageAttachmentRow(row))
+    .map((row) => ({
+      id: row.id,
+      name: row.originalName || row.filename || '',
+      mimeType: row.mimeType || '',
+      absolutePath: row.path,
+    }));
+  return editable;
 }
 
 function resolveGeneratedArtifactPath(row = {}) {
@@ -3282,6 +3320,36 @@ function validateDocxOperationCriteria(buffer, operations = []) {
       });
       continue;
     }
+    if (op.kind === 'recolor_image' || op.kind === 'replace_image') {
+      // Structural + byte-level assertion on the FINAL buffer: the zip must
+      // still parse with word/document.xml present, and the target media part
+      // must REALLY hold different bytes (recolor) / exactly the replacement
+      // bytes (replace). Guards against shipping a no-op "edit".
+      let passed = false;
+      const details = { partName: op.checkPartName || op.partName || null };
+      try {
+        const zip = new PizZip(buffer);
+        const hasDocumentXml = Boolean(zip.file('word/document.xml'));
+        const part = details.partName ? zip.file(details.partName) : null;
+        const partBytes = part ? part.asNodeBuffer() : null;
+        const partSha1 = partBytes ? sha1Hex(partBytes) : null;
+        details.mediaChanged = Boolean(partSha1 && op.originalMediaSha1 && partSha1 !== op.originalMediaSha1);
+        passed = hasDocumentXml
+          && Boolean(partBytes)
+          && (op.kind === 'replace_image' && op.replacementSha1
+            ? partSha1 === op.replacementSha1
+            : details.mediaChanged);
+      } catch {
+        passed = false;
+      }
+      checks.push({
+        id: op.kind === 'recolor_image' ? 'image_recolored' : 'image_replaced',
+        label: op.kind === 'recolor_image' ? 'Imagen recoloreada dentro del DOCX' : 'Imagen reemplazada dentro del DOCX',
+        passed,
+        details,
+      });
+      continue;
+    }
     if (op.kind === 'replace_text') {
       const passed = !normalizedTextIncludes(text, op.needle) && normalizedTextIncludes(text, op.replacement);
       checks.push({
@@ -4347,6 +4415,288 @@ async function runInsertIndexOperation({ buffer, requestText }) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Embedded-image editing (recolor / replace) for DOCX.
+//
+// WHY: "la foto que te adjunto deseo que lo reemplaces por color azul" used to
+// fall into the TEXT planner — extractReplacementPair() even parsed "cambia el
+// logo a rojo" as replace_text(logo → rojo) — and the user got a garbled text
+// dump instead of an edited document. These helpers detect the image intent
+// FIRST, resolve which embedded image the user means (or ask, listing the
+// candidates), and run the surgical media-part edit via docx-image-adapter.
+// ---------------------------------------------------------------------------
+
+let _docxImageAdapterModule;
+function docxImageAdapterModule() {
+  if (_docxImageAdapterModule === undefined) {
+    try {
+      // eslint-disable-next-line global-require
+      _docxImageAdapterModule = require('./document-editing/docx-image-adapter');
+    } catch {
+      _docxImageAdapterModule = null;
+    }
+  }
+  return _docxImageAdapterModule;
+}
+
+// Keys are normalizeText() output (lowercased, accents stripped).
+const IMAGE_EDIT_COLOR_WORDS = {
+  azul: '#2563EB', blue: '#2563EB',
+  rojo: '#DC2626', roja: '#DC2626', red: '#DC2626',
+  verde: '#16A34A', green: '#16A34A',
+  negro: '#111827', negra: '#111827', black: '#111827',
+  gris: '#6B7280', gray: '#6B7280', grey: '#6B7280',
+  amarillo: '#F59E0B', amarilla: '#F59E0B', yellow: '#F59E0B',
+  naranja: '#EA580C', orange: '#EA580C',
+  morado: '#7C3AED', morada: '#7C3AED', violeta: '#7C3AED', purple: '#7C3AED',
+  blanco: '#F8FAFC', blanca: '#F8FAFC', white: '#F8FAFC',
+};
+
+const IMAGE_EDIT_NOUN_RE = /\b(foto\w*|imagen(?:es)?|figura\w*|logo\w*|logotipo\w*|picture|image)\b/;
+// reempla[zc]: cubre el subjuntivo "reemplaces/reemplace" (z→c ante e), la
+// conjugación exacta del prompt del bug — reemplaz\w* NO la matchea.
+const IMAGE_EDIT_VERB_RE = /\b(reempla[zc]\w*|cambi\w*|recolor\w*|pinta\w*|colorea\w*|sustitu\w*|replace\w*|change\w*|repaint\w*|swap\w*|tint\w*|pon(?:er|ga|gan|la|lo|le|me)?)\b/;
+const IMAGE_REPLACE_VERB_RE = /\b(reempla[zc]\w*|sustitu\w*|replace\w*|swap\w*)\b/;
+const IMAGE_POSITIONAL_CUE_RE = /\b(primera?|primer|segunda?|tercera?|tercer|cuarta?|quinta?|ultima|ultimo|first|second|third|fourth|fifth|last|encabezado|header|pie de pagina|footer)\b/;
+const IMAGE_NUMBER_CUE_RE = /\b(?:imagen|foto|figura|logo|image|picture)\s*(?:n(?:ro|umero)?\.?\s*|#\s*)?(\d{1,2})\b/;
+
+// Detect "edit an image inside the document" intents (ES + EN) and classify
+// them as recolor vs replace. Returns null for anything else so the regular
+// text-edit planner keeps full ownership of non-image requests.
+function parseImageEditRequest(requestText = '') {
+  const text = normalizeText(requestText);
+  if (!text) return null;
+  const hay = withCollapsedRepeats(text);
+  if (!IMAGE_EDIT_NOUN_RE.test(hay) || !IMAGE_EDIT_VERB_RE.test(hay)) return null;
+  // Quoted pairs are TEXT replacements even when the word "foto" appears
+  // inside them ('reemplaza "foto" por "fotografía"') — never hijack those.
+  if (extractQuotedValues(requestText).length >= 2) return null;
+  // "reemplaza la PALABRA imagen por gráfico" talks about the word, not the
+  // picture — that is a text edit, keep it out of the image path.
+  if (/\b(?:palabra|termino|texto|frase|word)\s+(?:foto\w*|imagen(?:es)?|figura\w*|logo\w*)\b/.test(text)) return null;
+
+  let color = null;
+  let colorName = '';
+  const hexMatch = text.match(/#([0-9a-f]{6}|[0-9a-f]{3})\b/);
+  if (hexMatch) {
+    const raw = hexMatch[1];
+    const hex = raw.length === 3 ? raw.split('').map((c) => c + c).join('') : raw;
+    color = `#${hex.toUpperCase()}`;
+    colorName = color;
+  } else {
+    for (const [word, hex] of Object.entries(IMAGE_EDIT_COLOR_WORDS)) {
+      if (new RegExp(`\\b${word}\\b`).test(text)) {
+        color = hex;
+        colorName = word;
+        break;
+      }
+    }
+  }
+
+  const positionalCueMatch = text.match(IMAGE_POSITIONAL_CUE_RE) || text.match(IMAGE_NUMBER_CUE_RE);
+  const positionalCue = positionalCueMatch ? positionalCueMatch[0] : null;
+
+  // "reemplaza … por color azul" / "cámbiala a rojo" — a color token wins even
+  // when the verb is "reemplazar": the user wants the SAME picture in another
+  // color, not a swap (the exact phrasing of the live bug).
+  if (color) {
+    return { kind: 'recolor_image', color, colorName, ...(positionalCue ? { positionalCue } : {}) };
+  }
+  const replaceCue = /\b(?:imagen|foto|figura|logo|picture|image)\s+(?:adjunt\w*|attached|nueva|nuevo)\b/.test(text)
+    || /\b(?:esta|esa|otra|another|this)\s+(?:imagen|foto|figura|picture|image)\b/.test(text)
+    || /\bpor\s+(?:la|una|otra)\s+(?:imagen|foto|figura)\b/.test(text);
+  if (IMAGE_REPLACE_VERB_RE.test(hay) || replaceCue) {
+    return { kind: 'replace_image', ...(positionalCue ? { positionalCue } : {}) };
+  }
+  return null;
+}
+
+// Map a positional cue onto the listDocxImages() order. Returns -1 when the
+// target stays ambiguous — the caller must then ASK, never guess (recoloring
+// the wrong image would reproduce the original bug in a new form).
+function resolveImageEditTargetIndex(images = [], positionalCue = null) {
+  if (!Array.isArray(images) || images.length === 0) return -1;
+  if (!positionalCue) return images.length === 1 ? 0 : -1;
+  const cue = normalizeText(positionalCue);
+  if (/encabezado|header/.test(cue)) {
+    return images.findIndex((image) => image.scope === 'header');
+  }
+  if (/pie|footer/.test(cue)) {
+    return images.findIndex((image) => image.scope === 'footer');
+  }
+  if (/ultim|last/.test(cue)) return images.length - 1;
+  const ordinal = /primer/.test(cue) || /first/.test(cue) ? 1
+    : /segund/.test(cue) || /second/.test(cue) ? 2
+      : /tercer/.test(cue) || /third/.test(cue) ? 3
+        : /cuart/.test(cue) || /fourth/.test(cue) ? 4
+          : /quint/.test(cue) || /fifth/.test(cue) ? 5
+            : Number(cue.match(/(\d{1,2})/)?.[1] || 0);
+  if (ordinal >= 1 && ordinal <= images.length) return ordinal - 1;
+  return -1;
+}
+
+function imageScopeLabel(scope) {
+  if (scope === 'header') return 'en el encabezado';
+  if (scope === 'footer') return 'en el pie de página';
+  return 'en el cuerpo del documento';
+}
+
+function buildImageChoiceQuestion(images = [], docName = 'el documento') {
+  const lines = images.slice(0, 10).map((image, position) => {
+    const alt = image.altText ? ` — «${compact(image.altText, 60)}»` : '';
+    return `${position + 1}) ${imageScopeLabel(image.scope)}${alt} (${String(image.extension || '').toUpperCase() || 'imagen'})`;
+  });
+  return `Encontré ${images.length} imágenes en «${docName}»:\n${lines.join('\n')}\n¿Cuál deseas modificar? Dímelo, por ejemplo: «la primera» o «la imagen 2».`;
+}
+
+function sha1Hex(buffer) {
+  return createHash('sha1').update(buffer).digest('hex');
+}
+
+async function runRecolorImageOperation({ buffer, op }) {
+  const adapter = docxImageAdapterModule();
+  if (!adapter) throw new Error('La edición de imágenes no está disponible en este despliegue.');
+  const before = adapter.listDocxImages(buffer)[op.imageIndex];
+  if (!before) throw new Error(`No existe la imagen ${Number(op.imageIndex) + 1} en el documento.`);
+  const result = await adapter.recolorDocxImage({ buffer, imageIndex: op.imageIndex, color: op.color });
+  const after = new PizZip(result.buffer).file(result.partName)?.asNodeBuffer();
+  if (!after || after.equals(before.bytes)) {
+    // Never persist a no-op "edit": the user would download an artifact that
+    // is byte-identical to the original and think we lied about the change.
+    throw new Error('La imagen quedó idéntica tras el recolor; no entrego un archivo sin cambios reales.');
+  }
+  // Annotations consumed by validateDocxOperationCriteria on the FINAL buffer.
+  op.partName = result.partName;
+  op.checkPartName = result.newPartName || result.partName;
+  op.originalMediaSha1 = sha1Hex(before.bytes);
+  return {
+    buffer: result.buffer,
+    step: {
+      kind: 'recolor_image',
+      label: `imagen ${Number(op.imageIndex) + 1}`,
+      color: op.color,
+      colorName: op.colorName || '',
+      scope: result.scope,
+    },
+    validationBlocks: [],
+  };
+}
+
+async function runReplaceImageOperation({ buffer, op }) {
+  const adapter = docxImageAdapterModule();
+  if (!adapter) throw new Error('La edición de imágenes no está disponible en este despliegue.');
+  const before = adapter.listDocxImages(buffer)[op.imageIndex];
+  if (!before) throw new Error(`No existe la imagen ${Number(op.imageIndex) + 1} en el documento.`);
+  const result = adapter.replaceDocxImage({
+    buffer,
+    imageIndex: op.imageIndex,
+    replacementBytes: op.replacementBytes,
+    replacementMime: op.replacementMime,
+  });
+  op.partName = result.partName;
+  op.checkPartName = result.newPartName || result.partName;
+  op.originalMediaSha1 = sha1Hex(before.bytes);
+  op.replacementSha1 = sha1Hex(op.replacementBytes);
+  return {
+    buffer: result.buffer,
+    step: {
+      kind: 'replace_image',
+      label: `imagen ${Number(op.imageIndex) + 1}`,
+      replacementName: op.replacementName || '',
+      retargeted: Boolean(result.retargeted),
+      scope: result.scope,
+    },
+    validationBlocks: [],
+  };
+}
+
+// Full image-edit path: enumerate → resolve target (or ask) → execute.
+// Every failure degrades to { clarification: true, message } — a plain Spanish
+// answer for the user — NEVER an exception that would let the caller fall
+// through to the text/annex path that produced the original garbled output.
+async function runDocxImageEditFlow({ input, imageEdit, requestText, sourceFile, assetFiles = [] }) {
+  const docName = sourceFile?.originalName || sourceFile?.filename || 'el documento';
+  const actionLabel = imageEdit.kind === 'recolor_image' ? 'recolorear' : 'reemplazar';
+  const adapter = docxImageAdapterModule();
+  if (!adapter) {
+    return { clarification: true, message: 'La edición de imágenes dentro de documentos no está disponible en este despliegue.' };
+  }
+  let images;
+  try {
+    images = adapter.listDocxImages(input);
+  } catch (err) {
+    return { clarification: true, message: `No pude leer las imágenes de «${docName}»: ${err?.message || 'archivo dañado'}.` };
+  }
+  if (!images.length) {
+    return { clarification: true, message: `No encontré imágenes dentro de «${docName}», así que no hay ninguna imagen que ${actionLabel}. Verifica que el archivo adjunto sea el correcto.` };
+  }
+  const targetIndex = resolveImageEditTargetIndex(images, imageEdit.positionalCue || null);
+  if (targetIndex < 0) {
+    return { clarification: true, message: buildImageChoiceQuestion(images, docName) };
+  }
+  const op = { kind: imageEdit.kind, imageIndex: targetIndex };
+  if (imageEdit.kind === 'recolor_image') {
+    op.color = imageEdit.color;
+    op.colorName = imageEdit.colorName || '';
+  } else {
+    const asset = (assetFiles || []).find((file) => normalizeText(file.mimeType).startsWith('image/') || /\.(png|jpe?g|gif|webp)$/i.test(String(file.name || '')));
+    if (!asset || !asset.absolutePath) {
+      return { clarification: true, message: 'Para reemplazar la imagen necesito la imagen nueva: adjúntala (PNG o JPG) junto con la instrucción y hago el cambio de inmediato.' };
+    }
+    try {
+      op.replacementBytes = await fs.promises.readFile(asset.absolutePath);
+    } catch {
+      return { clarification: true, message: `No pude leer la imagen adjunta «${asset.name || 'sin nombre'}». Vuelve a adjuntarla e inténtalo de nuevo.` };
+    }
+    op.replacementMime = asset.mimeType || '';
+    op.replacementName = asset.name || '';
+  }
+  try {
+    const execution = await executeDocxOperations({
+      input,
+      ops: [op],
+      requestText,
+      sourceText: '',
+      allSourceFiles: [sourceFile],
+      sourceFile,
+    });
+    return {
+      buffer: execution.buffer,
+      operations: [op],
+      steps: execution.steps,
+      suffix: imageEdit.kind === 'recolor_image' ? 'imagen_recoloreada' : 'imagen_reemplazada',
+      titleSuffix: imageEdit.kind === 'recolor_image' ? 'imagen recoloreada' : 'imagen reemplazada',
+    };
+  } catch (err) {
+    return { clarification: true, message: `No pude ${actionLabel} la imagen: ${err?.message || 'error desconocido'}` };
+  }
+}
+
+// Clarification results carry NO artifact on purpose: the question IS the
+// answer. validation.passed=true because asking (instead of guessing which
+// image to mutate) is the correct outcome, not a failure.
+function buildImageEditClarificationResult({ message, format = 'docx' }) {
+  return {
+    content: message,
+    clarification: true,
+    artifact: null,
+    file: null,
+    validation: {
+      format,
+      checks: {},
+      passed: true,
+      clarification: true,
+      technicalScore: 100,
+      qualityScore: 100,
+      overallScore: 100,
+      details: { editMode: 'image_edit_clarification' },
+    },
+    previewHtml: null,
+    format,
+    orchestration: null,
+  };
+}
+
 async function executeDocxOperations({ input, ops, requestText, sourceText, allSourceFiles, sourceFile, referenceFiles = [], signal }) {
   let buffer = input;
   const steps = [];
@@ -4377,6 +4727,10 @@ async function executeDocxOperations({ input, ops, requestText, sourceText, allS
       result = runReplaceTextOperation({ buffer, op });
     } else if (op.kind === 'proofread_minimal') {
       result = runProofreadMinimalOperation({ buffer, op });
+    } else if (op.kind === 'recolor_image') {
+      result = await runRecolorImageOperation({ buffer, op });
+    } else if (op.kind === 'replace_image') {
+      result = await runReplaceImageOperation({ buffer, op });
     } else {
       result = runAppendGenericOperation({ buffer, op, requestText, sourceText, sourceFile });
     }
@@ -4650,6 +5004,14 @@ function describeStep(step) {
       ? `apliqué correcciones mínimas de redacción y ortografía (${count} ajuste(s))`
       : 'revisé el DOCX y lo devolví preservado; no encontré correcciones mínimas determinísticas que aplicar';
   }
+  if (step.kind === 'recolor_image') {
+    const where = step.scope === 'header' ? ' del encabezado' : step.scope === 'footer' ? ' del pie de página' : '';
+    return `recoloreé la ${step.label || 'imagen'}${where} a ${step.colorName || step.color || 'un nuevo color'} conservando su posición y tamaño`;
+  }
+  if (step.kind === 'replace_image') {
+    const where = step.scope === 'header' ? ' del encabezado' : step.scope === 'footer' ? ' del pie de página' : '';
+    return `reemplacé la ${step.label || 'imagen'}${where} por la imagen adjunta${step.replacementName ? ` («${step.replacementName}»)` : ''} conservando su posición y tamaño`;
+  }
   if (step.kind === 'set_cell') return `actualicé la celda ${step.label || 'solicitada'}`;
   if (step.kind === 'append_generic' && step.mode === 'xlsx_new_sheet') return 'agregué una hoja nueva con el contenido solicitado';
   if (step.kind === 'append_generic' && step.mode === 'pptx_new_slide') return 'agregué una diapositiva nueva con el contenido solicitado';
@@ -4715,6 +5077,7 @@ async function generateSourcePreservingDocumentEdit({
   sourceFile,
   sourceFiles = null,
   referenceFiles = [],
+  assetFiles = [],
   selectionReason = '',
   prompt,
   displayPrompt,
@@ -4740,46 +5103,78 @@ async function generateSourcePreservingDocumentEdit({
 
   if (isDocxFile(sourceFile)) {
     format = 'docx';
-    // Agentic step 1-3: analyse the request + document and plan one or more
-    // operations; step 4: execute every operation in order on the same buffer.
-    const documentXml = readDocxDocumentXml(input);
-    const refs = referenceFiles?.length ? referenceFiles : referenceSourceFiles(allSourceFiles, sourceFile);
-    operations = await planSourcePreservingOperationsSmart({ requestText, documentXml, referenceFiles: refs, signal });
-    const execution = await executeDocxOperations({
-      input,
-      ops: operations,
-      requestText,
-      sourceText,
-      allSourceFiles,
-      sourceFile,
-      referenceFiles: refs,
-      signal,
-    });
-    output = execution.buffer;
-    validationBlocks = execution.validationBlocks;
-    orchestration = buildDocumentOrchestrationPlan({
-      requestText,
-      sourceFile,
-      referenceFiles: refs,
-      operations,
-      selectionReason,
-    });
+    // Image-edit fast path — resolved BEFORE the text planner because the text
+    // heuristics misread image requests ("cambia el logo a rojo" used to parse
+    // as replace_text logo→rojo) and the degraded output was a garbled annex.
+    const imageEdit = parseImageEditRequest(requestText);
+    if (imageEdit) {
+      const imageResult = await runDocxImageEditFlow({
+        input,
+        imageEdit,
+        requestText,
+        sourceFile,
+        assetFiles,
+      });
+      if (imageResult.clarification) {
+        return buildImageEditClarificationResult({ message: imageResult.message, format });
+      }
+      output = imageResult.buffer;
+      operations = imageResult.operations;
+      validationBlocks = [];
+      orchestration = buildDocumentOrchestrationPlan({
+        requestText,
+        sourceFile,
+        referenceFiles: [],
+        operations,
+        selectionReason,
+      });
+      suffix = imageResult.suffix;
+      titleSuffix = imageResult.titleSuffix;
+      const stepSummary = joinSpanishList(imageResult.steps.map(describeStep));
+      explanation = `Se conservó el DOCX original; ${stepSummary}.`;
+      content = `Listo. Conservé el DOCX original y ${stepSummary}, sin alterar el resto del archivo.`;
+    } else {
+      // Agentic step 1-3: analyse the request + document and plan one or more
+      // operations; step 4: execute every operation in order on the same buffer.
+      const documentXml = readDocxDocumentXml(input);
+      const refs = referenceFiles?.length ? referenceFiles : referenceSourceFiles(allSourceFiles, sourceFile);
+      operations = await planSourcePreservingOperationsSmart({ requestText, documentXml, referenceFiles: refs, signal });
+      const execution = await executeDocxOperations({
+        input,
+        ops: operations,
+        requestText,
+        sourceText,
+        allSourceFiles,
+        sourceFile,
+        referenceFiles: refs,
+        signal,
+      });
+      output = execution.buffer;
+      validationBlocks = execution.validationBlocks;
+      orchestration = buildDocumentOrchestrationPlan({
+        requestText,
+        sourceFile,
+        referenceFiles: refs,
+        operations,
+        selectionReason,
+      });
 
-    const labels = execution.steps.map((step) => step.label).filter(Boolean);
-    if (labels.length) {
-      suffix = `${labels.map((label) => normalizeText(label).replace(/\s+/g, '_')).join('_')}_completado`;
-      titleSuffix = `${labels.join(' y ')} completado`;
-    } else if (execution.steps.some((step) => step.kind === 'integrate_references')) {
-      suffix = 'documentos_integrados';
-      titleSuffix = 'con documentos integrados';
+      const labels = execution.steps.map((step) => step.label).filter(Boolean);
+      if (labels.length) {
+        suffix = `${labels.map((label) => normalizeText(label).replace(/\s+/g, '_')).join('_')}_completado`;
+        titleSuffix = `${labels.join(' y ')} completado`;
+      } else if (execution.steps.some((step) => step.kind === 'integrate_references')) {
+        suffix = 'documentos_integrados';
+        titleSuffix = 'con documentos integrados';
+      }
+      const stepSummary = joinSpanishList(execution.steps.map(describeStep));
+      explanation = stepSummary
+        ? `Se conservó el DOCX original; ${stepSummary}.`
+        : 'Se conservó el DOCX original y se aplicó la edición solicitada.';
+      content = stepSummary
+        ? `Listo. Conservé el DOCX original y, en ${execution.steps.length === 1 ? 'un paso' : `${execution.steps.length} pasos`}, ${stepSummary}, sin alterar el resto del archivo.`
+        : 'Listo. Conservé el DOCX original y apliqué la edición solicitada sin alterar el resto del archivo.';
     }
-    const stepSummary = joinSpanishList(execution.steps.map(describeStep));
-    explanation = stepSummary
-      ? `Se conservó el DOCX original; ${stepSummary}.`
-      : 'Se conservó el DOCX original y se aplicó la edición solicitada.';
-    content = stepSummary
-      ? `Listo. Conservé el DOCX original y, en ${execution.steps.length === 1 ? 'un paso' : `${execution.steps.length} pasos`}, ${stepSummary}, sin alterar el resto del archivo.`
-      : 'Listo. Conservé el DOCX original y apliqué la edición solicitada sin alterar el resto del archivo.';
   } else {
     const blocks = buildAppendixBlocks({
       prompt: requestText,
@@ -4965,12 +5360,25 @@ async function tryGenerateSourcePreservingDocumentEdit({
 } = {}) {
   const requestText = displayPrompt || prompt || '';
   const sourceFiles = await loadEditableSourceFiles(prisma, { userId, fileIds, chatId, prompt: requestText });
+  // Attached images travel outside the editable set: they are candidate
+  // replacement payloads for "reemplaza la foto por la imagen adjunta".
+  const assetFiles = Array.isArray(sourceFiles.assetFiles) ? sourceFiles.assetFiles : [];
   const priorArtifacts = await loadRecentGeneratedArtifactSourceFiles(prisma, { userId, chatId });
   const intentFiles = sourceFiles.length ? sourceFiles : priorArtifacts;
   if (!isSourcePreservingEditRequest(requestText, intentFiles)) return null;
   const targetedSection = isTargetedSectionFillRequest(requestText);
   const selection = selectSourcePreservingDocumentSet({ requestText, sourceFiles, priorArtifacts });
   const supported = selection.sourceFile;
+  if (!supported && !sourceFiles.length && !priorArtifacts.length && assetFiles.length) {
+    // Solo se adjuntaron imágenes (sin documento base). Para un intent de
+    // edición de imagen, explicamos que las imágenes se editan DENTRO de un
+    // documento; para el resto, el error genérico de formato compatible.
+    if (parseImageEditRequest(requestText)) {
+      throw new Error('Solo puedo editar imágenes que estén dentro de un documento (por ejemplo un DOCX). Adjunta el documento que contiene la imagen junto con la instrucción y hago el cambio.');
+    }
+    const names = assetFiles.map((file) => file.name).filter(Boolean).join(', ');
+    throw new Error(`Para conservar el documento original necesito un archivo editable compatible (${supportedSourceEditLabel()}). Archivo recibido: ${names || 'sin archivo compatible'}.`);
+  }
   if (!supported && !sourceFiles.length && !priorArtifacts.length) {
     // No hay ningún archivo adjunto ni artefacto previo que conservar. La
     // petición ("coloca esta información en un word") es en realidad una
@@ -4994,6 +5402,7 @@ async function tryGenerateSourcePreservingDocumentEdit({
     sourceFile: supported,
     sourceFiles: selection.sourceFiles,
     referenceFiles: selection.referenceFiles,
+    assetFiles,
     selectionReason: selection.selectionReason,
     prompt,
     displayPrompt,
@@ -5013,6 +5422,7 @@ module.exports = {
   inferDocumentTitle,
   isSourcePreservingEditRequest,
   loadEditableSourceFiles,
+  parseImageEditRequest,
   parseTargetSectionRequest,
   tryGenerateSourcePreservingDocumentEdit,
   INTERNAL: {
@@ -5077,7 +5487,10 @@ module.exports = {
     requestMentionsGeneralDocument,
     requestWantsMinimalProofreading,
     requestWantsReferenceIntegration,
+    resolveImageEditTargetIndex,
     resolveStoredFilePath,
+    runDocxImageEditFlow,
+    buildImageChoiceQuestion,
     sanitizeCapturedParagraphProperties,
     selectSourcePreservingDocumentSet,
     setXlsxCellBuffer,
