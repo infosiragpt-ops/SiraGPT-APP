@@ -377,6 +377,84 @@ router.get('/projects/:id/files', authenticateToken, async (req, res) => {
   }
 });
 
+// ── Workspace import (browser → Codex project) ─────────────────────────────
+// The /code chat keeps its own in-browser workspace; before an iterate run the
+// frontend pushes those files here so the agent edits the SAME tree the user
+// sees (audit 3.1-ALTA: without this, iterate edited a stale starter project
+// and then overwrote the local workspace with it). The runner sidecar already
+// rejects path traversal (resolveProjectRelPath), so this route only enforces
+// auth/ownership, payload budgets, and the no-active-run invariant.
+const IMPORT_MAX_FILES = 200;
+const IMPORT_MAX_PATH_CHARS = 500;
+const IMPORT_MAX_CONTENT_BYTES = 500 * 1024; // 500KB per file
+const IMPORT_MAX_TOTAL_BYTES = 5 * 1024 * 1024; // 5MB per request
+
+const importFilesValidators = [
+  body('files')
+    .isArray({ min: 1, max: IMPORT_MAX_FILES })
+    .withMessage(`files must be an array of 1-${IMPORT_MAX_FILES} items`),
+  body('files.*.path')
+    .isString()
+    .withMessage('path must be a string')
+    .bail()
+    .isLength({ min: 1, max: IMPORT_MAX_PATH_CHARS })
+    .withMessage(`path must be 1-${IMPORT_MAX_PATH_CHARS} chars`),
+  body('files.*.content')
+    .isString()
+    .withMessage('content must be a string')
+    .bail()
+    .custom((content) => {
+      if (Buffer.byteLength(content, 'utf8') > IMPORT_MAX_CONTENT_BYTES) {
+        throw new Error(`each file content must be <= ${IMPORT_MAX_CONTENT_BYTES} bytes`);
+      }
+      return true;
+    }),
+  body('files').custom((files) => {
+    if (!Array.isArray(files)) return true; // isArray above already flags it
+    const total = files.reduce(
+      (sum, f) => sum + (typeof f?.content === 'string' ? Buffer.byteLength(f.content, 'utf8') : 0),
+      0,
+    );
+    if (total > IMPORT_MAX_TOTAL_BYTES) {
+      throw new Error(`total content must be <= ${IMPORT_MAX_TOTAL_BYTES} bytes`);
+    }
+    return true;
+  }),
+];
+
+router.post(
+  '/projects/:id/files',
+  authenticateToken,
+  requireCodexAgentAccess,
+  importFilesValidators,
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+
+    let project;
+    try {
+      project = await loadOwnedProject(req, res);
+      if (!project) return undefined;
+      if (await runService.hasActiveRun({ projectId: project.id })) {
+        return res.status(409).json({
+          error: 'run_in_progress',
+          message: 'Hay un run activo en este proyecto; espera a que termine antes de importar archivos.',
+        });
+      }
+    } catch (err) {
+      return res.status(500).json({ error: 'codex_import_failed', message: err.message });
+    }
+
+    try {
+      const files = req.body.files.map((f) => ({ path: String(f.path), content: String(f.content) }));
+      await createRunnerClient().writeFiles(project.id, files);
+      return res.json({ ok: true, written: files.length });
+    } catch (err) {
+      return res.status(502).json({ error: 'runner_unreachable', message: err.message });
+    }
+  },
+);
+
 router.get('/projects/:id/file', authenticateToken, async (req, res) => {
   try {
     const project = await loadOwnedProject(req, res);

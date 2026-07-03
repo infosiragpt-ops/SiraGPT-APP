@@ -37,6 +37,10 @@ export const codexApi = {
   previewStatus: (id: string) => req<any>(`/projects/${id}/preview/status`),
   exportProject: (id: string) => req<{ ok: boolean; project: string; files: number; hostPath: string }>(`/projects/${id}/export`, { method: "POST" }),
   listFiles: (id: string) => req<{ files: string[] }>(`/projects/${id}/files`).then((r) => r.files),
+  // Workspace import (browser → Codex project): push the local files into the
+  // project BEFORE an iterate run so the agent edits the tree the user sees.
+  importFiles: (id: string, files: Array<{ path: string; content: string }>) =>
+    req<{ ok: boolean; written: number }>(`/projects/${id}/files`, { method: "POST", body: JSON.stringify({ files }) }),
   readFileContent: (id: string, path: string) => req<{ ok: boolean; path: string; content: string }>(`/projects/${id}/file?path=${encodeURIComponent(path)}`),
 
   createRun: (projectId: string, body: { mode: "plan" | "build"; prompt?: string; model?: string; tier?: string; planRunId?: string }) =>

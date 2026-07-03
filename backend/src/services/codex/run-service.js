@@ -201,6 +201,17 @@ async function cancelRun({ userId, runId, db = defaultPrisma, queue = runQueue, 
   return publicRun(fresh);
 }
 
+/** True when the project has a queued/running/waiting_approval run. Used by
+ *  the workspace-import route so a client can't overwrite files under a live
+ *  build (the agent would be editing a tree that mutates beneath it). */
+async function hasActiveRun({ projectId, db = defaultPrisma }) {
+  const prisma = requireDb(db);
+  const active = await prisma.codexRun.count({
+    where: { projectId, status: { in: ACTIVE_STATUSES } },
+  });
+  return active > 0;
+}
+
 async function getRun({ userId, runId, db = defaultPrisma }) {
   const prisma = requireDb(db);
   const row = await prisma.codexRun.findFirst({ where: { id: runId, userId }, include: { metric: true } });
@@ -224,6 +235,7 @@ module.exports = {
   cancelRun,
   getRun,
   listRuns,
+  hasActiveRun,
   publicRun,
   publicMetric,
   RunServiceError,

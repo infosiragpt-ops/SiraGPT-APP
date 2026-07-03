@@ -665,6 +665,70 @@ function buildSystemContext(
   ].join("\n")
 }
 
+// ── Persistent chat→Codex-project mapping ───────────────────────────────────
+// The in-memory ref used to be the ONLY record of which Codex project a chat
+// session drives, so a reload created a fresh empty project and iterate then
+// edited THAT one and overwrote the local workspace (audit 3.1-ALTA). Backed
+// by localStorage, keyed by chatSessionId; every access is try/catch'd and
+// SSR-safe (storage may be unavailable or full — the in-memory ref still works
+// for the lifetime of the panel).
+const CODEX_PROJECT_STORE_PREFIX = "siragpt:codex-project:"
+
+function readPersistedCodexProject(sid: string): string | null {
+  if (typeof window === "undefined") return null
+  try {
+    return window.localStorage.getItem(`${CODEX_PROJECT_STORE_PREFIX}${sid}`)
+  } catch {
+    return null
+  }
+}
+
+function persistCodexProject(sid: string, projectId: string): void {
+  if (typeof window === "undefined") return
+  try {
+    window.localStorage.setItem(`${CODEX_PROJECT_STORE_PREFIX}${sid}`, projectId)
+  } catch {
+    /* storage unavailable/full — the in-memory ref still covers this session */
+  }
+}
+
+function clearPersistedCodexProject(sid: string): void {
+  if (typeof window === "undefined") return
+  try {
+    window.localStorage.removeItem(`${CODEX_PROJECT_STORE_PREFIX}${sid}`)
+  } catch {
+    /* ignore */
+  }
+}
+
+// Backend import caps (POST /api/codex/projects/:id/files): 200 files, 500KB
+// per file, 5MB total. Filter/trim the local workspace to fit so a huge asset
+// never turns the whole sync into a 400.
+const CODEX_IMPORT_MAX_FILES = 200
+const CODEX_IMPORT_MAX_FILE_BYTES = 500 * 1024
+const CODEX_IMPORT_MAX_TOTAL_BYTES = 5 * 1024 * 1024
+
+function collectWorkspaceFilesForImport(
+  files: Record<string, { path: string; language: string; content: string }>,
+): Array<{ path: string; content: string }> {
+  const out: Array<{ path: string; content: string }> = []
+  let total = 0
+  const encoder = typeof TextEncoder !== "undefined" ? new TextEncoder() : null
+  const byteLen = (s: string) => (encoder ? encoder.encode(s).length : s.length)
+  for (const [path, file] of Object.entries(files)) {
+    if (!path || typeof file?.content !== "string") continue
+    if (path.length > 500) continue
+    if (/(^|\/)(node_modules|\.git|dist|build|\.next)\//.test(path)) continue
+    const bytes = byteLen(file.content)
+    if (bytes > CODEX_IMPORT_MAX_FILE_BYTES) continue
+    if (total + bytes > CODEX_IMPORT_MAX_TOTAL_BYTES) break
+    out.push({ path, content: file.content })
+    total += bytes
+    if (out.length >= CODEX_IMPORT_MAX_FILES) break
+  }
+  return out
+}
+
 export function AICodeChatPanel() {
   const { user, token } = useAuth()
   const {
@@ -828,6 +892,9 @@ export function AICodeChatPanel() {
   const codexHealth = useCodexHealth()
   const codexAvailable = codexHealth.enabled === true
   // Map<chatSessionId, codexProjectId> so each code chat reuses ONE project.
+  // In-memory cache only — the durable mapping lives in localStorage (see
+  // readPersistedCodexProject/persistCodexProject), so a reload reattaches to
+  // the SAME project instead of iterating on a fresh empty one.
   const codexProjectRef = React.useRef<Record<string, string>>({})
 
   const abortRef = React.useRef<AbortController | null>(null)
@@ -2151,22 +2218,76 @@ export function AICodeChatPanel() {
         })
 
       try {
-        // 1) Ensure ONE Codex project per chat session (cached by sid).
-        let projectId = codexProjectRef.current[sid]
+        // 1) Ensure ONE Codex project per chat session. The in-memory ref is a
+        //    fast cache; localStorage is the durable record so a reload does
+        //    NOT mint a fresh empty project that iterate would then edit and
+        //    sync back over the local workspace. A persisted id is verified
+        //    against the backend (it may have been deleted or belong to another
+        //    account after a re-login) before being trusted.
+        let projectId: string | undefined = codexProjectRef.current[sid]
+        if (!projectId) {
+          const persisted = readPersistedCodexProject(sid)
+          if (persisted) {
+            try {
+              const existing = await codexApi.getProject(persisted)
+              if (existing?.id) projectId = existing.id
+            } catch {
+              clearPersistedCodexProject(sid)
+            }
+          }
+        }
         if (!projectId) {
           const title = compactGeneratedTitle(text)
           const project = await codexApi.createProject(title)
           projectId = project.id
-          codexProjectRef.current[sid] = projectId
         }
+        codexProjectRef.current[sid] = projectId
+        persistCodexProject(sid, projectId)
 
         setEnginePhase(
           iterate ? "Preparando turno del agente" : "Planificando la construcción",
           buildCodeAgentPhases("context", {
             plan: { status: "done", detail: "Proyecto Codex listo" },
-            context: { status: "running", detail: iterate ? "Leyendo workspace" : "Preparando build" },
+            context: { status: "running", detail: iterate ? "Sincronizando workspace" : "Preparando build" },
           }),
         )
+
+        // 1b) Iterate edits the REMOTE project and syncs the result back over
+        //     the local workspace — so the remote tree must first BE the local
+        //     tree. Push the browser workspace into the project before the run;
+        //     if the import fails, abort this tier (editing a stale/foreign
+        //     tree and overwriting the local files with it is strictly worse
+        //     than falling back) and let dispatch use the next engine.
+        if (iterate) {
+          const workspaceFiles = collectWorkspaceFilesForImport(files)
+          if (workspaceFiles.length > 0) {
+            try {
+              await codexApi.importFiles(projectId, workspaceFiles)
+            } catch (err: any) {
+              if (cancelledTurn()) {
+                finishStopped()
+                return
+              }
+              const detail = err?.message || "no se pudo sincronizar el workspace"
+              finish(
+                "_No pude sincronizar tu workspace con el proyecto del Agente Codex, así que no lo toco (editar otro árbol pisaría tus archivos). Sigo con otro motor…_",
+                {
+                  label: "Sincronización fallida",
+                  phases: buildCodeAgentPhases("context", {
+                    plan: { status: "done", detail: "Proyecto Codex listo" },
+                    context: { status: "error", detail },
+                  }),
+                },
+              )
+              toast.error("No pude sincronizar el workspace con Codex; uso otro motor.")
+              return "workspace_sync_failed"
+            }
+            if (cancelledTurn()) {
+              finishStopped()
+              return
+            }
+          }
+        }
 
         // 2) Start a `plan` run for the user's order. Codex requires a plan run
         //    before a build; the plan auto-approves into build below.
@@ -2584,10 +2705,14 @@ export function AICodeChatPanel() {
             return
           }
           if (codexAvailable) {
-            // Codex build mode iterates on follow-ups (it edits the project it
-            // already created for this session and reads the tree back).
-            await runCodexEngine(action.instruction, sid, { iterate: true })
-          } else if (engineMode && engineAvailable) {
+            // Codex build mode iterates on follow-ups (it syncs the local
+            // workspace into the session's project, edits it and reads the
+            // tree back). A failed workspace sync means Codex would edit the
+            // WRONG tree — treat it as "Codex unavailable" for this turn.
+            const out = await runCodexEngine(action.instruction, sid, { iterate: true })
+            if (out !== "workspace_sync_failed") return
+          }
+          if (engineMode && engineAvailable) {
             await runEngine(action.instruction, sid, { iterate: true })
           } else {
             await sendPrompt(action.instruction, { autoApply: true })
@@ -2612,9 +2737,13 @@ export function AICodeChatPanel() {
           // sendPrompt (autoApply stays false because composerMode !== "app")
           // and must NEVER route into runCodexEngine/runEngine, which apply files.
           if ((composerMode === "app" || composerMode === "build") && codexAvailable) {
-            // Codex build mode iterates on the session's existing project.
-            await runCodexEngine(buildText, sid, { iterate: true, displayText: text })
-          } else if (
+            // Codex build mode iterates on the session's existing project
+            // (after syncing the local workspace into it). A failed sync falls
+            // through to the next tier as if Codex were unavailable.
+            const out = await runCodexEngine(buildText, sid, { iterate: true, displayText: text })
+            if (out !== "workspace_sync_failed") return
+          }
+          if (
             (composerMode === "app" || composerMode === "build") &&
             engineMode &&
             engineAvailable
