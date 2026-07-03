@@ -6,8 +6,8 @@ import { GeistMono } from "geist/font/mono"
 import "./globals.css"
 import "./video-liquid.css"
 import { NextIntlClientProvider } from "next-intl"
-import { getLocale, getMessages } from "next-intl/server"
-import { isRTL } from "@/lib/i18n/locales"
+import { getLocale, getMessages, getTranslations } from "next-intl/server"
+import { isRTL, SUPPORTED_LOCALES } from "@/lib/i18n/locales"
 // LayoutClientEffects is loaded via a "use client" dynamic wrapper (ssr:false)
 // to prevent React from emitting a <div hidden=""> RSC transport container
 // before the <a> skip-link in the server HTML. That hidden div made the first
@@ -64,80 +64,77 @@ export async function generateMetadata(): Promise<Metadata> {
   const h = await headers()
   const pathname = h.get("x-pathname") || "/"
   const canonical = canonicalFromPathname(pathname)
+  const locale = await getLocale()
+  const t = await getTranslations({ locale, namespace: "common" })
+
+  const titleDefault = t("meta.titleDefault")
+  const titleTemplate = t("meta.titleTemplate")
+  const description = t("meta.description")
+
+  const alternates: Metadata["alternates"] = canonical
+    ? {
+        canonical,
+        languages: Object.fromEntries(
+          SUPPORTED_LOCALES.map((loc) => [loc, `https://siragpt.com${canonical}`])
+        ),
+      }
+    : undefined
+
   const meta: Metadata = {
-  metadataBase: new URL("https://siragpt.com"),
-  title: {
-    default: "Sira GPT — Plataforma de IA Multimodal",
-    template: "%s · Sira GPT",
-  },
-  description: "Plataforma multi-LLM con generación de texto, imagen, audio y video. GPT-4, Claude, Gemini y más en un solo lugar.",
-  keywords: ["IA", "ChatGPT", "Claude", "Gemini", "generación de imágenes", "asistente IA", "plataforma IA", "productividad"],
-  authors: [{ name: "Sira GPT" }],
-  creator: "Sira GPT",
-  publisher: "Sira GPT",
-  applicationName: "Sira GPT",
-  category: "technology",
-  // Per-route canonical computed from the x-pathname header injected
-  // by middleware. Pages on the NON_CANONICAL list (chat, settings,
-  // billing, etc.) omit the tag entirely so Google doesn't try to
-  // canonicalise them to themselves while robots.txt also disallows
-  // them — the conflicting signals were what Lighthouse was flagging.
-  alternates: canonical ? { canonical } : undefined,
-  // Explicit robots directives — Lighthouse otherwise warns
-  // "Page is blocked from indexing" whenever it cannot find a positive
-  // index/follow signal. We also opt into Google's max-* hints so rich
-  // results aren't truncated.
-  robots: {
-    index: true,
-    follow: true,
-    nocache: false,
-    googleBot: {
+    metadataBase: new URL("https://siragpt.com"),
+    title: {
+      default: titleDefault,
+      template: titleTemplate,
+    },
+    description,
+    keywords: ["IA", "ChatGPT", "Claude", "Gemini", "generación de imágenes", "asistente IA", "plataforma IA", "productividad"],
+    authors: [{ name: "SiraGPT" }],
+    creator: "SiraGPT",
+    publisher: "SiraGPT",
+    applicationName: "SiraGPT",
+    category: "technology",
+    alternates,
+    robots: {
       index: true,
       follow: true,
-      "max-snippet": -1,
-      "max-image-preview": "large",
-      "max-video-preview": -1,
+      nocache: false,
+      googleBot: {
+        index: true,
+        follow: true,
+        "max-snippet": -1,
+        "max-image-preview": "large",
+        "max-video-preview": -1,
+      },
     },
-  },
-  // OG tags so Slack / WhatsApp / Twitter previews show a branded
-  // card instead of a generic Next.js placeholder.
-  openGraph: {
-    type: "website",
-    locale: "es_ES",
-    siteName: "Sira GPT",
-    title: "Sira GPT — Plataforma de IA Multimodal",
-    description: "GPT-4, Claude, Gemini y más en un solo lugar. Chatea, genera imágenes, analiza documentos.",
-    images: [{ url: "/sira-gpt.png", width: 1200, height: 630, alt: "Sira GPT" }],
-  },
-  twitter: {
-    card: "summary_large_image",
-    title: "Sira GPT — Plataforma de IA Multimodal",
-    description: "GPT-4, Claude, Gemini y más en un solo lugar.",
-    images: ["/sira-gpt.png"],
-  },
-  // Web App Manifest — lets the browser surface the "Install" /
-  // "Add to Home Screen" affordance with our branded icon, name and
-  // launcher shortcuts (Nuevo chat / Biblioteca / Proyectos).
-  manifest: "/manifest.webmanifest",
-  // Sets the apple-mobile-web-app-* meta tags so iOS treats the
-  // installed PWA-style shortcut as a full-screen app, hiding the
-  // Safari chrome and respecting the notch.
-  appleWebApp: {
-    capable: true,
-    title: "Sira GPT",
-    statusBarStyle: "black-translucent",
-  },
-  // Standalone icons. The 180×180 link is the one iOS Home Screen
-  // actually uses; the other sizes flow through the manifest.
-  icons: {
-    icon: [
-      { url: "/sira-gpt-192.png", sizes: "192x192", type: "image/png" },
-      { url: "/sira-gpt-512.png", sizes: "512x512", type: "image/png" },
-    ],
-    apple: [
-      { url: "/sira-gpt-180.png", sizes: "180x180", type: "image/png" },
-    ],
-  },
+    openGraph: {
+      type: "website",
+      locale: locale.replace("-", "_"),
+      siteName: "SiraGPT",
+      title: titleDefault,
+      description,
+      images: [{ url: "/sira-gpt.png", width: 1200, height: 630, alt: "SiraGPT" }],
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: titleDefault,
+      description,
+      images: ["/sira-gpt.png"],
+    },
+    manifest: "/manifest.webmanifest",
+    appleWebApp: {
+      capable: true,
+      title: "SiraGPT",
+      statusBarStyle: "black-translucent",
+    },
+    icons: {
+      icon: [
+        { url: "/sira-gpt-192.png", sizes: "192x192", type: "image/png" },
+        { url: "/sira-gpt-512.png", sizes: "512x512", type: "image/png" },
+      ],
+      apple: [
+        { url: "/sira-gpt-180.png", sizes: "180x180", type: "image/png" },
+      ],
+    },
   }
   return meta
 }
@@ -170,6 +167,7 @@ export default async function RootLayout({
 }) {
   const locale = await getLocale()
   const messages = await getMessages()
+  const t = await getTranslations("common")
   const dir = isRTL(locale) ? "rtl" : "ltr"
 
   return (
@@ -243,7 +241,7 @@ export default async function RootLayout({
                 {
                   "@type": "Organization",
                   "@id": "https://siragpt.com/#organization",
-                  name: "Sira GPT",
+                  name: "SiraGPT",
                   url: "https://siragpt.com",
                   logo: "https://siragpt.com/sira-gpt-512.png",
                 },
@@ -251,7 +249,7 @@ export default async function RootLayout({
                   "@type": "WebSite",
                   "@id": "https://siragpt.com/#website",
                   url: "https://siragpt.com",
-                  name: "Sira GPT",
+                  name: "SiraGPT",
                   description:
                     "Plataforma multi-LLM con generación de texto, imagen, audio y video.",
                   inLanguage: "es",
@@ -259,7 +257,7 @@ export default async function RootLayout({
                 },
                 {
                   "@type": "SoftwareApplication",
-                  name: "Sira GPT",
+                  name: "SiraGPT",
                   applicationCategory: "BusinessApplication",
                   operatingSystem: "Web, iOS, Android",
                   url: "https://siragpt.com",
@@ -288,10 +286,10 @@ export default async function RootLayout({
           regardless of which page renders.
         */}
         <a href="#main-content" className="skip-to-content">
-          Saltar al contenido
+          {t("skipToContent")}
         </a>
         <span aria-live="polite" className="sr-only" data-app-bootstrap-status>
-          Preparando Sira GPT
+          {t("loading")}
         </span>
         {/*
           LayoutClientEffects is intentionally placed INSIDE NextIntlClientProvider

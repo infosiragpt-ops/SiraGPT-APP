@@ -290,7 +290,7 @@
     "continueWithGoogle": "Google ile devam et",
     "noAccount": "Hesabınız yok mu?",
     "haveAccount": "Zaten hesabınız var mı?",
-    "tagline": "Sira Gpt hesabınıza giriş yapın"
+    "tagline": "SiraGPT hesabınıza giriş yapın"
   },
   "documents": {
     "download": "İndir",
@@ -337,7 +337,8 @@
     "dragDrop": "Dosyaları buraya bırakın",
     "or": "veya",
     "processing": "Mesajlarınız işleniyor…",
-    "tryAgain": "Tekrar dene"
+    "tryAgain": "Tekrar dene",
+    "skipToContent": "Skip to content"
   },
   "thinking": {
     "thinking": "Düşünüyor…",
@@ -499,5 +500,10 @@
       "forbiddenTitle": "Restricted access",
       "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist."
     }
+  },
+  "meta": {
+    "titleDefault": "SiraGPT — Multimodal AI Platform",
+    "titleTemplate": "%s · SiraGPT",
+    "description": "Multi-LLM platform with text, image, audio and video generation. GPT-4, Claude, Gemini and more in one place."
   }
 }

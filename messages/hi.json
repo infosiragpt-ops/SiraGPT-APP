@@ -290,7 +290,7 @@
     "continueWithGoogle": "Google के साथ जारी रखें",
     "noAccount": "खाता नहीं है?",
     "haveAccount": "पहले से खाता है?",
-    "tagline": "अपने Sira Gpt खाते में साइन इन करें"
+    "tagline": "अपने SiraGPT खाते में साइन इन करें"
   },
   "documents": {
     "download": "डाउनलोड",
@@ -337,7 +337,8 @@
     "dragDrop": "फ़ाइलें यहाँ छोड़ें",
     "or": "या",
     "processing": "आपके संदेश संसाधित हो रहे हैं…",
-    "tryAgain": "पुनः प्रयास"
+    "tryAgain": "पुनः प्रयास",
+    "skipToContent": "सामग्री पर जाएं"
   },
   "thinking": {
     "thinking": "सोच रहा है…",
@@ -499,5 +500,10 @@
       "forbiddenTitle": "Restricted access",
       "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist."
     }
+  },
+  "meta": {
+    "titleDefault": "SiraGPT — मल्टीमॉडल AI प्लेटफॉर्म",
+    "titleTemplate": "%s · SiraGPT",
+    "description": "मल्टी-LLM प्लेटफॉर्म जिसमें टेक्स्ट, इमेज, ऑडियो और वीडियो जनरेशन है। GPT-4, Claude, Gemini और बहुत कुछ एक ही जगह पर।"
   }
 }

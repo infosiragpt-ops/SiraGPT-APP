@@ -290,7 +290,7 @@
     "continueWithGoogle": "使用 Google 继续",
     "noAccount": "没有账号？",
     "haveAccount": "已有账号？",
-    "tagline": "登录您的 Sira Gpt 账号"
+    "tagline": "登录您的 SiraGPT 账号"
   },
   "documents": {
     "download": "下载",
@@ -407,7 +407,8 @@
     "dragDrop": "拖拽文件到此",
     "or": "或",
     "processing": "正在处理您的消息…",
-    "tryAgain": "重试"
+    "tryAgain": "重试",
+    "skipToContent": "Skip to content"
   },
   "thinking": {
     "thinking": "思考中…",
@@ -569,5 +570,10 @@
       "forbiddenTitle": "Restricted access",
       "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist."
     }
+  },
+  "meta": {
+    "titleDefault": "SiraGPT — Multimodal AI Platform",
+    "titleTemplate": "%s · SiraGPT",
+    "description": "Multi-LLM platform with text, image, audio and video generation. GPT-4, Claude, Gemini and more in one place."
   }
 }

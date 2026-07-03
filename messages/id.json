@@ -290,7 +290,7 @@
     "continueWithGoogle": "Continue with Google",
     "noAccount": "Don't have an account?",
     "haveAccount": "Already have an account?",
-    "tagline": "Sign in to your Sira Gpt account"
+    "tagline": "Sign in to your SiraGPT account"
   },
   "documents": {
     "download": "Download",
@@ -337,7 +337,8 @@
     "dragDrop": "Drop files here",
     "or": "or",
     "processing": "Processing your messages…",
-    "tryAgain": "Try again"
+    "tryAgain": "Try again",
+    "skipToContent": "Langsung ke konten"
   },
   "thinking": {
     "thinking": "Berpikir…",
@@ -499,5 +500,10 @@
       "forbiddenTitle": "Restricted access",
       "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist."
     }
+  },
+  "meta": {
+    "titleDefault": "SiraGPT — Platform AI Multimodal",
+    "titleTemplate": "%s · SiraGPT",
+    "description": "Platform multi-LLM dengan pembuatan teks, gambar, audio, dan video. GPT-4, Claude, Gemini, dan lainnya dalam satu tempat."
   }
 }

@@ -2,9 +2,9 @@ import type { Metadata } from "next"
 import HomePage from "./home-page"
 
 export const metadata: Metadata = {
-  title: "Sira GPT — Plataforma de IA Multimodal",
+  title: "SiraGPT — Plataforma de IA Multimodal",
   description:
-    "Sira GPT integra OpenAI, Gemini, Claude, DeepSeek, Stripe, Replit, ElevenLabs y OpenClaw en una experiencia de IA profesional.",
+    "SiraGPT integra OpenAI, Gemini, Claude, DeepSeek, Stripe, Replit, ElevenLabs y OpenClaw en una experiencia de IA profesional.",
   keywords: [
     "IA",
     "chatbot",
@@ -21,11 +21,11 @@ export const metadata: Metadata = {
     "asistente de IA",
     "productividad",
   ],
-  authors: [{ name: "Sira GPT" }],
-  creator: "Sira GPT",
+  authors: [{ name: "SiraGPT" }],
+  creator: "SiraGPT",
   metadataBase: new URL("https://siragpt.com"),
   openGraph: {
-    title: "Sira GPT — Plataforma de IA Multimodal",
+    title: "SiraGPT — Plataforma de IA Multimodal",
     description:
       "OpenAI, Gemini, Claude, DeepSeek, Stripe, Replit, ElevenLabs y OpenClaw en una sola plataforma.",
     type: "website",
@@ -33,7 +33,7 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "Sira GPT — Plataforma de IA Multimodal",
+    title: "SiraGPT — Plataforma de IA Multimodal",
     description:
       "Una landing minimalista para la plataforma IA de Sira GPT.",
   },

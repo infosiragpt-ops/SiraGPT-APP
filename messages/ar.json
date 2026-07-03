@@ -293,7 +293,7 @@
     "continueWithGoogle": "المتابعة باستخدام Google",
     "noAccount": "ليس لديك حساب؟",
     "haveAccount": "هل لديك حساب بالفعل؟",
-    "tagline": "سجّل الدخول إلى حسابك في Sira Gpt"
+    "tagline": "سجّل الدخول إلى حسابك في SiraGPT"
   },
   "documents": {
     "download": "تنزيل",
@@ -340,7 +340,8 @@
     "dragDrop": "أسقط الملفات هنا",
     "or": "أو",
     "processing": "جارٍ معالجة رسائلك…",
-    "tryAgain": "حاول مرة أخرى"
+    "tryAgain": "حاول مرة أخرى",
+    "skipToContent": "تخطى إلى المحتوى"
   },
   "thinking": {
     "thinking": "يفكّر…",
@@ -502,5 +503,10 @@
       "forbiddenTitle": "Restricted access",
       "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist."
     }
+  },
+  "meta": {
+    "titleDefault": "SiraGPT — منصة ذكاء اصطناعي متعددة الوسائط",
+    "titleTemplate": "%s · SiraGPT",
+    "description": "منصة متعددة النماذج اللغوية مع إنشاء النصوص والصور والصوت والفيديو. GPT-4 وClaude وGemini والمزيد في مكان واحد."
   }
 }

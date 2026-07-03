@@ -309,11 +309,11 @@
     "serverWarmingButton": "Iniciando servidor…",
     "noAccount": "¿No tienes cuenta?",
     "haveAccount": "¿Ya tienes cuenta?",
-    "tagline": "Inicia sesión en tu cuenta de Sira Gpt",
+    "tagline": "Inicia sesión en tu cuenta de SiraGPT",
     "signingIn": "Iniciando sesión…",
     "invalidCreds": "Credenciales incorrectas",
     "createYourAccount": "Crea tu cuenta",
-    "registerTagline": "Empieza gratis con Sira Gpt",
+    "registerTagline": "Empieza gratis con SiraGPT",
     "name": "Nombre",
     "namePlaceholder": "Tu nombre completo",
     "confirmPassword": "Confirmar contraseña",
@@ -329,7 +329,7 @@
     "orWithEmail": "o con tu correo electrónico",
     "signUpWithGoogle": "Registrarse con Google",
     "nameRequired": "Introduce tu nombre",
-    "passwordTooShort": "La contraseña debe tener al menos 6 caracteres",
+    "passwordTooShort": "La contraseña debe tener al menos 8 caracteres",
     "passwordsNoMatch": "Las contraseñas no coinciden",
     "agreeTermsRequired": "Debes aceptar los términos para continuar",
     "back": "Volver",
@@ -474,7 +474,8 @@
     "dragDrop": "Arrastra archivos aquí",
     "or": "o",
     "processing": "Procesando tus mensajes…",
-    "tryAgain": "Intentar de nuevo"
+    "tryAgain": "Intentar de nuevo",
+    "skipToContent": "Saltar al contenido"
   },
   "thinking": {
     "thinking": "Pensando…",
@@ -636,5 +637,10 @@
       "forbiddenTitle": "Acceso restringido",
       "forbiddenBody": "Tu cuenta no está autorizada para ejecutar APPS en producción. Pide acceso de admin o agrega tu usuario al allowlist."
     }
+  },
+  "meta": {
+    "titleDefault": "SiraGPT — Plataforma de IA Multimodal",
+    "titleTemplate": "%s · SiraGPT",
+    "description": "Plataforma multi-LLM con generación de texto, imagen, audio y video. GPT-4, Claude, Gemini y más en un solo lugar."
   }
 }

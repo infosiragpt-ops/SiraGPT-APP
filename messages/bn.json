@@ -290,7 +290,7 @@
     "continueWithGoogle": "Continue with Google",
     "noAccount": "Don't have an account?",
     "haveAccount": "Already have an account?",
-    "tagline": "Sign in to your Sira Gpt account"
+    "tagline": "Sign in to your SiraGPT account"
   },
   "documents": {
     "download": "Download",
@@ -337,7 +337,8 @@
     "dragDrop": "Drop files here",
     "or": "or",
     "processing": "Processing your messages…",
-    "tryAgain": "Try again"
+    "tryAgain": "Try again",
+    "skipToContent": "Skip to content"
   },
   "thinking": {
     "thinking": "ভাবছে…",
@@ -499,5 +500,10 @@
       "forbiddenTitle": "Restricted access",
       "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist."
     }
+  },
+  "meta": {
+    "titleDefault": "SiraGPT — Multimodal AI Platform",
+    "titleTemplate": "%s · SiraGPT",
+    "description": "Multi-LLM platform with text, image, audio and video generation. GPT-4, Claude, Gemini and more in one place."
   }
 }

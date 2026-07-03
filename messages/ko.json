@@ -290,7 +290,7 @@
     "continueWithGoogle": "Google로 계속",
     "noAccount": "계정이 없으신가요?",
     "haveAccount": "이미 계정이 있으신가요?",
-    "tagline": "Sira Gpt 계정에 로그인"
+    "tagline": "SiraGPT 계정에 로그인"
   },
   "documents": {
     "download": "다운로드",
@@ -337,7 +337,8 @@
     "dragDrop": "여기에 파일을 드롭",
     "or": "또는",
     "processing": "메시지 처리 중…",
-    "tryAgain": "다시 시도"
+    "tryAgain": "다시 시도",
+    "skipToContent": "Skip to content"
   },
   "thinking": {
     "thinking": "생각 중…",
@@ -499,5 +500,10 @@
       "forbiddenTitle": "Restricted access",
       "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist."
     }
+  },
+  "meta": {
+    "titleDefault": "SiraGPT — Multimodal AI Platform",
+    "titleTemplate": "%s · SiraGPT",
+    "description": "Multi-LLM platform with text, image, audio and video generation. GPT-4, Claude, Gemini and more in one place."
   }
 }
