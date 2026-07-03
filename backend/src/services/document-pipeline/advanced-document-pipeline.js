@@ -2066,11 +2066,29 @@ async function buildPptx(plan, outputPath) {
 
   slide = pptx.addSlide();
   addTitle(slide, 'Agenda', 'Ruta de la presentación');
-  contentPlan.agenda.slice(0, 7).forEach((s, i) => {
-    slide.addText(String(i + 1).padStart(2, '0'), { x: 0.9, y: 1.98 + i * 0.56, w: 0.42, h: 0.3, fontSize: 11, bold: true, color: palette.accent, margin: 0 });
-    slide.addText(s, { x: 1.48, y: 1.92 + i * 0.56, w: 7.1, h: 0.36, fontSize: 17, color: palette.dark, bold: i === 0, fit: 'shrink' });
-    slide.addShape(pptx.ShapeType.rect, { x: 0.92, y: 2.36 + i * 0.56, w: 7.5, h: 0.01, fill: { color: 'E2E8F0', transparency: 15 }, line: { color: 'E2E8F0', transparency: 100 } });
+  // Fill the canvas: ≥5 items flow into two balanced columns (the previous
+  // single half-width column left the right 50% of the slide empty — the
+  // "half-empty deck" the user flagged). ≤4 items keep one column plus a
+  // thesis panel on the right so the slide still reads full.
+  const agendaItems = contentPlan.agenda.slice(0, 8);
+  const twoColAgenda = agendaItems.length >= 5;
+  const perCol = twoColAgenda ? Math.ceil(agendaItems.length / 2) : agendaItems.length;
+  agendaItems.forEach((s, i) => {
+    const col = twoColAgenda ? Math.floor(i / perCol) : 0;
+    const row = twoColAgenda ? i % perCol : i;
+    const x = 0.9 + col * 6.15;
+    const rowH = twoColAgenda ? 0.72 : 0.62;
+    const y = 2.05 + row * rowH;
+    slide.addText(String(i + 1).padStart(2, '0'), { x, y: y + 0.06, w: 0.42, h: 0.3, fontSize: 11, bold: true, color: palette.accent, margin: 0 });
+    slide.addText(s, { x: x + 0.58, y, w: twoColAgenda ? 5.15 : 7.1, h: 0.36, fontSize: 16, color: palette.dark, bold: i === 0, fit: 'shrink' });
+    slide.addShape(pptx.ShapeType.rect, { x: x + 0.02, y: y + 0.44, w: twoColAgenda ? 5.6 : 7.5, h: 0.01, fill: { color: 'E2E8F0', transparency: 15 }, line: { color: 'E2E8F0', transparency: 100 } });
   });
+  if (!twoColAgenda && contentPlan.thesis) {
+    slide.addShape(pptx.ShapeType.roundRect, { x: 8.55, y: 2.05, w: 4.0, h: 3.2, rectRadius: 0.1, fill: { color: 'EFF6FF' }, line: { color: 'BFDBFE' } });
+    slide.addShape(pptx.ShapeType.rect, { x: 8.55, y: 2.05, w: 0.09, h: 3.2, fill: { color: palette.accent }, line: { color: palette.accent } });
+    slide.addText('TESIS DE LA PRESENTACIÓN', { x: 8.82, y: 2.3, w: 3.5, h: 0.22, fontSize: 9.5, bold: true, color: palette.accent, charSpace: 1.5, margin: 0 });
+    slide.addText(contentPlan.thesis, { x: 8.82, y: 2.66, w: 3.5, h: 2.35, fontSize: 13.5, bold: true, color: palette.dark, fit: 'shrink', margin: 0 });
+  }
   slide.addNotes('Explicar la ruta de navegación y anticipar que cada lámina aterriza una decisión o aprendizaje.');
 
   if (contentPlan.references?.length) {
@@ -2108,12 +2126,26 @@ async function buildPptx(plan, outputPath) {
     const pageIndex = i + 3;
 
     if (layout === 'section') {
+      // Divider with presence: giant translucent section number, kicker,
+      // title, summary and a progress rail. The previous shape was a lone
+      // title floating on a dark canvas — read as unfinished.
+      const sectionNumber = String((contentPlan.slides.slice(0, i).filter((s) => (s.layout || '') === 'section').length + 1)).padStart(2, '0');
       slide.background = { color: palette.dark };
       slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 7.5, fill: { color: palette.dark }, line: { color: palette.dark } });
+      slide.addText(sectionNumber, { x: 8.7, y: 0.9, w: 4.3, h: 3.4, fontFace: 'Aptos Display', fontSize: 200, bold: true, color: '1E293B', align: 'right', margin: 0 });
       slide.addShape(pptx.ShapeType.rect, { x: 0.65, y: 3.0, w: 0.85, h: 0.07, fill: { color: palette.cyan }, line: { color: palette.cyan } });
       if (slideSpec.kicker) slide.addText(slideSpec.kicker.toUpperCase(), { x: 0.67, y: 2.5, w: 9.5, h: 0.3, fontSize: 12, bold: true, color: palette.cyan, charSpace: 2, margin: 0 });
       slide.addText(slideSpec.title, { x: 0.65, y: 3.25, w: 11.6, h: 1.3, fontFace: 'Aptos Display', fontSize: 40, bold: true, color: palette.white, fit: 'shrink', margin: 0 });
-      if (slideSpec.summary) slide.addText(slideSpec.summary, { x: 0.67, y: 4.7, w: 9.4, h: 0.7, fontSize: 15, color: 'CBD5E1', fit: 'shrink', margin: 0 });
+      slide.addText(slideSpec.summary || `Sección ${sectionNumber} de la presentación: ${contentPlan.topic || plan.title}.`, { x: 0.67, y: 4.7, w: 9.4, h: 0.7, fontSize: 15, color: 'CBD5E1', fit: 'shrink', margin: 0 });
+      // Progress rail: one dot per content slide, current position accented.
+      const totalDots = Math.min(10, totalSlides);
+      for (let dot = 0; dot < totalDots; dot += 1) {
+        slide.addShape(pptx.ShapeType.ellipse, {
+          x: 0.68 + dot * 0.34, y: 6.75, w: 0.14, h: 0.14,
+          fill: { color: dot === Math.min(i, totalDots - 1) ? palette.cyan : '334155' },
+          line: { color: dot === Math.min(i, totalDots - 1) ? palette.cyan : '334155' },
+        });
+      }
       slide.addNotes(slideSpec.notes || slideSpec.title);
       continue;
     }
@@ -2136,11 +2168,21 @@ async function buildPptx(plan, outputPath) {
     }
 
     if (layout === 'stat' && slideSpec.stat) {
-      slide.addText(slideSpec.stat.value, { x: 0.7, y: 2.3, w: 5.9, h: 2.0, fontFace: 'Aptos Display', fontSize: 88, bold: true, color: palette.accent, fit: 'shrink', margin: 0 });
-      slide.addText(slideSpec.stat.caption, { x: 0.78, y: 4.45, w: 5.6, h: 0.95, fontSize: 17, color: palette.dark, fit: 'shrink', margin: 0 });
-      (slideSpec.support || []).slice(0, 3).forEach((item, itemIndex) => {
-        slide.addShape(pptx.ShapeType.roundRect, { x: 7.3, y: 2.15 + itemIndex * 1.45, w: 5.2, h: 1.2, rectRadius: 0.1, fill: { color: 'F8FAFC' }, line: { color: 'E2E8F0' } });
-        slide.addText(item, { x: 7.58, y: 2.45 + itemIndex * 1.45, w: 4.7, h: 0.66, fontSize: 13, color: '334155', fit: 'shrink', margin: 0 });
+      // The right rail must never render empty (the "60% blank stat slide"
+      // the user flagged): when the designer sent no support items, fall
+      // back to summary/takeaway/notes-derived cards so the canvas is full.
+      slide.addShape(pptx.ShapeType.roundRect, { x: 0.7, y: 2.0, w: 6.1, h: 4.55, rectRadius: 0.12, fill: { color: 'EFF6FF' }, line: { color: 'BFDBFE' } });
+      slide.addText(slideSpec.stat.value, { x: 0.95, y: 2.45, w: 5.6, h: 2.0, fontFace: 'Aptos Display', fontSize: 84, bold: true, color: palette.accent, fit: 'shrink', margin: 0 });
+      slide.addText(slideSpec.stat.caption, { x: 1.0, y: 4.6, w: 5.5, h: 1.6, fontSize: 16, color: palette.dark, fit: 'shrink', margin: 0 });
+      const supportItems = (Array.isArray(slideSpec.support) && slideSpec.support.length > 0
+        ? slideSpec.support
+        : [slideSpec.summary, slideSpec.takeaway || slideSpec.insight, slideSpec.notes]
+      ).filter(Boolean).slice(0, 3);
+      supportItems.forEach((item, itemIndex) => {
+        const y = 2.0 + itemIndex * 1.55;
+        slide.addShape(pptx.ShapeType.roundRect, { x: 7.3, y, w: 5.2, h: 1.32, rectRadius: 0.1, fill: { color: 'F8FAFC' }, line: { color: 'E2E8F0' } });
+        slide.addShape(pptx.ShapeType.rect, { x: 7.3, y, w: 0.08, h: 1.32, fill: { color: palette.cyan }, line: { color: palette.cyan } });
+        slide.addText(item, { x: 7.56, y: y + 0.22, w: 4.75, h: 0.9, fontSize: 13, color: '334155', fit: 'shrink', margin: 0 });
       });
       slide.addNotes(slideSpec.notes);
       continue;
