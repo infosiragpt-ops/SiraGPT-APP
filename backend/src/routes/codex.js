@@ -84,8 +84,41 @@ function codexPreviewBasePath(projectId, token) {
   return `/api/codex/projects/${encodeURIComponent(projectId)}/preview/${encodeURIComponent(token)}/app/`;
 }
 
-function codexPreviewInternalUrl(env = process.env) {
-  return String(env.CODE_RUNNER_DEV_INTERNAL_URL || env.CODE_RUNNER_DEV_URL || runnerDevUrl(env)).replace(/\/+$/, '');
+function codexPreviewInternalUrl(env = process.env, port = null) {
+  const base = String(env.CODE_RUNNER_DEV_INTERNAL_URL || env.CODE_RUNNER_DEV_URL || runnerDevUrl(env)).replace(/\/+$/, '');
+  if (port == null) return base;
+  try {
+    const u = new URL(base);
+    u.port = String(port);
+    return u.toString().replace(/\/+$/, '');
+  } catch {
+    return base;
+  }
+}
+
+// ── Per-project dev-server port (multi-project runner, audit B1) ────────────
+// The runner assigns each project a port from its pool; the preview proxy must
+// target the right one. Short-TTL cache so the proxy doesn't hit the runner's
+// control API for every asset request. Primed on preview/start, invalidated on
+// stop; a stale hit self-heals within the TTL (the runner keeps a project's
+// port stable across restarts — it only changes after a pool evict).
+const previewPortCache = new Map(); // projectId -> { port, ts }
+function previewPortTtlMs(env = process.env) {
+  return Math.max(500, Number(env.CODEX_PREVIEW_PORT_TTL_MS) || 3000);
+}
+
+async function resolvePreviewPort(projectId, env = process.env) {
+  const hit = previewPortCache.get(projectId);
+  if (hit && Date.now() - hit.ts < previewPortTtlMs(env)) return hit.port;
+  try {
+    const st = await createRunnerClient().devStatus(projectId);
+    const port = st && st.running && Number.isInteger(st.port) ? st.port : null;
+    previewPortCache.set(projectId, { port, ts: Date.now() });
+    return port;
+  } catch {
+    // Runner unreachable → keep whatever we knew (null → legacy base URL).
+    return hit ? hit.port : null;
+  }
 }
 
 function previewProxyHostHeader(upstreamBase, env = process.env) {
@@ -121,7 +154,7 @@ async function waitForRunnerPreviewReady(runner, projectId, env = process.env) {
   let lastStatus = null;
 
   while (Date.now() < deadline) {
-    lastStatus = await runner.devStatus();
+    lastStatus = await runner.devStatus(projectId);
     const sameProject = !lastStatus.project || lastStatus.project === projectId;
     if (lastStatus.ready && sameProject) return lastStatus;
     if (lastStatus.error && lastStatus.running === false) throw new Error(lastStatus.error);
@@ -256,9 +289,19 @@ router.post('/projects/:id/preview/start', authenticateToken, async (req, res) =
     const basePath = codexPreviewBasePath(project.id, token);
     const runner = createRunnerClient();
     const out = await runner.startDev(project.id, { basePath });
+    if (Number.isInteger(out?.port)) {
+      previewPortCache.set(project.id, { port: out.port, ts: Date.now() });
+    }
     const previewStatus = await waitForRunnerPreviewReady(runner, project.id);
     return res.json({ ...out, previewStatus, devUrl: basePath, previewUrl: basePath, basePath });
   } catch (err) {
+    // Pool full and nothing evictable in the runner → surface as 429, not 502.
+    if (err && (err.status === 429 || err.body?.error === 'dev_pool_exhausted')) {
+      return res.status(429).json({
+        error: 'dev_pool_exhausted',
+        message: 'Todos los slots de preview están ocupados arrancando. Intenta de nuevo en unos segundos.',
+      });
+    }
     return res.status(502).json({ error: 'runner_unreachable', message: err.message });
   }
 });
@@ -267,8 +310,8 @@ router.get('/projects/:id/preview/status', authenticateToken, requireCodexAgentA
   try {
     const project = await loadOwnedProject(req, res);
     if (!project) return undefined;
-    const out = await createRunnerClient().devStatus();
-    return res.json({ ...out, devUrl: runnerDevUrl() });
+    const out = await createRunnerClient().devStatus(project.id);
+    return res.json({ ...out, devUrl: runnerDevUrl(process.env, Number.isInteger(out?.port) ? out.port : null) });
   } catch (err) {
     return res.status(502).json({ error: 'runner_unreachable', message: err.message });
   }
@@ -278,7 +321,8 @@ router.post('/projects/:id/preview/stop', authenticateToken, requireCodexAgentAc
   try {
     const project = await loadOwnedProject(req, res);
     if (!project) return undefined;
-    await createRunnerClient().stopDev();
+    await createRunnerClient().stopDev(project.id);
+    previewPortCache.delete(project.id);
     return res.json({ ok: true });
   } catch (err) {
     return res.status(502).json({ error: 'runner_unreachable', message: err.message });
@@ -300,13 +344,17 @@ router.post('/projects/:id/export', authenticateToken, requireCodexAgentAccess, 
   }
 });
 
-router.use('/projects/:id/preview/:token/app', applyPreviewFrameHeaders, (req, res) => {
+router.use('/projects/:id/preview/:token/app', applyPreviewFrameHeaders, async (req, res) => {
   const payload = verifyPreviewToken(req.params.token);
   if (!payload || payload.projectId !== req.params.id) return res.status(403).json({ error: 'forbidden' });
 
+  // Multi-project runner: target the port assigned to THIS project. Null
+  // (unknown/not running) falls back to the configured base URL (legacy 5173).
+  const projectPort = await resolvePreviewPort(req.params.id);
+
   let upstreamBase;
   try {
-    upstreamBase = new URL(codexPreviewInternalUrl());
+    upstreamBase = new URL(codexPreviewInternalUrl(process.env, projectPort));
   } catch {
     return res.status(502).json({ error: 'runner_unreachable', message: 'Preview interno no configurado.' });
   }

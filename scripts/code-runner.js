@@ -3,16 +3,28 @@
  *
  * Runs as a tiny Bun sidecar that SHARES the OpenCode engine's workspace volume,
  * so it sees the multi-file project the agent wrote. On `POST /run` it installs
- * deps with bun and starts the project's dev server on DEV_PORT (published to
- * the host), so the /code preview can iframe a REAL running Node/Vite/Next app —
- * not just CDN HTML. One project at a time (the workspace is single-tenant).
+ * deps with bun and starts that project's dev server on a port from the pool
+ * (CODE_RUNNER_DEV_PORT_POOL, default DEV_PORT..DEV_PORT+9), so the /code
+ * preview can iframe a REAL running Node/Vite/Next app — not just CDN HTML.
+ *
+ * MULTI-PROJECT (audit B1): one dev server per project, each on its own pool
+ * port. Concurrency limit = pool size; when the pool is exhausted the OLDEST
+ * server in state ready/error is evicted (killed with its process group).
+ * If nothing is evictable (all still installing) /run answers 429. Servers
+ * idle > CODE_RUNNER_DEV_IDLE_MS (default 30 min without control-API activity
+ * for that project) are reaped. The legacy no-project run (workspace root)
+ * stays pinned to DEV_PORT so the old /code flow keeps its contract.
  *
  * Control API (CTRL_PORT, internal):
- *   POST /run     → (re)install + start the dev server. Body { project? } to
- *                   run a per-project workspace (projects/<id>); without body
- *                   it keeps running the workspace root (legacy /code flow).
- *   GET  /status  → { running, ready, framework, project, port, error, tail }
- *   POST /stop    → kill the dev server.
+ *   POST /run     → (re)install + start the dev server for { project? } and
+ *                   answer { ok, port, project, reused }. Without a project it
+ *                   runs the workspace root on DEV_PORT (legacy /code flow).
+ *                   429 { error: "dev_pool_exhausted" } when the pool is full
+ *                   and nothing is evictable.
+ *   GET  /status  → ?project=X for that project's server; without it, legacy:
+ *                   the LAST STARTED server, plus a `servers` summary array.
+ *   POST /stop    → { project? } kills that project's server; without a body
+ *                   it kills them ALL (legacy semantics).
  *
  * Workspace API (Codex Agent V2, flag-gated at the backend):
  *   POST /workspace/init  { project }          → mkdir + git init -b main
@@ -26,10 +38,19 @@
 
 const { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, statSync, copyFileSync, rmSync } = require("node:fs");
 const { dirname } = require("node:path");
-const { sanitizeProjectId, resolveProjectRelPath, commandRejectionReason, shouldIgnoreExportPath } = require("./code-runner-utils.js");
+const {
+  sanitizeProjectId,
+  resolveProjectRelPath,
+  commandRejectionReason,
+  shouldIgnoreExportPath,
+  parseDevPortPool,
+  createDevPool,
+} = require("./code-runner-utils.js");
 
 const WORKDIR = process.env.RUNNER_WORKDIR || "/workspace";
 const DEV_PORT = Number(process.env.DEV_PORT || 5173);
+const DEV_PORT_POOL = parseDevPortPool(process.env.CODE_RUNNER_DEV_PORT_POOL, DEV_PORT);
+const DEV_IDLE_MS = Math.max(60_000, Number(process.env.CODE_RUNNER_DEV_IDLE_MS) || 30 * 60_000);
 const CTRL_PORT = Number(process.env.CTRL_PORT || 4097);
 const PROJECTS_DIR = `${WORKDIR}/projects`;
 // Host-bind-mounted mirror target (Codex Agent V2 "export to disk", hybrid mode).
@@ -77,21 +98,78 @@ try {
   /* git missing — surfaced by /workspace/init instead */
 }
 
-let devProc = null;
-const state = {
-  running: false,
-  ready: false,
-  framework: null,
-  project: null,
-  port: DEV_PORT,
-  basePath: null,
-  error: null,
-  log: [],
-};
+// ── Multi-project dev-server registry ───────────────────────────────────────
+// Key '' (ROOT_KEY) is the legacy workspace-root run, pinned to DEV_PORT.
+const ROOT_KEY = "";
+const devPool = createDevPool({ ports: DEV_PORT_POOL });
+let lastStartedKey = null; // legacy GET /status (no project) mirrors this one
 
-function pushLog(line) {
-  state.log.push(String(line).slice(0, 500));
-  if (state.log.length > 80) state.log.shift();
+// `setsid` makes the spawned dev command a process-group leader (it execs in
+// place when the caller isn't already a group leader, so the pid is stable),
+// which lets us kill the WHOLE tree (bunx → vite → esbuild...) on evict/stop.
+// Same pattern as host-runner.js killGroup; falls back to a direct kill.
+const SETSID_AVAILABLE = (() => {
+  try {
+    return Bun.spawnSync(["setsid", "--version"]).exitCode === 0;
+  } catch {
+    return false;
+  }
+})();
+
+function groupCmd(cmd) {
+  return SETSID_AVAILABLE ? ["setsid", ...cmd] : cmd;
+}
+
+function killGroup(proc) {
+  if (!proc || proc.killed) return;
+  try {
+    process.kill(-proc.pid, "SIGTERM"); // group leader (setsid) → whole tree
+  } catch {
+    try { proc.kill(); } catch { /* already gone */ }
+  }
+  // Escalate stragglers: SIGKILL the group a few seconds later, best-effort.
+  const pid = proc.pid;
+  setTimeout(() => {
+    try { process.kill(-pid, "SIGKILL"); } catch { /* gone */ }
+  }, 4000);
+}
+
+function killEntryProc(entry) {
+  if (!entry) return;
+  killGroup(entry.proc);
+  entry.proc = null;
+}
+
+function pushLog(entry, line) {
+  entry.log.push(String(line).slice(0, 500));
+  if (entry.log.length > 80) entry.log.shift();
+}
+
+function entryStatus(entry) {
+  if (!entry) {
+    return { running: false, ready: false, framework: null, project: null, port: null, basePath: null, error: null, log: [] };
+  }
+  return {
+    running: entry.state === "installing" || entry.state === "starting" || entry.state === "ready",
+    ready: entry.state === "ready",
+    framework: entry.framework || null,
+    project: entry.key === ROOT_KEY ? null : entry.key,
+    port: entry.port,
+    basePath: entry.basePath || null,
+    error: entry.error || null,
+    log: entry.log,
+    startedAt: entry.startedAt,
+  };
+}
+
+function serversSummary() {
+  return devPool.list().map((e) => ({
+    project: e.key === ROOT_KEY ? null : e.key,
+    port: e.port,
+    state: e.state,
+    startedAt: e.startedAt,
+    lastUsedAt: e.lastUsedAt,
+  }));
 }
 
 async function readJson(path) {
@@ -104,12 +182,12 @@ async function readJson(path) {
   }
 }
 
-/** Is the dev server actually accepting connections yet? */
-async function probeReady() {
+/** Is the dev server on `port` actually accepting connections yet? */
+async function probeReady(port) {
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 1500);
-    const r = await fetch(`http://127.0.0.1:${DEV_PORT}/`, { signal: ctrl.signal });
+    const r = await fetch(`http://127.0.0.1:${port}/`, { signal: ctrl.signal });
     clearTimeout(t);
     return r.status > 0;
   } catch {
@@ -117,7 +195,7 @@ async function probeReady() {
   }
 }
 
-function pipe(stream, prefix) {
+function pipe(entry, stream, prefix) {
   if (!stream) return;
   (async () => {
     const reader = stream.getReader();
@@ -127,7 +205,7 @@ function pipe(stream, prefix) {
         const { done, value } = await reader.read();
         if (done) break;
         for (const line of dec.decode(value).split("\n")) {
-          if (line.trim()) pushLog(`${prefix} ${line.trim()}`);
+          if (line.trim()) pushLog(entry, `${prefix} ${line.trim()}`);
         }
       }
     } catch {
@@ -143,24 +221,67 @@ function safeBasePath(value) {
   return raw.endsWith("/") ? raw : `${raw}/`;
 }
 
+/**
+ * Allocate (or reuse) the slot for a project and kick off install+dev in the
+ * background. Returns { port, project, reused } synchronously-ish (one probe
+ * when reusing). Throws { code: "dev_pool_exhausted" } when the pool is full
+ * and nothing is evictable.
+ */
 async function startDev(projectId = null, basePath = null) {
-  if (devProc) {
-    try { devProc.kill(); } catch { /* already gone */ }
-    devProc = null;
+  const key = projectId || ROOT_KEY;
+  const normBase = safeBasePath(basePath);
+
+  // Reuse: same project, already serving with the same base path → no restart
+  // (vite watches files, edits are picked up by HMR without a re-run).
+  const existing = devPool.get(key);
+  if (existing && existing.state === "ready" && (existing.basePath || null) === normBase && (await probeReady(existing.port))) {
+    devPool.touch(key);
+    lastStartedKey = key;
+    return { port: existing.port, project: projectId, reused: true };
   }
-  state.running = true;
-  state.ready = false;
-  state.error = null;
-  state.log = [];
+
+  const alloc = devPool.allocate(key, key === ROOT_KEY ? { pinnedPort: DEV_PORT } : {});
+  if (!alloc) {
+    const err = new Error("dev pool exhausted: all slots are busy starting");
+    err.code = "dev_pool_exhausted";
+    throw err;
+  }
+  if (alloc.evicted) {
+    killEntryProc(alloc.evicted);
+    console.log(`[code-runner] evicted dev server ${alloc.evicted.key || "<root>"} on :${alloc.evicted.port}`);
+  }
+  const entry = alloc.entry;
+  killEntryProc(entry); // restart of an existing slot → kill the old tree first
+  entry.gen = (entry.gen || 0) + 1;
+  entry.state = "installing";
+  entry.error = null;
+  entry.log = [];
+  entry.framework = null;
+  entry.basePath = normBase;
+  entry.startedAt = Date.now();
+  entry.lastUsedAt = Date.now();
+  lastStartedKey = key;
+
+  runDev(entry, projectId).catch((e) => {
+    if (devPool.get(key) !== entry) return; // superseded/stopped meanwhile
+    entry.state = "error";
+    entry.error = String(e && e.message ? e.message : e);
+  });
+  return { port: entry.port, project: projectId, reused: false };
+}
+
+async function runDev(entry, projectId) {
+  const myGen = entry.gen;
+  const key = entry.key;
+  const port = entry.port;
+  // A newer /run (or /stop) for this project supersedes this generation.
+  const stale = () => devPool.get(key) !== entry || entry.gen !== myGen;
 
   const cwd = projectId ? projectDirOf(projectId) : WORKDIR;
-  state.project = projectId;
-  state.basePath = safeBasePath(basePath);
-
   const pkg = await readJson(`${cwd}/package.json`);
   if (!pkg) {
-    state.running = false;
-    state.error = "No package.json — this project doesn't need a build (use the static preview).";
+    entry.state = "error";
+    entry.error = "No package.json — this project doesn't need a build (use the static preview).";
     return;
   }
 
@@ -168,67 +289,88 @@ async function startDev(projectId = null, basePath = null) {
   const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
   const isNext = !!deps.next;
   const hasDevScript = pkg.scripts && pkg.scripts.dev;
-  state.framework = isNext ? "next" : deps.vite ? "vite" : hasDevScript ? "custom" : "vite";
+  entry.framework = isNext ? "next" : deps.vite ? "vite" : hasDevScript ? "custom" : "vite";
 
-  pushLog("$ bun install");
-  const install = Bun.spawn(["bun", "install"], { cwd, stdout: "pipe", stderr: "pipe" });
-  pipe(install.stdout, "[install]");
-  pipe(install.stderr, "[install]");
+  pushLog(entry, "$ bun install");
+  const install = Bun.spawn(groupCmd(["bun", "install"]), { cwd, stdout: "pipe", stderr: "pipe" });
+  entry.proc = install;
+  pipe(entry, install.stdout, "[install]");
+  pipe(entry, install.stderr, "[install]");
   const code = await install.exited;
+  if (stale()) return;
   if (code !== 0) {
-    state.running = false;
-    state.error = `bun install failed (exit ${code})`;
+    entry.proc = null;
+    entry.state = "error";
+    entry.error = `bun install failed (exit ${code})`;
     return;
   }
 
-  // Dev command per framework. Host 0.0.0.0 so it's reachable from the host.
+  // Dev command per framework. Host 0.0.0.0 so it's reachable from the proxy.
   let cmd;
   if (isNext) {
-    cmd = ["bunx", "next", "dev", "-H", "0.0.0.0", "-p", String(DEV_PORT)];
+    cmd = ["bunx", "next", "dev", "-H", "0.0.0.0", "-p", String(port)];
   } else if (deps.vite || (hasDevScript && /vite/.test(pkg.scripts.dev || ""))) {
-    cmd = ["bunx", "vite", "--host", "0.0.0.0", "--port", String(DEV_PORT)];
-    if (state.basePath) cmd.push("--base", state.basePath);
+    cmd = ["bunx", "vite", "--host", "0.0.0.0", "--port", String(port)];
+    if (entry.basePath) cmd.push("--base", entry.basePath);
   } else if (hasDevScript) {
     cmd = ["bun", "run", "dev"];
   } else {
-    cmd = ["bunx", "vite", "--host", "0.0.0.0", "--port", String(DEV_PORT)];
-    if (state.basePath) cmd.push("--base", state.basePath);
+    cmd = ["bunx", "vite", "--host", "0.0.0.0", "--port", String(port)];
+    if (entry.basePath) cmd.push("--base", entry.basePath);
   }
-  pushLog(`$ ${cmd.join(" ")}`);
-  devProc = Bun.spawn(cmd, {
+  pushLog(entry, `$ ${cmd.join(" ")}`);
+  entry.state = "starting";
+  const devProc = Bun.spawn(groupCmd(cmd), {
     cwd,
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, PORT: String(DEV_PORT), HOST: "0.0.0.0", BROWSER: "none" },
+    env: { ...process.env, PORT: String(port), HOST: "0.0.0.0", BROWSER: "none" },
   });
-  pipe(devProc.stdout, "[dev]");
-  pipe(devProc.stderr, "[dev]");
+  entry.proc = devProc;
+  pipe(entry, devProc.stdout, "[dev]");
+  pipe(entry, devProc.stderr, "[dev]");
 
   // Poll readiness for up to ~90s (cold-cache installs of vite + tailwind v4
   // native binaries can be slow; the frontend polls with its own ~3min budget).
   for (let i = 0; i < 60; i++) {
     await Bun.sleep(1500);
-    if (await probeReady()) {
-      state.ready = true;
-      pushLog(`[runner] dev server ready on ${DEV_PORT}`);
+    if (stale()) return;
+    if (await probeReady(port)) {
+      entry.state = "ready";
+      pushLog(entry, `[runner] dev server ready on ${port}`);
       return;
     }
     if (devProc.killed) {
-      state.running = false;
-      state.error = "dev server exited before becoming ready";
+      entry.state = "error";
+      entry.error = "dev server exited before becoming ready";
       return;
     }
   }
-  // Kill the stalled process so a late-ready zombie can't confuse the next /status.
-  try {
-    devProc.kill();
-  } catch {
-    /* already gone */
-  }
-  devProc = null;
-  state.running = false;
-  state.error = "dev server didn't become ready in 90s";
+  // Kill the stalled tree so a late-ready zombie can't confuse the next /status.
+  killEntryProc(entry);
+  entry.state = "error";
+  entry.error = "dev server didn't become ready in 90s";
 }
+
+function stopEntry(key) {
+  const entry = devPool.release(key);
+  if (!entry) return false;
+  killEntryProc(entry);
+  entry.state = "stopped";
+  if (lastStartedKey === key) lastStartedKey = null;
+  return true;
+}
+
+// Reaper: kill dev servers with no control-API activity for DEV_IDLE_MS.
+// (The proxy talks straight to the dev port, so "idle" means no /run|/status
+// touches for that project — the frontend re-runs preview/start on a dead
+// preview, and warm bun caches make that restart fast.)
+setInterval(() => {
+  for (const idle of devPool.idleEntries(DEV_IDLE_MS)) {
+    console.log(`[code-runner] reaping idle dev server ${idle.key || "<root>"} on :${idle.port}`);
+    stopEntry(idle.key);
+  }
+}, 60_000);
 
 Bun.serve({
   port: CTRL_PORT,
@@ -316,8 +458,28 @@ Bun.serve({
     }
 
     if (url.pathname === "/status") {
-      const ready = state.running ? await probeReady() : false;
-      return Response.json({ ...state, ready, tail: state.log.slice(-12) });
+      const rawProject = url.searchParams.get("project");
+      let entry;
+      if (rawProject) {
+        const id = sanitizeProjectId(rawProject);
+        if (!id) return Response.json({ ok: false, error: "invalid_project" }, { status: 400 });
+        entry = devPool.get(id);
+        if (entry) devPool.touch(id); // status polling counts as activity for the reaper
+      } else {
+        // Legacy: no project param → the last started server.
+        entry = lastStartedKey != null ? devPool.get(lastStartedKey) : null;
+      }
+      const st = entryStatus(entry);
+      // Legacy contract: `ready` is a LIVE probe while the server is running
+      // (it can flip true during "starting", as soon as the port answers).
+      const ready = st.running ? await probeReady(st.port) : false;
+      const { log, ...rest } = st;
+      return Response.json({
+        ...rest,
+        ready,
+        tail: (log || []).slice(-12),
+        servers: serversSummary(),
+      });
     }
     if (url.pathname === "/run" && req.method === "POST") {
       const body = await req.json().catch(() => ({}));
@@ -325,20 +487,37 @@ Bun.serve({
       if (body && body.project && !id) {
         return Response.json({ ok: false, error: "invalid_project" }, { status: 400 });
       }
-      startDev(id, body && body.basePath).catch((e) => {
-        state.error = String(e && e.message ? e.message : e);
-        state.running = false;
-      });
-      return Response.json({ ok: true, port: DEV_PORT, project: id });
+      try {
+        const out = await startDev(id, body && body.basePath);
+        return Response.json({ ok: true, port: out.port, project: id, reused: out.reused });
+      } catch (e) {
+        if (e && e.code === "dev_pool_exhausted") {
+          return Response.json({ ok: false, error: "dev_pool_exhausted" }, { status: 429 });
+        }
+        return Response.json({ ok: false, error: String(e && e.message ? e.message : e) }, { status: 500 });
+      }
     }
     if (url.pathname === "/stop" && req.method === "POST") {
-      if (devProc) { try { devProc.kill(); } catch { /* gone */ } devProc = null; }
-      state.running = false;
-      state.ready = false;
-      return Response.json({ ok: true });
+      const body = await req.json().catch(() => ({}));
+      const id = body && body.project ? sanitizeProjectId(body.project) : null;
+      if (body && body.project && !id) {
+        return Response.json({ ok: false, error: "invalid_project" }, { status: 400 });
+      }
+      if (id) {
+        const stopped = stopEntry(id);
+        return Response.json({ ok: true, stopped: stopped ? 1 : 0 });
+      }
+      // Legacy: no project → stop them ALL.
+      let stopped = 0;
+      for (const e of devPool.list()) {
+        if (stopEntry(e.key)) stopped++;
+      }
+      return Response.json({ ok: true, stopped });
     }
     return new Response("code-runner ok", { status: 200 });
   },
 });
 
-console.log(`[code-runner] control on :${CTRL_PORT}, dev on :${DEV_PORT}, workdir ${WORKDIR}`);
+console.log(
+  `[code-runner] control on :${CTRL_PORT}, dev pool ${DEV_PORT_POOL[0]}-${DEV_PORT_POOL[DEV_PORT_POOL.length - 1]} (${DEV_PORT_POOL.length} slots, setsid=${SETSID_AVAILABLE}), workdir ${WORKDIR}`,
+);

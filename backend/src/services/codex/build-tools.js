@@ -293,7 +293,7 @@ const TOOLS = {
     async execute(args, ctx) {
       const sleep = (ms) => new Promise((r) => { setTimeout(r, ms); });
       try {
-        let status = await ctx.runner.devStatus();
+        let status = await ctx.runner.devStatus(ctx.project);
         // Not running (or running another project) → (re)start it for this one.
         if (!status?.running || (status.project && status.project !== ctx.project)) {
           await ctx.runner.startDev(ctx.project);
@@ -301,7 +301,7 @@ const TOOLS = {
         const deadline = Date.now() + Math.min(Math.max(Number(args?.waitMs) || 20000, 2000), 60000);
         do {
           await sleep(1500);
-          status = await ctx.runner.devStatus();
+          status = await ctx.runner.devStatus(ctx.project);
           if (status?.ready || status?.error) break;
         } while (Date.now() < deadline);
 
