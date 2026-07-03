@@ -120,18 +120,23 @@ class OcrEngine {
     return !quality?.accepted;
   }
 
-  async extractFromImage(filePath, options = {}) {
+  async extractFromImage(input, options = {}) {
     const config = this.config;
     const mode = String(options.mode || config.mode).toLowerCase();
     if (mode === 'off') return this.skipped('ocr_disabled');
 
+    // Accepts a file path OR an in-memory Buffer (embedded Office images
+    // never touch disk). sharp + tesseract already handle both; only the
+    // vision fallback needs to know which one it got.
+    const inputRef = Buffer.isBuffer(input) ? { buffer: input } : { filePath: input };
+
     if (mode === 'vision') {
-      return this.runVisionFallback({ filePath, mimeType: options.mimeType || 'image/png', config });
+      return this.runVisionFallback({ ...inputRef, mimeType: options.mimeType || 'image/png', config });
     }
 
     let localResult;
     try {
-      localResult = await this.runLocalImageOcr(filePath, options);
+      localResult = await this.runLocalImageOcr(input, options);
     } catch (error) {
       localResult = {
         quality: this.evaluateQuality({ text: '', confidence: 0 }, config),
@@ -144,7 +149,7 @@ class OcrEngine {
 
     if (this.shouldUseVisionFallback(localResult.quality, { mode }) && options.allowVision !== false) {
       const visionResult = await this.runVisionFallback({
-        filePath,
+        ...inputRef,
         mimeType: options.mimeType || 'image/png',
         config,
         localQuality: localResult.quality,
@@ -570,6 +575,111 @@ class OcrEngine {
       pageQuality: pageMeta,
       omittedPageQuality: omittedPageMeta,
     });
+  }
+
+  /**
+   * OCR a SPECIFIC subset of PDF pages (1-based page numbers) and return
+   * per-page results. This powers mixed PDFs — documents whose text layer
+   * covers some pages while others are scans/images: the caller keeps the
+   * cheap text-layer pages and asks this method only for the pages that
+   * came back empty. Pages are rendered individually via pdf-to-img's
+   * getPage(), so a 300-page contract with 4 scanned annexes renders 4
+   * pages, not 300.
+   *
+   * Hybrid per page: Tesseract multi-variant first, vision fallback only
+   * for pages Tesseract can't read (same ladder as extractFromImage).
+   */
+  async extractPdfPagesSubset(filePath, pageNumbers = [], options = {}) {
+    const config = this.config;
+    const mode = String(options.mode || config.mode).toLowerCase();
+    if (mode === 'off') return { pages: [], ocr: { status: 'skipped', reason: 'ocr_disabled' } };
+
+    const { pdf } = await import('pdf-to-img');
+    const doc = await pdf(filePath, { scale: options.scale || config.pdfScale || 2.4 });
+    const docLength = Number(doc.length || 0);
+    const targets = [...new Set(pageNumbers)]
+      .filter(n => Number.isInteger(n) && n >= 1 && (docLength === 0 || n <= docLength))
+      .sort((a, b) => a - b);
+    const maxPages = Number.parseInt(options.maxPages ?? 0, 10) || 0;
+    const selected = maxPages > 0 ? targets.slice(0, maxPages) : targets;
+    if (selected.length === 0) {
+      return { pages: [], ocr: { status: 'skipped', reason: 'no_target_pages', pagesRequested: pageNumbers.length } };
+    }
+
+    const language = options.language || this.defaultLanguage;
+    const worker = await createWorker(language);
+    const pages = [];
+    const startedAt = Date.now();
+    try {
+      if (typeof worker.setParameters === 'function') {
+        await worker.setParameters({
+          preserve_interword_spaces: '1',
+          tessedit_pageseg_mode: '1',
+        }).catch(() => null);
+      }
+      for (const pageNumber of selected) {
+        let raw;
+        try {
+          raw = await doc.getPage(pageNumber);
+        } catch {
+          pages.push({ page: pageNumber, text: '', confidence: 0, provider: null, reason: 'render_failed' });
+          continue;
+        }
+        const variantFactories = this.createPdfPageVariants(raw, config);
+        let localResult;
+        try {
+          localResult = await this.recognizeBestVariant(worker, variantFactories, config, {
+            maxVariants: config.pdfMaxVariants,
+          });
+        } catch (error) {
+          localResult = { quality: this.evaluateQuality({ text: '', confidence: 0 }, config), error: error?.message };
+        }
+        let quality = localResult.quality;
+        let provider = 'tesseract';
+
+        if (!quality.accepted && this.shouldUseVisionFallback(quality, { mode }) && options.allowVision !== false) {
+          const preprocessed = await this.preprocessPdfPage(raw, config).catch(() => raw);
+          const vision = await this.runVisionFallback({
+            buffer: preprocessed,
+            mimeType: 'image/png',
+            config,
+            localQuality: quality,
+            promptPrefix: `Página ${pageNumber}.`,
+          });
+          if (vision.ocr.status === 'vision_fallback' && vision.text) {
+            quality = this.evaluateQuality({ text: vision.text, confidence: vision.ocr.confidence || 92 }, config);
+            provider = vision.ocr.provider;
+          }
+        }
+
+        const usable = quality.enoughText || quality.legibleShort;
+        pages.push({
+          page: pageNumber,
+          text: usable ? quality.text : '',
+          confidence: Math.round(Number(quality.confidence || 0)),
+          usefulChars: quality.usefulChars,
+          provider: usable ? provider : null,
+          reason: usable ? 'ok' : quality.reason,
+        });
+      }
+    } finally {
+      await worker.terminate();
+    }
+
+    const pagesWithText = pages.filter(page => page.text).length;
+    return {
+      pages,
+      ocr: {
+        status: pagesWithText > 0 ? 'pages_subset_ok' : 'failed',
+        provider: 'hybrid',
+        pagesRequested: pageNumbers.length,
+        pagesProcessed: selected.length,
+        pagesWithText,
+        capped: targets.length > selected.length,
+        elapsedMs: Date.now() - startedAt,
+        language,
+      },
+    };
   }
 
   async runVisionPdfFallback(pageBuffers, { config = this.config, localQuality = null } = {}) {

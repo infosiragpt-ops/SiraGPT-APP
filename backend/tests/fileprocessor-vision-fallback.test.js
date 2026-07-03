@@ -82,12 +82,14 @@ function tempImage() {
 
 // ── _shouldApplyVisionFallback ────────────────────────────────────────────
 
-test('_shouldApplyVisionFallback returns false by default (env flag off)', () => {
-  const out = fileProcessor._shouldApplyVisionFallback(
-    { text: 'a', ocr: { confidence: 0.1 } },
-    {},
-  );
-  assert.equal(out, false);
+test('_shouldApplyVisionFallback returns false when explicitly disabled (=0)', async () => {
+  await withEnv({ SIRAGPT_VISION_FALLBACK_ENABLED: '0', OPENAI_API_KEY: 'sk-test' }, () => {
+    const out = fileProcessor._shouldApplyVisionFallback(
+      { text: 'a', ocr: { confidence: 0.1 } },
+      {},
+    );
+    assert.equal(out, false);
+  });
 });
 
 test('_shouldApplyVisionFallback returns false without any OpenAI key/client', async () => {

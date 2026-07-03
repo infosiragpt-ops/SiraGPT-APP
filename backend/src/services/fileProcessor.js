@@ -5,6 +5,8 @@ const sharp = require('sharp');
 const fs = require('fs').promises;
 const path = require('path');
 const ocrEngine = require('./ocr-engine');
+const mixedPdf = require('./document/mixed-pdf');
+const officeImages = require('./office-image-extractor');
 const { readXlsxFile, selectWorkbookWorksheets, worksheetRows, evaluateFormulas } = require('./xlsx-safe-workbook');
 const rtfParser = require('./rtf-parser');
 const odfParser = require('./opendocument-parser');
@@ -405,21 +407,50 @@ class FileProcessor {
           // missing text layer and runs OCR. Only return early when we actually
           // captured text.
           if (fullText.trim().length > 0) {
+            // MIXED PDF: some pages have a text layer, others are scans/photos
+            // with none. The old early-return silently dropped the scanned
+            // pages. Detect them and OCR ONLY those pages, merging both
+            // sources back in page order.
+            let mergedText = fullText;
+            let mixedOcr = null;
+            try {
+              if (mixedPdf.mixedOcrEnabled() && mixedPdf.isMixedPdf(pages)) {
+                const lowTextPages = mixedPdf.findLowTextPages(pages);
+                const cap = mixedPdf.mixedOcrMaxPages();
+                console.log(`[fileProcessor] mixed PDF: ${lowTextPages.length}/${pages.length} page(s) without text layer — running per-page OCR (cap ${cap})`);
+                const subset = await ocrEngine.extractPdfPagesSubset(filePath, lowTextPages, { maxPages: cap });
+                const merged = mixedPdf.mergeMixedPdfText(pages, subset.pages);
+                if (merged.ocrPagesUsed > 0) {
+                  mergedText = merged.text;
+                  mixedOcr = {
+                    scannedPages: lowTextPages.length,
+                    ocrPagesProcessed: subset.ocr?.pagesProcessed || 0,
+                    ocrPagesWithText: merged.ocrPagesUsed,
+                    capped: Boolean(subset.ocr?.capped),
+                  };
+                }
+              }
+            } catch (mixedErr) {
+              console.warn(`[fileProcessor] mixed-PDF OCR failed (keeping text layer only): ${mixedErr.message}`);
+            }
+
             const header = `PDF document — ${streamingResult.totalPages} page(s) extracted, ` +
               `${streamingResult.totalChars} characters` +
+              (mixedOcr ? ` (+${mixedOcr.ocrPagesWithText} scanned page(s) recovered via OCR)` : '') +
               (streamingResult.partial ? ' (partial — RSS cap reached)' : '') +
               `\n---\n`;
 
-            const extractedText = header + fullText;
+            const extractedText = header + mergedText;
             const ocr = {
-              status: 'skipped',
+              status: mixedOcr ? 'mixed_text_and_ocr' : 'skipped',
               confidence: null,
-              provider: 'pdf_text_layer',
+              provider: mixedOcr ? 'pdf_text_layer+ocr' : 'pdf_text_layer',
               reason: 'embedded_text_layer',
               pages: streamingResult.totalPages,
               streaming: true,
               pageCount: streamingResult.pageCount,
               partial: streamingResult.partial,
+              ...(mixedOcr ? { mixedOcr } : {}),
             };
             return options.detailed ? { extractedText, ocr } : extractedText;
           }
@@ -560,7 +591,7 @@ class FileProcessor {
       const markdown = this._htmlToMarkdown(html);
       console.log(`Word file processed: ${filePath}, html=${html.length} chars, md=${markdown.length} chars`);
       const header = `Word document — ${markdown.length} characters extracted, structure preserved as markdown\n---\n`;
-      return header + markdown;
+      return this._withEmbeddedImageText(filePath, header + markdown, 'docx');
     } catch (error) {
       // Mammoth throws verbose stack traces (jszip/openZip chain) when
       // the .docx is corrupt, truncated, or actually a different format
@@ -688,7 +719,7 @@ class FileProcessor {
       }
 
       header += '\n';
-      return header + sheetSummaries.join('\n');
+      return this._withEmbeddedImageText(filePath, header + sheetSummaries.join('\n'), 'xlsx');
     } catch (error) {
       throw new Error(`Excel processing failed: ${error.message}`);
     }
@@ -760,8 +791,8 @@ class FileProcessor {
         mimeType: options.mimeType || 'image/png',
       });
 
-      // Optional GPT-4o-vision fallback. Off by default; switched on
-      // via env SIRAGPT_VISION_FALLBACK_ENABLED=1. Triggers ONLY when
+      // GPT-4o-vision fallback. ON by default when an OpenAI key exists;
+      // opt out via SIRAGPT_VISION_FALLBACK_ENABLED=0. Triggers ONLY when
       // Tesseract produced little text OR low-confidence output —
       // those are the cases where a vision LLM that understands
       // layout, tables, equations beats a pure OCR engine. Failures
@@ -803,7 +834,7 @@ class FileProcessor {
    * ocr result; no side effects.
    *
    * Triggers when ALL of the following are true:
-   *   - SIRAGPT_VISION_FALLBACK_ENABLED=1
+   *   - SIRAGPT_VISION_FALLBACK_ENABLED is not '0' (default: enabled)
    *   - OPENAI_API_KEY is set (either in env OR via options.openai)
    *   - Tesseract text is shorter than SIRAGPT_VISION_FALLBACK_MIN_CHARS
    *     (default 100) OR confidence < SIRAGPT_VISION_FALLBACK_MIN_CONFIDENCE
@@ -811,9 +842,31 @@ class FileProcessor {
    *
    * Override via options.forceVisionFallback=true / =false for tests.
    */
+  /**
+   * Best-effort append of embedded-image OCR text to an Office document's
+   * extraction. Never fails the base extraction: any error (corrupt media,
+   * OCR crash, timeout) logs a warning and returns the text unchanged.
+   * Disable globally with SIRAGPT_OFFICE_IMAGE_OCR=0.
+   */
+  async _withEmbeddedImageText(filePath, baseText, kind) {
+    try {
+      const appendix = await officeImages.extractImageAppendix(filePath);
+      if (appendix) {
+        console.log(`[fileProcessor] ${kind}: appended OCR text from embedded images (${appendix.length} chars)`);
+        return `${baseText}\n\n${appendix}`;
+      }
+    } catch (error) {
+      console.warn(`[fileProcessor] embedded-image OCR failed for ${kind} (keeping text only):`, error?.message || error);
+    }
+    return baseText;
+  }
+
   _shouldApplyVisionFallback(result, options = {}) {
     if (typeof options.forceVisionFallback === 'boolean') return options.forceVisionFallback;
-    if (process.env.SIRAGPT_VISION_FALLBACK_ENABLED !== '1') return false;
+    // Default ON (parity with how ChatGPT/Claude read attachments): any
+    // weak local OCR falls through to the vision model whenever an OpenAI
+    // key is available. Opt out explicitly with SIRAGPT_VISION_FALLBACK_ENABLED=0.
+    if (process.env.SIRAGPT_VISION_FALLBACK_ENABLED === '0') return false;
     if (!options.openai && !process.env.OPENAI_API_KEY) return false;
     const text = String(result?.text || '');
     const confidence = typeof result?.ocr?.confidence === 'number' ? result.ocr.confidence : 1;
@@ -902,7 +955,7 @@ class FileProcessor {
         ? parsed
         : (typeof parsed?.toText === 'function' ? parsed.toText() : String(parsed || ''));
       console.log(`PowerPoint file processed: ${filePath}, length: ${text.length}`);
-      return text;
+      return this._withEmbeddedImageText(filePath, text, 'pptx');
     } catch (error) {
       console.error(`PowerPoint file processing error for ${filePath}:`, error);
       throw new Error(`PowerPoint presentation processing failed: ${error.message}`);
