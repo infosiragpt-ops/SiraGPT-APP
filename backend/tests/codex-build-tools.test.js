@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { TOOLS, toolRegistry, getTool, lineCount, parsePrismaSchema } = require('../src/services/codex/build-tools');
+const { TOOLS, toolRegistry, getTool, lineCount, parsePrismaSchema, normalisePlanTasks } = require('../src/services/codex/build-tools');
 
 function fakeRunner(overrides = {}) {
   return {
@@ -18,7 +18,7 @@ test('toolRegistry projects name/description/parameters for every tool', () => {
   const reg = toolRegistry();
   assert.deepEqual(
     reg.map((t) => t.name).sort(),
-    ['dev_server_check', 'edit_file', 'grep_search', 'inspect_database', 'list_files', 'read_file', 'run_command', 'run_subagent', 'type_check', 'web_search', 'write_file'],
+    ['dev_server_check', 'edit_file', 'grep_search', 'inspect_database', 'list_files', 'read_file', 'run_command', 'run_subagent', 'type_check', 'update_plan', 'web_search', 'write_file'],
   );
   for (const t of reg) { assert.ok(t.description); assert.ok(t.parameters); }
 });
@@ -80,6 +80,55 @@ test('getTool + lineCount helpers', () => {
   assert.equal(getTool('nope'), null);
   assert.equal(lineCount('a\nb'), 2);
   assert.equal(lineCount(''), 0);
+});
+
+// ---------------------------------------------------------------------------
+// update_plan (G1): TodoWrite parity — validates the shape and returns the
+// normalised plan tasks the loop turns into a plan_updated event. Touches no
+// filesystem.
+
+test('update_plan validates the shape and returns normalised planTasks', async () => {
+  const r = await TOOLS.update_plan.execute({
+    tasks: [
+      { id: 't1', title: 'Estructura', status: 'completed' },
+      { id: 't2', title: 'Estilos', status: 'in_progress' },
+      { id: 't3', title: 'Deploy', status: 'pending' },
+    ],
+  }, {});
+  assert.equal(r.isError, false);
+  assert.deepEqual(r.planTasks, [
+    { id: 't1', title: 'Estructura', status: 'completed' },
+    { id: 't2', title: 'Estilos', status: 'in_progress' },
+    { id: 't3', title: 'Deploy', status: 'pending' },
+  ]);
+  assert.match(r.summary, /1\/3 completadas/);
+  assert.equal(TOOLS.update_plan.kind, 'terminal');
+  assert.equal(TOOLS.update_plan.commandFor(), 'update plan');
+});
+
+test('update_plan derives a missing title from the id but requires id + a known status', async () => {
+  const ok = await TOOLS.update_plan.execute({ tasks: [{ id: 't1', status: 'pending' }] }, {});
+  assert.equal(ok.isError, false);
+  assert.equal(ok.planTasks[0].title, 't1');
+
+  const badStatus = await TOOLS.update_plan.execute({ tasks: [{ id: 't1', title: 'x', status: 'doing' }] }, {});
+  assert.equal(badStatus.isError, true);
+
+  const noId = await TOOLS.update_plan.execute({ tasks: [{ title: 'x', status: 'pending' }] }, {});
+  assert.equal(noId.isError, true);
+
+  const notArray = await TOOLS.update_plan.execute({ tasks: 'nope' }, {});
+  assert.equal(notArray.isError, true);
+
+  const empty = await TOOLS.update_plan.execute({ tasks: [] }, {});
+  assert.equal(empty.isError, true);
+});
+
+test('normalisePlanTasks returns null on unrecoverable shapes', () => {
+  assert.equal(normalisePlanTasks(null), null);
+  assert.equal(normalisePlanTasks([{ id: '', status: 'pending' }]), null);
+  assert.equal(normalisePlanTasks([{ id: 't1', status: 'nope' }]), null);
+  assert.deepEqual(normalisePlanTasks([{ id: 't1', status: 'completed' }]), [{ id: 't1', title: 't1', status: 'completed' }]);
 });
 
 const PRISMA_SCHEMA = `

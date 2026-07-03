@@ -212,6 +212,7 @@ function buildSystemPrompt({ project, plan, fileTree, sourcePrompt }) {
   if (plan) {
     lines.push('Plan aprobado por el usuario (síguelo):');
     lines.push(JSON.stringify(plan));
+    lines.push('Mantén el checklist del plan al día con update_plan (como TodoWrite): ANTES de empezar una tarea, llama update_plan marcándola in_progress; al terminarla, llama update_plan marcándola completed, ANTES de avanzar a la siguiente. Pasa SIEMPRE la lista COMPLETA de tareas del plan (id + title + status) en cada llamada, no solo la que cambió. Usa exactamente los mismos id y title del plan.');
   }
   if (fileTree) {
     lines.push('Archivos actuales del workspace:');
@@ -534,6 +535,19 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
     const executeCall = async (call) => {
       const tool = buildTools.getTool(call.name);
       const actionId = `a${++actionCounter}`;
+
+      // update_plan is a plan-progress signal, not a workspace action: it emits a
+      // `plan_updated` event (TodoWrite parity) instead of action_start/end, so it
+      // never pollutes the action timeline. Best-effort — a failed emit never
+      // aborts the loop; the observation is still fed back to the model.
+      if (tool && call.name === 'update_plan') {
+        const result = await tool.execute(call.args, { env });
+        if (!result.isError && Array.isArray(result.planTasks)) {
+          await eventStore.appendEvent(run.id, 'plan_updated', { tasks: result.planTasks }, { prisma }).catch(() => {});
+        }
+        return { message: `[TOOL_RESULT ${call.name}] ${result.observation || result.summary || ''}`, blocking: null };
+      }
+
       if (!tool) {
         await eventStore.appendEvent(run.id, 'action_start', { actionId, kind: 'terminal', command: String(call.name), groupId }, { prisma });
         await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'error', outputSummary: `herramienta desconocida: ${call.name}`, durationMs: 0 }, { prisma });

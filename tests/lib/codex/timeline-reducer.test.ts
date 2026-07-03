@@ -99,11 +99,35 @@ describe('timelineReducer', () => {
     expect((s.items[0] as any).text).toBe('once')
   })
 
-  it('covers all 12 catalog event types without throwing', () => {
-    const types = ['run_status', 'plan_proposed', 'reasoning_start', 'reasoning_delta', 'reasoning_end', 'action_start', 'action_end', 'narrative_delta', 'checkpoint_created', 'run_summary', 'action_required', 'heartbeat']
+  it('covers all catalog event types without throwing', () => {
+    const types = ['run_status', 'plan_proposed', 'plan_updated', 'reasoning_start', 'reasoning_delta', 'reasoning_end', 'action_start', 'action_end', 'narrative_delta', 'checkpoint_created', 'run_summary', 'action_required', 'heartbeat']
     let s = initialTimelineState()
     for (const t of types) s = timelineReducer(s, { type: t, seq: seq++, data: { status: 'done', blockId: 'b', actionId: 'a', groupId: 'g', kind: 'terminal', status_: 'done', architecture: 'x', pages: [], components: [], tasks: [], metrics: {}, patternId: 'p', title: 't', rawError: 'e', blockedCapabilities: [], commitSha: 'abc1234', checkpointId: 'c', text: 'x' } })
     expect(s).toBeTruthy()
+  })
+
+  it('plan_updated is not a timeline item; it accumulates the latest progress (last write wins)', () => {
+    const s = apply([
+      ev('plan_proposed', { architecture: 'Vite', pages: [], components: [], tasks: [{ id: 't1', title: 'A' }, { id: 't2', title: 'B' }] }),
+      ev('plan_updated', { tasks: [{ id: 't1', title: 'A', status: 'in_progress' }, { id: 't2', title: 'B', status: 'pending' }] }),
+      ev('plan_updated', { tasks: [{ id: 't1', title: 'A', status: 'completed' }, { id: 't2', title: 'B', status: 'in_progress' }] }),
+    ])
+    // Only the plan item exists in the timeline; plan_updated is not an item.
+    expect(s.items.map((i) => i.kind)).toEqual(['plan'])
+    expect(s.planProgress).toEqual([
+      { id: 't1', title: 'A', status: 'completed' },
+      { id: 't2', title: 'B', status: 'in_progress' },
+    ])
+  })
+
+  it('planProgress stays null until the first plan_updated (legacy runs degrade)', () => {
+    const s = apply([ev('plan_proposed', { architecture: 'x', pages: [], components: [], tasks: [{ id: 't1' }] })])
+    expect(s.planProgress).toBeNull()
+  })
+
+  it('plan_updated coerces an unknown status to pending', () => {
+    const s = apply([ev('plan_updated', { tasks: [{ id: 't1', title: 'A', status: 'weird' }] })])
+    expect(s.planProgress).toEqual([{ id: 't1', title: 'A', status: 'pending' }])
   })
 
   it('markPlanApproved flips the plan item', () => {

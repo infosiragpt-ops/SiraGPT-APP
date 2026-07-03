@@ -14,6 +14,8 @@ const RUN_STATUSES = ['queued', 'running', 'waiting_approval', 'done', 'error', 
 const ACTION_KINDS = ['terminal', 'file_read', 'file_write', 'reasoning', 'web', 'database', 'agent'];
 const ACTION_END_STATUSES = ['done', 'error'];
 const COST_SOURCES = ['provider_exact', 'openrouter_generation', 'estimated'];
+// Per-task status carried by plan_updated (TodoWrite parity).
+const PLAN_TASK_STATUSES = ['pending', 'in_progress', 'completed'];
 
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const isStr = (v) => typeof v === 'string';
@@ -36,6 +38,21 @@ const VALIDATORS = {
     isArr(d.pages) &&
     isArr(d.components) &&
     isArr(d.tasks),
+
+  // Dynamic plan progress (TodoWrite / update_plan parity): the agent emits this
+  // as it marks each plan task pending → in_progress → completed. `tasks` is the
+  // full current task list so the UI renders REAL per-task status. Additive: a
+  // run that never calls update_plan simply never emits it (checklist degrades).
+  plan_updated: (d) =>
+    isObj(d) &&
+    isArr(d.tasks) &&
+    d.tasks.every(
+      (t) =>
+        isObj(t) &&
+        nonEmptyStr(t.id) &&
+        isStr(t.title) &&
+        PLAN_TASK_STATUSES.includes(t.status),
+    ),
 
   reasoning_start: (d) => isObj(d) && nonEmptyStr(d.blockId) && isStr(d.label),
   reasoning_delta: (d) => isObj(d) && nonEmptyStr(d.blockId) && isStr(d.text),
@@ -123,6 +140,7 @@ module.exports = {
   ACTION_KINDS,
   ACTION_END_STATUSES,
   COST_SOURCES,
+  PLAN_TASK_STATUSES,
   VALIDATORS,
   isKnownEventType,
   isValidEvent,
