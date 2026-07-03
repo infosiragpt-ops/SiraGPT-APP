@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const {
   addRowsWorksheet,
+  inferNumericColumns,
   cellToText,
   createWorkbook,
   defangCellText,
@@ -151,4 +152,55 @@ test('excelColLetter: two-letter columns beyond 26 (not capped at Z)', () => {
   assert.equal(excelColLetter(53), 'BA');
   assert.equal(excelColLetter(703), 'AAA');
   assert.equal(excelColLetter(0), '');
+});
+
+// ── Professional styling defaults (added with the doc-design overhaul) ──────
+
+test('addRowsWorksheet applies professional defaults: freeze, autofilter, header fill, numFmt', async () => {
+  const wb = createWorkbook();
+  const rows = [
+    ['Producto', 'Precio', 'Stock'],
+    ['Paracetamol', 12.5, 120],
+    ['Ibuprofeno', 18.9, 80],
+    ['Amoxicilina', 25.0, 45],
+  ];
+  addRowsWorksheet(wb, 'Inventario', rows);
+  const buffer = await writeWorkbookBuffer(wb);
+  const reopened = await readXlsxBuffer(buffer);
+  const ws = reopened.getWorksheet('Inventario');
+  assert.equal(ws.views?.[0]?.state, 'frozen', 'header row frozen');
+  assert.equal(ws.views?.[0]?.ySplit, 1);
+  assert.ok(ws.autoFilter, 'autofilter present');
+  const header = ws.getRow(1);
+  assert.equal(header.getCell(1).fill?.pattern, 'solid', 'header fill applied');
+  assert.equal(header.font?.bold, true);
+  // Precio detected as currency (header keyword) → 2-decimal format
+  assert.equal(ws.getRow(2).getCell(2).numFmt, '#,##0.00');
+  // Stock numeric but not currency
+  assert.equal(ws.getRow(2).getCell(3).numFmt, '#,##0.##');
+  // First (text) column untouched
+  assert.ok(!ws.getRow(2).getCell(1).numFmt);
+});
+
+test('addRowsWorksheet {plain:true} keeps the legacy bare grid', async () => {
+  const wb = createWorkbook();
+  addRowsWorksheet(wb, 'Plano', [['a', 'b'], ['1', '2']], { plain: true });
+  const buffer = await writeWorkbookBuffer(wb);
+  const reopened = await readXlsxBuffer(buffer);
+  const ws = reopened.getWorksheet('Plano');
+  assert.ok(!ws.autoFilter, 'no autofilter in plain mode');
+  assert.notEqual(ws.views?.[0]?.state, 'frozen');
+});
+
+test('inferNumericColumns: 70% threshold, currency by header keyword, numeric strings count', () => {
+  const { numeric, currency } = inferNumericColumns([
+    ['Nombre', 'Total USD', 'Unidades', 'Notas'],
+    ['a', 100.5, '12', 'texto'],
+    ['b', 200.1, '30', 'más texto'],
+    ['c', 150.2, 'n/a', 'otro'],
+  ]);
+  assert.ok(numeric.has(1), 'Total USD numeric');
+  assert.ok(currency.has(1), 'Total USD currency by header');
+  assert.ok(!numeric.has(2), 'Unidades at 2/3 numeric (67%) stays below the 70% threshold');
+  assert.ok(!numeric.has(3), 'Notas text');
 });
