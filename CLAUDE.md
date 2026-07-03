@@ -1115,6 +1115,32 @@ registrados en backend/package.json. Los tests del agent-loop fijan
 En prod: pasar `ANTHROPIC_API_KEY`/`OPENROUTER_API_KEY` al contenedor backend
 vía el override (allowlist `environment:`).
 
+### Agent SDK v2 (added 2026-07-02, misma noche)
+- **Visibilidad en vivo**: cada tool call de un subagente emite action_start/
+  action_end reales en el timeline (`↳ <agente> · <cmd>`, mismo groupId que la
+  delegación) vía el callback `emitAction` que agent-loop inyecta en el ctx y
+  el SDK invoca alrededor de cada ejecución. Crash del callback nunca rompe la
+  delegación.
+- **Delegación paralela**: un turno compuesto SOLO de run_subagent (≥2) corre
+  los especialistas con Promise.all (turnos mixtos siguen secuenciales para
+  preservar read-after-write). El system prompt lo anuncia. El seq-gate del
+  event-store hace seguros los appends concurrentes.
+- **Agentes custom por proyecto**: `.sira/agents.json` en el workspace define
+  especialistas propios `[{ name, description, prompt, tools?, maxSteps? }]` —
+  validación estricta (nombre ^[a-z][a-z0-9_-]{1,29}$, sin colisión builtin,
+  tools ⊆ TOOLS sin run_subagent, maxSteps ≤ 12, prompt ≤ 4000 chars, máx 10).
+  run_subagent los carga best-effort en cada delegación; `GET /api/codex/agents`
+  expone `custom.{supported,path,allowedTools}`.
+- **Contexto automático**: el subagente recibe el árbol de archivos fresco
+  (git ls-files) en su primer mensaje — no gasta un paso en orientarse.
+- **Nuevo especialista `debugger`** (diagnóstico de causa raíz + fix mínimo,
+  con grep_search/type_check/dev_server_check) — 7 builtin en total.
+- **Informe con métricas**: durationMs + tokens acumulados en el outcome y en
+  el encabezado del reporte.
+- Tests: codex-agent-sdk (23) + caso de paralelismo con barrera en
+  codex-agent-loop (si el loop fuera secuencial, el primer subagente esperaría
+  para siempre → timeout).
+
 ## Deployments / Publishing — clon del tab de Replit (flag DEPLOYMENTS_V2, added 2026-06-18)
 
 Clon **de gestión** (no provisiona VMs reales) del tab "Deployments/Publishing" de

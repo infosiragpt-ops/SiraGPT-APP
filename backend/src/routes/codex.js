@@ -180,7 +180,17 @@ router.get('/agents', authenticateToken, (_req, res) => {
     const sdk = require('../services/codex/agent-sdk');
     // eslint-disable-next-line global-require
     const llmProvider = require('../services/codex/llm-provider');
-    return res.json({ ok: true, agents: sdk.listSubagents(), llm: llmProvider.describeActiveProvider() });
+    return res.json({
+      ok: true,
+      agents: sdk.listSubagents(),
+      llm: llmProvider.describeActiveProvider(),
+      custom: {
+        supported: true,
+        path: sdk.CUSTOM_AGENTS_PATH,
+        allowedTools: sdk.allowedCustomTools(),
+        note: 'Define agentes propios del proyecto en este archivo del workspace: [{ name, description, prompt, tools?, maxSteps? }].',
+      },
+    });
   } catch (err) {
     return res.status(500).json({ error: 'codex_agents_failed', message: err.message });
   }

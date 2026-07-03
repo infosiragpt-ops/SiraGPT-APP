@@ -326,7 +326,7 @@ const TOOLS = {
 
   run_subagent: {
     kind: 'agent',
-    description: 'Delega una tarea grande o especializada en un subagente experto con contexto fresco: planner (plan de construcción), frontend_builder (UI React/TS), backend_engineer (APIs y datos), db_architect (modelo de datos), qa_reviewer (revisión y verificación), enterprise_analyst (especificación de software empresarial: CRM/ERP/inventario/facturación/RRHH). Recibes solo su informe final.',
+    description: 'Delega una tarea grande o especializada en un subagente experto con contexto fresco: planner (plan de construcción), frontend_builder (UI React/TS), backend_engineer (APIs y datos), db_architect (modelo de datos), qa_reviewer (revisión y verificación), debugger (diagnóstico y fix de errores reales), enterprise_analyst (especificación de software empresarial: CRM/ERP/inventario/facturación/RRHH), más los agentes custom que el proyecto defina en .sira/agents.json. Puedes emitir VARIOS run_subagent en el mismo turno y correrán en paralelo. Recibes solo su informe final.',
     parameters: {
       type: 'object',
       properties: {
@@ -343,11 +343,12 @@ const TOOLS = {
       // eslint-disable-next-line global-require
       const sdk = require('./agent-sdk');
       try {
+        const customAgents = await sdk.loadWorkspaceAgents({ runner: ctx.runner, project: ctx.project });
         const outcome = await sdk.runSubagent({
           name: String(args?.agent || ''),
           task: String(args?.task || ''),
           context: String(args?.context || ''),
-          deps: { runner: ctx.runner, project: ctx.project, webSearch: ctx.webSearch, env: ctx.env, llmTurn: ctx.llmTurn, signal: ctx.signal, onUsage: ctx.onUsage },
+          deps: { runner: ctx.runner, project: ctx.project, webSearch: ctx.webSearch, env: ctx.env, llmTurn: ctx.llmTurn, signal: ctx.signal, onUsage: ctx.onUsage, emitAction: ctx.emitAction, customAgents },
         });
         const report = sdk.formatSubagentReport(outcome);
         return { isError: !outcome.ok, summary: `${outcome.agent}: ${outcome.ok ? 'completado' : 'falló'} (${outcome.toolCallsCount} herramientas)`, observation: report };

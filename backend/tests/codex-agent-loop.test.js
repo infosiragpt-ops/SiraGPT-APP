@@ -329,3 +329,45 @@ test('an unknown tool call still emits action_end AND counts toward actionsCount
   // The action_end means the action counts (spec req. 4: any status).
   assert.deepEqual(rec.actions, ['terminal']);
 });
+
+test('a turn of ONLY run_subagent calls runs the delegations in parallel', async () => {
+  let mainCalls = 0;
+  let inFlight = 0;
+  let release;
+  const bothStarted = new Promise((r) => { release = r; });
+  const llmTurn = async ({ messages }) => {
+    const sys = messages[0].content;
+    if (/agente de software senior/.test(sys)) {
+      if (mainCalls++ === 0) {
+        return {
+          text: 'Delego UI y revisión en paralelo.',
+          toolCalls: [
+            { name: 'run_subagent', args: { agent: 'planner', task: 'planea la UI' } },
+            { name: 'run_subagent', args: { agent: 'qa_reviewer', task: 'revisa el estado' } },
+          ],
+        };
+      }
+      return { text: 'fin', toolCalls: [] };
+    }
+    // Specialist turn: block until BOTH delegations are in flight. If the loop
+    // ran them sequentially, the first would wait forever → timeout → failure.
+    inFlight += 1;
+    if (inFlight >= 2) release();
+    await Promise.race([
+      bothStarted,
+      new Promise((_, rej) => { setTimeout(() => rej(new Error('subagents did not run in parallel')), 2000); }),
+    ]);
+    return { text: `informe de ${/PLANNER/.test(sys) ? 'planner' : 'qa'}`, toolCalls: [] };
+  };
+
+  const f = fakeDeps({ llmTurn });
+  const res = await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt: 'haz una app' }, project: { id: 'p1' }, deps: f.deps });
+  assert.equal(res.status, 'done');
+
+  const starts = f.events.filter((e) => e.type === 'action_start' && e.data.kind === 'agent');
+  assert.equal(starts.length, 2);
+  assert.equal(starts[0].data.groupId, starts[1].data.groupId); // one burst, one group
+  const ends = f.events.filter((e) => e.type === 'action_end');
+  assert.ok(ends.every((e) => e.data.status === 'done'), JSON.stringify(ends.map((e) => e.data.outputSummary)));
+  assert.ok(ends.some((e) => /planner: completado/.test(e.data.outputSummary || '')));
+});

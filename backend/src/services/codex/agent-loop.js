@@ -190,7 +190,8 @@ function buildSystemPrompt({ project, plan, fileTree, sourcePrompt }) {
     'Antes de dar por terminado, asegúrate de que el proyecto compila (el sistema ejecutará una verificación de tipos al final y te devolverá los errores si los hay).',
     'Nunca dependas de prompts interactivos de terminal; los comandos deben terminar solos.',
     'VERIFICA tu trabajo como lo haría un ingeniero: después de crear o editar código usa type_check para ver los errores reales de compilación y dev_server_check para confirmar que la app corre; corrige lo que salga antes de dar el trabajo por terminado.',
-    'Para tareas grandes o especializadas delega con run_subagent: planner (plan de construcción), frontend_builder (UI React/TS), backend_engineer (APIs y capa de datos), db_architect (modelo de datos), qa_reviewer (revisión final), enterprise_analyst (especificación de negocio).',
+    'Para tareas grandes o especializadas delega con run_subagent: planner (plan de construcción), frontend_builder (UI React/TS), backend_engineer (APIs y capa de datos), db_architect (modelo de datos), qa_reviewer (revisión final), debugger (diagnóstico y fix de errores reales), enterprise_analyst (especificación de negocio). Si el proyecto define agentes custom en .sira/agents.json también puedes delegarles.',
+    'Los subagentes son independientes: cuando dos tareas no dependen entre sí (p.ej. frontend_builder para la UI y db_architect para el modelo), emite VARIOS run_subagent en el MISMO turno y correrán en paralelo.',
     'Si el usuario pide software de EMPRESA (CRM, ERP, inventario, facturación, RRHH, punto de venta, gestión de clientes/proveedores/proyectos), delega PRIMERO en enterprise_analyst para convertir el pedido en módulos, entidades, roles y flujos; luego construye una app multi-módulo con navegación lateral, dashboard con KPIs y datos de ejemplo realistas del dominio.',
     `Proyecto: ${project?.name || 'Codex'}.`,
   ];
@@ -410,7 +411,8 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
     }
 
     const groupId = `g${++groupCounter}`;
-    for (const call of calls) {
+
+    const executeCall = async (call) => {
       const tool = buildTools.getTool(call.name);
       const actionId = `a${++actionCounter}`;
       if (!tool) {
@@ -420,8 +422,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         // an action_end of ANY status. This unknown-tool path emits an action_end,
         // so it must be counted too — otherwise the "Work done" number undercounts.
         if (metrics?.recordAction) metrics.recordAction('terminal', 0);
-        messages.push({ role: 'user', content: `[TOOL_RESULT ${call.name}] Error: herramienta desconocida.` });
-        continue;
+        return { message: `[TOOL_RESULT ${call.name}] Error: herramienta desconocida.`, blocking: null };
       }
 
       const command = tool.commandFor(call.args);
@@ -437,6 +438,22 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         signal,
         llmTurn,
         onUsage: (u) => { if (u && metrics?.recordLlmUsage) metrics.recordLlmUsage(u); },
+        // Live visibility for delegations: the SDK surfaces every specialist
+        // tool call as a nested action in the same group. The event store's
+        // per-run seq gate makes concurrent appends safe.
+        emitAction: async ({ kind, command: subCommand, path: subPath } = {}) => {
+          const subActionId = `a${++actionCounter}`;
+          const subKind = kind || 'terminal';
+          await eventStore.appendEvent(run.id, 'action_start', { actionId: subActionId, kind: subKind, command: subCommand || undefined, path: subPath || undefined, groupId }, { prisma }).catch(() => {});
+          const s0 = clock().getTime();
+          return {
+            end: async ({ status: subStatus = 'done', outputSummary: subSummary = '' } = {}) => {
+              const d = Math.max(0, clock().getTime() - s0);
+              await eventStore.appendEvent(run.id, 'action_end', { actionId: subActionId, status: subStatus === 'error' ? 'error' : 'done', outputSummary: subSummary, durationMs: d }, { prisma }).catch(() => {});
+              if (metrics?.recordAction) metrics.recordAction(subKind, d);
+            },
+          };
+        },
       });
       const durationMs = Math.max(0, clock().getTime() - t0);
       const status = result.isError ? 'error' : 'done';
@@ -467,12 +484,29 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
       if (metrics?.recordAction) metrics.recordAction(tool.kind, durationMs);
       if (Number.isFinite(result.linesRead) && metrics?.recordLinesRead) metrics.recordLinesRead(result.linesRead);
 
-      messages.push({ role: 'user', content: `[TOOL_RESULT ${call.name}] ${result.observation || outputSummary || ''}` });
+      return {
+        message: `[TOOL_RESULT ${call.name}] ${result.observation || outputSummary || ''}`,
+        blocking: blockingPattern ? { pattern: blockingPattern, detail: result.observation || outputSummary } : null,
+      };
+    };
 
-      if (blockingPattern) {
-        await eventStore.appendEvent(run.id, 'action_required', toActionRequired(blockingPattern, result.observation || outputSummary), { prisma }).catch(() => {});
-        return { status: 'error', error: blockingPattern.title };
-      }
+    // Claude Code-style parallel delegation: a turn made ONLY of run_subagent
+    // calls runs them concurrently (independent specialists; writes are
+    // per-file via the runner). Mixed turns stay sequential to preserve
+    // read-after-write ordering between tools.
+    const allDelegations = calls.length > 1 && calls.every((c) => c.name === 'run_subagent');
+    const outcomes = [];
+    if (allDelegations) {
+      outcomes.push(...await Promise.all(calls.map((call) => executeCall(call))));
+    } else {
+      for (const call of calls) outcomes.push(await executeCall(call));
+    }
+
+    for (const o of outcomes) messages.push({ role: 'user', content: o.message });
+    const blocked = outcomes.find((o) => o.blocking);
+    if (blocked) {
+      await eventStore.appendEvent(run.id, 'action_required', toActionRequired(blocked.blocking.pattern, blocked.blocking.detail), { prisma }).catch(() => {});
+      return { status: 'error', error: blocked.blocking.pattern.title };
     }
   }
 
