@@ -75,6 +75,31 @@ function formatSchema(schema) {
   return lines.join('\n');
 }
 
+const PLAN_TASK_STATUSES = ['pending', 'in_progress', 'completed'];
+
+/**
+ * Validate + normalise an update_plan `tasks` argument into the plan_updated
+ * payload shape `[{ id, title, status }]`. Returns null when the shape is
+ * unrecoverable (not an array, or an entry without a usable id/status). Tolerant
+ * of a missing/blank title (derived from id) but strict on id + a known status
+ * so a bogus call surfaces as a tool error instead of a malformed event.
+ */
+function normalisePlanTasks(raw) {
+  if (!Array.isArray(raw)) return null;
+  const out = [];
+  for (let i = 0; i < raw.length; i += 1) {
+    const t = raw[i];
+    if (!t || typeof t !== 'object' || Array.isArray(t)) return null;
+    const id = typeof t.id === 'string' && t.id.trim() ? t.id.trim() : '';
+    if (!id) return null;
+    const status = typeof t.status === 'string' ? t.status.trim() : '';
+    if (!PLAN_TASK_STATUSES.includes(status)) return null;
+    const title = typeof t.title === 'string' && t.title.trim() ? t.title.trim() : id;
+    out.push({ id, title, status });
+  }
+  return out;
+}
+
 const TOOLS = {
   run_command: {
     kind: 'terminal',
@@ -375,6 +400,51 @@ const TOOLS = {
     },
   },
 
+  update_plan: {
+    kind: 'terminal',
+    description: 'Actualiza el estado del plan aprobado (como TodoWrite): marca cada tarea del plan como pending, in_progress o completed a medida que avanzas. Llama a esta herramienta para poner una tarea en in_progress ANTES de empezarla y en completed al terminarla, ANTES de pasar a la siguiente. Pasa la lista COMPLETA de tareas del plan (id + title + status) en cada llamada. No toca archivos: solo refleja tu progreso en el checklist de la UI.',
+    parameters: {
+      type: 'object',
+      properties: {
+        tasks: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', description: 'Id de la tarea (el mismo del plan).' },
+              title: { type: 'string', description: 'Título de la tarea.' },
+              status: { type: 'string', enum: ['pending', 'in_progress', 'completed'], description: 'Estado actual de la tarea.' },
+            },
+            required: ['id', 'status'],
+          },
+          description: 'Lista completa de tareas del plan con su estado actual.',
+        },
+      },
+      required: ['tasks'],
+    },
+    commandFor: () => 'update plan',
+    pathFor: () => null,
+    async execute(args) {
+      const tasks = normalisePlanTasks(args?.tasks);
+      if (!tasks) {
+        return { isError: true, summary: 'tasks inválido', observation: 'Error: `tasks` debe ser un array de { id, title?, status } donde status ∈ pending|in_progress|completed.' };
+      }
+      if (!tasks.length) {
+        return { isError: true, summary: 'tasks vacío', observation: 'Error: `tasks` no puede estar vacío. Pasa la lista completa de tareas del plan con su estado.' };
+      }
+      const inProgress = tasks.filter((t) => t.status === 'in_progress').length;
+      const completed = tasks.filter((t) => t.status === 'completed').length;
+      // planTasks is the signal the build loop reads to emit a plan_updated event
+      // instead of a generic action_end (the tool touches no filesystem).
+      return {
+        isError: false,
+        planTasks: tasks,
+        summary: `plan: ${completed}/${tasks.length} completadas${inProgress ? `, ${inProgress} en curso` : ''}`,
+        observation: `OK: plan actualizado (${completed}/${tasks.length} completadas${inProgress ? `, ${inProgress} en curso` : ''}). Sigue con la siguiente tarea pendiente.`,
+      };
+    },
+  },
+
   inspect_database: {
     kind: 'database',
     description: 'Inspecciona el esquema de base de datos del proyecto (Prisma). Devuelve el provider, los modelos/tablas con sus campos y los enums, para rastrear y razonar sobre la base de datos antes de generar o modificar código que la use. No requiere conexión viva.',
@@ -414,4 +484,4 @@ function getTool(name) {
   return TOOLS[name] || null;
 }
 
-module.exports = { TOOLS, toolRegistry, getTool, lineCount, summarise, parsePrismaSchema, formatSchema };
+module.exports = { TOOLS, toolRegistry, getTool, lineCount, summarise, parsePrismaSchema, formatSchema, normalisePlanTasks, PLAN_TASK_STATUSES };

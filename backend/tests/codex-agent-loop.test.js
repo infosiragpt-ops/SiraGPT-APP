@@ -175,6 +175,47 @@ test('apps planning prompt defaults simple apps to Vite index.html', () => {
   assert.match(system, /PROHIBIDO Next\.js/i);
 });
 
+test('update_plan emits a plan_updated event (not an action) and feeds progress back to the model', async () => {
+  const f = fakeDeps({
+    plan: { architecture: 'Vite', pages: ['/'], components: ['Nav'], tasks: [{ id: 't1', title: 'Estructura', status: 'pending' }, { id: 't2', title: 'Estilos', status: 'pending' }] },
+    llmTurn: scriptedLlm([
+      { text: 'Marco la primera tarea en curso.', toolCalls: [
+        { name: 'update_plan', args: { tasks: [{ id: 't1', title: 'Estructura', status: 'in_progress' }, { id: 't2', title: 'Estilos', status: 'pending' }] } },
+      ] },
+      { text: 'Ya la terminé, marco completed.', toolCalls: [
+        { name: 'update_plan', args: { tasks: [{ id: 't1', title: 'Estructura', status: 'completed' }, { id: 't2', title: 'Estilos', status: 'pending' }] } },
+      ] },
+      { text: 'Listo.', toolCalls: [] },
+    ]),
+  });
+  const res = await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt: 'haz algo' }, project: { id: 'p1', name: 'X' }, deps: f.deps });
+  assert.equal(res.status, 'done');
+
+  const planUpdates = f.events.filter((e) => e.type === 'plan_updated');
+  assert.equal(planUpdates.length, 2);
+  assert.equal(planUpdates[0].data.tasks[0].status, 'in_progress');
+  assert.equal(planUpdates[1].data.tasks[0].status, 'completed');
+  // update_plan is plan progress, not a workspace action: it must NOT create
+  // action_start/action_end (or a CodexAction row).
+  assert.equal(f.events.some((e) => e.type === 'action_start' && e.data.command === 'update plan'), false);
+  assert.equal(f.actions.length, 0);
+});
+
+test('the system prompt instructs the agent to keep the plan up to date with update_plan', async () => {
+  let systemPrompt = '';
+  const f = fakeDeps({
+    plan: { architecture: 'Vite', pages: ['/'], components: [], tasks: [{ id: 't1', title: 'X', status: 'pending' }] },
+    llmTurn: async ({ messages }) => {
+      systemPrompt = messages.find((m) => m.role === 'system')?.content || '';
+      return { text: 'Listo.', toolCalls: [] };
+    },
+  });
+  await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt: 'algo' }, project: { id: 'p1', name: 'X' }, deps: f.deps });
+  assert.match(systemPrompt, /update_plan/i);
+  assert.match(systemPrompt, /in_progress/);
+  assert.match(systemPrompt, /completed/);
+});
+
 test('a tool error does NOT abort the loop; the error is fed back to the model', async () => {
   const f = fakeDeps({
     runner: {

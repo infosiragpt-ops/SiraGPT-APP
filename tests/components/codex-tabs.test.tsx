@@ -37,6 +37,30 @@ describe('ChecklistTab', () => {
     render(<ChecklistTab state={reduceEvents([])} runStatus={null} />)
     expect(screen.getByText(/Aún no hay un plan/)).toBeTruthy()
   })
+
+  it('renders REAL per-task status from update_plan (plan_updated) while the run is active', () => {
+    const state = reduceEvents([
+      { seq: 1, type: 'plan_proposed', data: { architecture: 'x', pages: [], components: [], tasks: [{ id: 't1', title: 'Crear hero' }, { id: 't2', title: 'Agregar nav' }] } },
+      { seq: 2, type: 'plan_updated', data: { tasks: [{ id: 't1', title: 'Crear hero', status: 'completed' }, { id: 't2', title: 'Agregar nav', status: 'in_progress' }] } },
+    ])
+    // Run is still running: with real progress the first task is DONE (line-through)
+    // even though the coarse fallback would have shown only task 0 in progress.
+    render(<ChecklistTab state={state} runStatus="running" />)
+    const done = screen.getByText('Crear hero')
+    expect(done.className).toMatch(/line-through/)
+    const inProgress = screen.getByText('Agregar nav')
+    expect(inProgress.className).not.toMatch(/line-through/)
+  })
+
+  it('degrades to the coarse fallback when no plan_updated has arrived', () => {
+    const state = reduceEvents([
+      { seq: 1, type: 'plan_proposed', data: { architecture: 'x', pages: [], components: [], tasks: [{ id: 't1', title: 'Crear hero' }, { id: 't2', title: 'Agregar nav' }] } },
+    ])
+    // No plan_updated → run done marks every task done (legacy behaviour).
+    render(<ChecklistTab state={state} runStatus="done" />)
+    expect(screen.getByText('Crear hero').className).toMatch(/line-through/)
+    expect(screen.getByText('Agregar nav').className).toMatch(/line-through/)
+  })
 })
 
 describe('WebTab', () => {
