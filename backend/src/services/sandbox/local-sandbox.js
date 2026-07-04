@@ -21,6 +21,7 @@
  */
 
 const { spawn } = require('child_process');
+const { performance } = require('perf_hooks');
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const HARD_MAX_TIMEOUT_MS = 5 * 60_000;
@@ -193,7 +194,8 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
     };
   }
 
-  const startedAt = Date.now();
+  const startedAt = performance.now();
+  const elapsedMs = () => Math.max(0, Math.round(performance.now() - startedAt));
   let child;
   try {
     child = spawnImpl(bin, argv, {
@@ -269,7 +271,7 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
         ok: false,
         code: 'sandbox_runtime_error',
         message: err && err.message,
-        durationMs: Date.now() - startedAt,
+        durationMs: elapsedMs(),
       });
     });
 
@@ -279,11 +281,12 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
       if (externalAbortHandler && opts.signal) {
         try { opts.signal.removeEventListener('abort', externalAbortHandler); } catch { /* ignore */ }
       }
-      const durationMs = Date.now() - startedAt;
+      let durationMs = elapsedMs();
       const stdout = stdoutBuf.toString('utf8');
       const stderr = stderrBuf.toString('utf8');
 
       if (killedReason === 'timeout') {
+        durationMs = Math.max(durationMs, timeoutMs);
         resolve({
           ok: false,
           code: 'sandbox_timeout',
