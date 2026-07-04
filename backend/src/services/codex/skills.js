@@ -50,6 +50,7 @@ const BUILTIN_SKILLS = [
       '',
       '## Motion (framer-motion YA está en el starter — úsalo)',
       '- Entrada por sección con fade+rise (once: true). Hover en tarjetas: translateY(-2px) + sombra. NADA de animaciones largas o loops que distraigan.',
+      '- TIPADO de componentes animados: NUNCA extiendas React.ButtonHTMLAttributes y hagas spread en motion.button (choca onAnimationStart/onDrag → TS2322). Usa `HTMLMotionProps<"button">` de framer-motion como tipo de props, o define solo las props que necesitas (children, onClick, className).',
       '',
       '## Calidad',
       '- Responsive real: probar mentalmente 360px, 768px, 1280px. Grid → 1 columna en móvil.',
@@ -148,6 +149,7 @@ const BUILTIN_SKILLS = [
       '2. **Clasifica**: (a) import/ruta mal → corrige el path exacto; (b) dependencia no declarada → añádela a package.json y reinstala; (c) error de tipos → arregla el TIPO, no le pongas `any`; (d) JSX/sintaxis → lee el archivo con read_file y corrige el fragmento exacto.',
       '3. **Un fix por ciclo**: cambia lo mínimo, re-verifica (type_check / dev_server_check), repite. Nunca reescribas el archivo entero por un error de una línea.',
       '4. **Si el mismo fix falla 2 veces**, retrocede: relee el archivo completo y cuestiona el diagnóstico — el error suele estar aguas arriba (un tipo exportado mal, un import circular).',
+      '5. **Pitfalls conocidos**: TS2322 en motion.button/motion.div con props spread → el tipo debe ser HTMLMotionProps<"button"> (framer-motion), no React.ButtonHTMLAttributes; "module not found ./X" tras crear X.tsx → revisa mayúsculas exactas del archivo.',
     ].join('\n'),
   },
 ];
