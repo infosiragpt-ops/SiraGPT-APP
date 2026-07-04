@@ -4139,6 +4139,19 @@ router.post(
           history: __conversationHistoryForUnderstanding,
           currentPrompt: prompt,
         });
+        // Typo repair (router-input only, deterministic ~0ms): fast/mobile
+        // typing ("docuemtno", "resumne") degraded triage/intent quality. The
+        // big LLM keeps seeing the literal prompt — same contract as PR-4.
+        try {
+          if (String(process.env.SIRAGPT_TYPO_REPAIR_ENABLED || 'true').toLowerCase() !== 'false') {
+            const { repairTypos } = require('../services/typo-repairer');
+            const __typo = repairTypos(__routerPrompt);
+            if (__typo.source === 'repaired') {
+              __routerPrompt = __typo.repaired;
+              console.log(`[typo-repair] ${__typo.changes.map((c) => `${c.from}→${c.to}`).join(', ')}`);
+            }
+          }
+        } catch (_typoErr) { /* fallback: prompt literal */ }
         try {
           if (String(process.env.SIRAGPT_SHORT_QUERY_EXPAND_ENABLED || 'true').toLowerCase() !== 'false') {
             const __expansion = expandShortQuery({
