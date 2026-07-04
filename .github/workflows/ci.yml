@@ -260,7 +260,7 @@ jobs:
             prisma-${{ runner.os }}-
 
       - name: Prisma · generate client
-        run: npx prisma generate
+        run: npx prisma generate --schema prisma/schema.prisma
 
       # Using `db push` (not `migrate deploy`) because the repo has no
       # migration history yet — push materializes the schema directly
@@ -270,11 +270,11 @@ jobs:
       # so the vector extension is created explicitly first.
       - name: Prisma · enable pgvector on service DB
         run: |
-          npx prisma db execute --stdin <<'SQL'
+          npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
           CREATE EXTENSION IF NOT EXISTS vector;
           SQL
       - name: Prisma · push schema to Postgres service
-        run: npx prisma db push --accept-data-loss --skip-generate
+        run: npx prisma db push --schema prisma/schema.prisma --accept-data-loss --skip-generate
 
       # Shard execution — round-robin slice of the full backend suite.
       # Coverage is collected on shard 1 only as an lcov artifact. Global
