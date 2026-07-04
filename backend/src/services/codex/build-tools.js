@@ -450,6 +450,45 @@ const TOOLS = {
     },
   },
 
+  browser_check: {
+    kind: 'web',
+    description: 'Abre la app en un navegador headless y reporta lo que VE EL USUARIO: si #root renderizó contenido, excepciones no capturadas, console.error, requests fallidos y el overlay de error de Vite. Úsalo tras dev_server_check cuando quieras confirmar que la app FUNCIONA de verdad (una página en blanco por excepción de runtime no aparece en los logs del servidor).',
+    parameters: { type: 'object', properties: { waitMs: { type: 'number', description: 'Espera máxima a que el dev server esté listo (default 20000).' } }, required: [] },
+    commandFor: () => 'browser check',
+    pathFor: () => null,
+    async execute(args, ctx) {
+      const sleep = (ms) => new Promise((r) => { setTimeout(r, ms); });
+      // eslint-disable-next-line global-require
+      const bc = require('./browser-check');
+      try {
+        // Ensure the dev server is up for THIS project (same contract as
+        // dev_server_check) before pointing the browser at it.
+        let status = await ctx.runner.devStatus();
+        if (!status?.running || (status.project && status.project !== ctx.project)) {
+          await ctx.runner.startDev(ctx.project);
+        }
+        const deadline = Date.now() + Math.min(Math.max(Number(args?.waitMs) || 20000, 2000), 60000);
+        while (Date.now() < deadline) {
+          status = await ctx.runner.devStatus();
+          if (status?.ready || status?.error) break;
+          await sleep(1500);
+        }
+        if (!status?.ready) {
+          return { isError: true, summary: 'dev server no listo para el navegador', observation: `El dev server no llegó a estar listo${status?.error ? ` (${status.error})` : ''} — usa dev_server_check para el detalle de logs.` };
+        }
+        const url = bc.devUrlFor(ctx.env || process.env, status.port || 5173);
+        const result = await bc.checkApp({ url, env: ctx.env || process.env });
+        const report = bc.formatReport(result, url);
+        if (result.unavailable) {
+          return { isError: false, summary: 'navegador no disponible (informacional)', observation: report };
+        }
+        return { isError: !result.ok, summary: result.ok ? 'la app renderiza sin errores de runtime' : `runtime con problemas (${result.errors.length} errores${result.overlay ? ' + overlay' : ''}${result.rendered ? '' : ', sin render'})`, observation: report };
+      } catch (err) {
+        return { isError: false, summary: `browser_check no disponible: ${err.message}`, observation: `No pude verificar en navegador (${err.message}). Continúa con dev_server_check/type_check.` };
+      }
+    },
+  },
+
   repo_map: {
     kind: 'file_read',
     description: 'Mapa RANKEADO del repositorio (estilo Aider): por archivo, sus símbolos exportados y cuántos archivos lo importan (←N), con los más centrales arriba. Úsalo al INICIO de un turno sobre un proyecto existente para orientarte sin leer todo; luego read_file solo lo que vayas a editar.',

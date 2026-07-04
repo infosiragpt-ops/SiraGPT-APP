@@ -88,6 +88,9 @@ ENV PORT=5000
 # binary and skip the browser download.
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium-browser
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+# browser_check (codex) drives the same system chromium via puppeteer.
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+ENV PUPPETEER_SKIP_DOWNLOAD=1
 
 EXPOSE 5000
 
