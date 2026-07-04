@@ -2676,7 +2676,7 @@ const ActiveToolsDisplay = ({
       ))}
       {isWebSearchActive && (
         <div
-          className="group/web-search-tool flex h-7 w-7 items-center justify-center overflow-hidden rounded-full border border-green-200 bg-green-100 px-0 text-xs text-green-700 transition-[width,padding,box-shadow] duration-300 ease-out hover:w-[120px] hover:justify-start hover:px-2 hover:shadow-sm focus-within:w-[120px] focus-within:justify-start focus-within:px-2 focus-within:shadow-sm dark:border-green-800 dark:bg-green-900/20 dark:text-green-300"
+          className="group/web-search-tool flex h-8 w-8 items-center justify-center overflow-hidden rounded-full border border-green-200 bg-green-100 px-0 text-xs text-green-700 transition-[width,padding,box-shadow] duration-300 ease-out hover:w-[120px] hover:justify-start hover:px-2 hover:shadow-sm focus-within:w-[120px] focus-within:justify-start focus-within:px-2 focus-within:shadow-sm dark:border-green-800 dark:bg-green-900/20 dark:text-green-300"
           aria-label="Búsqueda web activa. Pasa el cursor para cerrar."
         >
           <Globe className="h-3.5 w-3.5 shrink-0 motion-safe:animate-spin" />
@@ -4952,6 +4952,10 @@ function ChatInterfaceContent() {
 
   const [isWebSearching, setIsWebSearching] = React.useState(false)
   const [isWebSearchActive, setIsWebSearchActive] = React.useState(false);
+  const isWebSearchActiveRef = React.useRef(isWebSearchActive);
+  React.useEffect(() => {
+    isWebSearchActiveRef.current = isWebSearchActive;
+  }, [isWebSearchActive]);
   const [isGmailActive, setIsGmailActive] = React.useState(false);
   const [isProcessingGmail, setIsProcessingGmail] = React.useState(false);
   const [isGoogleCalendarActive, setIsGoogleCalendarActive] = React.useState(false);
@@ -5023,8 +5027,8 @@ function ChatInterfaceContent() {
    * Closes all tools and connectors - used when activating a new tool/connector
    * This ensures only one tool/connector is active at a time
    */
-  const closeAllToolsAndConnectors = React.useCallback(() => {
-    setIsWebSearchActive(false);
+  const closeAllToolsAndConnectors = React.useCallback((options: { preserveWebSearch?: boolean } = {}) => {
+    if (!options.preserveWebSearch) setIsWebSearchActive(false);
     setIsImageGenerationActive(false);
     setIsVoiceGenerationActive(false);
     setIsMusicGenerationActive(false);
@@ -6447,7 +6451,7 @@ But first, you need to connect your Spotify account securely using the button be
         setIsMusicGenerationActive(true);
         setChatType('text');
       } else {
-        closeAllToolsAndConnectors();
+        closeAllToolsAndConnectors({ preserveWebSearch: isWebSearchActiveRef.current });
         setChatType('text'); // Always default to text when switching chats
       }
 
@@ -6476,7 +6480,7 @@ But first, you need to connect your Spotify account securely using the button be
       setIsMusicGenerationActive(true);
       setChatType('text');
     } else {
-      closeAllToolsAndConnectors();
+      closeAllToolsAndConnectors({ preserveWebSearch: isWebSearchActiveRef.current });
     }
 
     // Use a small delay to ensure previous connector UI is fully closed

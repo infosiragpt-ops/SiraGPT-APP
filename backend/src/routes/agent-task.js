@@ -851,6 +851,9 @@ router.post('/task/:taskId/retry', authenticateToken, async (req, res) => {
       retryOf: snapshot.taskId,
       documentPolicy: snapshot.documentPolicy || null,
       openclawRuntimeProfile: snapshot.openclawRuntimeProfile || null,
+      // Real mid-run resume: the loop re-enters from the last completed
+      // step's saved trace instead of restarting the task from step 0.
+      resumeCheckpoint: snapshot.runnerCheckpoint || null,
     }, { priority: 1, jobId: `${snapshot.taskId}-retry-${Date.now()}` });
 
     let streamState = snapshot.streamState || initialAgentState();
@@ -942,6 +945,8 @@ router.post(
     });
     if (!scope.ok) return res.status(scope.status).json(scope.body);
     req.body.chatId = scope.chatId;
+
+    if (!checkUserInflightCap(req, res)) return undefined;
 
     const built = workspaceWorkflowOrchestrator.buildWorkspaceWorkflowJob({
       goal: req.body.goal,
@@ -1929,8 +1934,40 @@ function resolveAgentTaskBudget({ maxStepsRaw, maxRuntimeMsRaw, documentPolicy =
   };
 }
 
+// ─── Per-user in-flight concurrency cap ────────────────────────────────
+// A single user should not be able to monopolise the agent worker pool
+// (each queued task holds an LLM loop + tools for minutes). Above the cap
+// the request is rejected with 429 + the active task list so the client
+// can offer "espera o cancela una tarea". Env SIRAGPT_MAX_INFLIGHT_TASKS
+// (default 3, ≤0 disables). Best-effort: a store hiccup never blocks.
+function checkUserInflightCap(req, res) {
+  const cap = Number.parseInt(process.env.SIRAGPT_MAX_INFLIGHT_TASKS || '3', 10);
+  if (!Number.isFinite(cap) || cap <= 0) return true;
+  try {
+    const active = taskStore.getRunningTasksForUser(req.user?.id, { limit: cap + 1 });
+    if (Array.isArray(active) && active.length >= cap) {
+      metrics.counter('agent_task_inflight_cap_hits_total');
+      res.status(429).json({
+        error: `Ya tienes ${active.length} tareas de agente en curso (máximo ${cap}). Espera a que termine una o cancélala antes de lanzar otra.`,
+        code: 'inflight_cap',
+        cap,
+        activeTasks: active.slice(0, cap).map((t) => ({
+          taskId: t.taskId,
+          status: t.status,
+          displayGoal: String(t.displayGoal || '').slice(0, 120),
+        })),
+      });
+      return false;
+    }
+  } catch (capErr) {
+    console.warn('[agent-task] inflight cap check failed (allowing):', capErr?.message || capErr);
+  }
+  return true;
+}
+
 async function handleQueuedTaskRequest(req, res) {
   const rawGoal = String(req.body.goal || '');
+  if (!checkUserInflightCap(req, res)) return undefined;
   try {
     requireRedisUrl();
   } catch (err) {
@@ -3249,3 +3286,5 @@ module.exports.looksLikeDocumentFollowupQuestion = looksLikeDocumentFollowupQues
 module.exports.isTranscriptionRequest = isTranscriptionRequest;
 // Exposed for unit tests (interactive vs heavy-document budget gating).
 module.exports.resolveAgentTaskBudget = resolveAgentTaskBudget;
+// Exposed for unit tests (per-user in-flight concurrency cap).
+module.exports.checkUserInflightCap = checkUserInflightCap;

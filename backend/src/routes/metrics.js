@@ -76,6 +76,13 @@ function formatExposition() {
     const cognitive = require('../services/cognitive-metrics').toPrometheusText();
     if (cognitive && cognitive.trim()) lines.push(cognitive.trimEnd());
   } catch (_) { /* metrics must never break the endpoint */ }
+  // FlashGPT/Free-IA fallback counters — previously only on the standalone
+  // /api/free-ia/metrics.prom endpoint, so a scraper pointed at /metrics
+  // never saw silent quota fallbacks happening.
+  try {
+    const freeIa = require('../services/free-ia-metrics').toPrometheusText();
+    if (freeIa && freeIa.trim()) lines.push(freeIa.trimEnd());
+  } catch (_) { /* metrics must never break the endpoint */ }
   return lines.join('\n') + '\n';
 }
 

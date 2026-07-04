@@ -297,3 +297,24 @@ test('clear: removes user data', async () => {
   await L.clearUserLexicon('u1');
   assert.equal(L._internal.getMeta('u1', 'a').hits, 0);
 });
+
+test('recordTerm merges near-duplicate terms instead of re-ingesting', async () => {
+  const lex = require('../src/services/personal-lexicon');
+  const userId = 'dedup-test-user';
+  const rag = require('../src/services/rag-service');
+  let ingests = 0;
+  const origIngest = rag.ingest;
+  rag.ingest = async () => { ingests += 1; return { ok: true }; };
+  try {
+    await lex.recordTerm({ userId, term: 'matriz de riesgos operativos', definition: 'def A' });
+    // identical (accent/case-insensitive) → no new ingest
+    await lex.recordTerm({ userId, term: 'Matriz de Riesgos Operativos', definition: 'def B' });
+    // near-duplicate (Jaccard 3/4 = 0.75 → NOT merged, it's a distinct concept)
+    await lex.recordTerm({ userId, term: 'matriz de riesgos financieros', definition: 'def C' });
+    assert.equal(ingests, 2, `expected 2 ingests (1 dup merged), got ${ingests}`);
+    const meta = lex.getMeta(userId, 'matriz de riesgos operativos');
+    assert.ok(meta.hits >= 2, `merged duplicate should bump hits (got ${meta.hits})`);
+  } finally {
+    rag.ingest = origIngest;
+  }
+});

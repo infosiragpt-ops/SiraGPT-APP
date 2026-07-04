@@ -29,6 +29,43 @@
 const RESULT_PERSIST_MAX_CHARS = Math.max(1_000, Number(process.env.SIRAGPT_AGENT_RESULT_MAX_CHARS) || 30_000);
 const RESULT_PREVIEW_MAX_CHARS = 2_000;
 const ARGS_PERSIST_MAX_CHARS = 8_000;
+// Global default per-tool timeout when a tool declares no timeoutMs. A hung
+// tool must never consume the whole run budget. Env-tunable; 0/negative
+// disables (unbounded), matching the previous behaviour for opt-out.
+const DEFAULT_TOOL_TIMEOUT_MS = (() => {
+  const raw = Number(process.env.SIRAGPT_TOOL_TIMEOUT_MS);
+  if (Number.isFinite(raw)) return raw > 0 ? raw : Infinity;
+  return 120_000; // 2 min — generous for web_fetch / sandbox, still bounded
+})();
+// Hard cap on the size of a single tool RESULT that flows back into the model
+// loop. A tool returning a huge string (a 50MB fetch, a runaway sandbox dump)
+// would spike memory and blow the token budget; we truncate only oversized
+// STRING payloads (and string fields), never restructure objects the loop
+// needs. Marker is explicit — never a silent cut.
+const TOOL_RESULT_MAX_CHARS = Math.max(4_000, Number(process.env.SIRAGPT_TOOL_RESULT_MAX_CHARS) || 200_000);
+
+function capString(str) {
+  if (typeof str !== 'string' || str.length <= TOOL_RESULT_MAX_CHARS) return str;
+  const marker = `…[truncado ${TOOL_RESULT_MAX_CHARS} de ${str.length} chars]`;
+  return str.slice(0, Math.max(0, TOOL_RESULT_MAX_CHARS - marker.length)) + marker;
+}
+
+// Cap oversized string payloads before the result re-enters the loop. Objects
+// keep their shape; only their top-level string fields are clamped.
+function capToolResult(result) {
+  if (typeof result === 'string') return capString(result);
+  if (result && typeof result === 'object' && !Array.isArray(result)) {
+    let mutated = null;
+    for (const [k, v] of Object.entries(result)) {
+      if (typeof v === 'string' && v.length > TOOL_RESULT_MAX_CHARS) {
+        if (!mutated) mutated = { ...result };
+        mutated[k] = capString(v);
+      }
+    }
+    return mutated || result;
+  }
+  return result;
+}
 
 function safeStringify(value) {
   try {
@@ -375,9 +412,33 @@ function createAgentEventStream(opts = {}) {
           emit('tool_executing', { blockIndex: call.blockIndex, id: call.id, name: tool.name });
           call.state = 'executing';
           try {
-            const result = await inner(args, ctx);
-            finishCall(call, { result, isError: false });
-            return result;
+            // Per-tool timeout: a hung tool must not consume the whole run
+            // budget. The bound comes from the tool's declared timeoutMs (or a
+            // global default), so a stuck web_fetch / sandbox call fails cleanly
+            // with a model-readable observation instead of stalling the loop.
+            const toolTimeoutMs = Number(tool.timeoutMs) > 0
+              ? Number(tool.timeoutMs)
+              : DEFAULT_TOOL_TIMEOUT_MS;
+            let result;
+            if (toolTimeoutMs > 0 && toolTimeoutMs < Infinity) {
+              let timer;
+              const timeout = new Promise((_, reject) => {
+                timer = setTimeout(() => reject(new Error(
+                  `tool_timeout: "${tool.name}" no respondió en ${Math.round(toolTimeoutMs / 1000)}s. No reintentes la misma llamada; adapta el plan o informa al usuario.`,
+                )), toolTimeoutMs);
+                if (timer && typeof timer.unref === 'function') timer.unref();
+              });
+              try {
+                result = await Promise.race([Promise.resolve(inner(args, ctx)), timeout]);
+              } finally {
+                clearTimeout(timer);
+              }
+            } else {
+              result = await inner(args, ctx);
+            }
+            const capped = capToolResult(result);
+            finishCall(call, { result: capped, isError: false });
+            return capped;
           } catch (err) {
             finishCall(call, { result: { error: err && err.message ? err.message : String(err) }, isError: true });
             throw err;

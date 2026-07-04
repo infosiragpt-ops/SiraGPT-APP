@@ -96,12 +96,45 @@ function buildDoc(term, definition) {
  * skip; si tiene una definición distinta, ingestamos como entrada nueva
  * (el recall ranking decidirá cuál pesa más).
  */
+// Near-duplicate guard (brain-infra roadmap #2): recording the same or a
+// near-identical term used to blind-ingest a new RAG doc every time, bloating
+// the collection and splitting hit counts. Identical hash → just bump meta;
+// token-Jaccard > 0.8 vs an existing term → treat as the same concept.
+function findNearDuplicate(userId, term) {
+  const inner = termMeta.get(userId);
+  if (!inner) return null;
+  const hash = termHash(term);
+  if (inner.has(hash)) return hash;
+  const tokens = new Set(termHash(term).split(/\s+/).filter(Boolean));
+  if (!tokens.size) return null;
+  for (const existingHash of inner.keys()) {
+    const existingTokens = new Set(existingHash.split(/\s+/).filter(Boolean));
+    if (!existingTokens.size) continue;
+    let intersection = 0;
+    for (const tk of tokens) if (existingTokens.has(tk)) intersection += 1;
+    const union = tokens.size + existingTokens.size - intersection;
+    if (union > 0 && intersection / union > 0.8) return existingHash;
+  }
+  return null;
+}
+
 async function recordTerm({ userId, term, definition }) {
   if (LEXICON_DISABLED || !userId) return false;
   const t = clamp(term, MAX_TERM_LEN);
   const d = clamp(definition, MAX_DEFINITION_LEN);
   if (!t || !d) return false;
   try {
+    const duplicateOf = findNearDuplicate(userId, t);
+    if (duplicateOf) {
+      // Same concept already recorded: strengthen it instead of re-ingesting.
+      const inner = termMeta.get(userId);
+      const meta = inner && inner.get(duplicateOf);
+      if (meta) {
+        meta.hits += 1;
+        meta.lastSeenAt = Date.now();
+      }
+      return true;
+    }
     const docs = [buildDoc(t, d)];
     await rag.ingest(userId, collectionFor(userId), docs, { size: 1000, overlap: 0 });
     bumpMeta(userId, t);
@@ -288,6 +321,7 @@ module.exports = {
   recordTerm,
   recordTermsBatch,
   lookupTerms,
+  getMeta,
   decayUnused,
   clearUserLexicon,
   lexiconStats,

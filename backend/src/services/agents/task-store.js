@@ -95,6 +95,11 @@ function sanitizeTaskRecord(record = {}) {
     stats: record.stats || null,
     artifacts: record.artifacts || [],
     checkpoints: trimEvents(record.checkpoints, 200),
+    // Opaque react-agent loop checkpoint (messages trace + breaker state)
+    // written at every step boundary; lets an interrupted run resume from
+    // its last completed step instead of restarting from 0. Whitelisted
+    // here or every snapshot write would silently drop it.
+    runnerCheckpoint: record.runnerCheckpoint || null,
   };
 }
 
@@ -160,6 +165,34 @@ function updateTaskSnapshot(taskId, userId, patch = {}) {
   return next;
 }
 
+// Max serialized size of a runner checkpoint. The react-agent trace is
+// already bounded by compaction (~60k chars) so a normal checkpoint is far
+// below this; the cap only guards against pathological observations.
+const RUNNER_CHECKPOINT_MAX_CHARS = (() => {
+  const v = Number(process.env.SIRAGPT_RUNNER_CHECKPOINT_MAX_CHARS);
+  return Number.isFinite(v) && v > 0 ? v : 700_000;
+})();
+
+/**
+ * Persist the react-agent loop checkpoint for a running task. Read-modify-
+ * write of the snapshot's `runnerCheckpoint` field; best-effort by contract
+ * (a failed checkpoint write must never break the live run — callers wrap
+ * in try/catch). Oversized checkpoints are dropped, keeping the previous one.
+ */
+function saveRunnerCheckpoint(taskId, userId, checkpoint) {
+  if (!taskId || !userId || !checkpoint || typeof checkpoint !== 'object') return null;
+  try {
+    const serialized = JSON.stringify(checkpoint);
+    if (serialized.length > RUNNER_CHECKPOINT_MAX_CHARS) {
+      console.warn(`[task-store] runner checkpoint too large (${serialized.length} chars) for ${taskId} — keeping previous`);
+      return null;
+    }
+  } catch {
+    return null;
+  }
+  return updateTaskSnapshot(taskId, userId, { runnerCheckpoint: checkpoint });
+}
+
 function appendTaskEvent(snapshotLike, event, streamState, options = {}) {
   if (!snapshotLike?.taskId || !snapshotLike?.userId || !event) return null;
   const existing = getTaskSnapshotForUser(snapshotLike.taskId, snapshotLike.userId)
@@ -221,6 +254,9 @@ function markTaskStatus(taskLike, status, patch = {}) {
   if (!taskLike?.taskId || !taskLike?.userId) return null;
   const stamp = nowIso();
   const statusPatch = { status, updatedAt: stamp, ...patch };
+  // A completed run's loop checkpoint is dead weight (and a spurious-resume
+  // hazard); error/cancelled KEEP theirs so /retry can resume mid-run.
+  if (status === 'completed' && statusPatch.runnerCheckpoint === undefined) statusPatch.runnerCheckpoint = null;
   if (status === 'completed') statusPatch.completedAt = patch.completedAt || stamp;
   if (status === 'cancelled') statusPatch.cancelledAt = patch.cancelledAt || stamp;
   if (status === 'error') statusPatch.failedAt = patch.failedAt || stamp;
@@ -1038,6 +1074,7 @@ module.exports = {
   INDEX_FILE,
   MAX_SNAPSHOT_BYTES,
   appendTaskEvent,
+  saveRunnerCheckpoint,
   cleanupOrphanedArtifacts,
   collectReferencedArtifactIds,
   compactAllTerminalTasks,

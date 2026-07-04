@@ -68,3 +68,10 @@ test('formatExposition: ends with a newline (Prometheus parser requirement)', ()
   const text = formatExposition();
   assert.ok(text.endsWith('\n'));
 });
+
+test('formatExposition: includes FlashGPT/free-ia fallback counters', () => {
+  const { formatExposition } = freshRequire();
+  const text = formatExposition();
+  assert.ok(/sira_free_ia_fallback_total/.test(text),
+    'free-ia counters must be scrapeable from the main /metrics endpoint');
+});

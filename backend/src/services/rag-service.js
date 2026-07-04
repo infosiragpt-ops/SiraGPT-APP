@@ -167,8 +167,7 @@ async function _embedRaw(texts) {
   return out;
 }
 
-async function embed(texts) {
-  if (!Array.isArray(texts) || texts.length === 0) return [];
+async function _embedUncached(texts) {
   if (process.env.SIRA_RELIABILITY_WIRINGS === '1' || process.env.SIRA_RELIABILITY_WIRINGS === 'true') {
     try {
       const { getSingleFlight } = require('../cache/single-flight');
@@ -180,6 +179,59 @@ async function embed(texts) {
     }
   }
   return _embedRaw(texts);
+}
+
+// ── Embedding result cache ───────────────────────────────────────────────
+// Embeddings are deterministic per (model, text), so re-embedding the same
+// query or chunk across turns is pure API waste — RAG queries repeat (the
+// same question re-asked, memory recall probes, recurring chunks on
+// re-ingest). Content-hash LRU; a 1536-dim Float32Array is ~6 KB so the
+// default 2000 entries cost ~12 MB. Map insertion order + delete/re-set on
+// hit gives LRU without a dependency. Kill switch: SIRA_EMBED_CACHE_DISABLED.
+const EMBED_CACHE_MAX = positiveIntEnv(process.env.SIRA_EMBED_CACHE_MAX, 2000);
+const _embedCache = new Map(); // sha256(model\0text) → Float32Array
+const _embedCacheStats = { hits: 0, misses: 0 };
+
+function _embedCacheKey(text) {
+  return require('node:crypto').createHash('sha256')
+    .update(EMBED_MODEL).update('\0').update(String(text)).digest('hex');
+}
+
+async function embed(texts) {
+  if (!Array.isArray(texts) || texts.length === 0) return [];
+  if (process.env.SIRA_EMBED_CACHE_DISABLED === '1') return _embedUncached(texts);
+  const keys = texts.map(_embedCacheKey);
+  const out = new Array(texts.length);
+  const missIdx = [];
+  for (let i = 0; i < keys.length; i += 1) {
+    const hit = _embedCache.get(keys[i]);
+    if (hit) {
+      _embedCache.delete(keys[i]);
+      _embedCache.set(keys[i], hit); // refresh LRU position
+      out[i] = hit;
+      _embedCacheStats.hits += 1;
+    } else {
+      missIdx.push(i);
+      _embedCacheStats.misses += 1;
+    }
+  }
+  if (missIdx.length > 0) {
+    const vecs = await _embedUncached(missIdx.map((i) => texts[i]));
+    for (let j = 0; j < missIdx.length; j += 1) {
+      const i = missIdx[j];
+      out[i] = vecs[j];
+      if (vecs[j]) {
+        while (_embedCache.size >= EMBED_CACHE_MAX) {
+          _embedCache.delete(_embedCache.keys().next().value);
+        }
+        _embedCache.set(keys[i], vecs[j]);
+      }
+    }
+  }
+  // Pre-cache contract: a partial upstream response yielded a SHORT array
+  // (ingest's length guard depends on it to reject silent undefined
+  // embeddings). Compact any unfilled positions so that guard still fires.
+  return out.some((v) => v === undefined) ? out.filter((v) => v !== undefined) : out;
 }
 
 /**
@@ -1140,6 +1192,8 @@ module.exports = {
   positiveIntEnv, // exported for tests (env-cap parsing robustness)
   getOpenAI,     // exported so callers can pass the shared client to rerank
   _embedClientOptions, // exported for tests
+  _embedCache,        // exported for tests (embedding LRU)
+  _embedCacheStats,   // exported for tests
   // exported for tests / advanced callers
   fuseByRRF,
   expandWithGraph,
