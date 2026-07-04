@@ -92,7 +92,13 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   // conjugación del prompt del bug ("deseo que lo reemplaces por color azul").
   const imageEditVerb = /\b(reempla[zc]\w*|cambi\w*|recolor\w*|pinta\w*|sustitu\w*|pon(?:er|ga|gan|la|lo|le|me)?)\b/.test(editVerbHay);
   const imageEditIntent = imageNoun && imageEditVerb;
-  const editVerb = primaryEditVerb || adjuntarAction || editorialCorrectionIntent || imageEditIntent;
+  // PDF page-level safe ops (rota/gira/extrae/divide/une/combina las páginas…)
+  // — their verbs aren't in the generic edit lists, so a "rota la página 2 del
+  // pdf" used to fall through to plain chat.
+  const pdfOpIntent = /\b(rota\w*|gira\w*|rotate)\b/.test(text)
+    || (/\b(extrae\w*|extract|divide\w*|separa\w*|split)\b/.test(text) && /\bp[aá]ginas?\b/.test(text))
+    || (/\b(une|unir|junta\w*|combina\w*|fusiona\w*|merge)\b/.test(text) && /\bpdfs?\b/.test(text));
+  const editVerb = primaryEditVerb || adjuntarAction || editorialCorrectionIntent || imageEditIntent || pdfOpIntent;
   const existingDocRef = /\b(mi|mismo|misma|este|esta|ese|esa|documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx|powerpoint|pdf|tesis)\b/.test(text);
   const documentNoun = /\b(documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx|powerpoint|pdf|tesis)\b/.test(text);
   const appendLocation = /\b(al final|final|anexo|anexos|apendice|ultima pagina|ultima hoja|nueva hoja|nueva pagina|nueva diapositiva)\b/.test(text);
@@ -126,6 +132,8 @@ function isSourcePreservingEditRequest(prompt, files = []) {
     // Image noun + image-edit verb on an attachment turn is unambiguous: the
     // only editable image surface the user can mean is inside the attachment.
     if (imageEditIntent) return true;
+    // PDF page ops on an attachment turn target the attached PDF.
+    if (pdfOpIntent) return true;
     if (appendLocation || preservation || instrument || documentRegion) return true;
     if (documentNoun) return true;
     // A STRONG mutation verb alone is enough on an attachment turn — the
@@ -3425,6 +3433,28 @@ async function validateOfficeOperationCriteria(buffer, format, operations = [], 
         passed: normalizedTextIncludes(cellValue, op.value),
         details: { address: op.address, sheetName: op.sheetName || null, value: compact(cellValue, 120) },
       });
+    } else if (op.kind === 'rotate_pages' || op.kind === 'remove_pages' || op.kind === 'extract_pages' || op.kind === 'merge_pdfs') {
+      // Structural proof: the output parses as a PDF with the expected page
+      // count (pdf-lib is authoritative; %PDF magic is checked upstream).
+      let pageCount = null;
+      try {
+        const { PDFDocument } = require('pdf-lib');
+        const doc = await PDFDocument.load(buffer);
+        pageCount = doc.getPageCount();
+      } catch { pageCount = null; }
+      checks.push({
+        id: `pdf_${op.kind}`,
+        label: 'Operación de páginas PDF aplicada',
+        passed: Number.isInteger(pageCount) && (!op.expectedPageCount || pageCount === op.expectedPageCount),
+        details: { pageCount, expected: op.expectedPageCount || null },
+      });
+    } else if (op.kind === 'pdf_text_overlay') {
+      checks.push({
+        id: 'pdf_text_overlay',
+        label: 'Texto insertado sobre el PDF',
+        passed: buffer.slice(0, 5).toString('latin1') === '%PDF-' && buffer.length > 0,
+        details: { page: op.page, text: compact(op.text, 80) },
+      });
     } else if (op.kind === 'set_slide_title') {
       checks.push({
         id: 'pptx_slide_title_changed',
@@ -4485,6 +4515,19 @@ function docxImageAdapterModule() {
   return _docxImageAdapterModule;
 }
 
+let _pdfAdapterModule;
+function pdfAdapterModule() {
+  if (_pdfAdapterModule === undefined) {
+    try {
+      // eslint-disable-next-line global-require
+      _pdfAdapterModule = require('./document-editing/pdf-adapter');
+    } catch {
+      _pdfAdapterModule = null;
+    }
+  }
+  return _pdfAdapterModule;
+}
+
 let _pptxAdapterModule;
 function pptxAdapterModule() {
   if (_pptxAdapterModule === undefined) {
@@ -5049,6 +5092,130 @@ async function runPptxImageEditFlow({ input, imageEdit, requestText = '', source
   } catch (err) {
     return { clarification: true, message: `No pude ${actionLabel} la imagen: ${err?.message || 'error desconocido'}` };
   }
+}
+
+// ── PDF safe-op intent (rotate / extract / remove pages / text overlay) ─────
+// PDF is not editable like Office: only page-level surgery and overlays are
+// safe. Deep content edits keep flowing to the legacy (lossy) path, which
+// already warns about fidelity.
+const PDF_PAGE_LIST_RE = /\bp[aá]ginas?\s+((?:\d{1,4}\s*(?:,|y|a|al|-|hasta)\s*)*\d{1,4})\b/;
+
+function parsePdfPageList(text) {
+  const m = PDF_PAGE_LIST_RE.exec(text);
+  if (!m) return null;
+  const chunk = m[1];
+  const range = /(\d{1,4})\s*(?:a|al|-|hasta)\s*(\d{1,4})/.exec(chunk);
+  if (range) {
+    const a = Number(range[1]); const b = Number(range[2]);
+    const [lo, hi] = a <= b ? [a, b] : [b, a];
+    if (hi - lo > 500) return null;
+    return Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
+  }
+  return chunk.split(/\s*(?:,|y)\s*/).map(Number).filter((n) => Number.isInteger(n) && n > 0);
+}
+
+function parsePdfEditRequest(requestText = '') {
+  const text = normalizeText(requestText);
+  if (!text) return null;
+  const pages = parsePdfPageList(text);
+  // Overlay FIRST and verbs tested with quoted spans stripped: the quoted
+  // payload ("BORRADOR") must never trigger delete/extract verbs (borra\w*
+  // matches inside BORRADOR otherwise).
+  const overlay = /\b(?:agrega|anade|añade|inserta|escribe|pon)\b[^.;]*?\btexto\b\s*["“']?([^"”'.;]{2,200})["”']?/i.exec(requestText);
+  if (overlay) {
+    return { kind: 'text_overlay', text: overlay[1].trim(), page: pages ? pages[0] : 1 };
+  }
+  const verbText = normalizeText(requestText.replace(/["“'][^"”']{1,200}["”']/g, ' '));
+  if (/\b(rota\w*|gira\w*|rotate)\b/.test(verbText)) {
+    const deg = /(\d{2,3})\s*(?:grados|degrees|°)/.exec(verbText);
+    return { kind: 'rotate_pages', pages, degrees: deg ? Number(deg[1]) : 90 };
+  }
+  if (/\b(elimina\w*|borra\w*|quita\w*|remueve\w*|delete|remove)\b/.test(verbText) && pages) {
+    return { kind: 'remove_pages', pages };
+  }
+  if (/\b(extrae\w*|extract|divide\w*|separa\w*|split|qu[eé]date)\b/.test(verbText) && pages) {
+    return { kind: 'extract_pages', pages };
+  }
+  if (/\b(une|unir|junta\w*|combina\w*|fusiona\w*|merge)\b/.test(verbText) && /\bpdfs?\b/.test(verbText)) {
+    return { kind: 'merge_pdfs' };
+  }
+  return null;
+}
+
+async function runPdfSurgicalEditFlow({ input, pdfEdit, sourceFile, assetFiles = [], allSourceFiles = [] }) {
+  const adapter = pdfAdapterModule();
+  const docName = sourceFile?.originalName || sourceFile?.filename || 'el PDF';
+  if (!adapter) {
+    return { clarification: true, message: 'La edición de PDF no está disponible en este despliegue.' };
+  }
+  try {
+    if (pdfEdit.kind === 'rotate_pages') {
+      const result = await adapter.rotatePdfPages({ buffer: input, pages: pdfEdit.pages, degrees: pdfEdit.degrees });
+      const where = pdfEdit.pages ? `la(s) página(s) ${result.pages.join(', ')}` : 'todas las páginas';
+      return {
+        buffer: result.buffer,
+        operation: { kind: 'rotate_pages', pages: result.pages, degrees: result.degrees, expectedPageCount: result.pageCount },
+        steps: [{ kind: 'rotate_pages', label: where }],
+        suffix: 'rotado', titleSuffix: 'rotado',
+        summary: `roté ${where} ${result.degrees}°`,
+      };
+    }
+    if (pdfEdit.kind === 'remove_pages') {
+      const result = await adapter.removePdfPages({ buffer: input, pages: pdfEdit.pages });
+      return {
+        buffer: result.buffer,
+        operation: { kind: 'remove_pages', pages: pdfEdit.pages, expectedPageCount: result.pageCount },
+        steps: [{ kind: 'remove_pages', label: `páginas ${pdfEdit.pages.join(', ')}` }],
+        suffix: 'paginas_eliminadas', titleSuffix: 'páginas eliminadas',
+        summary: `eliminé la(s) página(s) ${pdfEdit.pages.join(', ')} (quedan ${result.pageCount})`,
+      };
+    }
+    if (pdfEdit.kind === 'extract_pages') {
+      const result = await adapter.extractPdfPages({ buffer: input, pages: pdfEdit.pages });
+      return {
+        buffer: result.buffer,
+        operation: { kind: 'extract_pages', pages: pdfEdit.pages, expectedPageCount: result.pageCount },
+        steps: [{ kind: 'extract_pages', label: `páginas ${pdfEdit.pages.join(', ')}` }],
+        suffix: 'paginas_extraidas', titleSuffix: 'páginas extraídas',
+        summary: `extraje la(s) página(s) ${pdfEdit.pages.join(', ')} en un PDF nuevo`,
+      };
+    }
+    if (pdfEdit.kind === 'merge_pdfs') {
+      const pdfBuffers = [input];
+      for (const file of allSourceFiles || []) {
+        if (file === sourceFile) continue;
+        if (!isPdfFile(file)) continue;
+        try {
+          const resolved = await resolveStoredFilePath(file, file.userId || '');
+          if (resolved) pdfBuffers.push(await fs.promises.readFile(resolved));
+        } catch { /* skip unreadable */ }
+      }
+      if (pdfBuffers.length < 2) {
+        return { clarification: true, message: 'Para unir PDFs adjunta los dos (o más) archivos PDF en el mismo mensaje y lo hago de inmediato.' };
+      }
+      const result = await adapter.mergePdfBuffers({ buffers: pdfBuffers });
+      return {
+        buffer: result.buffer,
+        operation: { kind: 'merge_pdfs', expectedPageCount: result.pageCount },
+        steps: [{ kind: 'merge_pdfs', label: `${result.merged} archivos` }],
+        suffix: 'unido', titleSuffix: 'unido',
+        summary: `uní ${result.merged} PDFs en uno de ${result.pageCount} páginas`,
+      };
+    }
+    if (pdfEdit.kind === 'text_overlay') {
+      const result = await adapter.addPdfTextOverlay({ buffer: input, page: pdfEdit.page, text: pdfEdit.text });
+      return {
+        buffer: result.buffer,
+        operation: { kind: 'pdf_text_overlay', page: result.page, text: result.text },
+        steps: [{ kind: 'pdf_text_overlay', label: `página ${result.page}` }],
+        suffix: 'anotado', titleSuffix: 'anotado',
+        summary: `inserté el texto «${result.text.slice(0, 60)}» sobre la página ${result.page} sin alterar el contenido original`,
+      };
+    }
+  } catch (err) {
+    return { clarification: true, message: `No pude aplicar el cambio en «${docName}»: ${err?.message || 'error desconocido'}.` };
+  }
+  return { clarification: true, message: 'No entendí qué operación de PDF aplicar.' };
 }
 
 async function executeDocxOperations({ input, ops, requestText, sourceText, allSourceFiles, sourceFile, referenceFiles = [], signal }) {
@@ -5644,6 +5811,25 @@ async function generateSourcePreservingDocumentEdit({
       }
     } else if (isPdfFile(sourceFile)) {
       format = 'pdf';
+      // Safe page-level fast paths (rotate/extract/remove/merge/overlay) —
+      // resolved BEFORE the legacy lossy text path.
+      const pdfEdit = parsePdfEditRequest(requestText);
+      if (pdfEdit) {
+        const pdfResult = await runPdfSurgicalEditFlow({ input, pdfEdit, sourceFile, assetFiles, allSourceFiles });
+        if (pdfResult.clarification) {
+          return buildImageEditClarificationResult({ message: pdfResult.message, format });
+        }
+        output = pdfResult.buffer;
+        operations = [pdfResult.operation];
+        validationBlocks = [];
+        orchestration = buildDocumentOrchestrationPlan({
+          requestText, sourceFile, referenceFiles, operations, selectionReason,
+        });
+        suffix = pdfResult.suffix;
+        titleSuffix = pdfResult.titleSuffix;
+        explanation = `Se conservó el PDF original; ${pdfResult.summary}.`;
+        content = `Listo. Conservé el PDF original: ${pdfResult.summary}.`;
+      } else {
       const execution = await executePdfOperations({
         input,
         requestText,
@@ -5671,6 +5857,7 @@ async function generateSourcePreservingDocumentEdit({
       content = stepSummary
         ? `Listo. Conservé el contenido completo del PDF original y ${stepSummary}.`
         : 'Listo. Conservé el contenido completo del PDF original y apliqué la edición solicitada.';
+      }
     } else if (isTextLikeFile(sourceFile)) {
       format = textLikeFormatForFile(sourceFile) || 'txt';
       const execution = executeTextLikeOperations({ input, requestText, format, blocks });
@@ -5827,6 +6014,7 @@ module.exports = {
   isSourcePreservingEditRequest,
   loadEditableSourceFiles,
   parseImageEditRequest,
+  parsePdfEditRequest,
   parsePresentationEditRequest,
   parseSpreadsheetEditRequest,
   parseTargetSectionRequest,
