@@ -138,6 +138,8 @@ test('detectSkillForPrompt: deterministic keyword mapping (ES/EN)', () => {
     ['sistema de gestión de clientes', 'crud-entidades'],
     ['un CRM para mi empresa', 'crud-entidades'],
     ['formulario de contacto con validación', 'formularios-validados'],
+    ['crea una tienda online de zapatillas', 'ecommerce-catalogo'],
+    ['hazme un portfolio personal de diseñador', 'portfolio-personal'],
   ];
   for (const [prompt, expected] of cases) {
     assert.equal(skills.detectSkillForPrompt(prompt)?.name, expected, prompt);
