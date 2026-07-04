@@ -2,34 +2,36 @@
 
 ## Current State
 
-- Android debug APK exists at `output/SiraGPT-android-debug.apk`.
-- Android release AAB exists at `output/SiraGPT-android-release.aab`.
+- Android debug APK QA exists in the current native QA prerelease.
+- Android release AAB QA exists in the current native QA prerelease.
 - Capacitor app ID is `com.siragpt.app`.
 - Production WebView URL is `https://siragpt.com`.
-- Android release signing is configured with the local upload key at `android/keystores/siragpt-upload-key.jks` and ignored secret properties at `android/keystore.properties`.
-- Android release publishing reached Google Play Console review for internal testing, but `Guardar y publicar` is blocked by developer account verification.
-- Android emulator validation is configured with AVD `SiraGPT_API36`; the debug APK installs and launches successfully.
-- iOS publishing is blocked on installing full Xcode and signing with an Apple Developer account.
+- Public GitHub prerelease `native-qa-v0.4.3-ec9d380c` contains unsigned QA packages for Android, iOS simulator, macOS, and Windows.
+- Android signed Play release publishing is blocked until the Play upload keystore secrets are configured in GitHub Actions and Google Play account verification is complete.
+- iOS publishing is blocked until Apple Developer signing assets, App Store Connect access, and Apple account verification are configured.
 
 ## Latest Validation
 
-- `npm run mobile:sync` completed for Android and iOS.
-- GitHub Actions `Native mobile builds` run `28715288814` passed on `production-main` SHA `4bbd7dc6d64a5a6d4f4a687c346ef8b9248f6747`.
-- The run produced fresh unsigned QA artifacts:
+- `npm run mobile:doctor` passed locally for Android and iOS.
+- `npm run native:version:check` passed locally for native version `0.4.3` / build `4003`.
+- `npm run native:store:readiness` passed locally against the submission metadata.
+- GitHub Actions `Native mobile builds` run `28717066596` passed on `production-main` SHA `ec9d380cc3d219b190c36d531ae7c6a86a7331a8`.
+- The run produced unsigned QA artifacts:
   - `siragpt-mobile-android`
   - `siragpt-mobile-ios-simulator`
-- Android SDK, emulator, platform tools, OpenJDK 21, `sdkmanager`, `avdmanager`, `adb`, and `jarsigner` are configured in `~/.zshrc` and `~/.zprofile`.
-- AVD `SiraGPT_API36` was created from `system-images;android-36;google_apis;arm64-v8a`.
-- `output/SiraGPT-android-debug.apk` installed on emulator `emulator-5554`.
-- `com.siragpt.app/.MainActivity` launched and loaded the Sira GPT WebView.
-- Navigation from the welcome screen to the sign-up screen was validated.
-- Android declares `android.permission.RECORD_AUDIO`; runtime permission is initially ungranted, as expected until the app asks for microphone access.
-- Screenshots:
-  - `output/SiraGPT-android-emulator-launch.png`
-  - `output/SiraGPT-android-emulator-signup.png`
-- Release AAB SHA-256: `3a1bb3349735df06ab73b9e34842179d594ec0ead9956e4601a4e5e3836f469f`.
-- Debug APK SHA-256: `8779645166ca8bf3483c4a368d98358acbe10e342d2f7cc200c8c20190e7519f`.
-- Upload key SHA-256: `c9afa1c1945681bb1b12587e399793907e341159019bb477579e3c607b1bbaa8`.
+- GitHub Actions `Native desktop builds` run `28717066561` passed on the same SHA and produced unsigned QA artifacts:
+  - `siragpt-desktop-macos`
+  - `siragpt-desktop-windows-x64`
+- Public QA prerelease:
+  - `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-qa-v0.4.3-ec9d380c`
+- Local downloaded QA artifacts:
+  - `output/native-qa/release-ec9d380c/SiraGPT-0.4.3-android-debug.apk`
+  - `output/native-qa/release-ec9d380c/SiraGPT-0.4.3-android-qa.aab`
+  - `output/native-qa/release-ec9d380c/SiraGPT-0.4.3-ios-simulator-app.zip`
+  - `output/native-qa/release-ec9d380c/SiraGPT-0.4.3-macos-arm64.dmg`
+  - `output/native-qa/release-ec9d380c/SiraGPT-0.4.3-macos-arm64.zip`
+  - `output/native-qa/release-ec9d380c/SiraGPT-Setup-0.4.3-windows-x64.exe`
+  - `output/native-qa/release-ec9d380c/SiraGPT-Portable-0.4.3-windows-x64.exe`
 
 ## Current GitHub Secrets State
 
