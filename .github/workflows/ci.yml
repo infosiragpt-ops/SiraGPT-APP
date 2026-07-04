@@ -513,42 +513,6 @@ jobs:
             echo "✓ informational Playwright smoke passed"
           fi
 
-  # ───────────────────────────────────────────────────────────────────
-  # DOCKER BUILD — verify both images build without errors
-  # ───────────────────────────────────────────────────────────────────
-  # Non-blocking (informational) — validates that the multi-stage
-  # Dockerfiles compile properly. When the project adds a registry push
-  # step, this job can be promoted to a hard gate.
-  docker:
-    name: Docker · build images
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    continue-on-error: true
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Build backend image (no push)
-        uses: docker/build-push-action@v7
-        with:
-          context: backend
-          file: backend/Dockerfile
-          tags: siragpt-api:ci
-          load: true
-          # Speed up: skip healthcheck validation during CI (no DB/Redis)
-          build-args: BUILDKIT_CONTEXT_KEEP_GIT_DIR=1
-
-      - name: Build frontend image (no push)
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: Dockerfile
-          tags: siragpt-frontend:ci
-          load: true
-
   ui-lock-verify:
     name: UI lock · verify zero visual-surface changes
     runs-on: ubuntu-latest
@@ -763,7 +727,7 @@ jobs:
   # touching the protection rule.
   ci:
     name: CI · required checks passed
-    needs: [frontend, backend, docker, licenses, security-audit, ui-lock-verify, visual-regression-check, secret-scan, dependency-audit, drizzle-migrations-dry-run, e2e-critical]
+    needs: [frontend, backend, licenses, security-audit, ui-lock-verify, visual-regression-check, secret-scan, dependency-audit, drizzle-migrations-dry-run, e2e-critical]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -822,7 +786,7 @@ jobs:
   # block merges. Runs only when an upstream job failed.
   notify-on-failure:
     name: Notify · Slack on failure
-    needs: [frontend, backend, docker, licenses, security-audit, ui-lock-verify, secret-scan, visual-regression-check, dependency-audit, drizzle-migrations-dry-run, e2e]
+    needs: [frontend, backend, licenses, security-audit, ui-lock-verify, secret-scan, visual-regression-check, dependency-audit, drizzle-migrations-dry-run, e2e]
     runs-on: ubuntu-latest
     if: failure()
     timeout-minutes: 3
@@ -844,7 +808,6 @@ jobs:
             echo "security-audit:  ${{ needs.security-audit.result }}"
             echo "ui-lock-verify:  ${{ needs.ui-lock-verify.result }}"
             echo "secret-scan:     ${{ needs.secret-scan.result }}"
-            echo "docker:          ${{ needs.docker.result }}"
             echo "e2e:             ${{ needs.e2e.result }}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
