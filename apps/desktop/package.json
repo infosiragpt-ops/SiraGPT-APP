@@ -24,6 +24,10 @@
     "mac": {
       "category": "public.app-category.productivity",
       "icon": "assets/icon.icns",
+      "hardenedRuntime": true,
+      "notarize": true,
+      "entitlements": "assets/entitlements.mac.plist",
+      "entitlementsInherit": "assets/entitlements.mac.inherit.plist",
       "target": [
         "dmg",
         "zip"

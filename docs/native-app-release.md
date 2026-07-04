@@ -24,6 +24,7 @@ Notes:
 - Release installers require external signing credentials:
   - Apple Developer ID certificate for macOS distribution outside the App Store.
   - Windows code-signing certificate for SmartScreen trust.
+- macOS notarization requires Hardened Runtime entitlements; these are configured in `apps/desktop/assets/entitlements.mac.plist`.
 - Signing certificates, passwords, and store account credentials must stay outside Git.
 
 ## iOS And Android
@@ -38,13 +39,14 @@ npm run mobile:doctor
 npm run mobile:open:ios
 npm run mobile:open:android
 npm run mobile:release:android
+npm run native:readiness:mobile
 ```
 
 Release requirements:
 
 - Android release builds require `android/keystore.properties` and the upload keystore in `android/keystores/`; both are intentionally ignored.
 - Google Play publishing requires owner verification in Play Console.
-- iOS release builds require full Xcode, Apple Developer signing, App Store Connect access, and manual review metadata.
+- iOS release builds require full Xcode, Apple Developer signing, a matching provisioning profile, App Store Connect access, and manual review metadata.
 
 ## GitHub Actions
 
@@ -60,6 +62,15 @@ Use `Native mobile builds` in GitHub Actions to validate the Capacitor wrappers 
 
 These workflows are unsigned by default. Add signing credentials only through GitHub Actions secrets when distribution signing is ready.
 
+Use `Native signed release packages` manually when real distribution credentials are configured. It can build one platform or all platforms:
+
+- Android: signed Play upload `.aab`.
+- iOS: signed App Store Connect `.ipa`.
+- macOS: signed and notarized `.dmg` and `.zip`.
+- Windows: signed `.exe` installer/portable artifacts.
+
+The workflow can optionally create or update a GitHub Release with the built native artifacts. It intentionally fails early if the required signing secrets for the selected platform are missing.
+
 ### Required GitHub Secrets For Signed Distribution
 
 Run the local readiness check before attempting a signed release:
@@ -67,6 +78,10 @@ Run the local readiness check before attempting a signed release:
 ```bash
 npm run native:readiness
 npm run native:readiness:android
+npm run native:readiness:ios
+npm run native:readiness:mobile
+npm run native:readiness:desktop
+npm run native:readiness:all
 ```
 
 Android signing secrets:
@@ -82,6 +97,9 @@ iOS/App Store Connect signing secrets:
 - `IOS_SIGNING_CERTIFICATE_BASE64`: base64-encoded iOS signing certificate.
 - `IOS_SIGNING_CERTIFICATE_PASSWORD`: signing certificate password.
 - `IOS_PROVISIONING_PROFILE_BASE64`: base64-encoded provisioning profile.
+
+App Store Connect upload secrets:
+
 - `APP_STORE_CONNECT_API_KEY_ID`: App Store Connect API key id.
 - `APP_STORE_CONNECT_API_ISSUER_ID`: App Store Connect API issuer id.
 - `APP_STORE_CONNECT_API_KEY_BASE64`: base64-encoded App Store Connect private key.
@@ -96,6 +114,21 @@ Desktop signing secrets:
 - `WINDOWS_CERTIFICATE_PASSWORD`: Windows certificate password.
 
 Never commit these values. Store them only as GitHub Actions secrets or in the vendor store portals.
+
+### Running A Signed Native Release
+
+1. Add the required secrets in GitHub: `Settings -> Secrets and variables -> Actions`.
+2. Open `Actions -> Native signed release packages -> Run workflow`.
+3. Choose `platform`:
+   - `android` when only the Play `.aab` is needed.
+   - `ios` when only the signed `.ipa` is needed.
+   - `macos` when only the notarized desktop package is needed.
+   - `windows` when only the Windows installer is needed.
+   - `all` for the complete native release set.
+4. Set `release_tag`, for example `native-v0.4.3`.
+5. Enable `create_github_release` only when the artifacts should be attached to a public GitHub Release.
+
+The workflow prints only secret names and readiness states. It must not print secret values.
 
 Store publication requires account-level work outside Git:
 
@@ -116,6 +149,7 @@ npm run desktop:pack:win
 npm run mobile:sync
 npm run mobile:doctor
 npm run native:readiness
+npm run native:readiness:desktop
 cd android && ./gradlew :app:assembleDebug :app:bundleRelease --no-daemon
 bash scripts/check-secrets.sh
 git diff --check

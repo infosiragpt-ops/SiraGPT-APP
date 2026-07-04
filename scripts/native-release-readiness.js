@@ -12,6 +12,8 @@ const groups = {
     "IOS_SIGNING_CERTIFICATE_BASE64",
     "IOS_SIGNING_CERTIFICATE_PASSWORD",
     "IOS_PROVISIONING_PROFILE_BASE64",
+  ],
+  appstore: [
     "APP_STORE_CONNECT_API_KEY_ID",
     "APP_STORE_CONNECT_API_ISSUER_ID",
     "APP_STORE_CONNECT_API_KEY_BASE64",
@@ -29,14 +31,22 @@ const groups = {
   ],
 }
 
+const aliases = {
+  all: Object.keys(groups),
+  apple: ["ios", "appstore", "macos"],
+  desktop: ["macos", "windows"],
+  mobile: ["android", "ios"],
+}
+
 function parseRequiredGroups(argv) {
   const requireArg = argv.find((arg) => arg.startsWith("--require="))
   if (!requireArg) return []
-  return requireArg
+  const names = requireArg
     .slice("--require=".length)
     .split(",")
     .map((name) => name.trim())
     .filter(Boolean)
+  return [...new Set(names.flatMap((name) => aliases[name] || [name]))]
 }
 
 function isPresent(name) {

@@ -1,0 +1,392 @@
+name: Native signed release packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform package to build
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - android
+          - ios
+          - macos
+          - windows
+      release_tag:
+        description: GitHub Release tag to create or update when enabled
+        required: true
+        default: native-v0.4.3
+        type: string
+      create_github_release:
+        description: Create or update the GitHub Release with built artifacts
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: native-signed-release-${{ github.ref }}-${{ inputs.platform }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '24'
+  JAVA_VERSION: '21'
+
+jobs:
+  android:
+    name: Android signed AAB
+    if: ${{ inputs.platform == 'all' || inputs.platform == 'android' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Setup Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: gradle
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Validate Android signing secrets
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: npm run native:readiness:android
+
+      - name: Prepare Android upload key
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -eu
+          mkdir -p android/keystores
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/keystores/siragpt-upload-key.jks
+          cat > android/keystore.properties <<EOF
+          storeFile=keystores/siragpt-upload-key.jks
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          keyPassword=$ANDROID_KEY_PASSWORD
+          EOF
+
+      - name: Build signed Android bundle
+        shell: bash
+        run: |
+          set -eu
+          npm run mobile:sync -- android
+          chmod +x android/gradlew
+          cd android
+          ./gradlew :app:bundleRelease --no-daemon --stacktrace
+          cd ..
+          short_sha="${GITHUB_SHA::7}"
+          mkdir -p output/native-release/android
+          cp android/app/build/outputs/bundle/release/app-release.aab "output/native-release/android/SiraGPT-${short_sha}.aab"
+
+      - name: Upload Android signed artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: siragpt-native-android
+          path: output/native-release/android/*.aab
+          retention-days: 30
+          if-no-files-found: error
+
+  ios:
+    name: iOS signed IPA
+    if: ${{ inputs.platform == 'all' || inputs.platform == 'ios' }}
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Validate iOS signing secrets
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          IOS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.IOS_SIGNING_CERTIFICATE_BASE64 }}
+          IOS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.IOS_SIGNING_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+        run: npm run native:readiness:ios
+
+      - name: Install iOS signing assets
+        id: ios_signing
+        shell: bash
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          IOS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.IOS_SIGNING_CERTIFICATE_BASE64 }}
+          IOS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.IOS_SIGNING_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          KEYCHAIN_PASSWORD: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -eu
+          decode_base64() {
+            if base64 --help 2>&1 | grep -q -- '--decode'; then
+              base64 --decode
+            else
+              base64 -D
+            fi
+          }
+
+          keychain_path="$RUNNER_TEMP/siragpt-signing.keychain-db"
+          cert_path="$RUNNER_TEMP/ios-signing.p12"
+          profile_path="$RUNNER_TEMP/profile.mobileprovision"
+          profile_plist="$RUNNER_TEMP/profile.plist"
+
+          printf '%s' "$IOS_SIGNING_CERTIFICATE_BASE64" | decode_base64 > "$cert_path"
+          printf '%s' "$IOS_PROVISIONING_PROFILE_BASE64" | decode_base64 > "$profile_path"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security import "$cert_path" -P "$IOS_SIGNING_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$keychain_path"
+
+          security cms -D -i "$profile_path" > "$profile_plist"
+          profile_uuid="$(/usr/libexec/PlistBuddy -c 'Print UUID' "$profile_plist")"
+          profile_name="$(/usr/libexec/PlistBuddy -c 'Print Name' "$profile_plist")"
+          profile_team_id="$(/usr/libexec/PlistBuddy -c 'Print TeamIdentifier:0' "$profile_plist")"
+
+          if [ "$profile_team_id" != "$APPLE_TEAM_ID" ]; then
+            echo "Provisioning profile team id does not match APPLE_TEAM_ID" >&2
+            exit 1
+          fi
+
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp "$profile_path" "$HOME/Library/MobileDevice/Provisioning Profiles/$profile_uuid.mobileprovision"
+
+          {
+            echo "profile_name=$profile_name"
+            echo "keychain_path=$keychain_path"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build signed iOS IPA
+        shell: bash
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          PROFILE_NAME: ${{ steps.ios_signing.outputs.profile_name }}
+        run: |
+          set -eu
+          npm run mobile:sync -- ios
+
+          export_options="$RUNNER_TEMP/ExportOptions.plist"
+          cat > "$export_options" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store-connect</string>
+            <key>teamID</key>
+            <string>$APPLE_TEAM_ID</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>com.siragpt.app</key>
+              <string>$PROFILE_NAME</string>
+            </dict>
+            <key>stripSwiftSymbols</key>
+            <true/>
+          </dict>
+          </plist>
+          EOF
+
+          archive_path="$RUNNER_TEMP/SiraGPT.xcarchive"
+          export_path="$PWD/output/native-release/ios"
+          mkdir -p "$export_path"
+
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$archive_path" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CODE_SIGN_STYLE=Manual \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
+            archive
+
+          xcodebuild \
+            -exportArchive \
+            -archivePath "$archive_path" \
+            -exportOptionsPlist "$export_options" \
+            -exportPath "$export_path"
+
+      - name: Upload iOS signed artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: siragpt-native-ios
+          path: output/native-release/ios/*.ipa
+          retention-days: 30
+          if-no-files-found: error
+
+  macos:
+    name: macOS signed DMG + ZIP
+    if: ${{ inputs.platform == 'all' || inputs.platform == 'macos' }}
+    runs-on: macos-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Validate macOS signing secrets
+        env:
+          MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: npm run native:readiness -- --require=macos
+
+      - name: Build signed and notarized macOS artifacts
+        env:
+          CSC_LINK: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: npm run desktop:dist:mac
+
+      - name: Stage macOS artifacts
+        shell: bash
+        run: |
+          set -eu
+          mkdir -p output/native-release/macos
+          cp output/desktop/*.dmg output/native-release/macos/
+          cp output/desktop/*-mac.zip output/native-release/macos/
+          cp output/desktop/*.blockmap output/native-release/macos/
+
+      - name: Upload macOS signed artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: siragpt-native-macos
+          path: output/native-release/macos/*
+          retention-days: 30
+          if-no-files-found: error
+
+  windows:
+    name: Windows signed installer
+    if: ${{ inputs.platform == 'all' || inputs.platform == 'windows' }}
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Validate Windows signing secrets
+        env:
+          WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: npm run native:readiness -- --require=windows
+
+      - name: Build signed Windows artifacts
+        env:
+          CSC_LINK: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: npm run desktop:dist:win
+
+      - name: Stage Windows artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force output/native-release/windows | Out-Null
+          Copy-Item output/desktop/*.exe output/native-release/windows/
+          Copy-Item output/desktop/*.blockmap output/native-release/windows/ -ErrorAction SilentlyContinue
+
+      - name: Upload Windows signed artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: siragpt-native-windows
+          path: output/native-release/windows/*
+          retention-days: 30
+          if-no-files-found: error
+
+  github-release:
+    name: Publish GitHub Release
+    if: ${{ always() && inputs.create_github_release && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    needs:
+      - android
+      - ios
+      - macos
+      - windows
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download native artifacts
+        uses: actions/download-artifact@v6
+        with:
+          pattern: siragpt-native-*
+          path: output/native-release
+          merge-multiple: true
+
+      - name: Create or update GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -eu
+          shopt -s globstar nullglob
+          files=(output/native-release/**/*)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No native artifacts found for release" >&2
+            exit 1
+          fi
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${files[@]}" --clobber
+          else
+            gh release create "$RELEASE_TAG" "${files[@]}" \
+              --target "$GITHUB_SHA" \
+              --title "SiraGPT native $RELEASE_TAG" \
+              --notes "Signed native SiraGPT packages built from $GITHUB_SHA."
+          fi
