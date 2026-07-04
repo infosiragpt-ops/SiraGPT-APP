@@ -245,17 +245,22 @@ const TOOLS = {
       try {
         const cur = await ctx.runner.readFile(ctx.project, args.path);
         const content = cur?.content ?? '';
-        const occurrences = args.find.length ? content.split(args.find).length - 1 : 0;
-        if (occurrences === 0) {
-          return { isError: true, summary: `texto a reemplazar no encontrado en ${args.path}`, observation: `Error: el texto a reemplazar no existe en ${args.path}. Lee el archivo con read_file y copia el fragmento EXACTO (espacios e indentación incluidos).` };
+        // Graduated match ladder (edit-matching.js): exact byte match first;
+        // if the model quoted the fragment with drifted indentation, a UNIQUE
+        // line-trimmed window still lands the edit (re-indented to the file).
+        // eslint-disable-next-line global-require
+        const { applyEdit } = require('./edit-matching');
+        const result = applyEdit(content, args.find, args.replace, { replaceAll: !!args.replaceAll });
+        if (!result.ok) {
+          if (result.reason === 'ambiguous') {
+            return { isError: true, summary: `find ambiguo (${result.occurrences} apariciones) en ${args.path}`, observation: `Error: \`find\` aparece ${result.occurrences} veces en ${args.path}${result.strategy === 'line-trimmed' ? ' (comparando líneas sin indentación)' : ''}. Amplía \`find\` con líneas de contexto para hacerlo único${result.strategy === 'exact' ? ', o pasa replaceAll:true para reemplazar todas' : ''}.` };
+          }
+          return { isError: true, summary: `texto a reemplazar no encontrado en ${args.path}`, observation: `Error: el texto a reemplazar no existe en ${args.path} (ni exacto ni por líneas). Lee el archivo con read_file y copia el fragmento real.` };
         }
-        if (occurrences > 1 && !args.replaceAll) {
-          return { isError: true, summary: `find ambiguo (${occurrences} apariciones) en ${args.path}`, observation: `Error: \`find\` aparece ${occurrences} veces en ${args.path}. Amplía \`find\` con líneas de contexto para hacerlo único, o pasa replaceAll:true para reemplazar todas.` };
-        }
-        const next = args.replaceAll ? content.split(args.find).join(args.replace) : content.replace(args.find, args.replace);
-        await ctx.runner.writeFiles(ctx.project, [{ path: args.path, content: next }]);
-        const n = args.replaceAll ? occurrences : 1;
-        return { isError: false, summary: `editado ${args.path} (${n} reemplazo${n === 1 ? '' : 's'})`, observation: `OK: editado ${args.path} (${n} reemplazo${n === 1 ? '' : 's'}).` };
+        await ctx.runner.writeFiles(ctx.project, [{ path: args.path, content: result.next }]);
+        const n = result.occurrences;
+        const via = result.strategy === 'line-trimmed' ? ' — coincidencia por líneas, indentación del archivo conservada' : '';
+        return { isError: false, summary: `editado ${args.path} (${n} reemplazo${n === 1 ? '' : 's'})`, observation: `OK: editado ${args.path} (${n} reemplazo${n === 1 ? '' : 's'}${via}).` };
       } catch (err) {
         return { isError: true, summary: `no se pudo editar: ${err.message}`, observation: `Error editando ${args.path}: ${err.message}` };
       }
