@@ -4952,6 +4952,10 @@ function ChatInterfaceContent() {
 
   const [isWebSearching, setIsWebSearching] = React.useState(false)
   const [isWebSearchActive, setIsWebSearchActive] = React.useState(false);
+  const isWebSearchActiveRef = React.useRef(isWebSearchActive);
+  React.useEffect(() => {
+    isWebSearchActiveRef.current = isWebSearchActive;
+  }, [isWebSearchActive]);
   const [isGmailActive, setIsGmailActive] = React.useState(false);
   const [isProcessingGmail, setIsProcessingGmail] = React.useState(false);
   const [isGoogleCalendarActive, setIsGoogleCalendarActive] = React.useState(false);
@@ -5023,8 +5027,8 @@ function ChatInterfaceContent() {
    * Closes all tools and connectors - used when activating a new tool/connector
    * This ensures only one tool/connector is active at a time
    */
-  const closeAllToolsAndConnectors = React.useCallback(() => {
-    setIsWebSearchActive(false);
+  const closeAllToolsAndConnectors = React.useCallback((options: { preserveWebSearch?: boolean } = {}) => {
+    if (!options.preserveWebSearch) setIsWebSearchActive(false);
     setIsImageGenerationActive(false);
     setIsVoiceGenerationActive(false);
     setIsMusicGenerationActive(false);
@@ -6447,7 +6451,7 @@ But first, you need to connect your Spotify account securely using the button be
         setIsMusicGenerationActive(true);
         setChatType('text');
       } else {
-        closeAllToolsAndConnectors();
+        closeAllToolsAndConnectors({ preserveWebSearch: isWebSearchActiveRef.current });
         setChatType('text'); // Always default to text when switching chats
       }
 
@@ -6476,7 +6480,7 @@ But first, you need to connect your Spotify account securely using the button be
       setIsMusicGenerationActive(true);
       setChatType('text');
     } else {
-      closeAllToolsAndConnectors();
+      closeAllToolsAndConnectors({ preserveWebSearch: isWebSearchActiveRef.current });
     }
 
     // Use a small delay to ensure previous connector UI is fully closed
