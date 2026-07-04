@@ -107,7 +107,9 @@ describe("chat video auto-activation source contract", () => {
   it("renders media controls inline next to the plus button instead of the bottom tool row", () => {
     assert.match(
       source,
-      /const isMediaToolActive = isImageGenerationActive \|\| isVoiceGenerationActive \|\| isMusicGenerationActive \|\| isVideoGenerationActive;[\s\S]{0,80}const shouldInlineActiveTools = isMediaToolActive;/,
+      // Web search joined the inline set in 318c1f274 (keep web search
+      // active after send) — the contract accepts media-only or media+web.
+      /const isMediaToolActive = isImageGenerationActive \|\| isVoiceGenerationActive \|\| isMusicGenerationActive \|\| isVideoGenerationActive;[\s\S]{0,80}const shouldInlineActiveTools = isMediaToolActive( \|\| isWebSearchActive)?;/,
       "active media modes should opt into inline composer controls"
     )
     assert.match(
