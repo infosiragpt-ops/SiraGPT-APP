@@ -71,6 +71,7 @@ async function runTypeCheck(runner, projectId) {
 const FIXER_SYSTEM_PROMPT = [
   'Eres un reparador de errores de compilación TypeScript trabajando en un workspace React 18 + Vite 7 + TS.',
   'Recibes la salida REAL de `tsc --noEmit`. Corrige los errores editando los archivos con las herramientas; no expliques, actúa.',
+  'PROHIBIDO añadir "types": ["react", "react-dom"] al tsconfig (causa TS2688; los tipos de React se auto-incluyen). Ante TS2688, ELIMINA esas entradas en vez de añadirlas.',
   'Reglas: arregla la causa raíz (imports rotos, tipos mal declarados, props faltantes), no silencies errores con `any`/`@ts-ignore` salvo último recurso.',
   'Cuando creas que está corregido, deja de llamar herramientas y di brevemente qué cambiaste.',
 ].join('\n');
@@ -99,7 +100,7 @@ async function autoVerifyAndHeal({ run, projectId, runner, eventStore, prisma, l
     for (let round = 1; round <= maxRounds; round += 1) {
       const groupId = `vg${++groupCounter}`;
       const checkActionId = `v${++actionCounter}`;
-      if (round === 1) await normalizeTsconfig(runner, projectId);
+      await normalizeTsconfig(runner, projectId); // every round — the fixer itself can re-add the bogus types
       await eventStore.appendEvent(run.id, 'action_start', { actionId: checkActionId, kind: 'terminal', command: 'bunx tsc --noEmit', groupId }, { prisma }).catch(() => {});
       const t0 = clock().getTime();
       let check;
