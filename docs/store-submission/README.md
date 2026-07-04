@@ -96,6 +96,7 @@ any SDKs bundled into native shells.
 npm run native:store:readiness
 npm run native:store:assets:generate
 npm run native:store:assets
+npm run native:store:packet
 npm run native:readiness
 npm run native:readiness:all
 npm run native:github-secrets:audit
@@ -114,6 +115,10 @@ are present in the execution environment.
 `native:store:assets:generate` regenerates the versioned PNG store assets under
 `docs/store-submission/assets/` using Playwright and the local SiraGPT brand
 assets.
+`native:store:packet` exports a non-secret `output/native-store-submission-packet/`
+directory with platform-specific listing copy, privacy drafts, account-action
+checklists, and copied assets for Google Play, App Store Connect, macOS, and
+Windows submission work.
 `native:github-secrets:audit` checks which native signing secret names are
 already configured in GitHub Actions for the public repository without reading
 or printing secret values. `native:github-secrets:check` fails until all native

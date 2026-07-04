@@ -10,6 +10,7 @@ on:
       - 'docs/store-submission/**'
       - 'scripts/native-release-plan.js'
       - 'scripts/native-store-assets-readiness.js'
+      - 'scripts/generate-native-store-packet.js'
       - 'scripts/native-store-readiness.js'
       - 'scripts/sync-native-version.js'
       - 'package.json'
@@ -25,6 +26,7 @@ on:
       - 'docs/store-submission/**'
       - 'scripts/native-release-plan.js'
       - 'scripts/native-store-assets-readiness.js'
+      - 'scripts/generate-native-store-packet.js'
       - 'scripts/native-store-readiness.js'
       - 'scripts/sync-native-version.js'
       - 'package.json'
@@ -62,7 +64,9 @@ jobs:
           npm run native:version:check
           npm run native:store:readiness
           npm run native:store:assets -- --out=output/native-store-assets-report.md --json-out=output/native-store-assets-report.json
+          npm run native:store:packet -- --require-ready
           node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('output/native-store-assets-report.json','utf8')); if (!['ready','blocked'].includes(p.status)) throw new Error('invalid native store asset status'); console.log('native-store-assets-status=' + p.status); console.log('native-store-assets-blocked-platforms=' + p.blockedPlatforms.length)"
+          node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('output/native-store-submission-packet.json','utf8')); if (p.status !== 'ready') throw new Error('native store packet is not ready'); console.log('native-store-packet-status=' + p.status); console.log('native-store-packet-platforms=' + p.platforms.length)"
 
       - name: Generate non-secret readiness plan
         env:
@@ -94,6 +98,8 @@ jobs:
           path: |
             output/native-store-assets-report.md
             output/native-store-assets-report.json
+            output/native-store-submission-packet/**
+            output/native-store-submission-packet.json
             output/native-release-plan.md
             output/native-release-plan.json
           retention-days: 30

@@ -19,6 +19,8 @@
   and Google Play feature graphic under `docs/store-submission/assets/`.
 - `npm run native:store:assets` validates the packaged app icons and generated
   store assets without reading signing credentials.
+- `npm run native:store:packet` exports platform-specific, non-secret submission
+  folders under `output/native-store-submission-packet/`.
 - GitHub Actions `Native mobile builds` run `28719956528` passed on `production-main` SHA `884cbec329822fa3590165fafea40c27edb10e95`.
 - The run produced unsigned QA artifacts:
   - `siragpt-mobile-android`
@@ -101,6 +103,7 @@ repo, run:
 ```bash
 npm run native:store:assets:generate
 npm run native:store:assets -- --require-ready
+npm run native:store:packet -- --require-ready
 npm run native:release:plan -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/native-release-plan.md --json-out=output/native-release-plan.json
 ```
 

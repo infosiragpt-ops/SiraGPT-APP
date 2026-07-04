@@ -203,6 +203,7 @@ package IDs before submitting anything to a store:
 npm run native:store:readiness
 npm run native:store:assets:generate
 npm run native:store:assets
+npm run native:store:packet
 ```
 
 These checks intentionally validate public metadata and public store-listing
@@ -211,6 +212,9 @@ reports missing screenshots and listing graphics without failing by default;
 use `npm run native:store:assets -- --require-ready` for final release gates.
 Regenerate the screenshots with `native:store:assets:generate` whenever the
 public product positioning or visible native store copy changes.
+Use `native:store:packet` to create the non-secret platform folders that can be
+used while filling Google Play, App Store Connect, macOS distribution, and
+Windows distribution forms.
 
 ## Validation Checklist
 
@@ -219,6 +223,7 @@ Before pushing native release changes:
 ```bash
 node -c apps/desktop/main.cjs
 node -c scripts/generate-native-store-assets.js
+node -c scripts/generate-native-store-packet.js
 node -c scripts/native-store-assets-readiness.js
 node -c scripts/native-store-readiness.js
 sh -n scripts/build-desktop.sh
@@ -226,6 +231,7 @@ npm run native:version:check
 npm run native:store:readiness
 npm run native:store:assets:generate
 npm run native:store:assets
+npm run native:store:packet -- --require-ready
 npm run desktop:pack
 npm run desktop:pack:win
 npm run mobile:sync
