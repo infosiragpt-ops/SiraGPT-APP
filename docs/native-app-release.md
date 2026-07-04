@@ -67,24 +67,24 @@ These workflows are unsigned by default. Add signing credentials only through Gi
 
 ### Latest Verified Native Builds
 
-Latest native package SHA verified: `140e23bea961dfdf177ff4a3aab06284f08a7506` on `production-main`.
+Latest native package SHA verified: `7d1ed661246409eeb817067de29147de6f36e373` on `production-main`.
 
-- Desktop workflow: `Native desktop builds` run `28717882095`.
+- Desktop workflow: `Native desktop builds` run `28718197674`.
   - macOS DMG + ZIP: passed.
   - Windows x64 NSIS + portable: passed.
   - Artifacts: `siragpt-desktop-macos`, `siragpt-desktop-windows-x64`.
-- Mobile workflow: `Native mobile builds` run `28717882099`.
+- Mobile workflow: `Native mobile builds` run `28718197656`.
   - Android APK + AAB: passed.
   - iOS simulator build: passed.
   - Artifacts: `siragpt-mobile-android`, `siragpt-mobile-ios-simulator`.
 
 Unsigned QA packages from these runs are attached to the GitHub prerelease
-`native-qa-v0.4.3-ec9d380c`:
+`native-qa-v0.4.3-7d1ed66`:
 
-https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-qa-v0.4.3-ec9d380c
+https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-qa-v0.4.3-7d1ed66
 
 The prerelease above is the latest durable public QA download packet. The
-current SHA also has fresh 14-day GitHub Actions artifacts attached to the
+verified SHA also has fresh 14-day GitHub Actions artifacts attached to the
 desktop and mobile runs listed above. These artifacts prove the wrappers and
 unsigned QA packages build successfully for macOS, Windows, Android, and iOS
 simulator. Public distribution still requires signing and store credentials.
