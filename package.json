@@ -49,6 +49,7 @@
     "native:github-secrets:audit": "bash scripts/audit-native-github-secrets.sh",
     "native:github-secrets:check": "bash scripts/audit-native-github-secrets.sh --require=all --only-required",
     "native:release:plan": "node scripts/native-release-plan.js",
+    "native:release:plan:ci": "node scripts/native-release-plan.js --secret-source=env --out=output/native-release-plan.md --json-out=output/native-release-plan.json",
     "native:store:readiness": "node scripts/native-store-readiness.js",
     "desktop:dev": "electron apps/desktop/main.cjs",
     "desktop:pack": "electron-builder --projectDir apps/desktop --dir --publish never",

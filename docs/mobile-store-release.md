@@ -99,6 +99,8 @@ npm run native:release:plan -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/n
 
 The generated files stay under ignored `output/` and may list missing secret
 names plus account-owner actions, but they must never contain secret values.
+The GitHub Actions workflow `Native readiness report` publishes the same
+non-secret checklist as an artifact named `siragpt-native-readiness-report`.
 
 ## Required Confirmations
 

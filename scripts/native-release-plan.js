@@ -81,6 +81,8 @@ const platformAliases = {
   apple: ["ios", "macos"],
 }
 
+const secretSources = new Set(["github", "env"])
+
 function parseArgs(argv) {
   const args = {
     repo: defaultRepo,
@@ -89,6 +91,7 @@ function parseArgs(argv) {
     out: "",
     jsonOut: "",
     requireReady: false,
+    secretSource: "github",
   }
 
   for (const arg of argv) {
@@ -100,6 +103,8 @@ function parseArgs(argv) {
       args.format = "markdown"
     } else if (arg === "--require-ready") {
       args.requireReady = true
+    } else if (arg.startsWith("--secret-source=")) {
+      args.secretSource = arg.slice("--secret-source=".length)
     } else if (arg.startsWith("--repo=")) {
       args.repo = arg.slice("--repo=".length)
     } else if (arg.startsWith("--platform=")) {
@@ -117,10 +122,10 @@ function parseArgs(argv) {
 }
 
 function usage() {
-  return `Usage: node scripts/native-release-plan.js [--repo=owner/name] [--platform=all|mobile|desktop|android|ios|macos|windows] [--markdown|--json] [--out=path] [--json-out=path] [--require-ready]
+  return `Usage: node scripts/native-release-plan.js [--repo=owner/name] [--platform=all|mobile|desktop|android|ios|macos|windows] [--secret-source=github|env] [--markdown|--json] [--out=path] [--json-out=path] [--require-ready]
 
 Creates a non-secret native release management plan for Mac, Windows, iPhone, and Android.
-It may query GitHub Actions secret names through gh, but it never reads or prints secret values.`
+It can query GitHub Actions secret names through gh or inspect selected environment-variable presence, but it never prints secret values.`
 }
 
 function readJson(filePath) {
@@ -175,6 +180,33 @@ function listGithubSecrets(repo) {
   }
 }
 
+function listEnvironmentSecrets() {
+  const names = unique(Object.values(secretGroups).flat())
+    .filter((name) => Boolean(process.env[name] && process.env[name].trim()))
+
+  return {
+    source: "env",
+    status: "available",
+    names,
+    error: "",
+  }
+}
+
+function listSecrets({ repo, source }) {
+  if (!secretSources.has(source)) {
+    throw new Error(`Unknown secret source: ${source}`)
+  }
+
+  if (source === "env") {
+    return listEnvironmentSecrets()
+  }
+
+  return {
+    source: "github",
+    ...listGithubSecrets(repo),
+  }
+}
+
 function secretsForGroups(groups) {
   return unique(groups.flatMap((group) => secretGroups[group] || []))
 }
@@ -199,8 +231,8 @@ function secretStatus(secretNames, presentNames, canAudit) {
   }
 }
 
-function createPlan({ repo, selectedPlatforms, metadata, githubSecrets }) {
-  const canAudit = githubSecrets.status === "available"
+function createPlan({ repo, selectedPlatforms, metadata, secrets }) {
+  const canAudit = secrets.status === "available"
   const generatedAt = new Date().toISOString()
   const platformPlans = selectedPlatforms.map((name) => {
     const platform = platforms[name]
@@ -216,9 +248,9 @@ function createPlan({ repo, selectedPlatforms, metadata, githubSecrets }) {
       artifact: platform.artifact,
       releaseGroups: platform.releaseGroups,
       storeGroups: platform.storeGroups,
-      releaseSecrets: secretStatus(releaseSecrets, githubSecrets.names, canAudit),
-      storeUploadSecrets: secretStatus(storeSecrets, githubSecrets.names, canAudit),
-      allSecrets: secretStatus(allSecrets, githubSecrets.names, canAudit),
+      releaseSecrets: secretStatus(releaseSecrets, secrets.names, canAudit),
+      storeUploadSecrets: secretStatus(storeSecrets, secrets.names, canAudit),
+      allSecrets: secretStatus(allSecrets, secrets.names, canAudit),
       accountActions: metadataPlatform.requiredAccountActions || [],
     }
   })
@@ -231,9 +263,10 @@ function createPlan({ repo, selectedPlatforms, metadata, githubSecrets }) {
     repo,
     status: ready ? "ready" : "blocked",
     githubSecretAudit: {
-      status: githubSecrets.status,
-      error: githubSecrets.error,
-      presentCount: githubSecrets.names.length,
+      source: secrets.source,
+      status: secrets.status,
+      error: secrets.error,
+      presentCount: secrets.names.length,
     },
     app: {
       name: metadata.app?.name,
@@ -266,6 +299,7 @@ function renderMarkdown(plan) {
   lines.push(`Generated: ${plan.generatedAt}`)
   lines.push(`Repository: \`${plan.repo}\``)
   lines.push(`Status: \`${plan.status}\``)
+  lines.push(`Secret audit source: \`${plan.githubSecretAudit.source}\``)
   lines.push("")
   lines.push("This plan contains secret names only. It must never include passwords, certificates, keystores, provisioning profiles, API private keys, or app-specific passwords.")
   lines.push("")
@@ -347,12 +381,15 @@ function main() {
 
   const selectedPlatforms = expandPlatforms(args.platform)
   const metadata = readJson(metadataPath)
-  const githubSecrets = listGithubSecrets(args.repo)
+  const secrets = listSecrets({
+    repo: args.repo,
+    source: args.secretSource,
+  })
   const plan = createPlan({
     repo: args.repo,
     selectedPlatforms,
     metadata,
-    githubSecrets,
+    secrets,
   })
 
   const json = `${JSON.stringify(plan, null, 2)}\n`

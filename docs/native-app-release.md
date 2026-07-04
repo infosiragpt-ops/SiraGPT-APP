@@ -133,6 +133,11 @@ account actions, and safe upload commands, use:
 npm run native:release:plan -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/native-release-plan.md --json-out=output/native-release-plan.json
 ```
 
+GitHub Actions also exposes `Native readiness report`, which generates and
+uploads the same non-secret Markdown/JSON packet as the artifact
+`siragpt-native-readiness-report`. That workflow inspects secret presence from
+GitHub Actions environment injection and never prints secret values.
+
 Android signing secrets:
 
 - `ANDROID_KEYSTORE_BASE64`: base64-encoded Play upload keystore.
@@ -218,6 +223,7 @@ npm run mobile:doctor
 npm run native:readiness
 npm run native:readiness:desktop
 npm run native:release:plan -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/native-release-plan.md --json-out=output/native-release-plan.json
+npm run native:release:plan:ci
 cd android && ./gradlew :app:assembleDebug :app:bundleRelease --no-daemon
 bash scripts/check-secrets.sh
 git diff --check

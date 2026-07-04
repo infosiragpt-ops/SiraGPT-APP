@@ -1,0 +1,94 @@
+name: Native readiness report
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [production-main]
+    paths:
+      - 'docs/native-app-release.md'
+      - 'docs/mobile-store-release.md'
+      - 'docs/store-submission/**'
+      - 'scripts/native-release-plan.js'
+      - 'scripts/native-store-readiness.js'
+      - 'scripts/sync-native-version.js'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'capacitor.config.ts'
+      - 'apps/desktop/package.json'
+      - '.github/workflows/native-readiness-report.yml'
+  push:
+    branches: [production-main]
+    paths:
+      - 'docs/native-app-release.md'
+      - 'docs/mobile-store-release.md'
+      - 'docs/store-submission/**'
+      - 'scripts/native-release-plan.js'
+      - 'scripts/native-store-readiness.js'
+      - 'scripts/sync-native-version.js'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'capacitor.config.ts'
+      - 'apps/desktop/package.json'
+      - '.github/workflows/native-readiness-report.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-readiness-report-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '24'
+
+jobs:
+  report:
+    name: Generate native release readiness packet
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Validate native public metadata
+        run: |
+          npm run native:version:check
+          npm run native:store:readiness
+
+      - name: Generate non-secret readiness plan
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          IOS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.IOS_SIGNING_CERTIFICATE_BASE64 }}
+          IOS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.IOS_SIGNING_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+          MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          npm run native:release:plan:ci
+          node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('output/native-release-plan.json','utf8')); if (!['ready','blocked'].includes(p.status)) throw new Error('invalid native readiness status'); if (p.githubSecretAudit.source !== 'env') throw new Error('expected env secret source'); console.log('native-readiness-status=' + p.status); console.log('native-readiness-missing-secrets=' + p.missingSecrets.length)"
+
+      - name: Upload native readiness packet
+        uses: actions/upload-artifact@v6
+        with:
+          name: siragpt-native-readiness-report
+          path: |
+            output/native-release-plan.md
+            output/native-release-plan.json
+          retention-days: 30
+          if-no-files-found: error
