@@ -36,6 +36,7 @@ import {
   Image as ImageIcon,
   LayoutGrid,
   ListChecks,
+  PackagePlus,
   Plus,
   Rocket,
   Search,
@@ -124,7 +125,7 @@ import { DiffView } from "./diff-view"
 
 import { DotmCircular15, THINKING_GLYPH_COLOR } from "@/components/ui/dotm-circular-15"
 
-type ComposerMode = "app" | "build" | "plan" | "debug" | "ask" | "image"
+type ComposerMode = "app" | "build" | "deps" | "plan" | "debug" | "ask" | "image"
 
 const CODE_OPEN_PREVIEW_EVENT = "siragpt:code-open-preview"
 const CODE_RUN_PREVIEW_EVENT = "siragpt:code-run-preview"
@@ -405,6 +406,7 @@ function orderFilesForWorkspaceApply<T extends { path: string; content?: string 
 const COMPOSER_MODE_LABEL: Record<ComposerMode, string> = {
   app: "App",
   build: "Build",
+  deps: "Deps",
   plan: "Plan",
   debug: "Debug",
   ask: "Ask",
@@ -414,6 +416,7 @@ const COMPOSER_MODE_LABEL: Record<ComposerMode, string> = {
 const COMPOSER_PLACEHOLDER: Record<ComposerMode, string> = {
   app: "Crea, prueba, itera…",
   build: "Pide un cambio, pega código o / para comandos",
+  deps: "Instala paquetes y úsalos en el código…",
   plan: "Objetivo o plan antes de editar archivos…",
   debug: "Error, stack trace o comportamiento esperado…",
   ask: "Pregunta sobre tu app o tu código — respondo sin tocar archivos…",
@@ -436,6 +439,8 @@ const COMPOSER_MODE_INSTRUCTION: Record<ComposerMode, string> = {
     "3) Cierra con 1-3 siguientes pasos sugeridos para iterar (ej. 'añade sección de precios', 'conecta un formulario', 'modo claro/oscuro').",
   build:
     "Modo Build: implementa cambios de código concretos. Si creas o modificas archivos, entrega bloques aplicables con ruta.",
+  deps:
+    "Modo Deps: actúa como un ingeniero de dependencias. Primero inspecciona package.json y el stack actual. Si el usuario pide instalar/agregar un paquete, actualiza package.json de forma mínima, instala con el gestor del workspace, ejecuta verificación y usa la dependencia en el código solo si el usuario lo pidió. No inventes paquetes; si un paquete requiere API key, variables o configuración externa, crea .env.example con placeholders y explica el requisito. Mantén el preview vivo funcionando.",
   plan:
     "Modo Plan: analiza primero, propone una arquitectura o pasos claros, identifica riesgos y no cambies archivos hasta que el usuario lo pida.",
   debug:
@@ -550,7 +555,7 @@ const CONVERSATION_SYSTEM_PROMPT = [
   "[MODO CONVERSACIÓN]",
   "Eres el agente de apps de SiraGPT dentro del workspace /code. El usuario NO pidió construir ni cambiar código: te está hablando (una pregunta, una duda o un comentario).",
   "Responde útil, cercano y BREVE (2-6 frases), en el idioma del usuario.",
-  "Si pregunta qué sabes hacer: creas apps, landings y juegos desde una descripción; editas el proyecto actual con cambios puntuales; lo ejecutas en vivo en el preview; y lo publicas.",
+  "Si pregunta qué sabes hacer: creas apps, landings y juegos desde una descripción; editas el proyecto actual; instalas dependencias npm cuando el proyecto lo necesita; lo ejecutas en vivo en el preview; lo corriges y lo publicas.",
   "PROHIBIDO generar código, bloques de archivos, o afirmar que hiciste cambios — en este turno solo conversas.",
   "Cierra invitando a pedir la construcción o el cambio cuando quiera.",
 ].join("\n")
@@ -610,7 +615,7 @@ function buildSystemContext(
   const hasNodeProject = Object.keys(files).some((p) => /(^|\/)package\.json$/.test(p))
   // App mode builds the full-stack APPS contract even on an empty workspace —
   // emitting the static-preview rules there would contradict the builder.
-  const expectNodeProject = hasNodeProject || mode === "app"
+  const expectNodeProject = hasNodeProject || mode === "app" || mode === "deps"
   const previewBlock = mode === "app"
     ? [
         "El workspace alojará un SOFTWARE FULL-STACK real: Next.js 14 App Router",
@@ -622,6 +627,14 @@ function buildSystemContext(
         "Si existe app/page.tsx, los cambios visuales del home/dashboard se hacen",
         "en app/page.tsx y app/globals.css. NO edites index.html ni README.md",
         "para cambios que deban verse en el preview vivo de Next.",
+      ].join("\n")
+    : mode === "deps"
+    ? [
+        hasNodeProject
+          ? "El workspace contiene package.json: trata este turno como gestión real de dependencias."
+          : "El usuario está pidiendo dependencias, pero aún no hay package.json. Si el pedido requiere un proyecto ejecutable, crea un starter Vite mínimo con package.json; si solo pregunta, explica qué falta.",
+        "Inspecciona package.json antes de cambiarlo. Instala paquetes solo por nombre/version válidos, sin flags arbitrarios ni scripts interactivos.",
+        "Después de instalar o editar dependencias, ejecuta type_check y dev_server_check; si aparece un import roto o módulo faltante, corrige package.json/código y verifica otra vez.",
       ].join("\n")
     : expectNodeProject
     ? [
@@ -3071,7 +3084,7 @@ function EmptyChat({ active }: { active: boolean }) {
         ¿Qué quieres construir?
       </h2>
       <p className="mt-1.5 max-w-[18rem] text-[13px] leading-relaxed text-muted-foreground">
-        Describe tu idea y el agente la crea, la ejecuta y la corrige sola.
+        Describe tu idea, pide paquetes npm y el agente crea, ejecuta, verifica y corrige el preview en vivo.
       </p>
     </div>
   )
@@ -3402,6 +3415,13 @@ function ComposerPlusMenu({
         >
           <Sparkles className={iconClass} />
           <span>Build</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          className={cn(itemClass, mode === "deps" && "bg-muted/70 font-medium text-foreground")}
+          onClick={() => onModeChange("deps")}
+        >
+          <PackagePlus className={iconClass} />
+          <span>Deps · instalar paquetes</span>
         </DropdownMenuItem>
         <DropdownMenuItem
           className={cn(itemClass, mode === "plan" && "bg-muted/70 font-medium text-foreground")}

@@ -37,21 +37,40 @@ test('list_files surfaces git failures as tool errors', async () => {
 });
 
 test('type_check clean pass', async () => {
+  const calls = [];
   const runner = fakeRunner({ exec: async (_p, cmd) => {
-    assert.deepEqual(cmd, ['bunx', 'tsc', '--noEmit', '--pretty', 'false']);
+    calls.push(cmd);
     return { exitCode: 0, stdout: '', stderr: '' };
   } });
   const r = await TOOLS.type_check.execute({}, { runner, project: 'p1' });
   assert.equal(r.isError, false);
+  assert.deepEqual(calls, [
+    ['bun', 'install'],
+    ['bunx', 'tsc', '--noEmit', '--pretty', 'false'],
+  ]);
   assert.match(r.observation, /compila sin errores/);
 });
 
 test('type_check failure feeds the REAL diagnostics back to the model', async () => {
-  const runner = fakeRunner({ exec: async () => ({ exitCode: 2, stdout: "src/App.tsx(1,1): error TS2304: Cannot find name 'x'.", stderr: '' }) });
+  let n = 0;
+  const runner = fakeRunner({
+    exec: async () => {
+      n += 1;
+      if (n === 1) return { exitCode: 0, stdout: '', stderr: '' };
+      return { exitCode: 2, stdout: "src/App.tsx(1,1): error TS2304: Cannot find name 'x'.", stderr: '' };
+    },
+  });
   const r = await TOOLS.type_check.execute({}, { runner, project: 'p1' });
   assert.equal(r.isError, true);
   assert.match(r.observation, /TS2304/);
   assert.match(r.observation, /Corrige estos errores/);
+});
+
+test('type_check failure reports install errors before tsc', async () => {
+  const runner = fakeRunner({ exec: async () => ({ exitCode: 1, stdout: '', stderr: 'No matching version for no-such-package' }) });
+  const r = await TOOLS.type_check.execute({}, { runner, project: 'p1' });
+  assert.equal(r.isError, true);
+  assert.match(r.observation, /No pude instalar/);
 });
 
 test('type_check runner crash is informational, not a build error', async () => {
@@ -114,6 +133,8 @@ test('new tools carry timeline metadata (kind/commandFor/pathFor)', () => {
   assert.equal(TOOLS.type_check.kind, 'terminal');
   assert.equal(TOOLS.dev_server_check.kind, 'terminal');
   assert.equal(TOOLS.run_subagent.kind, 'agent');
-  assert.equal(TOOLS.type_check.commandFor({}), 'bunx tsc --noEmit');
+  assert.equal(TOOLS.install_dependencies.kind, 'terminal');
+  assert.equal(TOOLS.type_check.commandFor({}), 'bun install && bunx tsc --noEmit');
+  assert.equal(TOOLS.install_dependencies.commandFor({ packages: ['zod'], dev: true }), 'bun add -d zod');
   assert.match(TOOLS.run_subagent.commandFor({ agent: 'planner', task: 'plan the CRM' }), /subagent planner/);
 });

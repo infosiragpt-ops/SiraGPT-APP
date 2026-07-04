@@ -198,12 +198,12 @@ function buildSystemPrompt({ project, plan, fileTree, sourcePrompt, projectNotes
     'Trabajas paso a paso: piensa, usa una herramienta, lee el resultado, continúa.',
     'El workspace ya viene provisionado con un starter REACT 18 + VITE 7 + TypeScript ejecutable: package.json (react, react-dom, lucide-react para iconos, framer-motion para animación, recharts para gráficas, clsx, @vitejs/plugin-react, typescript, vite), vite.config.ts, tsconfig.json, index.html (carga /src/main.tsx), src/main.tsx y src/App.tsx.',
     'NO inicialices frameworks ni ejecutes scaffolds interactivos (create-next-app/create-vite); construye componentes React (.tsx) editando/creando archivos en src/ con write_file/edit_file.',
-    'Si necesitas estructura adicional, crea archivos concretos tú mismo. Usa run_command solo para verificar, instalar dependencias declaradas o revisar git.',
+    'Si necesitas estructura adicional, crea archivos concretos tú mismo. Para paquetes npm usa install_dependencies (no run_command); luego ejecuta type_check y dev_server_check. Usa run_command solo para comandos no interactivos de verificación o git.',
     'Antes de editar un archivo existente, léelo (read_file) y usa edit_file con el fragmento EXACTO; usa repo_map (mapa rankeado de símbolos) al retomar un proyecto existente y list_files/grep_search para el detalle, en vez de adivinar rutas.',
     'NO reescribas un archivo que ya escribiste salvo para corregir un error concreto (uno que viste en type_check o dev_server_check). Construye archivo por archivo siguiendo el plan; NO intentes hacerlo "todo de una vez" reescribiendo el mismo archivo una y otra vez. Cuando un archivo esté listo, avanza al siguiente paso del plan.',
     'Antes de dar por terminado, asegúrate de que el proyecto compila (el sistema ejecutará una verificación de tipos al final y te devolverá los errores si los hay).',
     'Nunca dependas de prompts interactivos de terminal; los comandos deben terminar solos.',
-    'VERIFICA tu trabajo como lo haría un ingeniero: después de crear o editar código usa type_check para ver los errores reales de compilación, dev_server_check para confirmar que la app corre y browser_check para ver la app con ojos de usuario (excepciones de runtime, página en blanco, overlay de Vite); corrige lo que salga antes de dar el trabajo por terminado.',
+    'VERIFICA tu trabajo como lo haría un ingeniero: después de crear, editar o instalar dependencias usa type_check para instalar/leer errores reales de compilación, dev_server_check para confirmar que la app corre y browser_check para ver la app con ojos de usuario (excepciones de runtime, página en blanco, overlay de Vite); corrige lo que salga antes de dar el trabajo por terminado.',
     require('./skills').skillsPromptLine(),
     'Para tareas grandes o especializadas delega con run_subagent: planner (plan de construcción), frontend_builder (UI React/TS), backend_engineer (APIs y capa de datos), db_architect (modelo de datos), qa_reviewer (revisión final), debugger (diagnóstico y fix de errores reales), enterprise_analyst (especificación de negocio). Si el proyecto define agentes custom en .sira/agents.json también puedes delegarles.',
     'Los subagentes son independientes: cuando dos tareas no dependen entre sí (p.ej. frontend_builder para la UI y db_architect para el modelo), emite VARIOS run_subagent en el MISMO turno y correrán en paralelo.',
@@ -612,8 +612,8 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         if (v.ran && !v.ok) {
           verifyRounds += 1;
           const repairPrompt = v.kind === 'runtime'
-            ? `[VERIFICACIÓN RUNTIME] El proyecto compila pero NO arranca en el dev server. Errores de runtime/boot:\n${v.errors}\nDiagnostica la causa (imports rotos, module not found, dependencia sin declarar en package.json, error de sintaxis, overlay de Vite) con read_file/grep_search, corrígela (read_file + edit_file) y cuando termines deja de llamar herramientas.`
-            : `[VERIFICACIÓN] El proyecto NO compila. Errores de tsc:\n${v.errors}\nCorrige estos errores (read_file + edit_file) y cuando termines deja de llamar herramientas.`;
+            ? `[VERIFICACIÓN RUNTIME] El proyecto compila pero NO arranca en el dev server. Errores de runtime/boot:\n${v.errors}\nDiagnostica la causa (imports rotos, module not found, dependencia sin declarar en package.json, error de sintaxis, overlay de Vite) con read_file/grep_search; si falta un paquete usa install_dependencies; si es código, corrígelo con read_file + edit_file. Cuando termines deja de llamar herramientas.`
+            : `[VERIFICACIÓN] El proyecto NO compila. Errores de tsc:\n${v.errors}\nCorrige estos errores (si falta un paquete usa install_dependencies; si es código usa read_file + edit_file) y cuando termines deja de llamar herramientas.`;
           messages.push({ role: 'user', content: repairPrompt });
           continue;
         }

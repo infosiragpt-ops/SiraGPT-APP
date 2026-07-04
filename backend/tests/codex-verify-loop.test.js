@@ -122,7 +122,7 @@ test('fixer only gets the whitelisted repair tools', async () => {
     llmTurn: async ({ tools }) => { seenTools.push(tools.map((t) => t.name).sort()); return { text: 'ok', toolCalls: [] }; },
     env: { NODE_ENV: 'test' },
   });
-  assert.deepEqual(seenTools[0], ['edit_file', 'list_files', 'read_file', 'write_file']);
+  assert.deepEqual(seenTools[0], ['edit_file', 'install_dependencies', 'list_files', 'read_file', 'write_file']);
   for (const name of verifyLoop.FIX_TOOLS) assert.ok(TOOLS[name], name);
 });
 

@@ -76,6 +76,8 @@ function formatSchema(schema) {
 }
 
 const PLAN_TASK_STATUSES = ['pending', 'in_progress', 'completed'];
+const MAX_DEPENDENCIES_PER_INSTALL = 20;
+const PACKAGE_SPEC_RE = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*(?:@(?:[~^]?\d+(?:\.\d+){0,2}(?:[-+][a-z0-9.-]+)?|latest|next|beta|alpha|canary|rc))?$/i;
 
 /**
  * Validate + normalise an update_plan `tasks` argument into the plan_updated
@@ -100,10 +102,30 @@ function normalisePlanTasks(raw) {
   return out;
 }
 
+function normalisePackageSpecs(raw) {
+  if (!Array.isArray(raw)) return null;
+  const out = [];
+  const seen = new Set();
+  for (const item of raw) {
+    const spec = String(item || '').trim();
+    if (!spec) return null;
+    if (/[\\\s;&|`$<>]/.test(spec)) return null;
+    if (/^(?:https?:|git\+|github:|file:|link:|workspace:)/i.test(spec)) return null;
+    if (!PACKAGE_SPEC_RE.test(spec)) return null;
+    const key = spec.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push(spec);
+    }
+  }
+  if (out.length === 0 || out.length > MAX_DEPENDENCIES_PER_INSTALL) return null;
+  return out;
+}
+
 const TOOLS = {
   run_command: {
     kind: 'terminal',
-    description: 'Ejecuta un comando no interactivo en el workspace (allowlist: git, bun, bunx, node, ls, cat, wc). No uses scaffolds interactivos como create-next-app/create-vite; para landings/apps simples escribe archivos con write_file/edit_file.',
+    description: 'Ejecuta un comando no interactivo en el workspace (allowlist: git, bun, bunx, node, ls, cat, wc). Para instalar paquetes npm usa install_dependencies; no pases flags arbitrarios por run_command. No uses scaffolds interactivos como create-next-app/create-vite; para landings/apps simples escribe archivos con write_file/edit_file.',
     parameters: { type: 'object', properties: { cmd: { type: 'array', items: { type: 'string' } }, timeoutMs: { type: 'number' } }, required: ['cmd'] },
     commandFor: (args) => (Array.isArray(args?.cmd) ? args.cmd.join(' ') : String(args?.cmd || '')),
     pathFor: () => null,
@@ -121,6 +143,70 @@ const TOOLS = {
         };
       } catch (err) {
         return { isError: true, summary: `runner error: ${err.message}`, observation: `Error ejecutando comando: ${err.message}` };
+      }
+    },
+  },
+
+  install_dependencies: {
+    kind: 'terminal',
+    description: 'Instala dependencias npm declaradas por el usuario de forma segura con `bun add`. Valida nombres/versiones, rechaza URLs/flags/comandos, actualiza package.json/bun.lock y devuelve la salida real. Úsalo cuando falte un paquete, antes de type_check/dev_server_check.',
+    parameters: {
+      type: 'object',
+      properties: {
+        packages: { type: 'array', items: { type: 'string' }, description: 'Paquetes npm, opcionalmente con versión simple: lucide-react, zod@^3.23.8, @vitejs/plugin-react.' },
+        dev: { type: 'boolean', description: 'Instalar como devDependency con -d.' },
+        timeoutMs: { type: 'number' },
+      },
+      required: ['packages'],
+    },
+    commandFor: (args) => {
+      const specs = Array.isArray(args?.packages) ? args.packages.join(' ') : '';
+      return `bun add${args?.dev ? ' -d' : ''}${specs ? ` ${specs}` : ''}`;
+    },
+    pathFor: () => 'package.json',
+    async execute(args, ctx) {
+      const packages = normalisePackageSpecs(args?.packages);
+      if (!packages) {
+        return {
+          isError: true,
+          summary: 'paquetes inválidos',
+          observation: `Error: \`packages\` debe contener 1-${MAX_DEPENDENCIES_PER_INSTALL} nombres npm seguros (sin espacios, URLs, flags ni comandos). Ejemplo: ["lucide-react", "zod@^3.23.8"].`,
+        };
+      }
+      try {
+        await ctx.runner.readFile(ctx.project, 'package.json');
+      } catch {
+        return {
+          isError: true,
+          summary: 'package.json no encontrado',
+          observation: 'Error: no existe package.json. Crea primero un proyecto Vite/React mínimo o escribe package.json antes de instalar dependencias.',
+        };
+      }
+      const cmd = ['bun', 'add'];
+      if (args?.dev) cmd.push('-d');
+      cmd.push(...packages);
+      try {
+        const out = await ctx.runner.exec(ctx.project, cmd, { timeoutMs: args?.timeoutMs || 120000 });
+        const body = summarise([out.stdout, out.stderr].filter(Boolean).join('\n'), 5000);
+        if (out.exitCode !== 0) {
+          return {
+            isError: true,
+            summary: `bun add falló (exit ${out.exitCode})`,
+            observation: `No pude instalar ${packages.join(', ')}.\nexitCode=${out.exitCode}\n${body}`,
+          };
+        }
+        let manifest = '';
+        try {
+          const pkg = await ctx.runner.readFile(ctx.project, 'package.json');
+          manifest = pkg?.content ? `\npackage.json actualizado:\n${summarise(pkg.content, 2200)}` : '';
+        } catch { /* manifest summary is optional */ }
+        return {
+          isError: false,
+          summary: `instalado ${packages.join(', ')}`,
+          observation: `OK: instalé ${packages.join(', ')}${args?.dev ? ' como devDependency' : ''}.\n${body}${manifest}\nAhora ejecuta type_check y dev_server_check para validar que la app compila y corre.`,
+        };
+      } catch (err) {
+        return { isError: true, summary: `runner error: ${err.message}`, observation: `Error instalando dependencias: ${err.message}` };
       }
     },
   },
@@ -291,15 +377,24 @@ const TOOLS = {
 
   type_check: {
     kind: 'terminal',
-    description: 'Compila el proyecto con TypeScript (tsc --noEmit) y devuelve los errores REALES de tipos/imports. Úsalo SIEMPRE después de crear o editar código, y corrige lo que salga antes de terminar.',
+    description: 'Instala dependencias declaradas con bun install y compila el proyecto con TypeScript (tsc --noEmit), devolviendo los errores REALES de tipos/imports. Úsalo SIEMPRE después de crear, editar o instalar dependencias, y corrige lo que salga antes de terminar.',
     parameters: { type: 'object', properties: { timeoutMs: { type: 'number' } }, required: [] },
-    commandFor: () => 'bunx tsc --noEmit',
+    commandFor: () => 'bun install && bunx tsc --noEmit',
     pathFor: () => null,
     async execute(args, ctx) {
       try {
+        const install = await ctx.runner.exec(ctx.project, ['bun', 'install'], { timeoutMs: args?.timeoutMs || 120000 });
+        if (install.exitCode !== 0) {
+          const diagnostics = summarise([install.stdout, install.stderr].filter(Boolean).join('\n'), 6000);
+          return {
+            isError: true,
+            summary: `bun install falló (exit ${install.exitCode})`,
+            observation: `No pude instalar las dependencias declaradas antes del type check:\n${diagnostics}\nCorrige package.json/bun.lock o usa install_dependencies con paquetes válidos.`,
+          };
+        }
         const out = await ctx.runner.exec(ctx.project, ['bunx', 'tsc', '--noEmit', '--pretty', 'false'], { timeoutMs: args?.timeoutMs || 120000 });
         if (out.exitCode === 0) {
-          return { isError: false, summary: 'type check limpio', observation: 'OK: el proyecto compila sin errores de TypeScript.' };
+          return { isError: false, summary: 'dependencias instaladas + type check limpio', observation: 'OK: dependencias instaladas y el proyecto compila sin errores de TypeScript.' };
         }
         const diagnostics = summarise([out.stdout, out.stderr].filter(Boolean).join('\n'), 6000);
         return {
@@ -579,4 +674,15 @@ function getTool(name) {
   return TOOLS[name] || null;
 }
 
-module.exports = { TOOLS, toolRegistry, getTool, lineCount, summarise, parsePrismaSchema, formatSchema, normalisePlanTasks, PLAN_TASK_STATUSES };
+module.exports = {
+  TOOLS,
+  toolRegistry,
+  getTool,
+  lineCount,
+  summarise,
+  parsePrismaSchema,
+  formatSchema,
+  normalisePlanTasks,
+  normalisePackageSpecs,
+  PLAN_TASK_STATUSES,
+};

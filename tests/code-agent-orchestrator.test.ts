@@ -188,6 +188,14 @@ test("ask/plan modes pass through to plain chat", () => {
   assert.equal(nextAgentAction(state(), "planea la arquitectura", { mode: "plan", hasModel: true }).type, "passthrough")
 })
 
+test("deps mode routes to a constructive workspace patch", () => {
+  const a = nextAgentAction(state(), "instala lucide-react y úsalo en la navegación", {
+    mode: "deps",
+    hasModel: true,
+  })
+  assert.equal(a.type, "patch")
+})
+
 test("debug mode and pasted logs route to the SRE agent", () => {
   assert.equal(nextAgentAction(state(), "algo se rompió", { mode: "debug", hasModel: true }).type, "debug")
   const log = "npm error 404 Not Found - GET https://registry.npmjs.org/@x/y"

@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { TOOLS, toolRegistry, getTool, lineCount, parsePrismaSchema, normalisePlanTasks } = require('../src/services/codex/build-tools');
+const { TOOLS, toolRegistry, getTool, lineCount, parsePrismaSchema, normalisePlanTasks, normalisePackageSpecs } = require('../src/services/codex/build-tools');
 
 function fakeRunner(overrides = {}) {
   return {
@@ -18,7 +18,7 @@ test('toolRegistry projects name/description/parameters for every tool', () => {
   const reg = toolRegistry();
   assert.deepEqual(
     reg.map((t) => t.name).sort(),
-    ['browser_check', 'dev_server_check', 'edit_file', 'grep_search', 'inspect_database', 'list_files', 'read_file', 'repo_map', 'run_command', 'run_subagent', 'type_check', 'update_plan', 'use_skill', 'web_search', 'write_file'],
+    ['browser_check', 'dev_server_check', 'edit_file', 'grep_search', 'inspect_database', 'install_dependencies', 'list_files', 'read_file', 'repo_map', 'run_command', 'run_subagent', 'type_check', 'update_plan', 'use_skill', 'web_search', 'write_file'],
   );
   for (const t of reg) { assert.ok(t.description); assert.ok(t.parameters); }
 });
@@ -73,6 +73,34 @@ test('web_search returns titles/snippets and degrades without an adapter', async
 
   const noAdapter = await TOOLS.web_search.execute({ query: 'x' }, {});
   assert.equal(noAdapter.isError, true);
+});
+
+test('install_dependencies validates package specs and runs bun add safely', async () => {
+  const calls = [];
+  const runner = fakeRunner({
+    readFile: async (_project, path) => {
+      assert.equal(path, 'package.json');
+      return { content: '{"dependencies":{"lucide-react":"latest"}}' };
+    },
+    exec: async (_project, cmd) => {
+      calls.push(cmd);
+      return { exitCode: 0, stdout: 'installed', stderr: '' };
+    },
+  });
+  const r = await TOOLS.install_dependencies.execute({ packages: ['lucide-react', 'zod@^3.23.8'], dev: true }, { runner, project: 'p1' });
+  assert.equal(r.isError, false);
+  assert.deepEqual(calls[0], ['bun', 'add', '-d', 'lucide-react', 'zod@^3.23.8']);
+  assert.match(r.observation, /type_check/);
+  assert.equal(TOOLS.install_dependencies.pathFor({}), 'package.json');
+});
+
+test('install_dependencies rejects unsafe package specs', async () => {
+  assert.equal(normalisePackageSpecs(['lucide-react', '@vitejs/plugin-react']).length, 2);
+  assert.equal(normalisePackageSpecs(['react && rm -rf /']), null);
+  assert.equal(normalisePackageSpecs(['https://example.com/x.tgz']), null);
+  assert.equal(normalisePackageSpecs(['--force']), null);
+  const r = await TOOLS.install_dependencies.execute({ packages: ['react && rm -rf /'] }, { runner: fakeRunner(), project: 'p1' });
+  assert.equal(r.isError, true);
 });
 
 test('getTool + lineCount helpers', () => {

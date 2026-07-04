@@ -237,7 +237,13 @@ export function nextAgentAction(state: AgentState, input: string, signal: AgentS
   // 1) Explicit error-fix bridge always wins (user pressed "Reparar error").
   if (signal.fixErrorText) return { type: "debug", log: signal.fixErrorText }
 
-  // 2) Non-constructive modes → plain chat, ALWAYS. Ask/Plan/Image must NEVER
+  // 2) Dependency mode is constructive: edit package.json/lockfile, install,
+  //    then verify. It should never be treated as a passive Ask answer.
+  if (signal.mode === "deps") {
+    return { type: "patch", instruction: text }
+  }
+
+  // 3) Non-constructive modes → plain chat, ALWAYS. Ask/Plan/Image must NEVER
   //    write files — even after a build (phase "preview") or when the user pastes
   //    an error log — otherwise Ask silently turns a question into a patch/debug.
   //    This check stays ABOVE the preview-patch and pasted-log-debug rules below.
@@ -245,15 +251,15 @@ export function nextAgentAction(state: AgentState, input: string, signal: AgentS
     return { type: "passthrough" }
   }
 
-  // 3) Debug: explicit debug mode, or a pasted error log in a constructive mode.
+  // 4) Debug: explicit debug mode, or a pasted error log in a constructive mode.
   if (signal.mode === "debug" || isBuildLog(text)) return { type: "debug", log: text }
 
-  // 4) ⚡ Construir → generate immediately.
+  // 5) ⚡ Construir → generate immediately.
   if (signal.forceDeterministic) {
     return { type: "generate", context: seedGoal(state.context, text), tier: "deterministic" }
   }
 
-  // 5) Iterating on an already-built app.
+  // 6) Iterating on an already-built app.
   if (state.phase === "preview" && !isBuildRequest(text) && text.length > 0) {
     return { type: "patch", instruction: text }
   }
@@ -266,7 +272,7 @@ export function nextAgentAction(state: AgentState, input: string, signal: AgentS
     (signal.mode === "app" && text.length > 80)
   const isStart = (signal.mode === "app" || signal.mode === "build") && isBuildSeed
 
-  // 5) Intake gate (app/build). A conversational question mid-intake gets a
+  // 7) Intake gate (app/build). A conversational question mid-intake gets a
   //    CHAT answer instead of being stuffed into a slot and force-generating
   //    (a stalled intake used to swallow "¿puedes ayudarme?" into a build).
   if (inIntake && isConversationalMessage(text) && !isBuildRequest(text)) {
@@ -282,7 +288,7 @@ export function nextAgentAction(state: AgentState, input: string, signal: AgentS
     return { type: "generate", context: seedAutonomousBrief(state.context, text), tier }
   }
 
-  // 6) Default (e.g. app-mode follow-up that is not a build request).
+  // 8) Default (e.g. app-mode follow-up that is not a build request).
   return { type: "passthrough" }
 }
 

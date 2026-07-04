@@ -6,7 +6,7 @@
  * without pulling in localStorage or network code.
  */
 
-export type ComposerMode = "app" | "build" | "plan" | "debug" | "ask" | "image"
+export type ComposerMode = "app" | "build" | "deps" | "plan" | "debug" | "ask" | "image"
 
 export type AgentPhase = "idle" | "intake" | "generating" | "preview" | "debugging"
 
