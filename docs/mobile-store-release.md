@@ -6,7 +6,7 @@
 - Android release AAB QA builds successfully in GitHub Actions.
 - Capacitor app ID is `com.siragpt.app`.
 - Production WebView URL is `https://siragpt.com`.
-- Public GitHub prerelease `native-qa-v0.4.3-7d1ed66` contains unsigned QA packages for Android, iOS simulator, macOS, and Windows.
+- Public GitHub prerelease `native-qa-v0.4.3-884cbec` contains unsigned QA packages for Android, iOS simulator, macOS, and Windows.
 - Android signed Play release publishing is blocked until the Play upload keystore secrets are configured in GitHub Actions and Google Play account verification is complete.
 - iOS publishing is blocked until Apple Developer signing assets, App Store Connect access, and Apple account verification are configured.
 
@@ -15,23 +15,24 @@
 - `npm run mobile:doctor` passed locally for Android and iOS.
 - `npm run native:version:check` passed locally for native version `0.4.3` / build `4003`.
 - `npm run native:store:readiness` passed locally against the submission metadata.
-- GitHub Actions `Native mobile builds` run `28718197656` passed on `production-main` SHA `7d1ed661246409eeb817067de29147de6f36e373`.
+- GitHub Actions `Native mobile builds` run `28719956528` passed on `production-main` SHA `884cbec329822fa3590165fafea40c27edb10e95`.
 - The run produced unsigned QA artifacts:
   - `siragpt-mobile-android`
   - `siragpt-mobile-ios-simulator`
-- GitHub Actions `Native desktop builds` run `28718197674` passed on the same SHA and produced unsigned QA artifacts:
+- GitHub Actions `Native desktop builds` run `28719956526` passed on the same SHA and produced unsigned QA artifacts:
   - `siragpt-desktop-macos`
   - `siragpt-desktop-windows-x64`
 - Public QA prerelease:
-  - `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-qa-v0.4.3-7d1ed66`
+  - `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-qa-v0.4.3-884cbec`
 - Local downloaded QA artifacts:
-  - `output/native-qa/release-7d1ed66/SiraGPT-0.4.3-android-debug.apk`
-  - `output/native-qa/release-7d1ed66/SiraGPT-0.4.3-android-qa.aab`
-  - `output/native-qa/release-7d1ed66/SiraGPT-0.4.3-ios-simulator-app.zip`
-  - `output/native-qa/release-7d1ed66/SiraGPT-0.4.3-macos-arm64.dmg`
-  - `output/native-qa/release-7d1ed66/SiraGPT-0.4.3-macos-arm64.zip`
-  - `output/native-qa/release-7d1ed66/SiraGPT-Setup-0.4.3-windows-x64.exe`
-  - `output/native-qa/release-7d1ed66/SiraGPT-Portable-0.4.3-windows-x64.exe`
+  - `output/native-qa/release-884cbec32/SiraGPT-0.4.3-android-debug.apk`
+  - `output/native-qa/release-884cbec32/SiraGPT-0.4.3-android-qa.aab`
+  - `output/native-qa/release-884cbec32/SiraGPT-0.4.3-ios-simulator-app.zip`
+  - `output/native-qa/release-884cbec32/SiraGPT-0.4.3-macos-arm64.dmg`
+  - `output/native-qa/release-884cbec32/SiraGPT-0.4.3-macos-arm64.zip`
+  - `output/native-qa/release-884cbec32/SiraGPT-Setup-0.4.3-windows-x64.exe`
+  - `output/native-qa/release-884cbec32/SiraGPT-Portable-0.4.3-windows-x64.exe`
+  - `output/native-qa/release-884cbec32/SHA256SUMS.txt`
 
 ## Current GitHub Secrets State
 
