@@ -408,7 +408,12 @@
     "or": "oder",
     "processing": "Verarbeite Ihre Nachrichten…",
     "tryAgain": "Erneut versuchen",
-    "skipToContent": "Zum Inhalt springen"
+    "skipToContent": "Zum Inhalt springen",
+    "meta": {
+      "titleDefault": "SiraGPT — Multimodale KI-Plattform",
+      "titleTemplate": "%s · SiraGPT",
+      "description": "SiraGPT vereint OpenAI, Gemini, Claude, DeepSeek, Stripe, Replit, ElevenLabs und OpenClaw in einer professionellen KI-Erfahrung."
+    }
   },
   "thinking": {
     "thinking": "Denkt nach…",
