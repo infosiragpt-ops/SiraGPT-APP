@@ -584,11 +584,16 @@ model AgentStep {
   status     String   @default("completed") // completed | error | denied | interrupted | running
   durationMs Int?     @map("duration_ms")
   isError    Boolean  @default(false) @map("is_error")
+  // Correlation id shared by every step of one agent run — lets tooling
+  // fetch a whole run (GET /api/agent-runs/:traceId) without knowing the
+  // message id. Stamped by agent-steps-store at persist time.
+  traceId    String?  @map("trace_id")
   createdAt  DateTime @default(now()) @map("created_at")
 
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
 
   @@index([messageId, stepIndex])
+  @@index([traceId])
   @@map("agent_steps")
 }
 

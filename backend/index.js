@@ -372,6 +372,7 @@ const attributionStackRoutes = require('./src/routes/attribution-stack');
 const ragRoutes = require('./src/routes/rag');
 const agentRoutes = require('./src/routes/agent');
 const agentTaskRoutes = require('./src/routes/agent-task');
+const agentRunsRoutes = require('./src/routes/agent-runs');
 const agentBatchRoutes = require('./src/routes/agent-batch');
 const agentHarnessRoutes = require('./src/routes/agent-harness');
 const seAgentsRoutes = require('./src/routes/se-agents');
@@ -1068,6 +1069,8 @@ app.use('/api/rag', ragRoutes);
 // "key reused with different body" check.
 app.use('/api/agent', idempotency);
 app.use('/api/agent', agentTaskRoutes);
+// Observability read surface: full step trace of one agent run by trace_id.
+app.use('/api/agent-runs', agentRunsRoutes);
 app.use('/api/agent', agentBatchRoutes);
 app.use('/api/agent', agentRoutes);
 // Agent harness (Phase 1): interactive tool-permission decisions + external

@@ -64,12 +64,17 @@ function buildAgentMetadata(run, { model = null } = {}) {
 }
 
 /**
- * Persist the run. Returns { ok, stepsPersisted } and never throws.
+ * Persist the run. Returns { ok, stepsPersisted, traceId } and never throws.
+ * Every step row of one run shares a trace_id (caller-supplied or minted
+ * here) so GET /api/agent-runs/:traceId can fetch the whole run directly.
  */
-async function persistAgentRun({ prisma, messageId, run, model = null }) {
+async function persistAgentRun({ prisma, messageId, run, model = null, traceId = null }) {
   if (!prisma || !messageId || !run || !Array.isArray(run.steps) || run.steps.length === 0) {
-    return { ok: false, stepsPersisted: 0, skipped: true };
+    return { ok: false, stepsPersisted: 0, skipped: true, traceId: null };
   }
+  const finalTraceId = (typeof traceId === 'string' && traceId.trim())
+    ? traceId.trim().slice(0, 64)
+    : require('node:crypto').randomUUID();
   let stepsPersisted = 0;
   try {
     if (prisma.agentStep && typeof prisma.agentStep.createMany === 'function') {
@@ -83,6 +88,7 @@ async function persistAgentRun({ prisma, messageId, run, model = null }) {
         status: step.status || 'completed',
         durationMs: step.durationMs != null ? Math.round(step.durationMs) : null,
         isError: Boolean(step.isError),
+        traceId: finalTraceId,
       }));
       const created = await prisma.agentStep.createMany({ data: rows });
       stepsPersisted = (created && created.count) || rows.length;
@@ -93,6 +99,7 @@ async function persistAgentRun({ prisma, messageId, run, model = null }) {
   try {
     const agentMetadata = buildAgentMetadata(run, { model });
     if (agentMetadata && prisma.message && typeof prisma.message.update === 'function') {
+      agentMetadata.traceId = finalTraceId;
       await prisma.message.update({
         where: { id: String(messageId) },
         data: { agentMetadata },
@@ -101,7 +108,7 @@ async function persistAgentRun({ prisma, messageId, run, model = null }) {
   } catch (err) {
     try { console.warn('[agent-steps-store] agent_metadata persist failed:', err && err.message); } catch (_) { /* noop */ }
   }
-  return { ok: stepsPersisted > 0, stepsPersisted };
+  return { ok: stepsPersisted > 0, stepsPersisted, traceId: finalTraceId };
 }
 
 module.exports = {
