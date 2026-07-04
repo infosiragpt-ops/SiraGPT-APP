@@ -201,6 +201,7 @@ package IDs before submitting anything to a store:
 
 ```bash
 npm run native:store:readiness
+npm run native:store:assets:generate
 npm run native:store:assets
 ```
 
@@ -208,6 +209,8 @@ These checks intentionally validate public metadata and public store-listing
 assets only. They do not read or print signing credentials. The asset check
 reports missing screenshots and listing graphics without failing by default;
 use `npm run native:store:assets -- --require-ready` for final release gates.
+Regenerate the screenshots with `native:store:assets:generate` whenever the
+public product positioning or visible native store copy changes.
 
 ## Validation Checklist
 
@@ -215,11 +218,13 @@ Before pushing native release changes:
 
 ```bash
 node -c apps/desktop/main.cjs
+node -c scripts/generate-native-store-assets.js
 node -c scripts/native-store-assets-readiness.js
 node -c scripts/native-store-readiness.js
 sh -n scripts/build-desktop.sh
 npm run native:version:check
 npm run native:store:readiness
+npm run native:store:assets:generate
 npm run native:store:assets
 npm run desktop:pack
 npm run desktop:pack:win

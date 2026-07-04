@@ -94,6 +94,7 @@ any SDKs bundled into native shells.
 
 ```bash
 npm run native:store:readiness
+npm run native:store:assets:generate
 npm run native:store:assets
 npm run native:readiness
 npm run native:readiness:all
@@ -110,6 +111,9 @@ Google Play feature graphic. By default it reports `blocked` without failing
 CI; use `npm run native:store:assets -- --require-ready` when preparing the
 final store upload. `native:readiness:all` validates that signing secret names
 are present in the execution environment.
+`native:store:assets:generate` regenerates the versioned PNG store assets under
+`docs/store-submission/assets/` using Playwright and the local SiraGPT brand
+assets.
 `native:github-secrets:audit` checks which native signing secret names are
 already configured in GitHub Actions for the public repository without reading
 or printing secret values. `native:github-secrets:check` fails until all native

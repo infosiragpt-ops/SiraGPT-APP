@@ -15,9 +15,10 @@
 - `npm run mobile:doctor` passed locally for Android and iOS.
 - `npm run native:version:check` passed locally for native version `0.4.3` / build `4003`.
 - `npm run native:store:readiness` passed locally against the submission metadata.
-- `npm run native:store:assets` produces a non-secret asset report. The current
-  report is expected to stay `blocked` until final store screenshots and the
-  Google Play feature graphic are added under `docs/store-submission/assets/`.
+- `npm run native:store:assets:generate` creates the current store screenshots
+  and Google Play feature graphic under `docs/store-submission/assets/`.
+- `npm run native:store:assets` validates the packaged app icons and generated
+  store assets without reading signing credentials.
 - GitHub Actions `Native mobile builds` run `28719956528` passed on `production-main` SHA `884cbec329822fa3590165fafea40c27edb10e95`.
 - The run produced unsigned QA artifacts:
   - `siragpt-mobile-android`
@@ -98,6 +99,8 @@ To generate a current, non-secret management checklist for the public GitHub
 repo, run:
 
 ```bash
+npm run native:store:assets:generate
+npm run native:store:assets -- --require-ready
 npm run native:release:plan -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/native-release-plan.md --json-out=output/native-release-plan.json
 ```
 
