@@ -93,8 +93,14 @@ any SDKs bundled into native shells.
 npm run native:store:readiness
 npm run native:readiness
 npm run native:readiness:all
+npm run native:github-secrets:audit
+npm run native:github-secrets:check
 ```
 
 `native:store:readiness` validates that the metadata packet matches the real
 native package IDs and required public URLs. `native:readiness:all` validates
 that signing secret names are present in the execution environment.
+`native:github-secrets:audit` checks which native signing secret names are
+already configured in GitHub Actions for the public repository without reading
+or printing secret values. `native:github-secrets:check` fails until all native
+signing groups are configured.

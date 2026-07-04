@@ -46,6 +46,8 @@
     "native:readiness:mobile": "node scripts/native-release-readiness.js --require=mobile",
     "native:readiness:desktop": "node scripts/native-release-readiness.js --require=desktop",
     "native:readiness:all": "node scripts/native-release-readiness.js --require=all",
+    "native:github-secrets:audit": "bash scripts/audit-native-github-secrets.sh",
+    "native:github-secrets:check": "bash scripts/audit-native-github-secrets.sh --require=all --only-required",
     "native:store:readiness": "node scripts/native-store-readiness.js",
     "desktop:dev": "electron apps/desktop/main.cjs",
     "desktop:pack": "electron-builder --projectDir apps/desktop --dir --publish never",

@@ -119,9 +119,12 @@ npm run native:readiness:ios
 npm run native:readiness:mobile
 npm run native:readiness:desktop
 npm run native:readiness:all
+npm run native:github-secrets:audit
+npm run native:github-secrets:check
 ```
 
 For focused CI/preflight output, use `npm run native:readiness -- --require=android,ios,macos,windows --only-required`.
+For GitHub repository secret-name auditing, use `npm run native:github-secrets:audit -- --repo=infosiragpt-ops/SiraGPT-APP`.
 
 Android signing secrets:
 
@@ -153,6 +156,8 @@ Desktop signing secrets:
 - `WINDOWS_CERTIFICATE_PASSWORD`: Windows certificate password.
 
 Never commit these values. Store them only as GitHub Actions secrets or in the vendor store portals.
+The GitHub secret audit prints only names and missing groups; it does not read
+or print secret values.
 
 ### Running A Signed Native Release
 
