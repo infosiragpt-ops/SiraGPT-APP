@@ -123,6 +123,7 @@ npm run native:readiness:desktop
 npm run native:readiness:all
 npm run native:github-secrets:audit
 npm run native:github-secrets:check
+npm run native:github-secrets:setup -- --platform=all --dry-run
 npm run native:release:plan
 ```
 
@@ -139,6 +140,32 @@ GitHub Actions also exposes `Native readiness report`, which generates and
 uploads the same non-secret Markdown/JSON packet as the artifact
 `siragpt-native-readiness-report`. That workflow inspects secret presence from
 GitHub Actions environment injection and never prints secret values.
+
+To upload signing secrets from a trusted local machine without printing values,
+use the setup helper. It accepts existing base64 environment variables or
+raw file paths for keystores, certificates, provisioning profiles, and API key
+files:
+
+```bash
+npm run native:github-secrets:setup -- --platform=all --dry-run
+npm run native:github-secrets:setup -- --platform=android
+npm run native:github-secrets:setup -- --platform=ios
+npm run native:github-secrets:setup -- --platform=macos
+npm run native:github-secrets:setup -- --platform=windows
+```
+
+For example, Android can be loaded from a local upload keystore path:
+
+```bash
+ANDROID_KEYSTORE_PATH=/secure/siragpt-upload-key.jks \
+ANDROID_KEYSTORE_PASSWORD=... \
+ANDROID_KEY_ALIAS=siragpt \
+ANDROID_KEY_PASSWORD=... \
+npm run native:github-secrets:setup -- --platform=android
+```
+
+The helper pipes values into `gh secret set`; it reports only secret names,
+source variable names, and readiness states.
 
 Android signing secrets:
 
@@ -234,6 +261,7 @@ node -c scripts/generate-native-store-packet.js
 node -c scripts/native-store-assets-readiness.js
 node -c scripts/native-store-readiness.js
 sh -n scripts/build-desktop.sh
+sh -n scripts/setup-native-github-secrets.sh
 npm run native:version:check
 npm run native:store:readiness
 npm run native:store:assets:generate

@@ -108,11 +108,14 @@ repo, run:
 npm run native:store:assets:generate
 npm run native:store:assets -- --require-ready
 npm run native:store:packet -- --require-ready
+npm run native:github-secrets:setup -- --platform=mobile --dry-run
 npm run native:release:plan -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/native-release-plan.md --json-out=output/native-release-plan.json
 ```
 
 The generated files stay under ignored `output/` and may list missing secret
 names plus account-owner actions, but they must never contain secret values.
+The secret setup dry-run reports only missing or ready secret names and source
+variable names. It does not print values.
 The GitHub Actions workflow `Native readiness report` publishes the same
 non-secret checklist and asset readiness report as an artifact named
 `siragpt-native-readiness-report`.

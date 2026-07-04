@@ -113,6 +113,7 @@ npm run native:readiness
 npm run native:readiness:all
 npm run native:github-secrets:audit
 npm run native:github-secrets:check
+npm run native:github-secrets:setup -- --platform=all --dry-run
 npm run native:release:plan
 npm run native:release:plan:ci
 ```
@@ -135,6 +136,10 @@ Windows submission work.
 already configured in GitHub Actions for the public repository without reading
 or printing secret values. `native:github-secrets:check` fails until all native
 signing groups are configured.
+`native:github-secrets:setup` uploads native signing secrets from local
+environment variables or local file paths, base64-encoding file credentials
+before piping them into `gh secret set`. Use `--dry-run` first; it prints only
+secret names and source variable names, never secret values.
 `native:release:plan` generates a non-secret Markdown/JSON management packet
 for the current repo, including missing GitHub secret names, per-platform
 account actions, and safe `gh secret set` commands.
