@@ -38,6 +38,8 @@
     "mobile:dev:android": "CAPACITOR_SERVER_URL=http://10.0.2.2:3000 sh -c 'cap sync android && cap run android'",
     "mobile:dev:ios": "CAPACITOR_SERVER_URL=http://localhost:3000 sh -c 'cap sync ios && cap run ios'",
     "mobile:release:android": "sh scripts/build-android-release.sh",
+    "native:readiness": "node scripts/native-release-readiness.js",
+    "native:readiness:android": "node scripts/native-release-readiness.js --require=android",
     "desktop:dev": "electron apps/desktop/main.cjs",
     "desktop:pack": "electron-builder --projectDir apps/desktop --dir --publish never",
     "desktop:pack:mac": "electron-builder --projectDir apps/desktop --mac dir --publish never",

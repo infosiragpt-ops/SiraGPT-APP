@@ -32,6 +32,8 @@ jobs:
     name: Android APK + AAB
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    env:
+      HAS_ANDROID_SIGNING: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' && secrets.ANDROID_KEYSTORE_PASSWORD != '' && secrets.ANDROID_KEY_ALIAS != '' && secrets.ANDROID_KEY_PASSWORD != '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -52,6 +54,34 @@ jobs:
 
       - name: Install dependencies
         run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Prepare Android release signing
+        if: env.HAS_ANDROID_SIGNING == 'true'
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -eu
+          mkdir -p android/keystores
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/keystores/siragpt-upload-key.jks
+          cat > android/keystore.properties <<EOF
+          storeFile=keystores/siragpt-upload-key.jks
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          keyPassword=$ANDROID_KEY_PASSWORD
+          EOF
+
+      - name: Report Android release signing mode
+        shell: bash
+        run: |
+          if [ -f android/keystore.properties ]; then
+            echo "Android release signing: configured"
+          else
+            echo "Android release signing: not configured; producing unsigned QA bundle"
+          fi
 
       - name: Sync Capacitor Android
         run: npm run mobile:sync -- android

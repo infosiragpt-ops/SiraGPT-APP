@@ -60,6 +60,43 @@ Use `Native mobile builds` in GitHub Actions to validate the Capacitor wrappers 
 
 These workflows are unsigned by default. Add signing credentials only through GitHub Actions secrets when distribution signing is ready.
 
+### Required GitHub Secrets For Signed Distribution
+
+Run the local readiness check before attempting a signed release:
+
+```bash
+npm run native:readiness
+npm run native:readiness:android
+```
+
+Android signing secrets:
+
+- `ANDROID_KEYSTORE_BASE64`: base64-encoded Play upload keystore.
+- `ANDROID_KEYSTORE_PASSWORD`: keystore password.
+- `ANDROID_KEY_ALIAS`: upload key alias.
+- `ANDROID_KEY_PASSWORD`: upload key password.
+
+iOS/App Store Connect signing secrets:
+
+- `APPLE_TEAM_ID`: Apple Developer team id.
+- `IOS_SIGNING_CERTIFICATE_BASE64`: base64-encoded iOS signing certificate.
+- `IOS_SIGNING_CERTIFICATE_PASSWORD`: signing certificate password.
+- `IOS_PROVISIONING_PROFILE_BASE64`: base64-encoded provisioning profile.
+- `APP_STORE_CONNECT_API_KEY_ID`: App Store Connect API key id.
+- `APP_STORE_CONNECT_API_ISSUER_ID`: App Store Connect API issuer id.
+- `APP_STORE_CONNECT_API_KEY_BASE64`: base64-encoded App Store Connect private key.
+
+Desktop signing secrets:
+
+- `MACOS_CERTIFICATE_BASE64`: base64-encoded Developer ID certificate.
+- `MACOS_CERTIFICATE_PASSWORD`: macOS certificate password.
+- `APPLE_ID`: Apple ID used for notarization.
+- `APPLE_APP_SPECIFIC_PASSWORD`: Apple app-specific password for notarization.
+- `WINDOWS_CERTIFICATE_BASE64`: base64-encoded Windows code-signing certificate.
+- `WINDOWS_CERTIFICATE_PASSWORD`: Windows certificate password.
+
+Never commit these values. Store them only as GitHub Actions secrets or in the vendor store portals.
+
 Store publication requires account-level work outside Git:
 
 - Apple Developer/App Store Connect access for iPhone distribution.
@@ -78,6 +115,7 @@ npm run desktop:pack
 npm run desktop:pack:win
 npm run mobile:sync
 npm run mobile:doctor
+npm run native:readiness
 cd android && ./gradlew :app:assembleDebug :app:bundleRelease --no-daemon
 bash scripts/check-secrets.sh
 git diff --check
