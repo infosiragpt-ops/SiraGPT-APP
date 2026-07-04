@@ -124,7 +124,7 @@ export function isConversationalMessage(text: string): boolean {
   //    verb: "quiero preguntarte algo", "necesito saber si…", "quisiera
   //    entender cómo funciona".
   const DESIRE_CONVO =
-    /\b(quiero|quisiera|necesito|me gustaria|deseo)\s+(?:hacerte\s+|hacerle\s+)?(preguntar(?:te|le)?|saber|entender|consultar(?:te)?|hablar|charlar|platicar|conversar|comentar(?:te)?|contar(?:te)?|decir(?:te)?|una\s+(?:pregunta|duda|consulta|explicacion)|algo)\b/
+    /\b(quiero|quisiera|necesito|me gustaria|deseo)\s+(?:hacerte\s+|hacerle\s+)?(preguntar(?:te|le)?|saber|entender|consultar(?:te)?|hablar|charlar|platicar|conversar|comentar(?:te)?|contar(?:te)?|decir(?:te)?|una\s+(?:pregunta|duda|consulta|explicacion)|ayuda(?:rme)?|apoyo|una mano|algo)\b/
   if (DESIRE_CONVO.test(t)) return true
 
   // 2) From here on, real build intent wins ("crea una app", "quiero una
@@ -141,7 +141,7 @@ export function isConversationalMessage(text: string): boolean {
 
   // 4) Meta / acknowledgements / doubts without any build verb.
   const CONVO_MARKER =
-    /\b(una pregunta|tengo una (?:duda|consulta|pregunta)|preguntarte|explicame|explicarme|explica(?:me)?|dime|cuentame|no entiendo|ayudame a entender|gracias|muchas gracias|ok(?:ey)?|vale|perfecto|entendido|genial|buen trabajo|excelente|de acuerdo)\b/
+    /\b(una pregunta|tengo una (?:duda|consulta|pregunta)|preguntarte|explicame|explicarme|explica(?:me)?|dime|cuentame|no entiendo|ayudame(?: a entender)?|ayuda|puedes ayudar(?:me)?|help(?: me)?|gracias|muchas gracias|ok(?:ey)?|vale|perfecto|entendido|genial|buen trabajo|excelente|de acuerdo)\b/
   if (CONVO_MARKER.test(t) && !hasBuildVerb(raw)) return true
 
   return false
@@ -266,7 +266,12 @@ export function nextAgentAction(state: AgentState, input: string, signal: AgentS
     (signal.mode === "app" && text.length > 80)
   const isStart = (signal.mode === "app" || signal.mode === "build") && isBuildSeed
 
-  // 5) Intake gate (app/build).
+  // 5) Intake gate (app/build). A conversational question mid-intake gets a
+  //    CHAT answer instead of being stuffed into a slot and force-generating
+  //    (a stalled intake used to swallow "¿puedes ayudarme?" into a build).
+  if (inIntake && isConversationalMessage(text) && !isBuildRequest(text)) {
+    return { type: "passthrough" }
+  }
   if (isStart || inIntake) {
     if (inIntake) {
       const idx = Math.max(0, state.intakeStep - 1) // the slot we just asked about

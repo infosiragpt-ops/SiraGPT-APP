@@ -2516,6 +2516,17 @@ export function AICodeChatPanel() {
       }
       const sid = sessionId
       if (isQuickGreeting(text)) {
+        // With a live model the greeting is a REAL chat turn (varied, aware of
+        // the conversation) — the canned line is only the no-model fallback.
+        if (activeModelName) {
+          await sendPrompt(text, {
+            systemPrompt: CONVERSATION_SYSTEM_PROMPT,
+            autoApply: false,
+            plainStyle: true,
+          })
+          patchAgentState(sid, (s) => ({ ...s, phase: s.phase === "intake" ? "idle" : s.phase }))
+          return
+        }
         const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
         const greeting =
           "¡Hola! 👋 Soy tu agente de apps. Dime qué quieres construir o cambiar y me pongo manos a la obra — escribo el código, lo ejecuto y lo corrijo."
@@ -2548,10 +2559,10 @@ export function AICodeChatPanel() {
 
       // CONVERSATION tier: questions / doubts / meta get a chat answer — never
       // the intake or the generator ("quiero preguntarte algo" used to build an
-      // app because "quiero" counts as a build verb). Skipped mid-intake so the
-      // slot answers keep flowing into the FSM.
-      const gateAgent = activeCodeChatSession?.agent ?? defaultAgentState()
-      if (gateAgent.phase !== "intake" && isConversationalMessage(text)) {
+      // app because "quiero" counts as a build verb). Applies ALWAYS — a stalled
+      // intake used to swallow "¿puedes ayudarme?" into a build; slot answers
+      // ("una cafetería") are not conversational, so the FSM still gets them.
+      if (isConversationalMessage(text)) {
         if (activeModelName) {
           await sendPrompt(text, {
             systemPrompt: CONVERSATION_SYSTEM_PROMPT,
