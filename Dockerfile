@@ -18,8 +18,18 @@ RUN apk add --no-cache libc6-compat
 # Install deps separately for layer caching
 COPY package.json package-lock.json ./
 COPY backend/package.json backend/package-lock.json ./backend/
-RUN npm ci --legacy-peer-deps --prefer-offline --no-audit --no-fund
-RUN npm ci --prefix backend --omit=dev --legacy-peer-deps --prefer-offline --no-audit --no-fund
+RUN for attempt in 1 2 3; do \
+      npm ci --legacy-peer-deps --prefer-offline --no-audit --no-fund && break; \
+      status=$?; \
+      if [ "$attempt" = "3" ]; then exit "$status"; fi; \
+      sleep $((attempt * 10)); \
+    done
+RUN for attempt in 1 2 3; do \
+      npm ci --prefix backend --omit=dev --legacy-peer-deps --prefer-offline --no-audit --no-fund && break; \
+      status=$?; \
+      if [ "$attempt" = "3" ]; then exit "$status"; fi; \
+      sleep $((attempt * 10)); \
+    done
 
 # Copy app source after dependency install so Docker can cache npm layers.
 COPY . .
