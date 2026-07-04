@@ -248,3 +248,117 @@ test('_shouldApplyVisionFallback is ON by default when a key exists (opt-out wit
     assert.equal(fileProcessor._shouldApplyVisionFallback(weak, {}), false);
   });
 });
+
+// ── image-analyzer: clasificación + teselas (OCR profesional) ───────────────
+
+const imageAnalyzer = require('../src/services/image-analyzer');
+const ocrEngine = require('../src/services/ocr-engine');
+
+function fakeStats(over = {}) {
+  return {
+    width: 1920, height: 1080, megapixels: 2.07, aspect: 1920 / 1080,
+    luminance: 230, saturationSpread: 5, entropy: 4,
+    whiteBackground: true, darkBackground: false, grayscaleish: true,
+    ...over,
+  };
+}
+
+test('classifyImage: texto denso, escaneo, foto, recibo, captura', () => {
+  // Muro de texto denso (como un dump de sistema renderizado)
+  const dense = imageAnalyzer.classifyImage(fakeStats({ width: 6000, height: 4000, megapixels: 24 }), { usefulChars: 40_000 });
+  assert.equal(dense.type, 'text_dense');
+  // Documento escaneado normal
+  const scan = imageAnalyzer.classifyImage(fakeStats({ megapixels: 8, width: 2480, height: 3508, aspect: 2480 / 3508 }), { usefulChars: 3000 });
+  assert.equal(scan.type, 'document_scan');
+  // Fotografía: colorida, alta entropía, sin texto
+  const photo = imageAnalyzer.classifyImage(
+    fakeStats({ whiteBackground: false, grayscaleish: false, saturationSpread: 60, entropy: 7.5, luminance: 120, aspect: 1.5 }),
+    { usefulChars: 10 },
+  );
+  assert.equal(photo.type, 'photo');
+  // Ticket: estrecho y alto, fondo blanco
+  const receipt = imageAnalyzer.classifyImage(fakeStats({ width: 600, height: 2400, aspect: 0.25, megapixels: 1.44 }), { usefulChars: 400 });
+  assert.equal(receipt.type, 'receipt');
+  // Captura oscura 16:9 con texto
+  const shot = imageAnalyzer.classifyImage(
+    fakeStats({ whiteBackground: false, darkBackground: true, luminance: 40, megapixels: 2 }),
+    { usefulChars: 500 },
+  );
+  assert.equal(shot.type, 'screenshot');
+  // Sin stats → unknown sin crash
+  assert.equal(imageAnalyzer.classifyImage(null, {}).type, 'unknown');
+});
+
+test('normalizeVisionType mapea respuestas libres del modelo', () => {
+  assert.equal(imageAnalyzer.normalizeVisionType('Captura de pantalla'), 'screenshot');
+  assert.equal(imageAnalyzer.normalizeVisionType('texto denso'), 'text_dense');
+  assert.equal(imageAnalyzer.normalizeVisionType('documento escaneado'), 'document_scan');
+  assert.equal(imageAnalyzer.normalizeVisionType('gráfico o diagrama'), 'chart_diagram');
+  assert.equal(imageAnalyzer.normalizeVisionType('ticket o recibo'), 'receipt');
+  assert.equal(imageAnalyzer.normalizeVisionType('otro'), null);
+  assert.equal(imageAnalyzer.normalizeVisionType(''), null);
+});
+
+test('planTiles: cobertura completa, solape, respeta maxTiles', () => {
+  const cfg = { ...imageAnalyzer.tilingConfig(), targetTile: 2200, maxTiles: 9, overlap: 0.06 };
+  const tiles = imageAnalyzer.planTiles(6000, 4400, cfg);
+  assert.ok(tiles.length >= 4 && tiles.length <= 9, `tiles=${tiles.length}`);
+  // Cobertura: cada tesela dentro de límites y la última llega al borde
+  for (const t of tiles) {
+    assert.ok(t.left >= 0 && t.top >= 0);
+    assert.ok(t.left + t.width <= 6000 && t.top + t.height <= 4400);
+  }
+  const maxRight = Math.max(...tiles.map(t => t.left + t.width));
+  const maxBottom = Math.max(...tiles.map(t => t.top + t.height));
+  assert.equal(maxRight, 6000);
+  assert.equal(maxBottom, 4400);
+  // Solape entre columnas consecutivas de la misma fila
+  const row0 = tiles.filter(t => t.row === 0).sort((a, b) => a.col - b.col);
+  if (row0.length > 1) assert.ok(row0[1].left < row0[0].left + row0[0].width, 'sin solape horizontal');
+  // Imagen pequeña → 1 sola tesela
+  assert.equal(imageAnalyzer.planTiles(800, 600, cfg).length, 1);
+});
+
+test('shouldTileOcr: solo imágenes grandes, débiles o muy densas', () => {
+  const cfg = { ...imageAnalyzer.tilingConfig(), enabled: true, triggerSide: 3000, triggerChars: 1500 };
+  const big = fakeStats({ width: 6000, height: 4000 });
+  const small = fakeStats({ width: 1920, height: 1080 });
+  const weak = { accepted: false, usefulChars: 50 };
+  const strongSparse = { accepted: true, usefulChars: 200 };
+  const strongDense = { accepted: true, usefulChars: 9000 };
+  assert.equal(imageAnalyzer.shouldTileOcr(big, weak, cfg), true);
+  assert.equal(imageAnalyzer.shouldTileOcr(big, strongDense, cfg), true);
+  assert.equal(imageAnalyzer.shouldTileOcr(big, strongSparse, cfg), false);
+  assert.equal(imageAnalyzer.shouldTileOcr(small, weak, cfg), false);
+  assert.equal(imageAnalyzer.shouldTileOcr(null, weak, cfg), false);
+  assert.equal(imageAnalyzer.shouldTileOcr(big, weak, { ...cfg, enabled: false }), false);
+});
+
+test('computeImageStats lee un PNG real generado con sharp', async () => {
+  const sharpLib = require('sharp');
+  const buf = await sharpLib({ create: { width: 400, height: 300, channels: 3, background: { r: 250, g: 250, b: 250 } } }).png().toBuffer();
+  const stats = await imageAnalyzer.computeImageStats(buf);
+  assert.equal(stats.width, 400);
+  assert.equal(stats.height, 300);
+  assert.ok(stats.whiteBackground, `luminance=${stats.luminance}`);
+  assert.ok(stats.grayscaleish);
+  // Entrada corrupta → null, sin throw
+  assert.equal(await imageAnalyzer.computeImageStats(Buffer.from('no soy imagen')), null);
+});
+
+test('_withImageMeta adjunta ocr.image y respeta el veredicto de visión', () => {
+  const base = { text: 'hola', ocr: { status: 'local_ok', usefulChars: 40_000, lineCount: 100, confidence: 90 } };
+  const out = ocrEngine._withImageMeta(base, fakeStats({ width: 6000, height: 4000, megapixels: 24 }), { tiled: 6 });
+  assert.equal(out.ocr.image.type, 'text_dense');
+  assert.equal(out.ocr.image.tiledOcr, 6);
+  assert.equal(out.ocr.image.width, 6000);
+  // visionType gana sobre la heurística
+  const vis = { text: 'hola', ocr: { status: 'vision_fallback', usefulChars: 50, visionType: 'fotografía' } };
+  const out2 = ocrEngine._withImageMeta(vis, fakeStats(), { tiled: 0 });
+  assert.equal(out2.ocr.image.type, 'photo');
+  assert.equal(out2.ocr.image.typeConfidence, 0.9);
+  assert.equal(out2.ocr.image.tiledOcr, null);
+  // Sin stats ni visionType → sin metadata, sin crash
+  const out3 = ocrEngine._withImageMeta({ text: 'x', ocr: { status: 'local_ok' } }, null, {});
+  assert.equal(out3.ocr.image, undefined);
+});

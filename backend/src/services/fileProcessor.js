@@ -816,13 +816,24 @@ class FileProcessor {
         }
       }
 
+      // Professional header when the engine classified the image (type +
+      // dimensions + tiling). Absent metadata (stubs, skipped analysis)
+      // leaves the raw text untouched.
+      let finalText = result.text || '';
+      const imageMeta = result.ocr?.image;
+      if (finalText && imageMeta?.type) {
+        const dims = imageMeta.width && imageMeta.height ? ` (${imageMeta.width}×${imageMeta.height} px)` : '';
+        const tiledNote = imageMeta.tiledOcr ? `, OCR por teselas ×${imageMeta.tiledOcr}` : '';
+        finalText = `Imagen — ${imageMeta.typeLabelEs}${dims}${tiledNote} — ${finalText.length} caracteres extraídos\n---\n${finalText}`;
+      }
+
       if (options.detailed) {
         return {
-          extractedText: result.text || '',
+          extractedText: finalText,
           ocr: result.ocr,
         };
       }
-      return result.text || '';
+      return finalText;
     } catch (error) {
       throw new Error(`Image OCR processing failed: ${error.message}`);
     }

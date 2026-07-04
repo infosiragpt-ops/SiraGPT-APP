@@ -2,6 +2,7 @@ const { createWorker } = require('tesseract.js');
 const sharp = require('sharp');
 const fs = require('fs').promises;
 const OpenAI = require('openai');
+const imageAnalyzer = require('./image-analyzer');
 
 const OCR_PLACEHOLDER_RE = /^(no text found in image|no text detected(?: in image pdf)?|no content available|binary file|file content could not be extracted|file ".*?" uploaded successfully|error processing file:|unsupported file type)/i;
 
@@ -130,8 +131,13 @@ class OcrEngine {
     // vision fallback needs to know which one it got.
     const inputRef = Buffer.isBuffer(input) ? { buffer: input } : { filePath: input };
 
+    // Cheap sharp stats up-front: they drive type classification and the
+    // tiled-OCR decision. Best-effort — null never blocks extraction.
+    const stats = options.analyze === false ? null : await imageAnalyzer.computeImageStats(input);
+
     if (mode === 'vision') {
-      return this.runVisionFallback({ ...inputRef, mimeType: options.mimeType || 'image/png', config });
+      const visionOnly = await this.runVisionFallback({ ...inputRef, mimeType: options.mimeType || 'image/png', config });
+      return this._withImageMeta(visionOnly, stats, { tiled: 0 });
     }
 
     let localResult;
@@ -143,8 +149,25 @@ class OcrEngine {
         error: error?.message || 'local_ocr_failed',
       };
     }
+
+    // Tiled second pass for oversized dense-text images (huge screenshots,
+    // rendered text walls): the single pass downscales to ~3000px and tiny
+    // glyphs dissolve. Tiles keep native resolution; the better read wins.
+    let tiledUsed = 0;
+    if (imageAnalyzer.shouldTileOcr(stats, localResult.quality)) {
+      try {
+        const tiled = await this.runTiledImageOcr(input, stats, options);
+        if (tiled && this.scoreQuality(tiled.quality) > this.scoreQuality(localResult.quality)) {
+          localResult = tiled;
+          tiledUsed = tiled.tiles;
+        }
+      } catch (tileErr) {
+        console.warn('[ocr-engine] tiled OCR pass failed (keeping single pass):', tileErr?.message || tileErr);
+      }
+    }
+
     if (localResult.quality.accepted) {
-      return this.asLocalResult(localResult);
+      return this._withImageMeta(this.asLocalResult(localResult), stats, { tiled: tiledUsed });
     }
 
     if (this.shouldUseVisionFallback(localResult.quality, { mode }) && options.allowVision !== false) {
@@ -155,16 +178,100 @@ class OcrEngine {
         localQuality: localResult.quality,
       });
 
-      if (visionResult.ocr.status === 'vision_fallback') return visionResult;
+      if (visionResult.ocr.status === 'vision_fallback') {
+        return this._withImageMeta(visionResult, stats, { tiled: tiledUsed });
+      }
     }
 
     if (localResult.quality.enoughText || localResult.quality.legibleShort) {
       const result = this.asLocalResult(localResult);
       result.ocr.warning = 'vision_fallback_unavailable_or_weaker';
-      return result;
+      return this._withImageMeta(result, stats, { tiled: tiledUsed });
     }
 
-    return this.asFailedResult(localResult.quality, localResult.error);
+    return this._withImageMeta(this.asFailedResult(localResult.quality, localResult.error), stats, { tiled: tiledUsed });
+  }
+
+  /**
+   * Attach image classification metadata (`ocr.image`) to an extraction
+   * result. The vision model's own TYPE verdict (when it ran) beats the
+   * statistical guess. Never throws; returns the result untouched when
+   * stats are unavailable and no vision type exists.
+   */
+  _withImageMeta(result, stats, { tiled = 0 } = {}) {
+    if (!result || !result.ocr) return result;
+    const visionType = imageAnalyzer.normalizeVisionType(result.ocr.visionType);
+    if (!stats && !visionType) return result;
+    const classification = imageAnalyzer.classifyImage(stats, {
+      usefulChars: result.ocr.usefulChars,
+      lineCount: result.ocr.lineCount,
+      confidence: result.ocr.confidence,
+    });
+    const type = visionType || classification.type;
+    result.ocr.image = {
+      width: stats?.width ?? null,
+      height: stats?.height ?? null,
+      type,
+      typeLabelEs: imageAnalyzer.TYPE_LABELS_ES[type] || imageAnalyzer.TYPE_LABELS_ES.unknown,
+      typeConfidence: visionType ? 0.9 : classification.confidence,
+      textDensity: classification.textDensity,
+      tiledOcr: tiled > 1 ? tiled : null,
+    };
+    return result;
+  }
+
+  /**
+   * Tiled OCR: split the image into overlapping tiles (row-major reading
+   * order), OCR each at native resolution, and join. Consecutive duplicate
+   * lines from tile overlap are collapsed.
+   */
+  async runTiledImageOcr(input, stats, options = {}) {
+    const cfg = imageAnalyzer.tilingConfig();
+    const tiles = imageAnalyzer.planTiles(stats.width, stats.height, cfg);
+    if (tiles.length <= 1) return null;
+
+    const worker = await createWorker(options.language || this.defaultLanguage);
+    const texts = [];
+    let confSum = 0;
+    let confSamples = 0;
+    try {
+      if (typeof worker.setParameters === 'function') {
+        await worker.setParameters({
+          preserve_interword_spaces: '1',
+          tessedit_pageseg_mode: '1',
+        }).catch(() => null);
+      }
+      for (const tile of tiles) {
+        const buf = await sharp(input)
+          .extract({ left: tile.left, top: tile.top, width: tile.width, height: tile.height })
+          .greyscale()
+          .normalize()
+          .sharpen()
+          .png()
+          .toBuffer();
+        const { data: { text, confidence } } = await worker.recognize(buf);
+        const clean = normalizeOcrText(text);
+        if (clean) {
+          texts.push(clean);
+          confSum += Number(confidence || 0);
+          confSamples += 1;
+        }
+      }
+    } finally {
+      await worker.terminate();
+    }
+
+    // Collapse consecutive duplicate lines produced by tile overlap.
+    const lines = normalizeOcrText(texts.join('\n\n')).split('\n');
+    const deduped = lines.filter((line, i) => i === 0 || line !== lines[i - 1] || line === '');
+    const joined = deduped.join('\n');
+
+    return {
+      quality: this.evaluateQuality({ text: joined, confidence: confSamples ? confSum / confSamples : 0 }),
+      variants: null,
+      variant: `tiled_${tiles.length}`,
+      tiles: tiles.length,
+    };
   }
 
   async extractFromPdfImages(filePath, options = {}) {
@@ -779,7 +886,7 @@ class OcrEngine {
           {
             role: 'system',
             content:
-              'You are a professional OCR / document-transcription engine. Transcribe the COMPLETE, VERBATIM text of the image — every line, do NOT summarize, shorten, or omit anything. Preserve the document STRUCTURE using Markdown: headings as #/##, bullet/numbered lists, and tables as Markdown tables; keep the natural reading order (top-to-bottom, and for multi-column layouts finish the left column before the right). The document is most likely in SPANISH — preserve accents (á é í ó ú ñ ü) and ¿ ¡ punctuation exactly, and keep any other original language as-is (do NOT translate). Reproduce numbers, dates, and proper nouns exactly. Do NOT invent or hallucinate content. Output ONLY the transcription (no preamble, no commentary). If there is no legible text, respond with exactly: OCR_EMPTY',
+              'You are a professional OCR / document-transcription engine. Your FIRST output line must be exactly "TIPO: <clase>" where <clase> is one of: captura de pantalla | documento escaneado | texto denso | fotografía | gráfico o diagrama | ticket o recibo | otro. From the SECOND line on, transcribe the COMPLETE, VERBATIM text of the image — every line, do NOT summarize, shorten, or omit anything. Preserve the document STRUCTURE using Markdown: headings as #/##, bullet/numbered lists, and tables as Markdown tables; keep the natural reading order (top-to-bottom, and for multi-column layouts finish the left column before the right). The document is most likely in SPANISH — preserve accents (á é í ó ú ñ ü) and ¿ ¡ punctuation exactly, and keep any other original language as-is (do NOT translate). Reproduce numbers, dates, and proper nouns exactly. Do NOT invent or hallucinate content. Output ONLY the TIPO line and the transcription (no preamble, no commentary). If there is no legible text, output the TIPO line and then exactly: OCR_EMPTY',
           },
           {
             role: 'user',
@@ -797,14 +904,25 @@ class OcrEngine {
         ],
       });
 
-      const text = normalizeOcrText(response.choices?.[0]?.message?.content || '');
+      let raw = normalizeOcrText(response.choices?.[0]?.message?.content || '');
+      // The first line carries the model's image-type verdict; strip it
+      // from the transcription and surface it as metadata.
+      let visionType = null;
+      const typeMatch = raw.match(/^TIPO:\s*(.+)\s*$/im);
+      if (typeMatch) {
+        visionType = typeMatch[1].trim();
+        raw = raw.replace(typeMatch[0], '').trim();
+      }
+      const text = normalizeOcrText(raw);
       const quality = this.evaluateQuality({
         text: text === 'OCR_EMPTY' ? '' : text,
         confidence: 95,
       }, config);
 
       if (!quality.enoughText && !quality.legibleShort) {
-        return this.asFailedResult(quality, 'vision_fallback_empty');
+        const failed = this.asFailedResult(quality, 'vision_fallback_empty');
+        if (visionType) failed.ocr.visionType = visionType;
+        return failed;
       }
 
       return {
@@ -816,6 +934,7 @@ class OcrEngine {
           usefulChars: quality.usefulChars,
           lineCount: quality.lineCount,
           localConfidence: localQuality?.confidence ?? null,
+          ...(visionType ? { visionType } : {}),
         },
       };
     } catch (error) {
