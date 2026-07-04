@@ -41,6 +41,10 @@ const IMAGE_RELATIONSHIP_TYPE_SUFFIX = '/image';
 // cryptic sharp decode failure.
 const RECOLOR_UNSUPPORTED_EXTENSIONS = new Set(['wmf', 'emf', 'bmp', 'ico', 'pict']);
 
+// Per-part decompressed-size cap. Media beyond this is skipped, never loaded
+// — the zip-bomb guard (a DEFLATE part can inflate ~1000x its on-wire size).
+const MAX_MEDIA_PART_BYTES = Number(process.env.SIRAGPT_EDIT_MAX_MEDIA_BYTES || 50 * 1024 * 1024);
+
 const MIME_TO_EXTENSION = {
   'image/png': 'png',
   'image/jpeg': 'jpeg',
@@ -173,8 +177,21 @@ function collectScopeImages(zip, relsPath) {
   const images = [];
   for (const entry of entries) {
     const partName = resolveRelTargetPartName(relsPath, entry.rel.target);
-    const partFile = partName ? zip.file(partName) : null;
+    // Media-scope guard (adversarial review, reproduced): a crafted
+    // Relationship Target like "../docProps/core.xml" resolves outside
+    // word/media/ and would enumerate arbitrary zip parts as "images".
+    if (!partName || !/^word\/media\//.test(partName)) continue;
+    const partFile = zip.file(partName);
     if (!partFile) continue;
+    // Zip-bomb guard (adversarial review, reproduced live): a 300KB DOCX
+    // declaring a 300MB DEFLATE part inflated RSS ~1GB on asNodeBuffer().
+    // Check the declared uncompressed size BEFORE materialising the bytes.
+    const declaredSize = Number(partFile._data && partFile._data.uncompressedSize);
+    if (Number.isFinite(declaredSize) && declaredSize > MAX_MEDIA_PART_BYTES) {
+      // Skip the oversized part instead of loading it; the edit flow will
+      // report "no encontré imágenes" or offer the remaining candidates.
+      continue;
+    }
     images.push({
       relId: entry.rel.id,
       partName,
@@ -241,10 +258,12 @@ function encoderForExtension(pipeline, extension) {
 // .greyscale().tint() pipeline yields a plain grey image. Two passes —
 // greyscale to an intermediate lossless PNG, then tint + final encode —
 // produce the intended duotone.
-async function recolorDocxImage({ buffer, imageIndex, color } = {}) {
-  const images = listDocxImages(buffer);
-  const target = pickImage(images, imageIndex);
-  const ext = target.extension;
+// Format-agnostic duotone recolor of raw image bytes. Shared by the DOCX and
+// PPTX adapters — the two-pass pipeline (greyscale→PNG→tint) exists because
+// sharp applies tint BEFORE greyscale in its fixed internal order, so a
+// single chained call yields plain grey.
+async function recolorImageBytes({ bytes, extension, color }) {
+  const ext = String(extension || '').toLowerCase();
   if (RECOLOR_UNSUPPORTED_EXTENSIONS.has(ext)) {
     throw new Error(`La imagen está en formato ${ext.toUpperCase()} (formato heredado de Office) y no puedo recolorearla directamente. Conviértela a PNG o JPG e inténtalo de nuevo.`);
   }
@@ -253,15 +272,20 @@ async function recolorDocxImage({ buffer, imageIndex, color } = {}) {
     throw new Error('La edición de imágenes no está disponible en este despliegue (falta el módulo sharp).');
   }
   const rgb = hexToRgb(color);
-  let recolored;
   try {
-    let base = sharp(target.bytes);
+    let base = sharp(bytes);
     if (ext === 'png' || ext === 'webp' || ext === 'gif') base = base.ensureAlpha();
     const grey = await base.greyscale().png().toBuffer();
-    recolored = await encoderForExtension(sharp(grey).tint(rgb), ext).toBuffer();
+    return await encoderForExtension(sharp(grey).tint(rgb), ext).toBuffer();
   } catch (err) {
     throw new Error(`No pude procesar la imagen (${ext.toUpperCase()}): ${err?.message || 'formato no soportado'}.`);
   }
+}
+
+async function recolorDocxImage({ buffer, imageIndex, color } = {}) {
+  const images = listDocxImages(buffer);
+  const target = pickImage(images, imageIndex);
+  const recolored = await recolorImageBytes({ bytes: target.bytes, extension: target.extension, color });
   const zip = new PizZip(buffer);
   zip.file(target.partName, recolored);
   return {
@@ -354,6 +378,7 @@ function replaceDocxImage({ buffer, imageIndex, replacementBytes, replacementMim
 module.exports = {
   listDocxImages,
   recolorDocxImage,
+  recolorImageBytes,
   replaceDocxImage,
   INTERNAL: {
     collectBlipOrder,

@@ -229,3 +229,22 @@ describe('xlsx surgical edit — end to end', () => {
     assert.ok(fs.readFileSync(xlsxPath).equals(original), 'original upload must never change');
   });
 });
+
+// ── Review follow-ups ───────────────────────────────────────────────────────
+
+describe('xlsx-adapter — review fixes', () => {
+  test('reversed range D3:D2 behaves like D2:D3', async () => {
+    const buf = await makeWorkbook();
+    const r = adapter.formatRange({ buffer: buf, range: 'D3:D2', numberFormat: 'percent' });
+    assert.equal(r.cellsChanged, 2);
+  });
+
+  test('repeat formatRange reuses the numFmt instead of allocating duplicates', async () => {
+    const buf = await makeWorkbook();
+    const r1 = adapter.formatRange({ buffer: buf, column: 'D', numberFormat: 'currency', currency: 'EUR' });
+    const r2 = adapter.formatRange({ buffer: r1.buffer, range: 'C2:C3', numberFormat: 'currency', currency: 'EUR' });
+    assert.equal(r1.numFmtId, r2.numFmtId, 'same code → same numFmtId');
+    const styles = snapshot(r2.buffer)['xl/styles.xml'];
+    assert.equal((styles.match(/<numFmt\b/g) || []).length, 1, 'exactly one custom numFmt');
+  });
+});

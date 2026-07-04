@@ -473,3 +473,32 @@ describe('image edit flow — ambiguity, missing payload and end-to-end persiste
     assert.match(result.content, /No encontré imágenes/);
   });
 });
+
+// ── Security hardening (adversarial review, both reproduced live) ───────────
+
+describe('docx-image-adapter — security guards', () => {
+  test('zip-bomb: an oversized declared media part is skipped, never materialised', () => {
+    const PizZipLocal = require('pizzip');
+    const zip = new PizZipLocal();
+    zip.file('[Content_Types].xml', '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/></Types>');
+    zip.file('word/document.xml', '<w:document xmlns:w="w" xmlns:a="a" xmlns:r="r"><w:body><w:p><a:blip r:embed="rId1"/></w:p></w:body></w:document>');
+    zip.file('word/_rels/document.xml.rels', '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/></Relationships>');
+    // 60MB of zeros compresses to ~60KB but DECLARES 60MB — over the 50MB cap.
+    zip.file('word/media/image1.png', Buffer.alloc(60 * 1024 * 1024));
+    const buffer = zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
+    assert.ok(buffer.length < 5 * 1024 * 1024, 'the on-wire docx stays tiny (bomb shape)');
+    const images = adapter.listDocxImages(buffer);
+    assert.equal(images.length, 0, 'oversized part must be skipped, not loaded');
+  });
+
+  test('rels Target escaping word/media/ is ignored (no arbitrary part enumeration)', () => {
+    const PizZipLocal = require('pizzip');
+    const zip = new PizZipLocal();
+    zip.file('[Content_Types].xml', '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>');
+    zip.file('docProps/core.xml', '<coreProperties>SECRET-AUTHOR</coreProperties>');
+    zip.file('word/document.xml', '<w:document xmlns:a="a" xmlns:r="r"><w:body><w:p><a:blip r:embed="rId1"/></w:p></w:body></w:document>');
+    zip.file('word/_rels/document.xml.rels', '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../docProps/core.xml"/></Relationships>');
+    const buffer = zip.generate({ type: 'nodebuffer' });
+    assert.equal(adapter.listDocxImages(buffer).length, 0, 'non-media targets must not be listed as images');
+  });
+});

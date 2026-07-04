@@ -3425,6 +3425,35 @@ async function validateOfficeOperationCriteria(buffer, format, operations = [], 
         passed: normalizedTextIncludes(cellValue, op.value),
         details: { address: op.address, sheetName: op.sheetName || null, value: compact(cellValue, 120) },
       });
+    } else if (op.kind === 'set_slide_title') {
+      checks.push({
+        id: 'pptx_slide_title_changed',
+        label: 'Título de diapositiva actualizado',
+        passed: normalizedTextIncludes(text, op.title),
+        details: { slideNumber: op.slideNumber || null, title: compact(op.title, 120) },
+      });
+    } else if ((op.kind === 'recolor_image' || op.kind === 'replace_image') && format === 'pptx') {
+      // Byte-level proof on the final buffer: the target media part must hold
+      // different bytes (recolor) / exactly the replacement bytes (replace).
+      let passed = false;
+      const details = { partName: op.checkPartName || null };
+      try {
+        const zip = new PizZip(buffer);
+        const part = op.checkPartName ? zip.file(op.checkPartName) : null;
+        const partSha1 = part ? sha1Hex(part.asNodeBuffer()) : null;
+        details.mediaChanged = Boolean(partSha1 && op.originalMediaSha1 && partSha1 !== op.originalMediaSha1);
+        passed = Boolean(zip.file('ppt/presentation.xml'))
+          && Boolean(partSha1)
+          && (op.kind === 'replace_image' && op.replacementSha1
+            ? partSha1 === op.replacementSha1
+            : details.mediaChanged);
+      } catch { passed = false; }
+      checks.push({
+        id: op.kind === 'recolor_image' ? 'pptx_image_recolored' : 'pptx_image_replaced',
+        label: op.kind === 'recolor_image' ? 'Imagen recoloreada dentro del PPTX' : 'Imagen reemplazada dentro del PPTX',
+        passed,
+        details,
+      });
     } else if (op.kind === 'format_range') {
       // Surgical formatting op (Stage 2): the format code must be present in
       // xl/styles.xml and at least one target cell must have been restyled.
@@ -4456,6 +4485,19 @@ function docxImageAdapterModule() {
   return _docxImageAdapterModule;
 }
 
+let _pptxAdapterModule;
+function pptxAdapterModule() {
+  if (_pptxAdapterModule === undefined) {
+    try {
+      // eslint-disable-next-line global-require
+      _pptxAdapterModule = require('./document-editing/pptx-adapter');
+    } catch {
+      _pptxAdapterModule = null;
+    }
+  }
+  return _pptxAdapterModule;
+}
+
 let _xlsxAdapterModule;
 function xlsxAdapterModule() {
   if (_xlsxAdapterModule === undefined) {
@@ -4867,6 +4909,146 @@ async function runXlsxSurgicalEditFlow({ input, sheetEdit, sourceFile }) {
     return { clarification: true, message: `No pude aplicar el cambio en «${docName}»: ${err?.message || 'error desconocido'}.` };
   }
   return { clarification: true, message: 'No entendí qué cambio aplicar a la hoja de cálculo.' };
+}
+
+// ── PPTX surgical-edit intent (slide title) ─────────────────────────────────
+// "En la diapositiva 3 cambia el título a X y conserva el diseño" (owner
+// spec). Parsed BEFORE the pptx text/append planner: the old path could only
+// do whole-deck text replacement or append a slide, so title edits degraded
+// to appendix slides.
+const SLIDE_NOUN_RE = /\b(?:diapositiva|l[aá]mina|slide)\s*(?:n(?:ro|umero)?\.?\s*|#\s*)?(\d{1,3})\b/;
+const SLIDE_TITLE_NOUN_RE = /\b(t[ií]tulo|title)\b/;
+const SLIDE_TITLE_VERB_RE = /\b(cambi\w*|pon(?:er|ga|le)?|actualiza\w*|reemplaz\w*|reempla[zc]\w*|edita\w*|escrib\w*|modific\w*|set|change\w*|rename\w*)\b/;
+
+function parsePresentationEditRequest(requestText = '') {
+  const text = normalizeText(requestText);
+  if (!text) return null;
+  // A quoted replace-pair («reemplaza "X" por "Y"») is replace_text territory
+  // — legacy planner owns it. And the noun "título" must appear OUTSIDE the
+  // quoted spans: in that legacy shape the word often lives INSIDE the needle
+  // ("Título viejo") and used to hijack the request into a title edit.
+  const quotedPairs = (requestText.match(/["“'][^"”']{1,160}["”']/g) || []).length;
+  if (quotedPairs >= 2) return null;
+  const textOutsideQuotes = normalizeText(requestText.replace(/["“'][^"”']{1,160}["”']/g, ' '));
+  if (!SLIDE_TITLE_NOUN_RE.test(textOutsideQuotes) || !SLIDE_TITLE_VERB_RE.test(textOutsideQuotes)) return null;
+  const slideMatch = SLIDE_NOUN_RE.exec(text);
+  const slideNumber = slideMatch ? Number(slideMatch[1]) : null;
+  // Capture the new title from the ORIGINAL text (casing/accents preserved):
+  // quoted value wins; otherwise everything after "título … a|por|:" up to a
+  // clause boundary ("y conserva el diseño" must not leak into the title).
+  let title = null;
+  const quoted = /["“']([^"”']{2,120})["”']/.exec(requestText);
+  if (quoted) {
+    title = quoted[1].trim();
+  } else {
+    const tail = /\bt[ií]tulo\b[^,;.]*?\b(?:a|por|:)\s+(.+?)(?:\s+y\s+|\s+and\s+|[,;]|\.\s|\.$|$)/i.exec(requestText);
+    if (tail) title = tail[1].trim();
+  }
+  if (!title || title.length < 2) return null;
+  // "a azul" etc. is an image-edit phrase, not a title — let the image parser own it.
+  if (/^(?:color\s+)?(?:azul|rojo|verde|negro|gris|amarillo|naranja|morado|violeta|blanco|blue|red|green|black|gray|grey|yellow|orange|purple|white)$/i.test(title)) return null;
+  return { kind: 'set_slide_title', slideNumber, title };
+}
+
+async function runPptxSurgicalEditFlow({ input, slideEdit, sourceFile }) {
+  const adapter = pptxAdapterModule();
+  const docName = sourceFile?.originalName || sourceFile?.filename || 'la presentación';
+  if (!adapter) {
+    return { clarification: true, message: 'La edición de presentaciones no está disponible en este despliegue.' };
+  }
+  let slides;
+  try {
+    slides = adapter.listPptxSlides(input);
+  } catch (err) {
+    return { clarification: true, message: `No pude leer «${docName}»: ${err?.message || 'archivo dañado'}.` };
+  }
+  if (!slides.length) {
+    return { clarification: true, message: `«${docName}» no tiene diapositivas legibles.` };
+  }
+  let slideNumber = slideEdit.slideNumber;
+  if (!slideNumber) {
+    if (slides.length === 1) {
+      slideNumber = 1;
+    } else {
+      const listing = slides.slice(0, 10)
+        .map((s) => `${s.number}. «${s.title || s.textSnippet.slice(0, 40) || 'sin título'}»`)
+        .join('\n');
+      return { clarification: true, message: `«${docName}» tiene ${slides.length} diapositivas y no indicaste cuál editar:\n${listing}\n¿En qué diapositiva cambio el título?` };
+    }
+  }
+  try {
+    const result = adapter.setSlideTitle({ buffer: input, slideNumber, title: slideEdit.title });
+    return {
+      buffer: result.buffer,
+      operation: { kind: 'set_slide_title', slideNumber: result.slideNumber, title: slideEdit.title },
+      steps: [{ kind: 'set_slide_title', label: `diapositiva ${result.slideNumber}` }],
+      suffix: 'titulo_actualizado',
+      titleSuffix: 'título actualizado',
+      summary: `cambié el título de la diapositiva ${result.slideNumber} a «${slideEdit.title}» (antes: «${result.previousTitle || 'sin título'}»)`,
+    };
+  } catch (err) {
+    return { clarification: true, message: `No pude cambiar el título en «${docName}»: ${err?.message || 'error desconocido'}.` };
+  }
+}
+
+// Image edits inside a PPTX ("cambia la imagen de la diapositiva 2 a azul")
+// — reuses parseImageEditRequest and mirrors the DOCX image flow with the
+// pptx adapter (list → resolve target → recolor/replace → same part name).
+async function runPptxImageEditFlow({ input, imageEdit, requestText = '', sourceFile, assetFiles = [] }) {
+  const adapter = pptxAdapterModule();
+  const docName = sourceFile?.originalName || sourceFile?.filename || 'la presentación';
+  const actionLabel = imageEdit.kind === 'recolor_image' ? 'recolorear' : 'reemplazar';
+  if (!adapter) {
+    return { clarification: true, message: 'La edición de imágenes en presentaciones no está disponible en este despliegue.' };
+  }
+  let images;
+  try {
+    images = adapter.listPptxImages(input);
+  } catch (err) {
+    return { clarification: true, message: `No pude leer las imágenes de «${docName}»: ${err?.message || 'archivo dañado'}.` };
+  }
+  if (!images.length) {
+    return { clarification: true, message: `No encontré imágenes dentro de «${docName}», así que no hay ninguna imagen que ${actionLabel}.` };
+  }
+  // Slide cue narrows the candidates; then single-image fast accept or ask.
+  const slideCue = SLIDE_NOUN_RE.exec(normalizeText(requestText || ''));
+  const pool = slideCue ? images.filter((img) => img.slideNumber === Number(slideCue[1])) : images;
+  if (slideCue && !pool.length) {
+    return { clarification: true, message: `La diapositiva ${slideCue[1]} de «${docName}» no tiene imágenes.` };
+  }
+  if (pool.length > 1) {
+    const listing = pool.slice(0, 10).map((img, i) => `${i + 1}. diapositiva ${img.slideNumber} (${img.extension.toUpperCase()})`).join('\n');
+    return { clarification: true, message: `Encontré ${pool.length} imágenes en «${docName}»:\n${listing}\n¿Cuál deseas ${actionLabel}?` };
+  }
+  const target = pool[0];
+  try {
+    let result;
+    const op = { kind: imageEdit.kind, originalMediaSha1: sha1Hex(target.bytes) };
+    if (imageEdit.kind === 'recolor_image') {
+      result = await adapter.recolorPptxImage({ buffer: input, imageIndex: target.index, color: imageEdit.color });
+    } else {
+      const asset = (assetFiles || []).find((file) => normalizeText(file.mimeType).startsWith('image/') || /\.(png|jpe?g|gif|webp)$/i.test(String(file.name || '')));
+      if (!asset || !asset.absolutePath) {
+        return { clarification: true, message: 'Para reemplazar la imagen necesito la imagen nueva: adjúntala (PNG o JPG) junto con la instrucción.' };
+      }
+      const replacementBytes = await fs.promises.readFile(asset.absolutePath);
+      op.replacementSha1 = sha1Hex(replacementBytes);
+      result = await adapter.replacePptxImage({ buffer: input, imageIndex: target.index, replacementBytes, replacementMime: asset.mimeType || '' });
+    }
+    op.checkPartName = result.checkPartName || result.partName;
+    return {
+      buffer: result.buffer,
+      operation: op,
+      steps: [{ kind: imageEdit.kind, label: `diapositiva ${result.slideNumber}` }],
+      suffix: imageEdit.kind === 'recolor_image' ? 'imagen_recoloreada' : 'imagen_reemplazada',
+      titleSuffix: imageEdit.kind === 'recolor_image' ? 'imagen recoloreada' : 'imagen reemplazada',
+      summary: imageEdit.kind === 'recolor_image'
+        ? `recoloreé la imagen de la diapositiva ${result.slideNumber} a ${imageEdit.colorName || imageEdit.color} conservando su posición y tamaño`
+        : `reemplacé la imagen de la diapositiva ${result.slideNumber} conservando su posición y tamaño`,
+    };
+  } catch (err) {
+    return { clarification: true, message: `No pude ${actionLabel} la imagen: ${err?.message || 'error desconocido'}` };
+  }
 }
 
 async function executeDocxOperations({ input, ops, requestText, sourceText, allSourceFiles, sourceFile, referenceFiles = [], signal }) {
@@ -5411,6 +5593,30 @@ async function generateSourcePreservingDocumentEdit({
       }
     } else if (isPptxFile(sourceFile)) {
       format = 'pptx';
+      // Surgical fast paths — resolved BEFORE the text/append planner: slide
+      // title edits ("en la diapositiva 3 cambia el título…") and image
+      // recolor/replace inside slides. The old planner could only replace
+      // text deck-wide or append slides, so these degraded to appendices.
+      const slideEdit = parsePresentationEditRequest(requestText);
+      const pptxImageEdit = slideEdit ? null : parseImageEditRequest(requestText);
+      if (slideEdit || pptxImageEdit) {
+        const pptxResult = slideEdit
+          ? await runPptxSurgicalEditFlow({ input, slideEdit, sourceFile })
+          : await runPptxImageEditFlow({ input, imageEdit: pptxImageEdit, requestText, sourceFile, assetFiles });
+        if (pptxResult.clarification) {
+          return buildImageEditClarificationResult({ message: pptxResult.message, format });
+        }
+        output = pptxResult.buffer;
+        operations = pptxResult.operation ? [pptxResult.operation] : pptxResult.steps.map((st) => ({ kind: st.kind }));
+        validationBlocks = [];
+        orchestration = buildDocumentOrchestrationPlan({
+          requestText, sourceFile, referenceFiles, operations, selectionReason,
+        });
+        suffix = pptxResult.suffix;
+        titleSuffix = pptxResult.titleSuffix;
+        explanation = `Se conservó el PPTX original; ${pptxResult.summary}.`;
+        content = `Listo. Conservé el PPTX original: ${pptxResult.summary}, sin alterar el diseño, los fondos ni el resto de las diapositivas.`;
+      } else {
       operations = planGenericOfficeOperations({ requestText, format });
       if (operations.every((op) => op.kind === 'append_generic')) {
         const smart = await planOfficeOperationsSmart({ requestText, format, input, signal });
@@ -5435,6 +5641,7 @@ async function generateSourcePreservingDocumentEdit({
       content = stepSummary
         ? `Listo. Conservé el PPTX original y ${stepSummary}, sin reconstruir la presentación completa.`
         : 'Listo. Conservé el PPTX original y apliqué la edición solicitada sin reconstruir la presentación completa.';
+      }
     } else if (isPdfFile(sourceFile)) {
       format = 'pdf';
       const execution = await executePdfOperations({
@@ -5620,6 +5827,7 @@ module.exports = {
   isSourcePreservingEditRequest,
   loadEditableSourceFiles,
   parseImageEditRequest,
+  parsePresentationEditRequest,
   parseSpreadsheetEditRequest,
   parseTargetSectionRequest,
   tryGenerateSourcePreservingDocumentEdit,

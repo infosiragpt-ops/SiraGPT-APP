@@ -105,8 +105,9 @@ function ensureNumFmtStyles(stylesXml, formatCode) {
 
   // 1. numFmts element — schema-ordered right after <styleSheet …>. Reuse an
   // existing numFmt with the same code if present.
-  const existingCode = new RegExp(`<numFmt\\b[^>]*formatCode="${formatCode.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}"[^>]*numFmtId="(\\d+)"`);
-  const existingCode2 = new RegExp(`<numFmt\\b[^>]*numFmtId="(\\d+)"[^>]*formatCode="${formatCode.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}"`);
+  const escapedCode = xmlEscape(formatCode).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const existingCode = new RegExp(`<numFmt\\b[^>]*formatCode="${escapedCode}"[^>]*numFmtId="(\\d+)"`);
+  const existingCode2 = new RegExp(`<numFmt\\b[^>]*numFmtId="(\\d+)"[^>]*formatCode="${escapedCode}"`);
   let numFmtId = null;
   const em = existingCode.exec(xml) || existingCode2.exec(xml);
   if (em) {
@@ -187,7 +188,9 @@ function expandRange({ sheetXml, range, column }) {
     const [a, b] = range.split(':').map((r) => splitCellRef(r));
     if (!a || !b) return [];
     const cols = [];
-    for (let c = a.colIndex; c <= b.colIndex; c += 1) cols.push(excelColLetter(c));
+    // Accept reversed refs (D5:B2) the same way Excel does.
+    const c1 = Math.min(a.colIndex, b.colIndex), c2 = Math.max(a.colIndex, b.colIndex);
+    for (let c = c1; c <= c2; c += 1) cols.push(excelColLetter(c));
     const r1 = Math.min(a.row, b.row), r2 = Math.max(a.row, b.row);
     const cells = [];
     for (let r = r1; r <= r2; r += 1) for (const c of cols) cells.push(`${c}${r}`);
