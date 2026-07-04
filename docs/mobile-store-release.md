@@ -2,8 +2,8 @@
 
 ## Current State
 
-- Android debug APK QA exists in the current native QA prerelease.
-- Android release AAB QA exists in the current native QA prerelease.
+- Android debug APK QA builds successfully in GitHub Actions.
+- Android release AAB QA builds successfully in GitHub Actions.
 - Capacitor app ID is `com.siragpt.app`.
 - Production WebView URL is `https://siragpt.com`.
 - Public GitHub prerelease `native-qa-v0.4.3-ec9d380c` contains unsigned QA packages for Android, iOS simulator, macOS, and Windows.
@@ -15,11 +15,11 @@
 - `npm run mobile:doctor` passed locally for Android and iOS.
 - `npm run native:version:check` passed locally for native version `0.4.3` / build `4003`.
 - `npm run native:store:readiness` passed locally against the submission metadata.
-- GitHub Actions `Native mobile builds` run `28717066596` passed on `production-main` SHA `ec9d380cc3d219b190c36d531ae7c6a86a7331a8`.
+- GitHub Actions `Native mobile builds` run `28717882099` passed on `production-main` SHA `140e23bea961dfdf177ff4a3aab06284f08a7506`.
 - The run produced unsigned QA artifacts:
   - `siragpt-mobile-android`
   - `siragpt-mobile-ios-simulator`
-- GitHub Actions `Native desktop builds` run `28717066561` passed on the same SHA and produced unsigned QA artifacts:
+- GitHub Actions `Native desktop builds` run `28717882095` passed on the same SHA and produced unsigned QA artifacts:
   - `siragpt-desktop-macos`
   - `siragpt-desktop-windows-x64`
 - Public QA prerelease:
