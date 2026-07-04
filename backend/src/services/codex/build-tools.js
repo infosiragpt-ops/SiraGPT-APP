@@ -512,7 +512,7 @@ const TOOLS = {
 
   use_skill: {
     kind: 'file_read',
-    description: 'Carga un playbook (skill) con el estándar de calidad para un tipo de trabajo ANTES de construirlo: landing-profesional, crud-entidades, dashboard-kpis, auth-basica, formularios-validados, ecommerce-catalogo, portfolio-personal, debug-runtime, más los .md del proyecto en .sira/skills/. Sin nombre (o con nombre desconocido) devuelve el catálogo completo. Úsalo al inicio de la tarea correspondiente y sigue el playbook.',
+    description: 'Carga un playbook (skill) con el estándar de calidad para un tipo de trabajo ANTES de construirlo: landing-profesional, crud-entidades, dashboard-kpis, auth-basica, formularios-validados, ecommerce-catalogo, portfolio-personal, app-empresarial, debug-runtime, más los .md del proyecto en .sira/skills/. Sin nombre (o con nombre desconocido) devuelve el catálogo completo. Úsalo al inicio de la tarea correspondiente y sigue el playbook.',
     parameters: { type: 'object', properties: { name: { type: 'string', description: 'Nombre del skill (p.ej. landing-profesional). Omite para listar.' } }, required: [] },
     commandFor: (args) => `use_skill ${args?.name || '(listar)'}`,
     pathFor: (args) => (args?.name ? `.skills/${args.name}` : null),
