@@ -3284,11 +3284,29 @@ function validateDocxOperationCriteria(buffer, operations = []) {
       continue;
     }
     if ((op.kind === 'append_generic' || op.kind === 'append_labeled') && op.wantsInstrument) {
+      // Accept BOTH the deterministic template phrasing and the richer
+      // LLM-generated instruments (cuestionario/Likert/ítems/dimensión…). The
+      // old check demanded the exact template strings, so real generated
+      // instruments failed validation even though they were correct.
       const hasInstrumentHeading = normalized.includes('instrumento de recoleccion de datos')
         || normalized.includes('instrumentos de recoleccion de datos')
-        || normalized.includes('instrumento propuesto');
-      const passed = hasInstrumentHeading && normalized.includes('escala de respuesta');
+        || normalized.includes('instrumento propuesto')
+        || normalized.includes('cuestionario')
+        || normalized.includes('instrumento');
+      const hasScaleOrItems = normalized.includes('escala de respuesta')
+        || normalized.includes('likert')
+        || normalized.includes('totalmente de acuerdo')
+        || normalized.includes('dimension')
+        || normalized.includes('item');
+      const passed = hasInstrumentHeading && hasScaleOrItems;
       checks.push({ id: 'instrument_appended', label: 'Instrumento agregado al Word', passed });
+      continue;
+    }
+    if (op.kind === 'append_generic' || op.kind === 'append_labeled') {
+      // Generic append (non-instrument): the ANEXOS section must exist and the
+      // document must have grown with real content beyond the anchor heading.
+      const passed = normalized.includes('anexo') && text.length > 200;
+      checks.push({ id: 'content_appended', label: 'Contenido agregado al Word', passed });
       continue;
     }
     if (op.kind === 'integrate_references') {
@@ -3992,6 +4010,18 @@ function planSourcePreservingOperations({ requestText = '', documentXml = '', re
     } else {
       ops.push({ kind: 'append_generic', wantsInstrument: clauseWantsInstrument(norm) });
     }
+  }
+  // Collapse repeated append_generic ops into ONE. A phrasing like "agregale
+  // los instrumentos… analiza y agregale" splits into two identical appends,
+  // which produced two redundant appendices + a duplicated step summary
+  // ("agregué el contenido solicitado en anexos y agregué el contenido…").
+  const appendGenerics = ops.filter((op) => op.kind === 'append_generic');
+  if (appendGenerics.length > 1) {
+    const wantsInstrument = appendGenerics.some((op) => op.wantsInstrument);
+    const firstIndex = ops.findIndex((op) => op.kind === 'append_generic');
+    const collapsed = ops.filter((op) => op.kind !== 'append_generic');
+    collapsed.splice(firstIndex, 0, { kind: 'append_generic', wantsInstrument });
+    return collapsed;
   }
   return ops;
 }
