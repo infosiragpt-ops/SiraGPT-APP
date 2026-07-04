@@ -445,6 +445,27 @@ const TOOLS = {
     },
   },
 
+  repo_map: {
+    kind: 'file_read',
+    description: 'Mapa RANKEADO del repositorio (estilo Aider): por archivo, sus símbolos exportados y cuántos archivos lo importan (←N), con los más centrales arriba. Úsalo al INICIO de un turno sobre un proyecto existente para orientarte sin leer todo; luego read_file solo lo que vayas a editar.',
+    parameters: { type: 'object', properties: {}, required: [] },
+    commandFor: () => 'repo_map',
+    pathFor: () => null,
+    async execute(_args, ctx) {
+      // eslint-disable-next-line global-require
+      const { buildRepoMap } = require('./repo-map');
+      try {
+        const map = await buildRepoMap({ runner: ctx.runner, project: ctx.project });
+        if (!map) {
+          return { isError: false, summary: 'workspace sin fuentes que mapear', observation: 'El workspace aún no tiene archivos fuente que mapear (o el runner no respondió). Usa list_files para el inventario plano.' };
+        }
+        return { isError: false, summary: 'mapa del repo generado', observation: map };
+      } catch (err) {
+        return { isError: false, summary: `repo_map no disponible: ${err.message}`, observation: `No pude generar el mapa (${err.message}). Usa list_files/grep_search para orientarte.` };
+      }
+    },
+  },
+
   use_skill: {
     kind: 'file_read',
     description: 'Carga un playbook (skill) con el estándar de calidad para un tipo de trabajo ANTES de construirlo: landing-profesional, crud-entidades, dashboard-kpis, auth-basica, formularios-validados, debug-runtime, más los .md del proyecto en .sira/skills/. Sin nombre (o con nombre desconocido) devuelve el catálogo completo. Úsalo al inicio de la tarea correspondiente y sigue el playbook.',
