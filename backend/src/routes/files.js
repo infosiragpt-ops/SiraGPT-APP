@@ -983,6 +983,38 @@ router.get('/', authenticateToken, async (req, res) => {
 });
 
 // Get structured document analysis
+// Edit-history for an uploaded file: every surgical edit records an immutable
+// version pointing at the artifact holding the edited bytes. The original
+// upload is never mutated, so this is a pure read of the version list.
+// Auth + ownership scoped. Empty array when versioning isn't available yet.
+router.get('/:id/versions', authenticateToken, async (req, res) => {
+  try {
+    const file = await prisma.file.findFirst({
+      where: { id: req.params.id, userId: req.user.id },
+      select: { id: true },
+    });
+    if (!file) return res.status(404).json({ error: 'File not found' });
+    const { listFileVersions } = require('../services/document-editing/versioning');
+    const versions = await listFileVersions(prisma, { fileId: file.id, userId: req.user.id });
+    // Each version's edited bytes download from the agent-artifact endpoint;
+    // "restore" = fetch that URL (the original upload is always version 0).
+    return res.json({
+      fileId: file.id,
+      versions: versions.map((v) => ({
+        id: v.id,
+        version: v.version,
+        filename: v.filename,
+        summary: v.summary,
+        validationPassed: v.validationPassed,
+        createdAt: v.createdAt,
+        downloadUrl: v.artifactId ? `/api/agent/artifact/${v.artifactId}` : null,
+      })),
+    });
+  } catch (error) {
+    return res.status(500).json({ error: 'No se pudo listar el historial de versiones' });
+  }
+});
+
 router.get('/:id/analysis', authenticateToken, async (req, res) => {
   try {
     const file = await prisma.file.findFirst({

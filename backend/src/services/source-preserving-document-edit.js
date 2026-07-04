@@ -5989,7 +5989,7 @@ async function tryGenerateSourcePreservingDocumentEdit({
     const needed = targetedSection ? 'un archivo DOCX con la sección solicitada' : `un archivo editable compatible (${supportedSourceEditLabel()})`;
     throw new Error(`Para conservar el documento original necesito ${needed}. Archivo recibido: ${names || 'sin archivo compatible'}.`);
   }
-  return generateSourcePreservingDocumentEdit({
+  const result = await generateSourcePreservingDocumentEdit({
     sourceFile: supported,
     sourceFiles: selection.sourceFiles,
     referenceFiles: selection.referenceFiles,
@@ -6001,6 +6001,28 @@ async function tryGenerateSourcePreservingDocumentEdit({
     chatId,
     signal,
   });
+
+  // Non-destructive version history (best-effort): a clarification carries no
+  // artifact, so only real edits produce a version. The original upload
+  // (supported.id) is never mutated; this just records the edited artifact so
+  // the user can list/restore prior versions later.
+  if (result && !result.clarification && result.artifact && supported?.id) {
+    try {
+      const { recordFileVersion } = require('./document-editing/versioning');
+      const recorded = await recordFileVersion(prisma, {
+        fileId: supported.id,
+        userId,
+        artifactId: result.artifact.id || null,
+        filename: result.file?.filename || result.artifact.filename || 'documento',
+        summary: result.content ? String(result.content).slice(0, 300) : '',
+        editPlan: result.orchestration?.operations || null,
+        validationPassed: Boolean(result.validation?.passed),
+        createdByChatId: chatId || null,
+      });
+      if (recorded) result.version = { id: recorded.id, version: recorded.version, sourceFileId: supported.id };
+    } catch { /* versioning never blocks the edit */ }
+  }
+  return result;
 }
 
 module.exports = {
