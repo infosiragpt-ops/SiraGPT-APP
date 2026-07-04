@@ -64,7 +64,7 @@ These workflows are unsigned by default. Add signing credentials only through Gi
 
 ### Latest Verified Native Builds
 
-Current branch head verified: `4bbd7dc6d64a5a6d4f4a687c346ef8b9248f6747` on `production-main`.
+Latest native package SHA verified: `4bbd7dc6d64a5a6d4f4a687c346ef8b9248f6747` on `production-main`.
 
 - Mobile workflow: `Native mobile builds` run `28715288814`.
   - Android APK + AAB: passed.
