@@ -2,7 +2,7 @@ import { NextRequest } from "next/server"
 import { getAgent } from "@/server/agents/registry"
 import { streamLlmCall, estimateCost, getToolDefsForAgent } from "@/server/agents/llm"
 import { spawnSubagents } from "@/lib/code-agent/subagent"
-import type { LlmToolCall } from "@/server/agents/llm"
+import type { LlmToolCall, LlmMessage } from "@/server/agents/llm"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -106,8 +106,8 @@ async function runAgentLoop(
 ) {
   if (!def) return { error: "agent not found" }
 
-  const tools = getToolDefsForAgent(def.tools as Record<string, boolean>)
-  const messages: Array<{ role: string; content: string }> = [
+  const tools = getToolDefsForAgent(def.tools as unknown as Record<string, boolean>)
+  const messages: LlmMessage[] = [
     { role: "system", content: def.prompts.system },
     { role: "user", content: prompt },
   ]
