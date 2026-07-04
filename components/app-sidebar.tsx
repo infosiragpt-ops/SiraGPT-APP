@@ -499,7 +499,27 @@ export function AppSidebar() {
     // section here would read as an empty sidebar.
     if (mode === "code") setCodexCollapsed(false)
     try { window.localStorage.setItem("sira:sidebar:mode", mode) } catch { /* ignore */ }
-  }, [])
+    // The main view follows the toggle: Chats → the chat interface,
+    // Code → the Apps IDE. navigate() dedupes if already on the route.
+    navigate(mode === "code" ? "/code" : "/chat")
+  }, [navigate])
+  // …and the toggle follows the route: landing on /code (deep link, agent
+  // click, reload) flips the sidebar into Code mode and vice versa, so the
+  // header always reflects what the main view shows.
+  React.useEffect(() => {
+    if (!pathname) return
+    const routeMode: "chat" | "code" | null = pathname.startsWith("/code")
+      ? "code"
+      : pathname.startsWith("/chat") ? "chat" : null
+    if (routeMode) {
+      setSidebarMode((prev) => {
+        if (prev === routeMode) return prev
+        if (routeMode === "code") setCodexCollapsed(false)
+        try { window.localStorage.setItem("sira:sidebar:mode", routeMode) } catch { /* ignore */ }
+        return routeMode
+      })
+    }
+  }, [pathname])
   // Lote F · #45 — Codex section collapsible with persistent state.
   // Defaults to expanded on first visit so users discover it; once
   // collapsed the choice is remembered across reloads via localStorage.
@@ -1075,46 +1095,55 @@ export function AppSidebar() {
             state === "closed" && "hidden",
           )}
         >
-          {/* Claude-style mode toggle: Mensajes ↔ Code. Replaces the
+          {/* Claude-style mode toggle: Chats ↔ Code. Replaces the
               logo+name lockup in the open header (the collapsed rail
-              keeps the logo button below). */}
-          <div
-            role="tablist"
-            aria-label="Modo de la barra lateral"
-            className="flex shrink-0 items-center gap-0.5 rounded-lg bg-muted/60 p-0.5"
-          >
-            <button
-              type="button"
-              role="tab"
-              aria-selected={sidebarMode === "chat"}
-              aria-label="Mensajes"
-              title="Mensajes"
-              onClick={() => switchSidebarMode("chat")}
-              className={cn(
-                "flex h-7 w-9 items-center justify-center rounded-md transition-colors",
-                sidebarMode === "chat"
-                  ? "bg-background text-foreground shadow-sm ring-1 ring-border/50"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
+              keeps the logo button below). The active tab shows its
+              name; the wrapper centers the control in the header. */}
+          <div className="flex min-w-0 flex-1 items-center justify-center">
+            <div
+              role="tablist"
+              aria-label="Modo de la barra lateral"
+              className="flex shrink-0 items-center gap-0.5 rounded-lg bg-muted/60 p-0.5"
             >
-              <MessageSquare className="h-4 w-4" />
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={sidebarMode === "code"}
-              aria-label="Code"
-              title="Code"
-              onClick={() => switchSidebarMode("code")}
-              className={cn(
-                "flex h-7 w-9 items-center justify-center rounded-md transition-colors",
-                sidebarMode === "code"
-                  ? "bg-background text-foreground shadow-sm ring-1 ring-border/50"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <Code2 className="h-4 w-4" />
-            </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={sidebarMode === "chat"}
+                aria-label="Chats"
+                title="Chats"
+                onClick={() => switchSidebarMode("chat")}
+                className={cn(
+                  "flex h-7 items-center justify-center gap-1.5 rounded-md transition-colors",
+                  sidebarMode === "chat"
+                    ? "bg-background px-2.5 text-foreground shadow-sm ring-1 ring-border/50"
+                    : "w-9 text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <MessageSquare className="h-4 w-4 shrink-0" />
+                {sidebarMode === "chat" && (
+                  <span className="text-xs font-medium">Chats</span>
+                )}
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={sidebarMode === "code"}
+                aria-label="Code"
+                title="Code"
+                onClick={() => switchSidebarMode("code")}
+                className={cn(
+                  "flex h-7 items-center justify-center gap-1.5 rounded-md transition-colors",
+                  sidebarMode === "code"
+                    ? "bg-background px-2.5 text-foreground shadow-sm ring-1 ring-border/50"
+                    : "w-9 text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <Code2 className="h-4 w-4 shrink-0" />
+                {sidebarMode === "code" && (
+                  <span className="text-xs font-medium">Code</span>
+                )}
+              </button>
+            </div>
           </div>
           <div className="flex shrink-0 items-center gap-1">
             <NotificationCenter />
