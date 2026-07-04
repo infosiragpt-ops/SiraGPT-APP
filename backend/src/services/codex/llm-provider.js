@@ -46,7 +46,9 @@ function modelFor(name, env) {
 
 /** Higher-capability providers get more room to write whole files. */
 function defaultMaxTokensFor(name) {
-  return name === 'cerebras' ? 2048 : 8192;
+  if (name === 'cerebras') return 2048;
+  // Anthropic gets extra room: 8192 still truncated big write_file payloads.
+  return name === 'anthropic' ? 16384 : 8192;
 }
 
 /**

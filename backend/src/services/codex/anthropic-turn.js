@@ -16,7 +16,10 @@
 
 const DEFAULT_MODEL_POWER = 'claude-sonnet-4-6';
 const DEFAULT_MODEL_STANDARD = 'claude-haiku-4-5-20251001';
-const DEFAULT_MAX_TOKENS = 4096;
+// 4096 truncated large write_file calls (a realistic seed.ts + narrative
+// exceeds it → tool_use arrives without `content`, cycle-16 finding). Sonnet
+// supports far more output; 16K is the cost/latency sweet spot here.
+const DEFAULT_MAX_TOKENS = 16384;
 
 function getAnthropicTurnConfig({ env = process.env, tier = null } = {}) {
   const apiKey = String(env.ANTHROPIC_API_KEY || '').trim();
@@ -118,7 +121,9 @@ function parseResponse(resp, model) {
  * model. Throws on transport/config errors — the caller (llm-turn) decides
  * whether to fall back to the Cerebras path.
  */
-async function anthropicTurn({ messages, tools = [], signal, env = process.env, tier = null, createClient = defaultCreateClient, maxTokens = DEFAULT_MAX_TOKENS } = {}) {
+async function anthropicTurn({ messages, tools = [], signal, env = process.env, tier = null, createClient = defaultCreateClient, maxTokens = null } = {}) {
+  const envMax = Number(env.CODEX_ANTHROPIC_MAX_TOKENS);
+  const effectiveMaxTokens = maxTokens || (Number.isFinite(envMax) && envMax > 0 ? Math.floor(envMax) : DEFAULT_MAX_TOKENS);
   const cfg = getAnthropicTurnConfig({ env, tier });
   if (!cfg.enabled) throw new Error('codex anthropic-turn: ANTHROPIC_API_KEY no configurada');
   const client = createClient({ env });
@@ -128,7 +133,7 @@ async function anthropicTurn({ messages, tools = [], signal, env = process.env, 
   const useCache = cacheEnabled(env);
   const req = {
     model: cfg.model,
-    max_tokens: maxTokens,
+    max_tokens: effectiveMaxTokens,
     messages: turns,
   };
   // Prompt caching: mark the stable prefix (system + tools) so Anthropic caches
