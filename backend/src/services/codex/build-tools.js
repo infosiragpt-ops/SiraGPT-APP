@@ -445,6 +445,36 @@ const TOOLS = {
     },
   },
 
+  use_skill: {
+    kind: 'file_read',
+    description: 'Carga un playbook (skill) con el estándar de calidad para un tipo de trabajo ANTES de construirlo: landing-profesional, crud-entidades, dashboard-kpis, auth-basica, formularios-validados, debug-runtime, más los .md del proyecto en .sira/skills/. Sin nombre (o con nombre desconocido) devuelve el catálogo completo. Úsalo al inicio de la tarea correspondiente y sigue el playbook.',
+    parameters: { type: 'object', properties: { name: { type: 'string', description: 'Nombre del skill (p.ej. landing-profesional). Omite para listar.' } }, required: [] },
+    commandFor: (args) => `use_skill ${args?.name || '(listar)'}`,
+    pathFor: (args) => (args?.name ? `.skills/${args.name}` : null),
+    async execute(args, ctx) {
+      // Lazy require keeps module-load order flexible (mirrors run_subagent).
+      // eslint-disable-next-line global-require
+      const skills = require('./skills');
+      let workspaceSkills = [];
+      try {
+        workspaceSkills = await skills.loadWorkspaceSkills({ runner: ctx.runner, project: ctx.project });
+      } catch { /* best-effort — builtins always available */ }
+      const name = String(args?.name || '').trim().toLowerCase();
+      if (name) {
+        const skill = skills.getSkill(name, workspaceSkills);
+        if (skill) {
+          return { isError: false, summary: `skill ${skill.name} cargado`, observation: `${skill.body}\n\nAplica este playbook al trabajo actual.` };
+        }
+      }
+      const catalog = skills.formatCatalog(workspaceSkills);
+      return {
+        isError: false,
+        summary: name ? `skill "${name}" no existe — catálogo devuelto` : 'catálogo de skills',
+        observation: `${name ? `No hay un skill llamado "${name}". ` : ''}Skills disponibles:\n${catalog}\nLlama use_skill con el nombre exacto para cargar su playbook.`,
+      };
+    },
+  },
+
   inspect_database: {
     kind: 'database',
     description: 'Inspecciona el esquema de base de datos del proyecto (Prisma). Devuelve el provider, los modelos/tablas con sus campos y los enums, para rastrear y razonar sobre la base de datos antes de generar o modificar código que la use. No requiere conexión viva.',
