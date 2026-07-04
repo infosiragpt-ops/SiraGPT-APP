@@ -2739,9 +2739,13 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                 const previewUrl = htmlPreview
                                     ? `data:text/html;charset=utf-8,${encodeURIComponent(htmlPreview)}`
                                     : resolvedDownloadUrl;
+                                // Every generated office document is previewable now that
+                                // DocumentPreview renders xlsx/pptx/csv too (server-side
+                                // soffice→PDF for agent artifacts, client fallback otherwise).
+                                // The old allowlist left Excel/PowerPoint download-only.
                                 const canPreviewFile = !!onDocumentPreview && !!previewUrl && (
                                     Boolean(htmlPreview) ||
-                                    ['docx', 'doc', 'pdf', 'html', 'htm'].includes(extension)
+                                    ['docx', 'doc', 'pdf', 'html', 'htm', 'xlsx', 'xls', 'pptx', 'ppt', 'csv', 'odt', 'ods', 'odp', 'rtf'].includes(extension)
                                 );
                                 const getFileIcon = () => {
                                     if (fileNameLower.endsWith('.pdf')) {
@@ -2825,6 +2829,14 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                                                 url: previewUrl,
                                                                 downloadUrl: resolvedDownloadUrl || undefined,
                                                                 filename: fileName,
+                                                                // High-fidelity: for file-backed generated docs
+                                                                // (esp. xlsx/pptx) render the real soffice→PDF
+                                                                // instead of a client HTML table. The /render
+                                                                // endpoint converts any office format and the
+                                                                // viewer falls back to the client renderer on 4xx.
+                                                                previewPdfUrl: file.id && !htmlPreview && extension !== 'html' && extension !== 'htm'
+                                                                    ? `/api/files/${file.id}/render?target=pdf`
+                                                                    : undefined,
                                                             })}
                                                             className="h-9 px-4 font-medium shadow-sm hover:shadow-md"
                                                         >

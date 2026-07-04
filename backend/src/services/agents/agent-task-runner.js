@@ -2211,6 +2211,25 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           fresh.__fallthroughFreshDocument = true;
           throw fresh;
         }
+        if (preserved.clarification) {
+          // Edición de imagen ambigua (varias imágenes sin pista posicional,
+          // o falta la imagen de reemplazo): la pregunta de aclaración ES la
+          // respuesta final del task — no fabricamos una edición ni degradamos
+          // al generador de documentos nuevos.
+          emit({ type: 'step_done', id: currentStepId, ok: true });
+          currentStepId = null;
+          return finishDeterministicTask({
+            finalMarkdown: preserved.content,
+            stoppedReason: 'image_edit_clarification_needed',
+            steps: stepIdCounter,
+            artifactsList: [],
+            metadata: {
+              sourcePreservingEdit: true,
+              clarification: true,
+              sourceFileIds: files,
+            },
+          });
+        }
         if (!preserved.validation?.passed) {
           const unresolved = preserved.validation?.details?.agenticCycle?.unresolvedChecks || [];
           throw new Error(`La edición se generó pero no pasó la autoevaluación del DOCX${unresolved.length ? `: ${unresolved.join(', ')}` : '.'}`);
@@ -3070,7 +3089,12 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             // post-loop edit instead of letting it stall past maxRuntimeMs.
             signal: controller.signal,
           });
-          if (preserved?.artifact) {
+          if (preserved?.clarification) {
+            // La aclaración (qué imagen editar / falta la imagen nueva) es la
+            // respuesta final. Conservamos wantsSourcePreservingEdit en true
+            // para que el generador de documentos nuevos NO se dispare abajo.
+            finalMarkdown = preserved.content;
+          } else if (preserved?.artifact) {
             if (!preserved.validation?.passed) {
               const unresolved = preserved.validation?.details?.agenticCycle?.unresolvedChecks || [];
               throw new Error(`La edición se generó pero no pasó la autoevaluación del DOCX${unresolved.length ? `: ${unresolved.join(', ')}` : '.'}`);

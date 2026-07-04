@@ -2846,3 +2846,27 @@ model AccountingInvoiceLine {
   @@index([invoiceId])
   @@map("accounting_invoice_lines")
 }
+
+// Non-destructive edit history for the DocumentEditingService. Each surgical
+// edit of an uploaded file (docx/xlsx/pptx/pdf) records a version pointing at
+// the immutable artifact that holds the edited bytes — the ORIGINAL upload is
+// never modified, so "restaurar versión anterior" is just re-serving an older
+// artifact. Additive table; no backfill needed for existing rows.
+model FileVersion {
+  id             String   @id @default(cuid())
+  fileId         String   // the ORIGINAL uploaded File this version derives from
+  userId         String   // denormalised for cheap ownership checks
+  version        Int      // 1..N, monotonic per fileId
+  artifactId     String?  // agent artifact holding the edited bytes
+  filename       String
+  summary        String?  @db.Text // human-readable "qué cambió"
+  editPlan       Json?    // the structured operations that produced it
+  validationPassed Boolean @default(true)
+  createdByChatId String?
+  createdAt      DateTime @default(now())
+
+  @@unique([fileId, version])
+  @@index([fileId])
+  @@index([userId])
+  @@map("file_versions")
+}

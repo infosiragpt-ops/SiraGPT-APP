@@ -2,6 +2,7 @@ const fs = require('fs');
 const objectStorage = require('./object-storage');
 const os = require('os');
 const path = require('path');
+const { createHash } = require('crypto');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const PizZip = require('pizzip');
@@ -80,7 +81,24 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   const adjuntarAction = /\badjunt(?:a|ar|ame|arme|alo|ala|alos|alas|arlo|arla|arlos|arlas)\b/.test(text)
     && !/\b(?:documentos?|archivos?|imagenes?|fotos?|capturas?|pdf|word|docx|excel|xlsx|pptx?)\s+adjunt[oa]s?\b/.test(text)
     && !/\b(?:imagen|foto|captura|screenshot)\s+adjunt[oa]\b/.test(text);
-  const editVerb = primaryEditVerb || adjuntarAction || editorialCorrectionIntent;
+  // Image-edit intent — "cambia el logo a rojo", "recolorea la foto",
+  // "reemplaza la imagen por la adjunta". The generic verb lists miss
+  // recolor/pinta and the weak transform verb "cambia" demands a document
+  // noun, so these edit requests used to fall through to plain chat, where the
+  // model dumped the extracted document text (the live thesis-photo bug).
+  const imageNoun = /\b(foto\w*|imagen(?:es)?|figura\w*|logo\w*|logotipo\w*|picture|image)\b/.test(text);
+  // reempla[zc]: el subjuntivo es "reemplaces/reemplace" (z→c ante e) y los
+  // patrones reemplaz\w* del resto del módulo NO lo cubren — exactamente la
+  // conjugación del prompt del bug ("deseo que lo reemplaces por color azul").
+  const imageEditVerb = /\b(reempla[zc]\w*|cambi\w*|recolor\w*|pinta\w*|sustitu\w*|pon(?:er|ga|gan|la|lo|le|me)?)\b/.test(editVerbHay);
+  const imageEditIntent = imageNoun && imageEditVerb;
+  // PDF page-level safe ops (rota/gira/extrae/divide/une/combina las páginas…)
+  // — their verbs aren't in the generic edit lists, so a "rota la página 2 del
+  // pdf" used to fall through to plain chat.
+  const pdfOpIntent = /\b(rota\w*|gira\w*|rotate)\b/.test(text)
+    || (/\b(extrae\w*|extract|divide\w*|separa\w*|split)\b/.test(text) && /\bp[aá]ginas?\b/.test(text))
+    || (/\b(une|unir|junta\w*|combina\w*|fusiona\w*|merge)\b/.test(text) && /\bpdfs?\b/.test(text));
+  const editVerb = primaryEditVerb || adjuntarAction || editorialCorrectionIntent || imageEditIntent || pdfOpIntent;
   const existingDocRef = /\b(mi|mismo|misma|este|esta|ese|esa|documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx|powerpoint|pdf|tesis)\b/.test(text);
   const documentNoun = /\b(documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx|powerpoint|pdf|tesis)\b/.test(text);
   const appendLocation = /\b(al final|final|anexo|anexos|apendice|ultima pagina|ultima hoja|nueva hoja|nueva pagina|nueva diapositiva)\b/.test(text);
@@ -111,6 +129,11 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   if (explicitFreshDeliverable && !preservation && !concreteEditTarget && !explicitAttachedMutation) return false;
   if (hasFiles) {
     if (editorialCorrectionIntent) return true;
+    // Image noun + image-edit verb on an attachment turn is unambiguous: the
+    // only editable image surface the user can mean is inside the attachment.
+    if (imageEditIntent) return true;
+    // PDF page ops on an attachment turn target the attached PDF.
+    if (pdfOpIntent) return true;
     if (appendLocation || preservation || instrument || documentRegion) return true;
     if (documentNoun) return true;
     // A STRONG mutation verb alone is enough on an attachment turn — the
@@ -278,6 +301,12 @@ async function resolveRecentEditableFileIds(prisma, { chatId, prompt } = {}) {
   return ids;
 }
 
+function isImageAttachmentRow(row = {}) {
+  const mime = normalizeText(row.mimeType || row.type || row.contentType);
+  const name = normalizeText(row.originalName || row.filename || row.name || '');
+  return mime.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp|tiff?)$/.test(name);
+}
+
 async function loadEditableSourceFiles(prisma, { userId, fileIds = [], chatId = null, prompt = '' } = {}) {
   let ids = normalizeFileIdList(fileIds);
   const explicitFileIds = ids.length > 0;
@@ -298,7 +327,7 @@ async function loadEditableSourceFiles(prisma, { userId, fileIds = [], chatId = 
     },
   }).catch(() => []);
   const byId = new Map(rows.map((row) => [String(row.id), row]));
-  return ids
+  const resolved = ids
     .map((id) => byId.get(id))
     .filter(Boolean)
     .map((row) => ({
@@ -307,6 +336,23 @@ async function loadEditableSourceFiles(prisma, { userId, fileIds = [], chatId = 
       source: explicitFileIds ? 'current_upload' : 'recent_attachment',
     }))
     .filter((row) => row.path);
+  // Attached images are NOT editable bases (there is nothing to
+  // "source-preserve" in a bare PNG), but they ARE valid edit payloads:
+  // "reemplaza la foto por la imagen adjunta" needs the attached image's
+  // bytes. isPotentialEditableAttachmentRef() used to drop them silently, so
+  // the replacement image never reached the pipeline (the garbled-text bug).
+  // They travel as a side-channel property so every existing caller of this
+  // array keeps working unchanged.
+  const editable = resolved.filter((row) => !isImageAttachmentRow(row));
+  editable.assetFiles = resolved
+    .filter((row) => isImageAttachmentRow(row))
+    .map((row) => ({
+      id: row.id,
+      name: row.originalName || row.filename || '',
+      mimeType: row.mimeType || '',
+      absolutePath: row.path,
+    }));
+  return editable;
 }
 
 function resolveGeneratedArtifactPath(row = {}) {
@@ -3282,6 +3328,36 @@ function validateDocxOperationCriteria(buffer, operations = []) {
       });
       continue;
     }
+    if (op.kind === 'recolor_image' || op.kind === 'replace_image') {
+      // Structural + byte-level assertion on the FINAL buffer: the zip must
+      // still parse with word/document.xml present, and the target media part
+      // must REALLY hold different bytes (recolor) / exactly the replacement
+      // bytes (replace). Guards against shipping a no-op "edit".
+      let passed = false;
+      const details = { partName: op.checkPartName || op.partName || null };
+      try {
+        const zip = new PizZip(buffer);
+        const hasDocumentXml = Boolean(zip.file('word/document.xml'));
+        const part = details.partName ? zip.file(details.partName) : null;
+        const partBytes = part ? part.asNodeBuffer() : null;
+        const partSha1 = partBytes ? sha1Hex(partBytes) : null;
+        details.mediaChanged = Boolean(partSha1 && op.originalMediaSha1 && partSha1 !== op.originalMediaSha1);
+        passed = hasDocumentXml
+          && Boolean(partBytes)
+          && (op.kind === 'replace_image' && op.replacementSha1
+            ? partSha1 === op.replacementSha1
+            : details.mediaChanged);
+      } catch {
+        passed = false;
+      }
+      checks.push({
+        id: op.kind === 'recolor_image' ? 'image_recolored' : 'image_replaced',
+        label: op.kind === 'recolor_image' ? 'Imagen recoloreada dentro del DOCX' : 'Imagen reemplazada dentro del DOCX',
+        passed,
+        details,
+      });
+      continue;
+    }
     if (op.kind === 'replace_text') {
       const passed = !normalizedTextIncludes(text, op.needle) && normalizedTextIncludes(text, op.replacement);
       checks.push({
@@ -3356,6 +3432,74 @@ async function validateOfficeOperationCriteria(buffer, format, operations = [], 
         label: 'Celda Excel actualizada',
         passed: normalizedTextIncludes(cellValue, op.value),
         details: { address: op.address, sheetName: op.sheetName || null, value: compact(cellValue, 120) },
+      });
+    } else if (op.kind === 'rotate_pages' || op.kind === 'remove_pages' || op.kind === 'extract_pages' || op.kind === 'merge_pdfs') {
+      // Structural proof: the output parses as a PDF with the expected page
+      // count (pdf-lib is authoritative; %PDF magic is checked upstream).
+      let pageCount = null;
+      try {
+        const { PDFDocument } = require('pdf-lib');
+        const doc = await PDFDocument.load(buffer);
+        pageCount = doc.getPageCount();
+      } catch { pageCount = null; }
+      checks.push({
+        id: `pdf_${op.kind}`,
+        label: 'Operación de páginas PDF aplicada',
+        passed: Number.isInteger(pageCount) && (!op.expectedPageCount || pageCount === op.expectedPageCount),
+        details: { pageCount, expected: op.expectedPageCount || null },
+      });
+    } else if (op.kind === 'pdf_text_overlay') {
+      checks.push({
+        id: 'pdf_text_overlay',
+        label: 'Texto insertado sobre el PDF',
+        passed: buffer.slice(0, 5).toString('latin1') === '%PDF-' && buffer.length > 0,
+        details: { page: op.page, text: compact(op.text, 80) },
+      });
+    } else if (op.kind === 'set_slide_title') {
+      checks.push({
+        id: 'pptx_slide_title_changed',
+        label: 'Título de diapositiva actualizado',
+        passed: normalizedTextIncludes(text, op.title),
+        details: { slideNumber: op.slideNumber || null, title: compact(op.title, 120) },
+      });
+    } else if ((op.kind === 'recolor_image' || op.kind === 'replace_image') && format === 'pptx') {
+      // Byte-level proof on the final buffer: the target media part must hold
+      // different bytes (recolor) / exactly the replacement bytes (replace).
+      let passed = false;
+      const details = { partName: op.checkPartName || null };
+      try {
+        const zip = new PizZip(buffer);
+        const part = op.checkPartName ? zip.file(op.checkPartName) : null;
+        const partSha1 = part ? sha1Hex(part.asNodeBuffer()) : null;
+        details.mediaChanged = Boolean(partSha1 && op.originalMediaSha1 && partSha1 !== op.originalMediaSha1);
+        passed = Boolean(zip.file('ppt/presentation.xml'))
+          && Boolean(partSha1)
+          && (op.kind === 'replace_image' && op.replacementSha1
+            ? partSha1 === op.replacementSha1
+            : details.mediaChanged);
+      } catch { passed = false; }
+      checks.push({
+        id: op.kind === 'recolor_image' ? 'pptx_image_recolored' : 'pptx_image_replaced',
+        label: op.kind === 'recolor_image' ? 'Imagen recoloreada dentro del PPTX' : 'Imagen reemplazada dentro del PPTX',
+        passed,
+        details,
+      });
+    } else if (op.kind === 'format_range') {
+      // Surgical formatting op (Stage 2): the format code must be present in
+      // xl/styles.xml and at least one target cell must have been restyled.
+      let stylesHasCode = false;
+      try {
+        const zip = new PizZip(buffer);
+        const styles = zip.file('xl/styles.xml')?.asText() || '';
+        // styles.xml stores the format code XML-escaped ("€" → &quot;€&quot;),
+        // so compare against the escaped form.
+        stylesHasCode = op.formatCode ? styles.includes(xmlEscape(op.formatCode)) : /<numFmt\b/.test(styles);
+      } catch { stylesHasCode = false; }
+      checks.push({
+        id: 'xlsx_range_formatted',
+        label: 'Formato aplicado al rango',
+        passed: stylesHasCode && Number(op.cellsChanged || 0) > 0,
+        details: { formatCode: op.formatCode || null, cellsChanged: op.cellsChanged || 0, sheetName: op.sheetName || null },
       });
     } else if (op.kind === 'append_generic' && format === 'pptx') {
       const hasAnyAddedText = nonPageBreakBlocks(blocks)
@@ -4347,6 +4491,733 @@ async function runInsertIndexOperation({ buffer, requestText }) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Embedded-image editing (recolor / replace) for DOCX.
+//
+// WHY: "la foto que te adjunto deseo que lo reemplaces por color azul" used to
+// fall into the TEXT planner — extractReplacementPair() even parsed "cambia el
+// logo a rojo" as replace_text(logo → rojo) — and the user got a garbled text
+// dump instead of an edited document. These helpers detect the image intent
+// FIRST, resolve which embedded image the user means (or ask, listing the
+// candidates), and run the surgical media-part edit via docx-image-adapter.
+// ---------------------------------------------------------------------------
+
+let _docxImageAdapterModule;
+function docxImageAdapterModule() {
+  if (_docxImageAdapterModule === undefined) {
+    try {
+      // eslint-disable-next-line global-require
+      _docxImageAdapterModule = require('./document-editing/docx-image-adapter');
+    } catch {
+      _docxImageAdapterModule = null;
+    }
+  }
+  return _docxImageAdapterModule;
+}
+
+let _pdfAdapterModule;
+function pdfAdapterModule() {
+  if (_pdfAdapterModule === undefined) {
+    try {
+      // eslint-disable-next-line global-require
+      _pdfAdapterModule = require('./document-editing/pdf-adapter');
+    } catch {
+      _pdfAdapterModule = null;
+    }
+  }
+  return _pdfAdapterModule;
+}
+
+let _pptxAdapterModule;
+function pptxAdapterModule() {
+  if (_pptxAdapterModule === undefined) {
+    try {
+      // eslint-disable-next-line global-require
+      _pptxAdapterModule = require('./document-editing/pptx-adapter');
+    } catch {
+      _pptxAdapterModule = null;
+    }
+  }
+  return _pptxAdapterModule;
+}
+
+let _xlsxAdapterModule;
+function xlsxAdapterModule() {
+  if (_xlsxAdapterModule === undefined) {
+    try {
+      // eslint-disable-next-line global-require
+      _xlsxAdapterModule = require('./document-editing/xlsx-adapter');
+    } catch {
+      _xlsxAdapterModule = null;
+    }
+  }
+  return _xlsxAdapterModule;
+}
+
+// Keys are normalizeText() output (lowercased, accents stripped).
+const IMAGE_EDIT_COLOR_WORDS = {
+  azul: '#2563EB', blue: '#2563EB',
+  rojo: '#DC2626', roja: '#DC2626', red: '#DC2626',
+  verde: '#16A34A', green: '#16A34A',
+  negro: '#111827', negra: '#111827', black: '#111827',
+  gris: '#6B7280', gray: '#6B7280', grey: '#6B7280',
+  amarillo: '#F59E0B', amarilla: '#F59E0B', yellow: '#F59E0B',
+  naranja: '#EA580C', orange: '#EA580C',
+  morado: '#7C3AED', morada: '#7C3AED', violeta: '#7C3AED', purple: '#7C3AED',
+  blanco: '#F8FAFC', blanca: '#F8FAFC', white: '#F8FAFC',
+};
+
+const IMAGE_EDIT_NOUN_RE = /\b(foto\w*|imagen(?:es)?|figura\w*|logo\w*|logotipo\w*|picture|image)\b/;
+// reempla[zc]: cubre el subjuntivo "reemplaces/reemplace" (z→c ante e), la
+// conjugación exacta del prompt del bug — reemplaz\w* NO la matchea.
+const IMAGE_EDIT_VERB_RE = /\b(reempla[zc]\w*|cambi\w*|recolor\w*|pinta\w*|colorea\w*|sustitu\w*|replace\w*|change\w*|repaint\w*|swap\w*|tint\w*|pon(?:er|ga|gan|la|lo|le|me)?)\b/;
+const IMAGE_REPLACE_VERB_RE = /\b(reempla[zc]\w*|sustitu\w*|replace\w*|swap\w*)\b/;
+const IMAGE_POSITIONAL_CUE_RE = /\b(primera?|primer|segunda?|tercera?|tercer|cuarta?|quinta?|ultima|ultimo|first|second|third|fourth|fifth|last|encabezado|header|pie de pagina|footer)\b/;
+const IMAGE_NUMBER_CUE_RE = /\b(?:imagen|foto|figura|logo|image|picture)\s*(?:n(?:ro|umero)?\.?\s*|#\s*)?(\d{1,2})\b/;
+
+// Detect "edit an image inside the document" intents (ES + EN) and classify
+// them as recolor vs replace. Returns null for anything else so the regular
+// text-edit planner keeps full ownership of non-image requests.
+function parseImageEditRequest(requestText = '') {
+  const text = normalizeText(requestText);
+  if (!text) return null;
+  const hay = withCollapsedRepeats(text);
+  if (!IMAGE_EDIT_NOUN_RE.test(hay) || !IMAGE_EDIT_VERB_RE.test(hay)) return null;
+  // Quoted pairs are TEXT replacements even when the word "foto" appears
+  // inside them ('reemplaza "foto" por "fotografía"') — never hijack those.
+  if (extractQuotedValues(requestText).length >= 2) return null;
+  // "reemplaza la PALABRA imagen por gráfico" talks about the word, not the
+  // picture — that is a text edit, keep it out of the image path.
+  if (/\b(?:palabra|termino|texto|frase|word)\s+(?:foto\w*|imagen(?:es)?|figura\w*|logo\w*)\b/.test(text)) return null;
+
+  let color = null;
+  let colorName = '';
+  const hexMatch = text.match(/#([0-9a-f]{6}|[0-9a-f]{3})\b/);
+  if (hexMatch) {
+    const raw = hexMatch[1];
+    const hex = raw.length === 3 ? raw.split('').map((c) => c + c).join('') : raw;
+    color = `#${hex.toUpperCase()}`;
+    colorName = color;
+  } else {
+    for (const [word, hex] of Object.entries(IMAGE_EDIT_COLOR_WORDS)) {
+      if (new RegExp(`\\b${word}\\b`).test(text)) {
+        color = hex;
+        colorName = word;
+        break;
+      }
+    }
+  }
+
+  const positionalCueMatch = text.match(IMAGE_POSITIONAL_CUE_RE) || text.match(IMAGE_NUMBER_CUE_RE);
+  const positionalCue = positionalCueMatch ? positionalCueMatch[0] : null;
+
+  // "reemplaza … por color azul" / "cámbiala a rojo" — a color token wins even
+  // when the verb is "reemplazar": the user wants the SAME picture in another
+  // color, not a swap (the exact phrasing of the live bug).
+  if (color) {
+    return { kind: 'recolor_image', color, colorName, ...(positionalCue ? { positionalCue } : {}) };
+  }
+  const replaceCue = /\b(?:imagen|foto|figura|logo|picture|image)\s+(?:adjunt\w*|attached|nueva|nuevo)\b/.test(text)
+    || /\b(?:esta|esa|otra|another|this)\s+(?:imagen|foto|figura|picture|image)\b/.test(text)
+    || /\bpor\s+(?:la|una|otra)\s+(?:imagen|foto|figura)\b/.test(text);
+  if (IMAGE_REPLACE_VERB_RE.test(hay) || replaceCue) {
+    return { kind: 'replace_image', ...(positionalCue ? { positionalCue } : {}) };
+  }
+  return null;
+}
+
+// Map a positional cue onto the listDocxImages() order. Returns -1 when the
+// target stays ambiguous — the caller must then ASK, never guess (recoloring
+// the wrong image would reproduce the original bug in a new form).
+function resolveImageEditTargetIndex(images = [], positionalCue = null) {
+  if (!Array.isArray(images) || images.length === 0) return -1;
+  if (!positionalCue) return images.length === 1 ? 0 : -1;
+  const cue = normalizeText(positionalCue);
+  if (/encabezado|header/.test(cue)) {
+    return images.findIndex((image) => image.scope === 'header');
+  }
+  if (/pie|footer/.test(cue)) {
+    return images.findIndex((image) => image.scope === 'footer');
+  }
+  if (/ultim|last/.test(cue)) return images.length - 1;
+  const ordinal = /primer/.test(cue) || /first/.test(cue) ? 1
+    : /segund/.test(cue) || /second/.test(cue) ? 2
+      : /tercer/.test(cue) || /third/.test(cue) ? 3
+        : /cuart/.test(cue) || /fourth/.test(cue) ? 4
+          : /quint/.test(cue) || /fifth/.test(cue) ? 5
+            : Number(cue.match(/(\d{1,2})/)?.[1] || 0);
+  if (ordinal >= 1 && ordinal <= images.length) return ordinal - 1;
+  return -1;
+}
+
+function imageScopeLabel(scope) {
+  if (scope === 'header') return 'en el encabezado';
+  if (scope === 'footer') return 'en el pie de página';
+  return 'en el cuerpo del documento';
+}
+
+function buildImageChoiceQuestion(images = [], docName = 'el documento') {
+  const lines = images.slice(0, 10).map((image, position) => {
+    const alt = image.altText ? ` — «${compact(image.altText, 60)}»` : '';
+    return `${position + 1}) ${imageScopeLabel(image.scope)}${alt} (${String(image.extension || '').toUpperCase() || 'imagen'})`;
+  });
+  return `Encontré ${images.length} imágenes en «${docName}»:\n${lines.join('\n')}\n¿Cuál deseas modificar? Dímelo, por ejemplo: «la primera» o «la imagen 2».`;
+}
+
+function sha1Hex(buffer) {
+  return createHash('sha1').update(buffer).digest('hex');
+}
+
+async function runRecolorImageOperation({ buffer, op }) {
+  const adapter = docxImageAdapterModule();
+  if (!adapter) throw new Error('La edición de imágenes no está disponible en este despliegue.');
+  const before = adapter.listDocxImages(buffer)[op.imageIndex];
+  if (!before) throw new Error(`No existe la imagen ${Number(op.imageIndex) + 1} en el documento.`);
+  const result = await adapter.recolorDocxImage({ buffer, imageIndex: op.imageIndex, color: op.color });
+  const after = new PizZip(result.buffer).file(result.partName)?.asNodeBuffer();
+  if (!after || after.equals(before.bytes)) {
+    // Never persist a no-op "edit": the user would download an artifact that
+    // is byte-identical to the original and think we lied about the change.
+    throw new Error('La imagen quedó idéntica tras el recolor; no entrego un archivo sin cambios reales.');
+  }
+  // Annotations consumed by validateDocxOperationCriteria on the FINAL buffer.
+  op.partName = result.partName;
+  op.checkPartName = result.newPartName || result.partName;
+  op.originalMediaSha1 = sha1Hex(before.bytes);
+  return {
+    buffer: result.buffer,
+    step: {
+      kind: 'recolor_image',
+      label: `imagen ${Number(op.imageIndex) + 1}`,
+      color: op.color,
+      colorName: op.colorName || '',
+      scope: result.scope,
+    },
+    validationBlocks: [],
+  };
+}
+
+async function runReplaceImageOperation({ buffer, op }) {
+  const adapter = docxImageAdapterModule();
+  if (!adapter) throw new Error('La edición de imágenes no está disponible en este despliegue.');
+  const before = adapter.listDocxImages(buffer)[op.imageIndex];
+  if (!before) throw new Error(`No existe la imagen ${Number(op.imageIndex) + 1} en el documento.`);
+  const result = adapter.replaceDocxImage({
+    buffer,
+    imageIndex: op.imageIndex,
+    replacementBytes: op.replacementBytes,
+    replacementMime: op.replacementMime,
+  });
+  op.partName = result.partName;
+  op.checkPartName = result.newPartName || result.partName;
+  op.originalMediaSha1 = sha1Hex(before.bytes);
+  op.replacementSha1 = sha1Hex(op.replacementBytes);
+  return {
+    buffer: result.buffer,
+    step: {
+      kind: 'replace_image',
+      label: `imagen ${Number(op.imageIndex) + 1}`,
+      replacementName: op.replacementName || '',
+      retargeted: Boolean(result.retargeted),
+      scope: result.scope,
+    },
+    validationBlocks: [],
+  };
+}
+
+// Full image-edit path: enumerate → resolve target (or ask) → execute.
+// Every failure degrades to { clarification: true, message } — a plain Spanish
+// answer for the user — NEVER an exception that would let the caller fall
+// through to the text/annex path that produced the original garbled output.
+async function runDocxImageEditFlow({ input, imageEdit, requestText, sourceFile, assetFiles = [] }) {
+  const docName = sourceFile?.originalName || sourceFile?.filename || 'el documento';
+  const actionLabel = imageEdit.kind === 'recolor_image' ? 'recolorear' : 'reemplazar';
+  const adapter = docxImageAdapterModule();
+  if (!adapter) {
+    return { clarification: true, message: 'La edición de imágenes dentro de documentos no está disponible en este despliegue.' };
+  }
+  let images;
+  try {
+    images = adapter.listDocxImages(input);
+  } catch (err) {
+    return { clarification: true, message: `No pude leer las imágenes de «${docName}»: ${err?.message || 'archivo dañado'}.` };
+  }
+  if (!images.length) {
+    return { clarification: true, message: `No encontré imágenes dentro de «${docName}», así que no hay ninguna imagen que ${actionLabel}. Verifica que el archivo adjunto sea el correcto.` };
+  }
+  const targetIndex = resolveImageEditTargetIndex(images, imageEdit.positionalCue || null);
+  if (targetIndex < 0) {
+    return { clarification: true, message: buildImageChoiceQuestion(images, docName) };
+  }
+  const op = { kind: imageEdit.kind, imageIndex: targetIndex };
+  if (imageEdit.kind === 'recolor_image') {
+    op.color = imageEdit.color;
+    op.colorName = imageEdit.colorName || '';
+  } else {
+    const asset = (assetFiles || []).find((file) => normalizeText(file.mimeType).startsWith('image/') || /\.(png|jpe?g|gif|webp)$/i.test(String(file.name || '')));
+    if (!asset || !asset.absolutePath) {
+      return { clarification: true, message: 'Para reemplazar la imagen necesito la imagen nueva: adjúntala (PNG o JPG) junto con la instrucción y hago el cambio de inmediato.' };
+    }
+    try {
+      op.replacementBytes = await fs.promises.readFile(asset.absolutePath);
+    } catch {
+      return { clarification: true, message: `No pude leer la imagen adjunta «${asset.name || 'sin nombre'}». Vuelve a adjuntarla e inténtalo de nuevo.` };
+    }
+    op.replacementMime = asset.mimeType || '';
+    op.replacementName = asset.name || '';
+  }
+  try {
+    const execution = await executeDocxOperations({
+      input,
+      ops: [op],
+      requestText,
+      sourceText: '',
+      allSourceFiles: [sourceFile],
+      sourceFile,
+    });
+    return {
+      buffer: execution.buffer,
+      operations: [op],
+      steps: execution.steps,
+      suffix: imageEdit.kind === 'recolor_image' ? 'imagen_recoloreada' : 'imagen_reemplazada',
+      titleSuffix: imageEdit.kind === 'recolor_image' ? 'imagen recoloreada' : 'imagen reemplazada',
+    };
+  } catch (err) {
+    return { clarification: true, message: `No pude ${actionLabel} la imagen: ${err?.message || 'error desconocido'}` };
+  }
+}
+
+// Clarification results carry NO artifact on purpose: the question IS the
+// answer. validation.passed=true because asking (instead of guessing which
+// image to mutate) is the correct outcome, not a failure.
+function buildImageEditClarificationResult({ message, format = 'docx' }) {
+  return {
+    content: message,
+    clarification: true,
+    artifact: null,
+    file: null,
+    validation: {
+      format,
+      checks: {},
+      passed: true,
+      clarification: true,
+      technicalScore: 100,
+      qualityScore: 100,
+      overallScore: 100,
+      details: { editMode: 'image_edit_clarification' },
+    },
+    previewHtml: null,
+    format,
+    orchestration: null,
+  };
+}
+
+// ── XLSX surgical-edit intent (format range / set cell) ─────────────────────
+// Parsed BEFORE the generic xlsx text/append planner because "cambia la
+// columna D a formato moneda" is a formatting op, not a text replacement —
+// the old planner produced a generic appendix instead of touching styles.
+const SHEET_FORMAT_CURRENCY_RE = /\b(moneda|monetario|currency|euros?|d[oó]lares?|dollars?|precios?)\b/;
+const SHEET_FORMAT_PERCENT_RE = /\b(porcentajes?|percent(?:age)?|%)\b/;
+const SHEET_FORMAT_DATE_RE = /\b(fecha(?:s)?|date(?:s)?)\b/;
+const SHEET_FORMAT_VERB_RE = /\b(formatea\w*|formato|format\w*|cambi\w*|pon(?:er|ga|gan|la)?|aplica\w*|convierte\w*|convert\w*|dale?\b)\b/;
+const SHEET_COLUMN_RE = /\bcolumna\s+([a-z]{1,2})\b|\bcolumn\s+([a-z]{1,2})\b/;
+const SHEET_RANGE_RE = /\b([a-z]{1,2}\d{1,7})\s*:\s*([a-z]{1,2}\d{1,7})\b/;
+const SHEET_CELL_RE = /\b(?:celda|cell|casilla)\s+([a-z]{1,2}\d{1,7})\b/;
+const SHEET_SETVAL_VERB_RE = /\b(pon(?:er|ga|gan|le)?|cambi\w*|establece\w*|set|escrib\w*|actualiza\w*|coloca\w*)\b/;
+
+function detectCurrencyCode(text) {
+  if (/\bd[oó]lares?\b|\bdollars?\b|\busd\b|\$/.test(text)) return 'USD';
+  if (/\blibras?\b|\bgbp\b|£/.test(text)) return 'GBP';
+  if (/\bsoles?\b|\bpen\b|s\/\./.test(text)) return 'PEN';
+  return 'EUR';
+}
+
+// Returns { kind:'format_range'|'set_cell', column?, range?, cellRef?, sheetCue?,
+// numberFormat?, currency?, value? } or null.
+function parseSpreadsheetEditRequest(requestText = '') {
+  const text = normalizeText(requestText);
+  if (!text) return null;
+  const rawSheet = /\b(?:hoja|sheet|pesta[nñ]a)\s+["“']?([a-z0-9 _-]{1,40}?)["”']?(?:\s|$|,|\.)/.exec(text);
+  const sheetCue = rawSheet ? rawSheet[1].trim() : null;
+
+  // set_cell: "pon la celda B3 en 500" / "cambia la celda B3 a Hola"
+  const cellMatch = SHEET_CELL_RE.exec(text);
+  if (cellMatch && SHEET_SETVAL_VERB_RE.test(text)) {
+    // Capture the value after "en/a/=/:" from the ORIGINAL text (preserve
+    // casing), stopping at the first clause boundary so trailing chatter like
+    // "…a 999 y devuélveme el Excel completo." doesn't leak into the value.
+    const valMatch = /\b(?:celda|cell|casilla)\s+[a-z]{1,2}\d{1,7}\s*(?:en|a|=|:|con(?:\s+el\s+valor)?)\s+(.+?)(?:\s+y\s+|\s+and\s+|[,;]|\.\s|\.$|$)/i.exec(requestText);
+    const value = valMatch ? valMatch[1].trim().replace(/^["“']|["”']$/g, '') : null;
+    if (value) {
+      return { kind: 'set_cell', cellRef: cellMatch[1].toUpperCase(), value, sheetCue };
+    }
+  }
+
+  // format_range: needs a format verb + a target (column or range) + a format kind
+  let numberFormat = null;
+  if (SHEET_FORMAT_CURRENCY_RE.test(text)) numberFormat = 'currency';
+  else if (SHEET_FORMAT_PERCENT_RE.test(text)) numberFormat = 'percent';
+  else if (SHEET_FORMAT_DATE_RE.test(text)) numberFormat = 'date';
+  if (numberFormat && SHEET_FORMAT_VERB_RE.test(text)) {
+    const rangeM = SHEET_RANGE_RE.exec(text);
+    const colM = SHEET_COLUMN_RE.exec(text);
+    if (rangeM) {
+      return { kind: 'format_range', range: `${rangeM[1].toUpperCase()}:${rangeM[2].toUpperCase()}`, numberFormat, currency: detectCurrencyCode(text), sheetCue };
+    }
+    if (colM) {
+      return { kind: 'format_range', column: (colM[1] || colM[2]).toUpperCase(), numberFormat, currency: detectCurrencyCode(text), sheetCue };
+    }
+    const singleCell = SHEET_CELL_RE.exec(text);
+    if (singleCell) {
+      return { kind: 'format_range', range: singleCell[1].toUpperCase(), numberFormat, currency: detectCurrencyCode(text), sheetCue };
+    }
+  }
+  return null;
+}
+
+// Runs an XLSX surgical op via the pizzip adapter (never ExcelJS → safe on
+// chart/table workbooks). Returns { buffer, steps, suffix, titleSuffix } or a
+// { clarification, message } payload when the target is ambiguous.
+async function runXlsxSurgicalEditFlow({ input, sheetEdit, sourceFile }) {
+  const adapter = xlsxAdapterModule();
+  const docName = sourceFile?.originalName || sourceFile?.filename || 'la hoja de cálculo';
+  if (!adapter) {
+    return { clarification: true, message: 'La edición de hojas de cálculo no está disponible en este despliegue.' };
+  }
+  let sheets;
+  try {
+    sheets = adapter.listXlsxSheets(input);
+  } catch (err) {
+    return { clarification: true, message: `No pude leer «${docName}»: ${err?.message || 'archivo dañado'}.` };
+  }
+  if (!sheets.length) {
+    return { clarification: true, message: `«${docName}» no tiene hojas legibles.` };
+  }
+  // Ambiguity: 2+ sheets and no explicit sheet cue → ask which one.
+  let targetSheet = null;
+  if (sheetEdit.sheetCue) {
+    const norm = (s) => String(s || '').trim().toLowerCase();
+    targetSheet = sheets.find((s) => norm(s.name) === norm(sheetEdit.sheetCue))
+      || sheets.find((s) => norm(s.name).includes(norm(sheetEdit.sheetCue)));
+    if (!targetSheet) {
+      return { clarification: true, message: `No encontré una hoja llamada «${sheetEdit.sheetCue}» en «${docName}». Las hojas disponibles son: ${sheets.map((s) => `«${s.name}»`).join(', ')}. ¿Cuál deseas editar?` };
+    }
+  } else if (sheets.length > 1) {
+    return { clarification: true, message: `«${docName}» tiene ${sheets.length} hojas: ${sheets.map((s) => `«${s.name}»`).join(', ')}. ¿En cuál aplico el cambio?` };
+  } else {
+    targetSheet = sheets[0];
+  }
+
+  try {
+    if (sheetEdit.kind === 'format_range') {
+      const result = adapter.formatRange({
+        buffer: input,
+        sheet: targetSheet.name,
+        range: sheetEdit.range || null,
+        column: sheetEdit.column || null,
+        numberFormat: sheetEdit.numberFormat,
+        currency: sheetEdit.currency,
+      });
+      const where = sheetEdit.range || (sheetEdit.column ? `columna ${sheetEdit.column}` : 'el rango indicado');
+      const fmtLabel = sheetEdit.numberFormat === 'currency'
+        ? `moneda (${sheetEdit.currency})`
+        : sheetEdit.numberFormat === 'percent' ? 'porcentaje'
+          : sheetEdit.numberFormat === 'date' ? 'fecha' : sheetEdit.numberFormat;
+      return {
+        buffer: result.buffer,
+        steps: [{ kind: 'format_range', label: `${result.sheetName}!${where}`, count: result.cellsChanged }],
+        operation: { kind: 'format_range', formatCode: result.formatCode, cellsChanged: result.cellsChanged, sheetName: result.sheetName },
+        suffix: 'formato_actualizado',
+        titleSuffix: 'formato actualizado',
+        summary: `apliqué formato de ${fmtLabel} a ${result.cellsChanged} celda(s) de ${where} en la hoja «${result.sheetName}»`,
+      };
+    }
+    if (sheetEdit.kind === 'set_cell') {
+      const result = adapter.setCellValue({
+        buffer: input,
+        sheet: targetSheet.name,
+        cellRef: sheetEdit.cellRef,
+        value: sheetEdit.value,
+      });
+      return {
+        buffer: result.buffer,
+        steps: [{ kind: 'set_cell', label: `${result.sheetName}!${result.address}` }],
+        operation: { kind: 'set_cell', address: result.address, sheetName: result.sheetName, value: sheetEdit.value },
+        suffix: 'celda_actualizada',
+        titleSuffix: 'celda actualizada',
+        summary: `escribí «${sheetEdit.value}» en ${result.sheetName}!${result.address}`,
+      };
+    }
+  } catch (err) {
+    return { clarification: true, message: `No pude aplicar el cambio en «${docName}»: ${err?.message || 'error desconocido'}.` };
+  }
+  return { clarification: true, message: 'No entendí qué cambio aplicar a la hoja de cálculo.' };
+}
+
+// ── PPTX surgical-edit intent (slide title) ─────────────────────────────────
+// "En la diapositiva 3 cambia el título a X y conserva el diseño" (owner
+// spec). Parsed BEFORE the pptx text/append planner: the old path could only
+// do whole-deck text replacement or append a slide, so title edits degraded
+// to appendix slides.
+const SLIDE_NOUN_RE = /\b(?:diapositiva|l[aá]mina|slide)\s*(?:n(?:ro|umero)?\.?\s*|#\s*)?(\d{1,3})\b/;
+const SLIDE_TITLE_NOUN_RE = /\b(t[ií]tulo|title)\b/;
+const SLIDE_TITLE_VERB_RE = /\b(cambi\w*|pon(?:er|ga|le)?|actualiza\w*|reemplaz\w*|reempla[zc]\w*|edita\w*|escrib\w*|modific\w*|set|change\w*|rename\w*)\b/;
+
+function parsePresentationEditRequest(requestText = '') {
+  const text = normalizeText(requestText);
+  if (!text) return null;
+  // A quoted replace-pair («reemplaza "X" por "Y"») is replace_text territory
+  // — legacy planner owns it. And the noun "título" must appear OUTSIDE the
+  // quoted spans: in that legacy shape the word often lives INSIDE the needle
+  // ("Título viejo") and used to hijack the request into a title edit.
+  const quotedPairs = (requestText.match(/["“'][^"”']{1,160}["”']/g) || []).length;
+  if (quotedPairs >= 2) return null;
+  const textOutsideQuotes = normalizeText(requestText.replace(/["“'][^"”']{1,160}["”']/g, ' '));
+  if (!SLIDE_TITLE_NOUN_RE.test(textOutsideQuotes) || !SLIDE_TITLE_VERB_RE.test(textOutsideQuotes)) return null;
+  const slideMatch = SLIDE_NOUN_RE.exec(text);
+  const slideNumber = slideMatch ? Number(slideMatch[1]) : null;
+  // Capture the new title from the ORIGINAL text (casing/accents preserved):
+  // quoted value wins; otherwise everything after "título … a|por|:" up to a
+  // clause boundary ("y conserva el diseño" must not leak into the title).
+  let title = null;
+  const quoted = /["“']([^"”']{2,120})["”']/.exec(requestText);
+  if (quoted) {
+    title = quoted[1].trim();
+  } else {
+    const tail = /\bt[ií]tulo\b[^,;.]*?\b(?:a|por|:)\s+(.+?)(?:\s+y\s+|\s+and\s+|[,;]|\.\s|\.$|$)/i.exec(requestText);
+    if (tail) title = tail[1].trim();
+  }
+  if (!title || title.length < 2) return null;
+  // "a azul" etc. is an image-edit phrase, not a title — let the image parser own it.
+  if (/^(?:color\s+)?(?:azul|rojo|verde|negro|gris|amarillo|naranja|morado|violeta|blanco|blue|red|green|black|gray|grey|yellow|orange|purple|white)$/i.test(title)) return null;
+  return { kind: 'set_slide_title', slideNumber, title };
+}
+
+async function runPptxSurgicalEditFlow({ input, slideEdit, sourceFile }) {
+  const adapter = pptxAdapterModule();
+  const docName = sourceFile?.originalName || sourceFile?.filename || 'la presentación';
+  if (!adapter) {
+    return { clarification: true, message: 'La edición de presentaciones no está disponible en este despliegue.' };
+  }
+  let slides;
+  try {
+    slides = adapter.listPptxSlides(input);
+  } catch (err) {
+    return { clarification: true, message: `No pude leer «${docName}»: ${err?.message || 'archivo dañado'}.` };
+  }
+  if (!slides.length) {
+    return { clarification: true, message: `«${docName}» no tiene diapositivas legibles.` };
+  }
+  let slideNumber = slideEdit.slideNumber;
+  if (!slideNumber) {
+    if (slides.length === 1) {
+      slideNumber = 1;
+    } else {
+      const listing = slides.slice(0, 10)
+        .map((s) => `${s.number}. «${s.title || s.textSnippet.slice(0, 40) || 'sin título'}»`)
+        .join('\n');
+      return { clarification: true, message: `«${docName}» tiene ${slides.length} diapositivas y no indicaste cuál editar:\n${listing}\n¿En qué diapositiva cambio el título?` };
+    }
+  }
+  try {
+    const result = adapter.setSlideTitle({ buffer: input, slideNumber, title: slideEdit.title });
+    return {
+      buffer: result.buffer,
+      operation: { kind: 'set_slide_title', slideNumber: result.slideNumber, title: slideEdit.title },
+      steps: [{ kind: 'set_slide_title', label: `diapositiva ${result.slideNumber}` }],
+      suffix: 'titulo_actualizado',
+      titleSuffix: 'título actualizado',
+      summary: `cambié el título de la diapositiva ${result.slideNumber} a «${slideEdit.title}» (antes: «${result.previousTitle || 'sin título'}»)`,
+    };
+  } catch (err) {
+    return { clarification: true, message: `No pude cambiar el título en «${docName}»: ${err?.message || 'error desconocido'}.` };
+  }
+}
+
+// Image edits inside a PPTX ("cambia la imagen de la diapositiva 2 a azul")
+// — reuses parseImageEditRequest and mirrors the DOCX image flow with the
+// pptx adapter (list → resolve target → recolor/replace → same part name).
+async function runPptxImageEditFlow({ input, imageEdit, requestText = '', sourceFile, assetFiles = [] }) {
+  const adapter = pptxAdapterModule();
+  const docName = sourceFile?.originalName || sourceFile?.filename || 'la presentación';
+  const actionLabel = imageEdit.kind === 'recolor_image' ? 'recolorear' : 'reemplazar';
+  if (!adapter) {
+    return { clarification: true, message: 'La edición de imágenes en presentaciones no está disponible en este despliegue.' };
+  }
+  let images;
+  try {
+    images = adapter.listPptxImages(input);
+  } catch (err) {
+    return { clarification: true, message: `No pude leer las imágenes de «${docName}»: ${err?.message || 'archivo dañado'}.` };
+  }
+  if (!images.length) {
+    return { clarification: true, message: `No encontré imágenes dentro de «${docName}», así que no hay ninguna imagen que ${actionLabel}.` };
+  }
+  // Slide cue narrows the candidates; then single-image fast accept or ask.
+  const slideCue = SLIDE_NOUN_RE.exec(normalizeText(requestText || ''));
+  const pool = slideCue ? images.filter((img) => img.slideNumber === Number(slideCue[1])) : images;
+  if (slideCue && !pool.length) {
+    return { clarification: true, message: `La diapositiva ${slideCue[1]} de «${docName}» no tiene imágenes.` };
+  }
+  if (pool.length > 1) {
+    const listing = pool.slice(0, 10).map((img, i) => `${i + 1}. diapositiva ${img.slideNumber} (${img.extension.toUpperCase()})`).join('\n');
+    return { clarification: true, message: `Encontré ${pool.length} imágenes en «${docName}»:\n${listing}\n¿Cuál deseas ${actionLabel}?` };
+  }
+  const target = pool[0];
+  try {
+    let result;
+    const op = { kind: imageEdit.kind, originalMediaSha1: sha1Hex(target.bytes) };
+    if (imageEdit.kind === 'recolor_image') {
+      result = await adapter.recolorPptxImage({ buffer: input, imageIndex: target.index, color: imageEdit.color });
+    } else {
+      const asset = (assetFiles || []).find((file) => normalizeText(file.mimeType).startsWith('image/') || /\.(png|jpe?g|gif|webp)$/i.test(String(file.name || '')));
+      if (!asset || !asset.absolutePath) {
+        return { clarification: true, message: 'Para reemplazar la imagen necesito la imagen nueva: adjúntala (PNG o JPG) junto con la instrucción.' };
+      }
+      const replacementBytes = await fs.promises.readFile(asset.absolutePath);
+      op.replacementSha1 = sha1Hex(replacementBytes);
+      result = await adapter.replacePptxImage({ buffer: input, imageIndex: target.index, replacementBytes, replacementMime: asset.mimeType || '' });
+    }
+    op.checkPartName = result.checkPartName || result.partName;
+    return {
+      buffer: result.buffer,
+      operation: op,
+      steps: [{ kind: imageEdit.kind, label: `diapositiva ${result.slideNumber}` }],
+      suffix: imageEdit.kind === 'recolor_image' ? 'imagen_recoloreada' : 'imagen_reemplazada',
+      titleSuffix: imageEdit.kind === 'recolor_image' ? 'imagen recoloreada' : 'imagen reemplazada',
+      summary: imageEdit.kind === 'recolor_image'
+        ? `recoloreé la imagen de la diapositiva ${result.slideNumber} a ${imageEdit.colorName || imageEdit.color} conservando su posición y tamaño`
+        : `reemplacé la imagen de la diapositiva ${result.slideNumber} conservando su posición y tamaño`,
+    };
+  } catch (err) {
+    return { clarification: true, message: `No pude ${actionLabel} la imagen: ${err?.message || 'error desconocido'}` };
+  }
+}
+
+// ── PDF safe-op intent (rotate / extract / remove pages / text overlay) ─────
+// PDF is not editable like Office: only page-level surgery and overlays are
+// safe. Deep content edits keep flowing to the legacy (lossy) path, which
+// already warns about fidelity.
+const PDF_PAGE_LIST_RE = /\bp[aá]ginas?\s+((?:\d{1,4}\s*(?:,|y|a|al|-|hasta)\s*)*\d{1,4})\b/;
+
+function parsePdfPageList(text) {
+  const m = PDF_PAGE_LIST_RE.exec(text);
+  if (!m) return null;
+  const chunk = m[1];
+  const range = /(\d{1,4})\s*(?:a|al|-|hasta)\s*(\d{1,4})/.exec(chunk);
+  if (range) {
+    const a = Number(range[1]); const b = Number(range[2]);
+    const [lo, hi] = a <= b ? [a, b] : [b, a];
+    if (hi - lo > 500) return null;
+    return Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
+  }
+  return chunk.split(/\s*(?:,|y)\s*/).map(Number).filter((n) => Number.isInteger(n) && n > 0);
+}
+
+function parsePdfEditRequest(requestText = '') {
+  const text = normalizeText(requestText);
+  if (!text) return null;
+  const pages = parsePdfPageList(text);
+  // Overlay FIRST and verbs tested with quoted spans stripped: the quoted
+  // payload ("BORRADOR") must never trigger delete/extract verbs (borra\w*
+  // matches inside BORRADOR otherwise).
+  const overlay = /\b(?:agrega|anade|añade|inserta|escribe|pon)\b[^.;]*?\btexto\b\s*["“']?([^"”'.;]{2,200})["”']?/i.exec(requestText);
+  if (overlay) {
+    return { kind: 'text_overlay', text: overlay[1].trim(), page: pages ? pages[0] : 1 };
+  }
+  const verbText = normalizeText(requestText.replace(/["“'][^"”']{1,200}["”']/g, ' '));
+  if (/\b(rota\w*|gira\w*|rotate)\b/.test(verbText)) {
+    const deg = /(\d{2,3})\s*(?:grados|degrees|°)/.exec(verbText);
+    return { kind: 'rotate_pages', pages, degrees: deg ? Number(deg[1]) : 90 };
+  }
+  if (/\b(elimina\w*|borra\w*|quita\w*|remueve\w*|delete|remove)\b/.test(verbText) && pages) {
+    return { kind: 'remove_pages', pages };
+  }
+  if (/\b(extrae\w*|extract|divide\w*|separa\w*|split|qu[eé]date)\b/.test(verbText) && pages) {
+    return { kind: 'extract_pages', pages };
+  }
+  if (/\b(une|unir|junta\w*|combina\w*|fusiona\w*|merge)\b/.test(verbText) && /\bpdfs?\b/.test(verbText)) {
+    return { kind: 'merge_pdfs' };
+  }
+  return null;
+}
+
+async function runPdfSurgicalEditFlow({ input, pdfEdit, sourceFile, assetFiles = [], allSourceFiles = [] }) {
+  const adapter = pdfAdapterModule();
+  const docName = sourceFile?.originalName || sourceFile?.filename || 'el PDF';
+  if (!adapter) {
+    return { clarification: true, message: 'La edición de PDF no está disponible en este despliegue.' };
+  }
+  try {
+    if (pdfEdit.kind === 'rotate_pages') {
+      const result = await adapter.rotatePdfPages({ buffer: input, pages: pdfEdit.pages, degrees: pdfEdit.degrees });
+      const where = pdfEdit.pages ? `la(s) página(s) ${result.pages.join(', ')}` : 'todas las páginas';
+      return {
+        buffer: result.buffer,
+        operation: { kind: 'rotate_pages', pages: result.pages, degrees: result.degrees, expectedPageCount: result.pageCount },
+        steps: [{ kind: 'rotate_pages', label: where }],
+        suffix: 'rotado', titleSuffix: 'rotado',
+        summary: `roté ${where} ${result.degrees}°`,
+      };
+    }
+    if (pdfEdit.kind === 'remove_pages') {
+      const result = await adapter.removePdfPages({ buffer: input, pages: pdfEdit.pages });
+      return {
+        buffer: result.buffer,
+        operation: { kind: 'remove_pages', pages: pdfEdit.pages, expectedPageCount: result.pageCount },
+        steps: [{ kind: 'remove_pages', label: `páginas ${pdfEdit.pages.join(', ')}` }],
+        suffix: 'paginas_eliminadas', titleSuffix: 'páginas eliminadas',
+        summary: `eliminé la(s) página(s) ${pdfEdit.pages.join(', ')} (quedan ${result.pageCount})`,
+      };
+    }
+    if (pdfEdit.kind === 'extract_pages') {
+      const result = await adapter.extractPdfPages({ buffer: input, pages: pdfEdit.pages });
+      return {
+        buffer: result.buffer,
+        operation: { kind: 'extract_pages', pages: pdfEdit.pages, expectedPageCount: result.pageCount },
+        steps: [{ kind: 'extract_pages', label: `páginas ${pdfEdit.pages.join(', ')}` }],
+        suffix: 'paginas_extraidas', titleSuffix: 'páginas extraídas',
+        summary: `extraje la(s) página(s) ${pdfEdit.pages.join(', ')} en un PDF nuevo`,
+      };
+    }
+    if (pdfEdit.kind === 'merge_pdfs') {
+      const pdfBuffers = [input];
+      for (const file of allSourceFiles || []) {
+        if (file === sourceFile) continue;
+        if (!isPdfFile(file)) continue;
+        try {
+          const resolved = await resolveStoredFilePath(file, file.userId || '');
+          if (resolved) pdfBuffers.push(await fs.promises.readFile(resolved));
+        } catch { /* skip unreadable */ }
+      }
+      if (pdfBuffers.length < 2) {
+        return { clarification: true, message: 'Para unir PDFs adjunta los dos (o más) archivos PDF en el mismo mensaje y lo hago de inmediato.' };
+      }
+      const result = await adapter.mergePdfBuffers({ buffers: pdfBuffers });
+      return {
+        buffer: result.buffer,
+        operation: { kind: 'merge_pdfs', expectedPageCount: result.pageCount },
+        steps: [{ kind: 'merge_pdfs', label: `${result.merged} archivos` }],
+        suffix: 'unido', titleSuffix: 'unido',
+        summary: `uní ${result.merged} PDFs en uno de ${result.pageCount} páginas`,
+      };
+    }
+    if (pdfEdit.kind === 'text_overlay') {
+      const result = await adapter.addPdfTextOverlay({ buffer: input, page: pdfEdit.page, text: pdfEdit.text });
+      return {
+        buffer: result.buffer,
+        operation: { kind: 'pdf_text_overlay', page: result.page, text: result.text },
+        steps: [{ kind: 'pdf_text_overlay', label: `página ${result.page}` }],
+        suffix: 'anotado', titleSuffix: 'anotado',
+        summary: `inserté el texto «${result.text.slice(0, 60)}» sobre la página ${result.page} sin alterar el contenido original`,
+      };
+    }
+  } catch (err) {
+    return { clarification: true, message: `No pude aplicar el cambio en «${docName}»: ${err?.message || 'error desconocido'}.` };
+  }
+  return { clarification: true, message: 'No entendí qué operación de PDF aplicar.' };
+}
+
 async function executeDocxOperations({ input, ops, requestText, sourceText, allSourceFiles, sourceFile, referenceFiles = [], signal }) {
   let buffer = input;
   const steps = [];
@@ -4377,6 +5248,10 @@ async function executeDocxOperations({ input, ops, requestText, sourceText, allS
       result = runReplaceTextOperation({ buffer, op });
     } else if (op.kind === 'proofread_minimal') {
       result = runProofreadMinimalOperation({ buffer, op });
+    } else if (op.kind === 'recolor_image') {
+      result = await runRecolorImageOperation({ buffer, op });
+    } else if (op.kind === 'replace_image') {
+      result = await runReplaceImageOperation({ buffer, op });
     } else {
       result = runAppendGenericOperation({ buffer, op, requestText, sourceText, sourceFile });
     }
@@ -4650,6 +5525,14 @@ function describeStep(step) {
       ? `apliqué correcciones mínimas de redacción y ortografía (${count} ajuste(s))`
       : 'revisé el DOCX y lo devolví preservado; no encontré correcciones mínimas determinísticas que aplicar';
   }
+  if (step.kind === 'recolor_image') {
+    const where = step.scope === 'header' ? ' del encabezado' : step.scope === 'footer' ? ' del pie de página' : '';
+    return `recoloreé la ${step.label || 'imagen'}${where} a ${step.colorName || step.color || 'un nuevo color'} conservando su posición y tamaño`;
+  }
+  if (step.kind === 'replace_image') {
+    const where = step.scope === 'header' ? ' del encabezado' : step.scope === 'footer' ? ' del pie de página' : '';
+    return `reemplacé la ${step.label || 'imagen'}${where} por la imagen adjunta${step.replacementName ? ` («${step.replacementName}»)` : ''} conservando su posición y tamaño`;
+  }
   if (step.kind === 'set_cell') return `actualicé la celda ${step.label || 'solicitada'}`;
   if (step.kind === 'append_generic' && step.mode === 'xlsx_new_sheet') return 'agregué una hoja nueva con el contenido solicitado';
   if (step.kind === 'append_generic' && step.mode === 'pptx_new_slide') return 'agregué una diapositiva nueva con el contenido solicitado';
@@ -4715,6 +5598,7 @@ async function generateSourcePreservingDocumentEdit({
   sourceFile,
   sourceFiles = null,
   referenceFiles = [],
+  assetFiles = [],
   selectionReason = '',
   prompt,
   displayPrompt,
@@ -4740,46 +5624,78 @@ async function generateSourcePreservingDocumentEdit({
 
   if (isDocxFile(sourceFile)) {
     format = 'docx';
-    // Agentic step 1-3: analyse the request + document and plan one or more
-    // operations; step 4: execute every operation in order on the same buffer.
-    const documentXml = readDocxDocumentXml(input);
-    const refs = referenceFiles?.length ? referenceFiles : referenceSourceFiles(allSourceFiles, sourceFile);
-    operations = await planSourcePreservingOperationsSmart({ requestText, documentXml, referenceFiles: refs, signal });
-    const execution = await executeDocxOperations({
-      input,
-      ops: operations,
-      requestText,
-      sourceText,
-      allSourceFiles,
-      sourceFile,
-      referenceFiles: refs,
-      signal,
-    });
-    output = execution.buffer;
-    validationBlocks = execution.validationBlocks;
-    orchestration = buildDocumentOrchestrationPlan({
-      requestText,
-      sourceFile,
-      referenceFiles: refs,
-      operations,
-      selectionReason,
-    });
+    // Image-edit fast path — resolved BEFORE the text planner because the text
+    // heuristics misread image requests ("cambia el logo a rojo" used to parse
+    // as replace_text logo→rojo) and the degraded output was a garbled annex.
+    const imageEdit = parseImageEditRequest(requestText);
+    if (imageEdit) {
+      const imageResult = await runDocxImageEditFlow({
+        input,
+        imageEdit,
+        requestText,
+        sourceFile,
+        assetFiles,
+      });
+      if (imageResult.clarification) {
+        return buildImageEditClarificationResult({ message: imageResult.message, format });
+      }
+      output = imageResult.buffer;
+      operations = imageResult.operations;
+      validationBlocks = [];
+      orchestration = buildDocumentOrchestrationPlan({
+        requestText,
+        sourceFile,
+        referenceFiles: [],
+        operations,
+        selectionReason,
+      });
+      suffix = imageResult.suffix;
+      titleSuffix = imageResult.titleSuffix;
+      const stepSummary = joinSpanishList(imageResult.steps.map(describeStep));
+      explanation = `Se conservó el DOCX original; ${stepSummary}.`;
+      content = `Listo. Conservé el DOCX original y ${stepSummary}, sin alterar el resto del archivo.`;
+    } else {
+      // Agentic step 1-3: analyse the request + document and plan one or more
+      // operations; step 4: execute every operation in order on the same buffer.
+      const documentXml = readDocxDocumentXml(input);
+      const refs = referenceFiles?.length ? referenceFiles : referenceSourceFiles(allSourceFiles, sourceFile);
+      operations = await planSourcePreservingOperationsSmart({ requestText, documentXml, referenceFiles: refs, signal });
+      const execution = await executeDocxOperations({
+        input,
+        ops: operations,
+        requestText,
+        sourceText,
+        allSourceFiles,
+        sourceFile,
+        referenceFiles: refs,
+        signal,
+      });
+      output = execution.buffer;
+      validationBlocks = execution.validationBlocks;
+      orchestration = buildDocumentOrchestrationPlan({
+        requestText,
+        sourceFile,
+        referenceFiles: refs,
+        operations,
+        selectionReason,
+      });
 
-    const labels = execution.steps.map((step) => step.label).filter(Boolean);
-    if (labels.length) {
-      suffix = `${labels.map((label) => normalizeText(label).replace(/\s+/g, '_')).join('_')}_completado`;
-      titleSuffix = `${labels.join(' y ')} completado`;
-    } else if (execution.steps.some((step) => step.kind === 'integrate_references')) {
-      suffix = 'documentos_integrados';
-      titleSuffix = 'con documentos integrados';
+      const labels = execution.steps.map((step) => step.label).filter(Boolean);
+      if (labels.length) {
+        suffix = `${labels.map((label) => normalizeText(label).replace(/\s+/g, '_')).join('_')}_completado`;
+        titleSuffix = `${labels.join(' y ')} completado`;
+      } else if (execution.steps.some((step) => step.kind === 'integrate_references')) {
+        suffix = 'documentos_integrados';
+        titleSuffix = 'con documentos integrados';
+      }
+      const stepSummary = joinSpanishList(execution.steps.map(describeStep));
+      explanation = stepSummary
+        ? `Se conservó el DOCX original; ${stepSummary}.`
+        : 'Se conservó el DOCX original y se aplicó la edición solicitada.';
+      content = stepSummary
+        ? `Listo. Conservé el DOCX original y, en ${execution.steps.length === 1 ? 'un paso' : `${execution.steps.length} pasos`}, ${stepSummary}, sin alterar el resto del archivo.`
+        : 'Listo. Conservé el DOCX original y apliqué la edición solicitada sin alterar el resto del archivo.';
     }
-    const stepSummary = joinSpanishList(execution.steps.map(describeStep));
-    explanation = stepSummary
-      ? `Se conservó el DOCX original; ${stepSummary}.`
-      : 'Se conservó el DOCX original y se aplicó la edición solicitada.';
-    content = stepSummary
-      ? `Listo. Conservé el DOCX original y, en ${execution.steps.length === 1 ? 'un paso' : `${execution.steps.length} pasos`}, ${stepSummary}, sin alterar el resto del archivo.`
-      : 'Listo. Conservé el DOCX original y apliqué la edición solicitada sin alterar el resto del archivo.';
   } else {
     const blocks = buildAppendixBlocks({
       prompt: requestText,
@@ -4789,6 +5705,30 @@ async function generateSourcePreservingDocumentEdit({
     validationBlocks = blocks;
     if (isXlsxFile(sourceFile)) {
       format = 'xlsx';
+      // Surgical formatting/cell fast path — resolved BEFORE the generic
+      // planner because "columna D a formato moneda" is a styles.xml op the
+      // text planner can't express (it produced a generic appendix). Uses the
+      // pizzip adapter, never ExcelJS, so chart/table workbooks don't crash.
+      const sheetEdit = parseSpreadsheetEditRequest(requestText);
+      if (sheetEdit) {
+        const xlsxResult = await runXlsxSurgicalEditFlow({ input, sheetEdit, sourceFile });
+        if (xlsxResult.clarification) {
+          return buildImageEditClarificationResult({ message: xlsxResult.message, format });
+        }
+        output = xlsxResult.buffer;
+        // Use the detailed operation (formatCode/address/value) so the
+        // post-edit validator can assert the surgical effect landed.
+        operations = xlsxResult.operation ? [xlsxResult.operation] : xlsxResult.steps.map((s) => ({ kind: s.kind }));
+        validationBlocks = [];
+        orchestration = buildDocumentOrchestrationPlan({
+          requestText, sourceFile, referenceFiles, operations, selectionReason,
+        });
+        suffix = xlsxResult.suffix;
+        titleSuffix = xlsxResult.titleSuffix;
+        explanation = `Se conservó el XLSX original; ${xlsxResult.summary}.`;
+        content = `Listo. Conservé el XLSX original: ${xlsxResult.summary}, sin tocar el resto de las hojas, gráficos ni fórmulas.`;
+        // fall through to persistence below (skip the ExcelJS text flow)
+      } else {
       operations = planGenericOfficeOperations({ requestText, format });
       // When the regexes only produced the generic-appendix fallback, let the
       // LLM planner read the real workbook and build a concrete plan
@@ -4817,8 +5757,33 @@ async function generateSourcePreservingDocumentEdit({
       content = stepSummary
         ? `Listo. Conservé el XLSX original y ${stepSummary}, sin reemplazar las hojas existentes.`
         : 'Listo. Conservé el XLSX original y apliqué la edición solicitada sin reemplazar las hojas existentes.';
+      }
     } else if (isPptxFile(sourceFile)) {
       format = 'pptx';
+      // Surgical fast paths — resolved BEFORE the text/append planner: slide
+      // title edits ("en la diapositiva 3 cambia el título…") and image
+      // recolor/replace inside slides. The old planner could only replace
+      // text deck-wide or append slides, so these degraded to appendices.
+      const slideEdit = parsePresentationEditRequest(requestText);
+      const pptxImageEdit = slideEdit ? null : parseImageEditRequest(requestText);
+      if (slideEdit || pptxImageEdit) {
+        const pptxResult = slideEdit
+          ? await runPptxSurgicalEditFlow({ input, slideEdit, sourceFile })
+          : await runPptxImageEditFlow({ input, imageEdit: pptxImageEdit, requestText, sourceFile, assetFiles });
+        if (pptxResult.clarification) {
+          return buildImageEditClarificationResult({ message: pptxResult.message, format });
+        }
+        output = pptxResult.buffer;
+        operations = pptxResult.operation ? [pptxResult.operation] : pptxResult.steps.map((st) => ({ kind: st.kind }));
+        validationBlocks = [];
+        orchestration = buildDocumentOrchestrationPlan({
+          requestText, sourceFile, referenceFiles, operations, selectionReason,
+        });
+        suffix = pptxResult.suffix;
+        titleSuffix = pptxResult.titleSuffix;
+        explanation = `Se conservó el PPTX original; ${pptxResult.summary}.`;
+        content = `Listo. Conservé el PPTX original: ${pptxResult.summary}, sin alterar el diseño, los fondos ni el resto de las diapositivas.`;
+      } else {
       operations = planGenericOfficeOperations({ requestText, format });
       if (operations.every((op) => op.kind === 'append_generic')) {
         const smart = await planOfficeOperationsSmart({ requestText, format, input, signal });
@@ -4843,8 +5808,28 @@ async function generateSourcePreservingDocumentEdit({
       content = stepSummary
         ? `Listo. Conservé el PPTX original y ${stepSummary}, sin reconstruir la presentación completa.`
         : 'Listo. Conservé el PPTX original y apliqué la edición solicitada sin reconstruir la presentación completa.';
+      }
     } else if (isPdfFile(sourceFile)) {
       format = 'pdf';
+      // Safe page-level fast paths (rotate/extract/remove/merge/overlay) —
+      // resolved BEFORE the legacy lossy text path.
+      const pdfEdit = parsePdfEditRequest(requestText);
+      if (pdfEdit) {
+        const pdfResult = await runPdfSurgicalEditFlow({ input, pdfEdit, sourceFile, assetFiles, allSourceFiles });
+        if (pdfResult.clarification) {
+          return buildImageEditClarificationResult({ message: pdfResult.message, format });
+        }
+        output = pdfResult.buffer;
+        operations = [pdfResult.operation];
+        validationBlocks = [];
+        orchestration = buildDocumentOrchestrationPlan({
+          requestText, sourceFile, referenceFiles, operations, selectionReason,
+        });
+        suffix = pdfResult.suffix;
+        titleSuffix = pdfResult.titleSuffix;
+        explanation = `Se conservó el PDF original; ${pdfResult.summary}.`;
+        content = `Listo. Conservé el PDF original: ${pdfResult.summary}.`;
+      } else {
       const execution = await executePdfOperations({
         input,
         requestText,
@@ -4872,6 +5857,7 @@ async function generateSourcePreservingDocumentEdit({
       content = stepSummary
         ? `Listo. Conservé el contenido completo del PDF original y ${stepSummary}.`
         : 'Listo. Conservé el contenido completo del PDF original y apliqué la edición solicitada.';
+      }
     } else if (isTextLikeFile(sourceFile)) {
       format = textLikeFormatForFile(sourceFile) || 'txt';
       const execution = executeTextLikeOperations({ input, requestText, format, blocks });
@@ -4965,12 +5951,25 @@ async function tryGenerateSourcePreservingDocumentEdit({
 } = {}) {
   const requestText = displayPrompt || prompt || '';
   const sourceFiles = await loadEditableSourceFiles(prisma, { userId, fileIds, chatId, prompt: requestText });
+  // Attached images travel outside the editable set: they are candidate
+  // replacement payloads for "reemplaza la foto por la imagen adjunta".
+  const assetFiles = Array.isArray(sourceFiles.assetFiles) ? sourceFiles.assetFiles : [];
   const priorArtifacts = await loadRecentGeneratedArtifactSourceFiles(prisma, { userId, chatId });
   const intentFiles = sourceFiles.length ? sourceFiles : priorArtifacts;
   if (!isSourcePreservingEditRequest(requestText, intentFiles)) return null;
   const targetedSection = isTargetedSectionFillRequest(requestText);
   const selection = selectSourcePreservingDocumentSet({ requestText, sourceFiles, priorArtifacts });
   const supported = selection.sourceFile;
+  if (!supported && !sourceFiles.length && !priorArtifacts.length && assetFiles.length) {
+    // Solo se adjuntaron imágenes (sin documento base). Para un intent de
+    // edición de imagen, explicamos que las imágenes se editan DENTRO de un
+    // documento; para el resto, el error genérico de formato compatible.
+    if (parseImageEditRequest(requestText)) {
+      throw new Error('Solo puedo editar imágenes que estén dentro de un documento (por ejemplo un DOCX). Adjunta el documento que contiene la imagen junto con la instrucción y hago el cambio.');
+    }
+    const names = assetFiles.map((file) => file.name).filter(Boolean).join(', ');
+    throw new Error(`Para conservar el documento original necesito un archivo editable compatible (${supportedSourceEditLabel()}). Archivo recibido: ${names || 'sin archivo compatible'}.`);
+  }
   if (!supported && !sourceFiles.length && !priorArtifacts.length) {
     // No hay ningún archivo adjunto ni artefacto previo que conservar. La
     // petición ("coloca esta información en un word") es en realidad una
@@ -4990,10 +5989,11 @@ async function tryGenerateSourcePreservingDocumentEdit({
     const needed = targetedSection ? 'un archivo DOCX con la sección solicitada' : `un archivo editable compatible (${supportedSourceEditLabel()})`;
     throw new Error(`Para conservar el documento original necesito ${needed}. Archivo recibido: ${names || 'sin archivo compatible'}.`);
   }
-  return generateSourcePreservingDocumentEdit({
+  const result = await generateSourcePreservingDocumentEdit({
     sourceFile: supported,
     sourceFiles: selection.sourceFiles,
     referenceFiles: selection.referenceFiles,
+    assetFiles,
     selectionReason: selection.selectionReason,
     prompt,
     displayPrompt,
@@ -5001,6 +6001,28 @@ async function tryGenerateSourcePreservingDocumentEdit({
     chatId,
     signal,
   });
+
+  // Non-destructive version history (best-effort): a clarification carries no
+  // artifact, so only real edits produce a version. The original upload
+  // (supported.id) is never mutated; this just records the edited artifact so
+  // the user can list/restore prior versions later.
+  if (result && !result.clarification && result.artifact && supported?.id) {
+    try {
+      const { recordFileVersion } = require('./document-editing/versioning');
+      const recorded = await recordFileVersion(prisma, {
+        fileId: supported.id,
+        userId,
+        artifactId: result.artifact.id || null,
+        filename: result.file?.filename || result.artifact.filename || 'documento',
+        summary: result.content ? String(result.content).slice(0, 300) : '',
+        editPlan: result.orchestration?.operations || null,
+        validationPassed: Boolean(result.validation?.passed),
+        createdByChatId: chatId || null,
+      });
+      if (recorded) result.version = { id: recorded.id, version: recorded.version, sourceFileId: supported.id };
+    } catch { /* versioning never blocks the edit */ }
+  }
+  return result;
 }
 
 module.exports = {
@@ -5013,6 +6035,10 @@ module.exports = {
   inferDocumentTitle,
   isSourcePreservingEditRequest,
   loadEditableSourceFiles,
+  parseImageEditRequest,
+  parsePdfEditRequest,
+  parsePresentationEditRequest,
+  parseSpreadsheetEditRequest,
   parseTargetSectionRequest,
   tryGenerateSourcePreservingDocumentEdit,
   INTERNAL: {
@@ -5077,7 +6103,10 @@ module.exports = {
     requestMentionsGeneralDocument,
     requestWantsMinimalProofreading,
     requestWantsReferenceIntegration,
+    resolveImageEditTargetIndex,
     resolveStoredFilePath,
+    runDocxImageEditFlow,
+    buildImageChoiceQuestion,
     sanitizeCapturedParagraphProperties,
     selectSourcePreservingDocumentSet,
     setXlsxCellBuffer,

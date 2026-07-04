@@ -190,6 +190,20 @@ function buildDocumentEditTool(deps = {}) {
           displayPrompt: args.instruction,
           signal: ctx.signal,
         });
+        if (inproc && inproc.clarification) {
+          // Image-edit ambiguity (varias imágenes candidatas, falta la imagen
+          // nueva, formato no soportado): la pregunta ES la respuesta. Nunca
+          // caer al doc-agent del sandbox — ese camino regenera el documento y
+          // produce el volcado de texto ilegible que motivó este fix.
+          return {
+            ok: true,
+            engine: 'in-process',
+            clarification: true,
+            edited: [],
+            summary: String(inproc.content || '').slice(0, 1200),
+            note: 'Transmite esta aclaración al usuario TAL CUAL y espera su respuesta; NO edites ni generes ningún archivo todavía.',
+          };
+        }
         if (inproc && inproc.artifact && inproc.artifact.id) {
           if (ctx && typeof ctx.onEvent === 'function') {
             try {

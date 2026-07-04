@@ -253,7 +253,13 @@ router.post(
         signal: controller.signal,
       });
 
-      if (preservedEdit) {
+      if (preservedEdit?.clarification) {
+        // Edición de imagen ambigua (qué imagen editar / falta la imagen
+        // nueva): no hay archivo que entregar y la ruta de éxito exige `file`,
+        // así que encaminamos la pregunta por el canal de fallo para que el
+        // texto llegue íntegro al usuario en vez de un "resultado vacío".
+        errorMsg = preservedEdit.content;
+      } else if (preservedEdit) {
         send({ type: 'stage', label: 'Conservando documento original', pct: 40 });
         content = preservedEdit.content;
         file = preservedEdit.file;

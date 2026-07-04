@@ -39,6 +39,11 @@ export type DocumentPreviewTarget =
       url: string
       downloadUrl?: string
       filename?: string
+      // Explicit high-fidelity preview endpoint (server-side soffice→PDF). When
+      // set, the viewer renders THIS as a real PDF (pages/zoom, Excel looks like
+      // Excel) before any client-side fallback. Used for message-attached
+      // generated documents whose bytes live at a /uploads path (no artifact id).
+      previewPdfUrl?: string
     }
 
 interface DocumentPreviewProps {
@@ -384,6 +389,12 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
     return normalizeBackendAssetUrl(raw, process.env.NEXT_PUBLIC_IMAGE_URL)
   }, [url])
   const downloadUrl = React.useMemo(() => typeof url === "string" ? previewUrl : (url.downloadUrl || url.url), [previewUrl, url])
+  // Explicit high-fidelity endpoint passed by the caller (soffice→PDF for
+  // files whose bytes live at /uploads, so derivePreviewPdfUrl can't infer it).
+  const explicitPdfUrl = React.useMemo(() => {
+    const raw = typeof url === "string" ? null : (url.previewPdfUrl || null)
+    return raw ? normalizeBackendAssetUrl(raw, process.env.NEXT_PUBLIC_IMAGE_URL) : null
+  }, [url])
   const format = React.useMemo(() => {
     const fromUrl = inferFormat(previewUrl)
     // Prefer the real document type for Word files: the chat sometimes hands
@@ -699,8 +710,10 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
 
         // High-fidelity path FIRST: server-side soffice→PDF for office files.
         // Any failure (409 offloaded, soffice down, network) falls through to
-        // the legacy client-side renderers below — never a dead end.
-        const pdfEndpoint = derivePreviewPdfUrl(downloadUrl) || derivePreviewPdfUrl(assetUrl)
+        // the legacy client-side renderers below — never a dead end. An
+        // explicit previewPdfUrl (message-attached generated docs) wins over
+        // the inferred agent-artifact endpoint.
+        const pdfEndpoint = explicitPdfUrl || derivePreviewPdfUrl(downloadUrl) || derivePreviewPdfUrl(assetUrl)
         if (pdfEndpoint) {
           setState({ kind: "loading", message: "Generando vista previa…" })
           try {
@@ -784,7 +797,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
       cancelled = true
       if (blobUrl) URL.revokeObjectURL(blobUrl)
     }
-  }, [filename, format, previewUrl, downloadUrl])
+  }, [filename, format, previewUrl, downloadUrl, explicitPdfUrl])
 
   return (
     <div className="relative flex h-full w-full min-w-0 flex-col overflow-hidden bg-background">
