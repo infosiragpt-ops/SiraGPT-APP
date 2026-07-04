@@ -2874,11 +2874,45 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
 
     let preLoopStepId = null;
 
+    // ── Durable checkpoint/resume ───────────────────────────────────────
+    // Explicit resume (payload.resumeCheckpoint, set by /retry or boot
+    // recovery) wins; otherwise auto-adopt the snapshot's checkpoint when
+    // THIS task already ran and was interrupted mid-loop (status still
+    // running/queued with a saved checkpoint — e.g. a BullMQ stalled-job
+    // redelivery after a deploy killed the worker). Best-effort: any
+    // failure here just starts the loop from scratch.
+    let resumeCheckpoint = payload.resumeCheckpoint || null;
+    if (!resumeCheckpoint) {
+      try {
+        const priorSnapshot = taskStore.getTaskSnapshotForUser(taskId, user.id);
+        if (priorSnapshot?.runnerCheckpoint
+          && (priorSnapshot.status === 'running' || priorSnapshot.status === 'queued')
+          && Number(priorSnapshot.runnerCheckpoint.stepsCompleted) > 0) {
+          resumeCheckpoint = priorSnapshot.runnerCheckpoint;
+        }
+      } catch { /* start fresh */ }
+    }
+    if (resumeCheckpoint) {
+      emit({
+        type: 'checkpoint',
+        label: `Reanudando desde el paso ${resumeCheckpoint.stepsCompleted} (ejecución interrumpida)`,
+        status: 'resumed',
+        payload: { resumedFromStep: resumeCheckpoint.stepsCompleted, savedAt: resumeCheckpoint.savedAt || null },
+      });
+      console.log(`[agent-task-runner] resuming task ${taskId} from step ${resumeCheckpoint.stepsCompleted}`);
+    }
+
     const reactRunArgs = {
       query: goal,
       tools,
       maxSteps: effectiveMaxSteps,
       maxRuntimeMs,
+      resumeCheckpoint,
+      onCheckpoint: (cp) => {
+        try { taskStore.saveRunnerCheckpoint(taskId, user.id, cp); } catch (cpErr) {
+          try { console.warn(`[agent-task-runner] checkpoint save failed for ${taskId}:`, cpErr?.message || cpErr); } catch (_) {}
+        }
+      },
       model: runtimeModelProfile.runtimeModel,
       extraSystem: internals.buildAgentSystemPrompt(
         systemContract,
@@ -2975,9 +3009,20 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           status: 'warning',
           payload: { from: runtimeModelProfile.runtimeModel, to: failoverRuntime.model, reason: result.stoppedReason },
         });
+        // Resume the failover run from the last saved checkpoint (if any):
+        // the steps the dead model already completed — searches, document
+        // reads, artifacts — carry over instead of being re-executed.
+        let failoverResume = reactRunArgs.resumeCheckpoint || null;
+        try {
+          const cpSnapshot = taskStore.getTaskSnapshotForUser(taskId, user.id);
+          if (Number(cpSnapshot?.runnerCheckpoint?.stepsCompleted) > 0) {
+            failoverResume = cpSnapshot.runnerCheckpoint;
+          }
+        } catch { /* keep original */ }
         result = await reactAgent.run(failoverRuntime.client, {
           ...reactRunArgs,
           model: failoverRuntime.model,
+          resumeCheckpoint: failoverResume,
         });
       }
     }

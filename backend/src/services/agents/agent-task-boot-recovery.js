@@ -29,6 +29,75 @@ function logWarn(logger, fields, message) {
   }
 }
 
+// Cap on how many interrupted tasks a single boot will re-enqueue —
+// a crash-loop must not turn old checkpoints into an enqueue stampede.
+const DEFAULT_BOOT_RESUME_LIMIT = 10;
+
+/**
+ * Re-enqueue tasks that the fail-pass just marked 'error' but that carry a
+ * react-agent runnerCheckpoint (real mid-run progress). The re-enqueued job
+ * resumes the loop from the last completed step. Best-effort per task: a
+ * failed enqueue leaves the honest 'error' status untouched.
+ */
+async function resumeCheckpointedTasks({
+  env = process.env,
+  logger,
+  taskStore = defaultTaskStore,
+  recoveredRows = [],
+  enqueue = null,
+} = {}) {
+  const limit = parseNonNegativeInt(env.AGENT_TASK_BOOT_RESUME_LIMIT, DEFAULT_BOOT_RESUME_LIMIT);
+  if (limit === 0) return { resumed: 0, reason: 'limit_zero' };
+  // Lazy require: agent-task-queue pulls in BullMQ/Redis; boot recovery must
+  // stay importable in environments without them (tests inject `enqueue`).
+  // eslint-disable-next-line global-require
+  const enqueueAgentTask = enqueue || require('./agent-task-queue').enqueueAgentTask;
+  let resumed = 0;
+  for (const row of recoveredRows) {
+    if (resumed >= limit) break;
+    if (!row?.taskId || !row?.userId) continue;
+    let snapshot;
+    try {
+      snapshot = taskStore.readTaskSnapshot(row.taskId);
+    } catch { continue; }
+    const checkpoint = snapshot?.runnerCheckpoint;
+    if (!checkpoint || !(Number(checkpoint.stepsCompleted) > 0)) continue;
+    try {
+      const job = await enqueueAgentTask({
+        taskId: snapshot.taskId,
+        traceId: snapshot.traceId || null,
+        user: { id: snapshot.userId },
+        goal: snapshot.agentGoal || snapshot.displayGoal,
+        displayGoal: snapshot.displayGoal,
+        systemContract: snapshot.systemContract || '',
+        files: snapshot.fileIds || [],
+        chatId: snapshot.chatId || null,
+        model: snapshot.model || 'gpt-4o',
+        maxSteps: snapshot.maxSteps || 60,
+        maxRuntimeMs: snapshot.maxRuntimeMs || 2 * 60 * 60 * 1000,
+        documentPolicy: snapshot.documentPolicy || null,
+        openclawRuntimeProfile: snapshot.openclawRuntimeProfile || null,
+        retryOf: snapshot.taskId,
+        resumeCheckpoint: checkpoint,
+      }, { priority: 1, jobId: `${snapshot.taskId}-boot-resume-${Date.now()}` });
+      taskStore.appendTaskEvent(
+        { ...snapshot, status: 'queued', jobId: String(job.id) },
+        {
+          type: 'repair_attempt',
+          status: 'queued',
+          message: `Reanudando automáticamente desde el paso ${checkpoint.stepsCompleted} tras un reinicio del servidor.`,
+        },
+        { ...(snapshot.streamState || {}), done: false, error: null },
+      );
+      resumed += 1;
+      logWarn(logger, { taskId: snapshot.taskId, step: checkpoint.stepsCompleted, jobId: String(job.id) }, 'agent_task_boot_resume_enqueued');
+    } catch (err) {
+      logWarn(logger, { taskId: row.taskId, error: err?.message || String(err) }, 'agent_task_boot_resume_enqueue_failed');
+    }
+  }
+  return { resumed };
+}
+
 function recoverAgentTasksAfterBoot({
   env = process.env,
   logger,
@@ -61,6 +130,19 @@ function recoverAgentTasksAfterBoot({
     });
     const recovered = Array.isArray(result.recovered) ? result.recovered : [];
     const skipped = Array.isArray(result.skipped) ? result.skipped : [];
+
+    // Checkpointed tasks the fail-pass just killed get a second life: re-
+    // enqueue them so the loop resumes mid-run. Fire-and-forget — boot must
+    // not block on Redis; a failed resume leaves the honest 'error' status.
+    let resumePromise = Promise.resolve({ resumed: 0 });
+    if (!envFlag(env.AGENT_TASK_RESUME_ON_BOOT_DISABLED) && env.REDIS_URL && recovered.length > 0) {
+      resumePromise = resumeCheckpointedTasks({ env, logger, taskStore, recoveredRows: recovered })
+        .catch((err) => {
+          logWarn(logger, { error: err?.message || String(err) }, 'agent_task_boot_resume_failed');
+          return { resumed: 0, error: err?.message || String(err) };
+        });
+    }
+
     const fields = {
       count: result.count || recovered.length,
       skippedCount: result.skippedCount || skipped.length,
@@ -82,6 +164,8 @@ function recoverAgentTasksAfterBoot({
       skippedCount: fields.skippedCount,
       staleAfterMs,
       skipJobBacked,
+      // Exposed for tests/telemetry; boot callers ignore it (fire-and-forget).
+      resumePromise,
     };
   } catch (err) {
     logWarn(
@@ -106,5 +190,7 @@ function recoverAgentTasksAfterBoot({
 module.exports = {
   DEFAULT_BOOT_RECOVERY_STALE_MS,
   DEFAULT_JOB_BACKED_STALE_MS,
+  DEFAULT_BOOT_RESUME_LIMIT,
   recoverAgentTasksAfterBoot,
+  resumeCheckpointedTasks,
 };

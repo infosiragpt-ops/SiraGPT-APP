@@ -851,6 +851,9 @@ router.post('/task/:taskId/retry', authenticateToken, async (req, res) => {
       retryOf: snapshot.taskId,
       documentPolicy: snapshot.documentPolicy || null,
       openclawRuntimeProfile: snapshot.openclawRuntimeProfile || null,
+      // Real mid-run resume: the loop re-enters from the last completed
+      // step's saved trace instead of restarting the task from step 0.
+      resumeCheckpoint: snapshot.runnerCheckpoint || null,
     }, { priority: 1, jobId: `${snapshot.taskId}-retry-${Date.now()}` });
 
     let streamState = snapshot.streamState || initialAgentState();

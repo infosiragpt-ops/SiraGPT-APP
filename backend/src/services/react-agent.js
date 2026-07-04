@@ -792,6 +792,13 @@ async function run(openai, opts) {
     compactTailRounds = DEFAULT_COMPACT_TAIL_ROUNDS,
     onCompact = () => {},
     deferredTools = [],
+    // Durable checkpoint/resume (brain-infra roadmap): `onCheckpoint(cp)` is
+    // fired after every completed step with a serializable snapshot of the
+    // loop state; `resumeCheckpoint` re-enters the loop from such a snapshot
+    // (fresh system head + restored conversational trace + breaker state) so
+    // a killed worker/deploy does NOT restart the run from step 0.
+    onCheckpoint = null,
+    resumeCheckpoint = null,
   } = opts;
 
   if (!query) throw new Error('react-agent: query is required');
@@ -937,7 +944,77 @@ async function run(openai, opts) {
   // says there is no runtime left for another full step (see toolChoice).
   const stepDurations = [];
 
-  for (let step = 0; step < maxSteps; step++) {
+  // ── Resume from a durable checkpoint ────────────────────────────────────
+  // Restores the conversational trace (everything but the system head, which
+  // is rebuilt fresh each run — tool schemas/contracts may have changed) plus
+  // the breaker counters, and offsets the step budget by the work already
+  // done. Checkpoints are only written at step boundaries, so the restored
+  // trace always ends on a complete assistant→tool round. Invalid/stale
+  // checkpoints are ignored — the run silently starts from scratch.
+  let resumeStepOffset = 0;
+  if (resumeCheckpoint && typeof resumeCheckpoint === 'object') {
+    try {
+      const cpSteps = Number(resumeCheckpoint.stepsCompleted);
+      const cpMessages = Array.isArray(resumeCheckpoint.messages)
+        ? resumeCheckpoint.messages.filter((m) => m && m.role && m.role !== 'system')
+        : [];
+      if (Number.isFinite(cpSteps) && cpSteps > 0 && cpSteps < maxSteps && cpMessages.length >= 1) {
+        messages.length = 1; // keep the fresh system head
+        messages.push(...cpMessages);
+        messages.push({
+          role: 'user',
+          content: '[RESUMEN DE REANUDACIÓN] La ejecución anterior fue interrumpida (reinicio del servidor). '
+            + `Se reanudó desde el paso ${cpSteps} con todo el progreso previo arriba. `
+            + 'Continúa la tarea desde donde quedó — NO repitas trabajo ya hecho; revisa las observaciones previas antes de llamar herramientas.',
+        });
+        resumeStepOffset = cpSteps;
+        if (Array.isArray(resumeCheckpoint.steps)) {
+          for (const s of resumeCheckpoint.steps) {
+            if (s && typeof s === 'object') steps.push(s);
+          }
+        }
+        for (const t of resumeCheckpoint.exhaustedTools || []) exhaustedTools.add(String(t));
+        if (Number.isFinite(Number(resumeCheckpoint.finalizeRejectionsTotal))) {
+          finalizeRejectionsTotal = Number(resumeCheckpoint.finalizeRejectionsTotal);
+        }
+        if (Number.isFinite(Number(resumeCheckpoint.finalizeRejectionsConsecutive))) {
+          finalizeRejectionsConsecutive = Number(resumeCheckpoint.finalizeRejectionsConsecutive);
+        }
+      }
+    } catch (resumeErr) {
+      try { console.warn('[react-agent] resume checkpoint rejected (starting fresh):', resumeErr && resumeErr.message); } catch { /* noop */ }
+    }
+  }
+
+  // Serializable snapshot of the loop state at a step boundary. Observations
+  // inside `steps` records are truncated — the guard only needs tool names +
+  // gist, while the full context lives in `messages` (already bounded by
+  // compaction).
+  const buildCheckpoint = (stepsCompleted) => ({
+    v: 1,
+    stepsCompleted,
+    savedAt: new Date().toISOString(),
+    messages: messages.filter((m) => m && m.role !== 'system'),
+    steps: steps.map((s) => ({
+      step: s.step,
+      thought: typeof s.thought === 'string' ? s.thought.slice(0, 500) : '',
+      actions: (s.actions || []).map((a) => ({
+        tool: a.tool,
+        args: typeof a.args === 'string' ? a.args.slice(0, 500) : a.args,
+        observation: (() => {
+          try {
+            const raw = typeof a.observation === 'string' ? a.observation : JSON.stringify(a.observation);
+            return raw && raw.length > 2000 ? `${raw.slice(0, 2000)}…[truncado]` : a.observation;
+          } catch { return null; }
+        })(),
+      })),
+    })),
+    exhaustedTools: Array.from(exhaustedTools),
+    finalizeRejectionsTotal,
+    finalizeRejectionsConsecutive,
+  });
+
+  for (let step = resumeStepOffset; step < maxSteps; step++) {
     const stepStartedAt = Date.now();
     if (ctx?.signal?.aborted) {
       stoppedReason = 'aborted';
@@ -1459,6 +1536,16 @@ async function run(openai, opts) {
     steps.push(stepRecord);
     onStep(stepRecord);
     onStepDone(stepRecord);
+
+    // Durable checkpoint at the step boundary (trace ends on a complete
+    // round here). Skipped once finalized — the final answer persists via
+    // the caller's normal completion path and the checkpoint would only
+    // invite a spurious re-run. The callback must never break the loop.
+    if (typeof onCheckpoint === 'function' && !finalized) {
+      try { onCheckpoint(buildCheckpoint(step + 1)); } catch (cpErr) {
+        try { console.warn('[react-agent] onCheckpoint failed (continuing):', cpErr && cpErr.message); } catch { /* noop */ }
+      }
+    }
 
     stepDurations.push(Date.now() - stepStartedAt);
     if (finalized) break;
