@@ -4269,15 +4269,123 @@ async function runAppendLabeledOperation({ buffer, op, requestText, sourceText, 
   };
 }
 
-function runAppendGenericOperation({ buffer, op, requestText, sourceText, sourceFile }) {
+// LLM-generated appendix content. The deterministic buildInstrument/Generic
+// appendices only emit a template stub (or echo the raw prompt), so a request
+// like "analiza y agrégale los instrumentos de la investigación" used to add a
+// placeholder — which is why the chat agent generated the real content itself
+// and DUMPED it into the chat instead of the file. This produces the actual,
+// topic-specific content and appends THAT. Fail-open: returns null (caller
+// keeps the deterministic builder) when no provider key or on any failure.
+async function generateAppendixBlocksLLM({ requestText, sourceText, title, signal }) {
+  // Never touch the network in tests (deterministic fallback keeps CI offline).
+  if (String(process.env.NODE_ENV) === 'test' && process.env.SIRAGPT_APPENDIX_LLM_NETWORK !== '1') return null;
+  const resolved = resolveContentClient();
+  if (!resolved) return null;
+  const topic = String(title || '').slice(0, 200);
+  const context = String(sourceText || '').replace(/\s+/g, ' ').slice(0, 6000);
+  try {
+    const completion = await resolved.client.chat.completions.create({
+      model: resolved.model,
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'Eres un redactor académico experto. El usuario quiere AGREGAR contenido nuevo (un anexo) a un documento existente, no reescribirlo.',
+            'Genera SOLO el contenido solicitado, en español, completo y específico al tema del documento (no plantillas genéricas ni marcadores).',
+            'Formato de salida: Markdown. Usa ## para el título del anexo, ### para subsecciones, tablas Markdown (| col | col |) para cuestionarios/matrices/escalas, y listas donde aporten.',
+            'Si piden "instrumentos de investigación": redacta los instrumentos reales (cuestionarios con ítems concretos por dimensión, escala de Likert, instrucciones) adaptados EXACTAMENTE a las variables y población del documento.',
+            'No inventes estadísticas ni fuentes citadas; el contenido es un instrumento/plantilla de trabajo, no resultados.',
+            'No repitas el contenido que ya está en el documento; SOLO produce lo nuevo a anexar.',
+          ].join('\n'),
+        },
+        {
+          role: 'user',
+          content: [
+            `Tema/título del documento: ${topic || '(sin título detectado)'}`,
+            context ? `Extracto del documento (para adaptar el contenido a su tema, variables y población):\n${context}` : '',
+            `Instrucción del usuario: ${String(requestText || '').slice(0, 800)}`,
+            'Redacta ahora el contenido del anexo en Markdown.',
+          ].filter(Boolean).join('\n\n'),
+        },
+      ],
+      temperature: 0.4,
+    }, { signal, timeout: 40_000 });
+    const md = completion?.choices?.[0]?.message?.content;
+    if (!md || md.trim().length < 80) return null;
+    const blocks = markdownToAppendixBlocks(md);
+    return blocks.length >= 2 ? blocks : null;
+  } catch {
+    return null;
+  }
+}
+
+// Minimal Markdown → block[] for the appendix (headings, bullets, tables,
+// paragraphs). Mirrors the block kinds appendToDocxBuffer already renders.
+function markdownToAppendixBlocks(md) {
+  const lines = String(md).replace(/\r\n/g, '\n').split('\n');
+  const blocks = [block('pageBreak', ''), block('heading1', 'ANEXOS')];
+  let tableRows = [];
+  // Flatten Markdown tables to readable paragraphs — the append renderer
+  // (paragraphXml) only emits heading/bullet/normal, and generating inline
+  // OOXML tables risks corrupting the docx. Header row → bold-ish heading3,
+  // each body row → "col1 — col2 — col3". Keeps the real instrument items
+  // (dimensions, Likert scales) intact and safe.
+  const flushTable = () => {
+    if (tableRows.length < 2) { tableRows = []; return; }
+    const parse = (row) => row.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+    const headers = parse(tableRows[0]);
+    const bodyRows = tableRows.slice(1)
+      .filter((r) => !/^\s*\|?\s*:?-{2,}/.test(r)) // skip the |---|---| separator
+      .map(parse);
+    if (headers.some(Boolean)) blocks.push(block('heading3', headers.filter(Boolean).join('  ·  ')));
+    for (const cells of bodyRows) {
+      const text = cells.filter(Boolean).join('  —  ');
+      if (text) blocks.push(block('bullet', text));
+    }
+    tableRows = [];
+  };
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    if (/^\s*\|.*\|\s*$/.test(line)) { tableRows.push(line); continue; }
+    flushTable();
+    if (!line.trim()) continue;
+    const h = /^(#{1,4})\s+(.*)$/.exec(line);
+    if (h) {
+      const level = h[1].length;
+      blocks.push(block(level <= 1 ? 'heading1' : level === 2 ? 'heading2' : 'heading3', h[2].replace(/[*_`]/g, '')));
+      continue;
+    }
+    const bullet = /^\s*[-*+]\s+(.*)$/.exec(line) || /^\s*\d+[.)]\s+(.*)$/.exec(line);
+    if (bullet) { blocks.push(block('bullet', bullet[1].replace(/[*_`]/g, ''))); continue; }
+    blocks.push(block('normal', line.replace(/[*_`]/g, '')));
+  }
+  flushTable();
+  return blocks;
+}
+
+async function runAppendGenericOperation({ buffer, op, requestText, sourceText, sourceFile, signal }) {
   const originalName = sourceFile.originalName || sourceFile.filename;
-  const blocks = op.wantsInstrument
-    ? buildInstrumentAppendix({ prompt: requestText, sourceText, originalName })
-    : buildAppendixBlocks({ prompt: requestText, sourceText: sourceText || sourceFile.extractedText || '', originalName });
+  const title = inferDocumentTitle(sourceText || sourceFile.extractedText || '', originalName);
+  // Try RICH LLM-generated content first (the actual instruments/section the
+  // user asked for, analysed for THIS document's topic). Fall back to the
+  // deterministic template only when no provider is configured / it fails.
+  let blocks = await generateAppendixBlocksLLM({
+    requestText,
+    sourceText: sourceText || sourceFile.extractedText || '',
+    title,
+    signal,
+  });
+  let mode = op.wantsInstrument ? 'instrument_llm' : 'generic_llm';
+  if (!blocks) {
+    blocks = op.wantsInstrument
+      ? buildInstrumentAppendix({ prompt: requestText, sourceText, originalName })
+      : buildAppendixBlocks({ prompt: requestText, sourceText: sourceText || sourceFile.extractedText || '', originalName });
+    mode = op.wantsInstrument ? 'instrument' : 'generic';
+  }
   return {
     buffer: appendToDocxBuffer(buffer, blocks),
     validationBlocks: blocks,
-    step: { kind: 'append_generic', mode: op.wantsInstrument ? 'instrument' : 'generic' },
+    step: { kind: 'append_generic', mode },
   };
 }
 
@@ -5253,7 +5361,7 @@ async function executeDocxOperations({ input, ops, requestText, sourceText, allS
     } else if (op.kind === 'replace_image') {
       result = await runReplaceImageOperation({ buffer, op });
     } else {
-      result = runAppendGenericOperation({ buffer, op, requestText, sourceText, sourceFile });
+      result = await runAppendGenericOperation({ buffer, op, requestText, sourceText, sourceFile, signal });
     }
     buffer = result.buffer;
     steps.push(result.step);
@@ -6058,6 +6166,8 @@ module.exports = {
     configuredDocumentVirtualAgentPool,
     buildInstrumentAppendix,
     buildInstrumentAppendixBody,
+    markdownToAppendixBlocks,
+    generateAppendixBlocksLLM,
     buildReferenceIntegrationFallbackBlocks,
     buildSectionFormattingTemplate,
     analyzeDocumentStructure,
