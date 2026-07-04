@@ -35,6 +35,33 @@ async function fileExists(runner, projectId, path) {
   }
 }
 
+/**
+ * Deterministic tsconfig repair before type-checking. Models sometimes
+ * overwrite the starter tsconfig adding `"types": ["react", "react-dom"]`
+ * — redundant (React types auto-include via jsx + include:src) and fragile:
+ * it fires TS2688 whenever @types resolution hiccups, which the fixer then
+ * burns rounds on (cycle-14 CRM run). Strip exactly those entries; keep
+ * anything else (e.g. "vite/client") untouched. Best-effort by contract.
+ */
+async function normalizeTsconfig(runner, projectId) {
+  try {
+    const read = await runner.readFile(projectId, 'tsconfig.json');
+    const raw = typeof read?.content === 'string' ? read.content : '';
+    if (!raw.trim()) return false;
+    const cfg = JSON.parse(raw);
+    const types = cfg?.compilerOptions?.types;
+    if (!Array.isArray(types)) return false;
+    const cleaned = types.filter((t) => !['react', 'react-dom'].includes(String(t)));
+    if (cleaned.length === types.length) return false;
+    if (cleaned.length) cfg.compilerOptions.types = cleaned;
+    else delete cfg.compilerOptions.types;
+    await runner.writeFiles(projectId, [{ path: 'tsconfig.json', content: `${JSON.stringify(cfg, null, 2)}\n` }]);
+    return true;
+  } catch {
+    return false; // unparseable/custom tsconfig → leave it to the fixer
+  }
+}
+
 async function runTypeCheck(runner, projectId) {
   const out = await runner.exec(projectId, ['bunx', 'tsc', '--noEmit', '--pretty', 'false'], { timeoutMs: 120000 });
   const diagnostics = [out.stdout, out.stderr].filter(Boolean).join('\n').trim();
@@ -72,6 +99,7 @@ async function autoVerifyAndHeal({ run, projectId, runner, eventStore, prisma, l
     for (let round = 1; round <= maxRounds; round += 1) {
       const groupId = `vg${++groupCounter}`;
       const checkActionId = `v${++actionCounter}`;
+      if (round === 1) await normalizeTsconfig(runner, projectId);
       await eventStore.appendEvent(run.id, 'action_start', { actionId: checkActionId, kind: 'terminal', command: 'bunx tsc --noEmit', groupId }, { prisma }).catch(() => {});
       const t0 = clock().getTime();
       let check;
@@ -139,4 +167,4 @@ async function autoVerifyAndHeal({ run, projectId, runner, eventStore, prisma, l
   }
 }
 
-module.exports = { autoVerifyAndHeal, enabled, runTypeCheck, DEFAULT_ROUNDS, DEFAULT_FIX_STEPS, FIX_TOOLS, FIXER_SYSTEM_PROMPT };
+module.exports = { autoVerifyAndHeal, enabled, runTypeCheck, normalizeTsconfig, DEFAULT_ROUNDS, DEFAULT_FIX_STEPS, FIX_TOOLS, FIXER_SYSTEM_PROMPT };

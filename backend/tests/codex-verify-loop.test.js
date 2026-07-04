@@ -144,3 +144,37 @@ test('a tsc runner crash is informational (clean=null), not a failure', async ()
   assert.equal(out.ran, true);
   assert.equal(out.clean, null);
 });
+
+test('normalizeTsconfig strips bogus react types entries, keeps the rest', async () => {
+  const { normalizeTsconfig } = require('../src/services/codex/verify-loop');
+  let written = null;
+  const runner = {
+    readFile: async () => ({ content: JSON.stringify({ compilerOptions: { jsx: 'react-jsx', types: ['react', 'react-dom', 'vite/client'] } }) }),
+    writeFiles: async (_p, files) => { written = files[0]; },
+  };
+  assert.equal(await normalizeTsconfig(runner, 'p1'), true);
+  const cfg = JSON.parse(written.content);
+  assert.deepEqual(cfg.compilerOptions.types, ['vite/client']);
+
+  // Sin entradas bogus → no toca nada.
+  let touched = false;
+  const clean = {
+    readFile: async () => ({ content: JSON.stringify({ compilerOptions: { types: ['vite/client'] } }) }),
+    writeFiles: async () => { touched = true; },
+  };
+  assert.equal(await normalizeTsconfig(clean, 'p1'), false);
+  assert.equal(touched, false);
+
+  // types queda vacío → se elimina la clave.
+  let written2 = null;
+  const onlyBogus = {
+    readFile: async () => ({ content: JSON.stringify({ compilerOptions: { types: ['react'] } }) }),
+    writeFiles: async (_p, files) => { written2 = files[0]; },
+  };
+  assert.equal(await normalizeTsconfig(onlyBogus, 'p1'), true);
+  assert.ok(!('types' in JSON.parse(written2.content).compilerOptions));
+
+  // tsconfig roto → best-effort false, nunca lanza.
+  const broken = { readFile: async () => ({ content: '{invalid json' }), writeFiles: async () => {} };
+  assert.equal(await normalizeTsconfig(broken, 'p1'), false);
+});
