@@ -47,12 +47,12 @@ function backendCapability(id, label, predicate) {
   };
 }
 
-function workflowContains(id, token) {
+function workflowContains(id, token, relativePath = '.github/workflows/ci.yml', label = 'CI workflow') {
   return {
     id,
     category: 'ci-workflow',
-    description: `CI workflow contains ${token}`,
-    pass: () => readText('.github/workflows/ci.yml').includes(token),
+    description: `${label} contains ${token}`,
+    pass: () => readText(relativePath).includes(token),
   };
 }
 
@@ -161,7 +161,7 @@ const checks = [
   workflowContains('ci-093-license-audit', 'Licenses · third-party audit'),
   workflowContains('ci-094-gitleaks', 'Secret scan · gitleaks audit'),
   workflowContains('ci-095-ui-lock', 'UI lock · verify zero visual-surface changes'),
-  workflowContains('ci-096-docker-build', 'Docker · build images'),
+  workflowContains('ci-096-docker-build', 'Docker · build images', '.github/workflows/docker-build.yml', 'Docker workflow'),
   workflowContains('ci-097-playwright-smoke', 'E2E · Playwright smoke'),
   workflowContains('ci-098-visual-regression', 'Visual regression · pixel-perfect snapshots'),
   workflowContains('ci-099-required-checks', 'CI · required checks passed'),
