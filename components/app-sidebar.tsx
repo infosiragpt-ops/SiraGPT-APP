@@ -31,7 +31,7 @@ import {
   FolderKanban,
   PenSquare,
   Shield,
-
+  Code2,
   Edit2,
   Check,
   X,
@@ -484,6 +484,22 @@ export function AppSidebar() {
   const [hiddenChatIds, setHiddenChatIds] = React.useState<string[]>([])
   const [chatFolders, setChatFolders] = React.useState<Record<string, string>>({})
   const [scheduledChats, setScheduledChats] = React.useState<Record<string, { at: string; note?: string; title?: string }>>({})
+  // Claude-style sidebar mode toggle (header segmented control): "chat"
+  // shows the normal agentic-chat sidebar; "code" shows the APPS tree
+  // (moved out of the chat view). Persisted across reloads.
+  const [sidebarMode, setSidebarMode] = React.useState<"chat" | "code">("chat")
+  React.useEffect(() => {
+    try {
+      if (window.localStorage.getItem("sira:sidebar:mode") === "code") setSidebarMode("code")
+    } catch { /* ignore */ }
+  }, [])
+  const switchSidebarMode = React.useCallback((mode: "chat" | "code") => {
+    setSidebarMode(mode)
+    // Entering Code mode always reveals the APPS tree — a collapsed
+    // section here would read as an empty sidebar.
+    if (mode === "code") setCodexCollapsed(false)
+    try { window.localStorage.setItem("sira:sidebar:mode", mode) } catch { /* ignore */ }
+  }, [])
   // Lote F · #45 — Codex section collapsible with persistent state.
   // Defaults to expanded on first visit so users discover it; once
   // collapsed the choice is remembered across reloads via localStorage.
@@ -1059,15 +1075,46 @@ export function AppSidebar() {
             state === "closed" && "hidden",
           )}
         >
-          <div className="flex min-w-0 items-center gap-2.5">
-            <img
-              src="/sira-gpt.png"
-              alt=""
-              className="h-7 w-7 shrink-0 rounded-lg object-contain ring-1 ring-border/40"
-            />
-            <span className="truncate text-sm font-semibold tracking-normal text-foreground">
-              SiraGPT
-            </span>
+          {/* Claude-style mode toggle: Mensajes ↔ Code. Replaces the
+              logo+name lockup in the open header (the collapsed rail
+              keeps the logo button below). */}
+          <div
+            role="tablist"
+            aria-label="Modo de la barra lateral"
+            className="flex shrink-0 items-center gap-0.5 rounded-lg bg-muted/60 p-0.5"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={sidebarMode === "chat"}
+              aria-label="Mensajes"
+              title="Mensajes"
+              onClick={() => switchSidebarMode("chat")}
+              className={cn(
+                "flex h-7 w-9 items-center justify-center rounded-md transition-colors",
+                sidebarMode === "chat"
+                  ? "bg-background text-foreground shadow-sm ring-1 ring-border/50"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <MessageSquare className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={sidebarMode === "code"}
+              aria-label="Code"
+              title="Code"
+              onClick={() => switchSidebarMode("code")}
+              className={cn(
+                "flex h-7 w-9 items-center justify-center rounded-md transition-colors",
+                sidebarMode === "code"
+                  ? "bg-background text-foreground shadow-sm ring-1 ring-border/50"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <Code2 className="h-4 w-4" />
+            </button>
           </div>
           <div className="flex shrink-0 items-center gap-1">
             <NotificationCenter />
@@ -1100,11 +1147,13 @@ export function AppSidebar() {
         </div>
       </SidebarHeader>
 
-      {/* New Chat, Search, and Library buttons */}
+      {/* New Chat, Search, and Library buttons — chat mode only (the
+          Code mode sidebar is the APPS workspace tree). */}
       <div
         className={cn(
           "flex flex-col transition-all",
-          state === "open" ? "gap-0.5 px-2 py-2" : "p-2"
+          state === "open" ? "gap-0.5 px-2 py-2" : "p-2",
+          sidebarMode === "code" && "hidden",
         )}
       >
         <TooltipProvider>
@@ -1253,11 +1302,11 @@ export function AppSidebar() {
       >
         <SidebarSeparator />
 
-        {/* Codex — workspaces de código por encima de los chats recientes.
-            Movido aquí (antes vivía al final del SidebarContent) para que el
-            usuario lo encuentre nada más abrir la barra lateral.
-            Lote F · #45 — ahora con header colapsable persistente. */}
-        {selectedType === "Text Chat" && (
+        {/* Codex — the APPS workspace tree. Now lives in the sidebar's
+            CODE mode (header toggle), out of the chat view — nothing was
+            removed, only relocated behind the segmented control.
+            Lote F · #45 — header colapsable persistente. */}
+        {sidebarMode === "code" && (
           <SidebarGroup className="py-0">
             {state !== "closed" && (
               <button
@@ -1289,8 +1338,8 @@ export function AppSidebar() {
           </SidebarGroup>
         )}
 
-        {/* Recent Chats - Only show for Text Chat */}
-        {selectedType === "Text Chat" && (
+        {/* Recent Chats - Only show for Text Chat, in chat mode */}
+        {sidebarMode === "chat" && selectedType === "Text Chat" && (
           <SidebarGroup>
             <button
               type="button"

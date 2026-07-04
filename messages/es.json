@@ -447,6 +447,11 @@
     "dropFiles": "Suelta los archivos para subirlos"
   },
   "common": {
+    "meta": {
+      "titleDefault": "SiraGPT — Todo tu stack de IA en una sola cuenta",
+      "titleTemplate": "%s · SiraGPT",
+      "description": "Chatea con modelos líderes, genera imágenes, analiza documentos, crea contenido y automatiza tareas desde SiraGPT."
+    },
     "loading": "Cargando…",
     "noResults": "Sin resultados",
     "confirm": "Confirmar",

@@ -447,6 +447,11 @@
     "dropFiles": "Drop files to upload"
   },
   "common": {
+    "meta": {
+      "titleDefault": "SiraGPT — Your entire AI stack in one account",
+      "titleTemplate": "%s · SiraGPT",
+      "description": "Chat with leading AI models, generate images, analyze documents, create content and automate tasks from SiraGPT."
+    },
     "loading": "Loading…",
     "noResults": "No results",
     "confirm": "Confirm",
