@@ -43,6 +43,14 @@ function starterFiles({ projectName } = {}) {
     dependencies: {
       react: '^18.3.1',
       'react-dom': '^18.3.1',
+      // Curated quality kit — pre-declared so generated apps can use
+      // icons/motion/charts without a mid-build install round-trip (the
+      // runner's bun cache keeps reinstalls warm). The agent skills
+      // (landing-profesional, dashboard-kpis) prescribe these.
+      'lucide-react': '^0.469.0',
+      'framer-motion': '^11.15.0',
+      recharts: '^2.15.0',
+      clsx: '^2.1.1',
     },
     devDependencies: {
       '@vitejs/plugin-react': '^4.5.2',
