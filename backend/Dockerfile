@@ -13,7 +13,12 @@ RUN apk add --no-cache pandoc py3-openpyxl python3 py3-pip
 
 # Install Node deps
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev --prefer-offline --no-audit --no-fund
+RUN for attempt in 1 2 3; do \
+      npm ci --omit=dev --prefer-offline --no-audit --no-fund && break; \
+      status=$?; \
+      if [ "$attempt" = "3" ]; then exit "$status"; fi; \
+      sleep $((attempt * 10)); \
+    done
 
 # ─── Stage 2: Build Prisma client & test assets ──────────────
 FROM node:22-alpine AS build
