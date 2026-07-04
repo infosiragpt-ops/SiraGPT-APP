@@ -1,0 +1,96 @@
+name: Native desktop builds
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [production-main]
+    paths:
+      - 'apps/desktop/**'
+      - 'scripts/build-desktop.sh'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/native-desktop.yml'
+  push:
+    branches: [production-main]
+    paths:
+      - 'apps/desktop/**'
+      - 'scripts/build-desktop.sh'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/native-desktop.yml'
+
+env:
+  NODE_VERSION: '24'
+  CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+jobs:
+  macos:
+    name: macOS DMG + ZIP
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Validate desktop shell
+        run: |
+          node -c apps/desktop/main.cjs
+          sh -n scripts/build-desktop.sh
+
+      - name: Build macOS artifacts
+        run: npm run desktop:dist:mac
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: siragpt-desktop-macos
+          path: |
+            output/desktop/*.dmg
+            output/desktop/*-mac.zip
+            output/desktop/*.blockmap
+          retention-days: 14
+          if-no-files-found: error
+
+  windows:
+    name: Windows x64 NSIS + portable
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Validate desktop shell
+        run: node -c apps/desktop/main.cjs
+
+      - name: Build Windows artifacts
+        run: npm run desktop:dist:win
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: siragpt-desktop-windows-x64
+          path: |
+            output/desktop/*.exe
+            output/desktop/*.blockmap
+          retention-days: 14
+          if-no-files-found: error

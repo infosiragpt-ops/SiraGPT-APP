@@ -1,0 +1,45 @@
+{
+  "name": "siragpt-desktop",
+  "version": "0.4.3",
+  "description": "SiraGPT native desktop app shell.",
+  "private": true,
+  "productName": "SiraGPT",
+  "main": "main.cjs",
+  "author": "SiraGPT",
+  "build": {
+    "appId": "com.siragpt.desktop",
+    "productName": "SiraGPT",
+    "electronVersion": "43.0.0",
+    "directories": {
+      "buildResources": "assets",
+      "output": "../../output/desktop"
+    },
+    "files": [
+      "main.cjs",
+      "README.md",
+      "assets/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "assets/icon.icns",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "icon": "assets/icon.ico",
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
