@@ -599,7 +599,8 @@ const createDocument = {
     + 'XLSX (openpyxl): dark header fill (PatternFill solid 0F172A) with white bold font, ws.freeze_panes="A2", ws.auto_filter.ref over the data range, real column widths (ws.column_dimensions), number_format per column ("#,##0.00" money, "#,##0" counts, "dd/mm/yyyy" dates), zebra striping optional; KPIs/totals as REAL formulas (=SUM/AVERAGE), never hardcoded results. '
     + 'DOCX (python-docx): a real title (Heading 0/Title) — NEVER echo the user instruction as title —, body 11-12pt, headings per section, tables with header shading; no filler or meta text ("generado por", placeholders). '
     + 'PPTX (python-pptx): fill the canvas — no half-empty slides; titles ≤8 words; one idea per slide. '
-    + 'ALL: content must be topic-specific and realistic; never lorem/sample filler; Spanish accents intact.',
+    + 'ALL: content must be topic-specific and realistic; never lorem/sample filler; Spanish accents intact. '
+    + 'FILENAMES & TITLES: derive them from the CORE TOPIC only — delivery conditions (counts like "10 láminas", courtesy like "porfavor", quality words like "profesional") are instructions to honour, never part of names, titles or content.',
   parameters: {
     type: 'object',
     properties: {

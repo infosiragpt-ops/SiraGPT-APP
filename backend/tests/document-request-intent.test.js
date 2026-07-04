@@ -47,3 +47,21 @@ test('parseDocumentRequest fails open without provider keys', async (t) => {
   const { parseDocumentRequest } = require('../src/services/document-pipeline/content/parse-document-request');
   assert.equal(await parseDocumentRequest({ prompt: 'ppt de ventas en 10 láminas' }), null);
 });
+
+// ── Universal coverage: the interpretation rule must live in every brain ────
+
+test('master-prompt carries the always-on interpretation rule (all chat paths)', () => {
+  const src = require('node:fs').readFileSync(require.resolve('../src/services/master-prompt'), 'utf8');
+  assert.ok(src.includes('INTERPRET THE REQUEST BEFORE EXECUTING'), 'ABSOLUTE RULE present');
+  assert.ok(src.includes('Landin'), 'typo-repair guidance present');
+});
+
+test('agent-core planner rules carry topic-vs-conditions interpretation', () => {
+  const src = require('node:fs').readFileSync(require.resolve('../src/services/agents/agent-core'), 'utf8');
+  assert.ok(src.includes('DELIVERY CONDITIONS'), 'agent loop rule present');
+});
+
+test('sandbox file tool instructs topic-only filenames', () => {
+  const src = require('node:fs').readFileSync(require.resolve('../src/services/agents/task-tools'), 'utf8');
+  assert.ok(src.includes('FILENAMES & TITLES: derive them from the CORE TOPIC only'));
+});
