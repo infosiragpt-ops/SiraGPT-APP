@@ -14,6 +14,10 @@
 ## Latest Validation
 
 - `npm run mobile:sync` completed for Android and iOS.
+- GitHub Actions `Native mobile builds` run `28715288814` passed on `production-main` SHA `4bbd7dc6d64a5a6d4f4a687c346ef8b9248f6747`.
+- The run produced fresh unsigned QA artifacts:
+  - `siragpt-mobile-android`
+  - `siragpt-mobile-ios-simulator`
 - Android SDK, emulator, platform tools, OpenJDK 21, `sdkmanager`, `avdmanager`, `adb`, and `jarsigner` are configured in `~/.zshrc` and `~/.zprofile`.
 - AVD `SiraGPT_API36` was created from `system-images;android-36;google_apis;arm64-v8a`.
 - `output/SiraGPT-android-debug.apk` installed on emulator `emulator-5554`.
@@ -26,6 +30,21 @@
 - Release AAB SHA-256: `3a1bb3349735df06ab73b9e34842179d594ec0ead9956e4601a4e5e3836f469f`.
 - Debug APK SHA-256: `8779645166ca8bf3483c4a368d98358acbe10e342d2f7cc200c8c20190e7519f`.
 - Upload key SHA-256: `c9afa1c1945681bb1b12587e399793907e341159019bb477579e3c607b1bbaa8`.
+
+## Current GitHub Secrets State
+
+The public repository currently has only VPS deployment secrets configured.
+Signed store distribution is not ready until these native release secrets are
+added to GitHub Actions:
+
+- Android: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`.
+- iOS/App Store Connect: `APPLE_TEAM_ID`, `IOS_SIGNING_CERTIFICATE_BASE64`, `IOS_SIGNING_CERTIFICATE_PASSWORD`, `IOS_PROVISIONING_PROFILE_BASE64`, `APP_STORE_CONNECT_API_KEY_ID`, `APP_STORE_CONNECT_API_ISSUER_ID`, `APP_STORE_CONNECT_API_KEY_BASE64`.
+- macOS: `MACOS_CERTIFICATE_BASE64`, `MACOS_CERTIFICATE_PASSWORD`, `APPLE_TEAM_ID`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`.
+- Windows: `WINDOWS_CERTIFICATE_BASE64`, `WINDOWS_CERTIFICATE_PASSWORD`.
+
+Do not commit account passwords, keystores, certificates, provisioning profiles,
+or app-specific passwords. Add them only as GitHub Actions secrets or directly
+inside the vendor store portals.
 
 ## Current Google Play Blockers
 

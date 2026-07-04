@@ -62,6 +62,21 @@ Use `Native mobile builds` in GitHub Actions to validate the Capacitor wrappers 
 
 These workflows are unsigned by default. Add signing credentials only through GitHub Actions secrets when distribution signing is ready.
 
+### Latest Verified Native Builds
+
+Current branch head verified: `4bbd7dc6d64a5a6d4f4a687c346ef8b9248f6747` on `production-main`.
+
+- Mobile workflow: `Native mobile builds` run `28715288814`.
+  - Android APK + AAB: passed.
+  - iOS simulator build: passed.
+  - Artifacts: `siragpt-mobile-android`, `siragpt-mobile-ios-simulator`.
+- Desktop workflow: `Native desktop builds` run `28715288834`.
+  - macOS DMG + ZIP: passed.
+  - Windows x64 NSIS + portable: passed.
+  - Artifacts: `siragpt-desktop-macos`, `siragpt-desktop-windows-x64`.
+
+These artifacts prove the wrappers and unsigned QA packages build successfully. Public distribution still requires signing and store credentials.
+
 Use `Native signed release packages` manually when real distribution credentials are configured. It can build one platform or all platforms:
 
 - Android: signed Play upload `.aab`.
