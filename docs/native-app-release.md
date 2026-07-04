@@ -84,7 +84,17 @@ Use `Native signed release packages` manually when real distribution credentials
 - macOS: signed and notarized `.dmg` and `.zip`.
 - Windows: signed `.exe` installer/portable artifacts.
 
-The workflow can optionally create or update a GitHub Release with the built native artifacts. It intentionally fails early if the required signing secrets for the selected platform are missing.
+The workflow can optionally create or update a GitHub Release with the built native artifacts. It runs a cheap `Signed release preflight` job first and intentionally fails before launching platform runners if the required signing secrets for the selected platform are missing.
+
+The preflight validates package-signing credentials only:
+
+- `android`: Android upload keystore secrets.
+- `ios`: iOS signing certificate and provisioning profile.
+- `macos`: Developer ID signing and notarization secrets.
+- `windows`: Windows code-signing certificate secrets.
+- `all`: all four package-signing groups above.
+
+App Store Connect upload credentials are still listed below because they are required for store submission automation, but the current signed package workflow does not upload binaries to App Store Connect.
 
 ### Required GitHub Secrets For Signed Distribution
 
@@ -98,6 +108,8 @@ npm run native:readiness:mobile
 npm run native:readiness:desktop
 npm run native:readiness:all
 ```
+
+For focused CI/preflight output, use `npm run native:readiness -- --require=android,ios,macos,windows --only-required`.
 
 Android signing secrets:
 

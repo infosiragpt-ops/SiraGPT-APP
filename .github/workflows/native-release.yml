@@ -37,9 +37,55 @@ env:
   JAVA_VERSION: '21'
 
 jobs:
+  preflight:
+    name: Signed release preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Validate selected signing secrets
+        shell: bash
+        env:
+          PLATFORM: ${{ inputs.platform }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          IOS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.IOS_SIGNING_CERTIFICATE_BASE64 }}
+          IOS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.IOS_SIGNING_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          set -eu
+          case "$PLATFORM" in
+            all) groups="android,ios,macos,windows" ;;
+            android|ios|macos|windows) groups="$PLATFORM" ;;
+            *)
+              echo "Unknown platform: $PLATFORM" >&2
+              exit 2
+              ;;
+          esac
+
+          echo "Validating signing readiness for: $groups"
+          npm run native:readiness -- --require="$groups" --only-required
+
   android:
     name: Android signed AAB
     if: ${{ inputs.platform == 'all' || inputs.platform == 'android' }}
+    needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -113,6 +159,7 @@ jobs:
   ios:
     name: iOS signed IPA
     if: ${{ inputs.platform == 'all' || inputs.platform == 'ios' }}
+    needs: preflight
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
@@ -253,6 +300,7 @@ jobs:
   macos:
     name: macOS signed DMG + ZIP
     if: ${{ inputs.platform == 'all' || inputs.platform == 'macos' }}
+    needs: preflight
     runs-on: macos-latest
     timeout-minutes: 35
     steps:
@@ -307,6 +355,7 @@ jobs:
   windows:
     name: Windows signed installer
     if: ${{ inputs.platform == 'all' || inputs.platform == 'windows' }}
+    needs: preflight
     runs-on: windows-latest
     timeout-minutes: 35
     steps:
@@ -354,6 +403,7 @@ jobs:
     name: Publish GitHub Release
     if: ${{ always() && inputs.create_github_release && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
     needs:
+      - preflight
       - android
       - ios
       - macos

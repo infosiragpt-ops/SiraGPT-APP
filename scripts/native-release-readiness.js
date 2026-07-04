@@ -49,6 +49,10 @@ function parseRequiredGroups(argv) {
   return [...new Set(names.flatMap((name) => aliases[name] || [name]))]
 }
 
+function shouldPrintOnlyRequired(argv) {
+  return argv.includes("--only-required")
+}
+
 function isPresent(name) {
   return Boolean(process.env[name] && process.env[name].trim())
 }
@@ -66,7 +70,9 @@ function printGroup(name, secretNames) {
 }
 
 function main() {
-  const requiredGroups = parseRequiredGroups(process.argv.slice(2))
+  const argv = process.argv.slice(2)
+  const requiredGroups = parseRequiredGroups(argv)
+  const onlyRequired = shouldPrintOnlyRequired(argv)
   const unknownGroups = requiredGroups.filter((name) => !groups[name])
 
   if (unknownGroups.length > 0) {
@@ -75,9 +81,12 @@ function main() {
   }
 
   const missingByGroup = new Map()
+  const groupsToPrint = onlyRequired && requiredGroups.length > 0
+    ? requiredGroups
+    : Object.keys(groups)
 
-  for (const [name, secretNames] of Object.entries(groups)) {
-    const missing = printGroup(name, secretNames)
+  for (const name of groupsToPrint) {
+    const missing = printGroup(name, groups[name])
     missingByGroup.set(name, missing)
   }
 
