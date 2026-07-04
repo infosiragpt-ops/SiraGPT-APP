@@ -67,21 +67,23 @@ These workflows are unsigned by default. Add signing credentials only through Gi
 
 ### Latest Verified Native Builds
 
-Latest native package SHA verified: `884cbec329822fa3590165fafea40c27edb10e95` on `production-main`.
+Latest native package SHA verified: `3eec62c1ba14313d5f04017ccff75685b6ebb17b` on `production-main`.
 
-- Desktop workflow: `Native desktop builds` run `28719956526`.
+- Desktop workflow: `Native desktop builds` run `28722835938`.
   - macOS DMG + ZIP: passed.
   - Windows x64 NSIS + portable: passed.
   - Artifacts: `siragpt-desktop-macos`, `siragpt-desktop-windows-x64`.
-- Mobile workflow: `Native mobile builds` run `28719956528`.
+- Mobile workflow: `Native mobile builds` run `28722835932`.
   - Android APK + AAB: passed.
   - iOS simulator build: passed.
   - Artifacts: `siragpt-mobile-android`, `siragpt-mobile-ios-simulator`.
+- Readiness workflow: `Native readiness report` run `28722835962`.
+  - Non-secret release plan and store packet generation: passed.
 
 Unsigned QA packages from these runs are attached to the GitHub prerelease
-`native-qa-v0.4.3-884cbec`:
+`native-qa-v0.4.3-3eec62c`:
 
-https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-qa-v0.4.3-884cbec
+https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-qa-v0.4.3-3eec62c
 
 The prerelease above is the latest durable public QA download packet. The
 verified SHA also has fresh 14-day GitHub Actions artifacts attached to the
@@ -168,6 +170,11 @@ Desktop signing secrets:
 - `WINDOWS_CERTIFICATE_PASSWORD`: Windows certificate password.
 
 Never commit these values. Store them only as GitHub Actions secrets or in the vendor store portals.
+Normal account or mailbox passwords are not signing material and must not be
+stored in GitHub Actions. Apple notarization requires an app-specific password,
+and Google Play/iOS submission should use store-console credentials, API keys,
+certificates, provisioning profiles, and upload keys created for app
+distribution.
 The GitHub secret audit prints only names and missing groups; it does not read
 or print secret values.
 

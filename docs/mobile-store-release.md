@@ -6,7 +6,7 @@
 - Android release AAB QA builds successfully in GitHub Actions.
 - Capacitor app ID is `com.siragpt.app`.
 - Production WebView URL is `https://siragpt.com`.
-- Public GitHub prerelease `native-qa-v0.4.3-884cbec` contains unsigned QA packages for Android, iOS simulator, macOS, and Windows.
+- Public GitHub prerelease `native-qa-v0.4.3-3eec62c` contains unsigned QA packages for Android, iOS simulator, macOS, and Windows.
 - Android signed Play release publishing is blocked until the Play upload keystore secrets are configured in GitHub Actions and Google Play account verification is complete.
 - iOS publishing is blocked until Apple Developer signing assets, App Store Connect access, and Apple account verification are configured.
 
@@ -21,24 +21,25 @@
   store assets without reading signing credentials.
 - `npm run native:store:packet` exports platform-specific, non-secret submission
   folders under `output/native-store-submission-packet/`.
-- GitHub Actions `Native mobile builds` run `28719956528` passed on `production-main` SHA `884cbec329822fa3590165fafea40c27edb10e95`.
+- GitHub Actions `Native mobile builds` run `28722835932` passed on `production-main` SHA `3eec62c1ba14313d5f04017ccff75685b6ebb17b`.
 - The run produced unsigned QA artifacts:
   - `siragpt-mobile-android`
   - `siragpt-mobile-ios-simulator`
-- GitHub Actions `Native desktop builds` run `28719956526` passed on the same SHA and produced unsigned QA artifacts:
+- GitHub Actions `Native desktop builds` run `28722835938` passed on the same SHA and produced unsigned QA artifacts:
   - `siragpt-desktop-macos`
   - `siragpt-desktop-windows-x64`
+- GitHub Actions `Native readiness report` run `28722835962` passed on the same SHA and produced the non-secret release plan/store packet.
 - Public QA prerelease:
-  - `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-qa-v0.4.3-884cbec`
+  - `https://github.com/infosiragpt-ops/SiraGPT-APP/releases/tag/native-qa-v0.4.3-3eec62c`
 - Local downloaded QA artifacts:
-  - `output/native-qa/release-884cbec32/SiraGPT-0.4.3-android-debug.apk`
-  - `output/native-qa/release-884cbec32/SiraGPT-0.4.3-android-qa.aab`
-  - `output/native-qa/release-884cbec32/SiraGPT-0.4.3-ios-simulator-app.zip`
-  - `output/native-qa/release-884cbec32/SiraGPT-0.4.3-macos-arm64.dmg`
-  - `output/native-qa/release-884cbec32/SiraGPT-0.4.3-macos-arm64.zip`
-  - `output/native-qa/release-884cbec32/SiraGPT-Setup-0.4.3-windows-x64.exe`
-  - `output/native-qa/release-884cbec32/SiraGPT-Portable-0.4.3-windows-x64.exe`
-  - `output/native-qa/release-884cbec32/SHA256SUMS.txt`
+  - `output/native-qa/release-3eec62c1/final/SiraGPT-0.4.3-android-debug.apk`
+  - `output/native-qa/release-3eec62c1/final/SiraGPT-0.4.3-android-qa.aab`
+  - `output/native-qa/release-3eec62c1/final/SiraGPT-0.4.3-ios-simulator-app.zip`
+  - `output/native-qa/release-3eec62c1/final/SiraGPT-0.4.3-macos-arm64.dmg`
+  - `output/native-qa/release-3eec62c1/final/SiraGPT-0.4.3-macos-arm64.zip`
+  - `output/native-qa/release-3eec62c1/final/SiraGPT-Setup-0.4.3-windows-x64.exe`
+  - `output/native-qa/release-3eec62c1/final/SiraGPT-Portable-0.4.3-windows-x64.exe`
+  - `output/native-qa/release-3eec62c1/final/SHA256SUMS.txt`
 
 ## Current GitHub Secrets State
 
@@ -54,6 +55,9 @@ added to GitHub Actions:
 Do not commit account passwords, keystores, certificates, provisioning profiles,
 or app-specific passwords. Add them only as GitHub Actions secrets or directly
 inside the vendor store portals.
+Normal email/account passwords are not valid native signing credentials. Use
+dedicated upload keys, certificates, provisioning profiles, App Store Connect
+API keys, and Apple app-specific passwords for the signing workflow.
 
 ## Current Google Play Blockers
 

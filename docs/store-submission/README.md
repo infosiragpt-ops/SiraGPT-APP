@@ -19,6 +19,12 @@ secrets. They must never be committed.
 - Privacy policy: `https://siragpt.com/privacy-policy`
 - Support email: `infosiragpt@gmail.com`
 - Category: Productivity
+- Latest public QA packet: `native-qa-v0.4.3-3eec62c`
+  (`3eec62c1ba14313d5f04017ccff75685b6ebb17b`)
+- Latest verified native runs:
+  - Mobile: `28722835932`
+  - Desktop: `28722835938`
+  - Readiness report: `28722835962`
 
 The canonical draft metadata lives in
 `docs/store-submission/native-store-metadata.json`. The store asset manifest
@@ -35,6 +41,11 @@ lives in `docs/store-submission/native-store-assets.json`.
 5. Build signed packages through `Native signed release packages`.
 6. Upload only after manual confirmation because binaries and store metadata
    are transmitted to third-party platforms.
+
+Do not use a normal email or account password as a native signing secret.
+Distribution requires dedicated signing material: Android upload keystore,
+Apple certificates/profiles and app-specific password, App Store Connect API
+key, and Windows code-signing certificate.
 
 ## Platform Notes
 
