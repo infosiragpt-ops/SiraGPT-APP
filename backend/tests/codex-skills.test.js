@@ -128,3 +128,29 @@ test('use_skill is registered in the tool registry projection', () => {
   assert.ok(entry, 'use_skill must be in the registry');
   assert.ok(entry.description.includes('landing-profesional'));
 });
+
+test('detectSkillForPrompt: deterministic keyword mapping (ES/EN)', () => {
+  const cases = [
+    ['crea una landing page para una cafetería', 'landing-profesional'],
+    ['página web promocional para mi negocio', 'landing-profesional'],
+    ['haz un dashboard de ventas con KPIs', 'dashboard-kpis'],
+    ['app con login y registro de usuarios', 'auth-basica'],
+    ['sistema de gestión de clientes', 'crud-entidades'],
+    ['un CRM para mi empresa', 'crud-entidades'],
+    ['formulario de contacto con validación', 'formularios-validados'],
+  ];
+  for (const [prompt, expected] of cases) {
+    assert.equal(skills.detectSkillForPrompt(prompt)?.name, expected, prompt);
+  }
+  assert.equal(skills.detectSkillForPrompt('explícame qué es React'), null);
+  assert.equal(skills.detectSkillForPrompt(''), null);
+});
+
+test('buildSystemPrompt auto-injects the detected playbook', () => {
+  const { buildSystemPrompt } = require('../src/services/codex/agent-loop');
+  const p = buildSystemPrompt({ project: { name: 'X' }, plan: null, fileTree: null, sourcePrompt: 'crea una landing para una cafetería' });
+  assert.match(p, /PLAYBOOK APLICABLE \(landing-profesional\)/);
+  assert.match(p, /Hero/);
+  const p2 = buildSystemPrompt({ project: { name: 'X' }, plan: null, fileTree: null, sourcePrompt: 'arregla el bug del contador' });
+  assert.ok(!p2.includes('PLAYBOOK APLICABLE'));
+});

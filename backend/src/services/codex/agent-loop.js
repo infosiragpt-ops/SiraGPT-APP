@@ -223,6 +223,16 @@ function buildSystemPrompt({ project, plan, fileTree, sourcePrompt }) {
     lines.push('Archivos actuales del workspace:');
     lines.push(fileTree);
   }
+  // Deterministic skill auto-injection: when the prompt clearly matches a
+  // builtin playbook, its full body ships with the system prompt — the E2E
+  // validation showed models skip a passively-listed use_skill.
+  try {
+    const detected = require('./skills').detectSkillForPrompt(sourcePrompt);
+    if (detected) {
+      lines.push(`PLAYBOOK APLICABLE (${detected.name}) — SÍGUELO como estándar de calidad de este trabajo:`);
+      lines.push(detected.body);
+    }
+  } catch { /* skills are an aid, never a blocker */ }
   lines.push('Cuando el proyecto esté listo, deja de llamar herramientas y resume lo construido.');
   return lines.join('\n');
 }
@@ -301,7 +311,26 @@ async function verifyDevServer({ runner, projectId, run, eventStore, prisma, met
   const ok = Boolean(status?.ready) && !status?.error && !errLines;
 
   if (ok) {
-    await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'done', outputSummary: 'dev server arranca y responde', durationMs }, { prisma }).catch(() => {});
+    // Browser pass (bolt.diy loop-closer): the dev server answering is not the
+    // same as the APP WORKING — a runtime exception leaves #root blank with a
+    // clean server log. Drive the system Chromium against the dev URL and feed
+    // real user-facing errors back to the repair loop. Best-effort by
+    // contract: no browser/infra → still verified-ok. CODEX_VERIFY_BROWSER=0 disables.
+    if (String(env.CODEX_VERIFY_BROWSER || '1').trim() !== '0') {
+      try {
+        // eslint-disable-next-line global-require
+        const bc = require('./browser-check');
+        const url = bc.devUrlFor(env, status?.port || 5173);
+        const view = await bc.checkApp({ url, env });
+        if (!view.unavailable && !view.ok) {
+          const report = bc.formatReport(view, url);
+          await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'error', outputSummary: `la app no funciona en el navegador:\n${String(report).slice(0, 2000)}`, durationMs: Math.max(0, clock().getTime() - t0) }, { prisma }).catch(() => {});
+          if (metrics?.recordAction) metrics.recordAction('terminal', durationMs);
+          return { ran: true, ok: false, errors: String(report).slice(0, 4000) };
+        }
+      } catch { /* browser verification is an aid, never a blocker */ }
+    }
+    await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'done', outputSummary: 'dev server arranca y la app renderiza en navegador', durationMs }, { prisma }).catch(() => {});
     if (metrics?.recordAction) metrics.recordAction('terminal', durationMs);
     return { ran: true, ok: true };
   }

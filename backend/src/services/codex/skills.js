@@ -260,3 +260,30 @@ module.exports = {
   MAX_WORKSPACE_SKILLS,
   MAX_SKILL_BODY_CHARS,
 };
+
+// ─── Deterministic skill detection ──────────────────────────────────────────
+// The E2E validation run showed models skip a passively-listed use_skill —
+// so the loop AUTO-INJECTS the matching playbook at run start (media-intent
+// doctrine: critical behaviour must not depend on the model asking for it).
+const SKILL_TRIGGERS = [
+  { name: 'landing-profesional', re: /\b(landing|p[aá]gina (de aterrizaje|web|principal)|one[- ]?page|sitio (web )?promocional|portada)\b/i },
+  { name: 'dashboard-kpis', re: /\b(dashboard|panel (de )?(control|m[eé]tricas|admin)|kpis?|anal[ií]tica|reportes? ejecutivos?)\b/i },
+  { name: 'auth-basica', re: /\b(login|inicio de sesi[oó]n|registro de usuarios?|autenticaci[oó]n|sign ?in|sign ?up)\b/i },
+  { name: 'crud-entidades', re: /\b(crud|inventario|gesti[oó]n de (clientes|productos|pedidos|empleados|proveedores|proyectos|tareas)|cat[aá]logo|punto de venta|pos\b|facturaci[oó]n|crm|erp)\b/i },
+  { name: 'formularios-validados', re: /\b(formulario|encuesta|form(?:s)?\b|captura de datos)\b/i },
+];
+
+/** First matching builtin skill for a build prompt, or null. */
+function detectSkillForPrompt(prompt) {
+  const text = String(prompt || '');
+  if (!text.trim()) return null;
+  for (const trigger of SKILL_TRIGGERS) {
+    if (trigger.re.test(text)) {
+      return BUILTIN_SKILLS.find((s) => s.name === trigger.name) || null;
+    }
+  }
+  return null;
+}
+
+module.exports.detectSkillForPrompt = detectSkillForPrompt;
+module.exports.SKILL_TRIGGERS = SKILL_TRIGGERS;
