@@ -38,6 +38,14 @@ function contentHash(content) {
   return crypto.createHash('sha256').update(String(content || '')).digest('hex');
 }
 
+// rag.embed() returns Float32Array vectors (4x smaller in memory); accept
+// both typed arrays and plain arrays everywhere or nothing ever indexes.
+function toVectorArray(value) {
+  if (Array.isArray(value)) return value;
+  if (ArrayBuffer.isView(value) && typeof value.length === 'number') return Array.from(value);
+  return null;
+}
+
 function vecToLiteral(arr) {
   if (!Array.isArray(arr)) return null;
   return `[${arr.join(',')}]`;
@@ -83,7 +91,7 @@ async function indexTurn({
   let embedding;
   try {
     const out = await embedder([clean]);
-    embedding = Array.isArray(out) ? out[0] : null;
+    embedding = toVectorArray(Array.isArray(out) ? out[0] : null);
   } catch (err) {
     return { ok: false, reason: 'embed_error', error: err?.message || String(err) };
   }
@@ -145,7 +153,7 @@ async function recallSimilarTurns({
   let queryEmbedding;
   try {
     const out = await embedder([clean]);
-    queryEmbedding = Array.isArray(out) ? out[0] : null;
+    queryEmbedding = toVectorArray(Array.isArray(out) ? out[0] : null);
   } catch (_embedErr) {
     return [];
   }

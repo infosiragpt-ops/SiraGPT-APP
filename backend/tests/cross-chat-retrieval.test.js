@@ -274,3 +274,34 @@ test('buildCrossChatBlock: omits assistant line when answer missing', () => {
   assert.ok(block.includes('USUARIO PREGUNTÓ:'));
   assert.ok(!block.includes('ASISTENTE RESPONDIÓ:'));
 });
+
+test('indexTurn and recallSimilarTurns accept Float32Array embeddings (rag.embed contract)', async () => {
+  const cc = require('../src/services/cross-chat-retrieval');
+  const prev = process.env.ENABLE_CROSS_CHAT_RECALL;
+  process.env.ENABLE_CROSS_CHAT_RECALL = 'true';
+  try {
+    const executed = [];
+    const fakePrisma = {
+      $executeRawUnsafe: async (...args) => { executed.push(args); return 1; },
+      $queryRawUnsafe: async () => [],
+    };
+    const f32Embedder = async (texts) => texts.map(() => Float32Array.from([0.1, 0.2, 0.3]));
+    const res = await cc.indexTurn({
+      userId: 'u1', chatId: 'c1', role: 'user',
+      content: 'este es un turno suficientemente largo para ser indexado en memoria',
+      embedder: f32Embedder, prismaClient: fakePrisma,
+    });
+    assert.equal(res.ok, true, `Float32Array embedding must index (got ${JSON.stringify(res)})`);
+    assert.equal(executed.length, 1);
+    assert.match(executed[0][4], /^\[0\.1[0-9]*,0\.2/, 'vector literal built from typed array');
+
+    const recall = await cc.recallSimilarTurns({
+      userId: 'u1', currentPrompt: 'pregunta de prueba suficientemente larga',
+      embedder: f32Embedder, prismaClient: fakePrisma,
+    });
+    assert.deepEqual(recall, [], 'query path tolerates typed arrays without throwing');
+  } finally {
+    if (prev === undefined) delete process.env.ENABLE_CROSS_CHAT_RECALL;
+    else process.env.ENABLE_CROSS_CHAT_RECALL = prev;
+  }
+});
