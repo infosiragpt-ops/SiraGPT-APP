@@ -154,3 +154,39 @@ test('buildSystemPrompt auto-injects the detected playbook', () => {
   const p2 = buildSystemPrompt({ project: { name: 'X' }, plan: null, fileTree: null, sourcePrompt: 'arregla el bug del contador' });
   assert.ok(!p2.includes('PLAYBOOK APLICABLE'));
 });
+
+test('safeFileTree: grown project → ranked map; small starter → flat tree', async () => {
+  const al = require('../src/services/codex/agent-loop');
+  const grown = {};
+  for (let i = 0; i < 8; i++) grown[`src/m${i}.tsx`] = `export function M${i}() {}`;
+  const runnerGrown = {
+    exec: async () => ({ exitCode: 0, stdout: Object.keys(grown).join('\n') }),
+    readFile: async (_p, path) => ({ content: grown[path] ?? null }),
+  };
+  const mapTree = await al.safeFileTree(runnerGrown, 'p1');
+  assert.match(mapTree, /Mapa del repositorio/);
+
+  const runnerSmall = { exec: async () => ({ exitCode: 0, stdout: 'src/App.tsx\nsrc/main.tsx' }) };
+  const flat = await al.safeFileTree(runnerSmall, 'p1');
+  assert.equal(flat, 'src/App.tsx\nsrc/main.tsx');
+});
+
+test('safeProjectNotes: reads .sira/notes.md bounded, empty when missing', async () => {
+  const al = require('../src/services/codex/agent-loop');
+  const withNotes = { readFile: async (_p, path) => ({ content: path === '.sira/notes.md' ? `- decisión\n${'x'.repeat(5000)}` : null }) };
+  const notes = await al.safeProjectNotes(withNotes, 'p1');
+  assert.match(notes, /^- decisión/);
+  assert.ok(notes.length <= 2500);
+  const without = { readFile: async () => { throw new Error('not found'); } };
+  assert.equal(await al.safeProjectNotes(without, 'p1'), '');
+});
+
+test('buildSystemPrompt injects project memory and its upkeep instruction', () => {
+  const { buildSystemPrompt } = require('../src/services/codex/agent-loop');
+  const p = buildSystemPrompt({ project: { name: 'X' }, plan: null, fileTree: '', sourcePrompt: 'mejora el hero', projectNotes: '- Paleta: verde salvia' });
+  assert.match(p, /MEMORIA DEL PROYECTO/);
+  assert.match(p, /verde salvia/);
+  assert.match(p, /actualiza \.sira\/notes\.md/);
+  const p2 = buildSystemPrompt({ project: { name: 'X' }, plan: null, fileTree: '', sourcePrompt: 'x', projectNotes: '' });
+  assert.ok(!p2.includes('MEMORIA DEL PROYECTO'));
+});

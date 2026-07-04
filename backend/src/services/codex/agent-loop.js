@@ -188,7 +188,7 @@ async function defaultWebSearch(query) {
   }
 }
 
-function buildSystemPrompt({ project, plan, fileTree, sourcePrompt }) {
+function buildSystemPrompt({ project, plan, fileTree, sourcePrompt, projectNotes }) {
   const appsMode = isAppsPrompt(sourcePrompt);
   const forceViteApps = appsMode && !explicitlyRequestsNext(sourcePrompt);
   const lines = [
@@ -223,6 +223,11 @@ function buildSystemPrompt({ project, plan, fileTree, sourcePrompt }) {
     lines.push('Archivos actuales del workspace:');
     lines.push(fileTree);
   }
+  if (projectNotes) {
+    lines.push('MEMORIA DEL PROYECTO (.sira/notes.md — decisiones y convenciones de runs anteriores; respétalas):');
+    lines.push(projectNotes);
+  }
+  lines.push('Mantén la memoria del proyecto: al tomar una decisión estructural (stack, entidades, paleta, convenciones) o dejar trabajo pendiente, actualiza .sira/notes.md con write_file (crea el archivo si no existe; máximo ~60 líneas, lo más nuevo arriba).');
   // Deterministic skill auto-injection: when the prompt clearly matches a
   // builtin playbook, its full body ships with the system prompt — the E2E
   // validation showed models skip a passively-listed use_skill.
@@ -427,8 +432,37 @@ async function verifyWorkspace({ runner, projectId, run, eventStore, prisma, met
 async function safeFileTree(runner, projectId) {
   try {
     const out = await runner.exec(projectId, ['git', 'ls-files']);
-    if (out && out.exitCode === 0 && out.stdout) return String(out.stdout).slice(0, 4000);
+    if (!out || out.exitCode !== 0 || !out.stdout) return '';
+    const flat = String(out.stdout);
+    const paths = flat.split('\n').map((l) => l.trim()).filter(Boolean);
+    // Grown project → ranked repo map instead of a flat list (deterministic:
+    // the E2E validation showed models skip passively-offered tools). Small
+    // starters keep the flat tree — the map adds nothing there.
+    const sourceCount = paths.filter((p) => /\.(tsx?|jsx?)$/.test(p) && !/(^|\/)node_modules\//.test(p)).length;
+    if (sourceCount >= 6) {
+      try {
+        // eslint-disable-next-line global-require
+        const { buildRepoMap } = require('./repo-map');
+        const map = await buildRepoMap({ runner, project: projectId });
+        if (map) return map.slice(0, 4600);
+      } catch { /* map is an aid — fall back to the flat tree */ }
+    }
+    return flat.slice(0, 4000);
   } catch { /* ignore */ }
+  return '';
+}
+
+/**
+ * Project memory (CLAUDE.md pattern): `.sira/notes.md` persists decisions,
+ * conventions and pending work across runs. Read best-effort and injected
+ * into every run's system prompt; the agent is instructed to keep it fresh.
+ */
+async function safeProjectNotes(runner, projectId) {
+  try {
+    const read = await runner.readFile(projectId, '.sira/notes.md');
+    const text = typeof read?.content === 'string' ? read.content.trim() : '';
+    return text ? text.slice(0, 2500) : '';
+  } catch { /* no notes yet — normal for new projects */ }
   return '';
 }
 
@@ -479,8 +513,9 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   const plan = deps.plan || (await loadApprovedPlan({ run, eventStore, prisma }));
   const sourcePrompt = deps.sourcePrompt != null ? deps.sourcePrompt : await resolveRunSourcePrompt({ run, prisma });
   const fileTree = deps.fileTree != null ? deps.fileTree : await safeFileTree(runner, projectId);
+  const projectNotes = deps.projectNotes != null ? deps.projectNotes : await safeProjectNotes(runner, projectId);
   const messages = [
-    { role: 'system', content: buildSystemPrompt({ project, plan, fileTree, sourcePrompt }) },
+    { role: 'system', content: buildSystemPrompt({ project, plan, fileTree, sourcePrompt, projectNotes }) },
     { role: 'user', content: sourcePrompt || 'Construye el proyecto según el plan aprobado.' },
   ];
 
@@ -889,6 +924,7 @@ module.exports = {
   runBuildLoop,
   buildSystemPrompt,
   safeFileTree,
+  safeProjectNotes,
   loadApprovedPlan,
   // Exported for white-box tests / reuse.
   ensureAppsVitePreviewable,
