@@ -2,6 +2,7 @@ node_modules
 .next
 .git
 .gitignore
+.claude
 *.md
 .env*
 .next.broken*
@@ -11,6 +12,8 @@ node_modules
 test-results
 output
 artifacts
+uploads
+siraGPT
 ios
 android
 mobile-www

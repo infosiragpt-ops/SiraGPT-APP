@@ -5,6 +5,7 @@ on:
     branches: [main, production-main]
     paths:
       - Dockerfile
+      - .dockerignore
       - backend/Dockerfile
       - package.json
       - package-lock.json
