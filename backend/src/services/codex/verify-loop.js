@@ -63,6 +63,13 @@ async function normalizeTsconfig(runner, projectId) {
 }
 
 async function runTypeCheck(runner, projectId) {
+  // Ensure deps exist before every check: bunx fetches tsc from bun's GLOBAL
+  // cache, so tsc "runs" even on an empty node_modules and then floods with
+  // TS7026/type-resolution noise (cycle-18 finding: rounds ran against a tree
+  // that never got installed). With a lockfile this is a <1s no-op.
+  try {
+    await runner.exec(projectId, ['bun', 'install'], { timeoutMs: 120000 });
+  } catch { /* install trouble surfaces through tsc's own output */ }
   const out = await runner.exec(projectId, ['bunx', 'tsc', '--noEmit', '--pretty', 'false'], { timeoutMs: 120000 });
   const diagnostics = [out.stdout, out.stderr].filter(Boolean).join('\n').trim();
   return { clean: out.exitCode === 0, diagnostics };
