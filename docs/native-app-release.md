@@ -137,13 +137,28 @@ Store publication requires account-level work outside Git:
 - A Developer ID certificate for macOS distribution outside the App Store.
 - A Windows code-signing certificate for trusted Windows installers.
 
+## Store Submission Packet
+
+Non-secret store metadata and privacy declaration drafts live in
+`docs/store-submission/`. Validate that this packet still matches the native
+package IDs before submitting anything to a store:
+
+```bash
+npm run native:store:readiness
+```
+
+This check intentionally validates public metadata only. It does not read or
+print signing credentials.
+
 ## Validation Checklist
 
 Before pushing native release changes:
 
 ```bash
 node -c apps/desktop/main.cjs
+node -c scripts/native-store-readiness.js
 sh -n scripts/build-desktop.sh
+npm run native:store:readiness
 npm run desktop:pack
 npm run desktop:pack:win
 npm run mobile:sync

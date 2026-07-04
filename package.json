@@ -44,6 +44,7 @@
     "native:readiness:mobile": "node scripts/native-release-readiness.js --require=mobile",
     "native:readiness:desktop": "node scripts/native-release-readiness.js --require=desktop",
     "native:readiness:all": "node scripts/native-release-readiness.js --require=all",
+    "native:store:readiness": "node scripts/native-store-readiness.js",
     "desktop:dev": "electron apps/desktop/main.cjs",
     "desktop:pack": "electron-builder --projectDir apps/desktop --dir --publish never",
     "desktop:pack:mac": "electron-builder --projectDir apps/desktop --mac dir --publish never",

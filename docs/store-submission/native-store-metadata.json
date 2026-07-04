@@ -1,0 +1,141 @@
+{
+  "version": "2026-07-04",
+  "status": "submission-draft",
+  "app": {
+    "name": "Sira GPT",
+    "desktopProductName": "SiraGPT",
+    "category": "Productivity",
+    "primaryLanguage": "es",
+    "additionalLanguages": ["en"],
+    "marketingUrl": "https://siragpt.com",
+    "supportUrl": "https://siragpt.com",
+    "privacyPolicyUrl": "https://siragpt.com/privacy-policy",
+    "termsUrl": "https://siragpt.com/terms-of-service",
+    "webRuntimeUrl": "https://siragpt.com",
+    "bundleIds": {
+      "android": "com.siragpt.app",
+      "ios": "com.siragpt.app",
+      "macos": "com.siragpt.desktop",
+      "windows": "com.siragpt.desktop"
+    }
+  },
+  "storeCopy": {
+    "shortDescription": "AI assistant for chat, documents, voice, search, and productivity workflows.",
+    "subtitle": "AI chat, documents, voice, and productivity",
+    "fullDescription": "Sira GPT is an AI productivity assistant for chat, document workflows, voice, search, and project work. Use it to ask questions, work with files, generate or revise documents, and coordinate daily AI-powered tasks from the SiraGPT platform.",
+    "keywords": [
+      "ai assistant",
+      "chat",
+      "documents",
+      "productivity",
+      "voice",
+      "search"
+    ]
+  },
+  "platforms": {
+    "android": {
+      "packageName": "com.siragpt.app",
+      "trackFirstTarget": "internal-testing",
+      "binaryType": "aab",
+      "requiredAccountActions": [
+        "Google Play developer identity verification",
+        "Real Android device verification through Play Console mobile app",
+        "Contact phone number verification",
+        "Data safety form",
+        "Content rating questionnaire",
+        "Target audience and app access declarations"
+      ]
+    },
+    "ios": {
+      "bundleId": "com.siragpt.app",
+      "binaryType": "ipa",
+      "requiredAccountActions": [
+        "Apple Developer Program membership",
+        "App Store Connect app record",
+        "Distribution certificate and provisioning profile",
+        "App privacy details",
+        "Age rating",
+        "TestFlight or App Review submission"
+      ]
+    },
+    "macos": {
+      "bundleId": "com.siragpt.desktop",
+      "distribution": "Developer ID signed and notarized DMG/ZIP",
+      "requiredAccountActions": [
+        "Developer ID Application certificate",
+        "Apple notarization credentials",
+        "Gatekeeper notarization validation"
+      ]
+    },
+    "windows": {
+      "appId": "com.siragpt.desktop",
+      "distribution": "signed NSIS installer and portable EXE",
+      "requiredAccountActions": [
+        "Windows code-signing certificate",
+        "Microsoft Partner Center app reservation if publishing in Microsoft Store",
+        "Microsoft Store listing metadata and privacy URL if store-distributed"
+      ]
+    }
+  },
+  "privacyDraft": {
+    "tracking": false,
+    "thirdPartyAdvertising": false,
+    "encryptionInTransit": true,
+    "accountDeletionRequest": "https://siragpt.com/privacy-policy",
+    "dataTypes": [
+      {
+        "name": "Account identifiers and email",
+        "collected": true,
+        "linkedToUser": true,
+        "purposes": ["account-management", "app-functionality", "security"]
+      },
+      {
+        "name": "User messages, prompts, projects, generated content, files, and documents",
+        "collected": true,
+        "linkedToUser": true,
+        "purposes": ["app-functionality", "product-personalization", "support"]
+      },
+      {
+        "name": "Uploaded images, audio, and voice recordings when the user uses those features",
+        "collected": true,
+        "linkedToUser": true,
+        "purposes": ["app-functionality"]
+      },
+      {
+        "name": "Subscription status, payment provider identifiers, and receipts",
+        "collected": true,
+        "linkedToUser": true,
+        "purposes": ["payments", "account-management", "security"]
+      },
+      {
+        "name": "App interactions, diagnostics, crash logs, IP address, device, browser, and session data",
+        "collected": true,
+        "linkedToUser": true,
+        "purposes": ["analytics", "app-functionality", "security", "debugging"]
+      }
+    ]
+  },
+  "assetChecklist": {
+    "android": [
+      "512x512 app icon",
+      "Feature graphic 1024x500",
+      "At least 2 phone screenshots",
+      "Tablet screenshots if tablet distribution is enabled"
+    ],
+    "ios": [
+      "1024x1024 app icon with no transparency",
+      "iPhone screenshots for required device classes",
+      "iPad screenshots if iPad support remains enabled"
+    ],
+    "macos": [
+      "DMG and ZIP artifacts",
+      "Notarization proof",
+      "Installer screenshots or product page assets if published externally"
+    ],
+    "windows": [
+      "Signed installer and portable EXE",
+      "Store logos and screenshots if Microsoft Store distributed",
+      "Privacy policy URL"
+    ]
+  }
+}

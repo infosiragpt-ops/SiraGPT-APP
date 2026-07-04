@@ -63,6 +63,11 @@ These are account-owner actions and cannot be completed by build tooling or loca
 - Support URL: `https://siragpt.com`
 - Privacy policy URL: `https://siragpt.com/privacy-policy`
 
+The canonical non-secret submission packet is
+`docs/store-submission/native-store-metadata.json`. Run
+`npm run native:store:readiness` before using it in Google Play Console or
+App Store Connect.
+
 ## Required Confirmations
 
 - Creating the Android upload key creates a long-lived signing credential.
