@@ -25,6 +25,7 @@ secrets. They must never be committed.
   - Mobile: `28722835932`
   - Desktop: `28722835938`
   - Readiness report: `28722835962`
+- Distribution tracker: https://github.com/infosiragpt-ops/SiraGPT-APP/issues/4
 
 The canonical draft metadata lives in
 `docs/store-submission/native-store-metadata.json`. The store asset manifest
