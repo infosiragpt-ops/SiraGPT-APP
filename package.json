@@ -51,6 +51,7 @@
     "native:release:plan": "node scripts/native-release-plan.js",
     "native:release:plan:ci": "node scripts/native-release-plan.js --secret-source=env --out=output/native-release-plan.md --json-out=output/native-release-plan.json",
     "native:store:readiness": "node scripts/native-store-readiness.js",
+    "native:store:assets": "node scripts/native-store-assets-readiness.js",
     "desktop:dev": "electron apps/desktop/main.cjs",
     "desktop:pack": "electron-builder --projectDir apps/desktop --dir --publish never",
     "desktop:pack:mac": "electron-builder --projectDir apps/desktop --mac dir --publish never",

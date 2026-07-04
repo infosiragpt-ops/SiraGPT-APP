@@ -21,7 +21,8 @@ secrets. They must never be committed.
 - Category: Productivity
 
 The canonical draft metadata lives in
-`docs/store-submission/native-store-metadata.json`.
+`docs/store-submission/native-store-metadata.json`. The store asset manifest
+lives in `docs/store-submission/native-store-assets.json`.
 
 ## Submission Order
 
@@ -29,7 +30,8 @@ The canonical draft metadata lives in
 2. Complete owner-only account verification in Google Play Console and Apple
    Developer/App Store Connect.
 3. Add signing and store-upload secrets to GitHub Actions, never to the repo.
-4. Run `npm run native:store:readiness` and `npm run native:readiness:all`.
+4. Run `npm run native:store:readiness`, `npm run native:store:assets`, and
+   `npm run native:readiness:all`.
 5. Build signed packages through `Native signed release packages`.
 6. Upload only after manual confirmation because binaries and store metadata
    are transmitted to third-party platforms.
@@ -92,6 +94,7 @@ any SDKs bundled into native shells.
 
 ```bash
 npm run native:store:readiness
+npm run native:store:assets
 npm run native:readiness
 npm run native:readiness:all
 npm run native:github-secrets:audit
@@ -101,8 +104,12 @@ npm run native:release:plan:ci
 ```
 
 `native:store:readiness` validates that the metadata packet matches the real
-native package IDs and required public URLs. `native:readiness:all` validates
-that signing secret names are present in the execution environment.
+native package IDs and required public URLs. `native:store:assets` validates
+packaged app icons and public store-listing assets such as screenshots and the
+Google Play feature graphic. By default it reports `blocked` without failing
+CI; use `npm run native:store:assets -- --require-ready` when preparing the
+final store upload. `native:readiness:all` validates that signing secret names
+are present in the execution environment.
 `native:github-secrets:audit` checks which native signing secret names are
 already configured in GitHub Actions for the public repository without reading
 or printing secret values. `native:github-secrets:check` fails until all native
@@ -113,3 +120,5 @@ account actions, and safe `gh secret set` commands.
 `native:release:plan:ci` generates the same packet from environment-variable
 presence, which is how GitHub Actions can audit configured native secrets
 without listing or printing secret values.
+The GitHub Actions workflow `Native readiness report` publishes both the
+non-secret release plan and the store asset readiness report as artifacts.

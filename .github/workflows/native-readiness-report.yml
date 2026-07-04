@@ -9,6 +9,7 @@ on:
       - 'docs/mobile-store-release.md'
       - 'docs/store-submission/**'
       - 'scripts/native-release-plan.js'
+      - 'scripts/native-store-assets-readiness.js'
       - 'scripts/native-store-readiness.js'
       - 'scripts/sync-native-version.js'
       - 'package.json'
@@ -23,6 +24,7 @@ on:
       - 'docs/mobile-store-release.md'
       - 'docs/store-submission/**'
       - 'scripts/native-release-plan.js'
+      - 'scripts/native-store-assets-readiness.js'
       - 'scripts/native-store-readiness.js'
       - 'scripts/sync-native-version.js'
       - 'package.json'
@@ -59,6 +61,8 @@ jobs:
         run: |
           npm run native:version:check
           npm run native:store:readiness
+          npm run native:store:assets -- --out=output/native-store-assets-report.md --json-out=output/native-store-assets-report.json
+          node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('output/native-store-assets-report.json','utf8')); if (!['ready','blocked'].includes(p.status)) throw new Error('invalid native store asset status'); console.log('native-store-assets-status=' + p.status); console.log('native-store-assets-blocked-platforms=' + p.blockedPlatforms.length)"
 
       - name: Generate non-secret readiness plan
         env:
@@ -88,6 +92,8 @@ jobs:
         with:
           name: siragpt-native-readiness-report
           path: |
+            output/native-store-assets-report.md
+            output/native-store-assets-report.json
             output/native-release-plan.md
             output/native-release-plan.json
           retention-days: 30

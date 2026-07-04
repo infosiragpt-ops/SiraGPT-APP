@@ -15,6 +15,9 @@
 - `npm run mobile:doctor` passed locally for Android and iOS.
 - `npm run native:version:check` passed locally for native version `0.4.3` / build `4003`.
 - `npm run native:store:readiness` passed locally against the submission metadata.
+- `npm run native:store:assets` produces a non-secret asset report. The current
+  report is expected to stay `blocked` until final store screenshots and the
+  Google Play feature graphic are added under `docs/store-submission/assets/`.
 - GitHub Actions `Native mobile builds` run `28719956528` passed on `production-main` SHA `884cbec329822fa3590165fafea40c27edb10e95`.
 - The run produced unsigned QA artifacts:
   - `siragpt-mobile-android`
@@ -86,9 +89,10 @@ These are account-owner actions and cannot be completed by build tooling or loca
 - Privacy policy URL: `https://siragpt.com/privacy-policy`
 
 The canonical non-secret submission packet is
-`docs/store-submission/native-store-metadata.json`. Run
-`npm run native:store:readiness` before using it in Google Play Console or
-App Store Connect.
+`docs/store-submission/native-store-metadata.json`, with asset requirements in
+`docs/store-submission/native-store-assets.json`. Run
+`npm run native:store:readiness` and `npm run native:store:assets` before using
+it in Google Play Console or App Store Connect.
 
 To generate a current, non-secret management checklist for the public GitHub
 repo, run:
@@ -100,7 +104,8 @@ npm run native:release:plan -- --repo=infosiragpt-ops/SiraGPT-APP --out=output/n
 The generated files stay under ignored `output/` and may list missing secret
 names plus account-owner actions, but they must never contain secret values.
 The GitHub Actions workflow `Native readiness report` publishes the same
-non-secret checklist as an artifact named `siragpt-native-readiness-report`.
+non-secret checklist and asset readiness report as an artifact named
+`siragpt-native-readiness-report`.
 
 ## Required Confirmations
 

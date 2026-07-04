@@ -201,10 +201,13 @@ package IDs before submitting anything to a store:
 
 ```bash
 npm run native:store:readiness
+npm run native:store:assets
 ```
 
-This check intentionally validates public metadata only. It does not read or
-print signing credentials.
+These checks intentionally validate public metadata and public store-listing
+assets only. They do not read or print signing credentials. The asset check
+reports missing screenshots and listing graphics without failing by default;
+use `npm run native:store:assets -- --require-ready` for final release gates.
 
 ## Validation Checklist
 
@@ -212,10 +215,12 @@ Before pushing native release changes:
 
 ```bash
 node -c apps/desktop/main.cjs
+node -c scripts/native-store-assets-readiness.js
 node -c scripts/native-store-readiness.js
 sh -n scripts/build-desktop.sh
 npm run native:version:check
 npm run native:store:readiness
+npm run native:store:assets
 npm run desktop:pack
 npm run desktop:pack:win
 npm run mobile:sync
