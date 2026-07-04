@@ -166,7 +166,10 @@ jobs:
         working-directory: backend
     services:
       postgres:
-        image: postgres:16-alpine
+        # pgvector build of Postgres 16: schema.prisma now carries a
+        # vector(1536) column (cross-chat recall), which plain postgres
+        # can't materialize on `db push`. Same major version as before.
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -263,6 +266,13 @@ jobs:
       # migration history yet — push materializes the schema directly
       # from `schema.prisma`. Switch to `migrate deploy` once migrations
       # start shipping from the team's workflow.
+      # `db push` won't run CREATE EXTENSION for Unsupported() columns,
+      # so the vector extension is created explicitly first.
+      - name: Prisma · enable pgvector on service DB
+        run: |
+          npx prisma db execute --stdin <<'SQL'
+          CREATE EXTENSION IF NOT EXISTS vector;
+          SQL
       - name: Prisma · push schema to Postgres service
         run: npx prisma db push --accept-data-loss --skip-generate
 
